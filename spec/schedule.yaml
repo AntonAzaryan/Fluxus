@@ -27,7 +27,7 @@ schedule:
     description: |
       Внешний провайдер. Читает Position, Velocity, Collider.
       Пишет Position (единственная стадия, где это разрешено).
-      Порождает события Collision, RaycastHit.
+      Порождает события Collision, RaycastHit, TriggerEnter.
 
   - stage: Reaction
     description: |
