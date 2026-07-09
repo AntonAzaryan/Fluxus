@@ -10,6 +10,8 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "declaration": true,
+    "declarationMap": true,
+    "composite": true,
     "lib": ["ES2022"]
   },
   "include": ["src/**/*"],

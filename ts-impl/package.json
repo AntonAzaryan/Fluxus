@@ -1,7 +1,21 @@
 {
-  "name": "game-mvp-ts",
+  "name": "game-mvp-impl",
   "version": "0.1.0",
   "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tick": "./src/tick.ts",
+    "./fixed/fixed": "./src/fixed/fixed.ts",
+    "./ecs/events": "./src/ecs/events.ts",
+    "./ecs/world": "./src/ecs/world.ts",
+    "./archetypes/player": "./src/archetypes/player.ts",
+    "./archetypes/fireball": "./src/archetypes/fireball.ts",
+    "./archetypes/shield": "./src/archetypes/shield.ts",
+    "./components/types": "./src/components/types.ts",
+    "./resources/resources": "./src/resources/resources.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",

@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "moduleResolution": "bundler"
+  },
+  "files": [],
+  "references": [
+    { "path": "ts-impl" },
+    { "path": "ts-render" }
+  ]
+}

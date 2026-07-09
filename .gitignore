@@ -1,28 +1,7 @@
-# IDE
-.idea/
-.vscode/
-*.iml
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Build artifacts
-build/
-dist/
-out/
-
-# Logs
-*.log
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-
-# Node modules (если будет использоваться)
 node_modules/
-
-# Python venv
-venv/
-.env
+dist/
+*.log
+*.tsbuildinfo
+src/**/*.d.ts
+src/**/*.js
+src/**/*.js.map

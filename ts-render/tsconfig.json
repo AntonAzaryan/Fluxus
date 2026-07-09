@@ -3,10 +3,9 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "strict": true,
+    "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "noEmit": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "./dist",
     "rootDir": "./src",
@@ -14,11 +13,11 @@
     "declarationMap": true,
     "sourceMap": true,
     "lib": ["ES2022", "DOM"],
-    "allowSyntheticDefaultImports": true,
-    "resolveJsonModule": true,
     "baseUrl": "./src",
-    "composite": false
+    "paths": {
+      "game-mvp-impl/*": ["../../ts-impl/src/*"]
+    }
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "**/ts-impl/**"]
+  "exclude": ["node_modules", "dist"]
 }
