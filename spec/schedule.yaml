@@ -1,0 +1,23 @@
+# Расписание стадий тика
+# Порядок строго фиксирован для детерминизма
+
+stages:
+  - name: input_processing
+    description: Обработка команд игроков из InputBuffer
+    systems: []
+
+  - name: pre_simulation
+    description: Системы, работающие до физической симуляции
+    systems: []
+
+  - name: simulation
+    description: Основная физическая и игровая логика
+    systems: []
+
+  - name: post_simulation
+    description: Системы после симуляции (очистка, нотификации)
+    systems: []
+
+  - name: cleanup
+    description: Удаление помеченных сущностей, сброс буферов
+    systems: []
