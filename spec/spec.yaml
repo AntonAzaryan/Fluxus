@@ -2,7 +2,7 @@ meta:
   namespace: game_core
   version: 0.1.0
   tick_rate: 60
-  fixed_point_scale: 1000
+  fixed_point_scale: 65536
 
 directories:
   - resources
@@ -10,6 +10,7 @@ directories:
   - events
   - systems
   - archetypes
+  - contracts
   - scenarios
 
 schedule: schedule.yaml

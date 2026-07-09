@@ -1,23 +1,47 @@
-# Расписание стадий тика
-# Порядок строго фиксирован для детерминизма
+schedule:
+  - stage: Input
+    systems:
+      - PlayerCommandIngestSystem
 
-stages:
-  - name: input_processing
-    description: Обработка команд игроков из InputBuffer
-    systems: []
+  - stage: Intent
+    systems:
+      - CooldownTickSystem
+      - MoveIntentSystem
+      - DashStartSystem
+      - FireballCastSystem
+      - ShieldCastSystem
 
-  - name: pre_simulation
-    description: Системы, работающие до физической симуляции
-    systems: []
+  - stage: Simulation
+    description: |
+      Формирование Velocity. Position не мутируется.
+      Гравитация применяется к dz здесь.
+    systems:
+      - DashUpdateSystem
+      - SprintSystem
+      - FrictionSystem
+      - GravitySystem
 
-  - name: simulation
-    description: Основная физическая и игровая логика
-    systems: []
+  - stage: Physics
+    provider: external
+    contract: PhysicsContractV1
+    description: |
+      Внешний провайдер. Читает Position, Velocity, Collider.
+      Пишет Position (единственная стадия, где это разрешено).
+      Порождает события Collision, RaycastHit.
 
-  - name: post_simulation
-    description: Системы после симуляции (очистка, нотификации)
-    systems: []
+  - stage: Reaction
+    description: |
+      Реакция на физические события: отскоки снарядов, попадания.
+    systems:
+      - ProjectileBounceSystem
+      - ProjectileHitSystem
 
-  - name: cleanup
-    description: Удаление помеченных сущностей, сброс буферов
-    systems: []
+  - stage: Resolution
+    systems:
+      - DamageApplicationSystem
+      - ShieldExpirationSystem
+      - DespawnSystem
+
+  - stage: Time
+    systems:
+      - TimeAdvanceSystem
