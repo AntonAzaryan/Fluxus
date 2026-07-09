@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Game MVP Render</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+    }
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      font-family: monospace;
+      font-size: 14px;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 10px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div id="info">Game MVP Render - Three.js</div>
+  <script type="module" src="/main.ts"></script>
+</body>
+</html>
