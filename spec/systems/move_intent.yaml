@@ -1,0 +1,30 @@
+name: MoveIntentSystem
+description: |
+  Стадия: Intent
+  
+  Читает события MoveCommand и устанавливает компонент MoveIntent
+  у сущности игрока. MoveIntent используется MovementSystem для
+  установки Velocity.
+  
+  Компонент MoveIntent очищается в конце каждого тика (пересоздаётся).
+
+requires:
+  - component: MoveIntent
+    access: write
+triggers:
+  - event: MoveCommand
+
+logic: |
+  # Сначала очистить все MoveIntent (пересоздать каждый тик)
+  Для каждой сущности из выборки, у которой есть MoveIntent:
+    Установить MoveIntent.dx в 0.
+    Установить MoveIntent.dy в 0.
+    Установить MoveIntent.dz в 0.
+
+  # Обработать команды движения
+  Для каждого события MoveCommand:
+    # Проверить, что сущность существует (имеет MoveIntent)
+    Если сущность события.player_id имеет компонент MoveIntent:
+      Установить MoveIntent.dx у сущности события.player_id в событие.dx.
+      Установить MoveIntent.dy у сущности события.player_id в событие.dy.
+      Установить MoveIntent.dz у сущности события.player_id в событие.dz.

@@ -1,0 +1,14 @@
+# Здоровье сущности
+# См. schedule.yaml — DamageApplicationSystem, ProjectileHitSystem
+
+name: Health
+description: |
+  Текущее и максимальное здоровье сущности.
+  При получении урона уменьшается на значение урона.
+  При health <= 0 сущность помечается компонентом Dead.
+  
+  Время хранится в fixed-point для консистентности.
+
+fields:
+  current: fixed    # Текущее здоровье
+  max: fixed        # Максимальное здоровье

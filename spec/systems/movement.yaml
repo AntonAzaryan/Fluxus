@@ -1,0 +1,55 @@
+name: MovementSystem
+description: |
+  Стадия: Simulation
+  
+  Конвертирует MoveIntent в Velocity для движения персонажа.
+  Учитывает компонент Dash — если есть активный рывок, движение игнорируется.
+  
+  Скорость движения берётся из GameConfig.player_move_speed.
+
+requires:
+  - component: Position
+    access: read
+  - component: Velocity
+    access: write
+  - component: MoveIntent
+    access: read
+  - component: Dash
+    access: read
+reads:
+  - GameConfig
+
+logic: |
+  Для каждой сущности из выборки, у которой есть Position, Velocity, MoveIntent:
+    
+    # Если есть активный рывок — пропустить (DashUpdateSystem управляет скоростью)
+    Если сущность имеет компонент Dash:
+      Продолжить к следующей сущности.
+    
+    # Если игрок мёртв — не двигаться
+    Если сущность имеет компонент Dead:
+      Продолжить к следующей сущности.
+    
+    Прочитать MoveIntent.dx, MoveIntent.dy, MoveIntent.dz.
+
+    # Нормализовать вектор движения (если длина > 1)
+    Прочитать GameConfig.player_move_speed.
+
+    Если MoveIntent.dx != 0 или MoveIntent.dy != 0 или MoveIntent.dz != 0:
+      # Вычислить длину вектора в плоскости XY
+      length_sq = vec_length_sq_xy((MoveIntent.dx, MoveIntent.dy, MoveIntent.dz)).
+
+      Если length_sq > 1.0:
+        normalized = vec_normalize_xy((MoveIntent.dx, MoveIntent.dy, MoveIntent.dz)).
+      Иначе:
+        normalized = (MoveIntent.dx, MoveIntent.dy, MoveIntent.dz).
+
+      # Установить Velocity
+      Установить Velocity.dx в mul(normalized.x, GameConfig.player_move_speed).
+      Установить Velocity.dy в mul(normalized.y, GameConfig.player_move_speed).
+      Установить Velocity.dz в mul(normalized.z, GameConfig.player_move_speed).
+    Иначе:
+      # Остановить персонажа
+      Установить Velocity.dx в 0.
+      Установить Velocity.dy в 0.
+      Установить Velocity.dz в 0.

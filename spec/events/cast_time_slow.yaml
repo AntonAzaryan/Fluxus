@@ -1,0 +1,17 @@
+# Команда каста замедления времени
+# Генерируется PlayerCommandIngestSystem, потребляется TimeSlowCastSystem
+
+name: CastTimeSlow
+description: |
+  Команда каста ультимативной способности «Замедление времени» (клавиша R).
+  Генерируется PlayerCommandIngestSystem из InputBuffer.
+  
+  TimeSlowCastSystem читает CastTimeSlow, проверяет кулдаун,
+  устанавливает глобальный time_scale и добавляет иммунитет кастеру.
+  
+  Эффект длится time_slow_duration_ms, затем TimeSlowSyncSystem восстанавливает normal time.
+
+fields:
+  tick: u64         # Тик отправки команды (для валидации)
+  player_id: u64    # entity_id игрока
+  caster_id: u64    # entity_id кастера (обычно = player_id)

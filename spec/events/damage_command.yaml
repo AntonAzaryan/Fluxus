@@ -1,0 +1,16 @@
+# Команда нанесения урона
+# Генерируется ProjectileHitSystem, потребляется DamageApplicationSystem
+
+name: DamageCommand
+description: |
+  Команда нанесения урона цели.
+  Генерируется ProjectileHitSystem при коллизии снаряда с целью.
+  
+  DamageApplicationSystem читает DamageCommand, уменьшает Health цели,
+  проверяет смерть (health <= 0) и добавляет компонент Dead при необходимости.
+
+fields:
+  target_id: u64    # entity_id цели, получающей урон
+  source_id: u64    # entity_id источника урона (снаряд, кастер)
+  damage: fixed     # Величина урона
+  damage_type: string # Тип урона ("projectile", "melee", и т.д.)

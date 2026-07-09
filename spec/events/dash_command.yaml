@@ -1,0 +1,16 @@
+# Команда рывка
+# Генерируется PlayerCommandIngestSystem, потребляется DashStartSystem
+
+name: DashCommand
+description: |
+  Команда рывка (клавиша Space).
+  Генерируется PlayerCommandIngestSystem из InputBuffer.
+  
+  DashStartSystem читает DashCommand, проверяет кулдаун и отсутствие активного рывка,
+  добавляет компонент Dash с направлением текущего движения персонажа.
+  
+  Направление рывка берётся из MoveIntent или Velocity (если MoveIntent отсутствует).
+
+fields:
+  tick: u64         # Тик отправки команды (для валидации)
+  player_id: u64    # entity_id игрока

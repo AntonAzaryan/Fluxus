@@ -1,0 +1,71 @@
+name: DashStartSystem
+description: |
+  Стадия: Intent
+  
+  Обрабатывает команду рывка (DashCommand).
+  Проверяет кулдаун рывка и отсутствие активного рывка.
+  Добавляет компонент Dash с направлением текущего движения.
+
+  Направление берётся из MoveIntent (намерение движения в этом тике),
+  а не из Velocity — Velocity в момент обработки DashCommand может быть
+  устаревшим значением с прошлого тика (MovementSystem выполняется позже,
+  в стадии Simulation).
+
+requires:
+  - component: Cooldowns
+    access: write
+  - component: MoveIntent
+    access: read
+  - component: Dash
+    access: write
+triggers:
+  - event: DashCommand
+reads:
+  - GameConfig
+  - TimeState
+
+logic: |
+  Для каждого события DashCommand:
+    
+    # Проверить, что сущность существует
+    Если сущность события.player_id не имеет компонента Cooldowns:
+      Продолжить к следующей сущности.
+    
+    # Проверить кулдаун рывка
+    Прочитать Cooldowns.dash у сущности события.player_id.
+    Если Cooldowns.dash > 0:
+      Продолжить к следующей сущности.
+    
+    # Проверить, что нет активного рывка
+    Если сущность события.player_id имеет компонент Dash:
+      Продолжить к следующей сущности.
+    
+    # Проверить, что игрок не мёртв
+    Если сущность события.player_id имеет компонент Dead:
+      Продолжить к следующей сущности.
+    
+    # Получить направление рывка из MoveIntent (намерение движения в этом тике)
+    Прочитать MoveIntent.dx, MoveIntent.dy, MoveIntent.dz у сущности события.player_id.
+
+    # Если персонаж стоит, рывок не срабатывает (требует направления движения)
+    length_sq = vec_length_sq_xy((MoveIntent.dx, MoveIntent.dy, MoveIntent.dz)).
+
+    Если length_sq == 0:
+      # Персонаж стоит — рывок не срабатывает
+      Продолжить к следующей сущности.
+
+    # Нормализовать направление
+    dir = vec_normalize_xy((MoveIntent.dx, MoveIntent.dy, MoveIntent.dz)).
+
+    # Установить кулдаун рывка
+    Прочитать GameConfig.dash_cooldown_ms.
+    Установить Cooldowns.dash у сущности события.player_id в GameConfig.dash_cooldown_ms.
+    
+    # Добавить компонент Dash
+    Добавить компонент Dash к сущности события.player_id с полями {
+      start_tick: TimeState.current_tick,
+      duration_ms: GameConfig.dash_duration_ms,
+      dir_x: dir.x,
+      dir_y: dir.y,
+      dir_z: dir.z
+    }.

@@ -1,47 +1,94 @@
+# Расписание стадий и систем игрового тика
+# См. topology.md §7 — порядок стадий, conventions.md §4 — время
+
 schedule:
+  # =============================================================================
+  # Input: Обработка ввода от игроков
+  # =============================================================================
   - stage: Input
+    description: |
+      Чтение сырых команд из InputBuffer, конвертация в события-команды.
     systems:
       - PlayerCommandIngestSystem
 
+  # =============================================================================
+  # Intent: Обработка команд способностей
+  # =============================================================================
   - stage: Intent
+    description: |
+      Проверка кулдаунов, создание снарядов, эффектов способностей.
     systems:
-      - CooldownTickSystem
-      - MoveIntentSystem
-      - DashStartSystem
-      - FireballCastSystem
-      - ShieldCastSystem
+      - CooldownTickSystem        # Уменьшает кулдауны на 1 тик
+      - MoveIntentSystem          # Конвертирует MoveCommand в MoveIntent
+      - DashStartSystem           # Начинает рывок (проверка КД, создание Dash)
+      - FireballCastSystem        # Каст фаербола (Q)
+      - ShieldCastSystem          # Каст щита (E)
+      - TimeSlowCastSystem        # Каст замедления времени (R)
 
+  # =============================================================================
+  # Simulation: Движение и физика (до провайдера)
+  # =============================================================================
   - stage: Simulation
     description: |
-      Формирование Velocity. Position не мутируется.
-      Гравитация применяется к dz здесь.
+      Формирование Velocity. Position не мутируется (только провайдером физики).
+      Гравитация не применяется в MVP (горизонтальный полёт снарядов).
+      
+      НЕРЕАЛИЗОВАННЫЕ СИСТЕМЫ (оставлены для будущей реализации):
+      - SprintSystem: ускорение движения (не нужно в MVP)
+      - FrictionSystem: трение для остановки (не нужно, MovementSystem сам останавливает)
+      - GravitySystem: гравитация (в MVP gravity=0, снаряды летят горизонтально)
     systems:
-      - DashUpdateSystem
-      - SprintSystem
-      - FrictionSystem
-      - GravitySystem
+      - MovementSystem            # Конвертирует MoveIntent в Velocity
+      - DashUpdateSystem          # Обновляет скорость во время рывка
+      - TimeSlowSyncSystem        # Синхронизирует LocalTimeScale для иммунных
+      # - SprintSystem            # НЕ РЕАЛИЗОВАН В MVP
+      # - FrictionSystem          # НЕ РЕАЛИЗОВАН В MVP
+      # - GravitySystem           # НЕ РЕАЛИЗОВАН В MVP
 
+  # =============================================================================
+  # Physics: Внешний провайдер физики
+  # =============================================================================
   - stage: Physics
     provider: external
     contract: PhysicsContractV1
     description: |
-      Внешний провайдер. Читает Position, Velocity, Collider.
+      Внешний провайдер физики (см. spec/contracts/physics_v1.md).
+      Читает Position, Velocity, Collider.
       Пишет Position (единственная стадия, где это разрешено).
       Порождает события Collision, RaycastHit, TriggerEnter.
 
+  # =============================================================================
+  # Reaction: Реакция на физические события
+  # =============================================================================
   - stage: Reaction
     description: |
-      Реакция на физические события: отскоки снарядов, попадания.
+      Обработка коллизий снарядов, попаданий, отражений.
+      
+      НЕРЕАЛИЗОВАННЫЕ СИСТЕМЫ:
+      - ProjectileBounceSystem: отскок снарядов (в MVP обрабатывается физикой через restitution=1.0)
     systems:
-      - ProjectileBounceSystem
-      - ProjectileHitSystem
+      - ProjectileHitSystem       # Попадание снаряда → DamageCommand
+      # - ProjectileBounceSystem  # НЕ РЕАЛИЗОВАН В MVP (физика обрабатывает)
 
+  # =============================================================================
+  # Resolution: Применение урона, респавн, удаление сущностей
+  # =============================================================================
   - stage: Resolution
+    description: |
+      Применение урона к Health, смерть, респавн, истечение эффектов.
     systems:
-      - DamageApplicationSystem
-      - ShieldExpirationSystem
-      - DespawnSystem
+      - DamageApplicationSystem   # Применяет DamageCommand к Health
+      - ShieldExpirationSystem    # Удаляет щиты с health <= 0
+      - DespawnSystem             # Респавн мёртвых сущностей
 
+  # =============================================================================
+  # Time: Продвижение времени
+  # =============================================================================
   - stage: Time
+    description: |
+      Увеличение current_tick на 1.
+      
+      НЕРЕАЛИЗОВАННЫЕ СИСТЕМЫ:
+      - TimeAdvanceSystem: в MVP TimeState.current_tick увеличивается внешним рантаймом
     systems:
-      - TimeAdvanceSystem
+      # - TimeAdvanceSystem       # НЕ РЕАЛИЗОВАН В MVP (рантайм увеличивает tick)

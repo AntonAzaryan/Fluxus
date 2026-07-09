@@ -1,0 +1,45 @@
+name: TimeSlowSyncSystem
+description: |
+  Стадия: Simulation
+
+  Проверяет истечение эффекта глобального замедления времени по TimeSlowState.expires_tick.
+
+  Когда эффект заканчивается (current_tick >= expires_tick):
+  - Восстанавливает TimeState.time_scale = 1.0
+  - Сбрасывает TimeSlowState.expires_tick = 0
+  - Снимает TimeSlowImmune и сбрасывает LocalTimeScale.scale = 1.0
+    у ВСЕХ сущностей с TimeSlowImmune (кастер и унаследовавшие иммунитет снаряды)
+
+  Пока эффект активен, поддерживает корректный компенсирующий LocalTimeScale
+  у всех иммунных сущностей.
+
+requires:
+  - component: TimeSlowImmune
+    access: write
+  - component: LocalTimeScale
+    access: write
+reads:
+  - GameConfig
+  - TimeState
+  - TimeSlowState
+logic: |
+  Если TimeSlowState.expires_tick == 0:
+    # Замедление не активно — ничего не делать
+    Продолжить.
+  Иначе:
+    Если TimeState.current_tick >= TimeSlowState.expires_tick:
+      # Эффект истёк — снять замедление и иммунитет
+      Установить TimeState.time_scale в 1.0.
+      Установить TimeSlowState.expires_tick в 0.
+
+      Для каждой сущности из выборки, у которой есть TimeSlowImmune, LocalTimeScale:
+        Установить LocalTimeScale.scale в 1.0.
+        Удалить компонент TimeSlowImmune у сущности.
+    Иначе:
+      # Эффект активен — поддерживать корректный компенсирующий масштаб
+      Прочитать GameConfig.time_slow_scale.
+      expected_scale = div(1.0, GameConfig.time_slow_scale).
+
+      Для каждой сущности из выборки, у которой есть TimeSlowImmune, LocalTimeScale:
+        Если LocalTimeScale.scale != expected_scale:
+          Установить LocalTimeScale.scale в expected_scale.

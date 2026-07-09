@@ -1,0 +1,41 @@
+name: DashUpdateSystem
+description: |
+  Стадия: Simulation
+  
+  Обновляет сущности с активным рывком (компонент Dash).
+  Устанавливает повышенную скорость рывка в направлении Dash.dir.
+  Проверяет истечение времени рывка и удаляет компонент Dash.
+
+requires:
+  - component: Dash
+    access: write
+  - component: Velocity
+    access: write
+reads:
+  - GameConfig
+  - TimeState
+
+logic: |
+  Прочитать TimeState.current_tick.
+  Прочитать GameConfig.dash_speed.
+  Прочитать GameConfig.dash_duration_ms.
+  Прочитать GameConfig.ms_per_tick.
+
+  Для каждой сущности из выборки, у которой есть Dash, Velocity:
+    Прочитать Dash.start_tick, Dash.duration_ms, Dash.dir_x, Dash.dir_y, Dash.dir_z.
+
+    # Вычислить, истёк ли рывок
+    ticks_elapsed = sub(TimeState.current_tick, Dash.start_tick).
+    ms_elapsed = mul(ticks_elapsed, GameConfig.ms_per_tick).
+
+    Если ms_elapsed >= Dash.duration_ms:
+      # Рывок закончился — удалить компонент Dash и остановить
+      Удалить компонент Dash у сущности.
+      Установить Velocity.dx в 0.
+      Установить Velocity.dy в 0.
+      Установить Velocity.dz в 0.
+    Иначе:
+      # Установить скорость рывка
+      Установить Velocity.dx в mul(Dash.dir_x, GameConfig.dash_speed).
+      Установить Velocity.dy в mul(Dash.dir_y, GameConfig.dash_speed).
+      Установить Velocity.dz в mul(Dash.dir_z, GameConfig.dash_speed).

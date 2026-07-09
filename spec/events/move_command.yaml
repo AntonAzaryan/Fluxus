@@ -1,0 +1,17 @@
+# Команда движения
+# Генерируется PlayerCommandIngestSystem, потребляется MoveIntentSystem
+
+name: MoveCommand
+description: |
+  Команда движения от игрока. Генерируется PlayerCommandIngestSystem
+  из InputBuffer (сырой ввод WASD).
+  
+  MoveIntentSystem читает MoveCommand и устанавливает компонент MoveIntent
+  у сущности игрока. MovementSystem затем конвертирует MoveIntent в Velocity.
+
+fields:
+  tick: u64         # Тик, в котором команда была отправлена (для валидации)
+  player_id: u64    # entity_id игрока, отправившего команду
+  dx: fixed         # Намерение движения по X (-1.0 .. 1.0)
+  dy: fixed         # Намерение движения по Y (-1.0 .. 1.0)
+  dz: fixed         # Намерение движения по Z (в MVP всегда 0 — арена плоская)

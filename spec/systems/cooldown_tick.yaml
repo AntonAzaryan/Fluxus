@@ -1,0 +1,44 @@
+name: CooldownTickSystem
+description: |
+  Стадия: Intent
+  
+  Уменьшает кулдауны способностей на 1 тик (на величину dt в мс).
+  Кулдауны не могут стать отрицательными — минимальное значение 0.
+  
+  Система работает для всех сущностей с компонентом Cooldowns.
+
+requires:
+  - component: Cooldowns
+    access: write
+reads:
+  - TimeState
+  - GameConfig
+
+logic: |
+  # Шаг времени в миллисекундах — единственный источник GameConfig.ms_per_tick
+  Прочитать GameConfig.ms_per_tick.
+
+  Для каждой сущности из выборки, у которой есть Cooldowns:
+    Прочитать Cooldowns.fireball.
+    Если Cooldowns.fireball > 0:
+      Уменьшить Cooldowns.fireball на GameConfig.ms_per_tick.
+      Если Cooldowns.fireball < 0:
+        Установить Cooldowns.fireball в 0.
+
+    Прочитать Cooldowns.shield.
+    Если Cooldowns.shield > 0:
+      Уменьшить Cooldowns.shield на GameConfig.ms_per_tick.
+      Если Cooldowns.shield < 0:
+        Установить Cooldowns.shield в 0.
+
+    Прочитать Cooldowns.dash.
+    Если Cooldowns.dash > 0:
+      Уменьшить Cooldowns.dash на GameConfig.ms_per_tick.
+      Если Cooldowns.dash < 0:
+        Установить Cooldowns.dash в 0.
+
+    Прочитать Cooldowns.time_slow.
+    Если Cooldowns.time_slow > 0:
+      Уменьшить Cooldowns.time_slow на GameConfig.ms_per_tick.
+      Если Cooldowns.time_slow < 0:
+        Установить Cooldowns.time_slow в 0.

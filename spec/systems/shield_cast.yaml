@@ -1,0 +1,86 @@
+name: ShieldCastSystem
+description: |
+  Стадия: Intent
+  
+  Обрабатывает каст щита (CastShield).
+  Проверяет кулдаун и отсутствие активного щита у игрока.
+  Создаёт сущность щита перед персонажем в направлении прицеливания.
+  
+  Позиция щита: на расстоянии shield_spawn_distance от кастера
+  в направлении (target - caster_position).
+
+  Время жизни щита (Lifetime.expires_tick) вычисляется при создании
+  из GameConfig.shield_lifetime_ms и удаляется ShieldExpirationSystem.
+
+requires:
+  - component: Cooldowns
+    access: write
+  - component: Position
+    access: read
+  - component: AttachedTo
+    access: write
+triggers:
+  - event: CastShield
+reads:
+  - GameConfig
+  - TimeState
+logic: |
+  Для каждого события CastShield:
+    
+    # Проверить, что кастер существует
+    Если сущность события.caster_id не имеет компонента Cooldowns:
+      Продолжить к следующей сущности.
+    
+    # Проверить кулдаун щита
+    Прочитать Cooldowns.shield у сущности события.caster_id.
+    Если Cooldowns.shield > 0:
+      Продолжить к следующей сущности.
+    
+    # Проверить, что кастер не мёртв
+    Если сущность события.caster_id имеет компонент Dead:
+      Продолжить к следующей сущности.
+    
+    # Проверить, что нет активного щита у кастера
+    # (нет сущности с AttachedTo.owner_id == caster_id)
+    active_shield_found = false.
+    Для каждой сущности из выборки, у которой есть AttachedTo:
+      Если AttachedTo.owner_id == события.caster_id:
+        active_shield_found = true.
+    Если active_shield_found == true:
+      Продолжить к следующей сущности.
+
+    # Получить позицию кастера
+    Прочитать Position.x, Position.y, Position.z у сущности события.caster_id.
+
+    # Вычислить направление к точке прицеливания
+    delta = vec_sub((события.target_x, события.target_y, события.target_z), (Position.x, Position.y, Position.z)).
+    length_sq = vec_length_sq_xy(delta).
+
+    Если length_sq == 0:
+      # Цель совпадает с позицией — использовать направление по умолчанию
+      dir = (1.0, 0, 0).
+    Иначе:
+      dir = vec_normalize_xy(delta).
+
+    # Вычислить позицию спавна щита
+    Прочитать GameConfig.shield_spawn_distance.
+    shield_pos = vec_add((Position.x, Position.y, Position.z), vec_scale(dir, GameConfig.shield_spawn_distance)).
+
+    # Вычислить тик истечения щита
+    Прочитать GameConfig.shield_lifetime_ms, GameConfig.ms_per_tick.
+    lifetime_ticks = div(GameConfig.shield_lifetime_ms, GameConfig.ms_per_tick).
+
+    # Создать щит
+    Создать сущность из архетипа Shield с полями {
+      Position: { x: shield_pos.x, y: shield_pos.y, z: shield_pos.z },
+      Lifetime: { expires_tick: add(TimeState.current_tick, lifetime_ticks) }
+    }.
+
+    # Установить ссылку на владельца
+    Добавить компонент AttachedTo к созданной сущности щита с полями {
+      owner_id: события.caster_id
+    }.
+    
+    # Установить кулдаун
+    Прочитать GameConfig.shield_cooldown.
+    Установить Cooldowns.shield у сущности события.caster_id в GameConfig.shield_cooldown.

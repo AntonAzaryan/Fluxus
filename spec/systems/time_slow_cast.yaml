@@ -1,0 +1,65 @@
+name: TimeSlowCastSystem
+description: |
+  Стадия: Intent
+  
+  Обрабатывает каст замедления времени (CastTimeSlow).
+  Проверяет кулдаун, устанавливает глобальный time_scale.
+  Добавляет иммунитет кастеру (TimeSlowImmune + LocalTimeScale).
+  
+  Замедление влияет на все сущности кроме:
+  - Кастера (имеет TimeSlowImmune)
+  - Снарядов кастера (получают TimeSlowImmune при создании)
+
+requires:
+  - component: Cooldowns
+    access: write
+  - component: TimeSlowImmune
+    access: write
+  - component: LocalTimeScale
+    access: write
+triggers:
+  - event: CastTimeSlow
+reads:
+  - GameConfig
+  - TimeState
+  - TimeSlowState
+logic: |
+  Для каждого события CastTimeSlow:
+    
+    # Проверить, что кастер существует
+    Если сущность события.caster_id не имеет компонента Cooldowns:
+      Продолжить к следующей сущности.
+    
+    # Проверить кулдаун
+    Прочитать Cooldowns.time_slow у сущности события.caster_id.
+    Если Cooldowns.time_slow > 0:
+      Продолжить к следующей сущности.
+    
+    # Проверить, что кастер не мёртв
+    Если сущность события.caster_id имеет компонент Dead:
+      Продолжить к следующей сущности.
+    
+    # Установить глобальное замедление времени
+    Прочитать GameConfig.time_slow_scale.
+    Установить TimeState.time_scale в GameConfig.time_slow_scale.
+    
+    # Добавить иммунитет кастеру
+    Добавить компонент TimeSlowImmune к сущности события.caster_id.
+    
+    # Установить локальный масштаб времени для компенсации
+    # local_scale = 1.0 / time_slow_scale (чтобы двигаться с нормальной скоростью)
+    # Для time_slow_scale = 0.5: local_scale = 2.0
+    Прочитать GameConfig.time_slow_scale.
+    local_scale = div(1.0, GameConfig.time_slow_scale).
+    Добавить компонент LocalTimeScale к сущности события.caster_id с полями {
+      scale: local_scale
+    }.
+    
+    # Установить кулдаун
+    Прочитать GameConfig.time_slow_cooldown_ms.
+    Установить Cooldowns.time_slow у сущности события.caster_id в GameConfig.time_slow_cooldown_ms.
+
+    # Вычислить тик окончания эффекта и запомнить в TimeSlowState
+    Прочитать GameConfig.time_slow_duration_ms, GameConfig.ms_per_tick.
+    duration_ticks = div(GameConfig.time_slow_duration_ms, GameConfig.ms_per_tick).
+    Установить TimeSlowState.expires_tick в add(TimeState.current_tick, duration_ticks).

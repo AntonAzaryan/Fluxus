@@ -1,0 +1,21 @@
+# Буфер ввода команд игрока
+# См. conventions.md §6 — события-команды игрока
+
+name: InputBuffer
+description: |
+  Ресурс-буфер, куда внешний слой (презентация) кладёт сырые команды игрока.
+  PlayerCommandIngestSystem читает этот буфер в стадии Input,
+  конвертирует команды в события (CastFireball, MoveCommand, и т.д.)
+  и очищает буфер в конце тика.
+  
+  Команды валидируются на наличие сущности игрока, но не на КД способности.
+
+fields:
+  commands: list    # Список команд текущего тика
+  
+# Элемент списка commands — одно из:
+# - MoveCommandInput { player_id: u64, dx: fixed, dy: fixed, dz: fixed }
+# - CastFireballInput { player_id: u64, target_x: fixed, target_y: fixed, target_z: fixed }
+# - CastShieldInput { player_id: u64, target_x: fixed, target_y: fixed, target_z: fixed }
+# - DashInput { player_id: u64 }
+# - CastTimeSlowInput { player_id: u64 }
