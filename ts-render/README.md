@@ -57,24 +57,24 @@ src/
 ├── types.ts        # GameState, Entity types
 ├── renderer.ts     # Core renderer (scene, camera, lights)
 ├── entities.ts     # Entity mesh factory
-└── main.ts         # Demo entry point
+└── demo.ts         # Demo entry point
 ```
 
 ## Integration with ts-impl
 
-The renderer consumes `GameState` from ts-impl:
+Для полной интеграции с ts-impl требуется monorepo настройка (npm workspace или pnpm workspace).
+
+Текущее демо использует mock данные. Для подключения реального game state:
 
 ```typescript
-import { createGameState } from '../ts-impl/src/tick';
-import { createRenderer } from './renderer';
+import { tick, createGameState } from '../ts-impl/src/tick';
 
-const state = createGameState();
-const renderer = createRenderer(container);
+const gameState = createGameState();
 
-// Sync state at 60 FPS
-setInterval(() => {
-  renderer.updateState(state);
-}, 1000 / 60);
+function gameLoop() {
+  tick(gameState, input);
+  renderer.updateState(gameState);
+}
 ```
 
 ## Entity Types

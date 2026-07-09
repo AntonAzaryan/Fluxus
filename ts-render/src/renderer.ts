@@ -6,6 +6,9 @@ import * as THREE from 'three';
 import { GameState, Entity } from './types';
 import { EntityMeshFactory, EntityMeshes } from './entities';
 
+// Re-export GameState for consumers
+export type { GameState };
+
 /**
  * Renderer configuration
  */
