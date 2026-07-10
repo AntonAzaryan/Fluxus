@@ -11,8 +11,16 @@ import {
   TickInput,
 } from 'game-mvp-impl/tick';
 import { toFixed, ZERO, ONE } from 'game-mvp-impl/fixed/fixed';
-import { MoveCommand, DashCommand, CastFireball, CastShield, CastTimeSlow } from 'game-mvp-impl/ecs/events';
+import {
+  MoveCommandInput,
+  DashInput,
+  CastFireballInput,
+  CastShieldInput,
+  CastTimeSlowInput,
+} from 'game-mvp-impl/resources/resources';
 import { createPlayerArchetype } from 'game-mvp-impl/archetypes/player';
+
+type InputCommand = MoveCommandInput | DashInput | CastFireballInput | CastShieldInput | CastTimeSlowInput;
 
 // ============================================================================
 // Input Handler
@@ -25,68 +33,67 @@ class InputHandler {
   private currentTick = 0n;
 
   constructor(
-    private canvas: HTMLElement,
-    private emitCommand: (cmd: MoveCommand | DashCommand | CastFireball | CastShield | CastTimeSlow) => void
+    private emitCommand: (cmd: InputCommand) => void
   ) {
     this.setupListeners();
   }
 
   private setupListeners(): void {
     window.addEventListener('keydown', (e) => {
+      console.log('Key down:', e.code);
       this.keys.add(e.code);
-      
+
       if (e.code === 'KeyQ' && this.playerId) this.castFireball();
       if (e.code === 'KeyE' && this.playerId) this.castShield();
       if (e.code === 'Space' && this.playerId) this.startDash();
       if (e.code === 'KeyR' && this.playerId) this.castTimeSlow();
     });
 
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('keyup', (e) => {
+      console.log('Key up:', e.code);
+      this.keys.delete(e.code);
+    });
 
-    this.canvas.addEventListener('mousemove', (e) => {
-      const rect = this.canvas.getBoundingClientRect();
-      this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    window.addEventListener('mousemove', (e) => {
+      this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      this.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
     });
   }
 
   private castFireball(): void {
     const target = this.screenToWorld(this.mouse);
     this.emitCommand({
-      tick: this.currentTick,
+      type: 'CastFireballInput',
       player_id: this.playerId!,
-      caster_id: this.playerId!,
       target_x: toFixed(target.x),
       target_y: toFixed(target.y),
       target_z: ZERO,
-    } as CastFireball);
+    });
   }
 
   private castShield(): void {
     const target = this.screenToWorld(this.mouse);
     this.emitCommand({
-      tick: this.currentTick,
+      type: 'CastShieldInput',
       player_id: this.playerId!,
-      caster_id: this.playerId!,
       target_x: toFixed(target.x),
       target_y: toFixed(target.y),
       target_z: ZERO,
-    } as CastShield);
+    });
   }
 
   private startDash(): void {
     this.emitCommand({
-      tick: this.currentTick,
+      type: 'DashInput',
       player_id: this.playerId!,
-    } as DashCommand);
+    });
   }
 
   private castTimeSlow(): void {
     this.emitCommand({
-      tick: this.currentTick,
+      type: 'CastTimeSlowInput',
       player_id: this.playerId!,
-      caster_id: this.playerId!,
-    } as CastTimeSlow);
+    });
   }
 
   private screenToWorld(screen: THREE.Vector2): { x: number; y: number } {
@@ -116,10 +123,16 @@ class InputHandler {
       dy /= len;
     }
 
+    console.log('[getMovementIntent] keys:', Array.from(this.keys), 'dx:', dx, 'dy:', dy, 'pressed:', len > 0);
+
     return {
       pressed: len > 0,
       vec: new THREE.Vector2(dx, dy),
     };
+  }
+
+  getKeys(): Set<string> {
+    return this.keys;
   }
 
   updateTick(tick: bigint): void {
@@ -174,9 +187,9 @@ world.spawn({
 });
 
 // Commands buffer
-const commands: Array<MoveCommand | DashCommand | CastFireball | CastShield | CastTimeSlow> = [];
+const commands: InputCommand[] = [];
 
-const inputHandler = new InputHandler(container, (cmd) => commands.push(cmd));
+const inputHandler = new InputHandler((cmd) => commands.push(cmd));
 inputHandler.setPlayerId(playerId);
 
 // UI
@@ -201,21 +214,28 @@ function gameLoop(currentTime: number) {
   const deltaTime = currentTime - lastTime;
 
   if (deltaTime >= tickRate) {
-    // Movement intent
+    // Movement input
     const movement = inputHandler.getMovementIntent();
-    const player = world.get(playerId);
-    
-    if (player?.MoveIntent && movement.pressed) {
-      player.MoveIntent.dx = toFixed(movement.vec.x);
-      player.MoveIntent.dy = toFixed(movement.vec.y);
-      player.MoveIntent.dz = ZERO;
+
+    if (movement.pressed) {
+      const moveCmd = {
+        type: 'MoveCommandInput' as const,
+        player_id: playerId,
+        dx: toFixed(movement.vec.x),
+        dy: toFixed(movement.vec.y),
+        dz: ZERO,
+      };
+      console.log('[demo] Adding move command:', moveCmd);
+      commands.push(moveCmd);
     }
 
+    console.log('[demo] Tick with', commands.length, 'commands');
+
     // Tick
-    const input: TickInput = { commands: commands as any };
+    const input: TickInput = { commands };
     tick(gameState, input);
     commands.length = 0;
-    
+
     inputHandler.updateTick(resources.timeState.current_tick);
     lastTime = currentTime;
   }

@@ -15,6 +15,8 @@ export function moveIntentSystem(
 ): void {
   // Сначала очистить все MoveIntent (пересоздать каждый тик)
   const entitiesWithMoveIntent = world.with('MoveIntent');
+  console.log('[moveIntent] Entities with MoveIntent:', entitiesWithMoveIntent.length);
+  
   for (const entity of entitiesWithMoveIntent) {
     entity.MoveIntent.dx = BigInt(0);
     entity.MoveIntent.dy = BigInt(0);
@@ -23,12 +25,17 @@ export function moveIntentSystem(
 
   // Обработать команды движения
   const moveCommands = bus.get<MoveCommand>('MoveCommand');
+  console.log('[moveIntent] MoveCommands:', moveCommands.length);
+  
   for (const command of moveCommands) {
     const entity = world.get(command.player_id);
+    console.log('[moveIntent] Processing command for entity:', command.player_id, 'entity:', entity, 'MoveIntent:', entity?.MoveIntent);
+    
     if (entity && entity.MoveIntent) {
       entity.MoveIntent.dx = command.dx;
       entity.MoveIntent.dy = command.dy;
       entity.MoveIntent.dz = command.dz;
+      console.log('[moveIntent] Set MoveIntent to:', command.dx, command.dy);
     }
   }
 }

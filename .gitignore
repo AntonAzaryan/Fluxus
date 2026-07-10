@@ -5,3 +5,5 @@ dist/
 src/**/*.d.ts
 src/**/*.js
 src/**/*.js.map
+*.DS_Store
+.idea/

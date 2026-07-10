@@ -11,6 +11,7 @@ import { Resources, InputCommand } from './resources/resources';
 import { schedule } from './schedule';
 import { PhysicsProvider } from './physics/physicsProvider';
 import { Fixed, div, mul, ONE } from './fixed/fixed';
+import { defaultGameConfig } from './gameConfig';
 
 /**
  * Состояние игры для tick()
@@ -69,7 +70,7 @@ export function createGameState(): GameState {
   return {
     world: new GameWorld(),
     resources: {
-      gameConfig: {} as any, // Будет установлено извне
+      gameConfig: defaultGameConfig,
       timeState: { current_tick: BigInt(0), time_scale: ONE },
       rngState: { state: BigInt(0), inc: BigInt(0) },
       entityAllocatorState: { next_id: BigInt(1) },
