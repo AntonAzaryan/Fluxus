@@ -66,8 +66,10 @@ export function shieldCastSystem(
       dir = vec_normalize_xy(delta);
     }
 
-    // Вычислить позицию спавна щита
-    const shieldPos = vec_add(position, vec_scale(dir, gameConfig.shield_spawn_distance));
+    // Вычислить смещение щита относительно кастера (сохраняется в AttachedTo,
+    // чтобы AttachedToSyncSystem мог удерживать щит на этом смещении каждый тик).
+    const offset = vec_scale(dir, gameConfig.shield_spawn_distance);
+    const shieldPos = vec_add(position, offset);
 
     // Вычислить тик истечения щита
     const lifetimeTicks = div(gameConfig.shield_lifetime_ms, gameConfig.ms_per_tick);
@@ -80,7 +82,7 @@ export function shieldCastSystem(
       Collider: shieldArchetype.Collider,
       StaticBody: shieldArchetype.StaticBody,
       Health: shieldArchetype.Health,
-      AttachedTo: new AttachedTo(event.caster_id),
+      AttachedTo: new AttachedTo(event.caster_id, offset.x, offset.y),
       Lifetime: new Lifetime(expiresTick),
       CollisionLayer: shieldArchetype.CollisionLayer,
     });

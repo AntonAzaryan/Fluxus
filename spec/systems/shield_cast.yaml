@@ -7,7 +7,10 @@ description: |
   Создаёт сущность щита перед персонажем в направлении прицеливания.
   
   Позиция щита: на расстоянии shield_spawn_distance от кастера
-  в направлении (target - caster_position).
+  в направлении (target - caster_position). Это же смещение сохраняется
+  в AttachedTo.offset_x/offset_y — AttachedToSyncSystem (стадия Simulation)
+  удерживает щит на этом смещении от владельца каждый последующий тик,
+  а рендер использует его для поворота щита в направлении каста.
 
   Время жизни щита (Lifetime.expires_tick) вычисляется при создании
   из GameConfig.shield_lifetime_ms и удаляется ShieldExpirationSystem.
@@ -62,9 +65,10 @@ logic: |
     Иначе:
       dir = vec_normalize_xy(delta).
 
-    # Вычислить позицию спавна щита
+    # Вычислить смещение щита относительно кастера и позицию спавна
     Прочитать GameConfig.shield_spawn_distance.
-    shield_pos = vec_add((Position.x, Position.y, Position.z), vec_scale(dir, GameConfig.shield_spawn_distance)).
+    offset = vec_scale(dir, GameConfig.shield_spawn_distance).
+    shield_pos = vec_add((Position.x, Position.y, Position.z), offset).
 
     # Вычислить тик истечения щита
     Прочитать GameConfig.shield_lifetime_ms, GameConfig.ms_per_tick.
@@ -76,9 +80,12 @@ logic: |
       Lifetime: { expires_tick: add(TimeState.current_tick, lifetime_ticks) }
     }.
 
-    # Установить ссылку на владельца
+    # Установить ссылку на владельца и смещение (для AttachedToSyncSystem
+    # и для направления, в которое повёрнут щит на рендере)
     Добавить компонент AttachedTo к созданной сущности щита с полями {
-      owner_id: события.caster_id
+      owner_id: события.caster_id,
+      offset_x: offset.x,
+      offset_y: offset.y
     }.
     
     # Установить кулдаун

@@ -4,7 +4,7 @@
  */
 
 import * as THREE from 'three';
-import { createRenderer, GameState as RenderState } from './renderer';
+import { createRenderer, GameRenderer, GameState as RenderState } from './renderer';
 import {
   createGameState,
   tick,
@@ -33,14 +33,14 @@ class InputHandler {
   private currentTick = 0n;
 
   constructor(
-    private emitCommand: (cmd: InputCommand) => void
+    private emitCommand: (cmd: InputCommand) => void,
+    private renderer: GameRenderer
   ) {
     this.setupListeners();
   }
 
   private setupListeners(): void {
     window.addEventListener('keydown', (e) => {
-      console.log('Key down:', e.code);
       this.keys.add(e.code);
 
       if (e.code === 'KeyQ' && this.playerId) this.castFireball();
@@ -50,7 +50,6 @@ class InputHandler {
     });
 
     window.addEventListener('keyup', (e) => {
-      console.log('Key up:', e.code);
       this.keys.delete(e.code);
     });
 
@@ -97,12 +96,7 @@ class InputHandler {
   }
 
   private screenToWorld(screen: THREE.Vector2): { x: number; y: number } {
-    const viewWidth = 40;
-    const viewHeight = viewWidth * (window.innerHeight / window.innerWidth);
-    return {
-      x: screen.x * (viewWidth / 2),
-      y: screen.y * (viewHeight / 2),
-    };
+    return this.renderer.screenToGround(screen) ?? { x: 0, y: 0 };
   }
 
   setPlayerId(id: bigint): void {
@@ -122,8 +116,6 @@ class InputHandler {
       dx /= len;
       dy /= len;
     }
-
-    console.log('[getMovementIntent] keys:', Array.from(this.keys), 'dx:', dx, 'dy:', dy, 'pressed:', len > 0);
 
     return {
       pressed: len > 0,
@@ -152,11 +144,12 @@ document.body.appendChild(container);
 const renderer = createRenderer(container, {
   width: 1280,
   height: 720,
-  cameraZ: 30,
+  cameraZ: 320,
 });
 
 const gameState = createGameState();
 const { world, bus, resources } = gameState;
+(window as any).__world = world;
 
 // Spawn player
 const playerArchetype = createPlayerArchetype();
@@ -173,15 +166,15 @@ const playerId = world.spawn({
 
 // Spawn walls
 world.spawn({
-  Position: { x: toFixed(10), y: toFixed(5), z: ZERO },
-  Collider: { shape: 'aabb', radius: ZERO, half_width: toFixed(2), half_height: toFixed(5), height: toFixed(10) },
+  Position: { x: toFixed(60), y: toFixed(30), z: ZERO },
+  Collider: { shape: 'aabb', radius: ZERO, half_width: toFixed(15), half_height: toFixed(40), height: toFixed(10) },
   StaticBody: {},
   CollisionLayer: { layer: 2, mask: 0b1111 },
 });
 
 world.spawn({
-  Position: { x: toFixed(-10), y: toFixed(-5), z: ZERO },
-  Collider: { shape: 'aabb', radius: ZERO, half_width: toFixed(2), half_height: toFixed(5), height: toFixed(10) },
+  Position: { x: toFixed(-60), y: toFixed(-30), z: ZERO },
+  Collider: { shape: 'aabb', radius: ZERO, half_width: toFixed(15), half_height: toFixed(40), height: toFixed(10) },
   StaticBody: {},
   CollisionLayer: { layer: 2, mask: 0b1111 },
 });
@@ -189,7 +182,7 @@ world.spawn({
 // Commands buffer
 const commands: InputCommand[] = [];
 
-const inputHandler = new InputHandler((cmd) => commands.push(cmd));
+const inputHandler = new InputHandler((cmd) => commands.push(cmd), renderer);
 inputHandler.setPlayerId(playerId);
 
 // UI
@@ -225,11 +218,8 @@ function gameLoop(currentTime: number) {
         dy: toFixed(movement.vec.y),
         dz: ZERO,
       };
-      console.log('[demo] Adding move command:', moveCmd);
       commands.push(moveCmd);
     }
-
-    console.log('[demo] Tick with', commands.length, 'commands');
 
     // Tick
     const input: TickInput = { commands };
@@ -251,6 +241,8 @@ function gameLoop(currentTime: number) {
       Health: e.Health,
       Projectile: e.Projectile,
       Dash: e.Dash,
+      StaticBody: e.StaticBody,
+      AttachedTo: e.AttachedTo,
     })),
   };
 

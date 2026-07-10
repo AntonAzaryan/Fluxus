@@ -36,6 +36,8 @@ export class GameRenderer {
   private entityMeshes: Map<bigint, EntityMeshes>;
   private entityFactory: EntityMeshFactory;
   private animationId: number | null = null;
+  private raycaster = new THREE.Raycaster();
+  private groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
   constructor(container: HTMLElement, config: Partial<RendererConfig> = {}) {
     const cfg = { ...defaultConfig, ...config };
@@ -51,7 +53,11 @@ export class GameRenderer {
       0.1,
       1000
     );
-    this.camera.position.set(0, 0, cfg.cameraZ);
+    this.camera.position.set(
+      0,
+      -cfg.cameraZ * Math.sin(cfg.cameraAngle),
+      cfg.cameraZ * Math.cos(cfg.cameraAngle)
+    );
     this.camera.lookAt(0, 0, 0);
 
     // Renderer
@@ -63,8 +69,11 @@ export class GameRenderer {
     // Lights
     this.setupLights();
 
-    // Grid helper
+    // Grid helper — по умолчанию GridHelper лежит в плоскости XZ (Y-up),
+    // но игровая плоскость земли — XY (Z — высота, conventions.md §10),
+    // поэтому поворачиваем сетку в плоскость XY.
     const gridHelper = new THREE.GridHelper(100, 50, 0x444444, 0x222222);
+    gridHelper.rotation.x = Math.PI / 2;
     this.scene.add(gridHelper);
 
     // Entity meshes factory
@@ -111,10 +120,12 @@ export class GameRenderer {
       if (meshes && entity.Position) {
         const x = Number(entity.Position.x) / 65536;
         const y = Number(entity.Position.y) / 65536;
-        meshes.mesh.position.set(x, y, 0);
+        const z = Number(entity.Position.z) / 65536;
+        meshes.mesh.position.set(x, y, z);
 
         // Update health bar if exists
         if (entity.Health && meshes.healthBar) {
+          meshes.healthBar.position.set(x, y, z + 0.1);
           const healthPct = Number(entity.Health.current) / Number(entity.Health.max);
           meshes.healthBar.scale.x = healthPct;
         }
@@ -164,6 +175,18 @@ export class GameRenderer {
     }
     this.entityMeshes.clear();
     this.renderer.dispose();
+  }
+
+  /**
+   * Преобразовать экранные координаты (NDC, -1..1) в мировые координаты на плоскости земли (z=0),
+   * бросая луч через реальную (перспективную, наклонённую) камеру — вместо линейного приближения.
+   */
+  screenToGround(ndc: THREE.Vector2): { x: number; y: number } | null {
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const point = new THREE.Vector3();
+    const hit = this.raycaster.ray.intersectPlane(this.groundPlane, point);
+    if (!hit) return null;
+    return { x: point.x, y: point.y };
   }
 
   /**

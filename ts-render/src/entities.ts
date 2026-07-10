@@ -37,15 +37,30 @@ const materials = {
 
 /**
  * Geometries (reused for performance)
+ * Юнит-геометрии с основанием на z=0 (растут вверх по Z — высоте игры), масштабируются per-entity.
  */
 const geometries = {
-  circle: new THREE.CircleGeometry(1, 32),
-  rectangle: new THREE.PlaneGeometry(1, 1),
+  cylinder: createCylinderGeometry(),
+  box: createBoxGeometry(),
   shieldArc: createShieldArcGeometry(),
 };
 
+function createCylinderGeometry(): THREE.BufferGeometry {
+  // CylinderGeometry по умолчанию вытянут вдоль Y — поворачиваем вдоль Z (высота в игровых координатах)
+  const geometry = new THREE.CylinderGeometry(1, 1, 1, 32);
+  geometry.rotateX(Math.PI / 2);
+  geometry.translate(0, 0, 0.5); // основание на z=0, а не по центру
+  return geometry;
+}
+
+function createBoxGeometry(): THREE.BufferGeometry {
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  geometry.translate(0, 0, 0.5); // основание на z=0, а не по центру
+  return geometry;
+}
+
 /**
- * Create shield arc geometry (30 degree arc)
+ * Create shield arc geometry (30 degree arc), extruded по Z для объёма
  */
 function createShieldArcGeometry(): THREE.BufferGeometry {
   const shape = new THREE.Shape();
@@ -56,7 +71,7 @@ function createShieldArcGeometry(): THREE.BufferGeometry {
   shape.absarc(0, 0, radius, -arcAngle / 2, arcAngle / 2, false);
   shape.lineTo(0, 0);
 
-  return new THREE.ShapeGeometry(shape);
+  return new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: false });
 }
 
 /**
@@ -77,21 +92,16 @@ export class EntityMeshFactory {
 
     // Determine entity type by components
     if (entity.Projectile) {
-      mesh = this.createFireball();
+      mesh = this.createFireball(entity);
     } else if (entity.Dash) {
-      mesh = this.createPlayer(); // Dashing player
+      mesh = this.createPlayer(entity); // Dashing player
     } else if (entity.Collider?.shape === 'aabb') {
       mesh = this.createWall(entity);
-    } else if (entity.Collider?.shape === 'circle') {
-      // Check if it's a shield (has specific properties)
-      const radius = entity.Collider ? Number(entity.Collider.radius) / 65536 : 1;
-      if (radius > 1.5) {
-        mesh = this.createShield();
-      } else {
-        mesh = this.createPlayer();
-      }
+    } else if (entity.AttachedTo) {
+      // Щит — единственная круглая сущность с AttachedTo
+      mesh = this.createShield(entity);
     } else {
-      mesh = this.createPlayer();
+      mesh = this.createPlayer(entity);
     }
 
     // Add health bar if entity has health
@@ -107,33 +117,49 @@ export class EntityMeshFactory {
     return { mesh, healthBar };
   }
 
-  private createPlayer(): THREE.Mesh {
-    const mesh = new THREE.Mesh(geometries.circle, materials.player);
-    mesh.scale.set(1, 1, 1);
+  private createPlayer(entity: Entity): THREE.Mesh {
+    const mesh = new THREE.Mesh(geometries.cylinder, materials.player);
+    const radius = entity.Collider ? Number(entity.Collider.radius) / 65536 : 1;
+    const height = entity.Collider ? Number(entity.Collider.height) / 65536 : 1;
+    mesh.scale.set(radius, radius, height);
     return mesh;
   }
 
-  private createFireball(): THREE.Mesh {
-    const mesh = new THREE.Mesh(geometries.circle, materials.fireball);
-    mesh.scale.set(0.5, 0.5, 0.5);
+  private createFireball(entity: Entity): THREE.Mesh {
+    const mesh = new THREE.Mesh(geometries.cylinder, materials.fireball);
+    const radius = entity.Collider ? Number(entity.Collider.radius) / 65536 : 1;
+    const height = entity.Collider ? Number(entity.Collider.height) / 65536 : 1;
+    mesh.scale.set(radius, radius, height);
     return mesh;
   }
 
-  private createShield(): THREE.Mesh {
+  private createShield(entity: Entity): THREE.Mesh {
     const mesh = new THREE.Mesh(geometries.shieldArc, materials.shield);
-    mesh.scale.set(1.5, 1.5, 1);
+    const radius = entity.Collider ? Number(entity.Collider.radius) / 65536 : 1;
+    const height = entity.Collider ? Number(entity.Collider.height) / 65536 : 1;
+    mesh.scale.set(radius, radius, height);
+
+    // Дуга щита (local +X) поворачивается в сторону каста — направление
+    // задаётся смещением от владельца, зафиксированным в момент каста.
+    if (entity.AttachedTo) {
+      const offsetX = Number(entity.AttachedTo.offset_x) / 65536;
+      const offsetY = Number(entity.AttachedTo.offset_y) / 65536;
+      mesh.rotation.z = Math.atan2(offsetY, offsetX);
+    }
+
     return mesh;
   }
 
   private createWall(entity: Entity): THREE.Mesh {
-    const mesh = new THREE.Mesh(geometries.rectangle, materials.wall);
-    
+    const mesh = new THREE.Mesh(geometries.box, materials.wall);
+
     if (entity.Collider) {
       const width = Number(entity.Collider.half_width * 2n) / 65536;
-      const height = Number(entity.Collider.half_height * 2n) / 65536;
-      mesh.scale.set(width, height, 1);
+      const depth = Number(entity.Collider.half_height * 2n) / 65536;
+      const height = Number(entity.Collider.height) / 65536;
+      mesh.scale.set(width, depth, height);
     }
-    
+
     return mesh;
   }
 

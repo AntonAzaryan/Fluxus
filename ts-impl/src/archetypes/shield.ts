@@ -12,7 +12,7 @@ import {
   Lifetime,
   CollisionLayer,
 } from '../components/types';
-import { toFixed } from '../fixed/fixed';
+import { toFixed, ZERO } from '../fixed/fixed';
 import { defaultGameConfig } from '../gameConfig';
 
 export function createShieldArchetype(
@@ -42,7 +42,7 @@ export function createShieldArchetype(
     StaticBody: overrides?.StaticBody || new StaticBody(),
     Health:
       overrides?.Health || new Health(defaultGameConfig.shield_health, defaultGameConfig.shield_health),
-    AttachedTo: overrides?.AttachedTo || new AttachedTo(BigInt(0)),
+    AttachedTo: overrides?.AttachedTo || new AttachedTo(BigInt(0), ZERO, ZERO),
     Lifetime: overrides?.Lifetime || new Lifetime(BigInt(0)),
     CollisionLayer: overrides?.CollisionLayer || new CollisionLayer(4, 0b1010),
   };

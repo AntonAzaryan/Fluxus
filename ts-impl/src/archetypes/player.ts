@@ -51,6 +51,6 @@ export function createPlayerArchetype(
     Cooldowns:
       overrides?.Cooldowns || new Cooldowns(toFixed(0), toFixed(0), toFixed(0), toFixed(0)),
     MoveIntent: overrides?.MoveIntent || new MoveIntent(toFixed(0), toFixed(0), toFixed(0)),
-    CollisionLayer: overrides?.CollisionLayer || new CollisionLayer(1, 0b111),
+    CollisionLayer: overrides?.CollisionLayer || new CollisionLayer(1, 0b1110),
   };
 }

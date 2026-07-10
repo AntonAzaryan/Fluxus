@@ -34,19 +34,24 @@ export class PhysicsProvider {
   ): void {
     this.collisions = [];
 
-    // 1. Построить broad-phase grid
+    // 1. Собрать все физические тела (динамические и статичные), отсортировать
+    //    по возрастанию entity_id — гарантия стабильного порядка обхода (contract §8).
+    const allBodies = world
+      .query('Position', 'Collider')
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const dynamicBodies = allBodies.filter((entity) => entity.DynamicBody);
+
+    // 2. Построить broad-phase grid из ВСЕХ тел — статичные тела (стены, щиты)
+    //    тоже должны участвовать, иначе с ними никогда не будет найдена пара.
     this.grid.clear();
-    const dynamicBodies = world.with('DynamicBody');
-    
-    for (const entity of dynamicBodies) {
-      if (!entity.Position || !entity.Collider) continue;
+    for (const entity of allBodies) {
       this.grid.add(entity.id, entity.Position.x, entity.Position.y);
     }
 
-    // 2. Получить все пары для проверки
+    // 3. Получить все пары для проверки
     const pairs = this.grid.getPairs();
 
-    // 3. Интеграция и narrow-phase
+    // 4. Интеграция и narrow-phase
     const positions = new Map<bigint, { x: Fixed; y: Fixed; z: Fixed }>();
     const velocities = new Map<bigint, { dx: Fixed; dy: Fixed; dz: Fixed }>();
 
@@ -87,7 +92,7 @@ export class PhysicsProvider {
       entity.Position.z = newPos.z;
     }
 
-    // 4. Narrow-phase и разрешение коллизий
+    // 5. Narrow-phase и разрешение коллизий
     for (const [idA, idB] of pairs) {
       const entityA = world.get(idA);
       const entityB = world.get(idB);
@@ -125,7 +130,7 @@ export class PhysicsProvider {
       this.collisions.push(event);
     }
 
-    // 5. Обновить позиции после разрешения
+    // 6. Обновить позиции после разрешения
     for (const [id, pos] of positions) {
       const entity = world.get(id);
       if (entity && entity.Position) {
@@ -135,7 +140,17 @@ export class PhysicsProvider {
       }
     }
 
-    // 6. Сортировка событий и эмиссия
+    // 6b. Обновить скорости после разрешения (restitution/отражение, contract §4)
+    for (const [id, vel] of velocities) {
+      const entity = world.get(id);
+      if (entity && entity.Velocity) {
+        entity.Velocity.dx = vel.dx;
+        entity.Velocity.dy = vel.dy;
+        entity.Velocity.dz = vel.dz;
+      }
+    }
+
+    // 7. Сортировка событий и эмиссия
     this.collisions.sort((a, b) => {
       if (a.entity_a < b.entity_a) return -1;
       if (a.entity_a > b.entity_a) return 1;
@@ -228,7 +243,8 @@ export class PhysicsProvider {
       posB.x = add(posB.x, mul(correction.x, ratioB));
       posB.y = add(posB.y, mul(correction.y, ratioB));
     } else if (bodyA) {
-      // A динамическое, B статичное
+      // A динамическое, B статичное. normal направлена A->B, значит A нужно
+      // оттолкнуть в противоположную сторону (sub), иначе A толкает внутрь B.
       const correction = vec_scale(normal, penetration);
       posA.x = sub(posA.x, correction.x);
       posA.y = sub(posA.y, correction.y);
@@ -239,30 +255,14 @@ export class PhysicsProvider {
       posB.y = add(posB.y, correction.y);
     }
 
-    // Отскок (restitution)
-    if (bodyA && bodyB) {
-      // Относительная скорость (Velocity format: dx, dy, dz)
-      const relVel = {
-        x: sub(velA.dx, velB.dx),
-        y: sub(velA.dy, velB.dy),
-        z: sub(velA.dz, velB.dz),
-      };
-      const velAlongNormal = add(
-        add(mul(relVel.x, normal.x), mul(relVel.y, normal.y)),
-        mul(relVel.z, normal.z)
-      );
-
-      // Только если тела сближаются
-      if (velAlongNormal < ZERO) {
-        const j = mul(mul(neg(ONE + restitution), velAlongNormal), div(ONE, add(bodyA.mass, bodyB.mass)));
-
-        const impulse = vec_scale(normal, j);
-        velA.dx = add(velA.dx, div(impulse.x, bodyA.mass));
-        velA.dy = add(velA.dy, div(impulse.y, bodyA.mass));
-        velB.dx = sub(velB.dx, div(impulse.x, bodyB.mass));
-        velB.dy = sub(velB.dy, div(impulse.y, bodyB.mass));
-      }
-    } else if (bodyA) {
+    // Отскок (restitution) — только для столкновения со статичным телом
+    // (стена, щит). Между двумя динамическими телами (в этой игре —
+    // только Fireball vs Player) физический импульс не считается: попадание
+    // снаряда — это урон+уничтожение (см. projectile_hit.yaml), а не упругий
+    // удар. Без этого исключения крошечная масса снаряда (0.1) при
+    // restitution=1.0 давала нефизично огромный импульс на игрока и сам
+    // снаряд — баг «игрок улетает при выстреле».
+    if (bodyA && !bodyB) {
       // Отскок от статичного
       const velAlongNormal = add(add(mul(velA.dx, normal.x), mul(velA.dy, normal.y)), mul(velA.dz, normal.z));
       if (velAlongNormal < ZERO) {
@@ -270,7 +270,7 @@ export class PhysicsProvider {
         velA.dx = add(velA.dx, mul(normal.x, j));
         velA.dy = add(velA.dy, mul(normal.y, j));
       }
-    } else if (bodyB) {
+    } else if (bodyB && !bodyA) {
       const velAlongNormal = add(add(mul(velB.dx, normal.x), mul(velB.dy, normal.y)), mul(velB.dz, normal.z));
       if (velAlongNormal < ZERO) {
         const j = mul(neg(ONE + restitution), velAlongNormal);

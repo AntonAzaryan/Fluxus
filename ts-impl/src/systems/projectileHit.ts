@@ -45,6 +45,10 @@ export function projectileHitSystem(
 
     const projectile = projectileEntity.Projectile!;
 
+    // Снаряд появляется в позиции кастера и ещё пересекается с ним в тик спавна
+    // (physics_v1.md §5) — игнорируем столкновение с собственным владельцем.
+    if (targetId === projectile.owner_id) continue;
+
     // Проверить, является ли цель щитом (AttachedTo)
     if (targetEntity.AttachedTo) {
       // Щит блокирует и отражает снаряд

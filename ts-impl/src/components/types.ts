@@ -230,13 +230,19 @@ export class Dead {
 }
 
 /**
- * AttachedTo: привязка сущности к владельцу
+ * AttachedTo: привязка сущности к владельцу.
+ * offset_x/offset_y — смещение относительно Position владельца (в мировых
+ * единицах, XY), поддерживается каждый тик AttachedToSyncSystem.
  */
 export class AttachedTo {
   owner_id: bigint;
+  offset_x: Fixed;
+  offset_y: Fixed;
 
-  constructor(owner_id: bigint) {
+  constructor(owner_id: bigint, offset_x: Fixed, offset_y: Fixed) {
     this.owner_id = owner_id;
+    this.offset_x = offset_x;
+    this.offset_y = offset_y;
   }
 }
 

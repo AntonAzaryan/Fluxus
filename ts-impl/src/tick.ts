@@ -10,7 +10,7 @@ import { EventBus } from './ecs/events';
 import { Resources, InputCommand } from './resources/resources';
 import { schedule } from './schedule';
 import { PhysicsProvider } from './physics/physicsProvider';
-import { Fixed, div, mul, ONE } from './fixed/fixed';
+import { Fixed, div, mul, toFixed, ONE } from './fixed/fixed';
 import { defaultGameConfig } from './gameConfig';
 
 /**
@@ -47,9 +47,9 @@ export function tick(state: GameState, input: TickInput): GameState {
   resources.inputBuffer.commands = input.commands;
 
   // 3. Вычислить dt с учётом time_scale
-  // dt = (1.0 / tick_rate) * time_scale
-  // ms_per_tick уже содержит 1000.0 / tick_rate
-  const dt = mul(div(gameConfig.ms_per_tick, ONE), timeState.time_scale);
+  // dt = (1.0 / tick_rate) * time_scale, в СЕКУНДАХ (скорости в GameConfig — units/sec)
+  // ms_per_tick хранит миллисекунды (1000.0 / tick_rate) — переводим в секунды делением на 1000
+  const dt = mul(div(gameConfig.ms_per_tick, toFixed(1000.0)), timeState.time_scale);
 
   // 4. Выполнить все стадии по расписанию
   for (const stage of schedule) {

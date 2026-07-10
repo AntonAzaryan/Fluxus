@@ -30,9 +30,15 @@ schedule:
   # =============================================================================
   - stage: Simulation
     description: |
-      Формирование Velocity. Position не мутируется (только провайдером физики).
+      Формирование Velocity. Position сущностей с DynamicBody не мутируется
+      здесь (только провайдером физики, см. physics_v1.md §4 — авторство
+      Position провайдер получает только над DynamicBody). Щит — StaticBody,
+      его Position всегда полностью во владении игровой логики: тут
+      AttachedToSyncSystem пишет Position щита как owner.Position + offset,
+      до стадии Physics, чтобы обновлённая позиция участвовала в
+      коллизиях этого же тика.
       Гравитация не применяется в MVP (горизонтальный полёт снарядов).
-      
+
       НЕРЕАЛИЗОВАННЫЕ СИСТЕМЫ (оставлены для будущей реализации):
       - SprintSystem: ускорение движения (не нужно в MVP)
       - FrictionSystem: трение для остановки (не нужно, MovementSystem сам останавливает)
@@ -41,6 +47,7 @@ schedule:
       - MovementSystem            # Конвертирует MoveIntent в Velocity
       - DashUpdateSystem          # Обновляет скорость во время рывка
       - TimeSlowSyncSystem        # Синхронизирует LocalTimeScale для иммунных
+      - AttachedToSyncSystem      # Держит щит на смещении от владельца
       # - SprintSystem            # НЕ РЕАЛИЗОВАН В MVP
       # - FrictionSystem          # НЕ РЕАЛИЗОВАН В MVP
       # - GravitySystem           # НЕ РЕАЛИЗОВАН В MVP

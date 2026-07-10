@@ -7,9 +7,10 @@ description: |
   Щит — отдельная сущность с коллайдером, блокирует снаряды.
   
   Компоненты:
-  - Position, Collider, StaticBody — статичный барьер
+  - Position, Collider, StaticBody — барьер, коллизионно статичен,
+    но позиция поддерживается AttachedToSyncSystem каждый тик
   - Health — здоровье щита (1 хит = уничтожен)
-  - AttachedTo — ссылка на владельца
+  - AttachedTo — ссылка на владельца + смещение (следует за владельцем)
   - Lifetime — тик истечения (заполняется ShieldCastSystem при создании)
   - CollisionLayer — слой щитов
 
@@ -33,6 +34,8 @@ components:
     max: 1.0
   AttachedTo:
     owner_id: 0       # заполняется при создании
+    offset_x: 0       # заполняется при создании (смещение от владельца)
+    offset_y: 0       # заполняется при создании (смещение от владельца)
   Lifetime:
     expires_tick: 0   # заполняется ShieldCastSystem при создании
   CollisionLayer:

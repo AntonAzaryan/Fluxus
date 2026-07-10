@@ -100,7 +100,7 @@ export class UniformGrid {
           const a = entities[i];
           const b = entities[j];
           const key = a < b ? `${a},${b}` : `${b},${a}`;
-          
+
           if (!seen.has(key)) {
             seen.add(key);
             if (a < b) {
@@ -112,6 +112,16 @@ export class UniformGrid {
         }
       }
     }
+
+    // Порядок ячеек в Map не гарантирует порядок (min_id, max_id) между парами
+    // из разных ячеек — сортируем итоговый список явно (contract §8).
+    pairs.sort((x, y) => {
+      if (x[0] < y[0]) return -1;
+      if (x[0] > y[0]) return 1;
+      if (x[1] < y[1]) return -1;
+      if (x[1] > y[1]) return 1;
+      return 0;
+    });
 
     return pairs;
   }

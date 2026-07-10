@@ -19,18 +19,13 @@ export function playerCommandIngestSystem(
   const { inputBuffer, timeState } = resources;
   const commands = inputBuffer.commands;
 
-  console.log('[playerCommandIngest] Processing', commands.length, 'commands');
-
   for (const command of commands) {
-    console.log('[playerCommandIngest] Command:', command.type, command.player_id);
     switch (command.type) {
       case 'MoveCommandInput': {
         // Проверка: сущность существует и не мертва
         if (world.has(command.player_id)) {
           const health = world.get(command.player_id)?.Health;
           const dead = world.get(command.player_id)?.Dead;
-
-          console.log('[playerCommandIngest] MoveCommand:', command.player_id, 'health:', health, 'dead:', dead);
 
           if (health && !dead) {
             bus.emit('MoveCommand', {
@@ -40,7 +35,6 @@ export function playerCommandIngestSystem(
               dy: command.dy,
               dz: command.dz,
             });
-            console.log('[playerCommandIngest] Emitted MoveCommand');
           }
         }
         break;

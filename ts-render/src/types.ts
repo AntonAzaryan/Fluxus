@@ -35,6 +35,8 @@ export interface Entity {
   Health?: { current: Fixed; max: Fixed };
   Projectile?: { owner_id: bigint; damage: Fixed };
   Dash?: { start_tick: bigint; duration_ms: Fixed; dir_x: Fixed; dir_y: Fixed; dir_z: Fixed };
+  StaticBody?: {};
+  AttachedTo?: { owner_id: bigint; offset_x: Fixed; offset_y: Fixed };
 }
 
 /**

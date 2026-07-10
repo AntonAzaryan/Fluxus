@@ -50,6 +50,6 @@ export function createFireballArchetype(
         toFixed(0)
       ),
     LocalTimeScale: overrides?.LocalTimeScale || new LocalTimeScale(toFixed(1.0)),
-    CollisionLayer: overrides?.CollisionLayer || new CollisionLayer(8, 0b1110),
+    CollisionLayer: overrides?.CollisionLayer || new CollisionLayer(8, 0b111),
   };
 }
