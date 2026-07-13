@@ -17,7 +17,9 @@ export const defaultGameConfig: GameConfig = {
   fireball_max_distance: toFixed(600.0),
   fireball_damage: toFixed(100.0),
   fireball_radius: toFixed(8.0),
-  fireball_cooldown: toFixed(2000.0),
+  // Низкий кулдаун: позволяет держать несколько фаерболов в полёте
+  // (время жизни снаряда ~750мс при max_distance=600 / speed=800).
+  fireball_cooldown: toFixed(100.0),
 
   // Щит (E)
   shield_spawn_distance: toFixed(80.0),

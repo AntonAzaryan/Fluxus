@@ -18,7 +18,7 @@ fields:
   fireball_max_distance: fixed   # 600.0 — максимальная дистанция полёта
   fireball_damage: fixed         # 100.0 — урон при попадании
   fireball_radius: fixed         # 8.0 — радиус коллайдера снаряда
-  fireball_cooldown: fixed       # 2000.0 — кулдаун в миллисекундах
+  fireball_cooldown: fixed       # 100.0 — кулдаун в мс (низкий: несколько снарядов в полёте)
 
   # Щит (E)
   shield_spawn_distance: fixed   # 80.0 — расстояние от центра персонажа при создании

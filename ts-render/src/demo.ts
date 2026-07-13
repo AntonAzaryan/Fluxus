@@ -28,7 +28,7 @@ type InputCommand = MoveCommandInput | DashInput | CastFireballInput | CastShiel
 
 class InputHandler {
   private keys = new Set<string>();
-  private mouse = new THREE.Vector2();
+  private mouseClient = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
   private playerId: bigint | null = null;
   private currentTick = 0n;
 
@@ -54,13 +54,13 @@ class InputHandler {
     });
 
     window.addEventListener('mousemove', (e) => {
-      this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-      this.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      this.mouseClient.x = e.clientX;
+      this.mouseClient.y = e.clientY;
     });
   }
 
   private castFireball(): void {
-    const target = this.screenToWorld(this.mouse);
+    const target = this.aimPoint();
     this.emitCommand({
       type: 'CastFireballInput',
       player_id: this.playerId!,
@@ -71,7 +71,7 @@ class InputHandler {
   }
 
   private castShield(): void {
-    const target = this.screenToWorld(this.mouse);
+    const target = this.aimPoint();
     this.emitCommand({
       type: 'CastShieldInput',
       player_id: this.playerId!,
@@ -95,8 +95,9 @@ class InputHandler {
     });
   }
 
-  private screenToWorld(screen: THREE.Vector2): { x: number; y: number } {
-    return this.renderer.screenToGround(screen) ?? { x: 0, y: 0 };
+  // Точка на земле под курсором — цель для фаербола/щита.
+  private aimPoint(): { x: number; y: number } {
+    return this.renderer.clientToGround(this.mouseClient.x, this.mouseClient.y) ?? { x: 0, y: 0 };
   }
 
   setPlayerId(id: bigint): void {
@@ -184,6 +185,7 @@ const commands: InputCommand[] = [];
 
 const inputHandler = new InputHandler((cmd) => commands.push(cmd), renderer);
 inputHandler.setPlayerId(playerId);
+renderer.setFollowTarget(playerId);
 
 // UI
 const infoDiv = document.getElementById('info');
@@ -192,8 +194,9 @@ if (infoDiv) {
     <div style="font-weight: bold;">Game MVP - Full Integration</div>
     <div style="margin-top: 8px;">
       <div>WASD/Arrows: Move</div>
-      <div>Q: Fireball | E: Shield</div>
+      <div>Q: Fireball (летит к курсору) | E: Shield (к курсору)</div>
       <div>Space: Dash | R: Time Slow</div>
+      <div style="opacity:0.7">Наведи мышь — туда полетит фаербол</div>
     </div>
     <div style="margin-top: 8px;" id="stats"></div>
   `;

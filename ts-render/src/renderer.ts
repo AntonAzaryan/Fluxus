@@ -38,6 +38,9 @@ export class GameRenderer {
   private animationId: number | null = null;
   private raycaster = new THREE.Raycaster();
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+  // Смещение камеры относительно цели слежения (чтобы игрок не улетал за кадр)
+  private cameraOffset = new THREE.Vector3();
+  private followTargetId: bigint | null = null;
 
   constructor(container: HTMLElement, config: Partial<RendererConfig> = {}) {
     const cfg = { ...defaultConfig, ...config };
@@ -53,11 +56,12 @@ export class GameRenderer {
       0.1,
       1000
     );
-    this.camera.position.set(
+    this.cameraOffset.set(
       0,
       -cfg.cameraZ * Math.sin(cfg.cameraAngle),
       cfg.cameraZ * Math.cos(cfg.cameraAngle)
     );
+    this.camera.position.copy(this.cameraOffset);
     this.camera.lookAt(0, 0, 0);
 
     // Renderer
@@ -72,7 +76,7 @@ export class GameRenderer {
     // Grid helper — по умолчанию GridHelper лежит в плоскости XZ (Y-up),
     // но игровая плоскость земли — XY (Z — высота, conventions.md §10),
     // поэтому поворачиваем сетку в плоскость XY.
-    const gridHelper = new THREE.GridHelper(100, 50, 0x444444, 0x222222);
+    const gridHelper = new THREE.GridHelper(2000, 200, 0x444444, 0x222222);
     gridHelper.rotation.x = Math.PI / 2;
     this.scene.add(gridHelper);
 
@@ -139,6 +143,31 @@ export class GameRenderer {
         this.entityMeshes.delete(id);
       }
     }
+
+    // Камера следует за целью (игроком). Без этого при скорости движения,
+    // большой относительно видимой зоны, игрок мгновенно уезжает за кадр и
+    // кажется, что «улетает бесконечно».
+    if (this.followTargetId !== null) {
+      const target = state.entities.find((e) => e.id === this.followTargetId);
+      if (target?.Position) {
+        const tx = Number(target.Position.x) / 65536;
+        const ty = Number(target.Position.y) / 65536;
+        const tz = Number(target.Position.z) / 65536;
+        this.camera.position.set(
+          tx + this.cameraOffset.x,
+          ty + this.cameraOffset.y,
+          tz + this.cameraOffset.z
+        );
+        this.camera.lookAt(tx, ty, tz);
+      }
+    }
+  }
+
+  /**
+   * Назначить сущность, за которой следует камера (обычно игрок).
+   */
+  setFollowTarget(id: bigint | null): void {
+    this.followTargetId = id;
   }
 
   /**
@@ -187,6 +216,21 @@ export class GameRenderer {
     const hit = this.raycaster.ray.intersectPlane(this.groundPlane, point);
     if (!hit) return null;
     return { x: point.x, y: point.y };
+  }
+
+  /**
+   * Мировая точка на земле под курсором мыши. NDC вычисляются относительно
+   * bounding rect самого канваса, а НЕ window: канвас может не совпадать с
+   * окном (фиксированный размер / отступы), иначе прицел «мажет».
+   */
+  clientToGround(clientX: number, clientY: number): { x: number; y: number } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
+    );
+    return this.screenToGround(ndc);
   }
 
   /**
