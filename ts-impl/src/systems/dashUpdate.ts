@@ -24,9 +24,14 @@ export function dashUpdateSystem(
     const dash = entity.Dash!;
     const velocity = entity.Velocity!;
 
-    // Вычислить, истёк ли рывок
+    // Вычислить, истёк ли рывок.
+    // current_tick — целочисленный счётчик тиков (u64, conventions.md §4),
+    // поэтому elapsed ms = (число тиков) * ms_per_tick (fixed). Это
+    // масштабирование fixed на ЦЕЛОЕ — обычное умножение без сдвига, а НЕ mul():
+    // у mul сдвиг >>16 обнулял бы результат (ms_elapsed всегда ~0), и рывок
+    // никогда не заканчивался — игрок улетал бесконечно в сторону рывка.
     const ticksElapsed = sub(timeState.current_tick, dash.start_tick);
-    const msElapsed = mul(ticksElapsed, msPerTick);
+    const msElapsed = ticksElapsed * msPerTick;
 
     if (msElapsed >= dash.duration_ms) {
       // Рывок закончился — удалить компонент Dash и остановить

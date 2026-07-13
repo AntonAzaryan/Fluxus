@@ -24,9 +24,12 @@ logic: |
   Для каждой сущности из выборки, у которой есть Dash, Velocity:
     Прочитать Dash.start_tick, Dash.duration_ms, Dash.dir_x, Dash.dir_y, Dash.dir_z.
 
-    # Вычислить, истёк ли рывок
+    # Вычислить, истёк ли рывок.
+    # current_tick — целочисленный счётчик (u64, §4), ticks_elapsed — целое число тиков.
+    # Перевод в мс = масштабирование fixed ms_per_tick на ЦЕЛОЕ число тиков:
+    # обычное произведение без сдвига (НЕ mul(), т.к. mul даёт >>16 и обнулил бы результат).
     ticks_elapsed = sub(TimeState.current_tick, Dash.start_tick).
-    ms_elapsed = mul(ticks_elapsed, GameConfig.ms_per_tick).
+    ms_elapsed = ticks_elapsed * GameConfig.ms_per_tick.   # целое × fixed → fixed мс
 
     Если ms_elapsed >= Dash.duration_ms:
       # Рывок закончился — удалить компонент Dash и остановить

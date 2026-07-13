@@ -126,6 +126,54 @@ describe('Bug A: каст фаербола не выбрасывает игро�
   });
 });
 
+describe('Bug: рывок (dash) завершается, а не летит вечно', () => {
+  it('Dash снимается через ~dash_duration_ms и скорость возвращается к обычной', () => {
+    const gs = createGameState();
+    const { world } = gs;
+    const pa = createPlayerArchetype();
+    const playerId = world.spawn({
+      Position: pa.Position, Velocity: pa.Velocity, Collider: pa.Collider,
+      DynamicBody: pa.DynamicBody, Health: pa.Health, Cooldowns: pa.Cooldowns,
+      MoveIntent: pa.MoveIntent, CollisionLayer: pa.CollisionLayer,
+    });
+
+    // Тик 0: направление влево + рывок
+    tick(gs, { commands: [
+      { type: 'MoveCommandInput', player_id: playerId, dx: toFixed(-1), dy: ZERO, dz: ZERO } as any,
+      { type: 'DashInput', player_id: playerId } as any,
+    ] });
+    // Рывок активен, скорость рывка (dash_speed=1200)
+    expect((world.get(playerId) as any).Dash).toBeDefined();
+    expect(Math.abs(fromFixed(world.get(playerId)!.Velocity!.dx))).toBeGreaterThan(1000);
+
+    // dash_duration_ms=200мс ≈ 12 тиков. Продолжаем держать влево.
+    for (let i = 0; i < 20; i++) {
+      tick(gs, { commands: [
+        { type: 'MoveCommandInput', player_id: playerId, dx: toFixed(-1), dy: ZERO, dz: ZERO } as any,
+      ] });
+    }
+
+    const p = world.get(playerId)!;
+    // Рывок закончился
+    expect((p as any).Dash).toBeUndefined();
+    // Скорость вернулась к обычной ходьбе (<= player_move_speed=300), а не 1200
+    expect(Math.abs(fromFixed(p.Velocity!.dx))).toBeLessThanOrEqual(300);
+  });
+
+  it('без направления (стоя на месте) рывок не срабатывает', () => {
+    const gs = createGameState();
+    const { world } = gs;
+    const pa = createPlayerArchetype();
+    const playerId = world.spawn({
+      Position: pa.Position, Velocity: pa.Velocity, Collider: pa.Collider,
+      DynamicBody: pa.DynamicBody, Health: pa.Health, Cooldowns: pa.Cooldowns,
+      MoveIntent: pa.MoveIntent, CollisionLayer: pa.CollisionLayer,
+    });
+    tick(gs, { commands: [{ type: 'DashInput', player_id: playerId } as any] });
+    expect((world.get(playerId) as any).Dash).toBeUndefined();
+  });
+});
+
 describe('Bug E: снаряд деспавнится по max_distance', () => {
   it('фаербол исчезает, пролетев дистанцию больше max_distance', () => {
     const gs = createGameState();
