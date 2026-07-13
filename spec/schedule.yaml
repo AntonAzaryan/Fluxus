@@ -48,6 +48,7 @@ schedule:
       - DashUpdateSystem          # Обновляет скорость во время рывка
       - TimeSlowSyncSystem        # Синхронизирует LocalTimeScale для иммунных
       - AttachedToSyncSystem      # Держит щит на смещении от владельца
+      - ProjectileTravelSystem    # Копит traveled_distance, деспавн по max_distance
       # - SprintSystem            # НЕ РЕАЛИЗОВАН В MVP
       # - FrictionSystem          # НЕ РЕАЛИЗОВАН В MVP
       # - GravitySystem           # НЕ РЕАЛИЗОВАН В MVP

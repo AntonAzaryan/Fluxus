@@ -177,10 +177,14 @@ export class EntityMeshFactory {
   dispose(meshes: EntityMeshes): void {
     if (meshes.healthBar) {
       this.scene.remove(meshes.healthBar);
+      // healthBar создаётся своей PlaneGeometry на каждый инстанс — освобождаем.
       meshes.healthBar.geometry.dispose();
     }
     this.scene.remove(meshes.mesh);
-    meshes.mesh.geometry.dispose();
+    // ВНИМАНИЕ: mesh.geometry — это общая модульная геометрия
+    // (geometries.cylinder/box/shieldArc), разделяемая между сущностями.
+    // Её НЕЛЬЗЯ dispose здесь: иначе при удалении, например, фаербола
+    // рушится GPU-буфер общего цилиндра и перестаёт рендериться игрок.
   }
 }
 

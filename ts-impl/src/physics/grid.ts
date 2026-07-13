@@ -80,35 +80,49 @@ export class UniformGrid {
   }
 
   /**
-   * Получить все пары для проверки (из одних ячеек)
+   * Получить все пары-кандидаты для проверки.
+   *
+   * Для каждой занятой ячейки берём её сущности ВМЕСТЕ с сущностями из 8
+   * соседних ячеек (окрестность 3×3) и образуем пары. Раньше пары строились
+   * только внутри одной ячейки, из-за чего тела по разные стороны границы
+   * ячейки (напр. игрок и стена) никогда не сталкивались. Broad-phase лишь
+   * над-аппроксимирует — ложные пары отбросит narrow-phase.
    */
   getPairs(): Array<[bigint, bigint]> {
     const pairs: Array<[bigint, bigint]> = [];
     const seen = new Set<string>();
 
-    for (const entities of this.cells.values()) {
+    // Детерминированный порядок обхода ячеек
+    const cellKeys = [...this.cells.keys()].sort();
+
+    for (const key of cellKeys) {
+      const [cxStr, cyStr] = key.split(',');
+      const cx = Number(cxStr);
+      const cy = Number(cyStr);
+
+      // Собрать кандидатов из ячейки и соседних 3×3
+      const candidates: bigint[] = [];
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const neighbor = this.cells.get(makeKey(cx + dx, cy + dy));
+          if (neighbor) candidates.push(...neighbor);
+        }
+      }
+
       // Сортируем для детерминизма
-      entities.sort((a, b) => {
-        if (a < b) return -1;
-        if (a > b) return 1;
-        return 0;
-      });
+      candidates.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
-      // Все пары внутри ячейки
-      for (let i = 0; i < entities.length; i++) {
-        for (let j = i + 1; j < entities.length; j++) {
-          const a = entities[i];
-          const b = entities[j];
-          const key = a < b ? `${a},${b}` : `${b},${a}`;
-
-          if (!seen.has(key)) {
-            seen.add(key);
-            if (a < b) {
-              pairs.push([a, b]);
-            } else {
-              pairs.push([b, a]);
-            }
-          }
+      for (let i = 0; i < candidates.length; i++) {
+        for (let j = i + 1; j < candidates.length; j++) {
+          const a = candidates[i];
+          const b = candidates[j];
+          if (a === b) continue;
+          const lo = a < b ? a : b;
+          const hi = a < b ? b : a;
+          const pairKey = `${lo},${hi}`;
+          if (seen.has(pairKey)) continue;
+          seen.add(pairKey);
+          pairs.push([lo, hi]);
         }
       }
     }

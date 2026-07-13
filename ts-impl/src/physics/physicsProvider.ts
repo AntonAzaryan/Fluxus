@@ -181,13 +181,19 @@ export class PhysicsProvider {
     }
 
     if (colliderA.shape === 'circle' && colliderB.shape === 'aabb') {
-      return circleAabb(
+      // circleAabb возвращает нормаль «от AABB к кругу». Здесь круг — это A,
+      // значит нормаль указывает B→A. Контракт (physics_v1.md §5) требует a→b —
+      // инвертируем.
+      const c = circleAabb(
         posA, colliderA.radius, colliderA.height,
         posB, colliderB.half_width, colliderB.half_height, colliderB.height
       );
+      if (!c) return null;
+      return { ...c, normal: { x: neg(c.normal.x), y: neg(c.normal.y), z: c.normal.z } };
     }
 
     if (colliderA.shape === 'aabb' && colliderB.shape === 'circle') {
+      // Здесь круг — это B, нормаль «от AABB(A) к кругу(B)» уже a→b.
       return circleAabb(
         posB, colliderB.radius, colliderB.height,
         posA, colliderA.half_width, colliderA.half_height, colliderA.height
@@ -237,14 +243,18 @@ export class PhysicsProvider {
       const ratioA = div(bodyB.mass, totalMass);
       const ratioB = div(bodyA.mass, totalMass);
 
-      const correction = vec_scale(normal, div(penetration, BigInt(2)));
+      // Доли ratioA + ratioB == 1, поэтому суммарный сдвиг двух тел = penetration
+      // (без деления на 2). Прежний код делал div(penetration, 2n), где 2n —
+      // сырой integer: fixed-point div(pen, 2n) раздувал коррекцию в ~32768 раз
+      // (2n в Q16.16 = 2/65536) — отсюда «игрок улетает при выстреле».
+      const correction = vec_scale(normal, penetration);
       posA.x = sub(posA.x, mul(correction.x, ratioA));
       posA.y = sub(posA.y, mul(correction.y, ratioA));
       posB.x = add(posB.x, mul(correction.x, ratioB));
       posB.y = add(posB.y, mul(correction.y, ratioB));
     } else if (bodyA) {
-      // A динамическое, B статичное. normal направлена A->B, значит A нужно
-      // оттолкнуть в противоположную сторону (sub), иначе A толкает внутрь B.
+      // A динамическое, B статичное. normal направлена a->b (A->B), т.е. к телу B,
+      // поэтому A выталкивается в противоположную сторону (sub) — наружу.
       const correction = vec_scale(normal, penetration);
       posA.x = sub(posA.x, correction.x);
       posA.y = sub(posA.y, correction.y);
@@ -263,14 +273,17 @@ export class PhysicsProvider {
     // restitution=1.0 давала нефизично огромный импульс на игрока и сам
     // снаряд — баг «игрок улетает при выстреле».
     if (bodyA && !bodyB) {
-      // Отскок от статичного
+      // Отскок от статичного B. normal направлена A->B (к стене), поэтому
+      // сближение со стеной = положительная составляющая скорости вдоль нормали.
       const velAlongNormal = add(add(mul(velA.dx, normal.x), mul(velA.dy, normal.y)), mul(velA.dz, normal.z));
-      if (velAlongNormal < ZERO) {
+      if (velAlongNormal > ZERO) {
         const j = mul(neg(ONE + restitution), velAlongNormal);
         velA.dx = add(velA.dx, mul(normal.x, j));
         velA.dy = add(velA.dy, mul(normal.y, j));
       }
     } else if (bodyB && !bodyA) {
+      // Отскок от статичного A. normal направлена A->B (от стены к B), поэтому
+      // сближение со стеной = отрицательная составляющая скорости вдоль нормали.
       const velAlongNormal = add(add(mul(velB.dx, normal.x), mul(velB.dy, normal.y)), mul(velB.dz, normal.z));
       if (velAlongNormal < ZERO) {
         const j = mul(neg(ONE + restitution), velAlongNormal);

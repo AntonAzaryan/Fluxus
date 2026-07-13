@@ -17,6 +17,7 @@ import { movementSystem } from './systems/movement';
 import { dashUpdateSystem } from './systems/dashUpdate';
 import { timeSlowSyncSystem } from './systems/timeSlowSync';
 import { attachedToSyncSystem } from './systems/attachedToSync';
+import { projectileTravelSystem } from './systems/projectileTravel';
 import { projectileHitSystem } from './systems/projectileHit';
 import { damageApplicationSystem } from './systems/damageApplication';
 import { shieldExpirationSystem } from './systems/shieldExpiration';
@@ -66,6 +67,7 @@ export const schedule: Stage[] = [
       dashUpdateSystem(world, resources);
       timeSlowSyncSystem(world, resources);
       attachedToSyncSystem(world);
+      projectileTravelSystem(world, resources);
     },
   },
 

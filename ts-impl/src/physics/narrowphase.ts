@@ -7,7 +7,7 @@
  * - interval_overlap для Z
  */
 
-import { Fixed, add, sub, mul, div, abs, min, max, ZERO, ONE } from '../fixed/fixed';
+import { Fixed, add, sub, mul, div, abs, min, max, ZERO, ONE, HALF } from '../fixed/fixed';
 import { Vec3, vec_sub as vecSub, vec_length_xy, vec_normalize_xy, interval_overlap } from '../fixed/vector';
 
 /**
@@ -46,8 +46,11 @@ export function circleCircle(
   // Нормаль (от A к B)
   const normal = vec_normalize_xy(delta);
 
-  // Точка контакта (середина проникновения)
-  const halfPenetration = div(penetration, BigInt(2));
+  // Точка контакта (середина проникновения).
+  // ВНИМАНИЕ: половина берётся через mul(_, HALF), а НЕ div(_, 2n): div —
+  // это fixed-point деление, а 2n — сырой integer (в Q16.16 это 2/65536),
+  // из-за чего div(pen, 2n) умножало бы penetration на ~32768.
+  const halfPenetration = mul(penetration, HALF);
   const contactPoint = {
     x: add(posA.x, mul(normal.x, add(radiusA, halfPenetration))),
     y: add(posA.y, mul(normal.y, add(radiusA, halfPenetration))),
@@ -76,9 +79,15 @@ export function circleAabb(
   );
   if (!zOverlap) return null;
 
+  // Границы AABB
+  const minX = sub(aabbPos.x, aabbHalfWidth);
+  const maxX = add(aabbPos.x, aabbHalfWidth);
+  const minY = sub(aabbPos.y, aabbHalfHeight);
+  const maxY = add(aabbPos.y, aabbHalfHeight);
+
   // Найти ближайшую точку на AABB к центру круга
-  const closestX = max(aabbPos.x - aabbHalfWidth, min(circlePos.x, add(aabbPos.x, aabbHalfWidth)));
-  const closestY = max(aabbPos.y - aabbHalfHeight, min(circlePos.y, add(aabbPos.y, aabbHalfHeight)));
+  const closestX = max(minX, min(circlePos.x, maxX));
+  const closestY = max(minY, min(circlePos.y, maxY));
 
   const closest: Vec3 = { x: closestX, y: closestY, z: circlePos.z };
 
@@ -86,15 +95,37 @@ export function circleAabb(
   const delta = vecSub(circlePos, closest);
   const distance = vec_length_xy(delta);
 
-  if (distance >= circleRadius || distance === ZERO) {
+  // Центр круга внутри AABB (closest == центр, distance == 0) — раньше это
+  // возвращало null, и тело «проваливалось» в стену без детекции. Теперь
+  // выталкиваем через ближайшую грань: нормаль наружу, penetration = радиус +
+  // расстояние до этой грани. Нормаль указывает «от AABB к кругу» (наружу),
+  // как и в ветке снаружи — checkCollision сам приводит её к конвенции a→b.
+  if (distance === ZERO) {
+    const dLeft = sub(circlePos.x, minX);
+    const dRight = sub(maxX, circlePos.x);
+    const dBottom = sub(circlePos.y, minY);
+    const dTop = sub(maxY, circlePos.y);
+
+    let m = dLeft;
+    let normal: Vec3 = { x: neg(ONE), y: ZERO, z: ZERO };
+    if (dRight < m) { m = dRight; normal = { x: ONE, y: ZERO, z: ZERO }; }
+    if (dBottom < m) { m = dBottom; normal = { x: ZERO, y: neg(ONE), z: ZERO }; }
+    if (dTop < m) { m = dTop; normal = { x: ZERO, y: ONE, z: ZERO }; }
+
+    const penetration = add(m, circleRadius);
+    const contactPoint: Vec3 = { x: circlePos.x, y: circlePos.y, z: max(circlePos.z, aabbPos.z) };
+    return { collision: true, penetration, normal, contactPoint };
+  }
+
+  if (distance >= circleRadius) {
     return null;
   }
 
   // Проникновение
   const penetration = sub(circleRadius, distance);
 
-  // Нормаль
-  const normal = distance > ZERO ? vec_normalize_xy(delta) : { x: ONE, y: ZERO, z: ZERO };
+  // Нормаль (наружу от AABB к центру круга)
+  const normal = vec_normalize_xy(delta);
 
   // Точка контакта
   const contactPoint = {
@@ -141,9 +172,11 @@ export function aabbAabb(
   let normal: Vec3;
   let contactPoint: Vec3;
 
+  // Нормаль по конвенции контракта physics_v1.md §5 — направлена от a к b:
+  // если A левее B, то a→b это +x (ONE).
   if (overlapX < overlapY) {
     penetration = overlapX;
-    normal = { x: posA.x < posB.x ? neg(ONE) : ONE, y: ZERO, z: ZERO };
+    normal = { x: posA.x < posB.x ? ONE : neg(ONE), y: ZERO, z: ZERO };
     contactPoint = {
       x: posA.x < posB.x ? add(posA.x, halfWidthA) : sub(posA.x, halfWidthA),
       y: add(posA.y, posB.y) / BigInt(2),
@@ -151,7 +184,7 @@ export function aabbAabb(
     };
   } else {
     penetration = overlapY;
-    normal = { x: ZERO, y: posA.y < posB.y ? neg(ONE) : ONE, z: ZERO };
+    normal = { x: ZERO, y: posA.y < posB.y ? ONE : neg(ONE), z: ZERO };
     contactPoint = {
       x: add(posA.x, posB.x) / BigInt(2),
       y: posA.y < posB.y ? add(posA.y, halfHeightA) : sub(posA.y, halfHeightA),

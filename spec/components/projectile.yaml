@@ -12,4 +12,4 @@ fields:
   owner_id: u64       # entity_id кастера (для подсчёта урона)
   damage: fixed       # Урон снаряда
   max_distance: fixed # Максимальное расстояние полёта
-  traveled_distance: fixed # Пройденное расстояние (накапливается)
+  traveled_distance: fixed # Пройденное расстояние (накапливается ProjectileTravelSystem, деспавн при >= max_distance)
