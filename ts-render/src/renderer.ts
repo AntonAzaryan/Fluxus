@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { GameState, Entity } from './types';
 import { EntityMeshFactory, EntityMeshes } from './entities';
+import type { model } from 'war3-model';
 
 // Re-export GameState for consumers
 export type { GameState };
@@ -26,6 +27,12 @@ const defaultConfig: RendererConfig = {
   cameraAngle: Math.PI / 6, // 30 degrees
 };
 
+// Разворот MDX-модели: угол считаем как atan2(dy, dx). У этой модели локальный
+// «перёд» направлен вдоль +X, поэтому смещение не нужно (rotation.z = angle).
+const MDX_FACING_OFFSET = 0;
+// Порог скорости, ниже которого считаем сущность стоящей (idle).
+const MOVE_EPS = 0.02;
+
 /**
  * Main renderer class
  */
@@ -38,6 +45,7 @@ export class GameRenderer {
   private animationId: number | null = null;
   private raycaster = new THREE.Raycaster();
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+  private clock = new THREE.Clock();
   // Смещение камеры относительно цели слежения (чтобы игрок не улетал за кадр)
   private cameraOffset = new THREE.Vector3();
   private followTargetId: bigint | null = null;
@@ -102,6 +110,13 @@ export class GameRenderer {
   }
 
   /**
+   * Set player MDX model prototype
+   */
+  setPlayerModel(m: model.Model): void {
+    this.entityFactory.setPlayerModel(m);
+  }
+
+  /**
    * Update game state - sync entities with scene
    */
   updateState(state: GameState): void {
@@ -134,6 +149,11 @@ export class GameRenderer {
           meshes.healthBar.scale.x = healthPct;
         }
       }
+
+      // MDX-модель: поворот «лицом» по вектору движения + смена idle/walk
+      if (meshes?.mdx) {
+        this.updateMdxAnimation(entity, meshes);
+      }
     }
 
     // Remove dead entities
@@ -164,6 +184,35 @@ export class GameRenderer {
   }
 
   /**
+   * Обновить анимацию и разворот MDX-модели по состоянию сущности.
+   * Направление берём из рывка (чистое dir_*), иначе из скорости; поворачиваем
+   * модель вокруг вертикальной оси Z. Клип меняем только при смене состояния,
+   * чтобы не рестартить его каждый кадр.
+   */
+  private updateMdxAnimation(entity: Entity, meshes: EntityMeshes): void {
+    let dx = 0;
+    let dy = 0;
+    if (entity.Dash) {
+      dx = Number(entity.Dash.dir_x) / 65536;
+      dy = Number(entity.Dash.dir_y) / 65536;
+    } else if (entity.Velocity) {
+      dx = Number(entity.Velocity.dx) / 65536;
+      dy = Number(entity.Velocity.dy) / 65536;
+    }
+    const speed = Math.hypot(dx, dy);
+
+    if (speed > MOVE_EPS) {
+      meshes.mesh.rotation.z = Math.atan2(dy, dx) + MDX_FACING_OFFSET;
+    }
+
+    const desired = entity.Dash || speed > MOVE_EPS ? 'Walk' : 'Stand';
+    if (meshes.currentAnim !== desired && meshes.mdx) {
+      meshes.mdx.play(desired);
+      meshes.currentAnim = desired;
+    }
+  }
+
+  /**
    * Назначить сущность, за которой следует камера (обычно игрок).
    */
   setFollowTarget(id: bigint | null): void {
@@ -178,6 +227,10 @@ export class GameRenderer {
 
     const animate = () => {
       this.animationId = requestAnimationFrame(animate);
+      const dt = this.clock.getDelta();
+      for (const meshes of this.entityMeshes.values()) {
+        if (meshes.mixer) meshes.mixer.update(dt);
+      }
       this.renderer.render(this.scene, this.camera);
     };
 

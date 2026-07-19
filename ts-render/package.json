@@ -9,8 +9,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "game-mvp-impl": "*",
     "three": "^0.160.0",
-    "game-mvp-impl": "*"
+    "war3-model": "^4.0.0"
   },
   "devDependencies": {
     "@types/three": "^0.160.0",

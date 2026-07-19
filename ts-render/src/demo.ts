@@ -19,6 +19,7 @@ import {
   CastTimeSlowInput,
 } from 'game-mvp-impl/resources/resources';
 import { createPlayerArchetype } from 'game-mvp-impl/archetypes/player';
+import { loadMdxModel } from './mdxModel';
 
 type InputCommand = MoveCommandInput | DashInput | CastFireballInput | CastShieldInput | CastTimeSlowInput;
 
@@ -151,6 +152,7 @@ const renderer = createRenderer(container, {
 const gameState = createGameState();
 const { world, bus, resources } = gameState;
 (window as any).__world = world;
+(window as any).__renderer = renderer;
 
 // Spawn player
 const playerArchetype = createPlayerArchetype();
@@ -266,7 +268,14 @@ function gameLoop(currentTime: number) {
   requestAnimationFrame(gameLoop);
 }
 
-renderer.start();
-requestAnimationFrame(gameLoop);
-
-console.log('🎮 Game MVP started - ts-impl + ts-render fully integrated!');
+// Асинхронная загрузка MDX модели перед стартом
+loadMdxModel('/models/SkeletonBarbarian.mdx')
+  .then((mdl) => {
+    renderer.setPlayerModel(mdl);
+    console.log('MDX модель загружена:', mdl.Sequences.map((s) => s.Name));
+  })
+  .catch((e) => console.error('Не удалось загрузить MDX:', e))
+  .finally(() => {
+    renderer.start();
+    requestAnimationFrame(gameLoop);
+  });

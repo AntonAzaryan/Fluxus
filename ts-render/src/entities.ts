@@ -4,14 +4,20 @@
 
 import * as THREE from 'three';
 import { Entity } from './types';
+import type { MdxInstance } from './mdxModel';
+import { buildMdxInstance } from './mdxModel';
+import type { model } from 'war3-model';
 
 /**
  * Entity mesh collection
  */
 export interface EntityMeshes {
-  mesh: THREE.Mesh;
+  mesh: THREE.Object3D;
   healthBar?: THREE.Mesh;
   trail?: THREE.Line;
+  mixer?: THREE.AnimationMixer;
+  mdx?: MdxInstance;      // инстанс WC3-модели (для смены анимаций)
+  currentAnim?: string;   // имя проигрываемого клипа (чтобы не рестартить каждый кадр)
 }
 
 /**
@@ -79,29 +85,42 @@ function createShieldArcGeometry(): THREE.BufferGeometry {
  */
 export class EntityMeshFactory {
   private scene: THREE.Scene;
+  private playerModel: model.Model | null = null;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+  }
+
+  setPlayerModel(m: model.Model): void {
+    this.playerModel = m;
   }
 
   /**
    * Create meshes for an entity based on its components
    */
   create(entity: Entity): EntityMeshes | null {
-    let mesh: THREE.Mesh;
+    let mesh: THREE.Object3D;
+    let mixer: THREE.AnimationMixer | undefined;
+    let mdx: MdxInstance | undefined;
 
     // Determine entity type by components
     if (entity.Projectile) {
       mesh = this.createFireball(entity);
     } else if (entity.Dash) {
-      mesh = this.createPlayer(entity); // Dashing player
+      const result = this.createPlayer(entity);
+      mesh = result.mesh;
+      mixer = result.mixer;
+      mdx = result.mdx;
     } else if (entity.Collider?.shape === 'aabb') {
       mesh = this.createWall(entity);
     } else if (entity.AttachedTo) {
       // Щит — единственная круглая сущность с AttachedTo
       mesh = this.createShield(entity);
     } else {
-      mesh = this.createPlayer(entity);
+      const result = this.createPlayer(entity);
+      mesh = result.mesh;
+      mixer = result.mixer;
+      mdx = result.mdx;
     }
 
     // Add health bar if entity has health
@@ -114,15 +133,28 @@ export class EntityMeshFactory {
 
     this.scene.add(mesh);
 
-    return { mesh, healthBar };
+    return { mesh, healthBar, mixer, mdx, currentAnim: mdx ? 'Stand' : undefined };
   }
 
-  private createPlayer(entity: Entity): THREE.Mesh {
+  private createPlayer(
+    entity: Entity
+  ): { mesh: THREE.Object3D; mixer?: THREE.AnimationMixer; mdx?: MdxInstance } {
+    if (this.playerModel) {
+      const inst = buildMdxInstance(this.playerModel);
+      // У этой модели два полноростовых тела с текстурой Skeleton (geo0 и geo3),
+      // они накладываются («двойник»). Оставляем основное geo0, geo3 скрываем.
+      inst.hideGeosets([3]);
+      const height = entity.Collider ? Number(entity.Collider.height) / 65536 : 1;
+      inst.root.scale.setScalar(height);
+      inst.play('Stand');
+      return { mesh: inst.root, mixer: inst.mixer, mdx: inst };
+    }
+    // ---- fallback: старый цилиндр ----
     const mesh = new THREE.Mesh(geometries.cylinder, materials.player);
     const radius = entity.Collider ? Number(entity.Collider.radius) / 65536 : 1;
-    const height = entity.Collider ? Number(entity.Collider.height) / 65536 : 1;
-    mesh.scale.set(radius, radius, height);
-    return mesh;
+    const h = entity.Collider ? Number(entity.Collider.height) / 65536 : 1;
+    mesh.scale.set(radius, radius, h);
+    return { mesh };
   }
 
   private createFireball(entity: Entity): THREE.Mesh {
@@ -180,10 +212,13 @@ export class EntityMeshFactory {
       // healthBar создаётся своей PlaneGeometry на каждый инстанс — освобождаем.
       meshes.healthBar.geometry.dispose();
     }
+    if (meshes.mixer) {
+      meshes.mixer.stopAllAction();
+    }
     this.scene.remove(meshes.mesh);
     // ВНИМАНИЕ: mesh.geometry — это общая модульная геометрия
     // (geometries.cylinder/box/shieldArc), разделяемая между сущностями.
-    // Её НЕЛЬЗЯ dispose здесь: иначе при удалении, например, фаербола
+    // ЕЁ НЕЛЬЗЯ dispose здесь: иначе при удалении, например, фаербола
     // рушится GPU-буфер общего цилиндра и перестаёт рендериться игрок.
   }
 }
