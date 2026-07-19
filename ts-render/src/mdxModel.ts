@@ -29,6 +29,31 @@ export interface MdxInstance {
   hideGeosets(ids: number[]): void;
 }
 
+export interface BuildOptions {
+  /**
+   * Индексы геосетов (в mdl.Geosets), которые нужно исключить полностью —
+   * например арт-дубликаты тела. Такой геосет не создаётся и не получает
+   * треков видимости, поэтому его нельзя случайно «включить» анимацией.
+   */
+  hiddenGeosets?: number[];
+}
+
+/** Порог альфы, выше которого геосет считается видимым. */
+const ALPHA_VISIBLE = 0.1;
+
+/**
+ * Считать ли альфу геосета настоящей анимацией видимости.
+ *
+ * У этой (и типичных WC3) модели одноключевые GeosetAnim — это placeholder
+ * базового тела (в SkeletonBarbarian все они = 0 на служебном кадре, но геосет
+ * обязан быть виден всегда). Реальные тумблеры вариантов (Defend/Death) имеют
+ * ≥2 ключей и действительно переключают видимость по секвенциям. Поэтому альфу
+ * применяем ТОЛЬКО к многоключевым — иначе базовое тело исчезнет целиком.
+ */
+function isAnimatedAlpha(a: AnimVector | number | undefined): a is AnimVector {
+  return a != null && typeof a !== 'number' && !!a.Keys && a.Keys.length >= 2;
+}
+
 /**
  * Load and parse MDX model from URL
  */
@@ -58,9 +83,57 @@ function evalAlphaAt(
 }
 
 /**
+ * Собрать трек видимости геосета (BooleanKeyframeTrack на `.visible`) из
+ * анимации альфы GeosetAnim для окна секвенции [s0, s1].
+ *
+ * В WC3 альфа геосета практически всегда бинарная (ключи 0/1 со ступенчатой
+ * интерполяцией) — поэтому включаем/выключаем `.visible`, а не крутим opacity:
+ * это исключает проблемы с прозрачностью и записью глубины. Концевые ключи
+ * (t=0 и t=dur) добавляем всегда, чтобы клип полностью задавал состояние
+ * геосета и не «наследовал» его от предыдущего проигранного клипа.
+ */
+function buildVisibilityTrack(
+  trackName: string,
+  alpha: AnimVector,
+  s0: number,
+  s1: number,
+  dur: number
+): THREE.KeyframeTrack | null {
+  const keys = alpha.Keys;
+  if (!keys || keys.length === 0) return null;
+
+  const times: number[] = [];
+  const values: boolean[] = [];
+  const push = (t: number, a: number): void => {
+    // время должно строго возрастать — дубликаты по времени отбрасываем
+    if (times.length && t <= times[times.length - 1]) return;
+    times.push(t);
+    values.push(a >= ALPHA_VISIBLE);
+  };
+
+  push(0, evalAlphaAt(alpha, s0));
+  for (const k of keys) {
+    if (k.Frame <= s0 || k.Frame >= s1) continue;
+    push((k.Frame - s0) / 1000, k.Vector[0]);
+  }
+  push(dur, evalAlphaAt(alpha, s1));
+
+  if (times.length === 0) return null;
+  return new THREE.BooleanKeyframeTrack(trackName, times, values);
+}
+
+/**
  * Build a fresh instance from parsed model
  */
-export function buildMdxInstance(mdl: MdlModel.Model): MdxInstance {
+export function buildMdxInstance(mdl: MdlModel.Model, opts: BuildOptions = {}): MdxInstance {
+  const hidden = new Set(opts.hiddenGeosets ?? []);
+  // GeosetId -> анимация альфы (или константа). Управляет видимостью геосета
+  // по секвенциям: без этого «служебные» геосеты (напр. дубликат тела) видны
+  // постоянно как статичный двойник.
+  const alphaByGeoset = new Map<number, AnimVector | number>();
+  for (const ga of mdl.GeosetAnims ?? []) {
+    alphaByGeoset.set(ga.GeosetId, ga.Alpha as AnimVector | number);
+  }
   // ==========================================================================
   // A. Кости и скелет
   // ==========================================================================
@@ -116,6 +189,7 @@ export function buildMdxInstance(mdl: MdlModel.Model): MdxInstance {
 
   const geoMeshes: { mesh: THREE.SkinnedMesh; geosetId: number }[] = [];
   mdl.Geosets.forEach((g, gi) => {
+    if (hidden.has(gi)) return; // арт-дубликат: не создаём вовсе
     const vcount = g.Vertices.length / 3;
     const skinIndex = new Uint16Array(vcount * 4);
     const skinWeight = new Float32Array(vcount * 4);
@@ -149,6 +223,15 @@ export function buildMdxInstance(mdl: MdlModel.Model): MdxInstance {
     mesh.name = `geo${gi}`;
     mesh.bind(skeleton);
     mesh.frustumCulled = false;
+
+    // Начальная видимость по альфе первой секвенции (до первого mixer.update),
+    // чтобы скрытые в idle геосеты не «моргнули» на первом кадре.
+    const alpha0 = alphaByGeoset.get(gi);
+    if (isAnimatedAlpha(alpha0)) {
+      const f0 = mdl.Sequences[0]?.Interval[0] ?? 0;
+      mesh.visible = evalAlphaAt(alpha0, f0) >= ALPHA_VISIBLE;
+    }
+
     root.add(mesh);
     geoMeshes.push({ mesh, geosetId: gi });
   });
@@ -200,6 +283,16 @@ export function buildMdxInstance(mdl: MdlModel.Model): MdxInstance {
         tracks.push(new THREE.VectorKeyframeTrack(`${bn}.scale`, sc.t, vals));
       }
     });
+
+    // Видимость геосетов по GeosetAnim.Alpha — только для реально созданных
+    // (не скрытых) геосетов с покадровой альфой. Константная альфа уже учтена
+    // в начальной видимости при создании меша.
+    for (const { mesh, geosetId } of geoMeshes) {
+      const alpha = alphaByGeoset.get(geosetId);
+      if (!isAnimatedAlpha(alpha)) continue;
+      const tr = buildVisibilityTrack(`${mesh.name}.visible`, alpha, s0, s1, dur);
+      if (tr) tracks.push(tr);
+    }
 
     clips.push(new THREE.AnimationClip(seq.Name, dur, tracks));
   }

@@ -18,6 +18,7 @@ export interface EntityMeshes {
   mixer?: THREE.AnimationMixer;
   mdx?: MdxInstance;      // инстанс WC3-модели (для смены анимаций)
   currentAnim?: string;   // имя проигрываемого клипа (чтобы не рестартить каждый кадр)
+  targetRotZ?: number;    // целевой угол разворота по Z; докручиваем плавно в render-loop
 }
 
 /**
@@ -140,10 +141,10 @@ export class EntityMeshFactory {
     entity: Entity
   ): { mesh: THREE.Object3D; mixer?: THREE.AnimationMixer; mdx?: MdxInstance } {
     if (this.playerModel) {
+      // Видимость «служебных» геосетов (варианты Defend/Death, включая дубликат
+      // тела geo3) управляется покадровой GeosetAnim.Alpha внутри
+      // buildMdxInstance — в Stand/Walk они гаснут сами, без хардкода индексов.
       const inst = buildMdxInstance(this.playerModel);
-      // У этой модели два полноростовых тела с текстурой Skeleton (geo0 и geo3),
-      // они накладываются («двойник»). Оставляем основное geo0, geo3 скрываем.
-      inst.hideGeosets([3]);
       const height = entity.Collider ? Number(entity.Collider.height) / 65536 : 1;
       inst.root.scale.setScalar(height);
       inst.play('Stand');

@@ -32,6 +32,9 @@ const defaultConfig: RendererConfig = {
 const MDX_FACING_OFFSET = 0;
 // Порог скорости, ниже которого считаем сущность стоящей (idle).
 const MOVE_EPS = 0.02;
+// Скорость доворота модели к целевому направлению (1/сек, экспоненц. сглаживание).
+// Чем больше — тем резче разворот; ~12 даёт заметный, но плавный поворот.
+const TURN_RATE = 12;
 
 /**
  * Main renderer class
@@ -202,7 +205,9 @@ export class GameRenderer {
     const speed = Math.hypot(dx, dy);
 
     if (speed > MOVE_EPS) {
-      meshes.mesh.rotation.z = Math.atan2(dy, dx) + MDX_FACING_OFFSET;
+      // Задаём только ЦЕЛЬ разворота; фактический угол доворачивается плавно
+      // в render-loop по dt (иначе поворот скачком при смене направления).
+      meshes.targetRotZ = Math.atan2(dy, dx) + MDX_FACING_OFFSET;
     }
 
     const desired = entity.Dash || speed > MOVE_EPS ? 'Walk' : 'Stand';
@@ -210,6 +215,21 @@ export class GameRenderer {
       meshes.mdx.play(desired);
       meshes.currentAnim = desired;
     }
+  }
+
+  /**
+   * Плавно доворачивает модель к целевому направлению (targetRotZ) за кадр.
+   * Экспоненциальное сглаживание по кратчайшей дуге — не зависит от FPS и не
+   * «перескакивает» через ±π.
+   */
+  private smoothFacing(meshes: EntityMeshes, dt: number): void {
+    if (meshes.targetRotZ == null) return;
+    const cur = meshes.mesh.rotation.z;
+    // разница, приведённая к диапазону (-π, π] — поворачиваем по кратчайшей дуге
+    let diff = meshes.targetRotZ - cur;
+    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+    const t = 1 - Math.exp(-TURN_RATE * dt);
+    meshes.mesh.rotation.z = cur + diff * t;
   }
 
   /**
@@ -230,6 +250,7 @@ export class GameRenderer {
       const dt = this.clock.getDelta();
       for (const meshes of this.entityMeshes.values()) {
         if (meshes.mixer) meshes.mixer.update(dt);
+        this.smoothFacing(meshes, dt);
       }
       this.renderer.render(this.scene, this.camera);
     };
