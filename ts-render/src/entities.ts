@@ -17,8 +17,10 @@ export interface EntityMeshes {
   trail?: THREE.Line;
   mixer?: THREE.AnimationMixer;
   mdx?: MdxInstance;      // инстанс WC3-модели (для смены анимаций)
-  currentAnim?: string;   // имя проигрываемого клипа (чтобы не рестартить каждый кадр)
+  currentAnim?: string;   // текущая локомоция (Stand/Walk), чтобы не рестартить каждый кадр
   targetRotZ?: number;    // целевой угол разворота по Z; докручиваем плавно в render-loop
+  attackTimer?: number;   // сек до конца одноразовой анимации атаки (>0 — атака блокирует локомоцию)
+  attackAlt?: boolean;    // чередование Attack - 1 / Attack - 2 между выстрелами
 }
 
 /**

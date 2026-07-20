@@ -24,7 +24,12 @@ export interface MdxInstance {
   root: THREE.Group;
   mixer: THREE.AnimationMixer;
   clips: THREE.AnimationClip[];
-  play(nameSubstr: string): void;
+  /**
+   * Проиграть клип по подстроке имени с кроссфейдом от текущего.
+   * opts.once — проиграть один раз (LoopOnce) и зафиксировать последний кадр;
+   * для локомоции (Stand/Walk) — зациклить. Возвращает action (null если клипа нет).
+   */
+  play(nameSubstr: string, opts?: { once?: boolean; speed?: number }): THREE.AnimationAction | null;
   /** Скрыть геосеты по индексу (индекс в mdl.Geosets). */
   hideGeosets(ids: number[]): void;
 }
@@ -321,13 +326,24 @@ export function buildMdxInstance(mdl: MdlModel.Model, opts: BuildOptions = {}): 
   const mixer = new THREE.AnimationMixer(root);
   let current: THREE.AnimationAction | null = null;
 
-  const play = (sub: string) => {
+  const play = (
+    sub: string,
+    opts: { once?: boolean; speed?: number } = {}
+  ): THREE.AnimationAction | null => {
     const clip = clips.find((c) => c.name.toLowerCase().includes(sub.toLowerCase())) ?? clips[0];
-    if (!clip) return;
+    if (!clip) return null;
     const next = mixer.clipAction(clip);
-    next.reset().fadeIn(0.2).play();
-    if (current && current !== next) current.fadeOut(0.2);
+    if (opts.once) {
+      next.setLoop(THREE.LoopOnce, 1);
+      next.clampWhenFinished = true; // держим последний кадр до возврата в локомоцию
+    } else {
+      next.setLoop(THREE.LoopRepeat, Infinity);
+      next.clampWhenFinished = false;
+    }
+    next.reset().setEffectiveTimeScale(opts.speed ?? 1).fadeIn(0.15).play();
+    if (current && current !== next) current.fadeOut(0.15);
     current = next;
+    return next;
   };
 
   const hideGeosets = (ids: number[]) => {

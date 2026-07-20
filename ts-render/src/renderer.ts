@@ -35,6 +35,8 @@ const MOVE_EPS = 0.02;
 // Скорость доворота модели к целевому направлению (1/сек, экспоненц. сглаживание).
 // Чем больше — тем резче разворот; ~12 даёт заметный, но плавный поворот.
 const TURN_RATE = 12;
+// Имена клипов атаки — чередуем между выстрелами.
+const ATTACK_CLIPS = ['Attack - 1', 'Attack - 2'];
 
 /**
  * Main renderer class
@@ -52,6 +54,8 @@ export class GameRenderer {
   // Смещение камеры относительно цели слежения (чтобы игрок не улетал за кадр)
   private cameraOffset = new THREE.Vector3();
   private followTargetId: bigint | null = null;
+  // Уже отрисованные снаряды — чтобы триггерить анимацию атаки один раз на выстрел.
+  private seenProjectiles = new Set<bigint>();
 
   constructor(container: HTMLElement, config: Partial<RendererConfig> = {}) {
     const cfg = { ...defaultConfig, ...config };
@@ -167,6 +171,17 @@ export class GameRenderer {
       }
     }
 
+    // Детект выстрела: новый снаряд в этом кадре → анимация атаки у его владельца.
+    const projectileIds = new Set<bigint>();
+    for (const e of state.entities) {
+      if (!e.Projectile) continue;
+      projectileIds.add(e.id);
+      if (this.seenProjectiles.has(e.id)) continue; // уже видели — не ретригерим
+      const owner = this.entityMeshes.get(e.Projectile.owner_id);
+      if (owner?.mdx) this.triggerAttack(owner);
+    }
+    this.seenProjectiles = projectileIds; // забываем деспавненные снаряды
+
     // Камера следует за целью (игроком). Без этого при скорости движения,
     // большой относительно видимой зоны, игрок мгновенно уезжает за кадр и
     // кажется, что «улетает бесконечно».
@@ -210,10 +225,37 @@ export class GameRenderer {
       meshes.targetRotZ = Math.atan2(dy, dx) + MDX_FACING_OFFSET;
     }
 
+    // Пока играет одноразовая атака — запоминаем целевую локомоцию, но не
+    // переключаем клип (иначе атака оборвётся). Вернёмся к ней в tickAttack.
     const desired = entity.Dash || speed > MOVE_EPS ? 'Walk' : 'Stand';
-    if (meshes.currentAnim !== desired && meshes.mdx) {
-      meshes.mdx.play(desired);
+    const attacking = (meshes.attackTimer ?? 0) > 0;
+    if (meshes.currentAnim !== desired) {
       meshes.currentAnim = desired;
+      if (!attacking && meshes.mdx) meshes.mdx.play(desired, { speed: desired === 'Walk' ? 2.0 : 1 });
+    }
+  }
+
+  /**
+   * Запустить одноразовую анимацию атаки (чередуя Attack - 1 / Attack - 2).
+   * Блокирует локомоцию на длительность клипа (attackTimer).
+   */
+  private triggerAttack(meshes: EntityMeshes): void {
+    if (!meshes.mdx) return;
+    const name = meshes.attackAlt ? ATTACK_CLIPS[1] : ATTACK_CLIPS[0];
+    meshes.attackAlt = !meshes.attackAlt;
+    const action = meshes.mdx.play(name, { once: true, speed: 3 });
+    if (action) meshes.attackTimer = action.getClip().duration / 3; // длительность с учётом скорости
+  }
+
+  /**
+   * Отсчитать таймер атаки; по завершении вернуться к текущей локомоции.
+   */
+  private tickAttack(meshes: EntityMeshes, dt: number): void {
+    if (!meshes.attackTimer || meshes.attackTimer <= 0) return;
+    meshes.attackTimer -= dt;
+    if (meshes.attackTimer <= 0) {
+      meshes.attackTimer = 0;
+      meshes.mdx?.play(meshes.currentAnim ?? 'Stand');
     }
   }
 
@@ -251,6 +293,7 @@ export class GameRenderer {
       for (const meshes of this.entityMeshes.values()) {
         if (meshes.mixer) meshes.mixer.update(dt);
         this.smoothFacing(meshes, dt);
+        this.tickAttack(meshes, dt);
       }
       this.renderer.render(this.scene, this.camera);
     };
