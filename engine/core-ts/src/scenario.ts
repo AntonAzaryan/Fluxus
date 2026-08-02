@@ -12,10 +12,23 @@
 import { spawn } from './ecs/world.js';
 import { InputSystem } from './inputSystem.js';
 import { mathApi } from './mathApi.js';
+import {
+  createPhysicsApi,
+  PhysicsSystem,
+  PhysicsWorld,
+  staticsFromTerrain,
+  type PhysicsOptions,
+} from './physics.js';
 import { loadScene, type SceneDef } from './scene.js';
 import { prettyJsonSerializer, snapshotToPlain, type PlainSnapshot } from './serialization.js';
 import { initialState, tick, type Simulation } from './tick.js';
-import type { FieldOverrides, InputFrame, ReadonlyEventLog, SimulationState } from './types.js';
+import type {
+  FieldOverrides,
+  InputFrame,
+  PhysicsApi,
+  ReadonlyEventLog,
+  SimulationState,
+} from './types.js';
 
 export interface ScenarioSpawn {
   readonly prefab: string;
@@ -33,6 +46,11 @@ export interface ScenarioDef {
   readonly inputs?: readonly InputFrame[];
   /** Порядок игроков задаёт слоты (TICK-5); обязателен, если есть `inputs`. */
   readonly players?: readonly string[];
+  /**
+   * Включает физику (PHYS-4). Поле сценария, а не сцены: реализация — зависимость
+   * сборки (DI-3, SER-7), в конфиге сцены её быть не должно.
+   */
+  readonly physics?: PhysicsOptions;
 }
 
 /**
@@ -66,15 +84,26 @@ export function runScenario(def: ScenarioDef): RunOutput {
 
   const { world, systems, terrain } = loadScene(def.scene);
   if (def.players !== undefined) systems.register(new InputSystem({ players: def.players }));
+
+  // Статика обрывов строится из террейна до расстановки: она иммутабельна и в
+  // снапшот не входит (TERR-5, TERR-6).
+  let physics: PhysicsApi | undefined;
+  if (def.physics !== undefined) {
+    const statics = terrain === undefined ? [] : staticsFromTerrain(terrain.grid);
+    const physicsWorld = new PhysicsWorld(statics, terrain?.grid.tileSize);
+    systems.register(new PhysicsSystem(physicsWorld, def.physics));
+    physics = createPhysicsApi(world, physicsWorld, def.physics);
+  }
+
   for (const entry of def.initial ?? []) spawn(world, entry.prefab, entry.overrides);
 
   const state = initialState(world, def.seed);
-  // physics не подаётся: реализации ещё нет, а ядро тикает без неё (DI-3).
   const sim: Simulation = {
     systems,
     worldSeed: def.seed,
     math: mathApi,
     ...(terrain !== undefined ? { terrain } : {}),
+    ...(physics !== undefined ? { physics } : {}),
   };
 
   const byTick = new Map<number, InputFrame[]>();

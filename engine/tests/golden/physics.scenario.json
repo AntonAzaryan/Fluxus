@@ -1,0 +1,47 @@
+{
+  "name": "physics",
+  "seed": 20260813,
+  "ticks": 6,
+  "physics": {},
+  "scene": {
+    "components": [
+      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } },
+      {
+        "name": "Collider",
+        "fields": { "halfX": "fixed", "halfY": "fixed", "radius": "fixed", "shape": "i32" }
+      }
+    ],
+    "prefabs": [
+      {
+        "name": "Walker",
+        "components": {
+          "Position": { "x": 32768, "y": 32768 },
+          "Velocity": { "x": 16384, "y": 0 },
+          "Collider": { "halfX": 16384, "halfY": 16384, "radius": 16384, "shape": 1 }
+        }
+      },
+      {
+        "name": "Boulder",
+        "components": {
+          "Position": { "x": 98304, "y": 229376 },
+          "Collider": { "halfX": 32768, "halfY": 32768, "radius": 32768, "shape": 0 }
+        },
+        "tags": ["blocksMovement", "blocksVision"]
+      }
+    ],
+    "terrain": {
+      "width": 4,
+      "height": 4,
+      "tileSize": 65536,
+      "levels": ["0011", "0011", "0000", "0000"],
+      "flags": ["....", "....", "....", "...."]
+    },
+    "capacity": 16
+  },
+  "initial": [
+    { "prefab": "Walker" },
+    { "prefab": "Walker", "overrides": { "Position": { "y": 229376 } } },
+    { "prefab": "Boulder" }
+  ]
+}

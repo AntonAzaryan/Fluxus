@@ -204,6 +204,16 @@ const scenario: Json = {
       },
     },
     inputs: { type: 'array', items: { $ref: '#/$defs/inputFrame' } },
+    physics: {
+      $comment: 'Включает физику (PHYS-4). Поле сценария, а не сцены: реализация — зависимость сборки (DI-3).',
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        collider: { type: 'string', minLength: 1 },
+        velocity: { type: 'string', minLength: 1 },
+        order: { $comment: 'Равные order недопустимы (DET-3).', type: 'integer' },
+      },
+    },
     players: {
       $comment: 'Порядок задаёт слоты игроков (TICK-5); обязателен вместе с inputs.',
       type: 'array',

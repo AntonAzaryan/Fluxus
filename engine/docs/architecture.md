@@ -101,8 +101,8 @@
 | 9 | Serialization + JSON-схемы | ✅ `src/serialization.ts`, `src/scene.ts`, `src/schemas.ts`, `engine/schemas/*.json`: plain-форма мира, конфиг сцены, схемы порождаются из ядра |
 | 10 | CLI + golden-file test suite | ✅ `src/scenario.ts`, `bin/sim.mjs`, `engine/tests/golden/`: прогон сценария из одного JSON, побитовая сверка (`viewpoint = ALL`). Ввод и RNG вошли в эталоны change'ами `input-as-components` и `random-in-dsl` |
 | 11 | Terrain: карты уровней и пола, `levelAt`, генерация cliff-геометрии | ✅ `engine/core-ts/src/terrain.ts`: ассет в конфиге сцены, `levelAt`/`levelOf`/`hasFloorAt` в `SystemContext`, карта пола — компонент на singleton'е, обрывы — производные отрезки для физики |
-| 12 | Editor MVP (Compose) | Системы, prefabs и кисти террейна из UI — гипотеза data-driven архитектуры проверена |
-| 13 | Physics + raycast/LoS | Примитивные коллизии + детерминированный raycast |
+| 12 | Editor MVP (Compose) | ⏸ Отложен (решение 2026-08-02): редактор и его рендер спекаются отдельно, ядро доводится до конца раньше |
+| 13 | Physics + raycast/LoS | ✅ `engine/core-ts/src/physics.ts`: коллайдер-компонент, статика обрывов, сетка broad-phase, разрешение движения по осям с событием `Collision`, raycast с маской |
 | 14 | Snapshot ring buffer + dirty-tracking | Reproducible state; `TickResult.changes` наполняется |
 | 15 | Time system + Tween system | Time scaling, интерполяции |
 | 16 | World state machine + Rewind | Механика перемотки; `mode`/`isReplay` в `TickResult` |

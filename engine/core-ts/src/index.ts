@@ -41,6 +41,18 @@ export {
   TERRAIN_PREFAB,
 } from './terrain.js';
 export type { TerrainDef } from './terrain.js';
+export {
+  createPhysicsApi,
+  staticsFromTerrain,
+  PhysicsSystem,
+  PhysicsWorld,
+  BLOCKS_MOVEMENT,
+  BLOCKS_VISION,
+  SHAPE_AABB,
+  SHAPE_CIRCLE,
+  STATIC_COLLIDER,
+} from './physics.js';
+export type { PhysicsOptions, StaticCollider } from './physics.js';
 export { InputSystem, INPUT_FIELDS } from './inputSystem.js';
 export type { InputSystemOptions } from './inputSystem.js';
 export { runScenario, runScenarioBytes } from './scenario.js';

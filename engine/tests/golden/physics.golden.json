@@ -1,0 +1,821 @@
+{
+  "scenario": "physics",
+  "seed": 20260813,
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          7,
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "halfY": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "radius": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "shape": [
+              0,
+              1,
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              32768,
+              32768,
+              98304
+            ],
+            "y": [
+              0,
+              32768,
+              229376,
+              229376
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              65535,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              16384,
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            3,
+            [
+              "blocksMovement",
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": []
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          7,
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "halfY": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "radius": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "shape": [
+              0,
+              1,
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              49152,
+              49152,
+              98304
+            ],
+            "y": [
+              0,
+              32768,
+              229376,
+              229376
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              65535,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              16384,
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            3,
+            [
+              "blocksMovement",
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": []
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          7,
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "halfY": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "radius": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "shape": [
+              0,
+              1,
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              65536,
+              49152,
+              98304
+            ],
+            "y": [
+              0,
+              32768,
+              229376,
+              229376
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              65535,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              16384,
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            3,
+            [
+              "blocksMovement",
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Collision",
+          "data": {
+            "entity": 2,
+            "nx": -65536,
+            "ny": 0,
+            "other": 3
+          }
+        }
+      ]
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          7,
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "halfY": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "radius": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "shape": [
+              0,
+              1,
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              81920,
+              49152,
+              98304
+            ],
+            "y": [
+              0,
+              32768,
+              229376,
+              229376
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              65535,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              16384,
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            3,
+            [
+              "blocksMovement",
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Collision",
+          "data": {
+            "entity": 2,
+            "nx": -65536,
+            "ny": 0,
+            "other": 3
+          }
+        }
+      ]
+    },
+    {
+      "tick": 4,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          7,
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "halfY": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "radius": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "shape": [
+              0,
+              1,
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              98304,
+              49152,
+              98304
+            ],
+            "y": [
+              0,
+              32768,
+              229376,
+              229376
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              65535,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              16384,
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            3,
+            [
+              "blocksMovement",
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Collision",
+          "data": {
+            "entity": 2,
+            "nx": -65536,
+            "ny": 0,
+            "other": 3
+          }
+        }
+      ]
+    },
+    {
+      "tick": 5,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          7,
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "halfY": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "radius": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "shape": [
+              0,
+              1,
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              114688,
+              49152,
+              98304
+            ],
+            "y": [
+              0,
+              32768,
+              229376,
+              229376
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              65535,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              16384,
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            3,
+            [
+              "blocksMovement",
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Collision",
+          "data": {
+            "entity": 2,
+            "nx": -65536,
+            "ny": 0,
+            "other": 3
+          }
+        }
+      ]
+    },
+    {
+      "tick": 6,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          7,
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "halfY": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "radius": [
+              0,
+              16384,
+              16384,
+              32768
+            ],
+            "shape": [
+              0,
+              1,
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              114688,
+              49152,
+              98304
+            ],
+            "y": [
+              0,
+              32768,
+              229376,
+              229376
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              65535,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              16384,
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            3,
+            [
+              "blocksMovement",
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Collision",
+          "data": {
+            "entity": 1,
+            "nx": -65536,
+            "ny": 0,
+            "other": -1
+          }
+        },
+        {
+          "type": "Collision",
+          "data": {
+            "entity": 2,
+            "nx": -65536,
+            "ny": 0,
+            "other": 3
+          }
+        }
+      ]
+    }
+  ]
+}

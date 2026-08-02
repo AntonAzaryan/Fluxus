@@ -43,16 +43,21 @@ export interface MathApi {
   };
 }
 
-/**
- * Опциональная зависимость (DI-3): ядро собирается и тикает без неё.
- * Реализация появится на этапе 13; здесь зафиксирован только контракт.
- */
+/** Опциональная зависимость (DI-3): ядро собирается и тикает без неё. */
 export interface PhysicsApi {
-  readonly raycast: (from: Vec2, to: Vec2) => RaycastHit | null;
+  readonly raycast: (from: Vec2, to: Vec2, options?: RaycastOptions) => RaycastHit | null;
+}
+
+export interface RaycastOptions {
+  /** Тег коллайдеров, по которым считается пересечение; для LoS — `blocksVision` (PHYS-6). */
+  readonly mask?: string;
+  /** Сущность-источник: луч не должен упираться в собственный коллайдер (PHYS-6). */
+  readonly ignore?: EntityId;
 }
 
 export interface RaycastHit {
-  readonly entity: EntityId;
+  /** Отсутствует, если луч упёрся в статический коллайдер: сущности у него нет. */
+  readonly entity?: EntityId;
   readonly point: Vec2;
 }
 
