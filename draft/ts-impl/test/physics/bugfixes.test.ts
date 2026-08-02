@@ -16,6 +16,7 @@ import {
 } from '../../src/components/types';
 import { createGameState, tick, TickInput } from '../../src/tick';
 import { createPlayerArchetype } from '../../src/archetypes/player';
+import { defaultGameConfig } from '../../src/gameConfig';
 
 function worldAdapter(world: GameWorld) {
   return {
@@ -142,11 +143,13 @@ describe('Bug: рывок (dash) завершается, а не летит ве
       { type: 'MoveCommandInput', player_id: playerId, dx: toFixed(-1), dy: ZERO, dz: ZERO } as any,
       { type: 'DashInput', player_id: playerId } as any,
     ] });
-    // Рывок активен, скорость рывка (dash_speed=1200)
+    // Рывок активен, скорость — ровно dash_speed (значения баланса крутятся,
+    // поэтому сверяемся с конфигом, а не с зашитым числом)
     expect((world.get(playerId) as any).Dash).toBeDefined();
-    expect(Math.abs(fromFixed(world.get(playerId)!.Velocity!.dx))).toBeGreaterThan(1000);
+    expect(Math.abs(fromFixed(world.get(playerId)!.Velocity!.dx)))
+      .toBeCloseTo(fromFixed(defaultGameConfig.dash_speed), 3);
 
-    // dash_duration_ms=200мс ≈ 12 тиков. Продолжаем держать влево.
+    // dash_duration_ms ≈ 8 тиков при 130мс. Продолжаем держать влево.
     for (let i = 0; i < 20; i++) {
       tick(gs, { commands: [
         { type: 'MoveCommandInput', player_id: playerId, dx: toFixed(-1), dy: ZERO, dz: ZERO } as any,
@@ -156,8 +159,9 @@ describe('Bug: рывок (dash) завершается, а не летит ве
     const p = world.get(playerId)!;
     // Рывок закончился
     expect((p as any).Dash).toBeUndefined();
-    // Скорость вернулась к обычной ходьбе (<= player_move_speed=300), а не 1200
-    expect(Math.abs(fromFixed(p.Velocity!.dx))).toBeLessThanOrEqual(300);
+    // Скорость вернулась к обычной ходьбе (<= player_move_speed), а не dash_speed
+    expect(Math.abs(fromFixed(p.Velocity!.dx)))
+      .toBeLessThanOrEqual(fromFixed(defaultGameConfig.player_move_speed));
   });
 
   it('без направления (стоя на месте) рывок не срабатывает', () => {

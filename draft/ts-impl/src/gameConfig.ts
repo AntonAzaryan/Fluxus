@@ -9,10 +9,15 @@ import { toFixed } from './fixed/fixed';
 export const defaultGameConfig: GameConfig = {
   // Персонаж
   player_move_speed: toFixed(300.0),
+  // Разгон/торможение: 1500 → выход на полную скорость за ~0.20с,
+  // 1000 → остановка за ~0.30с (торможение мягче разгона — персонаж заметно
+  // «доскальзывает» после отпускания клавиш).
+  player_accel: toFixed(1500.0),
+  player_decel: toFixed(1000.0),
   player_max_health: toFixed(500.0),
   player_radius: toFixed(20.0),
 
-  // Фаербол (Q)
+  // Фаербол (ЛКМ)
   fireball_speed: toFixed(800.0),
   fireball_max_distance: toFixed(600.0),
   fireball_damage: toFixed(100.0),
@@ -22,17 +27,17 @@ export const defaultGameConfig: GameConfig = {
   fireball_cooldown: toFixed(100.0),
 
   // Щит (E)
-  shield_spawn_distance: toFixed(80.0),
-  shield_arc_degrees: toFixed(30.0),
+  shield_spawn_distance: toFixed(30.0),
+  shield_arc_degrees: toFixed(45.0),
   shield_lifetime_ms: toFixed(500.0),
   shield_health: toFixed(1.0),
   shield_radius: toFixed(35.0),
   shield_cooldown: toFixed(2000.0),
 
   // Рывок (Space)
-  dash_speed: toFixed(1200.0),
-  dash_duration_ms: toFixed(200.0),
-  dash_cooldown_ms: toFixed(500.0),
+  dash_speed: toFixed(700.0),
+  dash_duration_ms: toFixed(130.0),
+  dash_cooldown_ms: toFixed(200.0),
 
   // Замедление времени (R)
   time_slow_duration_ms: toFixed(3000.0),

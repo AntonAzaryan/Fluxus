@@ -8,10 +8,11 @@ import { EventBus } from '../../src/ecs/events';
 import { Resources, InputCommand } from '../../src/resources/resources';
 import { createPlayerArchetype } from '../../src/archetypes/player';
 import { defaultGameConfig } from '../../src/gameConfig';
-import { toFixed, ONE, ZERO } from '../../src/fixed/fixed';
+import { toFixed, div, ONE, ZERO } from '../../src/fixed/fixed';
 import { playerCommandIngestSystem } from '../../src/systems/playerCommandIngest';
 import { fireballCastSystem } from '../../src/systems/fireballCast';
 import { cooldownTickSystem } from '../../src/systems/cooldownTick';
+import { movementSystem } from '../../src/systems/movement';
 import { Position, Velocity, Collider, DynamicBody, Health, Cooldowns, MoveIntent, CollisionLayer } from '../../src/components/types';
 
 function createTestResources(): Resources {
@@ -112,6 +113,45 @@ describe('Integration: Systems', () => {
     // Всё ещё один фаербол
     const projectiles = world.with('Projectile');
     expect(projectiles.length).toBe(1);
+  });
+
+  it('should accelerate to move speed and decelerate to zero', () => {
+    const world = new GameWorld();
+    const resources = createTestResources();
+    // dt одного тика в секундах, как его считает tick()
+    const dt = div(defaultGameConfig.ms_per_tick, toFixed(1000));
+
+    const archetype = createPlayerArchetype();
+    const playerId = world.spawn({
+      Position: new Position(toFixed(0), toFixed(0), toFixed(0)),
+      Velocity: archetype.Velocity,
+      Collider: archetype.Collider,
+      DynamicBody: archetype.DynamicBody,
+      Health: archetype.Health,
+      Cooldowns: archetype.Cooldowns,
+      MoveIntent: new MoveIntent(ONE, ZERO, ZERO), // жмём «вправо»
+      CollisionLayer: archetype.CollisionLayer,
+    });
+    const player = world.get(playerId)!;
+
+    // Первый тик разгона — скорость уже не нулевая, но ещё не максимальная
+    movementSystem(world, resources, dt);
+    expect(player.Velocity!.dx).toBeGreaterThan(ZERO);
+    expect(player.Velocity!.dx).toBeLessThan(defaultGameConfig.player_move_speed);
+
+    // За 0.5с (30 тиков) при accel=1800 успевает выйти на полную скорость
+    for (let i = 0; i < 30; i++) movementSystem(world, resources, dt);
+    expect(player.Velocity!.dx).toBe(defaultGameConfig.player_move_speed);
+
+    // Клавиши отпущены — тормозим не мгновенно
+    player.MoveIntent!.dx = ZERO;
+    movementSystem(world, resources, dt);
+    expect(player.Velocity!.dx).toBeGreaterThan(ZERO);
+    expect(player.Velocity!.dx).toBeLessThan(defaultGameConfig.player_move_speed);
+
+    // ...но за 0.5с останавливаемся полностью
+    for (let i = 0; i < 30; i++) movementSystem(world, resources, dt);
+    expect(player.Velocity!.dx).toBe(ZERO);
   });
 
   it('should tick cooldowns down', () => {

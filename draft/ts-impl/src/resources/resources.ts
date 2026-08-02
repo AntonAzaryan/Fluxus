@@ -16,6 +16,8 @@ import { ComponentTypes } from '../components/types';
 export interface GameConfig {
   // Персонаж
   player_move_speed: Fixed;
+  player_accel: Fixed;
+  player_decel: Fixed;
   player_max_health: Fixed;
   player_radius: Fixed;
 

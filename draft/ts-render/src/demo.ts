@@ -44,7 +44,7 @@ class InputHandler {
     window.addEventListener('keydown', (e) => {
       this.keys.add(e.code);
 
-      if (e.code === 'KeyQ' && this.playerId) this.castFireball();
+      if (e.code === 'KeyO' && this.playerId) this.castFireball();
       if (e.code === 'KeyE' && this.playerId) this.castShield();
       if (e.code === 'Space' && this.playerId) this.startDash();
       if (e.code === 'KeyR' && this.playerId) this.castTimeSlow();
@@ -57,6 +57,15 @@ class InputHandler {
     window.addEventListener('mousemove', (e) => {
       this.mouseClient.x = e.clientX;
       this.mouseClient.y = e.clientY;
+    });
+
+    // ЛКМ — фаербол. Курсор к этому моменту уже мог не двигаться,
+    // поэтому берём точку из самого события, а не из последнего mousemove.
+    window.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || !this.playerId) return;
+      this.mouseClient.x = e.clientX;
+      this.mouseClient.y = e.clientY;
+      this.castFireball();
     });
   }
 
@@ -96,8 +105,8 @@ class InputHandler {
     });
   }
 
-  // Точка на земле под курсором — цель для фаербола/щита.
-  private aimPoint(): { x: number; y: number } {
+  // Точка на земле под курсором — цель для фаербола/щита и для доворота груди.
+  aimPoint(): { x: number; y: number } {
     return this.renderer.clientToGround(this.mouseClient.x, this.mouseClient.y) ?? { x: 0, y: 0 };
   }
 
@@ -196,9 +205,9 @@ if (infoDiv) {
     <div style="font-weight: bold;">Game MVP - Full Integration</div>
     <div style="margin-top: 8px;">
       <div>WASD/Arrows: Move</div>
-      <div>Q: Fireball (летит к курсору) | E: Shield (к курсору)</div>
+      <div>ЛКМ / O: Fireball (летит к курсору) | E: Shield (к курсору)</div>
       <div>Space: Dash | R: Time Slow</div>
-      <div style="opacity:0.7">Наведи мышь — туда полетит фаербол</div>
+      <div style="opacity:0.7">Наведи мышь — туда смотрит грудь и туда полетит фаербол</div>
     </div>
     <div style="margin-top: 8px;" id="stats"></div>
   `;
@@ -234,6 +243,9 @@ function gameLoop(currentTime: number) {
     inputHandler.updateTick(resources.timeState.current_tick);
     lastTime = currentTime;
   }
+
+  // Прицел мышью — грудь игрока доворачивается к этой точке
+  renderer.setAimTarget(inputHandler.aimPoint());
 
   // Render
   const renderState: RenderState = {

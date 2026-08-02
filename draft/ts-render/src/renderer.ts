@@ -37,6 +37,14 @@ const MOVE_EPS = 0.02;
 const TURN_RATE = 12;
 // Имена клипов атаки — чередуем между выстрелами.
 const ATTACK_CLIPS = ['Attack - 1', 'Attack - 2'];
+// Предел доворота груди относительно направления модели (рад). Больше — торс
+// «отрывается» от таза и модель выглядит сломанной.
+const TORSO_MAX_YAW = Math.PI * 0.4; // 72°
+// Скорость доворота груди (1/сек) — быстрее корпуса, прицел должен успевать за мышью.
+const TORSO_TURN_RATE = 18;
+// Вертикаль модели: MDX Z-up, родитель Bone_Chest (Bone_Root) не наклонён,
+// поэтому доворот вокруг Z в пространстве родителя = доворот вокруг мировой Z.
+const UP_Z = new THREE.Vector3(0, 0, 1);
 
 /**
  * Main renderer class
@@ -56,6 +64,9 @@ export class GameRenderer {
   private followTargetId: bigint | null = null;
   // Уже отрисованные снаряды — чтобы триггерить анимацию атаки один раз на выстрел.
   private seenProjectiles = new Set<bigint>();
+  // Точка прицеливания на земле (курсор) — к ней доворачивается грудь игрока.
+  private aimTarget: { x: number; y: number } | null = null;
+  private torsoQuat = new THREE.Quaternion();
 
   constructor(container: HTMLElement, config: Partial<RendererConfig> = {}) {
     const cfg = { ...defaultConfig, ...config };
@@ -282,6 +293,45 @@ export class GameRenderer {
   }
 
   /**
+   * Куда целится игрок (мировая точка на земле под курсором). Туда доворачивается
+   * его грудь; null — вернуть грудь в нейтраль.
+   */
+  setAimTarget(p: { x: number; y: number } | null): void {
+    this.aimTarget = p;
+  }
+
+  /**
+   * Доворот груди к точке прицеливания ПОВЕРХ анимации.
+   *
+   * Вызывать строго после mixer.update: микшер каждый кадр переписывает
+   * bone.quaternion значением из клипа, поэтому доворот не «накапливается»,
+   * а домножается заново. premultiply — поворот в пространстве родителя кости
+   * (Bone_Root), т.е. вокруг вертикали модели, а не вокруг локальной оси груди.
+   */
+  private applyTorsoAim(meshes: EntityMeshes, dt: number): void {
+    const torso = meshes.torso;
+    if (!torso) return;
+
+    let desired = 0;
+    if (this.aimTarget) {
+      const toAim = Math.atan2(
+        this.aimTarget.y - meshes.mesh.position.y,
+        this.aimTarget.x - meshes.mesh.position.x
+      );
+      // угол относительно текущего facing модели, приведённый к (-π, π]
+      const rel = toAim - meshes.mesh.rotation.z - MDX_FACING_OFFSET;
+      desired = Math.atan2(Math.sin(rel), Math.cos(rel));
+      desired = Math.max(-TORSO_MAX_YAW, Math.min(TORSO_MAX_YAW, desired));
+    }
+
+    const cur = meshes.torsoYaw ?? 0;
+    meshes.torsoYaw = cur + (desired - cur) * (1 - Math.exp(-TORSO_TURN_RATE * dt));
+    torso.quaternion.premultiply(
+      this.torsoQuat.setFromAxisAngle(UP_Z, meshes.torsoYaw)
+    );
+  }
+
+  /**
    * Start render loop
    */
   start(): void {
@@ -290,9 +340,11 @@ export class GameRenderer {
     const animate = () => {
       this.animationId = requestAnimationFrame(animate);
       const dt = this.clock.getDelta();
-      for (const meshes of this.entityMeshes.values()) {
+      for (const [id, meshes] of this.entityMeshes) {
         if (meshes.mixer) meshes.mixer.update(dt);
         this.smoothFacing(meshes, dt);
+        // Прицел мышью есть только у игрока — остальным грудь не крутим.
+        if (id === this.followTargetId) this.applyTorsoAim(meshes, dt);
         this.tickAttack(meshes, dt);
       }
       this.renderer.render(this.scene, this.camera);

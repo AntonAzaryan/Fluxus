@@ -32,6 +32,12 @@ export interface MdxInstance {
   play(nameSubstr: string, opts?: { once?: boolean; speed?: number }): THREE.AnimationAction | null;
   /** Скрыть геосеты по индексу (индекс в mdl.Geosets). */
   hideGeosets(ids: number[]): void;
+  /**
+   * Кости по ИСХОДНОМУ имени ноды MDX (`Bone_Chest`, `Bone_Head`, ...).
+   * Сами объекты названы `b<ObjectId>` — так на них ссылаются треки клипов,
+   * поэтому человекочитаемые имена живут отдельной мапой.
+   */
+  bones: Map<string, THREE.Bone>;
 }
 
 export interface BuildOptions {
@@ -151,6 +157,9 @@ export function buildMdxInstance(mdl: MdlModel.Model, opts: BuildOptions = {}): 
 
   const byId = new Map<number, THREE.Bone>();
   nodes.forEach((n, i) => byId.set(n.ObjectId, bones[i]));
+
+  const bonesByName = new Map<string, THREE.Bone>();
+  nodes.forEach((n, i) => bonesByName.set(n.Name, bones[i]));
 
   const roots: THREE.Bone[] = [];
   nodes.forEach((n, i) => {
@@ -352,5 +361,5 @@ export function buildMdxInstance(mdl: MdlModel.Model, opts: BuildOptions = {}): 
     }
   };
 
-  return { root, mixer, clips, play, hideGeosets };
+  return { root, mixer, clips, play, hideGeosets, bones: bonesByName };
 }

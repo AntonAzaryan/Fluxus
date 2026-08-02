@@ -23,7 +23,7 @@ import { damageApplicationSystem } from './systems/damageApplication';
 import { shieldExpirationSystem } from './systems/shieldExpiration';
 import { despawnSystem } from './systems/despawn';
 import { PhysicsProvider } from './physics/physicsProvider';
-import { Fixed } from './fixed/fixed';
+import { Fixed, ZERO } from './fixed/fixed';
 import { Collision } from './ecs/events';
 
 /**
@@ -62,8 +62,8 @@ export const schedule: Stage[] = [
   // Simulation: Движение и физика (до провайдера)
   {
     name: 'Simulation',
-    execute: (world, resources) => {
-      movementSystem(world, resources);
+    execute: (world, resources, bus, physics, dt) => {
+      movementSystem(world, resources, dt ?? ZERO);
       dashUpdateSystem(world, resources);
       timeSlowSyncSystem(world, resources);
       attachedToSyncSystem(world);

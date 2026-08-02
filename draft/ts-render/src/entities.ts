@@ -21,6 +21,8 @@ export interface EntityMeshes {
   targetRotZ?: number;    // целевой угол разворота по Z; докручиваем плавно в render-loop
   attackTimer?: number;   // сек до конца одноразовой анимации атаки (>0 — атака блокирует локомоцию)
   attackAlt?: boolean;    // чередование Attack - 1 / Attack - 2 между выстрелами
+  torso?: THREE.Bone;     // кость груди — доворачивается к курсору поверх анимации
+  torsoYaw?: number;      // текущий доворот груди относительно facing модели, рад
 }
 
 /**
@@ -136,7 +138,14 @@ export class EntityMeshFactory {
 
     this.scene.add(mesh);
 
-    return { mesh, healthBar, mixer, mdx, currentAnim: mdx ? 'Stand' : undefined };
+    return {
+      mesh,
+      healthBar,
+      mixer,
+      mdx,
+      currentAnim: mdx ? 'Stand' : undefined,
+      torso: mdx?.bones.get('Bone_Chest'),
+    };
   }
 
   private createPlayer(

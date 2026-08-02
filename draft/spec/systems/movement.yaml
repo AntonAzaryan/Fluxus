@@ -2,10 +2,12 @@ name: MovementSystem
 description: |
   Стадия: Simulation
   
-  Конвертирует MoveIntent в Velocity для движения персонажа.
+  Конвертирует MoveIntent в целевую скорость и подводит к ней Velocity
+  с ограниченным шагом: разгон при нажатых клавишах (GameConfig.player_accel),
+  торможение при отпущенных (GameConfig.player_decel).
   Учитывает компонент Dash — если есть активный рывок, движение игнорируется.
-  
-  Скорость движения берётся из GameConfig.player_move_speed.
+
+  Максимальная скорость берётся из GameConfig.player_move_speed.
 
 requires:
   - component: Position
@@ -15,6 +17,8 @@ requires:
   - component: MoveIntent
     access: read
   - component: Dash
+    access: read
+  - component: LocalTimeScale
     access: read
 reads:
   - GameConfig
@@ -32,10 +36,12 @@ logic: |
     
     Прочитать MoveIntent.dx, MoveIntent.dy, MoveIntent.dz.
 
-    # Нормализовать вектор движения (если длина > 1)
+    # Целевая скорость
     Прочитать GameConfig.player_move_speed.
 
-    Если MoveIntent.dx != 0 или MoveIntent.dy != 0 или MoveIntent.dz != 0:
+    moving = (MoveIntent.dx != 0 или MoveIntent.dy != 0 или MoveIntent.dz != 0).
+
+    Если moving:
       # Вычислить длину вектора в плоскости XY
       length_sq = vec_length_sq_xy((MoveIntent.dx, MoveIntent.dy, MoveIntent.dz)).
 
@@ -44,12 +50,37 @@ logic: |
       Иначе:
         normalized = (MoveIntent.dx, MoveIntent.dy, MoveIntent.dz).
 
-      # Установить Velocity
-      Установить Velocity.dx в mul(normalized.x, GameConfig.player_move_speed).
-      Установить Velocity.dy в mul(normalized.y, GameConfig.player_move_speed).
-      Установить Velocity.dz в mul(normalized.z, GameConfig.player_move_speed).
+      target = vec_scale(normalized, GameConfig.player_move_speed).
     Иначе:
-      # Остановить персонажа
-      Установить Velocity.dx в 0.
-      Установить Velocity.dy в 0.
-      Установить Velocity.dz в 0.
+      target = (0, 0, 0).
+
+    # Ограниченный шаг к целевой скорости: разгон / торможение.
+    # effective_dt масштабируется LocalTimeScale ровно так же, как в
+    # физическом провайдере (contracts/physics_v1.md) — иначе при замедлении
+    # времени разгон занимал бы столько же тиков на укороченном пути.
+    effective_dt = dt.
+    Если сущность имеет компонент LocalTimeScale:
+      effective_dt = mul(dt, LocalTimeScale.scale).
+
+    Если moving:
+      max_delta = mul(GameConfig.player_accel, effective_dt).
+    Иначе:
+      max_delta = mul(GameConfig.player_decel, effective_dt).
+
+    # Шаг считается по ВЕКТОРУ разницы, не покомпонентно: покомпонентное
+    # ограничение разгоняло бы диагональ в sqrt(2) раза быстрее прямой.
+    delta = vec_sub(target, (Velocity.dx, Velocity.dy, Velocity.dz)).
+    dist = vec_length_xy(delta).
+
+    Если dist <= max_delta:
+      # Дошли за этот тик — сесть точно на target, иначе останется
+      # бесконечное подползание на остаточных квантах скорости.
+      Установить Velocity.dx в target.x.
+      Установить Velocity.dy в target.y.
+    Иначе:
+      step = vec_scale(vec_normalize_xy(delta), max_delta).
+      Установить Velocity.dx в add(Velocity.dx, step.x).
+      Установить Velocity.dy в add(Velocity.dy, step.y).
+
+    # MVP: арена плоская, вертикальная скорость не разгоняется.
+    Установить Velocity.dz в target.z.
