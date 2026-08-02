@@ -36,14 +36,14 @@
 | Capability | Что покрывает | ID требований |
 |---|---|---|
 | `determinism-core` | Гарантии детерминизма, языки реализации, DI | DET-1..8, CORE-1..4, DI-1..3 |
-| `fixed-point-math` | Q16.16, умножение, округление, overflow | FP-1..4 |
-| `tick-loop` | `tick()`, `InputFrame`, `TickResult`, observers | TICK-1..4, OBS-1..6 |
-| `ecs-foundation` | ECS, Query API, Entity IDs, Command Buffer | ECS-1..5, QUERY-1..3, ID-1..5, CMD-1..5 |
-| `data-driven-systems` | System/Action/Expression DSL, Event Bus | SYS-1..8, ACT-1..3, EXPR-1..5, EVT-1..4 |
+| `fixed-point-math` | Q16.16, умножение, округление, overflow, насыщение при делении | FP-1..5 |
+| `tick-loop` | `tick()`, `InputFrame`, слоты игроков, `TickResult`, observers | TICK-1..5, OBS-1..6 |
+| `ecs-foundation` | ECS, Query API, Entity IDs, Command Buffer | ECS-1..5, QUERY-1..3, ID-1..5, CMD-1..6 |
+| `data-driven-systems` | System/Action/Expression DSL, Event Bus | SYS-1..8, ACT-1..3, EXPR-1..6, EVT-1..4 |
 | `time-system` | TimeScale, стакинг, твины | TIME-1..9, TWEEN-1..7 |
 | `rng` | PRNG, именованные стримы | RNG-1..7 |
 | `snapshot-rewind` | Снапшоты, перемотка, машина состояний мира | SNAP-1..6, REW-1..11, WSM-1..6 |
-| `serialization` | JSON / MessagePack, `Serializer` | SER-1..5 |
+| `serialization` | JSON / MessagePack, `Serializer`, порядок ключей, конфиг сцены | SER-1..7 |
 | `terrain` | Height field, карты уровней и пола, `levelAt`, cliff-геометрия | TERR-1..7 |
 | `arena` | Граница арены, принадлежность, сужение, выход за край и провал сквозь пол | ARENA-1..6 |
 | `physics` | Коллизии, статика обрывов, разрешение движения, детерминированный raycast | PHYS-1..9 |
