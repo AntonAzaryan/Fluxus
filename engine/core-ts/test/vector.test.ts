@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { fromFloat, toFloat } from '../src/fixed.js';
+import { fromFloat, toFloat } from '../src/math/fixed.js';
 import type { Vec2 } from '../src/types.js';
-import * as vec from '../src/vector.js';
+import * as vec from '../src/math/vector.js';
 
 function v(x: number, y: number): Vec2 {
   return { x: fromFloat(x), y: fromFloat(y) };

@@ -6,9 +6,9 @@
  * Порядок ключей задаётся при построении plain-формы (SER-6), а не здесь:
  * иначе каждая новая реализация `Serializer` обязана была бы его повторить.
  */
-import { fromPlain, toPlain, type PlainWorld } from './ecs/world.js';
-import type { PrefabDef } from './ecs/world.js';
-import type { ComponentSchema, Snapshot } from './types.js';
+import { fromPlain, toPlain, type PlainWorld } from '../ecs/world.js';
+import type { PrefabDef } from '../ecs/world.js';
+import type { ComponentSchema, Snapshot } from '../types.js';
 
 export interface Serializer {
   readonly name: string;

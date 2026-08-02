@@ -10,7 +10,7 @@
  */
 import { actionNames } from './actions.js';
 import { operators } from './expr.js';
-import { FIELD_TYPES } from './types.js';
+import { FIELD_TYPES } from '../types.js';
 
 type Json = Record<string, unknown>;
 

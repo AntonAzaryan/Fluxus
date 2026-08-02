@@ -1,4 +1,4 @@
-import type { EventEmitter, GameEvent, ReadonlyEventLog } from './types.js';
+import type { EventEmitter, GameEvent, ReadonlyEventLog } from '../types.js';
 
 const NO_DATA: Readonly<Record<string, number>> = Object.freeze({});
 

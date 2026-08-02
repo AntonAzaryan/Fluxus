@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { mathApi } from '../src/mathApi.js';
-import { SystemRegistry } from '../src/system.js';
+import { mathApi } from '../src/math/mathApi.js';
+import { SystemRegistry } from '../src/systems/registry.js';
 import {
   dispatch,
   initialState,
@@ -8,7 +8,7 @@ import {
   takeSnapshot,
   tick,
   type Simulation,
-} from '../src/tick.js';
+} from '../src/sim/tick.js';
 import { createWorld, getField, listAlive, spawn } from '../src/ecs/world.js';
 import type {
   ComponentSchema,

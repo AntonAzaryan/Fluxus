@@ -8,12 +8,12 @@
  * в истории (SNAP-4) — иначе глубина rewind в 420 тиков стоила бы сотни
  * мегабайт полных копий.
  */
-import { EventBus } from './events.js';
-import { createRngRegistry } from './rng.js';
-import { SystemRegistry } from './system.js';
-import { createCommandBuffer } from './ecs/commands.js';
-import { query as runQuery } from './ecs/query.js';
-import { cloneWorld, getField, hasComponent, isAlive } from './ecs/world.js';
+import { EventBus } from '../ecs/events.js';
+import { createRngRegistry } from '../math/rng.js';
+import { SystemRegistry } from '../systems/registry.js';
+import { createCommandBuffer } from '../ecs/commands.js';
+import { query as runQuery } from '../ecs/query.js';
+import { cloneWorld, getField, hasComponent, isAlive } from '../ecs/world.js';
 import type {
   ChangeSet,
   InputFrame,
@@ -26,7 +26,7 @@ import type {
   TickObserver,
   TickResult,
   WorldState,
-} from './types.js';
+} from '../types.js';
 
 /** Неизменяемая часть: зависимости и набор систем. Живёт вне `SimulationState`. */
 export interface Simulation {

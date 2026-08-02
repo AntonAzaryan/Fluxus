@@ -10,7 +10,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { runScenarioBytes, type ScenarioDef } from '../src/scenario.js';
+import { runScenarioBytes, type ScenarioDef } from '../src/sim/scenario.js';
 
 const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'golden');
 const UPDATE = process.env['UPDATE_GOLDEN'] === '1';

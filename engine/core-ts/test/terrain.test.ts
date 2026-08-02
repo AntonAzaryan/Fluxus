@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import * as fixed from '../src/fixed.js';
+import * as fixed from '../src/math/fixed.js';
 import { addComponent, getField, setField, spawn } from '../src/ecs/world.js';
 import { query } from '../src/ecs/query.js';
-import { loadScene } from '../src/scene.js';
-import { createTerrainGrid, FLOOR_COMPONENT, terrainPrefab, type TerrainDef } from '../src/terrain.js';
+import { loadScene } from '../src/sim/scene.js';
+import { createTerrainGrid, FLOOR_COMPONENT, terrainPrefab, type TerrainDef } from '../src/systems/terrain.js';
 import { LEVEL_OVERRIDE_COMPONENT } from '../src/types.js';
 
 const TILE = fixed.fromInt(2);

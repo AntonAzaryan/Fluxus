@@ -3,8 +3,8 @@
  * Алгоритм, хеш и развёртка seed зафиксированы в спеке дословно — здесь
  * ничего не меняется "для качества", только побитовая парность с Rust (CORE-2).
  */
-import { assert, DEBUG } from './debug.js';
-import type { Fixed, RngStream, RngStreams } from './types.js';
+import { assert, DEBUG } from '../debug.js';
+import type { Fixed, RngStream, RngStreams } from '../types.js';
 
 // ------------------------------------------------------------------- fnv-1a
 

@@ -17,7 +17,7 @@ import type {
   RngStream,
   SystemContext,
   Vec2,
-} from './types.js';
+} from '../types.js';
 
 /** Узел действия: объект с ровно одним ключом-именем действия. */
 export type Action = Readonly<Record<string, unknown>>;

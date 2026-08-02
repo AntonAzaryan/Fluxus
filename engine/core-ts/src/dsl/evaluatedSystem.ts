@@ -1,15 +1,15 @@
 /**
  * JSON-система (SYS-1) и её валидация на регистрации (SYS-3).
  *
- * Для scheduler'а неотличима от нативной: тот же интерфейс `System`, то же
+ * Для scheduler'а неотличима от системы на TS: тот же интерфейс `System`, то же
  * чтение через контекст и запись через Command Buffer (SYS-4, SYS-6). Именно
  * это делает `override` (SYS-7) безопасным — переписывание системы в код не
  * меняет ничего вокруг.
  */
 import { execute, actionNames, type Action } from './actions.js';
 import { operators, type Expression } from './expr.js';
-import { componentSchema, prefabOf } from './ecs/world.js';
-import type { System, SystemContext, WorldState } from './types.js';
+import { componentSchema, prefabOf } from '../ecs/world.js';
+import type { System, SystemContext, WorldState } from '../types.js';
 
 /** JSON-описание системы. `query` — сахар над действием `forEach` (SYS-1). */
 export interface SystemDef {

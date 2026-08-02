@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { InputSystem } from '../src/inputSystem.js';
-import { loadScene, type SceneDef } from '../src/scene.js';
-import { runScenario, type ScenarioDef } from '../src/scenario.js';
-import { initialState, tick, type Simulation } from '../src/tick.js';
-import { mathApi } from '../src/mathApi.js';
-import * as fixed from '../src/fixed.js';
+import { InputSystem } from '../src/systems/inputSystem.js';
+import { loadScene, type SceneDef } from '../src/sim/scene.js';
+import { runScenario, type ScenarioDef } from '../src/sim/scenario.js';
+import { initialState, tick, type Simulation } from '../src/sim/tick.js';
+import { mathApi } from '../src/math/mathApi.js';
+import * as fixed from '../src/math/fixed.js';
 import { getField, spawn } from '../src/ecs/world.js';
 import type { InputFrame } from '../src/types.js';
 

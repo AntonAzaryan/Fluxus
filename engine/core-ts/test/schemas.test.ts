@@ -2,9 +2,9 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { schemaFileContent, schemaFiles } from '../src/schemas.js';
-import { actionNames } from '../src/actions.js';
-import { operators } from '../src/expr.js';
+import { schemaFileContent, schemaFiles } from '../src/dsl/schemas.js';
+import { actionNames } from '../src/dsl/actions.js';
+import { operators } from '../src/dsl/expr.js';
 
 const SCHEMA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'schemas');
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SystemRegistry } from '../src/system.js';
-import { EventBus } from '../src/events.js';
+import { SystemRegistry } from '../src/systems/registry.js';
+import { EventBus } from '../src/ecs/events.js';
 import type { System, SystemContext } from '../src/types.js';
 
 const noop = (_ctx: SystemContext): void => {};

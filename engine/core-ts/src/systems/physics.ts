@@ -11,10 +11,10 @@
  * предел уже действует в `withinRadius` (QUERY-1), потому что там та же
  * арифметика.
  */
-import * as fixed from './fixed.js';
-import * as vec from './vector.js';
-import { getField, hasTag } from './ecs/world.js';
-import { query } from './ecs/query.js';
+import * as fixed from '../math/fixed.js';
+import * as vec from '../math/vector.js';
+import { getField, hasTag } from '../ecs/world.js';
+import { query } from '../ecs/query.js';
 import {
   FIXED_ONE,
   POSITION_COMPONENT,
@@ -27,7 +27,7 @@ import {
   type TerrainGrid,
   type Vec2,
   type WorldState,
-} from './types.js';
+} from '../types.js';
 
 /** Значения поля `shape` компонента коллайдера. */
 export const SHAPE_CIRCLE = 0;
@@ -182,7 +182,7 @@ export interface PhysicsOptions {
 }
 
 /**
- * Разрешение движения (PHYS-8). Нативная система за обычным контрактом: читает
+ * Разрешение движения (PHYS-8). Система на TS за обычным контрактом: читает
  * запросами, пишет только через Command Buffer (DET-7, CMD-4).
  *
  * Движение раскладывается по осям — сначала X, затем Y: заблокированная ось
@@ -239,9 +239,11 @@ export class PhysicsSystem implements System {
         if (step === 0) continue;
         const nextX = axis === 'x' ? fixed.add(x, step) : x;
         const nextY = axis === 'y' ? fixed.add(y, step) : y;
-        const swept = union(boundsAt(x, y, collider), boundsAt(nextX, nextY, collider));
+        const current = boundsAt(x, y, collider);
+        const next = boundsAt(nextX, nextY, collider);
+        const swept = union(current, next);
 
-        const hit = this.firstBlocker(ctx, swept, mover, blockers, positionOf);
+        const hit = this.firstBlocker(ctx, { current, next, swept, axis }, mover, blockers, positionOf);
         if (hit === undefined) {
           x = nextX;
           y = nextY;
@@ -269,17 +271,19 @@ export class PhysicsSystem implements System {
   /** Первый блокирующий: статика идёт раньше динамики, динамика — по порядку запроса (QUERY-2). */
   private firstBlocker(
     ctx: SystemContext,
-    swept: Bounds,
+    move: Move,
     mover: EntityId,
     blockers: Float64Array,
     positionOf: (entity: EntityId) => Vec2,
   ): number | undefined {
-    if (this.physicsWorld.query(swept, BLOCKS_MOVEMENT).length > 0) return STATIC_COLLIDER;
+    for (const s of this.physicsWorld.query(move.swept, BLOCKS_MOVEMENT)) {
+      if (blocks(move, s)) return STATIC_COLLIDER;
+    }
     for (const other of blockers) {
       if (other === mover) continue;
       const position = positionOf(other);
       const collider = colliderOf(ctx.get, other, this.colliderComponent);
-      if (overlaps(swept, boundsAt(position.x, position.y, collider))) return other;
+      if (blocks(move, boundsAt(position.x, position.y, collider))) return other;
     }
     return undefined;
   }
@@ -287,6 +291,39 @@ export class PhysicsSystem implements System {
 
 /** `other` в событии столкновения: сущности у статического коллайдера нет. */
 export const STATIC_COLLIDER = -1;
+
+interface Move {
+  readonly current: Bounds;
+  readonly next: Bounds;
+  readonly swept: Bounds;
+  readonly axis: 'x' | 'y';
+}
+
+/**
+ * Блокирует ли препятствие этот ход по оси.
+ *
+ * Пока сущность снаружи — блокирует всё, что задевает заметаемый объём. Если
+ * она уже внутри препятствия (заспавнили внахлёст, геймплейная система
+ * записала `Position` в стену), блокируется только ход, который не уводит её
+ * наружу: иначе любое движение считалось бы столкновением, и сущность
+ * залипала бы навсегда.
+ */
+function blocks(move: Move, obstacle: Bounds): boolean {
+  if (!overlaps(move.current, obstacle)) return overlaps(move.swept, obstacle);
+  return separation(move.next, obstacle, move.axis) <= separation(move.current, obstacle, move.axis);
+}
+
+/**
+ * Удвоенное расстояние между центрами по оси. Удвоенное — чтобы не делить:
+ * сравниваются только два таких значения между собой. Сумма границ выходит за
+ * i32, поэтому складывается обычной арифметикой (в Rust-порте — i64), а не
+ * через `fixed.add` с его проверкой диапазона.
+ */
+function separation(box: Bounds, obstacle: Bounds, axis: 'x' | 'y'): number {
+  const a = axis === 'x' ? box.minX + box.maxX : box.minY + box.maxY;
+  const b = axis === 'x' ? obstacle.minX + obstacle.maxX : obstacle.minY + obstacle.maxY;
+  return Math.abs(a - b);
+}
 
 function union(a: Bounds, b: Bounds): Bounds {
   return {

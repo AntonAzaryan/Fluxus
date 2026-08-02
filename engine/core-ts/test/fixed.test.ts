@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEBUG } from '../src/debug.js';
-import * as fixed from '../src/fixed.js';
+import * as fixed from '../src/math/fixed.js';
 import { FIXED_ONE } from '../src/types.js';
 
 /** Импортирует fixed.ts заново под заданным NODE_ENV (debug.ts читает его один раз при загрузке модуля). */
@@ -9,7 +9,7 @@ async function importUnder(nodeEnv: string): Promise<typeof fixed> {
   process.env.NODE_ENV = nodeEnv;
   vi.resetModules();
   try {
-    return await import('../src/fixed.js');
+    return await import('../src/math/fixed.js');
   } finally {
     process.env.NODE_ENV = prev;
     vi.resetModules();

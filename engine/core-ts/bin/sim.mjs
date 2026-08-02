@@ -30,5 +30,5 @@ if (file === undefined) {
   process.exit(2);
 }
 
-const { runScenarioBytes } = await import('../src/scenario.ts');
+const { runScenarioBytes } = await import('../src/sim/scenario.ts');
 process.stdout.write(runScenarioBytes(JSON.parse(readFileSync(file, 'utf8'))));

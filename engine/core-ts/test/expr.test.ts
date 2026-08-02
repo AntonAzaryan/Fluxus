@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { evaluate, operators, type Expression, type ExprWorld } from '../src/expr.js';
-import * as fixed from '../src/fixed.js';
-import { mathApi } from '../src/mathApi.js';
+import { evaluate, operators, type Expression, type ExprWorld } from '../src/dsl/expr.js';
+import * as fixed from '../src/math/fixed.js';
+import { mathApi } from '../src/math/mathApi.js';
 
 const F = fixed.fromFloat;
 

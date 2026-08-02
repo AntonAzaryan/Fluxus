@@ -1,6 +1,6 @@
 /** Обязательная зависимость ядра (DI-2): реализация MathApi поверх fixed.ts/vector.ts. */
 import * as fixed from './fixed.js';
-import type { MathApi } from './types.js';
+import type { MathApi } from '../types.js';
 import * as vector from './vector.js';
 
 export const mathApi: MathApi = {

@@ -7,8 +7,8 @@
  * карта пола — обычный компонент на singleton-сущности (TERR-6), поэтому она
  * снапшотится и откатывается без нового механизма.
  */
-import { INT32_MAX } from './fixed.js';
-import { getField, hasComponent, type PrefabDef } from './ecs/world.js';
+import { INT32_MAX } from '../math/fixed.js';
+import { getField, hasComponent, type PrefabDef } from '../ecs/world.js';
 import {
   LEVEL_OVERRIDE_COMPONENT,
   POSITION_COMPONENT,
@@ -19,7 +19,7 @@ import {
   type TerrainGrid,
   type Vec2,
   type WorldState,
-} from './types.js';
+} from '../types.js';
 
 /** Индекс символа в алфавите и есть уровень клетки (TERR-3). */
 const LEVEL_ALPHABET = '0123456789ABCDEF';

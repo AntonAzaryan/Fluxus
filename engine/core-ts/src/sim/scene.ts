@@ -6,9 +6,9 @@
  * тикает: `math` и `physics` — зависимости сборки (DI-2, DI-3), а не данные
  * сцены, и в конфиге их нет.
  */
-import { createWorld, spawn, type PrefabDef } from './ecs/world.js';
-import { SystemRegistry } from './system.js';
-import type { SystemDef } from './evaluatedSystem.js';
+import { createWorld, spawn, type PrefabDef } from '../ecs/world.js';
+import { SystemRegistry } from '../systems/registry.js';
+import type { SystemDef } from '../dsl/evaluatedSystem.js';
 import {
   createTerrainApi,
   createTerrainGrid,
@@ -16,8 +16,8 @@ import {
   terrainPrefab,
   TERRAIN_PREFAB,
   type TerrainDef,
-} from './terrain.js';
-import type { ComponentSchema, TerrainApi, WorldState } from './types.js';
+} from '../systems/terrain.js';
+import type { ComponentSchema, TerrainApi, WorldState } from '../types.js';
 
 export interface SceneDef {
   /** Порядок задаёт битовые id компонентов и потому является частью формата (SER-7). */

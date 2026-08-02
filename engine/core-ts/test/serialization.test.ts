@@ -4,11 +4,11 @@ import {
   prettyJsonSerializer,
   snapshotFromPlain,
   snapshotToPlain,
-} from '../src/serialization.js';
-import { loadScene, type SceneDef } from '../src/scene.js';
-import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/tick.js';
-import { mathApi } from '../src/mathApi.js';
-import * as fixed from '../src/fixed.js';
+} from '../src/sim/serialization.js';
+import { loadScene, type SceneDef } from '../src/sim/scene.js';
+import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
+import { mathApi } from '../src/math/mathApi.js';
+import * as fixed from '../src/math/fixed.js';
 import {
   addTag,
   createWorld,

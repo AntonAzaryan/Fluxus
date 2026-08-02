@@ -1,36 +1,40 @@
+// базис
 export * from './types.js';
 export { DEBUG, assert } from './debug.js';
-export * as fixed from './fixed.js';
-export * as vec from './vector.js';
-export { mathApi } from './mathApi.js';
-export { createRngRegistry, XorShift128Stream, seedStateFromName, fnv1a32 } from './rng.js';
+
+// math — детерминированная арифметика
+export * as fixed from './math/fixed.js';
+export * as vec from './math/vector.js';
+export { mathApi } from './math/mathApi.js';
+export { createRngRegistry, XorShift128Stream, seedStateFromName, fnv1a32 } from './math/rng.js';
+
+// ecs — хранилище мира
 export * as world from './ecs/world.js';
-export type { PrefabDef } from './ecs/world.js';
+export type { PrefabDef, PlainWorld } from './ecs/world.js';
 export * as entityIndex from './ecs/entityIndex.js';
 export * as componentMask from './ecs/componentMask.js';
 export { query } from './ecs/query.js';
 export { createCommandBuffer } from './ecs/commands.js';
 export type { CommandBufferHandle } from './ecs/commands.js';
-export { EventBus } from './events.js';
-export * as expr from './expr.js';
-export * as actions from './actions.js';
-export type { Action } from './actions.js';
+export { EventBus } from './ecs/events.js';
+
+// dsl — evaluate-системы и выражения из JSON
+export * as expr from './dsl/expr.js';
+export * as actions from './dsl/actions.js';
+export type { Action } from './dsl/actions.js';
 export type {
   Expression,
   ExpressionEvaluator,
   ExprValue,
   ExprVars,
   ExprWorld,
-} from './expr.js';
-export { SystemRegistry } from './system.js';
-export { EvaluatedSystem, validateSystem } from './evaluatedSystem.js';
-export type { SystemDef } from './evaluatedSystem.js';
-export { tick, dispatch, initialState, takeSnapshot, restoreSnapshot } from './tick.js';
-export { jsonSerializer, prettyJsonSerializer, snapshotToPlain, snapshotFromPlain } from './serialization.js';
-export type { PlainSnapshot, Serializer } from './serialization.js';
-export type { PlainWorld } from './ecs/world.js';
-export { loadScene } from './scene.js';
-export type { Scene, SceneDef } from './scene.js';
+} from './dsl/expr.js';
+export { EvaluatedSystem, validateSystem } from './dsl/evaluatedSystem.js';
+export type { SystemDef } from './dsl/evaluatedSystem.js';
+export { schemaFiles, schemaFileContent } from './dsl/schemas.js';
+
+// systems — системы на TS, их API и реестр порядка исполнения
+export { SystemRegistry } from './systems/registry.js';
 export {
   cellAt,
   createTerrainApi,
@@ -39,8 +43,8 @@ export {
   terrainPrefab,
   FLOOR_COMPONENT,
   TERRAIN_PREFAB,
-} from './terrain.js';
-export type { TerrainDef } from './terrain.js';
+} from './systems/terrain.js';
+export type { TerrainDef } from './systems/terrain.js';
 export {
   createPhysicsApi,
   staticsFromTerrain,
@@ -51,11 +55,17 @@ export {
   SHAPE_AABB,
   SHAPE_CIRCLE,
   STATIC_COLLIDER,
-} from './physics.js';
-export type { PhysicsOptions, StaticCollider } from './physics.js';
-export { InputSystem, INPUT_FIELDS } from './inputSystem.js';
-export type { InputSystemOptions } from './inputSystem.js';
-export { runScenario, runScenarioBytes } from './scenario.js';
-export type { RunOutput, ScenarioDef, ScenarioSpawn, TickRecord } from './scenario.js';
-export { schemaFiles, schemaFileContent } from './schemas.js';
-export type { Simulation } from './tick.js';
+} from './systems/physics.js';
+export type { PhysicsOptions, StaticCollider } from './systems/physics.js';
+export { InputSystem, INPUT_FIELDS } from './systems/inputSystem.js';
+export type { InputSystemOptions } from './systems/inputSystem.js';
+
+// sim — сборка сцены и прогон тиков
+export { tick, dispatch, initialState, takeSnapshot, restoreSnapshot } from './sim/tick.js';
+export type { Simulation } from './sim/tick.js';
+export { loadScene } from './sim/scene.js';
+export type { Scene, SceneDef } from './sim/scene.js';
+export { jsonSerializer, prettyJsonSerializer, snapshotToPlain, snapshotFromPlain } from './sim/serialization.js';
+export type { PlainSnapshot, Serializer } from './sim/serialization.js';
+export { runScenario, runScenarioBytes } from './sim/scenario.js';
+export type { RunOutput, ScenarioDef, ScenarioSpawn, TickRecord } from './sim/scenario.js';

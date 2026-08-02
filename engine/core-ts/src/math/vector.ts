@@ -1,6 +1,6 @@
 /** Vec2 в Q16.16 поверх fixed.ts (DI-2). */
 import * as fixed from './fixed.js';
-import type { Fixed, Vec2 } from './types.js';
+import type { Fixed, Vec2 } from '../types.js';
 
 export function add(a: Vec2, b: Vec2): Vec2 {
   return { x: fixed.add(a.x, b.x), y: fixed.add(a.y, b.y) };

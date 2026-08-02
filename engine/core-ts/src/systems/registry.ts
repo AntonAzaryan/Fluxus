@@ -1,5 +1,5 @@
-import { EvaluatedSystem, validateSystem, type SystemDef } from './evaluatedSystem.js';
-import type { System, WorldState } from './types.js';
+import { EvaluatedSystem, validateSystem, type SystemDef } from '../dsl/evaluatedSystem.js';
+import type { System, WorldState } from '../types.js';
 
 /**
  * Реестр систем. Единственный источник порядка исполнения — поле `order`

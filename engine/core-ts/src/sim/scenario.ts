@@ -9,16 +9,16 @@
  * Фильтрации по видимости здесь нет и не будет (CLI-5): golden фиксирует
  * полный мир, `viewpoint = ALL` — FoW живёт в транспорте, а не в ядре.
  */
-import { spawn } from './ecs/world.js';
-import { InputSystem } from './inputSystem.js';
-import { mathApi } from './mathApi.js';
+import { spawn } from '../ecs/world.js';
+import { InputSystem } from '../systems/inputSystem.js';
+import { mathApi } from '../math/mathApi.js';
 import {
   createPhysicsApi,
   PhysicsSystem,
   PhysicsWorld,
   staticsFromTerrain,
   type PhysicsOptions,
-} from './physics.js';
+} from '../systems/physics.js';
 import { loadScene, type SceneDef } from './scene.js';
 import { prettyJsonSerializer, snapshotToPlain, type PlainSnapshot } from './serialization.js';
 import { initialState, tick, type Simulation } from './tick.js';
@@ -28,7 +28,7 @@ import type {
   PhysicsApi,
   ReadonlyEventLog,
   SimulationState,
-} from './types.js';
+} from '../types.js';
 
 export interface ScenarioSpawn {
   readonly prefab: string;

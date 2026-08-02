@@ -5,7 +5,7 @@
  * `add_operation` — глобальная мутация синглтона (мимо DI-1). Форма AST при
  * этом сохранена — с ней работает редактор.
  */
-import type { EntityId, Fixed, MathApi, SystemContext, Vec2 } from './types.js';
+import type { EntityId, Fixed, MathApi, SystemContext, Vec2 } from '../types.js';
 
 /** Узел AST: литерал либо объект с ровно одним ключом-оператором (EXPR-1). */
 export type Expression = number | boolean | string | { readonly [op: string]: unknown };

@@ -6,7 +6,7 @@ import {
   seedStateFromName,
   splitmix32,
   XorShift128Stream,
-} from '../src/rng.js';
+} from '../src/math/rng.js';
 
 describe('воспроизводимость и независимость стримов', () => {
   it('одинаковые worldSeed + имя -> идентичная последовательность', () => {

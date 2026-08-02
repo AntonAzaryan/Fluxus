@@ -3,8 +3,8 @@
  * (FP-2): произведение двух i32 вылетает за 53-битный safe integer, поэтому
  * mul раскладывает операнды на 16-битные половины и собирает через Math.imul.
  */
-import { assert, DEBUG } from './debug.js';
-import { type Fixed, FIXED_ONE, FIXED_SHIFT } from './types.js';
+import { assert, DEBUG } from '../debug.js';
+import { type Fixed, FIXED_ONE, FIXED_SHIFT } from '../types.js';
 
 const INT32_MIN = -2147483648;
 const INT32_MAX = 2147483647;

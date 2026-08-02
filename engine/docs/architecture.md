@@ -17,7 +17,7 @@
 │  │ Action Executor / Expression (JsonLogic)   │  │
 │  │ ECS foundation + Query API                 │  │
 │  │ Time / Tween / Snapshot / RNG              │  │
-│  │ Visibility (нативная система FoW)          │  │
+│  │ Visibility (система FoW на TS)             │  │
 │  └────────────────────────────────────────────┘  │
 │           ▲ DI              ▲ DI                 │
 │      Math API          Physics API (обяз. при FoW)│
@@ -46,7 +46,7 @@
 | `serialization` | JSON / MessagePack, `Serializer` | SER-1..5 |
 | `terrain` | Height field, карты уровней и пола, `levelAt`, cliff-геометрия | TERR-1..7 |
 | `arena` | Граница арены, принадлежность, сужение, выход за край и провал сквозь пол | ARENA-1..6 |
-| `physics` | Коллизии, детерминированный raycast | PHYS-1..7 |
+| `physics` | Коллизии, статика обрывов, разрешение движения, детерминированный raycast | PHYS-1..9 |
 | `cli-testing` | CLI, golden-file, cross-language сверка | CLI-1..6 |
 | `netcode` | Server-auth, предсказание, per-client фильтрация | NET-1..15 |
 | `fog-of-war` | `Vision`/`Visibility`/`Stealth`, `VisibilitySystem` | FOW-1..9 |
@@ -79,7 +79,7 @@
 - JSON-first упрощает генерацию контента агентом.
 - Строгие JSON-схемы → агент генерит валидные компоненты и системы.
 - Документированные Action DSL и JsonLogic-операции — контекст для few-shot.
-- Cross-language парность поддерживается агентом (генерация Rust-версии по TS-спецификации), включая нативные системы вроде `VisibilitySystem`; сверка — golden-файлами.
+- Cross-language парность поддерживается агентом (генерация Rust-версии по TS-спецификации), включая системы на TS вроде `VisibilitySystem`; сверка — golden-файлами.
 
 ## 5. Roadmap
 
@@ -90,19 +90,19 @@
 | Этап | Задача | Результат |
 |---|---|---|
 | 0 | Формальная спецификация core | ✅ `openspec/specs/` + JSON-схемы (схемы ещё нет) |
-| 1 | Fixed-point Math API | ✅ `engine/core-ts/src/fixed.ts`, `vector.ts`, `mathApi.ts` |
+| 1 | Fixed-point Math API | ✅ `engine/core-ts/src/math/fixed.ts`, `math/vector.ts`, `math/mathApi.ts` |
 | 2 | ECS foundation + Query API + Command Buffer | ✅ Собственное SoA-хранилище, битовые маски, flush per-system |
 | 3 | Entity IDs + RNG streams | ✅ Generational IDs 24+24; xorshift128 с именованными стримами |
 | 4 | `System` / `SystemContext` + `SystemRegistry` | ✅ Контракт зафиксирован, DI Math/Physics |
-| 5 | Event Bus + Scheduler + Tick loop | ✅ `tick()` на нативных системах, мутабельный мир |
-| 6 | Expression Evaluator | ✅ `engine/core-ts/src/expr.ts`: свой обход JsonLogic-AST, Q16.16, sandbox через тип |
-| 7 | Action Executor | ✅ `engine/core-ts/src/actions.ts`: девять действий, все ECS-мутации командами, `spawn` с переопределением полей prefab'а |
-| 8 | System Evaluator = `EvaluatedSystem` | ✅ `engine/core-ts/src/evaluatedSystem.ts`: JSON-система в том же реестре, `override` по имени, валидация дерева на регистрации |
-| 9 | Serialization + JSON-схемы | ✅ `src/serialization.ts`, `src/scene.ts`, `src/schemas.ts`, `engine/schemas/*.json`: plain-форма мира, конфиг сцены, схемы порождаются из ядра |
-| 10 | CLI + golden-file test suite | ✅ `src/scenario.ts`, `bin/sim.mjs`, `engine/tests/golden/`: прогон сценария из одного JSON, побитовая сверка (`viewpoint = ALL`). Ввод и RNG вошли в эталоны change'ами `input-as-components` и `random-in-dsl` |
-| 11 | Terrain: карты уровней и пола, `levelAt`, генерация cliff-геометрии | ✅ `engine/core-ts/src/terrain.ts`: ассет в конфиге сцены, `levelAt`/`levelOf`/`hasFloorAt` в `SystemContext`, карта пола — компонент на singleton'е, обрывы — производные отрезки для физики |
+| 5 | Event Bus + Scheduler + Tick loop | ✅ `tick()` на системах TS, мутабельный мир |
+| 6 | Expression Evaluator | ✅ `engine/core-ts/src/dsl/expr.ts`: свой обход JsonLogic-AST, Q16.16, sandbox через тип |
+| 7 | Action Executor | ✅ `engine/core-ts/src/dsl/actions.ts`: девять действий, все ECS-мутации командами, `spawn` с переопределением полей prefab'а |
+| 8 | System Evaluator = `EvaluatedSystem` | ✅ `engine/core-ts/src/dsl/evaluatedSystem.ts`: JSON-система в том же реестре, `override` по имени, валидация дерева на регистрации |
+| 9 | Serialization + JSON-схемы | ✅ `src/sim/serialization.ts`, `src/sim/scene.ts`, `src/dsl/schemas.ts`, `engine/schemas/*.json`: plain-форма мира, конфиг сцены, схемы порождаются из ядра |
+| 10 | CLI + golden-file test suite | ✅ `src/sim/scenario.ts`, `bin/sim.mjs`, `engine/tests/golden/`: прогон сценария из одного JSON, побитовая сверка (`viewpoint = ALL`). Ввод и RNG вошли в эталоны change'ами `input-as-components` и `random-in-dsl` |
+| 11 | Terrain: карты уровней и пола, `levelAt`, генерация cliff-геометрии | ✅ `engine/core-ts/src/systems/terrain.ts`: ассет в конфиге сцены, `levelAt`/`levelOf`/`hasFloorAt` в `SystemContext`, карта пола — компонент на singleton'е, обрывы — производные отрезки для физики |
 | 12 | Editor MVP (Compose) | ⏸ Отложен (решение 2026-08-02): редактор и его рендер спекаются отдельно, ядро доводится до конца раньше |
-| 13 | Physics + raycast/LoS | ✅ `engine/core-ts/src/physics.ts`: коллайдер-компонент, статика обрывов, сетка broad-phase, разрешение движения по осям с событием `Collision`, raycast с маской |
+| 13 | Physics + raycast/LoS | ✅ `engine/core-ts/src/systems/physics.ts`: коллайдер-компонент, статика обрывов, сетка broad-phase, разрешение движения по осям с событием `Collision`, raycast с маской |
 | 14 | Snapshot ring buffer + dirty-tracking | Reproducible state; `TickResult.changes` наполняется |
 | 15 | Time system + Tween system | Time scaling, интерполяции |
 | 16 | World state machine + Rewind | Механика перемотки; `mode`/`isReplay` в `TickResult` |

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import * as fixed from '../src/fixed.js';
+import * as fixed from '../src/math/fixed.js';
 import { getField, spawn } from '../src/ecs/world.js';
-import { mathApi } from '../src/mathApi.js';
+import { mathApi } from '../src/math/mathApi.js';
 import {
   createPhysicsApi,
   PhysicsSystem,
@@ -13,10 +13,10 @@ import {
   SHAPE_CIRCLE,
   STATIC_COLLIDER,
   type StaticCollider,
-} from '../src/physics.js';
-import { loadScene, type SceneDef } from '../src/scene.js';
-import { createTerrainGrid } from '../src/terrain.js';
-import { initialState, tick, type Simulation } from '../src/tick.js';
+} from '../src/systems/physics.js';
+import { loadScene, type SceneDef } from '../src/sim/scene.js';
+import { createTerrainGrid } from '../src/systems/terrain.js';
+import { initialState, tick, type Simulation } from '../src/sim/tick.js';
 import type { FieldOverrides, GameEvent, Vec2 } from '../src/types.js';
 
 const F = fixed.fromFloat;
@@ -173,6 +173,27 @@ describe('разрешение движения (PHYS-8)', () => {
     expect(h.position(free).x).toBe(F(0.5));
     expect(events).toHaveLength(1);
     expect(events[0]!.data['other']).not.toBe(STATIC_COLLIDER);
+  });
+
+  it('сущность внутри препятствия выходит наружу, но не глубже', () => {
+    const h = harness(false);
+    h.place('Wall', { Position: { x: F(2), y: F(0) } });
+    const out = h.place('Mover', { Position: { x: F(2.2), y: F(0) }, Velocity: { x: F(0.3) } });
+    const deeper = h.place('Mover', { Position: { x: F(2.2), y: F(2) }, Velocity: { x: F(-0.3) } });
+    h.place('Wall', { Position: { x: F(2), y: F(2) } });
+
+    const events = h.step();
+    expect(h.position(out).x).toBe(fixed.add(F(2.2), F(0.3)));
+    expect(h.position(deeper).x).toBe(F(2.2));
+    expect(events.map((e) => e.data['entity'])).toEqual([deeper]);
+  });
+
+  it('сущность, засунутая в обрыв, из него выбирается', () => {
+    const h = harness();
+    // Обрыв на x = 2: коллайдер сущности накрывает его с обеих сторон.
+    const stuck = h.place('Mover', { Position: { x: F(2), y: F(0.5) }, Velocity: { x: F(-0.3) } });
+    h.step();
+    expect(h.position(stuck).x).toBe(fixed.sub(F(2), F(0.3)));
   });
 
   it('позиция пишется командами: сосед видит уже разрешённое положение', () => {

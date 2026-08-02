@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { EvaluatedSystem, validateSystem, type SystemDef } from '../src/evaluatedSystem.js';
-import { SystemRegistry } from '../src/system.js';
-import { initialState, tick, type Simulation } from '../src/tick.js';
-import * as fixed from '../src/fixed.js';
-import { mathApi } from '../src/mathApi.js';
+import { EvaluatedSystem, validateSystem, type SystemDef } from '../src/dsl/evaluatedSystem.js';
+import { SystemRegistry } from '../src/systems/registry.js';
+import { initialState, tick, type Simulation } from '../src/sim/tick.js';
+import * as fixed from '../src/math/fixed.js';
+import { mathApi } from '../src/math/mathApi.js';
 import { createWorld, getField, listAlive, spawn, type PrefabDef } from '../src/ecs/world.js';
 import type { ComponentSchema, System, SystemContext } from '../src/types.js';
 
@@ -50,7 +50,7 @@ const BURNING_JSON: SystemDef = {
   ],
 };
 
-/** Та же логика нативно — эталон парности для SYS-8. */
+/** Та же логика на TS — эталон парности для SYS-8. */
 class NativeBurning implements System {
   readonly name = 'Burning';
   readonly order = 10;
@@ -68,7 +68,7 @@ class NativeBurning implements System {
   }
 }
 
-/** Полное состояние сцены в виде строки — сверка JSON- и нативной версии. */
+/** Полное состояние сцены в виде строки — сверка evaluate- и TS-версии. */
 function dump(world: ReturnType<typeof createWorld>): string {
   return [...listAlive(world)]
     .map((e) => `${e}=${getField(world, e, 'Health', 'current')}`)
@@ -94,7 +94,7 @@ function run(system: System, ticks: number): { world: ReturnType<typeof createWo
 }
 
 describe('EvaluatedSystem в тике (SYS-1, SYS-4)', () => {
-  it('JSON-система исполняется наравне с нативной', () => {
+  it('evaluate-система исполняется наравне с системой на TS', () => {
     const { world } = run(new EvaluatedSystem(BURNING_JSON), 1);
     const [torch, rock] = [...listAlive(world)];
 
@@ -125,7 +125,7 @@ describe('EvaluatedSystem в тике (SYS-1, SYS-4)', () => {
   });
 });
 
-describe('парность JSON и нативной реализации (SYS-6, SYS-8)', () => {
+describe('парность evaluate- и TS-реализации (SYS-6, SYS-8)', () => {
   it('одинаковое состояние мира и одинаковые события за три тика', () => {
     const json = run(new EvaluatedSystem(BURNING_JSON), 3);
     const native = run(new NativeBurning(), 3);

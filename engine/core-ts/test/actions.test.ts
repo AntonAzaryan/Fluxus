@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { execute, actionNames, type Action } from '../src/actions.js';
-import type { Expression } from '../src/expr.js';
-import { EventBus } from '../src/events.js';
-import * as fixed from '../src/fixed.js';
-import { mathApi } from '../src/mathApi.js';
-import { createRngRegistry } from '../src/rng.js';
+import { execute, actionNames, type Action } from '../src/dsl/actions.js';
+import type { Expression } from '../src/dsl/expr.js';
+import { EventBus } from '../src/ecs/events.js';
+import * as fixed from '../src/math/fixed.js';
+import { mathApi } from '../src/math/mathApi.js';
+import { createRngRegistry } from '../src/math/rng.js';
 import { createCommandBuffer, type CommandBufferHandle } from '../src/ecs/commands.js';
 import { query } from '../src/ecs/query.js';
 import { createWorld, getField, hasComponent, isAlive, listAlive, spawn, type PrefabDef } from '../src/ecs/world.js';
