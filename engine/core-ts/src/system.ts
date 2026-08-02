@@ -1,4 +1,5 @@
-import type { System } from './types.js';
+import { EvaluatedSystem, validateSystem, type SystemDef } from './evaluatedSystem.js';
+import type { System, WorldState } from './types.js';
 
 /**
  * Реестр систем. Единственный источник порядка исполнения — поле `order`
@@ -22,6 +23,29 @@ export class SystemRegistry {
     }
     this.systems.push(system);
     this.sorted = false;
+  }
+
+  /** JSON-система из редактора: валидируется до старта матча (SYS-3), не в середине. */
+  registerFromJson(def: SystemDef, world: WorldState): void {
+    validateSystem(def, world);
+    this.register(new EvaluatedSystem(def));
+  }
+
+  /**
+   * Подмена реализации по имени (SYS-7). `order` обязан совпадать: подмена,
+   * тихо сдвинувшая порядок, меняет результат симуляции, ничего не сломав
+   * видимо, — тот же класс ошибки, ради которого DET-3 запрещает равные order.
+   */
+  override(system: System): void {
+    const index = this.systems.findIndex((s) => s.name === system.name);
+    if (index === -1) throw new Error(`override: система "${system.name}" не зарегистрирована`);
+    const previous = this.systems[index]!;
+    if (previous.order !== system.order) {
+      throw new Error(
+        `override: у системы "${system.name}" order ${previous.order}, подменяющая заявляет ${system.order}`,
+      );
+    }
+    this.systems[index] = system;
   }
 
   /** Системы в порядке исполнения. */

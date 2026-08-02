@@ -14,12 +14,31 @@
 ## Requirements
 ### Requirement: SYS-1 Система как JSON-описание
 
-Система SHALL описываться JSON с полями `name`, `order`, `query`, `forEach`/`do`.
+Система SHALL описываться JSON с полями `name`, `order`, `do` и необязательными `query`/`as`:
+
+```json
+{
+  "name": "Burning",
+  "order": 30,
+  "query": { "all": ["Burning", "Health"] },
+  "as": "target",
+  "do": [ /* actions */ ]
+}
+```
+
+`query` SHALL быть сахаром над действием `forEach` (ACT-1): описание с `query` эквивалентно телу из одного `forEach` с тем же `query`, `as` и `do`. Отдельного механизма итерации у системы MUST NOT быть — иначе в языке появятся два цикла с разной семантикой области видимости.
+
+Описание без `query` SHALL исполнять `do` один раз за тик: не всякая система работает поэлементно.
 
 #### Scenario: Создание системы в редакторе
 
 - **WHEN** геймдизайнер собирает систему визуально
 - **THEN** на выходе — валидный JSON с этими полями, готовый к регистрации в ядре
+
+#### Scenario: Система без запроса
+
+- **WHEN** система описана без `query`
+- **THEN** её `do` исполняется один раз за тик, без привязки к сущности
 
 ### Requirement: SYS-2 Детерминированное упорядочивание scheduler'ом
 
@@ -32,12 +51,28 @@ Scheduler SHALL упорядочивать системы по `order` дете�
 
 ### Requirement: SYS-3 Регистрация и валидация на старте
 
-Компоненты-данные и системы SHALL регистрироваться на старте и SHALL валидироваться при регистрации.
+Компоненты-данные и системы SHALL регистрироваться на старте и SHALL валидироваться при регистрации. Валидация JSON-системы SHALL проверять:
+
+- форму узлов: ровно один ключ у действия и у выражения;
+- имена действий и операторов — по закрытым наборам (ACT-1, EXPR-6);
+- существование компонентов и их полей, а также prefab'ов — по зарегистрированному миру;
+- связанность переменных: каждое имя в `var` SHALL быть введено объемлющим `as` или `bindings`.
+
+Сообщение об ошибке SHALL называть путь до узла — иначе поиск опечатки в дереве из сотни узлов сам становится задачей.
+
+Аргументы действий SHALL следовать единой конвенции имён, на которую опирается обход: `do`/`then`/`else` — списки действий, `values`/`data`/`bindings`/`overrides` — карты выражений, `entity`/`cond` — выражения, `component`/`field`/`prefab`/`type`/`as` — строковые литералы. Новое действие MUST NOT вводить аргумент с иным смыслом под этими именами.
+
+Проверка типов значений (число / булево / вектор) в валидацию не входит: она остаётся ошибкой времени вычисления.
 
 #### Scenario: Система ссылается на неизвестный компонент
 
 - **WHEN** JSON-система запрашивает компонент, которого нет в реестре
 - **THEN** регистрация падает на старте, а не в середине матча
+
+#### Scenario: Опечатка в имени переменной
+
+- **WHEN** выражение ссылается на `var`, не введённый ни одним объемлющим `as` или `bindings`
+- **THEN** регистрация падает и называет имя и путь до узла
 
 ### Requirement: SYS-4 Единый интерфейс System
 
@@ -46,15 +81,15 @@ Scheduler SHALL упорядочивать системы по `order` дете�
 ```ts
 interface System {
   readonly name: string;   // = имя RNG-стрима, ключ в реестре для подмены
-  readonly order: number;
-  execute(ctx: SystemContext): void;
+  readonly order: number;  // равные order недопустимы (DET-3)
+  run(ctx: SystemContext): void;
 }
 ```
 
 #### Scenario: Scheduler исполняет систему
 
 - **WHEN** приходит очередь системы в тике
-- **THEN** scheduler вызывает `execute(ctx)`, не зная, JSON-система это или нативная
+- **THEN** scheduler вызывает `run(ctx)`, не зная, JSON-система это или нативная
 
 ### Requirement: SYS-5 SystemContext как контракт границы core↔геймплей
 
@@ -62,14 +97,23 @@ interface System {
 
 ```ts
 interface SystemContext {
-  readonly world: WorldView;        // снапшот на начало системы, read-only (QUERY-3)
-  readonly commands: CommandBuffer; // единственный канал мутаций (CMD-1..4)
-  readonly events: EventBus;        // EVT-1..3
-  readonly rng: { stream(sub?: string): RngStream }; // стрим по name системы (RNG-4)
-  readonly time: TimeContext;       // tick, globalDelta (TIME-1..3)
-  readonly physics: PhysicsApi;     // raycast/коллизии, обязателен при FoW
+  readonly tick: number;
+  readonly query: (spec: QuerySpec) => Float64Array; // материализован на момент вызова (QUERY-3)
+  readonly get: (entity: EntityId, component: string, field: string) => number;
+  readonly has: (entity: EntityId, component: string) => boolean;
+  readonly isAlive: (entity: EntityId) => boolean;
+  readonly commands: CommandBuffer;   // единственный канал мутаций (CMD-1..4)
+  readonly events: EventEmitter;      // EVT-1..3
+  readonly rng: RngStreams;           // стрим по name системы (RNG-4)
+  readonly math: MathApi;             // обязательная зависимость (DI-2)
+  readonly physics?: PhysicsApi;      // опциональная (DI-3), обязательна при FoW
+  readonly inputs: readonly InputFrame[]; // канонические вводы тика (TICK-2)
 }
 ```
+
+Чтение мира — плоские `query`/`get`/`has`/`isAlive`, а не объект-view: view пришлось бы либо копировать, либо держать валидным дольше вызова, и то и другое противоречит QUERY-3.
+
+`TimeContext` в контракте отсутствует до появления системы времени (этап 15 roadmap); до тех пор номер тика доступен полем `tick`. Его добавление SHALL быть изменением этого требования, а не молчаливым расширением.
 
 #### Scenario: Системе нужен доступ к чему-то вне контекста
 
@@ -92,15 +136,22 @@ interface SystemContext {
 `SystemRegistry` SHALL хранить системы по `name` и SHALL позволять подменить реализацию через `override(system)` с тем же `name`/`order`, не затрагивая scheduler, Command Buffer, события и RNG-стримы.
 
 ```ts
-registry.registerFromJson(dashSystemJson); // из редактора
-registry.override(new NativeDashSystem()); // оптимизированная версия, тот же name/order
-registry.register(new VisibilitySystem()); // сразу нативная, тот же контракт
+registry.registerFromJson(dashSystemJson, world); // из редактора
+registry.override(new NativeDashSystem());        // оптимизированная версия, тот же name/order
+registry.register(new VisibilitySystem());        // сразу нативная, тот же контракт
 ```
+
+`override` SHALL требовать, чтобы система с таким `name` уже была зарегистрирована, и чтобы `order` совпадал с прежним. Подмена, сдвигающая `order`, MUST NOT приниматься: она меняет порядок исполнения систем в тике, то есть результат симуляции, не ломая при этом ничего видимого.
 
 #### Scenario: Оптимизация системы переписыванием в код
 
 - **WHEN** JSON-система заменяется нативной с тем же `name` и `order`
 - **THEN** вокруг не меняется ничего: ни scheduler, ни имя RNG-стрима, ни порядок команд
+
+#### Scenario: Подмена с другим order
+
+- **WHEN** `override` вызывается с системой, чей `order` отличается от зарегистрированного
+- **THEN** вызов отвергается: это не подмена реализации, а другая система
 
 ### Requirement: SYS-8 Golden-file не меняется при переписывании системы
 

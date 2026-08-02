@@ -23,5 +23,7 @@ export type {
   ExprWorld,
 } from './expr.js';
 export { SystemRegistry } from './system.js';
+export { EvaluatedSystem, validateSystem } from './evaluatedSystem.js';
+export type { SystemDef } from './evaluatedSystem.js';
 export { tick, dispatch, initialState, takeSnapshot, restoreSnapshot } from './tick.js';
 export type { Simulation } from './tick.js';

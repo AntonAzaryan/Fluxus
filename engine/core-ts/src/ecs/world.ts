@@ -188,6 +188,15 @@ export function componentId(state: WorldState, component: string): number | unde
   return toInternal(state).stores.get(component)?.id;
 }
 
+/** Схема компонента по имени — опора валидации JSON-систем (SYS-3). */
+export function componentSchema(state: WorldState, component: string): ComponentSchema | undefined {
+  return toInternal(state).stores.get(component)?.schema;
+}
+
+export function prefabOf(state: WorldState, prefab: string): PrefabDef | undefined {
+  return toInternal(state).prefabs.get(prefab);
+}
+
 export function componentMasks(state: WorldState): ComponentMasks {
   return toInternal(state).masks;
 }
