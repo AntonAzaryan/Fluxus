@@ -1,17 +1,4 @@
-# CLI & Test Infrastructure Specification
-
-## Purpose
-
-CLI поверх ядра как точка запуска симуляций и главный инструмент проверки детерминизма: golden-file тесты и cross-language сверка.
-## Requirements
-### Requirement: CLI-1 CLI-обёртка поверх ядра
-
-SHALL существовать CLI-обёртка поверх ядра для запуска симуляций.
-
-#### Scenario: Прогон сценария без клиента и сервера
-
-- **WHEN** нужно воспроизвести баг из матча
-- **THEN** сценарий прогоняется через CLI, без поднятия рендера и сети
+## MODIFIED Requirements
 
 ### Requirement: CLI-2 Вход CLI
 
@@ -76,13 +63,3 @@ Golden-file тесты SHALL сверять эталонные снапшоты 
 
 - **WHEN** изменение расчёта признано верным
 - **THEN** эталон перезаписывается явной командой, и новый эталон попадает в дифф на ревью
-
-### Requirement: CLI-6 Cross-language сверка
-
-При появлении Rust-реализации TS-output SHALL совпадать с Rust-output. Особое внимание — детерминизму `raycast`/LoS: tie-break и fixed-point пересечения SHALL совпадать побитово.
-
-#### Scenario: Расхождение на LoS
-
-- **WHEN** реализации по-разному разрешают hit на равной дистанции
-- **THEN** cross-language тест краснеет, указывая на нарушение tie-break из PHYS-7
-

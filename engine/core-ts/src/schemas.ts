@@ -126,6 +126,59 @@ const scene: Json = {
   },
 };
 
+const vec2: Json = {
+  $comment: 'Компоненты в Q16.16 (FP-1).',
+  type: 'object',
+  additionalProperties: false,
+  required: ['x', 'y'],
+  properties: { x: { type: 'integer' }, y: { type: 'integer' } },
+};
+
+const inputFrame: Json = {
+  $comment: 'InputFrame на пару (игрок, тик) — TICK-2.',
+  type: 'object',
+  additionalProperties: false,
+  required: ['tick', 'playerId', 'seq', 'move', 'aimDir', 'buttons'],
+  properties: {
+    tick: { type: 'integer', minimum: 1 },
+    playerId: { type: 'string', minLength: 1 },
+    seq: { type: 'integer' },
+    move: { $ref: '#/$defs/vec2' },
+    aimDir: { type: 'integer' },
+    buttons: { type: 'integer' },
+  },
+};
+
+const scenario: Json = {
+  title: 'Сценарий CLI (CLI-2)',
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'seed', 'ticks', 'scene'],
+  properties: {
+    name: { type: 'string', minLength: 1 },
+    seed: { type: 'integer' },
+    ticks: { type: 'integer', minimum: 0 },
+    scene: { $ref: '#/$defs/scene' },
+    initial: {
+      $comment: 'Начальная расстановка; порядок задаёт выданные ID (ID-2, DET-6).',
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['prefab'],
+        properties: {
+          prefab: { type: 'string', minLength: 1 },
+          overrides: {
+            type: 'object',
+            additionalProperties: { type: 'object', additionalProperties: { type: 'integer' } },
+          },
+        },
+      },
+    },
+    inputs: { type: 'array', items: { $ref: '#/$defs/inputFrame' } },
+  },
+};
+
 function document(id: string, body: Json, defs: Json): Json {
   return { $schema: DIALECT, $id: `${BASE}/${id}`, ...body, ...(Object.keys(defs).length > 0 ? { $defs: defs } : {}) };
 }
@@ -142,6 +195,17 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
     prefab,
     query,
     system,
+  }),
+  'scenario.schema.json': document('scenario.schema.json', scenario, {
+    action,
+    component,
+    expression,
+    inputFrame,
+    prefab,
+    query,
+    scene,
+    system,
+    vec2,
   }),
 };
 

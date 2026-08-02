@@ -1,0 +1,368 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-mvp.local/schemas/scenario.schema.json",
+  "title": "Сценарий CLI (CLI-2)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "seed",
+    "ticks",
+    "scene"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "seed": {
+      "type": "integer"
+    },
+    "ticks": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "scene": {
+      "$ref": "#/$defs/scene"
+    },
+    "initial": {
+      "$comment": "Начальная расстановка; порядок задаёт выданные ID (ID-2, DET-6).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "prefab"
+        ],
+        "properties": {
+          "prefab": {
+            "type": "string",
+            "minLength": 1
+          },
+          "overrides": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/inputFrame"
+      }
+    }
+  },
+  "$defs": {
+    "action": {
+      "$comment": "Узел действия: объект с одним ключом-именем (ACT-1). Состав аргументов проверяет загрузчик.",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "propertyNames": {
+        "enum": [
+          "addComponent",
+          "destroyEntity",
+          "emitEvent",
+          "forEach",
+          "if",
+          "let",
+          "modifyComponent",
+          "removeComponent",
+          "spawnEntity"
+        ]
+      }
+    },
+    "component": {
+      "title": "Схема компонента (ECS-3)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "fields"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fields": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "enum": [
+              "i32",
+              "fixed"
+            ]
+          }
+        },
+        "defaults": {
+          "$comment": "Значения в Q16.16 для полей типа fixed (FP-1).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "expression": {
+      "$comment": "Узел выражения: объект с одним ключом-оператором (EXPR-1). Арность и типы проверяет загрузчик.",
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "!",
+              "!=",
+              "*",
+              "+",
+              "-",
+              "/",
+              "<",
+              "<=",
+              "==",
+              ">",
+              ">=",
+              "abs",
+              "and",
+              "clamp",
+              "fromInt",
+              "getComponent",
+              "hasComponent",
+              "if",
+              "isAlive",
+              "max",
+              "min",
+              "or",
+              "sqrt",
+              "tick",
+              "toInt",
+              "var",
+              "vec",
+              "vec.add",
+              "vec.dot",
+              "vec.length",
+              "vec.lengthSq",
+              "vec.normalize",
+              "vec.scale",
+              "vec.sub",
+              "vec.x",
+              "vec.y"
+            ]
+          }
+        }
+      ]
+    },
+    "inputFrame": {
+      "$comment": "InputFrame на пару (игрок, тик) — TICK-2.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tick",
+        "playerId",
+        "seq",
+        "move",
+        "aimDir",
+        "buttons"
+      ],
+      "properties": {
+        "tick": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seq": {
+          "type": "integer"
+        },
+        "move": {
+          "$ref": "#/$defs/vec2"
+        },
+        "aimDir": {
+          "type": "integer"
+        },
+        "buttons": {
+          "type": "integer"
+        }
+      }
+    },
+    "prefab": {
+      "title": "Prefab (ECS-4)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "components"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "components": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "all": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "any": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "not": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "withTag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "withinRadius": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "center",
+            "radius"
+          ],
+          "properties": {
+            "center": {
+              "$ref": "#/$defs/expression"
+            },
+            "radius": {
+              "$ref": "#/$defs/expression"
+            }
+          }
+        }
+      }
+    },
+    "scene": {
+      "title": "Сцена (SER-7)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "components"
+      ],
+      "properties": {
+        "components": {
+          "$comment": "Порядок задаёт битовые id компонентов и является частью формата (SER-7).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/component"
+          }
+        },
+        "prefabs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/prefab"
+          }
+        },
+        "systems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/system"
+          }
+        },
+        "capacity": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "system": {
+      "title": "JSON-описание системы (SYS-1)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "order",
+        "do"
+      ],
+      "properties": {
+        "name": {
+          "$comment": "Имя RNG-стрима и ключ подмены (RNG-4, SYS-7).",
+          "type": "string",
+          "minLength": 1
+        },
+        "order": {
+          "$comment": "Равные order недопустимы (DET-3).",
+          "type": "integer"
+        },
+        "query": {
+          "$comment": "Сахар над действием forEach (SYS-1).",
+          "$ref": "#/$defs/query"
+        },
+        "as": {
+          "type": "string",
+          "minLength": 1
+        },
+        "do": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        }
+      }
+    },
+    "vec2": {
+      "$comment": "Компоненты в Q16.16 (FP-1).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        }
+      }
+    }
+  }
+}

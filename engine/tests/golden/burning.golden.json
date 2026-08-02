@@ -1,0 +1,387 @@
+{
+  "scenario": "burning",
+  "seed": 7,
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Burning": {
+            "dps": [
+              196608,
+              196608
+            ]
+          },
+          "Health": {
+            "current": [
+              655360,
+              393216
+            ],
+            "max": [
+              655360,
+              655360
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "flammable"
+            ]
+          ],
+          [
+            1,
+            [
+              "flammable"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": []
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Burning": {
+            "dps": [
+              196608,
+              196608
+            ]
+          },
+          "Health": {
+            "current": [
+              458752,
+              196608
+            ],
+            "max": [
+              655360,
+              655360
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "flammable"
+            ]
+          ],
+          [
+            1,
+            [
+              "flammable"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": []
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 1,
+        "generations": [
+          0,
+          1
+        ],
+        "alive": [
+          1,
+          0
+        ],
+        "freeList": [
+          1
+        ],
+        "maskWords": [
+          3,
+          0
+        ],
+        "components": {
+          "Burning": {
+            "dps": [
+              196608,
+              196608
+            ]
+          },
+          "Health": {
+            "current": [
+              262144,
+              0
+            ],
+            "max": [
+              655360,
+              655360
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "flammable"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Died",
+          "data": {
+            "entity": 1,
+            "tick": 2
+          }
+        }
+      ]
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          1
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Burning": {
+            "dps": [
+              196608,
+              196608
+            ]
+          },
+          "Health": {
+            "current": [
+              65536,
+              327680
+            ],
+            "max": [
+              655360,
+              655360
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "flammable"
+            ]
+          ],
+          [
+            1,
+            [
+              "flammable"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": []
+    },
+    {
+      "tick": 4,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 1,
+        "generations": [
+          1,
+          1
+        ],
+        "alive": [
+          0,
+          1
+        ],
+        "freeList": [
+          0
+        ],
+        "maskWords": [
+          0,
+          3
+        ],
+        "components": {
+          "Burning": {
+            "dps": [
+              196608,
+              196608
+            ]
+          },
+          "Health": {
+            "current": [
+              -131072,
+              131072
+            ],
+            "max": [
+              655360,
+              655360
+            ]
+          }
+        },
+        "tags": [
+          [
+            1,
+            [
+              "flammable"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Died",
+          "data": {
+            "entity": 0,
+            "tick": 4
+          }
+        }
+      ]
+    },
+    {
+      "tick": 5,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 0,
+        "generations": [
+          1,
+          2
+        ],
+        "alive": [
+          0,
+          0
+        ],
+        "freeList": [
+          0,
+          1
+        ],
+        "maskWords": [
+          0,
+          0
+        ],
+        "components": {
+          "Burning": {
+            "dps": [
+              196608,
+              196608
+            ]
+          },
+          "Health": {
+            "current": [
+              -131072,
+              -65536
+            ],
+            "max": [
+              655360,
+              655360
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Died",
+          "data": {
+            "entity": 16777217,
+            "tick": 5
+          }
+        }
+      ]
+    },
+    {
+      "tick": 6,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 0,
+        "generations": [
+          1,
+          2
+        ],
+        "alive": [
+          0,
+          0
+        ],
+        "freeList": [
+          0,
+          1
+        ],
+        "maskWords": [
+          0,
+          0
+        ],
+        "components": {
+          "Burning": {
+            "dps": [
+              196608,
+              196608
+            ]
+          },
+          "Health": {
+            "current": [
+              -131072,
+              -65536
+            ],
+            "max": [
+              655360,
+              655360
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": []
+    }
+  ]
+}

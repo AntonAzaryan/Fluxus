@@ -1,0 +1,56 @@
+{
+  "name": "movement",
+  "seed": 20260802,
+  "ticks": 5,
+  "scene": {
+    "components": [
+      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } }
+    ],
+    "prefabs": [
+      {
+        "name": "Mover",
+        "components": { "Position": { "x": 0, "y": 0 }, "Velocity": { "x": 65536, "y": 0 } },
+        "tags": ["mobile"]
+      }
+    ],
+    "systems": [
+      {
+        "name": "Movement",
+        "order": 10,
+        "query": { "all": ["Position", "Velocity"] },
+        "as": "e",
+        "do": [
+          {
+            "modifyComponent": {
+              "entity": { "var": "e" },
+              "component": "Position",
+              "values": {
+                "x": {
+                  "+": [
+                    { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "e" }, "Velocity", "x"] }
+                  ]
+                },
+                "y": {
+                  "+": [
+                    { "getComponent": [{ "var": "e" }, "Position", "y"] },
+                    { "getComponent": [{ "var": "e" }, "Velocity", "y"] }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "capacity": 16
+  },
+  "initial": [
+    { "prefab": "Mover" },
+    {
+      "prefab": "Mover",
+      "overrides": { "Position": { "x": 655360 }, "Velocity": { "x": -32768, "y": 32768 } }
+    }
+  ]
+}

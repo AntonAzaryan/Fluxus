@@ -1,0 +1,88 @@
+{
+  "name": "burning",
+  "seed": 7,
+  "ticks": 6,
+  "scene": {
+    "components": [
+      { "name": "Health", "fields": { "current": "fixed", "max": "fixed" } },
+      { "name": "Burning", "fields": { "dps": "fixed" } }
+    ],
+    "prefabs": [
+      {
+        "name": "Torch",
+        "components": {
+          "Health": { "current": 655360, "max": 655360 },
+          "Burning": { "dps": 196608 }
+        },
+        "tags": ["flammable"]
+      }
+    ],
+    "systems": [
+      {
+        "name": "Burning",
+        "order": 10,
+        "query": { "all": ["Burning", "Health"] },
+        "as": "e",
+        "do": [
+          {
+            "modifyComponent": {
+              "entity": { "var": "e" },
+              "component": "Health",
+              "values": {
+                "current": {
+                  "-": [
+                    { "getComponent": [{ "var": "e" }, "Health", "current"] },
+                    { "getComponent": [{ "var": "e" }, "Burning", "dps"] }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "cond": {
+                "<=": [
+                  { "getComponent": [{ "var": "e" }, "Health", "current"] },
+                  { "getComponent": [{ "var": "e" }, "Burning", "dps"] }
+                ]
+              },
+              "then": [
+                {
+                  "emitEvent": {
+                    "type": "Died",
+                    "data": { "entity": { "var": "e" }, "tick": { "tick": [] } }
+                  }
+                },
+                { "destroyEntity": { "entity": { "var": "e" } } }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "Reinforcements",
+        "order": 20,
+        "do": [
+          {
+            "if": {
+              "cond": { "==": [{ "tick": [] }, 3] },
+              "then": [
+                {
+                  "spawnEntity": {
+                    "prefab": "Torch",
+                    "overrides": { "Health": { "current": 327680 } }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "capacity": 8
+  },
+  "initial": [
+    { "prefab": "Torch" },
+    { "prefab": "Torch", "overrides": { "Health": { "current": 393216 } } }
+  ]
+}

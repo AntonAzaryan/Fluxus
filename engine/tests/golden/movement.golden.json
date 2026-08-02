@@ -1,0 +1,360 @@
+{
+  "scenario": "movement",
+  "seed": 20260802,
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              0,
+              655360
+            ],
+            "y": [
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              32768
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "mobile"
+            ]
+          ],
+          [
+            1,
+            [
+              "mobile"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": []
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              65536,
+              622592
+            ],
+            "y": [
+              0,
+              32768
+            ]
+          },
+          "Velocity": {
+            "x": [
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              32768
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "mobile"
+            ]
+          ],
+          [
+            1,
+            [
+              "mobile"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": []
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              131072,
+              589824
+            ],
+            "y": [
+              0,
+              65536
+            ]
+          },
+          "Velocity": {
+            "x": [
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              32768
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "mobile"
+            ]
+          ],
+          [
+            1,
+            [
+              "mobile"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": []
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              196608,
+              557056
+            ],
+            "y": [
+              0,
+              98304
+            ]
+          },
+          "Velocity": {
+            "x": [
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              32768
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "mobile"
+            ]
+          ],
+          [
+            1,
+            [
+              "mobile"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": []
+    },
+    {
+      "tick": 4,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              262144,
+              524288
+            ],
+            "y": [
+              0,
+              131072
+            ]
+          },
+          "Velocity": {
+            "x": [
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              32768
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "mobile"
+            ]
+          ],
+          [
+            1,
+            [
+              "mobile"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": []
+    },
+    {
+      "tick": 5,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              327680,
+              491520
+            ],
+            "y": [
+              0,
+              163840
+            ]
+          },
+          "Velocity": {
+            "x": [
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              32768
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "mobile"
+            ]
+          ],
+          [
+            1,
+            [
+              "mobile"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": []
+    }
+  ]
+}
