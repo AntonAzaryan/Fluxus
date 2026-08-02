@@ -1,0 +1,69 @@
+{
+  "name": "random-spread",
+  "seed": 424242,
+  "ticks": 3,
+  "scene": {
+    "components": [
+      { "name": "Health", "fields": { "current": "fixed", "max": "fixed" } },
+      { "name": "Dice", "fields": { "value": "i32" } }
+    ],
+    "prefabs": [
+      {
+        "name": "Unit",
+        "components": {
+          "Health": { "current": 6553600, "max": 6553600 },
+          "Dice": { "value": 0 }
+        }
+      }
+    ],
+    "systems": [
+      {
+        "name": "Spread",
+        "order": 10,
+        "query": { "all": ["Health", "Dice"] },
+        "as": "e",
+        "do": [
+          {
+            "random": {
+              "as": "roll",
+              "do": [
+                {
+                  "modifyComponent": {
+                    "entity": { "var": "e" },
+                    "component": "Health",
+                    "values": {
+                      "current": {
+                        "-": [
+                          { "getComponent": [{ "var": "e" }, "Health", "current"] },
+                          { "*": [{ "var": "roll" }, 1310720] }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "randomBelow": {
+              "as": "face",
+              "bound": 393216,
+              "subStream": "dice",
+              "do": [
+                {
+                  "modifyComponent": {
+                    "entity": { "var": "e" },
+                    "component": "Dice",
+                    "values": { "value": { "var": "face" } }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "capacity": 8
+  },
+  "initial": [{ "prefab": "Unit" }, { "prefab": "Unit" }]
+}

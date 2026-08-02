@@ -132,6 +132,7 @@ function checkAction(node: unknown, world: WorldState, scope: ReadonlySet<string
         break;
       case 'entity':
       case 'cond':
+      case 'bound':
         checkExpression(value, world, scope, at);
         break;
       case 'query':
@@ -149,6 +150,7 @@ function checkAction(node: unknown, world: WorldState, scope: ReadonlySet<string
       case 'field':
       case 'type':
       case 'as':
+      case 'subStream':
         literal(value, at);
         break;
       // Аргумент вне конвенции содержимым не проверяется — предел, зафиксированный в SYS-3.

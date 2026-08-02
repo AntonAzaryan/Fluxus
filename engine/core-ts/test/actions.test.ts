@@ -4,6 +4,7 @@ import type { Expression } from '../src/expr.js';
 import { EventBus } from '../src/events.js';
 import * as fixed from '../src/fixed.js';
 import { mathApi } from '../src/mathApi.js';
+import { createRngRegistry } from '../src/rng.js';
 import { createCommandBuffer, type CommandBufferHandle } from '../src/ecs/commands.js';
 import { query } from '../src/ecs/query.js';
 import { createWorld, getField, hasComponent, isAlive, listAlive, spawn, type PrefabDef } from '../src/ecs/world.js';
@@ -31,7 +32,9 @@ interface Harness {
   readonly setFieldLog: string[];
 }
 
-function harness(): Harness {
+const SYSTEM_NAME = 'Test';
+
+function harness(seed = 1234): Harness {
   const world = createWorld([Position, Health, Shield, Slots], PREFABS);
   const commands = createCommandBuffer(world);
   const events = new EventBus();
@@ -51,7 +54,7 @@ function harness(): Harness {
       },
     },
     events,
-    rng: { stream: () => { throw new Error('RNG в actions пока не входит'); } },
+    rng: createRngRegistry(seed).forSystem(SYSTEM_NAME),
     math: mathApi,
     inputs: [],
   };
@@ -296,5 +299,55 @@ describe('ошибки формы (ACT-1)', () => {
   it('в наборе нет addTween и addModifier — отложены до этапа 15', () => {
     expect(actionNames).not.toContain('addTween');
     expect(actionNames).not.toContain('addModifier');
+  });
+});
+
+describe('random и randomBelow (ACT-1, RNG-6)', () => {
+  /** Значение, связанное действием, — через запись в поле: другого выхода наружу у тела нет. */
+  function draw(action: Action, seed = 1234): number {
+    const h = harness(seed);
+    const hero = spawn(h.world, 'Hero');
+    const body = [{ modifyComponent: { entity: hero, component: 'Health', values: { current: { var: 'r' } } } }];
+    execute([{ ...action, [Object.keys(action)[0]!]: { ...(Object.values(action)[0] as object), as: 'r', do: body } }], h.ctx);
+    h.commands.flush();
+    return getField(h.world, hero, 'Health', 'current');
+  }
+
+  it('random даёт значение стрима системы', () => {
+    const expected = createRngRegistry(1234).forSystem(SYSTEM_NAME).stream().nextFixed();
+    expect(draw({ random: {} })).toBe(expected);
+  });
+
+  it('тот же seed — то же значение, другой seed — другое', () => {
+    expect(draw({ random: {} })).toBe(draw({ random: {} }));
+    expect(draw({ random: {} }, 1234)).not.toBe(draw({ random: {} }, 4321));
+  });
+
+  it('subStream — отдельная последовательность (RNG-2)', () => {
+    const expected = createRngRegistry(1234).forSystem(SYSTEM_NAME).stream('crits').nextFixed();
+    expect(draw({ random: { subStream: 'crits' } })).toBe(expected);
+    expect(draw({ random: { subStream: 'crits' } })).not.toBe(draw({ random: {} }));
+  });
+
+  it('randomBelow совпадает с прямым nextBelow — без смещения остатком', () => {
+    const expected = createRngRegistry(1234).forSystem(SYSTEM_NAME).stream().nextBelow(6);
+    expect(draw({ randomBelow: { bound: F(6) } })).toBe(expected);
+  });
+
+  it('randomBelow: bound меньше единицы — ошибка', () => {
+    expect(() => draw({ randomBelow: { bound: F(0.5) } })).toThrow(/не меньше 1/);
+  });
+
+  it('имя из as не видно за пределами тела', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+    const after = { modifyComponent: { entity: hero, component: 'Health', values: { current: { var: 'r' } } } };
+    expect(() => execute([{ random: { as: 'r', do: [] } }, after], h.ctx)).toThrow(/неизвестная переменная "r"/);
+  });
+
+  it('subStream — строковый литерал, а не выражение', () => {
+    expect(() => execute([{ random: { as: 'r', subStream: { var: 'x' }, do: [] } }], harness().ctx)).toThrow(
+      /строковый литерал/,
+    );
   });
 });

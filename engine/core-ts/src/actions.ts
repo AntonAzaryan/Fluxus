@@ -9,7 +9,15 @@
  * редактора нечем.
  */
 import { evaluate, type Expression, type ExprValue, type ExprVars } from './expr.js';
-import type { EntityId, Fixed, FieldOverrides, QuerySpec, SystemContext, Vec2 } from './types.js';
+import type {
+  EntityId,
+  Fixed,
+  FieldOverrides,
+  QuerySpec,
+  RngStream,
+  SystemContext,
+  Vec2,
+} from './types.js';
 
 /** Узел действия: объект с ровно одним ключом-именем действия. */
 export type Action = Readonly<Record<string, unknown>>;
@@ -139,6 +147,23 @@ function querySpec(raw: unknown, ctx: SystemContext, vars: ExprVars): QuerySpec 
   };
 }
 
+/**
+ * Общая часть `random` и `randomBelow`: стрим системы либо её суб-стрим
+ * (RNG-4, RNG-7), значение — в тело как обычная переменная.
+ */
+function bindRandom(
+  a: Args,
+  ctx: SystemContext,
+  vars: ExprVars,
+  action: string,
+  draw: (stream: RngStream) => number,
+): void {
+  const as = argStr(a, 'as', action);
+  const sub = a['subStream'];
+  const stream = sub === undefined ? ctx.rng.stream() : ctx.rng.stream(argStr(a, 'subStream', action));
+  execute(argBody(a, 'do', action), ctx, { ...vars, [as]: draw(stream) });
+}
+
 // --------------------------------------------------------------- действия
 
 type ActionFn = (a: Args, ctx: SystemContext, vars: ExprVars) => void;
@@ -191,6 +216,25 @@ const ACTIONS: Record<string, ActionFn> = {
       scope[key] = evaluate(bindings[key]!, ctx, vars);
     }
     execute(argBody(a, 'do', 'let'), ctx, scope);
+  },
+  /**
+   * Значение стрима, связанное с именем в теле (RNG-6). Действие, а не
+   * оператор: продвижение генератора — эффект, а число обращений к нему должно
+   * читаться из текста системы, а не зависеть от того, какие ветки выражения
+   * вычислялись.
+   */
+  random: (a, ctx, vars) => {
+    bindRandom(a, ctx, vars, 'random', (stream) => stream.nextFixed());
+  },
+  /**
+   * Равномерное целое в `[0, bound)` — отдельным именем, а не полем `kind`:
+   * набор имён закрыт и проверяется на регистрации (SYS-3). Остаток от
+   * `random` дал бы смещение на границах, которое в эталоне не видно.
+   */
+  randomBelow: (a, ctx, vars) => {
+    const bound = ctx.math.toInt(num(evaluate(argExpr(a, 'bound', 'randomBelow'), ctx, vars), 'randomBelow'));
+    if (bound < 1) throw new Error(`действие "randomBelow": "bound" должен быть не меньше 1, получено ${bound}`);
+    bindRandom(a, ctx, vars, 'randomBelow', (stream) => stream.nextBelow(bound));
   },
   forEach: (a, ctx, vars) => {
     const as = argStr(a, 'as', 'forEach');

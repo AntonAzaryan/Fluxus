@@ -47,6 +47,8 @@
           "if",
           "let",
           "modifyComponent",
+          "random",
+          "randomBelow",
           "removeComponent",
           "spawnEntity"
         ]

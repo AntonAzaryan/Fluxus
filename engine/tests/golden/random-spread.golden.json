@@ -1,0 +1,231 @@
+{
+  "scenario": "random-spread",
+  "seed": 424242,
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Dice": {
+            "value": [
+              0,
+              0
+            ]
+          },
+          "Health": {
+            "current": [
+              6553600,
+              6553600
+            ],
+            "max": [
+              6553600,
+              6553600
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": []
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Dice": {
+            "value": [
+              3,
+              1
+            ]
+          },
+          "Health": {
+            "current": [
+              6080240,
+              5987400
+            ],
+            "max": [
+              6553600,
+              6553600
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [
+        {
+          "name": "Spread",
+          "state": [
+            2946134282,
+            1864495294,
+            1551114669,
+            1855335645
+          ]
+        },
+        {
+          "name": "Spread/dice",
+          "state": [
+            4257833774,
+            2410241224,
+            2633342588,
+            880569734
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Dice": {
+            "value": [
+              3,
+              1
+            ]
+          },
+          "Health": {
+            "current": [
+              5983120,
+              5402520
+            ],
+            "max": [
+              6553600,
+              6553600
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [
+        {
+          "name": "Spread",
+          "state": [
+            1551114669,
+            1855335645,
+            318247460,
+            1916581061
+          ]
+        },
+        {
+          "name": "Spread/dice",
+          "state": [
+            2633342588,
+            880569734,
+            2182785076,
+            1200679843
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          3,
+          3
+        ],
+        "components": {
+          "Dice": {
+            "value": [
+              2,
+              3
+            ]
+          },
+          "Health": {
+            "current": [
+              5247280,
+              4989900
+            ],
+            "max": [
+              6553600,
+              6553600
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [
+        {
+          "name": "Spread",
+          "state": [
+            318247460,
+            1916581061,
+            2411235942,
+            1352118152
+          ]
+        },
+        {
+          "name": "Spread/dice",
+          "state": [
+            2182785076,
+            1200679843,
+            2007407443,
+            2690766972
+          ]
+        }
+      ],
+      "events": []
+    }
+  ]
+}

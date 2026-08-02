@@ -229,6 +229,28 @@ describe('валидация на регистрации (SYS-3)', () => {
     expect(() => validateSystem(leaked, makeWorld())).toThrow(/переменная "dmg" не связана/);
   });
 
+  it('переменная из random видна в теле и не видна снаружи (RNG-6)', () => {
+    const bound: SystemDef = {
+      ...BURNING_JSON,
+      do: [{ random: { as: 'roll', do: [{ emitEvent: { type: 'X', data: { d: v('roll') } } }] } }],
+    };
+    const leaked: SystemDef = {
+      ...BURNING_JSON,
+      do: [
+        { randomBelow: { as: 'face', bound: F(6), subStream: 'dice', do: [] } },
+        { emitEvent: { type: 'X', data: { d: v('face') } } },
+      ],
+    };
+
+    expect(() => validateSystem(bound, makeWorld())).not.toThrow();
+    expect(() => validateSystem(leaked, makeWorld())).toThrow(/переменная "face" не связана/);
+  });
+
+  it('опечатка в имени случайного действия падает на регистрации (ACT-1)', () => {
+    const typo = { ...BURNING_JSON, do: [{ randomBelwo: { as: 'r', bound: F(6), do: [] } }] } as SystemDef;
+    expect(() => validateSystem(typo, makeWorld())).toThrow(/неизвестное действие "randomBelwo"/);
+  });
+
   it('registerFromJson не регистрирует систему, не прошедшую валидацию', () => {
     const r = new SystemRegistry();
     expect(() => r.registerFromJson({ ...BURNING_JSON, query: { all: ['Ghost'] } }, makeWorld())).toThrow();
