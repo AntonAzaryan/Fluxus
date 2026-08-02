@@ -85,8 +85,11 @@ export interface TerrainGrid {
   readonly cliffs: readonly CliffEdge[];
 }
 
-/** Компонент-override уровня (ARENA-6) — вторая и последняя конвенция имён в ядре после `POSITION_COMPONENT`. */
+/** Компонент-override уровня (ARENA-6) — конвенция имён в ядре наравне с `POSITION_COMPONENT`. */
 export const LEVEL_OVERRIDE_COMPONENT = 'LevelOverride';
+
+/** Компонент множителя симуляционной скорости (TIME-2); читается в `getEffectiveDelta`. */
+export const TIME_SCALE_COMPONENT = 'TimeScale';
 
 /** Запрос уровня и пола (TERR-4). Опциональна как и физика: сцена без террейна тикает штатно (DI-3). */
 export interface TerrainApi {
@@ -95,6 +98,22 @@ export interface TerrainApi {
   /** Уровень сущности: override, если он есть, иначе производное от позиции (TERR-4, ARENA-6). */
   readonly levelOf: (entity: EntityId) => number;
   readonly hasFloorAt: (position: Vec2) => boolean;
+}
+
+// --------------------------------------------------------------------- arena
+
+/**
+ * Граница арены (ARENA-1..2). Центр иммутабелен и живёт здесь, радиус
+ * мутабелен и лежит в компоненте на `entity`: сужение обязано попадать в
+ * снапшот и откатываться вместе с миром (ARENA-4, SNAP-1).
+ */
+export interface ArenaApi {
+  /** Носитель мутабельного радиуса: политика меняет его через `commands.setField` (ARENA-4). */
+  readonly entity: EntityId;
+  readonly center: Vec2;
+  readonly radius: () => Fixed;
+  /** Принадлежность точки арене, граница включающая (ARENA-2). */
+  readonly contains: (position: Vec2) => boolean;
 }
 
 // ---------------------------------------------------------------------- ecs
@@ -177,6 +196,15 @@ export interface EventEmitter {
   emit(type: string, data?: Readonly<Record<string, number>>): void;
 }
 
+/**
+ * Шина тика целиком. Живёт в `SimulationState`, а не внутри `tick()`: события
+ * входят в снапшот и откатываются вместе с миром (SNAP-1, REW-10).
+ */
+export interface EventLog extends EventEmitter, ReadonlyEventLog {
+  clear(): void;
+  restore(events: readonly GameEvent[]): void;
+}
+
 // ------------------------------------------------------------------- systems
 
 export interface SystemContext {
@@ -193,7 +221,14 @@ export interface SystemContext {
   readonly physics?: PhysicsApi;
   /** Есть, если сцена содержит террейн (TERR-4). */
   readonly terrain?: TerrainApi;
+  /** Есть, если сцена содержит арену (ARENA-1). */
+  readonly arena?: ArenaApi;
   readonly inputs: readonly InputFrame[];
+  /**
+   * `globalDelta * TimeScale.value` с клампом стакинга (TIME-3, TIME-7).
+   * Учитывать его или нет — решает каждая система сама (TIME-4).
+   */
+  readonly getEffectiveDelta: (entity: EntityId, globalDelta: Fixed) => Fixed;
 }
 
 export interface System {
@@ -268,6 +303,10 @@ export interface SimulationState {
   readonly world: WorldState;
   tick: number;
   readonly rng: RngRegistry;
+  /** Шина текущего тика; входит в снапшот и откатывается (REW-10). */
+  readonly events: EventLog;
+  /** Режим мира (WSM-1); переключается только через `RewindController` (WSM-5). */
+  mode: WorldMode;
 }
 
 /** Полная копия состояния для истории — то, из чего восстанавливается тик (SNAP-1). */
@@ -275,4 +314,21 @@ export interface Snapshot {
   readonly tick: number;
   readonly world: WorldState;
   readonly rng: readonly RngStreamState[];
+  readonly events: readonly GameEvent[];
+  readonly mode: WorldMode;
+}
+
+/**
+ * История снапшотов за интерфейсом (SNAP-2): rewind-ульта и netcode-
+ * reconciliation используют разные реализации с разными интервалом и глубиной
+ * (SNAP-4), а не общий компромиссный буфер.
+ */
+export interface HistoryProvider {
+  /** Снимает снапшот, если текущий тик подходит под политику провайдера (SNAP-4). */
+  record(state: SimulationState): void;
+  /** Ближайший снапшот с тиком ≤ `tick`; при более глубоком запросе — самый старый (REW-1). */
+  nearest(tick: number): Snapshot | undefined;
+  /** Самый старый доступный тик — предел глубины перемотки (REW-1). */
+  readonly oldestTick: number | undefined;
+  readonly newestTick: number | undefined;
 }

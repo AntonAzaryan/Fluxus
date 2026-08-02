@@ -123,3 +123,51 @@ export function sqrt(a: Fixed): Fixed {
 }
 
 export { INT32_MIN, INT32_MAX };
+
+// ---------------------------------------- сравнение расстояний без sqrt
+
+/*
+ * Сравнение сумм квадратов в fixed-point без sqrt: граница включающая
+ * (QUERY-1, ARENA-2), а округление sqrt меняло бы состав результата у самой
+ * границы. dx*dx+dy*dy на i32-координатах вылетает за 2^53 (safe integer),
+ * поэтому считаем точно как беззнаковые 64 бита — пара 32-битных слов,
+ * собранная из 16-битных половин.
+ */
+
+type U64 = readonly [hi: number, lo: number];
+
+const TWO_16 = 0x10000;
+const TWO_32 = 0x100000000;
+
+/** Точное |a|*|a| для i32 как беззнаковое 64-битное число (hi, lo — 32-битные слова). */
+function sq64(a: number): U64 {
+  const v = Math.abs(a);
+  const hi16 = Math.floor(v / TWO_16);
+  const lo16 = v % TWO_16;
+
+  const loLo = lo16 * lo16; // < 2^32, точно
+  const cross = hi16 * lo16 * 2; // < 2^32, точно
+  const hiHi = hi16 * hi16; // < 2^32, точно
+
+  const crossLo = cross % TWO_16;
+  const crossHi = Math.floor(cross / TWO_16);
+
+  const loRaw = loLo + crossLo * TWO_16; // < 2^33, точно
+  const carry = Math.floor(loRaw / TWO_32);
+  return [hiHi + crossHi + carry, loRaw % TWO_32];
+}
+
+function add64(a: U64, b: U64): U64 {
+  const loRaw = a[1] + b[1];
+  const carry = Math.floor(loRaw / TWO_32);
+  return [a[0] + b[0] + carry, loRaw % TWO_32];
+}
+
+function le64(a: U64, b: U64): boolean {
+  return a[0] < b[0] || (a[0] === b[0] && a[1] <= b[1]);
+}
+
+/** dx² + dy² <= radius² — включая границу. Общий компаратор для `withinRadius` и арены. */
+export function distSqLe(dx: Fixed, dy: Fixed, radius: Fixed): boolean {
+  return le64(add64(sq64(dx), sq64(dy)), sq64(radius));
+}

@@ -1,0 +1,771 @@
+{
+  "scenario": "visibility",
+  "seed": 20260813,
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          89,
+          115,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              32768
+            ],
+            "halfY": [
+              0,
+              0,
+              65536
+            ],
+            "radius": [
+              0,
+              0,
+              0
+            ],
+            "shape": [
+              0,
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              32768,
+              327680,
+              196608
+            ],
+            "y": [
+              163840,
+              163840,
+              163840
+            ]
+          },
+          "Stealth": {
+            "active": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Team": {
+            "id": [
+              0,
+              1,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -65536,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Visibility": {
+            "visibleTo": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Vision": {
+            "radius": [
+              393216,
+              0,
+              0
+            ]
+          },
+          "VisionModifier": {
+            "id0": [
+              0,
+              0,
+              0
+            ],
+            "id1": [
+              0,
+              0,
+              0
+            ],
+            "id2": [
+              0,
+              0,
+              0
+            ],
+            "id3": [
+              0,
+              0,
+              0
+            ],
+            "value0": [
+              0,
+              0,
+              0
+            ],
+            "value1": [
+              0,
+              0,
+              0
+            ],
+            "value2": [
+              0,
+              0,
+              0
+            ],
+            "value3": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            2,
+            [
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          89,
+          115,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              32768
+            ],
+            "halfY": [
+              0,
+              0,
+              65536
+            ],
+            "radius": [
+              0,
+              0,
+              0
+            ],
+            "shape": [
+              0,
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              32768,
+              327680,
+              196608
+            ],
+            "y": [
+              163840,
+              98304,
+              163840
+            ]
+          },
+          "Stealth": {
+            "active": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Team": {
+            "id": [
+              0,
+              1,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -65536,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Visibility": {
+            "visibleTo": [
+              1,
+              2,
+              0
+            ]
+          },
+          "Vision": {
+            "radius": [
+              393216,
+              0,
+              0
+            ]
+          },
+          "VisionModifier": {
+            "id0": [
+              0,
+              0,
+              0
+            ],
+            "id1": [
+              0,
+              0,
+              0
+            ],
+            "id2": [
+              0,
+              0,
+              0
+            ],
+            "id3": [
+              0,
+              0,
+              0
+            ],
+            "value0": [
+              0,
+              0,
+              0
+            ],
+            "value1": [
+              0,
+              0,
+              0
+            ],
+            "value2": [
+              0,
+              0,
+              0
+            ],
+            "value3": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            2,
+            [
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          89,
+          115,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              32768
+            ],
+            "halfY": [
+              0,
+              0,
+              65536
+            ],
+            "radius": [
+              0,
+              0,
+              0
+            ],
+            "shape": [
+              0,
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              32768,
+              327680,
+              196608
+            ],
+            "y": [
+              163840,
+              32768,
+              163840
+            ]
+          },
+          "Stealth": {
+            "active": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Team": {
+            "id": [
+              0,
+              1,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -65536,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Visibility": {
+            "visibleTo": [
+              1,
+              2,
+              0
+            ]
+          },
+          "Vision": {
+            "radius": [
+              393216,
+              0,
+              0
+            ]
+          },
+          "VisionModifier": {
+            "id0": [
+              0,
+              0,
+              0
+            ],
+            "id1": [
+              0,
+              0,
+              0
+            ],
+            "id2": [
+              0,
+              0,
+              0
+            ],
+            "id3": [
+              0,
+              0,
+              0
+            ],
+            "value0": [
+              0,
+              0,
+              0
+            ],
+            "value1": [
+              0,
+              0,
+              0
+            ],
+            "value2": [
+              0,
+              0,
+              0
+            ],
+            "value3": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            2,
+            [
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          89,
+          115,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              32768
+            ],
+            "halfY": [
+              0,
+              0,
+              65536
+            ],
+            "radius": [
+              0,
+              0,
+              0
+            ],
+            "shape": [
+              0,
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              32768,
+              327680,
+              196608
+            ],
+            "y": [
+              163840,
+              -32768,
+              163840
+            ]
+          },
+          "Stealth": {
+            "active": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Team": {
+            "id": [
+              0,
+              1,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -65536,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Visibility": {
+            "visibleTo": [
+              1,
+              3,
+              0
+            ]
+          },
+          "Vision": {
+            "radius": [
+              393216,
+              0,
+              0
+            ]
+          },
+          "VisionModifier": {
+            "id0": [
+              0,
+              0,
+              0
+            ],
+            "id1": [
+              0,
+              0,
+              0
+            ],
+            "id2": [
+              0,
+              0,
+              0
+            ],
+            "id3": [
+              0,
+              0,
+              0
+            ],
+            "value0": [
+              0,
+              0,
+              0
+            ],
+            "value1": [
+              0,
+              0,
+              0
+            ],
+            "value2": [
+              0,
+              0,
+              0
+            ],
+            "value3": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            2,
+            [
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 4,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          89,
+          115,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              32768
+            ],
+            "halfY": [
+              0,
+              0,
+              65536
+            ],
+            "radius": [
+              0,
+              0,
+              0
+            ],
+            "shape": [
+              0,
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              32768,
+              327680,
+              196608
+            ],
+            "y": [
+              163840,
+              -98304,
+              163840
+            ]
+          },
+          "Stealth": {
+            "active": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Team": {
+            "id": [
+              0,
+              1,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -65536,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Visibility": {
+            "visibleTo": [
+              1,
+              2,
+              0
+            ]
+          },
+          "Vision": {
+            "radius": [
+              393216,
+              0,
+              0
+            ]
+          },
+          "VisionModifier": {
+            "id0": [
+              0,
+              0,
+              0
+            ],
+            "id1": [
+              0,
+              0,
+              0
+            ],
+            "id2": [
+              0,
+              0,
+              0
+            ],
+            "id3": [
+              0,
+              0,
+              0
+            ],
+            "value0": [
+              0,
+              0,
+              0
+            ],
+            "value1": [
+              0,
+              0,
+              0
+            ],
+            "value2": [
+              0,
+              0,
+              0
+            ],
+            "value3": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            2,
+            [
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    }
+  ]
+}

@@ -19,16 +19,12 @@ import {
   staticsFromTerrain,
   type PhysicsOptions,
 } from '../systems/physics.js';
+import { ArenaSystem } from '../systems/arena.js';
+import { VisibilitySystem, type VisibilityOptions } from '../systems/visibility.js';
 import { loadScene, type SceneDef } from './scene.js';
 import { prettyJsonSerializer, snapshotToPlain, type PlainSnapshot } from './serialization.js';
 import { initialState, tick, type Simulation } from './tick.js';
-import type {
-  FieldOverrides,
-  InputFrame,
-  PhysicsApi,
-  ReadonlyEventLog,
-  SimulationState,
-} from '../types.js';
+import type { FieldOverrides, InputFrame, PhysicsApi, SimulationState } from '../types.js';
 
 export interface ScenarioSpawn {
   readonly prefab: string;
@@ -51,18 +47,19 @@ export interface ScenarioDef {
    * сборки (DI-3, SER-7), в конфиге сцены её быть не должно.
    */
   readonly physics?: PhysicsOptions;
+  /**
+   * Включает пересчёт видимости (FOW-4). Как и физика — поле сценария, а не
+   * сцены: системе нужен raycast, то есть зависимость сборки (DI-3).
+   */
+  readonly visibility?: VisibilityOptions;
 }
 
 /**
- * Снапшот тика плюс его события: `emitEvent` — единственный наблюдаемый выход
- * системы, ничего не пишущей в мир, и без него golden не заметил бы его пропажу.
+ * Снапшот тика. События входят в него сами (SNAP-1): `emitEvent` — единственный
+ * наблюдаемый выход системы, ничего не пишущей в мир, и без него golden не
+ * заметил бы его пропажу.
  */
-export interface TickRecord extends PlainSnapshot {
-  readonly events: readonly {
-    readonly type: string;
-    readonly data: Readonly<Record<string, number>>;
-  }[];
-}
+export type TickRecord = PlainSnapshot;
 
 export interface RunOutput {
   readonly scenario: string;
@@ -82,7 +79,9 @@ export function runScenario(def: ScenarioDef): RunOutput {
     throw new Error(`сценарий "${def.name}": есть "inputs", но нет "players" — слоты не определены (TICK-5)`);
   }
 
-  const { world, systems, terrain } = loadScene(def.scene);
+  const { world, systems, terrain, arena } = loadScene(def.scene);
+  // Арена есть в сцене — значит, за её границей кто-то следит (ARENA-3, ARENA-5).
+  if (arena !== undefined) systems.register(new ArenaSystem());
   if (def.players !== undefined) systems.register(new InputSystem({ players: def.players }));
 
   // Статика обрывов строится из террейна до расстановки: она иммутабельна и в
@@ -95,6 +94,10 @@ export function runScenario(def: ScenarioDef): RunOutput {
     physics = createPhysicsApi(world, physicsWorld, def.physics);
   }
 
+  // Видимость считается по финальным позициям тика, поэтому регистрируется
+  // после физики (FOW-6).
+  if (def.visibility !== undefined) systems.register(new VisibilitySystem(def.visibility));
+
   for (const entry of def.initial ?? []) spawn(world, entry.prefab, entry.overrides);
 
   const state = initialState(world, def.seed);
@@ -103,6 +106,7 @@ export function runScenario(def: ScenarioDef): RunOutput {
     worldSeed: def.seed,
     math: mathApi,
     ...(terrain !== undefined ? { terrain } : {}),
+    ...(arena !== undefined ? { arena } : {}),
     ...(physics !== undefined ? { physics } : {}),
   };
 
@@ -113,10 +117,10 @@ export function runScenario(def: ScenarioDef): RunOutput {
     else byTick.set(frame.tick, [frame]);
   }
 
-  const ticks: TickRecord[] = [record(state, [])];
+  const ticks: TickRecord[] = [record(state)];
   for (let i = 0; i < def.ticks; i++) {
-    const result = tick(sim, state, byTick.get(state.tick + 1) ?? []);
-    ticks.push(record(state, result.events));
+    tick(sim, state, byTick.get(state.tick + 1) ?? []);
+    ticks.push(record(state));
   }
 
   return { scenario: def.name, seed: def.seed, ticks };
@@ -127,18 +131,14 @@ export function runScenarioBytes(def: ScenarioDef): Uint8Array {
   return prettyJsonSerializer.encode(runScenario(def));
 }
 
-function record(state: SimulationState, events: ReadonlyEventLog | readonly never[]): TickRecord {
+function record(state: SimulationState): TickRecord {
   // Снапшот собирается из живого состояния без `takeSnapshot`: plain-форма и
   // так копирует всё в новые массивы, копия перед копией ничего не защищает.
-  return {
-    ...snapshotToPlain({ tick: state.tick, world: state.world, rng: state.rng.snapshot() }),
-    events: [...events].map((event) => ({ type: event.type, data: sortKeys(event.data) })),
-  };
-}
-
-/** Порядок ключей задаётся здесь, а не сериализатором (SER-6). */
-function sortKeys(data: Readonly<Record<string, number>>): Record<string, number> {
-  const sorted: Record<string, number> = {};
-  for (const key of Object.keys(data).sort()) sorted[key] = data[key]!;
-  return sorted;
+  return snapshotToPlain({
+    tick: state.tick,
+    world: state.world,
+    rng: state.rng.snapshot(),
+    events: [...state.events],
+    mode: state.mode,
+  });
 }

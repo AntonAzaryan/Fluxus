@@ -60,6 +60,12 @@ function argExpr(a: Args, key: string, action: string): Expression {
   return a[key] as Expression;
 }
 
+/** Необязательный аргумент-выражение: отсутствие даёт `fallback`, а не ошибку. */
+function argNum(a: Args, key: string, action: string, ctx: SystemContext, vars: ExprVars, fallback?: Fixed): Fixed {
+  if (a[key] === undefined && fallback !== undefined) return fallback;
+  return num(evaluate(argExpr(a, key, action), ctx, vars), action);
+}
+
 function argBody(a: Args, key: string, action: string): readonly Action[] {
   const value = a[key];
   if (!Array.isArray(value)) throw new Error(`действие "${action}": "${key}" — список действий`);
@@ -166,6 +172,14 @@ function bindRandom(
 
 // --------------------------------------------------------------- действия
 
+/**
+ * Имя компонента твина (TWEEN-1). Живёт здесь, а не в `systems/tween.ts`:
+ * `addTween` — единственный способ его создать (TWEEN-5), а `TweenSystem` уже
+ * зависит от этого модуля ради `execute` для `onComplete` (TWEEN-4), и обратный
+ * импорт замкнул бы цикл.
+ */
+export const TWEEN_COMPONENT = 'Tween';
+
 type ActionFn = (a: Args, ctx: SystemContext, vars: ExprVars) => void;
 
 const ACTIONS: Record<string, ActionFn> = {
@@ -201,6 +215,27 @@ const ACTIONS: Record<string, ActionFn> = {
       argStr(a, 'type', 'emitEvent'),
       fields(argFields(a, 'data', 'emitEvent'), ctx, vars, 'emitEvent'),
     );
+  },
+  /**
+   * Создание твина (TWEEN-5): обычная команда добавления компонента, прямого
+   * пути в обход буфера нет. `def` — индекс в таблице определений сцены
+   * (`TweenDef`), потому что путь к полю и `onComplete` в скалярные поля
+   * компонента не помещаются (ECS-3); подробнее — в шапке `systems/tween.ts`.
+   *
+   * `def`, `easing` и `ignoreTimeScale` — поля `i32`, то есть сырые целые, а не
+   * Q16.16: та же конвенция, что у `modifyComponent`, преобразований действие
+   * не делает.
+   */
+  addTween: (a, ctx, vars) => {
+    ctx.commands.addComponent(entityOf(a, ctx, vars, 'addTween'), TWEEN_COMPONENT, {
+      def: argNum(a, 'def', 'addTween', ctx, vars),
+      from: argNum(a, 'from', 'addTween', ctx, vars),
+      to: argNum(a, 'to', 'addTween', ctx, vars),
+      duration: argNum(a, 'duration', 'addTween', ctx, vars),
+      elapsed: 0,
+      easing: argNum(a, 'easing', 'addTween', ctx, vars, 0),
+      ignoreTimeScale: argNum(a, 'ignoreTimeScale', 'addTween', ctx, vars, 0),
+    });
   },
   if: (a, ctx, vars) => {
     const cond = evaluate(argExpr(a, 'cond', 'if'), ctx, vars);

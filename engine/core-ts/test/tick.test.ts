@@ -111,9 +111,10 @@ describe('снапшоты (SNAP-1, SNAP-4, REW-2)', () => {
     expect(getField(snapshot.world, entity, 'Position', 'x')).toBe(65536);
     expect(getField(state.world, entity, 'Position', 'x')).toBe(196608);
 
-    const restored = restoreSnapshot(snapshot, WORLD_SEED);
-    expect(restored.tick).toBe(1);
-    expect(getField(restored.world, entity, 'Position', 'x')).toBe(65536);
+    // Восстановление идёт НА МЕСТЕ: ссылка на мир не подменяется (REW-2).
+    restoreSnapshot(state, snapshot);
+    expect(state.tick).toBe(1);
+    expect(getField(state.world, entity, 'Position', 'x')).toBe(65536);
   });
 
   it('снапшот + реплей вперёд даёт то же состояние, что честный прогон (REW-2)', () => {
@@ -141,8 +142,10 @@ describe('снапшоты (SNAP-1, SNAP-4, REW-2)', () => {
       getField(state.world, entity, 'Position', 'y'),
     ];
 
-    // Восстановление тика 1 и реплей тех же трёх тиков.
-    const replayed = restoreSnapshot(snapshot, WORLD_SEED);
+    // Восстановление тика 1 в чистом состоянии и реплей тех же трёх тиков.
+    const replayed = freshState();
+    spawn(replayed.world, 'mover');
+    restoreSnapshot(replayed, snapshot);
     for (let i = 0; i < 3; i++) tick(sim, replayed);
 
     expect(replayed.tick).toBe(4);
@@ -203,8 +206,8 @@ describe('детерминизм прогона (DET-1)', () => {
     expect(snapshot.rng[0]!.name).toBe('DamageSystem');
 
     // Состояние стримов входит в снапшот: восстановление повторяет бросок тика 2.
-    const restored = restoreSnapshot(snapshot, WORLD_SEED);
-    tick(sim, restored); // rolls[2]
+    restoreSnapshot(state, snapshot);
+    tick(sim, state); // rolls[2]
     expect(rolls[2]).toBe(rolls[1]);
   });
 });

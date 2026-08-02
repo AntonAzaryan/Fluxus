@@ -45,6 +45,7 @@
       "propertyNames": {
         "enum": [
           "addComponent",
+          "addTween",
           "destroyEntity",
           "emitEvent",
           "forEach",

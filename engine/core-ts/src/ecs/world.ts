@@ -54,6 +54,16 @@ interface WorldInternal {
   readonly prefabs: ReadonlyMap<string, PrefabDef>;
   readonly stores: Map<string, ComponentStorage>;
   tags: Map<number, Set<string>>;
+  /**
+   * Per-component dirty (OBS-6, NET-8): компонент → сущности, изменённые с
+   * последнего `clearDirty`. Гранулярность — per-component, а не
+   * per-entity-per-component: `changedEntities(component)` и сетевой дельте
+   * нужен ровно этот срез (открытый вопрос 3 в architecture.md).
+   *
+   * ponytail: Set на компонент, а не битовая маска по слотам. Замена — когда
+   * замеры покажут, что аллокации Set'ов заметны на реальной сцене.
+   */
+  dirty: Map<string, Set<EntityId>>;
 }
 
 const DEFAULT_CAPACITY = 1024;
@@ -148,8 +158,40 @@ export function createWorld(
     prefabs: prefabMap,
     stores,
     tags: new Map(),
+    dirty: new Map(),
   };
   return toState(internal);
+}
+
+// ------------------------------------------------------ dirty (OBS-6, NET-8)
+
+function markDirty(internal: WorldInternal, component: string, entity: EntityId): void {
+  const set = internal.dirty.get(component);
+  if (set === undefined) internal.dirty.set(component, new Set([entity]));
+  else set.add(entity);
+}
+
+/** Все компоненты сущности разом — структурное изменение задевает каждый из них. */
+function markAllDirty(internal: WorldInternal, entity: EntityId): void {
+  const index = rawIndexOf(entity);
+  for (const [name, store] of internal.stores) {
+    if (maskHas(internal.masks, index, store.id)) markDirty(internal, name, entity);
+  }
+}
+
+/** Начало тика: прошлый срез изменений отдан наблюдателям и больше не нужен (OBS-3). */
+export function clearDirty(state: WorldState): void {
+  toInternal(state).dirty.clear();
+}
+
+const NO_ENTITIES: ReadonlySet<EntityId> = new Set();
+
+export function dirtyEntities(state: WorldState, component: string): ReadonlySet<EntityId> {
+  return toInternal(state).dirty.get(component) ?? NO_ENTITIES;
+}
+
+export function dirtyIsEmpty(state: WorldState): boolean {
+  return toInternal(state).dirty.size === 0;
 }
 
 /**
@@ -269,7 +311,43 @@ export function cloneWorld(state: WorldState): WorldState {
     prefabs: src.prefabs,
     stores,
     tags,
+    // Снапшот — значение, а не живой мир: срез изменений в него не переносится.
+    dirty: new Map(),
   });
+}
+
+/**
+ * Восстанавливает содержимое `dst` из `src` НЕ подменяя объект (REW-2).
+ * Подмена ссылки была бы короче, но `TerrainApi` и `PhysicsApi` замкнуты на
+ * конкретный `WorldState` при сборке сцены: после свопа они читали бы мир,
+ * которого больше нет в симуляции.
+ */
+export function copyWorldInto(dst: WorldState, src: WorldState): void {
+  const to = toInternal(dst);
+  const from = toInternal(src);
+  if (to.capacity !== from.capacity) {
+    throw new Error(`copyWorldInto: ёмкости не совпадают (${to.capacity} против ${from.capacity})`);
+  }
+
+  to.entities.generations.set(from.entities.generations);
+  to.entities.alive.set(from.entities.alive);
+  to.entities.freeList = [...from.entities.freeList];
+  to.entities.nextIndex = from.entities.nextIndex;
+  to.entities.aliveCount = from.entities.aliveCount;
+  to.masks.words.set(from.masks.words);
+
+  for (const [name, store] of to.stores) {
+    const source = from.stores.get(name);
+    if (!source) throw new Error(`copyWorldInto: в источнике нет компонента "${name}"`);
+    for (const [field, arr] of Object.entries(store.fields)) {
+      arr.set(source.fields[field]!);
+    }
+  }
+
+  to.tags = new Map();
+  for (const [index, set] of from.tags) to.tags.set(index, new Set(set));
+  // Восстановление — изменение всего мира: срез дельты за него не отвечает.
+  to.dirty.clear();
 }
 
 /** Числовой id компонента — нужен Query для построения маски-фильтра. */
@@ -322,6 +400,7 @@ export function spawn(state: WorldState, prefabName: string, overrides?: FieldOv
   if (prefab.tags && prefab.tags.length > 0) {
     internal.tags.set(index, new Set(prefab.tags));
   }
+  markAllDirty(internal, entity);
   return entity;
 }
 
@@ -354,6 +433,7 @@ export function destroy(state: WorldState, entity: EntityId): void {
   const internal = toInternal(state);
   if (!indexIsAlive(internal.entities, entity)) return; // повторное удаление — не ошибка
   const index = rawIndexOf(entity);
+  markAllDirty(internal, entity);
   clearEntity(internal.masks, index);
   internal.tags.delete(index);
   free(internal.entities, entity);
@@ -394,6 +474,7 @@ export function setField(
   const arr = store.fields[field];
   if (!arr) throw new Error(`setField: у компонента "${component}" нет поля "${field}"`);
   arr[rawIndexOf(entity)] = value;
+  markDirty(internal, component, entity);
 }
 
 /** Добавляет компонент существующей сущности; отсутствующие поля берут default либо 0. */
@@ -412,6 +493,7 @@ export function addComponent(
     const value = values?.[field] ?? store.schema.defaults?.[field] ?? 0;
     store.fields[field]![index] = value;
   }
+  markDirty(internal, component, entity);
 }
 
 export function removeComponent(state: WorldState, entity: EntityId, component: string): void {
@@ -419,6 +501,7 @@ export function removeComponent(state: WorldState, entity: EntityId, component: 
   const store = internal.stores.get(component);
   if (!store) return;
   clearComponent(internal.masks, rawIndexOf(entity), store.id);
+  markDirty(internal, component, entity);
 }
 
 export function addTag(state: WorldState, entity: EntityId, tag: string): void {

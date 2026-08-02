@@ -91,11 +91,14 @@ export class PhysicsWorld {
   /** Метка последнего запроса на каждый коллайдер — дешёвая дедупликация по клеткам. */
   private readonly stamp: Int32Array;
   private queryId = 0;
+  // Поля объявлены явно, а не parameter properties: `bin/sim.mjs` исполняет
+  // исходники через strip-only режим node, который их не поддерживает (CLI-1).
+  readonly statics: readonly StaticCollider[];
+  readonly cellSize: Fixed;
 
-  constructor(
-    readonly statics: readonly StaticCollider[],
-    readonly cellSize: Fixed = DEFAULT_CELL_SIZE,
-  ) {
+  constructor(statics: readonly StaticCollider[], cellSize: Fixed = DEFAULT_CELL_SIZE) {
+    this.statics = statics;
+    this.cellSize = cellSize;
     this.stamp = new Int32Array(statics.length);
     for (let i = 0; i < statics.length; i++) {
       const s = statics[i]!;
@@ -199,11 +202,10 @@ export class PhysicsSystem implements System {
   readonly order: number;
   private readonly colliderComponent: string;
   private readonly velocityComponent: string;
+  private readonly physicsWorld: PhysicsWorld;
 
-  constructor(
-    private readonly physicsWorld: PhysicsWorld,
-    options: PhysicsOptions = {},
-  ) {
+  constructor(physicsWorld: PhysicsWorld, options: PhysicsOptions = {}) {
+    this.physicsWorld = physicsWorld;
     this.order = options.order ?? DEFAULT_ORDER;
     this.colliderComponent = options.collider ?? DEFAULT_COLLIDER_COMPONENT;
     this.velocityComponent = options.velocity ?? DEFAULT_VELOCITY_COMPONENT;

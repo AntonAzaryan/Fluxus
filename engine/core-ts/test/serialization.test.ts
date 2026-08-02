@@ -167,11 +167,12 @@ describe('Serializer (SER-2)', () => {
       COMPONENTS,
       PREFABS,
     );
-    const replayed = restoreSnapshot(decoded, 5);
-    tick(start().sim, replayed);
+    const fresh = start();
+    restoreSnapshot(fresh.state, decoded);
+    tick(fresh.sim, fresh.state);
 
-    expect(toPlain(replayed.world)).toEqual(toPlain(honest.state.world));
-    expect(replayed.tick).toBe(honest.state.tick);
+    expect(toPlain(fresh.state.world)).toEqual(toPlain(honest.state.world));
+    expect(fresh.state.tick).toBe(honest.state.tick);
   });
 });
 

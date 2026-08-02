@@ -1,0 +1,78 @@
+{
+  "name": "arena-time",
+  "seed": 20260812,
+  "ticks": 6,
+  "scene": {
+    "components": [
+      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Health", "fields": { "value": "fixed" } }
+    ],
+    "prefabs": [
+      {
+        "name": "Runner",
+        "components": {
+          "Position": { "x": 98304, "y": 98304 },
+          "Velocity": { "x": 65536, "y": 0 },
+          "Health": { "value": 0 },
+          "ArenaState": {},
+          "Tween": {
+            "def": 0,
+            "from": 0,
+            "to": 65536,
+            "duration": 49152,
+            "elapsed": 0,
+            "easing": 0,
+            "ignoreTimeScale": 0
+          },
+          "TimeScaleModifiers": { "id0": 1, "value0": 32768 }
+        }
+      },
+      {
+        "name": "Faller",
+        "components": {
+          "Position": { "x": 98304, "y": 32768 },
+          "Velocity": { "x": 65536, "y": 0 },
+          "Health": { "value": 0 },
+          "ArenaState": {}
+        }
+      }
+    ],
+    "systems": [
+      {
+        "name": "Movement",
+        "order": 10,
+        "query": { "all": ["Position", "Velocity"] },
+        "as": "e",
+        "do": [
+          {
+            "modifyComponent": {
+              "entity": { "var": "e" },
+              "component": "Position",
+              "values": {
+                "x": {
+                  "+": [
+                    { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "e" }, "Velocity", "x"] }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "terrain": {
+      "width": 5,
+      "height": 3,
+      "tileSize": 65536,
+      "levels": ["00000", "00000", "00000"],
+      "flags": [".._..", ".....", "....."]
+    },
+    "arena": { "center": { "x": 131072, "y": 98304 }, "radius": 131072 },
+    "timeScale": true,
+    "tweens": [{ "target": "Health.value" }],
+    "capacity": 16
+  },
+  "initial": [{ "prefab": "Runner" }, { "prefab": "Faller" }]
+}

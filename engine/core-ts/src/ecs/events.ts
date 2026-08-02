@@ -1,4 +1,4 @@
-import type { EventEmitter, GameEvent, ReadonlyEventLog } from '../types.js';
+import type { EventLog, GameEvent } from '../types.js';
 
 const NO_DATA: Readonly<Record<string, number>> = Object.freeze({});
 
@@ -9,7 +9,7 @@ const NO_DATA: Readonly<Record<string, number>> = Object.freeze({});
  * Событие описывает доменный факт и ничего не знает об адресате: категоризация
  * и фильтрация — работа потребителя (OBS-4).
  */
-export class EventBus implements EventEmitter, ReadonlyEventLog {
+export class EventBus implements EventLog {
   private readonly log: GameEvent[] = [];
 
   emit(type: string, data: Readonly<Record<string, number>> = NO_DATA): void {
@@ -33,5 +33,14 @@ export class EventBus implements EventEmitter, ReadonlyEventLog {
   /** Между тиками лог начинается заново: события не переживают тик (OBS-3). */
   clear(): void {
     this.log.length = 0;
+  }
+
+  /**
+   * Возврат шины к состоянию целевого тика (REW-10). Именно возврат, а не
+   * очистка: пустая шина после отката дала бы расхождение с честным реплеем.
+   */
+  restore(events: readonly GameEvent[]): void {
+    this.log.length = 0;
+    this.log.push(...events);
   }
 }

@@ -12,6 +12,7 @@
  * Контейнер результата — Float64Array: EntityId 48-битный, Uint32Array молча
  * усёк бы его при generation >= 256 (ID-1).
  */
+import { distSqLe } from '../math/fixed.js';
 import type { QuerySpec, Vec2, WorldState } from '../types.js';
 import { POSITION_COMPONENT } from '../types.js';
 import { componentId, componentMasks, getField, hasTag, listAlive } from './world.js';
@@ -68,50 +69,4 @@ function withinRadius(state: WorldState, entity: number, center: Vec2, radius: n
   const dx = getField(state, entity, POSITION_COMPONENT, 'x') - center.x;
   const dy = getField(state, entity, POSITION_COMPONENT, 'y') - center.y;
   return distSqLe(dx, dy, radius);
-}
-
-// ponytail: сравнение сумм квадратов в fixed-point без sqrt (QUERY-1: граница
-// включающая, округление sqrt меняло бы состав результата у самой границы).
-// dx*dx+dy*dy на i32-координатах может вылететь за 2^53 (safe integer) —
-// поэтому считаем точно как беззнаковые 64 бита (пара 32-битных слов) через
-// разложение на 16-битные половины. Это временное место: единая MathApi должна
-// получить такой же 64-битный компаратор, чтобы им пользовались и другие
-// системы (столкновения, LoS).
-
-type U64 = readonly [hi: number, lo: number];
-
-const TWO_16 = 0x10000;
-const TWO_32 = 0x100000000;
-
-/** Точное |a|*|a| для i32 как беззнаковое 64-битное число (hi,lo — 32-битные слова). */
-function sq64(a: number): U64 {
-  const v = Math.abs(a);
-  const hi16 = Math.floor(v / TWO_16);
-  const lo16 = v % TWO_16;
-
-  const loLo = lo16 * lo16; // < 2^32, точно
-  const cross = hi16 * lo16 * 2; // < 2^32, точно
-  const hiHi = hi16 * hi16; // < 2^32, точно
-
-  const crossLo = cross % TWO_16;
-  const crossHi = Math.floor(cross / TWO_16);
-
-  const loRaw = loLo + crossLo * TWO_16; // < 2^33, точно
-  const carry = Math.floor(loRaw / TWO_32);
-  return [hiHi + crossHi + carry, loRaw % TWO_32];
-}
-
-function add64(a: U64, b: U64): U64 {
-  const loRaw = a[1] + b[1];
-  const carry = Math.floor(loRaw / TWO_32);
-  return [a[0] + b[0] + carry, loRaw % TWO_32];
-}
-
-function le64(a: U64, b: U64): boolean {
-  return a[0] < b[0] || (a[0] === b[0] && a[1] <= b[1]);
-}
-
-/** dx²+dy² <= radius² — включая границу (QUERY-1). */
-function distSqLe(dx: number, dy: number, radius: number): boolean {
-  return le64(add64(sq64(dx), sq64(dy)), sq64(radius));
 }

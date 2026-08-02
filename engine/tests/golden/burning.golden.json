@@ -55,7 +55,8 @@
         ]
       },
       "rng": [],
-      "events": []
+      "events": [],
+      "mode": "Running"
     },
     {
       "tick": 1,
@@ -110,7 +111,8 @@
         ]
       },
       "rng": [],
-      "events": []
+      "events": [],
+      "mode": "Running"
     },
     {
       "tick": 2,
@@ -169,7 +171,8 @@
             "tick": 2
           }
         }
-      ]
+      ],
+      "mode": "Running"
     },
     {
       "tick": 3,
@@ -224,7 +227,8 @@
         ]
       },
       "rng": [],
-      "events": []
+      "events": [],
+      "mode": "Running"
     },
     {
       "tick": 4,
@@ -283,7 +287,8 @@
             "tick": 4
           }
         }
-      ]
+      ],
+      "mode": "Running"
     },
     {
       "tick": 5,
@@ -336,7 +341,8 @@
             "tick": 5
           }
         }
-      ]
+      ],
+      "mode": "Running"
     },
     {
       "tick": 6,
@@ -381,7 +387,8 @@
         "tags": []
       },
       "rng": [],
-      "events": []
+      "events": [],
+      "mode": "Running"
     }
   ]
 }

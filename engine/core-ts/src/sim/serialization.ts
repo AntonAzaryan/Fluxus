@@ -8,7 +8,7 @@
  */
 import { fromPlain, toPlain, type PlainWorld } from '../ecs/world.js';
 import type { PrefabDef } from '../ecs/world.js';
-import type { ComponentSchema, Snapshot } from '../types.js';
+import type { ComponentSchema, GameEvent, Snapshot, WorldMode } from '../types.js';
 
 export interface Serializer {
   readonly name: string;
@@ -41,6 +41,13 @@ export interface PlainSnapshot {
   readonly world: PlainWorld;
   /** Стримы отсортированы по имени (SER-6). */
   readonly rng: readonly { readonly name: string; readonly state: readonly number[] }[];
+  /** Шина тика: часть состояния, а не побочный вывод (SNAP-1, REW-10). */
+  readonly events: readonly {
+    readonly type: string;
+    readonly data: Readonly<Record<string, number>>;
+  }[];
+  /** Машина состояний мира входит в снапшот (SNAP-1, WSM-1). */
+  readonly mode: WorldMode;
 }
 
 export function snapshotToPlain(snapshot: Snapshot): PlainSnapshot {
@@ -50,7 +57,16 @@ export function snapshotToPlain(snapshot: Snapshot): PlainSnapshot {
     rng: [...snapshot.rng]
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
       .map((stream) => ({ name: stream.name, state: Array.from(stream.state) })),
+    events: snapshot.events.map((event) => ({ type: event.type, data: sortKeys(event.data) })),
+    mode: snapshot.mode,
   };
+}
+
+/** Порядок ключей задаётся здесь, при построении plain-формы, а не сериализатором (SER-6). */
+function sortKeys(data: Readonly<Record<string, number>>): Record<string, number> {
+  const sorted: Record<string, number> = {};
+  for (const key of Object.keys(data).sort()) sorted[key] = data[key]!;
+  return sorted;
 }
 
 export function snapshotFromPlain(
@@ -62,5 +78,7 @@ export function snapshotFromPlain(
     tick: plain.tick,
     world: fromPlain(plain.world, schemas, prefabs),
     rng: plain.rng.map((stream) => ({ name: stream.name, state: Uint32Array.from(stream.state) })),
+    events: plain.events.map((event): GameEvent => ({ type: event.type, data: event.data })),
+    mode: plain.mode,
   };
 }

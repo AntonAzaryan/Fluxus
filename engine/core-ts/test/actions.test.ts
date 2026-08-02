@@ -8,7 +8,7 @@ import { createRngRegistry } from '../src/math/rng.js';
 import { createCommandBuffer, type CommandBufferHandle } from '../src/ecs/commands.js';
 import { query } from '../src/ecs/query.js';
 import { createWorld, getField, hasComponent, isAlive, listAlive, spawn, type PrefabDef } from '../src/ecs/world.js';
-import type { ComponentSchema, SystemContext } from '../src/types.js';
+import { TIME_SCALE_COMPONENT, type ComponentSchema, type SystemContext } from '../src/types.js';
 
 const F = fixed.fromFloat;
 
@@ -57,6 +57,10 @@ function harness(seed = 1234): Harness {
     rng: createRngRegistry(seed).forSystem(SYSTEM_NAME),
     math: mathApi,
     inputs: [],
+    getEffectiveDelta: (entity, globalDelta) =>
+      hasComponent(world, entity, TIME_SCALE_COMPONENT)
+        ? mathApi.mul(globalDelta, getField(world, entity, TIME_SCALE_COMPONENT, 'value'))
+        : globalDelta,
   };
 
   return { ctx, commands, events, world, setFieldLog };
@@ -296,8 +300,10 @@ describe('ошибки формы (ACT-1)', () => {
     expect(() => execute([{ if: { cond: F(1), then: [] } }], harness().ctx)).toThrow(/булевым/);
   });
 
-  it('в наборе нет addTween и addModifier — отложены до этапа 15', () => {
-    expect(actionNames).not.toContain('addTween');
+  it('addTween в наборе есть (этап 15), addModifier — нет', () => {
+    expect(actionNames).toContain('addTween');
+    // Источники модификаторов заводятся системами через `modifierList` (TIME-8),
+    // отдельного действия под них в DSL пока нет.
     expect(actionNames).not.toContain('addModifier');
   });
 });

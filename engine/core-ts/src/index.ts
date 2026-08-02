@@ -57,12 +57,66 @@ export {
   STATIC_COLLIDER,
 } from './systems/physics.js';
 export type { PhysicsOptions, StaticCollider } from './systems/physics.js';
+export {
+  createArenaApi,
+  arenaPrefab,
+  ArenaSystem,
+  ARENA_COMPONENT,
+  ARENA_COMPONENTS,
+  ARENA_PREFAB,
+  ARENA_STATE_COMPONENT,
+} from './systems/arena.js';
+export type { ArenaDef, ArenaOptions } from './systems/arena.js';
+export {
+  VisibilitySystem,
+  teamBit,
+  isVisibleTo,
+  VISION_COMPONENT,
+  VISIBILITY_COMPONENT,
+  STEALTH_COMPONENT,
+  TEAM_COMPONENT,
+  VISION_SCHEMA,
+  VISIBILITY_SCHEMA,
+  STEALTH_SCHEMA,
+  TEAM_SCHEMA,
+  VISION_MODIFIERS,
+  FOW_COMPONENTS,
+  VISION_SCALE_MIN,
+  VISION_SCALE_MAX,
+  MAX_TEAMS,
+} from './systems/visibility.js';
+export type { VisibilityOptions } from './systems/visibility.js';
 export { InputSystem, INPUT_FIELDS } from './systems/inputSystem.js';
 export type { InputSystemOptions } from './systems/inputSystem.js';
+export { modifierList } from './systems/modifiers.js';
+export {
+  TimeScaleSystem,
+  TIME_COMPONENTS,
+  TIME_SCALE_MAX,
+  TIME_SCALE_MIN,
+  TIME_SCALE_MODIFIERS,
+  TIME_SCALE_SCHEMA,
+} from './systems/time.js';
+export type { TimeScaleSystemOptions } from './systems/time.js';
+export {
+  TweenSystem,
+  EASING_INSTANT,
+  EASING_LINEAR,
+  TWEEN_COMPONENT,
+  TWEEN_SCHEMA,
+} from './systems/tween.js';
+export type { TweenDef, TweenSystemOptions } from './systems/tween.js';
+export type { ModifierList } from './systems/modifiers.js';
 
 // sim — сборка сцены и прогон тиков
 export { tick, dispatch, initialState, takeSnapshot, restoreSnapshot } from './sim/tick.js';
 export type { Simulation } from './sim/tick.js';
+export { RingHistory } from './sim/history.js';
+export type { RingHistoryOptions } from './sim/history.js';
+export { createRewindController, createInputLog } from './sim/rewind.js';
+export type { ExemptField, InputLog, RewindController, RewindOptions } from './sim/rewind.js';
+export { filterSnapshot, relevantEntityVisible, VIEWPOINT_ALL, EVENT_ENTITY_FIELDS } from './sim/filter.js';
+export type { EventVisibility } from './sim/filter.js';
 export { loadScene } from './sim/scene.js';
 export type { Scene, SceneDef } from './sim/scene.js';
 export { jsonSerializer, prettyJsonSerializer, snapshotToPlain, snapshotFromPlain } from './sim/serialization.js';
