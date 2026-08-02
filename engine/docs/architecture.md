@@ -95,7 +95,7 @@
 | 3 | Entity IDs + RNG streams | ✅ Generational IDs 24+24; xorshift128 с именованными стримами |
 | 4 | `System` / `SystemContext` + `SystemRegistry` | ✅ Контракт зафиксирован, DI Math/Physics |
 | 5 | Event Bus + Scheduler + Tick loop | ✅ `tick()` на нативных системах, мутабельный мир |
-| 6 | Expression Evaluator | Fixed-point в выражениях, `getComponent`, sandbox |
+| 6 | Expression Evaluator | ✅ `engine/core-ts/src/expr.ts`: свой обход JsonLogic-AST, Q16.16, sandbox через тип |
 | 7 | Action Executor | Все actions через Command Buffer |
 | 8 | System Evaluator = `EvaluatedSystem` | JSON-система в том же реестре — подменяемость проверена |
 | 9 | Serialization + JSON-схемы | Формат компонентов, prefabs и систем, `Serializer` — то, с чем работает редактор |
@@ -115,6 +115,8 @@
 Заглушки в `TickResult`: поле `changes` присутствует в контракте с шага 5, но до шага 14 — пустой `ChangeSet`. Поля `mode`/`isReplay` присутствуют с шага 5, но до шага 16 — константы `Running` / `false`.
 
 Что изменилось по ходу шагов 1–5 (детали — в архивных change'ах `2026-08-02-implement-deterministic-core` и `2026-08-02-mutable-world-state`): сторонняя ECS-библиотека не используется (ECS-1), мир мутабелен и история живёт снапшотами по интервалу (TICK-1, SNAP-4). Шаг 9 из-за этого упрощается: dirty-tracking остаётся нужен сетевой дельте и `TickResult.changes`, но перестаёт быть условием того, чтобы история влезла в память.
+
+Что изменилось на шаге 6 (change `2026-08-02-expression-evaluator`): библиотека `json-logic-js` не используется — форма AST сохранена, обход свой, потому что библиотечная арифметика идёт в double, а расширение операторов — глобальная мутация синглтона. Зависимостей у ядра по-прежнему ноль.
 
 Каждый этап заводится как change: `/opsx:propose "<этап>"`.
 

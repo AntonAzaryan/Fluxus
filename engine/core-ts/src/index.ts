@@ -12,6 +12,14 @@ export { query } from './ecs/query.js';
 export { createCommandBuffer } from './ecs/commands.js';
 export type { CommandBufferHandle } from './ecs/commands.js';
 export { EventBus } from './events.js';
+export * as expr from './expr.js';
+export type {
+  Expression,
+  ExpressionEvaluator,
+  ExprValue,
+  ExprVars,
+  ExprWorld,
+} from './expr.js';
 export { SystemRegistry } from './system.js';
 export { tick, dispatch, initialState, takeSnapshot, restoreSnapshot } from './tick.js';
 export type { Simulation } from './tick.js';
