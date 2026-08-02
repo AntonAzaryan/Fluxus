@@ -109,6 +109,30 @@ const system: Json = {
   },
 };
 
+const terrain: Json = {
+  title: 'Ассет террейна (TERR-2, TERR-3)',
+  type: 'object',
+  additionalProperties: false,
+  required: ['width', 'height', 'tileSize', 'levels', 'flags'],
+  properties: {
+    width: { type: 'integer', minimum: 1 },
+    height: { type: 'integer', minimum: 1 },
+    tileSize: { $comment: 'Размер клетки в Q16.16 (FP-1, TERR-2).', type: 'integer', minimum: 1 },
+    levels: {
+      $comment: 'Строка на ряд, шестнадцатеричная цифра в верхнем регистре на клетку (TERR-3).',
+      type: 'array',
+      items: { type: 'string', pattern: '^[0-9A-F]+$' },
+      minItems: 1,
+    },
+    flags: {
+      $comment: '`.` обычная, `^` рампа, `_` нет пола — вне алфавита карты уровней (TERR-3).',
+      type: 'array',
+      items: { type: 'string', pattern: '^[.^_]+$' },
+      minItems: 1,
+    },
+  },
+};
+
 const scene: Json = {
   title: 'Сцена (SER-7)',
   type: 'object',
@@ -123,6 +147,10 @@ const scene: Json = {
     prefabs: { type: 'array', items: { $ref: '#/$defs/prefab' } },
     systems: { type: 'array', items: { $ref: '#/$defs/system' } },
     capacity: { type: 'integer', minimum: 1 },
+    terrain: {
+      $comment: 'Компонент карты пола и его prefab порождаются из ассета загрузчиком (TERR-6).',
+      $ref: '#/$defs/terrain',
+    },
   },
 };
 
@@ -193,6 +221,7 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
   'component.schema.json': document('component.schema.json', component, {}),
   'prefab.schema.json': document('prefab.schema.json', prefab, {}),
   'system.schema.json': document('system.schema.json', system, { action, expression, query }),
+  'terrain.schema.json': document('terrain.schema.json', terrain, {}),
   'scene.schema.json': document('scene.schema.json', scene, {
     action,
     component,
@@ -200,6 +229,7 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
     prefab,
     query,
     system,
+    terrain,
   }),
   'scenario.schema.json': document('scenario.schema.json', scenario, {
     action,
@@ -210,6 +240,7 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
     query,
     scene,
     system,
+    terrain,
     vec2,
   }),
 };

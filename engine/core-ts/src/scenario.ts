@@ -64,13 +64,18 @@ export function runScenario(def: ScenarioDef): RunOutput {
     throw new Error(`сценарий "${def.name}": есть "inputs", но нет "players" — слоты не определены (TICK-5)`);
   }
 
-  const { world, systems } = loadScene(def.scene);
+  const { world, systems, terrain } = loadScene(def.scene);
   if (def.players !== undefined) systems.register(new InputSystem({ players: def.players }));
   for (const entry of def.initial ?? []) spawn(world, entry.prefab, entry.overrides);
 
   const state = initialState(world, def.seed);
   // physics не подаётся: реализации ещё нет, а ядро тикает без неё (DI-3).
-  const sim: Simulation = { systems, worldSeed: def.seed, math: mathApi };
+  const sim: Simulation = {
+    systems,
+    worldSeed: def.seed,
+    math: mathApi,
+    ...(terrain !== undefined ? { terrain } : {}),
+  };
 
   const byTick = new Map<number, InputFrame[]>();
   for (const frame of def.inputs ?? []) {

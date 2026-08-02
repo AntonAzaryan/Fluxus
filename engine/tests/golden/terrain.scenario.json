@@ -1,0 +1,59 @@
+{
+  "name": "terrain",
+  "seed": 20260811,
+  "ticks": 3,
+  "scene": {
+    "components": [
+      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "LevelOverride", "fields": { "level": "i32" } }
+    ],
+    "prefabs": [
+      {
+        "name": "Walker",
+        "components": { "Position": { "x": 32768, "y": 32768 }, "Velocity": { "x": 65536, "y": 0 } }
+      },
+      {
+        "name": "Projectile",
+        "components": {
+          "Position": { "x": 32768, "y": 98304 },
+          "Velocity": { "x": 131072, "y": 0 },
+          "LevelOverride": { "level": 3 }
+        }
+      }
+    ],
+    "systems": [
+      {
+        "name": "Movement",
+        "order": 10,
+        "query": { "all": ["Position", "Velocity"] },
+        "as": "e",
+        "do": [
+          {
+            "modifyComponent": {
+              "entity": { "var": "e" },
+              "component": "Position",
+              "values": {
+                "x": {
+                  "+": [
+                    { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "e" }, "Velocity", "x"] }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "terrain": {
+      "width": 4,
+      "height": 3,
+      "tileSize": 65536,
+      "levels": ["0122", "0122", "0011"],
+      "flags": ["..^_", "..^.", "...."]
+    },
+    "capacity": 16
+  },
+  "initial": [{ "prefab": "Walker" }, { "prefab": "Projectile" }]
+}

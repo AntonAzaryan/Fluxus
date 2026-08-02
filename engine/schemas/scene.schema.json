@@ -30,6 +30,10 @@
     "capacity": {
       "type": "integer",
       "minimum": 1
+    },
+    "terrain": {
+      "$comment": "Компонент карты пола и его prefab порождаются из ассета загрузчиком (TERR-6).",
+      "$ref": "#/$defs/terrain"
     }
   },
   "$defs": {
@@ -253,6 +257,51 @@
           "items": {
             "$ref": "#/$defs/action"
           }
+        }
+      }
+    },
+    "terrain": {
+      "title": "Ассет террейна (TERR-2, TERR-3)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height",
+        "tileSize",
+        "levels",
+        "flags"
+      ],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tileSize": {
+          "$comment": "Размер клетки в Q16.16 (FP-1, TERR-2).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "levels": {
+          "$comment": "Строка на ряд, шестнадцатеричная цифра в верхнем регистре на клетку (TERR-3).",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9A-F]+$"
+          },
+          "minItems": 1
+        },
+        "flags": {
+          "$comment": "`.` обычная, `^` рампа, `_` нет пола — вне алфавита карты уровней (TERR-3).",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[.^_]+$"
+          },
+          "minItems": 1
         }
       }
     }

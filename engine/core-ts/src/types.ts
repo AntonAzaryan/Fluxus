@@ -56,6 +56,42 @@ export interface RaycastHit {
   readonly point: Vec2;
 }
 
+// ------------------------------------------------------------------- terrain
+
+/** Отрезок непроходимой границы между клетками (TERR-5). Выводится из карты уровней, не хранится в ассете. */
+export interface CliffEdge {
+  readonly from: Vec2;
+  readonly to: Vec2;
+}
+
+/** Иммутабельная часть террейна: входит в `worldInit` (DET-1) и не снапшотится (TERR-6). */
+export interface TerrainGrid {
+  readonly width: number;
+  readonly height: number;
+  /** Размер клетки в Q16.16 — поле ассета, а не константа ядра (TERR-2). */
+  readonly tileSize: Fixed;
+  /** Уровень клетки, row-major, `[0, 15]` (TERR-1, TERR-3). */
+  readonly levels: Uint8Array;
+  /** Признак рампы, row-major (TERR-3). */
+  readonly ramps: Uint8Array;
+  /** Начальное состояние пола из ассета; живое — в компоненте (TERR-6). */
+  readonly floor: Uint8Array;
+  /** Производная геометрия обрывов; вход для статических коллайдеров физики (TERR-5). */
+  readonly cliffs: readonly CliffEdge[];
+}
+
+/** Компонент-override уровня (ARENA-6) — вторая и последняя конвенция имён в ядре после `POSITION_COMPONENT`. */
+export const LEVEL_OVERRIDE_COMPONENT = 'LevelOverride';
+
+/** Запрос уровня и пола (TERR-4). Опциональна как и физика: сцена без террейна тикает штатно (DI-3). */
+export interface TerrainApi {
+  readonly grid: TerrainGrid;
+  readonly levelAt: (position: Vec2) => number;
+  /** Уровень сущности: override, если он есть, иначе производное от позиции (TERR-4, ARENA-6). */
+  readonly levelOf: (entity: EntityId) => number;
+  readonly hasFloorAt: (position: Vec2) => boolean;
+}
+
 // ---------------------------------------------------------------------- ecs
 
 /** Непрозрачный идентификатор: упаковка index+generation — деталь реализации (ID-1). */
@@ -150,6 +186,8 @@ export interface SystemContext {
   readonly rng: RngStreams;
   readonly math: MathApi;
   readonly physics?: PhysicsApi;
+  /** Есть, если сцена содержит террейн (TERR-4). */
+  readonly terrain?: TerrainApi;
   readonly inputs: readonly InputFrame[];
 }
 

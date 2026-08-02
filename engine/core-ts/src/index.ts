@@ -31,6 +31,16 @@ export type { PlainSnapshot, Serializer } from './serialization.js';
 export type { PlainWorld } from './ecs/world.js';
 export { loadScene } from './scene.js';
 export type { Scene, SceneDef } from './scene.js';
+export {
+  cellAt,
+  createTerrainApi,
+  createTerrainGrid,
+  floorComponentSchema,
+  terrainPrefab,
+  FLOOR_COMPONENT,
+  TERRAIN_PREFAB,
+} from './terrain.js';
+export type { TerrainDef } from './terrain.js';
 export { InputSystem, INPUT_FIELDS } from './inputSystem.js';
 export type { InputSystemOptions } from './inputSystem.js';
 export { runScenario, runScenarioBytes } from './scenario.js';

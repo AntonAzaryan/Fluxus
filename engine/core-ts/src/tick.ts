@@ -22,6 +22,7 @@ import type {
   SimulationState,
   Snapshot,
   SystemContext,
+  TerrainApi,
   TickObserver,
   TickResult,
   WorldState,
@@ -35,6 +36,11 @@ export interface Simulation {
   readonly math: MathApi;
   /** Опциональна на уровне ядра: без неё тик отрабатывает штатно (DI-3). */
   readonly physics?: PhysicsApi;
+  /**
+   * Террейн сцены (TERR-4). Живёт здесь, а не в `SimulationState`: карта
+   * уровней иммутабельна и в снапшот не входит (TERR-6).
+   */
+  readonly terrain?: TerrainApi;
 }
 
 const EMPTY_ENTITIES: ReadonlySet<number> = new Set();
@@ -77,6 +83,7 @@ export function tick(
       rng: state.rng.forSystem(system.name),
       math: sim.math,
       ...(sim.physics !== undefined ? { physics: sim.physics } : {}),
+      ...(sim.terrain !== undefined ? { terrain: sim.terrain } : {}),
       inputs,
     };
     system.run(ctx);
