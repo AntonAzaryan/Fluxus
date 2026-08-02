@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-mvp.local/schemas/system.schema.json",
+  "title": "JSON-описание системы (SYS-1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "order",
+    "do"
+  ],
+  "properties": {
+    "name": {
+      "$comment": "Имя RNG-стрима и ключ подмены (RNG-4, SYS-7).",
+      "type": "string",
+      "minLength": 1
+    },
+    "order": {
+      "$comment": "Равные order недопустимы (DET-3).",
+      "type": "integer"
+    },
+    "query": {
+      "$comment": "Сахар над действием forEach (SYS-1).",
+      "$ref": "#/$defs/query"
+    },
+    "as": {
+      "type": "string",
+      "minLength": 1
+    },
+    "do": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/action"
+      }
+    }
+  },
+  "$defs": {
+    "action": {
+      "$comment": "Узел действия: объект с одним ключом-именем (ACT-1). Состав аргументов проверяет загрузчик.",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "propertyNames": {
+        "enum": [
+          "addComponent",
+          "destroyEntity",
+          "emitEvent",
+          "forEach",
+          "if",
+          "let",
+          "modifyComponent",
+          "removeComponent",
+          "spawnEntity"
+        ]
+      }
+    },
+    "expression": {
+      "$comment": "Узел выражения: объект с одним ключом-оператором (EXPR-1). Арность и типы проверяет загрузчик.",
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "!",
+              "!=",
+              "*",
+              "+",
+              "-",
+              "/",
+              "<",
+              "<=",
+              "==",
+              ">",
+              ">=",
+              "abs",
+              "and",
+              "clamp",
+              "fromInt",
+              "getComponent",
+              "hasComponent",
+              "if",
+              "isAlive",
+              "max",
+              "min",
+              "or",
+              "sqrt",
+              "tick",
+              "toInt",
+              "var",
+              "vec",
+              "vec.add",
+              "vec.dot",
+              "vec.length",
+              "vec.lengthSq",
+              "vec.normalize",
+              "vec.scale",
+              "vec.sub",
+              "vec.x",
+              "vec.y"
+            ]
+          }
+        }
+      ]
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "all": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "any": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "not": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "withTag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "withinRadius": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "center",
+            "radius"
+          ],
+          "properties": {
+            "center": {
+              "$ref": "#/$defs/expression"
+            },
+            "radius": {
+              "$ref": "#/$defs/expression"
+            }
+          }
+        }
+      }
+    }
+  }
+}

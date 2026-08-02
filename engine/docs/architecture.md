@@ -98,7 +98,7 @@
 | 6 | Expression Evaluator | ✅ `engine/core-ts/src/expr.ts`: свой обход JsonLogic-AST, Q16.16, sandbox через тип |
 | 7 | Action Executor | ✅ `engine/core-ts/src/actions.ts`: девять действий, все ECS-мутации командами, `spawn` с переопределением полей prefab'а |
 | 8 | System Evaluator = `EvaluatedSystem` | ✅ `engine/core-ts/src/evaluatedSystem.ts`: JSON-система в том же реестре, `override` по имени, валидация дерева на регистрации |
-| 9 | Serialization + JSON-схемы | Формат компонентов, prefabs и систем, `Serializer` — то, с чем работает редактор |
+| 9 | Serialization + JSON-схемы | ✅ `src/serialization.ts`, `src/scene.ts`, `src/schemas.ts`, `engine/schemas/*.json`: plain-форма мира, конфиг сцены, схемы порождаются из ядра |
 | 10 | CLI + golden-file test suite | Побитовая сверка (`viewpoint = ALL`) |
 | 11 | Terrain: карты уровней и пола, `levelAt`, генерация cliff-геометрии | Height field как входной ассет; нужен редактору (ED-10) и предшествует физике, потому что обрывы — её входные данные |
 | 12 | Editor MVP (Compose) | Системы, prefabs и кисти террейна из UI — гипотеза data-driven архитектуры проверена |

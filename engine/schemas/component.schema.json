@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-mvp.local/schemas/component.schema.json",
+  "title": "Схема компонента (ECS-3)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "fields"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fields": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "enum": [
+          "i32",
+          "fixed"
+        ]
+      }
+    },
+    "defaults": {
+      "$comment": "Значения в Q16.16 для полей типа fixed (FP-1).",
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer"
+      }
+    }
+  }
+}

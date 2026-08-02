@@ -61,7 +61,10 @@ export interface RaycastHit {
 /** Непрозрачный идентификатор: упаковка index+generation — деталь реализации (ID-1). */
 export type EntityId = number;
 
-export type FieldType = 'i32' | 'fixed';
+/** Закрытый набор — из него же порождается JSON-схема компонента (SER-5). */
+export const FIELD_TYPES = ['i32', 'fixed'] as const;
+
+export type FieldType = (typeof FIELD_TYPES)[number];
 
 /** JSON-схема компонента (ECS-3). Float-полей нет по DET-2. */
 export interface ComponentSchema {

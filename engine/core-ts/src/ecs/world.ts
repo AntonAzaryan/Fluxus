@@ -153,6 +153,95 @@ export function createWorld(
 }
 
 /**
+ * Plain-форма мира (SER-1): только числа, массивы чисел и строки. Повторяет
+ * внутреннее устройство, а не «читаемый дамп по живым сущностям»: восстановить
+ * из читаемого дампа `freeList` и поколения нельзя, а без них следующий `spawn`
+ * выдаст другой ID — молчаливая рассинхронизация реплея.
+ *
+ * Массивы обрезаны по `nextIndex`: слоты за ним нулевые по построению.
+ */
+export interface PlainWorld {
+  readonly capacity: number;
+  readonly nextIndex: number;
+  readonly aliveCount: number;
+  readonly generations: readonly number[];
+  readonly alive: readonly number[];
+  readonly freeList: readonly number[];
+  readonly maskWords: readonly number[];
+  /** Компонент → поле → значения по raw-индексу. Ключи отсортированы (SER-6). */
+  readonly components: Readonly<Record<string, Readonly<Record<string, readonly number[]>>>>;
+  /** `[raw-индекс, отсортированные теги]`, по возрастанию индекса (SER-6). */
+  readonly tags: readonly (readonly [number, readonly string[]])[];
+}
+
+export function toPlain(state: WorldState): PlainWorld {
+  const internal = toInternal(state);
+  const used = internal.entities.nextIndex;
+
+  const components: Record<string, Record<string, readonly number[]>> = {};
+  for (const name of [...internal.stores.keys()].sort()) {
+    const store = internal.stores.get(name)!;
+    const fields: Record<string, readonly number[]> = {};
+    for (const field of Object.keys(store.fields).sort()) {
+      fields[field] = Array.from(store.fields[field]!.subarray(0, used));
+    }
+    components[name] = fields;
+  }
+
+  const tags: [number, string[]][] = [];
+  for (const index of [...internal.tags.keys()].sort((a, b) => a - b)) {
+    const set = internal.tags.get(index)!;
+    if (set.size > 0) tags.push([index, [...set].sort()]);
+  }
+
+  return {
+    capacity: internal.capacity,
+    nextIndex: used,
+    aliveCount: internal.entities.aliveCount,
+    generations: Array.from(internal.entities.generations.subarray(0, used)),
+    alive: Array.from(internal.entities.alive.subarray(0, used)),
+    freeList: [...internal.entities.freeList],
+    maskWords: Array.from(internal.masks.words.subarray(0, used * internal.masks.wordsPerEntity)),
+    components,
+    tags,
+  };
+}
+
+/**
+ * Восстанавливает мир из plain-формы. Схемы и prefabs — из того же конфига
+ * сцены, с которым мир был снят: порядок компонентов задаёт их битовые id, а
+ * значит, и смысл `maskWords` (SER-7).
+ */
+export function fromPlain(
+  plain: PlainWorld,
+  schemas: readonly ComponentSchema[],
+  prefabs: readonly PrefabDef[] = [],
+): WorldState {
+  const state = createWorld(schemas, prefabs, plain.capacity);
+  const internal = toInternal(state);
+
+  internal.entities.generations.set(plain.generations);
+  internal.entities.alive.set(plain.alive);
+  internal.entities.freeList = [...plain.freeList];
+  internal.entities.nextIndex = plain.nextIndex;
+  internal.entities.aliveCount = plain.aliveCount;
+  internal.masks.words.set(plain.maskWords);
+
+  for (const [name, fields] of Object.entries(plain.components)) {
+    const store = internal.stores.get(name);
+    if (!store) throw new Error(`fromPlain: компонент "${name}" не объявлен в схемах сцены`);
+    for (const [field, values] of Object.entries(fields)) {
+      const target = store.fields[field];
+      if (!target) throw new Error(`fromPlain: у компонента "${name}" нет поля "${field}"`);
+      target.set(values);
+    }
+  }
+
+  internal.tags = new Map(plain.tags.map(([index, names]) => [index, new Set(names)]));
+  return state;
+}
+
+/**
  * Полная глубокая копия мира. Мир мутабелен (TICK-1), поэтому копия нужна не
  * каждый тик, а только при снятии снапшота в историю (SNAP-4) — с интервалом,
  * который задаёт `HistoryProvider`.
