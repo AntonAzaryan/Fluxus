@@ -13,6 +13,8 @@ export { createCommandBuffer } from './ecs/commands.js';
 export type { CommandBufferHandle } from './ecs/commands.js';
 export { EventBus } from './events.js';
 export * as expr from './expr.js';
+export * as actions from './actions.js';
+export type { Action } from './actions.js';
 export type {
   Expression,
   ExpressionEvaluator,

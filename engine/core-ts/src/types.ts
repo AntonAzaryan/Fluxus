@@ -84,9 +84,12 @@ export interface QuerySpec {
   readonly withTag?: string;
 }
 
+/** Переопределение значений полей prefab'а при спавне: компонент → поле → значение (CMD-6). */
+export type FieldOverrides = Readonly<Record<string, Readonly<Record<string, number>>>>;
+
 /** Единственный канал мутаций для системы (DET-7, CMD-1, CMD-4). */
 export interface CommandBuffer {
-  spawn(prefab: string): void;
+  spawn(prefab: string, overrides?: FieldOverrides): void;
   destroy(entity: EntityId): void;
   addComponent(entity: EntityId, component: string, values?: Readonly<Record<string, number>>): void;
   removeComponent(entity: EntityId, component: string): void;

@@ -1,0 +1,207 @@
+/**
+ * Action Executor (ACT-1..3): исполняет JSON-описание действий над
+ * `SystemContext`. Форма узла та же, что у выражений — один ключ-действие, — но
+ * аргументы именованные: у действия их до шести, половина опциональна, и
+ * позиционный массив читался бы как `["Health", null, {…}, null]`.
+ *
+ * Единственная связь с миром — `ctx.commands` и `ctx.events` (ACT-2, CMD-4):
+ * прямых мутаций в таблице действий нет, поэтому сломать детерминизм из
+ * редактора нечем.
+ */
+import { evaluate, type Expression, type ExprValue, type ExprVars } from './expr.js';
+import type { EntityId, Fixed, FieldOverrides, QuerySpec, SystemContext, Vec2 } from './types.js';
+
+/** Узел действия: объект с ровно одним ключом-именем действия. */
+export type Action = Readonly<Record<string, unknown>>;
+
+/** Исполняет список действий по порядку (ACT-3). */
+export function execute(actions: readonly Action[], ctx: SystemContext, vars: ExprVars = {}): void {
+  for (const action of actions) {
+    const keys = Object.keys(action);
+    if (keys.length !== 1) {
+      throw new Error(`узел должен содержать ровно одно действие, найдено ${keys.length}: ${JSON.stringify(action)}`);
+    }
+    const name = keys[0]!;
+    // hasOwn, а не `name in ACTIONS`: то же правило, что для операторов (EXPR-6).
+    if (!Object.hasOwn(ACTIONS, name)) throw new Error(`неизвестное действие "${name}"`);
+    ACTIONS[name]!(args(action[name], name), ctx, vars);
+  }
+}
+
+// ------------------------------------------------------- чтение аргументов
+
+type Args = Readonly<Record<string, unknown>>;
+
+function args(raw: unknown, action: string): Args {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`действие "${action}": аргументы задаются объектом с именами полей`);
+  }
+  return raw as Args;
+}
+
+function argStr(a: Args, key: string, action: string): string {
+  const value = a[key];
+  if (typeof value !== 'string') {
+    throw new Error(`действие "${action}": "${key}" — строковый литерал, а не выражение`);
+  }
+  return value;
+}
+
+function argExpr(a: Args, key: string, action: string): Expression {
+  if (a[key] === undefined) throw new Error(`действие "${action}": не задан "${key}"`);
+  return a[key] as Expression;
+}
+
+function argBody(a: Args, key: string, action: string): readonly Action[] {
+  const value = a[key];
+  if (!Array.isArray(value)) throw new Error(`действие "${action}": "${key}" — список действий`);
+  return value as readonly Action[];
+}
+
+/** Карта «поле → выражение»; отсутствие эквивалентно пустой карте. */
+function argFields(a: Args, key: string, action: string): Readonly<Record<string, Expression>> {
+  const value = a[key];
+  if (value === undefined) return {};
+  return args(value, action) as Readonly<Record<string, Expression>>;
+}
+
+// ------------------------------------------------------------- вычисления
+
+function num(value: ExprValue, action: string): Fixed {
+  if (typeof value !== 'number') throw new Error(`действие "${action}": ожидалось число, получено ${typeof value}`);
+  return value;
+}
+
+function entityOf(a: Args, ctx: SystemContext, vars: ExprVars, action: string): EntityId {
+  return num(evaluate(argExpr(a, 'entity', action), ctx, vars), action);
+}
+
+/**
+ * Значения полей в порядке отсортированных имён (ACT-3). Порядок ключей объекта
+ * JS зависит от их вида — целочисленные имена всплывают вперёд, — поэтому
+ * опорой для детерминизма он служить не может.
+ */
+function fields(
+  map: Readonly<Record<string, Expression>>,
+  ctx: SystemContext,
+  vars: ExprVars,
+  action: string,
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const field of Object.keys(map).sort()) {
+    result[field] = num(evaluate(map[field]!, ctx, vars), action);
+  }
+  return result;
+}
+
+function overridesOf(a: Args, ctx: SystemContext, vars: ExprVars): FieldOverrides | undefined {
+  const raw = a['overrides'];
+  if (raw === undefined) return undefined;
+  const byComponent = args(raw, 'spawnEntity');
+  const result: Record<string, Record<string, number>> = {};
+  for (const component of Object.keys(byComponent).sort()) {
+    result[component] = fields(
+      args(byComponent[component], 'spawnEntity') as Readonly<Record<string, Expression>>,
+      ctx,
+      vars,
+      'spawnEntity',
+    );
+  }
+  return result;
+}
+
+/** Фильтры запроса — литералы, но центр и радиус `withinRadius` считаются выражениями. */
+function querySpec(raw: unknown, ctx: SystemContext, vars: ExprVars): QuerySpec {
+  const q = args(raw, 'forEach');
+  const names = (key: string): readonly string[] | undefined => {
+    const value = q[key];
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.some((n) => typeof n !== 'string')) {
+      throw new Error(`действие "forEach": "${key}" — список имён компонентов`);
+    }
+    return value as readonly string[];
+  };
+
+  let withinRadius: { center: Vec2; radius: Fixed } | undefined;
+  if (q['withinRadius'] !== undefined) {
+    const spec = args(q['withinRadius'], 'forEach');
+    const center = evaluate(argExpr(spec, 'center', 'forEach'), ctx, vars);
+    if (typeof center !== 'object') throw new Error('действие "forEach": "center" — вектор');
+    withinRadius = { center, radius: num(evaluate(argExpr(spec, 'radius', 'forEach'), ctx, vars), 'forEach') };
+  }
+
+  return {
+    all: names('all'),
+    any: names('any'),
+    not: names('not'),
+    withTag: q['withTag'] === undefined ? undefined : argStr(q, 'withTag', 'forEach'),
+    withinRadius,
+  };
+}
+
+// --------------------------------------------------------------- действия
+
+type ActionFn = (a: Args, ctx: SystemContext, vars: ExprVars) => void;
+
+const ACTIONS: Record<string, ActionFn> = {
+  modifyComponent: (a, ctx, vars) => {
+    const entity = entityOf(a, ctx, vars, 'modifyComponent');
+    const component = argStr(a, 'component', 'modifyComponent');
+    const values = fields(argFields(a, 'values', 'modifyComponent'), ctx, vars, 'modifyComponent');
+    for (const [field, value] of Object.entries(values)) {
+      ctx.commands.setField(entity, component, field, value);
+    }
+  },
+  addComponent: (a, ctx, vars) => {
+    ctx.commands.addComponent(
+      entityOf(a, ctx, vars, 'addComponent'),
+      argStr(a, 'component', 'addComponent'),
+      fields(argFields(a, 'values', 'addComponent'), ctx, vars, 'addComponent'),
+    );
+  },
+  removeComponent: (a, ctx, vars) => {
+    ctx.commands.removeComponent(
+      entityOf(a, ctx, vars, 'removeComponent'),
+      argStr(a, 'component', 'removeComponent'),
+    );
+  },
+  spawnEntity: (a, ctx, vars) => {
+    ctx.commands.spawn(argStr(a, 'prefab', 'spawnEntity'), overridesOf(a, ctx, vars));
+  },
+  destroyEntity: (a, ctx, vars) => {
+    ctx.commands.destroy(entityOf(a, ctx, vars, 'destroyEntity'));
+  },
+  emitEvent: (a, ctx, vars) => {
+    ctx.events.emit(
+      argStr(a, 'type', 'emitEvent'),
+      fields(argFields(a, 'data', 'emitEvent'), ctx, vars, 'emitEvent'),
+    );
+  },
+  if: (a, ctx, vars) => {
+    const cond = evaluate(argExpr(a, 'cond', 'if'), ctx, vars);
+    if (typeof cond !== 'boolean') throw new Error(`действие "if": условие должно быть булевым, получено ${typeof cond}`);
+    const branch = cond ? argBody(a, 'then', 'if') : a['else'] === undefined ? [] : argBody(a, 'else', 'if');
+    execute(branch, ctx, vars);
+  },
+  /** Биндинги вычисляются во внешней области — параллельно, а не по цепочке: иначе результат зависел бы от порядка имён. */
+  let: (a, ctx, vars) => {
+    const bindings = argFields(a, 'bindings', 'let');
+    const scope: Record<string, ExprValue> = { ...vars };
+    for (const key of Object.keys(bindings).sort()) {
+      scope[key] = evaluate(bindings[key]!, ctx, vars);
+    }
+    execute(argBody(a, 'do', 'let'), ctx, scope);
+  },
+  forEach: (a, ctx, vars) => {
+    const as = argStr(a, 'as', 'forEach');
+    const body = argBody(a, 'do', 'forEach');
+    // Результат материализован на момент вызова (QUERY-3), а мутации отложены
+    // до flush (CMD-1) — итерация стабильна независимо от тела.
+    for (const entity of ctx.query(querySpec(a['query'], ctx, vars))) {
+      execute(body, ctx, { ...vars, [as]: entity });
+    }
+  },
+};
+
+/** Имена действий — для валидации дерева на регистрации системы (SYS-3, этап 8). */
+export const actionNames: readonly string[] = Object.keys(ACTIONS);

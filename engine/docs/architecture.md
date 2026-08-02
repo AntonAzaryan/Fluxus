@@ -96,7 +96,7 @@
 | 4 | `System` / `SystemContext` + `SystemRegistry` | ✅ Контракт зафиксирован, DI Math/Physics |
 | 5 | Event Bus + Scheduler + Tick loop | ✅ `tick()` на нативных системах, мутабельный мир |
 | 6 | Expression Evaluator | ✅ `engine/core-ts/src/expr.ts`: свой обход JsonLogic-AST, Q16.16, sandbox через тип |
-| 7 | Action Executor | Все actions через Command Buffer |
+| 7 | Action Executor | ✅ `engine/core-ts/src/actions.ts`: девять действий, все ECS-мутации командами, `spawn` с переопределением полей prefab'а |
 | 8 | System Evaluator = `EvaluatedSystem` | JSON-система в том же реестре — подменяемость проверена |
 | 9 | Serialization + JSON-схемы | Формат компонентов, prefabs и систем, `Serializer` — то, с чем работает редактор |
 | 10 | CLI + golden-file test suite | Побитовая сверка (`viewpoint = ALL`) |

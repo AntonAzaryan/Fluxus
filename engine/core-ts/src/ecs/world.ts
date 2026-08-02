@@ -9,7 +9,7 @@
  * а не проверка по имени: фильтр запроса сводится к одному И по словам вместо
  * строкового поиска на каждую сущность.
  */
-import type { ComponentSchema, EntityId, WorldState } from '../types.js';
+import type { ComponentSchema, EntityId, FieldOverrides, WorldState } from '../types.js';
 import {
   allocate,
   cloneEntityIndex,
@@ -192,11 +192,17 @@ export function componentMasks(state: WorldState): ComponentMasks {
   return toInternal(state).masks;
 }
 
-/** Спавнит сущность из prefab'а (ECS-4). ID выдаётся детерминированно порядком вызовов (ID-2, DET-6). */
-export function spawn(state: WorldState, prefabName: string): EntityId {
+/**
+ * Спавнит сущность из prefab'а (ECS-4). ID выдаётся детерминированно порядком
+ * вызовов (ID-2, DET-6). `overrides` меняет значения полей поверх prefab'а
+ * (CMD-6), но не состав компонентов — состав задаёт только prefab.
+ */
+export function spawn(state: WorldState, prefabName: string, overrides?: FieldOverrides): EntityId {
   const internal = toInternal(state);
   const prefab = internal.prefabs.get(prefabName);
   if (!prefab) throw new Error(`spawn: prefab "${prefabName}" не найден`);
+  // Проверяем до allocate: иначе ошибка оставила бы полусозданную сущность.
+  if (overrides !== undefined) validateOverrides(internal, prefabName, prefab, overrides);
 
   const entity = allocate(internal.entities);
   const index = rawIndexOf(entity);
@@ -209,8 +215,9 @@ export function spawn(state: WorldState, prefabName: string): EntityId {
     const store = internal.stores.get(component);
     if (!store) throw new Error(`spawn: компонент "${component}" не зарегистрирован`);
     setComponent(internal.masks, index, store.id);
+    const override = overrides?.[component];
     for (const field of Object.keys(store.schema.fields)) {
-      const value = values[field] ?? store.schema.defaults?.[field] ?? 0;
+      const value = override?.[field] ?? values[field] ?? store.schema.defaults?.[field] ?? 0;
       store.fields[field]![index] = value;
     }
   }
@@ -218,6 +225,30 @@ export function spawn(state: WorldState, prefabName: string): EntityId {
     internal.tags.set(index, new Set(prefab.tags));
   }
   return entity;
+}
+
+/**
+ * CMD-6: переопределять можно только то, что prefab уже содержит. Молча
+ * проигнорированное поле означало бы способность, которая ничего не делает,
+ * и разбираться в этом пришлось бы по эффекту, а не по ошибке.
+ */
+function validateOverrides(
+  internal: WorldInternal,
+  prefabName: string,
+  prefab: PrefabDef,
+  overrides: FieldOverrides,
+): void {
+  for (const [component, fields] of Object.entries(overrides)) {
+    if (!Object.hasOwn(prefab.components, component)) {
+      throw new Error(`spawn: prefab "${prefabName}" не содержит компонент "${component}"`);
+    }
+    const schema = internal.stores.get(component)?.schema;
+    for (const field of Object.keys(fields)) {
+      if (schema?.fields[field] === undefined) {
+        throw new Error(`spawn: у компонента "${component}" нет поля "${field}"`);
+      }
+    }
+  }
 }
 
 /** Удаляет сущность: generation инкрементируется (ID-3), старые ссылки становятся невалидны. */

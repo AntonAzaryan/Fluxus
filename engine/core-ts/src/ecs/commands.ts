@@ -5,11 +5,11 @@
  * системы видит состояние на её начало (CMD-5, QUERY-3). flush per-system
  * вызывает планировщик (CMD-2), сам буфер за это не отвечает.
  */
-import type { CommandBuffer, EntityId, WorldState } from '../types.js';
+import type { CommandBuffer, EntityId, FieldOverrides, WorldState } from '../types.js';
 import * as world from './world.js';
 
 type Command =
-  | { readonly kind: 'spawn'; readonly prefab: string }
+  | { readonly kind: 'spawn'; readonly prefab: string; readonly overrides?: FieldOverrides }
   | { readonly kind: 'destroy'; readonly entity: EntityId }
   | {
       readonly kind: 'addComponent';
@@ -35,8 +35,8 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
   const commands: Command[] = [];
 
   return {
-    spawn(prefab) {
-      commands.push({ kind: 'spawn', prefab });
+    spawn(prefab, overrides) {
+      commands.push({ kind: 'spawn', prefab, overrides });
     },
     destroy(entity) {
       commands.push({ kind: 'destroy', entity });
@@ -59,7 +59,7 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
         if (cmd.kind !== 'spawn' && !world.isAlive(state, cmd.entity)) continue;
         switch (cmd.kind) {
           case 'spawn':
-            world.spawn(state, cmd.prefab);
+            world.spawn(state, cmd.prefab, cmd.overrides);
             break;
           case 'destroy':
             world.destroy(state, cmd.entity);
