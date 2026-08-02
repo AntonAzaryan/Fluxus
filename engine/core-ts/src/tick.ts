@@ -39,7 +39,7 @@ export interface Simulation {
 
 const EMPTY_ENTITIES: ReadonlySet<number> = new Set();
 
-/** Заглушка до этапа 9: интерфейс финальный, наполнит его dirty-tracking (OBS-6). */
+/** Заглушка до этапа 14: интерфейс финальный, наполнит его dirty-tracking (OBS-6). */
 const EMPTY_CHANGES: ChangeSet = {
   isEmpty: true,
   changedEntities: () => EMPTY_ENTITIES,
@@ -88,8 +88,8 @@ export function tick(
   return {
     state,
     tick: tickNumber,
-    mode: 'Running', // до этапа 12 машины состояний мира нет
-    isReplay: false, // до этапа 12 честный проход всегда первый
+    mode: 'Running', // до этапа 16 машины состояний мира нет
+    isReplay: false, // до этапа 16 честный проход всегда первый
     events,
     changes: EMPTY_CHANGES,
   };

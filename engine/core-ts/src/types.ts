@@ -45,7 +45,7 @@ export interface MathApi {
 
 /**
  * Опциональная зависимость (DI-3): ядро собирается и тикает без неё.
- * Реализация появится на этапе 14; здесь зафиксирован только контракт.
+ * Реализация появится на этапе 13; здесь зафиксирован только контракт.
  */
 export interface PhysicsApi {
   readonly raycast: (from: Vec2, to: Vec2) => RaycastHit | null;
@@ -168,7 +168,7 @@ export interface InputFrame {
 
 export type WorldMode = 'Running' | 'Paused' | 'Rewinding';
 
-/** Заглушка до этапа 9: интерфейс финальный, наполнение появится с dirty-tracking (OBS-6). */
+/** Заглушка до этапа 14: интерфейс финальный, наполнение появится с dirty-tracking (OBS-6). */
 export interface ChangeSet {
   readonly isEmpty: boolean;
   changedEntities(component: string): ReadonlySet<EntityId>;
