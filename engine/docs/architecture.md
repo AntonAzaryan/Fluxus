@@ -85,11 +85,11 @@
 | Этап | Задача | Результат |
 |---|---|---|
 | 0 | Формальная спецификация core | ✅ `openspec/specs/` + JSON-схемы (схемы ещё нет) |
-| 1 | Fixed-point Math API | Библиотека + тесты (mul/div/overflow, truncate toward zero) |
-| 2 | ECS foundation + Query API + Command Buffer | Детерминированный обход, deferred-мутации, flush per-system |
-| 3 | Entity IDs + RNG streams | Generational IDs; именованные стримы от world seed |
-| 4 | `System` / `SystemContext` + `SystemRegistry` | Контракт зафиксирован до первого tick loop |
-| 5 | Event Bus + Scheduler + Tick loop | `tick()` на нативных системах |
+| 1 | Fixed-point Math API | ✅ `engine/core-ts/src/fixed.ts`, `vector.ts`, `mathApi.ts` |
+| 2 | ECS foundation + Query API + Command Buffer | ✅ Собственное SoA-хранилище, битовые маски, flush per-system |
+| 3 | Entity IDs + RNG streams | ✅ Generational IDs 24+24; xorshift128 с именованными стримами |
+| 4 | `System` / `SystemContext` + `SystemRegistry` | ✅ Контракт зафиксирован, DI Math/Physics |
+| 5 | Event Bus + Scheduler + Tick loop | ✅ `tick()` на нативных системах, мутабельный мир |
 | 6 | Expression Evaluator | Fixed-point в выражениях, `getComponent`, sandbox |
 | 7 | Action Executor | Все actions через Command Buffer |
 | 8 | System Evaluator = `EvaluatedSystem` | JSON-система в том же реестре — подменяемость проверена |
@@ -105,6 +105,8 @@
 | 18 | (Будущее) Rust-порт ядра | Cross-language парность, включая LoS |
 
 Заглушки в `TickResult`: поле `changes` присутствует в контракте с шага 5, но до шага 9 — пустой `ChangeSet`. Поля `mode`/`isReplay` присутствуют с шага 5, но до шага 12 — константы `Running` / `false`.
+
+Что изменилось по ходу шагов 1–5 (детали — в архивных change'ах `2026-08-02-implement-deterministic-core` и `2026-08-02-mutable-world-state`): сторонняя ECS-библиотека не используется (ECS-1), мир мутабелен и история живёт снапшотами по интервалу (TICK-1, SNAP-4). Шаг 9 из-за этого упрощается: dirty-tracking остаётся нужен сетевой дельте и `TickResult.changes`, но перестаёт быть условием того, чтобы история влезла в память.
 
 Каждый этап заводится как change: `/opsx:propose "<этап>"`.
 

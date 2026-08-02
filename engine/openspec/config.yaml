@@ -4,7 +4,7 @@ context: |
   Движок сетевой 2.5D PvP-арены (Warlocks-like, до 10 игроков, изометрия).
   Продуктовый контекст — docs/one-pager.md, архитектурный обзор и roadmap — docs/architecture.md.
 
-  Стек: TypeScript (ядро MVP), bitecs (SoA/TypedArray), JsonLogic (выражения),
+  Стек: TypeScript (ядро MVP), собственное SoA-хранилище на TypedArray, JsonLogic (выражения),
   MessagePack (рантайм-снапшоты), Kotlin + Compose Multiplatform (редактор).
   Задел на вторую реализацию ядра на Rust. Никакого WASM в MVP.
 

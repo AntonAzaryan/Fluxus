@@ -1,0 +1,258 @@
+import { describe, expect, it } from 'vitest';
+import {
+  addComponent,
+  createWorld,
+  cloneWorld,
+  destroy,
+  getField,
+  hasComponent,
+  hasTag,
+  indexOf,
+  isAlive,
+  listAlive,
+  removeComponent,
+  setField,
+  spawn,
+  type PrefabDef,
+} from '../src/ecs/world.js';
+import { query } from '../src/ecs/query.js';
+import { indexOf as rawIndexOf } from '../src/ecs/entityIndex.js';
+import { createCommandBuffer } from '../src/ecs/commands.js';
+import type { ComponentSchema } from '../src/types.js';
+
+const Position: ComponentSchema = { name: 'Position', fields: { x: 'fixed', y: 'fixed' } };
+const Health: ComponentSchema = { name: 'Health', fields: { hp: 'i32' }, defaults: { hp: 100 } };
+const Stealth: ComponentSchema = { name: 'Stealth', fields: { flag: 'i32' } };
+
+const schemas = [Position, Health, Stealth];
+
+function prefab(
+  name: string,
+  components: PrefabDef['components'],
+  tags?: readonly string[],
+): PrefabDef {
+  return { name, components, tags };
+}
+
+describe('createWorld: prefab (ECS-5)', () => {
+  it('роняет загрузку prefab со ссылкой на несуществующее поле', () => {
+    expect(() =>
+      createWorld(schemas, [prefab('Bad', { Health: { notAField: 1 } })]),
+    ).toThrow(/notAField/);
+  });
+
+  it('роняет загрузку prefab со ссылкой на несуществующий компонент', () => {
+    expect(() => createWorld(schemas, [prefab('Bad2', { Ghost: {} })])).toThrow(/Ghost/);
+  });
+
+  it('роняет загрузку схемы, чей default ссылается на несуществующее поле', () => {
+    const Bad: ComponentSchema = { name: 'Bad', fields: { a: 'i32' }, defaults: { b: 1 } };
+    expect(() => createWorld([Bad], [])).toThrow(/b/);
+  });
+});
+
+describe('spawn/destroy: ID-1..3, DET-6', () => {
+  it('ID-2/DET-6: последовательный спавн даёт одинаковые ID при повторном прогоне с нуля', () => {
+    const scenario = () => {
+      const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+      return [spawn(world, 'P'), spawn(world, 'P'), spawn(world, 'P')];
+    };
+    const first = scenario();
+    const second = scenario();
+    expect(second).toEqual(first);
+
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const ids = [spawn(world, 'P'), spawn(world, 'P'), spawn(world, 'P')];
+    expect(ids.map((e) => indexOf(world, e))).toEqual([
+      indexOf(world, ids[0]!),
+      indexOf(world, ids[0]!) + 1,
+      indexOf(world, ids[0]!) + 2,
+    ]);
+  });
+
+  it('ID-1/ID-3: старая ссылка на переиспользованный слот невалидна', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })], 4);
+    const a = spawn(world, 'P');
+    const indexA = indexOf(world, a);
+    destroy(world, a);
+    const b = spawn(world, 'P'); // переиспользует слот a
+
+    expect(indexOf(world, b)).toBe(indexA); // слот действительно переиспользован
+    expect(a).not.toBe(b); // generation другой — ссылки различны
+    expect(isAlive(world, a)).toBe(false); // старая ссылка невалидна
+    expect(isAlive(world, b)).toBe(true);
+  });
+});
+
+describe('Query (QUERY-1..3)', () => {
+  it('QUERY-1: all + not + withinRadius + withTag отбирает ровно нужное; граница радиуса включена', () => {
+    const prefabs = [
+      prefab('Enemy', { Position: {}, Health: {} }, ['enemy']),
+      prefab('StealthEnemy', { Position: {}, Health: {}, Stealth: { flag: 1 } }, ['enemy']),
+      prefab('Ally', { Position: {}, Health: {} }, ['ally']),
+    ];
+    const world = createWorld(schemas, prefabs);
+
+    const onBoundary = spawn(world, 'Enemy'); // (3,4) — dist ровно 5
+    setField(world, onBoundary, 'Position', 'x', 3);
+    setField(world, onBoundary, 'Position', 'y', 4);
+
+    const outside = spawn(world, 'Enemy'); // (3,5) — dist sqrt(34) > 5
+    setField(world, outside, 'Position', 'x', 3);
+    setField(world, outside, 'Position', 'y', 5);
+
+    const stealthy = spawn(world, 'StealthEnemy'); // в радиусе, но со Stealth — исключён `not`
+    setField(world, stealthy, 'Position', 'x', 0);
+    setField(world, stealthy, 'Position', 'y', 0);
+
+    const ally = spawn(world, 'Ally'); // в радиусе, но не тот тег
+    setField(world, ally, 'Position', 'x', 1);
+    setField(world, ally, 'Position', 'y', 1);
+
+    const result = query(world, {
+      all: ['Health', 'Position'],
+      not: ['Stealth'],
+      withTag: 'enemy',
+      withinRadius: { center: { x: 0, y: 0 }, radius: 5 },
+    });
+
+    expect(Array.from(result)).toEqual([onBoundary]);
+  });
+
+  it('QUERY-2: порядок обхода одинаков при повторных прогонах, включая переиспользование слотов', () => {
+    const scenario = () => {
+      const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+      const a = spawn(world, 'P');
+      spawn(world, 'P');
+      destroy(world, a);
+      spawn(world, 'P'); // переиспользует слот a
+      spawn(world, 'P');
+      return Array.from(query(world, { all: ['Health'] }));
+    };
+
+    const first = scenario();
+    const second = scenario();
+    expect(second).toEqual(first);
+
+    // QUERY-2: порядок по возрастанию RAW-ИНДЕКСА, а не значения EntityId.
+    // Переиспользованный слот 0 несёт бо́льший generation, то есть больший id,
+    // но обходится первым — порядок задаётся слотом, а не идентификатором.
+    const indices = first.map((id) => rawIndexOf(id));
+    expect(indices).toEqual([...indices].sort((x, y) => x - y));
+    expect(first[0]).toBeGreaterThan(first[1]!); // именно тот случай, когда id убывает
+  });
+
+  it('QUERY-3: система удаляет часть найденных сущностей в цикле — снапшот стабилен', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const ids = [spawn(world, 'P'), spawn(world, 'P'), spawn(world, 'P')];
+    const result = query(world, { all: ['Health'] });
+    expect(result.length).toBe(3);
+
+    let visited = 0;
+    for (const entity of result) {
+      destroy(world, entity); // мутация мира прямо во время обхода снапшота
+      visited += 1;
+    }
+
+    expect(visited).toBe(3); // ни пропусков, ни повторов
+    expect(Array.from(result)).toEqual([...ids].sort((a, b) => a - b));
+    expect(listAlive(world).length).toBe(0); // мир действительно опустел
+  });
+});
+
+describe('Command Buffer (CMD-1..5)', () => {
+  it('CMD-5: query видит сущность до flush, даже после команды на её удаление', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const e = spawn(world, 'P');
+    const commands = createCommandBuffer(world);
+
+    commands.destroy(e);
+    expect(Array.from(query(world, { all: ['Health'] }))).toContain(e);
+
+    commands.flush();
+    expect(Array.from(query(world, { all: ['Health'] }))).not.toContain(e);
+  });
+
+  it('CMD-3: две команды на одно поле применяются в порядке создания', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const e = spawn(world, 'P');
+    const commands = createCommandBuffer(world);
+
+    commands.setField(e, 'Health', 'hp', 10);
+    commands.setField(e, 'Health', 'hp', 20);
+    commands.flush();
+    expect(getField(world, e, 'Health', 'hp')).toBe(20);
+
+    const commands2 = createCommandBuffer(world);
+    commands2.setField(e, 'Health', 'hp', 20);
+    commands2.setField(e, 'Health', 'hp', 10);
+    commands2.flush();
+    expect(getField(world, e, 'Health', 'hp')).toBe(10); // порядок, не значение, определяет итог
+  });
+
+  it('CMD-2: спавн и структурная команда видны следующей "системе" сразу после flush', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const commands = createCommandBuffer(world);
+    commands.spawn('P');
+    commands.flush();
+    expect(query(world, { all: ['Health'] }).length).toBe(1);
+  });
+
+  it('addComponent/removeComponent через буфер меняют принадлежность компонента', () => {
+    const world = createWorld(schemas, [prefab('P', {})]);
+    const e = spawn(world, 'P');
+    expect(hasComponent(world, e, 'Health')).toBe(false);
+
+    const commands = createCommandBuffer(world);
+    commands.addComponent(e, 'Health', { hp: 42 });
+    commands.flush();
+    expect(hasComponent(world, e, 'Health')).toBe(true);
+    expect(getField(world, e, 'Health', 'hp')).toBe(42);
+
+    const commands2 = createCommandBuffer(world);
+    commands2.removeComponent(e, 'Health');
+    commands2.flush();
+    expect(hasComponent(world, e, 'Health')).toBe(false);
+  });
+});
+
+describe('cloneWorld', () => {
+  it('клон не делит состояние с оригиналом', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const e = spawn(world, 'P');
+    const copy = cloneWorld(world);
+
+    setField(copy, e, 'Health', 'hp', 999);
+    destroy(copy, e);
+
+    expect(getField(world, e, 'Health', 'hp')).toBe(100);
+    expect(isAlive(world, e)).toBe(true);
+    expect(isAlive(copy, e)).toBe(false);
+  });
+
+  it('клон не мешает дальнейшему детерминированному спавну в оригинале', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    spawn(world, 'P');
+    const copy = cloneWorld(world);
+    spawn(copy, 'P'); // мутирует только копию
+
+    const nextInOriginal = spawn(world, 'P');
+    const worldFresh = createWorld(schemas, [prefab('P', { Health: {} })]);
+    spawn(worldFresh, 'P');
+    const nextInFresh = spawn(worldFresh, 'P');
+
+    expect(nextInOriginal).toBe(nextInFresh); // клон не повлиял на генерацию ID оригинала
+  });
+});
+
+describe('capacity', () => {
+  it('spawn за пределами capacity падает с явной ошибкой, а не портит данные', () => {
+    // Свой EntityIndex выдаёт индексы с нуля, поэтому capacity=2 вмещает ровно
+    // две сущности. Молчаливая порча тут особенно коварна: запись за границу
+    // Int32Array в JS не бросает, а просто теряется.
+    const world = createWorld(schemas, [prefab('P', { Health: {} })], 2);
+    spawn(world, 'P');
+    spawn(world, 'P');
+    expect(() => spawn(world, 'P')).toThrow(/capacity/);
+  });
+});
