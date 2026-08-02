@@ -8,12 +8,19 @@
 
 Требования и проектная документация движка. Источник правды о том, каким движок должен быть.
 
+- `openspec/specs/` — **нормативные требования**, 14 capability, 163 требования (DET-, ECS-, NET-, FOW- …)
+- `docs/architecture.md` — обзор слоёв, карта спецификаций, roadmap, открытые вопросы
 - `docs/one-pager.md` — что за проект
-- `docs/tech-requirements.md` — технические требования
-- `docs/sessions/` — логи проектных сессий
+- `docs/sessions/` — логи проектных сессий (история обсуждений, вне OpenSpec)
 - `docs/templates/` — шаблоны ADR и сессий
 
-Сюда позже приедет `openspec/`.
+```sh
+cd engine
+openspec list --specs               # список capability
+openspec spec show netcode          # одна спецификация
+openspec validate --specs --strict  # проверка формата
+/opsx:propose "<этап roadmap>"      # новое изменение
+```
 
 ## `draft/` — черновик-песочница
 
