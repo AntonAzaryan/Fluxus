@@ -10,6 +10,7 @@
  * полный мир, `viewpoint = ALL` — FoW живёт в транспорте, а не в ядре.
  */
 import { spawn } from './ecs/world.js';
+import { InputSystem } from './inputSystem.js';
 import { mathApi } from './mathApi.js';
 import { loadScene, type SceneDef } from './scene.js';
 import { prettyJsonSerializer, snapshotToPlain, type PlainSnapshot } from './serialization.js';
@@ -30,6 +31,8 @@ export interface ScenarioDef {
   readonly initial?: readonly ScenarioSpawn[];
   /** Канонические вводы тика (TICK-2); раскладываются по собственному полю `tick`. */
   readonly inputs?: readonly InputFrame[];
+  /** Порядок игроков задаёт слоты (TICK-5); обязателен, если есть `inputs`. */
+  readonly players?: readonly string[];
 }
 
 /**
@@ -57,7 +60,12 @@ export function runScenario(def: ScenarioDef): RunOutput {
     throw new Error(`сценарий "${def.name}": "ticks" — неотрицательное целое`);
   }
 
+  if (def.inputs !== undefined && def.inputs.length > 0 && def.players === undefined) {
+    throw new Error(`сценарий "${def.name}": есть "inputs", но нет "players" — слоты не определены (TICK-5)`);
+  }
+
   const { world, systems } = loadScene(def.scene);
+  if (def.players !== undefined) systems.register(new InputSystem({ players: def.players }));
   for (const entry of def.initial ?? []) spawn(world, entry.prefab, entry.overrides);
 
   const state = initialState(world, def.seed);

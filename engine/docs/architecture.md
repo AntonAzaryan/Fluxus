@@ -99,7 +99,7 @@
 | 7 | Action Executor | ✅ `engine/core-ts/src/actions.ts`: девять действий, все ECS-мутации командами, `spawn` с переопределением полей prefab'а |
 | 8 | System Evaluator = `EvaluatedSystem` | ✅ `engine/core-ts/src/evaluatedSystem.ts`: JSON-система в том же реестре, `override` по имени, валидация дерева на регистрации |
 | 9 | Serialization + JSON-схемы | ✅ `src/serialization.ts`, `src/scene.ts`, `src/schemas.ts`, `engine/schemas/*.json`: plain-форма мира, конфиг сцены, схемы порождаются из ядра |
-| 10 | CLI + golden-file test suite | ✅ `src/scenario.ts`, `bin/sim.mjs`, `engine/tests/golden/`: прогон сценария из одного JSON, побитовая сверка (`viewpoint = ALL`). инпуты эталонами не покрыты — в DSL нет доступа к `InputFrame` |
+| 10 | CLI + golden-file test suite | ✅ `src/scenario.ts`, `bin/sim.mjs`, `engine/tests/golden/`: прогон сценария из одного JSON, побитовая сверка (`viewpoint = ALL`). Ввод и RNG вошли в эталоны change'ами `input-as-components` и `random-in-dsl` |
 | 11 | Terrain: карты уровней и пола, `levelAt`, генерация cliff-геометрии | Height field как входной ассет; нужен редактору (ED-10) и предшествует физике, потому что обрывы — её входные данные |
 | 12 | Editor MVP (Compose) | Системы, prefabs и кисти террейна из UI — гипотеза data-driven архитектуры проверена |
 | 13 | Physics + raycast/LoS | Примитивные коллизии + детерминированный raycast |

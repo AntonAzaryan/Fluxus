@@ -131,3 +131,19 @@ describe('ошибки формы AST', () => {
     expect(() => evaluate({ '==': [position(1), position(2)] }, world)).toThrow(/покомпонентно/);
   });
 });
+
+describe('bitTest (EXPR-2)', () => {
+  it('читает отдельный бит сырой маски', () => {
+    expect(evaluate({ bitTest: [5, 0] }, world)).toBe(true);
+    expect(evaluate({ bitTest: [5, 1] }, world)).toBe(false);
+    expect(evaluate({ bitTest: [5, 2] }, world)).toBe(true);
+  });
+
+  it('старший бит i32 читается как бит 31, а не как знак', () => {
+    expect(evaluate({ bitTest: [-2147483648, 31] }, world)).toBe(true);
+  });
+
+  it('номер бита вне 0..31 — ошибка', () => {
+    expect(() => evaluate({ bitTest: [1, 32] }, world)).toThrow(/0\.\.31/);
+  });
+});

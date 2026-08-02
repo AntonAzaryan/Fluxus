@@ -176,6 +176,11 @@ const scenario: Json = {
       },
     },
     inputs: { type: 'array', items: { $ref: '#/$defs/inputFrame' } },
+    players: {
+      $comment: 'Порядок задаёт слоты игроков (TICK-5); обязателен вместе с inputs.',
+      type: 'array',
+      items: { type: 'string', minLength: 1 },
+    },
   },
 };
 

@@ -31,6 +31,8 @@ export type { PlainSnapshot, Serializer } from './serialization.js';
 export type { PlainWorld } from './ecs/world.js';
 export { loadScene } from './scene.js';
 export type { Scene, SceneDef } from './scene.js';
+export { InputSystem, INPUT_FIELDS } from './inputSystem.js';
+export type { InputSystemOptions } from './inputSystem.js';
 export { runScenario, runScenarioBytes } from './scenario.js';
 export type { RunOutput, ScenarioDef, ScenarioSpawn, TickRecord } from './scenario.js';
 export { schemaFiles, schemaFileContent } from './schemas.js';

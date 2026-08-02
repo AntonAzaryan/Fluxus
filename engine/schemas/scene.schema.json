@@ -114,6 +114,7 @@
               ">=",
               "abs",
               "and",
+              "bitTest",
               "clamp",
               "fromInt",
               "getComponent",

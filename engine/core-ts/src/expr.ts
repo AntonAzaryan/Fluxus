@@ -178,6 +178,20 @@ const OPS: Record<string, OpFn> = {
   /** Явное приведение масштаба для полей типа `i32` (EXPR-2). */
   fromInt: num1('fromInt', (m, a) => m.fromInt(a)),
   toInt: num1('toInt', (m, a) => m.toInt(a)),
+  /**
+   * Проверка бита маски `i32` — сырое целое, без Q16.16 (EXPR-2). Единственная
+   * битовая операция в таблице: маска читается по одному биту, арифметика над
+   * ней не определена, а фронт кнопки (TICK-4) иначе в JSON не выразить.
+   */
+  bitTest: (args, w, v) => {
+    arity('bitTest', args, 2);
+    const mask = num(evaluate(args[0]!, w, v), 'bitTest');
+    const bit = num(evaluate(args[1]!, w, v), 'bitTest');
+    if (!Number.isInteger(bit) || bit < 0 || bit > 31) {
+      throw new Error(`оператор "bitTest": номер бита — целое 0..31, получено ${bit}`);
+    }
+    return ((mask >>> bit) & 1) === 1;
+  },
 
   // сравнения: Q16.16 монотонен, поэтому сравнение обычное числовое
   '<': num2('<', (_m, a, b) => a < b),

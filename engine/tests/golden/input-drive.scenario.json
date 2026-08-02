@@ -1,0 +1,103 @@
+{
+  "name": "input-drive",
+  "seed": 99,
+  "ticks": 5,
+  "players": ["p1", "p2"],
+  "scene": {
+    "components": [
+      { "name": "Player", "fields": { "slot": "i32" } },
+      {
+        "name": "Input",
+        "fields": {
+          "aimDir": "fixed",
+          "buttons": "i32",
+          "moveX": "fixed",
+          "moveY": "fixed",
+          "prevButtons": "i32",
+          "seq": "i32"
+        }
+      },
+      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } }
+    ],
+    "prefabs": [
+      {
+        "name": "Hero",
+        "components": {
+          "Player": { "slot": 0 },
+          "Input": { "aimDir": 0, "buttons": 0, "moveX": 0, "moveY": 0, "prevButtons": 0, "seq": 0 },
+          "Position": { "x": 0, "y": 0 }
+        }
+      }
+    ],
+    "systems": [
+      {
+        "name": "Movement",
+        "order": 10,
+        "query": { "all": ["Position", "Input"] },
+        "as": "e",
+        "do": [
+          {
+            "modifyComponent": {
+              "entity": { "var": "e" },
+              "component": "Position",
+              "values": {
+                "x": {
+                  "+": [
+                    { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "e" }, "Input", "moveX"] }
+                  ]
+                },
+                "y": {
+                  "+": [
+                    { "getComponent": [{ "var": "e" }, "Position", "y"] },
+                    { "getComponent": [{ "var": "e" }, "Input", "moveY"] }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "Cast",
+        "order": 20,
+        "query": { "all": ["Input", "Player"] },
+        "as": "e",
+        "do": [
+          {
+            "if": {
+              "cond": {
+                "and": [
+                  { "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 0] },
+                  { "!": [{ "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "prevButtons"] }, 0] }] }
+                ]
+              },
+              "then": [
+                {
+                  "emitEvent": {
+                    "type": "Cast",
+                    "data": {
+                      "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] },
+                      "tick": { "tick": [] }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "capacity": 8
+  },
+  "initial": [
+    { "prefab": "Hero" },
+    { "prefab": "Hero", "overrides": { "Player": { "slot": 1 } } }
+  ],
+  "inputs": [
+    { "tick": 1, "playerId": "p1", "seq": 1, "move": { "x": 65536, "y": 0 }, "aimDir": 0, "buttons": 1 },
+    { "tick": 2, "playerId": "p1", "seq": 2, "move": { "x": 65536, "y": 0 }, "aimDir": 0, "buttons": 1 },
+    { "tick": 3, "playerId": "p1", "seq": 3, "move": { "x": 0, "y": 0 }, "aimDir": 0, "buttons": 0 },
+    { "tick": 4, "playerId": "p2", "seq": 1, "move": { "x": 0, "y": 131072 }, "aimDir": 0, "buttons": 1 }
+  ]
+}

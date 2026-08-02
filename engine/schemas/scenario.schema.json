@@ -56,6 +56,14 @@
       "items": {
         "$ref": "#/$defs/inputFrame"
       }
+    },
+    "players": {
+      "$comment": "Порядок задаёт слоты игроков (TICK-5); обязателен вместе с inputs.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     }
   },
   "$defs": {
@@ -140,6 +148,7 @@
               ">=",
               "abs",
               "and",
+              "bitTest",
               "clamp",
               "fromInt",
               "getComponent",
