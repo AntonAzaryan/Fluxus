@@ -7,10 +7,11 @@ import {
   isVisibleTo,
   teamBit,
   VisibilitySystem,
-  FOW_COMPONENTS,
+  VISION_MODIFIER_COMPONENT,
   MAX_TEAMS,
   VISIBILITY_COMPONENT,
 } from '../src/systems/visibility.js';
+import { requireModifierList } from '../src/systems/modifiers.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, tick, type Simulation } from '../src/sim/tick.js';
 import { LEVEL_OVERRIDE_COMPONENT, type EntityId, type FieldOverrides, type TickResult } from '../src/types.js';
@@ -31,8 +32,8 @@ const SCENE: SceneDef = {
     { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
     { name: 'Collider', fields: { halfX: 'fixed', halfY: 'fixed', radius: 'fixed', shape: 'i32' } },
     { name: LEVEL_OVERRIDE_COMPONENT, fields: { level: 'i32' } },
-    ...FOW_COMPONENTS,
   ],
+  fog: true,
   prefabs: [
     {
       name: 'Watcher',
@@ -68,20 +69,23 @@ const SCENE: SceneDef = {
 };
 
 function harness() {
-  const { world, terrain, systems } = loadScene(SCENE);
+  const { world, terrain, systems, modifiers } = loadScene(SCENE);
   const physicsWorld = new PhysicsWorld(staticsFromTerrain(terrain!.grid), terrain!.grid.tileSize);
-  systems.register(new VisibilitySystem());
+  const visionModifiers = requireModifierList(modifiers, VISION_MODIFIER_COMPONENT);
+  systems.register(new VisibilitySystem(visionModifiers));
   const sim: Simulation = {
     systems,
     worldSeed: 1,
     math: mathApi,
     physics: createPhysicsApi(world, physicsWorld),
     terrain: terrain!,
+    modifiers,
   };
   const state = initialState(world, 1);
 
   return {
     world,
+    visionModifiers,
     place: (prefab: string, overrides?: FieldOverrides) => spawn(world, prefab, overrides),
     step: (): TickResult => tick(sim, state),
     mask: (entity: EntityId): number => getField(world, entity, VISIBILITY_COMPONENT, 'visibleTo'),

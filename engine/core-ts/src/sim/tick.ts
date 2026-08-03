@@ -29,6 +29,7 @@ import {
   type ChangeSet,
   type InputFrame,
   type MathApi,
+  type ModifierRegistry,
   type PhysicsApi,
   type SimulationState,
   type Snapshot,
@@ -54,6 +55,12 @@ export interface Simulation {
   readonly terrain?: TerrainApi;
   /** Арена сцены (ARENA-1): центр иммутабелен, радиус лежит в компоненте. */
   readonly arena?: ArenaApi;
+  /**
+   * Списки источников-модификаторов сцены (TIME-7, FOW-3). Живут здесь по той
+   * же причине, что террейн: порождены данными сцены и иммутабельны, а их
+   * содержимое — обычные компоненты, которые снапшотятся сами.
+   */
+  readonly modifiers?: ModifierRegistry;
 }
 
 export function initialState(world: WorldState, worldSeed: number): SimulationState {
@@ -121,6 +128,7 @@ export function advance(
       ...(sim.physics !== undefined ? { physics: sim.physics } : {}),
       ...(sim.terrain !== undefined ? { terrain: sim.terrain } : {}),
       ...(sim.arena !== undefined ? { arena: sim.arena } : {}),
+      ...(sim.modifiers !== undefined ? { modifiers: sim.modifiers } : {}),
       inputs,
       // TIME-3: множитель берётся из уже сведённого `TimeScale.value`; сведение
       // списка источников — работа `TimeScaleSystem` (TIME-7), не тика.

@@ -50,6 +50,23 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
     setField(entity, component, field, value) {
       commands.push({ kind: 'setField', entity, component, field, value });
     },
+    /**
+     * CMD-5: точечное чтение уже отложенного. Обратный проход — потому что
+     * побеждает последняя команда на поле, как и на flush (CMD-3).
+     *
+     * ponytail: O(команд в буфере) на вызов. Буфер флашится в конце каждой
+     * системы, поэтому список короткий; индекс по адресу поля — когда
+     * распределение слотов станет горячим.
+     */
+    peekField(entity, component, field) {
+      for (let i = commands.length - 1; i >= 0; i--) {
+        const cmd = commands[i]!;
+        if (cmd.kind === 'setField' && cmd.entity === entity && cmd.component === component && cmd.field === field) {
+          return cmd.value;
+        }
+      }
+      return undefined;
+    },
     flush() {
       for (const cmd of commands) {
         // Команда, адресованная уже умершей сущности, отбрасывается: иначе она

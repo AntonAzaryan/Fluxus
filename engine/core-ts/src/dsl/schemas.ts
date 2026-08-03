@@ -133,6 +133,36 @@ const terrain: Json = {
   },
 };
 
+const vec2: Json = {
+  $comment: 'Компоненты в Q16.16 (FP-1).',
+  type: 'object',
+  additionalProperties: false,
+  required: ['x', 'y'],
+  properties: { x: { type: 'integer' }, y: { type: 'integer' } },
+};
+
+const arena: Json = {
+  title: 'Ассет арены (ARENA-1)',
+  type: 'object',
+  additionalProperties: false,
+  required: ['center', 'radius'],
+  properties: {
+    center: { $comment: 'Иммутабельный центр в Q16.16.', $ref: '#/$defs/vec2' },
+    radius: { $comment: 'Стартовый радиус в Q16.16; дальше живёт в компоненте (ARENA-4).', type: 'integer' },
+  },
+};
+
+const tweenDef: Json = {
+  title: 'Определение твина (TWEEN-1, TWEEN-3)',
+  type: 'object',
+  additionalProperties: false,
+  required: ['target'],
+  properties: {
+    target: { $comment: 'Путь к полю компонента, например "Health.value" (TWEEN-3).', type: 'string', minLength: 1 },
+    onComplete: { $comment: 'Исполняется по завершении твина (TWEEN-4).', type: 'array', items: { $ref: '#/$defs/action' } },
+  },
+};
+
 const scene: Json = {
   title: 'Сцена (SER-7)',
   type: 'object',
@@ -151,15 +181,29 @@ const scene: Json = {
       $comment: 'Компонент карты пола и его prefab порождаются из ассета загрузчиком (TERR-6).',
       $ref: '#/$defs/terrain',
     },
+    arena: {
+      $comment: 'Компоненты радиуса и состояния границы и prefab порождаются из ассета загрузчиком (ARENA-1).',
+      $ref: '#/$defs/arena',
+    },
+    timeScale: {
+      $comment: 'Подключает TimeScale, TimeScaleModifiers и сведение источников (TIME-2, TIME-7).',
+      type: 'boolean',
+    },
+    tweens: {
+      $comment: 'Таблица определений твинов (TWEEN-1, TWEEN-3): наличие включает TweenSystem.',
+      type: 'array',
+      items: { $ref: '#/$defs/tweenDef' },
+    },
+    fog: {
+      $comment: 'Подключает компоненты тумана войны (FOW-1..3).',
+      type: 'boolean',
+    },
+    modifierSlots: {
+      $comment: 'Число слотов в списках источников-модификаторов; по умолчанию 4 (TIME-7, SER-7).',
+      type: 'integer',
+      minimum: 1,
+    },
   },
-};
-
-const vec2: Json = {
-  $comment: 'Компоненты в Q16.16 (FP-1).',
-  type: 'object',
-  additionalProperties: false,
-  required: ['x', 'y'],
-  properties: { x: { type: 'integer' }, y: { type: 'integer' } },
 };
 
 const inputFrame: Json = {
@@ -219,6 +263,14 @@ const scenario: Json = {
       type: 'array',
       items: { type: 'string', minLength: 1 },
     },
+    visibility: {
+      $comment: 'Включает пересчёт видимости (FOW-4). Поле сценария, а не сцены: системе нужен raycast (DI-3).',
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        order: { $comment: 'Равные order недопустимы (DET-3).', type: 'integer' },
+      },
+    },
   },
 };
 
@@ -234,15 +286,19 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
   'terrain.schema.json': document('terrain.schema.json', terrain, {}),
   'scene.schema.json': document('scene.schema.json', scene, {
     action,
+    arena,
     component,
     expression,
     prefab,
     query,
     system,
     terrain,
+    tweenDef,
+    vec2,
   }),
   'scenario.schema.json': document('scenario.schema.json', scenario, {
     action,
+    arena,
     component,
     expression,
     inputFrame,
@@ -251,6 +307,7 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
     scene,
     system,
     terrain,
+    tweenDef,
     vec2,
   }),
 };

@@ -19,8 +19,8 @@ import {
   staticsFromTerrain,
   type PhysicsOptions,
 } from '../systems/physics.js';
-import { ArenaSystem } from '../systems/arena.js';
-import { VisibilitySystem, type VisibilityOptions } from '../systems/visibility.js';
+import { requireModifierList } from '../systems/modifiers.js';
+import { VisibilitySystem, VISION_MODIFIER_COMPONENT, type VisibilityOptions } from '../systems/visibility.js';
 import { loadScene, type SceneDef } from './scene.js';
 import { prettyJsonSerializer, snapshotToPlain, type PlainSnapshot } from './serialization.js';
 import { initialState, tick, type Simulation } from './tick.js';
@@ -79,9 +79,9 @@ export function runScenario(def: ScenarioDef): RunOutput {
     throw new Error(`сценарий "${def.name}": есть "inputs", но нет "players" — слоты не определены (TICK-5)`);
   }
 
-  const { world, systems, terrain, arena } = loadScene(def.scene);
-  // Арена есть в сцене — значит, за её границей кто-то следит (ARENA-3, ARENA-5).
-  if (arena !== undefined) systems.register(new ArenaSystem());
+  // Системы, включаемые составом сцены (в том числе `ArenaSystem`), регистрирует
+  // сам загрузчик (SER-7); здесь — только те, которым нужна зависимость сборки.
+  const { world, systems, terrain, arena, modifiers } = loadScene(def.scene);
   if (def.players !== undefined) systems.register(new InputSystem({ players: def.players }));
 
   // Статика обрывов строится из террейна до расстановки: она иммутабельна и в
@@ -96,7 +96,11 @@ export function runScenario(def: ScenarioDef): RunOutput {
 
   // Видимость считается по финальным позициям тика, поэтому регистрируется
   // после физики (FOW-6).
-  if (def.visibility !== undefined) systems.register(new VisibilitySystem(def.visibility));
+  if (def.visibility !== undefined) {
+    systems.register(
+      new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT), def.visibility),
+    );
+  }
 
   for (const entry of def.initial ?? []) spawn(world, entry.prefab, entry.overrides);
 
@@ -105,6 +109,7 @@ export function runScenario(def: ScenarioDef): RunOutput {
     systems,
     worldSeed: def.seed,
     math: mathApi,
+    modifiers,
     ...(terrain !== undefined ? { terrain } : {}),
     ...(arena !== undefined ? { arena } : {}),
     ...(physics !== undefined ? { physics } : {}),

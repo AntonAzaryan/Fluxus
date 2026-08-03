@@ -157,7 +157,48 @@ export interface CommandBuffer {
   addComponent(entity: EntityId, component: string, values?: Readonly<Record<string, number>>): void;
   removeComponent(entity: EntityId, component: string): void;
   setField(entity: EntityId, component: string, field: string, value: number): void;
+  /**
+   * Значение поля, уже поставленное командой в этом буфере, либо `undefined`,
+   * если команд на это поле в нём нет (CMD-5). Чтение точечное: перечисления
+   * накопленных команд нет и быть не должно — оно сделало бы их состав и
+   * порядок наблюдаемыми для систем.
+   *
+   * Нужно распределителям фиксированных слотов (TIME-7): мир до flush команд не
+   * видит, и без этого чтения два добавления подряд сели бы в один слот. Другой
+   * вариант — оверлей вне мира, который TICK-4 запрещает.
+   */
+  peekField(entity: EntityId, component: string, field: string): number | undefined;
 }
+
+// ---------------------------------------------------------------- modifiers
+
+/**
+ * Список источников-модификаторов одного компонента (TIME-7, FOW-3):
+ * `{ sources: [{id, value}] }`, разложенный по фиксированным слотам
+ * `id{N}`/`value{N}` (массивов в ECS нет, ECS-3). Экземпляр создаётся на сцену
+ * загрузчиком (SER-7) — модульным синглтоном быть не может, иначе две
+ * симуляции в одном процессе делили бы состояние (DI-1).
+ *
+ * Контракт живёт здесь, а реализация — в `systems/modifiers.ts`: на него
+ * ссылается `SystemContext`, а `types.ts` не импортирует из `systems/`.
+ */
+export interface ModifierList {
+  readonly component: string;
+  readonly slots: number;
+  readonly schema: ComponentSchema;
+  /**
+   * Произведение значений занятых слотов, клампленное в `[lo, hi]`. У
+   * сущности без компонента источников — `FIXED_ONE`.
+   */
+  product(ctx: SystemContext, entity: EntityId, lo: Fixed, hi: Fixed): Fixed;
+  /** Добавляет или обновляет источник по `id`. Бросает, если свободных слотов нет. */
+  add(ctx: SystemContext, entity: EntityId, id: number, value: Fixed): void;
+  /** Снимает источник по `id`; отсутствующий id — не ошибка (TIME-8). */
+  remove(ctx: SystemContext, entity: EntityId, id: number): void;
+}
+
+/** Списки источников сцены по имени компонента: адрес действия `addModifier` — данные (ACT-1). */
+export type ModifierRegistry = ReadonlyMap<string, ModifierList>;
 
 // ---------------------------------------------------------------------- rng
 
@@ -223,6 +264,8 @@ export interface SystemContext {
   readonly terrain?: TerrainApi;
   /** Есть, если сцена содержит арену (ARENA-1). */
   readonly arena?: ArenaApi;
+  /** Списки источников-модификаторов сцены (TIME-7, FOW-3); адресуются по имени компонента. */
+  readonly modifiers?: ModifierRegistry;
   readonly inputs: readonly InputFrame[];
   /**
    * `globalDelta * TimeScale.value` с клампом стакинга (TIME-3, TIME-7).

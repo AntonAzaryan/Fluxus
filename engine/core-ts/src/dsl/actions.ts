@@ -9,6 +9,7 @@
  * редактора нечем.
  */
 import { evaluate, type Expression, type ExprValue, type ExprVars } from './expr.js';
+import { requireModifierList } from '../systems/modifiers.js';
 import type {
   EntityId,
   Fixed,
@@ -236,6 +237,31 @@ const ACTIONS: Record<string, ActionFn> = {
       easing: argNum(a, 'easing', 'addTween', ctx, vars, 0),
       ignoreTimeScale: argNum(a, 'ignoreTimeScale', 'addTween', ctx, vars, 0),
     });
+  },
+  /**
+   * Постановка источника-модификатора (TIME-7, TIME-8): `component` адресует
+   * список источников, подключённый сценой, `id` — сырое целое (поле `i32`),
+   * `value` — множитель в Q16.16. Мутаций мимо буфера нет: слот занимается
+   * командами `setField` внутри списка (ACT-2, CMD-4).
+   *
+   * Два `addModifier` подряд для одной сущности занимают разные слоты: список
+   * читает уже поставленные им команды буфера (CMD-5).
+   */
+  addModifier: (a, ctx, vars) => {
+    requireModifierList(ctx.modifiers, argStr(a, 'component', 'addModifier')).add(
+      ctx,
+      entityOf(a, ctx, vars, 'addModifier'),
+      argNum(a, 'id', 'addModifier', ctx, vars),
+      argNum(a, 'value', 'addModifier', ctx, vars),
+    );
+  },
+  /** Снятие источника по `id` (TIME-8); отсутствующий id — не ошибка. */
+  removeModifier: (a, ctx, vars) => {
+    requireModifierList(ctx.modifiers, argStr(a, 'component', 'removeModifier')).remove(
+      ctx,
+      entityOf(a, ctx, vars, 'removeModifier'),
+      argNum(a, 'id', 'removeModifier', ctx, vars),
+    );
   },
   if: (a, ctx, vars) => {
     const cond = evaluate(argExpr(a, 'cond', 'if'), ctx, vars);

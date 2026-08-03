@@ -6,9 +6,16 @@ import * as fixed from '../src/math/fixed.js';
 import { mathApi } from '../src/math/mathApi.js';
 import { createRngRegistry } from '../src/math/rng.js';
 import { createCommandBuffer, type CommandBufferHandle } from '../src/ecs/commands.js';
+import { modifierList } from '../src/systems/modifiers.js';
 import { query } from '../src/ecs/query.js';
 import { createWorld, getField, hasComponent, isAlive, listAlive, spawn, type PrefabDef } from '../src/ecs/world.js';
-import { TIME_SCALE_COMPONENT, type ComponentSchema, type SystemContext } from '../src/types.js';
+import {
+  FIXED_ONE,
+  TIME_SCALE_COMPONENT,
+  type ComponentSchema,
+  type ModifierRegistry,
+  type SystemContext,
+} from '../src/types.js';
 
 const F = fixed.fromFloat;
 
@@ -19,8 +26,15 @@ const Shield: ComponentSchema = { name: 'Shield', fields: { amount: 'fixed' } };
 // нельзя брать за основу детерминизма (ACT-3).
 const Slots: ComponentSchema = { name: 'Slots', fields: { '0': 'i32', a: 'i32', b: 'i32' } };
 
+/** Список источников сцены (TIME-7): экземпляр на харнесс, не на модуль (DI-1). */
+const SLOW = modifierList('SlowSources', 2);
+const MODIFIERS: ModifierRegistry = new Map([[SLOW.component, SLOW]]);
+
 const PREFABS: PrefabDef[] = [
-  { name: 'Hero', components: { Position: { x: 0, y: 0 }, Health: { current: F(100), max: F(100) } } },
+  {
+    name: 'Hero',
+    components: { Position: { x: 0, y: 0 }, Health: { current: F(100), max: F(100) }, SlowSources: {} },
+  },
   { name: 'Projectile', components: { Position: { x: 0, y: 0 } } },
 ];
 
@@ -35,7 +49,7 @@ interface Harness {
 const SYSTEM_NAME = 'Test';
 
 function harness(seed = 1234): Harness {
-  const world = createWorld([Position, Health, Shield, Slots], PREFABS);
+  const world = createWorld([Position, Health, Shield, Slots, SLOW.schema], PREFABS);
   const commands = createCommandBuffer(world);
   const events = new EventBus();
   const setFieldLog: string[] = [];
@@ -56,6 +70,7 @@ function harness(seed = 1234): Harness {
     events,
     rng: createRngRegistry(seed).forSystem(SYSTEM_NAME),
     math: mathApi,
+    modifiers: MODIFIERS,
     inputs: [],
     getEffectiveDelta: (entity, globalDelta) =>
       hasComponent(world, entity, TIME_SCALE_COMPONENT)
@@ -300,11 +315,117 @@ describe('ошибки формы (ACT-1)', () => {
     expect(() => execute([{ if: { cond: F(1), then: [] } }], harness().ctx)).toThrow(/булевым/);
   });
 
-  it('addTween в наборе есть (этап 15), addModifier — нет', () => {
+  it('addTween, addModifier и removeModifier в наборе (ACT-1)', () => {
     expect(actionNames).toContain('addTween');
-    // Источники модификаторов заводятся системами через `modifierList` (TIME-8),
-    // отдельного действия под них в DSL пока нет.
-    expect(actionNames).not.toContain('addModifier');
+    expect(actionNames).toContain('addModifier');
+    expect(actionNames).toContain('removeModifier');
+  });
+});
+
+describe('источники-модификаторы из DSL (ACT-1, TIME-8)', () => {
+  const slot = (h: Harness, entity: number, i: number): [number, number] => [
+    getField(h.world, entity, SLOW.component, `id${i}`),
+    getField(h.world, entity, SLOW.component, `value${i}`),
+  ];
+
+  it('addModifier занимает свободный слот через Command Buffer', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+
+    execute([{ addModifier: { entity: hero, component: SLOW.component, id: 7, value: F(0.5) } }], h.ctx);
+    // ACT-2: до flush мир не тронут.
+    expect(slot(h, hero, 0)).toEqual([0, FIXED_ONE]);
+
+    h.commands.flush();
+    expect(slot(h, hero, 0)).toEqual([7, F(0.5)]);
+  });
+
+  it('два addModifier в одном теле занимают разные слоты (CMD-5)', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+
+    execute(
+      [
+        { addModifier: { entity: hero, component: SLOW.component, id: 1, value: F(0.5) } },
+        { addModifier: { entity: hero, component: SLOW.component, id: 2, value: F(0.25) } },
+      ],
+      h.ctx,
+    );
+    h.commands.flush();
+
+    expect(slot(h, hero, 0)).toEqual([1, F(0.5)]);
+    expect(slot(h, hero, 1)).toEqual([2, F(0.25)]);
+  });
+
+  it('повторный id обновляет тот же слот, а не занимает второй', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+
+    execute(
+      [
+        { addModifier: { entity: hero, component: SLOW.component, id: 1, value: F(0.5) } },
+        { addModifier: { entity: hero, component: SLOW.component, id: 1, value: F(0.25) } },
+      ],
+      h.ctx,
+    );
+    h.commands.flush();
+
+    expect(slot(h, hero, 0)).toEqual([1, F(0.25)]);
+    expect(slot(h, hero, 1)).toEqual([0, FIXED_ONE]);
+  });
+
+  it('removeModifier освобождает слот и возвращает нейтральное значение', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+
+    execute([{ addModifier: { entity: hero, component: SLOW.component, id: 7, value: F(0.5) } }], h.ctx);
+    h.commands.flush();
+    execute([{ removeModifier: { entity: hero, component: SLOW.component, id: 7 } }], h.ctx);
+    h.commands.flush();
+
+    expect(slot(h, hero, 0)).toEqual([0, FIXED_ONE]);
+  });
+
+  it('снятие отсутствующего источника — не ошибка и не команда (TIME-8)', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+
+    execute([{ removeModifier: { entity: hero, component: SLOW.component, id: 42 } }], h.ctx);
+    h.commands.flush();
+
+    expect(h.setFieldLog).toEqual([]);
+  });
+
+  it('переполнение слотов — ошибка, а не вытеснение чужого источника (TIME-7)', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+
+    expect(() =>
+      execute(
+        [
+          { addModifier: { entity: hero, component: SLOW.component, id: 1, value: F(0.5) } },
+          { addModifier: { entity: hero, component: SLOW.component, id: 2, value: F(0.5) } },
+          { addModifier: { entity: hero, component: SLOW.component, id: 3, value: F(0.5) } },
+        ],
+        h.ctx,
+      ),
+    ).toThrow(/все 2 слот/);
+  });
+
+  it('нулевой id источника запрещён (TIME-7)', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+    expect(() =>
+      execute([{ addModifier: { entity: hero, component: SLOW.component, id: 0, value: F(0.5) } }], h.ctx),
+    ).toThrow(/не может быть нулём/);
+  });
+
+  it('список, не подключённый сценой, — ошибка, а не действие без эффекта (ACT-1)', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+    expect(() =>
+      execute([{ addModifier: { entity: hero, component: 'Shield', id: 1, value: F(0.5) } }], h.ctx),
+    ).toThrow(/не подключает/);
   });
 });
 

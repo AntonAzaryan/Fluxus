@@ -10,36 +10,33 @@
  * нулевой идентификатор источника запрещён, и «пусто» не путается с
  * «множитель ноль».
  *
+ * Экземпляр создаётся на сцену (`sim/scene.ts`, SER-7), а не на уровне модуля:
+ * модульный синглтон разделили бы две симуляции в одном процессе (DI-1).
+ * Собственного состояния у экземпляра нет вовсе — коллизия слотов внутри тика
+ * решается чтением уже поставленных команд буфера (CMD-5), потому что оверлей
+ * вне мира не восстанавливается снапшотом (TICK-4).
+ *
  * ponytail: слотов фиксированное число, переполнение — ошибка, а не рост
  * массива. Динамический список потребовал бы массивных полей в ECS; вводить их
  * до того, как известно реальное число одновременных эффектов, незачем.
  */
-import { FIXED_ONE, type ComponentSchema, type EntityId, type Fixed, type SystemContext } from '../types.js';
+import {
+  FIXED_ONE,
+  type EntityId,
+  type ModifierList,
+  type ModifierRegistry,
+  type SystemContext,
+} from '../types.js';
 
-/** Слотов на сущность по умолчанию: столько независимых эффектов держится без ошибки. */
-const DEFAULT_SLOTS = 4;
+/** Слотов на сущность по умолчанию (SER-7): столько независимых эффектов держится без ошибки. */
+export const DEFAULT_MODIFIER_SLOTS = 4;
 
 /** Имена дополнены нулями до одной длины — иначе plain-форма сортирует id10 перед id2 (SER-6). */
 function slotName(prefix: string, index: number, total: number): string {
   return `${prefix}${String(index).padStart(String(total - 1).length, '0')}`;
 }
 
-export interface ModifierList {
-  readonly component: string;
-  readonly slots: number;
-  readonly schema: ComponentSchema;
-  /**
-   * Произведение значений занятых слотов, клампленное в `[lo, hi]`. У
-   * сущности без компонента источников — `FIXED_ONE`.
-   */
-  product(ctx: SystemContext, entity: EntityId, lo: Fixed, hi: Fixed): Fixed;
-  /** Добавляет или обновляет источник по `id`. Бросает, если свободных слотов нет. */
-  add(ctx: SystemContext, entity: EntityId, id: number, value: Fixed): void;
-  /** Снимает источник по `id`; отсутствующий id — не ошибка (TIME-8). */
-  remove(ctx: SystemContext, entity: EntityId, id: number): void;
-}
-
-export function modifierList(component: string, slots: number = DEFAULT_SLOTS): ModifierList {
+export function modifierList(component: string, slots: number = DEFAULT_MODIFIER_SLOTS): ModifierList {
   if (!Number.isInteger(slots) || slots < 1) throw new Error(`${component}: слотов должно быть ≥ 1`);
 
   const ids: string[] = [];
@@ -57,26 +54,14 @@ export function modifierList(component: string, slots: number = DEFAULT_SLOTS): 
   }
 
   /**
-   * Слоты, занятые командами этого тика. Мир до `flush` их ещё не видит
-   * (CMD-5), поэтому два `add` подряд без него сели бы в один слот и первый
-   * источник молча пропал бы. Оверлей живёт ровно один тик и сбрасывается по
-   * смене `ctx.tick` — в том числе при откате, который тик меняет (REW-2).
+   * Занятость слота: сначала уже поставленная команда этого буфера, потом мир.
+   * Мир до flush команд не видит (CMD-5), поэтому два `add` подряд без чтения
+   * буфера сели бы в один слот и первый источник молча пропал бы. Буфер живёт
+   * ровно один тик и очищается на flush каждой системы — состояния, которое
+   * пережило бы тик, здесь нет (TICK-4, REW-7).
    */
-  let pendingTick = -1;
-  const pending = new Map<string, number>();
-
-  const slotId = (ctx: SystemContext, entity: EntityId, slot: number): number => {
-    if (ctx.tick !== pendingTick) {
-      pending.clear();
-      pendingTick = ctx.tick;
-    }
-    return pending.get(`${entity}:${slot}`) ?? ctx.get(entity, component, ids[slot]!);
-  };
-
-  const claim = (ctx: SystemContext, entity: EntityId, slot: number, id: number): void => {
-    slotId(ctx, entity, slot); // сбрасывает оверлей на смене тика
-    pending.set(`${entity}:${slot}`, id);
-  };
+  const slotId = (ctx: SystemContext, entity: EntityId, slot: number): number =>
+    ctx.commands.peekField(entity, component, ids[slot]!) ?? ctx.get(entity, component, ids[slot]!);
 
   const findSlot = (ctx: SystemContext, entity: EntityId, id: number): number => {
     for (let i = 0; i < slots; i++) {
@@ -105,7 +90,6 @@ export function modifierList(component: string, slots: number = DEFAULT_SLOTS): 
       const existing = findSlot(ctx, entity, id);
       const slot = existing >= 0 ? existing : findSlot(ctx, entity, 0);
       if (slot < 0) throw new Error(`${component}: все ${slots} слотов заняты`);
-      claim(ctx, entity, slot, id);
       ctx.commands.setField(entity, component, ids[slot]!, id);
       ctx.commands.setField(entity, component, values[slot]!, value);
     },
@@ -113,9 +97,20 @@ export function modifierList(component: string, slots: number = DEFAULT_SLOTS): 
     remove(ctx, entity, id) {
       const slot = findSlot(ctx, entity, id);
       if (slot < 0) return;
-      claim(ctx, entity, slot, 0);
       ctx.commands.setField(entity, component, ids[slot]!, 0);
       ctx.commands.setField(entity, component, values[slot]!, FIXED_ONE);
     },
   };
+}
+
+/**
+ * Список по имени компонента или ошибка. Сцена без этого списка управлять им не
+ * может (ACT-1): «действие без эффекта» скрыло бы опечатку в конфиге.
+ */
+export function requireModifierList(registry: ModifierRegistry | undefined, component: string): ModifierList {
+  const list = registry?.get(component);
+  if (list === undefined) {
+    throw new Error(`список источников "${component}" сцена не подключает (TIME-7, SER-7)`);
+  }
+  return list;
 }

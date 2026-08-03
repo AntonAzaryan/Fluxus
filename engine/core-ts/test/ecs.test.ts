@@ -160,6 +160,35 @@ describe('Query (QUERY-1..3)', () => {
   });
 });
 
+describe('чтение отложенного из буфера (CMD-5)', () => {
+  it('значение видно до flush, а отсутствие команды отличимо от значения', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const e = spawn(world, 'P');
+    const commands = createCommandBuffer(world);
+
+    expect(commands.peekField(e, 'Health', 'hp')).toBeUndefined();
+    commands.setField(e, 'Health', 'hp', 42);
+    expect(commands.peekField(e, 'Health', 'hp')).toBe(42);
+    // Мир до flush не тронут — точечное чтение буфера этого не меняет.
+    expect(getField(world, e, 'Health', 'hp')).toBe(100);
+  });
+
+  it('побеждает последняя команда — то же, что окажется в мире (CMD-3)', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const e = spawn(world, 'P');
+    const commands = createCommandBuffer(world);
+
+    commands.setField(e, 'Health', 'hp', 1);
+    commands.setField(e, 'Health', 'hp', 2);
+    expect(commands.peekField(e, 'Health', 'hp')).toBe(2);
+
+    commands.flush();
+    expect(getField(world, e, 'Health', 'hp')).toBe(2);
+    // Буфер очищен: отложенного больше нет, читатель падает на состояние мира.
+    expect(commands.peekField(e, 'Health', 'hp')).toBeUndefined();
+  });
+});
+
 describe('Command Buffer (CMD-1..5)', () => {
   it('CMD-5: query видит сущность до flush, даже после команды на её удаление', () => {
     const world = createWorld(schemas, [prefab('P', { Health: {} })]);

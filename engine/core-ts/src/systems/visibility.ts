@@ -18,13 +18,13 @@
  * ставить нельзя.
  */
 import * as fixed from '../math/fixed.js';
-import { modifierList } from './modifiers.js';
 import { BLOCKS_VISION } from './physics.js';
 import {
   POSITION_COMPONENT,
   type ComponentSchema,
   type EntityId,
   type Fixed,
+  type ModifierList,
   type System,
   type SystemContext,
   type Vec2,
@@ -62,19 +62,21 @@ export const TEAM_SCHEMA: ComponentSchema = {
 /**
  * FOW-3: тот же паттерн списка источников, что у `TimeScaleModifiers` (TIME-7).
  * Значение слота — множитель радиуса; композиционная политика живёт вне ядра.
+ * Экземпляр списка создаёт сцена (SER-7): модульный синглтон разделили бы две
+ * симуляции в одном процессе (DI-1).
  */
-export const VISION_MODIFIERS = modifierList('VisionModifier');
+export const VISION_MODIFIER_COMPONENT = 'VisionModifier';
 
-/** Все схемы FoW разом — сцене подключать их одним спредом. */
-export const FOW_COMPONENTS: readonly ComponentSchema[] = [
-  VISION_SCHEMA,
-  VISIBILITY_SCHEMA,
-  STEALTH_SCHEMA,
-  TEAM_SCHEMA,
-  VISION_MODIFIERS.schema,
-];
+/**
+ * Все схемы FoW разом — сцене подключать их одним спредом. Порядок задаёт
+ * битовые id (SER-7), поэтому список источников обязан остаться последним.
+ * Функция, а не константа: его схема — функция от числа слотов сцены.
+ */
+export function fowComponents(modifiers: ModifierList): readonly ComponentSchema[] {
+  return [VISION_SCHEMA, VISIBILITY_SCHEMA, STEALTH_SCHEMA, TEAM_SCHEMA, modifiers.schema];
+}
 
-/** Клампы стакинга модификаторов обзора: слепота и четырёхкратный обзор — края разумного. */
+/** Клампы стакинга модификаторов обзора (FOW-3): сырой Q16.16 — от слепоты до 4.0. */
 export const VISION_SCALE_MIN: Fixed = 0;
 export const VISION_SCALE_MAX: Fixed = fixed.fromInt(4);
 
@@ -124,7 +126,11 @@ export class VisibilitySystem implements System {
   readonly name = 'Visibility';
   readonly order: number;
 
-  constructor(options: VisibilityOptions = {}) {
+  /** Список источников обзора приходит извне (DI-1): своего модульного у системы нет. */
+  constructor(
+    private readonly modifiers: ModifierList,
+    options: VisibilityOptions = {},
+  ) {
     this.order = options.order ?? DEFAULT_ORDER;
   }
 
@@ -145,7 +151,7 @@ export class VisibilitySystem implements System {
 
       const candidates = ctx.query({
         all: [VISIBILITY_COMPONENT, POSITION_COMPONENT],
-        withinRadius: { center: from, radius: effectiveRadius(ctx, observer) },
+        withinRadius: { center: from, radius: effectiveRadius(ctx, observer, this.modifiers) },
       });
       for (const candidate of candidates) {
         const mask = next.get(candidate);
@@ -188,8 +194,8 @@ function isHidden(ctx: SystemContext, entity: EntityId): boolean {
 }
 
 /** FOW-3: `Vision.radius`, домноженный на произведение источников `VisionModifier`. */
-function effectiveRadius(ctx: SystemContext, observer: EntityId): Fixed {
-  const scale = VISION_MODIFIERS.product(ctx, observer, VISION_SCALE_MIN, VISION_SCALE_MAX);
+function effectiveRadius(ctx: SystemContext, observer: EntityId, modifiers: ModifierList): Fixed {
+  const scale = modifiers.product(ctx, observer, VISION_SCALE_MIN, VISION_SCALE_MAX);
   return ctx.math.mul(ctx.get(observer, VISION_COMPONENT, 'radius'), scale);
 }
 

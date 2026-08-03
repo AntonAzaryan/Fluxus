@@ -1,0 +1,68 @@
+{
+  "name": "modifier-stack",
+  "seed": 20260814,
+  "ticks": 4,
+  "scene": {
+    "components": [{ "name": "Position", "fields": { "x": "fixed", "y": "fixed" } }],
+    "prefabs": [
+      {
+        "name": "Slowable",
+        "components": { "Position": { "x": 65536, "y": 65536 }, "TimeScaleModifiers": {} }
+      },
+      {
+        "name": "Plain",
+        "components": { "Position": { "x": 131072, "y": 65536 } }
+      }
+    ],
+    "systems": [
+      {
+        "name": "Slows",
+        "order": -1000,
+        "query": { "all": ["TimeScaleModifiers"] },
+        "as": "e",
+        "do": [
+          {
+            "if": {
+              "cond": { "==": [{ "tick": [] }, 1] },
+              "then": [
+                {
+                  "addModifier": {
+                    "entity": { "var": "e" },
+                    "component": "TimeScaleModifiers",
+                    "id": 1,
+                    "value": 32768
+                  }
+                },
+                {
+                  "addModifier": {
+                    "entity": { "var": "e" },
+                    "component": "TimeScaleModifiers",
+                    "id": 2,
+                    "value": 32768
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "if": {
+              "cond": { "==": [{ "tick": [] }, 3] },
+              "then": [
+                {
+                  "removeModifier": {
+                    "entity": { "var": "e" },
+                    "component": "TimeScaleModifiers",
+                    "id": 1
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "timeScale": true,
+    "capacity": 8
+  },
+  "initial": [{ "prefab": "Slowable" }, { "prefab": "Plain" }]
+}

@@ -1,0 +1,391 @@
+{
+  "scenario": "modifier-stack",
+  "seed": 20260814,
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          5,
+          1
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              65536,
+              131072
+            ],
+            "y": [
+              65536,
+              65536
+            ]
+          },
+          "TimeScale": {
+            "value": [
+              0,
+              0
+            ]
+          },
+          "TimeScaleModifiers": {
+            "id0": [
+              0,
+              0
+            ],
+            "id1": [
+              0,
+              0
+            ],
+            "id2": [
+              0,
+              0
+            ],
+            "id3": [
+              0,
+              0
+            ],
+            "value0": [
+              65536,
+              0
+            ],
+            "value1": [
+              65536,
+              0
+            ],
+            "value2": [
+              65536,
+              0
+            ],
+            "value3": [
+              65536,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          1
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              65536,
+              131072
+            ],
+            "y": [
+              65536,
+              65536
+            ]
+          },
+          "TimeScale": {
+            "value": [
+              16384,
+              0
+            ]
+          },
+          "TimeScaleModifiers": {
+            "id0": [
+              1,
+              0
+            ],
+            "id1": [
+              2,
+              0
+            ],
+            "id2": [
+              0,
+              0
+            ],
+            "id3": [
+              0,
+              0
+            ],
+            "value0": [
+              32768,
+              0
+            ],
+            "value1": [
+              32768,
+              0
+            ],
+            "value2": [
+              65536,
+              0
+            ],
+            "value3": [
+              65536,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          1
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              65536,
+              131072
+            ],
+            "y": [
+              65536,
+              65536
+            ]
+          },
+          "TimeScale": {
+            "value": [
+              16384,
+              0
+            ]
+          },
+          "TimeScaleModifiers": {
+            "id0": [
+              1,
+              0
+            ],
+            "id1": [
+              2,
+              0
+            ],
+            "id2": [
+              0,
+              0
+            ],
+            "id3": [
+              0,
+              0
+            ],
+            "value0": [
+              32768,
+              0
+            ],
+            "value1": [
+              32768,
+              0
+            ],
+            "value2": [
+              65536,
+              0
+            ],
+            "value3": [
+              65536,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          1
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              65536,
+              131072
+            ],
+            "y": [
+              65536,
+              65536
+            ]
+          },
+          "TimeScale": {
+            "value": [
+              32768,
+              0
+            ]
+          },
+          "TimeScaleModifiers": {
+            "id0": [
+              0,
+              0
+            ],
+            "id1": [
+              2,
+              0
+            ],
+            "id2": [
+              0,
+              0
+            ],
+            "id3": [
+              0,
+              0
+            ],
+            "value0": [
+              65536,
+              0
+            ],
+            "value1": [
+              32768,
+              0
+            ],
+            "value2": [
+              65536,
+              0
+            ],
+            "value3": [
+              65536,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 4,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          1
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              65536,
+              131072
+            ],
+            "y": [
+              65536,
+              65536
+            ]
+          },
+          "TimeScale": {
+            "value": [
+              32768,
+              0
+            ]
+          },
+          "TimeScaleModifiers": {
+            "id0": [
+              0,
+              0
+            ],
+            "id1": [
+              2,
+              0
+            ],
+            "id2": [
+              0,
+              0
+            ],
+            "id3": [
+              0,
+              0
+            ],
+            "value0": [
+              65536,
+              0
+            ],
+            "value1": [
+              32768,
+              0
+            ],
+            "value2": [
+              65536,
+              0
+            ],
+            "value3": [
+              65536,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    }
+  ]
+}

@@ -6,13 +6,15 @@ import { filterSnapshot, relevantEntityVisible, VIEWPOINT_ALL } from '../src/sim
 import { snapshotToPlain } from '../src/sim/serialization.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
-import { teamBit, VisibilitySystem, FOW_COMPONENTS, VISIBILITY_COMPONENT } from '../src/systems/visibility.js';
+import { teamBit, VisibilitySystem, VISIBILITY_COMPONENT, VISION_MODIFIER_COMPONENT } from '../src/systems/visibility.js';
+import { requireModifierList } from '../src/systems/modifiers.js';
 import type { EntityId, FieldOverrides, Snapshot } from '../src/types.js';
 
 const F = fixed.fromFloat;
 
 const SCENE: SceneDef = {
-  components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }, ...FOW_COMPONENTS],
+  components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }],
+  fog: true,
   prefabs: [
     {
       name: 'Watcher',
@@ -40,9 +42,9 @@ const SCENE: SceneDef = {
 };
 
 function harness() {
-  const { world, systems } = loadScene(SCENE);
-  systems.register(new VisibilitySystem());
-  const sim: Simulation = { systems, worldSeed: 1, math: mathApi };
+  const { world, systems, modifiers } = loadScene(SCENE);
+  systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+  const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers };
   const state = initialState(world, 1);
 
   return {

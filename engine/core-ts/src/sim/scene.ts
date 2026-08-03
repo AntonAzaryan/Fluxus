@@ -20,14 +20,16 @@ import {
 import {
   arenaPrefab,
   createArenaApi,
+  ArenaSystem,
   ARENA_COMPONENTS,
   ARENA_PREFAB,
   type ArenaDef,
 } from '../systems/arena.js';
-import { FOW_COMPONENTS } from '../systems/visibility.js';
-import { TimeScaleSystem, TIME_COMPONENTS } from '../systems/time.js';
+import { fowComponents, VISION_MODIFIER_COMPONENT } from '../systems/visibility.js';
+import { TimeScaleSystem, timeComponents, TIME_SCALE_MODIFIERS_COMPONENT } from '../systems/time.js';
 import { TweenSystem, TWEEN_SCHEMA, type TweenDef } from '../systems/tween.js';
-import type { ArenaApi, ComponentSchema, TerrainApi, WorldState } from '../types.js';
+import { modifierList, DEFAULT_MODIFIER_SLOTS } from '../systems/modifiers.js';
+import type { ArenaApi, ComponentSchema, ModifierRegistry, TerrainApi, WorldState } from '../types.js';
 
 export interface SceneDef {
   /** Порядок задаёт битовые id компонентов и потому является частью формата (SER-7). */
@@ -48,6 +50,12 @@ export interface SceneDef {
    * сцена не регистрирует: ей нужен raycast, то есть зависимость сборки (DI-3).
    */
   readonly fog?: boolean;
+  /**
+   * Число слотов в списках источников-модификаторов (TIME-7, FOW-3); по
+   * умолчанию 4. Часть формата снапшота: от него зависят и состав, и имена
+   * полей компонентов источников (SER-6, SER-7).
+   */
+  readonly modifierSlots?: number;
 }
 
 export interface Scene {
@@ -57,19 +65,34 @@ export interface Scene {
   readonly terrain?: TerrainApi;
   /** Есть, если сцена содержит арену. */
   readonly arena?: ArenaApi;
+  /**
+   * Списки источников-модификаторов сцены (TIME-7, FOW-3) — по одному
+   * экземпляру на сцену, а не на модуль (DI-1). Есть всегда: от флагов
+   * `timeScale`/`fog` зависит только то, дописана ли схема в мир.
+   */
+  readonly modifiers: ModifierRegistry;
 }
 
 export function loadScene(def: SceneDef): Scene {
   // Схемы карты пола и арены зависят от ассетов, поэтому дописываются к
   // объявленным компонентам, а не пишутся в сцене руками (TERR-6, ARENA-1).
   const grid = def.terrain === undefined ? undefined : createTerrainGrid(def.terrain);
+  const slots = def.modifierSlots ?? DEFAULT_MODIFIER_SLOTS;
+  const timeScaleModifiers = modifierList(TIME_SCALE_MODIFIERS_COMPONENT, slots);
+  const visionModifiers = modifierList(VISION_MODIFIER_COMPONENT, slots);
+  const modifiers: ModifierRegistry = new Map([
+    [timeScaleModifiers.component, timeScaleModifiers],
+    [visionModifiers.component, visionModifiers],
+  ]);
+  // Порядок нормативен (SER-7): floor → arena → timeScale → tween → fow. Он
+  // задаёт битовые id компонентов, то есть представление масок в снапшоте.
   const components = [
     ...def.components,
     ...(grid === undefined ? [] : [floorComponentSchema(grid)]),
     ...(def.arena === undefined ? [] : ARENA_COMPONENTS),
-    ...(def.timeScale === true ? TIME_COMPONENTS : []),
+    ...(def.timeScale === true ? timeComponents(timeScaleModifiers) : []),
     ...(def.tweens === undefined ? [] : [TWEEN_SCHEMA]),
-    ...(def.fog === true ? FOW_COMPONENTS : []),
+    ...(def.fog === true ? fowComponents(visionModifiers) : []),
   ];
   const prefabs = [
     ...(def.prefabs ?? []),
@@ -91,11 +114,15 @@ export function loadScene(def: SceneDef): Scene {
       ? undefined
       : createArenaApi(world, def.arena, spawn(world, ARENA_PREFAB));
   const systems = new SystemRegistry();
-  // Нативные системы, включаемые самим составом сцены. Их регистрация здесь, а
-  // не у вызывающего: без них объявленные компоненты — мёртвые данные.
+  // Нативные системы, включаемые самим составом сцены (SER-7). Их регистрация
+  // здесь, а не у вызывающего: без них объявленные компоненты — мёртвые данные.
+  // Исключение — только системы, которым нужна зависимость сборки:
+  // `PhysicsSystem` и `VisibilitySystem` (нужен raycast, DI-3).
   // `TweenSystem` разбирает пути к полям в конструкторе, поэтому битый
   // `target` падает на загрузке сцены, а не в середине матча (SYS-3).
-  if (def.timeScale === true) systems.register(new TimeScaleSystem());
+  // Арена есть в сцене — значит, за её границей кто-то следит (ARENA-3, ARENA-5).
+  if (def.arena !== undefined) systems.register(new ArenaSystem());
+  if (def.timeScale === true) systems.register(new TimeScaleSystem(timeScaleModifiers));
   if (def.tweens !== undefined) systems.register(new TweenSystem(def.tweens));
   // Валидация каждой системы — внутри registerFromJson (SYS-3): конфиг с
   // опечаткой не должен доживать до первого тика.
@@ -103,6 +130,7 @@ export function loadScene(def: SceneDef): Scene {
   return {
     world,
     systems,
+    modifiers,
     ...(terrain !== undefined ? { terrain } : {}),
     ...(arena !== undefined ? { arena } : {}),
   };

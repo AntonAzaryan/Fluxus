@@ -72,6 +72,7 @@ export {
   VisibilitySystem,
   teamBit,
   isVisibleTo,
+  fowComponents,
   VISION_COMPONENT,
   VISIBILITY_COMPONENT,
   STEALTH_COMPONENT,
@@ -80,8 +81,7 @@ export {
   VISIBILITY_SCHEMA,
   STEALTH_SCHEMA,
   TEAM_SCHEMA,
-  VISION_MODIFIERS,
-  FOW_COMPONENTS,
+  VISION_MODIFIER_COMPONENT,
   VISION_SCALE_MIN,
   VISION_SCALE_MAX,
   MAX_TEAMS,
@@ -89,13 +89,13 @@ export {
 export type { VisibilityOptions } from './systems/visibility.js';
 export { InputSystem, INPUT_FIELDS } from './systems/inputSystem.js';
 export type { InputSystemOptions } from './systems/inputSystem.js';
-export { modifierList } from './systems/modifiers.js';
+export { modifierList, requireModifierList, DEFAULT_MODIFIER_SLOTS } from './systems/modifiers.js';
 export {
   TimeScaleSystem,
-  TIME_COMPONENTS,
+  timeComponents,
   TIME_SCALE_MAX,
   TIME_SCALE_MIN,
-  TIME_SCALE_MODIFIERS,
+  TIME_SCALE_MODIFIERS_COMPONENT,
   TIME_SCALE_SCHEMA,
 } from './systems/time.js';
 export type { TimeScaleSystemOptions } from './systems/time.js';
@@ -107,7 +107,6 @@ export {
   TWEEN_SCHEMA,
 } from './systems/tween.js';
 export type { TweenDef, TweenSystemOptions } from './systems/tween.js';
-export type { ModifierList } from './systems/modifiers.js';
 
 // sim — сборка сцены и прогон тиков
 export { tick, dispatch, initialState, takeSnapshot, restoreSnapshot } from './sim/tick.js';

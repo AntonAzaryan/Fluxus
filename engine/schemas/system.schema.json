@@ -43,6 +43,7 @@
       "propertyNames": {
         "enum": [
           "addComponent",
+          "addModifier",
           "addTween",
           "destroyEntity",
           "emitEvent",
@@ -53,6 +54,7 @@
           "random",
           "randomBelow",
           "removeComponent",
+          "removeModifier",
           "spawnEntity"
         ]
       }

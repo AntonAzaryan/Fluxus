@@ -11,15 +11,27 @@
  * значение при вычислении нового означало бы экспоненту за несколько тиков.
  */
 import * as fixed from '../math/fixed.js';
-import { modifierList } from './modifiers.js';
-import { FIXED_ONE, TIME_SCALE_COMPONENT, type ComponentSchema, type System, type SystemContext } from '../types.js';
+import {
+  FIXED_ONE,
+  TIME_SCALE_COMPONENT,
+  type ComponentSchema,
+  type Fixed,
+  type ModifierList,
+  type System,
+  type SystemContext,
+} from '../types.js';
 
 /**
  * Техническая защита от деления на ~0 в `getEffectiveDelta`, не балансный кап
  * (TIME-7): баланс живёт в том, что система-владелец кладёт в `sources`.
+ *
+ * Границы нормированы сырым Q16.16 (`3276` ≈ 0.049988…, `262144` = 4.0), а не
+ * десятичной записью: `0.05 · 65536 = 3276.8`, и реализация с округлением дала
+ * бы `3277`, то есть другие байты в снапшоте при том же тексте требования
+ * (FP-3, CLI-6). Поэтому здесь целое, а не `fromFloat(0.05)`.
  */
-export const TIME_SCALE_MIN = fixed.fromFloat(0.05);
-export const TIME_SCALE_MAX = fixed.fromInt(4);
+export const TIME_SCALE_MIN: Fixed = 3276;
+export const TIME_SCALE_MAX: Fixed = fixed.fromInt(4);
 
 /** Раньше всех потребителей, но позже `InputSystem` (order −1000). */
 const DEFAULT_ORDER = -900;
@@ -31,11 +43,17 @@ export const TIME_SCALE_SCHEMA: ComponentSchema = {
   defaults: { value: FIXED_ONE },
 };
 
-/** Список источников замедления (TIME-7); наполняют его геймплейные системы (TIME-8). */
-export const TIME_SCALE_MODIFIERS = modifierList('TimeScaleModifiers');
+/** Имя компонента списка источников замедления (TIME-7); экземпляр списка создаёт сцена. */
+export const TIME_SCALE_MODIFIERS_COMPONENT = 'TimeScaleModifiers';
 
-/** Оба компонента для секции `components` сцены — порядок задаёт их битовые id (SER-7). */
-export const TIME_COMPONENTS: readonly ComponentSchema[] = [TIME_SCALE_SCHEMA, TIME_SCALE_MODIFIERS.schema];
+/**
+ * Оба компонента для секции `components` сцены — порядок задаёт их битовые id
+ * (SER-7), поэтому список источников обязан остаться вторым. Функция, а не
+ * константа: схема списка — функция от числа слотов, то есть от конфига сцены.
+ */
+export function timeComponents(modifiers: ModifierList): readonly ComponentSchema[] {
+  return [TIME_SCALE_SCHEMA, modifiers.schema];
+}
 
 export interface TimeScaleSystemOptions {
   readonly name?: string;
@@ -46,7 +64,11 @@ export class TimeScaleSystem implements System {
   readonly name: string;
   readonly order: number;
 
-  constructor(options: TimeScaleSystemOptions = {}) {
+  /** Список источников приходит извне (DI-1): своего модульного у системы нет. */
+  constructor(
+    private readonly modifiers: ModifierList,
+    options: TimeScaleSystemOptions = {},
+  ) {
     this.name = options.name ?? 'TimeScale';
     this.order = options.order ?? DEFAULT_ORDER;
   }
@@ -54,8 +76,8 @@ export class TimeScaleSystem implements System {
   run(ctx: SystemContext): void {
     // Обход только по результату запроса (DET-6): порядок здесь — порядок
     // индексов сущностей, а не обхода какой-нибудь карты.
-    for (const entity of ctx.query({ all: [TIME_SCALE_MODIFIERS.component] })) {
-      const value = TIME_SCALE_MODIFIERS.product(ctx, entity, TIME_SCALE_MIN, TIME_SCALE_MAX);
+    for (const entity of ctx.query({ all: [this.modifiers.component] })) {
+      const value = this.modifiers.product(ctx, entity, TIME_SCALE_MIN, TIME_SCALE_MAX);
       if (!ctx.has(entity, TIME_SCALE_COMPONENT)) {
         // Нейтральное значение компонента не требует: `getEffectiveDelta` без
         // него и так вернёт `globalDelta` (TIME-3).
