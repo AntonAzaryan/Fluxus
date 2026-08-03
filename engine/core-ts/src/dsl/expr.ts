@@ -5,7 +5,7 @@
  * `add_operation` — глобальная мутация синглтона (мимо DI-1). Форма AST при
  * этом сохранена — с ней работает редактор.
  */
-import type { EntityId, Fixed, MathApi, SystemContext, Vec2 } from '../types.js';
+import type { EntityId, Fixed, MathApi, ReadonlyEventLog, SystemContext, Vec2 } from '../types.js';
 
 /** Узел AST: литерал либо объект с ровно одним ключом-оператором (EXPR-1). */
 export type Expression = number | boolean | string | { readonly [op: string]: unknown };
@@ -15,9 +15,13 @@ export type ExprValue = Fixed | boolean | Vec2;
 
 /**
  * Read-only срез `SystemContext`. Sandbox EXPR-3 держится на этом типе:
- * `commands` и `events` в выражение не попадают, значит писать ему нечем.
+ * `commands` в выражение не попадает, а шина — только read-only-частью, без
+ * `emit`, значит писать выражению нечем.
  */
-export type ExprWorld = Pick<SystemContext, 'tick' | 'get' | 'has' | 'isAlive' | 'math'>;
+export type ExprWorld = Pick<SystemContext, 'tick' | 'get' | 'has' | 'isAlive' | 'math'> & {
+  /** Шина текущего тика (EVT-2); читается оператором `eventField`. */
+  readonly events: ReadonlyEventLog;
+};
 
 /** Локальные переменные: аргументы системы и биндинги `let` из Action DSL. */
 export type ExprVars = Readonly<Record<string, ExprValue>>;
@@ -156,6 +160,27 @@ const OPS: Record<string, OpFn> = {
   isAlive: (args, w, v) => {
     arity('isAlive', args, 1);
     return w.isAlive(eid(evaluate(args[0]!, w, v), 'isAlive'));
+  },
+  /**
+   * Поле данных события, на которое ссылается имя, связанное `forEachEvent`
+   * (ACT-1). Ссылка — индекс в шине тика, как `EntityId` — непрозрачное число.
+   *
+   * Масштаб не преобразуется, как и у `getComponent`: что в данных Q16.16, а
+   * что сырое целое, знает эмитент (у `Collision` нормаль — Q16.16, `entity` —
+   * идентификатор). Отсутствующее поле — ошибка, а не нуль: реестра типов
+   * событий нет, поймать опечатку на регистрации нечем (SYS-3).
+   */
+  eventField: (args, w, v) => {
+    arity('eventField', args, 2);
+    const event = w.events.at(num(evaluate(args[0]!, w, v), 'eventField'));
+    const field = str(args[1]!, 'eventField');
+    // `hasOwn`, а не проверка на undefined: иначе `toString` в позиции имени
+    // поля дотянулся бы до прототипа хост-объекта (EXPR-6).
+    const value = Object.hasOwn(event.data, field) ? event.data[field] : undefined;
+    if (typeof value !== 'number') {
+      throw new Error(`оператор "eventField": у события "${event.type}" нет поля "${field}"`);
+    }
+    return value;
   },
 
   // арифметика Q16.16

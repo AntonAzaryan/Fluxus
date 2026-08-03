@@ -18,6 +18,7 @@ import {
 import { query } from '../src/ecs/query.js';
 import { indexOf as rawIndexOf } from '../src/ecs/entityIndex.js';
 import { createCommandBuffer } from '../src/ecs/commands.js';
+import * as core from '../src/index.js';
 import type { ComponentSchema } from '../src/types.js';
 
 const Position: ComponentSchema = { name: 'Position', fields: { x: 'fixed', y: 'fixed' } };
@@ -117,6 +118,29 @@ describe('Query (QUERY-1..3)', () => {
     });
 
     expect(Array.from(result)).toEqual([onBoundary]);
+  });
+
+  it('QUERY-1: пустой набор компонентов не сужает выборку', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const ids = [spawn(world, 'P'), spawn(world, 'P')];
+
+    expect(Array.from(query(world, {}))).toEqual(ids);
+    expect(Array.from(query(world, { all: [], any: [], not: [] }))).toEqual(ids);
+    // Пустой `any` эквивалентен отсутствующему, хотя «хотя бы один из ни одного» ложно.
+    expect(Array.from(query(world, { all: ['Health'], any: [] }))).toEqual(ids);
+  });
+
+  it('QUERY-1: неизвестный компонент — пустой результат в all/any, но не отсеивает в not', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const ids = [spawn(world, 'P'), spawn(world, 'P')];
+
+    // Невыполнимое требование — выборка пуста; ошибкой это не считается: состав
+    // компонентов зависит от сцены.
+    expect(query(world, { all: ['Ghost'] }).length).toBe(0);
+    expect(query(world, { all: ['Health'], any: ['Ghost'] }).length).toBe(0);
+    // Невыполнимый запрет — выборка полная.
+    expect(Array.from(query(world, { not: ['Ghost'] }))).toEqual(ids);
+    expect(Array.from(query(world, { all: ['Health'], not: ['Ghost'] }))).toEqual(ids);
   });
 
   it('QUERY-2: порядок обхода одинаков при повторных прогонах, включая переиспользование слотов', () => {
@@ -227,6 +251,42 @@ describe('Command Buffer (CMD-1..5)', () => {
     expect(query(world, { all: ['Health'] }).length).toBe(1);
   });
 
+  it('CMD-7: команда к сущности, убитой в этом же буфере, не достаётся новой сущности того же слота', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const e = spawn(world, 'P');
+
+    const commands = createCommandBuffer(world);
+    commands.destroy(e);
+    commands.spawn('P'); // на flush займёт освободившийся слот e
+    commands.setField(e, 'Health', 'hp', 7);
+    commands.flush();
+
+    expect(isAlive(world, e)).toBe(false);
+    const alive = listAlive(world);
+    expect(alive.length).toBe(1);
+    const reused = alive[0]!;
+    expect(rawIndexOf(reused)).toBe(rawIndexOf(e)); // тот же слот, другое поколение
+    expect(reused).not.toBe(e);
+    expect(getField(world, reused, 'Health', 'hp')).toBe(100); // default prefab'а, не 7
+  });
+
+  it('CMD-7: команда к сущности, убитой предыдущей системой, отбрасывается молча', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const e = spawn(world, 'P');
+
+    const previousSystem = createCommandBuffer(world);
+    previousSystem.destroy(e);
+    previousSystem.flush();
+
+    const commands = createCommandBuffer(world);
+    commands.setField(e, 'Health', 'hp', 7);
+    commands.addComponent(e, 'Stealth', { flag: 1 });
+    commands.removeComponent(e, 'Health');
+    commands.destroy(e);
+    expect(() => commands.flush()).not.toThrow();
+    expect(listAlive(world).length).toBe(0);
+  });
+
   it('addComponent/removeComponent через буфер меняют принадлежность компонента', () => {
     const world = createWorld(schemas, [prefab('P', {})]);
     const e = spawn(world, 'P');
@@ -283,5 +343,30 @@ describe('capacity', () => {
     spawn(world, 'P');
     spawn(world, 'P');
     expect(() => spawn(world, 'P')).toThrow(/capacity/);
+  });
+});
+
+describe('публичная поверхность пакета (TICK-3)', () => {
+  it('наружу уходит только чтение мира плюс явный worldInit-хелпер', () => {
+    const mutators = [
+      'spawn',
+      'destroy',
+      'setField',
+      'addComponent',
+      'removeComponent',
+      'addTag',
+      'createWorld',
+      'fromPlain',
+      'copyWorldInto',
+      'clearDirty',
+      'componentMasks', // отдаёт живой Uint32Array мира — тоже запись
+    ];
+    for (const name of mutators) {
+      expect(core.world).not.toHaveProperty(name);
+    }
+    expect(typeof core.world.getField).toBe('function');
+    expect(typeof core.world.listAlive).toBe('function');
+    // Единственный мутатор в поверхности — с назначением в имени (TICK-3, исключение 1).
+    expect(typeof core.worldInitSpawn).toBe('function');
   });
 });

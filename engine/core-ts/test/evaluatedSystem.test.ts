@@ -125,6 +125,99 @@ describe('EvaluatedSystem в тике (SYS-1, SYS-4)', () => {
   });
 });
 
+describe('JSON-система читает события тика (EVT-2, ACT-1)', () => {
+  /** Публикует факт: сколько урона нанесено и кому. */
+  const emitter: SystemDef = {
+    name: 'Scorcher',
+    order: 10,
+    query: { all: ['Burning'] },
+    as: 'e',
+    do: [{ emitEvent: { type: 'Scorch', data: { target: v('e'), amount: F(5) } } }],
+  };
+
+  /** Политика: реакция на факт. Адресат и величина берутся из данных события. */
+  const reactor = (order: number): SystemDef => ({
+    name: 'ScorchDamage',
+    order,
+    do: [
+      {
+        forEachEvent: {
+          type: 'Scorch',
+          as: 'hit',
+          do: [
+            {
+              modifyComponent: {
+                entity: { eventField: [v('hit'), 'target'] },
+                component: 'Health',
+                values: {
+                  current: {
+                    '-': [
+                      field({ eventField: [v('hit'), 'target'] }, 'Health', 'current'),
+                      { eventField: [v('hit'), 'amount'] },
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  const runPair = (reactorOrder: number): ReturnType<typeof makeWorld> => {
+    const world = makeWorld();
+    spawn(world, 'Torch');
+    spawn(world, 'Rock');
+
+    const registry = new SystemRegistry();
+    registry.registerFromJson(emitter, world);
+    registry.registerFromJson(reactor(reactorOrder), world);
+    tick({ systems: registry, worldSeed: 1, math: mathApi }, initialState(world, 1));
+    return world;
+  };
+
+  it('реагирует на событие системы с меньшим order', () => {
+    const world = runPair(20);
+    const [torch, rock] = [...listAlive(world)];
+
+    expect(getField(world, torch!, 'Health', 'current')).toBe(F(25));
+    expect(getField(world, rock!, 'Health', 'current')).toBe(F(30)); // не был адресатом
+  });
+
+  it('с меньшим order не видит ничего: порядок реакции задаётся order', () => {
+    const world = runPair(5);
+    const [torch] = [...listAlive(world)];
+
+    expect(getField(world, torch!, 'Health', 'current')).toBe(F(30));
+  });
+
+  it('валидация ловит ссылку на событие вне тела и нелитеральное имя поля', () => {
+    const leaked: SystemDef = {
+      ...reactor(20),
+      do: [
+        { forEachEvent: { type: 'Scorch', as: 'hit', do: [] } },
+        { destroyEntity: { entity: { eventField: [v('hit'), 'target'] } } },
+      ],
+    };
+    const computed: SystemDef = {
+      ...reactor(20),
+      do: [
+        {
+          forEachEvent: {
+            type: 'Scorch',
+            as: 'hit',
+            do: [{ destroyEntity: { entity: { eventField: [v('hit'), v('hit')] } } }],
+          },
+        },
+      ],
+    };
+
+    expect(() => validateSystem(leaked, makeWorld())).toThrow(/переменная "hit" не связана/);
+    expect(() => validateSystem(computed, makeWorld())).toThrow(/ожидался строковый литерал/);
+  });
+});
+
 describe('парность evaluate- и TS-реализации (SYS-6, SYS-8)', () => {
   it('одинаковое состояние мира и одинаковые события за три тика', () => {
     const json = run(new EvaluatedSystem(BURNING_JSON), 3);

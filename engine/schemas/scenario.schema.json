@@ -110,6 +110,7 @@
           "destroyEntity",
           "emitEvent",
           "forEach",
+          "forEachEvent",
           "if",
           "let",
           "modifyComponent",
@@ -202,6 +203,7 @@
               "and",
               "bitTest",
               "clamp",
+              "eventField",
               "fromInt",
               "getComponent",
               "hasComponent",
@@ -260,7 +262,10 @@
           "type": "integer"
         },
         "buttons": {
-          "type": "integer"
+          "$comment": "u16-битмаска; ширину поля задаёт TICK-2, схема ей соответствует.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
         }
       }
     },

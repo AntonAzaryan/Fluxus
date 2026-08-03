@@ -188,8 +188,12 @@ const ACTIONS: Record<string, ActionFn> = {
     const entity = entityOf(a, ctx, vars, 'modifyComponent');
     const component = argStr(a, 'component', 'modifyComponent');
     const values = fields(argFields(a, 'values', 'modifyComponent'), ctx, vars, 'modifyComponent');
-    for (const [field, value] of Object.entries(values)) {
-      ctx.commands.setField(entity, component, field, value);
+    // Ключи сортируются повторно, а не берутся перечислением уже
+    // отсортированной карты: собранный объект носителем порядка быть не может —
+    // целочисленные имена в нём всплывают вперёд и упорядочиваются численно
+    // (`"9"` до `"10"`), что расходится с ACT-3.
+    for (const field of Object.keys(values).sort()) {
+      ctx.commands.setField(entity, component, field, values[field]!);
     }
   },
   addComponent: (a, ctx, vars) => {
@@ -304,6 +308,26 @@ const ACTIONS: Record<string, ActionFn> = {
     // до flush (CMD-1) — итерация стабильна независимо от тела.
     for (const entity of ctx.query(querySpec(a['query'], ctx, vars))) {
       execute(body, ctx, { ...vars, [as]: entity });
+    }
+  },
+  /**
+   * Итерация по событиям тика заданного типа (EVT-2). В тело уходит ссылка на
+   * событие — индекс в шине, — а поля читаются оператором `eventField`
+   * (EXPR-2): значение переменной DSL — скаляр или вектор, карта полей в него
+   * не помещается.
+   *
+   * Длина берётся один раз до обхода — по тому же правилу, что у `forEach` над
+   * запросом (QUERY-3): иначе тело, эмитящее событие того же типа, растило бы
+   * обход изнутри и зацикливалось.
+   */
+  forEachEvent: (a, ctx, vars) => {
+    const type = argStr(a, 'type', 'forEachEvent');
+    const as = argStr(a, 'as', 'forEachEvent');
+    const body = argBody(a, 'do', 'forEachEvent');
+    const published = ctx.events.length;
+    for (let i = 0; i < published; i++) {
+      if (ctx.events.at(i).type !== type) continue;
+      execute(body, ctx, { ...vars, [as]: i });
     }
   },
 };

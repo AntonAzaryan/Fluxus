@@ -256,7 +256,8 @@ export interface SystemContext {
   readonly has: (entity: EntityId, component: string) => boolean;
   readonly isAlive: (entity: EntityId) => boolean;
   readonly commands: CommandBuffer;
-  readonly events: EventEmitter;
+  /** Публикация и чтение шины тика (EVT-2): система видит события систем с меньшим `order`. */
+  readonly events: EventEmitter & ReadonlyEventLog;
   readonly rng: RngStreams;
   readonly math: MathApi;
   readonly physics?: PhysicsApi;

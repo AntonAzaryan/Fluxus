@@ -10,7 +10,43 @@ export { mathApi } from './math/mathApi.js';
 export { createRngRegistry, XorShift128Stream, seedStateFromName, fnv1a32 } from './math/rng.js';
 
 // ecs — хранилище мира
-export * as world from './ecs/world.js';
+import * as worldModule from './ecs/world.js';
+
+/**
+ * Чтение мира — публично; запись — нет (TICK-3). Мутаторы `spawn`/`destroy`/
+ * `setField`/`addComponent`/`removeComponent`/`addTag` и служебные
+ * `createWorld`/`fromPlain`/`copyWorldInto`/`clearDirty` остаются внутренними:
+ * опубликованные, они и есть тот side-channel, который TICK-3 объявляет
+ * несуществующим. Внутри тика мутации идут через Command Buffer (DET-7),
+ * начальная расстановка — через `worldInitSpawn`.
+ *
+ * `componentMasks` тоже не публичен: он отдаёт живой Uint32Array мира, то есть
+ * запись в состав компонентов в обход команд.
+ */
+export const world = {
+  cloneWorld: worldModule.cloneWorld,
+  componentId: worldModule.componentId,
+  componentSchema: worldModule.componentSchema,
+  dirtyEntities: worldModule.dirtyEntities,
+  dirtyIsEmpty: worldModule.dirtyIsEmpty,
+  getField: worldModule.getField,
+  hasComponent: worldModule.hasComponent,
+  hasTag: worldModule.hasTag,
+  indexOf: worldModule.indexOf,
+  isAlive: worldModule.isAlive,
+  listAlive: worldModule.listAlive,
+  prefabOf: worldModule.prefabOf,
+  toPlain: worldModule.toPlain,
+} as const;
+
+/**
+ * Единственный мутирующий хелпер в публичной поверхности: расстановка
+ * `worldInit` ДО первого `tick()` (TICK-3, исключение 1; DET-1). Порядок
+ * вызовов входит в воспроизводимость — он задаёт выданные ID (ID-2).
+ * Вызов после первого тика — нарушение TICK-3, а не поддержанный сценарий.
+ */
+export const worldInitSpawn = worldModule.spawn;
+
 export type { PrefabDef, PlainWorld } from './ecs/world.js';
 export * as entityIndex from './ecs/entityIndex.js';
 export * as componentMask from './ecs/componentMask.js';

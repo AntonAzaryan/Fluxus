@@ -217,7 +217,12 @@ const inputFrame: Json = {
     seq: { type: 'integer' },
     move: { $ref: '#/$defs/vec2' },
     aimDir: { type: 'integer' },
-    buttons: { type: 'integer' },
+    buttons: {
+      $comment: 'u16-битмаска; ширину поля задаёт TICK-2, схема ей соответствует.',
+      type: 'integer',
+      minimum: 0,
+      maximum: 65535,
+    },
   },
 };
 

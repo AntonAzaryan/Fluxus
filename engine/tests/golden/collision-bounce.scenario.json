@@ -1,0 +1,72 @@
+{
+  "name": "collision-bounce",
+  "seed": 20260803,
+  "ticks": 8,
+  "physics": {},
+  "scene": {
+    "components": [
+      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } },
+      {
+        "name": "Collider",
+        "fields": { "halfX": "fixed", "halfY": "fixed", "radius": "fixed", "shape": "i32" }
+      }
+    ],
+    "prefabs": [
+      {
+        "name": "Walker",
+        "components": {
+          "Position": { "x": 32768, "y": 229376 },
+          "Velocity": { "x": 16384, "y": 0 },
+          "Collider": { "halfX": 16384, "halfY": 16384, "radius": 16384, "shape": 1 }
+        }
+      },
+      {
+        "name": "Boulder",
+        "components": {
+          "Position": { "x": 163840, "y": 229376 },
+          "Collider": { "halfX": 32768, "halfY": 32768, "radius": 32768, "shape": 0 }
+        },
+        "tags": ["blocksMovement"]
+      }
+    ],
+    "systems": [
+      {
+        "name": "Bounce",
+        "order": 200,
+        "do": [
+          {
+            "forEachEvent": {
+              "type": "Collision",
+              "as": "hit",
+              "do": [
+                {
+                  "modifyComponent": {
+                    "entity": { "eventField": [{ "var": "hit" }, "entity"] },
+                    "component": "Velocity",
+                    "values": {
+                      "x": {
+                        "*": [
+                          {
+                            "getComponent": [
+                              { "eventField": [{ "var": "hit" }, "entity"] },
+                              "Velocity",
+                              "x"
+                            ]
+                          },
+                          { "eventField": [{ "var": "hit" }, "nx"] }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "capacity": 16
+  },
+  "initial": [{ "prefab": "Walker" }, { "prefab": "Boulder" }]
+}

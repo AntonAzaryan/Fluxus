@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { evaluate, operators, type Expression, type ExprWorld } from '../src/dsl/expr.js';
+import { EventBus } from '../src/ecs/events.js';
 import * as fixed from '../src/math/fixed.js';
 import { mathApi } from '../src/math/mathApi.js';
 
@@ -18,11 +19,17 @@ const ENTITIES: Record<number, Record<string, Record<string, number>>> = {
   },
 };
 
-// Sandbox EXPR-3 проверяется типом, а не тестом: в ExprWorld нет ни commands,
-// ни events, поэтому выражению нечем мутировать мир — этот стаб полон.
+/** Шина тика: два события, чтобы читалось именно то, на которое ссылка (EVT-2). */
+const events = new EventBus();
+events.emit('Collision', { entity: 1, other: 2, nx: fixed.fromInt(-1), ny: 0 });
+events.emit('Died', { entity: 7 });
+
+// Sandbox EXPR-3 проверяется типом, а не тестом: в ExprWorld нет commands, а
+// шина лежит read-only-частью, без `emit`, — этот стаб полон.
 const world: ExprWorld = {
   tick: 42,
   math: mathApi,
+  events,
   get: (e, c, f) => {
     const value = ENTITIES[e]?.[c]?.[f];
     if (value === undefined) throw new Error(`нет поля ${c}.${f} у ${e}`);
@@ -73,6 +80,38 @@ describe('доступ к миру', () => {
     expect(evaluate({ hasComponent: [2, 'Ammo'] }, world)).toBe(false);
     expect(evaluate({ isAlive: [99] }, world)).toBe(false);
     expect(evaluate({ tick: [] }, world)).toBe(42);
+  });
+});
+
+describe('чтение поля события (EXPR-2)', () => {
+  // Ссылка на событие — индекс в шине тика; в системе её связывает forEachEvent.
+  const hit = (index: number, field: string): Expression => ({ eventField: [index, field] });
+
+  it('читает поле того события, на которое ссылка', () => {
+    expect(evaluate(hit(0, 'entity'), world)).toBe(1);
+    expect(evaluate(hit(0, 'nx'), world)).toBe(fixed.fromInt(-1));
+    expect(evaluate(hit(1, 'entity'), world)).toBe(7);
+  });
+
+  it('масштаб не преобразует — как getComponent', () => {
+    // Нормаль уже Q16.16, идентификатор — сырое целое; оператор не трогает ни то, ни другое.
+    expect(evaluate({ '*': [hit(0, 'nx'), F(0.25)] }, world)).toBe(F(-0.25));
+  });
+
+  it('падает на отсутствующем поле, называя тип события и поле', () => {
+    expect(() => evaluate(hit(1, 'nx'), world)).toThrow(/у события "Died" нет поля "nx"/);
+  });
+
+  it('не разрешает имя поля через цепочку прототипов (EXPR-6)', () => {
+    expect(() => evaluate(hit(0, 'toString'), world)).toThrow(/нет поля "toString"/);
+  });
+
+  it('падает на ссылке вне шины', () => {
+    expect(() => evaluate(hit(9, 'entity'), world)).toThrow(/нет события с индексом 9/);
+  });
+
+  it('оператор входит в закрытую таблицу', () => {
+    expect(operators).toContain('eventField');
   });
 });
 

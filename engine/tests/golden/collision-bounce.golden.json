@@ -1,0 +1,664 @@
+{
+  "scenario": "collision-bounce",
+  "seed": 20260803,
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              16384,
+              32768
+            ],
+            "halfY": [
+              16384,
+              32768
+            ],
+            "radius": [
+              16384,
+              32768
+            ],
+            "shape": [
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              32768,
+              163840
+            ],
+            "y": [
+              229376,
+              229376
+            ]
+          },
+          "Velocity": {
+            "x": [
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            1,
+            [
+              "blocksMovement"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              16384,
+              32768
+            ],
+            "halfY": [
+              16384,
+              32768
+            ],
+            "radius": [
+              16384,
+              32768
+            ],
+            "shape": [
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              49152,
+              163840
+            ],
+            "y": [
+              229376,
+              229376
+            ]
+          },
+          "Velocity": {
+            "x": [
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            1,
+            [
+              "blocksMovement"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              16384,
+              32768
+            ],
+            "halfY": [
+              16384,
+              32768
+            ],
+            "radius": [
+              16384,
+              32768
+            ],
+            "shape": [
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              65536,
+              163840
+            ],
+            "y": [
+              229376,
+              229376
+            ]
+          },
+          "Velocity": {
+            "x": [
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            1,
+            [
+              "blocksMovement"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              16384,
+              32768
+            ],
+            "halfY": [
+              16384,
+              32768
+            ],
+            "radius": [
+              16384,
+              32768
+            ],
+            "shape": [
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              81920,
+              163840
+            ],
+            "y": [
+              229376,
+              229376
+            ]
+          },
+          "Velocity": {
+            "x": [
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            1,
+            [
+              "blocksMovement"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 4,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              16384,
+              32768
+            ],
+            "halfY": [
+              16384,
+              32768
+            ],
+            "radius": [
+              16384,
+              32768
+            ],
+            "shape": [
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              98304,
+              163840
+            ],
+            "y": [
+              229376,
+              229376
+            ]
+          },
+          "Velocity": {
+            "x": [
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            1,
+            [
+              "blocksMovement"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 5,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              16384,
+              32768
+            ],
+            "halfY": [
+              16384,
+              32768
+            ],
+            "radius": [
+              16384,
+              32768
+            ],
+            "shape": [
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              114688,
+              163840
+            ],
+            "y": [
+              229376,
+              229376
+            ]
+          },
+          "Velocity": {
+            "x": [
+              16384,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            1,
+            [
+              "blocksMovement"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 6,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              16384,
+              32768
+            ],
+            "halfY": [
+              16384,
+              32768
+            ],
+            "radius": [
+              16384,
+              32768
+            ],
+            "shape": [
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              114688,
+              163840
+            ],
+            "y": [
+              229376,
+              229376
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -16384,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            1,
+            [
+              "blocksMovement"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Collision",
+          "data": {
+            "entity": 0,
+            "nx": -65536,
+            "ny": 0,
+            "other": 1
+          }
+        }
+      ],
+      "mode": "Running"
+    },
+    {
+      "tick": 7,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              16384,
+              32768
+            ],
+            "halfY": [
+              16384,
+              32768
+            ],
+            "radius": [
+              16384,
+              32768
+            ],
+            "shape": [
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              98304,
+              163840
+            ],
+            "y": [
+              229376,
+              229376
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -16384,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            1,
+            [
+              "blocksMovement"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 8,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          7,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "halfX": [
+              16384,
+              32768
+            ],
+            "halfY": [
+              16384,
+              32768
+            ],
+            "radius": [
+              16384,
+              32768
+            ],
+            "shape": [
+              1,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              81920,
+              163840
+            ],
+            "y": [
+              229376,
+              229376
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -16384,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            1,
+            [
+              "blocksMovement"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    }
+  ]
+}

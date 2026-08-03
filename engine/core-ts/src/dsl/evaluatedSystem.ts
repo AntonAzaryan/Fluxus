@@ -214,8 +214,9 @@ function checkQuery(node: unknown, world: WorldState, scope: ReadonlySet<string>
 }
 
 /**
- * Строковые литералы принимают только `var`, `getComponent` и `hasComponent`;
- * у всех остальных операторов аргументы — выражения, поэтому обход общий.
+ * Строковые литералы принимают только `var`, `getComponent`, `hasComponent` и
+ * `eventField`; у всех остальных операторов аргументы — выражения, поэтому
+ * обход общий.
  */
 function checkExpression(node: unknown, world: WorldState, scope: ReadonlySet<string>, path: string): void {
   if (typeof node === 'number' || typeof node === 'boolean') return;
@@ -238,6 +239,13 @@ function checkExpression(node: unknown, world: WorldState, scope: ReadonlySet<st
       const field = literal(args[2], `${at}[2]`);
       if (schema.fields[field] === undefined) fail(`${at}[2]`, `у компонента "${component}" нет поля "${field}"`);
     }
+    return;
+  }
+  if (op === 'eventField') {
+    // Существование поля не проверяется: реестра типов событий и их полей в
+    // ядре нет — состав данных задаёт эмитент, в том числе нативный (EXPR-2).
+    checkExpression(args[0], world, scope, `${at}[0]`);
+    literal(args[1], `${at}[1]`);
     return;
   }
   args.forEach((arg, i) => checkExpression(arg, world, scope, `${at}[${i}]`));

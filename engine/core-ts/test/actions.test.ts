@@ -22,9 +22,13 @@ const F = fixed.fromFloat;
 const Position: ComponentSchema = { name: 'Position', fields: { x: 'fixed', y: 'fixed' } };
 const Health: ComponentSchema = { name: 'Health', fields: { current: 'fixed', max: 'fixed' } };
 const Shield: ComponentSchema = { name: 'Shield', fields: { amount: 'fixed' } };
-// Поле с целочисленным именем: именно из-за него порядок ключей объекта
-// нельзя брать за основу детерминизма (ACT-3).
-const Slots: ComponentSchema = { name: 'Slots', fields: { '0': 'i32', a: 'i32', b: 'i32' } };
+// Поля с целочисленными именами: именно из-за них порядок ключей объекта нельзя
+// брать за основу детерминизма (ACT-3). `"9"`/`"10"` — случай, где численный
+// порядок всплывших ключей противоположен лексикографическому.
+const Slots: ComponentSchema = {
+  name: 'Slots',
+  fields: { '0': 'i32', '9': 'i32', '10': 'i32', a: 'i32', b: 'i32' },
+};
 
 /** Список источников сцены (TIME-7): экземпляр на харнесс, не на модуль (DI-1). */
 const SLOW = modifierList('SlowSources', 2);
@@ -151,6 +155,19 @@ describe('порядок команд (ACT-3)', () => {
     expect(h.setFieldLog).toEqual(['Slots.0', 'Slots.a', 'Slots.b']);
   });
 
+  it('целочисленные имена полей идут лексикографически, а не численно', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+    execute([{ addComponent: { entity: hero, component: 'Slots' } }], h.ctx);
+    h.commands.flush();
+
+    execute([{ modifyComponent: { entity: hero, component: 'Slots', values: { 9: 1, 10: 2 } } }], h.ctx);
+
+    // Перечисление ключей объекта дало бы `9`, `10` — численный порядок
+    // всплывших целочисленных имён; ACT-3 требует лексикографического.
+    expect(h.setFieldLog).toEqual(['Slots.10', 'Slots.9']);
+  });
+
   it('действия внутри do исполняются в порядке перечисления', () => {
     const h = harness();
     const hero = spawn(h.world, 'Hero');
@@ -192,6 +209,69 @@ describe('spawnEntity с переопределением полей prefab (CMD
     const h = harness();
     execute([{ spawnEntity: { prefab: 'Projectile', overrides: { Position: { z: F(1) } } } }], h.ctx);
     expect(() => h.commands.flush()).toThrow(/нет поля "z"/);
+  });
+});
+
+describe('итерация по событиям тика (ACT-1, EVT-2)', () => {
+  /** Реакция: на каждое событие своего типа публикуется `Reacted` с его полем. */
+  const react = (type: string): Action => ({
+    forEachEvent: {
+      type,
+      as: 'hit',
+      do: [{ emitEvent: { type: 'Reacted', data: { n: { eventField: [{ var: 'hit' }, 'n'] } } } }],
+    },
+  });
+
+  const types = (h: Harness): string[] => [...h.events].map((e) => `${e.type}:${e.data['n']}`);
+
+  it('обходит только события своего типа, в порядке публикации', () => {
+    const h = harness();
+    h.events.emit('Collision', { n: 1 });
+    h.events.emit('Died', { n: 2 });
+    h.events.emit('Collision', { n: 3 });
+
+    execute([react('Collision')], h.ctx);
+
+    expect(types(h)).toEqual(['Collision:1', 'Died:2', 'Collision:3', 'Reacted:1', 'Reacted:3']);
+  });
+
+  it('событие, эмитнутое телом, в текущем обходе не участвует', () => {
+    const h = harness();
+    h.events.emit('Collision', { n: 1 });
+
+    // Тело публикует событие того же типа: обход, растущий изнутри, зациклился бы.
+    execute(
+      [
+        {
+          forEachEvent: {
+            type: 'Collision',
+            as: 'hit',
+            do: [{ emitEvent: { type: 'Collision', data: { n: { eventField: [{ var: 'hit' }, 'n'] } } } }],
+          },
+        },
+      ],
+      h.ctx,
+    );
+
+    expect(types(h)).toEqual(['Collision:1', 'Collision:1']);
+  });
+
+  it('ссылка на событие не видна за пределами тела', () => {
+    const h = harness();
+    h.events.emit('Collision', { n: 1 });
+    const after: Action = { emitEvent: { type: 'Reacted', data: { n: { eventField: [{ var: 'hit' }, 'n'] } } } };
+
+    expect(() => execute([react('Collision'), after], h.ctx)).toThrow(/неизвестная переменная "hit"/);
+  });
+
+  it('тип события — строковый литерал, а не выражение', () => {
+    expect(() => execute([{ forEachEvent: { type: { var: 'x' }, as: 'hit', do: [] } }], harness().ctx)).toThrow(
+      /строковый литерал/,
+    );
+  });
+
+  it('действие входит в закрытый набор', () => {
+    expect(actionNames).toContain('forEachEvent');
   });
 });
 
