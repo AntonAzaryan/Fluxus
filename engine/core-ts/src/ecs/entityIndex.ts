@@ -12,7 +12,7 @@
  * точны, а 2^48 гарантированно влезает. В Rust та же величина — u64, и то же
  * арифметическое правило (без сдвигов) тривиально воспроизводится побитово.
  */
-import { DEBUG, assert } from '../debug.js';
+import { DEBUG, assert, assertInvariant } from '../debug.js';
 import type { EntityId } from '../types.js';
 
 /** index и generation — по 24 бита каждый (см. упаковку в комментарии выше). */
@@ -37,12 +37,10 @@ export interface EntityIndex {
 
 /** ID-4: только TypedArray/число/массив чисел — тривиально клонируется и сериализуется. */
 export function createEntityIndex(capacity: number): EntityIndex {
-  if (DEBUG) {
-    assert(
-      Number.isInteger(capacity) && capacity > 0 && capacity <= GENERATION_LIMIT,
-      `EntityIndex: недопустимая capacity ${capacity}`,
-    );
-  }
+  assertInvariant(
+    Number.isInteger(capacity) && capacity > 0 && capacity <= GENERATION_LIMIT,
+    `EntityIndex: недопустимая capacity ${capacity}`,
+  );
   return {
     capacity,
     generations: new Uint32Array(capacity),
@@ -55,13 +53,14 @@ export function createEntityIndex(capacity: number): EntityIndex {
 
 /** Упаковка index+generation в один EntityId — арифметикой, см. комментарий в шапке файла. */
 export function makeEntityId(index: number, generation: number): EntityId {
-  if (DEBUG) {
-    assert(Number.isInteger(index) && index >= 0 && index <= MAX_INDEX, `EntityIndex: index вне диапазона: ${index}`);
-    assert(
-      Number.isInteger(generation) && generation >= 0 && generation <= MAX_GENERATION,
-      `EntityIndex: generation вне диапазона: ${generation}`,
-    );
-  }
+  assertInvariant(
+    Number.isInteger(index) && index >= 0 && index <= MAX_INDEX,
+    `EntityIndex: index вне диапазона: ${index}`,
+  );
+  assertInvariant(
+    Number.isInteger(generation) && generation >= 0 && generation <= MAX_GENERATION,
+    `EntityIndex: generation вне диапазона: ${generation}`,
+  );
   return index + generation * GENERATION_LIMIT;
 }
 
@@ -80,9 +79,7 @@ export function allocate(idx: EntityIndex): EntityId {
   if (fromFree !== undefined) {
     index = fromFree;
   } else {
-    if (idx.nextIndex >= idx.capacity) {
-      throw new Error(`EntityIndex: превышена capacity (${idx.capacity})`);
-    }
+    assertInvariant(idx.nextIndex < idx.capacity, `EntityIndex: превышена capacity (${idx.capacity})`);
     index = idx.nextIndex;
     idx.nextIndex++;
   }

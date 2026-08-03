@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setAssertSink } from '../src/debug.js';
 import {
   allocate,
   aliveEntities,
@@ -13,6 +14,23 @@ import {
 
 const MAX_INDEX = 2 ** 24 - 1;
 const MAX_GENERATION = 2 ** 24 - 1;
+
+/** Импортирует entityIndex.ts заново под заданным NODE_ENV, чтобы проверить release-сборку. */
+async function importEntityIndexUnder(nodeEnv: string): Promise<typeof import('../src/ecs/entityIndex.js')> {
+  const prev = process.env.NODE_ENV;
+  process.env.NODE_ENV = nodeEnv;
+  vi.resetModules();
+  try {
+    return await import('../src/ecs/entityIndex.js');
+  } finally {
+    process.env.NODE_ENV = prev;
+    vi.resetModules();
+  }
+}
+
+afterEach(() => {
+  setAssertSink(() => {});
+});
 
 describe('entityIndex', () => {
   it('ID-2/DET-6: последовательные allocate дают предсказуемые индексы; повтор с нуля даёт те же id', () => {
@@ -121,12 +139,35 @@ describe('entityIndex', () => {
     expect(idx.aliveCount).toBe(1);
   });
 
-  it('исчерпание capacity бросает внятную ошибку', () => {
+  it('ID-1: исчерпание capacity — жёсткая граница рождения EntityId, бросает в обоих режимах сборки', async () => {
     const idx = createEntityIndex(2);
     allocate(idx);
     allocate(idx);
-
     expect(() => allocate(idx)).toThrow(/capacity/i);
+
+    const release = await importEntityIndexUnder('production');
+    const relIdx = release.createEntityIndex(2);
+    release.allocate(relIdx);
+    release.allocate(relIdx);
+    expect(() => release.allocate(relIdx)).toThrow(/capacity/i);
+  });
+
+  it('ID-1: createEntityIndex с недопустимой capacity — assertInvariant, бросает в обоих режимах', async () => {
+    expect(() => createEntityIndex(0)).toThrow();
+    expect(() => createEntityIndex(-1)).toThrow();
+    expect(() => createEntityIndex(1.5)).toThrow();
+
+    const release = await importEntityIndexUnder('production');
+    expect(() => release.createEntityIndex(0)).toThrow();
+  });
+
+  it('ID-1: makeEntityId с index/generation вне 24 бит — assertInvariant, бросает в обоих режимах', async () => {
+    expect(() => makeEntityId(MAX_INDEX + 1, 0)).toThrow();
+    expect(() => makeEntityId(0, MAX_GENERATION + 1)).toThrow();
+    expect(() => makeEntityId(-1, 0)).toThrow();
+
+    const release = await importEntityIndexUnder('production');
+    expect(() => release.makeEntityId(MAX_INDEX + 1, 0)).toThrow();
   });
 
   it('id часто переиспользуемого слота не усекается в контейнере результата (ID-1)', () => {
@@ -146,14 +187,20 @@ describe('entityIndex', () => {
     expect(isAlive(idx, listed[0]!)).toBe(true);
   });
 
-  it('переполнение generation: в debug-сборке (тестовое окружение) — assert вместо тихого wrap', () => {
+  it('переполнение generation: мягкий assert (sink, не throw) — значение заворачивается одинаково в debug и release', () => {
     const idx = createEntityIndex(1);
-    const id = allocate(idx);
+    allocate(idx);
     idx.generations[0] = MAX_GENERATION; // симулируем слот, переиспользованный 2^24-1 раз
     const staleId = makeEntityId(0, MAX_GENERATION);
 
-    // free() должен увидеть переполнение до инкремента и бросить assert (DEBUG=true в тестах);
-    // в релизной сборке (DEBUG=false) та же ветка молча делает wrap к 0 через `% GENERATION_LIMIT`.
-    expect(() => free(idx, staleId)).toThrow(/generation/i);
+    const sink = vi.fn();
+    setAssertSink(sink);
+
+    // free() не бросает: диагностика уходит в sink, а generation молча заворачивается к 0
+    // через `% GENERATION_LIMIT` — то же самое значение, что было бы и в release-сборке.
+    expect(() => free(idx, staleId)).not.toThrow();
+    expect(sink).toHaveBeenCalledTimes(1);
+    expect(sink.mock.calls[0]?.[0]).toMatch(/generation/i);
+    expect(idx.generations[0]).toBe(0);
   });
 });

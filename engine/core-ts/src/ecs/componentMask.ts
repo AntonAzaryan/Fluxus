@@ -4,7 +4,7 @@
  * Каждой сущности соответствует `wordsPerEntity` слов Uint32Array, индексируемых raw-индексом
  * сущности. Компонент — это просто числовой id: бит `id % 32` в слове `floor(id / 32)`.
  * Структура — только Uint32Array и числа, без Map/Set/замыканий, чтобы её можно было
- * тривиально положить в снапшот мира и склонировать (structural sharing, SNAP-5).
+ * тривиально положить в снапшот мира и склонировать.
  */
 
 import { DEBUG, assert } from '../debug.js';
@@ -28,7 +28,9 @@ export function createMasks(capacity: number, componentCount: number): Component
   };
 }
 
+/** Мягкая диагностика (FP-4): вызывающий код зовёт её безусловно, проверка — только под DEBUG. */
 function checkBounds(masks: ComponentMasks, index: number, componentId?: number): void {
+  if (!DEBUG) return;
   assert(index >= 0 && index < masks.capacity, `entity index ${index} вне capacity ${masks.capacity}`);
   if (componentId !== undefined) {
     assert(
@@ -39,7 +41,7 @@ function checkBounds(masks: ComponentMasks, index: number, componentId?: number)
 }
 
 export function setComponent(masks: ComponentMasks, index: number, componentId: number): void {
-  if (DEBUG) checkBounds(masks, index, componentId);
+  checkBounds(masks, index, componentId);
   const { word, bit } = bitPos(componentId);
   const slot = index * masks.wordsPerEntity + word;
   // `>>> 0`: `1 << bit` при bit === 31 даёт отрицательное число (знаковый int32) —
@@ -48,21 +50,21 @@ export function setComponent(masks: ComponentMasks, index: number, componentId: 
 }
 
 export function clearComponent(masks: ComponentMasks, index: number, componentId: number): void {
-  if (DEBUG) checkBounds(masks, index, componentId);
+  checkBounds(masks, index, componentId);
   const { word, bit } = bitPos(componentId);
   const slot = index * masks.wordsPerEntity + word;
   masks.words[slot] = ((masks.words[slot] as number) & ~(1 << bit)) >>> 0;
 }
 
 export function hasComponent(masks: ComponentMasks, index: number, componentId: number): boolean {
-  if (DEBUG) checkBounds(masks, index, componentId);
+  checkBounds(masks, index, componentId);
   const { word, bit } = bitPos(componentId);
   const slot = index * masks.wordsPerEntity + word;
   return (((masks.words[slot] as number) >>> bit) & 1) !== 0;
 }
 
 export function clearEntity(masks: ComponentMasks, index: number): void {
-  if (DEBUG) checkBounds(masks, index);
+  checkBounds(masks, index);
   const base = index * masks.wordsPerEntity;
   for (let w = 0; w < masks.wordsPerEntity; w++) {
     masks.words[base + w] = 0;
@@ -73,7 +75,7 @@ export function clearEntity(masks: ComponentMasks, index: number): void {
 export function buildQueryMask(masks: ComponentMasks, componentIds: readonly number[]): Uint32Array {
   const mask = new Uint32Array(masks.wordsPerEntity);
   for (const id of componentIds) {
-    if (DEBUG) checkBounds(masks, 0, id);
+    checkBounds(masks, 0, id);
     const { word, bit } = bitPos(id);
     mask[word] = ((mask[word] as number) | (1 << bit)) >>> 0;
   }
@@ -92,7 +94,7 @@ export function isEmptyMask(queryMask: Uint32Array): boolean {
  * нет требуемых битов — условие вакуумно истинно.
  */
 export function matchesAll(masks: ComponentMasks, index: number, queryMask: Uint32Array): boolean {
-  if (DEBUG) checkBounds(masks, index);
+  checkBounds(masks, index);
   const base = index * masks.wordsPerEntity;
   for (let w = 0; w < queryMask.length; w++) {
     const q = queryMask[w] as number;
@@ -108,7 +110,7 @@ export function matchesAll(masks: ComponentMasks, index: number, queryMask: Uint
  */
 export function matchesAny(masks: ComponentMasks, index: number, queryMask: Uint32Array): boolean {
   if (isEmptyMask(queryMask)) return true;
-  if (DEBUG) checkBounds(masks, index);
+  checkBounds(masks, index);
   const base = index * masks.wordsPerEntity;
   for (let w = 0; w < queryMask.length; w++) {
     if ((((masks.words[base + w] as number) & (queryMask[w] as number)) >>> 0) !== 0) return true;
@@ -118,7 +120,7 @@ export function matchesAny(masks: ComponentMasks, index: number, queryMask: Uint
 
 /** Ни один бит queryMask не присутствует у сущности. Пустой queryMask (пустой `not`) матчит всё. */
 export function matchesNone(masks: ComponentMasks, index: number, queryMask: Uint32Array): boolean {
-  if (DEBUG) checkBounds(masks, index);
+  checkBounds(masks, index);
   const base = index * masks.wordsPerEntity;
   for (let w = 0; w < queryMask.length; w++) {
     if ((((masks.words[base + w] as number) & (queryMask[w] as number)) >>> 0) !== 0) return false;

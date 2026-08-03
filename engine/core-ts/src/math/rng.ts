@@ -3,7 +3,7 @@
  * Алгоритм, хеш и развёртка seed зафиксированы в спеке дословно — здесь
  * ничего не меняется "для качества", только побитовая парность с Rust (CORE-2).
  */
-import { assert, DEBUG } from '../debug.js';
+import { assertInvariant } from '../debug.js';
 import type { Fixed, RngStream, RngStreams } from '../types.js';
 
 // ------------------------------------------------------------------- fnv-1a
@@ -131,7 +131,7 @@ export class XorShift128Stream implements RngStream {
 
   /** Lemire multiply-shift с отбраковкой — детерминированно и воспроизводимо в Rust (без float). */
   nextBelow(bound: number): number {
-    if (DEBUG) assert(Number.isInteger(bound) && bound > 0, 'nextBelow: bound должен быть положительным целым');
+    assertInvariant(Number.isInteger(bound) && bound > 0, 'nextBelow: bound должен быть положительным целым');
     const s = bound >>> 0;
     const threshold = ((-s) >>> 0) % s; // (2^32 - s) mod s — граница отбраковки для равномерности
     let hi: number;

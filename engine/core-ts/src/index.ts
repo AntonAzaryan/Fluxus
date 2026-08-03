@@ -1,6 +1,7 @@
 // базис
 export * from './types.js';
-export { DEBUG, assert } from './debug.js';
+export { DEBUG, assert, assertInvariant, setAssertSink } from './debug.js';
+export type { AssertSink } from './debug.js';
 
 // math — детерминированная арифметика
 export * as fixed from './math/fixed.js';

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createRngRegistry,
   fixDegenerateState,
@@ -7,6 +7,19 @@ import {
   splitmix32,
   XorShift128Stream,
 } from '../src/math/rng.js';
+
+/** Импортирует rng.ts заново под заданным NODE_ENV, чтобы проверить release-сборку (RNG-8). */
+async function importRngUnder(nodeEnv: string): Promise<typeof import('../src/math/rng.js')> {
+  const prev = process.env.NODE_ENV;
+  process.env.NODE_ENV = nodeEnv;
+  vi.resetModules();
+  try {
+    return await import('../src/math/rng.js');
+  } finally {
+    process.env.NODE_ENV = prev;
+    vi.resetModules();
+  }
+}
 
 describe('воспроизводимость и независимость стримов', () => {
   it('одинаковые worldSeed + имя -> идентичная последовательность', () => {
@@ -179,6 +192,52 @@ describe('nextFixed', () => {
       expect(viaFixed).toBeGreaterThanOrEqual(0);
       expect(viaFixed).toBeLessThan(65536);
     }
+  });
+});
+
+describe('RNG-8: нормативная формула nextFixed/nextBelow (worldSeed=12345, "DamageSystem")', () => {
+  // Опирается на золотые значения next() из блока GOLDEN ниже: [0x8349c8f0, 0x3fc0d43e, ...].
+
+  it('nextFixed = старшие 16 бит next(), конкретное значение', () => {
+    const stream = new XorShift128Stream(seedStateFromName(12345, 'DamageSystem'));
+    expect(stream.nextFixed()).toBe(0x8349); // 0x8349c8f0 >>> 16 == 33609 == 0x8349
+  });
+
+  it('nextBelow: конкретный bound без отбраковки — один вызов next(), результат по формуле Lemire', () => {
+    const stream = new XorShift128Stream(seedStateFromName(12345, 'DamageSystem'));
+    const reference = new XorShift128Stream(seedStateFromName(12345, 'DamageSystem'));
+
+    const result = stream.nextBelow(100);
+    const x = BigInt(reference.next() >>> 0); // ровно один шаг — первый golden-value не отбраковывается при bound=100
+    const hi = (x * 100n) / (2n ** 32n);
+    expect(result).toBe(Number(hi));
+    expect(result).toBe(51);
+    expect(stream.getState()).toEqual(reference.getState()); // ровно один шаг генератора
+  });
+
+  it('nextBelow: конкретный bound с отбраковкой — первый draw отбракован, второй принят, hi=11390', () => {
+    // bound=45739: threshold=(2^32-45739)%45739=29457; lo(golden[0])=6224 < threshold -> reject;
+    // lo(golden[1])=2841698666 >= threshold -> accept, hi=11390. Сверено BigInt-эталоном при написании теста.
+    const stream = new XorShift128Stream(seedStateFromName(12345, 'DamageSystem'));
+    const reference = new XorShift128Stream(seedStateFromName(12345, 'DamageSystem'));
+
+    const result = stream.nextBelow(45739);
+    reference.next(); // отбракованный вызов
+    reference.next(); // принятый вызов
+
+    expect(result).toBe(11390);
+    expect(stream.getState()).toEqual(reference.getState()); // ровно два шага генератора — отбраковка видна в состоянии
+  });
+
+  it('bound < 1: жёсткая граница (assertInvariant) — бросает и в debug, и в release', async () => {
+    const stream = new XorShift128Stream(seedStateFromName(1, 'X'));
+    expect(() => stream.nextBelow(0)).toThrow();
+    expect(() => stream.nextBelow(-1)).toThrow();
+    expect(() => stream.nextBelow(1.5)).toThrow();
+
+    const release = await importRngUnder('production');
+    const releaseStream = new release.XorShift128Stream(release.seedStateFromName(1, 'X'));
+    expect(() => releaseStream.nextBelow(0)).toThrow();
   });
 });
 

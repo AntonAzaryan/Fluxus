@@ -75,7 +75,7 @@ export function runScenario(def: ScenarioDef): RunOutput {
     throw new Error(`сценарий "${def.name}": "ticks" — неотрицательное целое`);
   }
 
-  if (def.inputs !== undefined && def.inputs.length > 0 && def.players === undefined) {
+  if (def.inputs !== undefined && def.players === undefined) {
     throw new Error(`сценарий "${def.name}": есть "inputs", но нет "players" — слоты не определены (TICK-5)`);
   }
 

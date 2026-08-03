@@ -124,6 +124,11 @@ describe('сценарий с вводом (CLI-2)', () => {
     expect(() => runScenario(def)).toThrow(/нет "players"/);
   });
 
+  it('пустой inputs без players — тоже ошибка: правило CLI-2 смотрит на наличие поля, не на непустоту', () => {
+    const def: ScenarioDef = { ...base, inputs: [] };
+    expect(() => runScenario(def)).toThrow(/нет "players"/);
+  });
+
   it('players регистрируют InputSystem, ввод виден в снапшоте', () => {
     const def: ScenarioDef = {
       ...base,

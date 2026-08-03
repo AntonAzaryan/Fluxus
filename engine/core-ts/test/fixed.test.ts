@@ -1,20 +1,31 @@
-import { describe, expect, it, vi } from 'vitest';
-import { DEBUG } from '../src/debug.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setAssertSink } from '../src/debug.js';
 import * as fixed from '../src/math/fixed.js';
 import { FIXED_ONE } from '../src/types.js';
 
-/** Импортирует fixed.ts заново под заданным NODE_ENV (debug.ts читает его один раз при загрузке модуля). */
-async function importUnder(nodeEnv: string): Promise<typeof fixed> {
+/**
+ * Импортирует fixed.ts (и его debug.ts) заново под заданным NODE_ENV — отдельный
+ * граф модулей с собственным приватным sink, независимым от instances выше по файлу.
+ */
+async function importUnder(
+  nodeEnv: string,
+): Promise<typeof fixed & { debug: typeof import('../src/debug.js') }> {
   const prev = process.env.NODE_ENV;
   process.env.NODE_ENV = nodeEnv;
   vi.resetModules();
   try {
-    return await import('../src/math/fixed.js');
+    const debugMod = await import('../src/debug.js');
+    const fixedMod = await import('../src/math/fixed.js');
+    return { ...fixedMod, debug: debugMod };
   } finally {
     process.env.NODE_ENV = prev;
     vi.resetModules();
   }
 }
+
+afterEach(() => {
+  setAssertSink(() => {});
+});
 
 const F = fixed.fromFloat;
 const f = fixed.toFloat;
@@ -119,12 +130,20 @@ describe('div — truncate toward zero (FP-3)', () => {
     expect(fixed.toInt(fixed.div(F(3), F(-2)))).toBe(-1);
   });
 
-  it('деление на ноль: assert в debug, насыщение по знаку числителя (FP-5)', async () => {
-    expect(() => fixed.div(F(1), 0)).toThrow();
+  it('деление на ноль: насыщение по знаку числителя, одинаково в debug и release (FP-5)', async () => {
+    const sink = vi.fn();
+    setAssertSink(sink);
 
-    // Значение обязано быть определено и в релизе, где assert'а нет: Rust на
-    // целочисленном делении на ноль паникует, TS даёт Infinity — расхождение
-    // здесь означало бы десинк, поэтому результат задан спекой.
+    // debug-сборка (текущий top-level импорт, DEBUG=true в vitest): не бросает,
+    // диагностика уходит в sink, значение — насыщение.
+    expect(fixed.div(F(1), 0)).toBe(fixed.INT32_MAX);
+    expect(fixed.div(F(-1), 0)).toBe(fixed.INT32_MIN);
+    expect(fixed.div(0, 0)).toBe(0);
+    expect(sink).toHaveBeenCalled();
+
+    // Значение обязано быть определено и в релизе: Rust на целочисленном делении
+    // на ноль паникует, TS даёт Infinity — расхождение здесь означало бы десинк,
+    // поэтому результат задан спекой и одинаков в обоих режимах сборки.
     const release = await importUnder('production');
     expect(release.div(F(1), 0)).toBe(fixed.INT32_MAX);
     expect(release.div(F(-1), 0)).toBe(fixed.INT32_MIN);
@@ -132,8 +151,8 @@ describe('div — truncate toward zero (FP-3)', () => {
   });
 });
 
-describe('переполнение: wrapping + debug assert (FP-4)', () => {
-  it('debug: assert срабатывает; release: то же переполнение просто заворачивается, значения совпадают', async () => {
+describe('переполнение: wrapping + мягкий assert (FP-4)', () => {
+  it('debug: мягкий assert уходит в sink, не бросает; release: то же значение без диагностики (мул)', async () => {
     const a = fixed.fromInt(30000);
     const b = fixed.fromInt(30000);
     const expected = bigintMulShift(a, b);
@@ -141,16 +160,26 @@ describe('переполнение: wrapping + debug assert (FP-4)', () => {
     const debugMod = await importUnder('test');
     const releaseMod = await importUnder('production');
 
-    expect(() => debugMod.mul(a, b)).toThrow(); // assert словил переполнение
+    const sink = vi.fn();
+    debugMod.debug.setAssertSink(sink);
+
+    const inDebug = debugMod.mul(a, b); // не бросает — assert теперь мягкий
+    expect(inDebug).toBe(expected);
+    expect(sink).toHaveBeenCalledTimes(1); // диагностика всё же сработала
+
     const released = releaseMod.mul(a, b); // в релизе assert не вызывается вовсе
-    expect(released).toBe(expected); // но значение — то же самое wrapping
+    expect(released).toBe(expected); // значение — то же самое wrapping, что и в debug
   });
 
-  it('add: тот же паттерн debug/release для переполнения i32', async () => {
+  it('add: тот же паттерн debug/release для переполнения i32 — значения совпадают, sink срабатывает только в debug', async () => {
     const debugMod = await importUnder('test');
     const releaseMod = await importUnder('production');
 
-    expect(() => debugMod.add(2147483647, 100)).toThrow();
+    const sink = vi.fn();
+    debugMod.debug.setAssertSink(sink);
+
+    expect(debugMod.add(2147483647, 100)).toBe((2147483647 + 100) | 0);
+    expect(sink).toHaveBeenCalledTimes(1);
     expect(releaseMod.add(2147483647, 100)).toBe((2147483647 + 100) | 0);
   });
 
@@ -191,11 +220,14 @@ describe('sqrt — целочисленный алгоритм без Math.sqrt'
     expect(f(fixed.sqrt(F(1000)))).toBeCloseTo(Math.sqrt(1000), 2);
   });
 
-  it('отрицательный операнд: assert в debug, 0 в release', () => {
-    if (DEBUG) {
-      expect(() => fixed.sqrt(F(-1))).toThrow();
-    } else {
-      expect(fixed.sqrt(F(-1))).toBe(0);
-    }
+  it('отрицательный операнд (FP-6): возвращает 0 без исключения, одинаково в debug и release', async () => {
+    const sink = vi.fn();
+    setAssertSink(sink);
+
+    expect(fixed.sqrt(F(-1))).toBe(0); // debug-сборка (top-level импорт): не бросает
+    expect(sink).toHaveBeenCalled(); // диагностика ушла в sink
+
+    const release = await importUnder('production');
+    expect(release.sqrt(F(-1))).toBe(0); // release: то же значение, без assert вовсе
   });
 });
