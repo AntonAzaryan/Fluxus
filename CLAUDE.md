@@ -11,7 +11,7 @@ Repository documentation and specs are written in Russian (requirement modality 
 
 ## The spec is the source of truth
 
-`engine/openspec/specs/` (16 capabilities, ~192 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
+`engine/openspec/specs/` (17 capabilities, ~199 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
 
 - Requirements carry historical IDs (`DET-1`, `NET-15`, `FOW-4`…) in `### Requirement:` headers — preserve them; a new requirement takes the next free number of its prefix.
 - Changes go through the OpenSpec workflow: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`, etc. (the `openspec-*` skills in `engine/.claude/skills/`). Do not edit specs outside this process.
