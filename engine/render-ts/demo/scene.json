@@ -1,0 +1,201 @@
+{
+  "components": [
+    { "name": "Player", "fields": { "slot": "i32" } },
+    {
+      "name": "Input",
+      "fields": {
+        "aimDir": "fixed",
+        "buttons": "i32",
+        "moveX": "fixed",
+        "moveY": "fixed",
+        "prevButtons": "i32",
+        "seq": "i32"
+      }
+    },
+    { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
+    { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } },
+    {
+      "name": "Collider",
+      "fields": { "halfX": "fixed", "halfY": "fixed", "radius": "fixed", "shape": "i32" }
+    },
+    { "name": "Lifetime", "fields": { "ticks": "i32" } },
+    { "name": "Dead", "fields": { "atTick": "i32" } }
+  ],
+  "prefabs": [
+    {
+      "name": "Hero",
+      "components": {
+        "Player": { "slot": 0 },
+        "Input": { "aimDir": 0, "buttons": 0, "moveX": 0, "moveY": 0, "prevButtons": 0, "seq": 0 },
+        "Position": { "x": 753664, "y": 753664 },
+        "Velocity": { "x": 0, "y": 0 },
+        "Collider": { "halfX": 19661, "halfY": 19661, "radius": 19661, "shape": 0 }
+      },
+      "tags": ["Hero"]
+    },
+    {
+      "name": "Fireball",
+      "components": {
+        "Position": { "x": 0, "y": 0 },
+        "Velocity": { "x": 0, "y": 0 },
+        "Lifetime": { "ticks": 50 }
+      },
+      "tags": ["Fireball"]
+    }
+  ],
+  "systems": [
+    {
+      "name": "Movement",
+      "order": 10,
+      "query": { "all": ["Velocity", "Input"], "not": ["Dead"] },
+      "as": "e",
+      "do": [
+        {
+          "modifyComponent": {
+            "entity": { "var": "e" },
+            "component": "Velocity",
+            "values": {
+              "x": { "*": [{ "getComponent": [{ "var": "e" }, "Input", "moveX"] }, 5243] },
+              "y": { "*": [{ "getComponent": [{ "var": "e" }, "Input", "moveY"] }, 5243] }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "KillSwitch",
+      "order": 20,
+      "query": { "all": ["Player", "Input", "Velocity"], "not": ["Dead"] },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": {
+              "and": [
+                { "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 1] },
+                { "!": [{ "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "prevButtons"] }, 1] }] }
+              ]
+            },
+            "then": [
+              {
+                "addComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Dead",
+                  "values": { "atTick": { "tick": [] } }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Velocity",
+                  "values": { "x": 0, "y": 0 }
+                }
+              },
+              {
+                "emitEvent": {
+                  "type": "EntityDied",
+                  "data": { "entity": { "var": "e" } }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "FireballFlight",
+      "order": 40,
+      "query": { "all": ["Position", "Velocity", "Lifetime"] },
+      "as": "e",
+      "do": [
+        {
+          "modifyComponent": {
+            "entity": { "var": "e" },
+            "component": "Position",
+            "values": {
+              "x": {
+                "+": [
+                  { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                  { "getComponent": [{ "var": "e" }, "Velocity", "x"] }
+                ]
+              },
+              "y": {
+                "+": [
+                  { "getComponent": [{ "var": "e" }, "Position", "y"] },
+                  { "getComponent": [{ "var": "e" }, "Velocity", "y"] }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "modifyComponent": {
+            "entity": { "var": "e" },
+            "component": "Lifetime",
+            "values": {
+              "ticks": { "-": [{ "getComponent": [{ "var": "e" }, "Lifetime", "ticks"] }, 1] }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "terrain": {
+    "width": 24,
+    "height": 24,
+    "tileSize": 65536,
+    "levels": [
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111",
+      "000000000000000111111111"
+    ],
+    "flags": [
+      "........................",
+      "........................",
+      "........................",
+      "........................",
+      "........................",
+      ".....__.................",
+      ".....__.................",
+      "........................",
+      "........................",
+      "........................",
+      "..............^.........",
+      "..............^.........",
+      "..............^.........",
+      "..............^.........",
+      "........................",
+      "........................",
+      "........................",
+      ".........__.............",
+      "........................",
+      "........................",
+      "........................",
+      "........................",
+      "........................",
+      "........................"
+    ]
+  },
+  "capacity": 128
+}

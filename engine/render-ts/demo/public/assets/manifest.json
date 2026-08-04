@@ -1,0 +1,27 @@
+{
+  "entities": {
+    "Hero": {
+      "model": "models/SkeletonBarbarian.mdx",
+      "scale": 1.6,
+      "defaultSkin": "steel",
+      "skins": {
+        "steel": {
+          "0": "textures/skin-steel.png",
+          "1": "textures/skin-steel.png"
+        },
+        "ember": {
+          "0": "textures/skin-ember.png",
+          "1": "textures/skin-ember.png"
+        }
+      },
+      "animations": {
+        "states": { "idle": "Stand", "move": "Walk" },
+        "events": { "CastFireball": "Spell Slam", "EntityDied": "Death" }
+      },
+      "boneControls": {
+        "torso": { "bone": "Bone_Chest", "maxYawDeg": 72, "smoothing": 18 },
+        "head": { "bone": "Bone_Head", "maxYawDeg": 40, "smoothing": 20 }
+      }
+    }
+  }
+}
