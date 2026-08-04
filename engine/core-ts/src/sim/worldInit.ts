@@ -20,6 +20,7 @@
  */
 import { toPlain } from '../ecs/world.js';
 import { fnv1a32, utf8Bytes } from '../math/rng.js';
+import { canonicalJson } from './canonicalJson.js';
 import type { ArenaApi, TerrainApi, WorldMode, WorldState } from '../types.js';
 
 export interface WorldInitParts {
@@ -68,23 +69,4 @@ export function worldInitForm(parts: WorldInitParts): Record<string, unknown> {
 export function worldInitHash(parts: WorldInitParts): string {
   const hash = fnv1a32(utf8Bytes(canonicalJson(worldInitForm(parts))));
   return hash.toString(16).padStart(8, '0');
-}
-
-/**
- * JSON без незначащих пробелов, ключи каждого уровня отсортированы (SER-6).
- * Сортировка делается здесь, а не полагается на порядок вставки: плоская форма
- * мира строится отсортированной, но норма DET-1 говорит про поток байт, и
- * зависеть от чужого порядка вставки он не должен.
- */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (typeof value === 'object' && value !== null) {
-    const entries = Object.keys(value as Record<string, unknown>)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`);
-    return `{${entries.join(',')}}`;
-  }
-  // Все значения ядра целые: Q16.16 хранится как i32 (FP-1), поэтому вопроса
-  // дробной записи не возникает.
-  return JSON.stringify(value) ?? 'null';
 }

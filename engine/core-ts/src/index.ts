@@ -161,3 +161,4 @@ export { runScenario, runScenarioBytes } from './sim/scenario.js';
 export type { RunOutput, ScenarioDef, ScenarioSpawn, TickRecord } from './sim/scenario.js';
 export { worldInitHash, worldInitForm } from './sim/worldInit.js';
 export type { WorldInitParts } from './sim/worldInit.js';
+export { contentPackHash, contentPackForm } from './sim/contentPack.js';
