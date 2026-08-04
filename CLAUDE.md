@@ -2,66 +2,66 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Язык документации и общения в репозитории — русский (модальность требований в спеках — английская: SHALL / MUST NOT).
+Repository documentation and specs are written in Russian (requirement modality in specs is English: SHALL / MUST NOT). Keep it that way when editing them.
 
-## Две части репозитория
+## Two parts of the repository
 
-- `engine/` — **актуальное**: OpenSpec-спецификация движка + рабочая реализация ядра `core-ts/`.
-- `draft/` — историческая песочница (свой npm-workspace, своя карта в `draft/AGENTS.md`). **Не источник правды**; трогать только если задача явно про неё.
+- `engine/` — **current**: the OpenSpec specification of the engine + the working core implementation `core-ts/`.
+- `draft/` — historical sandbox (its own npm workspace, mapped in `draft/AGENTS.md`). **Not a source of truth**; touch only if the task is explicitly about it.
 
-## Источник правды — спека
+## The spec is the source of truth
 
-`engine/openspec/specs/` (16 capability, ~192 требования) нормативно описывает, каким движок должен быть. При расхождении реализации и спеки дефект — в реализации (CORE-3). Нормативные формулировки живут **только** в спеках — не дублировать их в docs или коде.
+`engine/openspec/specs/` (16 capabilities, ~192 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
 
-- Требования имеют исторические ID (`DET-1`, `NET-15`, `FOW-4`…) в заголовках `### Requirement:` — сохранять их; новое требование получает следующий свободный номер своего префикса.
-- Изменения проходят через OpenSpec-workflow: команды `/opsx:propose`, `/opsx:apply`, `/opsx:archive` и т.д. (скиллы `openspec-*` из `engine/.claude/skills/`). Не менять спеки в обход этого процесса.
-- Контекст и правила оформления спек — `engine/openspec/config.yaml`.
-- Обзор слоёв, roadmap, разделение «механизм vs политика», открытые вопросы — `engine/docs/architecture.md`.
+- Requirements carry historical IDs (`DET-1`, `NET-15`, `FOW-4`…) in `### Requirement:` headers — preserve them; a new requirement takes the next free number of its prefix.
+- Changes go through the OpenSpec workflow: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`, etc. (the `openspec-*` skills in `engine/.claude/skills/`). Do not edit specs outside this process.
+- Spec-writing context and rules — `engine/openspec/config.yaml`.
+- Layer overview, roadmap, the mechanism-vs-policy split, open questions — `engine/docs/architecture.md`.
 
 ```sh
 cd engine
-openspec list --specs               # список capability
-openspec spec show netcode          # одна спецификация
-openspec validate --specs --strict  # проверка формата
+openspec list --specs               # list capabilities
+openspec spec show netcode          # one spec
+openspec validate --specs --strict  # format check
 ```
 
-## Команды (engine/core-ts)
+## Commands (engine/core-ts)
 
-Node >= 22.18. Все команды из `engine/core-ts/`:
+Node >= 22.18. All commands from `engine/core-ts/`:
 
 ```sh
-npm test                                 # vitest, все тесты
-npx vitest run test/physics.test.ts      # один файл
-npx vitest run -t "имя теста"            # один тест по имени
+npm test                                 # vitest, all tests
+npx vitest run test/physics.test.ts      # one file
+npx vitest run -t "test name"            # one test by name
 npm run typecheck                        # tsc --noEmit
-npm run sim -- <scenario.json>           # CLI-прогон сценария (bin/sim.mjs)
-npm run golden                           # перегенерация golden-эталонов (UPDATE_GOLDEN=1)
-npm run schemas                          # перегенерация engine/schemas/*.json (UPDATE_SCHEMAS=1)
+npm run sim -- <scenario.json>           # CLI scenario run (bin/sim.mjs)
+npm run golden                           # regenerate golden baselines (UPDATE_GOLDEN=1)
+npm run schemas                          # regenerate engine/schemas/*.json (UPDATE_SCHEMAS=1)
 ```
 
-`engine/tests/golden/` — пары `*.scenario.json` / `*.golden.json`, побитовые эталоны прогона. Тест `golden.test.ts` сверяет их точно; если поведение изменено **осознанно и по спеке** — перегенерировать через `npm run golden` и включить диф эталонов в коммит. JSON-схемы в `engine/schemas/` порождаются из ядра — руками не править, только `npm run schemas`.
+`engine/tests/golden/` holds `*.scenario.json` / `*.golden.json` pairs — bitwise baselines of a scenario run. `golden.test.ts` compares them exactly; if behavior changed **deliberately and per spec**, regenerate with `npm run golden` and include the baseline diff in the commit. JSON schemas in `engine/schemas/` are generated from the core — never edit by hand, only via `npm run schemas`.
 
-Для `draft/`: `cd draft && npm test` (тесты ядра), `npm run dev:render` (Three.js-прототип).
+For `draft/`: `cd draft && npm test` (core tests), `npm run dev:render` (Three.js prototype).
 
-## Неснимаемые принципы ядра
+## Non-negotiable core principles
 
-Нарушение любого из них — дефект, а не компромисс (полный список — `engine/openspec/config.yaml`):
+Violating any of these is a defect, not a trade-off (full list — `engine/openspec/config.yaml`):
 
-- Единственный вход в симуляцию — `tick(state, inputs) → TickResult`; никакого I/O и side-effect'ов внутри тика, внешние потребители читают `TickResult` после.
-- Fixed-point Q16.16 везде в симуляции; float в геймплейных расчётах запрещён.
-- Мутации ECS — только через Command Buffer; мутаторы мира намеренно не экспортируются из `src/index.ts` (это и есть запрещённый side-channel, TICK-3).
-- JSON-система и нативная TS-система взаимозаменяемы за единым интерфейсом `System`.
-- Server-authoritative netcode; снапшот клиенту фильтруется по видимости (FoW — часть симуляции, не рендера).
-- У ядра **ноль** runtime-зависимостей — не добавлять библиотеки в `engine/core-ts` (сознательно отказались и от ECS-библиотек, и от `json-logic-js`).
-- Механизм vs политика: core не знает баланса. Число, которое может поменять геймдизайнер, живёт в JSON-системах, не в ядре (таблица примеров — `engine/docs/architecture.md` §3).
+- The only entry into the simulation is `tick(state, inputs) → TickResult`; no I/O or side effects inside a tick — external consumers read `TickResult` afterwards.
+- Fixed-point Q16.16 everywhere in the simulation; floats are forbidden in gameplay math.
+- ECS mutations go only through the Command Buffer; world mutators are deliberately not exported from `src/index.ts` (exporting them would be the side channel TICK-3 forbids).
+- A JSON-defined system and a native TS system are interchangeable behind the single `System` interface.
+- Server-authoritative netcode; each client's snapshot is filtered by visibility (FoW is part of the simulation, not the renderer).
+- The core has **zero** runtime dependencies — do not add libraries to `engine/core-ts` (ECS libraries and `json-logic-js` were deliberately rejected).
+- Mechanism vs policy: the core knows nothing about balance. Any number a game designer might tune lives in JSON systems, not in the core (examples table — `engine/docs/architecture.md` §3).
 
-## Устройство core-ts
+## core-ts layout
 
-`engine/core-ts/src/`, вся симуляция детерминированная:
+`engine/core-ts/src/`, the whole simulation is deterministic:
 
-- `math/` — Q16.16 (`fixed.ts`), векторы, `mathApi` (DI), xorshift128-RNG с именованными стримами.
-- `ecs/` — собственное SoA-хранилище на TypedArray (`world.ts`), битовые маски, Query API, Command Buffer (`commands.ts`), Event Bus, generational entity IDs. Per-component dirty-tracking наполняет `TickResult.changes`.
-- `dsl/` — data-driven слой: JsonLogic-совместимый evaluator выражений (`expr.ts`, свой обход AST), исполнитель действий (`actions.ts`), `EvaluatedSystem` (JSON-система в общем реестре), генерация схем.
-- `systems/` — нативные TS-системы: terrain, physics (broad-phase сетка, raycast), visibility/FoW, time/tween/modifiers, arena, input; общий `registry.ts`.
-- `sim/` — `tick.ts`, worldInit, сериализация (канонический JSON, plain-форма мира), конфиг сцены, `HistoryProvider` (ring buffer снапшотов), rewind/replay, per-client фильтр снапшота (`filter.ts`), `contentPackHash`.
-- `bin/sim.mjs` — CLI прогона сценария (основа golden-тестов и будущей cross-language сверки с Rust-портом).
+- `math/` — Q16.16 (`fixed.ts`), vectors, `mathApi` (DI), xorshift128 RNG with named streams.
+- `ecs/` — custom SoA storage on TypedArrays (`world.ts`), bit masks, Query API, Command Buffer (`commands.ts`), Event Bus, generational entity IDs. Per-component dirty tracking feeds `TickResult.changes`.
+- `dsl/` — the data-driven layer: JsonLogic-compatible expression evaluator (`expr.ts`, custom AST walk), action executor (`actions.ts`), `EvaluatedSystem` (a JSON system in the shared registry), schema generation.
+- `systems/` — native TS systems: terrain, physics (broad-phase grid, raycast), visibility/FoW, time/tween/modifiers, arena, input; shared `registry.ts`.
+- `sim/` — `tick.ts`, worldInit, serialization (canonical JSON, plain world form), scene config, `HistoryProvider` (snapshot ring buffer), rewind/replay, per-client snapshot filter (`filter.ts`), `contentPackHash`.
+- `bin/sim.mjs` — CLI scenario runner (the basis of golden tests and the future cross-language check against the Rust port).
