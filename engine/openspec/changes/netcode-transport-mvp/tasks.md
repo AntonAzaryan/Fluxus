@@ -3,10 +3,10 @@
 - [x] 1.1 Новая capability `netcode-transport` — NTR-1..13 в `specs/netcode-transport/spec.md` change'а
 - [x] 1.2 `specs/tick-loop/spec.md` — MODIFIED TICK-2: таймаут как дедлайн тика по расписанию, запрет досрочного тика при полном комплекте фреймов
 - [x] 1.3 `openspec validate netcode-transport-mvp --strict` проходит
-- [ ] 1.4 При sync: `openspec/specs/netcode-transport/spec.md` получает `## Purpose` — «транспортный слой поверх модели `netcode`: чем является сервер матча, каким набором сообщений стороны разговаривают, в каком темпе идёт матч и как это проверяется локально; модель — что передаём, что фильтруем, какая версия — остаётся в `netcode` и здесь не дублируется»
-- [ ] 1.5 При sync: `openspec/specs/netcode/spec.md` `## Purpose` — абзац «Прототип отзывчивости» переписать под принятое решение (стартовый режим — server-auth без предсказания, не lockstep-relay); требования `netcode` не трогать
-- [ ] 1.6 При sync: `openspec/specs/netcode/spec.md` `## Open Questions` — «Модель отзывчивости» закрыть решением со ссылкой на NTR-10; «Кто получает `viewpoint = ALL`» сузить до продакшн-авторизации со ссылкой на NTR-9 (для локального прогона решено)
-- [ ] 1.7 `openspec validate --specs --strict` — 17/17 после sync
+- [x] 1.4 Sync: `openspec/specs/netcode-transport/spec.md` получает `## Purpose` — «транспортный слой поверх модели `netcode`: чем является сервер матча, каким набором сообщений стороны разговаривают, в каком темпе идёт матч и как это проверяется локально; модель — что передаём, что фильтруем, какая версия — остаётся в `netcode` и здесь не дублируется»
+- [x] 1.5 Sync: `openspec/specs/netcode/spec.md` `## Purpose` — абзац «Прототип отзывчивости» переписать под принятое решение (стартовый режим — server-auth без предсказания, не lockstep-relay); требования `netcode` не трогать
+- [x] 1.6 Sync: `openspec/specs/netcode/spec.md` `## Open Questions` — «Модель отзывчивости» закрыть решением со ссылкой на NTR-10; «Кто получает `viewpoint = ALL`» сузить до продакшн-авторизации со ссылкой на NTR-9 (для локального прогона решено)
+- [x] 1.7 `openspec validate --specs --strict` — 17/17 после sync
 
 ## 2. Модуль
 
