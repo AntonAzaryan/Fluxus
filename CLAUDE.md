@@ -55,6 +55,15 @@ Violating any of these is a defect, not a trade-off (full list — `engine/opens
 - The core has **zero** runtime dependencies — do not add libraries to `engine/core-ts` (ECS libraries and `json-logic-js` were deliberately rejected).
 - Mechanism vs policy: the core knows nothing about balance. Any number a game designer might tune lives in JSON systems, not in the core (examples table — `engine/docs/architecture.md` §3).
 
+## Allocation discipline in the core
+
+A working discipline for `engine/core-ts`, not a defect-level rule like the list above:
+
+- The world is mutable by design (TICK-1): `tick()` advances state in place; the past lives as sparse snapshots in `HistoryProvider`, never as per-tick copies.
+- The hot path of a tick must not allocate proportionally to entity or system count. Long-lived structures (SoA arrays, dirty Sets, RNG wrappers, the per-tick `SystemContext`) are reused, not recreated each tick.
+- `TickResult` is a couple of tiny per-tick objects and a live view over world state — do not pool it; pooling would silently corrupt views observers may hold (OBS-3).
+- Deliberate allocation compromises are marked `ponytail` in code comments and get removed when profiling on a real scene shows them, not by taste.
+
 ## core-ts layout
 
 `engine/core-ts/src/`, the whole simulation is deterministic:
