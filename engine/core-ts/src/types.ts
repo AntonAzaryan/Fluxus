@@ -61,6 +61,37 @@ export interface RaycastHit {
   readonly point: Vec2;
 }
 
+// ---------------------------------------------------------------- navigation
+
+/**
+ * Поиск пути (NAV-1). Опциональная зависимость (DI-4): в отличие от физики,
+ * необязательна и для этой игры — крипов и NPC в MVP нет. Реализации в ядре
+ * пока нет: зафиксирован только шов, через который она войдёт.
+ */
+export interface NavigationApi {
+  readonly findPath: (from: Vec2, to: Vec2, options?: PathRequestOptions) => PathResult;
+}
+
+export interface PathRequestOptions {
+  /** Радиус агента: проход уже его диаметра путём не считается. Величина контента, не ядра (NAV-1). */
+  readonly agentRadius?: Fixed;
+}
+
+/**
+ * `unreachable` — ответ о геометрии, `budgetExhausted` — исчерпан бюджет поиска;
+ * исходы различимы намеренно, политика реагирует на них по-разному (NAV-5).
+ */
+export type PathStatus = 'found' | 'unreachable' | 'budgetExhausted';
+
+export interface PathResult {
+  readonly status: PathStatus;
+  /**
+   * Промежуточные цели в мировых координатах; последняя — конечная точка запроса.
+   * `from` не входит, при статусе кроме `found` список пуст (NAV-1).
+   */
+  readonly waypoints: readonly Vec2[];
+}
+
 // ------------------------------------------------------------------- terrain
 
 /** Отрезок непроходимой границы между клетками (TERR-5). Выводится из карты уровней, не хранится в ассете. */
@@ -261,6 +292,8 @@ export interface SystemContext {
   readonly rng: RngStreams;
   readonly math: MathApi;
   readonly physics?: PhysicsApi;
+  /** Есть, если навигация собрана (DI-4); сцена без неё тикает штатно (NAV-6). */
+  readonly navigation?: NavigationApi;
   /** Есть, если сцена содержит террейн (TERR-4). */
   readonly terrain?: TerrainApi;
   /** Есть, если сцена содержит арену (ARENA-1). */
