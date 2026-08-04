@@ -19,8 +19,9 @@
 │  │ Time / Tween / Snapshot / RNG              │  │
 │  │ Visibility (система FoW на TS)             │  │
 │  └────────────────────────────────────────────┘  │
-│           ▲ DI              ▲ DI                 │
-│      Math API          Physics API (обяз. при FoW)│
+│        ▲ DI        ▲ DI            ▲ DI          │
+│    Math API   Physics API      Navigation API    │
+│               (обяз. при FoW)  (нет реализации)  │
 └───────────────▲──────────────────────────────────┘
                 │ worldInit: террейн (immutable) + стартовая расстановка
                 │ tick(state, inputs) → TickResult
@@ -35,7 +36,7 @@
 
 | Capability | Что покрывает | ID требований |
 |---|---|---|
-| `determinism-core` | Гарантии детерминизма, языки реализации, DI | DET-1..8, CORE-1..4, DI-1..3 |
+| `determinism-core` | Гарантии детерминизма, языки реализации, DI | DET-1..8, CORE-1..4, DI-1..4 |
 | `fixed-point-math` | Q16.16, умножение, округление, overflow, насыщение при делении и sqrt | FP-1..6 |
 | `tick-loop` | `tick()`, `InputFrame`, слоты игроков, `TickResult`, observers | TICK-1..5, OBS-1..6 |
 | `ecs-foundation` | ECS, Query API, Entity IDs, Command Buffer | ECS-1..5, QUERY-1..3, ID-1..5, CMD-1..7 |
@@ -47,6 +48,7 @@
 | `terrain` | Height field, карты уровней и пола, `levelAt`, cliff-геометрия | TERR-1..7 |
 | `arena` | Граница арены, принадлежность, сужение, выход за край и провал сквозь пол | ARENA-1..6 |
 | `physics` | Коллизии, статика обрывов, разрешение движения, детерминированный raycast | PHYS-1..10 |
+| `pathfinding` | Navigation API: контракт запроса пути, бюджет поиска, путь как данные (реализации нет) | NAV-1..6 |
 | `cli-testing` | CLI, golden-file, cross-language сверка | CLI-1..6 |
 | `netcode` | Server-auth, предсказание, per-client фильтрация, единая версия | NET-1..17 |
 | `fog-of-war` | `Vision`/`Visibility`/`Stealth`, `VisibilitySystem` | FOW-1..9 |
@@ -69,6 +71,7 @@
 | Клетка без пола как состояние | Судьба попавшего в неё: смерть, падение, урон |
 | Граница арены + событие `LeftArena` | Что бывает за выход: килл, урон, возврат, отсрочка |
 | Изменение радиуса командой | Расписание сужения: когда, на сколько, до какого предела |
+| `findPath` + бюджет поиска в узлах | Куда идёт агент, когда перепланирует, как обходит живых |
 
 Правило: core никогда не знает баланса. Если в ядро просится число, которое может поменять геймдизайнер, — оно живёт в JSON.
 
@@ -110,6 +113,7 @@
 | 18 | FoW: компоненты + `VisibilitySystem` + fog-mask | ✅ (кроме рендера) `src/systems/visibility.ts`: `Vision`/`Visibility`/`Stealth`/`Team`/`VisionModifier`, пересчёт по `withinRadius` + `raycast` + фильтр уровня, эмит только при смене битов. Fog-mask (FOW-7..9) — рендер, вне ядра |
 | 19 | Arena: граница, принадлежность, сужение, события | ✅ `src/systems/arena.ts`: окружность в ассете, мутабельный радиус компонентом, `LeftArena` и `FellThroughFloor` по переходу (ARENA-1..6). Этапом не значилась — capability появилась после составления roadmap |
 | 20 | (Будущее) Rust-порт ядра | Cross-language парность, включая LoS |
+| 21 | (Будущее) Pathfinding для крипов/NPC | 🟡 Шов готов: `NavigationApi` и `navigation?` в `SystemContext` (`pathfinding` NAV-1..6, DI-4). Алгоритм, навигационные данные и связность сетки — отдельным этапом |
 
 Бывший этап сериализации разделён надвое: формат данных нужен редактору, ring buffer снапшотов — нет, он нужен перемотке и netcode. Разделение стало возможным после `mutable-world-state`: снапшоты перестали быть условием того, чтобы история влезла в память.
 

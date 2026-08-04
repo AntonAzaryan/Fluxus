@@ -30,6 +30,7 @@ import {
   type InputFrame,
   type MathApi,
   type ModifierRegistry,
+  type NavigationApi,
   type PhysicsApi,
   type SimulationState,
   type Snapshot,
@@ -48,6 +49,13 @@ export interface Simulation {
   readonly math: MathApi;
   /** Опциональна на уровне ядра: без неё тик отрабатывает штатно (DI-3). */
   readonly physics?: PhysicsApi;
+  /**
+   * Поиск пути (NAV-1). Опционален и для этой игры (DI-4): управление игроками
+   * прямое, а крипов и NPC в MVP нет. Живёт здесь по той же причине, что и
+   * террейн: навигационные данные производны от иммутабельной карты уровней и
+   * в снапшот не входят (NAV-3).
+   */
+  readonly navigation?: NavigationApi;
   /**
    * Террейн сцены (TERR-4). Живёт здесь, а не в `SimulationState`: карта
    * уровней иммутабельна и в снапшот не входит (TERR-6).
@@ -126,6 +134,7 @@ export function advance(
       rng: state.rng.forSystem(system.name),
       math: sim.math,
       ...(sim.physics !== undefined ? { physics: sim.physics } : {}),
+      ...(sim.navigation !== undefined ? { navigation: sim.navigation } : {}),
       ...(sim.terrain !== undefined ? { terrain: sim.terrain } : {}),
       ...(sim.arena !== undefined ? { arena: sim.arena } : {}),
       ...(sim.modifiers !== undefined ? { modifiers: sim.modifiers } : {}),
