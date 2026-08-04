@@ -63,12 +63,14 @@ export interface TimeScaleSystemOptions {
 export class TimeScaleSystem implements System {
   readonly name: string;
   readonly order: number;
+  // Явное поле вместо parameter property — по той же причине, что в
+  // `VisibilitySystem`: strip-only режим Node не поддерживает этот сахар, а ядро
+  // исполняется прямо из исходников, без шага сборки (CLI-1).
+  private readonly modifiers: ModifierList;
 
   /** Список источников приходит извне (DI-1): своего модульного у системы нет. */
-  constructor(
-    private readonly modifiers: ModifierList,
-    options: TimeScaleSystemOptions = {},
-  ) {
+  constructor(modifiers: ModifierList, options: TimeScaleSystemOptions = {}) {
+    this.modifiers = modifiers;
     this.name = options.name ?? 'TimeScale';
     this.order = options.order ?? DEFAULT_ORDER;
   }
