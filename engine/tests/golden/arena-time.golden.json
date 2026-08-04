@@ -1,6 +1,7 @@
 {
   "scenario": "arena-time",
   "seed": 20260812,
+  "worldInitHash": "1ec0c640",
   "ticks": [
     {
       "tick": 0,

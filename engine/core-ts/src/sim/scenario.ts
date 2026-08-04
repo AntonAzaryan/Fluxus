@@ -24,6 +24,7 @@ import { VisibilitySystem, VISION_MODIFIER_COMPONENT, type VisibilityOptions } f
 import { loadScene, type SceneDef } from './scene.js';
 import { prettyJsonSerializer, snapshotToPlain, type PlainSnapshot } from './serialization.js';
 import { initialState, tick, type Simulation } from './tick.js';
+import { worldInitHash } from './worldInit.js';
 import type { FieldOverrides, InputFrame, PhysicsApi, SimulationState } from '../types.js';
 
 export interface ScenarioSpawn {
@@ -64,6 +65,12 @@ export type TickRecord = PlainSnapshot;
 export interface RunOutput {
   readonly scenario: string;
   readonly seed: number;
+  /**
+   * Хеш `worldInit` (DET-1, CLI-3). Стоит перед `ticks`, потому что диагностика
+   * требует сравнивать хеши раньше снапшотов: расхождение начальных данных
+   * обязано быть видно в первых строках, до потиковой сверки.
+   */
+  readonly worldInitHash: string;
   /** Тик 0 — состояние после начальной расстановки, до первого `tick()`. */
   readonly ticks: readonly TickRecord[];
 }
@@ -105,6 +112,14 @@ export function runScenario(def: ScenarioDef): RunOutput {
   for (const entry of def.initial ?? []) spawn(world, entry.prefab, entry.overrides);
 
   const state = initialState(world, def.seed);
+  // Считается здесь и только здесь: после начальной расстановки и до первого
+  // тика — ровно тот момент, который DET-1 называет `worldInit`.
+  const hash = worldInitHash({
+    world,
+    mode: state.mode,
+    ...(terrain !== undefined ? { terrain } : {}),
+    ...(arena !== undefined ? { arena } : {}),
+  });
   const sim: Simulation = {
     systems,
     worldSeed: def.seed,
@@ -128,7 +143,7 @@ export function runScenario(def: ScenarioDef): RunOutput {
     ticks.push(record(state));
   }
 
-  return { scenario: def.name, seed: def.seed, ticks };
+  return { scenario: def.name, seed: def.seed, worldInitHash: hash, ticks };
 }
 
 /** Байты для golden-файла и stdout: pretty JSON того же документа. */

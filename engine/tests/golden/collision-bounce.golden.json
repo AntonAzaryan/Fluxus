@@ -1,6 +1,7 @@
 {
   "scenario": "collision-bounce",
   "seed": 20260803,
+  "worldInitHash": "e911d1ac",
   "ticks": [
     {
       "tick": 0,

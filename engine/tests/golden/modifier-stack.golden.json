@@ -1,6 +1,7 @@
 {
   "scenario": "modifier-stack",
   "seed": 20260814,
+  "worldInitHash": "cec08df0",
   "ticks": [
     {
       "tick": 0,

@@ -159,3 +159,5 @@ export { jsonSerializer, prettyJsonSerializer, snapshotToPlain, snapshotFromPlai
 export type { PlainSnapshot, Serializer } from './sim/serialization.js';
 export { runScenario, runScenarioBytes } from './sim/scenario.js';
 export type { RunOutput, ScenarioDef, ScenarioSpawn, TickRecord } from './sim/scenario.js';
+export { worldInitHash, worldInitForm } from './sim/worldInit.js';
+export type { WorldInitParts } from './sim/worldInit.js';

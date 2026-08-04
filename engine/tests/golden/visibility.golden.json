@@ -1,6 +1,7 @@
 {
   "scenario": "visibility",
   "seed": 20260813,
+  "worldInitHash": "d779f40b",
   "ticks": [
     {
       "tick": 0,
