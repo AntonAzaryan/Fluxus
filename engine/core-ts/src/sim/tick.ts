@@ -122,31 +122,36 @@ export function advance(
   clearDirty(world);
   const commands = createCommandBuffer(world);
 
+  // Контекст собирается один раз на тик, а не на каждую систему: между
+  // системами меняется только `rng` (его назначает цикл ниже), остальное
+  // неизменно весь тик. Иначе каждый тик стоил бы по объекту с дюжиной
+  // замыканий на систему.
+  const ctx: Omit<SystemContext, 'rng'> & { rng?: SystemContext['rng'] } = {
+    tick: state.tick,
+    query: (spec) => runQuery(world, spec),
+    get: (entity, component, field) => getField(world, entity, component, field),
+    has: (entity, component) => hasComponent(world, entity, component),
+    isAlive: (entity) => isAlive(world, entity),
+    commands,
+    events: state.events,
+    math: sim.math,
+    ...(sim.physics !== undefined ? { physics: sim.physics } : {}),
+    ...(sim.navigation !== undefined ? { navigation: sim.navigation } : {}),
+    ...(sim.terrain !== undefined ? { terrain: sim.terrain } : {}),
+    ...(sim.arena !== undefined ? { arena: sim.arena } : {}),
+    ...(sim.modifiers !== undefined ? { modifiers: sim.modifiers } : {}),
+    inputs,
+    // TIME-3: множитель берётся из уже сведённого `TimeScale.value`; сведение
+    // списка источников — работа `TimeScaleSystem` (TIME-7), не тика.
+    getEffectiveDelta: (entity, globalDelta) =>
+      hasComponent(world, entity, TIME_SCALE_COMPONENT)
+        ? sim.math.mul(globalDelta, getField(world, entity, TIME_SCALE_COMPONENT, 'value'))
+        : globalDelta,
+  };
+
   for (const system of sim.systems.ordered()) {
-    const ctx: SystemContext = {
-      tick: state.tick,
-      query: (spec) => runQuery(world, spec),
-      get: (entity, component, field) => getField(world, entity, component, field),
-      has: (entity, component) => hasComponent(world, entity, component),
-      isAlive: (entity) => isAlive(world, entity),
-      commands,
-      events: state.events,
-      rng: state.rng.forSystem(system.name),
-      math: sim.math,
-      ...(sim.physics !== undefined ? { physics: sim.physics } : {}),
-      ...(sim.navigation !== undefined ? { navigation: sim.navigation } : {}),
-      ...(sim.terrain !== undefined ? { terrain: sim.terrain } : {}),
-      ...(sim.arena !== undefined ? { arena: sim.arena } : {}),
-      ...(sim.modifiers !== undefined ? { modifiers: sim.modifiers } : {}),
-      inputs,
-      // TIME-3: множитель берётся из уже сведённого `TimeScale.value`; сведение
-      // списка источников — работа `TimeScaleSystem` (TIME-7), не тика.
-      getEffectiveDelta: (entity, globalDelta) =>
-        hasComponent(world, entity, TIME_SCALE_COMPONENT)
-          ? sim.math.mul(globalDelta, getField(world, entity, TIME_SCALE_COMPONENT, 'value'))
-          : globalDelta,
-    };
-    system.run(ctx);
+    ctx.rng = state.rng.forSystem(system.name);
+    system.run(ctx as SystemContext);
     // Flush в конце каждой системы, а не тика (CMD-2): следующая по order
     // система обязана видеть спавны и удаления предыдущей на этом же тике.
     commands.flush();
