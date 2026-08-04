@@ -5,10 +5,17 @@
         "source": "github",
         "repo": "DietrichGebert/ponytail"
       }
+    },
+    "claude-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-plugins-official"
+      }
     }
   },
   "enabledPlugins": {
-    "ponytail@ponytail": true
+    "ponytail@ponytail": true,
+    "typescript-lsp@claude-plugins-official": true
   },
   "hooks": {
     "SessionStart": [
