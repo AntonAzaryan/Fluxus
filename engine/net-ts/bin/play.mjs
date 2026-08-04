@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-transform-types
+#!/usr/bin/env node
 /**
  * Headless-клиент матча (NTR-12):
  *   node bin/play.mjs examples/duel.match.json --player p1 [--url ws://127.0.0.1:8080]

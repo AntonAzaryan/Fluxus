@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-transform-types
+#!/usr/bin/env node
 /**
  * Сервер матча за WebSocket (NTR-12):
  *   node bin/serve.mjs examples/duel.match.json [--port 8080] [--json] [--observer]
