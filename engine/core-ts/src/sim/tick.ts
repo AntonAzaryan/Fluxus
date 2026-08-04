@@ -143,46 +143,54 @@ function runSystems(
   clearDirty(world);
   const commands = createCommandBuffer(world);
 
+  // Контекст собирается один раз на тик, а не на каждую систему: между
+  // системами меняется только `rng` (его назначает цикл ниже), остальное
+  // неизменно весь тик. Иначе каждый тик стоил бы по объекту с дюжиной
+  // замыканий на систему.
+  const ctx: Omit<SystemContext, 'rng'> & { rng?: SystemContext['rng'] } = {
+    tick: state.tick,
+    query: (spec) => {
+      const matched = runQuery(world, spec);
+      // Пустой отбор — самый частый отказ JSON-системы, и без счётчика он
+      // неотличим от удалённой системы (DIAG-3). Замыкание одно на тик, как и
+      // весь контекст: счётчик пишется в контекст диагностики, не сюда.
+      countQuery(matched.length);
+      return matched;
+    },
+    get: (entity, component, field) => getField(world, entity, component, field),
+    has: (entity, component) => hasComponent(world, entity, component),
+    isAlive: (entity) => isAlive(world, entity),
+    commands,
+    events: state.events,
+    math: sim.math,
+    ...(sim.physics !== undefined ? { physics: sim.physics } : {}),
+    ...(sim.navigation !== undefined ? { navigation: sim.navigation } : {}),
+    ...(sim.terrain !== undefined ? { terrain: sim.terrain } : {}),
+    ...(sim.arena !== undefined ? { arena: sim.arena } : {}),
+    ...(sim.modifiers !== undefined ? { modifiers: sim.modifiers } : {}),
+    inputs,
+    // TIME-3: множитель берётся из уже сведённого `TimeScale.value`; сведение
+    // списка источников — работа `TimeScaleSystem` (TIME-7), не тика.
+    getEffectiveDelta: (entity, globalDelta) =>
+      hasComponent(world, entity, TIME_SCALE_COMPONENT)
+        ? sim.math.mul(globalDelta, getField(world, entity, TIME_SCALE_COMPONENT, 'value'))
+        : globalDelta,
+  };
+
   for (const system of sim.systems.ordered()) {
-    const ctx: SystemContext = {
-      tick: state.tick,
-      query: (spec) => {
-        const result = runQuery(world, spec);
-        // Пустой отбор — самый частый отказ JSON-системы, и без счётчика он
-        // неотличим от удалённой системы (DIAG-3).
-        countQuery(result.length);
-        return result;
-      },
-      get: (entity, component, field) => getField(world, entity, component, field),
-      has: (entity, component) => hasComponent(world, entity, component),
-      isAlive: (entity) => isAlive(world, entity),
-      commands,
-      events: state.events,
-      rng: state.rng.forSystem(system.name),
-      math: sim.math,
-      ...(sim.physics !== undefined ? { physics: sim.physics } : {}),
-      ...(sim.navigation !== undefined ? { navigation: sim.navigation } : {}),
-      ...(sim.terrain !== undefined ? { terrain: sim.terrain } : {}),
-      ...(sim.arena !== undefined ? { arena: sim.arena } : {}),
-      ...(sim.modifiers !== undefined ? { modifiers: sim.modifiers } : {}),
-      inputs,
-      // TIME-3: множитель берётся из уже сведённого `TimeScale.value`; сведение
-      // списка источников — работа `TimeScaleSystem` (TIME-7), не тика.
-      getEffectiveDelta: (entity, globalDelta) =>
-        hasComponent(world, entity, TIME_SCALE_COMPONENT)
-          ? sim.math.mul(globalDelta, getField(world, entity, TIME_SCALE_COMPONENT, 'value'))
-          : globalDelta,
-    };
+    ctx.rng = state.rng.forSystem(system.name);
     // Имя текущей системы проставляется здесь: так атрибуция трейса (DIAG-5)
     // достаётся без изменения интерфейса `CommandBuffer`, которым пользуются
     // все системы.
     beginSystem(system.name);
     try {
-      system.run(ctx);
+      system.run(ctx as SystemContext);
       // Flush в конце каждой системы, а не тика (CMD-2): следующая по order
       // система обязана видеть спавны и удаления предыдущей на этом же тике.
       commands.flush();
     } finally {
+      // В `finally`, чтобы граница упавшей системы попала в трейс: по нему и
+      // видно, на какой системе оборвался тик (DIAG-1).
       endSystem();
     }
   }

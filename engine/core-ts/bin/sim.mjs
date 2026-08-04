@@ -12,6 +12,14 @@
  * единственное, чего ему не хватает, — исходники импортируют './x.js', и это
  * './x.ts'. Альтернатива — компилировать ядро в dist перед каждым прогоном
  * ради инструмента, который зовут из тестов напрямую.
+ *
+ * Цена такого запуска — ограничение на исходники ядра: strip-only режим Node
+ * удаляет типы, но ничего не порождает, поэтому в `src/` нельзя parameter
+ * properties (`constructor(private readonly x: T)`), enum и namespace. Каждая
+ * такая конструкция валит CLI на старте — это стерегёт `test/cli.test.ts`.
+ * Флаг `--experimental-transform-types` снял бы запрет, но печатал бы
+ * ExperimentalWarning в вывод при каждом прогоне, а stdout здесь сверяют
+ * побайтно golden-тесты (CLI-4).
  */
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';

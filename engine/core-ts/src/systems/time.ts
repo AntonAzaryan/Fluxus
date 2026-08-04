@@ -63,12 +63,9 @@ export interface TimeScaleSystemOptions {
 export class TimeScaleSystem implements System {
   readonly name: string;
   readonly order: number;
-  /**
-   * Поле объявлено явно, а не parameter property: `bin/sim.mjs` исполняет
-   * исходники через strip-only режим Node, который parameter properties не
-   * поддерживает, — а CLI-2 требует, чтобы тест и командная строка звали один
-   * и тот же прогон.
-   */
+  // Явное поле вместо parameter property — по той же причине, что в
+  // `VisibilitySystem`: strip-only режим Node не поддерживает этот сахар, а ядро
+  // исполняется прямо из исходников, без шага сборки (CLI-1).
   private readonly modifiers: ModifierList;
 
   /** Список источников приходит извне (DI-1): своего модульного у системы нет. */

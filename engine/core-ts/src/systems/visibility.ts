@@ -125,7 +125,11 @@ export interface VisibilityOptions {
 export class VisibilitySystem implements System {
   readonly name = 'Visibility';
   readonly order: number;
-  /** Явное поле вместо parameter property — по той же причине, что в `TimeScaleSystem` (CLI-2). */
+  // Поле объявлено явно, а не parameter property в конструкторе: ядро исполняется
+  // без сборки — типы стрипает сам Node (>=22.18), а strip-only режим отвергает
+  // parameter properties, потому что те порождают код, а не только удаляют типы.
+  // Через этот файл проходит `bin/sim.mjs` (CLI-1), так что сахар здесь стоил бы
+  // CLI флага `--experimental-transform-types` и его предупреждения в выводе.
   private readonly modifiers: ModifierList;
 
   /** Список источников обзора приходит извне (DI-1): своего модульного у системы нет. */
