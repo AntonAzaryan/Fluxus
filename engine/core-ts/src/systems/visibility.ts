@@ -125,12 +125,12 @@ export interface VisibilityOptions {
 export class VisibilitySystem implements System {
   readonly name = 'Visibility';
   readonly order: number;
+  /** Явное поле вместо parameter property — по той же причине, что в `TimeScaleSystem` (CLI-2). */
+  private readonly modifiers: ModifierList;
 
   /** Список источников обзора приходит извне (DI-1): своего модульного у системы нет. */
-  constructor(
-    private readonly modifiers: ModifierList,
-    options: VisibilityOptions = {},
-  ) {
+  constructor(modifiers: ModifierList, options: VisibilityOptions = {}) {
+    this.modifiers = modifiers;
     this.order = options.order ?? DEFAULT_ORDER;
   }
 

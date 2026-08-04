@@ -23,10 +23,12 @@ import {
   hasComponent,
   isAlive,
 } from '../ecs/world.js';
+import { beginSystem, countQuery, endSystem, withDiagnostics } from '../debug.js';
 import {
   TIME_SCALE_COMPONENT,
   type ArenaApi,
   type ChangeSet,
+  type DiagnosticsSink,
   type InputFrame,
   type MathApi,
   type ModifierRegistry,
@@ -69,6 +71,13 @@ export interface Simulation {
    * содержимое — обычные компоненты, которые снапшотятся сами.
    */
   readonly modifiers?: ModifierRegistry;
+  /**
+   * Приёмник диагностики (DIAG-1). Опционален и инертен (DI-5): его наличие
+   * MUST NOT менять результат тика. Живёт здесь, а не в `SimulationState`,
+   * именно поэтому: состояние копируется в снапшот и восстанавливается
+   * перемоткой, зависимость сборки — нет.
+   */
+  readonly diagnostics?: DiagnosticsSink;
 }
 
 export function initialState(world: WorldState, worldSeed: number): SimulationState {
@@ -115,8 +124,20 @@ export function advance(
   inputs: readonly InputFrame[],
   isReplay: boolean,
 ): TickResult {
-  const world = state.world;
   state.tick++;
+  // Контекст диагностики устанавливается на время одного тика и снимается
+  // после (DIAG-1). Без sink'а тело зовётся напрямую — выключенная
+  // диагностика стоит одного сравнения на тик.
+  return withDiagnostics(sim.diagnostics, state.tick, () => runSystems(sim, state, inputs, isReplay));
+}
+
+function runSystems(
+  sim: Simulation,
+  state: SimulationState,
+  inputs: readonly InputFrame[],
+  isReplay: boolean,
+): TickResult {
+  const world = state.world;
 
   state.events.clear();
   clearDirty(world);
@@ -125,7 +146,13 @@ export function advance(
   for (const system of sim.systems.ordered()) {
     const ctx: SystemContext = {
       tick: state.tick,
-      query: (spec) => runQuery(world, spec),
+      query: (spec) => {
+        const result = runQuery(world, spec);
+        // Пустой отбор — самый частый отказ JSON-системы, и без счётчика он
+        // неотличим от удалённой системы (DIAG-3).
+        countQuery(result.length);
+        return result;
+      },
       get: (entity, component, field) => getField(world, entity, component, field),
       has: (entity, component) => hasComponent(world, entity, component),
       isAlive: (entity) => isAlive(world, entity),
@@ -146,10 +173,18 @@ export function advance(
           ? sim.math.mul(globalDelta, getField(world, entity, TIME_SCALE_COMPONENT, 'value'))
           : globalDelta,
     };
-    system.run(ctx);
-    // Flush в конце каждой системы, а не тика (CMD-2): следующая по order
-    // система обязана видеть спавны и удаления предыдущей на этом же тике.
-    commands.flush();
+    // Имя текущей системы проставляется здесь: так атрибуция трейса (DIAG-5)
+    // достаётся без изменения интерфейса `CommandBuffer`, которым пользуются
+    // все системы.
+    beginSystem(system.name);
+    try {
+      system.run(ctx);
+      // Flush в конце каждой системы, а не тика (CMD-2): следующая по order
+      // система обязана видеть спавны и удаления предыдущей на этом же тике.
+      commands.flush();
+    } finally {
+      endSystem();
+    }
   }
 
   return result(state, isReplay);

@@ -30,7 +30,10 @@
         │  Netcode snapshot filter│  ← per-client фильтрация (viewpoint)
         │  CLI (golden-file)      │  ← cross-language sync
         └─────────────────────────┘
+                ▲ DiagnosticsSink (push, во время тика)
 ```
+
+Выходов из ядра два, и они разные. `TickResult` — отчёт о тике, читаемый observer'ами ПОСЛЕ него. `DiagnosticsSink` — push-канал, работающий ВО ВРЕМЯ тика: по нему идут нарушенные инварианты и трейс потока команд. Второй нужен именно потому, что первого не существует в момент, когда тик оборвался исключением. Подробности — capability `diagnostics`.
 
 ## 2. Карта спецификаций
 
@@ -53,6 +56,7 @@
 | `netcode` | Server-auth, предсказание, per-client фильтрация, единая версия | NET-1..17 |
 | `fog-of-war` | `Vision`/`Visibility`/`Stealth`, `VisibilitySystem` | FOW-1..9 |
 | `editor` | Compose-редактор геймплея | ED-1..10 |
+| `diagnostics` | Приёмник диагностики, форма записи, уровни трейса, трейс потока Command Buffer | DIAG-1..7 |
 
 Требование ищется по ID: `openspec spec show <capability>` либо grep по `openspec/specs/`.
 
@@ -112,7 +116,8 @@
 | 17 | Netcode: server-auth + предсказание + per-client фильтрация | 🟡 Частично: `src/sim/filter.ts` — per-client фильтр снапшота и событий с `viewpoint` (NET-12..15). Транспорт, предсказание и reconciliation (NET-1..11) — вне ядра, отдельным этапом |
 | 18 | FoW: компоненты + `VisibilitySystem` + fog-mask | ✅ (кроме рендера) `src/systems/visibility.ts`: `Vision`/`Visibility`/`Stealth`/`Team`/`VisionModifier`, пересчёт по `withinRadius` + `raycast` + фильтр уровня, эмит только при смене битов. Fog-mask (FOW-7..9) — рендер, вне ядра |
 | 19 | Arena: граница, принадлежность, сужение, события | ✅ `src/systems/arena.ts`: окружность в ассете, мутабельный радиус компонентом, `LeftArena` и `FellThroughFloor` по переходу (ARENA-1..6). Этапом не значилась — capability появилась после составления roadmap |
-| 20 | (Будущее) Rust-порт ядра | Cross-language парность, включая LoS |
+| 19.5 | Диагностика и трейс ядра | ✅ `src/debug.ts` (приёмник на `Simulation`, DI-5), трейс потока Command Buffer в `src/ecs/commands.ts`, JSONL-вывод CLI (`--trace=`). Этапом не значилась — capability появилась после составления roadmap, как и `arena` |
+| 20 | (Будущее) Rust-порт ядра | Cross-language парность, включая LoS. Трейс даёт субтиковое разрешение там, где golden локализует расхождение только до тика (DIAG-6) |
 | 21 | (Будущее) Pathfinding для крипов/NPC | 🟡 Шов готов: `NavigationApi` и `navigation?` в `SystemContext` (`pathfinding` NAV-1..6, DI-4). Алгоритм, навигационные данные и связность сетки — отдельным этапом |
 
 Бывший этап сериализации разделён надвое: формат данных нужен редактору, ring buffer снапшотов — нет, он нужен перемотке и netcode. Разделение стало возможным после `mutable-world-state`: снапшоты перестали быть условием того, чтобы история влезла в память.

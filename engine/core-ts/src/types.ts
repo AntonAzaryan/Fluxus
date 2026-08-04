@@ -277,6 +277,97 @@ export interface EventLog extends EventEmitter, ReadonlyEventLog {
   restore(events: readonly GameEvent[]): void;
 }
 
+// --------------------------------------------------------------- diagnostics
+
+/**
+ * Уровень детализации трейса (DIAG-3). Регулирует объём штатной телеметрии и
+ * НЕ выключает диагностику нарушенных инвариантов: при подключённом sink'е она
+ * идёт на любом уровне, включая `off`.
+ */
+export const TRACE_LEVELS = ['off', 'systems', 'full'] as const;
+
+export type TraceLevel = (typeof TRACE_LEVELS)[number];
+
+/** Вид записи (DIAG-2). */
+export type DiagnosticKind = 'assert' | 'invariant' | 'systemBegin' | 'systemEnd' | 'command' | 'event';
+
+/** Важность записи (DIAG-2). Не путать с `TraceLevel` — это про сигнал, а не про объём. */
+export type DiagnosticLevel = 'info' | 'warn' | 'error';
+
+/**
+ * Исход команды, определяемый на flush (DIAG-5). `dropped:dead-target` и
+ * `overwritten` — штатные исходы, а не ошибки: CMD-7 объявляет отбрасывание
+ * молчаливым, CMD-3 — перекрытие последней командой нормой.
+ */
+export type CommandOutcome = 'applied' | 'dropped:dead-target' | 'overwritten';
+
+/**
+ * Стабильные коды записей (DIAG-2). Идентификатор записи — код, а не текст
+ * сообщения: формулировки правятся при вычитке, а потребители отбирают
+ * записи автоматически.
+ */
+export const DIAGNOSTIC_CODES = [
+  // нарушенные инварианты (FP-4)
+  'ASSERT',
+  'INVARIANT',
+  'FIXED_OVERFLOW',
+  'FIXED_DIV_BY_ZERO',
+  'FIXED_SQRT_NEGATIVE',
+  'ENTITY_CAPACITY_EXCEEDED',
+  'ENTITY_GENERATION_OVERFLOW',
+  'ENTITY_ID_OUT_OF_RANGE',
+  'MASK_INDEX_OUT_OF_RANGE',
+  'MASK_COMPONENT_OUT_OF_RANGE',
+  'RNG_BOUND_INVALID',
+  'SINK_THREW',
+  // трейс
+  'SYSTEM_BEGIN',
+  'SYSTEM_END',
+  'COMMAND',
+  'EVENT',
+] as const;
+
+export type DiagnosticCode = (typeof DIAGNOSTIC_CODES)[number];
+
+/** Данные записи: только скаляры — запись обязана быть самодостаточной (DIAG-4). */
+export type DiagnosticData = Readonly<Record<string, number | string>>;
+
+/**
+ * Запись диагностики (DIAG-2). Отметки реального времени в ней нет намеренно:
+ * часы здесь — пара «тик, порядковый номер», иначе трейс перестал бы быть
+ * воспроизводимым (DIAG-6).
+ */
+export interface DiagnosticRecord {
+  readonly tick: number;
+  /** Сквозной номер внутри тика: задаёт порядок записей всех видов (DIAG-2). */
+  readonly seq: number;
+  /** Система, в границах которой возникла запись; вне систем отсутствует. */
+  readonly system?: string;
+  readonly kind: DiagnosticKind;
+  readonly level: DiagnosticLevel;
+  readonly code: DiagnosticCode;
+  readonly data?: DiagnosticData;
+  /** Только у записей о командах (DIAG-5). */
+  readonly outcome?: CommandOutcome;
+  /** Только в debug-сборке (FP-4): текст свободен и частью API не является. */
+  readonly message?: string;
+}
+
+/**
+ * Приёмник диагностики (DIAG-1). Опциональная зависимость сборки (DI-5):
+ * живёт на `Simulation` рядом с Physics/Navigation API, а не в состоянии
+ * симуляции и не в модульной переменной — иначе две симуляции в одном
+ * процессе делили бы приёмник (DI-1).
+ *
+ * Контракт потребителя (DIAG-4): `record` MUST NOT бросать. Исключение из
+ * середины применения команд оставило бы мир мутированным частично, то есть
+ * наблюдатель изменил бы ход симуляции.
+ */
+export interface DiagnosticsSink {
+  readonly trace: TraceLevel;
+  record(entry: DiagnosticRecord): void;
+}
+
 // ------------------------------------------------------------------- systems
 
 export interface SystemContext {

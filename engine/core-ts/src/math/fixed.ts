@@ -12,7 +12,7 @@ const INT32_MAX = 2147483647;
 /** Заворачивает произвольную (но точно целую) величину в i32 и в debug-сборке ловит переполнение. */
 function wrap(raw: number, what: string): Fixed {
   const wrapped = raw | 0;
-  if (DEBUG) assert(raw === wrapped, `${what}: overflow (${raw} не помещается в i32)`);
+  if (DEBUG) assert(raw === wrapped, `${what}: overflow (${raw} не помещается в i32)`, 'FIXED_OVERFLOW');
   return wrapped;
 }
 
@@ -74,7 +74,7 @@ export function mul(a: Fixed, b: Fixed): Fixed {
  * теряет точность и не требует BigInt. Знак — отдельно, как и в mul (FP-3).
  */
 export function div(a: Fixed, b: Fixed): Fixed {
-  if (DEBUG) assert(b !== 0, 'div: деление на ноль');
+  if (DEBUG) assert(b !== 0, 'div: деление на ноль', 'FIXED_DIV_BY_ZERO');
   // FP-5: насыщение по знаку числителя. Нативное поведение расходится (Rust
   // паникует, TS даёт Infinity), поэтому результат задан спекой явно.
   if (b === 0) return a > 0 ? INT32_MAX : a < 0 ? INT32_MIN : 0;
@@ -108,7 +108,7 @@ export function clamp(a: Fixed, lo: Fixed, hi: Fixed): Fixed {
  * влезает в double точно, как и все промежуточные квадраты в поиске.
  */
 export function sqrt(a: Fixed): Fixed {
-  if (DEBUG) assert(a >= 0, 'sqrt: отрицательный операнд');
+  if (DEBUG) assert(a >= 0, 'sqrt: отрицательный операнд', 'FIXED_SQRT_NEGATIVE');
   if (a <= 0) return 0;
 
   const n = a * FIXED_ONE;

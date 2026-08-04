@@ -131,7 +131,11 @@ export class XorShift128Stream implements RngStream {
 
   /** Lemire multiply-shift с отбраковкой — детерминированно и воспроизводимо в Rust (без float). */
   nextBelow(bound: number): number {
-    assertInvariant(Number.isInteger(bound) && bound > 0, 'nextBelow: bound должен быть положительным целым');
+    assertInvariant(
+      Number.isInteger(bound) && bound > 0,
+      'nextBelow: bound должен быть положительным целым',
+      'RNG_BOUND_INVALID',
+    );
     const s = bound >>> 0;
     const threshold = ((-s) >>> 0) % s; // (2^32 - s) mod s — граница отбраковки для равномерности
     let hi: number;

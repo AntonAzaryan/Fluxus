@@ -25,7 +25,13 @@ import { loadScene, type SceneDef } from './scene.js';
 import { prettyJsonSerializer, snapshotToPlain, type PlainSnapshot } from './serialization.js';
 import { initialState, tick, type Simulation } from './tick.js';
 import { worldInitHash } from './worldInit.js';
-import type { FieldOverrides, InputFrame, PhysicsApi, SimulationState } from '../types.js';
+import type {
+  DiagnosticsSink,
+  FieldOverrides,
+  InputFrame,
+  PhysicsApi,
+  SimulationState,
+} from '../types.js';
 
 export interface ScenarioSpawn {
   readonly prefab: string;
@@ -75,7 +81,11 @@ export interface RunOutput {
   readonly ticks: readonly TickRecord[];
 }
 
-export function runScenario(def: ScenarioDef): RunOutput {
+/**
+ * Приёмник трейса (CLI-7). Необязателен: без него документ прогона совпадает с
+ * тем, что был до появления диагностики, — эталоны от параметра не зависят.
+ */
+export function runScenario(def: ScenarioDef, diagnostics?: DiagnosticsSink): RunOutput {
   if (typeof def.name !== 'string' || def.name === '') throw new Error('сценарий: "name" — непустая строка');
   if (!Number.isInteger(def.seed)) throw new Error(`сценарий "${def.name}": "seed" — целое число`);
   if (!Number.isInteger(def.ticks) || def.ticks < 0) {
@@ -128,6 +138,7 @@ export function runScenario(def: ScenarioDef): RunOutput {
     ...(terrain !== undefined ? { terrain } : {}),
     ...(arena !== undefined ? { arena } : {}),
     ...(physics !== undefined ? { physics } : {}),
+    ...(diagnostics !== undefined ? { diagnostics } : {}),
   };
 
   const byTick = new Map<number, InputFrame[]>();
@@ -147,8 +158,8 @@ export function runScenario(def: ScenarioDef): RunOutput {
 }
 
 /** Байты для golden-файла и stdout: pretty JSON того же документа. */
-export function runScenarioBytes(def: ScenarioDef): Uint8Array {
-  return prettyJsonSerializer.encode(runScenario(def));
+export function runScenarioBytes(def: ScenarioDef, diagnostics?: DiagnosticsSink): Uint8Array {
+  return prettyJsonSerializer.encode(runScenario(def, diagnostics));
 }
 
 function record(state: SimulationState): TickRecord {

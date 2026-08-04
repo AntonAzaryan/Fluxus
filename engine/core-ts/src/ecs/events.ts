@@ -1,4 +1,5 @@
 import type { EventLog, GameEvent } from '../types.js';
+import { countEvent, record, traceFull } from '../debug.js';
 
 const NO_DATA: Readonly<Record<string, number>> = Object.freeze({});
 
@@ -14,6 +15,11 @@ export class EventBus implements EventLog {
 
   emit(type: string, data: Readonly<Record<string, number>> = NO_DATA): void {
     this.log.push({ type, data });
+    countEvent();
+    // Вторая точка съёма трейса помимо Command Buffer (DIAG-2): без неё
+    // взаимный порядок событий и команд внутри системы не восстановить.
+    const traced = traceFull();
+    if (traced !== undefined) record(traced, 'event', 'info', 'EVENT', { data: { type, ...data } });
   }
 
   get length(): number {
