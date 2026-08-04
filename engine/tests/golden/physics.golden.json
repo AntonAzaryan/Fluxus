@@ -1,6 +1,7 @@
 {
   "scenario": "physics",
   "seed": 20260813,
+  "worldInitHash": "8c822a4b",
   "ticks": [
     {
       "tick": 0,
