@@ -25,16 +25,16 @@ openspec spec show netcode          # one spec
 openspec validate --specs --strict  # format check
 ```
 
-## Commands (engine/ workspace)
+## Commands (repository root workspace)
 
-Node >= 22.18. `engine/` is an npm workspace (`core-ts`, `net-ts`, `render-ts`, `assets-ts`, `client-ts` — the web client shell (worker hosting + channel, SHELL-1..7), `integration-ts` — the cross-layer integration suite, CLI-9): a single `npm install` from `engine/` installs everything, and the check-everything command before pushing is:
+Node >= 22.18. The repository root is the npm workspace; its members are the engine packages (`engine/core-ts`, `engine/net-ts`, `engine/render-ts`, `engine/assets-ts`, `engine/client-ts` — the web client shell (worker hosting + channel, SHELL-1..7), `engine/integration-ts` — the cross-layer integration suite, CLI-9). A single `npm install` from the root installs everything, and the check-everything command before pushing is:
 
 ```sh
-npm test          # from engine/: tests of all packages
-npm run typecheck # from engine/: tsc --noEmit of all packages
+npm test          # from the root: tests of all packages
+npm run typecheck # from the root: tsc --noEmit of all packages
 ```
 
-Per-package commands run from the package directory (or via `npm run <script> -w @game-mvp/<name>` from `engine/`). From `engine/core-ts/`:
+Per-package commands run from the package directory (or via `npm run <script> -w @game-mvp/<name>` from the root). From `engine/core-ts/`:
 
 ```sh
 npx vitest run test/physics.test.ts      # one file
@@ -44,7 +44,7 @@ npm run golden                           # regenerate golden baselines (UPDATE_G
 npm run schemas                          # regenerate engine/schemas/*.json (UPDATE_SCHEMAS=1)
 ```
 
-`engine/tests/golden/` holds `*.scenario.json` / `*.golden.json` pairs — bitwise baselines of a scenario run. `match-*` pairs are recorded loopback matches (CLI-10): the scenario is written by `integration-ts` (`npm run record`), the golden by the core adapter. `golden.test.ts` compares them exactly; if behavior changed **deliberately and per spec**, regenerate with `npm run golden` from `engine/` (re-records matches, then rewrites core baselines) and include the baseline diff in the commit. JSON schemas in `engine/schemas/` are generated from the core — never edit by hand, only via `npm run schemas`.
+`engine/tests/golden/` holds `*.scenario.json` / `*.golden.json` pairs — bitwise baselines of a scenario run. `match-*` pairs are recorded loopback matches (CLI-10): the scenario is written by `integration-ts` (`npm run record`), the golden by the core adapter. `golden.test.ts` compares them exactly; if behavior changed **deliberately and per spec**, regenerate with `npm run golden` from the repository root (re-records matches, then rewrites core baselines) and include the baseline diff in the commit. JSON schemas in `engine/schemas/` are generated from the core — never edit by hand, only via `npm run schemas`.
 
 ## Non-negotiable core principles
 

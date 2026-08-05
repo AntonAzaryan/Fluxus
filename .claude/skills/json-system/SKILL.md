@@ -1,7 +1,7 @@
 ---
 name: json-system
 description: Author data-driven content for the Fluxus engine — JSON systems (EvaluatedSystem), components, prefabs, scenes and scenarios in the Expression/Action DSL. Use whenever the user asks to write, generate, edit or debug a JSON system, a scene config, gameplay content, DSL expressions/actions, or anything a game designer would tune without touching TS code. Also use when converting gameplay logic between TS and JSON form.
-compatibility: Node >= 22.18, engine/ workspace installed
+compatibility: Node >= 22.18, workspace installed (npm install из корня репозитория)
 ---
 
 # Авторинг JSON-систем и контента

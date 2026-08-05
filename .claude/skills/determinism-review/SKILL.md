@@ -30,4 +30,4 @@ bash .claude/skills/determinism-review/scripts/check.sh
 
 ## Финал
 
-`npm test` и `npm run typecheck` из `engine/` (все пакеты). Если поведение менялось намеренно — эталоны через скил `golden-update`, диф эталонов в коммит.
+`npm test` и `npm run typecheck` из корня репозитория (все пакеты). Если поведение менялось намеренно — эталоны через скил `golden-update`, диф эталонов в коммит.

@@ -1,7 +1,7 @@
 ---
 name: golden-update
 description: Handle failing or outdated golden baseline tests in the Fluxus engine (engine/tests/golden). Use whenever golden.test.ts or matchGolden.test.ts goes red, whenever behavior of the simulation changed and baselines need regeneration, whenever the user mentions golden files, baselines, эталоны, match recordings, or asks to run npm run golden / npm run record / npm run schemas. Also use before committing any change that touches simulation behavior.
-compatibility: Run from engine/ workspace
+compatibility: Run from the repository root workspace
 ---
 
 # Обновление golden-эталонов
@@ -16,7 +16,7 @@ compatibility: Run from engine/ workspace
 
 ## Как перезаписывать
 
-Единственная правильная команда — из `engine/`:
+Единственная правильная команда — из корня репозитория:
 
 ```sh
 npm run golden
@@ -27,7 +27,7 @@ npm run golden
 После перезаписи:
 
 - **Просмотри диф эталонов глазами** (`git diff engine/tests/golden/`) — он обязан объясняться твоим изменением, строка в строку с ожиданием. Незнакомые дифы — назад к пункту 2.
-- Прогони полный набор: `npm test` из `engine/` — golden-тесты дополнительно сверяют, что два прогона дают одни байты (DET-1).
+- Прогони полный набор: `npm test` из корня репозитория — golden-тесты дополнительно сверяют, что два прогона дают одни байты (DET-1).
 - **Диф эталонов входит в тот же коммит**, что и изменение поведения, — с объяснением в сообщении коммита.
 
 ## Смежное: схемы
@@ -36,4 +36,4 @@ npm run golden
 
 ## Красный matchGolden отдельно
 
-Красный `integration-ts/test/matchGolden.test.ts` при зелёном core-golden означает: сетевой слой стал записывать матч иначе (пейсинг, подстановка predicted-кадров, порядок канонического лога). Принятие — то же `npm run golden` из `engine/`, и диф `match-*.scenario.json` смотрится на ревью так же внимательно.
+Красный `integration-ts/test/matchGolden.test.ts` при зелёном core-golden означает: сетевой слой стал записывать матч иначе (пейсинг, подстановка predicted-кадров, порядок канонического лога). Принятие — то же `npm run golden` из корня репозитория, и диф `match-*.scenario.json` смотрится на ревью так же внимательно.

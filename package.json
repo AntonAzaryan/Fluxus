@@ -1,15 +1,15 @@
 {
-  "name": "@game-mvp/engine",
+  "name": "game-mvp",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "workspaces": [
-    "core-ts",
-    "net-ts",
-    "render-ts",
-    "assets-ts",
-    "client-ts",
-    "integration-ts"
+    "engine/core-ts",
+    "engine/net-ts",
+    "engine/render-ts",
+    "engine/assets-ts",
+    "engine/client-ts",
+    "engine/integration-ts"
   ],
   "scripts": {
     "test": "npm run test --workspaces",

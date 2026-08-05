@@ -19,8 +19,9 @@
 
 ### Пакеты
 
-`engine/` — npm workspace; один `npm install` из `engine/` ставит всё. Зависимости
-направлены в одну сторону: ядро не знает ни о сети, ни о рендере.
+Пакеты — участники npm workspace, корень которого лежит в корне репозитория; один
+`npm install` оттуда ставит всё. Зависимости направлены в одну сторону: ядро не знает
+ни о сети, ни о рендере.
 
 - `core-ts/` — **ядро** (TypeScript): `src/math`, `src/ecs`, `src/dsl`, `src/systems`,
   `src/sim`; `bin/sim.mjs` — CLI прогона сценария. Рантайм-зависимостей нет вовсе —
@@ -43,7 +44,7 @@
 
 ### Команды
 
-Node >= 22.18, всё из `engine/`:
+Node >= 22.18, всё из корня репозитория:
 
 ```sh
 npm install
@@ -58,10 +59,10 @@ openspec validate --specs --strict  # проверка формата
 ```
 
 Команды отдельных пакетов — из их директорий (либо `npm run <script> -w @game-mvp/<name>`
-из `engine/`):
+из корня):
 
 ```sh
-cd core-ts
+cd engine/core-ts
 npm run sim -- ../tests/golden/movement.scenario.json   # прогон сценария через CLI
 npm run schemas     # обновить JSON-схемы (UPDATE_SCHEMAS=1)
 
