@@ -36,13 +36,13 @@ export class SystemRegistry {
    * тихо сдвинувшая порядок, меняет результат симуляции, ничего не сломав
    * видимо, — тот же класс ошибки, ради которого DET-3 запрещает равные order.
    */
-  override(system: System): void {
+  replace(system: System): void {
     const index = this.systems.findIndex((s) => s.name === system.name);
-    if (index === -1) throw new Error(`override: система "${system.name}" не зарегистрирована`);
+    if (index === -1) throw new Error(`replace: система "${system.name}" не зарегистрирована`);
     const previous = this.systems[index]!;
     if (previous.order !== system.order) {
       throw new Error(
-        `override: у системы "${system.name}" order ${previous.order}, подменяющая заявляет ${system.order}`,
+        `replace: у системы "${system.name}" order ${previous.order}, подменяющая заявляет ${system.order}`,
       );
     }
     this.systems[index] = system;

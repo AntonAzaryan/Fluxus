@@ -229,7 +229,7 @@ describe('парность evaluate- и TS-реализации (SYS-6, SYS-8)',
   });
 });
 
-describe('SystemRegistry.override (SYS-7)', () => {
+describe('SystemRegistry.replace (SYS-7)', () => {
   const registry = (): SystemRegistry => {
     const r = new SystemRegistry();
     r.register(new EvaluatedSystem(BURNING_JSON));
@@ -239,7 +239,7 @@ describe('SystemRegistry.override (SYS-7)', () => {
   it('подменяет реализацию, сохраняя место в порядке', () => {
     const r = registry();
     r.register({ name: 'After', order: 20, run: () => {} });
-    r.override(new NativeBurning());
+    r.replace(new NativeBurning());
 
     expect(r.ordered().map((s) => s.name)).toEqual(['Burning', 'After']);
     expect(r.ordered()[0]).toBeInstanceOf(NativeBurning);
@@ -247,11 +247,11 @@ describe('SystemRegistry.override (SYS-7)', () => {
 
   it('отвергает подмену с другим order', () => {
     const other: System = { name: 'Burning', order: 11, run: () => {} };
-    expect(() => registry().override(other)).toThrow(/order 10.*заявляет 11/);
+    expect(() => registry().replace(other)).toThrow(/order 10.*заявляет 11/);
   });
 
   it('отвергает подмену незарегистрированной системы', () => {
-    expect(() => registry().override({ name: 'Ghost', order: 1, run: () => {} })).toThrow(/не зарегистрирована/);
+    expect(() => registry().replace({ name: 'Ghost', order: 1, run: () => {} })).toThrow(/не зарегистрирована/);
   });
 });
 
