@@ -16,7 +16,7 @@ Repository documentation and specs are written in Russian (requirement modality 
 - Changes go through the OpenSpec workflow: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`, etc. (the `openspec-*` skills in `.claude/skills/`). Do not edit specs outside this process.
 - **Run every `openspec` command from `engine/`.** The CLI resolves the nearest `openspec/` root by walking *up* from the working directory, and the only one in this repo is `engine/openspec/`; from the repository root it silently reports `No specs found.` This applies to the `openspec` calls inside the `openspec-*` skills and `/opsx:*` commands too — they invoke the CLI bare, so the working directory has to be `engine/` before they run.
 - Spec-writing context and rules — `engine/openspec/config.yaml`.
-- Layer overview, roadmap, the mechanism-vs-policy split, open questions — `engine/docs/architecture.md`.
+- Layer overview, roadmap, the mechanism-vs-policy split, open questions — `docs/architecture.md` (repository root, alongside `docs/one-pager.md`).
 
 ```sh
 cd engine
@@ -56,7 +56,7 @@ Violating any of these is a defect, not a trade-off (full list — `engine/opens
 - A JSON-defined system and a native TS system are interchangeable behind the single `System` interface.
 - Server-authoritative netcode; each client's snapshot is filtered by visibility (FoW is part of the simulation, not the renderer).
 - The core has **zero** runtime dependencies — do not add libraries to `engine/core-ts` (ECS libraries and `json-logic-js` were deliberately rejected).
-- Mechanism vs policy: the core knows nothing about balance. Any number a game designer might tune lives in JSON systems, not in the core (examples table — `engine/docs/architecture.md` §3).
+- Mechanism vs policy: the core knows nothing about balance. Any number a game designer might tune lives in JSON systems, not in the core (examples table — `docs/architecture.md` §3).
 
 ## Allocation discipline in the core
 

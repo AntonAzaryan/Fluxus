@@ -1,6 +1,6 @@
 # Архитектурный обзор движка
 
-> Требования переехали в `openspec/specs/` — это документ «как всё устроено целиком» и «в каком порядке строим». Нормативные формулировки живут только в спеках; здесь их дублировать нельзя.
+> Требования переехали в `engine/openspec/specs/` — это документ «как всё устроено целиком» и «в каком порядке строим». Нормативные формулировки живут только в спеках; здесь их дублировать нельзя.
 
 ## 1. Слои
 
@@ -68,7 +68,7 @@
 | `rendering` | Рендер-наблюдатель: интерполяция, модели, анимации, кости, скины, террейн, подсистемы | REND-1..8 |
 | `client-shell` | Клиентская оболочка веба: ядро в воркере, рендер в main, канал transferable ping-pong, conflation, обратный канал | SHELL-1..7 |
 
-Требование ищется по ID: `openspec spec show <capability>` либо grep по `openspec/specs/`.
+Требование ищется по ID: `openspec spec show <capability>` либо grep по `engine/openspec/specs/`.
 
 ## 3. Механизм против политики
 
@@ -112,7 +112,7 @@
 
 | Этап | Задача | Результат |
 |---|---|---|
-| 0 | Формальная спецификация core | ✅ `openspec/specs/` + JSON-схемы (схемы ещё нет) |
+| 0 | Формальная спецификация core | ✅ `engine/openspec/specs/` + JSON-схемы (схемы ещё нет) |
 | 1 | Fixed-point Math API | ✅ `engine/core-ts/src/math/fixed.ts`, `math/vector.ts`, `math/mathApi.ts` |
 | 2 | ECS foundation + Query API + Command Buffer | ✅ Собственное SoA-хранилище, битовые маски, flush per-system |
 | 3 | Entity IDs + RNG streams | ✅ Generational IDs 24+24; xorshift128 с именованными стримами |
