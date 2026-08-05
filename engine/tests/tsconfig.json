@@ -1,0 +1,17 @@
+{
+  "//": "Общий код тестов (guard-сканеры) не принадлежит ни одному пакету: его импортируют сюиты core-ts, net-ts и integration-ts сразу. До появления этого файла он проверялся только транзитивно — через импорт из чужого проекта, — то есть не числился нигде и был невидим инструментам, которые ходят по списку проектов, а не по графу импортов (линтер это и обнаружил).",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["guard/**/*"]
+}

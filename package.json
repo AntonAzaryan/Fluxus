@@ -14,9 +14,18 @@
   "scripts": {
     "test": "npm run test --workspaces",
     "typecheck": "npm run typecheck --workspaces",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "check": "npm run typecheck && npm run lint && npm test",
     "golden": "npm run record -w @game-mvp/integration && npm run golden -w @game-mvp/core"
   },
   "engines": {
     "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^16.5.0",
+    "typescript-eslint": "^8.66.0"
   }
 }
