@@ -3,8 +3,8 @@
 // контракт «источник истины»:
 //  - engine/schemas/*.json порождаются из ядра (npm run schemas) — deny;
 //  - golden-эталоны и записанные match-сценарии пишутся только прогоном
-//    (npm run golden из engine/) — deny;
-//  - engine/openspec/specs/** меняются в рамках opsx-цикла — ask: правка
+//    (npm run golden из корня репозитория) — deny;
+//  - openspec/specs/** меняются в рамках opsx-цикла — ask: правка
 //    легитимна внутри /opsx:apply|sync|archive, подтверждает человек.
 import { readFileSync } from 'node:fs';
 
@@ -33,14 +33,14 @@ if (
 ) {
   decide(
     'deny',
-    'Golden-эталоны и match-сценарии пишутся только прогоном: npm run golden из engine/ (скил golden-update). Ручная правка — фальсификация эталона.',
+    'Golden-эталоны и match-сценарии пишутся только прогоном: npm run golden из корня репозитория (скил golden-update). Ручная правка — фальсификация эталона.',
   );
 }
 
-if (/(^|\/)engine\/openspec\/specs\//.test(file)) {
+if (/(^|\/)openspec\/specs\//.test(file)) {
   decide(
     'ask',
-    'engine/openspec/specs/ меняется через opsx-цикл (/opsx:apply, /opsx:sync, /opsx:archive). Подтверди, что это шаг этого цикла, а не прямая правка спеки.',
+    'openspec/specs/ меняется через opsx-цикл (/opsx:apply, /opsx:sync, /opsx:archive). Подтверди, что это шаг этого цикла, а не прямая правка спеки.',
   );
 }
 

@@ -1,16 +1,16 @@
 ---
 name: spec-coverage
 description: Build a requirement-to-implementation coverage report for the Fluxus engine — map OpenSpec requirement IDs (DET-1, NET-15, FOW-4, …) to the code and tests that implement them. Use whenever the user asks how well the implementation matches the spec, which requirements are untested or unimplemented, to refresh a spec-compliance/spec-alignment report, or before large refactors to know what is pinned down.
-compatibility: openspec CLI, run from engine/
+compatibility: openspec CLI, run from the repository root
 ---
 
 # Отчёт покрытия спеки реализацией
 
-Задача: свежая карта «требование → код → тест» по 19 capability из `engine/openspec/specs/`. Отчёт пиши по-русски и датируй в имени файла.
+Задача: свежая карта «требование → код → тест» по 19 capability из `openspec/specs/`. Отчёт пиши по-русски и датируй в имени файла.
 
 ## Сбор данных
 
-1. Список требований: `openspec list --specs` из `engine/`, затем по каждой capability — `openspec spec show <name>` (ID лежат в заголовках `### Requirement:`).
+1. Список требований: `openspec list --specs` из корня репозитория, затем по каждой capability — `openspec spec show <name>` (ID лежат в заголовках `### Requirement:`).
 2. Упоминания ID в реализации и тестах — ID цитируются в комментариях и именах тестов, это рабочая конвенция репы:
    ```sh
    grep -rnoE '\b[A-Z]{2,6}-[0-9]+\b' engine/core-ts/src engine/net-ts/src engine/integration-ts \

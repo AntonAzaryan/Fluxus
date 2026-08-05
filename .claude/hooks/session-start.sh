@@ -45,8 +45,8 @@ if [ -f "$REPO_ROOT/package.json" ]; then
 fi
 
 # 4. Санити-чек: спеки читаются.
-if [ -d "$REPO_ROOT/engine/openspec" ]; then
-  ( cd "$REPO_ROOT/engine" && openspec list --specs >/dev/null && echo "OpenSpec видит спеки в engine/openspec ✓" )
+if [ -d "$REPO_ROOT/openspec" ]; then
+  ( cd "$REPO_ROOT" && openspec list --specs >/dev/null && echo "OpenSpec видит спеки в openspec/ ✓" )
 fi
 
 echo "Окружение готово."

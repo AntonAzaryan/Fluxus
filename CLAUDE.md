@@ -6,20 +6,19 @@ Repository documentation and specs are written in Russian (requirement modality 
 
 ## The repository
 
-`engine/` is the OpenSpec specification of the engine + the working core implementation `core-ts/`.
+`openspec/` is the spec, `engine/` its working implementation (the `*-ts` packages), `docs/` the non-normative overview. The npm workspace root is the repository root.
 
 ## The spec is the source of truth
 
-`engine/openspec/specs/` (22 capabilities, ~245 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
+`openspec/specs/` (22 capabilities, ~245 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
 
 - Requirements carry historical IDs (`DET-1`, `NET-15`, `FOW-4`…) in `### Requirement:` headers — preserve them; a new requirement takes the next free number of its prefix.
 - Changes go through the OpenSpec workflow: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`, etc. (the `openspec-*` skills in `.claude/skills/`). Do not edit specs outside this process.
-- **Run every `openspec` command from `engine/`.** The CLI resolves the nearest `openspec/` root by walking *up* from the working directory, and the only one in this repo is `engine/openspec/`; from the repository root it silently reports `No specs found.` This applies to the `openspec` calls inside the `openspec-*` skills and `/opsx:*` commands too — they invoke the CLI bare, so the working directory has to be `engine/` before they run.
-- Spec-writing context and rules — `engine/openspec/config.yaml`.
-- Layer overview, roadmap, the mechanism-vs-policy split, open questions — `docs/architecture.md` (repository root, alongside `docs/one-pager.md`).
+- The spec covers more than the TS packages — `editor` (Kotlin + Compose, roadmap stage 12) is a capability with no code under `engine/`. Capability ≠ package.
+- Spec-writing context and rules — `openspec/config.yaml`.
+- Layer overview, roadmap, the mechanism-vs-policy split, open questions — `docs/architecture.md` (alongside `docs/one-pager.md`).
 
 ```sh
-cd engine
 openspec list --specs               # list capabilities
 openspec spec show netcode          # one spec
 openspec validate --specs --strict  # format check
@@ -48,7 +47,7 @@ npm run schemas                          # regenerate engine/schemas/*.json (UPD
 
 ## Non-negotiable core principles
 
-Violating any of these is a defect, not a trade-off (full list — `engine/openspec/config.yaml`):
+Violating any of these is a defect, not a trade-off (full list — `openspec/config.yaml`):
 
 - The only entry into the simulation is `tick(state, inputs) → TickResult`; no I/O or side effects inside a tick — external consumers read `TickResult` afterwards.
 - Fixed-point Q16.16 everywhere in the simulation; floats are forbidden in gameplay math.
