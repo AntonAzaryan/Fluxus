@@ -209,6 +209,46 @@
           }
         }
       ]
+    },
+    {
+      "name": "FireballImpact",
+      "order": 50,
+      "query": { "all": ["Position", "Lifetime"] },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": { "<=": [{ "getComponent": [{ "var": "e" }, "Lifetime", "ticks"] }, 0] },
+            "then": [
+              {
+                "let": {
+                  "bindings": {
+                    "at": {
+                      "vec": [
+                        { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                        { "getComponent": [{ "var": "e" }, "Position", "y"] }
+                      ]
+                    }
+                  },
+                  "do": [
+                    { "carveFloor": { "at": { "var": "at" } } },
+                    {
+                      "emitEvent": {
+                        "type": "FireballExploded",
+                        "data": {
+                          "x": { "vec.x": [{ "var": "at" }] },
+                          "y": { "vec.y": [{ "var": "at" }] }
+                        }
+                      }
+                    },
+                    { "destroyEntity": { "entity": { "var": "e" } } }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   ],
   "terrain": {

@@ -1,0 +1,125 @@
+{
+  "name": "carve-floor",
+  "seed": 20260805,
+  "ticks": 3,
+  "scene": {
+    "components": [
+      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Fuse", "fields": { "ticks": "i32" } }
+    ],
+    "prefabs": [
+      {
+        "name": "Charge",
+        "components": {
+          "Position": { "x": 229376, "y": 229376 },
+          "Velocity": { "x": 65536, "y": 0 },
+          "Fuse": { "ticks": 2 }
+        }
+      }
+    ],
+    "systems": [
+      {
+        "name": "Flight",
+        "order": 10,
+        "query": { "all": ["Position", "Velocity", "Fuse"] },
+        "as": "e",
+        "do": [
+          {
+            "modifyComponent": {
+              "entity": { "var": "e" },
+              "component": "Position",
+              "values": {
+                "x": {
+                  "+": [
+                    { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "e" }, "Velocity", "x"] }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "modifyComponent": {
+              "entity": { "var": "e" },
+              "component": "Fuse",
+              "values": {
+                "ticks": { "-": [{ "getComponent": [{ "var": "e" }, "Fuse", "ticks"] }, 1] }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "Detonate",
+        "order": 20,
+        "query": { "all": ["Position", "Fuse"] },
+        "as": "e",
+        "do": [
+          {
+            "let": {
+              "bindings": {
+                "at": {
+                  "vec": [
+                    { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "e" }, "Position", "y"] }
+                  ]
+                }
+              },
+              "do": [
+                {
+                  "if": {
+                    "cond": {
+                      "and": [
+                        { "<=": [{ "getComponent": [{ "var": "e" }, "Fuse", "ticks"] }, 0] },
+                        { "hasFloorAt": [{ "var": "at" }] }
+                      ]
+                    },
+                    "then": [
+                      { "carveFloor": { "at": { "var": "at" }, "radius": 98304 } },
+                      {
+                        "carveFloor": {
+                          "at": {
+                            "vec": [
+                              {
+                                "+": [
+                                  { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                                  65536
+                                ]
+                              },
+                              { "getComponent": [{ "var": "e" }, "Position", "y"] }
+                            ]
+                          },
+                          "radius": 65536
+                        }
+                      },
+                      {
+                        "emitEvent": {
+                          "type": "Detonated",
+                          "data": {
+                            "x": { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                            "y": { "getComponent": [{ "var": "e" }, "Position", "y"] }
+                          }
+                        }
+                      },
+                      { "destroyEntity": { "entity": { "var": "e" } } }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "terrain": {
+      "width": 8,
+      "height": 5,
+      "tileSize": 65536,
+      "levels": ["00000000", "00000000", "00000000", "00000000", "00000000"],
+      "flags": ["........", "........", "........", "........", "........"]
+    },
+    "capacity": 16
+  },
+  "initial": [{ "prefab": "Charge" }]
+}

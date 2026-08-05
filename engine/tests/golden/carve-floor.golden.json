@@ -1,0 +1,299 @@
+{
+  "scenario": "carve-floor",
+  "seed": 20260805,
+  "worldInitHash": "8d9d063e",
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          7
+        ],
+        "components": {
+          "Fuse": {
+            "ticks": [
+              0,
+              2
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              229376
+            ],
+            "y": [
+              0,
+              229376
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              -1,
+              0
+            ],
+            "w1": [
+              255,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              65536
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          7
+        ],
+        "components": {
+          "Fuse": {
+            "ticks": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              294912
+            ],
+            "y": [
+              0,
+              229376
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              -1,
+              0
+            ],
+            "w1": [
+              255,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              65536
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 1,
+        "generations": [
+          0,
+          1
+        ],
+        "alive": [
+          1,
+          0
+        ],
+        "freeList": [
+          1
+        ],
+        "maskWords": [
+          8,
+          0
+        ],
+        "components": {
+          "Fuse": {
+            "ticks": [
+              0,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              360448
+            ],
+            "y": [
+              0,
+              229376
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              261095423,
+              0
+            ],
+            "w1": [
+              143,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              65536
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Detonated",
+          "data": {
+            "x": 360448,
+            "y": 229376
+          }
+        }
+      ],
+      "mode": "Running"
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 2,
+        "aliveCount": 1,
+        "generations": [
+          0,
+          1
+        ],
+        "alive": [
+          1,
+          0
+        ],
+        "freeList": [
+          1
+        ],
+        "maskWords": [
+          8,
+          0
+        ],
+        "components": {
+          "Fuse": {
+            "ticks": [
+              0,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              360448
+            ],
+            "y": [
+              0,
+              229376
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              261095423,
+              0
+            ],
+            "w1": [
+              143,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              65536
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    }
+  ]
+}

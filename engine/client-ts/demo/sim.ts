@@ -6,15 +6,14 @@
  *
  * Сцена собрана из готовых тестовых сценариев ядра (`engine/tests/golden`):
  * движение по инпуту — из `input-drive`, полёт снаряда — из `terrain`,
- * коллайдер и физика — из `physics`. TS-система ниже добавляет только то, что
- * в JSON-DSL не выразить: выбивание бита пола.
+ * коллайдер и физика — из `physics`. Геймплей сцены — весь в JSON; нативными
+ * здесь регистрируются только `InputSystem` и `PhysicsSystem` — механизм
+ * движка, которому в JSON не место (TICK-4, DI-3).
  */
 import {
-  FLOOR_COMPONENT,
   InputSystem,
   PhysicsSystem,
   PhysicsWorld,
-  cellAt,
   initialState,
   loadScene,
   mathApi,
@@ -24,7 +23,6 @@ import {
   type SceneDef,
   type Simulation,
   type SimulationState,
-  type System,
   type TerrainApi,
   type TerrainGrid,
 } from '@game-mvp/core';
@@ -68,41 +66,7 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   const terrain = scene.terrain;
   const grid = terrain.grid;
 
-  /** Слов в компоненте карты пола — для адресации бита клетки (TERR-6). */
-  const floorWordTotal = Math.ceil((grid.width * grid.height) / 32);
-  /** Имя поля-слова карты пола: то же дополнение нулями, что в ядре. */
-  const floorWordField = (cell: number): string => {
-    const width = String(floorWordTotal - 1).length;
-    return `w${String(cell >>> 5).padStart(width, '0')}`;
-  };
-
-  /**
-   * Конец жизни фаербола: выбить бит пола клетки под точкой затухания (TERR-6;
-   * рендер покажет дыру не позже следующего кадра, REND-7) и убрать снаряд.
-   * TS-система: адресация слова/бита карты пола в JSON-DSL не выражается.
-   */
-  const impactSystem: System = {
-    name: 'FireballImpact',
-    order: 50,
-    run(ctx) {
-      for (const fireball of ctx.query({ all: ['Position', 'Lifetime'] })) {
-        if (ctx.get(fireball, 'Lifetime', 'ticks') > 0) continue;
-        const x = ctx.get(fireball, 'Position', 'x');
-        const y = ctx.get(fireball, 'Position', 'y');
-        const cell = cellAt(grid, { x, y });
-        const field = floorWordField(cell);
-        for (const holder of ctx.query({ withTag: 'terrain' })) {
-          const word = ctx.get(holder, FLOOR_COMPONENT, field);
-          ctx.commands.setField(holder, FLOOR_COMPONENT, field, word & ~(1 << (cell & 31)));
-        }
-        ctx.events.emit('FireballExploded', { x, y });
-        ctx.commands.destroy(fireball);
-      }
-    },
-  };
-
   scene.systems.register(new InputSystem({ players: [PLAYER_ID] }));
-  scene.systems.register(impactSystem);
   // Физика ядра: статика обрывов из террейна — игрок не сойдёт с плато мимо
   // рампы (PHYS-8, TERR-5). Снаряд без коллайдера — летит поверх обрывов.
   scene.systems.register(
