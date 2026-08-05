@@ -27,6 +27,22 @@
           "x": "fixed",
           "y": "fixed"
         }
+      },
+      {
+        "name": "Velocity",
+        "fields": {
+          "x": "fixed",
+          "y": "fixed"
+        }
+      },
+      {
+        "name": "Collider",
+        "fields": {
+          "halfX": "fixed",
+          "halfY": "fixed",
+          "radius": "fixed",
+          "shape": "i32"
+        }
       }
     ],
     "prefabs": [
@@ -47,6 +63,16 @@
           "Position": {
             "x": 0,
             "y": 0
+          },
+          "Velocity": {
+            "x": 0,
+            "y": 0
+          },
+          "Collider": {
+            "halfX": 19661,
+            "halfY": 19661,
+            "radius": 19661,
+            "shape": 0
           }
         },
         "tags": [
@@ -60,7 +86,7 @@
         "order": 10,
         "query": {
           "all": [
-            "Position",
+            "Velocity",
             "Input"
           ]
         },
@@ -71,19 +97,10 @@
               "entity": {
                 "var": "e"
               },
-              "component": "Position",
+              "component": "Velocity",
               "values": {
                 "x": {
-                  "+": [
-                    {
-                      "getComponent": [
-                        {
-                          "var": "e"
-                        },
-                        "Position",
-                        "x"
-                      ]
-                    },
+                  "*": [
                     {
                       "getComponent": [
                         {
@@ -92,20 +109,12 @@
                         "Input",
                         "moveX"
                       ]
-                    }
+                    },
+                    5243
                   ]
                 },
                 "y": {
-                  "+": [
-                    {
-                      "getComponent": [
-                        {
-                          "var": "e"
-                        },
-                        "Position",
-                        "y"
-                      ]
-                    },
+                  "*": [
                     {
                       "getComponent": [
                         {
@@ -114,7 +123,8 @@
                         "Input",
                         "moveY"
                       ]
-                    }
+                    },
+                    5243
                   ]
                 }
               }
@@ -1463,5 +1473,6 @@
   "players": [
     "p1",
     "p2"
-  ]
+  ],
+  "physics": {}
 }

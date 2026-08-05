@@ -46,6 +46,8 @@ export const TICK_RATE = 60;
 
 /** Один шаг вправо в Q16.16 — движение, заметное в снапшоте и в меше. */
 export const STEP: number = fixed.fromInt(1);
+/** Смещение за тик: `Movement` кладёт `Velocity = move × 5243`, физика интегрирует. */
+export const TICK_DELTA: number = fixed.mul(STEP, 5243);
 
 export function duelScene(): SceneDef {
   return {
@@ -63,6 +65,11 @@ export function duelScene(): SceneDef {
         },
       },
       { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+      { name: 'Velocity', fields: { x: 'fixed', y: 'fixed' } },
+      {
+        name: 'Collider',
+        fields: { halfX: 'fixed', halfY: 'fixed', radius: 'fixed', shape: 'i32' },
+      },
     ],
     prefabs: [
       {
@@ -71,34 +78,28 @@ export function duelScene(): SceneDef {
           Player: { slot: 0 },
           Input: { aimDir: 0, buttons: 0, moveX: 0, moveY: 0, prevButtons: 0, seq: 0 },
           Position: { x: 0, y: 0 },
+          Velocity: { x: 0, y: 0 },
+          Collider: { halfX: 19661, halfY: 19661, radius: 19661, shape: 0 },
         },
         tags: ['Hero'],
       },
     ],
     systems: [
+      // Конвейер движения — как в `content/scenes/duel.scene.json`: система
+      // сцены кладёт скорость, интегрирует её физика из конфига матча (NTR-14).
       {
         name: 'Movement',
         order: 10,
-        query: { all: ['Position', 'Input'] },
+        query: { all: ['Velocity', 'Input'] },
         as: 'e',
         do: [
           {
             modifyComponent: {
               entity: { var: 'e' },
-              component: 'Position',
+              component: 'Velocity',
               values: {
-                x: {
-                  '+': [
-                    { getComponent: [{ var: 'e' }, 'Position', 'x'] },
-                    { getComponent: [{ var: 'e' }, 'Input', 'moveX'] },
-                  ],
-                },
-                y: {
-                  '+': [
-                    { getComponent: [{ var: 'e' }, 'Position', 'y'] },
-                    { getComponent: [{ var: 'e' }, 'Input', 'moveY'] },
-                  ],
-                },
+                x: { '*': [{ getComponent: [{ var: 'e' }, 'Input', 'moveX'] }, 5243] },
+                y: { '*': [{ getComponent: [{ var: 'e' }, 'Input', 'moveY'] }, 5243] },
               },
             },
           },
@@ -118,6 +119,8 @@ export function duelConfig(overrides: Partial<MatchConfig> = {}): MatchConfig {
     sceneRef: 'duel',
     scene,
     initial: [{ prefab: 'Hero' }, { prefab: 'Hero', overrides: { Player: { slot: 1 } } }],
+    // Зависимость сборки мира (NTR-14): без физики Velocity никто не интегрирует.
+    physics: {},
     tickRate: TICK_RATE,
     // Снапшот каждый тик: интерполяция рендера идёт между соседними тиками,
     // и её ожидание в тесте считается без поправки на прореживание.
@@ -253,6 +256,7 @@ export class RenderBridge {
       players: config.players,
       seed: config.seed,
       initial: config.initial,
+      ...(config.physics !== undefined ? { physics: config.physics } : {}),
     });
     this.scene = new THREE.Scene();
     // Ассеты вертикали не нужны: подсистема позиций их не читает; источник —

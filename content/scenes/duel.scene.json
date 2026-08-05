@@ -103,6 +103,36 @@
       ]
     },
     {
+      "name": "Cast",
+      "order": 30,
+      "query": { "all": ["Input", "Player"], "not": ["Dead"] },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": {
+              "and": [
+                { "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 0] },
+                { "!": [{ "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "prevButtons"] }, 0] }] }
+              ]
+            },
+            "then": [
+              {
+                "emitEvent": {
+                  "type": "CastFireball",
+                  "data": {
+                    "entity": { "var": "e" },
+                    "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] },
+                    "tick": { "tick": [] }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "FireballFlight",
       "order": 40,
       "query": { "all": ["Position", "Velocity", "Lifetime"] },

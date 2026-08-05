@@ -4,7 +4,8 @@
   "seed": 99,
   "players": ["p1", "p2"],
   "sceneRef": "duel",
-  "contentPack": { "duel": "../scenes/duel-net.scene.json" },
+  "contentPack": { "duel": "../scenes/duel.scene.json" },
+  "physics": {},
   "initial": [
     { "prefab": "Hero" },
     { "prefab": "Hero", "overrides": { "Player": { "slot": 1 } } }
