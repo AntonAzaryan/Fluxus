@@ -99,10 +99,18 @@ export function writeTick(
   const snapAll = overrides?.snapAll ?? ext.snapAll;
   const freshEvents = overrides?.freshEvents ?? ext.freshEvents;
 
+  // Режим — индекс в закрытой таблице. Неизвестное имя раньше молча
+  // записывалось нулём, то есть кадр уезжал с `Running` вместо настоящего
+  // режима: приёмник, читающий rewind по `mode`, не отличил бы это от правды.
+  // Появление четвёртого `WorldMode` без правки таблицы — ошибка сборки, и
+  // сказать об этом должен writer, у которого на руках имя.
+  const mode = MODES.indexOf(ext.mode);
+  if (mode < 0) throw new Error(`codec: неизвестный режим мира "${ext.mode}"`);
+
   const header = new Uint32Array(buffer, 0, HEADER_WORDS);
   header[H_VERSION] = CODEC_VERSION;
   header[H_TICK] = ext.tick;
-  header[H_MODE] = Math.max(0, MODES.indexOf(ext.mode));
+  header[H_MODE] = mode;
   header[H_FLAGS] =
     (ext.isReplay ? FLAG_IS_REPLAY : 0) |
     (snapAll ? FLAG_SNAP_ALL : 0) |
@@ -134,6 +142,12 @@ export function readTick(
   events: readonly RenderEvent[],
   kindTable: readonly string[],
 ): ExtractedTick {
+  // Заголовок читается только после проверки, что он вообще есть: на буфере
+  // короче восьми слов конструктор Uint32Array бросит RangeError, и разговор о
+  // версии раскладки не состоится вовсе.
+  if (buffer.byteLength < HEADER_BYTES) {
+    throw new Error(`codec: кадр ${buffer.byteLength} байт, заголовок — ${HEADER_BYTES}`);
+  }
   const header = new Uint32Array(buffer, 0, HEADER_WORDS);
   if (header[H_VERSION] !== CODEC_VERSION) {
     throw new Error(`codec: версия раскладки ${header[H_VERSION]}, читатель ждёт ${CODEC_VERSION}`);
@@ -141,11 +155,27 @@ export function readTick(
   const count = header[H_COUNT]!;
   const floorPairs = header[H_FLOOR_PAIRS]!;
   const at = layout(count, floorPairs);
+  /**
+   * `count`/`floorPairs` приезжают из заголовка, то есть определяют раскладку
+   * данными самого кадра. Без этой проверки несогласованный кадр вылетал бы
+   * сырым RangeError из конструктора TypedArray — исключением про смещение и
+   * длину, по которому не видно, что не так с кадром. Проверка симметрична
+   * той, что делает `writeTick`, и называет то же самое.
+   */
+  if (buffer.byteLength < at.total) {
+    throw new Error(
+      `codec: кадр ${buffer.byteLength} байт, заголовок обещает ${at.total} (count=${count}, floorPairs=${floorPairs})`,
+    );
+  }
+  const mode = MODES[header[H_MODE]!];
+  if (mode === undefined) {
+    throw new Error(`codec: режим мира ${header[H_MODE]} вне таблицы из ${MODES.length}`);
+  }
   const flags = header[H_FLAGS]!;
   const f32 = at.f32;
   return {
     tick: header[H_TICK]!,
-    mode: MODES[header[H_MODE]!] ?? 'Running',
+    mode,
     isReplay: (flags & FLAG_IS_REPLAY) !== 0,
     snapAll: (flags & FLAG_SNAP_ALL) !== 0,
     freshEvents: (flags & FLAG_FRESH_EVENTS) !== 0,
