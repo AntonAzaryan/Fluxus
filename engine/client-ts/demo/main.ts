@@ -31,7 +31,7 @@ import { CAST_BUTTON, KILL_BUTTON, packAimDir } from './sim.js';
 const HEIGHT_STEP = 0.6;
 
 const CAMERA_DISTANCE = 16;
-/** Наклон камеры от вертикали: ~40° — изометрия из референса draft/renderer.ts. */
+/** Наклон камеры от вертикали: ~40° — изометрия из удалённого прототипа ts-render. */
 const CAMERA_TILT = (40 * Math.PI) / 180;
 
 // ------------------------------------------------------------------ three.js
