@@ -24,21 +24,26 @@ openspec spec show netcode          # one spec
 openspec validate --specs --strict  # format check
 ```
 
-## Commands (engine/core-ts)
+## Commands (engine/ workspace)
 
-Node >= 22.18. All commands from `engine/core-ts/`:
+Node >= 22.18. `engine/` is an npm workspace (`core-ts`, `net-ts`, `render-ts`, `assets-ts`, `integration-ts` — the cross-layer integration suite, CLI-9): a single `npm install` from `engine/` installs everything, and the check-everything command before pushing is:
 
 ```sh
-npm test                                 # vitest, all tests
+npm test          # from engine/: tests of all packages
+npm run typecheck # from engine/: tsc --noEmit of all packages
+```
+
+Per-package commands run from the package directory (or via `npm run <script> -w @game-mvp/<name>` from `engine/`). From `engine/core-ts/`:
+
+```sh
 npx vitest run test/physics.test.ts      # one file
 npx vitest run -t "test name"            # one test by name
-npm run typecheck                        # tsc --noEmit
 npm run sim -- <scenario.json>           # CLI scenario run (bin/sim.mjs)
 npm run golden                           # regenerate golden baselines (UPDATE_GOLDEN=1)
 npm run schemas                          # regenerate engine/schemas/*.json (UPDATE_SCHEMAS=1)
 ```
 
-`engine/tests/golden/` holds `*.scenario.json` / `*.golden.json` pairs — bitwise baselines of a scenario run. `golden.test.ts` compares them exactly; if behavior changed **deliberately and per spec**, regenerate with `npm run golden` and include the baseline diff in the commit. JSON schemas in `engine/schemas/` are generated from the core — never edit by hand, only via `npm run schemas`.
+`engine/tests/golden/` holds `*.scenario.json` / `*.golden.json` pairs — bitwise baselines of a scenario run. `match-*` pairs are recorded loopback matches (CLI-10): the scenario is written by `integration-ts` (`npm run record`), the golden by the core adapter. `golden.test.ts` compares them exactly; if behavior changed **deliberately and per spec**, regenerate with `npm run golden` from `engine/` (re-records matches, then rewrites core baselines) and include the baseline diff in the commit. JSON schemas in `engine/schemas/` are generated from the core — never edit by hand, only via `npm run schemas`.
 
 ## Non-negotiable core principles
 

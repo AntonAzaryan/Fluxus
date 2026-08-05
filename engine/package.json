@@ -1,0 +1,21 @@
+{
+  "name": "@game-mvp/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "core-ts",
+    "net-ts",
+    "render-ts",
+    "assets-ts",
+    "integration-ts"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "golden": "npm run record -w @game-mvp/integration && npm run golden -w @game-mvp/core"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}
