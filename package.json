@@ -14,9 +14,14 @@
   "scripts": {
     "test": "npm run test --workspaces",
     "typecheck": "npm run typecheck --workspaces",
+    "coverage": "vitest run --config vitest.coverage.config.ts --coverage",
     "golden": "npm run record -w @game-mvp/integration && npm run golden -w @game-mvp/core"
   },
   "engines": {
     "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.10",
+    "vitest": "^4.1.10"
   }
 }

@@ -36,6 +36,8 @@ npm test          # from the root: tests of all packages
 npm run typecheck # from the root: tsc --noEmit of all packages
 ```
 
+`npm run coverage` (root, `vitest.coverage.config.ts`) is a diagnostic, not a gate: no thresholds, and the percentage is not a goal. Read it as the list of what no test executes — a DSL operator exposed to content but never evaluated, a transport branch no match reaches. Run it package-by-package and it lies: `integration-ts` exercises core/net/render, so only the aggregate run counts.
+
 Per-package commands run from the package directory (or via `npm run <script> -w @game-mvp/<name>` from the root). From `engine/core-ts/`:
 
 ```sh
