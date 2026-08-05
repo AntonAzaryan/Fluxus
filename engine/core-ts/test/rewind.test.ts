@@ -5,7 +5,8 @@ import { initialState, takeSnapshot, tick, type Simulation } from '../src/sim/ti
 import { RingHistory } from '../src/sim/history.js';
 import { createInputLog, createRewindController } from '../src/sim/rewind.js';
 import { createWorld, getField, listAlive, setField, spawn } from '../src/ecs/world.js';
-import type { ComponentSchema, SimulationState, System } from '../src/types.js';
+import { InputSystem } from '../src/systems/inputSystem.js';
+import type { ComponentSchema, InputFrame, SimulationState, System } from '../src/types.js';
 import type { PrefabDef } from '../src/ecs/world.js';
 
 const WORLD_SEED = 4242;
@@ -84,6 +85,52 @@ function harness(interval = 3, capacity = 4): Harness {
   };
 }
 
+/** Кадр ввода одного игрока: важен только `moveX`, остальное — обязательные поля. */
+function frameOf(tick: number, moveX: number): InputFrame {
+  return { tick, playerId: 'p1', seq: tick, move: { x: moveX, y: 0 }, aimDir: 0, buttons: 0 };
+}
+
+/**
+ * Стенд для REW-5: та же история и тот же контроллер, но в мире есть игрок со
+ * слотом и компонентом ввода, а в реестре — `InputSystem`. Отдельно от общего
+ * harness, потому что остальным тестам ввод не нужен и лишний компонент менял
+ * бы их снапшоты.
+ */
+function inputHarness() {
+  const registry = new SystemRegistry();
+  registry.register(new InputSystem({ players: ['p1'] }));
+  const world = createWorld(
+    [
+      { name: 'Player', fields: { slot: 'i32' } },
+      {
+        name: 'Input',
+        fields: { aimDir: 'i32', buttons: 'i32', moveX: 'fixed', moveY: 'fixed', prevButtons: 'i32', seq: 'i32' },
+      },
+    ],
+    [{ name: 'hero', components: { Player: { slot: 0 }, Input: {} } }],
+  );
+  const player = spawn(world, 'hero');
+  const sim: Simulation = { systems: registry, worldSeed: WORLD_SEED, math: mathApi };
+  const state = initialState(world, WORLD_SEED);
+  const history = new RingHistory({ interval: 1, capacity: 8 });
+  const inputs = createInputLog();
+  history.record(state);
+
+  return {
+    sim,
+    state,
+    history,
+    inputs,
+    player,
+    press(tickNumber: number, moveX: number) {
+      const frames = [frameOf(tickNumber, moveX)];
+      inputs.record(tickNumber, frames);
+      tick(sim, state, frames);
+      history.record(state);
+    },
+  };
+}
+
 describe('ring buffer истории (SNAP-2..4, SNAP-6)', () => {
   it('снимает снапшот только на кратных интервалу тиках', () => {
     const h = harness(3, 10);
@@ -119,8 +166,13 @@ describe('ring buffer истории (SNAP-2..4, SNAP-6)', () => {
   });
 });
 
-describe('машина состояний мира (WSM-1..3, WSM-5, REW-8)', () => {
-  const controller = (h: Harness) =>
+// REW-3: перемотка — режим МИРА, а не эффект на сущность. Машина состояний
+// живёт на состоянии симуляции целиком, поэтому отматывается весь мир всем
+// участникам, а не «личная история» инициатора.
+describe('машина состояний мира (WSM-1..3, WSM-5, REW-8, REW-3)', () => {
+  // Ровно то, что контроллеру нужно, — чтобы стенд с вводом (REW-5) подходил
+  // сюда, не притворяясь полным `Harness`.
+  const controller = (h: Pick<Harness, 'sim' | 'state' | 'history' | 'inputs'>) =>
     createRewindController(h.sim, h.state, { history: h.history, inputs: h.inputs });
 
   it('единственный флоу перемотки — Running → Paused → Rewinding → Paused → Running', () => {
@@ -170,6 +222,34 @@ describe('машина состояний мира (WSM-1..3, WSM-5, REW-8)', ()
     tick(h.sim, h.state);
     expect(h.state.tick).toBe(3);
     expect(getField(h.state.world, h.mover, 'Position', 'x')).toBe(frozen);
+  });
+
+  /**
+   * REW-5 — следствие REW-4, но следствие, которое стоит зафиксировать
+   * отдельно: «обычные системы выключены» становится обещанием игроку («твоё
+   * движение во время перемотки ни на что не влияет») только если выключен и
+   * разбор ввода. `InputSystem` — обычная система (TICK-4), и ровно поэтому
+   * кадр, пришедший в Rewinding, до мира не доходит: компонент ввода
+   * сохраняет значение целевого тика, а не последнего нажатия.
+   */
+  it('ввод во время Rewinding до мира не доходит (REW-5)', () => {
+    const h = inputHarness();
+    h.press(1, 500);
+    h.press(2, 900);
+    expect(getField(h.state.world, h.player, 'Input', 'moveX')).toBe(900);
+
+    const wsm = controller(h);
+    wsm.pause();
+    wsm.beginRewind();
+
+    // Кадр с движением приходит, пока мир в Rewinding.
+    tick(h.sim, h.state, [frameOf(3, 777)]);
+    expect(h.state.tick).toBe(2);
+    expect(getField(h.state.world, h.player, 'Input', 'moveX')).toBe(900);
+
+    // И после отката — тоже значение целевого тика, а не 777.
+    wsm.seekTo(1);
+    expect(getField(h.state.world, h.player, 'Input', 'moveX')).toBe(500);
   });
 
   it('mode прокидывается в TickResult (WSM-1, WSM-6)', () => {
@@ -232,7 +312,9 @@ describe('перемотка (REW-1, REW-2, REW-9, REW-10)', () => {
     ]).toEqual(honest);
   });
 
-  it('шина событий откатывается на целевой тик, а не очищается (REW-10)', () => {
+  // EVT-3: события — часть снапшота, поэтому откат на тик с необработанной
+  // шиной восстанавливает её вместе с миром, а не начинает с пустой.
+  it('шина событий откатывается на целевой тик, а не очищается (REW-10, EVT-3)', () => {
     const h = harness(1, 20);
     h.runTo(5);
 
