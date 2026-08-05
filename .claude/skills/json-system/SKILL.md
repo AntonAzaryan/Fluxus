@@ -42,6 +42,7 @@ compatibility: Node >= 22.18, workspace installed (npm install из корня �
 - Компоненты/prefab'ы/системы — в `scene` (`SceneDef`, см. `core-ts/src/sim/scene.ts`): `components` (порядок — часть формата!), `prefabs`, `systems`, опционально `terrain`, `arena`, `timeScale`, `tweens`, `fog`, `modifierSlots`.
 - Сценарий (`ScenarioDef`, `core-ts/src/sim/scenario.ts`): `name`, `seed`, `ticks`, `scene`, опционально `initial` (порядок задаёт выданные ID), `inputs` + `players`, `physics`, `visibility`.
 - Баланс и любые тюнимые числа живут здесь, в JSON — не в коде ядра (mechanism vs policy).
+- **Где лежит файл.** Игровой контент — в дереве `content/` (`scenes/`, `matches/`, `visuals/`), никогда внутри пакета движка: `game-content` CONT-1, проверяется тестом `engine/integration-ts/test/contentBoundary.test.ts`. Исключение — фикстуры движка: golden-пары в `engine/tests/golden/` и временные сценарии отладки (CONT-4), они контентом не считаются.
 
 ## Проверка написанного
 

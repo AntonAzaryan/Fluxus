@@ -70,10 +70,10 @@ window.addEventListener('resize', () => {
 
 // ------------------------------------------------------------------- ассеты
 
-/** Источник байтов демо: дерево контента отдаёт vite из `demo/public/assets`. */
+/** Источник байтов демо: корень дерева контента (`content/`) отдаёт vite как статику. */
 const assetSource: AssetSource = {
   async read(id: string): Promise<ArrayBuffer> {
-    const response = await fetch(`/assets/${id}`);
+    const response = await fetch(`/${id}`);
     if (!response.ok) throw new Error(`HTTP ${response.status} за ассетом "${id}"`);
     return response.arrayBuffer();
   },
@@ -87,7 +87,7 @@ assets.registerLoader(manifestLoader);
 /** Манифест визуалов через тот же сервис (kind 'manifest', ASSET-6). */
 function loadManifest(): Promise<VisualManifest> {
   return new Promise((resolve, reject) => {
-    const handle = assets.request<VisualManifest>('manifest', 'manifest.json');
+    const handle = assets.request<VisualManifest>('manifest', 'visuals/manifest.json');
     let settled = false;
     let unsubscribe: (() => void) | null = null;
     const onState = (s: AssetState<VisualManifest>): void => {

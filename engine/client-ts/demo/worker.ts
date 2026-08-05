@@ -8,7 +8,7 @@ import { shellPort, WorkerShell } from '@game-mvp/client';
 import { Extractor, kindByTags } from '@game-mvp/render';
 import type { SceneDef } from '@game-mvp/core';
 import { PLAYER_ID, TICK_SECONDS, createDemoSimulation } from './sim.js';
-import sceneJson from './scene.json';
+import sceneJson from '../../../content/scenes/duel-demo.scene.json';
 
 const { sim, state, playerId, grid } = createDemoSimulation(sceneJson as unknown as SceneDef);
 

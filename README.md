@@ -14,6 +14,13 @@
 список и объём — `openspec list --specs`. Спека шире TS-пакетов: `editor` —
 capability без кода в `engine/`.
 
+## `content/`
+
+**Игровой контент** — политика, которую движок исполняет, но не содержит (CONT-1):
+`scenes/` и `matches/` — sim-документы, `visuals/` — манифест визуалов, модели и
+текстуры. ID ассета — путь от корня дерева (ASSET-2). Тестовые фикстуры движка
+контентом не являются и живут в `engine/` (CONT-4).
+
 ## `engine/`
 
 Рабочая реализация движка — пакеты `*-ts`.
@@ -71,8 +78,8 @@ cd ../client-ts
 npm run dev         # демо веб-клиента (vite)
 
 cd ../net-ts
-npm run serve examples/duel.match.json -- --port 8080          # сервер матча
-npm run play  examples/duel.match.json -- --player p1 --keys   # клиент (второй — p2)
+npm run serve ../../content/matches/duel.match.json -- --port 8080        # сервер матча
+npm run play  ../../content/matches/duel.match.json -- --player p1 --keys # клиент (второй — p2)
 ```
 
 Локальный матч на двух игроков — три процесса; что смотреть в счётчиках и какие

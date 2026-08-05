@@ -43,14 +43,14 @@ src/
 
 ```sh
 cd engine/net-ts
-npm run serve examples/duel.match.json -- --port 8080
+npm run serve ../../content/matches/duel.match.json -- --port 8080
 ```
 
 Два клиента, каждый в своём терминале:
 
 ```sh
-npm run play examples/duel.match.json -- --player p1 --keys
-npm run play examples/duel.match.json -- --player p2 --keys
+npm run play ../../content/matches/duel.match.json -- --player p1 --keys
+npm run play ../../content/matches/duel.match.json -- --player p2 --keys
 ```
 
 `--keys` — WASD и пробел. Терминал сообщает нажатие, но не отпускание, поэтому

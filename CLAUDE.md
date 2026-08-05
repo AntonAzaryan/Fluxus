@@ -6,7 +6,9 @@ Repository documentation and specs are written in Russian (requirement modality 
 
 ## The repository
 
-`openspec/` is the spec, `engine/` its working implementation (the `*-ts` packages), `docs/` the non-normative overview. The npm workspace root is the repository root.
+`openspec/` is the spec, `engine/` its working implementation (the `*-ts` packages), `content/` the game content the engine runs, `docs/` the non-normative overview. The npm workspace root is the repository root.
+
+Game content lives in `content/` and never inside an engine package (`game-content` CONT-1, enforced by `engine/integration-ts/test/contentBoundary.test.ts`): `content/scenes/`, `content/matches/` are sim documents, `content/visuals/` holds the visual manifest, models and textures, and an asset ID is a path from the tree root (ASSET-2). Engine test fixtures are **not** content and stay put — `engine/tests/golden/` and the scenes built inline in `engine/integration-ts/test/fixtures.ts` (CONT-4): an engine baseline must go red from an engine change, not from a designer retuning a number.
 
 ## The spec is the source of truth
 

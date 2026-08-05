@@ -1,5 +1,5 @@
 /**
- * Headless-половина демо: сборка мини-симуляции ядра из `demo/scene.json` —
+ * Headless-половина демо: сборка мини-симуляции ядра из `content/scenes/duel-demo.scene.json` —
  * без THREE и DOM, чтобы её можно было прогнать в Node (smoke-скрипты) и
  * переиспользовать из `main.ts`. Образец сборки — `test/host.test.ts` и
  * `core-ts/src/sim/scenario.ts`.
@@ -80,7 +80,7 @@ export interface DemoSimulation {
 
 /**
  * Поднимает сцену демо: мир, системы, физика, игрок. Чистая функция без DOM;
- * `def` — содержимое `demo/scene.json` (браузер импортирует его через vite,
+ * `def` — содержимое `content/scenes/duel-demo.scene.json` (браузер импортирует его через vite,
  * headless-скрипты читают файл сами — у Node и vite разные механики JSON).
  */
 export function createDemoSimulation(def: SceneDef): DemoSimulation {

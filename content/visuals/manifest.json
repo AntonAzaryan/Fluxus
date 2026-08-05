@@ -1,17 +1,17 @@
 {
   "entities": {
     "Hero": {
-      "model": "models/SkeletonBarbarian.mdx",
+      "model": "visuals/models/SkeletonBarbarian.mdx",
       "scale": 1.6,
       "defaultSkin": "steel",
       "skins": {
         "steel": {
-          "0": "textures/skin-steel.png",
-          "1": "textures/skin-steel.png"
+          "0": "visuals/textures/skin-steel.png",
+          "1": "visuals/textures/skin-steel.png"
         },
         "ember": {
-          "0": "textures/skin-ember.png",
-          "1": "textures/skin-ember.png"
+          "0": "visuals/textures/skin-ember.png",
+          "1": "visuals/textures/skin-ember.png"
         }
       },
       "animations": {
