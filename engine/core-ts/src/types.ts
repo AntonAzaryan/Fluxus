@@ -32,6 +32,9 @@ export interface MathApi {
   readonly max: (a: Fixed, b: Fixed) => Fixed;
   readonly clamp: (a: Fixed, lo: Fixed, hi: Fixed) => Fixed;
   readonly sqrt: (a: Fixed) => Fixed;
+  /** Угол — binary angle measure: оборот = 2^16, т.е. Q16.16-доля оборота (FP-7). */
+  readonly sin: (a: Fixed) => Fixed;
+  readonly cos: (a: Fixed) => Fixed;
   readonly vec: {
     readonly add: (a: Vec2, b: Vec2) => Vec2;
     readonly sub: (a: Vec2, b: Vec2) => Vec2;

@@ -239,3 +239,66 @@ describe('sqrt — целочисленный алгоритм без Math.sqrt'
     expect(release.sqrt(F(-1))).toBe(0); // release: то же значение, без assert вовсе
   });
 });
+
+describe('sin/cos — таблица первой четверти (FP-7, FP-8)', () => {
+  const TURN = 0x10000;
+  const QUARTER = 0x4000;
+
+  it('точен на осях', () => {
+    expect(fixed.sin(0)).toBe(0);
+    expect(fixed.sin(QUARTER)).toBe(FIXED_ONE);
+    expect(fixed.sin(2 * QUARTER)).toBe(0);
+    expect(fixed.sin(3 * QUARTER)).toBe(-FIXED_ONE);
+    expect(fixed.cos(0)).toBe(FIXED_ONE);
+    expect(fixed.cos(QUARTER)).toBe(0);
+    expect(fixed.cos(2 * QUARTER)).toBe(-FIXED_ONE);
+    expect(fixed.cos(3 * QUARTER)).toBe(0);
+  });
+
+  it('заворачивает маской: полный оборот и отрицательные углы (FP-7)', () => {
+    for (const a of [0, 1, 12345, QUARTER, 0xffff]) {
+      expect(fixed.sin(a + TURN)).toBe(fixed.sin(a));
+      expect(fixed.sin(a - 3 * TURN)).toBe(fixed.sin(a));
+    }
+    expect(fixed.sin(-QUARTER)).toBe(-FIXED_ONE); // −90° ≡ 270°
+    // 180° с отрицательной полуволны — ровно 0, без следа знака (-0)
+    expect(Object.is(fixed.sin(2 * QUARTER), 0)).toBe(true);
+  });
+
+  it('cos — сдвиг фазы на четверть оборота, побитово (FP-7)', () => {
+    for (let a = -TURN; a <= TURN; a += 997) {
+      expect(fixed.cos(a)).toBe(fixed.sin(a + QUARTER));
+    }
+  });
+
+  it('узлы таблицы совпадают с нормативной формулой FP-8', () => {
+    // Float легален в тестах (DET-2): двойная точность на порядки дальше от
+    // границы округления, чем ошибка libm.
+    for (let i = 0; i <= 256; i++) {
+      expect(fixed.sin(i * 64)).toBe(Math.round(Math.sin((2 * Math.PI * i) / 1024) * FIXED_ONE));
+    }
+  });
+
+  it('все 65536 углов в допуске ±2 кванта от float-эталона', () => {
+    for (let a = 0; a < TURN; a++) {
+      const ideal = Math.sin((2 * Math.PI * a) / TURN) * FIXED_ONE;
+      expect(Math.abs(fixed.sin(a) - ideal)).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it('симметрии полуволн на всём обороте', () => {
+    for (let a = 0; a <= 2 * QUARTER; a += 61) {
+      expect(fixed.sin(2 * QUARTER - a)).toBe(fixed.sin(a)); // sin(π−x) = sin(x)
+      expect(fixed.sin(2 * QUARTER + a)).toBe(-fixed.sin(a) | 0); // sin(π+x) = −sin(x); |0 гасит -0 эталона
+    }
+  });
+
+  it('монотонен на первой четверти — интерполяция не даёт провалов', () => {
+    let prev = fixed.sin(0);
+    for (let a = 1; a <= QUARTER; a++) {
+      const next = fixed.sin(a);
+      expect(next).toBeGreaterThanOrEqual(prev);
+      prev = next;
+    }
+  });
+});
