@@ -1,5 +1,5 @@
 /**
- * Headless-половина демо: сборка мини-симуляции ядра из `content/scenes/duel-demo.scene.json` —
+ * Headless-половина демо: сборка мини-симуляции ядра из `content/scenes/duel.scene.json` —
  * без THREE и DOM, чтобы её можно было прогнать в Node (smoke-скрипты) и
  * переиспользовать из `main.ts`. Образец сборки — `test/host.test.ts` и
  * `core-ts/src/sim/scenario.ts`.
@@ -80,7 +80,7 @@ export interface DemoSimulation {
 
 /**
  * Поднимает сцену демо: мир, системы, физика, игрок. Чистая функция без DOM;
- * `def` — содержимое `content/scenes/duel-demo.scene.json` (браузер импортирует его через vite,
+ * `def` — содержимое `content/scenes/duel.scene.json` (браузер импортирует его через vite,
  * headless-скрипты читают файл сами — у Node и vite разные механики JSON).
  */
 export function createDemoSimulation(def: SceneDef): DemoSimulation {
@@ -98,18 +98,24 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   };
 
   /**
-   * Каст фаербола: TS-система, потому что распаковка `aimDir` (сдвиги) в
-   * JSON-DSL не выражается. Фронт кнопки — по `buttons`/`prevButtons` из мира
-   * (TICK-4), вся арифметика — через `ctx.math` (fixed).
+   * Спавн фаербола: TS-система, потому что распаковка `aimDir` (сдвиги) в
+   * JSON-DSL не выражается. Фронт кнопки и канонический факт каста — событие
+   * `CastFireball` — даёт JSON-система `Cast` сцены; натив читает шину тика
+   * (EVT-2, `Cast` идёт раньше по order) и делает только то, чего JSON не
+   * может: разворачивает направление и спавнит снаряд. Направление для
+   * доворота торса (REND-5) уходит драфтовым событием `FireballAimed` —
+   * вместе с самим нативом оно исчезает на этапе 30 (fixed-тригонометрия).
    */
-  const castSystem: System = {
-    name: 'CastFireball',
-    order: 30,
+  const launchSystem: System = {
+    name: 'FireballLaunch',
+    order: 35,
     run(ctx) {
-      for (const entity of ctx.query({ all: ['Player', 'Input', 'Position'], not: ['Dead'] })) {
-        const buttons = ctx.get(entity, 'Input', 'buttons');
-        const previous = ctx.get(entity, 'Input', 'prevButtons');
-        if ((buttons & CAST_BUTTON) === 0 || (previous & CAST_BUTTON) !== 0) continue;
+      const total = ctx.events.length; // свои эмиты в этот же тик не перечитываем
+      for (let i = 0; i < total; i++) {
+        const event = ctx.events.at(i);
+        if (event.type !== 'CastFireball') continue;
+        const entity = event.data['entity'];
+        if (entity === undefined || !ctx.isAlive(entity)) continue;
 
         const raw = unpackAimDir(ctx.get(entity, 'Input', 'aimDir'));
         if (raw.x === 0 && raw.y === 0) continue; // каст без направления — no-op
@@ -127,9 +133,7 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
             y: ctx.math.mul(dir.y, FIREBALL_SPEED),
           },
         });
-        // Событие каста: рендер играет one-shot клип (REND-4) и доворачивает
-        // торс по dirX/dirY (REND-5); конвенция полей — как в RenderHost.
-        ctx.events.emit('CastFireball', { entity, dirX: dir.x, dirY: dir.y });
+        ctx.events.emit('FireballAimed', { entity, dirX: dir.x, dirY: dir.y });
       }
     },
   };
@@ -160,7 +164,7 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   };
 
   scene.systems.register(new InputSystem({ players: [PLAYER_ID] }));
-  scene.systems.register(castSystem);
+  scene.systems.register(launchSystem);
   scene.systems.register(impactSystem);
   // Физика ядра: статика обрывов из террейна — игрок не сойдёт с плато мимо
   // рампы (PHYS-8, TERR-5). Снаряд без коллайдера — летит поверх обрывов.

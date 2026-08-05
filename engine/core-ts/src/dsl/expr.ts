@@ -192,6 +192,9 @@ const OPS: Record<string, OpFn> = {
   max: num2('max', (m, a, b) => m.max(a, b)),
   abs: num1('abs', (m, a) => m.abs(a)),
   sqrt: num1('sqrt', (m, a) => m.sqrt(a)),
+  /** Тригонометрия (FP-7): угол — Q16.16-доля оборота, 16384 = 90° (EXPR-2). */
+  sin: num1('sin', (m, a) => m.sin(a)),
+  cos: num1('cos', (m, a) => m.cos(a)),
   clamp: (args, w, v) => {
     arity('clamp', args, 3);
     return w.math.clamp(

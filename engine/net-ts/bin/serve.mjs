@@ -38,6 +38,9 @@ const server = new MatchServer({
   inputDelay: match.inputDelay ?? 2,
   silenceTicks: (match.silenceSeconds ?? 10) * tickRate,
   allowObserver: flag('observer'),
+  // Зависимость сборки мира из файла матча (NTR-14): без неё сцена,
+  // рассчитанная на интегрирующую физику, молча стояла бы на месте.
+  ...(match.physics !== undefined ? { physics: match.physics } : {}),
 });
 
 const host = new MatchHost(server, webSocketTransportServer({ port }), { serializer });

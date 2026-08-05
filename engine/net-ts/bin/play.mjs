@@ -29,9 +29,9 @@ const playerId = option('player', match.players[0]);
 const url = option('url', 'ws://127.0.0.1:8080');
 const observer = flag('observer');
 
-// Клиент берёт из файла матча ровно две вещи: свой контент-пак и идентификатор
-// сборки. Всё остальное — слот, seed, расстановку, темп — он узнаёт из
-// `Welcome` (NTR-5), как и в бою.
+// Клиент берёт из файла матча только сборочные вещи: контент-пак, идентификатор
+// сборки и зависимости сборки мира (NTR-14). Данные матча — слот, seed,
+// расстановку, темп — он узнаёт из `Welcome` (NTR-5), как и в бою.
 const pack = contentPack(match.scenes);
 
 const STEP = fixed.fromFloat(0.15);
@@ -103,6 +103,9 @@ const client = new MatchClient({
   version: { buildId: match.buildId, contentPackHash: pack.hash },
   content: pack,
   observer,
+  // Третья вещь из файла матча — зависимость сборки мира (NTR-14): она того же
+  // рода, что контент-пак, и клиент обязан поднимать тот же состав систем.
+  ...(match.physics !== undefined ? { physics: match.physics } : {}),
 });
 
 const transport = await connectWebSocket(url);

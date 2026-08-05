@@ -8,7 +8,7 @@ import { shellPort, WorkerShell } from '@game-mvp/client';
 import { Extractor, kindByTags } from '@game-mvp/render';
 import type { SceneDef } from '@game-mvp/core';
 import { PLAYER_ID, TICK_SECONDS, createDemoSimulation } from './sim.js';
-import sceneJson from '../../../content/scenes/duel-demo.scene.json';
+import sceneJson from '../../../content/scenes/duel.scene.json';
 
 const { sim, state, playerId, grid } = createDemoSimulation(sceneJson as unknown as SceneDef);
 
@@ -17,7 +17,10 @@ const extractor = new Extractor({
   // записи в манифесте нет НАМЕРЕННО: частицы отложены, снаряд — заглушка.
   kindOf: kindByTags(['Hero', 'Fireball']),
   terrainGrid: grid,
-  aimEvents: ['CastFireball'],
+  // Направление несёт драфтовое событие натива (`FireballAimed`), а не
+  // канонический `CastFireball` сцены: JSON-каст без тригонометрии вектор
+  // из `aimDir` не развернёт (снимается этапом 30).
+  aimEvents: ['FireballAimed'],
 });
 
 const shell = new WorkerShell({

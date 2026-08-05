@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { FIXED_ONE, query, world as coreWorld, type Snapshot } from '@game-mvp/core';
-import { STEP, TICK_RATE, playMatch, walkRight } from './fixtures.js';
+import { TICK_DELTA, TICK_RATE, playMatch, walkRight } from './fixtures.js';
 
 function slotX(snapshot: Snapshot, slot: number): number {
   for (const entity of query(snapshot.world, { all: ['Player', 'Position'] })) {
@@ -65,8 +65,8 @@ describe('вертикаль сервер → снапшот → клиент �
     const snapshot = match.b.client.latest!;
     const snapX = slotX(snapshot, 0) / FIXED_ONE;
 
-    // Игрок шёл непрерывно: позиция предыдущего тика — ровно на шаг позади.
-    const step = STEP / FIXED_ONE;
+    // Игрок шёл непрерывно: позиция предыдущего тика — на смещение тика позади.
+    const step = TICK_DELTA / FIXED_ONE;
     match.clock.ms += 1000 / TICK_RATE / 2; // середина тика: альфа = 0.5
     match.bridge.host.frame(match.clock.ms);
     expect(meshOfSlot(match, 0).position.x).toBeCloseTo(snapX - step / 2, 10);
