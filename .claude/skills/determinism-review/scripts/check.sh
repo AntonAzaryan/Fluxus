@@ -3,7 +3,7 @@
 # strip-only ограничения и ноль runtime-зависимостей. Находка = место, куда
 # посмотреть глазами; контекст решает (см. SKILL.md).
 set -u
-ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"   # engine/
+ROOT="$(cd "$(dirname "$0")/../../../../engine" && pwd)"   # engine/
 SRC="$ROOT/core-ts/src"
 fail=0
 

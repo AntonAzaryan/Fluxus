@@ -11,7 +11,7 @@ compatibility: bash, run from repo root
 ## Механическая часть
 
 ```sh
-bash engine/.claude/skills/determinism-review/scripts/check.sh
+bash .claude/skills/determinism-review/scripts/check.sh
 ```
 
 Скрипт грепает запрещённые источники недетерминизма и проверяет ноль runtime-зависимостей. Находка — не приговор, а место, куда посмотреть; но в геймплейном пути оправданий у неё почти не бывает.
