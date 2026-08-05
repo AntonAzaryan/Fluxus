@@ -4,10 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Repository documentation and specs are written in Russian (requirement modality in specs is English: SHALL / MUST NOT). Keep it that way when editing them.
 
-## Two parts of the repository
+## The repository
 
-- `engine/` — **current**: the OpenSpec specification of the engine + the working core implementation `core-ts/`.
-- `draft/` — historical sandbox (its own npm workspace, mapped in `draft/AGENTS.md`). **Not a source of truth**; touch only if the task is explicitly about it.
+`engine/` is the OpenSpec specification of the engine + the working core implementation `core-ts/`.
 
 ## The spec is the source of truth
 
@@ -40,8 +39,6 @@ npm run schemas                          # regenerate engine/schemas/*.json (UPD
 ```
 
 `engine/tests/golden/` holds `*.scenario.json` / `*.golden.json` pairs — bitwise baselines of a scenario run. `golden.test.ts` compares them exactly; if behavior changed **deliberately and per spec**, regenerate with `npm run golden` and include the baseline diff in the commit. JSON schemas in `engine/schemas/` are generated from the core — never edit by hand, only via `npm run schemas`.
-
-For `draft/`: `cd draft && npm test` (core tests), `npm run dev:render` (Three.js prototype).
 
 ## Non-negotiable core principles
 
