@@ -1,16 +1,15 @@
 /**
- * Демо рендера (задача 5.1 add-render-assets-mvp): мини-симуляция ядра
- * (`demo/sim.ts`: `loadScene` + системы + физика) плюс `RenderHost` с
- * подсистемами террейна и моделей. Ядро о рендере не знает: хост подключён
- * обычным наблюдателем через `dispatch` (REND-1), объединяет их этот файл.
+ * Демо воркер-сборки (client-shell SHELL-1..7): симуляция в dedicated Worker
+ * (`worker.ts`), здесь — только THREE, ввод и UI. Presentation-состояние
+ * приезжает конвертами тиков через `RemoteHost`; подсистемы террейна и
+ * моделей — те же, что в однопоточной сборке (SHELL-2), обратный канал —
+ * `sendInput`/`control` (SHELL-6).
  *
- * Цикл: fixed timestep 60 тиков/с с аккумулятором; кадр отвязан от тика —
- * `RenderHost.frame(now)` интерполирует между двумя последними тиками (REND-2).
- * Обвязка камеры/света/ввода перенесена из `draft/ts-render` (demo.ts,
- * renderer.ts) — идеи UI, но симуляция целиком на `@game-mvp/core`.
+ * Кадр отвязан от тика (REND-2): `remote.frame(now)` интерполирует между
+ * двумя последними доставленными тиками по часам этого потока (SHELL-7).
  */
 import * as THREE from 'three';
-import { dispatch, fixed, tick, type InputFrame, type SceneDef } from '@game-mvp/core';
+import { fixed, type EntityId } from '@game-mvp/core';
 import {
   AssetService,
   manifestLoader,
@@ -22,33 +21,18 @@ import {
 } from '@game-mvp/assets';
 import {
   ModelsSubsystem,
-  RenderHost,
   TerrainSubsystem,
-  kindByTags,
   type RenderContext,
-} from '../src/index.js';
-import {
-  CAST_BUTTON,
-  KILL_BUTTON,
-  PLAYER_ID,
-  TICK_SECONDS,
-  createDemoSimulation,
-  packAimDir,
-} from './sim.js';
-import sceneJson from './scene.json';
-
-const TICK_MS = TICK_SECONDS * 1000;
+} from '@game-mvp/render';
+import { RemoteHost, shellPort } from '@game-mvp/client';
+import { CAST_BUTTON, KILL_BUTTON, packAimDir } from './sim.js';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
 const HEIGHT_STEP = 0.6;
 
 const CAMERA_DISTANCE = 16;
-/** Наклон камеры от вертикали: ~40° — изометрия из референса draft/renderer.ts. */
+/** Наклон камеры от вертикали: ~40° — изометрия из удалённого прототипа ts-render. */
 const CAMERA_TILT = (40 * Math.PI) / 180;
-
-// ------------------------------------------------------------------ симуляция
-
-const { sim, state, playerId, grid } = createDemoSimulation(sceneJson as unknown as SceneDef);
 
 // ------------------------------------------------------------------ three.js
 
@@ -73,8 +57,6 @@ const cameraOffset = new THREE.Vector3(
 /** Точка, за которой следит камера; сглаживается к игроку по кадрам. */
 const cameraTarget = new THREE.Vector3(11.5, 11.5, 0);
 
-// Свет: ambient + «солнце» (референс draft/renderer.ts). Позиция направленного
-// света статична — арена 24×24 целиком в его охвате.
 scene3.add(new THREE.AmbientLight(0xffffff, 0.65));
 const sun = new THREE.DirectionalLight(0xffffff, 1.7);
 sun.position.set(8, -12, 18);
@@ -120,36 +102,30 @@ function loadManifest(): Promise<VisualManifest> {
   });
 }
 
-// ------------------------------------------------------------ рендер-хост
-
-const context: RenderContext = { scene: scene3, assets, config: { heightStep: HEIGHT_STEP } };
-const host = new RenderHost(context, {
-  tickSeconds: TICK_SECONDS,
-  // Ключи манифеста визуалов = теги prefab'ов сцены (ASSET-6). У Fireball
-  // записи в манифесте нет НАМЕРЕННО: частицы отложены, снаряд — заглушка.
-  kindOf: kindByTags(['Hero', 'Fireball']),
-  terrainGrid: grid,
-  aimEvents: ['CastFireball'],
-});
-
-/** Подсистема моделей: появляется после загрузки манифеста (см. main). */
-let models: ModelsSubsystem | null = null;
-
 // ---------------------------------------------------------------------- ввод
 
 const keys = new Set<string>();
 /** Отложенный на ближайший тик каст: упакованный aimDir (см. packAimDir). */
 let pendingCast: number | null = null;
 let pendingKill = false;
-let inputSeq = 0;
 let currentSkin: 'steel' | 'ember' = 'steel';
 
 const raycaster = new THREE.Raycaster();
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
+// --------------------------------------------------------- воркер и рендер
+
+/** Подсистема моделей: появляется после загрузки манифеста (см. main). */
+let models: ModelsSubsystem | null = null;
+/** ID сущности героя из handshake воркера (helloExtra). */
+let heroId: EntityId | null = null;
+
+const context: RenderContext = { scene: scene3, assets, config: { heightStep: HEIGHT_STEP } };
+let remote: RemoteHost | null = null;
+
 /**
- * Точка клика на плоскости пола под игроком: луч через камеру (референс
- * clientToGround из draft/renderer.ts). NDC — относительно rect канваса.
+ * Точка клика на плоскости пола под игроком: луч через камеру. NDC —
+ * относительно rect канваса; плоскость на высоте уровня героя.
  */
 function groundPoint(clientX: number, clientY: number): { x: number; y: number } | null {
   const rect = renderer3.domElement.getBoundingClientRect();
@@ -159,8 +135,7 @@ function groundPoint(clientX: number, clientY: number): { x: number; y: number }
     -((clientY - rect.top) / rect.height) * 2 + 1,
   );
   raycaster.setFromCamera(ndc, camera);
-  // Плоскость на высоте уровня игрока: клик по плато целится по плато.
-  const level = host.view.entities.get(playerId)?.currLevel ?? 0;
+  const level = heroId === null ? 0 : (remote?.view?.entities.get(heroId)?.currLevel ?? 0);
   groundPlane.constant = -level * HEIGHT_STEP;
   const point = new THREE.Vector3();
   return raycaster.ray.intersectPlane(groundPlane, point) === null
@@ -176,7 +151,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyT') {
     // T — смена скина (REND-6); S свободна под «юг» в WASD.
     currentSkin = currentSkin === 'steel' ? 'ember' : 'steel';
-    models?.setSkin(playerId, currentSkin);
+    if (heroId !== null) models?.setSkin(heroId, currentSkin);
     updateHud();
     return;
   }
@@ -191,8 +166,8 @@ window.addEventListener('keyup', (e) => keys.delete(e.code));
 window.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
   const point = groundPoint(e.clientX, e.clientY);
-  if (point === null) return;
-  const view = host.view.entities.get(playerId);
+  if (point === null || heroId === null) return;
+  const view = remote?.view?.entities.get(heroId);
   if (view === undefined) return;
   const dx = point.x - view.currX;
   const dy = point.y - view.currY;
@@ -201,8 +176,13 @@ window.addEventListener('mousedown', (e) => {
   pendingCast = packAimDir(dx / length, dy / length);
 });
 
-/** Канонический ввод тика (TICK-2): состояние клавиш сэмплится каждый тик. */
-function inputFrameFor(tickNumber: number): InputFrame {
+/**
+ * Сырой ввод в воркер (SHELL-6): состояние клавиш сэмплится каждый кадр,
+ * фронты кнопок латчатся воркером до ближайшего тика — нажатие между тиками
+ * не теряется. `tick`/`seq` канонического InputFrame ставит воркер.
+ */
+function pushInput(): void {
+  if (remote === null) return;
   let moveX = 0;
   let moveY = 0;
   if (keys.has('KeyW') || keys.has('ArrowUp')) moveY += 1;
@@ -225,52 +205,37 @@ function inputFrameFor(tickNumber: number): InputFrame {
     pendingKill = false;
   }
 
-  inputSeq += 1;
-  return {
-    tick: tickNumber,
-    playerId: PLAYER_ID,
-    seq: inputSeq,
-    move: { x: fixed.fromFloat(nx), y: fixed.fromFloat(ny) },
-    aimDir,
-    buttons,
-  };
+  remote.sendInput({ x: fixed.fromFloat(nx), y: fixed.fromFloat(ny) }, aimDir, buttons);
 }
 
 // ------------------------------------------------------------- HUD и цикл
 
 function updateHud(): void {
   if (hudStatus === null) return;
-  const alive = host.view.entities.has(playerId);
-  const controller = models?.instanceFor(playerId)?.controller ?? null;
+  const view = remote?.view ?? null;
+  const alive = heroId !== null && view !== null && view.entities.has(heroId);
+  const controller = heroId === null ? null : (models?.instanceFor(heroId)?.controller ?? null);
   const status = controller?.isDead === true ? 'мёртв (перезапуск — F5)' : alive ? 'жив' : '—';
   hudStatus.textContent =
-    `тик ${state.tick} | сущностей ${host.view.entities.size} | ` +
+    `тик ${view?.tick ?? 0} | сущностей ${view?.entities.size ?? 0} | ` +
     `скин ${currentSkin} | герой: ${status}`;
 }
 
-let accumulator = 0;
-let lastFrameAt: number | null = null;
 let hudCountdown = 0;
+let lastFrameAt: number | null = null;
 
 function frame(now: number): void {
   requestAnimationFrame(frame);
   const dt = lastFrameAt === null ? 0 : Math.min(now - lastFrameAt, 250);
   lastFrameAt = now;
 
-  // Fixed timestep 60 тиков/с: аккумулятор наверстывает целыми тиками, кадр
-  // рисуется интерполяцией между двумя последними (REND-2).
-  accumulator += dt;
-  while (accumulator >= TICK_MS) {
-    accumulator -= TICK_MS;
-    const result = tick(sim, state, [inputFrameFor(state.tick + 1)]);
-    dispatch(result, [host]);
-  }
+  // Тиков здесь нет (SHELL-1): симуляция идёт в воркере своим тикером,
+  // кадр только шлёт ввод и интерполирует доставленное (REND-2).
+  pushInput();
+  remote?.frame(now);
 
-  host.frame(now);
-
-  // Камера следит за игроком: цель — интерполированная позиция инстанса,
-  // сглаживание экспоненциальное, не зависит от FPS (референс draft).
-  const instance = models?.instanceFor(playerId) ?? null;
+  // Камера следит за игроком: цель — интерполированная позиция инстанса.
+  const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
   if (instance !== null) {
     cameraTarget.lerp(instance.holder.position, 1 - Math.exp(-6 * (dt / 1000)));
   }
@@ -292,12 +257,21 @@ async function main(): Promise<void> {
   if (hudStatus !== null) hudStatus.textContent = 'загрузка манифеста визуалов…';
   const manifest = await loadManifest();
 
-  // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
-  host.register(new TerrainSubsystem(grid));
-  models = new ModelsSubsystem(manifest);
-  host.register(models);
+  if (hudStatus !== null) hudStatus.textContent = 'запуск воркера симуляции…';
+  const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
 
-  requestAnimationFrame(frame);
+  remote = new RemoteHost(context, {
+    onReady: (hello) => {
+      heroId = (hello.extra as { hero: EntityId }).hero;
+      const grid = remote!.terrain;
+      if (grid === null) throw new Error('демо: сцена обязана содержать террейн');
+      // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
+      remote!.register(new TerrainSubsystem(grid));
+      models = new ModelsSubsystem(manifest);
+      remote!.register(models);
+      requestAnimationFrame(frame);
+    },
+  }).connect(shellPort(worker));
 }
 
 void main().catch((e: unknown) => {

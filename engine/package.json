@@ -8,6 +8,7 @@
     "net-ts",
     "render-ts",
     "assets-ts",
+    "client-ts",
     "integration-ts"
   ],
   "scripts": {

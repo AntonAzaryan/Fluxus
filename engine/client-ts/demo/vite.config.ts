@@ -21,4 +21,7 @@ export default defineConfig({
     emptyOutDir: true,
     target: 'es2022',
   },
+  worker: {
+    format: 'es',
+  },
 });

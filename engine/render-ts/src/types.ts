@@ -47,6 +47,8 @@ export interface EntityView {
 /** Копия события тика: переживает `dispatch()`, в отличие от view ядра (OBS-3). */
 export interface RenderEvent {
   readonly type: string;
+  /** Тик, в котором событие произошло: при доставке каналом оболочки view может нести события нескольких тиков (SHELL-4). */
+  readonly tick?: number;
   readonly data: Readonly<Record<string, number>>;
 }
 
