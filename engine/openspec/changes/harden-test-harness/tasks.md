@@ -2,19 +2,19 @@
 
 ## 1. Workspace-конверсия engine/
 
-- [ ] 1.1 Создать корневой `engine/package.json` со списком workspaces (`core-ts`, `net-ts`, `render-ts`, `assets-ts`) и скриптами `test` / `typecheck`, прогоняющими все пакеты
-- [ ] 1.2 Заменить `file:`-зависимости пакетов на workspace-ссылки, удалить пакетные lockfile'ы, собрать единый `engine/package-lock.json`
-- [ ] 1.3 Обновить session-start hook и раздел «Commands» в CLAUDE.md: установка и прогон из `engine/`
-- [ ] 1.4 Приёмка: из чистого клона `npm install && npm test --workspaces && npm run typecheck --workspaces` зелёные, `npm run sim`/`npm run golden` в `core-ts` работают как раньше
+- [x] 1.1 Создать корневой `engine/package.json` со списком workspaces (`core-ts`, `net-ts`, `render-ts`, `assets-ts`) и скриптами `test` / `typecheck`, прогоняющими все пакеты
+- [x] 1.2 Заменить `file:`-зависимости пакетов на workspace-ссылки, удалить пакетные lockfile'ы, собрать единый `engine/package-lock.json`
+- [x] 1.3 Обновить session-start hook и раздел «Commands» в CLAUDE.md: установка и прогон из `engine/`
+- [x] 1.4 Приёмка: из чистого клона `npm install && npm test --workspaces && npm run typecheck --workspaces` зелёные, `npm run sim`/`npm run golden` в `core-ts` работают как раньше
 
 ## 2. Guard-проверки (CLI-8)
 
-- [ ] 2.1 Сканер на TypeScript Compiler API в `engine/tests/guard/`: обход AST, режимы «строгий»/«чистый цикл», аллоулист точных целочисленных `Math.*`, денилист (wall-clock, таймеры, `Math.random`, трансцендентные, float-литералы), сообщение с файлом/строкой/путём к конфигу
-- [ ] 2.2 Адаптер-тест в `core-ts/test/`: `src/` целиком в строгом режиме; при находках в существующем коде — точечные исключения с пометкой и отдельная фиксация дефектов (CORE-3)
-- [ ] 2.3 Адаптер-тест в `net-ts/test/`: чистые циклы (`src/server`, `src/match`, `src/protocol`, `src/client` без хоста)
-- [ ] 2.4 Guard границ ядра в `core-ts/test/`: все импорты `src/` относительные; `package.json` ядра без `dependencies`
-- [ ] 2.5 Guard поверхности ядра: эталонный список экспортов `src/index.ts`, сверка на прогоне, обновление через `UPDATE_API=1` (по образцу golden)
-- [ ] 2.6 Приёмка сценариев CLI-8: искусственное нарушение каждого вида (wall-clock, чужой импорт, лишний экспорт) краснит соответствующий тест; `Math.min`/`Math.floor` на целых — не краснит
+- [x] 2.1 Сканер на TypeScript Compiler API в `engine/tests/guard/`: обход AST, режимы «строгий»/«чистый цикл», аллоулист точных целочисленных `Math.*`, денилист (wall-clock, таймеры, `Math.random`, трансцендентные, float-литералы), сообщение с файлом/строкой/путём к конфигу
+- [x] 2.2 Адаптер-тест в `core-ts/test/`: `src/` целиком в строгом режиме; при находках в существующем коде — точечные исключения с пометкой и отдельная фиксация дефектов (CORE-3)
+- [x] 2.3 Адаптер-тест в `net-ts/test/`: чистые циклы (`src/server`, `src/match`, `src/protocol`, `src/client` без хоста)
+- [x] 2.4 Guard границ ядра в `core-ts/test/`: все импорты `src/` относительные; `package.json` ядра без `dependencies`
+- [x] 2.5 Guard поверхности ядра: эталонный список экспортов `src/index.ts`, сверка на прогоне, обновление через `UPDATE_API=1` (по образцу golden)
+- [x] 2.6 Приёмка сценариев CLI-8: искусственное нарушение каждого вида (wall-clock, чужой импорт, лишний экспорт) краснит соответствующий тест; `Math.min`/`Math.floor` на целых — не краснит
 
 ## 3. Интеграционный модуль (CLI-9)
 

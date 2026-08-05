@@ -25,15 +25,20 @@ openspec spec show netcode          # one spec
 openspec validate --specs --strict  # format check
 ```
 
-## Commands (engine/core-ts)
+## Commands (engine/ workspace)
 
-Node >= 22.18. All commands from `engine/core-ts/`:
+Node >= 22.18. `engine/` is an npm workspace (`core-ts`, `net-ts`, `render-ts`, `assets-ts`): a single `npm install` from `engine/` installs everything, and the check-everything command before pushing is:
 
 ```sh
-npm test                                 # vitest, all tests
+npm test          # from engine/: tests of all packages
+npm run typecheck # from engine/: tsc --noEmit of all packages
+```
+
+Per-package commands run from the package directory (or via `npm run <script> -w @game-mvp/<name>` from `engine/`). From `engine/core-ts/`:
+
+```sh
 npx vitest run test/physics.test.ts      # one file
 npx vitest run -t "test name"            # one test by name
-npm run typecheck                        # tsc --noEmit
 npm run sim -- <scenario.json>           # CLI scenario run (bin/sim.mjs)
 npm run golden                           # regenerate golden baselines (UPDATE_GOLDEN=1)
 npm run schemas                          # regenerate engine/schemas/*.json (UPDATE_SCHEMAS=1)

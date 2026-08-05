@@ -38,10 +38,10 @@ else
   echo "typescript-language-server $(typescript-language-server --version 2>/dev/null || echo '(версия не определена)')"
 fi
 
-# 3. Зависимости реализации ядра (vitest, typescript) — чтобы тесты и typecheck шли сразу.
-if [ -f "$REPO_ROOT/engine/core-ts/package.json" ]; then
-  echo "Ставлю зависимости engine/core-ts..."
-  npm install --prefix "$REPO_ROOT/engine/core-ts" --no-fund --no-audit
+# 3. Зависимости workspace движка (все пакеты одним install) — чтобы тесты и typecheck шли сразу.
+if [ -f "$REPO_ROOT/engine/package.json" ]; then
+  echo "Ставлю зависимости workspace engine/..."
+  npm install --prefix "$REPO_ROOT/engine" --no-fund --no-audit
 fi
 
 # 4. Санити-чек: спеки читаются.
