@@ -82,7 +82,7 @@ describe('пул инстансов по снапшоту (REND-3)', () => {
     expect(a).not.toBeNull();
     expect(a.meshes[0]!.geometry).toBe(b.meshes[0]!.geometry); // общие буферы
     expect(a.skeleton).not.toBe(b.skeleton); // скелет свой на инстанс
-    expect(a.materialsBySlot.get(0)).not.toBe(b.materialsBySlot.get(0));
+    expect(a.materials[0]).not.toBe(b.materials[0]);
   });
 
   it('сущность без записи в манифесте — заглушка и предупреждение один раз (ASSET-6)', () => {

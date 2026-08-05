@@ -57,12 +57,7 @@ export {
 export type { BoneControlDef, BoneLookup } from './model/boneControl.js';
 
 // Скины (REND-6).
-export {
-  applySkin,
-  canDecodeTextures,
-  skinTexturePaths,
-  textureFromAsset,
-} from './model/skins.js';
+export { applySkin, skinTexturePaths, textureFromImage } from './model/skins.js';
 export type { SkinApplication } from './model/skins.js';
 
 // Типы контракта ассетов, которыми оперирует публичный API рендера.
@@ -74,14 +69,16 @@ export type {
   AssetState,
   BoneTrack,
   ChannelKeys,
+  DecodedImage,
   EntityVisual,
   Handle,
+  Interpolation,
   NormalizedBone,
+  NormalizedMaterial,
   NormalizedMesh,
   NormalizedModel,
   NormalizedSequence,
   PartVisibilityTrack,
-  TextureAsset,
   TextureSlotRef,
   VisualManifest,
 } from '@game-mvp/assets';

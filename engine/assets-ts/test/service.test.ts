@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { AssetService, type AssetLoader, type AssetState } from '../src/index.js';
+import {
+  AssetService,
+  resolveDependencyPath,
+  type AssetLoader,
+  type AssetState,
+  type LoaderContext,
+} from '../src/index.js';
 import { MemoryAssetSource, bytesOf, settled } from './helpers.js';
 
 /** Загрузчик-заглушка: считает вызовы, каждый load создаёт новый объект. */
@@ -8,9 +14,9 @@ function fakeModelLoader(): AssetLoader<{ id: string }> & { loads: number } {
     kind: 'model' as const,
     extensions: ['.fake'] as const,
     loads: 0,
-    load(_bytes: ArrayBuffer, id: string): { id: string } {
+    load(_bytes: ArrayBuffer, ctx: LoaderContext): { id: string } {
       loader.loads += 1;
-      return { id };
+      return { id: ctx.id };
     },
   };
   return loader;
@@ -78,17 +84,126 @@ describe('AssetService: реестр загрузчиков (ASSET-3)', () => {
     if (s.status === 'failed') expect(s.reason).toMatch(/нет загрузчика/);
   });
 
-  it('kind зарегистрированного загрузчика расходится с kind запроса — throw, ассет не кэшируется', () => {
+  it('расширение знакомо, но под другим видом — failed, и причина называет этот вид', () => {
     const svc = new AssetService(new MemoryAssetSource(new Map([['a.fake', bytesOf('x')]])));
     svc.registerLoader(fakeModelLoader()); // производит 'model'
 
-    // Ошибка вида — синхронный throw, тем же тоном, что и про закэшированный
-    // ассет: несовпадение видно сразу, до всякого ввода-вывода (ASSET-2).
-    expect(() => svc.request('texture', 'a.fake')).toThrowError(/ASSET-2|другого типа/);
+    // Ключ реестра — пара «вид + формат», поэтому под видом texture загрузчика
+    // для .fake просто нет. Это вопрос комплектации рантайма (его могут
+    // зарегистрировать позже), значит failed, а не throw — но причина обязана
+    // назвать виды, под которыми расширение всё-таки знакомо: чаще всего это
+    // именно опечатка потребителя, и молчать о ней значит вредить отладке.
+    const s = svc.state(svc.request('texture', 'a.fake'));
+    expect(s.status).toBe('failed');
+    if (s.status === 'failed') {
+      expect(s.reason).toMatch(/нет загрузчика для вида "texture"/);
+      expect(s.reason).toMatch(/зарегистрированы виды: model/);
+    }
+  });
 
-    // Кэш не засорён неудавшимся запросом: правильный запрос грузится с нуля.
-    const h = svc.request('model', 'a.fake');
-    expect(svc.state(h).status).toBe('loading');
+  it('одно расширение у двух видов: регистрации не конфликтуют', async () => {
+    // `.json` — манифест визуалов и одновременно расширение нативного формата
+    // моделей three.js. При ключе реестра по одному расширению второй загрузчик
+    // молча вытеснил бы первый (ASSET-3).
+    const svc = new AssetService(
+      new MemoryAssetSource(
+        new Map([
+          ['unit.json', bytesOf('m')],
+          ['visuals.json', bytesOf('v')],
+        ]),
+      ),
+    );
+    svc.registerLoader({
+      kind: 'model',
+      extensions: ['.json'],
+      load: () => ({ what: 'модель' }),
+    });
+    svc.registerLoader({
+      kind: 'manifest',
+      extensions: ['.json'],
+      load: () => ({ what: 'манифест' }),
+    });
+
+    const model = await settled(svc, svc.request<{ what: string }>('model', 'unit.json'));
+    const manifest = await settled(svc, svc.request<{ what: string }>('manifest', 'visuals.json'));
+    expect(model.status === 'ready' && model.data.what).toBe('модель');
+    expect(manifest.status === 'ready' && manifest.data.what).toBe('манифест');
+  });
+});
+
+describe('AssetService: зависимости формата (ASSET-3)', () => {
+  /** Загрузчик формата из двух файлов: описание ссылается на буфер рядом. */
+  const twoFileLoader: AssetLoader<string> = {
+    kind: 'model',
+    extensions: ['.desc'],
+    async load(bytes: ArrayBuffer, ctx: LoaderContext): Promise<string> {
+      const buffer = await ctx.read(new TextDecoder().decode(bytes));
+      return new TextDecoder().decode(buffer);
+    },
+  };
+
+  it('загрузчик дочитывает соседний файл по относительному пути', async () => {
+    const source = new MemoryAssetSource(
+      new Map([
+        ['models/unit.desc', bytesOf('unit.bin')],
+        ['models/unit.bin', bytesOf('геометрия')],
+      ]),
+    );
+    const svc = new AssetService(source);
+    svc.registerLoader(twoFileLoader);
+
+    const s = await settled(svc, svc.request<string>('model', 'models/unit.desc'));
+    expect(s.status).toBe('ready');
+    if (s.status === 'ready') expect(s.data).toBe('геометрия');
+    // Путь разрешён от ДИРЕКТОРИИ ассета, а не от корня дерева контента.
+    expect(source.reads).toEqual(['models/unit.desc', 'models/unit.bin']);
+  });
+
+  it('недостающая зависимость — failed с причиной, называющей файл', async () => {
+    const svc = new AssetService(
+      new MemoryAssetSource(new Map([['models/unit.desc', bytesOf('missing.bin')]])),
+    );
+    svc.registerLoader(twoFileLoader);
+
+    const s = await settled(svc, svc.request('model', 'models/unit.desc'));
+    expect(s.status).toBe('failed');
+    if (s.status === 'failed') {
+      expect(s.reason).toMatch(/models\/missing\.bin/);
+      expect(s.reason).toMatch(/зависимость/);
+    }
+  });
+
+  it('сбой одной зависимости не мешает остальным ассетам', async () => {
+    const svc = new AssetService(
+      new MemoryAssetSource(
+        new Map([
+          ['a.desc', bytesOf('nope.bin')],
+          ['b.desc', bytesOf('b.bin')],
+          ['b.bin', bytesOf('цел')],
+        ]),
+      ),
+    );
+    svc.registerLoader(twoFileLoader);
+
+    const bad = await settled(svc, svc.request('model', 'a.desc'));
+    const good = await settled(svc, svc.request<string>('model', 'b.desc'));
+    expect(bad.status).toBe('failed');
+    expect(good.status).toBe('ready');
+  });
+
+  it('разрешение путей: точки, поддиректории и запрет выхода за корень', () => {
+    expect(resolveDependencyPath('models/unit.desc', 'unit.bin')).toBe('models/unit.bin');
+    expect(resolveDependencyPath('models/unit.desc', './tex/skin.png')).toBe('models/tex/skin.png');
+    expect(resolveDependencyPath('models/a/unit.desc', '../shared/atlas.png')).toBe(
+      'models/shared/atlas.png',
+    );
+    expect(resolveDependencyPath('models/unit.desc', '/textures/skin.png')).toBe(
+      'textures/skin.png',
+    );
+    // Дерево контента — не файловая система хоста: наружу ходу нет.
+    expect(() => resolveDependencyPath('models/unit.desc', '../../etc/passwd')).toThrow(
+      /за корень/,
+    );
   });
 });
 
@@ -241,10 +356,9 @@ describe('AssetService: retry (ASSET-4)', () => {
     expect(source.reads).toEqual(['unit.fake']);
   });
 
-  it('retry: загрузчик появился, но производит другой kind — failed, не throw', () => {
-    // Единственный оставшийся путь до проверки kind в startLoad: в момент
-    // request загрузчика не было (failed «нет загрузчика»), а зарегистрировали
-    // потом — и не тот. retry зовут из чужого кода, исключением его не бьём.
+  it('retry: зарегистрировали загрузчик того же формата, но чужого вида — снова failed, не throw', () => {
+    // retry зовут из чужого кода, не готового к исключению от давно
+    // запрошенного ассета, поэтому «загрузчика под мою пару так и нет» — failed.
     const svc = new AssetService(new MemoryAssetSource(new Map([['a.fake', bytesOf('x')]])));
     const h = svc.request('texture', 'a.fake'); // загрузчика ещё нет
     expect(svc.state(h).status).toBe('failed');
@@ -253,7 +367,7 @@ describe('AssetService: retry (ASSET-4)', () => {
     expect(() => svc.retry(h)).not.toThrow();
     const s = svc.state(h);
     expect(s.status).toBe('failed');
-    if (s.status === 'failed') expect(s.reason).toMatch(/запрошен как "texture"/);
+    if (s.status === 'failed') expect(s.reason).toMatch(/нет загрузчика для вида "texture"/);
   });
 
   it('retry подхватывает загрузчик, зарегистрированный после сбоя', async () => {

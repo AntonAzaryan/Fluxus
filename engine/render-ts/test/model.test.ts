@@ -62,7 +62,7 @@ describe('createModelInstance: скелет и биндинг', () => {
     expect(a.meshes[0]!.geometry).toBe(b.meshes[0]!.geometry);
     expect(a.meshes[0]!.geometry).toBe(shared.meshes[0]!.geometry);
     expect(a.skeleton).not.toBe(b.skeleton);
-    expect(a.materialsBySlot.get(0)).not.toBe(b.materialsBySlot.get(0));
+    expect(a.materials[0]).not.toBe(b.materials[0]);
   });
 
   it('нормализация масштаба: высота модели → одна единица × scale манифеста', () => {

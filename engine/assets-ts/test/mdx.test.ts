@@ -41,7 +41,11 @@ describe('Загрузчик MDX: эталонная модель (ASSET-5: head
 
     model.bones.forEach((b, i) => {
       expect(b.index).toBe(i);
-      expect(b.pivot).toHaveLength(3);
+      expect(b.position).toHaveLength(3);
+      // Поза покоя MDX: повороты и масштаб единичны, привязка выводится из позы.
+      expect([...b.rotation]).toEqual([0, 0, 0, 1]);
+      expect([...b.scale]).toEqual([1, 1, 1]);
+      expect(b.inverseBind).toBeNull();
       if (b.parentIndex !== -1) {
         expect(b.parentIndex).toBeGreaterThanOrEqual(0);
         expect(b.parentIndex).toBeLessThan(model.bones.length);
@@ -84,9 +88,40 @@ describe('Загрузчик MDX: эталонная модель (ASSET-5: head
         expect(sum, `${label}: веса вершины ${v} не нормированы`).toBeCloseTo(1, 5);
       }
 
-      expect(mesh.textureSlot).toBeGreaterThanOrEqual(0);
-      expect(mesh.textureSlot).toBeLessThan(model.textureSlots.length);
+      expect(mesh.materialIndex).toBeGreaterThanOrEqual(0);
+      expect(mesh.materialIndex).toBeLessThan(model.materials.length);
     }
+  });
+
+  it('материалы: непустые, карта базового цвета ссылается на существующий слот', () => {
+    expect(model.materials.length).toBeGreaterThan(0);
+    for (const material of model.materials) {
+      expect(material.baseColorFactor).toHaveLength(4);
+      expect(material.metallicFactor).toBeGreaterThanOrEqual(0);
+      expect(material.roughnessFactor).toBeGreaterThan(0);
+      // Карты материала — НОМЕРА слотов, а не пути: слот и есть точка подмены
+      // скином манифеста (ASSET-6).
+      if (material.baseColorTexture !== null) {
+        expect(material.baseColorTexture).toBeGreaterThanOrEqual(0);
+        expect(material.baseColorTexture).toBeLessThan(model.textureSlots.length);
+      }
+      expect(material.alphaMode).toBe('opaque');
+    }
+  });
+
+  it('интерполяция каналов заявлена и ограничена ступенчатой и линейной', () => {
+    // Эрмит и безье MDX сознательно не переводятся в cubic — см. загрузчик.
+    const seen = new Set<string>();
+    for (const seq of model.sequences) {
+      for (const track of seq.boneTracks) {
+        for (const channel of [track.position, track.rotation, track.scale]) {
+          if (channel === undefined) continue;
+          expect(['step', 'linear']).toContain(channel.interpolation);
+          seen.add(channel.interpolation);
+        }
+      }
+    }
+    expect(seen.size).toBeGreaterThan(0);
   });
 
   it('секвенции: непустые, duration > 0, знакомые клипы на месте', () => {

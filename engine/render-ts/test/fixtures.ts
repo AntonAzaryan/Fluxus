@@ -29,6 +29,7 @@ function sequence(
           times: new Float32Array([0, duration]),
           // identity → 90° вокруг Z.
           values: new Float32Array([0, 0, 0, 1, 0, 0, Math.SQRT1_2, Math.SQRT1_2]),
+          interpolation: 'linear',
         },
       },
     ],
@@ -42,8 +43,24 @@ function sequence(
 export function makeModel(): NormalizedModel {
   return {
     bones: [
-      { index: 0, name: 'Bone_Root', parentIndex: -1, pivot: [1, 2, 3] },
-      { index: 1, name: 'Bone_Chest', parentIndex: 0, pivot: [10, 0, 0] },
+      {
+        index: 0,
+        name: 'Bone_Root',
+        parentIndex: -1,
+        position: [1, 2, 3],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        inverseBind: null,
+      },
+      {
+        index: 1,
+        name: 'Bone_Chest',
+        parentIndex: 0,
+        position: [10, 0, 0],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        inverseBind: null,
+      },
     ],
     meshes: [
       {
@@ -54,7 +71,7 @@ export function makeModel(): NormalizedModel {
         indices: new Uint16Array([0, 1, 2]),
         skinIndices: new Uint16Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
         skinWeights: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]),
-        textureSlot: 0,
+        materialIndex: 0,
       },
     ],
     sequences: [
@@ -62,6 +79,20 @@ export function makeModel(): NormalizedModel {
       sequence('Walk Fast', 1),
       sequence('Attack - 1', 0.5),
       sequence('Death', 0.8),
+    ],
+    materials: [
+      {
+        baseColorFactor: [0.5, 0.5, 0.5, 1],
+        baseColorTexture: 0,
+        metallicFactor: 0.05,
+        roughnessFactor: 0.85,
+        normalTexture: null,
+        emissiveFactor: [0, 0, 0],
+        emissiveTexture: null,
+        alphaMode: 'opaque',
+        alphaCutoff: 0.5,
+        doubleSided: true,
+      },
     ],
     textureSlots: [{ slot: 0, path: 'tex/base.png' }],
     height: 2,
@@ -108,6 +139,10 @@ export function makeAssets(): AssetsStub {
         subscribers.set(k, set_);
       }
       set_.add(cb);
+      // Как настоящий сервис (ASSET-4): подписка немедленно приносит текущее
+      // состояние. Без этого стаб «терял» уже готовые ассеты, и потребители,
+      // полагающиеся на контракт, тестировались бы в несуществующем мире.
+      cb(states.get(k) ?? { status: 'loading' });
       return () => set_.delete(cb);
     },
     retry(): void {},

@@ -9,7 +9,9 @@
  */
 import * as THREE from 'three';
 import type {
+  Interpolation,
   NormalizedBone,
+  NormalizedMaterial,
   NormalizedModel,
   NormalizedSequence,
 } from '@game-mvp/assets';
@@ -19,7 +21,7 @@ import type {
 export interface SharedMeshData {
   readonly geometry: THREE.BufferGeometry;
   readonly partId: number;
-  readonly textureSlot: number;
+  readonly materialIndex: number;
 }
 
 /** Разделяемые данные одного ассета модели: строятся один раз, живут в кэше подсистемы. */
@@ -45,7 +47,7 @@ export function buildSharedModel(model: NormalizedModel): SharedModelData {
     if (mesh.normals === null || mesh.normals.length !== mesh.positions.length) {
       geometry.computeVertexNormals();
     }
-    return { geometry, partId: mesh.partId, textureSlot: mesh.textureSlot };
+    return { geometry, partId: mesh.partId, materialIndex: mesh.materialIndex };
   });
 
   return { model, meshes, clips: buildClips(model.sequences) };
@@ -70,17 +72,32 @@ export function buildClips(sequences: readonly NormalizedSequence[]): THREE.Anim
       if (track.position !== undefined) {
         // Значения уже абсолютные локальные (rest + offset) — см. контракт ассетов.
         tracks.push(
-          new THREE.VectorKeyframeTrack(`${bone}.position`, track.position.times, track.position.values),
+          new THREE.VectorKeyframeTrack(
+            `${bone}.position`,
+            track.position.times,
+            track.position.values,
+            interpolationMode(track.position.interpolation),
+          ),
         );
       }
       if (track.rotation !== undefined) {
         tracks.push(
-          new THREE.QuaternionKeyframeTrack(`${bone}.quaternion`, track.rotation.times, track.rotation.values),
+          new THREE.QuaternionKeyframeTrack(
+            `${bone}.quaternion`,
+            track.rotation.times,
+            track.rotation.values,
+            interpolationMode(track.rotation.interpolation),
+          ),
         );
       }
       if (track.scale !== undefined) {
         tracks.push(
-          new THREE.VectorKeyframeTrack(`${bone}.scale`, track.scale.times, track.scale.values),
+          new THREE.VectorKeyframeTrack(
+            `${bone}.scale`,
+            track.scale.times,
+            track.scale.values,
+            interpolationMode(track.scale.interpolation),
+          ),
         );
       }
     }
@@ -99,6 +116,17 @@ export function buildClips(sequences: readonly NormalizedSequence[]): THREE.Anim
   });
 }
 
+/**
+ * Режим интерполяции канала → режим трека THREE. Режим приезжает из ассета, а
+ * не назначается здесь: клип, записанный ступенчато и проигранный линейно, —
+ * это тихо испорченная анимация, и заметить её можно только глазами.
+ */
+function interpolationMode(mode: Interpolation): THREE.InterpolationModes {
+  if (mode === 'step') return THREE.InterpolateDiscrete;
+  if (mode === 'cubic') return THREE.InterpolateSmooth;
+  return THREE.InterpolateLinear;
+}
+
 // ------------------------------------------------------------------ скелет
 
 export interface SkeletonBuild {
@@ -109,12 +137,18 @@ export interface SkeletonBuild {
   readonly byName: ReadonlyMap<string, THREE.Bone>;
 }
 
-/** THREE.Bone-иерархия из нормализованного скелета: position — локальный pivot. */
+/**
+ * THREE.Bone-иерархия из нормализованного скелета. Поза покоя переносится
+ * ЦЕЛИКОМ — позиция, поворот и масштаб: у MDX повороты в покое единичны, но
+ * формат, где это не так, иначе приехал бы в сцену с потерянной позой.
+ */
 export function buildBones(bones: readonly NormalizedBone[]): SkeletonBuild {
   const built = bones.map((bone) => {
     const b = new THREE.Bone();
     b.name = `b${bone.index}`;
-    b.position.set(bone.pivot[0], bone.pivot[1], bone.pivot[2]);
+    b.position.set(bone.position[0], bone.position[1], bone.position[2]);
+    b.quaternion.set(bone.rotation[0], bone.rotation[1], bone.rotation[2], bone.rotation[3]);
+    b.scale.set(bone.scale[0], bone.scale[1], bone.scale[2]);
     return b;
   });
 
@@ -141,6 +175,12 @@ export interface InstanceOptions {
   readonly hiddenParts?: readonly number[];
 }
 
+/** Куда ставится текстура слота: конкретная карта конкретного материала. */
+export interface TextureTarget {
+  readonly material: THREE.MeshStandardMaterial;
+  readonly map: 'base' | 'normal' | 'emissive';
+}
+
 /** Пер-инстансная часть модели: скелет, меши и материалы — свои, буферы — общие. */
 export interface ModelInstance {
   /** Корень инстанса: сюда ставится позиция/курс сущности. */
@@ -149,13 +189,78 @@ export interface ModelInstance {
   readonly skeleton: THREE.Skeleton;
   readonly bonesByName: ReadonlyMap<string, THREE.Bone>;
   readonly meshes: readonly THREE.SkinnedMesh[];
-  /** Материал на слот текстуры — единица подмены скина (REND-6). */
-  readonly materialsBySlot: ReadonlyMap<number, THREE.MeshStandardMaterial>;
+  /** Материалы инстанса по индексу материала ассета. */
+  readonly materials: readonly THREE.MeshStandardMaterial[];
+  /**
+   * Слот текстуры → куда его класть. Слот остаётся единицей подмены скина
+   * (REND-6, ASSET-6), но теперь один слот может обслуживать несколько
+   * материалов и несколько карт — поэтому не «материал на слот», а «места
+   * употребления слота».
+   */
+  readonly textureTargets: ReadonlyMap<number, readonly TextureTarget[]>;
   /** Убирает пер-инстансные ресурсы; разделяемая геометрия остаётся в кэше (REND-3). */
   dispose(): void;
 }
 
-const BASE_MATERIAL_COLOR = 0xb8b8b0;
+/**
+ * Материал инстанса из описания материала ассета (ASSET-5). Раньше здесь стоял
+ * захардкоженный серый MeshStandardMaterial: рендер решал за ассет, как модель
+ * выглядит, и модель формата, который материалы описывает, приезжала бы серой.
+ * Цвета из ассета линейные — рабочее пространство THREE такое же, поэтому
+ * `setRGB` без указания пространства это ровно то, что нужно.
+ */
+function materialFromAsset(source: NormalizedMaterial): THREE.MeshStandardMaterial {
+  const material = new THREE.MeshStandardMaterial({
+    roughness: source.roughnessFactor,
+    metalness: source.metallicFactor,
+    side: source.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+    transparent: source.alphaMode === 'blend',
+    opacity: source.baseColorFactor[3],
+    alphaTest: source.alphaMode === 'mask' ? source.alphaCutoff : 0,
+  });
+  material.color.setRGB(source.baseColorFactor[0], source.baseColorFactor[1], source.baseColorFactor[2]);
+  material.emissive.setRGB(source.emissiveFactor[0], source.emissiveFactor[1], source.emissiveFactor[2]);
+  return material;
+}
+
+/** Материал последней надежды: модель без описанных материалов всё же видна. */
+const DEFAULT_MATERIAL: NormalizedMaterial = {
+  baseColorFactor: [0.5, 0.5, 0.5, 1],
+  baseColorTexture: null,
+  metallicFactor: 0,
+  roughnessFactor: 1,
+  normalTexture: null,
+  emissiveFactor: [0, 0, 0],
+  emissiveTexture: null,
+  alphaMode: 'opaque',
+  alphaCutoff: 0.5,
+  doubleSided: true,
+};
+
+/**
+ * Скелет с матрицами обратной привязки.
+ *
+ * Если ассет привязку не дал (`inverseBind: null` — так у MDX, где она честно
+ * выводится из позы покоя), отдаём построение самому THREE: он посчитает
+ * инверсии по мировым матрицам, которые к этому моменту уже обновлены. Если дал
+ * хоть одну — собираем массив целиком: у форматов вроде glTF привязка задана
+ * явно и сплошь и рядом НЕ равна инверсии позы покоя, так что вывести её из
+ * позы значит получить искажённый скининг.
+ */
+function buildSkeleton(
+  source: readonly NormalizedBone[],
+  bones: readonly THREE.Bone[],
+): THREE.Skeleton {
+  if (!source.some((bone) => bone.inverseBind !== null)) {
+    return new THREE.Skeleton([...bones]);
+  }
+  const inverses = source.map((bone, i) =>
+    bone.inverseBind !== null
+      ? new THREE.Matrix4().fromArray(bone.inverseBind)
+      : new THREE.Matrix4().copy(bones[i]!.matrixWorld).invert(),
+  );
+  return new THREE.Skeleton([...bones], inverses);
+}
 
 export function createModelInstance(
   shared: SharedModelData,
@@ -172,29 +277,37 @@ export function createModelInstance(
   // Skeleton.calculateInverses() посчитает inverse-bind по единичным матрицам
   // (кости ещё не в графе сцены) и скининг забайндится с искажением/схлопыванием.
   body.updateMatrixWorld(true);
-  const skeleton = new THREE.Skeleton([...bones]);
+  const skeleton = buildSkeleton(shared.model.bones, bones);
 
-  // B. Материалы — свои на инстанс, по одному на слот текстуры (REND-6).
-  const materialsBySlot = new Map<number, THREE.MeshStandardMaterial>();
-  const materialFor = (slot: number): THREE.MeshStandardMaterial => {
-    let material = materialsBySlot.get(slot);
-    if (material === undefined) {
-      material = new THREE.MeshStandardMaterial({
-        color: BASE_MATERIAL_COLOR,
-        roughness: 0.85,
-        metalness: 0.05,
-        side: THREE.DoubleSide,
-      });
-      materialsBySlot.set(slot, material);
-    }
-    return material;
+  // B. Материалы — свои на инстанс (REND-6: смена скина не трогает соседей),
+  // по одному на материал ассета. Слоты текстур — точки подмены скина —
+  // индексируются отдельно: один слот может кормить несколько материалов.
+  const materials = shared.model.materials.map(materialFromAsset);
+  const textureTargets = new Map<number, TextureTarget[]>();
+  const useSlot = (slot: number | null, material: THREE.MeshStandardMaterial, map: TextureTarget['map']): void => {
+    if (slot === null) return;
+    const targets = textureTargets.get(slot) ?? [];
+    targets.push({ material, map });
+    textureTargets.set(slot, targets);
   };
+  shared.model.materials.forEach((source, i) => {
+    const material = materials[i]!;
+    useSlot(source.baseColorTexture, material, 'base');
+    useSlot(source.normalTexture, material, 'normal');
+    useSlot(source.emissiveTexture, material, 'emissive');
+  });
+  // Модель без материалов (или меш со ссылкой в пустоту) не должна ронять
+  // построение инстанса: заглушка по умолчанию виднее, чем исключение.
+  const fallbackMaterial = materials[0] ?? materialFromAsset(DEFAULT_MATERIAL);
 
   // C. SkinnedMesh на каждый меш; геометрия разделяемая, биндинг — до масштаба.
   const meshes: THREE.SkinnedMesh[] = [];
   for (const meshData of shared.meshes) {
     if (hidden.has(meshData.partId)) continue; // арт-дубликат: не создаём вовсе
-    const mesh = new THREE.SkinnedMesh(meshData.geometry, materialFor(meshData.textureSlot));
+    const mesh = new THREE.SkinnedMesh(
+      meshData.geometry,
+      materials[meshData.materialIndex] ?? fallbackMaterial,
+    );
     // Имя обязано совпадать с именем узла в треках видимости (buildClips).
     mesh.name = `part${meshData.partId}`;
     body.add(mesh);
@@ -221,12 +334,15 @@ export function createModelInstance(
     skeleton,
     bonesByName: byName,
     meshes,
-    materialsBySlot,
+    materials,
+    textureTargets,
     dispose(): void {
       mixer.stopAllAction();
       mixer.uncacheRoot(root);
-      for (const material of materialsBySlot.values()) {
+      for (const material of materials) {
         material.map?.dispose();
+        material.normalMap?.dispose();
+        material.emissiveMap?.dispose();
         material.dispose();
       }
     },

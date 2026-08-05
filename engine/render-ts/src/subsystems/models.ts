@@ -314,7 +314,7 @@ export class ModelsSubsystem implements RenderSubsystem {
     if (entry?.data === undefined || entry.data === null) return;
     record.skinApp?.dispose();
     record.skinApp = applySkin(
-      model.materialsBySlot,
+      model.textureTargets,
       skinTexturePaths(entry.data.model, record.visual, record.skin),
       this.requireCtx().assets,
     );
