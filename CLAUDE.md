@@ -19,6 +19,7 @@ Game content lives in `content/` and never inside an engine package (`game-conte
 - The spec covers more than the TS packages — `editor` (Kotlin + Compose, roadmap stage 12) is a capability with no code under `engine/`. Capability ≠ package.
 - Spec-writing context and rules — `openspec/config.yaml`.
 - Layer overview, roadmap, the mechanism-vs-policy split, open questions — `docs/architecture.md` (alongside `docs/one-pager.md`).
+- **Work not yet done is written down, not remembered.** `openspec list` is the live queue of proposed changes; the roadmap table in `docs/architecture.md` says what each stage is for and in what order. A change whose `proposal.md` exists while `specs`/`design`/`tasks` are empty is a deliberate stub — read its `## Notes` and continue with `/opsx:update <name>`.
 
 ```sh
 openspec list --specs               # list capabilities
