@@ -118,13 +118,54 @@
             },
             "then": [
               {
-                "emitEvent": {
-                  "type": "CastFireball",
-                  "data": {
-                    "entity": { "var": "e" },
-                    "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] },
-                    "tick": { "tick": [] }
-                  }
+                "let": {
+                  "bindings": {
+                    "dir": {
+                      "vec": [
+                        { "cos": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] },
+                        { "sin": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] }
+                      ]
+                    }
+                  },
+                  "do": [
+                    {
+                      "spawnEntity": {
+                        "prefab": "Fireball",
+                        "overrides": {
+                          "Position": {
+                            "x": {
+                              "+": [
+                                { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                                { "*": [{ "vec.x": [{ "var": "dir" }] }, 29491] }
+                              ]
+                            },
+                            "y": {
+                              "+": [
+                                { "getComponent": [{ "var": "e" }, "Position", "y"] },
+                                { "*": [{ "vec.y": [{ "var": "dir" }] }, 29491] }
+                              ]
+                            }
+                          },
+                          "Velocity": {
+                            "x": { "*": [{ "vec.x": [{ "var": "dir" }] }, 16384] },
+                            "y": { "*": [{ "vec.y": [{ "var": "dir" }] }, 16384] }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "CastFireball",
+                        "data": {
+                          "dirX": { "vec.x": [{ "var": "dir" }] },
+                          "dirY": { "vec.y": [{ "var": "dir" }] },
+                          "entity": { "var": "e" },
+                          "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] },
+                          "tick": { "tick": [] }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             ]

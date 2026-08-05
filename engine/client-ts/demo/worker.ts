@@ -17,10 +17,9 @@ const extractor = new Extractor({
   // записи в манифесте нет НАМЕРЕННО: частицы отложены, снаряд — заглушка.
   kindOf: kindByTags(['Hero', 'Fireball']),
   terrainGrid: grid,
-  // Направление несёт драфтовое событие натива (`FireballAimed`), а не
-  // канонический `CastFireball` сцены: JSON-каст без тригонометрии вектор
-  // из `aimDir` не развернёт (снимается этапом 30).
-  aimEvents: ['FireballAimed'],
+  // Доворот торса (REND-5) — по направлению каста: одно каноническое событие
+  // сцены несёт и факт каста, и `dirX`/`dirY`.
+  aimEvents: ['CastFireball'],
 });
 
 const shell = new WorkerShell({
