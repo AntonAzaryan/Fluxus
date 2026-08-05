@@ -173,8 +173,8 @@ window.addEventListener('keydown', (e) => {
     keys.add(e.code);
     return;
   }
-  if (e.code === 'KeyS') {
-    // S — смена скина (REND-6), поэтому «юг» в движении только на ArrowDown.
+  if (e.code === 'KeyT') {
+    // T — смена скина (REND-6); S свободна под «юг» в WASD.
     currentSkin = currentSkin === 'steel' ? 'ember' : 'steel';
     models?.setSkin(playerId, currentSkin);
     updateHud();
@@ -206,7 +206,7 @@ function inputFrameFor(tickNumber: number): InputFrame {
   let moveX = 0;
   let moveY = 0;
   if (keys.has('KeyW') || keys.has('ArrowUp')) moveY += 1;
-  if (keys.has('ArrowDown')) moveY -= 1;
+  if (keys.has('KeyS') || keys.has('ArrowDown')) moveY -= 1;
   if (keys.has('KeyA') || keys.has('ArrowLeft')) moveX -= 1;
   if (keys.has('KeyD') || keys.has('ArrowRight')) moveX += 1;
   const length = Math.hypot(moveX, moveY);
