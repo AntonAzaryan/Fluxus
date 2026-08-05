@@ -13,6 +13,13 @@ export type {
 export { RenderHost, kindByTags } from './host.js';
 export { FloorMirror } from './floorMirror.js';
 
+// Половины хоста по границе потоков (client-shell SHELL-2): Extractor —
+// воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
+export { Extractor, ENTITY_MOVING } from './extractor.js';
+export type { ExtractedTick, ExtractorConfig } from './extractor.js';
+export { ViewBuffer } from './viewBuffer.js';
+export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
+
 // Подсистема террейна (REND-7) и её чистые генераторы геометрии.
 export {
   TerrainSubsystem,

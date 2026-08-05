@@ -66,6 +66,7 @@
 | `diagnostics` | Приёмник диагностики, форма записи, уровни трейса, трейс потока Command Buffer | DIAG-1..7 |
 | `assets` | Presentation-ассеты: handle'ы, загрузчики, кэш, манифест визуалов | ASSET-1..6 |
 | `rendering` | Рендер-наблюдатель: интерполяция, модели, анимации, кости, скины, террейн, подсистемы | REND-1..8 |
+| `client-shell` | Клиентская оболочка веба: ядро в воркере, рендер в main, канал transferable ping-pong, conflation, обратный канал | SHELL-1..7 |
 
 Требование ищется по ID: `openspec spec show <capability>` либо grep по `openspec/specs/`.
 
@@ -136,7 +137,8 @@
 | 22 | Диагностика и трейс ядра | ✅ `src/debug.ts` (приёмник на `Simulation`, DI-5), трейс потока Command Buffer в `src/ecs/commands.ts`, JSONL-вывод CLI (`--trace=`) — DIAG-1..7, CLI-7 |
 | 23 | (Будущее) Pathfinding для крипов/NPC | 🟡 Шов готов: `NavigationApi` и `navigation?` в `SystemContext` (`pathfinding` NAV-1..6, DI-4). Алгоритм, навигационные данные и связность сетки — отдельным этапом |
 | 24 | (Будущее) Предсказание своей сущности и reconciliation | NET-2/4/5 слоем над клиентом MVP; включается по замеру «нажал→увидел», а не заранее |
-| 25 | Render + assets MVP | ✅ `engine/assets-ts` (`@game-mvp/assets`: handle'ы, реестр загрузчиков, MDX/PNG/манифест визуалов) и `engine/render-ts` (`@game-mvp/render`: `RenderHost`-наблюдатель с интерполяцией, подсистемы террейна и моделей, data-driven анимации, bone-контроль, скины) + демо `render-ts/demo` (change `add-render-assets-mvp`, ASSET-1..6, REND-1..8). Fog-mask (FOW-7..9) и частицы — последующие этапы |
+| 25 | Render + assets MVP | ✅ `engine/assets-ts` (`@game-mvp/assets`: handle'ы, реестр загрузчиков, MDX/PNG/манифест визуалов) и `engine/render-ts` (`@game-mvp/render`: `RenderHost`-наблюдатель с интерполяцией, подсистемы террейна и моделей, data-driven анимации, bone-контроль, скины) + демо (change `add-render-assets-mvp`, ASSET-1..6, REND-1..8). Fog-mask (FOW-7..9) и частицы — последующие этапы |
+| 26 | Клиентская оболочка веба: ядро в воркере | ✅ `engine/client-ts` (`@game-mvp/client`): воркер-хост с тикером, канал transferable ping-pong с ack-conflation (состояние conflatable, события reliable), handshake, обратный канал ввода и WSM, `MessagePort`-транспорт под локальный сервер во втором воркере. `RenderHost` разнесён на `Extractor`/`ViewBuffer` по границе `TickView` — подсистемы не тронуты; демо переехало в `client-ts/demo` на воркер-сборку (change `add-worker-client-shell`, SHELL-1..7) |
 
 Этапы с 21-го появились после составления roadmap и потому идут за «будущим» 20-м: ни транспорт, ни диагностика, ни навигация, ни рендер не были условием ни одного этапа ядра.
 
