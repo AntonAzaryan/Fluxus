@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { contentPackHash } from '../src/sim/contentPack.js';
-import { runScenario, type ScenarioDef } from '../src/sim/scenario.js';
+import { runScenario } from '../src/sim/scenario.js';
 import type { SceneDef } from '../src/sim/scene.js';
 
 /**
@@ -54,7 +54,7 @@ const worldInitHashOf = (scene: SceneDef): string =>
     ticks: 0,
     scene,
     initial: [{ prefab: 'Unit' }],
-  } as ScenarioDef).worldInitHash;
+  }).worldInitHash;
 
 describe('хеш контент-пака (NET-17)', () => {
   it('восемь строчных hex-цифр и повторяемость', () => {

@@ -14,6 +14,24 @@ function image(r: number, g: number, b: number): DecodedImage {
   return { width: 1, height: 1, format: 'rgba8', pixels: Uint8Array.from([r, g, b, 255]) };
 }
 
+/**
+ * Карта материала как `DataTexture`. `Material.map` объявлен базовым `Texture`,
+ * у которого `image` — `unknown`: пиксели в общем случае могут быть чем угодно
+ * (canvas, video, ImageBitmap). `applySkin` кладёт туда именно `DataTexture` —
+ * сужение и проверяется рядом через `toBeInstanceOf`, поэтому здесь это
+ * утверждение о контракте, а не обход типов.
+ */
+function skinTexture(material: THREE.MeshStandardMaterial): THREE.DataTexture {
+  const map = material.map;
+  expect(map).toBeInstanceOf(THREE.DataTexture);
+  return map as THREE.DataTexture;
+}
+
+/** Пиксели карты материала списком — форма, удобная для сравнения в ассерте. */
+function skinPixels(material: THREE.MeshStandardMaterial): number[] {
+  return [...(skinTexture(material).image.data as Uint8Array)];
+}
+
 describe('skinTexturePaths (ASSET-6)', () => {
   it('базовые пути модели, поверх — подмены выбранного скина', () => {
     const model = makeModel();
@@ -34,12 +52,11 @@ describe('applySkin (REND-6)', () => {
 
     applySkin(instance.textureTargets, new Map([[0, 'tex/base.png']]), assets.service);
 
-    const map = instance.materials[0]!.map;
-    expect(map).toBeInstanceOf(THREE.DataTexture);
-    expect(map!.image.width).toBe(1);
-    expect([...(map!.image.data as Uint8Array)]).toEqual([10, 20, 30, 255]);
+    const map = skinTexture(instance.materials[0]!);
+    expect(map.image.width).toBe(1);
+    expect(skinPixels(instance.materials[0]!)).toEqual([10, 20, 30, 255]);
     // Цветовая карта — sRGB; иначе текстура высветлится на экране.
-    expect(map!.colorSpace).toBe(THREE.SRGBColorSpace);
+    expect(map.colorSpace).toBe(THREE.SRGBColorSpace);
   });
 
   it('текстура в loading — материал остаётся без карты, ошибки нет', () => {
@@ -75,8 +92,8 @@ describe('applySkin (REND-6)', () => {
     application.dispose();
     applySkin(second.textureTargets, new Map([[0, 'tex/ember.png']]), assets.service);
 
-    expect([...(second.materials[0]!.map!.image.data as Uint8Array)]).toEqual([9, 9, 9, 255]);
-    expect([...(first.materials[0]!.map!.image.data as Uint8Array)]).toEqual([1, 1, 1, 255]);
+    expect(skinPixels(second.materials[0]!)).toEqual([9, 9, 9, 255]);
+    expect(skinPixels(first.materials[0]!)).toEqual([1, 1, 1, 255]);
     expect(shared.model.textureSlots[0]!.path).toBe('tex/base.png'); // ассет не тронут
   });
 

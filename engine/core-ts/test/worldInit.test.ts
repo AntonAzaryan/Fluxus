@@ -34,7 +34,7 @@ const hashOf = (def: ScenarioDef): string => runScenario(def).worldInitHash;
 /** Глубокая правка сцены без мутации исходника: сценарии в тестах переиспользуются. */
 const withScene = (patch: Record<string, unknown>): ScenarioDef => ({
   ...BASE,
-  scene: { ...BASE.scene, ...patch } as ScenarioDef['scene'],
+  scene: { ...BASE.scene, ...patch },
 });
 
 describe('worldInit hash (DET-1)', () => {

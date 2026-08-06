@@ -13,7 +13,7 @@
  */
 import * as fixed from '../math/fixed.js';
 import * as vec from '../math/vector.js';
-import { getField, hasTag } from '../ecs/world.js';
+import { getField } from '../ecs/world.js';
 import { query } from '../ecs/query.js';
 import {
   FIXED_ONE,

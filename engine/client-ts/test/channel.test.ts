@@ -12,7 +12,6 @@ import { RingHistory, createInputLog, createRewindController, tick } from '@game
 import { ViewBuffer, type RenderSubsystem, type TickView } from '@game-mvp/render';
 import { RemoteHost, WorkerShell, shellPort, type TickEnvelope } from '../src/index.js';
 import {
-  CAST_BUTTON,
   PLAYER_ID,
   STEP,
   TICK_SECONDS,
