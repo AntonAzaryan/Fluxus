@@ -16,8 +16,38 @@
     { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } },
     {
       "name": "Collider",
-      "fields": { "halfX": "fixed", "halfY": "fixed", "radius": "fixed", "shape": "i32" }
+      "fields": {
+        "blockMask": "i32",
+        "cliffRise": "i32",
+        "halfX": "fixed",
+        "halfY": "fixed",
+        "hitMask": "i32",
+        "layer": "i32",
+        "radius": "fixed",
+        "shape": "i32"
+      }
     },
+    {
+      "name": "Locomotion",
+      "fields": {
+        "accel": "fixed",
+        "decel": "fixed",
+        "dodgeSpeed": "fixed",
+        "dodgeTicks": "i32",
+        "jumpHeight": "i32",
+        "jumpSpeed": "fixed",
+        "jumpTicks": "i32",
+        "maxSpeed": "fixed",
+        "rollSpeed": "fixed",
+        "rollTicks": "i32",
+        "windowTicks": "i32"
+      }
+    },
+    {
+      "name": "LocomotionState",
+      "fields": { "dirX": "fixed", "dirY": "fixed", "state": "i32", "ticksLeft": "i32" }
+    },
+    { "name": "LevelOverride", "fields": { "level": "i32" } },
     { "name": "Lifetime", "fields": { "ticks": "i32" } },
     { "name": "Dead", "fields": { "atTick": "i32" } }
   ],
@@ -29,7 +59,30 @@
         "Input": { "aimDir": 0, "buttons": 0, "moveX": 0, "moveY": 0, "prevButtons": 0, "seq": 0 },
         "Position": { "x": 753664, "y": 753664 },
         "Velocity": { "x": 0, "y": 0 },
-        "Collider": { "halfX": 19661, "halfY": 19661, "radius": 19661, "shape": 0 }
+        "Collider": {
+          "blockMask": 1,
+          "cliffRise": 0,
+          "halfX": 19661,
+          "halfY": 19661,
+          "hitMask": 0,
+          "layer": 2,
+          "radius": 19661,
+          "shape": 0
+        },
+        "Locomotion": {
+          "accel": 655,
+          "decel": 1311,
+          "dodgeSpeed": 13107,
+          "dodgeTicks": 8,
+          "jumpHeight": 1,
+          "jumpSpeed": 7864,
+          "jumpTicks": 20,
+          "maxSpeed": 5243,
+          "rollSpeed": 9830,
+          "rollTicks": 18,
+          "windowTicks": 12
+        },
+        "LocomotionState": { "dirX": 0, "dirY": 0, "state": 0, "ticksLeft": 0 }
       },
       "tags": ["Hero"]
     },
@@ -38,30 +91,22 @@
       "components": {
         "Position": { "x": 0, "y": 0 },
         "Velocity": { "x": 0, "y": 0 },
+        "Collider": {
+          "blockMask": 0,
+          "cliffRise": 0,
+          "halfX": 6554,
+          "halfY": 6554,
+          "hitMask": 2,
+          "layer": 4,
+          "radius": 6554,
+          "shape": 0
+        },
         "Lifetime": { "ticks": 50 }
       },
       "tags": ["Fireball"]
     }
   ],
   "systems": [
-    {
-      "name": "Movement",
-      "order": 10,
-      "query": { "all": ["Velocity", "Input"], "not": ["Dead"] },
-      "as": "e",
-      "do": [
-        {
-          "modifyComponent": {
-            "entity": { "var": "e" },
-            "component": "Velocity",
-            "values": {
-              "x": { "*": [{ "getComponent": [{ "var": "e" }, "Input", "moveX"] }, 5243] },
-              "y": { "*": [{ "getComponent": [{ "var": "e" }, "Input", "moveY"] }, 5243] }
-            }
-          }
-        }
-      ]
-    },
     {
       "name": "KillSwitch",
       "order": 20,
@@ -82,6 +127,12 @@
                   "entity": { "var": "e" },
                   "component": "Dead",
                   "values": { "atTick": { "tick": [] } }
+                }
+              },
+              {
+                "removeComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Locomotion"
                 }
               },
               {
@@ -179,26 +230,6 @@
       "query": { "all": ["Position", "Velocity", "Lifetime"] },
       "as": "e",
       "do": [
-        {
-          "modifyComponent": {
-            "entity": { "var": "e" },
-            "component": "Position",
-            "values": {
-              "x": {
-                "+": [
-                  { "getComponent": [{ "var": "e" }, "Position", "x"] },
-                  { "getComponent": [{ "var": "e" }, "Velocity", "x"] }
-                ]
-              },
-              "y": {
-                "+": [
-                  { "getComponent": [{ "var": "e" }, "Position", "y"] },
-                  { "getComponent": [{ "var": "e" }, "Velocity", "y"] }
-                ]
-              }
-            }
-          }
-        },
         {
           "modifyComponent": {
             "entity": { "var": "e" },

@@ -4,26 +4,82 @@
   "ticks": 6,
   "scene": {
     "components": [
-      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
-      { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } },
-      { "name": "Collider", "fields": { "shape": "i32", "radius": "fixed", "halfX": "fixed", "halfY": "fixed" } }
+      {
+        "name": "Position",
+        "fields": {
+          "x": "fixed",
+          "y": "fixed"
+        }
+      },
+      {
+        "name": "Velocity",
+        "fields": {
+          "x": "fixed",
+          "y": "fixed"
+        }
+      },
+      {
+        "name": "Collider",
+        "fields": {
+          "blockMask": "i32",
+          "cliffRise": "i32",
+          "halfX": "fixed",
+          "halfY": "fixed",
+          "hitMask": "i32",
+          "layer": "i32",
+          "radius": "fixed",
+          "shape": "i32"
+        }
+      }
     ],
     "prefabs": [
       {
         "name": "Wide",
         "components": {
-          "Position": { "x": 98304, "y": 98304 },
-          "Velocity": { "x": 16384, "y": 0 },
-          "Collider": { "shape": 0, "radius": 39322, "halfX": 39322, "halfY": 39322 },
-          "ArenaState": { "support": 32768 }
+          "Position": {
+            "x": 98304,
+            "y": 98304
+          },
+          "Velocity": {
+            "x": 16384,
+            "y": 0
+          },
+          "Collider": {
+            "blockMask": 0,
+            "cliffRise": 0,
+            "halfX": 39322,
+            "halfY": 39322,
+            "hitMask": 0,
+            "layer": 0,
+            "radius": 39322,
+            "shape": 0
+          },
+          "ArenaState": {
+            "support": 32768
+          }
         }
       },
       {
         "name": "Point",
         "components": {
-          "Position": { "x": 98304, "y": 98304 },
-          "Velocity": { "x": 16384, "y": 0 },
-          "Collider": { "shape": 0, "radius": 39322, "halfX": 39322, "halfY": 39322 },
+          "Position": {
+            "x": 98304,
+            "y": 98304
+          },
+          "Velocity": {
+            "x": 16384,
+            "y": 0
+          },
+          "Collider": {
+            "blockMask": 0,
+            "cliffRise": 0,
+            "halfX": 39322,
+            "halfY": 39322,
+            "hitMask": 0,
+            "layer": 0,
+            "radius": 39322,
+            "shape": 0
+          },
           "ArenaState": {}
         }
       }
@@ -35,9 +91,22 @@
       "levels": ["00000", "00000", "00000"],
       "flags": [".._..", ".._..", ".._.."]
     },
-    "arena": { "center": { "x": 163840, "y": 98304 }, "radius": 196608 },
+    "arena": {
+      "center": {
+        "x": 163840,
+        "y": 98304
+      },
+      "radius": 196608
+    },
     "capacity": 16
   },
   "physics": {},
-  "initial": [{ "prefab": "Wide" }, { "prefab": "Point" }]
+  "initial": [
+    {
+      "prefab": "Wide"
+    },
+    {
+      "prefab": "Point"
+    }
+  ]
 }

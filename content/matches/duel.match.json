@@ -6,6 +6,7 @@
   "sceneRef": "duel",
   "contentPack": { "duel": "../scenes/duel.scene.json" },
   "physics": {},
+  "locomotion": { "dodgeButton": 2, "jumpButton": 3 },
   "initial": [
     { "prefab": "Hero" },
     { "prefab": "Hero", "overrides": { "Player": { "slot": 1 } } }

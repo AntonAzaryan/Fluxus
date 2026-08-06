@@ -25,11 +25,13 @@ import {
   worldInitHash,
   worldInitSpawn,
   InputSystem,
+  LocomotionSystem,
   PhysicsSystem,
   PhysicsWorld,
   VisibilitySystem,
   VISION_MODIFIER_COMPONENT,
   type ComponentSchema,
+  type LocomotionOptions,
   type PhysicsApi,
   type PhysicsOptions,
   type PlainWorld,
@@ -49,6 +51,7 @@ export interface MatchWorldDef {
   readonly initial?: readonly ScenarioSpawn[];
   /** Зависимость сборки, а не данные сцены (DI-3) — поэтому здесь, а не в `SceneDef`. */
   readonly physics?: PhysicsOptions;
+  readonly locomotion?: LocomotionOptions;
   readonly visibility?: VisibilityOptions;
 }
 
@@ -62,6 +65,7 @@ export interface MatchWorld {
 export function buildMatchWorld(def: MatchWorldDef): MatchWorld {
   const { world, systems, terrain, arena, modifiers } = loadScene(def.scene);
   systems.register(new InputSystem({ players: def.players }));
+  if (def.locomotion !== undefined) systems.register(new LocomotionSystem(def.locomotion));
 
   let physics: PhysicsApi | undefined;
   if (def.physics !== undefined) {

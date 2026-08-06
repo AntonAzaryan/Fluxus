@@ -11,6 +11,7 @@
  */
 import { spawn } from '../ecs/world.js';
 import { InputSystem } from '../systems/inputSystem.js';
+import { LocomotionSystem, type LocomotionOptions } from '../systems/locomotion.js';
 import { mathApi } from '../math/mathApi.js';
 import {
   createPhysicsApi,
@@ -54,6 +55,12 @@ export interface ScenarioDef {
    * сборки (DI-3, SER-7), в конфиге сцены её быть не должно.
    */
   readonly physics?: PhysicsOptions;
+  /**
+   * Включает нативный локомоушен (LOC-1). Поле сценария по тем же основаниям,
+   * что и физика: какая реализация движет героя — зависимость сборки (SER-7),
+   * а не данные сцены.
+   */
+  readonly locomotion?: LocomotionOptions;
   /**
    * Включает пересчёт видимости (FOW-4). Как и физика — поле сценария, а не
    * сцены: системе нужен raycast, то есть зависимость сборки (DI-3).
@@ -100,6 +107,7 @@ export function runScenario(def: ScenarioDef, diagnostics?: DiagnosticsSink): Ru
   // сам загрузчик (SER-7); здесь — только те, которым нужна зависимость сборки.
   const { world, systems, terrain, arena, modifiers } = loadScene(def.scene);
   if (def.players !== undefined) systems.register(new InputSystem({ players: def.players }));
+  if (def.locomotion !== undefined) systems.register(new LocomotionSystem(def.locomotion));
 
   // Статика обрывов строится из террейна до расстановки: она иммутабельна и в
   // снапшот не входит (TERR-5, TERR-6).

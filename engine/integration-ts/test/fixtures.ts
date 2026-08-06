@@ -68,7 +68,16 @@ export function duelScene(): SceneDef {
       { name: 'Velocity', fields: { x: 'fixed', y: 'fixed' } },
       {
         name: 'Collider',
-        fields: { halfX: 'fixed', halfY: 'fixed', radius: 'fixed', shape: 'i32' },
+        fields: {
+          blockMask: 'i32',
+          cliffRise: 'i32',
+          halfX: 'fixed',
+          halfY: 'fixed',
+          hitMask: 'i32',
+          layer: 'i32',
+          radius: 'fixed',
+          shape: 'i32',
+        },
       },
     ],
     prefabs: [
@@ -79,7 +88,18 @@ export function duelScene(): SceneDef {
           Input: { aimDir: 0, buttons: 0, moveX: 0, moveY: 0, prevButtons: 0, seq: 0 },
           Position: { x: 0, y: 0 },
           Velocity: { x: 0, y: 0 },
-          Collider: { halfX: 19661, halfY: 19661, radius: 19661, shape: 0 },
+          // Маски нулевые: в вертикали герои не блокируются ничем (PHYS-2),
+          // как и до появления масок, когда тега блокировки на них не было.
+          Collider: {
+            blockMask: 0,
+            cliffRise: 0,
+            halfX: 19661,
+            halfY: 19661,
+            hitMask: 0,
+            layer: 0,
+            radius: 19661,
+            shape: 0,
+          },
         },
         tags: ['Hero'],
       },
@@ -257,6 +277,7 @@ export class RenderBridge {
       seed: config.seed,
       initial: config.initial,
       ...(config.physics !== undefined ? { physics: config.physics } : {}),
+      ...(config.locomotion !== undefined ? { locomotion: config.locomotion } : {}),
     });
     this.scene = new THREE.Scene();
     // Ассеты вертикали не нужны: подсистема позиций их не читает; источник —

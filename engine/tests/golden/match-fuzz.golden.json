@@ -1,7 +1,7 @@
 {
   "scenario": "match-fuzz",
   "seed": 977,
-  "worldInitHash": "9db7fb6a",
+  "worldInitHash": "367c05d8",
   "ticks": [
     {
       "tick": 0,
@@ -24,6 +24,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -31,6 +39,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -134,6 +150,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -141,6 +165,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -244,6 +276,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -251,6 +291,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -354,6 +402,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -361,6 +417,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -464,6 +528,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -471,6 +543,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -574,6 +654,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -581,6 +669,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -684,6 +780,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -691,6 +795,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -794,6 +906,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -801,6 +921,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -904,6 +1032,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -911,6 +1047,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -1014,6 +1158,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -1021,6 +1173,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -1124,6 +1284,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -1131,6 +1299,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -1234,6 +1410,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -1241,6 +1425,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -1344,6 +1536,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -1351,6 +1551,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -1454,6 +1662,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -1461,6 +1677,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -1564,6 +1788,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -1571,6 +1803,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -1674,6 +1914,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -1681,6 +1929,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -1784,6 +2040,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -1791,6 +2055,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -1894,6 +2166,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -1901,6 +2181,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -2004,6 +2292,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -2011,6 +2307,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -2114,6 +2418,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -2121,6 +2433,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -2224,6 +2544,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -2231,6 +2559,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -2334,6 +2670,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -2341,6 +2685,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -2444,6 +2796,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -2451,6 +2811,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -2554,6 +2922,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -2561,6 +2937,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -2664,6 +3048,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -2671,6 +3063,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -2774,6 +3174,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -2781,6 +3189,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -2884,6 +3300,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -2891,6 +3315,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -2994,6 +3426,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -3001,6 +3441,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -3104,6 +3552,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -3111,6 +3567,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -3214,6 +3678,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -3221,6 +3693,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -3324,6 +3804,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -3331,6 +3819,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -3434,6 +3930,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -3441,6 +3945,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -3544,6 +4056,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -3551,6 +4071,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -3654,6 +4182,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -3661,6 +4197,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -3764,6 +4308,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -3771,6 +4323,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -3874,6 +4434,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -3881,6 +4449,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -3984,6 +4560,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -3991,6 +4575,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -4094,6 +4686,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -4101,6 +4701,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -4204,6 +4812,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -4211,6 +4827,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -4314,6 +4938,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -4321,6 +4953,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -4424,6 +5064,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -4431,6 +5079,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -4534,6 +5190,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -4541,6 +5205,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -4644,6 +5316,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -4651,6 +5331,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -4754,6 +5442,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -4761,6 +5457,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -4864,6 +5568,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -4871,6 +5583,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -4974,6 +5694,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -4981,6 +5709,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -5084,6 +5820,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -5091,6 +5835,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -5194,6 +5946,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -5201,6 +5961,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -5304,6 +6072,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -5311,6 +6087,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -5414,6 +6198,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -5421,6 +6213,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -5524,6 +6324,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -5531,6 +6339,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -5634,6 +6450,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -5641,6 +6465,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -5744,6 +6576,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -5751,6 +6591,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -5854,6 +6702,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -5861,6 +6717,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -5964,6 +6828,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -5971,6 +6843,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -6074,6 +6954,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -6081,6 +6969,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -6184,6 +7080,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -6191,6 +7095,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -6294,6 +7206,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -6301,6 +7221,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -6404,6 +7332,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -6411,6 +7347,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -6514,6 +7458,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -6521,6 +7473,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
@@ -6624,6 +7584,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               19661,
               19661
@@ -6631,6 +7599,14 @@
             "halfY": [
               19661,
               19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
             ],
             "radius": [
               19661,
