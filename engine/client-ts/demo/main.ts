@@ -21,9 +21,17 @@ import {
   type VisualManifest,
 } from '@game-mvp/assets';
 import {
+  CameraEffectsDirector,
+  CameraRig,
   ModelsSubsystem,
   TerrainSubsystem,
   VisualSurfaceSource,
+  createCameraInput,
+  edgePanAxes,
+  heroMoveFromKeys,
+  resetCameraInput,
+  terrainGroundApi,
+  type CameraPose,
   type RenderContext,
 } from '@game-mvp/render';
 import { RemoteHost, shellPort } from '@game-mvp/client';
@@ -31,10 +39,6 @@ import { CAST_BUTTON, KILL_BUTTON, TURN_UNITS } from './sim.js';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
 const HEIGHT_STEP = 0.6;
-
-const CAMERA_DISTANCE = 16;
-/** Наклон камеры от вертикали: ~40° — изометрия из удалённого прототипа ts-render. */
-const CAMERA_TILT = (40 * Math.PI) / 180;
 
 // ------------------------------------------------------------------ three.js
 
@@ -51,13 +55,34 @@ const scene3 = new THREE.Scene();
 scene3.background = new THREE.Color(0x1a1a2e);
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 300);
-const cameraOffset = new THREE.Vector3(
-  0,
-  -CAMERA_DISTANCE * Math.sin(CAMERA_TILT),
-  CAMERA_DISTANCE * Math.cos(CAMERA_TILT),
-);
-/** Точка, за которой следит камера; сглаживается к игроку по кадрам. */
-const cameraTarget = new THREE.Vector3(11.5, 11.5, 0);
+camera.up.set(0, 0, 1);
+
+/**
+ * Камера — конвейер позы (CAM-1): rig режимов + стек эффектов живут в
+ * render-ts как чистые данные; здесь — только сбор ввода и применение
+ * финальной позы к THREE-камере (единственная точка).
+ */
+let rig: CameraRig | null = null;
+/** Диспетчер эффектов появляется вместе с манифестом (ASSET-7, см. main). */
+let director: CameraEffectsDirector | null = null;
+const camInput = createCameraInput();
+const lookTarget = new THREE.Vector3();
+
+function applyPose(pose: CameraPose): void {
+  camera.position.set(pose.posX, pose.posY, pose.posZ);
+  const cosPitch = Math.cos(pose.pitch);
+  lookTarget.set(
+    pose.posX + Math.cos(pose.yaw) * cosPitch,
+    pose.posY + Math.sin(pose.yaw) * cosPitch,
+    pose.posZ - Math.sin(pose.pitch),
+  );
+  camera.lookAt(lookTarget);
+  if (pose.roll !== 0) camera.rotateZ(pose.roll);
+  if (camera.fov !== pose.fovDeg) {
+    camera.fov = pose.fovDeg;
+    camera.updateProjectionMatrix();
+  }
+}
 
 scene3.add(new THREE.AmbientLight(0xffffff, 0.65));
 const sun = new THREE.DirectionalLight(0xffffff, 1.7);
@@ -113,6 +138,13 @@ let pendingCast: number | null = null;
 let pendingKill = false;
 let currentSkin: 'steel' | 'ember' = 'steel';
 
+/** Последняя позиция указателя — edge-pan считается по кадрам (CAM-3). */
+let pointerX = -1;
+let pointerY = -1;
+/** Зажатые кнопки мыши: 1 — drag-панорама (MMB), 2 — осмотр в fly (RMB). */
+let midDrag = false;
+let rightDrag = false;
+
 const raycaster = new THREE.Raycaster();
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
@@ -127,8 +159,10 @@ const context: RenderContext = { scene: scene3, assets, config: { heightStep: HE
 let remote: RemoteHost | null = null;
 
 /**
- * Точка клика на плоскости пола под игроком: луч через камеру. NDC —
- * относительно rect канваса; плоскость на высоте уровня героя.
+ * Точка клика на плоскости пола: луч через камеру (по финальной позе —
+ * «куда смотрю, туда и кликаю», design Decision 6). Плоскость — высота
+ * поверхности под точкой наблюдения камеры, а не уровень героя: в free-RTS
+ * герой может быть за экраном.
  */
 function groundPoint(clientX: number, clientY: number): { x: number; y: number } | null {
   const rect = renderer3.domElement.getBoundingClientRect();
@@ -138,15 +172,16 @@ function groundPoint(clientX: number, clientY: number): { x: number; y: number }
     -((clientY - rect.top) / rect.height) * 2 + 1,
   );
   raycaster.setFromCamera(ndc, camera);
-  const level = heroId === null ? 0 : (remote?.view?.entities.get(heroId)?.currLevel ?? 0);
-  groundPlane.constant = -level * HEIGHT_STEP;
+  groundPlane.constant = -(rig?.groundZ ?? 0);
   const point = new THREE.Vector3();
   return raycaster.ray.intersectPlane(groundPlane, point) === null
     ? null
     : { x: point.x, y: point.y };
 }
 
+/** Клавиши камеры (CAM-1): их фронты не доходят до `pushInput`. */
 window.addEventListener('keydown', (e) => {
+  if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
   if (e.repeat) {
     keys.add(e.code);
     return;
@@ -162,9 +197,25 @@ window.addEventListener('keydown', (e) => {
     pendingKill = true;
     return;
   }
+  if (e.code === 'Space') camInput.centerTap = true;
+  if (e.code === 'KeyY') camInput.followToggle = true;
+  if (e.code === 'KeyF') camInput.flyToggle = true;
   keys.add(e.code);
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
+
+window.addEventListener('mousemove', (e) => {
+  if (midDrag) {
+    camInput.dragDX += e.movementX;
+    camInput.dragDY += e.movementY;
+  }
+  if (rightDrag) {
+    camInput.lookDX += e.movementX;
+    camInput.lookDY += e.movementY;
+  }
+  pointerX = e.clientX;
+  pointerY = e.clientY;
+});
 
 /**
  * Направление клика → `aimDir` канонического `InputFrame` (TICK-2): угол в
@@ -179,6 +230,16 @@ function aimAngle(dx: number, dy: number): number {
 }
 
 window.addEventListener('mousedown', (e) => {
+  if (e.button === 1) {
+    // MMB — drag-панорама (CAM-3); default — autoscroll браузера.
+    e.preventDefault();
+    midDrag = true;
+    return;
+  }
+  if (e.button === 2) {
+    rightDrag = true;
+    return;
+  }
   if (e.button !== 0) return;
   const point = groundPoint(e.clientX, e.clientY);
   if (point === null || heroId === null) return;
@@ -189,23 +250,43 @@ window.addEventListener('mousedown', (e) => {
   if (Math.hypot(dx, dy) < 1e-3) return; // клик в себя — направления нет
   pendingCast = aimAngle(dx, dy);
 });
+window.addEventListener('mouseup', (e) => {
+  if (e.button === 1) midDrag = false;
+  if (e.button === 2) rightDrag = false;
+});
+window.addEventListener('contextmenu', (e) => e.preventDefault());
+window.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  // ~100 deltaY на щелчок колеса; трекпад копит дробные шаги.
+  camInput.wheelSteps += e.deltaY / 100;
+}, { passive: false });
+
+/** Сэмпл осей камеры на кадр: стрелки, edge-pan, удержания, fly-перемещение. */
+function sampleCameraInput(): void {
+  camInput.panX = (keys.has('ArrowRight') ? 1 : 0) - (keys.has('ArrowLeft') ? 1 : 0);
+  camInput.panY = (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0);
+  const rect = renderer3.domElement.getBoundingClientRect();
+  const margin = rig?.config.edgeMarginPx ?? 0;
+  const edge = edgePanAxes(pointerX, pointerY, rect, margin);
+  camInput.edgeX = edge.x;
+  camInput.edgeY = edge.y;
+  camInput.centerHeld = keys.has('Space');
+  const fly = rig?.capturesMovement() ?? false;
+  camInput.moveX = fly ? (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0) : 0;
+  camInput.moveY = fly ? (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0) : 0;
+  camInput.moveZ = fly ? (keys.has('KeyE') ? 1 : 0) - (keys.has('KeyQ') ? 1 : 0) : 0;
+}
 
 /**
  * Сырой ввод в воркер (SHELL-6): состояние клавиш сэмплится каждый кадр,
  * фронты кнопок латчатся воркером до ближайшего тика — нажатие между тиками
  * не теряется. `tick`/`seq` канонического InputFrame ставит воркер.
+ * Движение героя — WASD без стрелок; в fly-режиме камера владеет
+ * клавиатурой и герой стоит (CAM-1, CAM-2).
  */
 function pushInput(): void {
   if (remote === null) return;
-  let moveX = 0;
-  let moveY = 0;
-  if (keys.has('KeyW') || keys.has('ArrowUp')) moveY += 1;
-  if (keys.has('KeyS') || keys.has('ArrowDown')) moveY -= 1;
-  if (keys.has('KeyA') || keys.has('ArrowLeft')) moveX -= 1;
-  if (keys.has('KeyD') || keys.has('ArrowRight')) moveX += 1;
-  const length = Math.hypot(moveX, moveY);
-  const nx = length > 0 ? moveX / length : 0;
-  const ny = length > 0 ? moveY / length : 0;
+  const move = heroMoveFromKeys(keys, rig?.capturesMovement() ?? false);
 
   let buttons = 0;
   let aimDir = 0;
@@ -219,7 +300,7 @@ function pushInput(): void {
     pendingKill = false;
   }
 
-  remote.sendInput({ x: fixed.fromFloat(nx), y: fixed.fromFloat(ny) }, aimDir, buttons);
+  remote.sendInput({ x: fixed.fromFloat(move.x), y: fixed.fromFloat(move.y) }, aimDir, buttons);
 }
 
 // ------------------------------------------------------------- HUD и цикл
@@ -230,9 +311,11 @@ function updateHud(): void {
   const alive = heroId !== null && view !== null && view.entities.has(heroId);
   const controller = heroId === null ? null : (models?.instanceFor(heroId)?.controller ?? null);
   const status = controller?.isDead === true ? 'мёртв (перезапуск — F5)' : alive ? 'жив' : '—';
+  const modeName = { follow: 'follow', free: 'free', fly: 'fly' }[rig?.mode ?? 'follow'];
   hudStatus.textContent =
     `тик ${view?.tick ?? 0} | сущностей ${view?.entities.size ?? 0} | ` +
-    `скин ${currentSkin} | герой: ${status}`;
+    `скин ${currentSkin} | герой: ${status} | камера: ${modeName} ` +
+    `(стрелки/край/MMB — панорама, колесо — зум, Space — к герою, Y — follow, F — полёт)`;
 }
 
 let hudCountdown = 0;
@@ -245,16 +328,29 @@ function frame(now: number): void {
 
   // Тиков здесь нет (SHELL-1): симуляция идёт в воркере своим тикером,
   // кадр только шлёт ввод и интерполирует доставленное (REND-2).
+  sampleCameraInput();
   pushInput();
   remote?.frame(now);
 
-  // Камера следит за игроком: цель — интерполированная позиция инстанса.
-  const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
-  if (instance !== null) {
-    cameraTarget.lerp(instance.holder.position, 1 - Math.exp(-6 * (dt / 1000)));
+  // Конвейер камеры (CAM-1): follow-цель — интерполированная горизонталь
+  // инстанса (x/y; высоту rig берёт с поверхности, CAM-2), поза → эффекты →
+  // применение к THREE-камере.
+  if (rig !== null) {
+    const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
+    const heroView = heroId === null ? undefined : remote?.view?.entities.get(heroId);
+    const target =
+      instance === null
+        ? null
+        : {
+            x: instance.holder.position.x,
+            y: instance.holder.position.y,
+            snap: (heroView?.snap ?? false) || (remote?.view?.snapAll ?? false),
+          };
+    const dtSec = dt / 1000;
+    const logical = rig.update(camInput, dtSec, target);
+    resetCameraInput(camInput);
+    applyPose(director === null ? logical : director.stack.apply(logical, dtSec));
   }
-  camera.position.copy(cameraTarget).add(cameraOffset);
-  camera.lookAt(cameraTarget);
 
   renderer3.render(scene3, camera);
 
@@ -290,6 +386,25 @@ async function main(): Promise<void> {
       remote!.register(new TerrainSubsystem(grid, { surface }));
       models = new ModelsSubsystem(manifest, { surface });
       remote!.register(models);
+
+      // Камера: поверхность и границы — из той же сетки, что рендер террейна
+      // (CAM-2, CAM-3); эффекты — по таблицам манифеста (ASSET-7, CAM-6).
+      const ground = terrainGroundApi(grid, HEIGHT_STEP);
+      rig = new CameraRig({
+        groundHeightAt: ground.groundHeightAt,
+        bounds: ground.bounds,
+        startX: 11.5,
+        startY: 11.5,
+      });
+      director = new CameraEffectsDirector({ tables: manifest.cameraEffects });
+      // Мини-подсистема: события/состояния тика → диспетчер эффектов. syncTick
+      // приходит на каждую доставку — события reliable (SHELL-4) не теряются.
+      remote!.register({
+        name: 'camera-effects',
+        init: () => {},
+        syncTick: (view) => director?.onTick(view, rig!.focusX, rig!.focusY, heroId),
+        updateFrame: () => {},
+      });
       requestAnimationFrame(frame);
     },
   }).connect(shellPort(worker));

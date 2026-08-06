@@ -47,5 +47,18 @@
   },
   "terrain": {
     "curvatureMap": "visuals/arena-curvature.json"
+  },
+  "cameraEffects": {
+    "events": {
+      "FireballExploded": {
+        "effect": "shake",
+        "amplitude": 0.45,
+        "radius": 14,
+        "frequency": 13,
+        "maxOffset": 0.3,
+        "maxRoll": 0.04,
+        "decay": 1.6
+      }
+    }
   }
 }

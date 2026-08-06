@@ -214,3 +214,42 @@ describe('Загрузчик манифеста через сервис (ASSET-6
     }
   });
 });
+
+describe('validateManifest: секция эффектов камеры (ASSET-8)', () => {
+  const entities = { x: { model: 'm.mdx' } };
+
+  it('валидная секция проходит; неизвестный тип эффекта — не ошибка валидации', () => {
+    const result = validateManifest({
+      entities,
+      cameraEffects: {
+        events: { FireballExploded: { effect: 'shake', amplitude: 0.5, radius: 12 } },
+        // Тип из будущего кода камеры: отбраковка — предупреждением на
+        // потребителе, манифест валиден (ASSET-8).
+        states: { Drunk: { effect: 'wobble-3000', rollAmp: 0.1 } },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.cameraEffects!.events!['FireballExploded']!.effect).toBe('shake');
+  });
+
+  it('структурные ошибки — внятные, с путями до полей', () => {
+    expectErrors({ entities, cameraEffects: 42 }, /cameraEffects: ожидался объект/);
+    expectErrors(
+      { entities, cameraEffects: { evens: {} } },
+      /cameraEffects\.evens: неизвестное поле/,
+    );
+    expectErrors(
+      { entities, cameraEffects: { events: { Boom: {} } } },
+      /cameraEffects\.events\.Boom\.effect: обязательное поле/,
+    );
+    expectErrors(
+      { entities, cameraEffects: { events: { Boom: { effect: 'shake', radius: 'far' } } } },
+      /cameraEffects\.events\.Boom\.radius: параметр эффекта — конечное число/,
+    );
+    expectErrors(
+      { entities, cameraEffects: { states: 'yes' } },
+      /cameraEffects\.states: ожидался объект/,
+    );
+  });
+});

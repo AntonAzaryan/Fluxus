@@ -41,6 +41,10 @@ const DEFAULT_AIM_HOLD_TICKS = 45;
 export const ENTITY_MOVING = 1;
 /** Бит колонки `flags`: у сущности override уровня (TERR-4) — наклон по поверхности не применяется (REND-10). */
 export const ENTITY_LEVEL_OVERRIDE = 2;
+/** Сдвиг битов состояний в колонке `flags`: бит i+STATE_BITS_SHIFT — i-я компонента `stateComponents`. */
+export const STATE_BITS_SHIFT = 2;
+/** Колонка `flags` — u8: биты 0..1 заняты, под состояния остаётся 6 бит. */
+export const MAX_STATE_COMPONENTS = 6;
 
 /**
  * Плоское presentation-состояние одного тика — то, что пересекает границу
@@ -89,6 +93,12 @@ export interface ExtractorConfig {
   readonly aimEvents?: readonly string[];
   /** Сколько тиков держится направление каста, прежде чем цель протухнет. */
   readonly aimHoldTicks?: number;
+  /**
+   * Компоненты, чьё присутствие на сущности зеркалируется битами в
+   * `EntityView.states` (по порядку списка): вход длящихся эффектов камеры
+   * (CAM-6). Не больше MAX_STATE_COMPONENTS.
+   */
+  readonly stateComponents?: readonly string[];
 }
 
 const EMPTY_EVENTS: readonly RenderEvent[] = [];
@@ -106,6 +116,7 @@ export class Extractor {
   private readonly moveEpsilonSq: number;
   private readonly aimEvents: ReadonlySet<string>;
   private readonly aimHoldTicks: number;
+  private readonly stateComponents: readonly string[];
   private readonly grid: TerrainGrid | undefined;
   private readonly mirror: FloorMirror | null;
 
@@ -131,6 +142,12 @@ export class Extractor {
     this.moveEpsilonSq = moveEpsilon * moveEpsilon;
     this.aimEvents = new Set(config.aimEvents ?? []);
     this.aimHoldTicks = config.aimHoldTicks ?? DEFAULT_AIM_HOLD_TICKS;
+    this.stateComponents = config.stateComponents ?? [];
+    if (this.stateComponents.length > MAX_STATE_COMPONENTS) {
+      throw new Error(
+        `Extractor: stateComponents — ${this.stateComponents.length} компонент, колонка flags вмещает ${MAX_STATE_COMPONENTS}`,
+      );
+    }
     this.grid = config.terrainGrid;
     this.mirror = this.grid === undefined ? null : new FloorMirror(this.grid);
     this.out = {
@@ -233,6 +250,11 @@ export class Extractor {
       let flags = moving ? ENTITY_MOVING : 0;
       if (world.hasComponent(state, entity, LEVEL_OVERRIDE_COMPONENT)) {
         flags |= ENTITY_LEVEL_OVERRIDE;
+      }
+      for (let bit = 0; bit < this.stateComponents.length; bit++) {
+        if (world.hasComponent(state, entity, this.stateComponents[bit]!)) {
+          flags |= 1 << (bit + STATE_BITS_SHIFT);
+        }
       }
       out.flags[count] = flags;
       out.facingYaw[count] = yaw;

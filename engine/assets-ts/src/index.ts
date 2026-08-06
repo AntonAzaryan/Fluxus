@@ -34,7 +34,13 @@ export type {
 export type { DecodedImage } from './image.js';
 
 // манифест визуалов (ASSET-6)
-export type { VisualManifest, EntityVisual, SurfaceAlign } from './manifest.js';
+export type {
+  VisualManifest,
+  EntityVisual,
+  SurfaceAlign,
+  CameraEffectsSection,
+  CameraEffectDef,
+} from './manifest.js';
 export { validateManifest, resolveSurfaceAlign, DEFAULT_SURFACE_ALIGN } from './manifest.js';
 
 // карта кривизны террейна (ASSET-7)

@@ -44,6 +44,12 @@ export interface EntityView {
   facingYaw: number;
   /** Направление последнего каста/атаки, радианы; null — цель протухла (REND-5). */
   aimYaw: number | null;
+  /**
+   * Битовая маска состояний сущности: бит i — присутствие i-й компоненты из
+   * `stateComponents` конфига Extractor'а. Потребитель — длящиеся эффекты
+   * камеры (CAM-6, ASSET-8).
+   */
+  states: number;
 }
 
 /** Копия события тика: переживает `dispatch()`, в отличие от view ядра (OBS-3). */
@@ -127,6 +133,8 @@ export interface RenderHostConfig {
   readonly aimEvents?: readonly string[];
   /** Сколько тиков держится направление каста, прежде чем цель протухнет. */
   readonly aimHoldTicks?: number;
+  /** Компоненты, зеркалируемые в `EntityView.states` (эффекты камеры, CAM-6). */
+  readonly stateComponents?: readonly string[];
   /** Часы в миллисекундах; по умолчанию performance.now — параметр ради тестов. */
   readonly clock?: () => number;
 }

@@ -16,6 +16,26 @@ export interface VisualManifest {
   surfaceAlign?: SurfaceAlign;
   /** Presentation-данные террейна арены. */
   terrain?: { curvatureMap?: string };
+  /** Секция эффектов камеры (ASSET-8); потребитель — `camera` CAM-6. */
+  cameraEffects?: CameraEffectsSection;
+}
+
+/**
+ * Секция эффектов камеры (ASSET-8): таблицы «тип события тика → импульсный
+ * эффект» и «компонента-состояние сущности → длящийся эффект». Набор типов
+ * эффектов определяется кодом камеры; привязка и числа — только здесь.
+ * Запись с неизвестным типом эффекта — предупреждение и пропуск на
+ * потребителе, не ошибка валидации: манифест переживает код.
+ */
+export interface CameraEffectsSection {
+  events?: Record<string, CameraEffectDef>;
+  states?: Record<string, CameraEffectDef>;
+}
+
+/** Тип эффекта плюс его числовые параметры (амплитуда, частота, радиус…). */
+export interface CameraEffectDef {
+  effect: string;
+  [param: string]: string | number;
 }
 
 /**
@@ -224,9 +244,49 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
 }
 
 /**
- * Валидация документа манифеста (ASSET-6). Ошибки собираются все разом (не
- * fail-fast), каждая — с путём до поля, чтобы правка JSON не превращалась в
- * угадывание. Успех возвращает документ, типизированный как VisualManifest.
+ * Секция эффектов камеры (ASSET-7). Структура проверяется строго (typo —
+ * ошибка), но сам тип эффекта — нет: неизвестный тип валиден для манифеста
+ * и отбраковывается предупреждением на потребителе (камера переживает
+ * запись из будущего кода). Параметры, кроме `effect`, — конечные числа.
+ */
+function validateCameraEffects(section: unknown, errors: string[]): void {
+  const path = 'cameraEffects';
+  if (!isRecord(section)) {
+    errors.push(`${path}: ожидался объект { events?, states? }, получено ${typeName(section)}`);
+    return;
+  }
+  checkUnknownKeys(section, ['events', 'states'], path, errors);
+  for (const table of ['events', 'states'] as const) {
+    if (!(table in section)) continue;
+    const entries = section[table];
+    if (!isRecord(entries)) {
+      errors.push(`${path}.${table}: ожидался объект «имя → эффект», получено ${typeName(entries)}`);
+      continue;
+    }
+    for (const [name, def] of Object.entries(entries)) {
+      const defPath = `${path}.${table}.${name}`;
+      if (!isRecord(def)) {
+        errors.push(`${defPath}: ожидался объект { effect, …параметры }, получено ${typeName(def)}`);
+        continue;
+      }
+      if (typeof def.effect !== 'string' || def.effect.length === 0) {
+        errors.push(`${defPath}.effect: обязательное поле — тип эффекта (непустая строка)`);
+      }
+      for (const [param, value] of Object.entries(def)) {
+        if (param === 'effect') continue;
+        if (!isFiniteNumber(value)) {
+          errors.push(`${defPath}.${param}: параметр эффекта — конечное число, получено ${typeName(value)}`);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Валидация документа манифеста (ASSET-6, ASSET-7). Ошибки собираются все
+ * разом (не fail-fast), каждая — с путём до поля, чтобы правка JSON не
+ * превращалась в угадывание. Успех возвращает документ, типизированный как
+ * VisualManifest.
  */
 export function validateManifest(
   doc: unknown,
@@ -235,7 +295,7 @@ export function validateManifest(
   if (!isRecord(doc)) {
     return { ok: false, errors: [`манифест: ожидался объект, получено ${typeName(doc)}`] };
   }
-  checkUnknownKeys(doc, ['entities', 'surfaceAlign', 'terrain'], 'манифест', errors);
+  checkUnknownKeys(doc, ['entities', 'surfaceAlign', 'terrain', 'cameraEffects'], 'манифест', errors);
   if (!isRecord(doc.entities)) {
     errors.push(`entities: обязательное поле — объект «prefab → визуал», получено ${typeName(doc.entities)}`);
   } else {
@@ -243,6 +303,7 @@ export function validateManifest(
       validateEntity(entity, `entities.${name}`, errors);
     }
   }
+  if ('cameraEffects' in doc) validateCameraEffects(doc.cameraEffects, errors);
   if ('surfaceAlign' in doc) {
     validateSurfaceAlign(doc.surfaceAlign, 'surfaceAlign', errors);
   }
