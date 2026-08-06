@@ -12,6 +12,7 @@
  */
 import {
   InputSystem,
+  LocomotionSystem,
   PhysicsSystem,
   PhysicsWorld,
   initialState,
@@ -37,6 +38,14 @@ export const PLAYER_ID = 'p1';
 /** Биты маски `buttons` (TICK-2): договорённость демо, читается системами сцены. */
 export const CAST_BUTTON = 1 << 0;
 export const KILL_BUTTON = 1 << 1;
+/**
+ * Уклон и прыжок читает `LocomotionSystem` — ей нужны индексы битов, а
+ * оболочке маски: раскладку кнопок ядро не знает (LOC-1).
+ */
+export const DODGE_BIT = 2;
+export const JUMP_BIT = 3;
+export const DODGE_BUTTON = 1 << DODGE_BIT;
+export const JUMP_BUTTON = 1 << JUMP_BIT;
 
 /**
  * Полный оборот в единице угла ядра (FP-7): `aimDir` — binary angle measure,
@@ -67,6 +76,12 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   const grid = terrain.grid;
 
   scene.systems.register(new InputSystem({ players: [PLAYER_ID] }));
+  // Передвижение героя: разгон/торможение и манёвры уклона, переката и прыжка
+  // (LOC-1..6). Конфигурация — поля компонента `Locomotion` у prefab'а Hero,
+  // здесь только раскладка кнопок демо.
+  scene.systems.register(
+    new LocomotionSystem({ dodgeButton: DODGE_BIT, jumpButton: JUMP_BIT }),
+  );
   // Физика ядра: статика обрывов из террейна — игрок не сойдёт с плато мимо
   // рампы (PHYS-8, TERR-5). Снаряд без коллайдера — летит поверх обрывов.
   scene.systems.register(
