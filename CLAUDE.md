@@ -16,7 +16,7 @@ Game content lives in `content/` and never inside an engine package (`game-conte
 
 - Requirements carry historical IDs (`DET-1`, `NET-15`, `FOW-4`…) in `### Requirement:` headers — preserve them; a new requirement takes the next free number of its prefix.
 - Changes go through the OpenSpec workflow: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`, etc. (the `openspec-*` skills in `.claude/skills/`). Do not edit specs outside this process.
-- The spec covers more than the TS packages — `editor` (Kotlin + Compose, roadmap stage 12) is a capability with no code under `engine/`. Capability ≠ package.
+- The spec covers more than the TS packages — `editor` (TypeScript on top of the engine packages, web + desktop, roadmap stage 12) is a capability with no code under `engine/`. Capability ≠ package.
 - Spec-writing context and rules — `openspec/config.yaml`.
 - Layer overview, roadmap, the mechanism-vs-policy split, open questions — `docs/architecture.md` (alongside `docs/one-pager.md`).
 - **Work not yet done is written down, not remembered.** `openspec list` is the live queue of proposed changes; the roadmap table in `docs/architecture.md` says what each stage is for and in what order. A change whose `proposal.md` exists while `specs`/`design`/`tasks` are empty is a deliberate stub — read its `## Notes` and continue with `/opsx:update <name>`.

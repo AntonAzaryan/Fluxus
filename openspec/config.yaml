@@ -7,8 +7,9 @@ context: |
 
   Стек: TypeScript (ядро MVP), собственное SoA-хранилище на TypedArray,
   JsonLogic-совместимый JSON-AST со своим evaluator'ом (выражения),
-  MessagePack (рантайм-снапшоты), Kotlin + Compose Multiplatform (редактор).
-  Задел на вторую реализацию ядра на Rust. Никакого WASM в MVP.
+  MessagePack (рантайм-снапшоты), TypeScript поверх пакетов движка (редактор:
+  запускается в вебе и на десктопе из одной кодовой базы, вьюпорт — реализация
+  capability rendering). Задел на вторую реализацию ядра на Rust. Никакого WASM в MVP.
 
   Неснимаемые принципы (нарушение = дефект, а не компромисс):
   - Детерминизм first-class: единственный вход в симуляцию — tick(state, inputs) → TickResult.

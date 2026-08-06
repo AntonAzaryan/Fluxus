@@ -6,7 +6,7 @@
 
 ```text
 ┌─────────────────────────────────────────────────┐
-│  Редактор (Compose Multiplatform)                │
+│  Редактор (TypeScript, веб и десктоп)            │
 │  Визуальные триггеры / Data-Driven логика        │
 └───────────────┬──────────────────────────────────┘
                 │ генерирует JSON (компоненты, системы, prefabs)
@@ -62,7 +62,7 @@
 | `netcode` | Server-auth, предсказание, per-client фильтрация, единая версия | NET-1..17 |
 | `netcode-transport` | Модуль сетевого слоя, транспорт, сервер матча, протокол, хендшейк, темп, парность с CLI | NTR-1..13 |
 | `fog-of-war` | `Vision`/`Visibility`/`Stealth`, `VisibilitySystem` | FOW-1..9 |
-| `editor` | Compose-редактор геймплея | ED-1..10 |
+| `editor` | Редактор геймплея на стеке движка, веб и десктоп | ED-1..12 |
 | `diagnostics` | Приёмник диагностики, форма записи, уровни трейса, трейс потока Command Buffer | DIAG-1..7 |
 | `assets` | Presentation-ассеты: handle'ы, загрузчики, кэш, манифест визуалов | ASSET-1..6 |
 | `rendering` | Рендер-наблюдатель: интерполяция, модели, анимации, кости, скины, террейн, подсистемы | REND-1..8 |
@@ -126,7 +126,7 @@
 | 9 | Serialization + JSON-схемы | ✅ `src/sim/serialization.ts`, `src/sim/scene.ts`, `src/dsl/schemas.ts`, `engine/schemas/*.json`: plain-форма мира, конфиг сцены, схемы порождаются из ядра |
 | 10 | CLI + golden-file test suite | ✅ `src/sim/scenario.ts`, `bin/sim.mjs`, `engine/tests/golden/`: прогон сценария из одного JSON, побитовая сверка (`viewpoint = ALL`). Ввод и RNG вошли в эталоны change'ами `input-as-components` и `random-in-dsl` |
 | 11 | Terrain: карты уровней и пола, `levelAt`, генерация cliff-геометрии | ✅ `engine/core-ts/src/systems/terrain.ts`: ассет в конфиге сцены, `levelAt`/`levelOf`/`hasFloorAt` в `SystemContext`, карта пола — компонент на singleton'е, обрывы — производные отрезки для физики |
-| 12 | Editor MVP (Compose) | ⏸ Отложен (решение 2026-08-02): редактор и его рендер спекаются отдельно, ядро доводится до конца раньше |
+| 12 | Editor MVP | ⏸ Отложен (решение 2026-08-02): редактор и его рендер спекаются отдельно, ядро доводится до конца раньше. Стек переустановлен change'ом `retarget-editor-to-web-desktop` (2026-08-06): редактор на TypeScript поверх пакетов движка, вьюпорт — `render-ts`, превью — оболочка `client-ts`; запускается и в вебе, и на десктопе из одной кодовой базы |
 | 13 | Physics + raycast/LoS | ✅ `engine/core-ts/src/systems/physics.ts`: коллайдер-компонент, статика обрывов, сетка broad-phase, разрешение движения по осям с событием `Collision`, raycast с маской |
 | 14 | Snapshot ring buffer + dirty-tracking | ✅ `src/sim/history.ts`: `HistoryProvider` за интерфейсом, ring buffer со своим интервалом и глубиной; per-component dirty в `src/ecs/world.ts` наполняет `TickResult.changes` |
 | 15 | Time system + Tween system | ✅ `src/systems/time.ts`, `src/systems/tween.ts`, `src/systems/modifiers.ts`: `getEffectiveDelta` в `SystemContext`, стакинг через слоты `sources`, нативный `TweenSystem` и действие `addTween` |
