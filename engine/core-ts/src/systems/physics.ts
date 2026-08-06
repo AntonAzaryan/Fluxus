@@ -13,7 +13,7 @@
  */
 import * as fixed from '../math/fixed.js';
 import * as vec from '../math/vector.js';
-import { getField } from '../ecs/world.js';
+import { getField, hasComponent } from '../ecs/world.js';
 import { query } from '../ecs/query.js';
 import {
   FIXED_ONE,
@@ -396,6 +396,14 @@ export function createPhysicsApi(
       const point = vec.add(from, vec.scale(dir, best));
       const hit: RaycastHit = bestEntity === undefined ? { point } : { entity: bestEntity, point };
       return hit;
+    },
+    /** ARENA-5: у круга — радиус, у AABB — меньшая полуось (вписанная окружность). */
+    inradiusOf: (entity) => {
+      if (!hasComponent(world, entity, colliderComponent)) return undefined;
+      const collider = colliderOf(read, entity, colliderComponent);
+      return collider.shape === SHAPE_CIRCLE
+        ? collider.radius
+        : Math.min(collider.halfX, collider.halfY);
     },
   };
 }

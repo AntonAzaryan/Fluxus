@@ -336,6 +336,10 @@ export function createTerrainApi(
 ): TerrainApi {
   const levelAt = (position: Vec2): number => grid.levels[cellAt(grid, position)]!;
   const total = wordCount(grid);
+  const floorBit = (cell: number): boolean => {
+    const word = getField(world, floorEntity, FLOOR_COMPONENT, wordName(cell >>> 5, total));
+    return (word & (1 << (cell & 31))) !== 0;
+  };
   return {
     grid,
     floorEntity,
@@ -348,10 +352,43 @@ export function createTerrainApi(
             x: getField(world, entity, POSITION_COMPONENT, 'x'),
             y: getField(world, entity, POSITION_COMPONENT, 'y'),
           }),
-    hasFloorAt: (position) => {
-      const cell = cellAt(grid, position);
-      const word = getField(world, floorEntity, FLOOR_COMPONENT, wordName(cell >>> 5, total));
-      return (word & (1 << (cell & 31))) !== 0;
+    hasFloorAt: (position) => floorBit(cellAt(grid, position)),
+    /**
+     * Опорная проверка (ARENA-5): пересекает ли круг хотя бы одну клетку с
+     * полом. Правило намеренно НЕ правило области снятия (TERR-8, круг по
+     * центрам клеток): для опоры оно давало бы «нет опоры» у маленькой
+     * сущности посреди клетки, чей центр вне её малого круга. Здесь —
+     * ближайшая точка прямоугольника клетки, включающее сравнение квадратов.
+     */
+    hasFloorWithin: (position, radius) => {
+      if (radius <= 0) return floorBit(cellAt(grid, position));
+      const { tileSize, width, height } = grid;
+      // Границы — надмножество с запасом в клетку, как в `carveFloor`:
+      // принадлежность решает точный тест ниже, поэтому конвенция деления
+      // отрицательных (floor у JS против усечения у Rust) роли не играет.
+      // Без замыканий-помощников: запрос зовётся на каждом тике для каждой
+      // сущности с ненулевой опорой — это горячий путь, а не действие.
+      const xLo = clamp(Math.floor((position.x - radius) / tileSize) - 1, width - 1);
+      const xHi = clamp(Math.floor((position.x + radius) / tileSize) + 1, width - 1);
+      const yLo = clamp(Math.floor((position.y - radius) / tileSize) - 1, height - 1);
+      const yHi = clamp(Math.floor((position.y + radius) / tileSize) + 1, height - 1);
+      // Обход построчный (TERR-6); на результат порядок не влияет — это
+      // проверка существования, и ранний выход детерминизма не трогает.
+      let sawCell = false;
+      for (let y = yLo; y <= yHi; y++) {
+        for (let x = xLo; x <= xHi; x++) {
+          const minX = x * tileSize;
+          const minY = y * tileSize;
+          const nx = position.x < minX ? minX : position.x > minX + tileSize ? minX + tileSize : position.x;
+          const ny = position.y < minY ? minY : position.y > minY + tileSize ? minY + tileSize : position.y;
+          if (!distSqLe(nx - position.x, ny - position.y, radius)) continue;
+          sawCell = true;
+          if (floorBit(y * width + x)) return true;
+        }
+      }
+      // Круг не задел ни одной клетки — сущность далеко за краем сетки.
+      // Отвечает ближайшая клетка (тотальность TERR-4): тик не падает.
+      return sawCell ? false : floorBit(cellAt(grid, position));
     },
   };
 }

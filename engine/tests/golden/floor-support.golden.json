@@ -1,0 +1,973 @@
+{
+  "scenario": "floor-support",
+  "seed": 20260806,
+  "worldInitHash": "bc31aee3",
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          16,
+          39,
+          39
+        ],
+        "components": {
+          "ArenaBounds": {
+            "radius": [
+              0,
+              196608,
+              0,
+              0
+            ]
+          },
+          "ArenaState": {
+            "inside": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "onFloor": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "support": [
+              0,
+              0,
+              32768,
+              0
+            ]
+          },
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "halfY": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "radius": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "shape": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              0,
+              98304,
+              98304
+            ],
+            "y": [
+              0,
+              0,
+              98304,
+              98304
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              28539,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              16384,
+              16384
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "arena"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          16,
+          39,
+          39
+        ],
+        "components": {
+          "ArenaBounds": {
+            "radius": [
+              0,
+              196608,
+              0,
+              0
+            ]
+          },
+          "ArenaState": {
+            "inside": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "onFloor": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "support": [
+              0,
+              0,
+              32768,
+              0
+            ]
+          },
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "halfY": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "radius": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "shape": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              0,
+              114688,
+              114688
+            ],
+            "y": [
+              0,
+              0,
+              98304,
+              98304
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              28539,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              16384,
+              16384
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "arena"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          16,
+          39,
+          39
+        ],
+        "components": {
+          "ArenaBounds": {
+            "radius": [
+              0,
+              196608,
+              0,
+              0
+            ]
+          },
+          "ArenaState": {
+            "inside": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "onFloor": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "support": [
+              0,
+              0,
+              32768,
+              0
+            ]
+          },
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "halfY": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "radius": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "shape": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              0,
+              131072,
+              131072
+            ],
+            "y": [
+              0,
+              0,
+              98304,
+              98304
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              28539,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              16384,
+              16384
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "arena"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "FellThroughFloor",
+          "data": {
+            "entity": 3
+          }
+        }
+      ],
+      "mode": "Running"
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          16,
+          39,
+          39
+        ],
+        "components": {
+          "ArenaBounds": {
+            "radius": [
+              0,
+              196608,
+              0,
+              0
+            ]
+          },
+          "ArenaState": {
+            "inside": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "onFloor": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "support": [
+              0,
+              0,
+              32768,
+              0
+            ]
+          },
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "halfY": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "radius": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "shape": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              0,
+              147456,
+              147456
+            ],
+            "y": [
+              0,
+              0,
+              98304,
+              98304
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              28539,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              16384,
+              16384
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "arena"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 4,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          16,
+          39,
+          39
+        ],
+        "components": {
+          "ArenaBounds": {
+            "radius": [
+              0,
+              196608,
+              0,
+              0
+            ]
+          },
+          "ArenaState": {
+            "inside": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "onFloor": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "support": [
+              0,
+              0,
+              32768,
+              0
+            ]
+          },
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "halfY": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "radius": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "shape": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              0,
+              163840,
+              163840
+            ],
+            "y": [
+              0,
+              0,
+              98304,
+              98304
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              28539,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              16384,
+              16384
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "arena"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "FellThroughFloor",
+          "data": {
+            "entity": 2
+          }
+        }
+      ],
+      "mode": "Running"
+    },
+    {
+      "tick": 5,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          16,
+          39,
+          39
+        ],
+        "components": {
+          "ArenaBounds": {
+            "radius": [
+              0,
+              196608,
+              0,
+              0
+            ]
+          },
+          "ArenaState": {
+            "inside": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "onFloor": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "support": [
+              0,
+              0,
+              32768,
+              0
+            ]
+          },
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "halfY": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "radius": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "shape": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              0,
+              180224,
+              180224
+            ],
+            "y": [
+              0,
+              0,
+              98304,
+              98304
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              28539,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              16384,
+              16384
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "arena"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 6,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          8,
+          16,
+          39,
+          39
+        ],
+        "components": {
+          "ArenaBounds": {
+            "radius": [
+              0,
+              196608,
+              0,
+              0
+            ]
+          },
+          "ArenaState": {
+            "inside": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "onFloor": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "support": [
+              0,
+              0,
+              32768,
+              0
+            ]
+          },
+          "Collider": {
+            "halfX": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "halfY": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "radius": [
+              0,
+              0,
+              39322,
+              39322
+            ],
+            "shape": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              0,
+              196608,
+              196608
+            ],
+            "y": [
+              0,
+              0,
+              98304,
+              98304
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              28539,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              16384,
+              16384
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "arena"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    }
+  ]
+}
