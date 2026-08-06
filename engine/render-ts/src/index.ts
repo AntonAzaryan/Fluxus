@@ -15,17 +15,25 @@ export { FloorMirror } from './floorMirror.js';
 
 // Половины хоста по границе потоков (client-shell SHELL-2): Extractor —
 // воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
-export { Extractor, ENTITY_MOVING } from './extractor.js';
+export { Extractor, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';
 export type { ExtractedTick, ExtractorConfig } from './extractor.js';
 export { ViewBuffer } from './viewBuffer.js';
 export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 
-// Подсистема террейна (REND-7) и её чистые генераторы геометрии.
+// Визуальная поверхность террейна (REND-9, REND-10): хелпер, общий для
+// подсистем террейна и моделей, и его источник с загрузкой карты кривизны.
+export { cornerLevels, createVisualSurface } from './visualSurface.js';
+export type { SurfaceNormal, VisualSurface } from './visualSurface.js';
+export { VisualSurfaceSource } from './surfaceSource.js';
+export type { VisualSurfaceSourceOptions } from './surfaceSource.js';
+export { tiltTarget, smoothTilt } from './model/surfaceAlign.js';
+export type { TiltVector } from './model/surfaceAlign.js';
+
+// Подсистема террейна (REND-7, REND-9) и её чистые генераторы геометрии.
 export {
   TerrainSubsystem,
   buildFloorGeometry,
   buildWallGeometry,
-  cornerLevels,
   toBufferGeometry,
 } from './subsystems/terrain.js';
 export type { TerrainGeometryData, TerrainOptions } from './subsystems/terrain.js';

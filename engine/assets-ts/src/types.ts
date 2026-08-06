@@ -18,7 +18,7 @@
  * `string & {}` — идиома, которая оставляет подсказки по литералам, не закрывая
  * множество.
  */
-export type KnownAssetKind = 'model' | 'texture' | 'manifest';
+export type KnownAssetKind = 'model' | 'texture' | 'manifest' | 'terrain-curvature';
 // eslint-disable-next-line @typescript-eslint/ban-types
 export type AssetKind = KnownAssetKind | (string & {});
 
