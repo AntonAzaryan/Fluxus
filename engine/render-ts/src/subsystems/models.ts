@@ -8,7 +8,12 @@
  * маппинг анимаций, параметры bone-контроля.
  */
 import * as THREE from 'three';
-import type { EntityId } from '@game-mvp/core';
+import {
+  LOCOMOTION_AIRBORNE,
+  LOCOMOTION_DODGE,
+  LOCOMOTION_ROLL,
+  type EntityId,
+} from '@game-mvp/core';
 import {
   resolveSurfaceAlign,
   type AssetState,
@@ -26,6 +31,7 @@ import {
   type ModelInstance,
   type SharedModelData,
 } from '../model/build.js';
+import { advanceFall, jumpArc } from '../model/verticalOffset.js';
 import { AnimationController } from '../model/animation.js';
 import { BoneControlState } from '../model/boneControl.js';
 import { smoothYaw } from '../model/boneControl.js';
@@ -34,6 +40,8 @@ import { applySkin, skinTexturePaths, type SkinApplication } from '../model/skin
 export interface ModelsOptions {
   /** Тип события смерти — конвенция ядра. */
   readonly deathEvent?: string;
+  /** Тип события провала в клетку без пола (ARENA-5) — вход снижения (REND-12). */
+  readonly fallEvent?: string;
   /** Длительность кроссфейда клипов, секунды (REND-4). */
   readonly crossfade?: number;
   /** Скорость доворота корпуса инстанса к курсу движения, 1/с. */
@@ -51,6 +59,8 @@ export interface ModelsOptions {
 const DEFAULT_TURN_RATE = 12;
 const DEFAULT_TILT_RATE = 10;
 const PLACEHOLDER_COLOR = 0xd040d0;
+/** Конвенция арены ядра (ARENA-5); имя переопределяется опцией. */
+const DEFAULT_FALL_EVENT = 'FellThroughFloor';
 
 // Переиспользуемые между кадрами объекты — аллокаций на инстанс на кадр нет.
 const WORLD_UP = new THREE.Vector3(0, 0, 1);
@@ -60,9 +70,32 @@ const SCRATCH_AXIS = new THREE.Vector3();
 const SCRATCH_Q_TILT = new THREE.Quaternion();
 const SCRATCH_Q_YAW = new THREE.Quaternion();
 
-/** Состояния локомоции MVP — производные от компонент движения (REND-4). */
+/**
+ * Закрытый словарь состояний анимации (REND-4). Какие состояния бывают —
+ * контракт рендера; какой клип на состояние ложится — политика манифеста
+ * (ASSET-6), поэтому имён клипов здесь нет и быть не может.
+ */
 const STATE_IDLE = 'idle';
 const STATE_MOVE = 'move';
+const STATE_FALL = 'fall';
+
+/** Манёвр машины локомоушена (LOC-3) → состояние; вне таблицы — idle/move по скорости. */
+const MOTION_STATE: Readonly<Record<number, string>> = {
+  [LOCOMOTION_DODGE]: 'dodge',
+  [LOCOMOTION_ROLL]: 'roll',
+  [LOCOMOTION_AIRBORNE]: 'jump',
+};
+
+/**
+ * Состояние анимации инстанса (REND-4): снижение при провале — состояние
+ * рендера, манёвр — из машины локомоушена мира, всё остальное — по скорости.
+ * Окно даблтапа (LOC-4) в таблице манёвров отсутствует намеренно: ввод в нём
+ * рулит скоростью штатно, значит и анимация штатная.
+ */
+function animationStateOf(record: InstanceRecord): string {
+  if (record.falling) return STATE_FALL;
+  return MOTION_STATE[record.view.motion] ?? (record.view.moving ? STATE_MOVE : STATE_IDLE);
+}
 
 interface SharedEntry {
   data: SharedModelData | null;
@@ -91,6 +124,16 @@ interface InstanceRecord {
   readonly tiltMaxRad: number | null;
   /** Сглаженный наклон «ось × угол» (REND-10). */
   readonly tilt: TiltVector;
+  /** Параметры вертикального смещения записи (ASSET-6); нули — смещения нет (REND-12). */
+  readonly jumpArcHeight: number;
+  readonly fallSpeed: number;
+  readonly fallDepth: number;
+  /**
+   * Снижение при провале — presentation-состояние инстанса: в мире состояния
+   * «падает» нет, есть событие (ARENA-5). Живёт до разрыва непрерывности.
+   */
+  falling: boolean;
+  fallOffset: number;
 }
 
 export class ModelsSubsystem implements RenderSubsystem {
@@ -130,7 +173,13 @@ export class ModelsSubsystem implements RenderSubsystem {
       }
       record.view = entityView;
       record.snapPending ||= entityView.snap;
-      record.controller?.setState(entityView.moving ? STATE_MOVE : STATE_IDLE);
+      // Разрыв непрерывности возвращает инстанс на поверхность (REND-12):
+      // телепорт, респавн, rewind — снижение отменено, а не доигрывается.
+      if (entityView.snap) {
+        record.falling = false;
+        record.fallOffset = 0;
+      }
+      record.controller?.setState(animationStateOf(record));
     }
 
     // Исчезнувшие: инстанс убирается, разделяемый ассет остаётся в кэше (REND-3).
@@ -144,10 +193,20 @@ export class ModelsSubsystem implements RenderSubsystem {
     // События тика → one-shot клипы (REND-4); дедуп на потребителе (OBS-5):
     // при rewind/replay и на замороженных тиках события не переигрываются.
     if (view.freshEvents) {
+      const fallEvent = this.options.fallEvent ?? DEFAULT_FALL_EVENT;
       for (const event of view.events) {
         const caster = event.data['entity'] ?? event.data['source'];
         if (caster === undefined) continue;
-        this.instances.get(caster)?.controller?.handleEvent(event.type);
+        const record = this.instances.get(caster);
+        if (record === undefined) continue;
+        // Провал (ARENA-5) включает снижение и состояние `fall` (REND-12);
+        // убьёт ли сущность геймплейная система или вернёт на арену —
+        // рендеру неизвестно, и предвосхищать её решение он не пытается.
+        if (event.type === fallEvent) {
+          record.falling = true;
+          record.controller?.setState(STATE_FALL);
+        }
+        record.controller?.handleEvent(event.type);
       }
     }
   }
@@ -169,11 +228,18 @@ export class ModelsSubsystem implements RenderSubsystem {
       const y = view.prevY + (view.currY - view.prevY) * t;
       // Сущность на поверхности стоит на визуальной поверхности (рампы и
       // кривизна, REND-9); с override уровня (TERR-4) — на высоте уровня.
-      const z =
+      const base =
         surface !== null && !view.levelOverride
           ? surface.heightAt(x, y)
           : (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
-      record.holder.position.set(x, y, z);
+      // Вертикальное смещение — чистое представление (REND-12): дуга прыжка
+      // смешивается по тем же двум тикам, что позиция, снижение идёт по кадрам.
+      const arcPrev = jumpArc(view.prevMotionPhase, record.jumpArcHeight);
+      const arcCurr = jumpArc(view.currMotionPhase, record.jumpArcHeight);
+      if (record.falling) {
+        record.fallOffset = advanceFall(record.fallOffset, record.fallSpeed, record.fallDepth, dt);
+      }
+      record.holder.position.set(x, y, base + arcPrev + (arcCurr - arcPrev) * t + record.fallOffset);
 
       // Курс: цель из данных тика, доворот сглажен по кадрам; при snap — мгновенно.
       const targetYaw = view.facingYaw + facingOffset;
@@ -280,6 +346,11 @@ export class ModelsSubsystem implements RenderSubsystem {
       tiltFactor: align.factor,
       tiltMaxRad: align.maxAngleDeg === undefined ? null : (align.maxAngleDeg * Math.PI) / 180,
       tilt: { x: 0, y: 0 },
+      jumpArcHeight: visual?.verticalOffset?.jumpArc ?? 0,
+      fallSpeed: visual?.verticalOffset?.fallSpeed ?? 0,
+      fallDepth: visual?.verticalOffset?.fallDepth ?? 0,
+      falling: false,
+      fallOffset: 0,
     };
 
     if (view.kind === null) {
@@ -363,7 +434,7 @@ export class ModelsSubsystem implements RenderSubsystem {
       record.visual?.animations ?? {},
       controllerOptions,
     );
-    record.controller.setState(record.view.moving ? STATE_MOVE : STATE_IDLE);
+    record.controller.setState(animationStateOf(record));
 
     record.boneControl =
       record.visual?.boneControls === undefined

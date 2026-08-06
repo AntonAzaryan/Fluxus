@@ -253,3 +253,43 @@ describe('validateManifest: секция эффектов камеры (ASSET-8)
     );
   });
 });
+
+describe('validateManifest: вертикальное смещение инстанса (ASSET-6, REND-12)', () => {
+  const entities = { x: { model: 'm.mdx' } };
+
+  it('секция целиком опциональна, поля — по отдельности', () => {
+    for (const verticalOffset of [
+      { jumpArc: 1.2, fallSpeed: 6, fallDepth: 4 },
+      { jumpArc: 0.8 },
+      { fallSpeed: 5, fallDepth: 3 },
+      {},
+    ]) {
+      const result = validateManifest({ entities: { x: { model: 'm.mdx', verticalOffset } } });
+      expect(result.ok, JSON.stringify(verticalOffset)).toBe(true);
+    }
+    // Запись без секции — валидна и означает отсутствие смещения (REND-12).
+    const bare = validateManifest({ entities });
+    expect(bare.ok).toBe(true);
+    if (!bare.ok) return;
+    expect(bare.manifest.entities['x']!.verticalOffset).toBeUndefined();
+  });
+
+  it('отрицательные значения и опечатки — ошибки с путями до полей', () => {
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', verticalOffset: { jumpArc: -1 } } } },
+      /verticalOffset\.jumpArc: ожидалось неотрицательное число/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', verticalOffset: { fallSpeed: 'быстро' } } } },
+      /verticalOffset\.fallSpeed: ожидалось неотрицательное число/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', verticalOffset: { fallDeph: 3 } } } },
+      /verticalOffset\.fallDeph: неизвестное поле/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', verticalOffset: 1.5 } } },
+      /verticalOffset: ожидался объект/,
+    );
+  });
+});

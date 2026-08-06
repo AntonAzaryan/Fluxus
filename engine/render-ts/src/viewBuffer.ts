@@ -10,7 +10,7 @@
  * Мира здесь нет и быть не может: всё, что нужно кадру, обязано приехать
  * в плоской форме (SHELL-1, SHELL-2).
  */
-import type { EntityId } from '@game-mvp/core';
+import { LOCOMOTION_NORMAL, type EntityId } from '@game-mvp/core';
 import {
   ENTITY_LEVEL_OVERRIDE,
   ENTITY_MOVING,
@@ -39,6 +39,9 @@ interface EntityRecord extends EntityView {
   facingYaw: number;
   aimYaw: number | null;
   states: number;
+  motion: number;
+  prevMotionPhase: number;
+  currMotionPhase: number;
 }
 
 export interface ViewBufferConfig {
@@ -151,6 +154,9 @@ export class ViewBuffer {
       const x = ext.x[i]!;
       const y = ext.y[i]!;
       const level = ext.level[i]!;
+      // Фаза манёвра скользит по тем же двум тикам, что позиция (REND-12):
+      // дуга прыжка интерполируется вместе с ней, а не ступеньками по тикам.
+      const phase = ext.motionPhase[i]!;
 
       let record = this.records.get(id);
       if (record === undefined) {
@@ -171,12 +177,16 @@ export class ViewBuffer {
           facingYaw: 0,
           aimYaw: null,
           states: 0,
+          motion: LOCOMOTION_NORMAL,
+          prevMotionPhase: phase,
+          currMotionPhase: phase,
         };
         this.records.set(id, record);
       } else if (snapAll) {
         record.prevX = record.currX = x;
         record.prevY = record.currY = y;
         record.prevLevel = record.currLevel = level;
+        record.prevMotionPhase = record.currMotionPhase = phase;
         record.snap = true;
         record.spawned = false;
       } else if (!tickAdvanced) {
@@ -189,13 +199,16 @@ export class ViewBuffer {
         record.prevX = teleport ? x : record.currX;
         record.prevY = teleport ? y : record.currY;
         record.prevLevel = teleport ? level : record.currLevel;
+        record.prevMotionPhase = teleport ? phase : record.currMotionPhase;
         record.currX = x;
         record.currY = y;
         record.currLevel = level;
+        record.currMotionPhase = phase;
         record.snap = teleport;
         record.spawned = false;
       }
 
+      record.motion = ext.motion[i]!;
       record.moving = (ext.flags[i]! & ENTITY_MOVING) !== 0;
       record.levelOverride = (ext.flags[i]! & ENTITY_LEVEL_OVERRIDE) !== 0;
       record.states = ext.flags[i]! >>> STATE_BITS_SHIFT;

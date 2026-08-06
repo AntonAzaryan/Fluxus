@@ -57,6 +57,8 @@ function syntheticTick(overrides: Partial<ExtractedTick> = {}): ExtractedTick {
     flags: zeros((n) => new Uint8Array(n)),
     facingYaw: zeros((n) => new Float32Array(n)),
     aimYaw: zeros((n) => new Float32Array(n)),
+    motion: zeros((n) => new Uint8Array(n)),
+    motionPhase: zeros((n) => new Float32Array(n)),
     events: [],
     floorDelta: [],
     kindTable: [],
@@ -119,6 +121,21 @@ describe('кодек: roundtrip эквивалентен прямому вызо
     expect([...(wire.floorDelta as Uint32Array)]).toEqual(floorDelta);
     expect(wire.tick).toBe(ext.tick);
     expect(wire.count).toBe(ext.count);
+  });
+
+  it('состояние и фаза манёвра переезжают колонками (REND-4, REND-12)', () => {
+    // Симуляция рига локомоушена не содержит, а колонки обязаны переносить
+    // любые значения — включая NaN «манёвра нет» рядом с настоящей фазой.
+    const ext = syntheticTick({
+      count: 3,
+      motion: new Uint8Array([0, 2, 3]),
+      motionPhase: new Float32Array([Number.NaN, 0.25, 0.75]),
+    });
+    const wire = readTick(frameOf(ext), [], []);
+    expect([...wire.motion]).toEqual([0, 2, 3]);
+    expect(wire.motionPhase[0]).toBeNaN();
+    expect(wire.motionPhase[1]).toBeCloseTo(0.25, 6);
+    expect(wire.motionPhase[2]).toBeCloseTo(0.75, 6);
   });
 
   it('чужая версия раскладки — ошибка, а не мусор в кадре', () => {

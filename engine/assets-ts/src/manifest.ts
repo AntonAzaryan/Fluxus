@@ -52,6 +52,22 @@ export interface SurfaceAlign {
 /** Дефолт REND-10: перпендикулярен поверхности, без лимита угла. */
 export const DEFAULT_SURFACE_ALIGN: Readonly<SurfaceAlign> = Object.freeze({ factor: 1 });
 
+/**
+ * Вертикальное смещение инстанса (REND-12): дуга прыжка и снижение при
+ * провале. Вертикали в симуляции нет (`locomotion` LOC-5), поэтому числа
+ * художественные и живут только здесь. Все поля опциональны, отсутствие
+ * означает отсутствие смещения — глобального дефолта у секции намеренно нет:
+ * высота прыжка — свойство персонажа, а не мира (в отличие от наклона).
+ */
+export interface VerticalOffset {
+  /** Максимум дуги прыжка в мировых единицах; без него дуги нет. */
+  jumpArc?: number;
+  /** Скорость снижения при провале, мировых единиц в секунду. */
+  fallSpeed?: number;
+  /** На сколько инстанс уходит вниз и там останавливается. */
+  fallDepth?: number;
+}
+
 /** Параметры наклона записи: свои → дефолт манифеста → дефолт спеки (ASSET-6). */
 export function resolveSurfaceAlign(
   manifest: Pick<VisualManifest, 'surfaceAlign'>,
@@ -68,7 +84,7 @@ export interface EntityVisual {
   defaultSkin?: string;
   /** Имя скина → (номер textureSlot как строка → asset id текстуры). */
   skins?: Record<string, Record<string, string>>;
-  /** 'idle'/'move' → подстрока имени клипа; имя события → подстрока имени клипа. */
+  /** Состояние рендера ('idle', 'move', 'dodge', 'roll', 'jump', 'fall') → подстрока имени клипа; имя события → подстрока имени клипа (REND-4). */
   animations?: { states?: Record<string, string>; events?: Record<string, string> };
   /** Роль ('torso', 'head') → параметры процедурного контроля кости (REND-5). */
   boneControls?: Record<string, { bone: string; maxYawDeg: number; smoothing: number }>;
@@ -76,6 +92,8 @@ export interface EntityVisual {
   hiddenParts?: number[];
   /** Наклон по нормали визуальной поверхности; без него — дефолт манифеста (REND-10). */
   surfaceAlign?: SurfaceAlign;
+  /** Дуга прыжка и снижение при провале (REND-12); без секции — смещения нет. */
+  verticalOffset?: VerticalOffset;
 }
 
 function typeName(v: unknown): string {
@@ -134,6 +152,24 @@ function validateSurfaceAlign(v: unknown, path: string, errors: string[]): void 
   }
 }
 
+/** `verticalOffset` записи: все поля опциональны и неотрицательны (REND-12). */
+function validateVerticalOffset(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(
+      `${path}: ожидался объект { jumpArc?, fallSpeed?, fallDepth? }, получено ${typeName(v)}`,
+    );
+    return;
+  }
+  const fields = ['jumpArc', 'fallSpeed', 'fallDepth'] as const;
+  checkUnknownKeys(v, fields, path, errors);
+  for (const field of fields) {
+    const value = v[field];
+    if (field in v && (!isFiniteNumber(value) || value < 0)) {
+      errors.push(`${path}.${field}: ожидалось неотрицательное число мировых единиц`);
+    }
+  }
+}
+
 function validateEntity(entity: unknown, path: string, errors: string[]): void {
   if (!isRecord(entity)) {
     errors.push(`${path}: ожидался объект визуала, получено ${typeName(entity)}`);
@@ -141,13 +177,27 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
   }
   checkUnknownKeys(
     entity,
-    ['model', 'scale', 'defaultSkin', 'skins', 'animations', 'boneControls', 'hiddenParts', 'surfaceAlign'],
+    [
+      'model',
+      'scale',
+      'defaultSkin',
+      'skins',
+      'animations',
+      'boneControls',
+      'hiddenParts',
+      'surfaceAlign',
+      'verticalOffset',
+    ],
     path,
     errors,
   );
 
   if ('surfaceAlign' in entity) {
     validateSurfaceAlign(entity.surfaceAlign, `${path}.surfaceAlign`, errors);
+  }
+
+  if ('verticalOffset' in entity) {
+    validateVerticalOffset(entity.verticalOffset, `${path}.verticalOffset`, errors);
   }
 
   if (typeof entity.model !== 'string' || entity.model.length === 0) {

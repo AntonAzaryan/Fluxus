@@ -18,6 +18,10 @@ import {
   FIXED_ONE,
   FLOOR_COMPONENT,
   LEVEL_OVERRIDE_COMPONENT,
+  LOCOMOTION_AIRBORNE,
+  LOCOMOTION_DODGE,
+  LOCOMOTION_NORMAL,
+  LOCOMOTION_ROLL,
   POSITION_COMPONENT,
   cellAt,
   world,
@@ -36,6 +40,22 @@ const DEFAULT_VELOCITY_COMPONENT = 'Velocity';
 const DEFAULT_MOVE_EPSILON = 1e-3;
 /** Направление каста держится ~0.75 с при 60 тиках, дальше торс возвращается к движению. */
 const DEFAULT_AIM_HOLD_TICKS = 45;
+/** Дефолты имён компонентов локомоушена — те же, что у `LocomotionSystem` (LOC-1). */
+const DEFAULT_LOCOMOTION_STATE_COMPONENT = 'LocomotionState';
+const DEFAULT_LOCOMOTION_CONFIG_COMPONENT = 'Locomotion';
+
+/**
+ * Поле полной длительности манёвра в конфиг-компоненте — по его состоянию
+ * (LOC-3). Имена ПОЛЕЙ, в отличие от имён компонентов, параметром не являются:
+ * у самой системы ядра они тоже зашиты — это её контракт, а не конвенция ядра.
+ * Состояния вне таблицы (`Normal`, окно даблтапа) манёвром не являются, фазы
+ * у них нет.
+ */
+const MANEUVER_DURATION_FIELD: Readonly<Record<number, string>> = {
+  [LOCOMOTION_DODGE]: 'dodgeTicks',
+  [LOCOMOTION_ROLL]: 'rollTicks',
+  [LOCOMOTION_AIRBORNE]: 'jumpTicks',
+};
 
 /** Бит колонки `flags`: скорость выше порога — состояние `move` (REND-4). */
 export const ENTITY_MOVING = 1;
@@ -72,6 +92,19 @@ export interface ExtractedTick {
   flags: Uint8Array;
   facingYaw: Float32Array;
   aimYaw: Float32Array;
+  /**
+   * Состояние машины локомоушена (LOC-3) последнего тика — значение поля
+   * `state`; вне манёвра и у сущностей без локомоушена — `LOCOMOTION_NORMAL`.
+   * Потребитель — выбор состояния анимации (REND-4).
+   */
+  motion: Uint8Array;
+  /**
+   * Фаза манёвра — доля пройденных тиков от их полного числа, `[0..1)`;
+   * `NaN` — манёвра нет. Считается здесь, в воркере: длительность манёвра
+   * лежит в конфиг-компоненте, а conflation (SHELL-4) вправе съесть тик входа
+   * в манёвр, и главному потоку не от чего было бы её отсчитать (REND-12).
+   */
+  motionPhase: Float32Array;
   /** События этого тика (копии, OBS-3), с номером тика — для reliable-доставки (SHELL-4). */
   events: readonly RenderEvent[];
   /** Пары (клетка, бит) реально изменившихся клеток пола (TERR-6 → REND-7). ArrayLike — читатель канала подставляет view в буфер доставки. */
@@ -99,6 +132,15 @@ export interface ExtractorConfig {
    * (CAM-6). Не больше MAX_STATE_COMPONENTS.
    */
   readonly stateComponents?: readonly string[];
+  /**
+   * Компоненты локомоушена (LOC-1): состояние машины манёвров и конфигурация
+   * с длительностями. Имена — параметры системы ядра, а значит и наши;
+   * сборка без локомоушена просто не найдёт компонента и не заметит разницы.
+   */
+  readonly locomotion?: {
+    readonly stateComponent?: string;
+    readonly configComponent?: string;
+  };
 }
 
 const EMPTY_EVENTS: readonly RenderEvent[] = [];
@@ -117,6 +159,8 @@ export class Extractor {
   private readonly aimEvents: ReadonlySet<string>;
   private readonly aimHoldTicks: number;
   private readonly stateComponents: readonly string[];
+  private readonly locomotionState: string;
+  private readonly locomotionConfig: string;
   private readonly grid: TerrainGrid | undefined;
   private readonly mirror: FloorMirror | null;
 
@@ -148,6 +192,10 @@ export class Extractor {
         `Extractor: stateComponents — ${this.stateComponents.length} компонент, колонка flags вмещает ${MAX_STATE_COMPONENTS}`,
       );
     }
+    this.locomotionState =
+      config.locomotion?.stateComponent ?? DEFAULT_LOCOMOTION_STATE_COMPONENT;
+    this.locomotionConfig =
+      config.locomotion?.configComponent ?? DEFAULT_LOCOMOTION_CONFIG_COMPONENT;
     this.grid = config.terrainGrid;
     this.mirror = this.grid === undefined ? null : new FloorMirror(this.grid);
     this.out = {
@@ -165,6 +213,8 @@ export class Extractor {
       flags: new Uint8Array(0),
       facingYaw: new Float32Array(0),
       aimYaw: new Float32Array(0),
+      motion: new Uint8Array(0),
+      motionPhase: new Float32Array(0),
       events: EMPTY_EVENTS,
       floorDelta: EMPTY_DELTA,
       kindTable: this.kindTable,
@@ -258,6 +308,7 @@ export class Extractor {
       }
       out.flags[count] = flags;
       out.facingYaw[count] = yaw;
+      this.readMotion(state, entity, count);
 
       const aim = this.aim.get(entity);
       out.aimYaw[count] =
@@ -287,6 +338,39 @@ export class Extractor {
     out.flags = new Uint8Array(capacity);
     out.facingYaw = new Float32Array(capacity);
     out.aimYaw = new Float32Array(capacity);
+    out.motion = new Uint8Array(capacity);
+    out.motionPhase = new Float32Array(capacity);
+  }
+
+  /**
+   * Состояние манёвра и его фаза (REND-4, REND-12). Сущность без компонента
+   * состояния — `Normal` без фазы: участие определяется наличием данных, как и
+   * в самой симуляции (LOC-1). Незаполненная длительность манёвра даёт `NaN`,
+   * то есть «дуги нет», а не деление на ноль.
+   */
+  private readMotion(state: WorldState, entity: EntityId, index: number): void {
+    const out = this.out;
+    if (!world.hasComponent(state, entity, this.locomotionState)) {
+      out.motion[index] = LOCOMOTION_NORMAL;
+      out.motionPhase[index] = Number.NaN;
+      return;
+    }
+    const motion = world.getField(state, entity, this.locomotionState, 'state');
+    out.motion[index] = motion;
+
+    const durationField = MANEUVER_DURATION_FIELD[motion];
+    let phase = Number.NaN;
+    if (
+      durationField !== undefined &&
+      world.hasComponent(state, entity, this.locomotionConfig)
+    ) {
+      const total = world.getField(state, entity, this.locomotionConfig, durationField);
+      if (total > 0) {
+        const left = world.getField(state, entity, this.locomotionState, 'ticksLeft');
+        phase = (total - left) / total;
+      }
+    }
+    out.motionPhase[index] = phase;
   }
 
   private resolveKind(state: WorldState, entity: EntityId): number {

@@ -56,6 +56,7 @@ export class RenderHost implements TickObserver {
       ...(config.stateComponents !== undefined
         ? { stateComponents: config.stateComponents }
         : {}),
+      ...(config.locomotion !== undefined ? { locomotion: config.locomotion } : {}),
     });
     this.buffer = new ViewBuffer({
       tickSeconds: config.tickSeconds,
