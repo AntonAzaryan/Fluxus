@@ -1,0 +1,18 @@
+{
+  "name": "duel",
+  "buildId": "dev-0001",
+  "seed": 99,
+  "players": ["p1", "p2"],
+  "sceneRef": "duel",
+  "contentPack": { "duel": "../scenes/duel.scene.json" },
+  "physics": {},
+  "locomotion": { "dodgeButton": 2, "jumpButton": 3 },
+  "initial": [
+    { "prefab": "Hero" },
+    { "prefab": "Hero", "overrides": { "Player": { "slot": 1 } } }
+  ],
+  "tickRate": 60,
+  "snapshotRate": 30,
+  "inputDelay": 2,
+  "silenceSeconds": 30
+}

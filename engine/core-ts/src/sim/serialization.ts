@@ -10,10 +10,17 @@ import { fromPlain, toPlain, type PlainWorld } from '../ecs/world.js';
 import type { PrefabDef } from '../ecs/world.js';
 import type { ComponentSchema, GameEvent, Snapshot, WorldMode } from '../types.js';
 
+/**
+ * `encode`/`decode` объявлены полями-функциями, а не методами. Разница не
+ * косметическая: метод можно оторвать от объекта и получить `this`, которого
+ * нет, — а сериализатор ровно так и передают (`prettyJsonSerializer` берёт
+ * `decode` у JSON-варианта). Поле-функция объявляет, что `this` не нужен, и
+ * заодно проверяется контравариантно, а не бивариантно.
+ */
 export interface Serializer {
   readonly name: string;
-  encode(value: unknown): Uint8Array;
-  decode(bytes: Uint8Array): unknown;
+  readonly encode: (value: unknown) => Uint8Array;
+  readonly decode: (bytes: Uint8Array) => unknown;
 }
 
 const encoder = new TextEncoder();

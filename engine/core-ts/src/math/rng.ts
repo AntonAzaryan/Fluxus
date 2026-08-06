@@ -131,7 +131,11 @@ export class XorShift128Stream implements RngStream {
 
   /** Lemire multiply-shift с отбраковкой — детерминированно и воспроизводимо в Rust (без float). */
   nextBelow(bound: number): number {
-    assertInvariant(Number.isInteger(bound) && bound > 0, 'nextBelow: bound должен быть положительным целым');
+    assertInvariant(
+      Number.isInteger(bound) && bound > 0,
+      'nextBelow: bound должен быть положительным целым',
+      'RNG_BOUND_INVALID',
+    );
     const s = bound >>> 0;
     const threshold = ((-s) >>> 0) % s; // (2^32 - s) mod s — граница отбраковки для равномерности
     let hi: number;
@@ -185,6 +189,10 @@ export interface RngRegistry {
  */
 export function createRngRegistry(worldSeed: number): RngRegistry {
   const streams = new Map<string, XorShift128Stream>();
+  // Обёртки мемоизируются: tick() зовёт forSystem на каждую систему каждый
+  // тик, без кеша это аллокация на ровном месте. Обёртка без состояния —
+  // делегирует в getOrCreate, поэтому переживает и restore().
+  const wrappers = new Map<string, RngStreams>();
 
   function getOrCreate(name: string): XorShift128Stream {
     let s = streams.get(name);
@@ -197,12 +205,17 @@ export function createRngRegistry(worldSeed: number): RngRegistry {
 
   return {
     forSystem(systemName: string): RngStreams {
-      return {
-        stream(subStream?: string): RngStream {
-          const name = subStream === undefined ? systemName : `${systemName}/${subStream}`;
-          return getOrCreate(name);
-        },
-      };
+      let wrapper = wrappers.get(systemName);
+      if (wrapper === undefined) {
+        wrapper = {
+          stream(subStream?: string): RngStream {
+            const name = subStream === undefined ? systemName : `${systemName}/${subStream}`;
+            return getOrCreate(name);
+          },
+        };
+        wrappers.set(systemName, wrapper);
+      }
+      return wrapper;
     },
     snapshot(): RngSnapshotEntry[] {
       return Array.from(streams, ([name, stream]) => ({ name, state: stream.getState() }));

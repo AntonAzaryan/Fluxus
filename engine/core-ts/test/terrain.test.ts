@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import * as fixed from '../src/math/fixed.js';
 import { addComponent, getField, setField, spawn } from '../src/ecs/world.js';
 import { query } from '../src/ecs/query.js';
+import { mathApi } from '../src/math/mathApi.js';
 import { loadScene } from '../src/sim/scene.js';
+import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
 import { createTerrainGrid, FLOOR_COMPONENT, terrainPrefab, type TerrainDef } from '../src/systems/terrain.js';
 import { LEVEL_OVERRIDE_COMPONENT } from '../src/types.js';
 
@@ -83,8 +85,8 @@ describe('cliff-геометрия (TERR-5)', () => {
 
   it('перепад без рампы даёт границу', () => {
     expect(edges('01', '..')).toEqual([
-      { from: { x: TILE, y: 0 }, to: { x: TILE, y: TILE } },
-      { from: { x: TILE, y: TILE }, to: { x: TILE, y: fixed.fromInt(4) } },
+      { from: { x: TILE, y: 0 }, to: { x: TILE, y: TILE }, levelNeg: 0, levelPos: 1 },
+      { from: { x: TILE, y: TILE }, to: { x: TILE, y: fixed.fromInt(4) }, levelNeg: 0, levelPos: 1 },
     ]);
   });
 
@@ -108,7 +110,30 @@ describe('cliff-геометрия (TERR-5)', () => {
       levels: ['0', '3'],
       flags: ['.', '.'],
     });
-    expect(grid.cliffs).toEqual([{ from: { x: 0, y: TILE }, to: { x: TILE, y: TILE } }]);
+    expect(grid.cliffs).toEqual([
+      { from: { x: 0, y: TILE }, to: { x: TILE, y: TILE }, levelNeg: 0, levelPos: 3 },
+    ]);
+  });
+
+  it('отрезок несёт уровни обеих сторон в обеих ориентациях (TERR-5, PHYS-11)', () => {
+    // Вертикальные рёбра: слева уровень 2, справа 0 — `levelNeg` берёт сторону
+    // меньшей координаты по нормали, а не меньший из уровней.
+    expect(edges('20', '..')).toEqual([
+      { from: { x: TILE, y: 0 }, to: { x: TILE, y: TILE }, levelNeg: 2, levelPos: 0 },
+      { from: { x: TILE, y: TILE }, to: { x: TILE, y: fixed.fromInt(4) }, levelNeg: 2, levelPos: 0 },
+    ]);
+    // Горизонтальные рёбра: сверху 0, снизу 2.
+    const grid = createTerrainGrid({
+      width: 2,
+      height: 2,
+      tileSize: TILE,
+      levels: ['00', '22'],
+      flags: ['..', '..'],
+    });
+    expect(grid.cliffs).toEqual([
+      { from: { x: 0, y: TILE }, to: { x: TILE, y: TILE }, levelNeg: 0, levelPos: 2 },
+      { from: { x: TILE, y: TILE }, to: { x: fixed.fromInt(4), y: TILE }, levelNeg: 0, levelPos: 2 },
+    ]);
   });
 });
 
@@ -175,5 +200,78 @@ describe('карта пола (TERR-6)', () => {
     const { world } = scene(def);
     const [floorEntity] = query(world, { all: [FLOOR_COMPONENT] });
     expect(getField(world, floorEntity!, FLOOR_COMPONENT, 'w0')).toBe(0b11110111);
+  });
+
+  it('восстановление пола — та же мутация через Command Buffer', () => {
+    const { world, terrain, systems } = scene(def);
+    const [floorEntity] = query(world, { all: [FLOOR_COMPONENT] });
+    // Клетка (3, 0) — дыра из ассета (`_`): пол в ней не снимали, а ставят впервые.
+    const hole = 0 * 4 + 3;
+    expect(terrain!.hasFloorAt(at(3, 0))).toBe(false);
+
+    let restore = false;
+    systems.register({
+      name: 'RestoreFloor',
+      order: 1,
+      run: (ctx) => {
+        if (!restore) return;
+        const word = ctx.get(floorEntity!, FLOOR_COMPONENT, 'w0');
+        ctx.commands.setField(floorEntity!, FLOOR_COMPONENT, 'w0', word | (1 << hole));
+      },
+    });
+    const sim: Simulation = { systems, worldSeed: 1, math: mathApi, terrain: terrain! };
+    const state = initialState(world, 1);
+    tick(sim, state);
+    const snapshot = takeSnapshot(state);
+
+    restore = true;
+    const result = tick(sim, state);
+    expect(terrain!.hasFloorAt(at(3, 0))).toBe(true);
+    // Уровни не тронуты: восстановление — мутация пола, а не рельефа (TERR-6).
+    expect(terrain!.levelAt(at(3, 0))).toBe(2);
+    // Установка бита участвует в dirty-дельте наравне со снятием.
+    expect([...result.changes.changedEntities(FLOOR_COMPONENT)]).toContain(floorEntity);
+
+    restore = false;
+    restoreSnapshot(state, snapshot);
+    expect(terrain!.hasFloorAt(at(3, 0))).toBe(false);
+  });
+});
+
+describe('опорная область (ARENA-5, hasFloorWithin)', () => {
+  const F = fixed.fromFloat;
+  const point = (x: number, y: number) => ({ x: F(x), y: F(y) });
+  // Дыра — клетка (3, 0): x ∈ [6, 8), y ∈ [0, 2) при tileSize = 2.
+
+  it('круг целиком над дырой — пола нет, целиком на полу — есть', () => {
+    const { terrain } = scene(def);
+    expect(terrain!.hasFloorWithin(point(7, 1), F(0.5))).toBe(false);
+    expect(terrain!.hasFloorWithin(point(5, 1), F(0.5))).toBe(true);
+  });
+
+  it('круг краем достаёт клетку с полом', () => {
+    const { terrain } = scene(def);
+    // Центр в дыре, но до клетки (2, 0) с полом 0.25 < 0.5.
+    expect(terrain!.hasFloorWithin(point(6.25, 1), F(0.5))).toBe(true);
+  });
+
+  it('касание границы клетки с полом — опора есть (включительно)', () => {
+    const { terrain } = scene(def);
+    expect(terrain!.hasFloorWithin(point(6.5, 1), F(0.5))).toBe(true);
+    expect(terrain!.hasFloorWithin(point(6.6, 1), F(0.5))).toBe(false);
+  });
+
+  it('нулевой радиус тождествен hasFloorAt', () => {
+    const { terrain } = scene(def);
+    expect(terrain!.hasFloorWithin(point(7, 1), 0)).toBe(terrain!.hasFloorAt(point(7, 1)));
+    expect(terrain!.hasFloorWithin(point(5, 1), 0)).toBe(terrain!.hasFloorAt(point(5, 1)));
+  });
+
+  it('круг за краем сетки отвечает по ближайшей клетке (TERR-4)', () => {
+    const { terrain } = scene(def);
+    // Далеко справа от ряда 1 — ближайшая клетка (3, 1), пол есть.
+    expect(terrain!.hasFloorWithin(point(100, 3), fixed.fromInt(1))).toBe(true);
+    // Далеко справа от ряда 0 — ближайшая клетка (3, 0), дыра.
+    expect(terrain!.hasFloorWithin(point(100, 1), fixed.fromInt(1))).toBe(false);
   });
 });

@@ -23,13 +23,16 @@ import {
   hasComponent,
   isAlive,
 } from '../ecs/world.js';
+import { beginSystem, countQuery, endSystem, withDiagnostics } from '../debug.js';
 import {
   TIME_SCALE_COMPONENT,
   type ArenaApi,
   type ChangeSet,
+  type DiagnosticsSink,
   type InputFrame,
   type MathApi,
   type ModifierRegistry,
+  type NavigationApi,
   type PhysicsApi,
   type SimulationState,
   type Snapshot,
@@ -49,6 +52,13 @@ export interface Simulation {
   /** Опциональна на уровне ядра: без неё тик отрабатывает штатно (DI-3). */
   readonly physics?: PhysicsApi;
   /**
+   * Поиск пути (NAV-1). Опционален и для этой игры (DI-4): управление игроками
+   * прямое, а крипов и NPC в MVP нет. Живёт здесь по той же причине, что и
+   * террейн: навигационные данные производны от иммутабельной карты уровней и
+   * в снапшот не входят (NAV-3).
+   */
+  readonly navigation?: NavigationApi;
+  /**
    * Террейн сцены (TERR-4). Живёт здесь, а не в `SimulationState`: карта
    * уровней иммутабельна и в снапшот не входит (TERR-6).
    */
@@ -61,6 +71,13 @@ export interface Simulation {
    * содержимое — обычные компоненты, которые снапшотятся сами.
    */
   readonly modifiers?: ModifierRegistry;
+  /**
+   * Приёмник диагностики (DIAG-1). Опционален и инертен (DI-5): его наличие
+   * MUST NOT менять результат тика. Живёт здесь, а не в `SimulationState`,
+   * именно поэтому: состояние копируется в снапшот и восстанавливается
+   * перемоткой, зависимость сборки — нет.
+   */
+  readonly diagnostics?: DiagnosticsSink;
 }
 
 export function initialState(world: WorldState, worldSeed: number): SimulationState {
@@ -107,40 +124,75 @@ export function advance(
   inputs: readonly InputFrame[],
   isReplay: boolean,
 ): TickResult {
-  const world = state.world;
   state.tick++;
+  // Контекст диагностики устанавливается на время одного тика и снимается
+  // после (DIAG-1). Без sink'а тело зовётся напрямую — выключенная
+  // диагностика стоит одного сравнения на тик.
+  return withDiagnostics(sim.diagnostics, state.tick, () => runSystems(sim, state, inputs, isReplay));
+}
+
+function runSystems(
+  sim: Simulation,
+  state: SimulationState,
+  inputs: readonly InputFrame[],
+  isReplay: boolean,
+): TickResult {
+  const world = state.world;
 
   state.events.clear();
   clearDirty(world);
   const commands = createCommandBuffer(world);
 
+  // Контекст собирается один раз на тик, а не на каждую систему: между
+  // системами меняется только `rng` (его назначает цикл ниже), остальное
+  // неизменно весь тик. Иначе каждый тик стоил бы по объекту с дюжиной
+  // замыканий на систему.
+  const ctx: Omit<SystemContext, 'rng'> & { rng?: SystemContext['rng'] } = {
+    tick: state.tick,
+    query: (spec) => {
+      const matched = runQuery(world, spec);
+      // Пустой отбор — самый частый отказ JSON-системы, и без счётчика он
+      // неотличим от удалённой системы (DIAG-3). Замыкание одно на тик, как и
+      // весь контекст: счётчик пишется в контекст диагностики, не сюда.
+      countQuery(matched.length);
+      return matched;
+    },
+    get: (entity, component, field) => getField(world, entity, component, field),
+    has: (entity, component) => hasComponent(world, entity, component),
+    isAlive: (entity) => isAlive(world, entity),
+    commands,
+    events: state.events,
+    math: sim.math,
+    ...(sim.physics !== undefined ? { physics: sim.physics } : {}),
+    ...(sim.navigation !== undefined ? { navigation: sim.navigation } : {}),
+    ...(sim.terrain !== undefined ? { terrain: sim.terrain } : {}),
+    ...(sim.arena !== undefined ? { arena: sim.arena } : {}),
+    ...(sim.modifiers !== undefined ? { modifiers: sim.modifiers } : {}),
+    inputs,
+    // TIME-3: множитель берётся из уже сведённого `TimeScale.value`; сведение
+    // списка источников — работа `TimeScaleSystem` (TIME-7), не тика.
+    getEffectiveDelta: (entity, globalDelta) =>
+      hasComponent(world, entity, TIME_SCALE_COMPONENT)
+        ? sim.math.mul(globalDelta, getField(world, entity, TIME_SCALE_COMPONENT, 'value'))
+        : globalDelta,
+  };
+
   for (const system of sim.systems.ordered()) {
-    const ctx: SystemContext = {
-      tick: state.tick,
-      query: (spec) => runQuery(world, spec),
-      get: (entity, component, field) => getField(world, entity, component, field),
-      has: (entity, component) => hasComponent(world, entity, component),
-      isAlive: (entity) => isAlive(world, entity),
-      commands,
-      events: state.events,
-      rng: state.rng.forSystem(system.name),
-      math: sim.math,
-      ...(sim.physics !== undefined ? { physics: sim.physics } : {}),
-      ...(sim.terrain !== undefined ? { terrain: sim.terrain } : {}),
-      ...(sim.arena !== undefined ? { arena: sim.arena } : {}),
-      ...(sim.modifiers !== undefined ? { modifiers: sim.modifiers } : {}),
-      inputs,
-      // TIME-3: множитель берётся из уже сведённого `TimeScale.value`; сведение
-      // списка источников — работа `TimeScaleSystem` (TIME-7), не тика.
-      getEffectiveDelta: (entity, globalDelta) =>
-        hasComponent(world, entity, TIME_SCALE_COMPONENT)
-          ? sim.math.mul(globalDelta, getField(world, entity, TIME_SCALE_COMPONENT, 'value'))
-          : globalDelta,
-    };
-    system.run(ctx);
-    // Flush в конце каждой системы, а не тика (CMD-2): следующая по order
-    // система обязана видеть спавны и удаления предыдущей на этом же тике.
-    commands.flush();
+    ctx.rng = state.rng.forSystem(system.name);
+    // Имя текущей системы проставляется здесь: так атрибуция трейса (DIAG-5)
+    // достаётся без изменения интерфейса `CommandBuffer`, которым пользуются
+    // все системы.
+    beginSystem(system.name);
+    try {
+      system.run(ctx as SystemContext);
+      // Flush в конце каждой системы, а не тика (CMD-2): следующая по order
+      // система обязана видеть спавны и удаления предыдущей на этом же тике.
+      commands.flush();
+    } finally {
+      // В `finally`, чтобы граница упавшей системы попала в трейс: по нему и
+      // видно, на какой системе оборвался тик (DIAG-1).
+      endSystem();
+    }
   }
 
   return result(state, isReplay);

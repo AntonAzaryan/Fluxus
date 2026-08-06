@@ -1,7 +1,13 @@
 // базис
 export * from './types.js';
-export { DEBUG, assert, assertInvariant, setAssertSink } from './debug.js';
-export type { AssertSink } from './debug.js';
+/**
+ * `withDiagnostics` — область действия приёмника (DIAG-1): он устанавливается
+ * на время переданного тела и снимается после. Прежний `setAssertSink`
+ * удалён: модульная переменная делала приёмник общим на процесс, и две
+ * симуляции рядом писали бы в один (DI-1, DI-5).
+ */
+export { DEBUG, assert, assertInvariant, withDiagnostics } from './debug.js';
+export type { DiagnosticsContext } from './debug.js';
 
 // math — детерминированная арифметика
 export * as fixed from './math/fixed.js';
@@ -125,6 +131,15 @@ export {
 export type { VisibilityOptions } from './systems/visibility.js';
 export { InputSystem, INPUT_FIELDS } from './systems/inputSystem.js';
 export type { InputSystemOptions } from './systems/inputSystem.js';
+export {
+  LocomotionSystem,
+  LOCOMOTION_NORMAL,
+  LOCOMOTION_DODGE,
+  LOCOMOTION_ROLL,
+  LOCOMOTION_AIRBORNE,
+  LOCOMOTION_WINDOW,
+} from './systems/locomotion.js';
+export type { LocomotionOptions } from './systems/locomotion.js';
 export { modifierList, requireModifierList, DEFAULT_MODIFIER_SLOTS } from './systems/modifiers.js';
 export {
   TimeScaleSystem,
@@ -157,5 +172,9 @@ export { loadScene } from './sim/scene.js';
 export type { Scene, SceneDef } from './sim/scene.js';
 export { jsonSerializer, prettyJsonSerializer, snapshotToPlain, snapshotFromPlain } from './sim/serialization.js';
 export type { PlainSnapshot, Serializer } from './sim/serialization.js';
+export { createJsonlSink, traceLine } from './sim/trace.js';
 export { runScenario, runScenarioBytes } from './sim/scenario.js';
 export type { RunOutput, ScenarioDef, ScenarioSpawn, TickRecord } from './sim/scenario.js';
+export { worldInitHash, worldInitForm } from './sim/worldInit.js';
+export type { WorldInitParts } from './sim/worldInit.js';
+export { contentPackHash, contentPackForm } from './sim/contentPack.js';

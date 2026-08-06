@@ -14,9 +14,10 @@ import {
   type ArenaDef,
 } from '../src/systems/arena.js';
 import { FLOOR_COMPONENT, type TerrainDef } from '../src/systems/terrain.js';
+import { createPhysicsApi, PhysicsWorld, SHAPE_CIRCLE } from '../src/systems/physics.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
-import { LEVEL_OVERRIDE_COMPONENT, type GameEvent, type Vec2 } from '../src/types.js';
+import { FIXED_ONE, LEVEL_OVERRIDE_COMPONENT, type GameEvent, type Vec2 } from '../src/types.js';
 
 const F = fixed.fromFloat;
 const at = (x: number, y: number): Vec2 => ({ x: F(x), y: F(y) });
@@ -236,5 +237,133 @@ describe('провал сквозь пол (ARENA-5)', () => {
     h.step();
     h.move(projectile, 0.5, 4.5);
     expect(types(h.step())).toEqual(['LeftArena']);
+  });
+});
+
+/** Сцена с коллайдерами: опорная область — круг support × inradius (ARENA-5). */
+const SUPPORT_SCENE: SceneDef = {
+  components: [
+    { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+    { name: LEVEL_OVERRIDE_COMPONENT, fields: { level: 'i32' } },
+    { name: 'Collider', fields: { shape: 'i32', radius: 'fixed', halfX: 'fixed', halfY: 'fixed' } },
+    ...ARENA_COMPONENTS,
+  ],
+  prefabs: [
+    // Опора — половина коллайдера-круга радиуса 0.6: радиус области 0.3.
+    {
+      name: 'Heavy',
+      components: {
+        Position: { x: 0, y: 0 },
+        Collider: { shape: SHAPE_CIRCLE, radius: F(0.6), halfX: F(0.6), halfY: F(0.6) },
+        [ARENA_STATE_COMPONENT]: { support: F(0.5) },
+      },
+    },
+    // Дефолтный support = 0: коллайдер есть, но проверка — по центру.
+    {
+      name: 'Walker',
+      components: {
+        Position: { x: 0, y: 0 },
+        Collider: { shape: SHAPE_CIRCLE, radius: F(0.6), halfX: F(0.6), halfY: F(0.6) },
+        [ARENA_STATE_COMPONENT]: {},
+      },
+    },
+    // Тот же коэффициент без коллайдера: области не из чего строиться.
+    {
+      name: 'Ghost',
+      components: { Position: { x: 0, y: 0 }, [ARENA_STATE_COMPONENT]: { support: F(0.5) } },
+    },
+    arenaPrefab(ARENA),
+  ],
+  terrain: TERRAIN,
+};
+
+function supportHarness(withPhysics = true) {
+  const { world, terrain, systems } = loadScene(SUPPORT_SCENE);
+  const arena = createArenaApi(world, ARENA, spawn(world, ARENA_PREFAB));
+  systems.register(new ArenaSystem());
+  const physics = createPhysicsApi(world, new PhysicsWorld([]));
+  const sim: Simulation = {
+    systems,
+    worldSeed: 1,
+    math: mathApi,
+    terrain: terrain!,
+    arena,
+    ...(withPhysics ? { physics } : {}),
+  };
+  const state = initialState(world, 1);
+  return {
+    place: (prefab: string, x: number, y: number) =>
+      spawn(world, prefab, { Position: { x: F(x), y: F(y) } }),
+    move: (entity: number, x: number, y: number) => {
+      setField(world, entity, 'Position', 'x', F(x));
+      setField(world, entity, 'Position', 'y', F(y));
+    },
+    step: (): readonly GameEvent[] => [...tick(sim, state).events],
+  };
+}
+
+describe('опорная область (ARENA-5, support)', () => {
+  // Дыра из ассета — клетка (5, 4): x ∈ [5, 6), y ∈ [4, 5).
+
+  it('нависание краем над дырой — не провал, пока область пересекает пол', () => {
+    const h = supportHarness();
+    // Центр в дыре, но до клетки (4, 4) с полом 0.2 < 0.3.
+    h.place('Heavy', 5.2, 4.5);
+    expect(types(h.step())).toEqual([]);
+    expect(types(h.step())).toEqual([]);
+  });
+
+  it('полная потеря опоры даёт событие', () => {
+    const h = supportHarness();
+    const heavy = h.place('Heavy', 5.2, 4.5);
+    h.step();
+    // До любой клетки с полом 0.5 > 0.3: круг целиком в дыре.
+    h.move(heavy, 5.5, 4.5);
+    expect(types(h.step())).toEqual(['FellThroughFloor']);
+  });
+
+  it('нулевой коэффициент — прежняя проверка по центру', () => {
+    const h = supportHarness();
+    h.place('Walker', 5.2, 4.5);
+    expect(types(h.step())).toEqual(['FellThroughFloor']);
+  });
+
+  it('ненулевой коэффициент без коллайдера — по центру: уменьшать нечего', () => {
+    const h = supportHarness();
+    h.place('Ghost', 5.2, 4.5);
+    expect(types(h.step())).toEqual(['FellThroughFloor']);
+  });
+
+  it('сборка без Physics API тикает штатно и вырождается в центр (DI-3)', () => {
+    const h = supportHarness(false);
+    h.place('Heavy', 5.2, 4.5);
+    expect(types(h.step())).toEqual(['FellThroughFloor']);
+  });
+
+  it('перенос через дыру за один тик провала не даёт', () => {
+    const h = supportHarness();
+    const heavy = h.place('Heavy', 4.5, 4.5);
+    h.step();
+    // Дыра осталась строго между позициями тиков: траектория не свипается.
+    h.move(heavy, 6.5, 4.5);
+    expect(types(h.step())).toEqual([]);
+  });
+
+  it('support вне [0, 1] отвергается загрузкой (ARENA-3)', () => {
+    const withSupport = (support: number) =>
+      loadScene({
+        ...SUPPORT_SCENE,
+        prefabs: [
+          {
+            name: 'Bad',
+            components: { Position: { x: 0, y: 0 }, [ARENA_STATE_COMPONENT]: { support } },
+          },
+        ],
+      });
+    expect(() => withSupport(F(1.5))).toThrow(/ARENA-3/);
+    expect(() => withSupport(-1)).toThrow(/ARENA-3/);
+    // Сырое дробное вместо Q16.16 — та же ошибка контента.
+    expect(() => withSupport(0.5)).toThrow(/ARENA-3/);
+    expect(() => withSupport(FIXED_ONE)).not.toThrow();
   });
 });

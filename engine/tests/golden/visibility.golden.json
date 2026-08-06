@@ -1,6 +1,7 @@
 {
   "scenario": "visibility",
   "seed": 20260813,
+  "worldInitHash": "38275c01",
   "ticks": [
     {
       "tick": 0,
@@ -26,6 +27,16 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               0,
@@ -35,6 +46,16 @@
               0,
               0,
               65536
+            ],
+            "hitMask": [
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0
             ],
             "radius": [
               0,
@@ -179,6 +200,16 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               0,
@@ -188,6 +219,16 @@
               0,
               0,
               65536
+            ],
+            "hitMask": [
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0
             ],
             "radius": [
               0,
@@ -332,6 +373,16 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               0,
@@ -341,6 +392,16 @@
               0,
               0,
               65536
+            ],
+            "hitMask": [
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0
             ],
             "radius": [
               0,
@@ -485,6 +546,16 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               0,
@@ -494,6 +565,16 @@
               0,
               0,
               65536
+            ],
+            "hitMask": [
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0
             ],
             "radius": [
               0,
@@ -638,6 +719,16 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               0,
@@ -647,6 +738,16 @@
               0,
               0,
               65536
+            ],
+            "hitMask": [
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0
             ],
             "radius": [
               0,

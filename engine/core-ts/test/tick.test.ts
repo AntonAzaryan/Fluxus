@@ -12,9 +12,11 @@ import {
 import { createWorld, getField, listAlive, spawn } from '../src/ecs/world.js';
 import type {
   ComponentSchema,
+  NavigationApi,
   PhysicsApi,
   SimulationState,
   System,
+  SystemContext,
   TickObserver,
   TickResult,
 } from '../src/types.js';
@@ -31,10 +33,20 @@ const PREFABS: PrefabDef[] = [
   { name: 'mover', components: { Position: { x: 0, y: 0 }, Velocity: { x: 65536, y: 0 } } },
 ];
 
-function makeSim(systems: System[], physics?: PhysicsApi): Simulation {
+function makeSim(
+  systems: System[],
+  physics?: PhysicsApi,
+  navigation?: NavigationApi,
+): Simulation {
   const registry = new SystemRegistry();
   for (const system of systems) registry.register(system);
-  return { systems: registry, worldSeed: WORLD_SEED, math: mathApi, ...(physics ? { physics } : {}) };
+  return {
+    systems: registry,
+    worldSeed: WORLD_SEED,
+    math: mathApi,
+    ...(physics ? { physics } : {}),
+    ...(navigation ? { navigation } : {}),
+  };
 }
 
 function freshState(): SimulationState {
@@ -212,7 +224,7 @@ describe('детерминизм прогона (DET-1)', () => {
   });
 });
 
-describe('DI (DI-3)', () => {
+describe('DI (DI-3, DI-4)', () => {
   it('ядро тикает без Physics API', () => {
     const checker: System = {
       name: 'Checker',
@@ -223,13 +235,39 @@ describe('DI (DI-3)', () => {
   });
 
   it('переданный Physics API доходит до системы', () => {
-    const physics: PhysicsApi = { raycast: () => null };
+    const physics: PhysicsApi = { raycast: () => null, inradiusOf: () => undefined };
     const checker: System = {
       name: 'Checker',
       order: 10,
       run: (ctx) => expect(ctx.physics).toBe(physics),
     };
     tick(makeSim([checker], physics), freshState());
+  });
+
+  it('ядро тикает без Navigation API, и поля navigation в контексте нет', () => {
+    let seen: SystemContext | undefined;
+    const checker: System = {
+      name: 'Checker',
+      order: 10,
+      run: (ctx) => void (seen = ctx),
+    };
+    expect(() => tick(makeSim([checker]), freshState())).not.toThrow();
+    // Отсутствует, а не `undefined`: поле есть ровно при собранной зависимости (SYS-5).
+    expect(Object.hasOwn(seen!, 'navigation')).toBe(false);
+  });
+
+  it('переданный Navigation API доходит до системы (NAV-1)', () => {
+    const path = { status: 'found', waypoints: [{ x: 65536, y: 0 }] } as const;
+    const navigation: NavigationApi = { findPath: () => path };
+    const checker: System = {
+      name: 'Checker',
+      order: 10,
+      run: (ctx) => {
+        expect(ctx.navigation).toBe(navigation);
+        expect(ctx.navigation!.findPath({ x: 0, y: 0 }, { x: 65536, y: 0 })).toBe(path);
+      },
+    };
+    tick(makeSim([checker], undefined, navigation), freshState());
   });
 });
 

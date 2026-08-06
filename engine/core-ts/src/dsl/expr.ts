@@ -18,7 +18,10 @@ export type ExprValue = Fixed | boolean | Vec2;
  * `commands` в выражение не попадает, а шина — только read-only-частью, без
  * `emit`, значит писать выражению нечем.
  */
-export type ExprWorld = Pick<SystemContext, 'tick' | 'get' | 'has' | 'isAlive' | 'math'> & {
+export type ExprWorld = Pick<
+  SystemContext,
+  'tick' | 'get' | 'has' | 'isAlive' | 'math' | 'terrain'
+> & {
   /** Шина текущего тика (EVT-2); читается оператором `eventField`. */
   readonly events: ReadonlyEventLog;
 };
@@ -162,6 +165,19 @@ const OPS: Record<string, OpFn> = {
     return w.isAlive(eid(evaluate(args[0]!, w, v), 'isAlive'));
   },
   /**
+   * Наличие пола под мировой позицией (TERR-8). Тотален за краем сетки, как
+   * `levelAt` (TERR-4); читает мир, а не отложенные команды, — как
+   * `getComponent` и по той же причине (QUERY-3): до flush мир не менялся.
+   * Сцена без террейна — ошибка, а не `false`: отсутствие арены и отсутствие
+   * пола различимы, и второе значение спрятало бы ошибку сборки сцены.
+   */
+  hasFloorAt: (args, w, v) => {
+    arity('hasFloorAt', args, 1);
+    const position = vec(evaluate(args[0]!, w, v), 'hasFloorAt');
+    if (w.terrain === undefined) throw new Error('оператор "hasFloorAt": сцена без террейна');
+    return w.terrain.hasFloorAt(position);
+  },
+  /**
    * Поле данных события, на которое ссылается имя, связанное `forEachEvent`
    * (ACT-1). Ссылка — индекс в шине тика, как `EntityId` — непрозрачное число.
    *
@@ -192,6 +208,9 @@ const OPS: Record<string, OpFn> = {
   max: num2('max', (m, a, b) => m.max(a, b)),
   abs: num1('abs', (m, a) => m.abs(a)),
   sqrt: num1('sqrt', (m, a) => m.sqrt(a)),
+  /** Тригонометрия (FP-7): угол — Q16.16-доля оборота, 16384 = 90° (EXPR-2). */
+  sin: num1('sin', (m, a) => m.sin(a)),
+  cos: num1('cos', (m, a) => m.cos(a)),
   clamp: (args, w, v) => {
     arity('clamp', args, 3);
     return w.math.clamp(

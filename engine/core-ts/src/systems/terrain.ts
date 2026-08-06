@@ -7,7 +7,7 @@
  * карта пола — обычный компонент на singleton-сущности (TERR-6), поэтому она
  * снапшотится и откатывается без нового механизма.
  */
-import { INT32_MAX } from '../math/fixed.js';
+import { INT32_MAX, distSqLe } from '../math/fixed.js';
 import { getField, hasComponent, type PrefabDef } from '../ecs/world.js';
 import {
   LEVEL_OVERRIDE_COMPONENT,
@@ -15,6 +15,8 @@ import {
   type CliffEdge,
   type ComponentSchema,
   type EntityId,
+  type Fixed,
+  type SystemContext,
   type TerrainApi,
   type TerrainGrid,
   type Vec2,
@@ -77,19 +79,31 @@ export function createTerrainGrid(def: TerrainDef): TerrainGrid {
   return { ...grid, cliffs: buildCliffs(grid) };
 }
 
+/**
+ * `rows` объявлен `unknown`, а не `readonly string[]`: карта приезжает из
+ * ассета сцены, то есть из JSON, и объявленный тип был бы обещанием, которого
+ * никто не давал. Проверки ниже — единственное, что превращает её в массив
+ * строк, поэтому и ряд проверяется на строковость: ряд-число дальше по коду
+ * дал бы `undefined` из `indexOf` и сообщение про алфавит вместо сообщения про
+ * форму карты.
+ */
 function readMap(
-  rows: readonly string[],
+  rows: unknown,
   width: number,
   height: number,
   what: string,
   alphabet: string,
 ): Uint8Array {
   if (!Array.isArray(rows) || rows.length !== height) {
-    throw new Error(`TERR-2: карта "${what}" — ${rows?.length ?? 0} рядов вместо ${height}`);
+    const got = Array.isArray(rows) ? rows.length : 0;
+    throw new Error(`TERR-2: карта "${what}" — ${got} рядов вместо ${height}`);
   }
   const cells = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) {
-    const row = rows[y]!;
+    const row: unknown = rows[y];
+    if (typeof row !== 'string') {
+      throw new Error(`TERR-2: карта "${what}", ряд ${y} — не строка`);
+    }
     if (row.length !== width) {
       throw new Error(`TERR-2: карта "${what}", ряд ${y} — ${row.length} клеток вместо ${width}`);
     }
@@ -159,16 +173,28 @@ function buildCliffs(grid: TerrainGrid): CliffEdge[] {
   };
 
   // Порядок обхода — построчный, сосед справа перед соседом снизу (DET-6).
+  // Уровни сторон пишутся в отрезок здесь же (TERR-5): `levelNeg` — клетка с
+  // меньшей координатой по нормали ребра, `levelPos` — с большей (PHYS-11).
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = y * width + x;
       if (x + 1 < width && !passable(i, i + 1)) {
         const edgeX = (x + 1) * tileSize;
-        edges.push({ from: { x: edgeX, y: y * tileSize }, to: { x: edgeX, y: (y + 1) * tileSize } });
+        edges.push({
+          from: { x: edgeX, y: y * tileSize },
+          to: { x: edgeX, y: (y + 1) * tileSize },
+          levelNeg: levels[i]!,
+          levelPos: levels[i + 1]!,
+        });
       }
       if (y + 1 < height && !passable(i, i + width)) {
         const edgeY = (y + 1) * tileSize;
-        edges.push({ from: { x: x * tileSize, y: edgeY }, to: { x: (x + 1) * tileSize, y: edgeY } });
+        edges.push({
+          from: { x: x * tileSize, y: edgeY },
+          to: { x: (x + 1) * tileSize, y: edgeY },
+          levelNeg: levels[i]!,
+          levelPos: levels[i + width]!,
+        });
       }
     }
   }
@@ -226,6 +252,88 @@ export function terrainPrefab(grid: TerrainGrid): PrefabDef {
   return { name: TERRAIN_PREFAB, components: { [FLOOR_COMPONENT]: values }, tags: ['terrain'] };
 }
 
+/**
+ * Снятие пола в области вокруг мировой позиции (TERR-8). Механизм ядра: всё,
+ * что знает про слова и биты карты, живёт здесь — в языке систем ни битовой
+ * арифметики, ни вычисляемых имён полей нет и быть не должно (EXPR-2).
+ *
+ * Область — круг по ЦЕНТРАМ клеток, тем же правилом, что фильтр `withinRadius`
+ * Query API: `distSqLe` переиспользуется, а не повторяется, иначе «в радиусе»
+ * разошлось бы между запросом и действием при первой же правке. Без радиуса
+ * берётся клетка под точкой (`cellAt`, тотальный по TERR-4) — а не круг
+ * нулевого радиуса: тот не накрыл бы центр клетки, не совпади точка с ним.
+ */
+export function carveFloor(ctx: SystemContext, at: Vec2, radius?: Fixed): void {
+  const terrain = ctx.terrain;
+  if (terrain === undefined) throw new Error('TERR-8: снятие пола в сцене без террейна');
+  if (radius !== undefined && radius < 0) {
+    throw new Error(`TERR-8: радиус снятия пола не может быть отрицательным, получено ${radius}`);
+  }
+  const { grid, floorEntity } = terrain;
+  const total = wordCount(grid);
+
+  /**
+   * Слово карты → пара «как было, как стало». Исходное значение читается через
+   * буфер (CMD-5): мир до flush снятий этого тика не видит, и второе снятие,
+   * прочитав его напрямую, вернуло бы биты, погашенные первым.
+   *
+   * ponytail: карта живёт вызов, а не тик. Действие срабатывает по
+   * геймплейному событию, поэтому в дисциплину аллокаций горячего пути пока не
+   * попадает; переиспользуемый буфер — когда профиль покажет систему, зовущую
+   * снятие на каждую сущность запроса.
+   */
+  const words = new Map<number, { readonly before: number; after: number }>();
+  const clear = (cell: number): void => {
+    const index = cell >>> 5;
+    let word = words.get(index);
+    if (word === undefined) {
+      const field = wordName(index, total);
+      const before =
+        ctx.commands.peekField(floorEntity, FLOOR_COMPONENT, field) ??
+        ctx.get(floorEntity, FLOOR_COMPONENT, field);
+      word = { before, after: before };
+      words.set(index, word);
+    }
+    word.after &= ~(1 << (cell & 31));
+  };
+
+  if (radius === undefined) {
+    clear(cellAt(grid, at));
+  } else {
+    const { tileSize, width, height } = grid;
+    // Центр клетки при нечётном `tileSize` в Q16.16 не представим — сдвиг
+    // усекает вниз, и это часть нормы (TERR-8), а не округление на вкус.
+    const half = tileSize >> 1;
+    // Границы — заведомо надмножество с запасом в клетку: принадлежность решает
+    // точный целочисленный тест ниже. Поэтому конвенция деления отрицательных
+    // (floor у JS против усечения у Rust) на результат не влияет — надмножеством
+    // границы остаются при любой из них, а парность даёт `distSqLe`.
+    const lo = (v: number, max: number): number => clamp(Math.floor(v / tileSize) - 1, max);
+    const hi = (v: number, max: number): number => clamp(Math.floor(v / tileSize) + 1, max);
+    const xLo = lo(at.x - radius, width - 1);
+    const xHi = hi(at.x + radius, width - 1);
+    const yLo = lo(at.y - radius, height - 1);
+    const yHi = hi(at.y + radius, height - 1);
+    // Обход построчный — как нумерация клеток (TERR-6) и сборка обрывов (TERR-5).
+    for (let y = yLo; y <= yHi; y++) {
+      for (let x = xLo; x <= xHi; x++) {
+        const dx = x * tileSize + half - at.x;
+        const dy = y * tileSize + half - at.y;
+        if (distSqLe(dx, dy, radius)) clear(y * width + x);
+      }
+    }
+  }
+
+  // Команда — одна на слово и только на изменившееся: карта пола участвует в
+  // dirty-дельте (TERR-6), и запись прежнего значения объявила бы изменение,
+  // которого не было. Порядок — по возрастанию индекса слова (TERR-8).
+  for (const index of [...words.keys()].sort((a, b) => a - b)) {
+    const word = words.get(index)!;
+    if (word.after === word.before) continue;
+    ctx.commands.setField(floorEntity, FLOOR_COMPONENT, wordName(index, total), word.after);
+  }
+}
+
 // ------------------------------------------------------------------- запросы
 
 /**
@@ -240,8 +348,13 @@ export function createTerrainApi(
 ): TerrainApi {
   const levelAt = (position: Vec2): number => grid.levels[cellAt(grid, position)]!;
   const total = wordCount(grid);
+  const floorBit = (cell: number): boolean => {
+    const word = getField(world, floorEntity, FLOOR_COMPONENT, wordName(cell >>> 5, total));
+    return (word & (1 << (cell & 31))) !== 0;
+  };
   return {
     grid,
+    floorEntity,
     levelAt,
     /** ARENA-6: явный override приоритетнее производного значения. */
     levelOf: (entity) =>
@@ -251,10 +364,43 @@ export function createTerrainApi(
             x: getField(world, entity, POSITION_COMPONENT, 'x'),
             y: getField(world, entity, POSITION_COMPONENT, 'y'),
           }),
-    hasFloorAt: (position) => {
-      const cell = cellAt(grid, position);
-      const word = getField(world, floorEntity, FLOOR_COMPONENT, wordName(cell >>> 5, total));
-      return (word & (1 << (cell & 31))) !== 0;
+    hasFloorAt: (position) => floorBit(cellAt(grid, position)),
+    /**
+     * Опорная проверка (ARENA-5): пересекает ли круг хотя бы одну клетку с
+     * полом. Правило намеренно НЕ правило области снятия (TERR-8, круг по
+     * центрам клеток): для опоры оно давало бы «нет опоры» у маленькой
+     * сущности посреди клетки, чей центр вне её малого круга. Здесь —
+     * ближайшая точка прямоугольника клетки, включающее сравнение квадратов.
+     */
+    hasFloorWithin: (position, radius) => {
+      if (radius <= 0) return floorBit(cellAt(grid, position));
+      const { tileSize, width, height } = grid;
+      // Границы — надмножество с запасом в клетку, как в `carveFloor`:
+      // принадлежность решает точный тест ниже, поэтому конвенция деления
+      // отрицательных (floor у JS против усечения у Rust) роли не играет.
+      // Без замыканий-помощников: запрос зовётся на каждом тике для каждой
+      // сущности с ненулевой опорой — это горячий путь, а не действие.
+      const xLo = clamp(Math.floor((position.x - radius) / tileSize) - 1, width - 1);
+      const xHi = clamp(Math.floor((position.x + radius) / tileSize) + 1, width - 1);
+      const yLo = clamp(Math.floor((position.y - radius) / tileSize) - 1, height - 1);
+      const yHi = clamp(Math.floor((position.y + radius) / tileSize) + 1, height - 1);
+      // Обход построчный (TERR-6); на результат порядок не влияет — это
+      // проверка существования, и ранний выход детерминизма не трогает.
+      let sawCell = false;
+      for (let y = yLo; y <= yHi; y++) {
+        for (let x = xLo; x <= xHi; x++) {
+          const minX = x * tileSize;
+          const minY = y * tileSize;
+          const nx = position.x < minX ? minX : position.x > minX + tileSize ? minX + tileSize : position.x;
+          const ny = position.y < minY ? minY : position.y > minY + tileSize ? minY + tileSize : position.y;
+          if (!distSqLe(nx - position.x, ny - position.y, radius)) continue;
+          sawCell = true;
+          if (floorBit(y * width + x)) return true;
+        }
+      }
+      // Круг не задел ни одной клетки — сущность далеко за краем сетки.
+      // Отвечает ближайшая клетка (тотальность TERR-4): тик не падает.
+      return sawCell ? false : floorBit(cellAt(grid, position));
     },
   };
 }

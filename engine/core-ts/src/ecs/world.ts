@@ -60,8 +60,9 @@ interface WorldInternal {
    * per-entity-per-component: `changedEntities(component)` и сетевой дельте
    * нужен ровно этот срез (открытый вопрос 3 в architecture.md).
    *
-   * ponytail: Set на компонент, а не битовая маска по слотам. Замена — когда
-   * замеры покажут, что аллокации Set'ов заметны на реальной сцене.
+   * ponytail: Set на компонент, а не битовая маска по слотам. Set'ы
+   * переиспользуются между тиками (clearDirty чистит на месте, не пересоздаёт);
+   * замена на маску — когда замеры покажут, что заметен и сам обход Set'ов.
    */
   dirty: Map<string, Set<EntityId>>;
 }
@@ -85,7 +86,9 @@ function validateSchemas(schemas: readonly ComponentSchema[]): Map<string, Compo
     for (const [field, type] of Object.entries(schema.fields)) {
       if (type !== 'i32' && type !== 'fixed') {
         throw new Error(
-          `ECS-5: компонент "${schema.name}", поле "${field}": недопустимый тип "${type}" (только i32/fixed, DET-2)`,
+          // `String(type)`: после двух сравнений тип сузился до `never`, но
+          // значение пришло из JSON и в рантайме там что угодно.
+          `ECS-5: компонент "${schema.name}", поле "${field}": недопустимый тип "${String(type)}" (только i32/fixed, DET-2)`,
         );
       }
     }
@@ -179,9 +182,13 @@ function markAllDirty(internal: WorldInternal, entity: EntityId): void {
   }
 }
 
-/** Начало тика: прошлый срез изменений отдан наблюдателям и больше не нужен (OBS-3). */
+/**
+ * Начало тика: прошлый срез изменений отдан наблюдателям и больше не нужен
+ * (OBS-3). Set'ы чистятся на месте, а не `map.clear()`: пустые они остаются в
+ * карте и переиспользуются markDirty вместо аллокации новых на каждом тике.
+ */
 export function clearDirty(state: WorldState): void {
-  toInternal(state).dirty.clear();
+  for (const set of toInternal(state).dirty.values()) set.clear();
 }
 
 const NO_ENTITIES: ReadonlySet<EntityId> = new Set();
@@ -191,7 +198,10 @@ export function dirtyEntities(state: WorldState, component: string): ReadonlySet
 }
 
 export function dirtyIsEmpty(state: WorldState): boolean {
-  return toInternal(state).dirty.size === 0;
+  for (const set of toInternal(state).dirty.values()) {
+    if (set.size > 0) return false;
+  }
+  return true;
 }
 
 /**
@@ -347,7 +357,7 @@ export function copyWorldInto(dst: WorldState, src: WorldState): void {
   to.tags = new Map();
   for (const [index, set] of from.tags) to.tags.set(index, new Set(set));
   // Восстановление — изменение всего мира: срез дельты за него не отвечает.
-  to.dirty.clear();
+  clearDirty(dst);
 }
 
 /** Числовой id компонента — нужен Query для построения маски-фильтра. */
@@ -366,6 +376,15 @@ export function prefabOf(state: WorldState, prefab: string): PrefabDef | undefin
 
 export function componentMasks(state: WorldState): ComponentMasks {
   return toInternal(state).masks;
+}
+
+/**
+ * Живой EntityIndex мира — только для чтения в Query: прямой обход слотов не
+ * материализует промежуточный массив живых сущностей на каждый запрос. Как и
+ * `componentMasks`, из `index.ts` не публикуется (TICK-3).
+ */
+export function entityIndexOf(state: WorldState): EntityIndex {
+  return toInternal(state).entities;
 }
 
 /**

@@ -1,6 +1,7 @@
 {
   "scenario": "movement",
   "seed": 20260802,
+  "worldInitHash": "cd13cea3",
   "ticks": [
     {
       "tick": 0,

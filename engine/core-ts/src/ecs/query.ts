@@ -15,9 +15,9 @@
 import { distSqLe } from '../math/fixed.js';
 import type { QuerySpec, Vec2, WorldState } from '../types.js';
 import { POSITION_COMPONENT } from '../types.js';
-import { componentId, componentMasks, getField, hasTag, listAlive } from './world.js';
+import { componentId, componentMasks, entityIndexOf, getField, hasTag } from './world.js';
 import { buildQueryMask, matchesAll, matchesAny, matchesNone } from './componentMask.js';
-import { indexOf } from './entityIndex.js';
+import { makeEntityId } from './entityIndex.js';
 
 const EMPTY = new Float64Array(0);
 
@@ -44,15 +44,20 @@ export function query(state: WorldState, spec: QuerySpec): Float64Array {
   const notMaskRaw = spec.not ? maskOf(state, spec.not) : undefined;
   const notMask = notMaskRaw === 'unknown' ? undefined : notMaskRaw;
 
-  const candidates = listAlive(state);
-  const result = new Float64Array(candidates.length);
+  // Слоты обходятся напрямую, без материализации массива живых сущностей на
+  // каждый запрос (запросы зовутся системами каждый тик — это была бы лишняя
+  // аллокация размером в мир). Порядок QUERY-2 сохраняется по построению, а id
+  // упаковывается только для прошедших фильтр по маске.
+  const entities = entityIndexOf(state);
+  const result = new Float64Array(entities.aliveCount);
   let count = 0;
 
-  for (const entity of candidates) {
-    const index = indexOf(entity);
+  for (let index = 0; index < entities.nextIndex; index++) {
+    if (entities.alive[index] !== 1) continue;
     if (allMask && !matchesAll(masks, index, allMask)) continue;
     if (anyMask && !matchesAny(masks, index, anyMask)) continue;
     if (notMask && !matchesNone(masks, index, notMask)) continue;
+    const entity = makeEntityId(index, entities.generations[index] ?? 0);
     if (spec.withTag !== undefined && !hasTag(state, entity, spec.withTag)) continue;
     if (spec.withinRadius && !withinRadius(state, entity, spec.withinRadius.center, spec.withinRadius.radius)) {
       continue;
@@ -61,7 +66,7 @@ export function query(state: WorldState, spec: QuerySpec): Float64Array {
     count++;
   }
 
-  return count === candidates.length ? result : result.subarray(0, count);
+  return count === result.length ? result : result.subarray(0, count);
 }
 
 function withinRadius(state: WorldState, entity: number, center: Vec2, radius: number): boolean {
