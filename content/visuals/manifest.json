@@ -15,13 +15,37 @@
         }
       },
       "animations": {
-        "states": { "idle": "Stand", "move": "Walk" },
-        "events": { "CastFireball": "Spell Slam", "EntityDied": "Death" }
+        "states": {
+          "idle": "Stand",
+          "move": "Walk"
+        },
+        "events": {
+          "CastFireball": "Spell Slam",
+          "EntityDied": "Death"
+        }
       },
       "boneControls": {
-        "torso": { "bone": "Bone_Chest", "maxYawDeg": 72, "smoothing": 18 },
-        "head": { "bone": "Bone_Head", "maxYawDeg": 40, "smoothing": 20 }
+        "torso": {
+          "bone": "Bone_Chest",
+          "maxYawDeg": 72,
+          "smoothing": 18
+        },
+        "head": {
+          "bone": "Bone_Head",
+          "maxYawDeg": 40,
+          "smoothing": 20
+        }
+      },
+      "surfaceAlign": {
+        "factor": 1,
+        "maxAngleDeg": 30
       }
     }
+  },
+  "surfaceAlign": {
+    "factor": 1
+  },
+  "terrain": {
+    "curvatureMap": "visuals/arena-curvature.json"
   }
 }

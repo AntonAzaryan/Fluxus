@@ -18,7 +18,7 @@
  * `string & {}` — идиома, которая оставляет подсказки по литералам, не закрывая
  * множество.
  */
-export type KnownAssetKind = 'model' | 'texture' | 'manifest';
+export type KnownAssetKind = 'model' | 'texture' | 'manifest' | 'terrain-curvature';
 // Подавления здесь больше нет: `string & {}` — известная идиома открытого
 // множества, и линтер её пропускает сам. Прежний комментарий гасил правило
 // `ban-types`, которого в typescript-eslint 8 уже не существует.

@@ -17,6 +17,7 @@
 import {
   FIXED_ONE,
   FLOOR_COMPONENT,
+  LEVEL_OVERRIDE_COMPONENT,
   POSITION_COMPONENT,
   cellAt,
   world,
@@ -38,6 +39,8 @@ const DEFAULT_AIM_HOLD_TICKS = 45;
 
 /** Бит колонки `flags`: скорость выше порога — состояние `move` (REND-4). */
 export const ENTITY_MOVING = 1;
+/** Бит колонки `flags`: у сущности override уровня (TERR-4) — наклон по поверхности не применяется (REND-10). */
+export const ENTITY_LEVEL_OVERRIDE = 2;
 
 /**
  * Плоское presentation-состояние одного тика — то, что пересекает границу
@@ -227,7 +230,11 @@ export class Extractor {
         moving = vx * vx + vy * vy > this.moveEpsilonSq;
         if (moving) yaw = Math.atan2(vy, vx);
       }
-      out.flags[count] = moving ? ENTITY_MOVING : 0;
+      let flags = moving ? ENTITY_MOVING : 0;
+      if (world.hasComponent(state, entity, LEVEL_OVERRIDE_COMPONENT)) {
+        flags |= ENTITY_LEVEL_OVERRIDE;
+      }
+      out.flags[count] = flags;
       out.facingYaw[count] = yaw;
 
       const aim = this.aim.get(entity);

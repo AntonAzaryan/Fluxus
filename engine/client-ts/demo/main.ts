@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { fixed, type EntityId } from '@game-mvp/core';
 import {
   AssetService,
+  curvatureLoader,
   manifestLoader,
   mdxLoader,
   pngTextureLoader,
@@ -22,6 +23,7 @@ import {
 import {
   ModelsSubsystem,
   TerrainSubsystem,
+  VisualSurfaceSource,
   type RenderContext,
 } from '@game-mvp/render';
 import { RemoteHost, shellPort } from '@game-mvp/client';
@@ -83,6 +85,7 @@ const assets = new AssetService(assetSource);
 assets.registerLoader(mdxLoader);
 assets.registerLoader(pngTextureLoader);
 assets.registerLoader(manifestLoader);
+assets.registerLoader(curvatureLoader);
 
 /** Манифест визуалов через тот же сервис (kind 'manifest', ASSET-6). */
 function loadManifest(): Promise<VisualManifest> {
@@ -276,9 +279,16 @@ async function main(): Promise<void> {
       heroId = (hello.extra as { hero: EntityId }).hero;
       const grid = remote!.terrain;
       if (grid === null) throw new Error('демо: сцена обязана содержать террейн');
+      // Общая визуальная поверхность (REND-9/10): кривизна из манифеста,
+      // нет ссылки — плоские ступени REND-7.
+      const surface = new VisualSurfaceSource(grid, {
+        ...(manifest.terrain?.curvatureMap !== undefined
+          ? { curvatureMapId: manifest.terrain.curvatureMap }
+          : {}),
+      });
       // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
-      remote!.register(new TerrainSubsystem(grid));
-      models = new ModelsSubsystem(manifest);
+      remote!.register(new TerrainSubsystem(grid, { surface }));
+      models = new ModelsSubsystem(manifest, { surface });
       remote!.register(models);
       requestAnimationFrame(frame);
     },

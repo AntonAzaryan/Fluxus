@@ -9,13 +9,17 @@
  */
 import * as THREE from 'three';
 import type { EntityId } from '@game-mvp/core';
-import type {
-  AssetState,
-  EntityVisual,
-  NormalizedModel,
-  VisualManifest,
+import {
+  resolveSurfaceAlign,
+  type AssetState,
+  type EntityVisual,
+  type NormalizedModel,
+  type VisualManifest,
 } from '@game-mvp/assets';
 import type { EntityView, RenderContext, RenderSubsystem, TickView } from '../types.js';
+import type { VisualSurfaceSource } from '../surfaceSource.js';
+import type { SurfaceNormal } from '../visualSurface.js';
+import { smoothTilt, tiltTarget, type TiltVector } from '../model/surfaceAlign.js';
 import {
   buildSharedModel,
   createModelInstance,
@@ -36,12 +40,25 @@ export interface ModelsOptions {
   readonly turnRate?: number;
   /** Поворот модели относительно atan2-курса; у MDX «перёд» вдоль +X → 0. */
   readonly facingOffset?: number;
+  /** Источник визуальной поверхности — высота и наклон по рельефу (REND-9, REND-10). */
+  readonly surface?: VisualSurfaceSource;
+  /** Скорость сглаживания наклона по поверхности, 1/с (REND-10). */
+  readonly tiltRate?: number;
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
 }
 
 const DEFAULT_TURN_RATE = 12;
+const DEFAULT_TILT_RATE = 10;
 const PLACEHOLDER_COLOR = 0xd040d0;
+
+// Переиспользуемые между кадрами объекты — аллокаций на инстанс на кадр нет.
+const WORLD_UP = new THREE.Vector3(0, 0, 1);
+const SCRATCH_NORMAL: SurfaceNormal = { x: 0, y: 0, z: 1 };
+const SCRATCH_TILT: TiltVector = { x: 0, y: 0 };
+const SCRATCH_AXIS = new THREE.Vector3();
+const SCRATCH_Q_TILT = new THREE.Quaternion();
+const SCRATCH_Q_YAW = new THREE.Quaternion();
 
 /** Состояния локомоции MVP — производные от компонент движения (REND-4). */
 const STATE_IDLE = 'idle';
@@ -69,6 +86,11 @@ interface InstanceRecord {
   skin: string | undefined;
   yaw: number;
   snapPending: boolean;
+  /** Параметры наклона записи (ASSET-6): factor 0 выключает наклон. */
+  readonly tiltFactor: number;
+  readonly tiltMaxRad: number | null;
+  /** Сглаженный наклон «ось × угол» (REND-10). */
+  readonly tilt: TiltVector;
 }
 
 export class ModelsSubsystem implements RenderSubsystem {
@@ -90,6 +112,8 @@ export class ModelsSubsystem implements RenderSubsystem {
 
   init(ctx: RenderContext): void {
     this.ctx = ctx;
+    // Общий с подсистемой террейна источник поверхности; init идемпотентен.
+    this.options.surface?.init(ctx);
   }
 
   // ------------------------------------------------------------- syncTick
@@ -133,7 +157,9 @@ export class ModelsSubsystem implements RenderSubsystem {
   updateFrame(dt: number, alpha: number): void {
     const heightStep = this.requireCtx().config.heightStep;
     const turnRate = this.options.turnRate ?? DEFAULT_TURN_RATE;
+    const tiltRate = this.options.tiltRate ?? DEFAULT_TILT_RATE;
     const facingOffset = this.options.facingOffset ?? 0;
+    const surface = this.options.surface?.current ?? null;
 
     for (const record of this.instances.values()) {
       const view = record.view;
@@ -141,14 +167,35 @@ export class ModelsSubsystem implements RenderSubsystem {
       const t = view.snap ? 1 : alpha;
       const x = view.prevX + (view.currX - view.prevX) * t;
       const y = view.prevY + (view.currY - view.prevY) * t;
-      const z = (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
+      // Сущность на поверхности стоит на визуальной поверхности (рампы и
+      // кривизна, REND-9); с override уровня (TERR-4) — на высоте уровня.
+      const z =
+        surface !== null && !view.levelOverride
+          ? surface.heightAt(x, y)
+          : (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
       record.holder.position.set(x, y, z);
 
       // Курс: цель из данных тика, доворот сглажен по кадрам; при snap — мгновенно.
       const targetYaw = view.facingYaw + facingOffset;
       record.yaw = record.snapPending ? targetYaw : smoothYaw(record.yaw, targetYaw, turnRate, dt);
+
+      // Наклон по нормали поверхности (REND-10): только для сущностей на
+      // поверхности; сглажен по кадрам, при snap — мгновенно (REND-2).
+      if (surface !== null && record.tiltFactor > 0 && !view.levelOverride) {
+        surface.normalAt(x, y, SCRATCH_NORMAL);
+        tiltTarget(SCRATCH_NORMAL, record.tiltFactor, record.tiltMaxRad, SCRATCH_TILT);
+        if (record.snapPending) {
+          record.tilt.x = SCRATCH_TILT.x;
+          record.tilt.y = SCRATCH_TILT.y;
+        } else {
+          smoothTilt(record.tilt, SCRATCH_TILT, tiltRate, dt);
+        }
+      } else {
+        record.tilt.x = 0;
+        record.tilt.y = 0;
+      }
       record.snapPending = false;
-      record.holder.rotation.z = record.yaw;
+      this.applyOrientation(record);
 
       record.controller?.update(dt);
       // Bone-контроль строго после mixer.update и до отрисовки (REND-5).
@@ -162,6 +209,19 @@ export class ModelsSubsystem implements RenderSubsystem {
         );
       }
     }
+  }
+
+  /** Ориентация holder'а: сперва курс вокруг вертикали, поверх — наклон в мировых осях. */
+  private applyOrientation(record: InstanceRecord): void {
+    const angle = Math.hypot(record.tilt.x, record.tilt.y);
+    if (angle < 1e-6) {
+      record.holder.rotation.set(0, 0, record.yaw);
+      return;
+    }
+    SCRATCH_AXIS.set(record.tilt.x / angle, record.tilt.y / angle, 0);
+    SCRATCH_Q_TILT.setFromAxisAngle(SCRATCH_AXIS, angle);
+    SCRATCH_Q_YAW.setFromAxisAngle(WORLD_UP, record.yaw);
+    record.holder.quaternion.multiplyQuaternions(SCRATCH_Q_TILT, SCRATCH_Q_YAW);
   }
 
   // ------------------------------------------------------------ публичное
@@ -202,6 +262,7 @@ export class ModelsSubsystem implements RenderSubsystem {
     ctx.scene.add(holder);
 
     const visual = view.kind === null ? undefined : this.manifest.entities[view.kind];
+    const align = resolveSurfaceAlign(this.manifest, visual);
     const record: InstanceRecord = {
       entity: view.id,
       kind: view.kind,
@@ -216,6 +277,9 @@ export class ModelsSubsystem implements RenderSubsystem {
       skin: visual?.defaultSkin,
       yaw: view.facingYaw,
       snapPending: true,
+      tiltFactor: align.factor,
+      tiltMaxRad: align.maxAngleDeg === undefined ? null : (align.maxAngleDeg * Math.PI) / 180,
+      tilt: { x: 0, y: 0 },
     };
 
     if (view.kind === null) {

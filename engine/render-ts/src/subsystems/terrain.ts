@@ -1,11 +1,14 @@
 /**
- * Подсистема террейна (REND-7): ступени из тех же данных, что видит симуляция.
+ * Подсистема террейна (REND-7, REND-9): ступени из тех же данных, что видит
+ * симуляция, плюс визуальная кривизна поверх них.
  *
  * Горизонтальные площадки — на высоте `уровень × heightStep`, вертикальные
  * стенки — по cliff-отрезкам, ПЕРЕИСПОЛЬЗОВАННЫМ из производной геометрии ядра
  * (`TerrainGrid.cliffs`, TERR-5), а не выведенным заново; рампы — наклонные
  * площадки; клетки без пола — дыры. Силуэт совпадает с симуляционным по
- * построению: источник данных один.
+ * построению: источник данных один. Кривизна (REND-9) приходит через
+ * `VisualSurfaceSource`: углы клеток и кромки стенок берутся из визуальной
+ * поверхности, амплитуда меньше полушага — силуэт не расходится.
  *
  * Мутация пола (TERR-6) приходит дельтой клеток из presentation-состояния и
  * пересобирает затронутый чанк не позже следующего кадра; полная пересборка
@@ -14,6 +17,8 @@
 import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
 import type { RenderContext, RenderSubsystem, TickView } from '../types.js';
+import { cornerLevels, type VisualSurface } from '../visualSurface.js';
+import type { VisualSurfaceSource } from '../surfaceSource.js';
 
 // --------------------------------------------------- чистая генерация (тесты)
 
@@ -23,57 +28,11 @@ export interface TerrainGeometryData {
 }
 
 /**
- * Уровни четырёх углов клетки в порядке [c00, c10, c11, c01] (x,y → x+1,y →
- * x+1,y+1 → x,y+1). У обычной клетки все углы на её уровне; у рампы рёбра,
- * смежные с проходимым перепадом в единицу (TERR-5), поднимаются/опускаются
- * до уровня соседа — так пара «рампа + плато» смыкается без щелей.
- * Порядок рёбер фиксирован (W, E, N, S): последняя запись побеждает —
- * однозначность вместо зависимости от данных.
- */
-export function cornerLevels(
-  grid: TerrainGrid,
-  x: number,
-  y: number,
-): [number, number, number, number] {
-  const cell = y * grid.width + x;
-  const own = grid.levels[cell]!;
-  const corners: [number, number, number, number] = [own, own, own, own];
-  if (grid.ramps[cell] !== 1) return corners;
-
-  const stepNeighbour = (nx: number, ny: number): number | null => {
-    if (nx < 0 || ny < 0 || nx >= grid.width || ny >= grid.height) return null;
-    const level = grid.levels[ny * grid.width + nx]!;
-    // Сама клетка — рампа, поэтому перепад ровно в единицу проходим (TERR-5).
-    return Math.abs(level - own) === 1 ? level : null;
-  };
-
-  const west = stepNeighbour(x - 1, y);
-  if (west !== null) {
-    corners[0] = west;
-    corners[3] = west;
-  }
-  const east = stepNeighbour(x + 1, y);
-  if (east !== null) {
-    corners[1] = east;
-    corners[2] = east;
-  }
-  const north = stepNeighbour(x, y - 1);
-  if (north !== null) {
-    corners[0] = north;
-    corners[1] = north;
-  }
-  const south = stepNeighbour(x, y + 1);
-  if (south !== null) {
-    corners[3] = south;
-    corners[2] = south;
-  }
-  return corners;
-}
-
-/**
  * Площадки пола для прямоугольника клеток [x0..x0+w) × [y0..y0+h): квад на
- * клетку с пола́ми по углам из `cornerLevels`. Клетка без пола (`floor[cell]
- * === 0`) не получает геометрии вовсе — это и есть дыра (REND-7).
+ * клетку с пола́ми по углам из `cornerLevels`, при наличии `surface` — из
+ * визуальной поверхности с кривизной (REND-9; без карты кривизны значения
+ * совпадают). Клетка без пола (`floor[cell] === 0`) не получает геометрии
+ * вовсе — это и есть дыра (REND-7).
  */
 export function buildFloorGeometry(
   grid: TerrainGrid,
@@ -83,6 +42,7 @@ export function buildFloorGeometry(
   y0: number,
   w: number,
   h: number,
+  surface?: VisualSurface,
 ): TerrainGeometryData {
   const tile = grid.tileSize / FIXED_ONE;
   const positions: number[] = [];
@@ -93,13 +53,25 @@ export function buildFloorGeometry(
   for (let y = y0; y < y1; y++) {
     for (let x = x0; x < x1; x++) {
       if (floor[y * grid.width + x] === 0) continue; // дыра: пола нет
-      const [c00, c10, c11, c01] = cornerLevels(grid, x, y);
+      let h00: number;
+      let h10: number;
+      let h11: number;
+      let h01: number;
+      if (surface !== undefined) {
+        [h00, h10, h11, h01] = surface.cornerHeights(x, y);
+      } else {
+        const [c00, c10, c11, c01] = cornerLevels(grid, x, y);
+        h00 = c00 * heightStep;
+        h10 = c10 * heightStep;
+        h11 = c11 * heightStep;
+        h01 = c01 * heightStep;
+      }
       const base = positions.length / 3;
       positions.push(
-        x * tile, y * tile, c00 * heightStep,
-        (x + 1) * tile, y * tile, c10 * heightStep,
-        (x + 1) * tile, (y + 1) * tile, c11 * heightStep,
-        x * tile, (y + 1) * tile, c01 * heightStep,
+        x * tile, y * tile, h00,
+        (x + 1) * tile, y * tile, h10,
+        (x + 1) * tile, (y + 1) * tile, h11,
+        x * tile, (y + 1) * tile, h01,
       );
       // CCW при взгляде с +Z — нормаль вверх.
       indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
@@ -112,10 +84,30 @@ export function buildFloorGeometry(
  * Вертикальные стенки по cliff-отрезкам ядра (TERR-5 → REND-7). Отрезок лежит
  * на границе двух клеток; стенка тянется от нижнего уровня пары до верхнего.
  * Сами отрезки не пересчитываются — берутся из `grid.cliffs` как есть.
+ *
+ * При наличии `surface` кромки стенки на каждом конце отрезка тянутся до
+ * фактических визуальных высот углов обеих клеток (skirt): кривизна смещает
+ * кромку пола, и стенка обязана дойти до неё без щели (REND-9).
  */
-export function buildWallGeometry(grid: TerrainGrid, heightStep: number): TerrainGeometryData {
+export function buildWallGeometry(
+  grid: TerrainGrid,
+  heightStep: number,
+  surface?: VisualSurface,
+): TerrainGeometryData {
   const positions: number[] = [];
   const indices: number[] = [];
+
+  /** Высота угла клетки (cx, cy) в узле сетки (nodeX, nodeY). */
+  const cornerHeight = (cell: number, nodeX: number, nodeY: number): number => {
+    const cx = cell % grid.width;
+    const cy = Math.floor(cell / grid.width);
+    if (surface === undefined) return grid.levels[cell]! * heightStep;
+    const heights = surface.cornerHeights(cx, cy);
+    // Индекс угла по смещению узла от клетки: (0,0)→c00, (1,0)→c10, (1,1)→c11, (0,1)→c01.
+    const dx = nodeX - cx;
+    const dy = nodeY - cy;
+    return heights[dy === 0 ? dx : 3 - dx]!;
+  };
 
   for (const edge of grid.cliffs) {
     // Координаты отрезка кратны tileSize (fixed-домен — деление точное).
@@ -134,10 +126,19 @@ export function buildWallGeometry(grid: TerrainGrid, heightStep: number): Terrai
       cellA = (y - 1) * grid.width + x;
       cellB = y * grid.width + x;
     }
-    const levelA = grid.levels[cellA]!;
-    const levelB = grid.levels[cellB]!;
-    const low = Math.min(levelA, levelB) * heightStep;
-    const high = Math.max(levelA, levelB) * heightStep;
+
+    const fromNodeX = Math.round(edge.from.x / grid.tileSize);
+    const fromNodeY = Math.round(edge.from.y / grid.tileSize);
+    const toNodeX = Math.round(edge.to.x / grid.tileSize);
+    const toNodeY = Math.round(edge.to.y / grid.tileSize);
+    const fromA = cornerHeight(cellA, fromNodeX, fromNodeY);
+    const fromB = cornerHeight(cellB, fromNodeX, fromNodeY);
+    const toA = cornerHeight(cellA, toNodeX, toNodeY);
+    const toB = cornerHeight(cellB, toNodeX, toNodeY);
+    const lowFrom = Math.min(fromA, fromB);
+    const highFrom = Math.max(fromA, fromB);
+    const lowTo = Math.min(toA, toB);
+    const highTo = Math.max(toA, toB);
 
     const fx = edge.from.x / FIXED_ONE;
     const fy = edge.from.y / FIXED_ONE;
@@ -145,7 +146,7 @@ export function buildWallGeometry(grid: TerrainGrid, heightStep: number): Terrai
     const ty = edge.to.y / FIXED_ONE;
 
     const base = positions.length / 3;
-    positions.push(fx, fy, low, tx, ty, low, tx, ty, high, fx, fy, high);
+    positions.push(fx, fy, lowFrom, tx, ty, lowTo, tx, ty, highTo, fx, fy, highFrom);
     // Материал двусторонний — ориентация не нормируется.
     indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
@@ -168,6 +169,8 @@ export interface TerrainOptions {
   readonly chunkSize?: number;
   readonly floorColor?: number;
   readonly wallColor?: number;
+  /** Источник визуальной поверхности (REND-9); нет — плоские ступени REND-7. */
+  readonly surface?: VisualSurfaceSource;
 }
 
 const DEFAULT_CHUNK_SIZE = 16;
@@ -181,6 +184,7 @@ export class TerrainSubsystem implements RenderSubsystem {
   private readonly chunkSize: number;
   private readonly floorColor: number;
   private readonly wallColor: number;
+  private readonly surfaceSource: VisualSurfaceSource | undefined;
 
   private ctx: RenderContext | null = null;
   private heightStep = 1;
@@ -198,6 +202,7 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.chunkSize = options.chunkSize ?? DEFAULT_CHUNK_SIZE;
     this.floorColor = options.floorColor ?? DEFAULT_FLOOR_COLOR;
     this.wallColor = options.wallColor ?? DEFAULT_WALL_COLOR;
+    this.surfaceSource = options.surface;
     this.floor = new Uint8Array(grid.floor);
     this.chunksX = Math.ceil(grid.width / this.chunkSize);
     this.chunksY = Math.ceil(grid.height / this.chunkSize);
@@ -212,22 +217,50 @@ export class TerrainSubsystem implements RenderSubsystem {
       metalness: 0,
     });
 
-    // Стенки статичны: карта уровней иммутабельна (TERR-6 мутирует только пол).
+    // Кривизна (REND-9) догружается асинхронно: по готовности поверхность
+    // подменяется и вся геометрия пересобирается — уровни при этом те же,
+    // силуэт не меняется.
+    this.surfaceSource?.init(ctx);
+    this.surfaceSource?.onChange(() => {
+      this.rebuildWalls();
+      for (let chunk = 0; chunk < this.chunkMeshes.length; chunk++) this.dirtyChunks.add(chunk);
+    });
+
+    this.rebuildWalls();
+    this.chunkMeshes = new Array<THREE.Mesh | null>(this.chunksX * this.chunksY).fill(null);
+    for (let chunk = 0; chunk < this.chunkMeshes.length; chunk++) this.rebuildChunk(chunk);
+  }
+
+  /** Визуальная поверхность для генераторов; undefined — плоские ступени. */
+  private get surface(): VisualSurface | undefined {
+    return this.surfaceSource?.current ?? undefined;
+  }
+
+  /** Стенки пересобираются только при подмене поверхности: уровни иммутабельны (TERR-6). */
+  private rebuildWalls(): void {
+    const ctx = this.ctx;
+    if (ctx === null) return;
+    const previous = this.wallMesh;
+    const material =
+      previous?.material instanceof THREE.MeshStandardMaterial
+        ? previous.material
+        : new THREE.MeshStandardMaterial({
+            color: this.wallColor,
+            roughness: 0.95,
+            metalness: 0,
+            side: THREE.DoubleSide,
+          });
+    if (previous !== null) {
+      ctx.scene.remove(previous);
+      previous.geometry.dispose();
+    }
     const walls = new THREE.Mesh(
-      toBufferGeometry(buildWallGeometry(this.grid, this.heightStep)),
-      new THREE.MeshStandardMaterial({
-        color: this.wallColor,
-        roughness: 0.95,
-        metalness: 0,
-        side: THREE.DoubleSide,
-      }),
+      toBufferGeometry(buildWallGeometry(this.grid, this.heightStep, this.surface)),
+      material,
     );
     walls.name = 'terrain:walls';
     ctx.scene.add(walls);
     this.wallMesh = walls;
-
-    this.chunkMeshes = new Array<THREE.Mesh | null>(this.chunksX * this.chunksY).fill(null);
-    for (let chunk = 0; chunk < this.chunkMeshes.length; chunk++) this.rebuildChunk(chunk);
   }
 
   syncTick(view: TickView): void {
@@ -280,6 +313,7 @@ export class TerrainSubsystem implements RenderSubsystem {
       cy * this.chunkSize,
       this.chunkSize,
       this.chunkSize,
+      this.surface,
     );
     if (data.indices.length === 0) {
       this.chunkMeshes[chunk] = null;
