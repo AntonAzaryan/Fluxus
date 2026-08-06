@@ -11,7 +11,7 @@
  * в плоской форме (SHELL-1, SHELL-2).
  */
 import type { EntityId } from '@game-mvp/core';
-import { ENTITY_MOVING, type ExtractedTick } from './extractor.js';
+import { ENTITY_MOVING, STATE_BITS_SHIFT, type ExtractedTick } from './extractor.js';
 import type { EntityView, TickView } from './types.js';
 
 /** Скачок позиции за тик больше этого — телепорт: интерполяция «проехала бы» пол-арены. */
@@ -32,6 +32,7 @@ interface EntityRecord extends EntityView {
   moving: boolean;
   facingYaw: number;
   aimYaw: number | null;
+  states: number;
 }
 
 export interface ViewBufferConfig {
@@ -162,6 +163,7 @@ export class ViewBuffer {
           moving: false,
           facingYaw: 0,
           aimYaw: null,
+          states: 0,
         };
         this.records.set(id, record);
       } else if (snapAll) {
@@ -188,6 +190,7 @@ export class ViewBuffer {
       }
 
       record.moving = (ext.flags[i]! & ENTITY_MOVING) !== 0;
+      record.states = ext.flags[i]! >>> STATE_BITS_SHIFT;
       const facing = ext.facingYaw[i]!;
       if (!Number.isNaN(facing)) record.facingYaw = facing;
       const aim = ext.aimYaw[i]!;

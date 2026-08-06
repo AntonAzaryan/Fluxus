@@ -34,7 +34,12 @@ export type {
 export type { DecodedImage } from './image.js';
 
 // манифест визуалов (ASSET-6)
-export type { VisualManifest, EntityVisual } from './manifest.js';
+export type {
+  VisualManifest,
+  EntityVisual,
+  CameraEffectsSection,
+  CameraEffectDef,
+} from './manifest.js';
 export { validateManifest } from './manifest.js';
 
 // загрузчики реестра (ASSET-3); регистрируются потребителем через registerLoader

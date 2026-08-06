@@ -53,6 +53,9 @@ export class RenderHost implements TickObserver {
       ...(config.terrainGrid !== undefined ? { terrainGrid: config.terrainGrid } : {}),
       ...(config.aimEvents !== undefined ? { aimEvents: config.aimEvents } : {}),
       ...(config.aimHoldTicks !== undefined ? { aimHoldTicks: config.aimHoldTicks } : {}),
+      ...(config.stateComponents !== undefined
+        ? { stateComponents: config.stateComponents }
+        : {}),
     });
     this.buffer = new ViewBuffer({
       tickSeconds: config.tickSeconds,

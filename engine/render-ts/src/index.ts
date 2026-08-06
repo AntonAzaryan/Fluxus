@@ -20,6 +20,37 @@ export type { ExtractedTick, ExtractorConfig } from './extractor.js';
 export { ViewBuffer } from './viewBuffer.js';
 export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 
+// Камера (camera CAM-1..6): rig режимов, слой эффектов, диспетчер по манифесту.
+export {
+  CameraRig,
+  DEFAULT_CAMERA_CONFIG,
+  createCameraInput,
+  resetCameraInput,
+  edgePanAxes,
+  heroMoveFromKeys,
+  terrainGroundApi,
+} from './camera/rig.js';
+export type {
+  CameraBounds,
+  CameraConfig,
+  CameraInput,
+  CameraMode,
+  CameraPose,
+  CameraRigOptions,
+  FollowTarget,
+} from './camera/rig.js';
+export {
+  EffectStack,
+  SwayEffect,
+  TraumaShake,
+  valueNoise,
+  DEFAULT_SHAKE,
+  DEFAULT_SWAY,
+} from './camera/effects.js';
+export type { CameraEffect, PoseOffset, ShakeParams, SwayParams } from './camera/effects.js';
+export { CameraEffectsDirector } from './camera/director.js';
+export type { CameraEffectsDirectorOptions } from './camera/director.js';
+
 // Подсистема террейна (REND-7) и её чистые генераторы геометрии.
 export {
   TerrainSubsystem,
