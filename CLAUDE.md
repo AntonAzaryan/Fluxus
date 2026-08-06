@@ -22,11 +22,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `openspec/` is the spec, `engine/` its working implementation (the `*-ts` packages), `content/` the game content the engine runs, `docs/` the non-normative overview. The npm workspace root is the repository root.
 
-Game content lives in `content/` and never inside an engine package (`game-content` CONT-1, enforced by `engine/integration-ts/test/contentBoundary.test.ts`): `content/scenes/`, `content/matches/` are sim documents, `content/visuals/` holds the visual manifest, models and textures, and an asset ID is a path from the tree root (ASSET-2). Engine test fixtures are **not** content and stay put — `engine/tests/golden/` and the scenes built inline in `engine/integration-ts/test/fixtures.ts` (CONT-4): an engine baseline must go red from an engine change, not from a designer retuning a number.
+Game content lives in `content/` and never inside an engine package (`game-content` CONT-1, enforced by `engine/integration-ts/test/contentBoundary.test.ts`): `content/scenes/`, `content/matches/` are sim documents, `content/visuals/` holds the visual manifest, models and textures, and an asset ID is a path from the tree root (ASSET-2). Engine test fixtures are **not** content and stay put — `engine/tests/golden/` and the scenes built inline in `engine/integration-ts/test/fixtures.ts` (CONT-4): an engine baseline goes red from an engine change, not from a designer retuning a number.
 
 ## The spec is the source of truth
 
-`openspec/specs/` (24 capabilities, ~270 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
+`openspec/specs/` (24 capabilities, 284 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
 
 - Requirements carry historical IDs (`DET-1`, `NET-15`, `FOW-4`…) in `### Requirement:` headers — preserve them; a new requirement takes the next free number of its prefix.
 - Changes go through the OpenSpec workflow: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`, etc. (the `openspec-*` skills in `.claude/skills/`). Do not edit specs outside this process.
@@ -43,11 +43,13 @@ openspec validate --specs --strict  # format check
 
 ## Commands (repository root workspace)
 
-Node >= 22.18. The repository root is the npm workspace; its members are the engine packages (`engine/core-ts`, `engine/net-ts`, `engine/render-ts`, `engine/assets-ts`, `engine/client-ts` — the web client shell (worker hosting + channel, SHELL-1..7), `engine/integration-ts` — the cross-layer integration suite, CLI-9). A single `npm install` from the root installs everything, and the check-everything command before pushing is:
+Node >= 22.18. The repository root is the npm workspace; its members are the engine packages (`engine/core-ts`, `engine/net-ts`, `engine/render-ts`, `engine/assets-ts`, `engine/client-ts` — the web client shell (worker hosting + channel, SHELL-1..7), `engine/integration-ts` — the cross-layer integration suite, CLI-9). A single `npm install` from the root installs everything, and the check-everything gate before pushing is `npm run check` — it is `typecheck && lint && test`, and running only the first and the last is how a lint failure reaches the remote:
 
 ```sh
+npm run check     # from the root: typecheck + lint + test — run this before pushing
 npm test          # from the root: tests of all packages
 npm run typecheck # from the root: tsc --noEmit of all packages
+npm run lint      # from the root: eslint . --max-warnings 0
 ```
 
 `npm run coverage` (root, `vitest.coverage.config.ts`) is a diagnostic, not a gate: no thresholds, and the percentage is not a goal. Read it as the list of what no test executes — a DSL operator exposed to content but never evaluated, a transport branch no match reaches. Run it package-by-package and it lies: `integration-ts` exercises core/net/render, so only the aggregate run counts.
@@ -66,10 +68,11 @@ npm run schemas                          # regenerate engine/schemas/*.json (UPD
 
 ## Non-negotiable core principles
 
-Violating any of these is a defect, not a trade-off (full list — `openspec/config.yaml`):
+Violating any of these is a defect, not a trade-off. The same list, worded for spec authoring, is the «Неснимаемые принципы» block of `openspec/config.yaml` — keep the two in step when either changes:
 
 - The only entry into the simulation is `tick(state, inputs) → TickResult`; no I/O or side effects inside a tick — external consumers read `TickResult` afterwards.
 - Fixed-point Q16.16 everywhere in the simulation; floats are forbidden in gameplay math.
+- Data-driven: systems and gameplay are described in JSON, and the core is a universal evaluator of them.
 - ECS mutations go only through the Command Buffer; world mutators are deliberately not exported from `src/index.ts` (exporting them would be the side channel TICK-3 forbids).
 - A JSON-defined system and a native TS system are interchangeable behind the single `System` interface.
 - Server-authoritative netcode; each client's snapshot is filtered by visibility (FoW is part of the simulation, not the renderer).
@@ -94,4 +97,6 @@ A working discipline for `engine/core-ts`, not a defect-level rule like the list
 - `dsl/` — the data-driven layer: JsonLogic-compatible expression evaluator (`expr.ts`, custom AST walk), action executor (`actions.ts`), `EvaluatedSystem` (a JSON system in the shared registry), schema generation.
 - `systems/` — native TS systems: terrain, physics (broad-phase grid, raycast), visibility/FoW, time/tween/modifiers, arena, input; shared `registry.ts`.
 - `sim/` — `tick.ts`, worldInit, serialization (canonical JSON, plain world form), scene config, `HistoryProvider` (snapshot ring buffer), rewind/replay, per-client snapshot filter (`filter.ts`), `contentPackHash`.
+- `types.ts` — the contracts the layers meet on: `System`/`SystemContext`, the DI APIs (`MathApi`, `PhysicsApi`, `NavigationApi`, `TerrainApi`), `TickResult`, `InputFrame`.
+- `debug.ts` — the diagnostics sink and trace levels (capability `diagnostics`, DIAG-1..7; injected like the other APIs, DI-5). Push during a tick, unlike `TickResult`, which is read after it.
 - `bin/sim.mjs` — CLI scenario runner (the basis of golden tests and the future cross-language check against the Rust port).
