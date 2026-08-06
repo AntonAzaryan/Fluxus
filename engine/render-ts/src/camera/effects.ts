@@ -46,7 +46,7 @@ function hash(i: number, channel: number): number {
   return (x - Math.floor(x)) * 2 - 1;
 }
 
-/** Параметры тряски; политика — числа приходят из манифеста (ASSET-7). */
+/** Параметры тряски; политика — числа приходят из манифеста (ASSET-8). */
 export interface ShakeParams {
   /** Частота шума, Гц. */
   readonly frequency: number;
@@ -99,7 +99,7 @@ export class TraumaShake implements CameraEffect {
   }
 }
 
-/** Параметры sway («опьянение»); политика — из манифеста (ASSET-7). */
+/** Параметры sway («опьянение»); политика — из манифеста (ASSET-8). */
 export interface SwayParams {
   /** Амплитуда крена, радианы. */
   readonly rollAmp: number;

@@ -86,7 +86,9 @@ function validateSchemas(schemas: readonly ComponentSchema[]): Map<string, Compo
     for (const [field, type] of Object.entries(schema.fields)) {
       if (type !== 'i32' && type !== 'fixed') {
         throw new Error(
-          `ECS-5: компонент "${schema.name}", поле "${field}": недопустимый тип "${type}" (только i32/fixed, DET-2)`,
+          // `String(type)`: после двух сравнений тип сузился до `never`, но
+          // значение пришло из JSON и в рантайме там что угодно.
+          `ECS-5: компонент "${schema.name}", поле "${field}": недопустимый тип "${String(type)}" (только i32/fixed, DET-2)`,
         );
       }
     }

@@ -28,7 +28,7 @@ import {
 export const msgpackSerializer: Serializer = {
   name: 'msgpack',
   encode: (value) => msgpackEncode(value, { sortKeys: true, ignoreUndefined: true }),
-  decode: (bytes) => msgpackDecode(bytes) as unknown,
+  decode: (bytes) => msgpackDecode(bytes),
 };
 
 export { jsonSerializer };

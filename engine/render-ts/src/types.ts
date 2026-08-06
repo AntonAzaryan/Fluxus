@@ -38,6 +38,8 @@ export interface EntityView {
   spawned: boolean;
   /** Скорость выше порога на последнем тике — состояние `move` (REND-4). */
   moving: boolean;
+  /** Override уровня (TERR-4): сущность не «на поверхности», наклон не применяется (REND-10). */
+  levelOverride: boolean;
   /** Последний курс движения, радианы; сохраняется, пока сущность стоит. */
   facingYaw: number;
   /** Направление последнего каста/атаки, радианы; null — цель протухла (REND-5). */
@@ -45,7 +47,7 @@ export interface EntityView {
   /**
    * Битовая маска состояний сущности: бит i — присутствие i-й компоненты из
    * `stateComponents` конфига Extractor'а. Потребитель — длящиеся эффекты
-   * камеры (CAM-6, ASSET-7).
+   * камеры (CAM-6, ASSET-8).
    */
   states: number;
 }

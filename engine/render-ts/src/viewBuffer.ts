@@ -11,7 +11,12 @@
  * в плоской форме (SHELL-1, SHELL-2).
  */
 import type { EntityId } from '@game-mvp/core';
-import { ENTITY_MOVING, STATE_BITS_SHIFT, type ExtractedTick } from './extractor.js';
+import {
+  ENTITY_LEVEL_OVERRIDE,
+  ENTITY_MOVING,
+  STATE_BITS_SHIFT,
+  type ExtractedTick,
+} from './extractor.js';
 import type { EntityView, TickView } from './types.js';
 
 /** Скачок позиции за тик больше этого — телепорт: интерполяция «проехала бы» пол-арены. */
@@ -30,6 +35,7 @@ interface EntityRecord extends EntityView {
   snap: boolean;
   spawned: boolean;
   moving: boolean;
+  levelOverride: boolean;
   facingYaw: number;
   aimYaw: number | null;
   states: number;
@@ -140,7 +146,7 @@ export class ViewBuffer {
     seen.clear();
 
     for (let i = 0; i < ext.count; i++) {
-      const id = ext.id[i]! as EntityId;
+      const id = ext.id[i]!;
       seen.add(id);
       const x = ext.x[i]!;
       const y = ext.y[i]!;
@@ -161,6 +167,7 @@ export class ViewBuffer {
           snap: true,
           spawned: true,
           moving: false,
+          levelOverride: false,
           facingYaw: 0,
           aimYaw: null,
           states: 0,
@@ -190,6 +197,7 @@ export class ViewBuffer {
       }
 
       record.moving = (ext.flags[i]! & ENTITY_MOVING) !== 0;
+      record.levelOverride = (ext.flags[i]! & ENTITY_LEVEL_OVERRIDE) !== 0;
       record.states = ext.flags[i]! >>> STATE_BITS_SHIFT;
       const facing = ext.facingYaw[i]!;
       if (!Number.isNaN(facing)) record.facingYaw = facing;

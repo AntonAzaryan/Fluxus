@@ -215,7 +215,7 @@ describe('Загрузчик манифеста через сервис (ASSET-6
   });
 });
 
-describe('validateManifest: секция эффектов камеры (ASSET-7)', () => {
+describe('validateManifest: секция эффектов камеры (ASSET-8)', () => {
   const entities = { x: { model: 'm.mdx' } };
 
   it('валидная секция проходит; неизвестный тип эффекта — не ошибка валидации', () => {
@@ -224,7 +224,7 @@ describe('validateManifest: секция эффектов камеры (ASSET-7)
       cameraEffects: {
         events: { FireballExploded: { effect: 'shake', amplitude: 0.5, radius: 12 } },
         // Тип из будущего кода камеры: отбраковка — предупреждением на
-        // потребителе, манифест валиден (ASSET-7).
+        // потребителе, манифест валиден (ASSET-8).
         states: { Drunk: { effect: 'wobble-3000', rollAmp: 0.1 } },
       },
     });

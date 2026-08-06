@@ -10,6 +10,7 @@
  */
 import { evaluate, type Expression, type ExprValue, type ExprVars } from './expr.js';
 import { requireModifierList } from '../systems/modifiers.js';
+import { carveFloor as carveFloorInTerrain } from '../systems/terrain.js';
 import type {
   EntityId,
   Fixed,
@@ -258,6 +259,25 @@ const ACTIONS: Record<string, ActionFn> = {
       argNum(a, 'id', 'addModifier', ctx, vars),
       argNum(a, 'value', 'addModifier', ctx, vars),
     );
+  },
+  /**
+   * Снятие пола арены в области вокруг мировой позиции (TERR-8). Действие, а не
+   * работа контента со словами карты: раскладка нормирована ради побитовой
+   * парности реализаций (TERR-6), и адресовать её из данных нечем — битовой
+   * арифметики в DSL нет (EXPR-2).
+   *
+   * `radius` — расстояние в Q16.16, как координаты, а не число клеток: понятия
+   * клетки в языке систем нет. Отсутствие радиуса означает одну клетку под
+   * точкой, поэтому оно и отличимо от нуля — `argNum` здесь не годится.
+   */
+  carveFloor: (a, ctx, vars) => {
+    const at = evaluate(argExpr(a, 'at', 'carveFloor'), ctx, vars);
+    if (typeof at !== 'object') throw new Error('действие "carveFloor": "at" — вектор');
+    const radius =
+      a['radius'] === undefined
+        ? undefined
+        : num(evaluate(a['radius'] as Expression, ctx, vars), 'carveFloor');
+    carveFloorInTerrain(ctx, at, radius);
   },
   /** Снятие источника по `id` (TIME-8); отсутствующий id — не ошибка. */
   removeModifier: (a, ctx, vars) => {

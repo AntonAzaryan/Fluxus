@@ -12,12 +12,16 @@
 /** Ключ — sim-идентификатор (имя prefab'а/архетипа). */
 export interface VisualManifest {
   entities: Record<string, EntityVisual>;
-  /** Секция эффектов камеры (ASSET-7); потребитель — `camera` CAM-6. */
+  /** Дефолт наклона по поверхности для записей без своего surfaceAlign (REND-10). */
+  surfaceAlign?: SurfaceAlign;
+  /** Presentation-данные террейна арены. */
+  terrain?: { curvatureMap?: string };
+  /** Секция эффектов камеры (ASSET-8); потребитель — `camera` CAM-6. */
   cameraEffects?: CameraEffectsSection;
 }
 
 /**
- * Секция эффектов камеры (ASSET-7): таблицы «тип события тика → импульсный
+ * Секция эффектов камеры (ASSET-8): таблицы «тип события тика → импульсный
  * эффект» и «компонента-состояние сущности → длящийся эффект». Набор типов
  * эффектов определяется кодом камеры; привязка и числа — только здесь.
  * Запись с неизвестным типом эффекта — предупреждение и пропуск на
@@ -34,6 +38,28 @@ export interface CameraEffectDef {
   [param: string]: string | number;
 }
 
+/**
+ * Наклон инстанса по нормали визуальной поверхности (REND-10): up-вектор —
+ * slerp(вертикаль, нормаль, factor); maxAngleDeg ограничивает итоговое
+ * отклонение от вертикали при любом factor.
+ */
+export interface SurfaceAlign {
+  /** 0 — всегда вертикален, 1 — перпендикулярен поверхности. */
+  factor: number;
+  maxAngleDeg?: number;
+}
+
+/** Дефолт REND-10: перпендикулярен поверхности, без лимита угла. */
+export const DEFAULT_SURFACE_ALIGN: Readonly<SurfaceAlign> = Object.freeze({ factor: 1 });
+
+/** Параметры наклона записи: свои → дефолт манифеста → дефолт спеки (ASSET-6). */
+export function resolveSurfaceAlign(
+  manifest: Pick<VisualManifest, 'surfaceAlign'>,
+  visual: EntityVisual | undefined,
+): SurfaceAlign {
+  return visual?.surfaceAlign ?? manifest.surfaceAlign ?? DEFAULT_SURFACE_ALIGN;
+}
+
 export interface EntityVisual {
   /** Asset id модели. */
   model: string;
@@ -48,6 +74,8 @@ export interface EntityVisual {
   boneControls?: Record<string, { bone: string; maxYawDeg: number; smoothing: number }>;
   /** Индексы частей модели (`NormalizedMesh.partId`), исключаемых из рендера. */
   hiddenParts?: number[];
+  /** Наклон по нормали визуальной поверхности; без него — дефолт манифеста (REND-10). */
+  surfaceAlign?: SurfaceAlign;
 }
 
 function typeName(v: unknown): string {
@@ -91,6 +119,21 @@ function validateStringMap(v: unknown, path: string, what: string, errors: strin
   }
 }
 
+/** `surfaceAlign` записи или манифеста: factor в [0..1], лимит угла >= 0 (REND-10). */
+function validateSurfaceAlign(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(`${path}: ожидался объект { factor, maxAngleDeg? }, получено ${typeName(v)}`);
+    return;
+  }
+  checkUnknownKeys(v, ['factor', 'maxAngleDeg'], path, errors);
+  if (!isFiniteNumber(v.factor) || v.factor < 0 || v.factor > 1) {
+    errors.push(`${path}.factor: обязательное поле — число в [0..1], получено ${typeName(v.factor)}`);
+  }
+  if ('maxAngleDeg' in v && (!isFiniteNumber(v.maxAngleDeg) || v.maxAngleDeg < 0)) {
+    errors.push(`${path}.maxAngleDeg: ожидалось неотрицательное число градусов`);
+  }
+}
+
 function validateEntity(entity: unknown, path: string, errors: string[]): void {
   if (!isRecord(entity)) {
     errors.push(`${path}: ожидался объект визуала, получено ${typeName(entity)}`);
@@ -98,10 +141,14 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
   }
   checkUnknownKeys(
     entity,
-    ['model', 'scale', 'defaultSkin', 'skins', 'animations', 'boneControls', 'hiddenParts'],
+    ['model', 'scale', 'defaultSkin', 'skins', 'animations', 'boneControls', 'hiddenParts', 'surfaceAlign'],
     path,
     errors,
   );
+
+  if ('surfaceAlign' in entity) {
+    validateSurfaceAlign(entity.surfaceAlign, `${path}.surfaceAlign`, errors);
+  }
 
   if (typeof entity.model !== 'string' || entity.model.length === 0) {
     errors.push(`${path}.model: обязательное поле — непустая строка (asset id модели)`);
@@ -248,7 +295,7 @@ export function validateManifest(
   if (!isRecord(doc)) {
     return { ok: false, errors: [`манифест: ожидался объект, получено ${typeName(doc)}`] };
   }
-  checkUnknownKeys(doc, ['entities', 'cameraEffects'], 'манифест', errors);
+  checkUnknownKeys(doc, ['entities', 'surfaceAlign', 'terrain', 'cameraEffects'], 'манифест', errors);
   if (!isRecord(doc.entities)) {
     errors.push(`entities: обязательное поле — объект «prefab → визуал», получено ${typeName(doc.entities)}`);
   } else {
@@ -257,6 +304,24 @@ export function validateManifest(
     }
   }
   if ('cameraEffects' in doc) validateCameraEffects(doc.cameraEffects, errors);
+  if ('surfaceAlign' in doc) {
+    validateSurfaceAlign(doc.surfaceAlign, 'surfaceAlign', errors);
+  }
+  if ('terrain' in doc) {
+    if (!isRecord(doc.terrain)) {
+      errors.push(`terrain: ожидался объект, получено ${typeName(doc.terrain)}`);
+    } else {
+      checkUnknownKeys(doc.terrain, ['curvatureMap'], 'terrain', errors);
+      if (
+        'curvatureMap' in doc.terrain &&
+        (typeof doc.terrain.curvatureMap !== 'string' || doc.terrain.curvatureMap.length === 0)
+      ) {
+        errors.push(
+          `terrain.curvatureMap: ожидался asset id карты кривизны (непустая строка), получено ${typeName(doc.terrain.curvatureMap)}`,
+        );
+      }
+    }
+  }
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, manifest: doc as unknown as VisualManifest };
 }

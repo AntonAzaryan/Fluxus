@@ -17,6 +17,7 @@
 import {
   FIXED_ONE,
   FLOOR_COMPONENT,
+  LEVEL_OVERRIDE_COMPONENT,
   POSITION_COMPONENT,
   cellAt,
   world,
@@ -38,10 +39,12 @@ const DEFAULT_AIM_HOLD_TICKS = 45;
 
 /** Бит колонки `flags`: скорость выше порога — состояние `move` (REND-4). */
 export const ENTITY_MOVING = 1;
+/** Бит колонки `flags`: у сущности override уровня (TERR-4) — наклон по поверхности не применяется (REND-10). */
+export const ENTITY_LEVEL_OVERRIDE = 2;
 /** Сдвиг битов состояний в колонке `flags`: бит i+STATE_BITS_SHIFT — i-я компонента `stateComponents`. */
-export const STATE_BITS_SHIFT = 1;
-/** Колонка `flags` — u8: под состояния остаётся 7 бит. */
-export const MAX_STATE_COMPONENTS = 7;
+export const STATE_BITS_SHIFT = 2;
+/** Колонка `flags` — u8: биты 0..1 заняты, под состояния остаётся 6 бит. */
+export const MAX_STATE_COMPONENTS = 6;
 
 /**
  * Плоское presentation-состояние одного тика — то, что пересекает границу
@@ -245,6 +248,9 @@ export class Extractor {
         if (moving) yaw = Math.atan2(vy, vx);
       }
       let flags = moving ? ENTITY_MOVING : 0;
+      if (world.hasComponent(state, entity, LEVEL_OVERRIDE_COMPONENT)) {
+        flags |= ENTITY_LEVEL_OVERRIDE;
+      }
       for (let bit = 0; bit < this.stateComponents.length; bit++) {
         if (world.hasComponent(state, entity, this.stateComponents[bit]!)) {
           flags |= 1 << (bit + STATE_BITS_SHIFT);

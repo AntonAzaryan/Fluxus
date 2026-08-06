@@ -100,8 +100,16 @@ function channelInWindow(
  * работа с проверкой на глаз. Сегодня они и так проигрываются линейно, поэтому
  * `linear` здесь — фиксация существующего поведения, а не потеря.
  */
+/**
+ * `LineType.DontInterp` числом: `war3-model` объявляет `LineType` как enum
+ * только в типах, рантайм-значения у него нет — импортировать нечего. Аннотация
+ * привязывает литерал к тому же enum'у, поэтому сравнение ниже сопоставляет
+ * члены одного типа, а не число со значением из формата.
+ */
+const LINE_TYPE_DONT_INTERP: MdlModel.LineType = 0;
+
 function interpolationOf(v: MdlModel.AnimVector): Interpolation {
-  return v.LineType === 0 ? 'step' : 'linear';
+  return v.LineType === LINE_TYPE_DONT_INTERP ? 'step' : 'linear';
 }
 
 /**

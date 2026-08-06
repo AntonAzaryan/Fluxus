@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { fixed, type EntityId } from '@game-mvp/core';
 import {
   AssetService,
+  curvatureLoader,
   manifestLoader,
   mdxLoader,
   pngTextureLoader,
@@ -24,6 +25,7 @@ import {
   CameraRig,
   ModelsSubsystem,
   TerrainSubsystem,
+  VisualSurfaceSource,
   createCameraInput,
   edgePanAxes,
   heroMoveFromKeys,
@@ -33,7 +35,7 @@ import {
   type RenderContext,
 } from '@game-mvp/render';
 import { RemoteHost, shellPort } from '@game-mvp/client';
-import { CAST_BUTTON, KILL_BUTTON, packAimDir } from './sim.js';
+import { CAST_BUTTON, KILL_BUTTON, TURN_UNITS } from './sim.js';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
 const HEIGHT_STEP = 0.6;
@@ -108,6 +110,7 @@ const assets = new AssetService(assetSource);
 assets.registerLoader(mdxLoader);
 assets.registerLoader(pngTextureLoader);
 assets.registerLoader(manifestLoader);
+assets.registerLoader(curvatureLoader);
 
 /** Манифест визуалов через тот же сервис (kind 'manifest', ASSET-6). */
 function loadManifest(): Promise<VisualManifest> {
@@ -130,7 +133,7 @@ function loadManifest(): Promise<VisualManifest> {
 // ---------------------------------------------------------------------- ввод
 
 const keys = new Set<string>();
-/** Отложенный на ближайший тик каст: упакованный aimDir (см. packAimDir). */
+/** Отложенный на ближайший тик каст: угол прицеливания (см. aimAngle). */
 let pendingCast: number | null = null;
 let pendingKill = false;
 let currentSkin: 'steel' | 'ember' = 'steel';
@@ -214,6 +217,18 @@ window.addEventListener('mousemove', (e) => {
   pointerY = e.clientY;
 });
 
+/**
+ * Направление клика → `aimDir` канонического `InputFrame` (TICK-2): угол в
+ * единице ядра (FP-7, полный оборот `TURN_UNITS`). Float здесь законен ровно
+ * там же, где `fixed.fromFloat` для `move`, — это оболочка, производящая ввод,
+ * а не тик; в симуляцию уходит целое, и разворачивает его обратно в вектор
+ * JSON-система сцены оператором `cos`/`sin`. Маска — чтобы по проводу не
+ * ездили старшие биты: заворачивание угла ядро делает само.
+ */
+function aimAngle(dx: number, dy: number): number {
+  return Math.round((Math.atan2(dy, dx) / (2 * Math.PI)) * TURN_UNITS) & (TURN_UNITS - 1);
+}
+
 window.addEventListener('mousedown', (e) => {
   if (e.button === 1) {
     // MMB — drag-панорама (CAM-3); default — autoscroll браузера.
@@ -232,9 +247,8 @@ window.addEventListener('mousedown', (e) => {
   if (view === undefined) return;
   const dx = point.x - view.currX;
   const dy = point.y - view.currY;
-  const length = Math.hypot(dx, dy);
-  if (length < 1e-3) return;
-  pendingCast = packAimDir(dx / length, dy / length);
+  if (Math.hypot(dx, dy) < 1e-3) return; // клик в себя — направления нет
+  pendingCast = aimAngle(dx, dy);
 });
 window.addEventListener('mouseup', (e) => {
   if (e.button === 1) midDrag = false;
@@ -361,9 +375,16 @@ async function main(): Promise<void> {
       heroId = (hello.extra as { hero: EntityId }).hero;
       const grid = remote!.terrain;
       if (grid === null) throw new Error('демо: сцена обязана содержать террейн');
+      // Общая визуальная поверхность (REND-9/10): кривизна из манифеста,
+      // нет ссылки — плоские ступени REND-7.
+      const surface = new VisualSurfaceSource(grid, {
+        ...(manifest.terrain?.curvatureMap !== undefined
+          ? { curvatureMapId: manifest.terrain.curvatureMap }
+          : {}),
+      });
       // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
-      remote!.register(new TerrainSubsystem(grid));
-      models = new ModelsSubsystem(manifest);
+      remote!.register(new TerrainSubsystem(grid, { surface }));
+      models = new ModelsSubsystem(manifest, { surface });
       remote!.register(models);
 
       // Камера: поверхность и границы — из той же сетки, что рендер террейна

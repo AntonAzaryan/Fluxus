@@ -1,5 +1,5 @@
 /**
- * Слой эффектов камеры (camera CAM-6, assets ASSET-7): стек и офсеты,
+ * Слой эффектов камеры (camera CAM-6, assets ASSET-8): стек и офсеты,
  * trauma-стакание, множитель 0, подавление импульсов при реплее, длящиеся
  * эффекты от состояний сущности, неизвестный тип — предупреждение и пропуск,
  * зеркалирование состояний в EntityView.states.
@@ -112,7 +112,7 @@ describe('EffectStack и эффекты (CAM-6)', () => {
   });
 });
 
-describe('CameraEffectsDirector (CAM-6, ASSET-7)', () => {
+describe('CameraEffectsDirector (CAM-6, ASSET-8)', () => {
   const explosion = (x: number, y: number) => ({
     type: 'Boom',
     tick: 1,
@@ -192,7 +192,7 @@ describe('CameraEffectsDirector (CAM-6, ASSET-7)', () => {
     expect(isZero(offsetOf(director.stack))).toBe(true);
   });
 
-  it('неизвестный тип эффекта — предупреждение один раз и пропуск (ASSET-7)', () => {
+  it('неизвестный тип эффекта — предупреждение один раз и пропуск (ASSET-8)', () => {
     const warnings: string[] = [];
     const director = new CameraEffectsDirector({
       tables: { events: { Boom: { effect: 'earthquake' } } },
@@ -264,8 +264,8 @@ describe('EntityView.states: зеркалирование битов состо�
       x: new Float32Array([0]),
       y: new Float32Array([0]),
       level: new Uint8Array([0]),
-      // бит 0 — moving, биты выше — состояния (STATE_BITS_SHIFT).
-      flags: new Uint8Array([0b101]),
+      // бит 0 — moving, бит 1 — levelOverride, биты выше — состояния (STATE_BITS_SHIFT).
+      flags: new Uint8Array([0b1001]),
       facingYaw: new Float32Array([Number.NaN]),
       aimYaw: new Float32Array([Number.NaN]),
       events: [],

@@ -1,6 +1,6 @@
 /**
  * Диспетчер эффектов камеры (CAM-6): связывает данные симуляции со стеком
- * эффектов по таблицам манифеста визуалов (ASSET-7). Механизм — типы
+ * эффектов по таблицам манифеста визуалов (ASSET-8). Механизм — типы
  * эффектов в коде (`effects.ts`); политика — какие события и состояния их
  * вызывают и с какими числами — только манифест.
  *
@@ -15,7 +15,7 @@ import type { TickView } from '../types.js';
 import { EffectStack, SwayEffect, TraumaShake, type CameraEffect } from './effects.js';
 
 export interface CameraEffectsDirectorOptions {
-  /** Таблицы «событие/состояние → эффект» из манифеста (ASSET-7). */
+  /** Таблицы «событие/состояние → эффект» из манифеста (ASSET-8). */
   readonly tables?: CameraEffectsSection | undefined;
   /**
    * Упорядоченный список компонент-состояний, зеркалируемых в
@@ -43,7 +43,7 @@ export class CameraEffectsDirector {
   /** Инстансы эффектов по ключу записи; создаются лениво и живут в стеке. */
   private readonly shakes = new Map<string, TraumaShake>();
   private readonly sways = new Map<string, SwayEffect>();
-  /** Предупреждение на запись — один раз (ASSET-7). */
+  /** Предупреждение на запись — один раз (ASSET-8). */
   private readonly warned = new Set<string>();
 
   constructor(options: CameraEffectsDirectorOptions = {}) {

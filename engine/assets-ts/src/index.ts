@@ -37,12 +37,18 @@ export type { DecodedImage } from './image.js';
 export type {
   VisualManifest,
   EntityVisual,
+  SurfaceAlign,
   CameraEffectsSection,
   CameraEffectDef,
 } from './manifest.js';
-export { validateManifest } from './manifest.js';
+export { validateManifest, resolveSurfaceAlign, DEFAULT_SURFACE_ALIGN } from './manifest.js';
+
+// карта кривизны террейна (ASSET-7)
+export type { TerrainCurvatureMap } from './curvature.js';
+export { validateCurvatureMap, curvatureOffsetOf, CURVATURE_SCALE } from './curvature.js';
 
 // загрузчики реестра (ASSET-3); регистрируются потребителем через registerLoader
 export { mdxLoader } from './loaders/mdx.js';
 export { pngTextureLoader, decodePng } from './loaders/png.js';
 export { manifestLoader } from './loaders/manifest.js';
+export { curvatureLoader } from './loaders/curvature.js';
