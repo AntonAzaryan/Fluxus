@@ -49,7 +49,11 @@ export default defineConfig([
     extends: [tseslint.configs.recommendedTypeChecked],
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        // `vitest.coverage.config.ts` — единственный `.ts` в корне, вне всех
+        // пакетных tsconfig: сводный прогон покрытия задаётся флагом, а не
+        // членством в workspace. `allowDefaultProject` даёт ему типизированный
+        // разбор без отдельного tsconfig ради одного файла.
+        projectService: { allowDefaultProject: ['vitest.coverage.config.ts'] },
         tsconfigRootDir: import.meta.dirname,
       },
     },
