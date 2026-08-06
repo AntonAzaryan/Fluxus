@@ -140,7 +140,16 @@ const BINDINGS: Record<string, readonly (readonly [Expression, ExprValue])[]> = 
  * в `expr.test.ts` на полном стабе, здесь для них нет ни аргументов, ни
  * эталона из Math API.
  */
-const WORLD_OPS: readonly string[] = ['var', 'tick', 'getComponent', 'hasComponent', 'isAlive', 'eventField', 'bitTest'];
+const WORLD_OPS: readonly string[] = [
+  'var',
+  'tick',
+  'getComponent',
+  'hasComponent',
+  'isAlive',
+  'eventField',
+  'bitTest',
+  'hasFloorAt',
+];
 
 describe('проводка операторов в Math API (EXPR-2)', () => {
   for (const [op, cases] of Object.entries(BINDINGS)) {

@@ -132,6 +132,12 @@ export interface TerrainApi {
   /** Уровень сущности: override, если он есть, иначе производное от позиции (TERR-4, ARENA-6). */
   readonly levelOf: (entity: EntityId) => number;
   readonly hasFloorAt: (position: Vec2) => boolean;
+  /**
+   * Носитель карты пола (TERR-6): снятие пола адресует его команды буфера
+   * (TERR-8). Поле, а не поиск по тегу prefab'а: тег — способ найти сущность
+   * из контента, каналом механизма он быть не должен.
+   */
+  readonly floorEntity: EntityId;
 }
 
 // --------------------------------------------------------------------- arena
