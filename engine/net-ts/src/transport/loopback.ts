@@ -95,8 +95,14 @@ export class LoopbackHub implements TransportServer {
     return clientSide;
   }
 
-  async close(): Promise<void> {
+  /**
+   * Не `async`: закрытие loopback'а синхронно целиком, ждать нечего. `Promise`
+   * в подписи — требование интерфейса, за которым стоят транспорты с настоящим
+   * закрытием сокета, а `async` без единого `await` изображал бы ожидание.
+   */
+  close(): Promise<void> {
     this.handler = undefined;
     this.pending.length = 0;
+    return Promise.resolve();
   }
 }

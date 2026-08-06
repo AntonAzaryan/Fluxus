@@ -139,7 +139,7 @@ export class ViewBuffer {
     seen.clear();
 
     for (let i = 0; i < ext.count; i++) {
-      const id = ext.id[i]! as EntityId;
+      const id = ext.id[i]!;
       seen.add(id);
       const x = ext.x[i]!;
       const y = ext.y[i]!;

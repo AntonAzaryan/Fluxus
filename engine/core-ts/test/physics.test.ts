@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as fixed from '../src/math/fixed.js';
-import { getField, spawn } from '../src/ecs/world.js';
+import { getField, listAlive, spawn } from '../src/ecs/world.js';
 import { mathApi } from '../src/math/mathApi.js';
 import {
   createPhysicsApi,
@@ -91,7 +91,7 @@ function harness(withTerrainStatics = true) {
   };
 }
 
-describe('статика обрывов (PHYS-2, TERR-5)', () => {
+describe('статика обрывов (PHYS-2, PHYS-10, TERR-5)', () => {
   it('каждый отрезок обрыва становится вырожденным прямоугольником', () => {
     const grid = createTerrainGrid(TERRAIN);
     const statics = staticsFromTerrain(grid);
@@ -116,6 +116,69 @@ describe('статика обрывов (PHYS-2, TERR-5)', () => {
   it('касание границы не считается пересечением', () => {
     const world = new PhysicsWorld(staticsFromTerrain(createTerrainGrid(TERRAIN)), fixed.fromInt(1));
     expect(world.query({ minX: F(1.0), minY: F(0.1), maxX: F(2.0), maxY: F(0.9) }, BLOCKS_MOVEMENT)).toHaveLength(0);
+  });
+
+  it('статика сущностями не становится: отрезков много, сущностей не прибавилось (PHYS-10)', () => {
+    // Арена в тысячи клеток дала бы тысячи сущностей в каждом снапшоте, запросе
+    // и дампе, не неся данных сверх геометрии. Обрывы выводятся из карты
+    // уровней и живут в PhysicsWorld, а не в ECS.
+    const { world, terrain } = loadScene(SCENE);
+    const before = listAlive(world).length;
+    const statics = staticsFromTerrain(terrain!.grid);
+
+    expect(statics.length).toBeGreaterThan(0);
+    expect(listAlive(world)).toHaveLength(before);
+    // Единственная сущность сцены — singleton террейна, держащий карту пола
+    // компонентом (TERR-6); на отрезок обрыва сущности нет ни одной.
+    expect(before).toBe(1);
+  });
+});
+
+/**
+ * Tie-break raycast'а (PHYS-7) — требование про детерминизм, а не про удобство:
+ * при равной дистанции результат обязан быть одним и тем же в каждом прогоне и
+ * в каждой реализации, иначе Rust-порт разойдётся с TS ровно там, где обе
+ * стороны «правы». `cli-testing` прямо называет этот tie-break как то, на что
+ * укажет cross-language тест.
+ */
+describe('порядок hit’ов на равной дистанции (PHYS-7)', () => {
+  it('побеждает меньший index: строгое «<» не вытесняет уже найденный hit', () => {
+    const h = harness(false);
+    // Две стены в одной точке: дистанция совпадает бит в бит, геометрия
+    // исход не решает — решает только tie-break.
+    const first = h.place('Wall', { Position: { x: F(3), y: F(0) } });
+    const second = h.place('Wall', { Position: { x: F(3), y: F(0) } });
+    expect(first).toBeLessThan(second);
+
+    const hit = h.physics.raycast(at(0, 0), at(8, 0), { mask: BLOCKS_VISION });
+    expect(hit!.entity).toBe(first);
+  });
+
+  it('повторный запрос даёт тот же ответ — исход не плавает между прогонами', () => {
+    const h = harness(false);
+    h.place('Wall', { Position: { x: F(3), y: F(0) } });
+    h.place('Wall', { Position: { x: F(3), y: F(0) } });
+
+    const ray = () => h.physics.raycast(at(0, 0), at(8, 0), { mask: BLOCKS_VISION });
+    expect(ray()).toEqual(ray());
+  });
+
+  it('статика идёт раньше динамики: у неё нет index, порядок обхода зафиксирован', () => {
+    const h = harness(false);
+    h.place('Wall', { Position: { x: F(3), y: F(0) } });
+    // Статический отрезок ровно на грани стены — дистанции совпадают.
+    const statics: StaticCollider[] = [
+      { minX: F(2.5), maxX: F(2.5), minY: F(-1), maxY: F(1), tags: [BLOCKS_VISION] },
+    ];
+    const withStatic = createPhysicsApi(
+      h.world,
+      new PhysicsWorld(statics, fixed.fromInt(1)),
+    );
+
+    const hit = withStatic.raycast(at(0, 0), at(8, 0), { mask: BLOCKS_VISION });
+    expect(hit).not.toBeNull();
+    expect(hit!.entity).toBeUndefined(); // статика, а не сущность
+    expect(hit!.point.x).toBe(F(2.5));
   });
 });
 

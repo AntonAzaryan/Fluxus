@@ -79,19 +79,31 @@ export function createTerrainGrid(def: TerrainDef): TerrainGrid {
   return { ...grid, cliffs: buildCliffs(grid) };
 }
 
+/**
+ * `rows` объявлен `unknown`, а не `readonly string[]`: карта приезжает из
+ * ассета сцены, то есть из JSON, и объявленный тип был бы обещанием, которого
+ * никто не давал. Проверки ниже — единственное, что превращает её в массив
+ * строк, поэтому и ряд проверяется на строковость: ряд-число дальше по коду
+ * дал бы `undefined` из `indexOf` и сообщение про алфавит вместо сообщения про
+ * форму карты.
+ */
 function readMap(
-  rows: readonly string[],
+  rows: unknown,
   width: number,
   height: number,
   what: string,
   alphabet: string,
 ): Uint8Array {
   if (!Array.isArray(rows) || rows.length !== height) {
-    throw new Error(`TERR-2: карта "${what}" — ${rows?.length ?? 0} рядов вместо ${height}`);
+    const got = Array.isArray(rows) ? rows.length : 0;
+    throw new Error(`TERR-2: карта "${what}" — ${got} рядов вместо ${height}`);
   }
   const cells = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) {
-    const row = rows[y]!;
+    const row: unknown = rows[y];
+    if (typeof row !== 'string') {
+      throw new Error(`TERR-2: карта "${what}", ряд ${y} — не строка`);
+    }
     if (row.length !== width) {
       throw new Error(`TERR-2: карта "${what}", ряд ${y} — ${row.length} клеток вместо ${width}`);
     }

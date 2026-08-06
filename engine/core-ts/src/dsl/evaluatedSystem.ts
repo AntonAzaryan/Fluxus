@@ -24,12 +24,22 @@ export interface SystemDef {
 const DEFAULT_AS = 'entity';
 
 /**
+ * Проверка «это список действий» отдельным предикатом, а не голым
+ * `Array.isArray`: система приезжает из JSON, где `do` может оказаться чем
+ * угодно, а `Array.isArray` на объявленном типе сужает к `any[]` — то есть
+ * ровно там, где мы проверяем недоверенные данные, типы бы и отключились.
+ */
+function isActionList(value: unknown): value is readonly Action[] {
+  return Array.isArray(value);
+}
+
+/**
  * Разворачивает `query` в одно действие `forEach`. Отдельного механизма
  * итерации у системы нет намеренно: два цикла с разной семантикой области
  * видимости — лишний способ ошибиться.
  */
 function bodyOf(def: SystemDef): readonly Action[] {
-  if (!Array.isArray(def.do)) throw new Error(`система "${def.name}": "do" — список действий`);
+  if (!isActionList(def.do)) throw new Error(`система "${def.name}": "do" — список действий`);
   if (def.query === undefined) return def.do;
   return [{ forEach: { query: def.query, as: def.as ?? DEFAULT_AS, do: def.do } }];
 }
