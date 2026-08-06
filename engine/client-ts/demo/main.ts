@@ -25,7 +25,7 @@ import {
   type RenderContext,
 } from '@game-mvp/render';
 import { RemoteHost, shellPort } from '@game-mvp/client';
-import { CAST_BUTTON, KILL_BUTTON, packAimDir } from './sim.js';
+import { CAST_BUTTON, KILL_BUTTON, TURN_UNITS } from './sim.js';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
 const HEIGHT_STEP = 0.6;
@@ -105,7 +105,7 @@ function loadManifest(): Promise<VisualManifest> {
 // ---------------------------------------------------------------------- ввод
 
 const keys = new Set<string>();
-/** Отложенный на ближайший тик каст: упакованный aimDir (см. packAimDir). */
+/** Отложенный на ближайший тик каст: угол прицеливания (см. aimAngle). */
 let pendingCast: number | null = null;
 let pendingKill = false;
 let currentSkin: 'steel' | 'ember' = 'steel';
@@ -163,6 +163,18 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 
+/**
+ * Направление клика → `aimDir` канонического `InputFrame` (TICK-2): угол в
+ * единице ядра (FP-7, полный оборот `TURN_UNITS`). Float здесь законен ровно
+ * там же, где `fixed.fromFloat` для `move`, — это оболочка, производящая ввод,
+ * а не тик; в симуляцию уходит целое, и разворачивает его обратно в вектор
+ * JSON-система сцены оператором `cos`/`sin`. Маска — чтобы по проводу не
+ * ездили старшие биты: заворачивание угла ядро делает само.
+ */
+function aimAngle(dx: number, dy: number): number {
+  return Math.round((Math.atan2(dy, dx) / (2 * Math.PI)) * TURN_UNITS) & (TURN_UNITS - 1);
+}
+
 window.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
   const point = groundPoint(e.clientX, e.clientY);
@@ -171,9 +183,8 @@ window.addEventListener('mousedown', (e) => {
   if (view === undefined) return;
   const dx = point.x - view.currX;
   const dy = point.y - view.currY;
-  const length = Math.hypot(dx, dy);
-  if (length < 1e-3) return;
-  pendingCast = packAimDir(dx / length, dy / length);
+  if (Math.hypot(dx, dy) < 1e-3) return; // клик в себя — направления нет
+  pendingCast = aimAngle(dx, dy);
 });
 
 /**
