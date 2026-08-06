@@ -19,6 +19,7 @@ import {
 } from '../systems/terrain.js';
 import {
   arenaPrefab,
+  checkArenaSupport,
   createArenaApi,
   ArenaSystem,
   ARENA_COMPONENTS,
@@ -100,6 +101,9 @@ export function loadScene(def: SceneDef): Scene {
     // Ассет арены валидируется здесь же, до `createWorld`.
     ...(def.arena === undefined ? [] : [arenaPrefab(def.arena)]),
   ];
+  // Коэффициент опоры в prefabs сцены — доля в [0, 1] (ARENA-3): опечатка
+  // контента не должна доживать до первого тика.
+  checkArenaSupport(def.prefabs ?? []);
 
   const world = createWorld(components, prefabs, def.capacity);
   // Сущности террейна и арены спавнятся до начальной расстановки: они часть

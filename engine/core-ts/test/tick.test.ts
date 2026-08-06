@@ -235,7 +235,7 @@ describe('DI (DI-3, DI-4)', () => {
   });
 
   it('переданный Physics API доходит до системы', () => {
-    const physics: PhysicsApi = { raycast: () => null };
+    const physics: PhysicsApi = { raycast: () => null, inradiusOf: () => undefined };
     const checker: System = {
       name: 'Checker',
       order: 10,
