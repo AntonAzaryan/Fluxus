@@ -57,6 +57,7 @@ function syntheticTick(overrides: Partial<ExtractedTick> = {}): ExtractedTick {
     flags: zeros((n) => new Uint8Array(n)),
     facingYaw: zeros((n) => new Float32Array(n)),
     aimYaw: zeros((n) => new Float32Array(n)),
+    fall: zeros((n) => new Float32Array(n)),
     events: [],
     floorDelta: [],
     kindTable: [],
@@ -155,6 +156,17 @@ describe('кодек: значения на границах раскладки 
     expect(wire.facingYaw[1]).toBeCloseTo(1.5, 6);
     expect(wire.aimYaw[0]).toBeCloseTo(0.25, 6);
     expect(Number.isNaN(wire.aimYaw[1]!)).toBe(true);
+  });
+
+  it('прогресс падения доезжает вместе с NaN «не падает» (REND-12)', () => {
+    const ext = syntheticTick({
+      count: 2,
+      fall: Float32Array.from([NaN, 0.75]),
+    });
+
+    const wire = readTick(frameOf(ext), [], []);
+    expect(Number.isNaN(wire.fall[0]!)).toBe(true);
+    expect(wire.fall[1]).toBeCloseTo(0.75, 6);
   });
 
   it('отрицательный kind и предельные level/flags переживают roundtrip', () => {

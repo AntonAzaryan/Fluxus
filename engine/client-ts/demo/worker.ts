@@ -20,6 +20,8 @@ const extractor = new Extractor({
   // Доворот торса (REND-5) — по направлению каста: одно каноническое событие
   // сцены несёт и факт каста, и `dirX`/`dirY`.
   aimEvents: ['CastFireball'],
+  // Компонент падения сцены (REND-12): имя — политика контента.
+  fall: { component: 'Falling', progressField: 'progress', durationField: 'duration' },
 });
 
 const shell = new WorkerShell({

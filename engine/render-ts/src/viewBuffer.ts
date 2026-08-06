@@ -39,6 +39,9 @@ interface EntityRecord extends EntityView {
   facingYaw: number;
   aimYaw: number | null;
   states: number;
+  falling: boolean;
+  prevFall: number;
+  currFall: number;
 }
 
 export interface ViewBufferConfig {
@@ -151,6 +154,11 @@ export class ViewBuffer {
       const x = ext.x[i]!;
       const y = ext.y[i]!;
       const level = ext.level[i]!;
+      // `NaN` в колонке — «не падает» (REND-12); прогресс скользит prev/curr,
+      // как позиция, чтобы снижение интерполировалось между тиками.
+      const rawFall = ext.fall[i]!;
+      const falling = !Number.isNaN(rawFall);
+      const fall = falling ? rawFall : 0;
 
       let record = this.records.get(id);
       if (record === undefined) {
@@ -171,12 +179,16 @@ export class ViewBuffer {
           facingYaw: 0,
           aimYaw: null,
           states: 0,
+          falling,
+          prevFall: fall,
+          currFall: fall,
         };
         this.records.set(id, record);
       } else if (snapAll) {
         record.prevX = record.currX = x;
         record.prevY = record.currY = y;
         record.prevLevel = record.currLevel = level;
+        record.prevFall = record.currFall = fall;
         record.snap = true;
         record.spawned = false;
       } else if (!tickAdvanced) {
@@ -189,13 +201,16 @@ export class ViewBuffer {
         record.prevX = teleport ? x : record.currX;
         record.prevY = teleport ? y : record.currY;
         record.prevLevel = teleport ? level : record.currLevel;
+        record.prevFall = teleport ? fall : record.currFall;
         record.currX = x;
         record.currY = y;
         record.currLevel = level;
+        record.currFall = fall;
         record.snap = teleport;
         record.spawned = false;
       }
 
+      record.falling = falling;
       record.moving = (ext.flags[i]! & ENTITY_MOVING) !== 0;
       record.levelOverride = (ext.flags[i]! & ENTITY_LEVEL_OVERRIDE) !== 0;
       record.states = ext.flags[i]! >>> STATE_BITS_SHIFT;

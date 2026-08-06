@@ -10,6 +10,7 @@
 import type * as THREE from 'three';
 import type { EntityId, TerrainGrid, WorldMode, WorldState } from '@game-mvp/core';
 import type { AssetService } from '@game-mvp/assets';
+import type { FallExtractConfig } from './extractor.js';
 
 // ------------------------------------------------- presentation-состояние
 
@@ -50,6 +51,11 @@ export interface EntityView {
    * камеры (CAM-6, ASSET-8).
    */
   states: number;
+  /** Сущность падает (REND-12): различает падение с нулевым прогрессом и его отсутствие. */
+  falling: boolean;
+  /** Нормированный прогресс падения [0..1] на двух последних тиках; 0, когда не падает. */
+  prevFall: number;
+  currFall: number;
 }
 
 /** Копия события тика: переживает `dispatch()`, в отличие от view ядра (OBS-3). */
@@ -135,6 +141,8 @@ export interface RenderHostConfig {
   readonly aimHoldTicks?: number;
   /** Компоненты, зеркалируемые в `EntityView.states` (эффекты камеры, CAM-6). */
   readonly stateComponents?: readonly string[];
+  /** Компонент прогресса падения (REND-12); без него снижение не применяется. */
+  readonly fall?: FallExtractConfig;
   /** Часы в миллисекундах; по умолчанию performance.now — параметр ради тестов. */
   readonly clock?: () => number;
 }

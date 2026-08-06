@@ -72,12 +72,25 @@ export interface ExtractedTick {
   flags: Uint8Array;
   facingYaw: Float32Array;
   aimYaw: Float32Array;
+  /** Нормированный прогресс падения [0, 1] (REND-12); `NaN` — сущность не падает. */
+  fall: Float32Array;
   /** События этого тика (копии, OBS-3), с номером тика — для reliable-доставки (SHELL-4). */
   events: readonly RenderEvent[];
   /** Пары (клетка, бит) реально изменившихся клеток пола (TERR-6 → REND-7). ArrayLike — читатель канала подставляет view в буфер доставки. */
   floorDelta: ArrayLike<number>;
   /** Живой словарь визуальных типов; растёт append-only (SHELL-5). */
   kindTable: readonly string[];
+}
+
+/**
+ * Компонент прогресса падения (REND-12): какой компонент и какие поля несут
+ * прогресс и порог — политика контента, рендер узнаёт о ней по имени, как о
+ * компоненте скорости. Оба поля — сырые счётчики тиков (i32).
+ */
+export interface FallExtractConfig {
+  readonly component: string;
+  readonly progressField: string;
+  readonly durationField: string;
 }
 
 export interface ExtractorConfig {
@@ -99,6 +112,8 @@ export interface ExtractorConfig {
    * (CAM-6). Не больше MAX_STATE_COMPONENTS.
    */
   readonly stateComponents?: readonly string[];
+  /** Компонент прогресса падения (REND-12); без него колонка `fall` — сплошной `NaN`. */
+  readonly fall?: FallExtractConfig;
 }
 
 const EMPTY_EVENTS: readonly RenderEvent[] = [];
@@ -117,6 +132,7 @@ export class Extractor {
   private readonly aimEvents: ReadonlySet<string>;
   private readonly aimHoldTicks: number;
   private readonly stateComponents: readonly string[];
+  private readonly fallConfig: FallExtractConfig | undefined;
   private readonly grid: TerrainGrid | undefined;
   private readonly mirror: FloorMirror | null;
 
@@ -148,6 +164,7 @@ export class Extractor {
         `Extractor: stateComponents — ${this.stateComponents.length} компонент, колонка flags вмещает ${MAX_STATE_COMPONENTS}`,
       );
     }
+    this.fallConfig = config.fall;
     this.grid = config.terrainGrid;
     this.mirror = this.grid === undefined ? null : new FloorMirror(this.grid);
     this.out = {
@@ -165,6 +182,7 @@ export class Extractor {
       flags: new Uint8Array(0),
       facingYaw: new Float32Array(0),
       aimYaw: new Float32Array(0),
+      fall: new Float32Array(0),
       events: EMPTY_EVENTS,
       floorDelta: EMPTY_DELTA,
       kindTable: this.kindTable,
@@ -263,6 +281,17 @@ export class Extractor {
       out.aimYaw[count] =
         aim !== undefined && tick - aim.tick <= this.aimHoldTicks ? aim.yaw : Number.NaN;
 
+      // Прогресс падения нормируется здесь же, в единственной точке конверсии
+      // мира (REND-1): `NaN` отличает «не падает» от нулевого прогресса (REND-12).
+      let fall = Number.NaN;
+      const fallConfig = this.fallConfig;
+      if (fallConfig !== undefined && world.hasComponent(state, entity, fallConfig.component)) {
+        const progress = world.getField(state, entity, fallConfig.component, fallConfig.progressField);
+        const duration = world.getField(state, entity, fallConfig.component, fallConfig.durationField);
+        fall = duration <= 0 ? 1 : Math.min(Math.max(progress / duration, 0), 1);
+      }
+      out.fall[count] = fall;
+
       count++;
     }
     out.count = count;
@@ -287,6 +316,7 @@ export class Extractor {
     out.flags = new Uint8Array(capacity);
     out.facingYaw = new Float32Array(capacity);
     out.aimYaw = new Float32Array(capacity);
+    out.fall = new Float32Array(capacity);
   }
 
   private resolveKind(state: WorldState, entity: EntityId): number {

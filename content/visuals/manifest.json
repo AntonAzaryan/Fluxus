@@ -21,7 +21,8 @@
         },
         "events": {
           "CastFireball": "Spell Slam",
-          "EntityDied": "Death"
+          "EntityDied": "Death",
+          "FellThroughFloor": "Death"
         }
       },
       "boneControls": {

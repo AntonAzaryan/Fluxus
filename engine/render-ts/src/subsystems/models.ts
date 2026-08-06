@@ -44,12 +44,15 @@ export interface ModelsOptions {
   readonly surface?: VisualSurfaceSource;
   /** Скорость сглаживания наклона по поверхности, 1/с (REND-10). */
   readonly tiltRate?: number;
+  /** Визуальная глубина полного падения, мировые единицы (REND-12). */
+  readonly fallDepth?: number;
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
 }
 
 const DEFAULT_TURN_RATE = 12;
 const DEFAULT_TILT_RATE = 10;
+const DEFAULT_FALL_DEPTH = 4;
 const PLACEHOLDER_COLOR = 0xd040d0;
 
 // Переиспользуемые между кадрами объекты — аллокаций на инстанс на кадр нет.
@@ -158,6 +161,7 @@ export class ModelsSubsystem implements RenderSubsystem {
     const heightStep = this.requireCtx().config.heightStep;
     const turnRate = this.options.turnRate ?? DEFAULT_TURN_RATE;
     const tiltRate = this.options.tiltRate ?? DEFAULT_TILT_RATE;
+    const fallDepth = this.options.fallDepth ?? DEFAULT_FALL_DEPTH;
     const facingOffset = this.options.facingOffset ?? 0;
     const surface = this.options.surface?.current ?? null;
 
@@ -169,10 +173,15 @@ export class ModelsSubsystem implements RenderSubsystem {
       const y = view.prevY + (view.currY - view.prevY) * t;
       // Сущность на поверхности стоит на визуальной поверхности (рампы и
       // кривизна, REND-9); с override уровня (TERR-4) — на высоте уровня.
-      const z =
+      let z =
         surface !== null && !view.levelOverride
           ? surface.heightAt(x, y)
           : (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
+      // Снижение падающей сущности (REND-12): прогресс интерполируется, как
+      // позиция; квадрат прогресса — визуальное ускорение «гравитации», сама
+      // кривая и глубина в симуляцию не попадают.
+      const fallT = view.falling ? view.prevFall + (view.currFall - view.prevFall) * t : 0;
+      if (fallT > 0) z -= fallDepth * fallT * fallT;
       record.holder.position.set(x, y, z);
 
       // Курс: цель из данных тика, доворот сглажен по кадрам; при snap — мгновенно.
@@ -181,7 +190,8 @@ export class ModelsSubsystem implements RenderSubsystem {
 
       // Наклон по нормали поверхности (REND-10): только для сущностей на
       // поверхности; сглажен по кадрам, при snap — мгновенно (REND-2).
-      if (surface !== null && record.tiltFactor > 0 && !view.levelOverride) {
+      // Падающая сущность на поверхности не стоит — наклона нет (REND-12).
+      if (surface !== null && record.tiltFactor > 0 && !view.levelOverride && !view.falling) {
         surface.normalAt(x, y, SCRATCH_NORMAL);
         tiltTarget(SCRATCH_NORMAL, record.tiltFactor, record.tiltMaxRad, SCRATCH_TILT);
         if (record.snapPending) {

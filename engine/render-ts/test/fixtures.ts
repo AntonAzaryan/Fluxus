@@ -175,6 +175,9 @@ export function makeEntityView(id: EntityId, partial: Partial<EntityView> = {}):
     facingYaw: 0,
     aimYaw: null,
     states: 0,
+    falling: false,
+    prevFall: 0,
+    currFall: 0,
     ...partial,
   };
 }

@@ -19,7 +19,8 @@
       "fields": { "halfX": "fixed", "halfY": "fixed", "radius": "fixed", "shape": "i32" }
     },
     { "name": "Lifetime", "fields": { "ticks": "i32" } },
-    { "name": "Dead", "fields": { "atTick": "i32" } }
+    { "name": "Dead", "fields": { "atTick": "i32" } },
+    { "name": "Falling", "fields": { "progress": "i32", "duration": "i32" } }
   ],
   "prefabs": [
     {
@@ -29,7 +30,8 @@
         "Input": { "aimDir": 0, "buttons": 0, "moveX": 0, "moveY": 0, "prevButtons": 0, "seq": 0 },
         "Position": { "x": 753664, "y": 753664 },
         "Velocity": { "x": 0, "y": 0 },
-        "Collider": { "halfX": 19661, "halfY": 19661, "radius": 19661, "shape": 0 }
+        "Collider": { "halfX": 19661, "halfY": 19661, "radius": 19661, "shape": 0 },
+        "ArenaState": { "support": 0 }
       },
       "tags": ["Hero"]
     },
@@ -47,7 +49,7 @@
     {
       "name": "Movement",
       "order": 10,
-      "query": { "all": ["Velocity", "Input"], "not": ["Dead"] },
+      "query": { "all": ["Velocity", "Input"], "not": ["Dead", "Falling"] },
       "as": "e",
       "do": [
         {
@@ -65,7 +67,7 @@
     {
       "name": "KillSwitch",
       "order": 20,
-      "query": { "all": ["Player", "Input", "Velocity"], "not": ["Dead"] },
+      "query": { "all": ["Player", "Input", "Velocity"], "not": ["Dead", "Falling"] },
       "as": "e",
       "do": [
         {
@@ -105,7 +107,7 @@
     {
       "name": "Cast",
       "order": 30,
-      "query": { "all": ["Input", "Player"], "not": ["Dead"] },
+      "query": { "all": ["Input", "Player"], "not": ["Dead", "Falling"] },
       "as": "e",
       "do": [
         {
@@ -249,8 +251,87 @@
           }
         }
       ]
+    },
+    {
+      "name": "FallStart",
+      "order": 120,
+      "do": [
+        {
+          "forEachEvent": {
+            "type": "FellThroughFloor",
+            "as": "ev",
+            "do": [
+              {
+                "let": {
+                  "bindings": { "e": { "eventField": [{ "var": "ev" }, "entity"] } },
+                  "do": [
+                    {
+                      "addComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Falling",
+                        "values": { "progress": 0, "duration": 45 }
+                      }
+                    },
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Velocity",
+                        "values": { "x": 0, "y": 0 }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "FallProgress",
+      "order": 121,
+      "query": { "all": ["Falling"] },
+      "as": "e",
+      "do": [
+        {
+          "let": {
+            "bindings": {
+              "next": { "+": [{ "getComponent": [{ "var": "e" }, "Falling", "progress"] }, 1] }
+            },
+            "do": [
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Falling",
+                  "values": { "progress": { "var": "next" } }
+                }
+              },
+              {
+                "if": {
+                  "cond": {
+                    ">=": [{ "var": "next" }, { "getComponent": [{ "var": "e" }, "Falling", "duration"] }]
+                  },
+                  "then": [
+                    {
+                      "emitEvent": {
+                        "type": "EntityDied",
+                        "data": { "entity": { "var": "e" } }
+                      }
+                    },
+                    { "destroyEntity": { "entity": { "var": "e" } } }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   ],
+  "arena": {
+    "center": { "x": 786432, "y": 786432 },
+    "radius": 1179648
+  },
   "terrain": {
     "width": 24,
     "height": 24,

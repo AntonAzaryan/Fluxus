@@ -25,6 +25,7 @@ function syntheticTick(count: number): ExtractedTick {
     flags: new Uint8Array(count),
     facingYaw: new Float32Array(count),
     aimYaw: new Float32Array(count),
+    fall: new Float32Array(count),
     events: [],
     floorDelta: [],
     kindTable: ['Hero'],

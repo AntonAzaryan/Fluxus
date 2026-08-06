@@ -17,6 +17,7 @@
  *   x, y       f32×count   — мировые координаты (уже float, REND-1)
  *   facingYaw  f32×count   — NaN: стоит, курс не обновлять
  *   aimYaw     f32×count   — NaN: цели нет
+ *   fall       f32×count   — нормированный прогресс падения [0, 1] (REND-12), NaN: не падает
  *   kind       i32×count   — индекс в словаре kind'ов, −1: не рисуется
  *   floor      u32×2×pairs — пары (клетка, бит пола)
  *   level      u8×count
@@ -25,7 +26,7 @@
 import type { ExtractedTick, RenderEvent } from '@game-mvp/render';
 import type { WorldMode } from '@game-mvp/core';
 
-export const CODEC_VERSION = 1;
+export const CODEC_VERSION = 2;
 
 const HEADER_WORDS = 8;
 const HEADER_BYTES = HEADER_WORDS * 4;
@@ -48,7 +49,7 @@ const align8 = (bytes: number): number => (bytes + 7) & ~7;
 
 interface Layout {
   id: number;
-  f32: number; // x, затем y, facingYaw, aimYaw подряд
+  f32: number; // x, затем y, facingYaw, aimYaw, fall подряд
   kind: number;
   floor: number;
   level: number;
@@ -59,7 +60,7 @@ interface Layout {
 function layout(count: number, floorPairs: number): Layout {
   const id = align8(HEADER_BYTES);
   const f32 = id + count * 8;
-  const kind = f32 + count * 4 * 4;
+  const kind = f32 + count * 4 * 5;
   const floor = kind + count * 4;
   const level = floor + floorPairs * 8;
   const flags = level + count;
@@ -119,11 +120,12 @@ export function writeTick(
   header[H_FLOOR_PAIRS] = floorPairs;
 
   new Float64Array(buffer, at.id, count).set(ext.id.subarray(0, count));
-  const f32 = new Float32Array(buffer, at.f32, count * 4);
+  const f32 = new Float32Array(buffer, at.f32, count * 5);
   f32.set(ext.x.subarray(0, count), 0);
   f32.set(ext.y.subarray(0, count), count);
   f32.set(ext.facingYaw.subarray(0, count), count * 2);
   f32.set(ext.aimYaw.subarray(0, count), count * 3);
+  f32.set(ext.fall.subarray(0, count), count * 4);
   new Int32Array(buffer, at.kind, count).set(ext.kind.subarray(0, count));
   const floor = new Uint32Array(buffer, at.floor, floorPairs * 2);
   for (let i = 0; i < floorPairs * 2; i++) floor[i] = floorDelta[i]!;
@@ -185,6 +187,7 @@ export function readTick(
     y: new Float32Array(buffer, f32 + count * 4, count),
     facingYaw: new Float32Array(buffer, f32 + count * 8, count),
     aimYaw: new Float32Array(buffer, f32 + count * 12, count),
+    fall: new Float32Array(buffer, f32 + count * 16, count),
     kind: new Int32Array(buffer, at.kind, count),
     floorDelta: new Uint32Array(buffer, at.floor, floorPairs * 2),
     level: new Uint8Array(buffer, at.level, count),
