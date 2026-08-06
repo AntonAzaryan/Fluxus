@@ -131,6 +131,15 @@ export {
 export type { VisibilityOptions } from './systems/visibility.js';
 export { InputSystem, INPUT_FIELDS } from './systems/inputSystem.js';
 export type { InputSystemOptions } from './systems/inputSystem.js';
+export {
+  LocomotionSystem,
+  LOCOMOTION_NORMAL,
+  LOCOMOTION_DODGE,
+  LOCOMOTION_ROLL,
+  LOCOMOTION_AIRBORNE,
+  LOCOMOTION_WINDOW,
+} from './systems/locomotion.js';
+export type { LocomotionOptions } from './systems/locomotion.js';
 export { modifierList, requireModifierList, DEFAULT_MODIFIER_SLOTS } from './systems/modifiers.js';
 export {
   TimeScaleSystem,
