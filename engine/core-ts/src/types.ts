@@ -108,6 +108,14 @@ export interface PathResult {
 export interface CliffEdge {
   readonly from: Vec2;
   readonly to: Vec2;
+  /**
+   * Уровни клеток по обе стороны ребра (TERR-5): направленный гейт обрыва
+   * (PHYS-11) читает подъём из отрезка, не обращаясь к карте уровней второй
+   * раз. Сторона — по оси нормали ребра: `levelNeg` — клетка с меньшей
+   * координатой, `levelPos` — с большей.
+   */
+  readonly levelNeg: number;
+  readonly levelPos: number;
 }
 
 /** Иммутабельная часть террейна: входит в `worldInit` (DET-1) и не снапшотится (TERR-6). */

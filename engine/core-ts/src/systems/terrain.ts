@@ -173,16 +173,28 @@ function buildCliffs(grid: TerrainGrid): CliffEdge[] {
   };
 
   // Порядок обхода — построчный, сосед справа перед соседом снизу (DET-6).
+  // Уровни сторон пишутся в отрезок здесь же (TERR-5): `levelNeg` — клетка с
+  // меньшей координатой по нормали ребра, `levelPos` — с большей (PHYS-11).
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = y * width + x;
       if (x + 1 < width && !passable(i, i + 1)) {
         const edgeX = (x + 1) * tileSize;
-        edges.push({ from: { x: edgeX, y: y * tileSize }, to: { x: edgeX, y: (y + 1) * tileSize } });
+        edges.push({
+          from: { x: edgeX, y: y * tileSize },
+          to: { x: edgeX, y: (y + 1) * tileSize },
+          levelNeg: levels[i]!,
+          levelPos: levels[i + 1]!,
+        });
       }
       if (y + 1 < height && !passable(i, i + width)) {
         const edgeY = (y + 1) * tileSize;
-        edges.push({ from: { x: x * tileSize, y: edgeY }, to: { x: (x + 1) * tileSize, y: edgeY } });
+        edges.push({
+          from: { x: x * tileSize, y: edgeY },
+          to: { x: (x + 1) * tileSize, y: edgeY },
+          levelNeg: levels[i]!,
+          levelPos: levels[i + width]!,
+        });
       }
     }
   }

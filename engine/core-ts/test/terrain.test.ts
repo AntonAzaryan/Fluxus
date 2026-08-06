@@ -85,8 +85,8 @@ describe('cliff-геометрия (TERR-5)', () => {
 
   it('перепад без рампы даёт границу', () => {
     expect(edges('01', '..')).toEqual([
-      { from: { x: TILE, y: 0 }, to: { x: TILE, y: TILE } },
-      { from: { x: TILE, y: TILE }, to: { x: TILE, y: fixed.fromInt(4) } },
+      { from: { x: TILE, y: 0 }, to: { x: TILE, y: TILE }, levelNeg: 0, levelPos: 1 },
+      { from: { x: TILE, y: TILE }, to: { x: TILE, y: fixed.fromInt(4) }, levelNeg: 0, levelPos: 1 },
     ]);
   });
 
@@ -110,7 +110,30 @@ describe('cliff-геометрия (TERR-5)', () => {
       levels: ['0', '3'],
       flags: ['.', '.'],
     });
-    expect(grid.cliffs).toEqual([{ from: { x: 0, y: TILE }, to: { x: TILE, y: TILE } }]);
+    expect(grid.cliffs).toEqual([
+      { from: { x: 0, y: TILE }, to: { x: TILE, y: TILE }, levelNeg: 0, levelPos: 3 },
+    ]);
+  });
+
+  it('отрезок несёт уровни обеих сторон в обеих ориентациях (TERR-5, PHYS-11)', () => {
+    // Вертикальные рёбра: слева уровень 2, справа 0 — `levelNeg` берёт сторону
+    // меньшей координаты по нормали, а не меньший из уровней.
+    expect(edges('20', '..')).toEqual([
+      { from: { x: TILE, y: 0 }, to: { x: TILE, y: TILE }, levelNeg: 2, levelPos: 0 },
+      { from: { x: TILE, y: TILE }, to: { x: TILE, y: fixed.fromInt(4) }, levelNeg: 2, levelPos: 0 },
+    ]);
+    // Горизонтальные рёбра: сверху 0, снизу 2.
+    const grid = createTerrainGrid({
+      width: 2,
+      height: 2,
+      tileSize: TILE,
+      levels: ['00', '22'],
+      flags: ['..', '..'],
+    });
+    expect(grid.cliffs).toEqual([
+      { from: { x: 0, y: TILE }, to: { x: TILE, y: TILE }, levelNeg: 0, levelPos: 2 },
+      { from: { x: TILE, y: TILE }, to: { x: fixed.fromInt(4), y: TILE }, levelNeg: 0, levelPos: 2 },
+    ]);
   });
 });
 
