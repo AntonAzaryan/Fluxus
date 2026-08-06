@@ -272,7 +272,7 @@ describe('EntityView.states: зеркалирование битов состо�
       floorDelta: [],
       kindTable: [],
     });
-    const view = buffer.view.entities.get(7 as EntityId)!;
+    const view = buffer.view.entities.get(7)!;
     expect(view.moving).toBe(true);
     expect(view.states).toBe(0b10);
   });

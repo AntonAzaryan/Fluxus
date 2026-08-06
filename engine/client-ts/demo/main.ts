@@ -26,12 +26,12 @@ import {
   ModelsSubsystem,
   TerrainSubsystem,
   VisualSurfaceSource,
+  applyCameraPose,
   createCameraInput,
   edgePanAxes,
   heroMoveFromKeys,
   resetCameraInput,
   terrainGroundApi,
-  type CameraPose,
   type RenderContext,
 } from '@game-mvp/render';
 import { RemoteHost, shellPort } from '@game-mvp/client';
@@ -66,24 +66,6 @@ let rig: CameraRig | null = null;
 /** Диспетчер эффектов появляется вместе с манифестом (ASSET-7, см. main). */
 let director: CameraEffectsDirector | null = null;
 const camInput = createCameraInput();
-const lookTarget = new THREE.Vector3();
-
-function applyPose(pose: CameraPose): void {
-  camera.position.set(pose.posX, pose.posY, pose.posZ);
-  const cosPitch = Math.cos(pose.pitch);
-  lookTarget.set(
-    pose.posX + Math.cos(pose.yaw) * cosPitch,
-    pose.posY + Math.sin(pose.yaw) * cosPitch,
-    pose.posZ - Math.sin(pose.pitch),
-  );
-  camera.lookAt(lookTarget);
-  if (pose.roll !== 0) camera.rotateZ(pose.roll);
-  if (camera.fov !== pose.fovDeg) {
-    camera.fov = pose.fovDeg;
-    camera.updateProjectionMatrix();
-  }
-}
-
 scene3.add(new THREE.AmbientLight(0xffffff, 0.65));
 const sun = new THREE.DirectionalLight(0xffffff, 1.7);
 sun.position.set(8, -12, 18);
@@ -349,7 +331,7 @@ function frame(now: number): void {
     const dtSec = dt / 1000;
     const logical = rig.update(camInput, dtSec, target);
     resetCameraInput(camInput);
-    applyPose(director === null ? logical : director.stack.apply(logical, dtSec));
+    applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, dtSec));
   }
 
   renderer3.render(scene3, camera);

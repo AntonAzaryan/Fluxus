@@ -17,7 +17,7 @@ import {
 import { makeAssets, makeEntityView, makeTickView, type AssetsStub } from './fixtures.js';
 
 const STEP = 0.5;
-const HERO: EntityId = 1 as EntityId;
+const HERO: EntityId = 1;
 
 /** 4×4, уровень 0, сильный бугор в центре — заметные наклоны склонов. */
 function bumpyGrid() {
