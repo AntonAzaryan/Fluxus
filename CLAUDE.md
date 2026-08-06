@@ -2,7 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Repository documentation and specs are written in Russian (requirement modality in specs is English: SHALL / MUST NOT). Keep it that way when editing them.
+## Language policy
+
+- All reasoning, subagent instructions, and inter-agent communication — in English.
+- Final responses to the user — in Russian.
+
+### Spec handling
+
+- Specs (`openspec/`) and docs are written in Russian — requirement modality stays English (SHALL / MUST NOT). Keep it that way when editing them; do NOT translate them.
+- Reference requirements by ID (e.g. NTR-1, CONT-4, SHELL-3) instead of paraphrasing. When exact wording matters, quote the Russian text verbatim.
+- Before implementing, check the relevant capability spec: `openspec spec show <capability>`.
+
+### Naming
+
+- All code — identifiers, comments, schemas — in English. Commit messages follow the repository's own practice: an English conventional-commit prefix (`feat(camera):`, `spec(editor):`, `test:`) with a Russian subject.
+- Anglicisms in specs map to their English originals in code (тик → tick, рендер → render); never invent synonyms. Existing names in `engine/` packages are canonical — follow them.
 
 ## The repository
 
