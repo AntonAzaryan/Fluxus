@@ -35,6 +35,7 @@ export type { DecodedImage } from './image.js';
 
 // манифест визуалов (ASSET-6)
 export type {
+  VerticalOffset,
   VisualManifest,
   EntityVisual,
   SurfaceAlign,

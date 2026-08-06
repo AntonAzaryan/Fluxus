@@ -268,6 +268,8 @@ describe('EntityView.states: зеркалирование битов состо�
       flags: new Uint8Array([0b1001]),
       facingYaw: new Float32Array([Number.NaN]),
       aimYaw: new Float32Array([Number.NaN]),
+      motion: new Uint8Array([0]),
+      motionPhase: new Float32Array([Number.NaN]),
       events: [],
       floorDelta: [],
       kindTable: [],

@@ -38,6 +38,17 @@ export interface EntityView {
   spawned: boolean;
   /** Скорость выше порога на последнем тике — состояние `move` (REND-4). */
   moving: boolean;
+  /**
+   * Состояние машины локомоушена на последнем тике (`LOCOMOTION_*` ядра,
+   * LOC-3): из него берётся состояние анимации манёвра (REND-4).
+   */
+  motion: number;
+  /**
+   * Фаза манёвра на тех же двух тиках, что позиция, — доля пройденных тиков
+   * манёвра; `NaN` — манёвра на этом тике не было. Вход дуги прыжка (REND-12).
+   */
+  prevMotionPhase: number;
+  currMotionPhase: number;
   /** Override уровня (TERR-4): сущность не «на поверхности», наклон не применяется (REND-10). */
   levelOverride: boolean;
   /** Последний курс движения, радианы; сохраняется, пока сущность стоит. */
@@ -135,6 +146,8 @@ export interface RenderHostConfig {
   readonly aimHoldTicks?: number;
   /** Компоненты, зеркалируемые в `EntityView.states` (эффекты камеры, CAM-6). */
   readonly stateComponents?: readonly string[];
+  /** Имена компонентов локомоушена (LOC-1); дефолты — как у системы ядра. */
+  readonly locomotion?: { readonly stateComponent?: string; readonly configComponent?: string };
   /** Часы в миллисекундах; по умолчанию performance.now — параметр ради тестов. */
   readonly clock?: () => number;
 }

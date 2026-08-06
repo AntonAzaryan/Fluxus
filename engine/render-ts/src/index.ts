@@ -62,6 +62,9 @@ export type { VisualSurfaceSourceOptions } from './surfaceSource.js';
 export { tiltTarget, smoothTilt } from './model/surfaceAlign.js';
 export type { TiltVector } from './model/surfaceAlign.js';
 
+// Вертикальное смещение инстанса: дуга прыжка и снижение при провале (REND-12).
+export { jumpArc, advanceFall } from './model/verticalOffset.js';
+
 // Подсистема террейна (REND-7, REND-9) и её чистые генераторы геометрии.
 export {
   TerrainSubsystem,

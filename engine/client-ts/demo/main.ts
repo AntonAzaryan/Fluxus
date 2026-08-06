@@ -35,7 +35,7 @@ import {
   type RenderContext,
 } from '@game-mvp/render';
 import { RemoteHost, shellPort } from '@game-mvp/client';
-import { CAST_BUTTON, KILL_BUTTON, TURN_UNITS } from './sim.js';
+import { CAST_BUTTON, DODGE_BUTTON, JUMP_BUTTON, KILL_BUTTON, TURN_UNITS } from './sim.js';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
 const HEIGHT_STEP = 0.6;
@@ -118,6 +118,9 @@ const keys = new Set<string>();
 /** Отложенный на ближайший тик каст: угол прицеливания (см. aimAngle). */
 let pendingCast: number | null = null;
 let pendingKill = false;
+/** Отложенные фронты кнопок локомоушена (LOC-3): уклон/перекат и прыжок. */
+let pendingDodge = false;
+let pendingJump = false;
 let currentSkin: 'steel' | 'ember' = 'steel';
 
 /** Последняя позиция указателя — edge-pan считается по кадрам (CAM-3). */
@@ -179,7 +182,18 @@ window.addEventListener('keydown', (e) => {
     pendingKill = true;
     return;
   }
-  if (e.code === 'Space') camInput.centerTap = true;
+  // Уклон и прыжок — фронты кнопок локомоушена (LOC-4, LOC-5): латчатся до
+  // ближайшего тика, как каст и убийство, иначе нажатие между тиками пропадёт.
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+    pendingDodge = true;
+    return;
+  }
+  if (e.code === 'Space') {
+    pendingJump = true;
+    keys.add(e.code);
+    return;
+  }
+  if (e.code === 'KeyC') camInput.centerTap = true;
   if (e.code === 'KeyY') camInput.followToggle = true;
   if (e.code === 'KeyF') camInput.flyToggle = true;
   keys.add(e.code);
@@ -252,7 +266,7 @@ function sampleCameraInput(): void {
   const edge = edgePanAxes(pointerX, pointerY, rect, margin);
   camInput.edgeX = edge.x;
   camInput.edgeY = edge.y;
-  camInput.centerHeld = keys.has('Space');
+  camInput.centerHeld = keys.has('KeyC');
   const fly = rig?.capturesMovement() ?? false;
   camInput.moveX = fly ? (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0) : 0;
   camInput.moveY = fly ? (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0) : 0;
@@ -281,6 +295,14 @@ function pushInput(): void {
     buttons |= KILL_BUTTON;
     pendingKill = false;
   }
+  if (pendingDodge) {
+    buttons |= DODGE_BUTTON;
+    pendingDodge = false;
+  }
+  if (pendingJump) {
+    buttons |= JUMP_BUTTON;
+    pendingJump = false;
+  }
 
   remote.sendInput({ x: fixed.fromFloat(move.x), y: fixed.fromFloat(move.y) }, aimDir, buttons);
 }
@@ -297,7 +319,7 @@ function updateHud(): void {
   hudStatus.textContent =
     `тик ${view?.tick ?? 0} | сущностей ${view?.entities.size ?? 0} | ` +
     `скин ${currentSkin} | герой: ${status} | камера: ${modeName} ` +
-    `(стрелки/край/MMB — панорама, колесо — зум, Space — к герою, Y — follow, F — полёт)`;
+    `(стрелки/край/MMB — панорама, колесо — зум, C — к герою, Y — follow, F — полёт)`;
 }
 
 let hudCountdown = 0;

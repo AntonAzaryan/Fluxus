@@ -87,6 +87,9 @@ describe('buildSharedModel: клипы из секвенций (REND-4)', () => 
       'Walk Fast',
       'Attack - 1',
       'Death',
+      'Roll',
+      'Jump Loop',
+      'Fall',
     ]);
 
     const stand = shared.clips[0]!;

@@ -2,7 +2,7 @@
  * Общие фикстуры тестов: нормализованная модель, стаб AssetService с ручным
  * управлением состояниями и конструкторы presentation-состояния.
  */
-import type { EntityId } from '@game-mvp/core';
+import { LOCOMOTION_NORMAL, type EntityId } from '@game-mvp/core';
 import type {
   AssetKind,
   AssetService,
@@ -79,6 +79,9 @@ export function makeModel(): NormalizedModel {
       sequence('Walk Fast', 1),
       sequence('Attack - 1', 0.5),
       sequence('Death', 0.8),
+      sequence('Roll', 0.6),
+      sequence('Jump Loop', 0.7),
+      sequence('Fall', 0.9),
     ],
     materials: [
       {
@@ -175,6 +178,9 @@ export function makeEntityView(id: EntityId, partial: Partial<EntityView> = {}):
     facingYaw: 0,
     aimYaw: null,
     states: 0,
+    motion: LOCOMOTION_NORMAL,
+    prevMotionPhase: Number.NaN,
+    currMotionPhase: Number.NaN,
     ...partial,
   };
 }
