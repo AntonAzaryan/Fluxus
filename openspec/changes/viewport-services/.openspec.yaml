@@ -1,0 +1,7 @@
+schema: spec-driven
+created: 2026-08-06
+
+# Стаб очереди (change scene-editor, задача 2.x): спеки этого change'а появятся
+# при его разработке через /opsx:update viewport-services — тогда маркер снять.
+# Пока дельт нет намеренно: артефакты specs/design/tasks пусты, см. ## Notes в proposal.md.
+skip_specs: true
