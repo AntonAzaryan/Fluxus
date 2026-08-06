@@ -13,6 +13,7 @@ import { fixed, type EntityId } from '@game-mvp/core';
 import {
   AssetService,
   curvatureLoader,
+  gltfLoader,
   manifestLoader,
   mdxLoader,
   pngTextureLoader,
@@ -90,6 +91,7 @@ const assetSource: AssetSource = {
 
 const assets = new AssetService(assetSource);
 assets.registerLoader(mdxLoader);
+assets.registerLoader(gltfLoader);
 assets.registerLoader(pngTextureLoader);
 assets.registerLoader(manifestLoader);
 assets.registerLoader(curvatureLoader);

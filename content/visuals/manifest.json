@@ -1,41 +1,34 @@
 {
   "entities": {
     "Hero": {
-      "model": "visuals/models/SkeletonBarbarian.mdx",
-      "scale": 1.6,
-      "defaultSkin": "steel",
-      "skins": {
-        "steel": {
-          "0": "visuals/textures/skin-steel.png",
-          "1": "visuals/textures/skin-steel.png"
-        },
-        "ember": {
-          "0": "visuals/textures/skin-ember.png",
-          "1": "visuals/textures/skin-ember.png"
-        }
-      },
+      "model": "visuals/models/Barbarian/Barbarian.gltf",
+      "scale": 1.7,
       "animations": {
         "states": {
-          "idle": "Stand",
-          "move": "Walk"
+          "idle": "Idle",
+          "move": "Running_A",
+          "dodge": "Dodge_Forward",
+          "roll": "Dodge_Backward",
+          "jump": "Jump_Idle"
         },
         "events": {
-          "CastFireball": "Spell Slam",
-          "EntityDied": "Death"
+          "CastFireball": "1H_Ranged_Shoot",
+          "EntityDied": "Death_A"
         }
       },
       "boneControls": {
         "torso": {
-          "bone": "Bone_Chest",
-          "maxYawDeg": 72,
+          "bone": "chest",
+          "maxYawDeg": 60,
           "smoothing": 18
         },
         "head": {
-          "bone": "Bone_Head",
-          "maxYawDeg": 40,
+          "bone": "head",
+          "maxYawDeg": 45,
           "smoothing": 20
         }
       },
+      "hiddenParts": [1, 4, 5],
       "surfaceAlign": {
         "factor": 1,
         "maxAngleDeg": 30

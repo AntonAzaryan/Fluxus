@@ -1,0 +1,262 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "hand-written test fixture"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "model.bin",
+   "byteLength": 340
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 36
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 36,
+   "byteLength": 12
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 48,
+   "byteLength": 48
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 96,
+   "byteLength": 6
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 104,
+   "byteLength": 36
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 140,
+   "byteLength": 6
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 148,
+   "byteLength": 128
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 276,
+   "byteLength": 8
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 284,
+   "byteLength": 24
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 308,
+   "byteLength": 32
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5121,
+   "count": 3,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5123,
+   "count": 3,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5123,
+   "count": 3,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5126,
+   "count": 2,
+   "type": "MAT4"
+  },
+  {
+   "bufferView": 7,
+   "componentType": 5126,
+   "count": 2,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 8,
+   "componentType": 5126,
+   "count": 2,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 9,
+   "componentType": 5126,
+   "count": 2,
+   "type": "VEC4"
+  }
+ ],
+ "nodes": [
+  {
+   "name": "Armature",
+   "children": [
+    1,
+    2
+   ]
+  },
+  {
+   "name": "Body",
+   "mesh": 0,
+   "skin": 0
+  },
+  {
+   "name": "Root",
+   "translation": [
+    1,
+    2,
+    3
+   ],
+   "children": [
+    3
+   ]
+  },
+  {
+   "name": "Child",
+   "translation": [
+    0,
+    1,
+    0
+   ],
+   "children": [
+    4
+   ]
+  },
+  {
+   "name": "Prop",
+   "mesh": 1,
+   "translation": [
+    0,
+    0,
+    2
+   ]
+  }
+ ],
+ "meshes": [
+  {
+   "name": "BodyMesh",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "JOINTS_0": 1,
+      "WEIGHTS_0": 2
+     },
+     "indices": 3,
+     "material": 0
+    }
+   ]
+  },
+  {
+   "name": "PropMesh",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 4
+     },
+     "indices": 5,
+     "material": 0
+    }
+   ]
+  }
+ ],
+ "skins": [
+  {
+   "joints": [
+    2,
+    3
+   ],
+   "inverseBindMatrices": 6
+  }
+ ],
+ "materials": [
+  {
+   "name": "Mat",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     1,
+     1,
+     1,
+     1
+    ]
+   }
+  }
+ ],
+ "animations": [
+  {
+   "name": "Anim1",
+   "channels": [
+    {
+     "sampler": 0,
+     "target": {
+      "node": 0,
+      "path": "translation"
+     }
+    },
+    {
+     "sampler": 1,
+     "target": {
+      "node": 3,
+      "path": "rotation"
+     }
+    }
+   ],
+   "samplers": [
+    {
+     "input": 7,
+     "output": 8,
+     "interpolation": "LINEAR"
+    },
+    {
+     "input": 7,
+     "output": 9,
+     "interpolation": "LINEAR"
+    }
+   ]
+  }
+ ]
+}

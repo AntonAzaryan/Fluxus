@@ -50,6 +50,7 @@ export { validateCurvatureMap, curvatureOffsetOf, CURVATURE_SCALE } from './curv
 
 // загрузчики реестра (ASSET-3); регистрируются потребителем через registerLoader
 export { mdxLoader } from './loaders/mdx.js';
+export { gltfLoader } from './loaders/gltf.js';
 export { pngTextureLoader, decodePng } from './loaders/png.js';
 export { manifestLoader } from './loaders/manifest.js';
 export { curvatureLoader } from './loaders/curvature.js';
