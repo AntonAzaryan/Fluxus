@@ -133,7 +133,7 @@ export class CameraEffectsDirector {
       y = data['y'] / FIXED_ONE;
     } else {
       const source = data['entity'] ?? data['source'];
-      const entity = source === undefined ? undefined : view.entities.get(source as EntityId);
+      const entity = source === undefined ? undefined : view.entities.get(source);
       if (entity !== undefined) {
         x = entity.currX;
         y = entity.currY;

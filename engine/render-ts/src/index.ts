@@ -20,7 +20,8 @@ export type { ExtractedTick, ExtractorConfig } from './extractor.js';
 export { ViewBuffer } from './viewBuffer.js';
 export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 
-// Камера (camera CAM-1..6): rig режимов, слой эффектов, диспетчер по манифесту.
+// Камера (camera CAM-1..7): rig режимов, слой эффектов, диспетчер по манифесту,
+// общее применение позы к THREE-камере.
 export {
   CameraRig,
   DEFAULT_CAMERA_CONFIG,
@@ -50,6 +51,7 @@ export {
 export type { CameraEffect, PoseOffset, ShakeParams, SwayParams } from './camera/effects.js';
 export { CameraEffectsDirector } from './camera/director.js';
 export type { CameraEffectsDirectorOptions } from './camera/director.js';
+export { applyCameraPose } from './camera/apply.js';
 
 // Визуальная поверхность террейна (REND-9, REND-10): хелпер, общий для
 // подсистем террейна и моделей, и его источник с загрузкой карты кривизны.
