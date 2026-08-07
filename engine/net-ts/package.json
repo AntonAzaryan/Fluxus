@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "serve": "node bin/serve.mjs",
+    "host": "node bin/host.mjs",
     "play": "node bin/play.mjs"
   },
   "engines": {
