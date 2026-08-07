@@ -97,6 +97,8 @@ export class AnimationController {
   private oneShot: THREE.AnimationAction | null = null;
   /** Текущее состояние локомоции ('idle'/'move' в MVP). */
   private state: string | null = null;
+  /** Клип, назначенный набором инстансов поверх состояния (REND-11); undefined — не назначен. */
+  private override: string | undefined = undefined;
   private dead = false;
 
   constructor(
@@ -115,7 +117,7 @@ export class AnimationController {
     this.mixer.addEventListener('finished', (event) => {
       if (event.action !== this.oneShot) return;
       this.oneShot = null;
-      if (!this.dead) this.playState(this.state);
+      if (!this.dead) this.resumeLoop();
     });
   }
 
@@ -135,8 +137,23 @@ export class AnimationController {
   setState(state: string): void {
     if (this.dead || this.state === state) return;
     this.state = state;
-    if (this.oneShot !== null) return;
+    // Назначенный клип бьёт состояние: в документном режиме состояние всё равно
+    // производить не из чего, а в игровом override не ставится (REND-11).
+    if (this.oneShot !== null || this.override !== undefined) return;
     this.playState(state);
+  }
+
+  /**
+   * Клип, назначенный набором инстансов (REND-11): играет зацикленно поверх
+   * состояния и разрешается по тем же правилам, что запись манифеста (REND-4).
+   * `undefined` снимает назначение и возвращает клип текущего состояния —
+   * умолчание документного набора и единственное, что видит поток тиков.
+   */
+  setClipOverride(entry: string | undefined): void {
+    if (this.override === entry) return;
+    this.override = entry;
+    if (this.dead || this.oneShot !== null) return;
+    this.resumeLoop();
   }
 
   /**
@@ -167,6 +184,15 @@ export class AnimationController {
     this.mixer.update(dt);
   }
 
+  /** Зацикленный клип, к которому возвращаются: назначенный набором либо клип состояния. */
+  private resumeLoop(): void {
+    if (this.override !== undefined) {
+      this.playLoop(this.override);
+      return;
+    }
+    this.playState(this.state);
+  }
+
   private playState(state: string | null): void {
     if (state === null) return;
     const entry = this.mapping.states?.[state];
@@ -174,6 +200,10 @@ export class AnimationController {
     // не ошибка (REND-4), политика в данных, а не фолбэк в коде. Предупреждает
     // только запись, которая есть, но ни во что не разрешается.
     if (entry === undefined) return;
+    this.playLoop(entry);
+  }
+
+  private playLoop(entry: string): void {
     const clip = this.clipFor(entry);
     if (clip === null) return;
 

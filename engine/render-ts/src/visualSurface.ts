@@ -95,6 +95,8 @@ export function createVisualSurface(
   curvature: TerrainCurvatureMap | null = null,
 ): VisualSurface {
   const { width, height } = grid;
+  // Приём сетки — точка входной границы (REND-1, TERR-2): дальше поверхность
+  // считается целиком во float.
   const tile = grid.tileSize / FIXED_ONE;
 
   // Мировые высоты углов каждой клетки, [cell * 4 + corner], порядок cornerLevels.

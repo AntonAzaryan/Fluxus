@@ -13,6 +13,13 @@
  * Мутация пола (TERR-6) приходит дельтой клеток из presentation-состояния и
  * пересобирает затронутый чанк не позже следующего кадра; полная пересборка
  * чанка — осознанный выбор MVP (см. design Risks).
+ *
+ * Сетка — вторая точка входной границы рендера (REND-1): она приезжает не из
+ * `TickResult`, а инициализацией подсистемы (REND-8) — в воркер-сборке
+ * хендшейком оболочки (SHELL-5), — и `tileSize` с координатами cliff-отрезков в
+ * ней fixed-point (TERR-2). Поэтому деления на `FIXED_ONE` здесь стоят в точке
+ * приёма и должны там оставаться: глубже по коду рендера fixed-point значений и
+ * их арифметики нет.
  */
 import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
@@ -44,6 +51,7 @@ export function buildFloorGeometry(
   h: number,
   surface?: VisualSurface,
 ): TerrainGeometryData {
+  // Приём `tileSize` — точка входной границы (REND-1, SHELL-5, TERR-2).
   const tile = grid.tileSize / FIXED_ONE;
   const positions: number[] = [];
   const indices: number[] = [];
@@ -110,7 +118,10 @@ export function buildWallGeometry(
   };
 
   for (const edge of grid.cliffs) {
-    // Координаты отрезка кратны tileSize (fixed-домен — деление точное).
+    // Координаты отрезка — тоже точка входной границы (REND-1, TERR-2, TERR-5):
+    // индекс клетки считается в fixed-домене (кратность tileSize делает деление
+    // точным), мировые координаты кромки конвертируются во float ниже, и дальше
+    // геометрия строится целиком во float.
     let cellA: number;
     let cellB: number;
     if (edge.from.x === edge.to.x) {

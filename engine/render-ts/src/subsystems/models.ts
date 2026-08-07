@@ -1,11 +1,18 @@
 /**
- * Подсистема моделей (REND-3..6): пул инстансов по сущностям снапшота.
+ * Подсистема моделей (REND-3..6): пул инстансов по сущностям presentation-
+ * состояния.
  *
  * Появление сущности в presentation-состоянии создаёт инстанс, исчезновение —
  * убирает. Разделяемая часть ассета (геометрия, клипы) строится один раз и
  * кэшируется здесь; скелет, материалы и анимационное состояние — свои на
  * инстанс. Всё поведение — из манифеста визуалов (ASSET-6): модель, скины,
  * маппинг анимаций, параметры bone-контроля.
+ *
+ * Кто наполнил presentation-состояние — поток тиков или документный набор
+ * инстансов редактора (REND-11), — подсистеме не видно и знать не положено:
+ * вход у неё один, и правило жизненного цикла инстанса тоже одно (REND-3).
+ * Поля, которые заполняет только набор (`clip`, `skin`, `scale`), на пути тика
+ * приходят пустыми, и ветки под них не работают.
  */
 import * as THREE from 'three';
 import {
@@ -138,6 +145,14 @@ interface InstanceRecord {
   boneControl: BoneControlState | null;
   skinApp: SkinApplication | null;
   skin: string | undefined;
+  /**
+   * Скин и масштаб, назначенные presentation-состоянием (REND-11): хранятся,
+   * чтобы отличить «набор поменял поле» от «набор им не правит вовсе». На пути
+   * тика оба всегда `undefined`, поэтому `setSkin` остаётся единственным
+   * источником скина и ничем не перебивается.
+   */
+  viewSkin: string | undefined;
+  viewScale: number | undefined;
   yaw: number;
   snapPending: boolean;
   /**
@@ -208,7 +223,18 @@ export class ModelsSubsystem implements RenderSubsystem {
         record.falling = false;
         record.fallOffset = 0;
       }
-      record.controller?.setState(animationStateOf(record));
+      // Скин и масштаб из набора инстансов (REND-11): правка поля обновляет
+      // существующий инстанс — материалы скина, фаза анимации и сглаженный
+      // наклон при этом не теряются, потому что инстанс тот же.
+      if (entityView.skin !== record.viewSkin) {
+        record.viewSkin = entityView.skin;
+        this.assignSkin(record, entityView.skin ?? record.visual?.defaultSkin);
+      }
+      if (entityView.scale !== record.viewScale) {
+        record.viewScale = entityView.scale;
+        record.holder.scale.setScalar(entityView.scale ?? 1);
+      }
+      this.applyAnimation(record);
     }
 
     // Исчезнувшие: инстанс убирается, разделяемый ассет остаётся в кэше (REND-3).
@@ -352,8 +378,7 @@ export class ModelsSubsystem implements RenderSubsystem {
   setSkin(entity: EntityId, skin: string | undefined): boolean {
     const record = this.instances.get(entity);
     if (record === undefined) return false;
-    record.skin = skin;
-    if (record.model !== null) this.applyInstanceSkin(record, record.model);
+    this.assignSkin(record, skin);
     return true;
   }
 
@@ -375,9 +400,30 @@ export class ModelsSubsystem implements RenderSubsystem {
     return this.ctx;
   }
 
+  /** Скин инстанса: подменяются только текстуры его материалов (REND-6). */
+  private assignSkin(record: InstanceRecord, skin: string | undefined): void {
+    record.skin = skin;
+    if (record.model !== null) this.applyInstanceSkin(record, record.model);
+  }
+
+  /**
+   * Анимация инстанса: состояние из presentation-состояния (REND-4) и клип,
+   * назначенный набором инстансов поверх него (REND-11). На пути тика клип не
+   * назначается никогда, и override остаётся снятым.
+   */
+  private applyAnimation(record: InstanceRecord): void {
+    const controller = record.controller;
+    if (controller === null) return;
+    controller.setState(animationStateOf(record));
+    controller.setClipOverride(record.view.clip);
+  }
+
   private create(ctx: RenderContext, view: EntityView): InstanceRecord {
     const holder = new THREE.Group();
     holder.name = `entity:${view.id}`;
+    // Масштаб набора — множитель поверх масштаба записи манифеста (REND-11):
+    // запись масштабирует модель, набор — конкретное размещение.
+    if (view.scale !== undefined) holder.scale.setScalar(view.scale);
     ctx.scene.add(holder);
 
     const visual = view.kind === null ? undefined : this.manifest.entities[view.kind];
@@ -397,7 +443,9 @@ export class ModelsSubsystem implements RenderSubsystem {
       controller: null,
       boneControl: null,
       skinApp: null,
-      skin: visual?.defaultSkin,
+      skin: view.skin ?? visual?.defaultSkin,
+      viewSkin: view.skin,
+      viewScale: view.scale,
       facingOffset,
       yaw: view.facingYaw + facingOffset,
       snapPending: true,
@@ -498,7 +546,7 @@ export class ModelsSubsystem implements RenderSubsystem {
       record.visual?.animations ?? {},
       controllerOptions,
     );
-    record.controller.setState(animationStateOf(record));
+    this.applyAnimation(record);
 
     record.boneControl =
       record.visual?.boneControls === undefined

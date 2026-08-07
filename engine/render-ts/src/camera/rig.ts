@@ -240,6 +240,8 @@ export function terrainGroundApi(
   grid: TerrainGrid,
   heightStep: number,
 ): { groundHeightAt: (x: number, y: number) => number; bounds: CameraBounds } {
+  // Приём сетки — точка входной границы (REND-1, TERR-2): границы и высоты
+  // ниже считаются во float, fixed-point глубже не проникает.
   const tile = grid.tileSize / FIXED_ONE;
   return {
     groundHeightAt: (x: number, y: number): number => {

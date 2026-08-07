@@ -9,9 +9,16 @@ export type {
   TickView,
 } from './types.js';
 
-// Хост — TickObserver ядра (REND-1, REND-2) и реестр подсистем (REND-8).
+// Хост — TickObserver ядра (REND-1, REND-2) и продюсер presentation-состояния.
 export { RenderHost, kindByTags } from './host.js';
 export { FloorMirror } from './floorMirror.js';
+
+// Сцена подсистем (REND-8) — общая часть продюсеров presentation-состояния, и
+// документный источник инстансов как второй продюсер (REND-11).
+export { PresentationStage } from './stage.js';
+export type { PresentationProducer } from './stage.js';
+export { DocumentSource } from './documentSource.js';
+export type { DocumentInstance, DocumentSourceOptions } from './documentSource.js';
 
 // Половины хоста по границе потоков (client-shell SHELL-2): Extractor —
 // воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
