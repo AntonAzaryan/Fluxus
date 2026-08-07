@@ -49,7 +49,9 @@
     },
     { "name": "LevelOverride", "fields": { "level": "i32" } },
     { "name": "Lifetime", "fields": { "ticks": "i32" } },
-    { "name": "Dead", "fields": { "atTick": "i32" } }
+    { "name": "Dead", "fields": { "atTick": "i32" } },
+    { "name": "FallConfig", "fields": { "deathDepth": "fixed", "speed": "fixed" } },
+    { "name": "Falling", "fields": { "depth": "fixed" } }
   ],
   "prefabs": [
     {
@@ -82,7 +84,9 @@
           "rollTicks": 18,
           "windowTicks": 12
         },
-        "LocomotionState": { "dirX": 0, "dirY": 0, "state": 0, "ticksLeft": 0 }
+        "LocomotionState": { "dirX": 0, "dirY": 0, "state": 0, "ticksLeft": 0 },
+        "ArenaState": { "support": 0 },
+        "FallConfig": { "deathDepth": 262144, "speed": 6554 }
       },
       "tags": ["Hero"]
     },
@@ -280,8 +284,121 @@
           }
         }
       ]
+    },
+    {
+      "name": "FallStart",
+      "order": 120,
+      "do": [
+        {
+          "forEachEvent": {
+            "type": "FellThroughFloor",
+            "as": "ev",
+            "do": [
+              {
+                "let": {
+                  "bindings": { "e": { "eventField": [{ "var": "ev" }, "entity"] } },
+                  "do": [
+                    {
+                      "if": {
+                        "cond": { "hasComponent": [{ "var": "e" }, "FallConfig"] },
+                        "then": [
+                          {
+                            "addComponent": {
+                              "entity": { "var": "e" },
+                              "component": "Falling",
+                              "values": { "depth": 0 }
+                            }
+                          },
+                          {
+                            "addComponent": {
+                              "entity": { "var": "e" },
+                              "component": "LevelOverride",
+                              "values": { "level": 0 }
+                            }
+                          },
+                          {
+                            "removeComponent": {
+                              "entity": { "var": "e" },
+                              "component": "Locomotion"
+                            }
+                          },
+                          {
+                            "modifyComponent": {
+                              "entity": { "var": "e" },
+                              "component": "Velocity",
+                              "values": { "x": 0, "y": 0 }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "FallDeath",
+      "order": 130,
+      "query": { "all": ["Falling", "FallConfig"], "not": ["Dead"] },
+      "as": "e",
+      "do": [
+        {
+          "let": {
+            "bindings": {
+              "depth": {
+                "+": [
+                  { "getComponent": [{ "var": "e" }, "Falling", "depth"] },
+                  { "getComponent": [{ "var": "e" }, "FallConfig", "speed"] }
+                ]
+              }
+            },
+            "do": [
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Falling",
+                  "values": { "depth": { "var": "depth" } }
+                }
+              },
+              {
+                "if": {
+                  "cond": {
+                    ">=": [
+                      { "var": "depth" },
+                      { "getComponent": [{ "var": "e" }, "FallConfig", "deathDepth"] }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "addComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Dead",
+                        "values": { "atTick": { "tick": [] } }
+                      }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "EntityDied",
+                        "data": { "entity": { "var": "e" } }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   ],
+  "arena": {
+    "center": { "x": 786432, "y": 786432 },
+    "radius": 1114112
+  },
   "terrain": {
     "width": 24,
     "height": 24,

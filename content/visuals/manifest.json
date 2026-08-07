@@ -17,7 +17,8 @@
       "animations": {
         "states": {
           "idle": "Stand",
-          "move": "Walk"
+          "move": "Walk",
+          "fall": "Stand Ready"
         },
         "events": {
           "CastFireball": "Spell Slam",
