@@ -24,9 +24,14 @@ export interface Contribution {
   /**
    * Ключ строкового ресурса описания (ED-28). Текста здесь нет: он приходит из
    * бандла и служит описанием и в интерфейсе, и в машинном каталоге (ED-30).
-   * Ключ несёт сам вклад — той же формой, что и операция авторинга
-   * (`AuthoringOperation.descriptionKey`), а не вычисляет каркас: вклад волен
-   * лежать в пространстве ключей проекта, а не редактора.
+   *
+   * Ключ объявлен вкладом, а не вычислен каркасом, и запрету ED-28 это не
+   * противоречит: запрещена таблица «поле → ключ», а вычисление предписано «из
+   * пути поля в схеме». У вклада схемы нет и пути в ней нет — вычислять не из
+   * чего. Ключ здесь той же природы, что `id`: собственное объявление вклада, а
+   * не запись соответствия чему-то другому, которая могла бы с ним разойтись.
+   * Ключи полей по-прежнему считает `descriptionKey` слоя локалей, и второй
+   * точки их вывода в пакете нет.
    */
   readonly descriptionKey: string;
 }
@@ -78,6 +83,7 @@ export class ContributionRegistry<T extends Contribution> implements Contributio
     if (this.byId.has(id)) {
       throw new Error(`${this.kind}: вклад "${id}" уже зарегистрирован`);
     }
+    checkDescriptionKey(this.kind, contribution);
     this.checkClaim(contribution);
     this.byId.set(id, contribution);
     this.ordered = null;
@@ -96,6 +102,7 @@ export class ContributionRegistry<T extends Contribution> implements Contributio
       throw new Error(`${this.kind}: override вклада "${id}", который не зарегистрирован`);
     }
     this.byId.delete(id);
+    checkDescriptionKey(this.kind, contribution);
     this.checkClaim(contribution);
     this.byId.set(id, contribution);
     this.ordered = null;
@@ -132,6 +139,19 @@ export class ContributionRegistry<T extends Contribution> implements Contributio
         );
       }
     }
+  }
+}
+
+/**
+ * Ключ описания обязателен: вклад без него попадёт в машинный каталог (ED-30)
+ * с пустым описанием, а пустое описание неотличимо от отсутствующего — то
+ * самое прятание отсутствия, которое ED-28 запрещает показом самого ключа.
+ * Проверка при регистрации, а не при сборке каталога: отказ обязан приходить
+ * тому, кто вклад пишет, а не тому, кто его читает.
+ */
+function checkDescriptionKey(kind: ContributionKind, contribution: Contribution): void {
+  if (contribution.descriptionKey.trim() === '') {
+    throw new Error(`${kind}: у вклада "${contribution.id}" пустой ключ описания`);
   }
 }
 

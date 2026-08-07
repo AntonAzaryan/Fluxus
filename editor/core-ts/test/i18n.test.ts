@@ -9,11 +9,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   StringResources,
+  catalogDescriptions,
   confirmTranslations,
   descriptionKey,
-  descriptionKind,
   fingerprint,
-  isDescriptionKey,
+  keyKind,
   reportResources,
   schemaPathOf,
   translationStatus,
@@ -55,10 +55,15 @@ describe('ED-28: ключ выводится из пути поля в схем�
     expect(() => schemaPathOf('component', [])).toThrow();
   });
 
-  it('пространство описаний отделено от строк хрома', () => {
-    expect(isDescriptionKey('component.Health.max')).toBe(true);
-    expect(descriptionKind('operator.vec\\.add')).toBe('operator');
-    expect(isDescriptionKey('ui.save')).toBe(false);
+  it('вид читается из самого ключа, а не из списка известных видов', () => {
+    // ED-25: список видов внутри слоя ресурсов означал бы, что новое
+    // редактируемое правит каркас. Вид — первый сегмент до неэкранированной
+    // точки, и разбор одинаков для любого вида, включая ещё не существующий.
+    expect(keyKind('component.Health.max')).toBe('component');
+    expect(keyKind('operator.vec\\.add')).toBe('operator');
+    expect(keyKind('своиВклад.thing')).toBe('своиВклад');
+    // Ключ без точки видом не обладает и ни с одним видом путей не совпадёт.
+    expect(keyKind('save')).toBe('');
   });
 
   it('описание находится по пути, а не по отдельно заведённому ключу', () => {
@@ -119,9 +124,35 @@ describe('ED-28: двусторонний отчёт о рассогласова
     expect(report.orphaned).not.toContain('ui.save');
   });
 
+  it('вид, о путях которого не спросили, в осиротевшие не записывается', () => {
+    // Отчёт покрывает ровно те виды, чьи пути ему подали. Иначе слою ресурсов
+    // пришлось бы знать список видов — то есть каркасу пришлось бы знать
+    // редактируемое (ED-25).
+    const res = new StringResources({
+      locale: 'ru',
+      editor: { ru: { 'component.Health.max': 'Есть', 'операция.тык': 'Есть' } },
+    });
+    expect(res.report([['component', 'Health', 'max']], 'ru').orphaned).toEqual([]);
+    expect(res.report([['операция', 'иная']], 'ru').orphaned).toEqual(['операция.тык']);
+  });
+
   it('ресурс с пустым текстом оставляет поле недокументированным', () => {
     const report = reportResources([['component', 'Health', 'max']], []);
     expect(report).toEqual({ undocumented: ['component.Health.max'], orphaned: [] });
+  });
+});
+
+describe('ED-30: описания каталога — те же строки, что видит человек на `en`', () => {
+  it('резолвер каталога отвечает по ключу и не следует за локалью пользователя', () => {
+    const res = resources();
+    const catalog = catalogDescriptions(res);
+    expect(res.locale).toBe('ru');
+    expect(catalog.describe('component.Health.max')).toBe(EN['component.Health.max']);
+    res.setLocale('ru');
+    expect(catalog.describe('component.Health.max')).toBe(EN['component.Health.max']);
+    // Ресурса нет — виден сам ключ: отсутствие описания машинный потребитель
+    // обязан различать так же, как человек (ED-28).
+    expect(catalog.describe('component.Health.regen')).toBe('component.Health.regen');
   });
 });
 

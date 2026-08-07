@@ -30,6 +30,4 @@ export {
   type ContributionCatalogSource,
   type EditorCatalog,
   type OperationCatalogSource,
-  type OperationParameterView,
-  type OperationView,
 } from './catalog.js';

@@ -204,3 +204,16 @@ export class StringResources implements TextSource, DescriptionSource {
     for (const listener of this.listeners) listener();
   }
 }
+
+/**
+ * Резолвер для машинного каталога (ED-30). Каталог спрашивает описания ключом:
+ * ключи в нём — от самих вкладов и операций, а вычисление ключа из пути схемы
+ * (ED-28) остаётся в одном месте — `descriptionKey`. Локаль зафиксирована на
+ * `SOURCE_LOCALE`: описание для машинного потребителя и описание, которое
+ * видит человек на английской локали, — один и тот же текст, второго набора
+ * формулировок не заводится. Функция здесь, а не у каталога, чтобы каждый его
+ * потребитель не повторял привязку к локали по-своему.
+ */
+export function catalogDescriptions(resources: StringResources): { describe(key: string): string } {
+  return { describe: (key) => resources.textIn(SOURCE_LOCALE, key) };
+}

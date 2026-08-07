@@ -5,13 +5,7 @@
  * ключу и по пути поля в схеме, и умеет отчитаться, где ресурсы и схемы
  * разошлись. Показ, наведение и явный вызов подсказки — за интерфейсом.
  */
-export {
-  DESCRIPTION_KINDS,
-  descriptionKey,
-  descriptionKind,
-  isDescriptionKey,
-  schemaPathOf,
-} from './keys.js';
+export { descriptionKey, keyKind, schemaPathOf } from './keys.js';
 export type { DescriptionKind, SchemaPath } from './keys.js';
 
 export {
@@ -19,6 +13,7 @@ export {
   SHIPPED_LOCALES,
   SOURCE_LOCALE,
   StringResources,
+  catalogDescriptions,
   projectBundlePath,
 } from './resources.js';
 export type {
@@ -32,13 +27,9 @@ export type {
   TextSource,
 } from './resources.js';
 
-export {
-  componentDescriptionPaths,
-  documentDescriptionPaths,
-  dslDescriptionPaths,
-  editorDescriptionPaths,
-  namedDescriptionPaths,
-} from './paths.js';
+// Источники путей вносят доменные имена — это вклад, а не каркас (ED-25), и
+// перечисление их здесь поимённо втащило бы те же имена в барель слоя.
+export * from './paths.js';
 
 export { isReportEmpty, reportResources } from './report.js';
 export type { ResourceReport } from './report.js';

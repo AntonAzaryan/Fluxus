@@ -9,34 +9,19 @@
  * подсказку. Поэтому вывод — одна функция, и все — инспектор (ED-24), каталог
  * (ED-30), отчёт о рассогласовании — зовут именно её.
  *
- * Первый сегмент пути — вид описываемого, набор видов закрыт. Закрытость нужна
- * отчёту ED-28: ресурс считается осиротевшим, если его ключ лежит в
- * пространстве описаний, но ни один путь схемы его не даёт. Строки хрома
- * редактора живут вне этого пространства (корень `ui.`) и под отчёт не
- * попадают — иначе каждая подпись кнопки числилась бы осиротевшей.
+ * Первый сегмент пути — вид описываемого, и набор видов здесь не перечислен.
+ * Перечисление означало бы, что новый вид редактируемого правит слой ресурсов,
+ * то есть каркас, — ровно то, что запрещает ED-25 («иначе каждая новая область
+ * правит каркас»). Вид приносит тот, кто приносит путь: реестры вкладов и
+ * источники путей (`paths.ts`). Отчёт ED-28 берёт множество видов оттуда же, из
+ * поданных ему путей, и потому не нуждается в словаре доменных имён.
  */
 
 /**
- * Виды описываемого. Расширяется правкой этого списка — сознательной, а не
- * побочной: новый вид означает новый источник путей для отчёта (`paths.ts`),
- * иначе его ресурсы сразу окажутся осиротевшими.
- *
- * `component`/`prefab`/`system` — то, что объявляет контент (ED-6, ED-7);
- * `schema` — поля форматов документов, объявленные движком; `action` и
- * `operator` — словарь DSL (ED-4, ED-5); `cameraEffect` — эффекты камеры из
- * манифеста визуалов (ED-14).
+ * Вид описываемого — первый сегмент пути (`component`, `action`,
+ * `cameraEffect`, …). Строка, а не перечисление: см. шапку.
  */
-export const DESCRIPTION_KINDS = [
-  'action',
-  'cameraEffect',
-  'component',
-  'operator',
-  'prefab',
-  'schema',
-  'system',
-] as const;
-
-export type DescriptionKind = (typeof DESCRIPTION_KINDS)[number];
+export type DescriptionKind = string;
 
 /**
  * Путь поля в схеме: вид и как минимум одно имя. Один вид без имени ничего не
@@ -45,7 +30,8 @@ export type DescriptionKind = (typeof DESCRIPTION_KINDS)[number];
  */
 export type SchemaPath = readonly [DescriptionKind, string, ...string[]];
 
-const KINDS: ReadonlySet<string> = new Set(DESCRIPTION_KINDS);
+const SEPARATOR = '.';
+const ESCAPE = '\\';
 
 /**
  * Точка внутри сегмента экранируется, а не остаётся как есть: имена сегментов
@@ -53,12 +39,11 @@ const KINDS: ReadonlySet<string> = new Set(DESCRIPTION_KINDS);
  * `vec.add`, `vec.x`. Без экранирования пути `['operator', 'vec.add']` и
  * гипотетический `['operator', 'vec', 'add']` дали бы один ключ, то есть одно
  * описание на два разных поля — ровно то молчаливое слипание, против которого
- * ED-28 запрещает ручную таблицу. Обратного разбора ключа нет: ключ сравнивают
- * с ключом, путь восстанавливать незачем.
+ * ED-28 запрещает ручную таблицу.
  */
 function escapeSegment(segment: string, index: number): string {
   if (segment === '') throw new Error(`сегмент ${index} пути схемы пуст: описывать нечего`);
-  return segment.replace(/\\/g, '\\\\').replace(/\./g, '\\.');
+  return segment.replaceAll(ESCAPE, ESCAPE + ESCAPE).replaceAll(SEPARATOR, ESCAPE + SEPARATOR);
 }
 
 /**
@@ -76,21 +61,30 @@ export function schemaPathOf(kind: DescriptionKind, segments: readonly string[])
 /** Единственный способ получить ключ описания по пути поля в схеме (ED-28). */
 export function descriptionKey(path: SchemaPath): string {
   if (path.length < 2) throw new Error('путь схемы короче двух сегментов: описывать нечего');
-  const kind = path[0];
-  if (!KINDS.has(kind)) throw new Error(`неизвестный вид описываемого "${kind}"`);
-  return path.map(escapeSegment).join('.');
+  return path.map(escapeSegment).join(SEPARATOR);
 }
 
 /**
- * Вид, к которому относится ключ, — или `undefined`, если ключ вне
- * пространства описаний (строка хрома). Виды точек не содержат, поэтому
- * сравнение с префиксом однозначно и экранирования не касается.
+ * Вид, к которому относится ключ: первый сегмент, до неэкранированной точки.
+ * Разбор именно такой, а не сравнение с набором известных префиксов, — иначе
+ * знать вид означало бы держать их список (см. шапку). Полный обратный разбор
+ * ключа не нужен: ключ сравнивают с ключом.
  */
-export function descriptionKind(key: string): DescriptionKind | undefined {
-  return DESCRIPTION_KINDS.find((kind) => key.startsWith(`${kind}.`));
-}
-
-/** Лежит ли ключ в пространстве описаний — вопрос отчёта ED-28 об осиротевших. */
-export function isDescriptionKey(key: string): boolean {
-  return descriptionKind(key) !== undefined;
+export function keyKind(key: string): DescriptionKind {
+  let kind = '';
+  for (let i = 0; i < key.length; i++) {
+    const char = key[i]!;
+    if (char === ESCAPE) {
+      i += 1;
+      const escaped = key[i];
+      if (escaped !== undefined) kind += escaped;
+      continue;
+    }
+    if (char === SEPARATOR) return kind;
+    kind += char;
+  }
+  // Точки нет вовсе: ключ не выведен из пути схемы — так выглядят строки хрома
+  // без пространства имён. Вид у него пустой, и ни с одним видом пути он не
+  // совпадёт.
+  return '';
 }

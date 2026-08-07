@@ -16,7 +16,7 @@
  * По паре отпечатков правило подтверждения механическое: подтверждается тот
  * ключ, чей перевод с прошлого раза изменился.
  */
-import { fnv1a32 } from '@game-mvp/core';
+import { fnv1a32, prettyJsonSerializer } from '@game-mvp/core';
 import type { LocaleBundle, LocaleId } from './resources.js';
 
 /**
@@ -70,15 +70,17 @@ export function confirmTranslations(
 }
 
 /**
- * Канонический текст файла-спутника: ключи отсортированы, отступ два пробела,
- * перевод строки в конце. Форма — как у генерируемых схем ядра: файл переписан
- * генератором целиком, и дифф в нём должен показывать только изменившиеся
- * ключи.
+ * Канонический текст файла-спутника. Форматирует ядро (`prettyJsonSerializer`),
+ * а не своя строка: как выглядит записанный на диск JSON — правило ядра
+ * (SER-1, SER-2), и вторая его реализация в редакторе запрещена (ED-1). Своё
+ * здесь только одно — сортировка ключей: файл переписывается генератором
+ * целиком, и дифф в нём должен показывать изменившиеся ключи, а не их порядок.
  */
 export function fingerprintFileContent(file: FingerprintFile): string {
   const entries: Record<string, FingerprintEntry> = {};
   for (const key of Object.keys(file.entries).sort()) entries[key] = file.entries[key]!;
-  return `${JSON.stringify({ locale: file.locale, source: file.source, entries }, null, 2)}\n`;
+  const bytes = prettyJsonSerializer.encode({ locale: file.locale, source: file.source, entries });
+  return new TextDecoder().decode(bytes);
 }
 
 export interface TranslationStatus {

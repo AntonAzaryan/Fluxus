@@ -46,6 +46,7 @@ import {
   cloneFrozen,
   isJsonArray,
   pathKey,
+  pathsEqual,
   pathStartsWith,
   formatPath,
   removeAtPath,
@@ -234,25 +235,67 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
       const key = pathKey(path);
       if (pending.seen.has(key)) return;
       pending.seen.add(key);
-      pending.paths.push(path);
+      // Копия, а не сама ссылка: путь приходит из параметров операции, то есть
+      // из чужих рук, и вызывающий, дописавший в свой массив шаг после вызова,
+      // переписал бы задним числом запись истории о том, что было тронуто.
+      pending.paths.push(Object.freeze([...path]));
     }
 
     run(params: OperationParams): JsonValue | undefined {
       checkParams(this.#operation, params);
-      // Параметры запоминаются копией: история показывает, чем была операция,
-      // и вызывающий не должен уметь переписать это задним числом.
-      this.#params = cloneFrozen(params);
+      // Одно применение — всё или ничего. Упавшая посередине операция иначе
+      // оставила бы документ в состоянии, которого не производит ни одна
+      // операция целиком, и `commit` записал бы это состояние в историю: undo
+      // и redo водили бы по нему как по достижимому (ED-18).
+      const undoRun = this.#snapshotOpen();
       const ctx = new Context(this);
       try {
         // Результат последнего применения — результат взаимодействия: мазок
         // отдаёт то, чем он кончился, а не то, чем начался.
         this.#result = this.#operation.apply(ctx, params) ?? undefined;
+        // Параметры запоминаются копией и только после успеха: история
+        // показывает, чем была операция, вызывающий не должен уметь переписать
+        // это задним числом, а отменённое применение записью не было.
+        this.#params = cloneFrozen(params);
         return this.#result;
+      } catch (error) {
+        undoRun();
+        throw error;
       } finally {
         // Контекст закрывается сразу после возврата из `apply`: операция,
         // сохранившая его в замыкании, ничего им не сделает.
         ctx.close();
       }
+    }
+
+    /**
+     * Снимок состояния до применения — ссылками, а не копиями: значения
+     * иммутабельны, поэтому откат одного применения стоит столько же, сколько
+     * ссылка на документ. Вместе с документами откатывается и учёт тронутых
+     * мест: место, правку которого отменил отказ, не должно числиться тронутым
+     * — иначе оповещение (ED-15) назовёт его вместо того, что тронуто на самом
+     * деле, а следующее применение промолчит о нём как об уже названном.
+     */
+    #snapshotOpen(): () => void {
+      const taken = [...documents.values()].map((record) => ({
+        record,
+        value: record.value,
+        descriptors: record.descriptors,
+      }));
+      const marks = [...this.#touched].map(([id, pending]) => ({ id, pending, count: pending.paths.length }));
+      return () => {
+        for (const { record, value, descriptors } of taken) {
+          record.value = value;
+          record.descriptors = descriptors;
+        }
+        this.#touched.clear();
+        for (const { id, pending, count } of marks) {
+          pending.paths.length = count;
+          pending.seen.clear();
+          for (const path of pending.paths) pending.seen.add(pathKey(path));
+          this.#touched.set(id, pending);
+        }
+      };
     }
 
     extend(params: OperationParams = {}): JsonValue | undefined {
@@ -399,14 +442,30 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
       this.#assertLive();
       const where = this.locate(id, descriptor);
       const pending = this.#tx.touch(id);
-      this.#write(pending, [...where.path, ...path], value);
+      const full: JsonPath = [...where.path, ...path];
+      this.#guard(pending.record, full, where.list);
+      this.#write(pending, full, value);
     }
 
     removeRecordValue(id: DocumentId, descriptor: string, path: JsonPath): void {
       this.#assertLive();
+      // Пустой путь — это сама запись, а не место внутри неё. Вырезать её здесь
+      // значило бы сдвинуть индексы соседей, не тронув таблицу дескрипторов:
+      // дескрипторы следующих записей начали бы указывать на чужие, то есть
+      // адресация сломалась бы от удаления соседа — ровно то, что ED-29
+      // запрещает. Запись убирает `removeRecord`, который правит и таблицу.
+      if (path.length === 0) {
+        throw new OperationError(
+          this.#tx.operationId,
+          `запись "${descriptor}": пустой путь адресует саму запись — её убирает удаление записи, а не поля`,
+          { received: descriptor },
+        );
+      }
       const where = this.locate(id, descriptor);
       const pending = this.#tx.touch(id);
-      this.#erase(pending, [...where.path, ...path]);
+      const full: JsonPath = [...where.path, ...path];
+      this.#guard(pending.record, full, where.list);
+      this.#erase(pending, full);
     }
 
     appendRecord(id: DocumentId, list: JsonPath, item: JsonValue): DescriptorId {
@@ -440,9 +499,16 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
      * записи: у записей есть дескрипторы, и путь с индексом ломается от
      * удаления соседа (ED-29). Ветка проверяется в обе стороны — запись в
      * предка списка заменила бы список так же незаметно.
+     *
+     * `except` — список, внутрь записи которого правка и адресована
+     * дескриптором: для него путь с индексом законен, он и получен от
+     * дескриптора. Прочие отслеживаемые списки остаются закрыты и на этом пути
+     * тоже — список, вложенный в запись другого списка, иначе правился бы
+     * индексом в обход собственных дескрипторов.
      */
-    #guard(record: DocumentRecord, path: JsonPath): void {
+    #guard(record: DocumentRecord, path: JsonPath, except?: JsonPath): void {
       for (const list of record.lists) {
+        if (except !== undefined && pathsEqual(list, except)) continue;
         if (pathStartsWith(path, list) || pathStartsWith(list, path)) {
           throw new OperationError(
             this.#tx.operationId,
@@ -504,7 +570,15 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
   const restore = (entry: HistoryEntry, direction: 'undo' | 'redo'): void => {
     for (const change of direction === 'undo' ? [...entry.changes].reverse() : entry.changes) {
       const record = documents.get(change.documentId);
-      if (record === undefined) continue;
+      // Закрыть документ, упомянутый в истории, `closeDocument` не даёт, так
+      // что сюда попасть нечем. Отказ, а не пропуск: пропустив документ,
+      // сессия привела бы остальные в состояние, которого вместе с ним не
+      // было ни разу, — то самое недостижимое состояние из ED-18.
+      if (record === undefined) {
+        throw new Error(
+          `${direction}: документ "${change.documentId}" записи истории не открыт`,
+        );
+      }
       record.value = direction === 'undo' ? change.before : change.after;
       record.descriptors = direction === 'undo' ? change.descriptorsBefore : change.descriptorsAfter;
     }
@@ -520,6 +594,10 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     operations: registry,
 
     openDocument(input) {
+      // Взаимодействие идёт над тем набором документов, с которым началось:
+      // `cancel` возвращает к состоянию до начала, а документ, открытый
+      // посередине, возвращать некуда — он остался бы открытым от отменённого.
+      if (transaction !== undefined) throw new Error('открыть документ во время взаимодействия нельзя');
       if (documents.has(input.id)) throw new Error(`документ "${input.id}" уже открыт`);
       const value = cloneFrozen(input.value);
       const lists = Object.freeze((input.lists ?? []).map((list) => Object.freeze([...list])));
@@ -557,6 +635,11 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
       [...documents.values()].filter((record) => record.value !== record.saved).map((record) => record.id),
 
     markSaved(id) {
+      // Промежуточное состояние мазка на диск не попадает: отметив его
+      // сохранённым, сессия объявила бы диском состояние, которое `cancel`
+      // через мгновение отменит, и «сохранение трогает только правленое»
+      // (ED-21) перестало бы что-либо значить.
+      if (transaction !== undefined) throw new Error('отметить документ сохранённым во время взаимодействия нельзя');
       const record = requireDocument(id);
       record.saved = record.value;
       emit({ kind: 'saved', documentIds: [id], paths: [] });

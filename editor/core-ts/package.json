@@ -17,6 +17,7 @@
     "node": ">=22.18"
   },
   "dependencies": {
+    "@game-mvp/assets": "*",
     "@game-mvp/core": "*"
   },
   "devDependencies": {

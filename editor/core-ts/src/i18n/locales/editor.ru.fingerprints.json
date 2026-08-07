@@ -66,6 +66,54 @@
       "source": "15533f09",
       "translated": "8ac1df7f"
     },
+    "operation.document.list.append": {
+      "source": "8ed5fd10",
+      "translated": "384b55cf"
+    },
+    "operation.document.list.remove": {
+      "source": "df415ed7",
+      "translated": "bd8fc0b5"
+    },
+    "operation.document.list.removeValue": {
+      "source": "bc078f46",
+      "translated": "948c8225"
+    },
+    "operation.document.list.setValue": {
+      "source": "a3537edd",
+      "translated": "c41fc934"
+    },
+    "operation.document.removeValue": {
+      "source": "864e1a84",
+      "translated": "71b77d22"
+    },
+    "operation.document.setValue": {
+      "source": "d177e2c3",
+      "translated": "2b0ec5a8"
+    },
+    "operation.param.document": {
+      "source": "811fb0a0",
+      "translated": "6e6123ba"
+    },
+    "operation.param.item": {
+      "source": "a94692c3",
+      "translated": "b8c7fffb"
+    },
+    "operation.param.list": {
+      "source": "b8c6b494",
+      "translated": "2ef0e979"
+    },
+    "operation.param.path": {
+      "source": "edf7bc09",
+      "translated": "0c9d34ed"
+    },
+    "operation.param.record": {
+      "source": "e4202b20",
+      "translated": "e6bdefbf"
+    },
+    "operation.param.value": {
+      "source": "4abd114d",
+      "translated": "d0f6c18f"
+    },
     "operator.!": {
       "source": "136a9493",
       "translated": "c502a14b"

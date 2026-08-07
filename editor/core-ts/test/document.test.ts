@@ -8,7 +8,12 @@
  * документов, где они есть).
  */
 import { describe, expect, it } from 'vitest';
-import { createEditorSession, DESCRIPTOR_SCOPE, type EditorSession } from '../src/document/index.js';
+import {
+  createEditorSession,
+  DESCRIPTOR_SCOPE,
+  type EditorSession,
+  type JsonValue,
+} from '../src/document/index.js';
 import {
   createOperationRegistry,
   registerBuiltinOperations,
@@ -127,6 +132,64 @@ describe('ED-29: адресация записи переживает правк
   });
 });
 
+describe('ED-29: обходных путей записи не остаётся', () => {
+  it('запись не убирается правкой поля с пустым путём: иначе дескрипторы соседей уехали бы', () => {
+    const editor = session();
+    openScene(editor, [{ prefab: 'a' }, { prefab: 'b' }, { prefab: 'c' }]);
+    const [first, second] = editor.descriptors(SCENE, ['initial']);
+    expect(() =>
+      editor.applyOperation('document.list.removeValue', { document: SCENE, record: first!, path: [] }),
+    ).toThrow(/пустой путь адресует саму запись/);
+    // Ни правки, ни сдвига адресации: список и таблица дескрипторов совпадают.
+    expect(editor.descriptors(SCENE, ['initial'])).toHaveLength(3);
+    expect(editor.resolveDescriptor(SCENE, second!)?.index).toBe(1);
+    editor.applyOperation('document.list.remove', { document: SCENE, record: first! });
+    expect(editor.descriptors(SCENE, ['initial'])).toHaveLength(2);
+    expect(editor.resolveDescriptor(SCENE, second!)?.index).toBe(0);
+  });
+
+  it('вложенный отслеживаемый список не правится индексом через запись внешнего', () => {
+    const editor = session();
+    editor.openDocument({
+      id: SCENE,
+      kind: 'scene',
+      value: { initial: [{ prefab: 'a', children: [{ prefab: 'x' }] }] },
+      lists: [['initial'], ['initial', 0, 'children']],
+    });
+    const [outer] = editor.descriptors(SCENE, ['initial']);
+    expect(() =>
+      editor.applyOperation('document.list.setValue', {
+        document: SCENE,
+        record: outer!,
+        path: ['children', 0, 'prefab'],
+        value: 'y',
+      }),
+    ).toThrow(/адресуются дескриптором/);
+  });
+
+  it('путь, переданный операции, не остаётся у вызывающего живой ссылкой', () => {
+    const editor = session();
+    openScene(editor);
+    const path: (string | number)[] = ['capacity'];
+    editor.applyOperation('document.setValue', { document: SCENE, path: path as never, value: 1 });
+    path.push('дописано после вызова');
+    expect(editor.history().undo[0]?.paths[0]?.path).toEqual(['capacity']);
+  });
+
+  it('ключ `__proto__` документа не теряется и не подменяет прототип', () => {
+    const editor = session();
+    // `JSON.parse` кладёт `__proto__` собственным ключом — документ с диска
+    // может его нести, и потеря ключа была бы правкой мимо слоя операций.
+    const parsed = JSON.parse('{"__proto__":{"a":1},"b":2}') as JsonValue;
+    editor.openDocument({ id: 'content/x.json', kind: 'any', value: parsed });
+    const value = editor.documentValue('content/x.json') as Record<string, unknown>;
+    expect(Object.keys(value)).toEqual(['__proto__', 'b']);
+    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+    editor.applyOperation('document.setValue', { document: 'content/x.json', path: ['b'], value: 3 });
+    expect(Object.keys(editor.documentValue('content/x.json') as object)).toEqual(['__proto__', 'b']);
+  });
+});
+
 describe('ED-18: undo/redo над операциями', () => {
   it('операция обратима и повторима', () => {
     const editor = session();
@@ -194,6 +257,49 @@ describe('ED-18: границей операции служит взаимоде
     expect(editor.documentValue(SCENE)).toEqual({ components: [], initial: [] });
     expect(editor.canUndo()).toBe(false);
     expect(editor.pending).toBe(false);
+  });
+
+  it('упавшее применение не оставляет полуправки в незакрытом взаимодействии', () => {
+    const registry = registerBuiltinOperations(createOperationRegistry());
+    registry.register({
+      id: 'test.half',
+      descriptionKey: 'test.half',
+      params: {
+        document: { type: 'document', descriptionKey: 'test.document' },
+        tag: { type: 'string', descriptionKey: 'test.tag' },
+        boom: { type: 'boolean', descriptionKey: 'test.boom' },
+      },
+      apply(ctx, params) {
+        ctx.setValue(params.document as string, ['half', params.tag as string], 1);
+        if (params.boom === true) throw new Error('операция упала посередине');
+        ctx.setValue(params.document as string, ['whole', params.tag as string], 2);
+        return undefined;
+      },
+    });
+    const editor = createEditorSession({ operations: registry });
+    editor.openDocument({ id: 'content/x.json', kind: 'any', value: {} });
+    const stroke = editor.beginOperation('test.half', { document: 'content/x.json', tag: 'a', boom: false });
+    expect(() => stroke.extend({ document: 'content/x.json', tag: 'b', boom: true })).toThrow(/посередине/);
+    // Взаимодействие живо, но его состояние — то, к которому привело последнее
+    // целиком применённое действие: половины упавшего в документе нет.
+    const applied = { half: { a: 1 }, whole: { a: 2 } };
+    expect(editor.documentValue('content/x.json')).toEqual(applied);
+    stroke.commit();
+    expect(editor.documentValue('content/x.json')).toEqual(applied);
+    editor.undo();
+    expect(editor.documentValue('content/x.json')).toEqual({});
+  });
+
+  it('состав документов и отметка о сохранении не меняются посреди взаимодействия', () => {
+    const editor = session();
+    openScene(editor);
+    const drag = editor.beginOperation('document.setValue', { document: SCENE, path: ['capacity'], value: 1 });
+    expect(() => editor.markSaved(SCENE)).toThrow(/во время взаимодействия/);
+    expect(() => editor.openDocument({ id: 'content/y.json', kind: 'any', value: {} })).toThrow(
+      /во время взаимодействия/,
+    );
+    drag.cancel();
+    expect(editor.dirtyDocumentIds()).toEqual([]);
   });
 
   it('второе взаимодействие поверх незакрытого не начинается', () => {

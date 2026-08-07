@@ -7,10 +7,16 @@
  * Доменные имена в фикстурах — намеренно (см. шапку `registry.test.ts`).
  */
 import { describe, expect, it } from 'vitest';
-import { buildEditorCatalog, type OperationView } from '../src/registry/catalog.js';
+import { buildEditorCatalog } from '../src/registry/catalog.js';
 import { createEditorContributions } from '../src/registry/contributions.js';
 import type { DescriptionResolver } from '../src/registry/descriptions.js';
-import { createOperationRegistry, describeOperations } from '../src/operations/registry.js';
+import {
+  createOperationRegistry,
+  describeOperations,
+  type OperationDescription,
+} from '../src/operations/registry.js';
+import { BUILTIN_OPERATIONS, registerBuiltinOperations } from '../src/operations/builtin.js';
+import { EDITOR_BUNDLES, StringResources, catalogDescriptions } from '../src/i18n/index.js';
 
 /**
  * Заглушка бандла `en` (ED-28, слой локалей): цепочка разрешения кончается самим
@@ -20,12 +26,12 @@ function resolver(bundle: Record<string, string> = {}): DescriptionResolver {
   return { describe: (key) => bundle[key] ?? key };
 }
 
-function noOperations(): readonly OperationView[] {
+function noOperations(): readonly OperationDescription[] {
   return [];
 }
 
 function sources(overrides?: {
-  operations?: () => readonly OperationView[];
+  operations?: () => readonly OperationDescription[];
   descriptions?: DescriptionResolver;
 }) {
   const contributions = createEditorContributions();
@@ -137,6 +143,33 @@ describe('ED-30: машинный каталог', () => {
       ['document', false],
       ['target', true],
     ]);
+  });
+
+  it('описания встроенных операций приходят из бандла, а не оказываются ключами', () => {
+    // Шов трёх слоёв целиком: реестр операций (ED-29) → каталог (ED-30) →
+    // строковые ресурсы (ED-28). Ключ, за которым нет строки, виден как сам
+    // ключ — это правильное поведение цепочки, но для операций, которые
+    // редактор везёт с собой, это значило бы каталог без описаний.
+    const resources = new StringResources({ locale: 'ru', editor: EDITOR_BUNDLES });
+    const catalog = buildEditorCatalog({
+      ...sources(),
+      operations: () => describeOperations(registerBuiltinOperations(createOperationRegistry())),
+      descriptions: catalogDescriptions(resources),
+    });
+
+    expect(catalog.operations).toHaveLength(BUILTIN_OPERATIONS.length);
+    for (const operation of catalog.operations) {
+      expect(operation.description).not.toBe(operation.descriptionKey);
+      for (const param of operation.params) {
+        expect(param.description).not.toBe(param.descriptionKey);
+      }
+    }
+    // Локаль пользователя — русская, каталог всё равно английский: описание для
+    // машины и описание для человека на `en` — один текст (ED-30).
+    expect(resources.locale).toBe('ru');
+    expect(catalog.operations[0]?.description).toBe(
+      EDITOR_BUNDLES['en']![catalog.operations[0]!.descriptionKey],
+    );
   });
 
   it('отдаёт области и типы редактируемого из реестров', () => {

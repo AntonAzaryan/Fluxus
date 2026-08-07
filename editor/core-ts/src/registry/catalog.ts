@@ -10,10 +10,12 @@
  * а ключи — от самих вкладов и операций.
  *
  * Реестр операций каталогу не принадлежит — он живёт в слое операций
- * (`../operations/`). Зависимость выражена узким интерфейсом чтения
- * (`OperationCatalogSource`): каталог знает про операции ровно то, что обязан
- * показать, и ни один из двух модулей не владеет другим.
+ * (`../operations/`), и его само-описание строит он же (`describeOperations`).
+ * Каталог берёт это описание типом, а не своей похожей формой: одинаковая по
+ * составу пара интерфейсов — второе описание операции, расходящееся с первым
+ * там, где о нём забыли, ровно как отдельно поддерживаемый файл каталога.
  */
+import type { OperationDescription, OperationParamDescription } from '../operations/registry.js';
 import type { ContributionReader } from './contribution.js';
 import { compareIds } from './contribution.js';
 import type { DescriptionResolver } from './descriptions.js';
@@ -23,34 +25,12 @@ import type {
   WorkspaceAreaContribution,
 } from './kinds.js';
 
-/** Параметр операции — то, что каталог обязан показать про него (ED-30). */
-export interface OperationParameterView {
-  readonly name: string;
-  /** Тип параметра в словаре слоя операций; каталог его не толкует. */
-  readonly type: string;
-  readonly optional: boolean;
-  /**
-   * Значение параметра живёт только в текущей сессии — таков сессионный
-   * дескриптор записи расстановки. Каталог обязан говорить об этом явно:
-   * ссылка, сохранённая между сессиями, недействительна.
-   */
-  readonly sessionScoped: boolean;
-  readonly descriptionKey: string;
-}
-
-/** Операция авторинга (ED-29) глазами каталога. */
-export interface OperationView {
-  readonly id: string;
-  readonly descriptionKey: string;
-  readonly params: readonly OperationParameterView[];
-}
-
 /**
  * Источник операций: функция, а не готовый список. Каталог строится в момент
  * запроса, и список, переданный значением, был бы снимком — тем самым вторым
  * описанием, только с коротким сроком жизни.
  */
-export type OperationCatalogSource = () => readonly OperationView[];
+export type OperationCatalogSource = () => readonly OperationDescription[];
 
 /**
  * Реестры, из которых собирается каталог. Тип — на чтение и по минимуму: набор
@@ -75,7 +55,7 @@ export interface CatalogSources {
  * уходит машинному потребителю, а `undefined` исчезает при сериализации в JSON,
  * и «горячей клавиши нет» становится неотличимо от «поля нет вовсе».
  */
-export interface CatalogParameter extends OperationParameterView {
+export interface CatalogParameter extends OperationParamDescription {
   readonly description: string;
 }
 

@@ -31,6 +31,20 @@ describe('ED-25: реестр вкладов', () => {
     expect(() => registry.register({ ...noop })).toThrow(/уже зарегистрирована/);
   });
 
+  it('операция и её параметр без ключа описания не регистрируются', () => {
+    const registry = createOperationRegistry();
+    expect(() => registry.register({ ...noop, id: 'a.op', descriptionKey: '' })).toThrow(
+      /пустой ключ описания/,
+    );
+    expect(() =>
+      registry.register({
+        ...noop,
+        id: 'b.op',
+        params: { value: { type: 'json', descriptionKey: '  ' } },
+      }),
+    ).toThrow(/пустой ключ описания параметра "value"/);
+  });
+
   it('перечень упорядочен по id, а не по порядку регистрации', () => {
     const registry = createOperationRegistry();
     registry.register({ ...noop, id: 'z.op' });

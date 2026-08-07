@@ -34,6 +34,17 @@ export function createOperationRegistry(): OperationRegistry {
       if (operations.has(operation.id)) {
         throw new Error(`операция "${operation.id}" уже зарегистрирована`);
       }
+      // Ключ описания обязателен и у операции, и у каждого её параметра: без
+      // него запись каталога (ED-30) приходит к внешнему потребителю с пустым
+      // описанием, а пустое от отсутствующего он не отличит (ED-28).
+      if (operation.descriptionKey.trim() === '') {
+        throw new Error(`операция "${operation.id}": пустой ключ описания`);
+      }
+      for (const [name, spec] of Object.entries(operation.params)) {
+        if (spec.descriptionKey.trim() === '') {
+          throw new Error(`операция "${operation.id}": пустой ключ описания параметра "${name}"`);
+        }
+      }
       operations.set(operation.id, operation);
     },
     has: (id) => operations.has(id),

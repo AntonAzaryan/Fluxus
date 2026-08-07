@@ -166,6 +166,20 @@ describe('ED-25: реестры вкладов', () => {
     expect(() => contributions.fieldEditors.override(vectorField)).toThrow(/не зарегистрирован/);
   });
 
+  it('отвергает вклад без ключа описания', () => {
+    // Вклад с пустым ключом попал бы в каталог (ED-30) с пустым описанием, а
+    // пустое от отсутствующего внешний потребитель не отличит: ED-28 требует
+    // показывать сам ключ, а не прятать отсутствие.
+    const contributions = createEditorContributions();
+    expect(() => contributions.areas.register({ ...sceneArea, descriptionKey: ' ' })).toThrow(
+      /пустой ключ описания/,
+    );
+    contributions.fieldEditors.register(numberField);
+    expect(() =>
+      contributions.fieldEditors.override({ ...numberField, descriptionKey: '' }),
+    ).toThrow(/пустой ключ описания/);
+  });
+
   it('принимает вклад, расширенный слоем выше, без второго реестра', () => {
     interface MountedArea extends WorkspaceAreaContribution {
       mount(): string;

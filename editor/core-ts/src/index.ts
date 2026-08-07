@@ -17,3 +17,6 @@ export * from './document/index.js';
 export * from './operations/index.js';
 export * from './registry/index.js';
 export * from './i18n/index.js';
+export * from './validation/index.js';
+export * from './host/index.js';
+export * from './project/index.js';
