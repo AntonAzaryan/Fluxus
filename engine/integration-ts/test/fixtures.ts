@@ -130,6 +130,24 @@ export function duelScene(): SceneDef {
   };
 }
 
+/**
+ * Та же сцена с расстановкой в конфиге (SER-7, SER-8): реквизит стоит на арене
+ * в каждом её прогоне и занимает первые ID, герои приходят расстановкой конфига
+ * матча и встают за ним. Записанный на ней матч и держит парность пролога
+ * `buildMatchWorld` с прологом ядра (NTR-8, CLI-10).
+ */
+export function propScene(): SceneDef {
+  const scene = duelScene();
+  return {
+    ...scene,
+    prefabs: [...(scene.prefabs ?? []), { name: 'Prop', components: { Position: { x: 0, y: 0 } } }],
+    initial: [
+      { prefab: 'Prop', overrides: { Position: { x: fixed.fromInt(2), y: 0 } } },
+      { prefab: 'Prop', overrides: { Position: { x: 0, y: fixed.fromInt(3) } } },
+    ],
+  };
+}
+
 export function duelConfig(overrides: Partial<MatchConfig> = {}): MatchConfig {
   const scene = overrides.scene ?? duelScene();
   return {

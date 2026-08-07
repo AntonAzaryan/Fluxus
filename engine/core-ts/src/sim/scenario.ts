@@ -9,7 +9,6 @@
  * Фильтрации по видимости здесь нет и не будет (CLI-5): golden фиксирует
  * полный мир, `viewpoint = ALL` — FoW живёт в транспорте, а не в ядре.
  */
-import { spawn } from '../ecs/world.js';
 import { InputSystem } from '../systems/inputSystem.js';
 import { LocomotionSystem, type LocomotionOptions } from '../systems/locomotion.js';
 import { mathApi } from '../math/mathApi.js';
@@ -22,29 +21,23 @@ import {
 } from '../systems/physics.js';
 import { requireModifierList } from '../systems/modifiers.js';
 import { VisibilitySystem, VISION_MODIFIER_COMPONENT, type VisibilityOptions } from '../systems/visibility.js';
+import { applyPlacement, type ScenarioSpawn } from './placement.js';
 import { loadScene, type SceneDef } from './scene.js';
 import { prettyJsonSerializer, snapshotToPlain, type PlainSnapshot } from './serialization.js';
 import { initialState, tick, type Simulation } from './tick.js';
 import { worldInitHash } from './worldInit.js';
-import type {
-  DiagnosticsSink,
-  FieldOverrides,
-  InputFrame,
-  PhysicsApi,
-  SimulationState,
-} from '../types.js';
-
-export interface ScenarioSpawn {
-  readonly prefab: string;
-  readonly overrides?: FieldOverrides;
-}
+import type { DiagnosticsSink, InputFrame, PhysicsApi, SimulationState } from '../types.js';
 
 export interface ScenarioDef {
   readonly name: string;
   readonly seed: number;
   readonly ticks: number;
   readonly scene: SceneDef;
-  /** Начальная расстановка: порядок вызовов задаёт выданные ID (ID-2, DET-6). */
+  /**
+   * Начальная расстановка прогона (SER-8): порядок записей задаёт выданные ID
+   * (ID-2, DET-6). Расстановку сцены она не замещает — та применяется первой,
+   * внутри `loadScene`, и участники прогона встают за ней.
+   */
   readonly initial?: readonly ScenarioSpawn[];
   /** Канонические вводы тика (TICK-2); раскладываются по собственному полю `tick`. */
   readonly inputs?: readonly InputFrame[];
@@ -127,7 +120,10 @@ export function runScenario(def: ScenarioDef, diagnostics?: DiagnosticsSink): Ru
     );
   }
 
-  for (const entry of def.initial ?? []) spawn(world, entry.prefab, entry.overrides);
+  // Расстановка сценария — после расстановки сцены, которую применил
+  // `loadScene` (SER-8): сцена описывает содержимое арены, сценарий —
+  // участников этого прогона, и ID выданы в этом порядке.
+  applyPlacement(world, def.initial, `сценарий "${def.name}"`);
 
   const state = initialState(world, def.seed);
   // Считается здесь и только здесь: после начальной расстановки и до первого

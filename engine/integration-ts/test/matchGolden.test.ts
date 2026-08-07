@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { duelConfig, fuzzInput, playMatch, walkRight, type PlayedMatch } from './fixtures.js';
+import { duelConfig, fuzzInput, playMatch, propScene, walkRight, type PlayedMatch } from './fixtures.js';
 
 const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'golden');
 const UPDATE = process.env['UPDATE_MATCHES'] === '1';
@@ -46,6 +46,14 @@ const RECORDINGS: readonly Recording[] = [
         },
         duelConfig({ name: 'match-fuzz', seed: FUZZ_SEED }),
       ),
+  },
+  {
+    // Сцена с непустой расстановкой (SER-7, SER-8): реквизит сцены занимает
+    // первые ID, герои матча идут за ним. Забытая в прологе `buildMatchWorld`
+    // расстановка сцены краснеет здесь и в паре ядра к этому сценарию (NTR-8).
+    file: 'match-props.scenario.json',
+    play: () =>
+      playMatch(16, { a: walkRight(12) }, duelConfig({ name: 'match-props', scene: propScene() })),
   },
 ];
 

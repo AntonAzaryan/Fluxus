@@ -30,6 +30,7 @@ import { fowComponents, VISION_MODIFIER_COMPONENT } from '../systems/visibility.
 import { TimeScaleSystem, timeComponents, TIME_SCALE_MODIFIERS_COMPONENT } from '../systems/time.js';
 import { TweenSystem, TWEEN_SCHEMA, type TweenDef } from '../systems/tween.js';
 import { modifierList, DEFAULT_MODIFIER_SLOTS } from '../systems/modifiers.js';
+import { applyPlacement, type ScenarioSpawn } from './placement.js';
 import type { ArenaApi, ComponentSchema, ModifierRegistry, TerrainApi, WorldState } from '../types.js';
 
 export interface SceneDef {
@@ -57,6 +58,16 @@ export interface SceneDef {
    * полей компонентов источников (SER-6, SER-7).
    */
   readonly modifierSlots?: number;
+  /**
+   * Начальная расстановка сцены (SER-7, SER-8) — то, что стоит на арене в
+   * каждом её прогоне. Порядок записей нормативен: он задаёт выданные
+   * `index`/`generation` (ID-2, DET-6), а через плоскую форму мира — хеш
+   * `worldInit` (DET-1). Сортировать и дедуплицировать список нельзя.
+   *
+   * Расстановку документа прогона (сценарий CLI-2, конфиг матча NTR-5) она не
+   * замещает и не замещается ею: они складываются, сцена идёт первой.
+   */
+  readonly initial?: readonly ScenarioSpawn[];
 }
 
 export interface Scene {
@@ -117,6 +128,10 @@ export function loadScene(def: SceneDef): Scene {
     def.arena === undefined
       ? undefined
       : createArenaApi(world, def.arena, spawn(world, ARENA_PREFAB));
+  // Расстановка сцены — строго после носителей (SER-7) и строго до расстановки
+  // документа прогона (SER-8): порядок задаёт выданные ID, то есть хеш
+  // `worldInit`. Отсутствующий список неотличим от пустого.
+  applyPlacement(world, def.initial, 'сцена');
   const systems = new SystemRegistry();
   // Нативные системы, включаемые самим составом сцены (SER-7). Их регистрация
   // здесь, а не у вызывающего: без них объявленные компоненты — мёртвые данные.

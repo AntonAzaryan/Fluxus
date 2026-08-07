@@ -48,6 +48,10 @@ export interface MatchWorldDef {
   readonly seed: number;
   /** Порядок задаёт слоты (TICK-5) и входит в воспроизводимость наравне с seed. */
   readonly players: readonly string[];
+  /**
+   * Расстановка документа прогона (SER-8) — участники этого матча. Расстановку
+   * конфига сцены она не замещает: та применяется первой, внутри `loadScene`.
+   */
   readonly initial?: readonly ScenarioSpawn[];
   /** Зависимость сборки, а не данные сцены (DI-3) — поэтому здесь, а не в `SceneDef`. */
   readonly physics?: PhysicsOptions;
@@ -82,6 +86,11 @@ export function buildMatchWorld(def: MatchWorldDef): MatchWorld {
     );
   }
 
+  // Расстановка матча идёт ПОСЛЕ расстановки сцены (SER-8): ту уже применил
+  // `loadScene` вслед за сущностями-носителями, и повторять её здесь нельзя —
+  // расстановки складываются, а не замещают друг друга. Порядок «носители →
+  // сцена → матч» задаёт выданные ID, то есть хеш `worldInit`, по которому
+  // сверяются клиент и сервер (NTR-5).
   for (const entry of def.initial ?? []) worldInitSpawn(world, entry.prefab, entry.overrides);
 
   const state = initialState(world, def.seed);

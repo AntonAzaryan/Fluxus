@@ -109,6 +109,23 @@ export function fogScene(): SceneDef {
   };
 }
 
+/**
+ * Та же сцена с расстановкой в конфиге (SER-7, SER-8): реквизит стоит на арене
+ * в каждом её прогоне, а герои приходят расстановкой конфига матча. Обе
+ * расстановки складываются, сцена идёт первой — и ID выданы в этом порядке.
+ */
+export function placedScene(): SceneDef {
+  const scene = duelScene();
+  return {
+    ...scene,
+    prefabs: [...(scene.prefabs ?? []), { name: 'Prop', components: { Position: { x: 0, y: 0 } } }],
+    initial: [
+      { prefab: 'Prop', overrides: { Position: { x: fixed.fromInt(2), y: 0 } } },
+      { prefab: 'Prop', overrides: { Position: { x: 0, y: fixed.fromInt(3) } } },
+    ],
+  };
+}
+
 export function versionOf(scene: SceneDef): GameVersion {
   return { buildId: BUILD_ID, contentPackHash: contentPackHash(scene) };
 }

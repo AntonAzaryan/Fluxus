@@ -1,0 +1,547 @@
+{
+  "scenario": "scene-initial",
+  "seed": 20260807,
+  "worldInitHash": "d115fef8",
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 5,
+        "aliveCount": 5,
+        "generations": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          1,
+          1,
+          3,
+          3
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              0,
+              131072,
+              196608,
+              0,
+              0
+            ],
+            "y": [
+              0,
+              65536,
+              0,
+              0,
+              0
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              15,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              0,
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0,
+              32768
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "static"
+            ]
+          ],
+          [
+            2,
+            [
+              "static"
+            ]
+          ],
+          [
+            3,
+            [
+              "mobile"
+            ]
+          ],
+          [
+            4,
+            [
+              "mobile"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 5,
+        "aliveCount": 5,
+        "generations": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          1,
+          1,
+          3,
+          3
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              0,
+              131072,
+              196608,
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              65536,
+              0,
+              0,
+              32768
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              15,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              0,
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0,
+              32768
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "static"
+            ]
+          ],
+          [
+            2,
+            [
+              "static"
+            ]
+          ],
+          [
+            3,
+            [
+              "mobile"
+            ]
+          ],
+          [
+            4,
+            [
+              "mobile"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 5,
+        "aliveCount": 5,
+        "generations": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          1,
+          1,
+          3,
+          3
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              0,
+              131072,
+              196608,
+              131072,
+              -65536
+            ],
+            "y": [
+              0,
+              65536,
+              0,
+              0,
+              65536
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              15,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              0,
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0,
+              32768
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "static"
+            ]
+          ],
+          [
+            2,
+            [
+              "static"
+            ]
+          ],
+          [
+            3,
+            [
+              "mobile"
+            ]
+          ],
+          [
+            4,
+            [
+              "mobile"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 5,
+        "aliveCount": 5,
+        "generations": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          1,
+          1,
+          3,
+          3
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              0,
+              131072,
+              196608,
+              196608,
+              -98304
+            ],
+            "y": [
+              0,
+              65536,
+              0,
+              0,
+              98304
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              15,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              0,
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0,
+              32768
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "static"
+            ]
+          ],
+          [
+            2,
+            [
+              "static"
+            ]
+          ],
+          [
+            3,
+            [
+              "mobile"
+            ]
+          ],
+          [
+            4,
+            [
+              "mobile"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 4,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 5,
+        "aliveCount": 5,
+        "generations": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          1,
+          1,
+          3,
+          3
+        ],
+        "components": {
+          "Position": {
+            "x": [
+              0,
+              131072,
+              196608,
+              262144,
+              -131072
+            ],
+            "y": [
+              0,
+              65536,
+              0,
+              0,
+              131072
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              15,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              0,
+              65536,
+              -32768
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0,
+              32768
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "static"
+            ]
+          ],
+          [
+            2,
+            [
+              "static"
+            ]
+          ],
+          [
+            3,
+            [
+              "mobile"
+            ]
+          ],
+          [
+            4,
+            [
+              "mobile"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    }
+  ]
+}

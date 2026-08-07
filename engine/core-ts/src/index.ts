@@ -174,7 +174,14 @@ export { jsonSerializer, prettyJsonSerializer, snapshotToPlain, snapshotFromPlai
 export type { PlainSnapshot, Serializer } from './sim/serialization.js';
 export { createJsonlSink, traceLine } from './sim/trace.js';
 export { runScenario, runScenarioBytes } from './sim/scenario.js';
-export type { RunOutput, ScenarioDef, ScenarioSpawn, TickRecord } from './sim/scenario.js';
+export type { RunOutput, ScenarioDef, TickRecord } from './sim/scenario.js';
+/**
+ * Запись расстановки — формат SER-8, общий конфигу сцены, сценарию CLI и
+ * конфигу матча. Имя экспорта историческое: тип жил полем сценария.
+ * `applyPlacement` наружу не уходит — расстановку применяют загрузчик и прогон
+ * до первого тика, а публичный мутатор остаётся один (TICK-3).
+ */
+export type { ScenarioSpawn } from './sim/placement.js';
 export { worldInitHash, worldInitForm } from './sim/worldInit.js';
 export type { WorldInitParts } from './sim/worldInit.js';
 export { contentPackHash, contentPackForm } from './sim/contentPack.js';

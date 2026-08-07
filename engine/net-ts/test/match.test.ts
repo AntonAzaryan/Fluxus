@@ -15,8 +15,18 @@ import {
   world as coreWorld,
   type Snapshot,
 } from '@game-mvp/core';
-import { connectClient, duelScene, harness, settle, STEP, type ConnectedClient } from './fixtures.js';
+import {
+  connectClient,
+  duelConfig,
+  duelScene,
+  harness,
+  placedScene,
+  settle,
+  STEP,
+  type ConnectedClient,
+} from './fixtures.js';
 import type { InputSource } from '../src/client/host.js';
+import type { MatchConfig } from '../src/server/matchServer.js';
 
 function walkRight(untilTick: number): InputSource {
   return (tick) => (tick <= untilTick ? { move: { x: STEP, y: 0 }, aimDir: 0, buttons: 0 } : undefined);
@@ -33,9 +43,9 @@ function positionOfSlot(snapshot: Snapshot, slot: number): { x: number; y: numbe
   return undefined;
 }
 
-async function playMatch(ticks: number) {
-  const fixture = harness();
-  const scene = duelScene();
+async function playMatch(ticks: number, config: MatchConfig = duelConfig()) {
+  const fixture = harness(config);
+  const scene = config.scene;
   const a = connectClient(fixture.hub, 'p1', fixture.clock, scene, { input: walkRight(8) });
   const b = connectClient(fixture.hub, 'p2', fixture.clock, scene, {});
   await settle();
@@ -81,6 +91,28 @@ describe('матч двух игроков', () => {
     // Последний тик прогона против канонического состояния сервера — включая
     // rng, шину событий и режим мира, а не только позиции.
     expect(replay.ticks[replay.ticks.length - 1]).toEqual(snapshotToPlain(server.snapshot()));
+  });
+
+  it('расстановка сцены применяется до расстановки матча и остаётся парной ядру (SER-8, NTR-8)', async () => {
+    // Сцена с непустым `initial`: пролог `buildMatchWorld` повторяет пролог
+    // ядра, и забытая в нём расстановка сцены разошлась бы именно здесь.
+    const { server, a } = await playMatch(12, duelConfig({ scene: placedScene() }));
+
+    const snapshot = server.snapshot();
+    // Реквизит сцены занял первые слоты, герои матча встали за ним (ID-2).
+    const positions = [...query(snapshot.world, { all: ['Position'] })].map((entity) => ({
+      x: coreWorld.getField(snapshot.world, entity, 'Position', 'x'),
+      hero: coreWorld.hasComponent(snapshot.world, entity, 'Player'),
+    }));
+    expect(positions).toHaveLength(4);
+    expect(positions.slice(0, 2).map((entry) => entry.hero)).toEqual([false, false]);
+    expect(positions.slice(2).map((entry) => entry.hero)).toEqual([true, true]);
+
+    const replay = runScenario(server.toScenario());
+    expect(replay.worldInitHash).toBe(server.worldInitHash);
+    expect(replay.ticks[replay.ticks.length - 1]).toEqual(snapshotToPlain(snapshot));
+    // Клиент поднимает мир той же сборкой из той же сцены контент-пака (NTR-5).
+    expect(a.client.worldInitHash).toBe(server.worldInitHash);
   });
 
   it('канонический лог содержит кадр каждого слота на каждом тике', async () => {

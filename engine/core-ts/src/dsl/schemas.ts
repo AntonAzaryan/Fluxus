@@ -163,6 +163,24 @@ const tweenDef: Json = {
   },
 };
 
+const spawnEntry: Json = {
+  title: 'Запись начальной расстановки (SER-8)',
+  type: 'object',
+  additionalProperties: false,
+  required: ['prefab'],
+  properties: {
+    prefab: { type: 'string', minLength: 1 },
+    overrides: {
+      $comment: "Карта «компонент → поле → значение» поверх значений prefab'а (CMD-6).",
+      type: 'object',
+      additionalProperties: { type: 'object', additionalProperties: { type: 'integer' } },
+    },
+  },
+};
+
+/** Список записей — общий формат расстановки конфига сцены и документа прогона (SER-8). */
+const placement: Json = { type: 'array', items: { $ref: '#/$defs/spawnEntry' } };
+
 const scene: Json = {
   title: 'Сцена (SER-7)',
   type: 'object',
@@ -203,6 +221,10 @@ const scene: Json = {
       type: 'integer',
       minimum: 1,
     },
+    initial: {
+      ...placement,
+      $comment: 'Расстановка сцены: после сущностей-носителей и до расстановки прогона (SER-7, SER-8).',
+    },
   },
 };
 
@@ -237,20 +259,8 @@ const scenario: Json = {
     ticks: { type: 'integer', minimum: 0 },
     scene: { $ref: '#/$defs/scene' },
     initial: {
-      $comment: 'Начальная расстановка; порядок задаёт выданные ID (ID-2, DET-6).',
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['prefab'],
-        properties: {
-          prefab: { type: 'string', minLength: 1 },
-          overrides: {
-            type: 'object',
-            additionalProperties: { type: 'object', additionalProperties: { type: 'integer' } },
-          },
-        },
-      },
+      ...placement,
+      $comment: 'Расстановка прогона: применяется после расстановки сцены (SER-8, ID-2, DET-6).',
     },
     inputs: { type: 'array', items: { $ref: '#/$defs/inputFrame' } },
     physics: {
@@ -296,6 +306,7 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
     expression,
     prefab,
     query,
+    spawnEntry,
     system,
     terrain,
     tweenDef,
@@ -310,6 +321,7 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
     prefab,
     query,
     scene,
+    spawnEntry,
     system,
     terrain,
     tweenDef,

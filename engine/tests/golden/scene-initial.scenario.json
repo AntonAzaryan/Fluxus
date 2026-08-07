@@ -1,0 +1,65 @@
+{
+  "name": "scene-initial",
+  "seed": 20260807,
+  "ticks": 4,
+  "scene": {
+    "components": [
+      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } }
+    ],
+    "prefabs": [
+      { "name": "Prop", "components": { "Position": { "x": 0, "y": 0 } }, "tags": ["static"] },
+      {
+        "name": "Mover",
+        "components": { "Position": { "x": 0, "y": 0 }, "Velocity": { "x": 65536, "y": 0 } },
+        "tags": ["mobile"]
+      }
+    ],
+    "systems": [
+      {
+        "name": "Movement",
+        "order": 10,
+        "query": { "all": ["Position", "Velocity"] },
+        "as": "e",
+        "do": [
+          {
+            "modifyComponent": {
+              "entity": { "var": "e" },
+              "component": "Position",
+              "values": {
+                "x": {
+                  "+": [
+                    { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "e" }, "Velocity", "x"] }
+                  ]
+                },
+                "y": {
+                  "+": [
+                    { "getComponent": [{ "var": "e" }, "Position", "y"] },
+                    { "getComponent": [{ "var": "e" }, "Velocity", "y"] }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "terrain": {
+      "width": 2,
+      "height": 2,
+      "tileSize": 65536,
+      "levels": ["00", "00"],
+      "flags": ["..", ".."]
+    },
+    "initial": [
+      { "prefab": "Prop", "overrides": { "Position": { "x": 131072, "y": 65536 } } },
+      { "prefab": "Prop", "overrides": { "Position": { "x": 196608 } } }
+    ],
+    "capacity": 16
+  },
+  "initial": [
+    { "prefab": "Mover" },
+    { "prefab": "Mover", "overrides": { "Velocity": { "x": -32768, "y": 32768 } } }
+  ]
+}
