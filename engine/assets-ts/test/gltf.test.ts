@@ -101,8 +101,30 @@ describe('Загрузчик glTF: рукописная фикстура (ASSET-
     }
   });
 
+  it('материалы: metallic/roughness, alphaMode и слоты карт приезжают из формата', () => {
+    expect(model.materials).toHaveLength(1);
+    const material = model.materials[0]!;
+    expect(material.metallicFactor).toBeCloseTo(0.25, 5);
+    expect(material.roughnessFactor).toBeCloseTo(0.75, 5);
+    expect(material.alphaMode).toBe('mask');
+    expect(material.alphaCutoff).toBeCloseTo(0.25, 5);
+    expect(material.doubleSided).toBe(true);
+    // Карта ссылается на НОМЕР слота, а не на путь (ASSET-5): подмена скина
+    // работает по слоту (REND-6), поэтому нумерация обязана быть сквозной.
+    expect(material.baseColorTexture).toBe(0);
+    expect(material.normalTexture).toBeNull();
+  });
+
+  it('слоты текстур: путь разрешается ОТ ID ассета, слот без файла остаётся в нумерации', () => {
+    expect(model.textureSlots).toHaveLength(2);
+    // "../shared/atlas.png" от ID "gltf-mini/model.gltf" → "shared/atlas.png" (ASSET-3).
+    expect(model.textureSlots[0]).toEqual({ slot: 0, path: 'shared/atlas.png' });
+    // Изображение без внешнего uri (встроенное) — слот объявлен, файла за ним нет.
+    expect(model.textureSlots[1]).toEqual({ slot: 1, path: null });
+  });
+
   it('секвенции: канал корневого узла конвертируется, канал некорневого — нет', () => {
-    expect(model.sequences).toHaveLength(1);
+    expect(model.sequences).toHaveLength(2);
     const seq = model.sequences[0]!;
     expect(seq.name).toBe('Anim1');
     expect(seq.duration).toBeCloseTo(1, 5);
@@ -117,5 +139,16 @@ describe('Загрузчик glTF: рукописная фикстура (ASSET-
     expect(childTrack.rotation).toBeDefined();
     // Некорневой узел: локальный поворот проходит БЕЗ изменений.
     closeArray(childTrack.rotation!.values, [0, 0, 0, 1, 0, 0, Math.SQRT1_2, Math.SQRT1_2]);
+    // Режим интерполяции приезжает из формата, а не подразумевается (ASSET-5).
+    expect(childTrack.rotation!.interpolation).toBe('linear');
+  });
+
+  it('секвенции: STEP-канал сохраняет ступенчатую интерполяцию', () => {
+    const seq = model.sequences.find((s) => s.name === 'Anim2_Step')!;
+    const track = seq.boneTracks.find((t) => t.boneIndex === 3)!;
+    expect(track.scale).toBeDefined();
+    // Ступенчатый клип, выпрямленный в линейный, — тихо испорченная анимация.
+    expect(track.scale!.interpolation).toBe('step');
+    closeArray(track.scale!.values, [1, 1, 1, 2, 2, 2]);
   });
 });

@@ -123,7 +123,7 @@ let pendingKill = false;
 /** Отложенные фронты кнопок локомоушена (LOC-3): уклон/перекат и прыжок. */
 let pendingDodge = false;
 let pendingJump = false;
-let currentSkin: 'steel' | 'ember' = 'steel';
+let currentSkin: 'base' | 'ember' = 'base';
 
 /** Последняя позиция указателя — edge-pan считается по кадрам (CAM-3). */
 let pointerX = -1;
@@ -175,7 +175,7 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyT') {
     // T — смена скина (REND-6); S свободна под «юг» в WASD.
-    currentSkin = currentSkin === 'steel' ? 'ember' : 'steel';
+    currentSkin = currentSkin === 'base' ? 'ember' : 'base';
     if (heroId !== null) models?.setSkin(heroId, currentSkin);
     updateHud();
     return;
@@ -390,7 +390,13 @@ async function main(): Promise<void> {
       });
       // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
       remote!.register(new TerrainSubsystem(grid, { surface }));
-      models = new ModelsSubsystem(manifest, { surface });
+      // `facingOffset` компенсирует «перёд» модели: рендер считает передом +X
+      // (так у MDX), а у Barbarian.gltf после приведения осей перёд смотрит
+      // вдоль −Y, то есть на четверть оборота правее курса. Опция глобальна на
+      // подсистему, поэтому она верна ровно пока в сцене один формат моделей;
+      // как только форматов станет два, «перёд» обязан переехать в данные
+      // ассета или манифеста — см. change `model-orientation-and-clips`.
+      models = new ModelsSubsystem(manifest, { surface, facingOffset: Math.PI / 2 });
       remote!.register(models);
 
       // Камера: поверхность и границы — из той же сетки, что рендер террейна

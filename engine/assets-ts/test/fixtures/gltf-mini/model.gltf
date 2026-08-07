@@ -14,7 +14,7 @@
  "buffers": [
   {
    "uri": "model.bin",
-   "byteLength": 340
+   "byteLength": 364
   }
  ],
  "bufferViews": [
@@ -67,6 +67,11 @@
    "buffer": 0,
    "byteOffset": 308,
    "byteLength": 32
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 340,
+   "byteLength": 24
   }
  ],
  "accessors": [
@@ -129,6 +134,12 @@
    "componentType": 5126,
    "count": 2,
    "type": "VEC4"
+  },
+  {
+   "bufferView": 10,
+   "componentType": 5126,
+   "count": 2,
+   "type": "VEC3"
   }
  ],
  "nodes": [
@@ -222,8 +233,32 @@
      1,
      1,
      1
-    ]
-   }
+    ],
+    "baseColorTexture": {
+     "index": 0
+    },
+    "metallicFactor": 0.25,
+    "roughnessFactor": 0.75
+   },
+   "doubleSided": true,
+   "alphaMode": "MASK",
+   "alphaCutoff": 0.25
+  }
+ ],
+ "textures": [
+  {
+   "source": 0
+  },
+  {
+   "source": 1
+  }
+ ],
+ "images": [
+  {
+   "uri": "../shared/atlas.png"
+  },
+  {
+   "mimeType": "image/png"
   }
  ],
  "animations": [
@@ -255,6 +290,25 @@
      "input": 7,
      "output": 9,
      "interpolation": "LINEAR"
+    }
+   ]
+  },
+  {
+   "name": "Anim2_Step",
+   "channels": [
+    {
+     "sampler": 0,
+     "target": {
+      "node": 3,
+      "path": "scale"
+     }
+    }
+   ],
+   "samplers": [
+    {
+     "input": 7,
+     "output": 10,
+     "interpolation": "STEP"
     }
    ]
   }
