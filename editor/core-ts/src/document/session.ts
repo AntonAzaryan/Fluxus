@@ -47,7 +47,6 @@ import {
   isJsonArray,
   pathKey,
   pathStartsWith,
-  pathsEqual,
   formatPath,
   removeAtPath,
   setAtPath,
@@ -97,7 +96,7 @@ export interface OperationTransaction {
   readonly open: boolean;
   /** Продолжает то же взаимодействие: тот же `apply` с новыми параметрами. */
   extend(params?: OperationParams): JsonValue | undefined;
-  /** Закрывает взаимодействие одной записью истории. */
+  /** Закрывает взаимодействие одной записью истории; отдаёт результат последнего применения. */
   commit(): OperationOutcome;
   /** Возвращает документы к состоянию до `beginOperation`; в историю ничего не кладётся. */
   cancel(): void;
@@ -203,6 +202,7 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     readonly #operation: AuthoringOperation;
     readonly #touched = new Map<DocumentId, PendingDocument>();
     #params: JsonValue = null;
+    #result: JsonValue | undefined;
     #open = true;
 
     constructor(operation: AuthoringOperation) {
@@ -239,10 +239,15 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
 
     run(params: OperationParams): JsonValue | undefined {
       checkParams(this.#operation, params);
-      this.#params = cloneFrozen(params as JsonValue);
+      // Параметры запоминаются копией: история показывает, чем была операция,
+      // и вызывающий не должен уметь переписать это задним числом.
+      this.#params = cloneFrozen(params);
       const ctx = new Context(this);
       try {
-        return this.#operation.apply(ctx, params) ?? undefined;
+        // Результат последнего применения — результат взаимодействия: мазок
+        // отдаёт то, чем он кончился, а не то, чем начался.
+        this.#result = this.#operation.apply(ctx, params) ?? undefined;
+        return this.#result;
       } finally {
         // Контекст закрывается сразу после возврата из `apply`: операция,
         // сохранившая его в замыкании, ничего им не сделает.
@@ -274,7 +279,7 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
         });
       }
       if (changes.length === 0) {
-        return { operationId: this.operationId, result: undefined, documentIds: [], recorded: false };
+        return { operationId: this.operationId, result: this.#result, documentIds: [], recorded: false };
       }
       const entry: HistoryEntry = {
         operationId: this.operationId,
@@ -284,7 +289,7 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
       history.push(entry);
       const documentIds = changes.map((change) => change.documentId);
       emit({ kind: 'applied', operationId: this.operationId, documentIds, paths: pathRefs(changes) });
-      return { operationId: this.operationId, result: undefined, documentIds, recorded: true };
+      return { operationId: this.operationId, result: this.#result, documentIds, recorded: true };
     }
 
     cancel(): void {
@@ -438,7 +443,7 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
      */
     #guard(record: DocumentRecord, path: JsonPath): void {
       for (const list of record.lists) {
-        if (pathsEqual(path, list) || pathStartsWith(path, list) || pathStartsWith(list, path)) {
+        if (pathStartsWith(path, list) || pathStartsWith(list, path)) {
           throw new OperationError(
             this.#tx.operationId,
             `${formatPath(path)}: записи списка ${formatPath(list)} адресуются дескриптором, а не путём`,
@@ -475,10 +480,7 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     }
   }
 
-  const start = (
-    operationId: string,
-    params: OperationParams,
-  ): { readonly tx: Transaction; readonly result: JsonValue | undefined } => {
+  const start = (operationId: string, params: OperationParams): Transaction => {
     if (transaction !== undefined) {
       throw new OperationError(operationId, `взаимодействие "${transaction.operationId}" ещё не закрыто`);
     }
@@ -489,7 +491,8 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     const tx = new Transaction(operation);
     transaction = tx;
     try {
-      return { tx, result: tx.run(params) };
+      tx.run(params);
+      return tx;
     } catch (error) {
       // Упавшая операция не оставляет полуправки: то, что она успела записать,
       // откатывается тем же механизмом, что и отменённое взаимодействие.
@@ -572,12 +575,11 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     applyOperation(operationId, params = {}) {
       // Одношаговый вызов — то же взаимодействие, просто из одного применения:
       // открыть и закрыть его сразу, а не завести второй путь исполнения.
-      const { tx, result } = start(operationId, params);
-      return { ...tx.commit(), result };
+      return start(operationId, params).commit();
     },
 
     beginOperation(operationId, params = {}) {
-      return start(operationId, params).tx;
+      return start(operationId, params);
     },
 
     get pending() {
