@@ -1,0 +1,578 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="2720" viewBox="0 0 1500 2720" font-family="Inter, 'Segoe UI', Roboto, Arial, sans-serif">
+  <defs>
+    <linearGradient id="lava" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF8A3D"/>
+      <stop offset="1" stop-color="#F04B12"/>
+    </linearGradient>
+    <linearGradient id="vp" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1B1F22"/>
+      <stop offset="1" stop-color="#0F1214"/>
+    </linearGradient>
+    <clipPath id="board"><rect x="0" y="0" width="1440" height="820" rx="10"/></clipPath>
+    <clipPath id="vpclip"><rect x="304" y="80" width="780" height="710"/></clipPath>
+  </defs>
+
+  <rect width="1500" height="2720" fill="#08090A"/>
+
+  <!-- ============================== BOARD 1: СЦЕНА ============================== -->
+  <g transform="translate(30,40)">
+    <text x="0" y="-14" fill="#E8E8E8" font-size="15" font-weight="600">1 · Рабочая область «Сцена» — вьюпорт, кисти террейна, расстановка</text>
+    <rect x="0" y="0" width="1440" height="820" rx="10" fill="#0E0E0E" stroke="#2C2C2C"/>
+    <g clip-path="url(#board)">
+
+      <!-- top bar -->
+      <rect x="0" y="0" width="1440" height="44" fill="#181818"/>
+      <line x1="0" y1="44" x2="1440" y2="44" stroke="#2C2C2C"/>
+      <path d="M18 15 L26 22 L18 29 L10 22 Z" fill="url(#lava)"/>
+      <text x="36" y="27" fill="#E8E8E8" font-size="13" font-weight="600">Fluxus Editor</text>
+      <line x1="148" y1="12" x2="148" y2="32" stroke="#2C2C2C"/>
+      <text x="164" y="27" fill="#9E9E9E" font-size="12">content / scenes / demo.scene.json</text>
+      <circle cx="380" cy="22" r="3.5" fill="#FF6A2B"/>
+      <rect x="520" y="9" width="360" height="26" rx="13" fill="#0C0C0C" stroke="#2C2C2C"/>
+      <circle cx="540" cy="22" r="5" fill="none" stroke="#6E6E6E" stroke-width="1.4"/>
+      <line x1="544" y1="26" x2="548" y2="30" stroke="#6E6E6E" stroke-width="1.4"/>
+      <text x="558" y="26" fill="#6E6E6E" font-size="12">Поиск по проекту: объекты, системы, ассеты…</text>
+      <rect x="838" y="14" width="34" height="16" rx="4" fill="#1C1C1C" stroke="#2C2C2C"/>
+      <text x="855" y="25" fill="#7A7A7A" font-size="9" text-anchor="middle">Ctrl P</text>
+
+      <rect x="1000" y="10" width="72" height="24" rx="12" fill="#0C0C0C" stroke="#2C2C2C"/>
+      <rect x="1002" y="12" width="34" height="20" rx="10" fill="#2A1710" stroke="#FF6A2B"/>
+      <text x="1019" y="26" fill="#FF8F4D" font-size="10.5" text-anchor="middle">RU</text>
+      <text x="1054" y="26" fill="#7A7A7A" font-size="10.5" text-anchor="middle">EN</text>
+
+      <g stroke="#9E9E9E" stroke-width="1.5" fill="none" stroke-linecap="round">
+        <path d="M1150 18 L1144 23 L1150 28"/><path d="M1144 23 H1155 a5 5 0 0 1 0 10 H1150"/>
+        <path d="M1184 18 L1190 23 L1184 28"/><path d="M1190 23 H1179 a5 5 0 0 0 0 10 H1184"/>
+      </g>
+      <rect x="1206" y="8" width="88" height="28" rx="6" fill="none" stroke="#3A3A3A"/>
+      <text x="1250" y="26" fill="#C8C8C8" font-size="12" text-anchor="middle">Сохранить</text>
+      <rect x="1304" y="8" width="120" height="28" rx="14" fill="url(#lava)"/>
+      <path d="M1326 15 L1338 22 L1326 29 Z" fill="#140A05"/>
+      <text x="1382" y="26" fill="#180B04" font-size="12" font-weight="700" text-anchor="middle">Превью</text>
+
+      <!-- left rail -->
+      <rect x="0" y="44" width="64" height="776" fill="#131313"/>
+      <line x1="64" y1="44" x2="64" y2="820" stroke="#2C2C2C"/>
+      <rect x="4" y="56" width="56" height="56" rx="8" fill="#1F1F1F"/>
+      <rect x="0" y="66" width="3" height="36" rx="1.5" fill="#FF6A2B"/>
+      <path d="M20 88 L27 76 L33 84 L38 78 L44 88 Z" fill="none" stroke="#FF6A2B" stroke-width="1.8" stroke-linejoin="round"/>
+      <text x="32" y="104" fill="#FF6A2B" font-size="9" text-anchor="middle">Сцена</text>
+
+      <g fill="none" stroke="#8A8A8A" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M32 140 L44 147 V161 L32 168 L20 161 V147 Z"/><path d="M20 147 L32 154 L44 147 M32 154 V168"/>
+      </g>
+      <text x="32" y="182" fill="#8A8A8A" font-size="9" text-anchor="middle">Объекты</text>
+
+      <g fill="none" stroke="#8A8A8A" stroke-width="1.6"><circle cx="23" cy="218" r="4"/><circle cx="23" cy="242" r="4"/><circle cx="43" cy="230" r="4"/><path d="M27 220 L39 228 M27 240 L39 232"/></g>
+      <text x="32" y="260" fill="#8A8A8A" font-size="9" text-anchor="middle">Системы</text>
+
+      <g fill="none" stroke="#8A8A8A" stroke-width="1.6"><rect x="20" y="296" width="24" height="24" rx="3"/><path d="M20 304 H44 M20 312 H44 M28 296 V320"/></g>
+      <text x="32" y="338" fill="#8A8A8A" font-size="9" text-anchor="middle">Схемы</text>
+
+      <g fill="none" stroke="#8A8A8A" stroke-width="1.6"><rect x="20" y="374" width="24" height="20" rx="3"/><circle cx="27" cy="381" r="2.2"/><path d="M20 391 L28 384 L35 391 L39 387 L44 392"/></g>
+      <text x="32" y="412" fill="#8A8A8A" font-size="9" text-anchor="middle">Ассеты</text>
+
+      <g fill="none" stroke="#6E6E6E" stroke-width="1.6"><circle cx="32" cy="782" r="7"/><path d="M32 771 V775 M32 789 V793 M21 782 H25 M39 782 H43"/></g>
+
+      <!-- navigator -->
+      <rect x="64" y="44" width="240" height="776" fill="#1A1A1A"/>
+      <line x1="304" y1="44" x2="304" y2="820" stroke="#2C2C2C"/>
+      <text x="80" y="70" fill="#E0E0E0" font-size="12" font-weight="600">Сцена</text>
+      <text x="126" y="70" fill="#5E5E5E" font-size="10">F1</text>
+      <text x="272" y="71" fill="#9E9E9E" font-size="16">+</text>
+      <line x1="64" y1="82" x2="304" y2="82" stroke="#242424"/>
+
+      <g font-size="11.5">
+        <text x="80" y="106" fill="#8A8A8A">▾</text><text x="94" y="106" fill="#D8D8D8">demo.scene.json</text>
+        <text x="94" y="130" fill="#8A8A8A">▾</text><text x="108" y="130" fill="#C0C0C0">Террейн</text>
+        <text x="122" y="152" fill="#9E9E9E">arena.terrain</text>
+        <text x="122" y="174" fill="#9E9E9E">arena.curvature</text>
+        <text x="94" y="198" fill="#8A8A8A">▾</text><text x="108" y="198" fill="#C0C0C0">Расстановка</text><text x="212" y="198" fill="#5E5E5E">12</text>
+        <text x="122" y="220" fill="#9E9E9E">hero</text>
+        <rect x="200" y="210" width="34" height="14" rx="7" fill="#232323"/><text x="217" y="220" fill="#8A8A8A" font-size="9" text-anchor="middle">unit</text>
+        <text x="122" y="242" fill="#9E9E9E">skeleton_01</text>
+
+        <rect x="64" y="252" width="240" height="24" fill="#232323"/>
+        <rect x="64" y="252" width="3" height="24" fill="#FF6A2B"/>
+        <text x="122" y="268" fill="#FFFFFF">skeleton_02</text>
+        <rect x="200" y="258" width="34" height="14" rx="7" fill="#2E2E2E"/><text x="217" y="268" fill="#B0B0B0" font-size="9" text-anchor="middle">unit</text>
+
+        <text x="122" y="292" fill="#9E9E9E">crate_01</text>
+        <rect x="200" y="282" width="34" height="14" rx="7" fill="#232323"/><text x="217" y="292" fill="#8A8A8A" font-size="9" text-anchor="middle">prop</text>
+
+        <text x="122" y="316" fill="#FF6B6E">crate_02</text>
+        <circle cx="200" cy="311" r="6" fill="none" stroke="#FF6B6E" stroke-width="1.4"/>
+        <path d="M197 308 L203 314 M203 308 L197 314" stroke="#FF6B6E" stroke-width="1.4"/>
+        <text x="214" y="316" fill="#FF6B6E" font-size="9">нет prefab</text>
+
+        <text x="94" y="344" fill="#8A8A8A">▾</text><text x="108" y="344" fill="#C0C0C0">Декорации</text><text x="212" y="344" fill="#5E5E5E">34</text>
+        <text x="122" y="366" fill="#9E9E9E">grass_patch_01</text>
+        <text x="122" y="388" fill="#9E9E9E">rock_cluster_03</text>
+      </g>
+      <line x1="64" y1="410" x2="304" y2="410" stroke="#242424"/>
+      <text x="80" y="434" fill="#6E6E6E" font-size="10">ПАЛИТРА ПРЕФАБОВ</text>
+      <g>
+        <rect x="80" y="446" width="62" height="62" rx="6" fill="#1F1F1F" stroke="#2C2C2C"/>
+        <rect x="150" y="446" width="62" height="62" rx="6" fill="#1F1F1F" stroke="#FF6A2B"/>
+        <rect x="220" y="446" width="62" height="62" rx="6" fill="#1F1F1F" stroke="#2C2C2C"/>
+        <text x="111" y="482" fill="#6E6E6E" font-size="10" text-anchor="middle">hero</text>
+        <text x="181" y="482" fill="#FF8F4D" font-size="10" text-anchor="middle">skeleton</text>
+        <text x="251" y="482" fill="#6E6E6E" font-size="10" text-anchor="middle">crate</text>
+      </g>
+
+      <!-- center: toolbar + viewport -->
+      <rect x="304" y="44" width="780" height="36" fill="#161616"/>
+      <line x1="304" y1="80" x2="1084" y2="80" stroke="#2C2C2C"/>
+      <g fill="none" stroke="#B0B0B0" stroke-width="1.5" stroke-linejoin="round">
+        <rect x="316" y="52" width="24" height="20" rx="4" fill="#262626" stroke="#3A3A3A"/>
+        <path d="M325 57 L325 68 L328 65 L330 69 L332 68 L330 64 L334 64 Z" fill="#FF6A2B" stroke="none"/>
+        <path d="M356 62 H372 M364 54 V70 M356 62 L360 58 M356 62 L360 66 M372 62 L368 58 M372 62 L368 66"/>
+        <path d="M396 68 a10 10 0 1 0 -4 -14"/><path d="M392 48 v7 h7"/>
+      </g>
+      <line x1="416" y1="52" x2="416" y2="72" stroke="#2C2C2C"/>
+      <g fill="none" stroke="#B0B0B0" stroke-width="1.5">
+        <path d="M430 70 L440 54 L450 70 Z"/>
+        <path d="M466 70 L482 70 L474 56 Z" stroke-dasharray="3 2"/>
+        <rect x="498" y="56" width="16" height="14" rx="2"/><path d="M502 60 L510 68 M510 60 L502 68"/>
+        <path d="M530 68 q8 -18 16 0" /><path d="M530 68 h16"/>
+      </g>
+      <line x1="562" y1="52" x2="562" y2="72" stroke="#2C2C2C"/>
+      <rect x="574" y="52" width="132" height="20" rx="10" fill="#2A1710" stroke="#FF6A2B"/>
+      <text x="640" y="66" fill="#FF8F4D" font-size="11" text-anchor="middle">Привязка к сетке</text>
+      <rect x="716" y="52" width="86" height="20" rx="10" fill="#1F1F1F" stroke="#3A3A3A"/>
+      <text x="759" y="66" fill="#9E9E9E" font-size="11" text-anchor="middle">Сетка</text>
+      <text x="924" y="66" fill="#6E6E6E" font-size="11">Кисть</text>
+      <rect x="960" y="52" width="52" height="20" rx="4" fill="#1F1F1F" stroke="#3A3A3A"/>
+      <text x="986" y="66" fill="#C8C8C8" font-size="11" text-anchor="middle">3×3</text>
+      <rect x="1020" y="52" width="52" height="20" rx="4" fill="#1F1F1F" stroke="#3A3A3A"/>
+      <text x="1046" y="66" fill="#C8C8C8" font-size="11" text-anchor="middle">ур. 2</text>
+
+      <rect x="304" y="80" width="780" height="710" fill="url(#vp)"/>
+      <g clip-path="url(#vpclip)">
+        <g transform="translate(694,430) scale(1,0.58) rotate(45)">
+          <rect x="-260" y="-260" width="520" height="520" fill="#15191C"/>
+          <rect x="-140" y="-220" width="200" height="160" fill="#1D2327" stroke="#39424A"/>
+          <rect x="-100" y="-180" width="100" height="80" fill="#242C31" stroke="#4A555E"/>
+          <rect x="120" y="40" width="80" height="80" fill="#08090A" stroke="#2A2E32"/>
+          <g stroke="#282D31" stroke-width="1">
+            <path d="M-260 -260 V260 M-220 -260 V260 M-180 -260 V260 M-140 -260 V260 M-100 -260 V260 M-60 -260 V260 M-20 -260 V260 M20 -260 V260 M60 -260 V260 M100 -260 V260 M140 -260 V260 M180 -260 V260 M220 -260 V260 M260 -260 V260"/>
+            <path d="M-260 -260 H260 M-260 -220 H260 M-260 -180 H260 M-260 -140 H260 M-260 -100 H260 M-260 -60 H260 M-260 -20 H260 M-260 20 H260 M-260 60 H260 M-260 100 H260 M-260 140 H260 M-260 180 H260 M-260 220 H260 M-260 260 H260"/>
+          </g>
+          <rect x="-260" y="-260" width="520" height="520" fill="none" stroke="#3A4249" stroke-width="1.5"/>
+          <circle cx="20" cy="140" r="62" fill="#FF6A2B" fill-opacity="0.14" stroke="#FF6A2B" stroke-width="2"/>
+        </g>
+
+        <!-- units -->
+        <ellipse cx="694" cy="400" rx="12" ry="6" fill="#000" fill-opacity="0.45"/>
+        <path d="M688 398 q6 -26 12 0 z" fill="#7E8C99"/><circle cx="694" cy="386" r="6" fill="#96A5B2"/>
+        <text x="694" y="368" fill="#7A8894" font-size="10" text-anchor="middle">hero</text>
+
+        <ellipse cx="680" cy="490" rx="11" ry="5" fill="#000" fill-opacity="0.45"/>
+        <path d="M674 488 q6 -24 12 0 z" fill="#5D6B77"/><circle cx="680" cy="477" r="5.5" fill="#74838F"/>
+
+        <ellipse cx="567" cy="408" rx="13" ry="6" fill="#000" fill-opacity="0.45"/>
+        <rect x="557" y="392" width="20" height="16" rx="2" fill="#4A423A" stroke="#655A4E"/>
+
+        <!-- selected unit -->
+        <ellipse cx="779" cy="465" rx="20" ry="10" fill="none" stroke="#FF6A2B" stroke-width="2"/>
+        <ellipse cx="779" cy="465" rx="20" ry="10" fill="#FF6A2B" fill-opacity="0.12"/>
+        <path d="M773 463 q6 -26 12 0 z" fill="#8D9CA8"/><circle cx="779" cy="451" r="6" fill="#A6B4C0"/>
+        <g stroke="#FF6A2B" stroke-width="2" fill="none">
+          <path d="M779 465 H829"/><path d="M829 465 L822 461 M829 465 L822 469"/>
+          <path d="M779 465 L751 479"/><path d="M751 479 L759 479 M751 479 L755 473"/>
+          <path d="M779 465 V425"/><path d="M779 425 L775 432 M779 425 L783 432"/>
+        </g>
+        <rect x="792" y="418" width="118" height="20" rx="4" fill="#151515" fill-opacity="0.92" stroke="#333"/>
+        <text x="801" y="432" fill="#D8D8D8" font-size="10">skeleton_02 · unit</text>
+
+        <!-- fow / mode chip -->
+        <rect x="320" y="96" width="150" height="24" rx="4" fill="#151515" fill-opacity="0.85" stroke="#2C2C2C"/>
+        <circle cx="334" cy="108" r="4" fill="#FF6A2B"/>
+        <text x="346" y="112" fill="#D8D8D8" font-size="11">Режим правки</text>
+      </g>
+      <line x1="304" y1="790" x2="1084" y2="790" stroke="#2C2C2C"/>
+      <rect x="304" y="790" width="780" height="30" fill="#161616"/>
+      <text x="318" y="809" fill="#8A8A8A" font-size="11">клетка 42, 17 · уровень 2 · рампа: нет · пол: есть</text>
+      <text x="820" y="809" fill="#8A8A8A" font-size="11">камера: free-RTS</text>
+      <text x="960" y="809" fill="#FF6B6E" font-size="11">1 ошибка</text>
+      <text x="1030" y="809" fill="#8A8A8A" font-size="11">12 объектов</text>
+
+      <!-- inspector -->
+      <rect x="1084" y="44" width="356" height="776" fill="#1A1A1A"/>
+      <line x1="1084" y1="44" x2="1084" y2="820" stroke="#2C2C2C"/>
+      <text x="1100" y="70" fill="#E0E0E0" font-size="12" font-weight="600">Инспектор</text>
+      <line x1="1084" y1="82" x2="1440" y2="82" stroke="#242424"/>
+
+      <rect x="1096" y="94" width="332" height="56" rx="6" fill="#202020" stroke="#2C2C2C"/>
+      <rect x="1108" y="106" width="32" height="32" rx="4" fill="#282828"/>
+      <text x="1150" y="118" fill="#FFFFFF" font-size="13" font-weight="600">skeleton_02</text>
+      <text x="1150" y="136" fill="#8A8A8A" font-size="11">prefab: skeleton</text>
+      <rect x="1364" y="106" width="52" height="18" rx="9" fill="#2A1710" stroke="#FF6A2B"/>
+      <text x="1390" y="119" fill="#FF8F4D" font-size="10" text-anchor="middle">unit</text>
+
+      <text x="1100" y="180" fill="#6E6E6E" font-size="10">ПЕРЕОПРЕДЕЛЕНИЯ ПОЛЕЙ · 3</text>
+      <line x1="1096" y1="190" x2="1428" y2="190" stroke="#242424"/>
+
+      <g font-size="11.5">
+        <text x="1100" y="214" fill="#9E9E9E">Transform.x</text>
+        <circle cx="1218" cy="210" r="6" fill="none" stroke="#5E5E5E"/><text x="1218" y="213.5" fill="#7A7A7A" font-size="8.5" text-anchor="middle">?</text>
+        <rect x="1240" y="202" width="80" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="1250" y="216" fill="#E0E0E0">12.500</text>
+        <text x="1100" y="242" fill="#9E9E9E">Transform.y</text>
+        <rect x="1240" y="230" width="80" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="1250" y="244" fill="#E0E0E0">-4.250</text>
+        <text x="1100" y="270" fill="#9E9E9E">Transform.rot</text>
+        <rect x="1240" y="258" width="80" height="20" rx="4" fill="#101010" stroke="#FF6A2B"/><text x="1250" y="272" fill="#FFFFFF">90.000</text>
+        <text x="1330" y="272" fill="#5E5E5E" font-size="10">Q16.16</text>
+      </g>
+
+      <text x="1100" y="308" fill="#6E6E6E" font-size="10">КОМПОНЕНТЫ ПРЕФАБА · только чтение здесь</text>
+      <line x1="1096" y1="318" x2="1428" y2="318" stroke="#242424"/>
+      <g font-size="11.5">
+        <rect x="1096" y="328" width="332" height="60" rx="6" fill="#1F1F1F" stroke="#2C2C2C"/>
+        <text x="1110" y="348" fill="#D8D8D8" font-weight="600">Health</text>
+        <text x="1110" y="370" fill="#9E9E9E">max</text><text x="1250" y="370" fill="#C8C8C8">120</text>
+        <circle cx="1218" cy="366" r="6" fill="none" stroke="#5E5E5E"/><text x="1218" y="369.5" fill="#7A7A7A" font-size="8.5" text-anchor="middle">?</text>
+        <text x="1330" y="370" fill="#5E5E5E" font-size="10">i32</text>
+
+        <rect x="1096" y="396" width="332" height="82" rx="6" fill="#1F1F1F" stroke="#2C2C2C"/>
+        <text x="1110" y="416" fill="#D8D8D8" font-weight="600">Vision</text>
+        <text x="1110" y="438" fill="#9E9E9E">radius</text><text x="1250" y="438" fill="#C8C8C8">6.000</text>
+        <circle cx="1218" cy="434" r="6" fill="none" stroke="#5E5E5E"/><text x="1218" y="437.5" fill="#7A7A7A" font-size="8.5" text-anchor="middle">?</text>
+        <text x="1110" y="460" fill="#9E9E9E">detectStealth</text><text x="1250" y="460" fill="#C8C8C8">false</text>
+
+        <rect x="1096" y="486" width="332" height="82" rx="6" fill="#1F1F1F" stroke="#2C2C2C"/>
+        <text x="1110" y="506" fill="#D8D8D8" font-weight="600">Locomotion</text>
+        <text x="1110" y="528" fill="#9E9E9E">speed</text>
+        <circle cx="1218" cy="524" r="6" fill="none" stroke="#5E5E5E"/><text x="1218" y="527.5" fill="#7A7A7A" font-size="8.5" text-anchor="middle">?</text>
+        <rect x="1240" y="516" width="80" height="20" rx="4" fill="#101010" stroke="#FF6B6E"/><text x="1250" y="530" fill="#FF9B9D">18.000</text>
+        <path d="M1330 522 l6 -10 l6 10 z" fill="none" stroke="#FF6B6E" stroke-width="1.4"/>
+        <text x="1110" y="556" fill="#FF6B6E" font-size="10">вне диапазона схемы: 0…12</text>
+      </g>
+
+      <line x1="1084" y1="600" x2="1440" y2="600" stroke="#242424"/>
+      <text x="1100" y="624" fill="#6E6E6E" font-size="10">ВИЗУАЛ · манифест</text>
+      <g font-size="11.5">
+        <text x="1100" y="650" fill="#9E9E9E">модель</text>
+        <rect x="1240" y="638" width="176" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="1250" y="652" fill="#E0E0E0">models/skeleton.glb</text>
+        <text x="1100" y="678" fill="#9E9E9E">скин</text>
+        <rect x="1240" y="666" width="176" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="1250" y="680" fill="#E0E0E0">default</text>
+        <text x="1100" y="706" fill="#9E9E9E">наклон по нормали</text>
+        <rect x="1240" y="694" width="34" height="18" rx="9" fill="#FF6A2B"/><circle cx="1265" cy="703" r="7" fill="#150A05"/>
+      </g>
+      <text x="1100" y="744" fill="#8A8A8A" font-size="11">Открыть в «Объекты» →</text>
+    </g>
+  </g>
+
+  <!-- ============================== BOARD 2: ОБЪЕКТЫ ============================== -->
+  <g transform="translate(30,940)">
+    <text x="0" y="-14" fill="#E8E8E8" font-size="15" font-weight="600">2 · Рабочая область «Объекты» — префаб и запись манифеста как одна сущность (ED-19)</text>
+    <rect x="0" y="0" width="1440" height="820" rx="10" fill="#0E0E0E" stroke="#2C2C2C"/>
+    <g clip-path="url(#board)">
+      <rect x="0" y="0" width="1440" height="44" fill="#181818"/>
+      <line x1="0" y1="44" x2="1440" y2="44" stroke="#2C2C2C"/>
+      <path d="M18 15 L26 22 L18 29 L10 22 Z" fill="url(#lava)"/>
+      <text x="36" y="27" fill="#E8E8E8" font-size="13" font-weight="600">Fluxus Editor</text>
+      <line x1="148" y1="12" x2="148" y2="32" stroke="#2C2C2C"/>
+      <text x="164" y="27" fill="#9E9E9E" font-size="12">content / prefabs / skeleton</text>
+      <rect x="1000" y="10" width="72" height="24" rx="12" fill="#0C0C0C" stroke="#2C2C2C"/>
+      <rect x="1002" y="12" width="34" height="20" rx="10" fill="#2A1710" stroke="#FF6A2B"/>
+      <text x="1019" y="26" fill="#FF8F4D" font-size="10.5" text-anchor="middle">RU</text>
+      <text x="1054" y="26" fill="#7A7A7A" font-size="10.5" text-anchor="middle">EN</text>
+      <rect x="520" y="9" width="360" height="26" rx="13" fill="#0C0C0C" stroke="#2C2C2C"/>
+      <circle cx="540" cy="22" r="5" fill="none" stroke="#6E6E6E" stroke-width="1.4"/>
+      <line x1="544" y1="26" x2="548" y2="30" stroke="#6E6E6E" stroke-width="1.4"/>
+      <text x="558" y="26" fill="#6E6E6E" font-size="12">Поиск по проекту…</text>
+      <rect x="1206" y="8" width="88" height="28" rx="6" fill="none" stroke="#3A3A3A"/>
+      <text x="1250" y="26" fill="#C8C8C8" font-size="12" text-anchor="middle">Сохранить</text>
+      <rect x="1304" y="8" width="120" height="28" rx="14" fill="url(#lava)"/>
+      <path d="M1326 15 L1338 22 L1326 29 Z" fill="#140A05"/>
+      <text x="1382" y="26" fill="#180B04" font-size="12" font-weight="700" text-anchor="middle">Превью</text>
+
+      <rect x="0" y="44" width="64" height="776" fill="#131313"/>
+      <line x1="64" y1="44" x2="64" y2="820" stroke="#2C2C2C"/>
+      <path d="M20 88 L27 76 L33 84 L38 78 L44 88 Z" fill="none" stroke="#8A8A8A" stroke-width="1.8" stroke-linejoin="round"/>
+      <text x="32" y="104" fill="#8A8A8A" font-size="9" text-anchor="middle">Сцена</text>
+      <rect x="4" y="128" width="56" height="56" rx="8" fill="#1F1F1F"/>
+      <rect x="0" y="138" width="3" height="36" rx="1.5" fill="#FF6A2B"/>
+      <g fill="none" stroke="#FF6A2B" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M32 140 L44 147 V161 L32 168 L20 161 V147 Z"/><path d="M20 147 L32 154 L44 147 M32 154 V168"/>
+      </g>
+      <text x="32" y="182" fill="#FF6A2B" font-size="9" text-anchor="middle">Объекты</text>
+      <g fill="none" stroke="#8A8A8A" stroke-width="1.6"><circle cx="23" cy="218" r="4"/><circle cx="23" cy="242" r="4"/><circle cx="43" cy="230" r="4"/><path d="M27 220 L39 228 M27 240 L39 232"/></g>
+      <text x="32" y="260" fill="#8A8A8A" font-size="9" text-anchor="middle">Системы</text>
+      <g fill="none" stroke="#8A8A8A" stroke-width="1.6"><rect x="20" y="296" width="24" height="24" rx="3"/><path d="M20 304 H44 M20 312 H44 M28 296 V320"/></g>
+      <text x="32" y="338" fill="#8A8A8A" font-size="9" text-anchor="middle">Схемы</text>
+      <g fill="none" stroke="#8A8A8A" stroke-width="1.6"><rect x="20" y="374" width="24" height="20" rx="3"/><circle cx="27" cy="381" r="2.2"/><path d="M20 391 L28 384 L35 391 L39 387 L44 392"/></g>
+      <text x="32" y="412" fill="#8A8A8A" font-size="9" text-anchor="middle">Ассеты</text>
+
+      <!-- navigator -->
+      <rect x="64" y="44" width="240" height="776" fill="#1A1A1A"/>
+      <line x1="304" y1="44" x2="304" y2="820" stroke="#2C2C2C"/>
+      <text x="80" y="70" fill="#E0E0E0" font-size="12" font-weight="600">Объекты</text>
+      <text x="146" y="70" fill="#5E5E5E" font-size="10">F2</text>
+      <line x1="64" y1="82" x2="304" y2="82" stroke="#242424"/>
+      <rect x="76" y="92" width="216" height="24" rx="4" fill="#101010" stroke="#2C2C2C"/>
+      <text x="88" y="108" fill="#6E6E6E" font-size="11">фильтр…</text>
+      <g font-size="11.5">
+        <text x="80" y="142" fill="#8A8A8A">▾</text><text x="94" y="142" fill="#C0C0C0">Юниты</text><text x="264" y="142" fill="#5E5E5E">4</text>
+        <text x="108" y="166" fill="#9E9E9E">hero</text>
+        <rect x="64" y="176" width="240" height="24" fill="#232323"/>
+        <rect x="64" y="176" width="3" height="24" fill="#FF6A2B"/>
+        <text x="108" y="192" fill="#FFFFFF">skeleton</text>
+        <text x="252" y="192" fill="#7A7A7A" font-size="10">3 разм.</text>
+        <text x="108" y="216" fill="#9E9E9E">archer</text>
+        <text x="108" y="240" fill="#9E9E9E">boss_golem</text>
+        <text x="80" y="266" fill="#8A8A8A">▾</text><text x="94" y="266" fill="#C0C0C0">Пропы</text><text x="264" y="266" fill="#5E5E5E">7</text>
+        <text x="108" y="290" fill="#9E9E9E">crate</text>
+        <text x="108" y="314" fill="#9E9E9E">barrel_explosive</text>
+        <text x="80" y="340" fill="#8A8A8A">▸</text><text x="94" y="340" fill="#C0C0C0">Декорации</text><text x="264" y="340" fill="#5E5E5E">11</text>
+      </g>
+      <rect x="76" y="366" width="216" height="28" rx="6" fill="#1F1F1F" stroke="#3A3A3A"/>
+      <text x="184" y="385" fill="#C8C8C8" font-size="11" text-anchor="middle">+ Новый объект</text>
+
+      <!-- center: object editor -->
+      <rect x="304" y="44" width="780" height="776" fill="#141414"/>
+      <rect x="304" y="44" width="780" height="60" fill="#181818"/>
+      <line x1="304" y1="104" x2="1084" y2="104" stroke="#2C2C2C"/>
+      <text x="324" y="74" fill="#FFFFFF" font-size="16" font-weight="600">skeleton</text>
+      <rect x="410" y="60" width="52" height="18" rx="9" fill="#2A1710" stroke="#FF6A2B"/>
+      <text x="436" y="73" fill="#FF8F4D" font-size="10" text-anchor="middle">unit</text>
+      <text x="324" y="92" fill="#6E6E6E" font-size="10.5">prefab: content/prefabs/skeleton.json  ·  манифест: visuals/manifest.json#skeleton  ·  пара согласована ✓</text>
+      <rect x="960" y="58" width="108" height="26" rx="6" fill="#1F1F1F" stroke="#3A3A3A"/>
+      <text x="1014" y="75" fill="#C8C8C8" font-size="11" text-anchor="middle">Показать JSON</text>
+
+      <text x="324" y="130" fill="#6E6E6E" font-size="10">КОМПОНЕНТЫ</text>
+      <g font-size="11.5">
+        <rect x="320" y="142" width="748" height="86" rx="6" fill="#1E1E1E" stroke="#2C2C2C"/>
+        <rect x="320" y="142" width="3" height="86" fill="#3A3A3A"/>
+        <text x="340" y="164" fill="#E0E0E0" font-weight="600">Health</text>
+        <text x="1044" y="164" fill="#6E6E6E" text-anchor="end">✕</text>
+        <text x="340" y="190" fill="#9E9E9E">max</text>
+        <circle cx="440" cy="186" r="6" fill="none" stroke="#5E5E5E"/><text x="440" y="189.5" fill="#7A7A7A" font-size="8.5" text-anchor="middle">?</text>
+        <rect x="470" y="178" width="100" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="480" y="192" fill="#E0E0E0">120</text>
+        <text x="586" y="192" fill="#5E5E5E" font-size="10">i32 · схема Health</text>
+        <text x="340" y="216" fill="#9E9E9E">regen</text>
+        <rect x="470" y="204" width="100" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="480" y="218" fill="#E0E0E0">0.000</text>
+        <text x="586" y="218" fill="#5E5E5E" font-size="10">q16.16</text>
+
+        <rect x="320" y="240" width="748" height="112" rx="6" fill="#1E1E1E" stroke="#2C2C2C"/>
+        <rect x="320" y="240" width="3" height="112" fill="#3A3A3A"/>
+        <text x="340" y="262" fill="#E0E0E0" font-weight="600">Vision</text>
+        <text x="400" y="262" fill="#5E5E5E" font-size="10">fog-of-war</text>
+        <text x="340" y="288" fill="#9E9E9E">radius</text>
+        <circle cx="440" cy="284" r="6" fill="none" stroke="#FF6A2B"/><text x="440" y="287.5" fill="#FF8F4D" font-size="8.5" text-anchor="middle">?</text>
+        <rect x="470" y="276" width="100" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="480" y="290" fill="#E0E0E0">6.000</text>
+        <text x="340" y="314" fill="#9E9E9E">detectStealth</text>
+        <rect x="470" y="304" width="34" height="18" rx="9" fill="#2C2C2C"/><circle cx="479" cy="313" r="7" fill="#8A8A8A"/>
+        <text x="340" y="340" fill="#9E9E9E">heightBonus</text>
+        <circle cx="440" cy="336" r="6" fill="none" stroke="#5E5E5E"/><text x="440" y="339.5" fill="#7A7A7A" font-size="8.5" text-anchor="middle">?</text>
+        <rect x="470" y="328" width="100" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="480" y="342" fill="#E0E0E0">1.000</text>
+
+        <rect x="320" y="364" width="748" height="86" rx="6" fill="#1E1E1E" stroke="#2C2C2C"/>
+        <rect x="320" y="364" width="3" height="86" fill="#3A3A3A"/>
+        <text x="340" y="386" fill="#E0E0E0" font-weight="600">Collider</text>
+        <text x="340" y="412" fill="#9E9E9E">shape</text>
+        <rect x="470" y="400" width="100" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="480" y="414" fill="#E0E0E0">circle ▾</text>
+        <text x="340" y="438" fill="#9E9E9E">radius</text>
+        <rect x="470" y="426" width="100" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="480" y="440" fill="#E0E0E0">0.400</text>
+      </g>
+
+      <!-- подсказка: ресурс найден на текущей локали -->
+      <path d="M452 290 L462 284 L462 296 Z" fill="#0B0B0B" stroke="#3A3A3A"/>
+      <rect x="462" y="258" width="464" height="76" rx="6" fill="#0B0B0B" stroke="#3A3A3A"/>
+      <text x="478" y="280" fill="#E0E0E0" font-size="11.5" font-weight="600">Vision.radius</text>
+      <text x="478" y="302" fill="#A8A8A8" font-size="11">Радиус обзора в клетках. Раскрывает туман войны вокруг</text>
+      <text x="478" y="320" fill="#A8A8A8" font-size="11">сущности; на возвышении складывается с heightBonus.</text>
+      <text x="916" y="280" fill="#4E4E4E" font-size="9.5" text-anchor="end" font-family="ui-monospace, Menlo, Consolas, monospace">component.Vision.radius</text>
+
+      <!-- подсказка: ресурса нет ни в ru, ни в en — показан сам ключ -->
+      <path d="M452 342 L462 336 L462 348 Z" fill="#0B0B0B" stroke="#3A3A3A"/>
+      <rect x="462" y="346" width="464" height="52" rx="6" fill="#0B0B0B" stroke="#3A3A3A" stroke-dasharray="4 3"/>
+      <text x="478" y="368" fill="#B0B0B0" font-size="11" font-family="ui-monospace, Menlo, Consolas, monospace">component.Vision.heightBonus</text>
+      <text x="478" y="387" fill="#6E6E6E" font-size="10">ресурса нет ни в ru, ни в en — показан сам ключ</text>
+
+      <rect x="320" y="464" width="180" height="30" rx="6" fill="#1F1F1F" stroke="#FF6A2B"/>
+      <text x="410" y="484" fill="#FF8F4D" font-size="11.5" text-anchor="middle">+ Добавить компонент</text>
+      <text x="516" y="484" fill="#5E5E5E" font-size="10.5">список берётся из реестра схем, а не из кода редактора</text>
+
+      <!-- inspector: visual -->
+      <rect x="1084" y="44" width="356" height="776" fill="#1A1A1A"/>
+      <line x1="1084" y1="44" x2="1084" y2="820" stroke="#2C2C2C"/>
+      <text x="1100" y="70" fill="#E0E0E0" font-size="12" font-weight="600">Визуал</text>
+      <text x="1148" y="70" fill="#5E5E5E" font-size="10">манифест</text>
+      <line x1="1084" y1="82" x2="1440" y2="82" stroke="#242424"/>
+      <rect x="1096" y="94" width="332" height="190" rx="6" fill="#101314" stroke="#2C2C2C"/>
+      <ellipse cx="1262" cy="252" rx="46" ry="12" fill="#000" fill-opacity="0.5"/>
+      <path d="M1246 248 q16 -84 32 0 z" fill="#8D9CA8"/><circle cx="1262" cy="176" r="20" fill="#A6B4C0"/>
+      <rect x="1108" y="252" width="86" height="20" rx="4" fill="#181818" fill-opacity="0.9" stroke="#333"/>
+      <text x="1151" y="266" fill="#C8C8C8" font-size="10" text-anchor="middle">idle ▾  ▶</text>
+      <g font-size="11.5">
+        <text x="1100" y="312" fill="#9E9E9E">модель</text>
+        <rect x="1230" y="300" width="186" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="1240" y="314" fill="#E0E0E0">models/skeleton.glb</text>
+        <text x="1100" y="340" fill="#9E9E9E">скин</text>
+        <rect x="1230" y="328" width="186" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="1240" y="342" fill="#E0E0E0">default ▾</text>
+        <text x="1100" y="368" fill="#9E9E9E">анимации</text>
+        <rect x="1230" y="356" width="186" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="1240" y="370" fill="#E0E0E0">idle, walk, death</text>
+        <text x="1100" y="396" fill="#9E9E9E">наклон по нормали</text>
+        <rect x="1230" y="384" width="34" height="18" rx="9" fill="#FF6A2B"/><circle cx="1255" cy="393" r="7" fill="#150A05"/>
+        <text x="1100" y="424" fill="#9E9E9E">масштаб</text>
+        <rect x="1230" y="412" width="186" height="20" rx="4" fill="#101010" stroke="#2C2C2C"/><text x="1240" y="426" fill="#E0E0E0">1.000</text>
+      </g>
+      <line x1="1084" y1="450" x2="1440" y2="450" stroke="#242424"/>
+      <text x="1100" y="474" fill="#6E6E6E" font-size="10">ЭФФЕКТЫ КАМЕРЫ</text>
+      <g font-size="11.5">
+        <rect x="1096" y="486" width="332" height="52" rx="6" fill="#1F1F1F" stroke="#2C2C2C"/>
+        <text x="1110" y="506" fill="#C8C8C8">on death → shake</text>
+        <text x="1110" y="526" fill="#8A8A8A" font-size="10.5">амплитуда 0.4 · затухание 0.8 · радиус 6</text>
+      </g>
+      <line x1="1084" y1="560" x2="1440" y2="560" stroke="#242424"/>
+      <text x="1100" y="584" fill="#6E6E6E" font-size="10">ИСПОЛЬЗОВАНИЕ</text>
+      <text x="1100" y="608" fill="#C8C8C8" font-size="11.5">3 размещения в demo.scene.json →</text>
+      <text x="1100" y="630" fill="#8A8A8A" font-size="11.5">спавнится системой cast.system.json →</text>
+    </g>
+  </g>
+
+  <!-- ============================== BOARD 3: СИСТЕМЫ ============================== -->
+  <g transform="translate(30,1840)">
+    <text x="0" y="-14" fill="#E8E8E8" font-size="15" font-weight="600">3 · Рабочая область «Системы» — триггеры списком, конструктор выражений (ED-4, ED-5)</text>
+    <rect x="0" y="0" width="1440" height="820" rx="10" fill="#0E0E0E" stroke="#2C2C2C"/>
+    <g clip-path="url(#board)">
+      <rect x="0" y="0" width="1440" height="44" fill="#181818"/>
+      <line x1="0" y1="44" x2="1440" y2="44" stroke="#2C2C2C"/>
+      <path d="M18 15 L26 22 L18 29 L10 22 Z" fill="url(#lava)"/>
+      <text x="36" y="27" fill="#E8E8E8" font-size="13" font-weight="600">Fluxus Editor</text>
+      <line x1="148" y1="12" x2="148" y2="32" stroke="#2C2C2C"/>
+      <text x="164" y="27" fill="#9E9E9E" font-size="12">content / systems / on_death.system.json</text>
+      <rect x="1000" y="10" width="72" height="24" rx="12" fill="#0C0C0C" stroke="#2C2C2C"/>
+      <rect x="1002" y="12" width="34" height="20" rx="10" fill="#2A1710" stroke="#FF6A2B"/>
+      <text x="1019" y="26" fill="#FF8F4D" font-size="10.5" text-anchor="middle">RU</text>
+      <text x="1054" y="26" fill="#7A7A7A" font-size="10.5" text-anchor="middle">EN</text>
+      <circle cx="416" cy="22" r="3.5" fill="#FF6A2B"/>
+      <rect x="520" y="9" width="360" height="26" rx="13" fill="#0C0C0C" stroke="#2C2C2C"/>
+      <circle cx="540" cy="22" r="5" fill="none" stroke="#6E6E6E" stroke-width="1.4"/>
+      <line x1="544" y1="26" x2="548" y2="30" stroke="#6E6E6E" stroke-width="1.4"/>
+      <text x="558" y="26" fill="#6E6E6E" font-size="12">Поиск по проекту…</text>
+      <rect x="1206" y="8" width="88" height="28" rx="6" fill="none" stroke="#3A3A3A"/>
+      <text x="1250" y="26" fill="#C8C8C8" font-size="12" text-anchor="middle">Сохранить</text>
+      <rect x="1304" y="8" width="120" height="28" rx="14" fill="url(#lava)"/>
+      <path d="M1326 15 L1338 22 L1326 29 Z" fill="#140A05"/>
+      <text x="1382" y="26" fill="#180B04" font-size="12" font-weight="700" text-anchor="middle">Превью</text>
+
+      <rect x="0" y="44" width="64" height="776" fill="#131313"/>
+      <line x1="64" y1="44" x2="64" y2="820" stroke="#2C2C2C"/>
+      <path d="M20 88 L27 76 L33 84 L38 78 L44 88 Z" fill="none" stroke="#8A8A8A" stroke-width="1.8" stroke-linejoin="round"/>
+      <text x="32" y="104" fill="#8A8A8A" font-size="9" text-anchor="middle">Сцена</text>
+      <g fill="none" stroke="#8A8A8A" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M32 140 L44 147 V161 L32 168 L20 161 V147 Z"/><path d="M20 147 L32 154 L44 147 M32 154 V168"/>
+      </g>
+      <text x="32" y="182" fill="#8A8A8A" font-size="9" text-anchor="middle">Объекты</text>
+      <rect x="4" y="206" width="56" height="56" rx="8" fill="#1F1F1F"/>
+      <rect x="0" y="216" width="3" height="36" rx="1.5" fill="#FF6A2B"/>
+      <g fill="none" stroke="#FF6A2B" stroke-width="1.6"><circle cx="23" cy="218" r="4"/><circle cx="23" cy="242" r="4"/><circle cx="43" cy="230" r="4"/><path d="M27 220 L39 228 M27 240 L39 232"/></g>
+      <text x="32" y="260" fill="#FF6A2B" font-size="9" text-anchor="middle">Системы</text>
+      <g fill="none" stroke="#8A8A8A" stroke-width="1.6"><rect x="20" y="296" width="24" height="24" rx="3"/><path d="M20 304 H44 M20 312 H44 M28 296 V320"/></g>
+      <text x="32" y="338" fill="#8A8A8A" font-size="9" text-anchor="middle">Схемы</text>
+      <g fill="none" stroke="#8A8A8A" stroke-width="1.6"><rect x="20" y="374" width="24" height="20" rx="3"/><circle cx="27" cy="381" r="2.2"/><path d="M20 391 L28 384 L35 391 L39 387 L44 392"/></g>
+      <text x="32" y="412" fill="#8A8A8A" font-size="9" text-anchor="middle">Ассеты</text>
+
+      <!-- navigator -->
+      <rect x="64" y="44" width="240" height="776" fill="#1A1A1A"/>
+      <line x1="304" y1="44" x2="304" y2="820" stroke="#2C2C2C"/>
+      <text x="80" y="70" fill="#E0E0E0" font-size="12" font-weight="600">Системы</text>
+      <text x="146" y="70" fill="#5E5E5E" font-size="10">F3</text>
+      <line x1="64" y1="82" x2="304" y2="82" stroke="#242424"/>
+      <text x="80" y="106" fill="#6E6E6E" font-size="10">ПОРЯДОК ИСПОЛНЕНИЯ В ТИКЕ</text>
+      <g font-size="11.5">
+        <text x="80" y="134" fill="#5E5E5E">1</text><text x="104" y="134" fill="#9E9E9E">input</text><text x="252" y="134" fill="#5E5E5E" font-size="10">TS</text>
+        <text x="80" y="158" fill="#5E5E5E">2</text><text x="104" y="158" fill="#9E9E9E">locomotion</text><text x="252" y="158" fill="#5E5E5E" font-size="10">TS</text>
+        <text x="80" y="182" fill="#5E5E5E">3</text><text x="104" y="182" fill="#9E9E9E">physics</text><text x="252" y="182" fill="#5E5E5E" font-size="10">TS</text>
+        <text x="80" y="206" fill="#5E5E5E">4</text><text x="104" y="206" fill="#9E9E9E">damage</text><text x="248" y="206" fill="#5E5E5E" font-size="10">JSON</text>
+        <rect x="64" y="216" width="240" height="24" fill="#232323"/>
+        <rect x="64" y="216" width="3" height="24" fill="#FF6A2B"/>
+        <text x="80" y="232" fill="#8A8A8A">5</text><text x="104" y="232" fill="#FFFFFF">on_death</text><text x="248" y="232" fill="#FF8F4D" font-size="10">JSON</text>
+        <text x="80" y="256" fill="#5E5E5E">6</text><text x="104" y="256" fill="#9E9E9E">visibility</text><text x="252" y="256" fill="#5E5E5E" font-size="10">TS</text>
+        <text x="80" y="280" fill="#5E5E5E">7</text><text x="104" y="280" fill="#9E9E9E">time</text><text x="252" y="280" fill="#5E5E5E" font-size="10">TS</text>
+      </g>
+      <text x="80" y="312" fill="#5E5E5E" font-size="10">перетаскиванием — порядок нормативен</text>
+      <rect x="76" y="330" width="216" height="28" rx="6" fill="#1F1F1F" stroke="#3A3A3A"/>
+      <text x="184" y="349" fill="#C8C8C8" font-size="11" text-anchor="middle">+ Новая система</text>
+
+      <!-- center: trigger editor -->
+      <rect x="304" y="44" width="780" height="776" fill="#141414"/>
+      <rect x="304" y="44" width="780" height="52" fill="#181818"/>
+      <line x1="304" y1="96" x2="1084" y2="96" stroke="#2C2C2C"/>
+      <text x="324" y="70" fill="#FFFFFF" font-size="15" font-weight="600">on_death</text>
+      <text x="324" y="88" fill="#6E6E6E" font-size="10.5">EvaluatedSystem · читает Health, Transform · пишет через Command Buffer</text>
+      <rect x="960" y="56" width="108" height="26" rx="6" fill="#1F1F1F" stroke="#3A3A3A"/>
+      <text x="1014" y="73" fill="#C8C8C8" font-size="11" text-anchor="middle">Показать JSON</text>
+
+      <text x="324" y="122" fill="#FF8F4D" font-size="10" font-weight="700">СОБЫТИЕ</text>
+      <rect x="320" y="132" width="748" height="44" rx="6" fill="#1E1E1E" stroke="#2C2C2C"/>
+      <rect x="320" y="132" width="3" height="44" fill="#FF6A2B"/>
+      <text x="340" y="159" fill="#E0E0E0" font-size="12.5">для каждой сущности, у которой <tspan fill="#FF8F4D">Health.current ≤ 0</tspan> и нет <tspan fill="#FF8F4D">Dead</tspan></text>
+
+      <text x="324" y="204" fill="#9E9E9E" font-size="10" font-weight="700">УСЛОВИЯ</text>
+      <rect x="320" y="214" width="748" height="88" rx="6" fill="#1E1E1E" stroke="#2C2C2C"/>
+      <rect x="320" y="214" width="3" height="88" fill="#3A3A3A"/>
+      <text x="340" y="240" fill="#C8C8C8" font-size="12.5">И</text>
+      <rect x="356" y="248" width="696" height="20" rx="4" fill="#242424"/>
+      <text x="368" y="262" fill="#D8D8D8" font-size="12">у сущности есть компонент <tspan fill="#9ED0FF">Loot</tspan></text>
+      <rect x="356" y="274" width="696" height="20" rx="4" fill="#2A2018" stroke="#FF6A2B"/>
+      <text x="368" y="288" fill="#FFFFFF" font-size="12">случайное число (стрим «loot») &lt; <tspan fill="#FF8F4D">Loot.chance</tspan></text>
+
+      <text x="324" y="330" fill="#9E9E9E" font-size="10" font-weight="700">ДЕЙСТВИЯ</text>
+      <rect x="320" y="340" width="748" height="132" rx="6" fill="#1E1E1E" stroke="#2C2C2C"/>
+      <rect x="320" y="340" width="3" height="132" fill="#3A3A3A"/>
+      <g font-size="12">
+        <text x="340" y="366" fill="#5E5E5E">1</text><text x="362" y="366" fill="#D8D8D8">добавить компонент <tspan fill="#9ED0FF">Dead</tspan></text>
+        <text x="340" y="392" fill="#5E5E5E">2</text><text x="362" y="392" fill="#D8D8D8">заспавнить префаб <tspan fill="#FF8F4D">explosion</tspan> в <tspan fill="#9ED0FF">Transform.position</tspan></text>
+        <text x="340" y="418" fill="#5E5E5E">3</text><text x="362" y="418" fill="#D8D8D8">заспавнить префаб <tspan fill="#FF8F4D">Loot.drop</tspan> в <tspan fill="#9ED0FF">Transform.position</tspan></text>
+        <text x="340" y="444" fill="#5E5E5E">4</text><text x="362" y="444" fill="#D8D8D8">послать событие <tspan fill="#9ED0FF">entityDied</tspan></text>
+      </g>
+      <rect x="320" y="486" width="150" height="28" rx="6" fill="#1F1F1F" stroke="#FF6A2B"/>
+      <text x="395" y="505" fill="#FF8F4D" font-size="11.5" text-anchor="middle">+ Добавить действие</text>
+      <text x="486" y="505" fill="#5E5E5E" font-size="10.5">каталог действий — из реестра DSL ядра</text>
+
+      <line x1="304" y1="790" x2="1084" y2="790" stroke="#2C2C2C"/>
+      <rect x="304" y="790" width="780" height="30" fill="#161616"/>
+      <circle cx="322" cy="805" r="5" fill="#4CAF50"/>
+      <text x="336" y="809" fill="#8A8A8A" font-size="11">валидно по схеме ядра · 0 ошибок</text>
+      <text x="900" y="809" fill="#8A8A8A" font-size="11">RNG-стримы: loot</text>
+
+      <!-- inspector: expression builder -->
+      <rect x="1084" y="44" width="356" height="776" fill="#1A1A1A"/>
+      <line x1="1084" y1="44" x2="1084" y2="820" stroke="#2C2C2C"/>
+      <text x="1100" y="70" fill="#E0E0E0" font-size="12" font-weight="600">Выражение</text>
+      <text x="1176" y="70" fill="#5E5E5E" font-size="10">условие 2</text>
+      <line x1="1084" y1="82" x2="1440" y2="82" stroke="#242424"/>
+
+      <g font-size="11.5">
+        <rect x="1096" y="94" width="332" height="30" rx="6" fill="#242424" stroke="#3A3A3A"/>
+        <text x="1110" y="113" fill="#D8D8D8">&lt;  меньше  ▾</text>
+        <path d="M1112 132 V150 H1128" fill="none" stroke="#3A3A3A"/>
+        <rect x="1130" y="140" width="298" height="30" rx="6" fill="#1F1F1F" stroke="#2C2C2C"/>
+        <text x="1144" y="159" fill="#D8D8D8">rng  ▾</text>
+        <text x="1210" y="159" fill="#8A8A8A" font-size="10.5">стрим «loot»</text>
+        <path d="M1112 170 V196 H1128" fill="none" stroke="#3A3A3A"/>
+        <rect x="1130" y="186" width="298" height="30" rx="6" fill="#1F1F1F" stroke="#2C2C2C"/>
+        <text x="1144" y="205" fill="#D8D8D8">var  ▾</text>
+        <text x="1210" y="205" fill="#FF8F4D" font-size="11">Loot.chance</text>
+        <path d="M1112 216 V242 H1128" fill="none" stroke="#3A3A3A" stroke-dasharray="3 3"/>
+        <rect x="1130" y="232" width="298" height="28" rx="6" fill="#181818" stroke="#2C2C2C" stroke-dasharray="4 3"/>
+        <text x="1144" y="250" fill="#5E5E5E">+ операнд</text>
+      </g>
+      <line x1="1084" y1="286" x2="1440" y2="286" stroke="#242424"/>
+      <text x="1100" y="310" fill="#6E6E6E" font-size="10">ТИП РЕЗУЛЬТАТА</text>
+      <text x="1100" y="332" fill="#C8C8C8" font-size="11.5">boolean  ·  совместим с условием ✓</text>
+      <line x1="1084" y1="352" x2="1440" y2="352" stroke="#242424"/>
+      <text x="1100" y="376" fill="#6E6E6E" font-size="10">JSON-AST</text>
+      <rect x="1096" y="388" width="332" height="86" rx="6" fill="#101010" stroke="#2C2C2C"/>
+      <g font-size="10.5" fill="#8A9AA8" font-family="ui-monospace, Menlo, Consolas, monospace">
+        <text x="1110" y="408">{ "&lt;": [</text>
+        <text x="1122" y="424">  { "rng": "loot" },</text>
+        <text x="1122" y="440">  { "var": "Loot.chance" }</text>
+        <text x="1110" y="456">] }</text>
+      </g>
+      <text x="1100" y="500" fill="#5E5E5E" font-size="10.5">только чтение: источник — конструктор слева</text>
+    </g>
+  </g>
+</svg>
