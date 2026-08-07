@@ -9,7 +9,7 @@
  * двумя последними доставленными тиками по часам этого потока (SHELL-7).
  */
 import * as THREE from 'three';
-import { fixed, type EntityId } from '@game-mvp/core';
+import type { EntityId } from '@game-mvp/core';
 import {
   AssetService,
   curvatureLoader,
@@ -30,13 +30,23 @@ import {
   applyCameraPose,
   createCameraInput,
   edgePanAxes,
-  heroMoveFromKeys,
   resetCameraInput,
   terrainGroundApi,
   type RenderContext,
 } from '@game-mvp/render';
-import { RemoteHost, shellPort } from '@game-mvp/client';
-import { CAST_BUTTON, DODGE_BUTTON, JUMP_BUTTON, KILL_BUTTON, TURN_UNITS } from './sim.js';
+import {
+  GamepadSource,
+  InputSampler,
+  KeyboardMouseSource,
+  RemoteHost,
+  TouchSource,
+  aimAngle,
+  navigatorGamepad,
+  shellPort,
+  validateBindings,
+} from '@game-mvp/client';
+import { ACTION_BITS } from './sim.js';
+import bindingsJson from './bindings.json';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
 const HEIGHT_STEP = 0.6;
@@ -116,13 +126,8 @@ function loadManifest(): Promise<VisualManifest> {
 
 // ---------------------------------------------------------------------- ввод
 
+/** Клавиши камеры (CAM-1..3); ввод героя живёт в источниках сэмплера ниже. */
 const keys = new Set<string>();
-/** Отложенный на ближайший тик каст: угол прицеливания (см. aimAngle). */
-let pendingCast: number | null = null;
-let pendingKill = false;
-/** Отложенные фронты кнопок локомоушена (LOC-3): уклон/перекат и прыжок. */
-let pendingDodge = false;
-let pendingJump = false;
 let currentSkin: 'steel' | 'ember' = 'steel';
 
 /** Последняя позиция указателя — edge-pan считается по кадрам (CAM-3). */
@@ -166,7 +171,10 @@ function groundPoint(clientX: number, clientY: number): { x: number; y: number }
     : { x: point.x, y: point.y };
 }
 
-/** Клавиши камеры (CAM-1): их фронты не доходят до `pushInput`. */
+/**
+ * Клавиши камеры и UI (CAM-1): фронты героя (каст, уклон, прыжок, убийство)
+ * обрабатывает `KeyboardMouseSource` по биндингам — сюда они не заходят.
+ */
 window.addEventListener('keydown', (e) => {
   if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
   if (e.repeat) {
@@ -178,21 +186,6 @@ window.addEventListener('keydown', (e) => {
     currentSkin = currentSkin === 'steel' ? 'ember' : 'steel';
     if (heroId !== null) models?.setSkin(heroId, currentSkin);
     updateHud();
-    return;
-  }
-  if (e.code === 'KeyK') {
-    pendingKill = true;
-    return;
-  }
-  // Уклон и прыжок — фронты кнопок локомоушена (LOC-4, LOC-5): латчатся до
-  // ближайшего тика, как каст и убийство, иначе нажатие между тиками пропадёт.
-  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
-    pendingDodge = true;
-    return;
-  }
-  if (e.code === 'Space') {
-    pendingJump = true;
-    keys.add(e.code);
     return;
   }
   if (e.code === 'KeyC') camInput.centerTap = true;
@@ -215,17 +208,93 @@ window.addEventListener('mousemove', (e) => {
   pointerY = e.clientY;
 });
 
+// -------------------------------------------------- источники ввода и сэмплер
+
 /**
- * Направление клика → `aimDir` канонического `InputFrame` (TICK-2): угол в
- * единице ядра (FP-7, полный оборот `TURN_UNITS`). Float здесь законен ровно
- * там же, где `fixed.fromFloat` для `move`, — это оболочка, производящая ввод,
- * а не тик; в симуляцию уходит целое, и разворачивает его обратно в вектор
- * JSON-система сцены оператором `cos`/`sin`. Маска — чтобы по проводу не
- * ездили старшие биты: заворачивание угла ядро делает само.
+ * Слой источников ввода (input-devices INP-1..5): клавиатура+мышь — целевое,
+ * тач и геймпад — те же биндинги-данные. Смысл битов — у контента
+ * (`ACTION_BITS` в sim.ts), раскладка устройств — `bindings.json`.
  */
-function aimAngle(dx: number, dy: number): number {
-  return Math.round((Math.atan2(dy, dx) / (2 * Math.PI)) * TURN_UNITS) & (TURN_UNITS - 1);
+const bindings = validateBindings(bindingsJson);
+const sampler = new InputSampler({ actionBits: ACTION_BITS });
+
+/**
+ * Прицел клика: точка на полу через raycast (design Decision 6) минус позиция
+ * героя — угол в единице ядра (FP-7); JSON-система сцены разворачивает его
+ * обратно в вектор оператором `cos`/`sin`. Null — направления нет, каст
+ * не возникает.
+ */
+function aimAtPointer(clientX: number, clientY: number): number | null {
+  const point = groundPoint(clientX, clientY);
+  if (point === null || heroId === null) return null;
+  const view = remote?.view?.entities.get(heroId);
+  if (view === undefined) return null;
+  const dx = point.x - view.currX;
+  const dy = point.y - view.currY;
+  return Math.hypot(dx, dy) < 1e-3 ? null : aimAngle(dx, dy); // клик в себя — направления нет
 }
+
+const kbmSource = new KeyboardMouseSource({
+  bindings: bindings.keyboardMouse,
+  // Fly владеет клавиатурой — герой стоит (CAM-1, CAM-2).
+  movementCaptured: () => rig?.capturesMovement() ?? false,
+  aimAt: aimAtPointer,
+});
+sampler.add(kbmSource);
+kbmSource.bind(window);
+
+let touchSource: TouchSource | null = null;
+if (bindings.touch !== undefined) {
+  touchSource = new TouchSource(bindings.touch, () => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
+  sampler.add(touchSource);
+  touchSource.bind(window);
+}
+
+if (bindings.gamepad !== undefined) {
+  sampler.add(new GamepadSource(bindings.gamepad, navigatorGamepad(window)));
+}
+
+/**
+ * Накладка тач-стиков: отрисовка — уровень приложения, источник отдаёт только
+ * геометрию (`overlay()`, design D6). База и ручка — по паре кругов на стик.
+ */
+const touchOverlay = ((): ((state: ReturnType<TouchSource['overlay']>) => void) | null => {
+  if (touchSource === null) return null;
+  const circle = (size: number, alpha: number): HTMLDivElement => {
+    const el = document.createElement('div');
+    el.style.cssText =
+      `position:fixed;width:${size}px;height:${size}px;border-radius:50%;` +
+      `border:2px solid rgba(255,255,255,0.5);background:rgba(255,255,255,${alpha});` +
+      'transform:translate(-50%,-50%);pointer-events:none;display:none;z-index:10';
+    app.appendChild(el);
+    return el;
+  };
+  const parts = {
+    moveStick: { base: circle(96, 0.08), knob: circle(40, 0.25) },
+    aimStick: { base: circle(96, 0.08), knob: circle(40, 0.25) },
+  };
+  const place = (el: HTMLDivElement, x: number, y: number): void => {
+    el.style.display = 'block';
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+  };
+  return (state) => {
+    for (const key of ['moveStick', 'aimStick'] as const) {
+      const stick = state[key];
+      const { base, knob } = parts[key];
+      if (stick === null) {
+        base.style.display = 'none';
+        knob.style.display = 'none';
+        continue;
+      }
+      place(base, stick.centerX, stick.centerY);
+      place(knob, stick.knobX, stick.knobY);
+    }
+  };
+})();
 
 window.addEventListener('mousedown', (e) => {
   if (e.button === 1) {
@@ -234,19 +303,8 @@ window.addEventListener('mousedown', (e) => {
     midDrag = true;
     return;
   }
-  if (e.button === 2) {
-    rightDrag = true;
-    return;
-  }
-  if (e.button !== 0) return;
-  const point = groundPoint(e.clientX, e.clientY);
-  if (point === null || heroId === null) return;
-  const view = remote?.view?.entities.get(heroId);
-  if (view === undefined) return;
-  const dx = point.x - view.currX;
-  const dy = point.y - view.currY;
-  if (Math.hypot(dx, dy) < 1e-3) return; // клик в себя — направления нет
-  pendingCast = aimAngle(dx, dy);
+  if (e.button === 2) rightDrag = true;
+  // ЛКМ (каст) обрабатывает KeyboardMouseSource.bind выше.
 });
 window.addEventListener('mouseup', (e) => {
   if (e.button === 1) midDrag = false;
@@ -276,37 +334,15 @@ function sampleCameraInput(): void {
 }
 
 /**
- * Сырой ввод в воркер (SHELL-6): состояние клавиш сэмплится каждый кадр,
- * фронты кнопок латчатся воркером до ближайшего тика — нажатие между тиками
- * не теряется. `tick`/`seq` канонического InputFrame ставит воркер.
- * Движение героя — WASD без стрелок; в fly-режиме камера владеет
- * клавиатурой и герой стоит (CAM-1, CAM-2).
+ * Канонический ввод в воркер (SHELL-6): сэмплер сводит источники, латчит
+ * фронты и квантует в Q16.16 (input-devices INP-2, INP-3, INP-5); фронты
+ * дальше латчатся воркером до ближайшего тика — нажатие между тиками не
+ * теряется. `tick`/`seq` канонического InputFrame ставит воркер.
  */
 function pushInput(): void {
   if (remote === null) return;
-  const move = heroMoveFromKeys(keys, rig?.capturesMovement() ?? false);
-
-  let buttons = 0;
-  let aimDir = 0;
-  if (pendingCast !== null) {
-    buttons |= CAST_BUTTON;
-    aimDir = pendingCast;
-    pendingCast = null;
-  }
-  if (pendingKill) {
-    buttons |= KILL_BUTTON;
-    pendingKill = false;
-  }
-  if (pendingDodge) {
-    buttons |= DODGE_BUTTON;
-    pendingDodge = false;
-  }
-  if (pendingJump) {
-    buttons |= JUMP_BUTTON;
-    pendingJump = false;
-  }
-
-  remote.sendInput({ x: fixed.fromFloat(move.x), y: fixed.fromFloat(move.y) }, aimDir, buttons);
+  const input = sampler.sample();
+  remote.sendInput(input.move, input.aimDir, input.buttons);
 }
 
 // ------------------------------------------------------------- HUD и цикл
@@ -336,6 +372,7 @@ function frame(now: number): void {
   // кадр только шлёт ввод и интерполирует доставленное (REND-2).
   sampleCameraInput();
   pushInput();
+  if (touchSource !== null) touchOverlay?.(touchSource.overlay());
   remote?.frame(now);
 
   // Конвейер камеры (CAM-1): follow-цель — интерполированная горизонталь

@@ -35,24 +35,13 @@ export const WORLD_SEED = 20260805;
 /** Игрок демо один; порядок списка игроков задаёт слоты (TICK-5). */
 export const PLAYER_ID = 'p1';
 
-/** Биты маски `buttons` (TICK-2): договорённость демо, читается системами сцены. */
-export const CAST_BUTTON = 1 << 0;
-export const KILL_BUTTON = 1 << 1;
 /**
- * Уклон и прыжок читает `LocomotionSystem` — ей нужны индексы битов, а
- * оболочке маски: раскладку кнопок ядро не знает (LOC-1).
+ * Имя действия → индекс бита `buttons` (TICK-2, input-devices INP-4): данные
+ * демо-контента, единственный источник смысла битов. Их читают системы сцены
+ * (`LocomotionSystem` — индексы) и сэмплер ввода (`InputSampler.actionBits`);
+ * раскладку кнопок ядро не знает (LOC-1).
  */
-export const DODGE_BIT = 2;
-export const JUMP_BIT = 3;
-export const DODGE_BUTTON = 1 << DODGE_BIT;
-export const JUMP_BUTTON = 1 << JUMP_BIT;
-
-/**
- * Полный оборот в единице угла ядра (FP-7): `aimDir` — binary angle measure,
- * то есть сырое значение угла совпадает с Q16.16-долей оборота. Оболочка
- * считает угол `atan2` и квантует им — как `move` квантуется `fromFloat`.
- */
-export const TURN_UNITS = 0x10000;
+export const ACTION_BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
 
 // ------------------------------------------------------------------- сборка
 
@@ -80,7 +69,7 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   // (LOC-1..6). Конфигурация — поля компонента `Locomotion` у prefab'а Hero,
   // здесь только раскладка кнопок демо.
   scene.systems.register(
-    new LocomotionSystem({ dodgeButton: DODGE_BIT, jumpButton: JUMP_BIT }),
+    new LocomotionSystem({ dodgeButton: ACTION_BITS.dodge, jumpButton: ACTION_BITS.jump }),
   );
   // Физика ядра: статика обрывов из террейна — игрок не сойдёт с плато мимо
   // рампы (PHYS-8, TERR-5). Снаряд без коллайдера — летит поверх обрывов.

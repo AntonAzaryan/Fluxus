@@ -28,7 +28,6 @@ export {
   createCameraInput,
   resetCameraInput,
   edgePanAxes,
-  heroMoveFromKeys,
   terrainGroundApi,
 } from './camera/rig.js';
 export type {
