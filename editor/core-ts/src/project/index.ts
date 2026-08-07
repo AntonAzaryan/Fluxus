@@ -12,11 +12,8 @@ export { canonicalizeDocument, decodeDocument, encodeDocument, isCanonicalDocume
 export { openDocumentFromHost, readDocument } from './documents.js';
 export type { OpenFromHostInput, ReadDocument } from './documents.js';
 
-export { issueKey } from './consistency.js';
-export type { ConsistencyIssue, ConsistencyRule, DocumentGroup, ProjectView } from './consistency.js';
-
 export { GROUP_WRITE_RULE_ID, saveDocuments } from './save.js';
-export type { SaveIssue, SaveRequest, SaveResult } from './save.js';
+export type { DocumentGroup, SaveRequest, SaveResult } from './save.js';
 
 export { loadProjectBundles } from './locales.js';
 export type { ProjectBundleFailure, ProjectBundlesResult } from './locales.js';

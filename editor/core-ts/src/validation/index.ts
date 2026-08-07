@@ -14,6 +14,7 @@ export type {
   ExpectedPresence,
   ExpectedRange,
   ExpectedReference,
+  ExpectedTogether,
   Finding,
   ReasonParams,
   ValidationExpectation,
@@ -27,7 +28,7 @@ export type {
 
 export { formatIssue, reasonKey, ruleDescriptionKey, REASON_PREFIX, RULE_DESCRIPTION_PREFIX } from './reasons.js';
 
-export { compareIssues, comparePaths, createReport } from './result.js';
+export { compareIssues, comparePaths, createReport, issueKey } from './result.js';
 
 export { createValidator, registerValidationRules, RULE_FAILED } from './runner.js';
 export type { Validator, ValidatorOptions, ValidationRunStats } from './runner.js';

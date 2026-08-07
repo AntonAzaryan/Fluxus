@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { createEditorSession, type EditorSession } from '../src/document/index.js';
+import { createEditorSession, getAtPath, isJsonArray, type EditorSession } from '../src/document/index.js';
 import { createOperationRegistry, registerBuiltinOperations } from '../src/operations/index.js';
 import { createMemoryHost, type MemoryHost } from '../src/host/index.js';
 import {
@@ -19,10 +19,22 @@ import {
   encodeDocument,
   isCanonicalDocument,
   openDocumentFromHost,
+  pairingGroups,
   saveDocuments,
-  scenePairingSave,
+  GROUP_WRITE_RULE_ID,
   type ScenePairing,
 } from '../src/project/index.js';
+import { ContributionRegistry } from '../src/registry/index.js';
+import {
+  createValidator,
+  crossDocumentRules,
+  reasonKey,
+  registerValidationRules,
+  ruleDescriptionKey,
+  PLACEMENT_PREFAB_RULE,
+  VISUAL_FOR_PREFAB_RULE,
+  type ValidationRule,
+} from '../src/validation/index.js';
 import type { JsonValue } from '../src/document/json.js';
 
 const decoder = new TextDecoder();
@@ -225,8 +237,21 @@ describe('ED-21: сохранение затрагивает только док
   });
 });
 
+/**
+ * Согласованность тройки проверяют те же правила-вклады, что подсвечивают её
+ * при правке (ED-8, ED-19, ED-25): сохранение получает реестр правил, а второго
+ * набора своих у него нет. Отсюда и форма замечаний — `ValidationIssue`, тот же
+ * структурный результат, что у валидации реального времени (ED-30).
+ */
 describe('ED-21, ED-19: сохранение не оставляет на диске рассинхронизированную тройку', () => {
   const PAIRING: ScenePairing = { scene: SCENE_PATH, manifest: MANIFEST_PATH };
+
+  /** Реестр правил редактора — тот же, из которого работает валидатор (ED-25). */
+  function editorRules(...extra: readonly ValidationRule[]): ContributionRegistry<ValidationRule> {
+    const registry = new ContributionRegistry<ValidationRule>({ kind: 'rule' });
+    registerValidationRules(registry, [...crossDocumentRules(), ...extra]);
+    return registry;
+  }
 
   async function opened(files: Readonly<Record<string, Uint8Array>>): Promise<{
     host: MemoryHost;
@@ -254,9 +279,15 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
       item: { prefab: 'Hero' },
     });
 
-    const result = await saveDocuments({ session, host: host.content, ...scenePairingSave([PAIRING]) });
+    const result = await saveDocuments({
+      session,
+      host: host.content,
+      groups: pairingGroups([PAIRING]),
+      rules: editorRules(),
+    });
     expect(result.refused).toBe(false);
-    expect(result.issues).toEqual([]);
+    expect(result.report.issues).toEqual([]);
+    expect(result.blocking).toEqual([]);
     expect(result.written).toEqual([SCENE_PATH]);
   });
 
@@ -268,19 +299,34 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
       item: { prefab: 'Ghost' },
     });
 
-    const result = await saveDocuments({ session, host: host.content, ...scenePairingSave([PAIRING]) });
+    const result = await saveDocuments({
+      session,
+      host: host.content,
+      groups: pairingGroups([PAIRING]),
+      rules: editorRules(),
+    });
 
     expect(result.refused).toBe(true);
     expect(result.written).toEqual([]);
     expect(host.writes).toEqual([]);
-    expect(result.issues).toContainEqual({
-      ruleId: 'save.pairing.sceneManifest',
-      messageKey: 'save.issue.placementWithoutPrefab',
-      documentId: SCENE_PATH,
-      path: ['initial', 1],
-      detail: { prefab: 'Ghost' },
-      blocking: true,
-    });
+    // Форма замечания — та же находка, что у валидации: правило, путь,
+    // полученное значение, ожидание и ключ причины (ED-30).
+    expect(result.blocking).toEqual([
+      {
+        ruleId: PLACEMENT_PREFAB_RULE,
+        severity: 'error',
+        documentId: SCENE_PATH,
+        path: ['initial', 1, 'prefab'],
+        received: 'Ghost',
+        expected: {
+          kind: 'reference',
+          targets: [{ documentId: SCENE_PATH, path: ['prefabs'] }],
+          known: ['Arena', 'Hero', 'Terrain'],
+        },
+        reasonKey: reasonKey(PLACEMENT_PREFAB_RULE, 'missingPrefab'),
+        reasonParams: { name: 'Ghost' },
+      },
+    ]);
   });
 
   it('новый prefab без записи манифеста — рассинхронизация пары, вносимая этим сохранением', async () => {
@@ -291,16 +337,28 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
       value: { name: 'Fireball', components: { Position: { x: 0, y: 0 } } },
     });
 
-    const result = await saveDocuments({ session, host: host.content, ...scenePairingSave([PAIRING]) });
+    const rules = editorRules();
+    const result = await saveDocuments({
+      session,
+      host: host.content,
+      groups: pairingGroups([PAIRING]),
+      rules,
+    });
 
     expect(result.refused).toBe(true);
-    expect(result.issues).toContainEqual({
-      ruleId: 'save.pairing.sceneManifest',
-      messageKey: 'save.issue.prefabWithoutManifestRecord',
+    expect(result.blocking.map((issue) => issue.ruleId)).toEqual([VISUAL_FOR_PREFAB_RULE]);
+    expect(result.blocking[0]).toMatchObject({
       documentId: SCENE_PATH,
-      detail: { prefab: 'Fireball', manifest: MANIFEST_PATH },
-      blocking: true,
+      path: ['prefabs', 1, 'name'],
+      received: 'Fireball',
+      reasonKey: reasonKey(VISUAL_FOR_PREFAB_RULE, 'missingVisual'),
+      reasonParams: { name: 'Fireball' },
     });
+
+    // Одно описание нарушения на редактор: то, чем сохранение отвергло запись,
+    // и то, чем валидация подсвечивает место при правке, — одно значение.
+    const live = createValidator({ rules }).run(session);
+    expect(result.blocking).toEqual([...live.forDocument(SCENE_PATH)]);
   });
 
   it('обе половины пары, заведённые одной правкой, сохраняются вместе', async () => {
@@ -316,7 +374,12 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
       value: { model: 'visuals/models/fireball.mdx' },
     });
 
-    const result = await saveDocuments({ session, host: host.content, ...scenePairingSave([PAIRING]) });
+    const result = await saveDocuments({
+      session,
+      host: host.content,
+      groups: pairingGroups([PAIRING]),
+      rules: editorRules(),
+    });
     expect(result.refused).toBe(false);
     expect([...result.written].sort()).toEqual([MANIFEST_PATH, SCENE_PATH].sort());
   });
@@ -340,19 +403,52 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
       item: { prefab: 'Hero' },
     });
 
-    const result = await saveDocuments({ session, host: host.content, ...scenePairingSave([PAIRING]) });
+    const result = await saveDocuments({
+      session,
+      host: host.content,
+      groups: pairingGroups([PAIRING]),
+      rules: editorRules(),
+    });
 
     expect(result.refused).toBe(false);
     expect(result.written).toEqual([SCENE_PATH]);
-    expect(result.issues).toEqual([
-      {
-        ruleId: 'save.pairing.sceneManifest',
-        messageKey: 'save.issue.prefabWithoutManifestRecord',
-        documentId: SCENE_PATH,
-        detail: { prefab: 'Fireball', manifest: MANIFEST_PATH },
-        blocking: false,
+    expect(result.blocking).toEqual([]);
+    // Найдено оно при этом не молча: отчёт называет его наравне с остальным.
+    expect(result.report.issues.map((issue) => issue.ruleId)).toEqual([VISUAL_FOR_PREFAB_RULE]);
+    expect(result.report.severityOf(SCENE_PATH)).toBe('error');
+  });
+
+  it('внесённое предупреждение записи не отвергает: отказ — свойство важности, а не факта правки', async () => {
+    /** Предупреждение, которого до правки не было: записей расстановки станет две. */
+    const crowded: ValidationRule = {
+      id: 'test.crowded',
+      descriptionKey: ruleDescriptionKey('test.crowded'),
+      appliesTo: ['scene'],
+      severity: 'warning',
+      check(run) {
+        const initial = getAtPath(run.document.value, ['initial']);
+        if (!isJsonArray(initial) || initial.length < 2) return;
+        run.report({ path: ['initial'], expected: { kind: 'range', max: 1 }, code: 'crowded' });
       },
-    ]);
+    };
+    const { host, session } = await opened({ [SCENE_PATH]: SCENE, [MANIFEST_PATH]: MANIFEST });
+    session.applyOperation('document.list.append', {
+      document: SCENE_PATH,
+      list: ['initial'],
+      item: { prefab: 'Hero' },
+    });
+
+    const result = await saveDocuments({
+      session,
+      host: host.content,
+      groups: pairingGroups([PAIRING]),
+      rules: editorRules(crowded),
+    });
+
+    expect(result.refused).toBe(false);
+    expect(result.written).toEqual([SCENE_PATH]);
+    expect(result.blocking).toEqual([]);
+    expect(result.report.severityOf(SCENE_PATH, ['initial'])).toBe('warning');
   });
 
   it('член тройки с правками нельзя оставить несохранённым — включая парный presentation-документ', async () => {
@@ -381,21 +477,57 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
       session,
       host: host.content,
       documentIds: [SCENE_PATH],
-      ...scenePairingSave([pairing]),
+      groups: pairingGroups([pairing]),
+      rules: editorRules(),
     });
 
     expect(partial.refused).toBe(true);
     expect(host.writes).toEqual([]);
-    expect(partial.issues).toContainEqual({
-      ruleId: 'save.group.writeTogether',
-      messageKey: 'save.issue.groupMemberLeftUnsaved',
-      documentId: PRESENTATION,
-      detail: { group: SCENE_PATH },
-      blocking: true,
-    });
+    // Правило записи судит не дерево, а само сохранение — и говорит о нём в том
+    // же словаре: ожидание «эти документы уходят одной записью».
+    expect(partial.blocking).toEqual([
+      {
+        ruleId: GROUP_WRITE_RULE_ID,
+        severity: 'error',
+        documentId: PRESENTATION,
+        path: [],
+        received: { decorations: [] },
+        expected: { kind: 'together', members: [SCENE_PATH, MANIFEST_PATH, PRESENTATION] },
+        reasonKey: reasonKey(GROUP_WRITE_RULE_ID, 'memberLeftUnsaved'),
+        reasonParams: { group: SCENE_PATH },
+      },
+    ]);
 
-    const full = await saveDocuments({ session, host: host.content, ...scenePairingSave([pairing]) });
+    const full = await saveDocuments({
+      session,
+      host: host.content,
+      groups: pairingGroups([pairing]),
+      rules: editorRules(),
+    });
     expect(full.refused).toBe(false);
     expect([...full.written].sort()).toEqual([PRESENTATION, SCENE_PATH].sort());
+  });
+
+  it('сохранение не сбивает кэш валидатора: прогон без правок по-прежнему не исполняет ничего', async () => {
+    const { host, session } = await opened({ [SCENE_PATH]: SCENE, [MANIFEST_PATH]: MANIFEST });
+    session.applyOperation('document.list.append', {
+      document: SCENE_PATH,
+      list: ['initial'],
+      item: { prefab: 'Hero' },
+    });
+
+    const rules = editorRules();
+    const validator = createValidator({ rules });
+    validator.run(session);
+    validator.run(session);
+    expect(validator.lastRun.executed).toBe(0);
+
+    // У сохранения свой прогон по состоянию диска: подмешаться в кэш редактора
+    // он не должен, иначе валидация реального времени пересчитывала бы всё
+    // после каждой записи (ED-8).
+    await saveDocuments({ session, host: host.content, groups: pairingGroups([PAIRING]), rules });
+
+    validator.run(session);
+    expect(validator.lastRun).toEqual({ executed: 0, reused: 3 });
   });
 });

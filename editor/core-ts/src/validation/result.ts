@@ -57,6 +57,26 @@ function addressKey(documentId: DocumentId, path: JsonPath): string {
   return `${documentId}${ADDRESS_SEPARATOR}${pathKey(path)}`;
 }
 
+/**
+ * Ключ тождества находки: «то же правило о том же месте по той же причине».
+ * Нужен там, где сравниваются два прогона: сохранение отличает по нему
+ * расхождение, которое вносит оно само, от лежавшего на диске до него (ED-21).
+ *
+ * В ключ не входят `received` и `expected` — они говорят, что правило увидело
+ * вокруг находки, и меняются от правки соседнего места: список известных имён в
+ * ссылочном ожидании сдвигается от появления любого нового prefab'а. Считать по
+ * ним тождество значило бы объявлять давнее нарушение новым всякий раз, когда
+ * рядом что-то поменялось, — то есть отказывать в записи из-за состояния, к
+ * которому эта запись отношения не имеет.
+ */
+export function issueKey(issue: ValidationIssue): string {
+  const params = Object.keys(issue.reasonParams)
+    .sort(compareIds)
+    .map((name) => `${name}=${String(issue.reasonParams[name])}`)
+    .join(',');
+  return [issue.ruleId, issue.documentId, pathKey(issue.path), issue.reasonKey, params].join(ADDRESS_SEPARATOR);
+}
+
 function worst(issues: readonly ValidationIssue[]): ValidationSeverity | undefined {
   let found: ValidationSeverity | undefined;
   for (const issue of issues) {
