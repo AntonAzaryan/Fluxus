@@ -123,7 +123,7 @@ let pendingKill = false;
 /** Отложенные фронты кнопок локомоушена (LOC-3): уклон/перекат и прыжок. */
 let pendingDodge = false;
 let pendingJump = false;
-let currentSkin: 'base' | 'ember' = 'base';
+let currentSkin: 'steel' | 'ember' = 'steel';
 
 /** Последняя позиция указателя — edge-pan считается по кадрам (CAM-3). */
 let pointerX = -1;
@@ -175,7 +175,7 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyT') {
     // T — смена скина (REND-6); S свободна под «юг» в WASD.
-    currentSkin = currentSkin === 'base' ? 'ember' : 'base';
+    currentSkin = currentSkin === 'steel' ? 'ember' : 'steel';
     if (heroId !== null) models?.setSkin(heroId, currentSkin);
     updateHud();
     return;
