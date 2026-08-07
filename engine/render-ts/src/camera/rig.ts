@@ -251,27 +251,6 @@ export function terrainGroundApi(
   };
 }
 
-/**
- * Движение героя из состояния клавиш (WASD): стрелки принадлежат камере и
- * сюда не входят; при захвате клавиатуры камерой (fly) — ноль (CAM-1, CAM-2).
- * Сборка отдаёт результат в `sendInput` — тестируемая точка «ввод камеры не
- * попадает в InputFrame».
- */
-export function heroMoveFromKeys(
-  keys: ReadonlySet<string>,
-  movementCaptured: boolean,
-): { x: number; y: number } {
-  if (movementCaptured) return { x: 0, y: 0 };
-  let x = 0;
-  let y = 0;
-  if (keys.has('KeyW')) y += 1;
-  if (keys.has('KeyS')) y -= 1;
-  if (keys.has('KeyA')) x -= 1;
-  if (keys.has('KeyD')) x += 1;
-  const length = Math.hypot(x, y);
-  return length > 0 ? { x: x / length, y: y / length } : { x: 0, y: 0 };
-}
-
 // ----------------------------------------------------------------------- rig
 
 export class CameraRig {

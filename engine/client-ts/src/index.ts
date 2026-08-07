@@ -28,5 +28,24 @@ export type { WorkerShellConfig } from './workerShell.js';
 export { RemoteHost } from './remoteHost.js';
 export type { RemoteHostConfig } from './remoteHost.js';
 
+// Слой источников ввода (input-devices INP-1..5): устройства → канонический ввод.
+export { TURN_UNITS, aimAngle } from './input/types.js';
+export type { ActionSink, ContinuousSample, InputSource } from './input/types.js';
+export { HeldActions, InputSampler } from './input/sampler.js';
+export type { CanonicalInput, SamplerOptions } from './input/sampler.js';
+export { KeyboardMouseSource } from './input/keyboardMouse.js';
+export type { KeyboardMouseBindings, KeyboardMouseOptions } from './input/keyboardMouse.js';
+export { TouchSource } from './input/touch.js';
+export type {
+  TouchBindings,
+  TouchOverlayState,
+  TouchViewport,
+  TouchZone,
+} from './input/touch.js';
+export { GamepadSource, navigatorGamepad } from './input/gamepad.js';
+export type { GamepadBindings, GamepadLike } from './input/gamepad.js';
+export { validateBindings } from './input/bindings.js';
+export type { InputBindings } from './input/bindings.js';
+
 // Транспорт netcode поверх пары портов — локальный сервер во втором воркере.
 export { portTransport } from './portTransport.js';
