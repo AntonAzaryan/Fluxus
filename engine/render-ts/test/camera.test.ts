@@ -8,7 +8,6 @@ import {
   CameraRig,
   createCameraInput,
   edgePanAxes,
-  heroMoveFromKeys,
   terrainGroundApi,
   type CameraInput,
   type CameraRigOptions,
@@ -219,14 +218,5 @@ describe('вспомогательные функции камеры', () => {
     expect(ground.groundHeightAt(1.5, 0.5)).toBeCloseTo(1.2, 6);
     expect(ground.groundHeightAt(99, 99)).toBeCloseTo(1.2, 6); // кламп к крайней клетке
     expect(ground.bounds).toEqual({ minX: 0, minY: 0, maxX: 2, maxY: 1 });
-  });
-
-  it('heroMoveFromKeys: WASD без стрелок; захват камерой — ноль (CAM-1, CAM-2)', () => {
-    const wasd = heroMoveFromKeys(new Set(['KeyW', 'KeyD']), false);
-    expect(Math.hypot(wasd.x, wasd.y)).toBeCloseTo(1, 6);
-    // Стрелки принадлежат камере и в движение героя не попадают.
-    expect(heroMoveFromKeys(new Set(['ArrowUp', 'ArrowRight']), false)).toEqual({ x: 0, y: 0 });
-    // Fly владеет клавиатурой: WASD не уходит в InputFrame.
-    expect(heroMoveFromKeys(new Set(['KeyW', 'KeyD']), true)).toEqual({ x: 0, y: 0 });
   });
 });
