@@ -50,8 +50,9 @@ export type { ConnectionId, Transport, TransportServer } from './transport/trans
 export { loopbackPair, LoopbackHub } from './transport/loopback.js';
 export type { LoopbackOptions } from './transport/loopback.js';
 export { connectWebSocket } from './transport/webSocketClient.js';
-export { webSocketTransportServer } from './transport/webSocketServer.js';
-export type { WebSocketServerOptions } from './transport/webSocketServer.js';
+export { webSocketTransportServer, webSocketChannelServer } from './transport/webSocketServer.js';
+export type { WebSocketChannelServer, WebSocketServerOptions } from './transport/webSocketServer.js';
+export { mergeTransportServers } from './transport/merged.js';
 
 // контент-пак
 export { contentPack } from './content/pack.js';
@@ -81,6 +82,59 @@ export { InputRing, DEFAULT_RING_TICKS } from './client/inputRing.js';
 export type { SentInput } from './client/inputRing.js';
 export { InterpolationBuffer, vanishedEntities, DEFAULT_DELAY_MS } from './client/interpolation.js';
 export type { InterpolationOptions, InterpolationSample } from './client/interpolation.js';
+
+// лобби (SES-4) — свой закрытый набор сообщений, отдельный от набора матча
+export {
+  LobbyProtocolError,
+  parseLobbyClientMessage,
+  parseLobbyServerMessage,
+} from './lobby/messages.js';
+export type {
+  BeginMessage,
+  ClosedMessage,
+  DeniedMessage,
+  JoinMessage,
+  JoinedMessage,
+  LeaveMessage,
+  LobbyClientMessage,
+  LobbyCloseReason,
+  LobbyDenyReason,
+  LobbyServerMessage,
+  RosterMessage,
+} from './lobby/messages.js';
+export { lobbyClientCodec, lobbyServerCodec } from './lobby/codec.js';
+export { LobbyServer } from './lobby/lobbyServer.js';
+export type { LobbyConfig, LobbyOutgoing, LobbyPhase } from './lobby/lobbyServer.js';
+export { LobbyHost } from './lobby/host.js';
+export type { LobbyHostOptions } from './lobby/host.js';
+export { LobbyClient } from './lobby/lobbyClient.js';
+export type { LobbyClientOptions, LobbyClientOutcome, LobbyClientPhase } from './lobby/lobbyClient.js';
+export { LobbyClientHost } from './lobby/clientHost.js';
+export type { LobbyClientHostOptions } from './lobby/clientHost.js';
+
+// сессия (SES-1..9) — размещение авторитета и рандеву
+export { createSessionInfo } from './session/session.js';
+export type { SessionInfo, SessionMode, SessionPhase } from './session/session.js';
+export { RendezvousError } from './session/rendezvous.js';
+export type { PublishedSession, Rendezvous, SessionChannel } from './session/rendezvous.js';
+export { decodeInvite, encodeInvite } from './session/invite.js';
+export { randomToken } from './session/rendezvous/token.js';
+export type { InvitePayload } from './session/invite.js';
+export { InProcessRendezvous } from './session/rendezvous/inProcess.js';
+export type { InProcessRendezvousOptions } from './session/rendezvous/inProcess.js';
+export { WebSocketRendezvous } from './session/rendezvous/webSocket.js';
+export type { WebSocketRendezvousOptions } from './session/rendezvous/webSocket.js';
+export { HostSession } from './session/hostSession.js';
+export type { HostSessionOptions, StartedMatch } from './session/hostSession.js';
+export { DedicatedSession } from './session/dedicatedSession.js';
+export type { DedicatedSessionOptions } from './session/dedicatedSession.js';
+export { joinMatch, joinSession, SessionJoinError } from './session/joinSession.js';
+export type {
+  JoinMatchOptions,
+  JoinSessionOptions,
+  JoinedMatch,
+  LobbyFailure,
+} from './session/joinSession.js';
 
 // наблюдаемость
 export { createClientMetrics, createServerMetrics, recordInputToVisible } from './metrics.js';
