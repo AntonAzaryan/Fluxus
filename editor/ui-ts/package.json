@@ -19,16 +19,10 @@
     "node": ">=22.18"
   },
   "dependencies": {
-    "@game-mvp/assets": "*",
-    "@game-mvp/client": "*",
-    "@game-mvp/core": "*",
-    "@game-mvp/editor-core": "*",
-    "@game-mvp/render": "*",
-    "three": "^0.185.1"
+    "@game-mvp/editor-core": "*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/three": "^0.185.4",
     "typescript": "^5.9.0",
     "vite": "^8.2.0",
     "vitest": "^4.1.10"

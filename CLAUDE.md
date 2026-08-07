@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## The repository
 
-`openspec/` is the spec, `engine/` its working implementation (the `*-ts` packages), `content/` the game content the engine runs, `docs/` the non-normative overview. The npm workspace root is the repository root.
+`openspec/` is the spec, `engine/` its working implementation (the `*-ts` packages), `editor/` the content editor built on top of them (capability `editor`, roadmap stage 12), `content/` the game content the engine runs, `docs/` the non-normative overview. The npm workspace root is the repository root.
 
 Game content lives in `content/` and never inside an engine package (`game-content` CONT-1, enforced by `engine/integration-ts/test/contentBoundary.test.ts`): `content/scenes/`, `content/matches/` are sim documents, `content/visuals/` holds the visual manifest, models and textures, and an asset ID is a path from the tree root (ASSET-2). Engine test fixtures are **not** content and stay put — `engine/tests/golden/` and the scenes built inline in `engine/integration-ts/test/fixtures.ts` (CONT-4): an engine baseline goes red from an engine change, not from a designer retuning a number.
 
@@ -43,7 +43,7 @@ openspec validate --specs --strict  # format check
 
 ## Commands (repository root workspace)
 
-Node >= 22.18. The repository root is the npm workspace; its members are the engine packages (`engine/core-ts`, `engine/net-ts`, `engine/render-ts`, `engine/assets-ts`, `engine/client-ts` — the web client shell (worker hosting + channel, SHELL-1..7), `engine/integration-ts` — the cross-layer integration suite, CLI-9). A single `npm install` from the root installs everything, and the check-everything gate before pushing is `npm run check` — it is `typecheck && lint && test`, and running only the first and the last is how a lint failure reaches the remote:
+Node >= 22.18. The repository root is the npm workspace; its members are the engine packages (`engine/core-ts`, `engine/net-ts`, `engine/render-ts`, `engine/assets-ts`, `engine/client-ts` — the web client shell (worker hosting + channel, SHELL-1..7), `engine/integration-ts` — the cross-layer integration suite, CLI-9) plus the two editor packages (`editor/core-ts` — the headless authoring layer, `editor/ui-ts` — its DOM interface and web app). A single `npm install` from the root installs everything, and the check-everything gate before pushing is `npm run check` — it is `typecheck && lint && test`, and running only the first and the last is how a lint failure reaches the remote:
 
 ```sh
 npm run check     # from the root: typecheck + lint + test — run this before pushing
