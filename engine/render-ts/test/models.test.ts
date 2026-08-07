@@ -34,7 +34,7 @@ function makeManifest(): VisualManifest {
   };
 }
 
-function makeRig(): {
+function makeRig(manifest: VisualManifest = makeManifest()): {
   subsystem: ModelsSubsystem;
   ctx: RenderContext;
   assets: AssetsStub;
@@ -47,7 +47,7 @@ function makeRig(): {
     assets: assets.service,
     config: { heightStep: 0.5 },
   };
-  const subsystem = new ModelsSubsystem(makeManifest(), {
+  const subsystem = new ModelsSubsystem(manifest, {
     warn: (message) => warnings.push(message),
   });
   subsystem.init(ctx);
@@ -162,6 +162,27 @@ describe('анимации по данным тика (REND-4)', () => {
     );
     expect(controller.isDead).toBe(true);
     expect(controller.currentClipName).toBe('Death');
+  });
+
+  it('неразрешённая запись манифеста жалуется в сток подсистемы и оставляет клип (REND-4)', () => {
+    const manifest: VisualManifest = {
+      entities: {
+        // Клипа «Wolk» в модели нет: опечатка автора манифеста.
+        Runner: { model: MODEL_ID, animations: { states: { idle: 'Stand', move: 'Wolk' } } },
+      },
+    };
+    const { subsystem, assets, warnings } = makeRig(manifest);
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    const controller = subsystem.instanceFor(1)!.controller!;
+    expect(controller.currentClipName).toBe('Stand - 1');
+
+    // Каждый тик зовёт setState — предупреждение остаётся одним на запись.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
+    expect(controller.currentClipName).toBe('Stand - 1');
+    expect(warnings.filter((message) => message.includes('Wolk')).length).toBe(1);
   });
 });
 

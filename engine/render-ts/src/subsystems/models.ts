@@ -35,7 +35,7 @@ import { advanceFall, jumpArc } from '../model/verticalOffset.js';
 import { AnimationController } from '../model/animation.js';
 import { BoneControlState } from '../model/boneControl.js';
 import { smoothYaw } from '../model/boneControl.js';
-import { applySkin, skinTexturePaths, type SkinApplication } from '../model/skins.js';
+import { applySkin, skinTextureSources, type SkinApplication } from '../model/skins.js';
 
 export interface ModelsOptions {
   /** Тип события смерти — конвенция ядра. */
@@ -443,7 +443,13 @@ export class ModelsSubsystem implements RenderSubsystem {
     this.disposePlaceholder(record);
     record.model = model;
 
-    const controllerOptions: { crossfade?: number; deathEvent?: string } = {};
+    // Неразрешённая запись анимации диагностируется в тот же сток, что и
+    // отсутствующая кость (REND-4, REND-5): у подсистемы один адресат жалоб.
+    const controllerOptions: {
+      crossfade?: number;
+      deathEvent?: string;
+      warn: (message: string) => void;
+    } = { warn: this.warn };
     if (this.options.crossfade !== undefined) controllerOptions.crossfade = this.options.crossfade;
     if (this.options.deathEvent !== undefined) controllerOptions.deathEvent = this.options.deathEvent;
     record.controller = new AnimationController(
@@ -468,7 +474,7 @@ export class ModelsSubsystem implements RenderSubsystem {
     record.skinApp?.dispose();
     record.skinApp = applySkin(
       model.textureTargets,
-      skinTexturePaths(entry.data.model, record.visual, record.skin),
+      skinTextureSources(entry.data.model, record.visual, record.skin),
       this.requireCtx().assets,
     );
   }

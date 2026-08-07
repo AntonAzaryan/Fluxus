@@ -95,7 +95,11 @@ export type {
 
 // Анимационный контроллер (REND-4).
 export { AnimationController, resolveClip } from './model/animation.js';
-export type { AnimationControllerOptions, AnimationMapping } from './model/animation.js';
+export type {
+  AnimationControllerOptions,
+  AnimationMapping,
+  ClipResolution,
+} from './model/animation.js';
 
 // Bone-контроль (REND-5).
 export {
@@ -108,8 +112,8 @@ export {
 export type { BoneControlDef, BoneLookup } from './model/boneControl.js';
 
 // Скины (REND-6).
-export { applySkin, skinTexturePaths, textureFromImage } from './model/skins.js';
-export type { SkinApplication } from './model/skins.js';
+export { applySkin, skinTextureSources, textureFromImage } from './model/skins.js';
+export type { SkinApplication, SkinTextureSource } from './model/skins.js';
 
 // Типы контракта ассетов, которыми оперирует публичный API рендера.
 export type {

@@ -1,11 +1,19 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   AssetService,
   gltfLoader,
   type Handle,
   type NormalizedModel,
 } from '../src/index.js';
-import { FIXTURES_DIR, FsAssetSource, settled } from './helpers.js';
+import { FIXTURES_DIR, FsAssetSource, MemoryAssetSource, settled } from './helpers.js';
+import {
+  buildGlbFixture,
+  EMBEDDED_PIXELS,
+  EXTERNAL_TEXTURE_PATH,
+  GLB_ID,
+  GLTF_ID,
+  EXTERNAL_PNG_ID,
+} from './glbFixture.js';
 
 const MODEL_ID = 'gltf-mini/model.gltf';
 
@@ -115,12 +123,12 @@ describe('Загрузчик glTF: рукописная фикстура (ASSET-
     expect(material.normalTexture).toBeNull();
   });
 
-  it('слоты текстур: путь разрешается ОТ ID ассета, слот без файла остаётся в нумерации', () => {
+  it('слоты текстур: путь разрешается ОТ ID ассета, слот без источника остаётся в нумерации', () => {
     expect(model.textureSlots).toHaveLength(2);
     // "../shared/atlas.png" от ID "gltf-mini/model.gltf" → "shared/atlas.png" (ASSET-3).
-    expect(model.textureSlots[0]).toEqual({ slot: 0, path: 'shared/atlas.png' });
-    // Изображение без внешнего uri (встроенное) — слот объявлен, файла за ним нет.
-    expect(model.textureSlots[1]).toEqual({ slot: 1, path: null });
+    expect(model.textureSlots[0]).toEqual({ slot: 0, source: 'file', path: 'shared/atlas.png' });
+    // Изображение без uri и без bufferView — источника нет вовсе, но номер занят.
+    expect(model.textureSlots[1]).toEqual({ slot: 1, source: 'none' });
   });
 
   it('секвенции: канал корневого узла конвертируется, канал некорневого — нет', () => {
@@ -150,5 +158,108 @@ describe('Загрузчик glTF: рукописная фикстура (ASSET-
     // Ступенчатый клип, выпрямленный в линейный, — тихо испорченная анимация.
     expect(track.scale!.interpolation).toBe('step');
     closeArray(track.scale!.values, [1, 1, 1, 2, 2, 2]);
+  });
+});
+
+describe('Загрузчик glTF: контейнер .glb со встроенным изображением (ASSET-5)', () => {
+  let packed: NormalizedModel;
+  let unpacked: NormalizedModel;
+  let warnings: string[];
+
+  /** Загрузка одного ID тем же загрузчиком — вид упаковки он определит сам. */
+  async function loadModel(source: MemoryAssetSource, id: string): Promise<NormalizedModel> {
+    const svc = new AssetService(source);
+    svc.registerLoader(gltfLoader);
+    const handle: Handle<NormalizedModel> = svc.request('model', id);
+    const state = await settled(svc, handle);
+    if (state.status !== 'ready') {
+      throw new Error(`модель "${id}" не загрузилась: ${state.status === 'failed' ? state.reason : state.status}`);
+    }
+    return state.data;
+  }
+
+  beforeAll(async () => {
+    const fixture = await buildGlbFixture();
+    const source = new MemoryAssetSource(
+      new Map([
+        [GLB_ID, fixture.glb],
+        [GLTF_ID, fixture.gltf],
+        ['gltf-mini/model.bin', fixture.bin],
+        [EXTERNAL_PNG_ID, fixture.png],
+      ]),
+    );
+    // Предупреждение о недекодируемом изображении — часть контракта загрузчика,
+    // поэтому оно перехватывается, а не глушится: тест ниже его проверяет.
+    warnings = [];
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    });
+    try {
+      packed = await loadModel(source, GLB_ID);
+      unpacked = await loadModel(source, GLTF_ID);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('контейнер даёт ту же модель, что и распакованная пара .gltf + .bin', () => {
+    // Различаться упаковки вправе ТОЛЬКО источником пикселей в слотах; всё
+    // остальное — скелет, меши, секвенции, материалы, высота — это одна и та же
+    // модель, и загрузчик у неё один (design, решение 4).
+    expect(packed.bones).toEqual(unpacked.bones);
+    expect(packed.meshes).toEqual(unpacked.meshes);
+    expect(packed.sequences).toEqual(unpacked.sequences);
+    expect(packed.materials).toEqual(unpacked.materials);
+    expect(packed.height).toBe(unpacked.height);
+  });
+
+  it('слот со встроенным изображением несёт декодированные пиксели', () => {
+    const slot = packed.textureSlots[0]!;
+    expect(slot.source).toBe('embedded');
+    if (slot.source !== 'embedded') return;
+    // ASSET-5: потребителю приезжают ПИКСЕЛИ, а не байты файла, — декодирование
+    // сделано один раз на ассет, внутри загрузчика.
+    expect(slot.image.width).toBe(2);
+    expect(slot.image.height).toBe(2);
+    expect(slot.image.format).toBe('rgba8');
+    expect([...slot.image.pixels]).toEqual(EMBEDDED_PIXELS);
+  });
+
+  it('слот с внешним uri несёт путь, разрешённый от ID ассета (ASSET-3)', () => {
+    // Контейнер не обязывает встраивать всё: внешнее изображение остаётся
+    // ссылкой на файл дерева контента ровно как в `.gltf`.
+    expect(packed.textureSlots[1]).toEqual({
+      slot: 1,
+      source: 'file',
+      path: EXTERNAL_TEXTURE_PATH,
+    });
+  });
+
+  it('встроенное изображение без декодера — слот без источника и предупреждение, а не отказ', () => {
+    // Модель без одной текстуры полезнее, чем не загрузившаяся модель
+    // (design, решение 3).
+    expect(packed.textureSlots[2]).toEqual({ slot: 2, source: 'none' });
+    expect(packed.textureSlots).toHaveLength(3);
+    expect(warnings.some((w) => w.includes('image/jpeg'))).toBe(true);
+  });
+
+  it('вид упаковки определяется сигнатурой содержимого, а не расширением', async () => {
+    // Тот же байт-в-байт контейнер под именем `.gltf` грузится как контейнер:
+    // имя файла — не свойство данных (design, решение 4).
+    const fixture = await buildGlbFixture();
+    const source = new MemoryAssetSource(
+      new Map([
+        ['gltf-mini/misnamed.gltf', fixture.glb],
+        [EXTERNAL_PNG_ID, fixture.png],
+      ]),
+    );
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const model = await loadModel(source, 'gltf-mini/misnamed.gltf');
+    expect(model.bones).toEqual(packed.bones);
+    expect(model.textureSlots[0]!.source).toBe('embedded');
   });
 });

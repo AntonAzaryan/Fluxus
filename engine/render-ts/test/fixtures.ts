@@ -97,7 +97,7 @@ export function makeModel(): NormalizedModel {
         doubleSided: true,
       },
     ],
-    textureSlots: [{ slot: 0, path: 'tex/base.png' }],
+    textureSlots: [{ slot: 0, source: 'file', path: 'tex/base.png' }],
     height: 2,
   };
 }

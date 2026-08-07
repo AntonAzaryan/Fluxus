@@ -11,7 +11,7 @@
       },
       "animations": {
         "states": {
-          "idle": "Unarmed_Idle",
+          "idle": "Idle",
           "move": "Running_A",
           "dodge": "Dodge_Forward",
           "roll": "Dodge_Backward",

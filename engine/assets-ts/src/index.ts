@@ -28,6 +28,9 @@ export type {
   Interpolation,
   PartVisibilityTrack,
   TextureSlotRef,
+  TextureSlotFile,
+  TextureSlotEmbedded,
+  TextureSlotNone,
 } from './model.js';
 
 // декодированное изображение — вид текстурного ассета (ASSET-5)

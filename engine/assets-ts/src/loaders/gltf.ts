@@ -1,16 +1,27 @@
 /**
  * Загрузчик glTF 2.0 поверх ручного разбора JSON — без THREE.js и DOM
- * (ASSET-5), в духе `mdxLoader`. Формат многофайловый: `.gltf` (JSON) плюс
- * внешний `.bin` (геометрия/скелет/анимации) и внешние `.png`-текстуры,
- * читаемые через `ctx.read` относительно ID модели (ASSET-3). `.glb`
- * (двоичный контейнер с зашитыми буфером/текстурами) НЕ поддерживается —
- * встроенные текстуры некуда деть без второго механизма подмены (текстуры
- * остаются путём в `textureSlots`, а не пикселями, ASSET-5); контент готовится
- * распаковкой `.glb` в `.gltf`+`.bin`+PNG один раз при добавлении ассета.
+ * (ASSET-5), в духе `mdxLoader`. Разбирает обе упаковки одного и того же
+ * формата:
+ *
+ * - `.gltf` — JSON плюс внешний `.bin` (геометрия/скелет/анимации) и внешние
+ *   `.png`-текстуры, читаемые через `ctx.read` относительно ID модели (ASSET-3);
+ * - `.glb` — двоичный контейнер: 12-байтовый заголовок, чанк JSON и чанк BIN,
+ *   то есть ровно те же JSON и буфер, что у `.gltf` лежат по разным файлам.
+ *   Изображения внутри контейнера декодируются здесь же и приезжают в модель
+ *   встроенными слотами (`TextureSlotEmbedded`) — распаковывать `.glb` на
+ *   части руками больше не нужно.
+ *
+ * Загрузчик один на оба расширения, и вид упаковки определяется СИГНАТУРОЙ
+ * СОДЕРЖИМОГО (`glTF`), а не именем файла: второй загрузчик означал бы две
+ * реализации одного формата, которые неизбежно разъедутся, а имя файла — не
+ * свойство данных.
  *
  * ПОДДЕРЖАННОЕ ПОДМНОЖЕСТВО (осознанно уже, чем весь glTF 2.0):
- * - Один буфер, внешний (`buffers[0].uri`); встроенные data-URI и sparse-
- *   accessor'ы не разбираются — внятная ошибка вместо молчаливой потери данных.
+ * - Один буфер: внешний (`buffers[0].uri`) либо BIN-чанк контейнера; встроенные
+ *   data-URI и sparse-accessor'ы не разбираются — внятная ошибка вместо
+ *   молчаливой потери данных.
+ * - Из встроенных изображений декодируется PNG (модульный `decodePng`);
+ *   формат без декодера (JPEG) даёт слот без источника и предупреждение.
  * - Примитивы TRIANGLES (mode по умолчанию), один primitive на mesh.
  * - Интерполяция каналов LINEAR и STEP переносятся как есть; CUBICSPLINE
  *   упрощается до LINEAR по значению ключа (без внутренней/внешней
@@ -46,7 +57,9 @@ import type {
   NormalizedSequence,
   TextureSlotRef,
 } from '../model.js';
+import type { DecodedImage } from '../image.js';
 import { resolveDependencyPath } from '../service.js';
+import { decodePng } from './png.js';
 
 // ============================================================== glTF JSON
 
@@ -106,6 +119,16 @@ interface GltfMaterial {
   readonly alphaCutoff?: number;
   readonly doubleSided?: boolean;
 }
+/**
+ * Изображение glTF задано ЛИБО внешним `uri`, ЛИБО куском буфера
+ * (`bufferView` + `mimeType`) — спецификация разрешает ровно одно из двух, и
+ * именно этой развилке отвечают два вида источника слота (ASSET-5).
+ */
+interface GltfImage {
+  readonly uri?: string;
+  readonly bufferView?: number;
+  readonly mimeType?: string;
+}
 interface GltfAnimationChannel {
   readonly sampler: number;
   readonly target: { readonly node?: number; readonly path: string };
@@ -130,7 +153,7 @@ interface GltfDocument {
   readonly skins?: readonly GltfSkin[];
   readonly materials?: readonly GltfMaterial[];
   readonly textures?: readonly { readonly source: number }[];
-  readonly images?: readonly { readonly uri?: string }[];
+  readonly images?: readonly GltfImage[];
   readonly animations?: readonly GltfAnimation[];
 }
 
@@ -358,11 +381,85 @@ function buildRestWorldMatrices(nodes: readonly GltfNode[], parent: Int32Array):
   return nodes.map((_n, i) => resolve(i));
 }
 
-export function normalizeGltf(
+/**
+ * Байты изображения, лежащего внутри буфера (`.glb` или общий `.bin`).
+ * Возвращает null, если ссылка битая: это повод для предупреждения, а не для
+ * отказа грузить модель целиком.
+ */
+function imageBytes(
+  doc: GltfDocument,
+  buffers: readonly Uint8Array[],
+  bufferViewIndex: number,
+): Uint8Array | null {
+  const bv = doc.bufferViews[bufferViewIndex];
+  if (bv == null) return null;
+  const buffer = buffers[bv.buffer];
+  if (buffer == null) return null;
+  const start = bv.byteOffset ?? 0;
+  return buffer.subarray(start, start + bv.byteLength);
+}
+
+/** Сигнатура PNG — единственный формат встроенных изображений, который модуль умеет. */
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
+
+function isPng(bytes: Uint8Array): boolean {
+  return bytes.length >= PNG_SIGNATURE.length && PNG_SIGNATURE.every((b, i) => bytes[i] === b);
+}
+
+/**
+ * Декодирование встроенных изображений — ОДИН РАЗ НА АССЕТ и один раз на
+ * изображение: несколько текстур могут ссылаться на один `images[i]`, и второй
+ * прогон декодера дал бы вторую копию пикселей у того же ассета.
+ *
+ * Формат без декодера (JPEG) и битые байты не роняют загрузку модели: слот
+ * останется без источника, а причина уйдёт предупреждением. Модель без одной
+ * текстуры полезнее, чем не загрузившаяся модель; отдельного канала
+ * предупреждений у `LoaderContext` сегодня нет, поэтому `console.warn` — тем
+ * же способом, каким `AssetService` сообщает о бросившем подписчике.
+ */
+async function decodeEmbeddedImages(
   doc: GltfDocument,
   buffers: readonly Uint8Array[],
   assetId: string,
-): NormalizedModel {
+): Promise<Map<number, DecodedImage>> {
+  const decoded = new Map<number, DecodedImage>();
+  const images = doc.images ?? [];
+  for (let i = 0; i < images.length; i++) {
+    const image = images[i]!;
+    if (image.uri != null || image.bufferView == null) continue; // внешний файл или пустая запись
+    const bytes = imageBytes(doc, buffers, image.bufferView);
+    if (bytes == null) {
+      console.warn(
+        `ассет "${assetId}": встроенное изображение ${i} ссылается на несуществующий bufferView ${image.bufferView} — слот останется без текстуры`,
+      );
+      continue;
+    }
+    if (!isPng(bytes)) {
+      console.warn(
+        `ассет "${assetId}": встроенное изображение ${i} (${image.mimeType ?? 'неизвестный тип'}) — декодера нет, поддержан только PNG; слот останется без текстуры`,
+      );
+      continue;
+    }
+    // `decodePng` ждёт ArrayBuffer, а срез буфера — вид на чужой: копируем
+    // ровно этот кусок, иначе декодер увидел бы соседние чанки контейнера.
+    const own = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(own).set(bytes);
+    try {
+      decoded.set(i, await decodePng(own, `${assetId}#image${i}`));
+    } catch (e) {
+      console.warn(
+        `ассет "${assetId}": встроенное изображение ${i} не декодировалось — ${e instanceof Error ? e.message : String(e)}; слот останется без текстуры`,
+      );
+    }
+  }
+  return decoded;
+}
+
+export async function normalizeGltf(
+  doc: GltfDocument,
+  buffers: readonly Uint8Array[],
+  assetId: string,
+): Promise<NormalizedModel> {
   if (!doc.asset.version.startsWith('2.')) {
     throw new Error(`glTF: неподдержанная версия "${doc.asset.version}" (нужна 2.x)`);
   }
@@ -518,14 +615,27 @@ export function normalizeGltf(
 
   // ====================================================== D. Слоты текстур
   //
-  // Слот = индекс в `textures[]` (совпадает с тем, на что ссылаются
-  // материалы выше). Изображение без внешнего `uri` (data-URI, встроенное
-  // в `.glb`) — слот объявлен, но файла за ним нет, как replaceable-слот
-  // MDX (см. `mdxLoader`).
+  // Слот = индекс в `textures[]` (совпадает с тем, на что ссылаются материалы
+  // выше), и номер слота от вида источника не зависит — скин подменяет по
+  // номеру (REND-6). Три источника, ровно три варианта `TextureSlotRef`:
+  // внешний `uri` — путь, разрешённый от ID модели (ASSET-3); `bufferView` —
+  // уже декодированные пиксели контейнера; всё остальное (в том числе
+  // недекодируемый формат) — слот без источника.
+  const embedded = await decodeEmbeddedImages(doc, buffers, assetId);
   const textureSlots: TextureSlotRef[] = textures.map((t, slot) => {
     const image = images[t.source];
-    const path = image?.uri != null ? resolveDependencyPath(assetId, image.uri) : null;
-    return Object.freeze({ slot, path });
+    if (image?.uri != null) {
+      return Object.freeze({
+        slot,
+        source: 'file' as const,
+        path: resolveDependencyPath(assetId, image.uri),
+      });
+    }
+    const pixels = embedded.get(t.source);
+    if (pixels !== undefined) {
+      return Object.freeze({ slot, source: 'embedded' as const, image: pixels });
+    }
+    return Object.freeze({ slot, source: 'none' as const });
   });
 
   // ======================================================== E. Секвенции
@@ -613,25 +723,87 @@ export function normalizeGltf(
   });
 }
 
-/** Загрузчик glTF для реестра сервиса (ASSET-3). */
+// ============================================================ контейнер .glb
+//
+// Раскладка контейнера (glTF 2.0, §4.4): заголовок 12 байт — magic `glTF`,
+// версия, полная длина файла; дальше чанки «длина, тип, данные», выровненные
+// по 4 байтам. Первый чанк обязан быть JSON, второй (если есть) — BIN.
+
+/** `glTF` little-endian — сигнатура СОДЕРЖИМОГО, по ней и различаются упаковки. */
+const GLB_MAGIC = 0x46546c67;
+const GLB_CHUNK_JSON = 0x4e4f534a;
+const GLB_CHUNK_BIN = 0x004e4942;
+
+/** Похожи ли байты на двоичный контейнер. Имя файла не спрашиваем — оно не свойство данных. */
+function isGlb(bytes: ArrayBuffer): boolean {
+  if (bytes.byteLength < 12) return false;
+  return new DataView(bytes).getUint32(0, true) === GLB_MAGIC;
+}
+
+/** JSON-чанк и BIN-чанк контейнера; BIN необязателен (буфер может быть внешним и у `.glb`). */
+function parseGlb(bytes: ArrayBuffer, id: string): { json: string; bin: Uint8Array | null } {
+  const view = new DataView(bytes);
+  const version = view.getUint32(4, true);
+  if (version !== 2) {
+    throw new Error(`ассет "${id}": версия контейнера .glb ${version} (поддержана 2)`);
+  }
+  let json: string | null = null;
+  let bin: Uint8Array | null = null;
+  let offset = 12;
+  while (offset + 8 <= bytes.byteLength) {
+    const length = view.getUint32(offset, true);
+    const type = view.getUint32(offset + 4, true);
+    const start = offset + 8;
+    if (start + length > bytes.byteLength) {
+      throw new Error(`ассет "${id}": чанк .glb выходит за конец файла`);
+    }
+    if (type === GLB_CHUNK_JSON && json === null) {
+      json = new TextDecoder('utf-8').decode(new Uint8Array(bytes, start, length));
+    } else if (type === GLB_CHUNK_BIN && bin === null) {
+      bin = new Uint8Array(bytes, start, length);
+    }
+    // Чанки выровнены по 4 байта; хвостовое выравнивание в length не входит.
+    offset = start + length + ((4 - (length % 4)) % 4);
+  }
+  if (json === null) throw new Error(`ассет "${id}": в контейнере .glb нет JSON-чанка`);
+  return { json, bin };
+}
+
+/**
+ * Загрузчик glTF для реестра сервиса (ASSET-3) — оба расширения одним
+ * загрузчиком (см. заголовок файла). Разбор JSON и добывание буфера
+ * различаются, вся нормализация — общая.
+ */
 export const gltfLoader: AssetLoader<NormalizedModel> = {
   kind: 'model',
-  extensions: ['.gltf'],
+  extensions: ['.gltf', '.glb'],
   async load(bytes: ArrayBuffer, ctx: LoaderContext): Promise<NormalizedModel> {
+    const container = isGlb(bytes) ? parseGlb(bytes, ctx.id) : null;
+    const text = container?.json ?? new TextDecoder('utf-8').decode(bytes);
+
     let doc: GltfDocument;
     try {
-      doc = JSON.parse(new TextDecoder('utf-8').decode(bytes)) as GltfDocument;
+      doc = JSON.parse(text) as GltfDocument;
     } catch (e) {
       throw new Error(`ассет "${ctx.id}": не удалось распарсить glTF JSON — ${e instanceof Error ? e.message : String(e)}`);
     }
     if (doc.buffers.length !== 1) {
       throw new Error(`ассет "${ctx.id}": поддержан ровно один buffer, получено ${doc.buffers.length}`);
     }
+
+    // Буфер без `uri` — это BIN-чанк контейнера, а не ошибка: так его и
+    // задаёт спецификация. Ошибкой остаётся только буфер без uri ВНЕ
+    // контейнера (data-URI), которого мы по-прежнему не разбираем.
     const bufferUri = doc.buffers[0]!.uri;
-    if (bufferUri == null) {
-      throw new Error(`ассет "${ctx.id}": buffers[0] без внешнего uri (встроенные/data-URI буферы не поддержаны)`);
+    let buffer: Uint8Array;
+    if (bufferUri != null) {
+      buffer = new Uint8Array(await ctx.read(bufferUri));
+    } else if (container?.bin != null) {
+      buffer = container.bin;
+    } else {
+      throw new Error(`ассет "${ctx.id}": buffers[0] без внешнего uri и без BIN-чанка (data-URI буферы не поддержаны)`);
     }
-    const bytesOfBuffer = await ctx.read(bufferUri);
-    return normalizeGltf(doc, [new Uint8Array(bytesOfBuffer)], ctx.id);
+
+    return normalizeGltf(doc, [buffer], ctx.id);
   },
 };
