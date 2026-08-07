@@ -29,6 +29,6 @@
 
 ## 5. Проверка
 
-- [ ] 5.1 `npm run typecheck` и `npm test` из корня — зелено
+- [x] 5.1 `npm run typecheck` и `npm test` из корня — зелено
 - [x] 5.2 Убедиться, что контент не менялся: `content/scenes/duel.scene.json` без `initial`, `content/matches/duel.match.json` со своими двумя героями, демо со своим `worldInitSpawn` (решение 2 в design.md)
 - [x] 5.3 Проверить, что мутирующая поверхность ядра не расширилась: `initial` применяется загрузчиком, публичного способа добавить сущность в идущую симуляцию не появилось (TICK-3, SER-8)

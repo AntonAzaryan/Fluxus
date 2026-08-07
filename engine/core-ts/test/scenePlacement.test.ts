@@ -67,6 +67,30 @@ describe('расстановка конфига сцены (SER-7, SER-8)', () =
     expect(alive.slice(2).map((entity) => getField(world, entity, 'Mark', 'id'))).toEqual([1, 2, 3]);
   });
 
+  it('носители идут первыми при полном составе необязательных ассетов (SER-7)', () => {
+    // Сущности-носители создают только `terrain` и `arena`; `timeScale`,
+    // `tweens` и `fog` дописывают компоненты и системы, но не сущности.
+    // Стоит будущему ассету завести собственного носителя — он обязан встать
+    // до расстановки, и здесь это покраснеет.
+    const { world } = loadScene(
+      withScene({
+        terrain: TERRAIN,
+        arena: ARENA,
+        timeScale: true,
+        tweens: [{ target: 'Mark.id' }],
+        fog: true,
+        initial: [prop(1), prop(2)],
+      }),
+    );
+
+    const alive = [...listAlive(world)];
+    expect(alive).toHaveLength(4);
+    expect(hasComponent(world, alive[0]!, FLOOR_COMPONENT)).toBe(true);
+    expect(hasComponent(world, alive[1]!, ARENA_COMPONENT)).toBe(true);
+    expect(alive.slice(2).map((entity) => indexOf(world, entity))).toEqual([2, 3]);
+    expect(alive.slice(2).map((entity) => getField(world, entity, 'Mark', 'id'))).toEqual([1, 2]);
+  });
+
   it('перестановка двух записей меняет index местами и меняет worldInitHash (SER-8)', () => {
     const straight = withScene({ initial: [prop(1), prop(2)] });
     const swapped = withScene({ initial: [prop(2), prop(1)] });
@@ -165,5 +189,20 @@ describe('валидация записи расстановки на загру
   it('запись без prefab’а отвергается до первого тика', () => {
     const broken = { overrides: { Mark: { id: 1 } } } as unknown as ScenarioSpawn;
     expect(() => loadScene(withScene({ initial: [broken] }))).toThrow(/"prefab"/);
+  });
+
+  it('ошибка расстановки прогона называет документ и номер записи', () => {
+    // Расстановок в прогоне две, и текст ошибки обязан различать, какая из них
+    // сломана: «сцена» и «сценарий "…"» — разные документы и разные авторы.
+    expect(() =>
+      runScenario({
+        name: 'placement',
+        seed: 7,
+        ticks: 0,
+        scene: BASE,
+        initial: [{ prefab: 'Prop' }, { prefab: 'Ghost' }],
+      }),
+    ).toThrow(/сценарий "placement".*запись #1.*Ghost/s);
+    expect(() => loadScene(withScene({ initial: [{ prefab: 'Ghost' }] }))).toThrow(/сцена: расстановка/);
   });
 });
