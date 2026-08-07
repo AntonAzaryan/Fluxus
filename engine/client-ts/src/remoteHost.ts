@@ -12,9 +12,23 @@
  *
  * Обратный канал (SHELL-6): `sendInput` и `control` — единственное влияние
  * главного потока на симуляцию.
+ *
+ * Реестр подсистем и кадр живут в `PresentationStage` — общей части продюсеров
+ * presentation-состояния (REND-11), ровно как у `RenderHost`. Хост от этого
+ * остаётся потоком тиков и только им: документных веток здесь нет, а второй
+ * продюсер (`DocumentSource`) пользуется той же сценой, не заглядывая сюда.
+ * Игровой сборке сцену передавать неоткуда — второго продюсера в ней не
+ * существует, и хост заводит свою.
  */
 import type { TerrainGrid, Vec2 } from '@game-mvp/core';
-import { ViewBuffer, type RenderContext, type RenderSubsystem, type TickView } from '@game-mvp/render';
+import {
+  PresentationStage,
+  ViewBuffer,
+  type PresentationProducer,
+  type RenderContext,
+  type RenderSubsystem,
+  type TickView,
+} from '@game-mvp/render';
 import { readTick } from './codec.js';
 import type {
   ControlMessage,
@@ -26,6 +40,13 @@ import type {
 } from './protocol.js';
 
 export interface RemoteHostConfig {
+  /**
+   * Сцена подсистем, разделяемая с другим продюсером presentation-состояния
+   * (REND-11): её передаёт редактор, чтобы вьюпорт и runner превью (`editor`
+   * ED-9) кормили одни и те же подсистемы. По умолчанию хост заводит свою — в
+   * игровом клиенте второго продюсера не существует.
+   */
+  readonly stage?: PresentationStage;
   /** Скачок позиции за тик больше этого (мировых единиц) — телепорт, snap (REND-2). */
   readonly snapDistance?: number;
   /** Часы в миллисекундах; по умолчанию performance.now — параметр ради тестов. */
@@ -37,10 +58,11 @@ export interface RemoteHostConfig {
   readonly onReady?: (hello: HelloMessage) => void;
 }
 
-export class RemoteHost {
-  private readonly context: RenderContext;
+export class RemoteHost implements PresentationProducer {
+  readonly name = 'remote';
+
+  private readonly presentation: PresentationStage;
   private readonly config: RemoteHostConfig;
-  private readonly subsystems: RenderSubsystem[] = [];
   private readonly kindTable: string[] = [];
   private port: ShellPort | null = null;
   private buffer: ViewBuffer | null = null;
@@ -51,7 +73,7 @@ export class RemoteHost {
   expiredEvents = 0;
 
   constructor(context: RenderContext, config: RemoteHostConfig = {}) {
-    this.context = context;
+    this.presentation = config.stage ?? new PresentationStage(context);
     this.config = config;
   }
 
@@ -60,10 +82,14 @@ export class RemoteHost {
     return this.buffer?.view ?? null;
   }
 
+  /** Сцена подсистем — общая с документным источником, когда его завёл редактор (REND-11). */
+  get stage(): PresentationStage {
+    return this.presentation;
+  }
+
   /** Регистрирует подсистему; порядок регистрации = порядок вызовов (REND-8). */
   register(subsystem: RenderSubsystem): this {
-    this.subsystems.push(subsystem);
-    subsystem.init(this.context);
+    this.presentation.register(subsystem);
     return this;
   }
 
@@ -75,12 +101,16 @@ export class RemoteHost {
     return this;
   }
 
-  /** Кадр: дословный контракт `RenderHost.frame` (REND-2, REND-8). */
+  /**
+   * Кадр: дословный контракт `RenderHost.frame` (REND-2, REND-8). Пока
+   * presentation-состояние наполняет другой продюсер (режим правки, REND-11),
+   * кадр не рисуется: подсистемы уже ведёт он.
+   */
   frame(now?: number): void {
-    if (this.buffer === null) return;
+    if (this.buffer === null || !this.presentation.isActive(this)) return;
     const timing = now === undefined ? this.buffer.frame() : this.buffer.frame(now);
     if (timing === null) return;
-    for (const subsystem of this.subsystems) subsystem.updateFrame(timing.dt, timing.alpha);
+    this.presentation.frame(timing.dt, timing.alpha);
   }
 
   /** Сырой ввод в воркер (SHELL-6); `move` — уже fixed-вектор. */
@@ -127,8 +157,11 @@ export class RemoteHost {
     this.expiredEvents += envelope.expiredEvents;
 
     // Колонки — view'ы в буфер: выпить всё синхронно до возврата (SHELL-3).
+    // Публикация потоком тиков: если состояние наполнял документный источник,
+    // его набор гасится здесь же — объект не попадёт в кадр дважды (REND-11).
+    // Гашение и `syncTick` идут до возврата буфера, как и раньше.
     buffer.apply(readTick(envelope.buffer, envelope.events, this.kindTable));
-    for (const subsystem of this.subsystems) subsystem.syncTick(buffer.view);
+    this.presentation.publish(this, buffer.view);
 
     this.requirePort().post({ t: 'ret', buffer: envelope.buffer }, [envelope.buffer]);
   }
