@@ -19,6 +19,63 @@ export function jumpArc(phase: number, height: number): number {
   return 4 * p * (1 - p) * height;
 }
 
+/** Концы манёвра в мировых координатах — вход опорных высот прыжка (REND-12). */
+export interface ManeuverEnds {
+  takeoffX: number;
+  takeoffY: number;
+  landingX: number;
+  landingY: number;
+}
+
+/**
+ * Концы манёвра, выведенные из данных тика (REND-12): движение в `Airborne`
+ * равномерно (LOC-3), поэтому по перемещению за тик `stepX/stepY` и шагу фазы
+ * за тик `phaseStep` восстанавливаются обе точки — назад на `phase / phaseStep`
+ * тиков и вперёд на `(1 − phase) / phaseStep`.
+ *
+ * Вырожденный вход — нефинитная фаза, неположительный шаг фазы (в том числе
+ * схлопнутая интерполяция после разрыва непрерывности, REND-2), нефинитное
+ * перемещение — схлопывает оба конца в текущую позицию: выводить траекторию
+ * не из чего, и инстанс остаётся на опорной высоте под собой.
+ *
+ * Пишет в `out` и возвращает его — на кадр не аллоцирует.
+ */
+export function maneuverEnds(
+  x: number,
+  y: number,
+  stepX: number,
+  stepY: number,
+  phase: number,
+  phaseStep: number,
+  out: ManeuverEnds,
+): ManeuverEnds {
+  out.takeoffX = x;
+  out.takeoffY = y;
+  out.landingX = x;
+  out.landingY = y;
+  if (!Number.isFinite(phase) || !Number.isFinite(stepX) || !Number.isFinite(stepY)) return out;
+  if (!Number.isFinite(phaseStep) || phaseStep <= 0) return out;
+  const p = phase < 0 ? 0 : phase > 1 ? 1 : phase;
+  const elapsed = p / phaseStep;
+  const remaining = (1 - p) / phaseStep;
+  out.takeoffX = x - stepX * elapsed;
+  out.takeoffY = y - stepY * elapsed;
+  out.landingX = x + stepX * remaining;
+  out.landingY = y + stepY * remaining;
+  return out;
+}
+
+/**
+ * Основание прыжка (REND-12): переход от опорной высоты отрыва к опорной
+ * высоте приземления по фазе манёвра. Дуга кладётся поверх него, так что
+ * траектория остаётся параболой — просто над наклонной.
+ */
+export function jumpBase(takeoffHeight: number, landingHeight: number, phase: number): number {
+  if (!Number.isFinite(phase)) return landingHeight;
+  const p = phase < 0 ? 0 : phase > 1 ? 1 : phase;
+  return takeoffHeight + (landingHeight - takeoffHeight) * p;
+}
+
 /**
  * Шаг снижения при провале: смещение уходит вниз со скоростью `speed` и
  * упирается в `−depth`, где и удерживается — что случится с провалившейся

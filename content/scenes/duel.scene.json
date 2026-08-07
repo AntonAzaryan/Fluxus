@@ -86,7 +86,7 @@
         },
         "LocomotionState": { "dirX": 0, "dirY": 0, "state": 0, "ticksLeft": 0 },
         "ArenaState": { "support": 0 },
-        "FallConfig": { "deathDepth": 262144, "speed": 6554 }
+        "FallConfig": { "deathDepth": 491520, "speed": 16384 }
       },
       "tags": ["Hero"]
     },
@@ -320,13 +320,6 @@
                             "removeComponent": {
                               "entity": { "var": "e" },
                               "component": "Locomotion"
-                            }
-                          },
-                          {
-                            "modifyComponent": {
-                              "entity": { "var": "e" },
-                              "component": "Velocity",
-                              "values": { "x": 0, "y": 0 }
                             }
                           }
                         ]

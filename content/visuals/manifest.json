@@ -43,8 +43,8 @@
       },
       "verticalOffset": {
         "jumpArc": 0.9,
-        "fallSpeed": 6,
-        "fallDepth": 4
+        "fallSpeed": 15,
+        "fallDepth": 7.5
       }
     }
   },

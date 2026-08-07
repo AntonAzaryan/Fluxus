@@ -31,7 +31,13 @@ import {
   type ModelInstance,
   type SharedModelData,
 } from '../model/build.js';
-import { advanceFall, jumpArc } from '../model/verticalOffset.js';
+import {
+  advanceFall,
+  jumpArc,
+  jumpBase,
+  maneuverEnds,
+  type ManeuverEnds,
+} from '../model/verticalOffset.js';
 import { AnimationController } from '../model/animation.js';
 import { BoneControlState } from '../model/boneControl.js';
 import { smoothYaw } from '../model/boneControl.js';
@@ -74,6 +80,7 @@ const SCRATCH_TILT: TiltVector = { x: 0, y: 0 };
 const SCRATCH_AXIS = new THREE.Vector3();
 const SCRATCH_Q_TILT = new THREE.Quaternion();
 const SCRATCH_Q_YAW = new THREE.Quaternion();
+const SCRATCH_ENDS: ManeuverEnds = { takeoffX: 0, takeoffY: 0, landingX: 0, landingY: 0 };
 
 /**
  * Закрытый словарь состояний анимации (REND-4). Какие состояния бывают —
@@ -100,6 +107,15 @@ const MOTION_STATE: Readonly<Record<number, string>> = {
 function animationStateOf(record: InstanceRecord): string {
   if (record.falling) return STATE_FALL;
   return MOTION_STATE[record.view.motion] ?? (record.view.moving ? STATE_MOVE : STATE_IDLE);
+}
+
+/**
+ * Прыжок в этом кадре (REND-12): манёвр `Airborne` с читаемой фазой. Ветка
+ * выбирается по манёвру, а не по флагу override уровня: override носят и
+ * снаряды, и проваливающиеся сущности (ARENA-6), и им ступенчатая база уместна.
+ */
+function isAirborne(view: EntityView): boolean {
+  return view.motion === LOCOMOTION_AIRBORNE && Number.isFinite(view.currMotionPhase);
 }
 
 interface SharedEntry {
@@ -240,10 +256,34 @@ export class ModelsSubsystem implements RenderSubsystem {
       const y = view.prevY + (view.currY - view.prevY) * t;
       // Сущность на поверхности стоит на визуальной поверхности (рампы и
       // кривизна, REND-9); с override уровня (TERR-4) — на высоте уровня.
-      const base =
-        surface !== null && !view.levelOverride
-          ? surface.heightAt(x, y)
-          : (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
+      // Летящая — на переходе между высотами отрыва и приземления (REND-12):
+      // дискретный уровень под ней в высоте прыжка не участвует, иначе
+      // пересечение границы обрыва сдвигало бы инстанс на ступень.
+      let base: number;
+      if (surface !== null && isAirborne(view)) {
+        // Фаза манёвра до первого его тика — ноль: на том тике манёвра ещё не
+        // было, и `prevMotionPhase` пришла как NaN.
+        const phasePrev = Number.isFinite(view.prevMotionPhase) ? view.prevMotionPhase : 0;
+        const phase = phasePrev + (view.currMotionPhase - phasePrev) * t;
+        maneuverEnds(
+          x,
+          y,
+          view.currX - view.prevX,
+          view.currY - view.prevY,
+          phase,
+          view.currMotionPhase - phasePrev,
+          SCRATCH_ENDS,
+        );
+        base = jumpBase(
+          surface.heightAt(SCRATCH_ENDS.takeoffX, SCRATCH_ENDS.takeoffY),
+          surface.heightAt(SCRATCH_ENDS.landingX, SCRATCH_ENDS.landingY),
+          phase,
+        );
+      } else if (surface !== null && !view.levelOverride) {
+        base = surface.heightAt(x, y);
+      } else {
+        base = (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
+      }
       // Вертикальное смещение — чистое представление (REND-12): дуга прыжка
       // смешивается по тем же двум тикам, что позиция, снижение идёт по кадрам.
       const arcPrev = jumpArc(view.prevMotionPhase, record.jumpArcHeight);
