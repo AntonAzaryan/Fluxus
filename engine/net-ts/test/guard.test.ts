@@ -23,6 +23,8 @@ describe('guard: чистые циклы сетевого слоя (CLI-8, NTR-3
         'transport', // сокеты и loopback — граница с внешним миром
         'server/host.ts', // таймер и часы сервера (NTR-3: всё, чего нет в чистом цикле)
         'client/host.ts', // собственный таймер клиента
+        'lobby/host.ts', // часы лобби: та же граница, что у хоста матча
+        'session/rendezvous', // сокеты, часы и источник токенов — граница с внешним миром
       ],
     });
     expect(formatViolations(violations)).toBe('');
