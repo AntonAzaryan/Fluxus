@@ -11,7 +11,6 @@
   "ui.chip.info": "Сведение",
   "ui.chip.selected": "Выбрано",
   "ui.chip.warning": "Предупреждение",
-  "ui.gallery.controls": "Контролы полей",
   "ui.gallery.frame": "Кадр вьюпорта",
   "ui.gallery.hints": "Подсказки",
   "ui.gallery.states": "Состояния и пометки",
@@ -27,6 +26,5 @@
   "ui.validation.derived": "Значение выводится ядром и здесь только показано",
   "ui.validation.missingPrefab": "Ссылка на несуществующий prefab",
   "ui.validation.outOfRange": "Вне диапазона схемы: 0…12",
-  "ui.viewport.label": "Кадр сцены",
-  "ui.viewport.mode.edit": "Правка"
+  "ui.viewport.label": "Кадр сцены"
 }

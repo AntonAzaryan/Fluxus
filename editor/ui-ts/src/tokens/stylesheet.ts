@@ -10,16 +10,20 @@
  * Граница вьюпорта тоже выражена здесь структурно. Вьюпорт есть кадр игры
  * (ED-1, ED-13), и хром не имеет права его окрашивать, поэтому:
  *
- * - все правила хрома написаны потомками `.fx-tokens` — вне этой области не
- *   действует ни одно из них;
+ * - все правила хрома написаны потомками `.fx-tokens`, и красят они по классу
+ *   хрома. Кадр лежит внутри этой области — он потомок корня приложения, — и
+ *   удерживает его не область, а то, что других классов он не несёт вовсе
+ *   (`viewportFrame` иных не ставит, `test/viewport.test.ts` это пиннит);
  * - `.fx-viewport` гасит каждый токен набора (`--x: initial` делает свойство
  *   гарантированно недействительным, и `var(--x)` перестаёт что-либо давать),
  *   а список гасимого берётся обходом `TOKENS` — новый токен попадает в сброс
- *   сам;
+ *   сам. Это и есть главный замок: наследование переменных из хрома-предка до
+ *   содержимого кадра не достаёт;
  * - служебные наложения внутри вьюпорта (подсветка выделения, gizmo) ED-22 не
  *   запрещает, поэтому у вьюпорта есть слой `.fx-viewport__overlay`, который
- *   заново вносит область токенов — но прозрачным фоном, чтобы кадр под ним
- *   остался кадром.
+ *   заново вносит область токенов — но прозрачным фоном и ниже кадра по дереву,
+ *   а наследование идёт сверху вниз, так что вернуть палитру на сам кадр этим
+ *   слоем нельзя.
  */
 import { EDITOR_ROOT_ID } from '../root.js';
 import { TOKENS, tokenValue } from './tokens.js';
@@ -117,8 +121,17 @@ const BASE_RULES: readonly CssRule[] = [
   },
   viewportRule,
   {
+    // Слой наложений накрывает кадр целиком, но не красит его и не перехватывает
+    // ввод: указатель должен доходить до кадра, а наложению, которому нужен
+    // клик (gizmo из `viewport-services`), его вернёт собственное правило.
     selector: `.${VIEWPORT_CLASS} > .${VIEWPORT_OVERLAY_CLASS}`,
-    declarations: ['position: absolute', 'inset: 0', 'background: none', 'pointer-events: none'],
+    declarations: [
+      'position: absolute',
+      'inset: 0',
+      'background: none',
+      'pointer-events: none',
+      'padding: var(--fx-space-2)',
+    ],
   },
 ];
 
@@ -183,10 +196,6 @@ const LAYOUT_RULES: readonly CssRule[] = [
     ],
   },
   { selector: `${S} .fx-frame-slot > .fx-viewport`, declarations: ['flex: 1'] },
-  {
-    selector: `.${VIEWPORT_CLASS} > .${VIEWPORT_OVERLAY_CLASS} > *`,
-    declarations: ['position: absolute', 'top: var(--fx-space-2)', 'left: var(--fx-space-2)'],
-  },
 ];
 
 const SURFACE_RULES: readonly CssRule[] = [
@@ -563,9 +572,21 @@ const FIELD_TABLE_RULES: readonly CssRule[] = [
     ],
   },
   {
-    selector: `${S} .fx-hint:hover, ${S} .fx-hint:focus-visible`,
+    // Наведение — не одно из пяти мест, за которыми ED-22 закрепил акцент,
+    // поэтому знак вопроса под курсором всего лишь становится заметнее.
+    selector: `${S} .fx-hint:hover`,
+    declarations: ['color: var(--fx-text-secondary)'],
+  },
+  {
+    // Фокус — одно из пяти. Рамка та же, что у кнопки: признак фокуса в
+    // интерфейсе один, иначе клавиатурный обход читается как разные элементы.
+    selector: `${S} .fx-hint:focus-visible`,
     role: 'interactive',
-    declarations: ['color: var(--fx-accent-bright)', 'outline: none'],
+    declarations: [
+      'color: var(--fx-accent-bright)',
+      'outline: var(--fx-hairline) solid var(--fx-accent)',
+      'outline-offset: 1px',
+    ],
   },
 ];
 

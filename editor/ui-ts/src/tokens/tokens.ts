@@ -133,10 +133,15 @@ const VALIDATIONS: readonly Token[] = [
 ];
 
 /**
- * Типографика: шесть кеглей, три начертания, один межстрочный интервал.
+ * Типографика: пять кеглей, три начертания, один межстрочный интервал.
  * Кегли взяты из референса и меньше материаловских по одной причине —
  * плотность таблицы полей. Гарнитура — системный стек, ни одного веб-шрифта:
  * ноль новых зависимостей.
+ *
+ * Ступени выше `title` в наборе нет: самый крупный текст хрома в референсе —
+ * заголовок верхнего бара кеглем 13. Заголовок крупнее понадобится просмотрщику
+ * ассетов, и заведёт его тот, кому он нужен, — токен без правила в таблице
+ * стилей проверить нечем.
  */
 const TYPE: readonly Token[] = [
   {
@@ -150,21 +155,23 @@ const TYPE: readonly Token[] = [
   { name: '--fx-font-size-body', value: '11.5px', group: 'type' },
   { name: '--fx-font-size-label', value: '12px', group: 'type' },
   { name: '--fx-font-size-title', value: '13px', group: 'type' },
-  { name: '--fx-font-size-heading', value: '16px', group: 'type' },
   { name: '--fx-font-weight-regular', value: '400', group: 'type' },
   { name: '--fx-font-weight-medium', value: '600', group: 'type' },
   { name: '--fx-font-weight-strong', value: '700', group: 'type' },
   { name: '--fx-line-height-dense', value: '16px', group: 'type' },
 ];
 
-/** Сетка отступов — шаг 4 px с одной половинной ступенью для плотных строк. */
+/**
+ * Сетка отступов — шаг 4 px с одной половинной ступенью для плотных строк.
+ * Ступени ровно те, что читает таблица стилей: ступень, которую не читает ни
+ * одно правило, никакая проверка не удержит от произвольного значения.
+ */
 const SPACE: readonly Token[] = [
   { name: '--fx-space-half', value: '2px', group: 'space' },
   { name: '--fx-space-1', value: '4px', group: 'space' },
   { name: '--fx-space-2', value: '8px', group: 'space' },
   { name: '--fx-space-3', value: '12px', group: 'space' },
   { name: '--fx-space-4', value: '16px', group: 'space' },
-  { name: '--fx-space-6', value: '24px', group: 'space' },
 ];
 
 /**

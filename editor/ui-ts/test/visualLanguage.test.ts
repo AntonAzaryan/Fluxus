@@ -15,10 +15,21 @@ import { TOKENS, tokensOf } from '../src/tokens/tokens.js';
 const body = (rule: CssRule): string => rule.declarations.join(';');
 const mentions = (rule: CssRule, prefix: string): boolean => body(rule).includes(prefix);
 
-/** Правила, объявляющие токены (область токенов и сброс кадра), из проверки ролей исключены. */
-const painting = STYLE_RULES.filter(
-  (rule) => !rule.declarations.some((decl) => decl.startsWith('--fx-')),
-);
+/**
+ * Селектор из нескольких через запятую — это несколько правил, записанных
+ * вместе. Проверять их как одну строку значит разрешить протащить шестое место
+ * акцента, приписав его к пятому: `.fx-a:hover, .fx-b:focus` содержит `:focus`,
+ * а красит и наведение тоже.
+ */
+const parts = (rule: CssRule): readonly string[] => rule.selector.split(',').map((s) => s.trim());
+
+/**
+ * Правила, объявляющие токены, из проверки ролей исключены — и исключены по
+ * имени, а не по признаку «есть объявление с `--fx-`»: иначе новое правило
+ * выходило бы из-под проверки, просто объявив в себе любой токен.
+ */
+const declaring = ['.fx-tokens', '.fx-viewport'];
+const painting = STYLE_RULES.filter((rule) => !declaring.includes(rule.selector));
 
 describe('ED-22: набор токенов', () => {
   it('имена токенов уникальны и все с префиксом --fx-', () => {
@@ -107,25 +118,31 @@ describe('ED-22: акцент закреплён за интерактивным
     const accented = painting.filter((rule) => mentions(rule, 'var(--fx-accent'));
     for (const place of places) {
       expect(
-        accented.some((rule) => rule.selector.includes(place)),
+        accented.some((rule) => parts(rule).some((part) => part.includes(place))),
         place,
       ).toBe(true);
     }
+    // Каждый селектор правила по отдельности: наведение, приписанное к фокусу
+    // одной запятой, здесь и ловится.
     for (const rule of accented) {
-      expect(
-        places.some((place) => rule.selector.includes(place)),
-        rule.selector,
-      ).toBe(true);
+      for (const part of parts(rule)) {
+        expect(
+          places.some((place) => part.includes(place)),
+          part,
+        ).toBe(true);
+      }
     }
   });
 });
 
 describe('ED-22: таблица стилей', () => {
   it('каждое правило хрома действует только внутри области токенов', () => {
-    const global = ['html, body', 'body', '#editor-root', '.fx-viewport'];
+    const global = ['html', 'body', '#editor-root', '.fx-viewport'];
     for (const rule of STYLE_RULES) {
-      if (global.some((selector) => rule.selector.startsWith(selector))) continue;
-      expect(rule.selector.startsWith('.fx-tokens'), rule.selector).toBe(true);
+      for (const part of parts(rule)) {
+        if (global.some((selector) => part.startsWith(selector))) continue;
+        expect(part.startsWith('.fx-tokens'), part).toBe(true);
+      }
     }
   });
 

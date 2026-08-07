@@ -75,11 +75,25 @@ describe('ED-27: литерал не может дойти до текстово
 
   it('текстовые атрибуты не проставляются мимо labels', () => {
     // Имена этих атрибутов знает один модуль — тот, что материализует узел.
-    // Появление их где-то ещё означает текст в обход `UiText`.
+    // Появление их где-то ещё означает текст в обход `UiText`. `style` в этом
+    // же списке не из-за текста: строка стиля — произвольный CSS в обход
+    // таблицы стилей, на которой держатся все структурные проверки ED-22.
+    const forbidden: Readonly<Record<string, string>> = {
+      'aria-label': 'src/dom/render.ts',
+      placeholder: 'src/dom/render.ts',
+      title: 'src/dom/render.ts',
+      alt: 'src/dom/render.ts',
+      // Имя `style` знают двое: тот, кто собирает атрибут из `vars`, и тот,
+      // кто создаёт сам элемент `<style>` с таблицей стилей.
+      style: 'src/tokens/stylesheet.ts',
+    };
     for (const file of sources()) {
-      if (file.path.endsWith('render.ts')) continue;
-      for (const attribute of ["'aria-label'", '"aria-label"', "'placeholder'", '"placeholder"']) {
-        expect(file.text.includes(attribute), `${file.path}: ${attribute}`).toBe(false);
+      if (file.path === 'src/dom/render.ts') continue;
+      for (const [name, owner] of Object.entries(forbidden)) {
+        if (file.path === owner) continue;
+        for (const attribute of [`'${name}'`, `"${name}"`]) {
+          expect(file.text.includes(attribute), `${file.path}: ${attribute}`).toBe(false);
+        }
       }
     }
   });
@@ -159,10 +173,25 @@ describe('ED-27: каждый видимый текст контрольного
   });
 
   it('ни один узел не несёт человеческого текста в машинных атрибутах', () => {
-    const human = ['title', 'aria-label', 'placeholder', 'alt'];
+    // `value` здесь же: содержимое поля ввода автор читает так же, как подпись,
+    // и учёт происхождения обязан его видеть. У `<option>` `value` — машинный
+    // идентификатор выбора, поэтому проверка смотрит на видимые теги.
+    const human = ['title', 'aria-label', 'placeholder', 'alt', 'style'];
     for (const node of walk(pageIn('ru'))) {
       for (const name of Object.keys(node.attrs ?? {})) {
-        expect(human.includes(name), `${node.tag}: атрибут ${name} мимо labels`).toBe(false);
+        if (name === 'value' && node.tag === 'option') continue;
+        expect(
+          [...human, 'value'].includes(name),
+          `${node.tag}: атрибут ${name} мимо labels`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it('пользовательские свойства — единственный стиль, который несёт узел', () => {
+    for (const node of walk(pageIn('ru'))) {
+      for (const name of Object.keys(node.vars ?? {})) {
+        expect(name.startsWith('--'), `${node.tag}: ${name}`).toBe(true);
       }
     }
   });

@@ -2,6 +2,10 @@
  * Материализация описания узла в DOM. Единственное место пакета, которое
  * создаёт элементы и пишет в них текст, — поэтому здесь же, и только здесь,
  * `UiText` превращается в строку, а текстовые атрибуты получают свои имена.
+ *
+ * Здесь же собирается атрибут `style`, и собирается он только из `vars`:
+ * пользовательские свойства — параметр правила таблицы стилей, произвольные
+ * объявления — обход самой таблицы (см. `node.ts`).
  */
 import type { UiNode, UiText } from './node.js';
 
@@ -27,9 +31,18 @@ function build(doc: Document, node: UiNode, inherited: 'svg' | undefined): Eleme
     element.setAttribute(name, value);
   }
 
+  const vars = Object.entries(node.vars ?? {});
+  if (vars.length > 0) {
+    for (const [name] of vars) {
+      if (!name.startsWith('--')) throw new Error(`editor-ui: ${name} — не свойство CSS`);
+    }
+    element.setAttribute('style', vars.map(([name, value]) => `${name}: ${value}`).join('; '));
+  }
+
   setLabel(element, 'title', node.labels?.title);
   setLabel(element, 'aria-label', node.labels?.ariaLabel);
   setLabel(element, 'placeholder', node.labels?.placeholder);
+  setLabel(element, 'value', node.labels?.value);
 
   if (node.text !== undefined) element.textContent = node.text.value;
   for (const child of node.children ?? []) element.append(build(doc, child, ns));

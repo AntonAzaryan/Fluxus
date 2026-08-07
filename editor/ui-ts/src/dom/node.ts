@@ -14,9 +14,15 @@
  *   он такое: разрешённый ресурс или значение открытого документа.
  *
  * Человеческий текст умеет прятаться в атрибутах (`title`, `aria-label`,
- * `placeholder`), поэтому такие атрибуты вынесены в отдельное поле `labels`
- * с тем же типом `UiText`, а `attrs` остаётся машинным: роли, идентификаторы,
- * типы контролов.
+ * `placeholder`, `value`), поэтому такие атрибуты вынесены в отдельное поле
+ * `labels` с тем же типом `UiText`, а `attrs` остаётся машинным: роли,
+ * идентификаторы, типы контролов.
+ *
+ * По той же причине узел не умеет нести атрибут `style`: строка стиля — это
+ * произвольный CSS в обход таблицы стилей, а на таблице держатся все три
+ * структурные проверки ED-22 (роль акцента, сброс палитры на границе кадра,
+ * высота строки из токена). Виджету достаётся `vars` — только пользовательские
+ * свойства, только для параметра раскладки вроде глубины узла дерева.
  */
 import type { TextSource } from '@game-mvp/editor-core';
 
@@ -54,6 +60,13 @@ export interface UiLabels {
   readonly title?: UiText;
   readonly ariaLabel?: UiText;
   readonly placeholder?: UiText;
+  /**
+   * Содержимое поля ввода. Видно автору так же, как подпись, и потому идёт
+   * сюда, а не в машинные атрибуты: иначе значение в инспекторе — единственный
+   * текст на странице, которого учёт ED-27 не видит. У `<option>` `value` —
+   * машинный идентификатор выбора, и остаётся в `attrs`.
+   */
+  readonly value?: UiText;
 }
 
 export type UiHandler = (event: Event) => void;
@@ -65,6 +78,8 @@ export interface UiNode {
   readonly classes?: readonly string[];
   /** Машинные атрибуты: `role`, `type`, `id`, `data-*`, `aria-*` без текста. */
   readonly attrs?: Readonly<Record<string, string>>;
+  /** Пользовательские свойства CSS (`--fx-depth`) — параметр правила, не стиль. */
+  readonly vars?: Readonly<Record<string, string>>;
   readonly labels?: UiLabels;
   readonly text?: UiText;
   readonly children?: readonly UiNode[];
@@ -104,7 +119,7 @@ export function collectTexts(node: UiNode): UiText[] {
     if (current.text !== undefined) texts.push(current.text);
     const labels = current.labels;
     if (labels === undefined) continue;
-    for (const label of [labels.title, labels.ariaLabel, labels.placeholder]) {
+    for (const label of [labels.title, labels.ariaLabel, labels.placeholder, labels.value]) {
       if (label !== undefined) texts.push(label);
     }
   }

@@ -11,7 +11,6 @@
   "ui.chip.info": "Note",
   "ui.chip.selected": "Selected",
   "ui.chip.warning": "Warning",
-  "ui.gallery.controls": "Field controls",
   "ui.gallery.frame": "Viewport frame",
   "ui.gallery.hints": "Hints",
   "ui.gallery.states": "States and marks",
@@ -27,6 +26,5 @@
   "ui.validation.derived": "The value is derived by the core and only shown here",
   "ui.validation.missingPrefab": "Reference to a prefab that does not exist",
   "ui.validation.outOfRange": "Outside the schema range: 0…12",
-  "ui.viewport.label": "Scene frame",
-  "ui.viewport.mode.edit": "Edit"
+  "ui.viewport.label": "Scene frame"
 }

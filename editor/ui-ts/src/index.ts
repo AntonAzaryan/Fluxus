@@ -63,16 +63,12 @@ export type { ListItem, ListSpec, TreeItem, TreeSpec } from './widgets/rows.js';
 export { tooltip } from './widgets/tooltip.js';
 export type { TooltipSpec } from './widgets/tooltip.js';
 /**
- * Наружу отдаётся `withValidation`, но не `validationMark`: состояние
- * валидации нельзя показать без иконки и причины (ED-22), и разъединить их
- * вызывающему нечем, потому что ставит их один вызов.
+ * Из состояний валидации наружу выходит один `withValidation`. Ни блок
+ * «иконка + причина», ни имена классов строгости публичными не делаются
+ * намеренно: имея их, состояние можно показать одним цветом, а ED-22 требует
+ * иконку, положение и причину — и ставит их все один вызов.
  */
-export {
-  INVALID_CLASS_PREFIX,
-  SEVERITY_ICONS,
-  VALIDATION_CLASS,
-  withValidation,
-} from './widgets/validation.js';
+export { withValidation } from './widgets/validation.js';
 export type { ValidationSeverity, ValidationState } from './widgets/validation.js';
 
 export { viewportFrame } from './viewport.js';

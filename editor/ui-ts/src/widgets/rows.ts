@@ -14,15 +14,17 @@
  */
 import { children, el, type UiNode, type UiText } from '../dom/node.js';
 import { icon, type IconName } from './icon.js';
-import { statusChip, type ChipTone } from './chip.js';
+import { statusChip } from './chip.js';
 import { withValidation, type ValidationState } from './validation.js';
 
 export interface TreeItem {
   readonly id: string;
   readonly label: UiText;
-  /** Пометка вида записи — данные документа, не состояние (ED-22). */
+  /**
+   * Пометка вида записи — данные документа, не состояние (ED-22). Тона у неё
+   * поэтому и нет: строгость приходит `validation`, вместе с причиной.
+   */
   readonly badge?: UiText;
-  readonly badgeTone?: ChipTone;
   readonly expanded?: boolean;
   readonly selected?: boolean;
   readonly validation?: ValidationState;
@@ -56,12 +58,10 @@ function treeRow(item: TreeItem, depth: number): UiNode {
   const selected = item.selected === true;
   const row = el('div', {
     classes: ['fx-row', ...(selected ? ['fx-is-selected'] : [])],
-    attrs: {
-      role: 'treeitem',
-      'aria-selected': String(selected),
-      'data-id': item.id,
-      style: `--fx-depth: ${String(depth)}`,
-    },
+    attrs: { role: 'treeitem', 'aria-selected': String(selected), 'data-id': item.id },
+    // Глубина — параметр правила отступа, а не стиль строки: само правило
+    // (`padding-left: calc(...)`) живёт в таблице стилей и там же меняется.
+    vars: { '--fx-depth': String(depth) },
     children: children(
       twisty(item),
       el('span', { classes: ['fx-row__label'], text: item.label }),
@@ -69,7 +69,7 @@ function treeRow(item: TreeItem, depth: number): UiNode {
         ? undefined
         : el('span', {
             classes: ['fx-row__trailing'],
-            children: [statusChip({ label: item.badge, tone: item.badgeTone ?? 'neutral' })],
+            children: [statusChip({ label: item.badge })],
           }),
     ),
     on:

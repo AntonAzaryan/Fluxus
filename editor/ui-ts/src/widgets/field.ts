@@ -35,12 +35,8 @@ function control(spec: FieldSpec, extraClasses: readonly string[]): UiNode {
     children: [
       el('input', {
         classes: ['fx-input', ...extraClasses],
-        attrs: {
-          type: 'text',
-          value: spec.value.value,
-          ...(spec.readOnly === true ? { readonly: '' } : {}),
-        },
-        labels: { ariaLabel: spec.label, placeholder: spec.placeholder },
+        attrs: { type: 'text', ...(spec.readOnly === true ? { readonly: '' } : {}) },
+        labels: { ariaLabel: spec.label, placeholder: spec.placeholder, value: spec.value },
         on:
           spec.onCommit === undefined || spec.readOnly === true
             ? undefined

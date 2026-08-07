@@ -54,7 +54,7 @@ describe('ED-22: плотность на контрольном случае', (
   });
 
   it('шкала отступов кратна четырём, кроме одной половинной ступени', () => {
-    const steps = ['--fx-space-1', '--fx-space-2', '--fx-space-3', '--fx-space-4', '--fx-space-6'];
+    const steps = ['--fx-space-1', '--fx-space-2', '--fx-space-3', '--fx-space-4'];
     for (const step of steps) expect(tokenPx(step) % 4, step).toBe(0);
     expect(tokenPx('--fx-space-half')).toBe(2);
   });

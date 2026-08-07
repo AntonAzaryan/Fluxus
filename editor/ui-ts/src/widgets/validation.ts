@@ -43,11 +43,11 @@ export const INVALID_CLASS_PREFIX = 'fx-invalid--';
 export const VALIDATION_CLASS = 'fx-validation';
 
 /**
- * Блок «иконка + причина». Не экспортируется наружу пакета намеренно: снаружи
- * доступна только `withValidation`, которая ставит его вместе с классом
- * строгости, и разъединить их вызывающему нечем.
+ * Блок «иконка + причина». Из модуля не выходит намеренно: доступна только
+ * `withValidation`, которая ставит его вместе с классом строгости, и
+ * разъединить их вызывающему нечем — ни снаружи пакета, ни изнутри.
  */
-export function validationMark(state: ValidationState): UiNode {
+function validationMark(state: ValidationState): UiNode {
   return el('div', {
     classes: [VALIDATION_CLASS, `${VALIDATION_CLASS}--${state.severity}`],
     attrs: { role: 'status', 'data-severity': state.severity },
@@ -70,6 +70,12 @@ export function validationMark(state: ValidationState): UiNode {
  */
 export function withValidation(node: UiNode, state: ValidationState | undefined): UiNode {
   if (state === undefined) return node;
+  // Тип требует причину, но пустую строку тип пропускает, а пустая причина —
+  // это ровно тот «различимый только оттенком» случай, который ED-22 и
+  // запрещает. Дешевле упасть здесь, чем показать красную рамку без объяснения.
+  if (state.reason.value.trim() === '') {
+    throw new Error(`editor-ui: состояние ${state.severity} без текста причины`);
+  }
   return {
     ...node,
     classes: [...(node.classes ?? []), `${INVALID_CLASS_PREFIX}${state.severity}`],

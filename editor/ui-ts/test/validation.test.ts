@@ -8,6 +8,8 @@
  * своей формы и непустой причиной. Инвариант держится тем, что признак и блок
  * ставит один вызов `withValidation`, и разъединить их вызывающему нечем.
  */
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   SAMPLE_DESCRIPTIONS,
@@ -16,6 +18,7 @@ import {
 } from '../src/gallery/controlCase.js';
 import { uiResources } from '../src/i18n/uiBundles.js';
 import { documentValue, el, findAll, hasClass, walk, type UiNode } from '../src/dom/node.js';
+import { statusChip } from '../src/widgets/chip.js';
 import { ICONS } from '../src/widgets/icon.js';
 import {
   INVALID_CLASS_PREFIX,
@@ -72,6 +75,46 @@ describe('ED-22: признак нарушения не существует б�
   it('без состояния узел не меняется вовсе', () => {
     const plain = el('div', { classes: ['fx-control'] });
     expect(withValidation(plain, undefined)).toBe(plain);
+  });
+
+  it('состояние с пустой причиной не показывается вовсе', () => {
+    // Тип требует причину, но пустую строку пропускает; пустая причина — это
+    // ровно «различимо только оттенком», чего ED-22 не допускает.
+    expect(() =>
+      withValidation(el('div'), { severity: 'error', reason: documentValue('  ') }),
+    ).toThrow('error');
+  });
+
+  it('имена классов строгости собирает один модуль пакета', () => {
+    // Второй модуль, собирающий `fx-invalid--` или `fx-validation--` сам,
+    // получил бы цвет строгости без иконки и причины. Таблица стилей эти имена
+    // читает — она красит по ним, — но не строит.
+    const dir = fileURLToPath(new URL('../src', import.meta.url));
+    const builders = readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((entry) => entry.endsWith('.ts'))
+      .filter((entry) => /`\$\{?(INVALID_CLASS_PREFIX|VALIDATION_CLASS)/.test(
+        readFileSync(`${dir}/${entry}`, 'utf8'),
+      ));
+    expect(builders).toEqual(['widgets/validation.ts']);
+  });
+});
+
+describe('ED-22: чип строгости различим не только оттенком', () => {
+  it.each(['error', 'warning', 'info'] as const)('тон %s приносит свою иконку', (tone) => {
+    const chip = statusChip({ label: documentValue('3'), tone });
+    const glyph = findAll(chip, (node) => node.attrs?.['data-icon'] !== undefined)[0];
+    expect(glyph?.attrs?.['data-icon']).toBe(SEVERITY_ICONS[tone]);
+  });
+
+  it('иконки трёх тонов различны — иначе оттенок снова единственный признак', () => {
+    const glyphs = (['error', 'warning', 'info'] as const).map(
+      (tone) =>
+        findAll(
+          statusChip({ label: documentValue('3'), tone }),
+          (node) => node.attrs?.['data-icon'] !== undefined,
+        )[0]?.attrs?.['data-icon'],
+    );
+    expect(new Set(glyphs).size).toBe(3);
   });
 });
 
