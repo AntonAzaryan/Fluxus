@@ -86,7 +86,7 @@
         },
         "LocomotionState": { "dirX": 0, "dirY": 0, "state": 0, "ticksLeft": 0 },
         "ArenaState": { "support": 0 },
-        "FallConfig": { "deathDepth": 491520, "speed": 16384 }
+        "FallConfig": { "deathDepth": 4915200, "speed": 16384 }
       },
       "tags": ["Hero"]
     },

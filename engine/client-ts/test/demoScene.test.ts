@@ -55,11 +55,11 @@ describe('демо-сцена: падение в дыру и смерть (ARENA
 
     expect(fellAt).not.toBeNull();
     expect(diedAt).not.toBeNull();
-    // Смерть — не в тике провала: снижение занимает `deathDepth / speed` = 30
+    // Смерть — не в тике провала: снижение занимает `deathDepth / speed` = 300
     // шагов, первый из которых делается на самом тике провала (`FallDeath`
     // идёт после `FallStart` в том же тике). Столько же длится снижение модели
-    // в рендере: 7.5 единиц на 15 единицах в секунду при 60 Гц (REND-12).
-    expect(diedAt! - fellAt!).toBe(29);
+    // в рендере: 75 единиц на 15 единицах в секунду при 60 Гц (REND-12).
+    expect(diedAt! - fellAt!).toBe(299);
 
     expect(coreWorld.hasComponent(state.world, playerId, 'Dead')).toBe(true);
     expect(coreWorld.hasComponent(state.world, playerId, 'Falling')).toBe(true);

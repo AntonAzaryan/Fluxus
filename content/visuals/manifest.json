@@ -44,7 +44,7 @@
       "verticalOffset": {
         "jumpArc": 0.9,
         "fallSpeed": 15,
-        "fallDepth": 7.5
+        "fallDepth": 75
       }
     }
   },
