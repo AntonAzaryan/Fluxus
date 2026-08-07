@@ -360,6 +360,39 @@ describe('продюсеры взаимоисключающи (REND-11)', () => 
     rig.frame(32);
     expect(frames.length).toBe(1);
   });
+
+  it('detach гасит набор, и ничью сцену не рисует никто', () => {
+    const rig = makeRig();
+    const frames: number[] = [];
+    rig.stage.register({
+      name: 'probe',
+      init: () => {},
+      syncTick: () => {},
+      updateFrame: () => frames.push(1),
+    });
+
+    rig.source.apply([placed('a')]);
+    rig.frame(16);
+    expect(frames.length).toBe(1);
+    expect(rig.ctx.scene.children.length).toBe(1);
+
+    // Продюсер ушёл, не передав состояние: инстансы убраны штатным правилом
+    // REND-3, сцена ничья.
+    rig.stage.detach(rig.source);
+    expect(rig.stage.activeProducer).toBeNull();
+    expect(rig.ctx.scene.children.length).toBe(0);
+
+    // Оставшийся цикл кадров ушедшего подсистем не трогает: иначе на ничьей
+    // сцене два продюсера гнали бы `updateFrame` по разу каждый.
+    rig.frame(32);
+    expect(frames.length).toBe(1);
+
+    // Возврат — обычный publish.
+    rig.source.apply([placed('a')]);
+    rig.frame(48);
+    expect(frames.length).toBe(2);
+    expect(rig.ctx.scene.children.length).toBe(1);
+  });
 });
 
 // ------------------------------------------------ превью ассета (ED-20)

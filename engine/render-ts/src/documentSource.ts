@@ -81,7 +81,7 @@ export class DocumentSource implements PresentationProducer {
   readonly name = 'document';
 
   /** Presentation-состояние набора; подсистемы получают его в `syncTick`. */
-  readonly view: TickView;
+  private readonly state: TickView;
 
   private readonly stage: PresentationStage;
   private readonly clock: () => number;
@@ -103,7 +103,7 @@ export class DocumentSource implements PresentationProducer {
   constructor(stage: PresentationStage, options: DocumentSourceOptions = {}) {
     this.stage = stage;
     this.clock = options.clock ?? (() => performance.now());
-    this.view = {
+    this.state = {
       tick: 0,
       mode: 'Running',
       isReplay: false,
@@ -117,6 +117,16 @@ export class DocumentSource implements PresentationProducer {
       floorBits: null,
       floorChangedCells: [],
     };
+  }
+
+  /**
+   * Presentation-состояние набора — только на чтение. Тип держит отсутствующее
+   * отсутствующим по построению (REND-11): `events`, `freshEvents`, `snapAll` и
+   * `floorBits` документному режиму присвоить неоткуда — не «пока никто не
+   * присвоил», а нечем, включая будущего потребителя.
+   */
+  get view(): Readonly<TickView> {
+    return this.state;
   }
 
   /** Сколько инстансов в текущем наборе. */
@@ -173,7 +183,7 @@ export class DocumentSource implements PresentationProducer {
       if (!seen.has(key)) this.drop(key);
     }
 
-    this.stage.publish(this, this.view);
+    this.stage.publish(this, this.state);
   }
 
   /** Пустой набор: все инстансы убираются штатным правилом REND-3. */
