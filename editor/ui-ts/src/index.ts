@@ -6,6 +6,74 @@
  * Правки документов этот пакет делает только операциями из
  * `@game-mvp/editor-core` (ED-29) — собственного пути записи у интерфейса нет.
  *
- * Пока пакет — скелет (W1-1 плана): экспортируется только то, что есть.
+ * Сегодня здесь визуальный язык: набор токенов, таблица стилей, слой описания
+ * узлов и базовые виджеты. Каркас областей приходит следующей задачей.
  */
 export { EDITOR_ROOT_ID, mountEditorRoot } from './root.js';
+
+export { TOKENS, tokenPx, tokenValue, tokensOf } from './tokens/tokens.js';
+export type { Token, TokenGroup } from './tokens/tokens.js';
+
+export {
+  APP_CLASS,
+  STYLESHEET_ELEMENT_ID,
+  STYLE_RULES,
+  TOKEN_SCOPE_CLASS,
+  VIEWPORT_CLASS,
+  VIEWPORT_OVERLAY_CLASS,
+  editorStylesheet,
+  installStylesheet,
+} from './tokens/stylesheet.js';
+export type { CssRule, RuleRole } from './tokens/stylesheet.js';
+
+export {
+  collectTexts,
+  children,
+  documentValue,
+  el,
+  findAll,
+  hasClass,
+  resourceText,
+  walk,
+} from './dom/node.js';
+export type {
+  UiHandler,
+  UiLabels,
+  UiNode,
+  UiNodeSpec,
+  UiText,
+  UiTextOrigin,
+} from './dom/node.js';
+export { renderInto, renderNode } from './dom/render.js';
+
+export { UI_BUNDLES, UI_KEY_PREFIX, uiResources } from './i18n/uiBundles.js';
+
+export { button } from './widgets/button.js';
+export type { ButtonSpec, ButtonVariant } from './widgets/button.js';
+export { statusChip } from './widgets/chip.js';
+export type { ChipSpec, ChipTone } from './widgets/chip.js';
+export { numberField, select, textField, toggle } from './widgets/field.js';
+export type { FieldSpec, SelectOption, SelectSpec, ToggleSpec } from './widgets/field.js';
+export { fieldRow, fieldTable, fieldTableHeight } from './widgets/fieldTable.js';
+export type { FieldGroupSpec, FieldRowSpec, FieldTableSpec } from './widgets/fieldTable.js';
+export { ICONS, icon } from './widgets/icon.js';
+export type { IconGeometry, IconName, IconSpec } from './widgets/icon.js';
+export { denseList, tree } from './widgets/rows.js';
+export type { ListItem, ListSpec, TreeItem, TreeSpec } from './widgets/rows.js';
+export { tooltip } from './widgets/tooltip.js';
+export type { TooltipSpec } from './widgets/tooltip.js';
+/**
+ * Наружу отдаётся `withValidation`, но не `validationMark`: состояние
+ * валидации нельзя показать без иконки и причины (ED-22), и разъединить их
+ * вызывающему нечем, потому что ставит их один вызов.
+ */
+export {
+  INVALID_CLASS_PREFIX,
+  SEVERITY_ICONS,
+  VALIDATION_CLASS,
+  withValidation,
+} from './widgets/validation.js';
+export type { ValidationSeverity, ValidationState } from './widgets/validation.js';
+
+export { viewportFrame } from './viewport.js';
+export type { ViewportSpec } from './viewport.js';
