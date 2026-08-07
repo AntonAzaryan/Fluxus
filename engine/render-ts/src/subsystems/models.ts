@@ -46,8 +46,6 @@ export interface ModelsOptions {
   readonly crossfade?: number;
   /** Скорость доворота корпуса инстанса к курсу движения, 1/с. */
   readonly turnRate?: number;
-  /** Поворот модели относительно atan2-курса; у MDX «перёд» вдоль +X → 0. */
-  readonly facingOffset?: number;
   /** Источник визуальной поверхности — высота и наклон по рельефу (REND-9, REND-10). */
   readonly surface?: VisualSurfaceSource;
   /** Скорость сглаживания наклона по поверхности, 1/с (REND-10). */
@@ -58,6 +56,13 @@ export interface ModelsOptions {
 
 const DEFAULT_TURN_RATE = 12;
 const DEFAULT_TILT_RATE = 10;
+/**
+ * Перёд модели, когда запись манифеста его не называет (REND-13): соглашение
+ * первого поддержанного формата — у MDX лицо вдоль `+X`, то есть 0. Так модели,
+ * добавленные до появления параметра, не меняют вид.
+ */
+const DEFAULT_FACING_RAD = 0;
+const DEG_TO_RAD = Math.PI / 180;
 const PLACEHOLDER_COLOR = 0xd040d0;
 /** Конвенция арены ядра (ARENA-5); имя переопределяется опцией. */
 const DEFAULT_FALL_EVENT = 'FellThroughFloor';
@@ -119,6 +124,14 @@ interface InstanceRecord {
   skin: string | undefined;
   yaw: number;
   snapPending: boolean;
+  /**
+   * Поправка разворота инстанса, радианы (REND-13): курс сущности плюс она даёт
+   * угол holder'а. Это ПРОТИВОПОЛОЖНОСТЬ переда модели из манифеста — чтобы
+   * лицо, смотрящее под углом `f`, оказалось направлено по курсу, инстанс надо
+   * довернуть на `−f`. Конверсия градусов и смена знака сделаны один раз здесь,
+   * при создании записи, а не в кадре.
+   */
+  readonly facingOffset: number;
   /** Параметры наклона записи (ASSET-6): factor 0 выключает наклон. */
   readonly tiltFactor: number;
   readonly tiltMaxRad: number | null;
@@ -217,7 +230,6 @@ export class ModelsSubsystem implements RenderSubsystem {
     const heightStep = this.requireCtx().config.heightStep;
     const turnRate = this.options.turnRate ?? DEFAULT_TURN_RATE;
     const tiltRate = this.options.tiltRate ?? DEFAULT_TILT_RATE;
-    const facingOffset = this.options.facingOffset ?? 0;
     const surface = this.options.surface?.current ?? null;
 
     for (const record of this.instances.values()) {
@@ -241,8 +253,9 @@ export class ModelsSubsystem implements RenderSubsystem {
       }
       record.holder.position.set(x, y, base + arcPrev + (arcCurr - arcPrev) * t + record.fallOffset);
 
-      // Курс: цель из данных тика, доворот сглажен по кадрам; при snap — мгновенно.
-      const targetYaw = view.facingYaw + facingOffset;
+      // Курс: цель из данных тика, доворот сглажен по кадрам; при snap —
+      // мгновенно. Поправка на перёд модели — своя у каждой записи (REND-13).
+      const targetYaw = view.facingYaw + record.facingOffset;
       record.yaw = record.snapPending ? targetYaw : smoothYaw(record.yaw, targetYaw, turnRate, dt);
 
       // Наклон по нормали поверхности (REND-10): только для сущностей на
@@ -269,7 +282,7 @@ export class ModelsSubsystem implements RenderSubsystem {
         record.boneControl.apply(
           record.model,
           view.aimYaw,
-          record.yaw - facingOffset,
+          record.yaw - record.facingOffset,
           dt,
           this.warn,
         );
@@ -329,6 +342,10 @@ export class ModelsSubsystem implements RenderSubsystem {
 
     const visual = view.kind === null ? undefined : this.manifest.entities[view.kind];
     const align = resolveSurfaceAlign(this.manifest, visual);
+    // Перёд модели (REND-13) описан в записи как направление её лица; поправка
+    // разворота — противоположный угол, см. `InstanceRecord.facingOffset`.
+    const facingOffset =
+      visual?.facingDeg === undefined ? DEFAULT_FACING_RAD : -visual.facingDeg * DEG_TO_RAD;
     const record: InstanceRecord = {
       entity: view.id,
       kind: view.kind,
@@ -341,7 +358,8 @@ export class ModelsSubsystem implements RenderSubsystem {
       boneControl: null,
       skinApp: null,
       skin: visual?.defaultSkin,
-      yaw: view.facingYaw,
+      facingOffset,
+      yaw: view.facingYaw + facingOffset,
       snapPending: true,
       tiltFactor: align.factor,
       tiltMaxRad: align.maxAngleDeg === undefined ? null : (align.maxAngleDeg * Math.PI) / 180,

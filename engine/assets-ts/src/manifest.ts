@@ -81,6 +81,21 @@ export interface EntityVisual {
   model: string;
   /** Мировая высота юнита; по умолчанию 1. */
   scale?: number;
+  /**
+   * Куда смотрит МОДЕЛЬ в канонических осях модуля — угол в градусах против
+   * часовой стрелки от `+X` (REND-13). Это описание самой модели, а не поправка
+   * к курсу: поправку рендер выводит сам.
+   *
+   * Перёд — свойство авторинга модели, а не системы координат: канонические оси
+   * (ASSET-5) фиксируют, где верх и какова единица длины, но не то, куда
+   * повёрнуто лицо, и вывести это из файла нельзя. Поэтому значение живёт в
+   * записи, а не одним числом на всех: модели разных форматов с разным передом
+   * сосуществуют в одной сцене.
+   *
+   * Примеры: у моделей MDX лицо вдоль `+X` — это `0` (и умолчание при
+   * отсутствии поля); у glTF-модели, чьё лицо смотрит вдоль `−Y`, это `-90`.
+   */
+  facingDeg?: number;
   defaultSkin?: string;
   /** Имя скина → (номер textureSlot как строка → asset id текстуры). */
   skins?: Record<string, Record<string, string>>;
@@ -180,6 +195,7 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
     [
       'model',
       'scale',
+      'facingDeg',
       'defaultSkin',
       'skins',
       'animations',
@@ -206,6 +222,14 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
 
   if ('scale' in entity && (!isFiniteNumber(entity.scale) || entity.scale <= 0)) {
     errors.push(`${path}.scale: ожидалось положительное число, получено ${typeName(entity.scale)}`);
+  }
+
+  // Диапазон не ограничиваем: угол заворачивается, и «-90» и «270» одинаково
+  // законны — требовать канонической записи значило бы придираться к автору.
+  if ('facingDeg' in entity && !isFiniteNumber(entity.facingDeg)) {
+    errors.push(
+      `${path}.facingDeg: ожидался угол переда модели в градусах (число), получено ${typeName(entity.facingDeg)}`,
+    );
   }
 
   const skins = entity.skins;

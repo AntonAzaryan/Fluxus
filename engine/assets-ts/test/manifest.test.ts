@@ -8,6 +8,7 @@ const validDoc = {
     skeleton: {
       model: 'models/SkeletonBarbarian.mdx',
       scale: 1.8,
+      facingDeg: -90,
       defaultSkin: 'bone',
       skins: {
         bone: { '0': 'textures/skeleton.png' },
@@ -72,6 +73,26 @@ describe('validateManifest (ASSET-6)', () => {
       /entities\.orc\.scale: .*положительное число/,
     );
     expectErrors({ entities: { orc: { model: 'm.mdx', scale: 0 } } }, /entities\.orc\.scale/);
+  });
+
+  it('facingDeg: опционален, любой конечный угол законен, нечисло — ошибка (REND-13)', () => {
+    // Поле опционально: запись без него описывает модель по соглашению MDX.
+    expect(validateManifest({ entities: { orc: { model: 'm.mdx' } } }).ok).toBe(true);
+    // Диапазон не ограничен: угол заворачивается, «-90» и «270» равнозначны.
+    for (const facingDeg of [0, -90, 270, 12.5]) {
+      expect(
+        validateManifest({ entities: { orc: { model: 'm.mdx', facingDeg } } }).ok,
+        `угол ${facingDeg} обязан быть законен`,
+      ).toBe(true);
+    }
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', facingDeg: '-90' } } },
+      /entities\.orc\.facingDeg: .*получено string/,
+    );
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', facingDeg: Number.NaN } } },
+      /entities\.orc\.facingDeg/,
+    );
   });
 
   it('skins: ключ слота не число, значение не строка — ошибки с путём до слота', () => {

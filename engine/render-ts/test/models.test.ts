@@ -207,3 +207,66 @@ describe('покадровое обновление (REND-2, REND-5)', () => {
     expect(euler.z).toBeGreaterThan(0.3);
   });
 });
+
+describe('перёд модели — данные записи манифеста (REND-13)', () => {
+  /**
+   * Манифест с двумя записями на одну модель: перёд у них разный, как у моделей
+   * разных форматов. Это и есть случай, ради которого перёд перестал быть одним
+   * числом на подсистему: значения, верного для обеих записей сразу, не бывает.
+   */
+  function makeFacingRig(): { subsystem: ModelsSubsystem; ctx: RenderContext } {
+    const assets = makeAssets();
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 0.5 },
+    };
+    const manifest: VisualManifest = {
+      entities: {
+        // Лицо вдоль +X — соглашение MDX, поправки не требует.
+        Mdxish: { model: MODEL_ID, facingDeg: 0 },
+        // Лицо вдоль −Y — так приезжает glTF-модель демо.
+        Gltfish: { model: MODEL_ID, facingDeg: -90 },
+        // Записи без поля разворачиваются по соглашению первого формата.
+        Legacy: { model: MODEL_ID },
+      },
+    };
+    const subsystem = new ModelsSubsystem(manifest, {});
+    subsystem.init(ctx);
+    return { subsystem, ctx };
+  }
+
+  it('две записи с разным передом развёрнуты каждая по-своему на одном курсе', () => {
+    const { subsystem } = makeFacingRig();
+    // Обе сущности держат ОДИН курс: расхождение разворота даёт только перёд.
+    const heading = Math.PI / 4;
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, { kind: 'Mdxish', facingYaw: heading }),
+        makeEntityView(2, { kind: 'Gltfish', facingYaw: heading }),
+        makeEntityView(3, { kind: 'Legacy', facingYaw: heading }),
+      ]),
+    );
+    subsystem.updateFrame(1 / 60, 1); // snapPending: доворот мгновенный
+
+    const yawOf = (id: number): number => subsystem.instanceFor(id)!.holder.rotation.z;
+    expect(yawOf(1)).toBeCloseTo(heading, 6);
+    // Лицо смотрит на −90°, значит инстанс доворачивается на +90°.
+    expect(yawOf(2)).toBeCloseTo(heading + Math.PI / 2, 6);
+    // Запись без поля ведёт себя как запись с передом вдоль +X.
+    expect(yawOf(3)).toBeCloseTo(yawOf(1), 6);
+  });
+
+  it('перёд одной записи не влияет на инстансы другой', () => {
+    const { subsystem } = makeFacingRig();
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, { kind: 'Mdxish', facingYaw: 0 }),
+        makeEntityView(2, { kind: 'Gltfish', facingYaw: 0 }),
+      ]),
+    );
+    subsystem.updateFrame(1 / 60, 1);
+    expect(subsystem.instanceFor(1)!.holder.rotation.z).toBeCloseTo(0, 6);
+    expect(subsystem.instanceFor(2)!.holder.rotation.z).toBeCloseTo(Math.PI / 2, 6);
+  });
+});
