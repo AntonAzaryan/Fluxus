@@ -85,6 +85,9 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
     math: mathApi,
     terrain,
     modifiers: scene.modifiers,
+    // Арена сцены — вход `ArenaSystem` (ARENA-1): без неё система молчит, и
+    // провал в клетку без пола не порождает `FellThroughFloor` (ARENA-5).
+    ...(scene.arena !== undefined ? { arena: scene.arena } : {}),
   };
 
   return { sim, state, playerId, terrain, grid };
