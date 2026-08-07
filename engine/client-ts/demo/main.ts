@@ -395,7 +395,7 @@ async function main(): Promise<void> {
       // вдоль −Y, то есть на четверть оборота правее курса. Опция глобальна на
       // подсистему, поэтому она верна ровно пока в сцене один формат моделей;
       // как только форматов станет два, «перёд» обязан переехать в данные
-      // ассета или манифеста — см. change `model-orientation-and-clips`.
+      // манифеста — см. change `multi-format-models` (ASSET-6, REND-13).
       models = new ModelsSubsystem(manifest, { surface, facingOffset: Math.PI / 2 });
       remote!.register(models);
 
