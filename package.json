@@ -9,7 +9,9 @@
     "engine/render-ts",
     "engine/assets-ts",
     "engine/client-ts",
-    "engine/integration-ts"
+    "engine/integration-ts",
+    "editor/core-ts",
+    "editor/ui-ts"
   ],
   "scripts": {
     "test": "npm run test --workspaces",

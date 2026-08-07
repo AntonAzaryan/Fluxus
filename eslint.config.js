@@ -74,11 +74,16 @@ export default defineConfig([
 
   // Браузерные пакеты: воркер, DOM, THREE. Node-глобалей у них нет.
   {
-    files: ['engine/client-ts/**/*.ts', 'engine/render-ts/**/*.ts'],
+    files: ['engine/client-ts/**/*.ts', 'engine/render-ts/**/*.ts', 'editor/ui-ts/**/*.ts'],
     languageOptions: { globals: { ...globals.browser, ...globals.worker } },
   },
   {
-    files: ['engine/core-ts/**/*.ts', 'engine/net-ts/**/*.ts', 'engine/assets-ts/**/*.ts'],
+    files: [
+      'engine/core-ts/**/*.ts',
+      'engine/net-ts/**/*.ts',
+      'engine/assets-ts/**/*.ts',
+      'editor/core-ts/**/*.ts',
+    ],
     languageOptions: { globals: globals.node },
   },
   {
