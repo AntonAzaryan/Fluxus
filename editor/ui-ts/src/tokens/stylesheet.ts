@@ -224,16 +224,34 @@ const SURFACE_RULES: readonly CssRule[] = [
     ],
   },
   {
+    // Хром достижим на любой ширине окна (ED-22): не поместившийся элемент
+    // переносится, а не уходит за границу зоны. Отсюда `flex-wrap` и
+    // `min-height` вместо фиксированной высоты — строка бара в высоту не
+    // изменилась, но вторая строка ей больше не запрещена.
     selector: `${S} .fx-bar`,
     declarations: [
       'background: var(--fx-surface-2)',
       'border-bottom: var(--fx-hairline) solid var(--fx-border)',
-      'height: calc(var(--fx-control-height-action) + var(--fx-space-4))',
+      'min-height: calc(var(--fx-control-height-action) + var(--fx-space-4))',
+      'display: flex',
+      'align-items: center',
+      'flex-wrap: wrap',
+      'gap: var(--fx-space-2)',
+      'padding: var(--fx-space-1) var(--fx-space-3)',
+      'flex: none',
+    ],
+  },
+  {
+    // Группа бара: перенос рвёт бар между группами, а не посреди пары
+    // «уровень кисти / размер кисти». Своей поверхности у группы нет — она
+    // только не даёт своим элементам разъехаться по строкам.
+    selector: `${S} .fx-bar__group`,
+    declarations: [
       'display: flex',
       'align-items: center',
       'gap: var(--fx-space-2)',
-      'padding: 0 var(--fx-space-3)',
       'flex: none',
+      'min-width: 0',
     ],
   },
 ];
@@ -282,6 +300,23 @@ const BUTTON_RULES: readonly CssRule[] = [
   {
     selector: `${S} .fx-button--ghost`,
     declarations: ['color: var(--fx-text-muted)', 'padding: 0 var(--fx-space-2)'],
+  },
+  {
+    // Кнопка-знак (ED-31): квадрат по высоте контрола — подписи в ней нет, и
+    // горизонтальные поля кнопки с подписью растянули бы её в прямоугольник.
+    selector: `${S} .fx-button--icon`,
+    declarations: ['width: var(--fx-control-height-action)', 'padding: 0', 'flex: none'],
+  },
+  {
+    // Нажатое состояние переключателя — тот же «включённый переключатель», за
+    // которым ED-22 закрепил акцент, а не второй акцент: у `fx-toggle` он же.
+    selector: `${S} .fx-button[aria-pressed='true']`,
+    role: 'interactive',
+    declarations: [
+      'background: var(--fx-accent-wash)',
+      'border-color: var(--fx-accent)',
+      'color: var(--fx-accent-bright)',
+    ],
   },
   {
     // Primary-действие — одно из пяти мест, за которыми ED-22 закрепил акцент.

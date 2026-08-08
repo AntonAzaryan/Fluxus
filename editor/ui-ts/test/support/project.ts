@@ -105,6 +105,8 @@ export interface FakeStage extends SceneStage {
   /** Была ли подача переподачей (`submit(draft, true)`) — по индексу подачи. */
   readonly reapplied: readonly boolean[];
   readonly zooms: readonly number[];
+  /** Сколько раз область просила обзорный кадр (ED-15, CAM-8). */
+  readonly framings: readonly boolean[];
   readonly last: StageDraft | undefined;
   /** Кадры чужих продюсеров, подключённые к циклу вьюпорта (REND-11). */
   readonly producers: readonly ((now: number) => void)[];
@@ -193,6 +195,8 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
   const producers: ((now: number) => void)[] = [];
   const hits = new Map<string, ScenePick>();
   const surfaceHits = new Map<string, ScenePick>();
+  const framings: boolean[] = [];
+  const canFrame = true;
   let flying = false;
   let failure: string | null = null;
   const at = (x: number, y: number): string => `${x}:${y}`;
@@ -218,6 +222,12 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
     },
     zoom: (steps) => {
       zooms.push(steps);
+    },
+    get canFrame(): boolean {
+      return canFrame;
+    },
+    frameArena: () => {
+      framings.push(true);
     },
     get instanceCount(): number {
       return submitted.at(-1)?.placements.length ?? 0;
@@ -253,6 +263,7 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
     reapplied,
     visuals,
     zooms,
+    framings,
     overlaySets,
     hits,
     surfaceHits,

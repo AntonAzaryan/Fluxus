@@ -178,10 +178,16 @@ export function withAttr(root: UiNode, name: string): UiNode[] {
   return findAll(root, (node) => attr(node, name) !== undefined);
 }
 
-/** Кнопка, чья подпись пришла из ресурса с этим ключом. */
+/**
+ * Кнопка, чьё имя пришло из ресурса с этим ключом. Имя — либо видимая подпись,
+ * либо доступное имя кнопки-знака (ED-31): у элемента бара подписи не видно, а
+ * имя у него обязано быть, и находится он по нему же.
+ */
 export function buttonByKey(root: UiNode, key: string): UiNode | undefined {
   return findAll(root, (node) => node.tag === 'button').find((node) =>
-    [...walk(node)].some((inner) => inner.text?.key === key),
+    [...walk(node)].some(
+      (inner) => inner.text?.key === key || inner.labels?.ariaLabel?.key === key,
+    ),
   );
 }
 

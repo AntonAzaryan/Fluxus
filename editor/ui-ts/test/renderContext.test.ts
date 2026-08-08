@@ -38,6 +38,7 @@ describe('ASSET-2: модуль ассетов один на редактор', 
     const scene = sceneStageOptions(assets, MANIFEST, {
       announce: () => undefined,
       pointer: () => undefined,
+      keys: () => new Set<string>(),
     });
     const preview = assetStageOptions(assets, { announce: () => undefined });
     // Один и тот же объект, а не два равных: кэш ассета ключуется его ID
@@ -52,6 +53,7 @@ describe('ASSET-2: модуль ассетов один на редактор', 
     const scene = sceneStageOptions(assets, MANIFEST, {
       announce: () => undefined,
       pointer: () => undefined,
+      keys: () => new Set<string>(),
     });
     const preview = assetStageOptions(assets, { announce: () => undefined });
     expect(scene.hostId).toBe(SCENE_VIEWPORT_ID);

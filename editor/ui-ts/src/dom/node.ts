@@ -39,6 +39,12 @@ export interface UiText {
   readonly value: string;
   /** Ключ ресурса — только у `origin: 'resource'`; по нему тест и проверяет локали. */
   readonly key?: string;
+  /**
+   * Машинный хвост, приписанный к разрешённому ресурсу, — сочетание клавиш
+   * (`hotkeyText`). Объявлен полем, а не спрятан в значении, чтобы учёт ED-27
+   * по-прежнему сверял ресурсную половину с бандлом посимвольно.
+   */
+  readonly suffix?: string;
 }
 
 /** Единственный способ показать строку интерфейса (ED-27). */
@@ -68,6 +74,18 @@ export function documentValue(value: string): UiText {
  */
 export function issueText(source: TextSource, issue: ValidationIssue): UiText {
   return { origin: 'resource', value: formatIssue(issue, source), key: issue.reasonKey };
+}
+
+/**
+ * Подсказка элемента с горячей клавишей (ED-31): имя из ресурса плюс само
+ * сочетание. Сочетание ресурсом не является и не переводится — по той же
+ * причине, по которой им не является `F2` у знака области в рельсе, — поэтому
+ * оно приходит машинной строкой из раскладки (ED-32) и остаётся видимым в
+ * `suffix`: учёт ED-27 продолжает проверять ровно ресурсную половину текста.
+ */
+export function hotkeyText(source: TextSource, key: string, stroke: string): UiText {
+  const suffix = ` (${stroke})`;
+  return { origin: 'resource', value: `${source.text(key)}${suffix}`, key, suffix };
 }
 
 /** Атрибуты, несущие человеческий текст, — только через `UiText`. */

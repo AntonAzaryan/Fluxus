@@ -416,7 +416,7 @@ describe('ED-26: недоступное показано недоступным'
     }
     // Настройки указателя гаснут, когда указатель не в руках.
     press(buttonByKey(view(fixture), 'ui.area.scene.toolTerrain'));
-    expect(buttonByKey(view(fixture), 'ui.area.scene.toolSelect')?.attrs?.['aria-disabled']).toBe(
+    expect(buttonByKey(view(fixture), 'ui.area.scene.toolPlace')?.attrs?.['aria-disabled']).toBe(
       'true',
     );
   });

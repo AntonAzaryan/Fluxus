@@ -204,14 +204,17 @@ describe('ED-13, ED-15: режимы камеры доступны с повер
     // осталась бы с прежней подписью до случайной чужой перерисовки.
     let redraws = 0;
     const stop = frame.subscribe(() => redraws++);
-    press(buttonByKey(frame.view(), 'ui.area.scene.cameraFree'));
+    press(buttonByKey(frame.view(), 'ui.area.scene.cameraFly'));
     expect(redraws).toBeGreaterThan(0);
     stop();
     expect(stage.flying).toBe(true);
-    // Подпись показывает текущий режим — автор видит его постоянно (ED-26).
-    // Показывает её вьюпорт, объявив о смене: спросить конвейер сразу после
-    // нажатия нельзя, режим применяет его ближайший кадр (CAM-2).
-    expect(buttonByKey(frame.view(), 'ui.area.scene.cameraFly')).toBeDefined();
+    // Имя переключателя от нажатия не меняется, а включённость несёт признак
+    // нажатого состояния (ED-31). Объявляет её вьюпорт сменой режима: спросить
+    // конвейер сразу после нажатия нельзя — режим применяет его ближайший
+    // кадр (CAM-2).
+    const fly = buttonByKey(frame.view(), 'ui.area.scene.cameraFly');
+    expect(fly).toBeDefined();
+    expect(attr(fly ?? { tag: 'div' }, 'aria-pressed')).toBe('true');
   });
 
   it('зум идёт тем же входом, что колесо мыши (CAM-4)', async () => {
@@ -293,7 +296,7 @@ describe('ED-12: без открытого проекта область не п
 
   it('кнопки камеры видимо недоступны, а не молча не срабатывают (ED-26)', () => {
     const { frame } = buildFrame([sceneArea]);
-    const fly = buttonByKey(frame.view(), 'ui.area.scene.cameraFree');
+    const fly = buttonByKey(frame.view(), 'ui.area.scene.cameraFly');
     expect(attr(fly ?? { tag: 'div' }, 'aria-disabled')).toBe('true');
   });
 });

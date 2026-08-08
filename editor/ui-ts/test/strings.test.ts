@@ -172,8 +172,11 @@ describe('ED-27: каждый видимый текст контрольного
       // Либо ресурс разрешился, либо показан сам ключ — пустой подсказки
       // ED-28 не допускает, а прозы мимо ресурсов не остаётся.
       const resolved = resources.lookup(key);
-      if (resolved === undefined) expect(text.value).toBe(key);
-      else expect(text.value).toBe(resolved.text);
+      // Машинный хвост подсказки (сочетание клавиш, ED-31) в ресурс не входит
+      // и не переводится: сверяется ровно ресурсная половина текста.
+      const suffix = text.suffix ?? '';
+      if (resolved === undefined) expect(text.value).toBe(`${key}${suffix}`);
+      else expect(text.value).toBe(`${resolved.text}${suffix}`);
     }
   });
 
@@ -301,9 +304,10 @@ describe('ED-27: каждый видимый текст каркаса имее�
         }
         const key = text.key ?? '';
         const resolved = resources.lookup(key);
+        const suffix = text.suffix ?? '';
         if (!hint) {
           expect(resolved, `ключ интерфейса не разрешился: ${key}`).toBeDefined();
-          expect(text.value).toBe(resolved?.text);
+          expect(text.value).toBe(`${resolved?.text ?? ''}${suffix}`);
           continue;
         }
         // Подсказка к полю (ED-28): ключ вычислен из пути поля в схеме, а
@@ -311,7 +315,7 @@ describe('ED-27: каждый видимый текст каркаса имее�
         // тогда показывается сам ключ. Требовать от него разрешения значило бы
         // запрещать редактору показывать недокументированное поле, а ED-28
         // требует обратного: отсутствие ресурса должно быть видно.
-        expect(text.value).toBe(resolved === undefined ? key : resolved.text);
+        expect(text.value).toBe(`${resolved === undefined ? key : resolved.text}${suffix}`);
       }
     }
   });
