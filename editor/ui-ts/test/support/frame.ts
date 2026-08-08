@@ -28,6 +28,7 @@ import { createSceneArea, sceneArea, type SceneAreaState } from '../../src/areas
 import { sceneValidationRules } from '../../src/areas/sceneProject.js';
 import type { StagePointer } from '../../src/areas/sceneInteraction.js';
 import { registerPlacementOperations } from '../../src/areas/scenePlacement.js';
+import { registerDecorationOperations } from '../../src/areas/sceneDecorations.js';
 import { registerTerrainOperations } from '../../src/areas/sceneTerrain.js';
 import { registerVisualsOperations } from '../../src/areas/assetVisuals.js';
 import { systemsArea } from '../../src/areas/systems.js';
@@ -68,7 +69,9 @@ export function buildFrame(
   const session = createEditorSession({
     operations: registerVisualsOperations(
       registerTerrainOperations(
-        registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+        registerDecorationOperations(
+          registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+        ),
       ),
     ),
   });

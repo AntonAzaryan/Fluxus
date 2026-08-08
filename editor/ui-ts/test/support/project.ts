@@ -41,6 +41,20 @@ export const FIXTURE_IDS: SceneProjectIds = {
 
 export const FIXTURE_CURVATURE_ID = 'visuals/fixture.curvature.json';
 
+/**
+ * Парный presentation-документ фикстуры (PRES-1). Имя не выбрано, а выведено
+ * правилом: базовое имя сцены плюс суффикс — ссылок между документами пары нет.
+ */
+export const FIXTURE_PRESENTATION_ID = 'scenes/fixture.presentation.json';
+
+/** Слой декораций фикстуры: две записи — по ним видно и порядок, и адресацию. */
+export const FIXTURE_PRESENTATION = {
+  decorations: [
+    { visual: 'Statue', x: 1.5, y: 1.5 },
+    { visual: 'Hero', x: 2.5, y: 0.5, yaw: 0.25, scale: 1.5 },
+  ],
+};
+
 /** Арена 4×4 с плато уровня 1 в правом нижнем углу и клеткой без пола. */
 export const FIXTURE_SCENE = {
   components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed', turns: 'fixed' } }],
@@ -62,6 +76,11 @@ export const FIXTURE_SCENE = {
 export const FIXTURE_VISUALS = {
   entities: {
     Hero: { model: 'visuals/models/hero.mdx', scale: 1.6 },
+  },
+  // Раздел decoration-видов (ASSET-9): за `Statue` prefab'а нет и не будет, а
+  // `Hero` доступен обоим слоям — пространство ключей одно.
+  decorations: {
+    Statue: { model: 'visuals/models/statue.mdx', scale: 2 },
   },
   terrain: { curvatureMap: FIXTURE_CURVATURE_ID },
 };
@@ -86,6 +105,27 @@ export function fixtureHost(scene: unknown = FIXTURE_SCENE): MemoryHost {
       [FIXTURE_IDS.config]: JSON.stringify(scene),
       [FIXTURE_IDS.visuals]: JSON.stringify(FIXTURE_VISUALS),
       [FIXTURE_CURVATURE_ID]: JSON.stringify(FIXTURE_CURVATURE),
+    },
+  });
+}
+
+/**
+ * То же дерево плюс парный presentation-документ (PRES-1). Отдельной функцией,
+ * а не флагом умолчания: «сцена без декораций» — законное состояние, и оно
+ * обязано оставаться тем, что проверяют остальные тесты.
+ */
+export function fixtureHostWithLayer(
+  scene: unknown = FIXTURE_SCENE,
+  layer: unknown = FIXTURE_PRESENTATION,
+): MemoryHost {
+  return createMemoryHost({
+    name: 'fixture',
+    root: { label: 'fixture' },
+    files: {
+      [FIXTURE_IDS.config]: JSON.stringify(scene),
+      [FIXTURE_IDS.visuals]: JSON.stringify(FIXTURE_VISUALS),
+      [FIXTURE_CURVATURE_ID]: JSON.stringify(FIXTURE_CURVATURE),
+      [FIXTURE_PRESENTATION_ID]: JSON.stringify(layer),
     },
   });
 }
