@@ -18,6 +18,7 @@
   "ui.area.assets.effectEvents": "Событие тика → импульсный эффект",
   "ui.area.assets.effectName": "Имя привязки",
   "ui.area.assets.effectNew": "Новая привязка эффекта",
+  "ui.area.assets.effectRemove": "Снять привязку",
   "ui.area.assets.effectSelected": "выбрана",
   "ui.area.assets.effectStates": "Состояние сущности → длящийся эффект",
   "ui.area.assets.effectSuggested": "Имена событий открытых сцен",

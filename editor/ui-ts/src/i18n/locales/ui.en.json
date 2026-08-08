@@ -18,6 +18,7 @@
   "ui.area.assets.effectEvents": "Tick event → impulse effect",
   "ui.area.assets.effectName": "Binding name",
   "ui.area.assets.effectNew": "New effect binding",
+  "ui.area.assets.effectRemove": "Remove binding",
   "ui.area.assets.effectSelected": "selected",
   "ui.area.assets.effectStates": "Entity state → lasting effect",
   "ui.area.assets.effectSuggested": "Event names from open scenes",

@@ -61,6 +61,7 @@ import {
   type DocumentKind,
   type EditorSession,
   type EnvironmentHost,
+  type OperationParams,
 } from '@game-mvp/editor-core';
 import type { CameraEffectsDescription, EntityVisual } from '@game-mvp/assets';
 import { CAMERA_EFFECTS_DESCRIPTION } from '@game-mvp/render';
@@ -118,9 +119,11 @@ import {
   CAMERA_EFFECTS_OPERATIONS,
   EFFECT_KEY,
   EVENTS_TABLE,
+  REMOVE_BINDING_OPERATION,
   STATES_TABLE,
   bindingNames,
   bindingOf,
+  bindingPath,
   emittedEventTypes,
   paramsForBinding,
   typesForTable,
@@ -778,8 +781,39 @@ function effectRows(context: AreaContext<AssetAreaState>, table: string): readon
     };
   });
 
-  if (selected !== '') rows.push(...effectParamRows(context, table, selected));
+  if (selected !== '') {
+    rows.push(...effectParamRows(context, table, selected));
+    rows.push(removeBindingRow(context, table, selected));
+  }
   return rows;
+}
+
+/**
+ * Снятие выбранной привязки (ED-14). Своей операции у него нет и не нужно —
+ * это ровно `document.removeValue` (`assetCameraEffects.ts`), — но дотянуться
+ * до него из таблицы автор обязан: иначе ошибочную привязку пришлось бы стирать
+ * руками в JSON, а ED-14 требует, чтобы ручная правка манифеста не была
+ * обязательной. Пустой пункт списка типов — не действие, а показ «типа нет»,
+ * и удалением он быть не может.
+ */
+function removeBindingRow(
+  context: AreaContext<AssetAreaState>,
+  table: string,
+  name: string,
+): FieldRowSpec {
+  const { state, resources } = context;
+  return {
+    label: resourceText(resources, 'ui.area.assets.effectRemove'),
+    control: button({
+      label: resourceText(resources, 'ui.area.assets.effectRemove'),
+      variant: 'ghost',
+      disabled: context.mode === 'preview',
+      onPress: () => {
+        effectOperation(context, REMOVE_BINDING_OPERATION, { path: bindingPath(table, name) });
+        state.effectBinding = '';
+      },
+    }),
+  };
 }
 
 /** Поля выбранной привязки: параметры типа плюс параметры привязки его вида. */
@@ -941,7 +975,7 @@ function eventSuggestions(context: AreaContext<AssetAreaState>): readonly string
 function effectOperation(
   context: AreaContext<AssetAreaState>,
   operationId: string,
-  params: Readonly<Record<string, string | number>>,
+  params: OperationParams,
 ): void {
   const { state, session } = context;
   const id = state.visualsId;

@@ -28,7 +28,10 @@
  *
  * Удаление записи своей операции не получает — `document.removeValue` делает
  * ровно это. Доменная операция ради переименования уже имеющегося действия
- * отвергнута по тем же основаниям, по каким её нет у соседа.
+ * отвергнута по тем же основаниям, по каким её нет у соседа. Дотянуться до неё
+ * из таблицы автор при этом обязан (`REMOVE_BINDING_OPERATION`, кнопка строки в
+ * `assets.ts`): «удаление есть в слое операций» и «удаление недостижимо из
+ * интерфейса» вместе означали бы правку JSON руками, чего ED-14 не допускает.
  */
 import {
   OperationError,
@@ -44,7 +47,9 @@ import {
   type OperationRegistry,
 } from '@game-mvp/editor-core';
 import {
+  cameraEffectParamInRange,
   cameraEffectParams,
+  cameraEffectRangeText,
   cameraEffectType,
   validateManifest,
   type CameraEffectKind,
@@ -59,6 +64,13 @@ export const CAMERA_EFFECTS_OPERATIONS = {
   bind: 'visuals.cameraEffects.bind',
   setParam: 'visuals.cameraEffects.setParam',
 } as const;
+
+/**
+ * Чем снимается привязка: общей операцией снятия значения. Своей у секции нет
+ * (см. шапку), но названа она здесь — таблице секции нужно чем-то удалять, а
+ * литерал идентификатора в интерфейсе был бы вторым знанием о том же решении.
+ */
+export const REMOVE_BINDING_OPERATION = 'document.removeValue';
 
 /** Где в манифесте лежит секция и её таблицы (ASSET-8) — доменное знание вклада. */
 export const SECTION_KEY = 'cameraEffects';
@@ -313,10 +325,12 @@ export function setCameraEffectParamOperation(
           received: value,
         });
       }
-      if ((spec.min !== undefined && value < spec.min) || (spec.max !== undefined && value > spec.max)) {
+      // Сравнение и его запись — те же, что у валидации секции (ASSET-8): второй
+      // ответ на вопрос «это в диапазоне?» разошёлся бы с первым молча.
+      if (!cameraEffectParamInRange(spec, value)) {
         throw new OperationError(
           id,
-          `параметр "value": ${value} вне диапазона [${spec.min ?? '-∞'}..${spec.max ?? '+∞'}], объявленного типом "${type.id}"`,
+          `параметр "value": ${value} вне диапазона ${cameraEffectRangeText(spec)}, объявленного типом "${type.id}"`,
           { param: 'value', received: value },
         );
       }

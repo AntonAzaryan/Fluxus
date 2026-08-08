@@ -318,6 +318,40 @@ describe('ED-14: «Тряска от взрыва без правки JSON»', (
   });
 });
 
+describe('ED-14: привязка снимается из таблицы, а не правкой JSON', () => {
+  it('кнопка выбранной строки снимает запись общей операцией', async () => {
+    const fixture = await areaWith(CAMERA_EFFECTS_DESCRIPTION);
+    fixture.state.effectTable = EVENTS_TABLE;
+    fixture.state.effectBinding = 'FireballExploded';
+    press(buttonByKey(fixture.view(), 'ui.area.assets.effectRemove'));
+
+    expect(
+      bindingOf(fixture.session.documentValue(VISUALS), EVENTS_TABLE, 'FireballExploded'),
+    ).toBeNull();
+    expect(fixture.state.failure).toBeNull();
+    // Своей операции у снятия нет — значит, оно тоже история сессии (ED-18).
+    fixture.session.undo();
+    expect(
+      bindingOf(fixture.session.documentValue(VISUALS), EVENTS_TABLE, 'FireballExploded'),
+    ).toEqual({ effect: 'shake', amplitude: 0.45, radius: 14 });
+  });
+
+  it('запись с типом, которого описание не знает, снимается тоже', async () => {
+    // Именно её автор и захочет удалить: ED-14 подсвечивает такую запись
+    // находкой, а до диска доводить её не следует (ASSET-8).
+    const fixture = await areaWith(CAMERA_EFFECTS_DESCRIPTION);
+    fixture.session.applyOperation('document.setValue', {
+      document: VISUALS,
+      path: ['cameraEffects', 'events', 'Stale'],
+      value: { effect: 'wobble-3000' },
+    });
+    fixture.state.effectTable = EVENTS_TABLE;
+    fixture.state.effectBinding = 'Stale';
+    press(buttonByKey(fixture.view(), 'ui.area.assets.effectRemove'));
+    expect(bindingOf(fixture.session.documentValue(VISUALS), EVENTS_TABLE, 'Stale')).toBeNull();
+  });
+});
+
 describe('ED-14: «Новый тип эффекта в коде камеры»', () => {
   it('тип из подставленного описания появляется в таблице сам — редактор не правится', async () => {
     const fixture = await areaWith(INVENTED);
