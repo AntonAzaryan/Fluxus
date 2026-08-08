@@ -89,3 +89,20 @@ export type { ValidationSeverity, ValidationState } from './widgets/validation.j
 
 export { viewportFrame } from './viewport.js';
 export type { ViewportSpec } from './viewport.js';
+
+/**
+ * Веб-реализация хоста среды (ED-12). Она в поверхности пакета, а рабочие
+ * области — нет, и это не непоследовательность: область есть вклад, который
+ * приносит собирающий редактор, а хост среды — сама среда, в которой он
+ * собирается. Второй реализации (десктопной) этот пакет не содержит.
+ */
+export { createWebHost } from './host/web.js';
+export type {
+  BeforeUnloadEventLike,
+  BrowserWindowLike,
+  DocumentTitleSink,
+  HttpFetch,
+  HttpRequest,
+  HttpResponse,
+  WebHostOptions,
+} from './host/web.js';

@@ -20,7 +20,17 @@ import { RAIL_ITEM_CLASS } from '../src/frame/rail.js';
 import { ZONE_ORDER } from '../src/frame/skeleton.js';
 import { sceneArea, type SceneAreaState } from '../src/areas/scene.js';
 import { systemsArea, type SystemsAreaState } from '../src/areas/systems.js';
-import { attr, buildFrame, buttonByKey, keydown, press, withAttr } from './support/frame.js';
+import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
+import {
+  attr,
+  buildFrame,
+  buildLoadedFrame,
+  buttonByKey,
+  keydown,
+  press,
+  withAttr,
+} from './support/frame.js';
+import { FIXTURE_IDS } from './support/project.js';
 
 /** Область без содержимого: нужна там, где проверяется каркас, а не вклад. */
 const blankArea: WorkspaceArea<object> = {
@@ -72,8 +82,8 @@ describe('ED-24: скелет области одинаков во всех об
     }
   });
 
-  it('навигатор — дерево в одной области и плоский список в другой', () => {
-    const { frame } = buildFrame();
+  it('навигатор — дерево в одной области и плоский список в другой', async () => {
+    const { frame } = await buildLoadedFrame();
     const navigatorOf = (): string[] => {
       const zone = withAttr(frame.view(), 'data-zone').find(
         (node) => attr(node, 'data-zone') === 'navigator',
@@ -141,25 +151,25 @@ describe('ED-23: состояние области переживает пере
     expect(frame.stateOf(sceneArea.id)).toBe(state);
   });
 
-  it('поза камеры, раскрытые узлы и строка под фокусом — те же, что были до ухода', () => {
-    const { frame } = buildFrame();
-    const state = frame.stateOf(sceneArea.id) as SceneAreaState;
-    // Поза меняется тем же способом, что и у автора: кнопкой на поверхности.
+  it('камера, раскрытые узлы и строка под фокусом — те же, что были до ухода', async () => {
+    // Поза камеры живёт в конвейере вьюпорта (ED-13), а вьюпорт — в записи
+    // состояния области: пережить переключение обязан именно он, иначе автор
+    // возвращался бы к сцене с другого ракурса.
+    const { frame, area, stage, state } = await buildLoadedFrame();
     press(buttonByKey(frame.view(), 'ui.area.scene.zoomIn'));
-    const distance = state.camera.distance;
-    expect(distance).toBeLessThan(24);
-    state.expanded.add('hero');
-    state.focusId = 'skeleton_02';
+    expect(stage.zooms).toHaveLength(1);
+    state.expanded.add('вложенный узел');
+    state.focusId = FIXTURE_IDS.visuals;
 
     frame.activate(systemsArea.id);
     frame.view();
-    frame.activate(sceneArea.id);
+    frame.activate(area.id);
     frame.view();
 
-    const returned = frame.stateOf(sceneArea.id) as SceneAreaState;
-    expect(returned.camera.distance).toBe(distance);
-    expect(returned.expanded.has('hero')).toBe(true);
-    expect(returned.focusId).toBe('skeleton_02');
+    const returned = frame.stateOf(area.id) as SceneAreaState;
+    expect(returned.stage).toBe(stage);
+    expect(returned.expanded.has('вложенный узел')).toBe(true);
+    expect(returned.focusId).toBe(FIXTURE_IDS.visuals);
   });
 
   it('запись заводится один раз и не пересоздаётся отрисовкой', () => {
@@ -214,25 +224,23 @@ describe('ED-23: состояние области переживает пере
 });
 
 describe('ED-23: выделение сквозное', () => {
-  it('выделение области ставится снаружи, когда область не показана', () => {
-    const { frame } = buildFrame();
+  it('выделение области ставится снаружи, когда область не показана', async () => {
+    const { frame, area, session } = await buildLoadedFrame();
+    const key = session.descriptors(FIXTURE_IDS.config, PLACEMENT_LIST)[0] ?? '';
     frame.activate(systemsArea.id);
-    frame.selection.set(sceneArea.id, ['hero']);
-    frame.activate(sceneArea.id);
-    const selected = findAll(
-      frame.view(),
-      (node) => attr(node, 'data-id') === 'hero',
-    )[0];
+    frame.selection.set(area.id, [key]);
+    frame.activate(area.id);
+    const selected = findAll(frame.view(), (node) => attr(node, 'data-id') === key)[0];
     expect(attr(selected ?? { tag: 'div' }, 'aria-selected')).toBe('true');
   });
 
-  it('выделение, поставленное в области, находится на месте после возврата', () => {
-    const { frame } = buildFrame();
-    const row = findAll(frame.view(), (node) => attr(node, 'data-id') === 'skeleton_02')[0];
-    press(row);
+  it('выделение, поставленное в области, находится на месте после возврата', async () => {
+    const { frame, area, session } = await buildLoadedFrame();
+    const key = session.descriptors(FIXTURE_IDS.config, PLACEMENT_LIST)[1] ?? '';
+    press(findAll(frame.view(), (node) => attr(node, 'data-id') === key)[0]);
     frame.activate(systemsArea.id);
-    frame.activate(sceneArea.id);
-    expect(frame.selection.get(sceneArea.id)).toEqual(['skeleton_02']);
+    frame.activate(area.id);
+    expect(frame.selection.get(area.id)).toEqual([key]);
   });
 
   it('выделения областей не смешиваются: модель одна, запись в ней — на область', () => {

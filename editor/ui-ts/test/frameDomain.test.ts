@@ -43,12 +43,14 @@ const DOMAIN_WORDS = [
 ];
 
 /**
- * Ключевые слова CSS, в которых сканеру мерещится доменное имя. Вырезаются из
- * любого файла, а не служат поводом не смотреть в файл целиком: `system-ui`
- * стоит в стеке гарнитур, и исключить из-за него весь набор токенов значило бы
- * завести в пакете место, куда доменное имя можно положить незамеченным.
+ * Имена, в которых сканеру мерещится доменное: ключевое слово CSS и функции
+ * платформы. Вырезаются из любого файла, а не служат поводом не смотреть в файл
+ * целиком: `system-ui` стоит в стеке гарнитур, а `encodeURIComponent` — в
+ * сборке URL хостом среды, и исключить из-за них весь набор токенов или весь
+ * шов среды значило бы завести в пакете место, куда доменное имя можно
+ * положить незамеченным.
  */
-const CSS_KEYWORDS: readonly string[] = ['system-ui'];
+const FOREIGN_NAMES: readonly string[] = ['system-ui', 'encodeURIComponent', 'decodeURIComponent'];
 
 /**
  * Исключения — по пути и с причиной, а не по вкусу. Оно здесь одно.
@@ -80,15 +82,15 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
-function stripCssKeywords(source: string): string {
+function stripForeignNames(source: string): string {
   let text = source;
-  for (const keyword of CSS_KEYWORDS) text = text.split(keyword).join(' ');
+  for (const name of FOREIGN_NAMES) text = text.split(name).join(' ');
   return text;
 }
 
 function domainWordsIn(source: string): string[] {
   const words = new Set<string>();
-  for (const [token] of stripCssKeywords(stripComments(source)).matchAll(/[A-Za-z][A-Za-z0-9]*/g)) {
+  for (const [token] of stripForeignNames(stripComments(source)).matchAll(/[A-Za-z][A-Za-z0-9]*/g)) {
     for (const part of token.split(/(?=[A-Z])/)) {
       const word = part.toLowerCase().replace(/s$/, '');
       if (DOMAIN_WORDS.includes(word)) words.add(word);
@@ -160,5 +162,10 @@ describe('ED-25: каркас интерфейса без доменных им�
     expect(domainWordsIn("const font = 'Inter, system-ui, sans-serif';")).toEqual([]);
     expect(domainWordsIn('const systemPanel = 1;')).toEqual(['system']);
     expect(domainWordsIn("const kind = 'system';")).toEqual(['system']);
+  });
+
+  it('вырезано имя платформы, а не слово `component` вообще', () => {
+    expect(domainWordsIn('const url = encodeURIComponent(path);')).toEqual([]);
+    expect(domainWordsIn('const componentName = 1;')).toEqual(['component']);
   });
 });

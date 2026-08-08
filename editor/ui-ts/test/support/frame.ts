@@ -12,14 +12,16 @@ import {
   registerBuiltinOperations,
   type ContributionRegistry,
   type EditorSession,
+  type MemoryHost,
   type StringResources,
 } from '@game-mvp/editor-core';
 import { findAll, walk, type UiNode } from '../../src/dom/node.js';
 import { createWorkspaceFrame, type WorkspaceFrame } from '../../src/frame/frame.js';
 import type { WorkspaceArea } from '../../src/frame/area.js';
 import { uiResources } from '../../src/i18n/uiBundles.js';
-import { sceneArea } from '../../src/areas/scene.js';
+import { createSceneArea, sceneArea, type SceneAreaState } from '../../src/areas/scene.js';
 import { systemsArea } from '../../src/areas/systems.js';
+import { FIXTURE_IDS, fakeStage, fixtureHost, settle, type FakeStage } from './project.js';
 
 export interface FrameFixture {
   readonly frame: WorkspaceFrame;
@@ -46,6 +48,29 @@ export function buildFrame(
     resources,
     areas: contributions.areas,
   };
+}
+
+/**
+ * Каркас с открытым проектом-фикстурой: область сцены получает дерево контента
+ * (ED-12) и дубль вьюпорта вместо WebGL. Асинхронность здесь настоящая — так
+ * же открывается и настоящий проект, — поэтому сборка ждёт микрозадач.
+ */
+export async function buildLoadedFrame(locale = 'ru'): Promise<LoadedFrameFixture> {
+  const host = fixtureHost();
+  const stage = fakeStage();
+  const area = createSceneArea({ host, ids: FIXTURE_IDS, stage: () => stage });
+  const fixture = buildFrame([area, systemsArea], locale);
+  // Запись состояния заводится лениво — первым обращением к области.
+  const state = fixture.frame.stateOf(area.id) as SceneAreaState;
+  await settle();
+  return { ...fixture, host, stage, area, state };
+}
+
+export interface LoadedFrameFixture extends FrameFixture {
+  readonly host: MemoryHost;
+  readonly stage: FakeStage;
+  readonly area: WorkspaceArea<SceneAreaState>;
+  readonly state: SceneAreaState;
 }
 
 export function attr(node: UiNode, name: string): string | undefined {

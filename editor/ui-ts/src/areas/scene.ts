@@ -1,92 +1,249 @@
 /**
  * @contribution Рабочая область сцены — вклад, а не часть каркаса.
  *
- * Доменные имена («сцена», «террейн», «расстановка») в этом файле есть и
- * должны быть: ED-25 отправляет доменное знание во вклад ровно затем, чтобы его
- * не было в каркасе. Сканер `test/frameDomain.test.ts` пропускает файл по
- * пометке `@contribution` в шапке.
+ * Доменные имена («сцена», «террейн», «расстановка») в этом файле есть и должны
+ * быть: ED-25 отправляет доменное знание во вклад ровно затем, чтобы его не
+ * было в каркасе. Сканер `test/frameDomain.test.ts` пропускает файл по пометке
+ * `@contribution` в шапке.
  *
- * Область тонкая намеренно: она занимает место, которое W3-1..W3-3 наполнят
- * настоящим вьюпортом, кистями и расстановкой. Тонкая — но не поддельная: три
- * зоны она заполняет по-своему (дерево — кадр — плотный инспектор), своё
- * состояние заводит настоящее (поза камеры, раскрытые узлы, строка под
- * фокусом), и именно на нём проверяется ED-23: уход в другую область и возврат
- * ничего из этого не теряют.
+ * Скелет области — тот же, что у всех (ED-24): навигатор редактируемого
+ * (документы сцены и её расстановка), поверхность правки (кадр вьюпорта) и
+ * инспектор выбранного. Что в этих зонах:
+ *
+ * - **навигатор** — открытые документы сцены и записи её начальной расстановки
+ *   (SER-7, SER-8), а не выдуманное дерево: строка есть ровно у того, что
+ *   существует в документе;
+ * - **поверхность** — кадр вьюпорта (ED-15) и переключатели режима камеры
+ *   (ED-13, CAM-2). Рисует его рендер движка, а не эта область: содержимое
+ *   кадра приносит `sceneStage.ts`, здесь только узел, в который он встаёт;
+ * - **инспектор** — поля выбранной записи. Пока схемы (ED-24) приносит W2-3,
+ *   поля показаны, но не правятся, и «не правятся» здесь видно (ED-26).
+ *
+ * Состояние области — запись, которую хранит каркас (ED-23): в ней живёт и
+ * вьюпорт со своим конвейером камеры, поэтому уход в другую область и возврат
+ * не теряют ни позы, ни зума, ни раскрытых узлов.
  */
+import { createHostAssetSource, type EnvironmentHost } from '@game-mvp/editor-core';
 import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
-import type { AreaContext, AreaZones, WorkspaceArea } from '../frame/area.js';
+import type { AreaContext, AreaSetup, AreaZones, WorkspaceArea } from '../frame/area.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS } from '../frame/styles.js';
 import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';
 import { textField } from '../widgets/field.js';
-import { fieldTable, type FieldGroupSpec } from '../widgets/fieldTable.js';
+import { fieldTable, type FieldRowSpec } from '../widgets/fieldTable.js';
 import { tree, type TreeItem } from '../widgets/rows.js';
+import { withValidation } from '../widgets/validation.js';
 import { viewportFrame } from '../viewport.js';
-import { MATERIAL } from './material.js';
-
-const SCENE = MATERIAL.scene;
-type RawNode = (typeof SCENE.tree)[number];
+import type { ScenePlacement } from './sceneDocuments.js';
+import { canRender, createSceneStage, type SceneStage } from './sceneStage.js';
+import {
+  draftOf,
+  openSceneProject,
+  type SceneProject,
+  type SceneProjectIds,
+} from './sceneProject.js';
+import type { SceneDraft } from './sceneDocuments.js';
 
 /** Идентификатор области. Один и тот же в реестре, рельсе и записи состояния. */
 export const SCENE_AREA_ID = 'area.scene';
 
-/** Дальность камеры в шагах: границы нужны, чтобы кнопка на краю была видимо недоступна. */
-const DISTANCE_MIN = 4;
-const DISTANCE_MAX = 64;
-const DISTANCE_STEP = 4;
+/** Узел кадра, в который встаёт холст рендера (`sceneStage.ts`). */
+export const SCENE_VIEWPORT_ID = 'fx-scene-viewport';
 
-/**
- * Состояние области. Заводит его область, хранит каркас (`frame/state.ts`) —
- * поэтому здесь обычные изменяемые поля, а не хитрость: запись живёт столько
- * же, сколько сессия, и переживает переключение сама собой.
- */
+/** Группы навигатора: не документы и не записи, а места, куда они складываются. */
+export const SCENE_NODES = {
+  placements: 'scene.placements',
+  assets: 'scene.assets',
+} as const;
+
+/** Сцена репозитория: то, что редактор открывает, пока открытия проекта нет (W4-1). */
+export const DEFAULT_SCENE_IDS: SceneProjectIds = {
+  config: 'scenes/duel.scene.json',
+  visuals: 'visuals/manifest.json',
+};
+
+/** Шаг колеса на нажатие кнопки бара: тот же вход зума, что у самого колеса (CAM-4). */
+const ZOOM_STEP = 1;
+
+export type SceneStageFactory = (
+  project: SceneProject,
+  host: EnvironmentHost,
+) => SceneStage | null;
+
+export interface SceneAreaOptions {
+  /** Хост среды (ED-12): откуда читаются документы сцены. Нет — проект не открыт. */
+  readonly host?: EnvironmentHost;
+  readonly ids?: SceneProjectIds;
+  /**
+   * Чем собирается вьюпорт. Подменяется тестом на структурный дубль: WebGL в
+   * headless-прогоне нет, а проверять подачу документов рендеру надо.
+   */
+  readonly stage?: SceneStageFactory;
+}
+
 export interface SceneAreaState {
-  /** Поза камеры. В W3-1 её получит конвейер `camera` (ED-13); пока — дальность. */
-  camera: { distance: number };
+  /** Открытые документы сцены; `null` — проект ещё не открыт или не открылся. */
+  project: SceneProject | null;
+  /** Вьюпорт со своим конвейером камеры; `null` — в этой среде рисовать нечем. */
+  stage: SceneStage | null;
+  /** Текущий кадр как функция документов (ED-15). */
+  draft: SceneDraft | null;
+  /** Почему проект не открылся; показывается на поверхности правки. */
+  failure: string | null;
   /** Раскрытые узлы навигатора. */
   readonly expanded: Set<string>;
   /** Строка навигатора под клавиатурным фокусом. */
   focusId: string;
+  /** Просьба перерисовать после асинхронного открытия; ставится отрисовкой. */
+  refresh: () => void;
+}
+
+const message = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+/** Вьюпорт по умолчанию: рендер движка там, где есть чем рисовать (ED-1). */
+function defaultStage(project: SceneProject, host: EnvironmentHost): SceneStage | null {
+  if (!canRender()) return null;
+  return createSceneStage({
+    hostId: SCENE_VIEWPORT_ID,
+    // Тот же шов к дереву, через который читаются документы (ASSET-2, ED-12).
+    assets: createHostAssetSource(host.content),
+    visuals: project.visuals,
+  });
 }
 
 /**
- * Восстановление вложенности из плоской таблицы: у каждой записи данных один и
- * тот же набор полей, и файл материала читается таблицей, а не деревом с дырами.
+ * Открытие проекта и слежение за документами. Пересчёт кадра подписан на
+ * сессию, а не на отрисовку страницы: ED-15 обещает отклик на правку, а не на
+ * то, что кто-то перерисовал интерфейс.
  */
-function treeItems(
-  context: AreaContext<SceneAreaState>,
-  rows: readonly RawNode[],
-  from: number,
-  depth: number,
-): { readonly items: readonly TreeItem[]; readonly next: number } {
-  const items: TreeItem[] = [];
-  let index = from;
-  while (index < rows.length) {
-    const raw = rows[index];
-    if (raw === undefined || raw.depth < depth) break;
-    const nested = treeItems(context, rows, index + 1, depth + 1);
-    items.push(itemOf(context, raw, nested.items));
-    index = nested.next;
-  }
-  return { items, next: index };
+function start(state: SceneAreaState, setup: AreaSetup, options: SceneAreaOptions): void {
+  const host = options.host;
+  if (host === undefined) return;
+  const ids = options.ids ?? DEFAULT_SCENE_IDS;
+  const build = options.stage ?? defaultStage;
+
+  openSceneProject(setup.session, host.content, ids)
+    .then((project) => {
+      state.project = project;
+      state.stage = build(project, host);
+      let config: unknown = undefined;
+      let curvature: unknown = undefined;
+      const recompute = (): void => {
+        // Значения сессии заморожены и подменяются целиком, поэтому сравнение
+        // по ссылке отвечает на вопрос «изменилось ли» точно и даром: выделение
+        // и открытие соседнего документа кадра не трогают.
+        const nextConfig = setup.session.documentValue(project.configId);
+        const nextCurvature =
+          project.curvatureId === null || !setup.session.isOpen(project.curvatureId)
+            ? null
+            : setup.session.documentValue(project.curvatureId);
+        if (state.draft !== null && nextConfig === config && nextCurvature === curvature) return;
+        config = nextConfig;
+        curvature = nextCurvature;
+        state.draft = draftOf(setup.session, project);
+        state.stage?.submit(state.draft);
+        state.refresh();
+      };
+      setup.session.subscribe(recompute);
+      recompute();
+    })
+    .catch((error: unknown) => {
+      state.failure = message(error);
+      state.refresh();
+    });
 }
 
-function itemOf(
-  context: AreaContext<SceneAreaState>,
-  raw: RawNode,
-  nested: readonly TreeItem[],
-): TreeItem {
+// ------------------------------------------------------------------ зоны
+
+function placementItem(context: AreaContext<SceneAreaState>, placement: ScenePlacement): TreeItem {
   const { state, selection } = context;
   return {
-    id: raw.id,
-    label: documentValue(raw.label),
-    ...(raw.badge === '' ? {} : { badge: documentValue(raw.badge) }),
-    expanded: state.expanded.has(raw.id),
-    selected: selection.has(raw.id),
-    ...(nested.length === 0 ? {} : { items: nested }),
+    id: placement.key,
+    label: documentValue(placement.prefab),
+    ...(placement.kind === null ? {} : { badge: documentValue(placement.kind) }),
+    selected: selection.has(placement.key),
     onSelect: (id) => {
       state.focusId = id;
       selection.set([id]);
+    },
+  };
+}
+
+function documentItem(context: AreaContext<SceneAreaState>, id: string): TreeItem {
+  const { state, selection } = context;
+  return {
+    id,
+    label: documentValue(id),
+    selected: selection.has(id),
+    onSelect: (selected) => {
+      state.focusId = selected;
+      selection.set([selected]);
+    },
+  };
+}
+
+function group(
+  context: AreaContext<SceneAreaState>,
+  id: string,
+  labelKey: string,
+  items: readonly TreeItem[],
+): TreeItem {
+  const { state } = context;
+  return {
+    id,
+    label: resourceText(context.resources, labelKey),
+    expanded: state.expanded.has(id),
+    ...(items.length === 0 ? {} : { items }),
+    onSelect: (selected) => {
+      state.focusId = selected;
+      context.selection.set([selected]);
+    },
+    onToggle: (selected) => {
+      if (state.expanded.has(selected)) state.expanded.delete(selected);
+      else state.expanded.add(selected);
+      context.refresh();
+    },
+  };
+}
+
+function navigator(context: AreaContext<SceneAreaState>): UiNode {
+  const { state, resources } = context;
+  const title = el('div', {
+    classes: ['fx-section'],
+    text: resourceText(resources, 'ui.navigator.title'),
+  });
+  const project = state.project;
+  if (project === null) {
+    return el('div', {
+      children: [
+        title,
+        el('div', {
+          classes: ['fx-row'],
+          text: resourceText(resources, 'ui.area.scene.noProject'),
+        }),
+      ],
+    });
+  }
+
+  const assets: TreeItem[] = [documentItem(context, project.visualsId)];
+  if (project.curvatureId !== null) assets.push(documentItem(context, project.curvatureId));
+  const placements = (state.draft?.placements ?? []).map((placement) =>
+    placementItem(context, placement),
+  );
+
+  const root: TreeItem = {
+    id: project.configId,
+    label: documentValue(project.configId),
+    expanded: state.expanded.has(project.configId),
+    selected: context.selection.has(project.configId),
+    items: [
+      group(context, SCENE_NODES.placements, 'ui.area.scene.placements', placements),
+      group(context, SCENE_NODES.assets, 'ui.navigator.assets', assets),
+    ],
+    onSelect: (id) => {
+      state.focusId = id;
+      context.selection.set([id]);
     },
     onToggle: (id) => {
       if (state.expanded.has(id)) state.expanded.delete(id);
@@ -94,24 +251,17 @@ function itemOf(
       context.refresh();
     },
   };
-}
 
-function navigator(context: AreaContext<SceneAreaState>): UiNode {
-  // Прокрутку зоны заводит каркас (ED-24), а не область: своя прокрутка внутри
-  // прокручиваемой зоны дала бы две полосы на одну колонку.
   return el('div', {
     children: [
-      el('div', {
-        classes: ['fx-section'],
-        text: resourceText(context.resources, 'ui.navigator.title'),
-      }),
+      title,
       tree({
-        label: resourceText(context.resources, 'ui.navigator.title'),
-        items: treeItems(context, SCENE.tree, 0, 0).items,
+        label: resourceText(resources, 'ui.navigator.title'),
+        items: [root],
         rovingId: 'scene-tree',
-        activeId: context.state.focusId,
+        activeId: state.focusId,
         onActive: (id) => {
-          context.state.focusId = id;
+          state.focusId = id;
           context.refresh();
         },
       }),
@@ -121,108 +271,172 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
 
 function surface(context: AreaContext<SceneAreaState>): UiNode {
   const { state, resources } = context;
-  const zoom = (delta: number, key: string, disabled: boolean): UiNode =>
+  const stage = state.stage;
+  const failure = state.failure ?? state.draft?.failure ?? null;
+
+  const zoom = (steps: number, key: string): UiNode =>
     button({
       label: resourceText(resources, key),
       variant: 'ghost',
-      disabled,
+      disabled: stage === null,
       onPress: () => {
-        state.camera = { distance: state.camera.distance + delta };
-        context.refresh();
+        stage?.zoom(steps);
       },
     });
 
   return el('div', {
     classes: [FILL_CLASS, FILL_COLUMN_CLASS],
-    children: [
+    children: children(
       el('div', {
         classes: ['fx-bar'],
-        children: [
+        children: children(
           statusChip({
             label: resourceText(resources, 'ui.chip.editMode'),
             tone: 'active',
             icon: 'dot',
           }),
-          zoom(-DISTANCE_STEP, 'ui.area.scene.zoomIn', state.camera.distance <= DISTANCE_MIN),
-          zoom(DISTANCE_STEP, 'ui.area.scene.zoomOut', state.camera.distance >= DISTANCE_MAX),
-        ],
+          // Облёт — режим конвейера камеры (CAM-2, ED-13), а не второй способ
+          // считать позу; free-RTS — тот же конвейер без цели слежения (CAM-7).
+          button({
+            label: resourceText(
+              resources,
+              stage?.flying === true ? 'ui.area.scene.cameraFly' : 'ui.area.scene.cameraFree',
+            ),
+            variant: 'ghost',
+            icon: 'layers',
+            disabled: stage === null,
+            onPress: () => {
+              stage?.toggleFly();
+              context.refresh();
+            },
+          }),
+          zoom(-ZOOM_STEP, 'ui.area.scene.zoomIn'),
+          zoom(ZOOM_STEP, 'ui.area.scene.zoomOut'),
+          // Причина — не оттенок: иконку, положение и текст ставит один вызов
+          // (ED-8, ED-22), а сам текст приходит от ядра, а не сочиняется здесь.
+          failure === null
+            ? undefined
+            : withValidation(
+                statusChip({
+                  label: resourceText(resources, 'ui.area.scene.brokenDocument'),
+                  tone: 'error',
+                }),
+                { severity: 'error', reason: documentValue(failure) },
+              ),
+        ),
       }),
       el('div', {
         classes: [FILL_CLASS],
         children: [
           viewportFrame({
             label: resourceText(resources, 'ui.viewport.label'),
-            hostId: 'fx-scene-viewport',
-            overlays: [
-              statusChip({ label: documentValue(SCENE.documentId), icon: 'dot' }),
-            ],
+            hostId: SCENE_VIEWPORT_ID,
           }),
         ],
       }),
-    ],
+    ),
   });
 }
 
 function inspector(context: AreaContext<SceneAreaState>): UiNode {
+  const { state, resources } = context;
   const selected = context.selection.current()[0];
-  const groups: FieldGroupSpec[] = SCENE.groups.map((group) => ({
-    label: documentValue(group.label),
-    rows: group.fields.map((field) => ({
-      label: documentValue(field.name),
-      // Правка полей — задача W2-3: инспектор строится из схемы редактируемого
-      // (ED-24), а реестр схем приносит W1-4. До тех пор поля показаны, но не
-      // правятся, и «не правятся» здесь видно, а не молча не срабатывает (ED-26).
-      control: textField({
-        label: documentValue(field.name),
-        value: documentValue(field.value),
-        readOnly: true,
-      }),
-      note: documentValue(field.note),
-    })),
-  }));
+  const placement = (state.draft?.placements ?? []).find((item) => item.key === selected);
+
+  const rows: FieldRowSpec[] =
+    placement === undefined
+      ? []
+      : [
+          {
+            label: resourceText(resources, 'ui.area.scene.field.prefab'),
+            control: textField({
+              label: resourceText(resources, 'ui.area.scene.field.prefab'),
+              value: documentValue(placement.prefab),
+              readOnly: true,
+            }),
+          },
+          // Позиция и уровень — производные worldInit: их выводит ядро (TERR-4),
+          // и правит их W3-3, ставя объект во вьюпорте.
+          ...(
+            [
+              ['ui.area.scene.field.x', placement.x.toFixed(3)],
+              ['ui.area.scene.field.y', placement.y.toFixed(3)],
+              ['ui.area.scene.field.level', String(placement.level ?? 0)],
+            ] as const
+          ).map(([key, value]) => ({
+            label: resourceText(resources, key),
+            control: textField({
+              label: resourceText(resources, key),
+              value: documentValue(value),
+              readOnly: true,
+            }),
+            note: resourceText(resources, 'ui.validation.derived'),
+          })),
+        ];
 
   return el('div', {
     children: children(
       el('div', {
         classes: ['fx-section'],
         children: children(
-          el('span', { text: resourceText(context.resources, 'ui.inspector.title') }),
-          selected === undefined
+          el('span', { text: resourceText(resources, 'ui.inspector.title') }),
+          placement === undefined
             ? undefined
             : el('span', {
                 classes: ['fx-row__trailing'],
-                children: [statusChip({ label: documentValue(selected) })],
+                children: [statusChip({ label: documentValue(placement.prefab) })],
               }),
         ),
       }),
-      fieldTable({
-        label: resourceText(context.resources, 'ui.inspector.fields'),
-        groups,
-      }),
+      rows.length === 0
+        ? el('div', {
+            classes: ['fx-row'],
+            text: resourceText(resources, 'ui.inspector.empty'),
+          })
+        : fieldTable({
+            label: resourceText(resources, 'ui.inspector.fields'),
+            groups: [{ label: resourceText(resources, 'ui.inspector.fields'), rows }],
+          }),
     ),
   });
 }
 
-export const sceneArea: WorkspaceArea<SceneAreaState> = {
-  id: SCENE_AREA_ID,
-  descriptionKey: 'ui.area.scene.description',
-  labelKey: 'ui.area.scene.label',
-  hotkey: 'F1',
-  icon: 'layers',
-  editableTypes: [{ id: 'scene', descriptionKey: 'ui.editable.scene.description' }],
-  createState(): SceneAreaState {
-    const root = SCENE.tree[0]?.id ?? '';
-    return {
-      camera: { distance: 24 },
-      expanded: new Set(SCENE.tree.filter((node) => node.depth < 2).map((node) => node.id)),
-      focusId: root,
-    };
-  },
-  render(context): AreaZones {
-    return {
-      navigator: navigator(context),
-      surface: surface(context),
-      inspector: inspector(context),
-    };
-  },
-};
+export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<SceneAreaState> {
+  return {
+    id: SCENE_AREA_ID,
+    descriptionKey: 'ui.area.scene.description',
+    labelKey: 'ui.area.scene.label',
+    hotkey: 'F1',
+    icon: 'layers',
+    editableTypes: [{ id: 'scene', descriptionKey: 'ui.editable.scene.description' }],
+    createState(setup): SceneAreaState {
+      const ids = options.ids ?? DEFAULT_SCENE_IDS;
+      const state: SceneAreaState = {
+        project: null,
+        stage: null,
+        draft: null,
+        failure: null,
+        expanded: new Set([ids.config, SCENE_NODES.placements, SCENE_NODES.assets]),
+        focusId: ids.config,
+        refresh: () => undefined,
+      };
+      start(state, setup, options);
+      return state;
+    },
+    render(context): AreaZones {
+      // Просьба перерисовать нужна асинхронному открытию проекта: оно
+      // заканчивается после того, как страница уже собрана.
+      context.state.refresh = () => {
+        context.refresh();
+      };
+      return {
+        navigator: navigator(context),
+        surface: surface(context),
+        inspector: inspector(context),
+      };
+    },
+  };
+}
+
+/** Область без открытого проекта: проект приносит оболочка (ED-12, W4-1). */
+export const sceneArea: WorkspaceArea<SceneAreaState> = createSceneArea();

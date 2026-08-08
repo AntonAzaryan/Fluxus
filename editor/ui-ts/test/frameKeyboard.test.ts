@@ -17,9 +17,9 @@ import { describe, expect, it } from 'vitest';
 import { findAll, type UiNode } from '../src/dom/node.js';
 import { ROVING_ATTR, rovingTarget } from '../src/dom/roving.js';
 import { RAIL_ROVING_ID } from '../src/frame/rail.js';
-import { sceneArea, type SceneAreaState } from '../src/areas/scene.js';
+import { SCENE_NODES } from '../src/areas/scene.js';
 import { systemsArea } from '../src/areas/systems.js';
-import { attr, buildFrame, keydown, withAttr } from './support/frame.js';
+import { attr, buildFrame, buildLoadedFrame, keydown, withAttr } from './support/frame.js';
 
 function tabStops(view: UiNode): string[] {
   return findAll(view, (node) => attr(node, 'tabindex') === '0').map(
@@ -32,8 +32,8 @@ function treeOf(view: UiNode): UiNode | undefined {
 }
 
 describe('обход скелета: одна остановка Tab на список, а не сотня', () => {
-  it('в дереве навигатора ровно одна строка достижима табуляцией', () => {
-    const { frame } = buildFrame();
+  it('в дереве навигатора ровно одна строка достижима табуляцией', async () => {
+    const { frame } = await buildLoadedFrame();
     const rows = findAll(frame.view(), (node) => attr(node, 'role') === 'treeitem');
     expect(rows.length).toBeGreaterThan(3);
     expect(rows.filter((row) => attr(row, 'tabindex') === '0')).toHaveLength(1);
@@ -55,25 +55,23 @@ describe('обход скелета: одна остановка Tab на спи
     expect(attr(stops[0] ?? { tag: 'div' }, 'data-area')).toBe(frame.activeAreaId());
   });
 
-  it('остановок Tab в области немного, и они не растут с числом строк', () => {
-    const { frame } = buildFrame();
+  it('остановок Tab в области немного, и они не растут с числом строк', async () => {
+    const { frame } = await buildLoadedFrame();
     // Рельс, строка дерева, поле поиска и кнопки бара — но не каждая запись.
     expect(tabStops(frame.view()).length).toBeLessThanOrEqual(4);
   });
 });
 
 describe('roving-фокус в дереве навигатора', () => {
-  it('стрелка вниз переводит фокус на следующую видимую строку', () => {
-    const { frame } = buildFrame();
-    const state = frame.stateOf(sceneArea.id) as SceneAreaState;
+  it('стрелка вниз переводит фокус на следующую видимую строку', async () => {
+    const { frame, state } = await buildLoadedFrame();
     const before = state.focusId;
     expect(keydown(treeOf(frame.view()), 'ArrowDown')).toBe(true);
     expect(state.focusId).not.toBe(before);
   });
 
-  it('стрелка влево сворачивает раскрытый узел, а не уводит фокус', () => {
-    const { frame } = buildFrame();
-    const state = frame.stateOf(sceneArea.id) as SceneAreaState;
+  it('стрелка влево сворачивает раскрытый узел, а не уводит фокус', async () => {
+    const { frame, state } = await buildLoadedFrame();
     const root = state.focusId;
     expect(state.expanded.has(root)).toBe(true);
     keydown(treeOf(frame.view()), 'ArrowLeft');
@@ -81,17 +79,16 @@ describe('roving-фокус в дереве навигатора', () => {
     expect(state.focusId).toBe(root);
   });
 
-  it('стрелка вправо раскрывает свёрнутый узел', () => {
-    const { frame } = buildFrame();
-    const state = frame.stateOf(sceneArea.id) as SceneAreaState;
+  it('стрелка вправо раскрывает свёрнутый узел', async () => {
+    const { frame, state } = await buildLoadedFrame();
     const root = state.focusId;
     keydown(treeOf(frame.view()), 'ArrowLeft');
     keydown(treeOf(frame.view()), 'ArrowRight');
     expect(state.expanded.has(root)).toBe(true);
   });
 
-  it('свёрнутый узел прячет своих детей и из обхода тоже', () => {
-    const { frame } = buildFrame();
+  it('свёрнутый узел прячет своих детей и из обхода тоже', async () => {
+    const { frame } = await buildLoadedFrame();
     const visible = (): number =>
       findAll(frame.view(), (node) => attr(node, 'role') === 'treeitem').length;
     const before = visible();
@@ -99,16 +96,15 @@ describe('roving-фокус в дереве навигатора', () => {
     expect(visible()).toBeLessThan(before);
   });
 
-  it('Enter выделяет строку под фокусом', () => {
-    const { frame } = buildFrame();
+  it('Enter выделяет строку под фокусом', async () => {
+    const { frame, area } = await buildLoadedFrame();
     keydown(treeOf(frame.view()), 'ArrowDown');
     keydown(treeOf(frame.view()), 'Enter');
-    expect(frame.selection.get(sceneArea.id)).toHaveLength(1);
+    expect(frame.selection.get(area.id)).toHaveLength(1);
   });
 
-  it('End и Home доходят до краёв и за них не уходят', () => {
-    const { frame } = buildFrame();
-    const state = frame.stateOf(sceneArea.id) as SceneAreaState;
+  it('End и Home доходят до краёв и за них не уходят', async () => {
+    const { frame, state } = await buildLoadedFrame();
     const first = state.focusId;
 
     keydown(treeOf(frame.view()), 'End');
@@ -123,15 +119,16 @@ describe('roving-фокус в дереве навигатора', () => {
     expect(state.focusId).toBe(first);
   });
 
-  it('клавиша не про перемещение остаётся вызывающему', () => {
+  it('клавиша не про перемещение остаётся вызывающему', async () => {
+    const { frame } = await buildLoadedFrame();
     expect(rovingTarget('KeyA', 0, 5)).toBeUndefined();
-    expect(keydown(treeOf(buildFrame().frame.view()), 'KeyA')).toBe(false);
+    expect(keydown(treeOf(frame.view()), 'KeyA')).toBe(false);
   });
 });
 
 describe('возврат фокуса и Escape', () => {
-  it('контейнеры помечены — по пометке фокус и возвращается после перерисовки', () => {
-    const { frame } = buildFrame();
+  it('контейнеры помечены — по пометке фокус и возвращается после перерисовки', async () => {
+    const { frame } = await buildLoadedFrame();
     const containers = withAttr(frame.view(), ROVING_ATTR).map((node) => attr(node, ROVING_ATTR));
     expect(containers).toContain(RAIL_ROVING_ID);
     expect(containers).toContain('scene-tree');
@@ -141,13 +138,12 @@ describe('возврат фокуса и Escape', () => {
     }
   });
 
-  it('свёрнутый узел не уносит с собой единственную остановку Tab', () => {
-    const { frame } = buildFrame();
-    const state = frame.stateOf(sceneArea.id) as SceneAreaState;
+  it('свёрнутый узел не уносит с собой единственную остановку Tab', async () => {
+    const { frame, state } = await buildLoadedFrame();
     // Фокус уходит вглубь, а потом узел над ним сворачивается извне — нажатием
     // на треугольник, а не стрелкой. Строка под фокусом перестаёт быть видимой.
     keydown(treeOf(frame.view()), 'End');
-    expect(state.expanded.delete('initial')).toBe(true);
+    expect(state.expanded.delete(SCENE_NODES.placements)).toBe(true);
     const tree = treeOf(frame.view());
     expect(findAll(tree ?? { tag: 'div' }, (node) => attr(node, 'tabindex') === '0')).toHaveLength(1);
   });

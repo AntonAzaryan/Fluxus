@@ -11,12 +11,16 @@
  */
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import { contentEndpoint } from './contentEndpoint.js';
 
 const appRoot = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const contentRoot = fileURLToPath(new URL('../../../content', import.meta.url));
 
 export default defineConfig({
+  // Перечисление дерева и запись документа: у HTTP их нет, и веб-хосту среды
+  // (ED-12) их даёт dev-сервер. Обоснование — в шапке `contentEndpoint.ts`.
+  plugins: [contentEndpoint({ root: contentRoot })],
   root: appRoot,
   publicDir: contentRoot,
   cacheDir: '../node_modules/.vite-app',
