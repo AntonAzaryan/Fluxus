@@ -643,7 +643,14 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
       const layers = new Set(keys.map((key) => layerOf(key)));
       if (layers.size !== 1) return null;
       // Слой ВЫДЕЛЕНИЯ, а не слой приёмника: перевод идёт из него.
-      return layers.has('decoration') ? 'decoration' : 'sim';
+      if (layers.has('decoration')) return 'decoration';
+      // Разжаловать в декорацию можно только то, у чего вид есть: у декорации
+      // `visual` — обязательное поле (PRES-2), а у сим-объекта, чей prefab в
+      // манифесте не описан, вида нет вовсе. Показывать перевод доступным было
+      // бы обещанием, которое отказом операции и кончится (ED-26).
+      const visualOf = (key: string): string | null =>
+        placements().find((item) => item.key === key)?.kind ?? null;
+      return keys.every((key) => visualOf(key) !== null) ? 'sim' : null;
     },
 
     /**

@@ -53,6 +53,8 @@ import { fixed } from '@game-mvp/core';
 import {
   quantizeDecorationLength,
   quantizeDecorationYaw,
+  visualKeys,
+  type VisualManifest,
 } from '@game-mvp/assets';
 import {
   OperationError,
@@ -148,6 +150,28 @@ function requireYaw(operationId: string, param: string, value: number): number {
   return quantizedValue;
 }
 
+/**
+ * Ключ вида записи (PRES-2): обязательная НЕПУСТАЯ строка. Проверка своя, а не
+ * схемы параметров: схема знает «строка», а пустой строки формат не допускает —
+ * и операция, записавшая её, оставила бы в документе запись, которую его же
+ * валидация отвергает. Инструмент авторинга обязан производить документ,
+ * проходящий формат, а не документ, о котором потом скажет валидация.
+ *
+ * Дорога сюда не только у автора: перевод prop → decoration (PRES-5) берёт вид
+ * у размещённого, а у сим-объекта, чей prefab в манифесте не описан, вида нет
+ * вовсе — и тогда переводить нечего.
+ */
+function requireVisual(operationId: string, value: unknown): string {
+  if (typeof value !== 'string' || value === '') {
+    throw new OperationError(
+      operationId,
+      'параметр "visual": ключ записи манифеста визуалов — непустая строка (PRES-2)',
+      { param: 'visual', ...(typeof value === 'string' ? { received: value } : {}) },
+    );
+  }
+  return value;
+}
+
 function requirePositiveScale(operationId: string, value: number): number {
   const quantizedValue = requireLength(operationId, 'scale', value);
   if (quantizedValue <= 0) {
@@ -176,12 +200,14 @@ export const addDecorationOperation: AuthoringOperation = {
     const id = DECORATION_OPERATIONS.add;
     const turns = params['turns'];
     const record: Record<string, JsonValue> = {
-      [DECORATION_FIELDS.visual]: params['visual'] as string,
+      [DECORATION_FIELDS.visual]: requireVisual(id, params['visual']),
       [DECORATION_FIELDS.x]: requireLength(id, 'x', asNumber(params, 'x')),
       [DECORATION_FIELDS.y]: requireLength(id, 'y', asNumber(params, 'y')),
     };
-    if (typeof turns === 'number' && requireYaw(id, 'turns', turns) !== 0) {
-      record[DECORATION_FIELDS.yaw] = requireYaw(id, 'turns', turns);
+    if (typeof turns === 'number') {
+      const yaw = requireYaw(id, 'turns', turns);
+      // Нулевой курс полем не пишется: умолчание формата и есть ноль (PRES-2).
+      if (yaw !== 0) record[DECORATION_FIELDS.yaw] = yaw;
     }
     // Только в конец (PRES-2): другого способа дописать запись у слоя нет.
     return ctx.appendRecord(asDocument(params), asList(params), record);
@@ -329,7 +355,7 @@ export const propToDecorationOperation: AuthoringOperation = {
     // Q16.16 → доля мировой единицы делает ЯДРО (`fixed.toFloat`), а не деление
     // на 65536 здесь: второй реализации конверсии редактор не заводит (ED-1).
     const record: Record<string, JsonValue> = {
-      [DECORATION_FIELDS.visual]: params['visual'] as string,
+      [DECORATION_FIELDS.visual]: requireVisual(id, params['visual']),
       [DECORATION_FIELDS.x]: requireLength(id, 'x', fixed.toFloat(raw(binding.x))),
       [DECORATION_FIELDS.y]: requireLength(id, 'y', fixed.toFloat(raw(binding.y))),
     };
@@ -358,16 +384,18 @@ function requireFixed(operationId: string, param: string, value: number): number
   return raw;
 }
 
-/** Имя вида для новой декорации, когда автор его не выбрал: первый по документу. */
-export function decorationVisualNames(manifest: {
-  readonly entities?: Readonly<Record<string, unknown>>;
-  readonly decorations?: Readonly<Record<string, unknown>>;
-} | null): readonly string[] {
-  if (manifest === null) return [];
-  // Оба раздела в одном пространстве (ASSET-9): ставить декорацию можно и видом
-  // сущности — камень, который бывает и препятствием, и украшением, описан один
-  // раз.
-  return [...Object.keys(manifest.entities ?? {}), ...Object.keys(manifest.decorations ?? {})];
+/**
+ * Из чего автор выбирает вид декорации — пространство визуальных ключей целиком
+ * (ASSET-9): ставить декорацию можно и видом сущности, потому что камень,
+ * который бывает и препятствием, и украшением, описан один раз.
+ *
+ * Считает пространство модуль ассетов (`visualKeys`), а не этот файл: раздела
+ * два, и второе их перечисление здесь разошлось бы с первым ровно так же молча,
+ * как второе определение шага квантования. Здесь остаётся только «манифеста нет
+ * — выбирать не из чего».
+ */
+export function decorationVisualNames(manifest: VisualManifest | null): readonly string[] {
+  return manifest === null ? [] : visualKeys(manifest);
 }
 
 export const DECORATION_AUTHORING_OPERATIONS: readonly AuthoringOperation[] = Object.freeze([

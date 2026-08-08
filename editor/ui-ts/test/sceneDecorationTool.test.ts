@@ -22,6 +22,8 @@ import {
 
 const AT_UNIT = { x: 10, y: 10 };
 const AT_DECORATION = { x: 30, y: 10 };
+/** Сим-объект, у которого записи манифеста нет: `Crate` в фикстуре без вида. */
+const AT_UNSEEN = { x: 50, y: 10 };
 const AT_EMPTY = { x: 90, y: 90 };
 
 const down = (f: LoadedFrameFixture, at: { x: number; y: number }, additive = false): void =>
@@ -53,7 +55,12 @@ async function withLayer(): Promise<LoadedFrameFixture> {
   const decoration = decorationKeys(fixture)[0] ?? '';
   fixture.stage.hits.set(`${AT_UNIT.x}:${AT_UNIT.y}`, entityHit(unit));
   fixture.stage.hits.set(`${AT_DECORATION.x}:${AT_DECORATION.y}`, entityHit(decoration, true));
+  fixture.stage.hits.set(
+    `${AT_UNSEEN.x}:${AT_UNSEEN.y}`,
+    entityHit(placementKeys(fixture)[1] ?? ''),
+  );
   fixture.stage.hits.set(`${AT_EMPTY.x}:${AT_EMPTY.y}`, surfaceHit(3.5, 3.5, 15));
+  fixture.stage.surfaceHits.set(`${AT_UNSEEN.x}:${AT_UNSEEN.y}`, surfaceHit(2.5, 1.5, 5));
   fixture.stage.surfaceHits.set(`${AT_UNIT.x}:${AT_UNIT.y}`, surfaceHit(0.5, 0.5, 0));
   fixture.stage.surfaceHits.set(`${AT_DECORATION.x}:${AT_DECORATION.y}`, surfaceHit(1.5, 1.5, 5));
   fixture.stage.surfaceHits.set(`${AT_EMPTY.x}:${AT_EMPTY.y}`, surfaceHit(3.5, 3.5, 15));
@@ -205,6 +212,36 @@ describe('ED-16: постановка декорации во вьюпорте',
     // Конфиг сцены при этом не тронут: слой изолирован (PRES-4).
     expect(placements(fixture)).toHaveLength(2);
     expect(selection(fixture)).toEqual([decorationKeys(fixture).at(-1)]);
+  });
+});
+
+describe('PRES-5, ED-26: перевод предлагается только там, где он исполним', () => {
+  it('однородное выделение переводится, смешанное — нет', async () => {
+    const fixture = await withLayer();
+    down(fixture, AT_UNIT);
+    up(fixture, AT_UNIT);
+    expect(tool(fixture).convertible).toBe('sim');
+
+    down(fixture, AT_DECORATION, true);
+    up(fixture, AT_DECORATION);
+    // Смешанное переводить некуда: половина уже в приёмнике.
+    expect(tool(fixture).convertible).toBeNull();
+  });
+
+  it('сим-объект без записи манифеста в декорацию не предлагается', async () => {
+    // `visual` у декорации — обязательное поле (PRES-2), а у объекта, чей
+    // prefab в манифесте не описан, вида нет вовсе: перевод показан
+    // недоступным, а не отказывает нажатием (ED-26).
+    const fixture = await withLayer();
+    down(fixture, AT_UNSEEN);
+    up(fixture, AT_UNSEEN);
+    expect(selection(fixture)).toEqual([placementKeys(fixture)[1]]);
+    expect(tool(fixture).convertible).toBeNull();
+
+    tool(fixture).convert(null);
+    // Ни один документ пары не тронут: несделанное осталось несделанным.
+    expect(layer(fixture)).toHaveLength(2);
+    expect(placements(fixture)).toHaveLength(2);
   });
 });
 

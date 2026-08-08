@@ -342,6 +342,68 @@ describe('ED-29: каждая операция слоя обратима без 
       expect(result.recorded).toBe(true);
     });
   }
+
+  /*
+   * Перемещение и поворот — операции РАЗМЕЩЁННОГО, общие на оба слоя
+   * (`proposal.md`, «Отступление реализации»), и слой у них параметр. Заготовка
+   * сим-слоя стоит в `scenePlacement.test.ts`; здесь пиннится вторая ветка той
+   * же операции — иначе «у каждой операции есть заготовка» держалось бы на
+   * половине её кода.
+   */
+  it.each([
+    [PLACEMENT_OPERATIONS.move, { x: 2.125, y: -3.75 }],
+    [PLACEMENT_OPERATIONS.rotate, { turns: 0.375 }],
+  ])('%s на слое decoration обратима без следа', (operationId, params) => {
+    const session = scratch();
+    const result = runOperationRoundTrip(session, operationId, {
+      document: FIXTURE_PRESENTATION_ID,
+      record: decorationKeys(session)[0]!,
+      layer: 'decoration',
+      ...params,
+    });
+    expect(result.findings).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.recorded).toBe(true);
+  });
+});
+
+// ------------------------------------------- обязательные поля записи (PRES-2)
+
+describe('PRES-2: `visual` — обязательная непустая строка', () => {
+  it('постановка без вида в документ не пишется', () => {
+    const session = scratch();
+    expect(() =>
+      session.applyOperation(DECORATION_OPERATIONS.add, {
+        document: FIXTURE_PRESENTATION_ID,
+        list: DECORATION_LIST,
+        visual: '',
+        x: 1,
+        y: 1,
+      }),
+    ).toThrow(/непустая строка/);
+    expect(layerOf(session)).toHaveLength(2);
+  });
+
+  it('prop без записи манифеста в декорацию не разжаловывается', () => {
+    // У сим-объекта, чей prefab в манифесте не описан, вида нет вовсе, и
+    // назвать его в записи decoration нечем: операция отказывает, а не пишет
+    // пустой ключ, который её же формат отвергает.
+    const session = scratch();
+    expect(() =>
+      session.applyOperation(DECORATION_OPERATIONS.fromProp, {
+        ...bindingParam(BINDING),
+        document: FIXTURE_IDS.config,
+        record: placementKeys(session)[1]!,
+        target: FIXTURE_PRESENTATION_ID,
+        list: DECORATION_LIST,
+        visual: '',
+      }),
+    ).toThrow(/непустая строка/);
+    expect(layerOf(session)).toHaveLength(2);
+    expect(
+      getAtPath(session.documentValue(FIXTURE_IDS.config), PLACEMENT_LIST) as readonly JsonValue[],
+    ).toHaveLength(2);
+  });
 });
 
 // ------------------------------------------------------------------- PRES-5
