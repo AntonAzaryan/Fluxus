@@ -5,7 +5,16 @@ import { query } from '../src/ecs/query.js';
 import { mathApi } from '../src/math/mathApi.js';
 import { loadScene } from '../src/sim/scene.js';
 import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
-import { createTerrainGrid, FLOOR_COMPONENT, terrainPrefab, type TerrainDef } from '../src/systems/terrain.js';
+import {
+  createTerrainGrid,
+  terrainFlagChar,
+  terrainLevelChar,
+  terrainPrefab,
+  FLOOR_COMPONENT,
+  TERRAIN_CELL_KINDS,
+  TERRAIN_LEVEL_MAX,
+  type TerrainDef,
+} from '../src/systems/terrain.js';
 import { LEVEL_OVERRIDE_COMPONENT } from '../src/types.js';
 
 const TILE = fixed.fromInt(2);
@@ -69,6 +78,61 @@ describe('ассет террейна (TERR-2, TERR-3)', () => {
 
   it('отвергает рампу в одну клетку (TERR-7)', () => {
     expect(() => createTerrainGrid({ ...def, flags: ['..^_', '....'] })).toThrow(/TERR-7/);
+  });
+});
+
+/**
+ * Запись клетки текстовой карты — обратный ход к разбору (TERR-3). Проверяется
+ * не совпадение с таблицей символов, а круг «записали → ядро прочитало то же»:
+ * потребитель ассета (редактор, ED-10) второй копии алфавита не держит (ED-1).
+ */
+describe('запись карт ассета (TERR-3)', () => {
+  it('уровень записывается символом, который разбор читает обратно', () => {
+    const levels = Array.from({ length: TERRAIN_LEVEL_MAX + 1 }, (_unused, level) => {
+      const char = terrainLevelChar(level);
+      expect(char).not.toBeNull();
+      return char!;
+    }).join('');
+    const grid = createTerrainGrid({
+      width: TERRAIN_LEVEL_MAX + 1,
+      height: 1,
+      tileSize: TILE,
+      levels: [levels],
+      flags: ['.'.repeat(TERRAIN_LEVEL_MAX + 1)],
+    });
+    expect([...grid.levels]).toEqual(
+      Array.from({ length: TERRAIN_LEVEL_MAX + 1 }, (_unused, level) => level),
+    );
+  });
+
+  it('уровень вне диапазона невыразим — запись отвергает его сама', () => {
+    expect(terrainLevelChar(TERRAIN_LEVEL_MAX + 1)).toBeNull();
+    expect(terrainLevelChar(-1)).toBeNull();
+    expect(terrainLevelChar(1.5)).toBeNull();
+    expect(terrainLevelChar(Number.NaN)).toBeNull();
+  });
+
+  it('вид клетки записывается символом, дающим те же рампу и пол', () => {
+    const [plain, ramp, noFloor] = TERRAIN_CELL_KINDS.map((kind) => {
+      const char = terrainFlagChar(kind);
+      expect(char).not.toBeNull();
+      return char!;
+    });
+    const grid = createTerrainGrid({
+      width: 2,
+      height: 2,
+      tileSize: TILE,
+      levels: ['00', '00'],
+      // Рампа — парой клеток: одиночная запрещена (TERR-7).
+      flags: [`${ramp}${ramp}`, `${plain}${noFloor}`],
+    });
+    expect([...grid.ramps]).toEqual([1, 1, 0, 0]);
+    expect([...grid.floor]).toEqual([1, 1, 1, 0]);
+  });
+
+  it('неизвестный вид клетки невыразим', () => {
+    expect(terrainFlagChar('hole')).toBeNull();
+    expect(terrainFlagChar('')).toBeNull();
   });
 });
 

@@ -50,6 +50,41 @@ export interface TerrainDef {
   readonly flags: readonly string[];
 }
 
+// ------------------------------------------------- запись карт ассета (TERR-3)
+
+/**
+ * Обратный ход к разбору: символ карты по значению клетки. Ассет террейна
+ * пишет редактор (ED-10), а правило текстового представления — ядра, и второй
+ * его реализации у потребителя быть не должно (ED-1, CORE-3).
+ *
+ * Наружу уходит запись, а не сами алфавиты: таблицу потребитель обязан
+ * индексировать правильно, а «уровень 16» на ней молча даёт `undefined` —
+ * значение вне диапазона отвергает по TERR-3 сама запись, в точке записи.
+ * Отказ — `null`, как у разбора символа карты кривизны (`assets` ASSET-7): не
+ * бросок, потому что вызывающий строит собственное сообщение об ошибке своего
+ * слоя, а `try/catch` вокруг записи одной клетки его бы только запутал.
+ */
+export function terrainLevelChar(level: number): string | null {
+  return Number.isInteger(level) ? (LEVEL_ALPHABET[level] ?? null) : null;
+}
+
+/** Наибольший выразимый уровень (TERR-3) — длина алфавита, а не второе число. */
+export const TERRAIN_LEVEL_MAX = LEVEL_ALPHABET.length - 1;
+
+/**
+ * Имена видов клетки — по одному на символ `FLAG_ALPHABET` и в его порядке:
+ * список именует позиции алфавита, а не повторяет его. Один символ описывает
+ * клетку целиком (TERR-3), поэтому это перечисление, а не набор флагов.
+ */
+export const TERRAIN_CELL_KINDS = ['plain', 'ramp', 'noFloor'] as const;
+export type TerrainCellKind = (typeof TERRAIN_CELL_KINDS)[number];
+
+/** Вид клетки → символ карты флагов; неизвестное имя — `null` (TERR-3). */
+export function terrainFlagChar(kind: string): string | null {
+  const index = (TERRAIN_CELL_KINDS as readonly string[]).indexOf(kind);
+  return index < 0 ? null : FLAG_ALPHABET[index]!;
+}
+
 /** Разбирает и валидирует ассет; cliff-геометрия выводится здесь же (TERR-5). */
 export function createTerrainGrid(def: TerrainDef): TerrainGrid {
   const { width, height, tileSize } = def;

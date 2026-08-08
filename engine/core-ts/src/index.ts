@@ -78,16 +78,27 @@ export { schemaFiles, schemaFileContent } from './dsl/schemas.js';
 
 // systems — системы на TS, их API и реестр порядка исполнения
 export { SystemRegistry } from './systems/registry.js';
+/**
+ * `terrainLevelChar`/`terrainFlagChar` — запись клетки текстовой карты (TERR-3)
+ * для того, кто ассет пишет (редактор, ED-10): разбор ядро уже даёт
+ * `createTerrainGrid`, и без обратного хода потребитель заводил бы вторую копию
+ * алфавита (ED-1, CORE-3). Мутирующей поверхности это не расширяет (TICK-3):
+ * функции чистые и работают с символами ассета, а не с миром.
+ */
 export {
   cellAt,
   createTerrainApi,
   createTerrainGrid,
   floorComponentSchema,
+  terrainFlagChar,
+  terrainLevelChar,
   terrainPrefab,
   FLOOR_COMPONENT,
+  TERRAIN_CELL_KINDS,
+  TERRAIN_LEVEL_MAX,
   TERRAIN_PREFAB,
 } from './systems/terrain.js';
-export type { TerrainDef } from './systems/terrain.js';
+export type { TerrainCellKind, TerrainDef } from './systems/terrain.js';
 export {
   createPhysicsApi,
   staticsFromTerrain,
