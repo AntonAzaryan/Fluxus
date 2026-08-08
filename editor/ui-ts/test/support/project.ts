@@ -14,23 +14,38 @@
  * производной проверяла бы только саму себя.
  */
 import { createMemoryHost, type MemoryHost } from '@game-mvp/editor-core';
-import type { SceneDraft } from '../../src/areas/sceneDocuments.js';
+import type { CameraPose, PresentationStage } from '@game-mvp/render';
+import type { PositionBinding, SceneDraft } from '../../src/areas/sceneDocuments.js';
 import type { SceneStage } from '../../src/areas/sceneStage.js';
 import type { SceneProjectIds } from '../../src/areas/sceneProject.js';
+import type { SceneOverlay, ScenePick } from '../../src/areas/sceneInteraction.js';
+
+/**
+ * Привязка проекта-фикстуры (ED-16). Она здесь ЕСТЬ и отличается от конвенции
+ * ядра полем поворота: иначе «редактор берёт имена из настройки проекта» было бы
+ * проверено на настройке, совпадающей с умолчанием, то есть не проверено.
+ */
+export const FIXTURE_POSITION: PositionBinding = {
+  component: 'Position',
+  x: 'x',
+  y: 'y',
+  rotation: { component: 'Position', field: 'turns' },
+};
 
 export const FIXTURE_IDS: SceneProjectIds = {
   config: 'scenes/fixture.scene.json',
   visuals: 'visuals/fixture.manifest.json',
+  position: FIXTURE_POSITION,
 };
 
 export const FIXTURE_CURVATURE_ID = 'visuals/fixture.curvature.json';
 
 /** Арена 4×4 с плато уровня 1 в правом нижнем углу и клеткой без пола. */
 export const FIXTURE_SCENE = {
-  components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }],
+  components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed', turns: 'fixed' } }],
   prefabs: [
-    { name: 'Hero', tags: ['Hero'], components: { Position: { x: 98304, y: 98304 } } },
-    { name: 'Crate', tags: ['Crate'], components: { Position: { x: 163840, y: 98304 } } },
+    { name: 'Hero', tags: ['Hero'], components: { Position: { x: 98304, y: 98304, turns: 0 } } },
+    { name: 'Crate', tags: ['Crate'], components: { Position: { x: 163840, y: 98304, turns: 0 } } },
   ],
   terrain: {
     width: 4,
@@ -68,13 +83,62 @@ export function fixtureHost(): MemoryHost {
   });
 }
 
+/**
+ * Попадание, которое дубль вьюпорта отдаёт по точке экрана. Тест раскладывает
+ * экран на попадания сам: настоящий picking считает по нарисованному (REND-15),
+ * а нарисованного в headless-прогоне нет.
+ */
+export type FakeHits = ReadonlyMap<string, ScenePick>;
+
 /** Дубль вьюпорта: помнит поданное, вместо того чтобы это рисовать. */
 export interface FakeStage extends SceneStage {
   readonly submitted: readonly SceneDraft[];
   readonly zooms: readonly number[];
   readonly last: SceneDraft | undefined;
+  /** Наборы наложений в порядке подачи (REND-16). */
+  readonly overlaySets: readonly (readonly SceneOverlay[])[];
+  /** Последний набор наложений. */
+  readonly overlays: readonly SceneOverlay[];
+  /** Что дубль отвечает на попадание в точку `x,y`; ключ — `${x}:${y}`. */
+  readonly hits: Map<string, ScenePick>;
+  /** То же для запроса «только поверхность». */
+  readonly surfaceHits: Map<string, ScenePick>;
   /** Причина сорвавшегося кадра — её ставит тест, как поставил бы её кадр. */
   fail(reason: string | null): void;
+}
+
+/** Попадание в поверхность: то, что picking отдаёт при клике по пустому месту. */
+export function surfaceHit(x: number, y: number, cell = 0): ScenePick {
+  return {
+    kind: 'surface',
+    handle: null,
+    key: null,
+    x,
+    y,
+    z: 0,
+    cell,
+    cellX: 0,
+    cellY: 0,
+    noFloor: false,
+    wall: false,
+  };
+}
+
+/** Попадание в размещённый объект: ключ уже переведён набором (REND-11). */
+export function entityHit(key: string): ScenePick {
+  return {
+    kind: 'entity',
+    handle: null,
+    key,
+    x: 0,
+    y: 0,
+    z: 0,
+    cell: -1,
+    cellX: -1,
+    cellY: -1,
+    noFloor: false,
+    wall: false,
+  };
 }
 
 /**
@@ -87,8 +151,12 @@ export interface FakeStage extends SceneStage {
 export function fakeStage(announce: () => void = () => undefined): FakeStage {
   const submitted: SceneDraft[] = [];
   const zooms: number[] = [];
+  const overlaySets: (readonly SceneOverlay[])[] = [];
+  const hits = new Map<string, ScenePick>();
+  const surfaceHits = new Map<string, ScenePick>();
   let flying = false;
   let failure: string | null = null;
+  const at = (x: number, y: number): string => `${x}:${y}`;
   return {
     submit: (draft) => {
       submitted.push(draft);
@@ -113,9 +181,24 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
       failure = reason;
       announce();
     },
+    // Presentation-сцену дубль не заводит: в headless-прогоне публиковать в неё
+    // нечего, а тип держит её обязательной ради превью и просмотрщика.
+    presentation: null as unknown as PresentationStage,
+    pose: null as CameraPose | null,
+    pick: (x, y) => hits.get(at(x, y)) ?? null,
+    pickSurface: (x, y) => surfaceHits.get(at(x, y)) ?? null,
+    setOverlays: (items) => {
+      overlaySets.push([...items]);
+    },
     dispose: () => undefined,
     submitted,
     zooms,
+    overlaySets,
+    hits,
+    surfaceHits,
+    get overlays(): readonly SceneOverlay[] {
+      return overlaySets.at(-1) ?? [];
+    },
     get last(): SceneDraft | undefined {
       return submitted.at(-1);
     },

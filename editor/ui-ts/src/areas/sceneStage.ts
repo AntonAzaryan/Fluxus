@@ -54,6 +54,29 @@
  * (`hostId`), и при необходимости возвращается на место. Это не обход каркаса —
  * содержимое кадра и по контракту `viewportFrame` приносит рендер, а не
  * интерфейс.
+ *
+ * ## Picking и наложения: вьюпорт отдаёт сервисы, а не политику
+ *
+ * REND-15 требует, чтобы луч строился «из той же позы и той же общей реализацией
+ * её применения, которыми нарисован кадр». Поэтому поза кадра здесь и хранится:
+ * `pick` считает по ПОСЛЕДНЕЙ отданной конвейером позе, а не по свежему опросу
+ * rig'а, — иначе наведение отвечало бы про кадр, которого автор не видел.
+ * Камера picking'у отдаётся та же самая (`camera3`), чтобы объект был буквально
+ * один, а прямоугольник кадра берётся у холста.
+ *
+ * Перевод попадания в размещённое делает набор инстансов (`DocumentSource.keyOf`,
+ * REND-11): picking о документах не знает и знать не должен. Обратный перевод —
+ * подсветка по ключу документа — идёт тем же набором (`entityOf`), и второго
+ * отображения «ключ ↔ сущность» в редакторе нет.
+ *
+ * Набор наложений декларативен (REND-16): вьюпорт хранит последний поданный и
+ * переподаёт его после каждого сведения документов. Переподача не украшение:
+ * смена визуального типа пересоздаёт инстанс с новым номером сущности, и
+ * подсветка, оставленная на прежнем номере, погасла бы молча.
+ *
+ * Что значит попадание — выделить, потащить, поставить — вьюпорт не решает
+ * (ED-25): события левой кнопки он пересылает наружу, а средняя и правая
+ * остаются камере (CAM-3).
  */
 import * as THREE from 'three';
 import {
@@ -72,8 +95,12 @@ import {
   OverlaySubsystem,
   PresentationStage,
   TerrainSubsystem,
+  ViewportPicking,
   VisualSurfaceSource,
   applyCameraPose,
+  type CameraPose,
+  type OverlayItem,
+  type PickHit,
   type RenderContext,
 } from '@game-mvp/render';
 import type { TerrainGrid } from '@game-mvp/core';
@@ -84,11 +111,18 @@ import {
   type SceneCamera,
 } from './sceneCamera.js';
 import type { SceneDraft } from './sceneDocuments.js';
+import type {
+  ScenePick,
+  ScenePicker,
+  SceneOverlay,
+  StagePointer,
+} from './sceneInteraction.js';
 
 /** Шаг высоты уровня в мировых единицах — параметр рендера (REND-7). */
 const HEIGHT_STEP = 0.6;
 
-/** Кнопка мыши: средняя — drag-панорама (CAM-3), правая — осмотр в облёте. */
+/** Кнопка мыши: левая — инструмент, средняя — drag-панорама (CAM-3), правая — осмотр. */
+const LEFT_BUTTON = 0;
 const MIDDLE_BUTTON = 1;
 const RIGHT_BUTTON = 2;
 
@@ -108,9 +142,14 @@ export interface SceneStageOptions {
    * только на смену, а не на каждый кадр.
    */
   readonly onChange?: () => void;
+  /**
+   * Указатель левой кнопкой — вход инструмента (ED-16, ED-17). Что попадание
+   * значит, вьюпорт не знает: это политика вклада (ED-25).
+   */
+  readonly onPointer?: (event: StagePointer) => void;
 }
 
-export interface SceneStage {
+export interface SceneStage extends ScenePicker {
   /** Новое состояние документов; кадр покажет его не позже следующего (ED-15). */
   submit(draft: SceneDraft): void;
   /** Идёт ли облёт (CAM-2) — это показывает бар области. */
@@ -121,6 +160,16 @@ export interface SceneStage {
   readonly instanceCount: number;
   /** Почему сорвался кадр; `null` — последний кадр прошёл целиком (ED-8). */
   readonly failure: string | null;
+  /**
+   * Presentation-сцена вьюпорта. Наружу она выходит потому, что продюсеров у
+   * неё больше одного и они взаимоисключающи (REND-11): превью (ED-9) и
+   * просмотрщик ассетов (ED-20) публикуются в ту же сцену, а не заводят вторую.
+   */
+  readonly presentation: PresentationStage;
+  /** Поза последнего кадра (CAM-1); `null` — кадра ещё не было. */
+  readonly pose: CameraPose | null;
+  /** Полный набор служебных наложений (REND-16); пустой — гасит все. */
+  setOverlays(items: readonly SceneOverlay[]): void;
   dispose(): void;
 }
 
@@ -166,9 +215,15 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
 
   let surface: VisualSurfaceSource | null = null;
   let terrain: TerrainSubsystem | null = null;
+  let overlays: OverlaySubsystem | null = null;
+  let picking: ViewportPicking | null = null;
   let camera: SceneCamera | null = null;
   let grid: TerrainGrid | null = null;
   let curvature: SceneDraft['curvature'] = null;
+  /** Поза кадра: по ней и считается луч наведения (REND-15), а не свежим опросом. */
+  let pose: CameraPose | null = null;
+  /** Последний поданный набор наложений — он переподаётся после сведения (REND-16). */
+  let overlaySet: readonly SceneOverlay[] = [];
 
   let draft: SceneDraft | null = null;
   let dirty = false;
@@ -192,6 +247,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   let pointer: PointerSample | null = null;
   let midDrag = false;
   let rightDrag = false;
+  let leftDrag = false;
 
   // ---------------------------------------------------------------- ввод
 
@@ -215,10 +271,23 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     if (midDrag) camera?.drag(event.movementX, event.movementY);
     if (rightDrag) camera?.look(event.movementX, event.movementY);
     pointer = { x: event.clientX, y: event.clientY, rect: rect() };
+    tell('move', event);
   };
   const onPointerLeave = (): void => {
     pointer = null;
   };
+  /** Модификатор мультивыделения (ED-17): и Shift, и Ctrl/Cmd — обе привычки. */
+  const additive = (event: MouseEvent): boolean =>
+    event.shiftKey || event.ctrlKey || event.metaKey;
+  const tell = (phase: StagePointer['phase'], event: MouseEvent): void => {
+    options.onPointer?.({
+      phase,
+      x: event.clientX,
+      y: event.clientY,
+      additive: additive(event),
+    });
+  };
+
   const onPointerDown = (event: MouseEvent): void => {
     canvas.focus();
     if (event.button === MIDDLE_BUTTON) {
@@ -226,10 +295,20 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       midDrag = true;
     }
     if (event.button === RIGHT_BUTTON) rightDrag = true;
+    if (event.button === LEFT_BUTTON) {
+      leftDrag = true;
+      tell('down', event);
+    }
   };
   const onPointerUp = (event: MouseEvent): void => {
     if (event.button === MIDDLE_BUTTON) midDrag = false;
     if (event.button === RIGHT_BUTTON) rightDrag = false;
+    // Отпускание ловится на документе: взаимодействие обязано закрыться и
+    // тогда, когда курсор ушёл с холста (ED-18 — одна запись на взаимодействие).
+    if (event.button === LEFT_BUTTON && leftDrag) {
+      leftDrag = false;
+      tell('up', event);
+    }
   };
   const onContextMenu = (event: Event): void => event.preventDefault();
   const onWheel = (event: WheelEvent): void => {
@@ -263,11 +342,21 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     surface = new VisualSurfaceSource(first);
     terrain = new TerrainSubsystem(first, { surface });
     presentation.register(terrain);
-    presentation.register(new ModelsSubsystem(options.visuals, { surface }));
+    const models = new ModelsSubsystem(options.visuals, { surface });
+    presentation.register(models);
     // Подсистему наложений регистрирует только вьюпорт редактора (REND-16):
-    // в игровом кадре её нет по конструкции. Набор пока пуст — выделение и
-    // превью кисти приносят W3-2 и W3-3.
-    presentation.register(new OverlaySubsystem({ surface }));
+    // в игровом кадре её нет по конструкции. Подсветка встаёт по видимой позе
+    // инстанса, поэтому источник прокси у неё тот же, что у picking'а.
+    overlays = new OverlaySubsystem({ surface, instances: models });
+    presentation.register(overlays);
+    // Камера picking'у отдаётся та же, которой рисуется кадр: «второго способа
+    // посчитать луч MUST NOT существовать» (REND-15).
+    picking = new ViewportPicking({
+      surface,
+      instances: models,
+      handles: overlays,
+      camera: camera3,
+    });
     camera = createSceneCamera({ grid: first, heightStep });
   };
 
@@ -291,6 +380,60 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     }
     // Полный набор инстансов; что создать, обновить и убрать, решает источник.
     source.apply(next.placements);
+    // Наложения переподаются после набора: смена визуального типа пересоздаёт
+    // инстанс с новым номером сущности, и подсветка на прежнем номере погасла
+    // бы молча (REND-11, REND-16).
+    pushOverlays();
+  };
+
+  // ------------------------------------------------------- picking и наложения
+
+  /** Точка вьюпорта из координат окна; null — прямоугольника кадра ещё нет. */
+  const viewportPoint = (
+    x: number,
+    y: number,
+  ): { x: number; y: number; width: number; height: number } | null => {
+    const box = rect();
+    if (box.width === 0 || box.height === 0) return null;
+    return { x: x - box.left, y: y - box.top, width: box.width, height: box.height };
+  };
+
+  /**
+   * Копия попадания: объект сервиса переиспользуется до следующего запроса
+   * (REND-15), а инструмент держит попадание от нажатия до отпускания. Ключ
+   * документа даёт набор инстансов, которому он и принадлежит (REND-11).
+   */
+  const copyHit = (hit: PickHit | null): ScenePick | null =>
+    hit === null
+      ? null
+      : {
+          kind: hit.kind,
+          handle: hit.handle,
+          key: hit.entity === 0 ? null : (source.keyOf(hit.entity) ?? null),
+          x: hit.x,
+          y: hit.y,
+          z: hit.z,
+          cell: hit.cell,
+          cellX: hit.cellX,
+          cellY: hit.cellY,
+          noFloor: hit.noFloor,
+          wall: hit.wall,
+        };
+
+  /** Наложения в словаре рендера: подсветка адресуется сущностью (REND-16). */
+  const pushOverlays = (): void => {
+    if (overlays === null) return;
+    const items: OverlayItem[] = [];
+    for (const item of overlaySet) {
+      if (item.kind !== 'highlight') {
+        items.push(item);
+        continue;
+      }
+      const entity = source.entityOf(item.placement);
+      // Ключа нет в наборе — рендер его не рисует, и подсвечивать нечего.
+      if (entity !== undefined) items.push({ kind: 'highlight', key: item.key, entity });
+    }
+    overlays.apply(items);
   };
 
   // ----------------------------------------------------------------- кадр
@@ -353,7 +496,10 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       if (camera !== null) {
         camera.sample(keys, pointer);
         // Общая реализация применения позы (CAM-1): своей копии у редактора нет.
-        applyCameraPose(camera3, camera.frame(dt));
+        // Она же запоминается: луч наведения обязан идти из позы НАРИСОВАННОГО
+        // кадра, а не из свежего опроса конвейера (REND-15).
+        pose = camera.frame(dt);
+        applyCameraPose(camera3, pose);
       }
       // Кадр подсистем: интерполировать нечего, альфа всегда 1 (REND-11).
       source.frame(now);
@@ -385,6 +531,24 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     },
     get failure(): string | null {
       return failureNow();
+    },
+    presentation,
+    get pose(): CameraPose | null {
+      return pose;
+    },
+    pick(x, y) {
+      if (picking === null || pose === null) return null;
+      const point = viewportPoint(x, y);
+      return point === null ? null : copyHit(picking.pick(pose, point));
+    },
+    pickSurface(x, y) {
+      if (picking === null || pose === null) return null;
+      const point = viewportPoint(x, y);
+      return point === null ? null : copyHit(picking.pickSurface(pose, point));
+    },
+    setOverlays(items) {
+      overlaySet = items;
+      pushOverlays();
     },
     dispose() {
       disposed = true;

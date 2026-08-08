@@ -20,6 +20,8 @@ import { createWorkspaceFrame, type WorkspaceFrame } from '../../src/frame/frame
 import type { WorkspaceArea } from '../../src/frame/area.js';
 import { uiResources } from '../../src/i18n/uiBundles.js';
 import { createSceneArea, sceneArea, type SceneAreaState } from '../../src/areas/scene.js';
+import type { StagePointer } from '../../src/areas/sceneInteraction.js';
+import { registerPlacementOperations } from '../../src/areas/scenePlacement.js';
 import { systemsArea } from '../../src/areas/systems.js';
 import { FIXTURE_IDS, fakeStage, fixtureHost, settle, type FakeStage } from './project.js';
 
@@ -38,8 +40,10 @@ export function buildFrame(
 ): FrameFixture {
   const contributions = createEditorContributions<WorkspaceArea>();
   for (const area of areas) contributions.areas.register(area);
+  // Тот же реестр, что собирает приложение: операции расстановки — вклад
+  // области (ED-25), и без него область правит документы нечем (ED-29).
   const session = createEditorSession({
-    operations: registerBuiltinOperations(createOperationRegistry()),
+    operations: registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
   });
   const resources = uiResources(locale);
   return {
@@ -60,12 +64,14 @@ export async function buildLoadedFrame(locale = 'ru'): Promise<LoadedFrameFixtur
   // Обратный канал вьюпорта дубль получает так же, как настоящий: область
   // отдаёт его сборкой, и через него же приходит просьба перерисовать.
   const built: FakeStage[] = [];
+  const pointers: ((event: StagePointer) => void)[] = [];
   const area = createSceneArea({
     host,
     ids: FIXTURE_IDS,
-    stage: (_project, _host, announce) => {
-      const made = fakeStage(announce);
+    stage: (_project, _host, hooks) => {
+      const made = fakeStage(hooks.announce);
       built.push(made);
+      pointers.push(hooks.pointer);
       return made;
     },
   });
@@ -74,8 +80,14 @@ export async function buildLoadedFrame(locale = 'ru'): Promise<LoadedFrameFixtur
   const state = fixture.frame.stateOf(area.id) as SceneAreaState;
   await settle();
   const stage = built[0];
-  if (stage === undefined) throw new Error('вьюпорт фикстуры не собрался');
-  return { ...fixture, host, stage, area, state };
+  const pointer = pointers[0];
+  if (stage === undefined || pointer === undefined) {
+    throw new Error('вьюпорт фикстуры не собрался');
+  }
+  // Страница собирается сразу: инструмент получает выделение и кадр отрисовкой,
+  // и до неё указатель ему подавать нечего.
+  fixture.frame.view();
+  return { ...fixture, host, stage, area, state, pointer };
 }
 
 export interface LoadedFrameFixture extends FrameFixture {
@@ -83,6 +95,8 @@ export interface LoadedFrameFixture extends FrameFixture {
   readonly stage: FakeStage;
   readonly area: WorkspaceArea<SceneAreaState>;
   readonly state: SceneAreaState;
+  /** Вход указателя вьюпорта — тот же канал, которым его зовёт настоящий холст. */
+  readonly pointer: (event: StagePointer) => void;
 }
 
 export function attr(node: UiNode, name: string): string | undefined {

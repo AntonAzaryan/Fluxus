@@ -23,13 +23,14 @@
  * вьюпорт со своим конвейером камеры, поэтому уход в другую область и возврат
  * не теряют ни позы, ни зума, ни раскрытых узлов.
  */
+import { FIXED_ONE } from '@game-mvp/core';
 import { createHostAssetSource, type EnvironmentHost } from '@game-mvp/editor-core';
 import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
 import type { AreaContext, AreaSetup, AreaZones, WorkspaceArea } from '../frame/area.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS } from '../frame/styles.js';
 import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';
-import { textField } from '../widgets/field.js';
+import { select, textField, toggle } from '../widgets/field.js';
 import { fieldTable, type FieldRowSpec } from '../widgets/fieldTable.js';
 import { tree, type TreeItem } from '../widgets/rows.js';
 import { withValidation } from '../widgets/validation.js';
@@ -37,12 +38,19 @@ import { viewportFrame } from '../viewport.js';
 import type { ScenePlacement } from './sceneDocuments.js';
 import { canRender, createSceneStage, type SceneStage } from './sceneStage.js';
 import {
+  createPlacementTool,
+  type PlacementTool,
+  type StagePointer,
+} from './sceneInteraction.js';
+import { prefabNames } from './scenePlacement.js';
+import {
+  PLACEMENT_LIST,
   draftOf,
   openSceneProject,
   type SceneProject,
   type SceneProjectIds,
 } from './sceneProject.js';
-import type { SceneDraft } from './sceneDocuments.js';
+import { TURN_RADIANS, type SceneDraft } from './sceneDocuments.js';
 
 /** Идентификатор области. Один и тот же в реестре, рельсе и записи состояния. */
 export const SCENE_AREA_ID = 'area.scene';
@@ -66,15 +74,29 @@ export const DEFAULT_SCENE_IDS: SceneProjectIds = {
 const ZOOM_STEP = 1;
 
 /**
- * Чем собирается вьюпорт. `announce` — обратный канал: вьюпорт зовёт его,
- * когда у него изменилось видимое в интерфейсе (режим камеры CAM-2, причина
- * сорвавшегося кадра ED-8). Спрашивать это сразу после нажатия нельзя: режим
- * доходит до конвейера вводом и применяется его ближайшим кадром.
+ * Шаг поворота с бара — восьмая оборота. Доля оборота, а не радианы: угол ядра
+ * измеряется оборотами (`fixed.sin`), и второй единицы редактор не вводит.
  */
+const ROTATION_STEP = 1 / 8;
+
+/**
+ * Обратные каналы вьюпорта. `announce` — вьюпорт зовёт его, когда у него
+ * изменилось видимое в интерфейсе (режим камеры CAM-2, причина сорвавшегося
+ * кадра ED-8): спрашивать это сразу после нажатия нельзя, режим доходит до
+ * конвейера вводом и применяется его ближайшим кадром. `pointer` — указатель
+ * левой кнопкой: что попадание значит, решает инструмент (ED-16, ED-17), а не
+ * вьюпорт.
+ */
+export interface SceneStageHooks {
+  readonly announce: () => void;
+  readonly pointer: (event: StagePointer) => void;
+}
+
+/** Чем собирается вьюпорт. */
 export type SceneStageFactory = (
   project: SceneProject,
   host: EnvironmentHost,
-  announce: () => void,
+  hooks: SceneStageHooks,
 ) => SceneStage | null;
 
 export interface SceneAreaOptions {
@@ -91,6 +113,8 @@ export interface SceneAreaOptions {
 export interface SceneAreaState {
   /** Открытые документы сцены; `null` — проект ещё не открыт или не открылся. */
   project: SceneProject | null;
+  /** Инструмент вьюпорта: выделение, расстановка, перемещение (ED-16, ED-17). */
+  readonly tool: PlacementTool;
   /** Вьюпорт со своим конвейером камеры; `null` — в этой среде рисовать нечем. */
   stage: SceneStage | null;
   /** Текущий кадр как функция документов (ED-15). */
@@ -112,7 +136,7 @@ const message = (error: unknown): string =>
 function defaultStage(
   project: SceneProject,
   host: EnvironmentHost,
-  announce: () => void,
+  hooks: SceneStageHooks,
 ): SceneStage | null {
   if (!canRender()) return null;
   return createSceneStage({
@@ -120,7 +144,8 @@ function defaultStage(
     // Тот же шов к дереву, через который читаются документы (ASSET-2, ED-12).
     assets: createHostAssetSource(host.content),
     visuals: project.visuals,
-    onChange: announce,
+    onChange: hooks.announce,
+    onPointer: hooks.pointer,
   });
 }
 
@@ -138,8 +163,15 @@ function start(state: SceneAreaState, setup: AreaSetup, options: SceneAreaOption
   openSceneProject(setup.session, host.content, ids)
     .then((project) => {
       state.project = project;
-      state.stage = build(project, host, () => {
-        state.refresh();
+      state.stage = build(project, host, {
+        announce: () => {
+          state.refresh();
+        },
+        // Инструмент живёт в записи состояния области и переживает уход в
+        // другую область (ED-23) — вместе с выделением, которое он ставит.
+        pointer: (event) => {
+          state.tool.pointer(event);
+        },
       });
       let config: unknown = undefined;
       let curvature: unknown = undefined;
@@ -283,6 +315,69 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
   });
 }
 
+/**
+ * Панель инструмента расстановки (ED-16, ED-17). Всё, что она делает, — зовёт
+ * инструмент: сама она в документы не пишет, потому что писать в них можно
+ * только операцией (ED-29).
+ *
+ * Недоступное показано недоступным, а не молча не срабатывает (ED-26): без
+ * выделения нечего поворачивать и удалять, без привязки поворота в настройке
+ * проекта поворот не выражается вовсе (ED-16), а без кадра не во что и попадать.
+ */
+function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
+  const { state, resources } = context;
+  const tool = state.tool;
+  const stage = state.stage;
+  const chosen = tool.selected();
+  // Список — тот же, что подан инструменту отрисовкой: второго перечня, который
+  // разошёлся бы с выбранным, не заводится.
+  const prefabs = tool.prefabs;
+  const placing = tool.mode === 'place';
+
+  const act = (key: string, disabled: boolean, press: () => void): UiNode =>
+    button({
+      label: resourceText(resources, key),
+      variant: 'ghost',
+      disabled,
+      onPress: press,
+    });
+
+  return [
+    // Режим — состояние инструмента, и подпись показывает текущий, а не тот, в
+    // который нажатие переведёт: иначе автор читает кнопку как индикатор.
+    act(placing ? 'ui.area.scene.toolPlace' : 'ui.area.scene.toolSelect', stage === null, () => {
+      tool.setMode(placing ? 'select' : 'place');
+    }),
+    select({
+      label: resourceText(resources, 'ui.area.scene.prefab'),
+      value: tool.prefab ?? '',
+      // Имя префаба — идентификатор документа, и локаль его не касается (ED-27).
+      options: prefabs.map((name) => ({ value: name, label: documentValue(name) })),
+      disabled: !placing || prefabs.length === 0,
+      onSelect: (value) => {
+        tool.setPrefab(value);
+      },
+    }),
+    toggle({
+      label: resourceText(resources, 'ui.area.scene.snap'),
+      on: tool.snapping,
+      disabled: stage === null,
+      onChange: (on) => {
+        tool.setSnapping(on);
+      },
+    }),
+    act('ui.area.scene.rotateLeft', !tool.canRotate || chosen.length === 0, () => {
+      tool.rotate(-ROTATION_STEP);
+    }),
+    act('ui.area.scene.rotateRight', !tool.canRotate || chosen.length === 0, () => {
+      tool.rotate(ROTATION_STEP);
+    }),
+    act('ui.action.remove', chosen.length === 0, () => {
+      tool.remove();
+    }),
+  ];
+}
+
 function surface(context: AreaContext<SceneAreaState>): UiNode {
   const { state, resources } = context;
   const stage = state.stage;
@@ -330,6 +425,7 @@ function surface(context: AreaContext<SceneAreaState>): UiNode {
           }),
           zoom(-ZOOM_STEP, 'ui.area.scene.zoomIn'),
           zoom(ZOOM_STEP, 'ui.area.scene.zoomOut'),
+          ...placementBar(context),
           // Причина — не оттенок: иконку, положение и текст ставит один вызов
           // (ED-8, ED-22), а сам текст приходит от ядра, а не сочиняется здесь.
           failure === null
@@ -373,12 +469,16 @@ function inspector(context: AreaContext<SceneAreaState>): UiNode {
               readOnly: true,
             }),
           },
-          // Позиция и уровень — производные worldInit: их выводит ядро (TERR-4),
-          // и правит их W3-3, ставя объект во вьюпорте.
+          // Позиция, поворот и уровень — производные worldInit: их выводит ядро
+          // (TERR-4), а правит их вьюпорт — постановкой, перетаскиванием и
+          // поворотом выделенного (ED-16), то есть операцией, а не этим полем.
           ...(
             [
               ['ui.area.scene.field.x', placement.x.toFixed(3)],
               ['ui.area.scene.field.y', placement.y.toFixed(3)],
+              ...(placement.yaw === undefined
+                ? []
+                : ([['ui.area.scene.field.turns', (placement.yaw / TURN_RADIANS).toFixed(3)]] as const)),
               ['ui.area.scene.field.level', String(placement.level ?? 0)],
             ] as const
           ).map(([key, value]) => ({
@@ -437,16 +537,46 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
         expanded: new Set([ids.config, SCENE_NODES.placements, SCENE_NODES.assets]),
         focusId: ids.config,
         refresh: () => undefined,
+        // Инструмент заводится вместе с записью состояния и живёт столько же
+        // (ED-23): указатель приходит в него из вьюпорта, а не из отрисовки.
+        tool: createPlacementTool({
+          session: setup.session,
+          documentId: ids.config,
+          list: PLACEMENT_LIST,
+          ...(ids.position === undefined ? {} : { binding: ids.position }),
+          refresh: () => {
+            state.refresh();
+          },
+        }),
       };
       start(state, setup, options);
       return state;
     },
     render(context): AreaZones {
+      const { state } = context;
       // Просьба перерисовать нужна асинхронному открытию проекта: оно
       // заканчивается после того, как страница уже собрана.
-      context.state.refresh = () => {
+      state.refresh = () => {
         context.refresh();
       };
+      // Инструмент видит выделение сессии (ED-23), кадр и текущий набор — то
+      // есть ровно то, что показывает эта же сборка страницы. Подаётся здесь, а
+      // не при заведении записи: выделение сквозное и приходит на отрисовку.
+      state.tool.attach({
+        selection: context.selection,
+        picker: state.stage,
+        placements: state.draft?.placements ?? [],
+        // Шаг привязки — размер клетки редактируемого террейна (ED-16, TERR-2).
+        snapStep:
+          state.draft?.grid === undefined || state.draft.grid === null
+            ? 0
+            : state.draft.grid.tileSize / FIXED_ONE,
+        prefabs:
+          state.project === null ? [] : prefabNames(context.session.documentValue(state.project.configId)),
+      });
+      // Набор наложений — функция выделения, а не история вызовов (REND-16):
+      // он отдаётся целиком на каждую сборку, а сводит его подсистема.
+      state.stage?.setOverlays(state.tool.overlays());
       return {
         navigator: navigator(context),
         surface: surface(context),

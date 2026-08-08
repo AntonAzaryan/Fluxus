@@ -43,6 +43,19 @@
  * которую опираются его же нативные системы, и повторять её строкой здесь
  * значило бы завести вторую (ED-1, CORE-3). Проект, у которого позиция лежит
  * иначе, подаёт свою привязку — правится настройка, а не редактор.
+ *
+ * ## Откуда берётся «где у объекта поворот»
+ *
+ * Тем же путём и по той же причине (ED-16 называет позицию и поворот вместе), с
+ * одной разницей: конвенции поворота у ядра нет вовсе — ни компонента, ни поля,
+ * — поэтому и умолчания у этой половины привязки нет. Проект, не назвавший
+ * поворот, поворота не хранит, и операция поворота ему недоступна (ED-26): это
+ * честнее выдуманного имени компонента.
+ *
+ * Единица угла при этом ядру принадлежит: `fixed.sin`/`fixed.cos` принимают долю
+ * оборота в Q16.16 (полный оборот — 1.0), и второй единицы редактор не вводит.
+ * Радианы появляются ровно на входной границе рендера (REND-1), где `yaw`
+ * набора инстансов их и требует.
  */
 import {
   createTerrainGrid,
@@ -85,6 +98,15 @@ export interface SceneDraft {
   readonly failure: string | null;
 }
 
+/** Полный оборот в радианах: угол ядра — доля оборота, `yaw` рендера — радианы. */
+export const TURN_RADIANS = Math.PI * 2;
+
+/** Где у сим-объекта лежит поворот (ED-16): компонент и имя одного его поля. */
+export interface RotationBinding {
+  readonly component: string;
+  readonly field: string;
+}
+
 /**
  * Где у сим-объекта лежит позиция (ED-16): компонент и имена двух его полей.
  * Настройка проекта, а не знание редактора — формат расстановки именованных
@@ -94,6 +116,8 @@ export interface PositionBinding {
   readonly component: string;
   readonly x: string;
   readonly y: string;
+  /** Где лежит поворот; нет — сцена поворота не хранит, и поворачивать нечего. */
+  readonly rotation?: RotationBinding;
 }
 
 /**
@@ -167,6 +191,7 @@ export function placementsOf(input: SceneDraftInput): readonly ScenePlacement[] 
   const visuals = input.visuals ?? null;
   const kindOf = kindByTags(visuals === null ? [] : Object.keys(visuals.entities));
   const at = input.position ?? DEFAULT_POSITION_BINDING;
+  const spin = at.rotation;
   const placements: ScenePlacement[] = [];
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!;
@@ -177,6 +202,10 @@ export function placementsOf(input: SceneDraftInput): readonly ScenePlacement[] 
     const has = world.hasComponent(state, entity, at.component);
     const fx = has ? world.getField(state, entity, at.component, at.x) : 0;
     const fy = has ? world.getField(state, entity, at.component, at.y) : 0;
+    // Поворот — вторая половина той же настройки; проект, её не назвавший,
+    // поворота не хранит, и курса у инстанса нет вовсе.
+    const spun = spin !== undefined && world.hasComponent(state, entity, spin.component);
+    const turns = spun ? world.getField(state, entity, spin.component, spin.field) : 0;
     // Точка входной границы рендера (REND-1): Q16.16 → float здесь, и глубже
     // fixed-point не идёт. Уровень под объектом — ответ ядра (TERR-4).
     placements.push({
@@ -186,6 +215,7 @@ export function placementsOf(input: SceneDraftInput): readonly ScenePlacement[] 
       x: fixed.toFloat(fx),
       y: fixed.toFloat(fy),
       level: scene.terrain?.levelAt({ x: fx, y: fy }) ?? 0,
+      ...(spin === undefined ? {} : { yaw: fixed.toFloat(turns) * TURN_RADIANS }),
     });
   }
   return placements;
