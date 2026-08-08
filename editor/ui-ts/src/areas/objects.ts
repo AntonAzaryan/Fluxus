@@ -593,6 +593,23 @@ function schemaBar(context: AreaContext<ObjectsAreaState>): readonly UiNode[] {
         state.drafts.field = '';
       },
     }),
+    button({
+      // Снятие схемы — базовая операция над записью списка (ED-30): порядок
+      // оставшихся схем при этом не переставляется, а битовые id за снятой
+      // сдвигаются потому, что автор её снял, — это правка, а не побочный
+      // эффект чужой правки (дельта ED-6). Повисшие на ней prefab'ы и системы
+      // покажет валидация (ED-8), а не отказ операции.
+      label: resourceText(resources, 'ui.area.objects.deleteComponent'),
+      variant: 'ghost',
+      disabled: off || record === null,
+      onPress: () => {
+        run(context, SCHEMA_OPERATIONS.remove, {
+          document: state.configId ?? '',
+          record: record?.key ?? '',
+        });
+        context.selection.set([]);
+      },
+    }),
   ];
 }
 

@@ -268,10 +268,35 @@ describe('ED-1: правил DSL в редакторе нет', () => {
    */
   const ADDRESSES: readonly string[] = ['forEachEvent', 'if'];
 
+  /**
+   * Два литерала, совпадающих с именами ОПЕРАТОРОВ, и ни один оператором не
+   * является:
+   *
+   * - `eventField` — вид аргумента (`OperatorArg` каталога `editor-core`);
+   *   совпадение по происхождению — форму `eventField` разбирает тот же
+   *   `checkExpression`, — а сам литерал проверяется типом объединения;
+   * - `tick` — источник срабатывания триггера (`TriggerSource`, ED-4): «система
+   *   без запроса и без события», к оператору `tick` (номер текущего тика,
+   *   EXPR-2) отношения не имеющий вовсе.
+   */
+  const NOT_OPERATORS: readonly string[] = ['eventField', 'tick'];
+
   it.each(files)('%s: имён закрытого набора действий в коде нет — есть каталог', (name) => {
     const literals = new Set(literalsOf(readFileSync(`${DIRECTORY}${name}`, 'utf8')));
     const named = [...actions.actionNames].filter((action) => literals.has(action));
     expect(named.filter((action) => !ADDRESSES.includes(action))).toEqual([]);
+  });
+
+  /**
+   * Вторая половина того же утверждения. Без неё сканер молчал бы о таблице
+   * «оператор → его аргументы», а именно она и была бы второй реализацией
+   * семантики выражений (ED-5, ED-1): форму знает каталог, арность — вычислитель.
+   */
+  it.each(files)('%s: имён закрытого набора операторов в коде нет — есть каталог', (name) => {
+    const literals = new Set(literalsOf(readFileSync(`${DIRECTORY}${name}`, 'utf8')));
+    const allowed = [...ADDRESSES, ...NOT_OPERATORS];
+    const named = [...expr.operators].filter((operator) => literals.has(operator));
+    expect(named.filter((operator) => !allowed.includes(operator))).toEqual([]);
   });
 
   it('палитра блоков производна от закрытых наборов ядра в обе стороны', () => {

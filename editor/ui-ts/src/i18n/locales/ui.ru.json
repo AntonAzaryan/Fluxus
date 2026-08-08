@@ -48,6 +48,7 @@
   "ui.area.objects.composition": "Состав выбранного",
   "ui.area.objects.createComponent": "Завести компонент",
   "ui.area.objects.createPrefab": "Завести объект",
+  "ui.area.objects.deleteComponent": "Удалить компонент",
   "ui.area.objects.deletePrefab": "Удалить объект",
   "ui.area.objects.derived": "Производные",
   "ui.area.objects.description": "Правка объектов: схемы компонентов и prefab'ы сцены",

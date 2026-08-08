@@ -302,6 +302,21 @@ describe('ED-6: схема компонента правится там, где 
       defaults: {},
     });
   });
+
+  it('схему можно и снять, и это правка базовой операцией, а не побочный эффект', async () => {
+    const { frame, session, areaId } = await opened();
+    const record = componentRecords(configOf(session), session.descriptors(CONFIG, COMPONENT_LIST))[0];
+    frame.selection.set(areaId, [record?.key ?? '']);
+
+    press(buttonByKey(zoneOf(frame.view(), 'surface'), 'ui.area.objects.deleteComponent'));
+    // Снята названная схема, а порядок оставшихся — прежний: перестановки
+    // побочным эффектом не случилось (дельта ED-6).
+    expect(componentsOf(session)).toEqual(['Health']);
+    // Правка идёт через слой операций (ED-29), поэтому обратима целиком —
+    // вместе с местом схемы в перечне, то есть с битовыми id (SER-7).
+    expect(session.undo()).toBe(true);
+    expect(componentsOf(session)).toEqual(['Position', 'Health']);
+  });
 });
 
 describe('ED-6: синтезированные загрузчиком схемы показаны и не правятся', () => {

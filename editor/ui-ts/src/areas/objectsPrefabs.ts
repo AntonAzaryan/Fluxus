@@ -46,9 +46,8 @@ import { componentEntry, derivedComponentFields } from './objectsSchemas.js';
 /** Где в конфиге сцены лежат prefab'ы (SER-7). */
 export const PREFAB_LIST: JsonPath = Object.freeze(['prefabs']);
 
-/** Ключи записи prefab'а (ECS-4). */
+/** Ключ состава записи prefab'а (ECS-4). */
 export const PREFAB_COMPONENTS_KEY = 'components';
-export const PREFAB_TAGS_KEY = 'tags';
 
 /** Имя схемы формата prefab'а в наборе ядра (SER-5). */
 const PREFAB_SCHEMA_FILE = 'prefab.schema.json';
@@ -70,14 +69,22 @@ export const PREFAB_COMPOSITION_OPERATIONS = {
   remove: 'document.list.remove',
 } as const;
 
-/** Один prefab так, как его видит область. */
+/**
+ * Один prefab так, как его видит область.
+ *
+ * Тегов (ECS-4) здесь нет, и это названный предел прохода, а не забывчивость:
+ * ED-7 требует визуального набора компонентов и начальных значений, а тег —
+ * элемент СПИСКА, и строке инспектора он не соответствует. Редактора поля под
+ * список редактор пока не везёт, а держать в записи то, чего никто не
+ * показывает и не правит, значило бы обещать интерфейсом больше, чем есть.
+ * Появится редактор поля-списка (ED-25) — теги встанут строкой, как остальные.
+ */
 export interface PrefabRecord {
   /** Сессионный дескриптор записи — ключ выделения и адрес операций (ED-29). */
   readonly key: string;
   readonly name: string;
   /** Имена компонентов в порядке документа. */
   readonly components: readonly string[];
-  readonly tags: readonly string[];
 }
 
 /**
@@ -96,12 +103,10 @@ export function prefabRecords(
     const key = keys[index];
     if (typeof name !== 'string' || key === undefined) return;
     const components = isJsonObject(entry) ? entry[PREFAB_COMPONENTS_KEY] : undefined;
-    const tags = isJsonObject(entry) ? entry[PREFAB_TAGS_KEY] : undefined;
     out.push({
       key,
       name,
       components: isJsonObject(components) ? Object.keys(components) : [],
-      tags: isJsonArray(tags) ? tags.filter((tag): tag is string => typeof tag === 'string') : [],
     });
   });
   return out;

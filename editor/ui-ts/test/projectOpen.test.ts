@@ -15,20 +15,20 @@
  * DOM и WebGL не нужны: `canRender()` в headless-прогоне ложен, и области
  * собираются без единого обращения к рендеру.
  */
-import { createMemoryHost, type MemoryHost } from '@game-mvp/editor-core';
+import { createMemoryHost, type JsonValue, type MemoryHost } from '@game-mvp/editor-core';
 import { describe, expect, it } from 'vitest';
 import { createEditorApp } from '../app/assembly.js';
-import { collectTexts, findAll } from '../src/dom/node.js';
+import { collectTexts, findAll, type UiNode } from '../src/dom/node.js';
 import { SHELL_COMMANDS } from '../src/palette/commands.js';
 import { ASSETS_AREA_ID, type AssetAreaState } from '../src/areas/assets.js';
 import { findAssetNode } from '../src/areas/assetTree.js';
 import { VISUALS_OPERATIONS } from '../src/areas/assetVisuals.js';
 import { SCENE_AREA_ID, type SceneAreaState } from '../src/areas/scene.js';
-import { PREFAB_LIST } from '../src/areas/objectsPrefabs.js';
+import { PREFAB_LIST, prefabRecords } from '../src/areas/objectsPrefabs.js';
 import { OBJECTS_AREA_ID, type ObjectsAreaState } from '../src/areas/objects.js';
 import { SYSTEMS_AREA_ID, type SystemsAreaState } from '../src/areas/systems.js';
 import { discoverProject } from '../src/areas/sceneDiscovery.js';
-import { attr, zoneOf } from './support/frame.js';
+import { attr, buttonByKey, press, zoneOf } from './support/frame.js';
 import { FIXTURE_CURVATURE, FIXTURE_SCENE, settle } from './support/project.js';
 import type { WorkspaceFrame } from '../src/frame/frame.js';
 
@@ -340,6 +340,80 @@ describe('ED-23, ED-25: области объектов и систем в со�
     expect(session.documentValue(CONFIG)).toEqual(FIXTURE_SCENE);
     expect(session.documentValue(VISUALS)).toEqual(MANIFEST);
     expect(objects.failure).toBeNull();
+  });
+
+  /**
+   * ED-19 «переименование меняет оба согласованно» — на СБОРКЕ и через
+   * интерфейс.
+   *
+   * Операция сама адресов ссылок не знает: их приносит сборка (решение 7а), и
+   * умолчание живёт в `defaultPrefabReferences`. Проверка на одной операции
+   * этого не ловит вовсе — подай ей адреса руками, и она перепишет что угодно,
+   * а собранный редактор молча не перепишет ничего. Поэтому здесь нажимается
+   * кнопка области, а сверяются ВСЕ четыре места, называющие имя: сама запись
+   * prefab'а, ключ манифеста, расстановка (SER-8) и литерал `prefab` действия
+   * `spawnEntity` внутри тела JSON-системы (ACT-1).
+   */
+  it('переименование объекта в области догоняет расстановку и системы (ED-19)', async () => {
+    const scene = {
+      ...FIXTURE_SCENE,
+      systems: [
+        {
+          name: 'spawner',
+          order: 1,
+          query: { all: ['Position'] },
+          do: [{ if: { cond: true, then: [{ spawnEntity: { prefab: 'Crate' } }] } }],
+        },
+      ],
+    };
+    const host = projectHost(scene);
+    const app = await createEditorApp({ host });
+    const objects = app.frame.stateOf(OBJECTS_AREA_ID) as ObjectsAreaState;
+    await settle();
+    const { session } = app.frame;
+
+    app.frame.activate(OBJECTS_AREA_ID);
+    // Раздел prefab'ов — клавишей раскладки области (ED-32), как у автора.
+    expect(app.frame.handleAreaKey({ code: 'KeyP', phase: 'down', repeat: false })).toBe(true);
+    const crate = prefabRecords(
+      session.documentValue(CONFIG),
+      session.descriptors(CONFIG, PREFAB_LIST),
+    ).find((record) => record.name === 'Crate');
+    app.frame.selection.set(OBJECTS_AREA_ID, [crate?.key ?? '']);
+
+    const bar = (): UiNode => zoneOf(app.frame.view(), 'surface');
+    const field = findAll(
+      bar(),
+      (node) => node.labels?.ariaLabel?.key === 'ui.area.objects.renameTo',
+    )[0];
+    field?.on?.['change']?.({ target: { value: 'Box' } } as unknown as Event);
+    press(buttonByKey(bar(), 'ui.area.objects.renamePrefab'));
+    expect(objects.failure).toBeNull();
+
+    const config = session.documentValue(CONFIG) as {
+      prefabs: readonly { name: string }[];
+      initial: readonly { prefab: string }[];
+      systems: readonly JsonValue[];
+    };
+    expect(config.prefabs.map((prefab) => prefab.name)).toEqual(['Hero', 'Box']);
+    expect(config.initial.map((entry) => entry.prefab)).toEqual(['Hero', 'Box']);
+    // Литерал лежит в глубине тела системы, и находит его обход по имени
+    // действия, а не по месту: `do[0].if.then[0].spawnEntity.prefab`.
+    expect(JSON.stringify(config.systems)).toContain('"prefab":"Box"');
+    expect(JSON.stringify(config.systems)).not.toContain('Crate');
+    // Ключ манифеста переехал НА СВОЁМ месте: дифф пары — один блок, а не два
+    // (ED-21).
+    expect(Object.keys((session.documentValue(VISUALS) as { entities: object }).entities)).toEqual([
+      'Hero',
+      'Box',
+    ]);
+
+    // Одно действие автора — одна запись истории (ED-18), и отменяется оно
+    // целиком, по обоим документам и по всем ссылкам.
+    expect(session.history().undo).toHaveLength(1);
+    expect(session.undo()).toBe(true);
+    expect(session.documentValue(CONFIG)).toEqual(scene);
+    expect(session.documentValue(VISUALS)).toEqual(MANIFEST);
   });
 
   it('переоткрытие переводит обе на документы нового проекта (ED-24)', async () => {

@@ -48,6 +48,7 @@
   "ui.area.objects.composition": "Composition of the selected",
   "ui.area.objects.createComponent": "Create component",
   "ui.area.objects.createPrefab": "Create object",
+  "ui.area.objects.deleteComponent": "Delete component",
   "ui.area.objects.deletePrefab": "Delete object",
   "ui.area.objects.derived": "Derived",
   "ui.area.objects.description": "Editing objects: component schemas and scene prefabs",

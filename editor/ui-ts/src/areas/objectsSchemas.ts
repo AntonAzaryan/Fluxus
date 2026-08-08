@@ -30,7 +30,7 @@
  * Отсутствие операции и есть способ сделать «перестановка MUST NOT быть
  * побочным эффектом» проверяемым: переставить нечем.
  */
-import { loadScene, schemaFiles, world, type SceneDef } from '@game-mvp/core';
+import { loadScene, schemaFiles, world, type SceneDef, type WorldState } from '@game-mvp/core';
 import {
   OperationError,
   getAtPath,
@@ -146,16 +146,50 @@ export interface DerivedComponents {
 
 const EMPTY_DERIVED: DerivedComponents = Object.freeze({ names: Object.freeze([]), failure: null });
 
+/** Мир конфига либо причина, по которой его нет. */
+interface LoadedConfig {
+  /** Мир поднятой сцены; `null` — сцена не поднялась. */
+  readonly world: WorldState | null;
+  /** Почему не поднялась (ED-8); `null` — поднялась. */
+  readonly failure: string | null;
+}
+
+const EMPTY_LOADED: LoadedConfig = Object.freeze({ world: null, failure: null });
+
 /**
  * Кэш по ссылке на значение документа. Значения сессии иммутабельны и меняются
  * заменой ссылки, поэтому ключ по ссылке точен: правка схемы даёт другой объект
  * и другой ответ. Без кэша мир поднимался бы на каждую отрисовку (design,
- * «Risks»: правка перечня перестраивает мир на каждую валидацию).
+ * «Risks»: правка перечня перестраивает мир на каждую валидацию), причём не
+ * по разу: состав prefab'а спрашивает схему у КАЖДОГО своего компонента, и
+ * подъём на вопрос означал бы `loadScene` на компонент.
+ *
+ * Кэшируется сам мир, а не производное от него: мир тут только читают
+ * (`componentNames`, `componentSchema`), а править его нечем — мутаторы наружу
+ * не экспортируются вовсе (TICK-3).
  */
+const loadedCache = new WeakMap<object, LoadedConfig>();
 const derivedCache = new WeakMap<object, DerivedComponents>();
 
 const message = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+function loadedConfig(config: JsonValue | undefined): LoadedConfig {
+  if (!isJsonObject(config)) return EMPTY_LOADED;
+  const cached = loadedCache.get(config);
+  if (cached !== undefined) return cached;
+  let found: LoadedConfig;
+  try {
+    // Приведение без проверки намеренно: разбирать конфиг умеет ядро, и оно же
+    // отвергает негодный (SER-7). Вторая проверка здесь была бы второй
+    // реализацией правила (ED-1); причина отказа показывается как есть.
+    found = { world: loadScene(config as unknown as SceneDef).world, failure: null };
+  } catch (error) {
+    found = { world: null, failure: message(error) };
+  }
+  loadedCache.set(config, found);
+  return found;
+}
 
 /**
  * Синтезируемые загрузчиком схемы (дельта ED-6). Считаются вычитанием: мир
@@ -167,22 +201,17 @@ export function derivedComponents(config: JsonValue | undefined): DerivedCompone
   if (!isJsonObject(config)) return EMPTY_DERIVED;
   const cached = derivedCache.get(config);
   if (cached !== undefined) return cached;
+  const loaded = loadedConfig(config);
   const declared = new Set(declaredComponentNames(config));
-  let found: DerivedComponents;
-  try {
-    // Приведение без проверки намеренно: разбирать конфиг умеет ядро, и оно же
-    // отвергает негодный (SER-7). Вторая проверка здесь была бы второй
-    // реализацией правила (ED-1); причина отказа показывается как есть.
-    const scene = loadScene(config as unknown as SceneDef);
-    found = {
-      names: Object.freeze(
-        world.componentNames(scene.world).filter((name) => !declared.has(name)),
-      ),
-      failure: null,
-    };
-  } catch (error) {
-    found = { names: Object.freeze([]), failure: message(error) };
-  }
+  const found: DerivedComponents =
+    loaded.world === null
+      ? { names: Object.freeze([]), failure: loaded.failure }
+      : {
+          names: Object.freeze(
+            world.componentNames(loaded.world).filter((name) => !declared.has(name)),
+          ),
+          failure: null,
+        };
   derivedCache.set(config, found);
   return found;
 }
@@ -263,23 +292,26 @@ export function derivedComponentSubject(
   };
 }
 
-/** Состав синтезированной схемы: спрашивается у поднятого мира, а не у документа. */
+/**
+ * Состав синтезированной схемы: спрашивается у поднятого мира, а не у
+ * документа. Мир берётся кэшированный (`loadedConfig`): состав prefab'а
+ * спрашивает схему у каждого своего компонента, и подъём на вопрос стоил бы
+ * `loadScene` на строку инспектора.
+ *
+ * Мир не поднялся — пустой состав без причины: о ней уже отчитался
+ * `derivedComponents`, и второго сообщения об одном отказе область не
+ * показывает.
+ */
 export function derivedComponentFields(
   config: JsonValue | undefined,
   name: string,
 ): readonly (readonly [string, string])[] {
-  if (!isJsonObject(config)) return [];
-  try {
-    const scene = loadScene(config as unknown as SceneDef);
-    const schema = world.componentSchema(scene.world, name);
-    return schema === undefined
-      ? []
-      : Object.entries(schema.fields).map(([field, type]) => [field, type] as const);
-  } catch {
-    // Мир не поднялся — причину уже называет `derivedComponents`, и второго
-    // сообщения об одном отказе область не показывает.
-    return [];
-  }
+  const state = loadedConfig(config).world;
+  if (state === null) return [];
+  const schema = world.componentSchema(state, name);
+  return schema === undefined
+    ? []
+    : Object.entries(schema.fields).map(([field, type]) => [field, type] as const);
 }
 
 // -------------------------------------------------------------- операции

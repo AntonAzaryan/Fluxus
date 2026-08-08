@@ -257,16 +257,26 @@ function operatorPicker(env: BlockEnvironment, path: JsonPath, value: JsonValue)
   return el('div', { classes: ['fx-cluster'], attrs: { 'data-picker': pathKey(path) }, children: [picker] });
 }
 
-/** Аргумент известной формы (`checkExpression`) — единственное, что ядро знает. */
+/**
+ * Аргумент известной формы (`checkExpression`) — единственное, что ядро знает.
+ *
+ * `kinds` — форма аргументов ЭТОГО оператора целиком, а не только вид текущего:
+ * поле сверяется со схемой того компонента, который называет соседний аргумент,
+ * и место соседа берётся из каталога (`kinds.indexOf('component')`), а не из
+ * знания о том, как устроен `getComponent`. Позиция, вписанная числом, была бы
+ * той самой второй реализацией формы DSL, которую запрещает ED-1: каталог
+ * пометит новый оператор иначе — и число разошлось бы с ним молча.
+ */
 function operatorArgControl(
   env: BlockEnvironment,
-  kind: OperatorArg,
+  kinds: readonly OperatorArg[],
+  index: number,
   path: JsonPath,
   value: JsonValue,
   args: readonly JsonValue[],
 ): UiNode {
   const world = env.world;
-  switch (kind) {
+  switch (kinds[index]) {
     case 'expression':
       return expressionBlock(env, path, value);
     case 'variable':
@@ -274,7 +284,8 @@ function operatorArgControl(
     case 'component':
       return namePicker(env, path, value, world === null ? null : world.componentNames);
     case 'field': {
-      const component = args[1];
+      const at = kinds.indexOf('component');
+      const component = at < 0 ? undefined : args[at];
       return namePicker(
         env,
         path,
@@ -286,6 +297,10 @@ function operatorArgControl(
       // Реестра типов событий и их полей в ядре нет вовсе (EXPR-2): состав
       // данных задаёт эмитент, и подсказывать здесь нечем.
       return namePicker(env, path, value, null);
+    default:
+      // Формы у этого места каталог не назвал: показывается выражением, как
+      // любой аргумент, который ядро не структурирует.
+      return expressionBlock(env, path, value);
   }
 }
 
@@ -370,7 +385,7 @@ export function expressionBlock(env: BlockEnvironment, path: JsonPath, value: Js
         rows.push(
           slotRow(
             String(index),
-            operatorArgControl(env, kind, at, node.args[index] ?? null, node.args),
+            operatorArgControl(env, block.args, index, at, node.args[index] ?? null, node.args),
             undefined,
             at,
           ),
