@@ -37,16 +37,16 @@
 
 ## 5. Правило редактора получает описание (ED-8, ED-14)
 
-- [ ] 5.1 В `editor/core-ts/src/validation/adapters.ts` расширить `ErrorListResult` необязательным `warnings` и научить `reportErrorList` заводить находки важности `warning` с тем же разбором адреса; `validateCurvatureMap` не трогать
-- [ ] 5.2 В `editor/core-ts/src/validation/engineRules.ts` — опция правил движка с описанием эффектов (по образцу `EngineRuleKinds`: знание приносит сборка, не правило) и передача её в `validateManifest` внутри `manifestRule`
+- [x] 5.1 В `editor/core-ts/src/validation/adapters.ts` расширить `ErrorListResult` необязательным `warnings` и научить `reportErrorList` заводить находки важности `warning` с тем же разбором адреса; `validateCurvatureMap` не трогать
+- [x] 5.2 В `editor/core-ts/src/validation/engineRules.ts` — опция правил движка с описанием эффектов (по образцу `EngineRuleKinds`: знание приносит сборка, не правило) и передача её в `validateManifest` внутри `manifestRule`
 - [ ] 5.3 В `editor/ui-ts/src/areas/sceneProject.ts` включить в `sceneValidationRules()` правила движка с видами документов этого проекта (`visuals`, `scene`, `terrain-curvature`) и с `CAMERA_EFFECTS_DESCRIPTION` — сегодня `engineValidationRules()` в собранном редакторе не регистрируется вовсе, и правило `assets.manifest` там не работает (design.md)
 - [ ] 5.4 Тесты: `editor/core-ts/test/validationRules.test.ts` — находки секции с адресом и важностью; `editor/ui-ts/test/validation.test.ts` (или `sceneArea.test.ts`) — правила движка присутствуют в реестре сборки
 
 ## 6. Междокументное правило имени состояния (ED-8)
 
-- [ ] 6.1 В `editor/core-ts/src/validation/crossDocument.ts` добавить `editor.cameraEffectState`: ключ таблицы `states` манифеста, не совпадающий ни с одной компонентой открытой сцены, — находка важности `warning`; при отсутствии открытых сцен правило молчит (общее правило файла)
-- [ ] 6.2 Строки описания правила и причины — в бандл `@game-mvp/editor-core` (`editor.ru.json`, `editor.en.json`), отпечатки перевода пересобрать `UPDATE_FINGERPRINTS=1 npx vitest run` из `editor/core-ts`
-- [ ] 6.3 Тест в `editor/core-ts/test/validationRules.test.ts` — по образцу «ED-19: рассинхронизация пары»
+- [x] 6.1 В `editor/core-ts/src/validation/crossDocument.ts` добавить `editor.cameraEffectState`: ключ таблицы `states` манифеста, не совпадающий ни с одной компонентой открытой сцены, — находка важности `warning`; при отсутствии открытых сцен правило молчит (общее правило файла)
+- [x] 6.2 Строки описания правила и причины — в бандл `@game-mvp/editor-core` (`editor.ru.json`, `editor.en.json`), отпечатки перевода пересобрать `UPDATE_FINGERPRINTS=1 npx vitest run` из `editor/core-ts`
+- [x] 6.3 Тест в `editor/core-ts/test/validationRules.test.ts` — по образцу «ED-19: рассинхронизация пары»
 
 ## 7. Операции секции (ED-29)
 

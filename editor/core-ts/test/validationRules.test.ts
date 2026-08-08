@@ -16,6 +16,7 @@ import {
   type SystemDef,
   type TerrainDef,
 } from '@game-mvp/core';
+import type { CameraEffectsDescription } from '@game-mvp/assets';
 import { describe, expect, it } from 'vitest';
 import { createEditorSession, type EditorSession, type JsonValue } from '../src/document/index.js';
 import { createOperationRegistry, registerBuiltinOperations } from '../src/operations/index.js';
@@ -25,9 +26,11 @@ import {
   crossDocumentRules,
   engineValidationRules,
   registerValidationRules,
+  CAMERA_EFFECT_STATE_RULE,
   CREATE_TERRAIN_GRID,
   CURVATURE_GRID_RULE,
   CURVATURE_RULE,
+  DEFAULT_ENGINE_KINDS,
   DEFAULT_PAIR_KINDS,
   DEFAULT_PLACEMENT_SITES,
   DECORATION_VISUAL_RULE,
@@ -242,6 +245,99 @@ describe('ED-14: манифест визуалов — все нарушения
         [MANIFEST]: { kind: 'manifest', value: MANIFEST_VALUE },
       }).ok,
     ).toBe(true);
+  });
+});
+
+/**
+ * ED-14, ASSET-8: секция эффектов проверяется тем же правилом, что остальной
+ * манифест, — но только если сборка подала правилам описание типов (CAM-9).
+ * Описание здесь выдуманное: своего перечня типов у редактора нет и быть не
+ * должно, а «правило берёт то, что дали» проверяется как раз чужим набором.
+ */
+describe('ED-14: секция эффектов камеры по описанию типов (CAM-9)', () => {
+  const description: CameraEffectsDescription = {
+    types: [
+      { id: 'shake', kind: 'impulse', params: [{ name: 'decay', defaultValue: 1.4, min: 0, max: 10 }] },
+      { id: 'sway', kind: 'lasting', params: [{ name: 'rollAmp', defaultValue: 0.05, min: 0 }] },
+    ],
+    binding: { impulse: [{ name: 'amplitude', defaultValue: 0.6, min: 0 }], lasting: [] },
+  };
+
+  const withEffects = (section: JsonValue): JsonValue => ({ ...MANIFEST_VALUE, cameraEffects: section });
+
+  const described = (section: JsonValue): ValidationReport =>
+    check({ [MANIFEST]: { kind: 'manifest', value: withEffects(section) } }, [
+      ...engineValidationRules(DEFAULT_ENGINE_KINDS, { cameraEffects: description }),
+    ]);
+
+  it('без описания правило о типах молчит: перечня типов у него нет', () => {
+    const report = check(
+      { [MANIFEST]: { kind: 'manifest', value: withEffects({ events: { Boom: { effect: 'nope' } } }) } },
+      [...engineValidationRules()],
+    );
+    expect(report.forDocument(MANIFEST)).toHaveLength(0);
+  });
+
+  it('неизвестный тип — находка важности warning, и она не запрещает сохранение (ED-3)', () => {
+    const report = described({ events: { Boom: { effect: 'wobble-3000' } } });
+    const issue = report.forDocument(MANIFEST).find((found) => found.ruleId === MANIFEST_RULE)!;
+    expect(issue.severity).toBe('warning');
+    expect(issue.path).toEqual(['cameraEffects', 'events', 'Boom', 'effect']);
+    expect(detailOf(issue)).toContain('wobble-3000');
+    // Предупреждения `ok` не отменяют: документ с типом из будущей сборки
+    // камеры остаётся сохраняемым (ASSET-8).
+    expect(report.ok).toBe(true);
+  });
+
+  it('значение вне диапазона — ошибка с адресом до поля', () => {
+    const report = described({ events: { Boom: { effect: 'shake', decay: 99 } } });
+    const issue = report.at(MANIFEST, ['cameraEffects', 'events', 'Boom', 'decay'])[0]!;
+    expect(issue.ruleId).toBe(MANIFEST_RULE);
+    expect(issue.severity).toBe('error');
+    expect(issue.received).toBe(99);
+    expect(report.ok).toBe(false);
+  });
+
+  it('законная запись находок не даёт', () => {
+    const report = described({ events: { Boom: { effect: 'shake', decay: 2, amplitude: 0.5 } } });
+    expect(report.forDocument(MANIFEST)).toHaveLength(0);
+  });
+});
+
+/**
+ * ED-8, CAM-6: ключ таблицы длящихся эффектов — имя компоненты-состояния, и
+ * выводится оно из открытой сцены (SER-7). Правило междокументное, поэтому и
+ * живёт рядом с соседями по паре, а не в правилах движка.
+ */
+describe('ED-8: имя состояния в таблице длящихся эффектов', () => {
+  const manifestWith = (states: JsonValue): JsonValue => ({ ...MANIFEST_VALUE, cameraEffects: { states } });
+
+  it('имя, которого не объявляет ни одна сцена, — предупреждение с адресом записи', () => {
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [MANIFEST]: { kind: 'manifest', value: manifestWith({ Drunk: { effect: 'sway' } }) },
+    });
+    const issue = report.forDocument(MANIFEST).find((found) => found.ruleId === CAMERA_EFFECT_STATE_RULE)!;
+    expect(issue.severity).toBe('warning');
+    expect(issue.path).toEqual(['cameraEffects', 'states', 'Drunk']);
+    expect(knownOf(issue)).toEqual(['Pos']);
+    // Предупреждение сохранению не мешает (ED-3).
+    expect(report.ok).toBe(true);
+  });
+
+  it('объявленная сценой компонента находок не даёт', () => {
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [MANIFEST]: { kind: 'manifest', value: manifestWith({ Pos: { effect: 'sway' } }) },
+    });
+    expect(report.forDocument(MANIFEST).filter((f) => f.ruleId === CAMERA_EFFECT_STATE_RULE)).toHaveLength(0);
+  });
+
+  it('без открытой сцены правило молчит: незагруженная сцена — не привязка в никуда', () => {
+    const report = check({
+      [MANIFEST]: { kind: 'manifest', value: manifestWith({ Drunk: { effect: 'sway' } }) },
+    });
+    expect(report.issues.filter((f) => f.ruleId === CAMERA_EFFECT_STATE_RULE)).toHaveLength(0);
   });
 });
 

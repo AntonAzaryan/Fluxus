@@ -641,6 +641,8 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
     await saveDocuments({ session, host: host.content, groups: pairingGroups([PAIRING]), rules });
 
     validator.run(session);
-    expect(validator.lastRun).toEqual({ executed: 0, reused: 3 });
+    // Четыре пары «правило × документ»: сцена держит два междокументных
+    // правила, манифест — два своих (пара ED-19 и имя состояния CAM-6).
+    expect(validator.lastRun).toEqual({ executed: 0, reused: 4 });
   });
 });

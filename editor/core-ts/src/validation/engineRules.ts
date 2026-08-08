@@ -35,7 +35,11 @@ import {
   type SystemDef,
   type TerrainDef,
 } from '@game-mvp/core';
-import { validateCurvatureMap, validateManifest } from '@game-mvp/assets';
+import {
+  validateCurvatureMap,
+  validateManifest,
+  type CameraEffectsDescription,
+} from '@game-mvp/assets';
 import type { DocumentKind, EditorDocument } from '../document/index.js';
 import { REJECTED, reportErrorList, reportThrown } from './adapters.js';
 import { ruleDescriptionKey } from './reasons.js';
@@ -57,6 +61,19 @@ export const DEFAULT_ENGINE_KINDS: EngineRuleKinds = Object.freeze({
   manifest: 'manifest',
   system: 'system',
 });
+
+/**
+ * Знание, которое правилам приносит сборка, — по тем же основаниям, что виды
+ * документов и адреса междокументных правил (`DocumentSite`): раскладку и
+ * состав редактируемого знает тот, кто собирает редактор (ED-25).
+ *
+ * Описание типов эффектов камеры (`camera` CAM-9) импортом сюда прийти не может:
+ * пакет headless и от `@game-mvp/render` не зависит — а описание живёт там.
+ * Без него секция эффектов проверяется структурно (ASSET-8), с ним — по нему.
+ */
+export interface EngineRuleOptions {
+  readonly cameraEffects?: CameraEffectsDescription;
+}
 
 /** Кто проверял — уезжает в ожидание находки, чтобы вопрос «чьё правило» не гадался. */
 export const LOAD_SCENE = '@game-mvp/core:loadScene';
@@ -164,7 +181,10 @@ export function systemRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): Valid
 }
 
 /** Манифест визуалов (ASSET-6, ASSET-8) — ED-14 требует тех же проверок в реальном времени. */
-export function manifestRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): ValidationRule {
+export function manifestRule(
+  kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS,
+  options: EngineRuleOptions = {},
+): ValidationRule {
   return {
     id: MANIFEST_RULE,
     descriptionKey: ruleDescriptionKey(MANIFEST_RULE),
@@ -172,7 +192,17 @@ export function manifestRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): Val
     appliesTo: [kinds.manifest],
     check(run) {
       const value = run.valueOf(run.document.id);
-      reportErrorList(run, { by: VALIDATE_MANIFEST }, validateManifest(value));
+      // Описание типов эффектов — вход валидации, а не знание правила (ASSET-8,
+      // CAM-9): без него секция проверяется структурно, с ним — по нему, и
+      // предупреждения о её записях доезжают до находок важности `warning`.
+      reportErrorList(
+        run,
+        { by: VALIDATE_MANIFEST },
+        validateManifest(
+          value,
+          options.cameraEffects === undefined ? {} : { cameraEffects: options.cameraEffects },
+        ),
+      );
     },
   };
 }
@@ -192,12 +222,15 @@ export function curvatureRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): Va
 }
 
 /** Все правила движка одним набором — обычная сборка редактора. */
-export function engineValidationRules(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): readonly ValidationRule[] {
+export function engineValidationRules(
+  kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS,
+  options: EngineRuleOptions = {},
+): readonly ValidationRule[] {
   return Object.freeze([
     sceneRule(kinds),
     terrainRule(kinds),
     systemRule(kinds),
-    manifestRule(kinds),
+    manifestRule(kinds, options),
     curvatureRule(kinds),
   ]);
 }

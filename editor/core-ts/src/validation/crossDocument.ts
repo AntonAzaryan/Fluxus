@@ -125,11 +125,22 @@ export const DEFAULT_DECORATION_SITES: readonly DocumentSite[] = Object.freeze([
   Object.freeze({ kind: 'presentation', path: Object.freeze(['decorations']) }),
 ]);
 
+/**
+ * Где в манифесте лежит таблица длящихся эффектов (`assets` ASSET-8): ключ
+ * записи — имя компоненты-состояния, и знать её обязан тот, кто ищет вторую
+ * сторону в конфиге сцены.
+ */
+export const MANIFEST_LASTING_EFFECTS_PATH: JsonPath = Object.freeze(['cameraEffects', 'states']);
+
+/** Где в конфиге сцены объявлены компоненты (SER-7). */
+export const COMPONENTS_PATH: JsonPath = Object.freeze(['components']);
+
 export const VISUAL_FOR_PREFAB_RULE = 'editor.visualForPrefab';
 export const PREFAB_FOR_VISUAL_RULE = 'editor.prefabForVisual';
 export const PLACEMENT_PREFAB_RULE = 'editor.placementPrefab';
 export const CURVATURE_GRID_RULE = 'editor.curvatureGrid';
 export const DECORATION_VISUAL_RULE = 'editor.decorationVisual';
+export const CAMERA_EFFECT_STATE_RULE = 'editor.cameraEffectState';
 
 /**
  * Коды причин: константами, а не литералами в двух местах. Один и тот же код
@@ -146,6 +157,7 @@ export const DECORATION_VISUAL_RULE = 'editor.decorationVisual';
 const MISSING_VISUAL = 'missingVisual';
 const MISSING_PREFAB = 'missingPrefab';
 const GRID_MISMATCH = 'gridMismatch';
+const MISSING_COMPONENT = 'missingComponent';
 
 /**
  * Prefabs, которые сцена поднимет, не объявляя их в документе: носители
@@ -376,6 +388,64 @@ export function decorationVisualRule(
   };
 }
 
+/** Имена компонент, объявленных конфигом сцены (SER-7). */
+function componentNamesOf(value: JsonValue | undefined): readonly string[] {
+  if (value === undefined) return [];
+  const list = getAtPath(value, COMPONENTS_PATH);
+  if (!isJsonArray(list)) return [];
+  const names: string[] = [];
+  for (const entry of list) {
+    if (isJsonObject(entry) && typeof entry['name'] === 'string') names.push(entry['name']);
+  }
+  return names;
+}
+
+/**
+ * `camera` CAM-6, `assets` ASSET-8: ключ таблицы длящихся эффектов — имя
+ * компоненты-состояния, и выводится оно из открытой сцены целиком (SER-7).
+ * Ключ, которого ни одна сцена не объявляет, — привязка в никуда: эффект не
+ * включится никогда, а автор об этом узнает только не увидев его.
+ *
+ * Важность — предупреждение: в рантайме такая запись просто не активируется, а
+ * манифест переживает код (ASSET-8) — сцена, объявляющая эту компоненту, может
+ * лежать в проекте и быть незагруженной прямо сейчас.
+ *
+ * Второго условия срабатывания длящегося эффекта — зеркалирования компоненты в
+ * `EntityView.states` списком `stateComponents` Extractor'а — правило не ловит:
+ * это конфиг сборки клиента, документом редактора он не является. В рантайме на
+ * него уже есть предупреждение диспетчера.
+ *
+ * Пары к таблице `events` здесь нет намеренно: машинного перечня типов событий
+ * тика не существует (нативные системы называют их литералами), и правило
+ * «имя события никем не эмитится» ругалось бы на каждое из них. Имена событий
+ * редактор подсказывает, а не проверяет.
+ */
+export function cameraEffectStateRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): ValidationRule {
+  return {
+    id: CAMERA_EFFECT_STATE_RULE,
+    descriptionKey: ruleDescriptionKey(CAMERA_EFFECT_STATE_RULE),
+    reasonCodes: [MISSING_COMPONENT],
+    appliesTo: [kinds.manifest],
+    severity: 'warning',
+    check(run) {
+      const scenes = run.documentsOfKind(kinds.scene);
+      if (scenes.length === 0) return;
+      const known = collect(scenes, COMPONENTS_PATH, componentNamesOf, run);
+      const table = getAtPath(run.document.value, MANIFEST_LASTING_EFFECTS_PATH);
+      if (!isJsonObject(table)) return;
+      for (const name of Object.keys(table)) {
+        if (known.names.has(name)) continue;
+        run.report({
+          path: [...MANIFEST_LASTING_EFFECTS_PATH, name],
+          expected: { kind: 'reference', targets: known.targets, known: known.sorted },
+          code: MISSING_COMPONENT,
+          params: { name },
+        });
+      }
+    },
+  };
+}
+
 /** Найденная сетка террейна: где лежит и что там. */
 interface FoundGrid {
   readonly documentId: DocumentId;
@@ -454,5 +524,6 @@ export function crossDocumentRules(
     placementPrefabRule(kinds, sites),
     curvatureGridRule(kinds, terrainSites),
     decorationVisualRule(kinds, decorationSites),
+    cameraEffectStateRule(kinds),
   ]);
 }

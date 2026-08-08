@@ -562,6 +562,14 @@
       "source": "d6076f16",
       "translated": "d1d792d0"
     },
+    "validation.reason.editor.cameraEffectState.missingComponent": {
+      "source": "d5e8234a",
+      "translated": "c0470e3a"
+    },
+    "validation.reason.editor.cameraEffectState.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
     "validation.reason.editor.curvatureGrid.gridMismatch": {
       "source": "c59eb270",
       "translated": "9139046f"
@@ -629,6 +637,10 @@
     "validation.rule.core.terrain": {
       "source": "07a2ee06",
       "translated": "c21195b6"
+    },
+    "validation.rule.editor.cameraEffectState": {
+      "source": "19c288f6",
+      "translated": "e62d628f"
     },
     "validation.rule.editor.curvatureGrid": {
       "source": "cc663f83",
