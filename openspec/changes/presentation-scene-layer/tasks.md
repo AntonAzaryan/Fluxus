@@ -52,6 +52,6 @@
 
 ## 6. Гейт
 
-- [x] 6.1 `npm run check` из корня (typecheck + lint + test)
-- [x] 6.2 `openspec validate presentation-scene-layer --type change --strict` и `openspec validate --specs --strict`
-- [x] 6.3 Схемы `engine/schemas/` не перегенерируются: парный документ и манифест — не документы ядра (SER-5 их не порождает); убедиться, что `npm run schemas` даёт пустой дифф
+- [x] 6.1 `npm run check` из корня (typecheck + lint + test) — зелёный, проверено ревью
+- [x] 6.2 `openspec validate presentation-scene-layer --type change --strict` и `openspec validate --specs --strict` — проверено ревью
+- [x] 6.3 Схемы `engine/schemas/` не перегенерируются: парный документ и манифест — не документы ядра (SER-5 их не порождает); убедиться, что `npm run schemas` даёт пустой дифф — прогнан ревью, дифф пуст, `engine/core-ts` и `engine/tests/golden/` побайтово нетронуты
