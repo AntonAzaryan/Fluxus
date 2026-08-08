@@ -11,6 +11,13 @@
  * cliff-границу на нижний уровень, а рампа смыкается с плато без щели.
  * Нормаль — аналитическая производная той же билинейной формы, без численного
  * дифференцирования по кадрам.
+ *
+ * В матче сетка и карта кривизны иммутабельны (TERR-6) — углы считаются один
+ * раз. У документного продюсера (REND-11) они мутабельны: кисти редактора
+ * правят уровни и кривизну (ED-10, ED-11), поэтому поверхность умеет
+ * пересчитывать углы прямоугольником клеток (`update`), а не собираться заново
+ * на каждый мазок. Пересчитанную сетку отдаёт ядро (TERR-5): производные
+ * величины здесь не выводятся, только читаются.
  */
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
 import { CURVATURE_SCALE, type TerrainCurvatureMap } from '@game-mvp/assets';
@@ -81,6 +88,34 @@ export interface VisualSurface {
   normalAt(wx: number, wy: number, out: SurfaceNormal): SurfaceNormal;
 }
 
+/**
+ * Поверхность, чьи углы можно пересчитать по прямоугольнику клеток. Нужна
+ * документному продюсеру: кисть правит несколько клеток, а не арену, и пересчёт
+ * всей сетки на мазок съел бы бюджет кадра ED-15 тем же, чем его съела бы
+ * пересборка сцены (REND-11).
+ */
+export interface MutableVisualSurface extends VisualSurface {
+  /**
+   * Подменяет сетку и карту кривизны и пересчитывает углы клеток прямоугольника
+   * [x0..x1] × [y0..y1] (включительно, клампится по сетке). Пустой прямоугольник
+   * (`x1 < x0`) меняет только ссылки — так уходит сетка, отличающаяся лишь
+   * картой пола: пола поверхность не видит.
+   *
+   * Прямоугольник задаётся в ИЗМЕНИВШИХСЯ клетках: угол клетки усредняется по
+   * смежным с ним клеткам, поэтому расширение на клетку по каждой стороне
+   * поверхность делает сама. Размеры сетки и `tileSize` менять нельзя — другая
+   * арена требует другой раскладки углов, то есть новой поверхности.
+   */
+  update(
+    grid: TerrainGrid,
+    curvature: TerrainCurvatureMap | null,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+  ): void;
+}
+
 /** Смежные с узлом (nx, ny) клетки — до четырёх; используется усреднением углов. */
 const NODE_CELLS: readonly (readonly [number, number])[] = [
   [-1, -1],
@@ -90,17 +125,18 @@ const NODE_CELLS: readonly (readonly [number, number])[] = [
 ];
 
 export function createVisualSurface(
-  grid: TerrainGrid,
+  initialGrid: TerrainGrid,
   heightStep: number,
-  curvature: TerrainCurvatureMap | null = null,
-): VisualSurface {
-  const { width, height } = grid;
+  initialCurvature: TerrainCurvatureMap | null = null,
+): MutableVisualSurface {
+  const { width, height } = initialGrid;
+  let grid = initialGrid;
+  let curvature = initialCurvature;
   // Приём сетки — точка входной границы (REND-1, TERR-2): дальше поверхность
   // считается целиком во float.
-  const tile = grid.tileSize / FIXED_ONE;
+  let tile = grid.tileSize / FIXED_ONE;
 
   // Мировые высоты углов каждой клетки, [cell * 4 + corner], порядок cornerLevels.
-  // Уровни и карта кривизны иммутабельны в матче — считается один раз.
   const corners = new Float32Array(width * height * 4);
   const offsetOfCorner = (cornerLevel: number, nodeX: number, nodeY: number): number => {
     if (curvature === null) return 0;
@@ -118,16 +154,25 @@ export function createVisualSurface(
     }
     return count === 0 ? 0 : (sum / count / CURVATURE_SCALE) * heightStep;
   };
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const levels = cornerLevels(grid, x, y);
-      const base = (y * width + x) * 4;
-      corners[base] = levels[0] * heightStep + offsetOfCorner(levels[0], x, y);
-      corners[base + 1] = levels[1] * heightStep + offsetOfCorner(levels[1], x + 1, y);
-      corners[base + 2] = levels[2] * heightStep + offsetOfCorner(levels[2], x + 1, y + 1);
-      corners[base + 3] = levels[3] * heightStep + offsetOfCorner(levels[3], x, y + 1);
+
+  /** Пересчёт углов клеток прямоугольника; границы клампятся по сетке. */
+  const computeCells = (x0: number, y0: number, x1: number, y1: number): void => {
+    const fromX = Math.max(x0, 0);
+    const fromY = Math.max(y0, 0);
+    const toX = Math.min(x1, width - 1);
+    const toY = Math.min(y1, height - 1);
+    for (let y = fromY; y <= toY; y++) {
+      for (let x = fromX; x <= toX; x++) {
+        const levels = cornerLevels(grid, x, y);
+        const base = (y * width + x) * 4;
+        corners[base] = levels[0] * heightStep + offsetOfCorner(levels[0], x, y);
+        corners[base + 1] = levels[1] * heightStep + offsetOfCorner(levels[1], x + 1, y);
+        corners[base + 2] = levels[2] * heightStep + offsetOfCorner(levels[2], x + 1, y + 1);
+        corners[base + 3] = levels[3] * heightStep + offsetOfCorner(levels[3], x, y + 1);
+      }
     }
-  }
+  };
+  computeCells(0, 0, width - 1, height - 1);
 
   /** Клетка и локальные (u, v) точки; за краем — ближайшая клетка (как TERR-4). */
   const scratch = { cell: 0, u: 0, v: 0 };
@@ -142,7 +187,32 @@ export function createVisualSurface(
   };
 
   return {
-    hasCurvature: curvature !== null,
+    get hasCurvature(): boolean {
+      return curvature !== null;
+    },
+
+    update(
+      nextGrid: TerrainGrid,
+      nextCurvature: TerrainCurvatureMap | null,
+      x0: number,
+      y0: number,
+      x1: number,
+      y1: number,
+    ): void {
+      if (nextGrid.width !== width || nextGrid.height !== height) {
+        throw new Error(
+          `render: поверхность собрана на сетке ${width}×${height}, ` +
+            `пришла ${nextGrid.width}×${nextGrid.height} — нужна новая поверхность (REND-9)`,
+        );
+      }
+      grid = nextGrid;
+      curvature = nextCurvature;
+      // Вторая точка приёма той же входной границы (REND-1, TERR-2).
+      tile = grid.tileSize / FIXED_ONE;
+      if (x1 < x0 || y1 < y0) return;
+      // Угол усредняется по смежным клеткам — правка клетки трогает соседей.
+      computeCells(x0 - 1, y0 - 1, x1 + 1, y1 + 1);
+    },
 
     cornerHeights(x: number, y: number): [number, number, number, number] {
       const base = (y * width + x) * 4;

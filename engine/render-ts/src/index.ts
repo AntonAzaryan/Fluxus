@@ -62,9 +62,9 @@ export { applyCameraPose } from './camera/apply.js';
 // Визуальная поверхность террейна (REND-9, REND-10): хелпер, общий для
 // подсистем террейна и моделей, и его источник с загрузкой карты кривизны.
 export { cornerLevels, createVisualSurface } from './visualSurface.js';
-export type { SurfaceNormal, VisualSurface } from './visualSurface.js';
+export type { MutableVisualSurface, SurfaceNormal, VisualSurface } from './visualSurface.js';
 export { VisualSurfaceSource } from './surfaceSource.js';
-export type { VisualSurfaceSourceOptions } from './surfaceSource.js';
+export type { SurfaceChangeListener, VisualSurfaceSourceOptions } from './surfaceSource.js';
 export { tiltTarget, smoothTilt } from './model/surfaceAlign.js';
 export type { TiltVector } from './model/surfaceAlign.js';
 
@@ -79,7 +79,7 @@ export {
   buildWallGeometry,
   toBufferGeometry,
 } from './subsystems/terrain.js';
-export type { TerrainGeometryData, TerrainOptions } from './subsystems/terrain.js';
+export type { CellRect, TerrainGeometryData, TerrainOptions } from './subsystems/terrain.js';
 
 // Подсистема моделей (REND-3..6).
 export { ModelsSubsystem } from './subsystems/models.js';

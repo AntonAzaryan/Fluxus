@@ -207,3 +207,107 @@ describe('VisualSurfaceSource (ASSET-7 → REND-9)', () => {
     expect(source.current?.hasCurvature).toBe(false);
   });
 });
+
+describe('VisualSurfaceSource: документные входы (ED-10, ED-11, ED-15)', () => {
+  function makeCtx() {
+    const assets = makeAssets();
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: STEP },
+    };
+    return { assets, ctx };
+  }
+
+  /** 4×2, клетка (x, 0) поднята на уровень 1 — результат кисти уровня (ED-10). */
+  function raisedGrid(x: number) {
+    const row = `${'0'.repeat(x)}1${'0'.repeat(3 - x)}`;
+    return createTerrainGrid({
+      width: 4,
+      height: 2,
+      tileSize: FIXED_ONE,
+      levels: [row, '0000'],
+      flags: ['....', '....'],
+    });
+  }
+
+  it('карта кривизны из памяти применяется без ассета и зовёт подписчиков списком клеток', () => {
+    const { assets, ctx } = makeCtx();
+    const source = new VisualSurfaceSource(flatGrid());
+    const changes: (readonly number[] | null)[] = [];
+    source.onChange((cells) => changes.push(cells));
+    source.init(ctx);
+
+    source.setCurvature(curvatureOf(4, 2, ['.7..', '....']));
+    expect(assets.requests.length).toBe(0); // документ, а не ассет
+    expect(source.current!.hasCurvature).toBe(true);
+    expect(source.current!.heightAt(1.5, 0.5)).toBeGreaterThan(0);
+    // Изменилась одна клетка — её и получил подписчик, а не «вся поверхность».
+    expect(changes).toEqual([[1]]);
+
+    // Снятие карты возвращает плоские ступени REND-7.
+    source.setCurvature(null);
+    expect(source.current!.hasCurvature).toBe(false);
+    expect(source.current!.heightAt(1.5, 0.5)).toBeCloseTo(0, 6);
+  });
+
+  it('карта из памяти главнее догруженного ассета: она и есть текущий документ', () => {
+    const { assets, ctx } = makeCtx();
+    const source = new VisualSurfaceSource(flatGrid(), { curvatureMapId: 'visuals/curve.json' });
+    source.init(ctx);
+    source.setCurvature(curvatureOf(4, 2, ['.7..', '....']));
+
+    assets.resolve('terrain-curvature', 'visuals/curve.json', curvatureOf(4, 2, ['...7', '....']));
+    // Ассет не перебил правку: поднята клетка кисти, а не клетка ассета.
+    expect(source.current!.heightAt(1.5, 0.5)).toBeGreaterThan(0);
+    expect(source.current!.heightAt(3.5, 0.5)).toBeCloseTo(0, 6);
+  });
+
+  it('несовпадение сетки карты из памяти — предупреждение и игнор (ASSET-7)', () => {
+    const { ctx } = makeCtx();
+    const warnings: string[] = [];
+    const source = new VisualSurfaceSource(flatGrid(), { warn: (m) => warnings.push(m) });
+    source.init(ctx);
+    source.setCurvature(curvatureOf(3, 3, ['...', '...', '...']));
+    expect(warnings.some((w) => /не совпадает с сеткой/.test(w))).toBe(true);
+    expect(source.current!.hasCurvature).toBe(false);
+  });
+
+  it('setGrid принимает пересчитанную ядром сетку: высоты идут за уровнями (TERR-5)', () => {
+    const { ctx } = makeCtx();
+    const source = new VisualSurfaceSource(flatGrid());
+    const changes: (readonly number[] | null)[] = [];
+    source.onChange((cells) => changes.push(cells));
+    source.init(ctx);
+    expect(source.current!.heightAt(1.5, 0.5)).toBeCloseTo(0, 6);
+
+    const raised = raisedGrid(1);
+    // Обрывы вывело ядро; источник поверхности их не выводит (ED-1).
+    expect(raised.cliffs.length).toBeGreaterThan(0);
+    source.setGrid(raised);
+    expect(source.current!.heightAt(1.5, 0.5)).toBeCloseTo(STEP, 6);
+    expect(source.current!.cornerHeights(1, 0)).toEqual([STEP, STEP, STEP, STEP]);
+    // Соседняя клетка осталась внизу: правка не «перетекла» через границу.
+    expect(source.current!.heightAt(2.5, 0.5)).toBeCloseTo(0, 6);
+    expect(changes).toEqual([[1]]);
+
+    // Сетка, отличающаяся только полом, поверхности не видна — подписчики молчат.
+    source.setGrid(raisedGrid(1));
+    expect(changes.length).toBe(1);
+  });
+
+  it('кривизна пересчитывается по новым уровням: cliff-граница держит её на месте', () => {
+    const { ctx } = makeCtx();
+    const source = new VisualSurfaceSource(flatGrid());
+    source.init(ctx);
+    // Кривизна на клетках 1 и 2, пока обе на уровне 0 — усреднение их связывает.
+    source.setCurvature(curvatureOf(4, 2, ['.77.', '....']));
+    const joined = source.current!.heightAt(2 - 1e-6, 0.5);
+    expect(joined).toBeGreaterThan(0);
+
+    // Клетка 1 поднялась: угол на границе усредняется только по своему уровню.
+    source.setGrid(raisedGrid(1));
+    expect(source.current!.heightAt(2 - 1e-6, 0.5)).toBeGreaterThan(STEP);
+    expect(source.current!.heightAt(2 + 1e-6, 0.5)).toBeLessThan(STEP / 2);
+  });
+});

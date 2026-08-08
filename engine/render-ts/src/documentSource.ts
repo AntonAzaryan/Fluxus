@@ -113,7 +113,8 @@ export class DocumentSource implements PresentationProducer {
       freshEvents: false,
       entities: this.entities,
       events: [],
-      // Террейн приезжает подсистеме инициализацией сценой (REND-8), а не набором.
+      // Террейн приезжает подсистеме сеткой (REND-8), а не набором инстансов:
+      // документная правка уровней и пола идёт через `TerrainSubsystem.applyGrid`.
       floorBits: null,
       floorChangedCells: [],
     };

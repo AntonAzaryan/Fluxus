@@ -14,6 +14,20 @@
  * пересобирает затронутый чанк не позже следующего кадра; полная пересборка
  * чанка — осознанный выбор MVP (см. design Risks).
  *
+ * У документного продюсера (REND-11) мутабельны и уровни: кисти редактора
+ * правят карту уровней, флаги и пол (ED-10), а вьюпорт обязан показать
+ * результат не позже следующего кадра (ED-15). Вход для этого один —
+ * `applyGrid`, декларативный по образцу `DocumentSource.apply`: потребитель
+ * отдаёт сетку ЦЕЛИКОМ, пересчитанную ядром (TERR-5, ED-1), а свести её с
+ * нарисованным — дело подсистемы. Императивного «подвинь эту клетку» здесь нет
+ * по той же причине, по какой его нет у инстансов: картинка обязана быть
+ * функцией документа, а не истории вызовов.
+ *
+ * И пол, и уровни живут в одной сетке, поэтому `applyGrid` заодно закрывает
+ * возврат из превью (ED-9): пол подсистема держит собственной копией и мутирует
+ * дельтами тика, а сетка документа возвращает её к состоянию документов —
+ * выбитая в превью дыра до кадра правки не доживает.
+ *
  * Сетка — вторая точка входной границы рендера (REND-1): она приезжает не из
  * `TickResult`, а инициализацией подсистемы (REND-8) — в воркер-сборке
  * хендшейком оболочки (SHELL-5), — и `tileSize` с координатами cliff-отрезков в
@@ -32,6 +46,14 @@ import type { VisualSurfaceSource } from '../surfaceSource.js';
 export interface TerrainGeometryData {
   readonly positions: Float32Array;
   readonly indices: Uint32Array;
+}
+
+/** Прямоугольник клеток [x0..x0+w) × [y0..y0+h) — область пересборки чанка. */
+export interface CellRect {
+  readonly x0: number;
+  readonly y0: number;
+  readonly w: number;
+  readonly h: number;
 }
 
 /**
@@ -96,11 +118,17 @@ export function buildFloorGeometry(
  * При наличии `surface` кромки стенки на каждом конце отрезка тянутся до
  * фактических визуальных высот углов обеих клеток (skirt): кривизна смещает
  * кромку пола, и стенка обязана дойти до неё без щели (REND-9).
+ *
+ * `bounds` ограничивает выборку отрезками, чья ВЛАДЕЮЩАЯ клетка попала в
+ * прямоугольник. Владелец — клетка с меньшей координатой по нормали ребра
+ * (`cellA`), поэтому владение — разбиение: объединение стенок всех чанков даёт
+ * ровно `grid.cliffs` и ни одного отрезка дважды.
  */
 export function buildWallGeometry(
   grid: TerrainGrid,
   heightStep: number,
   surface?: VisualSurface,
+  bounds?: CellRect,
 ): TerrainGeometryData {
   const positions: number[] = [];
   const indices: number[] = [];
@@ -136,6 +164,19 @@ export function buildWallGeometry(
       const x = Math.round(Math.min(edge.from.x, edge.to.x) / grid.tileSize);
       cellA = (y - 1) * grid.width + x;
       cellB = y * grid.width + x;
+    }
+
+    if (bounds !== undefined) {
+      const ownerX = cellA % grid.width;
+      const ownerY = Math.floor(cellA / grid.width);
+      if (
+        ownerX < bounds.x0 ||
+        ownerY < bounds.y0 ||
+        ownerX >= bounds.x0 + bounds.w ||
+        ownerY >= bounds.y0 + bounds.h
+      ) {
+        continue;
+      }
     }
 
     const fromNodeX = Math.round(edge.from.x / grid.tileSize);
@@ -176,7 +217,7 @@ export function toBufferGeometry(data: TerrainGeometryData): THREE.BufferGeometr
 // ---------------------------------------------------------------- подсистема
 
 export interface TerrainOptions {
-  /** Размер чанка в клетках; мутация пола пересобирает только свой чанк. */
+  /** Размер чанка в клетках; мутация сетки пересобирает только свои чанки. */
   readonly chunkSize?: number;
   readonly floorColor?: number;
   readonly wallColor?: number;
@@ -188,10 +229,19 @@ const DEFAULT_CHUNK_SIZE = 16;
 const DEFAULT_FLOOR_COLOR = 0x4a5d3a;
 const DEFAULT_WALL_COLOR = 0x6b5a48;
 
+/**
+ * Радиус влияния правки клетки в клетках. Уровень клетки виден на расстоянии
+ * одной клетки — угол усредняется по смежным (REND-9), а угол рампы тянется к
+ * проходимому соседу (TERR-5); стенка же читает углы ОБЕИХ своих клеток, и
+ * дальняя из них отстоит от правки ещё на клетку. Отсюда двойка: она задаёт
+ * область инвалидации, а не пересчёта — чанк всё равно один и тот же.
+ */
+const SHAPE_RADIUS = 2;
+
 export class TerrainSubsystem implements RenderSubsystem {
   readonly name = 'terrain';
 
-  private readonly grid: TerrainGrid;
+  private grid: TerrainGrid;
   private readonly chunkSize: number;
   private readonly floorColor: number;
   private readonly wallColor: number;
@@ -200,13 +250,14 @@ export class TerrainSubsystem implements RenderSubsystem {
   private ctx: RenderContext | null = null;
   private heightStep = 1;
   /** Собственная копия карты пола: presentation-состояние может жить без террейна. */
-  private readonly floor: Uint8Array;
-  private readonly chunksX: number;
-  private readonly chunksY: number;
-  private chunkMeshes: (THREE.Mesh | null)[] = [];
+  private floor: Uint8Array;
+  private chunksX: number;
+  private chunksY: number;
+  private floorMeshes: (THREE.Mesh | null)[] = [];
+  private wallMeshes: (THREE.Mesh | null)[] = [];
   private readonly dirtyChunks = new Set<number>();
   private floorMaterial: THREE.MeshStandardMaterial | null = null;
-  private wallMesh: THREE.Mesh | null = null;
+  private wallMaterial: THREE.MeshStandardMaterial | null = null;
 
   constructor(grid: TerrainGrid, options: TerrainOptions = {}) {
     this.grid = grid;
@@ -227,51 +278,73 @@ export class TerrainSubsystem implements RenderSubsystem {
       roughness: 0.95,
       metalness: 0,
     });
-
-    // Кривизна (REND-9) догружается асинхронно: по готовности поверхность
-    // подменяется и вся геометрия пересобирается — уровни при этом те же,
-    // силуэт не меняется.
-    this.surfaceSource?.init(ctx);
-    this.surfaceSource?.onChange(() => {
-      this.rebuildWalls();
-      for (let chunk = 0; chunk < this.chunkMeshes.length; chunk++) this.dirtyChunks.add(chunk);
+    this.wallMaterial = new THREE.MeshStandardMaterial({
+      color: this.wallColor,
+      roughness: 0.95,
+      metalness: 0,
+      side: THREE.DoubleSide,
     });
 
-    this.rebuildWalls();
-    this.chunkMeshes = new Array<THREE.Mesh | null>(this.chunksX * this.chunksY).fill(null);
-    for (let chunk = 0; chunk < this.chunkMeshes.length; chunk++) this.rebuildChunk(chunk);
+    // Поверхность меняется асинхронной догрузкой карты кривизны (REND-9) и
+    // правкой документа (ED-10, ED-11); в первом случае меняется вся, во втором
+    // — перечисленные клетки, и пересобираются только их чанки.
+    this.surfaceSource?.init(ctx);
+    this.surfaceSource?.onChange((cells) => {
+      if (cells === null) this.markAllChunks();
+      else for (const cell of cells) this.markShapeCell(cell);
+    });
+
+    this.allocateChunks();
+    this.markAllChunks();
+    this.flushDirty();
+  }
+
+  /**
+   * Сетка редактируемого документа целиком (ED-10, ED-15): уровни, флаги, пол и
+   * производная cliff-геометрия. Считает её ЯДРО (`createTerrainGrid`, TERR-5)
+   * — подсистема сводит пришедшее с нарисованным и инвалидирует только
+   * затронутые чанки; пересоздавать подсистему на мазок кисти не нужно.
+   *
+   * Пол сверяется с СОБСТВЕННОЙ копией, а не с прежней сеткой: её мог изменить
+   * поток тиков превью (TERR-6), и возврат к документам обязан эту мутацию
+   * снять (ED-9). Поэтому повторный `applyGrid` с той же сеткой — не пустая
+   * операция, а восстановление пола документа.
+   *
+   * Смена размеров арены пересобирает раскладку чанков целиком: это правка
+   * ассета террейна, а не мазок кисти.
+   */
+  applyGrid(next: TerrainGrid): void {
+    const previous = this.grid;
+    if (
+      next.width !== previous.width ||
+      next.height !== previous.height ||
+      next.tileSize !== previous.tileSize
+    ) {
+      this.resetGrid(next);
+      return;
+    }
+
+    this.grid = next;
+    const shape: number[] = [];
+    const cells = next.width * next.height;
+    for (let cell = 0; cell < cells; cell++) {
+      if (previous.levels[cell] !== next.levels[cell] || previous.ramps[cell] !== next.ramps[cell]) {
+        shape.push(cell);
+      }
+      if (this.floor[cell] !== next.floor[cell]) {
+        this.floor[cell] = next.floor[cell]!;
+        // Пол виден только в своей клетке: высот и стенок он не меняет (TERR-6).
+        this.dirtyChunks.add(this.chunkOfCell(cell));
+      }
+    }
+    for (const cell of shape) this.markShapeCell(cell);
+    // Поверхность стоит на той же сетке — уровни и рампы ей тоже изменились.
+    this.surfaceSource?.setGrid(next, shape);
   }
 
   /** Визуальная поверхность для генераторов; undefined — плоские ступени. */
   private get surface(): VisualSurface | undefined {
     return this.surfaceSource?.current ?? undefined;
-  }
-
-  /** Стенки пересобираются только при подмене поверхности: уровни иммутабельны (TERR-6). */
-  private rebuildWalls(): void {
-    const ctx = this.ctx;
-    if (ctx === null) return;
-    const previous = this.wallMesh;
-    const material =
-      previous?.material instanceof THREE.MeshStandardMaterial
-        ? previous.material
-        : new THREE.MeshStandardMaterial({
-            color: this.wallColor,
-            roughness: 0.95,
-            metalness: 0,
-            side: THREE.DoubleSide,
-          });
-    if (previous !== null) {
-      ctx.scene.remove(previous);
-      previous.geometry.dispose();
-    }
-    const walls = new THREE.Mesh(
-      toBufferGeometry(buildWallGeometry(this.grid, this.heightStep, this.surface)),
-      material,
-    );
-    walls.name = 'terrain:walls';
-    ctx.scene.add(walls);
-    this.wallMesh = walls;
   }
 
   syncTick(view: TickView): void {
@@ -283,19 +356,70 @@ export class TerrainSubsystem implements RenderSubsystem {
   }
 
   updateFrame(_dt: number, _alpha: number): void {
-    // Пересборка затронутых чанков — не позже следующего кадра (REND-7).
+    // Пересборка затронутых чанков — не позже следующего кадра (REND-7, ED-15).
+    this.flushDirty();
+  }
+
+  /** Число вершин пола — для тестов и профилировки. */
+  get floorVertexCount(): number {
+    return countVertices(this.floorMeshes);
+  }
+
+  /** Число вершин стенок — для тестов и профилировки. */
+  get wallVertexCount(): number {
+    return countVertices(this.wallMeshes);
+  }
+
+  private flushDirty(): void {
     if (this.dirtyChunks.size === 0) return;
     for (const chunk of this.dirtyChunks) this.rebuildChunk(chunk);
     this.dirtyChunks.clear();
   }
 
-  /** Число вершин пола — для тестов и профилировки. */
-  get floorVertexCount(): number {
-    let total = 0;
-    for (const mesh of this.chunkMeshes) {
-      if (mesh !== null) total += mesh.geometry.getAttribute('position').count;
+  private allocateChunks(): void {
+    const count = this.chunksX * this.chunksY;
+    this.floorMeshes = new Array<THREE.Mesh | null>(count).fill(null);
+    this.wallMeshes = new Array<THREE.Mesh | null>(count).fill(null);
+  }
+
+  private markAllChunks(): void {
+    const count = this.chunksX * this.chunksY;
+    for (let chunk = 0; chunk < count; chunk++) this.dirtyChunks.add(chunk);
+  }
+
+  /** Инвалидация окрестности правки уровня/рампы — все чанки в радиусе SHAPE_RADIUS. */
+  private markShapeCell(cell: number): void {
+    const { width, height } = this.grid;
+    const x = cell % width;
+    const y = Math.floor(cell / width);
+    const cx0 = Math.floor(Math.max(x - SHAPE_RADIUS, 0) / this.chunkSize);
+    const cx1 = Math.floor(Math.min(x + SHAPE_RADIUS, width - 1) / this.chunkSize);
+    const cy0 = Math.floor(Math.max(y - SHAPE_RADIUS, 0) / this.chunkSize);
+    const cy1 = Math.floor(Math.min(y + SHAPE_RADIUS, height - 1) / this.chunkSize);
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) this.dirtyChunks.add(cy * this.chunksX + cx);
     }
-    return total;
+  }
+
+  /** Другая арена: сцена очищается и раскладка чанков считается заново. */
+  private resetGrid(next: TerrainGrid): void {
+    const ctx = this.ctx;
+    if (ctx !== null) {
+      for (const mesh of [...this.floorMeshes, ...this.wallMeshes]) {
+        if (mesh === null) continue;
+        ctx.scene.remove(mesh);
+        mesh.geometry.dispose();
+      }
+    }
+    this.grid = next;
+    this.floor = new Uint8Array(next.floor);
+    this.chunksX = Math.ceil(next.width / this.chunkSize);
+    this.chunksY = Math.ceil(next.height / this.chunkSize);
+    this.allocateChunks();
+    this.dirtyChunks.clear();
+    // Поверхность собирается заново под новые размеры и зовёт подписчиков.
+    this.surfaceSource?.setGrid(next);
+    this.markAllChunks();
   }
 
   private chunkOfCell(cell: number): number {
@@ -306,33 +430,65 @@ export class TerrainSubsystem implements RenderSubsystem {
 
   private rebuildChunk(chunk: number): void {
     const ctx = this.ctx;
-    if (ctx === null || this.floorMaterial === null) return;
+    if (ctx === null || this.floorMaterial === null || this.wallMaterial === null) return;
 
-    const previous = this.chunkMeshes[chunk] ?? null;
+    const cx = chunk % this.chunksX;
+    const cy = Math.floor(chunk / this.chunksX);
+    const rect: CellRect = {
+      x0: cx * this.chunkSize,
+      y0: cy * this.chunkSize,
+      w: this.chunkSize,
+      h: this.chunkSize,
+    };
+
+    this.floorMeshes[chunk] = this.swapMesh(
+      this.floorMeshes[chunk] ?? null,
+      buildFloorGeometry(
+        this.grid,
+        this.floor,
+        this.heightStep,
+        rect.x0,
+        rect.y0,
+        rect.w,
+        rect.h,
+        this.surface,
+      ),
+      this.floorMaterial,
+      `terrain:chunk:${cx},${cy}`,
+    );
+    this.wallMeshes[chunk] = this.swapMesh(
+      this.wallMeshes[chunk] ?? null,
+      buildWallGeometry(this.grid, this.heightStep, this.surface, rect),
+      this.wallMaterial,
+      `terrain:walls:${cx},${cy}`,
+    );
+  }
+
+  /** Снимает старый меш со сцены и ставит новый; пустая геометрия — меша нет. */
+  private swapMesh(
+    previous: THREE.Mesh | null,
+    data: TerrainGeometryData,
+    material: THREE.Material,
+    name: string,
+  ): THREE.Mesh | null {
+    const ctx = this.ctx;
+    if (ctx === null) return previous;
     if (previous !== null) {
       ctx.scene.remove(previous);
       previous.geometry.dispose();
     }
-
-    const cx = chunk % this.chunksX;
-    const cy = Math.floor(chunk / this.chunksX);
-    const data = buildFloorGeometry(
-      this.grid,
-      this.floor,
-      this.heightStep,
-      cx * this.chunkSize,
-      cy * this.chunkSize,
-      this.chunkSize,
-      this.chunkSize,
-      this.surface,
-    );
-    if (data.indices.length === 0) {
-      this.chunkMeshes[chunk] = null;
-      return;
-    }
-    const mesh = new THREE.Mesh(toBufferGeometry(data), this.floorMaterial);
-    mesh.name = `terrain:chunk:${cx},${cy}`;
+    if (data.indices.length === 0) return null;
+    const mesh = new THREE.Mesh(toBufferGeometry(data), material);
+    mesh.name = name;
     ctx.scene.add(mesh);
-    this.chunkMeshes[chunk] = mesh;
+    return mesh;
   }
+}
+
+function countVertices(meshes: readonly (THREE.Mesh | null)[]): number {
+  let total = 0;
+  for (const mesh of meshes) {
+    if (mesh !== null) total += mesh.geometry.getAttribute('position').count;
+  }
+  return total;
 }
