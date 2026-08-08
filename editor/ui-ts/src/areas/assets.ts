@@ -46,7 +46,14 @@ import {
   type EnvironmentHost,
 } from '@game-mvp/editor-core';
 import type { EntityVisual } from '@game-mvp/assets';
-import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
+import {
+  children,
+  documentValue,
+  el,
+  resourceText,
+  type UiNode,
+  type UiText,
+} from '../dom/node.js';
 import type { AreaContext, AreaSetup, AreaZones, WorkspaceArea } from '../frame/area.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS } from '../frame/styles.js';
 import { button } from '../widgets/button.js';
@@ -319,6 +326,17 @@ function start(state: AssetAreaState, setup: AreaSetup, options: AssetAreaOption
 
 // ------------------------------------------------------------------ зоны
 
+/**
+ * Причина отказа ассета одним текстом (ASSET-4, ED-27): её называет модуль
+ * ассетов — тогда это значение, — а если его в этой среде нет, то и назвать её
+ * может только сам интерфейс, то есть ресурс.
+ */
+function assetReason(context: AreaContext<AssetAreaState>, asset: OpenedAsset): UiText {
+  return asset.reason === null
+    ? resourceText(context.resources, 'ui.area.assets.noAssets')
+    : documentValue(asset.reason);
+}
+
 function nodeItem(context: AreaContext<AssetAreaState>, node: AssetNode): TreeItem {
   const { state } = context;
   const opened = node.kind === 'file' ? state.probe.stateOf(node.path) : undefined;
@@ -336,8 +354,8 @@ function nodeItem(context: AreaContext<AssetAreaState>, node: AssetNode): TreeIt
     selected: state.selected === node.path,
     // Ассет с отказом — иконка, положение и причина, а не оттенок (ED-22).
     // Причину называет модуль ассетов (ASSET-4), а не эта строка.
-    ...(opened?.status === 'failed' && opened.reason !== null
-      ? { validation: { severity: 'error' as const, reason: documentValue(opened.reason) } }
+    ...(opened?.status === 'failed'
+      ? { validation: { severity: 'error' as const, reason: assetReason(context, opened) } }
       : {}),
     onSelect: () => {
       pick(state, context.session, node);
@@ -374,11 +392,15 @@ function navigator(context: AreaContext<AssetAreaState>): UiNode {
               ),
             ],
           }),
+      // «Дерево пусто» — утверждение об ассетах, и говорить его вместе с
+      // «перечислить их нечем» значило бы сказать неправду вторым сообщением.
       state.tree.nodes.length === 0
-        ? el('div', {
-            classes: ['fx-row'],
-            text: resourceText(resources, 'ui.area.assets.emptyTree'),
-          })
+        ? state.tree.failure !== null
+          ? undefined
+          : el('div', {
+              classes: ['fx-row'],
+              text: resourceText(resources, 'ui.area.assets.emptyTree'),
+            })
         : tree({
             label: resourceText(resources, 'ui.navigator.assets'),
             items: state.tree.nodes.map((node) => nodeItem(context, node)),
@@ -535,13 +557,13 @@ function surface(context: AreaContext<AssetAreaState>): UiNode {
           // Отказ самого ассета — рядом с ним же и с его причиной (ED-20,
           // ASSET-4). Остальные ассеты этим не затронуты: состояние у каждого
           // своё, и отказавший не мешает открыть соседний.
-          opened?.status === 'failed' && opened.reason !== null
+          opened?.status === 'failed'
             ? withValidation(
                 statusChip({
                   label: resourceText(resources, 'ui.area.assets.brokenAsset'),
                   tone: 'error',
                 }),
-                { severity: 'error', reason: documentValue(opened.reason) },
+                { severity: 'error', reason: assetReason(context, opened) },
               )
             : undefined,
         ),
@@ -590,14 +612,14 @@ function inspector(context: AreaContext<AssetAreaState>): UiNode {
           label: resourceText(resources, 'ui.area.assets.field.status'),
           value: resourceText(resources, STATUS_KEYS[opened.status]),
           readOnly: true,
-          ...(opened.reason === null
-            ? {}
-            : {
+          ...(opened.status === 'failed'
+            ? {
                 validation: {
                   severity: 'error' as const,
-                  reason: documentValue(opened.reason),
+                  reason: assetReason(context, opened),
                 },
-              }),
+              }
+            : {}),
         }),
       });
     }

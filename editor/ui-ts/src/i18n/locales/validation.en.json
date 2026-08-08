@@ -1,3 +1,0 @@
-{
-  "validation.reason.editor.curvatureGrid.gridMismatch": "The curvature map grid does not match the terrain grid: {axis} = {received}, while \"{against}\" has {expected}. The map is not drawn (ASSET-7)"
-}

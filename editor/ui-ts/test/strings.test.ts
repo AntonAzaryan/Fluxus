@@ -32,13 +32,8 @@ import {
   initialGalleryState,
   sampleDocumentStrings,
 } from '../src/gallery/controlCase.js';
-import { REASON_PREFIX } from '@game-mvp/editor-core';
-import {
-  UI_BUNDLES,
-  UI_KEY_PREFIX,
-  VALIDATION_BUNDLES,
-  uiResources,
-} from '../src/i18n/uiBundles.js';
+import { EDITOR_BUNDLES, REASON_PREFIX, type LocaleBundles } from '@game-mvp/editor-core';
+import { UI_BUNDLES, UI_KEY_PREFIX, uiResources } from '../src/i18n/uiBundles.js';
 import { collectTexts, walk, type UiNode } from '../src/dom/node.js';
 import { materialStrings } from '../src/areas/material.js';
 import { assetArea } from '../src/areas/assets.js';
@@ -59,14 +54,30 @@ function sources(): { readonly path: string; readonly text: string }[] {
 }
 
 /**
- * Бандлов у пакета два, и пространства у них разные: подпись интерфейса
- * называется по месту показа (`ui.*`), а причина находки — по правилу, которое
+ * Пространства строк на странице два, и называются они по-разному: подпись
+ * интерфейса — по месту показа (`ui.*`), причина находки — по правилу, которое
  * её сообщило (`validation.reason.*`, ключ выводит `reasonKey` ядра редактора).
  * Проверка на обоих одна и та же, поэтому и параметризована.
+ *
+ * Своего бандла причин у пакета нет: правила живут в `@game-mvp/editor-core`, и
+ * причины приезжают его бандлом — второго определения той же строки не
+ * заводится. Отсюда и срез: только `validation.reason.*`, потому что описания
+ * самих правил (`validation.rule.*`) интерфейс не показывает и в этом
+ * пространстве не лежат.
  */
-const BUNDLES: readonly (readonly [string, typeof UI_BUNDLES, string])[] = [
+const reasonsOf = (bundles: LocaleBundles): LocaleBundles =>
+  Object.fromEntries(
+    Object.entries(bundles).map(([locale, bundle]) => [
+      locale,
+      Object.fromEntries(
+        Object.entries(bundle).filter(([key]) => key.startsWith(REASON_PREFIX)),
+      ),
+    ]),
+  );
+
+const BUNDLES: readonly (readonly [string, LocaleBundles, string])[] = [
   ['хром', UI_BUNDLES, UI_KEY_PREFIX],
-  ['причины валидации', VALIDATION_BUNDLES, REASON_PREFIX],
+  ['причины валидации', reasonsOf(EDITOR_BUNDLES), REASON_PREFIX],
 ];
 
 describe('ED-27: бандлы строк пакета', () => {
@@ -269,7 +280,7 @@ describe('ED-27: каждый видимый текст каркаса имее�
     // дошедший до страницы, обязан разрешаться в обеих локалях. Бандл, в котором
     // его ищут, выбирается по пространству, а не по тому, где он нашёлся.
     const declared = (locale: 'ru' | 'en', key: string): string | undefined =>
-      key.startsWith(REASON_PREFIX) ? VALIDATION_BUNDLES[locale]?.[key] : UI_BUNDLES[locale]?.[key];
+      key.startsWith(REASON_PREFIX) ? EDITOR_BUNDLES[locale]?.[key] : UI_BUNDLES[locale]?.[key];
     const used = new Set(
       pagesIn('ru')
         .flatMap((page) => collectTexts(page))

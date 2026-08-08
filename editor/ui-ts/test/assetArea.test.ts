@@ -17,12 +17,14 @@
  *   деревом (ED-12).
  */
 import { describe, expect, it } from 'vitest';
+import { runOperationRoundTrip, type EditorSession } from '@game-mvp/editor-core';
 import { collectTexts, findAll, type UiNode } from '../src/dom/node.js';
 import { uiResources } from '../src/i18n/uiBundles.js';
 import {
   ASSETS_VIEWPORT_ID,
   assetStageOptions,
   createAssetArea,
+  type AssetAreaState,
 } from '../src/areas/assets.js';
 import {
   PREVIEW_ENTRY,
@@ -32,16 +34,18 @@ import {
   previewManifest,
 } from '../src/areas/assetPreview.js';
 import { assetKindOf, loadAssetTree } from '../src/areas/assetTree.js';
-import { VISUALS_OPERATIONS } from '../src/areas/assetVisuals.js';
+import { VISUALS_AUTHORING_OPERATIONS, VISUALS_OPERATIONS } from '../src/areas/assetVisuals.js';
 import { buildFrame, buttonByKey, press } from './support/frame.js';
 import {
   ASSET_IDS,
+  ASSET_VISUALS,
   HERO_MODEL,
   assetHost,
   buildAssetFrame,
   fakeAssets,
   hostWithoutListing,
 } from './support/assets.js';
+import { settle } from './support/project.js';
 
 type Fixture = Awaited<ReturnType<typeof buildAssetFrame>>;
 
@@ -280,6 +284,109 @@ describe('ED-20/ED-29: выбор пишется операцией и отме�
   });
 });
 
+describe('ED-29: каждая операция записи манифеста обратима', () => {
+  /** Сессия с открытым манифестом-фикстурой и тем же реестром, что у приложения. */
+  const scratch = (): EditorSession => {
+    const { session } = buildFrame([createAssetArea()]);
+    session.openDocument({
+      id: ASSET_IDS.visuals,
+      kind: 'visuals',
+      value: ASSET_VISUALS,
+    });
+    return session;
+  };
+
+  it.each([
+    [VISUALS_OPERATIONS.setModel, { asset: ASSET_IDS.broken }],
+    [VISUALS_OPERATIONS.setDefaultSkin, { skin: 'blue' }],
+    [VISUALS_OPERATIONS.setSkinTexture, { skin: 'red', slot: '1', asset: ASSET_IDS.skin }],
+  ])('«применить, отменить, сравнить» проходит для %s', (operationId, params) => {
+    const result = runOperationRoundTrip(scratch(), operationId, {
+      document: ASSET_IDS.visuals,
+      entry: 'Hero',
+      ...params,
+    });
+    expect(result.findings).toEqual([]);
+    expect(result.recorded).toBe(true);
+  });
+
+  it('в наборе ровно три операции — по одной на назначение ED-20', () => {
+    expect(VISUALS_AUTHORING_OPERATIONS.map((operation) => operation.id)).toEqual([
+      VISUALS_OPERATIONS.setModel,
+      VISUALS_OPERATIONS.setDefaultSkin,
+      VISUALS_OPERATIONS.setSkinTexture,
+    ]);
+  });
+});
+
+describe('ED-1: правила формата спрашиваются у модуля ассетов', () => {
+  const opened = (): EditorSession => {
+    const { session } = buildFrame([createAssetArea()]);
+    session.openDocument({
+      id: ASSET_IDS.visuals,
+      kind: 'visuals',
+      value: ASSET_VISUALS,
+    });
+    return session;
+  };
+
+  const skinsOf = (session: EditorSession): Record<string, unknown> | undefined =>
+    (
+      session.documentValue(ASSET_IDS.visuals) as {
+        entities: Record<string, { skins?: Record<string, unknown> }>;
+      }
+    ).entities['Hero']?.skins;
+
+  it('номер слота отвергает валидатор манифеста, а не копия его правила', () => {
+    const session = opened();
+    // Причина — словами владельца правила (ASSET-5, REND-6): своей копии этой
+    // проверки у операции нет, и разойтись с ней ей нечем (CORE-3).
+    expect(() =>
+      session.applyOperation(VISUALS_OPERATIONS.setSkinTexture, {
+        document: ASSET_IDS.visuals,
+        entry: 'Hero',
+        skin: 'red',
+        slot: 'diffuse',
+        asset: ASSET_IDS.skin,
+      }),
+    ).toThrow(/textureSlot/);
+    // Отказ не оставил полуправки: скина, который заводила упавшая операция, нет.
+    expect(skinsOf(session)?.['red']).toBeUndefined();
+  });
+
+  it('скин по умолчанию сверяет с подменами тот же валидатор', () => {
+    const session = opened();
+    expect(() =>
+      session.applyOperation(VISUALS_OPERATIONS.setDefaultSkin, {
+        document: ASSET_IDS.visuals,
+        entry: 'Hero',
+        skin: 'green',
+      }),
+    ).toThrow(/не описан в entities\.Hero\.skins/);
+  });
+
+  it('нарушение, бывшее в записи до операции, чужой правке не мешает', () => {
+    // Отказ операции — за то, что сломала она (ED-30). Иначе сломанную кем-то
+    // запись нельзя было бы починить выбором модели из просмотрщика (ED-20).
+    const { session } = buildFrame([createAssetArea()]);
+    session.openDocument({
+      id: ASSET_IDS.visuals,
+      kind: 'visuals',
+      // `defaultSkin` без единой подмены — нарушение ASSET-6, уже лежащее в документе.
+      value: { entities: { Hero: { model: ASSET_IDS.hero, defaultSkin: 'blue' } } },
+    });
+    session.applyOperation(VISUALS_OPERATIONS.setModel, {
+      document: ASSET_IDS.visuals,
+      entry: 'Hero',
+      asset: ASSET_IDS.broken,
+    });
+    const entities = (
+      session.documentValue(ASSET_IDS.visuals) as { entities: Record<string, { model: string }> }
+    ).entities;
+    expect(entities['Hero']?.model).toBe(ASSET_IDS.broken);
+  });
+});
+
 describe('ED-12/ED-20: дерево контента и его честные границы', () => {
   it('обход даёт дерево, а вид ассета — сами загрузчики (ASSET-3)', async () => {
     const host = assetHost();
@@ -304,6 +411,27 @@ describe('ED-12/ED-20: дерево контента и его честные г
     // разные утверждения, и второе он обязан прочитать (ED-12).
     expect(texts).toContain(reason);
     expect(texts).toContain(uiResources('ru').text('ui.area.assets.noListing'));
+    // И не сказано вторым сообщением, что ассетов нет: это другое утверждение.
+    expect(texts).not.toContain(uiResources('ru').text('ui.area.assets.emptyTree'));
+  });
+});
+
+describe('ED-27: причину, которой у модуля ассетов нет, называет ресурс', () => {
+  it('среда без превью — отказ без прозы в коде', async () => {
+    // Ни WebGL, ни дубля: сервиса ассетов у просмотрщика нет вовсе, и сказать
+    // что-либо о загрузке некому. Утверждение об этом — интерфейса, значит из
+    // ресурсов (ED-27), а не литералом рядом с местом показа.
+    const area = createAssetArea({ host: assetHost(), visuals: ASSET_IDS.visuals });
+    const fixture = buildFrame([area], 'ru');
+    const state = fixture.frame.stateOf(area.id) as AssetAreaState;
+    await settle();
+    const opened = state.probe.open('model', ASSET_IDS.hero);
+    expect(opened.status).toBe('failed');
+    expect(opened.reason).toBeNull();
+
+    state.selected = ASSET_IDS.hero;
+    const texts = collectTexts(fixture.frame.view()).map((text) => text.value);
+    expect(texts).toContain(uiResources('ru').text('ui.area.assets.noAssets'));
   });
 });
 
@@ -327,4 +455,19 @@ describe('ED-27: строки просмотрщика приходят из р�
       expect(resources.lookup(editable.descriptionKey)).toBeDefined();
     }
   });
+
+  it.each(['ru', 'en'])(
+    'на локали %s описания операций и их параметров разрешаются (ED-28, ED-30)',
+    (locale) => {
+      // Текст каталога и текст интерфейса — один и тот же (ED-30), поэтому
+      // ключ без строки означает пустое описание в обоих сразу.
+      const resources = uiResources(locale);
+      for (const operation of VISUALS_AUTHORING_OPERATIONS) {
+        expect(resources.lookup(operation.descriptionKey), operation.id).toBeDefined();
+        for (const [name, spec] of Object.entries(operation.params)) {
+          expect(resources.lookup(spec.descriptionKey), `${operation.id}: ${name}`).toBeDefined();
+        }
+      }
+    },
+  );
 });

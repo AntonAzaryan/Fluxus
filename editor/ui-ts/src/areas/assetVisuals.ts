@@ -15,10 +15,19 @@
  * подмена слота — знание формата (ASSET-6). Оставь его в интерфейсе, и оно
  * разъедется по кнопкам: три места, где путь собран руками, и ни одного, где
  * его можно проверить. Здесь же с ним рядом живут и проверки, которых у общей
- * операции быть не может: запись существует, скин записью описан, слот —
- * номер, а ID ассета — путь от корня дерева контента (ASSET-2), а не URL и не
- * выход за корень. Внешний потребитель, вызывающий операцию без интерфейса,
- * получает те же проверки — второго пути правки не заводится.
+ * операции быть не может: запись существует (ED-19), а ID ассета — путь от
+ * корня дерева контента (ASSET-2), а не URL и не выход за корень. Внешний
+ * потребитель, вызывающий операцию без интерфейса, получает те же проверки —
+ * второго пути правки не заводится.
+ *
+ * ## Чего здесь нет: правил, у которых есть владелец
+ *
+ * Что такое законная запись манифеста — номер слота текстуры, скин, на который
+ * ссылается `defaultSkin`, — знает модуль ассетов (`validateManifest`, ASSET-6),
+ * и своей копии этих правил редактор не заводит: вторая реализация правила с
+ * одним источником истины расходится с ним по определению (ED-1, CORE-3).
+ * Поэтому правленую запись операция отдаёт на проверку владельцу (`checkEntry`),
+ * а не сверяет сама.
  *
  * Обратное — доменная операция ради переименования уже имеющегося действия —
  * по-прежнему отвергается: удаление записи манифеста своей операции не
@@ -129,15 +138,37 @@ function requireAssetId(operationId: string, param: string, raw: string): string
   return normalized;
 }
 
-/** Номер слота текстуры: ключ подмены скина — именно номер (ASSET-5, REND-6). */
-function requireSlot(operationId: string, raw: string): string {
-  if (!/^\d+$/.test(raw)) {
-    throw new OperationError(operationId, 'параметр "slot": номер слота текстуры модели', {
-      param: 'slot',
-      received: raw,
-    });
+/** Ошибки записи глазами её владельца: запись оборачивается в манифест из неё одной. */
+function entryErrors(entry: string, value: JsonValue | undefined): readonly string[] {
+  const checked = validateManifest({ entities: { [entry]: value ?? null } });
+  return checked.ok ? [] : checked.errors;
+}
+
+/**
+ * Правленую запись проверяет модуль ассетов, а не операция (ED-1, CORE-3):
+ * номер слота текстуры и скин, на который ссылается `defaultSkin`, — правила
+ * формата, и живут они там же, где формат.
+ *
+ * Спрашивается владелец после записи и о РАЗНИЦЕ. Запись, сломанную до
+ * операции, показывает валидация документа (ED-8); отказывать выбору модели за
+ * чужое нарушение значило бы не дать автору его исправить. Полуправки отказ не
+ * оставляет: записанное упавшей операцией откатывает слой операций (ED-29).
+ */
+function checkEntry(
+  operationId: string,
+  ctx: OperationContext,
+  document: DocumentId,
+  entry: string,
+  before: JsonValue | undefined,
+  details: { param: string; received: JsonValue },
+): void {
+  const known = new Set(entryErrors(entry, before));
+  const introduced = entryErrors(entry, ctx.readAt(document, entryPath(entry))).filter(
+    (error) => !known.has(error),
+  );
+  if (introduced.length > 0) {
+    throw new OperationError(operationId, introduced.join('; '), details);
   }
-  return raw;
 }
 
 /**
@@ -175,14 +206,11 @@ export const setEntryDefaultSkinOperation: AuthoringOperation = {
     const entry = asString(params, 'entry');
     requireEntry(id, ctx, document, entry);
     const skin = asString(params, 'skin');
-    if (ctx.readAt(document, entryPath(entry, SKINS_KEY, skin)) === undefined) {
-      throw new OperationError(
-        id,
-        `скин "${skin}" записью "${entry}" не описан — подменять ему нечего (ASSET-6)`,
-        { param: 'skin', received: skin },
-      );
-    }
+    const before = ctx.readAt(document, entryPath(entry));
     ctx.setValue(document, entryPath(entry, DEFAULT_SKIN_KEY), skin);
+    // Описан ли скин записью — правило формата (ASSET-6), и отвечает на него
+    // модуль ассетов: своей копии этой проверки у операции нет.
+    checkEntry(id, ctx, document, entry, before, { param: 'skin', received: skin });
     return undefined;
   },
 };
@@ -209,9 +237,13 @@ export const setEntrySkinTextureOperation: AuthoringOperation = {
         received: skin,
       });
     }
-    const slot = requireSlot(id, asString(params, 'slot'));
+    const slot = asString(params, 'slot');
     const asset = requireAssetId(id, 'asset', asString(params, 'asset'));
+    const before = ctx.readAt(document, entryPath(entry));
     ctx.setValue(document, entryPath(entry, SKINS_KEY, skin, slot), asset);
+    // Номер слота — правило формата (ASSET-5, REND-6), и проверяет его тот же
+    // модуль ассетов, что проверяет манифест на загрузке.
+    checkEntry(id, ctx, document, entry, before, { param: 'slot', received: slot });
     return undefined;
   },
 };

@@ -72,7 +72,12 @@ export interface OpenedAsset {
   readonly id: string;
   readonly kind: AssetKind;
   readonly status: AssetStatus;
-  /** Причина отказа; `null` — отказа нет. Приходит от модуля ассетов (ASSET-3, ASSET-4). */
+  /**
+   * Причина отказа от модуля ассетов (ASSET-3, ASSET-4). `null` при `failed` —
+   * причину назвал не он: открывать ассеты в этой среде нечем, и это утверждение
+   * интерфейса, а значит приходит оно из строковых ресурсов (ED-27), а не
+   * прозой отсюда.
+   */
   readonly reason: string | null;
   /** Разделяемые данные ассета (ASSET-5); `null` — ещё не готов или не открылся. */
   readonly data: unknown;
@@ -118,7 +123,7 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
   const unsubscribes: (() => void)[] = [];
   let disposed = false;
 
-  const failed = (kind: AssetKind, id: string, reason: string): OpenedAsset => {
+  const failed = (kind: AssetKind, id: string, reason: string | null): OpenedAsset => {
     const entry: OpenedAsset = { id, kind, status: 'failed', reason, data: null };
     opened.set(id, entry);
     return entry;
@@ -141,9 +146,9 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
       const known = opened.get(id);
       if (known !== undefined) return known;
       const assets = options.assets;
-      if (assets === null) {
-        return failed(kind, id, `ассет "${id}": в этой среде рисовать и грузить нечем`);
-      }
+      // Отказ без причины: сказать её модулю ассетов нечем — его здесь нет
+      // вовсе. Словами это говорит ресурс интерфейса (ED-27), а не литерал.
+      if (assets === null) return failed(kind, id, null);
       let handle: Handle<unknown>;
       try {
         handle = assets.request<unknown>(kind, id);

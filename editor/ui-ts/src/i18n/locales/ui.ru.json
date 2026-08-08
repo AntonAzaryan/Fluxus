@@ -21,6 +21,7 @@
   "ui.area.assets.field.path": "path",
   "ui.area.assets.field.status": "state",
   "ui.area.assets.label": "Ассеты",
+  "ui.area.assets.noAssets": "Открывать ассеты в этой среде нечем: кадр превью не собрался",
   "ui.area.assets.noListing": "Перечисление дерева в этой среде недоступно",
   "ui.area.assets.none": "Не выбрано",
   "ui.area.assets.skin": "Скин",

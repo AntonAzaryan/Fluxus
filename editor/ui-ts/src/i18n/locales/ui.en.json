@@ -21,6 +21,7 @@
   "ui.area.assets.field.path": "path",
   "ui.area.assets.field.status": "state",
   "ui.area.assets.label": "Assets",
+  "ui.area.assets.noAssets": "This environment has nothing to open assets with: the preview frame did not assemble",
   "ui.area.assets.noListing": "This environment provides no directory listing",
   "ui.area.assets.none": "Not selected",
   "ui.area.assets.skin": "Skin",

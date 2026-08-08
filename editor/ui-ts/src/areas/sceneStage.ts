@@ -220,8 +220,10 @@ export interface SceneStage extends ScenePicker {
   readonly failure: string | null;
   /**
    * Presentation-сцена вьюпорта. Наружу она выходит потому, что продюсеров у
-   * неё больше одного и они взаимоисключающи (REND-11): превью (ED-9) и
-   * просмотрщик ассетов (ED-20) публикуются в ту же сцену, а не заводят вторую.
+   * неё больше одного и они взаимоисключающи (REND-11): превью (ED-9)
+   * публикуется в ЭТУ сцену, а не заводит вторую. У просмотрщика ассетов
+   * (ED-20) кадр свой — свой холст в своей рабочей области, — и продюсер в нём
+   * ровно один; собран он этой же сборкой, а не второй (ED-1).
    */
   readonly presentation: PresentationStage;
   /**
@@ -465,10 +467,15 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     // просто нет — ни границ, ни поверхности под точкой наблюдения.
     camera = createSceneCamera({ heightStep, ...(first === null ? {} : { grid: first }) });
   };
-  if (options.terrain === false) build(null);
+  /** Бывает ли у этого кадра террейн: у вырожденного случая (см. шапку) — нет. */
+  const hasTerrain = options.terrain !== false;
+  if (!hasTerrain) build(null);
 
   const applyDraft = (next: StageDraft, again: boolean): void => {
-    if (next.grid !== null && (again || next.grid !== grid)) {
+    // «Сетки не будет никогда» держится сборкой, а не тем, что подающий её не
+    // подаёт: подсистемы кадра без террейна подняты без поверхности, и принятая
+    // сетка дала бы камере границы арены, которой в кадре нет (CAM-7).
+    if (hasTerrain && next.grid !== null && (again || next.grid !== grid)) {
       const first = !built;
       grid = next.grid;
       if (first) build(next.grid);
