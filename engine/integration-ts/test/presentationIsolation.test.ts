@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   contentPackHash,
+  loadScene,
   runScenario,
   runScenarioBytes,
   type SceneDef,
@@ -131,6 +132,34 @@ describe('PRES-4: прогон с декорациями и без совпад�
     const broken = validatePresentationScene({ decorations: [{ x: 1 }] });
     expect(broken.ok).toBe(false);
     expect(Buffer.from(runScenarioBytes(scenario(scene))).equals(Buffer.from(bare))).toBe(true);
+  });
+});
+
+/**
+ * Побитовое равенство прогонов выше — свойство НЕОБХОДИМОЕ, но само по себе
+ * тавтологичное: парный документ в прогон и не подаётся, потому что подать его
+ * туда нечем. Здесь пиннится то, на чём это «нечем» держится, — раздельность
+ * загрузчиков (PRES-1): каждый из двух документов пары отвергается загрузчиком
+ * второго, и перепутать их местами не выйдет даже вызовом руками.
+ */
+describe('PRES-4: канала влияния нет по построению — загрузчики раздельны', () => {
+  it('конфиг сцены загрузчиком парного документа отвергается адресно', () => {
+    const rejected = validatePresentationScene(duelScene());
+    expect(rejected.ok).toBe(false);
+    if (rejected.ok) return;
+    // Состав документа закрыт (PRES-2), и поля сим-документа названы поимённо,
+    // а не проглочены молча.
+    expect(rejected.errors.join('\n')).toMatch(/components: неизвестное поле/);
+  });
+
+  it('парный документ загрузчиком конфига сцены не принимается', () => {
+    const paired = JSON.parse(
+      readFileSync(join(CONTENT_ROOT, presentationPathOf('scenes/duel.scene.json')), 'utf8'),
+    ) as unknown;
+    // Отказ здесь не оформленный — конфигом сцены этот документ не является ни
+    // одним полем, и разбор об этом спотыкается сразу. Пиннится сам факт: путь
+    // «парный документ доехал до `worldInit`» не проходим (DET-1, PRES-4).
+    expect(() => loadScene(paired as SceneDef)).toThrow();
   });
 });
 

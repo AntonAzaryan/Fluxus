@@ -46,10 +46,13 @@ function contentFile(relative: string): Uint8Array {
 const SCENE_PATH = 'scenes/duel.scene.json';
 const MATCH_PATH = 'matches/duel.match.json';
 const MANIFEST_PATH = 'visuals/manifest.json';
+/** Парный presentation-документ сцены (`presentation-scene` PRES-1). */
+const PRESENTATION_PATH = 'scenes/duel.presentation.json';
 
 const SCENE_ON_DISK = contentFile('scenes/duel.scene.json');
 const MATCH_ON_DISK = contentFile('matches/duel.match.json');
 const MANIFEST_ON_DISK = contentFile('visuals/manifest.json');
+const PRESENTATION_ON_DISK = contentFile('scenes/duel.presentation.json');
 
 function newSession(): EditorSession {
   return createEditorSession({ operations: registerBuiltinOperations(createOperationRegistry()) });
@@ -105,6 +108,115 @@ describe('ED-21: «открыл — сохранил без правок» не 
 
     expect(result.written).toEqual([SCENE_PATH]);
     expect(host.bytes(SCENE_PATH)).toEqual(canonical);
+  });
+});
+
+/**
+ * Третий член тройки ED-19 — парный presentation-документ (PRES-1). Свойство у
+ * него то же самое, и проверяется оно на настоящем документе дерева контента:
+ * канонический вид формата обязан быть точкой покоя, а «открыл — сохранил» —
+ * давать байт-в-байт тот же файл. Квантование (PRES-3) при этом касается
+ * ЗАПИСЫВАЕМОГО автором значения, а не прочитанного, и файл, написанный руками
+ * с большей точностью, разрядов не теряет.
+ */
+describe('ED-21, PRES-3: парный документ переживает «открыл — сохранил»', () => {
+  it('документ дерева контента остаётся на диске побайтово прежним', async () => {
+    const host = createMemoryHost({ files: { [PRESENTATION_PATH]: PRESENTATION_ON_DISK } });
+    const before = host.bytes(PRESENTATION_PATH);
+    const session = newSession();
+    await openDocumentFromHost(session, host.content, {
+      id: PRESENTATION_PATH,
+      kind: 'presentation',
+      lists: [['decorations']],
+    });
+
+    const result = await saveDocuments({ session, host: host.content });
+
+    expect(result).toMatchObject({ refused: false, written: [] });
+    expect(host.writes).toEqual([]);
+    expect(host.bytes(PRESENTATION_PATH)).toEqual(before);
+  });
+
+  it('канонический вид — точка покоя, и приведение к нему ничего не теряет', () => {
+    const canonical = canonicalizeDocument(PRESENTATION_ON_DISK);
+    expect(isCanonicalDocument(canonical)).toBe(true);
+    expect(canonicalizeDocument(canonical)).toEqual(canonical);
+    expect(decodeDocument(canonical)).toEqual(decodeDocument(PRESENTATION_ON_DISK));
+  });
+
+  it('правка и возврат значения дают байт-в-байт тот же файл', async () => {
+    const canonical = canonicalizeDocument(PRESENTATION_ON_DISK);
+    const host = createMemoryHost({ files: { [PRESENTATION_PATH]: canonical } });
+    const session = newSession();
+    await openDocumentFromHost(session, host.content, {
+      id: PRESENTATION_PATH,
+      kind: 'presentation',
+      lists: [['decorations']],
+    });
+
+    // Запись адресуется дескриптором, а не путём (ED-29) — так же, как запись
+    // расстановки: список `decorations` отслеживается сессией.
+    const record = session.descriptors(PRESENTATION_PATH, ['decorations'])[0]!;
+    const edit = (value: number): void => {
+      session.applyOperation('document.list.setValue', {
+        document: PRESENTATION_PATH,
+        record,
+        path: ['x'],
+        value,
+      });
+    };
+    edit(7.125);
+    edit(5.5);
+
+    const result = await saveDocuments({ session, host: host.content });
+
+    expect(result.written).toEqual([PRESENTATION_PATH]);
+    expect(host.bytes(PRESENTATION_PATH)).toEqual(canonical);
+  });
+
+  it('запись, сделанная руками с большей точностью, разрядов не теряет', async () => {
+    // Квантуется записываемое, а не прочитанное (PRES-3): сохранение чужой
+    // записи не касается, и точность у неё остаётся авторская.
+    const handwritten = encodeDocument({
+      decorations: [
+        { visual: 'Statue', x: 1.23456789, y: -0.000000001 },
+        { visual: 'Statue', x: 2, y: 2 },
+      ],
+    });
+    const host = createMemoryHost({ files: { [PRESENTATION_PATH]: handwritten } });
+    const session = newSession();
+    await openDocumentFromHost(session, host.content, {
+      id: PRESENTATION_PATH,
+      kind: 'presentation',
+      lists: [['decorations']],
+    });
+
+    session.applyOperation('document.list.setValue', {
+      document: PRESENTATION_PATH,
+      record: session.descriptors(PRESENTATION_PATH, ['decorations'])[1]!,
+      path: ['x'],
+      value: 5,
+    });
+    await saveDocuments({ session, host: host.content });
+
+    const saved = decodeDocument(host.bytes(PRESENTATION_PATH)) as {
+      decorations: readonly Record<string, JsonValue>[];
+    };
+    expect(saved.decorations[0]).toEqual({ visual: 'Statue', x: 1.23456789, y: -0.000000001 });
+    // Дифф правки — одна строка: ради читаемости диффа квантование и заведено.
+    const lines = changedLines(decoder.decode(handwritten), host.text(PRESENTATION_PATH));
+    expect(lines).toHaveLength(1);
+  });
+
+  it('парный документ — член группы записи тройки (ED-19)', () => {
+    const [group] = pairingGroups([
+      { scene: SCENE_PATH, manifest: MANIFEST_PATH, presentation: PRESENTATION_PATH },
+    ]);
+    expect(group?.members).toEqual([SCENE_PATH, MANIFEST_PATH, PRESENTATION_PATH]);
+    // Сцены без декораций пара из двух: создавать файл ради пустого слоя
+    // нельзя, и отсутствие члена в группе означает ровно это (PRES-1).
+    const [pairOnly] = pairingGroups([{ scene: SCENE_PATH, manifest: MANIFEST_PATH }]);
+    expect(pairOnly?.members).toEqual([SCENE_PATH, MANIFEST_PATH]);
   });
 });
 
