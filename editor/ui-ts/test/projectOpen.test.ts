@@ -20,6 +20,9 @@ import { describe, expect, it } from 'vitest';
 import { createEditorApp } from '../app/assembly.js';
 import { collectTexts, findAll } from '../src/dom/node.js';
 import { SHELL_COMMANDS } from '../src/palette/commands.js';
+import { ASSETS_AREA_ID, type AssetAreaState } from '../src/areas/assets.js';
+import { findAssetNode } from '../src/areas/assetTree.js';
+import { VISUALS_OPERATIONS } from '../src/areas/assetVisuals.js';
 import { SCENE_AREA_ID, type SceneAreaState } from '../src/areas/scene.js';
 import { discoverProject } from '../src/areas/sceneDiscovery.js';
 import { attr, zoneOf } from './support/frame.js';
@@ -162,6 +165,83 @@ describe('ED-12: среда без перечисления отказывает
     expect(
       marked.flatMap((node) => collectTexts(node)).some((text) => text.value.includes(reason)),
     ).toBe(true);
+  });
+});
+
+/**
+ * Второй проект, появившийся в дереве извне. Лежит в каталоге, который обход
+ * встречает раньше остальных, поэтому переоткрытие находит именно его: порядок
+ * обхода нормирован, и «первая найденная пара» — это утверждение о дереве, а не
+ * о везении.
+ */
+const ALPHA_CONFIG = 'alpha/level.json';
+const ALPHA_VISUALS = 'alpha/looks.json';
+const ALPHA_SCENE = {
+  components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }],
+  prefabs: [{ name: 'Ghost', tags: ['Ghost'], components: { Position: { x: 0, y: 0 } } }],
+};
+const ALPHA_MANIFEST = { entities: { Ghost: { model: 'alpha/models/ghost.mdx' } } };
+
+describe('ED-12/ED-24: переоткрытие проекта переоткрывает обе области', () => {
+  it('просмотрщик перевязывается на манифест нового проекта и перечитывает дерево', async () => {
+    const host = projectHost();
+    const app = await createEditorApp({ host });
+    const scene = app.frame.stateOf(SCENE_AREA_ID) as SceneAreaState;
+    const viewer = app.frame.stateOf(ASSETS_AREA_ID) as AssetAreaState;
+    await settle();
+    expect(viewer.visualsId).toBe(VISUALS);
+    expect(findAssetNode(viewer.tree, ALPHA_CONFIG)).toBeUndefined();
+
+    // Проект появился в дереве извне — ровно тот случай, ради которого
+    // переоткрытие идёт в дерево заново (ED-12).
+    host.set(ALPHA_CONFIG, JSON.stringify(ALPHA_SCENE));
+    host.set(ALPHA_VISUALS, JSON.stringify(ALPHA_MANIFEST));
+    runCommand(app.frame, SHELL_COMMANDS.openProject);
+    await settle();
+
+    // Обе области открыли ОДИН проект: пара «конфиг + манифест» (ED-19) не
+    // распалась на две находки двух обходов.
+    expect(scene.project?.configId).toBe(ALPHA_CONFIG);
+    expect(scene.project?.visualsId).toBe(ALPHA_VISUALS);
+    expect(viewer.visualsId).toBe(ALPHA_VISUALS);
+    // Запись выбрана из НОВОГО манифеста: запись прежнего проекта в нём не
+    // значит ничего.
+    expect(viewer.entry).toBe('Ghost');
+    // И дерево перечитано: появившийся извне файл в нём есть (ED-12, ED-20).
+    expect(findAssetNode(viewer.tree, ALPHA_CONFIG)).toBeDefined();
+  });
+
+  it('правка после переоткрытия уходит в манифест нового проекта (ED-21)', async () => {
+    const host = projectHost();
+    const app = await createEditorApp({ host });
+    app.frame.stateOf(SCENE_AREA_ID);
+    const viewer = app.frame.stateOf(ASSETS_AREA_ID) as AssetAreaState;
+    await settle();
+
+    host.set(ALPHA_CONFIG, JSON.stringify(ALPHA_SCENE));
+    host.set(ALPHA_VISUALS, JSON.stringify(ALPHA_MANIFEST));
+    runCommand(app.frame, SHELL_COMMANDS.openProject);
+    await settle();
+
+    // Тот же путь, которым пишет кнопка назначения просмотрщика (ED-20, ED-29).
+    app.frame.session.applyOperation(VISUALS_OPERATIONS.setModel, {
+      document: viewer.visualsId ?? '',
+      entry: viewer.entry,
+      asset: 'alpha/models/spectre.mdx',
+    });
+    runCommand(app.frame, SHELL_COMMANDS.save);
+    await settle();
+
+    // Записано ровно то, что автор правил, и записалось оно: манифест прежнего
+    // проекта в группе записи нового не состоит, и правка в нём осталась бы
+    // несохранимой парой (ED-19, ED-21).
+    expect(app.frame.notice()).toBeNull();
+    expect(host.writes).toEqual([ALPHA_VISUALS]);
+    expect(JSON.parse(host.text(ALPHA_VISUALS))).toEqual({
+      entities: { Ghost: { model: 'alpha/models/spectre.mdx' } },
+    });
+    // Манифест прежнего проекта не тронут ни правкой, ни записью.
+    expect(JSON.parse(host.text(VISUALS))).toEqual(MANIFEST);
   });
 });
 

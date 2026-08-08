@@ -46,7 +46,12 @@ import {
   type WorkspaceFrame,
 } from '../src/index.js';
 import { createAssetModule } from '../src/areas/assetModule.js';
-import { assetStageFactory, createAssetArea } from '../src/areas/assets.js';
+import {
+  ASSETS_AREA_ID,
+  assetStageFactory,
+  createAssetArea,
+  type AssetAreaState,
+} from '../src/areas/assets.js';
 import { registerVisualsOperations } from '../src/areas/assetVisuals.js';
 import { SCENE_AREA_ID, createSceneArea, type SceneAreaState } from '../src/areas/scene.js';
 import { discoverProject, type DiscoveredProject } from '../src/areas/sceneDiscovery.js';
@@ -84,12 +89,13 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
   const assets = createAssetModule(host);
 
   /**
-   * Первый обход уже сделан к моменту сборки областей, и повторять его сразу
-   * незачем; повторное открытие (команда палитры, ED-24) идёт в дерево заново —
-   * иначе оно не увидело бы файла, появившегося извне (ED-12).
+   * Обход дерева — ОДИН на одно открытие, и делает его сборка, а не области.
+   * Областей у проекта две (сцена и просмотрщик манифеста), и каждая со своим
+   * обходом нашла бы свою пару: между двумя обходами дерево успевает
+   * измениться, и «конфиг сцены + манифест» перестали бы быть парой (ED-19,
+   * ED-21). Поэтому найденное живёт здесь, а области спрашивают его.
    */
   const first = await discoverProject(host);
-  let pending: DiscoveredProject | null = first;
   /**
    * Открывается первая найденная пара — в порядке обхода дерева. Выбора автору
    * здесь не предлагается, и это названная граница, а не умолчание: выбор — это
@@ -97,17 +103,21 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
    * `project.scenes` перечисляет их все.
    */
   let current: SceneProjectIds | null = first.scenes[0] ?? null;
+  /** Почему дерево не перечислено (ED-12); `null` — перечислено. */
+  let failure: string | null = first.failure;
 
-  const openScene = async (): Promise<SceneProjectIds | null> => {
-    const found = pending ?? (await discoverProject(host));
-    pending = null;
+  /** Найти проект заново: только отсюда редактор и ходит в дерево за составом. */
+  const openProject = async (): Promise<void> => {
+    const found = await discoverProject(host);
+    failure = found.failure;
+    current = found.scenes[0] ?? null;
+  };
+
+  const openScene = (): Promise<SceneProjectIds | null> =>
     // Перечисления в этой среде нет — это причина, а не пустой проект: статике
     // перечислять дерево нечем (см. шапку `src/host/web.ts`), и подменять это
     // сообщением «сцен не найдено» значило бы соврать автору о его дереве.
-    if (found.failure !== null) throw new Error(found.failure);
-    current = found.scenes[0] ?? null;
-    return current;
-  };
+    failure === null ? Promise.resolve(current) : Promise.reject(new Error(failure));
 
   const contributions = createEditorContributions<
     WorkspaceArea,
@@ -139,7 +149,11 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
   contributions.areas.register(
     createAssetArea({
       host,
-      ...(current === null ? {} : { visuals: current.visuals }),
+      // Тот же открытый проект, что у области сцены, и спрашивается он тем же
+      // способом: манифест — половина пары ED-19, и «какой манифест открыт»
+      // обязано быть одним ответом на весь редактор, а не снимком, взятым при
+      // сборке. После переоткрытия проект другой (ED-24, ED-21).
+      open: () => Promise.resolve(current === null ? null : current.visuals),
       stage: assetStageFactory(assets),
       // Тот же модуль подаётся и напрямую: состояние ассета (ASSET-4)
       // просмотрщик спрашивает у него, а не у кадра, и там, где кадра нет
@@ -163,10 +177,16 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
   registerShellCommands(contributions.commands, {
     resources,
     areas: contributions.areas,
-    // Открытие проекта — тот же путь, которым область открылась в первый раз
-    // (ED-24): второго способа открыть проект не заводится.
-    open: (target) => {
+    // Открытие проекта — тот же путь, которым области открылись в первый раз
+    // (ED-24): второго способа открыть проект не заводится. Дерево обходится
+    // ДО того, как области спросят состав, — иначе они рассказали бы друг о
+    // друге разное (см. `openProject`), — и переоткрываются обе: проект после
+    // команды другой, а область, оставшаяся на прежних документах, правила бы
+    // то, чего в группе записи уже нет (ED-19, ED-21).
+    open: async (target) => {
+      await openProject();
       (target.stateOf(SCENE_AREA_ID) as SceneAreaState).reopen();
+      (target.stateOf(ASSETS_AREA_ID) as AssetAreaState).reopen();
       target.setNotice(null);
     },
     dirty: (target) => target.session.dirtyDocumentIds().length > 0,

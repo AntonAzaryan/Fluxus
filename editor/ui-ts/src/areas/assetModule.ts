@@ -41,6 +41,37 @@
  * Поэтому здесь заводится ровно один сервис на сборку, и загрузчики
  * регистрируются здесь же: набор форматов — свойство редактора, а не отдельного
  * кадра.
+ *
+ * ## Свежесть: сервис пересоздаётся, а модуль остаётся тем же
+ *
+ * `AssetService` кэширует по ID и ни вытеснения, ни инвалидации не имеет —
+ * ASSET-2 требует ровно этого. Решение о том, что с этим делать в редакторе,
+ * принято не здесь, а вместе с самим швом: шапка `host/assetSource.ts` ядра
+ * редактора («Инвалидация кэша: решение и его основание») отвергает точечное
+ * `evict(id)` как новую нормативную поверхность capability `assets` и оставляет
+ * держателю сервиса ровно одно действие — выбросить сервис целиком. Источник
+ * называет момент (`generation`, `onStale`), держатель пересоздаёт.
+ *
+ * Держатель — этот модуль, и отсюда его форма. Наружу выходит ОДИН объект,
+ * живущий столько же, сколько редактор: пересоздание сервиса не должно
+ * превращаться в раздачу нового сервиса каждому, кто держал прежний, — иначе
+ * общий кэш расщепился бы ровно тем способом, от которого его тут и берегут
+ * (ASSET-2). Потребитель спрашивает `service` в момент обращения (так его
+ * спрашивает контекст рендера, `sceneStage.ts`) либо ходит через сам модуль
+ * (`AssetStates` — так его спрашивает просмотрщик).
+ *
+ * Пересоздаётся сервис не на всякое шевеление дерева. Хост уведомляет и о
+ * записи самого редактора (`ContentTreeHost.write`), и сброс кэша на каждое
+ * сохранение означал бы перезагрузку всех моделей сцены после каждого Ctrl+S.
+ * Поэтому модуль смотрит, читал ли он изменившийся путь: читает он через свою
+ * обёртку над источником, и в неё попадают и сами ассеты, и их зависимости
+ * (ASSET-3) — файла, которого модуль не читал, в его кэше нет по построению.
+ *
+ * Чего это не делает: уже построенные инстансы рендера прежних данных не
+ * теряют — подсистема моделей запрашивает ассет при постройке инстанса
+ * (REND-3), и «перестроить нарисованное, потому что файл на диске изменился» —
+ * решение рендера, а не редактора. Свежие байты получает всё, что запрошено
+ * после инвалидации.
  */
 import {
   AssetService,
@@ -49,20 +80,131 @@ import {
   manifestLoader,
   mdxLoader,
   pngTextureLoader,
+  type AssetKind,
+  type AssetState,
+  type Handle,
 } from '@game-mvp/assets';
-import { createHostAssetSource, type EnvironmentHost } from '@game-mvp/editor-core';
+import {
+  createHostAssetSource,
+  normalizeContentPath,
+  type ContentAssetSource,
+  type EnvironmentHost,
+} from '@game-mvp/editor-core';
+import type { AssetStates } from './assetPreview.js';
 
 /**
- * Модуль ассетов поверх дерева контента хоста среды (ED-12, ASSET-2): байты
- * приходят тем же швом, которым читаются документы, и ID ассета есть путь в
- * дереве.
+ * Модуль ассетов редактора: тот же кэш на ID для всех кадров (ASSET-2), плюс
+ * то, чего у самого сервиса нет и не должно быть, — момент, когда кэш перестал
+ * быть правдой о дереве.
  */
-export function createAssetModule(host: EnvironmentHost): AssetService {
-  const assets = new AssetService(createHostAssetSource(host.content));
+export interface AssetModule extends AssetStates {
+  /**
+   * Сервис, которым модуль отвечает сейчас. Спрашивать его надо в момент
+   * обращения, а не запоминать: пересоздание меняет объект, и снимок означал бы
+   * второй ответ на вопрос «загрузился ли этот ассет» (ASSET-2).
+   */
+  readonly service: AssetService;
+  /**
+   * Поколение дерева, на котором собран текущий сервис (`HostAssetSource`).
+   * Растёт вместе с пересозданием и служит наблюдаемым признаком того, что
+   * кэш — уже не тот, который автор видел до правки дерева.
+   */
+  readonly generation: number;
+  /** Подписка на пересоздание сервиса; отписка возвращается вызовом. */
+  onInvalidate(listener: () => void): () => void;
+  /** Отписывает модуль от хоста среды. */
+  dispose(): void;
+}
+
+/** Набор форматов редактора (ASSET-3) — свойство редактора, а не кадра. */
+function build(source: ContentAssetSource): AssetService {
+  const assets = new AssetService(source);
   assets.registerLoader(mdxLoader);
   assets.registerLoader(gltfLoader);
   assets.registerLoader(pngTextureLoader);
   assets.registerLoader(manifestLoader);
   assets.registerLoader(curvatureLoader);
   return assets;
+}
+
+/**
+ * Модуль ассетов поверх дерева контента хоста среды (ED-12, ASSET-2): байты
+ * приходят тем же швом, которым читаются документы, и ID ассета есть путь в
+ * дереве.
+ */
+export function createAssetModule(host: EnvironmentHost): AssetModule {
+  const source = createHostAssetSource(host.content);
+  const listeners = new Set<() => void>();
+  /**
+   * Пути, которые текущий сервис действительно прочитал: и сами ассеты, и их
+   * зависимости (ASSET-3). Иначе о зависимостях знать неоткуда — сервис
+   * запрашивает их сам, минуя `request`.
+   */
+  const read = new Set<string>();
+  /** Хэндлы, выданные текущим сервисом: чужой ему хэндл он не примет. */
+  const issued = new Map<string, Handle<unknown>>();
+
+  const reading: ContentAssetSource = {
+    read(id) {
+      read.add(normalizeContentPath(id));
+      return source.read(id);
+    },
+  };
+
+  let service = build(reading);
+  let generation = source.generation;
+
+  const rebuild = (): void => {
+    service = build(reading);
+    generation = source.generation;
+    read.clear();
+    issued.clear();
+    for (const listener of [...listeners]) listener();
+  };
+
+  const stop = source.onStale((path) => {
+    // Дерево меняется и от записи самого редактора (шов уведомляет о ней
+    // наравне с чужой правкой), а прочитанного модулем это чаще всего не
+    // касается: документы сцены и манифеста читает не он.
+    if (read.has(path)) rebuild();
+  });
+
+  return {
+    get service(): AssetService {
+      return service;
+    },
+    get generation(): number {
+      return generation;
+    },
+    request<T>(kind: AssetKind, id: string): Handle<T> {
+      const handle = service.request<T>(kind, id);
+      issued.set(id, handle);
+      return handle;
+    },
+    state: <T,>(handle: Handle<T>): AssetState<T> => service.state<T>(handle),
+    subscribe: <T,>(handle: Handle<T>, listener: (state: AssetState<T>) => void): (() => void) =>
+      service.subscribe<T>(handle, listener),
+    retry(handle) {
+      const known = issued.get(handle.id);
+      // Хэндл прежнего сервиса: дерево изменилось, и кэш уже выброшен. Просьба
+      // автора от этого не пропадает — она становится первым запросом к новому
+      // кэшу, а он читает свежие байты (ASSET-2, ASSET-4).
+      if (known === undefined || known.kind !== handle.kind) {
+        issued.set(handle.id, service.request(handle.kind, handle.id));
+        return;
+      }
+      service.retry(known);
+    },
+    onInvalidate(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    dispose() {
+      listeners.clear();
+      stop();
+      source.dispose();
+    },
+  };
 }

@@ -94,12 +94,27 @@ export interface FakeAssets extends AssetStates {
   settle(id: string, state: AssetState<unknown>): void;
   /** Что и в каком виде запрашивали: повторный запрос обязан быть даром (ASSET-2). */
   readonly requests: readonly { readonly kind: AssetKind; readonly id: string }[];
+  /** Чем ответит повторная попытка (ASSET-4): её тоже ставит тест, а не догадка. */
+  onRetry(id: string, state: AssetState<unknown>): void;
+  /** ID, для которых просили повторить, — в порядке просьб. */
+  readonly retries: readonly string[];
+  /** Кэш выброшен: так о пересоздании сервиса сообщает настоящий модуль. */
+  invalidate(): void;
 }
 
 export function fakeAssets(initial: Readonly<Record<string, AssetState<unknown>>> = {}): FakeAssets {
   const states = new Map<string, AssetState<unknown>>(Object.entries(initial));
   const listeners = new Map<string, Set<(state: AssetState<unknown>) => void>>();
   const requests: { kind: AssetKind; id: string }[] = [];
+  const retries: string[] = [];
+  const afterRetry = new Map<string, AssetState<unknown>>();
+  const invalidated = new Set<() => void>();
+
+  const settle = (id: string, state: AssetState<unknown>): void => {
+    states.set(id, state);
+    for (const listener of [...(listeners.get(id) ?? [])]) listener(state);
+  };
+
   return {
     request: <T,>(kind: AssetKind, id: string): Handle<T> => {
       requests.push({ kind, id });
@@ -115,12 +130,47 @@ export function fakeAssets(initial: Readonly<Record<string, AssetState<unknown>>
       cast(states.get(handle.id) ?? { status: 'loading' });
       return () => set.delete(cast);
     },
-    settle(id, state) {
-      states.set(id, state);
-      for (const listener of [...(listeners.get(id) ?? [])]) listener(state);
+    retry(handle) {
+      retries.push(handle.id);
+      // Настоящий сервис перезапускает загрузку и объявляет её результат
+      // подписчикам (ASSET-4); чем она кончится, здесь решает тест.
+      const next = afterRetry.get(handle.id);
+      if (next !== undefined) settle(handle.id, next);
     },
+    onInvalidate(listener) {
+      invalidated.add(listener);
+      return () => invalidated.delete(listener);
+    },
+    settle,
+    onRetry(id, state) {
+      afterRetry.set(id, state);
+    },
+    invalidate() {
+      // Прежние подписки принадлежали выброшенному сервису — как и у
+      // настоящего модуля, они не переживают пересоздания.
+      listeners.clear();
+      for (const listener of [...invalidated]) listener();
+    },
+    retries,
     requests,
   };
+}
+
+/**
+ * Хост, который об изменениях дерева не сообщает: шов это прямо допускает
+ * («хост, который не умеет наблюдать за деревом, возвращает из `watch` отписку и
+ * не уведомляет никогда», ED-12). Ровно в такой среде повторная попытка
+ * (ASSET-4) — единственный способ узнать, что автор починил файл.
+ */
+export function hostWithoutWatching(host: EnvironmentHost): EnvironmentHost {
+  const content: ContentTreeHost = {
+    read: (path: ContentPath) => host.content.read(path),
+    write: (path: ContentPath, bytes: Uint8Array) => host.content.write(path, bytes),
+    stat: (path: ContentPath) => host.content.stat(path),
+    list: (path: ContentPath) => host.content.list(path),
+    watch: () => () => undefined,
+  };
+  return { name: host.name, root: host.root, content, picker: host.picker, window: host.window };
 }
 
 export interface AssetFixture extends FrameFixture {

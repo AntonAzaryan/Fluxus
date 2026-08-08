@@ -24,6 +24,7 @@
   "ui.area.assets.noAssets": "This environment has nothing to open assets with: the preview frame did not assemble",
   "ui.area.assets.noListing": "This environment provides no directory listing",
   "ui.area.assets.none": "Not selected",
+  "ui.area.assets.retry": "Try loading again",
   "ui.area.assets.skin": "Skin",
   "ui.area.assets.slot": "Texture slot",
   "ui.area.assets.statusFailed": "Failed",

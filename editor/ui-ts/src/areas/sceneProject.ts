@@ -90,7 +90,15 @@ export interface SceneProject {
   readonly visualsId: DocumentId;
   /** Карта кривизны — её ID берётся из манифеста; `null` — арена без кривизны. */
   readonly curvatureId: DocumentId | null;
-  readonly visuals: VisualManifest;
+  /**
+   * Манифест НА МОМЕНТ ОТКРЫТИЯ: им поднимается подсистема моделей (REND-8) и
+   * по нему находится карта кривизны (ASSET-7). Текущим состоянием манифеста он
+   * не является и являться не может — манифест правит просмотрщик (ED-14), и
+   * снимок расходится с документом на первой же правке. Всё, что рисует кадр,
+   * читает манифест из сессии (`draftOf`), а до подсистемы моделей он доезжает
+   * переподачей (REND-17).
+   */
+  readonly initialVisuals: VisualManifest;
   /** Настройка проекта о позиции (ED-16); её же получит расстановка W3-3. */
   readonly position: PositionBinding | undefined;
 }
@@ -131,25 +139,43 @@ export async function openSceneProject(
     configId: ids.config,
     visualsId: ids.visuals,
     curvatureId,
-    visuals,
+    initialVisuals: visuals,
     position: ids.position,
   };
 }
+
+const message = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 /**
  * Кадр по текущему состоянию открытых документов (ED-15). Ключи записей —
  * дескрипторы сессии: они переживают правку соседей, а значит инстанс не
  * пересоздаётся от правки позиции (REND-11).
+ *
+ * Манифест читается ИЗ СЕССИИ на каждый пересчёт, а не берётся снимком
+ * открытия: он такой же редактируемый документ (ED-14), и снимок означал бы,
+ * что назначенная в просмотрщике модель доедет до картинки только переоткрытием
+ * проекта — то есть не доедет (ED-15). Сломанный манифест кадра не гасит: его
+ * причина складывается с остальными, как и причина сломанной карты кривизны.
  */
 export function draftOf(session: EditorSession, project: SceneProject): SceneDraft {
-  return sceneDraft({
+  let visuals: VisualManifest | null = null;
+  let broken: string | null = null;
+  try {
+    visuals = visualsOf(session.documentValue(project.visualsId));
+  } catch (error) {
+    broken = message(error);
+  }
+  const draft = sceneDraft({
     config: session.documentValue(project.configId),
     keys: session.descriptors(project.configId, PLACEMENT_LIST),
-    visuals: project.visuals,
+    visuals,
     ...(project.position === undefined ? {} : { position: project.position }),
     curvature:
       project.curvatureId === null || !session.isOpen(project.curvatureId)
         ? null
         : session.documentValue(project.curvatureId),
   });
+  if (broken === null) return draft;
+  return { ...draft, failure: draft.failure === null ? broken : `${broken}; ${draft.failure}` };
 }

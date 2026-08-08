@@ -63,6 +63,21 @@ export interface AssetStates {
   request<T>(kind: AssetKind, id: string): Handle<T>;
   state<T>(handle: Handle<T>): AssetState<T>;
   subscribe<T>(handle: Handle<T>, listener: (state: AssetState<T>) => void): () => void;
+  /**
+   * Ещё одна попытка для отказавшего (ASSET-4: «повторный явный запрос MAY
+   * инициировать новую попытку загрузки»). Здесь она нужна не ради полноты
+   * подписи: ED-20 обязывает показать отказавший ассет причиной, а автор,
+   * починивший файл, обязан иметь способ спросить заново — иначе причина
+   * остаётся на экране до перезапуска редактора.
+   */
+  retry(handle: Handle): void;
+  /**
+   * Подписка на инвалидацию кэша: держатель сервиса выбросил его целиком, и
+   * прежние хэндлы ему больше не принадлежат (`assetModule.ts`). Метод
+   * необязателен — у сервиса самого по себе такого события нет и быть не должно
+   * (ASSET-2), это событие держателя.
+   */
+  onInvalidate?(listener: () => void): () => void;
 }
 
 export type AssetStatus = 'loading' | 'ready' | 'failed';
@@ -87,7 +102,9 @@ export interface AssetProbeOptions {
   /**
    * Сервис ассетов вьюпорта; `null` — в этой среде открывать ассеты нечем.
    * Отдельный сервис просмотрщику не заводится: кэш один на ID (ASSET-2), и
-   * второй грузил бы те же файлы второй раз.
+   * второй грузил бы те же файлы второй раз. Отсюда же и подписка на его
+   * инвалидацию, если она у него есть: выброшенный кэш обесценивает всё, что
+   * наблюдатель о нём помнит.
    */
   readonly assets: AssetStates | null;
   /** Состояние ассета меняется асинхронно (ASSET-4) — это просьба перерисовать. */
@@ -102,6 +119,12 @@ export interface AssetProbe {
   open(kind: AssetKind, id: string): OpenedAsset;
   /** Состояние уже открывавшегося ассета; `undefined` — такой не открывали. */
   stateOf(id: string): OpenedAsset | undefined;
+  /**
+   * Просьба автора попробовать ещё раз (ASSET-4, ED-20). Ничего не делает для
+   * того, что не открывали или что не отказывало: «загружается» и «загружен»
+   * второй попытки не требуют, и заводить её значило бы грузить готовое.
+   */
+  retry(id: string): void;
   dispose(): void;
 }
 
@@ -120,8 +143,12 @@ const message = (error: unknown): string =>
  */
 export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
   const opened = new Map<string, OpenedAsset>();
+  /** Хэндл на ID: им и адресуется повторная попытка (ASSET-2, ASSET-4). */
+  const handles = new Map<string, Handle<unknown>>();
   const unsubscribes: (() => void)[] = [];
   let disposed = false;
+  /** Отписка от инвалидации кэша; ставится ниже, когда `probe` уже собран. */
+  let offInvalidate: () => void = () => undefined;
 
   const failed = (kind: AssetKind, id: string, reason: string | null): OpenedAsset => {
     const entry: OpenedAsset = { id, kind, status: 'failed', reason, data: null };
@@ -141,7 +168,7 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
     return entry;
   };
 
-  return {
+  const probe: AssetProbe = {
     open(kind, id) {
       const known = opened.get(id);
       if (known !== undefined) return known;
@@ -157,6 +184,7 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
         // этой записи, а не исключение наружу: просмотрщик остаётся живым.
         return failed(kind, id, message(error));
       }
+      handles.set(id, handle);
       // Подписка зовёт слушателя немедленно (ASSET-4), и этот первый вызов
       // перерисовки не просит: страница и так собирается прямо сейчас, а
       // просьба посреди сборки была бы рекурсией.
@@ -176,12 +204,56 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
       return opened.get(id) ?? adopt(kind, id, { status: 'loading' });
     },
     stateOf: (id) => opened.get(id),
+    retry(id) {
+      const known = opened.get(id);
+      const handle = handles.get(id);
+      const assets = options.assets;
+      if (known === undefined || known.status !== 'failed' || assets === null) return;
+      if (handle === undefined) {
+        // Хэндла нет — запрос отказал синхронно (ASSET-2) и загрузки не было
+        // вовсе. Вторая попытка здесь — это первый запрос, а не повтор.
+        opened.delete(id);
+        probe.open(known.kind, id);
+        options.onChange();
+        return;
+      }
+      try {
+        assets.retry(handle);
+      } catch (error) {
+        // Отказ самой попытки — состояние этой записи, а не исключение наружу:
+        // просмотрщик роняться не имеет права (ED-20).
+        failed(known.kind, id, message(error));
+      }
+      options.onChange();
+    },
     dispose() {
       disposed = true;
-      for (const off of unsubscribes.splice(0)) off();
+      offInvalidate();
+      for (const unsubscribe of unsubscribes.splice(0)) unsubscribe();
       opened.clear();
+      handles.clear();
     },
   };
+
+  /**
+   * Кэш выброшен целиком (`assetModule.ts`): прежние хэндлы больше не
+   * принадлежат сервису, и держать по ним состояния значило бы показывать
+   * автору ответ, которого уже никто не даёт. Открытое открывается заново — тем
+   * же путём и в том же составе, поэтому «один ответ на ID» (ASSET-2)
+   * сохраняется, а не расщепляется на «до» и «после».
+   */
+  const reopen = (): void => {
+    if (disposed) return;
+    const known = [...opened.values()].map((entry) => ({ kind: entry.kind, id: entry.id }));
+    for (const unsubscribe of unsubscribes.splice(0)) unsubscribe();
+    opened.clear();
+    handles.clear();
+    for (const entry of known) probe.open(entry.kind, entry.id);
+    if (known.length > 0) options.onChange();
+  };
+  offInvalidate = options.assets?.onInvalidate?.(reopen) ?? ((): void => undefined);
+
+  return probe;
 }
 
 /** Данные модели открытого ассета; `null` — это не готовая модель (ASSET-5). */

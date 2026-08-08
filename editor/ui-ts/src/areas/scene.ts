@@ -33,7 +33,7 @@
  * первой на первом же несовпадении.
  */
 import { FIXED_ONE, type SceneDef } from '@game-mvp/core';
-import type { AssetService, VisualManifest } from '@game-mvp/assets';
+import type { VisualManifest } from '@game-mvp/assets';
 import {
   ContributionRegistry,
   CURVATURE_GRID_RULE,
@@ -67,7 +67,7 @@ import { placementSubject, sceneDocumentSubject } from './sceneSchema.js';
 import { withValidation } from '../widgets/validation.js';
 import { viewportFrame } from '../viewport.js';
 import type { ScenePlacement } from './sceneDocuments.js';
-import { createAssetModule } from './assetModule.js';
+import { createAssetModule, type AssetModule } from './assetModule.js';
 import {
   canRender,
   createSceneStage,
@@ -193,7 +193,7 @@ export interface SceneAreaOptions {
    * Модуль ассетов редактора (ASSET-2) — один на все кадры; нет — область
    * заводит свой. Обоснование общего кэша — в шапке `assetModule.ts`.
    */
-  readonly assets?: AssetService;
+  readonly assets?: AssetModule;
   /**
    * Чем собирается вьюпорт. Подменяется тестом на структурный дубль: WebGL в
    * headless-прогоне нет, а проверять подачу документов рендеру надо.
@@ -332,7 +332,7 @@ function brushSurface(
  * каждый свой контекст рендера (обоснование — в шапке `assetModule.ts`).
  */
 export function sceneStageOptions(
-  assets: AssetService,
+  assets: AssetModule,
   visuals: VisualManifest,
   hooks: SceneStageHooks,
 ): SceneStageOptions {
@@ -352,11 +352,15 @@ export function sceneStageOptions(
  * правил.
  */
 function defaultStage(
-  assets: AssetService,
+  assets: AssetModule,
   project: SceneProject,
   hooks: SceneStageHooks,
 ): SceneStage | null {
-  return canRender() ? createSceneStage(sceneStageOptions(assets, project.visuals, hooks)) : null;
+  // Подсистема моделей поднимается манифестом открытия (REND-8); дальше он
+  // приезжает переподачей на каждую правку документа (REND-17, ED-15).
+  return canRender()
+    ? createSceneStage(sceneStageOptions(assets, project.initialVisuals, hooks))
+    : null;
 }
 
 /**
@@ -383,7 +387,7 @@ function start(
   state: SceneAreaState,
   setup: AreaSetup,
   options: SceneAreaOptions,
-  assets: AssetService | null,
+  assets: AssetModule | null,
 ): void {
   const host = options.host;
   const open = opener(options);
@@ -465,6 +469,9 @@ function install(
   });
   let config: unknown = undefined;
   let curvature: unknown = undefined;
+  // Начальное значение — то, которым поднята подсистема моделей: первый
+  // пересчёт манифест не переподаёт, потому что переподавать ещё нечего.
+  let visuals: unknown = setup.session.documentValue(project.visualsId);
   const recompute = (): void => {
     // Отчёт пересчитывается раньше сверки ссылок и без неё: правила видят
     // больше документов, чем кадр (пара «конфиг — манифест», ED-19), и
@@ -479,10 +486,28 @@ function install(
       project.curvatureId === null || !setup.session.isOpen(project.curvatureId)
         ? null
         : setup.session.documentValue(project.curvatureId);
-    if (state.draft !== null && nextConfig === config && nextCurvature === curvature) return;
+    // Манифест визуалов — третий редактируемый документ кадра (ED-14): запись,
+    // назначенная в просмотрщике, обязана попасть в картинку не позже
+    // следующего кадра (ED-15), а не ждать переоткрытия проекта.
+    const nextVisuals = setup.session.documentValue(project.visualsId);
+    if (
+      state.draft !== null &&
+      nextConfig === config &&
+      nextCurvature === curvature &&
+      nextVisuals === visuals
+    ) {
+      return;
+    }
+    const edited = nextVisuals !== visuals;
     config = nextConfig;
     curvature = nextCurvature;
+    visuals = nextVisuals;
     state.draft = draftOf(setup.session, project);
+    // Переподача манифеста целиком и декларативно (REND-17): что пересобрать, а
+    // что обновить на живом инстансе, решает подсистема — второго такого
+    // решения в редакторе нет. Сломанный манифест не переподаётся: прежний
+    // лучше отсутствующего, а причина уже названа кадром (ED-8).
+    if (edited && state.draft.visuals !== null) state.stage?.applyVisuals(state.draft.visuals);
     // Пока идёт прогон, кадр наполняет он (REND-11): подать сюда документы
     // значило бы отобрать у него presentation-состояние посреди прогона.
     // Дождавшийся набор уедет во вьюпорт выходом из превью — переподачей.
@@ -1050,8 +1075,10 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
             state.project === null
               ? null
               : (setup.session.documentValue(state.project.configId) as unknown as SceneDef),
-          kinds: () =>
-            state.project === null ? [] : Object.keys(state.project.visuals.entities),
+          // Визуальные типы — из манифеста ТЕКУЩЕГО кадра (ED-15), а не из
+          // снимка открытия: запись, заведённую просмотрщиком минуту назад,
+          // прогон обязан видеть так же, как её видит вьюпорт.
+          kinds: () => Object.keys(state.draft?.visuals?.entities ?? {}),
           stage: () => state.stage,
           enter: () => {
             state.previewing = true;

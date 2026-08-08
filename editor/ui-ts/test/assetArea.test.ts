@@ -17,7 +17,12 @@
  *   деревом (ED-12).
  */
 import { describe, expect, it } from 'vitest';
-import { runOperationRoundTrip, type EditorSession } from '@game-mvp/editor-core';
+import {
+  createMemoryHost,
+  runOperationRoundTrip,
+  type EditorSession,
+  type MemoryHost,
+} from '@game-mvp/editor-core';
 import { collectTexts, findAll, type UiNode } from '../src/dom/node.js';
 import { uiResources } from '../src/i18n/uiBundles.js';
 import {
@@ -45,6 +50,7 @@ import {
   buildAssetFrame,
   fakeAssets,
   hostWithoutListing,
+  hostWithoutWatching,
 } from './support/assets.js';
 import { settle } from './support/project.js';
 
@@ -192,6 +198,140 @@ describe('ED-20: ассет с отказом показан причиной и
     const requests = assets.requests.length;
     selectRow(fixture, ASSET_IDS.hero);
     expect(assets.requests.length).toBe(requests);
+  });
+});
+
+/**
+ * Свежесть кэша (ASSET-2, ASSET-4) — на НАСТОЯЩЕМ модуле, а не на дубле: дубль
+ * не имеет ни кэша, ни источника байтов, и «повторная попытка прочитала файл
+ * заново» на нём проверить нечего. Формат взят тот, что разбирается headless, —
+ * манифест визуалов (ASSET-6): WebGL и парсеры моделей тут ни при чём.
+ */
+describe('ASSET-4: починенный ассет загружается заново', () => {
+  const ID = 'visuals/looks.json';
+  const MANIFEST = JSON.stringify({ entities: {} });
+
+  /** Дерево с одним отсутствующим файлом: первая попытка обязана отказать. */
+  const emptyTree = (): MemoryHost =>
+    createMemoryHost({ name: 'fresh', root: { label: 'дерево' }, files: {} });
+
+  it('повторная попытка автора читает файл заново, а не отдаёт прежний отказ', async () => {
+    // Среда без наблюдения за деревом (ED-12 её прямо допускает): узнать о
+    // починке иначе как просьбой автора здесь неоткуда.
+    const tree = emptyTree();
+    const assets = createAssetModule(hostWithoutWatching(tree));
+    const handle = assets.request('manifest', ID);
+    await settle();
+    expect(assets.state(handle).status).toBe('failed');
+
+    tree.set(ID, MANIFEST);
+    // Кэш от появления файла сам не обновился — источник о нём и не сообщал.
+    expect(assets.state(handle).status).toBe('failed');
+
+    assets.retry(handle);
+    await settle();
+    expect(assets.state(handle).status).toBe('ready');
+  });
+
+  it('правка в дереве выбрасывает кэш, а не оставляет его старым', async () => {
+    const tree = createMemoryHost({
+      name: 'watched',
+      root: { label: 'дерево' },
+      files: { [ID]: 'не json вовсе' },
+    });
+    const assets = createAssetModule(tree);
+    const first = assets.request('manifest', ID);
+    await settle();
+    expect(assets.state(first).status).toBe('failed');
+
+    const service = assets.service;
+    const generation = assets.generation;
+    let invalidations = 0;
+    assets.onInvalidate(() => {
+      invalidations += 1;
+    });
+
+    // Правка «извне» — то самое изменение дерева, о котором говорит шов
+    // (`HostAssetSource`): держатель сервиса выбрасывает кэш целиком.
+    tree.set(ID, MANIFEST);
+    expect(invalidations).toBe(1);
+    expect(assets.service).not.toBe(service);
+    expect(assets.generation).toBeGreaterThan(generation);
+
+    // Тот же ID у того же модуля — и он читает свежие байты.
+    const second = assets.request('manifest', ID);
+    await settle();
+    expect(assets.state(second).status).toBe('ready');
+  });
+
+  it('файл, которого модуль не читал, кэша не трогает', async () => {
+    const tree = createMemoryHost({
+      name: 'watched',
+      root: { label: 'дерево' },
+      files: { [ID]: MANIFEST },
+    });
+    const assets = createAssetModule(tree);
+    const handle = assets.request('manifest', ID);
+    await settle();
+    expect(assets.state(handle).status).toBe('ready');
+
+    const service = assets.service;
+    // Дерево уведомляет и о записи самого редактора: сохранение сцены не имеет
+    // права перезагружать все модели, которых оно не касалось.
+    tree.set('levels/arena.json', '{}');
+    expect(assets.service).toBe(service);
+    // Разделяемый ассет остался тем же — и handle остался действительным
+    // (ASSET-2).
+    expect(assets.state(handle).status).toBe('ready');
+  });
+});
+
+describe('ED-20: отказ ассета показан не навсегда', () => {
+  it('автор просит попробовать снова — и просмотрщик показывает загруженное', async () => {
+    const reason = 'ассет "visuals/models/broken.mdx": не разбирается как MDX';
+    const assets = fakeAssets({ [ASSET_IDS.broken]: { status: 'failed', reason } });
+    const fixture = await buildAssetFrame({ assets });
+    selectRow(fixture, ASSET_IDS.broken);
+    expect(fixture.state.probe.stateOf(ASSET_IDS.broken)?.status).toBe('failed');
+
+    // Автор починил файл в дереве: следующая попытка кончится иначе (ASSET-4).
+    assets.onRetry(ASSET_IDS.broken, { status: 'ready', data: HERO_MODEL });
+    press(buttonByKey(fixture.frame.view(), 'ui.area.assets.retry'));
+
+    expect(assets.retries).toEqual([ASSET_IDS.broken]);
+    expect(fixture.state.probe.stateOf(ASSET_IDS.broken)?.status).toBe('ready');
+    // Причина ушла со страницы вместе с отказом — она была утверждением о том,
+    // чего уже нет (ED-8).
+    expect(collectTexts(fixture.frame.view()).map((text) => text.value)).not.toContain(reason);
+  });
+
+  it('повторять нечего — кнопка показана недоступной, а не молчит (ED-26)', async () => {
+    const assets = fakeAssets({ [ASSET_IDS.hero]: { status: 'ready', data: HERO_MODEL } });
+    const fixture = await buildAssetFrame({ assets });
+    const disabled = (): string | undefined =>
+      buttonByKey(fixture.frame.view(), 'ui.area.assets.retry')?.attrs?.['aria-disabled'];
+    // Ничего не выбрано — повторять нечего.
+    expect(disabled()).toBe('true');
+    selectRow(fixture, ASSET_IDS.hero);
+    // Загруженное второй попытки не требует.
+    expect(disabled()).toBe('true');
+  });
+
+  it('выброшенный кэш переоткрывает то, что просмотрщик уже показывал (ASSET-2)', async () => {
+    const assets = fakeAssets({ [ASSET_IDS.hero]: { status: 'failed', reason: 'не читается' } });
+    const fixture = await buildAssetFrame({ assets });
+    selectRow(fixture, ASSET_IDS.hero);
+    expect(fixture.state.probe.stateOf(ASSET_IDS.hero)?.status).toBe('failed');
+    const requests = assets.requests.length;
+
+    // Дерево изменилось извне, держатель сервиса выбросил кэш: прежние хэндлы
+    // ему больше не принадлежат, и держаться за прежнее состояние значило бы
+    // показывать ответ, которого никто уже не даёт.
+    assets.settle(ASSET_IDS.hero, { status: 'ready', data: HERO_MODEL });
+    assets.invalidate();
+
+    expect(assets.requests.length).toBeGreaterThan(requests);
+    expect(fixture.state.probe.stateOf(ASSET_IDS.hero)?.status).toBe('ready');
   });
 });
 

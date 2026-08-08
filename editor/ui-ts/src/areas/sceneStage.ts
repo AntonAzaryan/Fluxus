@@ -132,6 +132,7 @@ import {
   type RenderContext,
 } from '@game-mvp/render';
 import type { TerrainGrid } from '@game-mvp/core';
+import type { AssetModule } from './assetModule.js';
 import {
   CAMERA_KEYS,
   createSceneCamera,
@@ -172,9 +173,11 @@ export interface SceneStageOptions {
   /**
    * Модуль ассетов редактора (ASSET-2) — готовый, а не источник байтов, из
    * которого кадр завёл бы свой. Кэш один на ID, и кадров в редакторе больше
-   * одного: обоснование — в шапке `assetModule.ts`.
+   * одного: обоснование — в шапке `assetModule.ts`. Модуль, а не сам сервис,
+   * потому что сервис под ним сменяется: кэш выбрасывается целиком, когда
+   * дерево изменилось, и кадр обязан идти за новым, а не рисовать по прежнему.
    */
-  readonly assets: AssetService;
+  readonly assets: AssetModule;
   /** Манифест визуалов (ASSET-6): без него подсистеме моделей нечего строить. */
   readonly visuals: VisualManifest;
   /**
@@ -289,7 +292,19 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
 
   // Модуль ассетов приходит снаружи и остаётся общим на все кадры редактора
   // (ASSET-2): контекст рендера у каждого кадра свой, а кэш ассетов — один.
-  const context: RenderContext = { scene, assets: options.assets, config: { heightStep } };
+  //
+  // Сервис спрашивается у модуля на КАЖДОМ обращении подсистем, а не кладётся
+  // сюда снимком: модуль выбрасывает сервис целиком, когда изменилось
+  // прочитанное им в дереве (обоснование — шапка `assetModule.ts`), и снимок
+  // означал бы, что кадр отвечает на «загрузился ли этот ассет» не тем же
+  // кэшем, что просмотрщик (ASSET-2).
+  const context: RenderContext = {
+    scene,
+    get assets(): AssetService {
+      return options.assets.service;
+    },
+    config: { heightStep },
+  };
   const presentation = new PresentationStage(context);
   const source = new DocumentSource(presentation);
 

@@ -35,6 +35,23 @@
  * шла зарегистрированной операцией. Поэтому кнопки назначения зовут реестр
  * (`assetVisuals.ts`) и ничего не пишут сами: undo этих правок работает по тем
  * же основаниям, что undo мазка кисти (ED-18), — история одна на сессию.
+ *
+ * ## Что здесь не снимок
+ *
+ * Две вещи области выглядят состоянием, а на деле являются ответом на вопрос,
+ * у которого ответ меняется, и снятые однажды они устаревают молча:
+ *
+ * - **манифест открытого проекта.** Он приходит открытием (ED-12) и после
+ *   переоткрытия ДРУГОЙ; просмотрщик, оставшийся на прежнем, правил бы
+ *   документ, которого нет ни в открытом проекте, ни в его группе записи
+ *   (ED-19, ED-21). Поэтому путь спрашивается функцией (`open`), а не берётся
+ *   значением, и переоткрытие (`reopen`) перечитывает заодно дерево: файл,
+ *   появившийся извне, иначе не показался бы вовсе.
+ * - **состояние ассета.** Отказ — это состояние загрузки, а не свойство файла
+ *   (ASSET-4): автор, починивший файл, обязан иметь способ спросить заново,
+ *   иначе причина висит до перезапуска редактора (ED-20). Просьбу принимает
+ *   `AssetProbe.retry`, а кэш, устаревший от правки дерева, выбрасывает
+ *   держатель модуля (шапка `assetModule.ts`) — и открытое открывается заново.
  */
 import {
   contentPathParent,
@@ -45,7 +62,7 @@ import {
   type EditorSession,
   type EnvironmentHost,
 } from '@game-mvp/editor-core';
-import type { AssetService, EntityVisual } from '@game-mvp/assets';
+import type { EntityVisual } from '@game-mvp/assets';
 import {
   children,
   documentValue,
@@ -96,7 +113,7 @@ import {
   manifestOf,
   skinNames,
 } from './assetVisuals.js';
-import { createAssetModule } from './assetModule.js';
+import { createAssetModule, type AssetModule } from './assetModule.js';
 import {
   canRender,
   createSceneStage,
@@ -133,6 +150,14 @@ export interface AssetAreaOptions {
   readonly host?: EnvironmentHost;
   /** Документ манифеста визуалов (ASSET-6), в записи которого пишет выбор. */
   readonly visuals?: ContentPath;
+  /**
+   * Чем манифест открытого проекта СПРАШИВАЕТСЯ, когда он заранее не известен:
+   * состав проекта приносит открытие (ED-12), и после переоткрытия он другой.
+   * `null` — открывать нечего. Зовётся и повторно — командой открытия проекта
+   * (ED-24): просмотрщик, оставшийся на прежнем манифесте, правил бы документ,
+   * которого нет ни в открытом проекте, ни в его группе записи (ED-21).
+   */
+  readonly open?: () => Promise<ContentPath | null>;
   readonly visualsKind?: DocumentKind;
   /** Корень обхода дерева; по умолчанию — весь корень (ED-20: навигация по дереву). */
   readonly root?: ContentPath;
@@ -173,6 +198,12 @@ export interface AssetAreaState {
   failure: string | null;
   /** Почему нечего показать в кадре: манифест не разбирается (ED-8). */
   previewFailure: string | null;
+  /**
+   * Открыть проект заново (ED-12, ED-24): спросить манифест открытого проекта и
+   * перечитать дерево контента. Тем же вызовом это делает команда палитры —
+   * второго пути открытия не заводится.
+   */
+  reopen: () => void;
   refresh: () => void;
 }
 
@@ -185,7 +216,7 @@ const message = (error: unknown): string =>
  * начинается с того, что кадр поднимается без террейна.
  */
 export function assetStageOptions(
-  assets: AssetService,
+  assets: AssetModule,
   hooks: AssetStageHooks,
 ): SceneStageOptions {
   return {
@@ -202,7 +233,7 @@ export function assetStageOptions(
 }
 
 /** Кадр превью по умолчанию: тот же рендер, что вьюпорт (ED-1), без террейна. */
-function defaultStage(assets: AssetService, hooks: AssetStageHooks): SceneStage | null {
+function defaultStage(assets: AssetModule, hooks: AssetStageHooks): SceneStage | null {
   return canRender() ? createSceneStage(assetStageOptions(assets, hooks)) : null;
 }
 
@@ -212,7 +243,7 @@ function defaultStage(assets: AssetService, hooks: AssetStageHooks): SceneStage 
  * (см. шапку `assetModule.ts`). Без неё область заводит свой модуль — так она
  * собирается там, где сборки нет вовсе (тест, галерея).
  */
-export function assetStageFactory(assets: AssetService): AssetStageFactory {
+export function assetStageFactory(assets: AssetModule): AssetStageFactory {
   return (_host, hooks) => defaultStage(assets, hooks);
 }
 
@@ -303,18 +334,39 @@ function assign(
 }
 
 /**
+ * Чем спрашивается манифест открытого проекта. Известный заранее и приносимый
+ * открытием — один и тот же шаг для области: она получает путь и не знает,
+ * откуда его взяли.
+ */
+function opener(options: AssetAreaOptions): (() => Promise<ContentPath | null>) | null {
+  if (options.open !== undefined) return options.open;
+  const id = options.visuals;
+  return id === undefined ? null : () => Promise.resolve(id);
+}
+
+/**
  * Открытие манифеста и дерева. Оба асинхронны и оба падают по-своему: манифеста
  * может не быть в проекте, перечисления — в среде (ED-12). Ни то, ни другое не
  * должно уносить область: каждая половина ловит своё и называет причину.
+ *
+ * Зовётся и повторно — переоткрытием проекта (ED-24). Дерево при этом читается
+ * заново всегда: файл, появившийся извне, иначе не показался бы вовсе (ED-12).
+ * Манифест переоткрывается только когда он ДРУГОЙ: тот же документ пересобирать
+ * незачем, а сброс выбранной записи на ровном месте отобрал бы у автора то, чем
+ * он в этот момент занят (ED-23).
  */
 function start(state: AssetAreaState, setup: AreaSetup, options: AssetAreaOptions): void {
   const host = options.host;
   if (host === undefined) return;
   const session = setup.session;
+  const open = opener(options);
 
   const openVisuals = async (): Promise<void> => {
-    const id = options.visuals;
-    if (id === undefined) return;
+    if (open === null) return;
+    const id = await open();
+    // Открывать нечего — это ответ, а не отказ: в дереве может не быть ни
+    // одного проекта, и причины у этого нет.
+    if (id === null || id === state.visualsId) return;
     // Идемпотентно: тот же манифест открывает область сцены, документ у них
     // один, и сессия открывает его однажды (ED-23).
     if (!session.isOpen(id)) {
@@ -325,8 +377,12 @@ function start(state: AssetAreaState, setup: AreaSetup, options: AssetAreaOption
     }
     state.visualsId = id;
     // Первая запись — она же выбранная: пустой выбор запер бы все три
-    // назначения, а выбирать автору пока не из чего.
+    // назначения, а выбирать автору пока не из чего. Запись прежнего проекта
+    // при этом не переносится: имена записей принадлежат манифесту, и совпасть
+    // они могут только случайно.
     state.entry = entryNames(session.documentValue(id))[0] ?? '';
+    // Скин описан записью (ASSET-6), а запись теперь другая.
+    state.skin = '';
   };
 
   const readTree = async (): Promise<void> => {
@@ -344,15 +400,10 @@ function start(state: AssetAreaState, setup: AreaSetup, options: AssetAreaOption
     }
   };
 
+  state.failure = null;
   void Promise.all([guard(openVisuals()), guard(readTree())]).then(() => {
     show(state, session);
     state.refresh();
-  });
-
-  // Правка манифеста — откуда угодно, в том числе без интерфейса (ED-29):
-  // кадр обязан показать её не позже следующего кадра (ED-15, REND-17).
-  session.subscribe(() => {
-    show(state, session);
   });
 }
 
@@ -493,7 +544,18 @@ function bar(context: AreaContext<AssetAreaState>): readonly UiNode[] {
       onPress: press,
     });
 
+  // Ассет, который автор починил в дереве, обязан иметь способ загрузиться
+  // заново (ASSET-4 это разрешает, ED-20 делает нужным): иначе причина отказа
+  // висит до перезапуска редактора. Повторять нечего, пока ничего не отказало,
+  // — и тогда кнопка показана недоступной, а не молчит (ED-26). В превью она
+  // доступна: загрузка ассета — не операция авторинга (ED-9).
+  const failedAsset =
+    state.selected !== null && state.probe.stateOf(state.selected)?.status === 'failed';
+
   return [
+    act('ui.area.assets.retry', !failedAsset, () => {
+      if (state.selected !== null) state.probe.retry(state.selected);
+    }),
     choice(context, 'ui.area.assets.entry', state.entry, entries, (next) => {
       state.entry = next;
       state.skin = '';
@@ -730,8 +792,9 @@ export function createAssetArea(options: AssetAreaOptions = {}): WorkspaceArea<A
     createState(setup): AssetAreaState {
       // Кадр собирается первым: его модуль ассетов и есть тот, у которого
       // просмотрщик спрашивает состояния (ASSET-2 — кэш один на ID). Модуль
-      // приносит сборка (`assetStageFactory`); своим область обходится там, где
-      // сборки нет.
+      // приносит сборка (`assetStageFactory`) — она же подаёт его полем
+      // `assets`, и только через него до просмотрщика доходит инвалидация
+      // кэша; своим область обходится там, где сборки нет.
       const host = options.host;
       const build =
         options.stage ??
@@ -764,8 +827,18 @@ export function createAssetArea(options: AssetAreaOptions = {}): WorkspaceArea<A
         visualsId: null,
         failure: null,
         previewFailure: null,
+        reopen: () => {
+          start(state, setup, options);
+        },
         refresh: () => undefined,
       };
+      // Правка манифеста — откуда угодно, в том числе без интерфейса (ED-29):
+      // кадр обязан показать её не позже следующего кадра (ED-15, REND-17).
+      // Подписка одна на запись состояния, а не на открытие: переоткрытие
+      // проекта меняет ДОКУМЕНТ, а не то, что за ним надо следить.
+      setup.session.subscribe(() => {
+        show(state, setup.session);
+      });
       start(state, setup, options);
       return state;
     },

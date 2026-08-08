@@ -105,6 +105,14 @@ export interface SceneDraft {
   readonly grid: TerrainGrid | null;
   readonly curvature: TerrainCurvatureMap | null;
   readonly placements: readonly ScenePlacement[];
+  /**
+   * Манифест визуалов кадра (ASSET-6). Он здесь по той же причине, по которой
+   * здесь сетка и кривизна: манифест — такой же редактируемый документ (ED-14),
+   * а кадр есть функция ТЕКУЩЕГО состояния документов (ED-15). Отдаётся он
+   * подсистеме моделей целиком (REND-17); `null` — документ не разбирается, и
+   * тогда переподавать нечего: прежний манифест лучше сломанного.
+   */
+  readonly visuals: VisualManifest | null;
   readonly failure: string | null;
 }
 
@@ -294,6 +302,7 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
     grid,
     curvature,
     placements,
+    visuals: input.visuals ?? null,
     failure: reasons.length === 0 ? null : reasons.join('; '),
   };
 }

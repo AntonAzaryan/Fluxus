@@ -14,6 +14,7 @@ import { VIEWPORT_CLASS } from '../src/tokens/stylesheet.js';
 import { SCENE_NODES, SCENE_VIEWPORT_ID, sceneArea } from '../src/areas/scene.js';
 import { canRender } from '../src/areas/sceneStage.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
+import { VISUALS_OPERATIONS } from '../src/areas/assetVisuals.js';
 import { attr, buildFrame, buildLoadedFrame, buttonByKey, press, zoneOf } from './support/frame.js';
 import { FIXTURE_IDS, settle } from './support/project.js';
 
@@ -81,6 +82,63 @@ describe('ED-15: вьюпорт показывает документы, а не
     session.undo();
     await settle();
     expect(stage.last?.placements[0]?.x).toBeCloseTo(before ?? -1, 6);
+  });
+
+  it('модель, назначенная в записи манифеста, доезжает до вьюпорта переподачей', async () => {
+    // ED-14 отдаёт манифест редактору, ED-15 требует показать его правку не
+    // позже следующего кадра, REND-17 говорит чем: манифест отдаётся целиком, а
+    // сводит поданное с нарисованным подсистема. Переоткрытия проекта здесь нет
+    // и быть не должно — оно потеряло бы позу камеры (ED-23).
+    const { session, stage } = await buildLoadedFrame();
+    const supplied = stage.visuals.length;
+    const built = stage.submitted.length;
+
+    session.applyOperation(VISUALS_OPERATIONS.setModel, {
+      document: FIXTURE_IDS.visuals,
+      entry: 'Hero',
+      asset: 'visuals/models/champion.mdx',
+    });
+    await settle();
+
+    expect(stage.visuals.length).toBeGreaterThan(supplied);
+    expect(stage.visuals.at(-1)?.entities['Hero']?.model).toBe('visuals/models/champion.mdx');
+    // Инстансы при этом подаются по-прежнему набором (REND-11): решение о том,
+    // что пересобрать, остаётся у подсистемы, а не размазывается по редактору.
+    expect(stage.submitted.length).toBeGreaterThan(built);
+  });
+
+  it('запись, заведённая в манифесте, меняет набор инстансов сцены', async () => {
+    // Визуальный тип инстанса — производная манифеста (ASSET-6, REND-11): пока
+    // записи нет, размещённое рисуется заглушкой. Снимок манифеста, снятый при
+    // открытии, оставил бы её заглушкой до перезапуска редактора.
+    const { session, stage } = await buildLoadedFrame();
+    expect(stage.last?.placements.map((item) => item.kind)).toEqual(['Hero', null]);
+
+    session.applyOperation('document.setValue', {
+      document: FIXTURE_IDS.visuals,
+      path: ['entities', 'Crate'],
+      value: { model: 'visuals/models/crate.mdx' },
+    });
+    await settle();
+
+    expect(stage.last?.placements.map((item) => item.kind)).toEqual(['Hero', 'Crate']);
+    expect(Object.keys(stage.visuals.at(-1)?.entities ?? {})).toEqual(['Hero', 'Crate']);
+  });
+
+  it('сломанный манифест не гасит кадр и не переподаётся (ED-8)', async () => {
+    const { session, stage, state } = await buildLoadedFrame();
+    const supplied = stage.visuals.length;
+    session.applyOperation('document.setValue', {
+      document: FIXTURE_IDS.visuals,
+      path: ['entities', 'Hero', 'model'],
+      value: 17,
+    });
+    await settle();
+
+    // Причина названа, прежний манифест остался у подсистемы: показать автору
+    // пустой кадр вместо причины — худшее из двух (ED-8, ED-15).
+    expect(state.draft?.failure).toContain('манифест');
+    expect(stage.visuals.length).toBe(supplied);
   });
 
   it('выделение и открытие соседнего документа кадр не пересобирают', async () => {
