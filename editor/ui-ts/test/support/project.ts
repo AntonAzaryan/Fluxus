@@ -130,6 +130,7 @@ export function surfaceHit(x: number, y: number, cell = 0): ScenePick {
     kind: 'surface',
     handle: null,
     key: null,
+    decoration: false,
     x,
     y,
     z: 0,
@@ -151,6 +152,7 @@ export function cellHit(cellX: number, cellY: number, width: number, noFloor = f
     kind: 'surface',
     handle: null,
     key: null,
+    decoration: false,
     x: cellX + 0.5,
     y: cellY + 0.5,
     z: 0,
@@ -162,12 +164,16 @@ export function cellHit(cellX: number, cellY: number, width: number, noFloor = f
   };
 }
 
-/** Попадание в размещённый объект: ключ уже переведён набором (REND-11). */
-export function entityHit(key: string): ScenePick {
+/**
+ * Попадание в размещённый объект: ключ уже переведён набором — документным
+ * источником (REND-11) либо набором декораций (REND-18).
+ */
+export function entityHit(key: string, decoration = false): ScenePick {
   return {
     kind: 'entity',
     handle: null,
     key,
+    decoration,
     x: 0,
     y: 0,
     z: 0,
@@ -269,6 +275,9 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
     surfaceHits,
     get overlays(): readonly SceneOverlay[] {
       return overlaySets.at(-1) ?? [];
+    },
+    get decorationCount(): number {
+      return submitted.at(-1)?.decorations?.length ?? 0;
     },
     get last(): StageDraft | undefined {
       return submitted.at(-1);

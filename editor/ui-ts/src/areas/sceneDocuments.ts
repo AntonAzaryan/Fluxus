@@ -7,7 +7,8 @@
  * редактируемых документов… Тикающей симуляции в режиме правки MUST NOT быть:
  * вьюпорт рисует начальное состояние сцены, а не её прогон». Этот модуль —
  * ровно та функция: значения открытых документов на входе, набор инстансов
- * (REND-11), сетка террейна (REND-14) и карта кривизны (REND-9) на выходе.
+ * (REND-11), набор decoration-инстансов (REND-18), сетка террейна (REND-14) и
+ * карта кривизны (REND-9) на выходе.
  * Ни THREE, ни DOM здесь нет — поэтому вся производная проверяется headless.
  *
  * ## Почему начальное состояние считает ядро
@@ -56,6 +57,19 @@
  * оборота в Q16.16 (полный оборот — 1.0), и второй единицы редактор не вводит.
  * Радианы появляются ровно на входной границе рендера (REND-1), где `yaw`
  * набора инстансов их и требует.
+ *
+ * ## Почему у декораций всё проще
+ *
+ * Начальное состояние сцены считает ядро, потому что запись расстановки — это
+ * prefab и переопределения полей, а где лежит позиция, знает мир. У декорации
+ * сим-стороны нет вовсе (ED-19): позиция, курс, масштаб и скин лежат прямо в
+ * записи парного документа (PRES-2), и поднимать ради них мир было бы не у кого
+ * спрашивать. Отсюда и `decorationsOf` без `loadScene`, и десятичные величины
+ * вместо Q16.16 (PRES-3) — конверсии на входе рендера они не требуют.
+ *
+ * Общего у двух наборов ровно одно, и оно существенное: ключ — дескриптор
+ * сессии. Списку `decorations` он выдаётся так же, как списку `initial`, и
+ * отсюда единообразие выделения (ED-17) получается не отдельной работой.
  */
 import {
   createTerrainGrid,
@@ -71,10 +85,11 @@ import {
 import {
   validateCurvatureMap,
   validateManifest,
+  validatePresentationScene,
   type TerrainCurvatureMap,
   type VisualManifest,
 } from '@game-mvp/assets';
-import { kindByTags, type DocumentInstance } from '@game-mvp/render';
+import { kindByTags, type DecorationInstance, type DocumentInstance } from '@game-mvp/render';
 
 /**
  * Размещённое сцены глазами редактора: то же, что отдаётся рендеру набором
@@ -96,6 +111,28 @@ export interface ScenePlacement extends DocumentInstance {
 }
 
 /**
+ * Размещённая декорация глазами редактора: то же, что отдаётся рендеру набором
+ * (REND-18), плюс две величины документа, которых рендеру не нужно, — ключ вида
+ * строкой и курс в доле оборота.
+ */
+export interface SceneDecoration extends DecorationInstance {
+  /**
+   * Ключ вида, КАК ОН ЗАПИСАН в документе. Отдельно от `kind` потому, что
+   * `kind` типизирован как «может не рисоваться», а подпись строки навигатора и
+   * адрес находки валидации у записи есть всегда — даже когда ключ ни во что не
+   * разрешается (PRES-2: в рантайме это заглушка, а не отсутствие записи).
+   */
+  readonly visual: string;
+  /**
+   * Курс в единице ДОКУМЕНТА — доле оборота (PRES-2), а не в радианах `yaw`
+   * рендера. Поле отдельное по той же причине, что `turns` у сим-объекта:
+   * поворот, посчитанный от прежнего через радианы, копил бы погрешность
+   * обратного хода на каждом нажатии.
+   */
+  readonly turns: number;
+}
+
+/**
  * Кадр как функция документов. `failure` — не исключение: правка, сломавшая
  * документ, обязана оставить автора в редакторе с прежней картинкой и
  * названной причиной, а не уронить вьюпорт (ED-8 показывает причину, ED-15
@@ -106,6 +143,12 @@ export interface SceneDraft {
   readonly curvature: TerrainCurvatureMap | null;
   readonly placements: readonly ScenePlacement[];
   /**
+   * Декорации парного presentation-документа (PRES-1) — третий набор рендера
+   * (REND-18), а не часть `placements`: продюсеров они не касаются и сменой
+   * режима не гасятся.
+   */
+  readonly decorations: readonly SceneDecoration[];
+  /**
    * Манифест визуалов кадра (ASSET-6). Он здесь по той же причине, по которой
    * здесь сетка и кривизна: манифест — такой же редактируемый документ (ED-14),
    * а кадр есть функция ТЕКУЩЕГО состояния документов (ED-15). Отдаётся он
@@ -115,6 +158,30 @@ export interface SceneDraft {
   readonly visuals: VisualManifest | null;
   readonly failure: string | null;
 }
+
+/**
+ * Имена полей записи decoration (PRES-2). Лежат здесь, а не рядом с операциями
+ * декораций, потому что читают их обе стороны: и операции слоя, и операции
+ * размещённого, общие на оба документа пары. Модуль формата — единственное
+ * место, откуда их видно всем, и цикла импортов при этом не возникает.
+ */
+export const DECORATION_FIELDS = {
+  visual: 'visual',
+  x: 'x',
+  y: 'y',
+  yaw: 'yaw',
+  scale: 'scale',
+  skin: 'skin',
+} as const;
+
+/**
+ * Слой, которому принадлежит размещённое (ED-19): сим-объект в расстановке
+ * конфига сцены или decoration в парном документе. Операции, действующие на
+ * выделение целиком (перемещение, поворот, удаление — ED-17), различают их
+ * этим параметром: величины квантуются по-разному (FP-1 против PRES-3), а
+ * выделение по построению бывает смешанным.
+ */
+export type PlacementLayer = 'sim' | 'decoration';
 
 /**
  * Полный оборот в радианах: угол ядра — доля оборота, `yaw` рендера — радианы.
@@ -165,6 +232,13 @@ export interface SceneDraftInput {
   readonly curvature?: unknown;
   /** Где у объекта позиция (ED-16); нет — конвенция ядра. */
   readonly position?: PositionBinding;
+  /**
+   * Значение парного presentation-документа (PRES-1); `undefined` и `null` —
+   * сцена без декораций, и это законное состояние, а не отсутствие данных.
+   */
+  readonly presentation?: unknown;
+  /** Ключи записей `decorations` по порядку списка — дескрипторы сессии (ED-29). */
+  readonly decorationKeys?: readonly string[];
 }
 
 interface SceneShape {
@@ -249,6 +323,45 @@ export function placementsOf(input: SceneDraftInput): readonly ScenePlacement[] 
 }
 
 /**
+ * Набор decoration-инстансов из парного документа (PRES-2) — декларативный вход
+ * третьего набора рендера (REND-18).
+ *
+ * Мира здесь не поднимается, и это разница по существу, а не оптимизация: у
+ * декорации сим-стороны нет вовсе (ED-19), позиция лежит прямо в записи, и
+ * спрашивать её у `loadScene` было бы не у кого. Отсюда же простота ключей —
+ * дескрипторы сессии выдаются списку `decorations` ровно так же, как списку
+ * `initial`, и устойчивость к правке соседей получается тем же механизмом.
+ *
+ * Ключ вида уходит в набор КАК ЕСТЬ, без сверки с манифестом: неразрешимую
+ * ссылку рендер рисует заглушкой с предупреждением, а подсвечивает её правило
+ * валидации `editor.decorationVisual` (PRES-2) — вторая проверка здесь была бы
+ * вторым описанием того же нарушения (ED-1, ED-30).
+ */
+export function decorationsOf(input: SceneDraftInput): readonly SceneDecoration[] {
+  const value = input.presentation;
+  if (value === undefined || value === null) return [];
+  const checked = validatePresentationScene(value);
+  if (!checked.ok) throw new Error(`presentation-документ: ${checked.errors.join('; ')}`);
+
+  return checked.scene.decorations.map((record, index) => {
+    const turns = record.yaw ?? 0;
+    return {
+      key: input.decorationKeys?.[index] ?? fallbackKey(index),
+      visual: record.visual,
+      kind: record.visual,
+      x: record.x,
+      y: record.y,
+      turns,
+      // Радианы — только рендеру (REND-1): единица документа — доля оборота,
+      // и обратного перевода нет, поворот берётся из `turns`.
+      yaw: turns * TURN_RADIANS,
+      ...(record.scale === undefined ? {} : { scale: record.scale }),
+      ...(record.skin === undefined ? {} : { skin: record.skin }),
+    };
+  });
+}
+
+/**
  * Карта кривизны из значения документа (ED-11, REND-14): несохранённый
  * документ кисти ассетом ещё не является, и ждать его записи значило бы
  * показывать автору не то, что он рисует.
@@ -277,6 +390,7 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
   let grid: TerrainGrid | null = null;
   let curvature: TerrainCurvatureMap | null = null;
   let placements: readonly ScenePlacement[] = [];
+  let decorations: readonly SceneDecoration[] = [];
 
   try {
     grid = terrainOf(input.config);
@@ -293,6 +407,14 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
   } catch (error) {
     reasons.push(message(error));
   }
+  // Сломанный парный документ не гасит ни террейн, ни расстановку: слой
+  // изолирован от симуляции (PRES-4), и картинка без декораций — законный кадр
+  // с названной причиной, а не отказ вьюпорта.
+  try {
+    decorations = decorationsOf(input);
+  } catch (error) {
+    reasons.push(message(error));
+  }
 
   // Сравнения сеток кривизны и террейна здесь нет намеренно: это отношение
   // между двумя документами, и правило для него одно — `editor.curvatureGrid`
@@ -302,6 +424,7 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
     grid,
     curvature,
     placements,
+    decorations,
     visuals: input.visuals ?? null,
     failure: reasons.length === 0 ? null : reasons.join('; '),
   };

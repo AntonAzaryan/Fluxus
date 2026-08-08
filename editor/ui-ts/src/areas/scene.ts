@@ -79,7 +79,7 @@ import { tree, type TreeItem } from '../widgets/rows.js';
 import { placementSubject, sceneDocumentSubject } from './sceneSchema.js';
 import { withValidation } from '../widgets/validation.js';
 import { viewportFrame } from '../viewport.js';
-import type { ScenePlacement } from './sceneDocuments.js';
+import type { SceneDecoration, ScenePlacement } from './sceneDocuments.js';
 import { createAssetModule, type AssetModule } from './assetModule.js';
 import {
   canRender,
@@ -94,6 +94,7 @@ import {
 } from './sceneInteraction.js';
 import { CAMERA_KEYS } from './sceneCamera.js';
 import { prefabNames } from './scenePlacement.js';
+import { decorationVisualNames } from './sceneDecorations.js';
 import {
   BRUSH_LEVELS,
   BRUSH_SIZES,
@@ -106,6 +107,7 @@ import {
 import { CURVATURE_OFFSETS } from './sceneTerrain.js';
 import { createScenePreview, type PreviewBackendFactory } from './scenePreview.js';
 import {
+  DECORATION_LIST,
   PLACEMENT_LIST,
   TERRAIN_ASSET,
   draftOf,
@@ -125,6 +127,7 @@ export const SCENE_VIEWPORT_ID = 'fx-scene-viewport';
 /** Группы навигатора: не документы и не записи, а места, куда они складываются. */
 export const SCENE_NODES = {
   placements: 'scene.placements',
+  decorations: 'scene.decorations',
   assets: 'scene.assets',
 } as const;
 
@@ -558,6 +561,11 @@ function install(
     session: setup.session,
     documentId: project.configId,
     list: PLACEMENT_LIST,
+    // Парный документ адресуется только когда он есть: сцена без декораций —
+    // законное состояние, и создавать файл ради пустого слоя нельзя (PRES-1).
+    ...(project.hasPresentation
+      ? { presentationId: project.presentationId, decorationList: DECORATION_LIST }
+      : {}),
     ...(ids.position === undefined ? {} : { binding: ids.position }),
     refresh: () => {
       state.refresh();
@@ -591,6 +599,7 @@ function install(
   });
   let config: unknown = undefined;
   let curvature: unknown = undefined;
+  let presentation: unknown = undefined;
   // Начальное значение — то, которым поднята подсистема моделей: первый
   // пересчёт манифест не переподаёт, потому что переподавать ещё нечего.
   let visuals: unknown = setup.session.documentValue(project.visualsId);
@@ -612,11 +621,18 @@ function install(
     // назначенная в просмотрщике, обязана попасть в картинку не позже
     // следующего кадра (ED-15), а не ждать переоткрытия проекта.
     const nextVisuals = setup.session.documentValue(project.visualsId);
+    // Парный документ — четвёртый редактируемый документ кадра (PRES-1): его
+    // правка обязана попасть в картинку не позже следующего кадра (ED-15).
+    const nextPresentation =
+      !project.hasPresentation || !setup.session.isOpen(project.presentationId)
+        ? null
+        : setup.session.documentValue(project.presentationId);
     if (
       state.draft !== null &&
       nextConfig === config &&
       nextCurvature === curvature &&
-      nextVisuals === visuals
+      nextVisuals === visuals &&
+      nextPresentation === presentation
     ) {
       return;
     }
@@ -624,6 +640,7 @@ function install(
     config = nextConfig;
     curvature = nextCurvature;
     visuals = nextVisuals;
+    presentation = nextPresentation;
     state.draft = draftOf(setup.session, project);
     // Переподача манифеста целиком и декларативно (REND-17): что пересобрать, а
     // что обновить на живом инстансе, решает подсистема — второго такого
@@ -682,6 +699,39 @@ function placementItem(context: AreaContext<SceneAreaState>, placement: ScenePla
     ...(placement.kind === null ? {} : { badge: documentValue(placement.kind) }),
     ...(validation === undefined ? {} : { validation }),
     selected: selection.has(placement.key),
+    onSelect: (id) => {
+      state.focusId = id;
+      selection.set([id]);
+    },
+  };
+}
+
+/**
+ * Строка декорации в навигаторе. Подписана она ключом вида (PRES-2), а не
+ * префабом: сим-стороны у декорации нет вовсе, и называть её нечем другим.
+ * Находка правила стоит внутри записи (на её ссылке `visual`), а строка — на
+ * самой записи, поэтому `under`, а не `at`.
+ */
+function decorationItem(
+  context: AreaContext<SceneAreaState>,
+  decoration: SceneDecoration,
+): TreeItem {
+  const { state, selection } = context;
+  const documentId = state.project?.presentationId;
+  const path =
+    documentId === undefined
+      ? undefined
+      : context.session.resolveDescriptor(documentId, decoration.key)?.path;
+  const issues =
+    documentId === undefined || path === undefined
+      ? []
+      : (state.report?.under(documentId, path) ?? []);
+  const validation = issueState(context.resources, issues);
+  return {
+    id: decoration.key,
+    label: documentValue(decoration.visual),
+    ...(validation === undefined ? {} : { validation }),
+    selected: selection.has(decoration.key),
     onSelect: (id) => {
       state.focusId = id;
       selection.set([id]);
@@ -752,6 +802,9 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
   const placements = (state.draft?.placements ?? []).map((placement) =>
     placementItem(context, placement),
   );
+  const decorations = (state.draft?.decorations ?? []).map((decoration) =>
+    decorationItem(context, decoration),
+  );
 
   const rootValidation = issueState(resources, state.report?.forDocument(project.configId) ?? []);
   const root: TreeItem = {
@@ -762,6 +815,11 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
     ...(rootValidation === undefined ? {} : { validation: rootValidation }),
     items: [
       group(context, SCENE_NODES.placements, 'ui.area.scene.placements', placements),
+      // Группа заводится, только когда парный документ есть: пустой узел
+      // «Декорации» у сцены без слоя обещал бы место, которого нет (PRES-1).
+      ...(project.hasPresentation
+        ? [group(context, SCENE_NODES.decorations, 'ui.area.scene.decorations', decorations)]
+        : []),
       group(context, SCENE_NODES.assets, 'ui.navigator.assets', assets),
     ],
     onSelect: (id) => {
@@ -847,6 +905,19 @@ function barGroup(items: readonly UiNode[]): UiNode | undefined {
  * проекта поворот не выражается вовсе (ED-16), а без кадра не во что и попадать.
  * В превью недоступно всё: операции авторинга там запрещены (ED-9).
  */
+/**
+ * Есть ли что поворачивать при текущем выделении (ED-26). Ответ разный по
+ * слоям: декорация поворачивается всегда, сим-объект — только если настройка
+ * проекта назвала, где лежит поворот (ED-16).
+ */
+function canRotateSelection(state: SceneAreaState): boolean {
+  const chosen = state.tool.selected();
+  if (chosen.length === 0) return false;
+  if (state.tool.canRotate) return true;
+  const decorations = new Set((state.draft?.decorations ?? []).map((item) => item.key));
+  return chosen.some((key) => decorations.has(key));
+}
+
 function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   const { state, resources } = context;
   const tool = state.tool;
@@ -864,6 +935,11 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   const act = (key: string, sign: IconName, disabled: boolean, press: () => void): UiNode =>
     iconButton(context, key, sign, { disabled, onPress: press });
 
+  // Слой постановки (ED-19): сим-объект или декорация. Переключатель, а не
+  // второй инструмент — вьюпорт, выделение и подсветка у них одни и те же
+  // (ED-17). Без парного документа он недоступен, а не спрятан (ED-26).
+  const decorating = tool.layer === 'decoration';
+
   return [
     // Режим — состояние, и показан он состоянием: имя переключателя называет
     // режим и от нажатия не меняется, а включённость несёт `aria-pressed` с
@@ -876,16 +952,37 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
         tool.setMode(placing ? 'select' : 'place');
       },
     }),
-    select({
-      label: resourceText(resources, 'ui.area.scene.prefab'),
-      value: tool.prefab ?? '',
-      // Имя префаба — идентификатор документа, и локаль его не касается (ED-27).
-      options: prefabs.map((name) => ({ value: name, label: documentValue(name) })),
-      disabled: !placing || !pointing || prefabs.length === 0,
-      onSelect: (value) => {
-        tool.setPrefab(value);
+    iconButton(context, 'ui.area.scene.layerDecoration', 'sprig', {
+      pressed: decorating,
+      disabled: stage === null || !pointing || !tool.canDecorate,
+      onPress: () => {
+        tool.setLayer(decorating ? 'sim' : 'decoration');
       },
     }),
+    // Из чего ставить: префаб у сим-объекта, ключ вида у декорации. Список один
+    // на два слоя не сводится — это разные множества и разные документы
+    // (ED-19), — но виден в баре ровно один: тот, которым сейчас ставят.
+    decorating
+      ? select({
+          label: resourceText(resources, 'ui.area.scene.visual'),
+          value: tool.visual ?? '',
+          // Ключ вида — идентификатор документа, локаль его не касается (ED-27).
+          options: tool.visuals.map((name) => ({ value: name, label: documentValue(name) })),
+          disabled: !placing || !pointing || tool.visuals.length === 0,
+          onSelect: (value) => {
+            tool.setVisual(value);
+          },
+        })
+      : select({
+          label: resourceText(resources, 'ui.area.scene.prefab'),
+          value: tool.prefab ?? '',
+          // Имя префаба — идентификатор документа, и локаль его не касается (ED-27).
+          options: prefabs.map((name) => ({ value: name, label: documentValue(name) })),
+          disabled: !placing || !pointing || prefabs.length === 0,
+          onSelect: (value) => {
+            tool.setPrefab(value);
+          },
+        }),
     toggle({
       label: resourceText(resources, 'ui.area.scene.snap'),
       on: tool.snapping,
@@ -894,12 +991,29 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
         tool.setSnapping(on);
       },
     }),
-    act('ui.area.scene.rotateLeft', 'rotate-left', off || !tool.canRotate || chosen.length === 0, () => {
+    // Поворот доступен, если поворачивать есть что: у декорации курс лежит
+    // полем записи (PRES-2) и привязки проекта не требует, у сим-объекта — без
+    // привязки не выражается вовсе (ED-16, ED-26).
+    act('ui.area.scene.rotateLeft', 'rotate-left', off || !canRotateSelection(state), () => {
       tool.rotate(-ROTATION_STEP);
     }),
-    act('ui.area.scene.rotateRight', 'rotate-right', off || !tool.canRotate || chosen.length === 0, () => {
+    act('ui.area.scene.rotateRight', 'rotate-right', off || !canRotateSelection(state), () => {
       tool.rotate(ROTATION_STEP);
     }),
+    // Перевод между слоями (ED-19, PRES-5): камню понадобился коллайдер —
+    // объект переезжает в конфиг сцены; у prop'а убрали геймплейную роль — он
+    // переезжает в парный документ. Недоступно, когда переводить нечего:
+    // выделение пусто, смешано или парного документа у сцены нет (ED-26).
+    act(
+      tool.convertible === 'decoration'
+        ? 'ui.area.scene.toProp'
+        : 'ui.area.scene.toDecoration',
+      'swap',
+      off || tool.convertible === null || (tool.convertible === 'decoration' && tool.prefab === null),
+      () => {
+        tool.convert(tool.prefab);
+      },
+    ),
     act('ui.action.remove', 'trash', off || chosen.length === 0, () => {
       tool.remove();
     }),
@@ -1278,7 +1392,11 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
           },
           ...(options.previewBackend === undefined ? {} : { backend: options.previewBackend }),
         }),
-        expanded: new Set([SCENE_NODES.placements, SCENE_NODES.assets]),
+        expanded: new Set([
+          SCENE_NODES.placements,
+          SCENE_NODES.decorations,
+          SCENE_NODES.assets,
+        ]),
         focusId: '',
         // Набор зажатого живёт столько же, сколько запись состояния: он обязан
         // пережить и перерисовку страницы, и уход в другую область (ED-23).
@@ -1325,6 +1443,9 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
         selection: context.selection,
         picker: state.stage,
         placements: state.draft?.placements ?? [],
+        // Вторая половина того же выделения (ED-17): инструмент один, а
+        // документа два, и какая запись где — он обязан знать по построению.
+        decorations: state.draft?.decorations ?? [],
         // Шаг привязки — размер клетки редактируемого террейна (ED-16, TERR-2).
         snapStep:
           state.draft?.grid === undefined || state.draft.grid === null
@@ -1332,6 +1453,9 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
             : state.draft.grid.tileSize / FIXED_ONE,
         prefabs:
           state.project === null ? [] : prefabNames(context.session.documentValue(state.project.configId)),
+        // Оба раздела манифеста в одном пространстве ключей (ASSET-9): камень,
+        // который бывает и препятствием, и украшением, описан один раз.
+        visuals: decorationVisualNames(state.draft?.visuals ?? null),
       });
       // Кисть видит тот же кадр и те же документы: сетка — уже производная,
       // выведенная ядром (TERR-5, REND-14), а не пересчитанная областью.

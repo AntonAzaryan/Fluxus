@@ -45,6 +45,7 @@ import {
   type WorkspaceArea,
   type WorkspaceFrame,
 } from '../src/index.js';
+import { presentationPathOf } from '@game-mvp/assets';
 import { createAssetModule } from '../src/areas/assetModule.js';
 import {
   ASSETS_AREA_ID,
@@ -57,6 +58,7 @@ import { SCENE_AREA_ID, createSceneArea, type SceneAreaState } from '../src/area
 import { discoverProject, type DiscoveredProject } from '../src/areas/sceneDiscovery.js';
 import { sceneValidationRules, type SceneProjectIds } from '../src/areas/sceneProject.js';
 import { registerPlacementOperations } from '../src/areas/scenePlacement.js';
+import { registerDecorationOperations } from '../src/areas/sceneDecorations.js';
 import { registerTerrainOperations } from '../src/areas/sceneTerrain.js';
 import { systemsArea } from '../src/areas/systems.js';
 
@@ -169,7 +171,9 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
   const session = createEditorSession({
     operations: registerVisualsOperations(
       registerTerrainOperations(
-        registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+        registerDecorationOperations(
+          registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+        ),
       ),
     ),
   });
@@ -195,12 +199,27 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
         session,
         host: host.content,
         rules: contributions.validationRules,
-        // Пара «конфиг сцены + манифест» уходит на диск одной записью (ED-21,
-        // ED-19). Что эти документы значат, знает сборка; сохранение знает
-        // только «группа документов».
+        // Тройка «конфиг сцены + парный presentation-документ + манифест»
+        // уходит на диск одной записью (ED-21, ED-19). Что эти документы
+        // значат, знает сборка; сохранение знает только «группа документов».
+        //
+        // Парный документ входит в группу, только если он открыт: сцена без
+        // декораций — законное состояние (PRES-1), и создавать файл ради
+        // пустого слоя нельзя. Открытым он бывает ровно тогда, когда лежит в
+        // дереве, — открытие ищет его правилом имени.
         ...(current === null
           ? {}
-          : { groups: pairingGroups([{ scene: current.config, manifest: current.visuals }]) }),
+          : {
+              groups: pairingGroups([
+                {
+                  scene: current.config,
+                  manifest: current.visuals,
+                  ...(session.isOpen(presentationPathOf(current.config))
+                    ? { presentation: presentationPathOf(current.config) }
+                    : {}),
+                },
+              ]),
+            }),
       });
       // Отказ показывается причиной самой находки (ED-8, ED-30): текст
       // принадлежит правилу, а не месту показа, и второй его формулировки

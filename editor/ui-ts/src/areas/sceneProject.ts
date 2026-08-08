@@ -2,11 +2,18 @@
  * @contribution Открытие документов сцены — часть вклада области, а не каркаса.
  *
  * Сцена — это не один документ: конфиг (SER-7) ссылается на ассет террейна,
- * манифест визуалов (ASSET-6) — на модели, скины и карту кривизны (ASSET-7).
- * ED-15 требует, чтобы изображение было производным от текущего состояния
- * ИХ ВСЕХ, поэтому все они открываются сессией как документы: правка манифеста
- * и правка кривизны — такие же правки, как правка позиции, и ждать записи на
- * диск ради картинки нельзя (ED-9, ED-21 — сохранение отдельная операция).
+ * манифест визуалов (ASSET-6) — на модели, скины и карту кривизны (ASSET-7), а
+ * рядом с конфигом лежит парный presentation-документ с декорациями
+ * (`presentation-scene` PRES-1). ED-15 требует, чтобы изображение было
+ * производным от текущего состояния ИХ ВСЕХ, поэтому все они открываются
+ * сессией как документы: правка манифеста и правка кривизны — такие же правки,
+ * как правка позиции, и ждать записи на диск ради картинки нельзя (ED-9, ED-21
+ * — сохранение отдельная операция).
+ *
+ * Парный документ находится ПРАВИЛОМ ИМЕНИ, а не ссылкой (PRES-1): ссылок
+ * между документами пары нет ни в одну сторону, и спросить о нём конфиг сцены
+ * нечем. Отсутствие файла — законное состояние, означающее сцену без
+ * декораций, а не отказ открытия.
  *
  * Читаются они через хост среды (ED-12) и только через него: прямого обращения
  * к файловой системе тут нет и в вебе быть не может.
@@ -21,7 +28,7 @@ import {
   type JsonPath,
   type ValidationRule,
 } from '@game-mvp/editor-core';
-import type { VisualManifest } from '@game-mvp/assets';
+import { presentationPathOf, type VisualManifest } from '@game-mvp/assets';
 import {
   sceneDraft,
   visualsOf,
@@ -41,11 +48,15 @@ export const PLACEMENT_LIST: JsonPath = ['initial'];
  */
 export const TERRAIN_ASSET: JsonPath = ['terrain'];
 
+/** Путь списка декораций в парном документе (PRES-2) — доменное знание вклада. */
+export const DECORATION_LIST: JsonPath = ['decorations'];
+
 /** Виды документов сцены — ими ключуются вклады инспектора и правил валидации (ED-25). */
 export const SCENE_KINDS = {
   config: 'scene',
   visuals: 'visuals',
   curvature: 'terrain-curvature',
+  presentation: 'presentation',
 } as const;
 
 /**
@@ -65,9 +76,14 @@ export function sceneValidationRules(): readonly ValidationRule[] {
       scene: SCENE_KINDS.config,
       manifest: SCENE_KINDS.visuals,
       curvature: SCENE_KINDS.curvature,
+      presentation: SCENE_KINDS.presentation,
     },
     [{ kind: SCENE_KINDS.config, path: PLACEMENT_LIST }],
     [{ kind: SCENE_KINDS.config, path: TERRAIN_ASSET }],
+    // Список декораций лежит полем парного документа (PRES-2) — раскладка у
+    // этого проекта совпадает с умолчанием правила, но названа явно рядом с
+    // остальными: адреса приносит собирающий редактор, а не правило.
+    [{ kind: SCENE_KINDS.presentation, path: DECORATION_LIST }],
   );
 }
 
@@ -90,6 +106,18 @@ export interface SceneProject {
   readonly visualsId: DocumentId;
   /** Карта кривизны — её ID берётся из манифеста; `null` — арена без кривизны. */
   readonly curvatureId: DocumentId | null;
+  /**
+   * Парный presentation-документ (PRES-1). ID известен всегда — он выводится из
+   * пути сцены правилом имени, — но `open` говорит, лежит ли он в дереве:
+   * отсутствие законно и означает сцену без декораций.
+   */
+  readonly presentationId: DocumentId;
+  /**
+   * Открыт ли парный документ. `false` — файла в дереве нет: расстановка
+   * декораций тогда недоступна (ED-26), потому что писать некуда, а создавать
+   * документ ради пустого слоя MUST NOT (PRES-1, ED-21).
+   */
+  readonly hasPresentation: boolean;
   /**
    * Манифест НА МОМЕНТ ОТКРЫТИЯ: им поднимается подсистема моделей (REND-8) и
    * по нему находится карта кривизны (ASSET-7). Текущим состоянием манифеста он
@@ -135,10 +163,29 @@ export async function openSceneProject(
     });
   }
 
+  // Парный документ ищется ПО ИМЕНИ (PRES-1): ссылок между документами пары нет
+  // ни в одну сторону, и спрашивать конфиг сцены о нём нечем — состав его полей
+  // закрыт (SER-7). Отсутствие файла — законное состояние, а не отказ
+  // открытия: сцена без декораций поднимается и рисуется как прежде.
+  const presentationId = presentationPathOf(ids.config);
+  const hasPresentation =
+    session.isOpen(presentationId) || (await host.stat(presentationId))?.kind === 'file';
+  if (hasPresentation && !session.isOpen(presentationId)) {
+    await openDocumentFromHost(session, host, {
+      id: presentationId,
+      kind: SCENE_KINDS.presentation,
+      // Записи decoration адресуются дескрипторами сессии — ровно так же, как
+      // записи расстановки, и отсюда единообразие выделения (ED-17, ED-29).
+      lists: [DECORATION_LIST],
+    });
+  }
+
   return {
     configId: ids.config,
     visualsId: ids.visuals,
     curvatureId,
+    presentationId,
+    hasPresentation,
     initialVisuals: visuals,
     position: ids.position,
   };
@@ -166,6 +213,7 @@ export function draftOf(session: EditorSession, project: SceneProject): SceneDra
   } catch (error) {
     broken = message(error);
   }
+  const presentationOpen = project.hasPresentation && session.isOpen(project.presentationId);
   const draft = sceneDraft({
     config: session.documentValue(project.configId),
     keys: session.descriptors(project.configId, PLACEMENT_LIST),
@@ -175,6 +223,14 @@ export function draftOf(session: EditorSession, project: SceneProject): SceneDra
       project.curvatureId === null || !session.isOpen(project.curvatureId)
         ? null
         : session.documentValue(project.curvatureId),
+    // Слой декораций читается из сессии на каждый пересчёт по той же причине,
+    // что и манифест: это такой же редактируемый документ, и картинка есть
+    // функция его ТЕКУЩЕГО состояния (ED-15). Отсутствие пары — не ошибка, а
+    // сцена без декораций (PRES-1).
+    presentation: presentationOpen ? session.documentValue(project.presentationId) : null,
+    decorationKeys: presentationOpen
+      ? session.descriptors(project.presentationId, DECORATION_LIST)
+      : [],
   });
   if (broken === null) return draft;
   return { ...draft, failure: draft.failure === null ? broken : `${broken}; ${draft.failure}` };

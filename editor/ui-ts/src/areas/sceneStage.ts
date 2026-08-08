@@ -136,6 +136,7 @@ import type {
   VisualManifest,
 } from '@game-mvp/assets';
 import {
+  DecorationSet,
   DocumentSource,
   ModelsSubsystem,
   OverlaySubsystem,
@@ -146,6 +147,7 @@ import {
   applyCameraPose,
   type CameraBounds,
   type CameraPose,
+  type DecorationInstance,
   type DocumentInstance,
   type OverlayItem,
   type PickHit,
@@ -174,15 +176,18 @@ const RIGHT_BUTTON = 2;
 
 /**
  * Что вьюпорту нужно от документов, чтобы нарисовать кадр: сетка террейна
- * (REND-14), карта кривизны (REND-9) и полный набор инстансов (REND-11). Ровно
- * три несимуляционных входа рендера, и ни одного доменного имени сверх них —
- * поэтому подать сюда может и кадр сцены (`SceneDraft`), и вырожденный набор
- * просмотрщика ассетов (ED-20), у которого ни сетки, ни кривизны нет.
+ * (REND-14), карта кривизны (REND-9), полный набор инстансов (REND-11) и полный
+ * набор декораций (REND-18). Ровно четыре несимуляционных входа рендера, и ни
+ * одного доменного имени сверх них — поэтому подать сюда может и кадр сцены
+ * (`SceneDraft`), и вырожденный набор просмотрщика ассетов (ED-20), у которого
+ * ни сетки, ни кривизны, ни декораций нет.
  */
 export interface StageDraft {
   readonly grid: TerrainGrid | null;
   readonly curvature: TerrainCurvatureMap | null;
   readonly placements: readonly DocumentInstance[];
+  /** Набор decoration-инстансов (REND-18); нет поля — слой пуст. */
+  readonly decorations?: readonly DecorationInstance[];
 }
 
 export interface SceneStageOptions {
@@ -268,6 +273,8 @@ export interface SceneStage extends ScenePicker {
   frameArena(): void;
   /** Сколько инстансов в наборе сейчас — по этому видно, что кадр не пуст. */
   readonly instanceCount: number;
+  /** Сколько декораций в наборе сейчас (REND-18). */
+  readonly decorationCount: number;
   /** Почему сорвался кадр; `null` — последний кадр прошёл целиком (ED-8). */
   readonly failure: string | null;
   /**
@@ -351,6 +358,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   };
   const presentation = new PresentationStage(context);
   const source = new DocumentSource(presentation);
+  // Третий набор рядом с продюсером, а не второй продюсер (REND-18): декорации
+  // остаются в кадре и в превью — гасить их смена режима не должна.
+  const decorations = new DecorationSet(presentation);
 
   let surface: VisualSurfaceSource | null = null;
   let terrain: TerrainSubsystem | null = null;
@@ -562,6 +572,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     }
     // Полный набор инстансов; что создать, обновить и убрать, решает источник.
     source.apply(next.placements);
+    // Декорации — отдельный набор и отдельная подача: продюсера они не
+    // трогают, и в превью их гасить нечем (REND-18).
+    decorations.apply(next.decorations ?? []);
     // Наложения переподаются после набора: смена визуального типа пересоздаёт
     // инстанс с новым номером сущности, и подсветка на прежнем номере погасла
     // бы молча (REND-11, REND-16).
@@ -591,7 +604,14 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       : {
           kind: hit.kind,
           handle: hit.handle,
-          key: hit.entity === 0 ? null : (source.keyOf(hit.entity) ?? null),
+          decoration: hit.decoration,
+          // Ключ документа даёт тот набор, которому инстанс принадлежит:
+          // нумерация у них своя, и спросить не тот набор значило бы получить
+          // чужой ключ (REND-18).
+          key:
+            hit.entity === 0
+              ? null
+              : ((hit.decoration ? decorations.keyOf(hit.entity) : source.keyOf(hit.entity)) ?? null),
           x: hit.x,
           y: hit.y,
           z: hit.z,
@@ -611,9 +631,20 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
         items.push(item);
         continue;
       }
-      const entity = source.entityOf(item.placement);
+      // Ключ ищется в том наборе, который его и выдал: сим-объект — в
+      // документном источнике, декорация — в наборе REND-18.
+      const entity = item.decoration
+        ? decorations.entityOf(item.placement)
+        : source.entityOf(item.placement);
       // Ключа нет в наборе — рендер его не рисует, и подсвечивать нечего.
-      if (entity !== undefined) items.push({ kind: 'highlight', key: item.key, entity });
+      if (entity !== undefined) {
+        items.push({
+          kind: 'highlight',
+          key: item.key,
+          entity,
+          ...(item.decoration ? { decoration: true } : {}),
+        });
+      }
     }
     overlays.apply(items);
   };
@@ -745,6 +776,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     },
     get instanceCount(): number {
       return source.size;
+    },
+    get decorationCount(): number {
+      return decorations.size;
     },
     get failure(): string | null {
       return failureNow();
