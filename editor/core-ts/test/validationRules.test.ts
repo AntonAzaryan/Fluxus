@@ -33,6 +33,7 @@ import {
   DEFAULT_ENGINE_KINDS,
   DEFAULT_PAIR_KINDS,
   DEFAULT_PLACEMENT_SITES,
+  DEFAULT_SYSTEM_SITES,
   DECORATION_VISUAL_RULE,
   LOAD_SCENE,
   MANIFEST_RULE,
@@ -43,6 +44,7 @@ import {
   TERRAIN_RULE,
   VALIDATE_SYSTEM,
   VISUAL_FOR_PREFAB_RULE,
+  type SystemSite,
   type TerrainSite,
   type ValidationIssue,
   type ValidationReport,
@@ -207,6 +209,151 @@ describe('ED-8: JSON-система проверяется против мира
 
   it('без открытой сцены о системе не судят: мира, который знает компоненты, нет', () => {
     expect(check({ [SYSTEM]: { kind: 'system', value: bad } }).issues).toHaveLength(0);
+  });
+});
+
+/**
+ * ED-8, ED-30: системы лежат полем конфига сцены (SYS-1, SER-7), а не
+ * документами, и раскладку правилу приносит сборка (ED-25) — тем же
+ * `DocumentSite`, каким её приносят междокументные правила.
+ *
+ * Проверяется здесь одно: находка адресует ЗАПИСЬ системы. До этого сломанная
+ * система гасила весь конфиг одним сообщением `loadScene`, и цикл «правка →
+ * находка → исправление» работал на уровне файла, в котором систем шесть.
+ * Вердикт при этом остаётся за ядром — сообщение сверяется с тем, что бросает
+ * сам `validateSystem`, вызванный в тесте напрямую (ED-1).
+ */
+describe('ED-30: система адресуется своей записью в документе-носителе', () => {
+  const MATCH = 'content/matches/duel.match.json';
+  const IN_SCENE: readonly SystemSite[] = [{ kind: 'scene', path: ['systems'] }];
+
+  const good = {
+    name: 'move',
+    order: 1,
+    query: { all: ['Pos'] },
+    do: [{ modifyComponent: { entity: { var: 'entity' }, component: 'Pos', values: { x: 1 } } }],
+  };
+  const bad = {
+    name: 'haunt',
+    order: 2,
+    query: { all: ['Pos'] },
+    do: [{ modifyComponent: { entity: { var: 'entity' }, component: 'Nope', values: {} } }],
+  };
+
+  /** Мир, в котором ядро судит систему: та же сцена, список систем пуст. */
+  const world = () => loadScene(SCENE_VALUE as unknown as SceneDef).world;
+
+  const rulesFor = (sites: readonly SystemSite[]): readonly ValidationRule[] =>
+    engineValidationRules(DEFAULT_ENGINE_KINDS, {}, sites);
+
+  it('сломанная система внутри конфига подсвечивается на своей записи, а не на документе', () => {
+    const value = { ...SCENE_VALUE, systems: [good, bad] };
+    const report = check({ [SCENE]: { kind: 'scene', value } }, rulesFor(IN_SCENE));
+    const issues = report.forDocument(SCENE).filter((found) => found.ruleId === SYSTEM_RULE);
+    // Ровно одна находка: годная запись рядом молчит, хотя лежит в том же поле.
+    expect(issues).toHaveLength(1);
+    const issue = issues[0]!;
+    expect(issue.path).toEqual(['systems', 1]);
+    // Полученное — сама запись: адрес указывает на неё, а не на её окрестность.
+    expect(issue.received).toEqual(bad);
+    expect(issue.expected).toEqual({
+      kind: 'accepted',
+      by: VALIDATE_SYSTEM,
+      detail: thrownBy(() => validateSystem(bad as unknown as SystemDef, world())),
+    });
+    expect(issue.reasonParams['against']).toBe(SCENE);
+    // Находка спрашивается по адресу записи — то, ради чего ED-30 требует путь.
+    expect(report.at(SCENE, ['systems', 1])).toHaveLength(1);
+  });
+
+  it('годный список систем внутри конфига находок не даёт', () => {
+    const value = { ...SCENE_VALUE, systems: [good] };
+    const report = check({ [SCENE]: { kind: 'scene', value } }, rulesFor(IN_SCENE));
+    expect(report.issues).toHaveLength(0);
+  });
+
+  it('вид документа-носителя — тоже параметр: список систем конфига матча', () => {
+    const report = check(
+      {
+        [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+        [MATCH]: { kind: 'match', value: { systems: [bad] } },
+      },
+      rulesFor([{ kind: 'match', path: ['systems'] }]),
+    );
+    const issue = report.forDocument(MATCH).find((found) => found.ruleId === SYSTEM_RULE)!;
+    expect(issue.path).toEqual(['systems', 0]);
+    // Мир по-прежнему берётся у сцены: систему судит тот, кто знает компоненты.
+    expect(issue.reasonParams['against']).toBe(SCENE);
+  });
+
+  it('раскладки складываются: и список внутри конфига, и системы отдельными документами', () => {
+    const report = check(
+      {
+        [SCENE]: { kind: 'scene', value: { ...SCENE_VALUE, systems: [bad] } },
+        [SYSTEM]: { kind: 'system', value: { ...bad, name: 'lonely', order: 7 } },
+      },
+      rulesFor([...IN_SCENE, ...DEFAULT_SYSTEM_SITES]),
+    );
+    expect(report.at(SCENE, ['systems', 0])).toHaveLength(1);
+    // У отдельного документа адрес прежний — корень: документ и есть система.
+    expect(report.at(SYSTEM, [])).toHaveLength(1);
+  });
+
+  it('умолчание — система отдельным документом: правило встаёт на свой вид и адресует корень', () => {
+    const rule = engineValidationRules().find((found) => found.id === SYSTEM_RULE)!;
+    expect(rule.appliesTo).toEqual(['system']);
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [SYSTEM]: { kind: 'system', value: bad },
+    });
+    expect(report.forDocument(SYSTEM).find((found) => found.ruleId === SYSTEM_RULE)?.path).toEqual([]);
+  });
+
+  it('сцена, сломанная не системой, молчит правилом систем: мира нет, судить нечем', () => {
+    const value = { ...SCENE_VALUE, initial: [{ prefab: 'ghost' }], systems: [bad] };
+    const report = check({ [SCENE]: { kind: 'scene', value } }, rulesFor(IN_SCENE));
+    expect(report.forDocument(SCENE).filter((found) => found.ruleId === SYSTEM_RULE)).toHaveLength(0);
+    // Отчитывается о ней её собственное правило — и на документе целиком.
+    const issue = report.forDocument(SCENE).find((found) => found.ruleId === SCENE_RULE)!;
+    expect(issue.path).toEqual([]);
+    expect(detailOf(issue)).toBe(thrownBy(() => loadScene(value as unknown as SceneDef)));
+  });
+
+  it('система, сломавшая сцену, названа дважды: документом и своей записью', () => {
+    // Два сообщения об одном нарушении не противоречат друг другу, а называют
+    // его с разной точностью — то же, что у пары `loadScene` и правила
+    // расстановки. Ради второго, точного, правило и получило адреса.
+    const value = { ...SCENE_VALUE, systems: [bad] };
+    const report = check({ [SCENE]: { kind: 'scene', value } }, rulesFor(IN_SCENE));
+    expect(report.forDocument(SCENE).map((found) => found.ruleId).sort()).toEqual([SCENE_RULE, SYSTEM_RULE]);
+  });
+
+  it('поля `systems` нет или оно не список — правило молчит: форму проверяет ядро', () => {
+    expect(check({ [SCENE]: { kind: 'scene', value: SCENE_VALUE } }, rulesFor(IN_SCENE)).issues).toHaveLength(0);
+    const report = check({ [SCENE]: { kind: 'scene', value: { ...SCENE_VALUE, systems: 7 } } }, rulesFor(IN_SCENE));
+    expect(report.forDocument(SCENE).filter((found) => found.ruleId === SYSTEM_RULE)).toHaveLength(0);
+  });
+
+  it('ED-8: правка одной записи возвращает правило в работу и переносит находку', () => {
+    // Имя и `order` у систем разные: равные ядро отвергает само (DET-3), и это
+    // проверка списка целиком, а не одной записи — её и делает правило сцены.
+    const chase = { ...good, name: 'chase', order: 3 };
+    const editor = sessionOf({ [SCENE]: { kind: 'scene', value: { ...SCENE_VALUE, systems: [good, chase] } } });
+    const validator = validatorOf(rulesFor(IN_SCENE));
+    expect(validator.run(editor).issues).toHaveLength(0);
+    validator.run(editor);
+    // Прогон без правок не исполняет ничего: подъём мира — дорогая операция, и
+    // ED-8 «в реальном времени» держится именно на этом.
+    expect(validator.lastRun.executed).toBe(0);
+
+    editor.applyOperation('document.setValue', {
+      document: SCENE,
+      path: ['systems', 1, 'do', 0, 'modifyComponent', 'component'],
+      value: 'Nope',
+    });
+    const report = validator.run(editor);
+    expect(validator.lastRun.executed).toBeGreaterThan(0);
+    expect(report.at(SCENE, ['systems', 1]).map((found) => found.ruleId)).toEqual([SYSTEM_RULE]);
   });
 });
 
