@@ -34,7 +34,7 @@ import {
 } from '../src/gallery/controlCase.js';
 import { EDITOR_BUNDLES, REASON_PREFIX, type LocaleBundles } from '@game-mvp/editor-core';
 import { UI_BUNDLES, UI_KEY_PREFIX, uiResources } from '../src/i18n/uiBundles.js';
-import { collectTexts, walk, type UiNode } from '../src/dom/node.js';
+import { collectTexts, hasClass, walk, type UiNode, type UiText } from '../src/dom/node.js';
 import { materialStrings } from '../src/areas/material.js';
 import { assetArea } from '../src/areas/assets.js';
 import { sceneArea } from '../src/areas/scene.js';
@@ -237,12 +237,36 @@ describe('ED-27: каждый видимый текст контрольного
  * разных источника текста, и ED-27 держит их все.
  */
 /**
- * Ключ хрома редактора: подпись интерфейса (`ui.*`) или причина находки
- * (`validation.reason.*`). Остальное на странице — описания полей (ED-28),
- * ключ которых вычислен из пути поля в схеме, и разрешаться он не обязан.
+ * Единственное место, где ED-28 разрешает тексту быть собственным ключом, —
+ * подсказка к полю: ключ вычислен из пути поля в схеме, ресурса на него может
+ * не быть ни в одной локали, и показ ключа и есть видимый признак того, что
+ * поле не документировано.
+ *
+ * Признак берётся структурный — узел подсказки, — а не по префиксу ключа.
+ * Послабление по префиксу было бы шире требования: под него попала бы и подпись
+ * интерфейса, у которой ключ разошёлся с бандлом (опечатка, переименование,
+ * забытое пространство имён), и отсутствие её ресурса перестало бы краснеть —
+ * ровно то невидимое отсутствие, которое ED-27 и ED-28 требуют делать видимым.
  */
-const isChromeKey = (key: string): boolean =>
-  key.startsWith(UI_KEY_PREFIX) || key.startsWith(REASON_PREFIX);
+const HINT_CLASS = 'fx-hint';
+
+interface PageText {
+  readonly text: UiText;
+  /** Текст узла подсказки к полю (ED-28), а не подпись интерфейса. */
+  readonly hint: boolean;
+}
+
+/** Видимый текст страницы вместе с ответом на вопрос, подсказка это или нет. */
+function classifiedTexts(root: UiNode): PageText[] {
+  const found: PageText[] = [];
+  for (const node of walk(root)) {
+    const hint = hasClass(node, HINT_CLASS);
+    // Узел без детей: тексты берутся у него самого, а не у поддерева, — иначе
+    // один и тот же текст пришёл бы столько раз, сколько над ним предков.
+    for (const text of collectTexts({ ...node, children: [] })) found.push({ text, hint });
+  }
+  return found;
+}
 
 describe('ED-27: каждый видимый текст каркаса имеет происхождение', () => {
   const materialCorpus = materialStrings();
@@ -268,7 +292,7 @@ describe('ED-27: каждый видимый текст каркаса имее�
   it.each(['ru', 'en'])('на локали %s текст — либо ресурс, либо материал', (locale) => {
     const resources = uiResources(locale);
     for (const page of pagesIn(locale)) {
-      for (const text of collectTexts(page)) {
+      for (const { text, hint } of classifiedTexts(page)) {
         if (text.origin === 'value') {
           expect(materialCorpus.has(text.value), `значение не из материала: ${text.value}`).toBe(
             true,
@@ -277,8 +301,8 @@ describe('ED-27: каждый видимый текст каркаса имее�
         }
         const key = text.key ?? '';
         const resolved = resources.lookup(key);
-        if (isChromeKey(key)) {
-          expect(resolved, `ключ каркаса не разрешился: ${key}`).toBeDefined();
+        if (!hint) {
+          expect(resolved, `ключ интерфейса не разрешился: ${key}`).toBeDefined();
           expect(text.value).toBe(resolved?.text);
           continue;
         }
@@ -298,20 +322,24 @@ describe('ED-27: каждый видимый текст каркаса имее�
     // его ищут, выбирается по пространству, а не по тому, где он нашёлся.
     const declared = (locale: 'ru' | 'en', key: string): string | undefined =>
       key.startsWith(REASON_PREFIX) ? EDITOR_BUNDLES[locale]?.[key] : UI_BUNDLES[locale]?.[key];
+    const texts = pagesIn('ru').flatMap((page) => classifiedTexts(page));
     const used = new Set(
-      pagesIn('ru')
-        .flatMap((page) => collectTexts(page))
-        .filter((text) => text.origin === 'resource')
-        .map((text) => text.key ?? ''),
+      texts
+        .filter((entry) => !entry.hint && entry.text.origin === 'resource')
+        .map((entry) => entry.text.key ?? ''),
     );
     expect(used.size).toBeGreaterThan(0);
-    // Пространств на странице три, а проверяются два: подписи хрома и причины
-    // находок принадлежат редактору и обязаны быть в обеих локалях. Третье —
-    // описания полей (ED-28) — принадлежит тому, кто объявил поле: описания
+    // Третье пространство страницы — описания полей (ED-28) — не проверяется, и
+    // проверяться не может: оно принадлежит тому, кто объявил поле, описания
     // компонентов пишет контент, и требовать их от бандла редактора значило бы
-    // требовать от него документировать чужие документы.
-    expect([...used].some((key) => !isChromeKey(key)), 'описаний полей на странице нет').toBe(true);
-    for (const key of [...used].filter(isChromeKey)) {
+    // требовать от него документировать чужие документы. Что они на странице
+    // есть, проверяется отдельно: иначе послабление выше было бы про пустое
+    // множество, и его сужение ничего бы не значило.
+    expect(
+      texts.some((entry) => entry.hint && entry.text.origin === 'resource'),
+      'описаний полей на странице нет',
+    ).toBe(true);
+    for (const key of used) {
       expect(declared('ru', key), `нет в ru: ${key}`).toBeDefined();
       expect(declared('en', key), `нет в en: ${key}`).toBeDefined();
     }

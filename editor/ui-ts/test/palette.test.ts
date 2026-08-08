@@ -150,6 +150,65 @@ describe('ED-24, ED-30: операции приходят из каталога,
     expect(entry?.disabled).toBe(true);
     frame.stopPreview();
   });
+
+  it('в превью недоступна и команда, объявившая операцию своей (ED-9, ED-26)', async () => {
+    // Строка команды и строка операции — два показа одного пути правки. Погасив
+    // только вторую, палитра оставила бы первую работающей, и превью писало бы
+    // в документы, чего ED-9 не допускает вовсе.
+    const commands = new ContributionRegistry<PaletteCommand>({
+      kind: 'command',
+      claimName: 'сочетание клавиш',
+      claimOf: (command) => command.keybinding,
+    });
+    let ran = 0;
+    commands.register({
+      id: 'test.command.write',
+      descriptionKey: 'ui.inspector.title',
+      labelKey: 'ui.inspector.title',
+      operation: NAMED_OPERATION.id,
+      run: () => {
+        ran += 1;
+      },
+    });
+    const { frame, session } = await buildLoadedFrame('ru', { commands });
+    session.operations.register(NAMED_OPERATION);
+    frame.togglePreview();
+    expect(frame.mode()).toBe('preview');
+
+    const entry = frame.paletteEntries().find((candidate) => candidate.kind === 'command');
+    expect(entry?.disabled).toBe(true);
+    // И по прямому вызову тоже: «недоступно» значит одно и то же на обоих путях.
+    entry?.run();
+    expect(ran).toBe(0);
+
+    frame.stopPreview();
+    expect(
+      frame.paletteEntries().find((candidate) => candidate.kind === 'command')?.disabled,
+    ).toBe(false);
+  });
+
+  it('команда без операции в превью остаётся доступной: это навигация, а не правка', async () => {
+    const commands = new ContributionRegistry<PaletteCommand>({
+      kind: 'command',
+      claimName: 'сочетание клавиш',
+      claimOf: (command) => command.keybinding,
+    });
+    commands.register({
+      id: 'test.command.goto',
+      descriptionKey: 'ui.inspector.title',
+      labelKey: 'ui.inspector.title',
+      run: (target: CommandTarget) => {
+        target.activate(systemsArea.id);
+      },
+    });
+    const { frame } = await buildLoadedFrame('ru', { commands });
+    frame.togglePreview();
+    const entry = frame.paletteEntries().find((candidate) => candidate.kind === 'command');
+    expect(entry?.disabled).toBe(false);
+    entry?.run();
+    expect(frame.activeAreaId()).toBe(systemsArea.id);
+    frame.stopPreview();
+  });
 });
 
 describe('ED-24, ED-23: поиск по проекту находит документ мимо дерева', () => {

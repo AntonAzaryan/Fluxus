@@ -87,17 +87,35 @@ function valueText(value: JsonValue | undefined): UiText {
  * Поле с перечисленными схемой значениями показывается выбором из них, каким бы
  * ни был его тип: «допустимые значения берутся из реестра схем» (ED-24), и
  * набранное руками значение вне набора было бы отвергнуто ядром (ED-3).
+ *
+ * Показ и разбор идут парой того же типа поля, что и у свободного ввода:
+ * величина, которую автор видит в списке, — та же, что он видел бы в поле, а в
+ * документ уходит то, что из неё разобрал редактор этого типа. Показывать
+ * машинное представление в списке и человеческое в поле значило бы, что одно и
+ * то же поле у автора выглядит по-разному в зависимости от того, перечислила
+ * схема его значения или нет.
  */
-function options(context: FieldEditorContext, parse: (raw: string) => JsonValue): UiNode {
+function options(
+  context: FieldEditorContext,
+  parse: (raw: string) => JsonValue | undefined,
+  display: (value: JsonValue | undefined) => string = valueString,
+): UiNode {
   const values = context.field.values ?? [];
   return select({
     label: context.label,
-    value: valueString(context.value),
-    options: values.map((value) => ({ value: valueString(value), label: valueText(value) })),
+    value: display(context.value),
+    options: values.map((value) => ({
+      value: display(value),
+      label: documentValue(display(value)),
+    })),
     disabled: context.disabled,
     ...(context.validation === undefined ? {} : { validation: context.validation }),
     onSelect: (raw) => {
-      context.commit(parse(raw));
+      const parsed = parse(raw);
+      // Выбор, не разбирающийся в значение своего типа, не записывается вовсе —
+      // по тому же правилу, что и набранный руками: подставить вместо него ноль
+      // значило бы положить в документ величину, которой автор не выбирал (ED-3).
+      if (parsed !== undefined) context.commit(parsed);
     },
   });
 }
@@ -113,7 +131,7 @@ function numeric(
     if (parsed !== undefined) context.commit(parsed);
   };
   if (context.field.values !== undefined) {
-    return options(context, (raw) => parse(raw) ?? 0);
+    return options(context, parse, (value) => show(value).value);
   }
   return numberField({
     label: context.label,

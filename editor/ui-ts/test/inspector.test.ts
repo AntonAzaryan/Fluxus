@@ -14,6 +14,7 @@ import {
   createEditorSession,
   createOperationRegistry,
   registerBuiltinOperations,
+  type EditorSession,
   type ValidationRule,
 } from '@game-mvp/editor-core';
 import { describe, expect, it } from 'vitest';
@@ -23,6 +24,7 @@ import {
   inspectorPanel,
   registerFieldEditors,
   type FieldEditor,
+  type SchemaField,
 } from '../src/inspector/index.js';
 import { textField } from '../src/widgets/field.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
@@ -110,6 +112,46 @@ describe('ED-24, ED-2: набор строк инспектора — это с�
     expect(rows).toEqual(['prefab', 'x', 'y', 'turns']);
   });
 
+  it('перечисленные значения показываются в единицах своего типа, а не в машинных', () => {
+    // Q16.16 показывается десятичной дробью и в свободном поле, и в списке: одно
+    // и то же поле не может выглядеть по-разному оттого, что схема перечислила
+    // его значения. В документ при этом уходит то же, что и из свободного поля,
+    // — целое число квантов (FP-1).
+    const session = createEditorSession({
+      operations: registerBuiltinOperations(createOperationRegistry()),
+    });
+    session.openDocument({ id: 'doc', kind: 'test', value: { speed: fixed.fromFloat(1) } });
+    const view = inspectorPanel({
+      resources: resourcesOf({}),
+      session,
+      fieldEditors: registerFieldEditors(createFieldEditorRegistry()),
+      subject: {
+        address: { documentId: 'doc' },
+        groups: [
+          {
+            name: 'group',
+            fields: [
+              {
+                name: 'speed',
+                type: 'fixed',
+                path: ['speed'],
+                description: ['test', 'speed'],
+                values: [fixed.fromFloat(1), fixed.fromFloat(2.5)],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const row = rowOf(view, 'speed');
+    const options = findAll(row.node, (node) => node.tag === 'option');
+    expect(options.map((node) => attr(node, 'value'))).toEqual(['1', '2.5']);
+
+    const select = findAll(row.node, (node) => node.tag === 'select')[0];
+    select?.on?.['change']?.({ target: { value: '2.5' } } as unknown as Event);
+    expect((session.documentValue('doc') as { speed: number }).speed).toBe(fixed.fromFloat(2.5));
+  });
+
   it('допустимые значения ссылки — существующие prefab’ы, а не свободный ввод', async () => {
     const { frame, session, area } = await buildLoadedFrame();
     const key = session.descriptors(FIXTURE_IDS.config, PLACEMENT_LIST)[0] ?? '';
@@ -188,6 +230,56 @@ function resourcesOf(
 ): StringResources {
   return new StringResources({ locale, editor: bundles });
 }
+
+describe('ED-24, ED-26, ED-29: адрес субъекта и поле, которое правке не подлежит', () => {
+  /** Субъект, у которого корень — место в документе, а не сам документ. */
+  const panelOf = (
+    field: SchemaField,
+  ): { readonly view: UiNode; readonly session: EditorSession } => {
+    const session = createEditorSession({
+      operations: registerBuiltinOperations(createOperationRegistry()),
+    });
+    session.openDocument({ id: 'doc', kind: 'test', value: { nested: { width: 4, derived: 9 } } });
+    return {
+      session,
+      view: inspectorPanel({
+        resources: resourcesOf({}),
+        session,
+        fieldEditors: registerFieldEditors(createFieldEditorRegistry()),
+        subject: {
+          address: { documentId: 'doc', root: ['nested'] },
+          groups: [{ name: 'nested', fields: [field] }],
+        },
+      }),
+    };
+  };
+
+  it('правка уходит по адресу от корня субъекта, а не от корня документа', () => {
+    const { view, session } = panelOf({
+      name: 'width',
+      type: 'integer',
+      path: ['width'],
+      description: ['test', 'width'],
+    });
+    commit(rowOf(view, 'width'), '7');
+    expect((session.documentValue('doc') as { nested: { width: number } }).nested.width).toBe(7);
+  });
+
+  it('поле, помеченное схемой как неправимое, показано недоступным, а не молчащим', () => {
+    // Производная величина, которую считает ядро, или место со своей операцией:
+    // строка у него есть (ED-24), а ввода в ней нет — и это видно (ED-26).
+    const { view } = panelOf({
+      name: 'derived',
+      type: 'integer',
+      path: ['derived'],
+      description: ['test', 'derived'],
+      readOnly: true,
+    });
+    const input = findAll(rowOf(view, 'derived').node, (node) => node.tag === 'input')[0];
+    expect(input?.attrs?.['readonly']).toBe('');
+    expect(input?.on?.['change']).toBeUndefined();
+  });
+});
 
 describe('ED-28: подсказка приходит по вычисленному ключу и не бывает пустой', () => {
   const subject = {

@@ -29,7 +29,13 @@
  * недоступным, а не молча не срабатывать (ED-26).
  *
  * В превью недоступны все операции авторинга разом — по тому же ED-26 и по
- * тому же основанию, по которому там недоступны инструменты (ED-9).
+ * тому же основанию, по которому там недоступны инструменты (ED-9). Недоступна
+ * при этом и команда, объявившая операцию своим полем `operation`: строка
+ * команды и строка операции — два показа одного пути правки, и погасить только
+ * второй значило бы оставить первый работающим («превью MUST NOT записывать
+ * что-либо в документы», ED-9). Команда без операции остаётся доступной — это
+ * навигация, а не авторинг, и ED-26 требует добираться до чего угодно из любого
+ * режима.
  */
 import type {
   ContributionReader,
@@ -128,9 +134,23 @@ export function matchesQuery(query: string, ...texts: readonly (string | undefin
   return texts.some((text) => text !== undefined && text.toLowerCase().includes(needle));
 }
 
+/**
+ * Применима ли команда сейчас. Двух ответов на этот вопрос в палитре нет:
+ * строка команды и строка операции, которую команда взяла на себя, спрашивают
+ * одну функцию — иначе одна из них рано или поздно осталась бы доступной там,
+ * где вторую уже погасили.
+ */
+function commandEnabled(spec: PaletteSpec, command: PaletteCommand): boolean {
+  // Команда, объявившая операцию авторинга, в превью недоступна: ED-9 запрещает
+  // там правку документов, а поле `operation` вклада — то самое объявление, по
+  // которому это видно реестру, а не только реализации команды (ED-25).
+  if (spec.mode === 'preview' && command.operation !== undefined) return false;
+  return command.enabled === undefined || command.enabled(spec.target);
+}
+
 function commandEntry(spec: PaletteSpec, command: PaletteCommand): PaletteEntry {
   const label = resourceText(spec.resources, command.labelKey);
-  const enabled = command.enabled === undefined || command.enabled(spec.target);
+  const enabled = commandEnabled(spec, command);
   return {
     id: command.id,
     kind: 'command',
@@ -140,7 +160,10 @@ function commandEntry(spec: PaletteSpec, command: PaletteCommand): PaletteEntry 
     ...(command.icon === undefined ? {} : { icon: command.icon }),
     disabled: !enabled,
     run: () => {
-      command.run(spec.target);
+      // Недоступная строка не исполняется и по прямому вызову: показ гасит её
+      // обработчик, но `run` доступен и снаружи показа (ED-30), а «недоступно»
+      // обязано значить одно и то же на обоих путях.
+      if (enabled) command.run(spec.target);
     },
   };
 }
@@ -154,14 +177,10 @@ function commandsHere(spec: PaletteSpec): readonly PaletteCommand[] {
 
 function operationEntries(spec: PaletteSpec): readonly PaletteEntry[] {
   const here = commandsHere(spec);
-  const preview = spec.mode === 'preview';
   return spec.catalog().operations.map((operation): PaletteEntry => {
     // Команда, взявшая операцию на себя, знает, откуда брать её параметры.
     const command = here.find((candidate) => candidate.operation === operation.id);
-    const enabled =
-      !preview &&
-      command !== undefined &&
-      (command.enabled === undefined || command.enabled(spec.target));
+    const enabled = command !== undefined && commandEnabled(spec, command);
     return {
       id: operation.id,
       kind: 'operation',
