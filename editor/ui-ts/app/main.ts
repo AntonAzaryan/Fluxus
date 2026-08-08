@@ -1,38 +1,40 @@
 /**
- * Точка входа веб-приложения редактора (ED-12, веб-среда). Здесь только
- * монтирование корня и постановка таблицы стилей визуального языка: всё
- * остальное — каркас областей и вклады — приходит реестрами (ED-25), а не
- * вызовами из этого файла.
+ * Точка входа веб-приложения редактора (ED-12, веб-среда).
  *
- * Пока каркаса нет, монтируется контрольный случай визуального языка (ED-22):
- * страница, на которой плотность инспектора на сорок с лишним строк не
- * утверждается словами, а видна. Задача W2-2 заменит её каркасом областей.
+ * Здесь и только здесь редактор собирается из частей: реестры вкладов, сессия
+ * с одной историей на всех (ED-18, ED-23), ресурсы строк и каркас рабочих
+ * областей. Всё, что этот файл делает с областями, — регистрирует их. Ни
+ * порядка зон, ни переключения, ни истории он не задаёт: это каркас, и он
+ * одинаков при любом наборе вкладов (ED-25).
+ *
+ * Добавить область — значит дописать сюда одну строку регистрации. Ни каркас,
+ * ни уже зарегистрированные области при этом не правятся, и проверяет это не
+ * обещание в комментарии, а `test/frameExtension.test.ts`.
  */
 import {
-  TOKEN_SCOPE_CLASS,
-  installStylesheet,
-  mountEditorRoot,
-  renderInto,
-  uiResources,
-} from '../src/index.js';
-import {
-  SAMPLE_DESCRIPTIONS,
-  controlCasePage,
-  initialGalleryState,
-} from '../src/gallery/controlCase.js';
+  createEditorContributions,
+  createEditorSession,
+  createOperationRegistry,
+  registerBuiltinOperations,
+} from '@game-mvp/editor-core';
+import { createWorkspaceFrame, mountWorkspaceFrame, uiResources } from '../src/index.js';
+import type { WorkspaceArea } from '../src/index.js';
+import { sceneArea } from '../src/areas/scene.js';
+import { systemsArea } from '../src/areas/systems.js';
 
-const root = mountEditorRoot(document);
-installStylesheet(document);
-// Корень — область действия токенов: всё, что красит хром, лежит внутри неё,
-// и только вьюпорт из неё вычтен (ED-22).
-root.classList.add(TOKEN_SCOPE_CLASS);
+const contributions = createEditorContributions<WorkspaceArea>();
+contributions.areas.register(sceneArea);
+contributions.areas.register(systemsArea);
 
-const resources = uiResources('ru', SAMPLE_DESCRIPTIONS);
-const state = initialGalleryState();
+const session = createEditorSession({
+  operations: registerBuiltinOperations(createOperationRegistry()),
+});
 
-function draw(): void {
-  renderInto(root, controlCasePage(resources, state, draw));
-}
-
-resources.onChange(draw);
-draw();
+mountWorkspaceFrame(
+  document,
+  createWorkspaceFrame({
+    areas: contributions.areas,
+    resources: uiResources('ru'),
+    session,
+  }),
+);

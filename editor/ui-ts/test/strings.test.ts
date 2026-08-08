@@ -33,7 +33,11 @@ import {
   sampleDocumentStrings,
 } from '../src/gallery/controlCase.js';
 import { UI_BUNDLES, UI_KEY_PREFIX, uiResources } from '../src/i18n/uiBundles.js';
-import { collectTexts, walk } from '../src/dom/node.js';
+import { collectTexts, walk, type UiNode } from '../src/dom/node.js';
+import { materialStrings } from '../src/areas/material.js';
+import { sceneArea } from '../src/areas/scene.js';
+import { systemsArea } from '../src/areas/systems.js';
+import { buildFrame } from './support/frame.js';
 
 /** Весь код пакета, а не только его библиотека: точка входа приложения — тоже интерфейс. */
 const ROOTS = ['src', 'app'] as const;
@@ -192,6 +196,86 @@ describe('ED-27: каждый видимый текст контрольного
     for (const node of walk(pageIn('ru'))) {
       for (const name of Object.keys(node.vars ?? {})) {
         expect(name.startsWith('--'), `${node.tag}: ${name}`).toBe(true);
+      }
+    }
+  });
+});
+
+/**
+ * Та же проверка на странице, которую монтирует приложение, — на каркасе с
+ * обеими рабочими областями. Контрольный случай визуального языка её не
+ * заменяет: подписи каркаса, подписи областей и содержимое их материала — три
+ * разных источника текста, и ED-27 держит их все.
+ */
+describe('ED-27: каждый видимый текст каркаса имеет происхождение', () => {
+  const materialCorpus = materialStrings();
+  const areas = [sceneArea, systemsArea];
+
+  const pagesIn = (locale: string): UiNode[] => {
+    const { frame } = buildFrame(areas, locale);
+    const pages = [frame.view()];
+    for (const area of areas) {
+      frame.activate(area.id);
+      pages.push(frame.view());
+    }
+    return pages;
+  };
+
+  it('обе области вообще показывают текст — проверка не пустая', () => {
+    for (const page of pagesIn('ru')) expect(collectTexts(page).length).toBeGreaterThan(10);
+  });
+
+  it.each(['ru', 'en'])('на локали %s текст — либо ресурс, либо материал', (locale) => {
+    const resources = uiResources(locale);
+    for (const page of pagesIn(locale)) {
+      for (const text of collectTexts(page)) {
+        if (text.origin === 'value') {
+          expect(materialCorpus.has(text.value), `значение не из материала: ${text.value}`).toBe(
+            true,
+          );
+          continue;
+        }
+        const key = text.key ?? '';
+        const resolved = resources.lookup(key);
+        expect(resolved, `ключ каркаса не разрешился: ${key}`).toBeDefined();
+        expect(text.value).toBe(resolved?.text);
+      }
+    }
+  });
+
+  it('ключи каркаса и областей объявлены в обеих локалях', () => {
+    const used = new Set(
+      pagesIn('ru')
+        .flatMap((page) => collectTexts(page))
+        .filter((text) => text.origin === 'resource')
+        .map((text) => text.key ?? ''),
+    );
+    expect(used.size).toBeGreaterThan(0);
+    for (const key of used) {
+      expect(key.startsWith(UI_KEY_PREFIX), `ключ вне пространства хрома: ${key}`).toBe(true);
+      expect(UI_BUNDLES.ru?.[key], `нет в ru: ${key}`).toBeDefined();
+      expect(UI_BUNDLES.en?.[key], `нет в en: ${key}`).toBeDefined();
+    }
+  });
+
+  it('смена языка меняет подписи каркаса и не трогает имена материала', () => {
+    const ru = pagesIn('ru').flatMap((page) => collectTexts(page));
+    const en = pagesIn('en').flatMap((page) => collectTexts(page));
+    expect(ru.length).toBe(en.length);
+    expect(ru.filter((text, index) => text.value !== en[index]?.value).length).toBeGreaterThan(0);
+    for (const [index, text] of ru.entries()) {
+      if (text.origin !== 'value') continue;
+      expect(en[index]?.value, `имя материала локализовано: ${text.value}`).toBe(text.value);
+    }
+  });
+
+  it('ключи описаний вкладов тоже разрешаются: каталог ED-30 читает те же строки', () => {
+    const resources = uiResources('en');
+    for (const area of areas) {
+      expect(resources.lookup(area.descriptionKey), area.id).toBeDefined();
+      expect(resources.lookup(area.labelKey), area.id).toBeDefined();
+      for (const editable of area.editableTypes) {
+        expect(resources.lookup(editable.descriptionKey), editable.id).toBeDefined();
       }
     }
   });

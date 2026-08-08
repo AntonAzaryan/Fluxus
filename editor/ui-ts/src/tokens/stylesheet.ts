@@ -25,38 +25,33 @@
  *   а наследование идёт сверху вниз, так что вернуть палитру на сам кадр этим
  *   слоем нельзя.
  */
+import { FRAME_RULES } from '../frame/styles.js';
 import { EDITOR_ROOT_ID } from '../root.js';
+import {
+  APP_CLASS,
+  SCOPE as S,
+  VIEWPORT_CLASS,
+  VIEWPORT_OVERLAY_CLASS,
+  type CssRule,
+} from './css.js';
 import { TOKENS, tokenValue } from './tokens.js';
 
-/** Класс области действия токенов. Всё, что красит хром, — потомок этого класса. */
-export const TOKEN_SCOPE_CLASS = 'fx-tokens';
-
-/** Класс корня приложения: область токенов плюс фон окна. */
-export const APP_CLASS = 'fx-app';
-
-/** Класс кадра вьюпорта — области, из которой палитра редактора вычтена. */
-export const VIEWPORT_CLASS = 'fx-viewport';
-
-/** Класс слоя служебных наложений внутри кадра. */
-export const VIEWPORT_OVERLAY_CLASS = 'fx-viewport__overlay';
+/**
+ * Имена классов и тип правила объявлены в `css.ts`: их читает и каркас, чьи
+ * правила этот модуль подмешивает в каскад. Публичная поверхность пакета от
+ * переезда не изменилась — они по-прежнему выходят отсюда.
+ */
+export {
+  APP_CLASS,
+  SCOPE,
+  TOKEN_SCOPE_CLASS,
+  VIEWPORT_CLASS,
+  VIEWPORT_OVERLAY_CLASS,
+} from './css.js';
+export type { CssRule, RuleRole } from './css.js';
 
 /** Идентификатор элемента `<style>`, в который ставится эта таблица. */
 export const STYLESHEET_ELEMENT_ID = 'fx-visual-language';
-
-/**
- * Роль правила. `interactive` — то, что ED-22 отдал акценту; `validation` —
- * состояния данных (ED-8). Правило без роли — нейтральный хром: поверхности,
- * рамки, типографика, плотность.
- */
-export type RuleRole = 'interactive' | 'validation';
-
-export interface CssRule {
-  readonly selector: string;
-  readonly declarations: readonly string[];
-  readonly role?: RuleRole;
-}
-
-const S = `.${TOKEN_SCOPE_CLASS}`;
 
 /** Объявление всех токенов — единственное место, где они получают значения. */
 const scopeRule: CssRule = {
@@ -137,9 +132,9 @@ const BASE_RULES: readonly CssRule[] = [
 
 /**
  * Раскладка — только то, из чего собран контрольный случай: ряд областей,
- * колонка с шагом сетки, кластер в строку. Каркас рабочих областей (ED-23,
- * ED-24) сюда не входит: он приносит свою раскладку задачей W2-2, и повторять
- * её здесь значило бы завести два источника одного и того же.
+ * колонка с шагом сетки, кластер в строку. Раскладка каркаса (ED-23, ED-24)
+ * сюда не входит и лежит у самого каркаса (`frame/styles.ts`): ширины зон —
+ * свойство скелета, и два источника одного и того же здесь не заводятся.
  */
 const LAYOUT_RULES: readonly CssRule[] = [
   { selector: `${S} .fx-main`, declarations: ['display: flex', 'flex: 1', 'min-height: 0'] },
@@ -159,16 +154,6 @@ const LAYOUT_RULES: readonly CssRule[] = [
       'align-items: center',
       'gap: var(--fx-space-2)',
       'flex-wrap: wrap',
-    ],
-  },
-  { selector: `${S} .fx-panel--nav`, declarations: ['width: 240px', 'flex: none'] },
-  {
-    selector: `${S} .fx-panel--inspector`,
-    declarations: [
-      'width: 356px',
-      'flex: none',
-      'border-right: none',
-      'border-left: var(--fx-hairline) solid var(--fx-border)',
     ],
   },
   {
@@ -479,6 +464,14 @@ const ROW_RULES: readonly CssRule[] = [
     ],
   },
   {
+    // Фокус клавиатуры — не выделение: по списку ходят стрелками, и строка под
+    // фокусом может быть не той, что выбрана. Признак поэтому другой — рамка,
+    // та же, что у кнопки и у поля.
+    selector: `${S} .fx-row:focus-visible`,
+    role: 'interactive',
+    declarations: ['outline: var(--fx-hairline) solid var(--fx-accent)', 'outline-offset: -1px'],
+  },
+  {
     selector: `${S} .fx-row__label`,
     declarations: ['overflow: hidden', 'text-overflow: ellipsis', 'white-space: nowrap', 'min-width: 0'],
   },
@@ -733,11 +726,18 @@ const TOOLTIP_RULES: readonly CssRule[] = [
   },
 ];
 
-/** Все правила визуального языка в порядке каскада. */
+/**
+ * Все правила визуального языка в порядке каскада. Правила каркаса идут после
+ * поверхностей, и это не косметика: зона скелета — это панель, которой каркас
+ * задал ширину и сторону рамки, а специфичность у `.fx-panel` и
+ * `.fx-zone--inspector` одна и та же. Встань каркас раньше — снятая им правая
+ * рамка вернулась бы обратно, и инспектор получил бы обе.
+ */
 export const STYLE_RULES: readonly CssRule[] = [
   ...BASE_RULES,
   ...LAYOUT_RULES,
   ...SURFACE_RULES,
+  ...FRAME_RULES,
   ...ICON_RULES,
   ...BUTTON_RULES,
   ...FIELD_RULES,

@@ -1,0 +1,106 @@
+{
+  "scene": {
+    "documentId": "content/scenes/demo.scene.json",
+    "tree": [
+      { "id": "demo.scene.json", "label": "demo.scene.json", "depth": 0, "badge": "" },
+      { "id": "terrain", "label": "terrain", "depth": 1, "badge": "" },
+      { "id": "arena.terrain", "label": "arena.terrain", "depth": 2, "badge": "asset" },
+      { "id": "arena.curvature", "label": "arena.curvature", "depth": 2, "badge": "asset" },
+      { "id": "initial", "label": "initial", "depth": 1, "badge": "12" },
+      { "id": "hero", "label": "hero", "depth": 2, "badge": "unit" },
+      { "id": "skeleton_01", "label": "skeleton_01", "depth": 2, "badge": "unit" },
+      { "id": "skeleton_02", "label": "skeleton_02", "depth": 2, "badge": "unit" },
+      { "id": "crate_01", "label": "crate_01", "depth": 2, "badge": "prop" }
+    ],
+    "groups": [
+      {
+        "label": "Transform",
+        "fields": [
+          { "name": "x", "value": "12.500", "note": "q16.16" },
+          { "name": "y", "value": "0.000", "note": "q16.16" },
+          { "name": "z", "value": "-4.250", "note": "q16.16" },
+          { "name": "yaw", "value": "90", "note": "deg" },
+          { "name": "scale", "value": "1.000", "note": "q16.16" }
+        ]
+      },
+      {
+        "label": "Health",
+        "fields": [
+          { "name": "max", "value": "240", "note": "i32" },
+          { "name": "current", "value": "240", "note": "i32" },
+          { "name": "regen", "value": "0.500", "note": "q16.16" },
+          { "name": "armor", "value": "4", "note": "i32" }
+        ]
+      },
+      {
+        "label": "Vision",
+        "fields": [
+          { "name": "radius", "value": "9", "note": "i32" },
+          { "name": "heightBonus", "value": "2", "note": "i32" },
+          { "name": "team", "value": "1", "note": "i32" },
+          { "name": "stealthDetection", "value": "0", "note": "i32" }
+        ]
+      },
+      {
+        "label": "Movement",
+        "fields": [
+          { "name": "speed", "value": "3.250", "note": "q16.16" },
+          { "name": "acceleration", "value": "8.000", "note": "q16.16" },
+          { "name": "turnRate", "value": "180", "note": "deg/s" },
+          { "name": "radius", "value": "0.400", "note": "q16.16" }
+        ]
+      },
+      {
+        "label": "Visual",
+        "fields": [
+          { "name": "model", "value": "SkeletonBarbarian.mdx", "note": "asset" },
+          { "name": "skin", "value": "skin-steel.png", "note": "asset" },
+          { "name": "animation", "value": "idle", "note": "id" },
+          { "name": "tint", "value": "ffffff", "note": "rgb" }
+        ]
+      }
+    ]
+  },
+  "systems": {
+    "documentId": "content/systems/on_death.system.json",
+    "documents": [
+      { "id": "content/systems/on_death.system.json", "label": "on_death.system.json", "secondary": "systems" },
+      { "id": "content/systems/regen.system.json", "label": "regen.system.json", "secondary": "systems" },
+      { "id": "content/systems/aggro.system.json", "label": "aggro.system.json", "secondary": "systems" }
+    ],
+    "document": {
+      "id": "on_death",
+      "flags": { "enabled": true, "replicated": false },
+      "rules": [
+        {
+          "id": "explode",
+          "event": "entity.died",
+          "condition": "has(Explosive)",
+          "action": "spawn(explosion, at: entity.position)"
+        },
+        {
+          "id": "loot",
+          "event": "entity.died",
+          "condition": "team != 0",
+          "action": "spawn(loot, at: entity.position)"
+        },
+        {
+          "id": "score",
+          "event": "entity.died",
+          "condition": "killer.team != 0",
+          "action": "add(killer.score, 1)"
+        }
+      ]
+    },
+    "groups": [
+      {
+        "label": "Rule",
+        "fields": [
+          { "name": "id", "value": "explode", "note": "id" },
+          { "name": "order", "value": "0", "note": "i32" },
+          { "name": "stream", "value": "combat", "note": "rng" }
+        ]
+      }
+    ]
+  }
+}

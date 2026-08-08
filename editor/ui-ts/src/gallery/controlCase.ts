@@ -10,17 +10,24 @@
  * примеров: страница монтируется в приложении (`app/main.ts`), а тест строит
  * то же самое дерево узлов и меряет по нему плотность и происхождение строк.
  *
+ * Страницу приложения с приходом каркаса областей (W2-2) монтирует каркас, а
+ * не она: контрольный случай остался тем, чем и был, — мерилом плотности и
+ * происхождения строк, по которому считают `test/density.test.ts` и
+ * `test/strings.test.ts`. Колонки он берёт у скелета, а не объявляет свои.
+ *
  * Данные страницы лежат в `sampleDocument.json` и это не деталь удобства.
  * Строки, приходящие в интерфейс из документа, обязаны приходить из документа
  * (ED-27 не локализует идентификаторы редактируемого), и тест `strings.test.ts`
  * проверяет ровно это: каждый текст на странице — либо ресурс с ключом, либо
  * строка, лежащая в этом файле данных. Литералу подписи взяться неоткуда.
  *
- * Каркас областей (ED-23, ED-24) эта страница не изображает — он задача W2-2.
- * Здесь только словарь: токены, виджеты и их состояния.
+ * Каркас областей (ED-23, ED-24) эта страница по-прежнему не изображает: здесь
+ * только словарь — токены, виджеты и их состояния.
  */
 import { schemaPathOf, descriptionKey, type StringResources } from '@game-mvp/editor-core';
 import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
+import { INSPECTOR_ZONE_CLASS, NAVIGATOR_ZONE_CLASS } from '../frame/styles.js';
+import { jsonStrings } from '../i18n/corpus.js';
 import { APP_CLASS } from '../tokens/stylesheet.js';
 import { button } from '../widgets/button.js';
 import { statusChip, type ChipTone } from '../widgets/chip.js';
@@ -225,7 +232,9 @@ function navigator(
   refresh: () => void,
 ): UiNode {
   return el('div', {
-    classes: ['fx-panel', 'fx-panel--nav'],
+    // Колонки контрольного случая — те же зоны, что у скелета области: ширину
+    // задаёт каркас (ED-24), и второго набора магических чисел здесь нет.
+    classes: ['fx-panel', NAVIGATOR_ZONE_CLASS],
     children: [
       el('div', { classes: ['fx-section'], text: resourceText(resources, 'ui.navigator.title') }),
       tree({
@@ -386,7 +395,7 @@ export function controlCasePage(
           navigator(resources, state, refresh),
           widgetShelf(resources),
           el('div', {
-            classes: ['fx-panel', 'fx-panel--inspector'],
+            classes: ['fx-panel', INSPECTOR_ZONE_CLASS],
             children: [
               el('div', {
                 classes: ['fx-section'],
@@ -407,21 +416,7 @@ export function controlCasePage(
  * перечень разошёлся бы с данными на первой же правке.
  */
 export function sampleDocumentStrings(): ReadonlySet<string> {
-  const strings = new Set<string>();
-  const visit = (value: unknown): void => {
-    if (typeof value === 'string') {
-      strings.add(value);
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item);
-      return;
-    }
-    if (typeof value === 'object' && value !== null) {
-      for (const item of Object.values(value)) visit(item);
-    }
-  };
-  visit(sample);
+  const strings = jsonStrings(sample);
   // Ключи описаний — часть той же поверхности документа, что и имена полей:
   // ключ выводится из пути в схеме (ED-28), и подсказка показывает его, когда
   // ресурса нет. Значениями обхода они не являются, поэтому добавлены явно.
