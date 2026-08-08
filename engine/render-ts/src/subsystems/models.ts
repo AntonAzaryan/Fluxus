@@ -13,6 +13,15 @@
  * вход у неё один, и правило жизненного цикла инстанса тоже одно (REND-3).
  * Поля, которые заполняет только набор (`clip`, `skin`, `scale`), на пути тика
  * приходят пустыми, и ветки под них не работают.
+ *
+ * Сам манифест — второй вход подсистемы и тоже переподаваемый (REND-17): в
+ * матче он приезжает загруженным ассетом один раз (ASSET-6), а редактор правит
+ * его непрерывно (ED-14) и обязан показать результат не позже следующего кадра
+ * (ED-15). Вход для этого один — `applyManifest`, декларативный по образцу
+ * `TerrainSubsystem.applyGrid` и `DocumentSource.apply`: потребитель отдаёт
+ * документ ЦЕЛИКОМ, а решать, что пересобрать, — дело подсистемы. Императивной
+ * правки поля записи здесь нет по той же причине, по какой её нет у инстансов и
+ * у сетки: картинка обязана быть функцией документа, а не истории вызовов.
  */
 import * as THREE from 'three';
 import {
@@ -153,7 +162,8 @@ interface SharedEntry {
 interface InstanceRecord {
   readonly entity: EntityId;
   readonly kind: string | null;
-  readonly visual: EntityVisual | undefined;
+  /** Запись манифеста этого типа; переподача манифеста её меняет (REND-17). */
+  visual: EntityVisual | undefined;
   view: EntityView;
   /** Узел позиции/курса; под ним либо заглушка, либо модель. */
   readonly holder: THREE.Group;
@@ -163,6 +173,12 @@ interface InstanceRecord {
   boneControl: BoneControlState | null;
   skinApp: SkinApplication | null;
   skin: string | undefined;
+  /**
+   * Скин выбран этому инстансу поимённо — полем набора (REND-11) или сменой
+   * скина (REND-6), — а не взят из `defaultSkin` записи. Переподача манифеста
+   * выбранного не отменяет (REND-17), а невыбранному отдаёт новый умолчательный.
+   */
+  skinChosen: boolean;
   /**
    * Скин и масштаб, назначенные presentation-состоянием (REND-11): хранятся,
    * чтобы отличить «набор поменял поле» от «набор им не правит вовсе». На пути
@@ -177,19 +193,19 @@ interface InstanceRecord {
    * Поправка разворота инстанса, радианы (REND-13): курс сущности плюс она даёт
    * угол holder'а. Это ПРОТИВОПОЛОЖНОСТЬ переда модели из манифеста — чтобы
    * лицо, смотрящее под углом `f`, оказалось направлено по курсу, инстанс надо
-   * довернуть на `−f`. Конверсия градусов и смена знака сделаны один раз здесь,
-   * при создании записи, а не в кадре.
+   * довернуть на `−f`. Конверсия градусов и смена знака сделаны один раз при
+   * приёме записи, а не в кадре.
    */
-  readonly facingOffset: number;
+  facingOffset: number;
   /** Параметры наклона записи (ASSET-6): factor 0 выключает наклон. */
-  readonly tiltFactor: number;
-  readonly tiltMaxRad: number | null;
+  tiltFactor: number;
+  tiltMaxRad: number | null;
   /** Сглаженный наклон «ось × угол» (REND-10). */
   readonly tilt: TiltVector;
   /** Параметры вертикального смещения записи (ASSET-6); нули — смещения нет (REND-12). */
-  readonly jumpArcHeight: number;
-  readonly fallSpeed: number;
-  readonly fallDepth: number;
+  jumpArcHeight: number;
+  fallSpeed: number;
+  fallDepth: number;
   /**
    * Снижение при провале — presentation-состояние инстанса: в мире состояния
    * «падает» нет, есть событие (ARENA-5). Живёт до разрыва непрерывности.
@@ -207,7 +223,8 @@ interface InstanceRecord {
 export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   readonly name = 'models';
 
-  private readonly manifest: VisualManifest;
+  /** Текущий манифест визуалов (ASSET-6); переподаётся целиком (REND-17). */
+  private manifest: VisualManifest;
   private readonly options: ModelsOptions;
   private readonly warn: (message: string) => void;
   private ctx: RenderContext | null = null;
@@ -254,6 +271,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // наклон при этом не теряются, потому что инстанс тот же.
       if (entityView.skin !== record.viewSkin) {
         record.viewSkin = entityView.skin;
+        record.skinChosen = entityView.skin !== undefined;
         this.assignSkin(record, entityView.skin ?? record.visual?.defaultSkin);
       }
       if (entityView.scale !== record.viewScale) {
@@ -405,8 +423,48 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   setSkin(entity: EntityId, skin: string | undefined): boolean {
     const record = this.instances.get(entity);
     if (record === undefined) return false;
+    // Скин назван поимённо: переподача манифеста его не отменит (REND-17).
+    record.skinChosen = true;
     this.assignSkin(record, skin);
     return true;
+  }
+
+  /**
+   * Правленый манифест визуалов целиком (ED-14, ED-15, REND-17). Подсистема
+   * сводит поданное с живыми инстансами сама: пере-инициализировать её или
+   * пересобирать сцену ради правки записи не нужно.
+   *
+   * Пересобирается инстанс ровно тогда, когда изменилось то, что строится из
+   * разделяемых данных ассета (REND-3), — модель и набор её рисуемых частей;
+   * остальное записи применяется на месте, потому что пересоздание потеряло бы
+   * материалы скина (REND-6), фазу анимации и сглаженный наклон (REND-10) —
+   * ровно то, что перечисляет REND-11, запрещая пересоздание.
+   *
+   * Записи, не изменившиеся в поданном документе, наблюдаемых последствий не
+   * получают: сравниваются ЗНАЧЕНИЯ, а не ссылки, — редактор отдаёт разобранный
+   * документ, и после любой правки все объекты в нём новые.
+   */
+  applyManifest(next: VisualManifest): void {
+    if (next === this.manifest) return;
+    this.manifest = next;
+    const ctx = this.requireCtx();
+
+    for (const record of this.instances.values()) {
+      // Невизуальная сущность (резолвер отнёс её к нерисуемым) записи не имеет.
+      if (record.kind === null) continue;
+      const before = record.visual;
+      record.visual = next.entities[record.kind];
+      if (rebuildsInstance(before, record.visual)) {
+        this.rebuild(ctx, record);
+        continue;
+      }
+      this.applyEntryParams(record);
+      // Масштаб записи — нормализующая обёртка: переставляется на живом инстансе.
+      record.model?.setScale(record.visual?.scale ?? 1);
+      record.controller?.setMapping(record.visual?.animations ?? {});
+      this.syncBoneControls(record);
+      this.syncSkin(record, before);
+    }
   }
 
   /**
@@ -477,6 +535,69 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   }
 
   /**
+   * Величины записи, которые инстанс применяет покадрово: наклон (REND-10),
+   * перёд (REND-13), вертикальное смещение (REND-12). Раскладываются в точке
+   * приёма записи — при создании инстанса и при переподаче манифеста (REND-17),
+   * — а не в кадре: конверсия градусов и разрешение дефолта манифеста делаются
+   * один раз. Присваивание того же значения последствий не имеет по построению.
+   */
+  private applyEntryParams(record: InstanceRecord): void {
+    const visual = record.visual;
+    const align = resolveSurfaceAlign(this.manifest, visual);
+    record.tiltFactor = align.factor;
+    record.tiltMaxRad = align.maxAngleDeg === undefined ? null : (align.maxAngleDeg * Math.PI) / 180;
+    // Перёд записи описан как направление лица модели; поправка разворота —
+    // противоположный угол, см. `InstanceRecord.facingOffset`.
+    record.facingOffset =
+      visual?.facingDeg === undefined ? DEFAULT_FACING_RAD : -visual.facingDeg * DEG_TO_RAD;
+    record.jumpArcHeight = visual?.verticalOffset?.jumpArc ?? 0;
+    record.fallSpeed = visual?.verticalOffset?.fallSpeed ?? 0;
+    record.fallDepth = visual?.verticalOffset?.fallDepth ?? 0;
+  }
+
+  /** Параметры контроля костей записи на живом инстансе (REND-5, REND-17). */
+  private syncBoneControls(record: InstanceRecord): void {
+    const controls = record.visual?.boneControls;
+    if (controls === undefined) {
+      // Роли сняты: пустая таблица заодно вернёт костям то, что было до override.
+      record.boneControl?.setControls({});
+      return;
+    }
+    if (record.boneControl === null) record.boneControl = new BoneControlState(controls);
+    else record.boneControl.setControls(controls);
+  }
+
+  /**
+   * Скин после переподачи (REND-17): выбранный поимённо остаётся, невыбранный
+   * переезжает на `defaultSkin` новой записи. Текстуры переставляются заново
+   * только если изменились подмены самого выбранного скина — правка чужого
+   * скина этот инстанс не касается.
+   */
+  private syncSkin(record: InstanceRecord, before: EntityVisual | undefined): void {
+    const skin = record.skinChosen ? record.skin : record.visual?.defaultSkin;
+    if (skin !== record.skin) {
+      this.assignSkin(record, skin);
+      return;
+    }
+    if (record.model !== null && !sameSkinSlots(before, record.visual, skin)) {
+      this.applyInstanceSkin(record, record.model);
+    }
+  }
+
+  /**
+   * Инстанс строится заново под новую запись (REND-3, REND-17). Holder, его поза
+   * и место в сцене остаются те же: пересобирается то, что построено из
+   * разделяемых данных ассета, а не размещённый объект — его идентичность в
+   * документе (REND-11) и попадание picking'а (REND-15) переподачу переживают.
+   */
+  private rebuild(ctx: RenderContext, record: InstanceRecord): void {
+    this.detachModel(record);
+    this.applyEntryParams(record);
+    if (!record.skinChosen) record.skin = record.visual?.defaultSkin;
+    this.attachVisual(ctx, record);
+  }
+
+  /**
    * Анимация инстанса: состояние из presentation-состояния (REND-4) и клип,
    * назначенный набором инстансов поверх него (REND-11). На пути тика клип не
    * назначается никогда, и override остаётся снятым.
@@ -497,11 +618,6 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     ctx.scene.add(holder);
 
     const visual = view.kind === null ? undefined : this.manifest.entities[view.kind];
-    const align = resolveSurfaceAlign(this.manifest, visual);
-    // Перёд модели (REND-13) описан в записи как направление её лица; поправка
-    // разворота — противоположный угол, см. `InstanceRecord.facingOffset`.
-    const facingOffset =
-      visual?.facingDeg === undefined ? DEFAULT_FACING_RAD : -visual.facingDeg * DEG_TO_RAD;
     const record: InstanceRecord = {
       entity: view.id,
       kind: view.kind,
@@ -514,45 +630,57 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       boneControl: null,
       skinApp: null,
       skin: view.skin ?? visual?.defaultSkin,
+      skinChosen: view.skin !== undefined,
       viewSkin: view.skin,
       viewScale: view.scale,
-      facingOffset,
-      yaw: view.facingYaw + facingOffset,
+      facingOffset: DEFAULT_FACING_RAD,
+      yaw: 0,
       snapPending: true,
-      tiltFactor: align.factor,
-      tiltMaxRad: align.maxAngleDeg === undefined ? null : (align.maxAngleDeg * Math.PI) / 180,
+      tiltFactor: 0,
+      tiltMaxRad: null,
       tilt: { x: 0, y: 0 },
-      jumpArcHeight: visual?.verticalOffset?.jumpArc ?? 0,
-      fallSpeed: visual?.verticalOffset?.fallSpeed ?? 0,
-      fallDepth: visual?.verticalOffset?.fallDepth ?? 0,
+      jumpArcHeight: 0,
+      fallSpeed: 0,
+      fallDepth: 0,
       falling: false,
       fallOffset: 0,
       posed: false,
     };
+    this.applyEntryParams(record);
+    record.yaw = view.facingYaw + record.facingOffset;
 
-    if (view.kind === null) {
-      // Резолвер явно отнёс сущность к невизуальным — не рисуем и не шумим.
-      return record;
-    }
+    this.attachVisual(ctx, record);
+    return record;
+  }
+
+  /**
+   * Заглушка и модель записи для инстанса, у которого их ещё (или уже) нет:
+   * общая часть создания инстанса и его пересборки под новой записью (REND-17).
+   */
+  private attachVisual(ctx: RenderContext, record: InstanceRecord): void {
+    const kind = record.kind;
+    // Резолвер явно отнёс сущность к невизуальным — не рисуем и не шумим.
+    if (kind === null) return;
+
+    const visual = record.visual;
     if (visual === undefined) {
       // Сущность без записи в манифесте: заглушка и предупреждение один раз (ASSET-6).
-      if (!this.warnedKinds.has(view.kind)) {
-        this.warnedKinds.add(view.kind);
-        this.warn(`render: для типа "${view.kind}" нет записи в манифесте визуалов — заглушка (ASSET-6)`);
+      if (!this.warnedKinds.has(kind)) {
+        this.warnedKinds.add(kind);
+        this.warn(`render: для типа "${kind}" нет записи в манифесте визуалов — заглушка (ASSET-6)`);
       }
-      record.placeholder = this.makePlaceholder(holder);
-      return record;
+      record.placeholder = this.makePlaceholder(record.holder);
+      return;
     }
 
     // Модель грузится асинхронно; до готовности — заглушка (ASSET-4).
-    record.placeholder = this.makePlaceholder(holder);
+    record.placeholder = this.makePlaceholder(record.holder);
     const entry = this.ensureShared(ctx, visual.model);
     if (entry.data !== null) {
       this.attachModel(record, entry.data);
     } else if (entry.failed === null) {
       entry.waiting.add(record);
     }
-    return record;
   }
 
   private makePlaceholder(holder: THREE.Group): THREE.Mesh {
@@ -640,10 +768,27 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
   private remove(ctx: RenderContext, record: InstanceRecord): void {
     ctx.scene.remove(record.holder);
+    this.detachModel(record);
+  }
+
+  /**
+   * Снимает с инстанса всё построенное из данных ассета — заглушку, модель,
+   * анимационный контроллер, контроль костей и текстуры скина, — оставляя сам
+   * holder. Общая часть удаления инстанса и его пересборки под новой записью
+   * (REND-17); разделяемые данные ассета остаются в кэше (REND-3).
+   */
+  private detachModel(record: InstanceRecord): void {
+    for (const entry of this.shared.values()) entry.waiting.delete(record);
     this.disposePlaceholder(record);
     record.skinApp?.dispose();
-    record.model?.dispose();
-    for (const entry of this.shared.values()) entry.waiting.delete(record);
+    record.skinApp = null;
+    record.controller = null;
+    record.boneControl = null;
+    if (record.model !== null) {
+      record.model.root.removeFromParent();
+      record.model.dispose();
+      record.model = null;
+    }
   }
 
   private disposePlaceholder(record: InstanceRecord): void {
@@ -653,4 +798,47 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     (record.placeholder.material as THREE.Material).dispose();
     record.placeholder = null;
   }
+}
+
+/**
+ * Пересобирать ли инстанс под переподанной записью (REND-17). Граница проходит
+ * по тому, что построено из разделяемых данных ассета (REND-3): другую модель и
+ * другой набор её рисуемых частей правкой построенного не получить, а всё
+ * прочее записи применяется на живом инстансе.
+ */
+function rebuildsInstance(
+  before: EntityVisual | undefined,
+  after: EntityVisual | undefined,
+): boolean {
+  if (before === after) return false;
+  if (before?.model !== after?.model) return true;
+  return !samePartSets(before?.hiddenParts, after?.hiddenParts);
+}
+
+/** Один и тот же набор скрытых частей (ASSET-6); порядок и отсутствие — не различия. */
+function samePartSets(before?: readonly number[], after?: readonly number[]): boolean {
+  if (before === after) return true;
+  const a = before ?? [];
+  const b = after ?? [];
+  return a.length === b.length && a.every((part) => b.includes(part));
+}
+
+/**
+ * Совпадают ли подмены выбранного скина в двух записях (REND-6). Сравнивается
+ * ровно выбранный скин: правка соседнего скина той же записи текстур этого
+ * инстанса не меняет и переставлять их не повод (REND-17).
+ */
+function sameSkinSlots(
+  before: EntityVisual | undefined,
+  after: EntityVisual | undefined,
+  skin: string | undefined,
+): boolean {
+  // Скина нет — подмен нет ни до, ни после: слоты модели идут как есть.
+  if (skin === undefined) return true;
+  const a = before?.skins?.[skin];
+  const b = after?.skins?.[skin];
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  const slots = Object.keys(a);
+  return slots.length === Object.keys(b).length && slots.every((slot) => a[slot] === b[slot]);
 }

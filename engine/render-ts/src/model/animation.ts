@@ -79,7 +79,8 @@ const DEFAULT_DEATH_EVENT = 'EntityDied';
 export class AnimationController {
   private readonly mixer: THREE.AnimationMixer;
   private readonly clips: readonly THREE.AnimationClip[];
-  private readonly mapping: AnimationMapping;
+  /** Таблицы манифеста; переподаваемы вместе с ним (REND-17). */
+  private mapping: AnimationMapping;
   private readonly crossfade: number;
   private readonly deathEvent: string;
   private readonly warn: (message: string) => void;
@@ -154,6 +155,30 @@ export class AnimationController {
     this.override = entry;
     if (this.dead || this.oneShot !== null) return;
     this.resumeLoop();
+  }
+
+  /**
+   * Таблицы правленого манифеста поверх живого контроллера (REND-17): фаза
+   * клипа и назначенный набором клип (REND-11) переживают подмену.
+   *
+   * Клип переигрывается ТОЛЬКО если сменилась запись, которая играла бы сейчас:
+   * редактор отдаёт манифест на каждую правку, включая правку клипа состояния,
+   * в котором инстанс не находится, и безусловное `resumeLoop` сбрасывало бы
+   * фазу анимации на ровном месте. Дедупликация предупреждений идёт по самой
+   * записи и не сбрасывается — та же строка второй раз консоль не топит (REND-4).
+   */
+  setMapping(mapping: AnimationMapping): void {
+    const before = this.playingEntry();
+    this.mapping = mapping;
+    if (this.dead || this.oneShot !== null) return;
+    if (this.playingEntry() === before) return;
+    this.resumeLoop();
+  }
+
+  /** Запись манифеста, звучащая сейчас: назначенный клип бьёт состояние (REND-11). */
+  private playingEntry(): string | undefined {
+    if (this.override !== undefined) return this.override;
+    return this.state === null ? undefined : this.mapping.states?.[this.state];
   }
 
   /**

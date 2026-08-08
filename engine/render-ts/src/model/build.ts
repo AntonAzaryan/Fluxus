@@ -260,6 +260,13 @@ export interface ModelInstance {
    * «какого размера нарисованный инстанс».
    */
   readonly bounds: ModelBounds;
+  /**
+   * Переставляет множитель масштаба записи манифеста (ASSET-6) у уже
+   * построенного инстанса и пересчитывает `bounds` тем же множителем (REND-17).
+   * Масштаб — нормализующая обёртка поверх скининга, а не часть построенного из
+   * разделяемых данных: строить инстанс заново ради него незачем.
+   */
+  setScale(scale: number): void;
   /** Убирает пер-инстансные ресурсы; разделяемая геометрия остаётся в кэше (REND-3). */
   dispose(): void;
 }
@@ -383,19 +390,23 @@ export function createModelInstance(
   // пространстве (порядок как в прототипе). Модель стоит на своём origin —
   // смещения по z нет (нормализованная высота считается от него).
   const height = Math.max(shared.model.height, 1e-3);
-  const normalized = (options.scale ?? 1) / height;
-  body.scale.setScalar(normalized);
   // Габариты инстанса — те же канонические границы под тем же множителем:
   // одно число, а не два похожих (REND-15).
   const canonical = modelBounds(shared.model, options.hiddenParts);
-  const bounds: ModelBounds = {
-    minX: canonical.minX * normalized,
-    minY: canonical.minY * normalized,
-    minZ: canonical.minZ * normalized,
-    maxX: canonical.maxX * normalized,
-    maxY: canonical.maxY * normalized,
-    maxZ: canonical.maxZ * normalized,
+  const bounds: ModelBounds = { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+  // Постановка масштаба и пересчёт габаритов — одна операция, потому что второй
+  // ответ на вопрос «какого размера нарисованный инстанс» разошёлся бы с первым.
+  const setScale = (scale: number): void => {
+    const normalized = scale / height;
+    body.scale.setScalar(normalized);
+    bounds.minX = canonical.minX * normalized;
+    bounds.minY = canonical.minY * normalized;
+    bounds.minZ = canonical.minZ * normalized;
+    bounds.maxX = canonical.maxX * normalized;
+    bounds.maxY = canonical.maxY * normalized;
+    bounds.maxZ = canonical.maxZ * normalized;
   };
+  setScale(options.scale ?? 1);
 
   const root = new THREE.Group();
   root.add(body);
@@ -411,6 +422,7 @@ export function createModelInstance(
     materials,
     textureTargets,
     bounds,
+    setScale,
     dispose(): void {
       mixer.stopAllAction();
       mixer.uncacheRoot(root);

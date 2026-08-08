@@ -50,6 +50,8 @@ export interface BoneControlDef {
 }
 
 interface RoleState {
+  /** Кость, к которой роль привязана сейчас: переподача манифеста её меняет (REND-17). */
+  bone: string;
   yaw: number;
   warned: boolean;
   /** Что мы записали в кость в прошлом кадре и что там было до override. */
@@ -69,9 +71,33 @@ export interface BoneLookup {
 export class BoneControlState {
   private readonly roles = new Map<string, RoleState>();
   private readonly quat = new THREE.Quaternion();
-  private readonly controls: Readonly<Record<string, BoneControlDef>>;
+  /** Параметры ролей; переподаваемы вместе с манифестом (REND-17). */
+  private controls: Readonly<Record<string, BoneControlDef>>;
+  /**
+   * Роли, оставившие свой override на кости, которой больше не управляют, —
+   * снятая роль и роль, переехавшая на другую кость. Откат делается в `apply`,
+   * где есть доступ к скелету инстанса, а не здесь.
+   */
+  private readonly abandoned: RoleState[] = [];
 
   constructor(controls: Readonly<Record<string, BoneControlDef>>) {
+    this.controls = controls;
+  }
+
+  /**
+   * Параметры ролей правленого манифеста (REND-17). Роль, оставшаяся на своей
+   * кости, сохраняет накопленный сглаженный доворот: лимит и скорость читаются
+   * покадрово, и менять из-за них состояние не за что. Роль, переехавшая на
+   * другую кость, начинается заново вместе со своим однократным предупреждением
+   * (REND-5) — это другая кость, и молчать о её отсутствии нельзя.
+   */
+  setControls(controls: Readonly<Record<string, BoneControlDef>>): void {
+    for (const [role, state] of this.roles) {
+      const next = controls[role];
+      if (next !== undefined && next.bone === state.bone) continue;
+      this.roles.delete(role);
+      this.abandoned.push(state);
+    }
     this.controls = controls;
   }
 
@@ -87,10 +113,18 @@ export class BoneControlState {
     dt: number,
     warn: (message: string) => void = (message) => console.warn(message),
   ): void {
+    this.releaseAbandoned(instance);
+
     for (const [role, def] of Object.entries(this.controls)) {
       let state = this.roles.get(role);
       if (state === undefined) {
-        state = { yaw: 0, warned: false, lastWritten: null, preOverride: new THREE.Quaternion() };
+        state = {
+          bone: def.bone,
+          yaw: 0,
+          warned: false,
+          lastWritten: null,
+          preOverride: new THREE.Quaternion(),
+        };
         this.roles.set(role, state);
       }
 
@@ -119,5 +153,21 @@ export class BoneControlState {
       if (state.lastWritten === null) state.lastWritten = new THREE.Quaternion();
       state.lastWritten.copy(bone.quaternion);
     }
+  }
+
+  /**
+   * Возврат костей, которыми роль больше не управляет, к значению до override.
+   * Без этого доворот, записанный до переподачи, остался бы в кости навсегда —
+   * клип перепишет её только если у него есть на неё трек.
+   */
+  private releaseAbandoned(instance: BoneLookup): void {
+    if (this.abandoned.length === 0) return;
+    for (const state of this.abandoned) {
+      const bone = instance.bonesByName.get(state.bone);
+      if (bone !== undefined && state.lastWritten !== null && bone.quaternion.equals(state.lastWritten)) {
+        bone.quaternion.copy(state.preOverride);
+      }
+    }
+    this.abandoned.length = 0;
   }
 }

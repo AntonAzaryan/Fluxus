@@ -83,7 +83,7 @@ export {
 } from './subsystems/terrain.js';
 export type { CellRect, TerrainGeometryData, TerrainOptions } from './subsystems/terrain.js';
 
-// Подсистема моделей (REND-3..6).
+// Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).
 export { ModelsSubsystem } from './subsystems/models.js';
 export type { ModelsOptions } from './subsystems/models.js';
 
