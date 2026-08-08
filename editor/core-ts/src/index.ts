@@ -14,6 +14,7 @@
  * имён здесь нет намеренно — второй перечень расходится с первым.
  */
 export * from './document/index.js';
+export * from './dsl/index.js';
 export * from './operations/index.js';
 export * from './registry/index.js';
 export * from './i18n/index.js';
