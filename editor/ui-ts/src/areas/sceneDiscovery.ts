@@ -83,17 +83,26 @@ function isObject(value: JsonValue): value is Record<string, JsonValue> {
 }
 
 /**
- * Конфиг сцены (SER-7): у него есть террейн и перечень prefab'ов. Ни того, ни
- * другого нет у манифеста визуалов, поле `terrain` у которого несёт карту
- * кривизны, а не сетку, — поэтому различает их именно `prefabs`.
+ * Конфиг сцены (SER-7). Спрашивается единственное поле, которое формат требует
+ * всегда, — перечень схем компонентов: его порядок задаёт битовые id и потому
+ * является частью формата, и сцены без него не бывает.
+ *
+ * Ни террейна, ни prefab'ов сцена иметь не обязана — оба поля необязательны, —
+ * и требовать их значило бы завести в редакторе своё требование к документу
+ * поверх SER-7: арена без рельефа и сцена, чьи сущности спавнит рантайм, просто
+ * не нашлись бы, и не нашлись бы молча.
  */
 function looksLikeScene(value: JsonValue): boolean {
-  return isObject(value) && isObject(value.terrain ?? null) && Array.isArray(value.prefabs);
+  return isObject(value) && Array.isArray(value.components);
 }
 
-/** Манифест визуалов (ASSET-6): словарь записей по визуальному типу. */
+/**
+ * Манифест визуалов (ASSET-6): словарь записей по визуальному типу. Схем
+ * компонентов у него нет — тем же полем он от конфига сцены и отличается, и
+ * второго признака различения не заводится.
+ */
 function looksLikeManifest(value: JsonValue): boolean {
-  return isObject(value) && isObject(value.entities ?? null) && !Array.isArray(value.prefabs);
+  return isObject(value) && isObject(value.entities ?? null) && !Array.isArray(value.components);
 }
 
 /**

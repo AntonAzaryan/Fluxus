@@ -33,6 +33,25 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+/**
+ * Сборка приложения лежит вне библиотеки (`app/`) и доменные имена называет по
+ * определению: она и решает, ЧТО открывать и какие документы держать вместе
+ * (ED-19, ED-21). Каркасом она при этом не является — ED-25 перечисляет каркас
+ * поимённо, и сборки в этом перечне нет.
+ *
+ * Чтобы «вынесли из-под сканера» не стало способом обойти его, состав `app/`
+ * назван здесь пофайлово и с причиной. Файл, появившийся там незаявленным,
+ * красит проверку — и разговор о том, каркас это или сборка, случается при его
+ * появлении, а не при следующем чтении кода.
+ */
+const APP_FILES: Readonly<Record<string, string>> = {
+  'assembly.ts': 'сборка редактора: реестры вкладов, открытый проект, группы записи',
+  'contentEndpoint.ts': 'серверная половина веб-хоста среды (ED-12)',
+  'index.html': 'страница приложения',
+  'main.ts': 'точка входа веб-среды: хост, заголовок вкладки, монтирование',
+  'vite.config.ts': 'конфиг сборки приложения',
+};
+
 /** Тот же список, что у headless-каркаса: одно требование — одно понятие. */
 const DOMAIN_WORDS = [
   'terrain',
@@ -69,6 +88,7 @@ const EXCEPTIONS: Readonly<Record<string, string>> = {
 };
 
 const SRC = fileURLToPath(new URL('../src/', import.meta.url));
+const APP = fileURLToPath(new URL('../app/', import.meta.url));
 
 function sourceFiles(directory: string): string[] {
   const found: string[] = [];
@@ -151,6 +171,22 @@ describe('ED-25: каркас интерфейса без доменных им�
         Object.keys(EXCEPTIONS).some((excluded) => relative.startsWith(excluded)),
         relative,
       ).toBe(false);
+    }
+  });
+
+  it('вне библиотеки лежит только заявленное: сборка, а не вынесенный каркас', () => {
+    // Сканер смотрит в `src/`, и «перенести файл в app/» не должно быть
+    // способом выйти из-под него. Состав каталога поэтому назван поимённо.
+    expect(readdirSync(APP).sort()).toEqual(Object.keys(APP_FILES).sort());
+  });
+
+  it('каркас в сборку не переехал: его модули по-прежнему в библиотеке', () => {
+    // Утверждение о том, ГДЕ живёт каркас, а не только о том, что в нём нет
+    // доменных имён: пустой `src/frame/` сделал бы сканер зелёным ни о чём.
+    const frame = files.filter((file) => file.slice(SRC.length).startsWith('frame/'));
+    expect(frame.length).toBeGreaterThan(5);
+    for (const name of ['frame/frame.ts', 'frame/rail.ts', 'frame/skeleton.ts', 'frame/topBar.ts']) {
+      expect(files.map((file) => file.slice(SRC.length)), name).toContain(name);
     }
   });
 

@@ -44,6 +44,7 @@ export type { MountedFrame, MountOptions } from './mount.js';
  * Режим и прогон (ED-9, ED-26) — типы, а не реализация: собрать прогон умеет
  * вклад, чьи документы прогоняются, а каркас только спрашивает и переключает.
  */
+export { PREVIEW_SUSPENSION_REASON } from './preview.js';
 export type { EditorMode, PreviewRun, PreviewSource } from './preview.js';
 /**
  * Сведение просьб перерисовать наружу не выходит: им пользуется отрисовка

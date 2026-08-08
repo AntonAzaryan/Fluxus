@@ -22,7 +22,7 @@ import { collectTexts, findAll } from '../src/dom/node.js';
 import { SHELL_COMMANDS } from '../src/palette/commands.js';
 import { SCENE_AREA_ID, type SceneAreaState } from '../src/areas/scene.js';
 import { discoverProject } from '../src/areas/sceneDiscovery.js';
-import { attr } from './support/frame.js';
+import { attr, zoneOf } from './support/frame.js';
 import { FIXTURE_CURVATURE, FIXTURE_SCENE, settle } from './support/project.js';
 import type { WorkspaceFrame } from '../src/frame/frame.js';
 
@@ -100,6 +100,24 @@ describe('ED-12: проект ищется в дереве, а не берётс
     // Карта кривизны названа манифестом (ASSET-7), а не найдена обходом:
     // документ, на который ссылается открытый, редактор берёт по ссылке.
     expect(state.project?.curvatureId).toBe(CURVATURE);
+  });
+
+  it('сцена без террейна и без prefab-ов — такая же сцена', async () => {
+    // Оба поля SER-7 объявляет необязательными: арена без рельефа и сцена, чьи
+    // сущности спавнит рантайм, — законные документы. Не найти их значило бы
+    // завести в редакторе своё требование к формату, причём молча.
+    const bare = { components: [{ name: 'Position', fields: { x: 'fixed' } }] };
+    const host = createMemoryHost({
+      name: 'bare',
+      root: { label: 'дерево без рельефа' },
+      files: {
+        'levels/flat.json': JSON.stringify(bare),
+        [VISUALS]: JSON.stringify(MANIFEST),
+      },
+    });
+    const found = await discoverProject(host);
+    expect(found.failure).toBeNull();
+    expect(found.scenes).toEqual([{ config: 'levels/flat.json', visuals: VISUALS }]);
   });
 
   it('дерево без сцены — пустой проект без причины: искать было чем', async () => {
@@ -211,6 +229,13 @@ describe('ED-21: сохранение трогает только докумен
     expect(
       collectTexts(app.frame.view()).some((text) => text.value === notice?.value),
     ).toBe(true);
+    // Строка отказа — про действие, а само нарушение остаётся видимым состоянием
+    // документов (ED-8): она погаснет от следующей правки, отчёт валидации — нет.
+    const marked = findAll(
+      zoneOf(app.frame.view(), 'navigator'),
+      (node) => attr(node, 'data-severity') === 'error',
+    );
+    expect(marked.length).toBeGreaterThan(0);
   });
 
   it('правка гасит прежнюю причину, а следующее сохранение проходит', async () => {

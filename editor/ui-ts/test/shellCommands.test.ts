@@ -89,6 +89,32 @@ describe('ED-24: команды оболочки приходят в палит�
     }
   });
 
+  it('подпись и описание каждой команды разрешаются в ОБЕИХ локалях (ED-27)', () => {
+    // Локали равноправны, и команда, чья подпись объявлена только в одной из
+    // них, показала бы автору голый ключ ресурса. Спрашиваются оба ключа:
+    // подпись видит автор, описание — он же в палитре и машинный потребитель
+    // каталога (ED-30).
+    const registry = new ContributionRegistry<PaletteCommand>({
+      kind: 'command',
+      claimName: 'сочетание клавиш',
+      claimOf: (command) => command.keybinding,
+    });
+    registerShellCommands(registry, {
+      resources: uiResources('ru'),
+      areas: { all: () => [systemsArea] },
+      open: () => undefined,
+      save: () => undefined,
+    });
+    expect(registry.all().length).toBeGreaterThan(5);
+    for (const locale of ['ru', 'en']) {
+      const resources = uiResources(locale);
+      for (const command of registry.all()) {
+        expect(resources.lookup(command.labelKey), `${command.id} @ ${locale}`).toBeDefined();
+        expect(resources.lookup(command.descriptionKey), `${command.id} @ ${locale}`).toBeDefined();
+      }
+    }
+  });
+
   it('команда перехода заводится на КАЖДУЮ область — и на ту, которой ещё нет', () => {
     // Новая область в палитре появляется регистрацией вклада, а не правкой
     // списка команд (ED-25).

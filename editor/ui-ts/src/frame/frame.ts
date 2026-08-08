@@ -34,11 +34,13 @@ import {
   buildEditorCatalog,
   catalogDescriptions,
   describeOperations,
+  type AuthoringSuspension,
   type Contribution,
   type ContributionKind,
   type ContributionReader,
   type EditorCatalog,
   type EditorSession,
+  type SessionEventKind,
   type StringResources,
   type ValidationRuleContribution,
   type ViewportToolContribution,
@@ -65,7 +67,12 @@ import {
   sameBinding,
   type KeyStroke,
 } from './keys.js';
-import type { EditorMode, PreviewRun, PreviewSource } from './preview.js';
+import {
+  PREVIEW_SUSPENSION_REASON,
+  type EditorMode,
+  type PreviewRun,
+  type PreviewSource,
+} from './preview.js';
 import { RAIL_ROVING_ID, areaRail } from './rail.js';
 import { createSelectionModel, type SelectionModel } from './selection.js';
 import { areaSkeleton } from './skeleton.js';
@@ -149,6 +156,23 @@ export interface WorkspaceFrame {
   view(): UiNode;
   subscribe(listener: () => void): () => void;
 }
+
+/**
+ * События сессии, после которых причина прежнего отказа перестаёт быть
+ * утверждением о настоящем: значения документов изменились.
+ *
+ * Перечислены именно они, а не «любое событие»: открытие документа, отметка о
+ * сохранении и приостановка авторинга (ED-9) значений не меняют, и гасить
+ * причину ими значило бы убирать её с глаз событием, к ней не относящимся, —
+ * вход в превью стирал бы отказ, который всё ещё верен (ED-8).
+ */
+const EDITING_EVENTS: ReadonlySet<SessionEventKind> = new Set<SessionEventKind>([
+  'applied',
+  'extended',
+  'undone',
+  'redone',
+  'cancelled',
+]);
 
 /** Пустой реестр: сборка, не принёсшая своего, каталогу его и отдаёт. */
 function emptyReader<T extends Contribution>(kind: ContributionKind): ContributionReader<T> {
@@ -236,6 +260,12 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
   let focusRequest: string | undefined;
   let mode: EditorMode = 'edit';
   let run: PreviewRun | null = null;
+  /**
+   * Право снять приостановку авторинга идущего прогона (ED-9). Лежит рядом с
+   * самим прогоном, потому что живёт ровно столько же: снять её может только
+   * тот, кто взял, и второго места, где помнят «мы в превью», не заводится.
+   */
+  let suspension: AuthoringSuspension | null = null;
   let previewFailure: string | null = null;
   let notice: UiText | null = null;
 
@@ -258,13 +288,15 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
   selection.subscribe(notify);
   // Документ изменился — страница перерисовывается, кто бы его ни изменил.
   // Операции исполнимы и без интерфейса (ED-29), и правка, пришедшая оттуда,
-  // обязана быть видна так же, как своя.
+  // обязана быть видна так же, как своя. Перерисовка идёт на всякое событие
+  // сессии: недоступность отмены и повтора она объявляет тоже (ED-26).
   //
-  // Заодно гаснет причина прежнего отказа: она была утверждением о том
-  // состоянии документов, которого уже нет, и оставленная на виду отправила бы
-  // автора чинить починенное (ED-8).
-  session.subscribe(() => {
-    notice = null;
+  // Причина прежнего отказа гаснет только от правки документов: она была
+  // утверждением о том их состоянии, которого уже нет, и оставленная на виду
+  // отправила бы автора чинить починенное (ED-8). Перечень таких событий — в
+  // `EDITING_EVENTS`.
+  session.subscribe((event) => {
+    if (EDITING_EVENTS.has(event.kind)) notice = null;
     notify();
   });
 
@@ -384,18 +416,22 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
         results: searchResults(),
         target: frame,
         areaId: activeId,
-        mode,
       }),
     // Пока идёт взаимодействие (перетаскивание, мазок кисти), сессия отменять
     // отказывается — записи, которую отменять, ещё нет (ED-18). Отказ этот
     // виден как недоступность, а не как исключение из обработчика клавиатуры:
     // недоступное показано недоступным (ED-26), и путь клавиши тот же, что путь
-    // кнопки бара, — иначе Ctrl+Z посреди мазка ронял бы разбор нажатия.
+    // кнопки бара, — иначе Ctrl+Z посреди мазка ронял бы разбор нажатия. Само
+    // взаимодействие в ответ сессии не входит намеренно: оно принадлежит
+    // каркасу, он его и ведёт.
     //
-    // В превью отмена и повтор недоступны по той же причине, по какой недоступны
-    // инструменты: это операции авторинга, а ED-9 запрещает их на время прогона.
-    canUndo: () => mode === 'edit' && !session.pending && session.canUndo(),
-    canRedo: () => mode === 'edit' && !session.pending && session.canRedo(),
+    // В превью отмена и повтор недоступны потому, что их отклонит сессия:
+    // приостановка авторинга (ED-9) — её состояние, и `canUndo` уже его
+    // учитывает. Спрашивается поэтому она, а не режим: режим остаётся
+    // индикацией для автора (ED-26), а не вторым правилом о доступности,
+    // которое кто-то держал бы в согласии с первым руками.
+    canUndo: () => !session.pending && session.canUndo(),
+    canRedo: () => !session.pending && session.canRedo(),
     undo() {
       if (frame.canUndo() && session.undo()) notify();
     },
@@ -420,14 +456,22 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
       }
       const source = previewSource();
       if (source === null) return;
+      // Авторинг приостанавливается ДО запуска (ED-9): `start` зовёт вход
+      // вклада, и к этому моменту незакрытое взаимодействие обязано быть уже
+      // снято — снимает его сама приостановка, а не вспомнивший о нём вклад.
+      const taken = session.suspendAuthoring(PREVIEW_SUSPENSION_REASON);
       try {
         // Режим ставится ПОСЛЕ удавшегося запуска: прогон, не начавшийся из-за
         // сломанного документа, оставляет автора в правке с названной причиной,
         // а не в превью без прогона (ED-8).
         run = source.start();
+        suspension = taken;
         previewFailure = null;
         mode = 'preview';
       } catch (error) {
+        // Не начавшийся прогон запрета за собой не оставляет: иначе автор
+        // остался бы в правке, где править нечем и отменить нечего.
+        taken.resume();
         previewFailure = reasonOf(error);
       }
       notify();
@@ -435,16 +479,23 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
     stopPreview() {
       const current = run;
       if (current === null) return;
+      const taken = suspension;
       // Режим гасится ДО остановки: вклад, возвращающий вьюпорт документам,
       // спрашивает у каркаса режим, и «ещё превью» на выходе означало бы, что
       // он подаст документы в чужой продюсер.
       run = null;
+      suspension = null;
       mode = 'edit';
       try {
         current.stop();
         previewFailure = null;
       } catch (error) {
         previewFailure = reasonOf(error);
+      } finally {
+        // Снятие — в `finally`, по тому же основанию, по которому вклад в
+        // `finally` возвращает вьюпорт документам: сорвавшийся снос прогона не
+        // имеет права оставить авторинг запертым до конца сеанса (ED-9, ED-18).
+        taken?.resume();
       }
       notify();
     },
@@ -489,7 +540,7 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
         // Недоступная команда нажатие всё равно забирает: показана она
         // недоступной (ED-26), и отдать её сочетание области значило бы, что
         // одна клавиша делает разное в зависимости от состояния документов.
-        if (commandEnabled(command, mode, frame)) command.run(frame);
+        if (commandEnabled(command, frame)) command.run(frame);
         return true;
       }
       // Сквозное разбирается раньше вкладов сознательно: сочетание отмены

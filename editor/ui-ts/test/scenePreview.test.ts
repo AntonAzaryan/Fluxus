@@ -16,8 +16,10 @@
  * «в превью взрыв выбивает пол… после выхода документы в том же состоянии».
  */
 import { FLOOR_COMPONENT, world, type EntityId } from '@game-mvp/core';
+import { AuthoringSuspendedError } from '@game-mvp/editor-core';
 import { describe, expect, it } from 'vitest';
-import { findAll, type UiNode } from '../src/dom/node.js';
+import { documentValue, findAll, type UiNode } from '../src/dom/node.js';
+import { PREVIEW_SUSPENSION_REASON } from '../src/frame/preview.js';
 import { createSceneArea } from '../src/areas/scene.js';
 import { systemsArea } from '../src/areas/systems.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
@@ -221,21 +223,120 @@ describe('ED-9, REND-14: выход возвращает вьюпорту док
     expect(fixture.stage.reapplied.at(-1)).toBe(true);
   });
 
-  it('правка, сделанная во время прогона, доезжает выходом из него', async () => {
-    // Правка приходит не из интерфейса (ED-29) — инструменты в превью
-    // недоступны, — но дойти до кадра она обязана: терять её нельзя.
+  it('правка во время прогона отклоняется сессией, а не откладывается на выход', async () => {
+    // «Превью MUST NOT записывать что-либо в документы» (ED-9) держится
+    // структурно: правку отклоняет сессия, а не недоступность кнопки (ED-26).
+    // Проверяется тем путём, которого недоступность вообще не касается, —
+    // вызовом операции мимо интерфейса (ED-29).
     const fixture = await buildLoadedFrame();
+    const before = fixture.session.documentValue(FIXTURE_IDS.config);
     fixture.frame.togglePreview();
-    fixture.session.applyOperation('document.setValue', {
-      document: FIXTURE_IDS.config,
-      path: ['prefabs', 0, 'components', 'Position', 'x'],
-      value: 262144,
-    });
+    expect(fixture.session.authoringSuspended).toBe(true);
+    expect(fixture.session.suspensionReasons()).toEqual([PREVIEW_SUSPENSION_REASON]);
+
+    expect(() =>
+      fixture.session.applyOperation('document.setValue', {
+        document: FIXTURE_IDS.config,
+        path: ['prefabs', 0, 'components', 'Position', 'x'],
+        value: 262144,
+      }),
+    ).toThrow(AuthoringSuspendedError);
+    // Полуправки отказ не оставляет: значение то же самое, а не равное ему.
+    expect(fixture.session.documentValue(FIXTURE_IDS.config)).toBe(before);
+
     await settle();
     fixture.frame.togglePreview();
-
+    // Выход снимает запрет и возвращает вьюпорту документы переподачей (REND-14).
+    expect(fixture.session.authoringSuspended).toBe(false);
     expect(fixture.stage.reapplied.at(-1)).toBe(true);
-    expect(fixture.stage.last?.placements[0]?.x).toBeCloseTo(4, 6);
+  });
+
+  it('запрет снимается и тогда, когда снос прогона сорвался', async () => {
+    // Иначе сорвавшийся `dispose` запирал бы авторинг до конца сеанса: снять
+    // приостановку может только тот, кто её взял (ED-9), а он — этот выход.
+    const fixture = await buildLoadedFrame();
+    fixture.frame.togglePreview();
+    fixture.preview.failDispose = true;
+    fixture.frame.togglePreview();
+
+    expect(fixture.frame.previewFailure()).not.toBeNull();
+    expect(fixture.session.authoringSuspended).toBe(false);
+    expect(fixture.frame.canUndo()).toBe(fixture.session.canUndo());
+  });
+
+  it('не начавшийся прогон запрета за собой не оставляет', async () => {
+    // Прогон, сорвавшийся на запуске, оставляет автора в правке с названной
+    // причиной (ED-8) — а значит и с работающей правкой: приостановка,
+    // пережившая неудавшийся запуск, заперла бы авторинг без единого признака
+    // на экране, и снять её было бы уже нечем.
+    const fixture = await buildLoadedFrame();
+    // Сетка, которую ядро отвергнет на загрузке (SER-7, TERR-2).
+    fixture.session.applyOperation('document.setValue', {
+      document: FIXTURE_IDS.config,
+      path: ['terrain', 'levels', 0],
+      value: '11',
+    });
+    await settle();
+
+    fixture.frame.togglePreview();
+    expect(fixture.frame.mode()).toBe('edit');
+    expect(fixture.frame.previewFailure()).not.toBeNull();
+    expect(fixture.session.authoringSuspended).toBe(false);
+    // Отменить правку, которая прогон и сорвала, автор может тут же.
+    expect(fixture.frame.canUndo()).toBe(true);
+    fixture.frame.undo();
+    expect(fixture.frame.canPreview()).toBe(true);
+  });
+});
+
+describe('ED-9, ED-26: доступность и отказ — одно правило, а не два', () => {
+  it('отмена недоступна, потому что её отклоняет сессия, а не потому что режим', async () => {
+    const fixture = await buildLoadedFrame();
+    editSystem(fixture);
+    expect(fixture.frame.canUndo()).toBe(true);
+
+    fixture.frame.togglePreview();
+    // Один и тот же ответ: каркас не выводит доступность из своего режима, он
+    // спрашивает того, кто откажет (ED-9).
+    expect(fixture.session.canUndo()).toBe(false);
+    expect(fixture.frame.canUndo()).toBe(false);
+    expect(fixture.frame.canRedo()).toBe(fixture.session.canRedo());
+
+    fixture.frame.togglePreview();
+    expect(fixture.frame.canUndo()).toBe(true);
+    expect(fixture.session.canUndo()).toBe(true);
+  });
+
+  it('причина отказа переживает прогон: он документов не менял', async () => {
+    // Причина гаснет от правки документов — она была утверждением об их
+    // состоянии (ED-8). Вход в прогон и выход из него значений не меняют, и
+    // погасить её ими значило бы убрать с глаз отказ, который всё ещё верен.
+    const fixture = await buildLoadedFrame();
+    fixture.frame.setNotice(documentValue('сохранение отказано'));
+
+    fixture.frame.togglePreview();
+    expect(fixture.frame.notice()?.value).toBe('сохранение отказано');
+    fixture.frame.togglePreview();
+    expect(fixture.frame.notice()?.value).toBe('сохранение отказано');
+
+    editSystem(fixture);
+    expect(fixture.frame.notice()).toBeNull();
+  });
+
+  it('чужая приостановка гасит отмену так же, как прогон', async () => {
+    // Приостановку берёт не только превью (ED-9): её вправе взять любой, кому
+    // нельзя дать править посреди работы. Каркас об этом не знает и знать не
+    // должен — он спрашивает сессию.
+    const fixture = await buildLoadedFrame();
+    editSystem(fixture);
+    const held = fixture.session.suspendAuthoring('импорт');
+
+    expect(fixture.frame.mode()).toBe('edit');
+    expect(fixture.frame.canUndo()).toBe(false);
+    expect(disabled(buttonByKey(fixture.frame.view(), 'ui.frame.undo'))).toBe('true');
+
+    held.resume();
+    expect(fixture.frame.canUndo()).toBe(true);
   });
 });
 

@@ -28,14 +28,15 @@
  * показана недоступной: элемент, который нельзя применить, обязан быть видимо
  * недоступным, а не молча не срабатывать (ED-26).
  *
- * В превью недоступны все операции авторинга разом — по тому же ED-26 и по
- * тому же основанию, по которому там недоступны инструменты (ED-9). Недоступна
- * при этом и команда, объявившая операцию своим полем `operation`: строка
- * команды и строка операции — два показа одного пути правки, и погасить только
- * второй значило бы оставить первый работающим («превью MUST NOT записывать
- * что-либо в документы», ED-9). Команда без операции остаётся доступной — это
- * навигация, а не авторинг, и ED-26 требует добираться до чего угодно из любого
- * режима.
+ * Пока авторинг приостановлен, недоступны все операции разом — и это ответ
+ * сессии, а не пересказ режима каркаса: приостановку берёт прогон (ED-9), а
+ * отклоняет правку она же, поэтому «показано недоступным» (ED-26) и «отказано»
+ * — одно правило, а не два похожих. Недоступна при этом и команда, объявившая
+ * операцию своим полем `operation`: строка команды и строка операции — два
+ * показа одного пути правки, и погасить только второй значило бы оставить
+ * первый работающим («превью MUST NOT записывать что-либо в документы», ED-9).
+ * Команда без операции остаётся доступной — это навигация, а не авторинг, и
+ * ED-26 требует добираться до чего угодно из любого режима.
  */
 import type {
   ContributionReader,
@@ -145,8 +146,6 @@ export interface PaletteSpec {
   readonly target: CommandTarget;
   /** Область, активная сейчас: команда, объявившая области, вне них не показана. */
   readonly areaId: string;
-  /** Режим редактора (ED-26): в превью операции авторинга недоступны (ED-9). */
-  readonly mode: EditorMode;
 }
 
 /**
@@ -167,21 +166,19 @@ export function matchesQuery(query: string, ...texts: readonly (string | undefin
  * одну функцию — иначе одна из них рано или поздно осталась бы доступной там,
  * где вторую уже погасили.
  */
-export function commandEnabled(
-  command: PaletteCommand,
-  mode: EditorMode,
-  target: CommandTarget,
-): boolean {
-  // Команда, объявившая операцию авторинга, в превью недоступна: ED-9 запрещает
-  // там правку документов, а поле `operation` вклада — то самое объявление, по
-  // которому это видно реестру, а не только реализации команды (ED-25).
-  if (mode === 'preview' && command.operation !== undefined) return false;
+export function commandEnabled(command: PaletteCommand, target: CommandTarget): boolean {
+  // Команда, объявившая операцию авторинга, недоступна ровно тогда, когда эту
+  // операцию отклонит сессия: приостановка авторинга — её состояние (ED-9), и
+  // спрашивается оно, а не режим каркаса. Поле `operation` вклада — то самое
+  // объявление, по которому это видно реестру, а не только реализации команды
+  // (ED-25).
+  if (command.operation !== undefined && target.session.authoringSuspended) return false;
   return command.enabled === undefined || command.enabled(target);
 }
 
 function commandEntry(spec: PaletteSpec, command: PaletteCommand): PaletteEntry {
   const label = resourceText(spec.resources, command.labelKey);
-  const enabled = commandEnabled(command, spec.mode, spec.target);
+  const enabled = commandEnabled(command, spec.target);
   return {
     id: command.id,
     kind: 'command',
@@ -211,7 +208,7 @@ function operationEntries(spec: PaletteSpec): readonly PaletteEntry[] {
   return spec.catalog().operations.map((operation): PaletteEntry => {
     // Команда, взявшая операцию на себя, знает, откуда брать её параметры.
     const command = here.find((candidate) => candidate.operation === operation.id);
-    const enabled = command !== undefined && commandEnabled(command, spec.mode, spec.target);
+    const enabled = command !== undefined && commandEnabled(command, spec.target);
     return {
       id: operation.id,
       kind: 'operation',

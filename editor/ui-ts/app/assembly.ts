@@ -90,6 +90,12 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
    */
   const first = await discoverProject(host);
   let pending: DiscoveredProject | null = first;
+  /**
+   * Открывается первая найденная пара — в порядке обхода дерева. Выбора автору
+   * здесь не предлагается, и это названная граница, а не умолчание: выбор — это
+   * своё место в интерфейсе, а до него остальные находки не пропадают —
+   * `project.scenes` перечисляет их все.
+   */
   let current: SceneProjectIds | null = first.scenes[0] ?? null;
 
   const openScene = async (): Promise<SceneProjectIds | null> => {
@@ -135,6 +141,11 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
       host,
       ...(current === null ? {} : { visuals: current.visuals }),
       stage: assetStageFactory(assets),
+      // Тот же модуль подаётся и напрямую: состояние ассета (ASSET-4)
+      // просмотрщик спрашивает у него, а не у кадра, и там, где кадра нет
+      // вовсе (среда без WebGL), ответ обязан остаться тем же самым — иначе
+      // «загрузился ли этот ассет» отвечалось бы двумя способами (ASSET-2).
+      assets,
     }),
   );
 
