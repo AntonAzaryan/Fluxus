@@ -31,6 +31,8 @@ import { registerPlacementOperations } from '../../src/areas/scenePlacement.js';
 import { registerDecorationOperations } from '../../src/areas/sceneDecorations.js';
 import { registerTerrainOperations } from '../../src/areas/sceneTerrain.js';
 import { registerVisualsOperations } from '../../src/areas/assetVisuals.js';
+import { registerCameraEffectsOperations } from '../../src/areas/assetCameraEffects.js';
+import type { CameraEffectsDescription } from '@game-mvp/assets';
 import { systemsArea } from '../../src/areas/systems.js';
 import { previewProbe, type PreviewProbe } from './preview.js';
 import { FIXTURE_IDS, fakeStage, fixtureHost, settle, type FakeStage } from './project.js';
@@ -53,6 +55,13 @@ export interface FrameExtras {
   readonly fieldEditors?: ContributionReader<FieldEditor>;
   /** Команды палитры (ED-24, ED-25); нет — реестр пуст. */
   readonly commands?: ContributionReader<PaletteCommand>;
+  /**
+   * Машинное описание типов эффектов камеры (`camera` CAM-9), с которым
+   * собираются операции секции. Приносит его сборка — тому же описанию она
+   * подаёт область и правила валидации, — и подставленное здесь описание с
+   * новым типом обязано работать без правок редактора (ED-14).
+   */
+  readonly cameraEffects?: CameraEffectsDescription;
 }
 
 /** Каркас с набором областей. По умолчанию — те же два вклада, что и в приложении. */
@@ -67,12 +76,15 @@ export function buildFrame(
   // записей манифеста — вклады областей (ED-25), и без них область правит
   // документы нечем (ED-29).
   const session = createEditorSession({
-    operations: registerVisualsOperations(
-      registerTerrainOperations(
-        registerDecorationOperations(
-          registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+    operations: registerCameraEffectsOperations(
+      registerVisualsOperations(
+        registerTerrainOperations(
+          registerDecorationOperations(
+            registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+          ),
         ),
       ),
+      extras.cameraEffects,
     ),
   });
   const resources = uiResources(locale);

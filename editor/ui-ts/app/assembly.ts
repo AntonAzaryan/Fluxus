@@ -54,6 +54,7 @@ import {
   type AssetAreaState,
 } from '../src/areas/assets.js';
 import { registerVisualsOperations } from '../src/areas/assetVisuals.js';
+import { registerCameraEffectsOperations } from '../src/areas/assetCameraEffects.js';
 import { SCENE_AREA_ID, createSceneArea, type SceneAreaState } from '../src/areas/scene.js';
 import { discoverProject, type DiscoveredProject } from '../src/areas/sceneDiscovery.js';
 import { sceneValidationRules, type SceneProjectIds } from '../src/areas/sceneProject.js';
@@ -169,10 +170,12 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
   // часть ядра редактора (ED-25, ED-29): реестр один и тот же для интерфейса и
   // для вызова без него.
   const session = createEditorSession({
-    operations: registerVisualsOperations(
-      registerTerrainOperations(
-        registerDecorationOperations(
-          registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+    operations: registerCameraEffectsOperations(
+      registerVisualsOperations(
+        registerTerrainOperations(
+          registerDecorationOperations(
+            registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+          ),
         ),
       ),
     ),

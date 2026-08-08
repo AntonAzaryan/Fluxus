@@ -34,6 +34,10 @@ import {
 } from '../src/gallery/controlCase.js';
 import { EDITOR_BUNDLES, REASON_PREFIX, type LocaleBundles } from '@game-mvp/editor-core';
 import { UI_BUNDLES, UI_KEY_PREFIX, uiResources } from '../src/i18n/uiBundles.js';
+import {
+  CAMERA_EFFECT_BUNDLES,
+  CAMERA_EFFECT_KEY_PREFIX,
+} from '../src/i18n/cameraEffectBundles.js';
 import { collectTexts, hasClass, walk, type UiNode, type UiText } from '../src/dom/node.js';
 import { materialStrings } from '../src/areas/material.js';
 import { assetArea } from '../src/areas/assets.js';
@@ -78,6 +82,9 @@ const reasonsOf = (bundles: LocaleBundles): LocaleBundles =>
 const BUNDLES: readonly (readonly [string, LocaleBundles, string])[] = [
   ['хром', UI_BUNDLES, UI_KEY_PREFIX],
   ['причины валидации', reasonsOf(EDITOR_BUNDLES), REASON_PREFIX],
+  // Третье пространство пакета — описания типов эффектов камеры (ED-28): их
+  // приносит тот же, кто приносит интерфейс, и свойства у бандла те же.
+  ['описания эффектов камеры', CAMERA_EFFECT_BUNDLES, CAMERA_EFFECT_KEY_PREFIX],
 ];
 
 describe('ED-27: бандлы строк пакета', () => {

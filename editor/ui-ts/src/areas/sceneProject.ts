@@ -20,6 +20,7 @@
  */
 import {
   crossDocumentRules,
+  engineValidationRules,
   openDocumentFromHost,
   type ContentPath,
   type ContentTreeHost,
@@ -29,6 +30,8 @@ import {
   type ValidationRule,
 } from '@game-mvp/editor-core';
 import { presentationPathOf, type VisualManifest } from '@game-mvp/assets';
+import { CAMERA_EFFECTS_DESCRIPTION } from '@game-mvp/render';
+import { SYSTEM_DOCUMENT_KIND } from './systems.js';
 import {
   sceneDraft,
   visualsOf,
@@ -60,7 +63,8 @@ export const SCENE_KINDS = {
 } as const;
 
 /**
- * Междокументные правила (ED-11, ED-19) с раскладкой ЭТОГО проекта.
+ * Правила валидации ЭТОГО проекта (ED-8): правила движка и междокументные — с
+ * его видами документов и его раскладкой.
  *
  * Правило знает отношение, а где лежат его стороны — знает тот, кто собирает
  * редактор (ED-25). Раскладка здесь нестандартная и потому названа целиком: и
@@ -69,22 +73,55 @@ export const SCENE_KINDS = {
  * проекте не сработало бы ни разу. Дописывать сравнение у себя вместо подачи
  * адресов значило бы завести вторую реализацию правила (ED-1, CORE-3) — ровно
  * то, ради чего адреса и стали параметром.
+ *
+ * По той же причине здесь и правила движка: их виды документов у этого проекта
+ * свои (манифест — `visuals`, карта кривизны — `terrain-curvature`), и с
+ * умолчаниями `engineValidationRules` не встали бы ни на один открытый
+ * документ. Пока их не приносил никто, ED-8 в собранном редакторе не
+ * исполнялся вовсе: подсветку в реальном времени давали только междокументные
+ * правила, а `loadScene`, `validateManifest` и остальные владельцы формата
+ * молчали.
+ *
+ * Ассет террейна лежит полем конфига сцены, отдельного документа вида `terrain`
+ * у проекта нет: правило террейна названо тем же видом, что конфиг, не будет —
+ * оно проверяло бы конфиг целиком конструктором сетки. Поэтому вид у него
+ * остаётся умолчальным и правило просто не срабатывает; сетку проверяет
+ * `loadScene` в составе конфига.
+ *
+ * Описание типов эффектов камеры (CAM-9) приносится тем же вызовом: правило
+ * `assets.manifest` импортировать его не может (пакет headless), а без него
+ * секция эффектов проверялась бы только структурно (ASSET-8, ED-14).
  */
 export function sceneValidationRules(): readonly ValidationRule[] {
-  return crossDocumentRules(
-    {
-      scene: SCENE_KINDS.config,
-      manifest: SCENE_KINDS.visuals,
-      curvature: SCENE_KINDS.curvature,
-      presentation: SCENE_KINDS.presentation,
-    },
-    [{ kind: SCENE_KINDS.config, path: PLACEMENT_LIST }],
-    [{ kind: SCENE_KINDS.config, path: TERRAIN_ASSET }],
-    // Список декораций лежит полем парного документа (PRES-2) — раскладка у
-    // этого проекта совпадает с умолчанием правила, но названа явно рядом с
-    // остальными: адреса приносит собирающий редактор, а не правило.
-    [{ kind: SCENE_KINDS.presentation, path: DECORATION_LIST }],
-  );
+  const kinds = {
+    scene: SCENE_KINDS.config,
+    manifest: SCENE_KINDS.visuals,
+    curvature: SCENE_KINDS.curvature,
+    presentation: SCENE_KINDS.presentation,
+  };
+  return Object.freeze([
+    ...engineValidationRules(
+      {
+        scene: SCENE_KINDS.config,
+        // Отдельного документа-ассета террейна у проекта нет (см. выше): вид
+        // остаётся умолчальным, и правило просто не срабатывает.
+        terrain: 'terrain',
+        curvature: SCENE_KINDS.curvature,
+        manifest: SCENE_KINDS.visuals,
+        system: SYSTEM_DOCUMENT_KIND,
+      },
+      { cameraEffects: CAMERA_EFFECTS_DESCRIPTION },
+    ),
+    ...crossDocumentRules(
+      kinds,
+      [{ kind: SCENE_KINDS.config, path: PLACEMENT_LIST }],
+      [{ kind: SCENE_KINDS.config, path: TERRAIN_ASSET }],
+      // Список декораций лежит полем парного документа (PRES-2) — раскладка у
+      // этого проекта совпадает с умолчанием правила, но названа явно рядом с
+      // остальными: адреса приносит собирающий редактор, а не правило.
+      [{ kind: SCENE_KINDS.presentation, path: DECORATION_LIST }],
+    ),
+  ]);
 }
 
 export interface SceneProjectIds {

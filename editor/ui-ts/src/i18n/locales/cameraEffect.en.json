@@ -1,0 +1,15 @@
+{
+  "cameraEffect.shake.amplitude": "Impulse strength: how much trauma a single event adds. Zero means the event does not shake at all.",
+  "cameraEffect.shake.decay": "Trauma decay rate, units per second: the larger it is, the shorter the shake.",
+  "cameraEffect.shake.effect": "Trauma-based camera shake: an event adds trauma, the amplitude grows as its square, and the offsets come from deterministic noise.",
+  "cameraEffect.shake.frequency": "Shake noise frequency, Hz: how fast the picture trembles. Positive.",
+  "cameraEffect.shake.maxOffset": "Maximum position offset at full trauma, world units.",
+  "cameraEffect.shake.maxRoll": "Maximum roll at full trauma, radians.",
+  "cameraEffect.shake.radius": "Distance falloff radius from the viewpoint, world units: beyond it the event does not shake. Without a value there is no falloff.",
+  "cameraEffect.sway.effect": "Camera sway (\"tipsiness\"): a lasting effect active while the state is present on the target; an envelope eases its contribution in and out.",
+  "cameraEffect.sway.fadeSeconds": "Fade-in and fade-out time of the effect, seconds: the state disappearing does not cut the picture abruptly.",
+  "cameraEffect.sway.fovAmp": "Field-of-view pulsation amplitude, degrees.",
+  "cameraEffect.sway.frequency": "Base sway frequency, Hz. Positive.",
+  "cameraEffect.sway.rollAmp": "Sway roll amplitude, radians.",
+  "cameraEffect.sway.yawAmp": "Sway yaw amplitude, radians."
+}

@@ -39,8 +39,8 @@
 
 - [x] 5.1 В `editor/core-ts/src/validation/adapters.ts` расширить `ErrorListResult` необязательным `warnings` и научить `reportErrorList` заводить находки важности `warning` с тем же разбором адреса; `validateCurvatureMap` не трогать
 - [x] 5.2 В `editor/core-ts/src/validation/engineRules.ts` — опция правил движка с описанием эффектов (по образцу `EngineRuleKinds`: знание приносит сборка, не правило) и передача её в `validateManifest` внутри `manifestRule`
-- [ ] 5.3 В `editor/ui-ts/src/areas/sceneProject.ts` включить в `sceneValidationRules()` правила движка с видами документов этого проекта (`visuals`, `scene`, `terrain-curvature`) и с `CAMERA_EFFECTS_DESCRIPTION` — сегодня `engineValidationRules()` в собранном редакторе не регистрируется вовсе, и правило `assets.manifest` там не работает (design.md)
-- [ ] 5.4 Тесты: `editor/core-ts/test/validationRules.test.ts` — находки секции с адресом и важностью; `editor/ui-ts/test/validation.test.ts` (или `sceneArea.test.ts`) — правила движка присутствуют в реестре сборки
+- [x] 5.3 В `editor/ui-ts/src/areas/sceneProject.ts` включить в `sceneValidationRules()` правила движка с видами документов этого проекта (`visuals`, `scene`, `terrain-curvature`) и с `CAMERA_EFFECTS_DESCRIPTION` — сегодня `engineValidationRules()` в собранном редакторе не регистрируется вовсе, и правило `assets.manifest` там не работает (design.md)
+- [x] 5.4 Тесты: `editor/core-ts/test/validationRules.test.ts` — находки секции с адресом и важностью; `editor/ui-ts/test/validation.test.ts` (или `sceneArea.test.ts`) — правила движка присутствуют в реестре сборки
 
 ## 6. Междокументное правило имени состояния (ED-8)
 
@@ -50,27 +50,27 @@
 
 ## 7. Операции секции (ED-29)
 
-- [ ] 7.1 Новый `editor/ui-ts/src/areas/assetCameraEffects.ts` с шапкой в духе `assetVisuals.ts`: пути секции (`cameraEffects.events|states`) — доменное знание вклада; операция `visuals.cameraEffects.bind` (`document`, `table`, `name`, `effect`) — заводит или перетипизовывает запись, пишет только `effect`, при смене типа удаляет параметры, которых новый тип не объявляет
-- [ ] 7.2 Операция `visuals.cameraEffects.setParam` (`document`, `table`, `name`, `param`, `value`) — имя параметра сверяется с описанием, значение с диапазоном; отдельной операции удаления не заводить (`document.removeValue`, как решено в `assetVisuals.ts`)
-- [ ] 7.3 Правленую запись отдавать на проверку владельцу формата и о разнице (`checkEntry` из `assetVisuals.ts` — вынести общий помощник либо повторить его контракт)
-- [ ] 7.4 `registerCameraEffectsOperations(registry)` и регистрация в `editor/ui-ts/app/assembly.ts` рядом с `registerVisualsOperations`
-- [ ] 7.5 Строки параметров операций (`ui.operation.param.*`) и их описаний — в `editor/ui-ts/src/i18n/locales/ui.{ru,en}.json`
-- [ ] 7.6 Тесты в `editor/ui-ts/test/assetArea.test.ts` (или новом `cameraEffects.test.ts`): обратимость каждой операции (ED-29), отказ на незаявленный параметр и на значение вне диапазона, исполнение без интерфейса, отсутствие второго пути правки секции
+- [x] 7.1 Новый `editor/ui-ts/src/areas/assetCameraEffects.ts` с шапкой в духе `assetVisuals.ts`: пути секции (`cameraEffects.events|states`) — доменное знание вклада; операция `visuals.cameraEffects.bind` (`document`, `table`, `name`, `effect`) — заводит или перетипизовывает запись, пишет только `effect`, при смене типа удаляет параметры, которых новый тип не объявляет
+- [x] 7.2 Операция `visuals.cameraEffects.setParam` (`document`, `table`, `name`, `param`, `value`) — имя параметра сверяется с описанием, значение с диапазоном; отдельной операции удаления не заводить (`document.removeValue`, как решено в `assetVisuals.ts`)
+- [x] 7.3 Правленую запись отдавать на проверку владельцу формата и о разнице (`checkEntry` из `assetVisuals.ts` — вынести общий помощник либо повторить его контракт)
+- [x] 7.4 `registerCameraEffectsOperations(registry)` и регистрация в `editor/ui-ts/app/assembly.ts` рядом с `registerVisualsOperations`
+- [x] 7.5 Строки параметров операций (`ui.operation.param.*`) и их описаний — в `editor/ui-ts/src/i18n/locales/ui.{ru,en}.json`
+- [x] 7.6 Тесты в `editor/ui-ts/test/assetArea.test.ts` (или новом `cameraEffects.test.ts`): обратимость каждой операции (ED-29), отказ на незаявленный параметр и на значение вне диапазона, исполнение без интерфейса, отсутствие второго пути правки секции
 
 ## 8. Таблицы в области ассетов (ED-14, ED-24)
 
-- [ ] 8.1 В `editor/ui-ts/src/areas/assets.ts` (зона инспектора) добавить две группы — импульсные и длящиеся привязки: строка = запись таблицы, выбор строки делает её субъектом полей
-- [ ] 8.2 Перечень типов для выбора — `description.types`, отфильтрованный по виду таблицы; поля записи — `spec.params` выбранного типа плюс `description.binding[kind]`; списка типов в редакторе не заводить ни в каком виде (ED-14)
-- [ ] 8.3 Подсказки полей — по ключу ED-28 из пути `['cameraEffect', <type>, <param>]` (`descriptionKey` из `@game-mvp/editor-core`)
-- [ ] 8.4 Подсказка имён событий: собрать литералы `emitEvent.type` из открытых документов сцен как список выбора; находок на неизвестное имя не заводить (design.md, «Имена событий подсказываются, а не проверяются»)
-- [ ] 8.5 Тест в `editor/ui-ts/test/assetArea.test.ts`: тип, добавленный в подставленное описание, появляется в таблице со своими полями — список в редакторе не правится (ED-14, сценарий «Новый тип эффекта в коде камеры»)
+- [x] 8.1 В `editor/ui-ts/src/areas/assets.ts` (зона инспектора) добавить две группы — импульсные и длящиеся привязки: строка = запись таблицы, выбор строки делает её субъектом полей
+- [x] 8.2 Перечень типов для выбора — `description.types`, отфильтрованный по виду таблицы; поля записи — `spec.params` выбранного типа плюс `description.binding[kind]`; списка типов в редакторе не заводить ни в каком виде (ED-14)
+- [x] 8.3 Подсказки полей — по ключу ED-28 из пути `['cameraEffect', <type>, <param>]` (`descriptionKey` из `@game-mvp/editor-core`)
+- [x] 8.4 Подсказка имён событий: собрать литералы `emitEvent.type` из открытых документов сцен как список выбора; находок на неизвестное имя не заводить (design.md, «Имена событий подсказываются, а не проверяются»)
+- [x] 8.5 Тест в `editor/ui-ts/test/assetArea.test.ts`: тип, добавленный в подставленное описание, появляется в таблице со своими полями — список в редакторе не правится (ED-14, сценарий «Новый тип эффекта в коде камеры»)
 
 ## 9. Строки описаний типов (ED-27, ED-28)
 
-- [ ] 9.1 Новый бандл `editor/ui-ts/src/i18n/cameraEffectBundles.ts` с префиксом `cameraEffect.` и локалями `locales/cameraEffect.{ru,en}.json`; влить в `uiResources` рядом с `UI_BUNDLES`
-- [ ] 9.2 Заполнить описания для `shake` и `sway` и всех их параметров плюс параметров привязки, обе локали равноправно (ED-27)
-- [ ] 9.3 Добавить бандл в параметризованный список `editor/ui-ts/test/strings.test.ts` («локали равноправны», «все ключи в своём пространстве»)
-- [ ] 9.4 Гейт «бандл ↔ описание» в обе стороны в `editor/ui-ts/test` (по образцу `editor/core-ts/test/i18nBundles.test.ts`): пути выводятся из `CAMERA_EFFECTS_DESCRIPTION`, тип без строк — красный тест
+- [x] 9.1 Новый бандл `editor/ui-ts/src/i18n/cameraEffectBundles.ts` с префиксом `cameraEffect.` и локалями `locales/cameraEffect.{ru,en}.json`; влить в `uiResources` рядом с `UI_BUNDLES`
+- [x] 9.2 Заполнить описания для `shake` и `sway` и всех их параметров плюс параметров привязки, обе локали равноправно (ED-27)
+- [x] 9.3 Добавить бандл в параметризованный список `editor/ui-ts/test/strings.test.ts` («локали равноправны», «все ключи в своём пространстве»)
+- [x] 9.4 Гейт «бандл ↔ описание» в обе стороны в `editor/ui-ts/test` (по образцу `editor/core-ts/test/i18nBundles.test.ts`): пути выводятся из `CAMERA_EFFECTS_DESCRIPTION`, тип без строк — красный тест
 
 ## 10. Контент и проверка
 
