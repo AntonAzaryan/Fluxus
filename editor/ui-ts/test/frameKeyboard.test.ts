@@ -26,7 +26,7 @@ import { areaGetsKey, type AreaKeyGate } from '../src/frame/keys.js';
 import { SURFACE_FOCUS_ID } from '../src/frame/skeleton.js';
 import { CAMERA_KEYS } from '../src/areas/sceneCamera.js';
 import { SCENE_AREA_KEYS, SCENE_NODES, sceneArea } from '../src/areas/scene.js';
-import { systemsArea } from '../src/areas/systems.js';
+import { stubArea } from './support/stubArea.js';
 import { uiResources } from '../src/i18n/uiBundles.js';
 import {
   attr,
@@ -72,7 +72,7 @@ describe('обход скелета: одна остановка Tab на спи
 
   it('то же в плоском списке другой области — правило обхода одно на оба виджета', () => {
     const { frame } = buildFrame();
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     const rows = findAll(frame.view(), (node) => attr(node, 'role') === 'option');
     expect(rows.filter((row) => attr(row, 'tabindex') === '0')).toHaveLength(1);
   });
@@ -274,9 +274,9 @@ describe('ED-32: клавиатура принадлежит активной о
   });
 
   it('вход в область горячей клавишей сразу даёт её клавиши', () => {
-    const { frame } = buildFrame([sceneArea, systemsArea]);
-    frame.activate(systemsArea.id);
-    expect(frame.activeAreaId()).toBe(systemsArea.id);
+    const { frame } = buildFrame([sceneArea, stubArea]);
+    frame.activate(stubArea.id);
+    expect(frame.activeAreaId()).toBe(stubArea.id);
     expect(frame.handleKey({ key: 'F1', ctrl: false, shift: false, alt: false })).toBe(true);
     expect(frame.activeAreaId()).toBe(sceneArea.id);
     // Фокус уходит на поверхность правки: оставленный в рельсе, он забрал бы
@@ -299,7 +299,7 @@ describe('ED-32: клавиатура принадлежит активной о
     expect(state.held.size).toBe(1);
     // Отпускание придёт уже в другую область, и оставленная зажатой стрелка
     // панорамировала бы камеру сцены из-под неё вечно (ED-32).
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     expect(state.held.size).toBe(0);
   });
 

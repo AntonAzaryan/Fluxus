@@ -28,7 +28,7 @@ import {
 } from '../src/inspector/index.js';
 import { textField } from '../src/widgets/field.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
-import { systemsArea } from '../src/areas/systems.js';
+import { stubArea } from './support/stubArea.js';
 import { attr, buildLoadedFrame, zoneOf } from './support/frame.js';
 import { FIXTURE_IDS, FIXTURE_SCENE, fixtureHost, settle } from './support/project.js';
 
@@ -194,7 +194,7 @@ describe('ED-25: редактор поля — вклад, и подхватыв
       .toBeGreaterThan(0);
 
     // Область систем: её флаги — тоже булевы поля, и правится реестр один раз.
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     expect(findAll(zoneOf(frame.view(), 'inspector'), (node) => hasClass(node, MARK)).length)
       .toBeGreaterThan(0);
   });

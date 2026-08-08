@@ -86,6 +86,10 @@ export function readDescriptor(params: OperationParams, name: string): string {
   return params[name] as string;
 }
 
+export function readString(params: OperationParams, name: string): string {
+  return params[name] as string;
+}
+
 export function readJson(params: OperationParams, name: string): JsonValue {
   return params[name] ?? null;
 }

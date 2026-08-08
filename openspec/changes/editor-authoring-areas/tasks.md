@@ -14,12 +14,12 @@
 
 ## 2. WP1: заглушка систем переезжает в тесты (точка сериализации)
 
-- [ ] 2.1 Перенести `editor/ui-ts/src/areas/material.json` → `editor/ui-ts/test/support/material.json` и `src/areas/material.ts` → `test/support/material.ts`, сохранив `materialStrings`
-- [ ] 2.2 Собрать в `editor/ui-ts/test/support/stubArea.ts` фикстурную область на этом материале (бывшая `systemsArea` со стубом): свой id (`area.stub`), своя горячая клавиша, три зоны непохожие на область сцены, правка карты флагов зарегистрированной операцией — по образцу `outsiderArea` из `frameExtension.test.ts`
-- [ ] 2.3 `editor/ui-ts/test/support/frame.ts`: заменить `systemsArea` на фикстурную область в умолчании `buildFrame`
-- [ ] 2.4 Перевести на фикстуру импорты в `frame.test.ts`, `frameExtension.test.ts`, `frameKeyboard.test.ts`, `inspector.test.ts`, `palette.test.ts`, `renderContext.test.ts`, `scenePreview.test.ts`, `sceneTool.test.ts`, `shellCommands.test.ts`, `strings.test.ts` — смысл проверок не меняется, меняется происхождение второй области
-- [ ] 2.5 Удалить `editor/ui-ts/src/areas/material.{ts,json}`; убедиться поиском, что в `src/` и `app/` ссылок на них не осталось
-- [ ] 2.6 `npm test -w @game-mvp/editor-ui` зелёный до появления новых областей: каркас проверяется на двух непохожих областях, ни одна из которых не требует открытого проекта
+- [x] 2.1 Перенести `editor/ui-ts/src/areas/material.json` → `editor/ui-ts/test/support/material.json` и `src/areas/material.ts` → `test/support/material.ts`, сохранив `materialStrings`
+- [x] 2.2 Собрать в `editor/ui-ts/test/support/stubArea.ts` фикстурную область на этом материале (бывшая `systemsArea` со стубом): свой id (`area.stub`), своя горячая клавиша, три зоны непохожие на область сцены, правка карты флагов зарегистрированной операцией — по образцу `outsiderArea` из `frameExtension.test.ts`
+- [x] 2.3 `editor/ui-ts/test/support/frame.ts`: заменить `systemsArea` на фикстурную область в умолчании `buildFrame`
+- [x] 2.4 Перевести на фикстуру импорты в `frame.test.ts`, `frameExtension.test.ts`, `frameKeyboard.test.ts`, `inspector.test.ts`, `palette.test.ts`, `renderContext.test.ts`, `scenePreview.test.ts`, `sceneTool.test.ts`, `shellCommands.test.ts`, `strings.test.ts` — смысл проверок не меняется, меняется происхождение второй области
+- [x] 2.5 Удалить `editor/ui-ts/src/areas/material.{ts,json}`; убедиться поиском, что в `src/` и `app/` ссылок на них не осталось. Сделано вместе с двумя следствиями, о которых WP6 и WP8 обязаны знать: `src/areas/systems.ts` ужат до объявления вида документа (`SYSTEM_DOCUMENT_KIND`, его читает `sceneProject.ts` — файл WP8 не тронут), а `app/assembly.ts` больше не регистрирует область систем (снята одна строка импорта и одна строка регистрации; вернёт её WP8 вместе с настоящей областью)
+- [x] 2.6 `npm test -w @game-mvp/editor-ui` зелёный до появления новых областей: каркас проверяется на двух непохожих областях, ни одна из которых не требует открытого проекта
 
 ## 3. WP2: перечисление компонентов и prefab'ов мира (engine/core-ts)
 
@@ -48,10 +48,10 @@
 
 ## 6. WP5: базовая операция `document.renameKey`
 
-- [ ] 6.1 `editor/core-ts/src/operations/builtin.ts`: операция `document.renameKey` (document, path, from, to) — переименование ключа объекта **с сохранением его позиции**; в шапке — почему позиция важна (ED-21, `project/canonical.ts` не сортирует ключи)
-- [ ] 6.2 Там же: отказ `OperationError`, если ключа `from` нет или ключ `to` уже занят; операция реализуется поверх существующих примитивов контекста — поверхность сессии не расширяется
-- [ ] 6.3 Ключ описания `operation.document.renameKey` — список для WP8 (файлы локалей правит он)
-- [ ] 6.4 `editor/core-ts/test/operations.test.ts`: позиция ключа сохранена (сравнение `Object.keys` до и после); `operationsConformance.test.ts` (применить → отменить → сравнить) проходит на новой операции автоматически — проверить, что она в перечне
+- [x] 6.1 `editor/core-ts/src/operations/builtin.ts`: операция `document.renameKey` (document, path, from, to) — переименование ключа объекта **с сохранением его позиции**; в шапке — почему позиция важна (ED-21, `project/canonical.ts` не сортирует ключи)
+- [x] 6.2 Там же: отказ `OperationError`, если ключа `from` нет или ключ `to` уже занят; операция реализуется поверх существующих примитивов контекста — поверхность сессии не расширяется
+- [x] 6.3 Ключи описаний для WP8 (файлы локалей правит он): `operation.document.renameKey`, `operation.param.from`, `operation.param.to`. Пока их нет в `editor.{ru,en}.json`, красен `registryCatalog.test.ts` («описания встроенных операций приходят из бандла») — это ожидаемая передача работы WP8, а не дефект WP5; после правки бандлов отпечатки пересчитываются `UPDATE_FINGERPRINTS=1 npx vitest run` (задача 9.4)
+- [x] 6.4 `editor/core-ts/test/operations.test.ts`: позиция ключа сохранена (сравнение `Object.keys` до и после); `operationsConformance.test.ts` (применить → отменить → сравнить) проходит на новой операции автоматически — проверить, что она в перечне
 
 ## 7. WP6: рабочая область систем (ED-4, ED-5)
 

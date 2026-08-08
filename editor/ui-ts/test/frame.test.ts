@@ -21,7 +21,7 @@ import { RAIL_ITEM_CLASS } from '../src/frame/rail.js';
 import { createCoalescingRedraw, type CoalescingRedraw } from '../src/frame/redraw.js';
 import { ZONE_ORDER } from '../src/frame/skeleton.js';
 import { sceneArea, type SceneAreaState } from '../src/areas/scene.js';
-import { systemsArea, type SystemsAreaState } from '../src/areas/systems.js';
+import { stubArea, type StubAreaState } from './support/stubArea.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
 import {
   attr,
@@ -68,14 +68,14 @@ describe('ED-24: скелет области одинаков во всех об
   it('переход в другую область не меняет ни порядка зон, ни их числа', () => {
     const { frame } = buildFrame();
     const before = zoneNames(frame.view());
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     expect(zoneNames(frame.view())).toEqual(before);
   });
 
   it('содержимое зон у двух областей разное — скелет один, области не одинаковые', () => {
     const { frame } = buildFrame();
     const scene = withAttr(frame.view(), 'data-zone');
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     const systems = withAttr(frame.view(), 'data-zone');
     for (const [index, zone] of scene.entries()) {
       const other = systems[index];
@@ -95,7 +95,7 @@ describe('ED-24: скелет области одинаков во всех об
       );
     };
     expect(navigatorOf()).toContain('tree');
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     expect(navigatorOf()).toContain('listbox');
   });
 });
@@ -113,17 +113,17 @@ describe('ED-23: рельс есть представление реестра �
         .filter((node) => attr(node, 'data-area') !== undefined)
         .map((node) => attr(node, 'data-area') ?? '');
     expect(active()).toEqual([sceneArea.id]);
-    frame.activate(systemsArea.id);
-    expect(active()).toEqual([systemsArea.id]);
+    frame.activate(stubArea.id);
+    expect(active()).toEqual([stubArea.id]);
   });
 });
 
 describe('ED-23: переключение горячей клавишей и явным элементом', () => {
   it('горячая клавиша вклада переключает область', () => {
     const { frame } = buildFrame();
-    expect(systemsArea.hotkey).toBe('F2');
-    expect(frame.handleKey({ key: 'F2', ctrl: false, shift: false, alt: false })).toBe(true);
-    expect(frame.activeAreaId()).toBe(systemsArea.id);
+    expect(stubArea.hotkey).toBe('F6');
+    expect(frame.handleKey({ key: 'F6', ctrl: false, shift: false, alt: false })).toBe(true);
+    expect(frame.activeAreaId()).toBe(stubArea.id);
     expect(frame.handleKey({ key: 'F1', ctrl: false, shift: false, alt: false })).toBe(true);
     expect(frame.activeAreaId()).toBe(sceneArea.id);
   });
@@ -132,10 +132,10 @@ describe('ED-23: переключение горячей клавишей и я�
     const { frame } = buildFrame();
     const item = findAll(
       frame.view(),
-      (node) => attr(node, 'data-area') === systemsArea.id,
+      (node) => attr(node, 'data-area') === stubArea.id,
     )[0];
     press(item);
-    expect(frame.activeAreaId()).toBe(systemsArea.id);
+    expect(frame.activeAreaId()).toBe(stubArea.id);
   });
 
   it('чужое сочетание каркас не забирает', () => {
@@ -148,7 +148,7 @@ describe('ED-23: состояние области переживает пере
   it('запись состояния — та же самая, а не равная ей', () => {
     const { frame } = buildFrame();
     const state = frame.stateOf(sceneArea.id);
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     frame.activate(sceneArea.id);
     expect(frame.stateOf(sceneArea.id)).toBe(state);
   });
@@ -163,7 +163,7 @@ describe('ED-23: состояние области переживает пере
     state.expanded.add('вложенный узел');
     state.focusId = FIXTURE_IDS.visuals;
 
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     frame.view();
     frame.activate(area.id);
     frame.view();
@@ -229,7 +229,7 @@ describe('ED-23: выделение сквозное', () => {
   it('выделение области ставится снаружи, когда область не показана', async () => {
     const { frame, area, session } = await buildLoadedFrame();
     const key = session.descriptors(FIXTURE_IDS.config, PLACEMENT_LIST)[0] ?? '';
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     frame.selection.set(area.id, [key]);
     frame.activate(area.id);
     const selected = findAll(frame.view(), (node) => attr(node, 'data-id') === key)[0];
@@ -240,7 +240,7 @@ describe('ED-23: выделение сквозное', () => {
     const { frame, area, session } = await buildLoadedFrame();
     const key = session.descriptors(FIXTURE_IDS.config, PLACEMENT_LIST)[1] ?? '';
     press(findAll(frame.view(), (node) => attr(node, 'data-id') === key)[0]);
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     frame.activate(area.id);
     expect(frame.selection.get(area.id)).toEqual([key]);
   });
@@ -248,9 +248,9 @@ describe('ED-23: выделение сквозное', () => {
   it('выделения областей не смешиваются: модель одна, запись в ней — на область', () => {
     const { frame } = buildFrame();
     frame.selection.set(sceneArea.id, ['hero']);
-    frame.selection.set(systemsArea.id, ['content/systems/regen.system.json']);
+    frame.selection.set(stubArea.id, ['content/systems/regen.system.json']);
     expect(frame.selection.get(sceneArea.id)).toEqual(['hero']);
-    expect(frame.selection.get(systemsArea.id)).toEqual([
+    expect(frame.selection.get(stubArea.id)).toEqual([
       'content/systems/regen.system.json',
     ]);
   });
@@ -265,8 +265,8 @@ describe('ED-23, ED-18: история одна на сессию, а не св�
 
   it('правка сделана операцией авторинга, а не записью в документ', () => {
     const { frame, session } = buildFrame();
-    frame.activate(systemsArea.id);
-    const state = frame.stateOf(systemsArea.id) as SystemsAreaState;
+    frame.activate(stubArea.id);
+    const state = frame.stateOf(stubArea.id) as StubAreaState;
     expect(session.isOpen(state.documentId)).toBe(true);
     expect(session.canUndo()).toBe(false);
 
@@ -277,8 +277,8 @@ describe('ED-23, ED-18: история одна на сессию, а не св�
 
   it('правка, сделанная в одной области, отменяется из другой', () => {
     const { frame, session } = buildFrame();
-    frame.activate(systemsArea.id);
-    const state = frame.stateOf(systemsArea.id) as SystemsAreaState;
+    frame.activate(stubArea.id);
+    const state = frame.stateOf(stubArea.id) as StubAreaState;
     const before = JSON.stringify(session.documentValue(state.documentId));
 
     toggleFlag(frame);
@@ -292,8 +292,8 @@ describe('ED-23, ED-18: история одна на сессию, а не св�
 
   it('повтор возвращает отменённое и тоже не спрашивает, где это было', () => {
     const { frame, session } = buildFrame();
-    frame.activate(systemsArea.id);
-    const state = frame.stateOf(systemsArea.id) as SystemsAreaState;
+    frame.activate(stubArea.id);
+    const state = frame.stateOf(stubArea.id) as StubAreaState;
     toggleFlag(frame);
     const after = JSON.stringify(session.documentValue(state.documentId));
 
@@ -305,8 +305,8 @@ describe('ED-23, ED-18: история одна на сессию, а не св�
 
   it('правка, пришедшая без интерфейса, доходит до страницы (ED-29, ED-15)', () => {
     const { frame, session } = buildFrame();
-    frame.activate(systemsArea.id);
-    const state = frame.stateOf(systemsArea.id) as SystemsAreaState;
+    frame.activate(stubArea.id);
+    const state = frame.stateOf(stubArea.id) as StubAreaState;
     frame.view();
 
     let redraws = 0;
@@ -326,7 +326,7 @@ describe('ED-23, ED-18: история одна на сессию, а не св�
     const { frame } = buildFrame();
     const undo = buttonByKey(frame.view(), 'ui.frame.undo');
     expect(attr(undo ?? { tag: 'div' }, 'aria-disabled')).toBe('true');
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     toggleFlag(frame);
     expect(attr(buttonByKey(frame.view(), 'ui.frame.undo') ?? { tag: 'div' }, 'aria-disabled')).toBe(
       'false',
@@ -338,7 +338,7 @@ describe('ED-23, ED-24: поиск по проекту — сквозной', ()
   it('запрос переживает переключение области', () => {
     const { frame } = buildFrame();
     frame.setSearchQuery('skeleton');
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     expect(frame.searchQuery()).toBe('skeleton');
     const search = findAll(frame.view(), (node) => attr(node, 'type') === 'search')[0];
     expect(search?.labels?.value?.value).toBe('skeleton');
@@ -428,6 +428,6 @@ describe('клавиатура рельса', () => {
     const { frame } = buildFrame();
     const rail = findAll(frame.view(), (node) => node.classes?.includes('fx-rail') === true)[0];
     expect(keydown(rail, 'ArrowDown')).toBe(true);
-    expect(frame.activeAreaId()).toBe(systemsArea.id);
+    expect(frame.activeAreaId()).toBe(stubArea.id);
   });
 });

@@ -61,7 +61,6 @@ import { sceneValidationRules, type SceneProjectIds } from '../src/areas/scenePr
 import { registerPlacementOperations } from '../src/areas/scenePlacement.js';
 import { registerDecorationOperations } from '../src/areas/sceneDecorations.js';
 import { registerTerrainOperations } from '../src/areas/sceneTerrain.js';
-import { systemsArea } from '../src/areas/systems.js';
 
 export interface EditorAppOptions {
   readonly host: EnvironmentHost;
@@ -145,7 +144,11 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
       validationRules: contributions.validationRules,
     }),
   );
-  contributions.areas.register(systemsArea);
+  // Области систем в сборке сейчас нет: она стояла на материале-заглушке, и
+  // заглушка уехала фикстурой в набор тестов (`src/areas/systems.ts`). Вернётся
+  // она настоящей — на списке JSON-систем конфига сцены (ED-4, ED-5), — и
+  // регистрация её будет ровно такой же строкой: ED-25 требует, чтобы новая
+  // область не правила ни каркас, ни соседние вклады.
   // Просмотрщик ассетов (ED-20) — такой же вклад: манифест визуалов он правит
   // тот же, что открывает область сцены, поэтому его ID приходит от того же
   // открытия, а кадр собирается на общем модуле ассетов.

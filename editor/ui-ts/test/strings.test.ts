@@ -39,11 +39,11 @@ import {
   CAMERA_EFFECT_KEY_PREFIX,
 } from '../src/i18n/cameraEffectBundles.js';
 import { collectTexts, hasClass, walk, type UiNode, type UiText } from '../src/dom/node.js';
-import { materialStrings } from '../src/areas/material.js';
 import { assetArea } from '../src/areas/assets.js';
 import { sceneArea } from '../src/areas/scene.js';
-import { systemsArea } from '../src/areas/systems.js';
 import { buildFrame } from './support/frame.js';
+import { materialStrings } from './support/material.js';
+import { stubArea } from './support/stubArea.js';
 
 /** Весь код пакета, а не только его библиотека: точка входа приложения — тоже интерфейс. */
 const ROOTS = ['src', 'app'] as const;
@@ -292,10 +292,12 @@ function classifiedTexts(root: UiNode): PageText[] {
 
 describe('ED-27: каждый видимый текст каркаса имеет происхождение', () => {
   const materialCorpus = materialStrings();
-  // Все области приложения: у каждой свой источник текста, и ED-27 держит их
-  // все. Просмотрщик ассетов здесь без открытого проекта — ровно тот случай,
-  // когда на странице нет ни одного значения документа и вся она из ресурсов.
-  const areas = [sceneArea, systemsArea, assetArea];
+  // Области приложения плюс фикстурная область набора: у каждой свой источник
+  // текста, и ED-27 держит их все. Значения документа на страницу приносит
+  // фикстура — её материал и есть контрольный случай «текст из документа», —
+  // а просмотрщик ассетов здесь без открытого проекта, ровно тот случай, когда
+  // на странице нет ни одного значения документа и вся она из ресурсов.
+  const areas = [sceneArea, stubArea, assetArea];
 
   const pagesIn = (locale: string): UiNode[] => {
     const { frame } = buildFrame(areas, locale);

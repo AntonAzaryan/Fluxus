@@ -18,7 +18,6 @@ import { SHELL_COMMANDS } from '../src/palette/commands.js';
 import { PALETTE_BINDING, UNDO_BINDING } from '../src/frame/keys.js';
 import { ASSETS_AREA_ID } from '../src/areas/assets.js';
 import { SCENE_AREA_ID, type SceneAreaState } from '../src/areas/scene.js';
-import { SYSTEMS_AREA_ID } from '../src/areas/systems.js';
 import type { PaletteEntry } from '../src/palette/palette.js';
 import type { WorkspaceFrame } from '../src/frame/frame.js';
 import { buildFrame } from './support/frame.js';
@@ -26,7 +25,7 @@ import { FIXTURE_CURVATURE, FIXTURE_SCENE, settle } from './support/project.js';
 import { ContributionRegistry } from '@game-mvp/editor-core';
 import type { PaletteCommand } from '../src/palette/palette.js';
 import { registerShellCommands } from '../src/palette/commands.js';
-import { systemsArea } from '../src/areas/systems.js';
+import { stubArea } from './support/stubArea.js';
 import { uiResources } from '../src/i18n/uiBundles.js';
 
 const CONFIG = 'levels/arena.json';
@@ -73,7 +72,6 @@ const CONTRIBUTED: readonly string[] = [
   SHELL_COMMANDS.redo,
   SHELL_COMMANDS.preview,
   `${SHELL_COMMANDS.areaPrefix}${SCENE_AREA_ID}`,
-  `${SHELL_COMMANDS.areaPrefix}${SYSTEMS_AREA_ID}`,
   `${SHELL_COMMANDS.areaPrefix}${ASSETS_AREA_ID}`,
 ];
 
@@ -101,7 +99,7 @@ describe('ED-24: команды оболочки приходят в палит�
     });
     registerShellCommands(registry, {
       resources: uiResources('ru'),
-      areas: { all: () => [systemsArea] },
+      areas: { all: () => [stubArea] },
       open: () => undefined,
       save: () => undefined,
     });
@@ -118,7 +116,7 @@ describe('ED-24: команды оболочки приходят в палит�
   it('команда перехода заводится на КАЖДУЮ область — и на ту, которой ещё нет', () => {
     // Новая область в палитре появляется регистрацией вклада, а не правкой
     // списка команд (ED-25).
-    const extra = { ...systemsArea, id: 'area.extra', hotkey: 'F9' };
+    const extra = { ...stubArea, id: 'area.extra', hotkey: 'F9' };
     const registry = new ContributionRegistry<PaletteCommand>({
       kind: 'command',
       claimName: 'сочетание клавиш',
@@ -126,7 +124,7 @@ describe('ED-24: команды оболочки приходят в палит�
     });
     registerShellCommands(registry, {
       resources: uiResources('ru'),
-      areas: { all: () => [systemsArea, extra] },
+      areas: { all: () => [stubArea, extra] },
     });
     expect(registry.has(`${SHELL_COMMANDS.areaPrefix}area.extra`)).toBe(true);
   });
@@ -140,8 +138,8 @@ describe('ED-24: каждая команда оболочки делает то,
     // применить, и он показан недоступным (ED-26).
     expect(entry(frame, `${SHELL_COMMANDS.areaPrefix}${SCENE_AREA_ID}`).disabled).toBe(true);
 
-    entry(frame, `${SHELL_COMMANDS.areaPrefix}${SYSTEMS_AREA_ID}`).run();
-    expect(frame.activeAreaId()).toBe(SYSTEMS_AREA_ID);
+    entry(frame, `${SHELL_COMMANDS.areaPrefix}${ASSETS_AREA_ID}`).run();
+    expect(frame.activeAreaId()).toBe(ASSETS_AREA_ID);
   });
 
   it('смена языка меняет локаль ресурсов и не трогает документы (ED-27)', async () => {
@@ -245,9 +243,9 @@ describe('ED-24, ED-25: сочетание команды — такое же з
       id: 'test.command.stealsArea',
       descriptionKey: 'ui.inspector.title',
       labelKey: 'ui.inspector.title',
-      keybinding: systemsArea.hotkey ?? PALETTE_BINDING,
+      keybinding: stubArea.hotkey ?? PALETTE_BINDING,
       run: () => undefined,
     });
-    expect(() => buildFrame([systemsArea], 'ru', { commands: registry })).toThrow();
+    expect(() => buildFrame([stubArea], 'ru', { commands: registry })).toThrow();
   });
 });

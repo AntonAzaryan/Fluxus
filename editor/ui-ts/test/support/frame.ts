@@ -33,7 +33,7 @@ import { registerTerrainOperations } from '../../src/areas/sceneTerrain.js';
 import { registerVisualsOperations } from '../../src/areas/assetVisuals.js';
 import { registerCameraEffectsOperations } from '../../src/areas/assetCameraEffects.js';
 import type { CameraEffectsDescription } from '@game-mvp/assets';
-import { systemsArea } from '../../src/areas/systems.js';
+import { stubArea } from './stubArea.js';
 import { previewProbe, type PreviewProbe } from './preview.js';
 import { FIXTURE_IDS, fakeStage, fixtureHost, settle, type FakeStage } from './project.js';
 
@@ -64,9 +64,13 @@ export interface FrameExtras {
   readonly cameraEffects?: CameraEffectsDescription;
 }
 
-/** Каркас с набором областей. По умолчанию — те же два вклада, что и в приложении. */
+/**
+ * Каркас с набором областей. По умолчанию — область сцены и фикстурная область
+ * набора (`stubArea`): каркас обязан проверяться на двух непохожих областях, и
+ * вторая из них принадлежит тестам, а не приложению.
+ */
 export function buildFrame(
-  areas: readonly WorkspaceArea[] = [sceneArea, systemsArea],
+  areas: readonly WorkspaceArea[] = [sceneArea, stubArea],
   locale = 'ru',
   extras: FrameExtras = {},
 ): FrameFixture {
@@ -137,7 +141,7 @@ export async function buildLoadedFrame(
       return made;
     },
   });
-  const fixture = buildFrame([area, systemsArea, ...(options.areas ?? [])], locale, options);
+  const fixture = buildFrame([area, stubArea, ...(options.areas ?? [])], locale, options);
   // Запись состояния заводится лениво — первым обращением к области.
   const state = fixture.frame.stateOf(area.id) as SceneAreaState;
   await settle();
@@ -157,7 +161,7 @@ export interface LoadedFrameOptions extends FrameExtras {
   readonly host?: MemoryHost;
   /** Дополнительные правила валидации (ED-8, ED-25). */
   readonly rules?: readonly ValidationRule[];
-  /** Дополнительные области сверх сцены и систем. */
+  /** Дополнительные области сверх сцены и фикстурной. */
   readonly areas?: readonly WorkspaceArea[];
 }
 

@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import { documentValue, findAll, type UiNode } from '../src/dom/node.js';
 import { PREVIEW_SUSPENSION_REASON } from '../src/frame/preview.js';
 import { createSceneArea } from '../src/areas/scene.js';
-import { systemsArea } from '../src/areas/systems.js';
+import { stubArea } from './support/stubArea.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
 import {
   attr,
@@ -415,7 +415,7 @@ describe('ED-26: режим виден постоянно и переключа�
   it('режим читается из любой области — он один на редактор, а не на область', async () => {
     const fixture = await buildLoadedFrame();
     fixture.frame.togglePreview();
-    for (const areaId of [systemsArea.id, fixture.area.id]) {
+    for (const areaId of [stubArea.id, fixture.area.id]) {
       fixture.frame.activate(areaId);
       expect(fixture.frame.mode()).toBe('preview');
       expect(shownKeys(fixture)).toContain('ui.chip.previewMode');
@@ -424,7 +424,7 @@ describe('ED-26: режим виден постоянно и переключа�
 
   it('запуск и выход доступны из области, которая сцену не показывает', async () => {
     const fixture = await buildLoadedFrame();
-    fixture.frame.activate(systemsArea.id);
+    fixture.frame.activate(stubArea.id);
     expect(fixture.frame.canPreview()).toBe(true);
 
     press(previewButton(fixture));
@@ -454,8 +454,8 @@ describe('ED-26: режим виден постоянно и переключа�
     });
     // Уход в соседнюю область записи чужого состояния не заводит: страницу тут
     // ещё никто не собирал, и области сцены как бы не существует.
-    const fixture = buildFrame([systemsArea, area]);
-    fixture.frame.activate(systemsArea.id);
+    const fixture = buildFrame([stubArea, area]);
+    fixture.frame.activate(stubArea.id);
     expect(fixture.frame.canPreview()).toBe(false);
 
     await settle();

@@ -21,7 +21,7 @@ import { collectTexts, findAll, hasClass, type UiNode } from '../src/dom/node.js
 import { PALETTE_CLASS, PALETTE_ROVING_ID } from '../src/palette/view.js';
 import type { CommandTarget, PaletteCommand } from '../src/palette/palette.js';
 import { PALETTE_BINDING } from '../src/frame/keys.js';
-import { systemsArea } from '../src/areas/systems.js';
+import { stubArea } from './support/stubArea.js';
 import { createAssetArea } from '../src/areas/assets.js';
 import { attr, buildFrame, buildLoadedFrame, keydown } from './support/frame.js';
 import { FIXTURE_CURVATURE_ID, FIXTURE_IDS, fixtureHost, settle } from './support/project.js';
@@ -69,7 +69,7 @@ describe('ED-24: палитра открывается и закрывается
     // Область, объявившая `Ctrl+P` своей, не получила бы ни одного нажатия —
     // каркас разбирает его раньше. Отказ вместо молчания (ED-23).
     expect(() =>
-      buildFrame([{ ...systemsArea, id: 'area.other', hotkey: PALETTE_BINDING }]),
+      buildFrame([{ ...stubArea, id: 'area.other', hotkey: PALETTE_BINDING }]),
     ).toThrow();
   });
 
@@ -198,7 +198,7 @@ describe('ED-24, ED-30: операции приходят из каталога,
       descriptionKey: 'ui.inspector.title',
       labelKey: 'ui.inspector.title',
       run: (target: CommandTarget) => {
-        target.activate(systemsArea.id);
+        target.activate(stubArea.id);
       },
     });
     const { frame } = await buildLoadedFrame('ru', { commands });
@@ -206,7 +206,7 @@ describe('ED-24, ED-30: операции приходят из каталога,
     const entry = frame.paletteEntries().find((candidate) => candidate.kind === 'command');
     expect(entry?.disabled).toBe(false);
     entry?.run();
-    expect(frame.activeAreaId()).toBe(systemsArea.id);
+    expect(frame.activeAreaId()).toBe(stubArea.id);
     frame.stopPreview();
   });
 });
@@ -235,8 +235,8 @@ describe('ED-24, ED-23: поиск по проекту находит докум
     hit?.run();
     // Поиск сквозной (ED-23): каркас переключает область сам, потому что
     // открыть найденное умеет только та область, которая его нашла.
-    expect(frame.activeAreaId()).toBe(systemsArea.id);
-    expect(frame.selection.get(systemsArea.id)).toEqual(['content/systems/regen.system.json']);
+    expect(frame.activeAreaId()).toBe(stubArea.id);
+    expect(frame.selection.get(stubArea.id)).toEqual(['content/systems/regen.system.json']);
   });
 
   it('пустой запрос находок не даёт, а команды и операции остаются', () => {
@@ -250,7 +250,7 @@ describe('ED-24, ED-23: поиск по проекту находит докум
   it('запрос сквозной: он переживает переключение области и правит список', async () => {
     const { frame } = await buildLoadedFrame();
     frame.setSearchQuery('fixture');
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     expect(frame.searchQuery()).toBe('fixture');
     frame.openPalette();
     const labels = frame
