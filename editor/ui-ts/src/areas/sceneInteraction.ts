@@ -29,6 +29,21 @@
  * выделение, и запись истории «подвинул на ноль» была бы undo, который ничего не
  * делает.
  *
+ * Закрыться она обязана в любом исходе. Штатный — отпускание (`commit`).
+ * Нештатных три, и все три идут одним путём (`cancel`): отпускание, до вьюпорта
+ * не дошедшее (фаза `cancel` — окно потеряло фокус, кадр снесён), нажатие поверх
+ * незакрытого перетаскивания и отказ ядра посреди него (величина вне Q16.16,
+ * FP-1). Оставленная открытой транзакция — не косметика: пока она открыта,
+ * сессия не даёт ни следующей операции, ни undo.
+ *
+ * ## Отклик вьюпорта во время взаимодействия (ED-15)
+ *
+ * Применения внутри транзакции сессия событием не объявляет — событие даёт
+ * только `commit`. Поэтому инструмент просит перерисовать сам, а сведение кадра
+ * с документами область делает на каждую сборку страницы: без этого объект
+ * стоял бы на месте, пока автор держит кнопку, то есть правка доходила бы до
+ * вьюпорта позже следующего кадра.
+ *
  * ## Привязка к сетке
  *
  * ED-16: «Привязка к сетке террейна SHALL быть опциональным инструментом ввода,
@@ -59,7 +74,6 @@ import type {
 import type { OverlayCells, OverlayGizmo, OverlayGrid } from '@game-mvp/render';
 import type { AreaSelection, SelectionRef } from '../frame/selection.js';
 import type { ScenePlacement, PositionBinding } from './sceneDocuments.js';
-import { TURN_RADIANS } from './sceneDocuments.js';
 import { PLACEMENT_OPERATIONS, bindingParam } from './scenePlacement.js';
 
 // --------------------------------------------------------------- сервисы кадра
@@ -109,12 +123,18 @@ export interface StageHighlight {
 /** Набор наложений вьюпорта в терминах редактора (REND-16). */
 export type SceneOverlay = StageHighlight | OverlayGizmo | OverlayCells | OverlayGrid;
 
-/** Фаза указателя, дошедшая до инструмента. Кнопки камеры сюда не попадают (CAM-3). */
-export type StagePointerPhase = 'down' | 'move' | 'up';
+/**
+ * Фаза указателя, дошедшая до инструмента. Кнопки камеры сюда не попадают
+ * (CAM-3). `cancel` — отпускание, до вьюпорта не дошедшее (окно потеряло фокус,
+ * область снесена): взаимодействие обязано закрыться и в этом случае, иначе оно
+ * остаётся открытым навсегда, а открытое взаимодействие в сессии запрещает и
+ * следующую операцию, и undo (ED-18).
+ */
+export type StagePointerPhase = 'down' | 'move' | 'up' | 'cancel';
 
 export interface StagePointer {
   readonly phase: StagePointerPhase;
-  /** Положение указателя в координатах окна — прямоугольник кадра знает вьюпорт. */
+  /** Положение указателя в координатах окна; у `cancel` смысла не имеет. */
   readonly x: number;
   readonly y: number;
   /** Модификатор мультивыделения (ED-17): добавить к выделению, а не заменить его. */
@@ -236,7 +256,14 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
   const toggled = (refs: readonly SelectionRef[], key: string): SelectionRef[] =>
     refs.includes(key) ? refs.filter((ref) => ref !== key) : [...refs, key];
 
-  /** Применяет перемещение всего выделенного одним продолжением взаимодействия. */
+  /**
+   * Применяет перемещение всего выделенного одним продолжением взаимодействия.
+   *
+   * Применения внутри транзакции сессия событием не объявляет — событие даёт
+   * только `commit`, — поэтому кадр пересчитывается просьбой перерисовать:
+   * без неё объект стоял бы на месте до отпускания кнопки, то есть правка
+   * доходила бы до вьюпорта позже следующего кадра (ED-15).
+   */
   const moveTo = (state: DragState, dx: number, dy: number): void => {
     for (const start of state.starts) {
       const params: OperationParams = {
@@ -252,11 +279,29 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
         state.transaction.extend(params);
       }
     }
+    refresh();
+  };
+
+  /**
+   * Бросает взаимодействие, вернув документы к состоянию до нажатия. Это же —
+   * ответ на отказ посреди перетаскивания: половина мультивыделения, доехавшая
+   * до новой позиции, есть состояние, которого не производит ни одна операция
+   * целиком, и `commit` записал бы его в историю как достижимое (ED-18).
+   */
+  const cancelDrag = (): void => {
+    const state = drag;
+    drag = null;
+    if (state?.transaction == null) return;
+    state.transaction.cancel();
+    refresh();
   };
 
   const place = (event: StagePointer): void => {
     const picker = input?.picker;
-    if (picker == null || prefab === null) return;
+    // Пока идёт чужое взаимодействие, второй операции сессия не начнёт — и
+    // отказывает исключением. Отказ здесь тот же, что у поворота и удаления:
+    // молча ничего не сделать, а не уронить обработчик указателя.
+    if (picker == null || prefab === null || session.pending) return;
     // Точка на поверхности, а не под объектом: ставят на арену, а не на юнита.
     const hit = picker.pickSurface(event.x, event.y);
     if (hit === null) return;
@@ -274,6 +319,10 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
   };
 
   const down = (event: StagePointer): void => {
+    // Нажатие поверх ещё не закрытого перетаскивания: отпускание до вьюпорта не
+    // дошло. Прежнее взаимодействие закрывается здесь, а не забывается ссылкой —
+    // забытая транзакция осталась бы открытой в сессии навсегда (ED-18).
+    if (drag !== null) cancelDrag();
     if (mode === 'place') {
       place(event);
       return;
@@ -313,7 +362,15 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
     const dx = ground.x - state.originX;
     const dy = ground.y - state.originY;
     if (state.transaction === null && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
-    moveTo(state, dx, dy);
+    try {
+      moveTo(state, dx, dy);
+    } catch {
+      // Величина, которой ядро не представляет (FP-1), взаимодействие не
+      // продолжает: документы возвращаются к состоянию до нажатия, в истории не
+      // остаётся ничего. Причина наружу не поднимается намеренно — это не
+      // отказ операции авторинга, а курсор, уехавший за пределы Q16.16.
+      cancelDrag();
+    }
   };
 
   const up = (): void => {
@@ -369,6 +426,7 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
     pointer(event) {
       if (event.phase === 'down') down(event);
       else if (event.phase === 'move') move(event);
+      else if (event.phase === 'cancel') cancelDrag();
       else up();
     },
 
@@ -388,7 +446,10 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
       let transaction: OperationTransaction | null = null;
       for (const key of keys) {
         const placement = placements().find((item) => item.key === key);
-        const current = (placement?.yaw ?? 0) / TURN_RADIANS;
+        // Прежний поворот берётся в единице ядра — доле оборота, — а не делением
+        // радиан рендера: обратный ход через радианы теряет квант Q16.16, и
+        // каждое нажатие уводило бы поворот на него (FP-1).
+        const current = placement?.turns ?? 0;
         const params: OperationParams = {
           ...bound,
           document: options.documentId,

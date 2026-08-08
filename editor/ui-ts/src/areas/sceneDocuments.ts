@@ -83,6 +83,16 @@ import { kindByTags, type DocumentInstance } from '@game-mvp/render';
  */
 export interface ScenePlacement extends DocumentInstance {
   readonly prefab: string;
+  /**
+   * Поворот в единице ЯДРА — доле оборота (`fixed.sin`), а не в радианах `yaw`.
+   * Поле отдельное, а не выводимое из `yaw` делением, потому что обратный ход
+   * через радианы не бит-в-бит: `raw/65536 · 2π / 2π` для примерно седьмой
+   * части значений Q16.16 даёт величину чуть ниже исходной, и `fixed.fromFloat`
+   * (усечение к нулю, FP-1) возвращает на квант меньше. Поворот, посчитанный
+   * от прежнего, терял бы этот квант на каждом нажатии. Ноль — проект не
+   * назвал, где лежит поворот (ED-16), и поворачивать нечего.
+   */
+  readonly turns: number;
 }
 
 /**
@@ -98,8 +108,13 @@ export interface SceneDraft {
   readonly failure: string | null;
 }
 
-/** Полный оборот в радианах: угол ядра — доля оборота, `yaw` рендера — радианы. */
-export const TURN_RADIANS = Math.PI * 2;
+/**
+ * Полный оборот в радианах: угол ядра — доля оборота, `yaw` рендера — радианы.
+ * Не экспортируется намеренно: перевод в радианы делается ровно на входной
+ * границе рендера (REND-1) и ровно один раз, а обратного перевода нет вовсе —
+ * поворот, который редактор пишет в документ, берётся из `ScenePlacement.turns`.
+ */
+const TURN_RADIANS = Math.PI * 2;
 
 /** Где у сим-объекта лежит поворот (ED-16): компонент и имя одного его поля. */
 export interface RotationBinding {
@@ -205,7 +220,9 @@ export function placementsOf(input: SceneDraftInput): readonly ScenePlacement[] 
     // Поворот — вторая половина той же настройки; проект, её не назвавший,
     // поворота не хранит, и курса у инстанса нет вовсе.
     const spun = spin !== undefined && world.hasComponent(state, entity, spin.component);
-    const turns = spun ? world.getField(state, entity, spin.component, spin.field) : 0;
+    // Доля оборота — единица ядра; её и держит запись. `raw / 65536` точно в
+    // double (степень двойки), поэтому обратно в Q16.16 она уходит без потери.
+    const turns = fixed.toFloat(spun ? world.getField(state, entity, spin.component, spin.field) : 0);
     // Точка входной границы рендера (REND-1): Q16.16 → float здесь, и глубже
     // fixed-point не идёт. Уровень под объектом — ответ ядра (TERR-4).
     placements.push({
@@ -215,7 +232,9 @@ export function placementsOf(input: SceneDraftInput): readonly ScenePlacement[] 
       x: fixed.toFloat(fx),
       y: fixed.toFloat(fy),
       level: scene.terrain?.levelAt({ x: fx, y: fy }) ?? 0,
-      ...(spin === undefined ? {} : { yaw: fixed.toFloat(turns) * TURN_RADIANS }),
+      turns,
+      // Радианы — только рендеру (REND-1): его `yaw` их и требует.
+      ...(spin === undefined ? {} : { yaw: turns * TURN_RADIANS }),
     });
   }
   return placements;

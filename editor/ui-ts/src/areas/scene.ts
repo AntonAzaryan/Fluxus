@@ -50,7 +50,7 @@ import {
   type SceneProject,
   type SceneProjectIds,
 } from './sceneProject.js';
-import { TURN_RADIANS, type SceneDraft } from './sceneDocuments.js';
+import type { SceneDraft } from './sceneDocuments.js';
 
 /** Идентификатор области. Один и тот же в реестре, рельсе и записи состояния. */
 export const SCENE_AREA_ID = 'area.scene';
@@ -127,6 +127,14 @@ export interface SceneAreaState {
   focusId: string;
   /** Просьба перерисовать после асинхронного открытия; ставится отрисовкой. */
   refresh: () => void;
+  /**
+   * Свести кадр с документами. Ставится открытием проекта; до него сводить
+   * нечего. Зовётся не только событием сессии: применения внутри идущего
+   * взаимодействия (перетаскивание, мазок кисти) событием не объявляются —
+   * событие даёт только `commit`, — и без явного сведения объект стоял бы на
+   * месте до отпускания кнопки (ED-15).
+   */
+  sync: () => void;
 }
 
 const message = (error: unknown): string =>
@@ -191,6 +199,10 @@ function start(state: SceneAreaState, setup: AreaSetup, options: SceneAreaOption
         state.stage?.submit(state.draft);
         state.refresh();
       };
+      // Подписка ловит правку, пришедшую откуда угодно, в том числе без
+      // интерфейса (ED-29); отрисовка зовёт то же самое ещё раз — она видит и
+      // те применения, о которых события ещё не было (открытое взаимодействие).
+      state.sync = recompute;
       setup.session.subscribe(recompute);
       recompute();
     })
@@ -476,9 +488,12 @@ function inspector(context: AreaContext<SceneAreaState>): UiNode {
             [
               ['ui.area.scene.field.x', placement.x.toFixed(3)],
               ['ui.area.scene.field.y', placement.y.toFixed(3)],
+              // Поворот показан в единице ядра — доле оборота: делить радианы
+              // рендера обратно значило бы показывать величину, которой в
+              // документе нет (FP-1).
               ...(placement.yaw === undefined
                 ? []
-                : ([['ui.area.scene.field.turns', (placement.yaw / TURN_RADIANS).toFixed(3)]] as const)),
+                : ([['ui.area.scene.field.turns', placement.turns.toFixed(3)]] as const)),
               ['ui.area.scene.field.level', String(placement.level ?? 0)],
             ] as const
           ).map(([key, value]) => ({
@@ -537,6 +552,7 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
         expanded: new Set([ids.config, SCENE_NODES.placements, SCENE_NODES.assets]),
         focusId: ids.config,
         refresh: () => undefined,
+        sync: () => undefined,
         // Инструмент заводится вместе с записью состояния и живёт столько же
         // (ED-23): указатель приходит в него из вьюпорта, а не из отрисовки.
         tool: createPlacementTool({
@@ -559,6 +575,12 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
       state.refresh = () => {
         context.refresh();
       };
+      // Кадр сводится с документами прежде, чем страница из них строится:
+      // правка, сделанная внутри ещё не закрытого взаимодействия, события
+      // сессии не даёт, и без этого вызова вьюпорт показывал бы её только
+      // после отпускания кнопки (ED-15). Сведение без правки — сравнение двух
+      // ссылок и выход.
+      state.sync();
       // Инструмент видит выделение сессии (ED-23), кадр и текущий набор — то
       // есть ровно то, что показывает эта же сборка страницы. Подаётся здесь, а
       // не при заведении записи: выделение сквозное и приходит на отрисовку.
@@ -574,9 +596,15 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
         prefabs:
           state.project === null ? [] : prefabNames(context.session.documentValue(state.project.configId)),
       });
-      // Набор наложений — функция выделения, а не история вызовов (REND-16):
-      // он отдаётся целиком на каждую сборку, а сводит его подсистема.
-      state.stage?.setOverlays(state.tool.overlays());
+      // Набор наложений — функция состояния, а не история вызовов (REND-16): он
+      // отдаётся ЦЕЛИКОМ на каждую сборку, а сводит его подсистема.
+      //
+      // Складывает его область, а не инструменты: `setOverlays` принимает полный
+      // набор, и инструмент, зовущий его сам, погасил бы наложения соседа. Свои
+      // наложения инструмент только называет — отсюда и `overlays()` без
+      // побочных действий. Кисть террейна (W3-2) добавит сюда своё слагаемое,
+      // а не второй вызов.
+      state.stage?.setOverlays([...state.tool.overlays()]);
       return {
         navigator: navigator(context),
         surface: surface(context),

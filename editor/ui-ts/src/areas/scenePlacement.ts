@@ -247,18 +247,14 @@ export const movePlacementOperation: AuthoringOperation = {
     const binding = readBinding(id, params);
     const document = asDocument(params);
     const record = asRecord(params);
-    ctx.setRecordValue(
-      document,
-      record,
-      [OVERRIDES_KEY, binding.component, binding.x],
-      requireQuantized(id, 'x', asNumber(params, 'x')),
-    );
-    ctx.setRecordValue(
-      document,
-      record,
-      [OVERRIDES_KEY, binding.component, binding.y],
-      requireQuantized(id, 'y', asNumber(params, 'y')),
-    );
+    // Обе величины квантуются ДО первой записи: отказ по второй иначе оставлял
+    // бы записанной первую. Откатить это умеет и сессия (упавшее применение
+    // возвращается целиком), но операция, которой для целостности нужен чужой
+    // откат, целостна лишь до первого вызывающего, который его не сделает.
+    const x = requireQuantized(id, 'x', asNumber(params, 'x'));
+    const y = requireQuantized(id, 'y', asNumber(params, 'y'));
+    ctx.setRecordValue(document, record, [OVERRIDES_KEY, binding.component, binding.x], x);
+    ctx.setRecordValue(document, record, [OVERRIDES_KEY, binding.component, binding.y], y);
     return undefined;
   },
 };

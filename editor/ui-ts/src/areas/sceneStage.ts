@@ -310,6 +310,17 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       tell('up', event);
     }
   };
+  /**
+   * Отпускание, до вьюпорта не дошедшее: окно потеряло фокус (переключение
+   * приложения, системное меню), и `mouseup` в него уже не придёт. Без этого
+   * взаимодействие сессии осталось бы открытым навсегда — а пока оно открыто,
+   * сессия не даёт ни следующей операции, ни undo (ED-18).
+   */
+  const onWindowBlur = (): void => {
+    if (!leftDrag) return;
+    leftDrag = false;
+    options.onPointer?.({ phase: 'cancel', x: 0, y: 0, additive: false });
+  };
   const onContextMenu = (event: Event): void => event.preventDefault();
   const onWheel = (event: WheelEvent): void => {
     event.preventDefault();
@@ -326,6 +337,8 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   canvas.addEventListener('contextmenu', onContextMenu);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   doc.addEventListener('mouseup', onPointerUp);
+  const window_ = doc.defaultView;
+  window_?.addEventListener('blur', onWindowBlur);
 
   // ------------------------------------------------------------- подсистемы
 
@@ -552,6 +565,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     },
     dispose() {
       disposed = true;
+      // Сессия живёт дольше вьюпорта: снос кадра посреди перетаскивания не имеет
+      // права оставить её взаимодействие открытым.
+      onWindowBlur();
       canvas.removeEventListener('keydown', onKeyDown);
       canvas.removeEventListener('keyup', onKeyUp);
       canvas.removeEventListener('blur', onBlur);
@@ -561,6 +577,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       canvas.removeEventListener('contextmenu', onContextMenu);
       canvas.removeEventListener('wheel', onWheel);
       doc.removeEventListener('mouseup', onPointerUp);
+      window_?.removeEventListener('blur', onWindowBlur);
       canvas.remove();
       renderer.dispose();
     },

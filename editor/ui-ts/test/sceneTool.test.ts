@@ -28,6 +28,17 @@ const move = (fixture: LoadedFrameFixture, at: { x: number; y: number }): void =
   fixture.pointer({ phase: 'move', ...at, additive: false });
 const up = (fixture: LoadedFrameFixture, at: { x: number; y: number }): void =>
   fixture.pointer({ phase: 'up', ...at, additive: false });
+const cancel = (fixture: LoadedFrameFixture): void =>
+  fixture.pointer({ phase: 'cancel', x: 0, y: 0, additive: false });
+
+/**
+ * Перерисовка, которую в живом редакторе делает подписчик `frame/mount.ts` на
+ * просьбу инструмента: описание страницы строится заново, и вместе с ним кадр
+ * сводится с документами. Тест зовёт её явно — DOM в прогоне нет.
+ */
+const redraw = (fixture: LoadedFrameFixture): void => {
+  fixture.frame.view();
+};
 
 const keys = (fixture: LoadedFrameFixture): readonly string[] =>
   fixture.session.descriptors(FIXTURE_IDS.config, PLACEMENT_LIST);
@@ -166,6 +177,62 @@ describe('ED-16, ED-18: перетаскивание — одна операци
     expect(fixture.session.history().undo).toEqual([]);
   });
 
+  it('объект едет во вьюпорте по ходу перетаскивания, а не в момент отпускания', async () => {
+    // ED-15: «вьюпорт показывает результат не позже следующего кадра». Правка
+    // внутри ещё не закрытого взаимодействия события сессии не даёт — событие
+    // даёт только `commit`, — поэтому кадр сводится с документами явно. Без
+    // этого объект стоял бы на месте, пока автор держит кнопку.
+    const fixture = await withHits();
+    const submitted = fixture.stage.submitted.length;
+
+    down(fixture, AT_FIRST);
+    move(fixture, AT_EMPTY);
+    redraw(fixture);
+
+    expect(fixture.stage.submitted.length).toBeGreaterThan(submitted);
+    // Кнопка ещё не отпущена, а набор инстансов уже в новой точке.
+    expect(fixture.stage.last?.placements[0]?.x).toBeCloseTo(3.5, 6);
+    expect(fixture.session.history().undo).toEqual([]);
+  });
+
+  it('брошенное перетаскивание возвращает документы и не оставляет записи', async () => {
+    // Отпускание, до вьюпорта не дошедшее (окно потеряло фокус, область снесена):
+    // без закрытия взаимодействие осталось бы открытым, а пока оно открыто,
+    // сессия не даёт ни следующей операции, ни undo (ED-18).
+    const fixture = await withHits();
+    const before = positionOf(fixture, 0, 'x');
+
+    down(fixture, AT_FIRST);
+    move(fixture, AT_EMPTY);
+    expect(fixture.session.pending).toBe(true);
+
+    cancel(fixture);
+    expect(fixture.session.pending).toBe(false);
+    expect(fixture.state.tool.dragging).toBe(false);
+    expect(positionOf(fixture, 0, 'x')).toBe(before);
+    expect(fixture.session.history().undo).toEqual([]);
+  });
+
+  it('точка вне представимого Q16.16 бросает перетаскивание целиком, а не наполовину', async () => {
+    // Половина мультивыделения, доехавшая до новой позиции, — состояние,
+    // которого не производит ни одна операция целиком; `commit` записал бы его
+    // в историю как достижимое (ED-18, FP-1).
+    const fixture = await withHits();
+    const before = positionOf(fixture, 0, 'x');
+
+    down(fixture, AT_FIRST);
+    down(fixture, AT_SECOND, true);
+    fixture.stage.surfaceHits.set(`${AT_EMPTY.x}:${AT_EMPTY.y}`, surfaceHit(1e9, 1e9, 15));
+    // Отказ ядра не поднимается исключением в обработчик указателя.
+    expect(() => {
+      move(fixture, AT_EMPTY);
+    }).not.toThrow();
+
+    expect(fixture.session.pending).toBe(false);
+    expect(positionOf(fixture, 0, 'x')).toBe(before);
+    expect(fixture.session.history().undo).toEqual([]);
+  });
+
   it('перетаскивание не переставляет записи расстановки', async () => {
     const fixture = await withHits();
     const names = records(fixture).map((entry) => getAtPath(entry, ['prefab']));
@@ -245,6 +312,26 @@ describe('ED-16: расстановка дописывает в конец и а
     press(buttonByKey(fixture.frame.view(), 'ui.area.scene.rotateRight'));
     expect(positionOf(fixture, 0, 'turns')).toBe(fixed.fromFloat(1 / 8));
     expect(positionOf(fixture, 1, 'turns')).toBeUndefined();
+  });
+
+  it('поворот считается от доли оборота документа, а не от радиан кадра (FP-1)', async () => {
+    // `raw/65536 · 2π / 2π` для примерно седьмой части значений Q16.16 даёт
+    // величину чуть ниже исходной, и усечение к нулю возвращает на квант
+    // меньше. Прежний поворот, взятый через радианы рендера, терял бы этот квант
+    // на каждом нажатии — молча и накопительно.
+    const fixture = await withHits();
+    down(fixture, AT_FIRST);
+    up(fixture, AT_FIRST);
+    redraw(fixture);
+
+    // Значение, которое обратный ход через радианы не воспроизводит бит-в-бит.
+    const hostile = -65533;
+    fixture.state.tool.rotate(hostile / FIXED_ONE);
+    redraw(fixture);
+    expect(positionOf(fixture, 0, 'turns')).toBe(hostile);
+
+    fixture.state.tool.rotate(1 / 8);
+    expect(positionOf(fixture, 0, 'turns')).toBe(hostile + FIXED_ONE / 8);
   });
 });
 
