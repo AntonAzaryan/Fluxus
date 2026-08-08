@@ -59,8 +59,11 @@ export {
   resolveVisual,
   visualKeys,
   cameraEffectParams,
+  cameraEffectParamInRange,
+  cameraEffectRangeText,
   cameraEffectType,
   clampCameraEffectParam,
+  POSITIVE_MIN,
   DEFAULT_SURFACE_ALIGN,
 } from './manifest.js';
 

@@ -8,7 +8,7 @@
  * Float, шум и Math-тригонометрия здесь легальны: слой живёт в рендере
  * (REND-1), в симуляцию ничего не течёт.
  */
-import type { CameraEffectParamSpec, CameraEffectTypeSpec } from '@game-mvp/assets';
+import { POSITIVE_MIN, type CameraEffectParamSpec, type CameraEffectTypeSpec } from '@game-mvp/assets';
 import type { CameraPose } from './rig.js';
 
 /** Аддитивный офсет позы; поля соответствуют `CameraPose`. */
@@ -78,9 +78,13 @@ export function defaults<T>(spec: CameraEffectTypeSpec): T {
 const nonNegative = (name: string, defaultValue: number): CameraEffectParamSpec =>
   Object.freeze({ name, defaultValue, min: 0 });
 
-/** Положительное число: частота нулём не бывает — это остановленное время. */
+/**
+ * Положительное число: частота нулём не бывает — это остановленное время.
+ * Границы описания включающие, и строгую положительность выражает `POSITIVE_MIN`
+ * — общее слово формата, а не число на месте (`@game-mvp/assets`).
+ */
 const positive = (name: string, defaultValue: number): CameraEffectParamSpec =>
-  Object.freeze({ name, defaultValue, min: Number.MIN_VALUE });
+  Object.freeze({ name, defaultValue, min: POSITIVE_MIN });
 
 /**
  * Детерминированный value-noise [-1..1]: сглаженная интерполяция хэша

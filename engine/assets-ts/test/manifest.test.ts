@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   AssetService,
+  POSITIVE_MIN,
+  cameraEffectRangeText,
+  clampCameraEffectParam,
   createManifestLoader,
   manifestLoader,
   resolveVisual,
@@ -346,6 +349,37 @@ describe('validateManifest: секция эффектов камеры (ASSET-8)
     if (result.ok) return;
     expect(result.errors.some((e) => /cameraEffects\.events\.Boom\.decay/.test(e))).toBe(true);
     expect(result.errors.some((e) => /cameraEffects\.events\.Boom\.amplitude/.test(e))).toBe(true);
+  });
+
+  /**
+   * Строгую положительность (CAM-9: «частота положительна») включающая граница
+   * выражает наименьшим представимым положительным числом. Сообщение об этом
+   * адресовано автору манифеста: `5e-324` в нём — внутренность представления, а
+   * не граница, которую автор способен прочесть.
+   */
+  it('строго положительная граница показана открытым нулём, а не 5e-324', () => {
+    const positive: CameraEffectsDescription = {
+      types: [{ id: 'shake', kind: 'impulse', params: [{ name: 'frequency', defaultValue: 13, min: POSITIVE_MIN }] }],
+      binding: { impulse: [], lasting: [] },
+    };
+    const result = validateManifest(
+      { entities, cameraEffects: { events: { Boom: { effect: 'shake', frequency: 0 } } } },
+      { cameraEffects: positive },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0]).toContain('(0..+∞)');
+    expect(result.errors.join()).not.toContain('5e-324');
+    // Приведение к границе (CAM-6) при этом остаётся точным по построению:
+    // ближе к запрошенному нулю положительное число не подойдёт.
+    expect(clampCameraEffectParam({ name: 'frequency', defaultValue: 13, min: POSITIVE_MIN }, 0)).toBe(
+      POSITIVE_MIN,
+    );
+  });
+
+  it('включающие границы записаны закрытыми скобками', () => {
+    expect(cameraEffectRangeText({ name: 'decay', defaultValue: 1, min: 0, max: 10 })).toBe('[0..10]');
+    expect(cameraEffectRangeText({ name: 'free', defaultValue: 1 })).toBe('(-∞..+∞)');
   });
 
   it('параметры привязки законны наравне с параметрами типа (CAM-9)', () => {

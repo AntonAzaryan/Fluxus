@@ -148,7 +148,47 @@ export function cameraEffectParams(
   return [...type.params, ...(description.binding[type.kind] ?? [])];
 }
 
-/** Значение параметра, приведённое к объявленным границам (CAM-6). */
+/**
+ * Нижняя граница «строго положительно» — наименьшее представимое положительное
+ * число. Границы описания включающие (`min`/`max`), и строгую положительность,
+ * о которой CAM-9 говорит прямым текстом («частота положительна»), в них
+ * выражает именно она: любое положительное значение её проходит, ноль и
+ * отрицательное — нет.
+ *
+ * Названа, а не написана числом на месте, ради двух вещей: код камеры объявляет
+ * ею положительные параметры одним словом, а `cameraEffectRangeText` печатает по
+ * ней открытый ноль вместо `5e-324` — граница адресована автору манифеста, а не
+ * читателю представления чисел.
+ */
+export const POSITIVE_MIN = Number.MIN_VALUE;
+
+/**
+ * Диапазон параметра интервальной записью: `[0..+∞)`, `[0..10]`, `(0..+∞)`.
+ * Скобка называет включение границы, и строго положительный минимум показан
+ * открытым нулём.
+ */
+export function cameraEffectRangeText(spec: CameraEffectParamSpec): string {
+  const low = spec.min === undefined ? '(-∞' : spec.min === POSITIVE_MIN ? '(0' : `[${spec.min}`;
+  const high = spec.max === undefined ? '+∞)' : `${spec.max}]`;
+  return `${low}..${high}`;
+}
+
+/**
+ * Значение в объявленных границах? Один ответ на весь репозиторий: им судят и
+ * валидация секции (ошибка, ASSET-8), и операция редактора (отказ) — второе
+ * сравнение разошлось бы с первым молча.
+ */
+export function cameraEffectParamInRange(spec: CameraEffectParamSpec, value: number): boolean {
+  if (spec.min !== undefined && value < spec.min) return false;
+  return !(spec.max !== undefined && value > spec.max);
+}
+
+/**
+ * Значение параметра, приведённое к объявленным границам (CAM-6). Для строго
+ * положительной границы приведение точно по построению: `POSITIVE_MIN` —
+ * ближайшее к нулю положительное число, и ближе к запрошенному нулю привести
+ * нельзя.
+ */
 export function clampCameraEffectParam(spec: CameraEffectParamSpec, value: number): number {
   const low = spec.min === undefined ? value : Math.max(spec.min, value);
   return spec.max === undefined ? low : Math.min(spec.max, low);
@@ -527,9 +567,9 @@ function validateEffectAgainstDescription(
       continue;
     }
     if (!isFiniteNumber(value)) continue; // о не-числе уже сказано ошибкой выше
-    if ((spec.min !== undefined && value < spec.min) || (spec.max !== undefined && value > spec.max)) {
+    if (!cameraEffectParamInRange(spec, value)) {
       errors.push(
-        `${defPath}.${param}: значение ${value} вне диапазона [${spec.min ?? '-∞'}..${spec.max ?? '+∞'}], объявленного типом "${id}"`,
+        `${defPath}.${param}: значение ${value} вне диапазона ${cameraEffectRangeText(spec)}, объявленного типом "${id}"`,
       );
     }
   }
