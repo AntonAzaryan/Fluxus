@@ -27,7 +27,7 @@
 import { getAtPath, type JsonValue } from '../document/index.js';
 import type { DocumentId, DocumentKind, EditorDocument } from '../document/index.js';
 import type { ContributionReader } from '../registry/index.js';
-import { reasonKey } from './reasons.js';
+import { reasonKey, RULE_FAILED } from './reasons.js';
 import { createReport } from './result.js';
 import type {
   Finding,
@@ -69,9 +69,6 @@ interface CacheEntry {
 }
 
 const NOTHING: ValidationRunStats = { executed: 0, reused: 0 };
-
-/** Код причины «правило упало само»: у каждого правила он один и тот же. */
-export const RULE_FAILED = 'ruleFailed';
 
 /** Разделитель ключа кэша: в id правила и id документа нулевого символа нет. */
 const KEY_SEPARATOR = '\u0000';
@@ -203,6 +200,13 @@ function execute(
       return value;
     },
     report(finding: Finding) {
+      // Код, которого правило не объявило, — дефект самого правила: по
+      // объявлению собран бандл (ED-28), и необъявленная причина показалась бы
+      // автору голым ключом. Отказ здесь превращается в находку «правило
+      // упало» ниже по стеку, то есть расхождение видно, а не молчит.
+      if (!rule.reasonCodes.includes(finding.code)) {
+        throw new Error(`правило "${rule.id}": код причины "${finding.code}" не объявлен в reasonCodes`);
+      }
       const documentId = finding.documentId ?? document.id;
       const value = read(documentId);
       issues.push({

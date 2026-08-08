@@ -521,6 +521,126 @@
     "schema.vec2.y": {
       "source": "da14a633",
       "translated": "c8f77238"
+    },
+    "validation.reason.assets.curvature.rejected": {
+      "source": "7eabc2f4",
+      "translated": "23125471"
+    },
+    "validation.reason.assets.curvature.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.assets.manifest.rejected": {
+      "source": "8616382b",
+      "translated": "65840c77"
+    },
+    "validation.reason.assets.manifest.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.core.scene.rejected": {
+      "source": "97d8ba9a",
+      "translated": "7ce47774"
+    },
+    "validation.reason.core.scene.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.core.system.rejected": {
+      "source": "44064fb6",
+      "translated": "34c84252"
+    },
+    "validation.reason.core.system.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.core.terrain.rejected": {
+      "source": "ab542ebe",
+      "translated": "a56da962"
+    },
+    "validation.reason.core.terrain.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.editor.curvatureGrid.gridMismatch": {
+      "source": "c59eb270",
+      "translated": "9139046f"
+    },
+    "validation.reason.editor.curvatureGrid.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.editor.placementPrefab.missingPrefab": {
+      "source": "f10d3e9c",
+      "translated": "2286e5c6"
+    },
+    "validation.reason.editor.placementPrefab.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.editor.prefabForVisual.missingPrefab": {
+      "source": "46df9f3a",
+      "translated": "165edc2e"
+    },
+    "validation.reason.editor.prefabForVisual.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.editor.visualForPrefab.missingVisual": {
+      "source": "d81b78e7",
+      "translated": "42a03644"
+    },
+    "validation.reason.editor.visualForPrefab.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.save.group.writeTogether.memberLeftUnsaved": {
+      "source": "cf6783d8",
+      "translated": "80e0d50e"
+    },
+    "validation.reason.save.group.writeTogether.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.rule.assets.curvature": {
+      "source": "7b2e7fe0",
+      "translated": "41a2cb57"
+    },
+    "validation.rule.assets.manifest": {
+      "source": "0737c4e0",
+      "translated": "55fbfe88"
+    },
+    "validation.rule.core.scene": {
+      "source": "500ea57e",
+      "translated": "25cbee7c"
+    },
+    "validation.rule.core.system": {
+      "source": "063b5e27",
+      "translated": "8f3d7757"
+    },
+    "validation.rule.core.terrain": {
+      "source": "07a2ee06",
+      "translated": "c21195b6"
+    },
+    "validation.rule.editor.curvatureGrid": {
+      "source": "cc663f83",
+      "translated": "882dd046"
+    },
+    "validation.rule.editor.placementPrefab": {
+      "source": "1d9e808b",
+      "translated": "7a8f3d00"
+    },
+    "validation.rule.editor.prefabForVisual": {
+      "source": "f7856492",
+      "translated": "0b8ce2ee"
+    },
+    "validation.rule.editor.visualForPrefab": {
+      "source": "d3af4126",
+      "translated": "4f74d22d"
+    },
+    "validation.rule.save.group.writeTogether": {
+      "source": "e1c5c8f8",
+      "translated": "46da1137"
     }
   }
 }

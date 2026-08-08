@@ -61,6 +61,7 @@ import {
   createValidator,
   issueKey,
   ruleDescriptionKey,
+  type RuleReasons,
   type ValidationIssue,
   type ValidationReport,
   type ValidationRule,
@@ -72,6 +73,19 @@ export const GROUP_WRITE_RULE_ID = 'save.group.writeTogether';
 
 /** Код причины единственной находки правила записи. */
 const MEMBER_LEFT_UNSAVED = 'memberLeftUnsaved';
+
+/**
+ * Правило записи глазами слоя ресурсов (ED-28): id и коды причин без `check`.
+ *
+ * Само правило строится по составу сохранения и до него не существует, а строки
+ * его причин обязаны лежать в бандле всегда — иначе автор увидел бы на отказе
+ * сохранения голый ключ. Поэтому объявление отделено от построения, и гейт
+ * бандла считает ключи по нему, а не по правилу, которого ещё нет.
+ */
+export const GROUP_WRITE_REASONS: RuleReasons = Object.freeze({
+  id: GROUP_WRITE_RULE_ID,
+  reasonCodes: Object.freeze([MEMBER_LEFT_UNSAVED]),
+});
 
 /**
  * Документы, чьи правки обязаны уходить на диск одной записью. Понятие
@@ -137,6 +151,7 @@ function groupWriteRule(
   return {
     id: GROUP_WRITE_RULE_ID,
     descriptionKey: ruleDescriptionKey(GROUP_WRITE_RULE_ID),
+    reasonCodes: GROUP_WRITE_REASONS.reasonCodes,
     appliesTo: kinds,
     check(run) {
       const group = left.get(run.document.id);

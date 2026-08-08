@@ -13,6 +13,11 @@
  * правила должны собираться и на проекте, где сцена называется иначе. Значения
  * по умолчанию — рядом, чтобы обычная сборка была одной строкой.
  *
+ * Код причины у всех пяти один — `REJECTED`: правило ничего не различает само,
+ * а различать за чужой валидатор значило бы разбирать его прозу (см. ниже).
+ * Строку причины это оставляет одну на правило, и она называет валидатора и
+ * везёт его сообщение дословно.
+ *
  * Чего эти правила не дают и дать не могут: адреса внутри документа для
  * валидаторов ядра. `loadScene`, `createTerrainGrid` и `validateSystem`
  * бросают на первом нарушении и путь не возвращают, поэтому находка адресует
@@ -32,7 +37,7 @@ import {
 } from '@game-mvp/core';
 import { validateCurvatureMap, validateManifest } from '@game-mvp/assets';
 import type { DocumentKind, EditorDocument } from '../document/index.js';
-import { reportErrorList, reportThrown } from './adapters.js';
+import { REJECTED, reportErrorList, reportThrown } from './adapters.js';
 import { ruleDescriptionKey } from './reasons.js';
 import type { ValidationRule, ValidationRun } from './types.js';
 
@@ -93,6 +98,7 @@ export function sceneRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): Valida
   return {
     id: SCENE_RULE,
     descriptionKey: ruleDescriptionKey(SCENE_RULE),
+    reasonCodes: [REJECTED],
     appliesTo: [kinds.scene],
     check(run) {
       const loaded = loadedScene(run, run.document);
@@ -115,6 +121,7 @@ export function terrainRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): Vali
   return {
     id: TERRAIN_RULE,
     descriptionKey: ruleDescriptionKey(TERRAIN_RULE),
+    reasonCodes: [REJECTED],
     appliesTo: [kinds.terrain],
     check(run) {
       const value = run.valueOf(run.document.id);
@@ -138,6 +145,7 @@ export function systemRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): Valid
   return {
     id: SYSTEM_RULE,
     descriptionKey: ruleDescriptionKey(SYSTEM_RULE),
+    reasonCodes: [REJECTED],
     appliesTo: [kinds.system],
     check(run) {
       const def = run.valueOf(run.document.id) as unknown as SystemDef;
@@ -160,6 +168,7 @@ export function manifestRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): Val
   return {
     id: MANIFEST_RULE,
     descriptionKey: ruleDescriptionKey(MANIFEST_RULE),
+    reasonCodes: [REJECTED],
     appliesTo: [kinds.manifest],
     check(run) {
       const value = run.valueOf(run.document.id);
@@ -173,6 +182,7 @@ export function curvatureRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): Va
   return {
     id: CURVATURE_RULE,
     descriptionKey: ruleDescriptionKey(CURVATURE_RULE),
+    reasonCodes: [REJECTED],
     appliesTo: [kinds.curvature],
     check(run) {
       const value = run.valueOf(run.document.id);

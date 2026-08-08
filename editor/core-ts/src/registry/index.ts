@@ -27,6 +27,7 @@ export {
   type CatalogOperation,
   type CatalogParameter,
   type CatalogSources,
+  type CatalogValidationRule,
   type ContributionCatalogSource,
   type EditorCatalog,
   type OperationCatalogSource,

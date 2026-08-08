@@ -39,6 +39,7 @@ const OTHER = 'content/other.json';
 const evenRule: ValidationRule = {
   id: 'test.even',
   descriptionKey: ruleDescriptionKey('test.even'),
+  reasonCodes: ['odd'],
   appliesTo: ['numbers'],
   check(run) {
     const value = getAtPath(run.document.value, ['value']);
@@ -56,6 +57,7 @@ const evenRule: ValidationRule = {
 const echoRule: ValidationRule = {
   id: 'test.echo',
   descriptionKey: ruleDescriptionKey('test.echo'),
+  reasonCodes: ['flagged'],
   appliesTo: ['numbers'],
   severity: 'warning',
   check(run) {
@@ -71,12 +73,25 @@ const echoRule: ValidationRule = {
   },
 };
 
+/** Ни одной находки не сообщает — падает; коды объявлять нечем и не из чего. */
 const fallingRule: ValidationRule = {
   id: 'test.falling',
   descriptionKey: ruleDescriptionKey('test.falling'),
+  reasonCodes: [],
   appliesTo: ['numbers'],
   check() {
     throw new Error('правило сломалось');
+  },
+};
+
+/** Сообщает код, которого не объявляло, — дефект правила, а не документа. */
+const undeclaredRule: ValidationRule = {
+  id: 'test.undeclared',
+  descriptionKey: ruleDescriptionKey('test.undeclared'),
+  reasonCodes: ['declared'],
+  appliesTo: ['numbers'],
+  check(run) {
+    run.report({ path: [], expected: { kind: 'presence', present: false }, code: 'invented' });
   },
 };
 
@@ -124,6 +139,7 @@ describe('ED-30: результат валидации структурный', 
     const deep: ValidationRule = {
       id: 'test.deep',
       descriptionKey: ruleDescriptionKey('test.deep'),
+      reasonCodes: ['ten', 'two'],
       appliesTo: ['numbers'],
       check(run) {
         run.report({ path: ['list', 10], expected: { kind: 'presence', present: false }, code: 'ten' });
@@ -153,6 +169,18 @@ describe('ED-30: результат валидации структурный', 
     expect(clean.severityOf(NUMBERS)).toBe('warning');
     // Предупреждение — состояние, которое надо видеть, но не отказ (ASSET-7).
     expect(clean.ok).toBe(true);
+  });
+
+  it('код, не объявленный правилом, отвергается: по объявлению собран бандл (ED-28)', () => {
+    // Объявление `reasonCodes` — то, из чего выводится множество строк причин;
+    // разойдись оно с сообщаемым, автор увидел бы на находке голый ключ.
+    // Расхождение поэтому не молчит, а становится находкой «правило упало».
+    const report = createValidator({ rules: rulesOf(undeclaredRule) }).run(sessionOf());
+    const [issue] = report.issues;
+    expect(issue?.reasonKey).toBe(reasonKey('test.undeclared', RULE_FAILED));
+    const { expected } = issue!;
+    expect(expected.kind).toBe('accepted');
+    expect(expected.kind === 'accepted' ? expected.detail : '').toContain('invented');
   });
 
   it('упавшее правило становится собственной находкой, а не молчанием', () => {

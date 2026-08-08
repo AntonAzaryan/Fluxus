@@ -42,7 +42,13 @@ export interface AdapterOptions {
   readonly params?: ReasonParams;
 }
 
-const DEFAULT_CODE = 'rejected';
+/**
+ * Код причины обоих переходников: «чужой валидатор отверг». Константа, а не
+ * литерал в двух местах, потому что то же значение объявляет правило в
+ * `reasonCodes` — набранное там заново, оно разошлось бы с сообщаемым молча.
+ */
+export const REJECTED = 'rejected';
+
 const EMPTY_PATH: JsonPath = Object.freeze([]);
 
 /**
@@ -59,7 +65,7 @@ export function reportThrown(run: ValidationRun, options: AdapterOptions, body: 
     run.report({
       path: options.base ?? EMPTY_PATH,
       expected: { kind: 'accepted', by: options.by, detail },
-      code: options.code ?? DEFAULT_CODE,
+      code: options.code ?? REJECTED,
       params: { ...options.params, by: options.by, detail },
     });
     return false;
@@ -82,7 +88,7 @@ export function reportErrorList(run: ValidationRun, options: AdapterOptions, res
     run.report({
       path: [...base, ...probePath(root, message)],
       expected: { kind: 'accepted', by: options.by, detail: message },
-      code: options.code ?? DEFAULT_CODE,
+      code: options.code ?? REJECTED,
       params: { ...options.params, by: options.by, detail: message },
     });
   }

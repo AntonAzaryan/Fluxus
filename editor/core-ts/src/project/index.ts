@@ -12,7 +12,7 @@ export { canonicalizeDocument, decodeDocument, encodeDocument, isCanonicalDocume
 export { openDocumentFromHost, readDocument } from './documents.js';
 export type { OpenFromHostInput, ReadDocument } from './documents.js';
 
-export { GROUP_WRITE_RULE_ID, saveDocuments } from './save.js';
+export { GROUP_WRITE_REASONS, GROUP_WRITE_RULE_ID, saveDocuments } from './save.js';
 export type { DocumentGroup, SaveRequest, SaveResult } from './save.js';
 
 export { loadProjectBundles } from './locales.js';

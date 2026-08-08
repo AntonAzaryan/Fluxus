@@ -111,6 +111,19 @@ export const PLACEMENT_PREFAB_RULE = 'editor.placementPrefab';
 export const CURVATURE_GRID_RULE = 'editor.curvatureGrid';
 
 /**
+ * Коды причин: константами, а не литералами в двух местах. Один и тот же код
+ * объявляется правилом (`reasonCodes`) и сообщается находкой, а из пары
+ * «правило + код» выводится ключ строки (`reasons.ts`) — набранный дважды, он
+ * разошёлся бы ровно так, как расходится запрещённая ED-28 таблица.
+ *
+ * `MISSING_PREFAB` — один на два правила: «названного prefab'а нет» — одно и то
+ * же нарушение, и различает их правило, а не код.
+ */
+const MISSING_VISUAL = 'missingVisual';
+const MISSING_PREFAB = 'missingPrefab';
+const GRID_MISMATCH = 'gridMismatch';
+
+/**
  * Prefabs, которые сцена поднимет, не объявляя их в документе: носители
  * террейна и арены синтезирует сам загрузчик. Имена берутся константами ядра,
  * а не строками: имя, набранное здесь заново, разъехалось бы с ядром молча.
@@ -162,6 +175,7 @@ export function visualForPrefabRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): Vali
   return {
     id: VISUAL_FOR_PREFAB_RULE,
     descriptionKey: ruleDescriptionKey(VISUAL_FOR_PREFAB_RULE),
+    reasonCodes: [MISSING_VISUAL],
     appliesTo: [kinds.scene],
     check(run) {
       const manifests = run.documentsOfKind(kinds.manifest);
@@ -176,7 +190,7 @@ export function visualForPrefabRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): Vali
         run.report({
           path: [...PREFABS_PATH, index, 'name'],
           expected: { kind: 'reference', targets: known.targets, known: known.sorted },
-          code: 'missingVisual',
+          code: MISSING_VISUAL,
           params: { name },
         });
       });
@@ -189,6 +203,7 @@ export function prefabForVisualRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): Vali
   return {
     id: PREFAB_FOR_VISUAL_RULE,
     descriptionKey: ruleDescriptionKey(PREFAB_FOR_VISUAL_RULE),
+    reasonCodes: [MISSING_PREFAB],
     appliesTo: [kinds.manifest],
     check(run) {
       const scenes = run.documentsOfKind(kinds.scene);
@@ -199,7 +214,7 @@ export function prefabForVisualRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): Vali
         run.report({
           path: [...ENTITIES_PATH, name],
           expected: { kind: 'reference', targets: known.targets, known: known.sorted },
-          code: 'missingPrefab',
+          code: MISSING_PREFAB,
           params: { name },
         });
       }
@@ -219,6 +234,7 @@ export function placementPrefabRule(
   return {
     id: PLACEMENT_PREFAB_RULE,
     descriptionKey: ruleDescriptionKey(PLACEMENT_PREFAB_RULE),
+    reasonCodes: [MISSING_PREFAB],
     appliesTo,
     check(run) {
       const scenes = run.documentsOfKind(kinds.scene);
@@ -237,7 +253,7 @@ export function placementPrefabRule(
           run.report({
             path: [...site.path, index, 'prefab'],
             expected: { kind: 'reference', targets: known.targets, known: known.sorted },
-            code: 'missingPrefab',
+            code: MISSING_PREFAB,
             params: { name },
           });
         });
@@ -279,6 +295,7 @@ export function curvatureGridRule(
   return {
     id: CURVATURE_GRID_RULE,
     descriptionKey: ruleDescriptionKey(CURVATURE_GRID_RULE),
+    reasonCodes: [GRID_MISMATCH],
     appliesTo: [kinds.curvature],
     // Рантайм переживает несовпадение игнором (ASSET-7) — в редакторе это
     // видимое состояние, а не запрет на сохранение.
@@ -295,7 +312,7 @@ export function curvatureGridRule(
           run.report({
             path: [axis],
             expected: { kind: 'oneOf', values: [theirs] },
-            code: 'gridMismatch',
+            code: GRID_MISMATCH,
             // `against` — документ-носитель сетки: с чем именно не совпало,
             // автор узнаёт по документу, а не по пути внутри него.
             params: { axis, expected: theirs, against: grid.documentId },

@@ -423,6 +423,7 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
     const crowded: ValidationRule = {
       id: 'test.crowded',
       descriptionKey: ruleDescriptionKey('test.crowded'),
+      reasonCodes: ['crowded'],
       appliesTo: ['scene'],
       severity: 'warning',
       check(run) {

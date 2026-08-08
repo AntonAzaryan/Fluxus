@@ -10,6 +10,18 @@ import { describe, expect, it } from 'vitest';
 import { buildEditorCatalog } from '../src/registry/catalog.js';
 import { createEditorContributions } from '../src/registry/contributions.js';
 import type { DescriptionResolver } from '../src/registry/descriptions.js';
+import type {
+  FieldEditorContribution,
+  PaletteCommandContribution,
+  ViewportToolContribution,
+  WorkspaceAreaContribution,
+} from '../src/registry/kinds.js';
+import {
+  builtinValidationRules,
+  registerValidationRules,
+  ruleDescriptionKey,
+  type ValidationRule,
+} from '../src/validation/index.js';
 import {
   createOperationRegistry,
   describeOperations,
@@ -250,6 +262,55 @@ describe('ED-30: машинный каталог', () => {
     ]);
     // Прежние записи — те же: расширение не правит уже описанное (ED-25).
     expect(after.areas.slice(0, 2)).toEqual(before.areas);
+  });
+
+  it('отдаёт правила валидации записями с описаниями, а не только id в списке типа', () => {
+    // ED-30 требует от каталога описаний. «Правило core.scene применимо к
+    // сцене» внешнему потребителю не объясняет ничего: по такому каталогу
+    // нельзя ни понять отказ, ни решить, что чинить.
+    const catalog = buildEditorCatalog(sources({ descriptions: resolver({ 'ui.rule.heightRange': 'Height range' }) }));
+    expect(catalog.validationRules).toEqual([
+      {
+        id: 'height.range',
+        descriptionKey: 'ui.rule.heightRange',
+        description: 'Height range',
+        appliesTo: ['scene'],
+      },
+    ]);
+    // Список id у типа остаётся ссылкой на эти же записи, а не вторым описанием.
+    expect(catalog.editableTypes.find((type) => type.id === 'scene')?.validationRules).toEqual([
+      'height.range',
+    ]);
+  });
+
+  it('описания правил, которые пакет везёт с собой, приходят из бандла `en`', () => {
+    // Шов ED-28 ↔ ED-30 для правил: ключ минтит `ruleDescriptionKey` по id
+    // правила, строку даёт бандл редактора, и это та же строка, которую видит
+    // человек на английской локали. Ключ вместо описания здесь означал бы
+    // каталог правил без описаний.
+    const resources = new StringResources({ locale: 'ru', editor: EDITOR_BUNDLES });
+    const contributions = createEditorContributions<
+      WorkspaceAreaContribution,
+      ViewportToolContribution,
+      FieldEditorContribution,
+      PaletteCommandContribution,
+      ValidationRule
+    >();
+    registerValidationRules(contributions.validationRules, builtinValidationRules());
+    const catalog = buildEditorCatalog({
+      contributions,
+      operations: noOperations,
+      descriptions: catalogDescriptions(resources),
+    });
+
+    expect(catalog.validationRules).toHaveLength(builtinValidationRules().length);
+    for (const rule of catalog.validationRules) {
+      expect(rule.descriptionKey, rule.id).toBe(ruleDescriptionKey(rule.id));
+      expect(rule.description, rule.id).toBe(EDITOR_BUNDLES['en']![rule.descriptionKey]);
+      expect(rule.description, rule.id).not.toBe(rule.descriptionKey);
+    }
+    // Локаль пользователя русская, каталог всё равно английский (ED-30).
+    expect(resources.locale).toBe('ru');
   });
 
   it('сливает тип, заявленный двумя областями, и падает на расхождении', () => {

@@ -17,6 +17,7 @@ export type {
   ExpectedTogether,
   Finding,
   ReasonParams,
+  RuleReasons,
   ValidationExpectation,
   ValidationIssue,
   ValidationReport,
@@ -26,15 +27,29 @@ export type {
   ValidationSource,
 } from './types.js';
 
-export { formatIssue, reasonKey, ruleDescriptionKey, REASON_PREFIX, RULE_DESCRIPTION_PREFIX } from './reasons.js';
+export {
+  formatIssue,
+  reasonCodesOf,
+  reasonKey,
+  reasonPath,
+  ruleDescriptionKey,
+  ruleDescriptionPath,
+  validationDescriptionPaths,
+  REASON_PREFIX,
+  RULE_DESCRIPTION_PREFIX,
+  RULE_FAILED,
+  VALIDATION_KIND,
+} from './reasons.js';
 
 export { compareIssues, comparePaths, createReport, issueKey } from './result.js';
 
-export { createValidator, registerValidationRules, RULE_FAILED } from './runner.js';
+export { createValidator, registerValidationRules } from './runner.js';
 export type { Validator, ValidatorOptions, ValidationRunStats } from './runner.js';
 
-export { probePath, reportErrorList, reportThrown } from './adapters.js';
+export { probePath, reportErrorList, reportThrown, REJECTED } from './adapters.js';
 export type { AdapterOptions, ErrorListResult } from './adapters.js';
+
+export { builtinValidationRules } from './builtin.js';
 
 export * from './engineRules.js';
 export * from './crossDocument.js';

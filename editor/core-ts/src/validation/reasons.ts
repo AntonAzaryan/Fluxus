@@ -12,25 +12,94 @@
  * Пространство ключей — `validation.*`, рядом с `operation.*` слоя операций и
  * вне пространства описаний полей (`component.`, `schema.`, …): иначе каждая
  * причина числилась бы осиротевшим ключом в отчёте ED-28.
+ *
+ * ## Ключ — тот же ключ, что у описания поля
+ *
+ * Оба ключа собираются `descriptionKey` слоя локалей, а не своей конкатенацией,
+ * и это не косметика. Отчёт ED-28 двусторонний и работает на путях схемы: без
+ * общего вывода пространство `validation.*` осталось бы вне его обеих сторон —
+ * недокументированное правило и осиротевшая причина не обнаруживались бы ничем.
+ * Вид пути один на всё пространство (`validation`), сегменты — `rule`/`reason`,
+ * затем id правила и код причины по частям. Точка внутри id (`core.scene`) —
+ * разделитель сегментов, а не символ имени, поэтому ключ выходит тот же, что
+ * давала прежняя конкатенация: ни одна уже показанная строка не переехала.
  */
 import { formatPath } from '../document/index.js';
-import type { TextSource } from '../i18n/index.js';
-import type { ValidationIssue } from './types.js';
+import { descriptionKey, schemaPathOf, type SchemaPath, type TextSource } from '../i18n/index.js';
+import type { RuleReasons, ValidationIssue } from './types.js';
+
+/**
+ * Вид описываемого для всего слоя валидации. Один на правила и причины: вид —
+ * первая сторона отчёта ED-28, и разными видами они разошлись бы по двум
+ * несвязанным отчётам, хотя мнёт их одно и то же переименование правила.
+ */
+export const VALIDATION_KIND = 'validation';
+
+const RULE_SEGMENT = 'rule';
+const REASON_SEGMENT = 'reason';
 
 /** Ключ описания самого правила — то, чем вклад объяснён человеку и каталогу. */
-export const RULE_DESCRIPTION_PREFIX = 'validation.rule';
+export const RULE_DESCRIPTION_PREFIX = `${VALIDATION_KIND}.${RULE_SEGMENT}`;
 
 /** Ключи причин. */
-export const REASON_PREFIX = 'validation.reason';
+export const REASON_PREFIX = `${VALIDATION_KIND}.${REASON_SEGMENT}`;
+
+/**
+ * Код причины «правило упало само»: минтит его прогон, а не правило, поэтому
+ * объявлять его правилу нечем и не нужно — он есть у каждого по построению.
+ */
+export const RULE_FAILED = 'ruleFailed';
+
+/** Путь описания правила: `validation.rule.<id по сегментам>`. */
+export function ruleDescriptionPath(ruleId: string): SchemaPath {
+  if (ruleId === '') throw new Error('ключ описания правила: пустой id');
+  return schemaPathOf(VALIDATION_KIND, [RULE_SEGMENT, ...ruleId.split('.')]);
+}
+
+/** Путь причины: `validation.reason.<id по сегментам>.<код>`. */
+export function reasonPath(ruleId: string, code: string): SchemaPath {
+  if (ruleId === '' || code === '') throw new Error('ключ причины: пустой id правила или код');
+  return schemaPathOf(VALIDATION_KIND, [REASON_SEGMENT, ...ruleId.split('.'), ...code.split('.')]);
+}
 
 export function ruleDescriptionKey(ruleId: string): string {
-  if (ruleId === '') throw new Error('ключ описания правила: пустой id');
-  return `${RULE_DESCRIPTION_PREFIX}.${ruleId}`;
+  return descriptionKey(ruleDescriptionPath(ruleId));
 }
 
 export function reasonKey(ruleId: string, code: string): string {
-  if (ruleId === '' || code === '') throw new Error('ключ причины: пустой id правила или код');
-  return `${REASON_PREFIX}.${ruleId}.${code}`;
+  return descriptionKey(reasonPath(ruleId, code));
+}
+
+/** Все коды причин правила: объявленные им и тот, что минтит прогон. */
+export function reasonCodesOf(rule: RuleReasons): readonly string[] {
+  return [...new Set([...rule.reasonCodes, RULE_FAILED])];
+}
+
+/**
+ * Вторая сторона отчёта ED-28 для пространства `validation.*`: описание правила
+ * и по причине на каждый код, который правило способно сообщить.
+ *
+ * Список выводится из самих правил, а не поддерживается рядом с бандлом:
+ * рукописный перечень ключей — та же таблица, которую ED-28 запрещает для
+ * полей, и разошёлся бы он так же молча — на первом же правиле, добавленном без
+ * правки перечня. Отсюда и `reasonCodes` у правила (`types.ts`): объявляет их
+ * тот же вклад, который причины и сообщает, а прогон не даёт объявлению
+ * разойтись с сообщаемым.
+ */
+export function validationDescriptionPaths(rules: Iterable<RuleReasons>): SchemaPath[] {
+  const paths: SchemaPath[] = [];
+  const seen = new Set<string>();
+  const take = (path: SchemaPath): void => {
+    const key = descriptionKey(path);
+    if (seen.has(key)) return;
+    seen.add(key);
+    paths.push(path);
+  };
+  for (const rule of rules) {
+    take(ruleDescriptionPath(rule.id));
+    for (const code of reasonCodesOf(rule)) take(reasonPath(rule.id, code));
+  }
+  return paths;
 }
 
 /**

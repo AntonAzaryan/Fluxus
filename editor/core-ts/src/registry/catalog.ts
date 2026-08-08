@@ -1,6 +1,7 @@
 /**
  * Машинное само-описание редактора (ED-30): каталог операций авторинга с
- * параметрами, набор рабочих областей и набор типов редактируемого.
+ * параметрами, набор рабочих областей, набор типов редактируемого и правила
+ * валидации, которыми эти типы проверяются.
  *
  * Каталог собирается из тех же реестров (ED-25), из которых строится интерфейс,
  * и собирается в момент запроса. Хранимого каталога нет намеренно: хранимый —
@@ -81,13 +82,30 @@ export interface CatalogEditableType {
   readonly description: string;
   readonly schemaId: string | null;
   readonly areas: readonly string[];
+  /** id правил, применимых к типу; сами правила — в `validationRules` каталога. */
   readonly validationRules: readonly string[];
+}
+
+/**
+ * Правило валидации в каталоге. Записью, а не только id в списке типа: ED-30
+ * требует от каталога описаний, а «правило `core.scene` применимо к сцене»
+ * объясняет внешнему потребителю ровно ничего — по такому каталогу нельзя ни
+ * понять отказ, ни решить, что чинить. Описание при этом то же самое, что видит
+ * человек на английской локали: второго набора формулировок для машины ED-30 не
+ * допускает, поэтому текст приходит из бандла по ключу вклада.
+ */
+export interface CatalogValidationRule {
+  readonly id: string;
+  readonly descriptionKey: string;
+  readonly description: string;
+  readonly appliesTo: readonly string[];
 }
 
 export interface EditorCatalog {
   readonly operations: readonly CatalogOperation[];
   readonly areas: readonly CatalogArea[];
   readonly editableTypes: readonly CatalogEditableType[];
+  readonly validationRules: readonly CatalogValidationRule[];
 }
 
 /** Собирает каталог из реестров. Вызывается на каждый запрос, ничего не кэширует. */
@@ -109,6 +127,7 @@ export function buildEditorCatalog(sources: CatalogSources): EditorCatalog {
 
   const areas = contributions.areas.all();
   const tools = contributions.viewportTools.all();
+  const rules = contributions.validationRules.all();
   const catalogAreas = areas.map(
     (area): CatalogArea => ({
       id: area.id,
@@ -125,7 +144,15 @@ export function buildEditorCatalog(sources: CatalogSources): EditorCatalog {
   return {
     operations: catalogOperations,
     areas: catalogAreas,
-    editableTypes: collectEditableTypes(areas, contributions.validationRules.all(), describe),
+    editableTypes: collectEditableTypes(areas, rules, describe),
+    validationRules: rules.map(
+      (rule): CatalogValidationRule => ({
+        id: rule.id,
+        descriptionKey: rule.descriptionKey,
+        description: describe(rule.descriptionKey),
+        appliesTo: [...rule.appliesTo].sort(compareIds),
+      }),
+    ),
   };
 }
 
