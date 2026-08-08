@@ -20,6 +20,10 @@ const extractor = new Extractor({
   // Доворот торса (REND-5) — по направлению каста: одно каноническое событие
   // сцены несёт и факт каста, и `dirX`/`dirY`.
   aimEvents: ['CastFireball'],
+  // Компоненты-состояния, зеркалируемые в `EntityView.states` (CAM-6): по ним
+  // диспетчер включает длящиеся эффекты манифеста. Порядок задаёт биты, и имя
+  // из таблицы `states` ищется именно в этом списке.
+  stateComponents: ['Falling'],
 });
 
 const shell = new WorkerShell({

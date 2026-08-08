@@ -74,8 +74,8 @@
 
 ## 10. Контент и проверка
 
-- [ ] 10.1 `content/visuals/manifest.json` — дополнить секцию примером длящегося эффекта (`states`: компонента-состояние героя → `sway`), существующую запись `FireballExploded` оставить как есть
-- [ ] 10.2 Проверить, что правка манифеста не затронула симуляцию: `worldInit`, golden-эталоны и реплеи не меняются (ASSET-8) — `npm test` из корня без регенерации эталонов
+- [x] 10.1 `content/visuals/manifest.json` — дополнить секцию примером длящегося эффекта (`states`: компонента-состояние героя → `sway`), существующую запись `FireballExploded` оставить как есть
+- [x] 10.2 Проверить, что правка манифеста не затронула симуляцию: `worldInit`, golden-эталоны и реплеи не меняются (ASSET-8) — `npm test` из корня без регенерации эталонов
 - [ ] 10.3 Прогнать редактор глазами: `npm run dev -w @game-mvp/editor-ui`, завести тряску от взрыва в таблице событий и убедиться, что на диск уходит валидная секция (ED-14, сценарий «Тряска от взрыва без правки JSON»)
-- [ ] 10.4 `npm run check` из корня (typecheck + lint + test)
-- [ ] 10.5 `openspec validate camera-effects-authoring --type change --strict`
+- [x] 10.4 `npm run check` из корня (typecheck + lint + test)
+- [x] 10.5 `openspec validate camera-effects-authoring --type change --strict`

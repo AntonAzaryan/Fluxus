@@ -87,6 +87,16 @@
         "maxRoll": 0.04,
         "decay": 1.6
       }
+    },
+    "states": {
+      "Falling": {
+        "effect": "sway",
+        "rollAmp": 0.06,
+        "yawAmp": 0.03,
+        "fovAmp": 3,
+        "frequency": 1.2,
+        "fadeSeconds": 0.4
+      }
     }
   }
 }
