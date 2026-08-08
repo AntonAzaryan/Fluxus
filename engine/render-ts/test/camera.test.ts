@@ -11,8 +11,10 @@ import {
   TraumaShake,
   createCameraInput,
   edgePanAxes,
+  resetCameraInput,
   terrainGroundApi,
   type CameraInput,
+  type CameraPose,
   type CameraRigOptions,
   type FollowTarget,
 } from '../src/index.js';
@@ -361,5 +363,174 @@ describe('вспомогательные функции камеры', () => {
     expect(ground.groundHeightAt(1.5, 0.5)).toBeCloseTo(1.2, 6);
     expect(ground.groundHeightAt(99, 99)).toBeCloseTo(1.2, 6); // кламп к крайней клетке
     expect(ground.bounds).toEqual({ minX: 0, minY: 0, maxX: 2, maxY: 1 });
+  });
+});
+
+/**
+ * Кадрирование по заданным границам (CAM-8). Проверяется не «дистанция равна
+ * такому-то числу» — это была бы вторая реализация той же формулы, — а само
+ * утверждение требования: прямоугольник попадает в кадр. Попадание считается
+ * по позе, которую отдал конвейер, и по поданным пропорциям.
+ */
+const HALF_FOV = (fovDeg: number): number => Math.tan(((fovDeg / 2) * Math.PI) / 180);
+
+/** Лежат ли все углы наземного прямоугольника внутри пирамиды видимости позы. */
+function rectInFrame(
+  pose: CameraPose,
+  rect: { minX: number; minY: number; maxX: number; maxY: number },
+  aspect: number,
+  groundZ: number,
+): boolean {
+  const tanV = HALF_FOV(pose.fovDeg);
+  const tanH = tanV * aspect;
+  const cosP = Math.cos(pose.pitch);
+  const sinP = Math.sin(pose.pitch);
+  // Оси кадра: взгляд, вбок и вверх — те же, что применяет `applyCameraPose`.
+  const f = [Math.cos(pose.yaw) * cosP, Math.sin(pose.yaw) * cosP, -sinP];
+  const r = [Math.sin(pose.yaw), -Math.cos(pose.yaw), 0];
+  const u = [sinP * Math.cos(pose.yaw), sinP * Math.sin(pose.yaw), cosP];
+  for (const x of [rect.minX, rect.maxX]) {
+    for (const y of [rect.minY, rect.maxY]) {
+      const v = [x - pose.posX, y - pose.posY, groundZ - pose.posZ];
+      const dot = (a: number[]): number =>
+        (a[0] ?? 0) * (v[0] ?? 0) + (a[1] ?? 0) * (v[1] ?? 0) + (a[2] ?? 0) * (v[2] ?? 0);
+      const depth = dot(f);
+      // Допуск в микрон: сравниваются два разных прохода одной геометрии.
+      if (depth <= 0) return false;
+      if (Math.abs(dot(r)) > depth * tanH + 1e-6) return false;
+      if (Math.abs(dot(u)) > depth * tanV + 1e-6) return false;
+    }
+  }
+  return true;
+}
+
+const arena = (size: number): { minX: number; minY: number; maxX: number; maxY: number } => ({
+  minX: 0,
+  minY: 0,
+  maxX: size,
+  maxY: size,
+});
+
+describe('CameraRig: кадрирование по заданным границам (CAM-8)', () => {
+  it('прямоугольник попадает в кадр при разных пропорциях', () => {
+    const rect = arena(14);
+    for (const aspect of [0.75, 1, 16 / 9, 2.5]) {
+      const { rig, input } = makeRig();
+      rig.frameBounds({ rect, aspect, immediate: true });
+      const pose = rig.update(input, 1 / 60, null);
+      expect(rig.focusX, `aspect ${aspect}`).toBeCloseTo(7, 6);
+      expect(rig.focusY, `aspect ${aspect}`).toBeCloseTo(7, 6);
+      expect(rectInFrame(pose, rect, aspect, rig.groundZ), `aspect ${aspect}`).toBe(true);
+    }
+  });
+
+  it('пропорции подаёт потребитель: узкий кадр отодвигает камеру дальше широкого', () => {
+    const rect = arena(14);
+    const far = makeRig();
+    far.rig.frameBounds({ rect, aspect: 0.75, immediate: true });
+    const near = makeRig();
+    near.rig.frameBounds({ rect, aspect: 2.5, immediate: true });
+    const distance = (made: { rig: CameraRig; input: CameraInput }): number => {
+      const pose = made.rig.update(made.input, 1 / 60, null);
+      return Math.hypot(pose.posX - made.rig.focusX, pose.posY - made.rig.focusY, pose.posZ);
+    };
+    expect(distance(far)).toBeGreaterThan(distance(near));
+  });
+
+  it('арена, не влезающая в пределы зума, кадрируется на пределе, а не отказом', () => {
+    const rect = arena(400);
+    const { rig, input } = makeRig();
+    rig.frameBounds({ rect, aspect: 16 / 9, immediate: true });
+    const pose = rig.update(input, 1 / 60, null);
+    expect(rig.focusX).toBeCloseTo(200, 6);
+    expect(rig.focusY).toBeCloseTo(200, 6);
+    const distance = Math.hypot(pose.posX - rig.focusX, pose.posY - rig.focusY, pose.posZ);
+    expect(distance).toBeCloseTo(rig.config.maxDistance, 6);
+  });
+
+  it('мгновенное применение даёт дистанцию на первом же update, сглаженное — приезжает', () => {
+    const rect = arena(14);
+    const distanceOf = (rig: CameraRig, input: CameraInput): number => {
+      const pose = rig.update(input, 1 / 60, null);
+      return Math.hypot(pose.posX - rig.focusX, pose.posY - rig.focusY, pose.posZ);
+    };
+    const instant = makeRig();
+    instant.rig.frameBounds({ rect, aspect: 16 / 9, immediate: true });
+    const wanted = distanceOf(instant.rig, instant.input);
+
+    const eased = makeRig();
+    eased.rig.frameBounds({ rect, aspect: 16 / 9 });
+    const first = distanceOf(eased.rig, eased.input);
+    expect(Math.abs(first - wanted)).toBeGreaterThan(0.1);
+    settle(eased.rig, eased.input, null, 300);
+    expect(distanceOf(eased.rig, eased.input)).toBeCloseTo(wanted, 3);
+  });
+
+  it('после кадрирования работают панорама и зум, и следующий кадр не возвращает вид', () => {
+    const rect = arena(14);
+    const { rig, input } = makeRig();
+    rig.frameBounds({ rect, aspect: 16 / 9, immediate: true });
+    rig.update(input, 1 / 60, null);
+    const framed = { x: rig.focusX, y: rig.focusY };
+
+    // Разовость: кадрирование никто не запрашивал заново.
+    settle(rig, input, null, 60);
+    expect(rig.focusX).toBeCloseTo(framed.x, 6);
+    expect(rig.focusY).toBeCloseTo(framed.y, 6);
+
+    input.panX = 1;
+    settle(rig, input, null, 30);
+    expect(rig.focusX).toBeGreaterThan(framed.x);
+    input.panX = 0;
+
+    const before = rig.update(input, 1 / 60, null);
+    const distance = Math.hypot(before.posX - rig.focusX, before.posY - rig.focusY);
+    input.wheelSteps = 3;
+    rig.update(input, 1 / 60, null);
+    resetCameraInput(input);
+    settle(rig, input, null, 120);
+    const after = rig.update(input, 1 / 60, null);
+    expect(Math.hypot(after.posX - rig.focusX, after.posY - rig.focusY)).toBeGreaterThan(distance);
+  });
+
+  it('кадрирование в облёте не меняет режима и видно после выхода из него', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0 });
+    input.flyToggle = true;
+    rig.update(input, 1 / 60, null);
+    resetCameraInput(input);
+    expect(rig.mode).toBe('fly');
+    const inFly = rig.update(input, 1 / 60, null);
+
+    rig.frameBounds({ rect: arena(14), aspect: 16 / 9, immediate: true });
+    const stillFlying = rig.update(input, 1 / 60, null);
+    expect(rig.mode).toBe('fly');
+    // Поза облёта своя (CAM-2) и кадрированием не тронута.
+    expect(stillFlying.posX).toBeCloseTo(inFly.posX, 6);
+    expect(stillFlying.posY).toBeCloseTo(inFly.posY, 6);
+
+    input.flyToggle = true;
+    rig.update(input, 1 / 60, null);
+    resetCameraInput(input);
+    expect(rig.mode).toBe('free');
+    expect(rig.focusX).toBeCloseTo(7, 6);
+    expect(rig.focusY).toBeCloseTo(7, 6);
+  });
+
+  it('точка наблюдения клампится инжектированными границами, а не поданным прямоугольником', () => {
+    // Кадрируют по аргументу, а клампят по инжектированному (CAM-3, CAM-7):
+    // прямоугольник смещён за пределы арены, и центр его туда не уводит.
+    const { rig, input } = makeRig({ bounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 } });
+    rig.frameBounds({ rect: { minX: 40, minY: 40, maxX: 54, maxY: 54 }, aspect: 16 / 9 });
+    rig.update(input, 1 / 60, null);
+    const margin = rig.config.boundsMargin;
+    expect(rig.focusX).toBeCloseTo(10 - margin, 6);
+    expect(rig.focusY).toBeCloseTo(10 - margin, 6);
+  });
+
+  it('кадр нулевого размера не даёт NaN: горизонталь просто не ограничивает', () => {
+    const { rig, input } = makeRig();
+    rig.frameBounds({ rect: arena(14), aspect: 0, immediate: true });
+    const pose = rig.update(input, 1 / 60, null);
+    expect(Number.isFinite(pose.posX) && Number.isFinite(pose.posZ)).toBe(true);
   });
 });

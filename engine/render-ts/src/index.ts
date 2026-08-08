@@ -1,4 +1,5 @@
 // Контракты пакета: подсистемы, presentation-состояние, конфиг хоста.
+export { DEFAULT_CURVATURE_TESSELLATION } from './types.js';
 export type {
   EntityView,
   RenderConfig,
@@ -27,8 +28,8 @@ export type { ExtractedTick, ExtractorConfig } from './extractor.js';
 export { ViewBuffer } from './viewBuffer.js';
 export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 
-// Камера (camera CAM-1..7): rig режимов, слой эффектов, диспетчер по манифесту,
-// общее применение позы к THREE-камере.
+// Камера (camera CAM-1..8): rig режимов и вход кадрирования, слой эффектов,
+// диспетчер по манифесту, общее применение позы к THREE-камере.
 export {
   CameraRig,
   DEFAULT_CAMERA_CONFIG,
@@ -40,6 +41,7 @@ export {
 export type {
   CameraBounds,
   CameraConfig,
+  CameraFraming,
   CameraInput,
   CameraMode,
   CameraPose,
