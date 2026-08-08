@@ -148,6 +148,33 @@ describe('ED-29: обходных путей записи не остаётся'
     expect(editor.resolveDescriptor(SCENE, second!)?.index).toBe(0);
   });
 
+  it('удаление записи, которой в документе нет, отклоняется, а не убирает один дескриптор', () => {
+    const editor = session();
+    editor.openDocument({
+      id: SCENE,
+      kind: 'scene',
+      value: { initial: [{ prefab: 'a', children: [{ prefab: 'x' }] }, { prefab: 'b' }] },
+      lists: [['initial'], ['initial', 0, 'children']],
+    });
+    const [outer] = editor.descriptors(SCENE, ['initial']);
+    const [inner] = editor.descriptors(SCENE, ['initial', 0, 'children']);
+    // Удаление внешней записи уносит с собой и вложенный список: его дескриптор
+    // указывает на адрес, по которому в документе больше ничего нет.
+    editor.applyOperation('document.list.remove', { document: SCENE, record: outer! });
+    expect(editor.resolveDescriptor(SCENE, inner!)).toBeDefined();
+    expect(() => editor.applyOperation('document.list.remove', { document: SCENE, record: inner! })).toThrow(
+      /ничего нет/,
+    );
+    // Запись и дескриптор — пара по индексу (ED-29): убрав дескриптор при
+    // нетронутом списке, сессия сдвинула бы всех следующих на единицу, и под
+    // курсором автора оказалась бы соседняя запись. Отказ не оставляет ни
+    // сдвига, ни записи в истории (ED-18).
+    expect(editor.descriptors(SCENE, ['initial', 0, 'children'])).toHaveLength(1);
+    expect(editor.documentValue(SCENE)).toEqual({ initial: [{ prefab: 'b' }] });
+    expect(editor.history().undo).toHaveLength(1);
+    expect(editor.pending).toBe(false);
+  });
+
   it('вложенный отслеживаемый список не правится индексом через запись внешнего', () => {
     const editor = session();
     editor.openDocument({
@@ -371,18 +398,68 @@ describe('ED-21: несохранённые правки', () => {
 });
 
 describe('сессия оповещает о правках (ED-15: изображение производно от документов)', () => {
+  const log = (editor: EditorSession, events: string[]): (() => void) =>
+    editor.subscribe((event) => {
+      events.push(`${event.kind}:${event.paths.map((ref) => ref.path.join('.')).join('|')}`);
+    });
+
   it('подписчик получает документ и путь тронутого места', () => {
     const editor = session();
     openScene(editor);
     const events: string[] = [];
-    const off = editor.subscribe((event) => {
-      events.push(`${event.kind}:${event.paths.map((ref) => ref.path.join('.')).join('|')}`);
-    });
+    const off = log(editor, events);
     editor.applyOperation('document.setValue', { document: SCENE, path: ['capacity'], value: 8 });
     editor.undo();
     off();
     editor.redo();
+    // Одношаговый вызов закрывается тем же вызовом: промежуточного состояния,
+    // которое кто-то мог бы увидеть, у него нет, и второго события о той же
+    // правке он не даёт.
     expect(events).toEqual(['applied:capacity', 'undone:capacity']);
+  });
+
+  it('применение внутри незакрытого взаимодействия объявляется, а не ждёт закрытия', () => {
+    const editor = session();
+    editor.openDocument({ id: 'content/x.json', kind: 'any', value: { pos: 0 } });
+    const events: string[] = [];
+    const off = log(editor, events);
+    // Перетаскивание: правится одно и то же место, и каждое применение обязано
+    // быть видно сразу — иначе объект встаёт на новое место только по
+    // отпускании кнопки (ED-15).
+    const drag = editor.beginOperation('document.setValue', { document: 'content/x.json', path: ['pos'], value: 1 });
+    drag.extend({ document: 'content/x.json', path: ['pos'], value: 2 });
+    // Применение, ничего не изменившее, события не даёт: то же значение —
+    // не правка (ED-21).
+    drag.extend({ document: 'content/x.json', path: ['pos'], value: 2 });
+    drag.commit();
+    off();
+    // Вид события отличает провизорное состояние от записанного в историю.
+    expect(events).toEqual(['extended:pos', 'extended:pos', 'applied:pos']);
+  });
+
+  it('объявленное открытым взаимодействием называется и в отказе', () => {
+    const editor = session();
+    editor.openDocument({ id: 'content/x.json', kind: 'any', value: { pos: 0 } });
+    const events: string[] = [];
+    const off = log(editor, events);
+    const drag = editor.beginOperation('document.setValue', { document: 'content/x.json', path: ['pos'], value: 1 });
+    drag.extend({ document: 'content/x.json', path: ['pos'], value: 0 });
+    drag.cancel();
+    off();
+    expect(events).toEqual(['extended:pos', 'extended:pos', 'cancelled:pos']);
+    expect(editor.documentValue('content/x.json')).toEqual({ pos: 0 });
+  });
+
+  it('упавшее применение не объявляется: откаченного состояния подписчик не видел', () => {
+    const editor = session();
+    openScene(editor, [{ prefab: 'a' }]);
+    const events: string[] = [];
+    const off = log(editor, events);
+    const stroke = editor.beginOperation('document.setValue', { document: SCENE, path: ['capacity'], value: 1 });
+    expect(() => stroke.extend({ document: SCENE, path: ['initial', 0, 'prefab'], value: 'b' })).toThrow();
+    stroke.commit();
+    off();
+    expect(events).toEqual(['extended:capacity', 'applied:capacity']);
   });
 });
 

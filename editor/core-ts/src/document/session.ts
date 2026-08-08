@@ -27,6 +27,14 @@
  * Прежние значения при этом берутся с первого касания места, а не с
  * последнего: двадцать клеток мазка вернутся к тем уровням, что были до
  * нажатия, а не к промежуточным.
+ *
+ * Незакрытое взаимодействие оповещает о себе наравне с закрытым (ED-15):
+ * каждое применение внутри него объявляется событием, отличным от события
+ * записи в историю. Иначе гарантию «не позже следующего кадра» держал бы каждый
+ * потребитель сам — сведением состояния на всякий случай перед отрисовкой, — а
+ * инструмент, забывший так сделать, показывал бы результат перетаскивания
+ * только по отпускании кнопки. Гарантия принадлежит слою, который правит
+ * документ, а не тем, кто на него смотрит.
  */
 import {
   DescriptorMinter,
@@ -95,7 +103,11 @@ export interface OperationOutcome {
 export interface OperationTransaction {
   readonly operationId: string;
   readonly open: boolean;
-  /** Продолжает то же взаимодействие: тот же `apply` с новыми параметрами. */
+  /**
+   * Продолжает то же взаимодействие: тот же `apply` с новыми параметрами.
+   * Каждое применение, что-то изменившее, объявляется событием `extended`
+   * (ED-15) — ждать закрытия взаимодействия, чтобы показать правку, незачем.
+   */
   extend(params?: OperationParams): JsonValue | undefined;
   /** Закрывает взаимодействие одной записью истории; отдаёт результат последнего применения. */
   commit(): OperationOutcome;
@@ -103,9 +115,28 @@ export interface OperationTransaction {
   cancel(): void;
 }
 
-export type SessionEventKind = 'opened' | 'closed' | 'applied' | 'undone' | 'redone' | 'cancelled' | 'saved';
+export type SessionEventKind =
+  | 'opened'
+  | 'closed'
+  | 'extended'
+  | 'applied'
+  | 'undone'
+  | 'redone'
+  | 'cancelled'
+  | 'saved';
 
-/** Оповещение для вьюпорта и панелей (ED-15: изображение обновляется не позже следующего кадра). */
+/**
+ * Оповещение для вьюпорта и панелей (ED-15: изображение обновляется не позже
+ * следующего кадра).
+ *
+ * Провизорное состояние отличается от записанного видом события, а не догадкой
+ * потребителя: `extended` — применение внутри незакрытого взаимодействия,
+ * которое `cancel` ещё отменит и которого в истории пока нет; `applied` —
+ * взаимодействие закрыто и легло в историю одной записью (ED-18). Потребителю,
+ * который только перерисовывает, различать их не нужно; тому, кто пишет
+ * состояние рядом с документом (метка «сохраняется», отчёт валидации), —
+ * нужно, и без вида события он выяснял бы это вторым способом.
+ */
 export interface SessionEvent {
   readonly kind: SessionEventKind;
   readonly operationId?: string;
@@ -202,6 +233,16 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     readonly operationId: string;
     readonly #operation: AuthoringOperation;
     readonly #touched = new Map<DocumentId, PendingDocument>();
+    /**
+     * Места, тронутые текущим применением, — из них собирается оповещение об
+     * открытом взаимодействии. Отдельно от накопленного перечня взаимодействия
+     * потому, что накопленный дедуплицирован: место, тронутое повторно
+     * (перетаскивание правит одно и то же поле десять раз), в нём уже есть, и
+     * событие о втором касании назвало бы пустой перечень — потребитель,
+     * читающий именно места, не узнал бы о правке (ED-15).
+     */
+    readonly #step: DocumentPathRef[] = [];
+    readonly #stepSeen = new Set<string>();
     #params: JsonValue = null;
     #result: JsonValue | undefined;
     #open = true;
@@ -233,16 +274,27 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
 
     mark(pending: PendingDocument, path: JsonPath): void {
       const key = pathKey(path);
-      if (pending.seen.has(key)) return;
-      pending.seen.add(key);
       // Копия, а не сама ссылка: путь приходит из параметров операции, то есть
       // из чужих рук, и вызывающий, дописавший в свой массив шаг после вызова,
       // переписал бы задним числом запись истории о том, что было тронуто.
-      pending.paths.push(Object.freeze([...path]));
+      const taken = Object.freeze([...path]);
+      if (!pending.seen.has(key)) {
+        pending.seen.add(key);
+        pending.paths.push(taken);
+      }
+      // Ключ шага — документ и место: разделителем взят управляющий символ,
+      // потому что ID документа — путь в дереве контента (ASSET-2), и обычный
+      // разделитель мог бы встретиться в нём самом.
+      const stepKey = `${pending.record.id}\u0000${key}`;
+      if (this.#stepSeen.has(stepKey)) return;
+      this.#stepSeen.add(stepKey);
+      this.#step.push({ documentId: pending.record.id, path: taken });
     }
 
-    run(params: OperationParams): JsonValue | undefined {
+    run(params: OperationParams, announce: boolean): JsonValue | undefined {
       checkParams(this.#operation, params);
+      this.#step.length = 0;
+      this.#stepSeen.clear();
       // Одно применение — всё или ничего. Упавшая посередине операция иначе
       // оставила бы документ в состоянии, которого не производит ни одна
       // операция целиком, и `commit` записал бы это состояние в историю: undo
@@ -257,7 +309,6 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
         // показывает, чем была операция, вызывающий не должен уметь переписать
         // это задним числом, а отменённое применение записью не было.
         this.#params = cloneFrozen(params);
-        return this.#result;
       } catch (error) {
         undoRun();
         throw error;
@@ -266,6 +317,31 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
         // сохранившая его в замыкании, ничего им не сделает.
         ctx.close();
       }
+      // Оповещение — после того, как применение состоялось целиком и поверхность
+      // правки закрыта: подписчик видит законченное состояние, а его отказ уже
+      // не может откатить правку, о которой ему сообщили.
+      if (announce) this.#announce();
+      return this.#result;
+    }
+
+    /**
+     * Событие о применении внутри незакрытого взаимодействия (ED-15). Вид
+     * события — не `applied`: в истории записи ещё нет, состояние провизорно и
+     * `cancel` его отменит, и потребитель, который на этом различии что-то
+     * строит, обязан получать различие, а не выводить его.
+     *
+     * Применение, ничего не изменившее, события не даёт — по той же причине, по
+     * которой не оставляет записи в истории: оповещение «ничего не произошло»
+     * стоит потребителю полной перерисовки и не значит ничего.
+     */
+    #announce(): void {
+      if (this.#step.length === 0) return;
+      const paths = [...this.#step];
+      const documentIds: DocumentId[] = [];
+      for (const ref of paths) {
+        if (!documentIds.includes(ref.documentId)) documentIds.push(ref.documentId);
+      }
+      emit({ kind: 'extended', operationId: this.operationId, documentIds, paths });
     }
 
     /**
@@ -300,7 +376,7 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
 
     extend(params: OperationParams = {}): JsonValue | undefined {
       this.#assertOpen();
-      return this.run(params);
+      return this.run(params, true);
     }
 
     commit(): OperationOutcome {
@@ -335,6 +411,17 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
       return { operationId: this.operationId, result: this.#result, documentIds, recorded: true };
     }
 
+    /**
+     * Своего вида события отказу не заводится: `cancelled` уже отличается от
+     * `applied`, и этого хватает — потребитель узнаёт, что провизорное
+     * состояние снято и в историю не легло.
+     *
+     * Пара с `extended` при этом полная: значение документа правится только
+     * заменой на новое, вернуться к той же ссылке оно не может, — поэтому
+     * документ, о котором было сказано `extended`, здесь непременно окажется
+     * изменённым и будет назван. Молчание отказа означает ровно то, что
+     * взаимодействие ничего не изменило и объявлять было нечего.
+     */
     cancel(): void {
       this.#assertOpen();
       this.#open = false;
@@ -487,7 +574,24 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
       const where = this.locate(id, descriptor);
       const existing = this.records(id, where.list);
       const pending = this.#tx.touch(id);
-      this.#erase(pending, where.path);
+      // Отказ, а не пропуск правки таблицы. Дескриптор и запись — пара по
+      // индексу: `locate` берёт индекс из таблицы и им же адресует список. Если
+      // по адресу записи в документе ничего нет, пара уже разошлась, и убрать
+      // дескриптор молча значило бы сдвинуть на единицу все следующие — под
+      // курсором автора оказалась бы соседняя запись (ED-29: адресация не
+      // ломается от правки соседей). Убрать вместо этого только дескриптор,
+      // оставив список как есть, — то же самое расхождение с другой стороны, а
+      // `commit` записал бы его в историю: undo и redo водили бы по состоянию,
+      // которого не производит ни одна операция целиком (ED-18). Отказ
+      // откатывается тем же механизмом, что всякое упавшее применение, и
+      // оставляет документ и таблицу такими, какими они были.
+      if (!this.#erase(pending, where.path)) {
+        throw new OperationError(
+          this.#tx.operationId,
+          `запись "${descriptor}": по её адресу ${formatPath(where.path)} в документе "${id}" ничего нет`,
+          { received: descriptor },
+        );
+      }
       this.#setDescriptors(pending, where.list, [
         ...existing.slice(0, where.index),
         ...existing.slice(where.index + 1),
@@ -526,11 +630,13 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
       this.#tx.mark(pending, path);
     }
 
-    #erase(pending: PendingDocument, path: JsonPath): void {
+    /** `false` — по пути ничего не было, документ той же ссылкой и правкой это не считается. */
+    #erase(pending: PendingDocument, path: JsonPath): boolean {
       const next = removeAtPath(pending.record.value, path);
-      if (next === pending.record.value) return;
+      if (next === pending.record.value) return false;
       pending.record.value = next;
       this.#tx.mark(pending, path);
+      return true;
     }
 
     #setDescriptors(pending: PendingDocument, list: JsonPath, ids: readonly DescriptorId[]): void {
@@ -546,7 +652,15 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     }
   }
 
-  const start = (operationId: string, params: OperationParams): Transaction => {
+  /**
+   * `announce` — объявлять ли первое применение событием `extended` (ED-15).
+   * Одношаговый вызов закрывает взаимодействие тем же вызовом, и наблюдать его
+   * промежуточное состояние было некому: событие о нём было бы вторым
+   * оповещением об одной и той же правке, то есть лишней перерисовкой у всех
+   * подписчиков. Взаимодействие, которое остаётся открытым, объявляет о себе с
+   * первого же применения — оно уже видно автору.
+   */
+  const start = (operationId: string, params: OperationParams, announce: boolean): Transaction => {
     if (transaction !== undefined) {
       throw new OperationError(operationId, `взаимодействие "${transaction.operationId}" ещё не закрыто`);
     }
@@ -557,7 +671,7 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     const tx = new Transaction(operation);
     transaction = tx;
     try {
-      tx.run(params);
+      tx.run(params, announce);
       return tx;
     } catch (error) {
       // Упавшая операция не оставляет полуправки: то, что она успела записать,
@@ -658,11 +772,11 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     applyOperation(operationId, params = {}) {
       // Одношаговый вызов — то же взаимодействие, просто из одного применения:
       // открыть и закрыть его сразу, а не завести второй путь исполнения.
-      return start(operationId, params).commit();
+      return start(operationId, params, false).commit();
     },
 
     beginOperation(operationId, params = {}) {
-      return start(operationId, params);
+      return start(operationId, params, true);
     },
 
     get pending() {
