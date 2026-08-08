@@ -86,6 +86,10 @@
       "source": "864e1a84",
       "translated": "71b77d22"
     },
+    "operation.document.renameKey": {
+      "source": "ec263340",
+      "translated": "a86fd2c7"
+    },
     "operation.document.setValue": {
       "source": "d177e2c3",
       "translated": "2b0ec5a8"
@@ -93,6 +97,10 @@
     "operation.param.document": {
       "source": "811fb0a0",
       "translated": "6e6123ba"
+    },
+    "operation.param.from": {
+      "source": "a5c2dcea",
+      "translated": "dacedcc7"
     },
     "operation.param.item": {
       "source": "a94692c3",
@@ -109,6 +117,10 @@
     "operation.param.record": {
       "source": "e4202b20",
       "translated": "e6bdefbf"
+    },
+    "operation.param.to": {
+      "source": "85456c8b",
+      "translated": "d7fc40fd"
     },
     "operation.param.value": {
       "source": "4abd114d",
