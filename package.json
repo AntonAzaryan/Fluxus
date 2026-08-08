@@ -20,7 +20,8 @@
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "check": "npm run typecheck && npm run lint && npm test",
-    "golden": "npm run record -w @game-mvp/integration && npm run golden -w @game-mvp/core"
+    "golden": "npm run record -w @game-mvp/integration && npm run golden -w @game-mvp/core",
+    "spec-graph": "node scripts/spec-graph.mjs"
   },
   "engines": {
     "node": ">=22.18"

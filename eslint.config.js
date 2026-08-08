@@ -116,6 +116,7 @@ export default defineConfig([
   {
     files: [
       '**/bin/*.mjs',
+      'scripts/*.mjs',
       '.claude/hooks/**',
       'engine/client-ts/demo/**/*.ts',
       '**/bench.test.ts',

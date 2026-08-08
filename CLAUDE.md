@@ -12,6 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Specs (`openspec/`) and docs are written in Russian — requirement modality stays English (SHALL / MUST NOT). Keep it that way when editing them; do NOT translate them.
 - Reference requirements by ID (e.g. NTR-1, CONT-4, SHELL-3) instead of paraphrasing. When exact wording matters, quote the Russian text verbatim.
 - Before implementing, check the relevant capability spec: `openspec spec show <capability>`.
+- Navigate specs lazily with `npm run spec-graph -- <cmd>` (`scripts/spec-graph.mjs`): to quote or check a single foreign requirement use `show <ID>` (one section, not the whole spec), find IDs with `find <text>`, expand the task's context via `refs <ID>`. Before editing a requirement, run `impact <ID>` — it lists what may go stale. The capability you are *changing* you still read whole. The tool sees main specs only, not `changes/` deltas; `spec-graph check` lints the reference graph (report mode — not part of `npm run check` yet).
 
 ### Naming
 
