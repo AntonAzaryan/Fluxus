@@ -29,12 +29,24 @@
  * нет ни одного документа, правило молчит. Незагруженный манифест — не
  * рассинхронизация пары, а незагруженный манифест; помечать по нему весь
  * список prefabs значило бы кричать о состоянии редактора, а не о документах.
+ *
+ * ## Раскладку документов правило не знает
+ *
+ * Где лежит вторая сторона — вид документа И путь внутри него — правило
+ * получает параметром (`DocumentSite`), а не выводит из вида. Правило,
+ * знающее раскладку, годно ровно для одного проекта: у реального проекта
+ * ассет террейна (TERR-2) лежит полем конфига сцены (SER-7), а не отдельным
+ * документом, и правило, читавшее размеры «у документа вида terrain», не
+ * срабатывало на нём никогда — а потребитель дописывал сравнение у себя, то
+ * есть заводил вторую реализацию правила (ED-1, ED-30). Раскладку знает тот,
+ * кто собирает редактор (ED-25); правило знает только отношение.
  */
 import { ARENA_PREFAB, TERRAIN_PREFAB } from '@game-mvp/core';
 import {
   getAtPath,
   isJsonArray,
   isJsonObject,
+  type DocumentId,
   type DocumentKind,
   type DocumentPathRef,
   type EditorDocument,
@@ -45,29 +57,49 @@ import { compareIds } from '../registry/index.js';
 import { ruleDescriptionKey } from './reasons.js';
 import type { ValidationRule, ValidationRun } from './types.js';
 
-/** Виды документов и адреса внутри них, на которых стоят парные правила. */
+/**
+ * Виды документов, на которых стоят парные правила. Только виды: где внутри
+ * документа лежит проверяемое, говорят адреса (`DocumentSite`).
+ */
 export interface PairKinds {
   readonly scene: DocumentKind;
   readonly manifest: DocumentKind;
-  readonly terrain: DocumentKind;
   readonly curvature: DocumentKind;
 }
 
 export const DEFAULT_PAIR_KINDS: PairKinds = Object.freeze({
   scene: 'scene',
   manifest: 'manifest',
-  terrain: 'terrain',
   curvature: 'curvature',
 });
 
-/** Где в документе лежит список расстановки (SER-8). */
-export interface PlacementSite {
+/**
+ * Адрес места в документе: вид документа и путь внутри него. Форма одна на все
+ * правила, которым нужна вторая сторона, — см. «Раскладку документов правило не
+ * знает» в шапке файла.
+ */
+export interface DocumentSite {
   readonly kind: DocumentKind;
   readonly path: JsonPath;
 }
 
+/** Где лежит список расстановки (SER-8). */
+export type PlacementSite = DocumentSite;
+
+/** Где лежит ассет террейна (TERR-2). */
+export type TerrainSite = DocumentSite;
+
 export const DEFAULT_PLACEMENT_SITES: readonly PlacementSite[] = Object.freeze([
   Object.freeze({ kind: 'scene', path: Object.freeze(['initial']) }),
+]);
+
+/**
+ * Умолчание — террейн отдельным документом, путь пустой: сам документ и есть
+ * ассет. Проект, у которого ассет лежит полем конфига сцены (SER-7), подаёт
+ * свой адрес: это его раскладка, а не знание правила.
+ */
+export const DEFAULT_TERRAIN_SITES: readonly TerrainSite[] = Object.freeze([
+  Object.freeze({ kind: 'terrain', path: Object.freeze([]) }),
 ]);
 
 export const PREFABS_PATH: JsonPath = Object.freeze(['prefabs']);
@@ -214,8 +246,36 @@ export function placementPrefabRule(
   };
 }
 
+/** Найденная сетка террейна: где лежит и что там. */
+interface FoundGrid {
+  readonly documentId: DocumentId;
+  readonly value: JsonValue;
+}
+
+/**
+ * Сетки террейна по адресам. Место, которого в документе нет (сцена без
+ * террейна), молчит наравне с незагруженным документом: отсутствие второй
+ * стороны — не несовпадение.
+ */
+function terrainGrids(run: ValidationRun, sites: readonly TerrainSite[]): readonly FoundGrid[] {
+  const found: FoundGrid[] = [];
+  for (const site of sites) {
+    for (const holder of run.documentsOfKind(site.kind)) {
+      const value = run.valueOf(holder.id);
+      if (value === undefined) continue;
+      const grid = getAtPath(value, site.path);
+      if (!isJsonObject(grid)) continue;
+      found.push({ documentId: holder.id, value: grid });
+    }
+  }
+  return found;
+}
+
 /** ED-11: сетка карты кривизны обязана совпасть с сеткой террейна. */
-export function curvatureGridRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): ValidationRule {
+export function curvatureGridRule(
+  kinds: PairKinds = DEFAULT_PAIR_KINDS,
+  sites: readonly TerrainSite[] = DEFAULT_TERRAIN_SITES,
+): ValidationRule {
   return {
     id: CURVATURE_GRID_RULE,
     descriptionKey: ruleDescriptionKey(CURVATURE_GRID_RULE),
@@ -224,20 +284,21 @@ export function curvatureGridRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): Valida
     // видимое состояние, а не запрет на сохранение.
     severity: 'warning',
     check(run) {
-      const grids = run.documentsOfKind(kinds.terrain);
+      const grids = terrainGrids(run, sites);
       if (grids.length === 0) return;
       for (const axis of ['width', 'height'] as const) {
         const mine = getAtPath(run.document.value, [axis]);
         if (typeof mine !== 'number') continue;
         for (const grid of grids) {
-          const value = run.valueOf(grid.id);
-          const theirs = value === undefined ? undefined : getAtPath(value, [axis]);
+          const theirs = getAtPath(grid.value, [axis]);
           if (typeof theirs !== 'number' || theirs === mine) continue;
           run.report({
             path: [axis],
             expected: { kind: 'oneOf', values: [theirs] },
             code: 'gridMismatch',
-            params: { axis, expected: theirs, against: grid.id },
+            // `against` — документ-носитель сетки: с чем именно не совпало,
+            // автор узнаёт по документу, а не по пути внутри него.
+            params: { axis, expected: theirs, against: grid.documentId },
           });
         }
       }
@@ -245,15 +306,20 @@ export function curvatureGridRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): Valida
   };
 }
 
-/** Междокументные правила одним набором. */
+/**
+ * Междокументные правила одним набором: виды документов проекта и адреса мест,
+ * которые правила читают. Оба набора адресов — параметры одной природы, и оба
+ * приносит тот, кто собирает редактор.
+ */
 export function crossDocumentRules(
   kinds: PairKinds = DEFAULT_PAIR_KINDS,
   sites: readonly PlacementSite[] = DEFAULT_PLACEMENT_SITES,
+  terrainSites: readonly TerrainSite[] = DEFAULT_TERRAIN_SITES,
 ): readonly ValidationRule[] {
   return Object.freeze([
     visualForPrefabRule(kinds),
     prefabForVisualRule(kinds),
     placementPrefabRule(kinds, sites),
-    curvatureGridRule(kinds),
+    curvatureGridRule(kinds, terrainSites),
   ]);
 }

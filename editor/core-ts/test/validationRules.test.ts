@@ -18,6 +18,7 @@ import {
 } from '@game-mvp/core';
 import { describe, expect, it } from 'vitest';
 import { createEditorSession, type EditorSession, type JsonValue } from '../src/document/index.js';
+import { createOperationRegistry, registerBuiltinOperations } from '../src/operations/index.js';
 import { ContributionRegistry } from '../src/registry/index.js';
 import {
   createValidator,
@@ -27,6 +28,8 @@ import {
   CREATE_TERRAIN_GRID,
   CURVATURE_GRID_RULE,
   CURVATURE_RULE,
+  DEFAULT_PAIR_KINDS,
+  DEFAULT_PLACEMENT_SITES,
   LOAD_SCENE,
   MANIFEST_RULE,
   PLACEMENT_PREFAB_RULE,
@@ -36,6 +39,7 @@ import {
   TERRAIN_RULE,
   VALIDATE_SYSTEM,
   VISUAL_FOR_PREFAB_RULE,
+  type TerrainSite,
   type ValidationIssue,
   type ValidationReport,
   type ValidationRule,
@@ -68,14 +72,29 @@ const CURVATURE_VALUE = { width: 2, height: 2, rows: ['..', '..'] };
 
 const ALL_RULES: readonly ValidationRule[] = [...engineValidationRules(), ...crossDocumentRules()];
 
-function check(documents: Readonly<Record<string, { kind: string; value: JsonValue }>>): ValidationReport {
-  const editor: EditorSession = createEditorSession();
+function sessionOf(documents: Readonly<Record<string, { kind: string; value: JsonValue }>>): EditorSession {
+  // Операции нужны не всякому тесту, но правка документа идёт только ими
+  // (ED-29), а прогон валидации от их наличия не зависит.
+  const editor: EditorSession = createEditorSession({
+    operations: registerBuiltinOperations(createOperationRegistry()),
+  });
   for (const [id, document] of Object.entries(documents)) {
     editor.openDocument({ id, kind: document.kind, value: document.value });
   }
+  return editor;
+}
+
+function validatorOf(rules: readonly ValidationRule[]) {
   const registry = new ContributionRegistry<ValidationRule>({ kind: 'rule' });
-  registerValidationRules(registry, ALL_RULES);
-  return createValidator({ rules: registry }).run(editor);
+  registerValidationRules(registry, rules);
+  return createValidator({ rules: registry });
+}
+
+function check(
+  documents: Readonly<Record<string, { kind: string; value: JsonValue }>>,
+  rules: readonly ValidationRule[] = ALL_RULES,
+): ValidationReport {
+  return validatorOf(rules).run(sessionOf(documents));
 }
 
 /** Дословное сообщение валидатора из находки — с проверкой вида ожидания. */
@@ -252,6 +271,76 @@ describe('ED-11: карта кривизны', () => {
       [CURVATURE]: { kind: 'curvature', value: { width: 3, height: 2, rows: ['...', '...'] } },
     });
     expect(report.issues).toHaveLength(0);
+  });
+});
+
+/**
+ * Раскладка реального проекта: отдельного документа террейна нет вовсе — ассет
+ * лежит полем конфига сцены (SER-7, TERR-2), и кисть уровня (ED-10) правит его
+ * там же. Правило, выводившее адрес из вида документа, на таком проекте не
+ * срабатывало никогда, и сравнение двух чисел приходилось писать потребителю у
+ * себя — вторая реализация правила с одним источником истины (ED-1, ED-30).
+ */
+describe('ED-11: ассет террейна внутри конфига сцены', () => {
+  const TERRAIN_IN_SCENE: readonly TerrainSite[] = [{ kind: 'scene', path: ['terrain'] }];
+  const RULES = crossDocumentRules(DEFAULT_PAIR_KINDS, DEFAULT_PLACEMENT_SITES, TERRAIN_IN_SCENE);
+  const NESTED_SCENE = { ...SCENE_VALUE, terrain: TERRAIN_VALUE };
+  const WIDER_CURVATURE = { width: 3, height: 2, rows: ['...', '...'] };
+
+  it('несовпадение сетки видно, хотя документа вида terrain в проекте нет', () => {
+    const report = check(
+      {
+        [SCENE]: { kind: 'scene', value: NESTED_SCENE },
+        [CURVATURE]: { kind: 'curvature', value: WIDER_CURVATURE },
+      },
+      RULES,
+    );
+    const issue = report.forDocument(CURVATURE).find((found) => found.ruleId === CURVATURE_GRID_RULE)!;
+    expect(issue.path).toEqual(['width']);
+    expect(issue.received).toBe(3);
+    expect(issue.expected).toEqual({ kind: 'oneOf', values: [2] });
+    // Важность прежняя: рантайм переживает несовпадение игнором (ASSET-7).
+    expect(issue.severity).toBe('warning');
+    // С чем не совпало — документ-носитель сетки, то есть сам конфиг сцены.
+    expect(issue.reasonParams['against']).toBe(SCENE);
+  });
+
+  it('совпавшая сетка находок не даёт', () => {
+    const report = check(
+      {
+        [SCENE]: { kind: 'scene', value: NESTED_SCENE },
+        [CURVATURE]: { kind: 'curvature', value: CURVATURE_VALUE },
+      },
+      RULES,
+    );
+    expect(report.issues).toHaveLength(0);
+  });
+
+  it('сцена без ассета террейна по адресу молчит, как молчит незагруженный документ', () => {
+    const report = check(
+      {
+        [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+        [CURVATURE]: { kind: 'curvature', value: WIDER_CURVATURE },
+      },
+      RULES,
+    );
+    expect(report.issues).toHaveLength(0);
+  });
+
+  it('ED-8: прогон без правок ничего не исполняет, а правка сетки в сцене возвращает правило в работу', () => {
+    const editor = sessionOf({
+      [SCENE]: { kind: 'scene', value: NESTED_SCENE },
+      [CURVATURE]: { kind: 'curvature', value: CURVATURE_VALUE },
+    });
+    const validator = validatorOf(RULES);
+    expect(validator.run(editor).issues).toHaveLength(0);
+    validator.run(editor);
+    expect(validator.lastRun.executed).toBe(0);
+
+    editor.applyOperation('document.setValue', { document: SCENE, path: ['terrain', 'width'], value: 3 });
+    const report = validator.run(editor);
+    expect(validator.lastRun.executed).toBeGreaterThan(0);
+    expect(report.forDocument(CURVATURE).map((found) => found.ruleId)).toContain(CURVATURE_GRID_RULE);
   });
 });
 
