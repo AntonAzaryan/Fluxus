@@ -38,11 +38,10 @@
  *
  * ## Отклик вьюпорта во время взаимодействия (ED-15)
  *
- * Применения внутри транзакции сессия событием не объявляет — событие даёт
- * только `commit`. Поэтому инструмент просит перерисовать сам, а сведение кадра
- * с документами область делает на каждую сборку страницы: без этого объект
- * стоял бы на месте, пока автор держит кнопку, то есть правка доходила бы до
- * вьюпорта позже следующего кадра.
+ * Применение внутри ещё не закрытой транзакции сессия объявляет событием
+ * наравне с записанным в историю, поэтому кадр сводится с документами сам:
+ * держать эту гарантию инструменту нечем и не нужно — объект едет во вьюпорте
+ * по ходу перетаскивания, а не в момент отпускания.
  *
  * ## Привязка к сетке
  *
@@ -256,14 +255,7 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
   const toggled = (refs: readonly SelectionRef[], key: string): SelectionRef[] =>
     refs.includes(key) ? refs.filter((ref) => ref !== key) : [...refs, key];
 
-  /**
-   * Применяет перемещение всего выделенного одним продолжением взаимодействия.
-   *
-   * Применения внутри транзакции сессия событием не объявляет — событие даёт
-   * только `commit`, — поэтому кадр пересчитывается просьбой перерисовать:
-   * без неё объект стоял бы на месте до отпускания кнопки, то есть правка
-   * доходила бы до вьюпорта позже следующего кадра (ED-15).
-   */
+  /** Применяет перемещение всего выделенного одним продолжением взаимодействия. */
   const moveTo = (state: DragState, dx: number, dy: number): void => {
     for (const start of state.starts) {
       const params: OperationParams = {
@@ -279,7 +271,6 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
         state.transaction.extend(params);
       }
     }
-    refresh();
   };
 
   /**
@@ -294,6 +285,37 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
     if (state?.transaction == null) return;
     state.transaction.cancel();
     refresh();
+  };
+
+  /**
+   * Пакет по мультивыделению — одно взаимодействие: `beginOperation` на первой
+   * записи, `extend` на каждой следующей, `commit` одной записью истории
+   * (ED-18). Автор нажал один раз, и отменять он будет тоже один раз.
+   *
+   * Отказ на середине пакета закрывает взаимодействие тем же путём, что отказ
+   * посреди перетаскивания: половина выделения, доехавшая до нового поворота,
+   * — состояние, которого не производит ни одна операция целиком, а незакрытая
+   * транзакция запретила бы и следующую операцию, и undo до конца сессии
+   * (ED-18). Причина при этом наружу поднимается: это отказ операции авторинга,
+   * а не курсор, уехавший за пределы Q16.16, и молчать о нём нечестно.
+   */
+  const batch = (
+    operationId: string,
+    keys: readonly string[],
+    paramsOf: (key: string) => OperationParams,
+  ): void => {
+    let transaction: OperationTransaction | null = null;
+    try {
+      for (const key of keys) {
+        const params = paramsOf(key);
+        if (transaction === null) transaction = session.beginOperation(operationId, params);
+        else transaction.extend(params);
+      }
+    } catch (error) {
+      transaction?.cancel();
+      throw error;
+    }
+    transaction?.commit();
   };
 
   const place = (event: StagePointer): void => {
@@ -443,26 +465,14 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
       const spin = binding?.rotation;
       const keys = selectedKeys();
       if (spin === undefined || keys.length === 0 || session.pending) return;
-      let transaction: OperationTransaction | null = null;
-      for (const key of keys) {
+      batch(PLACEMENT_OPERATIONS.rotate, keys, (key) => {
         const placement = placements().find((item) => item.key === key);
         // Прежний поворот берётся в единице ядра — доле оборота, — а не делением
         // радиан рендера: обратный ход через радианы теряет квант Q16.16, и
         // каждое нажатие уводило бы поворот на него (FP-1).
         const current = placement?.turns ?? 0;
-        const params: OperationParams = {
-          ...bound,
-          document: options.documentId,
-          record: key,
-          turns: current + turns,
-        };
-        if (transaction === null) {
-          transaction = session.beginOperation(PLACEMENT_OPERATIONS.rotate, params);
-        } else {
-          transaction.extend(params);
-        }
-      }
-      transaction?.commit();
+        return { ...bound, document: options.documentId, record: key, turns: current + turns };
+      });
       refresh();
     },
 
@@ -470,16 +480,10 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
       const keys = selectedKeys();
       if (keys.length === 0 || session.pending) return;
       // Мультивыделение уходит одной записью истории: автор удалял один раз.
-      let transaction: OperationTransaction | null = null;
-      for (const key of keys) {
-        const params: OperationParams = { document: options.documentId, record: key };
-        if (transaction === null) {
-          transaction = session.beginOperation(PLACEMENT_OPERATIONS.remove, params);
-        } else {
-          transaction.extend(params);
-        }
-      }
-      transaction?.commit();
+      batch(PLACEMENT_OPERATIONS.remove, keys, (key) => ({
+        document: options.documentId,
+        record: key,
+      }));
       select([]);
     },
   };

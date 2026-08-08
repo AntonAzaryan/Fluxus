@@ -179,15 +179,14 @@ describe('ED-16, ED-18: перетаскивание — одна операци
 
   it('объект едет во вьюпорте по ходу перетаскивания, а не в момент отпускания', async () => {
     // ED-15: «вьюпорт показывает результат не позже следующего кадра». Правка
-    // внутри ещё не закрытого взаимодействия события сессии не даёт — событие
-    // даёт только `commit`, — поэтому кадр сводится с документами явно. Без
-    // этого объект стоял бы на месте, пока автор держит кнопку.
+    // внутри ещё не закрытого взаимодействия объявляется событием сессии
+    // наравне с записанной в историю, поэтому кадр сводится с документами сам:
+    // страницу здесь никто не пересобирает, а набор уже новый.
     const fixture = await withHits();
     const submitted = fixture.stage.submitted.length;
 
     down(fixture, AT_FIRST);
     move(fixture, AT_EMPTY);
-    redraw(fixture);
 
     expect(fixture.stage.submitted.length).toBeGreaterThan(submitted);
     // Кнопка ещё не отпущена, а набор инстансов уже в новой точке.
@@ -299,6 +298,35 @@ describe('ED-16: расстановка дописывает в конец и а
     expect(selection(fixture)).toEqual([]);
     expect(fixture.session.history().undo).toHaveLength(1);
 
+    fixture.session.undo();
+    expect(records(fixture)).toHaveLength(2);
+  });
+
+  it('отказ посреди пакета закрывает взаимодействие, а не оставляет его открытым', async () => {
+    // Пакет по мультивыделению — одно взаимодействие сессии (ED-18), и закрыться
+    // оно обязано в любом исходе: незакрытая транзакция запрещает и следующую
+    // операцию, и undo до конца сессии. Отказ здесь настоящий: запись удалена
+    // мимо интерфейса (ED-29), страница ещё не пересобрана, и инструмент
+    // адресуется к записи, которой уже нет.
+    const fixture = await withHits();
+    const [first, second] = keys(fixture);
+    fixture.frame.selection.set(SCENE_AREA_ID, [first ?? '', second ?? '']);
+    fixture.frame.view();
+
+    fixture.session.applyOperation('document.list.remove', {
+      document: FIXTURE_IDS.config,
+      record: second ?? '',
+    });
+    expect(() => {
+      fixture.state.tool.remove();
+    }).toThrow();
+
+    expect(fixture.session.pending).toBe(false);
+    // Половины пакета в документе не осталось: первая запись на месте.
+    expect(records(fixture)).toHaveLength(1);
+    expect(fixture.session.history().undo).toHaveLength(1);
+    // И сессия работает дальше — отменить внешнее удаление по-прежнему можно.
+    expect(fixture.frame.canUndo()).toBe(true);
     fixture.session.undo();
     expect(records(fixture)).toHaveLength(2);
   });

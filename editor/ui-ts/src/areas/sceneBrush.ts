@@ -164,7 +164,11 @@ interface Cell {
 
 interface Stroke {
   transaction: OperationTransaction | null;
-  /** Клетки, уже покрашенные этим мазком: в мазке значение у всех одно. */
+  /**
+   * Клетки, уже покрашенные этим мазком. Нужны, чтобы возврат курсора на
+   * пройденное не превращался в лишние применения: клетку, покрашенную мазком,
+   * он второй раз не трогает.
+   */
   readonly painted: Set<number>;
 }
 
@@ -237,10 +241,10 @@ export function createBrushTool(options: BrushToolOptions): BrushTool {
   /**
    * Красит клетки под курсором, продолжая тот же мазок.
    *
-   * Применения внутри транзакции сессия событием не объявляет — событие даёт
-   * только `commit`, — поэтому кадр пересчитывается просьбой перерисовать: без
-   * неё карта менялась бы во вьюпорте только после отпускания кнопки, то есть
-   * правка доходила бы до кадра позже следующего (ED-15).
+   * Просьбы перерисовать здесь нет: применение внутри ещё не закрытой
+   * транзакции сессия объявляет событием наравне с записанным в историю, и
+   * кадр сводится с картами по нему — клетка меняется во вьюпорте по ходу
+   * мазка, а не после отпускания кнопки (ED-15).
    */
   const paintAt = (event: StagePointer): void => {
     const open = stroke;
@@ -251,7 +255,6 @@ export function createBrushTool(options: BrushToolOptions): BrushTool {
     const hit = picker.pickSurface(event.x, event.y);
     // Курсор ушёл за арену: красить нечего, а мазок при этом не прерывается.
     if (hit === null) return;
-    let touched = false;
     try {
       for (const cell of cellsAround({ x: hit.cellX, y: hit.cellY }, grid)) {
         const index = cell.y * grid.width + cell.x;
@@ -263,7 +266,6 @@ export function createBrushTool(options: BrushToolOptions): BrushTool {
         } else {
           open.transaction.extend(params);
         }
-        touched = true;
       }
     } catch {
       // Отказ операции мазок не продолжает: карты возвращаются к состоянию до
@@ -271,9 +273,7 @@ export function createBrushTool(options: BrushToolOptions): BrushTool {
       // это отказ записи, а не сломанный документ, и показывать его должен
       // тот же путь валидации, что показывает сломанное (ED-8).
       cancelStroke();
-      return;
     }
-    if (touched) refresh();
   };
 
   /** Клетка под курсором: превью обязано лежать там, где кисть покрасит. */

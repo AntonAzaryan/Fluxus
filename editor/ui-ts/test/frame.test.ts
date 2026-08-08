@@ -1,5 +1,6 @@
 /**
- * Каркас рабочих областей (ED-23) и скелет области (ED-24).
+ * Каркас рабочих областей (ED-23), скелет области (ED-24) и путь оповещений, по
+ * которому правка доходит до страницы (ED-15).
  *
  * Проверяется то, что оба требования называют прямо: переключение горячей
  * клавишей и явным элементом; одинаковые места зон во всех областях;
@@ -17,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { findAll, type UiNode } from '../src/dom/node.js';
 import type { WorkspaceArea } from '../src/frame/area.js';
 import { RAIL_ITEM_CLASS } from '../src/frame/rail.js';
+import { createCoalescingRedraw, type CoalescingRedraw } from '../src/frame/redraw.js';
 import { ZONE_ORDER } from '../src/frame/skeleton.js';
 import { sceneArea, type SceneAreaState } from '../src/areas/scene.js';
 import { systemsArea, type SystemsAreaState } from '../src/areas/systems.js';
@@ -346,6 +348,78 @@ describe('ED-23, ED-24: поиск по проекту — сквозной', ()
 describe('каркас без единой области', () => {
   it('отказывается собираться, а не показывает пустое окно', () => {
     expect(() => buildFrame([])).toThrow();
+  });
+});
+
+describe('ED-15: просьбы перерисовать сводятся в одну отрисовку', () => {
+  /** Очередь вместо микрозадачи: момент отрисовки в тесте обязан быть точкой. */
+  function queued(): { readonly run: () => void; readonly redraw: CoalescingRedraw; draws: number } {
+    const pending: (() => void)[] = [];
+    const box = {
+      draws: 0,
+      redraw: createCoalescingRedraw(
+        () => {
+          box.draws++;
+        },
+        (draw) => pending.push(draw),
+      ),
+      run: () => {
+        for (const draw of pending.splice(0)) draw();
+      },
+    };
+    return box;
+  }
+
+  it('несколько просьб подряд дают одну отрисовку, а следующая — новую', () => {
+    const box = queued();
+    box.redraw.request();
+    box.redraw.request();
+    box.redraw.request();
+    expect(box.redraw.pending).toBe(true);
+    // Синхронно не нарисовано ничего: сведение и есть отсрочка.
+    expect(box.draws).toBe(0);
+
+    box.run();
+    expect(box.draws).toBe(1);
+    expect(box.redraw.pending).toBe(false);
+
+    // Следующая порция работы — следующая отрисовка, а не пропущенная.
+    box.redraw.request();
+    box.run();
+    expect(box.draws).toBe(2);
+  });
+
+  it('снос страницы отменяет запланированное', () => {
+    const box = queued();
+    box.redraw.request();
+    box.redraw.cancel();
+    box.run();
+    expect(box.draws).toBe(0);
+  });
+
+  it('пакет по мультивыделению перерисовывает страницу один раз, а не по записи', async () => {
+    // Пакет — это `beginOperation`, `extend` на каждую запись и `commit` в одном
+    // синхронном вызове, и каждое из них сессия объявляет честно: состояние
+    // документов между ними разное (ED-18). Сводит их отрисовка — ED-15 даёт
+    // на это ровно тот зазор, в котором сведение законно.
+    const fixture = await buildLoadedFrame();
+    const keys = fixture.session.descriptors(FIXTURE_IDS.config, PLACEMENT_LIST);
+    fixture.frame.selection.set(fixture.area.id, [...keys]);
+    fixture.frame.view();
+
+    let notices = 0;
+    const box = queued();
+    fixture.frame.subscribe(() => {
+      notices++;
+      box.redraw.request();
+    });
+    fixture.state.tool.remove();
+    box.run();
+
+    // Оповещений действительно несколько — иначе сводить было бы нечего.
+    expect(keys.length).toBe(2);
+    expect(notices).toBeGreaterThan(2);
+    expect(box.draws).toBe(1);
   });
 });
 

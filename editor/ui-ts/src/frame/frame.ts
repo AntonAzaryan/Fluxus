@@ -169,13 +169,18 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
       // страницу. Показывать по нему результаты будет палитра (W2-3).
       query = next;
     },
-    canUndo: () => session.canUndo(),
-    canRedo: () => session.canRedo(),
+    // Пока идёт взаимодействие (перетаскивание, мазок кисти), сессия отменять
+    // отказывается — записи, которую отменять, ещё нет (ED-18). Отказ этот
+    // виден как недоступность, а не как исключение из обработчика клавиатуры:
+    // недоступное показано недоступным (ED-26), и путь клавиши тот же, что путь
+    // кнопки бара, — иначе Ctrl+Z посреди мазка ронял бы разбор нажатия.
+    canUndo: () => !session.pending && session.canUndo(),
+    canRedo: () => !session.pending && session.canRedo(),
     undo() {
-      if (session.undo()) notify();
+      if (frame.canUndo() && session.undo()) notify();
     },
     redo() {
-      if (session.redo()) notify();
+      if (frame.canRedo() && session.redo()) notify();
     },
     handleKey(stroke) {
       if (matchesBinding(stroke, UNDO_BINDING)) {
@@ -232,8 +237,8 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
           frameTopBar({
             resources,
             query,
-            canUndo: session.canUndo(),
-            canRedo: session.canRedo(),
+            canUndo: frame.canUndo(),
+            canRedo: frame.canRedo(),
             onQuery: (next) => {
               frame.setSearchQuery(next);
             },

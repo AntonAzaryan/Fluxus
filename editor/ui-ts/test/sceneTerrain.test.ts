@@ -223,6 +223,42 @@ describe('ED-11, ASSET-7: карта кривизны — отдельный с�
     expect(bytesOf(session, PAINT_IDS.curvature)).toBe(before);
   });
 
+  it('никакой путь не даёт операции кривизны попасть в карты террейна', () => {
+    // ED-11 «MUST NOT затрагивать sim-ассет террейна» держится структурно, а не
+    // дисциплиной: имя правимой карты в операции — литерал, и свободы у
+    // вызывающего ровно две — документ и путь до ассета. Проверяется это на
+    // конфиге сцены: карт с именем карты кривизны в нём нет ни по одному пути.
+    const session = paintSession();
+    const before = bytesOf(session, PAINT_IDS.config);
+    for (const path of [[], ['terrain'], ['terrain', 'levels'], ['terrain', 'flags']]) {
+      expect(() => {
+        session.applyOperation(TERRAIN_OPERATIONS.curvature, {
+          document: PAINT_IDS.config,
+          path,
+          cellX: 1,
+          cellY: 1,
+          offset: 3,
+        });
+      }, JSON.stringify(path)).toThrow();
+    }
+    expect(bytesOf(session, PAINT_IDS.config)).toBe(before);
+
+    // И обратно: карте кривизны нечем стать картой уровней.
+    const curvature = bytesOf(session, PAINT_IDS.curvature);
+    expect(() => {
+      setLevel(session, 1, 1, 1);
+    }).not.toThrow();
+    expect(() => {
+      session.applyOperation(TERRAIN_OPERATIONS.level, {
+        document: PAINT_IDS.curvature,
+        cellX: 1,
+        cellY: 1,
+        level: 1,
+      });
+    }).toThrow();
+    expect(bytesOf(session, PAINT_IDS.curvature)).toBe(curvature);
+  });
+
   it('мазок кривизны не меняет sim-ассет террейна ни на байт', () => {
     const session = paintSession();
     // Клетки с рампой и обрывом — тот самый случай ED-11: кривизна поверх них

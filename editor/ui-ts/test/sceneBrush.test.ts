@@ -170,6 +170,29 @@ describe('ED-18: непрерывный мазок — одна операция
     expect(session.history().undo).toEqual([]);
   });
 
+  it('отмена посреди мазка недоступна, а не роняет разбор нажатия (ED-26)', async () => {
+    // Пока мазок идёт, отменять нечего: записи в истории ещё нет, и сессия
+    // отказывает. Отказ этот виден недоступностью, а не исключением из
+    // обработчика клавиатуры — иначе Ctrl+Z с зажатой кнопкой ронял бы каркас.
+    const fixture = withCells(await buildLoadedFrame());
+    press(buttonByKey(view(fixture), 'ui.area.scene.toolTerrain'));
+    fixture.state.brush.setLevel(2);
+    fixture.pointer(at('down', 1, 1));
+    fixture.pointer(at('up', 1, 1));
+    expect(fixture.frame.canUndo()).toBe(true);
+
+    fixture.pointer(at('down', 2, 2));
+    expect(fixture.session.pending).toBe(true);
+    expect(fixture.frame.canUndo()).toBe(false);
+    expect(() => {
+      fixture.frame.handleKey({ key: 'z', ctrl: true, shift: false, alt: false });
+    }).not.toThrow();
+    expect(fixture.session.pending).toBe(true);
+
+    fixture.pointer(at('up', 2, 2));
+    expect(fixture.frame.canUndo()).toBe(true);
+  });
+
   it('отказ операции посреди мазка бросает его целиком, а не наполовину', () => {
     // Половина покрашенных клеток — состояние, которого не производит ни одна
     // операция целиком; `commit` записал бы его в историю как достижимое.
@@ -332,6 +355,32 @@ describe('ED-25: два инструмента делят один вьюпор�
     press(buttonByKey(view(fixture), 'ui.area.scene.toolPointer'));
     view(fixture);
     expect(fixture.stage.overlays).toEqual([]);
+  });
+
+  it('клетка меняется во вьюпорте по ходу мазка, а не после отпускания (ED-15)', async () => {
+    // Применение внутри ещё не закрытой транзакции объявляется событием сессии
+    // наравне с записанным в историю, поэтому кадр сводится с картами сам:
+    // страницу здесь никто не пересобирает, а сетка у вьюпорта уже новая.
+    const fixture = withCells(await buildLoadedFrame());
+    press(buttonByKey(view(fixture), 'ui.area.scene.toolTerrain'));
+    fixture.state.brush.setLevel(3);
+    const submitted = fixture.stage.submitted.length;
+
+    // Каждая клетка мазка доезжает до вьюпорта своей подачей, а не все разом
+    // по отпускании: подач ровно столько, сколько клеток покрашено.
+    fixture.pointer(at('down', 1, 1));
+    fixture.pointer(at('move', 2, 1));
+    fixture.pointer(at('move', 3, 1));
+
+    expect(fixture.stage.submitted.length).toBe(submitted + 3);
+    expect(fixture.stage.last?.grid?.levels[1 * 4 + 1]).toBe(3);
+    expect(fixture.stage.last?.grid?.levels[1 * 4 + 3]).toBe(3);
+    // Кнопка ещё не отпущена: в истории записи нет, а картинка уже другая.
+    expect(fixture.session.history().undo).toEqual([]);
+    expect(fixture.session.pending).toBe(true);
+
+    fixture.pointer(at('up', 1, 1));
+    expect(fixture.session.history().undo).toHaveLength(1);
   });
 
   it('правка уровня кистью доходит до вьюпорта новыми обрывами (ED-15, TERR-5)', async () => {

@@ -37,7 +37,13 @@ export {
 } from './keys.js';
 export type { KeyStroke } from './keys.js';
 export { mountWorkspaceFrame } from './mount.js';
-export type { MountedFrame } from './mount.js';
+export type { MountedFrame, MountOptions } from './mount.js';
+/**
+ * Сведение просьб перерисовать наружу не выходит: им пользуется отрисовка
+ * страницы, а не вклад. Подменить отсрочку можно параметром монтирования —
+ * второго способа перерисовать страницу это не заводит.
+ */
+export type { RedrawSchedule } from './redraw.js';
 export { RAIL_ITEM_CLASS, RAIL_ROVING_ID } from './rail.js';
 export { createSelectionModel } from './selection.js';
 export type { AreaSelection, SelectionModel, SelectionRef } from './selection.js';

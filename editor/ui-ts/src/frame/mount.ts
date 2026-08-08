@@ -2,7 +2,9 @@
  * Единственное место каркаса, которому нужен документ среды: отрисовка,
  * клавиатура и фокус.
  *
- * Отрисовка тотальная — страница строится заново на каждое изменение.
+ * Отрисовка тотальная — страница строится заново на каждое изменение, — и
+ * потому сведённая: оповещений об одной авторской порции работы приходит
+ * несколько, а собирается страница по ним один раз (`redraw.ts`).
  * Реактивности в пакете нет намеренно (ноль новых зависимостей), и за это
  * платится ровно одним: после замены поддерева фокус клавиатуры оказывается на
  * `body`. Поэтому здесь же живёт его возврат — по пометке `data-roving`
@@ -32,6 +34,7 @@ import { TOKEN_SCOPE_CLASS } from '../tokens/css.js';
 import { mountEditorRoot } from '../root.js';
 import type { WorkspaceFrame } from './frame.js';
 import { keyStrokeOf } from './keys.js';
+import { createCoalescingRedraw, type RedrawSchedule } from './redraw.js';
 
 export interface MountedFrame {
   readonly root: HTMLElement;
@@ -53,7 +56,19 @@ function restoreFocus(root: ParentNode, containerId: string | undefined): void {
   if (target instanceof HTMLElement) target.focus();
 }
 
-export function mountWorkspaceFrame(doc: Document, frame: WorkspaceFrame): MountedFrame {
+export interface MountOptions {
+  /**
+   * Чем откладывается сведённая отрисовка (`redraw.ts`). Подменяется тем, кто
+   * держит свой кадровый цикл; по умолчанию — микрозадача.
+   */
+  readonly schedule?: RedrawSchedule;
+}
+
+export function mountWorkspaceFrame(
+  doc: Document,
+  frame: WorkspaceFrame,
+  options: MountOptions = {},
+): MountedFrame {
   const root = mountEditorRoot(doc);
   installStylesheet(doc);
   // Корень — область действия токенов: всё, что красит хром, лежит внутри неё,
@@ -70,13 +85,24 @@ export function mountWorkspaceFrame(doc: Document, frame: WorkspaceFrame): Mount
     if (frame.handleKey(keyStrokeOf(event))) event.preventDefault();
   };
 
+  // Оповещений об одной авторской порции работы приходит несколько (пакет по
+  // мультивыделению — оповещение на запись), и отрисовка сводит их в одну
+  // (`redraw.ts`). Первая сборка при этом синхронна: страница обязана
+  // существовать к возврату из монтирования.
+  const redraw = createCoalescingRedraw(draw, options.schedule);
+
   doc.addEventListener('keydown', onKeyDown);
-  const unsubscribes = [frame.subscribe(draw)];
+  const unsubscribes = [
+    frame.subscribe(() => {
+      redraw.request();
+    }),
+  ];
   draw();
 
   return {
     root,
     dispose() {
+      redraw.cancel();
       doc.removeEventListener('keydown', onKeyDown);
       for (const unsubscribe of unsubscribes) unsubscribe();
     },
