@@ -5,6 +5,12 @@ import { describe, expect, it } from 'vitest';
 import { schemaFileContent, schemaFiles } from '../src/dsl/schemas.js';
 import { actionNames } from '../src/dsl/actions.js';
 import { operators } from '../src/dsl/expr.js';
+import {
+  terrainFlagChar,
+  terrainLevelChar,
+  TERRAIN_CELL_KINDS,
+  TERRAIN_LEVEL_MAX,
+} from '../src/systems/terrain.js';
 
 const SCHEMA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'schemas');
 
@@ -29,6 +35,31 @@ describe('engine/schemas (SER-5)', () => {
       expect(onDisk).toBe(schemaFileContent(name));
     });
   }
+
+  /**
+   * SER-5: схема не поддерживается отдельно от ядра. Паттерн карты записан
+   * диапазоном (`0-9A-F`), а алфавит ядра — перечислением символов, поэтому
+   * сверяется не текст паттерна, а принимаемое им множество: разойдись они —
+   * редактор писал бы ассет, который схема отвергает (ED-10).
+   */
+  it('схема террейна принимает ровно алфавиты карт (TERR-3)', () => {
+    const doc = schemaFiles['terrain.schema.json'] as {
+      properties: { levels: { items: { pattern: string } }; flags: { items: { pattern: string } } };
+    };
+    const levelChars = new Set(
+      Array.from({ length: TERRAIN_LEVEL_MAX + 1 }, (_unused, level) => terrainLevelChar(level)),
+    );
+    const flagChars = new Set(TERRAIN_CELL_KINDS.map((kind) => terrainFlagChar(kind)));
+    const levels = new RegExp(doc.properties.levels.items.pattern);
+    const flags = new RegExp(doc.properties.flags.items.pattern);
+
+    // Печатаемый ASCII — множество, из которого алфавит карты вообще выбирается.
+    for (let code = 0x21; code <= 0x7e; code++) {
+      const char = String.fromCharCode(code);
+      expect([char, levels.test(char)]).toEqual([char, levelChars.has(char)]);
+      expect([char, flags.test(char)]).toEqual([char, flagChars.has(char)]);
+    }
+  });
 
   it('схема системы перечисляет все действия и операторы ядра', () => {
     const doc = schemaFiles['system.schema.json'] as {

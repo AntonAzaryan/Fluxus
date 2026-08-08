@@ -1,0 +1,7693 @@
+{
+  "scenario": "match-fuzz",
+  "seed": 977,
+  "worldInitHash": "367c05d8",
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              0
+            ],
+            "moveY": [
+              0,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              0,
+              0
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              0
+            ],
+            "moveY": [
+              0,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              0,
+              0
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              0
+            ],
+            "moveY": [
+              0,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              0,
+              0
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              1,
+              0
+            ],
+            "moveX": [
+              0,
+              -65536
+            ],
+            "moveY": [
+              0,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              1,
+              1
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              -5243
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -5243
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 4,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              65536
+            ],
+            "moveY": [
+              0,
+              0
+            ],
+            "prevButtons": [
+              1,
+              0
+            ],
+            "seq": [
+              2,
+              2
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              5243,
+              0
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              5243
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 5,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              0
+            ],
+            "moveY": [
+              0,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              3,
+              3
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              0
+            ],
+            "y": [
+              0,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              0
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 6,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              0
+            ],
+            "moveY": [
+              65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              4,
+              4
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              0
+            ],
+            "y": [
+              5243,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 7,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              65536
+            ],
+            "moveY": [
+              0,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              5,
+              5
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              5243
+            ],
+            "y": [
+              5243,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              5243
+            ],
+            "y": [
+              0,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 8,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              65536
+            ],
+            "moveY": [
+              65536,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              6,
+              6
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              10486
+            ],
+            "y": [
+              10486,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              5243
+            ],
+            "y": [
+              5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 9,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              1,
+              0
+            ],
+            "moveX": [
+              0,
+              -65536
+            ],
+            "moveY": [
+              0,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              7,
+              7
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              5243
+            ],
+            "y": [
+              10486,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -5243
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 10,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              65536
+            ],
+            "moveY": [
+              -65536,
+              65536
+            ],
+            "prevButtons": [
+              1,
+              0
+            ],
+            "seq": [
+              8,
+              8
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              10486
+            ],
+            "y": [
+              5243,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              5243
+            ],
+            "y": [
+              -5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 11,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              -65536
+            ],
+            "moveY": [
+              0,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              9,
+              9
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              5243,
+              5243
+            ],
+            "y": [
+              5243,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              -5243
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 12,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              1
+            ],
+            "moveX": [
+              65536,
+              -65536
+            ],
+            "moveY": [
+              65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              10,
+              10
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              0
+            ],
+            "y": [
+              10486,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              -5243
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 13,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              -65536
+            ],
+            "moveY": [
+              0,
+              0
+            ],
+            "prevButtons": [
+              0,
+              1
+            ],
+            "seq": [
+              11,
+              11
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              -5243
+            ],
+            "y": [
+              10486,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              -5243
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 14,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              0
+            ],
+            "moveY": [
+              -65536,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              12,
+              12
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              -5243
+            ],
+            "y": [
+              5243,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              -5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 15,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              65536
+            ],
+            "moveY": [
+              -65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              13,
+              13
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              20972,
+              0
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              5243
+            ],
+            "y": [
+              -5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 16,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              0
+            ],
+            "moveY": [
+              -65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              14,
+              14
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              26215,
+              0
+            ],
+            "y": [
+              -5243,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              0
+            ],
+            "y": [
+              -5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 17,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              65536
+            ],
+            "moveY": [
+              65536,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              15,
+              15
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              26215,
+              5243
+            ],
+            "y": [
+              0,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              5243
+            ],
+            "y": [
+              5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 18,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              -65536
+            ],
+            "moveY": [
+              65536,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              16,
+              16
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              26215,
+              0
+            ],
+            "y": [
+              5243,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -5243
+            ],
+            "y": [
+              5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 19,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              1,
+              0
+            ],
+            "moveX": [
+              0,
+              65536
+            ],
+            "moveY": [
+              65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              17,
+              17
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              26215,
+              5243
+            ],
+            "y": [
+              10486,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              5243
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 20,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              -65536
+            ],
+            "moveY": [
+              -65536,
+              65536
+            ],
+            "prevButtons": [
+              1,
+              0
+            ],
+            "seq": [
+              18,
+              18
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              20972,
+              0
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              -5243
+            ],
+            "y": [
+              -5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 21,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              0
+            ],
+            "moveY": [
+              0,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              19,
+              19
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              0
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 22,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              0
+            ],
+            "moveY": [
+              -65536,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              20,
+              20
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              0
+            ],
+            "y": [
+              0,
+              5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              0
+            ],
+            "y": [
+              -5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 23,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              1,
+              0
+            ],
+            "moveX": [
+              -65536,
+              65536
+            ],
+            "moveY": [
+              -65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              21,
+              21
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              5243,
+              5243
+            ],
+            "y": [
+              -5243,
+              5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              5243
+            ],
+            "y": [
+              -5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 24,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              1
+            ],
+            "moveX": [
+              0,
+              -65536
+            ],
+            "moveY": [
+              -65536,
+              -65536
+            ],
+            "prevButtons": [
+              1,
+              0
+            ],
+            "seq": [
+              22,
+              22
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              5243,
+              0
+            ],
+            "y": [
+              -10486,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -5243
+            ],
+            "y": [
+              -5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 25,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              0
+            ],
+            "moveY": [
+              0,
+              0
+            ],
+            "prevButtons": [
+              0,
+              1
+            ],
+            "seq": [
+              23,
+              23
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              5243,
+              0
+            ],
+            "y": [
+              -10486,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 26,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              1,
+              0
+            ],
+            "moveX": [
+              65536,
+              65536
+            ],
+            "moveY": [
+              65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              24,
+              24
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              5243
+            ],
+            "y": [
+              -5243,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              5243
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 27,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              0
+            ],
+            "moveY": [
+              0,
+              -65536
+            ],
+            "prevButtons": [
+              1,
+              0
+            ],
+            "seq": [
+              25,
+              25
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              5243
+            ],
+            "y": [
+              -5243,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 28,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              65536
+            ],
+            "moveY": [
+              0,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              26,
+              26
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              10486
+            ],
+            "y": [
+              -5243,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              5243
+            ],
+            "y": [
+              0,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 29,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              1,
+              0
+            ],
+            "moveX": [
+              65536,
+              0
+            ],
+            "moveY": [
+              65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              27,
+              27
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              20972,
+              10486
+            ],
+            "y": [
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              0
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 30,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              1
+            ],
+            "moveX": [
+              -65536,
+              -65536
+            ],
+            "moveY": [
+              65536,
+              0
+            ],
+            "prevButtons": [
+              1,
+              0
+            ],
+            "seq": [
+              28,
+              28
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              5243
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              -5243
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 31,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              0
+            ],
+            "moveY": [
+              65536,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              1
+            ],
+            "seq": [
+              29,
+              29
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              5243
+            ],
+            "y": [
+              10486,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              0
+            ],
+            "y": [
+              5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 32,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              -65536
+            ],
+            "moveY": [
+              0,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              30,
+              30
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              0
+            ],
+            "y": [
+              10486,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              -5243
+            ],
+            "y": [
+              0,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 33,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              1,
+              1
+            ],
+            "moveX": [
+              0,
+              -65536
+            ],
+            "moveY": [
+              65536,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              31,
+              31
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              -5243
+            ],
+            "y": [
+              15729,
+              5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -5243
+            ],
+            "y": [
+              5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 34,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              0
+            ],
+            "moveY": [
+              0,
+              -65536
+            ],
+            "prevButtons": [
+              1,
+              1
+            ],
+            "seq": [
+              32,
+              32
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              -5243
+            ],
+            "y": [
+              15729,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              0
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 35,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              65536
+            ],
+            "moveY": [
+              65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              33,
+              33
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              0
+            ],
+            "y": [
+              20972,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              5243
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 36,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              65536
+            ],
+            "moveY": [
+              -65536,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              34,
+              34
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              5243
+            ],
+            "y": [
+              15729,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              5243
+            ],
+            "y": [
+              -5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 37,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              65536
+            ],
+            "moveY": [
+              -65536,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              35,
+              35
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              20972,
+              10486
+            ],
+            "y": [
+              10486,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              5243
+            ],
+            "y": [
+              -5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 38,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              65536
+            ],
+            "moveY": [
+              -65536,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              36,
+              36
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              15729
+            ],
+            "y": [
+              5243,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              5243
+            ],
+            "y": [
+              -5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 39,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              -65536
+            ],
+            "moveY": [
+              0,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              37,
+              37
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              10486
+            ],
+            "y": [
+              5243,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -5243
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 40,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              0
+            ],
+            "moveY": [
+              65536,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              38,
+              38
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              10486
+            ],
+            "y": [
+              10486,
+              -15729
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              0
+            ],
+            "y": [
+              5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 41,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              65536
+            ],
+            "moveY": [
+              65536,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              39,
+              39
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              15729
+            ],
+            "y": [
+              15729,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              5243
+            ],
+            "y": [
+              5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 42,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              1,
+              0
+            ],
+            "moveX": [
+              65536,
+              -65536
+            ],
+            "moveY": [
+              -65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              40,
+              40
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              20972,
+              10486
+            ],
+            "y": [
+              10486,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              -5243
+            ],
+            "y": [
+              -5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 43,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              -65536
+            ],
+            "moveY": [
+              65536,
+              65536
+            ],
+            "prevButtons": [
+              1,
+              0
+            ],
+            "seq": [
+              41,
+              41
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              5243
+            ],
+            "y": [
+              15729,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              -5243
+            ],
+            "y": [
+              5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 44,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              65536
+            ],
+            "moveY": [
+              -65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              42,
+              42
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              10486
+            ],
+            "y": [
+              10486,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              5243
+            ],
+            "y": [
+              -5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 45,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              1
+            ],
+            "moveX": [
+              65536,
+              -65536
+            ],
+            "moveY": [
+              -65536,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              43,
+              43
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              5243
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              -5243
+            ],
+            "y": [
+              -5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 46,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              1
+            ],
+            "moveX": [
+              65536,
+              -65536
+            ],
+            "moveY": [
+              65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              1
+            ],
+            "seq": [
+              44,
+              44
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              20972,
+              0
+            ],
+            "y": [
+              10486,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              -5243
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 47,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              1
+            ],
+            "moveX": [
+              -65536,
+              0
+            ],
+            "moveY": [
+              65536,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              1
+            ],
+            "seq": [
+              45,
+              45
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              0
+            ],
+            "y": [
+              15729,
+              -5243
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              0
+            ],
+            "y": [
+              5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 48,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              0
+            ],
+            "moveY": [
+              0,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              1
+            ],
+            "seq": [
+              46,
+              46
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              10486,
+              0
+            ],
+            "y": [
+              15729,
+              -10486
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              0
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 49,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              0
+            ],
+            "moveY": [
+              0,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              47,
+              47
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              0
+            ],
+            "y": [
+              15729,
+              -15729
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              0
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 50,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              -65536
+            ],
+            "moveY": [
+              -65536,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              48,
+              48
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              -5243
+            ],
+            "y": [
+              10486,
+              -20972
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -5243
+            ],
+            "y": [
+              -5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 51,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              0
+            ],
+            "moveY": [
+              -65536,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              49,
+              49
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              -5243
+            ],
+            "y": [
+              5243,
+              -15729
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              -5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 52,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              65536
+            ],
+            "moveY": [
+              0,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              50,
+              50
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              0
+            ],
+            "y": [
+              5243,
+              -20972
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              5243
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 53,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              1
+            ],
+            "moveX": [
+              0,
+              0
+            ],
+            "moveY": [
+              65536,
+              65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              51,
+              51
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              0
+            ],
+            "y": [
+              10486,
+              -15729
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              5243,
+              5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 54,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              -65536
+            ],
+            "moveY": [
+              65536,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              1
+            ],
+            "seq": [
+              52,
+              52
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              -5243
+            ],
+            "y": [
+              15729,
+              -20972
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -5243
+            ],
+            "y": [
+              5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 55,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              1
+            ],
+            "moveX": [
+              0,
+              65536
+            ],
+            "moveY": [
+              65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              53,
+              53
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              15729,
+              0
+            ],
+            "y": [
+              20972,
+              -20972
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              5243
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 56,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              65536,
+              65536
+            ],
+            "moveY": [
+              65536,
+              0
+            ],
+            "prevButtons": [
+              0,
+              1
+            ],
+            "seq": [
+              54,
+              54
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              20972,
+              5243
+            ],
+            "y": [
+              26215,
+              -20972
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              5243
+            ],
+            "y": [
+              5243,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 57,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              -65536
+            ],
+            "moveY": [
+              -65536,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              55,
+              55
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              20972,
+              0
+            ],
+            "y": [
+              20972,
+              -26215
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              -5243
+            ],
+            "y": [
+              -5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 58,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              1,
+              0
+            ],
+            "moveX": [
+              65536,
+              -65536
+            ],
+            "moveY": [
+              0,
+              -65536
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              56,
+              56
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              26215,
+              -5243
+            ],
+            "y": [
+              20972,
+              -31458
+            ]
+          },
+          "Velocity": {
+            "x": [
+              5243,
+              -5243
+            ],
+            "y": [
+              0,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 59,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              0,
+              0
+            ],
+            "moveY": [
+              -65536,
+              -65536
+            ],
+            "prevButtons": [
+              1,
+              0
+            ],
+            "seq": [
+              57,
+              57
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              26215,
+              -5243
+            ],
+            "y": [
+              15729,
+              -36701
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0
+            ],
+            "y": [
+              -5243,
+              -5243
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 60,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 2,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          31,
+          31
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
+            "halfX": [
+              19661,
+              19661
+            ],
+            "halfY": [
+              19661,
+              19661
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0
+            ],
+            "radius": [
+              19661,
+              19661
+            ],
+            "shape": [
+              0,
+              0
+            ]
+          },
+          "Input": {
+            "aimDir": [
+              0,
+              0
+            ],
+            "buttons": [
+              0,
+              0
+            ],
+            "moveX": [
+              -65536,
+              0
+            ],
+            "moveY": [
+              0,
+              0
+            ],
+            "prevButtons": [
+              0,
+              0
+            ],
+            "seq": [
+              58,
+              58
+            ]
+          },
+          "Player": {
+            "slot": [
+              0,
+              1
+            ]
+          },
+          "Position": {
+            "x": [
+              20972,
+              -5243
+            ],
+            "y": [
+              15729,
+              -36701
+            ]
+          },
+          "Velocity": {
+            "x": [
+              -5243,
+              0
+            ],
+            "y": [
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "Hero"
+            ]
+          ],
+          [
+            1,
+            [
+              "Hero"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    }
+  ]
+}

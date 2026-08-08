@@ -6,6 +6,8 @@ import { filterSnapshot, relevantEntityVisible, VIEWPOINT_ALL } from '../src/sim
 import { snapshotToPlain } from '../src/sim/serialization.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
+import { RingHistory } from '../src/sim/history.js';
+import { createInputLog, createRewindController } from '../src/sim/rewind.js';
 import { teamBit, VisibilitySystem, VISIBILITY_COMPONENT, VISION_MODIFIER_COMPONENT } from '../src/systems/visibility.js';
 import { requireModifierList } from '../src/systems/modifiers.js';
 import type { EntityId, FieldOverrides, Snapshot } from '../src/types.js';
@@ -222,5 +224,58 @@ describe('сцена без FoW (DI-3)', () => {
     const state = initialState(world, 1);
 
     expect([...listAlive(filterSnapshot(state, 0).world)]).toEqual([...listAlive(world)]);
+  });
+});
+
+/**
+ * REW-11 — стык двух механизмов, каждый из которых по отдельности покрыт:
+ * видимость (FOW-*) и перемотка (REW-*). Проверять его надо именно на стыке.
+ * `Visibility` — обычный компонент, поэтому он входит в снапшот и откатывается
+ * вместе с миром; отсюда следует, что после отката фильтр обязан опираться на
+ * видимость ЦЕЛЕВОГО тика. Если бы фильтр брал видимость текущего тика,
+ * зритель перемотки увидел бы прошлое глазами настоящего — врага, которого в
+ * тот момент не видел, либо пустоту на месте того, кого видел.
+ */
+describe('видимость откатывается вместе с миром (REW-11)', () => {
+  it('после отката враг снова в снапшоте: фильтр берёт Visibility целевого тика', () => {
+    const { world, systems, modifiers } = loadScene(SCENE);
+    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+    const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers };
+    const state = initialState(world, 1);
+
+    spawn(world, 'Watcher', { Position: { x: F(0), y: F(0) } });
+    const enemy = spawn(world, 'Enemy', { Position: { x: F(1), y: F(0) } });
+
+    // Интервал 1: каждый тик снимается снапшотом, поэтому seekTo восстанавливает
+    // целевой тик как есть, без доигрывания — проверяется откат, а не реплей.
+    const history = new RingHistory({ interval: 1, capacity: 16 });
+    const inputs = createInputLog();
+    history.record(state);
+    const step = (): void => {
+      inputs.record(state.tick + 1, []);
+      tick(sim, state);
+      history.record(state);
+    };
+
+    step();
+    step();
+    const seen = state.tick;
+    // На этом тике враг в зоне обзора и в персональном снапшоте команды 0 есть.
+    expect(isAlive(filterSnapshot(state, 0).world, enemy)).toBe(true);
+
+    // Враг ушёл из обзора: следующий пересчёт видимости снимет бит команды 0.
+    setField(world, enemy, 'Position', 'x', F(50));
+    setField(world, enemy, 'Position', 'y', F(50));
+    step();
+    step();
+    expect(isAlive(filterSnapshot(state, 0).world, enemy)).toBe(false);
+
+    const wsm = createRewindController(sim, state, { history, inputs });
+    wsm.pause();
+    wsm.beginRewind();
+    wsm.seekTo(seen);
+
+    expect(state.tick).toBe(seen);
+    expect(isAlive(filterSnapshot(state, 0).world, enemy)).toBe(true);
   });
 });

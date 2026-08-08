@@ -1,6 +1,7 @@
 {
   "scenario": "random-spread",
   "seed": 424242,
+  "worldInitHash": "9593cef1",
   "ticks": [
     {
       "tick": 0,

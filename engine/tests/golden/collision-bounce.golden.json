@@ -1,6 +1,7 @@
 {
   "scenario": "collision-bounce",
   "seed": 20260803,
+  "worldInitHash": "c28e5290",
   "ticks": [
     {
       "tick": 0,
@@ -23,6 +24,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               16384,
               32768
@@ -30,6 +39,14 @@
             "halfY": [
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              1
             ],
             "radius": [
               16384,
@@ -61,14 +78,7 @@
             ]
           }
         },
-        "tags": [
-          [
-            1,
-            [
-              "blocksMovement"
-            ]
-          ]
-        ]
+        "tags": []
       },
       "rng": [],
       "events": [],
@@ -95,6 +105,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               16384,
               32768
@@ -102,6 +120,14 @@
             "halfY": [
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              1
             ],
             "radius": [
               16384,
@@ -133,14 +159,7 @@
             ]
           }
         },
-        "tags": [
-          [
-            1,
-            [
-              "blocksMovement"
-            ]
-          ]
-        ]
+        "tags": []
       },
       "rng": [],
       "events": [],
@@ -167,6 +186,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               16384,
               32768
@@ -174,6 +201,14 @@
             "halfY": [
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              1
             ],
             "radius": [
               16384,
@@ -205,14 +240,7 @@
             ]
           }
         },
-        "tags": [
-          [
-            1,
-            [
-              "blocksMovement"
-            ]
-          ]
-        ]
+        "tags": []
       },
       "rng": [],
       "events": [],
@@ -239,6 +267,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               16384,
               32768
@@ -246,6 +282,14 @@
             "halfY": [
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              1
             ],
             "radius": [
               16384,
@@ -277,14 +321,7 @@
             ]
           }
         },
-        "tags": [
-          [
-            1,
-            [
-              "blocksMovement"
-            ]
-          ]
-        ]
+        "tags": []
       },
       "rng": [],
       "events": [],
@@ -311,6 +348,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               16384,
               32768
@@ -318,6 +363,14 @@
             "halfY": [
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              1
             ],
             "radius": [
               16384,
@@ -349,14 +402,7 @@
             ]
           }
         },
-        "tags": [
-          [
-            1,
-            [
-              "blocksMovement"
-            ]
-          ]
-        ]
+        "tags": []
       },
       "rng": [],
       "events": [],
@@ -383,6 +429,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               16384,
               32768
@@ -390,6 +444,14 @@
             "halfY": [
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              1
             ],
             "radius": [
               16384,
@@ -421,14 +483,7 @@
             ]
           }
         },
-        "tags": [
-          [
-            1,
-            [
-              "blocksMovement"
-            ]
-          ]
-        ]
+        "tags": []
       },
       "rng": [],
       "events": [],
@@ -455,6 +510,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               16384,
               32768
@@ -462,6 +525,14 @@
             "halfY": [
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              1
             ],
             "radius": [
               16384,
@@ -493,14 +564,7 @@
             ]
           }
         },
-        "tags": [
-          [
-            1,
-            [
-              "blocksMovement"
-            ]
-          ]
-        ]
+        "tags": []
       },
       "rng": [],
       "events": [
@@ -537,6 +601,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               16384,
               32768
@@ -544,6 +616,14 @@
             "halfY": [
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              1
             ],
             "radius": [
               16384,
@@ -575,14 +655,7 @@
             ]
           }
         },
-        "tags": [
-          [
-            1,
-            [
-              "blocksMovement"
-            ]
-          ]
-        ]
+        "tags": []
       },
       "rng": [],
       "events": [],
@@ -609,6 +682,14 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0
+            ],
             "halfX": [
               16384,
               32768
@@ -616,6 +697,14 @@
             "halfY": [
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              1
             ],
             "radius": [
               16384,
@@ -647,14 +736,7 @@
             ]
           }
         },
-        "tags": [
-          [
-            1,
-            [
-              "blocksMovement"
-            ]
-          ]
-        ]
+        "tags": []
       },
       "rng": [],
       "events": [],

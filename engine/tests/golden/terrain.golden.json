@@ -1,6 +1,7 @@
 {
   "scenario": "terrain",
   "seed": 20260811,
+  "worldInitHash": "f2eda6e6",
   "ticks": [
     {
       "tick": 0,

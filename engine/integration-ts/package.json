@@ -1,0 +1,28 @@
+{
+  "name": "@game-mvp/integration",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "record": "UPDATE_MATCHES=1 vitest run test/matchGolden.test.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "dependencies": {
+    "@game-mvp/assets": "*",
+    "@game-mvp/core": "*",
+    "@game-mvp/net": "*",
+    "@game-mvp/render": "*",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/three": "^0.185.4",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.10"
+  }
+}

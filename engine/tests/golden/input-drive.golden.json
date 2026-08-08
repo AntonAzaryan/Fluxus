@@ -1,6 +1,7 @@
 {
   "scenario": "input-drive",
   "seed": 99,
+  "worldInitHash": "b6e5ead5",
   "ticks": [
     {
       "tick": 0,

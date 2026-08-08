@@ -17,6 +17,8 @@ export const mathApi: MathApi = {
   max: fixed.max,
   clamp: fixed.clamp,
   sqrt: fixed.sqrt,
+  sin: fixed.sin,
+  cos: fixed.cos,
   vec: {
     add: vector.add,
     sub: vector.sub,

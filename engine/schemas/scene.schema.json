@@ -58,6 +58,13 @@
       "$comment": "Число слотов в списках источников-модификаторов; по умолчанию 4 (TIME-7, SER-7).",
       "type": "integer",
       "minimum": 1
+    },
+    "initial": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/spawnEntry"
+      },
+      "$comment": "Расстановка сцены: после сущностей-носителей и до расстановки прогона (SER-7, SER-8)."
     }
   },
   "$defs": {
@@ -71,6 +78,7 @@
           "addComponent",
           "addModifier",
           "addTween",
+          "carveFloor",
           "destroyEntity",
           "emitEvent",
           "forEach",
@@ -167,15 +175,18 @@
               "and",
               "bitTest",
               "clamp",
+              "cos",
               "eventField",
               "fromInt",
               "getComponent",
               "hasComponent",
+              "hasFloorAt",
               "if",
               "isAlive",
               "max",
               "min",
               "or",
+              "sin",
               "sqrt",
               "tick",
               "toInt",
@@ -268,6 +279,30 @@
             },
             "radius": {
               "$ref": "#/$defs/expression"
+            }
+          }
+        }
+      }
+    },
+    "spawnEntry": {
+      "title": "Запись начальной расстановки (SER-8)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prefab"
+      ],
+      "properties": {
+        "prefab": {
+          "type": "string",
+          "minLength": 1
+        },
+        "overrides": {
+          "$comment": "Карта «компонент → поле → значение» поверх значений prefab'а (CMD-6).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
             }
           }
         }

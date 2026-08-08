@@ -1,6 +1,7 @@
 {
   "scenario": "burning",
   "seed": 7,
+  "worldInitHash": "0d25f775",
   "ticks": [
     {
       "tick": 0,

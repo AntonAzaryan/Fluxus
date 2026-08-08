@@ -1,0 +1,156 @@
+/**
+ * Переходники от валидаторов движка к структурному результату (ED-30).
+ *
+ * Правило редактора не проверяет данные само — оно зовёт того, чьё это правило
+ * (ED-1). Отсюда ровно две формы, в которых валидаторы движка отвечают, и по
+ * переходнику на каждую:
+ *
+ * 1. Бросок на первом нарушении: так устроены `loadScene`, `createTerrainGrid`,
+ *    `validateSystem`. Адреса в документе такой ответ не содержит вовсе, и
+ *    вытащить его можно только разбором прозы сообщения. Разбор здесь не
+ *    делается: формулировки принадлежат чужому модулю, и переписывание текста
+ *    там молча ломало бы адресацию здесь. Находка получает путь, который дало
+ *    само правило (обычно — корень документа), а сообщение доезжает дословно.
+ * 2. Список строк «путь: текст», собранный не-fail-fast: так устроены
+ *    `validateManifest` и `validateCurvatureMap`. Здесь адрес в сообщении есть,
+ *    и терять его жалко — ED-30 требует именно пути в документе.
+ *
+ * Про второй случай стоит сказать прямо, потому что решение спорное. Разбирать
+ * собственный текстовый продукт обратно — плохая практика; правильное решение
+ * — чтобы валидатор возвращал путь структурой, и это записано как работа для
+ * пакета ассетов. Пока он возвращает строки, здесь применяется разбор с
+ * проверкой: адрес из сообщения не принимается на веру, а прикладывается к
+ * документу шаг за шагом, и в находку попадает только та часть, которая в
+ * документе действительно есть. Ошибка разбора в этой схеме даёт путь короче
+ * настоящего (в пределе — корень документа), но никогда не даёт пути в чужое
+ * место: находка либо адресует точно, либо адресует шире, и потребитель
+ * доопределяет её по дословному сообщению.
+ */
+import { getAtPath, type JsonPath, type JsonValue } from '../document/index.js';
+import type { ReasonParams, ValidationRun } from './types.js';
+
+/** Ответ валидатора, собирающего все нарушения разом. */
+export type ErrorListResult = { readonly ok: true } | { readonly ok: false; readonly errors: readonly string[] };
+
+export interface AdapterOptions {
+  /** Кто проверял: `пакет:функция`. Уезжает в ожидание находки. */
+  readonly by: string;
+  /** Код причины; по умолчанию `rejected`. */
+  readonly code?: string;
+  /** Путь, от которого отсчитывается адрес; по умолчанию — корень документа. */
+  readonly base?: JsonPath;
+  readonly params?: ReasonParams;
+}
+
+/**
+ * Код причины обоих переходников: «чужой валидатор отверг». Константа, а не
+ * литерал в двух местах, потому что то же значение объявляет правило в
+ * `reasonCodes` — набранное там заново, оно разошлось бы с сообщаемым молча.
+ */
+export const REJECTED = 'rejected';
+
+const EMPTY_PATH: JsonPath = Object.freeze([]);
+
+/**
+ * Зовёт валидатор, бросающий на первом нарушении, и превращает бросок в
+ * находку. Возвращает `true`, если валидатор принял данные, — вызывающему это
+ * нужно, чтобы не продолжать проверку по заведомо негодным данным.
+ */
+export function reportThrown(run: ValidationRun, options: AdapterOptions, body: () => void): boolean {
+  try {
+    body();
+    return true;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    run.report({
+      path: options.base ?? EMPTY_PATH,
+      expected: { kind: 'accepted', by: options.by, detail },
+      code: options.code ?? REJECTED,
+      params: { ...options.params, by: options.by, detail },
+    });
+    return false;
+  }
+}
+
+/**
+ * Превращает список сообщений «путь: текст» в находки — по одной на сообщение.
+ * Ни одно сообщение не теряется и не склеивается: не-fail-fast валидатор
+ * отвечает всеми нарушениями разом именно затем, чтобы автор чинил их за один
+ * проход, а свод их в одну находку вернул бы его к «исправил — узнал про
+ * следующее».
+ */
+export function reportErrorList(run: ValidationRun, options: AdapterOptions, result: ErrorListResult): boolean {
+  if (result.ok) return true;
+  const base = options.base ?? EMPTY_PATH;
+  const value = run.valueOf(run.document.id);
+  const root = base.length === 0 ? value : value === undefined ? undefined : getAtPath(value, base);
+  for (const message of result.errors) {
+    run.report({
+      path: [...base, ...probePath(root, message)],
+      expected: { kind: 'accepted', by: options.by, detail: message },
+      code: options.code ?? REJECTED,
+      params: { ...options.params, by: options.by, detail: message },
+    });
+  }
+  return false;
+}
+
+/**
+ * Адрес из сообщения, проверенный по документу. Возвращается самый длинный
+ * префикс разобранного пути, который в документе есть; всё, что не сошлось,
+ * отбрасывается вместе с остатком.
+ */
+export function probePath(root: JsonValue | undefined, message: string): JsonPath {
+  const steps = parseAddress(message);
+  const found: (string | number)[] = [];
+  let node: JsonValue | undefined = root;
+  for (const step of steps) {
+    if (node === undefined) break;
+    const next = getAtPath(node, [step]);
+    if (next === undefined) break;
+    found.push(step);
+    node = next;
+  }
+  return Object.freeze(found);
+}
+
+/**
+ * Символы, на которых адрес заведомо кончился: сообщение продолжается прозой.
+ * Пробел в их числе — ключа с пробелом разбор не увидит, и это осознанный
+ * размен: такой ключ встречается реже, чем проза после адреса.
+ */
+const STOP = new Set([' ', '\t', ',', ';', '"', "'", '(', ')', ':', '=', '»', '«']);
+
+function parseAddress(message: string): readonly (string | number)[] {
+  const head = message.split(':')[0] ?? '';
+  const steps: (string | number)[] = [];
+  let at = 0;
+  while (at < head.length) {
+    const char = head[at]!;
+    if (char === '.') {
+      at++;
+      continue;
+    }
+    if (char === '[') {
+      let cursor = at + 1;
+      let digits = '';
+      while (cursor < head.length && head[cursor]! >= '0' && head[cursor]! <= '9') {
+        digits += head[cursor]!;
+        cursor++;
+      }
+      if (digits === '' || head[cursor] !== ']') break;
+      steps.push(Number(digits));
+      at = cursor + 1;
+      continue;
+    }
+    let name = '';
+    while (at < head.length && head[at] !== '.' && head[at] !== '[' && !STOP.has(head[at]!)) {
+      name += head[at]!;
+      at++;
+    }
+    if (name === '') break;
+    steps.push(name);
+    if (at < head.length && STOP.has(head[at]!)) break;
+  }
+  return steps;
+}

@@ -1,0 +1,694 @@
+{
+  "name": "match-walk",
+  "seed": 424242,
+  "ticks": 24,
+  "scene": {
+    "components": [
+      {
+        "name": "Player",
+        "fields": {
+          "slot": "i32"
+        }
+      },
+      {
+        "name": "Input",
+        "fields": {
+          "aimDir": "fixed",
+          "buttons": "i32",
+          "moveX": "fixed",
+          "moveY": "fixed",
+          "prevButtons": "i32",
+          "seq": "i32"
+        }
+      },
+      {
+        "name": "Position",
+        "fields": {
+          "x": "fixed",
+          "y": "fixed"
+        }
+      },
+      {
+        "name": "Velocity",
+        "fields": {
+          "x": "fixed",
+          "y": "fixed"
+        }
+      },
+      {
+        "name": "Collider",
+        "fields": {
+          "blockMask": "i32",
+          "cliffRise": "i32",
+          "halfX": "fixed",
+          "halfY": "fixed",
+          "hitMask": "i32",
+          "layer": "i32",
+          "radius": "fixed",
+          "shape": "i32"
+        }
+      }
+    ],
+    "prefabs": [
+      {
+        "name": "Hero",
+        "components": {
+          "Player": {
+            "slot": 0
+          },
+          "Input": {
+            "aimDir": 0,
+            "buttons": 0,
+            "moveX": 0,
+            "moveY": 0,
+            "prevButtons": 0,
+            "seq": 0
+          },
+          "Position": {
+            "x": 0,
+            "y": 0
+          },
+          "Velocity": {
+            "x": 0,
+            "y": 0
+          },
+          "Collider": {
+            "blockMask": 0,
+            "cliffRise": 0,
+            "halfX": 19661,
+            "halfY": 19661,
+            "hitMask": 0,
+            "layer": 0,
+            "radius": 19661,
+            "shape": 0
+          }
+        },
+        "tags": [
+          "Hero"
+        ]
+      }
+    ],
+    "systems": [
+      {
+        "name": "Movement",
+        "order": 10,
+        "query": {
+          "all": [
+            "Velocity",
+            "Input"
+          ]
+        },
+        "as": "e",
+        "do": [
+          {
+            "modifyComponent": {
+              "entity": {
+                "var": "e"
+              },
+              "component": "Velocity",
+              "values": {
+                "x": {
+                  "*": [
+                    {
+                      "getComponent": [
+                        {
+                          "var": "e"
+                        },
+                        "Input",
+                        "moveX"
+                      ]
+                    },
+                    5243
+                  ]
+                },
+                "y": {
+                  "*": [
+                    {
+                      "getComponent": [
+                        {
+                          "var": "e"
+                        },
+                        "Input",
+                        "moveY"
+                      ]
+                    },
+                    5243
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "capacity": 8
+  },
+  "initial": [
+    {
+      "prefab": "Hero"
+    },
+    {
+      "prefab": "Hero",
+      "overrides": {
+        "Player": {
+          "slot": 1
+        }
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "tick": 1,
+      "playerId": "p1",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 1,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 2,
+      "playerId": "p1",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 2,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 3,
+      "playerId": "p1",
+      "seq": 1,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 3,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 4,
+      "playerId": "p1",
+      "seq": 2,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 4,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 5,
+      "playerId": "p1",
+      "seq": 3,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 5,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 6,
+      "playerId": "p1",
+      "seq": 4,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 6,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 7,
+      "playerId": "p1",
+      "seq": 5,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 7,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 8,
+      "playerId": "p1",
+      "seq": 6,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 8,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 9,
+      "playerId": "p1",
+      "seq": 7,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 9,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 10,
+      "playerId": "p1",
+      "seq": 8,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 10,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 11,
+      "playerId": "p1",
+      "seq": 9,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 11,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 12,
+      "playerId": "p1",
+      "seq": 10,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 12,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 13,
+      "playerId": "p1",
+      "seq": 11,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 13,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 14,
+      "playerId": "p1",
+      "seq": 12,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 14,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 15,
+      "playerId": "p1",
+      "seq": 13,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 15,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 16,
+      "playerId": "p1",
+      "seq": 14,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 16,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 17,
+      "playerId": "p1",
+      "seq": 15,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 17,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 18,
+      "playerId": "p1",
+      "seq": 16,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 18,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 19,
+      "playerId": "p1",
+      "seq": 16,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 19,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 20,
+      "playerId": "p1",
+      "seq": 16,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 20,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 21,
+      "playerId": "p1",
+      "seq": 16,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 21,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 22,
+      "playerId": "p1",
+      "seq": 16,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 22,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 23,
+      "playerId": "p1",
+      "seq": 16,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 23,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 24,
+      "playerId": "p1",
+      "seq": 16,
+      "move": {
+        "x": 65536,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    },
+    {
+      "tick": 24,
+      "playerId": "p2",
+      "seq": 0,
+      "move": {
+        "x": 0,
+        "y": 0
+      },
+      "aimDir": 0,
+      "buttons": 0
+    }
+  ],
+  "players": [
+    "p1",
+    "p2"
+  ],
+  "physics": {}
+}

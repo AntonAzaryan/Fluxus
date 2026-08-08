@@ -31,11 +31,16 @@ export function createMasks(capacity: number, componentCount: number): Component
 /** Мягкая диагностика (FP-4): вызывающий код зовёт её безусловно, проверка — только под DEBUG. */
 function checkBounds(masks: ComponentMasks, index: number, componentId?: number): void {
   if (!DEBUG) return;
-  assert(index >= 0 && index < masks.capacity, `entity index ${index} вне capacity ${masks.capacity}`);
+  assert(
+    index >= 0 && index < masks.capacity,
+    `entity index ${index} вне capacity ${masks.capacity}`,
+    'MASK_INDEX_OUT_OF_RANGE',
+  );
   if (componentId !== undefined) {
     assert(
       componentId >= 0 && componentId < masks.wordsPerEntity * 32,
       `componentId ${componentId} вне диапазона (wordsPerEntity=${masks.wordsPerEntity})`,
+      'MASK_COMPONENT_OUT_OF_RANGE',
     );
   }
 }

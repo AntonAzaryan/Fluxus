@@ -7,7 +7,7 @@ const noop = (_ctx: SystemContext): void => {};
 
 const sys = (name: string, order: number): System => ({ name, order, run: noop });
 
-describe('SystemRegistry (DET-3)', () => {
+describe('SystemRegistry (DET-3, SYS-2)', () => {
   it('исполняет по order независимо от порядка регистрации', () => {
     const registry = new SystemRegistry();
     registry.register(sys('B', 20));
@@ -30,7 +30,7 @@ describe('SystemRegistry (DET-3)', () => {
   });
 });
 
-describe('EventBus (OBS-4)', () => {
+describe('EventBus (OBS-4, EVT-1, EVT-4)', () => {
   it('копит события тика и отдаёт их как read-only view', () => {
     const bus = new EventBus();
     bus.emit('DamageDealt', { amount: 10 });
@@ -41,6 +41,8 @@ describe('EventBus (OBS-4)', () => {
     expect([...bus].map((e) => e.type)).toEqual(['DamageDealt', 'UltimateCast']);
   });
 
+  // EVT-4: шина чистится на границе тика — система видит только события
+  // своего тика. Факт события переживает границу только в снапшоте (EVT-3).
   it('очищается между тиками — события не переживают тик', () => {
     const bus = new EventBus();
     bus.emit('DamageDealt');

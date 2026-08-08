@@ -1,0 +1,646 @@
+{
+  "locale": "ru",
+  "source": "en",
+  "entries": {
+    "action.addComponent": {
+      "source": "a5387a96",
+      "translated": "2d287d27"
+    },
+    "action.addModifier": {
+      "source": "7aafd04a",
+      "translated": "a50d1ee0"
+    },
+    "action.addTween": {
+      "source": "7160013f",
+      "translated": "f192a9f1"
+    },
+    "action.carveFloor": {
+      "source": "3ebfc862",
+      "translated": "c6444694"
+    },
+    "action.destroyEntity": {
+      "source": "83aa0255",
+      "translated": "3f9abe8a"
+    },
+    "action.emitEvent": {
+      "source": "bfc61191",
+      "translated": "f271bd02"
+    },
+    "action.forEach": {
+      "source": "76ec91ff",
+      "translated": "b0534fd5"
+    },
+    "action.forEachEvent": {
+      "source": "47fce512",
+      "translated": "07c73f34"
+    },
+    "action.if": {
+      "source": "6501a4bb",
+      "translated": "b815e8d3"
+    },
+    "action.let": {
+      "source": "c63cd60a",
+      "translated": "16237d6d"
+    },
+    "action.modifyComponent": {
+      "source": "0e79965f",
+      "translated": "561151df"
+    },
+    "action.random": {
+      "source": "15922f8d",
+      "translated": "c1a8bbb2"
+    },
+    "action.randomBelow": {
+      "source": "c87711a3",
+      "translated": "746ed59c"
+    },
+    "action.removeComponent": {
+      "source": "ad685a32",
+      "translated": "b5043304"
+    },
+    "action.removeModifier": {
+      "source": "82ed864d",
+      "translated": "a2e1019c"
+    },
+    "action.spawnEntity": {
+      "source": "15533f09",
+      "translated": "8ac1df7f"
+    },
+    "operation.document.list.append": {
+      "source": "8ed5fd10",
+      "translated": "384b55cf"
+    },
+    "operation.document.list.remove": {
+      "source": "df415ed7",
+      "translated": "bd8fc0b5"
+    },
+    "operation.document.list.removeValue": {
+      "source": "bc078f46",
+      "translated": "948c8225"
+    },
+    "operation.document.list.setValue": {
+      "source": "a3537edd",
+      "translated": "c41fc934"
+    },
+    "operation.document.removeValue": {
+      "source": "864e1a84",
+      "translated": "71b77d22"
+    },
+    "operation.document.setValue": {
+      "source": "d177e2c3",
+      "translated": "2b0ec5a8"
+    },
+    "operation.param.document": {
+      "source": "811fb0a0",
+      "translated": "6e6123ba"
+    },
+    "operation.param.item": {
+      "source": "a94692c3",
+      "translated": "b8c7fffb"
+    },
+    "operation.param.list": {
+      "source": "b8c6b494",
+      "translated": "2ef0e979"
+    },
+    "operation.param.path": {
+      "source": "edf7bc09",
+      "translated": "0c9d34ed"
+    },
+    "operation.param.record": {
+      "source": "e4202b20",
+      "translated": "e6bdefbf"
+    },
+    "operation.param.value": {
+      "source": "4abd114d",
+      "translated": "d0f6c18f"
+    },
+    "operator.!": {
+      "source": "136a9493",
+      "translated": "c502a14b"
+    },
+    "operator.!=": {
+      "source": "0eea8279",
+      "translated": "8c280e05"
+    },
+    "operator.*": {
+      "source": "8868b4f4",
+      "translated": "9367d135"
+    },
+    "operator.+": {
+      "source": "52a6fe10",
+      "translated": "8f35528f"
+    },
+    "operator.-": {
+      "source": "e80eea7e",
+      "translated": "2f71c830"
+    },
+    "operator./": {
+      "source": "25153f88",
+      "translated": "c3100672"
+    },
+    "operator.<": {
+      "source": "a763fc23",
+      "translated": "7265adf6"
+    },
+    "operator.<=": {
+      "source": "139f3e22",
+      "translated": "1affadbb"
+    },
+    "operator.==": {
+      "source": "7edc5bf4",
+      "translated": "ff766eaa"
+    },
+    "operator.>": {
+      "source": "391489aa",
+      "translated": "48b8527e"
+    },
+    "operator.>=": {
+      "source": "036fa61d",
+      "translated": "5f5187b3"
+    },
+    "operator.abs": {
+      "source": "ab7ecf79",
+      "translated": "32241138"
+    },
+    "operator.and": {
+      "source": "93cb5128",
+      "translated": "71d4e04b"
+    },
+    "operator.bitTest": {
+      "source": "79735d02",
+      "translated": "0f67c114"
+    },
+    "operator.clamp": {
+      "source": "35cca1f8",
+      "translated": "2d68f157"
+    },
+    "operator.cos": {
+      "source": "367cefb5",
+      "translated": "2e1e18de"
+    },
+    "operator.eventField": {
+      "source": "94a96215",
+      "translated": "90e279b0"
+    },
+    "operator.fromInt": {
+      "source": "59b5f4e1",
+      "translated": "1053a7da"
+    },
+    "operator.getComponent": {
+      "source": "4cdd5bf4",
+      "translated": "abedc42b"
+    },
+    "operator.hasComponent": {
+      "source": "f3a1c47e",
+      "translated": "7a31ecf4"
+    },
+    "operator.hasFloorAt": {
+      "source": "ae96a9c4",
+      "translated": "75f7a263"
+    },
+    "operator.if": {
+      "source": "4c11d677",
+      "translated": "7fccb225"
+    },
+    "operator.isAlive": {
+      "source": "907a85e5",
+      "translated": "b0fc3c9b"
+    },
+    "operator.max": {
+      "source": "f5d5b476",
+      "translated": "0f274410"
+    },
+    "operator.min": {
+      "source": "feefd4e1",
+      "translated": "1c41af28"
+    },
+    "operator.or": {
+      "source": "a4b4fa15",
+      "translated": "a5f922fc"
+    },
+    "operator.sin": {
+      "source": "9c8b9a67",
+      "translated": "b8c93cad"
+    },
+    "operator.sqrt": {
+      "source": "8c0c07c8",
+      "translated": "01acf139"
+    },
+    "operator.tick": {
+      "source": "2887eedb",
+      "translated": "83236afb"
+    },
+    "operator.toInt": {
+      "source": "10aaf5a2",
+      "translated": "1b08f2da"
+    },
+    "operator.var": {
+      "source": "eb5dd3d8",
+      "translated": "c673d324"
+    },
+    "operator.vec": {
+      "source": "653d4d4f",
+      "translated": "30d2f520"
+    },
+    "operator.vec\\.add": {
+      "source": "db9ffce3",
+      "translated": "27044329"
+    },
+    "operator.vec\\.dot": {
+      "source": "ee348df4",
+      "translated": "1124428a"
+    },
+    "operator.vec\\.length": {
+      "source": "26793dc6",
+      "translated": "3568f374"
+    },
+    "operator.vec\\.lengthSq": {
+      "source": "55068837",
+      "translated": "2716f23d"
+    },
+    "operator.vec\\.normalize": {
+      "source": "29c6205f",
+      "translated": "876358cd"
+    },
+    "operator.vec\\.scale": {
+      "source": "bfccb402",
+      "translated": "28504370"
+    },
+    "operator.vec\\.sub": {
+      "source": "8fa6c33d",
+      "translated": "88d4100c"
+    },
+    "operator.vec\\.x": {
+      "source": "3109c7e5",
+      "translated": "9467c369"
+    },
+    "operator.vec\\.y": {
+      "source": "89f66f94",
+      "translated": "7f4cb932"
+    },
+    "schema.arena.center": {
+      "source": "6b883cd9",
+      "translated": "4c0d7e61"
+    },
+    "schema.arena.radius": {
+      "source": "08aa7df5",
+      "translated": "feab208a"
+    },
+    "schema.component.defaults": {
+      "source": "1edf66ec",
+      "translated": "addc3f90"
+    },
+    "schema.component.fields": {
+      "source": "267b7db8",
+      "translated": "bf22c9ed"
+    },
+    "schema.component.name": {
+      "source": "b23d8757",
+      "translated": "429fa83b"
+    },
+    "schema.inputFrame.aimDir": {
+      "source": "e440b02c",
+      "translated": "6c180f5e"
+    },
+    "schema.inputFrame.buttons": {
+      "source": "7ef0cac9",
+      "translated": "eda3949f"
+    },
+    "schema.inputFrame.move": {
+      "source": "f7e5ccd0",
+      "translated": "2b8b4b98"
+    },
+    "schema.inputFrame.playerId": {
+      "source": "13ed78ef",
+      "translated": "592fe5ae"
+    },
+    "schema.inputFrame.seq": {
+      "source": "11cf7985",
+      "translated": "f71cdce6"
+    },
+    "schema.inputFrame.tick": {
+      "source": "ef68019f",
+      "translated": "69a958c5"
+    },
+    "schema.prefab.components": {
+      "source": "85c489c9",
+      "translated": "cc733b2f"
+    },
+    "schema.prefab.name": {
+      "source": "eb720156",
+      "translated": "0beb92d2"
+    },
+    "schema.prefab.tags": {
+      "source": "4aba5984",
+      "translated": "ee9c267d"
+    },
+    "schema.query.all": {
+      "source": "e19f7999",
+      "translated": "7c2c94c2"
+    },
+    "schema.query.any": {
+      "source": "f0aea22f",
+      "translated": "3a0dfb3f"
+    },
+    "schema.query.not": {
+      "source": "783c68a5",
+      "translated": "67c806c2"
+    },
+    "schema.query.withTag": {
+      "source": "89c78836",
+      "translated": "3129c863"
+    },
+    "schema.query.withinRadius": {
+      "source": "3ed90c5c",
+      "translated": "684e2642"
+    },
+    "schema.query.withinRadius.center": {
+      "source": "ca9dc89e",
+      "translated": "7d38ab99"
+    },
+    "schema.query.withinRadius.radius": {
+      "source": "ab46d3d8",
+      "translated": "4111ec5c"
+    },
+    "schema.scenario.initial": {
+      "source": "b23b5160",
+      "translated": "dce00f90"
+    },
+    "schema.scenario.inputs": {
+      "source": "b4683e4e",
+      "translated": "e8e0ab04"
+    },
+    "schema.scenario.name": {
+      "source": "214f0487",
+      "translated": "df78f545"
+    },
+    "schema.scenario.physics": {
+      "source": "0cf3f77a",
+      "translated": "51a7d71e"
+    },
+    "schema.scenario.physics.collider": {
+      "source": "11626ef7",
+      "translated": "fe8c5cb5"
+    },
+    "schema.scenario.physics.order": {
+      "source": "8c4bfd66",
+      "translated": "816e78d0"
+    },
+    "schema.scenario.physics.velocity": {
+      "source": "2872c526",
+      "translated": "ac8ba95e"
+    },
+    "schema.scenario.players": {
+      "source": "a65751cb",
+      "translated": "8f219188"
+    },
+    "schema.scenario.scene": {
+      "source": "6d5186a4",
+      "translated": "12eae890"
+    },
+    "schema.scenario.seed": {
+      "source": "92cc90d6",
+      "translated": "7c8a4507"
+    },
+    "schema.scenario.ticks": {
+      "source": "1079a408",
+      "translated": "07dc4bbd"
+    },
+    "schema.scenario.visibility": {
+      "source": "171d4680",
+      "translated": "7259a055"
+    },
+    "schema.scenario.visibility.order": {
+      "source": "35d252d5",
+      "translated": "9aadddf3"
+    },
+    "schema.scene.arena": {
+      "source": "28c33ca9",
+      "translated": "fc991c24"
+    },
+    "schema.scene.capacity": {
+      "source": "2f0b915a",
+      "translated": "51164901"
+    },
+    "schema.scene.components": {
+      "source": "2aec5326",
+      "translated": "93f4a112"
+    },
+    "schema.scene.fog": {
+      "source": "789ae411",
+      "translated": "9768dc1d"
+    },
+    "schema.scene.initial": {
+      "source": "63892eb2",
+      "translated": "9abf7a4e"
+    },
+    "schema.scene.modifierSlots": {
+      "source": "f4120125",
+      "translated": "c3da959d"
+    },
+    "schema.scene.prefabs": {
+      "source": "899a43e4",
+      "translated": "055ed0ca"
+    },
+    "schema.scene.systems": {
+      "source": "c55c7efd",
+      "translated": "4cf37757"
+    },
+    "schema.scene.terrain": {
+      "source": "a5a3bb5e",
+      "translated": "c3087823"
+    },
+    "schema.scene.timeScale": {
+      "source": "ff166272",
+      "translated": "6212e1d9"
+    },
+    "schema.scene.tweens": {
+      "source": "7cb39f27",
+      "translated": "b27a9f75"
+    },
+    "schema.spawnEntry.overrides": {
+      "source": "b14f6bb4",
+      "translated": "f09b4bd4"
+    },
+    "schema.spawnEntry.prefab": {
+      "source": "4d4d5062",
+      "translated": "1a262cd5"
+    },
+    "schema.system.as": {
+      "source": "2a494f66",
+      "translated": "17c81d36"
+    },
+    "schema.system.do": {
+      "source": "b31b524f",
+      "translated": "b45941dc"
+    },
+    "schema.system.name": {
+      "source": "6108280e",
+      "translated": "71f352c8"
+    },
+    "schema.system.order": {
+      "source": "99f1e629",
+      "translated": "a6e6fcba"
+    },
+    "schema.system.query": {
+      "source": "7baf1fcc",
+      "translated": "602c4ec6"
+    },
+    "schema.terrain.flags": {
+      "source": "1f70541d",
+      "translated": "14c4a9e6"
+    },
+    "schema.terrain.height": {
+      "source": "b00e5351",
+      "translated": "2d287790"
+    },
+    "schema.terrain.levels": {
+      "source": "16faac38",
+      "translated": "6d4560d5"
+    },
+    "schema.terrain.tileSize": {
+      "source": "5aa20d2c",
+      "translated": "de3f8cea"
+    },
+    "schema.terrain.width": {
+      "source": "2ed8b5c2",
+      "translated": "cc93c4af"
+    },
+    "schema.tweenDef.onComplete": {
+      "source": "d8b5ddaf",
+      "translated": "e7f0528c"
+    },
+    "schema.tweenDef.target": {
+      "source": "085e7b2e",
+      "translated": "ee418841"
+    },
+    "schema.vec2.x": {
+      "source": "173d864e",
+      "translated": "a137821d"
+    },
+    "schema.vec2.y": {
+      "source": "da14a633",
+      "translated": "c8f77238"
+    },
+    "validation.reason.assets.curvature.rejected": {
+      "source": "7eabc2f4",
+      "translated": "23125471"
+    },
+    "validation.reason.assets.curvature.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.assets.manifest.rejected": {
+      "source": "8616382b",
+      "translated": "65840c77"
+    },
+    "validation.reason.assets.manifest.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.core.scene.rejected": {
+      "source": "97d8ba9a",
+      "translated": "7ce47774"
+    },
+    "validation.reason.core.scene.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.core.system.rejected": {
+      "source": "44064fb6",
+      "translated": "34c84252"
+    },
+    "validation.reason.core.system.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.core.terrain.rejected": {
+      "source": "ab542ebe",
+      "translated": "a56da962"
+    },
+    "validation.reason.core.terrain.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.editor.curvatureGrid.gridMismatch": {
+      "source": "c59eb270",
+      "translated": "9139046f"
+    },
+    "validation.reason.editor.curvatureGrid.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.editor.placementPrefab.missingPrefab": {
+      "source": "f10d3e9c",
+      "translated": "2286e5c6"
+    },
+    "validation.reason.editor.placementPrefab.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.editor.prefabForVisual.missingPrefab": {
+      "source": "46df9f3a",
+      "translated": "165edc2e"
+    },
+    "validation.reason.editor.prefabForVisual.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.editor.visualForPrefab.missingVisual": {
+      "source": "d81b78e7",
+      "translated": "42a03644"
+    },
+    "validation.reason.editor.visualForPrefab.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.save.group.writeTogether.memberLeftUnsaved": {
+      "source": "cf6783d8",
+      "translated": "80e0d50e"
+    },
+    "validation.reason.save.group.writeTogether.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.rule.assets.curvature": {
+      "source": "7b2e7fe0",
+      "translated": "41a2cb57"
+    },
+    "validation.rule.assets.manifest": {
+      "source": "0737c4e0",
+      "translated": "55fbfe88"
+    },
+    "validation.rule.core.scene": {
+      "source": "500ea57e",
+      "translated": "25cbee7c"
+    },
+    "validation.rule.core.system": {
+      "source": "063b5e27",
+      "translated": "8f3d7757"
+    },
+    "validation.rule.core.terrain": {
+      "source": "07a2ee06",
+      "translated": "c21195b6"
+    },
+    "validation.rule.editor.curvatureGrid": {
+      "source": "cc663f83",
+      "translated": "882dd046"
+    },
+    "validation.rule.editor.placementPrefab": {
+      "source": "1d9e808b",
+      "translated": "7a8f3d00"
+    },
+    "validation.rule.editor.prefabForVisual": {
+      "source": "f7856492",
+      "translated": "0b8ce2ee"
+    },
+    "validation.rule.editor.visualForPrefab": {
+      "source": "d3af4126",
+      "translated": "4f74d22d"
+    },
+    "validation.rule.save.group.writeTogether": {
+      "source": "e1c5c8f8",
+      "translated": "46da1137"
+    }
+  }
+}

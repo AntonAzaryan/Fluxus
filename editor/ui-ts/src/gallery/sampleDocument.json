@@ -1,0 +1,149 @@
+{
+  "path": "content/scenes/demo.scene.json",
+  "selection": { "name": "skeleton_02", "prefab": "skeleton", "tag": "unit" },
+  "tree": [
+    { "label": "demo.scene.json", "depth": 0, "expanded": true, "selected": false, "badge": "", "severity": "", "reasonKey": "" },
+    { "label": "arena.terrain", "depth": 1, "expanded": false, "selected": false, "badge": "", "severity": "", "reasonKey": "" },
+    { "label": "arena.curvature", "depth": 1, "expanded": false, "selected": false, "badge": "", "severity": "", "reasonKey": "" },
+    { "label": "hero", "depth": 1, "expanded": false, "selected": false, "badge": "unit", "severity": "", "reasonKey": "" },
+    { "label": "skeleton_01", "depth": 1, "expanded": false, "selected": false, "badge": "unit", "severity": "", "reasonKey": "" },
+    { "label": "skeleton_02", "depth": 1, "expanded": false, "selected": true, "badge": "unit", "severity": "", "reasonKey": "" },
+    { "label": "crate_01", "depth": 1, "expanded": false, "selected": false, "badge": "prop", "severity": "", "reasonKey": "" },
+    { "label": "crate_02", "depth": 1, "expanded": false, "selected": false, "badge": "prop", "severity": "error", "reasonKey": "ui.validation.missingPrefab" },
+    { "label": "grass_patch_01", "depth": 1, "expanded": false, "selected": false, "badge": "decor", "severity": "", "reasonKey": "" }
+  ],
+  "assets": [
+    { "label": "models/skeleton.glb", "secondary": "glb", "trailing": "3" },
+    { "label": "models/crate.glb", "secondary": "glb", "trailing": "7" },
+    { "label": "textures/ground.ktx2", "secondary": "ktx2", "trailing": "1" },
+    { "label": "visuals/manifest.json", "secondary": "json", "trailing": "1" }
+  ],
+  "optionSets": [
+    {
+      "id": "colliderShape",
+      "options": [
+        { "value": "circle", "label": "circle" },
+        { "value": "box", "label": "box" },
+        { "value": "capsule", "label": "capsule" }
+      ]
+    },
+    {
+      "id": "deathEffect",
+      "options": [
+        { "value": "none", "label": "none" },
+        { "value": "explosion", "label": "explosion" },
+        { "value": "dissolve", "label": "dissolve" }
+      ]
+    },
+    {
+      "id": "visionShape",
+      "options": [
+        { "value": "radial", "label": "radial" },
+        { "value": "cone", "label": "cone" }
+      ]
+    },
+    {
+      "id": "pathfinding",
+      "options": [
+        { "value": "grid", "label": "grid" },
+        { "value": "flow", "label": "flow" },
+        { "value": "none", "label": "none" }
+      ]
+    },
+    {
+      "id": "skin",
+      "options": [
+        { "value": "default", "label": "default" },
+        { "value": "frozen", "label": "frozen" }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "label": "Transform",
+      "fields": [
+        { "name": "x", "label": "Transform.x", "kind": "number", "value": "12.500", "note": "q16.16", "hint": true, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "y", "label": "Transform.y", "kind": "number", "value": "-4.250", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "z", "label": "Transform.z", "kind": "number", "value": "0.000", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "rotation", "label": "Transform.rotation", "kind": "number", "value": "90.000", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "scale", "label": "Transform.scale", "kind": "number", "value": "1.000", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "parent", "label": "Transform.parent", "kind": "text", "value": "", "note": "ref", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "anchored", "label": "Transform.anchored", "kind": "toggle", "value": "", "note": "bool", "hint": false, "on": true, "optionSet": "", "severity": "", "reasonKey": "" }
+      ]
+    },
+    {
+      "label": "Health",
+      "fields": [
+        { "name": "max", "label": "Health.max", "kind": "number", "value": "120", "note": "i32", "hint": true, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "current", "label": "Health.current", "kind": "number", "value": "120", "note": "i32", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "regen", "label": "Health.regen", "kind": "number", "value": "0.000", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "armor", "label": "Health.armor", "kind": "number", "value": "4", "note": "i32", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "invulnerable", "label": "Health.invulnerable", "kind": "toggle", "value": "", "note": "bool", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "deathEffect", "label": "Health.deathEffect", "kind": "select", "value": "dissolve", "note": "enum", "hint": false, "on": false, "optionSet": "deathEffect", "severity": "", "reasonKey": "" },
+        { "name": "corpseTtl", "label": "Health.corpseTtl", "kind": "number", "value": "180", "note": "ticks", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" }
+      ]
+    },
+    {
+      "label": "Vision",
+      "fields": [
+        { "name": "radius", "label": "Vision.radius", "kind": "number", "value": "6.000", "note": "q16.16", "hint": true, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "heightBonus", "label": "Vision.heightBonus", "kind": "number", "value": "1.000", "note": "q16.16", "hint": true, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "detectStealth", "label": "Vision.detectStealth", "kind": "toggle", "value": "", "note": "bool", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "shape", "label": "Vision.shape", "kind": "select", "value": "radial", "note": "enum", "hint": false, "on": false, "optionSet": "visionShape", "severity": "", "reasonKey": "" },
+        { "name": "fovDegrees", "label": "Vision.fovDegrees", "kind": "number", "value": "360.000", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "updateInterval", "label": "Vision.updateInterval", "kind": "number", "value": "2", "note": "ticks", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "team", "label": "Vision.team", "kind": "number", "value": "1", "note": "i32", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" }
+      ]
+    },
+    {
+      "label": "Locomotion",
+      "fields": [
+        { "name": "speed", "label": "Locomotion.speed", "kind": "number", "value": "18.000", "note": "q16.16", "hint": true, "on": false, "optionSet": "", "severity": "error", "reasonKey": "ui.validation.outOfRange" },
+        { "name": "acceleration", "label": "Locomotion.acceleration", "kind": "number", "value": "6.000", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "turnRate", "label": "Locomotion.turnRate", "kind": "number", "value": "270.000", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "pathfinding", "label": "Locomotion.pathfinding", "kind": "select", "value": "flow", "note": "enum", "hint": false, "on": false, "optionSet": "pathfinding", "severity": "", "reasonKey": "" },
+        { "name": "avoidRadius", "label": "Locomotion.avoidRadius", "kind": "number", "value": "0.400", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "canFly", "label": "Locomotion.canFly", "kind": "toggle", "value": "", "note": "bool", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "slopeLimit", "label": "Locomotion.slopeLimit", "kind": "number", "value": "2", "note": "levels", "hint": false, "on": false, "optionSet": "", "severity": "warning", "reasonKey": "ui.validation.deprecatedField" }
+      ]
+    },
+    {
+      "label": "Collider",
+      "fields": [
+        { "name": "shape", "label": "Collider.shape", "kind": "select", "value": "circle", "note": "enum", "hint": false, "on": false, "optionSet": "colliderShape", "severity": "", "reasonKey": "" },
+        { "name": "radius", "label": "Collider.radius", "kind": "number", "value": "0.400", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "height", "label": "Collider.height", "kind": "number", "value": "1.800", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "offsetX", "label": "Collider.offsetX", "kind": "number", "value": "0.000", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "offsetY", "label": "Collider.offsetY", "kind": "number", "value": "0.000", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "isTrigger", "label": "Collider.isTrigger", "kind": "toggle", "value": "", "note": "bool", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "layer", "label": "Collider.layer", "kind": "number", "value": "3", "note": "i32", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" }
+      ]
+    },
+    {
+      "label": "Visual",
+      "fields": [
+        { "name": "model", "label": "Visual.model", "kind": "text", "value": "models/skeleton.glb", "note": "asset", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "skin", "label": "Visual.skin", "kind": "select", "value": "default", "note": "enum", "hint": false, "on": false, "optionSet": "skin", "severity": "", "reasonKey": "" },
+        { "name": "animationSet", "label": "Visual.animationSet", "kind": "text", "value": "idle, walk, death", "note": "list", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "tiltToNormal", "label": "Visual.tiltToNormal", "kind": "toggle", "value": "", "note": "bool", "hint": false, "on": true, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "scale", "label": "Visual.scale", "kind": "number", "value": "1.000", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "castShadow", "label": "Visual.castShadow", "kind": "toggle", "value": "", "note": "bool", "hint": false, "on": true, "optionSet": "", "severity": "", "reasonKey": "" },
+        { "name": "lodBias", "label": "Visual.lodBias", "kind": "number", "value": "1.000", "note": "q16.16", "hint": false, "on": false, "optionSet": "", "severity": "info", "reasonKey": "ui.validation.derived" }
+      ]
+    }
+  ],
+  "descriptions": {
+    "en": {
+      "component.Transform.x": "Position along the arena X axis, in cells. Written by placement operations, not by the simulation.",
+      "component.Health.max": "Upper bound of health. An i32, not a fixed-point value: health is counted, not measured.",
+      "component.Vision.radius": "Vision radius in cells. Reveals the fog of war around the entity; on high ground it adds up with heightBonus.",
+      "component.Locomotion.speed": "Movement speed in cells per second, Q16.16. The schema range is 0…12."
+    },
+    "ru": {
+      "component.Transform.x": "Позиция по оси X арены, в клетках. Пишется операциями расстановки, а не симуляцией.",
+      "component.Health.max": "Верхняя граница здоровья. Целое i32, а не Q16.16: здоровье считают, а не измеряют.",
+      "component.Vision.radius": "Радиус обзора в клетках. Раскрывает туман войны вокруг сущности; на возвышении складывается с heightBonus.",
+      "component.Locomotion.speed": "Скорость перемещения в клетках за секунду, Q16.16. Диапазон схемы — 0…12."
+    }
+  }
+}

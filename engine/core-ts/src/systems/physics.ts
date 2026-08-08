@@ -1,6 +1,6 @@
 /**
- * Физика (PHYS-1..10): примитивные коллайдеры, статика обрывов, разрешение
- * движения и детерминированный raycast.
+ * Физика (PHYS-1..12): примитивные коллайдеры, статика обрывов, разрешение
+ * движения по маскам слоёв, sensor-пересечения и детерминированный raycast.
  *
  * Всё считается в 2D-проекции и в Q16.16 (PHYS-1, PHYS-3). Уровень террейна на
  * пересечения не влияет — перепад высот входит в физику статическими
@@ -13,7 +13,7 @@
  */
 import * as fixed from '../math/fixed.js';
 import * as vec from '../math/vector.js';
-import { getField, hasTag } from '../ecs/world.js';
+import { getField, hasComponent } from '../ecs/world.js';
 import { query } from '../ecs/query.js';
 import {
   FIXED_ONE,
@@ -33,12 +33,23 @@ import {
 export const SHAPE_CIRCLE = 0;
 export const SHAPE_AABB = 1;
 
-/** Теги блокировки: обычные теги сущности (ECS), у статики — её собственные. */
+/**
+ * Теги блокировки: обычные теги сущности (ECS), у статики — её собственные.
+ * Обзором управляет тег `blocksVision` (PHYS-2); участие в разрешении движения
+ * тегом больше не выражается — его задают маски `layer`/`blockMask`, и тег
+ * `blocksMovement` остаётся только меткой на статике обрывов (TERR-5).
+ */
 export const BLOCKS_MOVEMENT = 'blocksMovement';
 export const BLOCKS_VISION = 'blocksVision';
 
 /** Обрыв блокирует и движение, и обзор (TERR-5); массив общий на все отрезки. */
 const CLIFF_TAGS: readonly string[] = [BLOCKS_MOVEMENT, BLOCKS_VISION];
+
+/**
+ * Слой статики обрывов по умолчанию. Значение — параметр сборки, а не
+ * конвенция ядра (PHYS-2): загрузчик сцены вправе передать свой.
+ */
+export const DEFAULT_CLIFF_LAYER = 1;
 
 const DEFAULT_COLLIDER_COMPONENT = 'Collider';
 const DEFAULT_VELOCITY_COMPONENT = 'Velocity';
@@ -57,6 +68,14 @@ export interface StaticCollider {
   readonly maxX: Fixed;
   readonly maxY: Fixed;
   readonly tags: readonly string[];
+  /** Слой «кто я» (PHYS-2): блокирует движущегося, чей `blockMask` его накрывает. */
+  readonly layer: number;
+  /**
+   * Уровни сторон ребра обрыва (TERR-5) — только у статики, выведенной из
+   * cliff-геометрии: по ним направленный гейт (PHYS-11) считает подъём.
+   */
+  readonly levelNeg?: number;
+  readonly levelPos?: number;
 }
 
 interface Bounds {
@@ -66,14 +85,23 @@ interface Bounds {
   maxY: Fixed;
 }
 
-/** Статические коллайдеры обрывов из производной геометрии террейна (TERR-5). */
-export function staticsFromTerrain(grid: TerrainGrid): StaticCollider[] {
+/**
+ * Статические коллайдеры обрывов из производной геометрии террейна (TERR-5).
+ * Слой статики — параметр сборки (PHYS-2), а не конвенция ядра.
+ */
+export function staticsFromTerrain(
+  grid: TerrainGrid,
+  cliffLayer: number = DEFAULT_CLIFF_LAYER,
+): StaticCollider[] {
   return grid.cliffs.map((edge) => ({
     minX: Math.min(edge.from.x, edge.to.x),
     minY: Math.min(edge.from.y, edge.to.y),
     maxX: Math.max(edge.from.x, edge.to.x),
     maxY: Math.max(edge.from.y, edge.to.y),
     tags: CLIFF_TAGS,
+    layer: cliffLayer,
+    levelNeg: edge.levelNeg,
+    levelPos: edge.levelPos,
   }));
 }
 
@@ -119,6 +147,16 @@ export class PhysicsWorld {
 
   /** Статика, чей AABB пересекает `bounds` и у которой есть тег `tag`. Порядок — по индексу (DET-6). */
   query(bounds: Bounds, tag: string): StaticCollider[] {
+    return this.collect(bounds, tag, 0);
+  }
+
+  /** Статика, чей AABB пересекает `bounds` и чей `layer` попал в маску (PHYS-2). Порядок — по индексу (DET-6). */
+  queryByLayer(bounds: Bounds, mask: number): StaticCollider[] {
+    return this.collect(bounds, undefined, mask);
+  }
+
+  /** Общий обход клеток обоих запросов: фильтр — тег (raycast) либо маска (движение, сенсоры). */
+  private collect(bounds: Bounds, tag: string | undefined, mask: number): StaticCollider[] {
     this.queryId++;
     const found: number[] = [];
     for (let cy = this.cell(bounds.minY); cy <= this.cell(bounds.maxY); cy++) {
@@ -127,7 +165,7 @@ export class PhysicsWorld {
           if (this.stamp[index] === this.queryId) continue;
           this.stamp[index] = this.queryId;
           const s = this.statics[index]!;
-          if (!s.tags.includes(tag)) continue;
+          if (tag !== undefined ? !s.tags.includes(tag) : (s.layer & mask) === 0) continue;
           if (!overlaps(bounds, s)) continue;
           found.push(index);
         }
@@ -193,6 +231,16 @@ export interface PhysicsOptions {
  * без отдельного правила. Тест — свёрнутый (swept) AABB от старой позиции к
  * новой, поэтому быстрый снаряд не проскакивает сквозь нулевую толщину обрыва.
  *
+ * Препятствие блокирует движущегося, если `(obstacle.layer & mover.blockMask)`
+ * непусто (PHYS-2); статика обрывов дополнительно проходит направленный гейт
+ * по `cliffRise` (PHYS-11). Пересечения по `hitMask` не блокируют, а дают
+ * событие `Overlap` по фактически исполненному свипу (PHYS-12).
+ *
+ * Система — документированный опт-ин в TimeScale (TIME-4, TIME-5): шаг оси —
+ * произведение скорости на итоговый множитель `getEffectiveDelta` (TIME-3,
+ * TIME-7). Скорость в компоненте при этом не мутируется — замедление действует
+ * в точке интеграции и не «прилипает» к состоянию.
+ *
  * ponytail: формы аппроксимируются огибающими AABB, а сущность при блокировке
  * остаётся на старой координате оси, а не придвигается вплотную. Точный
  * контакт и капсульный sweep — когда это станет заметно в игре.
@@ -217,10 +265,9 @@ export class PhysicsSystem implements System {
     });
     if (movers.length === 0) return;
 
-    const blockers = ctx.query({
-      all: [POSITION_COMPONENT, this.colliderComponent],
-      withTag: BLOCKS_MOVEMENT,
-    });
+    // Препятствия — все носители коллайдера: участие в блокировке и в сенсорах
+    // решают маски на narrow-phase (PHYS-2), а не тег на запросе.
+    const obstacles = ctx.query({ all: [POSITION_COMPONENT, this.colliderComponent] });
     // Позиции уже разрешённых на этом тике: Command Buffer вливается только в
     // конце системы, а сосед обязан видеть, куда его предшественник уже встал.
     const resolved = new Map<EntityId, Vec2>();
@@ -232,12 +279,18 @@ export class PhysicsSystem implements System {
 
     for (const mover of movers) {
       const collider = colliderOf(ctx.get, mover, this.colliderComponent);
+      const blockMask = ctx.get(mover, this.colliderComponent, 'blockMask');
+      const hitMask = ctx.get(mover, this.colliderComponent, 'hitMask');
+      const cliffRise = ctx.get(mover, this.colliderComponent, 'cliffRise');
+      // Множитель шага — один на сущность и тик (TIME-3): обе оси одного хода
+      // обязаны замедляться одинаково.
+      const scale = ctx.getEffectiveDelta(mover, FIXED_ONE);
       const from = positionOf(mover);
       let x = from.x;
       let y = from.y;
 
       for (const axis of ['x', 'y'] as const) {
-        const step = ctx.get(mover, this.velocityComponent, axis);
+        const step = fixed.mul(ctx.get(mover, this.velocityComponent, axis), scale);
         if (step === 0) continue;
         const nextX = axis === 'x' ? fixed.add(x, step) : x;
         const nextY = axis === 'y' ? fixed.add(y, step) : y;
@@ -245,7 +298,18 @@ export class PhysicsSystem implements System {
         const next = boundsAt(nextX, nextY, collider);
         const swept = union(current, next);
 
-        const hit = this.firstBlocker(ctx, { current, next, swept, axis }, mover, blockers, positionOf);
+        const hit =
+          blockMask === 0
+            ? undefined
+            : this.firstBlocker(
+                ctx,
+                { current, next, swept, axis, step },
+                mover,
+                obstacles,
+                positionOf,
+                blockMask,
+                cliffRise,
+              );
         if (hit === undefined) {
           x = nextX;
           y = nextY;
@@ -262,6 +326,27 @@ export class PhysicsSystem implements System {
         });
       }
 
+      // Сенсоры (PHYS-12): объём — фактически исполненный ход тика, обе оси
+      // после разрешения. Порядок событий: статика раньше динамики, динамика —
+      // по порядку запроса (QUERY-2); одно событие на пару за тик — обход
+      // каждого препятствия здесь единственный.
+      if (hitMask !== 0) {
+        const executed = union(boundsAt(from.x, from.y, collider), boundsAt(x, y, collider));
+        const hitStatics = this.physicsWorld.queryByLayer(executed, hitMask);
+        for (let i = 0; i < hitStatics.length; i++) {
+          ctx.events.emit('Overlap', { entity: mover, other: STATIC_COLLIDER });
+        }
+        for (const other of obstacles) {
+          if (other === mover) continue;
+          if ((ctx.get(other, this.colliderComponent, 'layer') & hitMask) === 0) continue;
+          const position = positionOf(other);
+          const otherCollider = colliderOf(ctx.get, other, this.colliderComponent);
+          if (overlaps(executed, boundsAt(position.x, position.y, otherCollider))) {
+            ctx.events.emit('Overlap', { entity: mover, other });
+          }
+        }
+      }
+
       if (x !== from.x || y !== from.y) {
         resolved.set(mover, { x, y });
         ctx.commands.setField(mover, POSITION_COMPONENT, 'x', x);
@@ -270,19 +355,24 @@ export class PhysicsSystem implements System {
     }
   }
 
-  /** Первый блокирующий: статика идёт раньше динамики, динамика — по порядку запроса (QUERY-2). */
+  /** Первый блокирующий по маске (PHYS-2): статика идёт раньше динамики, динамика — по порядку запроса (QUERY-2). */
   private firstBlocker(
     ctx: SystemContext,
     move: Move,
     mover: EntityId,
-    blockers: Float64Array,
+    obstacles: Float64Array,
     positionOf: (entity: EntityId) => Vec2,
+    blockMask: number,
+    cliffRise: number,
   ): number | undefined {
-    for (const s of this.physicsWorld.query(move.swept, BLOCKS_MOVEMENT)) {
-      if (blocks(move, s)) return STATIC_COLLIDER;
+    for (const s of this.physicsWorld.queryByLayer(move.swept, blockMask)) {
+      if (!blocks(move, s)) continue;
+      if (cliffGateOpen(move, s, cliffRise)) continue;
+      return STATIC_COLLIDER;
     }
-    for (const other of blockers) {
+    for (const other of obstacles) {
       if (other === mover) continue;
+      if ((ctx.get(other, this.colliderComponent, 'layer') & blockMask) === 0) continue;
       const position = positionOf(other);
       const collider = colliderOf(ctx.get, other, this.colliderComponent);
       if (blocks(move, boundsAt(position.x, position.y, collider))) return other;
@@ -299,6 +389,30 @@ interface Move {
   readonly next: Bounds;
   readonly swept: Bounds;
   readonly axis: 'x' | 'y';
+  /** Шаг оси после TimeScale: гейту обрыва (PHYS-11) нужен знак — сторона захода. */
+  readonly step: Fixed;
+}
+
+/**
+ * Направленный гейт обрыва (PHYS-11): пропускает ли ребро этот ход. Применим
+ * только к статике с уровнями сторон; при нулевом `cliffRise` обрыв блокирует
+ * в обе стороны — поведение без гейта.
+ *
+ * Ось нормали ребра — вырожденная ось его нулевой толщины. Ход по другой оси
+ * при активном допуске не блокируется вовсе: сущность в воздухе, скользящая
+ * вдоль ребра, не должна за него цепляться. По оси нормали сторона захода
+ * определяется знаком шага: шаг больше нуля пересекает ребро со стороны
+ * меньшей координаты (`levelNeg`) к большей (`levelPos`), меньше нуля —
+ * наоборот. Блокируется только подъём выше допуска; спуск свободен с любой
+ * высоты.
+ */
+function cliffGateOpen(move: Move, s: StaticCollider, cliffRise: number): boolean {
+  if (s.levelNeg === undefined || s.levelPos === undefined) return false;
+  if (cliffRise <= 0) return false;
+  const normalAxis = s.minX === s.maxX ? 'x' : 'y';
+  if (move.axis !== normalAxis) return true;
+  const rise = move.step > 0 ? s.levelPos - s.levelNeg : s.levelNeg - s.levelPos;
+  return rise <= cliffRise;
 }
 
 /**
@@ -396,6 +510,14 @@ export function createPhysicsApi(
       const point = vec.add(from, vec.scale(dir, best));
       const hit: RaycastHit = bestEntity === undefined ? { point } : { entity: bestEntity, point };
       return hit;
+    },
+    /** ARENA-5: у круга — радиус, у AABB — меньшая полуось (вписанная окружность). */
+    inradiusOf: (entity) => {
+      if (!hasComponent(world, entity, colliderComponent)) return undefined;
+      const collider = colliderOf(read, entity, colliderComponent);
+      return collider.shape === SHAPE_CIRCLE
+        ? collider.radius
+        : Math.min(collider.halfX, collider.halfY);
     },
   };
 }
