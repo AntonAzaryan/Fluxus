@@ -46,7 +46,7 @@ import {
   shellPort,
   validateBindings,
 } from '@game-mvp/client';
-import { ACTION_BITS } from './sim.js';
+import { ACTION_BITS, STATE_COMPONENTS } from './sim.js';
 import bindingsJson from './bindings.json';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
@@ -449,6 +449,10 @@ async function main(): Promise<void> {
       director = new CameraEffectsDirector({
         tables: manifest.cameraEffects,
         description: CAMERA_EFFECTS_DESCRIPTION,
+        // Тот же список, по которому Extractor воркера выставляет биты
+        // `EntityView.states` (`sim.ts`): без него запись таблицы `states`
+        // манифеста не находит своего бита и эффект не включается никогда.
+        stateComponents: STATE_COMPONENTS,
       });
       // Мини-подсистема: события/состояния тика → диспетчер эффектов. syncTick
       // приходит на каждую доставку — события reliable (SHELL-4) не теряются.
