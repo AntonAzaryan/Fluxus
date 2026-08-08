@@ -45,14 +45,20 @@ import type {
   StringResources,
 } from '@game-mvp/editor-core';
 import { documentValue, resourceText, type UiText } from '../dom/node.js';
+import type { AreaState } from '../frame/area.js';
 import type { EditorMode } from '../frame/preview.js';
 import type { SelectionModel } from '../frame/selection.js';
 import type { IconName } from '../widgets/icon.js';
 
 /**
- * Что команде доступно из каркаса. Узко и намеренно: сессия (а в ней — реестр
- * операций и одна на всех история), сквозное выделение и переключение областей.
- * Ничего доменного здесь нет и появиться не может — команда, которой нужно
+ * Что команде доступно из каркаса — ровно то, чем каркас владеет сам: сессия (а
+ * в ней реестр операций и одна на всех история), сквозное выделение,
+ * переключение областей, режим и прогон (ED-26), запись состояния области
+ * (ED-23) и место для причины отказа.
+ *
+ * Ничего доменного здесь нет и появиться не может. Запись состояния области —
+ * не исключение: каркас отдаёт её непрозрачной (`AreaState` пуст), и что в ней
+ * лежит, знает только тот вклад, который её завёл. Команда, которой нужно
  * больше, берёт это у своего вклада, а не у каркаса.
  */
 export interface CommandTarget {
@@ -60,6 +66,27 @@ export interface CommandTarget {
   readonly selection: SelectionModel;
   activeAreaId(): string;
   activate(areaId: string): void;
+  /**
+   * Запись состояния области (ED-23). Каркас в неё не заглядывает; вклад,
+   * который её завёл, — знает, что в ней. Так команда открытия проекта
+   * добирается до открывающего, не заводя второго пути открытия.
+   */
+  stateOf(areaId: string): AreaState;
+  /** Режим редактора (ED-26): в превью авторинг закрыт. */
+  mode(): EditorMode;
+  canUndo(): boolean;
+  undo(): void;
+  canRedo(): boolean;
+  redo(): void;
+  canPreview(): boolean;
+  /** Запуск и выход одним действием — из любой области (ED-26). */
+  togglePreview(): void;
+  /**
+   * Причина отказа последнего действия — её каркас показывает постоянно, пока
+   * не сменят (ED-8). `null` гасит: команда, у которой всё получилось, обязана
+   * убрать чужую причину, иначе она переживёт своё событие.
+   */
+  setNotice(reason: UiText | null): void;
 }
 
 /** Команда палитры — вклад ED-25. */
@@ -140,17 +167,21 @@ export function matchesQuery(query: string, ...texts: readonly (string | undefin
  * одну функцию — иначе одна из них рано или поздно осталась бы доступной там,
  * где вторую уже погасили.
  */
-function commandEnabled(spec: PaletteSpec, command: PaletteCommand): boolean {
+export function commandEnabled(
+  command: PaletteCommand,
+  mode: EditorMode,
+  target: CommandTarget,
+): boolean {
   // Команда, объявившая операцию авторинга, в превью недоступна: ED-9 запрещает
   // там правку документов, а поле `operation` вклада — то самое объявление, по
   // которому это видно реестру, а не только реализации команды (ED-25).
-  if (spec.mode === 'preview' && command.operation !== undefined) return false;
-  return command.enabled === undefined || command.enabled(spec.target);
+  if (mode === 'preview' && command.operation !== undefined) return false;
+  return command.enabled === undefined || command.enabled(target);
 }
 
 function commandEntry(spec: PaletteSpec, command: PaletteCommand): PaletteEntry {
   const label = resourceText(spec.resources, command.labelKey);
-  const enabled = commandEnabled(spec, command);
+  const enabled = commandEnabled(command, spec.mode, spec.target);
   return {
     id: command.id,
     kind: 'command',
@@ -180,7 +211,7 @@ function operationEntries(spec: PaletteSpec): readonly PaletteEntry[] {
   return spec.catalog().operations.map((operation): PaletteEntry => {
     // Команда, взявшая операцию на себя, знает, откуда брать её параметры.
     const command = here.find((candidate) => candidate.operation === operation.id);
-    const enabled = command !== undefined && commandEnabled(spec, command);
+    const enabled = command !== undefined && commandEnabled(command, spec.mode, spec.target);
     return {
       id: operation.id,
       kind: 'operation',

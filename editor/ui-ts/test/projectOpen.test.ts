@@ -1,0 +1,247 @@
+/**
+ * Открытие проекта (ED-12) и каноническое сохранение (ED-21) — на настоящей
+ * сборке приложения (`app/assembly.ts`), а не на её пересказе.
+ *
+ * Проверяется здесь ровно то, что до W4-1 держалось на вписанном в код пути:
+ *
+ * - корень спрашивается у среды, а документы ИЩУТСЯ в дереве, причём по
+ *   содержимому: пути и имена файлов фикстуры нарочно не совпадают с
+ *   соглашением репозитория, и опознание по имени провалилось бы на них;
+ * - среда без перечисления (статическая выкладка — см. шапку `src/host/web.ts`)
+ *   отказывает с ПРИЧИНОЙ, а не показывает пустой проект;
+ * - сохранение пишет только то, в чём есть правки, а отказ доходит до автора
+ *   строкой каркаса, а не теряется в обработчике нажатия.
+ *
+ * DOM и WebGL не нужны: `canRender()` в headless-прогоне ложен, и области
+ * собираются без единого обращения к рендеру.
+ */
+import { createMemoryHost, type MemoryHost } from '@game-mvp/editor-core';
+import { describe, expect, it } from 'vitest';
+import { createEditorApp } from '../app/assembly.js';
+import { collectTexts, findAll } from '../src/dom/node.js';
+import { SHELL_COMMANDS } from '../src/palette/commands.js';
+import { SCENE_AREA_ID, type SceneAreaState } from '../src/areas/scene.js';
+import { discoverProject } from '../src/areas/sceneDiscovery.js';
+import { attr } from './support/frame.js';
+import { FIXTURE_CURVATURE, FIXTURE_SCENE, settle } from './support/project.js';
+import type { WorkspaceFrame } from '../src/frame/frame.js';
+
+/**
+ * Пути фикстуры нарочно не следуют соглашению репозитория (`scenes/*.scene.json`,
+ * `visuals/manifest.json`): опознание по имени файла на них не работает, а
+ * значит зелёный тест означает опознание по содержимому.
+ */
+const CONFIG = 'levels/arena.json';
+const VISUALS = 'art/looks.json';
+const CURVATURE = 'art/arena.curve.json';
+
+const MANIFEST = {
+  entities: { Hero: { model: 'art/models/hero.mdx', scale: 1.6 }, Crate: { model: 'art/models/crate.mdx' } },
+  terrain: { curvatureMap: CURVATURE },
+};
+
+function projectHost(scene: unknown = FIXTURE_SCENE): MemoryHost {
+  return createMemoryHost({
+    name: 'project',
+    root: { label: 'дерево фикстуры' },
+    // Корень отдаёт диалог среды, а не поле хоста: ED-12 требует спросить его,
+    // и фикстура обязана позволить проверить, что спросили.
+    choices: { root: { label: 'дерево фикстуры' } },
+    files: {
+      [CONFIG]: JSON.stringify(scene),
+      [VISUALS]: JSON.stringify(MANIFEST),
+      [CURVATURE]: JSON.stringify(FIXTURE_CURVATURE),
+      // Ни сцена, ни манифест: JSON в дереве бывает и не документом проекта.
+      'notes/plan.json': JSON.stringify({ note: 'заметка, а не документ проекта' }),
+      // Не JSON вовсе — обход до него даже не доходит.
+      'notes/plan.md': '# план',
+    },
+  });
+}
+
+/** Хост, у которого перечисления нет: так ведёт себя статическая выкладка (ED-12). */
+function hostWithoutListing(reason: string): MemoryHost {
+  const host = projectHost();
+  const list = (): Promise<never> => Promise.reject(new Error(reason));
+  return { ...host, content: { ...host.content, list } };
+}
+
+/** Строка палитры по её id: команда исполняется тем же путём, что у автора. */
+function runCommand(frame: WorkspaceFrame, id: string): void {
+  const entry = frame.paletteEntries().find((candidate) => candidate.id === id);
+  if (entry === undefined) throw new Error(`команды "${id}" нет в палитре`);
+  entry.run();
+}
+
+describe('ED-12: проект ищется в дереве, а не берётся по вписанному пути', () => {
+  it('корень спрашивается у среды, а документы опознаются по содержимому', async () => {
+    const host = projectHost();
+    const found = await discoverProject(host);
+
+    expect(found.failure).toBeNull();
+    expect(found.root?.label).toBe('дерево фикстуры');
+    // Корень взят у хоста среды, а не выведен редактором (ED-12).
+    expect(host.choiceRequests.map((request) => request.kind)).toContain('root');
+    // Пара найдена, и найдена не по имени файла: имена фикстуры соглашению не
+    // следуют вовсе.
+    expect(found.scenes).toEqual([{ config: CONFIG, visuals: VISUALS }]);
+    expect(found.manifests).toEqual([VISUALS]);
+  });
+
+  it('сборка открывает найденное, и открытое — то, что лежит в дереве', async () => {
+    const host = projectHost();
+    const app = await createEditorApp({ host });
+    const state = app.frame.stateOf(SCENE_AREA_ID) as SceneAreaState;
+    await settle();
+
+    expect(state.failure).toBeNull();
+    expect(state.project?.configId).toBe(CONFIG);
+    expect(state.project?.visualsId).toBe(VISUALS);
+    // Карта кривизны названа манифестом (ASSET-7), а не найдена обходом:
+    // документ, на который ссылается открытый, редактор берёт по ссылке.
+    expect(state.project?.curvatureId).toBe(CURVATURE);
+  });
+
+  it('дерево без сцены — пустой проект без причины: искать было чем', async () => {
+    const host = createMemoryHost({
+      name: 'empty',
+      root: { label: 'пусто' },
+      files: { 'notes/plan.json': JSON.stringify({ note: 'ничего' }) },
+    });
+    const app = await createEditorApp({ host });
+    const state = app.frame.stateOf(SCENE_AREA_ID) as SceneAreaState;
+    await settle();
+
+    expect(app.project.failure).toBeNull();
+    expect(app.project.scenes).toEqual([]);
+    expect(state.project).toBeNull();
+    expect(state.failure).toBeNull();
+  });
+});
+
+describe('ED-12: среда без перечисления отказывает причиной, а не пустым проектом', () => {
+  it('обход возвращает причину и ни одной сцены', async () => {
+    const reason = 'перечисления в этой сборке нет';
+    const found = await discoverProject(hostWithoutListing(reason));
+    expect(found.scenes).toEqual([]);
+    // «Сцен не найдено» и «искать нечем» — разные утверждения, и второе не
+    // выражается пустым списком.
+    expect(found.failure).toContain(reason);
+  });
+
+  it('причина доходит до автора: область показывает её на поверхности правки', async () => {
+    const reason = 'перечисления в этой сборке нет';
+    const app = await createEditorApp({ host: hostWithoutListing(reason) });
+    const state = app.frame.stateOf(SCENE_AREA_ID) as SceneAreaState;
+    await settle();
+
+    expect(state.project).toBeNull();
+    expect(state.failure).toContain(reason);
+    // Показана она иконкой, положением и текстом (ED-8, ED-22), а не только
+    // оттенком: находка стоит на элементе с признаком важности.
+    const marked = findAll(app.frame.view(), (node) => attr(node, 'data-severity') === 'error');
+    expect(marked.length).toBeGreaterThan(0);
+    expect(
+      marked.flatMap((node) => collectTexts(node)).some((text) => text.value.includes(reason)),
+    ).toBe(true);
+  });
+});
+
+describe('ED-21: сохранение трогает только документы с правками', () => {
+  it('«открыл — сохранил» без правок не пишет ничего', async () => {
+    const host = projectHost();
+    const app = await createEditorApp({ host });
+    app.frame.stateOf(SCENE_AREA_ID);
+    await settle();
+
+    runCommand(app.frame, SHELL_COMMANDS.save);
+    await settle();
+    // Пустой дифф получается не совпадением байтов, а отсутствием записи.
+    expect(host.writes).toEqual([]);
+  });
+
+  it('правка одного документа уходит на диск одна', async () => {
+    const host = projectHost();
+    const app = await createEditorApp({ host });
+    app.frame.stateOf(SCENE_AREA_ID);
+    await settle();
+
+    app.frame.session.applyOperation('document.setValue', {
+      document: CONFIG,
+      path: ['capacity'],
+      value: 32,
+    });
+    runCommand(app.frame, SHELL_COMMANDS.save);
+    await settle();
+
+    expect(host.writes).toEqual([CONFIG]);
+    expect(JSON.parse(host.text(CONFIG)) as { capacity: number }).toMatchObject({ capacity: 32 });
+    // Манифест правок не имел и на диск не уходил — иначе «затрагивает только
+    // документы с правками» было бы неправдой.
+    expect(JSON.parse(host.text(VISUALS))).toEqual(MANIFEST);
+    // Записанное — уже не несохранённое: снаружи окна это видно (ED-21).
+    expect(host.windowState.unsaved).toBe(false);
+  });
+
+  it('отказ показывается причиной и не пишет ни байта', async () => {
+    const host = projectHost();
+    const app = await createEditorApp({ host });
+    app.frame.stateOf(SCENE_AREA_ID);
+    await settle();
+
+    // Переименование prefab'а рвёт пару ED-19 и ссылку расстановки: на диске
+    // расхождения не было, вносит его именно это сохранение — ровно тот случай,
+    // который ED-21 запрещает записывать.
+    app.frame.session.applyOperation('document.setValue', {
+      document: CONFIG,
+      path: ['prefabs', 0, 'name'],
+      value: 'Villain',
+    });
+    runCommand(app.frame, SHELL_COMMANDS.save);
+    await settle();
+
+    expect(host.writes).toEqual([]);
+    const notice = app.frame.notice();
+    expect(notice).not.toBeNull();
+    // Текст причины принадлежит правилу и приходит ресурсом (ED-27, ED-30):
+    // сборка его не сочиняет.
+    expect(notice?.origin).toBe('resource');
+    expect(notice?.key).toContain('validation.reason.');
+    // И он же виден в баре каркаса, а не только в возвращённом значении.
+    expect(
+      collectTexts(app.frame.view()).some((text) => text.value === notice?.value),
+    ).toBe(true);
+  });
+
+  it('правка гасит прежнюю причину, а следующее сохранение проходит', async () => {
+    const host = projectHost();
+    const app = await createEditorApp({ host });
+    app.frame.stateOf(SCENE_AREA_ID);
+    await settle();
+
+    app.frame.session.applyOperation('document.setValue', {
+      document: CONFIG,
+      path: ['prefabs', 0, 'name'],
+      value: 'Villain',
+    });
+    runCommand(app.frame, SHELL_COMMANDS.save);
+    await settle();
+    expect(app.frame.notice()).not.toBeNull();
+
+    // Отмена — правка документов, и прежний отказ перестаёт быть утверждением
+    // о настоящем: оставленный на виду, он отправлял бы автора чинить
+    // починенное (ED-8).
+    app.frame.session.undo();
+    expect(app.frame.notice()).toBeNull();
+
+    app.frame.session.applyOperation('document.setValue', {
+      document: CONFIG,
+      path: ['capacity'],
+      value: 32,
+    });
+    runCommand(app.frame, SHELL_COMMANDS.save);
+    await settle();
+    expect(app.frame.notice()).toBeNull();
+    expect(host.writes).toEqual([CONFIG]);
+  });
+});

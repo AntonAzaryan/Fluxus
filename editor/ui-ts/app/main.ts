@@ -1,49 +1,16 @@
 /**
  * Точка входа веб-приложения редактора (ED-12, веб-среда).
  *
- * Здесь и только здесь редактор собирается из частей: хост среды, реестры
- * вкладов, сессия с одной историей на всех (ED-18, ED-23), ресурсы строк и
- * каркас рабочих областей. Всё, что этот файл делает с областями, —
- * регистрирует их. Ни порядка зон, ни переключения, ни истории он не задаёт:
- * это каркас, и он одинаков при любом наборе вкладов (ED-25).
- *
- * Добавить область — значит дописать сюда одну строку регистрации. Ни каркас,
- * ни уже зарегистрированные области при этом не правятся, и проверяет это не
- * обещание в комментарии, а `test/frameExtension.test.ts`.
- *
- * Среда — единственное, что этот файл знает и о чём не знает никто больше:
- * веб-хост, его канал внешних изменений дерева и заголовок вкладки. Всё
- * остальное написано так, будто среды не существует (ED-12).
+ * Здесь остаётся ровно то, чего не бывает нигде, кроме браузера: веб-хост
+ * среды, его канал внешних изменений дерева, заголовок вкладки, документ и
+ * монтирование страницы. Всё остальное — в `assembly.ts`, и написано оно так,
+ * будто среды не существует: другая среда приносит свой хост и зовёт ту же
+ * сборку (ED-12 — «десктопная сборка SHALL быть оболочкой над той же
+ * реализацией»).
  */
-import {
-  buildEditorCatalog,
-  catalogDescriptions,
-  createEditorContributions,
-  createEditorSession,
-  createOperationRegistry,
-  describeOperations,
-  registerBuiltinOperations,
-  registerValidationRules,
-  type ContentChangeKind,
-  type ContentPath,
-  type ValidationRule,
-  type ViewportToolContribution,
-} from '@game-mvp/editor-core';
-import {
-  createWebHost,
-  createWorkspaceFrame,
-  mountWorkspaceFrame,
-  registerFieldEditors,
-  uiResources,
-} from '../src/index.js';
-import type { FieldEditor, PaletteCommand, WorkspaceArea } from '../src/index.js';
-import { createAssetArea } from '../src/areas/assets.js';
-import { registerVisualsOperations } from '../src/areas/assetVisuals.js';
-import { DEFAULT_SCENE_IDS, createSceneArea } from '../src/areas/scene.js';
-import { sceneValidationRules } from '../src/areas/sceneProject.js';
-import { registerPlacementOperations } from '../src/areas/scenePlacement.js';
-import { registerTerrainOperations } from '../src/areas/sceneTerrain.js';
-import { systemsArea } from '../src/areas/systems.js';
+import type { ContentChangeKind, ContentPath } from '@game-mvp/editor-core';
+import { createWebHost, mountWorkspaceFrame } from '../src/index.js';
+import { createEditorApp } from './assembly.js';
 
 /**
  * Канал внешних изменений дерева контента: сокет dev-сервера
@@ -76,59 +43,16 @@ const host = createWebHost({
   window,
 });
 
-const contributions = createEditorContributions<
-  WorkspaceArea,
-  ViewportToolContribution,
-  FieldEditor,
-  PaletteCommand,
-  ValidationRule
->();
-// Редакторы поля — такой же вклад (ED-25): набор, который редактор везёт с
-// собой, регистрируется здесь же, и проект вправе перекрыть любой из них.
-registerFieldEditors(contributions.fieldEditors);
-// Правила валидации — такой же вклад, как область (ED-25), и реестр у них один
-// на редактор: раскладку документов проекта приносит область, а не правило.
-registerValidationRules(contributions.validationRules, sceneValidationRules());
-contributions.areas.register(
-  createSceneArea({ host, validationRules: contributions.validationRules }),
-);
-contributions.areas.register(systemsArea);
-// Просмотрщик ассетов (ED-20) — такой же вклад: манифест визуалов он правит тот
-// же, что открывает область сцены, поэтому его ID приходит одной настройкой.
-contributions.areas.register(
-  createAssetArea({ host, visuals: DEFAULT_SCENE_IDS.visuals }),
-);
-
-// Операции расстановки, кистей и записей манифеста — вклады областей, а не
-// часть ядра редактора (ED-25, ED-29): реестр один и тот же для интерфейса и
-// для вызова без него.
-const session = createEditorSession({
-  operations: registerVisualsOperations(
-    registerTerrainOperations(
-      registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
-    ),
-  ),
-});
-
-const resources = uiResources('ru');
-
-mountWorkspaceFrame(
-  document,
-  createWorkspaceFrame({
-    areas: contributions.areas,
-    resources,
-    session,
-    fieldEditors: contributions.fieldEditors,
-    commands: contributions.commands,
-    // Машинное само-описание редактора (ED-30) собирается из ВСЕХ реестров
-    // сборки, а не из тех, что видит каркас: палитра показывает операции из
-    // того же каталога, который получает внешний потребитель, и второго
-    // описания не заводится.
-    catalog: () =>
-      buildEditorCatalog({
-        contributions,
-        operations: () => describeOperations(session.operations),
-        descriptions: catalogDescriptions(resources),
-      }),
-  }),
-);
+// Открытие проекта асинхронно (дерево читает среда), и страница монтируется по
+// его завершении: каркас без единой области показывать нечего, а области
+// заводятся сборкой. Отказ открытия из этого пути не приходит — обход дерева
+// возвращает причину значением, и её показывает сама область (ED-8).
+createEditorApp({ host })
+  .then((app) => {
+    mountWorkspaceFrame(document, app.frame);
+  })
+  .catch((error: unknown) => {
+    // Единственный отказ, который некому показать: страницы ещё нет. Молчать
+    // о нём нельзя — иначе редактор не открылся бы без единого следа.
+    console.error(error);
+  });

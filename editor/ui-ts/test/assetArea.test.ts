@@ -33,6 +33,7 @@ import {
   previewEntry,
   previewManifest,
 } from '../src/areas/assetPreview.js';
+import { createAssetModule } from '../src/areas/assetModule.js';
 import { assetKindOf, loadAssetTree } from '../src/areas/assetTree.js';
 import { VISUALS_AUTHORING_OPERATIONS, VISUALS_OPERATIONS } from '../src/areas/assetVisuals.js';
 import { buildFrame, buttonByKey, press } from './support/frame.js';
@@ -78,8 +79,9 @@ function selectRow(fixture: Fixture, path: string): void {
 
 describe('ED-20/REND-11: превью — вырожденный случай документного источника', () => {
   it('кадр просмотрщика поднимается без террейна', () => {
-    const host = assetHost();
-    const options = assetStageOptions(host, { announce: () => undefined });
+    const options = assetStageOptions(createAssetModule(assetHost()), {
+      announce: () => undefined,
+    });
     // Ни сцены, ни террейна: REND-11 называет превью «набором из одного
     // инстанса без сцены и террейна», и начинается это с самого кадра.
     expect(options.terrain).toBe(false);

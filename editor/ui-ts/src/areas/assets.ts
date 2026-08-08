@@ -38,7 +38,6 @@
  */
 import {
   contentPathParent,
-  createHostAssetSource,
   openDocumentFromHost,
   type ContentPath,
   type DocumentId,
@@ -46,7 +45,7 @@ import {
   type EditorSession,
   type EnvironmentHost,
 } from '@game-mvp/editor-core';
-import type { EntityVisual } from '@game-mvp/assets';
+import type { AssetService, EntityVisual } from '@game-mvp/assets';
 import {
   children,
   documentValue,
@@ -97,6 +96,7 @@ import {
   manifestOf,
   skinNames,
 } from './assetVisuals.js';
+import { createAssetModule } from './assetModule.js';
 import {
   canRender,
   createSceneStage,
@@ -142,8 +142,9 @@ export interface AssetAreaOptions {
    */
   readonly stage?: AssetStageFactory;
   /**
-   * Чем спрашивается состояние ассета (ASSET-4); по умолчанию — сервис самого
-   * кадра. Второго сервиса не заводится: кэш один на ID (ASSET-2).
+   * Чем спрашивается состояние ассета (ASSET-4); по умолчанию — модуль самого
+   * кадра. Второго сервиса не заводится: кэш один на ID (ASSET-2), и сборка
+   * подаёт общий модуль через `stage` (`assetStageFactory`), а не вторым полем.
    */
   readonly assets?: AssetStates;
 }
@@ -184,13 +185,14 @@ const message = (error: unknown): string =>
  * начинается с того, что кадр поднимается без террейна.
  */
 export function assetStageOptions(
-  host: EnvironmentHost,
+  assets: AssetService,
   hooks: AssetStageHooks,
 ): SceneStageOptions {
   return {
     hostId: ASSETS_VIEWPORT_ID,
-    // Тот же шов к дереву, через который читаются документы (ASSET-2, ED-12).
-    assets: createHostAssetSource(host.content),
+    // Тот же модуль ассетов, которым рисует вьюпорт сцены: кэш один на ID
+    // (ASSET-2), и состояние ассета у просмотрщика и у кадра одно.
+    assets,
     // Записей ещё нет: первую принесёт переподача манифеста (REND-17).
     visuals: previewManifest(null),
     // Вырожденный случай REND-11: ни сцены, ни террейна не будет никогда.
@@ -200,8 +202,18 @@ export function assetStageOptions(
 }
 
 /** Кадр превью по умолчанию: тот же рендер, что вьюпорт (ED-1), без террейна. */
-function defaultStage(host: EnvironmentHost, hooks: AssetStageHooks): SceneStage | null {
-  return canRender() ? createSceneStage(assetStageOptions(host, hooks)) : null;
+function defaultStage(assets: AssetService, hooks: AssetStageHooks): SceneStage | null {
+  return canRender() ? createSceneStage(assetStageOptions(assets, hooks)) : null;
+}
+
+/**
+ * Кадр превью на ОБЩЕМ модуле ассетов — это и подаёт сборка (ED-25): один
+ * модуль на редактор (ASSET-2), а контекст рендера у каждого кадра свой
+ * (см. шапку `assetModule.ts`). Без неё область заводит свой модуль — так она
+ * собирается там, где сборки нет вовсе (тест, галерея).
+ */
+export function assetStageFactory(assets: AssetService): AssetStageFactory {
+  return (_host, hooks) => defaultStage(assets, hooks);
 }
 
 /** Запись манифеста, выбранная автором; `null` — не выбрана либо её нет. */
@@ -716,12 +728,19 @@ export function createAssetArea(options: AssetAreaOptions = {}): WorkspaceArea<A
       return found;
     },
     createState(setup): AssetAreaState {
-      // Кадр собирается первым: его сервис ассетов и есть тот, у которого
-      // просмотрщик спрашивает состояния (ASSET-2 — кэш один на ID).
+      // Кадр собирается первым: его модуль ассетов и есть тот, у которого
+      // просмотрщик спрашивает состояния (ASSET-2 — кэш один на ID). Модуль
+      // приносит сборка (`assetStageFactory`); своим область обходится там, где
+      // сборки нет.
+      const host = options.host;
+      const build =
+        options.stage ??
+        ((environment: EnvironmentHost, hooks: AssetStageHooks) =>
+          defaultStage(createAssetModule(environment), hooks));
       const stage =
-        options.host === undefined
+        host === undefined
           ? null
-          : (options.stage ?? defaultStage)(options.host, {
+          : build(host, {
               announce: () => {
                 state.refresh();
               },

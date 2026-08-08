@@ -33,10 +33,10 @@
  * первой на первом же несовпадении.
  */
 import { FIXED_ONE, type SceneDef } from '@game-mvp/core';
+import type { AssetService, VisualManifest } from '@game-mvp/assets';
 import {
   ContributionRegistry,
   CURVATURE_GRID_RULE,
-  createHostAssetSource,
   createValidator,
   registerValidationRules,
   type ContributionReader,
@@ -67,7 +67,13 @@ import { placementSubject, sceneDocumentSubject } from './sceneSchema.js';
 import { withValidation } from '../widgets/validation.js';
 import { viewportFrame } from '../viewport.js';
 import type { ScenePlacement } from './sceneDocuments.js';
-import { canRender, createSceneStage, type SceneStage } from './sceneStage.js';
+import { createAssetModule } from './assetModule.js';
+import {
+  canRender,
+  createSceneStage,
+  type SceneStage,
+  type SceneStageOptions,
+} from './sceneStage.js';
 import {
   createPlacementTool,
   type PlacementTool,
@@ -108,11 +114,14 @@ export const SCENE_NODES = {
   assets: 'scene.assets',
 } as const;
 
-/** Сцена репозитория: то, что редактор открывает, пока открытия проекта нет (W4-1). */
-export const DEFAULT_SCENE_IDS: SceneProjectIds = {
-  config: 'scenes/duel.scene.json',
-  visuals: 'visuals/manifest.json',
-};
+/**
+ * Проект, которого нет. Запись состояния заводится раньше, чем открытие
+ * закончится (а иногда открывать нечего вовсе), и инструментам нужен адрес уже
+ * тогда. Пустой адрес и есть честный ответ: писать в него нечем, а видимого
+ * пути к записи нет — без кадра вся панель расстановки показана недоступной
+ * (ED-26). Настоящий адрес инструмент получает вместе с открытым проектом.
+ */
+const NO_PROJECT: SceneProjectIds = { config: '', visuals: '' };
 
 /**
  * Инструменты вьюпорта области (ED-25). Их три, и вьюпорт у них один: указатель
@@ -170,7 +179,21 @@ export type SceneStageFactory = (
 export interface SceneAreaOptions {
   /** Хост среды (ED-12): откуда читаются документы сцены. Нет — проект не открыт. */
   readonly host?: EnvironmentHost;
+  /** Документы известного проекта. Нет ни их, ни `open` — открывать нечего. */
   readonly ids?: SceneProjectIds;
+  /**
+   * Чем проект ОТКРЫВАЕТСЯ, когда его состав заранее не известен (ED-12):
+   * корень спрашивается у среды, документы ищутся в дереве
+   * (`sceneDiscovery.ts`). `null` — открывать нечего; отказ — причина, которую
+   * область покажет (ED-8). Зовётся и повторно: тем же путём идёт команда
+   * открытия проекта из палитры (ED-24).
+   */
+  readonly open?: () => Promise<SceneProjectIds | null>;
+  /**
+   * Модуль ассетов редактора (ASSET-2) — один на все кадры; нет — область
+   * заводит свой. Обоснование общего кэша — в шапке `assetModule.ts`.
+   */
+  readonly assets?: AssetService;
   /**
    * Чем собирается вьюпорт. Подменяется тестом на структурный дубль: WebGL в
    * headless-прогоне нет, а проверять подачу документов рендеру надо.
@@ -201,8 +224,12 @@ function ownRules(): ContributionReader<ValidationRule> {
 export interface SceneAreaState {
   /** Открытые документы сцены; `null` — проект ещё не открыт или не открылся. */
   project: SceneProject | null;
-  /** Инструмент вьюпорта: выделение, расстановка, перемещение (ED-16, ED-17). */
-  readonly tool: PlacementTool;
+  /**
+   * Инструмент вьюпорта: выделение, расстановка, перемещение (ED-16, ED-17).
+   * Пересоздаётся вместе с открытым проектом: адрес документа, в который он
+   * пишет операциями (ED-29), — свойство проекта, а не области.
+   */
+  tool: PlacementTool;
   /** Кисти уровня, вида клетки и кривизны (ED-10, ED-11). */
   readonly brush: BrushTool;
   /** Кто из инструментов получает указатель; остальные его не видят вовсе. */
@@ -233,6 +260,14 @@ export interface SceneAreaState {
   readonly expanded: Set<string>;
   /** Строка навигатора под клавиатурным фокусом. */
   focusId: string;
+  /**
+   * Открыть проект заново (ED-12): спросить у среды корень и найти в дереве
+   * документы. Тем же вызовом это делает команда палитры (ED-24) — второго пути
+   * открытия не заводится.
+   */
+  reopen: () => void;
+  /** Отписка от правок открытого проекта; `undefined` — проект не открыт. */
+  unwatch?: () => void;
   /** Просьба перерисовать после асинхронного открытия; ставится отрисовкой. */
   refresh: () => void;
 }
@@ -284,92 +319,182 @@ function brushSurface(
   return grid === null || grid === undefined ? null : { target: { document, path }, grid };
 }
 
-/** Вьюпорт по умолчанию: рендер движка там, где есть чем рисовать (ED-1). */
-function defaultStage(
-  project: SceneProject,
-  host: EnvironmentHost,
+/**
+ * Чем собирается вьюпорт сцены. Отдельно от самой сборки — по той же причине,
+ * по которой отдельно объявлены настройки кадра просмотрщика
+ * (`assetStageOptions`): без WebGL проверяемо ровно это — что оба кадра берут
+ * ОДИН модуль ассетов (ASSET-2) и встают в РАЗНЫЕ узлы страницы, то есть держат
+ * каждый свой контекст рендера (обоснование — в шапке `assetModule.ts`).
+ */
+export function sceneStageOptions(
+  assets: AssetService,
+  visuals: VisualManifest,
   hooks: SceneStageHooks,
-): SceneStage | null {
-  if (!canRender()) return null;
-  return createSceneStage({
+): SceneStageOptions {
+  return {
     hostId: SCENE_VIEWPORT_ID,
-    // Тот же шов к дереву, через который читаются документы (ASSET-2, ED-12).
-    assets: createHostAssetSource(host.content),
-    visuals: project.visuals,
+    assets,
+    visuals,
     onChange: hooks.announce,
     onPointer: hooks.pointer,
-  });
+  };
+}
+
+/**
+ * Вьюпорт по умолчанию: рендер движка там, где есть чем рисовать (ED-1).
+ * Модуль ассетов приходит снаружи и общий на все кадры (ASSET-2); свой область
+ * заводит только тогда, когда сборка общего не принесла, — как и свой реестр
+ * правил.
+ */
+function defaultStage(
+  assets: AssetService,
+  project: SceneProject,
+  hooks: SceneStageHooks,
+): SceneStage | null {
+  return canRender() ? createSceneStage(sceneStageOptions(assets, project.visuals, hooks)) : null;
+}
+
+/**
+ * Чем открывается проект. Известный состав и поиск в дереве — один и тот же
+ * шаг для области: она получает документы и не знает, откуда их взяли.
+ */
+function opener(options: SceneAreaOptions): (() => Promise<SceneProjectIds | null>) | null {
+  if (options.open !== undefined) return options.open;
+  const ids = options.ids;
+  return ids === undefined ? null : () => Promise.resolve(ids);
 }
 
 /**
  * Открытие проекта и слежение за документами. Пересчёт кадра подписан на
  * сессию, а не на отрисовку страницы: ED-15 обещает отклик на правку, а не на
  * то, что кто-то перерисовал интерфейс.
+ *
+ * Зовётся и повторно — командой открытия проекта (ED-24). Повтор на тех же
+ * документах не пересобирает ничего: пересборка вьюпорта потеряла бы позу
+ * камеры, которую ED-23 обязывает пережить даже переключение области, а
+ * «открыть то же самое» состоянием области не является.
  */
-function start(state: SceneAreaState, setup: AreaSetup, options: SceneAreaOptions): void {
+function start(
+  state: SceneAreaState,
+  setup: AreaSetup,
+  options: SceneAreaOptions,
+  assets: AssetService | null,
+): void {
   const host = options.host;
-  if (host === undefined) return;
-  const ids = options.ids ?? DEFAULT_SCENE_IDS;
-  const build = options.stage ?? defaultStage;
+  const open = opener(options);
+  if (host === undefined || open === null) return;
+  const build =
+    options.stage ??
+    ((project: SceneProject, _host: EnvironmentHost, hooks: SceneStageHooks) =>
+      assets === null ? null : defaultStage(assets, project, hooks));
 
-  openSceneProject(setup.session, host.content, ids)
-    .then((project) => {
-      state.project = project;
-      state.stage = build(project, host, {
-        announce: () => {
-          state.refresh();
-        },
-        // Инструменты живут в записи состояния области и переживают уход в
-        // другую область (ED-23) — вместе с выделением, которое ставит один из
-        // них. Указатель получает ровно активный: что попадание значит, знает
-        // инструмент, а какой из них сейчас в руках — область (ED-25).
-        pointer: (event) => {
-          // В превью указатель до инструментов не доходит вовсе (ED-9): панель
-          // показывает их недоступными, и клик по кадру обязан значить то же,
-          // что показывает панель, — иначе «недоступно» было бы только надписью.
-          if (state.previewing) return;
-          if (state.activeTool === 'pointer') state.tool.pointer(event);
-          else state.brush.pointer(event);
-        },
-      });
-      let config: unknown = undefined;
-      let curvature: unknown = undefined;
-      const recompute = (): void => {
-        // Отчёт пересчитывается раньше сверки ссылок и без неё: правила видят
-        // больше документов, чем кадр (пара «конфиг — манифест», ED-19), и
-        // «кадр не изменился» их состояния не описывает. Дорогим это не
-        // становится — прогон сам решает, какие правила исполнять заново (ED-8).
-        state.report = state.validator.run(setup.session);
-        // Значения сессии заморожены и подменяются целиком, поэтому сравнение
-        // по ссылке отвечает на вопрос «изменилось ли» точно и даром: выделение
-        // и открытие соседнего документа кадра не трогают.
-        const nextConfig = setup.session.documentValue(project.configId);
-        const nextCurvature =
-          project.curvatureId === null || !setup.session.isOpen(project.curvatureId)
-            ? null
-            : setup.session.documentValue(project.curvatureId);
-        if (state.draft !== null && nextConfig === config && nextCurvature === curvature) return;
-        config = nextConfig;
-        curvature = nextCurvature;
-        state.draft = draftOf(setup.session, project);
-        // Пока идёт прогон, кадр наполняет он (REND-11): подать сюда документы
-        // значило бы отобрать у него presentation-состояние посреди прогона.
-        // Дождавшийся набор уедет во вьюпорт выходом из превью — переподачей.
-        if (!state.previewing) state.stage?.submit(state.draft);
-        state.refresh();
-      };
-      // Подписка ловит правку, пришедшую откуда угодно, в том числе без
-      // интерфейса (ED-29), и правку внутри ещё не закрытого взаимодействия:
-      // о применении внутри открытой транзакции сессия объявляет событием
-      // наравне с записанным в историю, поэтому объект едет во вьюпорте по ходу
-      // перетаскивания, а не в момент отпускания (ED-15).
-      setup.session.subscribe(recompute);
-      recompute();
+  open()
+    .then(async (ids) => {
+      if (ids === null) {
+        // Открывать нечего — это ответ, а не отказ: навигатор скажет, что
+        // проект не открыт, и причины у этого нет.
+        state.failure = null;
+        return;
+      }
+      const current = state.project;
+      if (current !== null && current.configId === ids.config && current.visualsId === ids.visuals) {
+        state.failure = null;
+        return;
+      }
+      const project = await openSceneProject(setup.session, host.content, ids);
+      install(state, setup, project, ids, build, host);
     })
     .catch((error: unknown) => {
       state.failure = message(error);
       state.refresh();
     });
+}
+
+/** Открытый проект на месте: вьюпорт, инструменты, подписка на правки. */
+function install(
+  state: SceneAreaState,
+  setup: AreaSetup,
+  project: SceneProject,
+  ids: SceneProjectIds,
+  build: SceneStageFactory,
+  host: EnvironmentHost,
+): void {
+  state.failure = null;
+  state.project = project;
+  // Инструмент адресует документ открытого проекта (ED-29), поэтому он и
+  // заводится вместе с ним. Выделение при этом не теряется: оно сквозное и
+  // живёт моделью каркаса (ED-23), а не инструментом.
+  state.tool = createPlacementTool({
+    session: setup.session,
+    documentId: project.configId,
+    list: PLACEMENT_LIST,
+    ...(ids.position === undefined ? {} : { binding: ids.position }),
+    refresh: () => {
+      state.refresh();
+    },
+  });
+  state.expanded.add(project.configId);
+  state.expanded.add(SCENE_NODES.placements);
+  state.expanded.add(SCENE_NODES.assets);
+  if (state.focusId === '') state.focusId = project.configId;
+  // Прежний вьюпорт сносится: открытие ДРУГОГО проекта — единственный путь
+  // сюда во второй раз, и оставленный кадр рисовал бы прежние документы в тот
+  // же узел страницы.
+  state.stage?.dispose();
+  state.stage = build(project, host, {
+    announce: () => {
+      state.refresh();
+    },
+    // Инструменты живут в записи состояния области и переживают уход в
+    // другую область (ED-23) — вместе с выделением, которое ставит один из
+    // них. Указатель получает ровно активный: что попадание значит, знает
+    // инструмент, а какой из них сейчас в руках — область (ED-25).
+    pointer: (event) => {
+      // В превью указатель до инструментов не доходит вовсе (ED-9): панель
+      // показывает их недоступными, и клик по кадру обязан значить то же,
+      // что показывает панель, — иначе «недоступно» было бы только надписью.
+      if (state.previewing) return;
+      if (state.activeTool === 'pointer') state.tool.pointer(event);
+      else state.brush.pointer(event);
+    },
+  });
+  let config: unknown = undefined;
+  let curvature: unknown = undefined;
+  const recompute = (): void => {
+    // Отчёт пересчитывается раньше сверки ссылок и без неё: правила видят
+    // больше документов, чем кадр (пара «конфиг — манифест», ED-19), и
+    // «кадр не изменился» их состояния не описывает. Дорогим это не
+    // становится — прогон сам решает, какие правила исполнять заново (ED-8).
+    state.report = state.validator.run(setup.session);
+    // Значения сессии заморожены и подменяются целиком, поэтому сравнение
+    // по ссылке отвечает на вопрос «изменилось ли» точно и даром: выделение
+    // и открытие соседнего документа кадра не трогают.
+    const nextConfig = setup.session.documentValue(project.configId);
+    const nextCurvature =
+      project.curvatureId === null || !setup.session.isOpen(project.curvatureId)
+        ? null
+        : setup.session.documentValue(project.curvatureId);
+    if (state.draft !== null && nextConfig === config && nextCurvature === curvature) return;
+    config = nextConfig;
+    curvature = nextCurvature;
+    state.draft = draftOf(setup.session, project);
+    // Пока идёт прогон, кадр наполняет он (REND-11): подать сюда документы
+    // значило бы отобрать у него presentation-состояние посреди прогона.
+    // Дождавшийся набор уедет во вьюпорт выходом из превью — переподачей.
+    if (!state.previewing) state.stage?.submit(state.draft);
+    state.refresh();
+  };
+  // Подписка ловит правку, пришедшую откуда угодно, в том числе без
+  // интерфейса (ED-29), и правку внутри ещё не закрытого взаимодействия:
+  // о применении внутри открытой транзакции сессия объявляет событием
+  // наравне с записанным в историю, поэтому объект едет во вьюпорте по ходу
+  // перетаскивания, а не в момент отпускания (ED-15).
+  //
+  // Подписка прежнего проекта снимается: она держит его документы и его кадр,
+  // и оставленная жить пересчитывала бы уже не открытое.
+  state.unwatch?.();
+  state.unwatch = setup.session.subscribe(recompute);
+  recompute();
 }
 
 // ------------------------------------------------------------------ зоны
@@ -890,7 +1015,11 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
       return found;
     },
     createState(setup): SceneAreaState {
-      const ids = options.ids ?? DEFAULT_SCENE_IDS;
+      // Модуль ассетов заводится один раз на запись состояния, а не на каждое
+      // открытие: повторное открытие завело бы второй кэш на те же ID
+      // (ASSET-2) — ровно то, чего общий модуль и не допускает.
+      const assets =
+        options.assets ?? (options.host === undefined ? null : createAssetModule(options.host));
       const state: SceneAreaState = {
         project: null,
         stage: null,
@@ -933,16 +1062,20 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
           },
           ...(options.previewBackend === undefined ? {} : { backend: options.previewBackend }),
         }),
-        expanded: new Set([ids.config, SCENE_NODES.placements, SCENE_NODES.assets]),
-        focusId: ids.config,
+        expanded: new Set([SCENE_NODES.placements, SCENE_NODES.assets]),
+        focusId: '',
+        reopen: () => {
+          start(state, setup, options, assets);
+        },
         refresh: () => undefined,
         // Инструмент заводится вместе с записью состояния и живёт столько же
         // (ED-23): указатель приходит в него из вьюпорта, а не из отрисовки.
+        // До открытия он адресован в пустоту — писать в него нечем и неоткуда
+        // (см. `NO_PROJECT`), а открытый проект приносит настоящий адрес.
         tool: createPlacementTool({
           session: setup.session,
-          documentId: ids.config,
+          documentId: NO_PROJECT.config,
           list: PLACEMENT_LIST,
-          ...(ids.position === undefined ? {} : { binding: ids.position }),
           refresh: () => {
             state.refresh();
           },
@@ -956,7 +1089,7 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
           },
         }),
       };
-      start(state, setup, options);
+      start(state, setup, options, assets);
       return state;
     },
     render(context): AreaZones {

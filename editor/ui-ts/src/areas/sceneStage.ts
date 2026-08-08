@@ -24,6 +24,16 @@
  * REND-16). Инстанс в таком кадре стоит на своём `level` (REND-11), потому что
  * сажать его не на что.
  *
+ * ## Контекст свой, модуль ассетов общий
+ *
+ * `RenderContext` (сцена THREE, модуль ассетов, конфиг) заводится здесь, то
+ * есть по одному на кадр: кадров в редакторе больше одного, и каждый держит
+ * свою presentation-сцену — иначе переключение рабочих областей отбирало бы
+ * presentation-состояние у соседа (REND-11) и теряло бы позу камеры, которую
+ * ED-23 обязывает пережить переключение. Общим при этом остаётся модуль
+ * ассетов: он приходит параметром, а не создаётся здесь. Развилка и её цена
+ * разобраны в шапке `assetModule.ts`.
+ *
  * ## Второй продюсер и один цикл кадров
  *
  * Превью (ED-9) публикуется в ЭТУ же presentation-сцену вторым продюсером
@@ -101,16 +111,10 @@
  * остаются камере (CAM-3).
  */
 import * as THREE from 'three';
-import {
+import type {
   AssetService,
-  curvatureLoader,
-  gltfLoader,
-  manifestLoader,
-  mdxLoader,
-  pngTextureLoader,
-  type AssetSource,
-  type TerrainCurvatureMap,
-  type VisualManifest,
+  TerrainCurvatureMap,
+  VisualManifest,
 } from '@game-mvp/assets';
 import {
   DocumentSource,
@@ -165,8 +169,12 @@ export interface StageDraft {
 export interface SceneStageOptions {
   /** Идентификатор узла кадра — тот же, что у `viewportFrame`. */
   readonly hostId: string;
-  /** Источник байтов ассетов (ASSET-2) — поверх хоста среды (ED-12). */
-  readonly assets: AssetSource;
+  /**
+   * Модуль ассетов редактора (ASSET-2) — готовый, а не источник байтов, из
+   * которого кадр завёл бы свой. Кэш один на ID, и кадров в редакторе больше
+   * одного: обоснование — в шапке `assetModule.ts`.
+   */
+  readonly assets: AssetService;
   /** Манифест визуалов (ASSET-6): без него подсистеме моделей нечего строить. */
   readonly visuals: VisualManifest;
   /**
@@ -279,14 +287,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   sun.position.set(8, -12, 18);
   scene.add(sun);
 
-  const assets = new AssetService(options.assets);
-  assets.registerLoader(mdxLoader);
-  assets.registerLoader(gltfLoader);
-  assets.registerLoader(pngTextureLoader);
-  assets.registerLoader(manifestLoader);
-  assets.registerLoader(curvatureLoader);
-
-  const context: RenderContext = { scene, assets, config: { heightStep } };
+  // Модуль ассетов приходит снаружи и остаётся общим на все кадры редактора
+  // (ASSET-2): контекст рендера у каждого кадра свой, а кэш ассетов — один.
+  const context: RenderContext = { scene, assets: options.assets, config: { heightStep } };
   const presentation = new PresentationStage(context);
   const source = new DocumentSource(presentation);
 

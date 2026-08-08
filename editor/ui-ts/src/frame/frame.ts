@@ -43,9 +43,10 @@ import {
   type ValidationRuleContribution,
   type ViewportToolContribution,
 } from '@game-mvp/editor-core';
-import { children, el, type UiNode } from '../dom/node.js';
+import { children, el, type UiNode, type UiText } from '../dom/node.js';
 import { defaultFieldEditors, type FieldEditor } from '../inspector/editors.js';
 import {
+  commandEnabled,
   paletteEntries,
   type PaletteCommand,
   type PaletteEntry,
@@ -132,6 +133,12 @@ export interface WorkspaceFrame {
   togglePreview(): void;
   /** Выход, если прогон идёт; иначе ничего. Им же снос страницы гасит прогон. */
   stopPreview(): void;
+  /**
+   * Причина отказа последнего действия — видна постоянно, пока её не сменят
+   * (ED-8). Каркас её не сочиняет: текст приходит от того, кто отказал.
+   */
+  notice(): UiText | null;
+  setNotice(reason: UiText | null): void;
   /** Разбор нажатия. `true` — каркас его забрал, и вызывающему нечего делать. */
   handleKey(stroke: KeyStroke): boolean;
   /**
@@ -197,6 +204,31 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
       );
     }
   }
+  // Сочетание команды (ED-24, ED-25) проверяется так же и по той же причине,
+  // что сочетание области: команда, объявившая занятое каркасом сочетание, не
+  // получила бы ни одного нажатия, и обнаруживалось бы это ненажимающейся
+  // клавишей, а не отказом. Реестр вкладов следит только за тем, чтобы двое
+  // команд не претендовали на одно сочетание, — своих сочетаний каркаса он не
+  // знает, они не вклад.
+  for (const command of commands.all()) {
+    const keybinding = command.keybinding;
+    if (keybinding === undefined) continue;
+    const takenByFrame = FRAME_BINDINGS.find((binding) => sameBinding(binding, keybinding));
+    if (takenByFrame !== undefined) {
+      throw new Error(
+        `editor-ui: сочетание "${keybinding}" занято каркасом, команда "${command.id}" его не получит`,
+      );
+    }
+    const takenByArea = registered.find(
+      (area) => area.hotkey !== undefined && sameBinding(area.hotkey, keybinding),
+    );
+    if (takenByArea !== undefined) {
+      throw new Error(
+        `editor-ui: сочетание "${keybinding}" занято областью "${takenByArea.id}", команда "${command.id}" его не получит`,
+      );
+    }
+  }
+
   let query = '';
   let palette = false;
   /** Строка палитры под подсветкой; пустая — подсвечена первая из показанных. */
@@ -205,6 +237,7 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
   let mode: EditorMode = 'edit';
   let run: PreviewRun | null = null;
   let previewFailure: string | null = null;
+  let notice: UiText | null = null;
 
   // Перерисовка во время перерисовки — не оповещение, а рекурсия: область,
   // открывшая документ при заведении своей записи, оповестила бы каркас прямо
@@ -226,7 +259,14 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
   // Документ изменился — страница перерисовывается, кто бы его ни изменил.
   // Операции исполнимы и без интерфейса (ED-29), и правка, пришедшая оттуда,
   // обязана быть видна так же, как своя.
-  session.subscribe(notify);
+  //
+  // Заодно гаснет причина прежнего отказа: она была утверждением о том
+  // состоянии документов, которого уже нет, и оставленная на виду отправила бы
+  // автора чинить починенное (ED-8).
+  session.subscribe(() => {
+    notice = null;
+    notify();
+  });
 
   const requireArea = (areaId: string): WorkspaceArea => {
     const area = areas.get(areaId);
@@ -363,6 +403,14 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
       if (frame.canRedo() && session.redo()) notify();
     },
     mode: () => mode,
+    notice: () => notice,
+    setNotice(reason) {
+      // Та же причина второй раз — не событие: перерисовка на каждый её показ
+      // сбрасывала бы фокус ради неизменившейся строки.
+      if (notice === reason) return;
+      notice = reason;
+      notify();
+    },
     canPreview: () => run !== null || previewSource() !== null,
     previewFailure: () => previewFailure,
     togglePreview() {
@@ -430,6 +478,20 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
         notify();
         return true;
       }
+      // Команды разбираются раньше областей: команда сквозная (ED-24 — «способ
+      // добраться до операции, не проходя дерево»), а горячая клавиша области
+      // переключает область. Сочетание при этом занято ровно одним из них —
+      // это проверено при сборке каркаса, а не порядком разбора.
+      for (const command of commands.all()) {
+        if (command.keybinding === undefined || !matchesBinding(stroke, command.keybinding)) {
+          continue;
+        }
+        // Недоступная команда нажатие всё равно забирает: показана она
+        // недоступной (ED-26), и отдать её сочетание области значило бы, что
+        // одна клавиша делает разное в зависимости от состояния документов.
+        if (commandEnabled(command, mode, frame)) command.run(frame);
+        return true;
+      }
       // Сквозное разбирается раньше вкладов сознательно: сочетание отмены
       // одинаково во всех областях, и область, объявившая его своим, не должна
       // уметь отобрать его у истории (ED-23).
@@ -475,6 +537,7 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
             mode,
             canPreview: frame.canPreview(),
             previewFailure: previewFailure,
+            notice,
             onQuery: (next) => {
               frame.setSearchQuery(next);
               // Набранный запрос открывает палитру: показать находки больше

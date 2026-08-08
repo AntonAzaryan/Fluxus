@@ -28,7 +28,14 @@
  * сквозное состояние сессии: он не должен теряться от перехода в другую область.
  */
 import type { StringResources } from '@game-mvp/editor-core';
-import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
+import {
+  children,
+  documentValue,
+  el,
+  resourceText,
+  type UiNode,
+  type UiText,
+} from '../dom/node.js';
 import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';
 import { withValidation } from '../widgets/validation.js';
@@ -45,6 +52,13 @@ export interface TopBarSpec {
   readonly canPreview: boolean;
   /** Причина, по которой прогон не состоялся; `null` — причины нет (ED-8). */
   readonly previewFailure: string | null;
+  /**
+   * Причина отказа последнего действия — открытия проекта, сохранения (ED-8,
+   * ED-21). Стоит здесь по тому же основанию, что и режим: бар один на окно и
+   * виден из любой области, а действие, отказавшее молча, автору не видно.
+   * Текст приходит от того, кто отказал: каркас его не сочиняет (ED-27).
+   */
+  readonly notice: UiText | null;
   readonly onQuery: (query: string) => void;
   readonly onUndo: () => void;
   readonly onRedo: () => void;
@@ -142,6 +156,19 @@ export function frameTopBar(spec: TopBarSpec): UiNode {
               tone: 'error',
             }),
             { severity: 'error', reason: documentValue(spec.previewFailure) },
+          ),
+      // Отказ действия — иконка, положение и текст причины, а не оттенок
+      // (ED-8, ED-22). Рядом с причиной сорвавшегося прогона: обе — «то, что
+      // редактор попробовал и не смог», и разводить их по разным местам
+      // значило бы заставить автора искать ответ в двух.
+      spec.notice === null
+        ? undefined
+        : withValidation(
+            statusChip({
+              label: resourceText(spec.resources, 'ui.frame.refused'),
+              tone: 'error',
+            }),
+            { severity: 'error', reason: spec.notice },
           ),
       button({
         label: resourceText(spec.resources, 'ui.frame.undo'),
