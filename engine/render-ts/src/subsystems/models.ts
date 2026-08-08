@@ -31,6 +31,8 @@ import {
 import type { EntityView, RenderContext, RenderSubsystem, TickView } from '../types.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import type { SurfaceNormal } from '../visualSurface.js';
+import { createPickProxy, type InstanceProxySource, type PickProxy, type PickProxyVisitor } from '../picking.js';
+import type { ModelBounds } from '../model/build.js';
 import { smoothTilt, tiltTarget, type TiltVector } from '../model/surfaceAlign.js';
 import {
   buildSharedModel,
@@ -77,6 +79,22 @@ const DEFAULT_TILT_RATE = 10;
 const DEFAULT_FACING_RAD = 0;
 const DEG_TO_RAD = Math.PI / 180;
 const PLACEHOLDER_COLOR = 0xd040d0;
+/** Габариты заглушки (ASSET-4) — из них же строится её геометрия. */
+const PLACEHOLDER_WIDTH = 0.4;
+const PLACEHOLDER_HEIGHT = 0.9;
+/**
+ * Объём-прокси заглушки (REND-15). Границ модели у неё нет — она сама и есть
+ * нарисованное, поэтому прокси производен от её геометрии, а не от размера,
+ * назначенного picking'ом отдельно.
+ */
+const PLACEHOLDER_BOUNDS: ModelBounds = {
+  minX: -PLACEHOLDER_WIDTH / 2,
+  minY: -PLACEHOLDER_WIDTH / 2,
+  minZ: 0,
+  maxX: PLACEHOLDER_WIDTH / 2,
+  maxY: PLACEHOLDER_WIDTH / 2,
+  maxZ: PLACEHOLDER_HEIGHT,
+};
 /** Конвенция арены ядра (ARENA-5); имя переопределяется опцией. */
 const DEFAULT_FALL_EVENT = 'FellThroughFloor';
 
@@ -180,7 +198,7 @@ interface InstanceRecord {
   fallOffset: number;
 }
 
-export class ModelsSubsystem implements RenderSubsystem {
+export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   readonly name = 'models';
 
   private readonly manifest: VisualManifest;
@@ -190,6 +208,8 @@ export class ModelsSubsystem implements RenderSubsystem {
   private readonly instances = new Map<EntityId, InstanceRecord>();
   private readonly shared = new Map<string, SharedEntry>();
   private readonly warnedKinds = new Set<string>();
+  /** Переиспользуемая запись прокси обхода (REND-15): валидна внутри визита. */
+  private readonly proxy: PickProxy = createPickProxy();
 
   constructor(manifest: VisualManifest, options: ModelsOptions = {}) {
     this.manifest = manifest;
@@ -382,6 +402,47 @@ export class ModelsSubsystem implements RenderSubsystem {
     return true;
   }
 
+  /**
+   * Объёмы-прокси нарисованных инстансов — вход picking'а вьюпорта (REND-15) и
+   * подсветки выделения (REND-16). Подсистема отдаёт УЗЕЛ, а не позу: то самое
+   * преобразование, которым инстанс нарисован в этом кадре, — посадка на
+   * визуальную поверхность (REND-9), вертикальное смещение (REND-12), наклон
+   * (REND-10), курс с поправкой переда (REND-13) и масштаб (REND-11) уже в нём.
+   * Пересчитывать их второй раз было бы вторым ответом на один вопрос.
+   */
+  eachProxy(visit: PickProxyVisitor): void {
+    for (const record of this.instances.values()) {
+      if (this.fillProxy(record, this.proxy)) visit(this.proxy);
+    }
+  }
+
+  /** Прокси одной сущности; false — рендер её не рисует, попадать не во что. */
+  proxyOf(entity: EntityId, out: PickProxy): boolean {
+    const record = this.instances.get(entity);
+    return record === undefined ? false : this.fillProxy(record, out);
+  }
+
+  /**
+   * Попадание только в нарисованное (REND-15): у сущности, отнесённой резолвером
+   * к невизуальным, нет ни модели, ни заглушки — и прокси у неё нет. Инстанс,
+   * чья модель ещё грузится, участвует объёмом заглушки (ASSET-4): автор видит
+   * её и вправе её двигать.
+   */
+  private fillProxy(record: InstanceRecord, out: PickProxy): boolean {
+    const bounds = record.model?.bounds ?? (record.placeholder === null ? null : PLACEHOLDER_BOUNDS);
+    if (bounds === null) return false;
+    out.entity = record.entity;
+    out.handle = null;
+    out.node = record.holder;
+    out.minX = bounds.minX;
+    out.minY = bounds.minY;
+    out.minZ = bounds.minZ;
+    out.maxX = bounds.maxX;
+    out.maxY = bounds.maxY;
+    out.maxZ = bounds.maxZ;
+    return true;
+  }
+
   /** Инстанс сущности — для тестов и отладки. */
   instanceFor(entity: EntityId): {
     readonly holder: THREE.Group;
@@ -485,8 +546,8 @@ export class ModelsSubsystem implements RenderSubsystem {
   }
 
   private makePlaceholder(holder: THREE.Group): THREE.Mesh {
-    const geometry = new THREE.BoxGeometry(0.4, 0.4, 0.9);
-    geometry.translate(0, 0, 0.45); // стоит на земле, а не тонет в ней
+    const geometry = new THREE.BoxGeometry(PLACEHOLDER_WIDTH, PLACEHOLDER_WIDTH, PLACEHOLDER_HEIGHT);
+    geometry.translate(0, 0, PLACEHOLDER_HEIGHT / 2); // стоит на земле, а не тонет в ней
     const material = new THREE.MeshStandardMaterial({ color: PLACEHOLDER_COLOR });
     const mesh = new THREE.Mesh(geometry, material);
     holder.add(mesh);

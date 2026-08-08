@@ -84,6 +84,17 @@ export interface VisualSurface {
   cornerHeights(x: number, y: number): [number, number, number, number];
   /** Высота в мировой точке; тотальна — за краем сетки отвечает ближайшая клетка. */
   heightAt(wx: number, wy: number): number;
+  /**
+   * Высота в мировой точке, посчитанная по углам ЗАДАННОЙ клетки; точка вне
+   * клетки клампится к её границам. Нужна там, где клетку выбирает вызывающий,
+   * а не округление координаты: марш picking'а по полю высот (REND-15) на
+   * границе двух клеток обязан считать по той, в которую вошёл, — иначе
+   * попадание в стенку обрыва разрешалось бы в клетку под ней.
+   *
+   * Формула та же, что у `heightAt`: обе зовут одну билинейную выборку, второй
+   * реализации поля высот не появляется (REND-9).
+   */
+  heightInCell(cellX: number, cellY: number, wx: number, wy: number): number;
   /** Единичная нормаль в мировой точке; пишет в out и возвращает его. */
   normalAt(wx: number, wy: number, out: SurfaceNormal): SurfaceNormal;
 }
@@ -186,6 +197,20 @@ export function createVisualSurface(
     scratch.v = Math.min(Math.max(gy - cy, 0), 1);
   };
 
+  /**
+   * Единственная реализация билинейной формы поверхности: и высота под точкой,
+   * и высота в заданной клетке, и нормаль читают её. Второй копии формулы быть
+   * не должно — расхождение с ней и есть расхождение с картинкой (REND-9).
+   */
+  const sample = (cell: number, u: number, v: number): number => {
+    const base = cell * 4;
+    const h00 = corners[base]!;
+    const h10 = corners[base + 1]!;
+    const h11 = corners[base + 2]!;
+    const h01 = corners[base + 3]!;
+    return h00 * (1 - u) * (1 - v) + h10 * u * (1 - v) + h11 * u * v + h01 * (1 - u) * v;
+  };
+
   return {
     get hasCurvature(): boolean {
       return curvature !== null;
@@ -221,15 +246,15 @@ export function createVisualSurface(
 
     heightAt(wx: number, wy: number): number {
       locate(wx, wy);
-      const base = scratch.cell * 4;
-      const { u, v } = scratch;
-      const h00 = corners[base]!;
-      const h10 = corners[base + 1]!;
-      const h11 = corners[base + 2]!;
-      const h01 = corners[base + 3]!;
-      return (
-        h00 * (1 - u) * (1 - v) + h10 * u * (1 - v) + h11 * u * v + h01 * (1 - u) * v
-      );
+      return sample(scratch.cell, scratch.u, scratch.v);
+    },
+
+    heightInCell(cellX: number, cellY: number, wx: number, wy: number): number {
+      const cx = Math.min(Math.max(cellX, 0), width - 1);
+      const cy = Math.min(Math.max(cellY, 0), height - 1);
+      const u = Math.min(Math.max(wx / tile - cx, 0), 1);
+      const v = Math.min(Math.max(wy / tile - cy, 0), 1);
+      return sample(cy * width + cx, u, v);
     },
 
     normalAt(wx: number, wy: number, out: SurfaceNormal): SurfaceNormal {

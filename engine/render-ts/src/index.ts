@@ -85,15 +85,46 @@ export type { CellRect, TerrainGeometryData, TerrainOptions } from './subsystems
 export { ModelsSubsystem } from './subsystems/models.js';
 export type { ModelsOptions } from './subsystems/models.js';
 
+// Сервисы вьюпорта редактора: picking по видимому изображению (REND-15) и
+// служебные наложения подсистемой рендера (REND-16). Игровой клиент ни того, ни
+// другого не собирает — наложений в его кадре нет по конструкции.
+export { ViewportPicking, createPickProxy, createPickRay } from './picking.js';
+export type {
+  InstanceProxySource,
+  PickHit,
+  PickKind,
+  PickProxy,
+  PickProxySource,
+  PickProxyVisitor,
+  PickRay,
+  ViewportPickingOptions,
+  ViewportPoint,
+} from './picking.js';
+export { OverlaySubsystem } from './subsystems/overlays.js';
+export type {
+  OverlayAxis,
+  OverlayCells,
+  OverlayColors,
+  OverlayGizmo,
+  OverlayGrid,
+  OverlayHandle,
+  OverlayHandleForm,
+  OverlayHighlight,
+  OverlayItem,
+  OverlayOptions,
+} from './subsystems/overlays.js';
+
 // Построение инстансов из нормализованных данных ассета (THREE-половина mdxModel).
 export {
   buildBones,
   buildClips,
   buildSharedModel,
   createModelInstance,
+  modelBounds,
 } from './model/build.js';
 export type {
   InstanceOptions,
+  ModelBounds,
   ModelInstance,
   SharedMeshData,
   SharedModelData,
