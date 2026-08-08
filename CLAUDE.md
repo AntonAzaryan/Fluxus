@@ -26,11 +26,11 @@ Game content lives in `content/` and never inside an engine package (`game-conte
 
 ## The spec is the source of truth
 
-`openspec/specs/` (27 capabilities, 308 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
+`openspec/specs/` (27 capabilities, 317 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
 
 - Requirements carry historical IDs (`DET-1`, `NET-15`, `FOW-4`…) in `### Requirement:` headers — preserve them; a new requirement takes the next free number of its prefix.
 - Changes go through the OpenSpec workflow: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`, etc. (the `openspec-*` skills in `.claude/skills/`). Do not edit specs outside this process.
-- The spec covers more than the TS packages — `editor` (TypeScript on top of the engine packages, web + desktop, roadmap stage 12) is a capability with no code under `engine/`. Capability ≠ package.
+- Capability ≠ package. `editor` (roadmap stage 12) lives in two packages outside `engine/` and reaches into three more capabilities' specs (`rendering`, `camera`, `serialization`); `pathfinding` is a seam with no algorithm behind it. Which requirements of `editor` have code, which are partial and which were out of the pass — `docs/reviews/2026-08-08-editor-coverage.md`.
 - Spec-writing context and rules — `openspec/config.yaml`.
 - Layer overview, roadmap, the mechanism-vs-policy split, open questions — `docs/architecture.md` (alongside `docs/one-pager.md`).
 - **Work not yet done is written down, not remembered.** `openspec list` is the live queue of proposed changes; the roadmap table in `docs/architecture.md` says what each stage is for and in what order. A change whose `proposal.md` exists while `specs`/`design`/`tasks` are empty is a deliberate stub — read its `## Notes` and continue with `/opsx:update <name>`.
@@ -63,6 +63,8 @@ npm run sim -- <scenario.json>           # CLI scenario run (bin/sim.mjs)
 npm run golden                           # regenerate golden baselines (UPDATE_GOLDEN=1)
 npm run schemas                          # regenerate engine/schemas/*.json (UPDATE_SCHEMAS=1)
 ```
+
+The editor's web app runs from the root as `npm run dev -w @game-mvp/editor-ui` (Vite; `app/vite.config.ts` serves `content/` as the content tree and adds the tree-listing endpoint the web environment host needs — a `vite build` has neither listing nor write, and says so, ED-12).
 
 `engine/tests/golden/` holds `*.scenario.json` / `*.golden.json` pairs — bitwise baselines of a scenario run. `match-*` pairs are recorded loopback matches (CLI-10): the scenario is written by `integration-ts` (`npm run record`), the golden by the core adapter. `golden.test.ts` compares them exactly; if behavior changed **deliberately and per spec**, regenerate with `npm run golden` from the repository root (re-records matches, then rewrites core baselines) and include the baseline diff in the commit. JSON schemas in `engine/schemas/` are generated from the core — never edit by hand, only via `npm run schemas`.
 
