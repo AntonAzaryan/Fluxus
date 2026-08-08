@@ -570,6 +570,14 @@
       "source": "d6076f16",
       "translated": "d1d792d0"
     },
+    "validation.reason.editor.decorationVisual.missingVisual": {
+      "source": "2408131a",
+      "translated": "683ac90b"
+    },
+    "validation.reason.editor.decorationVisual.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
     "validation.reason.editor.placementPrefab.missingPrefab": {
       "source": "f10d3e9c",
       "translated": "2286e5c6"
@@ -625,6 +633,10 @@
     "validation.rule.editor.curvatureGrid": {
       "source": "cc663f83",
       "translated": "882dd046"
+    },
+    "validation.rule.editor.decorationVisual": {
+      "source": "8d3f6bfb",
+      "translated": "11c7dfe0"
     },
     "validation.rule.editor.placementPrefab": {
       "source": "1d9e808b",

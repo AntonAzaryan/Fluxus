@@ -30,6 +30,7 @@ import {
   CURVATURE_RULE,
   DEFAULT_PAIR_KINDS,
   DEFAULT_PLACEMENT_SITES,
+  DECORATION_VISUAL_RULE,
   LOAD_SCENE,
   MANIFEST_RULE,
   PLACEMENT_PREFAB_RULE,
@@ -411,5 +412,79 @@ describe('ED-19: запись расстановки на несуществую
       [MANIFEST]: { kind: 'manifest', value: MANIFEST_VALUE },
     });
     expect(report.issues).toHaveLength(0);
+  });
+});
+
+describe('PRES-2: ссылка decoration на запись манифеста', () => {
+  const PRESENTATION = 'content/scenes/arena.presentation.json';
+  const WITH_DECORATIONS = {
+    entities: { grunt: { model: 'models/grunt.mdx' } },
+    decorations: { grass: { model: 'models/grass.mdx' } },
+  };
+
+  it('неразрешимый `visual` подсвечивается адресно и с именем в причине', () => {
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [MANIFEST]: { kind: 'manifest', value: WITH_DECORATIONS },
+      [PRESENTATION]: {
+        kind: 'presentation',
+        value: { decorations: [{ visual: 'grass', x: 0, y: 0 }, { visual: 'ghost', x: 1, y: 1 }] },
+      },
+    });
+    const issue = report
+      .forDocument(PRESENTATION)
+      .find((found) => found.ruleId === DECORATION_VISUAL_RULE)!;
+    expect(issue.path).toEqual(['decorations', 1, 'visual']);
+    expect(issue.received).toBe('ghost');
+    expect(issue.reasonParams['name']).toBe('ghost');
+    // Рантайм переживает это заглушкой (ASSET-6) — значит предупреждение, а не
+    // запрет сохранять.
+    expect(issue.severity).toBe('warning');
+    // Известное — оба раздела в одном пространстве ключей (ASSET-9).
+    expect(knownOf(issue)).toEqual(['grass', 'grunt']);
+  });
+
+  it('вид из раздела сущностей ссылке годится: копии в decoration-виды не требуется', () => {
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [MANIFEST]: { kind: 'manifest', value: WITH_DECORATIONS },
+      [PRESENTATION]: { kind: 'presentation', value: { decorations: [{ visual: 'grunt', x: 0, y: 0 }] } },
+    });
+    expect(report.forDocument(PRESENTATION)).toHaveLength(0);
+  });
+
+  it('незагруженный манифест правило молчит, а не объявляет все ссылки битыми', () => {
+    const report = check({
+      [PRESENTATION]: { kind: 'presentation', value: { decorations: [{ visual: 'ghost', x: 0, y: 0 }] } },
+    });
+    expect(report.issues).toHaveLength(0);
+  });
+
+  it('запись decoration-вида рассинхронизацией пары «prefab — запись» не считается (ASSET-9)', () => {
+    // ED-19 нормирует пару для сим-сущностей; у decoration сим-стороны нет, и
+    // раздел decoration-видов в находки `prefabForVisual` попадать не должен.
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [MANIFEST]: { kind: 'manifest', value: WITH_DECORATIONS },
+    });
+    expect(report.issues.filter((found) => found.ruleId === PREFAB_FOR_VISUAL_RULE)).toEqual([]);
+  });
+
+  it('адрес списка — параметр правила, а не его знание (ED-25)', () => {
+    const rules = crossDocumentRules(DEFAULT_PAIR_KINDS, DEFAULT_PLACEMENT_SITES, undefined, [
+      { kind: 'presentation', path: ['props'] },
+    ]);
+    const report = check(
+      {
+        [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+        [MANIFEST]: { kind: 'manifest', value: WITH_DECORATIONS },
+        [PRESENTATION]: { kind: 'presentation', value: { props: [{ visual: 'ghost', x: 0, y: 0 }] } },
+      },
+      rules,
+    );
+    const issue = report
+      .forDocument(PRESENTATION)
+      .find((found) => found.ruleId === DECORATION_VISUAL_RULE)!;
+    expect(issue.path).toEqual(['props', 0, 'visual']);
   });
 });
