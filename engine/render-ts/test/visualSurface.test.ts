@@ -1,7 +1,8 @@
 /**
- * Визуальная поверхность террейна (REND-9): непрерывность внутри уровня,
- * отсутствие «перетекания» кривизны через cliff-границу, амплитуда меньше
- * полушага, источник поверхности с догрузкой карты и несовпадением сетки.
+ * Визуальная поверхность террейна (REND-9): гладкость внутри уровня (C1 —
+ * сходятся и высота, и наклон), отсутствие «перетекания» кривизны через
+ * cliff-границу, амплитуда меньше полушага, источник поверхности с догрузкой
+ * карты и несовпадением сетки.
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
@@ -36,6 +37,17 @@ function flatGrid() {
   });
 }
 
+/** 4×4, плоский уровень 0 — плато, по которому рисуется кривизна. */
+function plateauGrid() {
+  return createTerrainGrid({
+    width: 4,
+    height: 4,
+    tileSize: FIXED_ONE,
+    levels: ['0000', '0000', '0000', '0000'],
+    flags: ['....', '....', '....', '....'],
+  });
+}
+
 /** 2×2: левый столбец — уровень 0, правый — уровень 1, рамп нет. */
 function cliffGrid() {
   return createTerrainGrid({
@@ -65,9 +77,7 @@ describe('createVisualSurface (REND-9)', () => {
     // Центры клеток: бугор под "7", впадина под "g".
     expect(surface.heightAt(1.5, 1)).toBeGreaterThan(0);
     expect(surface.heightAt(2.5, 1)).toBeLessThan(0);
-    // Высота непрерывна на границах клеток (C0); нормаль билинейной формы на
-    // границе может ломаться (хребет в узле) — её дрожание гасит временнóе
-    // сглаживание наклона (REND-10), непрерывности здесь не требуется.
+    // Высота непрерывна на границах клеток.
     for (const border of [1, 2, 3]) {
       expect(surface.heightAt(border - 1e-6, 0.7)).toBeCloseTo(surface.heightAt(border + 1e-6, 0.7), 4);
     }
@@ -75,6 +85,39 @@ describe('createVisualSurface (REND-9)', () => {
     const slope = surface.normalAt(0.7, 1.0, normal());
     expect(slope.x).toBeLessThan(-1e-3); // вершина восточнее — нормаль валится на запад
     expect(slope.z).toBeGreaterThan(0.9); // амплитуда мала — наклон умеренный
+  });
+
+  it('на границе клеток одного уровня сходятся и высота, и наклон (C1)', () => {
+    // Смещения разные по обеим осям — иначе тангенциальная производная нулевая
+    // с обеих сторон и сравнивать было бы нечего.
+    const surface = createVisualSurface(
+      plateauGrid(),
+      STEP,
+      curvatureOf(4, 4, ['.7g.', '7.g5', 'g5..', '..71']),
+    );
+
+    let tilted = 0;
+    const probe = (ax: number, ay: number, bx: number, by: number): void => {
+      expect(surface.heightAt(ax, ay)).toBeCloseTo(surface.heightAt(bx, by), 5);
+      const before = surface.normalAt(ax, ay, normal());
+      const after = surface.normalAt(bx, by, normal());
+      // Хребта в узле нет: наклон по обе стороны границы один и тот же.
+      expect(before.x).toBeCloseTo(after.x, 4);
+      expect(before.y).toBeCloseTo(after.y, 4);
+      expect(before.z).toBeCloseTo(after.z, 4);
+      if (Math.hypot(before.x, before.y) > 1e-3) tilted++;
+    };
+
+    for (const border of [1, 2, 3]) {
+      for (const along of [0.3, 1.7, 2.5, 3.4]) {
+        probe(border - 1e-6, along, border + 1e-6, along); // вертикальные границы
+        probe(along, border - 1e-6, along, border + 1e-6); // горизонтальные
+      }
+    }
+    // Проверка не вырождена: на границах поверхность местами наклонена.
+    expect(tilted).toBeGreaterThan(0);
+    // И внутри клетки наклон точно есть — сглаживание не сплющило рельеф.
+    expect(Math.abs(surface.normalAt(1.5, 1.5, normal()).x)).toBeGreaterThan(1e-3);
   });
 
   it('амплитуда ограничена меньше полушага: бугор не прочитывается как соседний уровень (REND-7)', () => {
@@ -101,6 +144,24 @@ describe('createVisualSurface (REND-9)', () => {
     expect(n.y).toBeCloseTo(0, 6);
   });
 
+  it('через cliff-границу не усредняются и нормали: кромка плато не скругляется', () => {
+    const grid = cliffGrid();
+    // Кривизна только у верхней клетки плато — плато наклонено вдоль кромки.
+    const surface = createVisualSurface(grid, STEP, curvatureOf(2, 2, ['.7', '..']));
+    const lower = surface.normalInCell(0, 0, 1, 0.5, normal());
+    const upper = surface.normalInCell(1, 0, 1, 0.5, normal());
+    // Одна и та же мировая точка на кромке: снизу — нормаль низины, сверху —
+    // нормаль плато. Усреднить их некому, потому что усреднения нет вовсе.
+    expect(lower.x).toBeCloseTo(0, 6);
+    expect(lower.y).toBeCloseTo(0, 6);
+    expect(lower.z).toBeCloseTo(1, 6);
+    expect(Math.abs(upper.y)).toBeGreaterThan(1e-2);
+    // И высоты на кромке расходятся на ступень — силуэт остался резким.
+    expect(surface.heightInCell(1, 0, 1, 0.5) - surface.heightInCell(0, 0, 1, 0.5)).toBeGreaterThan(
+      STEP / 2,
+    );
+  });
+
   it('за краем сетки отвечает ближайшая клетка — запрос тотален', () => {
     const surface = createVisualSurface(cliffGrid(), STEP, null);
     expect(surface.heightAt(-5, -5)).toBeCloseTo(0, 6);
@@ -110,7 +171,7 @@ describe('createVisualSurface (REND-9)', () => {
 });
 
 describe('геометрия с кривизной (REND-9)', () => {
-  it('пол с поверхностью повторяет её углы; без поверхности — прежние ступени', () => {
+  it('пол с поверхностью повторяет её форму; без поверхности — прежние ступени', () => {
     const grid = flatGrid();
     const surface = createVisualSurface(grid, STEP, curvatureOf(4, 2, ['7777', '7777']));
     const curved = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 4, 2, surface);
@@ -126,22 +187,55 @@ describe('геометрия с кривизной (REND-9)', () => {
     for (let i = 2; i < flat.positions.length; i += 3) expect(flat.positions[i]).toBe(0);
   });
 
+  it('сцена без карты кривизны собирает ТУ ЖЕ геометрию, что карта из одних точек', () => {
+    const grid = flatGrid();
+    // Карта задана, но пустая: узловые смещения нулевые — клетка остаётся одним
+    // квадом, и позиции совпадают с прежними ступенями побитово.
+    const empty = createVisualSurface(grid, STEP, curvatureOf(4, 2, ['....', '....']));
+    const none = createVisualSurface(grid, STEP, null);
+    const withMap = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 4, 2, empty);
+    const withSurface = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 4, 2, none);
+    const stairs = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 4, 2);
+
+    // Пре-change ожидание: квад на клетку, четыре вершины, все на нуле.
+    expect(stairs.positions.length).toBe(4 * 2 * 4 * 3);
+    expect(withMap.positions.length).toBe(stairs.positions.length);
+    expect([...withMap.positions]).toEqual([...stairs.positions]);
+    expect([...withSurface.positions]).toEqual([...stairs.positions]);
+    expect([...withMap.indices]).toEqual([...stairs.indices]);
+    // Нормали пустой карты — вертикали площадки, как и у ступеней.
+    for (let i = 0; i < withMap.normals!.length; i += 3) {
+      expect(withMap.normals![i]).toBeCloseTo(0, 6);
+      expect(withMap.normals![i + 1]).toBeCloseTo(0, 6);
+      expect(withMap.normals![i + 2]).toBeCloseTo(1, 6);
+    }
+    // Стенок на плоской арене нет ни там, ни там; на обрыве без кривизны —
+    // прежний одиночный квад на отрезок.
+    const cliff = cliffGrid();
+    const flatCliff = createVisualSurface(cliff, STEP, curvatureOf(2, 2, ['..', '..']));
+    const wallsPlain = buildWallGeometry(cliff, STEP);
+    const wallsField = buildWallGeometry(cliff, STEP, flatCliff);
+    expect([...wallsField.positions]).toEqual([...wallsPlain.positions]);
+  });
+
   it('стенка тянется до фактических визуальных кромок (skirt)', () => {
     const grid = cliffGrid();
     const surface = createVisualSurface(grid, STEP, curvatureOf(2, 2, ['.7', '.7']));
     const walls = buildWallGeometry(grid, STEP, surface);
-    // Верхние кромки стенок совпадают с углами приподнятого плато, а не с level×step.
+    // Верхние кромки стенок идут по полю плато, а не по level × step.
     const tops: number[] = [];
-    for (let i = 2; i < walls.positions.length; i += 3) {
-      const z = walls.positions[i]!;
+    for (let i = 0; i < walls.positions.length; i += 3) {
+      const z = walls.positions[i + 2]!;
       if (z > STEP / 2) tops.push(z);
     }
     expect(tops.length).toBeGreaterThan(0);
-    const [c00, , , c01] = surface.cornerHeights(1, 0);
-    for (const top of tops) {
-      expect([c00, c01, surface.cornerHeights(1, 1)[2], surface.cornerHeights(1, 1)[3]].some(
-        (h) => Math.abs(h - top) < 1e-6,
-      )).toBe(true);
+    for (let i = 0; i < walls.positions.length; i += 3) {
+      const y = walls.positions[i + 1]!;
+      const z = walls.positions[i + 2]!;
+      if (z <= STEP / 2) continue;
+      // Кромка — выборка поля верхней клетки в той же точке отрезка.
+      const cellY = Math.min(Math.max(Math.floor(y - 1e-9), 0), 1);
+      expect(z).toBeCloseTo(surface.heightInCell(1, cellY, 1, y), 6);
     }
   });
 });
