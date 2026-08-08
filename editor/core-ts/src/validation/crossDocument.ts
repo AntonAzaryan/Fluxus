@@ -294,14 +294,36 @@ export function placementPrefabRule(
  * поломан, а валидатор ассетов работает по разобранному манифесту и на
  * поломанном отказывает целиком. Правило обязано подсветить ссылку и тогда.
  */
+const VISUAL_SECTIONS: readonly JsonPath[] = Object.freeze([
+  ENTITIES_PATH,
+  MANIFEST_DECORATIONS_PATH,
+]);
+
 function visualKeysOf(value: JsonValue | undefined): readonly string[] {
   if (value === undefined) return [];
   const names: string[] = [];
-  for (const path of [ENTITIES_PATH, MANIFEST_DECORATIONS_PATH]) {
+  for (const path of VISUAL_SECTIONS) {
     const section = getAtPath(value, path);
     if (isJsonObject(section)) names.push(...Object.keys(section));
   }
   return names;
+}
+
+/**
+ * Известные визуальные ключи вместе с адресами, по которым они лежат. Отдельно
+ * от `collect` потому, что адрес здесь не один: пространство ключей одно, а
+ * разделов манифеста два (ASSET-9), и назвать в находке только `entities`
+ * значило бы отправить исправляющего не туда — вид, которого не хватает,
+ * заводится в любом из двух.
+ */
+function collectVisuals(documents: readonly EditorDocument[], run: ValidationRun): Known {
+  const names = new Set<string>();
+  const targets: DocumentPathRef[] = [];
+  for (const document of documents) {
+    for (const name of visualKeysOf(run.valueOf(document.id))) names.add(name);
+    for (const path of VISUAL_SECTIONS) targets.push({ documentId: document.id, path });
+  }
+  return { names, sorted: [...names].sort(compareIds), targets: Object.freeze(targets) };
 }
 
 /**
@@ -331,7 +353,7 @@ export function decorationVisualRule(
       // редактора, а не о документах.
       const manifests = run.documentsOfKind(kinds.manifest);
       if (manifests.length === 0) return;
-      const known = collect(manifests, ENTITIES_PATH, visualKeysOf, run);
+      const known = collectVisuals(manifests, run);
       for (const site of sites) {
         if (site.kind !== run.document.kind) continue;
         const list = getAtPath(run.document.value, site.path);
