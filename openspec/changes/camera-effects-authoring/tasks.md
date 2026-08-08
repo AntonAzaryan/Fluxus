@@ -1,14 +1,21 @@
+## 0. Порядок в очереди
+
+- [ ] 0.1 Убедиться, что `editor-viewport-ergonomics` синхронизирован в главную спеку раньше этого change: он занимает `CAM-8`, здесь взят `CAM-9` (`proposal.md`, «Порядок в очереди»). Если порядок перевернулся — переименовать требование обратно в `CAM-8` во всех файлах этого change'а и перевести `editor-viewport-ergonomics` на `CAM-9`; дырой в нумерации `camera` оставлять нельзя
+- [ ] 0.2 Убедиться, что `dedup-normative-duplicates` ещё НЕ синхронизирован: дельта `ASSET-8` здесь построена на действующем тексте главной спеки. Если он ушёл раньше — заменить второй абзац дельты на его редакцию (текст приведён в `proposal.md` дословно) перед синхронизацией
+- [ ] 0.3 После синхронизации этого change'а перестроить дельту `ASSET-8` в `dedup-normative-duplicates` по слитому тексту — тем же приёмом, каким `terminology-sweep` перестроен по слитому `REND-1`
+- [ ] 0.4 Координация по файлам с соседями по очереди: `editor/ui-ts/src/areas/sceneProject.ts` и `editor/ui-ts/app/assembly.ts` правит и `editor-authoring-areas` (его WP8) — регистрация правил движка (задача 5.3) и регистрация двух новых областей сходятся в этих двух файлах
+
 ## 1. Форма описания в модуле ассетов
 
 - [ ] 1.1 В `engine/assets-ts/src/manifest.ts` объявить контракт описания рядом с `CameraEffectDef`: `CameraEffectKind = 'impulse' | 'lasting'`, `CameraEffectParamSpec { name, defaultValue, min?, max? }`, `CameraEffectTypeSpec { id, kind, params }`, `CameraEffectsDescription { types, binding: Record<CameraEffectKind, readonly CameraEffectParamSpec[]> }`; фабрики эффекта в контракте нет — она render-специфична (design.md, «Описание живёт в камере, а его форма — в модуле ассетов»)
 - [ ] 1.2 Экспортировать новые типы из `engine/assets-ts/src/index.ts`
 
-## 2. Описание типов эффектов в камере (CAM-8)
+## 2. Описание типов эффектов в камере (CAM-9)
 
 - [ ] 2.1 В `engine/render-ts/src/camera/effects.ts` объявить дескрипторы рядом с их классами: `SHAKE_TYPE` (`impulse`; `frequency`, `maxOffset`, `maxRoll`, `decay`) и `SWAY_TYPE` (`lasting`; `rollAmp`, `yawAmp`, `fovAmp`, `frequency`, `fadeSeconds`) — умолчания и границы осмысленности в дескрипторе, а не в отдельной константе
 - [ ] 2.2 Вывести `DEFAULT_SHAKE`/`DEFAULT_SWAY` из дескрипторов (`defaults(spec)`), чтобы умолчание не жило в двух местах; сигнатуры конструкторов `TraumaShake`/`SwayEffect` не менять
 - [ ] 2.3 Привести классы к контрактам вида: `ImpulseEffect { trigger(strength) }` (переименование `TraumaShake.addTrauma`), `LastingEffect { setActive(active) }` (у `SwayEffect` уже есть); поправить вызовы в `engine/render-ts/test/cameraEffects.test.ts`
-- [ ] 2.4 Новый `engine/render-ts/src/camera/effectTypes.ts`: `CAMERA_EFFECTS_DESCRIPTION` — замороженное описание (`types` из дескрипторов + `binding.impulse` = `amplitude`, `radius`), поиск типа по id; ни одной человекочитаемой строки в файле (CAM-8)
+- [ ] 2.4 Новый `engine/render-ts/src/camera/effectTypes.ts`: `CAMERA_EFFECTS_DESCRIPTION` — замороженное описание (`types` из дескрипторов + `binding.impulse` = `amplitude`, `radius`), поиск типа по id; ни одной человекочитаемой строки в файле (CAM-9)
 - [ ] 2.5 Экспортировать описание и типы дескрипторов из `engine/render-ts/src/index.ts`
 
 ## 3. Диспетчер строит эффекты по описанию (CAM-6)
