@@ -23,6 +23,7 @@ export { type DescriptionResolver } from './descriptions.js';
 export {
   buildEditorCatalog,
   type CatalogArea,
+  type CatalogAuthoringSuspension,
   type CatalogEditableType,
   type CatalogOperation,
   type CatalogParameter,

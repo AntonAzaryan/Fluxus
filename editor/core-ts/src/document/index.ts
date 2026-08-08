@@ -12,6 +12,7 @@ export { DEFAULT_HISTORY_DEPTH } from './history.js';
 export type { HistoryEntryView, HistorySnapshot } from './history.js';
 export { createEditorSession } from './session.js';
 export type {
+  AuthoringSuspension,
   EditorSession,
   EditorSessionOptions,
   OperationOutcome,

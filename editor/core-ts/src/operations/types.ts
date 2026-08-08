@@ -141,3 +141,57 @@ export class OperationError extends Error {
     if (details?.received !== undefined) this.received = details.received;
   }
 }
+
+/**
+ * Код отказа «авторинг приостановлен». Отдельно от класса ошибки: класс живёт в
+ * памяти одного процесса, а код переживает границу — сериализованный отказ
+ * внешнему потребителю (ED-30) сохраняет ровно его.
+ */
+export const AUTHORING_SUSPENDED = 'authoring.suspended';
+
+/**
+ * Что именно отклонено. Набор закрыт и совпадает с набором входов сессии,
+ * меняющих значение документа: применение операции, начало взаимодействия,
+ * отмена и повтор. Перечень уходит в каталог (ED-30) — внешний потребитель
+ * узнаёт границу запрета из описания, а не из серии отказов.
+ */
+export const AUTHORING_ACTIONS = ['apply', 'begin', 'undo', 'redo'] as const;
+
+export type AuthoringAction = (typeof AUTHORING_ACTIONS)[number];
+
+const ACTION_SUBJECT: Readonly<Record<AuthoringAction, string>> = {
+  apply: 'применение операции',
+  begin: 'начало взаимодействия',
+  undo: 'отмена операции',
+  redo: 'повтор операции',
+};
+
+/**
+ * Отказ авторингу, пока он приостановлен (ED-9: в превью операции авторинга
+ * недоступны). Наследник `OperationError`, а не отдельный тип, по той же
+ * причине, по которой отказ операции вообще структурен: потребитель, уже
+ * разбирающий отказы операции, обязан разобрать и этот, не заводя второй ветки
+ * `catch`. Своё у него — код, отклонённое действие и причины приостановки.
+ *
+ * Причины приходят от того, кто приостановил, а не из строкового ресурса
+ * редактора: приостановку берут снаружи (превью — только первый её случай), и
+ * фиксированный текст «авторинг недоступен» был бы вторым набором формулировок
+ * (ED-28) и сказал бы меньше, чем названная причина.
+ */
+export class AuthoringSuspendedError extends OperationError {
+  readonly code: typeof AUTHORING_SUSPENDED = AUTHORING_SUSPENDED;
+  readonly action: AuthoringAction;
+  readonly reasons: readonly string[];
+
+  constructor(action: AuthoringAction, operationId: string, reasons: readonly string[]) {
+    super(operationId, 'авторинг приостановлен');
+    this.name = 'AuthoringSuspendedError';
+    this.action = action;
+    this.reasons = Object.freeze([...reasons]);
+    // Своё сообщение вместо унаследованного: отмена и повтор операциями реестра
+    // не являются, и префикс «операция "…"» назвал бы у них пустое имя — когда
+    // отменять нечего, имени нет вовсе.
+    const named = operationId === '' ? '' : ` "${operationId}"`;
+    this.message = `${ACTION_SUBJECT[action]}${named}: авторинг приостановлен (${this.reasons.join('; ')})`;
+  }
+}

@@ -35,6 +35,15 @@
  * инструмент, забывший так сделать, показывал бы результат перетаскивания
  * только по отпускании кнопки. Гарантия принадлежит слою, который правит
  * документ, а не тем, кто на него смотрит.
+ *
+ * По тем же основаниям здесь же живёт приостановка авторинга — «в превью
+ * операции авторинга недоступны, превью MUST NOT записывать что-либо в
+ * документы» (ED-9). Держать это одной недоступностью элементов интерфейса
+ * (ED-26) значит держать запрет на слое, который не пишет: вызов
+ * `applyOperation` мимо интерфейса — а ED-29 прямо требует, чтобы операции были
+ * исполнимы без него, — прошёл бы в документы посреди прогона. Поэтому запрет
+ * стоит там же, где стоит весь остальной запрет писать: в сессии. Интерфейсу
+ * остаётся аффорданс (показать недоступным), а не правило.
  */
 import {
   DescriptorMinter,
@@ -66,7 +75,9 @@ import type { DocumentId, DocumentKind, DocumentPathRef, EditorDocument, OpenDoc
 import { checkParams } from '../operations/params.js';
 import { createOperationRegistry, type OperationRegistry } from '../operations/registry.js';
 import {
+  AuthoringSuspendedError,
   OperationError,
+  type AuthoringAction,
   type AuthoringOperation,
   type OperationContext,
   type OperationParams,
@@ -115,6 +126,27 @@ export interface OperationTransaction {
   cancel(): void;
 }
 
+/**
+ * Право снять взятую приостановку авторинга (ED-9) — и единственный способ её
+ * снять. Метода «возобнови авторинг» у сессии нет намеренно: он был бы именем,
+ * которым любой вызывающий отменяет чужой запрет. Назвать чужую приостановку
+ * нечем — её значение получил тот, кто её взял, ровно как отписку от событий
+ * получает подписавшийся.
+ *
+ * Приостановок может быть несколько сразу, и они не спорят: каждая — заявка
+ * «пока я работаю, писать нельзя», а не владение режимом. Авторинг возвращается,
+ * когда снята последняя. Отказывать второму заявителю значило бы, что чужой
+ * прогон делает его работу невыполнимой, а ждать в headless-слое нечем.
+ */
+export interface AuthoringSuspension {
+  /** Причина, названная при взятии; она же приходит в отказ. */
+  readonly reason: string;
+  /** Действует ли ещё именно эта приостановка. */
+  readonly active: boolean;
+  /** Снимает ровно эту приостановку; повторный вызов ничего не делает. */
+  resume(): void;
+}
+
 export type SessionEventKind =
   | 'opened'
   | 'closed'
@@ -123,7 +155,9 @@ export type SessionEventKind =
   | 'undone'
   | 'redone'
   | 'cancelled'
-  | 'saved';
+  | 'saved'
+  | 'suspended'
+  | 'resumed';
 
 /**
  * Оповещение для вьюпорта и панелей (ED-15: изображение обновляется не позже
@@ -162,6 +196,31 @@ export interface EditorSession {
   beginOperation(operationId: string, params?: OperationParams): OperationTransaction;
   /** Идёт ли взаимодействие: пока идёт, второй операции не начать. */
   readonly pending: boolean;
+  /**
+   * Приостанавливает авторинг (ED-9): применение операций, начало
+   * взаимодействий, отмена и повтор отклоняются `AuthoringSuspendedError`, пока
+   * приостановка действует. Причина обязательна и непуста — она и есть то, что
+   * узнаёт получивший отказ.
+   *
+   * Незакрытое взаимодействие приостановки не переживает: оно отменяется здесь
+   * же, документы возвращаются к состоянию до его начала, и подписчики узнают об
+   * этом обычным `cancelled` (ED-15). Именно здесь, а не у того, кто
+   * приостанавливает: «превью MUST NOT записывать что-либо в документы» не может
+   * зависеть от того, вспомнил ли вызывающий про открытый мазок.
+   *
+   * Открытие, закрытие и отметка о сохранении под запрет не попадают: значений
+   * документов они не меняют, а запрещена ED-9 именно запись в них. Полный
+   * перечень покрытого объявлен каталогом (ED-30).
+   */
+  suspendAuthoring(reason: string): AuthoringSuspension;
+  /** Приостановлен ли авторинг сейчас — тот же вопрос, на который отвечает отказ. */
+  readonly authoringSuspended: boolean;
+  /**
+   * Причины действующих приостановок, в порядке взятия. Читается без попытки
+   * что-нибудь написать: внешний потребитель (ED-29, ED-30) вправе узнать
+   * состояние, а не выяснять его отказом.
+   */
+  suspensionReasons(): readonly string[];
   canUndo(): boolean;
   canRedo(): boolean;
   undo(): boolean;
@@ -194,7 +253,23 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
   const minter = new DescriptorMinter();
   const documents = new Map<DocumentId, DocumentRecord>();
   const listeners = new Set<(event: SessionEvent) => void>();
+  // Множество, а не флаг: приостановок бывает несколько сразу, и снимает каждую
+  // тот, кто её взял. Порядок вставки сохраняется — причины называются в том
+  // порядке, в каком приостановки брались.
+  const suspensions = new Set<{ readonly reason: string }>();
   let transaction: Transaction | undefined;
+
+  const reasons = (): readonly string[] => [...suspensions].map((suspension) => suspension.reason);
+
+  /**
+   * Единственная точка отказа: всякий вход, меняющий значение документа,
+   * проходит через неё. Одна — чтобы «что именно запрещено в приостановке»
+   * читалось в одном месте, а не собиралось из четырёх похожих условий.
+   */
+  const refuseWhenSuspended = (action: AuthoringAction, operationId: string): void => {
+    if (suspensions.size === 0) return;
+    throw new AuthoringSuspendedError(action, operationId, reasons());
+  };
 
   const requireDocument = (id: DocumentId): DocumentRecord => {
     const record = documents.get(id);
@@ -246,6 +321,8 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     #params: JsonValue = null;
     #result: JsonValue | undefined;
     #open = true;
+    /** Закрыто приостановкой авторинга, а не тем, кто взаимодействие вёл (ED-9). */
+    #abandoned = false;
 
     constructor(operation: AuthoringOperation) {
       this.#operation = operation;
@@ -422,7 +499,27 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
      * изменённым и будет назван. Молчание отказа означает ровно то, что
      * взаимодействие ничего не изменило и объявлять было нечего.
      */
+    /**
+     * Отмена, которую делает приостановка авторинга, а не ведущий
+     * взаимодействие. Отдельным именем, чтобы отличать её потом: держащий
+     * транзакцию о ней не знал, и его собственный `cancel` уже ничего не
+     * находит.
+     */
+    abandon(): void {
+      // Отметка ставится ПОСЛЕ отмены, а не до: до неё эта отмена сама
+      // отказалась бы — она и есть та отмена, о которой отметка говорит.
+      this.cancel();
+      this.#abandoned = true;
+    }
+
     cancel(): void {
+      // Отмена того, что уже отменила приостановка, — не ошибка: просят ровно
+      // того, что произошло, и произошло целиком (правки нет, записи истории
+      // нет). Отказ здесь ронял бы обработчик «бросить начатое» у каждого, кто
+      // ведёт взаимодействие, — то есть требовал бы от него помнить про чужую
+      // приостановку. Отмена после `commit` по-прежнему отказ: там просьба
+      // ложна, правка в истории.
+      if (this.#abandoned && !this.#open) return;
       this.#assertOpen();
       this.#open = false;
       transaction = undefined;
@@ -443,6 +540,12 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     }
 
     #assertOpen(): void {
+      // Причина закрытия называется, а не сводится к «уже закрыто»: продолжить
+      // или закрыть взаимодействие, которое сняла приостановка, пытается тот,
+      // кто о ней не знал, и «уже закрыто» не сказало бы ему, чем именно.
+      if (this.#abandoned) {
+        throw new OperationError(this.operationId, 'взаимодействие снято приостановкой авторинга (ED-9)');
+      }
       if (!this.#open) throw new OperationError(this.operationId, 'взаимодействие уже закрыто');
     }
   }
@@ -653,14 +756,25 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
   }
 
   /**
-   * `announce` — объявлять ли первое применение событием `extended` (ED-15).
-   * Одношаговый вызов закрывает взаимодействие тем же вызовом, и наблюдать его
-   * промежуточное состояние было некому: событие о нём было бы вторым
-   * оповещением об одной и той же правке, то есть лишней перерисовкой у всех
-   * подписчиков. Взаимодействие, которое остаётся открытым, объявляет о себе с
-   * первого же применения — оно уже видно автору.
+   * `action` различает два входа — одношаговое применение и начало
+   * взаимодействия, — и из него же следует, объявлять ли первое применение
+   * событием `extended` (ED-15). Одношаговый вызов закрывает взаимодействие тем
+   * же вызовом, и наблюдать его промежуточное состояние было некому: событие о
+   * нём было бы вторым оповещением об одной и той же правке, то есть лишней
+   * перерисовкой у всех подписчиков. Взаимодействие, которое остаётся открытым,
+   * объявляет о себе с первого же применения — оно уже видно автору. Тем же
+   * различием отказ называет, что именно отклонено (ED-30).
    */
-  const start = (operationId: string, params: OperationParams, announce: boolean): Transaction => {
+  const start = (
+    action: Extract<AuthoringAction, 'apply' | 'begin'>,
+    operationId: string,
+    params: OperationParams,
+  ): Transaction => {
+    // Первым делом и до всего прочего: приостановленный авторинг — состояние
+    // сессии, а не свойство конкретной операции, и отвечать на «примени» разбором
+    // параметров операции, которую всё равно не применят, значит отвечать не то.
+    refuseWhenSuspended(action, operationId);
+    const announce = action === 'begin';
     if (transaction !== undefined) {
       throw new OperationError(operationId, `взаимодействие "${transaction.operationId}" ещё не закрыто`);
     }
@@ -772,21 +886,65 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     applyOperation(operationId, params = {}) {
       // Одношаговый вызов — то же взаимодействие, просто из одного применения:
       // открыть и закрыть его сразу, а не завести второй путь исполнения.
-      return start(operationId, params, false).commit();
+      return start('apply', operationId, params).commit();
     },
 
     beginOperation(operationId, params = {}) {
-      return start(operationId, params, true);
+      return start('begin', operationId, params);
     },
 
     get pending() {
       return transaction !== undefined;
     },
 
-    canUndo: () => history.canUndo(),
-    canRedo: () => history.canRedo(),
+    get authoringSuspended() {
+      return suspensions.size > 0;
+    },
+
+    suspensionReasons: () => reasons(),
+
+    suspendAuthoring(reason) {
+      if (reason.trim() === '') {
+        throw new Error('приостановка авторинга без причины не берётся: отказ назвал бы пустое основание');
+      }
+      // Взаимодействие снимается ДО того, как приостановка начнёт действовать:
+      // снятие возвращает документы к состоянию до его начала, то есть само
+      // является правкой, и отказывать ему было бы отказом убрать провизорное
+      // состояние — оно тогда пережило бы вход в превью (ED-9, ED-18).
+      transaction?.abandon();
+      const taken = { reason };
+      const first = suspensions.size === 0;
+      suspensions.add(taken);
+      if (first) emit({ kind: 'suspended', documentIds: [], paths: [] });
+      return {
+        reason,
+        get active() {
+          return suspensions.has(taken);
+        },
+        resume() {
+          // Повторный вызов молчит: право снять — своё, и снимать им дважды
+          // нечего. Отказ здесь заставлял бы держащего помнить, снимал ли он уже.
+          if (!suspensions.delete(taken)) return;
+          if (suspensions.size === 0) emit({ kind: 'resumed', documentIds: [], paths: [] });
+        },
+      };
+    },
+
+    // Доступность отвечается тем же слоем, что и отказ: интерфейс спрашивает
+    // «можно ли», а не выводит это из своего режима (ED-26 — показать
+    // недоступным; ED-9 — почему). Незакрытое взаимодействие в этот ответ не
+    // входит: оно принадлежит спрашивающему, он его и ведёт, — а приостановку
+    // мог взять кто угодно.
+    canUndo: () => suspensions.size === 0 && history.canUndo(),
+    canRedo: () => suspensions.size === 0 && history.canRedo(),
 
     undo() {
+      // Отмена и повтор — авторинг наравне с операциями: они меняют значения
+      // документов, а «превью MUST NOT записывать что-либо в документы» (ED-9)
+      // сказано про запись, а не про её происхождение. Прогон собран из текущего
+      // состояния документов (ED-9), и отмена посреди него оставила бы мир
+      // прогона описанием документов, которых уже нет.
+      refuseWhenSuspended('undo', history.peekUndo()?.operationId ?? '');
       if (transaction !== undefined) throw new Error('undo во время взаимодействия недоступен');
       const entry = history.takeUndo();
       if (entry === undefined) return false;
@@ -795,6 +953,7 @@ export function createEditorSession(options: EditorSessionOptions = {}): EditorS
     },
 
     redo() {
+      refuseWhenSuspended('redo', history.peekRedo()?.operationId ?? '');
       if (transaction !== undefined) throw new Error('redo во время взаимодействия недоступен');
       const entry = history.takeRedo();
       if (entry === undefined) return false;

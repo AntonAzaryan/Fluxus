@@ -6,8 +6,16 @@
  */
 export { createOperationRegistry, describeOperations } from './registry.js';
 export type { OperationDescription, OperationParamDescription, OperationRegistry } from './registry.js';
-export { OPERATION_PARAM_TYPES, OperationError, SESSION_SCOPED_TYPES } from './types.js';
+export {
+  AUTHORING_ACTIONS,
+  AUTHORING_SUSPENDED,
+  AuthoringSuspendedError,
+  OPERATION_PARAM_TYPES,
+  OperationError,
+  SESSION_SCOPED_TYPES,
+} from './types.js';
 export type {
+  AuthoringAction,
   AuthoringOperation,
   OperationContext,
   OperationParams,

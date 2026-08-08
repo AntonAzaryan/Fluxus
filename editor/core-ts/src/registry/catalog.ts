@@ -17,6 +17,7 @@
  * там, где о нём забыли, ровно как отдельно поддерживаемый файл каталога.
  */
 import type { OperationDescription, OperationParamDescription } from '../operations/registry.js';
+import { AUTHORING_ACTIONS, AUTHORING_SUSPENDED, type AuthoringAction } from '../operations/types.js';
 import type { ContributionReader } from './contribution.js';
 import { compareIds } from './contribution.js';
 import type { DescriptionResolver } from './descriptions.js';
@@ -101,12 +102,43 @@ export interface CatalogValidationRule {
   readonly appliesTo: readonly string[];
 }
 
+/**
+ * Приостановка авторинга в каталоге (ED-9, ED-30). Каталог говорит, что такое
+ * состояние существует, каким кодом сессия отказывает и какие входы отказ
+ * покрывает: потребитель, прочитавший каталог операций и получивший отказ на
+ * вызов, иначе узнавал бы о целом состоянии редактора из текста ошибки.
+ *
+ * Чего здесь нет — того, приостановлен ли авторинг ПРЯМО СЕЙЧАС. Каталог
+ * строится из реестров и сессии не видит; живой флаг в нём был бы снимком,
+ * протухающим к моменту прочтения, — состояние спрашивают у сессии
+ * (`authoringSuspended`), у которой оно одно. Нет здесь и описания из
+ * строкового ресурса: причину называет тот, кто приостановил, и фиксированный
+ * текст был бы вторым набором формулировок (ED-28), который вдобавок знает
+ * меньше самой причины.
+ */
+export interface CatalogAuthoringSuspension {
+  /** Код в `AuthoringSuspendedError.code` — то, что переживает сериализацию отказа. */
+  readonly refusal: typeof AUTHORING_SUSPENDED;
+  /** Входы сессии, которые отказ покрывает: применение, начало, отмена, повтор. */
+  readonly covers: readonly AuthoringAction[];
+}
+
 export interface EditorCatalog {
   readonly operations: readonly CatalogOperation[];
   readonly areas: readonly CatalogArea[];
   readonly editableTypes: readonly CatalogEditableType[];
   readonly validationRules: readonly CatalogValidationRule[];
+  readonly authoringSuspension: CatalogAuthoringSuspension;
 }
+
+/**
+ * Описание берётся из констант слоя операций, а не пишется здесь второй раз:
+ * набор покрываемых входов объявляет тот, кто ими и отказывает.
+ */
+const AUTHORING_SUSPENSION: CatalogAuthoringSuspension = Object.freeze({
+  refusal: AUTHORING_SUSPENDED,
+  covers: AUTHORING_ACTIONS,
+});
 
 /** Собирает каталог из реестров. Вызывается на каждый запрос, ничего не кэширует. */
 export function buildEditorCatalog(sources: CatalogSources): EditorCatalog {
@@ -153,6 +185,7 @@ export function buildEditorCatalog(sources: CatalogSources): EditorCatalog {
         appliesTo: [...rule.appliesTo].sort(compareIds),
       }),
     ),
+    authoringSuspension: AUTHORING_SUSPENSION,
   };
 }
 

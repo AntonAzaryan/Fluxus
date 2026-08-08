@@ -108,6 +108,19 @@ export class OperationHistory {
     return this.#redo.length > 0;
   }
 
+  /**
+   * Ближайшая к отмене запись, не снимая её. Нужна отказу: он называет
+   * операцию, которую отменять, и тем адресуем (ED-30). Снять её отказ права не
+   * имеет — отказ ничего не меняет по определению.
+   */
+  peekUndo(): HistoryEntry | undefined {
+    return this.#undo.at(-1);
+  }
+
+  peekRedo(): HistoryEntry | undefined {
+    return this.#redo.at(-1);
+  }
+
   takeUndo(): HistoryEntry | undefined {
     const entry = this.#undo.pop();
     if (entry !== undefined) this.#redo.push(entry);
