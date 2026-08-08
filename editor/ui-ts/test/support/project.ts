@@ -124,6 +124,27 @@ export function surfaceHit(x: number, y: number, cell = 0): ScenePick {
   };
 }
 
+/**
+ * Попадание в клетку сетки — то, чем picking отвечает кисти (REND-15): индекс
+ * клетки, её координаты и признак отсутствия пола. Мировая точка здесь центр
+ * клетки: кисти она не нужна, но попадания без неё рендер не отдаёт.
+ */
+export function cellHit(cellX: number, cellY: number, width: number, noFloor = false): ScenePick {
+  return {
+    kind: 'surface',
+    handle: null,
+    key: null,
+    x: cellX + 0.5,
+    y: cellY + 0.5,
+    z: 0,
+    cell: cellY * width + cellX,
+    cellX,
+    cellY,
+    noFloor,
+    wall: false,
+  };
+}
+
 /** Попадание в размещённый объект: ключ уже переведён набором (REND-11). */
 export function entityHit(key: string): ScenePick {
   return {

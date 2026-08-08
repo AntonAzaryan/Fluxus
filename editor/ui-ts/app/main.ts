@@ -32,6 +32,7 @@ import {
 import type { WorkspaceArea } from '../src/index.js';
 import { createSceneArea } from '../src/areas/scene.js';
 import { registerPlacementOperations } from '../src/areas/scenePlacement.js';
+import { registerTerrainOperations } from '../src/areas/sceneTerrain.js';
 import { systemsArea } from '../src/areas/systems.js';
 
 /**
@@ -69,10 +70,12 @@ const contributions = createEditorContributions<WorkspaceArea>();
 contributions.areas.register(createSceneArea({ host }));
 contributions.areas.register(systemsArea);
 
-// Операции расстановки — вклад области, а не часть ядра редактора (ED-25,
-// ED-29): реестр один и тот же для интерфейса и для вызова без интерфейса.
+// Операции расстановки и кистей — вклады области, а не часть ядра редактора
+// (ED-25, ED-29): реестр один и тот же для интерфейса и для вызова без него.
 const session = createEditorSession({
-  operations: registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+  operations: registerTerrainOperations(
+    registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+  ),
 });
 
 mountWorkspaceFrame(

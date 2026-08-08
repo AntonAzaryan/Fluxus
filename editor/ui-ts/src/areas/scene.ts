@@ -44,7 +44,18 @@ import {
 } from './sceneInteraction.js';
 import { prefabNames } from './scenePlacement.js';
 import {
+  BRUSH_LEVELS,
+  BRUSH_SIZES,
+  TERRAIN_BRUSH_MODES,
+  createBrushTool,
+  type BrushSurface,
+  type BrushTool,
+  type TerrainBrushMode,
+} from './sceneBrush.js';
+import { CURVATURE_OFFSETS } from './sceneTerrain.js';
+import {
   PLACEMENT_LIST,
+  TERRAIN_ASSET,
   draftOf,
   openSceneProject,
   type SceneProject,
@@ -68,6 +79,30 @@ export const SCENE_NODES = {
 export const DEFAULT_SCENE_IDS: SceneProjectIds = {
   config: 'scenes/duel.scene.json',
   visuals: 'visuals/manifest.json',
+};
+
+/**
+ * Инструменты вьюпорта области (ED-25). Их три, и вьюпорт у них один: указатель
+ * — выделение и расстановка (ED-16, ED-17), две кисти — уровни и кривизна
+ * (ED-10, ED-11). Активный получает указатель целиком, а наложения области
+ * складываются из наборов всех: подсветка выделения не гаснет оттого, что автор
+ * взял кисть.
+ */
+export const SCENE_TOOLS = ['pointer', 'terrain', 'curvature'] as const;
+export type SceneToolId = (typeof SCENE_TOOLS)[number];
+
+/** Подписи инструментов и режимов кисти — ключи ресурсов (ED-27). */
+const TOOL_LABELS: Readonly<Record<SceneToolId, string>> = {
+  pointer: 'ui.area.scene.toolPointer',
+  terrain: 'ui.area.scene.toolTerrain',
+  curvature: 'ui.area.scene.toolCurvature',
+};
+
+const BRUSH_MODE_LABELS: Readonly<Record<TerrainBrushMode, string>> = {
+  level: 'ui.area.scene.brushLevel',
+  ramp: 'ui.area.scene.brushRamp',
+  removeFloor: 'ui.area.scene.brushRemoveFloor',
+  restoreFloor: 'ui.area.scene.brushRestoreFloor',
 };
 
 /** Шаг колеса на нажатие кнопки бара: тот же вход зума, что у самого колеса (CAM-4). */
@@ -115,6 +150,10 @@ export interface SceneAreaState {
   project: SceneProject | null;
   /** Инструмент вьюпорта: выделение, расстановка, перемещение (ED-16, ED-17). */
   readonly tool: PlacementTool;
+  /** Кисти уровня, вида клетки и кривизны (ED-10, ED-11). */
+  readonly brush: BrushTool;
+  /** Кто из инструментов получает указатель; остальные его не видят вовсе. */
+  activeTool: SceneToolId;
   /** Вьюпорт со своим конвейером камеры; `null` — в этой среде рисовать нечем. */
   stage: SceneStage | null;
   /** Текущий кадр как функция документов (ED-15). */
@@ -139,6 +178,31 @@ export interface SceneAreaState {
 
 const message = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+/**
+ * Переключение инструмента вьюпорта. Оба незакрытых взаимодействия закрываются
+ * здесь, а не «не могут случиться»: смена инструмента — четвёртый путь бросить
+ * начатое рядом с потерей фокуса, нажатием поверх незакрытого и сносом области,
+ * и оставленная открытой транзакция запрещает и следующую операцию, и undo
+ * (ED-18).
+ */
+function activateTool(state: SceneAreaState, next: SceneToolId): void {
+  if (state.activeTool === next) return;
+  state.tool.pointer({ phase: 'cancel', x: 0, y: 0, additive: false });
+  state.brush.cancel();
+  state.activeTool = next;
+  if (next !== 'pointer') state.brush.setLayer(next);
+  state.refresh();
+}
+
+/** Слой кисти как вход инструмента: где лежит ассет и какого размера его сетка. */
+function brushSurface(
+  document: string,
+  path: readonly (string | number)[],
+  grid: { readonly width: number; readonly height: number } | null | undefined,
+): BrushSurface | null {
+  return grid === null || grid === undefined ? null : { target: { document, path }, grid };
+}
 
 /** Вьюпорт по умолчанию: рендер движка там, где есть чем рисовать (ED-1). */
 function defaultStage(
@@ -175,10 +239,13 @@ function start(state: SceneAreaState, setup: AreaSetup, options: SceneAreaOption
         announce: () => {
           state.refresh();
         },
-        // Инструмент живёт в записи состояния области и переживает уход в
-        // другую область (ED-23) — вместе с выделением, которое он ставит.
+        // Инструменты живут в записи состояния области и переживают уход в
+        // другую область (ED-23) — вместе с выделением, которое ставит один из
+        // них. Указатель получает ровно активный: что попадание значит, знает
+        // инструмент, а какой из них сейчас в руках — область (ED-25).
         pointer: (event) => {
-          state.tool.pointer(event);
+          if (state.activeTool === 'pointer') state.tool.pointer(event);
+          else state.brush.pointer(event);
         },
       });
       let config: unknown = undefined;
@@ -345,6 +412,9 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   // разошёлся бы с выбранным, не заводится.
   const prefabs = tool.prefabs;
   const placing = tool.mode === 'place';
+  // Настройки указателя недоступны, пока указатель не в руках (ED-26): кисть
+  // получает нажатия целиком, и «расстановка» при ней ничего бы не делала.
+  const pointing = state.activeTool === 'pointer';
 
   const act = (key: string, disabled: boolean, press: () => void): UiNode =>
     button({
@@ -357,15 +427,19 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   return [
     // Режим — состояние инструмента, и подпись показывает текущий, а не тот, в
     // который нажатие переведёт: иначе автор читает кнопку как индикатор.
-    act(placing ? 'ui.area.scene.toolPlace' : 'ui.area.scene.toolSelect', stage === null, () => {
-      tool.setMode(placing ? 'select' : 'place');
-    }),
+    act(
+      placing ? 'ui.area.scene.toolPlace' : 'ui.area.scene.toolSelect',
+      stage === null || !pointing,
+      () => {
+        tool.setMode(placing ? 'select' : 'place');
+      },
+    ),
     select({
       label: resourceText(resources, 'ui.area.scene.prefab'),
       value: tool.prefab ?? '',
       // Имя префаба — идентификатор документа, и локаль его не касается (ED-27).
       options: prefabs.map((name) => ({ value: name, label: documentValue(name) })),
-      disabled: !placing || prefabs.length === 0,
+      disabled: !placing || !pointing || prefabs.length === 0,
       onSelect: (value) => {
         tool.setPrefab(value);
       },
@@ -373,7 +447,7 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
     toggle({
       label: resourceText(resources, 'ui.area.scene.snap'),
       on: tool.snapping,
-      disabled: stage === null,
+      disabled: stage === null || !pointing,
       onChange: (on) => {
         tool.setSnapping(on);
       },
@@ -390,12 +464,101 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   ];
 }
 
+/**
+ * Выбор инструмента вьюпорта (ED-25): инструменты области делят один кадр, и
+ * какой из них получает указатель, автор видит и меняет здесь. Активный помечен
+ * акцентом — тем самым «включённым переключателем», за которым ED-22 акцент и
+ * закрепил; кисть без карты видимо недоступна, а не молча не срабатывает
+ * (ED-26).
+ */
+function toolBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
+  const { state, resources } = context;
+  return SCENE_TOOLS.map((id) =>
+    button({
+      label: resourceText(resources, TOOL_LABELS[id]),
+      variant: state.activeTool === id ? 'primary' : 'ghost',
+      disabled: state.stage === null || (id !== 'pointer' && !state.brush.available(id)),
+      onPress: () => {
+        activateTool(state, id);
+      },
+    }),
+  );
+}
+
+/**
+ * Настройки кисти (ED-10, ED-11). Появляются только вместе с самой кистью:
+ * уровень и смещение — величины, которые кисть кладёт в клетку, и держать их на
+ * виду постоянно значило бы показывать автору числа там, где ED-11 требует
+ * показывать рельеф.
+ *
+ * Величины — значения документа, а не подписи интерфейса: уровень уезжает в
+ * карту как есть, и локаль его не касается (ED-27).
+ */
+function brushBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
+  const { state, resources } = context;
+  const brush = state.brush;
+  if (state.activeTool === 'pointer' || !brush.available()) return [];
+
+  const numbers = (
+    key: string,
+    value: number,
+    values: readonly number[],
+    pick: (next: number) => void,
+  ): UiNode =>
+    select({
+      label: resourceText(resources, key),
+      value: String(value),
+      options: values.map((entry) => ({ value: String(entry), label: documentValue(String(entry)) })),
+      onSelect: (raw) => {
+        pick(Number(raw));
+      },
+    });
+
+  const painting = brush.layer === 'terrain';
+  return children(
+    painting
+      ? select({
+          label: resourceText(resources, 'ui.area.scene.brushMode'),
+          value: brush.mode,
+          options: TERRAIN_BRUSH_MODES.map((mode) => ({
+            value: mode,
+            label: resourceText(resources, BRUSH_MODE_LABELS[mode]),
+          })),
+          onSelect: (raw) => {
+            const next = TERRAIN_BRUSH_MODES.find((mode) => mode === raw);
+            if (next !== undefined) brush.setMode(next);
+          },
+        })
+      : undefined,
+    painting && brush.mode !== 'level'
+      ? undefined
+      : painting
+        ? numbers('ui.area.scene.brushLevel', brush.level, BRUSH_LEVELS, (next) => {
+            brush.setLevel(next);
+          })
+        : numbers('ui.area.scene.brushOffset', brush.offset, CURVATURE_OFFSETS, (next) => {
+            brush.setOffset(next);
+          }),
+    numbers('ui.area.scene.brushSize', brush.size, BRUSH_SIZES, (next) => {
+      brush.setSize(next);
+    }),
+    toggle({
+      label: resourceText(resources, 'ui.area.scene.grid'),
+      on: brush.showGrid,
+      onChange: (on) => {
+        brush.setShowGrid(on);
+      },
+    }),
+  );
+}
+
 function surface(context: AreaContext<SceneAreaState>): UiNode {
   const { state, resources } = context;
   const stage = state.stage;
   // Три источника одной причины, а не три способа её показать: не открылся
   // проект, не сошлись документы, не прошёл кадр (ED-8, ED-30).
   const failure = state.failure ?? state.draft?.failure ?? stage?.failure ?? null;
+  const mismatch = state.draft?.mismatch ?? null;
 
   const zoom = (steps: number, key: string): UiNode =>
     button({
@@ -437,7 +600,9 @@ function surface(context: AreaContext<SceneAreaState>): UiNode {
           }),
           zoom(-ZOOM_STEP, 'ui.area.scene.zoomIn'),
           zoom(ZOOM_STEP, 'ui.area.scene.zoomOut'),
+          ...toolBar(context),
           ...placementBar(context),
+          ...brushBar(context),
           // Причина — не оттенок: иконку, положение и текст ставит один вызов
           // (ED-8, ED-22), а сам текст приходит от ядра, а не сочиняется здесь.
           failure === null
@@ -448,6 +613,18 @@ function surface(context: AreaContext<SceneAreaState>): UiNode {
                   tone: 'error',
                 }),
                 { severity: 'error', reason: documentValue(failure) },
+              ),
+          // Несовпадение сеток — предупреждение, а не отказ (ASSET-7: рантайм
+          // переживает его игнором карты), но видно оно обязано быть сразу
+          // (ED-11). Величины приходят от документов, подпись — от ресурса.
+          mismatch === null
+            ? undefined
+            : withValidation(
+                statusChip({
+                  label: resourceText(resources, 'ui.area.scene.curvatureGrid'),
+                  tone: 'warning',
+                }),
+                { severity: 'warning', reason: documentValue(mismatch) },
               ),
         ),
       }),
@@ -549,6 +726,7 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
         stage: null,
         draft: null,
         failure: null,
+        activeTool: 'pointer',
         expanded: new Set([ids.config, SCENE_NODES.placements, SCENE_NODES.assets]),
         focusId: ids.config,
         refresh: () => undefined,
@@ -560,6 +738,14 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
           documentId: ids.config,
           list: PLACEMENT_LIST,
           ...(ids.position === undefined ? {} : { binding: ids.position }),
+          refresh: () => {
+            state.refresh();
+          },
+        }),
+        // Кисти правят документы теми же операциями и той же сессией, что и
+        // расстановка (ED-29): второго пути правки в области нет.
+        brush: createBrushTool({
+          session: setup.session,
           refresh: () => {
             state.refresh();
           },
@@ -596,15 +782,33 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
         prefabs:
           state.project === null ? [] : prefabNames(context.session.documentValue(state.project.configId)),
       });
+      // Кисть видит тот же кадр и те же документы: сетка — уже производная,
+      // выведенная ядром (TERR-5, REND-14), а не пересчитанная областью.
+      const project = state.project;
+      state.brush.attach({
+        picker: state.stage,
+        terrain:
+          project === null
+            ? null
+            : brushSurface(project.configId, TERRAIN_ASSET, state.draft?.grid),
+        curvature:
+          project === null || project.curvatureId === null
+            ? null
+            : brushSurface(project.curvatureId, [], state.draft?.curvature),
+      });
       // Набор наложений — функция состояния, а не история вызовов (REND-16): он
       // отдаётся ЦЕЛИКОМ на каждую сборку, а сводит его подсистема.
       //
       // Складывает его область, а не инструменты: `setOverlays` принимает полный
       // набор, и инструмент, зовущий его сам, погасил бы наложения соседа. Свои
       // наложения инструмент только называет — отсюда и `overlays()` без
-      // побочных действий. Кисть террейна (W3-2) добавит сюда своё слагаемое,
-      // а не второй вызов.
-      state.stage?.setOverlays([...state.tool.overlays()]);
+      // побочных действий. Кисть — слагаемое, а не второй вызов; её набор
+      // входит в сумму, только пока она в руках (ED-9: в чужом режиме кисть
+      // ничего не показывает).
+      state.stage?.setOverlays([
+        ...state.tool.overlays(),
+        ...(state.activeTool === 'pointer' ? [] : state.brush.overlays()),
+      ]);
       return {
         navigator: navigator(context),
         surface: surface(context),

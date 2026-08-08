@@ -106,6 +106,16 @@ export interface SceneDraft {
   readonly curvature: TerrainCurvatureMap | null;
   readonly placements: readonly ScenePlacement[];
   readonly failure: string | null;
+  /**
+   * Несовпадение сеток карты кривизны и террейна (ED-11: «при изменении
+   * размеров сетки террейна несоответствие карты кривизны SHALL подсвечиваться
+   * сразу»). Отдельно от `failure`, потому что это не ошибка: рантайм переживает
+   * несовпадение предупреждением и игнором карты (ASSET-7), и в редакторе оно
+   * тоже видимое состояние, а не отказ.
+   *
+   * Только величины — подпись к ним даёт строковый ресурс области (ED-27).
+   */
+  readonly mismatch: string | null;
 }
 
 /**
@@ -286,10 +296,23 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
     reasons.push(message(error));
   }
 
+  // Сравнение сеток — единственное, что складывается здесь из двух документов
+  // сразу: каждый валидатор видит свой ассет и о парном не знает (ASSET-7
+  // оставляет эту проверку потребителю, который держит обе стороны). Рендер
+  // делает то же самое для своей картинки, но говорит об этом в лог — а ED-11
+  // требует показать несовпадение автору, в редакторе.
+  const mismatch =
+    grid !== null &&
+    curvature !== null &&
+    (curvature.width !== grid.width || curvature.height !== grid.height)
+      ? `${curvature.width}×${curvature.height} ≠ ${grid.width}×${grid.height}`
+      : null;
+
   return {
     grid,
     curvature,
     placements,
     failure: reasons.length === 0 ? null : reasons.join('; '),
+    mismatch,
   };
 }
