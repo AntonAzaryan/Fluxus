@@ -519,12 +519,47 @@ describe('CameraRig: кадрирование по заданным границ
   it('точка наблюдения клампится инжектированными границами, а не поданным прямоугольником', () => {
     // Кадрируют по аргументу, а клампят по инжектированному (CAM-3, CAM-7):
     // прямоугольник смещён за пределы арены, и центр его туда не уводит.
-    const { rig, input } = makeRig({ bounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 } });
-    rig.frameBounds({ rect: { minX: 40, minY: 40, maxX: 54, maxY: 54 }, aspect: 16 / 9 });
+    const bounds = { minX: 0, minY: 0, maxX: 10, maxY: 10 };
+    const rect = { minX: 40, minY: 40, maxX: 54, maxY: 54 };
+    const instant = makeRig({ bounds });
+    instant.rig.frameBounds({ rect, aspect: 16 / 9, immediate: true });
+    instant.rig.update(instant.input, 1 / 60, null);
+    const margin = instant.rig.config.boundsMargin;
+    expect(instant.rig.focusX).toBeCloseTo(10 - margin, 6);
+    expect(instant.rig.focusY).toBeCloseTo(10 - margin, 6);
+
+    // Перелёт клампится тем же — и потому доезжает: назначение за границами
+    // арены оставило бы его незавершённым навсегда.
+    const eased = makeRig({ bounds });
+    eased.rig.frameBounds({ rect, aspect: 16 / 9 });
+    settle(eased.rig, eased.input, null, 120);
+    expect(eased.rig.focusX).toBeCloseTo(10 - margin, 6);
+    expect(eased.rig.focusY).toBeCloseTo(10 - margin, 6);
+  });
+
+  it('сглаженное применение — перелёт точки наблюдения, а не её телепорт', () => {
+    // «Оба применения» CAM-8: мгновенное ставит точку наблюдения сразу,
+    // сглаженное ведёт её тем же сглаживанием, что и прочие переходы (CAM-2).
+    // Половина кадра, прыгающая при сглаженной дистанции, перелётом не была бы.
+    const rect = arena(14);
+    const { rig, input } = makeRig({ startX: 0, startY: 0 });
+    rig.frameBounds({ rect, aspect: 16 / 9 });
     rig.update(input, 1 / 60, null);
-    const margin = rig.config.boundsMargin;
-    expect(rig.focusX).toBeCloseTo(10 - margin, 6);
-    expect(rig.focusY).toBeCloseTo(10 - margin, 6);
+    expect(rig.focusX).toBeGreaterThan(0);
+    expect(rig.focusX).toBeLessThan(6.5);
+    settle(rig, input, null, 240);
+    expect(rig.focusX).toBeCloseTo(7, 6);
+    expect(rig.focusY).toBeCloseTo(7, 6);
+
+    // Разовость перелёта: взявшего камеру в руки автора он не тянет обратно.
+    const taken = makeRig({ startX: 0, startY: 0 });
+    taken.rig.frameBounds({ rect, aspect: 16 / 9 });
+    taken.input.panX = -1;
+    settle(taken.rig, taken.input, null, 10);
+    taken.input.panX = 0;
+    const stopped = taken.rig.focusX;
+    settle(taken.rig, taken.input, null, 120);
+    expect(taken.rig.focusX).toBeCloseTo(stopped, 6);
   });
 
   it('кадр нулевого размера не даёт NaN: горизонталь просто не ограничивает', () => {

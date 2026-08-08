@@ -352,6 +352,15 @@ export class CameraRig {
   private distance: number;
   /** Перелёт центрирования к герою (CAM-2), гасится вводом панорамы. */
   private recentering = false;
+  /**
+   * Незакрытый сглаженный перелёт кадрирования (CAM-8) и его назначение — уже
+   * склампленное по инжектированным границам. Гасится вводом панорамы и
+   * переходом в follow тем же правилом, что и центрирование: обе просьбы
+   * разовые, и обе автор отменяет тем, что берёт камеру в руки (CAM-3).
+   */
+  private framing = false;
+  private framingX = 0;
+  private framingY = 0;
   /** Fly-состояние; за пределами fly не используется. */
   private flyX = 0;
   private flyY = 0;
@@ -419,6 +428,13 @@ export class CameraRig {
    * кадрирование не меняет — вызванное в fly, оно адресуется наземным величинам
    * и становится видимым при возврате из облёта.
    *
+   * Применений два (CAM-8). Мгновенное ставит и точку наблюдения, и обе
+   * дистанции разом — ради первого кадра потребителя. Сглаженное — перелёт тем
+   * же сглаживанием, что и прочие переходы (CAM-2): точка наблюдения едет к
+   * центру ровно так же, как её ведёт центрирование к герою, а дистанция —
+   * своим `zoomSmoothing`. Телепорт точки наблюдения при сглаженной дистанции
+   * перелётом не является: половина кадра прыгала бы, половина приезжала.
+   *
    * Геометрия. Точка наземного прямоугольника, отстоящая от центра на `s` вдоль
    * направления взгляда, лежит в кадровых координатах на глубине `s·cos p + d`
    * и на высоте `s·sin p` (p — наклон, d — дистанция). Условие «попадает в
@@ -460,21 +476,30 @@ export class CameraRig {
       cfg.maxDistance,
     );
 
-    this.targetX = (rect.minX + rect.maxX) / 2;
-    this.targetY = (rect.minY + rect.maxY) / 2;
-    // Клампится по ИНЖЕКТИРОВАННЫМ границам (CAM-3, CAM-7): кадрируют по
+    // Центр клампится по ИНЖЕКТИРОВАННЫМ границам (CAM-3, CAM-7): кадрируют по
     // аргументу, а клампят по инжектированному — поданный прямоугольник границ
-    // не подменяет.
-    this.clampToBounds();
+    // не подменяет. Клампится именно назначение, а не догоняющая его точка:
+    // перелёт к недостижимому назначению не кончился бы никогда.
+    const centerX = this.clampedX((rect.minX + rect.maxX) / 2);
+    const centerY = this.clampedY((rect.minY + rect.maxY) / 2);
     // Перелёт центрирования к герою (CAM-2) — такая же разовая просьба, и
     // оставленный незавершённым он утащил бы кадрированную точку обратно уже
     // следующим кадром.
     this.recentering = false;
 
     this.desiredDistance = distance;
-    // Мгновенное применение выставляет и сглаженную дистанцию: иначе первый
-    // кадр всё равно приезжает к ней сглаживанием `zoomSmoothing`.
-    if (request.immediate === true) this.distance = distance;
+    if (request.immediate === true) {
+      this.framing = false;
+      this.targetX = centerX;
+      this.targetY = centerY;
+      // Мгновенное применение выставляет и сглаженную дистанцию: иначе первый
+      // кадр всё равно приезжает к ней сглаживанием `zoomSmoothing`.
+      this.distance = distance;
+      return;
+    }
+    this.framing = true;
+    this.framingX = centerX;
+    this.framingY = centerY;
   }
 
   /** Fly владеет клавиатурой движения: ввод героя в симуляцию не уходит (CAM-2). */
@@ -526,10 +551,12 @@ export class CameraRig {
     if (panActive) {
       this.modeState = 'free';
       this.recentering = false;
+      this.framing = false;
     }
     if (input.followToggle && target !== null) {
       this.modeState = 'follow';
       this.recentering = false;
+      this.framing = false;
     }
     if (input.centerTap && this.modeState === 'free' && target !== null) {
       this.recentering = true;
@@ -564,6 +591,23 @@ export class CameraRig {
       this.targetY += panY * speed * dt;
       this.targetX -= input.dragDX * cfg.dragPanPerPx * zoomScale;
       this.targetY += input.dragDY * cfg.dragPanPerPx * zoomScale;
+
+      // Перелёт кадрирования (CAM-8) — тем же сглаживанием, что и центрирование
+      // к герою: назначение уже склампено, поэтому доехать до него можно, и
+      // доехавший перелёт садится в него точно, а не «в пределах epsilon».
+      if (this.framing) {
+        const s = ease(cfg.recenterSmoothing, dt);
+        this.targetX += (this.framingX - this.targetX) * s;
+        this.targetY += (this.framingY - this.targetY) * s;
+        if (
+          Math.hypot(this.framingX - this.targetX, this.framingY - this.targetY) <
+          cfg.recenterEpsilon
+        ) {
+          this.targetX = this.framingX;
+          this.targetY = this.framingY;
+          this.framing = false;
+        }
+      }
 
       const held = input.centerHeld && target !== null;
       if ((this.recentering || held) && target !== null) {
@@ -607,11 +651,23 @@ export class CameraRig {
    * с первым, как разошлись бы две реализации применения позы (CAM-1).
    */
   private clampToBounds(): void {
+    this.targetX = this.clampedX(this.targetX);
+    this.targetY = this.clampedY(this.targetY);
+  }
+
+  /** Та же граница с запасом, применённая к одной координате (CAM-3, CAM-7). */
+  private clampedX(v: number): number {
     const bounds = this.bounds;
-    if (bounds === null) return;
+    if (bounds === null) return v;
     const margin = this.config.boundsMargin;
-    this.targetX = clampInside(this.targetX, bounds.minX + margin, bounds.maxX - margin);
-    this.targetY = clampInside(this.targetY, bounds.minY + margin, bounds.maxY - margin);
+    return clampInside(v, bounds.minX + margin, bounds.maxX - margin);
+  }
+
+  private clampedY(v: number): number {
+    const bounds = this.bounds;
+    if (bounds === null) return v;
+    const margin = this.config.boundsMargin;
+    return clampInside(v, bounds.minY + margin, bounds.maxY - margin);
   }
 
   /** Мёртвая зона и кламп осей панорамы. */
