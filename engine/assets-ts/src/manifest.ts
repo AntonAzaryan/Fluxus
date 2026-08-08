@@ -7,17 +7,62 @@
  *
  * Манифест — политика, не механизм: какая модель у юнита, какой клип на какое
  * действие, какие лимиты у поворота головы — решает этот JSON, а не код.
+ *
+ * Разделов записей два (ASSET-9): `entities` ключуется sim-идентификатором, а
+ * `decorations` — ключом вида, за которым в симуляции нет ничего. Состав записи
+ * у них общий, пространство ключей — тоже одно, и разрешает ключ в запись одна
+ * функция (`resolveVisual`), а не каждый потребитель по-своему.
  */
 
 /** Ключ — sim-идентификатор (имя prefab'а/архетипа). */
 export interface VisualManifest {
   entities: Record<string, EntityVisual>;
+  /**
+   * Раздел decoration-видов (ASSET-9): записи того же состава, что записи
+   * сущностей, но за ключом которых в симуляции нет ничего — ни prefab'а, ни
+   * архетипа. Отдельный раздел, а не ключи в `entities`, потому что `entities`
+   * ключуется sim-идентификатором, а ED-19 требует подсвечивать «запись
+   * манифеста без prefab'а» как рассинхронизацию пары: попади decoration-виды
+   * туда, каждый из них стал бы находкой валидации.
+   *
+   * Ключи обоих разделов лежат в ОДНОМ пространстве (ASSET-9): потребитель
+   * разрешает визуальный ключ в запись одним способом (`resolveVisual`), а два
+   * раздела с пересекающимися именами сделали бы ответ зависящим от порядка
+   * просмотра. Поэтому пересечение имён — ошибка валидации манифеста.
+   */
+  decorations?: Record<string, EntityVisual>;
   /** Дефолт наклона по поверхности для записей без своего surfaceAlign (REND-10). */
   surfaceAlign?: SurfaceAlign;
   /** Presentation-данные террейна арены. */
   terrain?: { curvatureMap?: string };
   /** Секция эффектов камеры (ASSET-8); потребитель — `camera` CAM-6. */
   cameraEffects?: CameraEffectsSection;
+}
+
+/**
+ * Запись визуального ключа — одно место разрешения на оба раздела (ASSET-9).
+ * Потребители зовут его, а не читают раздел сами: пространство ключей одно, и
+ * выбор раздела не должен становиться решением каждого вызывающего.
+ *
+ * Порядок просмотра здесь ни на что не влияет: пересечение имён отвергается
+ * валидацией манифеста, поэтому ключ разрешается не более чем в одну запись.
+ */
+export function resolveVisual(
+  manifest: Pick<VisualManifest, 'entities' | 'decorations'>,
+  key: string,
+): EntityVisual | undefined {
+  return manifest.entities[key] ?? manifest.decorations?.[key];
+}
+
+/**
+ * Все визуальные ключи манифеста в одном пространстве (ASSET-9) — то, из чего
+ * автор выбирает вид для размещения (`presentation-scene` PRES-2) и по чему
+ * валидация редактора судит о разрешимости ссылки.
+ */
+export function visualKeys(
+  manifest: Pick<VisualManifest, 'entities' | 'decorations'>,
+): readonly string[] {
+  return [...Object.keys(manifest.entities), ...Object.keys(manifest.decorations ?? {})];
 }
 
 /**
@@ -369,12 +414,44 @@ export function validateManifest(
   if (!isRecord(doc)) {
     return { ok: false, errors: [`манифест: ожидался объект, получено ${typeName(doc)}`] };
   }
-  checkUnknownKeys(doc, ['entities', 'surfaceAlign', 'terrain', 'cameraEffects'], 'манифест', errors);
+  checkUnknownKeys(
+    doc,
+    ['entities', 'decorations', 'surfaceAlign', 'terrain', 'cameraEffects'],
+    'манифест',
+    errors,
+  );
   if (!isRecord(doc.entities)) {
     errors.push(`entities: обязательное поле — объект «prefab → визуал», получено ${typeName(doc.entities)}`);
   } else {
     for (const [name, entity] of Object.entries(doc.entities)) {
       validateEntity(entity, `entities.${name}`, errors);
+    }
+  }
+  // Раздел decoration-видов (ASSET-9): состав записи тот же, что у сущности, —
+  // валидируется тем же проходом. Неприменимые к decoration части записи
+  // (таблицы клипов, кости, дуга прыжка) ошибкой не считаются: запись одного
+  // состава на оба раздела дешевле, чем два состава, — смысла им просто не
+  // придаётся (REND-18).
+  if ('decorations' in doc) {
+    if (!isRecord(doc.decorations)) {
+      errors.push(
+        `decorations: ожидался объект «ключ вида → визуал», получено ${typeName(doc.decorations)}`,
+      );
+    } else {
+      for (const [name, entry] of Object.entries(doc.decorations)) {
+        validateEntity(entry, `decorations.${name}`, errors);
+      }
+      // Пространство визуальных ключей одно (ASSET-9): имя, занятое в обоих
+      // разделах, сделало бы разрешение ключа зависящим от порядка просмотра.
+      if (isRecord(doc.entities)) {
+        for (const name of Object.keys(doc.decorations)) {
+          if (name in doc.entities) {
+            errors.push(
+              `decorations.${name}: имя занято записью сущности — ключи разделов лежат в одном пространстве (ASSET-9)`,
+            );
+          }
+        }
+      }
     }
   }
   if ('cameraEffects' in doc) validateCameraEffects(doc.cameraEffects, errors);

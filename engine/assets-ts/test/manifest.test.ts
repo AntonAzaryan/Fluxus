@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { AssetService, manifestLoader, validateManifest } from '../src/index.js';
+import {
+  AssetService,
+  manifestLoader,
+  resolveVisual,
+  validateManifest,
+  visualKeys,
+} from '../src/index.js';
 import { MemoryAssetSource, bytesOf, settled } from './helpers.js';
 
 /** Полноценный валидный визуал — покрывает все поля EntityVisual. */
@@ -312,5 +318,65 @@ describe('validateManifest: вертикальное смещение инста
       { entities: { x: { model: 'm.mdx', verticalOffset: 1.5 } } },
       /verticalOffset: ожидался объект/,
     );
+  });
+});
+
+describe('validateManifest: раздел decoration-видов (ASSET-9)', () => {
+  const entities = { rock: { model: 'models/Rock.mdx' } };
+
+  it('вид без prefab\'а валиден и разрешается наравне с записью сущности', () => {
+    const result = validateManifest({
+      entities,
+      decorations: { grass: { model: 'models/Grass.mdx', defaultSkin: 'dry', skins: { dry: { '0': 't.png' } } } },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Разрешение — одно на оба раздела: потребитель не выбирает раздел сам.
+    expect(resolveVisual(result.manifest, 'grass')?.model).toBe('models/Grass.mdx');
+    expect(resolveVisual(result.manifest, 'rock')?.model).toBe('models/Rock.mdx');
+    expect(resolveVisual(result.manifest, 'nobody')).toBeUndefined();
+    expect(visualKeys(result.manifest)).toEqual(['rock', 'grass']);
+  });
+
+  it('раздела может не быть вовсе — это манифест без decoration-видов', () => {
+    const result = validateManifest({ entities });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.decorations).toBeUndefined();
+    expect(visualKeys(result.manifest)).toEqual(['rock']);
+  });
+
+  it('имя, занятое в обоих разделах, отвергается — и в причине названо оно', () => {
+    const errors = expectErrors(
+      { entities, decorations: { rock: { model: 'models/Rock.mdx' } } },
+      /decorations\.rock: имя занято записью сущности/,
+    );
+    expect(errors.join('\n')).toContain('ASSET-9');
+  });
+
+  it('состав записи тот же: ошибки адресуются путём внутри раздела', () => {
+    expectErrors({ entities, decorations: { grass: {} } }, /decorations\.grass\.model: обязательное поле/);
+    expectErrors({ entities, decorations: 7 }, /decorations: ожидался объект/);
+    expectErrors(
+      { entities, decorations: { grass: { model: 'g.mdx', scal: 2 } } },
+      /decorations\.grass\.scal: неизвестное поле/,
+    );
+  });
+
+  it('неприменимые к decoration части записи валидны и смысла не получают', () => {
+    // Таблицы клипов, кости и дуга прыжка производить не от чего (REND-18), но
+    // запись одного состава на оба раздела дешевле, чем два состава.
+    const result = validateManifest({
+      entities,
+      decorations: {
+        banner: {
+          model: 'models/Banner.mdx',
+          animations: { states: { idle: 'Stand' }, events: { death: 'Death' } },
+          boneControls: { head: { bone: 'Bone_Head', maxYawDeg: 30, smoothing: 0.2 } },
+          verticalOffset: { jumpArc: 2, fallSpeed: 5, fallDepth: 3 },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
   });
 });

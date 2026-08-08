@@ -1,0 +1,218 @@
+/**
+ * Парный presentation-документ сцены (`presentation-scene` PRES-1..3): то, что
+ * видно на арене, но не существует для симуляции, — decorations (`editor`
+ * ED-19).
+ *
+ * Документ — presentation-ассет наравне с манифестом и картой кривизны
+ * (ASSET-1): грузится этим модулем через реестр загрузчиков (ASSET-3),
+ * идентифицируется путём в дереве контента (ASSET-2) и через загрузчик конфига
+ * сцены (SER-7) не проходит. Канала влияния на симуляцию у него нет по
+ * построению, а не по дисциплине вызывающего (PRES-4).
+ *
+ * ## Парность именем, а не ссылкой
+ *
+ * Документ лежит рядом с конфигом сцены и называется базовым именем файла сцены
+ * (часть до первой точки) плюс `.presentation.json`. Ссылок между документами
+ * пары нет ни в одну сторону: правило имени даёт «ровно одна сцена у документа
+ * и ровно один документ у сцены» по построению, а поле-ссылка допускало бы и
+ * два документа на сцену, и две сцены на документ (PRES-1). Правило живёт здесь
+ * одной функцией на все пакеты — редактору и рантайму нужен один и тот же
+ * ответ.
+ *
+ * ## Величины — десятичные, и это не упущение
+ *
+ * Fixed-point (`fixed-point-math` FP-1) — дисциплина симуляции, а симуляции за
+ * этим документом нет: обратной конверсии float → fixed в потоке рендера не
+ * существует (`rendering` REND-1), и хранить Q16.16 значило бы конвертировать
+ * его в точке приёма ради величины, которой во float достаточно (PRES-3).
+ *
+ * Квантование при этом обязательно — иначе перетаскивание мышью пишет разряды,
+ * не воспроизводимые повторным жестом, и дифф правки перестаёт быть читаемым.
+ * Шаг десятичный (`DECORATION_POSITION_STEP`, `DECORATION_YAW_STEP`), квантует
+ * инструмент авторинга ВЫЗОВОМ отсюда (`quantizeDecoration*`), а не своим
+ * округлением: шаг — свойство формата, и второго его определения быть не
+ * должно. Квантуется записываемое, а не прочитанное: файл, написанный руками с
+ * большей точностью, переживает «открыл — сохранил» байт-в-байт (`editor`
+ * ED-21), поэтому валидация проверяет конечность числа и положительность
+ * масштаба, а не кратность шагу.
+ */
+
+/** Запись размещения decoration (PRES-2). Состав закрыт. */
+export interface DecorationRecord {
+  /** Ключ записи манифеста визуалов — любого из двух его разделов (ASSET-9). */
+  readonly visual: string;
+  /** Позиция в мировых единицах, десятичным числом. */
+  readonly x: number;
+  readonly y: number;
+  /** Курс долей оборота; нет — 0. */
+  readonly yaw?: number;
+  /** Положительный множитель поверх масштаба записи вида; нет — 1. */
+  readonly scale?: number;
+  /** Имя скина записи вида (`rendering` REND-6); нет — скин записи. */
+  readonly skin?: string;
+}
+
+/**
+ * Документ целиком (PRES-2). Единственное поле — упорядоченный список записей;
+ * отсутствующий и пустой список неразличимы, и то и другое означает слой без
+ * декораций.
+ */
+export interface PresentationScene {
+  readonly decorations: readonly DecorationRecord[];
+}
+
+/** Шаг квантования позиции и масштаба — 10⁻³ мировой единицы (PRES-3). */
+export const DECORATION_POSITION_STEP = 1e-3;
+
+/** Шаг квантования курса — 10⁻⁴ оборота (PRES-3). */
+export const DECORATION_YAW_STEP = 1e-4;
+
+/** Суффикс имени парного документа (PRES-1). */
+export const PRESENTATION_SUFFIX = '.presentation.json';
+
+/**
+ * Обратные величины шагов — число шагов в мировой единице и в обороте. Именно
+ * они, а не сами шаги, участвуют в арифметике квантования: шаг — отрицательная
+ * степень десяти и в double точно не представим, поэтому `Math.round(v / 1e-3)
+ * * 1e-3` даёт `0.12350000000000001` там, где `Math.round(v * 1000) / 1000`
+ * даёт `0.1235`. Дифф правки — главное, что автор видит при ревью контента
+ * (PRES-3), и хвост из шестнадцати разрядов делает его нечитаемым.
+ */
+const POSITION_STEPS_PER_UNIT = 1e3;
+const YAW_STEPS_PER_TURN = 1e4;
+
+/**
+ * Квантование к десятичному шагу. Округление к ближайшему, а не усечение:
+ * усечение смещало бы величину систематически в одну сторону, и «подвинул и
+ * вернул» давало бы непустой дифф — ровно то, ради чего квантование заведено.
+ */
+function quantizeTo(value: number, stepsPerUnit: number): number | null {
+  if (!Number.isFinite(value)) return null;
+  const steps = Math.round(value * stepsPerUnit);
+  if (!Number.isFinite(steps)) return null;
+  const quantized = steps / stepsPerUnit;
+  // `-0` — законное значение double и невидимое отличие от нуля в JSON (`-0`
+  // печатается как `0`), но сравнение значений его различает: правка, сменившая
+  // знак нуля, помечала бы документ несохранённым ни от чего.
+  return quantized === 0 ? 0 : quantized;
+}
+
+/** Позиция и масштаб — к шагу 10⁻³ (PRES-3); `null` — величина не представима. */
+export function quantizeDecorationLength(value: number): number | null {
+  return quantizeTo(value, POSITION_STEPS_PER_UNIT);
+}
+
+/** Курс — к шагу 10⁻⁴ оборота (PRES-3); `null` — величина не представима. */
+export function quantizeDecorationYaw(value: number): number | null {
+  return quantizeTo(value, YAW_STEPS_PER_TURN);
+}
+
+/**
+ * Парный документ сцены по её пути (PRES-1). Базовое имя — часть до ПЕРВОЙ
+ * точки: у `duel.scene.json` это `duel`, поэтому парный документ —
+ * `duel.presentation.json`, а не `duel.scene.presentation.json`. Путь считается
+ * от корня дерева контента (ASSET-2, `game-content` CONT-2), и каталог у пары
+ * общий: перенос обоих файлов пару сохраняет и ни байта внутри не трогает
+ * (CONT-5).
+ */
+export function presentationPathOf(scenePath: string): string {
+  const slash = scenePath.lastIndexOf('/');
+  const directory = slash < 0 ? '' : scenePath.slice(0, slash + 1);
+  const file = slash < 0 ? scenePath : scenePath.slice(slash + 1);
+  const dot = file.indexOf('.');
+  const base = dot < 0 ? file : file.slice(0, dot);
+  return `${directory}${base}${PRESENTATION_SUFFIX}`;
+}
+
+/** Сам ли это парный документ: у него пары нет, и искать её у него не нужно. */
+export function isPresentationPath(path: string): boolean {
+  return path.endsWith(PRESENTATION_SUFFIX);
+}
+
+function typeName(v: unknown): string {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'массив';
+  return typeof v;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Состав закрыт (PRES-2): ключ, которого формат не знает, — ошибка, а не игнор. */
+const DOCUMENT_KEYS: readonly string[] = ['decorations'];
+const RECORD_KEYS: readonly string[] = ['visual', 'x', 'y', 'yaw', 'scale', 'skin'];
+
+function validateRecord(entry: unknown, path: string, errors: string[]): void {
+  if (!isRecord(entry)) {
+    errors.push(`${path}: ожидался объект записи decoration, получено ${typeName(entry)}`);
+    return;
+  }
+  for (const key of Object.keys(entry)) {
+    if (RECORD_KEYS.includes(key)) continue;
+    // Сим-поля названы отдельно: `prefab` и переопределения компонентов в
+    // записи — не опечатка, а первый шаг к геймплейному влиянию в слое,
+    // который его не допускает (PRES-2, ED-19).
+    const simField = key === 'prefab' || key === 'overrides';
+    errors.push(
+      simField
+        ? `${path}.${key}: сим-поля в записи decoration нет и быть не может — сим-стороны у неё нет вовсе (PRES-2, ED-19)`
+        : `${path}.${key}: неизвестное поле (допустимы: ${RECORD_KEYS.join(', ')})`,
+    );
+  }
+
+  if (typeof entry.visual !== 'string' || entry.visual.length === 0) {
+    errors.push(
+      `${path}.visual: обязательное поле — ключ записи манифеста визуалов (непустая строка), получено ${typeName(entry.visual)}`,
+    );
+  }
+  for (const axis of ['x', 'y'] as const) {
+    const value = entry[axis];
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      errors.push(
+        `${path}.${axis}: обязательное поле — конечное число мировых единиц, получено ${typeName(value)}`,
+      );
+    }
+  }
+  if ('yaw' in entry && (typeof entry.yaw !== 'number' || !Number.isFinite(entry.yaw))) {
+    errors.push(`${path}.yaw: ожидался курс долей оборота (конечное число), получено ${typeName(entry.yaw)}`);
+  }
+  if ('scale' in entry) {
+    const scale = entry.scale;
+    if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0) {
+      errors.push(`${path}.scale: ожидалось положительное конечное число, получено ${typeName(scale)}`);
+    }
+  }
+  if ('skin' in entry && (typeof entry.skin !== 'string' || entry.skin.length === 0)) {
+    errors.push(`${path}.skin: ожидалось имя скина (непустая строка), получено ${typeName(entry.skin)}`);
+  }
+}
+
+/**
+ * Валидация парного документа (PRES-2, PRES-3). Ошибки собираются все разом и
+ * каждая адресует ЗАПИСЬ индексом, а не документ целиком: правка JSON не должна
+ * превращаться в угадывание, какая из сорока декораций сломана.
+ */
+export function validatePresentationScene(
+  doc: unknown,
+): { ok: true; scene: PresentationScene } | { ok: false; errors: string[] } {
+  const errors: string[] = [];
+  if (!isRecord(doc)) {
+    return { ok: false, errors: [`presentation-документ: ожидался объект, получено ${typeName(doc)}`] };
+  }
+  for (const key of Object.keys(doc)) {
+    if (!DOCUMENT_KEYS.includes(key)) {
+      errors.push(`${key}: неизвестное поле (допустимо: ${DOCUMENT_KEYS.join(', ')})`);
+    }
+  }
+  const list = doc.decorations;
+  if (list !== undefined && !Array.isArray(list)) {
+    errors.push(`decorations: ожидался список записей размещения, получено ${typeName(list)}`);
+  } else if (Array.isArray(list)) {
+    list.forEach((entry, index) => validateRecord(entry, `decorations[${index}]`, errors));
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  // Отсутствующий и пустой список неразличимы (PRES-2): наружу и то и другое
+  // выходит пустым списком, и потребителю не приходится различать их самому.
+  return { ok: true, scene: { decorations: Array.isArray(list) ? (list as DecorationRecord[]) : [] } };
+}
