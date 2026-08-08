@@ -80,6 +80,13 @@ export interface OverlayGizmo {
   readonly z: number;
   /** Разворот набора ручек вокруг вертикали, радианы; нет — мировые оси. */
   readonly yaw?: number;
+  /**
+   * Множитель размера ручек поверх размера подсистемы; нет — 1. Поле набора, а
+   * не настройка сборки: экранно-постоянный gizmo — состояние инструмента,
+   * зависящее от дистанции камеры, и держать его в конструкторе значило бы
+   * лишить редактора (ED-16) единственного способа его назначить.
+   */
+  readonly scale?: number;
   readonly handles: readonly OverlayHandle[];
 }
 
@@ -135,7 +142,7 @@ export interface OverlayOptions {
   /** Прокси инстансов — по ним рисуется подсветка в видимой позе (REND-16). */
   readonly instances?: InstanceProxySource;
   readonly colors?: Partial<OverlayColors>;
-  /** Размер ручек gizmo в мировых единицах. */
+  /** Базовый размер ручек gizmo в мировых единицах; набор множит его своим `scale`. */
   readonly handleSize?: number;
   /** Подъём наложений над поверхностью, чтобы они не спорили с полом по глубине. */
   readonly lift?: number;
@@ -452,6 +459,10 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
     if (arm === null || ring === null || materials === null) return;
     node.object.position.set(item.x, item.y, item.z);
     node.object.rotation.set(0, 0, item.yaw ?? 0);
+    // Размер живёт в узле, а не в геометрии: объёмы-прокси ручек заданы в
+    // локальных осях меша, и picking (REND-15) получает масштаб той же матрицей,
+    // какой ручка нарисована, — второго места, где он учитывается, нет.
+    node.object.scale.setScalar(item.scale ?? 1);
 
     for (const handle of item.handles) {
       const geometry = handle.form === 'translate' ? arm : ring;
@@ -589,6 +600,7 @@ function sameItem(a: OverlayItem, b: OverlayItem): boolean {
   if (a.kind === 'highlight' && b.kind === 'highlight') return a.entity === b.entity;
   if (a.kind === 'gizmo' && b.kind === 'gizmo') {
     if (a.x !== b.x || a.y !== b.y || a.z !== b.z || (a.yaw ?? 0) !== (b.yaw ?? 0)) return false;
+    if ((a.scale ?? 1) !== (b.scale ?? 1)) return false;
     if (a.handles.length !== b.handles.length) return false;
     return a.handles.every((handle, i) => {
       const other = b.handles[i]!;

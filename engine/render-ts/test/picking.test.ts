@@ -20,6 +20,7 @@ import {
   PresentationStage,
   ViewportPicking,
   VisualSurfaceSource,
+  createPickProxy,
   type CameraPose,
   type RenderContext,
   type ViewportPoint,
@@ -228,6 +229,46 @@ describe('попадание в поверхность (REND-15)', () => {
     expect(hit.z).toBeCloseTo(1, 4);
   });
 
+  it('правило верхней клетки то же на границе по Y, а не только по X', () => {
+    const grid = createTerrainGrid({
+      width: 4,
+      height: 4,
+      tileSize: FIXED_ONE,
+      levels: ['0000', '0000', '1111', '1111'],
+      flags: ['....', '....', '....', '....'],
+    });
+    const { picking } = makeRig(grid);
+    // Луч идёт с юга вниз под 45° и пересекает плоскость y = 2 на z = 1.5 —
+    // внутри стенки, подпирающей площадку уровня 1.
+    const hit = picking.pick(
+      { posX: 1.5, posY: 0.5, posZ: 3, yaw: Math.PI / 2, pitch: Math.PI / 4, roll: 0, fovDeg: 45 },
+      VIEWPORT,
+    )!;
+    expect(hit.wall).toBe(true);
+    expect(hit.cellX).toBe(1);
+    expect(hit.cellY).toBe(2); // клетка плато, а не низина перед ней
+    expect(hit.z).toBeCloseTo(1.5, 4);
+  });
+
+  it('рампа стенкой не считается: перепад на ней непрерывен (TERR-5)', () => {
+    const grid = createTerrainGrid({
+      width: 4,
+      height: 4,
+      tileSize: FIXED_ONE,
+      levels: ['0111', '0111', '0111', '0111'],
+      flags: ['^...', '^...', '^...', '^...'],
+    });
+    const { picking } = makeRig(grid);
+    // Наклонная площадка рампы поднимается от 0 до уровня 1 внутри клетки —
+    // луч приходит на саму поверхность, а не на вертикальную грань.
+    const hit = picking.pick(lookEastDown(0, 1.5, 1.8), VIEWPORT)!;
+    expect(hit.kind).toBe('surface');
+    expect(hit.wall).toBe(false);
+    expect(hit.cellX).toBe(0);
+    expect(hit.x).toBeCloseTo(0.6, 3);
+    expect(hit.z).toBeCloseTo(1.2, 3);
+  });
+
   it('правка сетки меняет ответ без пересоздания сервиса; повтор без правок даёт то же', () => {
     const { picking, source } = makeRig(flatGrid());
     const first = picking.pick(lookDown(1.5, 1.5), VIEWPORT)!;
@@ -367,6 +408,78 @@ describe('попадание в размещённый объект (REND-15, ED
     expect(picking.pick(lookDown(2.5, 1.5), VIEWPORT)!.kind).toBe('surface');
   });
 
+  it('объём заглушки — габариты её же геометрии, а не отдельно назначенный размер', () => {
+    const { models } = makeRig(flatGrid());
+    models.syncTick(
+      makeTickView([makeEntityView(1, { kind: 'Box', currX: 1.5, currY: 1.5, prevX: 1.5, prevY: 1.5 })]),
+    );
+    models.updateFrame(0.016, 1);
+
+    const placeholder = models.instanceFor(1)!.holder.children[0] as THREE.Mesh;
+    placeholder.geometry.computeBoundingBox();
+    const box = placeholder.geometry.boundingBox!;
+    const proxy = createPickProxy();
+    expect(models.proxyOf(1, proxy)).toBe(true);
+    // Заглушка сама и есть нарисованное: разъедься эти два места — picking
+    // промахивался бы по видимому объекту (REND-15, ASSET-4).
+    expect(proxy.minX).toBeCloseTo(box.min.x, 6);
+    expect(proxy.minY).toBeCloseTo(box.min.y, 6);
+    expect(proxy.minZ).toBeCloseTo(box.min.z, 6);
+    expect(proxy.maxX).toBeCloseTo(box.max.x, 6);
+    expect(proxy.maxY).toBeCloseTo(box.max.y, 6);
+    expect(proxy.maxZ).toBeCloseTo(box.max.z, 6);
+  });
+
+  it('инстанс, не получивший позы кадра, не участвует: в кадре его нет', () => {
+    const { picking, models, assets } = makeRig(flatGrid());
+    assets.resolve('model', MODEL_ID, makeBoxModel(0.2, 2));
+    // Сущность появилась в presentation-состоянии, но кадра ещё не было: holder
+    // стоит в мировом нуле, и попадание в него было бы попаданием в пустоту.
+    models.syncTick(
+      makeTickView([makeEntityView(1, { kind: 'Box', currX: 3.5, currY: 3.5, prevX: 3.5, prevY: 3.5 })]),
+    );
+    expect(picking.pick(lookDown(0.1, 0.1), VIEWPORT)!.kind).toBe('surface');
+
+    models.updateFrame(0.016, 1);
+    expect(picking.pick(lookDown(0.1, 0.1), VIEWPORT)!.kind).toBe('surface');
+    expect(picking.pick(lookDown(3.5, 3.5), VIEWPORT)!.entity).toBe(1);
+  });
+
+  it('инстанс, схлопнутый нулевым масштабом, не забирает попадания себе', () => {
+    const { picking, models, assets } = makeRig(flatGrid());
+    assets.resolve('model', MODEL_ID, makeBoxModel(0.2, 2));
+    const view = makeEntityView(1, { kind: 'Box', currX: 1.5, currY: 1.5, prevX: 1.5, prevY: 1.5 });
+    models.syncTick(makeTickView([{ ...view, scale: 0 }]));
+    models.updateFrame(0.016, 1);
+
+    // Преобразование схлопнутого инстанса необратимо: не отсекать по нему
+    // значило бы отдавать ему весь экран на нулевой дистанции.
+    expect(picking.pick(lookDown(3.5, 3.5), VIEWPORT)!.kind).toBe('surface');
+    expect(picking.pick(lookDown(1.5, 1.5), VIEWPORT)!.kind).toBe('surface');
+  });
+
+  /**
+   * Единственное место, где picking мог бы разойтись с кадром, — интерполяция
+   * (REND-2): в режиме правки её нет (REND-11), но в превью инстанс рисуется
+   * между двумя тиками. Расхождения не возникает и там: прокси — узел, а узел
+   * стоит ровно там, куда его поставил ПОСЛЕДНИЙ кадр, со своей альфой.
+   */
+  it('в интерполированном кадре попадание идёт по нарисованной позе, а не по позе тика', () => {
+    const { picking, models, assets } = makeRig(flatGrid());
+    assets.resolve('model', MODEL_ID, makeBoxModel(0.2, 2));
+    models.syncTick(
+      makeTickView([makeEntityView(1, { kind: 'Box', prevX: 1.5, currX: 2.5, prevY: 1.5, currY: 1.5 })]),
+    );
+    models.updateFrame(0.016, 0.5);
+    expect(picking.pick(lookDown(2, 1.5), VIEWPORT)!.entity).toBe(1);
+    // Поза конца тика в этом кадре ещё не нарисована — и попадания не даёт.
+    expect(picking.pick(lookDown(2.45, 1.5), VIEWPORT)!.kind).toBe('surface');
+
+    // Следующий кадр довёл инстанс до конца тика — ответ поехал вместе с картинкой.
+    models.updateFrame(0.016, 1);
+    expect(picking.pick(lookDown(2.45, 1.5), VIEWPORT)!.entity).toBe(1);
+  });
+
   it('ответ — сущность presentation-состояния; ключ документа даёт REND-11, а не picking', () => {
     const { ctx, models, source, assets } = makeRig(flatGrid());
     const stage = new PresentationStage(ctx);
@@ -413,6 +526,28 @@ describe('порядок разрешения (REND-15)', () => {
     expect(hit.kind).toBe('handle');
     expect(hit.handle).toBe('axis-z');
     expect(hit.entity).toBe(0);
+  });
+
+  it('размер набора ручек виден picking’у той же матрицей, какой ручка нарисована', () => {
+    const { picking, overlays } = makeRig(flatGrid());
+    const gizmo = {
+      kind: 'gizmo',
+      key: 'move',
+      x: 1.5,
+      y: 1.5,
+      z: 0,
+      handles: [{ id: 'axis-x', axis: 'x', form: 'translate' }],
+    } as const;
+    overlays.apply([gizmo]);
+    // Ручка длиной в единицу кончается на x = 2.5 — проба за ней мимо.
+    expect(picking.pick(lookDown(2.8, 1.5), VIEWPORT)!.kind).toBe('surface');
+
+    // Экранно-постоянный gizmo — состояние инструмента (ED-16): набор назвал
+    // размер, и попадание выросло вместе с картинкой.
+    overlays.apply([{ ...gizmo, scale: 2 }]);
+    const hit = picking.pick(lookDown(2.8, 1.5), VIEWPORT)!;
+    expect(hit.kind).toBe('handle');
+    expect(hit.handle).toBe('axis-x');
   });
 
   it('запрос только поверхности игнорирует объект над клеткой (ED-10, ED-11)', () => {

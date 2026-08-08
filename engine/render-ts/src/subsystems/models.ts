@@ -196,6 +196,12 @@ interface InstanceRecord {
    */
   falling: boolean;
   fallOffset: number;
+  /**
+   * Инстанс уже получил позу кадра. До первого `updateFrame` holder стоит в
+   * мировом нуле, а не там, где сущность: попадание в него было бы попаданием
+   * в ненарисованное (REND-15).
+   */
+  posed: boolean;
 }
 
 export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
@@ -360,6 +366,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
         record.tilt.y = 0;
       }
       record.snapPending = false;
+      record.posed = true;
       this.applyOrientation(record);
 
       record.controller?.update(dt);
@@ -426,9 +433,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * Попадание только в нарисованное (REND-15): у сущности, отнесённой резолвером
    * к невизуальным, нет ни модели, ни заглушки — и прокси у неё нет. Инстанс,
    * чья модель ещё грузится, участвует объёмом заглушки (ASSET-4): автор видит
-   * её и вправе её двигать.
+   * её и вправе её двигать. Инстанс, созданный `syncTick` и ещё не получивший
+   * позы кадра, не участвует: в кадре его нет.
    */
   private fillProxy(record: InstanceRecord, out: PickProxy): boolean {
+    if (!record.posed) return false;
     const bounds = record.model?.bounds ?? (record.placeholder === null ? null : PLACEHOLDER_BOUNDS);
     if (bounds === null) return false;
     out.entity = record.entity;
@@ -518,6 +527,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       fallDepth: visual?.verticalOffset?.fallDepth ?? 0,
       falling: false,
       fallOffset: 0,
+      posed: false,
     };
 
     if (view.kind === null) {

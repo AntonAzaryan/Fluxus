@@ -362,6 +362,12 @@ export class ViewportPicking {
     const dx = this.localTip.x - ox;
     const dy = this.localTip.y - oy;
     const dz = this.localTip.z - oz;
+    // Вырожденное преобразование (нулевой масштаб набора или записи) необратимо,
+    // и локальный луч приходит нечисловым: слэбы на NaN не отсекают ничего и
+    // отдали бы попадание на нулевой дистанции — ближайшее из возможных.
+    // Схлопнутый инстанс в кадре не виден, значит и попадать в него нечем
+    // (REND-15).
+    if (!Number.isFinite(ox + oy + oz + dx + dy + dz)) return -1;
 
     let tMin = 0;
     let tMax = Number.POSITIVE_INFINITY;
