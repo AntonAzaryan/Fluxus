@@ -184,6 +184,49 @@ describe('ED-12: среда без перечисления отказывает
       marked.flatMap((node) => collectTexts(node)).some((text) => text.value.includes(reason)),
     ).toBe(true);
   });
+
+  /**
+   * Сорвавшееся открытие не запирает редактор. Обещание открытия у сборки одно
+   * на все области (иначе конфиг сцены открывался бы дважды и без чужих
+   * списков), и сорвавшееся обещание остаётся сорвавшимся: без сброса вторая
+   * попытка получала бы ту же ошибку вечно. Сбрасывает его переоткрытие — и
+   * проверяется здесь именно это, на всех четырёх областях сразу.
+   */
+  it('вторая попытка после сорвавшегося открытия проходит', async () => {
+    const reason = 'перечисления в этой сборке нет';
+    const base = projectHost();
+    let broken = true;
+    const host: MemoryHost = {
+      ...base,
+      content: {
+        ...base.content,
+        list: (path: string) =>
+          broken ? Promise.reject(new Error(reason)) : base.content.list(path),
+      },
+    };
+    const app = await createEditorApp({ host });
+    const scene = app.frame.stateOf(SCENE_AREA_ID) as SceneAreaState;
+    const objects = app.frame.stateOf(OBJECTS_AREA_ID) as ObjectsAreaState;
+    const systems = app.frame.stateOf(SYSTEMS_AREA_ID) as SystemsAreaState;
+    const viewer = app.frame.stateOf(ASSETS_AREA_ID) as AssetAreaState;
+    await settle();
+    expect(scene.failure).toContain(reason);
+    expect(objects.failure).toContain(reason);
+    expect(systems.failure).toContain(reason);
+
+    broken = false;
+    runCommand(app.frame, SHELL_COMMANDS.openProject);
+    await settle();
+
+    expect(scene.failure).toBeNull();
+    expect(scene.project?.configId).toBe(CONFIG);
+    expect(systems.configId).toBe(CONFIG);
+    expect(objects.configId).toBe(CONFIG);
+    expect(objects.visualsId).toBe(VISUALS);
+    expect(viewer.visualsId).toBe(VISUALS);
+    expect(objects.failure).toBeNull();
+    expect(systems.failure).toBeNull();
+  });
 });
 
 /**
