@@ -405,6 +405,13 @@ describe('picking и наложения по decoration-инстансам (REND
     rig.assets.resolve('model', MODEL_ID, makeModel());
     rig.frame();
 
+    // Согласованность попадания с изображением держится на том, что декорация
+    // посажена на визуальную поверхность тем же путём, что сим-объект (REND-9,
+    // REND-10): плато уровня 1 при шаге высоты 2 — это z = 2, и разрешись
+    // picking по «документной» позе на нуле, попадание разошлось бы с картинкой.
+    const holder = instanceHolder(rig.models, rig.decorations, 'rock')!;
+    expect(holder.position.z).toBeCloseTo(2, 6);
+
     const hit = rig.picking.pick(lookDown(2.5, 1.5, 12), VIEWPORT)!;
     expect(hit.kind).toBe('entity');
     expect(hit.decoration).toBe(true);
