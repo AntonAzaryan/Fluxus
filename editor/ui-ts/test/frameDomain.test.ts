@@ -14,7 +14,10 @@
  *
  * - Комментарии вырезаются: сам текст ED-25 цитирует запрещённые слова.
  * - Скан идёт по идентификаторам и содержимому строковых литералов.
- * - Идентификаторы разбиваются по camelCase и сводятся к единственному числу.
+ * - Идентификаторы разбиваются по camelCase и сводятся к единственному числу;
+ *   имя целиком из заглавных (`TERRAIN_KEY`) разбору по camelCase не поддаётся
+ *   и потому берётся словом — иначе константа с доменным именем прошла бы мимо
+ *   сканера ровно в том виде, в каком её и пишут.
  * - Ключевые слова CSS вырезаются до разбора: `system-ui` — имя гарнитуры, а
  *   не редактируемого, и вырезано именно оно, а не файл, в котором стоит.
  * - Файл, объявивший себя вкладом маркером `@contribution` в шапке, исключён:
@@ -91,7 +94,10 @@ function stripForeignNames(source: string): string {
 function domainWordsIn(source: string): string[] {
   const words = new Set<string>();
   for (const [token] of stripForeignNames(stripComments(source)).matchAll(/[A-Za-z][A-Za-z0-9]*/g)) {
-    for (const part of token.split(/(?=[A-Z])/)) {
+    // SCREAMING_SNAKE_CASE разбивается подчёркиванием, а не регистром: разбор
+    // по camelCase рассыпал бы `TERRAIN` на буквы и не нашёл бы в нём ничего.
+    const parts = /^[A-Z][A-Z0-9]*$/.test(token) ? [token] : token.split(/(?=[A-Z])/);
+    for (const part of parts) {
       const word = part.toLowerCase().replace(/s$/, '');
       if (DOMAIN_WORDS.includes(word)) words.add(word);
     }
@@ -167,5 +173,18 @@ describe('ED-25: каркас интерфейса без доменных им�
   it('вырезано имя платформы, а не слово `component` вообще', () => {
     expect(domainWordsIn('const url = encodeURIComponent(path);')).toEqual([]);
     expect(domainWordsIn('const componentName = 1;')).toEqual(['component']);
+    // Вырезка — по вхождению имени, а не по файлу: настоящий `component` рядом
+    // с `encodeURIComponent` в одном файле сканер видит.
+    expect(domainWordsIn('encodeURIComponent(p); const componentName = 1;')).toEqual(['component']);
+    expect(domainWordsIn('const COMPONENT_NAME = 1;')).toEqual(['component']);
+  });
+
+  it('сканер видит доменное имя в константе из заглавных', () => {
+    // Так их и пишут: `POSITION_COMPONENT`, `TERRAIN_PREFAB`. Разбор по
+    // camelCase на таком имени не срабатывает вовсе, и без отдельного правила
+    // каркас мог бы назвать редактируемое именно так — незамеченным.
+    expect(domainWordsIn('const TERRAIN_KEY = 1;')).toEqual(['terrain']);
+    expect(domainWordsIn('import { SCENE_PREFAB } from "x";')).toEqual(['prefab', 'scene']);
+    expect(domainWordsIn('const FILL_CLASS = 1;')).toEqual([]);
   });
 });

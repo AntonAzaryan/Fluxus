@@ -116,10 +116,77 @@ describe('ED-15, REND-11: набор инстансов — производна
     expect(placements[0]?.prefab).toBe('Crate');
   });
 
+  it('носители сцены не путаются с расстановкой ни при каком наборе ассетов (SER-7)', () => {
+    // Соответствие «запись #i ↔ живая сущность #(носители + i)» держится на
+    // нормативном порядке спавна: сперва носители порождённых компонентов,
+    // затем расстановка. Носителей у сцены столько, сколько ассетов их
+    // порождает, поэтому проверяются все сочетания: появление `arena` в сцене
+    // не имеет права переназначить объекты друг другу молча.
+    const arena = { center: { x: 131072, y: 131072 }, radius: 196608 };
+    const base = placementsOf({ config: FIXTURE_SCENE, visuals, keys: ['a', 'b'] });
+    const variants: Record<string, unknown>[] = [
+      { arena },
+      { fog: true },
+      { timeScale: true },
+      { tweens: [] },
+      { arena, fog: true, timeScale: true, tweens: [] },
+    ];
+    for (const extra of variants) {
+      const edited = { ...sceneCopy(), ...extra };
+      const placements = placementsOf({ config: edited, visuals, keys: ['a', 'b'] });
+      expect(placements.map((item) => item.prefab), JSON.stringify(extra)).toEqual([
+        'Hero',
+        'Crate',
+      ]);
+      expect(placements.map((item) => item.x), JSON.stringify(extra)).toEqual(
+        base.map((item) => item.x),
+      );
+    }
+  });
+
+  it('сцена без террейна тоже сходится: носителей нет, записи идут первыми', () => {
+    const edited = sceneCopy();
+    delete edited.terrain;
+    const placements = placementsOf({ config: edited, visuals, keys: ['a', 'b'] });
+    expect(placements.map((item) => item.prefab)).toEqual(['Hero', 'Crate']);
+    // Уровня под объектом без террейна нет — и выдумывать его редактор не станет.
+    expect(placements[0]?.level).toBe(0);
+  });
+
   it('пустая расстановка — пустой набор, и ядро для этого не поднимается', () => {
     const edited = sceneCopy();
     delete edited.initial;
     expect(placementsOf({ config: edited, visuals })).toEqual([]);
+  });
+});
+
+describe('ED-16: где у объекта позиция — настройка проекта, а не имя в редакторе', () => {
+  /** Тот же контент, но позицию несёт другой компонент с другими полями. */
+  const otherwiseNamed = (): Record<string, unknown> => {
+    const edited = sceneCopy();
+    edited.components = [{ name: 'Placement', fields: { east: 'fixed', north: 'fixed' } }];
+    edited.prefabs = [
+      { name: 'Hero', tags: ['Hero'], components: { Placement: { east: 98304, north: 98304 } } },
+      { name: 'Crate', tags: ['Crate'], components: { Placement: { east: 163840, north: 98304 } } },
+    ];
+    return edited;
+  };
+
+  it('привязка проекта читается вместо конвенции ядра', () => {
+    const placements = placementsOf({
+      config: otherwiseNamed(),
+      visuals,
+      position: { component: 'Placement', x: 'east', y: 'north' },
+    });
+    expect(placements[0]?.x).toBeCloseTo(1.5, 6);
+    expect(placements[1]?.x).toBeCloseTo(2.5, 6);
+  });
+
+  it('без привязки редактор берёт конвенцию ядра и позиции не выдумывает', () => {
+    // Компонента конвенции в этой сцене нет — и объект честно оказывается в
+    // начале координат, а не там, где редактор угадал бы по имени поля.
+    expect(placementsOf({ config: otherwiseNamed(), visuals })[0]?.x).toBe(0);
+    expect(placementsOf({ config: FIXTURE_SCENE, visuals })[0]?.x).toBeCloseTo(1.5, 6);
   });
 });
 

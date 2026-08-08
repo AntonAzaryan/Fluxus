@@ -20,7 +20,12 @@ import {
   type JsonPath,
 } from '@game-mvp/editor-core';
 import type { VisualManifest } from '@game-mvp/assets';
-import { sceneDraft, visualsOf, type SceneDraft } from './sceneDocuments.js';
+import {
+  sceneDraft,
+  visualsOf,
+  type PositionBinding,
+  type SceneDraft,
+} from './sceneDocuments.js';
 
 /** Путь списка расстановки в конфиге сцены (SER-7, SER-8) — доменное знание вклада. */
 export const PLACEMENT_LIST: JsonPath = ['initial'];
@@ -37,6 +42,12 @@ export interface SceneProjectIds {
   readonly config: ContentPath;
   /** Манифест визуалов; карту кривизны он называет сам (`terrain.curvatureMap`). */
   readonly visuals: ContentPath;
+  /**
+   * Где у сим-объекта позиция (ED-16). Настройка проекта: у ядра понятия
+   * позиции нет, и зашивать имя компонента в редактор нельзя. Нет — конвенция
+   * ядра (`DEFAULT_POSITION_BINDING`).
+   */
+  readonly position?: PositionBinding;
 }
 
 /** То, что редактор открыл: чем рисовать сцену и где это лежит. */
@@ -46,6 +57,8 @@ export interface SceneProject {
   /** Карта кривизны — её ID берётся из манифеста; `null` — арена без кривизны. */
   readonly curvatureId: DocumentId | null;
   readonly visuals: VisualManifest;
+  /** Настройка проекта о позиции (ED-16); её же получит расстановка W3-3. */
+  readonly position: PositionBinding | undefined;
 }
 
 /**
@@ -80,7 +93,13 @@ export async function openSceneProject(
     });
   }
 
-  return { configId: ids.config, visualsId: ids.visuals, curvatureId, visuals };
+  return {
+    configId: ids.config,
+    visualsId: ids.visuals,
+    curvatureId,
+    visuals,
+    position: ids.position,
+  };
 }
 
 /**
@@ -93,6 +112,7 @@ export function draftOf(session: EditorSession, project: SceneProject): SceneDra
     config: session.documentValue(project.configId),
     keys: session.descriptors(project.configId, PLACEMENT_LIST),
     visuals: project.visuals,
+    ...(project.position === undefined ? {} : { position: project.position }),
     curvature:
       project.curvatureId === null || !session.isOpen(project.curvatureId)
         ? null

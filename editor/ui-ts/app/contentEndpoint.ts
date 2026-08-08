@@ -34,8 +34,12 @@ const DEFAULT_EVENT = 'fx:content';
 
 type Kind = 'file' | 'directory' | 'missing';
 
-/** Путь внутри дерева или `null` — попытка выйти за корень. */
-function resolveInside(root: string, path: string): string | null {
+/**
+ * Путь внутри дерева или `null` — попытка выйти за корень. Экспортирована ради
+ * теста намеренно: между dev-сервером и файловой системой машины стоит одна эта
+ * функция, и проверять её через живой HTTP значило бы не проверять вовсе.
+ */
+export function resolveInside(root: string, path: string): string | null {
   const cleaned = path.replace(/\\/g, '/').split('/').filter((part) => part !== '' && part !== '.');
   if (cleaned.includes('..')) return null;
   const absolute = resolve(join(root, ...cleaned));
@@ -95,7 +99,9 @@ export function contentEndpoint(options: ContentEndpointOptions): Plugin {
         const path = parsed.searchParams.get('path') ?? '';
         const absolute = resolveInside(root, path);
         if (absolute === null) {
-          reply(response, 400, { kind: 'missing' });
+          // Отказ со своей причиной: за корень дерева не выходит ничего
+          // (CONT-1, ASSET-3), и путать это с «эндпойнта здесь нет» нельзя.
+          reply(response, 400, { kind: 'missing', reason: `путь "${path}" выходит за корень дерева` });
           return;
         }
 
@@ -124,7 +130,7 @@ export function contentEndpoint(options: ContentEndpointOptions): Plugin {
             reply(response, existed ? 200 : 201, { kind: 'file', created: !existed });
             return;
           }
-          reply(response, 405, { kind: 'missing' });
+          reply(response, 405, { kind: 'missing', reason: `метод ${method} эндпойнту дерева неизвестен` });
         })();
         done.catch((error: unknown) => {
           reply(response, 500, {

@@ -135,9 +135,17 @@ describe('ED-13, ED-15: режимы камеры доступны с повер
   it('переключатель облёта идёт в конвейер, а не считает позу сам', async () => {
     const { frame, stage } = await buildLoadedFrame();
     expect(stage.flying).toBe(false);
+    // Просьбу перерисовать приносит вьюпорт, а не нажатие: без неё страница
+    // осталась бы с прежней подписью до случайной чужой перерисовки.
+    let redraws = 0;
+    const stop = frame.subscribe(() => redraws++);
     press(buttonByKey(frame.view(), 'ui.area.scene.cameraFree'));
+    expect(redraws).toBeGreaterThan(0);
+    stop();
     expect(stage.flying).toBe(true);
     // Подпись показывает текущий режим — автор видит его постоянно (ED-26).
+    // Показывает её вьюпорт, объявив о смене: спросить конвейер сразу после
+    // нажатия нельзя, режим применяет его ближайший кадр (CAM-2).
     expect(buttonByKey(frame.view(), 'ui.area.scene.cameraFly')).toBeDefined();
   });
 
@@ -167,6 +175,27 @@ describe('ED-8, ED-22: сломанный документ назван прич
     expect(marks).toHaveLength(1);
     const reason = findAll(marks[0] ?? { tag: 'div' }, (node) => node.text?.origin === 'value');
     expect(reason[0]?.text?.value).toContain('levels');
+  });
+
+  it('сорвавшийся кадр вьюпорта называет себя там же, где сломанный документ', async () => {
+    // Документы целы, а кадр не прошёл — автор обязан это увидеть, иначе
+    // прежняя картинка читается как ответ на его правку (ED-8, ED-15).
+    const { frame, stage } = await buildLoadedFrame();
+    expect(findAll(frame.view(), (node) => attr(node, 'data-severity') === 'error')).toHaveLength(0);
+
+    let redraws = 0;
+    const stop = frame.subscribe(() => redraws++);
+    stage.fail('подсистема террейна: чанк не собрался');
+    // О причине вьюпорт сообщает сам — ждать чужой перерисовки нечего.
+    expect(redraws).toBeGreaterThan(0);
+    stop();
+    const marks = findAll(frame.view(), (node) => attr(node, 'data-severity') === 'error');
+    expect(marks).toHaveLength(1);
+    const reason = findAll(marks[0] ?? { tag: 'div' }, (node) => node.text?.origin === 'value');
+    expect(reason[0]?.text?.value).toContain('чанк');
+
+    stage.fail(null);
+    expect(findAll(frame.view(), (node) => attr(node, 'data-severity') === 'error')).toHaveLength(0);
   });
 });
 

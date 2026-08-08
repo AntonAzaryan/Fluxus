@@ -16,6 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import { createHostAssetSource } from '@game-mvp/editor-core';
 import { createWebHost, type HttpFetch, type HttpRequest, type HttpResponse } from '../src/host/web.js';
+import { resolveInside } from '../app/contentEndpoint.js';
 
 const encoder = new TextEncoder();
 
@@ -134,6 +135,41 @@ describe('ED-12, ED-20: перечисление каталога — часть
       fetch: net({ '/__content?path=visuals': () => response(200, { hello: 'index.html' }) }).fetch,
     });
     await expect(host.content.list('visuals')).rejects.toThrow('visuals');
+  });
+});
+
+describe('CONT-1: за корень дерева контента не выходит ничего', () => {
+  it('выход за корень отвергается до сети, а не сетью', async () => {
+    const { fetch, calls } = net({});
+    const host = createWebHost({ fetch });
+    await expect(host.content.read('../engine/core-ts/package.json')).rejects.toThrow('корень');
+    await expect(host.content.list('..')).rejects.toThrow('корень');
+    await expect(host.content.write('../x.json', new Uint8Array())).rejects.toThrow('корень');
+    expect(calls).toEqual([]);
+  });
+
+  it('вторая граница — серверная: эндпойнт сам решает, что лежит в дереве', () => {
+    const root = '/srv/content';
+    expect(resolveInside(root, 'visuals/manifest.json')).toBe('/srv/content/visuals/manifest.json');
+    // Абсолютный путь читается как путь ОТ КОРНЯ ДЕРЕВА, а не от корня диска.
+    expect(resolveInside(root, '/etc/passwd')).toBe('/srv/content/etc/passwd');
+    expect(resolveInside(root, '')).toBe(root);
+    for (const escape of ['../secrets', 'a/../../secrets', '..', '..\\secrets', 'a/./../../b']) {
+      expect(resolveInside(root, escape), escape).toBeNull();
+    }
+    // Сосед с общим префиксом именем каталога не является.
+    expect(resolveInside('/srv/content', '../content-private/x')).toBeNull();
+  });
+
+  it('отказ эндпойнта со своей причиной её и называет, а не подменяет догадкой', async () => {
+    const host = createWebHost({
+      fetch: net({
+        '/__content?path=visuals': () =>
+          response(500, { kind: 'missing', reason: 'EACCES: доступ к каталогу закрыт' }),
+      }).fetch,
+    });
+    // Иначе автор пошёл бы искать отсутствующий эндпойнт вместо своих прав.
+    await expect(host.content.list('visuals')).rejects.toThrow('EACCES');
   });
 });
 

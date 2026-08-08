@@ -19,6 +19,33 @@
  * кадр правок бывает несколько (мазок кисти — операция на кадр, ED-18), и
  * пересчёт на каждую делал бы работу, которую всё равно перекроет последняя.
  *
+ * Кадр, который не рисуется (автор ушёл в другую область — узла нет в
+ * странице), флаг не гасит: правка дождётся возвращения вьюпорта, а не
+ * потеряется в кадре, которого никто не видел.
+ *
+ * ## Что делает сорвавшийся кадр
+ *
+ * Ошибка внутри кадра — сведения набора или самой отрисовки — не имеет права
+ * ни увести цикл (иначе вьюпорт замирает навсегда), ни промолчать (иначе автор
+ * видит прежнюю картинку и считает её ответом на свою правку). Поэтому кадр
+ * ловит её, оставляет нарисованным последнее целое и называет причину полем
+ * `failure`, о смене которого сообщает `onChange` — теми же иконкой и текстом,
+ * какими область показывает сломанный документ (ED-8, ED-22).
+ *
+ * Живут эти две причины по-разному, и это не мелочь. Сорвавшееся сведение
+ * повторить не на чем — флаг погашен, документы те же, — и погасить причину
+ * следующим удавшимся кадром значило бы показать её ровно на один кадр, то
+ * есть не показать: она держится до следующей подачи. Сорвавшаяся отрисовка
+ * повторяется каждый кадр сама и гаснет тем кадром, который прошёл.
+ *
+ * ## Почему смена режима камеры объявляется, а не спрашивается
+ *
+ * Режим — состояние конвейера (CAM-2), и переключатель до него доходит вводом:
+ * `toggleFly` взводит фронт, а применяет его ближайший кадр rig'а. Спросить
+ * `flying` сразу после нажатия значит получить прежний ответ, поэтому смену
+ * режима объявляет сам кадр (`onChange`) — иначе подпись бара показывала бы
+ * один режим, пока камера в другом (ED-26). Тем же путём объявляется и `F`.
+ *
  * ## Почему холст живёт вне дерева описания
  *
  * Каркас перерисовывает страницу целиком (`frame/mount.ts`), заменяя поддерево
@@ -50,7 +77,12 @@ import {
   type RenderContext,
 } from '@game-mvp/render';
 import type { TerrainGrid } from '@game-mvp/core';
-import { createSceneCamera, type PointerSample, type SceneCamera } from './sceneCamera.js';
+import {
+  CAMERA_KEYS,
+  createSceneCamera,
+  type PointerSample,
+  type SceneCamera,
+} from './sceneCamera.js';
 import type { SceneDraft } from './sceneDocuments.js';
 
 /** Шаг высоты уровня в мировых единицах — параметр рендера (REND-7). */
@@ -70,6 +102,12 @@ export interface SceneStageOptions {
   /** Документ среды; по умолчанию — документ вкладки. */
   readonly document?: Document;
   readonly heightStep?: number;
+  /**
+   * Вьюпорт сообщает о том, что изменилось у него самого и видно в интерфейсе:
+   * режим камеры (CAM-2) и причина сорвавшегося кадра. Зовётся из кадра и
+   * только на смену, а не на каждый кадр.
+   */
+  readonly onChange?: () => void;
 }
 
 export interface SceneStage {
@@ -81,6 +119,8 @@ export interface SceneStage {
   zoom(steps: number): void;
   /** Сколько инстансов в наборе сейчас — по этому видно, что кадр не пуст. */
   readonly instanceCount: number;
+  /** Почему сорвался кадр; `null` — последний кадр прошёл целиком (ED-8). */
+  readonly failure: string | null;
   dispose(): void;
 }
 
@@ -134,6 +174,19 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   let dirty = false;
   let disposed = false;
   let lastFrameAt: number | null = null;
+  /**
+   * Две причины, а не одна: сорвавшееся сведение документов держится до
+   * следующей подачи (кадр за кадром оно не повторяется, и гасить его удачной
+   * отрисовкой значило бы показать причину на один кадр — то есть не показать),
+   * сорвавшаяся отрисовка держится, пока кадр не пройдёт.
+   */
+  let applyFailure: string | null = null;
+  let drawFailure: string | null = null;
+  const reasonOf = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+  /** Что о вьюпорте уже показано интерфейсом — с этим и сверяется `onChange`. */
+  let shownFlying = false;
+  let shownFailure: string | null = null;
 
   const keys = new Set<string>();
   let pointer: PointerSample | null = null;
@@ -151,7 +204,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     // Ввод камеры не пересекает никакой границы (CAM-1): пересекать нечего —
     // симуляции в режиме правки нет.
     if (event.code.startsWith('Arrow')) event.preventDefault();
-    if (!event.repeat && event.code === 'KeyF') camera?.toggleFly();
+    if (!event.repeat && event.code === CAMERA_KEYS.flyToggle) camera?.toggleFly();
     keys.add(event.code);
   };
   const onKeyUp = (event: KeyboardEvent): void => {
@@ -261,26 +314,55 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     return true;
   };
 
+  const failureNow = (): string | null => applyFailure ?? drawFailure;
+
+  /** Сообщить интерфейсу, если у вьюпорта изменилось видимое им (CAM-2, ED-8). */
+  const publish = (): void => {
+    const flying = camera?.flying ?? false;
+    const failure = failureNow();
+    if (flying === shownFlying && failure === shownFailure) return;
+    shownFlying = flying;
+    shownFailure = failure;
+    options.onChange?.();
+  };
+
   const frame = (now: number): void => {
     if (disposed) return;
+    // Планирование до работы: сорвавшийся кадр не имеет права увести цикл.
     requestAnimationFrame(frame);
+    // Кадра нет, пока узла нет в странице: правка ждёт возвращения вьюпорта
+    // (`dirty` не гаснет), а не теряется в кадре, которого никто не увидел.
     if (!attach()) return;
 
     const dt = lastFrameAt === null ? 0 : Math.min((now - lastFrameAt) / 1000, 0.25);
     lastFrameAt = now;
 
+    // Флаг гасится до сведения, а не после: сорвавшееся сведение обязано
+    // назвать причину, а не повторяться каждый кадр на тех же документах.
     if (dirty && draft !== null) {
       dirty = false;
-      applyDraft(draft);
+      try {
+        applyDraft(draft);
+        applyFailure = null;
+      } catch (error) {
+        // Последнее целое остаётся нарисованным, причина уходит в интерфейс.
+        applyFailure = reasonOf(error);
+      }
     }
-    if (camera !== null) {
-      camera.sample(keys, pointer);
-      // Общая реализация применения позы (CAM-1): своей копии у редактора нет.
-      applyCameraPose(camera3, camera.frame(dt));
+    try {
+      if (camera !== null) {
+        camera.sample(keys, pointer);
+        // Общая реализация применения позы (CAM-1): своей копии у редактора нет.
+        applyCameraPose(camera3, camera.frame(dt));
+      }
+      // Кадр подсистем: интерполировать нечего, альфа всегда 1 (REND-11).
+      source.frame(now);
+      renderer.render(scene, camera3);
+      drawFailure = null;
+    } catch (error) {
+      drawFailure = reasonOf(error);
     }
-    // Кадр подсистем: интерполировать нечего, альфа всегда 1 (REND-11).
-    source.frame(now);
-    renderer.render(scene, camera3);
+    publish();
   };
   requestAnimationFrame(frame);
 
@@ -300,6 +382,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     },
     get instanceCount(): number {
       return source.size;
+    },
+    get failure(): string | null {
+      return failureNow();
     },
     dispose() {
       disposed = true;

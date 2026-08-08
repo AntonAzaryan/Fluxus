@@ -73,12 +73,22 @@ export interface FakeStage extends SceneStage {
   readonly submitted: readonly SceneDraft[];
   readonly zooms: readonly number[];
   readonly last: SceneDraft | undefined;
+  /** Причина сорвавшегося кадра — её ставит тест, как поставил бы её кадр. */
+  fail(reason: string | null): void;
 }
 
-export function fakeStage(): FakeStage {
+/**
+ * Дубль повторяет ОБЪЯВИТЕЛЬНЫЙ характер настоящего вьюпорта: о смене режима и
+ * о сорвавшемся кадре он сообщает `announce`, а не ждёт, что его спросят. Чего
+ * он не повторяет — задержки в один кадр: у настоящего конвейера режим
+ * применяет ближайший кадр rig'а (CAM-2), и без RAF этого не воспроизвести.
+ * Поэтому здесь и проверяется механизм оповещения, а не момент его срабатывания.
+ */
+export function fakeStage(announce: () => void = () => undefined): FakeStage {
   const submitted: SceneDraft[] = [];
   const zooms: number[] = [];
   let flying = false;
+  let failure: string | null = null;
   return {
     submit: (draft) => {
       submitted.push(draft);
@@ -88,12 +98,20 @@ export function fakeStage(): FakeStage {
     },
     toggleFly: () => {
       flying = !flying;
+      announce();
     },
     zoom: (steps) => {
       zooms.push(steps);
     },
     get instanceCount(): number {
       return submitted.at(-1)?.placements.length ?? 0;
+    },
+    get failure(): string | null {
+      return failure;
+    },
+    fail: (reason) => {
+      failure = reason;
+      announce();
     },
     dispose: () => undefined,
     submitted,
@@ -104,7 +122,16 @@ export function fakeStage(): FakeStage {
   };
 }
 
-/** Прокрутка микрозадач: открытие документов асинхронно даже у хоста в памяти. */
+/**
+ * Ожидание того, что асинхронное уже случилось: открытие документов
+ * асинхронно даже у хоста в памяти.
+ *
+ * Ждёт макрозадачу, а не считает микрозадачи: очередь микрозадач опустошается
+ * целиком перед следующей макрозадачей, и цепочка из скольких угодно `await`
+ * успевает завершиться. Счёт же микрозадач привязывает фикстуру к длине
+ * цепочки — одна лишняя `await` в открытии проекта, и тест краснеет там, где
+ * ничего не сломалось.
+ */
 export async function settle(): Promise<void> {
-  for (let step = 0; step < 8; step++) await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }

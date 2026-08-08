@@ -65,9 +65,16 @@ export const DEFAULT_SCENE_IDS: SceneProjectIds = {
 /** Шаг колеса на нажатие кнопки бара: тот же вход зума, что у самого колеса (CAM-4). */
 const ZOOM_STEP = 1;
 
+/**
+ * Чем собирается вьюпорт. `announce` — обратный канал: вьюпорт зовёт его,
+ * когда у него изменилось видимое в интерфейсе (режим камеры CAM-2, причина
+ * сорвавшегося кадра ED-8). Спрашивать это сразу после нажатия нельзя: режим
+ * доходит до конвейера вводом и применяется его ближайшим кадром.
+ */
 export type SceneStageFactory = (
   project: SceneProject,
   host: EnvironmentHost,
+  announce: () => void,
 ) => SceneStage | null;
 
 export interface SceneAreaOptions {
@@ -102,13 +109,18 @@ const message = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
 /** Вьюпорт по умолчанию: рендер движка там, где есть чем рисовать (ED-1). */
-function defaultStage(project: SceneProject, host: EnvironmentHost): SceneStage | null {
+function defaultStage(
+  project: SceneProject,
+  host: EnvironmentHost,
+  announce: () => void,
+): SceneStage | null {
   if (!canRender()) return null;
   return createSceneStage({
     hostId: SCENE_VIEWPORT_ID,
     // Тот же шов к дереву, через который читаются документы (ASSET-2, ED-12).
     assets: createHostAssetSource(host.content),
     visuals: project.visuals,
+    onChange: announce,
   });
 }
 
@@ -126,7 +138,9 @@ function start(state: SceneAreaState, setup: AreaSetup, options: SceneAreaOption
   openSceneProject(setup.session, host.content, ids)
     .then((project) => {
       state.project = project;
-      state.stage = build(project, host);
+      state.stage = build(project, host, () => {
+        state.refresh();
+      });
       let config: unknown = undefined;
       let curvature: unknown = undefined;
       const recompute = (): void => {
@@ -272,7 +286,9 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
 function surface(context: AreaContext<SceneAreaState>): UiNode {
   const { state, resources } = context;
   const stage = state.stage;
-  const failure = state.failure ?? state.draft?.failure ?? null;
+  // Три источника одной причины, а не три способа её показать: не открылся
+  // проект, не сошлись документы, не прошёл кадр (ED-8, ED-30).
+  const failure = state.failure ?? state.draft?.failure ?? stage?.failure ?? null;
 
   const zoom = (steps: number, key: string): UiNode =>
     button({
@@ -305,9 +321,11 @@ function surface(context: AreaContext<SceneAreaState>): UiNode {
             variant: 'ghost',
             icon: 'layers',
             disabled: stage === null,
+            // Перерисовку просит сам вьюпорт, когда режим до конвейера дошёл:
+            // спросить `flying` прямо здесь значило бы получить прежний ответ
+            // и показывать один режим, пока камера в другом (ED-26).
             onPress: () => {
               stage?.toggleFly();
-              context.refresh();
             },
           }),
           zoom(-ZOOM_STEP, 'ui.area.scene.zoomIn'),

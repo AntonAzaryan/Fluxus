@@ -32,6 +32,17 @@
  * обновляет инстанс, а не пересоздаёт его. Индекс в списке таким ключом не
  * является (удаление соседа сдвигает хвост), поэтому ключи приносит сессия —
  * её дескрипторы (`descriptors`) заведены ровно для этого.
+ *
+ * ## Откуда берётся «где у объекта позиция»
+ *
+ * ED-16: «Какие компонент и поля их несут, редактор SHALL брать из настройки
+ * проекта, а не из зашитого в редактор имени компонента». Поэтому привязка —
+ * значение (`PositionBinding`), приходящее сверху вместе с документами, а не
+ * литерал в этом файле. Значение по умолчанию берётся у ядра
+ * (`POSITION_COMPONENT`) и только у него: это его собственная конвенция, на
+ * которую опираются его же нативные системы, и повторять её строкой здесь
+ * значило бы завести вторую (ED-1, CORE-3). Проект, у которого позиция лежит
+ * иначе, подаёт свою привязку — правится настройка, а не редактор.
  */
 import {
   createTerrainGrid,
@@ -74,6 +85,28 @@ export interface SceneDraft {
   readonly failure: string | null;
 }
 
+/**
+ * Где у сим-объекта лежит позиция (ED-16): компонент и имена двух его полей.
+ * Настройка проекта, а не знание редактора — формат расстановки именованных
+ * полей позиции не имеет вовсе (SER-8).
+ */
+export interface PositionBinding {
+  readonly component: string;
+  readonly x: string;
+  readonly y: string;
+}
+
+/**
+ * Привязка по умолчанию — конвенция самого ядра (`POSITION_COMPONENT`), на
+ * которую опираются его нативные системы. Редактор её не вводит и не копирует:
+ * он её импортирует, и проект вправе подать другую.
+ */
+export const DEFAULT_POSITION_BINDING: PositionBinding = {
+  component: POSITION_COMPONENT,
+  x: 'x',
+  y: 'y',
+};
+
 export interface SceneDraftInput {
   /** Значение конфига сцены — как его отдаёт сессия. */
   readonly config: unknown;
@@ -83,6 +116,8 @@ export interface SceneDraftInput {
   readonly visuals?: VisualManifest | null;
   /** Значение документа карты кривизны (ED-11); ассетом он ещё может и не быть. */
   readonly curvature?: unknown;
+  /** Где у объекта позиция (ED-16); нет — конвенция ядра. */
+  readonly position?: PositionBinding;
 }
 
 interface SceneShape {
@@ -131,16 +166,17 @@ export function placementsOf(input: SceneDraftInput): readonly ScenePlacement[] 
 
   const visuals = input.visuals ?? null;
   const kindOf = kindByTags(visuals === null ? [] : Object.keys(visuals.entities));
+  const at = input.position ?? DEFAULT_POSITION_BINDING;
   const placements: ScenePlacement[] = [];
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!;
     const entity = alive[carriers + index]!;
     const prefab = entry.prefab;
     // Позиция — поле компонента, а не поле записи: какой компонент её несёт,
-    // знает контент, и читается она у мира по конвенции ядра.
-    const has = world.hasComponent(state, entity, POSITION_COMPONENT);
-    const fx = has ? world.getField(state, entity, POSITION_COMPONENT, 'x') : 0;
-    const fy = has ? world.getField(state, entity, POSITION_COMPONENT, 'y') : 0;
+    // говорит настройка проекта (ED-16), а значения читаются у поднятого мира.
+    const has = world.hasComponent(state, entity, at.component);
+    const fx = has ? world.getField(state, entity, at.component, at.x) : 0;
+    const fy = has ? world.getField(state, entity, at.component, at.y) : 0;
     // Точка входной границы рендера (REND-1): Q16.16 → float здесь, и глубже
     // fixed-point не идёт. Уровень под объектом — ответ ядра (TERR-4).
     placements.push({

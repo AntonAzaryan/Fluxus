@@ -122,6 +122,8 @@ interface ContentReply {
   readonly kind: ContentEntryKind | 'missing';
   readonly entries?: readonly { readonly name: string; readonly kind: ContentEntryKind }[];
   readonly created?: boolean;
+  /** Причина отказа, названная самим эндпойнтом; у успешного ответа её нет. */
+  readonly reason?: string;
 }
 
 const DEFAULT_ROUTE = '/__content';
@@ -141,12 +143,29 @@ function isReply(value: unknown): value is ContentReply {
   return kind === 'file' || kind === 'directory' || kind === 'missing';
 }
 
+/** Причина отказа, названная самим эндпойнтом; `null` — ответ её не несёт. */
+async function refusalReason(response: HttpResponse): Promise<string | null> {
+  try {
+    const body: unknown = await response.json();
+    const reason = (body as { reason?: unknown }).reason;
+    return typeof reason === 'string' && reason !== '' ? reason : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Ответ эндпойнта либо отказ, называющий путь. Отдельная функция потому, что
  * «эндпойнта в этой сборке нет» и «по пути ничего нет» обязаны различаться:
  * первое — отсутствие возможности у среды, второе — обычный ответ о дереве, и
  * свести их к пустому списку значило бы показать автору пустой проект вместо
  * сообщения о том, что перечисления здесь не бывает.
+ *
+ * Различаются и два отказа. Эндпойнт, отказавший со своей причиной (выход за
+ * корень дерева, сорвавшаяся запись), эту причину и называет: подменять её
+ * догадкой «в этой среде записи не бывает» значило бы отправить автора чинить
+ * не то. Догадка остаётся там, где отказ нем, — это и есть случай статической
+ * выкладки.
  */
 async function reply(
   http: HttpFetch,
@@ -163,8 +182,11 @@ async function reply(
     );
   }
   if (!response.ok) {
+    const reason = await refusalReason(response);
     throw new Error(
-      `дерево контента: "${path}" — HTTP ${response.status}; эта среда перечисления и записи не предоставляет (ED-12)`,
+      reason === null
+        ? `дерево контента: "${path}" — HTTP ${response.status}; похоже, эта среда перечисления и записи не предоставляет (ED-12)`
+        : `дерево контента: "${path}" — HTTP ${response.status}: ${reason}`,
     );
   }
   let body: unknown;

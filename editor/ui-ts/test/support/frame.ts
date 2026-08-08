@@ -57,12 +57,24 @@ export function buildFrame(
  */
 export async function buildLoadedFrame(locale = 'ru'): Promise<LoadedFrameFixture> {
   const host = fixtureHost();
-  const stage = fakeStage();
-  const area = createSceneArea({ host, ids: FIXTURE_IDS, stage: () => stage });
+  // Обратный канал вьюпорта дубль получает так же, как настоящий: область
+  // отдаёт его сборкой, и через него же приходит просьба перерисовать.
+  const built: FakeStage[] = [];
+  const area = createSceneArea({
+    host,
+    ids: FIXTURE_IDS,
+    stage: (_project, _host, announce) => {
+      const made = fakeStage(announce);
+      built.push(made);
+      return made;
+    },
+  });
   const fixture = buildFrame([area, systemsArea], locale);
   // Запись состояния заводится лениво — первым обращением к области.
   const state = fixture.frame.stateOf(area.id) as SceneAreaState;
   await settle();
+  const stage = built[0];
+  if (stage === undefined) throw new Error('вьюпорт фикстуры не собрался');
   return { ...fixture, host, stage, area, state };
 }
 
