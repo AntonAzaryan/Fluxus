@@ -23,10 +23,10 @@
 
 ## 3. WP2: перечисление компонентов и prefab'ов мира (engine/core-ts)
 
-- [ ] 3.1 `engine/core-ts/src/ecs/world.ts`: read-only `componentNames(state)` — имена компонентов в порядке объявления (он нормативен, SER-7), и `prefabNames(state)` — имена зарегистрированных prefab'ов
-- [ ] 3.2 `engine/core-ts/src/index.ts`: добавить обе в пространство `world` рядом с `componentSchema`/`prefabOf`; мутирующих хелперов не добавлять
-- [ ] 3.3 Тест в `engine/core-ts/test/world.test.ts`: порядок имён совпадает с порядком объявления схем; синтезированные загрузчиком компоненты (пол, арена, FoW) в перечне присутствуют; `prefabNames` содержит `TERRAIN_PREFAB` и `ARENA_PREFAB` для сцены с ними
-- [ ] 3.4 Скил `determinism-review` по диффу `engine/core-ts`: чтение, вне тика, без аллокаций в горячем пути; `engine/tests/golden/` не тронут
+- [x] 3.1 `engine/core-ts/src/ecs/world.ts`: read-only `componentNames(state)` — имена компонентов в порядке объявления (он нормативен, SER-7), и `prefabNames(state)` — имена зарегистрированных prefab'ов
+- [x] 3.2 `engine/core-ts/src/index.ts`: добавить обе в пространство `world` рядом с `componentSchema`/`prefabOf`; мутирующих хелперов не добавлять
+- [x] 3.3 Тест в `engine/core-ts/test/world.test.ts`: порядок имён совпадает с порядком объявления схем; синтезированные загрузчиком компоненты (пол, арена, FoW) в перечне присутствуют; `prefabNames` содержит `TERRAIN_PREFAB` и `ARENA_PREFAB` для сцены с ними
+- [x] 3.4 Скил `determinism-review` по диффу `engine/core-ts`: чтение, вне тика, без аллокаций в горячем пути; `engine/tests/golden/` не тронут
 
 ## 4. WP3: модель блоков DSL (editor/core-ts/src/dsl)
 
