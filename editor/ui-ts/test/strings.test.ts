@@ -236,6 +236,14 @@ describe('ED-27: каждый видимый текст контрольного
  * заменяет: подписи каркаса, подписи областей и содержимое их материала — три
  * разных источника текста, и ED-27 держит их все.
  */
+/**
+ * Ключ хрома редактора: подпись интерфейса (`ui.*`) или причина находки
+ * (`validation.reason.*`). Остальное на странице — описания полей (ED-28),
+ * ключ которых вычислен из пути поля в схеме, и разрешаться он не обязан.
+ */
+const isChromeKey = (key: string): boolean =>
+  key.startsWith(UI_KEY_PREFIX) || key.startsWith(REASON_PREFIX);
+
 describe('ED-27: каждый видимый текст каркаса имеет происхождение', () => {
   const materialCorpus = materialStrings();
   // Все области приложения: у каждой свой источник текста, и ED-27 держит их
@@ -269,8 +277,17 @@ describe('ED-27: каждый видимый текст каркаса имее�
         }
         const key = text.key ?? '';
         const resolved = resources.lookup(key);
-        expect(resolved, `ключ каркаса не разрешился: ${key}`).toBeDefined();
-        expect(text.value).toBe(resolved?.text);
+        if (isChromeKey(key)) {
+          expect(resolved, `ключ каркаса не разрешился: ${key}`).toBeDefined();
+          expect(text.value).toBe(resolved?.text);
+          continue;
+        }
+        // Подсказка к полю (ED-28): ключ вычислен из пути поля в схеме, а
+        // ресурса на него может не быть ни в текущей локали, ни в `en` —
+        // тогда показывается сам ключ. Требовать от него разрешения значило бы
+        // запрещать редактору показывать недокументированное поле, а ED-28
+        // требует обратного: отсутствие ресурса должно быть видно.
+        expect(text.value).toBe(resolved === undefined ? key : resolved.text);
       }
     }
   });
@@ -288,11 +305,13 @@ describe('ED-27: каждый видимый текст каркаса имее�
         .map((text) => text.key ?? ''),
     );
     expect(used.size).toBeGreaterThan(0);
-    for (const key of used) {
-      expect(
-        key.startsWith(UI_KEY_PREFIX) || key.startsWith(REASON_PREFIX),
-        `ключ вне пространств пакета: ${key}`,
-      ).toBe(true);
+    // Пространств на странице три, а проверяются два: подписи хрома и причины
+    // находок принадлежат редактору и обязаны быть в обеих локалях. Третье —
+    // описания полей (ED-28) — принадлежит тому, кто объявил поле: описания
+    // компонентов пишет контент, и требовать их от бандла редактора значило бы
+    // требовать от него документировать чужие документы.
+    expect([...used].some((key) => !isChromeKey(key)), 'описаний полей на странице нет').toBe(true);
+    for (const key of [...used].filter(isChromeKey)) {
       expect(declared('ru', key), `нет в ru: ${key}`).toBeDefined();
       expect(declared('en', key), `нет в en: ${key}`).toBeDefined();
     }

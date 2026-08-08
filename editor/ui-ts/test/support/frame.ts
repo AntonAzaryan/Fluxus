@@ -6,20 +6,26 @@
  * тесты каркаса ходят по `UiNode`, как и тесты визуального языка.
  */
 import {
+  ContributionRegistry,
   createEditorContributions,
   createEditorSession,
   createOperationRegistry,
   registerBuiltinOperations,
-  type ContributionRegistry,
+  registerValidationRules,
+  type ContributionReader,
   type EditorSession,
   type MemoryHost,
   type StringResources,
+  type ValidationRule,
 } from '@game-mvp/editor-core';
+import type { FieldEditor } from '../../src/inspector/index.js';
+import type { PaletteCommand } from '../../src/palette/palette.js';
 import { findAll, walk, type UiNode } from '../../src/dom/node.js';
 import { createWorkspaceFrame, type WorkspaceFrame } from '../../src/frame/frame.js';
 import type { WorkspaceArea } from '../../src/frame/area.js';
 import { uiResources } from '../../src/i18n/uiBundles.js';
 import { createSceneArea, sceneArea, type SceneAreaState } from '../../src/areas/scene.js';
+import { sceneValidationRules } from '../../src/areas/sceneProject.js';
 import type { StagePointer } from '../../src/areas/sceneInteraction.js';
 import { registerPlacementOperations } from '../../src/areas/scenePlacement.js';
 import { registerTerrainOperations } from '../../src/areas/sceneTerrain.js';
@@ -36,10 +42,23 @@ export interface FrameFixture {
   readonly areas: ContributionRegistry<WorkspaceArea>;
 }
 
+/**
+ * Чем сборка каркаса отличается от умолчаний. Всё это — реестры вкладов
+ * (ED-25): их приносит тот, кто собирает редактор, и тест здесь стоит на его
+ * месте.
+ */
+export interface FrameExtras {
+  /** Реестр редакторов поля (ED-25); нет — набор по умолчанию. */
+  readonly fieldEditors?: ContributionReader<FieldEditor>;
+  /** Команды палитры (ED-24, ED-25); нет — реестр пуст. */
+  readonly commands?: ContributionReader<PaletteCommand>;
+}
+
 /** Каркас с набором областей. По умолчанию — те же два вклада, что и в приложении. */
 export function buildFrame(
   areas: readonly WorkspaceArea[] = [sceneArea, systemsArea],
   locale = 'ru',
+  extras: FrameExtras = {},
 ): FrameFixture {
   const contributions = createEditorContributions<WorkspaceArea>();
   for (const area of areas) contributions.areas.register(area);
@@ -54,8 +73,16 @@ export function buildFrame(
     ),
   });
   const resources = uiResources(locale);
+  // Перечислено поимённо, а не спредом: сборка приносит реестры вкладов, и
+  // случайно прилетевшее поле не должно уметь подменить сам реестр областей.
   return {
-    frame: createWorkspaceFrame({ areas: contributions.areas, resources, session }),
+    frame: createWorkspaceFrame({
+      areas: contributions.areas,
+      resources,
+      session,
+      ...(extras.fieldEditors === undefined ? {} : { fieldEditors: extras.fieldEditors }),
+      ...(extras.commands === undefined ? {} : { commands: extras.commands }),
+    }),
     session,
     resources,
     areas: contributions.areas,
@@ -67,8 +94,11 @@ export function buildFrame(
  * (ED-12) и дубль вьюпорта вместо WebGL. Асинхронность здесь настоящая — так
  * же открывается и настоящий проект, — поэтому сборка ждёт микрозадач.
  */
-export async function buildLoadedFrame(locale = 'ru'): Promise<LoadedFrameFixture> {
-  const host = fixtureHost();
+export async function buildLoadedFrame(
+  locale = 'ru',
+  options: LoadedFrameOptions = {},
+): Promise<LoadedFrameFixture> {
+  const host = options.host ?? fixtureHost();
   // Обратный канал вьюпорта дубль получает так же, как настоящий: область
   // отдаёт его сборкой, и через него же приходит просьба перерисовать.
   const built: FakeStage[] = [];
@@ -76,9 +106,14 @@ export async function buildLoadedFrame(locale = 'ru'): Promise<LoadedFrameFixtur
   // Вторая сторона канала превью — та же подмена и по той же причине, что
   // вьюпорт: настоящего воркера в headless-прогоне нет (ED-9, SHELL-3).
   const preview = previewProbe();
+  // Правила валидации — вклад (ED-25): сборка вправе принести свои, и область
+  // прогоняет их наравне с теми, что приносит проект сцены.
+  const rules = new ContributionRegistry<ValidationRule>({ kind: 'rule' });
+  registerValidationRules(rules, [...sceneValidationRules(), ...(options.rules ?? [])]);
   const area = createSceneArea({
     host,
     ids: FIXTURE_IDS,
+    validationRules: rules,
     previewBackend: preview.factory,
     stage: (_project, _host, hooks) => {
       const made = fakeStage(hooks.announce);
@@ -87,7 +122,7 @@ export async function buildLoadedFrame(locale = 'ru'): Promise<LoadedFrameFixtur
       return made;
     },
   });
-  const fixture = buildFrame([area, systemsArea], locale);
+  const fixture = buildFrame([area, systemsArea, ...(options.areas ?? [])], locale, options);
   // Запись состояния заводится лениво — первым обращением к области.
   const state = fixture.frame.stateOf(area.id) as SceneAreaState;
   await settle();
@@ -100,6 +135,15 @@ export async function buildLoadedFrame(locale = 'ru'): Promise<LoadedFrameFixtur
   // и до неё указатель ему подавать нечего.
   fixture.frame.view();
   return { ...fixture, host, stage, area, state, pointer, preview };
+}
+
+export interface LoadedFrameOptions extends FrameExtras {
+  /** Дерево контента; нет — фикстура по умолчанию. */
+  readonly host?: MemoryHost;
+  /** Дополнительные правила валидации (ED-8, ED-25). */
+  readonly rules?: readonly ValidationRule[];
+  /** Дополнительные области сверх сцены и систем. */
+  readonly areas?: readonly WorkspaceArea[];
 }
 
 export interface LoadedFrameFixture extends FrameFixture {
@@ -115,6 +159,18 @@ export interface LoadedFrameFixture extends FrameFixture {
 
 export function attr(node: UiNode, name: string): string | undefined {
   return node.attrs?.[name];
+}
+
+/**
+ * Одна зона скелета (ED-24). Нужна там, где проверяется не «есть ли на
+ * странице», а «в каком месте страницы»: находка валидации показывается и в
+ * навигаторе, и в инспекторе, и в баре поверхности, и утверждение о ней без
+ * зоны стало бы утверждением о числе показов.
+ */
+export function zoneOf(root: UiNode, name: 'navigator' | 'surface' | 'inspector'): UiNode {
+  const found = findAll(root, (node) => attr(node, 'data-zone') === name)[0];
+  if (found === undefined) throw new Error(`в скелете нет зоны ${name}`);
+  return found;
 }
 
 /** Узлы с заданным машинным атрибутом — в порядке документа. */

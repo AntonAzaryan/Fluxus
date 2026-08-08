@@ -19,6 +19,7 @@
  */
 export type {
   AreaContext,
+  AreaSearch,
   AreaSetup,
   AreaState,
   AreaZones,
@@ -29,6 +30,7 @@ export type { WorkspaceFrame, WorkspaceFrameOptions } from './frame.js';
 export {
   DISMISS_KEY,
   FRAME_BINDINGS,
+  PALETTE_BINDING,
   REDO_BINDING,
   UNDO_BINDING,
   keyStrokeOf,

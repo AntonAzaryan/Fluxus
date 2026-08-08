@@ -68,9 +68,14 @@ const LOCALES: readonly (readonly [string, string])[] = [
 ];
 
 /**
- * Строка поиска отдаёт запрос по `change`, а не по каждому нажатию: перерисовка
- * на посимвольный ввод уводила бы фокус из поля, а сам запрос — состояние
- * сессии, а не повод перерисовать страницу.
+ * Строка поиска отдаёт запрос посимвольно: по нему открывается палитра, а
+ * палитра обязана сужаться по мере набора — иначе поиск при сотнях документов
+ * не отличается от прохода по дереву (ED-24).
+ *
+ * Фокус при этом не теряется, хотя страница и пересобирается на каждый символ:
+ * первый же символ переносит набор в строку запроса палитры, куда каркас и
+ * просит вернуть фокус (`frame.ts`). Оставлять набор здесь было бы вторым полем
+ * с тем же содержимым.
  */
 function searchField(spec: TopBarSpec): UiNode {
   const label = resourceText(spec.resources, 'ui.app.search');
@@ -85,7 +90,7 @@ function searchField(spec: TopBarSpec): UiNode {
       ...(spec.query === '' ? {} : { value: documentValue(spec.query) }),
     },
     on: {
-      change: (event: Event) => {
+      input: (event: Event) => {
         const target = event.target;
         if (target !== null && 'value' in target && typeof target.value === 'string') {
           spec.onQuery(target.value);

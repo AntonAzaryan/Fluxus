@@ -16,15 +16,16 @@
  * остальное написано так, будто среды не существует (ED-12).
  */
 import {
+  buildEditorCatalog,
+  catalogDescriptions,
   createEditorContributions,
   createEditorSession,
   createOperationRegistry,
+  describeOperations,
   registerBuiltinOperations,
   registerValidationRules,
   type ContentChangeKind,
   type ContentPath,
-  type FieldEditorContribution,
-  type PaletteCommandContribution,
   type ValidationRule,
   type ViewportToolContribution,
 } from '@game-mvp/editor-core';
@@ -32,9 +33,10 @@ import {
   createWebHost,
   createWorkspaceFrame,
   mountWorkspaceFrame,
+  registerFieldEditors,
   uiResources,
 } from '../src/index.js';
-import type { WorkspaceArea } from '../src/index.js';
+import type { FieldEditor, PaletteCommand, WorkspaceArea } from '../src/index.js';
 import { createAssetArea } from '../src/areas/assets.js';
 import { registerVisualsOperations } from '../src/areas/assetVisuals.js';
 import { DEFAULT_SCENE_IDS, createSceneArea } from '../src/areas/scene.js';
@@ -77,10 +79,13 @@ const host = createWebHost({
 const contributions = createEditorContributions<
   WorkspaceArea,
   ViewportToolContribution,
-  FieldEditorContribution,
-  PaletteCommandContribution,
+  FieldEditor,
+  PaletteCommand,
   ValidationRule
 >();
+// Редакторы поля — такой же вклад (ED-25): набор, который редактор везёт с
+// собой, регистрируется здесь же, и проект вправе перекрыть любой из них.
+registerFieldEditors(contributions.fieldEditors);
 // Правила валидации — такой же вклад, как область (ED-25), и реестр у них один
 // на редактор: раскладку документов проекта приносит область, а не правило.
 registerValidationRules(contributions.validationRules, sceneValidationRules());
@@ -105,11 +110,25 @@ const session = createEditorSession({
   ),
 });
 
+const resources = uiResources('ru');
+
 mountWorkspaceFrame(
   document,
   createWorkspaceFrame({
     areas: contributions.areas,
-    resources: uiResources('ru'),
+    resources,
     session,
+    fieldEditors: contributions.fieldEditors,
+    commands: contributions.commands,
+    // Машинное само-описание редактора (ED-30) собирается из ВСЕХ реестров
+    // сборки, а не из тех, что видит каркас: палитра показывает операции из
+    // того же каталога, который получает внешний потребитель, и второго
+    // описания не заводится.
+    catalog: () =>
+      buildEditorCatalog({
+        contributions,
+        operations: () => describeOperations(session.operations),
+        descriptions: catalogDescriptions(resources),
+      }),
   }),
 );

@@ -29,11 +29,14 @@
  * ссылки на выделенное (непрозрачная строка), но не знает, что ею адресовано.
  */
 import type {
+  ContributionReader,
   EditorSession,
   StringResources,
   WorkspaceAreaContribution,
 } from '@game-mvp/editor-core';
 import type { UiNode } from '../dom/node.js';
+import type { FieldEditor } from '../inspector/editors.js';
+import type { SearchHit } from '../palette/palette.js';
 import type { IconName } from '../widgets/icon.js';
 import type { EditorMode, PreviewSource } from './preview.js';
 import type { AreaSelection } from './selection.js';
@@ -86,8 +89,28 @@ export interface AreaContext<S extends AreaState = AreaState> {
    * нельзя (ED-9), и решение об этом принимается там же, где строится элемент.
    */
   readonly mode: EditorMode;
+  /**
+   * Реестр редакторов поля (ED-25) — один на редактор, а не свой у каждой
+   * области: «редактор поля подхватывается инспектором во всех областях сразу»
+   * держится ровно на том, что реестр области не принадлежит. Она берёт его
+   * отсюда и отдаёт инспектору вместе со своей схемой (ED-24).
+   */
+  readonly fieldEditors: ContributionReader<FieldEditor>;
   /** Просьба перерисовать: область изменила своё состояние и хочет это показать. */
   refresh(): void;
+}
+
+/**
+ * Что область получает на запрос поиска. Отдельно от `AreaContext`, потому что
+ * поиск — не отрисовка: ни режима, ни реестра редакторов поля, ни просьбы
+ * перерисовать здесь нет — метод обязан быть дешёвым и без побочных действий.
+ */
+export interface AreaSearch<S extends AreaState = AreaState> {
+  readonly query: string;
+  readonly state: S;
+  /** Сквозное выделение (ED-23): им находка себя и открывает. */
+  readonly selection: AreaSelection;
+  readonly session: EditorSession;
 }
 
 /**
@@ -114,6 +137,19 @@ export interface WorkspaceArea<S extends AreaState = AreaState>
    * обязан быть дешёвым и без побочных действий: сам прогон начинает `start`.
    */
   preview?(state: S): PreviewSource;
+  /**
+   * Что область находит по запросу поиска (ED-24: «поиск вместо дерева»). Нет
+   * метода — области нечего искать.
+   *
+   * Находки приносит область, а не каркас, по той же причине, по которой она
+   * приносит содержимое зон: каркас не знает, что за материал она правит, и
+   * «открыть найденное напрямую» умеет только она сама (ED-25). Переключение на
+   * область при этом делает каркас — поиск сквозной (ED-23), и находка соседней
+   * области обязана открываться так же, как своя.
+   *
+   * Метод зовут на каждый набранный автором символ.
+   */
+  search?(input: AreaSearch<S>): readonly SearchHit[];
   /** Содержимое трёх зон. Зовётся на каждую отрисовку активной области. */
   render(context: AreaContext<S>): AreaZones;
 }

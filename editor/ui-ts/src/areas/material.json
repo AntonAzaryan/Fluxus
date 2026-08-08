@@ -18,6 +18,12 @@
         "secondary": "systems"
       }
     ],
+    "schema": {
+      "flags": {
+        "enabled": "boolean",
+        "replicated": "boolean"
+      }
+    },
     "document": {
       "id": "on_death",
       "flags": {

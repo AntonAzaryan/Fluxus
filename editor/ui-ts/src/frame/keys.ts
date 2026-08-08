@@ -39,6 +39,13 @@ export const REDO_BINDING = 'Ctrl+Shift+Z';
 export const DISMISS_KEY = 'Escape';
 
 /**
+ * Открытие палитры команд (ED-24). Сочетание сквозное, как отмена: палитра —
+ * способ добраться до чего угодно из любой области, и область, объявившая это
+ * сочетание своим, отобрала бы у автора единственный путь мимо дерева.
+ */
+export const PALETTE_BINDING = 'Ctrl+P';
+
+/**
  * Канонические имена модификаторов — так же, как они пишутся в самих
  * сочетаниях. Порядок здесь и есть порядок в канонической записи: сравнение
  * идёт строками, а не тремя условиями, поэтому `Shift+Ctrl+Z` и `Ctrl+Shift+Z`
@@ -86,4 +93,5 @@ export const FRAME_BINDINGS: readonly string[] = Object.freeze([
   UNDO_BINDING,
   REDO_BINDING,
   DISMISS_KEY,
+  PALETTE_BINDING,
 ]);

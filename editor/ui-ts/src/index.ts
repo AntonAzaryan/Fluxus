@@ -35,6 +35,15 @@ export type { CssRule, RuleRole } from './tokens/stylesheet.js';
  */
 export * from './frame/index.js';
 
+/**
+ * Инспектор из схемы (ED-24) и палитра команд с поиском по проекту (ED-24) —
+ * части каркаса, а не вклады: место инспектора и способ добраться до чего
+ * угодно мимо дерева одинаковы во всех областях. Вкладами приходит то, что они
+ * показывают: редакторы поля, команды и находки поиска (ED-25).
+ */
+export * from './inspector/index.js';
+export * from './palette/index.js';
+
 export {
   ROVING_ATTR,
   rovingContainer,

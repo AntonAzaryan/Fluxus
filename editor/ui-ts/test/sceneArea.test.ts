@@ -9,12 +9,12 @@
  * ему отдано, а не как оно нарисовано (WebGL в прогоне нет).
  */
 import { describe, expect, it } from 'vitest';
-import { findAll, hasClass } from '../src/dom/node.js';
+import { findAll, hasClass, type UiNode } from '../src/dom/node.js';
 import { VIEWPORT_CLASS } from '../src/tokens/stylesheet.js';
 import { SCENE_NODES, SCENE_VIEWPORT_ID, sceneArea } from '../src/areas/scene.js';
 import { canRender } from '../src/areas/sceneStage.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
-import { attr, buildFrame, buildLoadedFrame, buttonByKey, press } from './support/frame.js';
+import { attr, buildFrame, buildLoadedFrame, buttonByKey, press, zoneOf } from './support/frame.js';
 import { FIXTURE_IDS, settle } from './support/project.js';
 
 describe('ED-15: вьюпорт показывает документы, а не фикстуру интерфейса', () => {
@@ -110,18 +110,22 @@ describe('ED-24: три зоны области наполнены докуме�
   it('инспектор показывает поля выбранной записи и молчит, пока ничего не выбрано', async () => {
     const { frame, session, area } = await buildLoadedFrame();
     const keys = (): string[] =>
-      findAll(frame.view(), (node) => node.text?.key !== undefined).map(
+      findAll(zoneOf(frame.view(), 'inspector'), (node) => node.text?.key !== undefined).map(
         (node) => node.text?.key ?? '',
       );
     expect(keys()).toContain('ui.inspector.empty');
 
     const key = session.descriptors(FIXTURE_IDS.config, PLACEMENT_LIST)[0];
     frame.selection.set(area.id, [key ?? '']);
-    const values = findAll(frame.view(), (node) => node.labels?.value !== undefined).map(
-      (node) => node.labels?.value?.value ?? '',
+    // Строки инспектора — поля схемы: запись расстановки по схеме формата
+    // (SER-8) и поля компонентов её prefab'а по схемам компонентов (ECS-3).
+    const inspector = zoneOf(frame.view(), 'inspector');
+    const labels = findAll(inspector, (node) => hasClass(node, 'fx-field-row__label')).flatMap(
+      (row) => findAll(row, (node) => node.text?.origin === 'value').map((node) => node.text?.value),
     );
-    expect(values).toContain('Hero');
-    expect(values).toContain('1.500');
+    expect(labels).toContain('prefab');
+    expect(labels).toContain('x');
+    expect(labels).toContain('turns');
     expect(keys()).not.toContain('ui.inspector.empty');
   });
 
@@ -174,7 +178,13 @@ describe('ED-8, ED-22: сломанный документ назван прич
     expect(stage.last?.grid).toBeNull();
     expect(drawn).toBeDefined();
 
-    const marks = findAll(frame.view(), (node) => attr(node, 'data-severity') === 'error');
+    // Смотрим в бар поверхности правки: с W2-3 то же нарушение видно и строкой
+    // навигатора (`report.forDocument`), и утверждение о числе показов без
+    // зоны стало бы утверждением о том, в скольких местах оно показано.
+    const marks = findAll(
+      zoneOf(frame.view(), 'surface'),
+      (node) => attr(node, 'data-severity') === 'error',
+    );
     expect(marks).toHaveLength(1);
     const reason = findAll(marks[0] ?? { tag: 'div' }, (node) => node.text?.origin === 'value');
     expect(reason[0]?.text?.value).toContain('levels');
@@ -184,7 +194,9 @@ describe('ED-8, ED-22: сломанный документ назван прич
     // Документы целы, а кадр не прошёл — автор обязан это увидеть, иначе
     // прежняя картинка читается как ответ на его правку (ED-8, ED-15).
     const { frame, stage } = await buildLoadedFrame();
-    expect(findAll(frame.view(), (node) => attr(node, 'data-severity') === 'error')).toHaveLength(0);
+    const errors = (): UiNode[] =>
+      findAll(zoneOf(frame.view(), 'surface'), (node) => attr(node, 'data-severity') === 'error');
+    expect(errors()).toHaveLength(0);
 
     let redraws = 0;
     const stop = frame.subscribe(() => redraws++);
@@ -192,13 +204,13 @@ describe('ED-8, ED-22: сломанный документ назван прич
     // О причине вьюпорт сообщает сам — ждать чужой перерисовки нечего.
     expect(redraws).toBeGreaterThan(0);
     stop();
-    const marks = findAll(frame.view(), (node) => attr(node, 'data-severity') === 'error');
+    const marks = errors();
     expect(marks).toHaveLength(1);
     const reason = findAll(marks[0] ?? { tag: 'div' }, (node) => node.text?.origin === 'value');
     expect(reason[0]?.text?.value).toContain('чанк');
 
     stage.fail(null);
-    expect(findAll(frame.view(), (node) => attr(node, 'data-severity') === 'error')).toHaveLength(0);
+    expect(errors()).toHaveLength(0);
   });
 });
 

@@ -19,6 +19,20 @@ import { children, el, type UiNode, type UiText } from '../dom/node.js';
 import { icon } from './icon.js';
 import { withValidation, type ValidationState } from './validation.js';
 
+/**
+ * Значение элемента, на котором случилось событие. Проверка по наличию
+ * значения, а не по классу элемента: класс принадлежит тому окну, в котором
+ * построена страница, и `instanceof` ложно отрицателен и в соседнем окне
+ * оболочки среды (ED-12), и там, где документа нет вовсе. То же duck-typing,
+ * что у строки поиска каркаса, — второго способа прочитать ввод не заводится.
+ */
+function valueOf(event: Event): string | undefined {
+  const target: unknown = event.target;
+  if (typeof target !== 'object' || target === null || !('value' in target)) return undefined;
+  const { value } = target;
+  return typeof value === 'string' ? value : undefined;
+}
+
 export interface FieldSpec {
   readonly value: UiText;
   /** Подпись для доступности: контрол живёт в таблице, где подпись — соседняя ячейка. */
@@ -42,8 +56,8 @@ function control(spec: FieldSpec, extraClasses: readonly string[]): UiNode {
             ? undefined
             : {
                 change: (event: Event) => {
-                  const target = event.target;
-                  if (target instanceof HTMLInputElement) spec.onCommit?.(target.value);
+                  const raw = valueOf(event);
+                  if (raw !== undefined) spec.onCommit?.(raw);
                 },
               },
       }),
@@ -105,8 +119,8 @@ export function select(spec: SelectSpec): UiNode {
                   ? undefined
                   : {
                       change: (event: Event) => {
-                        const target = event.target;
-                        if (target instanceof HTMLSelectElement) spec.onSelect?.(target.value);
+                        const raw = valueOf(event);
+                        if (raw !== undefined) spec.onSelect?.(raw);
                       },
                     },
             }),

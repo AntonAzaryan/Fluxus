@@ -72,12 +72,18 @@ export const FIXTURE_CURVATURE = {
   rows: ['....', '.1a.', '.a1.', '....'],
 };
 
-export function fixtureHost(): MemoryHost {
+/**
+ * Дерево контента фикстуры. Конфиг сцены — параметр, а не константа: проверка
+ * «поле, дописанное в схему компонента, появляется в инспекторе» обязана
+ * дописать его в НАСТОЯЩИЙ документ, а не в подставленную инспектору структуру,
+ * иначе она проверяет саму себя, а не чтение реестра схем (ED-24).
+ */
+export function fixtureHost(scene: unknown = FIXTURE_SCENE): MemoryHost {
   return createMemoryHost({
     name: 'fixture',
     root: { label: 'fixture' },
     files: {
-      [FIXTURE_IDS.config]: JSON.stringify(FIXTURE_SCENE),
+      [FIXTURE_IDS.config]: JSON.stringify(scene),
       [FIXTURE_IDS.visuals]: JSON.stringify(FIXTURE_VISUALS),
       [FIXTURE_CURVATURE_ID]: JSON.stringify(FIXTURE_CURVATURE),
     },

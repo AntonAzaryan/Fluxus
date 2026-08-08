@@ -37,6 +37,7 @@
  * же основаниям, что undo мазка кисти (ED-18), — история одна на сессию.
  */
 import {
+  contentPathParent,
   createHostAssetSource,
   openDocumentFromHost,
   type ContentPath,
@@ -54,7 +55,14 @@ import {
   type UiNode,
   type UiText,
 } from '../dom/node.js';
-import type { AreaContext, AreaSetup, AreaZones, WorkspaceArea } from '../frame/area.js';
+import type {
+  AreaContext,
+  AreaSearch,
+  AreaSetup,
+  AreaZones,
+  WorkspaceArea,
+} from '../frame/area.js';
+import { matchesQuery, type SearchHit } from '../palette/palette.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS } from '../frame/styles.js';
 import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';
@@ -67,6 +75,7 @@ import {
   EMPTY_ASSET_TREE,
   findAssetNode,
   loadAssetTree,
+  walkAssetNodes,
   type AssetNode,
   type AssetTree,
 } from './assetTree.js';
@@ -230,6 +239,17 @@ function show(state: AssetAreaState, session: EditorSession): void {
   }
   stage.applyVisuals(previewManifest(entry));
   stage.submit(previewDraft(entry, { clip: state.clip, skin: state.skin }));
+}
+
+/** Каталоги над путём — их раскрывает находка поиска, чтобы найденное было видно. */
+function ancestorsOf(path: ContentPath): readonly ContentPath[] {
+  const parents: ContentPath[] = [];
+  let current = contentPathParent(path);
+  while (current !== '') {
+    parents.push(current);
+    current = contentPathParent(current);
+  }
+  return parents;
 }
 
 /** Выбор строки дерева: открыть ассет (ASSET-2) и показать его (ED-20). */
@@ -666,6 +686,35 @@ export function createAssetArea(options: AssetAreaOptions = {}): WorkspaceArea<A
     hotkey: 'F3',
     icon: 'search',
     editableTypes: [{ id: 'visuals', descriptionKey: 'ui.editable.visuals.description' }],
+    /**
+     * Поиск по проекту (ED-24) в части ассетов: файл дерева контента по его
+     * пути. Находка открывает ассет ровно тем же путём, что клик по строке
+     * дерева, — вторым способом «выбрать ассет» она не является (ED-20).
+     *
+     * Каталоги в находки не попадают: добраться ED-24 требует до ассета, а
+     * каталог — это место, а не то, что показывают в кадре.
+     */
+    search(input: AreaSearch<AssetAreaState>): readonly SearchHit[] {
+      const { query, state, session, selection } = input;
+      const found: SearchHit[] = [];
+      for (const node of walkAssetNodes(state.tree.nodes)) {
+        if (node.kind === 'directory' || !matchesQuery(query, node.path)) continue;
+        found.push({
+          id: node.path,
+          label: documentValue(node.name),
+          detail: documentValue(node.path),
+          icon: 'search',
+          reveal: () => {
+            // Раскрытие узлов над находкой: иначе выбранное лежит в свёрнутом
+            // каталоге, и «открыть напрямую» кончается пустым деревом.
+            for (const parent of ancestorsOf(node.path)) state.expanded.add(parent);
+            pick(state, session, node);
+            selection.set([node.path]);
+          },
+        });
+      }
+      return found;
+    },
     createState(setup): AssetAreaState {
       // Кадр собирается первым: его сервис ассетов и есть тот, у которого
       // просмотрщик спрашивает состояния (ASSET-2 — кэш один на ID).

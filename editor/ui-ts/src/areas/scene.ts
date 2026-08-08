@@ -39,20 +39,29 @@ import {
   registerValidationRules,
   type ContributionReader,
   type EnvironmentHost,
+  type JsonPath,
   type ValidationIssue,
   type ValidationReport,
   type ValidationRule,
   type Validator,
 } from '@game-mvp/editor-core';
 import { children, documentValue, el, issueText, resourceText, type UiNode } from '../dom/node.js';
-import type { AreaContext, AreaSetup, AreaZones, WorkspaceArea } from '../frame/area.js';
+import type {
+  AreaContext,
+  AreaSearch,
+  AreaSetup,
+  AreaZones,
+  WorkspaceArea,
+} from '../frame/area.js';
 import type { PreviewSource } from '../frame/preview.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS } from '../frame/styles.js';
+import { inspectorPanel, issueState, type InspectorSubject } from '../inspector/index.js';
+import { matchesQuery, type SearchHit } from '../palette/palette.js';
 import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';
-import { select, textField, toggle } from '../widgets/field.js';
-import { fieldTable, type FieldRowSpec } from '../widgets/fieldTable.js';
+import { select, toggle } from '../widgets/field.js';
 import { tree, type TreeItem } from '../widgets/rows.js';
+import { placementSubject, sceneDocumentSubject } from './sceneSchema.js';
 import { withValidation } from '../widgets/validation.js';
 import { viewportFrame } from '../viewport.js';
 import type { ScenePlacement } from './sceneDocuments.js';
@@ -363,12 +372,36 @@ function start(state: SceneAreaState, setup: AreaSetup, options: SceneAreaOption
 
 // ------------------------------------------------------------------ зоны
 
+/**
+ * Путь записи расстановки в документе на текущий момент: дескриптор переживает
+ * правку соседей, а путь — нет, поэтому он и спрашивается у сессии на каждую
+ * сборку строки (ED-29).
+ */
+function placementPath(
+  context: AreaContext<SceneAreaState>,
+  configId: string,
+  key: string,
+): JsonPath | undefined {
+  return context.session.resolveDescriptor(configId, key)?.path;
+}
+
 function placementItem(context: AreaContext<SceneAreaState>, placement: ScenePlacement): TreeItem {
   const { state, selection } = context;
+  const configId = state.project?.configId;
+  const path = configId === undefined ? undefined : placementPath(context, configId, placement.key);
+  // Находка правила стоит на месте внутри записи (например, на её ссылке на
+  // prefab), а строка навигатора — на самой записи: поэтому `under`, а не `at`.
+  // Оба индекса отчёта заведены ровно для этих двух вопросов (ED-8, ED-30).
+  const issues =
+    configId === undefined || path === undefined
+      ? []
+      : (state.report?.under(configId, path) ?? []);
+  const validation = issueState(context.resources, issues);
   return {
     id: placement.key,
     label: documentValue(placement.prefab),
     ...(placement.kind === null ? {} : { badge: documentValue(placement.kind) }),
+    ...(validation === undefined ? {} : { validation }),
     selected: selection.has(placement.key),
     onSelect: (id) => {
       state.focusId = id;
@@ -379,9 +412,11 @@ function placementItem(context: AreaContext<SceneAreaState>, placement: ScenePla
 
 function documentItem(context: AreaContext<SceneAreaState>, id: string): TreeItem {
   const { state, selection } = context;
+  const validation = issueState(context.resources, state.report?.forDocument(id) ?? []);
   return {
     id,
     label: documentValue(id),
+    ...(validation === undefined ? {} : { validation }),
     selected: selection.has(id),
     onSelect: (selected) => {
       state.focusId = selected;
@@ -439,11 +474,13 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
     placementItem(context, placement),
   );
 
+  const rootValidation = issueState(resources, state.report?.forDocument(project.configId) ?? []);
   const root: TreeItem = {
     id: project.configId,
     label: documentValue(project.configId),
     expanded: state.expanded.has(project.configId),
     selected: context.selection.has(project.configId),
+    ...(rootValidation === undefined ? {} : { validation: rootValidation }),
     items: [
       group(context, SCENE_NODES.placements, 'ui.area.scene.placements', placements),
       group(context, SCENE_NODES.assets, 'ui.navigator.assets', assets),
@@ -752,73 +789,49 @@ function surface(context: AreaContext<SceneAreaState>): UiNode {
   });
 }
 
-function inspector(context: AreaContext<SceneAreaState>): UiNode {
-  const { state, resources } = context;
+/**
+ * Что показывает инспектор при текущем выделении. Схему приносит `sceneSchema.ts`
+ * — реестр схем ядра, а не список в этом файле (ED-24). Выбранному, у которого
+ * схемы нет (карта кривизны, манифест), инспектор показывает пустоту, а не
+ * выдуманные строки: их формат нормируют другие capability.
+ */
+function subjectOf(context: AreaContext<SceneAreaState>): InspectorSubject | null {
+  const { state, session } = context;
+  const project = state.project;
   const selected = context.selection.current()[0];
+  if (project === null || selected === undefined) return null;
+
   const placement = (state.draft?.placements ?? []).find((item) => item.key === selected);
+  if (placement !== undefined) {
+    return placementSubject({
+      session,
+      documentId: project.configId,
+      record: placement.key,
+      prefab: placement.prefab,
+      prefabs: prefabNames(session.documentValue(project.configId)),
+    });
+  }
+  return selected === project.configId ? sceneDocumentSubject(project.configId) : null;
+}
 
-  const rows: FieldRowSpec[] =
-    placement === undefined
-      ? []
-      : [
-          {
-            label: resourceText(resources, 'ui.area.scene.field.prefab'),
-            control: textField({
-              label: resourceText(resources, 'ui.area.scene.field.prefab'),
-              value: documentValue(placement.prefab),
-              readOnly: true,
-            }),
-          },
-          // Позиция, поворот и уровень — производные worldInit: их выводит ядро
-          // (TERR-4), а правит их вьюпорт — постановкой, перетаскиванием и
-          // поворотом выделенного (ED-16), то есть операцией, а не этим полем.
-          ...(
-            [
-              ['ui.area.scene.field.x', placement.x.toFixed(3)],
-              ['ui.area.scene.field.y', placement.y.toFixed(3)],
-              // Поворот показан в единице ядра — доле оборота: делить радианы
-              // рендера обратно значило бы показывать величину, которой в
-              // документе нет (FP-1).
-              ...(placement.yaw === undefined
-                ? []
-                : ([['ui.area.scene.field.turns', placement.turns.toFixed(3)]] as const)),
-              ['ui.area.scene.field.level', String(placement.level ?? 0)],
-            ] as const
-          ).map(([key, value]) => ({
-            label: resourceText(resources, key),
-            control: textField({
-              label: resourceText(resources, key),
-              value: documentValue(value),
-              readOnly: true,
-            }),
-            note: resourceText(resources, 'ui.validation.derived'),
-          })),
-        ];
-
-  return el('div', {
-    children: children(
-      el('div', {
-        classes: ['fx-section'],
-        children: children(
-          el('span', { text: resourceText(resources, 'ui.inspector.title') }),
-          placement === undefined
-            ? undefined
-            : el('span', {
-                classes: ['fx-row__trailing'],
-                children: [statusChip({ label: documentValue(placement.prefab) })],
-              }),
-        ),
-      }),
-      rows.length === 0
-        ? el('div', {
-            classes: ['fx-row'],
-            text: resourceText(resources, 'ui.inspector.empty'),
-          })
-        : fieldTable({
-            label: resourceText(resources, 'ui.inspector.fields'),
-            groups: [{ label: resourceText(resources, 'ui.inspector.fields'), rows }],
-          }),
-    ),
+function inspector(context: AreaContext<SceneAreaState>): UiNode {
+  const { state } = context;
+  return inspectorPanel({
+    resources: context.resources,
+    session: context.session,
+    // Реестр редакторов поля — от каркаса: вклад, зарегистрированный один раз,
+    // подхватывается инспектором всех областей сразу (ED-25).
+    fieldEditors: context.fieldEditors,
+    subject: subjectOf(context),
+    // Структурный отчёт (ED-30): по нему поле и находит свою находку.
+    report: state.report,
+    // В превью операции авторинга недоступны, и поля показаны недоступными, а
+    // не молча не принимающими ввод (ED-9, ED-26).
+    disabled: authoringOff(context),
+    onFailure: (reason) => {
+      state.failure = reason;
+      context.refresh();
+    },
   });
 }
 
@@ -831,6 +844,49 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
     icon: 'layers',
     editableTypes: [{ id: 'scene', descriptionKey: 'ui.editable.scene.description' }],
     preview: (state) => state.preview,
+    /**
+     * Поиск по проекту (ED-24): документы сцены по их пути в дереве контента и
+     * записи расстановки по имени prefab'а. «Открыть напрямую» здесь — выделить
+     * найденное и раскрыть узлы над ним: то же состояние, в котором автор
+     * оказался бы, пройдя дерево, только без прохода.
+     */
+    search(input: AreaSearch<SceneAreaState>): readonly SearchHit[] {
+      const { query, state, selection } = input;
+      const project = state.project;
+      if (project === null) return [];
+      const found: SearchHit[] = [];
+      const reveal = (id: string, ...open: readonly string[]): (() => void) => {
+        return () => {
+          for (const node of open) state.expanded.add(node);
+          state.focusId = id;
+          selection.set([id]);
+        };
+      };
+      const documents = [
+        project.configId,
+        project.visualsId,
+        ...(project.curvatureId === null ? [] : [project.curvatureId]),
+      ];
+      for (const id of documents) {
+        if (!matchesQuery(query, id)) continue;
+        found.push({
+          id,
+          label: documentValue(id),
+          icon: 'layers',
+          reveal: reveal(id, project.configId, SCENE_NODES.assets),
+        });
+      }
+      for (const placement of state.draft?.placements ?? []) {
+        if (!matchesQuery(query, placement.prefab)) continue;
+        found.push({
+          id: placement.key,
+          label: documentValue(placement.prefab),
+          detail: documentValue(project.configId),
+          reveal: reveal(placement.key, project.configId, SCENE_NODES.placements),
+        });
+      }
+      return found;
+    },
     createState(setup): SceneAreaState {
       const ids = options.ids ?? DEFAULT_SCENE_IDS;
       const state: SceneAreaState = {

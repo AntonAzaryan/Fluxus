@@ -223,6 +223,13 @@ export interface ListItem {
   readonly trailing?: UiText;
   readonly icon?: IconName;
   readonly selected?: boolean;
+  /**
+   * Строка, которую сейчас нечем применить (ED-26): она показана и приглушена,
+   * а не спрятана — исчезнувший элемент оставляет автора гадать, был ли он.
+   * Признак несёт `aria-disabled`, а не отсутствие обработчика: обработчика
+   * может не быть и у обычной строки списка.
+   */
+  readonly disabled?: boolean;
   readonly validation?: ValidationState;
   readonly onSelect?: (id: string) => void;
 }
@@ -279,6 +286,7 @@ export function denseList(spec: ListSpec): UiNode {
           role: 'option',
           'aria-selected': String(selected),
           'data-id': item.id,
+          ...(item.disabled === true ? { 'aria-disabled': 'true' } : {}),
           ...(roving ? rovingItem(item.id === active) : {}),
         },
         children: children(
@@ -292,7 +300,7 @@ export function denseList(spec: ListSpec): UiNode {
             : el('span', { classes: ['fx-row__trailing'], text: item.trailing }),
         ),
         on:
-          item.onSelect === undefined
+          item.onSelect === undefined || item.disabled === true
             ? undefined
             : {
                 click: () => {

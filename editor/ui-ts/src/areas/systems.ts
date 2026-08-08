@@ -18,12 +18,18 @@
  * метода не имеет. На этой правке проверяется сценарий ED-23 «отмена правки,
  * сделанной в другой области».
  */
-import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
-import type { AreaContext, AreaSetup, AreaZones, WorkspaceArea } from '../frame/area.js';
+import { documentValue, el, resourceText, type UiNode } from '../dom/node.js';
+import type {
+  AreaContext,
+  AreaSearch,
+  AreaSetup,
+  AreaZones,
+  WorkspaceArea,
+} from '../frame/area.js';
 import { SCROLL_CLASS } from '../frame/styles.js';
+import { inspectorPanel, type InspectorSubject, type SchemaField } from '../inspector/index.js';
+import { matchesQuery, type SearchHit } from '../palette/palette.js';
 import { statusChip } from '../widgets/chip.js';
-import { toggle } from '../widgets/field.js';
-import { fieldTable, type FieldRowSpec } from '../widgets/fieldTable.js';
 import { denseList } from '../widgets/rows.js';
 import { MATERIAL } from './material.js';
 
@@ -47,13 +53,23 @@ export interface SystemsAreaState {
   focusId: string;
 }
 
-function flagsOf(context: AreaContext<SystemsAreaState>): Readonly<Record<string, boolean>> {
-  const value = context.session.documentValue(context.state.documentId);
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
-  const flags = (value as Record<string, unknown>).flags;
-  if (typeof flags !== 'object' || flags === null || Array.isArray(flags)) return {};
-  return Object.fromEntries(
-    Object.entries(flags).map(([name, raw]) => [name, raw === true]),
+/**
+ * Схема флагов документа — заглушка на месте настоящего реестра схем систем
+ * (ED-4, ED-5 — следующий проход). Лежит в материале рядом с самим документом,
+ * а не списком в этом файле: инспектор строится из схемы (ED-24), и подсунуть
+ * ему список имён значило бы проверять его на том, чего он не делает.
+ */
+function flagSchema(): readonly SchemaField[] {
+  return Object.entries(MATERIAL.systems.schema.flags).map(
+    ([name, type]): SchemaField => ({
+      name,
+      type,
+      path: [...FLAGS_PATH, name],
+      // Ключ описания вычисляется из пути (ED-28). Ресурса на него нет ни в
+      // одной локали, и подсказка показывает сам ключ — видимый признак того,
+      // что поле не документировано.
+      description: [SYSTEM_DOCUMENT_KIND, name],
+    }),
   );
 }
 
@@ -132,36 +148,27 @@ function surface(context: AreaContext<SystemsAreaState>): UiNode {
   });
 }
 
-function inspector(context: AreaContext<SystemsAreaState>): UiNode {
-  const { resources, session, state } = context;
-  const rows: FieldRowSpec[] = Object.entries(flagsOf(context)).map(([name, on]) => ({
-    label: documentValue(name),
-    control: toggle({
-      label: documentValue(name),
-      on,
-      onChange: (next) => {
-        // Единственный путь правки — зарегистрированная операция (ED-29).
-        // Прямой записи в документ у интерфейса нет: сессия отдаёт значение
-        // замороженным, и обойти историю (ED-18) нечем. Перерисовки область не
-        // просит: документ изменился, и каркас узнаёт об этом от сессии — так
-        // же, как узнал бы о правке, пришедшей вообще не из интерфейса.
-        session.applyOperation('document.setValue', {
-          document: state.documentId,
-          path: [...FLAGS_PATH, name],
-          value: next,
-        });
-      },
-    }),
-  }));
+/**
+ * Инспектор — тот же, что у остальных областей (ED-24), и правит он тем же
+ * слоем операций (ED-29): область не заводит ни своих контролов по типу поля,
+ * ни своего пути записи в документ. Отсюда же и «редактор поля подхватывается
+ * во всех областях сразу» (ED-25): реестр приходит от каркаса.
+ */
+function subjectOf(context: AreaContext<SystemsAreaState>): InspectorSubject {
+  return {
+    address: { documentId: context.state.documentId },
+    groups: [{ name: SYSTEMS.document.id, fields: flagSchema() }],
+    title: documentValue(SYSTEMS.document.id),
+  };
+}
 
-  return el('div', {
-    children: children(
-      el('div', { classes: ['fx-section'], text: resourceText(resources, 'ui.inspector.title') }),
-      fieldTable({
-        label: resourceText(resources, 'ui.area.systems.flags'),
-        groups: [{ label: documentValue(SYSTEMS.document.id), rows }],
-      }),
-    ),
+function inspector(context: AreaContext<SystemsAreaState>): UiNode {
+  return inspectorPanel({
+    resources: context.resources,
+    session: context.session,
+    fieldEditors: context.fieldEditors,
+    subject: subjectOf(context),
+    disabled: context.mode === 'preview',
   });
 }
 
@@ -174,6 +181,26 @@ export const systemsArea: WorkspaceArea<SystemsAreaState> = {
   editableTypes: [
     { id: SYSTEM_DOCUMENT_KIND, descriptionKey: 'ui.editable.system.description' },
   ],
+  /**
+   * Поиск по проекту (ED-24): документы области по их имени. Сценарий требования
+   * — «автор ищет систему по имени в проекте с сотней документов» — закрывается
+   * ровно этим: находка выделяет документ, не проходя дерево.
+   */
+  search(input: AreaSearch<SystemsAreaState>): readonly SearchHit[] {
+    const { query, state, selection } = input;
+    return SYSTEMS.documents
+      .filter((document) => matchesQuery(query, document.id, document.label))
+      .map((document) => ({
+        id: document.id,
+        label: documentValue(document.label),
+        detail: documentValue(document.id),
+        icon: 'graph' as const,
+        reveal: () => {
+          state.focusId = document.id;
+          selection.set([document.id]);
+        },
+      }));
+  },
   createState(setup: AreaSetup): SystemsAreaState {
     const documentId = SYSTEMS.documentId;
     // Документ открывается один раз на сессию — вместе с записью состояния.

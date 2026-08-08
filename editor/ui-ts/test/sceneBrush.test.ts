@@ -25,6 +25,7 @@ import {
   buildLoadedFrame,
   buttonByKey,
   press,
+  zoneOf,
   type LoadedFrameFixture,
 } from './support/frame.js';
 import { PAINT_IDS, PAINT_SIDE, bytesOf, paintSession } from './support/paint.js';
@@ -454,8 +455,22 @@ describe('ED-11: несовпадение сеток видно сразу', () 
       FIXTURE_CURVATURE_ID,
     ]);
     expect(issues.every((issue) => issue.severity === 'warning')).toBe(true);
-    const marks = findAll(view(fixture), (node) => node.attrs?.['data-severity'] === 'warning');
+    // Бар поверхности правки: находка на ось — своим чипом. Строка навигатора
+    // показывает то же нарушение своим признаком (`report.forDocument`), и
+    // считать их вместе значило бы считать места показа, а не находки.
+    const marks = findAll(
+      zoneOf(view(fixture), 'surface'),
+      (node) => node.attrs?.['data-severity'] === 'warning',
+    );
     expect(marks).toHaveLength(issues.length);
+    // Та же находка видна и на строке документа в навигаторе: `report` — общий,
+    // и место показа выбирает зона, а не правило (ED-8, ED-22).
+    expect(
+      findAll(
+        zoneOf(view(fixture), 'navigator'),
+        (node) => node.attrs?.['data-severity'] === 'warning',
+      ).length,
+    ).toBeGreaterThan(0);
     // Причина — разрешённый ресурс с подставленными величинами (ED-27): ни
     // ключа, ни пустого текста автору не показывается.
     const reasons = marks.flatMap((mark) =>

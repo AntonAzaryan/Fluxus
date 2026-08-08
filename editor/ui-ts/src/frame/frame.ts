@@ -29,13 +29,35 @@
  * что требует документа, — в `mount.ts`, и потому этот модуль проверяется без
  * DOM целиком.
  */
-import type { ContributionReader, EditorSession, StringResources } from '@game-mvp/editor-core';
-import { el, type UiNode } from '../dom/node.js';
+import {
+  ContributionRegistry,
+  buildEditorCatalog,
+  catalogDescriptions,
+  describeOperations,
+  type Contribution,
+  type ContributionKind,
+  type ContributionReader,
+  type EditorCatalog,
+  type EditorSession,
+  type StringResources,
+  type ValidationRuleContribution,
+  type ViewportToolContribution,
+} from '@game-mvp/editor-core';
+import { children, el, type UiNode } from '../dom/node.js';
+import { defaultFieldEditors, type FieldEditor } from '../inspector/editors.js';
+import {
+  paletteEntries,
+  type PaletteCommand,
+  type PaletteEntry,
+  type SearchHit,
+} from '../palette/palette.js';
+import { PALETTE_ROVING_ID, paletteView } from '../palette/view.js';
 import { APP_CLASS } from '../tokens/css.js';
 import type { AreaSetup, AreaState, WorkspaceArea } from './area.js';
 import {
   DISMISS_KEY,
   FRAME_BINDINGS,
+  PALETTE_BINDING,
   REDO_BINDING,
   UNDO_BINDING,
   matchesBinding,
@@ -59,6 +81,23 @@ export interface WorkspaceFrameOptions {
   readonly initialAreaId?: string;
   /** Модель выделения; по умолчанию заводится своя, на сессию. */
   readonly selection?: SelectionModel;
+  /**
+   * Реестр редакторов поля (ED-25). Один на редактор: он уходит каждой области
+   * на отрисовку, и потому вклад, зарегистрированный один раз, подхватывается
+   * инспектором всех областей сразу. По умолчанию — набор, который редактор
+   * везёт с собой.
+   */
+  readonly fieldEditors?: ContributionReader<FieldEditor>;
+  /** Реестр команд палитры (ED-24, ED-25); по умолчанию пуст. */
+  readonly commands?: ContributionReader<PaletteCommand>;
+  /**
+   * Машинный каталог редактора (ED-30) — из него палитра берёт операции. По
+   * умолчанию собирается из того же, что есть у каркаса: реестра областей и
+   * реестра операций сессии. Сборка, у которой есть ещё и реестры инструментов
+   * и правил, подаёт свой — второго описания при этом не заводится, потому что
+   * оба собираются из реестров в момент запроса.
+   */
+  readonly catalog?: () => EditorCatalog;
 }
 
 export interface WorkspaceFrame {
@@ -73,6 +112,12 @@ export interface WorkspaceFrame {
   /** Запрос поиска по проекту — сквозной, переключение области его не теряет. */
   searchQuery(): string;
   setSearchQuery(query: string): void;
+  /** Открыта ли палитра команд (ED-24). */
+  paletteOpen(): boolean;
+  openPalette(): void;
+  closePalette(): void;
+  /** Строки палитры при текущем запросе: находки поиска, команды, операции. */
+  paletteEntries(): readonly PaletteEntry[];
   canUndo(): boolean;
   canRedo(): boolean;
   undo(): void;
@@ -98,12 +143,33 @@ export interface WorkspaceFrame {
   subscribe(listener: () => void): () => void;
 }
 
+/** Пустой реестр: сборка, не принёсшая своего, каталогу его и отдаёт. */
+function emptyReader<T extends Contribution>(kind: ContributionKind): ContributionReader<T> {
+  return new ContributionRegistry<T>({ kind });
+}
+
 export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceFrame {
   const { areas, resources, session } = options;
   const selection = options.selection ?? createSelectionModel();
   const states = createAreaStateStore();
   const setup: AreaSetup = { session };
   const listeners = new Set<() => void>();
+  const fieldEditors = options.fieldEditors ?? defaultFieldEditors();
+  const commands = options.commands ?? emptyReader<PaletteCommand>('command');
+  const catalog =
+    options.catalog ??
+    ((): EditorCatalog =>
+      buildEditorCatalog({
+        contributions: {
+          areas,
+          viewportTools: emptyReader<ViewportToolContribution>('tool'),
+          validationRules: emptyReader<ValidationRuleContribution>('rule'),
+        },
+        // Тот же реестр операций, что исполняет правки (ED-29), и то же
+        // само-описание, что уходит внешнему потребителю (ED-30).
+        operations: () => describeOperations(session.operations),
+        descriptions: catalogDescriptions(resources),
+      }));
 
   const registered = areas.all();
   const first = registered[0];
@@ -132,6 +198,9 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
     }
   }
   let query = '';
+  let palette = false;
+  /** Строка палитры под подсветкой; пустая — подсвечена первая из показанных. */
+  let paletteActive = '';
   let focusRequest: string | undefined;
   let mode: EditorMode = 'edit';
   let run: PreviewRun | null = null;
@@ -192,6 +261,42 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
     return null;
   };
 
+  /**
+   * Находки поиска по проекту (ED-24). Спрашиваются у областей: что считать
+   * находкой, знает вклад, а каркас складывает ответы и добавляет к каждой
+   * переход в её область — поиск сквозной (ED-23).
+   *
+   * Пустой запрос находок не даёт: палитра с пустым запросом показывает, что
+   * редактор умеет, а не всё, что в нём открыто.
+   */
+  const searchResults = (): readonly SearchHit[] => {
+    if (query.trim() === '') return [];
+    const found: SearchHit[] = [];
+    for (const area of areas.all()) {
+      if (area.search === undefined) continue;
+      const hits = area.search({
+        query,
+        state: states.of(area, setup),
+        selection: selection.in(area.id),
+        session,
+      });
+      for (const hit of hits) {
+        found.push({
+          ...hit,
+          // Область — часть адреса находки: две области вправе назвать свои
+          // находки одинаково, и подсветка в списке не должна их путать.
+          id: `${area.id}/${hit.id}`,
+          reveal: () => {
+            activate(area.id);
+            hit.reveal();
+            notify();
+          },
+        });
+      }
+    }
+    return found;
+  };
+
   const frame: WorkspaceFrame = {
     areas,
     session,
@@ -201,10 +306,46 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
     stateOf: (areaId) => states.of(requireArea(areaId), setup),
     searchQuery: () => query,
     setSearchQuery(next) {
-      // Без оповещения: запрос — состояние сессии, а не повод перерисовать
-      // страницу. Показывать по нему результаты будет палитра (W2-3).
+      if (next === query) return;
       query = next;
+      // Подсветка сбрасывается вместе с запросом: строка, на которой она
+      // стояла, следующим списком может и не показаться, а Enter обязан
+      // исполнять видимое.
+      paletteActive = '';
+      // Оповещение обязательно: запрос — сквозное состояние (ED-23), и по нему
+      // палитра показывает находки (ED-24). Молчащий запрос не делал бы ничего.
+      notify();
     },
+    paletteOpen: () => palette,
+    openPalette() {
+      if (palette) return;
+      palette = true;
+      paletteActive = '';
+      // Фокус уходит в строку запроса палитры: открыть её и заставить автора
+      // до неё дотянуться мышью значило бы не дать ему добраться до чего-либо
+      // клавиатурой (ED-24).
+      focusRequest = PALETTE_ROVING_ID;
+      notify();
+    },
+    closePalette() {
+      if (!palette) return;
+      palette = false;
+      // Фокус возвращается туда же, куда его возвращает отказ от начатого, — к
+      // рельсу: он одинаков во всех областях.
+      focusRequest = RAIL_ROVING_ID;
+      notify();
+    },
+    paletteEntries: () =>
+      paletteEntries({
+        resources,
+        query,
+        commands,
+        catalog,
+        results: searchResults(),
+        target: frame,
+        areaId: activeId,
+        mode,
+      }),
     // Пока идёт взаимодействие (перетаскивание, мазок кисти), сессия отменять
     // отказывается — записи, которую отменять, ещё нет (ED-18). Отказ этот
     // виден как недоступность, а не как исключение из обработчика клавиатуры:
@@ -260,6 +401,13 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
       notify();
     },
     handleKey(stroke) {
+      if (matchesBinding(stroke, PALETTE_BINDING)) {
+        // Одно сочетание на открытие и закрытие: состояний ровно два, и второе
+        // сочетание было бы вторым местом, где они перечислены.
+        if (palette) frame.closePalette();
+        else frame.openPalette();
+        return true;
+      }
       if (matchesBinding(stroke, UNDO_BINDING)) {
         frame.undo();
         return true;
@@ -269,10 +417,15 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
         return true;
       }
       if (stroke.key === DISMISS_KEY && !stroke.ctrl && !stroke.alt) {
+        // Открытую палитру Escape гасит: всплывающее закрывается раньше, чем
+        // отменяется что-либо ещё, — иначе одна клавиша делала бы два разных
+        // дела в зависимости от того, куда автор смотрит.
+        if (palette) {
+          frame.closePalette();
+          return true;
+        }
         // Escape возвращает фокус к рельсу — к тому единственному месту,
-        // которое одинаково во всех областях. Гашение всплывающего (палитра,
-        // подсказка) — за тем, кто его показал, и до каркаса эта клавиша тогда
-        // не доходит.
+        // которое одинаково во всех областях.
         focusRequest = RAIL_ROVING_ID;
         notify();
         return true;
@@ -304,14 +457,16 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
           selection: selection.in(area.id),
           session,
           mode,
+          fieldEditors,
           refresh: notify,
         });
       } finally {
         rendering = false;
       }
+      const entries = palette ? frame.paletteEntries() : [];
       return el('div', {
         classes: [APP_CLASS, 'fx-frame'],
-        children: [
+        children: children(
           frameTopBar({
             resources,
             query,
@@ -322,6 +477,10 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
             previewFailure: previewFailure,
             onQuery: (next) => {
               frame.setSearchQuery(next);
+              // Набранный запрос открывает палитру: показать находки больше
+              // негде, а ED-24 требует от поиска именно того, чтобы по нему
+              // добирались до найденного, а не только хранили строку.
+              if (next.trim() !== '') frame.openPalette();
             },
             onUndo: () => {
               frame.undo();
@@ -345,7 +504,36 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
               areaSkeleton(zones, resources),
             ],
           }),
-        ],
+          // Палитра — последним ребёнком страницы: она всплывающее, и лежать
+          // ей поверх всего, что каркас показал до неё (ED-24).
+          !palette
+            ? undefined
+            : paletteView({
+                resources,
+                entries,
+                query,
+                activeId: paletteActive,
+                onQuery: (next) => {
+                  frame.setSearchQuery(next);
+                },
+                onActive: (id) => {
+                  paletteActive = id;
+                  notify();
+                },
+                onRun: (id) => {
+                  const entry = entries.find((candidate) => candidate.id === id);
+                  if (entry === undefined || entry.disabled) return;
+                  // Палитра закрывается ДО исполнения: строка, сменившая
+                  // область или выделение, оставила бы за собой список,
+                  // собранный по прежнему состоянию.
+                  frame.closePalette();
+                  entry.run();
+                },
+                onDismiss: () => {
+                  frame.closePalette();
+                },
+              }),
+        ),
       });
     },
     subscribe(listener) {

@@ -26,6 +26,7 @@
  *   слоем нельзя.
  */
 import { FRAME_RULES } from '../frame/styles.js';
+import { PALETTE_RULES } from '../palette/styles.js';
 import { EDITOR_ROOT_ID } from '../root.js';
 import {
   APP_CLASS,
@@ -472,6 +473,13 @@ const ROW_RULES: readonly CssRule[] = [
     declarations: ['outline: var(--fx-hairline) solid var(--fx-accent)', 'outline-offset: -1px'],
   },
   {
+    // Строка, которую сейчас нечем применить, приглушена — тем же способом, что
+    // недоступная кнопка (ED-26). Признак несёт разметка (`aria-disabled`), а
+    // прозрачность лишь показывает его.
+    selector: `${S} .fx-row[aria-disabled='true']`,
+    declarations: ['opacity: var(--fx-state-disabled-opacity)'],
+  },
+  {
     selector: `${S} .fx-row__label`,
     declarations: ['overflow: hidden', 'text-overflow: ellipsis', 'white-space: nowrap', 'min-width: 0'],
   },
@@ -738,6 +746,7 @@ export const STYLE_RULES: readonly CssRule[] = [
   ...LAYOUT_RULES,
   ...SURFACE_RULES,
   ...FRAME_RULES,
+  ...PALETTE_RULES,
   ...ICON_RULES,
   ...BUTTON_RULES,
   ...FIELD_RULES,
