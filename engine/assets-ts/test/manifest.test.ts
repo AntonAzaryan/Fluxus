@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   AssetService,
+  createManifestLoader,
   manifestLoader,
   resolveVisual,
   validateManifest,
   visualKeys,
+  type CameraEffectsDescription,
 } from '../src/index.js';
 import { MemoryAssetSource, bytesOf, settled } from './helpers.js';
 
@@ -278,6 +280,104 @@ describe('validateManifest: секция эффектов камеры (ASSET-8)
       { entities, cameraEffects: { states: 'yes' } },
       /cameraEffects\.states: ожидался объект/,
     );
+  });
+
+  /**
+   * ASSET-8: набор типов задаётся описанием камеры (CAM-9), и валидация
+   * принимает его входом. Описание здесь выдуманное — своего перечня типов у
+   * теста быть не должно ровно по той же причине, по какой его нет у модуля
+   * ассетов: он разошёлся бы с камерой молча.
+   */
+  const description: CameraEffectsDescription = {
+    types: [
+      {
+        id: 'shake',
+        kind: 'impulse',
+        params: [
+          { name: 'frequency', defaultValue: 13, min: 0 },
+          { name: 'decay', defaultValue: 1.4, min: 0, max: 10 },
+        ],
+      },
+      { id: 'sway', kind: 'lasting', params: [{ name: 'rollAmp', defaultValue: 0.05, min: 0 }] },
+    ],
+    binding: {
+      impulse: [
+        { name: 'amplitude', defaultValue: 0.6, min: 0 },
+        { name: 'radius', defaultValue: Number.POSITIVE_INFINITY, min: 0 },
+      ],
+      lasting: [],
+    },
+  };
+
+  const checked = (section: unknown) =>
+    validateManifest({ entities, cameraEffects: section }, { cameraEffects: description });
+
+  it('без описания тип эффекта не проверяется вовсе: своего перечня у валидации нет', () => {
+    const result = validateManifest({
+      entities,
+      cameraEffects: { events: { Boom: { effect: 'wobble-3000', whatever: 1 } } },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('неизвестный тип с описанием — предупреждение, а не ошибка (манифест переживает код)', () => {
+    const result = checked({ events: { Boom: { effect: 'wobble-3000' } } });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/cameraEffects\.events\.Boom\.effect/);
+    expect(result.warnings[0]).toMatch(/wobble-3000/);
+  });
+
+  it('тип другого вида, чем таблица, и незаявленный параметр — тоже предупреждения', () => {
+    const result = checked({
+      states: { Drunk: { effect: 'shake' } },
+      events: { Boom: { effect: 'shake', loudness: 3 } },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings.some((w) => /Drunk\.effect/.test(w) && /lasting/.test(w))).toBe(true);
+    expect(result.warnings.some((w) => /Boom\.loudness/.test(w))).toBe(true);
+  });
+
+  it('значение вне объявленного диапазона — ошибка с адресом до поля', () => {
+    const result = checked({ events: { Boom: { effect: 'shake', decay: 99, amplitude: -1 } } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((e) => /cameraEffects\.events\.Boom\.decay/.test(e))).toBe(true);
+    expect(result.errors.some((e) => /cameraEffects\.events\.Boom\.amplitude/.test(e))).toBe(true);
+  });
+
+  it('параметры привязки законны наравне с параметрами типа (CAM-9)', () => {
+    const result = checked({ events: { Boom: { effect: 'shake', amplitude: 0.5, radius: 12 } } });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('загрузчик с описанием логирует предупреждение и загрузку не роняет (ASSET-4)', async () => {
+    const warnings: string[] = [];
+    const svc = new AssetService(
+      new MemoryAssetSource(
+        new Map([
+          [
+            'visuals.json',
+            bytesOf(
+              JSON.stringify({
+                entities,
+                cameraEffects: { events: { Boom: { effect: 'wobble-3000' } } },
+              }),
+            ),
+          ],
+        ]),
+      ),
+    );
+    svc.registerLoader(
+      createManifestLoader({ cameraEffects: description, warn: (m) => warnings.push(m) }),
+    );
+    const state = await settled(svc, svc.request('manifest', 'visuals.json'));
+    expect(state.status).toBe('ready');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/wobble-3000/);
   });
 });
 

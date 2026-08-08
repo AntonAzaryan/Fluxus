@@ -263,7 +263,7 @@ describe('CameraRig: переподача источников (CAM-7)', () => {
     const stack = new EffectStack();
     const shake = new TraumaShake();
     stack.add(shake);
-    shake.addTrauma(1);
+    shake.trigger(1);
     expect(rollOver(stack, rig, input, 5)).toBeGreaterThan(0);
     const zoomBefore = distanceOf(rig, input);
     expect(rig.mode).toBe('free');

@@ -8,6 +8,7 @@
  * Float, шум и Math-тригонометрия здесь легальны: слой живёт в рендере
  * (REND-1), в симуляцию ничего не течёт.
  */
+import type { CameraEffectParamSpec, CameraEffectTypeSpec } from '@game-mvp/assets';
 import type { CameraPose } from './rig.js';
 
 /** Аддитивный офсет позы; поля соответствуют `CameraPose`. */
@@ -29,6 +30,57 @@ export interface PoseOffset {
 export interface CameraEffect {
   update(dt: number, out: PoseOffset): boolean;
 }
+
+/** Импульсный эффект (CAM-9): запускается событием тика с силой импульса. */
+export interface ImpulseEffect extends CameraEffect {
+  trigger(strength: number): void;
+}
+
+/** Длящийся эффект (CAM-9): висит, пока состояние присутствует на цели. */
+export interface LastingEffect extends CameraEffect {
+  setActive(active: boolean): void;
+}
+
+/**
+ * Дескриптор типа эффекта: описание CAM-9 плюс фабрика. Фабрика живёт здесь, а
+ * не в контракте `@game-mvp/assets`, потому что она render-специфична — валидации
+ * секции и редактору хватает описания без неё (design.md).
+ *
+ * Видов два, и каждый обещает свой контракт запуска: импульсный строит
+ * `ImpulseEffect`, длящийся — `LastingEffect`. Обещание в типе, а не в
+ * договорённости: диспетчер зовёт `trigger`/`setActive` без приведений и без
+ * проверок в рантайме.
+ */
+export interface ImpulseEffectType extends CameraEffectTypeSpec {
+  readonly kind: 'impulse';
+  create(params: Readonly<Record<string, number>>): ImpulseEffect;
+}
+
+export interface LastingEffectType extends CameraEffectTypeSpec {
+  readonly kind: 'lasting';
+  create(params: Readonly<Record<string, number>>): LastingEffect;
+}
+
+export type CameraEffectType = ImpulseEffectType | LastingEffectType;
+
+/**
+ * Умолчания типа одним объектом — единственный способ их узнать. Отдельной
+ * константы умолчаний у эффекта нет: она жила бы рядом с дескриптором и
+ * разошлась бы с ним при первой правке.
+ */
+export function defaults<T>(spec: CameraEffectTypeSpec): T {
+  const out: Record<string, number> = {};
+  for (const param of spec.params) out[param.name] = param.defaultValue;
+  return out as T;
+}
+
+/** Неотрицательное число — самая частая граница осмысленности параметра. */
+const nonNegative = (name: string, defaultValue: number): CameraEffectParamSpec =>
+  Object.freeze({ name, defaultValue, min: 0 });
+
+/** Положительное число: частота нулём не бывает — это остановленное время. */
+const positive = (name: string, defaultValue: number): CameraEffectParamSpec =>
+  Object.freeze({ name, defaultValue, min: Number.MIN_VALUE });
 
 /**
  * Детерминированный value-noise [-1..1]: сглаженная интерполяция хэша
@@ -58,12 +110,26 @@ export interface ShakeParams {
   readonly decay: number;
 }
 
-export const DEFAULT_SHAKE: ShakeParams = {
-  frequency: 13,
-  maxOffset: 0.35,
-  maxRoll: 0.05,
-  decay: 1.4,
-};
+/**
+ * Дескриптор тряски (CAM-9): идентификатор, вид, параметры с умолчаниями и
+ * границами осмысленности. Человекочитаемых формулировок здесь нет и быть не
+ * должно — тексты живут в строковых ресурсах потребителя (ED-28).
+ */
+export const SHAKE_TYPE: ImpulseEffectType = Object.freeze({
+  id: 'shake',
+  kind: 'impulse',
+  params: Object.freeze([
+    positive('frequency', 13),
+    nonNegative('maxOffset', 0.35),
+    nonNegative('maxRoll', 0.05),
+    nonNegative('decay', 1.4),
+  ]),
+  create: (params: Readonly<Record<string, number>>): ImpulseEffect =>
+    new TraumaShake(params as unknown as Partial<ShakeParams>),
+});
+
+/** Умолчания тряски выведены из дескриптора: второго места у умолчания нет. */
+export const DEFAULT_SHAKE: ShakeParams = Object.freeze(defaults<ShakeParams>(SHAKE_TYPE));
 
 /**
  * Тряска по trauma (Squirrel Eiserloh, GDC «Juicing Your Cameras With Math»):
@@ -71,7 +137,7 @@ export const DEFAULT_SHAKE: ShakeParams = {
  * усиливает тряску, а не заводит конкурирующую; смещения — value-noise,
  * не рандомные дёрганья.
  */
-export class TraumaShake implements CameraEffect {
+export class TraumaShake implements ImpulseEffect {
   private readonly params: ShakeParams;
   private trauma = 0;
   private time = 0;
@@ -80,9 +146,9 @@ export class TraumaShake implements CameraEffect {
     this.params = { ...DEFAULT_SHAKE, ...params };
   }
 
-  /** Импульс: trauma аккумулируется и клампится к 1. */
-  addTrauma(amount: number): void {
-    this.trauma = Math.min(1, this.trauma + Math.max(0, amount));
+  /** Импульс (CAM-9): trauma аккумулируется и клампится к 1. */
+  trigger(strength: number): void {
+    this.trauma = Math.min(1, this.trauma + Math.max(0, strength));
   }
 
   update(dt: number, out: PoseOffset): boolean {
@@ -113,20 +179,29 @@ export interface SwayParams {
   readonly fadeSeconds: number;
 }
 
-export const DEFAULT_SWAY: SwayParams = {
-  rollAmp: 0.05,
-  yawAmp: 0.02,
-  fovAmp: 2.5,
-  frequency: 0.9,
-  fadeSeconds: 1.2,
-};
+/** Дескриптор качания (CAM-9) — рядом со своим классом, как и у тряски. */
+export const SWAY_TYPE: LastingEffectType = Object.freeze({
+  id: 'sway',
+  kind: 'lasting',
+  params: Object.freeze([
+    nonNegative('rollAmp', 0.05),
+    nonNegative('yawAmp', 0.02),
+    nonNegative('fovAmp', 2.5),
+    positive('frequency', 0.9),
+    nonNegative('fadeSeconds', 1.2),
+  ]),
+  create: (params: Readonly<Record<string, number>>): LastingEffect =>
+    new SwayEffect(params as unknown as Partial<SwayParams>),
+});
+
+export const DEFAULT_SWAY: SwayParams = Object.freeze(defaults<SwayParams>(SWAY_TYPE));
 
 /**
  * Длящийся эффект качания: активен, пока состояние присутствует на цели
  * (CAM-6); конверт плавно вводит и гасит вклад — исчезновение состояния не
  * обрывает картинку скачком.
  */
-export class SwayEffect implements CameraEffect {
+export class SwayEffect implements LastingEffect {
   private readonly params: SwayParams;
   private active = false;
   private envelope = 0;

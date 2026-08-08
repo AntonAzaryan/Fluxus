@@ -59,11 +59,29 @@ export {
   EffectStack,
   SwayEffect,
   TraumaShake,
+  defaults,
   valueNoise,
   DEFAULT_SHAKE,
   DEFAULT_SWAY,
+  SHAKE_TYPE,
+  SWAY_TYPE,
 } from './camera/effects.js';
-export type { CameraEffect, PoseOffset, ShakeParams, SwayParams } from './camera/effects.js';
+export type {
+  CameraEffect,
+  CameraEffectType,
+  ImpulseEffect,
+  ImpulseEffectType,
+  LastingEffect,
+  LastingEffectType,
+  PoseOffset,
+  ShakeParams,
+  SwayParams,
+} from './camera/effects.js';
+// Машинное описание типов эффектов (CAM-9) — единственный перечень типов:
+// по нему строит эффекты слой, проверяет секцию валидация манифеста (ASSET-8)
+// и рисует таблицы редактор (ED-14).
+export { CAMERA_EFFECTS_DESCRIPTION, CAMERA_EFFECT_TYPES } from './camera/effectTypes.js';
+export type { CameraEffectsCatalog } from './camera/effectTypes.js';
 export { CameraEffectsDirector } from './camera/director.js';
 export type { CameraEffectsDirectorOptions } from './camera/director.js';
 export { applyCameraPose } from './camera/apply.js';

@@ -44,12 +44,23 @@ export type {
   SurfaceAlign,
   CameraEffectsSection,
   CameraEffectDef,
+  // Форма машинного описания типов эффектов (`camera` CAM-9): контракт живёт
+  // здесь, рядом с форматом секции, а его содержимое — в коде камеры.
+  CameraEffectKind,
+  CameraEffectParamSpec,
+  CameraEffectTypeSpec,
+  CameraEffectsDescription,
+  ManifestValidation,
+  ValidateManifestOptions,
 } from './manifest.js';
 export {
   validateManifest,
   resolveSurfaceAlign,
   resolveVisual,
   visualKeys,
+  cameraEffectParams,
+  cameraEffectType,
+  clampCameraEffectParam,
   DEFAULT_SURFACE_ALIGN,
 } from './manifest.js';
 
@@ -74,6 +85,7 @@ export {
 export { mdxLoader } from './loaders/mdx.js';
 export { gltfLoader } from './loaders/gltf.js';
 export { pngTextureLoader, decodePng } from './loaders/png.js';
-export { manifestLoader } from './loaders/manifest.js';
+export { manifestLoader, createManifestLoader } from './loaders/manifest.js';
+export type { ManifestLoaderOptions } from './loaders/manifest.js';
 export { curvatureLoader } from './loaders/curvature.js';
 export { presentationLoader } from './loaders/presentation.js';
