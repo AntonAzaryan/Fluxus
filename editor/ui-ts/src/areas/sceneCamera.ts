@@ -58,8 +58,12 @@ export interface PointerSample {
 }
 
 export interface SceneCameraOptions {
-  /** Сетка террейна документа: поверхность и границы конвейера (CAM-7). */
-  readonly grid: TerrainGrid;
+  /**
+   * Сетка террейна документа: поверхность и границы конвейера (CAM-7).
+   * Нет сетки — нет и арены: кадр без террейна (превью ассета ED-20) идёт тем
+   * же конвейером без источников, а не вторым способом считать позу (ED-13).
+   */
+  readonly grid?: TerrainGrid;
   /** Шаг высоты уровня — параметр рендера (REND-7); тот же, что у подсистемы. */
   readonly heightStep: number;
   /** Настройки конвейера (CAM-1). Игровой кадр — значения по умолчанию. */
@@ -93,14 +97,22 @@ const axis = (keys: ReadonlySet<string>, positive: string, negative: string): nu
   (keys.has(positive) ? 1 : 0) - (keys.has(negative) ? 1 : 0);
 
 export function createSceneCamera(options: SceneCameraOptions): SceneCamera {
-  const ground: TerrainCameraSource = terrainGroundApi(options.grid, options.heightStep);
+  // Источники конвейера опциональны (CAM-7), и это не заглушка: кадр без
+  // террейна не имеет ни границ, ни поверхности, и подсунуть ему выдуманную
+  // арену значило бы клампить камеру по несуществующему.
+  let ground: TerrainCameraSource | null =
+    options.grid === undefined ? null : terrainGroundApi(options.grid, options.heightStep);
   const input = createCameraInput();
   const rig = new CameraRig({
-    groundHeightAt: ground.groundHeightAt,
-    bounds: ground.bounds,
-    // Старт — центр арены: в режиме правки цели, к которой можно приехать, нет.
-    startX: (ground.bounds.maxX + ground.bounds.minX) / 2,
-    startY: (ground.bounds.maxY + ground.bounds.minY) / 2,
+    ...(ground === null
+      ? {}
+      : {
+          groundHeightAt: ground.groundHeightAt,
+          bounds: ground.bounds,
+          // Старт — центр арены: в режиме правки цели, к которой можно приехать, нет.
+          startX: (ground.bounds.maxX + ground.bounds.minX) / 2,
+          startY: (ground.bounds.maxY + ground.bounds.minY) / 2,
+        }),
     ...(options.config === undefined ? {} : { config: options.config }),
   });
 
@@ -117,6 +129,9 @@ export function createSceneCamera(options: SceneCameraOptions): SceneCamera {
     },
 
     setGrid(grid) {
+      // Первая сетка заводит источник: кадр, у которого арены не было, получает
+      // её теми же средствами, а не остаётся без границ молча.
+      ground ??= terrainGroundApi(grid, options.heightStep);
       ground.setGrid(grid);
       // Границы — значение, и без переподачи камера осталась бы клампиться по
       // прежней арене (CAM-7). Высоту источник отдаёт замыканием и по новой

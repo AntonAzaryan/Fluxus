@@ -35,7 +35,9 @@ import {
   uiResources,
 } from '../src/index.js';
 import type { WorkspaceArea } from '../src/index.js';
-import { createSceneArea } from '../src/areas/scene.js';
+import { createAssetArea } from '../src/areas/assets.js';
+import { registerVisualsOperations } from '../src/areas/assetVisuals.js';
+import { DEFAULT_SCENE_IDS, createSceneArea } from '../src/areas/scene.js';
 import { sceneValidationRules } from '../src/areas/sceneProject.js';
 import { registerPlacementOperations } from '../src/areas/scenePlacement.js';
 import { registerTerrainOperations } from '../src/areas/sceneTerrain.js';
@@ -86,12 +88,20 @@ contributions.areas.register(
   createSceneArea({ host, validationRules: contributions.validationRules }),
 );
 contributions.areas.register(systemsArea);
+// Просмотрщик ассетов (ED-20) — такой же вклад: манифест визуалов он правит тот
+// же, что открывает область сцены, поэтому его ID приходит одной настройкой.
+contributions.areas.register(
+  createAssetArea({ host, visuals: DEFAULT_SCENE_IDS.visuals }),
+);
 
-// Операции расстановки и кистей — вклады области, а не часть ядра редактора
-// (ED-25, ED-29): реестр один и тот же для интерфейса и для вызова без него.
+// Операции расстановки, кистей и записей манифеста — вклады областей, а не
+// часть ядра редактора (ED-25, ED-29): реестр один и тот же для интерфейса и
+// для вызова без него.
 const session = createEditorSession({
-  operations: registerTerrainOperations(
-    registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+  operations: registerVisualsOperations(
+    registerTerrainOperations(
+      registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+    ),
   ),
 });
 

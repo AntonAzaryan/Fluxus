@@ -132,3 +132,32 @@ describe('CAM-4, CAM-7: зум и переподача источников ра
     expect(rig.frame(1 / 60).posZ).toBeGreaterThan(flat + HEIGHT_STEP);
   });
 });
+
+/**
+ * Кадр без террейна (ED-20, REND-11): арены у превью ассета нет вовсе, и
+ * подсунуть конвейеру выдуманную значило бы клампить камеру по несуществующему.
+ * Проверяется, что это тот же конвейер без источников (CAM-7), а не второй
+ * способ считать позу.
+ */
+describe('ED-13, CAM-7: конвейер без источников — кадр без террейна', () => {
+  it('поза выдаётся и ввод её меняет, хотя ни границ, ни поверхности нет', () => {
+    const rig = createSceneCamera({ heightStep: HEIGHT_STEP });
+    const pose = rig.frame(1 / 60);
+    expect(Number.isFinite(pose.posX) && Number.isFinite(pose.posZ)).toBe(true);
+    const before = rig.focusX;
+    // Границ нет — и панораме нечем упереться: клампа арены не существует.
+    hold(rig, [CAMERA_KEYS.panRight]);
+    expect(rig.focusX).toBeGreaterThan(before);
+  });
+
+  it('первая сетка заводит источник, а не остаётся неуслышанной', () => {
+    const rig = createSceneCamera({ heightStep: HEIGHT_STEP });
+    for (let step = 0; step < 120; step++) rig.frame(1 / 60);
+    const flat = rig.frame(1 / 60).posZ;
+    rig.setGrid(
+      createTerrainGrid(terrainDef(Array.from({ length: SIZE }, () => '5'.repeat(SIZE)))),
+    );
+    for (let step = 0; step < 240; step++) rig.frame(1 / 60);
+    expect(rig.frame(1 / 60).posZ).toBeGreaterThan(flat + HEIGHT_STEP);
+  });
+});

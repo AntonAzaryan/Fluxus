@@ -27,11 +27,14 @@ describe('ED-15: вьюпорт показывает документы, а не
   });
 
   it('первый же кадр получает сетку, кривизну и набор инстансов', async () => {
-    const { stage } = await buildLoadedFrame();
+    const { stage, state } = await buildLoadedFrame();
     const draft = stage.last;
     expect(draft?.grid?.width).toBe(4);
     expect(draft?.curvature?.width).toBe(4);
-    expect(draft?.placements.map((item) => item.prefab)).toEqual(['Hero', 'Crate']);
+    // Вьюпорту отдан ТОТ САМЫЙ кадр области, поэтому имена префабов читаются с
+    // него: вьюпорту они не видны вовсе — его вход шире кадра сцены (REND-11).
+    expect(state.draft).toBe(draft);
+    expect(state.draft?.placements.map((item) => item.prefab)).toEqual(['Hero', 'Crate']);
   });
 
   it('правка документа даёт вьюпорту новый набор — сама, без перерисовки страницы', async () => {

@@ -41,6 +41,7 @@ import {
 } from '../src/i18n/uiBundles.js';
 import { collectTexts, walk, type UiNode } from '../src/dom/node.js';
 import { materialStrings } from '../src/areas/material.js';
+import { assetArea } from '../src/areas/assets.js';
 import { sceneArea } from '../src/areas/scene.js';
 import { systemsArea } from '../src/areas/systems.js';
 import { buildFrame } from './support/frame.js';
@@ -226,7 +227,10 @@ describe('ED-27: каждый видимый текст контрольного
  */
 describe('ED-27: каждый видимый текст каркаса имеет происхождение', () => {
   const materialCorpus = materialStrings();
-  const areas = [sceneArea, systemsArea];
+  // Все области приложения: у каждой свой источник текста, и ED-27 держит их
+  // все. Просмотрщик ассетов здесь без открытого проекта — ровно тот случай,
+  // когда на странице нет ни одного значения документа и вся она из ресурсов.
+  const areas = [sceneArea, systemsArea, assetArea];
 
   const pagesIn = (locale: string): UiNode[] => {
     const { frame } = buildFrame(areas, locale);

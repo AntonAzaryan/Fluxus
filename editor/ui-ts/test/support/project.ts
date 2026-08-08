@@ -14,9 +14,10 @@
  * производной проверяла бы только саму себя.
  */
 import { createMemoryHost, type MemoryHost } from '@game-mvp/editor-core';
+import type { VisualManifest } from '@game-mvp/assets';
 import { PresentationStage, type CameraPose, type RenderContext } from '@game-mvp/render';
-import type { PositionBinding, SceneDraft } from '../../src/areas/sceneDocuments.js';
-import type { SceneStage } from '../../src/areas/sceneStage.js';
+import type { PositionBinding } from '../../src/areas/sceneDocuments.js';
+import type { SceneStage, StageDraft } from '../../src/areas/sceneStage.js';
 import type { SceneProjectIds } from '../../src/areas/sceneProject.js';
 import type { SceneOverlay, ScenePick } from '../../src/areas/sceneInteraction.js';
 
@@ -92,11 +93,13 @@ export type FakeHits = ReadonlyMap<string, ScenePick>;
 
 /** Дубль вьюпорта: помнит поданное, вместо того чтобы это рисовать. */
 export interface FakeStage extends SceneStage {
-  readonly submitted: readonly SceneDraft[];
+  readonly submitted: readonly StageDraft[];
+  /** Манифесты, переподанные подсистеме моделей (REND-17), в порядке подачи. */
+  readonly visuals: readonly VisualManifest[];
   /** Была ли подача переподачей (`submit(draft, true)`) — по индексу подачи. */
   readonly reapplied: readonly boolean[];
   readonly zooms: readonly number[];
-  readonly last: SceneDraft | undefined;
+  readonly last: StageDraft | undefined;
   /** Кадры чужих продюсеров, подключённые к циклу вьюпорта (REND-11). */
   readonly producers: readonly ((now: number) => void)[];
   /** Один кадр цикла: дубль не крутит RAF, поэтому кадр просит тест. */
@@ -176,8 +179,9 @@ export function entityHit(key: string): ScenePick {
  * Поэтому здесь и проверяется механизм оповещения, а не момент его срабатывания.
  */
 export function fakeStage(announce: () => void = () => undefined): FakeStage {
-  const submitted: SceneDraft[] = [];
+  const submitted: StageDraft[] = [];
   const reapplied: boolean[] = [];
+  const visuals: VisualManifest[] = [];
   const zooms: number[] = [];
   const overlaySets: (readonly SceneOverlay[])[] = [];
   const producers: ((now: number) => void)[] = [];
@@ -195,6 +199,9 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
     submit: (draft, again = false) => {
       submitted.push(draft);
       reapplied.push(again);
+    },
+    applyVisuals: (next) => {
+      visuals.push(next);
     },
     get flying(): boolean {
       return flying;
@@ -238,6 +245,7 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
     dispose: () => undefined,
     submitted,
     reapplied,
+    visuals,
     zooms,
     overlaySets,
     hits,
@@ -245,7 +253,7 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
     get overlays(): readonly SceneOverlay[] {
       return overlaySets.at(-1) ?? [];
     },
-    get last(): SceneDraft | undefined {
+    get last(): StageDraft | undefined {
       return submitted.at(-1);
     },
   };

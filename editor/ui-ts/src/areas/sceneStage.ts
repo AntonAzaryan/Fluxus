@@ -11,6 +11,19 @@
  * Тика в режиме правки нет (ED-15): кадровый цикл не двигает мир, а только
  * сводит документный набор, считает позу камеры конвейером (ED-13) и рисует.
  *
+ * ## Кадр без террейна
+ *
+ * Подсистемы поднимает первая сетка: до неё ни поверхности (REND-9), ни границ
+ * арены (CAM-7) не существует. Набору из одного инстанса без сцены и террейна —
+ * превью ассета (ED-20, REND-11) — сетки не будет никогда, и он поднимает те же
+ * подсистемы сразу, опцией `terrain: false`. Не второй сборкой рендера: ED-20
+ * требует «тем же рендером, что вьюпорт», и вторая сборка разошлась бы с первой
+ * по определению (ED-1, CORE-3). Разница ровно в том, чего у вырожденного
+ * случая нет: без сетки нет ни подсистемы террейна, ни визуальной поверхности,
+ * а значит нет и того, что из неё выведено, — наложений и picking'а (REND-15,
+ * REND-16). Инстанс в таком кадре стоит на своём `level` (REND-11), потому что
+ * сажать его не на что.
+ *
  * ## Второй продюсер и один цикл кадров
  *
  * Превью (ED-9) публикуется в ЭТУ же presentation-сцену вторым продюсером
@@ -96,6 +109,7 @@ import {
   mdxLoader,
   pngTextureLoader,
   type AssetSource,
+  type TerrainCurvatureMap,
   type VisualManifest,
 } from '@game-mvp/assets';
 import {
@@ -108,6 +122,7 @@ import {
   VisualSurfaceSource,
   applyCameraPose,
   type CameraPose,
+  type DocumentInstance,
   type OverlayItem,
   type PickHit,
   type RenderContext,
@@ -119,7 +134,6 @@ import {
   type PointerSample,
   type SceneCamera,
 } from './sceneCamera.js';
-import type { SceneDraft } from './sceneDocuments.js';
 import type {
   ScenePick,
   ScenePicker,
@@ -135,6 +149,19 @@ const LEFT_BUTTON = 0;
 const MIDDLE_BUTTON = 1;
 const RIGHT_BUTTON = 2;
 
+/**
+ * Что вьюпорту нужно от документов, чтобы нарисовать кадр: сетка террейна
+ * (REND-14), карта кривизны (REND-9) и полный набор инстансов (REND-11). Ровно
+ * три несимуляционных входа рендера, и ни одного доменного имени сверх них —
+ * поэтому подать сюда может и кадр сцены (`SceneDraft`), и вырожденный набор
+ * просмотрщика ассетов (ED-20), у которого ни сетки, ни кривизны нет.
+ */
+export interface StageDraft {
+  readonly grid: TerrainGrid | null;
+  readonly curvature: TerrainCurvatureMap | null;
+  readonly placements: readonly DocumentInstance[];
+}
+
 export interface SceneStageOptions {
   /** Идентификатор узла кадра — тот же, что у `viewportFrame`. */
   readonly hostId: string;
@@ -142,6 +169,12 @@ export interface SceneStageOptions {
   readonly assets: AssetSource;
   /** Манифест визуалов (ASSET-6): без него подсистеме моделей нечего строить. */
   readonly visuals: VisualManifest;
+  /**
+   * Бывает ли у этого кадра террейн. `false` — вырожденный случай REND-11
+   * (превью ассета ED-20): подсистемы поднимаются сразу, без сетки и без
+   * поверхности. По умолчанию `true` — кадр ждёт первой сетки документа.
+   */
+  readonly terrain?: boolean;
   /** Документ среды; по умолчанию — документ вкладки. */
   readonly document?: Document;
   readonly heightStep?: number;
@@ -169,7 +202,14 @@ export interface SceneStage extends ScenePicker {
    * мире, — и повторная доставка той же сетки возвращает его (REND-14), тогда
    * как пропуск по совпадению ссылок оставил бы дыру в кадре режима правки.
    */
-  submit(draft: SceneDraft, reapply?: boolean): void;
+  submit(draft: StageDraft, reapply?: boolean): void;
+  /**
+   * Правленый манифест визуалов целиком (REND-17): подсистема сводит поданное с
+   * живыми инстансами сама. Декларативно и целиком — императивной правки одной
+   * записи у неё нет, и заводить её здесь было бы вторым решением о том, что
+   * пересобрать (ED-14, ED-15).
+   */
+  applyVisuals(visuals: VisualManifest): void;
   /** Идёт ли облёт (CAM-2) — это показывает бар области. */
   readonly flying: boolean;
   toggleFly(): void;
@@ -250,17 +290,22 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
 
   let surface: VisualSurfaceSource | null = null;
   let terrain: TerrainSubsystem | null = null;
+  let models: ModelsSubsystem | null = null;
   let overlays: OverlaySubsystem | null = null;
   let picking: ViewportPicking | null = null;
   let camera: SceneCamera | null = null;
   let grid: TerrainGrid | null = null;
-  let curvature: SceneDraft['curvature'] = null;
+  /** Манифест, которым живёт подсистема моделей сейчас (ASSET-6, REND-17). */
+  let visuals = options.visuals;
+  /** Подняты ли подсистемы: сетка их поднимает один раз, и только первая. */
+  let built = false;
+  let curvature: StageDraft['curvature'] = null;
   /** Поза кадра: по ней и считается луч наведения (REND-15), а не свежим опросом. */
   let pose: CameraPose | null = null;
   /** Последний поданный набор наложений — он переподаётся после сведения (REND-16). */
   let overlaySet: readonly SceneOverlay[] = [];
 
-  let draft: SceneDraft | null = null;
+  let draft: StageDraft | null = null;
   let dirty = false;
   /** Подать заново, не спрашивая ссылок: так возвращается кадр после превью. */
   let reapply = false;
@@ -386,35 +431,45 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
    * нужны и поверхности (REND-9), и камере (CAM-7). Порядок регистрации
    * нормативен (REND-8): террейн, модели, наложения.
    *
-   * Отсюда следует и сегодняшняя граница: сцена вовсе без террейна кадра не
-   * получает. Вырожденный набор без сцены и террейна нужен просмотрщику
-   * ассетов (ED-20, REND-11) — там ему и место, вместе с W3-5.
+   * `first === null` — кадр без террейна (`terrain: false`, см. шапку): сетки не
+   * будет никогда, и всё, что из неё выводится, не поднимается вовсе. Ветка
+   * здесь одна и та же, потому что сборка рендера у обоих случаев одна (ED-1):
+   * различаются они тем, чего у вырожденного случая нет, а не тем, как он
+   * рисуется.
    */
-  const build = (first: TerrainGrid): void => {
-    surface = new VisualSurfaceSource(first);
-    terrain = new TerrainSubsystem(first, { surface });
-    presentation.register(terrain);
-    const models = new ModelsSubsystem(options.visuals, { surface });
+  const build = (first: TerrainGrid | null): void => {
+    built = true;
+    if (first !== null) {
+      surface = new VisualSurfaceSource(first);
+      terrain = new TerrainSubsystem(first, { surface });
+      presentation.register(terrain);
+    }
+    models = new ModelsSubsystem(visuals, surface === null ? {} : { surface });
     presentation.register(models);
-    // Подсистему наложений регистрирует только вьюпорт редактора (REND-16):
-    // в игровом кадре её нет по конструкции. Подсветка встаёт по видимой позе
-    // инстанса, поэтому источник прокси у неё тот же, что у picking'а.
-    overlays = new OverlaySubsystem({ surface, instances: models });
-    presentation.register(overlays);
-    // Камера picking'у отдаётся та же, которой рисуется кадр: «второго способа
-    // посчитать луч MUST NOT существовать» (REND-15).
-    picking = new ViewportPicking({
-      surface,
-      instances: models,
-      handles: overlays,
-      camera: camera3,
-    });
-    camera = createSceneCamera({ grid: first, heightStep });
+    if (surface !== null) {
+      // Подсистему наложений регистрирует только вьюпорт редактора (REND-16):
+      // в игровом кадре её нет по конструкции. Подсветка встаёт по видимой позе
+      // инстанса, поэтому источник прокси у неё тот же, что у picking'а.
+      overlays = new OverlaySubsystem({ surface, instances: models });
+      presentation.register(overlays);
+      // Камера picking'у отдаётся та же, которой рисуется кадр: «второго способа
+      // посчитать луч MUST NOT существовать» (REND-15).
+      picking = new ViewportPicking({
+        surface,
+        instances: models,
+        handles: overlays,
+        camera: camera3,
+      });
+    }
+    // Конвейер камеры один и тот же (ED-13, CAM-1); арены без террейна у него
+    // просто нет — ни границ, ни поверхности под точкой наблюдения.
+    camera = createSceneCamera({ heightStep, ...(first === null ? {} : { grid: first }) });
   };
+  if (options.terrain === false) build(null);
 
-  const applyDraft = (next: SceneDraft, again: boolean): void => {
+  const applyDraft = (next: StageDraft, again: boolean): void => {
     if (next.grid !== null && (again || next.grid !== grid)) {
-      const first = grid === null;
+      const first = !built;
       grid = next.grid;
       if (first) build(next.grid);
       else {
@@ -579,6 +634,12 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       // Просьба переподать не гаснет от следующей обычной подачи: между
       // подачей и кадром может пройти и то, и другое.
       if (again) reapply = true;
+    },
+    applyVisuals(next) {
+      // Запоминается и тогда, когда подсистемы ещё не подняты: сетка поднимет
+      // их правленым манифестом, а не тем, с которым собирался вьюпорт.
+      visuals = next;
+      models?.applyManifest(next);
     },
     get flying(): boolean {
       return camera?.flying ?? false;

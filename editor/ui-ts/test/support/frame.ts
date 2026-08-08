@@ -23,6 +23,7 @@ import { createSceneArea, sceneArea, type SceneAreaState } from '../../src/areas
 import type { StagePointer } from '../../src/areas/sceneInteraction.js';
 import { registerPlacementOperations } from '../../src/areas/scenePlacement.js';
 import { registerTerrainOperations } from '../../src/areas/sceneTerrain.js';
+import { registerVisualsOperations } from '../../src/areas/assetVisuals.js';
 import { systemsArea } from '../../src/areas/systems.js';
 import { previewProbe, type PreviewProbe } from './preview.js';
 import { FIXTURE_IDS, fakeStage, fixtureHost, settle, type FakeStage } from './project.js';
@@ -42,11 +43,14 @@ export function buildFrame(
 ): FrameFixture {
   const contributions = createEditorContributions<WorkspaceArea>();
   for (const area of areas) contributions.areas.register(area);
-  // Тот же реестр, что собирает приложение: операции расстановки и кистей —
-  // вклады области (ED-25), и без них область правит документы нечем (ED-29).
+  // Тот же реестр, что собирает приложение: операции расстановки, кистей и
+  // записей манифеста — вклады областей (ED-25), и без них область правит
+  // документы нечем (ED-29).
   const session = createEditorSession({
-    operations: registerTerrainOperations(
-      registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+    operations: registerVisualsOperations(
+      registerTerrainOperations(
+        registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+      ),
     ),
   });
   const resources = uiResources(locale);
