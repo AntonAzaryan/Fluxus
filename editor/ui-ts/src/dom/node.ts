@@ -24,7 +24,7 @@
  * высота строки из токена). Виджету достаётся `vars` — только пользовательские
  * свойства, только для параметра раскладки вроде глубины узла дерева.
  */
-import type { TextSource } from '@game-mvp/editor-core';
+import { formatIssue, type TextSource, type ValidationIssue } from '@game-mvp/editor-core';
 
 /**
  * Откуда взялся текст. `resource` — строка из локали (ED-27); `value` —
@@ -53,6 +53,21 @@ export function resourceText(source: TextSource, key: string): UiText {
  */
 export function documentValue(value: string): UiText {
   return { origin: 'value', value };
+}
+
+/**
+ * Причина находки валидации (ED-8, ED-30) — тот же ресурс по ключу, только с
+ * подстановкой параметров находки. Подставляет ядро редактора (`formatIssue`):
+ * ключ причины и её параметры принадлежат правилу, и второго формата подстановки
+ * интерфейс не заводит.
+ *
+ * Третий конструктор `UiText` стоит здесь, а не у вызывающего, ровно затем,
+ * чтобы «текст узла собирают только функции этого модуля» осталось правдой:
+ * происхождение и ключ проставляются в одном месте, и подписать литерал
+ * ресурсом по-прежнему нечем (ED-27).
+ */
+export function issueText(source: TextSource, issue: ValidationIssue): UiText {
+  return { origin: 'resource', value: formatIssue(issue, source), key: issue.reasonKey };
 }
 
 /** Атрибуты, несущие человеческий текст, — только через `UiText`. */

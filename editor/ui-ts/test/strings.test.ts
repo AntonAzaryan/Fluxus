@@ -32,7 +32,13 @@ import {
   initialGalleryState,
   sampleDocumentStrings,
 } from '../src/gallery/controlCase.js';
-import { UI_BUNDLES, UI_KEY_PREFIX, uiResources } from '../src/i18n/uiBundles.js';
+import { REASON_PREFIX } from '@game-mvp/editor-core';
+import {
+  UI_BUNDLES,
+  UI_KEY_PREFIX,
+  VALIDATION_BUNDLES,
+  uiResources,
+} from '../src/i18n/uiBundles.js';
 import { collectTexts, walk, type UiNode } from '../src/dom/node.js';
 import { materialStrings } from '../src/areas/material.js';
 import { sceneArea } from '../src/areas/scene.js';
@@ -51,18 +57,29 @@ function sources(): { readonly path: string; readonly text: string }[] {
   });
 }
 
-describe('ED-27: бандл строк хрома', () => {
-  it('локали ru и en равноправны — один и тот же набор ключей', () => {
-    const en = Object.keys(UI_BUNDLES.en ?? {}).sort();
-    const ru = Object.keys(UI_BUNDLES.ru ?? {}).sort();
+/**
+ * Бандлов у пакета два, и пространства у них разные: подпись интерфейса
+ * называется по месту показа (`ui.*`), а причина находки — по правилу, которое
+ * её сообщило (`validation.reason.*`, ключ выводит `reasonKey` ядра редактора).
+ * Проверка на обоих одна и та же, поэтому и параметризована.
+ */
+const BUNDLES: readonly (readonly [string, typeof UI_BUNDLES, string])[] = [
+  ['хром', UI_BUNDLES, UI_KEY_PREFIX],
+  ['причины валидации', VALIDATION_BUNDLES, REASON_PREFIX],
+];
+
+describe('ED-27: бандлы строк пакета', () => {
+  it.each(BUNDLES)('%s: локали ru и en равноправны — один и тот же набор ключей', (_name, bundles) => {
+    const en = Object.keys(bundles.en ?? {}).sort();
+    const ru = Object.keys(bundles.ru ?? {}).sort();
     expect(ru).toEqual(en);
     expect(en.length).toBeGreaterThan(0);
   });
 
-  it('все ключи лежат в пространстве хрома и ни один не пуст', () => {
-    for (const [locale, bundle] of Object.entries(UI_BUNDLES)) {
+  it.each(BUNDLES)('%s: все ключи в своём пространстве и ни один не пуст', (_name, bundles, prefix) => {
+    for (const [locale, bundle] of Object.entries(bundles)) {
       for (const [key, value] of Object.entries(bundle)) {
-        expect(key.startsWith(UI_KEY_PREFIX), `${locale}: ${key}`).toBe(true);
+        expect(key.startsWith(prefix), `${locale}: ${key}`).toBe(true);
         expect(value.trim().length, `${locale}: ${key}`).toBeGreaterThan(0);
       }
     }
@@ -244,6 +261,11 @@ describe('ED-27: каждый видимый текст каркаса имее�
   });
 
   it('ключи каркаса и областей объявлены в обеих локалях', () => {
+    // Пространства два — подписи и причины находок, — а свойство одно: ключ,
+    // дошедший до страницы, обязан разрешаться в обеих локалях. Бандл, в котором
+    // его ищут, выбирается по пространству, а не по тому, где он нашёлся.
+    const declared = (locale: 'ru' | 'en', key: string): string | undefined =>
+      key.startsWith(REASON_PREFIX) ? VALIDATION_BUNDLES[locale]?.[key] : UI_BUNDLES[locale]?.[key];
     const used = new Set(
       pagesIn('ru')
         .flatMap((page) => collectTexts(page))
@@ -252,9 +274,12 @@ describe('ED-27: каждый видимый текст каркаса имее�
     );
     expect(used.size).toBeGreaterThan(0);
     for (const key of used) {
-      expect(key.startsWith(UI_KEY_PREFIX), `ключ вне пространства хрома: ${key}`).toBe(true);
-      expect(UI_BUNDLES.ru?.[key], `нет в ru: ${key}`).toBeDefined();
-      expect(UI_BUNDLES.en?.[key], `нет в en: ${key}`).toBeDefined();
+      expect(
+        key.startsWith(UI_KEY_PREFIX) || key.startsWith(REASON_PREFIX),
+        `ключ вне пространств пакета: ${key}`,
+      ).toBe(true);
+      expect(declared('ru', key), `нет в ru: ${key}`).toBeDefined();
+      expect(declared('en', key), `нет в en: ${key}`).toBeDefined();
     }
   });
 

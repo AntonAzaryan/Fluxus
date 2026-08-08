@@ -12,12 +12,14 @@
  * к файловой системе тут нет и в вебе быть не может.
  */
 import {
+  crossDocumentRules,
   openDocumentFromHost,
   type ContentPath,
   type ContentTreeHost,
   type DocumentId,
   type EditorSession,
   type JsonPath,
+  type ValidationRule,
 } from '@game-mvp/editor-core';
 import type { VisualManifest } from '@game-mvp/assets';
 import {
@@ -45,6 +47,29 @@ export const SCENE_KINDS = {
   visuals: 'visuals',
   curvature: 'terrain-curvature',
 } as const;
+
+/**
+ * Междокументные правила (ED-11, ED-19) с раскладкой ЭТОГО проекта.
+ *
+ * Правило знает отношение, а где лежат его стороны — знает тот, кто собирает
+ * редактор (ED-25). Раскладка здесь нестандартная и потому названа целиком: и
+ * список расстановки (SER-8), и ассет террейна (TERR-2) лежат полями конфига
+ * сцены (SER-7), а не отдельными документами, и правило с умолчаниями на этом
+ * проекте не сработало бы ни разу. Дописывать сравнение у себя вместо подачи
+ * адресов значило бы завести вторую реализацию правила (ED-1, CORE-3) — ровно
+ * то, ради чего адреса и стали параметром.
+ */
+export function sceneValidationRules(): readonly ValidationRule[] {
+  return crossDocumentRules(
+    {
+      scene: SCENE_KINDS.config,
+      manifest: SCENE_KINDS.visuals,
+      curvature: SCENE_KINDS.curvature,
+    },
+    [{ kind: SCENE_KINDS.config, path: PLACEMENT_LIST }],
+    [{ kind: SCENE_KINDS.config, path: TERRAIN_ASSET }],
+  );
+}
 
 export interface SceneProjectIds {
   /** Конфиг сцены — путь от корня дерева контента, он же ID документа (ASSET-2). */

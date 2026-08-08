@@ -18,10 +18,26 @@
 import { FLOOR_COMPONENT, world, type EntityId } from '@game-mvp/core';
 import { describe, expect, it } from 'vitest';
 import { findAll, type UiNode } from '../src/dom/node.js';
+import { createSceneArea } from '../src/areas/scene.js';
 import { systemsArea } from '../src/areas/systems.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
-import { attr, buildLoadedFrame, buttonByKey, press, type LoadedFrameFixture } from './support/frame.js';
-import { FIXTURE_IDS, entityHit, settle, surfaceHit } from './support/project.js';
+import {
+  attr,
+  buildFrame,
+  buildLoadedFrame,
+  buttonByKey,
+  press,
+  type LoadedFrameFixture,
+} from './support/frame.js';
+import { previewProbe } from './support/preview.js';
+import {
+  FIXTURE_IDS,
+  entityHit,
+  fakeStage,
+  fixtureHost,
+  settle,
+  surfaceHit,
+} from './support/project.js';
 
 /**
  * Система, выбивающая пол арены целиком: сетка фикстуры 4×4, то есть одно слово
@@ -184,6 +200,27 @@ describe('ED-9, REND-14: выход возвращает вьюпорту док
     expect([...(fixture.stage.last?.grid?.floor ?? [])].filter((bit) => bit === 0)).toHaveLength(1);
   });
 
+  it('сорвавшийся снос прогона всё равно возвращает вьюпорт документам', async () => {
+    // Выход из превью — единственный путь обратно к документам (ED-9), и он не
+    // имеет права зависеть от того, удался ли снос воркера: кадр, оставшийся за
+    // ушедшим продюсером, показывал бы мир прогона в режиме правки, а убрать его
+    // было бы уже нечем — прогона-то нет.
+    const fixture = await buildLoadedFrame();
+    fixture.frame.togglePreview();
+    fixture.preview.step(2);
+    const submits = fixture.stage.submitted.length;
+
+    fixture.preview.failDispose = true;
+    fixture.frame.togglePreview();
+
+    expect(fixture.frame.mode()).toBe('edit');
+    // Причина названа, а не проглочена (ED-8).
+    expect(fixture.frame.previewFailure()).not.toBeNull();
+    expect(fixture.state.previewing).toBe(false);
+    expect(fixture.stage.submitted.length).toBe(submits + 1);
+    expect(fixture.stage.reapplied.at(-1)).toBe(true);
+  });
+
   it('правка, сделанная во время прогона, доезжает выходом из него', async () => {
     // Правка приходит не из интерфейса (ED-29) — инструменты в превью
     // недоступны, — но дойти до кадра она обязана: терять её нельзя.
@@ -300,6 +337,35 @@ describe('ED-26: режим виден постоянно и переключа�
     expect(fixture.preview.disposals).toBe(1);
   });
 
+  it('на холодном старте запись состояния заводит сам вопрос «есть ли что прогонять»', async () => {
+    // ED-26 требует запуска из ЛЮБОЙ области, а прогонять умеет та, чьи
+    // документы прогоняются. Значит, вопрос каркаса обязан работать и тогда,
+    // когда автор в ту область ни разу не заходил: записи состояния ещё нет, и
+    // заводит её этот самый вопрос. Пока документы открываются, прогонять
+    // нечего — и элемент показан недоступным, а не инертным.
+    const host = fixtureHost();
+    const preview = previewProbe();
+    const area = createSceneArea({
+      host,
+      ids: FIXTURE_IDS,
+      previewBackend: preview.factory,
+      stage: (_project, _host, hooks) => fakeStage(hooks.announce),
+    });
+    // Уход в соседнюю область записи чужого состояния не заводит: страницу тут
+    // ещё никто не собирал, и области сцены как бы не существует.
+    const fixture = buildFrame([systemsArea, area]);
+    fixture.frame.activate(systemsArea.id);
+    expect(fixture.frame.canPreview()).toBe(false);
+
+    await settle();
+    expect(fixture.frame.canPreview()).toBe(true);
+    fixture.frame.togglePreview();
+    expect(fixture.frame.mode()).toBe('preview');
+    expect(preview.scenes).toHaveLength(1);
+    // Открытие документов записью на диск не является (ED-21).
+    expect(host.writes).toEqual([]);
+  });
+
   it('без открытого проекта запуск показан недоступным, а не молча инертным', async () => {
     const fixture = await buildLoadedFrame();
     // Проект-фикстура открыт — кнопка доступна; сравнение с областью без
@@ -330,6 +396,18 @@ describe('ED-26: режим виден постоянно и переключа�
   });
 });
 
+/**
+ * ED-13: «ввод камеры не пересекает границу воркера, результат превью тот же,
+ * что без движений камеры».
+ *
+ * Что здесь доказуемо и что нет, названо честно. Вьюпорт подделан, и настоящего
+ * конвейера камеры (CAM-1) у дубля нет — сравнение двух прогонов само по себе
+ * доказывало бы лишь то, что вызовы записывающего дубля ничего не шлют. Поэтому
+ * несущая проверка — не равенство двух прогонов, а состав того, что главный
+ * поток вообще отправляет в воркер ПРИ движущейся камере: если бы путь от ввода
+ * к границе существовал, в списке появился бы конверт не из одного `ret`.
+ * Равенство прогонов стоит рядом вторым, более грубым свидетельством.
+ */
 describe('ED-13: ввод камеры не пересекает границу воркера', () => {
   /** Один прогон: N тиков с кадрами; `camera` — что автор делает с камерой. */
   async function run(camera: (fixture: LoadedFrameFixture, step: number) => void) {
@@ -358,6 +436,11 @@ describe('ED-13: ввод камеры не пересекает границу 
 
     expect(moved.fixture.stage.zooms).toHaveLength(5);
     expect(moved.messages.length).toBeGreaterThan(5);
+    // Из главного потока при движущейся камере уходит только возврат буфера
+    // (SHELL-3): канала, по которому ввод дошёл бы до симуляции, нет.
+    const fromMain = moved.messages.filter((message) => message.from === 'main');
+    expect(fromMain.length).toBeGreaterThan(0);
+    expect([...new Set(fromMain.map((message) => message.kind))]).toEqual(['ret']);
     expect(moved.messages).toEqual(still.messages);
   });
 });

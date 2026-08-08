@@ -1,0 +1,3 @@
+{
+  "validation.reason.editor.curvatureGrid.gridMismatch": "Сетка карты кривизны не совпала с сеткой террейна: {axis} = {received}, а в «{against}» — {expected}. Карта не рисуется (ASSET-7)"
+}

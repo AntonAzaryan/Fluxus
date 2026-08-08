@@ -44,6 +44,12 @@ export interface PreviewProbe {
   readonly simulation: PreviewSimulation | null;
   /** Сколько прогонов снесено. */
   readonly disposals: number;
+  /**
+   * Заставить снос прогона сорваться. Настоящий `worker.terminate()` бросает
+   * редко, но выход из превью обязан вернуть вьюпорт документам и в этом случае
+   * (ED-9), и проверить это иначе нечем.
+   */
+  failDispose: boolean;
   /** Тики воркера вручную: таймеров в прогоне тестов нет. */
   step(ticks?: number): void;
   /** То, что подставляется области вместо воркера. */
@@ -65,6 +71,7 @@ export function previewProbe(): PreviewProbe {
   const messages: RecordedMessage[] = [];
   let simulation: PreviewSimulation | null = null;
   let disposals = 0;
+  let failDispose = false;
 
   const factory: PreviewBackendFactory = (message) => {
     scenes.push(message);
@@ -104,6 +111,7 @@ export function previewProbe(): PreviewProbe {
       dispose() {
         simulation?.shell.stop();
         disposals++;
+        if (failDispose) throw new Error('снос прогона сорвался');
       },
     };
   };
@@ -116,6 +124,12 @@ export function previewProbe(): PreviewProbe {
     },
     get disposals(): number {
       return disposals;
+    },
+    get failDispose(): boolean {
+      return failDispose;
+    },
+    set failDispose(value: boolean) {
+      failDispose = value;
     },
     step(ticks = 1) {
       for (let index = 0; index < ticks; index++) simulation?.shell.stepTick();

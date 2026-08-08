@@ -49,6 +49,7 @@ export {
   el,
   findAll,
   hasClass,
+  issueText,
   resourceText,
   walk,
 } from './dom/node.js';
@@ -62,7 +63,7 @@ export type {
 } from './dom/node.js';
 export { renderInto, renderNode } from './dom/render.js';
 
-export { UI_BUNDLES, UI_KEY_PREFIX, uiResources } from './i18n/uiBundles.js';
+export { UI_BUNDLES, UI_KEY_PREFIX, VALIDATION_BUNDLES, uiResources } from './i18n/uiBundles.js';
 
 export { button } from './widgets/button.js';
 export type { ButtonSpec, ButtonVariant } from './widgets/button.js';

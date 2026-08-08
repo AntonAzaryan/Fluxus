@@ -214,8 +214,6 @@ export interface ScenePreviewHooks {
   leave(): void;
   /** Чем поднимается вторая сторона канала; по умолчанию — воркер веба. */
   readonly backend?: PreviewBackendFactory;
-  readonly tickSeconds?: number;
-  readonly seed?: number;
 }
 
 /**
@@ -239,53 +237,66 @@ export function createScenePreview(hooks: ScenePreviewHooks): PreviewSource {
       // ни режима, ни начатого взаимодействия он не меняет.
       loadScene(def);
 
-      // Вход объявляется до запуска: авторинг в превью недоступен (ED-9), а
-      // брошенная открытой транзакция была бы авторингом, пережившим запрет.
-      hooks.enter();
-
       const message: PreviewSceneMessage = {
         t: PREVIEW_SCENE_MESSAGE,
         def,
         kinds: hooks.kinds(),
-        tickSeconds: hooks.tickSeconds ?? PREVIEW_TICK_SECONDS,
-        seed: hooks.seed ?? PREVIEW_WORLD_SEED,
+        tickSeconds: PREVIEW_TICK_SECONDS,
+        seed: PREVIEW_WORLD_SEED,
       };
 
-      // Сцена подсистем — та же, что у вьюпорта (REND-11): подсистемы не
-      // различают продюсеров, и второй сцены превью не заводит.
-      const host = new RemoteHost(stage.context, { stage: stage.presentation });
+      let host: RemoteHost | null = null;
       let backend: PreviewBackend | undefined;
       let detach: () => void = () => undefined;
+      // Под откатом — ВСЁ, начиная со входа в превью: любая строка ниже может
+      // сорваться, а область, объявившая вход и не получившая выхода, осталась
+      // бы в превью, которого нет, — с запертыми авторингом и undo (ED-9, ED-18).
       try {
+        // Вход объявляется до запуска: авторинг в превью недоступен (ED-9), а
+        // брошенная открытой транзакция была бы авторингом, пережившим запрет.
+        hooks.enter();
+        // Сцена подсистем — та же, что у вьюпорта (REND-11): подсистемы не
+        // различают продюсеров, и второй сцены превью не заводит.
+        const remote = new RemoteHost(stage.context, { stage: stage.presentation });
+        host = remote;
         backend = (hooks.backend ?? workerPreviewBackend)(message);
-        host.connect(backend.port);
+        remote.connect(backend.port);
         detach = stage.attachProducer((now) => {
-          host.frame(now);
+          remote.frame(now);
         });
         backend.start();
       } catch (error) {
         // Наполовину поднятый прогон не остаётся: иначе воркер пережил бы
         // отказ, а область — осталась бы в превью, которого нет.
         detach();
-        stage.presentation.detach(host);
+        if (host !== null) stage.presentation.detach(host);
         backend?.dispose();
         hooks.leave();
         throw error;
       }
       const started = backend;
+      const running = host;
 
       let stopped = false;
       return {
         stop() {
           if (stopped) return;
           stopped = true;
-          detach();
-          // Продюсер уходит, не передавая состояние: его инстансы гасятся
-          // штатным правилом REND-3, сцена остаётся ничьей до первой подачи
-          // документов (REND-11).
-          stage.presentation.detach(host);
-          started.dispose();
-          hooks.leave();
+          try {
+            detach();
+            // Продюсер уходит, не передавая состояние: его инстансы гасятся
+            // штатным правилом REND-3, сцена остаётся ничьей до первой подачи
+            // документов (REND-11).
+            stage.presentation.detach(running);
+            started.dispose();
+          } finally {
+            // Возврат вьюпорта документам — в `finally`, а не последней строкой:
+            // сорвавшийся снос прогона не имеет права оставить кадр в превью
+            // навсегда. Сцена в этот момент уже ничья (REND-11), и не переподать
+            // документы значило бы показывать автору мир прогона в режиме
+            // правки, без единого способа его оттуда убрать (ED-9).
+            hooks.leave();
+          }
         },
       };
     },

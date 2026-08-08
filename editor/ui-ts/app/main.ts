@@ -20,8 +20,13 @@ import {
   createEditorSession,
   createOperationRegistry,
   registerBuiltinOperations,
+  registerValidationRules,
   type ContentChangeKind,
   type ContentPath,
+  type FieldEditorContribution,
+  type PaletteCommandContribution,
+  type ValidationRule,
+  type ViewportToolContribution,
 } from '@game-mvp/editor-core';
 import {
   createWebHost,
@@ -31,6 +36,7 @@ import {
 } from '../src/index.js';
 import type { WorkspaceArea } from '../src/index.js';
 import { createSceneArea } from '../src/areas/scene.js';
+import { sceneValidationRules } from '../src/areas/sceneProject.js';
 import { registerPlacementOperations } from '../src/areas/scenePlacement.js';
 import { registerTerrainOperations } from '../src/areas/sceneTerrain.js';
 import { systemsArea } from '../src/areas/systems.js';
@@ -66,8 +72,19 @@ const host = createWebHost({
   window,
 });
 
-const contributions = createEditorContributions<WorkspaceArea>();
-contributions.areas.register(createSceneArea({ host }));
+const contributions = createEditorContributions<
+  WorkspaceArea,
+  ViewportToolContribution,
+  FieldEditorContribution,
+  PaletteCommandContribution,
+  ValidationRule
+>();
+// Правила валидации — такой же вклад, как область (ED-25), и реестр у них один
+// на редактор: раскладку документов проекта приносит область, а не правило.
+registerValidationRules(contributions.validationRules, sceneValidationRules());
+contributions.areas.register(
+  createSceneArea({ host, validationRules: contributions.validationRules }),
+);
 contributions.areas.register(systemsArea);
 
 // Операции расстановки и кистей — вклады области, а не часть ядра редактора

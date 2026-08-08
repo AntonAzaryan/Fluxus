@@ -31,8 +31,20 @@
  * первой на первом же несовпадении.
  */
 import { FIXED_ONE, type SceneDef } from '@game-mvp/core';
-import { createHostAssetSource, type EnvironmentHost } from '@game-mvp/editor-core';
-import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
+import {
+  ContributionRegistry,
+  CURVATURE_GRID_RULE,
+  createHostAssetSource,
+  createValidator,
+  registerValidationRules,
+  type ContributionReader,
+  type EnvironmentHost,
+  type ValidationIssue,
+  type ValidationReport,
+  type ValidationRule,
+  type Validator,
+} from '@game-mvp/editor-core';
+import { children, documentValue, el, issueText, resourceText, type UiNode } from '../dom/node.js';
 import type { AreaContext, AreaSetup, AreaZones, WorkspaceArea } from '../frame/area.js';
 import type { PreviewSource } from '../frame/preview.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS } from '../frame/styles.js';
@@ -67,6 +79,7 @@ import {
   TERRAIN_ASSET,
   draftOf,
   openSceneProject,
+  sceneValidationRules,
   type SceneProject,
   type SceneProjectIds,
 } from './sceneProject.js';
@@ -159,6 +172,19 @@ export interface SceneAreaOptions {
    * границу.
    */
   readonly previewBackend?: PreviewBackendFactory;
+  /**
+   * Реестр правил валидации (ED-25). Нет — область заводит свой из
+   * `sceneValidationRules()`: сам список правил один и лежит там, а реестр
+   * бывает общим с остальным редактором, когда его приносит сборка.
+   */
+  readonly validationRules?: ContributionReader<ValidationRule>;
+}
+
+/** Свой реестр правил, когда общего сборка не принесла. */
+function ownRules(): ContributionReader<ValidationRule> {
+  const rules = new ContributionRegistry<ValidationRule>({ kind: 'rule' });
+  registerValidationRules(rules, sceneValidationRules());
+  return rules;
 }
 
 export interface SceneAreaState {
@@ -174,6 +200,14 @@ export interface SceneAreaState {
   stage: SceneStage | null;
   /** Текущий кадр как функция документов (ED-15). */
   draft: SceneDraft | null;
+  /** Прогон правил по открытым документам (ED-8): им и находится нарушение. */
+  readonly validator: Validator;
+  /**
+   * Последний отчёт валидации; `null` — прогонов ещё не было (проект не открыт).
+   * Структурный результат, а не строка (ED-30): интерфейс показывает из него то,
+   * для чего у него есть место, а внешний потребитель читает его целиком.
+   */
+  report: ValidationReport | null;
   /** Прогон текущих документов (ED-9): его каркас и спрашивает у области. */
   readonly preview: PreviewSource;
   /**
@@ -290,6 +324,11 @@ function start(state: SceneAreaState, setup: AreaSetup, options: SceneAreaOption
       let config: unknown = undefined;
       let curvature: unknown = undefined;
       const recompute = (): void => {
+        // Отчёт пересчитывается раньше сверки ссылок и без неё: правила видят
+        // больше документов, чем кадр (пара «конфиг — манифест», ED-19), и
+        // «кадр не изменился» их состояния не описывает. Дорогим это не
+        // становится — прогон сам решает, какие правила исполнять заново (ED-8).
+        state.report = state.validator.run(setup.session);
         // Значения сессии заморожены и подменяются целиком, поэтому сравнение
         // по ссылке отвечает на вопрос «изменилось ли» точно и даром: выделение
         // и открытие соседнего документа кадра не трогают.
@@ -606,13 +645,36 @@ function brushBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   );
 }
 
+/**
+ * Находка правила сеток (ED-11) в баре поверхности правки. Подпись — ресурс
+ * области, причина — ресурс самой находки с подставленными величинами
+ * (`issueText`): текст нарушения принадлежит правилу, а не месту показа, и
+ * второй его формулировки в области не заводится (ED-27, ED-30).
+ */
+function gridChip(context: AreaContext<SceneAreaState>, issue: ValidationIssue): UiNode {
+  const { resources } = context;
+  return withValidation(
+    statusChip({
+      label: resourceText(resources, 'ui.area.scene.curvatureGrid'),
+      tone: issue.severity,
+    }),
+    { severity: issue.severity, reason: issueText(resources, issue) },
+  );
+}
+
 function surface(context: AreaContext<SceneAreaState>): UiNode {
   const { state, resources } = context;
   const stage = state.stage;
   // Три источника одной причины, а не три способа её показать: не открылся
   // проект, не сошлись документы, не прошёл кадр (ED-8, ED-30).
   const failure = state.failure ?? state.draft?.failure ?? stage?.failure ?? null;
-  const mismatch = state.draft?.mismatch ?? null;
+  // Несовпадение сеток кривизны и террейна — находка правила `editor.curvatureGrid`
+  // (ED-11), а не второе сравнение двух чисел здесь. Из отчёта берётся только
+  // оно: остальным находкам места в интерфейсе пока нет, и показывать их
+  // единственным чипом бара значило бы свалить в него весь отчёт.
+  const grids = (state.report?.issues ?? []).filter(
+    (issue) => issue.ruleId === CURVATURE_GRID_RULE,
+  );
 
   const zoom = (steps: number, key: string): UiNode =>
     button({
@@ -672,16 +734,9 @@ function surface(context: AreaContext<SceneAreaState>): UiNode {
               ),
           // Несовпадение сеток — предупреждение, а не отказ (ASSET-7: рантайм
           // переживает его игнором карты), но видно оно обязано быть сразу
-          // (ED-11). Величины приходят от документов, подпись — от ресурса.
-          mismatch === null
-            ? undefined
-            : withValidation(
-                statusChip({
-                  label: resourceText(resources, 'ui.area.scene.curvatureGrid'),
-                  tone: 'warning',
-                }),
-                { severity: 'warning', reason: documentValue(mismatch) },
-              ),
+          // (ED-11). Важность и текст причины приходят от находки: цвет тут
+          // ничего не решает, различают иконка, положение и причина (ED-22).
+          ...grids.map((issue) => gridChip(context, issue)),
         ),
       }),
       el('div', {
@@ -782,6 +837,10 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
         project: null,
         stage: null,
         draft: null,
+        // Правила — вклад (ED-25), и прогон живёт столько же, сколько запись
+        // состояния: его кэш опирается на значения открытых документов сессии.
+        validator: createValidator({ rules: options.validationRules ?? ownRules() }),
+        report: null,
         previewing: false,
         failure: null,
         activeTool: 'pointer',

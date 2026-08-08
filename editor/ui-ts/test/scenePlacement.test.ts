@@ -21,7 +21,6 @@ import {
   createEditorSession,
   createOperationRegistry,
   createValidator,
-  crossDocumentRules,
   getAtPath,
   registerBuiltinOperations,
   registerValidationRules,
@@ -32,7 +31,7 @@ import {
   type ValidationRule,
 } from '@game-mvp/editor-core';
 import { describe, expect, it } from 'vitest';
-import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
+import { PLACEMENT_LIST, SCENE_KINDS, sceneValidationRules } from '../src/areas/sceneProject.js';
 import {
   PLACEMENT_AUTHORING_OPERATIONS,
   PLACEMENT_OPERATIONS,
@@ -74,7 +73,7 @@ function scratchSession(): EditorSession {
   });
   session.openDocument({
     id: FIXTURE_IDS.config,
-    kind: 'scene',
+    kind: SCENE_KINDS.config,
     value: SCRATCH as unknown as JsonValue,
     lists: [PLACEMENT_LIST],
   });
@@ -359,11 +358,14 @@ describe('ED-19: пару «prefab — запись манифеста» про�
     const session = scratchSession();
     session.openDocument({
       id: FIXTURE_IDS.visuals,
-      kind: 'manifest',
+      kind: SCENE_KINDS.visuals,
       value: FIXTURE_VISUALS,
     });
     const rules = new ContributionRegistry<ValidationRule>({ kind: 'rule' });
-    registerValidationRules(rules, crossDocumentRules());
+    // Раскладка — та же, что у настоящего проекта (`sceneValidationRules`):
+    // с умолчаниями правила искали бы стороны в документах видов, которых у
+    // этого проекта нет, и ни одно не сработало бы ни разу.
+    registerValidationRules(rules, sceneValidationRules());
     const report = createValidator({ rules }).run(session);
 
     const found = report

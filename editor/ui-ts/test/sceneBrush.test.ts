@@ -8,7 +8,7 @@
  * (ED-29), в одну запись истории на мазок (ED-18) и в набор наложений (REND-16).
  */
 import { createTerrainGrid, type TerrainDef } from '@game-mvp/core';
-import { getAtPath, type EditorSession } from '@game-mvp/editor-core';
+import { CURVATURE_GRID_RULE, getAtPath, type EditorSession } from '@game-mvp/editor-core';
 import { describe, expect, it } from 'vitest';
 import { findAll, type UiNode } from '../src/dom/node.js';
 import { SCENE_AREA_ID, sceneArea } from '../src/areas/scene.js';
@@ -422,9 +422,13 @@ describe('ED-26: недоступное показано недоступным'
 });
 
 describe('ED-11: несовпадение сеток видно сразу', () => {
+  /** Находки правила сеток в отчёте области — то, что бар и показывает. */
+  const gridIssues = (fixture: LoadedFrameFixture) =>
+    (fixture.state.report?.issues ?? []).filter((issue) => issue.ruleId === CURVATURE_GRID_RULE);
+
   it('смена размеров террейна подсвечивает карту кривизны предупреждением', async () => {
     const fixture = await buildLoadedFrame();
-    expect(fixture.state.draft?.mismatch).toBeNull();
+    expect(gridIssues(fixture)).toEqual([]);
 
     fixture.session.applyOperation('document.setValue', {
       document: FIXTURE_IDS.config,
@@ -440,10 +444,28 @@ describe('ED-11: несовпадение сеток видно сразу', () 
     await settle();
 
     // ASSET-7: рантайм переживает несовпадение игнором карты, поэтому это
-    // предупреждение, а не ошибка, — но видно оно сразу (ED-11).
-    expect(fixture.state.draft?.mismatch).toBe('4×4 ≠ 3×3');
+    // предупреждение, а не ошибка, — но видно оно сразу (ED-11). Нарушений два,
+    // по одному на ось: находка адресует ось, а не «сетки не совпали» целиком
+    // (ED-30 — путь в документе, полученное значение и ожидание).
+    const issues = gridIssues(fixture);
+    expect(issues.map((issue) => issue.path)).toEqual([['height'], ['width']]);
+    expect(issues.map((issue) => issue.documentId)).toEqual([
+      FIXTURE_CURVATURE_ID,
+      FIXTURE_CURVATURE_ID,
+    ]);
+    expect(issues.every((issue) => issue.severity === 'warning')).toBe(true);
     const marks = findAll(view(fixture), (node) => node.attrs?.['data-severity'] === 'warning');
-    expect(marks).toHaveLength(1);
+    expect(marks).toHaveLength(issues.length);
+    // Причина — разрешённый ресурс с подставленными величинами (ED-27): ни
+    // ключа, ни пустого текста автору не показывается.
+    const reasons = marks.flatMap((mark) =>
+      findAll(mark, (node) => node.text?.key === issues[0]?.reasonKey).map(
+        (node) => node.text?.value ?? '',
+      ),
+    );
+    expect(reasons).toHaveLength(issues.length);
+    expect(reasons[0]).toContain('4');
+    expect(reasons[0]).not.toBe(issues[0]?.reasonKey);
     // Карта не закрыта и не подменена: несовпадение — состояние, а не отказ.
     expect(fixture.session.isOpen(FIXTURE_CURVATURE_ID)).toBe(true);
   });

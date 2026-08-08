@@ -30,19 +30,28 @@
  *
  * ## Откуда берутся символы карт
  *
- * Карта кривизны: обратная таблица выводится обходом `curvatureOffsetOf` —
- * экспортированного разбора символа (ASSET-7). Своей копии её алфавита у
- * редактора нет вовсе, и диапазон смещений — то, что в этом алфавите выразимо.
+ * Ниоткуда: своего алфавита у редактора нет ни для одной из трёх карт.
  *
- * Карты террейна: разбор живёт в ядре (`createTerrainGrid`), но обратного хода
- * — символа по уровню — оно не экспортирует, а ассет пишет редактор (ED-10).
- * Символы поэтому названы здесь. Вторым описанием ПРАВИЛА это не становится:
- * согласие с ядром проверяет само ядро на каждой правке (ED-8) — карта,
- * разошедшаяся с алфавитом, не доживает до кадра, — а round-trip «записали
- * уровень → ядро прочитало тот же» пиннится тестом, а не совпадением двух
- * таблиц на глаз.
+ * Карты террейна: ядро владеет обеими сторонами — разбором (`createTerrainGrid`)
+ * и записью (`terrainLevelChar`, `terrainFlagChar`, TERR-3), — и редактор зовёт
+ * его запись. Так и должно быть: правило текстового представления имеет один
+ * источник истины, и вторая его реализация у потребителя расходится с ним по
+ * определению (ED-1, CORE-3). Диапазон уровней тем же порядком: `MAX_LEVEL` —
+ * это `TERRAIN_LEVEL_MAX` ядра, а не второе число рядом с ним.
+ *
+ * Карта кривизны: обратная таблица выводится обходом `curvatureOffsetOf` —
+ * экспортированного разбора символа (ASSET-7). Тот же принцип, только владелец
+ * другой: алфавит presentation-ассета принадлежит модулю ассетов, и диапазон
+ * смещений — то, что в этом алфавите выразимо.
  */
 import { curvatureOffsetOf } from '@game-mvp/assets';
+import {
+  TERRAIN_CELL_KINDS,
+  TERRAIN_LEVEL_MAX,
+  terrainFlagChar,
+  terrainLevelChar,
+  type TerrainCellKind,
+} from '@game-mvp/core';
 import {
   OperationError,
   formatPath,
@@ -69,29 +78,21 @@ export const LEVEL_MAP = 'levels';
 export const FLAG_MAP = 'flags';
 export const OFFSET_MAP = 'rows';
 
-/**
- * Символы карты уровней (TERR-3): индекс символа и есть уровень клетки, а длина
- * строки — весь выразимый диапазон.
- */
-const LEVEL_CHARS = '0123456789ABCDEF';
-
-/** Наибольший выразимый уровень — производное алфавита, а не второе число. */
-export const MAX_LEVEL = LEVEL_CHARS.length - 1;
+/** Наибольший выразимый уровень (TERR-3) — ответ ядра, а не число редактора. */
+export const MAX_LEVEL = TERRAIN_LEVEL_MAX;
 
 /**
  * Вид клетки в карте флагов (TERR-3): один символ описывает клетку целиком,
  * комбинаций в модели нет — рампа без пола смысла не имеет. Поэтому «пометить
  * рампой», «снять пол» и «вернуть пол» (ED-10) — три значения одного параметра,
  * а не три независимых флага, которые можно было бы выставить разом.
+ *
+ * Перечисление — ядра; здесь оно только переизлучается, чтобы кисть и тесты
+ * брали его у соседа-вклада, а не у ядра напрямую: место, где живёт раскладка
+ * операций террейна редактора, — одно, и это оно.
  */
-export const TERRAIN_CELL_KINDS = ['plain', 'ramp', 'noFloor'] as const;
-export type TerrainCellKind = (typeof TERRAIN_CELL_KINDS)[number];
-
-const CELL_CHARS: Readonly<Record<TerrainCellKind, string>> = {
-  plain: '.',
-  ramp: '^',
-  noFloor: '_',
-};
+export { TERRAIN_CELL_KINDS };
+export type { TerrainCellKind };
 
 /**
  * Смещение → символ карты кривизны (ASSET-7). Таблица выведена из разбора
@@ -186,9 +187,10 @@ function paintCell(
 }
 
 /**
- * Уровень клетки (ED-10, TERR-3). Диапазон проверяется здесь, а не только
- * ядром: «значение вне диапазона… MUST NOT возникать в результате программной
- * мутации» — то есть отказать обязана сама запись, а не разбор записанного.
+ * Уровень клетки (ED-10, TERR-3). Диапазон проверяется в точке записи, а не
+ * только на разборе записанного: «значение вне диапазона… MUST NOT возникать в
+ * результате программной мутации». Проверяет его сама запись ядра — отказ
+ * приходит из неё значением `null`, и операция только объясняет его автору.
  */
 export const setLevelOperation: AuthoringOperation = {
   id: TERRAIN_OPERATIONS.level,
@@ -197,8 +199,8 @@ export const setLevelOperation: AuthoringOperation = {
   apply(ctx, params) {
     const id = TERRAIN_OPERATIONS.level;
     const level = asNumber(params, 'level');
-    const char = Number.isInteger(level) ? LEVEL_CHARS[level] : undefined;
-    if (char === undefined) {
+    const char = terrainLevelChar(level);
+    if (char === null) {
       throw new OperationError(id, `параметр "level": уровень вне [0, ${MAX_LEVEL}] (TERR-3)`, {
         param: 'level',
         received: level,
@@ -221,8 +223,8 @@ export const setCellKindOperation: AuthoringOperation = {
   apply(ctx, params) {
     const id = TERRAIN_OPERATIONS.cell;
     const kind = params['kind'] as string;
-    const char = (CELL_CHARS as Record<string, string | undefined>)[kind];
-    if (char === undefined) {
+    const char = terrainFlagChar(kind);
+    if (char === null) {
       throw new OperationError(
         id,
         `параметр "kind": вид клетки — один из ${TERRAIN_CELL_KINDS.join(', ')} (TERR-3)`,
