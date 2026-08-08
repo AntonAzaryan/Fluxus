@@ -44,7 +44,9 @@ export type {
   CameraMode,
   CameraPose,
   CameraRigOptions,
+  CameraSources,
   FollowTarget,
+  TerrainCameraSource,
 } from './camera/rig.js';
 export {
   EffectStack,

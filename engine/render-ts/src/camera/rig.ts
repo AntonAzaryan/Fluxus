@@ -13,6 +13,11 @@
  * Высота точки наблюдения во всех режимах, кроме fly, — уровень клифа под
  * ней (CAM-2), сглаженный; вертикальная координата цели не читается вовсе:
  * подброс героя камеру не качает.
+ *
+ * Источник поверхности и границы инжектирует потребитель и может переподать
+ * их работающему конвейеру (`setSources`, CAM-7): в матче арена иммутабельна
+ * (TERR-6) и переподачи нет ни разу, а в редакторе автор правит геометрию и
+ * меняет размеры арены, не теряя ни режима, ни зума, ни вида.
  */
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
 
@@ -189,11 +194,20 @@ export const DEFAULT_CAMERA_CONFIG: CameraConfig = {
   effectsMultiplier: 1,
 };
 
-export interface CameraRigOptions {
-  readonly config?: Partial<CameraConfig>;
+/**
+ * Инжектируемая потребителем часть конвейера (CAM-7): источник высоты и
+ * границы. Тот же набор принимает конструктор и `CameraRig.setSources` —
+ * состав инжекции при создании и при переподаче один по построению.
+ * Отсутствующее поле оставляет прежнее значение, `null` снимает источник.
+ */
+export interface CameraSources {
   /** Высота поверхности (уровень клифа × шаг высоты) под мировой точкой (CAM-2). */
-  readonly groundHeightAt?: (x: number, y: number) => number;
-  readonly bounds?: CameraBounds;
+  readonly groundHeightAt?: ((x: number, y: number) => number) | null;
+  readonly bounds?: CameraBounds | null;
+}
+
+export interface CameraRigOptions extends CameraSources {
+  readonly config?: Partial<CameraConfig>;
   /** Стартовая точка наблюдения. */
   readonly startX?: number;
   readonly startY?: number;
@@ -205,6 +219,14 @@ export interface CameraRigOptions {
 const ease = (k: number, dt: number): number => 1 - Math.exp(-k * dt);
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
+
+/**
+ * Кламп в интервал, который может оказаться пустым: арена меньше двойного
+ * запаса не оставляет допустимых положений вовсе (CAM-7), и симметричный
+ * ответ один — середина, то есть центр арены.
+ */
+const clampInside = (v: number, lo: number, hi: number): number =>
+  lo > hi ? (lo + hi) / 2 : clamp(v, lo, hi);
 
 /**
  * Edge-pan по положению указателя относительно прямоугольника канваса:
@@ -232,34 +254,65 @@ export function edgePanAxes(
 }
 
 /**
+ * Источник поверхности и границ камеры над сеткой террейна — набор,
+ * инжектируемый в конвейер (CAM-7), плюс вход смены сетки под ним.
+ */
+export interface TerrainCameraSource extends CameraSources {
+  readonly groundHeightAt: (x: number, y: number) => number;
+  readonly bounds: CameraBounds;
+  /** Сетка, по которой отвечает источник: правка документа, RESIZE арены. */
+  setGrid(grid: TerrainGrid): void;
+}
+
+/**
  * Поверхность и границы камеры из сетки террейна (CAM-2, CAM-3): уровень
  * клифа клетки под точкой × шаг высоты; точки за сеткой прижимаются к
  * крайним клеткам. Читает те же данные, что рендер террейна (REND-7).
+ *
+ * Сетка живёт ссылкой, а не снимается при вызове: документная доставка
+ * декларативна и приезжает НОВЫМ объектом (REND-14), и снимок молча отвечал бы
+ * по прежней арене (CAM-7). Переподать источник конвейеру всё равно нужно —
+ * `setGrid` меняет ответы источника, а не состояние камеры.
  */
-export function terrainGroundApi(
-  grid: TerrainGrid,
-  heightStep: number,
-): { groundHeightAt: (x: number, y: number) => number; bounds: CameraBounds } {
+export function terrainGroundApi(grid: TerrainGrid, heightStep: number): TerrainCameraSource {
   // Приём сетки — точка входной границы (REND-1, TERR-2): границы и высоты
   // ниже считаются во float, fixed-point глубже не проникает.
-  const tile = grid.tileSize / FIXED_ONE;
+  let current = grid;
+  let tile = grid.tileSize / FIXED_ONE;
+  let bounds: CameraBounds = gridBounds(grid, tile);
   return {
+    // Замыкание, а не метод: потребитель отрывает его от объекта и передаёт полем.
     groundHeightAt: (x: number, y: number): number => {
-      const cx = clamp(Math.floor(x / tile), 0, grid.width - 1);
-      const cy = clamp(Math.floor(y / tile), 0, grid.height - 1);
-      return grid.levels[cy * grid.width + cx]! * heightStep;
+      const cx = clamp(Math.floor(x / tile), 0, current.width - 1);
+      const cy = clamp(Math.floor(y / tile), 0, current.height - 1);
+      return current.levels[cy * current.width + cx]! * heightStep;
     },
-    bounds: { minX: 0, minY: 0, maxX: grid.width * tile, maxY: grid.height * tile },
+    get bounds(): CameraBounds {
+      return bounds;
+    },
+    setGrid(next: TerrainGrid): void {
+      current = next;
+      tile = next.tileSize / FIXED_ONE;
+      bounds = gridBounds(next, tile);
+    },
   };
 }
+
+const gridBounds = (grid: TerrainGrid, tile: number): CameraBounds => ({
+  minX: 0,
+  minY: 0,
+  maxX: grid.width * tile,
+  maxY: grid.height * tile,
+});
 
 // ----------------------------------------------------------------------- rig
 
 export class CameraRig {
   readonly config: CameraConfig;
 
-  private readonly groundHeightAt: ((x: number, y: number) => number) | null;
-  private readonly bounds: CameraBounds | null;
+  /** Инжектированные источники (CAM-7); переподаются `setSources`. */
+  private groundHeightAt: ((x: number, y: number) => number) | null;
+  private bounds: CameraBounds | null;
 
   private modeState: CameraMode = 'follow';
   /** Точка наблюдения (сглаженная) и её высота по поверхности. */
@@ -307,6 +360,26 @@ export class CameraRig {
 
   get mode(): CameraMode {
     return this.modeState;
+  }
+
+  /**
+   * Переподача инжектированных источников работающему конвейеру (CAM-7):
+   * автор поменял размеры арены или правит её геометрию. Отсутствующее поле
+   * оставляет прежнее значение, `null` снимает источник.
+   *
+   * Новые границы применяются сразу, а не в ближайшем кадре: точку наблюдения
+   * до него успевает прочитать диспетчер эффектов (CAM-6). Высота, наоборот,
+   * не пересчитывается здесь — её тянет к новой поверхности кадр своим
+   * сглаживанием (CAM-2), и накопленное значение не сбрасывается.
+   */
+  setSources(sources: CameraSources): void {
+    if (sources.groundHeightAt !== undefined) {
+      this.groundHeightAt = sources.groundHeightAt;
+    }
+    if (sources.bounds !== undefined) {
+      this.bounds = sources.bounds;
+      this.clampToBounds();
+    }
   }
 
   /** Fly владеет клавиатурой движения: ввод героя в симуляцию не уходит (CAM-2). */
@@ -408,18 +481,7 @@ export class CameraRig {
       }
     }
 
-    if (this.bounds !== null) {
-      this.targetX = clamp(
-        this.targetX,
-        this.bounds.minX + cfg.boundsMargin,
-        this.bounds.maxX - cfg.boundsMargin,
-      );
-      this.targetY = clamp(
-        this.targetY,
-        this.bounds.minY + cfg.boundsMargin,
-        this.bounds.maxY - cfg.boundsMargin,
-      );
-    }
+    this.clampToBounds();
 
     // Высота — уровень клифа под точкой наблюдения (CAM-2), не z цели;
     // snap цели протаскивает и высоту без проезда.
@@ -442,6 +504,19 @@ export class CameraRig {
     pose.pitch = cfg.pitch;
     pose.roll = 0;
     pose.fovDeg = cfg.fovDeg;
+  }
+
+  /**
+   * Кламп точки наблюдения в границы арены с запасом (CAM-3). Один хелпер на
+   * кадр и на переподачу границ (CAM-7): второй способ клампить разошёлся бы
+   * с первым, как разошлись бы две реализации применения позы (CAM-1).
+   */
+  private clampToBounds(): void {
+    const bounds = this.bounds;
+    if (bounds === null) return;
+    const margin = this.config.boundsMargin;
+    this.targetX = clampInside(this.targetX, bounds.minX + margin, bounds.maxX - margin);
+    this.targetY = clampInside(this.targetY, bounds.minY + margin, bounds.maxY - margin);
   }
 
   /** Мёртвая зона и кламп осей панорамы. */

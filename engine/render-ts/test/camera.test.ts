@@ -1,11 +1,14 @@
 /**
- * CameraRig (camera CAM-1..5): конвейер позы без WebGL — поза как данные,
- * follow по x/y с высотой по поверхности, режимы и Dota-переходы, зум,
- * кламп к границам, snap без проезда, маршрутизация ввода героя.
+ * CameraRig (camera CAM-1..5, CAM-7): конвейер позы без WebGL — поза как
+ * данные, follow по x/y с высотой по поверхности, режимы и Dota-переходы, зум,
+ * кламп к границам, snap без проезда, маршрутизация ввода героя, переподача
+ * инжектированных источника поверхности и границ.
  */
 import { describe, expect, it } from 'vitest';
 import {
   CameraRig,
+  EffectStack,
+  TraumaShake,
   createCameraInput,
   edgePanAxes,
   terrainGroundApi,
@@ -16,6 +19,20 @@ import {
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
 
 const target = (x: number, y: number, snap = false): FollowTarget => ({ x, y, snap });
+
+/** Плоская сетка width×height с уровнем `level` во всех клетках. */
+function flatGrid(width: number, height: number, level: number): TerrainGrid {
+  const cells = width * height;
+  return {
+    width,
+    height,
+    tileSize: FIXED_ONE,
+    levels: new Uint8Array(cells).fill(level),
+    ramps: new Uint8Array(cells),
+    floor: new Uint8Array(cells).fill(1),
+    cliffs: [],
+  };
+}
 
 function makeRig(options: CameraRigOptions = {}): { rig: CameraRig; input: CameraInput } {
   return { rig: new CameraRig(options), input: createCameraInput() };
@@ -189,6 +206,132 @@ describe('CameraRig: границы арены (CAM-3)', () => {
     input.panX = 1;
     settle(rig, input, null, 1200);
     expect(rig.focusX).toBeCloseTo(24 - rig.config.boundsMargin, 3);
+  });
+});
+
+describe('CameraRig: переподача источников (CAM-7)', () => {
+  /** Дистанция камеры по позе — зум переживает переподачу (CAM-4). */
+  const distanceOf = (rig: CameraRig, input: CameraInput): number => {
+    const pose = rig.update(input, 1 / 60, null);
+    return (pose.posZ - rig.groundZ) / Math.sin(rig.config.pitch);
+  };
+
+  /** Суммарный |roll| эффектов за несколько кадров: стек ещё работает (CAM-6). */
+  const rollOver = (stack: EffectStack, rig: CameraRig, input: CameraInput, frames: number): number => {
+    let total = 0;
+    for (let i = 0; i < frames; i++) {
+      total += Math.abs(stack.apply(rig.update(input, 1 / 60, null), 1 / 60).roll);
+    }
+    return total;
+  };
+
+  it('уменьшившаяся арена приводит точку наблюдения внутрь ближайшим положением', () => {
+    const { rig, input } = makeRig({
+      bounds: { minX: 0, minY: 0, maxX: 24, maxY: 24 },
+      startX: 20,
+      startY: 4,
+    });
+    input.panX = 1; // открепляет камеру в free-RTS (CAM-2)
+    settle(rig, input, null, 1200);
+    input.panX = 0;
+    const margin = rig.config.boundsMargin;
+    expect(rig.focusX).toBeCloseTo(24 - margin, 3);
+
+    rig.setSources({ bounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 } });
+    // X был за новым краем — прижался к нему с тем же запасом; Y был внутри и
+    // не сдвинулся: ближайшее положение, а не центр и не стартовая точка.
+    expect(rig.focusX).toBeCloseTo(10 - margin, 6);
+    expect(rig.focusY).toBeCloseTo(4, 6);
+  });
+
+  it('переподача границ не трогает режим, зум и стек эффектов', () => {
+    const { rig, input } = makeRig({
+      bounds: { minX: 0, minY: 0, maxX: 24, maxY: 24 },
+      startX: 20,
+      startY: 4,
+    });
+    input.panX = 1;
+    rig.update(input, 1 / 60, target(0, 0));
+    input.panX = 0;
+    input.wheelSteps = 100; // отдалить за лимит (CAM-4)
+    rig.update(input, 1 / 60, null);
+    input.wheelSteps = 0;
+    settle(rig, input, null, 600);
+
+    const stack = new EffectStack();
+    const shake = new TraumaShake();
+    stack.add(shake);
+    shake.addTrauma(1);
+    expect(rollOver(stack, rig, input, 5)).toBeGreaterThan(0);
+    const zoomBefore = distanceOf(rig, input);
+    expect(rig.mode).toBe('free');
+
+    rig.setSources({ bounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 } });
+
+    expect(rig.mode).toBe('free');
+    expect(distanceOf(rig, input)).toBeCloseTo(zoomBefore, 3);
+    // Стек живёт у потребителя и переподачей не задет — пересоздание камеры
+    // отняло бы и его вместе с накопленной trauma.
+    expect(rollOver(stack, rig, input, 5)).toBeGreaterThan(0);
+  });
+
+  it('без переподачи конвейер работает по прежним значениям', () => {
+    const { rig, input } = makeRig({
+      bounds: { minX: 0, minY: 0, maxX: 24, maxY: 24 },
+      startX: 12,
+      startY: 12,
+    });
+    input.panX = 1;
+    settle(rig, input, null, 1200);
+    const margin = rig.config.boundsMargin;
+    expect(rig.focusX).toBeCloseTo(24 - margin, 3);
+
+    // Пустая переподача и переподача одной только поверхности границ не трогают.
+    rig.setSources({});
+    rig.setSources({ groundHeightAt: () => 3 });
+    settle(rig, input, null, 60);
+    expect(rig.focusX).toBeCloseTo(24 - margin, 3);
+  });
+
+  it('источник поверхности отвечает по действующей сетке, а не по той, над которой создан', () => {
+    const ground = terrainGroundApi(flatGrid(4, 4, 0), 0.6);
+    const { rig, input } = makeRig({
+      groundHeightAt: ground.groundHeightAt,
+      bounds: ground.bounds,
+      startX: 2,
+      startY: 2,
+    });
+    settle(rig, input, null, 300);
+    expect(rig.groundZ).toBeCloseTo(0, 6);
+
+    // Автор поднял уровень: пересчитанная ядром сетка приезжает НОВЫМ объектом
+    // (rendering REND-14) — снимок при создании отвечал бы по прежней арене.
+    ground.setGrid(flatGrid(4, 4, 2));
+    rig.update(input, 1 / 60, null);
+    expect(rig.groundZ).toBeGreaterThan(0);
+    expect(rig.groundZ).toBeLessThan(0.6); // сглаженно, не скачком за кадр (CAM-2)
+    settle(rig, input, null, 300);
+    expect(rig.groundZ).toBeCloseTo(1.2, 3);
+  });
+
+  it('границы источника отвечают по новой сетке и переподаются камере как есть', () => {
+    const ground = terrainGroundApi(flatGrid(24, 24, 0), 0.6);
+    const { rig, input } = makeRig({
+      groundHeightAt: ground.groundHeightAt,
+      bounds: ground.bounds,
+      startX: 20,
+      startY: 20,
+    });
+    settle(rig, input, null, 60);
+
+    ground.setGrid(flatGrid(10, 10, 0));
+    expect(ground.bounds).toEqual({ minX: 0, minY: 0, maxX: 10, maxY: 10 });
+
+    // Источник и есть набор, который принимает конвейер (CAM-7).
+    rig.setSources(ground);
+    const margin = rig.config.boundsMargin;
+    expect(rig.focusX).toBeCloseTo(10 - margin, 6);
+    expect(rig.focusY).toBeCloseTo(10 - margin, 6);
   });
 });
 
