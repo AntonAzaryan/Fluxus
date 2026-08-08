@@ -4,12 +4,25 @@
  * Хелпер принадлежит рендеру, а не какой-то из подсистем: подсистемы за общим
  * контрактом друг о друге не знают (REND-8), обе получают его извне.
  *
- * Базовая высота — уровень клетки × heightStep с рампами по `cornerLevels`;
- * поверх — смещения карты кривизны (ASSET-7), сглаженные усреднением по углам
- * и билинейной интерполяцией внутри клетки. Усреднение в угле идёт только по
- * смежным клеткам уровня самого угла: выпуклость плато не «перетекает» через
- * cliff-границу на нижний уровень, а рампа смыкается с плато без щели.
- * Нормаль — аналитическая производная той же билинейной формы, без численного
+ * Поле высот — сумма двух слагаемых (REND-9):
+ *
+ *     h(u, v) = base(u, v) + curv(S(u), S(v)),   S(t) = t² · (3 − 2t)
+ *
+ * `base` — уровень клетки × heightStep с рампами по `cornerLevels`,
+ * интерполированный билинейно; `curv` — узловые смещения карты кривизны
+ * (ASSET-7), тоже билинейно, но по параметрам, пропущенным через smoothstep.
+ * Усреднение в угле идёт только по смежным клеткам уровня самого угла:
+ * выпуклость плато не «перетекает» через cliff-границу на нижний уровень, а
+ * рампа смыкается с плато без щели.
+ *
+ * Разделение слагаемых и есть причина, по которой поверхность внутри уровня
+ * гладкая (C1), а рампа остаётся плоскостью: `S'(0) = S'(1) = 0`, поэтому
+ * производная слагаемого кривизны на границе клетки равна нулю с обеих сторон
+ * — хребта в узле сетки нет; база через `S` не пропускается, иначе перепад в
+ * уровень между углами рампы превратился бы в волну (REND-7). При отсутствии
+ * карты `curv ≡ 0`, и поле совпадает с прежним билинейным побитово.
+ *
+ * Нормаль — аналитическая производная той же формы, без численного
  * дифференцирования по кадрам.
  *
  * В матче сетка и карта кривизны иммутабельны (TERR-6) — углы считаются один
@@ -97,6 +110,27 @@ export interface VisualSurface {
   heightInCell(cellX: number, cellY: number, wx: number, wy: number): number;
   /** Единичная нормаль в мировой точке; пишет в out и возвращает его. */
   normalAt(wx: number, wy: number, out: SurfaceNormal): SurfaceNormal;
+  /**
+   * Нормаль, посчитанная по углам ЗАДАННОЙ клетки — близнец `heightInCell` с
+   * тем же клампом точки к границам клетки. Вершина геометрии получает нормаль
+   * из клетки, которой она принадлежит (REND-9): внутри уровня соседние клетки
+   * дают на общем ребре одно и то же (`S'` там ноль, углы общие), а через
+   * cliff-границу нормали не усредняются вовсе — силуэт кромки остаётся резким.
+   */
+  normalInCell(
+    cellX: number,
+    cellY: number,
+    wx: number,
+    wy: number,
+    out: SurfaceNormal,
+  ): SurfaceNormal;
+  /**
+   * Есть ли у клетки кривизна — «хотя бы одно из четырёх УЗЛОВЫХ смещений
+   * ненулевое». Это порог разбиения геометрии (REND-9), а не проверка карты:
+   * узловое смещение уже вобрало соседей, поэтому клетка рядом с холмом честно
+   * попадает в разбиваемые, а плоская область арены с картой кривизны —  нет.
+   */
+  hasCellCurvature(x: number, y: number): boolean;
 }
 
 /**
@@ -150,6 +184,10 @@ export function createVisualSurface(
 
   // Мировые высоты углов каждой клетки, [cell * 4 + corner], порядок cornerLevels.
   const corners = new Float32Array(width * height * 4);
+  // Узловые смещения кривизны тех же углов в мировых единицах: `corners` минус
+  // база. Держатся рядом, а не вычитаются обратно, потому что по ним спрашивают
+  // порог разбиения (`hasCellCurvature`) и считают слагаемое `curv` (REND-9).
+  const offsets = new Float32Array(width * height * 4);
   const offsetOfCorner = (cornerLevel: number, nodeX: number, nodeY: number): number => {
     if (curvature === null) return 0;
     let sum = 0;
@@ -177,10 +215,18 @@ export function createVisualSurface(
       for (let x = fromX; x <= toX; x++) {
         const levels = cornerLevels(grid, x, y);
         const base = (y * width + x) * 4;
-        corners[base] = levels[0] * heightStep + offsetOfCorner(levels[0], x, y);
-        corners[base + 1] = levels[1] * heightStep + offsetOfCorner(levels[1], x + 1, y);
-        corners[base + 2] = levels[2] * heightStep + offsetOfCorner(levels[2], x + 1, y + 1);
-        corners[base + 3] = levels[3] * heightStep + offsetOfCorner(levels[3], x, y + 1);
+        const o00 = offsetOfCorner(levels[0], x, y);
+        const o10 = offsetOfCorner(levels[1], x + 1, y);
+        const o11 = offsetOfCorner(levels[2], x + 1, y + 1);
+        const o01 = offsetOfCorner(levels[3], x, y + 1);
+        offsets[base] = o00;
+        offsets[base + 1] = o10;
+        offsets[base + 2] = o11;
+        offsets[base + 3] = o01;
+        corners[base] = levels[0] * heightStep + o00;
+        corners[base + 1] = levels[1] * heightStep + o10;
+        corners[base + 2] = levels[2] * heightStep + o11;
+        corners[base + 3] = levels[3] * heightStep + o01;
       }
     }
   };
@@ -199,17 +245,66 @@ export function createVisualSurface(
   };
 
   /**
-   * Единственная реализация билинейной формы поверхности: и высота под точкой,
-   * и высота в заданной клетке, и нормаль читают её. Второй копии формулы быть
-   * не должно — расхождение с ней и есть расхождение с картинкой (REND-9).
+   * Единственная реализация формы поверхности: и высота под точкой, и высота в
+   * заданной клетке, и нормаль читают её. Второй копии формулы быть не должно —
+   * расхождение с ней и есть расхождение с картинкой (REND-9).
+   *
+   * База билинейна по (u, v), слагаемое кривизны — по (S(u), S(v)). В углах
+   * `S` тождественна, поэтому `sample` в углу равен `corners` побитово, а без
+   * карты кривизны все узловые смещения нулевые и остаётся ровно прежняя
+   * билинейная форма.
    */
   const sample = (cell: number, u: number, v: number): number => {
-    const base = cell * 4;
-    const h00 = corners[base]!;
-    const h10 = corners[base + 1]!;
-    const h11 = corners[base + 2]!;
-    const h01 = corners[base + 3]!;
-    return h00 * (1 - u) * (1 - v) + h10 * u * (1 - v) + h11 * u * v + h01 * (1 - u) * v;
+    const at = cell * 4;
+    const o00 = offsets[at]!;
+    const o10 = offsets[at + 1]!;
+    const o11 = offsets[at + 2]!;
+    const o01 = offsets[at + 3]!;
+    const b00 = corners[at]! - o00;
+    const b10 = corners[at + 1]! - o10;
+    const b11 = corners[at + 2]! - o11;
+    const b01 = corners[at + 3]! - o01;
+    const base =
+      b00 * (1 - u) * (1 - v) + b10 * u * (1 - v) + b11 * u * v + b01 * (1 - u) * v;
+    const su = smoothstep(u);
+    const sv = smoothstep(v);
+    const curv =
+      o00 * (1 - su) * (1 - sv) + o10 * su * (1 - sv) + o11 * su * sv + o01 * (1 - su) * sv;
+    return base + curv;
+  };
+
+  /**
+   * Нормаль по углам заданной клетки в её локальных (u, v). Производные —
+   * аналитические: у базы прежние, у слагаемого кривизны добавляется множитель
+   * `S'`, который на границах клетки обращается в ноль (REND-9).
+   */
+  const normalOf = (cell: number, u: number, v: number, out: SurfaceNormal): SurfaceNormal => {
+    const at = cell * 4;
+    const o00 = offsets[at]!;
+    const o10 = offsets[at + 1]!;
+    const o11 = offsets[at + 2]!;
+    const o01 = offsets[at + 3]!;
+    const b00 = corners[at]! - o00;
+    const b10 = corners[at + 1]! - o10;
+    const b11 = corners[at + 2]! - o11;
+    const b01 = corners[at + 3]! - o01;
+    const su = smoothstep(u);
+    const sv = smoothstep(v);
+    const dhdu =
+      (1 - v) * (b10 - b00) +
+      v * (b11 - b01) +
+      smoothstepDerivative(u) * ((1 - sv) * (o10 - o00) + sv * (o11 - o01));
+    const dhdv =
+      (1 - u) * (b01 - b00) +
+      u * (b11 - b10) +
+      smoothstepDerivative(v) * ((1 - su) * (o01 - o00) + su * (o11 - o10));
+    const dhdx = dhdu / tile;
+    const dhdy = dhdv / tile;
+    const invLen = 1 / Math.sqrt(dhdx * dhdx + dhdy * dhdy + 1);
+    out.x = -dhdx * invLen;
+    out.y = -dhdy * invLen;
+    out.z = invLen;
+    return out;
   };
 
   return {
@@ -261,20 +356,47 @@ export function createVisualSurface(
 
     normalAt(wx: number, wy: number, out: SurfaceNormal): SurfaceNormal {
       locate(wx, wy);
-      const base = scratch.cell * 4;
-      const { u, v } = scratch;
-      const h00 = corners[base]!;
-      const h10 = corners[base + 1]!;
-      const h11 = corners[base + 2]!;
-      const h01 = corners[base + 3]!;
-      // Производные билинейной формы по мировым осям.
-      const dhdx = ((1 - v) * (h10 - h00) + v * (h11 - h01)) / tile;
-      const dhdy = ((1 - u) * (h01 - h00) + u * (h11 - h10)) / tile;
-      const invLen = 1 / Math.sqrt(dhdx * dhdx + dhdy * dhdy + 1);
-      out.x = -dhdx * invLen;
-      out.y = -dhdy * invLen;
-      out.z = invLen;
-      return out;
+      return normalOf(scratch.cell, scratch.u, scratch.v, out);
+    },
+
+    normalInCell(
+      cellX: number,
+      cellY: number,
+      wx: number,
+      wy: number,
+      out: SurfaceNormal,
+    ): SurfaceNormal {
+      const cx = Math.min(Math.max(cellX, 0), width - 1);
+      const cy = Math.min(Math.max(cellY, 0), height - 1);
+      const u = Math.min(Math.max(wx / tile - cx, 0), 1);
+      const v = Math.min(Math.max(wy / tile - cy, 0), 1);
+      return normalOf(cy * width + cx, u, v, out);
+    },
+
+    hasCellCurvature(x: number, y: number): boolean {
+      if (x < 0 || y < 0 || x >= width || y >= height) return false;
+      const at = (y * width + x) * 4;
+      return (
+        offsets[at] !== 0 ||
+        offsets[at + 1] !== 0 ||
+        offsets[at + 2] !== 0 ||
+        offsets[at + 3] !== 0
+      );
     },
   };
+}
+
+/**
+ * Сглаживающий параметр `S(t) = t² · (3 − 2t)`: монотонна на [0, 1], не выходит
+ * за его пределы (амплитуда слагаемого кривизны остаётся под полушагом REND-7
+ * по построению) и обнуляет производную на обоих концах — этим и убирается
+ * излом поверхности в узле сетки (REND-9).
+ */
+function smoothstep(t: number): number {
+  return t * t * (3 - 2 * t);
+}
+
+/** `S'(t) = 6t(1 − t)`; ноль на обоих концах отрезка — это и есть C1 на границе. */
+function smoothstepDerivative(t: number): number {
+  return 6 * t * (1 - t);
 }
