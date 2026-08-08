@@ -19,6 +19,7 @@ import { MatchClient, type MatchClientOptions } from '../src/client/matchClient.
 import { MatchHost } from '../src/server/host.js';
 import { MatchServer, type MatchConfig } from '../src/server/matchServer.js';
 import { LoopbackHub } from '../src/transport/loopback.js';
+import type { Transport } from '../src/transport/transport.js';
 import type { ClientMessage, GameVersion, WireInput } from '../src/protocol/messages.js';
 
 export const BUILD_ID = 'test-build-0001';
@@ -108,6 +109,23 @@ export function fogScene(): SceneDef {
   };
 }
 
+/**
+ * Та же сцена с расстановкой в конфиге (SER-7, SER-8): реквизит стоит на арене
+ * в каждом её прогоне, а герои приходят расстановкой конфига матча. Обе
+ * расстановки складываются, сцена идёт первой — и ID выданы в этом порядке.
+ */
+export function placedScene(): SceneDef {
+  const scene = duelScene();
+  return {
+    ...scene,
+    prefabs: [...(scene.prefabs ?? []), { name: 'Prop', components: { Position: { x: 0, y: 0 } } }],
+    initial: [
+      { prefab: 'Prop', overrides: { Position: { x: fixed.fromInt(2), y: 0 } } },
+      { prefab: 'Prop', overrides: { Position: { x: 0, y: fixed.fromInt(3) } } },
+    ],
+  };
+}
+
 export function versionOf(scene: SceneDef): GameVersion {
   return { buildId: BUILD_ID, contentPackHash: contentPackHash(scene) };
 }
@@ -140,6 +158,8 @@ export interface Clock {
 export interface ConnectedClient {
   readonly client: MatchClient;
   readonly host: ClientHost;
+  /** Клиентский конец канала: нужен тестам, которые рвут связь со своей стороны. */
+  readonly transport: Transport;
 }
 
 export function connectClient(
@@ -157,12 +177,13 @@ export function connectClient(
     content: pack,
     ...clientOptions,
   });
-  const host = new ClientHost(client, hub.connect(), {
+  const transport = hub.connect();
+  const host = new ClientHost(client, transport, {
     now: () => clock.ms,
     ...(input !== undefined ? { input } : {}),
   });
   host.start();
-  return { client, host };
+  return { client, host, transport };
 }
 
 export interface Harness {

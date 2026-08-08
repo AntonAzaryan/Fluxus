@@ -16,10 +16,42 @@
     { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } },
     {
       "name": "Collider",
-      "fields": { "halfX": "fixed", "halfY": "fixed", "radius": "fixed", "shape": "i32" }
+      "fields": {
+        "blockMask": "i32",
+        "cliffRise": "i32",
+        "halfX": "fixed",
+        "halfY": "fixed",
+        "hitMask": "i32",
+        "layer": "i32",
+        "radius": "fixed",
+        "shape": "i32"
+      }
     },
+    {
+      "name": "Locomotion",
+      "fields": {
+        "accel": "fixed",
+        "decel": "fixed",
+        "dodgeSpeed": "fixed",
+        "dodgeTicks": "i32",
+        "jumpHeight": "i32",
+        "jumpSpeed": "fixed",
+        "jumpTicks": "i32",
+        "maxSpeed": "fixed",
+        "rollSpeed": "fixed",
+        "rollTicks": "i32",
+        "windowTicks": "i32"
+      }
+    },
+    {
+      "name": "LocomotionState",
+      "fields": { "dirX": "fixed", "dirY": "fixed", "state": "i32", "ticksLeft": "i32" }
+    },
+    { "name": "LevelOverride", "fields": { "level": "i32" } },
     { "name": "Lifetime", "fields": { "ticks": "i32" } },
-    { "name": "Dead", "fields": { "atTick": "i32" } }
+    { "name": "Dead", "fields": { "atTick": "i32" } },
+    { "name": "FallConfig", "fields": { "deathDepth": "fixed", "speed": "fixed" } },
+    { "name": "Falling", "fields": { "depth": "fixed" } }
   ],
   "prefabs": [
     {
@@ -29,7 +61,32 @@
         "Input": { "aimDir": 0, "buttons": 0, "moveX": 0, "moveY": 0, "prevButtons": 0, "seq": 0 },
         "Position": { "x": 753664, "y": 753664 },
         "Velocity": { "x": 0, "y": 0 },
-        "Collider": { "halfX": 19661, "halfY": 19661, "radius": 19661, "shape": 0 }
+        "Collider": {
+          "blockMask": 1,
+          "cliffRise": 0,
+          "halfX": 19661,
+          "halfY": 19661,
+          "hitMask": 0,
+          "layer": 2,
+          "radius": 19661,
+          "shape": 0
+        },
+        "Locomotion": {
+          "accel": 655,
+          "decel": 1311,
+          "dodgeSpeed": 13107,
+          "dodgeTicks": 8,
+          "jumpHeight": 1,
+          "jumpSpeed": 7864,
+          "jumpTicks": 20,
+          "maxSpeed": 5243,
+          "rollSpeed": 9830,
+          "rollTicks": 18,
+          "windowTicks": 12
+        },
+        "LocomotionState": { "dirX": 0, "dirY": 0, "state": 0, "ticksLeft": 0 },
+        "ArenaState": { "support": 0 },
+        "FallConfig": { "deathDepth": 4915200, "speed": 16384 }
       },
       "tags": ["Hero"]
     },
@@ -38,30 +95,22 @@
       "components": {
         "Position": { "x": 0, "y": 0 },
         "Velocity": { "x": 0, "y": 0 },
+        "Collider": {
+          "blockMask": 0,
+          "cliffRise": 0,
+          "halfX": 6554,
+          "halfY": 6554,
+          "hitMask": 2,
+          "layer": 4,
+          "radius": 6554,
+          "shape": 0
+        },
         "Lifetime": { "ticks": 50 }
       },
       "tags": ["Fireball"]
     }
   ],
   "systems": [
-    {
-      "name": "Movement",
-      "order": 10,
-      "query": { "all": ["Velocity", "Input"], "not": ["Dead"] },
-      "as": "e",
-      "do": [
-        {
-          "modifyComponent": {
-            "entity": { "var": "e" },
-            "component": "Velocity",
-            "values": {
-              "x": { "*": [{ "getComponent": [{ "var": "e" }, "Input", "moveX"] }, 5243] },
-              "y": { "*": [{ "getComponent": [{ "var": "e" }, "Input", "moveY"] }, 5243] }
-            }
-          }
-        }
-      ]
-    },
     {
       "name": "KillSwitch",
       "order": 20,
@@ -82,6 +131,12 @@
                   "entity": { "var": "e" },
                   "component": "Dead",
                   "values": { "atTick": { "tick": [] } }
+                }
+              },
+              {
+                "removeComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Locomotion"
                 }
               },
               {
@@ -118,13 +173,54 @@
             },
             "then": [
               {
-                "emitEvent": {
-                  "type": "CastFireball",
-                  "data": {
-                    "entity": { "var": "e" },
-                    "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] },
-                    "tick": { "tick": [] }
-                  }
+                "let": {
+                  "bindings": {
+                    "dir": {
+                      "vec": [
+                        { "cos": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] },
+                        { "sin": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] }
+                      ]
+                    }
+                  },
+                  "do": [
+                    {
+                      "spawnEntity": {
+                        "prefab": "Fireball",
+                        "overrides": {
+                          "Position": {
+                            "x": {
+                              "+": [
+                                { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                                { "*": [{ "vec.x": [{ "var": "dir" }] }, 29491] }
+                              ]
+                            },
+                            "y": {
+                              "+": [
+                                { "getComponent": [{ "var": "e" }, "Position", "y"] },
+                                { "*": [{ "vec.y": [{ "var": "dir" }] }, 29491] }
+                              ]
+                            }
+                          },
+                          "Velocity": {
+                            "x": { "*": [{ "vec.x": [{ "var": "dir" }] }, 16384] },
+                            "y": { "*": [{ "vec.y": [{ "var": "dir" }] }, 16384] }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "CastFireball",
+                        "data": {
+                          "dirX": { "vec.x": [{ "var": "dir" }] },
+                          "dirY": { "vec.y": [{ "var": "dir" }] },
+                          "entity": { "var": "e" },
+                          "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] },
+                          "tick": { "tick": [] }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             ]
@@ -141,26 +237,6 @@
         {
           "modifyComponent": {
             "entity": { "var": "e" },
-            "component": "Position",
-            "values": {
-              "x": {
-                "+": [
-                  { "getComponent": [{ "var": "e" }, "Position", "x"] },
-                  { "getComponent": [{ "var": "e" }, "Velocity", "x"] }
-                ]
-              },
-              "y": {
-                "+": [
-                  { "getComponent": [{ "var": "e" }, "Position", "y"] },
-                  { "getComponent": [{ "var": "e" }, "Velocity", "y"] }
-                ]
-              }
-            }
-          }
-        },
-        {
-          "modifyComponent": {
-            "entity": { "var": "e" },
             "component": "Lifetime",
             "values": {
               "ticks": { "-": [{ "getComponent": [{ "var": "e" }, "Lifetime", "ticks"] }, 1] }
@@ -168,8 +244,154 @@
           }
         }
       ]
+    },
+    {
+      "name": "FireballImpact",
+      "order": 50,
+      "query": { "all": ["Position", "Lifetime"] },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": { "<=": [{ "getComponent": [{ "var": "e" }, "Lifetime", "ticks"] }, 0] },
+            "then": [
+              {
+                "let": {
+                  "bindings": {
+                    "at": {
+                      "vec": [
+                        { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                        { "getComponent": [{ "var": "e" }, "Position", "y"] }
+                      ]
+                    }
+                  },
+                  "do": [
+                    { "carveFloor": { "at": { "var": "at" } } },
+                    {
+                      "emitEvent": {
+                        "type": "FireballExploded",
+                        "data": {
+                          "x": { "vec.x": [{ "var": "at" }] },
+                          "y": { "vec.y": [{ "var": "at" }] }
+                        }
+                      }
+                    },
+                    { "destroyEntity": { "entity": { "var": "e" } } }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "FallStart",
+      "order": 120,
+      "do": [
+        {
+          "forEachEvent": {
+            "type": "FellThroughFloor",
+            "as": "ev",
+            "do": [
+              {
+                "let": {
+                  "bindings": { "e": { "eventField": [{ "var": "ev" }, "entity"] } },
+                  "do": [
+                    {
+                      "if": {
+                        "cond": { "hasComponent": [{ "var": "e" }, "FallConfig"] },
+                        "then": [
+                          {
+                            "addComponent": {
+                              "entity": { "var": "e" },
+                              "component": "Falling",
+                              "values": { "depth": 0 }
+                            }
+                          },
+                          {
+                            "addComponent": {
+                              "entity": { "var": "e" },
+                              "component": "LevelOverride",
+                              "values": { "level": 0 }
+                            }
+                          },
+                          {
+                            "removeComponent": {
+                              "entity": { "var": "e" },
+                              "component": "Locomotion"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "FallDeath",
+      "order": 130,
+      "query": { "all": ["Falling", "FallConfig"], "not": ["Dead"] },
+      "as": "e",
+      "do": [
+        {
+          "let": {
+            "bindings": {
+              "depth": {
+                "+": [
+                  { "getComponent": [{ "var": "e" }, "Falling", "depth"] },
+                  { "getComponent": [{ "var": "e" }, "FallConfig", "speed"] }
+                ]
+              }
+            },
+            "do": [
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Falling",
+                  "values": { "depth": { "var": "depth" } }
+                }
+              },
+              {
+                "if": {
+                  "cond": {
+                    ">=": [
+                      { "var": "depth" },
+                      { "getComponent": [{ "var": "e" }, "FallConfig", "deathDepth"] }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "addComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Dead",
+                        "values": { "atTick": { "tick": [] } }
+                      }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "EntityDied",
+                        "data": { "entity": { "var": "e" } }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   ],
+  "arena": {
+    "center": { "x": 786432, "y": 786432 },
+    "radius": 1114112
+  },
   "terrain": {
     "width": 24,
     "height": 24,

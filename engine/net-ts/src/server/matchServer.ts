@@ -17,6 +17,7 @@ import {
   VIEWPOINT_ALL,
   type EventVisibility,
   type InputFrame,
+  type LocomotionOptions,
   type PhysicsOptions,
   type ScenarioDef,
   type ScenarioSpawn,
@@ -64,6 +65,7 @@ export interface MatchConfig {
   readonly silenceTicks?: number;
   readonly allowObserver?: boolean;
   readonly physics?: PhysicsOptions;
+  readonly locomotion?: LocomotionOptions;
   readonly visibility?: VisibilityOptions;
   /** Политика видимости событий (NET-13) — параметр, а не зашитое решение (NTR-9). */
   readonly eventVisibility?: EventVisibility;
@@ -160,6 +162,7 @@ export class MatchServer {
       players: config.players,
       ...(config.initial !== undefined ? { initial: config.initial } : {}),
       ...(config.physics !== undefined ? { physics: config.physics } : {}),
+      ...(config.locomotion !== undefined ? { locomotion: config.locomotion } : {}),
       ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
     });
     this.sim = built.sim;
@@ -479,6 +482,7 @@ export class MatchServer {
       inputs: this.canonical,
       players: this.config.players,
       ...(this.config.physics !== undefined ? { physics: this.config.physics } : {}),
+      ...(this.config.locomotion !== undefined ? { locomotion: this.config.locomotion } : {}),
       ...(this.config.visibility !== undefined ? { visibility: this.config.visibility } : {}),
     };
   }

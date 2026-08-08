@@ -166,6 +166,60 @@ export function buildBones(bones: readonly NormalizedBone[]): SkeletonBuild {
   return { bones: built, roots, byName };
 }
 
+// ------------------------------------------------------------------ границы
+
+/** Осевой габаритный объём в тех осях, в которых его посчитали. */
+export interface ModelBounds {
+  minX: number;
+  minY: number;
+  minZ: number;
+  maxX: number;
+  maxY: number;
+  maxZ: number;
+}
+
+/**
+ * Границы модели в КАНОНИЧЕСКИХ осях модуля ассетов (ASSET-5) — до нормализации
+ * по высоте и до масштаба записи манифеста. Считаются по позициям мешей в позе
+ * покоя: видимого меша на CPU нет (скининг живёт на GPU), и bind-поза — всё, что
+ * о форме модели известно этой стороне.
+ *
+ * Скрытые части (`hiddenParts` записи манифеста, ASSET-6) исключаются: их меши
+ * инстанс не создаёт вовсе, а объём обязан быть производным от нарисованного.
+ *
+ * Модель без вершин даёт вырожденный объём (все нули) — и это верно: рисовать
+ * там нечего, значит и попадать не во что.
+ */
+export function modelBounds(
+  model: NormalizedModel,
+  hiddenParts?: readonly number[],
+): ModelBounds {
+  const hidden = hiddenParts === undefined ? null : new Set(hiddenParts);
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+  for (const mesh of model.meshes) {
+    if (hidden?.has(mesh.partId) === true) continue;
+    const positions = mesh.positions;
+    for (let i = 0; i + 2 < positions.length; i += 3) {
+      const x = positions[i]!;
+      const y = positions[i + 1]!;
+      const z = positions[i + 2]!;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (z < minZ) minZ = z;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      if (z > maxZ) maxZ = z;
+    }
+  }
+  if (minX > maxX) return { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+  return { minX, minY, minZ, maxX, maxY, maxZ };
+}
+
 // ----------------------------------------------------------------- инстанс
 
 export interface InstanceOptions {
@@ -198,6 +252,21 @@ export interface ModelInstance {
    * употребления слота».
    */
   readonly textureTargets: ReadonlyMap<number, readonly TextureTarget[]>;
+  /**
+   * Габариты инстанса в его собственных осях — границы модели (ASSET-5),
+   * умноженные на ТОТ ЖЕ множитель нормализации, каким отмасштабирован `body`.
+   * Отсюда объём-прокси picking'а (REND-15) и рамка подсветки (REND-16) берут
+   * размер: считать его отдельно значило бы завести второй ответ на вопрос
+   * «какого размера нарисованный инстанс».
+   */
+  readonly bounds: ModelBounds;
+  /**
+   * Переставляет множитель масштаба записи манифеста (ASSET-6) у уже
+   * построенного инстанса и пересчитывает `bounds` тем же множителем (REND-17).
+   * Масштаб — нормализующая обёртка поверх скининга, а не часть построенного из
+   * разделяемых данных: строить инстанс заново ради него незачем.
+   */
+  setScale(scale: number): void;
   /** Убирает пер-инстансные ресурсы; разделяемая геометрия остаётся в кэше (REND-3). */
   dispose(): void;
 }
@@ -321,7 +390,23 @@ export function createModelInstance(
   // пространстве (порядок как в прототипе). Модель стоит на своём origin —
   // смещения по z нет (нормализованная высота считается от него).
   const height = Math.max(shared.model.height, 1e-3);
-  body.scale.setScalar((options.scale ?? 1) / height);
+  // Габариты инстанса — те же канонические границы под тем же множителем:
+  // одно число, а не два похожих (REND-15).
+  const canonical = modelBounds(shared.model, options.hiddenParts);
+  const bounds: ModelBounds = { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+  // Постановка масштаба и пересчёт габаритов — одна операция, потому что второй
+  // ответ на вопрос «какого размера нарисованный инстанс» разошёлся бы с первым.
+  const setScale = (scale: number): void => {
+    const normalized = scale / height;
+    body.scale.setScalar(normalized);
+    bounds.minX = canonical.minX * normalized;
+    bounds.minY = canonical.minY * normalized;
+    bounds.minZ = canonical.minZ * normalized;
+    bounds.maxX = canonical.maxX * normalized;
+    bounds.maxY = canonical.maxY * normalized;
+    bounds.maxZ = canonical.maxZ * normalized;
+  };
+  setScale(options.scale ?? 1);
 
   const root = new THREE.Group();
   root.add(body);
@@ -336,6 +421,8 @@ export function createModelInstance(
     meshes,
     materials,
     textureTargets,
+    bounds,
+    setScale,
     dispose(): void {
       mixer.stopAllAction();
       mixer.uncacheRoot(root);

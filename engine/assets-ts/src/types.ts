@@ -18,8 +18,10 @@
  * `string & {}` — идиома, которая оставляет подсказки по литералам, не закрывая
  * множество.
  */
-export type KnownAssetKind = 'model' | 'texture' | 'manifest';
-// eslint-disable-next-line @typescript-eslint/ban-types
+export type KnownAssetKind = 'model' | 'texture' | 'manifest' | 'terrain-curvature';
+// Подавления здесь больше нет: `string & {}` — известная идиома открытого
+// множества, и линтер её пропускает сам. Прежний комментарий гасил правило
+// `ban-types`, которого в typescript-eslint 8 уже не существует.
 export type AssetKind = KnownAssetKind | (string & {});
 
 /**
@@ -27,6 +29,7 @@ export type AssetKind = KnownAssetKind | (string & {});
  * данных: в рантайме не хранится, но связывает `request` с `state`.
  * Данные ассета доступны только через сервис по handle.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- `T` фантомный по построению: он и не должен появляться в полях
 export interface Handle<T = unknown> {
   readonly id: string;
   readonly kind: AssetKind;

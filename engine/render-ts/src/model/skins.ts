@@ -8,6 +8,14 @@
  * здесь остаётся только загрузка пикселей в GPU-текстуру. Раньше на этом месте
  * стояла ветка `createImageBitmap`, которой в Node нет, — и весь путь скинов
  * в headless-тестах просто не исполнялся.
+ *
+ * Слот модели несёт источник одного из двух видов (ASSET-5, `TextureSlotRef`):
+ * путь к файлу дерева контента — тогда пиксели запрашиваются ассетом, — либо
+ * встроенное декодированное изображение, приехавшее внутри файла модели: его
+ * запрашивать не у кого, декодировано оно уже загрузчиком, и GPU-текстура
+ * строится прямо из него. Скин манифеста остаётся ПУТЁВЫМ (ASSET-6) и
+ * подменяет источник слота ЦЕЛИКОМ, одинаково поверх обоих видов: он не
+ * «дописывает путь» к существующему источнику, а заменяет его.
  */
 import * as THREE from 'three';
 import type {
@@ -20,26 +28,44 @@ import type {
 import type { TextureTarget } from './build.js';
 
 /**
- * Итоговая карта «слот → путь текстуры»: базовые пути модели, поверх —
- * подмены выбранного скина. Ключ подмены в манифесте — номер слота строкой.
+ * Откуда инстанс берёт пиксели слота: файл дерева контента (запрашивается через
+ * AssetService) либо готовое изображение, приехавшее внутри файла модели.
+ * Размеченное объединение, а не «путь плюс необязательные пиксели», по той же
+ * причине, что и в `TextureSlotRef`: состояния «заданы оба» не бывает.
  */
-export function skinTexturePaths(
+export type SkinTextureSource =
+  | { readonly kind: 'path'; readonly path: string }
+  | { readonly kind: 'image'; readonly image: DecodedImage };
+
+/**
+ * Итоговая карта «слот → источник текстуры»: базовые источники модели, поверх —
+ * подмены выбранного скина. Ключ подмены в манифесте — номер слота строкой,
+ * значение — путь: скин по контракту путевой (ASSET-6), поэтому он всегда даёт
+ * источник вида `path`, чем бы слот ни был занят до него.
+ *
+ * Слот без источника (`source: 'none'` — replaceable-слот WC3, недекодируемое
+ * встроенное изображение) в карту не попадает: запрашивать нечего, карта
+ * материала остаётся пустой. Номер за ним всё равно закреплён, и скин может
+ * его занять.
+ */
+export function skinTextureSources(
   model: NormalizedModel,
   visual: EntityVisual | undefined,
   skin: string | undefined,
-): Map<number, string> {
-  const paths = new Map<number, string>();
+): Map<number, SkinTextureSource> {
+  const sources = new Map<number, SkinTextureSource>();
   for (const ref of model.textureSlots) {
-    if (ref.path !== null) paths.set(ref.slot, ref.path);
+    if (ref.source === 'file') sources.set(ref.slot, { kind: 'path', path: ref.path });
+    else if (ref.source === 'embedded') sources.set(ref.slot, { kind: 'image', image: ref.image });
   }
   const overrides = skin === undefined ? undefined : visual?.skins?.[skin];
   if (overrides !== undefined) {
     for (const [slot, path] of Object.entries(overrides)) {
       const index = Number(slot);
-      if (Number.isInteger(index)) paths.set(index, path);
+      if (Number.isInteger(index)) sources.set(index, { kind: 'path', path });
     }
   }
-  return paths;
+  return sources;
 }
 
 /** THREE-текстура из декодированных пикселей ассета. Работает и в Node. */
@@ -83,27 +109,38 @@ function assignTexture(target: TextureTarget, texture: THREE.Texture): void {
 }
 
 /**
- * Применяет набор «слот → путь» к материалам инстанса. Каждая текстура
- * запрашивается через AssetService и ставится по факту `ready` (ASSET-4: рендер
- * обязан жить с `loading` неограниченной длительности).
+ * Применяет набор «слот → источник» к материалам инстанса.
+ *
+ * Источник-путь запрашивается через AssetService и ставится по факту `ready`
+ * (ASSET-4: рендер обязан жить с `loading` неограниченной длительности).
+ * Источник-изображение ставится сразу: пиксели уже декодированы загрузчиком
+ * модели, ассета за ними нет и ждать нечего — путь через AssetService означал
+ * бы второй кэш поверх уже разделяемых данных модели.
  */
 export function applySkin(
   textureTargets: ReadonlyMap<number, readonly TextureTarget[]>,
-  paths: ReadonlyMap<number, string>,
+  sources: ReadonlyMap<number, SkinTextureSource>,
   assets: AssetService,
 ): SkinApplication {
   const unsubscribes: (() => void)[] = [];
   let disposed = false;
 
-  for (const [slot, path] of paths) {
+  for (const [slot, source] of sources) {
     const targets = textureTargets.get(slot);
     if (targets === undefined || targets.length === 0) continue; // слот никем не используется
 
-    const handle = assets.request<DecodedImage>('texture', path);
+    // Своя THREE-текстура на каждое употребление слота: разделяемое здесь —
+    // пиксели ассета, а GPU-объект пер-инстансный (REND-3).
+    if (source.kind === 'image') {
+      for (const target of targets) {
+        assignTexture(target, textureFromImage(source.image, target.map));
+      }
+      continue;
+    }
+
+    const handle = assets.request<DecodedImage>('texture', source.path);
     const applyState = (state: AssetState<DecodedImage>): void => {
       if (disposed || state.status !== 'ready') return;
-      // Своя THREE-текстура на каждое употребление слота: разделяемое здесь —
-      // пиксели ассета, а GPU-объект пер-инстансный (REND-3).
       for (const target of targets) assignTexture(target, textureFromImage(state.data, target.map));
     };
     // subscribe сам зовёт колбэк с текущим состоянием — отдельный вызов

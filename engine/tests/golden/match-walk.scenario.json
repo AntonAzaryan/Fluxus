@@ -38,8 +38,12 @@
       {
         "name": "Collider",
         "fields": {
+          "blockMask": "i32",
+          "cliffRise": "i32",
           "halfX": "fixed",
           "halfY": "fixed",
+          "hitMask": "i32",
+          "layer": "i32",
           "radius": "fixed",
           "shape": "i32"
         }
@@ -69,8 +73,12 @@
             "y": 0
           },
           "Collider": {
+            "blockMask": 0,
+            "cliffRise": 0,
             "halfX": 19661,
             "halfY": 19661,
+            "hitMask": 0,
+            "layer": 0,
             "radius": 19661,
             "shape": 0
           }

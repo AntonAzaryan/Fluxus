@@ -4,38 +4,92 @@
   "ticks": 4,
   "scene": {
     "components": [
-      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
-      { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } },
+      {
+        "name": "Position",
+        "fields": {
+          "x": "fixed",
+          "y": "fixed"
+        }
+      },
+      {
+        "name": "Velocity",
+        "fields": {
+          "x": "fixed",
+          "y": "fixed"
+        }
+      },
       {
         "name": "Collider",
-        "fields": { "shape": "i32", "radius": "fixed", "halfX": "fixed", "halfY": "fixed" }
+        "fields": {
+          "blockMask": "i32",
+          "cliffRise": "i32",
+          "halfX": "fixed",
+          "halfY": "fixed",
+          "hitMask": "i32",
+          "layer": "i32",
+          "radius": "fixed",
+          "shape": "i32"
+        }
       }
     ],
     "prefabs": [
       {
         "name": "Scout",
         "components": {
-          "Position": { "x": 32768, "y": 163840 },
-          "Vision": { "radius": 393216 },
-          "Team": { "id": 0 },
-          "Visibility": { "visibleTo": 0 }
+          "Position": {
+            "x": 32768,
+            "y": 163840
+          },
+          "Vision": {
+            "radius": 393216
+          },
+          "Team": {
+            "id": 0
+          },
+          "Visibility": {
+            "visibleTo": 0
+          }
         }
       },
       {
         "name": "Enemy",
         "components": {
-          "Position": { "x": 327680, "y": 163840 },
-          "Velocity": { "x": -65536, "y": 0 },
-          "Team": { "id": 1 },
-          "Visibility": { "visibleTo": 0 },
-          "Stealth": { "active": 0 }
+          "Position": {
+            "x": 327680,
+            "y": 163840
+          },
+          "Velocity": {
+            "x": -65536,
+            "y": 0
+          },
+          "Team": {
+            "id": 1
+          },
+          "Visibility": {
+            "visibleTo": 0
+          },
+          "Stealth": {
+            "active": 0
+          }
         }
       },
       {
         "name": "Wall",
         "components": {
-          "Position": { "x": 196608, "y": 163840 },
-          "Collider": { "shape": 1, "radius": 0, "halfX": 32768, "halfY": 65536 }
+          "Position": {
+            "x": 196608,
+            "y": 163840
+          },
+          "Collider": {
+            "blockMask": 0,
+            "cliffRise": 0,
+            "halfX": 32768,
+            "halfY": 65536,
+            "hitMask": 0,
+            "layer": 0,
+            "radius": 0,
+            "shape": 1
+          }
         },
         "tags": ["blocksVision"]
       }
@@ -44,18 +98,38 @@
       {
         "name": "Movement",
         "order": 10,
-        "query": { "all": ["Position", "Velocity"] },
+        "query": {
+          "all": ["Position", "Velocity"]
+        },
         "as": "e",
         "do": [
           {
             "modifyComponent": {
-              "entity": { "var": "e" },
+              "entity": {
+                "var": "e"
+              },
               "component": "Position",
               "values": {
                 "y": {
                   "+": [
-                    { "getComponent": [{ "var": "e" }, "Position", "y"] },
-                    { "getComponent": [{ "var": "e" }, "Velocity", "x"] }
+                    {
+                      "getComponent": [
+                        {
+                          "var": "e"
+                        },
+                        "Position",
+                        "y"
+                      ]
+                    },
+                    {
+                      "getComponent": [
+                        {
+                          "var": "e"
+                        },
+                        "Velocity",
+                        "x"
+                      ]
+                    }
                   ]
                 }
               }
@@ -69,5 +143,15 @@
   },
   "physics": {},
   "visibility": {},
-  "initial": [{ "prefab": "Scout" }, { "prefab": "Enemy" }, { "prefab": "Wall" }]
+  "initial": [
+    {
+      "prefab": "Scout"
+    },
+    {
+      "prefab": "Enemy"
+    },
+    {
+      "prefab": "Wall"
+    }
+  ]
 }

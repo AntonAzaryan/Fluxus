@@ -93,11 +93,13 @@ class PortHub implements TransportServer {
     return portTransport(shellPort(channel.port2));
   }
 
-  async close(): Promise<void> {
+  /** Не `async`: закрытие портов синхронно, `Promise` — только форма интерфейса. */
+  close(): Promise<void> {
     for (const channel of this.channels) {
       channel.port1.close();
       channel.port2.close();
     }
+    return Promise.resolve();
   }
 }
 

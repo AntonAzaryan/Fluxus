@@ -25,7 +25,7 @@ function readSchema(name: string): Json {
 /** Три правила из SER-5/design.md; ничего сверх них не проверяется. */
 function validate(defs: Json, node: Json, value: unknown, path: string): string[] {
   if (typeof node['$ref'] === 'string') {
-    const name = (node['$ref'] as string).replace('#/$defs/', '');
+    const name = (node['$ref']).replace('#/$defs/', '');
     const target = defs[name] as Json | undefined;
     if (target === undefined) return [`${path}: неизвестная ссылка "${node['$ref']}"`];
     return validate(defs, target, value, path);

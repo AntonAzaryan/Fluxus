@@ -94,7 +94,8 @@ function spawnRunner(scene: Scene, x: number, y: number, vx: number, vy: number)
 
 interface HostRig {
   host: RenderHost;
-  setNow(ms: number): void;
+  /** Поле-функция, а не метод: `setNow` разбирают деструктуризацией, `this` ему не нужен. */
+  setNow: (ms: number) => void;
 }
 
 function makeHost(scene: Scene, config: Partial<RenderHostConfig> = {}): HostRig {

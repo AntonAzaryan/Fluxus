@@ -1,0 +1,77 @@
+{
+  "systems": {
+    "documentId": "content/systems/on_death.system.json",
+    "documents": [
+      {
+        "id": "content/systems/on_death.system.json",
+        "label": "on_death.system.json",
+        "secondary": "systems"
+      },
+      {
+        "id": "content/systems/regen.system.json",
+        "label": "regen.system.json",
+        "secondary": "systems"
+      },
+      {
+        "id": "content/systems/aggro.system.json",
+        "label": "aggro.system.json",
+        "secondary": "systems"
+      }
+    ],
+    "schema": {
+      "flags": {
+        "enabled": "boolean",
+        "replicated": "boolean"
+      }
+    },
+    "document": {
+      "id": "on_death",
+      "flags": {
+        "enabled": true,
+        "replicated": false
+      },
+      "rules": [
+        {
+          "id": "explode",
+          "event": "entity.died",
+          "condition": "has(Explosive)",
+          "action": "spawn(explosion, at: entity.position)"
+        },
+        {
+          "id": "loot",
+          "event": "entity.died",
+          "condition": "team != 0",
+          "action": "spawn(loot, at: entity.position)"
+        },
+        {
+          "id": "score",
+          "event": "entity.died",
+          "condition": "killer.team != 0",
+          "action": "add(killer.score, 1)"
+        }
+      ]
+    },
+    "groups": [
+      {
+        "label": "Rule",
+        "fields": [
+          {
+            "name": "id",
+            "value": "explode",
+            "note": "id"
+          },
+          {
+            "name": "order",
+            "value": "0",
+            "note": "i32"
+          },
+          {
+            "name": "stream",
+            "value": "combat",
+            "note": "rng"
+          }
+        ]
+      }
+    ]
+  }
+}

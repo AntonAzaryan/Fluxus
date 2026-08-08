@@ -183,19 +183,35 @@ describe('Загрузчик MDX: эталонная модель (ASSET-5: head
     }
   });
 
-  it('слоты текстур: нумерация сквозная, путь либо непустой, либо null', () => {
+  it('слоты текстур: нумерация сквозная, источник — файл либо ничего', () => {
     expect(model.textureSlots.length).toBeGreaterThan(0);
     model.textureSlots.forEach((slot, i) => {
       // Сквозная нумерация — главный инвариант: скины манифеста подменяют
-      // текстуры по НОМЕРУ слота, поэтому слоты без файла (в MDX это
-      // replaceable-слоты team color) из списка не выкидываются, а приезжают
-      // с path === null и держат свой номер.
+      // текстуры по НОМЕРУ слота (REND-6), поэтому слоты без источника (в MDX
+      // это replaceable-слоты team color) из списка не выкидываются, а держат
+      // свой номер.
       expect(slot.slot).toBe(i);
-      expect(slot.path === null || slot.path.length > 0).toBe(true);
+      // Встроенных изображений у MDX не бывает: текстуры WC3 — всегда файл.
+      expect(slot.source === 'file' || slot.source === 'none').toBe(true);
+      if (slot.source === 'file') expect(slot.path.length).toBeGreaterThan(0);
     });
     // У эталона есть и слоты с текстурой, и replaceable-слот без файла.
-    expect(model.textureSlots.some((s) => s.path !== null)).toBe(true);
-    expect(model.textureSlots.some((s) => s.path === null)).toBe(true);
+    expect(model.textureSlots.some((s) => s.source === 'file')).toBe(true);
+    expect(model.textureSlots.some((s) => s.source === 'none')).toBe(true);
+  });
+
+  it('слоты текстур: те же пути и те же номера, что и до перехода на объединение', () => {
+    // Смена ПРЕДСТАВЛЕНИЯ слота не должна была изменить сами слоты: эталонная
+    // модель обязана дать то же их число, ту же нумерацию и те же пути.
+    const slots = model.textureSlots.map((s) => (s.source === 'file' ? s.path : null));
+    expect(slots).toEqual([
+      'Textures\\Skeleton.blp',
+      null, // replaceable-слот team color — источника нет, номер занят
+      'Units\\Creeps\\SkeletonOrc\\SkeletonOrc.blp',
+      'Textures\\Centaur.blp',
+      'Textures\\Bandit.blp',
+      'Units\\Human\\Jaina\\Jaina.blp',
+    ]);
   });
 
   it('height: положительная высота bbox по Z', () => {

@@ -8,6 +8,7 @@ const validDoc = {
     skeleton: {
       model: 'models/SkeletonBarbarian.mdx',
       scale: 1.8,
+      facingDeg: -90,
       defaultSkin: 'bone',
       skins: {
         bone: { '0': 'textures/skeleton.png' },
@@ -72,6 +73,26 @@ describe('validateManifest (ASSET-6)', () => {
       /entities\.orc\.scale: .*положительное число/,
     );
     expectErrors({ entities: { orc: { model: 'm.mdx', scale: 0 } } }, /entities\.orc\.scale/);
+  });
+
+  it('facingDeg: опционален, любой конечный угол законен, нечисло — ошибка (REND-13)', () => {
+    // Поле опционально: запись без него описывает модель по соглашению MDX.
+    expect(validateManifest({ entities: { orc: { model: 'm.mdx' } } }).ok).toBe(true);
+    // Диапазон не ограничен: угол заворачивается, «-90» и «270» равнозначны.
+    for (const facingDeg of [0, -90, 270, 12.5]) {
+      expect(
+        validateManifest({ entities: { orc: { model: 'm.mdx', facingDeg } } }).ok,
+        `угол ${facingDeg} обязан быть законен`,
+      ).toBe(true);
+    }
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', facingDeg: '-90' } } },
+      /entities\.orc\.facingDeg: .*получено string/,
+    );
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', facingDeg: Number.NaN } } },
+      /entities\.orc\.facingDeg/,
+    );
   });
 
   it('skins: ключ слота не число, значение не строка — ошибки с путём до слота', () => {
@@ -212,5 +233,84 @@ describe('Загрузчик манифеста через сервис (ASSET-6
       expect(s.reason).toMatch(/не прошёл валидацию/);
       expect(s.reason).toMatch(/entities\.orc\.model/);
     }
+  });
+});
+
+describe('validateManifest: секция эффектов камеры (ASSET-8)', () => {
+  const entities = { x: { model: 'm.mdx' } };
+
+  it('валидная секция проходит; неизвестный тип эффекта — не ошибка валидации', () => {
+    const result = validateManifest({
+      entities,
+      cameraEffects: {
+        events: { FireballExploded: { effect: 'shake', amplitude: 0.5, radius: 12 } },
+        // Тип из будущего кода камеры: отбраковка — предупреждением на
+        // потребителе, манифест валиден (ASSET-8).
+        states: { Drunk: { effect: 'wobble-3000', rollAmp: 0.1 } },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.cameraEffects!.events!['FireballExploded']!.effect).toBe('shake');
+  });
+
+  it('структурные ошибки — внятные, с путями до полей', () => {
+    expectErrors({ entities, cameraEffects: 42 }, /cameraEffects: ожидался объект/);
+    expectErrors(
+      { entities, cameraEffects: { evens: {} } },
+      /cameraEffects\.evens: неизвестное поле/,
+    );
+    expectErrors(
+      { entities, cameraEffects: { events: { Boom: {} } } },
+      /cameraEffects\.events\.Boom\.effect: обязательное поле/,
+    );
+    expectErrors(
+      { entities, cameraEffects: { events: { Boom: { effect: 'shake', radius: 'far' } } } },
+      /cameraEffects\.events\.Boom\.radius: параметр эффекта — конечное число/,
+    );
+    expectErrors(
+      { entities, cameraEffects: { states: 'yes' } },
+      /cameraEffects\.states: ожидался объект/,
+    );
+  });
+});
+
+describe('validateManifest: вертикальное смещение инстанса (ASSET-6, REND-12)', () => {
+  const entities = { x: { model: 'm.mdx' } };
+
+  it('секция целиком опциональна, поля — по отдельности', () => {
+    for (const verticalOffset of [
+      { jumpArc: 1.2, fallSpeed: 6, fallDepth: 4 },
+      { jumpArc: 0.8 },
+      { fallSpeed: 5, fallDepth: 3 },
+      {},
+    ]) {
+      const result = validateManifest({ entities: { x: { model: 'm.mdx', verticalOffset } } });
+      expect(result.ok, JSON.stringify(verticalOffset)).toBe(true);
+    }
+    // Запись без секции — валидна и означает отсутствие смещения (REND-12).
+    const bare = validateManifest({ entities });
+    expect(bare.ok).toBe(true);
+    if (!bare.ok) return;
+    expect(bare.manifest.entities['x']!.verticalOffset).toBeUndefined();
+  });
+
+  it('отрицательные значения и опечатки — ошибки с путями до полей', () => {
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', verticalOffset: { jumpArc: -1 } } } },
+      /verticalOffset\.jumpArc: ожидалось неотрицательное число/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', verticalOffset: { fallSpeed: 'быстро' } } } },
+      /verticalOffset\.fallSpeed: ожидалось неотрицательное число/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', verticalOffset: { fallDeph: 3 } } } },
+      /verticalOffset\.fallDeph: неизвестное поле/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', verticalOffset: 1.5 } } },
+      /verticalOffset: ожидался объект/,
+    );
   });
 });

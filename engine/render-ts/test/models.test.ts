@@ -34,7 +34,7 @@ function makeManifest(): VisualManifest {
   };
 }
 
-function makeRig(): {
+function makeRig(manifest: VisualManifest = makeManifest()): {
   subsystem: ModelsSubsystem;
   ctx: RenderContext;
   assets: AssetsStub;
@@ -47,7 +47,7 @@ function makeRig(): {
     assets: assets.service,
     config: { heightStep: 0.5 },
   };
-  const subsystem = new ModelsSubsystem(makeManifest(), {
+  const subsystem = new ModelsSubsystem(manifest, {
     warn: (message) => warnings.push(message),
   });
   subsystem.init(ctx);
@@ -163,6 +163,27 @@ describe('анимации по данным тика (REND-4)', () => {
     expect(controller.isDead).toBe(true);
     expect(controller.currentClipName).toBe('Death');
   });
+
+  it('неразрешённая запись манифеста жалуется в сток подсистемы и оставляет клип (REND-4)', () => {
+    const manifest: VisualManifest = {
+      entities: {
+        // Клипа «Wolk» в модели нет: опечатка автора манифеста.
+        Runner: { model: MODEL_ID, animations: { states: { idle: 'Stand', move: 'Wolk' } } },
+      },
+    };
+    const { subsystem, assets, warnings } = makeRig(manifest);
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    const controller = subsystem.instanceFor(1)!.controller!;
+    expect(controller.currentClipName).toBe('Stand - 1');
+
+    // Каждый тик зовёт setState — предупреждение остаётся одним на запись.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
+    expect(controller.currentClipName).toBe('Stand - 1');
+    expect(warnings.filter((message) => message.includes('Wolk')).length).toBe(1);
+  });
 });
 
 describe('покадровое обновление (REND-2, REND-5)', () => {
@@ -205,5 +226,68 @@ describe('покадровое обновление (REND-2, REND-5)', () => {
     // Лимит манифеста 72°; клип Stand сам крутит кость, поэтому проверяем
     // только знак и заметность доворота, а не точный угол.
     expect(euler.z).toBeGreaterThan(0.3);
+  });
+});
+
+describe('перёд модели — данные записи манифеста (REND-13)', () => {
+  /**
+   * Манифест с двумя записями на одну модель: перёд у них разный, как у моделей
+   * разных форматов. Это и есть случай, ради которого перёд перестал быть одним
+   * числом на подсистему: значения, верного для обеих записей сразу, не бывает.
+   */
+  function makeFacingRig(): { subsystem: ModelsSubsystem; ctx: RenderContext } {
+    const assets = makeAssets();
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 0.5 },
+    };
+    const manifest: VisualManifest = {
+      entities: {
+        // Лицо вдоль +X — соглашение MDX, поправки не требует.
+        Mdxish: { model: MODEL_ID, facingDeg: 0 },
+        // Лицо вдоль −Y — так приезжает glTF-модель демо.
+        Gltfish: { model: MODEL_ID, facingDeg: -90 },
+        // Записи без поля разворачиваются по соглашению первого формата.
+        Legacy: { model: MODEL_ID },
+      },
+    };
+    const subsystem = new ModelsSubsystem(manifest, {});
+    subsystem.init(ctx);
+    return { subsystem, ctx };
+  }
+
+  it('две записи с разным передом развёрнуты каждая по-своему на одном курсе', () => {
+    const { subsystem } = makeFacingRig();
+    // Обе сущности держат ОДИН курс: расхождение разворота даёт только перёд.
+    const heading = Math.PI / 4;
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, { kind: 'Mdxish', facingYaw: heading }),
+        makeEntityView(2, { kind: 'Gltfish', facingYaw: heading }),
+        makeEntityView(3, { kind: 'Legacy', facingYaw: heading }),
+      ]),
+    );
+    subsystem.updateFrame(1 / 60, 1); // snapPending: доворот мгновенный
+
+    const yawOf = (id: number): number => subsystem.instanceFor(id)!.holder.rotation.z;
+    expect(yawOf(1)).toBeCloseTo(heading, 6);
+    // Лицо смотрит на −90°, значит инстанс доворачивается на +90°.
+    expect(yawOf(2)).toBeCloseTo(heading + Math.PI / 2, 6);
+    // Запись без поля ведёт себя как запись с передом вдоль +X.
+    expect(yawOf(3)).toBeCloseTo(yawOf(1), 6);
+  });
+
+  it('перёд одной записи не влияет на инстансы другой', () => {
+    const { subsystem } = makeFacingRig();
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, { kind: 'Mdxish', facingYaw: 0 }),
+        makeEntityView(2, { kind: 'Gltfish', facingYaw: 0 }),
+      ]),
+    );
+    subsystem.updateFrame(1 / 60, 1);
+    expect(subsystem.instanceFor(1)!.holder.rotation.z).toBeCloseTo(0, 6);
+    expect(subsystem.instanceFor(2)!.holder.rotation.z).toBeCloseTo(Math.PI / 2, 6);
   });
 });

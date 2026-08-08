@@ -15,12 +15,55 @@
         }
       },
       "animations": {
-        "states": { "idle": "Stand", "move": "Walk" },
-        "events": { "CastFireball": "Spell Slam", "EntityDied": "Death" }
+        "states": {
+          "idle": "Stand",
+          "move": "Walk",
+          "fall": "Stand Ready"
+        },
+        "events": {
+          "CastFireball": "Spell Slam",
+          "EntityDied": "Death"
+        }
       },
       "boneControls": {
-        "torso": { "bone": "Bone_Chest", "maxYawDeg": 72, "smoothing": 18 },
-        "head": { "bone": "Bone_Head", "maxYawDeg": 40, "smoothing": 20 }
+        "torso": {
+          "bone": "Bone_Chest",
+          "maxYawDeg": 72,
+          "smoothing": 18
+        },
+        "head": {
+          "bone": "Bone_Head",
+          "maxYawDeg": 40,
+          "smoothing": 20
+        }
+      },
+      "surfaceAlign": {
+        "factor": 1,
+        "maxAngleDeg": 30
+      },
+      "verticalOffset": {
+        "jumpArc": 0.9,
+        "fallSpeed": 15,
+        "fallDepth": 75
+      }
+    }
+  },
+  "surfaceAlign": {
+    "factor": 1
+  },
+  "terrain": {
+    "curvatureMap": "visuals/arena-curvature.json"
+  },
+  "cameraEffects": {
+    "events": {
+      "FireballExploded": {
+        "effect": "shake",
+        "amplitude": 0.45,
+        "radius": 14,
+        "frequency": 13,
+        "maxOffset": 0.3,
+        "maxRoll": 0.04,
+        "decay": 1.6
       }
     }
   }

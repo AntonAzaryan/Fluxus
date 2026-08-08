@@ -1,6 +1,7 @@
 # game-mvp
 
-Сетевой 2.5D action-игровой движок (Diablo/PoE-стиль) с детерминированным ECS-ядром тика.
+Движок сетевой 2.5D PvP-арены (Warlocks-like, до 10 игроков, изометрия) с детерминированным
+ECS-ядром тика.
 
 ## `docs/`
 
@@ -38,7 +39,9 @@ capability без кода в `engine/`.
   (loopback и WebSocket). Зависит от `core-ts` односторонне (NTR-1)
 - `assets-ts/` — **реестр ассетов**: загрузчики MDX и PNG, манифест, сервис.
   О three.js не знает — построение сцены живёт в рендере (ASSET-5)
-- `render-ts/` — **рендер** на three.js: extractor, host, модели и их подсистемы, viewBuffer
+- `render-ts/` — **рендер** на three.js: extractor, host, viewBuffer, подсистемы террейна
+  и моделей, визуальная поверхность с кривизной (`visualSurface.ts`, `surfaceSource.ts`),
+  зеркало пола (`floorMirror.ts`) и конвейер камеры (`camera/`, CAM-1..7)
 - `client-ts/` — **shell веб-клиента** (SHELL-1..7): ядро в воркере, канал поверх
   transferable-буферов; демо на vite
 - `integration-ts/` — **кросс-слойная сюита** (CLI-9): вертикальный прогон, фазз,
@@ -56,8 +59,10 @@ Node >= 22.18, всё из корня репозитория:
 
 ```sh
 npm install
+npm run check     # ворота перед пушем: typecheck + lint + test
 npm test          # тесты всех пакетов
 npm run typecheck # tsc --noEmit всех пакетов
+npm run lint      # eslint . --max-warnings 0
 npm run golden    # перезаписать golden-эталоны (сначала матчи, затем ядро)
 
 openspec list --specs               # список capability

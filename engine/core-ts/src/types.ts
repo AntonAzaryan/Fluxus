@@ -49,6 +49,13 @@ export interface MathApi {
 /** Опциональная зависимость (DI-3): ядро собирается и тикает без неё. */
 export interface PhysicsApi {
   readonly raycast: (from: Vec2, to: Vec2, options?: RaycastOptions) => RaycastHit | null;
+  /**
+   * Радиус вписанной окружности коллайдера сущности (ARENA-5): у круга — его
+   * радиус, у AABB — меньшая полуось. `undefined` — коллайдера на сущности нет.
+   * Живёт в Physics API, а не в арене: имя компонента коллайдера — параметр
+   * физики (PHYS-2), и второй конвенции имён ядро не вводит.
+   */
+  readonly inradiusOf: (entity: EntityId) => Fixed | undefined;
 }
 
 export interface RaycastOptions {
@@ -101,6 +108,14 @@ export interface PathResult {
 export interface CliffEdge {
   readonly from: Vec2;
   readonly to: Vec2;
+  /**
+   * Уровни клеток по обе стороны ребра (TERR-5): направленный гейт обрыва
+   * (PHYS-11) читает подъём из отрезка, не обращаясь к карте уровней второй
+   * раз. Сторона — по оси нормали ребра: `levelNeg` — клетка с меньшей
+   * координатой, `levelPos` — с большей.
+   */
+  readonly levelNeg: number;
+  readonly levelPos: number;
 }
 
 /** Иммутабельная часть террейна: входит в `worldInit` (DET-1) и не снапшотится (TERR-6). */
@@ -132,6 +147,18 @@ export interface TerrainApi {
   /** Уровень сущности: override, если он есть, иначе производное от позиции (TERR-4, ARENA-6). */
   readonly levelOf: (entity: EntityId) => number;
   readonly hasFloorAt: (position: Vec2) => boolean;
+  /**
+   * Есть ли пол под опорной областью — кругом вокруг позиции (ARENA-5).
+   * Пересечение круга с клеткой включающее (касание — опора), круг вне сетки
+   * отвечает по ближайшей клетке — та же тотальность, что у `levelAt` (TERR-4).
+   */
+  readonly hasFloorWithin: (position: Vec2, radius: Fixed) => boolean;
+  /**
+   * Носитель карты пола (TERR-6): снятие пола адресует его команды буфера
+   * (TERR-8). Поле, а не поиск по тегу prefab'а: тег — способ найти сущность
+   * из контента, каналом механизма он быть не должен.
+   */
+  readonly floorEntity: EntityId;
 }
 
 // --------------------------------------------------------------------- arena
