@@ -14,6 +14,7 @@ import { VIEWPORT_CLASS } from '../src/tokens/stylesheet.js';
 import { SCENE_NODES, SCENE_VIEWPORT_ID, sceneArea } from '../src/areas/scene.js';
 import { canRender } from '../src/areas/sceneStage.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
+import { PREFAB_LIST } from '../src/areas/objectsPrefabs.js';
 import { VISUALS_OPERATIONS } from '../src/areas/assetVisuals.js';
 import { attr, buildFrame, buildLoadedFrame, buttonByKey, press, zoneOf } from './support/frame.js';
 import { FIXTURE_IDS, settle } from './support/project.js';
@@ -43,9 +44,12 @@ describe('ED-15: вьюпорт показывает документы, а не
     const before = stage.submitted.length;
     const key = session.descriptors(FIXTURE_IDS.config, PLACEMENT_LIST)[0];
 
-    session.applyOperation('document.setValue', {
+    // Prefab'ы конфига — тоже отслеживаемый список (их правит область объектов),
+    // поэтому запись адресуется дескриптором, а не индексом (ED-29).
+    session.applyOperation('document.list.setValue', {
       document: FIXTURE_IDS.config,
-      path: ['prefabs', 0, 'components', 'Position', 'x'],
+      record: session.descriptors(FIXTURE_IDS.config, PREFAB_LIST)[0] ?? '',
+      path: ['components', 'Position', 'x'],
       value: 262144,
     });
     await settle();
@@ -73,9 +77,10 @@ describe('ED-15: вьюпорт показывает документы, а не
   it('отмена операции возвращает прежний набор — обратного проигрывания не требуется (ED-18)', async () => {
     const { session, stage } = await buildLoadedFrame();
     const before = stage.last?.placements[0]?.x;
-    session.applyOperation('document.setValue', {
+    session.applyOperation('document.list.setValue', {
       document: FIXTURE_IDS.config,
-      path: ['prefabs', 0, 'components', 'Position', 'x'],
+      record: session.descriptors(FIXTURE_IDS.config, PREFAB_LIST)[0] ?? '',
+      path: ['components', 'Position', 'x'],
       value: 262144,
     });
     await settle();

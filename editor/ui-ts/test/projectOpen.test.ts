@@ -24,6 +24,9 @@ import { ASSETS_AREA_ID, type AssetAreaState } from '../src/areas/assets.js';
 import { findAssetNode } from '../src/areas/assetTree.js';
 import { VISUALS_OPERATIONS } from '../src/areas/assetVisuals.js';
 import { SCENE_AREA_ID, type SceneAreaState } from '../src/areas/scene.js';
+import { PREFAB_LIST } from '../src/areas/objectsPrefabs.js';
+import { OBJECTS_AREA_ID, type ObjectsAreaState } from '../src/areas/objects.js';
+import { SYSTEMS_AREA_ID, type SystemsAreaState } from '../src/areas/systems.js';
 import { discoverProject } from '../src/areas/sceneDiscovery.js';
 import { attr, zoneOf } from './support/frame.js';
 import { FIXTURE_CURVATURE, FIXTURE_SCENE, settle } from './support/project.js';
@@ -67,6 +70,21 @@ function hostWithoutListing(reason: string): MemoryHost {
   const host = projectHost();
   const list = (): Promise<never> => Promise.reject(new Error(reason));
   return { ...host, content: { ...host.content, list } };
+}
+
+/**
+ * Переименовать ОДНУ половину пары ED-19 — prefab конфига, не тронув запись
+ * манифеста. Записи `prefabs` отслеживаются (их правит область объектов),
+ * поэтому запись адресуется дескриптором, а не индексом (ED-29).
+ */
+function renameHalfOfPair(frame: WorkspaceFrame): void {
+  const { session } = frame;
+  session.applyOperation('document.list.setValue', {
+    document: CONFIG,
+    record: session.descriptors(CONFIG, PREFAB_LIST)[0] ?? '',
+    path: ['name'],
+    value: 'Villain',
+  });
 }
 
 /** Строка палитры по её id: команда исполняется тем же путём, что у автора. */
@@ -245,6 +263,107 @@ describe('ED-12/ED-24: переоткрытие проекта переоткр�
   });
 });
 
+/**
+ * ED-23, ED-25: объекты и системы — РАЗНЫЕ рабочие области, и обе собраны тем
+ * же вкладом, что и соседние. Проверяется здесь то, что видно только на
+ * настоящей сборке и ни на одной области по отдельности:
+ *
+ * - конфиг сцены открывается ОДИН раз и сразу со всеми отслеживаемыми списками
+ *   проекта (`PROJECT_LISTS`). Дописать список вторым открытием нельзя, поэтому
+ *   область, чей список не отследили, не показывает пустой перечень, а называет
+ *   причину — и различить одно от другого можно только здесь;
+ * - наборы операций обеих областей лежат в том же реестре, что расстановка и
+ *   кисти: правка идёт операцией и без интерфейса (ED-29, ED-30);
+ * - история одна на сессию (ED-18): правка в одной области отменяется из любой.
+ */
+describe('ED-23, ED-25: области объектов и систем в собранном редакторе', () => {
+  it('обе стоят на том же конфиге, и их списки записей отслежены открытием', async () => {
+    const app = await createEditorApp({ host: projectHost() });
+    const systems = app.frame.stateOf(SYSTEMS_AREA_ID) as SystemsAreaState;
+    const objects = app.frame.stateOf(OBJECTS_AREA_ID) as ObjectsAreaState;
+    await settle();
+
+    expect(systems.configId).toBe(CONFIG);
+    expect(objects.configId).toBe(CONFIG);
+    // Вторая половина пары ED-19 — тот же манифест, что у просмотрщика.
+    expect(objects.visualsId).toBe(VISUALS);
+    expect(systems.failure).toBeNull();
+    expect(objects.failure).toBeNull();
+    // То самое, ради чего перечень списков собран в одном месте: отследи
+    // открытие только свои — и соседи остались бы без адресуемых записей.
+    expect(systems.tracked).toBe(true);
+    expect(objects.tracked).toBe(true);
+    expect(app.frame.session.document(CONFIG).lists).toEqual([
+      ['initial'],
+      ['components'],
+      ['prefabs'],
+      ['systems'],
+    ]);
+  });
+
+  it('операции обеих областей — в том же реестре, и их правки в одной истории', async () => {
+    const host = projectHost();
+    const app = await createEditorApp({ host });
+    const objects = app.frame.stateOf(OBJECTS_AREA_ID) as ObjectsAreaState;
+    await settle();
+    const { session } = app.frame;
+
+    // Юнит заводится одним действием и по двум документам сразу (ED-19).
+    session.applyOperation('objects.prefab.create', {
+      document: CONFIG,
+      list: ['prefabs'],
+      name: 'Turret',
+      visuals: VISUALS,
+      model: 'art/models/turret.mdx',
+    });
+    // Система — в том же реестре и в том же документе (ED-4).
+    session.applyOperation('systems.system.create', {
+      document: CONFIG,
+      list: ['systems'],
+      name: 'Regen',
+    });
+
+    const config = session.documentValue(CONFIG) as {
+      prefabs: readonly { name: string }[];
+      systems: readonly { name: string }[];
+    };
+    expect(config.prefabs.map((prefab) => prefab.name)).toContain('Turret');
+    expect(config.systems.map((system) => system.name)).toEqual(['Regen']);
+    expect(
+      (session.documentValue(VISUALS) as { entities: Record<string, unknown> }).entities['Turret'],
+    ).toEqual({ model: 'art/models/turret.mdx' });
+
+    // История одна на сессию (ED-18, ED-23): обе правки снимаются подряд, и
+    // снимаются целиком — обе половины пары вместе.
+    session.undo();
+    session.undo();
+    expect(session.documentValue(CONFIG)).toEqual(FIXTURE_SCENE);
+    expect(session.documentValue(VISUALS)).toEqual(MANIFEST);
+    expect(objects.failure).toBeNull();
+  });
+
+  it('переоткрытие переводит обе на документы нового проекта (ED-24)', async () => {
+    const host = projectHost();
+    const app = await createEditorApp({ host });
+    const systems = app.frame.stateOf(SYSTEMS_AREA_ID) as SystemsAreaState;
+    const objects = app.frame.stateOf(OBJECTS_AREA_ID) as ObjectsAreaState;
+    await settle();
+
+    host.set(ALPHA_CONFIG, JSON.stringify(ALPHA_SCENE));
+    host.set(ALPHA_VISUALS, JSON.stringify(ALPHA_MANIFEST));
+    runCommand(app.frame, SHELL_COMMANDS.openProject);
+    await settle();
+
+    expect(systems.configId).toBe(ALPHA_CONFIG);
+    expect(objects.configId).toBe(ALPHA_CONFIG);
+    expect(objects.visualsId).toBe(ALPHA_VISUALS);
+    // Списки нового документа отслежены так же, как у прежнего: переоткрытие —
+    // то же открытие, а не второй его способ (ED-24).
+    expect(systems.tracked).toBe(true);
+    expect(objects.tracked).toBe(true);
+  });
+});
+
 describe('ED-21: сохранение трогает только документы с правками', () => {
   it('«открыл — сохранил» без правок не пишет ничего', async () => {
     const host = projectHost();
@@ -289,12 +408,10 @@ describe('ED-21: сохранение трогает только докумен
 
     // Переименование prefab'а рвёт пару ED-19 и ссылку расстановки: на диске
     // расхождения не было, вносит его именно это сохранение — ровно тот случай,
-    // который ED-21 запрещает записывать.
-    app.frame.session.applyOperation('document.setValue', {
-      document: CONFIG,
-      path: ['prefabs', 0, 'name'],
-      value: 'Villain',
-    });
+    // который ED-21 запрещает записывать. Переименовано оно нарочно ПОЛОВИНОЙ:
+    // операция пары (`objects.prefab.rename`) правит обе стороны сразу, и
+    // расхождения бы не случилось.
+    renameHalfOfPair(app.frame);
     runCommand(app.frame, SHELL_COMMANDS.save);
     await settle();
 
@@ -324,11 +441,7 @@ describe('ED-21: сохранение трогает только докумен
     app.frame.stateOf(SCENE_AREA_ID);
     await settle();
 
-    app.frame.session.applyOperation('document.setValue', {
-      document: CONFIG,
-      path: ['prefabs', 0, 'name'],
-      value: 'Villain',
-    });
+    renameHalfOfPair(app.frame);
     runCommand(app.frame, SHELL_COMMANDS.save);
     await settle();
     expect(app.frame.notice()).not.toBeNull();

@@ -23,6 +23,7 @@ import { PREVIEW_SUSPENSION_REASON } from '../src/frame/preview.js';
 import { createSceneArea } from '../src/areas/scene.js';
 import { stubArea } from './support/stubArea.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
+import { SYSTEM_LIST } from '../src/areas/systemsDocuments.js';
 import {
   attr,
   buildFrame,
@@ -62,12 +63,18 @@ const FLOOR_BREAKER = {
   ],
 };
 
-/** Несохранённая правка документа сцены: та самая, которую обязан взять прогон. */
+/**
+ * Несохранённая правка документа сцены: та самая, которую обязан взять прогон.
+ *
+ * Записи `systems` — отслеживаемый список конфига (его правит область систем),
+ * и дописывается запись туда тем же способом, что и запись расстановки: списком
+ * в конец, а не индексом внутрь (ED-29).
+ */
 function editSystem(fixture: LoadedFrameFixture): void {
-  fixture.session.applyOperation('document.setValue', {
+  fixture.session.applyOperation('document.list.append', {
     document: FIXTURE_IDS.config,
-    path: ['systems', 0],
-    value: FLOOR_BREAKER,
+    list: SYSTEM_LIST,
+    item: FLOOR_BREAKER,
   });
 }
 

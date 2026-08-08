@@ -208,7 +208,46 @@ describe('ED-8, ED-25: набор правил проекта', () => {
     // Карта кривизны у проекта называется `terrain-curvature`, а не умолчанием
     // правила: с умолчанием оно не встало бы ни на один открытый документ.
     expect(byId.get(CURVATURE_RULE)?.appliesTo).toEqual([SCENE_KINDS.curvature]);
-    expect(byId.get(SYSTEM_RULE)?.appliesTo).toEqual(['system']);
+    // Систем-документов у проекта нет вовсе: его системы лежат списком внутри
+    // конфига сцены (SYS-1, SER-7), и адреса их правило получает от сборки
+    // (`systemSites`). С умолчальным видом `system` оно не встало бы ни на один
+    // открытый документ — ровно та же беда, что у карты кривизны выше.
+    expect(byId.get(SYSTEM_RULE)?.appliesTo).toEqual([SCENE_KINDS.config]);
+  });
+
+  it('находка правила систем адресует запись, а не конфиг целиком (ED-8, ED-30)', () => {
+    const registry = new ContributionRegistry<ValidationRule>({ kind: 'rule' });
+    registerValidationRules(registry, rules);
+    const session = createEditorSession({
+      operations: registerBuiltinOperations(createOperationRegistry()),
+    });
+    session.openDocument({
+      id: 'scenes/arena.scene.json',
+      kind: SCENE_KINDS.config,
+      value: {
+        components: [{ name: 'Pos', fields: { x: 'i32', y: 'i32' } }],
+        prefabs: [{ name: 'grunt', components: { Pos: { x: 0, y: 0 } } }],
+        capacity: 16,
+        initial: [{ prefab: 'grunt' }],
+        systems: [
+          {
+            name: 'haunt',
+            order: 1,
+            query: { all: ['Pos'] },
+            // Компонента `Nope` в сцене нет — вердикт выносит `validateSystem`
+            // ядра, а не редактор (ED-1).
+            do: [
+              { modifyComponent: { entity: { var: 'entity' }, component: 'Nope', values: {} } },
+            ],
+          },
+        ],
+      },
+    });
+    const report = createValidator({ rules: registry }).run(session);
+    const issue = report.issues.find((found) => found.ruleId === SYSTEM_RULE);
+    // Путь до записи — это то, чем находка отличается от «сцена не грузится»:
+    // автор видит СВОЮ систему подсвеченной, а не документ целиком.
+    expect(issue?.path).toEqual(['systems', 0]);
   });
 
   it('правило манифеста получило описание типов эффектов: секция проверяется по нему (ED-14)', () => {

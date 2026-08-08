@@ -57,10 +57,23 @@ import { registerVisualsOperations } from '../src/areas/assetVisuals.js';
 import { registerCameraEffectsOperations } from '../src/areas/assetCameraEffects.js';
 import { SCENE_AREA_ID, createSceneArea, type SceneAreaState } from '../src/areas/scene.js';
 import { discoverProject, type DiscoveredProject } from '../src/areas/sceneDiscovery.js';
-import { sceneValidationRules, type SceneProjectIds } from '../src/areas/sceneProject.js';
+import {
+  openSceneProject,
+  sceneValidationRules,
+  type SceneProjectIds,
+} from '../src/areas/sceneProject.js';
 import { registerPlacementOperations } from '../src/areas/scenePlacement.js';
 import { registerDecorationOperations } from '../src/areas/sceneDecorations.js';
 import { registerTerrainOperations } from '../src/areas/sceneTerrain.js';
+import {
+  OBJECTS_AREA_ID,
+  createObjectsArea,
+  type ObjectsAreaState,
+} from '../src/areas/objects.js';
+import { registerPairOperations } from '../src/areas/objectsOperations.js';
+import { registerSchemaOperations } from '../src/areas/objectsSchemas.js';
+import { SYSTEMS_AREA_ID, createSystemsArea, type SystemsAreaState } from '../src/areas/systems.js';
+import { registerSystemOperations } from '../src/areas/systemsOperations.js';
 
 export interface EditorAppOptions {
   readonly host: EnvironmentHost;
@@ -92,10 +105,11 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
 
   /**
    * Обход дерева — ОДИН на одно открытие, и делает его сборка, а не области.
-   * Областей у проекта две (сцена и просмотрщик манифеста), и каждая со своим
-   * обходом нашла бы свою пару: между двумя обходами дерево успевает
-   * измениться, и «конфиг сцены + манифест» перестали бы быть парой (ED-19,
-   * ED-21). Поэтому найденное живёт здесь, а области спрашивают его.
+   * Областей у проекта четыре (сцена, системы, объекты и просмотрщик
+   * манифеста), и каждая со своим обходом нашла бы свою пару: между двумя
+   * обходами дерево успевает измениться, и «конфиг сцены + манифест»
+   * перестали бы быть парой (ED-19, ED-21). Поэтому найденное живёт здесь, а
+   * области спрашивают его.
    */
   const first = await discoverProject(host);
   /**
@@ -108,18 +122,68 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
   /** Почему дерево не перечислено (ED-12); `null` — перечислено. */
   let failure: string | null = first.failure;
 
+  // Операции расстановки, кистей, записей манифеста, объектов и систем —
+  // вклады областей, а не часть ядра редактора (ED-25, ED-29): реестр один и
+  // тот же для интерфейса и для вызова без него. Сессия заводится ДО областей,
+  // потому что открытие документов проекта — тоже дело сборки (см. ниже).
+  const session = createEditorSession({
+    operations: registerSystemOperations(
+      registerPairOperations(
+        registerSchemaOperations(
+          registerCameraEffectsOperations(
+            registerVisualsOperations(
+              registerTerrainOperations(
+                registerDecorationOperations(
+                  registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  });
+
+  /**
+   * Открытие документов проекта — ОДНО на весь редактор, и делает его сборка.
+   *
+   * Конфиг сцены правят три области (сцена, объекты, системы), а сессия
+   * открывает документ однажды: повторный `openDocument` отказывает, и
+   * отслеживаемые списки записей вторым вызовом не дописываются. Дай каждой
+   * области открывать его самой — и кто успел первым, тот и назвал списки:
+   * соседи получили бы либо отказ «документ уже открыт», либо документ без
+   * своих списков. Поэтому обещание открытия здесь одно и общее: первая
+   * спросившая область его заводит, остальные получают то же самое, а списки
+   * названы целиком (`PROJECT_LISTS`).
+   *
+   * Сбрасывается оно ровно там, где проект перестаёт быть прежним, — в
+   * `openProject`: после переоткрытия документы другие (ED-24, ED-21).
+   */
+  let opening: Promise<SceneProjectIds | null> | null = null;
+
+  const openScene = (): Promise<SceneProjectIds | null> => {
+    opening ??= (async () => {
+      // Перечисления в этой среде нет — это причина, а не пустой проект:
+      // статике перечислять дерево нечем (см. шапку `src/host/web.ts`), и
+      // подменять это сообщением «сцен не найдено» значило бы соврать автору о
+      // его дереве.
+      if (failure !== null) throw new Error(failure);
+      if (current === null) return null;
+      await openSceneProject(session, host.content, current);
+      return current;
+    })();
+    return opening;
+  };
+
   /** Найти проект заново: только отсюда редактор и ходит в дерево за составом. */
   const openProject = async (): Promise<void> => {
     const found = await discoverProject(host);
     failure = found.failure;
     current = found.scenes[0] ?? null;
+    // Прежнее открытие относилось к прежним документам: держать его значило бы
+    // отдать областям проект, которого больше нет.
+    opening = null;
   };
-
-  const openScene = (): Promise<SceneProjectIds | null> =>
-    // Перечисления в этой среде нет — это причина, а не пустой проект: статике
-    // перечислять дерево нечем (см. шапку `src/host/web.ts`), и подменять это
-    // сообщением «сцен не найдено» значило бы соврать автору о его дереве.
-    failure === null ? Promise.resolve(current) : Promise.reject(new Error(failure));
 
   const contributions = createEditorContributions<
     WorkspaceArea,
@@ -144,11 +208,30 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
       validationRules: contributions.validationRules,
     }),
   );
-  // Области систем в сборке сейчас нет: она стояла на материале-заглушке, и
-  // заглушка уехала фикстурой в набор тестов (`src/areas/systems.ts`). Вернётся
-  // она настоящей — на списке JSON-систем конфига сцены (ED-4, ED-5), — и
-  // регистрация её будет ровно такой же строкой: ED-25 требует, чтобы новая
-  // область не правила ни каркас, ни соседние вклады.
+  // Область систем (ED-4, ED-5) — такой же вклад, и регистрация её ровно такая
+  // же строка: ED-25 требует, чтобы новая область не правила ни каркас, ни
+  // соседние вклады. Правит она список JSON-систем того же конфига сцены
+  // (SYS-1, SER-7), поэтому и открытый проект у неё тот же — и спрашивается он
+  // тем же способом, что у соседей.
+  contributions.areas.register(
+    createSystemsArea({
+      host,
+      open: async () => (await openScene())?.config ?? null,
+    }),
+  );
+  // Область объектов (ED-6, ED-7, ED-19, ED-23) правит ОБЕ половины пары: схемы
+  // и prefab'ы лежат в конфиге сцены, записи визуалов — в манифесте. Пару
+  // называет сборка (ED-19), а не область: «какой манифест открыт» обязано быть
+  // одним ответом на весь редактор.
+  contributions.areas.register(
+    createObjectsArea({
+      host,
+      open: async () => {
+        const ids = await openScene();
+        return ids === null ? null : { config: ids.config, visuals: ids.visuals };
+      },
+    }),
+  );
   // Просмотрщик ассетов (ED-20) — такой же вклад: манифест визуалов он правит
   // тот же, что открывает область сцены, поэтому его ID приходит от того же
   // открытия, а кадр собирается на общем модуле ассетов.
@@ -158,8 +241,10 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
       // Тот же открытый проект, что у области сцены, и спрашивается он тем же
       // способом: манифест — половина пары ED-19, и «какой манифест открыт»
       // обязано быть одним ответом на весь редактор, а не снимком, взятым при
-      // сборке. После переоткрытия проект другой (ED-24, ED-21).
-      open: () => Promise.resolve(current === null ? null : current.visuals),
+      // сборке. После переоткрытия проект другой (ED-24, ED-21). Тем же
+      // способом — значит через то же общее открытие: спроси просмотрщик ID
+      // раньше, чем документы открылись, и манифест открылся бы дважды.
+      open: async () => (await openScene())?.visuals ?? null,
       stage: assetStageFactory(assets),
       // Тот же модуль подаётся и напрямую: состояние ассета (ASSET-4)
       // просмотрщик спрашивает у него, а не у кадра, и там, где кадра нет
@@ -168,21 +253,6 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
       assets,
     }),
   );
-
-  // Операции расстановки, кистей и записей манифеста — вклады областей, а не
-  // часть ядра редактора (ED-25, ED-29): реестр один и тот же для интерфейса и
-  // для вызова без него.
-  const session = createEditorSession({
-    operations: registerCameraEffectsOperations(
-      registerVisualsOperations(
-        registerTerrainOperations(
-          registerDecorationOperations(
-            registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
-          ),
-        ),
-      ),
-    ),
-  });
 
   registerShellCommands(contributions.commands, {
     resources,
@@ -195,7 +265,11 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
     // то, чего в группе записи уже нет (ED-19, ED-21).
     open: async (target) => {
       await openProject();
+      // Переоткрываются ВСЕ области проекта: оставшаяся на прежних документах
+      // правила бы то, чего в группе записи уже нет (ED-19, ED-21).
       (target.stateOf(SCENE_AREA_ID) as SceneAreaState).reopen();
+      (target.stateOf(SYSTEMS_AREA_ID) as SystemsAreaState).reopen();
+      (target.stateOf(OBJECTS_AREA_ID) as ObjectsAreaState).reopen();
       (target.stateOf(ASSETS_AREA_ID) as AssetAreaState).reopen();
       target.setNotice(null);
     },

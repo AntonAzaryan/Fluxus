@@ -31,7 +31,9 @@ import {
 } from '@game-mvp/editor-core';
 import { presentationPathOf, type VisualManifest } from '@game-mvp/assets';
 import { CAMERA_EFFECTS_DESCRIPTION } from '@game-mvp/render';
-import { SYSTEM_DOCUMENT_KIND } from './systems.js';
+import { OBJECT_LISTS } from './objects.js';
+import { SYSTEM_DOCUMENT_KIND, SYSTEM_LISTS } from './systems.js';
+import { systemSites } from './systemsDocuments.js';
 import {
   sceneDraft,
   visualsOf,
@@ -53,6 +55,29 @@ export const TERRAIN_ASSET: JsonPath = ['terrain'];
 
 /** Путь списка декораций в парном документе (PRES-2) — доменное знание вклада. */
 export const DECORATION_LIST: JsonPath = ['decorations'];
+
+/**
+ * ВСЕ отслеживаемые списки конфига сцены — одним перечнем, потому что открыть
+ * их можно только одним вызовом.
+ *
+ * Конфиг сцены правят три области: сцена расставляет (`initial`, SER-8),
+ * объекты описывают схемы и prefab'ы (`components`, `prefabs`, SER-7), системы
+ * — JSON-системы (`systems`, SYS-1). Документ у них ОДИН, и сессия открывает
+ * его однажды: `openDocument` на уже открытый документ отказывает, а
+ * отслеживаемые списки — свойство открытия и вторым вызовом не дописываются
+ * (`document/session.ts`). Поэтому перечень собран здесь целиком, а не по
+ * области за раз: открывшая документ первой область, назвавшая только свои
+ * списки, оставила бы соседей без адресуемых записей (ED-29), и те показали бы
+ * причину «списков не отслеживают» вместо своего материала.
+ *
+ * Список декораций сюда не входит: он лежит в парном документе (PRES-2), а не
+ * в конфиге, и открывается вместе с ним.
+ */
+export const PROJECT_LISTS: readonly JsonPath[] = Object.freeze([
+  PLACEMENT_LIST,
+  ...OBJECT_LISTS,
+  ...SYSTEM_LISTS,
+]);
 
 /** Виды документов сцены — ими ключуются вклады инспектора и правил валидации (ED-25). */
 export const SCENE_KINDS = {
@@ -91,6 +116,13 @@ export const SCENE_KINDS = {
  * Описание типов эффектов камеры (CAM-9) приносится тем же вызовом: правило
  * `assets.manifest` импортировать его не может (пакет headless), а без него
  * секция эффектов проверялась бы только структурно (ASSET-8, ED-14).
+ *
+ * Третьим аргументом идут адреса систем (`systemSites`) — по тем же основаниям
+ * и тем же приёмом: JSON-системы у этого проекта лежат СПИСКОМ внутри конфига
+ * сцены (SYS-1, SER-7), а не отдельными документами. Без них правило встало бы
+ * на умолчальный вид `system`, которого у проекта нет вовсе, и не сработало бы
+ * ни разу; с ними находка адресует запись системы, а не конфиг целиком (ED-8,
+ * ED-30).
  */
 export function sceneValidationRules(): readonly ValidationRule[] {
   const kinds = {
@@ -108,9 +140,13 @@ export function sceneValidationRules(): readonly ValidationRule[] {
         terrain: 'terrain',
         curvature: SCENE_KINDS.curvature,
         manifest: SCENE_KINDS.visuals,
+        // Вид системы-документа проект объявляет (его вносит область систем,
+        // ED-30), но своих систем-документов у него нет: где лежат ЕГО
+        // системы, говорит третий аргумент.
         system: SYSTEM_DOCUMENT_KIND,
       },
       { cameraEffects: CAMERA_EFFECTS_DESCRIPTION },
+      systemSites(SCENE_KINDS.config),
     ),
     ...crossDocumentRules(
       kinds,
@@ -183,8 +219,10 @@ export async function openSceneProject(
       id: ids.config,
       kind: SCENE_KINDS.config,
       // Записи расстановки адресуются дескрипторами сессии: они и служат
-      // ключами инстансов документного набора (REND-11).
-      lists: [PLACEMENT_LIST],
+      // ключами инстансов документного набора (REND-11). Списки соседних
+      // областей открываются здесь же и по той же причине — обоснование
+      // перечня в шапке `PROJECT_LISTS`.
+      lists: [...PROJECT_LISTS],
     });
   }
   if (!session.isOpen(ids.visuals)) {

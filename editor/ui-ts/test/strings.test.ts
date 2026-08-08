@@ -40,7 +40,15 @@ import {
 } from '../src/i18n/cameraEffectBundles.js';
 import { collectTexts, hasClass, walk, type UiNode, type UiText } from '../src/dom/node.js';
 import { assetArea } from '../src/areas/assets.js';
+import { objectsArea } from '../src/areas/objects.js';
+import {
+  SCHEMA_AUTHORING_OPERATIONS,
+  fieldTypeNames,
+} from '../src/areas/objectsSchemas.js';
+import { PAIR_AUTHORING_OPERATIONS } from '../src/areas/objectsOperations.js';
+import { SYSTEM_AUTHORING_OPERATIONS } from '../src/areas/systemsOperations.js';
 import { sceneArea } from '../src/areas/scene.js';
+import { systemsArea } from '../src/areas/systems.js';
 import { buildFrame } from './support/frame.js';
 import { materialStrings } from './support/material.js';
 import { stubArea } from './support/stubArea.js';
@@ -291,13 +299,24 @@ function classifiedTexts(root: UiNode): PageText[] {
 }
 
 describe('ED-27: каждый видимый текст каркаса имеет происхождение', () => {
-  const materialCorpus = materialStrings();
+  /**
+   * Значения, которые страница вправе показать. Материал фикстуры — первый
+   * источник; второй — опубликованная схема формата (SER-5): имена типов поля
+   * (`ecs-foundation` ECS-3) область объектов берёт оттуда и показывает как
+   * есть, потому что это машинные идентификаторы, которые ED-27 не локализует
+   * ровно так же, как имена документов.
+   */
+  const materialCorpus = new Set([...materialStrings(), ...fieldTypeNames()]);
   // Области приложения плюс фикстурная область набора: у каждой свой источник
   // текста, и ED-27 держит их все. Значения документа на страницу приносит
   // фикстура — её материал и есть контрольный случай «текст из документа», —
-  // а просмотрщик ассетов здесь без открытого проекта, ровно тот случай, когда
-  // на странице нет ни одного значения документа и вся она из ресурсов.
-  const areas = [sceneArea, stubArea, assetArea];
+  // а просмотрщик ассетов, область систем и область объектов здесь без
+  // открытого проекта: ровно тот случай, когда на странице нет ни одного
+  // значения документа и вся она из ресурсов, включая причину «проект не
+  // открыт». Обе области авторинга в этом перечне затем, что их подписи —
+  // такой же видимый текст (ED-27), и забытый ключ одной из локалей иначе
+  // остался бы невидимым до первого запуска редактора на чужом языке.
+  const areas = [sceneArea, stubArea, assetArea, systemsArea, objectsArea];
 
   const pagesIn = (locale: string): UiNode[] => {
     const { frame } = buildFrame(areas, locale);
@@ -318,6 +337,11 @@ describe('ED-27: каждый видимый текст каркаса имее�
     for (const page of pagesIn(locale)) {
       for (const { text, hint } of classifiedTexts(page)) {
         if (text.origin === 'value') {
+          // Пустое поле ввода значения не несёт: у формы, в которую автор ещё
+          // ничего не набрал, содержимое пусто, и человеческого текста в нём
+          // нет ни в одной локали. Подсказка такого поля — подпись, и её
+          // происхождение проверяется общим порядком.
+          if (text.value === '') continue;
           expect(materialCorpus.has(text.value), `значение не из материала: ${text.value}`).toBe(
             true,
           );
@@ -388,6 +412,28 @@ describe('ED-27: каждый видимый текст каркаса имее�
       expect(resources.lookup(area.labelKey), area.id).toBeDefined();
       for (const editable of area.editableTypes) {
         expect(resources.lookup(editable.descriptionKey), editable.id).toBeDefined();
+      }
+    }
+  });
+
+  /**
+   * Описания операций областей авторинга (ED-28, ED-30). На страницу они не
+   * попадают — их читает каталог, — поэтому проверка выше их не увидела бы, а
+   * ключ без строки означал бы пустое описание и в каталоге, и в палитре сразу.
+   * Обе локали равноправны (ED-27), и спрашиваются обе.
+   */
+  it.each(['ru', 'en'])('на локали %s описания операций двух областей разрешаются', (locale) => {
+    const resources = uiResources(locale);
+    const contributed = [
+      ...SYSTEM_AUTHORING_OPERATIONS,
+      ...SCHEMA_AUTHORING_OPERATIONS,
+      ...PAIR_AUTHORING_OPERATIONS,
+    ];
+    expect(contributed.length).toBeGreaterThan(0);
+    for (const operation of contributed) {
+      expect(resources.lookup(operation.descriptionKey), operation.id).toBeDefined();
+      for (const [name, spec] of Object.entries(operation.params)) {
+        expect(resources.lookup(spec.descriptionKey), `${operation.id}: ${name}`).toBeDefined();
       }
     }
   });
