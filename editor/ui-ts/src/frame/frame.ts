@@ -19,7 +19,11 @@
  * - запись состояния на каждую посещённую область (`state.ts`);
  * - сквозные вещи, которые ED-23 запрещает разводить по областям: выделение
  *   (`selection.ts`), запрос поиска по проекту и историю операций — последняя
- *   не заводится здесь вовсе, а берётся у сессии, где она одна (ED-18).
+ *   не заводится здесь вовсе, а берётся у сессии, где она одна (ED-18);
+ * - текущий режим и идущий прогон (`preview.ts`, ED-26): «запуск и выход
+ *   доступны из любой рабочей области», а значит место им там же, где
+ *   переключение областей. Что именно прогоняется, каркас по-прежнему не знает
+ *   — он перебирает вклады и берёт первый готовый прогонять (ED-25).
  *
  * Каркас — чистое описание: `view()` возвращает узел и ничего не рисует. Всё,
  * что требует документа, — в `mount.ts`, и потому этот модуль проверяется без
@@ -38,6 +42,7 @@ import {
   sameBinding,
   type KeyStroke,
 } from './keys.js';
+import type { EditorMode, PreviewRun, PreviewSource } from './preview.js';
 import { RAIL_ROVING_ID, areaRail } from './rail.js';
 import { createSelectionModel, type SelectionModel } from './selection.js';
 import { areaSkeleton } from './skeleton.js';
@@ -72,6 +77,16 @@ export interface WorkspaceFrame {
   canRedo(): boolean;
   undo(): void;
   redo(): void;
+  /** Режим редактора — он же виден автору постоянно (ED-26). */
+  mode(): EditorMode;
+  /** Есть ли что запускать (в превью — всегда: выйти можно всегда). */
+  canPreview(): boolean;
+  /** Почему прогон не начался или не закончился; `null` — причин нет (ED-8). */
+  previewFailure(): string | null;
+  /** Запуск и выход одним действием — из любой области и без сохранения (ED-26). */
+  togglePreview(): void;
+  /** Выход, если прогон идёт; иначе ничего. Им же снос страницы гасит прогон. */
+  stopPreview(): void;
   /** Разбор нажатия. `true` — каркас его забрал, и вызывающему нечего делать. */
   handleKey(stroke: KeyStroke): boolean;
   /**
@@ -118,6 +133,9 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
   }
   let query = '';
   let focusRequest: string | undefined;
+  let mode: EditorMode = 'edit';
+  let run: PreviewRun | null = null;
+  let previewFailure: string | null = null;
 
   // Перерисовка во время перерисовки — не оповещение, а рекурсия: область,
   // открывшая документ при заведении своей записи, оповестила бы каркас прямо
@@ -156,6 +174,24 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
     notify();
   };
 
+  const reasonOf = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
+  /**
+   * Первый вклад, готовый прогонять сейчас (ED-25): каркас спрашивает реестр, а
+   * не знает, у кого прогон есть. Запись состояния при этом заводится только у
+   * тех вкладов, что прогон вообще объявили, — то есть у того самого, чьи
+   * документы прогон и возьмёт.
+   */
+  const previewSource = (): PreviewSource | null => {
+    for (const area of areas.all()) {
+      if (area.preview === undefined) continue;
+      const source = area.preview(states.of(area, setup));
+      if (source.ready()) return source;
+    }
+    return null;
+  };
+
   const frame: WorkspaceFrame = {
     areas,
     session,
@@ -174,13 +210,54 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
     // виден как недоступность, а не как исключение из обработчика клавиатуры:
     // недоступное показано недоступным (ED-26), и путь клавиши тот же, что путь
     // кнопки бара, — иначе Ctrl+Z посреди мазка ронял бы разбор нажатия.
-    canUndo: () => !session.pending && session.canUndo(),
-    canRedo: () => !session.pending && session.canRedo(),
+    //
+    // В превью отмена и повтор недоступны по той же причине, по какой недоступны
+    // инструменты: это операции авторинга, а ED-9 запрещает их на время прогона.
+    canUndo: () => mode === 'edit' && !session.pending && session.canUndo(),
+    canRedo: () => mode === 'edit' && !session.pending && session.canRedo(),
     undo() {
       if (frame.canUndo() && session.undo()) notify();
     },
     redo() {
       if (frame.canRedo() && session.redo()) notify();
+    },
+    mode: () => mode,
+    canPreview: () => run !== null || previewSource() !== null,
+    previewFailure: () => previewFailure,
+    togglePreview() {
+      if (run !== null) {
+        frame.stopPreview();
+        return;
+      }
+      const source = previewSource();
+      if (source === null) return;
+      try {
+        // Режим ставится ПОСЛЕ удавшегося запуска: прогон, не начавшийся из-за
+        // сломанного документа, оставляет автора в правке с названной причиной,
+        // а не в превью без прогона (ED-8).
+        run = source.start();
+        previewFailure = null;
+        mode = 'preview';
+      } catch (error) {
+        previewFailure = reasonOf(error);
+      }
+      notify();
+    },
+    stopPreview() {
+      const current = run;
+      if (current === null) return;
+      // Режим гасится ДО остановки: вклад, возвращающий вьюпорт документам,
+      // спрашивает у каркаса режим, и «ещё превью» на выходе означало бы, что
+      // он подаст документы в чужой продюсер.
+      run = null;
+      mode = 'edit';
+      try {
+        current.stop();
+        previewFailure = null;
+      } catch (error) {
+        previewFailure = reasonOf(error);
+      }
+      notify();
     },
     handleKey(stroke) {
       if (matchesBinding(stroke, UNDO_BINDING)) {
@@ -226,6 +303,7 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
           state: states.of(area, setup),
           selection: selection.in(area.id),
           session,
+          mode,
           refresh: notify,
         });
       } finally {
@@ -239,6 +317,9 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
             query,
             canUndo: frame.canUndo(),
             canRedo: frame.canRedo(),
+            mode,
+            canPreview: frame.canPreview(),
+            previewFailure: previewFailure,
             onQuery: (next) => {
               frame.setSearchQuery(next);
             },
@@ -247,6 +328,9 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
             },
             onRedo: () => {
               frame.redo();
+            },
+            onPreview: () => {
+              frame.togglePreview();
             },
           }),
           el('div', {

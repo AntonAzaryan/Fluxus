@@ -39,6 +39,11 @@ export type { KeyStroke } from './keys.js';
 export { mountWorkspaceFrame } from './mount.js';
 export type { MountedFrame, MountOptions } from './mount.js';
 /**
+ * Режим и прогон (ED-9, ED-26) — типы, а не реализация: собрать прогон умеет
+ * вклад, чьи документы прогоняются, а каркас только спрашивает и переключает.
+ */
+export type { EditorMode, PreviewRun, PreviewSource } from './preview.js';
+/**
  * Сведение просьб перерисовать наружу не выходит: им пользуется отрисовка
  * страницы, а не вклад. Подменить отсрочку можно параметром монтирования —
  * второго способа перерисовать страницу это не заводит.

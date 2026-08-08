@@ -1,6 +1,7 @@
 {
   "ui.action.addComponent": "Добавить компонент",
   "ui.action.preview": "Превью",
+  "ui.action.previewStop": "Выйти из превью",
   "ui.action.remove": "Удалить",
   "ui.action.save": "Сохранить",
   "ui.action.showJson": "Показать JSON",
@@ -48,6 +49,7 @@
   "ui.chip.editMode": "Режим правки",
   "ui.chip.error": "Ошибка",
   "ui.chip.info": "Сведение",
+  "ui.chip.previewMode": "Режим превью",
   "ui.chip.selected": "Выбрано",
   "ui.chip.warning": "Предупреждение",
   "ui.editable.scene.description": "Конфиг сцены, который исполняет ядро",
@@ -89,6 +91,7 @@
   "ui.operation.scene.placement.rotate": "Переписывает переопределение поворота одной записи расстановки. Недоступна, пока настройка проекта не назвала, где поворот лежит.",
   "ui.operation.scene.terrain.cell": "Пишет вид одной клетки в карту флагов ассета террейна: обычная, рампа, без пола. Карты уровней не касается.",
   "ui.operation.scene.terrain.level": "Пишет уровень одной клетки в карту уровней ассета террейна. Обрывы вокруг неё выводит ядро из этой же карты — отдельного слоя у них нет.",
+  "ui.preview.failed": "Превью не запустилось",
   "ui.tooltip.missingResource": "Ресурса нет ни в текущей локали, ни в английской — показан сам ключ",
   "ui.validation.deprecatedField": "Поле объявлено устаревшим в схеме и будет снято",
   "ui.validation.derived": "Значение выводится ядром и здесь только показано",

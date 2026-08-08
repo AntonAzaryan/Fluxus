@@ -11,6 +11,15 @@
  * Тика в режиме правки нет (ED-15): кадровый цикл не двигает мир, а только
  * сводит документный набор, считает позу камеры конвейером (ED-13) и рисует.
  *
+ * ## Второй продюсер и один цикл кадров
+ *
+ * Превью (ED-9) публикуется в ЭТУ же presentation-сцену вторым продюсером
+ * (REND-11) и рисуется ЭТИМ же циклом (`attachProducer`). Своего цикла у него
+ * нет намеренно: два цикла давали бы подсистемам два `updateFrame` на кадр.
+ * Камера при этом остаётся здесь и в превью работает как обычно — её ввод не
+ * пересекает границы воркера (ED-13, CAM-1) просто потому, что пересекать её
+ * тут нечем: обратный канал прогона держит его runner, а не вьюпорт.
+ *
  * ## Отклик не позже следующего кадра
  *
  * ED-15 требует показать правку не позже следующего кадра. Механизм — один и
@@ -150,8 +159,17 @@ export interface SceneStageOptions {
 }
 
 export interface SceneStage extends ScenePicker {
-  /** Новое состояние документов; кадр покажет его не позже следующего (ED-15). */
-  submit(draft: SceneDraft): void;
+  /**
+   * Новое состояние документов; кадр покажет его не позже следующего (ED-15).
+   *
+   * `reapply` — подать всё заново, даже если значения совпали по ссылке.
+   * Сравнение по ссылке здесь обычно и есть ответ на вопрос «изменилось ли», но
+   * ровно один случай оно разбирает неверно: возврат из превью. Документы за
+   * прогон не менялись, а картинка менялась — поток тиков выбил пол в СВОЁМ
+   * мире, — и повторная доставка той же сетки возвращает его (REND-14), тогда
+   * как пропуск по совпадению ссылок оставил бы дыру в кадре режима правки.
+   */
+  submit(draft: SceneDraft, reapply?: boolean): void;
   /** Идёт ли облёт (CAM-2) — это показывает бар области. */
   readonly flying: boolean;
   toggleFly(): void;
@@ -166,6 +184,23 @@ export interface SceneStage extends ScenePicker {
    * просмотрщик ассетов (ED-20) публикуются в ту же сцену, а не заводят вторую.
    */
   readonly presentation: PresentationStage;
+  /**
+   * Контекст рендера вьюпорта (REND-8): та же сцена THREE, тот же модуль
+   * ассетов, тот же конфиг. Второй продюсер получает его, а не заводит свой:
+   * два контекста — это две сцены, то есть второй путь отрисовки (REND-11).
+   */
+  readonly context: RenderContext;
+  /**
+   * Подключает кадр чужого продюсера к циклу вьюпорта; возвращает отсоединение.
+   *
+   * Цикл кадров у редактора один — тот, что крутит `requestAnimationFrame`
+   * здесь. Второй, заведённый превью, гнал бы подсистемам второй `updateFrame`
+   * на том же кадре, и dt сглаживаний удваивался бы (REND-8). Кто из
+   * подключённых наполняет presentation-состояние, решает не цикл, а сцена
+   * (`PresentationStage.isActive`, REND-11): неактивный на свой вызов ничего не
+   * делает.
+   */
+  attachProducer(frame: (now: number) => void): () => void;
   /** Поза последнего кадра (CAM-1); `null` — кадра ещё не было. */
   readonly pose: CameraPose | null;
   /** Полный набор служебных наложений (REND-16); пустой — гасит все. */
@@ -227,6 +262,10 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
 
   let draft: SceneDraft | null = null;
   let dirty = false;
+  /** Подать заново, не спрашивая ссылок: так возвращается кадр после превью. */
+  let reapply = false;
+  /** Кадры чужих продюсеров (REND-11) — превью ED-9; в игровом кадре их нет. */
+  const guests = new Set<(now: number) => void>();
   let disposed = false;
   let lastFrameAt: number | null = null;
   /**
@@ -373,19 +412,21 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     camera = createSceneCamera({ grid: first, heightStep });
   };
 
-  const applyDraft = (next: SceneDraft): void => {
-    if (next.grid !== null && next.grid !== grid) {
+  const applyDraft = (next: SceneDraft, again: boolean): void => {
+    if (next.grid !== null && (again || next.grid !== grid)) {
       const first = grid === null;
       grid = next.grid;
       if (first) build(next.grid);
       else {
         // Декларативная доставка сетки целиком (REND-14): подсистема сводит её
         // с нарисованным сама, а поверхность и чанки инвалидирует точечно.
+        // Повторная доставка той же сетки не пуста — она возвращает карту пола
+        // (REND-14), и на этом держится выход из превью (ED-9).
         terrain?.applyGrid(next.grid);
         camera?.setGrid(next.grid);
       }
     }
-    if (next.curvature !== curvature) {
+    if (again || next.curvature !== curvature) {
       curvature = next.curvature;
       // Карта из памяти, а не ассетом: несохранённый документ кисти ассетом ещё
       // не является (ED-11, REND-14).
@@ -497,8 +538,10 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     // назвать причину, а не повторяться каждый кадр на тех же документах.
     if (dirty && draft !== null) {
       dirty = false;
+      const again = reapply;
+      reapply = false;
       try {
-        applyDraft(draft);
+        applyDraft(draft, again);
         applyFailure = null;
       } catch (error) {
         // Последнее целое остаётся нарисованным, причина уходит в интерфейс.
@@ -516,6 +559,10 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       }
       // Кадр подсистем: интерполировать нечего, альфа всегда 1 (REND-11).
       source.frame(now);
+      // Кадры чужих продюсеров тем же циклом (REND-8): наполняет
+      // presentation-состояние ровно один из подключённых, и кто именно —
+      // знает сцена, а не этот цикл.
+      for (const guest of guests) guest(now);
       renderer.render(scene, camera3);
       drawFailure = null;
     } catch (error) {
@@ -526,9 +573,12 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   requestAnimationFrame(frame);
 
   return {
-    submit(next) {
+    submit(next, again = false) {
       draft = next;
       dirty = true;
+      // Просьба переподать не гаснет от следующей обычной подачи: между
+      // подачей и кадром может пройти и то, и другое.
+      if (again) reapply = true;
     },
     get flying(): boolean {
       return camera?.flying ?? false;
@@ -546,6 +596,18 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       return failureNow();
     },
     presentation,
+    context,
+    attachProducer(guest) {
+      // Недоставленная подача документов гасится: пока presentation-состояние
+      // наполняет чужой продюсер, сводить её нельзя — она отобрала бы у него
+      // состояние посреди прогона (REND-11). Потерять её нечего: возврат к
+      // документам идёт переподачей целиком (`submit(draft, true)`).
+      dirty = false;
+      guests.add(guest);
+      return () => {
+        guests.delete(guest);
+      };
+    },
     get pose(): CameraPose | null {
       return pose;
     },

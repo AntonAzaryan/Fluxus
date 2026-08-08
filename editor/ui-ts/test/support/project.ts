@@ -14,7 +14,7 @@
  * производной проверяла бы только саму себя.
  */
 import { createMemoryHost, type MemoryHost } from '@game-mvp/editor-core';
-import type { CameraPose, PresentationStage } from '@game-mvp/render';
+import { PresentationStage, type CameraPose, type RenderContext } from '@game-mvp/render';
 import type { PositionBinding, SceneDraft } from '../../src/areas/sceneDocuments.js';
 import type { SceneStage } from '../../src/areas/sceneStage.js';
 import type { SceneProjectIds } from '../../src/areas/sceneProject.js';
@@ -93,8 +93,14 @@ export type FakeHits = ReadonlyMap<string, ScenePick>;
 /** Дубль вьюпорта: помнит поданное, вместо того чтобы это рисовать. */
 export interface FakeStage extends SceneStage {
   readonly submitted: readonly SceneDraft[];
+  /** Была ли подача переподачей (`submit(draft, true)`) — по индексу подачи. */
+  readonly reapplied: readonly boolean[];
   readonly zooms: readonly number[];
   readonly last: SceneDraft | undefined;
+  /** Кадры чужих продюсеров, подключённые к циклу вьюпорта (REND-11). */
+  readonly producers: readonly ((now: number) => void)[];
+  /** Один кадр цикла: дубль не крутит RAF, поэтому кадр просит тест. */
+  frame(now: number): void;
   /** Наборы наложений в порядке подачи (REND-16). */
   readonly overlaySets: readonly (readonly SceneOverlay[])[];
   /** Последний набор наложений. */
@@ -171,16 +177,24 @@ export function entityHit(key: string): ScenePick {
  */
 export function fakeStage(announce: () => void = () => undefined): FakeStage {
   const submitted: SceneDraft[] = [];
+  const reapplied: boolean[] = [];
   const zooms: number[] = [];
   const overlaySets: (readonly SceneOverlay[])[] = [];
+  const producers: ((now: number) => void)[] = [];
   const hits = new Map<string, ScenePick>();
   const surfaceHits = new Map<string, ScenePick>();
   let flying = false;
   let failure: string | null = null;
   const at = (x: number, y: number): string => `${x}:${y}`;
+  // Сцена подсистем настоящая, а контекст рендера — дубль: публиковать в неё
+  // прогон обязан по-настоящему (взаимоисключающесть продюсеров REND-11 —
+  // поведение сцены, а не дубля), а рисовать в headless-прогоне нечем.
+  const context = { scene: {}, assets: {}, config: { heightStep: 1 } } as unknown as RenderContext;
+  const presentation = new PresentationStage(context);
   return {
-    submit: (draft) => {
+    submit: (draft, again = false) => {
       submitted.push(draft);
+      reapplied.push(again);
     },
     get flying(): boolean {
       return flying;
@@ -202,9 +216,19 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
       failure = reason;
       announce();
     },
-    // Presentation-сцену дубль не заводит: в headless-прогоне публиковать в неё
-    // нечего, а тип держит её обязательной ради превью и просмотрщика.
-    presentation: null as unknown as PresentationStage,
+    presentation,
+    context,
+    attachProducer: (producer) => {
+      producers.push(producer);
+      return () => {
+        const index = producers.indexOf(producer);
+        if (index >= 0) producers.splice(index, 1);
+      };
+    },
+    frame: (now) => {
+      for (const producer of [...producers]) producer(now);
+    },
+    producers,
     pose: null as CameraPose | null,
     pick: (x, y) => hits.get(at(x, y)) ?? null,
     pickSurface: (x, y) => surfaceHits.get(at(x, y)) ?? null,
@@ -213,6 +237,7 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
     },
     dispose: () => undefined,
     submitted,
+    reapplied,
     zooms,
     overlaySets,
     hits,

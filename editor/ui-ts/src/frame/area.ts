@@ -35,6 +35,7 @@ import type {
 } from '@game-mvp/editor-core';
 import type { UiNode } from '../dom/node.js';
 import type { IconName } from '../widgets/icon.js';
+import type { EditorMode, PreviewSource } from './preview.js';
 import type { AreaSelection } from './selection.js';
 
 /**
@@ -79,6 +80,12 @@ export interface AreaContext<S extends AreaState = AreaState> {
   /** Сквозное выделение, суженное до этой области (ED-23). */
   readonly selection: AreaSelection;
   readonly session: EditorSession;
+  /**
+   * Режим редактора (ED-26). Приходит на отрисовку, а не спрашивается у
+   * каркаса: область обязана показать недоступным всё, что в превью применить
+   * нельзя (ED-9), и решение об этом принимается там же, где строится элемент.
+   */
+  readonly mode: EditorMode;
   /** Просьба перерисовать: область изменила своё состояние и хочет это показать. */
   refresh(): void;
 }
@@ -97,6 +104,16 @@ export interface WorkspaceArea<S extends AreaState = AreaState>
   readonly labelKey: string;
   /** Заводит запись состояния области. Зовётся один раз — при первом заходе в неё. */
   createState(setup: AreaSetup): S;
+  /**
+   * Чем эта область умеет прогонять свои документы (ED-9); нет метода —
+   * прогонять ей нечего. Функция от записи состояния, а не поле вклада: в
+   * записи живут открытые документы и кадр, а вклад — один на приложение, и
+   * складывать в него состояние значило бы делать его одиночкой (см. шапку).
+   *
+   * Каркас зовёт метод, чтобы узнать, доступен ли запуск (ED-26), поэтому он
+   * обязан быть дешёвым и без побочных действий: сам прогон начинает `start`.
+   */
+  preview?(state: S): PreviewSource;
   /** Содержимое трёх зон. Зовётся на каждую отрисовку активной области. */
   render(context: AreaContext<S>): AreaZones;
 }

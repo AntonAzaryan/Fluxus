@@ -12,25 +12,55 @@
  * который сейчас нечем применить, обязан быть видимо недоступен (ED-26), а не
  * исчезать, оставляя автора гадать, был ли он.
  *
- * Чего здесь нет намеренно: аффорданса превью и индикации режима (ED-26) —
- * это задача W2-4, и место под них в баре уже есть; палитры команд и списка
- * результатов поиска (ED-24) — задача W2-3. Строка поиска стоит здесь уже
- * сейчас, потому что её запрос — сквозное состояние сессии: он не должен
- * теряться от перехода в другую область.
+ * Здесь же — аффорданс прогона и индикация режима (ED-26). Оба стоят именно
+ * тут, а не на поверхности правки: бар один на окно и виден из любой рабочей
+ * области, а требование говорит и «доступны из любой области», и «режим виден
+ * постоянно». Кнопка одна на запуск и выход: состояний ровно два, и вторая
+ * кнопка была бы вторым местом, где они перечислены.
+ *
+ * Пометка режима — чип, а не подпись самой кнопки: кнопка называет действие
+ * («запустить», «выйти»), а чип — состояние, и слить их значило бы заставить
+ * автора выводить режим из надписи на элементе управления, чего ED-26
+ * запрещает прямым текстом.
+ *
+ * Чего здесь нет намеренно: палитры команд и списка результатов поиска (ED-24)
+ * — задача W2-3. Строка поиска стоит здесь уже сейчас, потому что её запрос —
+ * сквозное состояние сессии: он не должен теряться от перехода в другую область.
  */
 import type { StringResources } from '@game-mvp/editor-core';
 import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
 import { button } from '../widgets/button.js';
+import { statusChip } from '../widgets/chip.js';
+import { withValidation } from '../widgets/validation.js';
+import type { EditorMode } from './preview.js';
 
 export interface TopBarSpec {
   readonly resources: StringResources;
   readonly query: string;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
+  /** Текущий режим (ED-26): его показывает чип, а не поведение инструментов. */
+  readonly mode: EditorMode;
+  /** Есть ли что запускать; `false` — элемент показан недоступным (ED-26). */
+  readonly canPreview: boolean;
+  /** Причина, по которой прогон не состоялся; `null` — причины нет (ED-8). */
+  readonly previewFailure: string | null;
   readonly onQuery: (query: string) => void;
   readonly onUndo: () => void;
   readonly onRedo: () => void;
+  readonly onPreview: () => void;
 }
+
+/** Подписи режима и действия — ключи ресурсов (ED-27), по одному на состояние. */
+const MODE_LABELS: Readonly<Record<EditorMode, string>> = {
+  edit: 'ui.chip.editMode',
+  preview: 'ui.chip.previewMode',
+};
+
+const PREVIEW_LABELS: Readonly<Record<EditorMode, string>> = {
+  edit: 'ui.action.preview',
+  preview: 'ui.action.previewStop',
+};
 
 const LOCALES: readonly (readonly [string, string])[] = [
   ['ru', 'ui.locale.ru'],
@@ -77,11 +107,37 @@ export function frameTopBar(spec: TopBarSpec): UiNode {
       },
     });
 
+  const preview = spec.mode === 'preview';
   return el('header', {
     classes: ['fx-bar'],
     children: children(
       el('span', { classes: ['fx-bar__title'], text: resourceText(spec.resources, 'ui.app.title') }),
       searchField(spec),
+      // Прогон идёт — это включённое состояние, за которым ED-22 акцент и
+      // закрепил; правка — обычное, и акцента ей не полагается.
+      statusChip({
+        label: resourceText(spec.resources, MODE_LABELS[spec.mode]),
+        tone: preview ? 'active' : 'neutral',
+        icon: preview ? 'play' : 'dot',
+      }),
+      button({
+        label: resourceText(spec.resources, PREVIEW_LABELS[spec.mode]),
+        variant: 'primary',
+        icon: preview ? 'stop' : 'play',
+        disabled: !spec.canPreview,
+        onPress: spec.onPreview,
+      }),
+      // Причина — не оттенок: иконку, положение и текст ставит один вызов
+      // (ED-8, ED-22), а сам текст приходит оттуда, где прогон не задался.
+      spec.previewFailure === null
+        ? undefined
+        : withValidation(
+            statusChip({
+              label: resourceText(spec.resources, 'ui.preview.failed'),
+              tone: 'error',
+            }),
+            { severity: 'error', reason: documentValue(spec.previewFailure) },
+          ),
       button({
         label: resourceText(spec.resources, 'ui.frame.undo'),
         variant: 'ghost',

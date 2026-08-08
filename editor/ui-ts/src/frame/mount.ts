@@ -103,6 +103,9 @@ export function mountWorkspaceFrame(
     root,
     dispose() {
       redraw.cancel();
+      // Прогон живёт дольше страницы (ED-9: у него свой поток), и снос страницы
+      // обязан его закончить — иначе воркер переживает окно, которое его завело.
+      frame.stopPreview();
       doc.removeEventListener('keydown', onKeyDown);
       for (const unsubscribe of unsubscribes) unsubscribe();
     },

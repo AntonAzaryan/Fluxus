@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@game-mvp/assets": "*",
+    "@game-mvp/client": "*",
     "@game-mvp/core": "*",
     "@game-mvp/editor-core": "*",
     "@game-mvp/render": "*",

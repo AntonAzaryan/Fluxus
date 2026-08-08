@@ -24,6 +24,7 @@ import type { StagePointer } from '../../src/areas/sceneInteraction.js';
 import { registerPlacementOperations } from '../../src/areas/scenePlacement.js';
 import { registerTerrainOperations } from '../../src/areas/sceneTerrain.js';
 import { systemsArea } from '../../src/areas/systems.js';
+import { previewProbe, type PreviewProbe } from './preview.js';
 import { FIXTURE_IDS, fakeStage, fixtureHost, settle, type FakeStage } from './project.js';
 
 export interface FrameFixture {
@@ -68,9 +69,13 @@ export async function buildLoadedFrame(locale = 'ru'): Promise<LoadedFrameFixtur
   // отдаёт его сборкой, и через него же приходит просьба перерисовать.
   const built: FakeStage[] = [];
   const pointers: ((event: StagePointer) => void)[] = [];
+  // Вторая сторона канала превью — та же подмена и по той же причине, что
+  // вьюпорт: настоящего воркера в headless-прогоне нет (ED-9, SHELL-3).
+  const preview = previewProbe();
   const area = createSceneArea({
     host,
     ids: FIXTURE_IDS,
+    previewBackend: preview.factory,
     stage: (_project, _host, hooks) => {
       const made = fakeStage(hooks.announce);
       built.push(made);
@@ -90,7 +95,7 @@ export async function buildLoadedFrame(locale = 'ru'): Promise<LoadedFrameFixtur
   // Страница собирается сразу: инструмент получает выделение и кадр отрисовкой,
   // и до неё указатель ему подавать нечего.
   fixture.frame.view();
-  return { ...fixture, host, stage, area, state, pointer };
+  return { ...fixture, host, stage, area, state, pointer, preview };
 }
 
 export interface LoadedFrameFixture extends FrameFixture {
@@ -100,6 +105,8 @@ export interface LoadedFrameFixture extends FrameFixture {
   readonly state: SceneAreaState;
   /** Вход указателя вьюпорта — тот же канал, которым его зовёт настоящий холст. */
   readonly pointer: (event: StagePointer) => void;
+  /** Канал прогона превью: чем он поднят и что через него прошло (ED-9, ED-13). */
+  readonly preview: PreviewProbe;
 }
 
 export function attr(node: UiNode, name: string): string | undefined {

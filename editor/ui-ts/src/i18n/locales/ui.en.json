@@ -1,6 +1,7 @@
 {
   "ui.action.addComponent": "Add component",
   "ui.action.preview": "Preview",
+  "ui.action.previewStop": "Leave preview",
   "ui.action.remove": "Remove",
   "ui.action.save": "Save",
   "ui.action.showJson": "Show JSON",
@@ -48,6 +49,7 @@
   "ui.chip.editMode": "Edit mode",
   "ui.chip.error": "Error",
   "ui.chip.info": "Note",
+  "ui.chip.previewMode": "Preview mode",
   "ui.chip.selected": "Selected",
   "ui.chip.warning": "Warning",
   "ui.editable.scene.description": "Scene config the core runs",
@@ -89,6 +91,7 @@
   "ui.operation.scene.placement.rotate": "Rewrites the rotation override of one placement record. Unavailable until the project setting names where rotation lives.",
   "ui.operation.scene.terrain.cell": "Writes the kind of one cell into the flag map of the terrain asset: plain, ramp, floorless. It never touches the level map.",
   "ui.operation.scene.terrain.level": "Writes the level of one cell into the level map of the terrain asset. Cliffs around it are derived by the core from that same map — they have no layer of their own.",
+  "ui.preview.failed": "Preview did not start",
   "ui.tooltip.missingResource": "No resource in the current locale nor in English — the key itself is shown",
   "ui.validation.deprecatedField": "The schema marks this field deprecated; it will be dropped",
   "ui.validation.derived": "The value is derived by the core and only shown here",

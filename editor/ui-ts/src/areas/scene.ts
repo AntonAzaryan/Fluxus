@@ -21,12 +21,20 @@
  *
  * Состояние области — запись, которую хранит каркас (ED-23): в ней живёт и
  * вьюпорт со своим конвейером камеры, поэтому уход в другую область и возврат
- * не теряют ни позы, ни зума, ни раскрытых узлов.
+ * не теряют ни позы, ни зума, ни раскрытых узлов. Там же живёт и прогон
+ * превью (`scenePreview.ts`, ED-9): документы, которые он прогоняет, и кадр, в
+ * который он публикуется, — содержимое этой же записи, а запуск и выход даёт
+ * каркас, потому что доступны они из любой области (ED-26).
+ *
+ * Индикации режима на поверхности правки нет намеренно: режим один на редактор
+ * и виден в верхнем баре каркаса; вторая пометка в области разошлась бы с
+ * первой на первом же несовпадении.
  */
-import { FIXED_ONE } from '@game-mvp/core';
+import { FIXED_ONE, type SceneDef } from '@game-mvp/core';
 import { createHostAssetSource, type EnvironmentHost } from '@game-mvp/editor-core';
 import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
 import type { AreaContext, AreaSetup, AreaZones, WorkspaceArea } from '../frame/area.js';
+import type { PreviewSource } from '../frame/preview.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS } from '../frame/styles.js';
 import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';
@@ -53,6 +61,7 @@ import {
   type TerrainBrushMode,
 } from './sceneBrush.js';
 import { CURVATURE_OFFSETS } from './sceneTerrain.js';
+import { createScenePreview, type PreviewBackendFactory } from './scenePreview.js';
 import {
   PLACEMENT_LIST,
   TERRAIN_ASSET,
@@ -143,6 +152,13 @@ export interface SceneAreaOptions {
    * headless-прогоне нет, а проверять подачу документов рендеру надо.
    */
   readonly stage?: SceneStageFactory;
+  /**
+   * Чем поднимается вторая сторона канала превью (ED-9, SHELL-3); по умолчанию
+   * — воркер веба. Подменяется тестом по той же причине, что и вьюпорт:
+   * настоящего воркера в headless-прогоне нет, а проверять надо ЧТО пересекает
+   * границу.
+   */
+  readonly previewBackend?: PreviewBackendFactory;
 }
 
 export interface SceneAreaState {
@@ -158,6 +174,14 @@ export interface SceneAreaState {
   stage: SceneStage | null;
   /** Текущий кадр как функция документов (ED-15). */
   draft: SceneDraft | null;
+  /** Прогон текущих документов (ED-9): его каркас и спрашивает у области. */
+  readonly preview: PreviewSource;
+  /**
+   * Идёт ли прогон. Флаг области, а не пересказ режима каркаса: пересчёт кадра
+   * подписан на сессию и случается между отрисовками, а подавать документы в
+   * чужой продюсер посреди прогона нельзя (REND-11).
+   */
+  previewing: boolean;
   /** Почему проект не открылся; показывается на поверхности правки. */
   failure: string | null;
   /** Раскрытые узлы навигатора. */
@@ -172,19 +196,38 @@ const message = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
 /**
+ * Бросить начатое обоими инструментами. Незакрытая транзакция запрещает сессии
+ * и следующую операцию, и undo (ED-18), поэтому её закрывает каждый путь, на
+ * котором взаимодействие обрывается: потеря фокуса и снос области (`sceneStage`),
+ * смена инструмента и вход в превью (ED-9).
+ */
+function cancelInteraction(state: SceneAreaState): void {
+  state.tool.pointer({ phase: 'cancel', x: 0, y: 0, additive: false });
+  state.brush.cancel();
+}
+
+/**
  * Переключение инструмента вьюпорта. Оба незакрытых взаимодействия закрываются
- * здесь, а не «не могут случиться»: смена инструмента — четвёртый путь бросить
- * начатое рядом с потерей фокуса, нажатием поверх незакрытого и сносом области,
- * и оставленная открытой транзакция запрещает и следующую операцию, и undo
- * (ED-18).
+ * здесь, а не «не могут случиться»: смена инструмента — один из путей бросить
+ * начатое, и оставленная открытой транзакция переживает его дефектом.
  */
 function activateTool(state: SceneAreaState, next: SceneToolId): void {
   if (state.activeTool === next) return;
-  state.tool.pointer({ phase: 'cancel', x: 0, y: 0, additive: false });
-  state.brush.cancel();
+  cancelInteraction(state);
   state.activeTool = next;
   if (next !== 'pointer') state.brush.setLayer(next);
   state.refresh();
+}
+
+/**
+ * Закрыт ли авторинг сейчас. Закрыт он ровно в превью: «в превью операции
+ * авторинга недоступны» (ED-9), и элемент, который нельзя применить, показан
+ * недоступным, а не молча не срабатывает (ED-26). Режим приходит от каркаса —
+ * он же виден автору постоянно, и второго ответа на вопрос «правка или прогон»
+ * в области не заводится.
+ */
+function authoringOff(context: AreaContext<SceneAreaState>): boolean {
+  return context.mode === 'preview';
 }
 
 /** Слой кисти как вход инструмента: где лежит ассет и какого размера его сетка. */
@@ -236,6 +279,10 @@ function start(state: SceneAreaState, setup: AreaSetup, options: SceneAreaOption
         // них. Указатель получает ровно активный: что попадание значит, знает
         // инструмент, а какой из них сейчас в руках — область (ED-25).
         pointer: (event) => {
+          // В превью указатель до инструментов не доходит вовсе (ED-9): панель
+          // показывает их недоступными, и клик по кадру обязан значить то же,
+          // что показывает панель, — иначе «недоступно» было бы только надписью.
+          if (state.previewing) return;
           if (state.activeTool === 'pointer') state.tool.pointer(event);
           else state.brush.pointer(event);
         },
@@ -255,7 +302,10 @@ function start(state: SceneAreaState, setup: AreaSetup, options: SceneAreaOption
         config = nextConfig;
         curvature = nextCurvature;
         state.draft = draftOf(setup.session, project);
-        state.stage?.submit(state.draft);
+        // Пока идёт прогон, кадр наполняет он (REND-11): подать сюда документы
+        // значило бы отобрать у него presentation-состояние посреди прогона.
+        // Дождавшийся набор уедет во вьюпорт выходом из превью — переподачей.
+        if (!state.previewing) state.stage?.submit(state.draft);
         state.refresh();
       };
       // Подписка ловит правку, пришедшую откуда угодно, в том числе без
@@ -395,6 +445,7 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
  * Недоступное показано недоступным, а не молча не срабатывает (ED-26): без
  * выделения нечего поворачивать и удалять, без привязки поворота в настройке
  * проекта поворот не выражается вовсе (ED-16), а без кадра не во что и попадать.
+ * В превью недоступно всё: операции авторинга там запрещены (ED-9).
  */
 function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   const { state, resources } = context;
@@ -407,7 +458,8 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   const placing = tool.mode === 'place';
   // Настройки указателя недоступны, пока указатель не в руках (ED-26): кисть
   // получает нажатия целиком, и «расстановка» при ней ничего бы не делала.
-  const pointing = state.activeTool === 'pointer';
+  const off = authoringOff(context);
+  const pointing = state.activeTool === 'pointer' && !off;
 
   const act = (key: string, disabled: boolean, press: () => void): UiNode =>
     button({
@@ -445,13 +497,13 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
         tool.setSnapping(on);
       },
     }),
-    act('ui.area.scene.rotateLeft', !tool.canRotate || chosen.length === 0, () => {
+    act('ui.area.scene.rotateLeft', off || !tool.canRotate || chosen.length === 0, () => {
       tool.rotate(-ROTATION_STEP);
     }),
-    act('ui.area.scene.rotateRight', !tool.canRotate || chosen.length === 0, () => {
+    act('ui.area.scene.rotateRight', off || !tool.canRotate || chosen.length === 0, () => {
       tool.rotate(ROTATION_STEP);
     }),
-    act('ui.action.remove', chosen.length === 0, () => {
+    act('ui.action.remove', off || chosen.length === 0, () => {
       tool.remove();
     }),
   ];
@@ -466,11 +518,12 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
  */
 function toolBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   const { state, resources } = context;
+  const off = authoringOff(context);
   return SCENE_TOOLS.map((id) =>
     button({
       label: resourceText(resources, TOOL_LABELS[id]),
       variant: state.activeTool === id ? 'primary' : 'ghost',
-      disabled: state.stage === null || (id !== 'pointer' && !state.brush.available(id)),
+      disabled: off || state.stage === null || (id !== 'pointer' && !state.brush.available(id)),
       onPress: () => {
         activateTool(state, id);
       },
@@ -486,11 +539,16 @@ function toolBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
  *
  * Величины — значения документа, а не подписи интерфейса: уровень уезжает в
  * карту как есть, и локаль его не касается (ED-27).
+ *
+ * В превью настройки остаются на виду и показаны недоступными: ED-26 требует
+ * именно этого — «автор смотрит на панель инструментов при работающем превью, и
+ * инструменты показаны недоступными», а не исчезнувшими.
  */
 function brushBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   const { state, resources } = context;
   const brush = state.brush;
   if (state.activeTool === 'pointer' || !brush.available()) return [];
+  const off = authoringOff(context);
 
   const numbers = (
     key: string,
@@ -502,6 +560,7 @@ function brushBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
       label: resourceText(resources, key),
       value: String(value),
       options: values.map((entry) => ({ value: String(entry), label: documentValue(String(entry)) })),
+      disabled: off,
       onSelect: (raw) => {
         pick(Number(raw));
       },
@@ -517,6 +576,7 @@ function brushBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
             value: mode,
             label: resourceText(resources, BRUSH_MODE_LABELS[mode]),
           })),
+          disabled: off,
           onSelect: (raw) => {
             const next = TERRAIN_BRUSH_MODES.find((mode) => mode === raw);
             if (next !== undefined) brush.setMode(next);
@@ -538,6 +598,7 @@ function brushBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
     toggle({
       label: resourceText(resources, 'ui.area.scene.grid'),
       on: brush.showGrid,
+      disabled: off,
       onChange: (on) => {
         brush.setShowGrid(on);
       },
@@ -569,11 +630,13 @@ function surface(context: AreaContext<SceneAreaState>): UiNode {
       el('div', {
         classes: ['fx-bar'],
         children: children(
-          statusChip({
-            label: resourceText(resources, 'ui.chip.editMode'),
-            tone: 'active',
-            icon: 'dot',
-          }),
+          // Пометки режима здесь нет намеренно: он один на редактор и виден из
+          // любой области (ED-26), поэтому живёт в верхнем баре каркаса. Вторая
+          // пометка в области рано или поздно разошлась бы с первой.
+          //
+          // Кнопки камеры в превью НЕ гаснут: ED-13 прямо разрешает панорамировать
+          // и зумить при работающем прогоне — ввод камеры границы воркера не
+          // пересекает, и прогон от него не меняется.
           // Облёт — режим конвейера камеры (CAM-2, ED-13), а не второй способ
           // считать позу; free-RTS — тот же конвейер без цели слежения (CAM-7).
           button({
@@ -712,14 +775,47 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
     hotkey: 'F1',
     icon: 'layers',
     editableTypes: [{ id: 'scene', descriptionKey: 'ui.editable.scene.description' }],
+    preview: (state) => state.preview,
     createState(setup): SceneAreaState {
       const ids = options.ids ?? DEFAULT_SCENE_IDS;
       const state: SceneAreaState = {
         project: null,
         stage: null,
         draft: null,
+        previewing: false,
         failure: null,
         activeTool: 'pointer',
+        // Прогон заводится вместе с записью и живёт столько же: документы,
+        // кадр и незакрытые взаимодействия — всё это её содержимое (ED-9).
+        preview: createScenePreview({
+          // Значение открытого документа и есть текущее состояние сцены —
+          // вместе с несохранёнными правками (ED-9, ED-26).
+          // Приведение без проверки здесь намеренно: разбирать конфиг умеет
+          // ядро, и оно же отвергает негодный на загрузке (SER-7). Вторая
+          // проверка в редакторе была бы второй реализацией правила (ED-1), а
+          // причина отказа доедет до автора тем же путём, что у сломанного
+          // документа, — исключением запуска (ED-8).
+          scene: () =>
+            state.project === null
+              ? null
+              : (setup.session.documentValue(state.project.configId) as unknown as SceneDef),
+          kinds: () =>
+            state.project === null ? [] : Object.keys(state.project.visuals.entities),
+          stage: () => state.stage,
+          enter: () => {
+            state.previewing = true;
+            cancelInteraction(state);
+          },
+          leave: () => {
+            state.previewing = false;
+            // Переподача, а не обычная подача: документы за прогон не менялись,
+            // и по совпадению значений не доехало бы ничего — включая пол,
+            // выбитый тиками прогона (REND-14).
+            if (state.draft !== null) state.stage?.submit(state.draft, true);
+            state.refresh();
+          },
+          ...(options.previewBackend === undefined ? {} : { backend: options.previewBackend }),
+        }),
         expanded: new Set([ids.config, SCENE_NODES.placements, SCENE_NODES.assets]),
         focusId: ids.config,
         refresh: () => undefined,
@@ -791,10 +887,18 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
       // побочных действий. Кисть — слагаемое, а не второй вызов; её набор
       // входит в сумму, только пока она в руках (ED-9: в чужом режиме кисть
       // ничего не показывает).
-      state.stage?.setOverlays([
-        ...state.tool.overlays(),
-        ...(state.activeTool === 'pointer' ? [] : state.brush.overlays()),
-      ]);
+      //
+      // В превью набор пуст: наложения — служебная разметка авторинга поверх
+      // документов (подсветка выделенного, клетки под кистью), а в кадре прогона
+      // документных инстансов нет вовсе (REND-11).
+      state.stage?.setOverlays(
+        authoringOff(context)
+          ? []
+          : [
+              ...state.tool.overlays(),
+              ...(state.activeTool === 'pointer' ? [] : state.brush.overlays()),
+            ],
+      );
       return {
         navigator: navigator(context),
         surface: surface(context),
