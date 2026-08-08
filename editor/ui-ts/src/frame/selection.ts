@@ -18,12 +18,15 @@
 /** Ссылка на выделенное. Смысл строки принадлежит области, выдавшей её. */
 export type SelectionRef = string;
 
-/** Выделение одной области — то, что видит вклад. */
+/**
+ * Выделение одной области — то, что видит вклад. Снятие выделения отдельным
+ * методом здесь не значится: «снять» — это `set([])`, то же действие с тем же
+ * оповещением, и второе имя ему только позволило бы двум местам разойтись.
+ */
 export interface AreaSelection {
   current(): readonly SelectionRef[];
   has(ref: SelectionRef): boolean;
   set(refs: readonly SelectionRef[]): void;
-  clear(): void;
 }
 
 /** Модель выделения сессии — то, что видит каркас и сквозные потребители. */
@@ -59,9 +62,6 @@ export function createSelectionModel(): SelectionModel {
       has: (ref) => model.get(areaId).includes(ref),
       set: (refs) => {
         model.set(areaId, refs);
-      },
-      clear: () => {
-        model.set(areaId, []);
       },
     }),
     subscribe(listener) {

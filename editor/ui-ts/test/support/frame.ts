@@ -10,6 +10,7 @@ import {
   createEditorSession,
   createOperationRegistry,
   registerBuiltinOperations,
+  type ContributionRegistry,
   type EditorSession,
   type StringResources,
 } from '@game-mvp/editor-core';
@@ -24,6 +25,8 @@ export interface FrameFixture {
   readonly frame: WorkspaceFrame;
   readonly session: EditorSession;
   readonly resources: StringResources;
+  /** Сам реестр: каркас видит его только на чтение, а сборка — целиком. */
+  readonly areas: ContributionRegistry<WorkspaceArea>;
 }
 
 /** Каркас с набором областей. По умолчанию — те же два вклада, что и в приложении. */
@@ -41,6 +44,7 @@ export function buildFrame(
     frame: createWorkspaceFrame({ areas: contributions.areas, resources, session }),
     session,
     resources,
+    areas: contributions.areas,
   };
 }
 

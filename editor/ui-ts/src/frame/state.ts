@@ -9,29 +9,36 @@
  * здесь одно и здесь же: наружу запись выходит своим типом, внутри лежит
  * пустым `AreaState`, и это ровно та граница, на которой каркас перестаёт
  * понимать содержимое.
+ *
+ * Запись принадлежит вкладу, а не его идентификатору. Разница видна ровно в
+ * одном случае, и случай этот реальный: реестр вкладов умеет подмену по id
+ * (`ContributionRegistry.override` — так проект перекрывает вклад редактора).
+ * Подменивший вклад — другая область с другим состоянием, и отдать ему чужую
+ * запись значило бы соврать в том самом единственном приведении типа: поля,
+ * которых он ждёт, пришли бы от предшественника. Поэтому смена вклада заводит
+ * новую запись, а «та же область» по-прежнему получает свою (ED-23).
  */
 import type { AreaSetup, AreaState, WorkspaceArea } from './area.js';
 
 export interface AreaStateStore {
   /** Запись области: заводится при первом обращении, дальше отдаётся та же. */
   of<S extends AreaState>(area: WorkspaceArea<S>, setup: AreaSetup): S;
-  /** Запись по идентификатору — для тех, у кого вклада на руках нет. */
-  get(areaId: string): AreaState | undefined;
-  /** Области, у которых запись уже заведена, — то есть посещённые. */
-  ids(): readonly string[];
+}
+
+interface AreaRecord {
+  readonly area: WorkspaceArea;
+  readonly state: AreaState;
 }
 
 export function createAreaStateStore(): AreaStateStore {
-  const records = new Map<string, AreaState>();
+  const records = new Map<string, AreaRecord>();
   return {
     of<S extends AreaState>(area: WorkspaceArea<S>, setup: AreaSetup): S {
       const existing = records.get(area.id);
-      if (existing !== undefined) return existing as S;
+      if (existing !== undefined && existing.area === area) return existing.state as S;
       const created = area.createState(setup);
-      records.set(area.id, created);
+      records.set(area.id, { area, state: created });
       return created;
     },
-    get: (areaId) => records.get(areaId),
-    ids: () => [...records.keys()],
   };
 }

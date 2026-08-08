@@ -69,3 +69,21 @@ export function matchesBinding(stroke: KeyStroke, binding: string): boolean {
   const declared = canonical(binding.split('+'));
   return declared !== '' && declared === bindingOf(stroke);
 }
+
+/** Одно ли это сочетание: сравнение объявленного с объявленным, а не с нажатием. */
+export function sameBinding(left: string, right: string): boolean {
+  const declared = canonical(left.split('+'));
+  return declared !== '' && declared === canonical(right.split('+'));
+}
+
+/**
+ * Сочетания, которые каркас разбирает раньше вкладов и потому не отдаёт им:
+ * отмена, повтор и возврат фокуса одинаковы во всех областях (ED-18, ED-23).
+ * Список объявлен здесь, рядом с самими сочетаниями, чтобы у каркаса не
+ * заводилось второго перечня того, что он забирает.
+ */
+export const FRAME_BINDINGS: readonly string[] = Object.freeze([
+  UNDO_BINDING,
+  REDO_BINDING,
+  DISMISS_KEY,
+]);

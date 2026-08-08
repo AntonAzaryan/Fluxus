@@ -15,11 +15,27 @@
  */
 import { describe, expect, it } from 'vitest';
 import { findAll, type UiNode } from '../src/dom/node.js';
+import type { WorkspaceArea } from '../src/frame/area.js';
 import { RAIL_ITEM_CLASS } from '../src/frame/rail.js';
 import { ZONE_ORDER } from '../src/frame/skeleton.js';
 import { sceneArea, type SceneAreaState } from '../src/areas/scene.js';
 import { systemsArea, type SystemsAreaState } from '../src/areas/systems.js';
 import { attr, buildFrame, buttonByKey, keydown, press, withAttr } from './support/frame.js';
+
+/** Область без содержимого: нужна там, где проверяется каркас, а не вклад. */
+const blankArea: WorkspaceArea<object> = {
+  id: 'area.blank',
+  descriptionKey: 'blank.description',
+  labelKey: 'blank.label',
+  icon: 'search',
+  editableTypes: [{ id: 'blank', descriptionKey: 'blank.editable' }],
+  createState: () => ({}),
+  render: () => ({
+    navigator: { tag: 'div' },
+    surface: { tag: 'div' },
+    inspector: { tag: 'div' },
+  }),
+};
 
 function zoneNames(view: UiNode): string[] {
   return withAttr(view, 'data-zone').map((node) => attr(node, 'data-zone') ?? '');
@@ -152,6 +168,48 @@ describe('ED-23: состояние области переживает пере
     frame.view();
     frame.view();
     expect(frame.stateOf(sceneArea.id)).toBe(first);
+  });
+
+  it('запись заводится лениво: непосещённая область своей не имеет', () => {
+    // Область может заводить в записи что угодно дорогое — открывать документ,
+    // читать дерево контента. Каркас, заводящий записи всем при сборке, платил
+    // бы за области, в которые автор не заходил.
+    let created = 0;
+    const counted: WorkspaceArea<{ readonly mark: number }> = {
+      ...blankArea,
+      id: 'area.unvisited',
+      hotkey: 'F7',
+      createState: () => {
+        created++;
+        return { mark: created };
+      },
+    };
+    const { frame } = buildFrame([sceneArea, counted]);
+    frame.view();
+    expect(created).toBe(0);
+    frame.activate(counted.id);
+    frame.view();
+    frame.view();
+    expect(created).toBe(1);
+  });
+
+  it('подмена вклада по id заводит новую запись, а не отдаёт чужую', () => {
+    // Реестр умеет подмену (`override`) — так проект перекрывает вклад
+    // редактора. Подменивший — другая область: её `render` ждёт своих полей, и
+    // запись предшественника означала бы ложь в единственном приведении типа,
+    // которым каркас отдаёт запись владельцу.
+    const fixture = buildFrame();
+    const before = fixture.frame.stateOf(sceneArea.id);
+    const replacement: WorkspaceArea<{ readonly own: true }> = {
+      ...blankArea,
+      id: sceneArea.id,
+      hotkey: sceneArea.hotkey,
+      createState: () => ({ own: true }),
+    };
+    fixture.areas.override(replacement);
+    const after = fixture.frame.stateOf(sceneArea.id);
+    expect(after).not.toBe(before);
+    expect(after).toEqual({ own: true });
   });
 });
 

@@ -41,7 +41,6 @@ export {
   rovingItem,
   rovingTarget,
 } from './dom/roving.js';
-export { jsonStrings } from './i18n/corpus.js';
 
 export {
   collectTexts,

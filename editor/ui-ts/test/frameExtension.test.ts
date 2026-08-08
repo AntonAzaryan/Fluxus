@@ -132,4 +132,22 @@ describe('ED-25: реестр не пускает двоих на одну го�
   it('вторая область с той же клавишей не регистрируется', () => {
     expect(() => buildFrame([sceneArea, { ...outsiderArea, id: 'area.twin', hotkey: 'F1' }])).toThrow();
   });
+
+  /**
+   * Сочетания каркаса вкладом не объявлены, и реестр про них не знает: он
+   * сравнивает вклады между собой. Каркас разбирает своё раньше вкладов
+   * (ED-18, ED-23: история сквозная и область не должна уметь её отобрать), и
+   * область, объявившая отмену, не получила бы ни одного нажатия. Молчание
+   * здесь хуже отказа: неработающая клавиша выглядит как сломанная клавиатура,
+   * а не как непринятый вклад.
+   */
+  it.each(['Ctrl+Z', 'Shift+Ctrl+Z', 'Escape'])('область не забирает сочетание каркаса: %s', (hotkey) => {
+    expect(() => buildFrame([sceneArea, { ...outsiderArea, hotkey }])).toThrow(/каркас/);
+  });
+
+  it('а не занятое каркасом сочетание принимается как есть', () => {
+    const { frame } = buildFrame([sceneArea, { ...outsiderArea, hotkey: 'Ctrl+Shift+O' }]);
+    expect(frame.handleKey({ key: 'o', ctrl: true, shift: true, alt: false })).toBe(true);
+    expect(frame.activeAreaId()).toBe(outsiderArea.id);
+  });
 });

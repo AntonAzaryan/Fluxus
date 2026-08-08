@@ -31,9 +31,11 @@ import { APP_CLASS } from '../tokens/css.js';
 import type { AreaSetup, AreaState, WorkspaceArea } from './area.js';
 import {
   DISMISS_KEY,
+  FRAME_BINDINGS,
   REDO_BINDING,
   UNDO_BINDING,
   matchesBinding,
+  sameBinding,
   type KeyStroke,
 } from './keys.js';
 import { RAIL_ROVING_ID, areaRail } from './rail.js';
@@ -97,6 +99,22 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
   let activeId = options.initialAreaId ?? first.id;
   if (!areas.has(activeId)) {
     throw new Error(`editor-ui: рабочая область "${activeId}" не зарегистрирована`);
+  }
+
+  // Реестр следит, чтобы на одну клавишу не претендовали две области, но своих
+  // сочетаний каркаса он не знает: они не вклад. Область, объявившая отмену
+  // или возврат фокуса, не получила бы ни одного нажатия — каркас разбирает их
+  // раньше (ED-18, ED-23). Отказ вместо молчания: неработающая горячая клавиша
+  // вклада обнаруживалась бы не отказом, а ненажимающейся клавишей.
+  for (const area of registered) {
+    const hotkey = area.hotkey;
+    if (hotkey === undefined) continue;
+    const taken = FRAME_BINDINGS.find((binding) => sameBinding(binding, hotkey));
+    if (taken !== undefined) {
+      throw new Error(
+        `editor-ui: сочетание "${hotkey}" занято каркасом, область "${area.id}" его не получит`,
+      );
+    }
   }
   let query = '';
   let focusRequest: string | undefined;
