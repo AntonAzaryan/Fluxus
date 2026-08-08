@@ -27,6 +27,20 @@ import {
   withValidation,
   type ValidationSeverity,
 } from '../src/widgets/validation.js';
+import {
+  ContributionRegistry,
+  CURVATURE_RULE,
+  MANIFEST_RULE,
+  SCENE_RULE,
+  SYSTEM_RULE,
+  createEditorSession,
+  createOperationRegistry,
+  createValidator,
+  registerBuiltinOperations,
+  registerValidationRules,
+  type ValidationRule,
+} from '@game-mvp/editor-core';
+import { SCENE_KINDS, sceneValidationRules } from '../src/areas/sceneProject.js';
 
 const page = controlCasePage(
   uiResources('ru', SAMPLE_DESCRIPTIONS),
@@ -170,5 +184,58 @@ describe('ED-22: инвариант на контрольном случае', (
     expect(broken.length).toBeGreaterThan(0);
     for (const row of selected) expect(markOf(row)).toBeUndefined();
     for (const row of broken) expect(row.attrs?.['aria-selected']).toBe('false');
+  });
+});
+
+/**
+ * ED-8: правила движка — часть набора, который приносит сборка редактора.
+ *
+ * Проверяется это здесь потому, что нарушение уже случалось молча: до прохода
+ * `camera-effects-authoring` `sceneValidationRules()` возвращал одни
+ * междокументные правила, `engineValidationRules()` звали только тесты
+ * `editor/core-ts`, и `assets.manifest` — правило, которым ED-14 требует
+ * подсвечивать секцию эффектов в реальном времени, — в собранном редакторе не
+ * работало вовсе. Отсутствие правила ни один прогон интерфейса не красит: он
+ * просто не показывает находок.
+ */
+describe('ED-8, ED-25: набор правил проекта', () => {
+  const rules = sceneValidationRules();
+  const byId = new Map(rules.map((rule) => [rule.id, rule]));
+
+  it('правила движка в наборе есть, и каждое стоит на виде документа ЭТОГО проекта', () => {
+    expect(byId.get(SCENE_RULE)?.appliesTo).toEqual([SCENE_KINDS.config]);
+    expect(byId.get(MANIFEST_RULE)?.appliesTo).toEqual([SCENE_KINDS.visuals]);
+    // Карта кривизны у проекта называется `terrain-curvature`, а не умолчанием
+    // правила: с умолчанием оно не встало бы ни на один открытый документ.
+    expect(byId.get(CURVATURE_RULE)?.appliesTo).toEqual([SCENE_KINDS.curvature]);
+    expect(byId.get(SYSTEM_RULE)?.appliesTo).toEqual(['system']);
+  });
+
+  it('правило манифеста получило описание типов эффектов: секция проверяется по нему (ED-14)', () => {
+    const registry = new ContributionRegistry<ValidationRule>({ kind: 'rule' });
+    registerValidationRules(registry, rules);
+    const session = createEditorSession({
+      operations: registerBuiltinOperations(createOperationRegistry()),
+    });
+    session.openDocument({
+      id: 'visuals/manifest.json',
+      kind: SCENE_KINDS.visuals,
+      value: { entities: {}, cameraEffects: { events: { Boom: { effect: 'wobble-3000' } } } },
+    });
+    const report = createValidator({ rules: registry }).run(session);
+    const issue = report.issues.find((found) => found.ruleId === MANIFEST_RULE);
+    // Без описания правило о типах молчит — находка и есть доказательство, что
+    // описание доехало до `validateManifest` (CAM-9).
+    expect(issue?.severity).toBe('warning');
+    expect(issue?.path).toEqual(['cameraEffects', 'events', 'Boom', 'effect']);
+  });
+
+  it('каждое правило в наборе ровно одно: двойная регистрация дублировала бы находки', () => {
+    expect(byId.size).toBe(rules.length);
+    // Реестр вкладов на повторный id отвечает отказом (ED-25) — набор, поданный
+    // ему дважды, уронил бы сборку, а не удвоил находки молча.
+    const registry = new ContributionRegistry<ValidationRule>({ kind: 'rule' });
+    registerValidationRules(registry, rules);
+    expect(() => registerValidationRules(registry, rules)).toThrow();
   });
 });
