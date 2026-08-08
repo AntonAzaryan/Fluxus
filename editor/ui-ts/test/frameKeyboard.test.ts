@@ -27,6 +27,7 @@ import { SURFACE_FOCUS_ID } from '../src/frame/skeleton.js';
 import { CAMERA_KEYS } from '../src/areas/sceneCamera.js';
 import { SCENE_AREA_KEYS, SCENE_NODES, sceneArea } from '../src/areas/scene.js';
 import { systemsArea } from '../src/areas/systems.js';
+import { uiResources } from '../src/i18n/uiBundles.js';
 import {
   attr,
   buttonByKey,
@@ -212,6 +213,14 @@ describe('ED-32: клавиатура принадлежит активной о
     // быть каждая клавиша, которая работает.
     expect(codes).toContain(CAMERA_KEYS.flyToggle);
     expect(codes).toContain(CAMERA_KEYS.panLeft);
+    // Имя действия — ресурс (ED-27): раскладка, которую нечем показать, не
+    // может быть единственным источником для подсказок (ED-31).
+    for (const locale of ['ru', 'en']) {
+      const resources = uiResources(locale);
+      for (const key of SCENE_AREA_KEYS) {
+        expect(resources.lookup(key.labelKey), `${locale}: ${key.labelKey}`).toBeDefined();
+      }
+    }
   });
 
   it('кнопка бара не отбирает стрелки: панорама работает сразу после нажатия', async () => {
