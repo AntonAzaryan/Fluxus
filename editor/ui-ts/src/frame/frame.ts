@@ -329,6 +329,16 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
   const activate = (areaId: string): void => {
     const area = requireArea(areaId);
     if (area.id === activeId) return;
+    // Уходящая область отпускает всё зажатое (ED-32): её клавиши работают,
+    // пока она активна, а отпускания зажатой стрелки она уже не получит —
+    // оно достанется той области, что стала активной. Оставленная зажатой,
+    // стрелка панорамировала бы её камеру из-под чужой области вечно; это тот
+    // же случай, что потеря фокуса окном, и решается он тем же `blur`.
+    const leaving = requireArea(activeId);
+    const held = states.peek(leaving);
+    if (leaving.handleKey !== undefined && held !== undefined) {
+      leaving.handleKey({ state: held, code: '', phase: 'blur', repeat: false, mode });
+    }
     activeId = area.id;
     notify();
   };

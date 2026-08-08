@@ -293,6 +293,16 @@ describe('ED-32: клавиатура принадлежит активной о
     expect(state.held.size).toBe(0);
   });
 
+  it('уход из области отпускает зажатое: чужая область её клавиш не держит', async () => {
+    const { frame, state } = await buildLoadedFrame();
+    frame.handleAreaKey(down(CAMERA_KEYS.panRight));
+    expect(state.held.size).toBe(1);
+    // Отпускание придёт уже в другую область, и оставленная зажатой стрелка
+    // панорамировала бы камеру сцены из-под неё вечно (ED-32).
+    frame.activate(systemsArea.id);
+    expect(state.held.size).toBe(0);
+  });
+
   it('клавиша не из раскладки области остаётся среде', async () => {
     const { frame } = await buildLoadedFrame();
     expect(frame.handleAreaKey(down('KeyZ'))).toBe(false);
