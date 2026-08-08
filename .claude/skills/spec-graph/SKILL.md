@@ -21,7 +21,7 @@ npm run spec-graph -- refs NET-12         # кого цитирует / кто �
 npm run spec-graph -- impact ECS-3        # транзитивно: кто устареет от правки
 npm run spec-graph -- deps netcode        # рёбра capability-уровня
 npm run spec-graph -- graph --mermaid     # весь граф с группировкой по слоям
-npm run spec-graph -- check               # линт графа (exit 1 при находках)
+npm run spec-graph -- check               # линт графа (exit 1 при находках; входит в npm run check)
 npm run spec-graph -- check --metrics     # диагностика: fan-in, instability, сироты, рёбра «вверх»
 ```
 

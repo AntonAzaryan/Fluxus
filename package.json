@@ -19,7 +19,7 @@
     "coverage": "vitest run --config vitest.coverage.config.ts --coverage",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
-    "check": "npm run typecheck && npm run lint && npm test",
+    "check": "npm run typecheck && npm run lint && npm run spec-graph -- check && npm test",
     "golden": "npm run record -w @game-mvp/integration && npm run golden -w @game-mvp/core",
     "spec-graph": "node scripts/spec-graph.mjs"
   },
