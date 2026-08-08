@@ -25,6 +25,7 @@ import {
   edgePanAxes,
   resetCameraInput,
   terrainGroundApi,
+  type CameraBounds,
   type CameraConfig,
   type CameraInput,
   type CameraPose,
@@ -78,8 +79,22 @@ export interface SceneCamera {
   /** Точка наблюдения — её показывает бар области. */
   readonly focusX: number;
   readonly focusY: number;
+  /**
+   * Границы арены документа; `null` — кадра без террейна (ED-20) арена не
+   * касается. Отдаются тем же источником, что инжектирован в конвейер (CAM-7):
+   * второго вычисления размеров арены в редакторе не заводится.
+   */
+  readonly arena: CameraBounds | null;
   /** Правка документа террейна под камерой: переподача источников (CAM-7). */
   setGrid(grid: TerrainGrid): void;
+  /**
+   * Кадрирование по заданным границам (CAM-8) — прокси к входу конвейера.
+   * Считает позу конвейер: ED-13 запрещает второй способ её считать, и потому
+   * здесь нет ни одной строки арифметики. ЧТО кадрировать и КОГДА — политика
+   * потребителя, поэтому прямоугольник и пропорции приходят аргументами:
+   * свои размеры знает кадр, а не камера.
+   */
+  frameBounds(rect: CameraBounds, aspect: number, immediate?: boolean): void;
   /** Оси панорамы по зажатым клавишам и указателю (CAM-3). */
   sample(keys: ReadonlySet<string>, pointer: PointerSample | null): void;
   /** Drag средней кнопкой (CAM-3) и осмотр в облёте — в пикселях за кадр. */
@@ -126,6 +141,13 @@ export function createSceneCamera(options: SceneCameraOptions): SceneCamera {
     },
     get focusY(): number {
       return rig.focusY;
+    },
+    get arena(): CameraBounds | null {
+      return ground?.bounds ?? null;
+    },
+
+    frameBounds(rect, aspect, immediate = false) {
+      rig.frameBounds({ rect, aspect, immediate });
     },
 
     setGrid(grid) {

@@ -161,3 +161,78 @@ describe('ED-13, CAM-7: конвейер без источников — кад�
     expect(rig.frame(1 / 60).posZ).toBeGreaterThan(flat + HEIGHT_STEP);
   });
 });
+
+/**
+ * Стартовый и обзорный кадр (ED-15) через вход кадрирования конвейера (CAM-8).
+ * Ни одной ожидаемой величины редактор здесь не считает: проверяется, что
+ * кадрирование запрошено по границам арены, отданным тем же источником, что
+ * инжектирован в конвейер, и что после него камера работает как обычно.
+ */
+const OVERVIEW = 20;
+const overviewGrid = () =>
+  createTerrainGrid({
+    width: OVERVIEW,
+    height: OVERVIEW,
+    tileSize: 65536,
+    levels: Array.from({ length: OVERVIEW }, () => '0'.repeat(OVERVIEW)),
+    flags: Array.from({ length: OVERVIEW }, () => '.'.repeat(OVERVIEW)),
+  });
+
+/** Горизонтальный вынос камеры от точки наблюдения — он монотонен по дистанции. */
+function reach(rig: ReturnType<typeof createSceneCamera>): number {
+  const pose = rig.frame(1 / 60);
+  return Math.hypot(pose.posX - rig.focusX, pose.posY - rig.focusY);
+}
+
+describe('ED-15, CAM-8: стартовый и обзорный кадр — кадрированием, а не своей позой', () => {
+  it('границы арены отдаёт тот же источник, что инжектирован в конвейер', () => {
+    const rig = createSceneCamera({ grid: overviewGrid(), heightStep: HEIGHT_STEP });
+    expect(rig.arena).toEqual({ minX: 0, minY: 0, maxX: OVERVIEW, maxY: OVERVIEW });
+    // Кадра без террейна арена не касается вовсе (ED-20).
+    expect(createSceneCamera({ heightStep: HEIGHT_STEP }).arena).toBeNull();
+  });
+
+  it('первый же кадр после мгновенного кадрирования — обзорный', () => {
+    const rig = createSceneCamera({ grid: overviewGrid(), heightStep: HEIGHT_STEP });
+    const arena = rig.arena;
+    expect(arena).not.toBeNull();
+    const close = reach(rig);
+    rig.frameBounds(arena ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 }, 16 / 9, true);
+    const framed = reach(rig);
+    // Обзор дальше стартовой игровой дистанции — арена в кадре целиком.
+    expect(framed).toBeGreaterThan(close);
+    expect(rig.focusX).toBeCloseTo(OVERVIEW / 2, 6);
+    expect(rig.focusY).toBeCloseTo(OVERVIEW / 2, 6);
+    // Перелёта автор не видит: следующие кадры дистанцию не двигают.
+    for (let step = 0; step < 60; step++) rig.frame(1 / 60);
+    expect(reach(rig)).toBeCloseTo(framed, 6);
+  });
+
+  it('обзорное действие после приближения возвращает обзор и не меняет режима', () => {
+    const rig = createSceneCamera({ grid: overviewGrid(), heightStep: HEIGHT_STEP });
+    const arena = rig.arena ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    rig.frameBounds(arena, 16 / 9, true);
+    const overview = reach(rig);
+
+    rig.zoom(-6);
+    hold(rig, [CAMERA_KEYS.panRight], 120);
+    expect(reach(rig)).toBeLessThan(overview);
+    expect(rig.focusX).toBeGreaterThan(OVERVIEW / 2);
+
+    rig.frameBounds(arena, 16 / 9);
+    hold(rig, [], 240);
+    expect(reach(rig)).toBeCloseTo(overview, 3);
+    expect(rig.focusX).toBeCloseTo(OVERVIEW / 2, 6);
+    expect(rig.flying).toBe(false);
+  });
+
+  it('кадрирование в облёте режима не меняет (CAM-8)', () => {
+    const rig = createSceneCamera({ grid: overviewGrid(), heightStep: HEIGHT_STEP });
+    rig.toggleFly();
+    rig.frame(1 / 60);
+    expect(rig.flying).toBe(true);
+    rig.frameBounds(rig.arena ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 }, 16 / 9);
+    rig.frame(1 / 60);
+    expect(rig.flying).toBe(true);
+  });
+});
