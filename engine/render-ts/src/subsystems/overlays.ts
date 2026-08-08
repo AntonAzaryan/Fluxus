@@ -69,11 +69,19 @@ export interface OverlayHandle {
   readonly active?: boolean;
 }
 
-/** Подсветка сущности presentation-состояния в её видимой позе. */
+/** Подсветка инстанса в его видимой позе. */
 export interface OverlayHighlight {
   readonly kind: 'highlight';
   readonly key: string;
   readonly entity: EntityId;
+  /**
+   * Подсвечивается decoration-инстанс (REND-18), а не сущность
+   * presentation-состояния. Признак, а не отдельный вид наложения: подсветка у
+   * сим-объекта и у декорации одна и та же — этого требует единообразие
+   * выделения (`editor` ED-17), — а различаются только наборы, в которых
+   * ищется инстанс.
+   */
+  readonly decoration?: boolean;
 }
 
 /** Ручки gizmo в заданной позе. */
@@ -353,6 +361,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
     for (const node of this.nodes.values()) {
       for (const handle of node.handles) {
         this.handleProxy.entity = 0;
+        this.handleProxy.decoration = false;
         this.handleProxy.handle = handle.id;
         this.handleProxy.node = handle.mesh;
         this.handleProxy.minX = handle.minX;
@@ -424,7 +433,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
     const material = this.highlightMaterial;
     if (edges === null || material === null) return;
     const outline = new THREE.LineSegments(edges, material);
-    outline.name = `highlight:${item.entity}`;
+    outline.name = `highlight:${item.decoration === true ? 'decoration:' : ''}${item.entity}`;
     outline.matrixAutoUpdate = false;
     outline.renderOrder = 1;
     node.object.add(outline);
@@ -440,7 +449,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
     const outline = node.object.children[0];
     if (outline === undefined) return;
     const source = this.options.instances;
-    if (source === undefined || !source.proxyOf(item.entity, this.proxy)) {
+    if (source === undefined || !source.proxyOf(item.entity, this.proxy, item.decoration === true)) {
       outline.visible = false;
       return;
     }
@@ -684,7 +693,9 @@ function pushLiftedPoint(
 /** Наложение не изменилось — сценовые объекты пересобирать нечего. */
 function sameItem(a: OverlayItem, b: OverlayItem): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === 'highlight' && b.kind === 'highlight') return a.entity === b.entity;
+  if (a.kind === 'highlight' && b.kind === 'highlight') {
+    return a.entity === b.entity && (a.decoration ?? false) === (b.decoration ?? false);
+  }
   if (a.kind === 'gizmo' && b.kind === 'gizmo') {
     if (a.x !== b.x || a.y !== b.y || a.z !== b.z || (a.yaw ?? 0) !== (b.yaw ?? 0)) return false;
     if ((a.scale ?? 1) !== (b.scale ?? 1)) return false;

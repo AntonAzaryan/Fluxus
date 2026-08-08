@@ -21,6 +21,11 @@ export type { PresentationProducer } from './stage.js';
 export { DocumentSource } from './documentSource.js';
 export type { DocumentInstance, DocumentSourceOptions } from './documentSource.js';
 
+// Набор decoration-инстансов (REND-18) — третий набор рядом с продюсерами:
+// сосуществует с любым из них и сменой режима не гасится.
+export { DecorationSet } from './decorations.js';
+export type { DecorationInstance } from './decorations.js';
+
 // Половины хоста по границе потоков (client-shell SHELL-2): Extractor —
 // воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
 export { Extractor, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';

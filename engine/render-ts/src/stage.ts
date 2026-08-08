@@ -14,6 +14,10 @@
  * «удалить всё» API, — и только затем публикуется набор нового. Отсюда же
  * запрет удвоения при входе в превью (`editor` ED-9): набор противоположного
  * продюсера в этот момент уже пуст.
+ *
+ * Набор decoration-инстансов (REND-18) идёт мимо этого механизма и своим входом
+ * (`publishDecorations`): он не продюсер, взаимоисключающесть на него не
+ * распространяется, и смена режима его гасить MUST NOT.
  */
 import type { EntityId } from '@game-mvp/core';
 import type { EntityView, RenderContext, RenderSubsystem, TickView } from './types.js';
@@ -104,6 +108,20 @@ export class PresentationStage {
     if (this.producer !== producer) return;
     this.flush();
     this.producer = null;
+  }
+
+  /**
+   * Полный набор decoration-инстансов подсистемам (REND-18). Продюсера не
+   * меняет и набор уходящего не гасит: декорации СОСУЩЕСТВУЮТ с любым
+   * продюсером, и вход в превью (`editor` ED-9) их в кадре оставляет — сцена,
+   * которую автор украсил, украшена и в прогоне. Удвоить объект при этом
+   * нечем: в снапшоте decoration не появляется никогда (PRES-4).
+   *
+   * Подсистема, которой инстансы не принадлежат, метода не имеет и набора не
+   * получает — терять ей нечего, а знать о декорациях незачем.
+   */
+  publishDecorations(entities: ReadonlyMap<EntityId, EntityView>): void {
+    for (const subsystem of this.subsystems) subsystem.syncDecorations?.(entities);
   }
 
   /** Покадровое обновление подсистем в порядке регистрации (REND-2, REND-8). */
