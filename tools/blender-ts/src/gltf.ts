@@ -144,7 +144,7 @@ export function parseGltfJson(text: string): GltfDocument {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new GltfParseError('glTF: документ — объект JSON');
   }
-  return { json: parsed as GltfJson, binaryChunk: null };
+  return { json: parsed, binaryChunk: null };
 }
 
 /**
