@@ -12,7 +12,7 @@
 - DET-3 перестаёт быть половиной правила: он остаётся владельцем нормы упорядочивания и получает явный запрет вторичного ключа сортировки со ссылкой на DET-9.
 - SYS-2 перестаёт дублировать DET-3 и становится содержательным утверждением со стороны контента: `order` — единственное, чем автор сцены задаёт место системы в тике.
 - SYS-4 перестаёт прятать норму в комментарии примера: уникальность `name` и `order` записывается текстом требования, комментарии в блоке кода объявляются пояснением.
-- Значения `order` нативных систем перестают быть параметром конструктора: **BREAKING** для сборок, передававших `options.order` в `InputSystem`, `PhysicsSystem`, `ArenaSystem`, `TimeScaleSystem`, `TweenSystem`, `VisibilitySystem` (в репозитории таких вызовов нет).
+- Значения `order` нативных систем перестают быть параметром конструктора: **BREAKING** для сборок, передававших `options.order` в `InputSystem`, `PhysicsSystem`, `ArenaSystem`, `TimeScaleSystem`, `TweenSystem`, `VisibilitySystem`, `LocomotionSystem` (в репозитории таких вызовов нет). `LocomotionSystem` заодно уходит с исторического 10 на якорь 0: 10 — самое частое значение `order` в контенте, и якорь там был бы ловушкой.
 
 Требования нативных систем (`physics` PHYS-8, `arena` ARENA-3/ARENA-5, `time-system` TIME-7/TWEEN-6, `tick-loop` TICK-4, `fog-of-war` FOW-6) не трогаются намеренно: норма порядка держится в одном месте, иначе change воспроизведёт ровно ту болезнь, которую лечит.
 
@@ -30,7 +30,8 @@
 ## Impact
 
 - `engine/core-ts/src/systems/registry.ts` — проверка занятого `order` уже есть, меняется только текст ошибки и ссылка на требование; проверка становится нормируемой, а не инициативой реализации.
-- `engine/core-ts/src/systems/{inputSystem,time,tween,physics,arena,visibility}.ts` — `DEFAULT_ORDER` становится константой, нормированной DET-9; поле `order` уходит из options-объектов.
+- `engine/core-ts/src/systems/{inputSystem,time,locomotion,tween,physics,arena,visibility}.ts` — `DEFAULT_ORDER` становится константой, нормированной DET-9; поле `order` уходит из options-объектов.
+- `engine/schemas/scenario.schema.json` — поля-включателя `locomotion` в схеме не было вовсе, хотя `ScenarioDef` его поддерживает: сценарий с локомоушеном не проходил валидацию схемой. Поле добавляется в генератор `dsl/schemas.ts` (уже без `order`) и схема перегенерируется; вслед за ним в бандлы редактора приходят описания его полей (ED-28).
 - `engine/core-ts/src/sim/scene.ts` (загрузчик, SER-7 регистрирует `TimeScaleSystem`, `TweenSystem`, `ArenaSystem`) — передавать `order` больше нечем.
 - Тесты: регресс на конфликт `order` (сообщение называет обе системы) и на соответствие таблице DET-9.
 - `content/scenes/duel.scene.json` — JSON-система `FireballImpact` стоит на `order: 50`, то есть на якоре `TweenSystem`; сцена твинов не включает, поэтому конфликта сегодня нет, но включение `tweens` уронит её на загрузке. Разбирается в design.
