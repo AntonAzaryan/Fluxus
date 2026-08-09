@@ -63,13 +63,20 @@ const BURNING: SystemDef = {
 
 const SCENE: SceneDef = { components: COMPONENTS, prefabs: PREFABS, systems: [BURNING], capacity: 64 };
 
-/** Мир с непустым freeList и тегами — то, что легко потерять при выгрузке. */
+/**
+ * Мир с непустым freeList и тегами — то, что легко потерять при выгрузке.
+ * Освобождения нарочно в невозрастающем порядке (слот 3, затем 0): список
+ * [3, 0] отличим и от перечня живых, и от отсортированного набора (ID-4) —
+ * круг, сохраняющий состав, но не порядок, здесь краснеет.
+ */
 function populated(): ReturnType<typeof createWorld> {
   const world = createWorld(COMPONENTS, PREFABS, 64);
   const first = spawn(world, 'Torch');
   spawn(world, 'Rock');
   const third = spawn(world, 'Torch');
-  destroy(world, first); // слот 0 уходит в freeList, поколение растёт
+  const fourth = spawn(world, 'Rock');
+  destroy(world, fourth); // слот 3 уходит в freeList первым
+  destroy(world, first); // слот 0 ложится поверх — стек [3, 0]
   setField(world, third, 'Health', 'current', F(7));
   addTag(world, third, 'lit');
   return world;
@@ -95,14 +102,16 @@ describe('plain-форма мира (SER-1)', () => {
   });
 
   it('ID-4: круг сохраняет все три части состояния схемы идентификаторов', () => {
-    const original = populated(); // слот 0 освобождён, слоты 1 и 2 живы
+    const original = populated(); // слоты 3 и 0 освобождены в этом порядке, живы 1 и 2
     const plain = toPlain(original);
 
     // Ни одна из трёх частей не выводится из остальных: перечень живых не даёт
-    // ни поколений освободившихся слотов, ни порядка их освобождения.
-    expect(plain.nextIndex).toBe(3);
-    expect(plain.freeList).toEqual([0]);
-    expect(plain.generations).toEqual([1, 0, 0]);
+    // ни поколений освободившихся слотов, ни порядка их освобождения. Порядок
+    // [3, 0] невозрастающий — сортировка или вывод из признака занятости дали
+    // бы [0, 3] и другой слот первому спавну.
+    expect(plain.nextIndex).toBe(4);
+    expect(plain.freeList).toEqual([3, 0]);
+    expect(plain.generations).toEqual([1, 0, 0, 1]);
 
     const restored = toPlain(fromPlain(plain, COMPONENTS, PREFABS));
 

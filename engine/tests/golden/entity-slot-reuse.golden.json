@@ -1,7 +1,7 @@
 {
   "scenario": "entity-slot-reuse",
   "seed": 20260809,
-  "worldInitHash": "f0746f04",
+  "worldInitHash": "74cc5f75",
   "ticks": [
     {
       "tick": 0,
@@ -26,15 +26,15 @@
           1,
           3,
           3,
-          1
+          3
         ],
         "components": {
           "Doomed": {
             "at": [
               0,
               2,
-              3,
-              0
+              4,
+              3
             ]
           },
           "Mark": {
@@ -42,7 +42,7 @@
               1,
               2,
               2,
-              1
+              2
             ]
           }
         },
@@ -75,15 +75,15 @@
           1,
           3,
           3,
-          1
+          3
         ],
         "components": {
           "Doomed": {
             "at": [
               0,
               2,
-              3,
-              0
+              4,
+              3
             ]
           },
           "Mark": {
@@ -91,7 +91,7 @@
               1,
               2,
               2,
-              1
+              2
             ]
           }
         },
@@ -126,15 +126,15 @@
           1,
           0,
           3,
-          1
+          3
         ],
         "components": {
           "Doomed": {
             "at": [
               0,
               2,
-              3,
-              0
+              4,
+              3
             ]
           },
           "Mark": {
@@ -142,7 +142,7 @@
               1,
               2,
               2,
-              1
+              2
             ]
           }
         },
@@ -161,32 +161,32 @@
         "generations": [
           0,
           1,
-          1,
-          0
+          0,
+          1
         ],
         "alive": [
           1,
           0,
-          0,
-          1
+          1,
+          0
         ],
         "freeList": [
           1,
-          2
+          3
         ],
         "maskWords": [
           1,
           0,
-          0,
-          1
+          3,
+          0
         ],
         "components": {
           "Doomed": {
             "at": [
               0,
               2,
-              3,
-              0
+              4,
+              3
             ]
           },
           "Mark": {
@@ -194,7 +194,7 @@
               1,
               2,
               2,
-              1
+              2
             ]
           }
         },
@@ -209,43 +209,45 @@
       "world": {
         "capacity": 8,
         "nextIndex": 4,
-        "aliveCount": 3,
+        "aliveCount": 1,
         "generations": [
           0,
           1,
           1,
-          0
+          1
         ],
         "alive": [
           1,
           0,
-          1,
-          1
+          0,
+          0
         ],
         "freeList": [
-          1
+          1,
+          3,
+          2
         ],
         "maskWords": [
           1,
           0,
-          1,
-          1
+          0,
+          0
         ],
         "components": {
           "Doomed": {
             "at": [
               0,
               2,
-              3,
-              0
+              4,
+              3
             ]
           },
           "Mark": {
             "id": [
               1,
               2,
-              3,
-              1
+              2,
+              2
             ]
           }
         },
@@ -260,35 +262,36 @@
       "world": {
         "capacity": 8,
         "nextIndex": 4,
-        "aliveCount": 3,
+        "aliveCount": 2,
         "generations": [
           0,
           1,
           1,
-          0
+          1
         ],
         "alive": [
           1,
           0,
           1,
-          1
+          0
         ],
         "freeList": [
-          1
+          1,
+          3
         ],
         "maskWords": [
           1,
           0,
           1,
-          1
+          0
         ],
         "components": {
           "Doomed": {
             "at": [
               0,
               2,
-              3,
-              0
+              4,
+              3
             ]
           },
           "Mark": {
@@ -296,58 +299,7 @@
               1,
               2,
               3,
-              1
-            ]
-          }
-        },
-        "tags": []
-      },
-      "rng": [],
-      "events": [],
-      "mode": "Running"
-    },
-    {
-      "tick": 6,
-      "world": {
-        "capacity": 8,
-        "nextIndex": 4,
-        "aliveCount": 3,
-        "generations": [
-          0,
-          1,
-          1,
-          0
-        ],
-        "alive": [
-          1,
-          0,
-          1,
-          1
-        ],
-        "freeList": [
-          1
-        ],
-        "maskWords": [
-          1,
-          0,
-          1,
-          1
-        ],
-        "components": {
-          "Doomed": {
-            "at": [
-              0,
-              2,
-              3,
-              0
-            ]
-          },
-          "Mark": {
-            "id": [
-              1,
-              2,
-              3,
-              1
+              2
             ]
           }
         },

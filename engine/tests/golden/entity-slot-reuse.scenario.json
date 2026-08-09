@@ -1,7 +1,7 @@
 {
   "name": "entity-slot-reuse",
   "seed": 20260809,
-  "ticks": 6,
+  "ticks": 5,
   "scene": {
     "components": [
       { "name": "Mark", "fields": { "id": "i32" } },
@@ -33,7 +33,7 @@
         "do": [
           {
             "if": {
-              "cond": { "==": [{ "tick": [] }, 4] },
+              "cond": { "==": [{ "tick": [] }, 5] },
               "then": [{ "spawnEntity": { "prefab": "Newborn" } }]
             }
           }
@@ -45,7 +45,7 @@
   "initial": [
     { "prefab": "Keeper" },
     { "prefab": "Victim" },
-    { "prefab": "Victim", "overrides": { "Doomed": { "at": 3 } } },
-    { "prefab": "Keeper" }
+    { "prefab": "Victim", "overrides": { "Doomed": { "at": 4 } } },
+    { "prefab": "Victim", "overrides": { "Doomed": { "at": 3 } } }
   ]
 }

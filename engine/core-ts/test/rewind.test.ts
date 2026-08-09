@@ -366,8 +366,8 @@ describe('перемотка (REW-1, REW-2, REW-9, REW-10)', () => {
  * общего `harness`, потому что тому нужен неизменный состав сущностей, а здесь
  * весь смысл — в удалении на одном тике и спавне на другом.
  */
-function slotHarness(interval = 2, capacity = 8) {
-  const lifecycle: System = {
+function slotHarness(interval = 2, capacity = 8, custom?: { lifecycle: System; spawns: number }) {
+  const lifecycle: System = custom?.lifecycle ?? {
     name: 'Lifecycle',
     order: 30,
     run(ctx) {
@@ -383,7 +383,7 @@ function slotHarness(interval = 2, capacity = 8) {
   registry.register(moveSystem);
   registry.register(lifecycle);
   const world = createWorld(SCHEMAS, PREFABS, capacity);
-  for (let i = 0; i < 3; i++) spawn(world, 'mover'); // слоты 0,1,2
+  for (let i = 0; i < (custom?.spawns ?? 3); i++) spawn(world, 'mover'); // слоты 0..N−1
   const sim: Simulation = { systems: registry, worldSeed: WORLD_SEED, math: mathApi };
   const state = initialState(world, WORLD_SEED);
   const history = new RingHistory({ interval, capacity: 16 });
@@ -426,6 +426,33 @@ describe('состояние схемы идентификаторов при о
     // снова занят, а список пуст. Живой список предложил бы его аллокации.
     expect(h.idState()).toMatchObject({ nextIndex: 3, freeList: [] });
     expect(h.slots()).toEqual([0, 1, 2]);
+  });
+
+  it('ID-4: восстановленный список — тот же стек, а не производная от признака занятости', () => {
+    // Смерти в порядке «слот 2, затем слот 0» дают невозрастающий список [2, 0]:
+    // восстановление, выводящее его из перечня живых (или сортирующее), дало бы
+    // [0, 2] — состав тот же, а вершина стека другая, и аллокация после отката
+    // взяла бы другой слот. Ровно этот случай ID-4 объявляет нарушением.
+    const lifecycle: System = {
+      name: 'Lifecycle',
+      order: 30,
+      run(ctx) {
+        if (ctx.tick === 2) ctx.commands.destroy(ctx.query({ all: ['Position'] })[2]!);
+        if (ctx.tick === 3) ctx.commands.destroy(ctx.query({ all: ['Position'] })[0]!);
+      },
+    };
+    const h = slotHarness(2, 8, { lifecycle, spawns: 4 });
+    h.runTo(4);
+    expect(h.idState().freeList).toEqual([2, 0]);
+
+    const wsm = createRewindController(h.sim, h.state, { history: h.history, inputs: h.inputs });
+    wsm.pause();
+    wsm.beginRewind();
+    wsm.seekTo(3); // снапшот тика 2 + реплей тика 3: обе смерти позади
+
+    expect(h.idState().freeList).toEqual([2, 0]); // точный массив, не состав
+    // Вершина восстановленного стека — слот 0 (освобождён последним, ID-6).
+    expect(rawIndexOf(spawn(h.state.world, 'mover'))).toBe(0);
   });
 
   it('ID-4/DET-6: реплей через удаление выдаёт те же {index, generation}', () => {
