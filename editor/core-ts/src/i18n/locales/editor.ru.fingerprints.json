@@ -394,10 +394,6 @@
       "source": "11626ef7",
       "translated": "fe8c5cb5"
     },
-    "schema.scenario.physics.order": {
-      "source": "8c4bfd66",
-      "translated": "816e78d0"
-    },
     "schema.scenario.physics.velocity": {
       "source": "2872c526",
       "translated": "ac8ba95e"
@@ -421,10 +417,6 @@
     "schema.scenario.visibility": {
       "source": "171d4680",
       "translated": "7259a055"
-    },
-    "schema.scenario.visibility.order": {
-      "source": "35d252d5",
-      "translated": "9aadddf3"
     },
     "schema.scene.arena": {
       "source": "28c33ca9",
