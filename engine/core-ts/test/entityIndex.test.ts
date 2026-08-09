@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { setAssertSink } from '../src/debug.js';
+import { describe, expect, it, vi } from 'vitest';
+import { withDiagnostics } from '../src/debug.js';
+import type { DiagnosticRecord, DiagnosticsSink } from '../src/types.js';
 import {
   allocate,
   aliveEntities,
@@ -28,9 +29,6 @@ async function importEntityIndexUnder(nodeEnv: string): Promise<typeof import('.
   }
 }
 
-afterEach(() => {
-  setAssertSink(() => {});
-});
 
 describe('entityIndex', () => {
   it('ID-2/DET-6: последовательные allocate дают предсказуемые индексы; повтор с нуля даёт те же id', () => {
@@ -193,14 +191,14 @@ describe('entityIndex', () => {
     idx.generations[0] = MAX_GENERATION; // симулируем слот, переиспользованный 2^24-1 раз
     const staleId = makeEntityId(0, MAX_GENERATION);
 
-    const sink = vi.fn();
-    setAssertSink(sink);
+    const entries: DiagnosticRecord[] = [];
+    const sink: DiagnosticsSink = { trace: 'off', record: (entry) => entries.push(entry) };
 
     // free() не бросает: диагностика уходит в sink, а generation молча заворачивается к 0
     // через `% GENERATION_LIMIT` — то же самое значение, что было бы и в release-сборке.
-    expect(() => free(idx, staleId)).not.toThrow();
-    expect(sink).toHaveBeenCalledTimes(1);
-    expect(sink.mock.calls[0]?.[0]).toMatch(/generation/i);
+    expect(() => withDiagnostics(sink, 1, () => free(idx, staleId))).not.toThrow();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.code).toBe('ENTITY_GENERATION_OVERFLOW');
     expect(idx.generations[0]).toBe(0);
   });
 });

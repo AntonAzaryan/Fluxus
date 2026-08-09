@@ -1,7 +1,13 @@
 // базис
 export * from './types.js';
-export { DEBUG, assert, assertInvariant, setAssertSink } from './debug.js';
-export type { AssertSink } from './debug.js';
+/**
+ * `withDiagnostics` — область действия приёмника (DIAG-1): он устанавливается
+ * на время переданного тела и снимается после. Прежний `setAssertSink`
+ * удалён: модульная переменная делала приёмник общим на процесс, и две
+ * симуляции рядом писали бы в один (DI-1, DI-5).
+ */
+export { DEBUG, assert, assertInvariant, withDiagnostics } from './debug.js';
+export type { DiagnosticsContext } from './debug.js';
 
 // math — детерминированная арифметика
 export * as fixed from './math/fixed.js';
@@ -26,6 +32,7 @@ import * as worldModule from './ecs/world.js';
 export const world = {
   cloneWorld: worldModule.cloneWorld,
   componentId: worldModule.componentId,
+  componentNames: worldModule.componentNames,
   componentSchema: worldModule.componentSchema,
   dirtyEntities: worldModule.dirtyEntities,
   dirtyIsEmpty: worldModule.dirtyIsEmpty,
@@ -35,6 +42,7 @@ export const world = {
   indexOf: worldModule.indexOf,
   isAlive: worldModule.isAlive,
   listAlive: worldModule.listAlive,
+  prefabNames: worldModule.prefabNames,
   prefabOf: worldModule.prefabOf,
   toPlain: worldModule.toPlain,
 } as const;
@@ -72,16 +80,27 @@ export { schemaFiles, schemaFileContent } from './dsl/schemas.js';
 
 // systems — системы на TS, их API и реестр порядка исполнения
 export { SystemRegistry } from './systems/registry.js';
+/**
+ * `terrainLevelChar`/`terrainFlagChar` — запись клетки текстовой карты (TERR-3)
+ * для того, кто ассет пишет (редактор, ED-10): разбор ядро уже даёт
+ * `createTerrainGrid`, и без обратного хода потребитель заводил бы вторую копию
+ * алфавита (ED-1, CORE-3). Мутирующей поверхности это не расширяет (TICK-3):
+ * функции чистые и работают с символами ассета, а не с миром.
+ */
 export {
   cellAt,
   createTerrainApi,
   createTerrainGrid,
   floorComponentSchema,
+  terrainFlagChar,
+  terrainLevelChar,
   terrainPrefab,
   FLOOR_COMPONENT,
+  TERRAIN_CELL_KINDS,
+  TERRAIN_LEVEL_MAX,
   TERRAIN_PREFAB,
 } from './systems/terrain.js';
-export type { TerrainDef } from './systems/terrain.js';
+export type { TerrainCellKind, TerrainDef } from './systems/terrain.js';
 export {
   createPhysicsApi,
   staticsFromTerrain,
@@ -125,6 +144,15 @@ export {
 export type { VisibilityOptions } from './systems/visibility.js';
 export { InputSystem, INPUT_FIELDS } from './systems/inputSystem.js';
 export type { InputSystemOptions } from './systems/inputSystem.js';
+export {
+  LocomotionSystem,
+  LOCOMOTION_NORMAL,
+  LOCOMOTION_DODGE,
+  LOCOMOTION_ROLL,
+  LOCOMOTION_AIRBORNE,
+  LOCOMOTION_WINDOW,
+} from './systems/locomotion.js';
+export type { LocomotionOptions } from './systems/locomotion.js';
 export { modifierList, requireModifierList, DEFAULT_MODIFIER_SLOTS } from './systems/modifiers.js';
 export {
   TimeScaleSystem,
@@ -157,5 +185,16 @@ export { loadScene } from './sim/scene.js';
 export type { Scene, SceneDef } from './sim/scene.js';
 export { jsonSerializer, prettyJsonSerializer, snapshotToPlain, snapshotFromPlain } from './sim/serialization.js';
 export type { PlainSnapshot, Serializer } from './sim/serialization.js';
+export { createJsonlSink, traceLine } from './sim/trace.js';
 export { runScenario, runScenarioBytes } from './sim/scenario.js';
-export type { RunOutput, ScenarioDef, ScenarioSpawn, TickRecord } from './sim/scenario.js';
+export type { RunOutput, ScenarioDef, TickRecord } from './sim/scenario.js';
+/**
+ * Запись расстановки — формат SER-8, общий конфигу сцены, сценарию CLI и
+ * конфигу матча. Имя экспорта историческое: тип жил полем сценария.
+ * `applyPlacement` наружу не уходит — расстановку применяют загрузчик и прогон
+ * до первого тика, а публичный мутатор остаётся один (TICK-3).
+ */
+export type { ScenarioSpawn } from './sim/placement.js';
+export { worldInitHash, worldInitForm } from './sim/worldInit.js';
+export type { WorldInitParts } from './sim/worldInit.js';
+export { contentPackHash, contentPackForm } from './sim/contentPack.js';

@@ -40,6 +40,7 @@ export function createEntityIndex(capacity: number): EntityIndex {
   assertInvariant(
     Number.isInteger(capacity) && capacity > 0 && capacity <= GENERATION_LIMIT,
     `EntityIndex: недопустимая capacity ${capacity}`,
+    'ENTITY_CAPACITY_EXCEEDED',
   );
   return {
     capacity,
@@ -56,10 +57,12 @@ export function makeEntityId(index: number, generation: number): EntityId {
   assertInvariant(
     Number.isInteger(index) && index >= 0 && index <= MAX_INDEX,
     `EntityIndex: index вне диапазона: ${index}`,
+    'ENTITY_ID_OUT_OF_RANGE',
   );
   assertInvariant(
     Number.isInteger(generation) && generation >= 0 && generation <= MAX_GENERATION,
     `EntityIndex: generation вне диапазона: ${generation}`,
+    'ENTITY_ID_OUT_OF_RANGE',
   );
   return index + generation * GENERATION_LIMIT;
 }
@@ -79,7 +82,11 @@ export function allocate(idx: EntityIndex): EntityId {
   if (fromFree !== undefined) {
     index = fromFree;
   } else {
-    assertInvariant(idx.nextIndex < idx.capacity, `EntityIndex: превышена capacity (${idx.capacity})`);
+    assertInvariant(
+      idx.nextIndex < idx.capacity,
+      `EntityIndex: превышена capacity (${idx.capacity})`,
+      'ENTITY_CAPACITY_EXCEEDED',
+    );
     index = idx.nextIndex;
     idx.nextIndex++;
   }
@@ -108,7 +115,13 @@ export function free(idx: EntityIndex, id: EntityId): void {
   // (Rust-generation — u32/u64 со своим wrapping_add), поэтому wrap явный
   // через `%`, а не побочный эффект переполнения типа.
   const current = idx.generations[index] ?? 0;
-  if (DEBUG) assert(current < MAX_GENERATION, `EntityIndex: переполнение generation на слоте ${index}`);
+  if (DEBUG) {
+    assert(
+      current < MAX_GENERATION,
+      `EntityIndex: переполнение generation на слоте ${index}`,
+      'ENTITY_GENERATION_OVERFLOW',
+    );
+  }
   idx.generations[index] = (current + 1) % GENERATION_LIMIT;
 
   idx.freeList.push(index);

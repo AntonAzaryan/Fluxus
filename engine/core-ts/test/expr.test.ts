@@ -58,6 +58,21 @@ describe('арифметика в Q16.16 (EXPR-2)', () => {
     expect(evaluate({ clamp: [F(7), F(0), F(5)] }, world)).toBe(F(5));
   });
 
+  it('sin/cos: угол — Q16.16-доля оборота, значения из таблицы FP-8', () => {
+    expect(evaluate({ sin: [F(0.25)] }, world)).toBe(F(1)); // 90°
+    expect(evaluate({ cos: [F(0.5)] }, world)).toBe(F(-1)); // 180°
+    expect(evaluate({ sin: [{ '+': [F(0.25), F(1)] }] }, world)).toBe(F(1)); // оборот заворачивается
+    expect(evaluate({ sin: [F(0.125)] }, world)).toBe(fixed.sin(F(0.125))); // 45° — из той же таблицы
+  });
+
+  it('разворачивает угол прицеливания в единичный вектор без нативной системы (EXPR-2)', () => {
+    const angle = F(0.125); // 45°
+    const dir = evaluate({ vec: [{ cos: [angle] }, { sin: [angle] }] }, world);
+    expect(dir).toEqual({ x: fixed.cos(angle), y: fixed.sin(angle) });
+    // √2/2 в Q16.16 — длина вектора остаётся единичной с точностью кванта
+    expect(fixed.toFloat(mathApi.vec.length(dir as { x: number; y: number }))).toBeCloseTo(1, 3);
+  });
+
   it('целочисленное поле требует явного fromInt', () => {
     const raw = { '*': [{ getComponent: [1, 'Ammo', 'count'] }, F(2)] };
     const scaled = { '*': [{ fromInt: [{ getComponent: [1, 'Ammo', 'count'] }] }, F(2)] };

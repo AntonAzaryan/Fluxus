@@ -10,9 +10,10 @@
  * лежит в компоненте на сущности арены: сужение обязано попадать в снапшот и
  * откатываться вместе с миром (ARENA-4, SNAP-1).
  */
-import { distSqLe, INT32_MAX, INT32_MIN, sub } from '../math/fixed.js';
+import { distSqLe, INT32_MAX, INT32_MIN, mul, sub } from '../math/fixed.js';
 import { getField, type PrefabDef } from '../ecs/world.js';
 import {
+  FIXED_ONE,
   LEVEL_OVERRIDE_COMPONENT,
   POSITION_COMPONENT,
   type ArenaApi,
@@ -51,15 +52,37 @@ export interface ArenaDef {
  * Дефолт «внутри и на полу» означает, что сущность считается появившейся в
  * штатном положении: спавн за краем или над дырой даёт событие на первом же
  * тике, и политике не нужен отдельный канал для этого случая.
+ *
+ * `support` — коэффициент опорной области (ARENA-3): Q16.16-доля вписанной
+ * окружности коллайдера в `[0, 1]`, ноль — проверка по центру. Конфигурация, а
+ * не состояние прошлого тика, но живёт в том же компоненте: участие в
+ * проверках арены и их параметры — один гейт, а отдельный опциональный
+ * компонент дал бы вторую маску на том же горячем пути.
  */
 export const ARENA_COMPONENTS: readonly ComponentSchema[] = [
   { name: ARENA_COMPONENT, fields: { radius: 'fixed' } },
   {
     name: ARENA_STATE_COMPONENT,
-    fields: { inside: 'i32', onFloor: 'i32' },
+    fields: { inside: 'i32', onFloor: 'i32', support: 'fixed' },
     defaults: { inside: 1, onFloor: 1 },
   },
 ];
+
+/**
+ * Валидация `support` в prefabs сцены (ARENA-3): доля вне `[0, 1]` не имеет
+ * геометрического смысла и отвергается на загрузке, а не проявляется поведением.
+ */
+export function checkArenaSupport(prefabs: readonly PrefabDef[]): void {
+  for (const prefab of prefabs) {
+    const support = prefab.components[ARENA_STATE_COMPONENT]?.['support'];
+    if (support === undefined) continue;
+    if (!Number.isInteger(support) || support < 0 || support > FIXED_ONE) {
+      throw new Error(
+        `ARENA-3: prefab "${prefab.name}" — "support" вне [0, 1] в Q16.16 (получено ${support})`,
+      );
+    }
+  }
+}
 
 /** Prefab singleton-сущности арены; здесь же валидируется ассет (ARENA-1). */
 export function arenaPrefab(def: ArenaDef): PrefabDef {
@@ -149,11 +172,30 @@ export class ArenaSystem implements System {
       // (ARENA-6) означает, что сущность в полёте — снаряд над дырой не падает.
       // Без террейна проверять нечем (DI-3).
       if (ctx.terrain === undefined || ctx.has(entity, LEVEL_OVERRIDE_COMPONENT)) continue;
-      const onFloor = ctx.terrain.hasFloorAt(position) ? 1 : 0;
+      const onFloor = standsOnFloor(ctx, entity, position) ? 1 : 0;
       if (onFloor !== ctx.get(entity, ARENA_STATE_COMPONENT, 'onFloor')) {
         ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'onFloor', onFloor);
         if (onFloor === 0) ctx.events.emit('FellThroughFloor', { entity });
       }
     }
   }
+}
+
+/**
+ * Критерий опоры (ARENA-5): круг радиуса `support × inradius коллайдера`
+ * пересекает хотя бы одну клетку с полом. Вырождение в точку — и поведение,
+ * тождественное проверке по центру, — при нулевом `support`, без коллайдера
+ * (уменьшать нечего) и без Physics API (форма коллайдера ядру неизвестна, DI-3).
+ */
+function standsOnFloor(ctx: SystemContext, entity: EntityId, position: Vec2): boolean {
+  const terrain = ctx.terrain!;
+  const support = ctx.get(entity, ARENA_STATE_COMPONENT, 'support');
+  if (support !== 0 && ctx.physics !== undefined) {
+    const inradius = ctx.physics.inradiusOf(entity);
+    if (inradius !== undefined) {
+      const radius = mul(support, inradius);
+      if (radius > 0) return terrain.hasFloorWithin(position, radius);
+    }
+  }
+  return terrain.hasFloorAt(position);
 }

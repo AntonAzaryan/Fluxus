@@ -1,0 +1,37 @@
+{
+  "name": "game-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "engine/core-ts",
+    "engine/net-ts",
+    "engine/render-ts",
+    "engine/assets-ts",
+    "engine/client-ts",
+    "engine/integration-ts",
+    "editor/core-ts",
+    "editor/ui-ts"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "coverage": "vitest run --config vitest.coverage.config.ts --coverage",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "check": "npm run typecheck && npm run lint && npm run spec-graph -- check && npm test",
+    "golden": "npm run record -w @game-mvp/integration && npm run golden -w @game-mvp/core",
+    "spec-graph": "node scripts/spec-graph.mjs"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^9.39.5",
+    "globals": "^16.5.0",
+    "typescript-eslint": "^8.66.0",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,6 +1,7 @@
 {
   "scenario": "physics",
   "seed": 20260813,
+  "worldInitHash": "01b0c8f9",
   "ticks": [
     {
       "tick": 0,
@@ -29,6 +30,18 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              1,
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               16384,
@@ -40,6 +53,18 @@
               16384,
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0,
+              1
             ],
             "radius": [
               0,
@@ -101,7 +126,6 @@
           [
             3,
             [
-              "blocksMovement",
               "blocksVision"
             ]
           ]
@@ -138,6 +162,18 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              1,
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               16384,
@@ -149,6 +185,18 @@
               16384,
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0,
+              1
             ],
             "radius": [
               0,
@@ -210,7 +258,6 @@
           [
             3,
             [
-              "blocksMovement",
               "blocksVision"
             ]
           ]
@@ -247,6 +294,18 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              1,
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               16384,
@@ -258,6 +317,18 @@
               16384,
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0,
+              1
             ],
             "radius": [
               0,
@@ -319,7 +390,6 @@
           [
             3,
             [
-              "blocksMovement",
               "blocksVision"
             ]
           ]
@@ -366,6 +436,18 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              1,
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               16384,
@@ -377,6 +459,18 @@
               16384,
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0,
+              1
             ],
             "radius": [
               0,
@@ -438,7 +532,6 @@
           [
             3,
             [
-              "blocksMovement",
               "blocksVision"
             ]
           ]
@@ -485,6 +578,18 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              1,
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               16384,
@@ -496,6 +601,18 @@
               16384,
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0,
+              1
             ],
             "radius": [
               0,
@@ -557,7 +674,6 @@
           [
             3,
             [
-              "blocksMovement",
               "blocksVision"
             ]
           ]
@@ -604,6 +720,18 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              1,
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               16384,
@@ -615,6 +743,18 @@
               16384,
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0,
+              1
             ],
             "radius": [
               0,
@@ -676,7 +816,6 @@
           [
             3,
             [
-              "blocksMovement",
               "blocksVision"
             ]
           ]
@@ -723,6 +862,18 @@
         ],
         "components": {
           "Collider": {
+            "blockMask": [
+              0,
+              1,
+              1,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0,
+              0
+            ],
             "halfX": [
               0,
               16384,
@@ -734,6 +885,18 @@
               16384,
               16384,
               32768
+            ],
+            "hitMask": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              0,
+              0,
+              1
             ],
             "radius": [
               0,
@@ -795,7 +958,6 @@
           [
             3,
             [
-              "blocksMovement",
               "blocksVision"
             ]
           ]

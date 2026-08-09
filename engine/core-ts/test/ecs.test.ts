@@ -1,16 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  addComponent,
   createWorld,
   cloneWorld,
   destroy,
   getField,
   hasComponent,
-  hasTag,
   indexOf,
   isAlive,
   listAlive,
-  removeComponent,
   setField,
   spawn,
   type PrefabDef,
