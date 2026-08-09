@@ -29,9 +29,18 @@
 - [x] 4.2 `engine/tests/golden/modifier-stack.scenario.json`: сдвинуть `Slows` с `order: -1000` (якорь `InputSystem`); система в сценарии единственная
 - [x] 4.3 Пройти по остальным сценам `content/` и сценариям `engine/tests/golden/` на попадание в якорные значения таблицы DET-9
 
-## 5. Проверка
+## 5. LocomotionSystem под шкалой
 
-- [x] 5.1 `npm run typecheck` и `npm test` из корня — зелено
-- [x] 5.2 `npm test` из корня: эталоны `engine/tests/golden/` не двинулись — `worldInitHash` от состава и порядка систем не зависит (DET-1), и это проверка того, что change ничего не сдвинул
-- [x] 5.3 `openspec validate --change native-system-order --strict` — зелено
-- [x] 5.4 Демо запускается на изменённой сцене дуэли: движение, каст, взрыв, разрушение пола — как до change
+- [x] 5.1 Дельта `determinism-core`: седьмая строка таблицы DET-9 — `LocomotionSystem`, якорь 0, требование-владелец `locomotion` LOC-1, LOC-2; в перечне оснований — почему интервал (−1000, 100) и почему 0, а не исторические 10
+- [x] 5.2 `engine/core-ts/src/systems/locomotion.ts`: `order` уходит из `LocomotionOptions` и из `DEFAULTS`; якорь 0 — константа со ссылкой на DET-9, комментарий о снятии `LevelOverride` до проверки пола арены переведён на якоря
+- [x] 5.3 Пройти по местам конструирования `LocomotionSystem` (`sim/scenario.ts`, `net-ts/src/match/world.ts`, демо `client-ts`, тесты, `content/matches/duel.match.json`): `order` не передаёт никто
+- [x] 5.4 Тест таблицы DET-9 в `engine/core-ts/test/system.test.ts` — семь систем, `Locomotion` на 0 между `TimeScale` и `Tween`
+- [x] 5.5 `engine/schemas/scenario.schema.json`: поле-включатель `locomotion` в схеме отсутствовало вовсе, хотя `ScenarioDef` его поддерживает, — добавлено в генератор `dsl/schemas.ts` (без `order`) и перегенерировано `npm run schemas`
+- [x] 5.6 Бандлы редактора: описания полей `schema.scenario.locomotion.*` (ED-28 требует описание на каждое поле схемы), спутник отпечатков пересобран
+
+## 6. Проверка
+
+- [x] 6.1 `npm run typecheck` и `npm test` из корня — зелено
+- [x] 6.2 `npm test` из корня: эталоны `engine/tests/golden/` не двинулись — `worldInitHash` от состава и порядка систем не зависит (DET-1), и это проверка того, что change ничего не сдвинул
+- [x] 6.3 `openspec validate --change native-system-order --strict` — зелено
+- [x] 6.4 Демо запускается на изменённой сцене дуэли: движение, каст, взрыв, разрушение пола — как до change
