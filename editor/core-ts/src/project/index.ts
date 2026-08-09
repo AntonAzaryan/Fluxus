@@ -19,3 +19,4 @@ export { loadProjectBundles } from './locales.js';
 export type { ProjectBundleFailure, ProjectBundlesResult } from './locales.js';
 
 export * from './pairing.js';
+export * from './binding.js';

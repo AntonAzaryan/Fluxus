@@ -18,6 +18,7 @@
     "test": "npm run test --workspaces",
     "typecheck": "npm run typecheck --workspaces",
     "coverage": "vitest run --config vitest.coverage.config.ts --coverage",
+    "import": "node tools/blender-ts/bin/import.mjs",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "check": "npm run typecheck && npm run lint && npm run spec-graph -- check && npm test",

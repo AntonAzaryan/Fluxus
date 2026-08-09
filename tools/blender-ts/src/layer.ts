@@ -12,9 +12,10 @@
  * Формат расстановки именованных полей позиции не имеет вовсе (SER-8): позиция
  * и курс записываются переопределением полей компонентов, а какие это компонент
  * и поля — настройка проекта (ED-16). Импортёр её MUST NOT вводить (BLND-3),
- * поэтому привязка приходит ЗНАЧЕНИЕМ (`PositionBinding`), а умолчание берётся
- * у ядра (`POSITION_COMPONENT`) — ровно тем же способом, что у расстановки
- * редактора. Проект, не назвавший, где лежит поворот, поворота не хранит, и
+ * поэтому привязка приходит ЗНАЧЕНИЕМ (`PositionBinding`), объявленным у
+ * редактора (`@game-mvp/editor-core`), а умолчание берётся у ядра — ровно тем
+ * же способом, что у расстановки редактора. Проект, не назвавший, где лежит
+ * поворот, поворота не хранит, и
  * курс сим-объекта в документ не пишется: выдуманное имя компонента было бы
  * хуже отсутствующего поля.
  *
@@ -33,49 +34,26 @@
  * названо честно: переименование и добавление объекта двигают позиции записей
  * `initial`, то есть выданные ID и хеш `worldInit`.
  */
-import { fixed, FIXED_ONE, POSITION_COMPONENT, type ComponentSchema, type PrefabDef } from '@game-mvp/core';
+import { fixed, FIXED_ONE, type ComponentSchema, type PrefabDef } from '@game-mvp/core';
 import { quantizeDecorationLength, quantizeDecorationYaw, resolveVisual, type VisualManifest } from '@game-mvp/assets';
-import type { JsonObject, JsonValue } from '@game-mvp/editor-core';
+import {
+  DEFAULT_POSITION_BINDING,
+  type JsonObject,
+  type JsonValue,
+  type PositionBinding,
+} from '@game-mvp/editor-core';
 import { SKIN_KEY, type SourceObject } from './normalize.js';
 
 /**
- * Где у сим-объекта лежит поворот (ED-16): компонент и имя одного его поля.
- *
- * СОСТАВ ОБЩИЙ С РЕДАКТОРОМ и повторён здесь по расположению кода, а не по
- * замыслу: канонический экземпляр живёт в `editor/ui-ts/src/areas/
- * sceneDocuments.ts`, а тот пакет — DOM-интерфейс, и тянуть его в headless-
- * инструмент нельзя. Общее место — `editor/core-ts`, куда привязка и переезжает
- * вместе с операцией импорта (задача 3.1, ED-29); до тех пор ЛЮБАЯ правка
- * состава обязана идти в обе копии.
+ * Привязка позиции и поворота (ED-16) — общая с расстановкой редактора и потому
+ * объявленная у него: `@game-mvp/editor-core`, `project/binding.ts`. Реэкспорт,
+ * а не второе объявление: состав у неё один, второй разошёлся бы молча (ED-1).
  */
-export interface RotationBinding {
-  readonly component: string;
-  readonly field: string;
-}
-
-/**
- * Где у сим-объекта лежат позиция и поворот (ED-16). Настройка проекта, а не
- * знание импортёра: тот же состав, что у привязки расстановки редактора, —
- * подаётся она одинаково обоим инструментам.
- */
-export interface PositionBinding {
-  readonly component: string;
-  readonly x: string;
-  readonly y: string;
-  /** Где лежит поворот; нет — сцена поворота не хранит, и курс не пишется. */
-  readonly rotation?: RotationBinding;
-}
-
-/**
- * Привязка по умолчанию — конвенция самого ядра (`POSITION_COMPONENT`), на
- * которую опираются его нативные системы. Импортёр её не вводит и не копирует
- * строкой: он её импортирует, а проект вправе подать другую.
- */
-export const DEFAULT_POSITION_BINDING: PositionBinding = {
-  component: POSITION_COMPONENT,
-  x: 'x',
-  y: 'y',
-};
+export {
+  DEFAULT_POSITION_BINDING,
+  type PositionBinding,
+  type RotationBinding,
+} from '@game-mvp/editor-core';
 
 /** Важность находки: «ошибка» останавливает запись целиком (BLND-6). */
 export type FindingSeverity = 'error' | 'warning';

@@ -55,13 +55,85 @@ export const PREFABS: readonly PrefabDef[] = [
   { name: 'Marker', components: { Player: { slot: 0 } } },
 ];
 
+/**
+ * Манифест визуалов цели (ASSET-9). Запись есть у каждого prefab'а: пара
+ * «prefab — запись манифеста» проверяется валидацией на общих основаниях
+ * (ED-19), и цель импорта обязана быть согласованной ДО импорта — иначе тест
+ * проверял бы, что чужое нарушение не мешает записи, а не то, что мешает своё.
+ */
 export const MANIFEST: VisualManifest = {
-  entities: { Hero: { model: 'visuals/models/hero.gltf' } },
+  entities: {
+    Hero: { model: 'visuals/models/hero.gltf' },
+    Rock: { model: 'visuals/models/rock.gltf' },
+    Marker: { model: 'visuals/models/marker.gltf' },
+  },
   decorations: { Statue: { model: 'visuals/models/statue.gltf' } },
 };
 
 export function context(overrides: Partial<SpatialLayerContext> = {}): SpatialLayerContext {
   return { components: COMPONENTS, prefabs: PREFABS, visuals: MANIFEST, ...overrides };
+}
+
+/* Цель импорта: дерево контента из тех же схем и prefab'ов, что и контекст выше. */
+
+export const SCENE_ID = 'scenes/duel.scene.json';
+export const PRESENTATION_ID = 'scenes/duel.presentation.json';
+export const SOURCE_ID = 'scenes/duel.gltf';
+export const MANIFEST_ID = 'visuals/manifest.json';
+
+/**
+ * Конфиг сцены цели. Полей сверх производных здесь нарочно много: BLND-2
+ * требует, чтобы импорт не тронул ни одного из них, и проверять это на
+ * документе из одного `initial` было бы нечем.
+ */
+export function sceneDocument(initial: readonly unknown[] = []): Record<string, unknown> {
+  return {
+    capacity: 64,
+    components: COMPONENTS.map((schema) => ({ name: schema.name, fields: { ...schema.fields } })),
+    prefabs: PREFABS.map((def) => ({ name: def.name, components: structuredClone(def.components) })),
+    systems: [
+      {
+        name: 'Drift',
+        order: 10,
+        query: { all: ['Position', 'Locomotion'] },
+        as: 'e',
+        do: [
+          {
+            modifyComponent: {
+              entity: { var: 'e' },
+              component: 'Position',
+              values: { x: { getComponent: [{ var: 'e' }, 'Position', 'x'] } },
+            },
+          },
+        ],
+      },
+    ],
+    initial: [...initial],
+  };
+}
+
+/** Парный presentation-документ цели (PRES-1, PRES-2). */
+export function presentationDocument(decorations: readonly unknown[] = []): Record<string, unknown> {
+  return { decorations: [...decorations] };
+}
+
+/** Манифест визуалов дерева (ASSET-9) — тот же, что подаётся контекстом. */
+export function manifestDocument(): Record<string, unknown> {
+  return structuredClone(MANIFEST) as unknown as Record<string, unknown>;
+}
+
+/** Дерево контента цели: сцена, парный документ, манифест и экспорт источника. */
+export function contentFiles(
+  source: string = 'placements.gltf',
+  scene: Record<string, unknown> = sceneDocument(),
+  presentation: Record<string, unknown> = presentationDocument(),
+): Record<string, string | Uint8Array> {
+  return {
+    [SCENE_ID]: JSON.stringify(scene, null, 2),
+    [PRESENTATION_ID]: JSON.stringify(presentation, null, 2),
+    [MANIFEST_ID]: JSON.stringify(manifestDocument(), null, 2),
+    [SOURCE_ID]: fixtureBytes(source),
+  };
 }
 
 /**
