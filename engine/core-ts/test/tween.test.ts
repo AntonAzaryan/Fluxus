@@ -203,6 +203,25 @@ describe('onComplete (TWEEN-4)', () => {
     );
     expect(events).toEqual([{ type: 'TweenDone', data: { who: target } }]);
   });
+
+  it('ошибка внутри onComplete называет систему, путь до узла и причину (SYS-9)', () => {
+    // Тело onComplete — тот же Action DSL, что у системы из данных, и ошибка в
+    // нём того же класса: без имени системы её пришлось бы искать по всем
+    // определениям твинов сцены.
+    const broken: readonly TweenDef[] = [
+      {
+        target: 'Health.value',
+        // Ссылка на событие, которого в шине нет: ошибка вычисления класса 3.
+        onComplete: [{ emitEvent: { type: 'Boom', data: { d: { eventField: [0, 'nope'] } } } }],
+      },
+    ];
+    const h = harness(broken);
+    const target = h.place();
+
+    expect(() =>
+      h.step((ctx) => execute([addTween({ entity: target, duration: GLOBAL_DELTA, easing: EASING_INSTANT })], ctx)),
+    ).toThrow(/система "Tween", узел \[0\]\.emitEvent: нет события с индексом 0/);
+  });
 });
 
 describe('учёт TimeScale per-tween (TWEEN-7)', () => {

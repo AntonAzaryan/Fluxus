@@ -18,7 +18,7 @@
  * закрыто именно этим: у системы единого решения нет, оно в данных.
  */
 import * as fixed from '../math/fixed.js';
-import { execute, TWEEN_COMPONENT, type Action } from '../dsl/actions.js';
+import { execute, systemError, TWEEN_COMPONENT, type Action } from '../dsl/actions.js';
 import { FIXED_ONE, type ComponentSchema, type EntityId, type Fixed, type System, type SystemContext } from '../types.js';
 
 export { TWEEN_COMPONENT };
@@ -156,7 +156,15 @@ export class TweenSystem implements System {
     }
     // Порядок команд — порядок применения (CMD-3): целевое поле уже записано,
     // и onComplete видит его конечное значение только после общего flush.
-    execute(def.onComplete, ctx, { entity });
+    //
+    // Ошибка внутри onComplete — та же ошибка класса 3, что у системы из данных
+    // (SYS-9), и называть она обязана то же: систему, путь до узла и причину.
+    // Механизм тот же, что у `EvaluatedSystem.run`, а не его копия.
+    try {
+      execute(def.onComplete, ctx, { entity });
+    } catch (cause) {
+      throw systemError(this.name, cause);
+    }
     ctx.commands.removeComponent(entity, TWEEN_COMPONENT);
   }
 }
