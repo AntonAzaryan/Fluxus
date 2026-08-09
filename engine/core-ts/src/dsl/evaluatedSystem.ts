@@ -250,8 +250,10 @@ function checkExpression(node: unknown, world: WorldState, scope: ReadonlySet<st
   const args = (Array.isArray(raw) ? raw : [raw]) as readonly Expression[];
   const at = `${path}.${op}`;
 
+  // Путь до узла — `at`, как у соседних проверок этой функции: сегмент с именем
+  // оператора отличает узел от того, что стоит на его месте.
   const wrongArity = arityError(op, signature, args.length);
-  if (wrongArity !== undefined) fail(path, wrongArity);
+  if (wrongArity !== undefined) fail(at, wrongArity);
 
   // Литеральные позиции — только имена; в остальных позициях строка отвергается
   // рекурсивным вызовом ниже.

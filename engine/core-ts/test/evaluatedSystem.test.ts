@@ -391,7 +391,7 @@ describe('валидация на регистрации (SYS-3)', () => {
 
   it('называет путь до узла в ошибке арности (SYS-3)', () => {
     expect(invalid({ do: [{ destroyEntity: { entity: { '+': [F(1)] } } }] })).toThrow(
-      /система "Burning"\[0\]\.forEach\.do\[0\]\.destroyEntity\.entity: оператор "\+"/,
+      /система "Burning"\[0\]\.forEach\.do\[0\]\.destroyEntity\.entity\.\+: оператор "\+"/,
     );
   });
 

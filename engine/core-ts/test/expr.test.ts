@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { evaluate, operators, type Expression, type ExprWorld } from '../src/dsl/expr.js';
+import {
+  evaluate,
+  operators,
+  signatureOf,
+  type Expression,
+  type ExprWorld,
+  type OpSignature,
+} from '../src/dsl/expr.js';
 import { EventBus } from '../src/ecs/events.js';
 import * as fixed from '../src/math/fixed.js';
 import { mathApi } from '../src/math/mathApi.js';
@@ -240,6 +247,97 @@ const EXPR_8_TABLE: readonly string[] = [
   'vec.y',
 ];
 
+/**
+ * Форма применения каждого оператора — вторая копия таблицы EXPR-8, снятая с
+ * текста требования, а не с `signatureOf`. В этом весь смысл: сверка с
+ * реализацией через саму реализацию не поймала бы ничего. Вторая реализация ядра
+ * собирает свою таблицу по тому же тексту (CLI-6), и расхождение в арности или
+ * литеральных позициях обязано краснеть здесь.
+ *
+ * `odd`, `literals` и `ranges` опущены там, где норма их не задаёт: умолчания —
+ * `false`, пустой список, пустой список.
+ */
+type ExpectedShape = {
+  readonly min: number;
+  readonly max: number;
+  readonly odd?: boolean;
+  readonly literals?: readonly number[];
+  readonly ranges?: readonly (readonly [number, number, number])[];
+};
+
+const EXPR_8_SHAPES: Readonly<Record<string, ExpectedShape>> = {
+  // окружение и мир
+  var: { min: 1, max: 1, literals: [0] },
+  tick: { min: 0, max: 0 },
+  getComponent: { min: 3, max: 3, literals: [1, 2] },
+  hasComponent: { min: 2, max: 2, literals: [1] },
+  isAlive: { min: 1, max: 1 },
+  hasFloorAt: { min: 1, max: 1 },
+  eventField: { min: 2, max: 2, literals: [1] },
+  // арифметика
+  '+': { min: 2, max: 2 },
+  '-': { min: 2, max: 2 },
+  '*': { min: 2, max: 2 },
+  '/': { min: 2, max: 2 },
+  min: { min: 2, max: 2 },
+  max: { min: 2, max: 2 },
+  abs: { min: 1, max: 1 },
+  sqrt: { min: 1, max: 1 },
+  sin: { min: 1, max: 1 },
+  cos: { min: 1, max: 1 },
+  clamp: { min: 3, max: 3 },
+  fromInt: { min: 1, max: 1 },
+  toInt: { min: 1, max: 1 },
+  bitTest: { min: 2, max: 2, ranges: [[1, 0, 31]] },
+  // сравнения
+  '<': { min: 2, max: 2 },
+  '<=': { min: 2, max: 2 },
+  '>': { min: 2, max: 2 },
+  '>=': { min: 2, max: 2 },
+  '==': { min: 2, max: 2 },
+  '!=': { min: 2, max: 2 },
+  // логика
+  and: { min: 2, max: Infinity },
+  or: { min: 2, max: Infinity },
+  '!': { min: 1, max: 1 },
+  if: { min: 3, max: Infinity, odd: true },
+  // векторы
+  vec: { min: 2, max: 2 },
+  'vec.add': { min: 2, max: 2 },
+  'vec.sub': { min: 2, max: 2 },
+  'vec.scale': { min: 2, max: 2 },
+  'vec.dot': { min: 2, max: 2 },
+  'vec.lengthSq': { min: 1, max: 1 },
+  'vec.length': { min: 1, max: 1 },
+  'vec.normalize': { min: 1, max: 1 },
+  'vec.x': { min: 1, max: 1 },
+  'vec.y': { min: 1, max: 1 },
+};
+
+/** Полная форма из краткой записи ожидания — умолчания те же, что у `def`. */
+function expanded(shape: ExpectedShape): OpSignature {
+  return {
+    min: shape.min,
+    max: shape.max,
+    odd: shape.odd ?? false,
+    literals: shape.literals ?? [],
+    ranges: shape.ranges ?? [],
+  };
+}
+
+/** Только поля сигнатуры: строка таблицы несёт ещё и `fn`, а он к норме не относится. */
+function shapeOf(op: string): OpSignature | undefined {
+  const signature = signatureOf(op);
+  if (signature === undefined) return undefined;
+  return {
+    min: signature.min,
+    max: signature.max,
+    odd: signature.odd,
+    literals: [...signature.literals],
+    ranges: signature.ranges.map((range) => [...range] as [number, number, number]),
+  };
+}
+
 describe('состав таблицы операторов (EXPR-8)', () => {
   it('совпадает с нормативной таблицей имя в имя', () => {
     expect([...operators].sort()).toEqual([...EXPR_8_TABLE].sort());
@@ -248,6 +346,58 @@ describe('состав таблицы операторов (EXPR-8)', () => {
   it('в таблице ровно 41 оператор', () => {
     expect(EXPR_8_TABLE.length).toBe(41);
     expect(new Set(EXPR_8_TABLE).size).toBe(41);
+  });
+
+  it('перечень форм покрывает таблицу целиком и ничего сверх неё', () => {
+    expect(Object.keys(EXPR_8_SHAPES).sort()).toEqual([...EXPR_8_TABLE].sort());
+  });
+
+  for (const op of EXPR_8_TABLE) {
+    it(`форма применения "${op}" — как в норме`, () => {
+      expect(shapeOf(op)).toEqual(expanded(EXPR_8_SHAPES[op]!));
+    });
+  }
+
+  it('имени вне таблицы формы нет, и цепочка прототипов её не даёт (EXPR-6)', () => {
+    expect(signatureOf('nope')).toBeUndefined();
+    expect(signatureOf('constructor')).toBeUndefined();
+    expect(signatureOf('toString')).toBeUndefined();
+  });
+});
+
+describe('строка таблицы неизменяема (EXPR-6, DI-1)', () => {
+  it('подменить реализацию оператора снаружи нечем', () => {
+    const signature = signatureOf('+')! as OpSignature & { fn: unknown };
+    expect(Object.isFrozen(signature)).toBe(true);
+    // Модули ES исполняются в strict mode: запись во frozen — исключение, а не
+    // молчаливый no-op. Это и есть `add_operation` json-logic-js, которого здесь
+    // быть не должно.
+    expect(() => {
+      (signature as { fn: unknown }).fn = () => 0;
+    }).toThrow(TypeError);
+    expect(() => {
+      (signature as { min: number }).min = 7;
+    }).toThrow(TypeError);
+  });
+
+  it('вложенные списки формы заморожены вместе со строкой', () => {
+    const getComponent = signatureOf('getComponent')!;
+    expect(Object.isFrozen(getComponent.literals)).toBe(true);
+    expect(() => (getComponent.literals as number[]).push(0)).toThrow(TypeError);
+
+    const bitTest = signatureOf('bitTest')!;
+    expect(Object.isFrozen(bitTest.ranges)).toBe(true);
+    expect(Object.isFrozen(bitTest.ranges[0])).toBe(true);
+    expect(() => ((bitTest.ranges[0] as unknown as number[])[2] = 99)).toThrow(TypeError);
+  });
+
+  it('заморожена каждая строка таблицы, а не только те, что смотрели', () => {
+    for (const op of operators) {
+      const signature = signatureOf(op)!;
+      expect(Object.isFrozen(signature), op).toBe(true);
+      expect(Object.isFrozen(signature.literals), op).toBe(true);
+      expect(Object.isFrozen(signature.ranges), op).toBe(true);
+    }
   });
 });
 

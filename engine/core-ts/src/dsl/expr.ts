@@ -104,6 +104,11 @@ const NO_RANGES: OpSignature['ranges'] = Object.freeze([]);
  * Сигнатура оператора; `undefined` — имени в таблице нет. `hasOwn`, а не
  * `in`: `constructor` в позиции оператора не должен разрешаться через цепочку
  * прототипов ни при вычислении, ни на регистрации (EXPR-6).
+ *
+ * Наружу уходит сама строка таблицы, а не её копия, — и потому строка заморожена
+ * при сборке (`def`/`defVariadic`). Модуль реэкспортируется из `index.ts`, и без
+ * заморозки потребитель дотянулся бы до `fn`: это ровно `add_operation`
+ * `json-logic-js` — мутация синглтона, отвергнутая DI-1 и EXPR-6.
  */
 export function signatureOf(op: string): OpSignature | undefined {
   return Object.hasOwn(OPS, op) ? OPS[op] : undefined;
@@ -163,14 +168,26 @@ interface OpDef extends OpSignature {
   readonly fn: OpFn;
 }
 
+/**
+ * Замораживает строку целиком, вместе с вложенными списками: `signatureOf`
+ * отдаёт её наружу как есть, и незамороженный `literals` или диапазон был бы той
+ * же дырой, что незамороженная строка (см. `signatureOf`).
+ */
+function freezeRow(row: OpDef): OpDef {
+  Object.freeze(row.literals);
+  for (const range of row.ranges) Object.freeze(range);
+  Object.freeze(row.ranges);
+  return Object.freeze(row);
+}
+
 /** Оператор с точным числом аргументов. */
 function def(n: number, fn: OpFn, rest: Partial<OpSignature> = {}): OpDef {
-  return { min: n, max: n, odd: false, literals: NO_LITERALS, ranges: NO_RANGES, ...rest, fn };
+  return freezeRow({ min: n, max: n, odd: false, literals: NO_LITERALS, ranges: NO_RANGES, ...rest, fn });
 }
 
 /** Переменная арность: `and`/`or` (не менее двух) и `if` (нечётное, не менее трёх). */
 function defVariadic(min: number, odd: boolean, fn: OpFn): OpDef {
-  return { min, max: Infinity, odd, literals: NO_LITERALS, ranges: NO_RANGES, fn };
+  return freezeRow({ min, max: Infinity, odd, literals: NO_LITERALS, ranges: NO_RANGES, fn });
 }
 
 const num1 =
@@ -217,7 +234,7 @@ const equality =
  * литеральные позиции, реализация. Оператора итерации в ней нет и быть не
  * должно: циклы живут только в actions (EXPR-5).
  */
-const OPS: Record<string, OpDef> = {
+const OPS: Record<string, OpDef> = Object.freeze({
   // окружение
   var: def(
     1,
@@ -368,7 +385,7 @@ const OPS: Record<string, OpDef> = {
       num(evaluate(args[1]!, w, v), 'vec.scale'),
     ),
   ),
-};
+});
 
 /** Имена операторов — для валидации AST на регистрации системы (SYS-3, этап 8). */
 export const operators: readonly string[] = Object.keys(OPS);
