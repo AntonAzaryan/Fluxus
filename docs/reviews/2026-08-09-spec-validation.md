@@ -107,3 +107,7 @@
 Уже закрываются pending-изменениями: П1 (`filter-ownership`), С8 частично (`entity-id-state`, `spec-terminology`), Т16 (`filter-ownership`), Т18 (`terminology-sweep`); П4 осознанно открыт в Notes `rewind-epoch`. Требуют внимания при apply: П2/П3 (шов между `filter-ownership`, `net-event-delivery` и `rewind-epoch` по шине и эпохе `Events`), Т20 (`native-system-order` не трогает TICK-4), и П10 — дельта FOW-5 в `spec-terminology` переносит противоречащий текст про теги блокировки дословно, закрепляя его.
 
 Всё остальное (П5–П18, С1–С20 кроме С8, Т1–Т15, Т17, Т19, Р1–Р5) в очереди не значится.
+
+## Статус исправлений (дополнение от 2026-08-09)
+
+Все находки закрыты change'ем `spec-validation-fixes` (та же дата, ветка `claude/spec-validation-contradictions-ladjwk`): разделы П/С/Т — правками main-спек с ребейзом задетых дельт pending-изменений, раздел Р — правками харнесса, доков и кода редактора (парный presentation-документ теперь возникает при первой decoration-правке). Исключения, оставленные очереди намеренно: П1/П2/П3 — `filter-ownership`/`net-event-delivery`/`rewind-epoch` (швы дописаны в их артефакты), П4 — открыт в Notes `rewind-epoch`, Т18 — `terminology-sweep`. Две находки при фиксе уточнились: у П8 врала спека, а не код (обхода сериализации в `local` нет), у П13 в машине состояний пять состояний (`Window` — отдельное состояние, а не флаг).
