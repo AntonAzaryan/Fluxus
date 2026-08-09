@@ -247,7 +247,7 @@
     },
     {
       "name": "FireballImpact",
-      "order": 50,
+      "order": 60,
       "query": { "all": ["Position", "Lifetime"] },
       "as": "e",
       "do": [

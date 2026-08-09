@@ -54,8 +54,8 @@ export const DEFAULT_CLIFF_LAYER = 1;
 const DEFAULT_COLLIDER_COMPONENT = 'Collider';
 const DEFAULT_VELOCITY_COMPONENT = 'Velocity';
 const DEFAULT_CELL_SIZE = fixed.fromInt(4);
-/** Физика двигает сущности после геймплейных систем, но до наблюдателей видимости. */
-const DEFAULT_ORDER = 100;
+/** Якорь шкалы `order` (DET-9); параметром сборки не является. */
+const ANCHOR_ORDER = 100;
 
 /**
  * Статический коллайдер: прямоугольник в мировых координатах. Обрыв —
@@ -219,7 +219,6 @@ function boundsAt(x: Fixed, y: Fixed, collider: Collider): Bounds {
 export interface PhysicsOptions {
   readonly collider?: string;
   readonly velocity?: string;
-  readonly order?: number;
 }
 
 /**
@@ -247,14 +246,13 @@ export interface PhysicsOptions {
  */
 export class PhysicsSystem implements System {
   readonly name = 'Physics';
-  readonly order: number;
+  readonly order = ANCHOR_ORDER;
   private readonly colliderComponent: string;
   private readonly velocityComponent: string;
   private readonly physicsWorld: PhysicsWorld;
 
   constructor(physicsWorld: PhysicsWorld, options: PhysicsOptions = {}) {
     this.physicsWorld = physicsWorld;
-    this.order = options.order ?? DEFAULT_ORDER;
     this.colliderComponent = options.collider ?? DEFAULT_COLLIDER_COMPONENT;
     this.velocityComponent = options.velocity ?? DEFAULT_VELOCITY_COMPONENT;
   }

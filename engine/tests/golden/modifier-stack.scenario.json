@@ -17,7 +17,7 @@
     "systems": [
       {
         "name": "Slows",
-        "order": -1000,
+        "order": -950,
         "query": { "all": ["TimeScaleModifiers"] },
         "as": "e",
         "do": [

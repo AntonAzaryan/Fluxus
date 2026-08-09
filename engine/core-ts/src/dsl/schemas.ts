@@ -102,7 +102,7 @@ const system: Json = {
   required: ['name', 'order', 'do'],
   properties: {
     name: { $comment: 'Имя RNG-стрима и ключ подмены (RNG-4, SYS-7).', type: 'string', minLength: 1 },
-    order: { $comment: 'Равные order недопустимы (DET-3).', type: 'integer' },
+    order: { $comment: 'Место системы в тике; равные order недопустимы (SYS-2, DET-9).', type: 'integer' },
     query: { $comment: 'Сахар над действием forEach (SYS-1).', $ref: '#/$defs/query' },
     as: { type: 'string', minLength: 1 },
     do: { type: 'array', items: { $ref: '#/$defs/action' } },
@@ -270,7 +270,31 @@ const scenario: Json = {
       properties: {
         collider: { type: 'string', minLength: 1 },
         velocity: { type: 'string', minLength: 1 },
-        order: { $comment: 'Равные order недопустимы (DET-3).', type: 'integer' },
+      },
+    },
+    locomotion: {
+      $comment: 'Включает нативный локомоушен (LOC-1). Поле сценария, а не сцены: реализация — зависимость сборки (SER-7).',
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { $comment: 'Имя RNG-стрима и ключ подмены (RNG-4, SYS-7).', type: 'string', minLength: 1 },
+        inputComponent: { type: 'string', minLength: 1 },
+        velocityComponent: { type: 'string', minLength: 1 },
+        configComponent: { type: 'string', minLength: 1 },
+        stateComponent: { type: 'string', minLength: 1 },
+        colliderComponent: { type: 'string', minLength: 1 },
+        dodgeButton: {
+          $comment: 'Индекс бита в маске кнопок; раскладку ввода ядро не знает (LOC-1).',
+          type: 'integer',
+          minimum: 0,
+          maximum: 15,
+        },
+        jumpButton: {
+          $comment: 'Индекс бита в маске кнопок; раскладку ввода ядро не знает (LOC-1).',
+          type: 'integer',
+          minimum: 0,
+          maximum: 15,
+        },
       },
     },
     players: {
@@ -282,9 +306,7 @@ const scenario: Json = {
       $comment: 'Включает пересчёт видимости (FOW-4). Поле сценария, а не сцены: системе нужен raycast (DI-3).',
       type: 'object',
       additionalProperties: false,
-      properties: {
-        order: { $comment: 'Равные order недопустимы (DET-3).', type: 'integer' },
-      },
+      properties: {},
     },
   },
 };

@@ -81,9 +81,7 @@ export function buildMatchWorld(def: MatchWorldDef): MatchWorld {
 
   // После физики: видимость считается по финальным позициям тика (FOW-6).
   if (def.visibility !== undefined) {
-    systems.register(
-      new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT), def.visibility),
-    );
+    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
   }
 
   // Расстановка матча идёт ПОСЛЕ расстановки сцены (SER-8): ту уже применил
