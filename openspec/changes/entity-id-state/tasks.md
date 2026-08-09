@@ -44,6 +44,6 @@
 
 ## 8. Проверка
 
-- [ ] 8.1 `npm run typecheck` и `npm test` из корня — зелено
-- [ ] 8.2 `npm run golden` из корня: диффов быть не должно — change нормирует существующее поведение
-- [ ] 8.3 `openspec validate --specs --strict` после apply
+- [x] 8.1 `npm run typecheck` и `npm test` из корня — зелено
+- [x] 8.2 `npm run golden` из корня: диффов быть не должно — change нормирует существующее поведение
+- [x] 8.3 `openspec validate --specs --strict` после apply
