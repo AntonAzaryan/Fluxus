@@ -13,7 +13,8 @@
  * Парный документ находится ПРАВИЛОМ ИМЕНИ, а не ссылкой (PRES-1): ссылок
  * между документами пары нет ни в одну сторону, и спросить о нём конфиг сцены
  * нечем. Отсутствие файла — законное состояние, означающее сцену без
- * декораций, а не отказ открытия.
+ * декораций, а не отказ открытия: документ тогда открывается пустым в сессии,
+ * и слой декораций доступен на сцене, у которой файла ещё нет (ED-16, PRES-5).
  *
  * Читаются они через хост среды (ED-12) и только через него: прямого обращения
  * к файловой системе тут нет и в вебе быть не может.
@@ -27,6 +28,7 @@ import {
   type DocumentId,
   type EditorSession,
   type JsonPath,
+  type JsonValue,
   type ValidationRule,
 } from '@game-mvp/editor-core';
 import { presentationPathOf, type VisualManifest } from '@game-mvp/assets';
@@ -55,6 +57,13 @@ export const TERRAIN_ASSET: JsonPath = ['terrain'];
 
 /** Путь списка декораций в парном документе (PRES-2) — доменное знание вклада. */
 export const DECORATION_LIST: JsonPath = ['decorations'];
+
+/**
+ * Чем открывается парный документ, которого в дереве ещё нет. Пустой объект, а
+ * не `{"decorations": []}`: отсутствующий и пустой список неразличимы (PRES-2),
+ * и поле, которого автор не писал, попало бы в дифф первой же правки (ED-21).
+ */
+const EMPTY_PRESENTATION: JsonValue = Object.freeze({});
 
 /**
  * ВСЕ отслеживаемые списки конфига сцены — одним перечнем, потому что открыть
@@ -180,17 +189,13 @@ export interface SceneProject {
   /** Карта кривизны — её ID берётся из манифеста; `null` — арена без кривизны. */
   readonly curvatureId: DocumentId | null;
   /**
-   * Парный presentation-документ (PRES-1). ID известен всегда — он выводится из
-   * пути сцены правилом имени, — но `open` говорит, лежит ли он в дереве:
-   * отсутствие законно и означает сцену без декораций.
+   * Парный presentation-документ (PRES-1). ID выводится из пути сцены правилом
+   * имени, и документ по нему открыт ВСЕГДА: файла в дереве может ещё не быть —
+   * тогда он открыт пустым в сессии. Отдельного «есть ли он» у проекта поэтому
+   * нет: расстановка декораций и перевод prop → decoration безусловны (ED-16,
+   * PRES-5), а на диск документ уходит сохранением и только с содержимым.
    */
   readonly presentationId: DocumentId;
-  /**
-   * Открыт ли парный документ. `false` — файла в дереве нет: расстановка
-   * декораций тогда недоступна (ED-26), потому что писать некуда, а создавать
-   * документ ради пустого слоя MUST NOT (PRES-1, ED-21).
-   */
-  readonly hasPresentation: boolean;
   /**
    * Манифест НА МОМЕНТ ОТКРЫТИЯ: им поднимается подсистема моделей (REND-8) и
    * по нему находится карта кривизны (ASSET-7). Текущим состоянием манифеста он
@@ -240,19 +245,27 @@ export async function openSceneProject(
 
   // Парный документ ищется ПО ИМЕНИ (PRES-1): ссылок между документами пары нет
   // ни в одну сторону, и спрашивать конфиг сцены о нём нечем — состав его полей
-  // закрыт (SER-7). Отсутствие файла — законное состояние, а не отказ
-  // открытия: сцена без декораций поднимается и рисуется как прежде.
+  // закрыт (SER-7). Файла в дереве может не быть, и это законное состояние —
+  // сцена без декораций; документ тогда открывается пустым, а не пропускается:
+  // ED-16 и PRES-5 требуют расстановки декораций и перевода prop → decoration
+  // безусловно, и слой, доступный только там, где файл уже кем-то создан, их не
+  // исполняет. Запрет PRES-1 при этом не нарушается: он про документ,
+  // заведённый ради пустого слоя, а не про документ, заведённый правкой, — на
+  // диск пустой документ не уходит (сохранение сборки, ED-21).
   const presentationId = presentationPathOf(ids.config);
-  const hasPresentation =
-    session.isOpen(presentationId) || (await host.stat(presentationId))?.kind === 'file';
-  if (hasPresentation && !session.isOpen(presentationId)) {
-    await openDocumentFromHost(session, host, {
+  if (!session.isOpen(presentationId)) {
+    const opening = {
       id: presentationId,
       kind: SCENE_KINDS.presentation,
       // Записи decoration адресуются дескрипторами сессии — ровно так же, как
       // записи расстановки, и отсюда единообразие выделения (ED-17, ED-29).
       lists: [DECORATION_LIST],
-    });
+    };
+    if ((await host.stat(presentationId))?.kind === 'file') {
+      await openDocumentFromHost(session, host, opening);
+    } else {
+      session.openDocument({ ...opening, value: EMPTY_PRESENTATION });
+    }
   }
 
   return {
@@ -260,7 +273,6 @@ export async function openSceneProject(
     visualsId: ids.visuals,
     curvatureId,
     presentationId,
-    hasPresentation,
     initialVisuals: visuals,
     position: ids.position,
   };
@@ -288,7 +300,7 @@ export function draftOf(session: EditorSession, project: SceneProject): SceneDra
   } catch (error) {
     broken = message(error);
   }
-  const presentationOpen = project.hasPresentation && session.isOpen(project.presentationId);
+  const presentationOpen = session.isOpen(project.presentationId);
   const draft = sceneDraft({
     config: session.documentValue(project.configId),
     keys: session.descriptors(project.configId, PLACEMENT_LIST),

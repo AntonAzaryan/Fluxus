@@ -25,6 +25,8 @@ import { findAssetNode } from '../src/areas/assetTree.js';
 import { VISUALS_OPERATIONS } from '../src/areas/assetVisuals.js';
 import { SCENE_AREA_ID, type SceneAreaState } from '../src/areas/scene.js';
 import { PREFAB_LIST, prefabRecords } from '../src/areas/objectsPrefabs.js';
+import { DECORATION_LIST, PLACEMENT_LIST } from '../src/areas/sceneProject.js';
+import { DECORATION_OPERATIONS } from '../src/areas/sceneDecorations.js';
 import { OBJECTS_AREA_ID, type ObjectsAreaState } from '../src/areas/objects.js';
 import { SYSTEMS_AREA_ID, type SystemsAreaState } from '../src/areas/systems.js';
 import { discoverProject } from '../src/areas/sceneDiscovery.js';
@@ -40,6 +42,13 @@ import type { WorkspaceFrame } from '../src/frame/frame.js';
 const CONFIG = 'levels/arena.json';
 const VISUALS = 'art/looks.json';
 const CURVATURE = 'art/arena.curve.json';
+/**
+ * Парный presentation-документ этой сцены (PRES-1). Имя не выбрано, а выведено
+ * правилом: базовое имя файла сцены плюс суффикс, каталог общий. В дереве
+ * фикстуры его НЕТ — он и не должен там лежать, пока автор не поставил ни одной
+ * декорации.
+ */
+const PRESENTATION = 'levels/arena.presentation.json';
 
 const MANIFEST = {
   entities: { Hero: { model: 'art/models/hero.mdx', scale: 1.6 }, Crate: { model: 'art/models/crate.mdx' } },
@@ -578,5 +587,153 @@ describe('ED-21: сохранение трогает только докумен
     await settle();
     expect(app.frame.notice()).toBeNull();
     expect(host.writes).toEqual([CONFIG]);
+  });
+});
+
+/**
+ * ED-16, PRES-5, PRES-1: парный документ рождается первой правкой декораций.
+ *
+ * Расстановка декораций и перевод prop → decoration не оговорены существованием
+ * `*.presentation.json`, поэтому редактор его и не требует: документ открыт
+ * пустым в сессии, а на диск уходит сохранением — и только если в нём что-то
+ * есть. Пустой слой файла не заводит: «документ ради пустого слоя» PRES-1
+ * запрещает, а сохранение затрагивает только документы с правками (ED-21).
+ */
+describe('PRES-1, ED-16: парный документ создаётся правкой, а не заранее', () => {
+  /** Открытый редактор на дереве без парного документа. */
+  async function opened(): Promise<{
+    host: MemoryHost;
+    frame: WorkspaceFrame;
+  }> {
+    const host = projectHost();
+    const app = await createEditorApp({ host });
+    app.frame.stateOf(SCENE_AREA_ID);
+    await settle();
+    return { host, frame: app.frame };
+  }
+
+  const addDecoration = (frame: WorkspaceFrame): void => {
+    frame.session.applyOperation(DECORATION_OPERATIONS.add, {
+      document: PRESENTATION,
+      list: DECORATION_LIST,
+      visual: 'Hero',
+      x: 1.5,
+      y: 2.5,
+    });
+  };
+
+  it('открытие держит пустой слой в сессии и файла в дереве не заводит', async () => {
+    const { host, frame } = await opened();
+    expect(frame.session.isOpen(PRESENTATION)).toBe(true);
+    expect(frame.session.documentValue(PRESENTATION)).toEqual({});
+    expect(await host.content.stat(PRESENTATION)).toBeUndefined();
+    // Открытие правкой не является: несохранённого в проекте нет (ED-21).
+    expect(frame.session.dirtyDocumentIds()).toEqual([]);
+  });
+
+  it('поставленная декорация уходит на диск, и файл появляется с ней', async () => {
+    const { host, frame } = await opened();
+    addDecoration(frame);
+
+    runCommand(frame, SHELL_COMMANDS.save);
+    await settle();
+
+    expect(host.writes).toEqual([PRESENTATION]);
+    expect(JSON.parse(host.text(PRESENTATION))).toEqual({
+      decorations: [{ visual: 'Hero', x: 1.5, y: 2.5 }],
+    });
+    expect(host.windowState.unsaved).toBe(false);
+  });
+
+  it('перевод prop → decoration пишет обе половины пары одной записью (PRES-5)', async () => {
+    const { host, frame } = await opened();
+    const { session } = frame;
+    session.applyOperation(DECORATION_OPERATIONS.fromProp, {
+      document: CONFIG,
+      record: session.descriptors(CONFIG, PLACEMENT_LIST)[0] ?? '',
+      target: PRESENTATION,
+      list: DECORATION_LIST,
+      visual: 'Hero',
+    });
+
+    runCommand(frame, SHELL_COMMANDS.save);
+    await settle();
+
+    // Оба документа тройки ED-19 с правками — и оба ушли на диск вместе.
+    expect(host.writes).toEqual([CONFIG, PRESENTATION]);
+    const layer = JSON.parse(host.text(PRESENTATION)) as { decorations: readonly unknown[] };
+    expect(layer.decorations).toHaveLength(1);
+    // Сим-сторона у объекта исчезла: существование в обоих документах сразу
+    // PRES-5 запрещает.
+    const config = JSON.parse(host.text(CONFIG)) as { initial: readonly { prefab: string }[] };
+    expect(config.initial.map((entry) => entry.prefab)).toEqual(['Crate']);
+  });
+
+  it('правка, не касающаяся декораций, парного документа не создаёт', async () => {
+    const { host, frame } = await opened();
+    frame.session.applyOperation('document.setValue', {
+      document: CONFIG,
+      path: ['capacity'],
+      value: 32,
+    });
+
+    runCommand(frame, SHELL_COMMANDS.save);
+    await settle();
+
+    expect(host.writes).toEqual([CONFIG]);
+    expect(await host.content.stat(PRESENTATION)).toBeUndefined();
+  });
+
+  it('отменённая единственная правка декораций файла не оставляет', async () => {
+    const { host, frame } = await opened();
+    addDecoration(frame);
+    expect(frame.session.undo()).toBe(true);
+
+    runCommand(frame, SHELL_COMMANDS.save);
+    await settle();
+
+    expect(host.writes).toEqual([]);
+    expect(await host.content.stat(PRESENTATION)).toBeUndefined();
+  });
+
+  it('опустевший до сохранения слой файла не заводит и несохранённым не числится', async () => {
+    const { host, frame } = await opened();
+    const { session } = frame;
+    addDecoration(frame);
+    // Не отмена, а удаление: документ остаётся с пустым списком, а не с тем
+    // значением, с которым открылся, — и писать его всё равно нечем (PRES-2).
+    session.applyOperation(DECORATION_OPERATIONS.remove, {
+      document: PRESENTATION,
+      record: session.descriptors(PRESENTATION, DECORATION_LIST)[0] ?? '',
+    });
+
+    runCommand(frame, SHELL_COMMANDS.save);
+    await settle();
+
+    expect(host.writes).toEqual([]);
+    expect(await host.content.stat(PRESENTATION)).toBeUndefined();
+    // Отсутствие файла и пустой список неразличимы (PRES-2): держать метку
+    // «есть несохранённое» на этом различии нечем.
+    expect(host.windowState.unsaved).toBe(false);
+    expect(session.dirtyDocumentIds()).toEqual([]);
+  });
+
+  it('опустевший УЖЕ СУЩЕСТВУЮЩИЙ файл переписывается: удаление не теряется', async () => {
+    const host = projectHost();
+    host.set(PRESENTATION, JSON.stringify({ decorations: [{ visual: 'Hero', x: 1, y: 1 }] }));
+    const app = await createEditorApp({ host });
+    app.frame.stateOf(SCENE_AREA_ID);
+    await settle();
+    const { session } = app.frame;
+
+    session.applyOperation(DECORATION_OPERATIONS.remove, {
+      document: PRESENTATION,
+      record: session.descriptors(PRESENTATION, DECORATION_LIST)[0] ?? '',
+    });
+    runCommand(app.frame, SHELL_COMMANDS.save);
+    await settle();
+
+    expect(host.writes).toEqual([PRESENTATION]);
+    expect(JSON.parse(host.text(PRESENTATION))).toEqual({ decorations: [] });
   });
 });

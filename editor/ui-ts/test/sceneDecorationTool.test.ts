@@ -16,6 +16,7 @@ import {
   FIXTURE_IDS,
   FIXTURE_PRESENTATION_ID,
   entityHit,
+  fixtureHost,
   fixtureHostWithLayer,
   surfaceHit,
 } from './support/project.js';
@@ -68,6 +69,24 @@ async function withLayer(): Promise<LoadedFrameFixture> {
   return fixture;
 }
 
+/**
+ * Сцена, парного документа у которой в дереве НЕТ: слой декораций живёт
+ * документом сессии, пока его не запишет сохранение (PRES-1, ED-16).
+ */
+async function withoutLayer(): Promise<LoadedFrameFixture> {
+  const fixture = await buildLoadedFrame('ru', { host: fixtureHost() });
+  fixture.stage.hits.set(`${AT_UNIT.x}:${AT_UNIT.y}`, entityHit(placementKeys(fixture)[0] ?? ''));
+  fixture.stage.surfaceHits.set(`${AT_UNIT.x}:${AT_UNIT.y}`, surfaceHit(0.5, 0.5, 0));
+  fixture.stage.hits.set(`${AT_EMPTY.x}:${AT_EMPTY.y}`, surfaceHit(3.5, 3.5, 15));
+  fixture.stage.surfaceHits.set(`${AT_EMPTY.x}:${AT_EMPTY.y}`, surfaceHit(3.5, 3.5, 15));
+  fixture.frame.view();
+  return fixture;
+}
+
+/** Лежит ли парный документ в дереве: слой в сессии — ещё не файл на диске. */
+const inTree = async (f: LoadedFrameFixture): Promise<boolean> =>
+  (await f.host.content.stat(FIXTURE_PRESENTATION_ID))?.kind === 'file';
+
 describe('PRES-1: открытие сцены находит парный документ по имени', () => {
   it('документ открыт, его записи попали в кадр и адресуются дескрипторами', async () => {
     const fixture = await withLayer();
@@ -80,13 +99,83 @@ describe('PRES-1: открытие сцены находит парный док
     expect(draft.decorations![0]!.key).toBe(decorationKeys(fixture)[0]);
   });
 
-  it('сцена без парного документа поднимается без предупреждений', async () => {
-    const fixture = await buildLoadedFrame();
-    expect(fixture.session.isOpen('scenes/fixture.presentation.json')).toBe(false);
+  it('сцена без файла пары поднимается пустым слоем, и слой доступен', async () => {
+    const fixture = await withoutLayer();
+    // Документ открыт, хотя файла в дереве нет: пустой слой — законное
+    // состояние сцены, а не отсутствие места (PRES-1, PRES-2).
+    expect(fixture.session.isOpen(FIXTURE_PRESENTATION_ID)).toBe(true);
+    expect(fixture.session.documentValue(FIXTURE_PRESENTATION_ID)).toEqual({});
+    expect(await inTree(fixture)).toBe(false);
     expect(fixture.stage.last!.decorations ?? []).toEqual([]);
     expect(fixture.stage.failure).toBeNull();
-    // Слой декораций недоступен: писать некуда, и это видно (ED-26).
-    expect(tool(fixture).canDecorate).toBe(false);
+    // Расстановка декораций от существования файла не зависит (ED-16, PRES-5).
+    expect(tool(fixture).canDecorate).toBe(true);
+  });
+});
+
+/**
+ * ED-16, PRES-5, PRES-1: парный документ рождается ПРАВКОЙ, а не заранее.
+ *
+ * SHALL расстановки декораций и перевода prop → decoration не оговорены
+ * существованием файла, и слой, доступный только на сцене, где `*.presentation.json`
+ * кто-то уже создал руками, их не исполняет. Документ поэтому открыт пустым, а
+ * файла до сохранения не появляется: «документ ради пустого слоя» PRES-1
+ * запрещает, документ ради правки — нет.
+ */
+describe('ED-16, PRES-5: первая правка декораций наполняет пустой парный документ', () => {
+  it('декорация ставится на сцене без файла пары и живёт в сессии до сохранения', async () => {
+    const fixture = await withoutLayer();
+    const active = tool(fixture);
+    active.setLayer('decoration');
+    active.setMode('place');
+    active.setVisual('Statue');
+    fixture.frame.view();
+
+    down(fixture, AT_EMPTY);
+    up(fixture, AT_EMPTY);
+
+    const records = layer(fixture);
+    expect(records).toHaveLength(1);
+    expect(getAtPath(records[0] ?? null, ['visual'])).toBe('Statue');
+    expect(selection(fixture)).toEqual([decorationKeys(fixture)[0]]);
+    // Слой доехал до кадра тем же путём, что и на сцене с файлом (ED-15).
+    expect(fixture.stage.last!.decorations).toHaveLength(1);
+    // Диска правка не касалась: сохранение — отдельная операция (ED-21).
+    expect(fixture.host.writes).toEqual([]);
+    expect(await inTree(fixture)).toBe(false);
+  });
+
+  it('prop переводится в декорацию туда же, и запись уезжает из конфига (PRES-5)', async () => {
+    const fixture = await withoutLayer();
+    down(fixture, AT_UNIT);
+    up(fixture, AT_UNIT);
+    expect(tool(fixture).convertible).toBe('sim');
+
+    tool(fixture).convert(null);
+
+    expect(layer(fixture)).toHaveLength(1);
+    expect(getAtPath(layer(fixture)[0] ?? null, ['visual'])).toBe('Hero');
+    expect(placements(fixture)).toHaveLength(1);
+    expect(await inTree(fixture)).toBe(false);
+  });
+
+  it('отменённая единственная правка не оставляет в слое несохранённого', async () => {
+    const fixture = await withoutLayer();
+    const active = tool(fixture);
+    active.setLayer('decoration');
+    active.setMode('place');
+    active.setVisual('Statue');
+    fixture.frame.view();
+    down(fixture, AT_EMPTY);
+    up(fixture, AT_EMPTY);
+    expect(fixture.session.document(FIXTURE_PRESENTATION_ID).dirty).toBe(true);
+
+    expect(fixture.session.undo()).toBe(true);
+    // Документ вернулся к тому, чем открылся, — и сохранять в нём нечего:
+    // писать пустой документ значило бы завести файл ради пустого слоя (PRES-1).
+    expect(fixture.session.documentValue(FIXTURE_PRESENTATION_ID)).toEqual({});
+    expect(fixture.session.document(FIXTURE_PRESENTATION_ID).dirty).toBe(false);
+    expect(fixture.session.dirtyDocumentIds()).not.toContain(FIXTURE_PRESENTATION_ID);
   });
 });
 
