@@ -79,6 +79,16 @@ const CENTER_TOLERANCE = 0.25;
 /** Сколько ошибок читатель называет, прежде чем замолчать: сломанная сетка их даёт по клетке. */
 const ERROR_LIMIT = 16;
 
+/**
+ * Величина в сообщении. Позиции приезжают из float32, и «высота
+ * 1.399999976158142» в отказе называет не то, что автор видит во вьюпорте
+ * Blender; отброшенные разряды — заведомо ниже допуска `HEIGHT_EPSILON`, то
+ * есть ниже того, что вообще различимо этими проверками.
+ */
+export function formatHeight(value: number): string {
+  return Number.isFinite(value) ? String(Number(value.toFixed(4))) : String(value);
+}
+
 interface CellSlot {
   height: number;
   readonly channels: number[];
@@ -146,7 +156,8 @@ export function readCellGrid(
     const y = Math.round(v);
     if (Math.abs(u - x) > CENTER_TOLERANCE || Math.abs(v - y) > CENTER_TOLERANCE) {
       fail(
-        `грань ${face} с центром (${centerX}, ${centerY}) не попадает в центр клетки: сетка сдвинута ` +
+        `грань ${face} с центром (${formatHeight(centerX)}, ${formatHeight(centerY)}) не попадает в центр ` +
+          `клетки: сетка сдвинута ` +
           `либо её трансформ не применён (CONVENTIONS.md)`,
       );
       continue;
@@ -193,7 +204,10 @@ export function readCellGrid(
       continue;
     }
     if (Math.abs(known.height - first) > HEIGHT_EPSILON) {
-      fail(`клетка (${x}, ${y}): грани клетки лежат на разной высоте (${known.height} и ${first})`);
+      fail(
+        `клетка (${x}, ${y}): грани клетки лежат на разной высоте ` +
+          `(${formatHeight(known.height)} и ${formatHeight(first)})`,
+      );
       continue;
     }
     for (let c = 0; c < channels.length; c++) {

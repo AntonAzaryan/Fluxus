@@ -133,19 +133,25 @@ export async function runImport(request: ImportRequest): Promise<ImportResult> {
     throw new Error(`конфигу сцены "${scene}" нечего импортировать: файла нет (BLND-2 — парность по имени)`);
   }
 
-  const objects = await readSource(host, source);
+  const { document, objects } = await readSource(host, source);
   // Режим проверки не касается чужой сессии: он ничего не записывает НИКУДА, а
   // применённая в подданной сессии операция осталась бы в ней правкой и записью
   // истории (ED-18) — то есть проверка меняла бы состояние редактора.
   const session = dryRun ? createImportSession() : (request.session ?? createImportSession());
   const target: ImportTarget = await openImportTarget(session, host, {
     scene,
+    slots: slotsOf(objects),
     ...(request.manifest === undefined ? {} : { manifest: request.manifest }),
     ...(request.kinds === undefined ? {} : { kinds: request.kinds }),
     ...(request.binding === undefined ? {} : { binding: request.binding }),
   });
 
-  const layer = generateSpatialLayer(objects, target.context);
+  // Слой считается целиком до первой записи: размещения и клеточные слои — один
+  // вход одной операции, и половины импорта не бывает (BLND-6).
+  const layer = withCellLayer(
+    generateSpatialLayer(objects, target.context),
+    generateCellLayer(document, objects, target.context),
+  );
   const base = {
     dryRun,
     source,
@@ -165,9 +171,11 @@ export async function runImport(request: ImportRequest): Promise<ImportResult> {
       importParams({
         scene: target.sceneId,
         presentation: target.presentationId,
+        curvature: target.curvatureId,
         layer,
         initialPath: target.initialPath,
         decorationsPath: target.decorationsPath,
+        terrainPath: target.terrainPath,
       }),
     );
     changes = (outcome.result ?? null) as Record<string, unknown> | null;

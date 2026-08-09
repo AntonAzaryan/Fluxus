@@ -28,6 +28,7 @@ export {
   parseGltf,
   parseGltfJson,
   readAccessor,
+  readMeshGeometry,
   rootNodesOf,
 } from './gltf.js';
 export type {
@@ -41,10 +42,20 @@ export type {
   GltfNode,
   GltfPrimitive,
   GltfScene,
+  MeshGeometry,
 } from './gltf.js';
 
-export { SEMANTIC_KEYS, SKIN_KEY, coerceExtra, decompose, localMatrixOf, multiplyMatrices, normalizeDocument } from './normalize.js';
-export type { SemanticKind, SourceObject } from './normalize.js';
+export {
+  SEMANTIC_KEYS,
+  SKIN_KEY,
+  coerceExtra,
+  decompose,
+  localMatrixOf,
+  multiplyMatrices,
+  normalizeDocument,
+  worldPoint,
+} from './normalize.js';
+export type { SemanticKind, SourceObject, WorldPoint } from './normalize.js';
 
 export {
   DEFAULT_POSITION_BINDING,
@@ -54,13 +65,34 @@ export {
   quantizedFixed,
 } from './layer.js';
 export type {
+  CellLayerContext,
+  CurvatureMap,
   Finding,
   FindingSeverity,
   PositionBinding,
   RotationBinding,
   SpatialLayer,
   SpatialLayerContext,
+  TargetTerrain,
+  TerrainMaps,
 } from './layer.js';
+
+export {
+  HEIGHT_EPSILON,
+  NOFLOOR_CHANNEL,
+  RAMP_CHANNEL,
+  readCellGrid,
+} from './cells.js';
+export type { CellGrid, CellGridRead, CellGridSpec } from './cells.js';
+
+export {
+  LEVEL_UNIT,
+  MAX_CURVATURE_OFFSET,
+  MIN_CURVATURE_OFFSET,
+  generateCellLayer,
+  withCellLayer,
+} from './maps.js';
+export type { CellLayer } from './maps.js';
 
 export {
   SCENE_SUFFIX,
@@ -75,6 +107,7 @@ export {
 export {
   DEFAULT_DECORATIONS_PATH,
   DEFAULT_INITIAL_PATH,
+  DEFAULT_TERRAIN_PATH,
   IMPORT_SPATIAL_LAYER,
   importParams,
   importSpatialLayerOperation,
@@ -89,9 +122,10 @@ export {
   contextOf,
   contextOfValues,
   openImportTarget,
+  terrainOfValue,
   visualsOf,
 } from './project.js';
-export type { ImportKinds, ImportTarget, OpenImportTargetInput } from './project.js';
+export type { ImportKinds, ImportSlots, ImportTarget, OpenImportTargetInput } from './project.js';
 
 export { createImportSession, runImport } from './importer.js';
 export type { ImportRequest, ImportResult } from './importer.js';

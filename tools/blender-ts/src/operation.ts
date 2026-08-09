@@ -498,8 +498,8 @@ export const importSpatialLayerOperation: AuthoringOperation = {
       terrain === null
         ? null
         : {
-            levels: writeMap(ctx, scene, [...terrainPath, LEVEL_MAP], terrain.levels),
-            flags: writeMap(ctx, scene, [...terrainPath, FLAG_MAP], terrain.flags),
+            levels: { ...writeMap(ctx, scene, [...terrainPath, LEVEL_MAP], terrain.levels) },
+            flags: { ...writeMap(ctx, scene, [...terrainPath, FLAG_MAP], terrain.flags) },
           };
     const curvatureChange =
       curvature === null || curvatureId === null
@@ -508,7 +508,7 @@ export const importSpatialLayerOperation: AuthoringOperation = {
             size:
               writeScalar(ctx, curvatureId, ['width'], curvature.width) +
               writeScalar(ctx, curvatureId, ['height'], curvature.height),
-            rows: writeMap(ctx, curvatureId, [OFFSET_MAP], curvature.rows),
+            rows: { ...writeMap(ctx, curvatureId, [OFFSET_MAP], curvature.rows) },
           };
 
     return {

@@ -47,6 +47,7 @@ import { CURVATURE_SCALE, curvatureOffsetOf, validateCurvatureMap } from '@game-
 import {
   HEIGHT_EPSILON,
   NOFLOOR_CHANNEL,
+  formatHeight,
   RAMP_CHANNEL,
   readCellGrid,
   type CellGrid,
@@ -158,7 +159,7 @@ function terrainMapsOf(sink: Sink, object: SourceObject, grid: CellGrid): Terrai
         error(
           sink,
           object.name,
-          `клетка (${x}, ${y}): высота ${grid.heights[at]} не разрешается в целый уровень — ` +
+          `клетка (${x}, ${y}): высота ${formatHeight(grid.heights[at]!)} не разрешается в целый уровень — ` +
             `округлять за автора импорт не вправе (BLND-9)`,
         );
         failed = true;
@@ -226,7 +227,7 @@ function curvatureRowsOf(sink: Sink, object: SourceObject, grid: CellGrid): read
         warning(
           sink,
           object.name,
-          `клетка (${x}, ${y}): смещение ${value} шага высоты вне амплитуды алфавита ` +
+          `клетка (${x}, ${y}): смещение ${formatHeight(value)} шага высоты вне амплитуды алфавита ` +
             `[${MIN_CURVATURE_OFFSET}/${CURVATURE_SCALE}, ${MAX_CURVATURE_OFFSET}/${CURVATURE_SCALE}] — ` +
             `записана крайняя ступень (BLND-10)`,
         );

@@ -68,11 +68,26 @@ export const MANIFEST: VisualManifest = {
     Marker: { model: 'visuals/models/marker.gltf' },
   },
   decorations: { Statue: { model: 'visuals/models/statue.gltf' } },
+  // Адрес карты кривизны называет манифест (ASSET-7): своей конвенции имени у
+  // неё нет, и импорт её не выдумывает (BLND-10).
+  terrain: { curvatureMap: 'visuals/arena-curvature.json' },
 };
 
 export function context(overrides: Partial<SpatialLayerContext> = {}): SpatialLayerContext {
-  return { components: COMPONENTS, prefabs: PREFABS, visuals: MANIFEST, ...overrides };
+  return {
+    components: COMPONENTS,
+    prefabs: PREFABS,
+    visuals: MANIFEST,
+    // Сетку цели подаёт тест, которому она нужна: сцена без ассета террейна —
+    // законное состояние, и клеточные слои на ней отказывают (BLND-9).
+    terrain: null,
+    curvatureMap: MANIFEST.terrain?.curvatureMap ?? null,
+    ...overrides,
+  };
 }
+
+/** Сетка цели значением — то, что `contextOfValues` вынимает из конфига сцены. */
+export const TARGET_TERRAIN = { width: 4, height: 4, tileSize: 65536 } as const;
 
 /* Цель импорта: дерево контента из тех же схем и prefab'ов, что и контекст выше. */
 
@@ -80,15 +95,36 @@ export const SCENE_ID = 'scenes/duel.scene.json';
 export const PRESENTATION_ID = 'scenes/duel.presentation.json';
 export const SOURCE_ID = 'scenes/duel.gltf';
 export const MANIFEST_ID = 'visuals/manifest.json';
+export const CURVATURE_ID = 'visuals/arena-curvature.json';
+
+/**
+ * Ассет террейна цели (TERR-2, TERR-3): сетка 4×4 по клетке в мировую единицу.
+ * Карты — «до импорта»: плоский нулевой уровень без рамп и провалов, чтобы
+ * приехавшие из источника карты были видны в диффе целиком.
+ */
+export const TERRAIN_ASSET: Record<string, unknown> = {
+  width: 4,
+  height: 4,
+  tileSize: 65536,
+  levels: ['0000', '0000', '0000', '0000'],
+  flags: ['....', '....', '....', '....'],
+};
 
 /**
  * Конфиг сцены цели. Полей сверх производных здесь нарочно много: BLND-2
  * требует, чтобы импорт не тронул ни одного из них, и проверять это на
  * документе из одного `initial` было бы нечем.
+ *
+ * Ассет террейна — необязательный: сцена без него законна (TERR-4), и именно на
+ * ней проверяется «источник без terrain-объекта ассета не трогает» (BLND-2).
  */
-export function sceneDocument(initial: readonly unknown[] = []): Record<string, unknown> {
+export function sceneDocument(
+  initial: readonly unknown[] = [],
+  terrain: Record<string, unknown> | null = null,
+): Record<string, unknown> {
   return {
     capacity: 64,
+    ...(terrain === null ? {} : { terrain: structuredClone(terrain) }),
     components: COMPONENTS.map((schema) => ({ name: schema.name, fields: { ...schema.fields } })),
     prefabs: PREFABS.map((def) => ({ name: def.name, components: structuredClone(def.components) })),
     systems: [
@@ -122,17 +158,28 @@ export function manifestDocument(): Record<string, unknown> {
   return structuredClone(MANIFEST) as unknown as Record<string, unknown>;
 }
 
-/** Дерево контента цели: сцена, парный документ, манифест и экспорт источника. */
+/** Документ карты кривизны (ASSET-7) — «до импорта»: сетка та же, смещений нет. */
+export function curvatureDocument(rows: readonly string[] = ['....', '....', '....', '....']): Record<string, unknown> {
+  return { width: 4, height: 4, rows: [...rows] };
+}
+
+/**
+ * Дерево контента цели: сцена, парный документ, манифест и экспорт источника.
+ * Источник — имя закоммиченной фикстуры либо готовые байты (grid-сетки строятся
+ * в памяти, см. `gridGltf`).
+ */
 export function contentFiles(
-  source: string = 'placements.gltf',
+  source: string | Uint8Array = 'placements.gltf',
   scene: Record<string, unknown> = sceneDocument(),
   presentation: Record<string, unknown> = presentationDocument(),
+  extra: Record<string, string | Uint8Array> = {},
 ): Record<string, string | Uint8Array> {
   return {
     [SCENE_ID]: JSON.stringify(scene, null, 2),
     [PRESENTATION_ID]: JSON.stringify(presentation, null, 2),
     [MANIFEST_ID]: JSON.stringify(manifestDocument(), null, 2),
-    [SOURCE_ID]: fixtureBytes(source),
+    [SOURCE_ID]: typeof source === 'string' ? fixtureBytes(source) : source,
+    ...extra,
   };
 }
 
@@ -169,3 +216,198 @@ export function packGlb(json: unknown, binary?: Uint8Array): Uint8Array {
   }
   return out;
 }
+
+/* -------------------------------------------------- grid-фикстуры (BLND-9, BLND-10) */
+
+/**
+ * Сетка клеточных данных так, как её экспортирует Blender: отдельный
+ * четырёхугольник на клетку (`grids.py` аддона), триангулированный экспортёром,
+ * с целочисленными каналами `_RAMP`/`_NOFLOOR` на вершинах.
+ *
+ * Строится в памяти из ЧИТАЕМЫХ карт — рядов алфавитов TERR-3 и ASSET-7, — а не
+ * лежит закоммиченным блобом: base64 бинарного чанка в ревью нечитаем, и
+ * фикстура из него доказывала бы меньше, чем строка `'0011'` рядом с
+ * ожиданием. Тот же довод, по которому `.glb` собирается `packGlb`.
+ *
+ * Пространство координат — glTF после экспорта «+Y Up»: клетка `(x, y)` лежит в
+ * `[x·cell, (x+1)·cell] × [y·cell, (y+1)·cell]` мировых координат, то есть в
+ * glTF `z` от `−y·cell` до `−(y+1)·cell`, а высота уезжает в glTF `+y`.
+ */
+export interface GridObjectSpec {
+  /** Имя объекта Blender — адрес в находках (BLND-6). */
+  readonly name: string;
+  readonly semantic: 'terrain' | 'curvature';
+  /** Высота клетки в мировых единицах, по рядам сетки. */
+  readonly heights: readonly (readonly number[])[];
+  /** Значения канала `_RAMP` по клеткам; нет — канала в экспорте нет вовсе. */
+  readonly ramp?: readonly (readonly number[])[];
+  readonly noFloor?: readonly (readonly number[])[];
+  /** Размер клетки в мировых единицах; нет — единица (`tileSize` 65536). */
+  readonly cellSize?: number;
+  /** Разрез квада по второй диагонали — экспортёр вправе выбрать любую. */
+  readonly flipDiagonal?: boolean;
+}
+
+/** Карта уровней (TERR-3) → высоты клеток: один уровень — одна мировая единица. */
+export function levelHeights(rows: readonly string[]): number[][] {
+  return rows.map((row) => [...row].map((char) => parseInt(char, 16)));
+}
+
+/** Ряды карты флагов (TERR-3) → значения канала: символ совпал — единица. */
+export function flagCells(rows: readonly string[], char: string): number[][] {
+  return rows.map((row) => [...row].map((cell) => (cell === char ? 1 : 0)));
+}
+
+/** Ряды карты кривизны (ASSET-7) → высоты клеток в долях шага высоты. */
+export function curvatureHeights(rows: readonly string[]): number[][] {
+  return rows.map((row) =>
+    [...row].map((char) => {
+      if (char === '.') return 0;
+      if (char >= '1' && char <= '7') return (char.charCodeAt(0) - 0x30) / 16;
+      return -(char.charCodeAt(0) - 0x60) / 16;
+    }),
+  );
+}
+
+interface Chunk {
+  readonly bytes: Uint8Array;
+  readonly accessor: Record<string, unknown>;
+  readonly view: Record<string, unknown>;
+}
+
+function floatChunk(values: readonly number[], components: number): Chunk {
+  const array = Float32Array.from(values);
+  return {
+    bytes: new Uint8Array(array.buffer),
+    accessor: { componentType: 5126, count: values.length / components, type: components === 3 ? 'VEC3' : 'SCALAR' },
+    view: { byteLength: array.byteLength },
+  };
+}
+
+function indexChunk(values: readonly number[]): Chunk {
+  const array = Uint32Array.from(values);
+  return {
+    bytes: new Uint8Array(array.buffer),
+    accessor: { componentType: 5125, count: values.length, type: 'SCALAR' },
+    view: { byteLength: array.byteLength },
+  };
+}
+
+/** Документ glTF с grid-объектами и их бинарным чанком. */
+export function gridSource(specs: readonly GridObjectSpec[]): {
+  json: Record<string, unknown>;
+  binary: Uint8Array;
+} {
+  const nodes: Record<string, unknown>[] = [];
+  const meshes: Record<string, unknown>[] = [];
+  const accessors: Record<string, unknown>[] = [];
+  const views: Record<string, unknown>[] = [];
+  const chunks: Uint8Array[] = [];
+  let offset = 0;
+
+  const push = (chunk: Chunk): number => {
+    views.push({ buffer: 0, byteOffset: offset, ...chunk.view });
+    accessors.push({ bufferView: views.length - 1, ...chunk.accessor });
+    chunks.push(chunk.bytes);
+    // Выравнивание по четырём байтам — требование формата к смещениям вида.
+    offset += chunk.bytes.byteLength + ((4 - (chunk.bytes.byteLength % 4)) % 4);
+    return accessors.length - 1;
+  };
+
+  for (const spec of specs) {
+    const cell = spec.cellSize ?? 1;
+    const height = spec.heights.length;
+    const width = spec.heights[0]?.length ?? 0;
+    const positions: number[] = [];
+    const indices: number[] = [];
+    const ramp: number[] = [];
+    const noFloor: number[] = [];
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const z = spec.heights[y]![x]!;
+        const x0 = x * cell;
+        const x1 = (x + 1) * cell;
+        const y0 = -y * cell;
+        const y1 = -(y + 1) * cell;
+        const base = positions.length / 3;
+        // Четыре угла клетки в порядке аддона; вертикаль мира — glTF `+y`.
+        positions.push(x0, z, y0, x1, z, y0, x1, z, y1, x0, z, y1);
+        indices.push(
+          ...(spec.flipDiagonal === true
+            ? [base, base + 1, base + 3, base + 1, base + 2, base + 3]
+            : [base, base + 1, base + 2, base, base + 2, base + 3]),
+        );
+        for (let corner = 0; corner < 4; corner++) {
+          ramp.push(spec.ramp?.[y]?.[x] ?? 0);
+          noFloor.push(spec.noFloor?.[y]?.[x] ?? 0);
+        }
+      }
+    }
+
+    const attributes: Record<string, number> = { POSITION: push(floatChunk(positions, 3)) };
+    if (spec.ramp !== undefined) attributes['_RAMP'] = push(floatChunk(ramp, 1));
+    if (spec.noFloor !== undefined) attributes['_NOFLOOR'] = push(floatChunk(noFloor, 1));
+    const primitive = { attributes, indices: push(indexChunk(indices)), mode: 4 };
+    meshes.push({ name: `${spec.name}-mesh`, primitives: [primitive] });
+    nodes.push({ name: spec.name, mesh: meshes.length - 1, extras: { [spec.semantic]: 1 } });
+  }
+
+  const binary = new Uint8Array(offset);
+  let at = 0;
+  for (const chunk of chunks) {
+    binary.set(chunk, at);
+    at += chunk.byteLength + ((4 - (chunk.byteLength % 4)) % 4);
+  }
+  return {
+    json: {
+      asset: { version: '2.0', generator: 'фикстура конвейера, собранная тестом (BLND-7)' },
+      scene: 0,
+      scenes: [{ nodes: nodes.map((_, index) => index) }],
+      nodes,
+      meshes,
+      accessors,
+      bufferViews: views,
+      buffers: [{ byteLength: binary.byteLength }],
+    },
+    binary,
+  };
+}
+
+/** Контейнер `.glb`: клеточные данные приезжают бинарным чанком (задача 4.2). */
+export function gridGlb(specs: readonly GridObjectSpec[]): Uint8Array {
+  const source = gridSource(specs);
+  return packGlb(source.json, source.binary);
+}
+
+/** Текстовая форма того же источника: буфер уезжает `data:`-URI. */
+export function gridGltf(specs: readonly GridObjectSpec[]): Uint8Array {
+  const source = gridSource(specs);
+  const base64 = Buffer.from(source.binary).toString('base64');
+  const json = {
+    ...source.json,
+    buffers: [{ byteLength: source.binary.byteLength, uri: `data:application/octet-stream;base64,${base64}` }],
+  };
+  return new TextEncoder().encode(JSON.stringify(json));
+}
+
+/** Карты, которые даёт `TERRAIN_GRID`: плато с рампой и провалом в углу. */
+export const TERRAIN_LEVELS: readonly string[] = ['0000', '0000', '1111', '1111'];
+export const TERRAIN_FLAGS: readonly string[] = ['_...', '_^^.', '....', '....'];
+
+/** Grid-объект террейна, дающий карты выше. */
+export const TERRAIN_GRID: GridObjectSpec = {
+  name: 'terrain',
+  semantic: 'terrain',
+  heights: levelHeights(TERRAIN_LEVELS),
+  ramp: flagCells(TERRAIN_FLAGS, '^'),
+  noFloor: flagCells(TERRAIN_FLAGS, '_'),
+};
+
+/** Ряды, которые даёт `CURVATURE_GRID`. */
+export const CURVATURE_ROWS: readonly string[] = ['.123', 'abc.', '7g..', '....'];
+
+export const CURVATURE_GRID: GridObjectSpec = {
+  name: 'curvature',
+  semantic: 'curvature',
+  heights: curvatureHeights(CURVATURE_ROWS),
+};
