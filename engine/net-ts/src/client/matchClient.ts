@@ -67,6 +67,22 @@ export interface InputSample {
   readonly buttons: number;
 }
 
+/**
+ * Доставка состояния рендеру: пара снапшотов с долей между ними (NET-3) плюс
+ * признак разрыва непрерывности.
+ *
+ * Признак едет ИМЕННО здесь, а не рядом отдельным вызовом: «Признаки разрыва
+ * непрерывности (rewind/replay, смена режима мира) SHALL передаваться в
+ * доставке состояния» (`client-shell` SHELL-7). Состояние и указание рисовать
+ * его snap'ом обязаны приезжать вместе, иначе между чтением одного и другого
+ * появляется окно, в котором рендер уже знает новое состояние, но ещё не знает,
+ * что интерполировать к нему нечего (REND-2).
+ */
+export interface MatchSample extends InterpolationSample {
+  /** Состояние принадлежит другой ветви истории — рисовать snap'ом (SHELL-7, NTR-10). */
+  readonly discontinuity: boolean;
+}
+
 export type ClientPhase = 'greeting' | 'lobby' | 'playing' | 'closed';
 
 const DEFAULTS = {
@@ -161,9 +177,14 @@ export class MatchClient {
    * предыдущим не существовало, и рисовать его нужно snap'ом (`client-shell`
    * SHELL-7, `rendering` REND-2).
    *
-   * Читается вместе с состоянием и гасится чтением — как признаки разрыва в
-   * канале оболочки, где они копятся до ближайшей доставки. Подглядеть, не
-   * гася, — `discontinuous`.
+   * Потребителей состояния два, и признак ездит к обоим одинаково — вместе с
+   * состоянием и гасясь чтением. Потребитель, берущий состояние `sample()`,
+   * читает признак в поле `discontinuity` самого сэмпла и этот метод не зовёт
+   * вовсе. Этот метод — для второго: того, кто рисует по `latest`, минуя буфер
+   * интерполяции (RenderBridge оболочки). Гасит признак тот, кто первым взял
+   * состояние: два независимых потребителя одного клиента поделили бы один
+   * признак и один из них нарисовал бы «проезд» между ветвями истории.
+   * Подглядеть, не гася, — `discontinuous`.
    */
   takeDiscontinuity(): boolean {
     const pending = this.discontinuityPending;
@@ -191,10 +212,19 @@ export class MatchClient {
     return this.outbox.splice(0, this.outbox.length);
   }
 
-  sample(nowMs: number): InterpolationSample | undefined {
+  /**
+   * Состояние на момент `nowMs` вместе с признаком разрыва (SHELL-7).
+   *
+   * Признак гасится ровно тогда, когда сэмпл отдан: доставки состояния не
+   * случилось — гасить нечего, и разрыв дождётся следующего вызова. Второй
+   * потребитель, читающий `latest` мимо буфера, берёт тот же признак
+   * `takeDiscontinuity()`; контракт описан там.
+   */
+  sample(nowMs: number): MatchSample | undefined {
     const sampled = this.buffer.sample(nowMs);
-    if (sampled !== undefined) this.metrics.bufferLagMs = sampled.lagMs;
-    return sampled;
+    if (sampled === undefined) return undefined;
+    this.metrics.bufferLagMs = sampled.lagMs;
+    return { ...sampled, discontinuity: this.takeDiscontinuity() };
   }
 
   /**
@@ -214,6 +244,18 @@ export class MatchClient {
   /** Ввод игрока: помечается тиком с запасом задержки (NTR-7) и уходит на сервер. */
   pushInput(sample: InputSample, nowMs: number): void {
     if (this.clientPhase !== 'playing' || this.matchPacing === undefined) return;
+    // Мир, который клиент видит остановленным, ввода не ждёт: он на симуляцию
+    // не повлияет (NET-11, REW-5), и сервер отбросит его сам — авторитетная
+    // проверка стоит там. Здесь это гигиена канала, поэтому и источник самый
+    // дешёвый: режим мира приезжает внутри снапшота (SNAP-1) и лежит в
+    // последнем применённом состоянии. Он же и граница честности этой
+    // проверки — во время `Paused` сервер не рассылает состояний вовсе, и
+    // последним известным клиенту режимом остаётся `Running`: паузу видит
+    // только сервер, перемотку — оба. До первого снапшота режим не известен
+    // вовсе, и молчать по незнанию клиент не должен: мир матча стартует в
+    // `Running`.
+    const known = this.buffer.latest;
+    if (known !== undefined && known.mode !== 'Running') return;
     const frame: InputFrame = {
       tick: this.estimatedTick + this.matchPacing.inputDelay,
       playerId: this.options.playerId,
@@ -338,6 +380,14 @@ export class MatchClient {
       epoch < this.lastAppliedEpoch ||
       (epoch === this.lastAppliedEpoch && tick <= this.lastAppliedTick);
     if (stale) {
+      // Асимметрия с правилом дедупа ввода (NTR-7) намеренная: повторно
+      // разосланное состояние с равной парой считается здесь наравне с
+      // устаревшим, тогда как повторно присланный кадр ввода не считается
+      // дефектом нигде. Причина в том, что мерят эти счётчики разное.
+      // `snapshotsDropped` — «сколько состояний доехало впустую», и повтор
+      // доехал впустую ровно так же, как опоздавший: клиент показывать его не
+      // станет. Счётчики NTR-11, которые правило дедупа бережёт, — про дефекты
+      // КАНАЛА и отправителя, и избыточная отправка ввода там штатный режим.
       this.metrics.snapshotsDropped++;
       return;
     }
@@ -373,6 +423,11 @@ export class MatchClient {
     if (rewound) {
       this.buffer.reset();
       this.discontinuityPending = true;
+      // Сколько ввода игрока унесла перемотка (NTR-10): кадры прежних эпох
+      // остаются в кольце ровно ради этого ответа, и здесь у него появляется
+      // потребитель. В мир и в канонический лог величина не попадает — она
+      // клиентская и наблюдательная (NTR-11).
+      this.metrics.inputsStranded = this.ring.strandedBefore(epoch);
     }
     this.resyncTick(tick, rewound);
     this.buffer.push(snapshot, nowMs);

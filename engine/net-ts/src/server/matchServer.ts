@@ -16,7 +16,6 @@ import {
   filterSnapshot,
   snapshotToPlain,
   tick as advanceTick,
-  RingHistory,
   VIEWPOINT_ALL,
   type EventVisibility,
   type ExemptField,
@@ -33,6 +32,7 @@ import {
   type VisibilityOptions,
   type WorldMode,
 } from '@game-mvp/core';
+import { BranchHistory, type MatchHistory } from '../match/history.js';
 import { buildMatchWorld } from '../match/world.js';
 import { createServerMetrics, type ServerMetrics } from '../metrics.js';
 import type { ConnectionId } from '../transport/transport.js';
@@ -164,7 +164,7 @@ export class MatchServer {
   private readonly state: ReturnType<typeof buildMatchWorld>['state'];
 
   /** Механизм перемотки (NET-11, WSM-1..6). `undefined` — матч поднят без истории. */
-  private readonly history: RingHistory | undefined;
+  private readonly history: MatchHistory | undefined;
   private readonly inputLog: InputLog | undefined;
   private readonly rewindController: RewindController | undefined;
 
@@ -261,11 +261,18 @@ export class MatchServer {
       // Реплей внутри `seekTo` идёт по каноническим вводам (REW-2), поэтому лог
       // ядра ведётся рядом с сегментами: сегменты — история матча, `InputLog` —
       // рабочий буфер механизма восстановления.
-      const history = new RingHistory({
+      const history = new BranchHistory({
         interval: config.rewind.interval,
         capacity: config.rewind.capacity,
       });
-      const inputLog = createInputLog();
+      // Глубина лога вводов привязана к глубине истории, а не к умолчанию
+      // `createInputLog`: реплей внутри `seekTo` идёт от ближайшего снапшота
+      // (REW-2), то есть заглядывает назад на `depth` тиков от самого свежего
+      // снапшота плюс ещё до `interval - 1` тиков, на которые живой тик успел
+      // уйти вперёд от него. Умолчание в 1024 кадра при глубоком буфере
+      // (SNAP-4 — своё число у каждого провайдера) молча оставило бы реплей без
+      // вводов, и восстановленное состояние разошлось бы с исходным (DET-1).
+      const inputLog = createInputLog(history.depth + config.rewind.interval + 1);
       // Состояние до первого тика — тоже точка восстановления (REW-1).
       history.record(this.state);
       this.history = history;
@@ -475,6 +482,21 @@ export class MatchServer {
     const pending = this.pending[slot]!;
     const playerId = this.config.players[slot]!;
 
+    // Мир не идёт — ввод не принимается вовсе (NET-11, REW-5). Проверка стоит
+    // перед проверкой эпохи, потому что клиент, пересинхронизировавшийся по
+    // первому снапшоту новой эпохи, шлёт кадры с ВЕРНОЙ эпохой и верными
+    // будущими тиками, пока мир ещё в `Rewinding` или `Paused`: они прошли бы
+    // все остальные проверки, дождались бы в `pending` возобновления и легли бы
+    // на мир залпом — «ввод, накопленный в замороженном мире и применённый
+    // скопом на возобновлении, дал бы залп действий, которых игрок в идущем
+    // матче не совершал» (NET-11).
+    //
+    // Молча и без счётчиков: NTR-11 такого класса не определяет, а канал здесь
+    // исправен — отправитель не видит, что мир остановлен, и его кадры не
+    // дефект ни канала, ни клиента. Пауза и перемотка для него неразличимы,
+    // поэтому правило одно на оба режима.
+    if (this.state.mode !== 'Running') return;
+
     // Эпоха — величина сообщения, а не кадра (NTR-16): ввод, порождённый в
     // стёртой перемоткой ветви истории, по номеру тика неотличим от свежего, и
     // без этой проверки применялся бы тем успешнее, чем мельче был откат.
@@ -669,9 +691,18 @@ export class MatchServer {
     this.requireRewind().beginRewind();
   }
 
-  /** `Paused → Running` — продолжить с текущего, в том числе перемотанного, тика. */
+  /**
+   * `Paused → Running` — продолжить с текущего, в том числе перемотанного, тика.
+   *
+   * Накопленный неприменённый ввод гасится и здесь, а не только на смене эпохи:
+   * ввод в замороженный мир не принимается вовсе (`ingest`), но перемотка на
+   * тот же тик эпохи не двигает (NTR-16), и кадр, доехавший до `pause()`, ждал
+   * бы в `pending` возобновления. Залпа на возобновлении быть не должно
+   * (NET-11, REW-5), а лишний `clear` на переходе стоит ровно ничего.
+   */
   resume(): void {
     this.requireRewind().resume();
+    for (const pending of this.pending) pending.clear();
   }
 
   /**
@@ -682,7 +713,22 @@ export class MatchServer {
    * является одно восстановленное состояние, а не поток промежуточных.
    */
   seekTo(tick: number): void {
-    this.requireRewind().seekTo(tick);
+    const controller = this.requireRewind();
+    // Точка остановки лежит в прошлом (REW-7). Без этой проверки `seekTo` на
+    // будущий тик доиграл бы мир вперёд реплеевыми тиками по ПУСТОМУ логу
+    // вводов — тики, которых в каноническом логе нет и не будет (NTR-16), то
+    // есть тихо невоспроизводимая запись. Ошибкой, как у соседей: перемотка
+    // вперёд — дефект вызывающей политики, а не штатный случай.
+    if (tick > this.state.tick) {
+      throw new Error(
+        `MatchServer.seekTo: точка остановки ${tick} впереди текущего тика ${this.state.tick} (REW-7)`,
+      );
+    }
+    controller.seekTo(tick);
+    // Ветвь, которую перемотка стёрла, уходит из истории здесь же: живые тики
+    // новой эпохи пойдут по тем же номерам, и без обрезки в буфере оказались бы
+    // два снапшота одного тика — см. `BranchHistory`.
+    this.history?.dropAfter(this.state.tick);
     this.adoptFramesOf(this.state.tick);
     this.broadcastSnapshots();
   }

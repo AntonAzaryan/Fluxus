@@ -49,9 +49,20 @@ export function createServerMetrics(slotCount: number): ServerMetrics {
 
 export interface ClientMetrics {
   snapshotsApplied: number;
-  /** Снапшот с тиком не больше применённого: условие работы на неупорядоченном канале (NTR-10). */
+  /**
+   * Снапшот, пара `(эпоха, тик)` которого не больше применённой (NTR-16,
+   * NTR-10): условие работы на неупорядоченном канале. Считается по паре, а не
+   * по тику, — при перемотке номера тиков идут назад, и «устаревший» от
+   * «перемотанного» отличает только эпоха.
+   */
   snapshotsDropped: number;
   inputsSent: number;
+  /**
+   * Кадры кольца, оставшиеся в эпохах старше текущей, — сколько ввода игрока
+   * унесла перемотка (NTR-10). Величина клиентская и наблюдательная: в мир и в
+   * канонический `inputs[]` она не попадает (NTR-11).
+   */
+  inputsStranded: number;
   bytesReceived: number;
   /**
    * Задержка «нажал → увидел», мс: от отправки кадра до появления его `seq` в
@@ -71,6 +82,7 @@ export function createClientMetrics(): ClientMetrics {
     snapshotsApplied: 0,
     snapshotsDropped: 0,
     inputsSent: 0,
+    inputsStranded: 0,
     bytesReceived: 0,
     inputToVisibleMs: undefined,
     inputToVisibleMinMs: undefined,

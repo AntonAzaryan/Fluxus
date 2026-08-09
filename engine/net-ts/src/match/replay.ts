@@ -76,7 +76,19 @@ export function replaySegments(def: SegmentedReplayDef): SegmentedReplayResult {
     if (built.state.tick !== first - 1) {
       built = buildMatchWorld(worldDef);
       for (let t = 1; t < first; t++) {
-        advanceTick(built.sim, built.state, applied.get(t) ?? []);
+        const frames = applied.get(t);
+        if (frames === undefined) {
+          // Пропуск тика в переигрываемом префиксе — сломанный лог, как пустой
+          // и как несплошной сегмент: сегменты покрывают исполненные тики
+          // подряд (NTR-16), и дырка означает, что запись не полна. Подставить
+          // здесь нулевой ввод значило бы доиграть мир кадрами, которых на
+          // сервере не было, и получить состояние, не совпадающее с
+          // авторитетным, — то есть тихо ложный прогон (DET-1, NTR-8).
+          throw new Error(
+            `реплей: тик ${t} перед сегментом эпохи ${segment.epoch} не покрыт ни одним сегментом (NTR-16)`,
+          );
+        }
+        advanceTick(built.sim, built.state, frames);
       }
       if (built.state.tick !== first - 1) {
         throw new Error(

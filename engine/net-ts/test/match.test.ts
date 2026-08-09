@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  fixed,
   query,
   runScenario,
   snapshotToPlain,
@@ -22,6 +23,7 @@ import {
   harness,
   hello,
   inputMessage,
+  inputMessageOf,
   placedScene,
   settle,
   wireInput,
@@ -152,6 +154,55 @@ describe('матч двух игроков', () => {
     expect(a.client.metrics.snapshotsDropped).toBe(1);
     expect(a.client.metrics.snapshotsApplied).toBe(applied);
     expect(a.client.latest!.tick).toBe(lastTick);
+    // Отброшенный снапшот признака разрыва не взводит: он не состояние другой
+    // ветви истории, а старое состояние этой (SHELL-7).
+    expect(a.client.discontinuous).toBe(false);
+  });
+
+  it('признак разрыва едет в доставке состояния и гасится ею (SHELL-7)', async () => {
+    const { a, server, clock } = await playMatch(16);
+
+    // Фон: пока эпоха одна, доставка идёт без разрыва.
+    expect(a.client.sample(clock.ms)!.discontinuity).toBe(false);
+
+    const rewoundTo = a.client.latest!.tick - 4;
+    a.client.receive(
+      { type: 'Snapshot', epoch: 1, tick: rewoundTo, snapshot: snapshotToPlain(server.snapshot()) },
+      clock.ms,
+    );
+
+    // Признак приезжает вместе с состоянием, а не отдельным вызовом рядом с ним.
+    const sampled = a.client.sample(clock.ms)!;
+    expect(sampled.discontinuity).toBe(true);
+    expect(sampled.from).toBe(sampled.to);
+    // И гасится доставкой: второй кадр рисуется уже обычным порядком.
+    expect(a.client.sample(clock.ms)!.discontinuity).toBe(false);
+    expect(a.client.discontinuous).toBe(false);
+    // Перемотка унесла отправленный в прежней эпохе ввод — это видно счётчиком
+    // (NTR-10), и в мир он при этом не попадает (NTR-11).
+    expect(a.client.metrics.inputsStranded).toBeGreaterThan(0);
+  });
+
+  it('в замороженный мир клиент ввода не шлёт (NET-11, REW-5)', async () => {
+    const { a, server, clock } = await playMatch(16);
+
+    const sent = a.client.metrics.inputsSent;
+    // Состояние с сервера, который перематывает: режим мира приезжает внутри
+    // снапшота (SNAP-1), и он же — единственный честный источник для клиента.
+    // Матч поднят без истории, поэтому режим ставится прямо в плоской форме —
+    // предмет проверки здесь клиентский, а не серверный.
+    a.client.receive(
+      {
+        type: 'Snapshot',
+        epoch: 1,
+        tick: a.client.latest!.tick - 4,
+        snapshot: { ...snapshotToPlain(server.snapshot()), mode: 'Rewinding' },
+      },
+      clock.ms,
+    );
+
+    a.client.pushInput({ move: { x: STEP, y: 0 }, aimDir: 0, buttons: 0 }, clock.ms);
+    expect(a.client.metrics.inputsSent).toBe(sent);
   });
 });
 
@@ -276,6 +327,113 @@ describe('перемотка на сервере (NET-11, NTR-16)', () => {
 
     // Плоской формы документа у такого матча нет, и отказ явный (CLI-2).
     expect(() => server.toScenario()).toThrow(/сегмент/);
+  });
+
+  it('вторая перемотка восстанавливает живую ветвь, а не стёртую первой (REW-2, NTR-16)', () => {
+    const { server } = rewindableMatch();
+    // Эпоха 0: игрок идёт вправо восемь тиков.
+    for (let tick = 1; tick <= 8; tick++) {
+      server.receive(1, inputMessage(wireInput(tick, tick, STEP)));
+      server.advance();
+    }
+    expect(positionOfSlot(server.snapshot(), 0)!.x).toBe(fixed.fromInt(8));
+
+    server.pause();
+    server.beginRewind();
+    server.seekTo(4);
+    server.pause();
+    server.resume();
+    expect(server.epoch).toBe(1);
+
+    // Эпоха 1: те же номера тиков исполняются заново, и игрок идёт влево.
+    for (let tick = 5; tick <= 8; tick++) {
+      server.receive(1, inputMessageOf(1, wireInput(tick, 100 + tick, -STEP)));
+      server.advance();
+    }
+    expect(positionOfSlot(server.snapshot(), 0)!.x).toBe(0);
+
+    // Вторая перемотка на тик 6. В истории лежит по снапшоту тика 6 на каждую
+    // ветвь, и без отсечения стёртой восстановилась бы она — молча и с
+    // расхождением парности (NTR-8).
+    server.pause();
+    server.beginRewind();
+    server.seekTo(6);
+
+    expect(server.tick).toBe(6);
+    expect(server.epoch).toBe(2);
+    expect(positionOfSlot(server.snapshot(), 0)!.x).toBe(fixed.fromInt(2));
+  });
+
+  it('пропуск тика в записи отвергается, а не доигрывается нулевым вводом (NTR-16)', () => {
+    const config = duelConfig();
+    const frames = (tick: number) =>
+      config.players.map((playerId) => ({
+        tick,
+        playerId,
+        seq: 0,
+        move: { x: 0, y: 0 },
+        aimDir: 0,
+        buttons: 0,
+      }));
+
+    // Сегменты покрывают тики 1..2 и 5..6: тики 3 и 4 не исполнены ни одним из
+    // них, то есть запись не полна. Доиграть их нулевым вводом означало бы
+    // получить состояние, которого на сервере не было (DET-1, NTR-8).
+    expect(() =>
+      replaySegments({
+        scene: config.scene,
+        seed: config.seed,
+        players: config.players,
+        ...(config.initial !== undefined ? { initial: config.initial } : {}),
+        segments: [
+          { epoch: 0, frames: [...frames(1), ...frames(2)] },
+          { epoch: 1, frames: [...frames(5), ...frames(6)] },
+        ],
+      }),
+    ).toThrow(/не покрыт/);
+  });
+
+  it('точка остановки впереди текущего тика отвергается (REW-7)', () => {
+    const { server } = rewindableMatch();
+    for (let tick = 1; tick <= 4; tick++) server.advance();
+
+    server.pause();
+    server.beginRewind();
+    expect(() => server.seekTo(9)).toThrow(/впереди/);
+    // Мир при этом не сдвинулся ни на тик: реплей по пустому логу не начался.
+    expect(server.tick).toBe(4);
+  });
+
+  it('ввод в замороженный мир до симуляции не доходит (NET-11, REW-5)', () => {
+    const { server } = rewindableMatch();
+    for (let tick = 1; tick <= 4; tick++) server.advance();
+
+    // `Paused`: кадр помечен верной эпохой и будущим тиком в окне — все
+    // остальные проверки приёма он проходит.
+    server.pause();
+    server.receive(1, inputMessage(wireInput(6, 55, STEP)));
+    // Кадры замороженного мира не судятся вовсе: даже адресованный далеко за
+    // окно приёма не растит счётчик — сервер их не рассматривает.
+    server.receive(1, inputMessage(wireInput(100_000, 57, STEP)));
+    // `Rewinding`: перемотка на тот же тик эпохи не двигает (NTR-16), поэтому и
+    // сброс неприменённого ввода по смене эпохи здесь не срабатывает.
+    server.beginRewind();
+    server.seekTo(4);
+    server.receive(1, inputMessageOf(server.epoch, wireInput(6, 56, STEP)));
+    server.pause();
+    server.resume();
+
+    for (let tick = 5; tick <= 6; tick++) server.advance();
+
+    const own = server.canonicalInputs.filter((frame) => frame.playerId === 'p1');
+    expect(own.some((frame) => frame.seq === 55 || frame.seq === 56)).toBe(false);
+    // Залпа на возобновлении нет: мир игрока не двигался вовсе.
+    expect(positionOfSlot(server.snapshot(), 0)!.x).toBe(0);
+    // Молча: канал исправен, и NTR-11 такого класса дефекта не определяет.
+    const counters = server.metrics.slots[0]!;
+    expect(counters.applied).toBe(0);
+    expect(counters.late).toBe(0);
+    expect(counters.outOfWindow).toBe(0);
   });
 });
 

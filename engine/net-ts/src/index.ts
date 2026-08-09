@@ -61,6 +61,8 @@ export type { LoadedContentPack } from './content/pack.js';
 // мир матча
 export { buildMatchWorld, orderedSchemas } from './match/world.js';
 export type { MatchWorld, MatchWorldDef } from './match/world.js';
+export { BranchHistory } from './match/history.js';
+export type { MatchHistory } from './match/history.js';
 export { replaySegments } from './match/replay.js';
 export type {
   ReplaySegment,
@@ -87,6 +89,7 @@ export type {
   ContentPack,
   InputSample,
   MatchClientOptions,
+  MatchSample,
 } from './client/matchClient.js';
 export { ClientHost } from './client/host.js';
 export type { ClientHostOptions, InputSource } from './client/host.js';

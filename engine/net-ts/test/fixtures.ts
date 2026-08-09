@@ -215,5 +215,10 @@ export function inputMessage(...frames: WireInput[]): ClientMessage {
   return { type: 'Input', epoch: 0, frames };
 }
 
+/** То же сообщение, но от клиента, уже пересинхронизировавшегося на новую эпоху. */
+export function inputMessageOf(epoch: number, ...frames: WireInput[]): ClientMessage {
+  return { type: 'Input', epoch, frames };
+}
+
 /** Один шаг вправо в Q16.16 — заметное движение, которое видно в снапшоте. */
 export const STEP: number = fixed.fromInt(1);

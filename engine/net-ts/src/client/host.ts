@@ -6,7 +6,7 @@ import type { Serializer } from '@game-mvp/core';
 import { clientCodec, DEFAULT_SERIALIZER, type Codec } from '../protocol/codec.js';
 import { ProtocolError, type ClientMessage, type ServerMessage } from '../protocol/messages.js';
 import type { Transport } from '../transport/transport.js';
-import type { InputSample, MatchClient } from './matchClient.js';
+import type { InputSample, MatchClient, MatchSample } from './matchClient.js';
 
 /** Источник ввода: сценарий из файла, клавиатура или тест. `undefined` — на этом тике ввода нет. */
 export type InputSource = (tick: number) => InputSample | undefined;
@@ -66,8 +66,11 @@ export class ClientHost {
   /**
    * Шаг локального времени клиента: оценка серверного тика и сэмпл ввода.
    * Отдельно от `run()`, чтобы тест двигал клиента сам, без таймеров.
+   *
+   * Возвращает состояние на этот момент вместе с признаком разрыва — то, что
+   * рисует рендер (SHELL-7).
    */
-  step(): void {
+  step(): MatchSample | undefined {
     const now = this.now();
     this.client.advance();
     if (this.input !== undefined && this.client.phase === 'playing') {
@@ -77,8 +80,13 @@ export class ClientHost {
     // Сэмпл буфера интерполяции — то, что на каждом кадре делает рендер. Здесь
     // он нужен и без рендера: иначе отставание буфера (NTR-11) никто не считает,
     // и headless-прогон не отвечает на треть вопроса про отклик.
-    this.client.sample(now);
+    //
+    // Сэмпл несёт признак разрыва (SHELL-7) и гасит его — значит, состояние в
+    // связке с этим хостом берут отсюда: рендер, поднятый поверх, читает
+    // возвращённый сэмпл, а не зовёт `sample()` вторым потребителем.
+    const state = this.client.sample(now);
     this.flush();
+    return state;
   }
 
   /** Запускает собственный темп. Частота берётся из `Welcome`, до него — 60 Гц по умолчанию. */
