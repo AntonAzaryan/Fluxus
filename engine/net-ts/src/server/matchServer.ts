@@ -61,6 +61,13 @@ export interface MatchConfig {
   readonly tickRate?: number;
   readonly snapshotRate?: number;
   readonly inputDelay?: number;
+  /**
+   * Верхняя граница окна приёма ввода в тиках (NTR-7). Механизм — конечность
+   * границы, политика — само число: без неё размер буфера неприменённого ввода
+   * на слот задаёт клиент, а не конфиг матча. Не меньше `inputDelay`, иначе
+   * корректно помеченный клиентом кадр не проходит проверку сервера.
+   */
+  readonly inputWindow?: number;
   /** Порог молчания слота в тиках; по умолчанию 10 секунд при текущем `tickRate`. */
   readonly silenceTicks?: number;
   readonly allowObserver?: boolean;
@@ -94,6 +101,8 @@ const DEFAULTS = {
   tickRate: 60,
   snapshotRate: 30,
   inputDelay: 2,
+  /** Четверть секунды при 60 Гц (NTR-7): больше половины круга на играбельном канале и всё же конечная величина. */
+  inputWindow: 15,
   silenceSeconds: 10,
 } as const;
 
@@ -106,6 +115,7 @@ export class MatchServer {
   private readonly snapshotRate: number;
   private readonly snapshotEvery: number;
   private readonly inputDelay: number;
+  private readonly inputWindow: number;
   private readonly silenceTicks: number;
   private readonly maxLead: number;
 
@@ -123,6 +133,16 @@ export class MatchServer {
   private readonly canonical: InputFrame[] = [];
   private readonly outbox: Outgoing[] = [];
   private matchPhase: MatchPhase = 'lobby';
+
+  /**
+   * Пара `(эпоха, тик)` последнего разосланного авторитетного состояния
+   * (NTR-16). Эпоха выводится из самой последовательности состояний, а не из
+   * наблюдения за переходами машины состояний мира: вход в `Rewinding` номера
+   * тика не двигает, а одно `seekTo` даёт до десятка восстановлений.
+   */
+  private currentEpoch = 0;
+  /** `-1` — не разослано ещё ничего, и сравнивать не с чем. */
+  private lastBroadcastTick = -1;
 
   constructor(config: MatchConfig) {
     if (config.players.length === 0) throw new Error('MatchConfig: нужен хотя бы один слот');
@@ -150,6 +170,15 @@ export class MatchServer {
     }
     this.snapshotEvery = this.tickRate / this.snapshotRate;
     this.inputDelay = config.inputDelay ?? DEFAULTS.inputDelay;
+    this.inputWindow = config.inputWindow ?? DEFAULTS.inputWindow;
+    // Окно уже запаса задержки означало бы, что сервер отвергает собственную
+    // разметку: клиент помечает кадр тиком `serverTick + inputDelay` по тому же
+    // конфигу, который прислал сервер (NTR-7).
+    if (this.inputWindow < this.inputDelay) {
+      throw new Error(
+        `MatchConfig: inputWindow (${this.inputWindow}) меньше inputDelay (${this.inputDelay})`,
+      );
+    }
     this.silenceTicks = config.silenceTicks ?? this.tickRate * DEFAULTS.silenceSeconds;
     // Окно приёма: запас задержки плюс секунда. Кадр дальше него — не опоздание
     // и не спешка, а рассинхронизация оценки тика либо мусор, и молча копить его
@@ -181,9 +210,19 @@ export class MatchServer {
     return this.state.tick;
   }
 
+  /** Текущая эпоха матча (NTR-16): в мир она не попадает и живёт только здесь. */
+  get epoch(): number {
+    return this.currentEpoch;
+  }
+
   /** Расписание матча. Читает драйвер — он держит темп, сервер часов не знает (NTR-3). */
   get pacing(): Pacing {
-    return { tickRate: this.tickRate, snapshotRate: this.snapshotRate, inputDelay: this.inputDelay };
+    return {
+      tickRate: this.tickRate,
+      snapshotRate: this.snapshotRate,
+      inputDelay: this.inputDelay,
+      inputWindow: this.inputWindow,
+    };
   }
 
   get phase(): MatchPhase {
@@ -318,11 +357,7 @@ export class MatchServer {
       seed: this.config.seed,
       match: { sceneRef: this.config.sceneRef, initial: this.config.initial ?? [] },
       worldInitHash: this.worldInitHash,
-      pacing: {
-        tickRate: this.tickRate,
-        snapshotRate: this.snapshotRate,
-        inputDelay: this.inputDelay,
-      },
+      pacing: this.pacing,
     });
 
     if (this.slotClaimed.every(Boolean)) this.start();
@@ -421,6 +456,15 @@ export class MatchServer {
    * ровно тот профиль нагрузки, который спека netcode просит замерить.
    */
   private broadcastSnapshots(tick: number): void {
+    // Единственное место, где эпоха увеличивается (NTR-16). Правило —
+    // «тик очередного авторитетного состояния меньше тика предыдущего», и оно
+    // применяется здесь потому, что здесь формируется рассылка: любой будущий
+    // источник состояния (рассылка по факту восстановления во время
+    // `Rewinding`) проходит через эту же точку и второй нумерации не заводит.
+    if (this.lastBroadcastTick >= 0 && tick < this.lastBroadcastTick) this.currentEpoch++;
+    this.lastBroadcastTick = tick;
+    const epoch = this.currentEpoch;
+
     for (const connection of this.connections.values()) {
       if (connection.phase === 'greeting') continue;
       const viewpoint =
@@ -431,7 +475,7 @@ export class MatchServer {
         this.config.eventVisibility === undefined
           ? filterSnapshot(this.state, viewpoint)
           : filterSnapshot(this.state, viewpoint, this.config.eventVisibility);
-      this.send(connection.id, { type: 'Snapshot', tick, snapshot: snapshotToPlain(filtered) });
+      this.send(connection.id, { type: 'Snapshot', epoch, tick, snapshot: snapshotToPlain(filtered) });
       this.metrics.snapshotsSent++;
     }
   }

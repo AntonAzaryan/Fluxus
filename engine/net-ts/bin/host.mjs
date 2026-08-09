@@ -56,6 +56,7 @@ const session = await HostSession.open({
     tickRate,
     snapshotRate: match.snapshotRate ?? 30,
     inputDelay: match.inputDelay ?? 2,
+    ...(match.inputWindow !== undefined ? { inputWindow: match.inputWindow } : {}),
     silenceTicks: (match.silenceSeconds ?? 10) * tickRate,
     // Зависимости сборки мира — из файла матча (NTR-14), а не из кода запускалки.
     ...(match.physics !== undefined ? { physics: match.physics } : {}),

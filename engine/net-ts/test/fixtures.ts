@@ -210,8 +210,9 @@ export function wireInput(tick: number, seq: number, moveX = 0, moveY = 0, butto
   return { tick, seq, moveX, moveY, aimDir: 0, buttons };
 }
 
+/** Эпоха — величина сообщения, а не кадра (NTR-16); матч без перемотки живёт нулевой. */
 export function inputMessage(...frames: WireInput[]): ClientMessage {
-  return { type: 'Input', frames };
+  return { type: 'Input', epoch: 0, frames };
 }
 
 /** Один шаг вправо в Q16.16 — заметное движение, которое видно в снапшоте. */

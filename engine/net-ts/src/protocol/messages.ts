@@ -60,8 +60,15 @@ export interface HelloMessage {
   readonly observer: boolean;
 }
 
+/**
+ * Эпоха живёт на сообщении, а не на `WireInput`: `InputFrame` — контракт ядра
+ * (TICK-2), он едет в канонический `inputs[]` и в golden-эталоны, а эпоха —
+ * величина слоя матча (NTR-16). Это эпоха, против которой ввод порождён, то
+ * есть эпоха последнего применённого клиентом снапшота (NTR-7).
+ */
 export interface InputMessage {
   readonly type: 'Input';
+  readonly epoch: number;
   readonly frames: readonly WireInput[];
 }
 
@@ -88,6 +95,8 @@ export interface Pacing {
   readonly tickRate: number;
   readonly snapshotRate: number;
   readonly inputDelay: number;
+  /** Верхняя граница окна приёма ввода в тиках (NTR-7): конечная и заданная конфигом матча, а не клиентом. */
+  readonly inputWindow: number;
 }
 
 export interface WelcomeMessage {
@@ -111,8 +120,13 @@ export interface StartMessage {
   readonly tick: number;
 }
 
+/**
+ * Номер авторитетного состояния — пара `(epoch, tick)` (NTR-16): номер тика при
+ * перемотке идёт назад, и один он состояние не называет.
+ */
 export interface SnapshotMessage {
   readonly type: 'Snapshot';
+  readonly epoch: number;
   readonly tick: number;
   readonly snapshot: PlainSnapshot;
 }
@@ -219,7 +233,16 @@ export function parseClientMessage(value: unknown): ClientMessage {
       if (frames.length > MAX_FRAMES_PER_MESSAGE) {
         throw new ProtocolError(`Input: больше ${MAX_FRAMES_PER_MESSAGE} кадров в сообщении`);
       }
-      return { type: 'Input', frames: frames.map(wireInput) };
+      // Эпоха проверяется тем же способом, что и номер тика: целое,
+      // неотрицательное. Отсутствующее поле — разрыв соединения (NTR-4), а не
+      // умолчание: молча подставленный ноль означал бы, что ввод из стёртой
+      // перемоткой ветви истории приезжает помеченным нулевой эпохой и
+      // проходит проверку сервера у любого клиента постарше протокола.
+      return {
+        type: 'Input',
+        epoch: int(source, 'epoch', 'Input', 0, Number.MAX_SAFE_INTEGER),
+        frames: frames.map(wireInput),
+      };
     }
     case 'Bye':
       return { type: 'Bye', reason: typeof source['reason'] === 'string' ? source['reason'] : '' };
@@ -259,6 +282,7 @@ export function parseServerMessage(value: unknown): ServerMessage {
           tickRate: int(pacing, 'tickRate', 'Welcome.pacing', 1, 1000),
           snapshotRate: int(pacing, 'snapshotRate', 'Welcome.pacing', 1, 1000),
           inputDelay: int(pacing, 'inputDelay', 'Welcome.pacing', 0, 1000),
+          inputWindow: int(pacing, 'inputWindow', 'Welcome.pacing', 0, 1000),
         },
       };
     }
@@ -273,6 +297,7 @@ export function parseServerMessage(value: unknown): ServerMessage {
     case 'Snapshot':
       return {
         type: 'Snapshot',
+        epoch: int(source, 'epoch', 'Snapshot', 0, Number.MAX_SAFE_INTEGER),
         tick: int(source, 'tick', 'Snapshot', 0, Number.MAX_SAFE_INTEGER),
         snapshot: object(source['snapshot'], 'Snapshot.snapshot') as unknown as PlainSnapshot,
       };

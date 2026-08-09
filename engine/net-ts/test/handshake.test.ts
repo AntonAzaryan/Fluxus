@@ -93,7 +93,7 @@ describe('Welcome', () => {
     expect(message.slot).toBe(1);
     expect(message.players).toEqual(['p1', 'p2']);
     expect(message.worldInitHash).toBe(server.worldInitHash);
-    expect(message.pacing).toEqual({ tickRate: 60, snapshotRate: 30, inputDelay: 2 });
+    expect(message.pacing).toEqual({ tickRate: 60, snapshotRate: 30, inputDelay: 2, inputWindow: 15 });
     // Сцена названа ссылкой: раздавать контент-пак матча сервер не должен (NET-16).
     expect(message.match.sceneRef).toBe('duel');
     expect(JSON.stringify(message)).not.toContain('components');

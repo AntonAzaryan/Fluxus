@@ -98,6 +98,12 @@ export class MatchClient {
 
   private estimatedTick = 0;
   private lastAppliedTick = -1;
+  /**
+   * Эпоха последнего применённого снапшота (NTR-16). До первого снапшота — 0:
+   * матч начинается нулевой эпохой, и кадр, отправленный до первой рассылки,
+   * помечен ею же.
+   */
+  private lastAppliedEpoch = 0;
   private nextSeq = 1;
   private lastMeasuredSeq = 0;
 
@@ -190,8 +196,12 @@ export class MatchClient {
     };
     this.nextSeq++;
     this.ring.push(frame, nowMs);
+    // Ввод адресуется парой (NTR-7): номер тика без эпохи не называет тик
+    // матча, в котором была перемотка, и кадр из стёртой ветви истории
+    // применился бы тем успешнее, чем мельче был откат.
     this.outbox.push({
       type: 'Input',
+      epoch: this.lastAppliedEpoch,
       frames: [
         {
           tick: frame.tick,
@@ -220,7 +230,7 @@ export class MatchClient {
         this.estimatedTick = message.tick;
         return;
       case 'Snapshot':
-        this.onSnapshot(message.tick, message.snapshot, nowMs);
+        this.onSnapshot(message.epoch, message.tick, message.snapshot, nowMs);
         return;
       case 'End':
         this.close('ended', message.reason);
@@ -282,7 +292,7 @@ export class MatchClient {
     this.clientPhase = 'lobby';
   }
 
-  private onSnapshot(tick: number, plain: unknown, nowMs: number): void {
+  private onSnapshot(epoch: number, tick: number, plain: unknown, nowMs: number): void {
     // Условие работы на неупорядоченном канале (NTR-10): устаревший снапшот
     // отбрасывается, и картинка назад не прыгает.
     if (tick <= this.lastAppliedTick) {
@@ -311,6 +321,7 @@ export class MatchClient {
       return;
     }
 
+    this.lastAppliedEpoch = epoch;
     this.lastAppliedTick = tick;
     this.resyncTick(tick);
     this.buffer.push(snapshot, nowMs);

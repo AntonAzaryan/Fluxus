@@ -33,7 +33,7 @@ describe('кодирование кадра', () => {
         seed: 99,
         match: { sceneRef: 'duel', initial: [{ prefab: 'Hero' }] },
         worldInitHash: 'deadbeef',
-        pacing: { tickRate: 60, snapshotRate: 30, inputDelay: 2 },
+        pacing: { tickRate: 60, snapshotRate: 30, inputDelay: 2, inputWindow: 15 },
       };
       const codec2 = serverCodec(serializer);
       expect(codec.decode(codec2.encode(message) as never)).toEqual(message);
@@ -65,8 +65,10 @@ describe('разбор входящего', () => {
   });
 
   it('нецелые и отсутствующие поля кадра отвергаются', () => {
-    expect(() => parseClientMessage({ type: 'Input', frames: [{ tick: 1.5, seq: 1 }] })).toThrow(ProtocolError);
-    expect(() => parseClientMessage({ type: 'Input', frames: [] })).toThrow(ProtocolError);
+    expect(() => parseClientMessage({ type: 'Input', epoch: 0, frames: [{ tick: 1.5, seq: 1 }] })).toThrow(
+      ProtocolError,
+    );
+    expect(() => parseClientMessage({ type: 'Input', epoch: 0, frames: [] })).toThrow(ProtocolError);
     expect(() => parseClientMessage({ type: 'Input' })).toThrow(ProtocolError);
   });
 

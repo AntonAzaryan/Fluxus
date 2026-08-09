@@ -141,7 +141,7 @@ describe('матч двух игроков', () => {
     const applied = a.client.metrics.snapshotsApplied;
     const lastTick = a.client.latest!.tick;
     a.client.receive(
-      { type: 'Snapshot', tick: lastTick - 2, snapshot: snapshotToPlain(server.snapshot()) },
+      { type: 'Snapshot', epoch: 0, tick: lastTick - 2, snapshot: snapshotToPlain(server.snapshot()) },
       clock.ms,
     );
 
