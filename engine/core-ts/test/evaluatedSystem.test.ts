@@ -344,9 +344,99 @@ describe('валидация на регистрации (SYS-3)', () => {
     expect(() => validateSystem(typo, makeWorld())).toThrow(/неизвестное действие "randomBelwo"/);
   });
 
+  it('ловит ошибку арности в неисполняемой ветке if (EXPR-8)', () => {
+    // Ветка ложна и никогда не сработает — момент обнаружения от этого не зависит.
+    const dead: Partial<SystemDef> = {
+      do: [
+        {
+          if: {
+            cond: false,
+            then: [{ destroyEntity: { entity: { '+': [v('e'), F(1), F(2)] } } }],
+          },
+        },
+      ],
+    };
+    expect(invalid(dead)).toThrow(/оператор "\+": ожидалось аргументов 2, получено 3/);
+  });
+
+  it('ловит арность у операторов переменной арности', () => {
+    expect(invalid({ do: [{ destroyEntity: { entity: { if: [true, v('e')] } } }] })).toThrow(
+      /оператор "if": ожидалось \[cond, then, …, else\]/,
+    );
+    expect(invalid({ do: [{ destroyEntity: { entity: { and: [true] } } }] })).toThrow(
+      /оператор "and": ожидалось аргументов не менее 2, получено 1/,
+    );
+  });
+
+  it('ловит строку в позиции выражения и выражение в литеральной позиции', () => {
+    expect(invalid({ do: [{ destroyEntity: { entity: { '+': [F(1), 'два'] } } }] })).toThrow(
+      /строка допустима только в позиции имени/,
+    );
+    expect(
+      invalid({ do: [{ destroyEntity: { entity: { getComponent: [v('e'), v('e'), 'current'] } } }] }),
+    ).toThrow(/ожидался строковый литерал/);
+  });
+
+  it('ловит литеральный номер бита вне диапазона, но не вычисляемый (EXPR-2, SYS-9)', () => {
+    expect(invalid({ do: [{ destroyEntity: { entity: { if: [{ bitTest: [1, 32] }, v('e'), v('e')] } } }] })).toThrow(
+      /ожидалось целое 0\.\.31, получено 32/,
+    );
+    // Вычисляемый номер на регистрации неизвестен — он остаётся ошибкой тика.
+    expect(
+      invalid({
+        do: [{ destroyEntity: { entity: { if: [{ bitTest: [1, field(v('e'), 'Health', 'current')] }, v('e'), v('e')] } } }],
+      }),
+    ).not.toThrow();
+  });
+
+  it('называет путь до узла в ошибке арности (SYS-3)', () => {
+    expect(invalid({ do: [{ destroyEntity: { entity: { '+': [F(1)] } } }] })).toThrow(
+      /система "Burning"\[0\]\.forEach\.do\[0\]\.destroyEntity\.entity: оператор "\+"/,
+    );
+  });
+
+  it('отвергает имя из цепочки прототипов в позиции оператора (EXPR-6)', () => {
+    expect(invalid({ do: [{ destroyEntity: { entity: { constructor: [] } } }] })).toThrow(
+      /неизвестный оператор "constructor"/,
+    );
+    // Через JSON.parse, а не литералом: в литерале `__proto__` меняет прототип
+    // вместо того, чтобы стать собственным ключом, — а система приезжает из JSON.
+    const fromJson = JSON.parse('{"do":[{"destroyEntity":{"entity":{"__proto__":[]}}}]}') as Partial<SystemDef>;
+    expect(invalid(fromJson)).toThrow(/неизвестный оператор "__proto__"/);
+    expect(invalid({ do: [{ destroyEntity: { entity: { toString: [v('e')] } } }] })).toThrow(
+      /неизвестный оператор "toString"/,
+    );
+  });
+
   it('registerFromJson не регистрирует систему, не прошедшую валидацию', () => {
     const r = new SystemRegistry();
     expect(() => r.registerFromJson({ ...BURNING_JSON, query: { all: ['Ghost'] } }, makeWorld())).toThrow();
     expect(r.ordered()).toEqual([]);
+  });
+
+  it('hasFloorAt в сцене без террейна проходит регистрацию и падает при вычислении (SYS-5, SYS-9)', () => {
+    // Наличие террейна — факт сборки сцены, а не зарегистрированного мира: одно
+    // и то же описание системы валидно для сцены, где террейн есть.
+    const grounded: SystemDef = {
+      name: 'Grounded',
+      order: 10,
+      do: [
+        {
+          if: {
+            cond: { hasFloorAt: [{ vec: [0, 0] }] },
+            then: [{ emitEvent: { type: 'OnFloor', data: {} } }],
+          },
+        },
+      ],
+    };
+    const world = makeWorld();
+
+    expect(() => validateSystem(grounded, world)).not.toThrow();
+
+    const registry = new SystemRegistry();
+    registry.registerFromJson(grounded, world);
+    expect(() => tick({ systems: registry, worldSeed: 1, math: mathApi }, initialState(world, 1))).toThrow(
+      /система "Grounded", узел \[0\]\.if: оператор "hasFloorAt": сцена без террейна/,
+    );
   });
 });

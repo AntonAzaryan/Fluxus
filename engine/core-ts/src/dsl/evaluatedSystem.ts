@@ -6,8 +6,8 @@
  * это делает `override` (SYS-7) безопасным — переписывание системы в код не
  * меняет ничего вокруг.
  */
-import { execute, actionNames, type Action } from './actions.js';
-import { operators, type Expression } from './expr.js';
+import { execute, actionNames, systemError, type Action } from './actions.js';
+import { arityError, signatureOf, type Expression } from './expr.js';
 import { componentSchema, prefabOf } from '../ecs/world.js';
 import type { System, SystemContext, WorldState } from '../types.js';
 
@@ -58,7 +58,14 @@ export class EvaluatedSystem implements System {
   }
 
   run(ctx: SystemContext): void {
-    execute(this.body, ctx);
+    try {
+      execute(this.body, ctx);
+    } catch (cause) {
+      // Класс 3 (SYS-9): сообщение называет систему, путь до узла и причину.
+      // Ошибка жёсткая — она обрывает тик, и команды, накопленные этой системой
+      // до обрыва, до мира не доходят: их сливает `tick()` после `run`.
+      throw systemError(this.name, cause);
+    }
   }
 }
 
@@ -224,39 +231,67 @@ function checkQuery(node: unknown, world: WorldState, scope: ReadonlySet<string>
 }
 
 /**
- * Строковые литералы принимают только `var`, `getComponent`, `hasComponent` и
- * `eventField`; у всех остальных операторов аргументы — выражения, поэтому
- * обход общий.
+ * Форма применения оператора берётся из его сигнатуры в `expr.ts` (EXPR-8) —
+ * там же, где реализация: второй таблицы арности и литеральных позиций рядом с
+ * валидатором нет по той же причине, по какой её нет у действий, — она
+ * разошлась бы с оригиналом при первой же правке.
+ *
+ * Именами проверяемое (переменная связана, компонент и поле существуют) остаётся
+ * здесь: это уже не форма узла, а сверка с зарегистрированным миром (SYS-3).
  */
 function checkExpression(node: unknown, world: WorldState, scope: ReadonlySet<string>, path: string): void {
   if (typeof node === 'number' || typeof node === 'boolean') return;
+  if (typeof node === 'string') {
+    fail(path, 'ожидалось выражение: строка допустима только в позиции имени');
+  }
   const [op, raw] = onlyKey(node, path, 'выражение');
-  if (!operators.includes(op)) fail(path, `неизвестный оператор "${op}"`);
+  const signature = signatureOf(op);
+  if (signature === undefined) fail(path, `неизвестный оператор "${op}"`);
   const args = (Array.isArray(raw) ? raw : [raw]) as readonly Expression[];
   const at = `${path}.${op}`;
 
-  if (op === 'var') {
-    const name = literal(args[0], `${at}[0]`);
-    if (!scope.has(name)) fail(at, `переменная "${name}" не связана`);
-    return;
-  }
-  if (op === 'getComponent' || op === 'hasComponent') {
-    checkExpression(args[0], world, scope, `${at}[0]`);
-    const component = literal(args[1], `${at}[1]`);
-    const schema = componentSchema(world, component);
-    if (schema === undefined) fail(`${at}[1]`, `компонент "${component}" не зарегистрирован`);
-    if (op === 'getComponent') {
-      const field = literal(args[2], `${at}[2]`);
-      if (schema.fields[field] === undefined) fail(`${at}[2]`, `у компонента "${component}" нет поля "${field}"`);
+  const wrongArity = arityError(op, signature, args.length);
+  if (wrongArity !== undefined) fail(path, wrongArity);
+
+  // Литеральные позиции — только имена; в остальных позициях строка отвергается
+  // рекурсивным вызовом ниже.
+  for (const i of signature.literals) literal(args[i], `${at}[${i}]`);
+
+  // Область определения целого литерала (SYS-3): на сегодняшнем составе это
+  // только номер бита `bitTest`. Вычисляемый аргумент в той же позиции остаётся
+  // ошибкой времени вычисления (SYS-9) — до тика он неизвестен.
+  for (const [position, lo, hi] of signature.ranges) {
+    const value = args[position];
+    if (typeof value === 'number' && (!Number.isInteger(value) || value < lo || value > hi)) {
+      fail(`${at}[${position}]`, `ожидалось целое ${lo}..${hi}, получено ${value}`);
     }
-    return;
   }
-  if (op === 'eventField') {
-    // Существование поля не проверяется: реестра типов событий и их полей в
-    // ядре нет — состав данных задаёт эмитент, в том числе нативный (EXPR-2).
-    checkExpression(args[0], world, scope, `${at}[0]`);
-    literal(args[1], `${at}[1]`);
-    return;
+
+  switch (op) {
+    case 'var': {
+      const name = args[0] as string;
+      if (!scope.has(name)) fail(at, `переменная "${name}" не связана`);
+      break;
+    }
+    case 'getComponent':
+    case 'hasComponent': {
+      const component = args[1] as string;
+      const schema = componentSchema(world, component);
+      if (schema === undefined) fail(`${at}[1]`, `компонент "${component}" не зарегистрирован`);
+      if (op === 'getComponent') {
+        const field = args[2] as string;
+        if (schema.fields[field] === undefined) fail(`${at}[2]`, `у компонента "${component}" нет поля "${field}"`);
+      }
+      break;
+    }
+    // `eventField`: существование поля не проверяется — реестра типов событий и
+    // их полей в ядре нет, состав данных задаёт эмитент (EXPR-2).
+    default:
+      break;
   }
-  args.forEach((arg, i) => checkExpression(arg, world, scope, `${at}[${i}]`));
+
+  args.forEach((arg, i) => {
+    if (signature.literals.includes(i)) return;
+    checkExpression(arg, world, scope, `${at}[${i}]`);
+  });
 }
