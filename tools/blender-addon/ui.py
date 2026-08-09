@@ -5,13 +5,13 @@ N-панель авторинга (BLND-8): типизированный вид 
 снимок `sources`, собранный оператором обновления, обработчиком открытия файла
 и таймером запуска. Подсказки о неизвестных именах — именно подсказки по
 опубликованным перечням движка: правило одно, и живёт оно в импортёре
-(BLND-6, BLND-8). Живая проверка dry-run'ом импортёра — задача 8.5, её место
-здесь же, отдельной строкой находок.
+(BLND-6, BLND-8). Находки живой проверки панель тоже только показывает: зовёт
+импортёр подпроцессом и публикует отчёт модуль `livecheck`.
 """
 
 import bpy
 
-from . import exporter, props, sources
+from . import exporter, livecheck, props, sources
 from .grids import CURVATURE_KEY, NOFLOOR_ATTRIBUTE, RAMP_ATTRIBUTE, TERRAIN_KEY
 
 CATEGORY = "Fluxus"
@@ -201,11 +201,125 @@ class FLUXUS_PT_export(FluxusPanel, bpy.types.Panel):
         layout.label(text="«+Y Up», custom properties, только текущая сцена", icon="INFO")
 
 
+class FLUXUS_PT_check(FluxusPanel, bpy.types.Panel):
+    """
+    Живая проверка (задача 8.5, BLND-8): показ находок импортёра.
+
+    Панель ничего не проверяет сама — она рисует отчёт, опубликованный модулем
+    `livecheck` (правило одно, и живёт оно в импортёре, BLND-6). IO здесь нет:
+    ни запуска подпроцесса, ни чтения файлов — только опубликованное состояние
+    и вопросы к уже открытым данным.
+    """
+
+    bl_idname = "FLUXUS_PT_check"
+    bl_label = "Проверка"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.operator("fluxus.check_now", icon="CHECKMARK")
+        layout.label(text="правила называет импортёр, не аддон (BLND-6)", icon="INFO")
+
+        if livecheck.is_running():
+            layout.label(text="проверка идёт…", icon="TIME")
+
+        report = livecheck.report()
+        if not report.checked:
+            layout.label(text="в этой сессии не проверялось", icon="INFO")
+            return
+
+        column = layout.column(align=True)
+        if report.source:
+            column.label(text="файл: %s" % bpy.path.basename(report.source), icon="FILE")
+        column.label(text="проверено: %s" % report.time_text(), icon="TIME")
+        if not livecheck.checked_source_matches(bpy.data.filepath):
+            column.label(text="отчёт о другом файле — проверьте заново", icon="ERROR")
+        elif bpy.data.is_dirty:
+            # Проверяется последний ЭКСПОРТ, а он пишется по сохранению:
+            # несохранённые правки в отчёт не попали, и молчать об этом нельзя.
+            column.label(text="есть несохранённые правки — отчёт о", icon="ERROR")
+            column.label(text="последнем сохранении")
+
+        if report.status == "failed":
+            box = layout.box()
+            box.label(text="проверка не выполнена", icon="CANCEL")
+            for line in livecheck.wrapped(report.problem or ""):
+                box.label(text=line)
+            self._draw_output(layout, report)
+            return
+
+        box = layout.box()
+        if report.errors or report.warnings:
+            box.label(
+                text="ошибок: %d, предупреждений: %d" % (report.errors, report.warnings),
+                icon="CANCEL" if report.errors else "ERROR",
+            )
+        else:
+            box.label(text="находок нет", icon="CHECKMARK")
+        box.label(text="слой: initial %d, decorations %d" % (report.initial, report.decorations))
+        for line in report.changes:
+            box.label(text=line, icon="FILE_REFRESH")
+        if report.status == "done" and not report.changes and report.ok:
+            box.label(text="документы совпадают с источником", icon="INFO")
+
+        self._draw_findings(layout, report)
+
+        if report.refusal:
+            box = layout.box()
+            box.label(text="импорт отказал", icon="CANCEL")
+            for line in livecheck.wrapped(report.refusal):
+                box.label(text=line)
+        if report.blocking:
+            box = layout.box()
+            box.label(text="запись отвергнута валидацией (ED-21)", icon="CANCEL")
+            for address in report.blocking[: livecheck.PANEL_FINDINGS]:
+                for line in livecheck.wrapped(address):
+                    box.label(text=line)
+            # Текст находки валидации складывает команда, и лежит он в её
+            # выводе: в JSON у неё ключ ресурса, а не фраза (ED-27, ED-28).
+            self._draw_output(layout, report)
+
+    def _draw_findings(self, layout, report):
+        if not report.findings:
+            return
+        box = layout.box()
+        box.label(text="Находки", icon="TEXT")
+        for finding in report.findings[: livecheck.PANEL_FINDINGS]:
+            # Красный крест — ошибка (импорт откажет), треугольник —
+            # предупреждение (импорт пройдёт).
+            icon = "CANCEL" if finding.is_error else "ERROR"
+            row = box.row(align=True)
+            if finding.object_name:
+                # Имя объекта — кнопка: клик уводит выделение к нему (BLND-6:
+                # адрес находки — имя объекта Blender, и оно должно работать).
+                row.operator(
+                    "fluxus.select_object", text=finding.object_name, icon=icon
+                ).object_name = finding.object_name
+            else:
+                row.label(text="(находка не об объекте)", icon=icon)
+            for line in livecheck.wrapped(finding.message):
+                # Отступ пробелами: `label` не переносит и не отступает сам, а
+                # пустая иконка-заполнитель — версионно чувствительный идентификатор.
+                box.label(text="    " + line)
+        hidden = len(report.findings) - livecheck.PANEL_FINDINGS
+        if hidden > 0:
+            box.label(text="и ещё %d — полный перечень даёт команда импорта" % hidden, icon="INFO")
+
+    def _draw_output(self, layout, report):
+        if not report.output:
+            return
+        box = layout.box()
+        box.label(text="Вывод команды (хвост)", icon="CONSOLE")
+        for line in report.output:
+            for piece in livecheck.wrapped(line):
+                box.label(text=piece)
+
+
 CLASSES = (
     FLUXUS_PT_sources,
     FLUXUS_PT_object,
     FLUXUS_PT_terrain,
     FLUXUS_PT_export,
+    FLUXUS_PT_check,
 )
 
 

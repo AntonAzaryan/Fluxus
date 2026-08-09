@@ -16,6 +16,7 @@ ED-30, BLND-8), а ручной экспорт штатным glTF-экспор�
 - `preview.py` — превью ступеней, клифов и сглаженного рельефа на Geometry Nodes;
 - `placement.py` — операторы размещений, переопределений и камеры превью;
 - `brushes.py` — кисти-инструменты (`WorkSpaceTool` + модальные операторы);
+- `livecheck.py` — живая проверка экспорта вызовом `import --dry-run`;
 - `exporter.py` — авто-экспорт `.glb` по сохранению `.blend`;
 - `ui.py` — N-панель.
 
@@ -50,14 +51,16 @@ if "sources" in locals():  # noqa: F821 — перезагрузка скрип�
     preview = importlib.reload(preview)  # noqa: F821
     placement = importlib.reload(placement)  # noqa: F821
     brushes = importlib.reload(brushes)  # noqa: F821
+    livecheck = importlib.reload(livecheck)  # noqa: F821
     exporter = importlib.reload(exporter)  # noqa: F821
     ui = importlib.reload(ui)  # noqa: F821
 else:
-    from . import brushes, exporter, grids, placement, preview, props, sources, ui
+    from . import brushes, exporter, grids, livecheck, placement, preview, props, sources, ui
 
 # Порядок важен: свойства регистрируются первыми (на них ссылаются панели и
-# операторы), интерфейс — последним.
-_MODULES = (props, grids, preview, placement, brushes, exporter, ui)
+# операторы), интерфейс — последним. `livecheck` идёт до экспортёра: его
+# проверку экспортёр назначает после успешного экспорта.
+_MODULES = (props, grids, preview, placement, brushes, livecheck, exporter, ui)
 
 
 def register():

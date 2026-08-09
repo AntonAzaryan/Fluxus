@@ -37,6 +37,10 @@
 (`export_extras`, `export_yup`) — отказ экспорта, а не тихий экспорт не в том
 формате. Тихо отдать импортёру файл без `extras` хуже, чем не отдать ничего.
 
+После успешного экспорта — и по сохранению, и по кнопке — назначается живая
+проверка (`livecheck`, задача 8.5): назначение дешёвое, запуск отложен
+дебаунсом, сохранение `.blend` подпроцесса не ждёт.
+
 Обработчик `save_post` регистрируется с `@persistent` и защитой от повторной
 регистрации (отчёт `docs/reviews/2026-08-09-blender-level-editor.md`, §5):
 после «Reload Scripts» в списке остаётся старая функция, поэтому снимаем по
@@ -48,7 +52,7 @@ import os
 import bpy
 from bpy.app.handlers import persistent
 
-from . import props, sources
+from . import livecheck, props, sources
 
 #: Настройки, без которых экспорт бессмыслен: их отсутствие в RNA — отказ.
 REQUIRED_SETTINGS = {
@@ -160,6 +164,7 @@ class FLUXUS_OT_export_now(bpy.types.Operator):
             _report("экспорт не выполнен")
             return {"CANCELLED"}
         _report("экспортировано: %s" % target)
+        livecheck.schedule(bpy.data.filepath)
         self.report({"INFO"}, "экспортировано: %s" % os.path.basename(target))
         return {"FINISHED"}
 
@@ -182,6 +187,12 @@ def fluxus_export_on_save(*_args):
     for message in messages:
         print("[fluxus] %s" % message)
     _report(("экспортировано: %s" if ok else "экспорт не выполнен: %s") % target)
+    if ok:
+        # Живая проверка свежего экспорта (задача 8.5). Только НАЗНАЧЕНИЕ: сам
+        # запуск отложен дебаунсом и идёт таймером, поэтому сохранение `.blend`
+        # не ждёт ни Node, ни импортёра. Свойств обработчик по-прежнему не
+        # пишет — состояние проверки живёт в модуле `livecheck`.
+        livecheck.schedule(bpy.data.filepath)
 
 
 @persistent
