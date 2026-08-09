@@ -181,6 +181,10 @@ describe('конфиг темпа', () => {
     expect(() => harness(duelConfig({ tickRate: 60, snapshotRate: 45 }))).toThrow(/не делит/);
   });
 
+  it('inputWindow меньше inputDelay отвергается на сборке матча (NTR-7)', () => {
+    expect(() => harness(duelConfig({ inputDelay: 20, inputWindow: 15 }))).toThrow(/меньше inputDelay/);
+  });
+
   it('число слотов — величина конфига, а не константа (NTR-6)', () => {
     const config = duelConfig({ players: ['p1', 'p2', 'p3', 'p4'] });
     const { server } = harness(config);

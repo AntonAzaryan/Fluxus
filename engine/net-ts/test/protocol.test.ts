@@ -72,6 +72,25 @@ describe('разбор входящего', () => {
     expect(() => parseClientMessage({ type: 'Input' })).toThrow(ProtocolError);
   });
 
+  it('отсутствующая эпоха — разрыв, а не умолчание (NTR-16)', () => {
+    expect(() => parseClientMessage({ type: 'Input', frames: [wireInput(1, 1)] })).toThrow(ProtocolError);
+    expect(() => parseServerMessage({ type: 'Snapshot', tick: 1, snapshot: {} })).toThrow(ProtocolError);
+  });
+
+  it('Welcome без inputWindow в pacing отвергается (NTR-7)', () => {
+    expect(() =>
+      parseServerMessage({
+        type: 'Welcome',
+        slot: 0,
+        players: ['p1', 'p2'],
+        seed: 1,
+        match: { sceneRef: 'duel', initial: [] },
+        worldInitHash: 'x',
+        pacing: { tickRate: 60, snapshotRate: 30, inputDelay: 2 },
+      }),
+    ).toThrow(ProtocolError);
+  });
+
   it('личность даёт соединение, а не содержимое кадра', () => {
     const frame = toInputFrame(wireInput(4, 2, 65536), 'p2', 4);
     expect(frame.playerId).toBe('p2');
