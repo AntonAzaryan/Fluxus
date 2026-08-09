@@ -51,6 +51,11 @@ function validationMark(state: ValidationState): UiNode {
   return el('div', {
     classes: [VALIDATION_CLASS, `${VALIDATION_CLASS}--${state.severity}`],
     attrs: { role: 'status', 'data-severity': state.severity },
+    // Причина ещё и подсказкой: в хвосте плотной строки она ужимается
+    // многоточием (иначе имя документа осталось бы от неё в три символа), и
+    // текст, урезанный раскладкой, обязан быть доступен целиком. Второй строки
+    // это не заводит — подсказка та же `UiText`, что и видимая причина (ED-27).
+    labels: { title: state.reason },
     children: [
       icon({ name: SEVERITY_ICONS[state.severity] }),
       el('span', { classes: [`${VALIDATION_CLASS}__reason`], text: state.reason }),

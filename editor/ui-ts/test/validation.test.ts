@@ -19,6 +19,7 @@ import {
 import { uiResources } from '../src/i18n/uiBundles.js';
 import { documentValue, el, findAll, hasClass, walk, type UiNode } from '../src/dom/node.js';
 import { statusChip } from '../src/widgets/chip.js';
+import { STYLE_RULES } from '../src/tokens/stylesheet.js';
 import { ICONS } from '../src/widgets/icon.js';
 import {
   INVALID_CLASS_PREFIX,
@@ -84,6 +85,24 @@ describe('ED-22: признак нарушения не существует б�
       (candidate) => hasClass(candidate, `${VALIDATION_CLASS}__reason`),
     )[0];
     expect(reasonNode?.text?.value).toBe(reason.value);
+  });
+
+  it('причина доступна целиком подсказкой: в строке её режет раскладка', () => {
+    // Дефект, который это пиннит: в навигаторе длинная причина ужимала имя
+    // документа до «sc…», а сама обрывалась на границе панели — без единого
+    // способа прочитать её целиком. Потолок ширины ставит таблица стилей,
+    // полный текст — подсказка, и текст этот тот же самый (ED-27).
+    const reason = documentValue('у prefab’а «Fireball» нет записи в манифесте');
+    const mark = markOf(withValidation(el('div', { classes: ['fx-row'] }), {
+      severity: 'error',
+      reason,
+    }));
+    expect(mark?.labels?.title).toEqual(reason);
+
+    const rule = STYLE_RULES.find((entry) => entry.selector.endsWith('.fx-row > .fx-validation'));
+    expect(rule?.declarations).toContain('max-width: 50%');
+    // Уступает в тесной строке сперва причина, а не имя документа.
+    expect(rule?.declarations).toContain('flex: 0 4 auto');
   });
 
   it('без состояния узел не меняется вовсе', () => {

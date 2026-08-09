@@ -731,9 +731,27 @@ const VALIDATION_RULES: readonly CssRule[] = [
     // В строке дерева и списка сообщение уходит в хвост строки: положение
     // отличает его от подписи, а не только цвет.
     //
+    // Хвост — не половина строки: без потолка длинная причина съедала подпись
+    // до многоточия, и документ в навигаторе назывался «sc…». Тесно в строке
+    // обоим, и порядок уступок задан: сжимается сперва причина (она урезается
+    // осмысленно — иконка строгости остаётся, а текст целиком приходит
+    // подсказкой, `withValidation`), и только потом имя, по которому строку и
+    // находят.
     selector: `${S} .fx-row > .fx-validation`,
     role: 'validation',
-    declarations: ['margin-left: auto', 'align-items: center', 'white-space: nowrap'],
+    declarations: [
+      'margin-left: auto',
+      'align-items: center',
+      'white-space: nowrap',
+      'flex: 0 4 auto',
+      'max-width: 50%',
+      'overflow: hidden',
+    ],
+  },
+  {
+    selector: `${S} .fx-row > .fx-validation > .fx-validation__reason`,
+    role: 'validation',
+    declarations: ['overflow: hidden', 'text-overflow: ellipsis'],
   },
 ];
 
