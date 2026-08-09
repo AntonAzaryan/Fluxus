@@ -5,6 +5,7 @@ import {
   snapshotFromPlain,
   snapshotToPlain,
 } from '../src/sim/serialization.js';
+import { canonicalJson } from '../src/sim/canonicalJson.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
 import { mathApi } from '../src/math/mathApi.js';
@@ -91,6 +92,35 @@ describe('plain-форма мира (SER-1)', () => {
 
     // Переиспользование слота из freeList — то, ради чего выгружается индекс целиком.
     expect(spawn(restored, 'Rock')).toBe(spawn(original, 'Rock'));
+  });
+
+  it('ID-4: круг сохраняет все три части состояния схемы идентификаторов', () => {
+    const original = populated(); // слот 0 освобождён, слоты 1 и 2 живы
+    const plain = toPlain(original);
+
+    // Ни одна из трёх частей не выводится из остальных: перечень живых не даёт
+    // ни поколений освободившихся слотов, ни порядка их освобождения.
+    expect(plain.nextIndex).toBe(3);
+    expect(plain.freeList).toEqual([0]);
+    expect(plain.generations).toEqual([1, 0, 0]);
+
+    const restored = toPlain(fromPlain(plain, COMPONENTS, PREFABS));
+
+    expect(restored.nextIndex).toBe(plain.nextIndex);
+    expect(restored.freeList).toEqual(plain.freeList);
+    expect(restored.generations).toEqual(plain.generations);
+  });
+
+  it('DET-1 п. 3: пустой список свободных слотов лежит в форме полем, а не опускается', () => {
+    // Опущенный ключ дал бы другой поток байт на тех же данных — ложное
+    // расхождение ровно там, где хеш `worldInit` заводился ради истинного.
+    const fresh = createWorld(COMPONENTS, PREFABS, 8);
+    spawn(fresh, 'Rock');
+    const plain = toPlain(fresh);
+
+    expect(Object.keys(plain)).toContain('freeList');
+    expect(plain.freeList).toEqual([]);
+    expect(canonicalJson(plain)).toContain('"freeList":[]');
   });
 
   it('отвергает компонент, которого нет в схемах сцены', () => {

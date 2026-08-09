@@ -75,6 +75,94 @@ describe('entityIndex', () => {
     expect(idx.aliveCount).toBe(0);
   });
 
+  it('ID-6: спавн после смерти занимает последний освобождённый слот, а не новый', () => {
+    const idx = createEntityIndex(16);
+    const ids = Array.from({ length: 8 }, () => allocate(idx)); // индексы 0..7
+    free(idx, ids[7] as number);
+
+    const reused = allocate(idx);
+
+    expect(indexOf(reused)).toBe(7);
+    // Счётчик не сдвинулся: слот пришёл из списка, а не «очередной новый» (ID-2).
+    expect(idx.nextIndex).toBe(8);
+    expect(idx.freeList).toEqual([]);
+  });
+
+  it('ID-6: две смерти подряд — спавн берёт слот, освобождённый вторым, а не наименьший', () => {
+    // Сценарий ID-6 «Две смерти и один спавн»: слоты 2 и 5 освобождаются именно
+    // в этом порядке, поэтому стек отдаёт 5. «Наименьший свободный» отдал бы 2.
+    const idx = createEntityIndex(8);
+    const ids = Array.from({ length: 6 }, () => allocate(idx)); // индексы 0..5
+
+    free(idx, ids[2] as number);
+    free(idx, ids[5] as number);
+
+    expect(indexOf(allocate(idx))).toBe(5);
+    expect(indexOf(allocate(idx))).toBe(2);
+  });
+
+  it('ID-6: при пустом списке берётся очередной новый слот по счётчику', () => {
+    const idx = createEntityIndex(8);
+    const first = allocate(idx);
+    free(idx, first);
+    allocate(idx); // выбирает список досуха
+
+    expect(idx.freeList).toEqual([]);
+    const fresh = allocate(idx);
+
+    expect(indexOf(fresh)).toBe(1); // слот 0 занят, список пуст — очередной новый
+    expect(idx.nextIndex).toBe(2);
+  });
+
+  it('ID-6/ID-1: аллокация при непустом списке и nextIndex == capacity законна', () => {
+    // Жёсткая граница ID-1 названа только для пустого списка: слоты за счётчиком
+    // кончились, но освобождённый слот выдаётся, а не считается исчерпанием.
+    const idx = createEntityIndex(2);
+    const first = allocate(idx);
+    allocate(idx);
+    expect(idx.nextIndex).toBe(idx.capacity);
+
+    free(idx, first);
+    expect(() => allocate(idx)).not.toThrow();
+    expect(idx.nextIndex).toBe(2);
+    // Список снова пуст — следующая аллокация упирается в границу ID-1.
+    expect(() => allocate(idx)).toThrow(/capacity/i);
+  });
+
+  it('ID-2: три спавна при пустом списке — последовательные индексы, счётчик вырастает на три', () => {
+    const idx = createEntityIndex(8);
+    const before = idx.nextIndex;
+    const ids = [allocate(idx), allocate(idx), allocate(idx)];
+
+    expect(ids.map(indexOf)).toEqual([0, 1, 2]);
+    expect(idx.nextIndex).toBe(before + 3);
+  });
+
+  it('ID-2: три спавна при непустом списке берут слоты из списка, счётчик не двигается', () => {
+    const idx = createEntityIndex(8);
+    const ids = Array.from({ length: 5 }, () => allocate(idx)); // индексы 0..4
+    for (const slot of [1, 3, 0]) free(idx, ids[slot] as number);
+    const counterBefore = idx.nextIndex;
+
+    const reused = [allocate(idx), allocate(idx), allocate(idx)].map(indexOf);
+
+    expect(reused).toEqual([0, 3, 1]); // LIFO от порядка освобождения
+    expect(reused).not.toEqual([...reused].sort((a, b) => a - b)); // не последовательные
+    expect(idx.nextIndex).toBe(counterBefore);
+  });
+
+  it('ID-2: удаление не уменьшает счётчик', () => {
+    const idx = createEntityIndex(8);
+    const ids = Array.from({ length: 4 }, () => allocate(idx));
+    expect(idx.nextIndex).toBe(4);
+
+    for (const id of ids) free(idx, id);
+
+    expect(idx.nextIndex).toBe(4); // верхняя граница когда-либо занятых слотов
+    expect(idx.aliveCount).toBe(0);
+    expect(idx.freeList).toEqual([0, 1, 2, 3]);
+  });
+
   it('LIFO: порядок переиспользования освобождённых слотов детерминирован', () => {
     const idx = createEntityIndex(8);
     const ids = [

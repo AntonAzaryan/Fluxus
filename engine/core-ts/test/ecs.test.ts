@@ -248,6 +248,42 @@ describe('Command Buffer (CMD-1..5)', () => {
     expect(query(world, { all: ['Health'] }).length).toBe(1);
   });
 
+  it('ID-6/CMD-3: порядок освобождения слотов задан порядком применения команд', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const ids = Array.from({ length: 4 }, () => spawn(world, 'P')); // слоты 0..3
+
+    const commands = createCommandBuffer(world);
+    commands.destroy(ids[1]!); // применится первым — слот 1 ложится в список
+    commands.destroy(ids[3]!); // применится вторым — слот 3 оказывается на вершине
+    commands.flush();
+
+    // Стек, а не очередь и не «наименьший свободный»: сперва 3, потом 1.
+    expect(rawIndexOf(spawn(world, 'P'))).toBe(3);
+    expect(rawIndexOf(spawn(world, 'P'))).toBe(1);
+  });
+
+  it('ID-6/CMD-1: слот попадает в список на flush, а не в момент постановки команды', () => {
+    const world = createWorld(schemas, [prefab('P', { Health: {} })]);
+    const ids = Array.from({ length: 3 }, () => spawn(world, 'P')); // слоты 0..2
+
+    // Спавн поставлен ДО destroy, значит и применится раньше: на его момент
+    // список свободных слотов ещё пуст, и он берёт очередной новый слот.
+    const early = createCommandBuffer(world);
+    early.spawn('P');
+    early.destroy(ids[0]!);
+    early.flush();
+    const spawned = Array.from(listAlive(world), rawIndexOf);
+    expect(spawned).toEqual([1, 2, 3]); // слот 0 освобождён, новая сущность — в слоте 3
+
+    // Тот же порядок постановки наоборот: destroy применяется первым, и спавн
+    // видит уже непустой список — то есть содержимое стека определяет flush.
+    const late = createCommandBuffer(world);
+    late.destroy(ids[1]!);
+    late.spawn('P');
+    late.flush();
+    expect(Array.from(listAlive(world), rawIndexOf)).toEqual([1, 2, 3]); // слот 1 переиспользован
+  });
+
   it('CMD-7: команда к сущности, убитой в этом же буфере, не достаётся новой сущности того же слота', () => {
     const world = createWorld(schemas, [prefab('P', { Health: {} })]);
     const e = spawn(world, 'P');

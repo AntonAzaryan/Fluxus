@@ -1,0 +1,51 @@
+{
+  "name": "entity-slot-reuse",
+  "seed": 20260809,
+  "ticks": 6,
+  "scene": {
+    "components": [
+      { "name": "Mark", "fields": { "id": "i32" } },
+      { "name": "Doomed", "fields": { "at": "i32" } }
+    ],
+    "prefabs": [
+      { "name": "Keeper", "components": { "Mark": { "id": 1 } } },
+      { "name": "Victim", "components": { "Mark": { "id": 2 }, "Doomed": { "at": 2 } } },
+      { "name": "Newborn", "components": { "Mark": { "id": 3 } } }
+    ],
+    "systems": [
+      {
+        "name": "Reaper",
+        "order": 10,
+        "query": { "all": ["Doomed"] },
+        "as": "e",
+        "do": [
+          {
+            "if": {
+              "cond": { "==": [{ "tick": [] }, { "getComponent": [{ "var": "e" }, "Doomed", "at"] }] },
+              "then": [{ "destroyEntity": { "entity": { "var": "e" } } }]
+            }
+          }
+        ]
+      },
+      {
+        "name": "Breeder",
+        "order": 20,
+        "do": [
+          {
+            "if": {
+              "cond": { "==": [{ "tick": [] }, 4] },
+              "then": [{ "spawnEntity": { "prefab": "Newborn" } }]
+            }
+          }
+        ]
+      }
+    ],
+    "capacity": 8
+  },
+  "initial": [
+    { "prefab": "Keeper" },
+    { "prefab": "Victim" },
+    { "prefab": "Victim", "overrides": { "Doomed": { "at": 3 } } },
+    { "prefab": "Keeper" }
+  ]
+}

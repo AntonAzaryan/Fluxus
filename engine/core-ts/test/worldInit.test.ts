@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { runScenario, type ScenarioDef } from '../src/sim/scenario.js';
 import { worldInitForm } from '../src/sim/worldInit.js';
 import { loadScene } from '../src/sim/scene.js';
-import { spawn } from '../src/ecs/world.js';
+import { canonicalJson } from '../src/sim/canonicalJson.js';
+import { listAlive, spawn } from '../src/ecs/world.js';
 
 /**
  * Хеш `worldInit` (DET-1). Сцена держится минимальной, но обязана содержать и
@@ -141,6 +142,31 @@ describe('worldInit hash (DET-1)', () => {
 
   it('стабилен между прогонами', () => {
     expect(hashOf(BASE)).toBe(hashOf(BASE));
+  });
+
+  it('зафиксирован значением: изменение состава представления сдвинуло бы хеш молча', () => {
+    // Сравнение двух прогонов ловит недетерминизм, но не ловит изменение
+    // канонического представления: оно двигает хеш одинаково в обоих прогонах.
+    // Литерал — единственное, что превращает такой сдвиг в красный тест.
+    expect(hashOf(BASE)).toBe('dd82396b');
+  });
+
+  it('DET-1: список свободных слотов входит в представление пустым списком', () => {
+    // Стартовая расстановка только спавнит и ничего не удаляет, поэтому список
+    // пуст, а счётчик равен числу расставленных сущностей (ID-2, ID-6). Пустота
+    // при этом не основание опустить поле: опущенный ключ дал бы другой поток
+    // байт на тех же данных.
+    const { world, terrain, arena } = loadScene(BASE.scene);
+    spawn(world, 'Unit');
+    spawn(world, 'Unit');
+    const form = worldInitForm({ world, mode: 'Running', terrain, arena });
+    const plain = form.world as { freeList: readonly number[]; nextIndex: number };
+
+    expect(plain.freeList).toEqual([]);
+    // Счётчик равен числу расставленных сущностей — включая те, что ставит сам
+    // загрузчик сцены (границы арены): переиспользований слотов до первого тика нет.
+    expect(plain.nextIndex).toBe(listAlive(world).length);
+    expect(canonicalJson(form)).toContain('"freeList":[]');
   });
 
   it('в каноническую форму не входят RNG, шина событий и номер тика', () => {
