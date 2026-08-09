@@ -210,8 +210,11 @@ export interface PlacementToolOptions {
   /** Путь списка расстановки в конфиге (SER-8). */
   readonly list: JsonPath;
   /**
-   * Парный presentation-документ (PRES-1); `undefined` — сцены без декораций:
-   * писать некуда, и расстановка декораций показана недоступной (ED-26).
+   * Парный presentation-документ (PRES-1). Область сцены называет его всегда:
+   * документ открыт вместе со сценой — в том числе пустым, когда файла в дереве
+   * ещё нет, — и слой декораций от существования файла не зависит (ED-16,
+   * PRES-5). `undefined` оставлено проекту, у которого слоя нет вовсе: писать
+   * тогда некуда, и расстановка декораций показана недоступной (ED-26).
    */
   readonly presentationId?: DocumentId;
   /** Путь списка декораций в парном документе (PRES-2). */
@@ -310,7 +313,7 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
 
   const placements = (): readonly ScenePlacement[] => input?.placements ?? [];
   const decorations = (): readonly SceneDecoration[] => input?.decorations ?? [];
-  /** Есть ли парный документ: без него писать декорации некуда (PRES-1). */
+  /** Назван ли парный документ: без него писать декорации некуда (PRES-1). */
   const canDecorate = (): boolean =>
     options.presentationId !== undefined && options.decorationList !== undefined;
 

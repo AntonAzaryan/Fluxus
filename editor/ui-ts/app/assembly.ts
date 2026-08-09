@@ -28,6 +28,9 @@ import {
   registerBuiltinOperations,
   registerValidationRules,
   saveDocuments,
+  type ContentTreeHost,
+  type DocumentId,
+  type EditorSession,
   type EnvironmentHost,
   type LocaleId,
   type StringResources,
@@ -58,6 +61,7 @@ import { registerCameraEffectsOperations } from '../src/areas/assetCameraEffects
 import { SCENE_AREA_ID, createSceneArea, type SceneAreaState } from '../src/areas/scene.js';
 import { discoverProject, type DiscoveredProject } from '../src/areas/sceneDiscovery.js';
 import {
+  DECORATION_LIST,
   openSceneProject,
   sceneValidationRules,
   type SceneProjectIds,
@@ -79,6 +83,33 @@ export interface EditorAppOptions {
   readonly host: EnvironmentHost;
   /** Локаль автора — настройка пользователя, а не свойство проекта (ED-27). */
   readonly locale?: LocaleId;
+}
+
+/**
+ * Уходит ли парный presentation-документ (PRES-1) на диск этим сохранением.
+ *
+ * Открыт он ВСЕГДА — в том числе на сцене, у которой файла в дереве ещё нет
+ * (`sceneProject.ts`): расстановка декораций и перевод prop → decoration
+ * безусловны (ED-16, PRES-5). Записывать его при этом есть смысл не всегда, и
+ * условия ровно два:
+ *
+ * - в слое что-то есть — тогда файл и рождается правкой, а не «ради пустого
+ *   слоя», чего PRES-1 не допускает;
+ * - файл уже лежит в дереве — тогда опустевший слой обязан доехать до диска,
+ *   иначе удаление последней декорации потерялось бы.
+ *
+ * Пустой слой сцены без файла не пишется вовсе: отсутствующий и пустой список
+ * неразличимы (PRES-2), и документ с `"decorations": []` сказал бы ровно то же,
+ * что его отсутствие, — ценой файла, которого автор не заводил.
+ */
+async function presentationGoesToDisk(
+  session: EditorSession,
+  host: ContentTreeHost,
+  presentation: DocumentId,
+): Promise<boolean> {
+  if (!session.isOpen(presentation)) return false;
+  if (session.descriptors(presentation, DECORATION_LIST).length > 0) return true;
+  return (await host.stat(presentation))?.kind === 'file';
 }
 
 export interface EditorApp {
@@ -275,6 +306,10 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
     },
     dirty: (target) => target.session.dirtyDocumentIds().length > 0,
     save: async (target) => {
+      const presentation = current === null ? null : presentationPathOf(current.config);
+      const writesPresentation =
+        presentation !== null &&
+        (await presentationGoesToDisk(session, host.content, presentation));
       const result = await saveDocuments({
         session,
         host: host.content,
@@ -283,10 +318,12 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
         // уходит на диск одной записью (ED-21, ED-19). Что эти документы
         // значат, знает сборка; сохранение знает только «группа документов».
         //
-        // Парный документ входит в группу, только если он открыт: сцена без
-        // декораций — законное состояние (PRES-1), и создавать файл ради
-        // пустого слоя нельзя. Открытым он бывает ровно тогда, когда лежит в
-        // дереве, — открытие ищет его правилом имени.
+        // Парный документ входит и в группу, и в саму запись ровно тогда, когда
+        // ему есть что сказать диску (`presentationGoesToDisk`): пустой слой
+        // сцены, у которой файла нет, — законное состояние, и файла ради него
+        // не появляется (PRES-1). В группу его при этом нельзя внести, не внеся
+        // в запись: член группы с правками, оставленный несохранённым, — то
+        // самое нарушение, которое фаза записи и отвергает.
         ...(current === null
           ? {}
           : {
@@ -294,13 +331,27 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
                 {
                   scene: current.config,
                   manifest: current.visuals,
-                  ...(session.isOpen(presentationPathOf(current.config))
-                    ? { presentation: presentationPathOf(current.config) }
-                    : {}),
+                  ...(writesPresentation && presentation !== null ? { presentation } : {}),
                 },
               ]),
             }),
+        ...(presentation === null || writesPresentation
+          ? {}
+          : { documentIds: session.dirtyDocumentIds().filter((id) => id !== presentation) }),
       });
+      // Правки пустого слоя, которого на диске нет, записью не стали — но
+      // несохранёнными они и не остаются: отсутствие файла и пустой список
+      // неразличимы (PRES-2), то есть документ уже совпадает с деревом, и метка
+      // «есть несохранённое» держалась бы на различии, которого нет (ED-21).
+      if (
+        presentation !== null &&
+        !writesPresentation &&
+        !result.refused &&
+        session.isOpen(presentation) &&
+        session.document(presentation).dirty
+      ) {
+        session.markSaved(presentation);
+      }
       // Отказ показывается причиной самой находки (ED-8, ED-30): текст
       // принадлежит правилу, а не месту показа, и второй его формулировки
       // сборка не заводит. Удавшееся сохранение чужую причину гасит.
