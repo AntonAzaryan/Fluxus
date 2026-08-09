@@ -162,6 +162,13 @@ export interface FakeStage extends SceneStage {
   readonly surfaceHits: Map<string, ScenePick>;
   /** Причина сорвавшегося кадра — её ставит тест, как поставил бы её кадр. */
   fail(reason: string | null): void;
+  /**
+   * Появление и исчезновение арены (CAM-7): у настоящего вьюпорта её заводит
+   * первая сетка документа, то есть уже после того, как бар области нарисован
+   * без неё. Ставит её тест — и дубль объявляет смену тем же каналом, каким
+   * объявляет её настоящий кадр (`StageSignals`).
+   */
+  arena(present: boolean): void;
 }
 
 /** Попадание в поверхность: то, что picking отдаёт при клике по пустому месту. */
@@ -242,7 +249,7 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
   const hits = new Map<string, ScenePick>();
   const surfaceHits = new Map<string, ScenePick>();
   const framings: boolean[] = [];
-  const canFrame = true;
+  let canFrame = true;
   let flying = false;
   let failure: string | null = null;
   const at = (x: number, y: number): string => `${x}:${y}`;
@@ -283,6 +290,10 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
     },
     fail: (reason) => {
       failure = reason;
+      announce();
+    },
+    arena: (present) => {
+      canFrame = present;
       announce();
     },
     presentation,

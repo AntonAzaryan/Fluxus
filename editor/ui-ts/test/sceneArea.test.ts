@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { findAll, hasClass, type UiNode } from '../src/dom/node.js';
 import { VIEWPORT_CLASS } from '../src/tokens/stylesheet.js';
 import { SCENE_NODES, SCENE_VIEWPORT_ID, sceneArea } from '../src/areas/scene.js';
-import { canRender } from '../src/areas/sceneStage.js';
+import { canRender, signalsChanged, type StageSignals } from '../src/areas/sceneStage.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
 import { PREFAB_LIST } from '../src/areas/objectsPrefabs.js';
 import { VISUALS_OPERATIONS } from '../src/areas/assetVisuals.js';
@@ -220,6 +220,37 @@ describe('ED-13, ED-15: режимы камеры доступны с повер
     const fly = buttonByKey(frame.view(), 'ui.area.scene.cameraFly');
     expect(fly).toBeDefined();
     expect(attr(fly ?? { tag: 'div' }, 'aria-pressed')).toBe('true');
+  });
+
+  /**
+   * ED-26: показанное «недоступно» обязано значить недоступно, а не «интерфейс
+   * ещё не спрашивал». Арену заводит первая сетка документа — она приходит
+   * позже первой отрисовки бара, — и о её появлении вьюпорт сообщает сам, тем
+   * же каналом, что о режиме камеры и о сорвавшемся кадре.
+   */
+  it('появившаяся арена включает обзорное действие сама, без чужой перерисовки', async () => {
+    const { frame, stage } = await buildLoadedFrame();
+    const fit = (): UiNode =>
+      buttonByKey(zoneOf(frame.view(), 'surface'), 'ui.area.scene.overview') ?? { tag: 'div' };
+    stage.arena(false);
+    expect(attr(fit(), 'aria-disabled')).toBe('true');
+
+    let redraws = 0;
+    const stop = frame.subscribe(() => redraws++);
+    stage.arena(true);
+    expect(redraws).toBeGreaterThan(0);
+    stop();
+    expect(attr(fit(), 'aria-disabled')).toBe('false');
+  });
+
+  it('объявляемое вьюпортом сравнивается целиком, а не полем на выбор', () => {
+    const shown: StageSignals = { flying: false, failure: null, canFrame: false };
+    // Каждое поле записи — повод перерисовать: пропущенное в сравнении и есть
+    // дефект «действие стало доступным, а показано недоступным».
+    expect(signalsChanged(shown, shown)).toBe(false);
+    expect(signalsChanged(shown, { ...shown, canFrame: true })).toBe(true);
+    expect(signalsChanged(shown, { ...shown, flying: true })).toBe(true);
+    expect(signalsChanged(shown, { ...shown, failure: 'кадр не прошёл' })).toBe(true);
   });
 
   it('зум идёт тем же входом, что колесо мыши (CAM-4)', async () => {

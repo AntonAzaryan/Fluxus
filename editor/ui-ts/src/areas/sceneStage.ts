@@ -233,6 +233,28 @@ export interface SceneStageOptions {
   readonly onPointer?: (event: StagePointer) => void;
 }
 
+/**
+ * Что вьюпорт объявляет интерфейсу (`onChange`): режим камеры (CAM-2), причина
+ * сорвавшегося кадра (ED-8) и наличие арены (ED-26). Все три — одной записью, а
+ * не тремя сравнениями по месту: забытое в сравнении поле и есть тот дефект,
+ * при котором действие остаётся показанным недоступным после того, как стало
+ * доступным, а заметить это можно только глазом на живой сцене.
+ */
+export interface StageSignals {
+  readonly flying: boolean;
+  readonly failure: string | null;
+  readonly canFrame: boolean;
+}
+
+/**
+ * Изменилось ли объявляемое. Ключи берутся у самой записи, а не перечислены
+ * здесь: поле, дописанное в `StageSignals`, попадает в сравнение само, и забыть
+ * его негде.
+ */
+export function signalsChanged(shown: StageSignals, next: StageSignals): boolean {
+  return (Object.keys(next) as (keyof StageSignals)[]).some((key) => shown[key] !== next[key]);
+}
+
 export interface SceneStage extends ScenePicker {
   /**
    * Новое состояние документов; кадр покажет его не позже следующего (ED-15).
@@ -259,6 +281,10 @@ export interface SceneStage extends ScenePicker {
   /**
    * Есть ли что кадрировать: у кадра без террейна (ED-20) арены нет вовсе, и
    * обзорное действие бара показывается недоступным (ED-26), а не молчит.
+   *
+   * Заводит арену первая сетка документа — то есть уже после того, как бар
+   * области нарисован без неё, — поэтому смену вьюпорт объявляет сам
+   * (`StageSignals`), а не ждёт, что его спросят.
    */
   readonly canFrame: boolean;
   /**
@@ -405,8 +431,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   const reasonOf = (error: unknown): string =>
     error instanceof Error ? error.message : String(error);
   /** Что о вьюпорте уже показано интерфейсом — с этим и сверяется `onChange`. */
-  let shownFlying = false;
-  let shownFailure: string | null = null;
+  let shown: StageSignals = { flying: false, failure: null, canFrame: false };
 
   /** Зажатое приходит от области (ED-32); своего набора у холста больше нет. */
   const heldKeys = options.keys ?? ((): ReadonlySet<string> => NO_KEYS);
@@ -671,14 +696,18 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   };
 
   const failureNow = (): string | null => applyFailure ?? drawFailure;
+  /** Есть ли арена: её заводит первая сетка документа, а не сборка вьюпорта. */
+  const framableNow = (): boolean => camera?.arena != null;
 
   /** Сообщить интерфейсу, если у вьюпорта изменилось видимое им (CAM-2, ED-8). */
   const publish = (): void => {
-    const flying = camera?.flying ?? false;
-    const failure = failureNow();
-    if (flying === shownFlying && failure === shownFailure) return;
-    shownFlying = flying;
-    shownFailure = failure;
+    const next: StageSignals = {
+      flying: camera?.flying ?? false,
+      failure: failureNow(),
+      canFrame: framableNow(),
+    };
+    if (!signalsChanged(shown, next)) return;
+    shown = next;
     options.onChange?.();
   };
 
@@ -766,7 +795,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       camera?.zoom(steps);
     },
     get canFrame(): boolean {
-      return camera?.arena != null;
+      return framableNow();
     },
     frameArena() {
       const arena = camera?.arena ?? null;
