@@ -6,7 +6,7 @@
  * это делает `override` (SYS-7) безопасным — переписывание системы в код не
  * меняет ничего вокруг.
  */
-import { execute, actionNames, systemError, type Action } from './actions.js';
+import { execute, actionNames, requiredArgs, systemError, type Action } from './actions.js';
 import { arityError, signatureOf, type Expression } from './expr.js';
 import { componentSchema, prefabOf } from '../ecs/world.js';
 import type { System, SystemContext, WorldState } from '../types.js';
@@ -172,6 +172,14 @@ function checkAction(node: unknown, world: WorldState, scope: ReadonlySet<string
         break;
       // Аргумент вне конвенции содержимым не проверяется — предел, зафиксированный в SYS-3.
     }
+  }
+
+  // Обязательные аргументы — после обхода, а не до него: если в написанном есть
+  // ошибка, называть надо её, а не первый недостающий ключ. `hasOwn`, а не
+  // индексирование: то же правило разрешения имени, что у операторов (EXPR-6).
+  const required = Object.hasOwn(requiredArgs, name) ? requiredArgs[name]! : [];
+  for (const key of required) {
+    if (args[key] === undefined) fail(here, `не задан обязательный аргумент "${key}"`);
   }
 }
 

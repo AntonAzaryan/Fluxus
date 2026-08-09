@@ -196,7 +196,7 @@ describe('ED-1: слоты блока — те аргументы, которы�
   it('аргумент вне конвенции ядро содержимым не проверяет — и модель его не знает', () => {
     // Предел, зафиксированный в SYS-3. Именно поэтому таблицы «действие → его
     // аргументы» в редакторе нет: проверять по ней было бы строже ядра.
-    expect(accepted(systemOf({ let: { nope: { alsoNope: [] } } }))).toBe(true);
+    expect(accepted(systemOf({ let: { do: [], nope: { alsoNope: [] } } }))).toBe(true);
     expect(conventionSlot('nope')).toBeUndefined();
     expect(conventionSlot('cond')).toEqual({ name: 'cond', kind: 'expression' });
   });
@@ -260,9 +260,13 @@ describe('ED-4: реакция на событие собирается блок
     expect(Object.keys(buildExpression('tick'))).toEqual(['tick']);
   });
 
-  it('пустой блок законен: слоты ещё не заполнены, а SYS-3 это принимает', () => {
+  it('пустой блок собирается, а незаполненный слот называет ядро (ACT-1, SYS-3)', () => {
+    // Редактор блок не судит (ED-1): узел без слотов — законный документ, автор
+    // его ещё заполняет. Вердикт об обязательном аргументе — ядра, и он адресный.
     expect(buildAction({ name: 'spawnEntity' })).toEqual({ spawnEntity: {} });
-    expect(accepted(systemOf(buildAction({ name: 'spawnEntity' })))).toBe(true);
+    expect(rejection(systemOf(buildAction({ name: 'spawnEntity' })))).toContain(
+      'не задан обязательный аргумент "prefab"',
+    );
   });
 });
 

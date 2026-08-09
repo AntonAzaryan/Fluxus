@@ -411,3 +411,38 @@ const ACTIONS: Record<string, ActionFn> = {
 
 /** Имена действий — для валидации дерева на регистрации системы (SYS-3, этап 8). */
 export const actionNames: readonly string[] = Object.keys(ACTIONS);
+
+/**
+ * Обязательные аргументы каждого действия (ACT-1) — то, без чего исполнитель
+ * бросил бы: `argExpr`, `argStr` и `argBody` отсутствия не прощают. Читается
+ * валидацией на регистрации (SYS-3): состав аргументов виден из текста системы
+ * целиком, и ждать срабатывания ветки незачем.
+ *
+ * Перечень живёт здесь, рядом с самой таблицей действий и её чтецами аргументов,
+ * и связан с ними тестами: `actions.test.ts` собирает по нему полный набор
+ * аргументов и требует, чтобы исполнителя он устраивал, а без любого одного
+ * ключа — нет; `evaluatedSystem.test.ts` держит рядом копию, выписанную по
+ * ACT-1. Разъехаться перечню, норме и исполнителю негде.
+ *
+ * Необязательного здесь нет по определению: `argNum` с умолчанием (`easing`,
+ * `ignoreTimeScale`), `argFields` (`values`, `data`, `bindings`, `overrides`) и
+ * читаемые напрямую `radius`, `else`, `subStream` отсутствие переживают.
+ */
+export const requiredArgs: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  modifyComponent: Object.freeze(['entity', 'component']),
+  addComponent: Object.freeze(['entity', 'component']),
+  removeComponent: Object.freeze(['entity', 'component']),
+  spawnEntity: Object.freeze(['prefab']),
+  destroyEntity: Object.freeze(['entity']),
+  emitEvent: Object.freeze(['type']),
+  addTween: Object.freeze(['entity', 'def', 'from', 'to', 'duration']),
+  addModifier: Object.freeze(['entity', 'component', 'id', 'value']),
+  removeModifier: Object.freeze(['entity', 'component', 'id']),
+  carveFloor: Object.freeze(['at']),
+  if: Object.freeze(['cond', 'then']),
+  let: Object.freeze(['do']),
+  random: Object.freeze(['as', 'do']),
+  randomBelow: Object.freeze(['as', 'bound', 'do']),
+  forEach: Object.freeze(['query', 'as', 'do']),
+  forEachEvent: Object.freeze(['type', 'as', 'do']),
+});

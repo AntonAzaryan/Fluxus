@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EvaluatedSystem, validateSystem, type SystemDef } from '../src/dsl/evaluatedSystem.js';
+import { actionNames, requiredArgs } from '../src/dsl/actions.js';
 import { SystemRegistry } from '../src/systems/registry.js';
 import { initialState, tick, type Simulation } from '../src/sim/tick.js';
 import * as fixed from '../src/math/fixed.js';
@@ -437,6 +438,112 @@ describe('валидация на регистрации (SYS-3)', () => {
     registry.registerFromJson(grounded, world);
     expect(() => tick({ systems: registry, worldSeed: 1, math: mathApi }, initialState(world, 1))).toThrow(
       /система "Grounded", узел \[0\]\.if: оператор "hasFloorAt": сцена без террейна/,
+    );
+  });
+});
+
+/**
+ * Обязательные аргументы действий (ACT-1) ловятся на регистрации: состав
+ * аргументов виден из текста системы целиком, и ждать срабатывания ветки
+ * незачем (SYS-3).
+ *
+ * Перечень `requiredArgs` живёт рядом с таблицей действий, а его связь с самими
+ * чтецами аргументов держит этот файл: полный набор регистрируется, а он же без
+ * любого одного обязательного ключа — падает.
+ */
+describe('обязательные аргументы действий на регистрации (SYS-3, ACT-1)', () => {
+  const invalid = (patch: Partial<SystemDef>): (() => void) => {
+    const world = makeWorld();
+    return () => validateSystem({ ...BURNING_JSON, ...patch }, world);
+  };
+
+  /** Полный набор аргументов каждого действия — только обязательные, без единого лишнего. */
+  const FULL: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+    modifyComponent: { entity: v('e'), component: 'Health' },
+    addComponent: { entity: v('e'), component: 'Health' },
+    removeComponent: { entity: v('e'), component: 'Health' },
+    spawnEntity: { prefab: 'Torch' },
+    destroyEntity: { entity: v('e') },
+    emitEvent: { type: 'Died' },
+    addTween: { entity: v('e'), def: 0, from: 0, to: F(1), duration: F(1) },
+    // `component` адресует список источников сцены; на регистрации он проверяется
+    // как обычное имя компонента (SYS-3), а наличие списка — дело сборки (SYS-5).
+    addModifier: { entity: v('e'), component: 'Health', id: 1, value: F(1) },
+    removeModifier: { entity: v('e'), component: 'Health', id: 1 },
+    carveFloor: { at: { vec: [0, 0] } },
+    if: { cond: true, then: [] },
+    let: { do: [] },
+    random: { as: 'r', do: [] },
+    randomBelow: { as: 'r', bound: F(2), do: [] },
+    forEach: { query: {}, as: 'x', do: [] },
+    forEachEvent: { type: 'Died', as: 'ev', do: [] },
+  };
+
+  /** Тот же набор без одного ключа — узел, который автор недописал. */
+  const without = (name: string, key: string): Record<string, unknown> => {
+    const args: Record<string, unknown> = { ...FULL[name]! };
+    delete args[key];
+    return { [name]: args };
+  };
+
+  it('перечень покрывает набор действий целиком и совпадает с нормой ключ в ключ', () => {
+    expect(Object.keys(requiredArgs).sort()).toEqual([...actionNames].sort());
+    expect(Object.keys(FULL).sort()).toEqual([...actionNames].sort());
+    // `FULL` выписан по ACT-1, а не собран из `requiredArgs`: перечень, из
+    // которого ключ выпал, обязан краснеть здесь.
+    for (const name of actionNames) {
+      expect(Object.keys(FULL[name]!).sort(), name).toEqual([...requiredArgs[name]!].sort());
+    }
+  });
+
+  it('полный набор аргументов принимается у каждого действия', () => {
+    for (const name of actionNames) {
+      expect(invalid({ do: [{ [name]: FULL[name]! }] }), name).not.toThrow();
+    }
+  });
+
+  for (const name of Object.keys(FULL)) {
+    it(`"${name}" без любого обязательного аргумента на регистрацию не проходит`, () => {
+      const required = requiredArgs[name]!;
+      expect(required.length, `${name}: перечень пуст`).toBeGreaterThan(0);
+      for (const key of required) {
+        // Ключ обязателен: полный набор без него — уже не система.
+        expect(invalid({ do: [without(name, key)] }), `${name}.${key}`).toThrow(
+          new RegExp(`не задан обязательный аргумент "${key}"`),
+        );
+      }
+    });
+  }
+
+  it('сообщение называет путь до узла и недостающий ключ', () => {
+    expect(invalid({ do: [{ modifyComponent: { entity: v('e') } }] })).toThrow(
+      /система "Burning"\[0\]\.forEach\.do\[0\]\.modifyComponent: не задан обязательный аргумент "component"/,
+    );
+  });
+
+  it('примеры из нормы: forEach без `as`, if без `then`', () => {
+    expect(invalid({ do: [{ forEach: { query: {}, do: [] } }] })).toThrow(
+      /\.forEach: не задан обязательный аргумент "as"/,
+    );
+    expect(invalid({ do: [{ if: { cond: true } }] })).toThrow(/\.if: не задан обязательный аргумент "then"/);
+  });
+
+  it('необязательное остаётся необязательным', () => {
+    // `radius` у carveFloor: его отсутствие — не пропуск, а «одна клетка под точкой».
+    expect(invalid({ do: [{ carveFloor: { at: { vec: [0, 0] } } }] })).not.toThrow();
+    // `else` у ветвления, `values` у записи полей, `easing`/`ignoreTimeScale` у
+    // твина, `subStream` у случайного действия, `overrides` у спавна.
+    expect(invalid({ do: [{ if: { cond: true, then: [], else: [] } }] })).not.toThrow();
+    expect(invalid({ do: [{ addTween: FULL['addTween']! }] })).not.toThrow();
+    expect(invalid({ do: [{ random: { as: 'r', subStream: 'crits', do: [] } }] })).not.toThrow();
+    expect(invalid({ do: [{ let: { bindings: { n: 1 }, do: [] } }] })).not.toThrow();
+  });
+
+  it('обязательный аргумент проверяется после написанного: называется ошибка, а не пропуск', () => {
+    // В узле есть и опечатка, и недостающий ключ. Сообщение — про опечатку:
+    // недописанный слот автор видит и сам, а неизвестный компонент — нет.
+    expect(invalid({ do: [{ modifyComponent: { component: 'Ghost' } }] })).toThrow(
+      /компонент "Ghost" не зарегистрирован/,
     );
   });
 });
