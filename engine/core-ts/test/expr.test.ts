@@ -186,6 +186,161 @@ describe('ошибки формы AST', () => {
   });
 });
 
+/**
+ * Копия состава таблицы EXPR-8 — по разделам требования и в его порядке.
+ * Список литеральный намеренно: рассинхронизация состава с нормой должна
+ * краснеть здесь, а не обнаруживаться чтением спеки рядом с кодом.
+ */
+const EXPR_8_TABLE: readonly string[] = [
+  // окружение и мир
+  'var',
+  'tick',
+  'getComponent',
+  'hasComponent',
+  'isAlive',
+  'hasFloorAt',
+  'eventField',
+  // арифметика
+  '+',
+  '-',
+  '*',
+  '/',
+  'min',
+  'max',
+  'abs',
+  'sqrt',
+  'sin',
+  'cos',
+  'clamp',
+  'fromInt',
+  'toInt',
+  'bitTest',
+  // сравнения
+  '<',
+  '<=',
+  '>',
+  '>=',
+  '==',
+  '!=',
+  // логика
+  'and',
+  'or',
+  '!',
+  'if',
+  // векторы
+  'vec',
+  'vec.add',
+  'vec.sub',
+  'vec.scale',
+  'vec.dot',
+  'vec.lengthSq',
+  'vec.length',
+  'vec.normalize',
+  'vec.x',
+  'vec.y',
+];
+
+describe('состав таблицы операторов (EXPR-8)', () => {
+  it('совпадает с нормативной таблицей имя в имя', () => {
+    expect([...operators].sort()).toEqual([...EXPR_8_TABLE].sort());
+  });
+
+  it('в таблице ровно 41 оператор', () => {
+    expect(EXPR_8_TABLE.length).toBe(41);
+    expect(new Set(EXPR_8_TABLE).size).toBe(41);
+  });
+});
+
+describe('краевые случаи таблицы (EXPR-8)', () => {
+  it('clamp при lo > hi даёт hi', () => {
+    // Порядок сведения нормативен: зеркальная запись дала бы lo.
+    expect(evaluate({ clamp: [F(0), F(10), F(2)] }, world)).toBe(F(2));
+    expect(evaluate({ clamp: [F(100), F(10), F(2)] }, world)).toBe(F(2));
+  });
+
+  it('нормализация нулевого вектора даёт нулевой вектор, а не насыщение (FP-5)', () => {
+    expect(evaluate({ 'vec.normalize': [{ vec: [0, 0] }] }, world)).toEqual({ x: 0, y: 0 });
+  });
+
+  it('abs от INT32_MIN заворачивается в INT32_MIN (FP-4)', () => {
+    expect(evaluate({ abs: [fixed.INT32_MIN] }, world)).toBe(fixed.INT32_MIN);
+  });
+
+  it('оператор нулевой арности записывается пустым списком', () => {
+    expect(evaluate({ tick: [] }, world)).toBe(42);
+    // `null` — не список, поэтому читается как список из одного аргумента.
+    expect(() => evaluate({ tick: null }, world)).toThrow(
+      /оператор "tick": ожидалось аргументов 0, получено 1/,
+    );
+  });
+
+  it('разнотипные операнды == и != — ошибка, а не false (EXPR-7)', () => {
+    expect(() => evaluate({ '==': [F(1), true] }, world)).toThrow(
+      /оператор "==": операнды разных типов, number и boolean/,
+    );
+    expect(() => evaluate({ '!=': [true, F(0)] }, world)).toThrow(
+      /оператор "!=": операнды разных типов, boolean и number/,
+    );
+    // Однотипные сравниваются как прежде.
+    expect(evaluate({ '==': [true, true] }, world)).toBe(true);
+    expect(evaluate({ '!=': [F(1), F(2)] }, world)).toBe(true);
+  });
+});
+
+describe('ленивость логики (EXPR-8)', () => {
+  /** Заведомо падающее выражение: у события "Died" поля "nx" нет. */
+  const boom: Expression = { eventField: [1, 'nx'] };
+
+  it('and не вычисляет аргументы за первым false', () => {
+    expect(evaluate({ and: [false, { '==': [boom, F(0)] }] }, world)).toBe(false);
+    expect(() => evaluate({ and: [true, { '==': [boom, F(0)] }] }, world)).toThrow(/нет поля "nx"/);
+  });
+
+  it('or не вычисляет аргументы за первым true', () => {
+    expect(evaluate({ or: [true, { '==': [boom, F(0)] }] }, world)).toBe(true);
+    expect(() => evaluate({ or: [false, { '==': [boom, F(0)] }] }, world)).toThrow(/нет поля "nx"/);
+  });
+
+  it('if не вычисляет невыбранную ветвь и условия за первым истинным', () => {
+    // Ветвь `then` первого условия ложна — падающее выражение в ней не трогают.
+    expect(evaluate({ if: [false, boom, true, F(2), F(3)] }, world)).toBe(F(2));
+    // Второе условие стоит за истинным первым — не вычисляется вместе со своей ветвью.
+    expect(evaluate({ if: [true, F(1), { '==': [boom, F(0)] }, F(2), F(3)] }, world)).toBe(F(1));
+    // Ветвь `else` не вычисляется, когда условие истинно.
+    expect(evaluate({ if: [true, F(1), boom] }, world)).toBe(F(1));
+  });
+});
+
+describe('чего в таблице нет (EXPR-8)', () => {
+  it('вариадической арифметики нет: сложение строго бинарное', () => {
+    expect(() => evaluate({ '+': [F(1), F(2), F(3)] }, world)).toThrow(
+      /оператор "\+": ожидалось аргументов 2, получено 3/,
+    );
+  });
+
+  it('унарного минуса нет', () => {
+    expect(() => evaluate({ '-': [F(1)] }, world)).toThrow(/оператор "-": ожидалось аргументов 2, получено 1/);
+  });
+
+  it('у var нет второго аргумента-умолчания', () => {
+    expect(() => evaluate({ var: ['a', F(0)] }, world, { a: F(1) })).toThrow(
+      /оператор "var": ожидалось аргументов 1, получено 2/,
+    );
+  });
+
+  it('цепочечных сравнений нет', () => {
+    expect(() => evaluate({ '<': [F(1), F(2), F(3)] }, world)).toThrow(
+      /оператор "<": ожидалось аргументов 2, получено 3/,
+    );
+  });
+
+  it('if без else нет', () => {
+    expect(() => evaluate({ if: [true, F(1)] }, world)).toThrow(
+      /оператор "if": ожидалось \[cond, then, …, else\] — нечётное число аргументов не менее 3, получено 2/,
+    );
+  });
+});
+
 describe('bitTest (EXPR-2)', () => {
   it('читает отдельный бит сырой маски', () => {
     expect(evaluate({ bitTest: [5, 0] }, world)).toBe(true);
