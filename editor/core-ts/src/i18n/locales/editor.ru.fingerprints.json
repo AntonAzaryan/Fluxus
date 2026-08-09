@@ -382,6 +382,42 @@
       "source": "b4683e4e",
       "translated": "e8e0ab04"
     },
+    "schema.scenario.locomotion": {
+      "source": "3b9016f8",
+      "translated": "436776b3"
+    },
+    "schema.scenario.locomotion.colliderComponent": {
+      "source": "9490b3b7",
+      "translated": "75589d7c"
+    },
+    "schema.scenario.locomotion.configComponent": {
+      "source": "1ceb8ec1",
+      "translated": "2da04fc5"
+    },
+    "schema.scenario.locomotion.dodgeButton": {
+      "source": "7db287ed",
+      "translated": "8572facc"
+    },
+    "schema.scenario.locomotion.inputComponent": {
+      "source": "0a50ee5e",
+      "translated": "64b1c9d2"
+    },
+    "schema.scenario.locomotion.jumpButton": {
+      "source": "9249a416",
+      "translated": "c077d1ba"
+    },
+    "schema.scenario.locomotion.name": {
+      "source": "aa4386a3",
+      "translated": "5bc75427"
+    },
+    "schema.scenario.locomotion.stateComponent": {
+      "source": "463ed77d",
+      "translated": "0c415901"
+    },
+    "schema.scenario.locomotion.velocityComponent": {
+      "source": "04539120",
+      "translated": "05ebcb3f"
+    },
     "schema.scenario.name": {
       "source": "214f0487",
       "translated": "df78f545"
@@ -483,8 +519,8 @@
       "translated": "71f352c8"
     },
     "schema.system.order": {
-      "source": "99f1e629",
-      "translated": "a6e6fcba"
+      "source": "66a5cc77",
+      "translated": "b86557ff"
     },
     "schema.system.query": {
       "source": "7baf1fcc",

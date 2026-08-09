@@ -272,6 +272,31 @@ const scenario: Json = {
         velocity: { type: 'string', minLength: 1 },
       },
     },
+    locomotion: {
+      $comment: 'Включает нативный локомоушен (LOC-1). Поле сценария, а не сцены: реализация — зависимость сборки (SER-7).',
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { $comment: 'Имя RNG-стрима и ключ подмены (RNG-4, SYS-7).', type: 'string', minLength: 1 },
+        inputComponent: { type: 'string', minLength: 1 },
+        velocityComponent: { type: 'string', minLength: 1 },
+        configComponent: { type: 'string', minLength: 1 },
+        stateComponent: { type: 'string', minLength: 1 },
+        colliderComponent: { type: 'string', minLength: 1 },
+        dodgeButton: {
+          $comment: 'Индекс бита в маске кнопок; раскладку ввода ядро не знает (LOC-1).',
+          type: 'integer',
+          minimum: 0,
+          maximum: 15,
+        },
+        jumpButton: {
+          $comment: 'Индекс бита в маске кнопок; раскладку ввода ядро не знает (LOC-1).',
+          type: 'integer',
+          minimum: 0,
+          maximum: 15,
+        },
+      },
+    },
     players: {
       $comment: 'Порядок задаёт слоты игроков (TICK-5); обязателен вместе с inputs.',
       type: 'array',
