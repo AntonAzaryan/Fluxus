@@ -297,6 +297,31 @@ describe('REND-16: превью кисти и сетка уходят набор
     brush.pointer(at('move', PAINT_SIDE + 1, 2));
     expect(brush.overlays().map((item) => item.kind)).toEqual(['grid']);
   });
+
+  it('ушедший с холста курсор уносит превью с собой', () => {
+    const { brush } = painter();
+    brush.pointer(at('move', 2, 2));
+    expect(brush.overlays()).toHaveLength(2);
+    // Указатель ушёл из кадра: клетки под ним больше нет, и показывать место,
+    // где кисть покрасит, нечем — оставленный след врал бы о нём.
+    brush.pointer(at('leave', 2, 2));
+    expect(brush.overlays().map((item) => item.kind)).toEqual(['grid']);
+  });
+
+  it('уход курсора мазок не прерывает: отпускание придёт с документа (ED-18)', () => {
+    const { session, brush } = painter();
+    brush.setLevel(2);
+    brush.pointer(at('down', 1, 1));
+    brush.pointer(at('leave', 1, 1));
+    expect(brush.painting).toBe(true);
+    // Вернулся в кадр — мазок продолжается тем же, а не начинается вторым.
+    brush.pointer(at('move', 2, 1));
+    brush.pointer(at('up', 2, 1));
+    expect(session.history().undo).toHaveLength(1);
+    const levels = levelsOf(session);
+    expect(levels[1 * PAINT_SIDE + 1]).toBe(2);
+    expect(levels[1 * PAINT_SIDE + 2]).toBe(2);
+  });
 });
 
 // --------------------------------------------------------------- область

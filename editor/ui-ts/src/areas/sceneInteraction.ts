@@ -157,8 +157,14 @@ export type SceneOverlay = StageHighlight | OverlayGizmo | OverlayCells | Overla
  * область снесена): взаимодействие обязано закрыться и в этом случае, иначе оно
  * остаётся открытым навсегда, а открытое взаимодействие в сессии запрещает и
  * следующую операцию, и undo (ED-18).
+ *
+ * `leave` — указатель ушёл с холста. Это НЕ отмена: начатое взаимодействие
+ * продолжается (кнопку отпустят где угодно, и отпускание придёт с документа), а
+ * гаснет то, что показывало положение указателя, — превью мазка кисти
+ * (REND-16). Оставленное наложение врало бы о месте, где кисть покрасит, и
+ * оставалось бы висеть, пока автор не вернётся в кадр.
  */
-export type StagePointerPhase = 'down' | 'move' | 'up' | 'cancel';
+export type StagePointerPhase = 'down' | 'move' | 'up' | 'cancel' | 'leave';
 
 export interface StagePointer {
   readonly phase: StagePointerPhase;

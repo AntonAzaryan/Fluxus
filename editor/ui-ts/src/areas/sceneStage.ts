@@ -453,8 +453,13 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     pointer = { x: event.clientX, y: event.clientY, rect: rect() };
     tell('move', event);
   };
-  const onPointerLeave = (): void => {
+  const onPointerLeave = (event: MouseEvent): void => {
     pointer = null;
+    // Инструменту это говорится, а не только edge-панораме: наложение, которое
+    // показывало клетку под курсором, обязано погаснуть вместе с курсором
+    // (REND-16). Начатое взаимодействие фаза не закрывает — отпускание придёт
+    // с документа, где бы кнопку ни отпустили (ED-18).
+    tell('leave', event);
   };
   /** Модификатор мультивыделения (ED-17): и Shift, и Ctrl/Cmd — обе привычки. */
   const additive = (event: MouseEvent): boolean =>
