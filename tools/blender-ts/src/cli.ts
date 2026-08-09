@@ -155,8 +155,16 @@ export function cliValidationRules(): ContributionReader<ValidationRule> {
   return { get: (id) => byId.get(id), has: (id) => byId.has(id), all: () => all };
 }
 
-/** Результат JSON'ом — мост для аддона (BLND-8) и для правила синхронизации. */
+/**
+ * Результат JSON'ом — мост для аддона (BLND-8) и для правила синхронизации.
+ *
+ * Слой уезжает целиком, включая клеточные слои (BLND-9, BLND-10): «что уедет в
+ * документы» — то, ради чего живая проверка и зовётся, а слот, которого в ответе
+ * нет, читатель отличить от «источник его не даёт» не сможет. Отсутствие слота
+ * при этом значимо и здесь: ключа нет ровно тогда, когда ассет не переписывается.
+ */
 export function resultJson(result: ImportResult): string {
+  const { terrain, curvature } = result.layer;
   return JSON.stringify(
     {
       ok: result.ok,
@@ -165,7 +173,12 @@ export function resultJson(result: ImportResult): string {
       scene: result.scene,
       presentation: result.presentation,
       findings: result.findings,
-      layer: { initial: result.layer.initial, decorations: result.layer.decorations },
+      layer: {
+        initial: result.layer.initial,
+        decorations: result.layer.decorations,
+        ...(terrain === undefined ? {} : { terrain }),
+        ...(curvature === undefined ? {} : { curvature }),
+      },
       changes: result.changes,
       written: result.written,
       refusal: result.refusal,

@@ -121,6 +121,10 @@ class Report:
         #: Размер целевого слоя: записи `initial` (SER-8) и `decorations` (PRES-2).
         self.initial = 0
         self.decorations = 0
+        #: Клеточные слои, которые перепишет импорт: `terrain` (BLND-9) и/или
+        #: `curvature` (BLND-10). Пусто — источник их не даёт, и ассеты остаются
+        #: за редактором и руками (BLND-2): «пусто» и «нет слота» — разные вещи.
+        self.maps = []
         #: Что импорт изменил бы в документах — строками «слот: …».
         self.changes = []
         #: Почему проверка не выполнилась (только для `failed`).
@@ -305,16 +309,39 @@ def _tail(text):
     return lines[-OUTPUT_LINES:]
 
 
-def _slot_change(name, value):
-    """Строка «что изменилось в слоте» из ответа операции импорта."""
+#: Ключи счёта правок одного слота — в порядке показа.
+_COUNTS = (("set", "изменено"), ("appended", "добавлено"), ("removed", "снято"))
+
+
+def _positive(number):
+    return isinstance(number, int) and not isinstance(number, bool) and number > 0
+
+
+def _slot_changes(name, value, out=None):
+    """
+    Строки «что изменилось в слоте» из ответа операции импорта.
+
+    Слоты ассетов ВЛОЖЕННЫЕ: у террейна счёт по карте (`levels`, `flags`), у
+    кривизны — размеры и ряды. Плоский разбор терял бы их молча, и панель
+    показывала бы «документы совпадают» на импорте, переписавшем карту уровней.
+    """
+    if out is None:
+        out = []
     if not isinstance(value, dict):
-        return None
-    counts = []
-    for key, label in (("set", "изменено"), ("appended", "добавлено"), ("removed", "снято")):
-        number = value.get(key)
-        if isinstance(number, int) and not isinstance(number, bool) and number > 0:
-            counts.append("%s %d" % (label, number))
-    return None if not counts else "%s: %s" % (name, ", ".join(counts))
+        return out
+    counts = [label + " %d" % value[key] for key, label in _COUNTS if _positive(value.get(key))]
+    if counts:
+        out.append("%s: %s" % (name, ", ".join(counts)))
+    flat = {key for key, _ in _COUNTS}
+    for key in sorted(value.keys()):
+        if key in flat:
+            continue
+        inner = value[key]
+        if isinstance(inner, dict):
+            _slot_changes("%s.%s" % (name, key), inner, out)
+        elif _positive(inner):
+            out.append("%s.%s: изменено %d" % (name, key, inner))
+    return out
 
 
 def _parse(outcome):
@@ -376,13 +403,14 @@ def _parse(outcome):
             entries = layer.get(key)
             if isinstance(entries, list):
                 setattr(result, key, len(entries))
+        for key in ("terrain", "curvature"):
+            if isinstance(layer.get(key), dict):
+                result.maps.append(key)
 
     changes = document.get("changes")
     if isinstance(changes, dict):
-        for key, value in changes.items():
-            line = _slot_change(str(key), value)
-            if line is not None:
-                result.changes.append(line)
+        for key in sorted(changes.keys()):
+            _slot_changes(str(key), changes[key], result.changes)
 
     refusal = document.get("refusal")
     result.refusal = refusal if isinstance(refusal, str) and refusal else None

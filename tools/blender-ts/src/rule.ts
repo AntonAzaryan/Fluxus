@@ -13,6 +13,14 @@
  * пере-импорт после правки `.blend` — потому что сравнивает не «кто последний
  * писал», а сам слой с тем, что дал бы импорт.
  *
+ * Сверяются ВСЕ производные данные, которые называет BLND-2: `initial` конфига
+ * сцены, `decorations` парного документа, а при соответствующих объектах
+ * источника — карты ассета террейна (BLND-9) и карта кривизны (BLND-10). Слой
+ * для сверки считается тем же вызовом, что и слой импорта (`generateSpatialLayer`
+ * + `generateCellLayer`): второе «что дал бы импорт» разошлось бы с первым молча
+ * (ED-1, CORE-3), и первым же расхождением стало бы молчание о правке карты
+ * уровней кистью ED-10.
+ *
  * ## Почему источник читает не правило
  *
  * Правило исполняется синхронно и на каждую правку (ED-8), а чтение дерева —
@@ -46,10 +54,11 @@ import {
   type ValidationRun,
 } from '@game-mvp/editor-core';
 import { presentationPathOf } from '@game-mvp/assets';
-import { parseGltf } from './gltf.js';
-import { generateSpatialLayer, hasErrors, type SpatialLayerContext } from './layer.js';
+import { parseGltf, type GltfDocument } from './gltf.js';
+import { generateSpatialLayer, hasErrors, type SpatialLayer, type SpatialLayerContext } from './layer.js';
+import { generateCellLayer, withCellLayer } from './maps.js';
 import { normalizeDocument, type SourceObject } from './normalize.js';
-import { DEFAULT_DECORATIONS_PATH, DEFAULT_INITIAL_PATH } from './operation.js';
+import { DEFAULT_DECORATIONS_PATH, DEFAULT_INITIAL_PATH, DEFAULT_TERRAIN_PATH } from './operation.js';
 import { SOURCE_EXTENSION, sourcePathOf } from './pairing.js';
 import { contextOfValues } from './project.js';
 
@@ -74,6 +83,14 @@ export type SourceState =
       readonly status: 'ready';
       readonly path: ContentPath;
       readonly objects: readonly SourceObject[];
+      /**
+       * Разобранный документ: клеточные слои (BLND-9, BLND-10) читаются из его
+       * аксессоров, а не из объектов — те несут только адрес меша. Держится он
+       * рядом с объектами по той же причине, по которой держатся объекты: это
+       * самое дорогое в цикле, и разбирать его заново на каждую валидацию
+       * значило бы платить за неизменившиеся байты (ED-8).
+       */
+      readonly document: GltfDocument;
       /** Отпечаток прочитанных байтов — ключ кэша (ED-8). */
       readonly fingerprint: string;
     };
@@ -164,7 +181,8 @@ export function createSourceCache(
 
       let state: SourceState;
       try {
-        state = { status: 'ready', path, objects: normalizeDocument(parseGltf(bytes)), fingerprint };
+        const document = parseGltf(bytes);
+        state = { status: 'ready', path, document, objects: normalizeDocument(document), fingerprint };
       } catch (error) {
         state = { status: 'rejected', path, reason: message(error) };
       }
@@ -179,12 +197,15 @@ export interface SyncKinds {
   readonly scene: DocumentKind;
   readonly presentation: DocumentKind;
   readonly manifest: DocumentKind;
+  /** Документ карты кривизны (ASSET-7) — его адрес называет манифест. */
+  readonly curvature: DocumentKind;
 }
 
 export const DEFAULT_SYNC_KINDS: SyncKinds = Object.freeze({
   scene: 'scene',
   presentation: 'presentation',
   manifest: 'manifest',
+  curvature: 'curvature',
 });
 
 export interface SpatialLayerSyncOptions {
@@ -195,6 +216,8 @@ export interface SpatialLayerSyncOptions {
   readonly initialPath?: JsonPath;
   /** Где лежат decorations в парном документе (PRES-2). */
   readonly decorationsPath?: JsonPath;
+  /** Где лежит ассет террейна (TERR-2); нет — поле `terrain` конфига сцены. */
+  readonly terrainPath?: JsonPath;
   readonly binding?: PositionBinding;
 }
 
@@ -218,6 +241,7 @@ export function spatialLayerSyncRule(options: SpatialLayerSyncOptions): Validati
   const kinds = options.kinds ?? DEFAULT_SYNC_KINDS;
   const initialPath = options.initialPath ?? DEFAULT_INITIAL_PATH;
   const decorationsPath = options.decorationsPath ?? DEFAULT_DECORATIONS_PATH;
+  const terrainPath = options.terrainPath ?? DEFAULT_TERRAIN_PATH;
 
   return {
     id: SPATIAL_LAYER_SYNC_RULE,
@@ -243,7 +267,16 @@ export function spatialLayerSyncRule(options: SpatialLayerSyncOptions): Validati
         return;
       }
 
-      const layer = generateSpatialLayer(state.objects, contextFor(run, kinds, options.binding));
+      // Слой считается ЦЕЛИКОМ — с клеточными слоями (BLND-9, BLND-10), — потому
+      // что производными данными BLND-2 называет и их: ассет террейна и карту
+      // кривизны при соответствующих объектах источника. Сравнивать половину
+      // значило бы молчать о правке карты уровней мимо Blender ровно там, где
+      // следующий импорт её перезапишет.
+      const context = contextFor(run, kinds, options.binding, terrainPath);
+      const layer: SpatialLayer = withCellLayer(
+        generateSpatialLayer(state.objects, context),
+        generateCellLayer(state.document, state.objects, context),
+      );
       if (hasErrors(layer.findings)) {
         // Импорт этот источник отверг бы (BLND-6): сравнивать документы не с
         // чем, и молчать об этом нельзя — «расхождения нет» здесь было бы
@@ -274,6 +307,62 @@ export function spatialLayerSyncRule(options: SpatialLayerSyncOptions): Validati
         slot: 'initial',
       });
 
+      // Карты ассета террейна лежат тем же документом (TERR-2 — полем конфига у
+      // этого проекта), поэтому сверяются здесь же и рядами: ряд — единица
+      // формата (TERR-3), и адрес расхождения обязан называть ряд, а не файл.
+      const terrain = layer.terrain;
+      if (terrain !== undefined) {
+        for (const [key, rows] of [
+          ['levels', terrain.levels],
+          ['flags', terrain.flags],
+        ] as const) {
+          compare(run, {
+            documentId: run.document.id,
+            value: run.document.value,
+            path: [...terrainPath, key],
+            expected: [...rows],
+            source: state.path,
+            slot: `terrain.${key}`,
+          });
+        }
+      }
+
+      // Карта кривизны — отдельный документ, адрес которому даёт манифест
+      // (ASSET-7). Не открыт — правило о нём молчит, как и о парном документе.
+      const curvature = layer.curvature;
+      const curvatureId = context.curvatureMap;
+      if (curvature !== undefined && curvatureId != null) {
+        const document = run.documentsOfKind(kinds.curvature).find((entry) => entry.id === curvatureId);
+        if (document !== undefined) {
+          const value = run.valueOf(document.id);
+          // Размеры и ряды — по отдельности, ровно теми адресами, которыми их
+          // пишет операция импорта: сверка документа целиком краснела бы от
+          // порядка ключей, которого импорт не меняет (ED-21).
+          for (const [key, wanted] of [
+            ['width', curvature.width],
+            ['height', curvature.height],
+          ] as const) {
+            const actual = getAtPath(value ?? null, [key]);
+            if (sameJson(actual, wanted)) continue;
+            run.report({
+              documentId: document.id,
+              path: [key],
+              expected: { kind: 'oneOf', values: [wanted] },
+              code: LAYER_DIVERGED,
+              params: { slot: `curvature.${key}`, source: state.path },
+            });
+          }
+          compare(run, {
+            documentId: document.id,
+            value,
+            path: ['rows'],
+            expected: [...curvature.rows],
+            source: state.path,
+            slot: 'curvature.rows',
+          });
+        }
+      }
+
       // Вторая сторона — парный документ (PRES-1), найденный правилом имени.
       // Не открыт ни один — правило о нём молчит: незагруженный документ не есть
       // расхождение (та же оговорка, что у прочих междокументных правил).
@@ -296,6 +385,7 @@ function contextFor(
   run: ValidationRun,
   kinds: SyncKinds,
   binding: PositionBinding | undefined,
+  terrainPath: JsonPath,
 ): SpatialLayerContext {
   const manifests = run.documentsOfKind(kinds.manifest);
   const manifest = manifests[0];
@@ -303,6 +393,7 @@ function contextFor(
     run.document.value,
     manifest === undefined ? undefined : run.valueOf(manifest.id),
     binding,
+    terrainPath,
   );
 }
 

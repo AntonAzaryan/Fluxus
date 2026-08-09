@@ -236,6 +236,37 @@ describe('BLND-6, BLND-8: режим проверки не пишет и отв�
     expect(await host.stat(PRESENTATION_ID)).toBeUndefined();
   });
 
+  it('клеточные слои уезжают тем же JSON: живая проверка видит и карты (BLND-9, BLND-10)', async () => {
+    const files = contentFiles(
+      gridGltf([TERRAIN_GRID, CURVATURE_GRID]),
+      sceneDocument([], TERRAIN_ASSET),
+      presentationDocument(),
+      { [CURVATURE_ID]: JSON.stringify(curvatureDocument(), null, 2) },
+    );
+    const root = await tree(files);
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`, '--dry-run']);
+
+    expect(run.code).toBe(0);
+    const result = JSON.parse(run.out.join('\n')) as {
+      layer: {
+        terrain?: { levels: string[]; flags: string[] };
+        curvature?: { width: number; height: number; rows: string[] };
+      };
+    };
+    expect(result.layer.terrain).toEqual({ levels: [...TERRAIN_LEVELS], flags: [...TERRAIN_FLAGS] });
+    expect(result.layer.curvature).toEqual({ width: 4, height: 4, rows: [...CURVATURE_ROWS] });
+  });
+
+  it('слота, которого источник не даёт, в JSON нет: «не переписывается» отличимо от «пусто»', async () => {
+    const root = await tree();
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`, '--dry-run']);
+
+    const result = JSON.parse(run.out.join('\n')) as { layer: Record<string, unknown> };
+    expect(Object.keys(result.layer)).toEqual(['initial', 'decorations']);
+  });
+
   it('источник с ошибкой в режиме проверки — тот же отказ и тот же адрес', async () => {
     const root = await tree(contentFiles('mixed.gltf'));
 
@@ -473,6 +504,24 @@ describe('BLND-9, BLND-10: ассеты в атомарной записи им�
     expect(await contentOf(root, SCENE_ID)).toEqual(before.scene);
     expect(await contentOf(root, PRESENTATION_ID)).toEqual(before.presentation);
     expect(await contentOf(root, CURVATURE_ID)).toEqual(before.curvature);
+  });
+
+  it('отказ не оставляет на диске созданной под слой пустой карты кривизны (BLND-6)', async () => {
+    // Карты в дереве ещё нет: под curvature-объект источника импорт открывает
+    // её пустой (как парный документ), и отказ соседнего слоя обязан унести
+    // её с собой — файл, созданный неудавшимся импортом, и есть та самая
+    // половина состояния, которой не бывает.
+    const broken = { ...TERRAIN_GRID, heights: levelHeights(['0000', '0000', '1111', '1110']) };
+    broken.heights[3]![3] = 1.4;
+    const root = await tree(
+      contentFiles(gridGltf([broken, CURVATURE_GRID]), sceneDocument([], TERRAIN_ASSET), presentationDocument()),
+    );
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(run.code).toBe(1);
+    expect(run.err.join('\n')).toContain('высота 1.4');
+    await expect(contentOf(root, CURVATURE_ID)).rejects.toThrow();
   });
 
   it('повторный импорт источника с ассетами не пишет ничего (BLND-4)', async () => {

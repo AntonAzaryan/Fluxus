@@ -256,6 +256,11 @@ class FLUXUS_PT_check(FluxusPanel, bpy.types.Panel):
         else:
             box.label(text="находок нет", icon="CHECKMARK")
         box.label(text="слой: initial %d, decorations %d" % (report.initial, report.decorations))
+        # Клеточные слои называются отдельно: ассет, которого источник не даёт,
+        # импорт не переписывает вовсе (BLND-2), и «переписывается» обязано быть
+        # видно до записи, а не после диффа.
+        if report.maps:
+            box.label(text="ассеты: %s" % ", ".join(report.maps), icon="MESH_GRID")
         for line in report.changes:
             box.label(text=line, icon="FILE_REFRESH")
         if report.status == "done" and not report.changes and report.ok:

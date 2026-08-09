@@ -31,12 +31,21 @@ import {
 } from '../src/index.js';
 import { runImport } from '../src/importer.js';
 import {
+  CURVATURE_GRID,
+  CURVATURE_ID,
+  CURVATURE_ROWS,
   MANIFEST_ID,
   PRESENTATION_ID,
   SCENE_ID,
+  TERRAIN_ASSET,
+  TERRAIN_FLAGS,
+  TERRAIN_GRID,
+  TERRAIN_LEVELS,
   context,
   contentFiles,
+  curvatureDocument,
   fixtureBytes,
+  gridGlb,
   manifestDocument,
   objectsOf,
   presentationDocument,
@@ -99,7 +108,7 @@ function issuesOf(editor: EditorSession, rule: ValidationRule): readonly Validat
 
 /** Дерево цели, где источник лежит под парным именем `.glb`. */
 function withSource(
-  fixture = 'placements.gltf',
+  fixture: string | Uint8Array = 'placements.gltf',
   scene = sceneDocument(),
   presentation = presentationDocument(),
 ): Record<string, string | Uint8Array> {
@@ -262,5 +271,128 @@ describe('ED-8: кэш по байтам источника', () => {
     const changed = await sources.refresh(SCENE_ID);
     expect(changed).not.toBe(first);
     expect(changed.status).toBe('ready');
+  });
+});
+
+describe('BLND-2: производные данные — это и карты ассетов (BLND-9, BLND-10)', () => {
+  /**
+   * Сцена, сопряжённая с источником, у которого есть оба grid-объекта, и
+   * документ карты кривизны рядом. Карты в документах — «до импорта»: ровно тот
+   * случай, ради которого правило и заводилось (забытый пере-импорт).
+   */
+  function terrainSession(
+    scene: Record<string, unknown>,
+    curvature: Record<string, unknown> | null = curvatureDocument(),
+  ): EditorSession {
+    const editor = session(scene, presentationDocument());
+    if (curvature !== null) {
+      editor.openDocument({ id: CURVATURE_ID, kind: 'curvature', value: curvature as JsonValue });
+    }
+    return editor;
+  }
+
+  const gridSource = (): Record<string, string | Uint8Array> =>
+    withSource(gridGlb([TERRAIN_GRID, CURVATURE_GRID]), sceneDocument([], TERRAIN_ASSET));
+
+  it('карта уровней, разошедшаяся с источником, подсвечена рядом, а не файлом целиком', async () => {
+    const { host } = tree(gridSource());
+    const sources = createSourceCache(host);
+    await sources.refresh(SCENE_ID);
+    // Автор поднял ряд кистью ED-10: правка законна, но её перезапишет импорт.
+    const stale = { ...TERRAIN_ASSET, levels: ['0000', '0000', '1111', '1110'], flags: [...TERRAIN_FLAGS] };
+    const editor = terrainSession(sceneDocument([], stale), curvatureDocument(CURVATURE_ROWS));
+
+    const issues = issuesOf(editor, spatialLayerSyncRule({ sources }));
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.severity).toBe('warning');
+    expect(issues[0]!.documentId).toBe(SCENE_ID);
+    expect(issues[0]!.path).toEqual(['terrain', 'levels', 3]);
+    expect(issues[0]!.reasonParams).toMatchObject({ slot: 'terrain.levels' });
+  });
+
+  it('карта вида клеток сверяется той же сверкой', async () => {
+    const { host } = tree(gridSource());
+    const sources = createSourceCache(host);
+    await sources.refresh(SCENE_ID);
+    const stale = { ...TERRAIN_ASSET, levels: [...TERRAIN_LEVELS], flags: ['....', '....', '....', '....'] };
+    const editor = terrainSession(sceneDocument([], stale), curvatureDocument(CURVATURE_ROWS));
+
+    const issues = issuesOf(editor, spatialLayerSyncRule({ sources }));
+
+    expect(issues.map((issue) => issue.reasonParams['slot'])).toEqual(['terrain.flags', 'terrain.flags']);
+    expect(issues[0]!.path).toEqual(['terrain', 'flags', 0]);
+  });
+
+  it('карта кривизны разошлась — находка стоит на её документе (ASSET-7)', async () => {
+    const { host } = tree(gridSource());
+    const sources = createSourceCache(host);
+    await sources.refresh(SCENE_ID);
+    const scene = sceneDocument([], {
+      ...TERRAIN_ASSET,
+      levels: [...TERRAIN_LEVELS],
+      flags: [...TERRAIN_FLAGS],
+    });
+    const editor = terrainSession(scene, curvatureDocument());
+
+    const issues = issuesOf(editor, spatialLayerSyncRule({ sources }));
+
+    expect(issues.every((issue) => issue.documentId === CURVATURE_ID)).toBe(true);
+    expect(issues.map((issue) => issue.path)).toEqual([
+      ['rows', 0],
+      ['rows', 1],
+      ['rows', 2],
+    ]);
+    expect(issues[0]!.reasonParams).toMatchObject({ slot: 'curvature.rows' });
+  });
+
+  it('документы, совпадающие с источником целиком, находок не дают', async () => {
+    const { host } = tree(gridSource());
+    const sources = createSourceCache(host);
+    await sources.refresh(SCENE_ID);
+    const scene = sceneDocument([], {
+      ...TERRAIN_ASSET,
+      levels: [...TERRAIN_LEVELS],
+      flags: [...TERRAIN_FLAGS],
+    });
+
+    const issues = issuesOf(
+      terrainSession(scene, curvatureDocument(CURVATURE_ROWS)),
+      spatialLayerSyncRule({ sources }),
+    );
+
+    expect(issues).toEqual([]);
+  });
+
+  it('источник без grid-объектов ассеты не сверяет: они не производные (BLND-2)', async () => {
+    const { host } = tree(withSource('placements.gltf', sceneDocument([], TERRAIN_ASSET)));
+    const sources = createSourceCache(host);
+    await sources.refresh(SCENE_ID);
+    // Ассет террейна намеренно не тот, что дал бы grid-объект: раз объекта в
+    // источнике нет, ассет остаётся за редактором и руками — и молчание правила
+    // об этом обязано быть полным.
+    const layer = derived();
+    const editor = session(
+      sceneDocument([...layer.initial], { ...TERRAIN_ASSET, levels: ['1111', '1111', '1111', '1111'] }),
+      presentationDocument([...layer.decorations]),
+    );
+    editor.openDocument({ id: CURVATURE_ID, kind: 'curvature', value: curvatureDocument() as JsonValue });
+
+    expect(issuesOf(editor, spatialLayerSyncRule({ sources }))).toEqual([]);
+  });
+
+  it('документ карты не открыт — правило о нём молчит, как и о парном', async () => {
+    const { host } = tree(gridSource());
+    const sources = createSourceCache(host);
+    await sources.refresh(SCENE_ID);
+    const scene = sceneDocument([], {
+      ...TERRAIN_ASSET,
+      levels: [...TERRAIN_LEVELS],
+      flags: [...TERRAIN_FLAGS],
+    });
+
+    const issues = issuesOf(terrainSession(scene, null), spatialLayerSyncRule({ sources }));
+
+    expect(issues).toEqual([]);
   });
 });
