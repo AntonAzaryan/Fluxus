@@ -95,6 +95,16 @@ export interface BlockEnvironment {
   refresh(): void;
 }
 
+/**
+ * Класс строки блочного редактора. Строка блока — не строка списка: в ней лежит
+ * собранный блок (карточка оператора, стопка вложенных слотов, поле с подписью
+ * сверху), а высота плотного списка ей потолок, а не мерка. Правило класса
+ * (`tokens/stylesheet.ts`) берёт ту же плотность тем же токеном, но `min-height`
+ * вместо `height`: однострочная строка блока по-прежнему ровно плотная, а
+ * вложенное перестаёт налезать на соседнее.
+ */
+export const BLOCK_ROW = 'fx-row--block';
+
 /** Ключ черновика: место плюс роль — у одного места ролей бывает две. */
 function draftKey(path: JsonPath, role: string): string {
   return `${pathKey(path)}#${role}`;
@@ -185,7 +195,7 @@ function candidates(
  */
 function slotRow(name: string, control: UiNode, remove: UiNode | undefined, at?: JsonPath): UiNode {
   return el('div', {
-    classes: ['fx-row'],
+    classes: ['fx-row', BLOCK_ROW],
     attrs: { 'data-slot': name, ...(at === undefined ? {} : { 'data-at': pathKey(at) }) },
     children: children(
       el('span', { classes: ['fx-row__secondary'], text: documentValue(name) }),
@@ -365,7 +375,7 @@ export function expressionBlock(env: BlockEnvironment, path: JsonPath, value: Js
               },
             });
     return el('div', {
-      classes: ['fx-row'],
+      classes: ['fx-row', BLOCK_ROW],
       attrs: { 'data-expression': pathKey(path), 'data-literal': 'true' },
       children: [control, operatorPicker(env, path, value)],
     });
@@ -428,7 +438,7 @@ export function expressionBlock(env: BlockEnvironment, path: JsonPath, value: Js
     if (asList) {
       rows.push(
         el('div', {
-          classes: ['fx-row'],
+          classes: ['fx-row', BLOCK_ROW],
           // Адрес дописывания — сам список аргументов: у вложенных выражений
           // таких кнопок столько же, сколько узлов.
           attrs: { 'data-append': pathKey([...path, node.operator]) },
@@ -493,7 +503,7 @@ function fieldsBlock(
         ),
       ),
       el('div', {
-        classes: ['fx-row'],
+        classes: ['fx-row', BLOCK_ROW],
         children: children(
           names === null
             ? textField({
@@ -570,7 +580,7 @@ function overridesBlock(
         }),
       ),
       el('div', {
-        classes: ['fx-row'],
+        classes: ['fx-row', BLOCK_ROW],
         children: children(
           available === null
             ? textField({
@@ -627,7 +637,7 @@ function componentListBlock(env: BlockEnvironment, path: JsonPath, value: JsonVa
         ),
       ),
       el('div', {
-        classes: ['fx-row'],
+        classes: ['fx-row', BLOCK_ROW],
         children: children(
           world === null
             ? textField({
@@ -837,7 +847,7 @@ export function actionNodeBlock(env: BlockEnvironment, path: JsonPath, node: Jso
       ...(missing.length === 0
         ? []
         : [el('div', {
-            classes: ['fx-row'],
+            classes: ['fx-row', BLOCK_ROW],
             children: children(
               select({
                 label: resourceText(env.resources, 'ui.area.systems.slot'),
@@ -882,7 +892,7 @@ export function actionListBlock(env: BlockEnvironment, path: JsonPath, value: Js
     children: [
       ...list.map((node, index) => actionNodeBlock(env, [...path, index], node)),
       el('div', {
-        classes: ['fx-row'],
+        classes: ['fx-row', BLOCK_ROW],
         children: children(
           select({
             label: resourceText(env.resources, 'ui.area.systems.action'),

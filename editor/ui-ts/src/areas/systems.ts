@@ -86,6 +86,7 @@ import {
 } from './systemsDocuments.js';
 import { SYSTEM_OPERATIONS } from './systemsOperations.js';
 import {
+  BLOCK_ROW,
   actionListBlock,
   expressionBlock,
   queryBlock,
@@ -472,7 +473,7 @@ function eventBlock(
     classes: ['fx-stack'],
     children: [EVENT_TYPE_SLOT, EVENT_AS_SLOT].map((slot) =>
       el('div', {
-        classes: ['fx-row'],
+        classes: ['fx-row', BLOCK_ROW],
         attrs: { 'data-slot': slot },
         children: [
           textField({
@@ -500,7 +501,7 @@ function conditionBlock(
     return expressionBlock(env, trigger.conditionPath, valueAt(record.value, trigger.conditionPath) ?? null);
   }
   return el('div', {
-    classes: ['fx-row'],
+    classes: ['fx-row', BLOCK_ROW],
     children: [
       button({
         label: resourceText(context.resources, 'ui.area.systems.addCondition'),

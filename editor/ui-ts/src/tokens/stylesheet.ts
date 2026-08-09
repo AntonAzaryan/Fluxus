@@ -485,6 +485,42 @@ const ROW_RULES: readonly CssRule[] = [
     ],
   },
   {
+    // Строка, в которой лежит собранный блок, а не подпись (ED-5): карточка
+    // оператора, стопка вложенных строк, поле с подписью сверху. Плотность
+    // приходит тем же токеном и остаётся плотностью — строка с одной подписью
+    // и чипом по-прежнему ровно `--fx-row-dense`, — но потолком быть
+    // перестаёт: `height` обрезал бы вложенное, и блоки Cast'а накладывались
+    // бы друг на друга вместо того, чтобы встать друг под другом.
+    selector: `${S} .fx-row--block`,
+    declarations: [
+      'height: auto',
+      'min-height: var(--fx-row-dense)',
+      'align-items: flex-start',
+      'flex-wrap: wrap',
+      'gap: var(--fx-space-1)',
+      'padding: var(--fx-space-half) var(--fx-space-2) var(--fx-space-half) 0',
+    ],
+  },
+  {
+    // Вложенный блок занимает остаток строки: собранное под оператором шире
+    // подписи слота, и прижимать его к её ширине значило бы читать документ
+    // колонкой в три символа.
+    //
+    // Уже своего содержимого он при этом не становится (`min-width` остаётся
+    // `auto`): у формулы Cast'а вложенность доходит до восьми уровней, и
+    // разрешённое сжатие ниже min-content схлопывало бы её в столбик пикеров
+    // шириной в стрелку. Не поместившееся уходит в прокрутку поверхности —
+    // это след, а `.fx-surface` для того и `overflow: auto` (ED-22).
+    selector: `${S} .fx-row--block > .fx-card, ${S} .fx-row--block > .fx-stack`,
+    declarations: ['flex: 1 1 auto'],
+  },
+  {
+    // Подпись слота не сжимается: имя места в документе — то, по чему блок и
+    // читается, и укоротить его до многоточия значило бы спрятать адрес.
+    selector: `${S} .fx-row--block > .fx-row__secondary`,
+    declarations: ['flex: none', 'line-height: var(--fx-row-dense)'],
+  },
+  {
     selector: `${S} .fx-row:hover`,
     declarations: ['background: var(--fx-state-hover)'],
   },
@@ -686,6 +722,7 @@ const VALIDATION_RULES: readonly CssRule[] = [
   {
     // В строке дерева и списка сообщение уходит в хвост строки: положение
     // отличает его от подписи, а не только цвет.
+    //
     selector: `${S} .fx-row > .fx-validation`,
     role: 'validation',
     declarations: ['margin-left: auto', 'align-items: center', 'white-space: nowrap'],

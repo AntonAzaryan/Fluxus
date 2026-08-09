@@ -37,7 +37,7 @@ import {
   type JsonValue,
   type ValidationRule,
 } from '@game-mvp/editor-core';
-import { findAll, type UiNode } from '../src/dom/node.js';
+import { findAll, hasClass, type UiNode } from '../src/dom/node.js';
 import {
   SYSTEMS_AREA_ID,
   createSystemsArea,
@@ -49,7 +49,8 @@ import {
   systemSites,
 } from '../src/areas/systemsDocuments.js';
 import { registerSystemOperations } from '../src/areas/systemsOperations.js';
-import { actionPalette, operatorPalette } from '../src/areas/systemsBlocks.js';
+import { BLOCK_ROW, actionPalette, operatorPalette } from '../src/areas/systemsBlocks.js';
+import { STYLE_RULES } from '../src/tokens/stylesheet.js';
 import { buildFrame, buttonByKey, press, zoneOf } from './support/frame.js';
 import { stubArea } from './support/stubArea.js';
 import { settle } from './support/project.js';
@@ -348,5 +349,50 @@ describe('ED-8: находка адресует запись системы, а 
     expect(
       report(SCENE as unknown as JsonValue).issues.filter((issue) => issue.ruleId === SYSTEM_RULE),
     ).toEqual([]);
+  });
+});
+
+/**
+ * ED-22 на поверхности систем: «Хром SHALL оставаться достижимым… элемент
+ * управления, не помещающийся в свою полосу… MUST NOT оказываться за границей
+ * зоны без следа». Строка блочного редактора держит не подпись, а собранный
+ * блок, и потолок высоты плотного списка резал бы его: карточки вложенных
+ * операторов наезжали одна на другую, и поверхность переставала читаться.
+ *
+ * Проверка структурная — раскладку в headless-прогоне не посчитать, — и она о
+ * двух вещах сразу: разметка помечает такие строки своим классом, а правило
+ * этого класса берёт ту же плотность тем же токеном, но полом, а не потолком.
+ */
+describe('ED-22, ED-5: строка блока не режет вложенное в неё', () => {
+  /** Строки, внутри которых лежит собранный блок, а не одна подпись. */
+  function nestingRows(root: UiNode): readonly UiNode[] {
+    return findAll(root, (node) => hasClass(node, 'fx-row')).filter(
+      (row) =>
+        findAll(row, (child) => child !== row && (hasClass(child, 'fx-card') || hasClass(child, 'fx-stack')))
+          .length > 0,
+    );
+  }
+
+  it('каждая строка с вложенным блоком помечена строкой блока', async () => {
+    const { frame } = await opened();
+    const surface = (): UiNode => zoneOf(frame.view(), 'surface');
+    const COND: JsonPath = ['do', 0, 'if', 'cond'];
+    press(buttonByKey(surface(), 'ui.area.systems.addCondition'));
+    pickOperator(surface(), COND, 'if');
+    appendArgument(surface(), [...COND, 'if']);
+    // Аргумент-узел и есть вложенная карточка: она лежит в строке слота.
+    pickOperator(surface(), [...COND, 'if', 0], '<');
+
+    const nesting = nestingRows(surface());
+    expect(nesting.length).toBeGreaterThan(0);
+    for (const row of nesting) expect(row.classes).toContain(BLOCK_ROW);
+  });
+
+  it('плотность строки блока приходит токеном и остаётся полом, а не потолком', () => {
+    const rule = STYLE_RULES.find((entry) => entry.selector.endsWith(`.${BLOCK_ROW}`));
+    expect(rule?.declarations).toContain(`min-height: var(--fx-row-dense)`);
+    // Потолка нет: `height` из плотной строки снят, иначе `min-height` ничего
+    // бы не решил — фиксированная высота обрезает вложенное молча.
+    expect(rule?.declarations).toContain('height: auto');
   });
 });
