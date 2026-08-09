@@ -40,7 +40,6 @@ export const LOCOMOTION_WINDOW = 4;
 
 export interface LocomotionOptions {
   readonly name?: string;
-  readonly order?: number;
   /** Компонент ввода; поля пишет `InputSystem` (TICK-4). */
   readonly inputComponent?: string;
   /** Компонент скорости; интегрирует её физика (PHYS-8). */
@@ -56,10 +55,11 @@ export interface LocomotionOptions {
   readonly jumpButton?: number;
 }
 
+/** Якорь шкалы `order` (DET-9); параметром сборки не является. */
+const ANCHOR_ORDER = 0;
+
 const DEFAULTS = {
   name: 'Locomotion',
-  /** Между `InputSystem` (−1000) и физикой (100) — D8. */
-  order: 10,
   inputComponent: 'Input',
   velocityComponent: 'Velocity',
   configComponent: 'Locomotion',
@@ -87,7 +87,7 @@ function approach(current: Fixed, desired: Fixed, accel: Fixed, decel: Fixed): F
 
 export class LocomotionSystem implements System {
   readonly name: string;
-  readonly order: number;
+  readonly order = ANCHOR_ORDER;
   private readonly input: string;
   private readonly velocity: string;
   private readonly config: string;
@@ -99,7 +99,6 @@ export class LocomotionSystem implements System {
 
   constructor(options: LocomotionOptions = {}) {
     this.name = options.name ?? DEFAULTS.name;
-    this.order = options.order ?? DEFAULTS.order;
     this.input = options.inputComponent ?? DEFAULTS.inputComponent;
     this.velocity = options.velocityComponent ?? DEFAULTS.velocityComponent;
     this.config = options.configComponent ?? DEFAULTS.configComponent;
@@ -195,7 +194,7 @@ export class LocomotionSystem implements System {
     ctx.commands.setField(entity, this.state, 'state', LOCOMOTION_NORMAL);
     if (state === LOCOMOTION_AIRBORNE) {
       // Тик приземления (LOC-5): override снимается ДО проверки пола арены
-      // (order 10 < 110) — приземление в дыру даёт провал штатно.
+      // (якоря 0 и 110, DET-9) — приземление в дыру даёт провал штатно.
       if (ctx.has(entity, LEVEL_OVERRIDE_COMPONENT)) {
         ctx.commands.removeComponent(entity, LEVEL_OVERRIDE_COMPONENT);
       }

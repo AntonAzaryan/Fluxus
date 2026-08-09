@@ -4,6 +4,7 @@ import { EventBus } from '../src/ecs/events.js';
 import { EvaluatedSystem } from '../src/dsl/evaluatedSystem.js';
 import { InputSystem } from '../src/systems/inputSystem.js';
 import { TimeScaleSystem, TIME_SCALE_MODIFIERS_COMPONENT } from '../src/systems/time.js';
+import { LocomotionSystem } from '../src/systems/locomotion.js';
 import { TweenSystem } from '../src/systems/tween.js';
 import { PhysicsSystem, PhysicsWorld } from '../src/systems/physics.js';
 import { ArenaSystem } from '../src/systems/arena.js';
@@ -15,11 +16,12 @@ const noop = (_ctx: SystemContext): void => {};
 
 const sys = (name: string, order: number): System => ({ name, order, run: noop });
 
-/** Все шесть нативных систем таблицы DET-9, каждая со своими зависимостями (DI-1). */
+/** Все семь нативных систем таблицы DET-9, каждая со своими зависимостями (DI-1). */
 function nativeSystems(): readonly System[] {
   return [
     new InputSystem({ players: ['p1'] }),
     new TimeScaleSystem(modifierList(TIME_SCALE_MODIFIERS_COMPONENT)),
+    new LocomotionSystem(),
     new TweenSystem([]),
     new PhysicsSystem(new PhysicsWorld([])),
     new ArenaSystem(),
@@ -67,7 +69,7 @@ describe('SystemRegistry (DET-3, SYS-2)', () => {
 });
 
 describe('Шкала order (DET-9)', () => {
-  // Тест обязан краснеть от правки любой из шести констант: сверяются и сами
+  // Тест обязан краснеть от правки любой из семи констант: сверяются и сами
   // значения таблицы, и последовательность, которая из них следует.
   it('нативные системы стоят на якорях таблицы', () => {
     const registry = new SystemRegistry();
@@ -76,6 +78,7 @@ describe('Шкала order (DET-9)', () => {
     expect(registry.ordered().map((s) => [s.name, s.order])).toEqual([
       ['Input', -1000],
       ['TimeScale', -900],
+      ['Locomotion', 0],
       ['Tween', 50],
       ['Physics', 100],
       ['Arena', 110],
@@ -94,6 +97,10 @@ describe('Шкала order (DET-9)', () => {
 
   // Ничья не разрешается ничем — в том числе именем (SYS-7, RNG-4): регистрация
   // падает в обе стороны, и до сравнения имён дело не доходит.
+  //
+  // Проверяется здесь именно барьер регистрации, а не сортировка scheduler'а:
+  // ничья в реестр не попадает, поэтому сравнения имён в сортировке нет и
+  // проверить его нечем — реестр остаётся с одной системой в обоих порядках.
   it('равные order не разводятся по имени ни в каком порядке регистрации', () => {
     const first = new SystemRegistry();
     first.register(sys('A', 10));
