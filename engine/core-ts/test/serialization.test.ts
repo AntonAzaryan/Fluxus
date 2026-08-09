@@ -5,6 +5,7 @@ import {
   snapshotFromPlain,
   snapshotToPlain,
 } from '../src/sim/serialization.js';
+import { canonicalJson } from '../src/sim/canonicalJson.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
 import { mathApi } from '../src/math/mathApi.js';
@@ -62,13 +63,20 @@ const BURNING: SystemDef = {
 
 const SCENE: SceneDef = { components: COMPONENTS, prefabs: PREFABS, systems: [BURNING], capacity: 64 };
 
-/** Мир с непустым freeList и тегами — то, что легко потерять при выгрузке. */
+/**
+ * Мир с непустым freeList и тегами — то, что легко потерять при выгрузке.
+ * Освобождения нарочно в невозрастающем порядке (слот 3, затем 0): список
+ * [3, 0] отличим и от перечня живых, и от отсортированного набора (ID-4) —
+ * круг, сохраняющий состав, но не порядок, здесь краснеет.
+ */
 function populated(): ReturnType<typeof createWorld> {
   const world = createWorld(COMPONENTS, PREFABS, 64);
   const first = spawn(world, 'Torch');
   spawn(world, 'Rock');
   const third = spawn(world, 'Torch');
-  destroy(world, first); // слот 0 уходит в freeList, поколение растёт
+  const fourth = spawn(world, 'Rock');
+  destroy(world, fourth); // слот 3 уходит в freeList первым
+  destroy(world, first); // слот 0 ложится поверх — стек [3, 0]
   setField(world, third, 'Health', 'current', F(7));
   addTag(world, third, 'lit');
   return world;
@@ -91,6 +99,37 @@ describe('plain-форма мира (SER-1)', () => {
 
     // Переиспользование слота из freeList — то, ради чего выгружается индекс целиком.
     expect(spawn(restored, 'Rock')).toBe(spawn(original, 'Rock'));
+  });
+
+  it('ID-4: круг сохраняет все три части состояния схемы идентификаторов', () => {
+    const original = populated(); // слоты 3 и 0 освобождены в этом порядке, живы 1 и 2
+    const plain = toPlain(original);
+
+    // Ни одна из трёх частей не выводится из остальных: перечень живых не даёт
+    // ни поколений освободившихся слотов, ни порядка их освобождения. Порядок
+    // [3, 0] невозрастающий — сортировка или вывод из признака занятости дали
+    // бы [0, 3] и другой слот первому спавну.
+    expect(plain.nextIndex).toBe(4);
+    expect(plain.freeList).toEqual([3, 0]);
+    expect(plain.generations).toEqual([1, 0, 0, 1]);
+
+    const restored = toPlain(fromPlain(plain, COMPONENTS, PREFABS));
+
+    expect(restored.nextIndex).toBe(plain.nextIndex);
+    expect(restored.freeList).toEqual(plain.freeList);
+    expect(restored.generations).toEqual(plain.generations);
+  });
+
+  it('DET-1 п. 3: пустой список свободных слотов лежит в форме полем, а не опускается', () => {
+    // Опущенный ключ дал бы другой поток байт на тех же данных — ложное
+    // расхождение ровно там, где хеш `worldInit` заводился ради истинного.
+    const fresh = createWorld(COMPONENTS, PREFABS, 8);
+    spawn(fresh, 'Rock');
+    const plain = toPlain(fresh);
+
+    expect(Object.keys(plain)).toContain('freeList');
+    expect(plain.freeList).toEqual([]);
+    expect(canonicalJson(plain)).toContain('"freeList":[]');
   });
 
   it('отвергает компонент, которого нет в схемах сцены', () => {

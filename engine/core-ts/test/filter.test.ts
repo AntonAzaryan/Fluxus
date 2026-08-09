@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as fixed from '../src/math/fixed.js';
 import { mathApi } from '../src/math/mathApi.js';
-import { getField, isAlive, listAlive, setField, spawn } from '../src/ecs/world.js';
+import { getField, isAlive, listAlive, setField, spawn, toPlain } from '../src/ecs/world.js';
+import { indexOf as rawIndexOf } from '../src/ecs/entityIndex.js';
 import { filterSnapshot, relevantEntityVisible, VIEWPOINT_ALL } from '../src/sim/filter.js';
 import { snapshotToPlain } from '../src/sim/serialization.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
@@ -112,6 +113,25 @@ describe('per-client фильтрация снапшота (NET-12)', () => {
     expect([...listAlive(h.world)]).toEqual(alive);
     expect([...listAlive(before.world)]).toEqual(alive);
     expect(snapshotToPlain(takeSnapshot(h.state))).toEqual(snapshotToPlain(before));
+  });
+
+  it('ID-4/NET-12: снапшот расходится с каноническим по поколениям и списку свободных слотов', () => {
+    const h = apart();
+    const canonical = toPlain(h.world);
+    expect(canonical.freeList).toEqual([]); // в каноническом мире никто не умирал
+
+    const personal = toPlain(filterSnapshot(h.state, 0).world);
+
+    // Фильтр вырезает невидимое штатным удалением, поэтому слот врага уходит в
+    // список свободных, а его поколение растёт — в каноническом мире ни того,
+    // ни другого нет. Счётчик слотов при этом общий: удаление его не двигает (ID-2).
+    expect(personal.freeList).toEqual([rawIndexOf(h.enemy)]);
+    expect(personal.generations).not.toEqual(canonical.generations);
+    expect(personal.nextIndex).toBe(canonical.nextIndex);
+
+    // Расхождение расхождением детерминизма не является: вход следующего тика —
+    // канонический мир, и он остался нетронутым (ID-4, NET-12).
+    expect(toPlain(h.world)).toEqual(canonical);
   });
 
   it('команда вне 32 бит — ошибка (FOW-2)', () => {

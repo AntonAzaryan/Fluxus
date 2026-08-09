@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { mathApi } from '../src/math/mathApi.js';
 import { SystemRegistry } from '../src/systems/registry.js';
-import { initialState, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
+import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
 import { RingHistory } from '../src/sim/history.js';
 import { createInputLog, createRewindController } from '../src/sim/rewind.js';
-import { createWorld, getField, listAlive, setField, spawn } from '../src/ecs/world.js';
+import { createWorld, getField, listAlive, setField, spawn, toPlain } from '../src/ecs/world.js';
+import { indexOf as rawIndexOf } from '../src/ecs/entityIndex.js';
 import { InputSystem } from '../src/systems/inputSystem.js';
 import type { ComponentSchema, InputFrame, SimulationState, System } from '../src/types.js';
 import type { PrefabDef } from '../src/ecs/world.js';
@@ -357,6 +358,143 @@ describe('перемотка (REW-1, REW-2, REW-9, REW-10)', () => {
     wsm.seekTo(2);
 
     expect(h.state.tick).toBe(8);
+  });
+});
+
+/**
+ * Стенд для ID-4/ID-6: жизненный цикл слотов по расписанию тиков. Отдельно от
+ * общего `harness`, потому что тому нужен неизменный состав сущностей, а здесь
+ * весь смысл — в удалении на одном тике и спавне на другом.
+ */
+function slotHarness(interval = 2, capacity = 8, custom?: { lifecycle: System; spawns: number }) {
+  const lifecycle: System = custom?.lifecycle ?? {
+    name: 'Lifecycle',
+    order: 30,
+    run(ctx) {
+      // Слот 1 умирает на тике 3, новая сущность рождается на тике 5 — между
+      // ними список свободных слотов непуст, и именно этот отрезок пересекает
+      // перемотка.
+      if (ctx.tick === 3) ctx.commands.destroy(ctx.query({ all: ['Position'] })[1]!);
+      if (ctx.tick === 5) ctx.commands.spawn('mover');
+    },
+  };
+
+  const registry = new SystemRegistry();
+  registry.register(moveSystem);
+  registry.register(lifecycle);
+  const world = createWorld(SCHEMAS, PREFABS, capacity);
+  for (let i = 0; i < (custom?.spawns ?? 3); i++) spawn(world, 'mover'); // слоты 0..N−1
+  const sim: Simulation = { systems: registry, worldSeed: WORLD_SEED, math: mathApi };
+  const state = initialState(world, WORLD_SEED);
+  const history = new RingHistory({ interval, capacity: 16 });
+  const inputs = createInputLog();
+  history.record(state);
+
+  return {
+    sim,
+    state,
+    history,
+    inputs,
+    runTo(target: number) {
+      while (state.tick < target) {
+        inputs.record(state.tick + 1, []);
+        tick(sim, state);
+        history.record(state);
+      }
+    },
+    slots: () => Array.from(listAlive(state.world), rawIndexOf),
+    ids: () => [...listAlive(state.world)],
+    idState: () => {
+      const plain = toPlain(state.world);
+      return { nextIndex: plain.nextIndex, freeList: plain.freeList, generations: plain.generations };
+    },
+  };
+}
+
+describe('состояние схемы идентификаторов при откате (ID-4, ID-6, SNAP-1)', () => {
+  it('ID-4: список свободных слотов возвращается к значению целевого тика, а не остаётся живым', () => {
+    const h = slotHarness();
+    h.runTo(4); // смерть слота 1 уже случилась, спавн — ещё нет
+    expect(h.idState()).toMatchObject({ nextIndex: 3, freeList: [1] });
+
+    const wsm = createRewindController(h.sim, h.state, { history: h.history, inputs: h.inputs });
+    wsm.pause();
+    wsm.beginRewind();
+    wsm.seekTo(2);
+
+    // Слот 1 освобождён «в будущем» относительно тика 2 — в откаченном мире он
+    // снова занят, а список пуст. Живой список предложил бы его аллокации.
+    expect(h.idState()).toMatchObject({ nextIndex: 3, freeList: [] });
+    expect(h.slots()).toEqual([0, 1, 2]);
+  });
+
+  it('ID-4: восстановленный список — тот же стек, а не производная от признака занятости', () => {
+    // Смерти в порядке «слот 2, затем слот 0» дают невозрастающий список [2, 0]:
+    // восстановление, выводящее его из перечня живых (или сортирующее), дало бы
+    // [0, 2] — состав тот же, а вершина стека другая, и аллокация после отката
+    // взяла бы другой слот. Ровно этот случай ID-4 объявляет нарушением.
+    const lifecycle: System = {
+      name: 'Lifecycle',
+      order: 30,
+      run(ctx) {
+        if (ctx.tick === 2) ctx.commands.destroy(ctx.query({ all: ['Position'] })[2]!);
+        if (ctx.tick === 3) ctx.commands.destroy(ctx.query({ all: ['Position'] })[0]!);
+      },
+    };
+    const h = slotHarness(2, 8, { lifecycle, spawns: 4 });
+    h.runTo(4);
+    expect(h.idState().freeList).toEqual([2, 0]);
+
+    const wsm = createRewindController(h.sim, h.state, { history: h.history, inputs: h.inputs });
+    wsm.pause();
+    wsm.beginRewind();
+    wsm.seekTo(3); // снапшот тика 2 + реплей тика 3: обе смерти позади
+
+    expect(h.idState().freeList).toEqual([2, 0]); // точный массив, не состав
+    // Вершина восстановленного стека — слот 0 (освобождён последним, ID-6).
+    expect(rawIndexOf(spawn(h.state.world, 'mover'))).toBe(0);
+  });
+
+  it('ID-4/DET-6: реплей через удаление выдаёт те же {index, generation}', () => {
+    const honest = slotHarness();
+    honest.runTo(7);
+    const expected = honest.ids();
+    const expectedState = honest.idState();
+
+    const h = slotHarness();
+    h.runTo(7);
+    const wsm = createRewindController(h.sim, h.state, { history: h.history, inputs: h.inputs });
+    wsm.pause();
+    wsm.beginRewind();
+    wsm.seekTo(2); // до смерти слота 1
+    wsm.pause();
+    wsm.resume();
+    h.runTo(7);
+
+    // Слот 1 освободился на реплее там же, где и в первом прогоне, и спавн тика 5
+    // снова занял именно его — с тем же поколением.
+    expect(h.ids()).toEqual(expected);
+    expect(h.idState()).toEqual(expectedState);
+    expect(h.slots()).toEqual([0, 1, 2]);
+    expect(h.idState().generations[1]).toBe(1); // слот переиспользован ровно один раз
+  });
+
+  it('SNAP-1: спавн сразу после restoreSnapshot даёт тот же {index, generation}', () => {
+    const honest = slotHarness();
+    honest.runTo(4);
+    const snapshot = takeSnapshot(honest.state); // freeList = [1]
+    honest.runTo(5); // тик со спавном
+    const expected = honest.ids();
+
+    // Тот же тик, но начатый с восстановленного состояния: состояние схемы
+    // идентификаторов пришло в снапшоте целиком, включая список свободных слотов.
+    const other = slotHarness();
+    other.runTo(7); // уводим мир заведомо в другое состояние
+    restoreSnapshot(other.state, snapshot);
+    tick(other.sim, other.state);
+
+    expect(other.state.tick).toBe(5);
+    expect(other.ids()).toEqual(expected);
   });
 });
 
