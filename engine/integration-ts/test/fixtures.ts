@@ -287,6 +287,7 @@ export class RenderBridge {
   readonly host: RenderHost;
   readonly positions: PositionsSubsystem;
   private lastTick = -1;
+  private lastEpoch = 0;
 
   constructor(sceneDef: SceneDef, config: MatchConfig, clock: Clock) {
     this.world = buildMatchWorld({
@@ -313,19 +314,35 @@ export class RenderBridge {
     this.host.register(this.positions);
   }
 
-  /** Применяет свежий снапшот; повторный тик игнорируется, как в NTR-10. */
-  apply(snapshot: Snapshot): void {
-    if (snapshot.tick === this.lastTick) return;
+  /**
+   * Применяет свежий снапшот. «Свежий» — по ПАРЕ `(эпоха, тик)` лексикографически
+   * (NTR-10, NTR-16), а не по одному номеру тика: при перемотке номера идут
+   * назад и повторяются, и дедуп по тику погасил бы ровно то состояние, которое
+   * NET-11 велит показать. Эпоха приезжает аргументом от `MatchClient.epoch` —
+   * сам `Snapshot` её не несёт и нести не должен (NTR-16: в мир она не входит).
+   *
+   * `discontinuity` — признак разрыва непрерывности от клиента (SHELL-7), тот
+   * же, что рендер получает в сэмпле. Он и едет в `isReplay` `TickResult`'а:
+   * для рендера «состояние другой ветви истории» и «реплеевый тик» — один
+   * случай, разрыв (REND-2), и extractor выводит из него `snapAll`. Тем же
+   * флагом он гасит `freshEvents` — и это осознанно: события перемотанного
+   * состояния уже показывались в стёртой ветви, играть их второй раз незачем.
+   */
+  apply(snapshot: Snapshot, epoch: number, discontinuity: boolean): void {
+    if (epoch < this.lastEpoch || (epoch === this.lastEpoch && snapshot.tick <= this.lastTick)) {
+      return;
+    }
     restoreSnapshot(this.world.state, snapshot);
     this.host.onTick({
       state: this.world.state,
       tick: snapshot.tick,
       mode: this.world.state.mode,
-      isReplay: false,
+      isReplay: discontinuity,
       events: this.world.state.events,
       changes: NO_CHANGES,
     });
     this.lastTick = snapshot.tick;
+    this.lastEpoch = epoch;
   }
 }
 
@@ -386,8 +403,13 @@ export async function playMatch(
     await settle();
     fixture.host.step();
     await settle();
+    // Признак снимается КАЖДУЮ итерацию, а не только вместе с состоянием: он
+    // гасится чтением (SHELL-7), и пропущенная итерация донесла бы его до
+    // следующего снапшота — то есть рендер нарисовал бы snap на состоянии, к
+    // которому разрыв не относится.
+    const discontinuity = b.client.takeDiscontinuity();
     const latest = b.client.latest;
-    if (latest !== undefined) bridge.apply(latest);
+    if (latest !== undefined) bridge.apply(latest, b.client.epoch, discontinuity);
   }
   return { ...fixture, a, b, bridge };
 }

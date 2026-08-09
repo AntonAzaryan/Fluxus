@@ -25,9 +25,8 @@ function fogConfig(overrides = {}) {
   });
 }
 
-function snapshotsAfterTick(config = fogConfig(), observer = false) {
-  const fixture = harness(config);
-  const { server } = fixture;
+function running(config = fogConfig(), observer = false) {
+  const { server } = harness(config);
   server.connect(1);
   server.receive(1, hello('p1', config.version));
   server.connect(2);
@@ -37,13 +36,22 @@ function snapshotsAfterTick(config = fogConfig(), observer = false) {
     server.receive(3, hello('watcher', config.version, true));
   }
   server.drain();
-  server.advance();
+  return server;
+}
 
+/** Разосланные снапшоты по соединениям — то, что каждое из них реально увидело. */
+function drainSnapshots(server: ReturnType<typeof running>) {
   const byConnection = new Map<number, SnapshotMessage>();
   for (const outgoing of server.drain()) {
     if (outgoing.message.type === 'Snapshot') byConnection.set(outgoing.to, outgoing.message);
   }
   return byConnection;
+}
+
+function snapshotsAfterTick(config = fogConfig(), observer = false) {
+  const server = running(config, observer);
+  server.advance();
+  return drainSnapshots(server);
 }
 
 describe('фильтрация по viewpoint', () => {
@@ -87,6 +95,31 @@ describe('фильтрация по viewpoint', () => {
     const snapshots = snapshotsAfterTick(duelConfig({ snapshotRate: 60 }));
     for (const message of snapshots.values()) {
       expect(message.snapshot.world.aliveCount).toBe(2);
+    }
+  });
+
+  it('восстановленное состояние режется по видимости целевого тика (REW-11, NTR-9)', () => {
+    // Рассылка по факту восстановления идёт мимо расписания (NTR-16), то есть
+    // отдельным путём, — и персональная фильтрация обязана применяться к ней на
+    // общих основаниях. Разослать в этой точке канонический мир было бы самым
+    // естественным сокращением и означало бы wallhack ровно на время перемотки.
+    const server = running(fogConfig({ rewind: { interval: 1, capacity: 32 } }));
+    for (let tick = 1; tick <= 6; tick++) server.advance();
+    server.drain();
+
+    server.pause();
+    server.beginRewind();
+    server.seekTo(3);
+
+    const snapshots = drainSnapshots(server);
+    expect(snapshots.size).toBe(2);
+    for (const [connection, message] of snapshots) {
+      expect(message).toMatchObject({ epoch: 1, tick: 3 });
+      const world = message.snapshot.world;
+      const slot = connection - 1;
+      expect(world.aliveCount).toBe(1);
+      expect(world.alive[slot]).toBe(1);
+      expect(world.alive[1 - slot]).toBe(0);
     }
   });
 });

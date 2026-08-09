@@ -78,12 +78,15 @@ describe('порядок буфера', () => {
   });
 
   it('сброс на смене эпохи опустошает буфер, и перемотанное состояние применяется snap\'ом', () => {
-    const buffer = new InterpolationBuffer({ delayMs: 100 });
-    for (let tick = 500; tick <= 510; tick++) buffer.push({ tick } as Snapshot, tick * 33);
+    const filled = (): InterpolationBuffer => {
+      const buffer = new InterpolationBuffer({ delayMs: 100 });
+      for (let tick = 500; tick <= 510; tick++) buffer.push({ tick } as Snapshot, tick * 33);
+      return buffer;
+    };
 
     // Мир перемотан на тик 480: состояния прежней эпохи стёрты вместе с ней
-    // (NTR-10). Без сброса `latest` остался бы на тике 510 — порядок буфера
-    // держится тиком, — и перемотанный мир не показался бы вовсе.
+    // (NTR-10).
+    const buffer = filled();
     buffer.reset();
     expect(buffer.length).toBe(0);
     expect(buffer.latest).toBeUndefined();
@@ -95,6 +98,16 @@ describe('порядок буфера', () => {
     expect(sample.from.tick).toBe(480);
     expect(sample.to.tick).toBe(480);
     expect(sample.alpha).toBe(0);
+
+    // Тот же буфер без сброса — и то же состояние в нём не показывается вовсе:
+    // порядок буфера держится тиком, поэтому последним остаётся состояние
+    // стёртой ветви, а сэмпл проезжает между её же кадрами. Ради этого сброс и
+    // существует, а не ради пустоты как таковой.
+    const stale = filled();
+    stale.push({ tick: 480 } as Snapshot, 510 * 33);
+    expect(stale.latest!.tick).toBe(510);
+    const proceeded = stale.sample(510 * 33 + 200)!;
+    expect(proceeded.to.tick).not.toBe(480);
   });
 });
 
