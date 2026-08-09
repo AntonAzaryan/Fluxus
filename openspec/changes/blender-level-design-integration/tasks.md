@@ -83,4 +83,4 @@
 - [x] 11.1 Править `openspec/changes/terrain-texturing/proposal.md`: ассет+рендер остаются, «кисть заливки в editor» → «раскраска в Blender → конвейер», ASSET-10 в его тексте → ASSET-11 (design 15)
 - [x] 11.2 Обновить `docs/architecture.md`: этап 12 — «направление level-дизайна заморожено, превью и data-driven-области живут»; новый этап конвейера Blender со ссылкой на `blender-pipeline`
 - [x] 11.3 Обновить `CLAUDE.md`: пакет `tools/blender-ts`, аддон, команды `npm run import` (+ `--dry-run`/`--watch`), число capability/требований, абзац о Blender как редакторе level-дизайна и glTF как формате моделей
-- [ ] 11.4 Финальная сверка: `npm run check`, `openspec validate --strict`, дифф ветки глазами
+- [x] 11.4 Финальная сверка: `npm run check`, `openspec validate --strict`, дифф ветки глазами
