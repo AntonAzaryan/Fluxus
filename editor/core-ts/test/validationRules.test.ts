@@ -16,6 +16,7 @@ import {
   type SystemDef,
   type TerrainDef,
 } from '@game-mvp/core';
+import type { CameraEffectsDescription } from '@game-mvp/assets';
 import { describe, expect, it } from 'vitest';
 import { createEditorSession, type EditorSession, type JsonValue } from '../src/document/index.js';
 import { createOperationRegistry, registerBuiltinOperations } from '../src/operations/index.js';
@@ -25,11 +26,15 @@ import {
   crossDocumentRules,
   engineValidationRules,
   registerValidationRules,
+  CAMERA_EFFECT_STATE_RULE,
   CREATE_TERRAIN_GRID,
   CURVATURE_GRID_RULE,
   CURVATURE_RULE,
+  DEFAULT_ENGINE_KINDS,
   DEFAULT_PAIR_KINDS,
   DEFAULT_PLACEMENT_SITES,
+  DEFAULT_SYSTEM_SITES,
+  DECORATION_VISUAL_RULE,
   LOAD_SCENE,
   MANIFEST_RULE,
   PLACEMENT_PREFAB_RULE,
@@ -39,6 +44,7 @@ import {
   TERRAIN_RULE,
   VALIDATE_SYSTEM,
   VISUAL_FOR_PREFAB_RULE,
+  type SystemSite,
   type TerrainSite,
   type ValidationIssue,
   type ValidationReport,
@@ -206,6 +212,151 @@ describe('ED-8: JSON-система проверяется против мира
   });
 });
 
+/**
+ * ED-8, ED-30: системы лежат полем конфига сцены (SYS-1, SER-7), а не
+ * документами, и раскладку правилу приносит сборка (ED-25) — тем же
+ * `DocumentSite`, каким её приносят междокументные правила.
+ *
+ * Проверяется здесь одно: находка адресует ЗАПИСЬ системы. До этого сломанная
+ * система гасила весь конфиг одним сообщением `loadScene`, и цикл «правка →
+ * находка → исправление» работал на уровне файла, в котором систем шесть.
+ * Вердикт при этом остаётся за ядром — сообщение сверяется с тем, что бросает
+ * сам `validateSystem`, вызванный в тесте напрямую (ED-1).
+ */
+describe('ED-30: система адресуется своей записью в документе-носителе', () => {
+  const MATCH = 'content/matches/duel.match.json';
+  const IN_SCENE: readonly SystemSite[] = [{ kind: 'scene', path: ['systems'] }];
+
+  const good = {
+    name: 'move',
+    order: 1,
+    query: { all: ['Pos'] },
+    do: [{ modifyComponent: { entity: { var: 'entity' }, component: 'Pos', values: { x: 1 } } }],
+  };
+  const bad = {
+    name: 'haunt',
+    order: 2,
+    query: { all: ['Pos'] },
+    do: [{ modifyComponent: { entity: { var: 'entity' }, component: 'Nope', values: {} } }],
+  };
+
+  /** Мир, в котором ядро судит систему: та же сцена, список систем пуст. */
+  const world = () => loadScene(SCENE_VALUE as unknown as SceneDef).world;
+
+  const rulesFor = (sites: readonly SystemSite[]): readonly ValidationRule[] =>
+    engineValidationRules(DEFAULT_ENGINE_KINDS, {}, sites);
+
+  it('сломанная система внутри конфига подсвечивается на своей записи, а не на документе', () => {
+    const value = { ...SCENE_VALUE, systems: [good, bad] };
+    const report = check({ [SCENE]: { kind: 'scene', value } }, rulesFor(IN_SCENE));
+    const issues = report.forDocument(SCENE).filter((found) => found.ruleId === SYSTEM_RULE);
+    // Ровно одна находка: годная запись рядом молчит, хотя лежит в том же поле.
+    expect(issues).toHaveLength(1);
+    const issue = issues[0]!;
+    expect(issue.path).toEqual(['systems', 1]);
+    // Полученное — сама запись: адрес указывает на неё, а не на её окрестность.
+    expect(issue.received).toEqual(bad);
+    expect(issue.expected).toEqual({
+      kind: 'accepted',
+      by: VALIDATE_SYSTEM,
+      detail: thrownBy(() => validateSystem(bad as unknown as SystemDef, world())),
+    });
+    expect(issue.reasonParams['against']).toBe(SCENE);
+    // Находка спрашивается по адресу записи — то, ради чего ED-30 требует путь.
+    expect(report.at(SCENE, ['systems', 1])).toHaveLength(1);
+  });
+
+  it('годный список систем внутри конфига находок не даёт', () => {
+    const value = { ...SCENE_VALUE, systems: [good] };
+    const report = check({ [SCENE]: { kind: 'scene', value } }, rulesFor(IN_SCENE));
+    expect(report.issues).toHaveLength(0);
+  });
+
+  it('вид документа-носителя — тоже параметр: список систем конфига матча', () => {
+    const report = check(
+      {
+        [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+        [MATCH]: { kind: 'match', value: { systems: [bad] } },
+      },
+      rulesFor([{ kind: 'match', path: ['systems'] }]),
+    );
+    const issue = report.forDocument(MATCH).find((found) => found.ruleId === SYSTEM_RULE)!;
+    expect(issue.path).toEqual(['systems', 0]);
+    // Мир по-прежнему берётся у сцены: систему судит тот, кто знает компоненты.
+    expect(issue.reasonParams['against']).toBe(SCENE);
+  });
+
+  it('раскладки складываются: и список внутри конфига, и системы отдельными документами', () => {
+    const report = check(
+      {
+        [SCENE]: { kind: 'scene', value: { ...SCENE_VALUE, systems: [bad] } },
+        [SYSTEM]: { kind: 'system', value: { ...bad, name: 'lonely', order: 7 } },
+      },
+      rulesFor([...IN_SCENE, ...DEFAULT_SYSTEM_SITES]),
+    );
+    expect(report.at(SCENE, ['systems', 0])).toHaveLength(1);
+    // У отдельного документа адрес прежний — корень: документ и есть система.
+    expect(report.at(SYSTEM, [])).toHaveLength(1);
+  });
+
+  it('умолчание — система отдельным документом: правило встаёт на свой вид и адресует корень', () => {
+    const rule = engineValidationRules().find((found) => found.id === SYSTEM_RULE)!;
+    expect(rule.appliesTo).toEqual(['system']);
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [SYSTEM]: { kind: 'system', value: bad },
+    });
+    expect(report.forDocument(SYSTEM).find((found) => found.ruleId === SYSTEM_RULE)?.path).toEqual([]);
+  });
+
+  it('сцена, сломанная не системой, молчит правилом систем: мира нет, судить нечем', () => {
+    const value = { ...SCENE_VALUE, initial: [{ prefab: 'ghost' }], systems: [bad] };
+    const report = check({ [SCENE]: { kind: 'scene', value } }, rulesFor(IN_SCENE));
+    expect(report.forDocument(SCENE).filter((found) => found.ruleId === SYSTEM_RULE)).toHaveLength(0);
+    // Отчитывается о ней её собственное правило — и на документе целиком.
+    const issue = report.forDocument(SCENE).find((found) => found.ruleId === SCENE_RULE)!;
+    expect(issue.path).toEqual([]);
+    expect(detailOf(issue)).toBe(thrownBy(() => loadScene(value as unknown as SceneDef)));
+  });
+
+  it('система, сломавшая сцену, названа дважды: документом и своей записью', () => {
+    // Два сообщения об одном нарушении не противоречат друг другу, а называют
+    // его с разной точностью — то же, что у пары `loadScene` и правила
+    // расстановки. Ради второго, точного, правило и получило адреса.
+    const value = { ...SCENE_VALUE, systems: [bad] };
+    const report = check({ [SCENE]: { kind: 'scene', value } }, rulesFor(IN_SCENE));
+    expect(report.forDocument(SCENE).map((found) => found.ruleId).sort()).toEqual([SCENE_RULE, SYSTEM_RULE]);
+  });
+
+  it('поля `systems` нет или оно не список — правило молчит: форму проверяет ядро', () => {
+    expect(check({ [SCENE]: { kind: 'scene', value: SCENE_VALUE } }, rulesFor(IN_SCENE)).issues).toHaveLength(0);
+    const report = check({ [SCENE]: { kind: 'scene', value: { ...SCENE_VALUE, systems: 7 } } }, rulesFor(IN_SCENE));
+    expect(report.forDocument(SCENE).filter((found) => found.ruleId === SYSTEM_RULE)).toHaveLength(0);
+  });
+
+  it('ED-8: правка одной записи возвращает правило в работу и переносит находку', () => {
+    // Имя и `order` у систем разные: равные ядро отвергает само (DET-3), и это
+    // проверка списка целиком, а не одной записи — её и делает правило сцены.
+    const chase = { ...good, name: 'chase', order: 3 };
+    const editor = sessionOf({ [SCENE]: { kind: 'scene', value: { ...SCENE_VALUE, systems: [good, chase] } } });
+    const validator = validatorOf(rulesFor(IN_SCENE));
+    expect(validator.run(editor).issues).toHaveLength(0);
+    validator.run(editor);
+    // Прогон без правок не исполняет ничего: подъём мира — дорогая операция, и
+    // ED-8 «в реальном времени» держится именно на этом.
+    expect(validator.lastRun.executed).toBe(0);
+
+    editor.applyOperation('document.setValue', {
+      document: SCENE,
+      path: ['systems', 1, 'do', 0, 'modifyComponent', 'component'],
+      value: 'Nope',
+    });
+    const report = validator.run(editor);
+    expect(validator.lastRun.executed).toBeGreaterThan(0);
+    expect(report.at(SCENE, ['systems', 1]).map((found) => found.ruleId)).toEqual([SYSTEM_RULE]);
+  });
+});
+
 describe('ED-14: манифест визуалов — все нарушения разом и с адресом', () => {
   it('несколько нарушений в одном документе дают несколько находок с путями', () => {
     const value = {
@@ -241,6 +392,99 @@ describe('ED-14: манифест визуалов — все нарушения
         [MANIFEST]: { kind: 'manifest', value: MANIFEST_VALUE },
       }).ok,
     ).toBe(true);
+  });
+});
+
+/**
+ * ED-14, ASSET-8: секция эффектов проверяется тем же правилом, что остальной
+ * манифест, — но только если сборка подала правилам описание типов (CAM-9).
+ * Описание здесь выдуманное: своего перечня типов у редактора нет и быть не
+ * должно, а «правило берёт то, что дали» проверяется как раз чужим набором.
+ */
+describe('ED-14: секция эффектов камеры по описанию типов (CAM-9)', () => {
+  const description: CameraEffectsDescription = {
+    types: [
+      { id: 'shake', kind: 'impulse', params: [{ name: 'decay', defaultValue: 1.4, min: 0, max: 10 }] },
+      { id: 'sway', kind: 'lasting', params: [{ name: 'rollAmp', defaultValue: 0.05, min: 0 }] },
+    ],
+    binding: { impulse: [{ name: 'amplitude', defaultValue: 0.6, min: 0 }], lasting: [] },
+  };
+
+  const withEffects = (section: JsonValue): JsonValue => ({ ...MANIFEST_VALUE, cameraEffects: section });
+
+  const described = (section: JsonValue): ValidationReport =>
+    check({ [MANIFEST]: { kind: 'manifest', value: withEffects(section) } }, [
+      ...engineValidationRules(DEFAULT_ENGINE_KINDS, { cameraEffects: description }),
+    ]);
+
+  it('без описания правило о типах молчит: перечня типов у него нет', () => {
+    const report = check(
+      { [MANIFEST]: { kind: 'manifest', value: withEffects({ events: { Boom: { effect: 'nope' } } }) } },
+      [...engineValidationRules()],
+    );
+    expect(report.forDocument(MANIFEST)).toHaveLength(0);
+  });
+
+  it('неизвестный тип — находка важности warning, и она не запрещает сохранение (ED-3)', () => {
+    const report = described({ events: { Boom: { effect: 'wobble-3000' } } });
+    const issue = report.forDocument(MANIFEST).find((found) => found.ruleId === MANIFEST_RULE)!;
+    expect(issue.severity).toBe('warning');
+    expect(issue.path).toEqual(['cameraEffects', 'events', 'Boom', 'effect']);
+    expect(detailOf(issue)).toContain('wobble-3000');
+    // Предупреждения `ok` не отменяют: документ с типом из будущей сборки
+    // камеры остаётся сохраняемым (ASSET-8).
+    expect(report.ok).toBe(true);
+  });
+
+  it('значение вне диапазона — ошибка с адресом до поля', () => {
+    const report = described({ events: { Boom: { effect: 'shake', decay: 99 } } });
+    const issue = report.at(MANIFEST, ['cameraEffects', 'events', 'Boom', 'decay'])[0]!;
+    expect(issue.ruleId).toBe(MANIFEST_RULE);
+    expect(issue.severity).toBe('error');
+    expect(issue.received).toBe(99);
+    expect(report.ok).toBe(false);
+  });
+
+  it('законная запись находок не даёт', () => {
+    const report = described({ events: { Boom: { effect: 'shake', decay: 2, amplitude: 0.5 } } });
+    expect(report.forDocument(MANIFEST)).toHaveLength(0);
+  });
+});
+
+/**
+ * ED-8, CAM-6: ключ таблицы длящихся эффектов — имя компоненты-состояния, и
+ * выводится оно из открытой сцены (SER-7). Правило междокументное, поэтому и
+ * живёт рядом с соседями по паре, а не в правилах движка.
+ */
+describe('ED-8: имя состояния в таблице длящихся эффектов', () => {
+  const manifestWith = (states: JsonValue): JsonValue => ({ ...MANIFEST_VALUE, cameraEffects: { states } });
+
+  it('имя, которого не объявляет ни одна сцена, — предупреждение с адресом записи', () => {
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [MANIFEST]: { kind: 'manifest', value: manifestWith({ Drunk: { effect: 'sway' } }) },
+    });
+    const issue = report.forDocument(MANIFEST).find((found) => found.ruleId === CAMERA_EFFECT_STATE_RULE)!;
+    expect(issue.severity).toBe('warning');
+    expect(issue.path).toEqual(['cameraEffects', 'states', 'Drunk']);
+    expect(knownOf(issue)).toEqual(['Pos']);
+    // Предупреждение сохранению не мешает (ED-3).
+    expect(report.ok).toBe(true);
+  });
+
+  it('объявленная сценой компонента находок не даёт', () => {
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [MANIFEST]: { kind: 'manifest', value: manifestWith({ Pos: { effect: 'sway' } }) },
+    });
+    expect(report.forDocument(MANIFEST).filter((f) => f.ruleId === CAMERA_EFFECT_STATE_RULE)).toHaveLength(0);
+  });
+
+  it('без открытой сцены правило молчит: незагруженная сцена — не привязка в никуда', () => {
+    const report = check({
+      [MANIFEST]: { kind: 'manifest', value: manifestWith({ Drunk: { effect: 'sway' } }) },
+    });
+    expect(report.issues.filter((f) => f.ruleId === CAMERA_EFFECT_STATE_RULE)).toHaveLength(0);
   });
 });
 
@@ -411,5 +655,79 @@ describe('ED-19: запись расстановки на несуществую
       [MANIFEST]: { kind: 'manifest', value: MANIFEST_VALUE },
     });
     expect(report.issues).toHaveLength(0);
+  });
+});
+
+describe('PRES-2: ссылка decoration на запись манифеста', () => {
+  const PRESENTATION = 'content/scenes/arena.presentation.json';
+  const WITH_DECORATIONS = {
+    entities: { grunt: { model: 'models/grunt.mdx' } },
+    decorations: { grass: { model: 'models/grass.mdx' } },
+  };
+
+  it('неразрешимый `visual` подсвечивается адресно и с именем в причине', () => {
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [MANIFEST]: { kind: 'manifest', value: WITH_DECORATIONS },
+      [PRESENTATION]: {
+        kind: 'presentation',
+        value: { decorations: [{ visual: 'grass', x: 0, y: 0 }, { visual: 'ghost', x: 1, y: 1 }] },
+      },
+    });
+    const issue = report
+      .forDocument(PRESENTATION)
+      .find((found) => found.ruleId === DECORATION_VISUAL_RULE)!;
+    expect(issue.path).toEqual(['decorations', 1, 'visual']);
+    expect(issue.received).toBe('ghost');
+    expect(issue.reasonParams['name']).toBe('ghost');
+    // Рантайм переживает это заглушкой (ASSET-6) — значит предупреждение, а не
+    // запрет сохранять.
+    expect(issue.severity).toBe('warning');
+    // Известное — оба раздела в одном пространстве ключей (ASSET-9).
+    expect(knownOf(issue)).toEqual(['grass', 'grunt']);
+  });
+
+  it('вид из раздела сущностей ссылке годится: копии в decoration-виды не требуется', () => {
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [MANIFEST]: { kind: 'manifest', value: WITH_DECORATIONS },
+      [PRESENTATION]: { kind: 'presentation', value: { decorations: [{ visual: 'grunt', x: 0, y: 0 }] } },
+    });
+    expect(report.forDocument(PRESENTATION)).toHaveLength(0);
+  });
+
+  it('незагруженный манифест правило молчит, а не объявляет все ссылки битыми', () => {
+    const report = check({
+      [PRESENTATION]: { kind: 'presentation', value: { decorations: [{ visual: 'ghost', x: 0, y: 0 }] } },
+    });
+    expect(report.issues).toHaveLength(0);
+  });
+
+  it('запись decoration-вида рассинхронизацией пары «prefab — запись» не считается (ASSET-9)', () => {
+    // ED-19 нормирует пару для сим-сущностей; у decoration сим-стороны нет, и
+    // раздел decoration-видов в находки `prefabForVisual` попадать не должен.
+    const report = check({
+      [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+      [MANIFEST]: { kind: 'manifest', value: WITH_DECORATIONS },
+    });
+    expect(report.issues.filter((found) => found.ruleId === PREFAB_FOR_VISUAL_RULE)).toEqual([]);
+  });
+
+  it('адрес списка — параметр правила, а не его знание (ED-25)', () => {
+    const rules = crossDocumentRules(DEFAULT_PAIR_KINDS, DEFAULT_PLACEMENT_SITES, undefined, [
+      { kind: 'presentation', path: ['props'] },
+    ]);
+    const report = check(
+      {
+        [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+        [MANIFEST]: { kind: 'manifest', value: WITH_DECORATIONS },
+        [PRESENTATION]: { kind: 'presentation', value: { props: [{ visual: 'ghost', x: 0, y: 0 }] } },
+      },
+      rules,
+    );
+    const issue = report
+      .forDocument(PRESENTATION)
+      .find((found) => found.ruleId === DECORATION_VISUAL_RULE)!;
+    expect(issue.path).toEqual(['props', 0, 'visual']);
   });
 });

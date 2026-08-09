@@ -27,10 +27,33 @@
  * вышел. Приметой фокусируемых полей придётся заняться в тот день, когда
  * появится контрол, пишущий в документ по ходу ввода, а не по его завершении.
  *
+ * ## Порядок разбора нажатия (ED-32)
+ *
  * Клавиатура слушается на документе, а не на корне: горячая клавиша области
  * (ED-23) и отмена операции (ED-18) обязаны срабатывать независимо от того,
  * где сейчас фокус, — иначе «сквозная история» перестаёт быть сквозной ровно
- * тогда, когда автор стоит в поле ввода.
+ * тогда, когда автор стоит в поле ввода. Подписок на документе поэтому две, и
+ * они и есть три ступени порядка ED-32:
+ *
+ * - **захват** — сквозные сочетания каркаса. Они обязаны срабатывать и из поля
+ *   ввода, поэтому идут раньше всех;
+ * - **виджет под фокусом** — между двумя подписками. Дерево, список и палитра
+ *   потребляют своё нажатие вызовом `preventDefault` (`widgets/rows.ts`,
+ *   `dom/roving.ts`), и признак «потреблено» тем самым уже существует;
+ * - **всплытие** — клавиши активной области, и только если нажатие не
+ *   потреблено. Спрашивать вместо этого `document.activeElement` и сверяться со
+ *   списком виджетов нельзя: список пришлось бы держать рядом с виджетами, и
+ *   расходился бы он с ними ровно так же, как ручная таблица «поле → ключ»
+ *   в ED-28.
+ *
+ * Сам порядок записан функцией `areaGetsKey` (`keys.ts`), а не тремя условиями
+ * по месту: без DOM его иначе не проверить, а «стрелка в дереве камеру не
+ * двигает» — утверждение о порядке, а не о том, куда уехал фокус. Здесь
+ * остаётся только подписка и перевод события среды в её аргументы.
+ *
+ * Отпускание и потеря фокуса окном идут мимо порядка: «клавиша больше не
+ * зажата» — утверждение о клавиатуре, а не просьба что-то сделать, и
+ * пропущенное оно оставило бы область панорамирующей вечно.
  */
 import { renderInto } from '../dom/render.js';
 import { ROVING_ATTR } from '../dom/roving.js';
@@ -38,7 +61,8 @@ import { installStylesheet } from '../tokens/stylesheet.js';
 import { TOKEN_SCOPE_CLASS } from '../tokens/css.js';
 import { mountEditorRoot } from '../root.js';
 import type { WorkspaceFrame } from './frame.js';
-import { keyStrokeOf } from './keys.js';
+import { areaGetsKey, keyStrokeOf, type KeyTarget } from './keys.js';
+import { SURFACE_FOCUS_ID } from './skeleton.js';
 import { createCoalescingRedraw, type RedrawSchedule } from './redraw.js';
 
 export interface MountedFrame {
@@ -47,18 +71,39 @@ export interface MountedFrame {
   dispose(): void;
 }
 
-/** Контейнер, в котором сейчас фокус, — по нему фокус и возвращается. */
+/**
+ * Контейнер, в котором сейчас фокус, — по нему фокус и возвращается. Поверхность
+ * правки roving-контейнером не является, но местом фокуса по умолчанию является
+ * (ED-32), и перерисовка не должна выбрасывать из неё автора так же, как не
+ * должна выбрасывать из списка.
+ */
 function focusedContainer(doc: Document): string | undefined {
   const active = doc.activeElement;
-  const container = active === null ? null : active.closest(`[${ROVING_ATTR}]`);
-  return container?.getAttribute(ROVING_ATTR) ?? undefined;
+  if (active === null) return undefined;
+  const container = active.closest(`[${ROVING_ATTR}]`);
+  if (container !== null) return container.getAttribute(ROVING_ATTR) ?? undefined;
+  return active.id === SURFACE_FOCUS_ID ? SURFACE_FOCUS_ID : undefined;
 }
 
-/** Единственная остановка Tab внутри контейнера — она же место фокуса. */
+/**
+ * Единственная остановка Tab внутри контейнера — она же место фокуса. Место по
+ * умолчанию контейнером не является и адресуется своим идентификатором.
+ */
 function restoreFocus(root: ParentNode, containerId: string | undefined): void {
   if (containerId === undefined) return;
-  const target = root.querySelector(`[${ROVING_ATTR}="${containerId}"] [tabindex="0"]`);
+  const target =
+    root.querySelector(`[${ROVING_ATTR}="${containerId}"] [tabindex="0"]`) ??
+    root.querySelector(`#${containerId}`);
   if (target instanceof HTMLElement) target.focus();
+}
+
+/** Цель события в том виде, в каком её читает порядок разбора (`keys.ts`). */
+function keyTarget(target: EventTarget | null): KeyTarget | null {
+  if (!(target instanceof Element)) return null;
+  return {
+    tagName: target.tagName,
+    editable: target instanceof HTMLElement && target.isContentEditable,
+  };
 }
 
 export interface MountOptions {
@@ -86,8 +131,36 @@ export function mountWorkspaceFrame(
     restoreFocus(root, frame.takeFocusRequest() ?? previous);
   };
 
-  const onKeyDown = (event: KeyboardEvent): void => {
+  // Ступень первая (ED-32): сквозные сочетания каркаса, на фазе захвата.
+  const onFrameKey = (event: KeyboardEvent): void => {
     if (frame.handleKey(keyStrokeOf(event))) event.preventDefault();
+  };
+
+  // Ступень третья: клавиши активной области, на всплытии. Ступень вторая —
+  // виджет под фокусом — стоит между ними сама: она уже вызвала
+  // `preventDefault`, и признак этот здесь и читается.
+  const onAreaKey = (event: KeyboardEvent): void => {
+    const gate = {
+      defaultPrevented: event.defaultPrevented,
+      target: keyTarget(event.target),
+      ctrl: event.ctrlKey || event.metaKey,
+      shift: event.shiftKey,
+      alt: event.altKey,
+    };
+    if (!areaGetsKey(gate)) return;
+    if (frame.handleAreaKey({ code: event.code, phase: 'down', repeat: event.repeat })) {
+      event.preventDefault();
+    }
+  };
+
+  // Отпускание области отдаётся без разбора порядка: «клавиша больше не
+  // зажата» — утверждение о клавиатуре, а не просьба что-то сделать, и
+  // пропущенное оно оставило бы область панорамирующей навсегда.
+  const onKeyUp = (event: KeyboardEvent): void => {
+    frame.handleAreaKey({ code: event.code, phase: 'up', repeat: false });
+  };
+  const onBlur = (): void => {
+    frame.handleAreaKey({ code: '', phase: 'blur', repeat: false });
   };
 
   // Оповещений об одной авторской порции работы приходит несколько (пакет по
@@ -96,7 +169,11 @@ export function mountWorkspaceFrame(
   // существовать к возврату из монтирования.
   const redraw = createCoalescingRedraw(draw, options.schedule);
 
-  doc.addEventListener('keydown', onKeyDown);
+  doc.addEventListener('keydown', onFrameKey, true);
+  doc.addEventListener('keydown', onAreaKey);
+  doc.addEventListener('keyup', onKeyUp);
+  const window_ = doc.defaultView;
+  window_?.addEventListener('blur', onBlur);
   const unsubscribes = [
     frame.subscribe(() => {
       redraw.request();
@@ -111,7 +188,10 @@ export function mountWorkspaceFrame(
       // Прогон живёт дольше страницы (ED-9: у него свой поток), и снос страницы
       // обязан его закончить — иначе воркер переживает окно, которое его завело.
       frame.stopPreview();
-      doc.removeEventListener('keydown', onKeyDown);
+      doc.removeEventListener('keydown', onFrameKey, true);
+      doc.removeEventListener('keydown', onAreaKey);
+      doc.removeEventListener('keyup', onKeyUp);
+      window_?.removeEventListener('blur', onBlur);
       for (const unsubscribe of unsubscribes) unsubscribe();
     },
   };

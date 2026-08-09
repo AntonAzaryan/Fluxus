@@ -12,6 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Specs (`openspec/`) and docs are written in Russian — requirement modality stays English (SHALL / MUST NOT). Keep it that way when editing them; do NOT translate them.
 - Reference requirements by ID (e.g. NTR-1, CONT-4, SHELL-3) instead of paraphrasing. When exact wording matters, quote the Russian text verbatim.
 - Before implementing, check the relevant capability spec: `openspec spec show <capability>`.
+- Navigate specs lazily with `npm run spec-graph -- <cmd>` (`scripts/spec-graph.mjs`): to quote or check a single foreign requirement use `show <ID>` (one section, not the whole spec), find IDs with `find <text>`, expand the task's context via `refs <ID>`. Before editing a requirement, run `impact <ID>` — it lists what may go stale. The capability you are *changing* you still read whole. The tool sees main specs only, not `changes/` deltas; `spec-graph check` lints the reference graph and is part of the `npm run check` gate.
 
 ### Naming
 
@@ -22,15 +23,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `openspec/` is the spec, `engine/` its working implementation (the `*-ts` packages), `editor/` the content editor built on top of them (capability `editor`, roadmap stage 12), `content/` the game content the engine runs, `docs/` the non-normative overview. The npm workspace root is the repository root.
 
-Game content lives in `content/` and never inside an engine package (`game-content` CONT-1, enforced by `engine/integration-ts/test/contentBoundary.test.ts`): `content/scenes/`, `content/matches/` are sim documents, `content/visuals/` holds the visual manifest, models and textures, and an asset ID is a path from the tree root (ASSET-2). Engine test fixtures are **not** content and stay put — `engine/tests/golden/` and the scenes built inline in `engine/integration-ts/test/fixtures.ts` (CONT-4): an engine baseline goes red from an engine change, not from a designer retuning a number.
+Game content lives in `content/` and never inside an engine package (`game-content` CONT-1, enforced by `engine/integration-ts/test/contentBoundary.test.ts`): `content/scenes/`, `content/matches/` are sim documents, each scene may have a paired presentation document beside it (`duel.presentation.json` — decorations, capability `presentation-scene` PRES-1), `content/visuals/` holds the visual manifest, models and textures, and an asset ID is a path from the tree root (ASSET-2). Engine test fixtures are **not** content and stay put — `engine/tests/golden/` and the scenes built inline in `engine/integration-ts/test/fixtures.ts` (CONT-4): an engine baseline goes red from an engine change, not from a designer retuning a number.
 
 ## The spec is the source of truth
 
-`openspec/specs/` (27 capabilities, 317 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
+`openspec/specs/` (28 capabilities, 332 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
 
 - Requirements carry historical IDs (`DET-1`, `NET-15`, `FOW-4`…) in `### Requirement:` headers — preserve them; a new requirement takes the next free number of its prefix.
 - Changes go through the OpenSpec workflow: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`, etc. (the `openspec-*` skills in `.claude/skills/`). Do not edit specs outside this process.
-- Capability ≠ package. `editor` (roadmap stage 12) lives in two packages outside `engine/` and reaches into three more capabilities' specs (`rendering`, `camera`, `serialization`); `pathfinding` is a seam with no algorithm behind it. Which requirements of `editor` have code, which are partial and which were out of the pass — `docs/reviews/2026-08-08-editor-coverage.md`.
+- Capability ≠ package. `editor` (roadmap stage 12) lives in two packages outside `engine/`, reaches into four more capabilities' specs (`rendering`, `camera`, `serialization`, `assets`) and brought a fifth into being (`presentation-scene` — the paired presentation document its decorations live in); `pathfinding` is a seam with no algorithm behind it. Which requirements of `editor` have code, which are partial and which were out of the pass — `docs/reviews/2026-08-08-editor-coverage.md` (the historical report plus its 2026-08-09 addendum).
 - Spec-writing context and rules — `openspec/config.yaml`.
 - Layer overview, roadmap, the mechanism-vs-policy split, open questions — `docs/architecture.md` (alongside `docs/one-pager.md`).
 - **Work not yet done is written down, not remembered.** `openspec list` is the live queue of proposed changes; the roadmap table in `docs/architecture.md` says what each stage is for and in what order. A change whose `proposal.md` exists while `specs`/`design`/`tasks` are empty is a deliberate stub — read its `## Notes` and continue with `/opsx:update <name>`.
@@ -43,7 +44,7 @@ openspec validate --specs --strict  # format check
 
 ## Commands (repository root workspace)
 
-Node >= 22.18. The repository root is the npm workspace; its members are the engine packages (`engine/core-ts`, `engine/net-ts`, `engine/render-ts`, `engine/assets-ts`, `engine/client-ts` — the web client shell (worker hosting + channel, SHELL-1..7), `engine/integration-ts` — the cross-layer integration suite, CLI-9) plus the two editor packages (`editor/core-ts` — the headless authoring layer, `editor/ui-ts` — its DOM interface and web app). A single `npm install` from the root installs everything, and the check-everything gate before pushing is `npm run check` — it is `typecheck && lint && test`, and running only the first and the last is how a lint failure reaches the remote:
+Node >= 22.18. The repository root is the npm workspace; its members are the engine packages (`engine/core-ts`, `engine/net-ts`, `engine/render-ts`, `engine/assets-ts`, `engine/client-ts` — the web client shell (worker hosting + channel, SHELL-1..7), `engine/integration-ts` — the cross-layer integration suite, CLI-9) plus the two editor packages (`editor/core-ts` — the headless authoring layer, `editor/ui-ts` — its DOM interface and web app). A single `npm install` from the root installs everything, and the check-everything gate before pushing is `npm run check` — it is `typecheck && lint && spec-graph check && test`, and running only a subset is how a lint or spec-graph failure reaches the remote:
 
 ```sh
 npm run check     # from the root: typecheck + lint + test — run this before pushing

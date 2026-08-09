@@ -19,7 +19,7 @@ import type { AreaZones, WorkspaceArea } from '../src/frame/area.js';
 import { RAIL_ITEM_CLASS } from '../src/frame/rail.js';
 import { ZONE_ORDER } from '../src/frame/skeleton.js';
 import { sceneArea } from '../src/areas/scene.js';
-import { systemsArea } from '../src/areas/systems.js';
+import { stubArea } from './support/stubArea.js';
 import { attr, buildFrame, press, withAttr } from './support/frame.js';
 
 /** Состояние чужой области: каркас его не читает и прочесть не может. */
@@ -49,7 +49,7 @@ const outsiderArea: WorkspaceArea<OutsiderState> = {
 };
 
 const withOutsider = (): ReturnType<typeof buildFrame> =>
-  buildFrame([sceneArea, systemsArea, outsiderArea]);
+  buildFrame([sceneArea, stubArea, outsiderArea]);
 
 describe('ED-25: новая рабочая область не правит ни каркас, ни соседние вклады', () => {
   it('регистрация добавляет знак в рельс — и ничего больше не требует', () => {
@@ -119,7 +119,7 @@ describe('ED-25: новая рабочая область не правит ни
 
   it('переключение на неё и обратно ничего не ломает в истории сессии', () => {
     const { frame, session } = withOutsider();
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     press(findAll(frame.view(), (node) => attr(node, 'role') === 'switch')[0]);
     frame.activate(outsiderArea.id);
     expect(frame.canUndo()).toBe(true);

@@ -47,26 +47,39 @@ import {
   type ValidationRule,
   type Validator,
 } from '@game-mvp/editor-core';
-import { children, documentValue, el, issueText, resourceText, type UiNode } from '../dom/node.js';
+import {
+  children,
+  documentValue,
+  el,
+  hotkeyText,
+  issueText,
+  resourceText,
+  type UiNode,
+  type UiText,
+} from '../dom/node.js';
 import type {
   AreaContext,
+  AreaKey,
+  AreaKeyInput,
   AreaSearch,
   AreaSetup,
   AreaZones,
   WorkspaceArea,
 } from '../frame/area.js';
+import { keyLabel } from '../frame/keys.js';
 import type { PreviewSource } from '../frame/preview.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS } from '../frame/styles.js';
 import { inspectorPanel, issueState, type InspectorSubject } from '../inspector/index.js';
 import { matchesQuery, type SearchHit } from '../palette/palette.js';
 import { button } from '../widgets/button.js';
+import type { IconName } from '../widgets/icon.js';
 import { statusChip } from '../widgets/chip.js';
 import { select, toggle } from '../widgets/field.js';
 import { tree, type TreeItem } from '../widgets/rows.js';
 import { placementSubject, sceneDocumentSubject } from './sceneSchema.js';
 import { withValidation } from '../widgets/validation.js';
 import { viewportFrame } from '../viewport.js';
-import type { ScenePlacement } from './sceneDocuments.js';
+import type { SceneDecoration, ScenePlacement } from './sceneDocuments.js';
 import { createAssetModule, type AssetModule } from './assetModule.js';
 import {
   canRender,
@@ -79,7 +92,9 @@ import {
   type PlacementTool,
   type StagePointer,
 } from './sceneInteraction.js';
+import { CAMERA_KEYS } from './sceneCamera.js';
 import { prefabNames } from './scenePlacement.js';
+import { decorationVisualNames } from './sceneDecorations.js';
 import {
   BRUSH_LEVELS,
   BRUSH_SIZES,
@@ -92,6 +107,7 @@ import {
 import { CURVATURE_OFFSETS } from './sceneTerrain.js';
 import { createScenePreview, type PreviewBackendFactory } from './scenePreview.js';
 import {
+  DECORATION_LIST,
   PLACEMENT_LIST,
   TERRAIN_ASSET,
   draftOf,
@@ -111,6 +127,7 @@ export const SCENE_VIEWPORT_ID = 'fx-scene-viewport';
 /** Группы навигатора: не документы и не записи, а места, куда они складываются. */
 export const SCENE_NODES = {
   placements: 'scene.placements',
+  decorations: 'scene.decorations',
   assets: 'scene.assets',
 } as const;
 
@@ -140,6 +157,57 @@ const TOOL_LABELS: Readonly<Record<SceneToolId, string>> = {
   curvature: 'ui.area.scene.toolCurvature',
 };
 
+/**
+ * Знаки инструментов (ED-31). Выбор знака делает область — она же инструмент и
+ * регистрирует (ED-25): таблицы «инструмент → знак» в каркасе нет, а геометрия
+ * знака лежит данными в `widgets/icon.ts`, где её и проверяют на различие форм.
+ */
+const TOOL_ICONS: Readonly<Record<SceneToolId, IconName>> = {
+  pointer: 'cursor',
+  terrain: 'paint',
+  curvature: 'curve',
+};
+
+/** Клавиша, которой берётся инструмент. Часть той же раскладки, что камера. */
+const TOOL_HOTKEYS: Readonly<Record<SceneToolId, string>> = {
+  pointer: 'KeyV',
+  terrain: 'KeyB',
+  curvature: 'KeyC',
+};
+
+/**
+ * Раскладка клавиш области как данные вклада (ED-32). Перечень один: по нему
+ * область и разбирает нажатия, и собирает подсказки своих элементов (ED-31) —
+ * второго перечня «для подсказок» не существует, поэтому смена раскладки меняет
+ * и подсказку.
+ */
+export const SCENE_AREA_KEYS: readonly AreaKey[] = Object.freeze([
+  { code: CAMERA_KEYS.panLeft, labelKey: 'ui.area.scene.keyPanLeft' },
+  { code: CAMERA_KEYS.panRight, labelKey: 'ui.area.scene.keyPanRight' },
+  { code: CAMERA_KEYS.panUp, labelKey: 'ui.area.scene.keyPanUp' },
+  { code: CAMERA_KEYS.panDown, labelKey: 'ui.area.scene.keyPanDown' },
+  { code: CAMERA_KEYS.flyToggle, labelKey: 'ui.area.scene.cameraFly' },
+  { code: CAMERA_KEYS.flyLeft, labelKey: 'ui.area.scene.keyFlyLeft' },
+  { code: CAMERA_KEYS.flyRight, labelKey: 'ui.area.scene.keyFlyRight' },
+  { code: CAMERA_KEYS.flyForward, labelKey: 'ui.area.scene.keyFlyForward' },
+  { code: CAMERA_KEYS.flyBack, labelKey: 'ui.area.scene.keyFlyBack' },
+  { code: CAMERA_KEYS.flyUp, labelKey: 'ui.area.scene.keyFlyUp' },
+  { code: CAMERA_KEYS.flyDown, labelKey: 'ui.area.scene.keyFlyDown' },
+  ...SCENE_TOOLS.map((id) => ({ code: TOOL_HOTKEYS[id], labelKey: TOOL_LABELS[id] })),
+]);
+
+/** Клавиши, которые двигают камеру удержанием, — их набор и копит область. */
+const CAMERA_HELD: ReadonlySet<string> = new Set<string>(
+  Object.entries(CAMERA_KEYS)
+    .filter(([role]) => role !== 'flyToggle')
+    .map(([, code]) => code),
+);
+
+/** Обратная таблица «клавиша → инструмент»: раскладка одна, читается с двух сторон. */
+const TOOL_BY_KEY: ReadonlyMap<string, SceneToolId> = new Map(
+  SCENE_TOOLS.map((id) => [TOOL_HOTKEYS[id], id]),
+);
+
 const BRUSH_MODE_LABELS: Readonly<Record<TerrainBrushMode, string>> = {
   level: 'ui.area.scene.brushLevel',
   ramp: 'ui.area.scene.brushRamp',
@@ -167,6 +235,12 @@ const ROTATION_STEP = 1 / 8;
 export interface SceneStageHooks {
   readonly announce: () => void;
   readonly pointer: (event: StagePointer) => void;
+  /**
+   * Что зажато на клавиатуре сейчас. Спрашивает вьюпорт, отвечает область:
+   * клавиши принадлежат ей, а не её холсту (ED-32), и набор живёт в записи её
+   * состояния — иначе перерисовка, заменяющая узел кадра, роняла бы его.
+   */
+  readonly keys: () => ReadonlySet<string>;
 }
 
 /** Чем собирается вьюпорт. */
@@ -261,6 +335,13 @@ export interface SceneAreaState {
   /** Строка навигатора под клавиатурным фокусом. */
   focusId: string;
   /**
+   * Зажатые клавиши раскладки области (ED-32). Живут в записи состояния, а не в
+   * узле кадра: отрисовка тотальная, и набор, привязанный к холсту, сбрасывался
+   * бы на каждой правке — стрелка «переставала бы работать» ровно так же, как
+   * переставала от нажатия кнопки бара.
+   */
+  readonly held: Set<string>;
+  /**
    * Открыть проект заново (ED-12): спросить у среды корень и найти в дереве
    * документы. Тем же вызовом это делает команда палитры (ED-24) — второго пути
    * открытия не заводится.
@@ -305,6 +386,48 @@ function activateTool(state: SceneAreaState, next: SceneToolId): void {
 }
 
 /**
+ * Клавиша области (ED-32). Порядок разбора держит каркас: сюда нажатие доходит,
+ * только если сквозные сочетания его не забрали, фокус не в поле ввода и виджет
+ * под фокусом его не потребил. Второго порядка — своего у этой области — здесь
+ * поэтому нет, есть только раскладка (`SCENE_AREA_KEYS`) и то, что она значит.
+ *
+ * Указания на поверхность правки клавиши не требуют: набор зажатого живёт в
+ * записи состояния, а не в холсте, и вьюпорт спрашивает его каждым кадром.
+ */
+function handleSceneKey(input: AreaKeyInput<SceneAreaState>): boolean {
+  const state = input.state;
+  if (input.phase === 'blur') {
+    // Окно потеряло фокус — отпускания уже не придёт, и оставленная зажатой
+    // клавиша панорамировала бы вечно.
+    state.held.clear();
+    return false;
+  }
+  if (input.phase === 'up') return state.held.delete(input.code);
+
+  const tool = TOOL_BY_KEY.get(input.code);
+  if (tool !== undefined) {
+    // Недоступный инструмент нажатие всё равно забирает — по тому же
+    // основанию, по которому его забирает недоступная команда палитры: отдать
+    // клавишу дальше значило бы, что одна клавиша делает разное в зависимости
+    // от состояния документов (ED-26).
+    const off = input.mode === 'preview';
+    const ready = !off && state.stage !== null && (tool === 'pointer' || state.brush.available(tool));
+    if (ready && !input.repeat) activateTool(state, tool);
+    return true;
+  }
+  if (input.code === CAMERA_KEYS.flyToggle) {
+    // Фронт, а не удержание: автоповтор переключал бы облёт каждым повтором.
+    // Камера работает и в превью — ED-13 разрешает панорамировать и зумить при
+    // работающем прогоне, ввод камеры границы воркера не пересекает.
+    if (!input.repeat) state.stage?.toggleFly();
+    return true;
+  }
+  if (!CAMERA_HELD.has(input.code)) return false;
+  state.held.add(input.code);
+  return true;
+}
+
+/**
  * Закрыт ли авторинг сейчас. Закрыт он ровно в превью: «в превью операции
  * авторинга недоступны» (ED-9), и элемент, который нельзя применить, показан
  * недоступным, а не молча не срабатывает (ED-26). Режим приходит от каркаса —
@@ -342,6 +465,7 @@ export function sceneStageOptions(
     visuals,
     onChange: hooks.announce,
     onPointer: hooks.pointer,
+    keys: hooks.keys,
   };
 }
 
@@ -437,6 +561,11 @@ function install(
     session: setup.session,
     documentId: project.configId,
     list: PLACEMENT_LIST,
+    // Парный документ адресуется только когда он есть: сцена без декораций —
+    // законное состояние, и создавать файл ради пустого слоя нельзя (PRES-1).
+    ...(project.hasPresentation
+      ? { presentationId: project.presentationId, decorationList: DECORATION_LIST }
+      : {}),
     ...(ids.position === undefined ? {} : { binding: ids.position }),
     refresh: () => {
       state.refresh();
@@ -466,9 +595,11 @@ function install(
       if (state.activeTool === 'pointer') state.tool.pointer(event);
       else state.brush.pointer(event);
     },
+    keys: () => state.held,
   });
   let config: unknown = undefined;
   let curvature: unknown = undefined;
+  let presentation: unknown = undefined;
   // Начальное значение — то, которым поднята подсистема моделей: первый
   // пересчёт манифест не переподаёт, потому что переподавать ещё нечего.
   let visuals: unknown = setup.session.documentValue(project.visualsId);
@@ -490,11 +621,18 @@ function install(
     // назначенная в просмотрщике, обязана попасть в картинку не позже
     // следующего кадра (ED-15), а не ждать переоткрытия проекта.
     const nextVisuals = setup.session.documentValue(project.visualsId);
+    // Парный документ — четвёртый редактируемый документ кадра (PRES-1): его
+    // правка обязана попасть в картинку не позже следующего кадра (ED-15).
+    const nextPresentation =
+      !project.hasPresentation || !setup.session.isOpen(project.presentationId)
+        ? null
+        : setup.session.documentValue(project.presentationId);
     if (
       state.draft !== null &&
       nextConfig === config &&
       nextCurvature === curvature &&
-      nextVisuals === visuals
+      nextVisuals === visuals &&
+      nextPresentation === presentation
     ) {
       return;
     }
@@ -502,6 +640,7 @@ function install(
     config = nextConfig;
     curvature = nextCurvature;
     visuals = nextVisuals;
+    presentation = nextPresentation;
     state.draft = draftOf(setup.session, project);
     // Переподача манифеста целиком и декларативно (REND-17): что пересобрать, а
     // что обновить на живом инстансе, решает подсистема — второго такого
@@ -560,6 +699,39 @@ function placementItem(context: AreaContext<SceneAreaState>, placement: ScenePla
     ...(placement.kind === null ? {} : { badge: documentValue(placement.kind) }),
     ...(validation === undefined ? {} : { validation }),
     selected: selection.has(placement.key),
+    onSelect: (id) => {
+      state.focusId = id;
+      selection.set([id]);
+    },
+  };
+}
+
+/**
+ * Строка декорации в навигаторе. Подписана она ключом вида (PRES-2), а не
+ * префабом: сим-стороны у декорации нет вовсе, и называть её нечем другим.
+ * Находка правила стоит внутри записи (на её ссылке `visual`), а строка — на
+ * самой записи, поэтому `under`, а не `at`.
+ */
+function decorationItem(
+  context: AreaContext<SceneAreaState>,
+  decoration: SceneDecoration,
+): TreeItem {
+  const { state, selection } = context;
+  const documentId = state.project?.presentationId;
+  const path =
+    documentId === undefined
+      ? undefined
+      : context.session.resolveDescriptor(documentId, decoration.key)?.path;
+  const issues =
+    documentId === undefined || path === undefined
+      ? []
+      : (state.report?.under(documentId, path) ?? []);
+  const validation = issueState(context.resources, issues);
+  return {
+    id: decoration.key,
+    label: documentValue(decoration.visual),
+    ...(validation === undefined ? {} : { validation }),
+    selected: selection.has(decoration.key),
     onSelect: (id) => {
       state.focusId = id;
       selection.set([id]);
@@ -630,6 +802,9 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
   const placements = (state.draft?.placements ?? []).map((placement) =>
     placementItem(context, placement),
   );
+  const decorations = (state.draft?.decorations ?? []).map((decoration) =>
+    decorationItem(context, decoration),
+  );
 
   const rootValidation = issueState(resources, state.report?.forDocument(project.configId) ?? []);
   const root: TreeItem = {
@@ -640,6 +815,11 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
     ...(rootValidation === undefined ? {} : { validation: rootValidation }),
     items: [
       group(context, SCENE_NODES.placements, 'ui.area.scene.placements', placements),
+      // Группа заводится, только когда парный документ есть: пустой узел
+      // «Декорации» у сцены без слоя обещал бы место, которого нет (PRES-1).
+      ...(project.hasPresentation
+        ? [group(context, SCENE_NODES.decorations, 'ui.area.scene.decorations', decorations)]
+        : []),
       group(context, SCENE_NODES.assets, 'ui.navigator.assets', assets),
     ],
     onSelect: (id) => {
@@ -670,6 +850,51 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
   });
 }
 
+/** Чем отличается один элемент бара от другого: клавиша, состояние, доступность. */
+interface BarButtonSpec {
+  /** Код клавиши раскладки (ED-32); подсказка называет ту же, которая работает. */
+  readonly hotkey?: string;
+  /** Включённость переключателя; `undefined` — элемент не переключатель. */
+  readonly pressed?: boolean;
+  readonly disabled?: boolean;
+  readonly onPress: () => void;
+}
+
+/**
+ * Элемент бара, показывающий только знак (ED-31). Имя и подсказка обязательны
+ * и приходят ресурсами (ED-27); горячая клавиша в подсказке берётся из той же
+ * раскладки, по которой она и работает, — второго перечня клавиш нет (ED-32).
+ */
+function iconButton(
+  context: AreaContext<SceneAreaState>,
+  key: string,
+  sign: IconName,
+  spec: BarButtonSpec,
+): UiNode {
+  const { resources } = context;
+  const name = resourceText(resources, key);
+  const title: UiText =
+    spec.hotkey === undefined ? name : hotkeyText(resources, key, keyLabel(spec.hotkey));
+  return button({
+    icon: sign,
+    name,
+    title,
+    variant: 'ghost',
+    ...(spec.pressed === undefined ? {} : { pressed: spec.pressed }),
+    disabled: spec.disabled === true,
+    onPress: spec.onPress,
+  });
+}
+
+/**
+ * Группа бара. Перенос по ширине (ED-22) рвёт бар между группами, а не посреди
+ * пары «уровень кисти / размер кисти»: пустая группа при этом не рисуется —
+ * узел-обёртка вокруг ничего оставил бы в баре зазор ни от чего.
+ */
+function barGroup(items: readonly UiNode[]): UiNode | undefined {
+  return items.length === 0 ? undefined : el('div', { classes: ['fx-bar__group'], children: items });
+}
+
 /**
  * Панель инструмента расстановки (ED-16, ED-17). Всё, что она делает, — зовёт
  * инструмент: сама она в документы не пишет, потому что писать в них можно
@@ -680,6 +905,19 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
  * проекта поворот не выражается вовсе (ED-16), а без кадра не во что и попадать.
  * В превью недоступно всё: операции авторинга там запрещены (ED-9).
  */
+/**
+ * Есть ли что поворачивать при текущем выделении (ED-26). Ответ разный по
+ * слоям: декорация поворачивается всегда, сим-объект — только если настройка
+ * проекта назвала, где лежит поворот (ED-16).
+ */
+function canRotateSelection(state: SceneAreaState): boolean {
+  const chosen = state.tool.selected();
+  if (chosen.length === 0) return false;
+  if (state.tool.canRotate) return true;
+  const decorations = new Set((state.draft?.decorations ?? []).map((item) => item.key));
+  return chosen.some((key) => decorations.has(key));
+}
+
 function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   const { state, resources } = context;
   const tool = state.tool;
@@ -694,34 +932,57 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
   const off = authoringOff(context);
   const pointing = state.activeTool === 'pointer' && !off;
 
-  const act = (key: string, disabled: boolean, press: () => void): UiNode =>
-    button({
-      label: resourceText(resources, key),
-      variant: 'ghost',
-      disabled,
-      onPress: press,
-    });
+  const act = (key: string, sign: IconName, disabled: boolean, press: () => void): UiNode =>
+    iconButton(context, key, sign, { disabled, onPress: press });
+
+  // Слой постановки (ED-19): сим-объект или декорация. Переключатель, а не
+  // второй инструмент — вьюпорт, выделение и подсветка у них одни и те же
+  // (ED-17). Без парного документа он недоступен, а не спрятан (ED-26).
+  const decorating = tool.layer === 'decoration';
 
   return [
-    // Режим — состояние инструмента, и подпись показывает текущий, а не тот, в
-    // который нажатие переведёт: иначе автор читает кнопку как индикатор.
-    act(
-      placing ? 'ui.area.scene.toolPlace' : 'ui.area.scene.toolSelect',
-      stage === null || !pointing,
-      () => {
+    // Режим — состояние, и показан он состоянием: имя переключателя называет
+    // режим и от нажатия не меняется, а включённость несёт `aria-pressed` с
+    // акцентом (ED-31, ED-22). Прежняя подпись, подменявшаяся между «текущим» и
+    // «результатом нажатия», по построению не сообщала, что она такое.
+    iconButton(context, 'ui.area.scene.toolPlace', 'stamp', {
+      pressed: placing,
+      disabled: stage === null || !pointing,
+      onPress: () => {
         tool.setMode(placing ? 'select' : 'place');
       },
-    ),
-    select({
-      label: resourceText(resources, 'ui.area.scene.prefab'),
-      value: tool.prefab ?? '',
-      // Имя префаба — идентификатор документа, и локаль его не касается (ED-27).
-      options: prefabs.map((name) => ({ value: name, label: documentValue(name) })),
-      disabled: !placing || !pointing || prefabs.length === 0,
-      onSelect: (value) => {
-        tool.setPrefab(value);
+    }),
+    iconButton(context, 'ui.area.scene.layerDecoration', 'sprig', {
+      pressed: decorating,
+      disabled: stage === null || !pointing || !tool.canDecorate,
+      onPress: () => {
+        tool.setLayer(decorating ? 'sim' : 'decoration');
       },
     }),
+    // Из чего ставить: префаб у сим-объекта, ключ вида у декорации. Список один
+    // на два слоя не сводится — это разные множества и разные документы
+    // (ED-19), — но виден в баре ровно один: тот, которым сейчас ставят.
+    decorating
+      ? select({
+          label: resourceText(resources, 'ui.area.scene.visual'),
+          value: tool.visual ?? '',
+          // Ключ вида — идентификатор документа, локаль его не касается (ED-27).
+          options: tool.visuals.map((name) => ({ value: name, label: documentValue(name) })),
+          disabled: !placing || !pointing || tool.visuals.length === 0,
+          onSelect: (value) => {
+            tool.setVisual(value);
+          },
+        })
+      : select({
+          label: resourceText(resources, 'ui.area.scene.prefab'),
+          value: tool.prefab ?? '',
+          // Имя префаба — идентификатор документа, и локаль его не касается (ED-27).
+          options: prefabs.map((name) => ({ value: name, label: documentValue(name) })),
+          disabled: !placing || !pointing || prefabs.length === 0,
+          onSelect: (value) => {
+            tool.setPrefab(value);
+          },
+        }),
     toggle({
       label: resourceText(resources, 'ui.area.scene.snap'),
       on: tool.snapping,
@@ -730,13 +991,30 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
         tool.setSnapping(on);
       },
     }),
-    act('ui.area.scene.rotateLeft', off || !tool.canRotate || chosen.length === 0, () => {
+    // Поворот доступен, если поворачивать есть что: у декорации курс лежит
+    // полем записи (PRES-2) и привязки проекта не требует, у сим-объекта — без
+    // привязки не выражается вовсе (ED-16, ED-26).
+    act('ui.area.scene.rotateLeft', 'rotate-left', off || !canRotateSelection(state), () => {
       tool.rotate(-ROTATION_STEP);
     }),
-    act('ui.area.scene.rotateRight', off || !tool.canRotate || chosen.length === 0, () => {
+    act('ui.area.scene.rotateRight', 'rotate-right', off || !canRotateSelection(state), () => {
       tool.rotate(ROTATION_STEP);
     }),
-    act('ui.action.remove', off || chosen.length === 0, () => {
+    // Перевод между слоями (ED-19, PRES-5): камню понадобился коллайдер —
+    // объект переезжает в конфиг сцены; у prop'а убрали геймплейную роль — он
+    // переезжает в парный документ. Недоступно, когда переводить нечего:
+    // выделение пусто, смешано или парного документа у сцены нет (ED-26).
+    act(
+      tool.convertible === 'decoration'
+        ? 'ui.area.scene.toProp'
+        : 'ui.area.scene.toDecoration',
+      'swap',
+      off || tool.convertible === null || (tool.convertible === 'decoration' && tool.prefab === null),
+      () => {
+        tool.convert(tool.prefab);
+      },
+    ),
+    act('ui.action.remove', 'trash', off || chosen.length === 0, () => {
       tool.remove();
     }),
   ];
@@ -750,12 +1028,12 @@ function placementBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
  * (ED-26).
  */
 function toolBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
-  const { state, resources } = context;
+  const { state } = context;
   const off = authoringOff(context);
   return SCENE_TOOLS.map((id) =>
-    button({
-      label: resourceText(resources, TOOL_LABELS[id]),
-      variant: state.activeTool === id ? 'primary' : 'ghost',
+    iconButton(context, TOOL_LABELS[id], TOOL_ICONS[id], {
+      hotkey: TOOL_HOTKEYS[id],
+      pressed: state.activeTool === id,
       disabled: off || state.stage === null || (id !== 'pointer' && !state.brush.available(id)),
       onPress: () => {
         activateTool(state, id);
@@ -870,15 +1148,48 @@ function surface(context: AreaContext<SceneAreaState>): UiNode {
     (issue) => issue.ruleId === CURVATURE_GRID_RULE,
   );
 
-  const zoom = (steps: number, key: string): UiNode =>
-    button({
-      label: resourceText(resources, key),
-      variant: 'ghost',
+  const zoom = (steps: number, key: string, sign: IconName): UiNode =>
+    iconButton(context, key, sign, {
       disabled: stage === null,
       onPress: () => {
         stage?.zoom(steps);
       },
     });
+
+  // Камера: облёт, зум и обзорный кадр. В превью эти кнопки НЕ гаснут — ED-13
+  // прямо разрешает панорамировать и зумить при работающем прогоне: ввод камеры
+  // границы воркера не пересекает, и прогон от него не меняется.
+  const cameraGroup = [
+    // Облёт — режим конвейера камеры (CAM-2, ED-13), а не второй способ считать
+    // позу; free-RTS — тот же конвейер без цели слежения (CAM-7). Имя
+    // переключателя называет режим и от нажатия не меняется, включённость несёт
+    // `aria-pressed` с акцентом (ED-31): по подписи, подменяемой между «Облёт» и
+    // «Свободная камера», нельзя было понять, что она сообщает — текущий режим
+    // или результат нажатия.
+    iconButton(context, 'ui.area.scene.cameraFly', 'fly', {
+      hotkey: CAMERA_KEYS.flyToggle,
+      pressed: stage?.flying === true,
+      disabled: stage === null,
+      // Перерисовку просит сам вьюпорт, когда режим до конвейера дошёл:
+      // спросить `flying` прямо здесь значило бы получить прежний ответ
+      // и показывать один режим, пока камера в другом (ED-26).
+      onPress: () => {
+        stage?.toggleFly();
+      },
+    }),
+    zoom(-ZOOM_STEP, 'ui.area.scene.zoomIn', 'zoom-in'),
+    zoom(ZOOM_STEP, 'ui.area.scene.zoomOut', 'zoom-out'),
+    // Обзорный кадр (ED-15) — то же кадрирование конвейера, что и стартовый
+    // (CAM-8), а не запомненная поза: запомненная разошлась бы с ареной на
+    // первой же правке её размеров. В облёте показан недоступным (ED-26):
+    // кадрирование режима не меняет, и видимого ответа у него там нет.
+    iconButton(context, 'ui.area.scene.overview', 'fit', {
+      disabled: stage === null || !stage.canFrame || stage.flying,
+      onPress: () => {
+        stage?.frameArena();
+      },
+    }),
+  ];
 
   return el('div', {
     classes: [FILL_CLASS, FILL_COLUMN_CLASS],
@@ -889,48 +1200,32 @@ function surface(context: AreaContext<SceneAreaState>): UiNode {
           // Пометки режима здесь нет намеренно: он один на редактор и виден из
           // любой области (ED-26), поэтому живёт в верхнем баре каркаса. Вторая
           // пометка в области рано или поздно разошлась бы с первой.
-          //
-          // Кнопки камеры в превью НЕ гаснут: ED-13 прямо разрешает панорамировать
-          // и зумить при работающем прогоне — ввод камеры границы воркера не
-          // пересекает, и прогон от него не меняется.
-          // Облёт — режим конвейера камеры (CAM-2, ED-13), а не второй способ
-          // считать позу; free-RTS — тот же конвейер без цели слежения (CAM-7).
-          button({
-            label: resourceText(
-              resources,
-              stage?.flying === true ? 'ui.area.scene.cameraFly' : 'ui.area.scene.cameraFree',
+          barGroup(cameraGroup),
+          barGroup(toolBar(context)),
+          barGroup(placementBar(context)),
+          barGroup(brushBar(context)),
+          barGroup(
+            children(
+              // Причина — не оттенок: иконку, положение и текст ставит один
+              // вызов (ED-8, ED-22), а сам текст приходит от ядра, а не
+              // сочиняется здесь.
+              failure === null
+                ? undefined
+                : withValidation(
+                    statusChip({
+                      label: resourceText(resources, 'ui.area.scene.brokenDocument'),
+                      tone: 'error',
+                    }),
+                    { severity: 'error', reason: documentValue(failure) },
+                  ),
+              // Несовпадение сеток — предупреждение, а не отказ (ASSET-7:
+              // рантайм переживает его игнором карты), но видно оно обязано
+              // быть сразу (ED-11). Важность и текст причины приходят от
+              // находки: цвет тут ничего не решает, различают иконка, положение
+              // и причина (ED-22).
+              ...grids.map((issue) => gridChip(context, issue)),
             ),
-            variant: 'ghost',
-            icon: 'layers',
-            disabled: stage === null,
-            // Перерисовку просит сам вьюпорт, когда режим до конвейера дошёл:
-            // спросить `flying` прямо здесь значило бы получить прежний ответ
-            // и показывать один режим, пока камера в другом (ED-26).
-            onPress: () => {
-              stage?.toggleFly();
-            },
-          }),
-          zoom(-ZOOM_STEP, 'ui.area.scene.zoomIn'),
-          zoom(ZOOM_STEP, 'ui.area.scene.zoomOut'),
-          ...toolBar(context),
-          ...placementBar(context),
-          ...brushBar(context),
-          // Причина — не оттенок: иконку, положение и текст ставит один вызов
-          // (ED-8, ED-22), а сам текст приходит от ядра, а не сочиняется здесь.
-          failure === null
-            ? undefined
-            : withValidation(
-                statusChip({
-                  label: resourceText(resources, 'ui.area.scene.brokenDocument'),
-                  tone: 'error',
-                }),
-                { severity: 'error', reason: documentValue(failure) },
-              ),
-          // Несовпадение сеток — предупреждение, а не отказ (ASSET-7: рантайм
-          // переживает его игнором карты), но видно оно обязано быть сразу
-          // (ED-11). Важность и текст причины приходят от находки: цвет тут
-          // ничего не решает, различают иконка, положение и причина (ED-22).
-          ...grids.map((issue) => gridChip(context, issue)),
+          ),
         ),
       }),
       el('div', {
@@ -999,6 +1294,9 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
     labelKey: 'ui.area.scene.label',
     hotkey: 'F1',
     icon: 'layers',
+    // Раскладка области — данные вклада (ED-32); её же читают подсказки (ED-31).
+    keys: SCENE_AREA_KEYS,
+    handleKey: handleSceneKey,
     editableTypes: [{ id: 'scene', descriptionKey: 'ui.editable.scene.description' }],
     preview: (state) => state.preview,
     /**
@@ -1094,8 +1392,15 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
           },
           ...(options.previewBackend === undefined ? {} : { backend: options.previewBackend }),
         }),
-        expanded: new Set([SCENE_NODES.placements, SCENE_NODES.assets]),
+        expanded: new Set([
+          SCENE_NODES.placements,
+          SCENE_NODES.decorations,
+          SCENE_NODES.assets,
+        ]),
         focusId: '',
+        // Набор зажатого живёт столько же, сколько запись состояния: он обязан
+        // пережить и перерисовку страницы, и уход в другую область (ED-23).
+        held: new Set<string>(),
         reopen: () => {
           start(state, setup, options, assets);
         },
@@ -1138,6 +1443,9 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
         selection: context.selection,
         picker: state.stage,
         placements: state.draft?.placements ?? [],
+        // Вторая половина того же выделения (ED-17): инструмент один, а
+        // документа два, и какая запись где — он обязан знать по построению.
+        decorations: state.draft?.decorations ?? [],
         // Шаг привязки — размер клетки редактируемого террейна (ED-16, TERR-2).
         snapStep:
           state.draft?.grid === undefined || state.draft.grid === null
@@ -1145,6 +1453,9 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
             : state.draft.grid.tileSize / FIXED_ONE,
         prefabs:
           state.project === null ? [] : prefabNames(context.session.documentValue(state.project.configId)),
+        // Оба раздела манифеста в одном пространстве ключей (ASSET-9): камень,
+        // который бывает и препятствием, и украшением, описан один раз.
+        visuals: decorationVisualNames(state.draft?.visuals ?? null),
       });
       // Кисть видит тот же кадр и те же документы: сетка — уже производная,
       // выведенная ядром (TERR-5, REND-14), а не пересчитанная областью.

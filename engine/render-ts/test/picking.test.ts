@@ -269,6 +269,32 @@ describe('попадание в поверхность (REND-15)', () => {
     expect(hit.z).toBeCloseTo(1.2, 3);
   });
 
+  it('попадание по холму считается по сглаженному полю, а не по билинейной хорде (REND-9)', () => {
+    const { picking, source } = makeRig(flatGrid(3, 3));
+    // Северный ряд поднят кривизной: внутри клетки (1,1) поле меняется по Y.
+    source.setCurvature(curvature(3, 3, ['777', '...', '...']));
+    const surface = source.current!;
+    expect(surface.hasCellCurvature(1, 1)).toBe(true);
+
+    const px = 1.5;
+    const py = 1.25;
+    const hit = picking.pickSurface(lookDown(px, py), VIEWPORT)!;
+    expect(hit.cellX).toBe(1);
+    expect(hit.cellY).toBe(1);
+    // Марш идёт тем же `heightInCell`, каким геометрия ставит свои вершины:
+    // попадание лежит НА поверхности, а не на её хорде.
+    expect(hit.z).toBeCloseTo(surface.heightInCell(1, 1, px, py), 4);
+
+    // Билинейная форма по углам клетки (то, чем поле было до сглаживания) в
+    // этой точке даёт заметно другую высоту — тест не вырожден.
+    const [h00, h10, h11, h01] = surface.cornerHeights(1, 1);
+    const u = px - 1;
+    const v = py - 1;
+    const chord =
+      h00 * (1 - u) * (1 - v) + h10 * u * (1 - v) + h11 * u * v + h01 * (1 - u) * v;
+    expect(Math.abs(hit.z - chord)).toBeGreaterThan(1e-3);
+  });
+
   it('правка сетки меняет ответ без пересоздания сервиса; повтор без правок даёт то же', () => {
     const { picking, source } = makeRig(flatGrid());
     const first = picking.pick(lookDown(1.5, 1.5), VIEWPORT)!;

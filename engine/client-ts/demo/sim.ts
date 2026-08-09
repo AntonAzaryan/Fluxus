@@ -43,6 +43,16 @@ export const PLAYER_ID = 'p1';
  */
 export const ACTION_BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
 
+/**
+ * Компоненты-состояния, зеркалируемые в `EntityView.states` (CAM-6): порядок
+ * списка задаёт номера битов. Список ОДИН на обе половины сборки — Extractor
+ * симуляции (`worker.ts`) выставляет по нему биты, диспетчер эффектов главного
+ * потока (`main.ts`) по нему же ищет имя из таблицы `states` манифеста
+ * (ASSET-8). Два списка разошлись бы молча: эффект просто не включался бы, а
+ * автор увидел бы только его отсутствие.
+ */
+export const STATE_COMPONENTS: readonly string[] = Object.freeze(['Falling']);
+
 // ------------------------------------------------------------------- сборка
 
 export interface DemoSimulation {

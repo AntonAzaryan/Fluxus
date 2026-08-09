@@ -28,9 +28,12 @@ import { createSceneArea, sceneArea, type SceneAreaState } from '../../src/areas
 import { sceneValidationRules } from '../../src/areas/sceneProject.js';
 import type { StagePointer } from '../../src/areas/sceneInteraction.js';
 import { registerPlacementOperations } from '../../src/areas/scenePlacement.js';
+import { registerDecorationOperations } from '../../src/areas/sceneDecorations.js';
 import { registerTerrainOperations } from '../../src/areas/sceneTerrain.js';
 import { registerVisualsOperations } from '../../src/areas/assetVisuals.js';
-import { systemsArea } from '../../src/areas/systems.js';
+import { registerCameraEffectsOperations } from '../../src/areas/assetCameraEffects.js';
+import type { CameraEffectsDescription } from '@game-mvp/assets';
+import { stubArea } from './stubArea.js';
 import { previewProbe, type PreviewProbe } from './preview.js';
 import { FIXTURE_IDS, fakeStage, fixtureHost, settle, type FakeStage } from './project.js';
 
@@ -52,11 +55,22 @@ export interface FrameExtras {
   readonly fieldEditors?: ContributionReader<FieldEditor>;
   /** Команды палитры (ED-24, ED-25); нет — реестр пуст. */
   readonly commands?: ContributionReader<PaletteCommand>;
+  /**
+   * Машинное описание типов эффектов камеры (`camera` CAM-9), с которым
+   * собираются операции секции. Приносит его сборка — тому же описанию она
+   * подаёт область и правила валидации, — и подставленное здесь описание с
+   * новым типом обязано работать без правок редактора (ED-14).
+   */
+  readonly cameraEffects?: CameraEffectsDescription;
 }
 
-/** Каркас с набором областей. По умолчанию — те же два вклада, что и в приложении. */
+/**
+ * Каркас с набором областей. По умолчанию — область сцены и фикстурная область
+ * набора (`stubArea`): каркас обязан проверяться на двух непохожих областях, и
+ * вторая из них принадлежит тестам, а не приложению.
+ */
 export function buildFrame(
-  areas: readonly WorkspaceArea[] = [sceneArea, systemsArea],
+  areas: readonly WorkspaceArea[] = [sceneArea, stubArea],
   locale = 'ru',
   extras: FrameExtras = {},
 ): FrameFixture {
@@ -66,10 +80,15 @@ export function buildFrame(
   // записей манифеста — вклады областей (ED-25), и без них область правит
   // документы нечем (ED-29).
   const session = createEditorSession({
-    operations: registerVisualsOperations(
-      registerTerrainOperations(
-        registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+    operations: registerCameraEffectsOperations(
+      registerVisualsOperations(
+        registerTerrainOperations(
+          registerDecorationOperations(
+            registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+          ),
+        ),
       ),
+      extras.cameraEffects,
     ),
   });
   const resources = uiResources(locale);
@@ -122,7 +141,7 @@ export async function buildLoadedFrame(
       return made;
     },
   });
-  const fixture = buildFrame([area, systemsArea, ...(options.areas ?? [])], locale, options);
+  const fixture = buildFrame([area, stubArea, ...(options.areas ?? [])], locale, options);
   // Запись состояния заводится лениво — первым обращением к области.
   const state = fixture.frame.stateOf(area.id) as SceneAreaState;
   await settle();
@@ -142,7 +161,7 @@ export interface LoadedFrameOptions extends FrameExtras {
   readonly host?: MemoryHost;
   /** Дополнительные правила валидации (ED-8, ED-25). */
   readonly rules?: readonly ValidationRule[];
-  /** Дополнительные области сверх сцены и систем. */
+  /** Дополнительные области сверх сцены и фикстурной. */
   readonly areas?: readonly WorkspaceArea[];
 }
 
@@ -178,10 +197,16 @@ export function withAttr(root: UiNode, name: string): UiNode[] {
   return findAll(root, (node) => attr(node, name) !== undefined);
 }
 
-/** Кнопка, чья подпись пришла из ресурса с этим ключом. */
+/**
+ * Кнопка, чьё имя пришло из ресурса с этим ключом. Имя — либо видимая подпись,
+ * либо доступное имя кнопки-знака (ED-31): у элемента бара подписи не видно, а
+ * имя у него обязано быть, и находится он по нему же.
+ */
 export function buttonByKey(root: UiNode, key: string): UiNode | undefined {
   return findAll(root, (node) => node.tag === 'button').find((node) =>
-    [...walk(node)].some((inner) => inner.text?.key === key),
+    [...walk(node)].some(
+      (inner) => inner.text?.key === key || inner.labels?.ariaLabel?.key === key,
+    ),
   );
 }
 

@@ -14,6 +14,8 @@ import { uiResources } from '../src/i18n/uiBundles.js';
 import { fieldTableHeight } from '../src/widgets/fieldTable.js';
 import { STYLE_RULES } from '../src/tokens/stylesheet.js';
 import { tokenPx } from '../src/tokens/tokens.js';
+import { findAll, hasClass } from '../src/dom/node.js';
+import { buildLoadedFrame, zoneOf } from './support/frame.js';
 
 /**
  * Высота колонки инспектора в референсе раскладки (`mockup.svg`: панель от
@@ -88,5 +90,62 @@ describe('ED-22: высоту строк задают токены, а не ви
       if (allowed.some((selector) => entry.selector.includes(selector))) continue;
       expect(entry.declaration, entry.selector).toContain('var(--fx-');
     }
+  });
+});
+
+/**
+ * ED-22: «Хром SHALL оставаться достижимым на любой ширине окна: элемент
+ * управления, не помещающийся в свою полосу, SHALL переноситься либо уходить в
+ * явный аффорданс переполнения и MUST NOT оказываться за границей зоны без
+ * следа».
+ *
+ * Проверка структурная, а не пиксельная: раскладку в headless-прогоне не
+ * посчитать, а утверждение требования — про то, что элемент остаётся в
+ * разметке и что правило полосы разрешает ему перенос, а не обрезает его.
+ */
+describe('ED-22: бар достижим на любой ширине', () => {
+  const barRule = STYLE_RULES.find((rule) => rule.selector.endsWith('.fx-bar'));
+
+  it('строка бара берёт высоту из того же токена, что и раньше', () => {
+    // Высота не изменилась — изменилось только то, что она больше не потолок:
+    // `min-height` вместо `height`, иначе вторая строка обрезалась бы.
+    const height = barRule?.declarations.find((entry) => /^(min-)?height:/.test(entry));
+    expect(height).toBe('min-height: calc(var(--fx-control-height-action) + var(--fx-space-4))');
+    expect(barRule?.declarations).not.toContain('overflow: hidden');
+  });
+
+  it('не поместившийся элемент переносится, а не уходит за границу зоны', () => {
+    expect(barRule?.declarations).toContain('flex-wrap: wrap');
+  });
+
+  it('перенос рвёт бар между группами, а не посреди пары настроек', () => {
+    const group = STYLE_RULES.find((rule) => rule.selector.endsWith('.fx-bar__group'));
+    expect(group?.declarations).toContain('display: flex');
+    // Пару «уровень кисти / размер кисти» держит вместе порядок раскладки
+    // flex: строки набираются целыми группами, и группа уезжает на следующую
+    // строку целиком. Растягиваться она при этом не имеет права — иначе
+    // группы разъехались бы по полосе и без всякого переноса.
+    expect(group?.declarations).toContain('flex: 0 1 auto');
+  });
+
+  it('группа шире полосы переносится внутри себя, а не уходит за границу зоны', () => {
+    // Последняя мера, а не первая: сжимается и переносится только та группа,
+    // которая одна в строке всё равно не помещается (поверхность правки на
+    // узком окне). Без этого поворот, перевод и удаление становились
+    // недостижимы — ровно то, что ED-22 запрещает.
+    const group = STYLE_RULES.find((rule) => rule.selector.endsWith('.fx-bar__group'));
+    expect(group?.declarations).toContain('flex-wrap: wrap');
+    expect(group?.declarations).toContain('min-width: 0');
+  });
+
+  it('ни один элемент бара не выпадает из разметки: они лежат в группах', async () => {
+    const { frame } = await buildLoadedFrame();
+    const bar = findAll(zoneOf(frame.view(), 'surface'), (node) => hasClass(node, 'fx-bar'))[0];
+    expect(bar).toBeDefined();
+    const groups = (bar?.children ?? []).filter((node) => hasClass(node, 'fx-bar__group'));
+    expect(groups.length).toBeGreaterThanOrEqual(2);
+    // Прямых детей у бара ровно столько, сколько групп: элемент, оставленный
+    // мимо группы, переносился бы сам по себе и рвал бы пару.
+    expect(bar?.children?.length).toBe(groups.length);
   });
 });

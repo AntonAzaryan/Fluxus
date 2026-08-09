@@ -87,6 +87,12 @@ describe('ED-16: перестановка записей не бывает по�
       params: () => ({ document: SCENE, path: ['capacity'] }),
       order: ['a', 'b', 'c'],
     },
+    'document.renameKey': {
+      // Переименование ключа не трогает списков вовсе: путь ведёт в объект вне
+      // отслеживаемого списка, а ключ остаётся на своём месте (ED-21).
+      params: () => ({ document: SCENE, path: ['prefabs', 0], from: 'components', to: 'parts' }),
+      order: ['a', 'b', 'c'],
+    },
     'document.list.append': {
       params: () => ({ document: SCENE, list: ['initial'], item: { prefab: 'a' } }),
       order: ['a', 'b', 'c', 'a'],

@@ -23,6 +23,12 @@ import type { AreaSetup, AreaState, WorkspaceArea } from './area.js';
 export interface AreaStateStore {
   /** Запись области: заводится при первом обращении, дальше отдаётся та же. */
   of<S extends AreaState>(area: WorkspaceArea<S>, setup: AreaSetup): S;
+  /**
+   * Уже заведённая запись — или `undefined`, если её ещё нет. Спрашивает тот,
+   * кому запись нужна, только если она существует: заводить её ради вопроса
+   * значило бы открыть документы области, в которую автор ещё не входил.
+   */
+  peek(area: WorkspaceArea): AreaState | undefined;
 }
 
 interface AreaRecord {
@@ -39,6 +45,10 @@ export function createAreaStateStore(): AreaStateStore {
       const created = area.createState(setup);
       records.set(area.id, { area, state: created });
       return created;
+    },
+    peek(area: WorkspaceArea): AreaState | undefined {
+      const existing = records.get(area.id);
+      return existing !== undefined && existing.area === area ? existing.state : undefined;
     },
   };
 }

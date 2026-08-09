@@ -25,6 +25,18 @@ import {
 /** Имя зоны: и ключ ресурса подписи, и метка `data-zone` для проверок. */
 export type ZoneName = 'navigator' | 'surface' | 'inspector';
 
+/**
+ * Место фокуса по умолчанию (ED-32): поверхность правки активной области.
+ * Именно зона скелета, а не что-то внутри неё, — во-первых, зона есть у каждой
+ * области и одинакова во всех (ED-24), во-вторых, «место по умолчанию MUST NOT
+ * потреблять клавиши области», а пустая зона не потребляет ничего. Рельс на
+ * этой роли был бы прямым нарушением: он roving-контейнер и стрелки забирает.
+ *
+ * Остановкой Tab зона не становится (`tabindex="-1"`): обход страницы от неё не
+ * удлиняется, а фокус ей ставят программно — возвратом клавиатуры области.
+ */
+export const SURFACE_FOCUS_ID = 'fx-zone-surface';
+
 /** Порядок зон. Один на все области — в этом всё требование ED-24. */
 export const ZONE_ORDER: readonly ZoneName[] = Object.freeze([
   'navigator',
@@ -52,7 +64,11 @@ const ZONE_SURFACES: Readonly<Record<ZoneName, readonly string[]>> = {
 function zone(name: ZoneName, content: UiNode, resources: StringResources): UiNode {
   return el('section', {
     classes: ['fx-zone', ZONE_CLASSES[name], ...ZONE_SURFACES[name]],
-    attrs: { role: 'region', 'data-zone': name },
+    attrs: {
+      role: 'region',
+      'data-zone': name,
+      ...(name === 'surface' ? { id: SURFACE_FOCUS_ID, tabindex: '-1' } : {}),
+    },
     labels: { ariaLabel: resourceText(resources, `ui.frame.zone.${name}`) },
     children: [content],
   });

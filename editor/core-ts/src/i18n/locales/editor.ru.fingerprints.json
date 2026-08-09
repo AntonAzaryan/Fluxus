@@ -86,6 +86,10 @@
       "source": "864e1a84",
       "translated": "71b77d22"
     },
+    "operation.document.renameKey": {
+      "source": "ec263340",
+      "translated": "a86fd2c7"
+    },
     "operation.document.setValue": {
       "source": "d177e2c3",
       "translated": "2b0ec5a8"
@@ -93,6 +97,10 @@
     "operation.param.document": {
       "source": "811fb0a0",
       "translated": "6e6123ba"
+    },
+    "operation.param.from": {
+      "source": "a5c2dcea",
+      "translated": "dacedcc7"
     },
     "operation.param.item": {
       "source": "a94692c3",
@@ -109,6 +117,10 @@
     "operation.param.record": {
       "source": "e4202b20",
       "translated": "e6bdefbf"
+    },
+    "operation.param.to": {
+      "source": "85456c8b",
+      "translated": "d7fc40fd"
     },
     "operation.param.value": {
       "source": "4abd114d",
@@ -562,11 +574,27 @@
       "source": "d6076f16",
       "translated": "d1d792d0"
     },
+    "validation.reason.editor.cameraEffectState.missingComponent": {
+      "source": "d5e8234a",
+      "translated": "c0470e3a"
+    },
+    "validation.reason.editor.cameraEffectState.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
     "validation.reason.editor.curvatureGrid.gridMismatch": {
       "source": "c59eb270",
       "translated": "9139046f"
     },
     "validation.reason.editor.curvatureGrid.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
+    "validation.reason.editor.decorationVisual.missingVisual": {
+      "source": "2408131a",
+      "translated": "683ac90b"
+    },
+    "validation.reason.editor.decorationVisual.ruleFailed": {
       "source": "d6076f16",
       "translated": "d1d792d0"
     },
@@ -622,9 +650,17 @@
       "source": "07a2ee06",
       "translated": "c21195b6"
     },
+    "validation.rule.editor.cameraEffectState": {
+      "source": "19c288f6",
+      "translated": "e62d628f"
+    },
     "validation.rule.editor.curvatureGrid": {
       "source": "cc663f83",
       "translated": "882dd046"
+    },
+    "validation.rule.editor.decorationVisual": {
+      "source": "8d3f6bfb",
+      "translated": "11c7dfe0"
     },
     "validation.rule.editor.placementPrefab": {
       "source": "1d9e808b",

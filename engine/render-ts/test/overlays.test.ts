@@ -14,6 +14,7 @@ import {
   type VisualManifest,
 } from '@game-mvp/assets';
 import {
+  DEFAULT_CURVATURE_TESSELLATION,
   ModelsSubsystem,
   OverlaySubsystem,
   VisualSurfaceSource,
@@ -229,33 +230,55 @@ describe('подсветка выделения (REND-16)', () => {
 // -------------------------------------------------- наложения по поверхности
 
 describe('наложения по визуальной поверхности (REND-16, REND-9)', () => {
-  it('клетки лежат на высотах поверхности с кривизной, а не на плоскости уровня', () => {
+  it('клетка без кривизны — прежний плоский квад по углам поверхности', () => {
     const rig = makeRig();
-    rig.source.setCurvature(curvature(['7777', '7777', '7777', '7777']));
     rig.overlays.apply([{ kind: 'cells', key: 'brush', cells: [1 * 4 + 1] }]);
 
     const mesh = rig.ctx.scene.getObjectByName('cells') as THREE.Mesh;
     const positions = mesh.geometry.getAttribute('position');
+    expect(positions.count).toBe(4);
     const heights = rig.source.current!.cornerHeights(1, 1);
-    // Выпуклость поднята кривизной: плоскость уровня дала бы ноль.
-    expect(heights[0]).toBeGreaterThan(0);
     for (let i = 0; i < positions.count; i++) {
       expect(positions.getZ(i)).toBeCloseTo(heights[i]! + 0.02, 6);
     }
   });
 
-  it('сетка идёт по углам клеток той же поверхности', () => {
+  it('ячейка на холме строится той же выборкой, что пол: не проваливается и не висит (REND-9)', () => {
+    const rig = makeRig();
+    rig.source.setCurvature(curvature(['.7..', '.7..', '....', '....']));
+    rig.overlays.apply([{ kind: 'cells', key: 'brush', cells: [1 * 4 + 1] }]);
+
+    const surface = rig.source.current!;
+    expect(surface.hasCellCurvature(1, 1)).toBe(true);
+    const mesh = rig.ctx.scene.getObjectByName('cells') as THREE.Mesh;
+    const positions = mesh.geometry.getAttribute('position');
+    // Разбита так же, как пол: N × N подквадов вместо одного.
+    expect(positions.count).toBe(DEFAULT_CURVATURE_TESSELLATION ** 2 * 4);
+    let raised = 0;
+    for (let i = 0; i < positions.count; i++) {
+      const x = positions.getX(i);
+      const y = positions.getY(i);
+      // Каждая вершина — точка поля плюс подъём, а не угол плоского квада.
+      expect(positions.getZ(i)).toBeCloseTo(surface.heightInCell(1, 1, x, y) + 0.02, 6);
+      if (positions.getZ(i) > 0.02 + 1e-6) raised++;
+    }
+    expect(raised).toBeGreaterThan(0);
+  });
+
+  it('сетка идёт по клеткам той же поверхности; клетка с кривизной — ломаная по полю', () => {
     const rig = makeRig();
     rig.source.setCurvature(curvature(['7777', '7777', '7777', '7777']));
     rig.overlays.apply([{ kind: 'grid', key: 'grid', x0: 1, y0: 1, x1: 1, y1: 1 }]);
 
+    const surface = rig.source.current!;
     const lines = rig.ctx.scene.getObjectByName('grid') as THREE.LineSegments;
     const positions = lines.geometry.getAttribute('position');
-    expect(positions.count).toBe(8); // четыре ребра одной клетки
-    const heights = rig.source.current!.cornerHeights(1, 1);
+    // Четыре ребра, каждое из N отрезков по два конца.
+    expect(positions.count).toBe(4 * DEFAULT_CURVATURE_TESSELLATION * 2);
     for (let i = 0; i < positions.count; i++) {
-      expect(positions.getZ(i)).toBeCloseTo(heights[0] + 0.02, 6);
-      expect(heights[i % 4]).toBeCloseTo(heights[0], 6);
+      const x = positions.getX(i);
+      const y = positions.getY(i);
+      expect(positions.getZ(i)).toBeCloseTo(surface.heightInCell(1, 1, x, y) + 0.02, 6);
     }
   });
 

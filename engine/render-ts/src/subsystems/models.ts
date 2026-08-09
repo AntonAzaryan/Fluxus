@@ -14,6 +14,22 @@
  * Поля, которые заполняет только набор (`clip`, `skin`, `scale`), на пути тика
  * приходят пустыми, и ветки под них не работают.
  *
+ * ## Второй пул: decoration-инстансы (REND-18)
+ *
+ * Набор decoration приходит своим входом (`syncDecorations`) и живёт в СВОЁМ
+ * пуле — рядом с пулом presentation-состояния, а не внутри него. Причина одна и
+ * несущая: смена продюсера гасит presentation-состояние (REND-11), а декорации
+ * гасить нельзя — сцена, которую автор украсил, украшена и в прогоне. Общий пул
+ * означал бы, что «погасить набор ушедшего продюсера» и «оставить декорации» —
+ * одно действие с двумя разными результатами.
+ *
+ * Рисуются они ТЕМ ЖЕ путём и теми же ветками: запись манифеста (ASSET-6,
+ * ASSET-9), скин (REND-6), перёд (REND-13), посадка на визуальную поверхность
+ * (REND-9) и наклон по её нормали (REND-10). Второго пути отрисовки не
+ * появляется — этого требуют и REND-18, и REND-11. Разница ровно в том, чего у
+ * декорации нет: вертикального смещения (REND-12), контроля костей (REND-5) и
+ * событийных клипов (REND-4) — производить их не от чего.
+ *
  * Сам манифест — второй вход подсистемы и тоже переподаваемый (REND-17): в
  * матче он приезжает загруженным ассетом один раз (ASSET-6), а редактор правит
  * его непрерывно (ED-14) и обязан показать результат не позже следующего кадра
@@ -32,6 +48,7 @@ import {
 } from '@game-mvp/core';
 import {
   resolveSurfaceAlign,
+  resolveVisual,
   type AssetState,
   type EntityVisual,
   type NormalizedModel,
@@ -39,7 +56,7 @@ import {
 } from '@game-mvp/assets';
 import type { EntityView, RenderContext, RenderSubsystem, TickView } from '../types.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
-import type { SurfaceNormal } from '../visualSurface.js';
+import type { SurfaceNormal, VisualSurface } from '../visualSurface.js';
 import { createPickProxy, type InstanceProxySource, type PickProxy, type PickProxyVisitor } from '../picking.js';
 import type { ModelBounds } from '../model/build.js';
 import { smoothTilt, tiltTarget, type TiltVector } from '../model/surfaceAlign.js';
@@ -162,6 +179,12 @@ interface SharedEntry {
 interface InstanceRecord {
   readonly entity: EntityId;
   readonly kind: string | null;
+  /**
+   * Инстанс — decoration (REND-18), а не сущность presentation-состояния.
+   * Признак нужен снаружи (picking REND-15, подсветка REND-16): нумерация у
+   * двух пулов своя, и одно число значит в них разные инстансы.
+   */
+  readonly decoration: boolean;
   /** Запись манифеста этого типа; переподача манифеста её меняет (REND-17). */
   visual: EntityVisual | undefined;
   view: EntityView;
@@ -229,6 +252,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private readonly warn: (message: string) => void;
   private ctx: RenderContext | null = null;
   private readonly instances = new Map<EntityId, InstanceRecord>();
+  /**
+   * Пул decoration-инстансов (REND-18) — второй и независимый: смена продюсера
+   * гасит `instances` и этого пула не касается.
+   */
+  private readonly decorations = new Map<EntityId, InstanceRecord>();
   private readonly shared = new Map<string, SharedEntry>();
   private readonly warnedKinds = new Set<string>();
   /** Переиспользуемая запись прокси обхода (REND-15): валидна внутри визита. */
@@ -250,44 +278,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
   syncTick(view: TickView): void {
     const ctx = this.requireCtx();
-
-    // Появившиеся и живые сущности (REND-3).
-    for (const entityView of view.entities.values()) {
-      let record = this.instances.get(entityView.id);
-      if (record === undefined) {
-        record = this.create(ctx, entityView);
-        this.instances.set(entityView.id, record);
-      }
-      record.view = entityView;
-      record.snapPending ||= entityView.snap;
-      // Разрыв непрерывности возвращает инстанс на поверхность (REND-12):
-      // телепорт, респавн, rewind — снижение отменено, а не доигрывается.
-      if (entityView.snap) {
-        record.falling = false;
-        record.fallOffset = 0;
-      }
-      // Скин и масштаб из набора инстансов (REND-11): правка поля обновляет
-      // существующий инстанс — материалы скина, фаза анимации и сглаженный
-      // наклон при этом не теряются, потому что инстанс тот же.
-      if (entityView.skin !== record.viewSkin) {
-        record.viewSkin = entityView.skin;
-        record.skinChosen = entityView.skin !== undefined;
-        this.assignSkin(record, entityView.skin ?? record.visual?.defaultSkin);
-      }
-      if (entityView.scale !== record.viewScale) {
-        record.viewScale = entityView.scale;
-        record.holder.scale.setScalar(entityView.scale ?? 1);
-      }
-      this.applyAnimation(record);
-    }
-
-    // Исчезнувшие: инстанс убирается, разделяемый ассет остаётся в кэше (REND-3).
-    for (const [entity, record] of this.instances) {
-      if (!view.entities.has(entity)) {
-        this.remove(ctx, record);
-        this.instances.delete(entity);
-      }
-    }
+    this.syncPool(ctx, this.instances, view.entities, false);
 
     // События тика → one-shot клипы (REND-4); дедуп на потребителе (OBS-5):
     // при rewind/replay и на замороженных тиках события не переигрываются.
@@ -310,6 +301,66 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
   }
 
+  /**
+   * Полный набор decoration-инстансов (REND-18). Сведение — то же самое, что у
+   * presentation-состояния: тот же `syncPool`, то же правило жизненного цикла
+   * (REND-3). Событий здесь не разбирается вовсе — их у decoration нет, а не
+   * «пока никто не прислал».
+   */
+  syncDecorations(entities: ReadonlyMap<EntityId, EntityView>): void {
+    this.syncPool(this.requireCtx(), this.decorations, entities, true);
+  }
+
+  /**
+   * Сведение пула с поданным набором сущностей (REND-3): появившиеся создают
+   * инстанс, исчезнувшие убирают, сохранившиеся обновляются. Одна реализация на
+   * оба пула — второй разошёлся бы с первым, а REND-18 требует ровно того же
+   * пути отрисовки, что REND-11.
+   */
+  private syncPool(
+    ctx: RenderContext,
+    pool: Map<EntityId, InstanceRecord>,
+    entities: ReadonlyMap<EntityId, EntityView>,
+    decoration: boolean,
+  ): void {
+    for (const entityView of entities.values()) {
+      let record = pool.get(entityView.id);
+      if (record === undefined) {
+        record = this.create(ctx, entityView, decoration);
+        pool.set(entityView.id, record);
+      }
+      record.view = entityView;
+      record.snapPending ||= entityView.snap;
+      // Разрыв непрерывности возвращает инстанс на поверхность (REND-12):
+      // телепорт, респавн, rewind — снижение отменено, а не доигрывается.
+      if (entityView.snap) {
+        record.falling = false;
+        record.fallOffset = 0;
+      }
+      // Скин и масштаб из набора инстансов (REND-11, REND-18): правка поля
+      // обновляет существующий инстанс — материалы скина, фаза анимации и
+      // сглаженный наклон при этом не теряются, потому что инстанс тот же.
+      if (entityView.skin !== record.viewSkin) {
+        record.viewSkin = entityView.skin;
+        record.skinChosen = entityView.skin !== undefined;
+        this.assignSkin(record, entityView.skin ?? record.visual?.defaultSkin);
+      }
+      if (entityView.scale !== record.viewScale) {
+        record.viewScale = entityView.scale;
+        record.holder.scale.setScalar(entityView.scale ?? 1);
+      }
+      this.applyAnimation(record);
+    }
+
+    // Исчезнувшие: инстанс убирается, разделяемый ассет остаётся в кэше (REND-3).
+    for (const [entity, record] of pool) {
+      if (!entities.has(entity)) {
+        this.remove(ctx, record);
+        pool.delete(entity);
+      }
+    }
+  }
+
   // ---------------------------------------------------------- updateFrame
 
   updateFrame(dt: number, alpha: number): void {
@@ -318,7 +369,22 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const tiltRate = this.options.tiltRate ?? DEFAULT_TILT_RATE;
     const surface = this.options.surface?.current ?? null;
 
-    for (const record of this.instances.values()) {
+    // Оба пула одним проходом и одними правилами: декорация в кадре автора и
+    // декорация в кадре игрока обязаны быть одним изображением (REND-18).
+    this.poseAll(this.instances, dt, alpha, heightStep, turnRate, tiltRate, surface);
+    this.poseAll(this.decorations, dt, alpha, heightStep, turnRate, tiltRate, surface);
+  }
+
+  private poseAll(
+    pool: ReadonlyMap<EntityId, InstanceRecord>,
+    dt: number,
+    alpha: number,
+    heightStep: number,
+    turnRate: number,
+    tiltRate: number,
+    surface: VisualSurface | null,
+  ): void {
+    for (const record of pool.values()) {
       const view = record.view;
       // Интерполяция между двумя последними тиками; snap-тик рисуется без неё (REND-2).
       const t = view.snap ? 1 : alpha;
@@ -448,12 +514,19 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (next === this.manifest) return;
     this.manifest = next;
     const ctx = this.requireCtx();
+    // Переподача действует на оба пула: раздел decoration-видов — такая же
+    // часть манифеста (ASSET-9), и правка записи камня обязана доехать и до
+    // размещённой декорации (REND-17, ED-15).
+    this.resupply(ctx, this.instances);
+    this.resupply(ctx, this.decorations);
+  }
 
-    for (const record of this.instances.values()) {
+  private resupply(ctx: RenderContext, pool: ReadonlyMap<EntityId, InstanceRecord>): void {
+    for (const record of pool.values()) {
       // Невизуальная сущность (резолвер отнёс её к нерисуемым) записи не имеет.
       if (record.kind === null) continue;
       const before = record.visual;
-      record.visual = next.entities[record.kind];
+      record.visual = resolveVisual(this.manifest, record.kind);
       if (rebuildsInstance(before, record.visual)) {
         this.rebuild(ctx, record);
         continue;
@@ -479,12 +552,27 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     for (const record of this.instances.values()) {
       if (this.fillProxy(record, this.proxy)) visit(this.proxy);
     }
+    // Decoration-инстансы — после инстансов presentation-состояния (REND-18):
+    // правило «первый в порядке набора» (REND-15) при двух наборах остаётся
+    // определённым только заданным порядком обхода.
+    for (const record of this.decorations.values()) {
+      if (this.fillProxy(record, this.proxy)) visit(this.proxy);
+    }
   }
 
-  /** Прокси одной сущности; false — рендер её не рисует, попадать не во что. */
-  proxyOf(entity: EntityId, out: PickProxy): boolean {
-    const record = this.instances.get(entity);
+  /**
+   * Прокси одного инстанса; false — рендер его не рисует, попадать не во что.
+   * `decoration` выбирает пул: нумерация у них своя, и одно число значит в них
+   * разные инстансы (REND-18).
+   */
+  proxyOf(entity: EntityId, out: PickProxy, decoration = false): boolean {
+    const record = (decoration ? this.decorations : this.instances).get(entity);
     return record === undefined ? false : this.fillProxy(record, out);
+  }
+
+  /** Сколько decoration-инстансов нарисовано — по этому видно, что набор доехал. */
+  get decorationCount(): number {
+    return this.decorations.size;
   }
 
   /**
@@ -499,6 +587,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const bounds = record.model?.bounds ?? (record.placeholder === null ? null : PLACEHOLDER_BOUNDS);
     if (bounds === null) return false;
     out.entity = record.entity;
+    out.decoration = record.decoration;
     out.handle = null;
     out.node = record.holder;
     out.minX = bounds.minX;
@@ -511,12 +600,15 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   }
 
   /** Инстанс сущности — для тестов и отладки. */
-  instanceFor(entity: EntityId): {
+  instanceFor(
+    entity: EntityId,
+    decoration = false,
+  ): {
     readonly holder: THREE.Group;
     readonly model: ModelInstance | null;
     readonly controller: AnimationController | null;
   } | null {
-    const record = this.instances.get(entity);
+    const record = (decoration ? this.decorations : this.instances).get(entity);
     if (record === undefined) return null;
     return { holder: record.holder, model: record.model, controller: record.controller };
   }
@@ -550,14 +642,20 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // противоположный угол, см. `InstanceRecord.facingOffset`.
     record.facingOffset =
       visual?.facingDeg === undefined ? DEFAULT_FACING_RAD : -visual.facingDeg * DEG_TO_RAD;
-    record.jumpArcHeight = visual?.verticalOffset?.jumpArc ?? 0;
-    record.fallSpeed = visual?.verticalOffset?.fallSpeed ?? 0;
-    record.fallDepth = visual?.verticalOffset?.fallDepth ?? 0;
+    // Вертикальное смещение (REND-12) у decoration отсутствует: ни дуги прыжка,
+    // ни снижения при провале — манёвров у него не бывает (REND-18). Запись с
+    // этой секцией остаётся валидной (ASSET-9), но смысла ей здесь не придаётся.
+    const offset = record.decoration ? undefined : visual?.verticalOffset;
+    record.jumpArcHeight = offset?.jumpArc ?? 0;
+    record.fallSpeed = offset?.fallSpeed ?? 0;
+    record.fallDepth = offset?.fallDepth ?? 0;
   }
 
   /** Параметры контроля костей записи на живом инстансе (REND-5, REND-17). */
   private syncBoneControls(record: InstanceRecord): void {
-    const controls = record.visual?.boneControls;
+    // Процедурный контроль костей производен от цели атаки/каста (REND-5), а у
+    // decoration её не бывает: роли записи на него не действуют (ASSET-9).
+    const controls = record.decoration ? undefined : record.visual?.boneControls;
     if (controls === undefined) {
       // Роли сняты: пустая таблица заодно вернёт костям то, что было до override.
       record.boneControl?.setControls({});
@@ -609,18 +707,22 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     controller.setClipOverride(record.view.clip);
   }
 
-  private create(ctx: RenderContext, view: EntityView): InstanceRecord {
+  private create(ctx: RenderContext, view: EntityView, decoration: boolean): InstanceRecord {
     const holder = new THREE.Group();
-    holder.name = `entity:${view.id}`;
+    holder.name = `${decoration ? 'decoration' : 'entity'}:${view.id}`;
     // Масштаб набора — множитель поверх масштаба записи манифеста (REND-11):
     // запись масштабирует модель, набор — конкретное размещение.
     if (view.scale !== undefined) holder.scale.setScalar(view.scale);
     ctx.scene.add(holder);
 
-    const visual = view.kind === null ? undefined : this.manifest.entities[view.kind];
+    // Разрешение ключа — одно на оба раздела манифеста (ASSET-9): decoration
+    // вправе сослаться и на запись сущности, если камень у неё и prop, и
+    // декорация, — второй копии записи для этого не заводится.
+    const visual = view.kind === null ? undefined : resolveVisual(this.manifest, view.kind);
     const record: InstanceRecord = {
       entity: view.id,
       kind: view.kind,
+      decoration,
       visual,
       view,
       holder,
@@ -747,10 +849,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     );
     this.applyAnimation(record);
 
-    record.boneControl =
-      record.visual?.boneControls === undefined
-        ? null
-        : new BoneControlState(record.visual.boneControls);
+    // Контроля костей у decoration нет (REND-5, REND-18): доворачивать нечего.
+    const controls = record.decoration ? undefined : record.visual?.boneControls;
+    record.boneControl = controls === undefined ? null : new BoneControlState(controls);
 
     this.applyInstanceSkin(record, model);
   }

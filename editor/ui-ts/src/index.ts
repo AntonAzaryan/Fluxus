@@ -58,6 +58,7 @@ export {
   el,
   findAll,
   hasClass,
+  hotkeyText,
   issueText,
   resourceText,
   walk,
@@ -75,7 +76,12 @@ export { renderInto, renderNode } from './dom/render.js';
 export { UI_BUNDLES, UI_KEY_PREFIX, uiResources } from './i18n/uiBundles.js';
 
 export { button } from './widgets/button.js';
-export type { ButtonSpec, ButtonVariant } from './widgets/button.js';
+export type {
+  ButtonSpec,
+  ButtonVariant,
+  IconButtonSpec,
+  LabelledButtonSpec,
+} from './widgets/button.js';
 export { statusChip } from './widgets/chip.js';
 export type { ChipSpec, ChipTone } from './widgets/chip.js';
 export { numberField, select, textField, toggle } from './widgets/field.js';

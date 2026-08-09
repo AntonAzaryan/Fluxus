@@ -39,6 +39,7 @@ const CONFIG_HINT = 'конфиг: engine/tests/guard/contentLocation.ts';
 /** Документы контента, опознаваемые по окончанию имени. */
 const CONTENT_SUFFIXES = new Map<string, string>([
   ['.scene.json', 'конфиг сцены (serialization SER-7)'],
+  ['.presentation.json', 'парный presentation-документ сцены (presentation-scene PRES-1)'],
   ['.match.json', 'конфиг матча'],
   ['.mdx', 'модель'],
   ['.png', 'текстура'],

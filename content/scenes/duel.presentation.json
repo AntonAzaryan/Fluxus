@@ -1,0 +1,8 @@
+{
+  "decorations": [
+    { "visual": "Statue", "x": 5.5, "y": 5.5, "yaw": 0.125 },
+    { "visual": "Statue", "x": 5.5, "y": 18.5, "yaw": 0.875, "skin": "steel" },
+    { "visual": "Statue", "x": 18.5, "y": 5.5, "yaw": 0.375, "scale": 0.75 },
+    { "visual": "Statue", "x": 18.5, "y": 18.5, "yaw": 0.625, "scale": 0.75, "skin": "steel" }
+  ]
+}

@@ -10,7 +10,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createTerrainGrid } from '@game-mvp/core';
-import { CAMERA_KEYS, createSceneCamera } from '../src/areas/sceneCamera.js';
+import { DEFAULT_CAMERA_CONFIG } from '@game-mvp/render';
+import { CAMERA_KEYS, EDITOR_CAMERA_CONFIG, createSceneCamera } from '../src/areas/sceneCamera.js';
 
 const HEIGHT_STEP = 0.6;
 
@@ -159,5 +160,140 @@ describe('ED-13, CAM-7: конвейер без источников — кад�
     );
     for (let step = 0; step < 240; step++) rig.frame(1 / 60);
     expect(rig.frame(1 / 60).posZ).toBeGreaterThan(flat + HEIGHT_STEP);
+  });
+});
+
+/**
+ * Стартовый и обзорный кадр (ED-15) через вход кадрирования конвейера (CAM-8).
+ * Ни одной ожидаемой величины редактор здесь не считает: проверяется, что
+ * кадрирование запрошено по границам арены, отданным тем же источником, что
+ * инжектирован в конвейер, и что после него камера работает как обычно.
+ */
+const OVERVIEW = 20;
+const overviewGrid = () =>
+  createTerrainGrid({
+    width: OVERVIEW,
+    height: OVERVIEW,
+    tileSize: 65536,
+    levels: Array.from({ length: OVERVIEW }, () => '0'.repeat(OVERVIEW)),
+    flags: Array.from({ length: OVERVIEW }, () => '.'.repeat(OVERVIEW)),
+  });
+
+/** Горизонтальный вынос камеры от точки наблюдения — он монотонен по дистанции. */
+function reach(rig: ReturnType<typeof createSceneCamera>): number {
+  const pose = rig.frame(1 / 60);
+  return Math.hypot(pose.posX - rig.focusX, pose.posY - rig.focusY);
+}
+
+describe('ED-15, CAM-8: стартовый и обзорный кадр — кадрированием, а не своей позой', () => {
+  it('границы арены отдаёт тот же источник, что инжектирован в конвейер', () => {
+    const rig = createSceneCamera({ grid: overviewGrid(), heightStep: HEIGHT_STEP });
+    expect(rig.arena).toEqual({ minX: 0, minY: 0, maxX: OVERVIEW, maxY: OVERVIEW });
+    // Кадра без террейна арена не касается вовсе (ED-20).
+    expect(createSceneCamera({ heightStep: HEIGHT_STEP }).arena).toBeNull();
+  });
+
+  it('первый же кадр после мгновенного кадрирования — обзорный', () => {
+    const rig = createSceneCamera({ grid: overviewGrid(), heightStep: HEIGHT_STEP });
+    const arena = rig.arena;
+    expect(arena).not.toBeNull();
+    const close = reach(rig);
+    rig.frameBounds(arena ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 }, 16 / 9, true);
+    const framed = reach(rig);
+    // Обзор дальше стартовой игровой дистанции — арена в кадре целиком.
+    expect(framed).toBeGreaterThan(close);
+    expect(rig.focusX).toBeCloseTo(OVERVIEW / 2, 6);
+    expect(rig.focusY).toBeCloseTo(OVERVIEW / 2, 6);
+    // Перелёта автор не видит: следующие кадры дистанцию не двигают.
+    for (let step = 0; step < 60; step++) rig.frame(1 / 60);
+    expect(reach(rig)).toBeCloseTo(framed, 6);
+  });
+
+  it('обзорное действие после приближения возвращает обзор и не меняет режима', () => {
+    const rig = createSceneCamera({ grid: overviewGrid(), heightStep: HEIGHT_STEP });
+    const arena = rig.arena ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    rig.frameBounds(arena, 16 / 9, true);
+    const overview = reach(rig);
+
+    rig.zoom(-6);
+    hold(rig, [CAMERA_KEYS.panRight], 120);
+    expect(reach(rig)).toBeLessThan(overview);
+    expect(rig.focusX).toBeGreaterThan(OVERVIEW / 2);
+
+    rig.frameBounds(arena, 16 / 9);
+    hold(rig, [], 240);
+    expect(reach(rig)).toBeCloseTo(overview, 3);
+    expect(rig.focusX).toBeCloseTo(OVERVIEW / 2, 6);
+    expect(rig.flying).toBe(false);
+  });
+
+  it('кадрирование в облёте режима не меняет (CAM-8)', () => {
+    const rig = createSceneCamera({ grid: overviewGrid(), heightStep: HEIGHT_STEP });
+    rig.toggleFly();
+    rig.frame(1 / 60);
+    expect(rig.flying).toBe(true);
+    rig.frameBounds(rig.arena ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 }, 16 / 9);
+    rig.frame(1 / 60);
+    expect(rig.flying).toBe(true);
+  });
+});
+
+/**
+ * Потолок зума вьюпорта редактора (ED-13, CAM-1, CAM-8).
+ *
+ * ED-13 требует совпадения с игровым конфигом по наклону, дистанции и FOV по
+ * умолчанию; потолок зума в этот перечень не входит и остаётся настройкой
+ * конвейера. Проверяется, что настройка эта РАБОТАЕТ на настоящей по размеру
+ * арене: обзор не упирается в кламп (CAM-8 клампа не обходит), и отдалиться от
+ * стартового кадра есть куда. Игровой конфиг при этом остаётся игровым.
+ */
+const ARENA = 34;
+const arenaGrid = () =>
+  createTerrainGrid({
+    width: ARENA,
+    height: ARENA,
+    tileSize: 65536,
+    levels: Array.from({ length: ARENA }, () => '0'.repeat(ARENA)),
+    flags: Array.from({ length: ARENA }, () => '.'.repeat(ARENA)),
+  });
+
+describe('ED-13, CAM-1: потолок зума кадра правки поднят конфигом, а не обходом клампа', () => {
+  it('игрового умолчания работа не касается', () => {
+    expect(DEFAULT_CAMERA_CONFIG.maxDistance).toBe(28);
+    expect(EDITOR_CAMERA_CONFIG.maxDistance).toBeGreaterThan(DEFAULT_CAMERA_CONFIG.maxDistance);
+  });
+
+  it('обзор арены 34×34 не обрезается потолком', () => {
+    const rig = createSceneCamera({ grid: arenaGrid(), heightStep: HEIGHT_STEP });
+    const arena = rig.arena ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    rig.frameBounds(arena, 1, true);
+    // Эталон — тот же конвейер с заведомо недостижимым потолком: совпадение
+    // означает, что кадрирование не упёрлось в кламп. Ожидаемой величины
+    // редактор не считает — её считает конвейер (ED-13).
+    const free = createSceneCamera({
+      grid: arenaGrid(),
+      heightStep: HEIGHT_STEP,
+      config: { maxDistance: Number.MAX_SAFE_INTEGER },
+    });
+    free.frameBounds(arena, 1, true);
+    expect(reach(rig)).toBeCloseTo(reach(free), 6);
+
+    // С игровым потолком тот же обзор обрезается — иначе проверка выше пуста.
+    const game = createSceneCamera({
+      grid: arenaGrid(),
+      heightStep: HEIGHT_STEP,
+      config: { maxDistance: DEFAULT_CAMERA_CONFIG.maxDistance },
+    });
+    game.frameBounds(arena, 1, true);
+    expect(reach(game)).toBeLessThan(reach(rig));
+  });
+
+  it('от стартового кадра есть куда отдалиться', () => {
+    const rig = createSceneCamera({ grid: arenaGrid(), heightStep: HEIGHT_STEP });
+    rig.frameBounds(rig.arena ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 }, 1, true);
+    const overview = reach(rig);
+    rig.zoom(4);
+    hold(rig, [], 180);
+    expect(reach(rig)).toBeGreaterThan(overview);
   });
 });

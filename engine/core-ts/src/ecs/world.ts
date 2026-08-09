@@ -374,6 +374,27 @@ export function prefabOf(state: WorldState, prefab: string): PrefabDef | undefin
   return toInternal(state).prefabs.get(prefab);
 }
 
+/**
+ * Имена компонентов мира в порядке объявления — том же, что задаёт битовые id
+ * (`componentId`) и потому нормативен (SER-7). Перечень нужен тому, кто
+ * `componentSchema` спрашивает по имени, а самих имён не знает: редактор
+ * строит по нему пикеры компонентов и показывает синтезированные загрузчиком
+ * схемы наравне с объявленными контентом (ED-6, ED-7).
+ *
+ * Чтение, а не мутация (TICK-3): наружу уходит свежий массив строк, живого
+ * состояния мира — ни байта. Вызывается вне тика, поэтому аллокация массива
+ * дисциплины горячего пути не задевает; звать это из системы незачем — внутри
+ * тика состав компонентов сущности даёт маска, а не перебор имён.
+ */
+export function componentNames(state: WorldState): readonly string[] {
+  return [...toInternal(state).stores.keys()];
+}
+
+/** Имена зарегистрированных prefab'ов (ECS-4) в порядке объявления; та же природа, что у `componentNames`. */
+export function prefabNames(state: WorldState): readonly string[] {
+  return [...toInternal(state).prefabs.keys()];
+}
+
 export function componentMasks(state: WorldState): ComponentMasks {
   return toInternal(state).masks;
 }

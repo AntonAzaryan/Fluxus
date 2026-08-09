@@ -29,8 +29,17 @@
 import { getAtPath, type JsonPath, type JsonValue } from '../document/index.js';
 import type { ReasonParams, ValidationRun } from './types.js';
 
-/** Ответ валидатора, собирающего все нарушения разом. */
-export type ErrorListResult = { readonly ok: true } | { readonly ok: false; readonly errors: readonly string[] };
+/**
+ * Ответ валидатора, собирающего все нарушения разом.
+ *
+ * `warnings` необязательны: их сообщает не всякий валидатор (`validateCurvatureMap`
+ * — нет, `validateManifest` — да, ASSET-8), а «нарушение есть, но документ
+ * валиден» иначе не выразить. Приходят они и в удачной ветке — именно там они и
+ * бывают чаще всего.
+ */
+export type ErrorListResult =
+  | { readonly ok: true; readonly warnings?: readonly string[] }
+  | { readonly ok: false; readonly errors: readonly string[]; readonly warnings?: readonly string[] };
 
 export interface AdapterOptions {
   /** Кто проверял: `пакет:функция`. Уезжает в ожидание находки. */
@@ -80,18 +89,24 @@ export function reportThrown(run: ValidationRun, options: AdapterOptions, body: 
  * следующее».
  */
 export function reportErrorList(run: ValidationRun, options: AdapterOptions, result: ErrorListResult): boolean {
-  if (result.ok) return true;
   const base = options.base ?? EMPTY_PATH;
   const value = run.valueOf(run.document.id);
   const root = base.length === 0 ? value : value === undefined ? undefined : getAtPath(value, base);
-  for (const message of result.errors) {
+  const report = (message: string, severity: 'error' | 'warning'): void => {
     run.report({
       path: [...base, ...probePath(root, message)],
       expected: { kind: 'accepted', by: options.by, detail: message },
       code: options.code ?? REJECTED,
       params: { ...options.params, by: options.by, detail: message },
+      severity,
     });
-  }
+  };
+  // Предупреждения разбираются тем же разбором адреса и отличаются от ошибок
+  // ровно важностью: то, что чужой валидатор переживает (пропуск записи), автор
+  // видит, но сохранению это не мешает (ED-3).
+  for (const message of result.warnings ?? []) report(message, 'warning');
+  if (result.ok) return true;
+  for (const message of result.errors) report(message, 'error');
   return false;
 }
 

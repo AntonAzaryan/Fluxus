@@ -351,6 +351,15 @@ export function createBrushTool(options: BrushToolOptions): BrushTool {
         cancelStroke();
         return;
       }
+      if (event.phase === 'leave') {
+        // Курсор ушёл с холста: показывать нечего — клетки под ним больше нет.
+        // Мазок при этом не прерывается (ED-18): кнопку отпустят где угодно, и
+        // отпускание придёт с документа.
+        if (hover === null) return;
+        hover = null;
+        refresh();
+        return;
+      }
       if (event.phase === 'up') {
         const open = stroke;
         stroke = null;

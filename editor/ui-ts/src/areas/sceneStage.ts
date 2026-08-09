@@ -24,6 +24,15 @@
  * REND-16). Инстанс в таком кадре стоит на своём `level` (REND-11), потому что
  * сажать его не на что.
  *
+ * ## Стартовый и обзорный кадр
+ *
+ * Первая сетка не только поднимает подсистемы, но и просит кадрирование по
+ * границам арены с мгновенным применением (ED-15, CAM-8): автор при открытии
+ * видит то, что собирается править. Просьба исполняется кадровым циклом, а не
+ * на месте, потому что пропорции кадра подаёт потребитель, а свои размеры холст
+ * узнаёт только после раскладки страницы; при нулевых размерах просьба ждёт.
+ * Тем же путём идёт обзорное действие бара — сглаженным перелётом.
+ *
  * ## Контекст свой, модуль ассетов общий
  *
  * `RenderContext` (сцена THREE, модуль ассетов, конфиг) заводится здесь, то
@@ -78,6 +87,16 @@
  * режима объявляет сам кадр (`onChange`) — иначе подпись бара показывала бы
  * один режим, пока камера в другом (ED-26). Тем же путём объявляется и `F`.
  *
+ * ## Клавиатура холсту не принадлежит
+ *
+ * Слушателей клавиатуры на холсте нет: клавиши принадлежат активной области
+ * (ED-32), приходят от каркаса и складываются в набор, который живёт в записи
+ * состояния области. Вьюпорт спрашивает этот набор каждым кадром
+ * (`options.keys`) — так он переживает перерисовку страницы, заменяющую узел
+ * кадра, и не требует, чтобы автор перед стрелкой ткнул в кадр мышью. Указатель
+ * — edge-pan, drag, колесо — остаётся на холсте: это ввод мышью в кадр (CAM-3),
+ * и к фокусу он отношения не имеет.
+ *
  * ## Почему холст живёт вне дерева описания
  *
  * Каркас перерисовывает страницу целиком (`frame/mount.ts`), заменяя поддерево
@@ -117,6 +136,7 @@ import type {
   VisualManifest,
 } from '@game-mvp/assets';
 import {
+  DecorationSet,
   DocumentSource,
   ModelsSubsystem,
   OverlaySubsystem,
@@ -125,7 +145,9 @@ import {
   ViewportPicking,
   VisualSurfaceSource,
   applyCameraPose,
+  type CameraBounds,
   type CameraPose,
+  type DecorationInstance,
   type DocumentInstance,
   type OverlayItem,
   type PickHit,
@@ -133,12 +155,7 @@ import {
 } from '@game-mvp/render';
 import type { TerrainGrid } from '@game-mvp/core';
 import type { AssetModule } from './assetModule.js';
-import {
-  CAMERA_KEYS,
-  createSceneCamera,
-  type PointerSample,
-  type SceneCamera,
-} from './sceneCamera.js';
+import { createSceneCamera, type PointerSample, type SceneCamera } from './sceneCamera.js';
 import type {
   ScenePick,
   ScenePicker,
@@ -149,6 +166,9 @@ import type {
 /** Шаг высоты уровня в мировых единицах — параметр рендера (REND-7). */
 const HEIGHT_STEP = 0.6;
 
+/** Кадр, у которого источника клавиатуры нет вовсе (ED-20): ничего не зажато. */
+const NO_KEYS: ReadonlySet<string> = new Set<string>();
+
 /** Кнопка мыши: левая — инструмент, средняя — drag-панорама (CAM-3), правая — осмотр. */
 const LEFT_BUTTON = 0;
 const MIDDLE_BUTTON = 1;
@@ -156,15 +176,18 @@ const RIGHT_BUTTON = 2;
 
 /**
  * Что вьюпорту нужно от документов, чтобы нарисовать кадр: сетка террейна
- * (REND-14), карта кривизны (REND-9) и полный набор инстансов (REND-11). Ровно
- * три несимуляционных входа рендера, и ни одного доменного имени сверх них —
- * поэтому подать сюда может и кадр сцены (`SceneDraft`), и вырожденный набор
- * просмотрщика ассетов (ED-20), у которого ни сетки, ни кривизны нет.
+ * (REND-14), карта кривизны (REND-9), полный набор инстансов (REND-11) и полный
+ * набор декораций (REND-18). Ровно четыре несимуляционных входа рендера, и ни
+ * одного доменного имени сверх них — поэтому подать сюда может и кадр сцены
+ * (`SceneDraft`), и вырожденный набор просмотрщика ассетов (ED-20), у которого
+ * ни сетки, ни кривизны, ни декораций нет.
  */
 export interface StageDraft {
   readonly grid: TerrainGrid | null;
   readonly curvature: TerrainCurvatureMap | null;
   readonly placements: readonly DocumentInstance[];
+  /** Набор decoration-инстансов (REND-18); нет поля — слой пуст. */
+  readonly decorations?: readonly DecorationInstance[];
 }
 
 export interface SceneStageOptions {
@@ -196,10 +219,40 @@ export interface SceneStageOptions {
    */
   readonly onChange?: () => void;
   /**
+   * Что сейчас зажато на клавиатуре — спрашивается каждым кадром (CAM-3).
+   * Набор держит область, а не вьюпорт: клавиши принадлежат активной области
+   * (ED-32), а не её холсту, и набор обязан пережить перерисовку страницы,
+   * которая холст в узле кадра заменяет. Нет источника — кадр без клавиатуры
+   * (превью ассета ED-20).
+   */
+  readonly keys?: () => ReadonlySet<string>;
+  /**
    * Указатель левой кнопкой — вход инструмента (ED-16, ED-17). Что попадание
    * значит, вьюпорт не знает: это политика вклада (ED-25).
    */
   readonly onPointer?: (event: StagePointer) => void;
+}
+
+/**
+ * Что вьюпорт объявляет интерфейсу (`onChange`): режим камеры (CAM-2), причина
+ * сорвавшегося кадра (ED-8) и наличие арены (ED-26). Все три — одной записью, а
+ * не тремя сравнениями по месту: забытое в сравнении поле и есть тот дефект,
+ * при котором действие остаётся показанным недоступным после того, как стало
+ * доступным, а заметить это можно только глазом на живой сцене.
+ */
+export interface StageSignals {
+  readonly flying: boolean;
+  readonly failure: string | null;
+  readonly canFrame: boolean;
+}
+
+/**
+ * Изменилось ли объявляемое. Ключи берутся у самой записи, а не перечислены
+ * здесь: поле, дописанное в `StageSignals`, попадает в сравнение само, и забыть
+ * его негде.
+ */
+export function signalsChanged(shown: StageSignals, next: StageSignals): boolean {
+  return (Object.keys(next) as (keyof StageSignals)[]).some((key) => shown[key] !== next[key]);
 }
 
 export interface SceneStage extends ScenePicker {
@@ -225,8 +278,29 @@ export interface SceneStage extends ScenePicker {
   readonly flying: boolean;
   toggleFly(): void;
   zoom(steps: number): void;
+  /**
+   * Есть ли что кадрировать: у кадра без террейна (ED-20) арены нет вовсе, и
+   * обзорное действие бара показывается недоступным (ED-26), а не молчит.
+   *
+   * Заводит арену первая сетка документа — то есть уже после того, как бар
+   * области нарисован без неё, — поэтому смену вьюпорт объявляет сам
+   * (`StageSignals`), а не ждёт, что его спросят.
+   */
+  readonly canFrame: boolean;
+  /**
+   * Обзорный кадр (ED-15): кадрирование по границам арены входом конвейера
+   * (CAM-8). Запомненной позы у него нет — она разошлась бы с ареной на первой
+   * же правке её размеров.
+   *
+   * Просьба исполняется ближайшим кадром, а не здесь: пропорции у конвейера
+   * от кадра (CAM-8), а размеры холста известны только после раскладки
+   * страницы. Тем же путём идёт и стартовый кадр — с мгновенным применением.
+   */
+  frameArena(): void;
   /** Сколько инстансов в наборе сейчас — по этому видно, что кадр не пуст. */
   readonly instanceCount: number;
+  /** Сколько декораций в наборе сейчас (REND-18). */
+  readonly decorationCount: number;
   /** Почему сорвался кадр; `null` — последний кадр прошёл целиком (ED-8). */
   readonly failure: string | null;
   /**
@@ -280,6 +354,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
   const canvas = renderer.domElement;
+  // Остановка Tab у кадра остаётся: он обязан быть достижим обходом (ED-31).
+  // Клавиатуру она при этом не включает — клавиши работают, пока область
+  // активна, и указания на её поверхность правки не требуют (ED-32).
   canvas.tabIndex = 0;
 
   const scene = new THREE.Scene();
@@ -307,6 +384,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   };
   const presentation = new PresentationStage(context);
   const source = new DocumentSource(presentation);
+  // Третий набор рядом с продюсером, а не второй продюсер (REND-18): декорации
+  // остаются в кадре и в превью — гасить их смена режима не должна.
+  const decorations = new DecorationSet(presentation);
 
   let surface: VisualSurfaceSource | null = null;
   let terrain: TerrainSubsystem | null = null;
@@ -324,6 +404,13 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   let pose: CameraPose | null = null;
   /** Последний поданный набор наложений — он переподаётся после сведения (REND-16). */
   let overlaySet: readonly SceneOverlay[] = [];
+  /**
+   * Незакрытая просьба кадрировать (CAM-8): прямоугольник и способ применения.
+   * Ждёт кадра, потому что пропорции подаёт потребитель, а свои размеры холст
+   * узнаёт только после раскладки страницы. Не гаснет, пока размеры нулевые:
+   * стартовый кадр обязан быть кадрированным, а не пропущенным (ED-15).
+   */
+  let framing: { readonly rect: CameraBounds; readonly immediate: boolean } | null = null;
 
   let draft: StageDraft | null = null;
   let dirty = false;
@@ -344,10 +431,10 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   const reasonOf = (error: unknown): string =>
     error instanceof Error ? error.message : String(error);
   /** Что о вьюпорте уже показано интерфейсом — с этим и сверяется `onChange`. */
-  let shownFlying = false;
-  let shownFailure: string | null = null;
+  let shown: StageSignals = { flying: false, failure: null, canFrame: false };
 
-  const keys = new Set<string>();
+  /** Зажатое приходит от области (ED-32); своего набора у холста больше нет. */
+  const heldKeys = options.keys ?? ((): ReadonlySet<string> => NO_KEYS);
   let pointer: PointerSample | null = null;
   let midDrag = false;
   let rightDrag = false;
@@ -360,25 +447,19 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     return { left: box.left, top: box.top, width: box.width, height: box.height };
   };
 
-  const onKeyDown = (event: KeyboardEvent): void => {
-    // Ввод камеры не пересекает никакой границы (CAM-1): пересекать нечего —
-    // симуляции в режиме правки нет.
-    if (event.code.startsWith('Arrow')) event.preventDefault();
-    if (!event.repeat && event.code === CAMERA_KEYS.flyToggle) camera?.toggleFly();
-    keys.add(event.code);
-  };
-  const onKeyUp = (event: KeyboardEvent): void => {
-    keys.delete(event.code);
-  };
-  const onBlur = (): void => keys.clear();
   const onPointerMove = (event: MouseEvent): void => {
     if (midDrag) camera?.drag(event.movementX, event.movementY);
     if (rightDrag) camera?.look(event.movementX, event.movementY);
     pointer = { x: event.clientX, y: event.clientY, rect: rect() };
     tell('move', event);
   };
-  const onPointerLeave = (): void => {
+  const onPointerLeave = (event: MouseEvent): void => {
     pointer = null;
+    // Инструменту это говорится, а не только edge-панораме: наложение, которое
+    // показывало клетку под курсором, обязано погаснуть вместе с курсором
+    // (REND-16). Начатое взаимодействие фаза не закрывает — отпускание придёт
+    // с документа, где бы кнопку ни отпустили (ED-18).
+    tell('leave', event);
   };
   /** Модификатор мультивыделения (ED-17): и Shift, и Ctrl/Cmd — обе привычки. */
   const additive = (event: MouseEvent): boolean =>
@@ -393,7 +474,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   };
 
   const onPointerDown = (event: MouseEvent): void => {
-    canvas.focus();
+    // Фокус холсту нажатие НЕ отдаёт: клик в кадр — не способ включить
+    // клавиатуру области (ED-32), а забранный фокус увёл бы автора из виджета,
+    // в котором он стоял.
     if (event.button === MIDDLE_BUTTON) {
       event.preventDefault();
       midDrag = true;
@@ -432,9 +515,8 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     camera?.zoom(event.deltaY / 100);
   };
 
-  canvas.addEventListener('keydown', onKeyDown);
-  canvas.addEventListener('keyup', onKeyUp);
-  canvas.addEventListener('blur', onBlur);
+  // Указатель остаётся на холсте: edge-pan, drag и колесо — ввод мышью в кадр
+  // (CAM-3), и к тому, где стоит фокус клавиатуры, он отношения не имеет.
   canvas.addEventListener('mousemove', onPointerMove);
   canvas.addEventListener('mouseleave', onPointerLeave);
   canvas.addEventListener('mousedown', onPointerDown);
@@ -484,6 +566,12 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     // Конвейер камеры один и тот же (ED-13, CAM-1); арены без террейна у него
     // просто нет — ни границ, ни поверхности под точкой наблюдения.
     camera = createSceneCamera({ heightStep, ...(first === null ? {} : { grid: first }) });
+    // Первый кадр открытой сцены показывает арену целиком (ED-15): просьба
+    // кадрировать мгновенно, чтобы перелёта к обзору автор не видел. Позу
+    // считает конвейер (CAM-8) — своего расчёта стартовой позы у редактора не
+    // появляется, `startX/startY` остаются центром арены.
+    const arena = camera.arena;
+    if (arena !== null) framing = { rect: arena, immediate: true };
   };
   /** Бывает ли у этого кадра террейн: у вырожденного случая (см. шапку) — нет. */
   const hasTerrain = options.terrain !== false;
@@ -514,6 +602,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     }
     // Полный набор инстансов; что создать, обновить и убрать, решает источник.
     source.apply(next.placements);
+    // Декорации — отдельный набор и отдельная подача: продюсера они не
+    // трогают, и в превью их гасить нечем (REND-18).
+    decorations.apply(next.decorations ?? []);
     // Наложения переподаются после набора: смена визуального типа пересоздаёт
     // инстанс с новым номером сущности, и подсветка на прежнем номере погасла
     // бы молча (REND-11, REND-16).
@@ -543,7 +634,14 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       : {
           kind: hit.kind,
           handle: hit.handle,
-          key: hit.entity === 0 ? null : (source.keyOf(hit.entity) ?? null),
+          decoration: hit.decoration,
+          // Ключ документа даёт тот набор, которому инстанс принадлежит:
+          // нумерация у них своя, и спросить не тот набор значило бы получить
+          // чужой ключ (REND-18).
+          key:
+            hit.entity === 0
+              ? null
+              : ((hit.decoration ? decorations.keyOf(hit.entity) : source.keyOf(hit.entity)) ?? null),
           x: hit.x,
           y: hit.y,
           z: hit.z,
@@ -563,9 +661,20 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
         items.push(item);
         continue;
       }
-      const entity = source.entityOf(item.placement);
+      // Ключ ищется в том наборе, который его и выдал: сим-объект — в
+      // документном источнике, декорация — в наборе REND-18.
+      const entity = item.decoration
+        ? decorations.entityOf(item.placement)
+        : source.entityOf(item.placement);
       // Ключа нет в наборе — рендер его не рисует, и подсвечивать нечего.
-      if (entity !== undefined) items.push({ kind: 'highlight', key: item.key, entity });
+      if (entity !== undefined) {
+        items.push({
+          kind: 'highlight',
+          key: item.key,
+          entity,
+          ...(item.decoration ? { decoration: true } : {}),
+        });
+      }
     }
     overlays.apply(items);
   };
@@ -592,14 +701,18 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   };
 
   const failureNow = (): string | null => applyFailure ?? drawFailure;
+  /** Есть ли арена: её заводит первая сетка документа, а не сборка вьюпорта. */
+  const framableNow = (): boolean => camera?.arena != null;
 
   /** Сообщить интерфейсу, если у вьюпорта изменилось видимое им (CAM-2, ED-8). */
   const publish = (): void => {
-    const flying = camera?.flying ?? false;
-    const failure = failureNow();
-    if (flying === shownFlying && failure === shownFailure) return;
-    shownFlying = flying;
-    shownFailure = failure;
+    const next: StageSignals = {
+      flying: camera?.flying ?? false,
+      failure: failureNow(),
+      canFrame: framableNow(),
+    };
+    if (!signalsChanged(shown, next)) return;
+    shown = next;
     options.onChange?.();
   };
 
@@ -628,9 +741,20 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
         applyFailure = reasonOf(error);
       }
     }
+    // Кадрирование — раньше кадра камеры и после раскладки холста: пропорции
+    // подаёт потребитель (CAM-8), и до первой раскладки подавать нечего. Пока
+    // размеры нулевые, просьба ждёт: кадр нулевого размера дал бы конвейеру
+    // пропорции, которых у него не будет уже в следующем кадре.
+    if (framing !== null && camera !== null) {
+      const box = rect();
+      if (box.width > 0 && box.height > 0) {
+        camera.frameBounds(framing.rect, box.width / box.height, framing.immediate);
+        framing = null;
+      }
+    }
     try {
       if (camera !== null) {
-        camera.sample(keys, pointer);
+        camera.sample(heldKeys(), pointer);
         // Общая реализация применения позы (CAM-1): своей копии у редактора нет.
         // Она же запоминается: луч наведения обязан идти из позы НАРИСОВАННОГО
         // кадра, а не из свежего опроса конвейера (REND-15).
@@ -675,8 +799,20 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     zoom(steps) {
       camera?.zoom(steps);
     },
+    get canFrame(): boolean {
+      return framableNow();
+    },
+    frameArena() {
+      const arena = camera?.arena ?? null;
+      // Границы спрашиваются на каждый вызов, а не запоминаются: автор правит
+      // размеры арены (CAM-7), и запомненный прямоугольник разошёлся бы с ней.
+      if (arena !== null) framing = { rect: arena, immediate: false };
+    },
     get instanceCount(): number {
       return source.size;
+    },
+    get decorationCount(): number {
+      return decorations.size;
     },
     get failure(): string | null {
       return failureNow();
@@ -716,9 +852,6 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       // Сессия живёт дольше вьюпорта: снос кадра посреди перетаскивания не имеет
       // права оставить её взаимодействие открытым.
       onWindowBlur();
-      canvas.removeEventListener('keydown', onKeyDown);
-      canvas.removeEventListener('keyup', onKeyUp);
-      canvas.removeEventListener('blur', onBlur);
       canvas.removeEventListener('mousemove', onPointerMove);
       canvas.removeEventListener('mouseleave', onPointerLeave);
       canvas.removeEventListener('mousedown', onPointerDown);
