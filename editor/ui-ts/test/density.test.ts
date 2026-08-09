@@ -121,10 +121,21 @@ describe('ED-22: бар достижим на любой ширине', () => {
   it('перенос рвёт бар между группами, а не посреди пары настроек', () => {
     const group = STYLE_RULES.find((rule) => rule.selector.endsWith('.fx-bar__group'));
     expect(group?.declarations).toContain('display: flex');
-    // Группа сама не переносится: `flex: none` и есть то, что держит её пару
-    // «уровень кисти / размер кисти» в одной строке.
-    expect(group?.declarations).toContain('flex: none');
-    expect(group?.declarations).not.toContain('flex-wrap: wrap');
+    // Пару «уровень кисти / размер кисти» держит вместе порядок раскладки
+    // flex: строки набираются целыми группами, и группа уезжает на следующую
+    // строку целиком. Растягиваться она при этом не имеет права — иначе
+    // группы разъехались бы по полосе и без всякого переноса.
+    expect(group?.declarations).toContain('flex: 0 1 auto');
+  });
+
+  it('группа шире полосы переносится внутри себя, а не уходит за границу зоны', () => {
+    // Последняя мера, а не первая: сжимается и переносится только та группа,
+    // которая одна в строке всё равно не помещается (поверхность правки на
+    // узком окне). Без этого поворот, перевод и удаление становились
+    // недостижимы — ровно то, что ED-22 запрещает.
+    const group = STYLE_RULES.find((rule) => rule.selector.endsWith('.fx-bar__group'));
+    expect(group?.declarations).toContain('flex-wrap: wrap');
+    expect(group?.declarations).toContain('min-width: 0');
   });
 
   it('ни один элемент бара не выпадает из разметки: они лежат в группах', async () => {
