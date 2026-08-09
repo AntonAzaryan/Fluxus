@@ -561,11 +561,12 @@ function install(
     session: setup.session,
     documentId: project.configId,
     list: PLACEMENT_LIST,
-    // Парный документ адресуется только когда он есть: сцена без декораций —
-    // законное состояние, и создавать файл ради пустого слоя нельзя (PRES-1).
-    ...(project.hasPresentation
-      ? { presentationId: project.presentationId, decorationList: DECORATION_LIST }
-      : {}),
+    // Парный документ адресуется всегда: он открыт вместе со сценой, в том
+    // числе пустым, и первая же поставленная декорация его наполняет (PRES-1,
+    // ED-16). Файла в дереве при этом может ещё не быть — он появится
+    // сохранением, а до него слой живёт документом сессии.
+    presentationId: project.presentationId,
+    decorationList: DECORATION_LIST,
     ...(ids.position === undefined ? {} : { binding: ids.position }),
     refresh: () => {
       state.refresh();
@@ -623,10 +624,9 @@ function install(
     const nextVisuals = setup.session.documentValue(project.visualsId);
     // Парный документ — четвёртый редактируемый документ кадра (PRES-1): его
     // правка обязана попасть в картинку не позже следующего кадра (ED-15).
-    const nextPresentation =
-      !project.hasPresentation || !setup.session.isOpen(project.presentationId)
-        ? null
-        : setup.session.documentValue(project.presentationId);
+    const nextPresentation = !setup.session.isOpen(project.presentationId)
+      ? null
+      : setup.session.documentValue(project.presentationId);
     if (
       state.draft !== null &&
       nextConfig === config &&
@@ -815,11 +815,10 @@ function navigator(context: AreaContext<SceneAreaState>): UiNode {
     ...(rootValidation === undefined ? {} : { validation: rootValidation }),
     items: [
       group(context, SCENE_NODES.placements, 'ui.area.scene.placements', placements),
-      // Группа заводится, только когда парный документ есть: пустой узел
-      // «Декорации» у сцены без слоя обещал бы место, которого нет (PRES-1).
-      ...(project.hasPresentation
-        ? [group(context, SCENE_NODES.decorations, 'ui.area.scene.decorations', decorations)]
-        : []),
+      // Группа заводится всегда — наравне с расстановкой: слой декораций
+      // доступен на любой сцене, парный документ открыт вместе с ней, и пустой
+      // узел «Декорации» означает пустой слой, а не отсутствие места (PRES-1).
+      group(context, SCENE_NODES.decorations, 'ui.area.scene.decorations', decorations),
       group(context, SCENE_NODES.assets, 'ui.navigator.assets', assets),
     ],
     onSelect: (id) => {
