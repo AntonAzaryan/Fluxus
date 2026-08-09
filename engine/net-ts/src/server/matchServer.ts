@@ -76,6 +76,17 @@ export interface MatchConfig {
    */
   readonly inputWindow?: number;
   /**
+   * Глубина повтора потока событий (NTR-15): сколько ПРЕДЫДУЩИХ рассылок
+   * повторяет каждое сообщение `Events`. Величина, а не константа, по той же
+   * причине, что `tickRate` и `snapshotRate` (NTR-7): она предъявляется замеру,
+   * и прибор для неё — счётчик разрывов диапазона (NTR-11).
+   *
+   * `0` легален и означает «без повтора»: на канале без потерь избыточность —
+   * чистый трафик. Умолчание 2 — «переживает две потери подряд», то есть каждая
+   * пачка едет трижды.
+   */
+  readonly eventRepeat?: number;
+  /**
    * История для серверной перемотки (NET-11). Поле необязательное: матч без
    * ульты отката снапшотов не снимает и переходов машины состояний не знает —
    * интервал и глубина суть параметры провайдера, а не константы ядра (SNAP-4).
@@ -143,6 +154,8 @@ const DEFAULTS = {
   inputDelay: 2,
   /** Четверть секунды при 60 Гц (NTR-7): больше половины круга на играбельном канале и всё же конечная величина. */
   inputWindow: 15,
+  /** Две предыдущие рассылки (NTR-15): пачка едет трижды и переживает две потери подряд. */
+  eventRepeat: 2,
   silenceSeconds: 10,
 } as const;
 
@@ -158,6 +171,7 @@ export class MatchServer {
   private readonly snapshotEvery: number;
   private readonly inputDelay: number;
   private readonly inputWindow: number;
+  private readonly eventRepeat: number;
   private readonly silenceTicks: number;
 
   private readonly sim: ReturnType<typeof buildMatchWorld>['sim'];
@@ -251,6 +265,14 @@ export class MatchServer {
         `MatchConfig: inputWindow (${this.inputWindow}) меньше inputDelay (${this.inputDelay})`,
       );
     }
+    this.eventRepeat = config.eventRepeat ?? DEFAULTS.eventRepeat;
+    // Ноль легален — «без повтора» (NTR-15); отрицательное и дробное не
+    // означают ничего: глубина считается в рассылках, а не в долях рассылки, и
+    // молча приведённое к нулю значение выдало бы канал без избыточности за
+    // настроенный.
+    if (!Number.isInteger(this.eventRepeat) || this.eventRepeat < 0) {
+      throw new Error(`MatchConfig: eventRepeat (${this.eventRepeat}) — целое, не меньше нуля (NTR-15)`);
+    }
     this.silenceTicks = config.silenceTicks ?? this.tickRate * DEFAULTS.silenceSeconds;
 
     const built = buildMatchWorld({
@@ -317,6 +339,7 @@ export class MatchServer {
       snapshotRate: this.snapshotRate,
       inputDelay: this.inputDelay,
       inputWindow: this.inputWindow,
+      eventRepeat: this.eventRepeat,
     };
   }
 

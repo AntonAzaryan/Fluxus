@@ -238,6 +238,15 @@ describe('конфиг темпа', () => {
     expect(() => harness(duelConfig({ inputDelay: 20, inputWindow: 15 }))).toThrow(/меньше inputDelay/);
   });
 
+  it('глубина повтора событий — целое, не меньше нуля; ноль легален (NTR-15)', () => {
+    expect(() => harness(duelConfig({ eventRepeat: -1 }))).toThrow(/eventRepeat/);
+    expect(() => harness(duelConfig({ eventRepeat: 1.5 }))).toThrow(/eventRepeat/);
+    // Ноль означает «без повтора», а не «параметр не задан».
+    expect(harness(duelConfig({ eventRepeat: 0 })).server.pacing.eventRepeat).toBe(0);
+    // Умолчание — две предыдущие рассылки.
+    expect(harness(duelConfig()).server.pacing.eventRepeat).toBe(2);
+  });
+
   it('число слотов — величина конфига, а не константа (NTR-6)', () => {
     const config = duelConfig({ players: ['p1', 'p2', 'p3', 'p4'] });
     const { server } = harness(config);

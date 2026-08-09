@@ -37,6 +37,7 @@ const server = new MatchServer({
   snapshotRate: match.snapshotRate ?? 30,
   inputDelay: match.inputDelay ?? 2,
   ...(match.inputWindow !== undefined ? { inputWindow: match.inputWindow } : {}),
+  ...(match.eventRepeat !== undefined ? { eventRepeat: match.eventRepeat } : {}),
   silenceTicks: (match.silenceSeconds ?? 10) * tickRate,
   allowObserver: flag('observer'),
   // Зависимость сборки мира из файла матча (NTR-14): без неё сцена,

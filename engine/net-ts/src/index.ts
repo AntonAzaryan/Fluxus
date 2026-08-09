@@ -22,6 +22,8 @@ export type {
   ClientMessage,
   EndMessage,
   EndReason,
+  EventBatch,
+  EventsMessage,
   GameVersion,
   HelloMessage,
   InputMessage,

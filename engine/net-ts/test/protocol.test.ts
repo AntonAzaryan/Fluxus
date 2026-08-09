@@ -33,7 +33,25 @@ describe('кодирование кадра', () => {
         seed: 99,
         match: { sceneRef: 'duel', initial: [{ prefab: 'Hero' }] },
         worldInitHash: 'deadbeef',
-        pacing: { tickRate: 60, snapshotRate: 30, inputDelay: 2, inputWindow: 15 },
+        pacing: { tickRate: 60, snapshotRate: 30, inputDelay: 2, inputWindow: 15, eventRepeat: 2 },
+      };
+      const codec2 = serverCodec(serializer);
+      expect(codec.decode(codec2.encode(message) as never)).toEqual(message);
+    });
+
+    it(`круг потока событий через ${serializer.name} (NTR-15)`, () => {
+      const codec = clientCodec(serializer);
+      const message: ServerMessage = {
+        type: 'Events',
+        epoch: 3,
+        from: 10,
+        to: 12,
+        // Тик 11 в теле отсутствует: внутри объявленного диапазона это
+        // «событий не было», а не потерянная пачка (NTR-15).
+        batches: [
+          { tick: 10, events: [{ type: 'EntityDied', data: { entity: 7 } }] },
+          { tick: 12, events: [{ type: 'RoundEnded', data: {} }] },
+        ],
       };
       const codec2 = serverCodec(serializer);
       expect(codec.decode(codec2.encode(message) as never)).toEqual(message);
@@ -86,7 +104,21 @@ describe('разбор входящего', () => {
         seed: 1,
         match: { sceneRef: 'duel', initial: [] },
         worldInitHash: 'x',
-        pacing: { tickRate: 60, snapshotRate: 30, inputDelay: 2 },
+        pacing: { tickRate: 60, snapshotRate: 30, inputDelay: 2, eventRepeat: 2 },
+      }),
+    ).toThrow(ProtocolError);
+  });
+
+  it('Welcome без eventRepeat в pacing отвергается (NTR-15)', () => {
+    expect(() =>
+      parseServerMessage({
+        type: 'Welcome',
+        slot: 0,
+        players: ['p1', 'p2'],
+        seed: 1,
+        match: { sceneRef: 'duel', initial: [] },
+        worldInitHash: 'x',
+        pacing: { tickRate: 60, snapshotRate: 30, inputDelay: 2, inputWindow: 15 },
       }),
     ).toThrow(ProtocolError);
   });
@@ -96,6 +128,91 @@ describe('разбор входящего', () => {
     expect(frame.playerId).toBe('p2');
     expect(frame.move).toEqual({ x: 65536, y: 0 });
     expect(frame.tick).toBe(4);
+  });
+});
+
+/**
+ * Поток фактов тиков (NTR-15). Разбор — единственная граница, на которой
+ * сообщение становится доверенным, поэтому каждое нарушение формы называется
+ * исходом, а не пропускается молча.
+ */
+describe('разбор потока событий', () => {
+  const events = (patch: Record<string, unknown> = {}): unknown => ({
+    type: 'Events',
+    epoch: 1,
+    from: 4,
+    to: 6,
+    batches: [{ tick: 5, events: [{ type: 'EntityDied', data: { entity: 3 } }] }],
+    ...patch,
+  });
+
+  it('пустой диапазон без событий разбирается: тишина отличима от потери', () => {
+    const parsed = parseServerMessage(events({ batches: [] }));
+    expect(parsed).toEqual({ type: 'Events', epoch: 1, from: 4, to: 6, batches: [] });
+  });
+
+  it('from больше to отвергается: диапазон замкнутый', () => {
+    expect(() => parseServerMessage(events({ from: 7, to: 6, batches: [] }))).toThrow(ProtocolError);
+    // Диапазон в один тик легален — замкнутость включает обе границы.
+    expect(() => parseServerMessage(events({ from: 5, to: 5 }))).not.toThrow();
+  });
+
+  it('отрицательный и дробный номер тика в диапазоне отвергается', () => {
+    expect(() => parseServerMessage(events({ from: -1, to: 6, batches: [] }))).toThrow(ProtocolError);
+    expect(() => parseServerMessage(events({ from: 4, to: 6.5, batches: [] }))).toThrow(ProtocolError);
+  });
+
+  it('пачка с тиком вне объявленного диапазона отвергается', () => {
+    expect(() => parseServerMessage(events({ batches: [{ tick: 3, events: [] }] }))).toThrow(ProtocolError);
+    expect(() => parseServerMessage(events({ batches: [{ tick: 7, events: [] }] }))).toThrow(ProtocolError);
+    // Обе границы включающие.
+    expect(() =>
+      parseServerMessage(events({ batches: [{ tick: 4, events: [] }, { tick: 6, events: [] }] })),
+    ).not.toThrow();
+  });
+
+  it('пустой тип события отвергается', () => {
+    expect(() =>
+      parseServerMessage(events({ batches: [{ tick: 5, events: [{ type: '', data: {} }] }] })),
+    ).toThrow(ProtocolError);
+  });
+
+  it('data — плоская карта чисел, вложенность отвергается (OBS-1)', () => {
+    const nested = { type: 'Hit', data: { entity: 3, at: { x: 1 } } };
+    expect(() => parseServerMessage(events({ batches: [{ tick: 5, events: [nested] }] }))).toThrow(
+      ProtocolError,
+    );
+    const stringly = { type: 'Hit', data: { entity: '3' } };
+    expect(() => parseServerMessage(events({ batches: [{ tick: 5, events: [stringly] }] }))).toThrow(
+      ProtocolError,
+    );
+    const listed = { type: 'Hit', data: { entity: [3] } };
+    expect(() => parseServerMessage(events({ batches: [{ tick: 5, events: [listed] }] }))).toThrow(
+      ProtocolError,
+    );
+  });
+
+  it('отсутствующая эпоха диапазона — разрыв, а не умолчание (NTR-16)', () => {
+    const { epoch: _epoch, ...withoutEpoch } = events() as Record<string, unknown>;
+    expect(() => parseServerMessage(withoutEpoch)).toThrow(ProtocolError);
+  });
+
+  it('потолка на число пачек нет: границы NTR-15 меряются в тиках', () => {
+    // Сотня пачек — больше, чем `MAX_FRAMES_PER_MESSAGE` у `Input`: потолок
+    // разбора ввода потоку событий не наследуется, иначе бой на длинном
+    // диапазоне давал бы молча укороченную пачку.
+    const batches = Array.from({ length: 100 }, (_, i) => ({
+      tick: i,
+      events: [{ type: 'Hit', data: { entity: i } }],
+    }));
+    const parsed = parseServerMessage(events({ from: 0, to: 99, batches }));
+    expect(parsed).toMatchObject({ type: 'Events', from: 0, to: 99 });
+    expect((parsed as { batches: readonly unknown[] }).batches).toHaveLength(100);
+  });
+
+  it('batches не массив — отвергается, а не пропускается молча', () => {
+    expect(() => parseServerMessage(events({ batches: {} }))).toThrow(ProtocolError);
+    expect(() => parseServerMessage(events({ batches: [{ tick: 5 }] }))).toThrow(ProtocolError);
   });
 });
 
