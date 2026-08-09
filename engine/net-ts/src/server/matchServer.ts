@@ -38,6 +38,8 @@ import { createServerMetrics, type ServerMetrics } from '../metrics.js';
 import type { ConnectionId } from '../transport/transport.js';
 import type {
   ClientMessage,
+  EventBatch,
+  EventsMessage,
   GameVersion,
   Pacing,
   RejectReason,
@@ -130,6 +132,41 @@ interface OpenSegment {
   readonly frames: InputFrame[];
 }
 
+/**
+ * Разосланное окно потока событий (NTR-15): замкнутый диапазон тиков одной
+ * рассылки и непустые пачки внутри него. Тик диапазона, пачки которого нет,
+ * означает «на этом тике событий не было», поэтому пустые пачки не хранятся —
+ * покрытие держит объявленный диапазон, а не перечисление тиков.
+ */
+interface EventWindow {
+  readonly from: number;
+  readonly to: number;
+  readonly batches: readonly EventBatch[];
+}
+
+/**
+ * Накопитель потока событий одного `viewpoint` (NTR-15, решение 2 дизайна).
+ *
+ * По `viewpoint`, а не по соединению: два соединения одной команды получают
+ * один и тот же отобранный поток, и хранить его дважды незачем.
+ *
+ * Глубина накопления меряется в тиках и равна «период рассылки × (глубина
+ * повтора + 1)»: `repeats` держит `eventRepeat` уже разосланных окон по
+ * `snapshotEvery` тиков каждое, плюс открытое окно текущего периода. Границы в
+ * событиях или байтах здесь не появляются: тик, породивший много событий, — это
+ * бой, а не отказ протокола.
+ */
+interface EventStream {
+  /** Первый ещё не разосланный живой тик текущей эпохи; `-1` — окно не открыто. */
+  from: number;
+  /** Последний накопленный живой тик; значим только при `from >= 0`. */
+  to: number;
+  /** Непустые пачки открытого окна, в порядке возрастания тика. */
+  batches: EventBatch[];
+  /** Кольцо разосланных окон, повторяемых следующими сообщениями. */
+  readonly repeats: EventWindow[];
+}
+
 export type MatchPhase = 'lobby' | 'running' | 'ended';
 
 /** Исходящее: сообщение конкретному соединению и признак «после этого закрыть». */
@@ -189,6 +226,13 @@ export class MatchServer {
   /** Пришедший, но ещё не исполненный ввод: слот → тик → кадр. */
   private readonly pending: Map<number, InputFrame>[];
   private readonly lastFrame: (InputFrame | undefined)[];
+
+  /**
+   * Накопители потока событий по `viewpoint` (NTR-15). Ключей не больше, чем
+   * различных `viewpoint` матча, то есть числа слотов плюс наблюдатель: карта
+   * от длительности матча не растёт.
+   */
+  private readonly eventStreams = new Map<number, EventStream>();
 
   /** Канонический лог сегментами (NTR-16); плоский список — его частный случай. */
   private readonly segments: OpenSegment[] = [];
@@ -608,7 +652,23 @@ export class MatchServer {
     // принадлежит стёртой ветви, и доигрывать по ней нечего.
     this.liveFrontier = this.state.tick;
 
-    if (tick % this.snapshotEvery === 0) this.broadcastSnapshots();
+    // Персональные проекции ЭТОГО тика — на каждом исполненном тике, а не
+    // только на тиках рассылки (NTR-15, «Момент фильтрации»): видимость
+    // события оценивается по состоянию мира того тика, на котором событие
+    // опубликовано, а к рассылке мир уже другой. Отсюда же место в порядке
+    // обработки — то же, где формируются персональные снапшоты (NTR-3).
+    //
+    // `result.isReplay` здесь всегда `false`, и проверять это нечем: живой тик
+    // исполняется только этим вызовом `tick()`, а переисполненные тики
+    // (`isReplay = true`, REW-4) живут внутри `seekTo` ядра и наружу
+    // `TickResult` не отдают вовсе — накопителю их не видно по построению
+    // (NTR-15, `tick-loop` OBS-5). Гарда нет потому, что гардить нечего.
+    const filtered = this.filterByViewpoint();
+    this.collectEvents(filtered);
+    // Эпоха внутри `broadcastSnapshots` здесь не растёт: живой тик больше
+    // предыдущего авторитетного состояния по построению, и накопленное окно
+    // между отбором и рассылкой сброшено быть не может.
+    if (tick % this.snapshotEvery === 0) this.broadcastSnapshots(filtered);
 
     for (let slot = 0; slot < this.config.players.length; slot++) {
       if (this.metrics.slots[slot]!.silentTicks > this.silenceTicks) {
@@ -658,15 +718,125 @@ export class MatchServer {
   }
 
   /**
+   * `viewpoint` соединения (NET-12, NTR-9). Наблюдателю — `VIEWPOINT_ALL`,
+   * игроку — команда его слота либо сам слот. Одно место на все каналы:
+   * разойтись `viewpoint`'ом между снапшотом и потоком событий значило бы
+   * завести второй отбор там, где NET-13 требует один.
+   */
+  private viewpointOf(connection: Connection): number {
+    return connection.phase === 'observer'
+      ? VIEWPOINT_ALL
+      : (this.config.teams?.[connection.slot] ?? connection.slot);
+  }
+
+  /**
+   * Персональная проекция текущего состояния (NET-12, NET-18): отобранный мир и
+   * отобранная тем же вызовом шина. Наблюдателю (`VIEWPOINT_ALL`) фильтр
+   * снимается целиком — и с мира, и с шины, — а не по каналам (NTR-9).
+   *
+   * ponytail: отбор идёт единственным опубликованным входом ядра, а он копирует
+   * мир целиком (`engine/core-ts/src/sim/filter.ts`). Звать его на каждом тике
+   * на каждый `viewpoint` — вдвое больше копий, чем прежде, при `snapshotRate`
+   * вдвое меньше `tickRate`. Узкий вход «отфильтровать только события, без
+   * копирования мира» заводится ОТДЕЛЬНЫМ изменением ядра со своим требованием
+   * (NTR-1), а не правкой по ходу сетевой работы; до него живём копией и меряем.
+   */
+  private filterFor(viewpoint: number): Snapshot {
+    return this.config.eventVisibility === undefined
+      ? filterSnapshot(this.state, viewpoint)
+      : filterSnapshot(this.state, viewpoint, this.config.eventVisibility);
+  }
+
+  /**
+   * Проекции тика по одной на активный `viewpoint`, а не на соединение: два
+   * соединения одной команды видят одно и то же, и второй вызов фильтра дал бы
+   * ту же копию мира второй раз.
+   */
+  private filterByViewpoint(): Map<number, Snapshot> {
+    const filtered = new Map<number, Snapshot>();
+    for (const connection of this.connections.values()) {
+      if (connection.phase === 'greeting') continue;
+      const viewpoint = this.viewpointOf(connection);
+      if (filtered.has(viewpoint)) continue;
+      filtered.set(viewpoint, this.filterFor(viewpoint));
+    }
+    return filtered;
+  }
+
+  private streamOf(viewpoint: number): EventStream {
+    const existing = this.eventStreams.get(viewpoint);
+    if (existing !== undefined) return existing;
+    const opened: EventStream = { from: -1, to: -1, batches: [], repeats: [] };
+    this.eventStreams.set(viewpoint, opened);
+    return opened;
+  }
+
+  /**
+   * Накопление УЖЕ ОТОБРАННОГО (NTR-15): в поток кладётся шина персональной
+   * проекции, а не шина тика. Отобрать позже нельзя, не изменив ответ, и оба
+   * направления ошибки дефектны — потерянный факт видимого врага и утёкший
+   * факт невидимого.
+   *
+   * Открытое окно ведёт диапазон, а не список тиков: тик без событий пачки не
+   * заводит, но в диапазон входит, и получатель читает его как «событий не
+   * было».
+   */
+  private collectEvents(filtered: ReadonlyMap<number, Snapshot>): void {
+    const tick = this.state.tick;
+    for (const [viewpoint, personal] of filtered) {
+      const stream = this.streamOf(viewpoint);
+      if (stream.from < 0) stream.from = tick;
+      stream.to = tick;
+      if (personal.events.length > 0) stream.batches.push({ tick, events: personal.events });
+    }
+  }
+
+  /**
+   * Закрыть открытое окно `viewpoint` и собрать из него сообщение (NTR-15).
+   *
+   * Объявленный диапазон — повторяемые окна плюс текущее. Окна смежны по
+   * построению (каждое открывается тиком, следующим за `to` предыдущего),
+   * поэтому склейка непрерывна и покрыта полностью. Повтор — избыточность
+   * вместо подтверждений: пачка едет `eventRepeat + 1` раз и переживает
+   * `eventRepeat` потерь подряд, а однократность держит курсор получателя.
+   */
+  private closeEventWindow(viewpoint: number, epoch: number): EventsMessage {
+    const stream = this.streamOf(viewpoint);
+    const closed: EventWindow = { from: stream.from, to: stream.to, batches: stream.batches };
+    const batches: EventBatch[] = [];
+    for (const window of stream.repeats) batches.push(...window.batches);
+    batches.push(...closed.batches);
+    const from = stream.repeats[0]?.from ?? closed.from;
+
+    stream.repeats.push(closed);
+    // Кольцо: разосланных окон держится ровно `eventRepeat`. При нуле окно
+    // вытесняется сразу же — «без повтора» (NTR-15).
+    while (stream.repeats.length > this.eventRepeat) stream.repeats.shift();
+    stream.from = -1;
+    stream.to = -1;
+    stream.batches = [];
+
+    return { type: 'Events', epoch, from, to: closed.to, batches };
+  }
+
+  /**
    * Тик исполнен один раз, снапшотов — по числу соединений (NET-12).
    *
-   * ponytail: фильтрация зовётся на каждое соединение отдельно, даже когда у
-   * двух совпадает `viewpoint`, и каждый вызов копирует мир целиком. На двух
-   * игроках это две копии на рассылку; кэш по `viewpoint` и delta-компрессия
-   * (NET-8) вводятся тогда, когда замер на десяти игроках покажет упор — это
-   * ровно тот профиль нагрузки, который спека netcode просит замерить.
+   * `filtered` — проекции ЭТОГО тика, снятые отбором событий (NTR-15): рассылка
+   * по расписанию берёт их готовыми, а не фильтрует мир второй раз. Тем самым
+   * шина в кадре `Snapshot` и поток `Events` отобраны буквально одним вызовом на
+   * одном тике — то, чего требует шов с NET-18: разойдись предикат или момент, и
+   * клиент увидел бы в состоянии факт, которого нет в потоке.
+   *
+   * Отсутствие `filtered` означает рассылку МИМО расписания — по факту
+   * восстановления во время `Rewinding` (NTR-16). Она фильтрует сама и потока
+   * событий не несёт: расписание у `Events` то же, что у снапшотов по NTR-7
+   * (NTR-15, «Расписание»), восстановленный тик исполнен в ПРЕЖНЕЙ эпохе и свои
+   * события в ней уже отдал, переисполненные тики в накопитель не попадают
+   * (REW-4, OBS-5), а живых тиков новой эпохи в этот момент ещё нет — то есть
+   * объявлять нечего: диапазон замкнут, и открыть его не с чего.
    */
-  private broadcastSnapshots(): void {
+  private broadcastSnapshots(filtered?: ReadonlyMap<number, Snapshot>): void {
     // Номер тика берётся из самого состояния, а не из аргумента: рассылка идёт
     // и по расписанию, и по факту восстановления (NTR-16), и вызывающая сторона
     // не должна иметь способа разойтись номером с тем, что уедет на провод.
@@ -677,20 +847,34 @@ export class MatchServer {
     // состояния проходят через эту точку и второй нумерации не заводят.
     if (this.lastStateTick >= 0 && tick < this.lastStateTick) this.onEpochChanged();
     this.lastStateTick = tick;
+    // Та же выведенная величина штампуется и в `Snapshot`, и в `Events`
+    // (NTR-16): считать эпоху заново на каждое сообщение значило бы завести
+    // второй вывод одной величины.
     const epoch = this.currentEpoch;
+
+    // Сообщение потока — одно на `viewpoint`: два соединения одной команды
+    // делят и пачку, и кадр.
+    const events = filtered === undefined ? undefined : new Map<number, EventsMessage>();
 
     for (const connection of this.connections.values()) {
       if (connection.phase === 'greeting') continue;
-      const viewpoint =
-        connection.phase === 'observer'
-          ? VIEWPOINT_ALL
-          : (this.config.teams?.[connection.slot] ?? connection.slot);
-      const filtered =
-        this.config.eventVisibility === undefined
-          ? filterSnapshot(this.state, viewpoint)
-          : filterSnapshot(this.state, viewpoint, this.config.eventVisibility);
-      this.send(connection.id, { type: 'Snapshot', epoch, tick, snapshot: snapshotToPlain(filtered) });
+      const viewpoint = this.viewpointOf(connection);
+      const personal = filtered?.get(viewpoint) ?? this.filterFor(viewpoint);
+      this.send(connection.id, { type: 'Snapshot', epoch, tick, snapshot: snapshotToPlain(personal) });
       this.metrics.snapshotsSent++;
+
+      // Поток идёт тем же путём и наблюдателю, и игроку — отдельной ветки для
+      // `VIEWPOINT_ALL` здесь нет (NTR-15). Условие на `filtered` — не про
+      // наблюдателя, а про то, что события этого тика для этого `viewpoint`
+      // отобраны: иначе объявленный диапазон утверждал бы покрытие, которого не
+      // считали.
+      if (events === undefined || filtered?.has(viewpoint) !== true) continue;
+      let message = events.get(viewpoint);
+      if (message === undefined) {
+        message = this.closeEventWindow(viewpoint, epoch);
+        events.set(viewpoint, message);
+      }
+      this.send(connection.id, message);
     }
   }
 
@@ -699,10 +883,18 @@ export class MatchServer {
    * накопленный, но ещё не применённый ввод всех слотов (NTR-7): он порождён в
    * стёртой ветви истории, помечен прежней эпохой и после возобновления
    * применялся бы тем успешнее, чем мельче был откат.
+   *
+   * Здесь же сбрасываются накопители потока событий (NTR-15): пачки стёртой
+   * эпохи по паре `(эпоха, тик)` меньше курсора получателя и приняты быть не
+   * могут, сколько их ни повторяй. Открытое окно уходит вместе с кольцом — оно
+   * той же стёртой эпохи, — и первое сообщение новой эпохи откроет диапазон с
+   * первого ЖИВОГО тика новой ветви. Цена записана в решении 8 дизайна:
+   * недоставленная последняя дорассылочная пачка теряется окончательно.
    */
   private onEpochChanged(): void {
     this.currentEpoch++;
     for (const pending of this.pending) pending.clear();
+    this.eventStreams.clear();
   }
 
   // -------------------------------------------------------------- перемотка
@@ -753,6 +945,10 @@ export class MatchServer {
    * исполняется, и расписанию не на чем срабатывать. Реплеевые тики внутри
    * `seekTo` собственных рассылок не порождают — наблюдаемым результатом
    * является одно восстановленное состояние, а не поток промежуточных.
+   *
+   * Потока событий эта рассылка не несёт (см. `broadcastSnapshots`): её тик
+   * исполнен в прежней эпохе и свои факты в ней уже отдал, а живых тиков новой
+   * эпохи ещё нет.
    */
   seekTo(tick: number): void {
     const controller = this.requireRewind();
@@ -794,11 +990,48 @@ export class MatchServer {
     }
   }
 
+  /**
+   * Хвост потока перед `End` (NTR-15, «Завершение матча»): накопленное с
+   * последней рассылки уходит ДО закрытия соединения. Матч кончается событием —
+   * последним убийством, истёкшим таймером, — и потерять именно его значит
+   * потерять то единственное, ради чего поток заведён.
+   *
+   * Диапазон хвоста — ровно нерассланные тики, без повтора уже разосланных
+   * окон: повтор не помог бы самому хвосту (он в кольце не лежит), а диапазон
+   * перекрыл бы предыдущий без всякой пользы. Кольцо не трогается: матч
+   * кончился, повторять больше нечем и некуда.
+   */
+  private flushEvents(viewpoint: number, epoch: number): EventsMessage | undefined {
+    const stream = this.eventStreams.get(viewpoint);
+    if (stream === undefined || stream.from < 0) return undefined;
+    const message: EventsMessage = {
+      type: 'Events',
+      epoch,
+      from: stream.from,
+      to: stream.to,
+      batches: stream.batches,
+    };
+    stream.from = -1;
+    stream.to = -1;
+    stream.batches = [];
+    return message;
+  }
+
   private end(reason: 'player-silent' | 'player-left' | 'server-stopped'): void {
     if (this.matchPhase === 'ended') return;
     this.matchPhase = 'ended';
+    const epoch = this.currentEpoch;
+    const tails = new Map<number, EventsMessage | undefined>();
     for (const connection of this.connections.values()) {
       if (connection.phase === 'greeting') continue;
+      const viewpoint = this.viewpointOf(connection);
+      // Хвост считается один раз на `viewpoint` — как и всякая пачка потока, —
+      // а уезжает каждому соединению этого `viewpoint`.
+      if (!tails.has(viewpoint)) tails.set(viewpoint, this.flushEvents(viewpoint, epoch));
+      const tail = tails.get(viewpoint);
+      // Порядок в одном `drain()` значим ровно здесь: `Events` раньше `End`,
+      // соединение закрывается после — исходящее с `closeAfter` последнее.
+      if (tail !== undefined) this.send(connection.id, tail);
       this.send(connection.id, { type: 'End', reason, tick: this.state.tick }, true);
     }
   }
