@@ -33,6 +33,7 @@ import {
   type MatchConfig,
   type MatchWorld,
   type PresentedState,
+  type Transport,
 } from '@game-mvp/net';
 import { AssetService } from '@game-mvp/assets';
 import {
@@ -183,8 +184,18 @@ export interface ConnectedClient {
   readonly host: ClientHost;
 }
 
+/**
+ * Источник клиентского конца канала. `LoopbackHub` его и есть; отдельный тип
+ * нужен обёртке над транспортом (NTR-2): «канал теряет и переставляет
+ * сообщения» — свойство реализации транспорта, и подменяется она, а не сервер с
+ * клиентом.
+ */
+export interface ClientLink {
+  connect(): Transport;
+}
+
 export function connectClient(
-  hub: LoopbackHub,
+  hub: ClientLink,
   playerId: string,
   clock: Clock,
   scene: SceneDef,
