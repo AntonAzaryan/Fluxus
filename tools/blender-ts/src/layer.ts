@@ -38,7 +38,16 @@ import { quantizeDecorationLength, quantizeDecorationYaw, resolveVisual, type Vi
 import type { JsonObject, JsonValue } from '@game-mvp/editor-core';
 import { SKIN_KEY, type SourceObject } from './normalize.js';
 
-/** Где у сим-объекта лежит поворот (ED-16): компонент и имя одного его поля. */
+/**
+ * Где у сим-объекта лежит поворот (ED-16): компонент и имя одного его поля.
+ *
+ * СОСТАВ ОБЩИЙ С РЕДАКТОРОМ и повторён здесь по расположению кода, а не по
+ * замыслу: канонический экземпляр живёт в `editor/ui-ts/src/areas/
+ * sceneDocuments.ts`, а тот пакет — DOM-интерфейс, и тянуть его в headless-
+ * инструмент нельзя. Общее место — `editor/core-ts`, куда привязка и переезжает
+ * вместе с операцией импорта (задача 3.1, ED-29); до тех пор ЛЮБАЯ правка
+ * состава обязана идти в обе копии.
+ */
 export interface RotationBinding {
   readonly component: string;
   readonly field: string;
@@ -184,6 +193,17 @@ function fieldValue(
   return raw;
 }
 
+/**
+ * Занято ли поле трансформом объекта (BLND-3): позиция и курс приходят из
+ * матрицы узла, и custom property того же адреса — не второй источник, а
+ * противоречие.
+ */
+function isBoundField(binding: PositionBinding, component: string, field: string): boolean {
+  if (component === binding.component && (field === binding.x || field === binding.y)) return true;
+  const rotation = binding.rotation;
+  return rotation !== undefined && component === rotation.component && field === rotation.field;
+}
+
 /** Переопределения записи расстановки: «компонент → поле → значение» (CMD-6). */
 type Overrides = Record<string, Record<string, number>>;
 
@@ -255,6 +275,12 @@ function placementRecord(
   write(binding.component, binding.y, source.y);
   if (binding.rotation !== undefined) {
     write(binding.rotation.component, binding.rotation.field, source.yaw);
+    // Зеркало курсом не выражается: разложение зеркального трансформа отдаёт
+    // курс, отличающийся на пол-оборота (BLND-3). Позиции это не касается,
+    // поэтому у сцены без поворота и предупреждения нет.
+    if (source.mirrored) {
+      warning(sink, source.name, 'трансформ зеркальный; курс зеркала не выражает (BLND-3)');
+    }
   }
 
   for (const key of Object.keys(source.extras).sort(compareObjectNames)) {
@@ -262,6 +288,17 @@ function placementRecord(
     if (separator <= 0 || separator === key.length - 1) continue;
     const component = key.slice(0, separator);
     const field = key.slice(separator + 1);
+    if (isBoundField(binding, component, field)) {
+      // Позиция и курс берутся ИЗ ТРАНСФОРМА (BLND-3), и молчаливо предпочесть
+      // одно из двух значений импортёр не вправе: автор двигал бы объект в
+      // Blender, а в кадре ничего бы не менялось.
+      error(
+        sink,
+        source.name,
+        `"${key}": позиция и курс берутся из трансформа объекта (BLND-3), а не из custom property`,
+      );
+      continue;
+    }
     const raw = source.extras[key];
     if (typeof raw === 'string') {
       error(sink, source.name, `"${key}": значение поля компонента — число, а не строка "${raw}"`);
@@ -306,6 +343,16 @@ function decorationRecord(sink: Sink, source: SourceObject, context: SpatialLaye
   }
   if (!source.uniformScale) {
     warning(sink, source.name, 'масштаб неодинаков по осям; в запись уходит масштаб по оси X (PRES-2)');
+  }
+  if (source.mirrored) {
+    // Зеркало не выражают ни `yaw`, ни положительный `scale` записи (PRES-2):
+    // разложение отдаёт курс, отличающийся на пол-оборота, и объект в кадре
+    // движка окажется не тем, что автор видит во вьюпорте Blender (BLND-11).
+    warning(
+      sink,
+      source.name,
+      'трансформ зеркальный; запись decoration зеркала не выражает — в документ уходит курс без него (PRES-2)',
+    );
   }
 
   const skin = source.extras[SKIN_KEY];

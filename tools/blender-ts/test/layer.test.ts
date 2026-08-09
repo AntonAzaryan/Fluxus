@@ -172,6 +172,38 @@ describe('BLND-3, BLND-6: находки называют объект Blender',
     expect(messagesFor(findings, 'alpha-hero')[0]).toContain("не входит в состав prefab'а");
   });
 
+  it('custom property на месте позиции — отказ: позиция берётся из трансформа', () => {
+    // Молчаливо предпочесть одно из двух значений импортёр не вправе: автор
+    // двигал бы объект в Blender, а в кадре не менялось бы ничего (BLND-3).
+    const objects = objectsOf('placements.gltf').map((object) =>
+      object.name === 'alpha-hero'
+        ? { ...object, extras: { ...object.extras, 'Position.x': 9 } }
+        : object,
+    );
+    const layer = generateSpatialLayer(objects, context());
+    expect(messagesFor(layer.findings, 'alpha-hero')[0]).toContain('из трансформа объекта');
+    expect(hasErrors(layer.findings)).toBe(true);
+    // Значение custom property в запись не уехало: позиция осталась трансформной.
+    expect(layer.initial[0]?.['overrides']).toEqual({
+      Position: { x: fixed.fromFloat(-1.5), y: fixed.fromFloat(-2.25) },
+    });
+  });
+
+  it('custom property на месте курса — отказ у проекта, назвавшего поворот', () => {
+    const objects = objectsOf('placements.gltf').map((object) =>
+      object.name === 'alpha-hero'
+        ? { ...object, extras: { ...object.extras, 'Facing.turns': 0.5 } }
+        : object,
+    );
+    const withRotation = context({ binding: { ...DEFAULT_POSITION_BINDING, rotation: ROTATION } });
+    expect(messagesFor(generateSpatialLayer(objects, withRotation).findings, 'alpha-hero')[0]).toContain(
+      'из трансформа объекта',
+    );
+    // Проект, не назвавший, где лежит поворот, того же поля не занимает: для
+    // него это обычное переопределение (BLND-3).
+    expect(messagesFor(generateSpatialLayer(objects, context()).findings, 'alpha-hero')).toEqual([]);
+  });
+
   it('имя объекта, встретившееся дважды, лишает порядок однозначности', () => {
     const objects = objectsOf('placements.gltf');
     const twin = objects.find((object) => object.name === 'alpha-hero');
@@ -198,6 +230,27 @@ describe('BLND-6: ключ visual без записи манифеста — п�
 
   it('неодинаковый по осям масштаб — предупреждение с названным выбором', () => {
     expect(messagesFor(layer.findings, 'stretched-statue')[0]).toContain('оси X');
+  });
+
+  it('зеркальный трансформ — предупреждение: запись decoration зеркала не выражает', () => {
+    const objects = objectsOf('warnings.gltf').map((object) =>
+      object.name === 'stretched-statue' ? { ...object, mirrored: true } : object,
+    );
+    const findings = generateSpatialLayer(objects, context()).findings;
+    expect(messagesFor(findings, 'stretched-statue').some((m) => m.includes('зеркальный'))).toBe(true);
+    expect(hasErrors(findings)).toBe(false);
+  });
+
+  it('зеркальный трансформ сим-размещения — предупреждение у проекта с поворотом', () => {
+    const objects = objectsOf('placements.gltf').map((object) =>
+      object.name === 'alpha-hero' ? { ...object, mirrored: true } : object,
+    );
+    const withRotation = context({ binding: { ...DEFAULT_POSITION_BINDING, rotation: ROTATION } });
+    expect(messagesFor(generateSpatialLayer(objects, withRotation).findings, 'alpha-hero')[0]).toContain(
+      'зеркальный',
+    );
+    // Позиции зеркало не касается: сцена без поворота о нём и не слышит.
+    expect(messagesFor(generateSpatialLayer(objects, context()).findings, 'alpha-hero')).toEqual([]);
   });
 });
 

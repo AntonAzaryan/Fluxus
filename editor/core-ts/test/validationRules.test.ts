@@ -16,7 +16,7 @@ import {
   type SystemDef,
   type TerrainDef,
 } from '@game-mvp/core';
-import type { CameraEffectsDescription } from '@game-mvp/assets';
+import type { CameraConfigDescription, CameraEffectsDescription } from '@game-mvp/assets';
 import { describe, expect, it } from 'vitest';
 import { createEditorSession, type EditorSession, type JsonValue } from '../src/document/index.js';
 import { createOperationRegistry, registerBuiltinOperations } from '../src/operations/index.js';
@@ -448,6 +448,50 @@ describe('ED-14: секция эффектов камеры по описани�
   it('законная запись находок не даёт', () => {
     const report = described({ events: { Boom: { effect: 'shake', decay: 2, amplitude: 0.5 } } });
     expect(report.forDocument(MANIFEST)).toHaveLength(0);
+  });
+});
+
+/**
+ * ED-14, ASSET-10: секция конфига камеры проверяется тем же правилом и тем же
+ * способом, что секция эффектов, — состав параметров приходит описанием из кода
+ * камеры (CAM-1). Без описания перечня у редактора нет, и неизвестный параметр
+ * молчит; с описанием он предупреждение — то же, что видит клиент на загрузке
+ * манифеста, иначе один документ был бы «чистым» у редактора и шумным у клиента.
+ */
+describe('ED-14: секция конфига камеры по описанию конфига (ASSET-10)', () => {
+  const description: CameraConfigDescription = { params: ['pitch', 'distance'] };
+
+  const withConfig = (section: JsonValue): JsonValue => ({ ...MANIFEST_VALUE, cameraConfig: section });
+
+  const described = (section: JsonValue): ValidationReport =>
+    check({ [MANIFEST]: { kind: 'manifest', value: withConfig(section) } }, [
+      ...engineValidationRules(DEFAULT_ENGINE_KINDS, { cameraConfig: description }),
+    ]);
+
+  it('без описания правило о составе параметров молчит: перечня у него нет', () => {
+    const report = check({ [MANIFEST]: { kind: 'manifest', value: withConfig({ wobbliness: 3 }) } }, [
+      ...engineValidationRules(),
+    ]);
+    expect(report.forDocument(MANIFEST)).toHaveLength(0);
+  });
+
+  it('неизвестный параметр — предупреждение, а не ошибка (симметрия с ASSET-8)', () => {
+    const report = described({ pitch: 0.7, wobbliness: 3 });
+    const issue = report.forDocument(MANIFEST).find((found) => found.ruleId === MANIFEST_RULE)!;
+    expect(issue.severity).toBe('warning');
+    expect(detailOf(issue)).toContain('wobbliness');
+    expect(report.ok).toBe(true);
+  });
+
+  it('нечисловое значение — ошибка на общих основаниях манифеста', () => {
+    const report = described({ distance: 'далеко' });
+    const issue = report.forDocument(MANIFEST).find((found) => found.ruleId === MANIFEST_RULE)!;
+    expect(issue.severity).toBe('error');
+    expect(report.ok).toBe(false);
+  });
+
+  it('объявленные параметры числами находок не дают', () => {
+    expect(described({ pitch: 0.7, distance: 22 }).forDocument(MANIFEST)).toHaveLength(0);
   });
 });
 

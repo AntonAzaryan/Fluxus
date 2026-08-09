@@ -87,6 +87,8 @@ export interface SourceObject {
   readonly scale: number;
   /** Равны ли масштабы по осям с точностью до шага PRES-3. */
   readonly uniformScale: boolean;
+  /** Зеркален ли трансформ (отрицательный определитель); формат зеркала не знает. */
+  readonly mirrored: boolean;
   /** Скалярные custom properties объекта после коэрции; несвёрнутое отброшено. */
   readonly extras: Readonly<Record<string, string | number | boolean>>;
   /** Меш узла — сырьё клеточных данных (BLND-9, BLND-10); `null` — узел без геометрии. */
@@ -157,6 +159,19 @@ function columnLength(matrix: readonly number[], column: number): number {
 }
 
 /**
+ * Определитель линейной части матрицы. Знак — единственное, ради чего он
+ * считается: отрицательный означает зеркальный трансформ. Соответствие осей
+ * конвейера — поворот (определитель `+1`), поэтому знак в мировом пространстве
+ * тот же, что в пространстве glTF.
+ */
+function linearDeterminant(m: readonly number[]): number {
+  const [m0 = 0, m1 = 0, m2 = 0] = [m[0], m[1], m[2]];
+  const [m4 = 0, m5 = 0, m6 = 0] = [m[4], m[5], m[6]];
+  const [m8 = 0, m9 = 0, m10 = 0] = [m[8], m[9], m[10]];
+  return m0 * (m5 * m10 - m6 * m9) + m1 * (m6 * m8 - m4 * m10) + m2 * (m4 * m9 - m5 * m8);
+}
+
+/**
  * Разложение мировой матрицы в величины конвейера. Единственное место, где
  * живут знаки соответствия осей (design, решение 5).
  */
@@ -167,6 +182,7 @@ export function decompose(matrix: readonly number[]): {
   yaw: number;
   scale: number;
   uniformScale: boolean;
+  mirrored: boolean;
 } {
   const tx = matrix[12] ?? 0;
   const ty = matrix[13] ?? 0;
@@ -189,6 +205,11 @@ export function decompose(matrix: readonly number[]): {
     yaw: turns < 0 ? turns + 1 : turns >= 1 ? turns - 1 : turns,
     scale: sx,
     uniformScale: Math.abs(sx - sy) <= SCALE_TOLERANCE && Math.abs(sx - sz) <= SCALE_TOLERANCE,
+    // Длины столбцов знака не несут, поэтому зеркало ими не ловится: у объекта
+    // с масштабом −1 по оси разложение даёт положительный масштаб и курс,
+    // отличающийся на пол-оборота. Ни PRES-2, ни SER-8 зеркала не выражают, и
+    // назвать эту потерю обязан импортёр (BLND-6), а не автор по кадру.
+    mirrored: linearDeterminant(matrix) < 0,
   };
 }
 
@@ -252,6 +273,7 @@ export function normalizeDocument(document: GltfDocument): readonly SourceObject
       yaw: transform.yaw,
       scale: transform.scale,
       uniformScale: transform.uniformScale,
+      mirrored: transform.mirrored,
       extras,
       mesh: node.mesh ?? null,
     });

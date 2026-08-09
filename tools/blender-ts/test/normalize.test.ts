@@ -60,6 +60,17 @@ describe('BLND-3: трансформ приходит двумя формами'
     const stretched = objectNamed(objectsOf('warnings.gltf'), 'stretched-statue');
     expect(stretched.scale).toBeCloseTo(2, TURN_PRECISION);
     expect(stretched.uniformScale).toBe(false);
+    expect(stretched.mirrored).toBe(false);
+  });
+
+  it('зеркальный трансформ виден отдельно: длины столбцов знака не несут', () => {
+    // Масштаб −1 по оси X: разложение отдаёт положительный масштаб и курс,
+    // отличающийся на пол-оборота, — зеркала ни одна величина не выражает.
+    const mirrored = decompose(localMatrixOf({ scale: [-1, 1, 1] }));
+    expect(mirrored.mirrored).toBe(true);
+    expect(mirrored.scale).toBeCloseTo(1, TURN_PRECISION);
+    expect(mirrored.yaw).toBeCloseTo(0.5, TURN_PRECISION);
+    expect(decompose(localMatrixOf({ scale: [2, 2, 2] })).mirrored).toBe(false);
   });
 });
 

@@ -191,7 +191,15 @@ export type PlacementLayer = 'sim' | 'decoration';
  */
 const TURN_RADIANS = Math.PI * 2;
 
-/** Где у сим-объекта лежит поворот (ED-16): компонент и имя одного его поля. */
+/**
+ * Где у сим-объекта лежит поворот (ED-16): компонент и имя одного его поля.
+ *
+ * Тот же состав повторён в `tools/blender-ts/src/layer.ts` — импортёру конвейера
+ * привязка нужна ровно так же (BLND-3), а этот пакет DOM-ный и в headless-
+ * инструмент не тянется. Копия временная: общее место — `editor/core-ts` вместе
+ * с операцией импорта (`blender-pipeline` BLND-5); пока копий две, правка
+ * состава идёт в обе.
+ */
 export interface RotationBinding {
   readonly component: string;
   readonly field: string;
