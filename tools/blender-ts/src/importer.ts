@@ -8,10 +8,12 @@
  * атомарность: между «слой посчитан» и «документы сохранены» нет ни одного
  * шага, который мог бы оставить половину.
  *
- * Режим проверки (`dryRun`) отличается ровно одним: сохранения нет. Всё
- * остальное — те же разбор, те же находки, тот же целевой слой и та же операция
- * над той же сессией. Иначе «живая проверка» аддона (BLND-8) проверяла бы не то,
- * что делает импорт, и расходилась бы с ним молча.
+ * Режим проверки (`dryRun`) отличается двумя вещами: сохранения нет и сессия
+ * своя. Всё остальное — те же разбор, те же находки, тот же целевой слой и та же
+ * операция; иначе «живая проверка» аддона (BLND-8) проверяла бы не то, что
+ * делает импорт, и расходилась бы с ним молча. Своя сессия — потому что
+ * проверка обязана не менять НИЧЕГО: применённая в чужой сессии операция
+ * осталась бы в ней правкой и записью истории (ED-18).
  */
 import {
   OperationError,
@@ -30,7 +32,7 @@ import {
 } from '@game-mvp/editor-core';
 import { parseGltf } from './gltf.js';
 import { generateSpatialLayer, hasErrors, type Finding, type SpatialLayer } from './layer.js';
-import { normalizeDocument } from './normalize.js';
+import { normalizeDocument, type SourceObject } from './normalize.js';
 import { IMPORT_SPATIAL_LAYER, importParams, registerBlenderOperations } from './operation.js';
 import { openImportTarget, type ImportKinds, type ImportTarget } from './project.js';
 import { scenePathOf } from './pairing.js';
@@ -48,7 +50,8 @@ export interface ImportRequest {
   readonly kinds?: ImportKinds;
   /**
    * Сессия. Своя, если не подали: из редактора приходит его собственная — и
-   * тогда импорт ложится в ту же историю (ED-18), что и правки автора.
+   * тогда импорт ложится в ту же историю (ED-18), что и правки автора. В режиме
+   * проверки не используется: проверке нечего менять в чужой сессии.
    */
   readonly session?: EditorSession;
   /** Правила, которыми проверяется состояние дерева после записи (ED-8, ED-21). */
@@ -93,7 +96,7 @@ function message(error: unknown): string {
  * назывались путём источника: «файла нет» и «файл не разбирается» — разные
  * беды, и обе не про сцену.
  */
-async function readSource(host: ContentTreeHost, source: ContentPath): Promise<ReturnType<typeof normalizeDocument>> {
+async function readSource(host: ContentTreeHost, source: ContentPath): Promise<readonly SourceObject[]> {
   let bytes: Uint8Array;
   try {
     bytes = new Uint8Array(await host.read(source));
