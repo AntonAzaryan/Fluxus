@@ -21,8 +21,9 @@ import { describe, expect, it } from 'vitest';
 import { documentValue, findAll, type UiNode } from '../src/dom/node.js';
 import { PREVIEW_SUSPENSION_REASON } from '../src/frame/preview.js';
 import { createSceneArea } from '../src/areas/scene.js';
-import { systemsArea } from '../src/areas/systems.js';
+import { stubArea } from './support/stubArea.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
+import { SYSTEM_LIST } from '../src/areas/systemsDocuments.js';
 import {
   attr,
   buildFrame,
@@ -62,12 +63,18 @@ const FLOOR_BREAKER = {
   ],
 };
 
-/** Несохранённая правка документа сцены: та самая, которую обязан взять прогон. */
+/**
+ * Несохранённая правка документа сцены: та самая, которую обязан взять прогон.
+ *
+ * Записи `systems` — отслеживаемый список конфига (его правит область систем),
+ * и дописывается запись туда тем же способом, что и запись расстановки: списком
+ * в конец, а не индексом внутрь (ED-29).
+ */
 function editSystem(fixture: LoadedFrameFixture): void {
-  fixture.session.applyOperation('document.setValue', {
+  fixture.session.applyOperation('document.list.append', {
     document: FIXTURE_IDS.config,
-    path: ['systems', 0],
-    value: FLOOR_BREAKER,
+    list: SYSTEM_LIST,
+    item: FLOOR_BREAKER,
   });
 }
 
@@ -415,7 +422,7 @@ describe('ED-26: режим виден постоянно и переключа�
   it('режим читается из любой области — он один на редактор, а не на область', async () => {
     const fixture = await buildLoadedFrame();
     fixture.frame.togglePreview();
-    for (const areaId of [systemsArea.id, fixture.area.id]) {
+    for (const areaId of [stubArea.id, fixture.area.id]) {
       fixture.frame.activate(areaId);
       expect(fixture.frame.mode()).toBe('preview');
       expect(shownKeys(fixture)).toContain('ui.chip.previewMode');
@@ -424,7 +431,7 @@ describe('ED-26: режим виден постоянно и переключа�
 
   it('запуск и выход доступны из области, которая сцену не показывает', async () => {
     const fixture = await buildLoadedFrame();
-    fixture.frame.activate(systemsArea.id);
+    fixture.frame.activate(stubArea.id);
     expect(fixture.frame.canPreview()).toBe(true);
 
     press(previewButton(fixture));
@@ -454,8 +461,8 @@ describe('ED-26: режим виден постоянно и переключа�
     });
     // Уход в соседнюю область записи чужого состояния не заводит: страницу тут
     // ещё никто не собирал, и области сцены как бы не существует.
-    const fixture = buildFrame([systemsArea, area]);
-    fixture.frame.activate(systemsArea.id);
+    const fixture = buildFrame([stubArea, area]);
+    fixture.frame.activate(stubArea.id);
     expect(fixture.frame.canPreview()).toBe(false);
 
     await settle();

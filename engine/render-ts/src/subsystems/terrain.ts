@@ -17,8 +17,9 @@
  * У документного продюсера (REND-11) мутабельны и уровни: кисти редактора
  * правят карту уровней, флаги и пол (ED-10), а вьюпорт обязан показать
  * результат не позже следующего кадра (ED-15). Вход для этого один —
- * `applyGrid`, декларативный по образцу `DocumentSource.apply`: потребитель
- * отдаёт сетку ЦЕЛИКОМ, пересчитанную ядром (TERR-5, ED-1), а свести её с
+ * `applyGrid`, документный источник террейна REND-14, декларативный по образцу
+ * `DocumentSource.apply` (REND-11): потребитель отдаёт сетку ЦЕЛИКОМ,
+ * пересчитанную ядром (TERR-5, ED-1), а свести её с
  * нарисованным — дело подсистемы. Императивного «подвинь эту клетку» здесь нет
  * по той же причине, по какой его нет у инстансов: картинка обязана быть
  * функцией документа, а не истории вызовов.
@@ -26,19 +27,26 @@
  * И пол, и уровни живут в одной сетке, поэтому `applyGrid` заодно закрывает
  * возврат из превью (ED-9): пол подсистема держит собственной копией и мутирует
  * дельтами тика, а сетка документа возвращает её к состоянию документов —
- * выбитая в превью дыра до кадра правки не доживает.
+ * выбитая в превью дыра до кадра правки не доживает. Повторная доставка той же
+ * сетки поэтому не пустая операция, и REND-14 требует этого явно.
  *
  * Сетка — вторая точка входной границы рендера (REND-1): она приезжает не из
  * `TickResult`, а инициализацией подсистемы (REND-8) — в воркер-сборке
- * хендшейком оболочки (SHELL-5), — и `tileSize` с координатами cliff-отрезков в
- * ней fixed-point (TERR-2). Поэтому деления на `FIXED_ONE` здесь стоят в точке
+ * хендшейком оболочки (SHELL-5) — либо доставкой после инициализации
+ * (REND-14), и `tileSize` с координатами cliff-отрезков в ней fixed-point
+ * (TERR-2). Поэтому деления на `FIXED_ONE` здесь стоят в точке
  * приёма и должны там оставаться: глубже по коду рендера fixed-point значений и
  * их арифметики нет.
  */
 import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
-import type { RenderContext, RenderSubsystem, TickView } from '../types.js';
-import { cornerLevels, type VisualSurface } from '../visualSurface.js';
+import {
+  DEFAULT_CURVATURE_TESSELLATION,
+  type RenderContext,
+  type RenderSubsystem,
+  type TickView,
+} from '../types.js';
+import { cornerLevels, type SurfaceNormal, type VisualSurface } from '../visualSurface.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 
 // --------------------------------------------------- чистая генерация (тесты)
@@ -46,6 +54,12 @@ import type { VisualSurfaceSource } from '../surfaceSource.js';
 export interface TerrainGeometryData {
   readonly positions: Float32Array;
   readonly indices: Uint32Array;
+  /**
+   * Нормали вершин, если генератор посчитал их сам (REND-9): пол берёт их из
+   * поля высот в клетке-владельце вершины. Нет — нормали считает
+   * `toBufferGeometry` по треугольникам, и стенка обрыва остаётся плоской.
+   */
+  readonly normals?: Float32Array;
 }
 
 /** Прямоугольник клеток [x0..x0+w) × [y0..y0+h) — область пересборки чанка. */
@@ -57,11 +71,20 @@ export interface CellRect {
 }
 
 /**
- * Площадки пола для прямоугольника клеток [x0..x0+w) × [y0..y0+h): квад на
- * клетку с пола́ми по углам из `cornerLevels`, при наличии `surface` — из
- * визуальной поверхности с кривизной (REND-9; без карты кривизны значения
- * совпадают). Клетка без пола (`floor[cell] === 0`) не получает геометрии
- * вовсе — это и есть дыра (REND-7).
+ * Площадки пола для прямоугольника клеток [x0..x0+w) × [y0..y0+h). Геометрия —
+ * ВЫБОРКА визуальной поверхности (REND-9), а не её углы: клетка, у которой хотя
+ * бы одно узловое смещение ненулевое, разбивается на `tessellation ×
+ * tessellation` подклеток с вершинами на поле; клетка без кривизны остаётся
+ * одним квадом по `cornerHeights`, и сцена без карты кривизны собирает ровно ту
+ * же геометрию, что и до сглаживания. Без `surface` высоты берутся из
+ * `cornerLevels` — плоские ступени REND-7.
+ *
+ * Нормали генератор считает сам, из поля в клетке-владельце вершины: соседние
+ * клетки одного уровня сходятся на общем ребре по построению, а через
+ * cliff-границу не усредняются вовсе (REND-9).
+ *
+ * Клетка без пола (`floor[cell] === 0`) не получает геометрии вовсе — это и
+ * есть дыра (REND-7).
  */
 export function buildFloorGeometry(
   grid: TerrainGrid,
@@ -72,42 +95,133 @@ export function buildFloorGeometry(
   w: number,
   h: number,
   surface?: VisualSurface,
+  tessellation: number = DEFAULT_CURVATURE_TESSELLATION,
 ): TerrainGeometryData {
   // Приём `tileSize` — точка входной границы (REND-1, SHELL-5, TERR-2).
   const tile = grid.tileSize / FIXED_ONE;
   const positions: number[] = [];
+  const normals: number[] = [];
   const indices: number[] = [];
+  const steps = Math.max(1, Math.floor(tessellation));
+  const scratch: SurfaceNormal = { x: 0, y: 0, z: 0 };
 
   const x1 = Math.min(x0 + w, grid.width);
   const y1 = Math.min(y0 + h, grid.height);
   for (let y = y0; y < y1; y++) {
     for (let x = x0; x < x1; x++) {
       if (floor[y * grid.width + x] === 0) continue; // дыра: пола нет
-      let h00: number;
-      let h10: number;
-      let h11: number;
-      let h01: number;
-      if (surface !== undefined) {
-        [h00, h10, h11, h01] = surface.cornerHeights(x, y);
-      } else {
-        const [c00, c10, c11, c01] = cornerLevels(grid, x, y);
-        h00 = c00 * heightStep;
-        h10 = c10 * heightStep;
-        h11 = c11 * heightStep;
-        h01 = c01 * heightStep;
+      const divisions = surface?.hasCellCurvature(x, y) === true ? steps : 1;
+      if (divisions === 1) {
+        let h00: number;
+        let h10: number;
+        let h11: number;
+        let h01: number;
+        if (surface !== undefined) {
+          [h00, h10, h11, h01] = surface.cornerHeights(x, y);
+        } else {
+          const [c00, c10, c11, c01] = cornerLevels(grid, x, y);
+          h00 = c00 * heightStep;
+          h10 = c10 * heightStep;
+          h11 = c11 * heightStep;
+          h01 = c01 * heightStep;
+        }
+        const base = positions.length / 3;
+        positions.push(
+          x * tile, y * tile, h00,
+          (x + 1) * tile, y * tile, h10,
+          (x + 1) * tile, (y + 1) * tile, h11,
+          x * tile, (y + 1) * tile, h01,
+        );
+        if (surface === undefined) {
+          // Поля нет вовсе — только база: у площадки нормаль вертикальна, у
+          // рампы постоянна, и вершины квада получают одну и ту же (REND-7).
+          quadNormal(h00, h10, h11, h01, 0.5, 0.5, tile, scratch);
+          for (let i = 0; i < 4; i++) normals.push(scratch.x, scratch.y, scratch.z);
+        } else {
+          pushSurfaceNormal(normals, surface, x, y, x * tile, y * tile, scratch);
+          pushSurfaceNormal(normals, surface, x, y, (x + 1) * tile, y * tile, scratch);
+          pushSurfaceNormal(normals, surface, x, y, (x + 1) * tile, (y + 1) * tile, scratch);
+          pushSurfaceNormal(normals, surface, x, y, x * tile, (y + 1) * tile, scratch);
+        }
+        // CCW при взгляде с +Z — нормаль вверх.
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        continue;
       }
-      const base = positions.length / 3;
-      positions.push(
-        x * tile, y * tile, h00,
-        (x + 1) * tile, y * tile, h10,
-        (x + 1) * tile, (y + 1) * tile, h11,
-        x * tile, (y + 1) * tile, h01,
-      );
-      // CCW при взгляде с +Z — нормаль вверх.
-      indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+
+      // Разбиение: вершины стоят на поле, а не на хорде между углами клетки.
+      const field = surface!;
+      for (let j = 0; j < divisions; j++) {
+        for (let i = 0; i < divisions; i++) {
+          const ax = (x + i / divisions) * tile;
+          const bx = (x + (i + 1) / divisions) * tile;
+          const ay = (y + j / divisions) * tile;
+          const by = (y + (j + 1) / divisions) * tile;
+          const base = positions.length / 3;
+          pushSurfaceVertex(positions, normals, field, x, y, ax, ay, scratch);
+          pushSurfaceVertex(positions, normals, field, x, y, bx, ay, scratch);
+          pushSurfaceVertex(positions, normals, field, x, y, bx, by, scratch);
+          pushSurfaceVertex(positions, normals, field, x, y, ax, by, scratch);
+          indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        }
+      }
     }
   }
-  return { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
+  return {
+    positions: new Float32Array(positions),
+    indices: new Uint32Array(indices),
+    normals: new Float32Array(normals),
+  };
+}
+
+/** Вершина на поле: позиция и нормаль читаются в клетке-владельце (REND-9). */
+function pushSurfaceVertex(
+  positions: number[],
+  normals: number[],
+  surface: VisualSurface,
+  cellX: number,
+  cellY: number,
+  wx: number,
+  wy: number,
+  scratch: SurfaceNormal,
+): void {
+  positions.push(wx, wy, surface.heightInCell(cellX, cellY, wx, wy));
+  pushSurfaceNormal(normals, surface, cellX, cellY, wx, wy, scratch);
+}
+
+function pushSurfaceNormal(
+  normals: number[],
+  surface: VisualSurface,
+  cellX: number,
+  cellY: number,
+  wx: number,
+  wy: number,
+  scratch: SurfaceNormal,
+): void {
+  surface.normalInCell(cellX, cellY, wx, wy, scratch);
+  normals.push(scratch.x, scratch.y, scratch.z);
+}
+
+/**
+ * Нормаль билинейной площадки по её углам — вырожденный случай «поля нет»:
+ * слагаемого кривизны не существует, остаётся производная базы. Второй
+ * реализации ПОЛЯ это не заводит (REND-9): поля здесь нет вовсе.
+ */
+function quadNormal(
+  h00: number,
+  h10: number,
+  h11: number,
+  h01: number,
+  u: number,
+  v: number,
+  tile: number,
+  out: SurfaceNormal,
+): void {
+  const dhdx = ((1 - v) * (h10 - h00) + v * (h11 - h01)) / tile;
+  const dhdy = ((1 - u) * (h01 - h00) + u * (h11 - h10)) / tile;
+  const invLen = 1 / Math.sqrt(dhdx * dhdx + dhdy * dhdy + 1);
+  out.x = -dhdx * invLen;
+  out.y = -dhdy * invLen;
+  out.z = invLen;
 }
 
 /**
@@ -119,6 +233,11 @@ export function buildFloorGeometry(
  * фактических визуальных высот углов обеих клеток (skirt): кривизна смещает
  * кромку пола, и стенка обязана дойти до неё без щели (REND-9).
  *
+ * Если хотя бы одна из клеток отрезка несёт кривизну, кромка пола над стенкой
+ * разбита — и стенка разбивается вместе с ней на `tessellation` квадов теми же
+ * выборками поля: спрямлённая хордой стенка под разбитым полом дала бы щель
+ * (REND-9). Отрезок без кривизны с обеих сторон остаётся одним квадом.
+ *
  * `bounds` ограничивает выборку отрезками, чья ВЛАДЕЮЩАЯ клетка попала в
  * прямоугольник. Владелец — клетка с меньшей координатой по нормали ребра
  * (`cellA`), поэтому владение — разбиение: объединение стенок всех чанков даёт
@@ -129,9 +248,13 @@ export function buildWallGeometry(
   heightStep: number,
   surface?: VisualSurface,
   bounds?: CellRect,
+  tessellation: number = DEFAULT_CURVATURE_TESSELLATION,
 ): TerrainGeometryData {
   const positions: number[] = [];
   const indices: number[] = [];
+  // Приём `tileSize` — та же точка входной границы, что у пола (REND-1, TERR-2).
+  const tile = grid.tileSize / FIXED_ONE;
+  const steps = Math.max(1, Math.floor(tessellation));
 
   /** Высота угла клетки (cx, cy) в узле сетки (nodeX, nodeY). */
   const cornerHeight = (cell: number, nodeX: number, nodeY: number): number => {
@@ -183,34 +306,89 @@ export function buildWallGeometry(
     const fromNodeY = Math.round(edge.from.y / grid.tileSize);
     const toNodeX = Math.round(edge.to.x / grid.tileSize);
     const toNodeY = Math.round(edge.to.y / grid.tileSize);
-    const fromA = cornerHeight(cellA, fromNodeX, fromNodeY);
-    const fromB = cornerHeight(cellB, fromNodeX, fromNodeY);
-    const toA = cornerHeight(cellA, toNodeX, toNodeY);
-    const toB = cornerHeight(cellB, toNodeX, toNodeY);
-    const lowFrom = Math.min(fromA, fromB);
-    const highFrom = Math.max(fromA, fromB);
-    const lowTo = Math.min(toA, toB);
-    const highTo = Math.max(toA, toB);
 
     const fx = edge.from.x / FIXED_ONE;
     const fy = edge.from.y / FIXED_ONE;
     const tx = edge.to.x / FIXED_ONE;
     const ty = edge.to.y / FIXED_ONE;
 
-    const base = positions.length / 3;
-    positions.push(fx, fy, lowFrom, tx, ty, lowTo, tx, ty, highTo, fx, fy, highFrom);
-    // Материал двусторонний — ориентация не нормируется.
-    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    // Разбиение кромки — ровно там, где разбита кромка пола над стенкой.
+    const divisions =
+      surface !== undefined &&
+      (surface.hasCellCurvature(cellA % grid.width, Math.floor(cellA / grid.width)) ||
+        surface.hasCellCurvature(cellB % grid.width, Math.floor(cellB / grid.width)))
+        ? steps
+        : 1;
+
+    // Концы отрезка берутся по углам клеток — так же, как до разбиения, чтобы
+    // отрезок без кривизны давал побитово прежний квад; промежуточные точки —
+    // тем же `heightInCell`, каким считает пол.
+    let prevX = fx;
+    let prevY = fy;
+    let prevLow = 0;
+    let prevHigh = 0;
+    for (let i = 0; i <= divisions; i++) {
+      let px: number;
+      let py: number;
+      let hA: number;
+      let hB: number;
+      if (i === 0 || i === divisions) {
+        const nodeX = i === 0 ? fromNodeX : toNodeX;
+        const nodeY = i === 0 ? fromNodeY : toNodeY;
+        px = i === 0 ? fx : tx;
+        py = i === 0 ? fy : ty;
+        hA = cornerHeight(cellA, nodeX, nodeY);
+        hB = cornerHeight(cellB, nodeX, nodeY);
+      } else {
+        px = (fromNodeX + ((toNodeX - fromNodeX) * i) / divisions) * tile;
+        py = (fromNodeY + ((toNodeY - fromNodeY) * i) / divisions) * tile;
+        hA = sampleWallSide(grid, heightStep, surface, cellA, px, py);
+        hB = sampleWallSide(grid, heightStep, surface, cellB, px, py);
+      }
+      const low = Math.min(hA, hB);
+      const high = Math.max(hA, hB);
+      if (i > 0) {
+        const base = positions.length / 3;
+        positions.push(prevX, prevY, prevLow, px, py, low, px, py, high, prevX, prevY, prevHigh);
+        // Материал двусторонний — ориентация не нормируется.
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      }
+      prevX = px;
+      prevY = py;
+      prevLow = low;
+      prevHigh = high;
+    }
   }
   return { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
 }
 
-/** BufferGeometry из числовых данных; нормали считаются по треугольникам. */
+/** Высота поля в клетке стороны отрезка; без поля — плоская ступень уровня. */
+function sampleWallSide(
+  grid: TerrainGrid,
+  heightStep: number,
+  surface: VisualSurface | undefined,
+  cell: number,
+  wx: number,
+  wy: number,
+): number {
+  if (surface === undefined) return grid.levels[cell]! * heightStep;
+  return surface.heightInCell(cell % grid.width, Math.floor(cell / grid.width), wx, wy);
+}
+
+/**
+ * BufferGeometry из числовых данных. Готовые нормали ставятся атрибутом (пол:
+ * они посчитаны из поля высот, REND-9); если их нет — считаются по
+ * треугольникам, и стенка обрыва остаётся плоской.
+ */
 export function toBufferGeometry(data: TerrainGeometryData): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
-  geometry.computeVertexNormals();
+  if (data.normals !== undefined && data.normals.length === data.positions.length) {
+    geometry.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
+  } else {
+    geometry.computeVertexNormals();
+  }
   return geometry;
 }
 
@@ -249,6 +427,8 @@ export class TerrainSubsystem implements RenderSubsystem {
 
   private ctx: RenderContext | null = null;
   private heightStep = 1;
+  /** Плотность разбиения клеток с кривизной — параметр рендера (REND-9). */
+  private tessellation = DEFAULT_CURVATURE_TESSELLATION;
   /** Собственная копия карты пола: presentation-состояние может жить без террейна. */
   private floor: Uint8Array;
   private chunksX: number;
@@ -273,6 +453,7 @@ export class TerrainSubsystem implements RenderSubsystem {
   init(ctx: RenderContext): void {
     this.ctx = ctx;
     this.heightStep = ctx.config.heightStep;
+    this.tessellation = ctx.config.curvatureTessellation ?? DEFAULT_CURVATURE_TESSELLATION;
     this.floorMaterial = new THREE.MeshStandardMaterial({
       color: this.floorColor,
       roughness: 0.95,
@@ -300,10 +481,11 @@ export class TerrainSubsystem implements RenderSubsystem {
   }
 
   /**
-   * Сетка редактируемого документа целиком (ED-10, ED-15): уровни, флаги, пол и
-   * производная cliff-геометрия. Считает её ЯДРО (`createTerrainGrid`, TERR-5)
-   * — подсистема сводит пришедшее с нарисованным и инвалидирует только
-   * затронутые чанки; пересоздавать подсистему на мазок кисти не нужно.
+   * Сетка редактируемого документа целиком (REND-14, ED-10, ED-15): уровни,
+   * флаги, пол и производная cliff-геометрия. Считает её ЯДРО
+   * (`createTerrainGrid`, TERR-5) — подсистема сводит пришедшее с нарисованным
+   * и инвалидирует только затронутые чанки; пересоздавать подсистему на мазок
+   * кисти не нужно.
    *
    * Пол сверяется с СОБСТВЕННОЙ копией, а не с прежней сеткой: её мог изменить
    * поток тиков превью (TERR-6), и возврат к документам обязан эту мутацию
@@ -452,13 +634,14 @@ export class TerrainSubsystem implements RenderSubsystem {
         rect.w,
         rect.h,
         this.surface,
+        this.tessellation,
       ),
       this.floorMaterial,
       `terrain:chunk:${cx},${cy}`,
     );
     this.wallMeshes[chunk] = this.swapMesh(
       this.wallMeshes[chunk] ?? null,
-      buildWallGeometry(this.grid, this.heightStep, this.surface, rect),
+      buildWallGeometry(this.grid, this.heightStep, this.surface, rect, this.tessellation),
       this.wallMaterial,
       `terrain:walls:${cx},${cy}`,
     );

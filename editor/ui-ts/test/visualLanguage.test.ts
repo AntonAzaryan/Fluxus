@@ -11,6 +11,12 @@
 import { describe, expect, it } from 'vitest';
 import { STYLE_RULES, editorStylesheet, type CssRule } from '../src/tokens/stylesheet.js';
 import { TOKENS, tokensOf } from '../src/tokens/tokens.js';
+import { findAll, hasClass, type UiNode } from '../src/dom/node.js';
+import { ICONS } from '../src/widgets/icon.js';
+import { keyLabel } from '../src/frame/keys.js';
+import { CAMERA_KEYS } from '../src/areas/sceneCamera.js';
+import { SCENE_AREA_KEYS, sceneArea } from '../src/areas/scene.js';
+import { buildFrame, buildLoadedFrame, zoneOf } from './support/frame.js';
 
 const body = (rule: CssRule): string => rule.declarations.join(';');
 const mentions = (rule: CssRule, prefix: string): boolean => body(rule).includes(prefix);
@@ -106,10 +112,11 @@ describe('ED-22: акцент закреплён за интерактивным
 
   it('акцент присутствует ровно в пяти местах, названных ED-22', () => {
     // Выделение, фокус, активная рабочая область, включённый переключатель,
-    // primary-действие. Мест пять, признаков шесть: активную область помечает
-    // знак в рельсе (`fx-is-active`), а «включённый» носят и переключатель
-    // (`fx-is-on`), и чип включённого инструмента (`fx-chip--active`) — это
-    // один и тот же случай, показанный двумя разными виджетами.
+    // primary-действие. Мест пять, признаков семь: активную область помечает
+    // знак в рельсе (`fx-is-active`), а «включённый» носят переключатель
+    // (`fx-is-on`), чип включённого инструмента (`fx-chip--active`) и
+    // кнопка-знак с нажатым состоянием (`aria-pressed`, ED-31) — это один и
+    // тот же случай, показанный тремя разными виджетами.
     const places = [
       'fx-button--primary',
       ':focus',
@@ -117,6 +124,7 @@ describe('ED-22: акцент закреплён за интерактивным
       'fx-is-on',
       'fx-is-active',
       'fx-chip--active',
+      "[aria-pressed='true']",
     ];
     const accented = painting.filter((rule) => mentions(rule, 'var(--fx-accent'));
     for (const place of places) {
@@ -154,5 +162,103 @@ describe('ED-22: таблица стилей', () => {
     expect(css.length).toBeGreaterThan(0);
     expect((css.match(/\{/g) ?? []).length).toBe(STYLE_RULES.length);
     expect((css.match(/\}/g) ?? []).length).toBe(STYLE_RULES.length);
+  });
+});
+
+/**
+ * ED-31: «Инструменты и переключатели бара поверхности правки SHALL
+ * опознаваться знаком, а не подписью… У каждого такого элемента SHALL быть
+ * доступное имя и подсказка, и оба SHALL приходить строковыми ресурсами».
+ *
+ * Проверяется на собранной странице области, а не на списке знаков: заглушка
+ * появляется не в наборе иконок, а в баре — там, где элементу «пока» ставят
+ * чужой знак.
+ */
+const barsOf = (view: UiNode): UiNode[] => findAll(view, (node) => hasClass(node, 'fx-bar'));
+
+const iconButtonsOf = (root: UiNode): UiNode[] =>
+  findAll(root, (node) => hasClass(node, 'fx-button--icon'));
+
+const iconNameOf = (node: UiNode): string | undefined =>
+  findAll(node, (inner) => inner.attrs?.['data-icon'] !== undefined)[0]?.attrs?.['data-icon'];
+
+describe('ED-31: инструменты вьюпорта — знак, имя, подсказка', () => {
+  it('бар области сцены собран из знаковых элементов, а не из подписей', async () => {
+    const { frame } = await buildLoadedFrame();
+    const bar = barsOf(zoneOf(frame.view(), 'surface'))[0];
+    expect(bar, 'у области сцены нет бара').toBeDefined();
+    expect(iconButtonsOf(bar ?? { tag: 'div' }).length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('у каждого знакового элемента есть имя и подсказка из ресурсов', async () => {
+    const { frame, resources } = await buildLoadedFrame();
+    for (const bar of barsOf(frame.view())) {
+      for (const element of iconButtonsOf(bar)) {
+        const name = element.labels?.ariaLabel;
+        const title = element.labels?.title;
+        expect(name?.origin, iconNameOf(element)).toBe('resource');
+        expect(title?.origin, iconNameOf(element)).toBe('resource');
+        expect(resources.lookup(name?.key ?? ''), name?.key).toBeDefined();
+        // Знак объявлен и не подписан текстом: имя существует, но не нарисовано.
+        expect(iconNameOf(element), name?.key).toBeDefined();
+        expect(findAll(element, (inner) => inner.text !== undefined)).toHaveLength(0);
+      }
+    }
+  });
+
+  it('два элемента одного бара не несут одного знака', async () => {
+    const { frame } = await buildLoadedFrame();
+    for (const bar of barsOf(frame.view())) {
+      const signs = iconButtonsOf(bar).map((element) => iconNameOf(element));
+      expect(new Set(signs).size, signs.join(',')).toBe(signs.length);
+    }
+  });
+
+  it('геометрия знаков различна попарно: чужой знак не различал бы элементы', () => {
+    const shapes = Object.values(ICONS).map((geometry) => geometry.paths.join('|'));
+    expect(new Set(shapes).size).toBe(shapes.length);
+  });
+
+  it('переключатель облёта не меняет имени, а объявляет нажатое состояние', async () => {
+    const { frame, stage } = await buildLoadedFrame();
+    const flyOf = (): UiNode | undefined =>
+      iconButtonsOf(frame.view()).find(
+        (node) => node.labels?.ariaLabel?.key === 'ui.area.scene.cameraFly',
+      );
+    const before = flyOf();
+    expect(before?.attrs?.['aria-pressed']).toBe('false');
+    stage.toggleFly();
+    const after = flyOf();
+    // Имя то же самое, изменилось только состояние (ED-31, ED-22).
+    expect(after?.labels?.ariaLabel?.key).toBe(before?.labels?.ariaLabel?.key);
+    expect(after?.labels?.ariaLabel?.value).toBe(before?.labels?.ariaLabel?.value);
+    expect(after?.attrs?.['aria-pressed']).toBe('true');
+  });
+
+  it('подсказка называет ту же клавишу, которая работает', async () => {
+    const { frame } = await buildLoadedFrame();
+    const fly = iconButtonsOf(frame.view()).find(
+      (node) => node.labels?.ariaLabel?.key === 'ui.area.scene.cameraFly',
+    );
+    const declared = SCENE_AREA_KEYS.find((key) => key.code === CAMERA_KEYS.flyToggle);
+    expect(declared).toBeDefined();
+    // Перечень один: подсказка собрана из той же раскладки, по которой клавиша
+    // и разбирается (ED-32), а не из второго списка «для подсказок».
+    expect(fly?.labels?.title?.value).toContain(keyLabel(declared?.code ?? ''));
+    expect(fly?.labels?.title?.suffix).toBe(` (${keyLabel(CAMERA_KEYS.flyToggle)})`);
+  });
+
+  it('недоступный элемент бара остаётся достижимым и объявленным (ED-26)', () => {
+    // Без открытого проекта кадра нет, и кнопки камеры показаны недоступными.
+    const { frame } = buildFrame([sceneArea]);
+    const disabled = iconButtonsOf(frame.view()).filter(
+      (node) => node.attrs?.['aria-disabled'] === 'true',
+    );
+    expect(disabled.length).toBeGreaterThan(0);
+    for (const element of disabled) {
+      // `aria-disabled`, а не `disabled`: из обхода элемент не выпадает.
+      expect(element.attrs?.['disabled']).toBeUndefined();
+      expect(element.labels?.ariaLabel?.origin).toBe('resource');
+    }
   });
 });

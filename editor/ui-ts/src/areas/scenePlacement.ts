@@ -1,5 +1,5 @@
 /**
- * @contribution Операции расстановки сим-объектов сцены (ED-16) — вклад в слой
+ * @contribution Операции расстановки размещённого (ED-16) — вклад в слой
  * операций авторинга (ED-29), а не часть каркаса.
  *
  * ED-29 не оставляет выбора: «Всякая правка редактируемых документов SHALL
@@ -9,6 +9,23 @@
  * непрерывное перетаскивание — одна транзакция сессии, а значит одна запись
  * истории, независимо от числа кадров, на которые оно пришлось.
  *
+ * ## Почему перемещение и поворот — одна операция на два слоя
+ *
+ * Постановка у сим-объекта и у декорации разная по существу: одна называет
+ * prefab, вторая — визуальный вид, и это две операции (`scene.placement.add` и
+ * `scene.decoration.add`). Перемещение и поворот — одно действие: ED-17 требует,
+ * чтобы групповые операции действовали на всё выделение, а выделение по
+ * построению бывает смешанным — юнит и декорация разом (сценарий ED-16). Две
+ * операции на это одно действие означали бы две транзакции на одно
+ * перетаскивание, то есть две записи истории там, где автор тащил один раз, —
+ * а сессия второй транзакции поверх открытой и не даст (ED-18).
+ *
+ * Поэтому слой приходит ПАРАМЕТРОМ (`layer`), и различие форматов остаётся
+ * ровно там, где оно есть: сим-объект получает величины в Q16.16 внутри
+ * переопределений компонента (FP-1, SER-8), декорация — десятичные поля своей
+ * записи (PRES-2, PRES-3). Одно поведение — одно имя в машинном каталоге
+ * (ED-30).
+ *
  * ## Что операции знают о содержимом и чего не знают
  *
  * Запись расстановки — `prefab` и переопределения полей (SER-8), и именованных
@@ -17,6 +34,9 @@
  * литералом здесь; умолчание берётся у ядра (`DEFAULT_POSITION_BINDING`), у
  * которого оно и живёт. Внешний потребитель, вызывающий операцию без интерфейса,
  * подаёт ту же привязку тем же параметром: второго пути нет.
+ *
+ * У декорации привязки нет и быть не может: полей симуляции в парном документе
+ * не бывает ни под каким именем (PRES-2), а позиция лежит прямо в записи.
  *
  * ## Порядок записей
  *
@@ -56,8 +76,11 @@ import {
   type OperationParamSpec,
   type OperationRegistry,
 } from '@game-mvp/editor-core';
+import { quantizeDecorationLength, quantizeDecorationYaw } from '@game-mvp/assets';
 import {
+  DECORATION_FIELDS,
   DEFAULT_POSITION_BINDING,
+  type PlacementLayer,
   type PositionBinding,
   type RotationBinding,
 } from './sceneDocuments.js';
@@ -70,6 +93,45 @@ export const PLACEMENT_OPERATIONS = {
   /** `document.list.remove`: удалять запись по дескриптору умеет базовый набор. */
   remove: 'document.list.remove',
 } as const;
+
+/**
+ * Слой размещённого в параметрах операции. Отсутствует — сим-объект: слой,
+ * существовавший раньше decoration'ов, и умолчание оставляет прежние вызовы
+ * прежними.
+ */
+function readLayer(operationId: string, params: OperationParams): PlacementLayer {
+  const raw = params['layer'];
+  if (raw === undefined || raw === null) return 'sim';
+  if (raw !== 'sim' && raw !== 'decoration') {
+    throw new OperationError(operationId, 'параметр "layer": ожидался "sim" либо "decoration"', {
+      param: 'layer',
+      received: raw,
+    });
+  }
+  return raw;
+}
+
+/**
+ * Авторская величина с экрана в десятичное число парного документа (PRES-3).
+ * Квантует не эта функция, а модуль, которому формат принадлежит: шаг —
+ * свойство формата, и второе его определение здесь разошлось бы с первым так
+ * же молча, как своё умножение на 65536 разошлось бы с `fixed.fromFloat`.
+ */
+function requireDecimal(
+  operationId: string,
+  param: string,
+  value: number,
+  yaw: boolean,
+): number {
+  const quantizedValue = yaw ? quantizeDecorationYaw(value) : quantizeDecorationLength(value);
+  if (quantizedValue === null) {
+    throw new OperationError(operationId, `параметр "${param}": не конечное число (PRES-3)`, {
+      param,
+      received: value,
+    });
+  }
+  return quantizedValue;
+}
 
 /** Путь переопределений внутри записи расстановки (SER-8). */
 export const OVERRIDES_KEY = 'overrides';
@@ -92,6 +154,11 @@ const BINDING: OperationParamSpec = {
   type: 'json',
   optional: true,
   descriptionKey: 'ui.operation.param.binding',
+};
+const LAYER: OperationParamSpec = {
+  type: 'string',
+  optional: true,
+  descriptionKey: 'ui.operation.param.layer',
 };
 
 /**
@@ -241,16 +308,23 @@ export const addPlacementOperation: AuthoringOperation = {
 export const movePlacementOperation: AuthoringOperation = {
   id: PLACEMENT_OPERATIONS.move,
   descriptionKey: 'ui.operation.scene.placement.move',
-  params: { document: DOCUMENT, record: RECORD, x: X, y: Y, binding: BINDING },
+  params: { document: DOCUMENT, record: RECORD, x: X, y: Y, binding: BINDING, layer: LAYER },
   apply(ctx, params) {
     const id = PLACEMENT_OPERATIONS.move;
-    const binding = readBinding(id, params);
     const document = asDocument(params);
     const record = asRecord(params);
     // Обе величины квантуются ДО первой записи: отказ по второй иначе оставлял
     // бы записанной первую. Откатить это умеет и сессия (упавшее применение
     // возвращается целиком), но операция, которой для целостности нужен чужой
     // откат, целостна лишь до первого вызывающего, который его не сделает.
+    if (readLayer(id, params) === 'decoration') {
+      const dx = requireDecimal(id, 'x', asNumber(params, 'x'), false);
+      const dy = requireDecimal(id, 'y', asNumber(params, 'y'), false);
+      ctx.setRecordValue(document, record, [DECORATION_FIELDS.x], dx);
+      ctx.setRecordValue(document, record, [DECORATION_FIELDS.y], dy);
+      return undefined;
+    }
+    const binding = readBinding(id, params);
     const x = requireQuantized(id, 'x', asNumber(params, 'x'));
     const y = requireQuantized(id, 'y', asNumber(params, 'y'));
     ctx.setRecordValue(document, record, [OVERRIDES_KEY, binding.component, binding.x], x);
@@ -266,15 +340,27 @@ export const movePlacementOperation: AuthoringOperation = {
 export const rotatePlacementOperation: AuthoringOperation = {
   id: PLACEMENT_OPERATIONS.rotate,
   descriptionKey: 'ui.operation.scene.placement.rotate',
-  params: { document: DOCUMENT, record: RECORD, turns: TURNS, binding: BINDING },
+  params: { document: DOCUMENT, record: RECORD, turns: TURNS, binding: BINDING, layer: LAYER },
   apply(ctx, params) {
     const id = PLACEMENT_OPERATIONS.rotate;
+    const turns = asNumber(params, 'turns');
+    if (readLayer(id, params) === 'decoration') {
+      // Курс декорации лежит полем записи, а привязки проекта у неё нет вовсе:
+      // полей симуляции в парном документе не бывает (PRES-2).
+      ctx.setRecordValue(
+        asDocument(params),
+        asRecord(params),
+        [DECORATION_FIELDS.yaw],
+        requireDecimal(id, 'turns', turns, true),
+      );
+      return undefined;
+    }
     const spin = requireRotation(id, readBinding(id, params));
     ctx.setRecordValue(
       asDocument(params),
       asRecord(params),
       [OVERRIDES_KEY, spin.component, spin.field],
-      requireQuantized(id, 'turns', asNumber(params, 'turns')),
+      requireQuantized(id, 'turns', turns),
     );
     return undefined;
   },

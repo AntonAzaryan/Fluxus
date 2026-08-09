@@ -32,6 +32,7 @@ import * as worldModule from './ecs/world.js';
 export const world = {
   cloneWorld: worldModule.cloneWorld,
   componentId: worldModule.componentId,
+  componentNames: worldModule.componentNames,
   componentSchema: worldModule.componentSchema,
   dirtyEntities: worldModule.dirtyEntities,
   dirtyIsEmpty: worldModule.dirtyIsEmpty,
@@ -41,6 +42,7 @@ export const world = {
   indexOf: worldModule.indexOf,
   isAlive: worldModule.isAlive,
   listAlive: worldModule.listAlive,
+  prefabNames: worldModule.prefabNames,
   prefabOf: worldModule.prefabOf,
   toPlain: worldModule.toPlain,
 } as const;

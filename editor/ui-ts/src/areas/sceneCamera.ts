@@ -25,6 +25,7 @@ import {
   edgePanAxes,
   resetCameraInput,
   terrainGroundApi,
+  type CameraBounds,
   type CameraConfig,
   type CameraInput,
   type CameraPose,
@@ -50,6 +51,26 @@ export const CAMERA_KEYS = {
   flyDown: 'KeyQ',
 } as const;
 
+/**
+ * Настройки конвейера у кадра редактора (CAM-1) — ровно то одно, чем он
+ * отличается от игрового.
+ *
+ * ED-13 требует совпадения с игровым конфигом по наклону, дистанции и FOV **по
+ * умолчанию**; потолка зума в этом перечне нет, и он остаётся настройкой
+ * конвейера (CAM-1). Поднят он не по вкусу, а по замеру: обзор арены сцены из
+ * `content/` (34×34) требует дистанции около полусотни, тогда как игровой
+ * потолок — 28. На нём обзорный кадр упирается в кламп (CAM-8 прямо говорит,
+ * что кадрирование клампа не обходит), южный край арены остаётся за кадром, а
+ * «Отдалить» сразу после открытия не делает ничего. Design работы называет это
+ * решение прямо: потолок зума лечится потолком в конфиге вьюпорта, а не
+ * исключением из клампа и не своим расчётом позы.
+ *
+ * Число щедрое, а не подогнанное под сегодняшнюю арену: подогнанное разошлось
+ * бы с первой же ареной, которую автор нарисует крупнее. `DEFAULT_CAMERA_CONFIG`
+ * при этом не трогается — игровой кадр остаётся с игровым потолком.
+ */
+export const EDITOR_CAMERA_CONFIG: Partial<CameraConfig> = Object.freeze({ maxDistance: 240 });
+
 /** Положение указателя в прямоугольнике кадра — вход edge-панорамы (CAM-3). */
 export interface PointerSample {
   readonly x: number;
@@ -66,7 +87,10 @@ export interface SceneCameraOptions {
   readonly grid?: TerrainGrid;
   /** Шаг высоты уровня — параметр рендера (REND-7); тот же, что у подсистемы. */
   readonly heightStep: number;
-  /** Настройки конвейера (CAM-1). Игровой кадр — значения по умолчанию. */
+  /**
+   * Настройки конвейера (CAM-1) поверх редакторских (`EDITOR_CAMERA_CONFIG`):
+   * поданное здесь перекрывает их, всё остальное остаётся игровым умолчанием.
+   */
   readonly config?: Partial<CameraConfig>;
 }
 
@@ -78,8 +102,22 @@ export interface SceneCamera {
   /** Точка наблюдения — её показывает бар области. */
   readonly focusX: number;
   readonly focusY: number;
+  /**
+   * Границы арены документа; `null` — кадра без террейна (ED-20) арена не
+   * касается. Отдаются тем же источником, что инжектирован в конвейер (CAM-7):
+   * второго вычисления размеров арены в редакторе не заводится.
+   */
+  readonly arena: CameraBounds | null;
   /** Правка документа террейна под камерой: переподача источников (CAM-7). */
   setGrid(grid: TerrainGrid): void;
+  /**
+   * Кадрирование по заданным границам (CAM-8) — прокси к входу конвейера.
+   * Считает позу конвейер: ED-13 запрещает второй способ её считать, и потому
+   * здесь нет ни одной строки арифметики. ЧТО кадрировать и КОГДА — политика
+   * потребителя, поэтому прямоугольник и пропорции приходят аргументами:
+   * свои размеры знает кадр, а не камера.
+   */
+  frameBounds(rect: CameraBounds, aspect: number, immediate?: boolean): void;
   /** Оси панорамы по зажатым клавишам и указателю (CAM-3). */
   sample(keys: ReadonlySet<string>, pointer: PointerSample | null): void;
   /** Drag средней кнопкой (CAM-3) и осмотр в облёте — в пикселях за кадр. */
@@ -113,7 +151,8 @@ export function createSceneCamera(options: SceneCameraOptions): SceneCamera {
           startX: (ground.bounds.maxX + ground.bounds.minX) / 2,
           startY: (ground.bounds.maxY + ground.bounds.minY) / 2,
         }),
-    ...(options.config === undefined ? {} : { config: options.config }),
+    // Конфиг кадра правки — редакторский; поданное сборкой ложится поверх.
+    config: { ...EDITOR_CAMERA_CONFIG, ...options.config },
   });
 
   return {
@@ -126,6 +165,13 @@ export function createSceneCamera(options: SceneCameraOptions): SceneCamera {
     },
     get focusY(): number {
       return rig.focusY;
+    },
+    get arena(): CameraBounds | null {
+      return ground?.bounds ?? null;
+    },
+
+    frameBounds(rect, aspect, immediate = false) {
+      rig.frameBounds({ rect, aspect, immediate });
     },
 
     setGrid(grid) {

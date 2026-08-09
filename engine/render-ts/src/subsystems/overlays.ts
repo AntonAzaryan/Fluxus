@@ -31,7 +31,12 @@
  */
 import * as THREE from 'three';
 import { FIXED_ONE, type EntityId } from '@game-mvp/core';
-import type { RenderContext, RenderSubsystem, TickView } from '../types.js';
+import {
+  DEFAULT_CURVATURE_TESSELLATION,
+  type RenderContext,
+  type RenderSubsystem,
+  type TickView,
+} from '../types.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import type { VisualSurface } from '../visualSurface.js';
 import {
@@ -64,11 +69,19 @@ export interface OverlayHandle {
   readonly active?: boolean;
 }
 
-/** Подсветка сущности presentation-состояния в её видимой позе. */
+/** Подсветка инстанса в его видимой позе. */
 export interface OverlayHighlight {
   readonly kind: 'highlight';
   readonly key: string;
   readonly entity: EntityId;
+  /**
+   * Подсвечивается decoration-инстанс (REND-18), а не сущность
+   * presentation-состояния. Признак, а не отдельный вид наложения: подсветка у
+   * сим-объекта и у декорации одна и та же — этого требует единообразие
+   * выделения (`editor` ED-17), — а различаются только наборы, в которых
+   * ищется инстанс.
+   */
+  readonly decoration?: boolean;
 }
 
 /** Ручки gizmo в заданной позе. */
@@ -185,6 +198,8 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
   private readonly lift: number;
 
   private ctx: RenderContext | null = null;
+  /** Плотность разбиения — та же, что у пола: наложение лежит на той же выборке. */
+  private tessellation = DEFAULT_CURVATURE_TESSELLATION;
   private readonly group = new THREE.Group();
   private readonly nodes = new Map<string, OverlayNode>();
   private attached = false;
@@ -220,6 +235,10 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
 
   init(ctx: RenderContext): void {
     this.ctx = ctx;
+    this.tessellation = Math.max(
+      1,
+      Math.floor(ctx.config.curvatureTessellation ?? DEFAULT_CURVATURE_TESSELLATION),
+    );
     // Общий с подсистемами террейна и моделей источник поверхности; init идемпотентен.
     this.options.surface?.init(ctx);
     this.options.surface?.onChange(() => {
@@ -342,6 +361,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
     for (const node of this.nodes.values()) {
       for (const handle of node.handles) {
         this.handleProxy.entity = 0;
+        this.handleProxy.decoration = false;
         this.handleProxy.handle = handle.id;
         this.handleProxy.node = handle.mesh;
         this.handleProxy.minX = handle.minX;
@@ -413,7 +433,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
     const material = this.highlightMaterial;
     if (edges === null || material === null) return;
     const outline = new THREE.LineSegments(edges, material);
-    outline.name = `highlight:${item.entity}`;
+    outline.name = `highlight:${item.decoration === true ? 'decoration:' : ''}${item.entity}`;
     outline.matrixAutoUpdate = false;
     outline.renderOrder = 1;
     node.object.add(outline);
@@ -429,7 +449,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
     const outline = node.object.children[0];
     if (outline === undefined) return;
     const source = this.options.instances;
-    if (source === undefined || !source.proxyOf(item.entity, this.proxy)) {
+    if (source === undefined || !source.proxyOf(item.entity, this.proxy, item.decoration === true)) {
       outline.visible = false;
       return;
     }
@@ -490,6 +510,10 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
    * Клетки лежат на визуальной поверхности (REND-9) — по кривизне и рампам, а не
    * на плоскости уровня: иначе превью кисти на холме показывает автору не те
    * клетки, которые кисть покрасит (ED-11).
+   *
+   * Ячейка строится ТОЙ ЖЕ выборкой и с той же плотностью, что пол под ней:
+   * плоский квад на сглаженном холме провалился бы в него серединой. Наложений
+   * в кадре единицы, поэтому отдельного параметра плотности у них нет.
    */
   private buildCells(node: OverlayNode, item: OverlayCells): void {
     const source = this.options.surface;
@@ -505,15 +529,33 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
       if (cell < 0 || cell >= grid.width * grid.height) continue;
       const x = cell % grid.width;
       const y = Math.floor(cell / grid.width);
-      const [h00, h10, h11, h01] = surface.cornerHeights(x, y);
-      const base = positions.length / 3;
-      positions.push(
-        x * tile, y * tile, h00 + this.lift,
-        (x + 1) * tile, y * tile, h10 + this.lift,
-        (x + 1) * tile, (y + 1) * tile, h11 + this.lift,
-        x * tile, (y + 1) * tile, h01 + this.lift,
-      );
-      indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      if (!surface.hasCellCurvature(x, y)) {
+        const [h00, h10, h11, h01] = surface.cornerHeights(x, y);
+        const base = positions.length / 3;
+        positions.push(
+          x * tile, y * tile, h00 + this.lift,
+          (x + 1) * tile, y * tile, h10 + this.lift,
+          (x + 1) * tile, (y + 1) * tile, h11 + this.lift,
+          x * tile, (y + 1) * tile, h01 + this.lift,
+        );
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        continue;
+      }
+      const divisions = this.tessellation;
+      for (let j = 0; j < divisions; j++) {
+        for (let i = 0; i < divisions; i++) {
+          const ax = (x + i / divisions) * tile;
+          const bx = (x + (i + 1) / divisions) * tile;
+          const ay = (y + j / divisions) * tile;
+          const by = (y + (j + 1) / divisions) * tile;
+          const base = positions.length / 3;
+          pushLiftedPoint(positions, surface, x, y, ax, ay, this.lift);
+          pushLiftedPoint(positions, surface, x, y, bx, ay, this.lift);
+          pushLiftedPoint(positions, surface, x, y, bx, by, this.lift);
+          pushLiftedPoint(positions, surface, x, y, ax, by, this.lift);
+          indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        }
+      }
     }
     if (indices.length === 0) return;
     const geometry = new THREE.BufferGeometry();
@@ -540,7 +582,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
     const positions: number[] = [];
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
-        pushCellOutline(positions, surface, x, y, tile, this.lift);
+        pushCellOutline(positions, surface, x, y, tile, this.lift, this.tessellation);
       }
     }
     if (positions.length === 0) return;
@@ -568,7 +610,11 @@ function orientHandle(mesh: THREE.Mesh, handle: OverlayHandle): void {
   else if (handle.axis === 'y') mesh.rotation.set(Math.PI / 2, 0, 0);
 }
 
-/** Четыре ребра клетки по её углам визуальной поверхности. */
+/**
+ * Четыре ребра клетки по визуальной поверхности. Клетка с кривизной даёт
+ * ломаную по той же выборке поля, что и её пол (REND-9): прямой контур на
+ * сглаженном холме резал бы его насквозь.
+ */
 function pushCellOutline(
   out: number[],
   surface: VisualSurface,
@@ -576,28 +622,80 @@ function pushCellOutline(
   y: number,
   tile: number,
   lift: number,
+  tessellation: number,
 ): void {
-  const [h00, h10, h11, h01] = surface.cornerHeights(x, y);
   const x0 = x * tile;
   const y0 = y * tile;
   const x1 = (x + 1) * tile;
   const y1 = (y + 1) * tile;
-  const z00 = h00 + lift;
-  const z10 = h10 + lift;
-  const z11 = h11 + lift;
-  const z01 = h01 + lift;
-  out.push(
-    x0, y0, z00, x1, y0, z10,
-    x1, y0, z10, x1, y1, z11,
-    x1, y1, z11, x0, y1, z01,
-    x0, y1, z01, x0, y0, z00,
-  );
+  if (!surface.hasCellCurvature(x, y)) {
+    const [h00, h10, h11, h01] = surface.cornerHeights(x, y);
+    const z00 = h00 + lift;
+    const z10 = h10 + lift;
+    const z11 = h11 + lift;
+    const z01 = h01 + lift;
+    out.push(
+      x0, y0, z00, x1, y0, z10,
+      x1, y0, z10, x1, y1, z11,
+      x1, y1, z11, x0, y1, z01,
+      x0, y1, z01, x0, y0, z00,
+    );
+    return;
+  }
+  // Рёбра в том же порядке: юг (y0), восток (x1), север (y1), запад (x0).
+  pushOutlineEdge(out, surface, x, y, lift, tessellation, x0, y0, x1, y0);
+  pushOutlineEdge(out, surface, x, y, lift, tessellation, x1, y0, x1, y1);
+  pushOutlineEdge(out, surface, x, y, lift, tessellation, x1, y1, x0, y1);
+  pushOutlineEdge(out, surface, x, y, lift, tessellation, x0, y1, x0, y0);
+}
+
+/** Ребро контура ломаной по полю: `tessellation` отрезков вместо одного. */
+function pushOutlineEdge(
+  out: number[],
+  surface: VisualSurface,
+  cellX: number,
+  cellY: number,
+  lift: number,
+  tessellation: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): void {
+  let px = ax;
+  let py = ay;
+  let pz = surface.heightInCell(cellX, cellY, ax, ay) + lift;
+  for (let i = 1; i <= tessellation; i++) {
+    const t = i / tessellation;
+    const qx = ax + (bx - ax) * t;
+    const qy = ay + (by - ay) * t;
+    const qz = surface.heightInCell(cellX, cellY, qx, qy) + lift;
+    out.push(px, py, pz, qx, qy, qz);
+    px = qx;
+    py = qy;
+    pz = qz;
+  }
+}
+
+/** Точка ячейки наложения на поле, поднятая над ним на `lift`. */
+function pushLiftedPoint(
+  out: number[],
+  surface: VisualSurface,
+  cellX: number,
+  cellY: number,
+  wx: number,
+  wy: number,
+  lift: number,
+): void {
+  out.push(wx, wy, surface.heightInCell(cellX, cellY, wx, wy) + lift);
 }
 
 /** Наложение не изменилось — сценовые объекты пересобирать нечего. */
 function sameItem(a: OverlayItem, b: OverlayItem): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === 'highlight' && b.kind === 'highlight') return a.entity === b.entity;
+  if (a.kind === 'highlight' && b.kind === 'highlight') {
+    return a.entity === b.entity && (a.decoration ?? false) === (b.decoration ?? false);
+  }
   if (a.kind === 'gizmo' && b.kind === 'gizmo') {
     if (a.x !== b.x || a.y !== b.y || a.z !== b.z || (a.yaw ?? 0) !== (b.yaw ?? 0)) return false;
     if ((a.scale ?? 1) !== (b.scale ?? 1)) return false;

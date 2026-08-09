@@ -47,6 +47,12 @@ import type { VisualSurface } from './visualSurface.js';
 export interface PickProxy {
   /** Сущность presentation-состояния; 0 — прокси не сущности, а ручки. */
   entity: EntityId;
+  /**
+   * Прокси decoration-инстанса (REND-18), а не сущности presentation-состояния.
+   * Нумерация у двух наборов своя, поэтому одного `entity` для адресации
+   * попадания недостаточно — без признака ключ искали бы не в том наборе.
+   */
+  decoration: boolean;
   /** Идентичность ручки наложения (REND-16); null — прокси инстанса. */
   handle: string | null;
   /** Узел, чьей мировой матрицей инстанс или ручка нарисованы. */
@@ -73,14 +79,19 @@ export interface PickProxySource {
  * нарисован инстанс.
  */
 export interface InstanceProxySource extends PickProxySource {
-  /** Прокси сущности в out; false — рендер её не рисует, выделять нечего. */
-  proxyOf(entity: EntityId, out: PickProxy): boolean;
+  /**
+   * Прокси инстанса в out; false — рендер его не рисует, выделять нечего.
+   * `decoration` выбирает набор (REND-18): без него подсветка декорации встала
+   * бы на сущность presentation-состояния с тем же номером.
+   */
+  proxyOf(entity: EntityId, out: PickProxy, decoration?: boolean): boolean;
 }
 
 /** Пустая запись прокси — источники заполняют её на каждый визит. */
 export function createPickProxy(): PickProxy {
   return {
     entity: 0,
+    decoration: false,
     handle: null,
     node: EMPTY_NODE,
     minX: 0,
@@ -136,6 +147,12 @@ export interface PickHit {
   readonly handle: string | null;
   /** Сущность presentation-состояния; 0 — попадание не в объект. Ключ документа даёт `DocumentSource.keyOf` (REND-11). */
   readonly entity: EntityId;
+  /**
+   * Попадание пришлось на decoration-инстанс (REND-18): ключ документа тогда
+   * даёт `DecorationSet.keyOf`, а не документный источник, — наборы разные, и
+   * нумерация у них своя.
+   */
+  readonly decoration: boolean;
   /** Расстояние по лучу от точки наблюдения, мировые единицы. */
   readonly distance: number;
   /** Мировая точка попадания, float (REND-1). */
@@ -157,6 +174,7 @@ interface MutablePickHit {
   kind: PickKind;
   handle: string | null;
   entity: EntityId;
+  decoration: boolean;
   distance: number;
   x: number;
   y: number;
@@ -211,6 +229,7 @@ export class ViewportPicking {
     kind: 'surface',
     handle: null,
     entity: 0,
+    decoration: false,
     distance: 0,
     x: 0,
     y: 0,
@@ -230,15 +249,19 @@ export class ViewportPicking {
   private searchRay: PickRay = this.rayScratch;
   private bestT = Number.POSITIVE_INFINITY;
   private bestEntity: EntityId = 0;
+  private bestDecoration = false;
   private bestHandle: string | null = null;
 
   /** Визитор источника прокси; создан один раз — аллокаций в пути наведения нет. */
   private readonly visitProxy: PickProxyVisitor = (proxy: PickProxy): void => {
     const t = this.intersectProxy(this.searchRay, proxy);
-    // Побеждает ближайший; при равной дистанции — первый в порядке набора (REND-15).
+    // Побеждает ближайший; при равной дистанции — первый в порядке набора
+    // (REND-15). Порядок обхода задаёт источник, и он же ставит decoration-
+    // инстансы после инстансов presentation-состояния (REND-18).
     if (t < 0 || t >= this.bestT) return;
     this.bestT = t;
     this.bestEntity = proxy.entity;
+    this.bestDecoration = proxy.decoration;
     this.bestHandle = proxy.handle;
   };
 
@@ -319,6 +342,7 @@ export class ViewportPicking {
     this.searchRay = ray;
     this.bestT = Number.POSITIVE_INFINITY;
     this.bestEntity = 0;
+    this.bestDecoration = false;
     this.bestHandle = null;
     source.eachProxy(this.visitProxy);
     if (!Number.isFinite(this.bestT)) return false;
@@ -327,6 +351,7 @@ export class ViewportPicking {
     hit.kind = kind;
     hit.handle = this.bestHandle;
     hit.entity = this.bestEntity;
+    hit.decoration = this.bestDecoration;
     hit.distance = this.bestT;
     hit.x = ray.originX + ray.dirX * this.bestT;
     hit.y = ray.originY + ray.dirY * this.bestT;
@@ -579,6 +604,7 @@ export class ViewportPicking {
     hit.kind = 'surface';
     hit.handle = null;
     hit.entity = 0;
+    hit.decoration = false;
     hit.distance = t;
     hit.x = ray.originX + ray.dirX * t;
     hit.y = ray.originY + ray.dirY * t;

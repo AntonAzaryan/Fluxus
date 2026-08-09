@@ -224,16 +224,42 @@ const SURFACE_RULES: readonly CssRule[] = [
     ],
   },
   {
+    // Хром достижим на любой ширине окна (ED-22): не поместившийся элемент
+    // переносится, а не уходит за границу зоны. Отсюда `flex-wrap` и
+    // `min-height` вместо фиксированной высоты — строка бара в высоту не
+    // изменилась, но вторая строка ей больше не запрещена.
     selector: `${S} .fx-bar`,
     declarations: [
       'background: var(--fx-surface-2)',
       'border-bottom: var(--fx-hairline) solid var(--fx-border)',
-      'height: calc(var(--fx-control-height-action) + var(--fx-space-4))',
+      'min-height: calc(var(--fx-control-height-action) + var(--fx-space-4))',
       'display: flex',
       'align-items: center',
+      'flex-wrap: wrap',
       'gap: var(--fx-space-2)',
-      'padding: 0 var(--fx-space-3)',
+      'padding: var(--fx-space-1) var(--fx-space-3)',
       'flex: none',
+    ],
+  },
+  {
+    // Группа бара: перенос рвёт бар между группами, а не посреди пары
+    // «уровень кисти / размер кисти». Держит пару вместе не запрет переноса, а
+    // порядок раскладки flex — строки набираются целыми группами, и группа
+    // уезжает на следующую строку целиком, пока она в строку помещается.
+    //
+    // Своего переноса группа при этом не запрещает, и это не косметика:
+    // группа, которая шире всей полосы (поверхность правки на узком окне),
+    // при `flex: none` просто уходила бы за границу зоны — поворот и удаление
+    // становились недостижимы. ED-22 требует обратного, поэтому такая группа
+    // сжимается и переносится внутри себя — последней мерой, а не первой.
+    selector: `${S} .fx-bar__group`,
+    declarations: [
+      'display: flex',
+      'align-items: center',
+      'flex-wrap: wrap',
+      'gap: var(--fx-space-2)',
+      'flex: 0 1 auto',
+      'min-width: 0',
     ],
   },
 ];
@@ -282,6 +308,23 @@ const BUTTON_RULES: readonly CssRule[] = [
   {
     selector: `${S} .fx-button--ghost`,
     declarations: ['color: var(--fx-text-muted)', 'padding: 0 var(--fx-space-2)'],
+  },
+  {
+    // Кнопка-знак (ED-31): квадрат по высоте контрола — подписи в ней нет, и
+    // горизонтальные поля кнопки с подписью растянули бы её в прямоугольник.
+    selector: `${S} .fx-button--icon`,
+    declarations: ['width: var(--fx-control-height-action)', 'padding: 0', 'flex: none'],
+  },
+  {
+    // Нажатое состояние переключателя — тот же «включённый переключатель», за
+    // которым ED-22 закрепил акцент, а не второй акцент: у `fx-toggle` он же.
+    selector: `${S} .fx-button[aria-pressed='true']`,
+    role: 'interactive',
+    declarations: [
+      'background: var(--fx-accent-wash)',
+      'border-color: var(--fx-accent)',
+      'color: var(--fx-accent-bright)',
+    ],
   },
   {
     // Primary-действие — одно из пяти мест, за которыми ED-22 закрепил акцент.
@@ -448,6 +491,42 @@ const ROW_RULES: readonly CssRule[] = [
       'min-width: 0',
       'box-shadow: inset 3px 0 0 transparent',
     ],
+  },
+  {
+    // Строка, в которой лежит собранный блок, а не подпись (ED-5): карточка
+    // оператора, стопка вложенных строк, поле с подписью сверху. Плотность
+    // приходит тем же токеном и остаётся плотностью — строка с одной подписью
+    // и чипом по-прежнему ровно `--fx-row-dense`, — но потолком быть
+    // перестаёт: `height` обрезал бы вложенное, и блоки Cast'а накладывались
+    // бы друг на друга вместо того, чтобы встать друг под другом.
+    selector: `${S} .fx-row--block`,
+    declarations: [
+      'height: auto',
+      'min-height: var(--fx-row-dense)',
+      'align-items: flex-start',
+      'flex-wrap: wrap',
+      'gap: var(--fx-space-1)',
+      'padding: var(--fx-space-half) var(--fx-space-2) var(--fx-space-half) 0',
+    ],
+  },
+  {
+    // Вложенный блок занимает остаток строки: собранное под оператором шире
+    // подписи слота, и прижимать его к её ширине значило бы читать документ
+    // колонкой в три символа.
+    //
+    // Уже своего содержимого он при этом не становится (`min-width` остаётся
+    // `auto`): у формулы Cast'а вложенность доходит до восьми уровней, и
+    // разрешённое сжатие ниже min-content схлопывало бы её в столбик пикеров
+    // шириной в стрелку. Не поместившееся уходит в прокрутку поверхности —
+    // это след, а `.fx-surface` для того и `overflow: auto` (ED-22).
+    selector: `${S} .fx-row--block > .fx-card, ${S} .fx-row--block > .fx-stack`,
+    declarations: ['flex: 1 1 auto'],
+  },
+  {
+    // Подпись слота не сжимается: имя места в документе — то, по чему блок и
+    // читается, и укоротить его до многоточия значило бы спрятать адрес.
+    selector: `${S} .fx-row--block > .fx-row__secondary`,
+    declarations: ['flex: none', 'line-height: var(--fx-row-dense)'],
   },
   {
     selector: `${S} .fx-row:hover`,
@@ -651,9 +730,28 @@ const VALIDATION_RULES: readonly CssRule[] = [
   {
     // В строке дерева и списка сообщение уходит в хвост строки: положение
     // отличает его от подписи, а не только цвет.
+    //
+    // Хвост — не половина строки: без потолка длинная причина съедала подпись
+    // до многоточия, и документ в навигаторе назывался «sc…». Тесно в строке
+    // обоим, и порядок уступок задан: сжимается сперва причина (она урезается
+    // осмысленно — иконка строгости остаётся, а текст целиком приходит
+    // подсказкой, `withValidation`), и только потом имя, по которому строку и
+    // находят.
     selector: `${S} .fx-row > .fx-validation`,
     role: 'validation',
-    declarations: ['margin-left: auto', 'align-items: center', 'white-space: nowrap'],
+    declarations: [
+      'margin-left: auto',
+      'align-items: center',
+      'white-space: nowrap',
+      'flex: 0 4 auto',
+      'max-width: 50%',
+      'overflow: hidden',
+    ],
+  },
+  {
+    selector: `${S} .fx-row > .fx-validation > .fx-validation__reason`,
+    role: 'validation',
+    declarations: ['overflow: hidden', 'text-overflow: ellipsis'],
   },
 ];
 

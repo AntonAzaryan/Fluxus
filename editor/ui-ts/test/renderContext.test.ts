@@ -25,7 +25,7 @@ import {
   sceneStageOptions,
   type SceneAreaState,
 } from '../src/areas/scene.js';
-import { systemsArea } from '../src/areas/systems.js';
+import { stubArea } from './support/stubArea.js';
 import { buildFrame } from './support/frame.js';
 import { FIXTURE_IDS, fakeStage, fixtureHost, settle } from './support/project.js';
 import { ASSET_IDS, assetHost } from './support/assets.js';
@@ -38,6 +38,7 @@ describe('ASSET-2: модуль ассетов один на редактор', 
     const scene = sceneStageOptions(assets, MANIFEST, {
       announce: () => undefined,
       pointer: () => undefined,
+      keys: () => new Set<string>(),
     });
     const preview = assetStageOptions(assets, { announce: () => undefined });
     // Один и тот же объект, а не два равных: кэш ассета ключуется его ID
@@ -52,6 +53,7 @@ describe('ASSET-2: модуль ассетов один на редактор', 
     const scene = sceneStageOptions(assets, MANIFEST, {
       announce: () => undefined,
       pointer: () => undefined,
+      keys: () => new Set<string>(),
     });
     const preview = assetStageOptions(assets, { announce: () => undefined });
     expect(scene.hostId).toBe(SCENE_VIEWPORT_ID);
@@ -78,7 +80,7 @@ describe('ED-23: состояние области переживает пере
       visuals: ASSET_IDS.visuals,
       stage: () => previewStages.shift() ?? null,
     });
-    const { frame } = buildFrame([area, systemsArea, viewer]);
+    const { frame } = buildFrame([area, stubArea, viewer]);
 
     const sceneState = frame.stateOf(area.id) as SceneAreaState;
     const viewerState = frame.stateOf(viewer.id) as AssetAreaState;
@@ -93,7 +95,7 @@ describe('ED-23: состояние области переживает пере
     // Уход в соседнюю область и возврат: запись та же самая, а не равная ей, —
     // вместе с ней на месте и вьюпорт со своей позой камеры (ED-23).
     frame.activate(viewer.id);
-    frame.activate(systemsArea.id);
+    frame.activate(stubArea.id);
     frame.activate(SCENE_AREA_ID);
     expect(frame.stateOf(area.id)).toBe(sceneState);
     expect(frame.stateOf(viewer.id)).toBe(viewerState);

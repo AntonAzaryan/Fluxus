@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { AssetService, manifestLoader, validateManifest } from '../src/index.js';
+import {
+  AssetService,
+  POSITIVE_MIN,
+  cameraEffectRangeText,
+  clampCameraEffectParam,
+  createManifestLoader,
+  manifestLoader,
+  resolveVisual,
+  validateManifest,
+  visualKeys,
+  type CameraEffectsDescription,
+} from '../src/index.js';
 import { MemoryAssetSource, bytesOf, settled } from './helpers.js';
 
 /** Полноценный валидный визуал — покрывает все поля EntityVisual. */
@@ -273,6 +284,135 @@ describe('validateManifest: секция эффектов камеры (ASSET-8)
       /cameraEffects\.states: ожидался объект/,
     );
   });
+
+  /**
+   * ASSET-8: набор типов задаётся описанием камеры (CAM-9), и валидация
+   * принимает его входом. Описание здесь выдуманное — своего перечня типов у
+   * теста быть не должно ровно по той же причине, по какой его нет у модуля
+   * ассетов: он разошёлся бы с камерой молча.
+   */
+  const description: CameraEffectsDescription = {
+    types: [
+      {
+        id: 'shake',
+        kind: 'impulse',
+        params: [
+          { name: 'frequency', defaultValue: 13, min: 0 },
+          { name: 'decay', defaultValue: 1.4, min: 0, max: 10 },
+        ],
+      },
+      { id: 'sway', kind: 'lasting', params: [{ name: 'rollAmp', defaultValue: 0.05, min: 0 }] },
+    ],
+    binding: {
+      impulse: [
+        { name: 'amplitude', defaultValue: 0.6, min: 0 },
+        { name: 'radius', defaultValue: Number.POSITIVE_INFINITY, min: 0 },
+      ],
+      lasting: [],
+    },
+  };
+
+  const checked = (section: unknown) =>
+    validateManifest({ entities, cameraEffects: section }, { cameraEffects: description });
+
+  it('без описания тип эффекта не проверяется вовсе: своего перечня у валидации нет', () => {
+    const result = validateManifest({
+      entities,
+      cameraEffects: { events: { Boom: { effect: 'wobble-3000', whatever: 1 } } },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('неизвестный тип с описанием — предупреждение, а не ошибка (манифест переживает код)', () => {
+    const result = checked({ events: { Boom: { effect: 'wobble-3000' } } });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/cameraEffects\.events\.Boom\.effect/);
+    expect(result.warnings[0]).toMatch(/wobble-3000/);
+  });
+
+  it('тип другого вида, чем таблица, и незаявленный параметр — тоже предупреждения', () => {
+    const result = checked({
+      states: { Drunk: { effect: 'shake' } },
+      events: { Boom: { effect: 'shake', loudness: 3 } },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings.some((w) => /Drunk\.effect/.test(w) && /lasting/.test(w))).toBe(true);
+    expect(result.warnings.some((w) => /Boom\.loudness/.test(w))).toBe(true);
+  });
+
+  it('значение вне объявленного диапазона — ошибка с адресом до поля', () => {
+    const result = checked({ events: { Boom: { effect: 'shake', decay: 99, amplitude: -1 } } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((e) => /cameraEffects\.events\.Boom\.decay/.test(e))).toBe(true);
+    expect(result.errors.some((e) => /cameraEffects\.events\.Boom\.amplitude/.test(e))).toBe(true);
+  });
+
+  /**
+   * Строгую положительность (CAM-9: «частота положительна») включающая граница
+   * выражает наименьшим представимым положительным числом. Сообщение об этом
+   * адресовано автору манифеста: `5e-324` в нём — внутренность представления, а
+   * не граница, которую автор способен прочесть.
+   */
+  it('строго положительная граница показана открытым нулём, а не 5e-324', () => {
+    const positive: CameraEffectsDescription = {
+      types: [{ id: 'shake', kind: 'impulse', params: [{ name: 'frequency', defaultValue: 13, min: POSITIVE_MIN }] }],
+      binding: { impulse: [], lasting: [] },
+    };
+    const result = validateManifest(
+      { entities, cameraEffects: { events: { Boom: { effect: 'shake', frequency: 0 } } } },
+      { cameraEffects: positive },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0]).toContain('(0..+∞)');
+    expect(result.errors.join()).not.toContain('5e-324');
+    // Приведение к границе (CAM-6) при этом остаётся точным по построению:
+    // ближе к запрошенному нулю положительное число не подойдёт.
+    expect(clampCameraEffectParam({ name: 'frequency', defaultValue: 13, min: POSITIVE_MIN }, 0)).toBe(
+      POSITIVE_MIN,
+    );
+  });
+
+  it('включающие границы записаны закрытыми скобками', () => {
+    expect(cameraEffectRangeText({ name: 'decay', defaultValue: 1, min: 0, max: 10 })).toBe('[0..10]');
+    expect(cameraEffectRangeText({ name: 'free', defaultValue: 1 })).toBe('(-∞..+∞)');
+  });
+
+  it('параметры привязки законны наравне с параметрами типа (CAM-9)', () => {
+    const result = checked({ events: { Boom: { effect: 'shake', amplitude: 0.5, radius: 12 } } });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('загрузчик с описанием логирует предупреждение и загрузку не роняет (ASSET-4)', async () => {
+    const warnings: string[] = [];
+    const svc = new AssetService(
+      new MemoryAssetSource(
+        new Map([
+          [
+            'visuals.json',
+            bytesOf(
+              JSON.stringify({
+                entities,
+                cameraEffects: { events: { Boom: { effect: 'wobble-3000' } } },
+              }),
+            ),
+          ],
+        ]),
+      ),
+    );
+    svc.registerLoader(
+      createManifestLoader({ cameraEffects: description, warn: (m) => warnings.push(m) }),
+    );
+    const state = await settled(svc, svc.request('manifest', 'visuals.json'));
+    expect(state.status).toBe('ready');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/wobble-3000/);
+  });
 });
 
 describe('validateManifest: вертикальное смещение инстанса (ASSET-6, REND-12)', () => {
@@ -312,5 +452,65 @@ describe('validateManifest: вертикальное смещение инста
       { entities: { x: { model: 'm.mdx', verticalOffset: 1.5 } } },
       /verticalOffset: ожидался объект/,
     );
+  });
+});
+
+describe('validateManifest: раздел decoration-видов (ASSET-9)', () => {
+  const entities = { rock: { model: 'models/Rock.mdx' } };
+
+  it('вид без prefab\'а валиден и разрешается наравне с записью сущности', () => {
+    const result = validateManifest({
+      entities,
+      decorations: { grass: { model: 'models/Grass.mdx', defaultSkin: 'dry', skins: { dry: { '0': 't.png' } } } },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Разрешение — одно на оба раздела: потребитель не выбирает раздел сам.
+    expect(resolveVisual(result.manifest, 'grass')?.model).toBe('models/Grass.mdx');
+    expect(resolveVisual(result.manifest, 'rock')?.model).toBe('models/Rock.mdx');
+    expect(resolveVisual(result.manifest, 'nobody')).toBeUndefined();
+    expect(visualKeys(result.manifest)).toEqual(['rock', 'grass']);
+  });
+
+  it('раздела может не быть вовсе — это манифест без decoration-видов', () => {
+    const result = validateManifest({ entities });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.decorations).toBeUndefined();
+    expect(visualKeys(result.manifest)).toEqual(['rock']);
+  });
+
+  it('имя, занятое в обоих разделах, отвергается — и в причине названо оно', () => {
+    const errors = expectErrors(
+      { entities, decorations: { rock: { model: 'models/Rock.mdx' } } },
+      /decorations\.rock: имя занято записью сущности/,
+    );
+    expect(errors.join('\n')).toContain('ASSET-9');
+  });
+
+  it('состав записи тот же: ошибки адресуются путём внутри раздела', () => {
+    expectErrors({ entities, decorations: { grass: {} } }, /decorations\.grass\.model: обязательное поле/);
+    expectErrors({ entities, decorations: 7 }, /decorations: ожидался объект/);
+    expectErrors(
+      { entities, decorations: { grass: { model: 'g.mdx', scal: 2 } } },
+      /decorations\.grass\.scal: неизвестное поле/,
+    );
+  });
+
+  it('неприменимые к decoration части записи валидны и смысла не получают', () => {
+    // Таблицы клипов, кости и дуга прыжка производить не от чего (REND-18), но
+    // запись одного состава на оба раздела дешевле, чем два состава.
+    const result = validateManifest({
+      entities,
+      decorations: {
+        banner: {
+          model: 'models/Banner.mdx',
+          animations: { states: { idle: 'Stand' }, events: { death: 'Death' } },
+          boneControls: { head: { bone: 'Bone_Head', maxYawDeg: 30, smoothing: 0.2 } },
+          verticalOffset: { jumpArc: 2, fallSpeed: 5, fallDepth: 3 },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
   });
 });

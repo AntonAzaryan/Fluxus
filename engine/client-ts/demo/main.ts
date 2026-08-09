@@ -12,9 +12,9 @@ import * as THREE from 'three';
 import type { EntityId } from '@game-mvp/core';
 import {
   AssetService,
+  createManifestLoader,
   curvatureLoader,
   gltfLoader,
-  manifestLoader,
   mdxLoader,
   pngTextureLoader,
   type AssetSource,
@@ -22,6 +22,7 @@ import {
   type VisualManifest,
 } from '@game-mvp/assets';
 import {
+  CAMERA_EFFECTS_DESCRIPTION,
   CameraEffectsDirector,
   CameraRig,
   ModelsSubsystem,
@@ -45,7 +46,7 @@ import {
   shellPort,
   validateBindings,
 } from '@game-mvp/client';
-import { ACTION_BITS } from './sim.js';
+import { ACTION_BITS, STATE_COMPONENTS } from './sim.js';
 import bindingsJson from './bindings.json';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
@@ -103,7 +104,10 @@ const assets = new AssetService(assetSource);
 assets.registerLoader(mdxLoader);
 assets.registerLoader(gltfLoader);
 assets.registerLoader(pngTextureLoader);
-assets.registerLoader(manifestLoader);
+// Описание типов эффектов камеры (CAM-9) подаёт тот, кто собирает клиента:
+// модуль ассетов о типах не знает, а с описанием проверяет по нему и секцию
+// эффектов манифеста (ASSET-8).
+assets.registerLoader(createManifestLoader({ cameraEffects: CAMERA_EFFECTS_DESCRIPTION }));
 assets.registerLoader(curvatureLoader);
 
 /** Манифест визуалов через тот же сервис (kind 'manifest', ASSET-6). */
@@ -442,7 +446,14 @@ async function main(): Promise<void> {
         startX: 11.5,
         startY: 11.5,
       });
-      director = new CameraEffectsDirector({ tables: manifest.cameraEffects });
+      director = new CameraEffectsDirector({
+        tables: manifest.cameraEffects,
+        description: CAMERA_EFFECTS_DESCRIPTION,
+        // Тот же список, по которому Extractor воркера выставляет биты
+        // `EntityView.states` (`sim.ts`): без него запись таблицы `states`
+        // манифеста не находит своего бита и эффект не включается никогда.
+        stateComponents: STATE_COMPONENTS,
+      });
       // Мини-подсистема: события/состояния тика → диспетчер эффектов. syncTick
       // приходит на каждую доставку — события reliable (SHELL-4) не теряются.
       remote!.register({

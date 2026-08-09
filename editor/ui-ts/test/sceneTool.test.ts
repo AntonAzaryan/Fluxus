@@ -13,7 +13,7 @@ import { getAtPath, type JsonValue } from '@game-mvp/editor-core';
 import { describe, expect, it } from 'vitest';
 import { SCENE_AREA_ID } from '../src/areas/scene.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';
-import { systemsArea } from '../src/areas/systems.js';
+import { stubArea } from './support/stubArea.js';
 import { buildLoadedFrame, buttonByKey, press, type LoadedFrameFixture } from './support/frame.js';
 import { FIXTURE_IDS, entityHit, surfaceHit } from './support/project.js';
 
@@ -380,7 +380,7 @@ describe('ED-23: выделение переживает переключени�
     down(fixture, AT_SECOND);
     up(fixture, AT_SECOND);
 
-    fixture.frame.activate(systemsArea.id);
+    fixture.frame.activate(stubArea.id);
     fixture.frame.view();
     fixture.frame.activate(SCENE_AREA_ID);
     fixture.frame.view();

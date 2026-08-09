@@ -19,6 +19,9 @@
  */
 export type {
   AreaContext,
+  AreaKey,
+  AreaKeyInput,
+  AreaKeyPhase,
   AreaSearch,
   AreaSetup,
   AreaState,
@@ -26,18 +29,21 @@ export type {
   WorkspaceArea,
 } from './area.js';
 export { createWorkspaceFrame } from './frame.js';
-export type { WorkspaceFrame, WorkspaceFrameOptions } from './frame.js';
+export type { FrameAreaKey, WorkspaceFrame, WorkspaceFrameOptions } from './frame.js';
 export {
   DISMISS_KEY,
   FRAME_BINDINGS,
   PALETTE_BINDING,
   REDO_BINDING,
   UNDO_BINDING,
+  areaGetsKey,
+  keyLabel,
   keyStrokeOf,
   matchesBinding,
   sameBinding,
+  textEntry,
 } from './keys.js';
-export type { KeyStroke } from './keys.js';
+export type { AreaKeyGate, KeyStroke, KeyTarget } from './keys.js';
 export { mountWorkspaceFrame } from './mount.js';
 export type { MountedFrame, MountOptions } from './mount.js';
 /**
@@ -55,7 +61,7 @@ export type { RedrawSchedule } from './redraw.js';
 export { RAIL_ITEM_CLASS, RAIL_ROVING_ID } from './rail.js';
 export { createSelectionModel } from './selection.js';
 export type { AreaSelection, SelectionModel, SelectionRef } from './selection.js';
-export { ZONE_ORDER } from './skeleton.js';
+export { SURFACE_FOCUS_ID, ZONE_ORDER } from './skeleton.js';
 export type { ZoneName } from './skeleton.js';
 export {
   FILL_CLASS,

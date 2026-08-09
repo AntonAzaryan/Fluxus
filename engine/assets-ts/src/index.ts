@@ -44,16 +44,51 @@ export type {
   SurfaceAlign,
   CameraEffectsSection,
   CameraEffectDef,
+  // Форма машинного описания типов эффектов (`camera` CAM-9): контракт живёт
+  // здесь, рядом с форматом секции, а его содержимое — в коде камеры.
+  CameraEffectKind,
+  CameraEffectParamSpec,
+  CameraEffectTypeSpec,
+  CameraEffectsDescription,
+  ManifestValidation,
+  ValidateManifestOptions,
 } from './manifest.js';
-export { validateManifest, resolveSurfaceAlign, DEFAULT_SURFACE_ALIGN } from './manifest.js';
+export {
+  validateManifest,
+  resolveSurfaceAlign,
+  resolveVisual,
+  visualKeys,
+  cameraEffectParams,
+  cameraEffectParamInRange,
+  cameraEffectRangeText,
+  cameraEffectType,
+  clampCameraEffectParam,
+  POSITIVE_MIN,
+  DEFAULT_SURFACE_ALIGN,
+} from './manifest.js';
 
 // карта кривизны террейна (ASSET-7)
 export type { TerrainCurvatureMap } from './curvature.js';
 export { validateCurvatureMap, curvatureOffsetOf, CURVATURE_SCALE } from './curvature.js';
 
+// парный presentation-документ сцены (`presentation-scene` PRES-1..3)
+export type { DecorationRecord, PresentationScene } from './presentation.js';
+export {
+  DECORATION_POSITION_STEP,
+  DECORATION_YAW_STEP,
+  PRESENTATION_SUFFIX,
+  isPresentationPath,
+  presentationPathOf,
+  quantizeDecorationLength,
+  quantizeDecorationYaw,
+  validatePresentationScene,
+} from './presentation.js';
+
 // загрузчики реестра (ASSET-3); регистрируются потребителем через registerLoader
 export { mdxLoader } from './loaders/mdx.js';
 export { gltfLoader } from './loaders/gltf.js';
 export { pngTextureLoader, decodePng } from './loaders/png.js';
-export { manifestLoader } from './loaders/manifest.js';
+export { manifestLoader, createManifestLoader } from './loaders/manifest.js';
+export type { ManifestLoaderOptions } from './loaders/manifest.js';
 export { curvatureLoader } from './loaders/curvature.js';
+export { presentationLoader } from './loaders/presentation.js';

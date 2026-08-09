@@ -8,11 +8,13 @@ import * as THREE from 'three';
 import { FIXED_ONE, createTerrainGrid } from '@game-mvp/core';
 import { validateCurvatureMap, type TerrainCurvatureMap } from '@game-mvp/assets';
 import {
+  DEFAULT_CURVATURE_TESSELLATION,
   TerrainSubsystem,
   VisualSurfaceSource,
   buildFloorGeometry,
   buildWallGeometry,
   cornerLevels,
+  createVisualSurface,
   type RenderContext,
 } from '../src/index.js';
 import { makeAssets, makeTickView } from './fixtures.js';
@@ -309,7 +311,15 @@ describe('TerrainSubsystem.applyGrid: сетка документа (ED-10, ED-1
       if (z > 0) raised++;
     }
     expect(raised).toBeGreaterThan(0);
-    expect(subsystem.floorVertexCount).toBe(DOC_WIDTH * DOC_HEIGHT * 4);
+    // Разбиваются ровно клетки с ненулевыми УЗЛОВЫМИ смещениями: мазок по
+    // клетке (1,1) поднимает четыре её узла, а каждый узел общий у четырёх
+    // клеток — итого девять клеток 3×3 вокруг мазка. Остальная арена осталась
+    // квадом на клетку: цена платится там, где нарисован рельеф (REND-9).
+    const n = DEFAULT_CURVATURE_TESSELLATION;
+    const curved = 9;
+    expect(subsystem.floorVertexCount).toBe(
+      curved * n * n * 4 + (DOC_WIDTH * DOC_HEIGHT - curved) * 4,
+    );
   });
 
   it('смена размеров арены пересобирает раскладку чанков', () => {
@@ -328,5 +338,180 @@ describe('TerrainSubsystem.applyGrid: сетка документа (ED-10, ED-1
     subsystem.updateFrame(0.016, 1);
     expect(ctx.scene.children.length).toBe(1);
     expect(subsystem.floorVertexCount).toBe(8 * 8 * 4);
+  });
+});
+
+// -------------------------------------- разбиение по кривизне (REND-9)
+
+/**
+ * Геометрия — выборка поля высот, а не его углы: клетка с ненулевым узловым
+ * смещением разбивается, клетка без кривизны остаётся одним квадом, а швов ни
+ * между разбитыми клетками, ни на стыке с неразбитым соседом не возникает.
+ */
+describe('разбиение клеток с кривизной (REND-9)', () => {
+  const N = DEFAULT_CURVATURE_TESSELLATION;
+  const TILE = FIXED_ONE / FIXED_ONE;
+
+  /** Плоская арена 24×8 с мазком кривизны по клетке (1,1). */
+  function curvedRig() {
+    const grid = docGrid();
+    const surface = createVisualSurface(grid, STEP, docCurvature([[1, 1]]));
+    return { grid, surface };
+  }
+
+  /** Вершины геометрии как тройки — сравнивать позиции удобнее по вершинам. */
+  function vertices(data: { positions: Float32Array }): [number, number, number][] {
+    const out: [number, number, number][] = [];
+    for (let v = 0; v < data.positions.length; v += 3) {
+      out.push([data.positions[v]!, data.positions[v + 1]!, data.positions[v + 2]!]);
+    }
+    return out;
+  }
+
+  it('клетка с кривизной даёт N × N квадов, соседняя плоская остаётся одним', () => {
+    const { grid, surface } = curvedRig();
+    // Порог — узловые смещения, а не значение карты в клетке: соседка мазка
+    // тоже разбивается, а клетка через одну — уже нет.
+    expect(surface.hasCellCurvature(1, 1)).toBe(true);
+    expect(surface.hasCellCurvature(2, 1)).toBe(true);
+    expect(surface.hasCellCurvature(3, 1)).toBe(false);
+
+    const curved = buildFloorGeometry(grid, grid.floor, STEP, 1, 1, 1, 1, surface, N);
+    expect(curved.positions.length / 3).toBe(N * N * 4);
+    expect(curved.indices.length).toBe(N * N * 6);
+    // Вершины стоят НА поле: середина клетки поднята над хордой её углов.
+    expect(Math.max(...vertices(curved).map(([, , z]) => z))).toBeGreaterThan(0);
+
+    const flat = buildFloorGeometry(grid, grid.floor, STEP, 3, 1, 1, 1, surface, N);
+    expect(flat.positions.length / 3).toBe(4);
+    expect(flat.indices.length).toBe(6);
+  });
+
+  it('T-стыка со щелью нет: на общем ребре с неразбитым соседом вершины лежат на его прямой', () => {
+    const { grid, surface } = curvedRig();
+    // Клетка (2,1) разбита, её восточный сосед (3,1) — целый квад.
+    const curved = buildFloorGeometry(grid, grid.floor, STEP, 2, 1, 1, 1, surface, N);
+    const [n00, , , n01] = surface.cornerHeights(3, 1);
+    let onEdge = 0;
+    for (const [x, y, z] of vertices(curved)) {
+      if (Math.abs(x - 3 * TILE) > 1e-12) continue;
+      // Прямая соседа между его углами на этом ребре.
+      const t = y / TILE - 1;
+      expect(z).toBeCloseTo(n00 + (n01 - n00) * t, 12);
+      onEdge++;
+    }
+    // Подквады ребра не сварены между собой, поэтому по две вершины на каждый.
+    expect(onEdge).toBe(2 * N);
+  });
+
+  it('швов нет и между двумя разбитыми клетками: общие точки ребра совпадают по высоте', () => {
+    const { grid, surface } = curvedRig();
+    const west = buildFloorGeometry(grid, grid.floor, STEP, 1, 1, 1, 1, surface, N);
+    const east = buildFloorGeometry(grid, grid.floor, STEP, 2, 1, 1, 1, surface, N);
+    const onSeam = (data: { positions: Float32Array }): Map<number, number> => {
+      const heights = new Map<number, number>();
+      for (const [x, y, z] of vertices(data)) {
+        if (Math.abs(x - 2 * TILE) > 1e-12) continue;
+        heights.set(y, z);
+      }
+      return heights;
+    };
+    const a = onSeam(west);
+    const b = onSeam(east);
+    expect(a.size).toBe(N + 1);
+    expect(b.size).toBe(N + 1);
+    let raised = 0;
+    for (const [y, z] of a) {
+      expect(b.has(y)).toBe(true);
+      expect(b.get(y)!).toBeCloseTo(z, 12);
+      if (z > 0) raised++;
+    }
+    // Проверка не вырождена: шов проходит по поднятой кривизной части поля.
+    expect(raised).toBeGreaterThan(0);
+  });
+
+  it('плато с кривизной без граней: нормали вершин пола совпадают через границы клеток', () => {
+    const { grid, surface } = curvedRig();
+    const data = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 4, 4, surface, N);
+    const groups = new Map<string, { x: number; y: number; z: number }[]>();
+    for (let v = 0; v < data.positions.length; v += 3) {
+      const key = `${data.positions[v]!}|${data.positions[v + 1]!}`;
+      const list = groups.get(key) ?? [];
+      list.push({
+        x: data.normals![v]!,
+        y: data.normals![v + 1]!,
+        z: data.normals![v + 2]!,
+      });
+      groups.set(key, list);
+    }
+    let tilted = 0;
+    for (const list of groups.values()) {
+      const first = list[0]!;
+      for (const n of list) {
+        expect(n.x).toBeCloseTo(first.x, 9);
+        expect(n.y).toBeCloseTo(first.y, 9);
+        expect(n.z).toBeCloseTo(first.z, 9);
+      }
+      if (Math.hypot(first.x, first.y) > 1e-3) tilted++;
+    }
+    // Плато не плоское — иначе совпадение нормалей ничего бы не значило.
+    expect(tilted).toBeGreaterThan(0);
+  });
+});
+
+// ------------------------------------- кромка стенки под разбитым полом
+
+describe('кромка стенки идёт по той же выборке, что кромка пола (REND-9)', () => {
+  const N = DEFAULT_CURVATURE_TESSELLATION;
+
+  /** Арена, где клетки (1,1) и (2,1) подняты на уровень 1, кривизна — на (1,1). */
+  function ledge() {
+    const levels = rows('0');
+    levels[1] = `011${levels[1]!.slice(3)}`;
+    const grid = createTerrainGrid({
+      width: DOC_WIDTH,
+      height: DOC_HEIGHT,
+      tileSize: FIXED_ONE,
+      levels,
+      flags: rows('.'),
+    });
+    return { grid, surface: createVisualSurface(grid, STEP, docCurvature([[1, 1]])) };
+  }
+
+  it('верх стенки совпадает с кромкой пола в каждой точке разбиения — зазора нет', () => {
+    const { grid, surface } = ledge();
+    expect(grid.cliffs.length).toBeGreaterThan(0);
+    // Кромка плато под стенкой идёт по сглаженной кривизне, а не по прямой.
+    expect(surface.hasCellCurvature(2, 1)).toBe(true);
+
+    const bounds = { x0: 0, y0: 0, w: 8, h: 8 };
+    const floor = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 8, 8, surface, N);
+    const walls = buildWallGeometry(grid, STEP, surface, bounds, N);
+    // Разбитая стенка: полоса из N квадов вместо одного на отрезок.
+    expect(walls.positions.length / 3).toBeGreaterThan(grid.cliffs.length * 4);
+
+    const floorPoints = new Set<string>();
+    for (let v = 0; v < floor.positions.length; v += 3) {
+      floorPoints.add(
+        `${floor.positions[v]!.toFixed(6)}|${floor.positions[v + 1]!.toFixed(6)}|${floor.positions[v + 2]!.toFixed(6)}`,
+      );
+    }
+    // Вершины 2 и 3 каждого квада полосы — верхняя кромка (см. buildWallGeometry).
+    let tops = 0;
+    for (let vertex = 0; vertex * 3 < walls.positions.length; vertex++) {
+      if (vertex % 4 !== 2 && vertex % 4 !== 3) continue;
+      const v = vertex * 3;
+      const key = `${walls.positions[v]!.toFixed(6)}|${walls.positions[v + 1]!.toFixed(6)}|${walls.positions[v + 2]!.toFixed(6)}`;
+      expect(floorPoints.has(key)).toBe(true);
+      tops++;
+    }
+    expect(tops).toBeGreaterThan(0);
+  });
+
+  it('отрезок без кривизны с обеих сторон остаётся одним квадом', () => {
+    const grid = docGridRaised(20, 5); // далеко от мазка кривизны
+    const surface = createVisualSurface(grid, STEP, docCurvature([[1, 1]]));
+    const walls = buildWallGeometry(grid, STEP, surface, undefined, N);
+    expect(walls.positions.length / 3).toBe(grid.cliffs.length * 4);
   });
 });

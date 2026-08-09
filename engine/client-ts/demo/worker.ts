@@ -7,7 +7,7 @@
 import { shellPort, WorkerShell } from '@game-mvp/client';
 import { Extractor, kindByTags } from '@game-mvp/render';
 import type { SceneDef } from '@game-mvp/core';
-import { PLAYER_ID, TICK_SECONDS, createDemoSimulation } from './sim.js';
+import { PLAYER_ID, STATE_COMPONENTS, TICK_SECONDS, createDemoSimulation } from './sim.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 
 const { sim, state, playerId, grid } = createDemoSimulation(sceneJson as unknown as SceneDef);
@@ -20,6 +20,10 @@ const extractor = new Extractor({
   // Доворот торса (REND-5) — по направлению каста: одно каноническое событие
   // сцены несёт и факт каста, и `dirX`/`dirY`.
   aimEvents: ['CastFireball'],
+  // Компоненты-состояния, зеркалируемые в `EntityView.states` (CAM-6): по ним
+  // диспетчер включает длящиеся эффекты манифеста. Список общий с главным
+  // потоком (`sim.ts`) — порядок задаёт биты, и разойтись половинам нельзя.
+  stateComponents: STATE_COMPONENTS,
 });
 
 const shell = new WorkerShell({

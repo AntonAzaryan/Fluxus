@@ -47,4 +47,4 @@
 
 - [x] 5.1 Пакетные ворота зелёные: `npm run typecheck -w @game-mvp/render`, `npm test -w @game-mvp/render`, `npm test -w @game-mvp/client`, `npm test -w @game-mvp/integration`, `npx eslint engine/render-ts --max-warnings 0`. Сводный `npm run check` из корня остаётся за сборкой ветки — рядом идёт параллельная работа в `editor/ui-ts`
 - [x] 5.2 `engine/tests/golden/` не тронут: наложения и picking — presentation (ASSET-1), `worldInit` и снапшоты прежние
-- [ ] 5.3 `git diff --stat`: тронуты `openspec/changes/viewport-services/` и `engine/render-ts`; ядро, `net-ts`, `content/` и `openspec/specs/` не тронуты
+- [x] 5.3 `git diff --stat`: тронуты `openspec/changes/viewport-services/` и `engine/render-ts`; ядро, `net-ts`, `content/` и `openspec/specs/` не тронуты

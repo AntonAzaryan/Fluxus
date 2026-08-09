@@ -44,7 +44,9 @@ function prepared(): EditorSession {
     },
     lists: [['initial']],
   });
-  editor.openDocument({ id: PREFAB, kind: 'prefab', value: { hp: 10, tags: ['unit'] } });
+  // Ключей три, и правится средний: обратимость переименования — это и прежнее
+  // имя, и прежнее место, а на крайнем ключе разница не видна (ED-21).
+  editor.openDocument({ id: PREFAB, kind: 'prefab', value: { hp: 10, armor: 2, tags: ['unit'] } });
   return editor;
 }
 
@@ -56,6 +58,9 @@ const fixtures: Readonly<Record<string, Fixture>> = {
   },
   'document.removeValue': {
     params: () => ({ document: PREFAB, path: ['tags'] }),
+  },
+  'document.renameKey': {
+    params: () => ({ document: PREFAB, path: [], from: 'armor', to: 'shield' }),
   },
   'document.list.append': {
     params: () => ({ document: SCENE, list: ['initial'], item: { prefab: 'b', overrides: { Pos: { x: 9, y: 9 } } } }),

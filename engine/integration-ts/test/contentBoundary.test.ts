@@ -38,6 +38,7 @@ describe('guard: сканер границы контента ловит каж�
     mkdirSync(join(root, 'pkg-ts/node_modules/dep'), { recursive: true });
     mkdirSync(join(root, 'tests/golden'), { recursive: true });
     writeFileSync(join(root, 'pkg-ts/src/duel.scene.json'), '{}');
+    writeFileSync(join(root, 'pkg-ts/src/duel.presentation.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/duel.match.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/manifest.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/hero.mdx'), '');
@@ -55,10 +56,11 @@ describe('guard: сканер границы контента ловит каж�
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('сцена, матч, манифест, модель и текстура краснят', () => {
+  it('сцена, парный слой, матч, манифест, модель и текстура краснят', () => {
     const files = scanContentLocation({ rootDir: root }).map((v) => v.file);
     expect(files).toEqual([
       'pkg-ts/src/duel.match.json',
+      'pkg-ts/src/duel.presentation.json',
       'pkg-ts/src/duel.scene.json',
       'pkg-ts/src/hero.mdx',
       'pkg-ts/src/manifest.json',

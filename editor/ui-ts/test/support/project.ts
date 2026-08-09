@@ -41,6 +41,20 @@ export const FIXTURE_IDS: SceneProjectIds = {
 
 export const FIXTURE_CURVATURE_ID = 'visuals/fixture.curvature.json';
 
+/**
+ * Парный presentation-документ фикстуры (PRES-1). Имя не выбрано, а выведено
+ * правилом: базовое имя сцены плюс суффикс — ссылок между документами пары нет.
+ */
+export const FIXTURE_PRESENTATION_ID = 'scenes/fixture.presentation.json';
+
+/** Слой декораций фикстуры: две записи — по ним видно и порядок, и адресацию. */
+export const FIXTURE_PRESENTATION = {
+  decorations: [
+    { visual: 'Statue', x: 1.5, y: 1.5 },
+    { visual: 'Hero', x: 2.5, y: 0.5, yaw: 0.25, scale: 1.5 },
+  ],
+};
+
 /** Арена 4×4 с плато уровня 1 в правом нижнем углу и клеткой без пола. */
 export const FIXTURE_SCENE = {
   components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed', turns: 'fixed' } }],
@@ -62,6 +76,11 @@ export const FIXTURE_SCENE = {
 export const FIXTURE_VISUALS = {
   entities: {
     Hero: { model: 'visuals/models/hero.mdx', scale: 1.6 },
+  },
+  // Раздел decoration-видов (ASSET-9): за `Statue` prefab'а нет и не будет, а
+  // `Hero` доступен обоим слоям — пространство ключей одно.
+  decorations: {
+    Statue: { model: 'visuals/models/statue.mdx', scale: 2 },
   },
   terrain: { curvatureMap: FIXTURE_CURVATURE_ID },
 };
@@ -91,6 +110,27 @@ export function fixtureHost(scene: unknown = FIXTURE_SCENE): MemoryHost {
 }
 
 /**
+ * То же дерево плюс парный presentation-документ (PRES-1). Отдельной функцией,
+ * а не флагом умолчания: «сцена без декораций» — законное состояние, и оно
+ * обязано оставаться тем, что проверяют остальные тесты.
+ */
+export function fixtureHostWithLayer(
+  scene: unknown = FIXTURE_SCENE,
+  layer: unknown = FIXTURE_PRESENTATION,
+): MemoryHost {
+  return createMemoryHost({
+    name: 'fixture',
+    root: { label: 'fixture' },
+    files: {
+      [FIXTURE_IDS.config]: JSON.stringify(scene),
+      [FIXTURE_IDS.visuals]: JSON.stringify(FIXTURE_VISUALS),
+      [FIXTURE_CURVATURE_ID]: JSON.stringify(FIXTURE_CURVATURE),
+      [FIXTURE_PRESENTATION_ID]: JSON.stringify(layer),
+    },
+  });
+}
+
+/**
  * Попадание, которое дубль вьюпорта отдаёт по точке экрана. Тест раскладывает
  * экран на попадания сам: настоящий picking считает по нарисованному (REND-15),
  * а нарисованного в headless-прогоне нет.
@@ -105,6 +145,8 @@ export interface FakeStage extends SceneStage {
   /** Была ли подача переподачей (`submit(draft, true)`) — по индексу подачи. */
   readonly reapplied: readonly boolean[];
   readonly zooms: readonly number[];
+  /** Сколько раз область просила обзорный кадр (ED-15, CAM-8). */
+  readonly framings: readonly boolean[];
   readonly last: StageDraft | undefined;
   /** Кадры чужих продюсеров, подключённые к циклу вьюпорта (REND-11). */
   readonly producers: readonly ((now: number) => void)[];
@@ -120,6 +162,13 @@ export interface FakeStage extends SceneStage {
   readonly surfaceHits: Map<string, ScenePick>;
   /** Причина сорвавшегося кадра — её ставит тест, как поставил бы её кадр. */
   fail(reason: string | null): void;
+  /**
+   * Появление и исчезновение арены (CAM-7): у настоящего вьюпорта её заводит
+   * первая сетка документа, то есть уже после того, как бар области нарисован
+   * без неё. Ставит её тест — и дубль объявляет смену тем же каналом, каким
+   * объявляет её настоящий кадр (`StageSignals`).
+   */
+  arena(present: boolean): void;
 }
 
 /** Попадание в поверхность: то, что picking отдаёт при клике по пустому месту. */
@@ -128,6 +177,7 @@ export function surfaceHit(x: number, y: number, cell = 0): ScenePick {
     kind: 'surface',
     handle: null,
     key: null,
+    decoration: false,
     x,
     y,
     z: 0,
@@ -149,6 +199,7 @@ export function cellHit(cellX: number, cellY: number, width: number, noFloor = f
     kind: 'surface',
     handle: null,
     key: null,
+    decoration: false,
     x: cellX + 0.5,
     y: cellY + 0.5,
     z: 0,
@@ -160,12 +211,16 @@ export function cellHit(cellX: number, cellY: number, width: number, noFloor = f
   };
 }
 
-/** Попадание в размещённый объект: ключ уже переведён набором (REND-11). */
-export function entityHit(key: string): ScenePick {
+/**
+ * Попадание в размещённый объект: ключ уже переведён набором — документным
+ * источником (REND-11) либо набором декораций (REND-18).
+ */
+export function entityHit(key: string, decoration = false): ScenePick {
   return {
     kind: 'entity',
     handle: null,
     key,
+    decoration,
     x: 0,
     y: 0,
     z: 0,
@@ -193,6 +248,8 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
   const producers: ((now: number) => void)[] = [];
   const hits = new Map<string, ScenePick>();
   const surfaceHits = new Map<string, ScenePick>();
+  const framings: boolean[] = [];
+  let canFrame = true;
   let flying = false;
   let failure: string | null = null;
   const at = (x: number, y: number): string => `${x}:${y}`;
@@ -219,6 +276,12 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
     zoom: (steps) => {
       zooms.push(steps);
     },
+    get canFrame(): boolean {
+      return canFrame;
+    },
+    frameArena: () => {
+      framings.push(true);
+    },
     get instanceCount(): number {
       return submitted.at(-1)?.placements.length ?? 0;
     },
@@ -227,6 +290,10 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
     },
     fail: (reason) => {
       failure = reason;
+      announce();
+    },
+    arena: (present) => {
+      canFrame = present;
       announce();
     },
     presentation,
@@ -253,11 +320,15 @@ export function fakeStage(announce: () => void = () => undefined): FakeStage {
     reapplied,
     visuals,
     zooms,
+    framings,
     overlaySets,
     hits,
     surfaceHits,
     get overlays(): readonly SceneOverlay[] {
       return overlaySets.at(-1) ?? [];
+    },
+    get decorationCount(): number {
+      return submitted.at(-1)?.decorations?.length ?? 0;
     },
     get last(): StageDraft | undefined {
       return submitted.at(-1);

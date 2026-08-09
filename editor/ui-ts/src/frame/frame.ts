@@ -56,7 +56,7 @@ import {
 } from '../palette/palette.js';
 import { PALETTE_ROVING_ID, paletteView } from '../palette/view.js';
 import { APP_CLASS } from '../tokens/css.js';
-import type { AreaSetup, AreaState, WorkspaceArea } from './area.js';
+import type { AreaKeyPhase, AreaSetup, AreaState, WorkspaceArea } from './area.js';
 import {
   DISMISS_KEY,
   FRAME_BINDINGS,
@@ -73,9 +73,9 @@ import {
   type PreviewRun,
   type PreviewSource,
 } from './preview.js';
-import { RAIL_ROVING_ID, areaRail } from './rail.js';
+import { areaRail } from './rail.js';
 import { createSelectionModel, type SelectionModel } from './selection.js';
-import { areaSkeleton } from './skeleton.js';
+import { SURFACE_FOCUS_ID, areaSkeleton } from './skeleton.js';
 import { createAreaStateStore } from './state.js';
 import { frameTopBar } from './topBar.js';
 
@@ -106,6 +106,13 @@ export interface WorkspaceFrameOptions {
    * оба собираются из реестров в момент запроса.
    */
   readonly catalog?: () => EditorCatalog;
+}
+
+/** Нажатие, дошедшее до активной области; чьё оно — знает область, а не каркас. */
+export interface FrameAreaKey {
+  readonly code: string;
+  readonly phase: AreaKeyPhase;
+  readonly repeat: boolean;
 }
 
 export interface WorkspaceFrame {
@@ -146,8 +153,19 @@ export interface WorkspaceFrame {
    */
   notice(): UiText | null;
   setNotice(reason: UiText | null): void;
-  /** Разбор нажатия. `true` — каркас его забрал, и вызывающему нечего делать. */
+  /**
+   * Первая ступень разбора (ED-32): сквозные сочетания каркаса — отмена,
+   * повтор, палитра, возврат клавиатуры области, горячие клавиши областей и
+   * команд. `true` — каркас нажатие забрал, и дальше оно не идёт.
+   */
   handleKey(stroke: KeyStroke): boolean;
+  /**
+   * Последняя ступень разбора (ED-32): клавиша активной области. Зовётся, только
+   * когда сквозные сочетания нажатие не забрали, фокус не в текстовом поле и
+   * виджет под фокусом нажатие не потребил — порядок держит `mount.ts`, а не
+   * область. `true` — область нажатие забрала.
+   */
+  handleAreaKey(input: FrameAreaKey): boolean;
   /**
    * Куда каркас просит вернуть фокус после ближайшей перерисовки, и забирает
    * просьбу: она одноразовая, иначе фокус уезжал бы на каждую перерисовку.
@@ -311,6 +329,16 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
   const activate = (areaId: string): void => {
     const area = requireArea(areaId);
     if (area.id === activeId) return;
+    // Уходящая область отпускает всё зажатое (ED-32): её клавиши работают,
+    // пока она активна, а отпускания зажатой стрелки она уже не получит —
+    // оно достанется той области, что стала активной. Оставленная зажатой,
+    // стрелка панорамировала бы её камеру из-под чужой области вечно; это тот
+    // же случай, что потеря фокуса окном, и решается он тем же `blur`.
+    const leaving = requireArea(activeId);
+    const held = states.peek(leaving);
+    if (leaving.handleKey !== undefined && held !== undefined) {
+      leaving.handleKey({ state: held, code: '', phase: 'blur', repeat: false, mode });
+    }
     activeId = area.id;
     notify();
   };
@@ -402,9 +430,10 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
     closePalette() {
       if (!palette) return;
       palette = false;
-      // Фокус возвращается туда же, куда его возвращает отказ от начатого, — к
-      // рельсу: он одинаков во всех областях.
-      focusRequest = RAIL_ROVING_ID;
+      // Фокус возвращается туда же, куда его возвращает отказ от начатого, — на
+      // поверхность правки активной области: место по умолчанию одинаково во
+      // всех областях и клавиш области не потребляет (ED-32).
+      focusRequest = SURFACE_FOCUS_ID;
       notify();
     },
     paletteEntries: () =>
@@ -523,9 +552,11 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
           frame.closePalette();
           return true;
         }
-        // Escape возвращает фокус к рельсу — к тому единственному месту,
-        // которое одинаково во всех областях.
-        focusRequest = RAIL_ROVING_ID;
+        // Escape возвращает клавиатуру области: это и есть тот сквозной способ
+        // вернуть её из любого виджета, которого требует ED-32. К рельсу он не
+        // возвращает намеренно — рельс потребляет стрелки, и область, у которой
+        // клавиатуру всегда держит он, своих клавиш не получила бы никогда.
+        focusRequest = SURFACE_FOCUS_ID;
         notify();
         return true;
       }
@@ -549,10 +580,25 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
       for (const area of areas.all()) {
         if (area.hotkey !== undefined && matchesBinding(stroke, area.hotkey)) {
           activate(area.id);
+          // Вошедший в область сразу получает её клавиши (ED-32): фокус,
+          // оставшийся в чужом виджете, отобрал бы у неё стрелки.
+          focusRequest = SURFACE_FOCUS_ID;
+          notify();
           return true;
         }
       }
       return false;
+    },
+    handleAreaKey(input) {
+      const area = requireArea(activeId);
+      if (area.handleKey === undefined) return false;
+      return area.handleKey({
+        state: states.of(area, setup),
+        code: input.code,
+        phase: input.phase,
+        repeat: input.repeat,
+        mode,
+      });
     },
     takeFocusRequest() {
       const requested = focusRequest;

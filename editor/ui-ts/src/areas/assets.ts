@@ -61,8 +61,10 @@ import {
   type DocumentKind,
   type EditorSession,
   type EnvironmentHost,
+  type OperationParams,
 } from '@game-mvp/editor-core';
-import type { EntityVisual } from '@game-mvp/assets';
+import type { CameraEffectsDescription, EntityVisual } from '@game-mvp/assets';
+import { CAMERA_EFFECTS_DESCRIPTION } from '@game-mvp/render';
 import {
   children,
   documentValue,
@@ -82,8 +84,8 @@ import { matchesQuery, type SearchHit } from '../palette/palette.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS } from '../frame/styles.js';
 import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';
-import { select, textField } from '../widgets/field.js';
-import { fieldTable, type FieldRowSpec } from '../widgets/fieldTable.js';
+import { numberField, select, textField } from '../widgets/field.js';
+import { fieldTable, type FieldGroupSpec, type FieldRowSpec } from '../widgets/fieldTable.js';
 import { tree, type TreeItem } from '../widgets/rows.js';
 import { withValidation } from '../widgets/validation.js';
 import { viewportFrame } from '../viewport.js';
@@ -113,6 +115,20 @@ import {
   manifestOf,
   skinNames,
 } from './assetVisuals.js';
+import {
+  CAMERA_EFFECTS_OPERATIONS,
+  EFFECT_KEY,
+  EVENTS_TABLE,
+  REMOVE_BINDING_OPERATION,
+  STATES_TABLE,
+  bindingNames,
+  bindingOf,
+  bindingPath,
+  emittedEventTypes,
+  paramsForBinding,
+  typesForTable,
+} from './assetCameraEffects.js';
+import { effectParamKey } from '../i18n/cameraEffectBundles.js';
 import { createAssetModule, type AssetModule } from './assetModule.js';
 import {
   canRender,
@@ -134,6 +150,13 @@ export const ASSETS_VIEWPORT_ID = 'fx-assets-viewport';
  * его однажды).
  */
 export const DEFAULT_VISUALS_KIND: DocumentKind = 'visuals';
+
+/**
+ * Вид документов сцены. Просмотрщик их не правит и не открывает — он лишь
+ * собирает из них подсказки имён событий тика (ED-14), и вид приходит той же
+ * настройкой, что вид манифеста.
+ */
+export const DEFAULT_SCENE_KIND: DocumentKind = 'scene';
 
 /** Обратные каналы кадра: он объявляет то, что видно в интерфейсе (ED-8, CAM-2). */
 export interface AssetStageHooks {
@@ -159,6 +182,19 @@ export interface AssetAreaOptions {
    */
   readonly open?: () => Promise<ContentPath | null>;
   readonly visualsKind?: DocumentKind;
+  /**
+   * Вид документов сцены — из них собираются подсказки имён событий (ED-14):
+   * литералы `emitEvent.type` открытых сцен. Проверкой они не становятся —
+   * машинного перечня событий тика нет.
+   */
+  readonly sceneKind?: DocumentKind;
+  /**
+   * Машинное описание типов эффектов камеры (`camera` CAM-9). Умолчание —
+   * описание сборки камеры; параметром оно ради того же, ради чего у диспетчера:
+   * новый тип обязан появляться в таблицах САМ, и проверяется это подставленным
+   * описанием, а не правкой этого файла (ED-14).
+   */
+  readonly cameraEffects?: CameraEffectsDescription;
   /** Корень обхода дерева; по умолчанию — весь корень (ED-20: навигация по дереву). */
   readonly root?: ContentPath;
   /**
@@ -188,6 +224,17 @@ export interface AssetAreaState {
   skin: string;
   /** Номер слота текстуры, который подменит выбранная текстура (REND-6). */
   slot: string;
+  /** Таблица секции эффектов, с которой работает автор (ASSET-8): события или состояния. */
+  effectTable: string;
+  /** Выбранная привязка — субъект полей ниже; `''` — не выбрана. */
+  effectBinding: string;
+  /** Имя заводимой привязки и тип, который ей назначат: черновик, а не документ. */
+  effectName: string;
+  effectType: string;
+  /** Описание типов эффектов (CAM-9) — им и только им строятся обе таблицы. */
+  readonly effects: CameraEffectsDescription;
+  /** Вид документов сцены: из них собираются подсказки имён событий. */
+  readonly sceneKind: DocumentKind;
   /** Кадр превью; `null` — в этой среде рисовать нечем. */
   stage: SceneStage | null;
   /** Состояния открытых ассетов (ASSET-4) — из них и берётся причина отказа. */
@@ -675,6 +722,274 @@ function surface(context: AreaContext<AssetAreaState>): UiNode {
   });
 }
 
+// ------------------------------------------------- секция эффектов камеры
+
+/**
+ * Две таблицы секции эффектов камеры (ED-14): «событие тика → импульсный
+ * эффект» и «состояние сущности → длящийся эффект». Строятся они ИЗ ОПИСАНИЯ
+ * (CAM-9) целиком: перечень типов, поля записи и их подсказки — всё оттуда, и
+ * своего списка типов у редактора нет ни в каком виде.
+ *
+ * Живут они в области ассетов, а не в своей: у секции нет своего документа, а
+ * ED-23 требует, чтобы состояние области переживало переключение, а не
+ * размножалось. Перерастёт зону инспектора — станет своей областью вкладом
+ * (ED-25), и ни операции, ни описание при этом не поменяются.
+ */
+function effectRows(context: AreaContext<AssetAreaState>, table: string): readonly FieldRowSpec[] {
+  const { state, resources, session } = context;
+  const id = state.visualsId;
+  if (id === null || !session.isOpen(id)) return [];
+  const value = session.documentValue(id);
+  const description = context.state.effects;
+  const names = bindingNames(value, table);
+  const selected = state.effectTable === table ? state.effectBinding : '';
+  const off = context.mode === 'preview';
+
+  const rows: FieldRowSpec[] = names.map((name) => {
+    const record = bindingOf(value, table, name);
+    const effect = typeof record?.[EFFECT_KEY] === 'string' ? record[EFFECT_KEY] : '';
+    return {
+      label: documentValue(name),
+      // Тип записи — выбор из описания, отфильтрованного по виду таблицы: он же
+      // и перетипизация, и делает её та же операция, что заводит привязку.
+      control: select({
+        label: documentValue(name),
+        value: effect,
+        options: [
+          { value: '', label: resourceText(resources, 'ui.area.assets.none') },
+          ...typesForTable(description, table).map((type) => ({
+            value: type.id,
+            label: documentValue(type.id),
+          })),
+        ],
+        disabled: off,
+        onSelect: (next) => {
+          state.effectTable = table;
+          state.effectBinding = name;
+          if (next !== '' && next !== effect) {
+            effectOperation(context, CAMERA_EFFECTS_OPERATIONS.bind, {
+              table,
+              name,
+              effect: next,
+            });
+          } else {
+            context.refresh();
+          }
+        },
+      }),
+      ...(selected === name ? { note: resourceText(resources, 'ui.area.assets.effectSelected') } : {}),
+    };
+  });
+
+  if (selected !== '') {
+    rows.push(...effectParamRows(context, table, selected));
+    rows.push(removeBindingRow(context, table, selected));
+  }
+  return rows;
+}
+
+/**
+ * Снятие выбранной привязки (ED-14). Своей операции у него нет и не нужно —
+ * это ровно `document.removeValue` (`assetCameraEffects.ts`), — но дотянуться
+ * до него из таблицы автор обязан: иначе ошибочную привязку пришлось бы стирать
+ * руками в JSON, а ED-14 требует, чтобы ручная правка манифеста не была
+ * обязательной. Пустой пункт списка типов — не действие, а показ «типа нет»,
+ * и удалением он быть не может.
+ */
+function removeBindingRow(
+  context: AreaContext<AssetAreaState>,
+  table: string,
+  name: string,
+): FieldRowSpec {
+  const { state, resources } = context;
+  return {
+    label: resourceText(resources, 'ui.area.assets.effectRemove'),
+    control: button({
+      label: resourceText(resources, 'ui.area.assets.effectRemove'),
+      variant: 'ghost',
+      disabled: context.mode === 'preview',
+      onPress: () => {
+        effectOperation(context, REMOVE_BINDING_OPERATION, { path: bindingPath(table, name) });
+        state.effectBinding = '';
+      },
+    }),
+  };
+}
+
+/** Поля выбранной привязки: параметры типа плюс параметры привязки его вида. */
+function effectParamRows(
+  context: AreaContext<AssetAreaState>,
+  table: string,
+  name: string,
+): readonly FieldRowSpec[] {
+  const { state, session, resources } = context;
+  const id = state.visualsId;
+  if (id === null || !session.isOpen(id)) return [];
+  const record = bindingOf(session.documentValue(id), table, name);
+  const effect = typeof record?.[EFFECT_KEY] === 'string' ? record[EFFECT_KEY] : '';
+  const off = context.mode === 'preview';
+  return paramsForBinding(context.state.effects, effect).map((param) => {
+    const current = record?.[param.name];
+    return {
+      label: documentValue(param.name),
+      // Подсказка — по ключу ED-28 из пути описания: ресурса может не быть, и
+      // тогда автор увидит сам ключ — видимый признак недокументированного.
+      hint: resourceText(resources, effectParamKey(effect, param.name)),
+      control: numberField({
+        label: documentValue(param.name),
+        value: documentValue(typeof current === 'number' ? String(current) : ''),
+        readOnly: off,
+        onCommit: (raw) => {
+          const parsed = Number(raw);
+          if (raw.trim() === '' || Number.isNaN(parsed)) return;
+          effectOperation(context, CAMERA_EFFECTS_OPERATIONS.setParam, {
+            table,
+            name,
+            param: param.name,
+            value: parsed,
+          });
+        },
+      }),
+    };
+  });
+}
+
+/** Заведение привязки: имя, тип и кнопка. Имя события подсказывается, а не проверяется. */
+function effectDraftRows(context: AreaContext<AssetAreaState>): readonly FieldRowSpec[] {
+  const { state, resources, session } = context;
+  const off = context.mode === 'preview';
+  const table = state.effectTable;
+  const suggestions = state.effectTable === EVENTS_TABLE ? eventSuggestions(context) : [];
+  return [
+    {
+      label: resourceText(resources, 'ui.area.assets.effectTable'),
+      control: select({
+        label: resourceText(resources, 'ui.area.assets.effectTable'),
+        value: table,
+        options: [
+          { value: EVENTS_TABLE, label: resourceText(resources, 'ui.area.assets.effectEvents') },
+          { value: STATES_TABLE, label: resourceText(resources, 'ui.area.assets.effectStates') },
+        ],
+        onSelect: (next) => {
+          state.effectTable = next;
+          state.effectBinding = '';
+          state.effectType = '';
+          context.refresh();
+        },
+      }),
+    },
+    {
+      label: resourceText(resources, 'ui.area.assets.effectName'),
+      control: textField({
+        label: resourceText(resources, 'ui.area.assets.effectName'),
+        value: documentValue(state.effectName),
+        readOnly: off,
+        onCommit: (raw) => {
+          state.effectName = raw;
+          context.refresh();
+        },
+      }),
+    },
+    // Подсказка имён событий (ED-14): литералы `emitEvent.type` открытых сцен.
+    // Выбор подставляет имя в поле — назвать событие, которого в сценах ещё
+    // нет, автор по-прежнему вправе: машинного перечня событий тика нет.
+    ...(state.effectTable === EVENTS_TABLE
+      ? [
+          {
+            label: resourceText(resources, 'ui.area.assets.effectSuggested'),
+            control: select({
+              label: resourceText(resources, 'ui.area.assets.effectSuggested'),
+              value: suggestions.includes(state.effectName) ? state.effectName : '',
+              options: [
+                { value: '', label: resourceText(resources, 'ui.area.assets.none') },
+                ...suggestions.map((name) => ({ value: name, label: documentValue(name) })),
+              ],
+              disabled: off || suggestions.length === 0,
+              onSelect: (next) => {
+                state.effectName = next;
+                context.refresh();
+              },
+            }),
+          } satisfies FieldRowSpec,
+        ]
+      : []),
+    {
+      label: resourceText(resources, 'ui.area.assets.effectType'),
+      control: select({
+        label: resourceText(resources, 'ui.area.assets.effectType'),
+        value: state.effectType,
+        options: [
+          { value: '', label: resourceText(resources, 'ui.area.assets.none') },
+          ...typesForTable(context.state.effects, table).map((type) => ({
+            value: type.id,
+            label: documentValue(type.id),
+          })),
+        ],
+        disabled: off,
+        onSelect: (next) => {
+          state.effectType = next;
+          context.refresh();
+        },
+      }),
+    },
+    {
+      label: resourceText(resources, 'ui.area.assets.effectBind'),
+      control: button({
+        label: resourceText(resources, 'ui.area.assets.effectBind'),
+        variant: 'ghost',
+        disabled:
+          off ||
+          state.visualsId === null ||
+          !session.isOpen(state.visualsId) ||
+          state.effectName === '' ||
+          state.effectType === '',
+        onPress: () => {
+          effectOperation(context, CAMERA_EFFECTS_OPERATIONS.bind, {
+            table,
+            name: state.effectName,
+            effect: state.effectType,
+          });
+          state.effectBinding = state.effectName;
+        },
+      }),
+    },
+  ];
+}
+
+/**
+ * Имена событий тика из открытых сцен (ED-14) — подсказка, а не проверка:
+ * нативные системы ядра называют свои события литералами в коде, и машинного
+ * перечня событий сегодня нет вовсе.
+ */
+function eventSuggestions(context: AreaContext<AssetAreaState>): readonly string[] {
+  const { session, state } = context;
+  const found = new Set<string>();
+  for (const id of session.documentIds()) {
+    if (session.document(id).kind !== state.sceneKind) continue;
+    for (const type of emittedEventTypes(session.documentValue(id))) found.add(type);
+  }
+  return [...found].sort();
+}
+
+/** Правка секции идёт операцией и только ей (ED-29); отказ показывается причиной (ED-30). */
+function effectOperation(
+  context: AreaContext<AssetAreaState>,
+  operationId: string,
+  params: OperationParams,
+): void {
+  const { state, session } = context;
+  const id = state.visualsId;
+  if (id === null) return;
+  try {
+    session.applyOperation(operationId, { document: id, ...params });
+    state.failure = null;
+  } catch (error) {
+    state.failure = message(error);
+  }
+  state.refresh();
+  context.refresh();
+}
+
 /** Состояние ассета подписью: статус — ресурс, причина — текст модуля ассетов. */
 const STATUS_KEYS: Readonly<Record<OpenedAsset['status'], string>> = {
   loading: 'ui.area.assets.statusLoading',
@@ -725,6 +1040,21 @@ function inspector(context: AreaContext<AssetAreaState>): UiNode {
     }
   }
 
+  // Группы зоны инспектора (ED-24): поля выбранного ассета и две таблицы
+  // секции эффектов камеры. Таблицы показываются, пока открыт манифест, —
+  // секция принадлежит документу, а не выбранному в дереве файлу.
+  const groups: FieldGroupSpec[] = [];
+  if (rows.length > 0) {
+    groups.push({ label: resourceText(resources, 'ui.inspector.fields'), rows });
+  }
+  if (state.visualsId !== null && session.isOpen(state.visualsId)) {
+    groups.push(
+      { label: resourceText(resources, 'ui.area.assets.effectEvents'), rows: effectRows(context, EVENTS_TABLE) },
+      { label: resourceText(resources, 'ui.area.assets.effectStates'), rows: effectRows(context, STATES_TABLE) },
+      { label: resourceText(resources, 'ui.area.assets.effectNew'), rows: effectDraftRows(context) },
+    );
+  }
+
   return el('div', {
     children: children(
       el('div', {
@@ -739,15 +1069,12 @@ function inspector(context: AreaContext<AssetAreaState>): UiNode {
               }),
         ),
       }),
-      rows.length === 0
+      groups.length === 0
         ? el('div', {
             classes: ['fx-row'],
             text: resourceText(resources, 'ui.inspector.empty'),
           })
-        : fieldTable({
-            label: resourceText(resources, 'ui.inspector.fields'),
-            groups: [{ label: resourceText(resources, 'ui.inspector.fields'), rows }],
-          }),
+        : fieldTable({ label: resourceText(resources, 'ui.inspector.fields'), groups }),
     ),
   });
 }
@@ -817,6 +1144,12 @@ export function createAssetArea(options: AssetAreaOptions = {}): WorkspaceArea<A
         clip: '',
         skin: '',
         slot: '',
+        effectTable: EVENTS_TABLE,
+        effectBinding: '',
+        effectName: '',
+        effectType: '',
+        effects: options.cameraEffects ?? CAMERA_EFFECTS_DESCRIPTION,
+        sceneKind: options.sceneKind ?? DEFAULT_SCENE_KIND,
         stage,
         probe: createAssetProbe({
           assets: options.assets ?? stage?.context.assets ?? null,

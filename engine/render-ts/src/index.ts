@@ -1,4 +1,5 @@
 // Контракты пакета: подсистемы, presentation-состояние, конфиг хоста.
+export { DEFAULT_CURVATURE_TESSELLATION } from './types.js';
 export type {
   EntityView,
   RenderConfig,
@@ -20,6 +21,11 @@ export type { PresentationProducer } from './stage.js';
 export { DocumentSource } from './documentSource.js';
 export type { DocumentInstance, DocumentSourceOptions } from './documentSource.js';
 
+// Набор decoration-инстансов (REND-18) — третий набор рядом с продюсерами:
+// сосуществует с любым из них и сменой режима не гасится.
+export { DecorationSet } from './decorations.js';
+export type { DecorationInstance } from './decorations.js';
+
 // Половины хоста по границе потоков (client-shell SHELL-2): Extractor —
 // воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
 export { Extractor, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';
@@ -27,8 +33,8 @@ export type { ExtractedTick, ExtractorConfig } from './extractor.js';
 export { ViewBuffer } from './viewBuffer.js';
 export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 
-// Камера (camera CAM-1..7): rig режимов, слой эффектов, диспетчер по манифесту,
-// общее применение позы к THREE-камере.
+// Камера (camera CAM-1..8): rig режимов и вход кадрирования, слой эффектов,
+// диспетчер по манифесту, общее применение позы к THREE-камере.
 export {
   CameraRig,
   DEFAULT_CAMERA_CONFIG,
@@ -40,6 +46,7 @@ export {
 export type {
   CameraBounds,
   CameraConfig,
+  CameraFraming,
   CameraInput,
   CameraMode,
   CameraPose,
@@ -52,11 +59,29 @@ export {
   EffectStack,
   SwayEffect,
   TraumaShake,
+  defaults,
   valueNoise,
   DEFAULT_SHAKE,
   DEFAULT_SWAY,
+  SHAKE_TYPE,
+  SWAY_TYPE,
 } from './camera/effects.js';
-export type { CameraEffect, PoseOffset, ShakeParams, SwayParams } from './camera/effects.js';
+export type {
+  CameraEffect,
+  CameraEffectType,
+  ImpulseEffect,
+  ImpulseEffectType,
+  LastingEffect,
+  LastingEffectType,
+  PoseOffset,
+  ShakeParams,
+  SwayParams,
+} from './camera/effects.js';
+// Машинное описание типов эффектов (CAM-9) — единственный перечень типов:
+// по нему строит эффекты слой, проверяет секцию валидация манифеста (ASSET-8)
+// и рисует таблицы редактор (ED-14).
+export { CAMERA_EFFECTS_DESCRIPTION, CAMERA_EFFECT_TYPES } from './camera/effectTypes.js';
+export type { CameraEffectsCatalog } from './camera/effectTypes.js';
 export { CameraEffectsDirector } from './camera/director.js';
 export type { CameraEffectsDirectorOptions } from './camera/director.js';
 export { applyCameraPose } from './camera/apply.js';

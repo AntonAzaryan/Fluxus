@@ -1,8 +1,8 @@
 /**
  * @contribution Правила, у которых нет источника в движке (ED-19, ED-11).
  *
- * Всё остальное в слое валидации — вызов чужого валидатора (ED-1). Эти четыре
- * правила — исключение, и оно объясняется, а не подразумевается: проверяемое
+ * Всё остальное в слое валидации — вызов чужого валидатора (ED-1). Эти пять
+ * правил — исключение, и оно объясняется, а не подразумевается: проверяемое
  * ими отношение живёт МЕЖДУ документами, а функции движка каждая видит один
  * документ и про парный не знает.
  *
@@ -24,6 +24,12 @@
  *   только свою сетку; проверка совпадения по ASSET-7 лежит на потребителе,
  *   который держит обе, и в рантайме это предупреждение с игнором — поэтому
  *   важность здесь тоже предупреждение, а не ошибка.
+ * - «ссылка decoration не разрешается в запись манифеста» (`presentation-scene`
+ *   PRES-2). Загрузчик парного документа манифеста не имеет, а загрузчик
+ *   манифеста не знает о парном документе: ссылку не видит ни один из них.
+ *   PRES-2 требует подсветить её адресно и сразу — в рантайме та же запись
+ *   рисуется заглушкой с предупреждением (ASSET-6), поэтому и здесь это
+ *   предупреждение, а не отказ сохранять.
  *
  * Общее правило для всех междокументных: если противоположной стороны в сессии
  * нет ни одного документа, правило молчит. Незагруженный манифест — не
@@ -65,12 +71,15 @@ export interface PairKinds {
   readonly scene: DocumentKind;
   readonly manifest: DocumentKind;
   readonly curvature: DocumentKind;
+  /** Парный presentation-документ сцены (`presentation-scene` PRES-1). */
+  readonly presentation: DocumentKind;
 }
 
 export const DEFAULT_PAIR_KINDS: PairKinds = Object.freeze({
   scene: 'scene',
   manifest: 'manifest',
   curvature: 'curvature',
+  presentation: 'presentation',
 });
 
 /**
@@ -104,11 +113,34 @@ export const DEFAULT_TERRAIN_SITES: readonly TerrainSite[] = Object.freeze([
 
 export const PREFABS_PATH: JsonPath = Object.freeze(['prefabs']);
 export const ENTITIES_PATH: JsonPath = Object.freeze(['entities']);
+/** Раздел decoration-видов манифеста (`assets` ASSET-9). */
+export const MANIFEST_DECORATIONS_PATH: JsonPath = Object.freeze(['decorations']);
+
+/**
+ * Где в парном документе лежит список размещений (PRES-2). Умолчание, а не
+ * знание правила: адрес приносит собирающий редактор — тем же `DocumentSite`,
+ * которым он приносит адрес расстановки.
+ */
+export const DEFAULT_DECORATION_SITES: readonly DocumentSite[] = Object.freeze([
+  Object.freeze({ kind: 'presentation', path: Object.freeze(['decorations']) }),
+]);
+
+/**
+ * Где в манифесте лежит таблица длящихся эффектов (`assets` ASSET-8): ключ
+ * записи — имя компоненты-состояния, и знать её обязан тот, кто ищет вторую
+ * сторону в конфиге сцены.
+ */
+export const MANIFEST_LASTING_EFFECTS_PATH: JsonPath = Object.freeze(['cameraEffects', 'states']);
+
+/** Где в конфиге сцены объявлены компоненты (SER-7). */
+export const COMPONENTS_PATH: JsonPath = Object.freeze(['components']);
 
 export const VISUAL_FOR_PREFAB_RULE = 'editor.visualForPrefab';
 export const PREFAB_FOR_VISUAL_RULE = 'editor.prefabForVisual';
 export const PLACEMENT_PREFAB_RULE = 'editor.placementPrefab';
 export const CURVATURE_GRID_RULE = 'editor.curvatureGrid';
+export const DECORATION_VISUAL_RULE = 'editor.decorationVisual';
+export const CAMERA_EFFECT_STATE_RULE = 'editor.cameraEffectState';
 
 /**
  * Коды причин: константами, а не литералами в двух местах. Один и тот же код
@@ -117,11 +149,15 @@ export const CURVATURE_GRID_RULE = 'editor.curvatureGrid';
  * разошёлся бы ровно так, как расходится запрещённая ED-28 таблица.
  *
  * `MISSING_PREFAB` — один на два правила: «названного prefab'а нет» — одно и то
- * же нарушение, и различает их правило, а не код.
+ * же нарушение, и различает их правило, а не код. Тем же способом `MISSING_VISUAL`
+ * делят «prefab без записи манифеста» (ED-19) и «ссылка decoration в никуда»
+ * (`presentation-scene` PRES-2): нарушение одно — названной записи манифеста не
+ * существует.
  */
 const MISSING_VISUAL = 'missingVisual';
 const MISSING_PREFAB = 'missingPrefab';
 const GRID_MISMATCH = 'gridMismatch';
+const MISSING_COMPONENT = 'missingComponent';
 
 /**
  * Prefabs, которые сцена поднимет, не объявляя их в документе: носители
@@ -262,6 +298,154 @@ export function placementPrefabRule(
   };
 }
 
+/**
+ * Визуальные ключи манифеста — оба раздела в одном пространстве (ASSET-9).
+ * Читаются они здесь путями, а не `visualKeys` модуля ассетов, по той же
+ * причине, по какой prefab'ы читаются `prefabNamesOf`: документ в сессии —
+ * произвольный JSON, который автор правит прямо сейчас и который может быть
+ * поломан, а валидатор ассетов работает по разобранному манифесту и на
+ * поломанном отказывает целиком. Правило обязано подсветить ссылку и тогда.
+ */
+const VISUAL_SECTIONS: readonly JsonPath[] = Object.freeze([
+  ENTITIES_PATH,
+  MANIFEST_DECORATIONS_PATH,
+]);
+
+function visualKeysOf(value: JsonValue | undefined): readonly string[] {
+  if (value === undefined) return [];
+  const names: string[] = [];
+  for (const path of VISUAL_SECTIONS) {
+    const section = getAtPath(value, path);
+    if (isJsonObject(section)) names.push(...Object.keys(section));
+  }
+  return names;
+}
+
+/**
+ * Известные визуальные ключи вместе с адресами, по которым они лежат. Отдельно
+ * от `collect` потому, что адрес здесь не один: пространство ключей одно, а
+ * разделов манифеста два (ASSET-9), и назвать в находке только `entities`
+ * значило бы отправить исправляющего не туда — вид, которого не хватает,
+ * заводится в любом из двух.
+ */
+function collectVisuals(documents: readonly EditorDocument[], run: ValidationRun): Known {
+  const names = new Set<string>();
+  const targets: DocumentPathRef[] = [];
+  for (const document of documents) {
+    for (const name of visualKeysOf(run.valueOf(document.id))) names.add(name);
+    for (const path of VISUAL_SECTIONS) targets.push({ documentId: document.id, path });
+  }
+  return { names, sorted: [...names].sort(compareIds), targets: Object.freeze(targets) };
+}
+
+/**
+ * PRES-2: `visual` записи decoration, не разрешающийся в запись манифеста
+ * визуалов. Ищется он в ОБОИХ разделах (ASSET-9): вид, нужный и prop'у, и
+ * декорации, описан один раз, и требовать копии в разделе decoration-видов
+ * значило бы чинить норму реализацией.
+ *
+ * Важность — предупреждение: в рантайме такая запись рисуется заглушкой с
+ * предупреждением, а остальная сцена рисуется как обычно (ASSET-6), и делать
+ * редактор строже нормы здесь незачем.
+ */
+export function decorationVisualRule(
+  kinds: PairKinds = DEFAULT_PAIR_KINDS,
+  sites: readonly DocumentSite[] = DEFAULT_DECORATION_SITES,
+): ValidationRule {
+  const appliesTo = [...new Set(sites.map((site) => site.kind))].sort(compareIds);
+  return {
+    id: DECORATION_VISUAL_RULE,
+    descriptionKey: ruleDescriptionKey(DECORATION_VISUAL_RULE),
+    reasonCodes: [MISSING_VISUAL],
+    appliesTo,
+    severity: 'warning',
+    check(run) {
+      // Незагруженный манифест — не оборванная ссылка, а незагруженный
+      // манифест: помечать по нему весь список значило бы кричать о состоянии
+      // редактора, а не о документах.
+      const manifests = run.documentsOfKind(kinds.manifest);
+      if (manifests.length === 0) return;
+      const known = collectVisuals(manifests, run);
+      for (const site of sites) {
+        if (site.kind !== run.document.kind) continue;
+        const list = getAtPath(run.document.value, site.path);
+        if (!isJsonArray(list)) continue;
+        list.forEach((entry, index) => {
+          if (!isJsonObject(entry)) return;
+          const name = entry['visual'];
+          // Форму записи проверяет формат (PRES-2): не-строка — его нарушение,
+          // а не отсутствующая ссылка, и второго сообщения о ней здесь нет.
+          if (typeof name !== 'string' || known.names.has(name)) return;
+          run.report({
+            path: [...site.path, index, 'visual'],
+            expected: { kind: 'reference', targets: known.targets, known: known.sorted },
+            code: MISSING_VISUAL,
+            params: { name },
+          });
+        });
+      }
+    },
+  };
+}
+
+/** Имена компонент, объявленных конфигом сцены (SER-7). */
+function componentNamesOf(value: JsonValue | undefined): readonly string[] {
+  if (value === undefined) return [];
+  const list = getAtPath(value, COMPONENTS_PATH);
+  if (!isJsonArray(list)) return [];
+  const names: string[] = [];
+  for (const entry of list) {
+    if (isJsonObject(entry) && typeof entry['name'] === 'string') names.push(entry['name']);
+  }
+  return names;
+}
+
+/**
+ * `camera` CAM-6, `assets` ASSET-8: ключ таблицы длящихся эффектов — имя
+ * компоненты-состояния, и выводится оно из открытой сцены целиком (SER-7).
+ * Ключ, которого ни одна сцена не объявляет, — привязка в никуда: эффект не
+ * включится никогда, а автор об этом узнает только не увидев его.
+ *
+ * Важность — предупреждение: в рантайме такая запись просто не активируется, а
+ * манифест переживает код (ASSET-8) — сцена, объявляющая эту компоненту, может
+ * лежать в проекте и быть незагруженной прямо сейчас.
+ *
+ * Второго условия срабатывания длящегося эффекта — зеркалирования компоненты в
+ * `EntityView.states` списком `stateComponents` Extractor'а — правило не ловит:
+ * это конфиг сборки клиента, документом редактора он не является. В рантайме на
+ * него уже есть предупреждение диспетчера.
+ *
+ * Пары к таблице `events` здесь нет намеренно: машинного перечня типов событий
+ * тика не существует (нативные системы называют их литералами), и правило
+ * «имя события никем не эмитится» ругалось бы на каждое из них. Имена событий
+ * редактор подсказывает, а не проверяет.
+ */
+export function cameraEffectStateRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): ValidationRule {
+  return {
+    id: CAMERA_EFFECT_STATE_RULE,
+    descriptionKey: ruleDescriptionKey(CAMERA_EFFECT_STATE_RULE),
+    reasonCodes: [MISSING_COMPONENT],
+    appliesTo: [kinds.manifest],
+    severity: 'warning',
+    check(run) {
+      const scenes = run.documentsOfKind(kinds.scene);
+      if (scenes.length === 0) return;
+      const known = collect(scenes, COMPONENTS_PATH, componentNamesOf, run);
+      const table = getAtPath(run.document.value, MANIFEST_LASTING_EFFECTS_PATH);
+      if (!isJsonObject(table)) return;
+      for (const name of Object.keys(table)) {
+        if (known.names.has(name)) continue;
+        run.report({
+          path: [...MANIFEST_LASTING_EFFECTS_PATH, name],
+          expected: { kind: 'reference', targets: known.targets, known: known.sorted },
+          code: MISSING_COMPONENT,
+          params: { name },
+        });
+      }
+    },
+  };
+}
+
 /** Найденная сетка террейна: где лежит и что там. */
 interface FoundGrid {
   readonly documentId: DocumentId;
@@ -332,11 +516,14 @@ export function crossDocumentRules(
   kinds: PairKinds = DEFAULT_PAIR_KINDS,
   sites: readonly PlacementSite[] = DEFAULT_PLACEMENT_SITES,
   terrainSites: readonly TerrainSite[] = DEFAULT_TERRAIN_SITES,
+  decorationSites: readonly DocumentSite[] = DEFAULT_DECORATION_SITES,
 ): readonly ValidationRule[] {
   return Object.freeze([
     visualForPrefabRule(kinds),
     prefabForVisualRule(kinds),
     placementPrefabRule(kinds, sites),
     curvatureGridRule(kinds, terrainSites),
+    decorationVisualRule(kinds, decorationSites),
+    cameraEffectStateRule(kinds),
   ]);
 }
