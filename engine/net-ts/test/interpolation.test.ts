@@ -76,6 +76,26 @@ describe('порядок буфера', () => {
     expect(sample.to.tick).toBe(2);
     expect(sample.alpha).toBe(0);
   });
+
+  it('сброс на смене эпохи опустошает буфер, и перемотанное состояние применяется snap\'ом', () => {
+    const buffer = new InterpolationBuffer({ delayMs: 100 });
+    for (let tick = 500; tick <= 510; tick++) buffer.push({ tick } as Snapshot, tick * 33);
+
+    // Мир перемотан на тик 480: состояния прежней эпохи стёрты вместе с ней
+    // (NTR-10). Без сброса `latest` остался бы на тике 510 — порядок буфера
+    // держится тиком, — и перемотанный мир не показался бы вовсе.
+    buffer.reset();
+    expect(buffer.length).toBe(0);
+    expect(buffer.latest).toBeUndefined();
+
+    buffer.push({ tick: 480 } as Snapshot, 510 * 33);
+    expect(buffer.latest!.tick).toBe(480);
+    // Интерполировать между ветвями истории нечем: from === to, «проезда» нет.
+    const sample = buffer.sample(510 * 33 + 200)!;
+    expect(sample.from.tick).toBe(480);
+    expect(sample.to.tick).toBe(480);
+    expect(sample.alpha).toBe(0);
+  });
 });
 
 describe('исчезновение сущности', () => {

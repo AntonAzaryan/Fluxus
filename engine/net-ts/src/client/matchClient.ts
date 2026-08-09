@@ -104,6 +104,8 @@ export class MatchClient {
    * помечен ею же.
    */
   private lastAppliedEpoch = 0;
+  /** Разрыв непрерывности мира: взведён сменой эпохи, гасится чтением (SHELL-7). */
+  private discontinuityPending = false;
   private nextSeq = 1;
   private lastMeasuredSeq = 0;
 
@@ -146,6 +148,32 @@ export class MatchClient {
   /** Последний применённый снапшот — вход для рендера и для проверок. */
   get latest(): Snapshot | undefined {
     return this.buffer.latest;
+  }
+
+  /** Эпоха последнего применённого состояния (NTR-16) — вторая половина его номера. */
+  get epoch(): number {
+    return this.lastAppliedEpoch;
+  }
+
+  /**
+   * Признак разрыва непрерывности, взведённый сменой эпохи (NTR-10): состояние
+   * принадлежит другой ветви истории, промежуточных положений между ним и
+   * предыдущим не существовало, и рисовать его нужно snap'ом (`client-shell`
+   * SHELL-7, `rendering` REND-2).
+   *
+   * Читается вместе с состоянием и гасится чтением — как признаки разрыва в
+   * канале оболочки, где они копятся до ближайшей доставки. Подглядеть, не
+   * гася, — `discontinuous`.
+   */
+  takeDiscontinuity(): boolean {
+    const pending = this.discontinuityPending;
+    this.discontinuityPending = false;
+    return pending;
+  }
+
+  /** Тот же признак, но без гашения — для диагностики и проверок. */
+  get discontinuous(): boolean {
+    return this.discontinuityPending;
   }
 
   /** Предъявление версии (NET-16) — первое, что уходит в соединение. */
@@ -195,7 +223,9 @@ export class MatchClient {
       buttons: sample.buttons,
     };
     this.nextSeq++;
-    this.ring.push(frame, nowMs);
+    // Кольцо хранит кадр вместе с эпохой отправки (NTR-10): кадр стёртой
+    // эпохи переотправке не подлежит, но остаётся материалом диагностики.
+    this.ring.push(frame, nowMs, this.lastAppliedEpoch);
     // Ввод адресуется парой (NTR-7): номер тика без эпохи не называет тик
     // матча, в котором была перемотка, и кадр из стёртой ветви истории
     // применился бы тем успешнее, чем мельче был откат.
@@ -294,8 +324,20 @@ export class MatchClient {
 
   private onSnapshot(epoch: number, tick: number, plain: unknown, nowMs: number): void {
     // Условие работы на неупорядоченном канале (NTR-10): устаревший снапшот
-    // отбрасывается, и картинка назад не прыгает.
-    if (tick <= this.lastAppliedTick) {
+    // отбрасывается, и картинка назад не прыгает. Сравнение идёт по паре
+    // (эпоха, тик) лексикографически, а не по одному тику (NTR-16): при
+    // перемотке номера тиков идут назад, и сравнение по тику погасило бы ровно
+    // те состояния, которые NET-11 велит показать, — «устаревший» и
+    // «перемотанный» снапшоты по одному номеру тика неразличимы.
+    //
+    // Равная пара отбрасывается вместе с меньшей: одна эпоха и один тик
+    // достижимы только повторной рассылкой того же состояния — живой тик
+    // исполняется за эпоху один раз, — и другого состояния с этой парой не
+    // существует (NTR-16).
+    const stale =
+      epoch < this.lastAppliedEpoch ||
+      (epoch === this.lastAppliedEpoch && tick <= this.lastAppliedTick);
+    if (stale) {
       this.metrics.snapshotsDropped++;
       return;
     }
@@ -321,9 +363,18 @@ export class MatchClient {
       return;
     }
 
+    // Рост эпохи читается как разрыв непрерывности мира (NTR-10) и разбирается
+    // до применения состояния: буфер интерполяции сбрасывается, состояние
+    // ложится в него первым и потому применяется snap'ом, признак разрыва
+    // уходит оболочке (SHELL-7), а оценка серверного тика пересинхронизируется.
+    const rewound = epoch > this.lastAppliedEpoch;
     this.lastAppliedEpoch = epoch;
     this.lastAppliedTick = tick;
-    this.resyncTick(tick);
+    if (rewound) {
+      this.buffer.reset();
+      this.discontinuityPending = true;
+    }
+    this.resyncTick(tick, rewound);
     this.buffer.push(snapshot, nowMs);
     this.metrics.snapshotsApplied++;
     this.measureResponse(snapshot, nowMs);
@@ -343,8 +394,18 @@ export class MatchClient {
    * с плечом она занижает оценку и часть кадров начнёт опаздывать. Правильная
    * граница — та же плюс половина круга; вводится вместе с компенсацией в
    * `advance()`, по замеру на реальном канале.
+   *
+   * На смене эпохи (`rewound`) оценка ставится ровно на тик первого снапшота
+   * новой эпохи, а не подтягивается постепенно (NTR-10). Постепенное
+   * подтягивание её не опустило бы вовсе — `max` держит прежнее значение, —
+   * и собственные кадры клиента остались бы адресованными в стёртое будущее:
+   * сервер отбрасывал бы их как вышедшие за окно приёма (NTR-7).
    */
-  private resyncTick(snapshotTick: number): void {
+  private resyncTick(snapshotTick: number, rewound: boolean): void {
+    if (rewound) {
+      this.estimatedTick = snapshotTick;
+      return;
+    }
     const pacing = this.matchPacing;
     if (pacing === undefined) {
       this.estimatedTick = Math.max(this.estimatedTick, snapshotTick);

@@ -39,14 +39,14 @@ describe('ёмкость кольца', () => {
 describe('поиск по тику', () => {
   it('отдаёт кадр вместе с моментом отправки', () => {
     const ring = new InputRing(8);
-    ring.push(frame(5, 1), 1000);
+    ring.push(frame(5, 1), 1000, 0);
 
-    expect(ring.at(5)).toEqual({ frame: frame(5, 1), sentAtMs: 1000 });
+    expect(ring.at(5)).toEqual({ frame: frame(5, 1), sentAtMs: 1000, epoch: 0 });
   });
 
   it('на тике, до которого кольцо ещё не дошло, — промах', () => {
     const ring = new InputRing(8);
-    ring.push(frame(5, 1), 1000);
+    ring.push(frame(5, 1), 1000, 0);
 
     expect(ring.at(4)).toBeUndefined();
     expect(ring.at(6)).toBeUndefined();
@@ -54,11 +54,11 @@ describe('поиск по тику', () => {
 
   it('вытесненный тик — промах, а не кадр, занявший его слот', () => {
     const ring = new InputRing(8);
-    ring.push(frame(5, 1), 1000);
+    ring.push(frame(5, 1), 1000, 0);
     // Тик 13 садится ровно в слот тика 5 (13 % 8 === 5).
-    ring.push(frame(13, 2), 2000);
+    ring.push(frame(13, 2), 2000, 0);
 
-    expect(ring.at(13)).toEqual({ frame: frame(13, 2), sentAtMs: 2000 });
+    expect(ring.at(13)).toEqual({ frame: frame(13, 2), sentAtMs: 2000, epoch: 0 });
     // Вернись здесь кадр тика 13 — отклик посчитался бы от чужой отправки,
     // то есть промахнулся бы на глубину кольца.
     expect(ring.at(5)).toBeUndefined();
@@ -66,7 +66,7 @@ describe('поиск по тику', () => {
 
   it('хранит ровно capacity последних тиков, на тик глубже — уже нет', () => {
     const ring = new InputRing(4);
-    for (let tick = 0; tick < 10; tick++) ring.push(frame(tick), tick * 16);
+    for (let tick = 0; tick < 10; tick++) ring.push(frame(tick), tick * 16, 0);
 
     // Последние четыре тика на месте.
     for (let tick = 6; tick < 10; tick++) {
@@ -86,8 +86,8 @@ describe('поиск по тику', () => {
 describe('поиск по seq (метрика отклика)', () => {
   it('находит отправку по номеру, который вернулся в снапшоте', () => {
     const ring = new InputRing(8);
-    ring.push(frame(5, 41), 1000);
-    ring.push(frame(6, 42), 1016);
+    ring.push(frame(5, 41), 1000, 0);
+    ring.push(frame(6, 42), 1016, 0);
 
     expect(ring.bySeq(42)?.sentAtMs).toBe(1016);
     expect(ring.bySeq(41)?.frame.tick).toBe(5);
@@ -95,8 +95,8 @@ describe('поиск по seq (метрика отклика)', () => {
 
   it('на неизвестном и вытесненном seq — промах, а не чужая отправка', () => {
     const ring = new InputRing(8);
-    ring.push(frame(5, 41), 1000);
-    ring.push(frame(13, 49), 2000);
+    ring.push(frame(5, 41), 1000, 0);
+    ring.push(frame(13, 49), 2000, 0);
 
     expect(ring.bySeq(7)).toBeUndefined();
     expect(ring.bySeq(41)).toBeUndefined();
@@ -104,12 +104,38 @@ describe('поиск по seq (метрика отклика)', () => {
 
   it('seq вне кольца — undefined, а не чужой кадр', () => {
     const ring = new InputRing(2);
-    ring.push(frame(1, 100), 10);
-    ring.push(frame(2, 101), 20);
-    ring.push(frame(3, 102), 30); // вытесняет seq 100
+    ring.push(frame(1, 100), 10, 0);
+    ring.push(frame(2, 101), 20, 0);
+    ring.push(frame(3, 102), 30, 0); // вытесняет seq 100
 
     expect(ring.bySeq(100)).toBeUndefined();
     expect(ring.bySeq(999)).toBeUndefined();
     expect(ring.bySeq(102)?.frame.tick).toBe(3);
+  });
+});
+
+describe('эпоха рядом с кадром (NTR-10)', () => {
+  it('кадр помнит эпоху отправки, а не только тик', () => {
+    const ring = new InputRing(8);
+    ring.push(frame(5, 1), 1000, 0);
+    ring.push(frame(6, 2), 1016, 1);
+
+    expect(ring.at(5)?.epoch).toBe(0);
+    expect(ring.at(6)?.epoch).toBe(1);
+    expect(ring.bySeq(2)?.epoch).toBe(1);
+  });
+
+  it('перемотка не выметает кольцо: стёртая эпоха остаётся счётной диагностикой', () => {
+    const ring = new InputRing(8);
+    // Три кадра ушли до перемотки, два — после возобновления с тика 4.
+    for (let tick = 1; tick <= 3; tick++) ring.push(frame(tick), tick * 16, 0);
+    for (let tick = 4; tick <= 5; tick++) ring.push(frame(tick), tick * 16, 1);
+
+    // Ровно столько ввода унесла перемотка — и это единственное, ради чего
+    // кадры стёртой эпохи в кольце остаются: переотправке они не подлежат.
+    expect(ring.strandedBefore(1)).toBe(3);
+    expect(ring.at(2)?.epoch).toBe(0);
+    // Внутри своей эпохи не унесено ничего.
+    expect(ring.strandedBefore(0)).toBe(0);
   });
 });
