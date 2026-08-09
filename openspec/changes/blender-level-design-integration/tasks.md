@@ -4,7 +4,7 @@
 
 ## 1. Норма и документы
 
-- [ ] 1.1 Импортировать отчёт-обоснование в `docs/reviews/2026-08-09-blender-level-editor.md` (текст PDF «Blender as a Level Editor for Fluxus», ненормативно, с пометкой источника)
+- [x] 1.1 Импортировать отчёт-обоснование в `docs/reviews/2026-08-09-blender-level-editor.md` (текст PDF «Blender as a Level Editor for Fluxus», ненормативно, с пометкой источника)
 - [ ] 1.2 Написать `tools/blender-ts/CONVENTIONS.md`: фиксированная LTS-версия Blender, «+Y Up», 1 юнит = 1 м, соответствие осей `(x, y) ← (x, −z)`, `yaw` вокруг Y долями оборота, применённые трансформы, схема custom properties (`prefab`, `visual`, `terrain`, `curvature`, `<Компонент>.<поле>`, `skin`), правило имён объектов как порядка записей (BLND-4)
 - [ ] 1.3 Сверить дельты спек: `openspec validate --strict`; после архивации — `npm run spec-graph -- check` (ссылки BLND-* ↔ PRES-*/CONT-*/CAM-*/ASSET-*/ED-*/TERR-*)
 
