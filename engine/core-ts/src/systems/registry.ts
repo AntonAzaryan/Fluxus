@@ -3,7 +3,8 @@ import type { System, WorldState } from '../types.js';
 
 /**
  * Реестр систем. Единственный источник порядка исполнения — поле `order`
- * (DET-3); порядок регистрации на результат не влияет.
+ * (DET-3); порядок регистрации на результат не влияет. Шкала `order` одна на
+ * нативные и JSON-описанные системы, и значения в ней попарно различны (DET-9).
  */
 export class SystemRegistry {
   private readonly systems: System[] = [];
@@ -13,12 +14,13 @@ export class SystemRegistry {
     if (this.systems.some((s) => s.name === system.name)) {
       throw new Error(`система с именем "${system.name}" уже зарегистрирована`);
     }
-    // Равные order оставили бы порядок на усмотрение сортировки — то есть на
-    // усмотрение реализации. Для парности с Rust это недопустимо.
+    // Уникальность `order`, запрет tie-break'а и требование назвать обе системы
+    // в ошибке — норма DET-9; здесь только её проверка.
     const clash = this.systems.find((s) => s.order === system.order);
     if (clash !== undefined) {
       throw new Error(
-        `order ${system.order} занят системой "${clash.name}": порядок должен быть однозначен (DET-3)`,
+        `order ${system.order} занят системой "${clash.name}", на него же встаёт "${system.name}": ` +
+          `порядок должен быть однозначен (DET-9)`,
       );
     }
     this.systems.push(system);
@@ -34,7 +36,7 @@ export class SystemRegistry {
   /**
    * Подмена реализации по имени (SYS-7). `order` обязан совпадать: подмена,
    * тихо сдвинувшая порядок, меняет результат симуляции, ничего не сломав
-   * видимо, — тот же класс ошибки, ради которого DET-3 запрещает равные order.
+   * видимо, — тот же класс ошибки, ради которого DET-9 запрещает равные order.
    */
   override(system: System): void {
     const index = this.systems.findIndex((s) => s.name === system.name);

@@ -122,7 +122,7 @@ export {
   ARENA_PREFAB,
   ARENA_STATE_COMPONENT,
 } from './systems/arena.js';
-export type { ArenaDef, ArenaOptions } from './systems/arena.js';
+export type { ArenaDef } from './systems/arena.js';
 export {
   VisibilitySystem,
   teamBit,

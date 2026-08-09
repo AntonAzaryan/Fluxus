@@ -115,9 +115,7 @@ export function runScenario(def: ScenarioDef, diagnostics?: DiagnosticsSink): Ru
   // Видимость считается по финальным позициям тика, поэтому регистрируется
   // после физики (FOW-6).
   if (def.visibility !== undefined) {
-    systems.register(
-      new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT), def.visibility),
-    );
+    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
   }
 
   // Расстановка сценария — после расстановки сцены, которую применил

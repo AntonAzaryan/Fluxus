@@ -16,7 +16,7 @@
       "minLength": 1
     },
     "order": {
-      "$comment": "Равные order недопустимы (DET-3).",
+      "$comment": "Место системы в тике; равные order недопустимы (SYS-2, DET-9).",
       "type": "integer"
     },
     "query": {

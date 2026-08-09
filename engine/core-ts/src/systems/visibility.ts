@@ -104,12 +104,15 @@ export function isVisibleTo(mask: number, team: number): boolean {
 
 // -------------------------------------------------------------------- система
 
-/** Обзор считается после движения (`PhysicsSystem` — 100) и до конца тика (FOW-6). */
-const DEFAULT_ORDER = 900;
+/** Якорь шкалы `order` (DET-9); параметром сборки не является. */
+const ANCHOR_ORDER = 900;
 
-export interface VisibilityOptions {
-  readonly order?: number;
-}
+/**
+ * Опций у системы не осталось: место в тике — якорь, а не параметр (DET-9).
+ * Тип сохранён как форма поля-включателя в документах прогона и матча
+ * (`"visibility": {}` в сценарии, CLI-2), поэтому объект без свойств.
+ */
+export type VisibilityOptions = Record<string, never>;
 
 /**
  * FOW-5: за тик по каждому наблюдателю — кандидаты через `withinRadius`,
@@ -124,7 +127,7 @@ export interface VisibilityOptions {
  */
 export class VisibilitySystem implements System {
   readonly name = 'Visibility';
-  readonly order: number;
+  readonly order = ANCHOR_ORDER;
   // Поле объявлено явно, а не parameter property в конструкторе: ядро исполняется
   // без сборки — типы стрипает сам Node (>=22.18), а strip-only режим отвергает
   // parameter properties, потому что те порождают код, а не только удаляют типы.
@@ -133,9 +136,8 @@ export class VisibilitySystem implements System {
   private readonly modifiers: ModifierList;
 
   /** Список источников обзора приходит извне (DI-1): своего модульного у системы нет. */
-  constructor(modifiers: ModifierList, options: VisibilityOptions = {}) {
+  constructor(modifiers: ModifierList) {
     this.modifiers = modifiers;
-    this.order = options.order ?? DEFAULT_ORDER;
   }
 
   run(ctx: SystemContext): void {
