@@ -89,6 +89,7 @@ export { MatchClient } from './client/matchClient.js';
 export type {
   ClientPhase,
   ContentPack,
+  DeliveredEvents,
   InputSample,
   MatchClientOptions,
   MatchSample,
