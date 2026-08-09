@@ -415,6 +415,85 @@ describe('validateManifest: секция эффектов камеры (ASSET-8)
   });
 });
 
+/**
+ * ASSET-10: секция задаёт ЗНАЧЕНИЯ, состав параметров принадлежит коду камеры
+ * (CAM-1) и приезжает описанием — своего перечня у теста нет ровно по той же
+ * причине, по какой его нет у модуля ассетов.
+ */
+describe('validateManifest: секция конфига камеры (ASSET-10)', () => {
+  const entities = { x: { model: 'm.mdx' } };
+  const description = { params: ['pitch', 'distance', 'effectsMultiplier'] };
+  const checked = (section: unknown) =>
+    validateManifest({ entities, cameraConfig: section }, { cameraConfig: description });
+
+  it('манифест без секции валиден — камера на умолчаниях кода', () => {
+    const result = validateManifest({ entities });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.cameraConfig).toBeUndefined();
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('известные параметры числами проходят и типизируются', () => {
+    const result = checked({ pitch: 0.7, distance: 22, effectsMultiplier: 0 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.cameraConfig!['distance']).toBe(22);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('неизвестный параметр — предупреждение и пропуск, а не ошибка (симметрия с ASSET-8)', () => {
+    const result = checked({ pitch: 0.7, wobbliness: 3 });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/cameraConfig\.wobbliness/);
+  });
+
+  it('без описания состав параметров не проверяется вовсе: своего перечня у валидации нет', () => {
+    const result = validateManifest({ entities, cameraConfig: { wobbliness: 3 } });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('нечисловое значение — ошибка на общих основаниях манифеста', () => {
+    expectErrors(
+      { entities, cameraConfig: { distance: 'далеко' } },
+      /cameraConfig\.distance: параметр конфига камеры — конечное число/,
+    );
+    // Структура секции проверяется одинаково с описанием и без него: иначе один
+    // документ был бы валиден у клиента и невалиден у редактора.
+    const withDescription = checked({ distance: 'далеко' });
+    expect(withDescription.ok).toBe(false);
+    expectErrors({ entities, cameraConfig: 42 }, /cameraConfig: ожидался объект/);
+    expectErrors({ entities, cameraConfig: { pitch: null } }, /cameraConfig\.pitch/);
+  });
+
+  it('опечатка в имени секции ловится схемой манифеста', () => {
+    expectErrors({ entities, cameraConfigs: {} }, /манифест\.cameraConfigs: неизвестное поле/);
+  });
+
+  it('загрузчик с описанием логирует предупреждение и загрузку не роняет (ASSET-4)', async () => {
+    const warnings: string[] = [];
+    const svc = new AssetService(
+      new MemoryAssetSource(
+        new Map([
+          [
+            'visuals.json',
+            bytesOf(JSON.stringify({ entities, cameraConfig: { pitch: 0.7, wobbliness: 3 } })),
+          ],
+        ]),
+      ),
+    );
+    svc.registerLoader(
+      createManifestLoader({ cameraConfig: description, warn: (m) => warnings.push(m) }),
+    );
+    const state = await settled(svc, svc.request('manifest', 'visuals.json'));
+    expect(state.status).toBe('ready');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/wobbliness/);
+  });
+});
+
 describe('validateManifest: вертикальное смещение инстанса (ASSET-6, REND-12)', () => {
   const entities = { x: { model: 'm.mdx' } };
 

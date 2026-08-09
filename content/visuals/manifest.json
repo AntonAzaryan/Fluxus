@@ -76,6 +76,31 @@
   "terrain": {
     "curvatureMap": "visuals/arena-curvature.json"
   },
+  "cameraConfig": {
+    "pitch": 0.8726646259971648,
+    "yaw": 1.5707963267948966,
+    "fovDeg": 45,
+    "distance": 16,
+    "minDistance": 8,
+    "maxDistance": 28,
+    "zoomStep": 1.15,
+    "followSmoothing": 6,
+    "zoomSmoothing": 8,
+    "heightSmoothing": 8,
+    "recenterSmoothing": 10,
+    "panSpeed": 14,
+    "dragPanPerPx": 0.02,
+    "edgeMarginPx": 24,
+    "boundsMargin": 2,
+    "snapDistance": 2,
+    "recenterEpsilon": 0.1,
+    "flySpeed": 12,
+    "flySpeedMin": 2,
+    "flySpeedMax": 60,
+    "flySpeedStep": 1.2,
+    "lookSensitivity": 0.005,
+    "effectsMultiplier": 1
+  },
   "cameraEffects": {
     "events": {
       "FireballExploded": {
