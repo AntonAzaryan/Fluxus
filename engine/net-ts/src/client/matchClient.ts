@@ -30,7 +30,11 @@ import {
 import { buildMatchWorld, orderedSchemas } from '../match/world.js';
 import { createClientMetrics, recordInputToVisible, type ClientMetrics } from '../metrics.js';
 import { InputRing, DEFAULT_RING_TICKS } from './inputRing.js';
-import { InterpolationBuffer, type InterpolationSample } from './interpolation.js';
+import {
+  InterpolationBuffer,
+  type InterpolationSample,
+  type PresentedState,
+} from './interpolation.js';
 import type {
   ClientCloseReason,
   ClientMessage,
@@ -207,8 +211,17 @@ export class MatchClient {
     return this.estimatedTick;
   }
 
-  /** Последний применённый снапшот — вход для рендера и для проверок. */
-  get latest(): Snapshot | undefined {
+  /**
+   * Последнее применённое состояние — вход для рендера и для проверок, в
+   * презентационной проекции: снапшот БЕЗ шины (`PresentedState`, NTR-15).
+   *
+   * Шина в кадре на проводе остаётся и в буфере хранится: это состояние,
+   * восстанавливаемое вместе с миром (SNAP-1). Наружу её не отдаёт ни этот
+   * геттер, ни `sample()` — единственный источник фактов для представления
+   * `takeEvents()`, и «не открывать шину вовсе» (задача 4.4) держится типом, а
+   * не примечанием в документации.
+   */
+  get latest(): PresentedState | undefined {
     return this.buffer.latest;
   }
 
@@ -262,9 +275,18 @@ export class MatchClient {
    * же причине, что у `takeDiscontinuity()`. Подглядеть, не сливая, —
    * `pendingEvents`.
    *
-   * Шина применённого снапшота источником фактов НЕ является и наружу не
-   * открыта вовсе (NTR-15, «Шина внутри снапшота»): события тиков рассылки
-   * проигрались бы дважды. Единственный источник — этот метод.
+   * Единственный источник фактов — этот метод (NTR-15, «Шина внутри
+   * снапшота»). Шина остаётся в кадре на проводе и в буфере как СОСТОЯНИЕ,
+   * восстанавливаемое вместе с миром (SNAP-1), но презентационная поверхность
+   * её не отдаёт: и `latest`, и `sample()` дают `PresentedState` — снапшот без
+   * шины. Прочитай представление шину — события тиков рассылки проигрались бы
+   * дважды.
+   *
+   * Факты стёртой перемоткой ветви, уже попавшие в очередь и ещё не слитые,
+   * потребителю ДОЕДУТ: очередь — доставленное, а не предсказание того, что
+   * доставку переживёт. Отличить их даёт `DeliveredEvents.epoch`, и решение —
+   * проиграть или выбросить — принимает потребитель (решение 8 дизайна): для
+   * него граница эпохи и так разрыв, рисуемый snap'ом (SHELL-7).
    */
   takeEvents(): DeliveredEvents[] {
     if (this.eventQueue.length === 0) return [];

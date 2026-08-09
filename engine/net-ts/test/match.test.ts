@@ -14,7 +14,6 @@ import {
   runScenario,
   snapshotToPlain,
   world as coreWorld,
-  type Snapshot,
 } from '@game-mvp/core';
 import {
   connectClient,
@@ -32,13 +31,14 @@ import {
 } from './fixtures.js';
 import { replaySegments } from '../src/match/replay.js';
 import type { InputSource } from '../src/client/host.js';
+import type { PresentedState } from '../src/client/interpolation.js';
 import type { MatchConfig, Outgoing } from '../src/server/matchServer.js';
 
 function walkRight(untilTick: number): InputSource {
   return (tick) => (tick <= untilTick ? { move: { x: STEP, y: 0 }, aimDir: 0, buttons: 0 } : undefined);
 }
 
-function positionOfSlot(snapshot: Snapshot, slot: number): { x: number; y: number } | undefined {
+function positionOfSlot(snapshot: PresentedState, slot: number): { x: number; y: number } | undefined {
   for (const entity of query(snapshot.world, { all: ['Player', 'Position'] })) {
     if (coreWorld.getField(snapshot.world, entity, 'Player', 'slot') !== slot) continue;
     return {

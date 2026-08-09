@@ -22,6 +22,8 @@ import {
   inputMessageOf,
   wireInput,
 } from './fixtures.js';
+import { contentPack } from '../src/content/pack.js';
+import { MatchClient } from '../src/client/matchClient.js';
 import type { EventsMessage, SnapshotMessage } from '../src/protocol/messages.js';
 import type { MatchConfig, MatchServer, Outgoing } from '../src/server/matchServer.js';
 
@@ -239,6 +241,22 @@ describe('избыточность вместо подтверждений (NTR-
     expect(messages.map(ticksOf)).toEqual([[1], [1], [1], []]);
   });
 
+  it('повтор едет тем же объектом пачки: отбор случился один раз — на публикации', () => {
+    const server = running(duelConfig({ scene: castScene(), eventRepeat: 2 }));
+    server.receive(1, inputMessage(wireInput(1, 1, 0, 0, 1)));
+    advance(server, 6);
+
+    const messages = drainEvents(server).get(1)!;
+    expect(messages.map(ticksOf)).toEqual([[1], [1], [1]]);
+    // Тот же объект, а не равный: пачка отобрана вызовом фильтра на СВОЁМ тике
+    // и на рассылке не пересобирается. Пересборка означала бы отбор по
+    // состоянию мира на момент рассылки — то есть ровно ту ошибку, против
+    // которой написан «Момент фильтрации» (NTR-15).
+    const first = messages[0]!.batches[0]!;
+    expect(messages[1]!.batches[0]!).toBe(first);
+    expect(messages[2]!.batches[0]!).toBe(first);
+  });
+
   it('глубина 0 — без повтора', () => {
     const server = running(duelConfig({ scene: castScene(), eventRepeat: 0 }));
     server.receive(1, inputMessage(wireInput(1, 1, 0, 0, 1)));
@@ -319,6 +337,34 @@ describe('накопитель по viewpoint, а не по соединению
     const messages = drainEvents(server);
     expect(messages.get(1)![0]!).not.toBe(messages.get(2)![0]!);
   });
+
+  it('вернувшийся наблюдатель открывает диапазон заново, а не объявляет несобранное покрытым', () => {
+    const config = duelConfig({ scene: castScene(), eventRepeat: 2, allowObserver: true });
+    const server = running(config, true);
+    advance(server, 2);
+    expect(drainEvents(server).get(3)![0]!).toMatchObject({ from: 1, to: 2 });
+
+    // Наблюдатель ушёл: тики 3..4 его `viewpoint` никто не собирает.
+    server.disconnect(3);
+    server.receive(1, inputMessage(wireInput(3, 1, 0, 0, 1)));
+    advance(server, 2);
+    // Контроль: каст на тике 3 БЫЛ — игроку он доехал, и молчание ниже не от
+    // того, что событие не случилось.
+    expect(drainEvents(server).get(1)!.flatMap(ticksOf)).toEqual([3]);
+
+    server.connect(4);
+    server.receive(4, hello('watcher', config.version, true));
+    server.drain();
+    advance(server, 2);
+
+    const message = drainEvents(server).get(4)![0]!;
+    // Диапазон открыт первым СОБРАННЫМ после возвращения тиком. Объяви он 1..6
+    // (кольцо прежнего соединения так и предлагает), тики 3..4 значились бы
+    // покрытыми, и каст тика 3 читался бы как «событий не было» — потеря,
+    // выданная за тишину (NTR-15, «Объявленный диапазон»).
+    expect(message).toMatchObject({ epoch: 0, from: 5, to: 6 });
+    expect(ticksOf(message)).toEqual([]);
+  });
 });
 
 describe('эпоха диапазона (NTR-16)', () => {
@@ -342,10 +388,17 @@ describe('эпоха диапазона (NTR-16)', () => {
     const outgoing = server.drain();
     // Снапшот уходит — состояние восстановлено и наблюдаемо (NTR-16, REW-11).
     expect(outgoing.filter((entry) => entry.message.type === 'Snapshot')).toHaveLength(2);
-    // Событий — нет: расписание у потока то же, что у снапшотов по NTR-7
-    // (NTR-15, «Расписание»), тик восстановления исполнен в прежней эпохе и свои
-    // факты в ней уже отдал, а живых тиков новой эпохи ещё нет.
-    expect(eventsOf(outgoing).size).toBe(0);
+    // Новых событий рассылка восстановления не открывает: расписание у потока
+    // то же, что у снапшотов по NTR-7 (NTR-15, «Расписание»), живых тиков новой
+    // эпохи ещё нет. Уходит только последний, максимально избыточный повтор
+    // ПРЕЖНЕЙ эпохи, срезанный по точке восстановления («Избыточность»).
+    const streams = eventsOf(outgoing);
+    expect(streams.size).toBe(2);
+    for (const messages of streams.values()) {
+      expect(messages).toHaveLength(1);
+      expect(messages[0]!).toMatchObject({ epoch: 0, to: 3 });
+      expect(ticksOf(messages[0]!)).toEqual([]);
+    }
     expect(server.epoch).toBe(1);
   });
 
@@ -376,6 +429,125 @@ describe('эпоха диапазона (NTR-16)', () => {
     expect(ticksOf(message)).toEqual([4]);
   });
 
+  /**
+   * `snapshotRate` 15 при `tickRate` 60 — рассылка на каждом четвёртом тике:
+   * между рассылкой тика 4 и живым тиком 7 лежит открытое окно из трёх тиков, и
+   * точка восстановления делит его надвое. Ровно это деление и есть предмет
+   * проверок ниже.
+   */
+  function windowedRewindable(): MatchConfig {
+    return duelConfig({
+      scene: castScene(),
+      snapshotRate: 15,
+      eventRepeat: 2,
+      rewind: { interval: 1, capacity: 32 },
+    });
+  }
+
+  /** Каст p1 на тиках 5 и 7 — по разные стороны точки восстановления 6. */
+  function castsAtFiveAndSeven(server: MatchServer): void {
+    server.receive(
+      1,
+      inputMessage(wireInput(5, 1, 0, 0, 1), wireInput(6, 2, 0, 0, 0), wireInput(7, 3, 0, 0, 1)),
+    );
+  }
+
+  it('префикс исполненных тиков уходит сообщением прежней эпохи, стёртый хвост — нет', () => {
+    const server = running(windowedRewindable());
+    castsAtFiveAndSeven(server);
+    advance(server, 7);
+    // Рассылка была на тике 4; тики 5..7 остались в открытом окне.
+    expect(drainEvents(server).get(1)!.map((message) => [message.from, message.to])).toEqual([[1, 4]]);
+
+    server.pause();
+    server.beginRewind();
+    server.seekTo(6);
+
+    const outgoing = server.drain().filter((entry) => entry.to === 1);
+    expect(outgoing.map((entry) => entry.message.type)).toEqual(['Events', 'Snapshot']);
+    const prefix = outgoing[0]!.message as EventsMessage;
+    // Тики 5 и 6 исполнены живьём и перемоткой НЕ стёрты: их эффекты лежат в
+    // восстановленном мире, и «события каждого исполненного тика SHALL
+    // доставляться» (NTR-15) относится к ним. Уходит это прежней эпохой и до
+    // того, как эпоха выросла; сообщение — последнее в эпохе, поэтому несёт и
+    // кольцо повторов («Избыточность»): диапазон начинается его первым окном.
+    expect(prefix).toMatchObject({ epoch: 0, from: 1, to: 6 });
+    expect(ticksOf(prefix)).toEqual([5]);
+    // Пачка тика 7 принадлежит стёртой ветви и уходит вместе с кольцом
+    // (решение 8 дизайна) — в объявленный диапазон она не попадает вовсе.
+    expect(server.epoch).toBe(1);
+    expect(outgoing[1]!.message).toMatchObject({ type: 'Snapshot', epoch: 1, tick: 6 });
+  });
+
+  it('окно целиком за точкой восстановления — уходит только повтор кольца', () => {
+    const server = running(windowedRewindable());
+    castsAtFiveAndSeven(server);
+    advance(server, 7);
+    server.drain();
+
+    server.pause();
+    server.beginRewind();
+    server.seekTo(4);
+
+    // Открытое окно начиналось тиком 5 — всё оно стёрто, и «диапазон» из него
+    // получился бы вывернутым: 5..4. Пачки тиков 5 и 7 не едут; уходит лишь
+    // последний повтор кольца прежней эпохи, срезанный по точке восстановления.
+    const messages = drainEvents(server).get(1)!;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!).toMatchObject({ epoch: 0, from: 1, to: 4 });
+    expect(ticksOf(messages[0]!)).toEqual([]);
+    expect(server.epoch).toBe(1);
+  });
+
+  it('клиент применяет факты префикса ровно один раз, и рост эпохи следом разрывом не считается', () => {
+    const config = windowedRewindable();
+    const { server } = harness(config);
+    const pack = contentPack({ duel: config.scene });
+    const client = new MatchClient({ playerId: 'p1', version: config.version, content: pack });
+    const clock = { ms: 0 };
+    const relay = (): void => {
+      for (const outgoing of server.drain()) {
+        if (outgoing.to !== 1) continue;
+        clock.ms += 1;
+        client.receive(outgoing.message, clock.ms);
+      }
+    };
+
+    server.connect(1);
+    server.receive(1, hello('p1', config.version));
+    server.connect(2);
+    server.receive(2, hello('p2', config.version));
+    relay();
+    castsAtFiveAndSeven(server);
+    advance(server, 7);
+    relay();
+    // Рассылка тика 4 объявила пустой диапазон 1..4: каст тика 5 в неё не попал.
+    expect(client.takeEvents()).toEqual([]);
+
+    server.pause();
+    server.beginRewind();
+    server.seekTo(6);
+    relay();
+
+    const delivered = client.takeEvents();
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toMatchObject({ epoch: 0, tick: 5 });
+    // Ровно один раз: очередь пустеет чтением, и второго проигрывания нет.
+    expect(client.takeEvents()).toEqual([]);
+    expect(client.metrics.eventBatchesDelivered).toBe(1);
+
+    server.pause();
+    server.resume();
+    advance(server, 2);
+    relay();
+
+    // Первое сообщение новой эпохи начинается с тика 7 — «позже» между эпохами
+    // не определено, и разрывом это не считается (NTR-16, решение 8).
+    expect(client.epoch).toBe(1);
+    expect(client.metrics.eventRangeGaps).toBe(0);
+    expect(client.metrics.eventBatchesDelivered).toBe(1);
+  });
+
   it('тики внутреннего реплея в поток не попадают (REW-4, OBS-5)', () => {
     // Интервал 4: `seekTo(3)` восстанавливает снапшот тика 0 и ДОИГРЫВАЕТ тики
     // 1..3 реплеем. Тик 1 при этом публикует свой каст повторно — и в поток он
@@ -399,8 +571,10 @@ describe('эпоха диапазона (NTR-16)', () => {
     const messages = drainEvents(server).get(1)!;
     expect(messages.flatMap(ticksOf)).toEqual([]);
     // Первый диапазон новой эпохи начинается за точкой возобновления, а не с
-    // переисполненного тика 1.
-    expect(messages[0]!).toMatchObject({ epoch: 1, from: 4 });
+    // переисполненного тика 1; перед ним — только повтор кольца прежней эпохи.
+    const fresh = messages.find((message) => message.epoch === 1)!;
+    expect(fresh).toMatchObject({ epoch: 1, from: 4 });
+    expect(messages.filter((message) => message.epoch === 0).flatMap(ticksOf)).toEqual([]);
   });
 });
 
@@ -424,7 +598,67 @@ describe('завершение матча (NTR-15)', () => {
     expect(outgoing.map((entry) => entry.closeAfter)).toEqual([false, true]);
   });
 
-  it('сливать нечего — уходит один End', () => {
+  it('пустой хвост объявляется: тики после последней рассылки покрыты и перед End', () => {
+    const server = running(duelConfig({ scene: castScene(), eventRepeat: 0 }));
+    advance(server, 2);
+    server.drain();
+
+    // Тик 3 исполнен, событий на нём нет — и это ровно тот случай, ради
+    // которого объявленный диапазон существует.
+    advance(server, 1);
+    server.stop();
+
+    const outgoing = server.drain().filter((entry) => entry.to === 1);
+    expect(outgoing.map((entry) => entry.message.type)).toEqual(['Events', 'End']);
+    // Без этого сообщения получатель не отличил бы «на тике 3 событий не было»
+    // от «последнее сообщение матча потерялось».
+    expect(outgoing[0]!.message).toMatchObject({ from: 3, to: 3, batches: [] });
+  });
+
+  it('слив повторяет кольцо: последнее сообщение матча — самое избыточное', () => {
+    const server = running(duelConfig({ scene: castScene(), eventRepeat: 2 }));
+    server.receive(1, inputMessage(wireInput(3, 1, 0, 0, 1)));
+    advance(server, 4);
+    // Рассылка тика 4 везла каст тика 3 — и это единственное сообщение по
+    // расписанию, которое его везло. Считаем его потерянным каналом (NTR-2):
+    // ниже проверяется, чинит ли потерю слив.
+    const scheduled = drainEvents(server).get(1)!;
+    expect(scheduled[scheduled.length - 1]!).toMatchObject({ from: 1, to: 4 });
+    expect(ticksOf(scheduled[scheduled.length - 1]!)).toEqual([3]);
+
+    advance(server, 1);
+    server.stop();
+
+    const outgoing = server.drain().filter((entry) => entry.to === 1);
+    expect(outgoing.map((entry) => entry.message.type)).toEqual(['Events', 'End']);
+    const tail = outgoing[0]!.message as EventsMessage;
+    // Кольцо повторено: у последнего сообщения нет СЛЕДУЮЩЕГО, и «каждое
+    // сообщение повторяет несколько предыдущих рассылок» (NTR-15) держится
+    // только здесь. Факт тика 3 доезжает, хотя везшее его сообщение потеряно.
+    expect(tail).toMatchObject({ epoch: 0, from: 1, to: 5 });
+    expect(ticksOf(tail)).toEqual([3]);
+  });
+
+  it('хвоста нет, а кольцо есть — сообщение всё равно уходит повтором', () => {
+    const server = running(duelConfig({ scene: castScene(), eventRepeat: 2 }));
+    server.receive(1, inputMessage(wireInput(1, 1, 0, 0, 1)));
+    advance(server, 2);
+    server.drain();
+    server.stop();
+
+    const outgoing = server.drain().filter((entry) => entry.to === 1);
+    expect(outgoing.map((entry) => entry.message.type)).toEqual(['Events', 'End']);
+    const tail = outgoing[0]!.message as EventsMessage;
+    // Диапазон тот же, что объявляла последняя рассылка: доехала она — повтор
+    // отбросит курсор получателя, не доехала — факт спасён. Молчать здесь
+    // значило бы сделать последнее сообщение матча самым скупым.
+    expect(tail).toMatchObject({ from: 1, to: 2 });
+    expect(ticksOf(tail)).toEqual([1]);
+  });
+
+  it('нечего слить вовсе — уходит один End', () => {
+    // Глубина повтора 0: кольцо пусто по построению, и после рассылки тика 2 не
+    // осталось ни хвоста, ни повторов — объявлять нечего.
     const server = running(duelConfig({ scene: castScene(), eventRepeat: 0 }));
     advance(server, 2);
     server.drain();

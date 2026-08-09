@@ -13,8 +13,35 @@ import { describe, expect, it } from 'vitest';
 import { snapshotToPlain } from '@game-mvp/core';
 import { BUILD_ID, duelConfig, harness, hello } from './fixtures.js';
 import { contentPack } from '../src/content/pack.js';
+import { ClientHost } from '../src/client/host.js';
 import { MatchClient } from '../src/client/matchClient.js';
 import type { EventBatch, ServerMessage } from '../src/protocol/messages.js';
+import type { Transport } from '../src/transport/transport.js';
+
+/**
+ * Канал-заглушка: хост требует транспорт, а предмет проверок ниже — его шаг, а
+ * не доставка. Настоящий канал под теми же вызовами — в `match.test.ts`.
+ */
+class SinkTransport implements Transport {
+  readonly sent: Uint8Array[] = [];
+  isClosed = false;
+
+  send(bytes: Uint8Array): void {
+    this.sent.push(bytes);
+  }
+
+  close(): void {
+    this.isClosed = true;
+  }
+
+  onMessage(): void {
+    // Входящих у заглушки нет: сообщения подаёт тест прямо в клиент.
+  }
+
+  onClose(): void {
+    // Закрытия тоже: матч в этих проверках не кончается.
+  }
+}
 
 /** Пачка одного тика: типы событий в порядке публикации (EVT-2). */
 function batch(tick: number, ...types: readonly string[]): EventBatch {
@@ -248,6 +275,44 @@ describe('клиент: поток событий и эпоха (NTR-16, NTR-15)
   });
 });
 
+describe('шаг хоста: у очереди фактов есть потребитель (NTR-15)', () => {
+  /** Клиент без хендшейка: `onEvents` мира не касается и `Welcome` не требует. */
+  function hosted() {
+    const config = duelConfig();
+    const pack = contentPack({ duel: config.scene });
+    const client = new MatchClient({
+      playerId: 'p1',
+      version: { buildId: BUILD_ID, contentPackHash: pack.hash },
+      content: pack,
+    });
+    const host = new ClientHost(client, new SinkTransport(), { now: () => 0 });
+    return { client, host };
+  }
+
+  it('шаг отдаёт каждый факт ровно один раз', () => {
+    const { client, host } = hosted();
+    client.receive(events(0, 0, 5, batch(2, 'EntityDied'), batch(4, 'Cast')), 0);
+
+    expect(host.step().events.map((entry) => entry.tick)).toEqual([2, 4]);
+    // Второй шаг пуст: очередь пустеет сливом, и звук проигрывается не столько
+    // раз, сколько кадров нарисовал рендер.
+    expect(host.step().events).toEqual([]);
+    expect(client.pendingEvents).toEqual([]);
+  });
+
+  it('слив не ждёт готовности буфера интерполяции', () => {
+    const { client, host } = hosted();
+    client.receive(events(0, 0, 3, batch(1, 'EntityDied')), 0);
+
+    const step = host.step();
+    // Состояния нет — снапшотов клиент не видел вовсе. Факты это не
+    // задерживает: связать их с готовностью буфера значило бы терять факты ровно
+    // там, где картинка ещё не поехала.
+    expect(step.state).toBeUndefined();
+    expect(step.events.map((entry) => entry.tick)).toEqual([1]);
+  });
+});
+
 describe('клиент: два курсора независимы (NTR-15, NTR-10)', () => {
   it('отброшенный устаревший снапшот не двигает курсор событий', () => {
     const { client, feed, snapshot } = playing();
@@ -282,6 +347,26 @@ describe('клиент: два курсора независимы (NTR-15, NTR-
     snapshot(0, applied + 1);
     expect(client.metrics.snapshotsApplied).toBe(appliedCount + 1);
     expect(client.latest!.tick).toBe(applied + 1);
+  });
+
+  it('презентационная поверхность шины не отдаёт, хотя в кадре она едет (NTR-15)', () => {
+    const { client, clock } = playing();
+
+    // Шина в кадре на проводе остаётся и в буфере лежит как есть: это
+    // состояние, восстанавливаемое вместе с миром (SNAP-1). Наружу её не отдают
+    // ни `latest`, ни `sample()`: единственный источник фактов — `takeEvents()`,
+    // иначе события тиков рассылки проигрались бы дважды. Строки ниже не
+    // компилируются, и это часть проверки — запрет держится типом, а не
+    // примечанием в документации (NTR-15, «Шина внутри снапшота»).
+    // @ts-expect-error шины в презентационной проекции нет
+    const busOfLatest: unknown = client.latest!.events;
+    const sampled = client.sample(clock.ms)!;
+    // @ts-expect-error её нет и в паре сэмпла
+    const busOfSample: unknown = sampled.from.events;
+
+    // При этом на проводе она приехала — проверка про поверхность, а не про кадр.
+    expect(Array.isArray(busOfLatest)).toBe(true);
+    expect(Array.isArray(busOfSample)).toBe(true);
   });
 
   it('поток событий не порождает исходящих сообщений и не трогает состояние (NTR-11, NTR-2)', () => {

@@ -8,10 +8,11 @@
  * интерполированному снапшоту (REND-2 поверх NET-3).
  */
 import { describe, expect, it } from 'vitest';
-import { FIXED_ONE, query, world as coreWorld, type Snapshot } from '@game-mvp/core';
+import { FIXED_ONE, query, world as coreWorld } from '@game-mvp/core';
+import type { PresentedState } from '@game-mvp/net';
 import { TICK_DELTA, TICK_RATE, playMatch, walkRight } from './fixtures.js';
 
-function slotX(snapshot: Snapshot, slot: number): number {
+function slotX(snapshot: PresentedState, slot: number): number {
   for (const entity of query(snapshot.world, { all: ['Player', 'Position'] })) {
     if (coreWorld.getField(snapshot.world, entity, 'Player', 'slot') !== slot) continue;
     return coreWorld.getField(snapshot.world, entity, 'Position', 'x');

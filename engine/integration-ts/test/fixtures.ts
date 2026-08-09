@@ -17,8 +17,8 @@ import {
   seedStateFromName,
   type ChangeSet,
   type EntityId,
+  type GameEvent,
   type SceneDef,
-  type Snapshot,
 } from '@game-mvp/core';
 import {
   ClientHost,
@@ -32,6 +32,7 @@ import {
   type InputSource,
   type MatchConfig,
   type MatchWorld,
+  type PresentedState,
 } from '@game-mvp/net';
 import { AssetService } from '@game-mvp/assets';
 import {
@@ -230,6 +231,9 @@ const NO_CHANGES: ChangeSet = {
   changedEntities: () => EMPTY_ENTITIES,
 };
 
+/** Шина, с которой мост восстанавливает мир: пустая — факты едут потоком (NTR-15). */
+const NO_EVENTS: readonly GameEvent[] = [];
+
 /**
  * Подсистема-потребитель вертикали: по объекту THREE на сущность, позиция —
  * интерполяция между двумя последними тиками (REND-2), snap — без неё.
@@ -328,11 +332,17 @@ export class RenderBridge {
    * флагом он гасит `freshEvents` — и это осознанно: события перемотанного
    * состояния уже показывались в стёртой ветви, играть их второй раз незачем.
    */
-  apply(snapshot: Snapshot, epoch: number, discontinuity: boolean): void {
+  apply(snapshot: PresentedState, epoch: number, discontinuity: boolean): void {
     if (epoch < this.lastEpoch || (epoch === this.lastEpoch && snapshot.tick <= this.lastTick)) {
       return;
     }
-    restoreSnapshot(this.world.state, snapshot);
+    // Состояние приезжает презентационной проекцией — без шины (NTR-15, «Шина
+    // внутри снапшота»): единственный источник фактов для представления —
+    // поток `Events` (`MatchClient.takeEvents`). Мир моста поэтому
+    // восстанавливается с ПУСТОЙ шиной, а не с шиной кадра: возьми мост её
+    // отсюда — события тиков рассылки проигрались бы дважды, из состояния и из
+    // потока.
+    restoreSnapshot(this.world.state, { ...snapshot, events: NO_EVENTS });
     this.host.onTick({
       state: this.world.state,
       tick: snapshot.tick,

@@ -95,11 +95,15 @@ export type {
   MatchSample,
 } from './client/matchClient.js';
 export { ClientHost } from './client/host.js';
-export type { ClientHostOptions, InputSource } from './client/host.js';
+export type { ClientHostOptions, ClientStep, InputSource } from './client/host.js';
 export { InputRing, DEFAULT_RING_TICKS } from './client/inputRing.js';
 export type { SentInput } from './client/inputRing.js';
 export { InterpolationBuffer, vanishedEntities, DEFAULT_DELAY_MS } from './client/interpolation.js';
-export type { InterpolationOptions, InterpolationSample } from './client/interpolation.js';
+export type {
+  InterpolationOptions,
+  InterpolationSample,
+  PresentedState,
+} from './client/interpolation.js';
 
 // лобби (SES-4) — свой закрытый набор сообщений, отдельный от набора матча
 export {

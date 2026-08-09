@@ -19,9 +19,13 @@ import {
   runScenario,
   snapshotToPlain,
   world as coreWorld,
-  type Snapshot,
 } from '@game-mvp/core';
-import { replaySegments, type InputSource, type MatchSegment } from '@game-mvp/net';
+import {
+  replaySegments,
+  type InputSource,
+  type MatchSegment,
+  type PresentedState,
+} from '@game-mvp/net';
 import {
   RenderBridge,
   STEP,
@@ -127,7 +131,7 @@ function replayOf(config: ReturnType<typeof duelConfig>, segments: readonly Matc
 }
 
 /** Позиция героя слота — чем и видно, что состояния двух ветвей разные. */
-function slotX(snapshot: Snapshot, slot: number): number {
+function slotX(snapshot: PresentedState, slot: number): number {
   for (const entity of query(snapshot.world, { all: ['Player', 'Position'] })) {
     if (coreWorld.getField(snapshot.world, entity, 'Player', 'slot') !== slot) continue;
     return coreWorld.getField(snapshot.world, entity, 'Position', 'x');

@@ -17,9 +17,24 @@ export interface InterpolationOptions {
   readonly capacity?: number;
 }
 
+/**
+ * Состояние, отдаваемое представлению, — снапшот БЕЗ шины (NTR-15, «Шина внутри
+ * снапшота»).
+ *
+ * Шина едет в кадре на проводе и хранится в буфере как есть: это состояние,
+ * восстанавливаемое вместе с миром (`snapshot-rewind` SNAP-1), и снятие его
+ * сделало бы снапшот неполным. Но «получатель MUST NOT брать из неё факты для
+ * представления»: единственный источник фактов — поток `Events`
+ * (`MatchClient.takeEvents`), иначе события тиков рассылки проигрывались бы
+ * дважды — из состояния и из потока. Дисциплина «не читать» держится не
+ * уговором, а типом: презентационная поверхность шины не отдаёт вовсе, и
+ * потребителю нечего прочитать по невнимательности.
+ */
+export type PresentedState = Omit<Snapshot, 'events'>;
+
 export interface InterpolationSample {
-  readonly from: Snapshot;
-  readonly to: Snapshot;
+  readonly from: PresentedState;
+  readonly to: PresentedState;
   /** Доля между `from` и `to`, `[0, 1]`. */
   readonly alpha: number;
   /** Насколько отображаемый момент отстаёт от последнего пришедшего снапшота, мс. */
@@ -48,7 +63,8 @@ export class InterpolationBuffer {
     return this.received.length;
   }
 
-  get latest(): Snapshot | undefined {
+  /** Последнее пришедшее состояние в презентационной проекции (см. `PresentedState`). */
+  get latest(): PresentedState | undefined {
     return this.received[this.received.length - 1]?.snapshot;
   }
 
@@ -112,7 +128,7 @@ export class InterpolationBuffer {
  * плавное гашение: отсутствие означает «ушла в туман», а не смерть (NET-14) —
  * смерть приезжает явным событием, и различать эти случаи обязан клиент.
  */
-export function vanishedEntities(from: Snapshot, to: Snapshot): EntityId[] {
+export function vanishedEntities(from: PresentedState, to: PresentedState): EntityId[] {
   const gone: EntityId[] = [];
   for (const entity of coreWorld.listAlive(from.world)) {
     if (!coreWorld.isAlive(to.world, entity)) gone.push(entity);

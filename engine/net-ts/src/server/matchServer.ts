@@ -783,6 +783,20 @@ export class MatchServer {
    */
   private collectEvents(filtered: ReadonlyMap<number, Snapshot>): void {
     const tick = this.state.tick;
+    // Накопитель `viewpoint`, которого на этом тике нет вовсе (все его
+    // соединения отпали), выбрасывается, а не ждёт возвращения. Иначе
+    // объявленный диапазон солгал бы (NTR-15): окна в кольце остались бы от
+    // прежнего соединения, тики без соединения никем не собирались, и первое же
+    // сообщение вернувшегося наблюдателя объявило бы `from` из старого кольца —
+    // то есть покрытие интервала, который не считали, а событие внутри него
+    // читалось бы как «событий не было». Возобновившийся `viewpoint` начинает с
+    // чистого окна: разрыв в его потоке — это разрыв, а не тишина.
+    //
+    // Заодно карта перестаёт держать мёртвые накопители: ключей в ней не больше,
+    // чем активных `viewpoint` прямо сейчас.
+    for (const viewpoint of this.eventStreams.keys()) {
+      if (!filtered.has(viewpoint)) this.eventStreams.delete(viewpoint);
+    }
     for (const [viewpoint, personal] of filtered) {
       const stream = this.streamOf(viewpoint);
       if (stream.from < 0) stream.from = tick;
@@ -845,7 +859,7 @@ export class MatchServer {
     // «тик очередного авторитетного состояния меньше тика предыдущего», и оно
     // применяется здесь потому, что здесь формируется рассылка: оба источника
     // состояния проходят через эту точку и второй нумерации не заводят.
-    if (this.lastStateTick >= 0 && tick < this.lastStateTick) this.onEpochChanged();
+    if (this.lastStateTick >= 0 && tick < this.lastStateTick) this.onEpochChanged(tick);
     this.lastStateTick = tick;
     // Та же выведенная величина штампуется и в `Snapshot`, и в `Events`
     // (NTR-16): считать эпоху заново на каждое сообщение значило бы завести
@@ -886,15 +900,70 @@ export class MatchServer {
    *
    * Здесь же сбрасываются накопители потока событий (NTR-15): пачки стёртой
    * эпохи по паре `(эпоха, тик)` меньше курсора получателя и приняты быть не
-   * могут, сколько их ни повторяй. Открытое окно уходит вместе с кольцом — оно
-   * той же стёртой эпохи, — и первое сообщение новой эпохи откроет диапазон с
-   * первого ЖИВОГО тика новой ветви. Цена записана в решении 8 дизайна:
-   * недоставленная последняя дорассылочная пачка теряется окончательно.
+   * могут, сколько их ни повторяй. Кольцо уходит целиком — оно той же стёртой
+   * эпохи, — и первое сообщение новой эпохи откроет диапазон с первого ЖИВОГО
+   * тика новой ветви.
+   *
+   * Но открытое окно ПЕРЕД сбросом отдаётся: его префикс — тики от `stream.from`
+   * до тика восстановления — исполнен живьём и перемоткой НЕ стёрт, их эффекты
+   * лежат в восстановленном мире, и «события каждого исполненного тика SHALL
+   * доставляться» (NTR-15, «Накопление») относится к ним в полной мере.
+   * Выбросить их вместе с кольцом значило бы терять факты тем вернее, чем реже
+   * рассылка. Уходит это сообщением ПРЕЖНЕЙ эпохи и до того, как эпоха выросла:
+   * по паре оно выше курсора получателя, встык к последнему объявленному
+   * диапазону (`from` = первый несобранный тик, `to` = тик восстановления), а
+   * рост эпохи следом разрывом не считается (NTR-16, решение 8).
+   *
+   * Хвост за точкой восстановления — пачки стёртой ветви — отбрасывается вместе
+   * с кольцом: цена, записанная в решении 8 дизайна.
    */
-  private onEpochChanged(): void {
+  private onEpochChanged(restoredTick: number): void {
+    this.flushPrefixOfErasedEpoch(restoredTick);
     this.currentEpoch++;
     for (const pending of this.pending) pending.clear();
     this.eventStreams.clear();
+  }
+
+  /**
+   * Префикс открытого окна каждого `viewpoint` — исполненные и не стёртые
+   * перемоткой тики — уходит сообщением прежней эпохи (см. `onEpochChanged`).
+   *
+   * Это последнее сообщение эпохи, следующего за ним не будет, поэтому оно
+   * максимально избыточно (NTR-15 «Избыточность», тот же довод, что у хвоста
+   * перед `End`): кольцо повторов вкладывается целиком, срезанное по точке
+   * восстановления. Тики за ней — ветвь, которую перемотка стёрла: их пачки
+   * не едут, а объявленный диапазон кончается на `restoredTick`, так что
+   * «покрыт полностью» остаётся правдой. Слать нечего только когда и окно, и
+   * кольцо целиком за точкой восстановления либо пусты.
+   */
+  private flushPrefixOfErasedEpoch(restoredTick: number): void {
+    const epoch = this.currentEpoch;
+    for (const [viewpoint, stream] of this.eventStreams) {
+      const from = stream.repeats[0]?.from ?? stream.from;
+      if (from < 0 || from > restoredTick) continue;
+      const batches: EventBatch[] = [];
+      for (const window of stream.repeats) batches.push(...window.batches);
+      if (stream.from >= 0) batches.push(...stream.batches);
+      this.sendToViewpoint(viewpoint, {
+        type: 'Events',
+        epoch,
+        from,
+        to: restoredTick,
+        batches: batches.filter((batch) => batch.tick <= restoredTick),
+      });
+    }
+  }
+
+  /**
+   * Одно сообщение — всем соединениям `viewpoint`, тем же объектом: пачка
+   * считается один раз на `viewpoint`, как и на рассылке.
+   */
+  private sendToViewpoint(viewpoint: number, message: ServerMessage): void {
+    for (const connection of this.connections.values()) {
+      if (connection.phase === 'greeting') continue;
+      if (this.viewpointOf(connection) !== viewpoint) continue;
+      this.send(connection.id, message);
+    }
   }
 
   // -------------------------------------------------------------- перемотка
@@ -996,20 +1065,40 @@ export class MatchServer {
    * последним убийством, истёкшим таймером, — и потерять именно его значит
    * потерять то единственное, ради чего поток заведён.
    *
-   * Диапазон хвоста — ровно нерассланные тики, без повтора уже разосланных
-   * окон: повтор не помог бы самому хвосту (он в кольце не лежит), а диапазон
-   * перекрыл бы предыдущий без всякой пользы. Кольцо не трогается: матч
-   * кончился, повторять больше нечем и некуда.
+   * Сообщение — максимально избыточное, а не минимальное: оно собирается как на
+   * рассылке (кольцо повторов плюс открытое окно), потому что у него нет
+   * СЛЕДУЮЩЕГО. «Каждое сообщение SHALL повторять события нескольких предыдущих
+   * рассылок» (NTR-15, «Избыточность») держится тем, что пачка едет
+   * `eventRepeat + 1` раз; окно, закрытое последней рассылкой по расписанию,
+   * уехало бы ровно один раз, и его потеря была бы невосполнима — при том что
+   * сам хвост доехал. Лишние байты последнего сообщения матча стоят дешевле
+   * потерянного последнего убийства.
+   *
+   * Отсюда же второй случай: слить нечего, но кольцо не пусто — сообщение всё
+   * равно уходит. Последнее сообщение матча обязано быть самым избыточным, а не
+   * самым скупым. Молчание остаётся ровно на «нечего слить вовсе»: ни хвоста, ни
+   * кольца — объявлять нечего.
+   *
+   * Кольцо при этом не трогается: матч кончился, повторять больше нечем и некуда.
    */
   private flushEvents(viewpoint: number, epoch: number): EventsMessage | undefined {
     const stream = this.eventStreams.get(viewpoint);
-    if (stream === undefined || stream.from < 0) return undefined;
+    if (stream === undefined) return undefined;
+    const last = stream.repeats[stream.repeats.length - 1];
+    if (stream.from < 0 && last === undefined) return undefined;
+
+    const batches: EventBatch[] = [];
+    for (const window of stream.repeats) batches.push(...window.batches);
+    batches.push(...stream.batches);
     const message: EventsMessage = {
       type: 'Events',
       epoch,
-      from: stream.from,
-      to: stream.to,
-      batches: stream.batches,
+      from: stream.repeats[0]?.from ?? stream.from,
+      // Хвоста может не быть вовсе: тогда объявляется ровно то, что уже
+      // объявлялось последней рассылкой, — повтор, который получатель отбросит
+      // по курсору, если предыдущее сообщение доехало.
+      to: stream.from < 0 ? last!.to : stream.to,
+      batches,
     };
     stream.from = -1;
     stream.to = -1;
