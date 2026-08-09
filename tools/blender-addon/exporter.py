@@ -3,18 +3,30 @@
 
 Экспортирует ШТАТНЫЙ glTF-экспортёр Blender (design, решение 1): своего
 сериализатора у конвейера нет и быть не должно — он стал бы второй реализацией
-правил формата. Настройки — ровно те, что пиннит `tools/blender-ts/
-CONVENTIONS.md`:
+правил формата.
+
+Пиннит `tools/blender-ts/CONVENTIONS.md` две настройки, и обе здесь
+обязательные:
 
 - `export_yup=True` — «+Y Up»: вертикаль мира — ось `+Y` glTF, конверсию осей
   делает экспортёр, а не импортёр;
 - `export_extras=True` — custom properties объектов уезжают в `extras` узлов;
-  без них экспорт пуст по смыслу (BLND-3);
+  без них экспорт пуст по смыслу (BLND-3).
+
+Остальное — выбор аддона в пределах, которые конвенции оставляют открытыми
+(«Apply Modifiers — по вкусу»), а не норма конвейера:
+
 - `use_active_scene=True` — экспортируется текущая сцена, и только она;
-- `export_apply=False` — модификаторы НЕ применяются: превью ступеней и клифов
-  на Geometry Nodes в импорт не входит, клифы движок строит сам (TERR-5);
-- `export_attributes=True` — клеточные атрибуты рампы и пола уезжают
-  каналами `_RAMP` и `_NOFLOOR` (BLND-9).
+- `export_apply=False` — модификаторы НЕ применяются, и это выбор со смыслом:
+  превью ступеней и клифов на Geometry Nodes в импорт не входит, клифы движок
+  строит сам (TERR-5). Трансформов ОБЪЕКТОВ настройка не касается вовсе —
+  экспортёр всегда пишет их узлами, — поэтому требование конвенций «применить
+  трансформы до экспорта» она не подменяет и не отменяет: это ручной шаг автора
+  для вспомогательной геометрии и grid-мешей;
+- `export_attributes=True` — клеточные атрибуты рампы и пола уезжают каналами
+  `_RAMP` и `_NOFLOOR`. Канал ещё НЕ зафиксирован конвенциями: его пиннит
+  задача 4.1 вместе с чтением клеточных данных (BLND-9), и до тех пор это
+  заготовка аддона, а не норма формата.
 
 Имя выхода детерминировано: `<база>.glb` рядом с `.blend`, парность со сценой
 даёт имя (BLND-2).
@@ -108,11 +120,24 @@ def _target_path():
     return sources.export_path(bpy.data.filepath)
 
 
-def _report_to_scene(text):
-    scene = getattr(bpy.context, "scene", None)
-    settings = getattr(scene, "fluxus", None) if scene is not None else None
-    if settings is not None:
-        settings.export_report = text
+#: Результат последнего экспорта. Состояние МОДУЛЯ, а не свойство сцены:
+#: обработчик `save_post` отрабатывает уже ПОСЛЕ записи файла, и правка любого
+#: свойства ID-данных (сцены) пометила бы только что сохранённый `.blend`
+#: изменённым — автор видел бы звёздочку несохранённых правок сразу после
+#: каждого сохранения и получал бы вопрос «сохранить?» на выходе. Показать
+#: строку в панели это не мешает: панель читает её отсюда, как читает и снимок
+#: перечней (`sources.get`), и в `.blend` она не попадает.
+_LAST_REPORT = ""
+
+
+def last_report():
+    """Строка результата последнего экспорта; пусто — экспорта в этой сессии не было."""
+    return _LAST_REPORT
+
+
+def _report(text):
+    global _LAST_REPORT
+    _LAST_REPORT = text
     print("[fluxus] %s" % text)
 
 
@@ -132,9 +157,9 @@ class FLUXUS_OT_export_now(bpy.types.Operator):
         for message in messages:
             self.report({"WARNING"}, message)
         if not ok:
-            _report_to_scene("экспорт не выполнен")
+            _report("экспорт не выполнен")
             return {"CANCELLED"}
-        _report_to_scene("экспортировано: %s" % target)
+        _report("экспортировано: %s" % target)
         self.report({"INFO"}, "экспортировано: %s" % os.path.basename(target))
         return {"FINISHED"}
 
@@ -156,7 +181,7 @@ def fluxus_export_on_save(*_args):
     ok, messages = export_scene(bpy.context, target)
     for message in messages:
         print("[fluxus] %s" % message)
-    _report_to_scene(("экспортировано: %s" if ok else "экспорт не выполнен: %s") % target)
+    _report(("экспортировано: %s" if ok else "экспорт не выполнен: %s") % target)
 
 
 @persistent

@@ -11,7 +11,7 @@ N-панель авторинга (BLND-8): типизированный вид 
 
 import bpy
 
-from . import props, sources
+from . import exporter, props, sources
 from .grids import CURVATURE_KEY, NOFLOOR_ATTRIBUTE, RAMP_ATTRIBUTE, TERRAIN_KEY
 
 CATEGORY = "Fluxus"
@@ -195,8 +195,9 @@ class FLUXUS_PT_export(FluxusPanel, bpy.types.Panel):
             layout.label(text="файл не сохранён", icon="ERROR")
         else:
             layout.label(text=bpy.path.basename(target), icon="FILE")
-        if settings.export_report:
-            layout.label(text=settings.export_report, icon="INFO")
+        report = exporter.last_report()
+        if report:
+            layout.label(text=report, icon="INFO")
         layout.label(text="«+Y Up», custom properties, только текущая сцена", icon="INFO")
 
 

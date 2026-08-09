@@ -12,6 +12,7 @@ import {
   createEditorSession,
   createMemoryHost,
   createValidator,
+  decodeDocument,
   type ContentPath,
   type ContentTreeHost,
   type ContributionReader,
@@ -28,6 +29,7 @@ import {
   generateSpatialLayer,
   spatialLayerSyncRule,
 } from '../src/index.js';
+import { runImport } from '../src/importer.js';
 import {
   MANIFEST_ID,
   PRESENTATION_ID,
@@ -170,6 +172,34 @@ describe('BLND-2: правка производного слоя сопряжё�
     const sources = createSourceCache(host);
     await sources.refresh(SCENE_ID);
     const editor = session(sceneDocument([...layer.initial]), presentationDocument([...layer.decorations]));
+
+    expect(issuesOf(editor, spatialLayerSyncRule({ sources }))).toEqual([]);
+  });
+});
+
+describe('BLND-2: правило сверяет ровно то представление, которое пишет импорт', () => {
+  it('сразу после импорта и сохранения находок нет — сравнение идёт по записанным байтам', async () => {
+    // Прежние проверки сверяют слой с теми же объектами в памяти, что построил
+    // импортёр, и потому не увидели бы расхождения, вносимого КАНОНИЧЕСКИМ
+    // сохранением (ED-21): порядок ключей записи, форма чисел. Здесь документы
+    // приходят с «диска» — байтами, которые записал импорт.
+    const memory = createMemoryHost({ files: withSource() });
+    const host = memory.content;
+
+    const imported = await runImport({ host, source: SOURCE_ID, manifest: MANIFEST_ID });
+    expect(imported.ok).toBe(true);
+    expect([...imported.written].sort()).toEqual([PRESENTATION_ID, SCENE_ID].sort());
+
+    const read = async (id: string): Promise<JsonValue> => decodeDocument(await host.read(id));
+    const editor = session(
+      (await read(SCENE_ID)) as unknown as Record<string, unknown>,
+      (await read(PRESENTATION_ID)) as unknown as Record<string, unknown>,
+    );
+    const sources = createSourceCache(host);
+    // Молчание правила обязано означать «сверено и сошлось», а не «сверять было
+    // нечем»: источник прочитан, слой непустой.
+    expect((await sources.refresh(SCENE_ID)).status).toBe('ready');
+    expect(imported.layer.initial.length + imported.layer.decorations.length).toBeGreaterThan(0);
 
     expect(issuesOf(editor, spatialLayerSyncRule({ sources }))).toEqual([]);
   });

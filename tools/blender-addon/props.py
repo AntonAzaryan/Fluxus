@@ -162,11 +162,10 @@ class FluxusSceneProps(bpy.types.PropertyGroup):
         description="Экспортировать `<база>.glb` рядом с `.blend` по сохранению (BLND-12)",
         default=True,
     )
-    export_report: StringProperty(
-        name="Результат экспорта",
-        description="Что случилось при последнем экспорте",
-        default="",
-    )
+    # Результата последнего экспорта здесь нет намеренно: его пишет обработчик
+    # `save_post` — уже ПОСЛЕ записи файла, — и правка свойства сцены пометила бы
+    # только что сохранённый `.blend` изменённым. Строка живёт состоянием модуля
+    # `exporter` (`exporter.last_report`) и в файл не попадает.
 
     terrain_object: PointerProperty(
         name="Terrain",

@@ -12,8 +12,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createMemoryHost,
   encodeDocument,
   saveDocuments,
+  type ContentTreeHost,
   type EditorSession,
 } from '@game-mvp/editor-core';
 import { IMPORT_SPATIAL_LAYER, generateSpatialLayer, importParams, openImportTarget } from '../src/index.js';
@@ -161,6 +163,30 @@ describe('BLND-6, BLND-8: режим проверки не пишет и отв�
     expect(result.layer.initial).toHaveLength(2);
     expect(result.layer.decorations).toHaveLength(1);
     expect(await contentOf(root, SCENE_ID)).toEqual(before);
+  });
+
+  it('записи нет НИ ОДНОЙ: ни правки документа, ни нового парного документа', async () => {
+    // Дерево в памяти со счётчиком записей: «файл не изменился» доказывает
+    // меньше, чем «в дерево не писали». Парного документа в нём нет нарочно —
+    // именно его импорт создал бы первым (PRES-1), и режим проверки не вправе.
+    const files = contentFiles();
+    delete files[PRESENTATION_ID];
+    const memory = createMemoryHost({ files });
+    const writes: string[] = [];
+    const host: ContentTreeHost = {
+      ...memory.content,
+      write(path, bytes) {
+        writes.push(path);
+        return memory.content.write(path, bytes);
+      },
+    };
+
+    const result = await runImport({ host, source: SOURCE_ID, manifest: MANIFEST_ID, dryRun: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.layer.decorations.length).toBeGreaterThan(0);
+    expect(writes).toEqual([]);
+    expect(await host.stat(PRESENTATION_ID)).toBeUndefined();
   });
 
   it('источник с ошибкой в режиме проверки — тот же отказ и тот же адрес', async () => {

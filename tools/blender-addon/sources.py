@@ -150,28 +150,41 @@ def find_project_root(start: str) -> Optional[str]:
         current = parent
 
 
-def scene_document_path(blend_path: str) -> Optional[str]:
-    """`<база>.scene.json` рядом с `.blend` (BLND-2)."""
+def base_path(blend_path: str) -> Optional[str]:
+    """
+    Путь без имени-с-расширениями: каталог плюс база имени.
+
+    База берётся до ПЕРВОЙ точки — то же правило, по которому находят друг друга
+    сцена и её парный документ (`presentationPathOf` модуля ассетов, PRES-1) и по
+    которому импортёр ищет сцену источника (`tools/blender-ts/src/pairing.ts`,
+    BLND-2). `os.path.splitext` режет по ПОСЛЕДНЕЙ точке и на имени `duel.v2.blend`
+    дал бы пару `duel.v2.scene.json`, которой на стороне импортёра нет: тот
+    ищет `duel.scene.json`. Одно правило парности — одна реализация на каждой
+    стороне, а не две разные.
+    """
     if not blend_path:
         return None
-    base, _ = os.path.splitext(blend_path)
-    return base + SCENE_SUFFIX
+    directory, name = os.path.split(blend_path)
+    dot = name.find(".")
+    return os.path.join(directory, name if dot < 0 else name[:dot])
+
+
+def scene_document_path(blend_path: str) -> Optional[str]:
+    """`<база>.scene.json` рядом с `.blend` (BLND-2)."""
+    base = base_path(blend_path)
+    return None if base is None else base + SCENE_SUFFIX
 
 
 def presentation_document_path(blend_path: str) -> Optional[str]:
     """`<база>.presentation.json` рядом со сценой (PRES-1)."""
-    if not blend_path:
-        return None
-    base, _ = os.path.splitext(blend_path)
-    return base + PRESENTATION_SUFFIX
+    base = base_path(blend_path)
+    return None if base is None else base + PRESENTATION_SUFFIX
 
 
 def export_path(blend_path: str) -> Optional[str]:
     """Детерминированное имя экспорта: `<база>.glb` рядом с `.blend` (BLND-2)."""
-    if not blend_path:
-        return None
-    base, _ = os.path.splitext(blend_path)
-    return base + ".glb"
+    base = base_path(blend_path)
+    return None if base is None else base + ".glb"
 
 
 def content_root(blend_path: str, project_root: Optional[str]) -> Optional[str]:
