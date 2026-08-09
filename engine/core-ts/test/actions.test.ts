@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { execute, actionNames, type Action } from '../src/dsl/actions.js';
+import { execute, actionNames, requiredArgs, type Action } from '../src/dsl/actions.js';
 import type { Expression } from '../src/dsl/expr.js';
 import { EventBus } from '../src/ecs/events.js';
 import * as fixed from '../src/math/fixed.js';
@@ -556,5 +556,103 @@ describe('random и randomBelow (ACT-1, RNG-6)', () => {
     expect(() => execute([{ random: { as: 'r', subStream: { var: 'x' }, do: [] } }], harness().ctx)).toThrow(
       /строковый литерал/,
     );
+  });
+});
+
+/**
+ * Связь `requiredArgs` с самими чтецами аргументов (ACT-1). Перечень читает
+ * валидация на регистрации (SYS-3), а бросают `argExpr`, `argStr` и `argBody`
+ * при исполнении — и разъехаться этим двум нельзя: перечень, где ключа не
+ * хватает, вернул бы ошибку в середину матча, а лишний ключ отверг бы систему,
+ * которую исполнитель принимает.
+ *
+ * Сверка идёт в обе стороны: полный набор из одних обязательных ключей
+ * исполнителя по аргументам устраивает, а он же без любого одного — нет.
+ */
+describe('перечень обязательных аргументов и чтецы аргументов (ACT-1, SYS-3)', () => {
+  /** Отказ по недостающему аргументу — в отличие от отказа по устройству сцены. */
+  const MISSING_ARG = /не задан "|— список действий|— строковый литерал|аргументы задаются объектом/;
+
+  /**
+   * Годное значение каждого аргумента: своё там, где действие смотрит на
+   * содержимое (`component` у модификаторов адресует список источников сцены),
+   * общее — там, где не смотрит. `entity` подставляется живой сущностью уже
+   * поднятого мира (см. `run`).
+   */
+  const VALUE: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+    addModifier: { component: SLOW.component },
+    removeModifier: { component: SLOW.component },
+  };
+  const COMMON: Readonly<Record<string, unknown>> = {
+    entity: 0,
+    component: 'Shield',
+    prefab: 'Projectile',
+    type: 'Died',
+    at: { vec: [0, 0] },
+    cond: true,
+    bound: F(2),
+    as: 'r',
+    id: 1,
+    value: F(1),
+    def: 0,
+    from: 0,
+    to: F(1),
+    duration: F(1),
+    query: {},
+    do: [],
+    then: [],
+  };
+
+  /**
+   * Набор аргументов действия СОБИРАЕТСЯ ПО ПЕРЕЧНЮ, а не выписан рядом с ним:
+   * ключ, выпавший из перечня, выпадает и отсюда — и исполнитель на нём падает.
+   * Именно так ловится перечень, в котором ключа не хватает.
+   */
+  function fullArgs(name: string): Record<string, unknown> {
+    const args: Record<string, unknown> = {};
+    for (const key of requiredArgs[name]!) args[key] = VALUE[name]?.[key] ?? COMMON[key];
+    return args;
+  }
+
+  /** Сообщение отказа исполнителя; пусто — действие отработало. */
+  function run(node: Action): string {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+    const args = { ...(Object.values(node)[0] as Record<string, unknown>) };
+    // `entity` фиксируется на живую сущность уже поднятого мира.
+    if (args['entity'] !== undefined) args['entity'] = hero;
+    try {
+      execute([{ [Object.keys(node)[0]!]: args }], h.ctx);
+      return '';
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  it('перечень покрывает набор действий целиком, и каждому ключу есть значение', () => {
+    expect(Object.keys(requiredArgs).sort()).toEqual([...actionNames].sort());
+    for (const name of actionNames) {
+      for (const [key, value] of Object.entries(fullArgs(name))) {
+        expect(value, `${name}.${key}`).toBeDefined();
+      }
+    }
+  });
+
+  it('собранный по перечню набор исполнитель по аргументам устраивает: в перечне ничего не пропущено', () => {
+    for (const name of actionNames) {
+      // Отказ по устройству сцены (террейна в харнессе нет) — не про аргументы и
+      // здесь не считается (SYS-5, SYS-9).
+      expect(run({ [name]: fullArgs(name) }), name).not.toMatch(MISSING_ARG);
+    }
+  });
+
+  it('без любого обязательного ключа исполнитель падает: лишнего в перечне нет', () => {
+    for (const name of actionNames) {
+      for (const key of requiredArgs[name]!) {
+        const stripped = fullArgs(name);
+        delete stripped[key];
+        expect(run({ [name]: stripped }), `${name} без "${key}"`).toMatch(MISSING_ARG);
+      }
+    }
   });
 });

@@ -75,6 +75,27 @@ export function generationOf(id: EntityId): number {
   return Math.floor(id / GENERATION_LIMIT);
 }
 
+/**
+ * Сколько ещё сущностей примет индекс: освобождённые слоты плюс неиспользованные
+ * индексы (ID-2). Нужно тому, кто обязан узнать об исчерпании ёмкости ДО
+ * аллокации, — двухпроходному flush'у буфера команд (SYS-9).
+ */
+export function room(idx: EntityIndex): number {
+  return idx.freeList.length + (idx.capacity - idx.nextIndex);
+}
+
+/**
+ * Отказ по ёмкости — одной формулировкой и одним кодом для обоих вызывающих:
+ * самой аллокации и проверки перед ней. Второй текст рядом разошёлся бы с этим.
+ */
+export function assertRoom(idx: EntityIndex, available: number): void {
+  assertInvariant(
+    available > 0,
+    `EntityIndex: превышена capacity (${idx.capacity})`,
+    'ENTITY_CAPACITY_EXCEEDED',
+  );
+}
+
 /** ID-2/DET-6: сперва LIFO из freeList, иначе — очередной nextIndex. Бросает при исчерпании capacity. */
 export function allocate(idx: EntityIndex): EntityId {
   let index: number;
@@ -82,11 +103,7 @@ export function allocate(idx: EntityIndex): EntityId {
   if (fromFree !== undefined) {
     index = fromFree;
   } else {
-    assertInvariant(
-      idx.nextIndex < idx.capacity,
-      `EntityIndex: превышена capacity (${idx.capacity})`,
-      'ENTITY_CAPACITY_EXCEEDED',
-    );
+    assertRoom(idx, idx.capacity - idx.nextIndex);
     index = idx.nextIndex;
     idx.nextIndex++;
   }

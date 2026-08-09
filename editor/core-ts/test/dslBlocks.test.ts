@@ -126,7 +126,7 @@ describe('ED-5: каталог блоков — закрытые наборы я
     expect(block.descriptionKey).toBe('operator.vec\\.add');
   });
 
-  it('форму имеют ровно те четыре оператора, чью структуру разбирает `checkExpression`', () => {
+  it('форму имеют ровно те операторы, у которых ядро называет литеральные позиции', () => {
     const structured = catalog.operators.filter((block) => !block.variadic).map((block) => block.name);
     expect(structured).toEqual(['eventField', 'getComponent', 'hasComponent', 'var']);
     expect(catalog.operators.find((block) => block.name === 'getComponent')?.args).toEqual([
@@ -134,9 +134,27 @@ describe('ED-5: каталог блоков — закрытые наборы я
       'component',
       'field',
     ]);
-    // Остальные — n-арный список выражений: арности ядро на валидации не знает,
-    // и в каталоге её нет (SYS-3 выносит её в ошибку времени вычисления).
+    // У остальных литеральных позиций нет: структурировать в списке нечего, и
+    // автор собирает выражения сам. Число их рассудит регистрация (SYS-3).
     expect(catalog.operators.find((block) => block.name === 'clamp')?.args).toEqual([]);
+  });
+
+  it('позиции имён берутся из сигнатуры ядра, а не из перечня в редакторе (EXPR-8)', () => {
+    // Перечня позиций в каталоге нет вовсе: каждая форма обязана сойтись с тем,
+    // что публикует `signatureOf`, — иначе редактор подсказывал бы своё.
+    for (const block of catalog.operators) {
+      const signature = expr.signatureOf(block.name)!;
+      expect(signature, block.name).toBeDefined();
+      if (block.variadic) {
+        expect(signature.literals, block.name).toEqual([]);
+        continue;
+      }
+      expect(block.args.length, block.name).toBe(signature.max);
+      const named = block.args
+        .map((arg, index) => (arg === 'expression' ? -1 : index))
+        .filter((index) => index >= 0);
+      expect(named, block.name).toEqual([...signature.literals]);
+    }
   });
 
   it('слоты у всех действий одни и те же: персонального набора аргументов нет (ED-1)', () => {
@@ -196,7 +214,7 @@ describe('ED-1: слоты блока — те аргументы, которы�
   it('аргумент вне конвенции ядро содержимым не проверяет — и модель его не знает', () => {
     // Предел, зафиксированный в SYS-3. Именно поэтому таблицы «действие → его
     // аргументы» в редакторе нет: проверять по ней было бы строже ядра.
-    expect(accepted(systemOf({ let: { nope: { alsoNope: [] } } }))).toBe(true);
+    expect(accepted(systemOf({ let: { do: [], nope: { alsoNope: [] } } }))).toBe(true);
     expect(conventionSlot('nope')).toBeUndefined();
     expect(conventionSlot('cond')).toEqual({ name: 'cond', kind: 'expression' });
   });
@@ -260,9 +278,13 @@ describe('ED-4: реакция на событие собирается блок
     expect(Object.keys(buildExpression('tick'))).toEqual(['tick']);
   });
 
-  it('пустой блок законен: слоты ещё не заполнены, а SYS-3 это принимает', () => {
+  it('пустой блок собирается, а незаполненный слот называет ядро (ACT-1, SYS-3)', () => {
+    // Редактор блок не судит (ED-1): узел без слотов — законный документ, автор
+    // его ещё заполняет. Вердикт об обязательном аргументе — ядра, и он адресный.
     expect(buildAction({ name: 'spawnEntity' })).toEqual({ spawnEntity: {} });
-    expect(accepted(systemOf(buildAction({ name: 'spawnEntity' })))).toBe(true);
+    expect(rejection(systemOf(buildAction({ name: 'spawnEntity' })))).toContain(
+      'не задан обязательный аргумент "prefab"',
+    );
   });
 });
 

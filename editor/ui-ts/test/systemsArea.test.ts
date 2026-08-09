@@ -157,6 +157,8 @@ describe('ED-4: реакция на событие собирается из б�
     // Блок «событие»: источник — событие, а не тик.
     commit(fieldByKey(surface(), 'ui.area.systems.source'), 'event');
     commit(slotField(surface(), 'type', 'input'), 'EntityDied');
+    // Имя ссылки на событие обязательно (ACT-1): без него ядро систему не примет.
+    commit(slotField(surface(), 'as', 'input'), 'died');
 
     // Блок «действия»: имя действия — из закрытого набора ядра, а не из ввода.
     const palette = fieldByKey(surface(), 'ui.area.systems.action');
@@ -181,6 +183,7 @@ describe('ED-4: реакция на событие собирается из б�
         {
           forEachEvent: {
             type: 'EntityDied',
+            as: 'died',
             do: [{ spawnEntity: { prefab: 'Explosion' } }],
           },
         },

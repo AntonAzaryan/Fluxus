@@ -24,9 +24,19 @@ import type {
 /** Узел действия: объект с ровно одним ключом-именем действия. */
 export type Action = Readonly<Record<string, unknown>>;
 
-/** Исполняет список действий по порядку (ACT-3). */
-export function execute(actions: readonly Action[], ctx: SystemContext, vars: ExprVars = {}): void {
-  for (const action of actions) {
+/**
+ * Исполняет список действий по порядку (ACT-3). `body` — имя аргумента, из
+ * которого этот список взят (`do`/`then`/`else`): участвует только в пути до
+ * узла, который собирается на выходе из упавшего действия.
+ */
+export function execute(
+  actions: readonly Action[],
+  ctx: SystemContext,
+  vars: ExprVars = {},
+  body?: string,
+): void {
+  for (let i = 0; i < actions.length; i++) {
+    const action = actions[i]!;
     const keys = Object.keys(action);
     if (keys.length !== 1) {
       throw new Error(`узел должен содержать ровно одно действие, найдено ${keys.length}: ${JSON.stringify(action)}`);
@@ -34,8 +44,55 @@ export function execute(actions: readonly Action[], ctx: SystemContext, vars: Ex
     const name = keys[0]!;
     // hasOwn, а не `name in ACTIONS`: то же правило, что для операторов (EXPR-6).
     if (!Object.hasOwn(ACTIONS, name)) throw new Error(`неизвестное действие "${name}"`);
-    ACTIONS[name]!(args(action[name], name), ctx, vars);
+    try {
+      ACTIONS[name]!(args(action[name], name), ctx, vars);
+    } catch (cause) {
+      throw atNode(`${body === undefined ? '' : `.${body}`}[${i}].${name}`, cause);
+    }
   }
+}
+
+// ------------------------------------------------------ ошибки исполнения
+
+/**
+ * Ошибка класса 3 (SYS-9) с путём до узла. Путь дописывается сегмент за
+ * сегментом на выходе из каждого объемлющего действия, поэтому на успешном пути
+ * он не собирается вовсе — строк в теле цикла нет.
+ */
+export class DslRuntimeError extends Error {
+  /** Путь до узла от корня тела системы — та же форма, что на регистрации (SYS-3). */
+  readonly path: string;
+  /** Причина без пути: сообщение оператора или действия. */
+  readonly reason: string;
+
+  constructor(path: string, reason: string, cause: unknown) {
+    super(`узел ${path}: ${reason}`, { cause });
+    this.name = 'DslRuntimeError';
+    this.path = path;
+    this.reason = reason;
+  }
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** Приписывает сегмент пути к ошибке, поднимающейся из тела действия. */
+function atNode(segment: string, cause: unknown): DslRuntimeError {
+  if (cause instanceof DslRuntimeError) {
+    return new DslRuntimeError(segment + cause.path, cause.reason, cause);
+  }
+  return new DslRuntimeError(segment, messageOf(cause), cause);
+}
+
+/**
+ * Ошибка на границе системы, описанной данными: называет систему, путь до узла
+ * и причину (SYS-9). Обрывает тик — мягкого продолжения у класса 3 нет (FP-4).
+ */
+export function systemError(system: string, cause: unknown): Error {
+  const where = cause instanceof DslRuntimeError ? `, узел ${cause.path}` : '';
+  const reason = cause instanceof DslRuntimeError ? cause.reason : messageOf(cause);
+  return new Error(`система "${system}"${where}: ${reason}`, { cause });
 }
 
 // ------------------------------------------------------- чтение аргументов
@@ -169,7 +226,7 @@ function bindRandom(
   const as = argStr(a, 'as', action);
   const sub = a['subStream'];
   const stream = sub === undefined ? ctx.rng.stream() : ctx.rng.stream(argStr(a, 'subStream', action));
-  execute(argBody(a, 'do', action), ctx, { ...vars, [as]: draw(stream) });
+  execute(argBody(a, 'do', action), ctx, { ...vars, [as]: draw(stream) }, 'do');
 }
 
 // --------------------------------------------------------------- действия
@@ -291,7 +348,7 @@ const ACTIONS: Record<string, ActionFn> = {
     const cond = evaluate(argExpr(a, 'cond', 'if'), ctx, vars);
     if (typeof cond !== 'boolean') throw new Error(`действие "if": условие должно быть булевым, получено ${typeof cond}`);
     const branch = cond ? argBody(a, 'then', 'if') : a['else'] === undefined ? [] : argBody(a, 'else', 'if');
-    execute(branch, ctx, vars);
+    execute(branch, ctx, vars, cond ? 'then' : 'else');
   },
   /** Биндинги вычисляются во внешней области — параллельно, а не по цепочке: иначе результат зависел бы от порядка имён. */
   let: (a, ctx, vars) => {
@@ -300,7 +357,7 @@ const ACTIONS: Record<string, ActionFn> = {
     for (const key of Object.keys(bindings).sort()) {
       scope[key] = evaluate(bindings[key]!, ctx, vars);
     }
-    execute(argBody(a, 'do', 'let'), ctx, scope);
+    execute(argBody(a, 'do', 'let'), ctx, scope, 'do');
   },
   /**
    * Значение стрима, связанное с именем в теле (RNG-6). Действие, а не
@@ -327,7 +384,7 @@ const ACTIONS: Record<string, ActionFn> = {
     // Результат материализован на момент вызова (QUERY-3), а мутации отложены
     // до flush (CMD-1) — итерация стабильна независимо от тела.
     for (const entity of ctx.query(querySpec(a['query'], ctx, vars))) {
-      execute(body, ctx, { ...vars, [as]: entity });
+      execute(body, ctx, { ...vars, [as]: entity }, 'do');
     }
   },
   /**
@@ -347,10 +404,45 @@ const ACTIONS: Record<string, ActionFn> = {
     const published = ctx.events.length;
     for (let i = 0; i < published; i++) {
       if (ctx.events.at(i).type !== type) continue;
-      execute(body, ctx, { ...vars, [as]: i });
+      execute(body, ctx, { ...vars, [as]: i }, 'do');
     }
   },
 };
 
 /** Имена действий — для валидации дерева на регистрации системы (SYS-3, этап 8). */
 export const actionNames: readonly string[] = Object.keys(ACTIONS);
+
+/**
+ * Обязательные аргументы каждого действия (ACT-1) — то, без чего исполнитель
+ * бросил бы: `argExpr`, `argStr` и `argBody` отсутствия не прощают. Читается
+ * валидацией на регистрации (SYS-3): состав аргументов виден из текста системы
+ * целиком, и ждать срабатывания ветки незачем.
+ *
+ * Перечень живёт здесь, рядом с самой таблицей действий и её чтецами аргументов,
+ * и связан с ними тестами: `actions.test.ts` собирает по нему полный набор
+ * аргументов и требует, чтобы исполнителя он устраивал, а без любого одного
+ * ключа — нет; `evaluatedSystem.test.ts` держит рядом копию, выписанную по
+ * ACT-1. Разъехаться перечню, норме и исполнителю негде.
+ *
+ * Необязательного здесь нет по определению: `argNum` с умолчанием (`easing`,
+ * `ignoreTimeScale`), `argFields` (`values`, `data`, `bindings`, `overrides`) и
+ * читаемые напрямую `radius`, `else`, `subStream` отсутствие переживают.
+ */
+export const requiredArgs: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  modifyComponent: Object.freeze(['entity', 'component']),
+  addComponent: Object.freeze(['entity', 'component']),
+  removeComponent: Object.freeze(['entity', 'component']),
+  spawnEntity: Object.freeze(['prefab']),
+  destroyEntity: Object.freeze(['entity']),
+  emitEvent: Object.freeze(['type']),
+  addTween: Object.freeze(['entity', 'def', 'from', 'to', 'duration']),
+  addModifier: Object.freeze(['entity', 'component', 'id', 'value']),
+  removeModifier: Object.freeze(['entity', 'component', 'id']),
+  carveFloor: Object.freeze(['at']),
+  if: Object.freeze(['cond', 'then']),
+  let: Object.freeze(['do']),
+  random: Object.freeze(['as', 'do']),
+  randomBelow: Object.freeze(['as', 'bound', 'do']),
+  forEach: Object.freeze(['query', 'as', 'do']),
+  forEachEvent: Object.freeze(['type', 'as', 'do']),
+});

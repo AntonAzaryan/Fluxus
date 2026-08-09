@@ -12,12 +12,14 @@
 import type { ComponentSchema, EntityId, FieldOverrides, WorldState } from '../types.js';
 import {
   allocate,
+  assertRoom,
   cloneEntityIndex,
   createEntityIndex,
   free,
   indexOf as rawIndexOf,
   isAlive as indexIsAlive,
   aliveEntities as indexAliveEntities,
+  room as indexRoom,
   type EntityIndex,
 } from './entityIndex.js';
 import {
@@ -408,6 +410,57 @@ export function entityIndexOf(state: WorldState): EntityIndex {
   return toInternal(state).entities;
 }
 
+// ------------------------------------- проверки мутаторов (CMD-2, SYS-9)
+//
+// Условия, на которых мутатор бросает, вынесены в отдельные функции и оттуда же
+// экспортированы: буфер команд обязан узнать об отказе ДО первой мутации мира,
+// иначе команды упавшей системы применились бы частично (SYS-9). Второй список
+// тех же условий рядом с буфером разошёлся бы с этим при первой же правке.
+
+function storeOf(internal: WorldInternal, action: string, component: string): ComponentStorage {
+  const store = internal.stores.get(component);
+  if (!store) throw new Error(`${action}: компонент "${component}" не зарегистрирован`);
+  return store;
+}
+
+function fieldOf(internal: WorldInternal, action: string, component: string, field: string): Int32Array {
+  const arr = storeOf(internal, action, component).fields[field];
+  if (!arr) throw new Error(`${action}: у компонента "${component}" нет поля "${field}"`);
+  return arr;
+}
+
+/** Компонент зарегистрирован — иначе тот же отказ, что у мутатора с именем `action`. */
+export function checkComponent(state: WorldState, action: string, component: string): void {
+  storeOf(toInternal(state), action, component);
+}
+
+/** Компонент и его поле существуют — иначе тот же отказ, что у мутатора с именем `action`. */
+export function checkField(state: WorldState, action: string, component: string, field: string): void {
+  fieldOf(toInternal(state), action, component, field);
+}
+
+/**
+ * Условия, на которых бросает `spawn`: prefab зарегистрирован, а `overrides`
+ * адресуют только то, что prefab уже содержит (CMD-6). Мира не касается.
+ */
+export function checkSpawn(state: WorldState, prefabName: string, overrides?: FieldOverrides): PrefabDef {
+  const internal = toInternal(state);
+  const prefab = internal.prefabs.get(prefabName);
+  if (!prefab) throw new Error(`spawn: prefab "${prefabName}" не найден`);
+  if (overrides !== undefined) validateOverrides(internal, prefabName, prefab, overrides);
+  return prefab;
+}
+
+/** Сколько ещё сущностей примет мир (ID-2); счёт ведёт `EntityIndex`. */
+export function spawnRoom(state: WorldState): number {
+  return indexRoom(toInternal(state).entities);
+}
+
+/** Отказ по ёмкости теми же словами, что у аллокации (ID-1), но до неё. */
+export function checkSpawnRoom(state: WorldState, available: number): void {
+  assertRoom(toInternal(state).entities, available);
+}
+
 /**
  * Спавнит сущность из prefab'а (ECS-4). ID выдаётся детерминированно порядком
  * вызовов (ID-2, DET-6). `overrides` меняет значения полей поверх prefab'а
@@ -415,10 +468,8 @@ export function entityIndexOf(state: WorldState): EntityIndex {
  */
 export function spawn(state: WorldState, prefabName: string, overrides?: FieldOverrides): EntityId {
   const internal = toInternal(state);
-  const prefab = internal.prefabs.get(prefabName);
-  if (!prefab) throw new Error(`spawn: prefab "${prefabName}" не найден`);
   // Проверяем до allocate: иначе ошибка оставила бы полусозданную сущность.
-  if (overrides !== undefined) validateOverrides(internal, prefabName, prefab, overrides);
+  const prefab = checkSpawn(state, prefabName, overrides);
 
   const entity = allocate(internal.entities);
   const index = rawIndexOf(entity);
@@ -493,12 +544,7 @@ export function hasComponent(state: WorldState, entity: EntityId, component: str
 }
 
 export function getField(state: WorldState, entity: EntityId, component: string, field: string): number {
-  const internal = toInternal(state);
-  const store = internal.stores.get(component);
-  if (!store) throw new Error(`getField: компонент "${component}" не зарегистрирован`);
-  const arr = store.fields[field];
-  if (!arr) throw new Error(`getField: у компонента "${component}" нет поля "${field}"`);
-  return arr[rawIndexOf(entity)] ?? 0;
+  return fieldOf(toInternal(state), 'getField', component, field)[rawIndexOf(entity)] ?? 0;
 }
 
 export function setField(
@@ -509,11 +555,7 @@ export function setField(
   value: number,
 ): void {
   const internal = toInternal(state);
-  const store = internal.stores.get(component);
-  if (!store) throw new Error(`setField: компонент "${component}" не зарегистрирован`);
-  const arr = store.fields[field];
-  if (!arr) throw new Error(`setField: у компонента "${component}" нет поля "${field}"`);
-  arr[rawIndexOf(entity)] = value;
+  fieldOf(internal, 'setField', component, field)[rawIndexOf(entity)] = value;
   markDirty(internal, component, entity);
 }
 
@@ -525,8 +567,7 @@ export function addComponent(
   values?: Readonly<Record<string, number>>,
 ): void {
   const internal = toInternal(state);
-  const store = internal.stores.get(component);
-  if (!store) throw new Error(`addComponent: компонент "${component}" не зарегистрирован`);
+  const store = storeOf(internal, 'addComponent', component);
   const index = rawIndexOf(entity);
   setComponent(internal.masks, index, store.id);
   for (const field of Object.keys(store.schema.fields)) {

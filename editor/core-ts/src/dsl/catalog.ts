@@ -20,16 +20,20 @@
  * - Действие — слоты конвенции SYS-3, одни и те же у всех действий (`slots.ts`).
  *   Персонального набора аргументов ядро не публикует, и выдумывать его здесь
  *   значило бы завести вторую реализацию семантики DSL (ED-1).
- * - Оператор — n-арный список выражений, КРОМЕ четырёх, чью структуру разбирает
- *   сам `checkExpression`: `var`, `getComponent`, `hasComponent`, `eventField`.
- *   Это единственное, что ядро об аргументах операторов знает, и ровно это
- *   каталог и повторяет.
+ * - Оператор — то, что ядро публикует сигнатурой (`expr.signatureOf`, EXPR-8):
+ *   арность и позиции литеральных имён. Позиции читаются оттуда, а не
+ *   перечисляются здесь: перечень-дубль разошёлся бы с нормой молча.
  *
- * Арности остальных операторов в каталоге нет намеренно: `arity()` живёт в
- * вычислителе, а не в валидаторе, и SYS-3 прямо выносит арность и типы значений
- * в ошибку времени вычисления. Ответ на это — не второй проверяльщик, а превью
- * (ED-9).
+ * Чего в каталоге нет и почему. Позиции литералов ядро называет, а чем имя в
+ * такой позиции ЯВЛЯЕТСЯ — нет: компонент, поле, переменная или поле события
+ * различимы только по смыслу оператора, и это единственное, что осталось здесь
+ * (`LITERAL_KINDS`). Арность ядро проверяет на регистрации (SYS-3), поэтому
+ * второго проверяльщика в редакторе нет — вердикт выносит `validateSystem`
+ * (ED-1). А типы значений остаются ошибкой времени вычисления (EXPR-7, SYS-9):
+ * тип известен только по факту чтения мира, и ответ на это — не проверка, а
+ * превью (ED-9).
  */
+import { expr } from '@game-mvp/core';
 import { descriptionKey } from '../i18n/keys.js';
 import { dslDescriptionPaths } from '../i18n/paths.js';
 import { CONVENTION_SLOTS, type ConventionSlot } from './slots.js';
@@ -66,12 +70,12 @@ export interface OperatorBlock {
   readonly name: string;
   readonly descriptionKey: string;
   /**
-   * Аргументы известной формы. Пустой список означает не «аргументов нет», а
-   * «ядро их не структурирует»: оператор n-арный, автор добавляет и убирает
-   * выражения сам.
+   * Аргументы известной формы — по сигнатуре оператора (EXPR-8). Пустой список
+   * означает не «аргументов нет», а «литеральных позиций у оператора нет»: все
+   * аргументы — выражения, и автор добавляет и убирает их сам.
    */
   readonly args: readonly OperatorArg[];
-  /** `true`, если форма аргументов ядру неизвестна и список свободный. */
+  /** `true`, если структурировать в списке нечего и он свободный. */
   readonly variadic: boolean;
 }
 
@@ -81,15 +85,17 @@ export interface DslCatalog {
 }
 
 /**
- * Четыре формы, которые разбирает `checkExpression`. Это не таблица сигнатур
- * рядом с таблицей операторов, а перечень исключений из общего обхода: у всех
- * прочих операторов аргументы — плоский список выражений, и обход у них один.
+ * Чем ЯВЛЯЕТСЯ имя в литеральной позиции — по порядку позиций, которые называет
+ * `signatureOf(name).literals`. Позиций здесь нет намеренно: их публикует ядро,
+ * и вторая их копия рядом с нормой EXPR-8 разошлась бы при первой же правке
+ * таблицы. Осталось только то, чего в сигнатуре не бывает вовсе, — чем имя
+ * подсказывать.
  */
-const STRUCTURED_ARGS: Readonly<Record<string, readonly OperatorArg[]>> = Object.freeze({
+const LITERAL_KINDS: Readonly<Record<string, readonly OperatorArg[]>> = Object.freeze({
   var: Object.freeze<OperatorArg[]>(['variable']),
-  getComponent: Object.freeze<OperatorArg[]>(['expression', 'component', 'field']),
-  hasComponent: Object.freeze<OperatorArg[]>(['expression', 'component']),
-  eventField: Object.freeze<OperatorArg[]>(['expression', 'eventField']),
+  getComponent: Object.freeze<OperatorArg[]>(['component', 'field']),
+  hasComponent: Object.freeze<OperatorArg[]>(['component']),
+  eventField: Object.freeze<OperatorArg[]>(['eventField']),
 });
 
 const NO_ARGS: readonly OperatorArg[] = Object.freeze([]);
@@ -102,8 +108,27 @@ function actionBlockOf(name: string): ActionBlock {
   });
 }
 
+/**
+ * Форма аргументов оператора из его сигнатуры: литеральные позиции — именами,
+ * остальные — вложенными выражениями. Оператор без литеральных позиций формы не
+ * имеет: список у него свободный, и автор добавляет выражения сам.
+ */
+function argsOf(name: string): readonly OperatorArg[] {
+  const signature = expr.signatureOf(name);
+  if (signature === undefined || signature.literals.length === 0) return NO_ARGS;
+  const kinds = Object.hasOwn(LITERAL_KINDS, name) ? LITERAL_KINDS[name]! : NO_ARGS;
+  const args: OperatorArg[] = [];
+  // Литеральные позиции бывают только у операторов точной арности, поэтому
+  // длина списка известна.
+  for (let i = 0; i < signature.max; i++) args.push('expression');
+  signature.literals.forEach((position, nth) => {
+    args[position] = kinds[nth] ?? 'expression';
+  });
+  return Object.freeze(args);
+}
+
 function operatorBlockOf(name: string): OperatorBlock {
-  const args = Object.hasOwn(STRUCTURED_ARGS, name) ? STRUCTURED_ARGS[name]! : NO_ARGS;
+  const args = argsOf(name);
   return Object.freeze({
     name,
     descriptionKey: descriptionKey([OPERATOR_KIND, name]),

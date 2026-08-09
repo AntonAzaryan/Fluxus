@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { evaluate, operators, type Expression, type ExprWorld } from '../src/dsl/expr.js';
+import {
+  evaluate,
+  operators,
+  signatureOf,
+  type Expression,
+  type ExprWorld,
+  type OpSignature,
+} from '../src/dsl/expr.js';
 import { EventBus } from '../src/ecs/events.js';
 import * as fixed from '../src/math/fixed.js';
 import { mathApi } from '../src/math/mathApi.js';
@@ -183,6 +190,304 @@ describe('ошибки формы AST', () => {
     expect(() => evaluate({ '+': [true, F(1)] }, world)).toThrow(/ожидалось число/);
     expect(() => evaluate({ if: [true, F(1)] }, world)).toThrow(/оператор "if"/);
     expect(() => evaluate({ '==': [position(1), position(2)] }, world)).toThrow(/покомпонентно/);
+  });
+});
+
+/**
+ * Копия состава таблицы EXPR-8 — по разделам требования и в его порядке.
+ * Список литеральный намеренно: рассинхронизация состава с нормой должна
+ * краснеть здесь, а не обнаруживаться чтением спеки рядом с кодом.
+ */
+const EXPR_8_TABLE: readonly string[] = [
+  // окружение и мир
+  'var',
+  'tick',
+  'getComponent',
+  'hasComponent',
+  'isAlive',
+  'hasFloorAt',
+  'eventField',
+  // арифметика
+  '+',
+  '-',
+  '*',
+  '/',
+  'min',
+  'max',
+  'abs',
+  'sqrt',
+  'sin',
+  'cos',
+  'clamp',
+  'fromInt',
+  'toInt',
+  'bitTest',
+  // сравнения
+  '<',
+  '<=',
+  '>',
+  '>=',
+  '==',
+  '!=',
+  // логика
+  'and',
+  'or',
+  '!',
+  'if',
+  // векторы
+  'vec',
+  'vec.add',
+  'vec.sub',
+  'vec.scale',
+  'vec.dot',
+  'vec.lengthSq',
+  'vec.length',
+  'vec.normalize',
+  'vec.x',
+  'vec.y',
+];
+
+/**
+ * Форма применения каждого оператора — вторая копия таблицы EXPR-8, снятая с
+ * текста требования, а не с `signatureOf`. В этом весь смысл: сверка с
+ * реализацией через саму реализацию не поймала бы ничего. Вторая реализация ядра
+ * собирает свою таблицу по тому же тексту (CLI-6), и расхождение в арности или
+ * литеральных позициях обязано краснеть здесь.
+ *
+ * `odd`, `literals` и `ranges` опущены там, где норма их не задаёт: умолчания —
+ * `false`, пустой список, пустой список.
+ */
+type ExpectedShape = {
+  readonly min: number;
+  readonly max: number;
+  readonly odd?: boolean;
+  readonly literals?: readonly number[];
+  readonly ranges?: readonly (readonly [number, number, number])[];
+};
+
+const EXPR_8_SHAPES: Readonly<Record<string, ExpectedShape>> = {
+  // окружение и мир
+  var: { min: 1, max: 1, literals: [0] },
+  tick: { min: 0, max: 0 },
+  getComponent: { min: 3, max: 3, literals: [1, 2] },
+  hasComponent: { min: 2, max: 2, literals: [1] },
+  isAlive: { min: 1, max: 1 },
+  hasFloorAt: { min: 1, max: 1 },
+  eventField: { min: 2, max: 2, literals: [1] },
+  // арифметика
+  '+': { min: 2, max: 2 },
+  '-': { min: 2, max: 2 },
+  '*': { min: 2, max: 2 },
+  '/': { min: 2, max: 2 },
+  min: { min: 2, max: 2 },
+  max: { min: 2, max: 2 },
+  abs: { min: 1, max: 1 },
+  sqrt: { min: 1, max: 1 },
+  sin: { min: 1, max: 1 },
+  cos: { min: 1, max: 1 },
+  clamp: { min: 3, max: 3 },
+  fromInt: { min: 1, max: 1 },
+  toInt: { min: 1, max: 1 },
+  bitTest: { min: 2, max: 2, ranges: [[1, 0, 31]] },
+  // сравнения
+  '<': { min: 2, max: 2 },
+  '<=': { min: 2, max: 2 },
+  '>': { min: 2, max: 2 },
+  '>=': { min: 2, max: 2 },
+  '==': { min: 2, max: 2 },
+  '!=': { min: 2, max: 2 },
+  // логика
+  and: { min: 2, max: Infinity },
+  or: { min: 2, max: Infinity },
+  '!': { min: 1, max: 1 },
+  if: { min: 3, max: Infinity, odd: true },
+  // векторы
+  vec: { min: 2, max: 2 },
+  'vec.add': { min: 2, max: 2 },
+  'vec.sub': { min: 2, max: 2 },
+  'vec.scale': { min: 2, max: 2 },
+  'vec.dot': { min: 2, max: 2 },
+  'vec.lengthSq': { min: 1, max: 1 },
+  'vec.length': { min: 1, max: 1 },
+  'vec.normalize': { min: 1, max: 1 },
+  'vec.x': { min: 1, max: 1 },
+  'vec.y': { min: 1, max: 1 },
+};
+
+/** Полная форма из краткой записи ожидания — умолчания те же, что у `def`. */
+function expanded(shape: ExpectedShape): OpSignature {
+  return {
+    min: shape.min,
+    max: shape.max,
+    odd: shape.odd ?? false,
+    literals: shape.literals ?? [],
+    ranges: shape.ranges ?? [],
+  };
+}
+
+/** Только поля сигнатуры: строка таблицы несёт ещё и `fn`, а он к норме не относится. */
+function shapeOf(op: string): OpSignature | undefined {
+  const signature = signatureOf(op);
+  if (signature === undefined) return undefined;
+  return {
+    min: signature.min,
+    max: signature.max,
+    odd: signature.odd,
+    literals: [...signature.literals],
+    ranges: signature.ranges.map((range) => [...range] as [number, number, number]),
+  };
+}
+
+describe('состав таблицы операторов (EXPR-8)', () => {
+  it('совпадает с нормативной таблицей имя в имя', () => {
+    expect([...operators].sort()).toEqual([...EXPR_8_TABLE].sort());
+  });
+
+  it('в таблице ровно 41 оператор', () => {
+    expect(EXPR_8_TABLE.length).toBe(41);
+    expect(new Set(EXPR_8_TABLE).size).toBe(41);
+  });
+
+  it('перечень форм покрывает таблицу целиком и ничего сверх неё', () => {
+    expect(Object.keys(EXPR_8_SHAPES).sort()).toEqual([...EXPR_8_TABLE].sort());
+  });
+
+  for (const op of EXPR_8_TABLE) {
+    it(`форма применения "${op}" — как в норме`, () => {
+      expect(shapeOf(op)).toEqual(expanded(EXPR_8_SHAPES[op]!));
+    });
+  }
+
+  it('имени вне таблицы формы нет, и цепочка прототипов её не даёт (EXPR-6)', () => {
+    expect(signatureOf('nope')).toBeUndefined();
+    expect(signatureOf('constructor')).toBeUndefined();
+    expect(signatureOf('toString')).toBeUndefined();
+  });
+});
+
+describe('строка таблицы неизменяема (EXPR-6, DI-1)', () => {
+  it('подменить реализацию оператора снаружи нечем', () => {
+    const signature = signatureOf('+')! as OpSignature & { fn: unknown };
+    expect(Object.isFrozen(signature)).toBe(true);
+    // Модули ES исполняются в strict mode: запись во frozen — исключение, а не
+    // молчаливый no-op. Это и есть `add_operation` json-logic-js, которого здесь
+    // быть не должно.
+    expect(() => {
+      (signature as { fn: unknown }).fn = () => 0;
+    }).toThrow(TypeError);
+    expect(() => {
+      (signature as { min: number }).min = 7;
+    }).toThrow(TypeError);
+  });
+
+  it('вложенные списки формы заморожены вместе со строкой', () => {
+    const getComponent = signatureOf('getComponent')!;
+    expect(Object.isFrozen(getComponent.literals)).toBe(true);
+    expect(() => (getComponent.literals as number[]).push(0)).toThrow(TypeError);
+
+    const bitTest = signatureOf('bitTest')!;
+    expect(Object.isFrozen(bitTest.ranges)).toBe(true);
+    expect(Object.isFrozen(bitTest.ranges[0])).toBe(true);
+    expect(() => ((bitTest.ranges[0] as unknown as number[])[2] = 99)).toThrow(TypeError);
+  });
+
+  it('заморожена каждая строка таблицы, а не только те, что смотрели', () => {
+    for (const op of operators) {
+      const signature = signatureOf(op)!;
+      expect(Object.isFrozen(signature), op).toBe(true);
+      expect(Object.isFrozen(signature.literals), op).toBe(true);
+      expect(Object.isFrozen(signature.ranges), op).toBe(true);
+    }
+  });
+});
+
+describe('краевые случаи таблицы (EXPR-8)', () => {
+  it('clamp при lo > hi даёт hi', () => {
+    // Порядок сведения нормативен: зеркальная запись дала бы lo.
+    expect(evaluate({ clamp: [F(0), F(10), F(2)] }, world)).toBe(F(2));
+    expect(evaluate({ clamp: [F(100), F(10), F(2)] }, world)).toBe(F(2));
+  });
+
+  it('нормализация нулевого вектора даёт нулевой вектор, а не насыщение (FP-5)', () => {
+    expect(evaluate({ 'vec.normalize': [{ vec: [0, 0] }] }, world)).toEqual({ x: 0, y: 0 });
+  });
+
+  it('abs от INT32_MIN заворачивается в INT32_MIN (FP-4)', () => {
+    expect(evaluate({ abs: [fixed.INT32_MIN] }, world)).toBe(fixed.INT32_MIN);
+  });
+
+  it('оператор нулевой арности записывается пустым списком', () => {
+    expect(evaluate({ tick: [] }, world)).toBe(42);
+    // `null` — не список, поэтому читается как список из одного аргумента.
+    expect(() => evaluate({ tick: null }, world)).toThrow(
+      /оператор "tick": ожидалось аргументов 0, получено 1/,
+    );
+  });
+
+  it('разнотипные операнды == и != — ошибка, а не false (EXPR-7)', () => {
+    expect(() => evaluate({ '==': [F(1), true] }, world)).toThrow(
+      /оператор "==": операнды разных типов, number и boolean/,
+    );
+    expect(() => evaluate({ '!=': [true, F(0)] }, world)).toThrow(
+      /оператор "!=": операнды разных типов, boolean и number/,
+    );
+    // Однотипные сравниваются как прежде.
+    expect(evaluate({ '==': [true, true] }, world)).toBe(true);
+    expect(evaluate({ '!=': [F(1), F(2)] }, world)).toBe(true);
+  });
+});
+
+describe('ленивость логики (EXPR-8)', () => {
+  /** Заведомо падающее выражение: у события "Died" поля "nx" нет. */
+  const boom: Expression = { eventField: [1, 'nx'] };
+
+  it('and не вычисляет аргументы за первым false', () => {
+    expect(evaluate({ and: [false, { '==': [boom, F(0)] }] }, world)).toBe(false);
+    expect(() => evaluate({ and: [true, { '==': [boom, F(0)] }] }, world)).toThrow(/нет поля "nx"/);
+  });
+
+  it('or не вычисляет аргументы за первым true', () => {
+    expect(evaluate({ or: [true, { '==': [boom, F(0)] }] }, world)).toBe(true);
+    expect(() => evaluate({ or: [false, { '==': [boom, F(0)] }] }, world)).toThrow(/нет поля "nx"/);
+  });
+
+  it('if не вычисляет невыбранную ветвь и условия за первым истинным', () => {
+    // Ветвь `then` первого условия ложна — падающее выражение в ней не трогают.
+    expect(evaluate({ if: [false, boom, true, F(2), F(3)] }, world)).toBe(F(2));
+    // Второе условие стоит за истинным первым — не вычисляется вместе со своей ветвью.
+    expect(evaluate({ if: [true, F(1), { '==': [boom, F(0)] }, F(2), F(3)] }, world)).toBe(F(1));
+    // Ветвь `else` не вычисляется, когда условие истинно.
+    expect(evaluate({ if: [true, F(1), boom] }, world)).toBe(F(1));
+  });
+});
+
+describe('чего в таблице нет (EXPR-8)', () => {
+  it('вариадической арифметики нет: сложение строго бинарное', () => {
+    expect(() => evaluate({ '+': [F(1), F(2), F(3)] }, world)).toThrow(
+      /оператор "\+": ожидалось аргументов 2, получено 3/,
+    );
+  });
+
+  it('унарного минуса нет', () => {
+    expect(() => evaluate({ '-': [F(1)] }, world)).toThrow(/оператор "-": ожидалось аргументов 2, получено 1/);
+  });
+
+  it('у var нет второго аргумента-умолчания', () => {
+    expect(() => evaluate({ var: ['a', F(0)] }, world, { a: F(1) })).toThrow(
+      /оператор "var": ожидалось аргументов 1, получено 2/,
+    );
+  });
+
+  it('цепочечных сравнений нет', () => {
+    expect(() => evaluate({ '<': [F(1), F(2), F(3)] }, world)).toThrow(
+      /оператор "<": ожидалось аргументов 2, получено 3/,
+    );
+  });
+
+  it('if без else нет', () => {
+    expect(() => evaluate({ if: [true, F(1)] }, world)).toThrow(
+      /оператор "if": ожидалось \[cond, then, …, else\] — нечётное число аргументов не менее 3, получено 2/,
+    );
   });
 });
 
