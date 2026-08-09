@@ -52,4 +52,4 @@
 
 - [x] 7.1 `npm run typecheck` и `npm test` из корня — зелено
 - [x] 7.2 Убедиться, что `engine/core-ts` не менялся и golden-эталоны не двинулись: эпоха в мир не попадает
-- [ ] 7.3 `openspec validate --specs --strict` после `/opsx:archive`
+- [x] 7.3 `openspec validate --specs --strict` после `/opsx:archive`

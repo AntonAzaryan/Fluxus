@@ -482,8 +482,9 @@ describe('поток событий на границе: накопление и
     // Событие и уничтожение разнесены по тикам намеренно: политика видимости по
     // умолчанию (NET-13) считает видимость по УЖЕ отфильтрованному миру своего
     // тика, поэтому событие про сущность, уничтоженную тем же тиком, не прошло
-    // бы отбор ни у кого, кроме наблюдателя. Труп, покидающий мир следующим
-    // тиком, — обычная форма содержимого (см. `content/scenes/duel.scene.json`).
+    // бы отбор ни у кого, кроме наблюдателя. Контент сегодня обходит ловушку
+    // иначе: труп в `duel.scene.json` живёт дальше под `Dead`, а единственный
+    // destroyEntity того же тика (`FireballExploded`) не ссылается на сущность.
     const match = await playing(
       eventConfig({
         marks: [
@@ -737,9 +738,9 @@ describe('поток событий на границе: перемотка (NTR
   /** Тик, переисполняемый после возобновления: он публикует событие в ОБЕИХ ветвях. */
   const REPLAYED = REWIND_TO + 1;
 
-  function rewoundConfig(policyTicks = REPLAYED): MatchConfig {
+  function rewoundConfig(): MatchConfig {
     return eventConfig(
-      { marks: [{ id: 1, visibleTo: BOTH }], emits: [{ mark: 1, tick: policyTicks, type: 'Cast' }] },
+      { marks: [{ id: 1, visibleTo: BOTH }], emits: [{ mark: 1, tick: REPLAYED, type: 'Cast' }] },
       { eventRepeat: 2, rewind: { interval: 1, capacity: 64 } },
     );
   }
