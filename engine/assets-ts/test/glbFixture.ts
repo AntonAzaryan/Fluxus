@@ -34,7 +34,23 @@ export const EXTERNAL_TEXTURE_URI = '../shared/atlas.png';
 export const EXTERNAL_TEXTURE_PATH = 'shared/atlas.png';
 
 /** Начало JPEG (SOI + APP0): формат без декодера в модуле — повод для слота без источника. */
-const JPEG_BYTES = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0]);
+export const JPEG_BYTES = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0]);
+
+/** Те же `EMBEDDED_PIXELS` настоящим PNG — общий кирпич всех упаковок фикстуры. */
+export async function encodeEmbeddedPng(): Promise<Uint8Array> {
+  const row = (a: number[], b: number[]): Uint8Array => Uint8Array.from([...a, ...b]);
+  return new Uint8Array(
+    await encodePng({
+      width: 2,
+      height: 2,
+      colorType: 6,
+      rows: [
+        row(EMBEDDED_PIXELS.slice(0, 4), EMBEDDED_PIXELS.slice(4, 8)),
+        row(EMBEDDED_PIXELS.slice(8, 12), EMBEDDED_PIXELS.slice(12, 16)),
+      ],
+    }),
+  );
+}
 
 const GLB_MAGIC = 0x46546c67;
 const GLB_CHUNK_JSON = 0x4e4f534a;
@@ -98,18 +114,7 @@ export async function buildGlbFixture(): Promise<GlbFixture> {
   const baseBin = new Uint8Array(await readFile(join(FIXTURES_DIR, 'gltf-mini/model.bin')));
   const doc = JSON.parse(baseJson) as Record<string, unknown>;
 
-  const row = (a: number[], b: number[]): Uint8Array => Uint8Array.from([...a, ...b]);
-  const png = new Uint8Array(
-    await encodePng({
-      width: 2,
-      height: 2,
-      colorType: 6,
-      rows: [
-        row(EMBEDDED_PIXELS.slice(0, 4), EMBEDDED_PIXELS.slice(4, 8)),
-        row(EMBEDDED_PIXELS.slice(8, 12), EMBEDDED_PIXELS.slice(12, 16)),
-      ],
-    }),
-  );
+  const png = await encodeEmbeddedPng();
 
   // BIN контейнера = исходный буфер модели, следом выровненные байты изображений.
   const pngOffset = baseBin.length + pad4(baseBin.length);
