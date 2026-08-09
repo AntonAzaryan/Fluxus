@@ -1,0 +1,18 @@
+{
+  "asset": { "version": "2.0", "generator": "рукописная фикстура конвейера (BLND-7)" },
+  "scene": 0,
+  "scenes": [{ "nodes": [0, 1] }],
+  "nodes": [
+    {
+      "name": "ghost-visual",
+      "translation": [1, 0, -1],
+      "extras": { "visual": "NoSuchVisual" }
+    },
+    {
+      "name": "stretched-statue",
+      "translation": [2, 0, -2],
+      "scale": [2, 1, 1],
+      "extras": { "visual": "Statue" }
+    }
+  ]
+}

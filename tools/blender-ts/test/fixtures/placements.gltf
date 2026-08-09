@@ -1,0 +1,51 @@
+{
+  "asset": { "version": "2.0", "generator": "рукописная фикстура конвейера (BLND-7)" },
+  "scene": 0,
+  "scenes": [{ "nodes": [0, 1, 2, 3] }],
+  "nodes": [
+    {
+      "name": "zeta-hero",
+      "translation": [3, 0, -4],
+      "rotation": [0, 0.7071067811865476, 0, 0.7071067811865476],
+      "extras": {
+        "prefab": "Hero",
+        "Player.slot": 1,
+        "Locomotion.maxSpeed": 0.5
+      }
+    },
+    {
+      "name": "alpha-hero",
+      "translation": [-1.5, 0, 2.25],
+      "extras": { "prefab": "Hero" }
+    },
+    {
+      "name": "beta-statue",
+      "mesh": 0,
+      "translation": [5.5, 0, -18.5],
+      "rotation": [0, 0.3826834323650898, 0, 0.9238795325112867],
+      "scale": [0.75, 0.75, 0.75],
+      "extras": { "visual": "Statue", "skin": "steel" }
+    },
+    {
+      "name": "marker-center",
+      "mesh": 0,
+      "translation": [0, 0, 0]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "unit-triangle",
+      "primitives": [{ "attributes": { "POSITION": 0 } }]
+    }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3" }
+  ],
+  "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }],
+  "buffers": [
+    {
+      "byteLength": 36,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/"
+    }
+  ]
+}

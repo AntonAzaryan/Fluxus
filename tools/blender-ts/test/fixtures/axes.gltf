@@ -1,0 +1,25 @@
+{
+  "asset": { "version": "2.0", "generator": "рукописная фикстура конвейера (BLND-7)" },
+  "scene": 0,
+  "scenes": [{ "nodes": [0, 1, 2] }],
+  "nodes": [
+    {
+      "name": "at-two-five-minus-three",
+      "translation": [2, 5, -3]
+    },
+    {
+      "name": "quarter-turn",
+      "translation": [0, 0, 0],
+      "rotation": [0, 0.7071067811865476, 0, 0.7071067811865476]
+    },
+    {
+      "name": "parented-child-of-shift",
+      "translation": [1, 0, -1],
+      "children": [3]
+    },
+    {
+      "name": "child",
+      "translation": [2, 0, -3]
+    }
+  ]
+}
