@@ -11,5 +11,6 @@
   "validation.reason.blender.spatialLayerSync.layerDiverged": "Слой «{slot}» разошёлся с источником «{source}»: правку перезапишет следующий импорт — выполните импорт либо правьте в Blender (BLND-2)",
   "validation.reason.blender.spatialLayerSync.sourceUnreadable": "Источник «{source}» лежит рядом со сценой, но среда его не прочитала: сверить слой не с чем: {reason}",
   "validation.reason.blender.spatialLayerSync.sourceRejected": "Источник «{source}» не проходит импорт: сверять слой не с чем, пока источник не исправлен: {reason} (BLND-6)",
+  "validation.reason.blender.spatialLayerSync.sourceUnread": "Источник сцены «{scene}» не читан: слой не сверялся ни разу — обновите состояние источников (это делает сборка редактора до прогона валидации, BLND-2)",
   "validation.reason.blender.spatialLayerSync.ruleFailed": "Правило валидации «{rule}» упало на этом документе: проверено не было ничего, и это дефект правила, а не документа."
 }

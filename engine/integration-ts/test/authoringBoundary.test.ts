@@ -1,7 +1,8 @@
 /**
- * Граница инструментов авторинга (`blender-pipeline` BLND-7, BLND-12): движок и
- * редактор не зависят от конвейера Blender, а клиент матча не обладает ни
- * импортёром, ни каналом watch.
+ * Граница инструментов авторинга (`blender-pipeline` BLND-7, BLND-12): движок
+ * не зависит от конвейера Blender, редактор знает о нём ровно сборкой, клиент
+ * матча не обладает ни импортёром, ни каналом watch, а сам гейт проходит без
+ * установленного Blender.
  *
  * Проверка живёт в кросс-слойной сюите по той же причине, что и граница
  * контента: правило репозиторное — оно про то, чего НЕ должно быть в чужих
@@ -14,7 +15,7 @@
  * клиента, и появиться он может ровно там, где кому-то надоест перезапускать
  * демо.
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,15 +23,19 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   AUTHORING_IMPORTS,
   HOT_CHANNEL_TEXT,
+  PROCESS_LAUNCH_IMPORTS,
   WATCH_REFERENCES,
   formatAuthoringViolations,
   moduleSpecifiers,
   scanAuthoringBoundary,
   scanAuthoringDependencies,
+  scanProcessLaunch,
 } from '../../tests/guard/authoringBoundary.js';
 
 const ENGINE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const EDITOR_ROOT = join(ENGINE_ROOT, '../editor');
+const TOOLS_ROOT = join(ENGINE_ROOT, '../tools');
+const REPO_ROOT = join(ENGINE_ROOT, '..');
 const CLIENT_ROOT = join(ENGINE_ROOT, 'client-ts');
 
 /**
@@ -41,7 +46,40 @@ const CLIENT_ROOT = join(ENGINE_ROOT, 'client-ts');
  */
 const SELF = 'integration-ts/test/authoringBoundary.test.ts';
 
-describe('guard: конвейер Blender — не зависимость движка и редактора (BLND-7)', () => {
+/**
+ * Где редактору знать о конвейере ПОЗВОЛЕНО, и почему именно там.
+ *
+ * BLND-5 требует, чтобы командная строка и работающий редактор исполняли одну и
+ * ту же зарегистрированную операцию, а BLND-2 — чтобы правка производных данных
+ * подсвечивалась правилом-вкладом валидации редактора (ED-8, ED-25). И то и
+ * другое регистрирует сборка (ED-25), поэтому пакет вклада она импортирует, а
+ * манифест пакета объявляет его зависимостью.
+ *
+ * Перечень назван пофайлово намеренно: «редактор вправе» не должно расползтись
+ * на headless-ядро редактора и на каркас интерфейса — им о конвейере знать
+ * незачем, и появление там импорта обязано краснеть. Тест сюда же и смотрит с
+ * другой стороны: перечисленное обязано импортировать пакет НА САМОМ ДЕЛЕ,
+ * иначе исключение переживёт снятую регистрацию и разрешит будущий импорт молча.
+ */
+const EDITOR_ASSEMBLY: Readonly<Record<string, string>> = {
+  'ui-ts/app/assembly.ts': 'сборка редактора: регистрация операции и правила-вклада (BLND-5, BLND-2)',
+  'ui-ts/test/blenderSync.test.ts': 'проверка той самой регистрации на собранном редакторе',
+};
+
+/** Манифест, объявляющий пакет конвейера зависимостью, — тот же, что везёт сборку. */
+const EDITOR_MANIFEST = 'ui-ts/package.json';
+
+/**
+ * Где подпроцесс в гейте законен — по пути и с причиной. Перечень пуст не будет
+ * и не должен: CLI ядра проверяется запуском (CLI-9), иначе тест проверял бы то,
+ * как модуль грузит vitest, а не то, как его грузит Node. Команда исключения
+ * при этом проверяется отдельно — см. тест ниже.
+ */
+const PROCESS_LAUNCH_EXCEPTIONS: Readonly<Record<string, string>> = {
+  'core-ts/test/cli.test.ts': 'запуск `bin/sim.mjs` интерпретатором Node — проверка CLI ядра (CLI-9)',
+};
+
+describe('guard: конвейер Blender — не зависимость движка (BLND-7)', () => {
   it('ни один пакет движка не импортирует импортёр', () => {
     const violations = scanAuthoringBoundary({
       rootDir: ENGINE_ROOT,
@@ -51,14 +89,76 @@ describe('guard: конвейер Blender — не зависимость дви
     expect(formatAuthoringViolations(violations)).toBe('');
   });
 
-  it('ни один пакет редактора не импортирует импортёр', () => {
-    const violations = scanAuthoringBoundary({ rootDir: EDITOR_ROOT, imports: AUTHORING_IMPORTS });
+  it('ни один манифест движка не объявляет его зависимостью', () => {
+    expect(formatAuthoringViolations(scanAuthoringDependencies(ENGINE_ROOT))).toBe('');
+  });
+});
+
+describe('guard: у редактора о конвейере знает только сборка (BLND-5, BLND-2)', () => {
+  it('вне названных файлов сборки импортёр не импортируется', () => {
+    const violations = scanAuthoringBoundary({
+      rootDir: EDITOR_ROOT,
+      imports: AUTHORING_IMPORTS,
+      exclude: Object.keys(EDITOR_ASSEMBLY),
+    });
     expect(formatAuthoringViolations(violations)).toBe('');
   });
 
-  it('ни один манифест движка и редактора не объявляет его зависимостью', () => {
-    expect(formatAuthoringViolations(scanAuthoringDependencies(ENGINE_ROOT))).toBe('');
-    expect(formatAuthoringViolations(scanAuthoringDependencies(EDITOR_ROOT))).toBe('');
+  it('исключения — не мёртвые: каждый названный файл вправду импортирует пакет', () => {
+    for (const [file, why] of Object.entries(EDITOR_ASSEMBLY)) {
+      const source = readFileSync(join(EDITOR_ROOT, file), 'utf8');
+      expect(moduleSpecifiers(source), `${file}: ${why}`).toContain('@game-mvp/blender-ts');
+    }
+  });
+
+  it('зависимость объявлена ровно одним манифестом редактора', () => {
+    const violations = scanAuthoringDependencies(EDITOR_ROOT, AUTHORING_IMPORTS, [EDITOR_MANIFEST]);
+    expect(formatAuthoringViolations(violations)).toBe('');
+    // И она действительно есть: без неё исключение выше разрешало бы импорт
+    // пакета, которого редактор не объявил своим.
+    const manifest = JSON.parse(readFileSync(join(EDITOR_ROOT, EDITOR_MANIFEST), 'utf8')) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(Object.keys(manifest.dependencies ?? {})).toContain('@game-mvp/blender-ts');
+  });
+});
+
+/**
+ * BLND-7, сценарий «CI без Blender»: гейт зелёный там, где Blender не
+ * установлен. Проверка импортов этого не даёт — бинарь зовут оболочкой, — и
+ * закрывается он двумя каналами сразу (см. `scanProcessLaunch`).
+ */
+describe('guard: гейт не зовёт Blender ни одним каналом (BLND-7)', () => {
+  it('ни один скрипт манифеста не запускает бинарь Blender', () => {
+    expect(formatAuthoringViolations(scanProcessLaunch(REPO_ROOT))).toBe('');
+  });
+
+  it('подпроцесс в гейте запускает ровно один названный файл', () => {
+    // Движок, редактор и сам импортёр: без подпроцесса Blender не позвать ни
+    // под каким именем, и перечень мест, где подпроцесс вообще есть, короче и
+    // проверяемее перечня имён бинарей. Аддон (`tools/blender-addon/`) — Python,
+    // вне workspace и вне гейта, и его вызов Node сюда не попадает.
+    for (const root of [ENGINE_ROOT, EDITOR_ROOT, join(TOOLS_ROOT, 'blender-ts')]) {
+      const violations = scanAuthoringBoundary({
+        rootDir: root,
+        imports: PROCESS_LAUNCH_IMPORTS,
+        exclude: [SELF, ...Object.keys(PROCESS_LAUNCH_EXCEPTIONS)],
+      });
+      expect(formatAuthoringViolations(violations), root).toBe('');
+    }
+  });
+
+  it('и запускает он интерпретатор Node, а не имя из строки', () => {
+    // Исключение проверяется, а не даётся на слово: подпроцесс там один, и его
+    // команда — `process.execPath`. Собранное из строки имя бинаря прошло бы
+    // мимо сканера импортов, и тогда «гейт Blender не зовёт» держалось бы на
+    // ревью.
+    for (const file of Object.keys(PROCESS_LAUNCH_EXCEPTIONS)) {
+      const source = readFileSync(join(ENGINE_ROOT, file), 'utf8');
+      const launches = [...source.matchAll(/\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync)\s*\(\s*([^,)]+)/g)];
+      expect(launches.length, file).toBeGreaterThan(0);
+      for (const [, command] of launches) expect(command?.trim(), file).toBe('process.execPath');
+    }
   });
 });
 
@@ -106,7 +206,17 @@ describe('guard: сканер границы авторинга ловит то,
     );
     writeFileSync(
       join(root, 'pkg-ts/package.json'),
-      JSON.stringify({ dependencies: { '@game-mvp/blender-ts': '*' } }),
+      JSON.stringify({
+        dependencies: { '@game-mvp/blender-ts': '*' },
+        scripts: {
+          // Команда Blender'ом: ровно то, чего в гейте быть не должно.
+          export: 'blender --background scene.blend',
+          // А это — не он: путь пакета и имя workspace, в которых слово стоит
+          // частью имени, а не командой.
+          import: 'node tools/blender-ts/bin/import.mjs',
+          test: 'npm run test -w @game-mvp/blender-ts',
+        },
+      }),
     );
   });
 
@@ -153,6 +263,20 @@ describe('guard: сканер границы авторинга ловит то,
     const violations = scanAuthoringDependencies(root);
     expect(violations.map((violation) => violation.file)).toEqual(['pkg-ts/package.json']);
     expect(violations[0]!.message).toContain('BLND-7');
+  });
+
+  it('названный манифест из проверки зависимостей исключается по пути', () => {
+    const violations = scanAuthoringDependencies(root, AUTHORING_IMPORTS, ['pkg-ts/package.json']);
+    expect(formatAuthoringViolations(violations)).toBe('');
+  });
+
+  it('команда Blender краснит, а имя пакета в скрипте — нет', () => {
+    const violations = scanProcessLaunch(root);
+    expect(violations.map((violation) => violation.file)).toEqual(['pkg-ts/package.json']);
+    // Красный ровно один скрипт: `import` и `test` называют пакет, а не бинарь.
+    expect(violations).toHaveLength(1);
+    expect(violations[0]!.message).toContain('"export"');
+    expect(violations[0]!.rule).toBe('blender-in-gate');
   });
 
   it('сканер берёт спецификаторы всех четырёх форм', () => {

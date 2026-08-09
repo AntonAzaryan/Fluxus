@@ -11,5 +11,6 @@
   "validation.reason.blender.spatialLayerSync.layerDiverged": "The \"{slot}\" layer diverged from source \"{source}\": the next import will overwrite this edit — run the import or edit in Blender (BLND-2)",
   "validation.reason.blender.spatialLayerSync.sourceUnreadable": "Source \"{source}\" sits next to the scene but the environment did not read it: there is nothing to compare the layer against: {reason}",
   "validation.reason.blender.spatialLayerSync.sourceRejected": "Source \"{source}\" does not pass the import: there is nothing to compare the layer against until the source is fixed: {reason} (BLND-6)",
+  "validation.reason.blender.spatialLayerSync.sourceUnread": "The source of scene \"{scene}\" has not been read: the layer was never compared — refresh the source state (the editor assembly does that before the validation pass, BLND-2)",
   "validation.reason.blender.spatialLayerSync.ruleFailed": "Validation rule \"{rule}\" failed on this document: nothing was checked, and that is a defect of the rule, not of the document."
 }

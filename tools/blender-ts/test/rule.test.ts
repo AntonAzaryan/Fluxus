@@ -214,9 +214,16 @@ describe('BLND-2: правило сверяет ровно то представ
   });
 });
 
+/** Дерево цели вовсе без источника: ни `.glb`, ни `.gltf` рядом со сценой. */
+function withoutSource(): Record<string, string | Uint8Array> {
+  const files = contentFiles();
+  delete files['scenes/duel.gltf'];
+  return files;
+}
+
 describe('BLND-2: сцена без источника живёт как прежде', () => {
   it('ни находки, ни попытки чтения', async () => {
-    const { host, reads } = tree(contentFiles());
+    const { host, reads } = tree(withoutSource());
     const sources = createSourceCache(host);
 
     const state = await sources.refresh(SCENE_ID);
@@ -224,6 +231,52 @@ describe('BLND-2: сцена без источника живёт как пре�
 
     expect(state.status).toBe('none');
     expect(reads).toEqual([]);
+    expect(issuesOf(editor, spatialLayerSyncRule({ sources }))).toEqual([]);
+  });
+});
+
+describe('BLND-3: источник парен сцене форматом, а не контейнером', () => {
+  it('текстовый экспорт рядом со сценой сверяется так же, как контейнер', async () => {
+    // Импорт принимает обе формы (`SOURCE_EXTENSIONS`), и правило обязано
+    // принимать те же: знай оно только про `.glb`, сцена с текстовым экспортом
+    // молча считалась бы несопряжённой.
+    const { host } = tree(contentFiles());
+    const sources = createSourceCache(host);
+    const state = await sources.refresh(SCENE_ID);
+
+    expect(state.status).toBe('ready');
+    expect(state.status === 'ready' ? state.path : '').toBe('scenes/duel.gltf');
+    const editor = session(sceneDocument(), presentationDocument());
+    expect(issuesOf(editor, spatialLayerSyncRule({ sources })).length).toBeGreaterThan(0);
+  });
+});
+
+describe('BLND-2: «не читан» и «источника нет» — разные ответы', () => {
+  it('кэш, которого никто не обновил, отвечает «не читан», а не молчанием', () => {
+    const { host, reads } = tree(withoutSource());
+    const sources = createSourceCache(host);
+    const editor = session(sceneDocument(), presentationDocument());
+
+    // Ни одного `refresh`: ровно то состояние, в котором находится собранный
+    // редактор, забывший обновить источники до прогона валидации.
+    expect(sources.stateOf(SCENE_ID).status).toBe('unknown');
+    const issues = issuesOf(editor, spatialLayerSyncRule({ sources }));
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.reasonKey).toBe('validation.reason.blender.spatialLayerSync.sourceUnread');
+    expect(issues[0]!.severity).toBe('warning');
+    // Читать правило при этом не пробовало: чтение — дело кэша (ED-8, ED-12).
+    expect(reads).toEqual([]);
+  });
+
+  it('после обновления кэша ответ становится определённым', async () => {
+    const { host } = tree(withoutSource());
+    const sources = createSourceCache(host);
+    const editor = session(sceneDocument(), presentationDocument());
+    expect(issuesOf(editor, spatialLayerSyncRule({ sources }))).toHaveLength(1);
+
+    await sources.refresh(SCENE_ID);
+
     expect(issuesOf(editor, spatialLayerSyncRule({ sources }))).toEqual([]);
   });
 });

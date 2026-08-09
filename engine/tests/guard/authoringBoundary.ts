@@ -1,8 +1,33 @@
 /**
  * Guard границы инструментов авторинга (`blender-pipeline` BLND-7, BLND-12):
- * конвейер Blender не является зависимостью пакетов движка и редактора, а
  * рантайм — клиент, сервер, воркеры — импортёра не зовёт и за источниками не
- * следит.
+ * следит, а пакеты движка о конвейере не знают вовсе.
+ *
+ * ## Кого запрет касается, а кого нет
+ *
+ * BLND-7 запрещает зависимость от BLENDER — «ни рантаймной, ни тестовой», — и
+ * держится он на том, что гейт `npm run check` проходит без установленного
+ * Blender. Пакет `@game-mvp/blender-ts` этим Blender'ом НЕ является: он на
+ * TypeScript, читает закоммиченные фикстуры экспорта и Blender не вызывает ни в
+ * какой форме (проверка — `scanProcessLaunch` ниже и тест гейта рядом).
+ *
+ * Поэтому запрет здесь сужен до того, что нормирует спека:
+ *
+ * - **пакеты движка** — импортёра не знают: он инструмент времени авторинга, а
+ *   рантайм читает документы (BLND-7, сценарий «Предложение импортировать на
+ *   старте клиента»);
+ * - **сборка редактора** — знает и обязана знать. BLND-5 требует, чтобы «импорт
+ *   запускали командой workspace и операцией из работающего редактора» и оба
+ *   пути исполняли ОДНУ зарегистрированную операцию, а BLND-2 — чтобы правка
+ *   производных данных мимо импорта подсвечивалась «валидацией редактора на
+ *   общих основаниях (ED-8) правилом-вкладом (ED-25)». Регистрирует вклады
+ *   сборка (ED-25), и запрет ей импортировать пакет вклада означал бы, что обе
+ *   клаузы не исполняет ничто. Направление зависимости при этом прежнее:
+ *   `blender-ts` → `editor-core`, `editor-ui` → `blender-ts`, цикла нет.
+ *
+ * Список файлов сборки, которым это разрешено, — данные теста рядом: он назван
+ * поимённо и с причиной, чтобы «редактор вправе» не расползлось на headless-ядро
+ * редактора и на каркас интерфейса, которым знать о конвейере незачем.
  *
  * Это вопрос того, ЧТО пакет импортирует, поэтому сканируются спецификаторы
  * модулей, а не файловая раскладка (соседний `contentLocation.ts`) и не
@@ -57,7 +82,7 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', '.vite']);
 /**
  * Инструменты авторинга конвейера. Рантайм их не зовёт: импорт — авторинг,
  * рантайм читает документы, а забытый импорт ловит валидация (BLND-2), а не
- * загрузка клиента.
+ * загрузка клиента. Сборке редактора это разрешено — см. шапку файла.
  */
 export const AUTHORING_IMPORTS: readonly ForbiddenReference[] = [
   {
@@ -179,8 +204,10 @@ export function scanAuthoringBoundary(config: AuthoringScanConfig): AuthoringVio
 export function scanAuthoringDependencies(
   rootDir: string,
   forbidden: readonly ForbiddenReference[] = AUTHORING_IMPORTS,
+  exclude: readonly string[] = [],
 ): AuthoringViolation[] {
   const out: AuthoringViolation[] = [];
+  const excluded = new Set(exclude);
   const visit = (dir: string): void => {
     for (const entry of readdirSync(dir).sort()) {
       const full = join(dir, entry);
@@ -190,6 +217,7 @@ export function scanAuthoringDependencies(
         continue;
       }
       if (entry !== 'package.json') continue;
+      if (excluded.has(relative(rootDir, full).split(sep).join('/'))) continue;
       const manifest = JSON.parse(readFileSync(full, 'utf8')) as {
         dependencies?: Record<string, string>;
         devDependencies?: Record<string, string>;
@@ -204,6 +232,67 @@ export function scanAuthoringDependencies(
           file: relative(rootDir, full).split(sep).join('/'),
           rule: rule.rule,
           message: `зависимость "${rule.match}": ${rule.why} (${CONFIG_HINT})`,
+        });
+      }
+    }
+  };
+  visit(rootDir);
+  return out;
+}
+
+/**
+ * Запуск Blender откуда угодно в гейте: команда `npm`-скрипта и запуск
+ * подпроцесса из кода.
+ *
+ * Утверждение BLND-7 «гейт `npm run check` SHALL проходить без установленного
+ * Blender» на одних импортах не держится: бинарь зовут не импортом, а оболочкой,
+ * и сканер спецификаторов такого вызова не видит вовсе (о чём и сказано выше).
+ * Здесь проверяются оба доступных канала, и вместе они закрывают вопрос:
+ *
+ * 1. **Скрипты манифестов** — по слову-командой `blender` в значении скрипта.
+ *    Слово, а не подстрока: `tools/blender-ts/bin/import.mjs` и
+ *    `-w @game-mvp/blender-ts` — пути и имена пакетов, а не команда.
+ * 2. **Запуск подпроцесса из кода** — по модулю `child_process`. Тоньше не
+ *    нужно и нельзя: имя бинаря в коде собирается из чего угодно, а без
+ *    подпроцесса его не запустить ни под каким именем. Гейт подпроцессов не
+ *    запускает вовсе, и это утверждение о нём — сильнее и проверяемее, чем
+ *    перечень имён бинарей.
+ */
+export const PROCESS_LAUNCH_IMPORTS: readonly ForbiddenReference[] = [
+  {
+    match: 'child_process',
+    rule: 'blender-in-gate',
+    why: 'запуск подпроцесса в пакете гейта: единственный канал, которым Blender мог бы быть позван (BLND-7)',
+  },
+];
+
+/** Команда `blender` в значении скрипта — как слово, а не как часть пути. */
+const BLENDER_COMMAND = /(^|[\s;&|(`])blender(\.exe)?($|[\s;&|)`])/i;
+
+/**
+ * Скрипты манифестов, зовущие Blender. Возвращает нарушения тем же видом, что
+ * и остальные сканеры, — их печатает тот же `formatAuthoringViolations`.
+ */
+export function scanProcessLaunch(rootDir: string): AuthoringViolation[] {
+  const out: AuthoringViolation[] = [];
+  const visit = (dir: string): void => {
+    for (const entry of readdirSync(dir).sort()) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        if (SKIP_DIRS.has(entry) || entry.startsWith('.')) continue;
+        visit(full);
+        continue;
+      }
+      if (entry !== 'package.json') continue;
+      const manifest = JSON.parse(readFileSync(full, 'utf8')) as {
+        scripts?: Record<string, string>;
+      };
+      for (const [name, command] of Object.entries(manifest.scripts ?? {})) {
+        if (!BLENDER_COMMAND.test(command)) continue;
+        out.push({
+          file: relative(rootDir, full).split(sep).join('/'),
+          rule: 'blender-in-gate',
+          message: `скрипт "${name}" зовёт Blender: гейт проходит без него (BLND-7) (${CONFIG_HINT})`,
         });
       }
     }

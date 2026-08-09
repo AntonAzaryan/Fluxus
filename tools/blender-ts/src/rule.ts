@@ -31,12 +31,19 @@
  * которым живёт валидатор (ED-8): пере-разбор glTF идёт только тогда, когда
  * файл действительно сменился.
  *
- * ## Среда, которая не умеет прочитать источник
+ * ## Четыре ответа кэша, и ни одного молчаливого
  *
- * Отвечает честной причиной, а не пустым результатом (ED-12, ED-20): у сцены с
- * `.glb` рядом «находок нет» и «прочитать не удалось» — разные ответы, и второй
- * обязан быть виден. Сцена БЕЗ источника — третий случай: конвейер к ней
- * отношения не имеет, находки нет и читать нечего (BLND-2).
+ * - `none` — источника рядом со сценой нет: конвейер к ней отношения не имеет,
+ *   находки нет и читать нечего (BLND-2).
+ * - `unknown` — источник ещё НЕ ЧИТАН: собирающий редактор кэш не обновил либо
+ *   обновление ещё идёт. Это не «источника нет»: свести два ответа к одному
+ *   значило бы объявить сцену несопряжённой на основании того, что о ней ничего
+ *   не спрашивали, — то самое молчание, ради устранения которого правило и
+ *   заведено. Поэтому у него своя находка, а у собирающего — обязанность
+ *   обновить кэш до прогона (см. `app/assembly.ts` редактора).
+ * - `unavailable` / `rejected` — источник есть, но прочитать или разобрать его
+ *   не удалось: причина называется дословно (ED-12, ED-20).
+ * - `ready` — есть с чем сверять.
  */
 import {
   getAtPath,
@@ -59,7 +66,7 @@ import { generateSpatialLayer, hasErrors, type SpatialLayer, type SpatialLayerCo
 import { generateCellLayer, withCellLayer } from './maps.js';
 import { normalizeDocument, type SourceObject } from './normalize.js';
 import { DEFAULT_DECORATIONS_PATH, DEFAULT_INITIAL_PATH, DEFAULT_TERRAIN_PATH } from './operation.js';
-import { SOURCE_EXTENSION, sourcePathOf } from './pairing.js';
+import { SOURCE_EXTENSIONS, sourcePathOf } from './pairing.js';
 import { contextOfValues } from './project.js';
 
 export const SPATIAL_LAYER_SYNC_RULE = 'blender.spatialLayerSync';
@@ -70,11 +77,18 @@ const LAYER_DIVERGED = 'layerDiverged';
 const SOURCE_UNREADABLE = 'sourceUnreadable';
 /** Источник прочитан, но импорт его отверг (BLND-6): сравнивать не с чем. */
 const SOURCE_REJECTED = 'sourceRejected';
+/** Источник не читан вовсе: сверки не было, и молчать об этом нельзя. */
+const SOURCE_UNREAD = 'sourceUnread';
 
 /** Что известно об источнике сцены прямо сейчас. */
 export type SourceState =
   /** Источника рядом со сценой нет — сцена не сопряжена с конвейером (BLND-2). */
   | { readonly status: 'none' }
+  /**
+   * О сцене ещё не спрашивали: кэш не обновляли ни разу. Отличается от `none`
+   * тем же, чем «не проверяли» отличается от «проверили и не нашли».
+   */
+  | { readonly status: 'unknown' }
   /** Источник есть, среда его не отдала: причина — дословно от среды. */
   | { readonly status: 'unavailable'; readonly path: ContentPath; readonly reason: string }
   /** Источник прочитан, но не разобрался. */
@@ -108,11 +122,18 @@ export interface SpatialLayerSourceCache extends SpatialLayerSources {
 }
 
 export interface SourceCacheOptions {
-  /** Расширение экспорта источника; умолчание — `.glb` (BLND-2). */
-  readonly extension?: string;
+  /**
+   * Расширения экспорта источника в порядке предпочтения; умолчание —
+   * `SOURCE_EXTENSIONS` (`.glb`, затем `.gltf`). Их два по той же причине, по
+   * которой их принимает импорт: форматом BLND-3 называет glTF 2.0, а не
+   * контейнер, и правило, знающее только про `.glb`, молчало бы о сцене,
+   * сопряжённой с текстовым экспортом.
+   */
+  readonly extensions?: readonly string[];
 }
 
 const NONE: SourceState = Object.freeze({ status: 'none' });
+const UNKNOWN: SourceState = Object.freeze({ status: 'unknown' });
 
 /** FNV-1a по байтам: отпечаток нужен для сравнения «те же байты?», а не для криптографии. */
 function fingerprintOf(bytes: Uint8Array): string {
@@ -138,11 +159,13 @@ export function createSourceCache(
   host: ContentTreeHost,
   options: SourceCacheOptions = {},
 ): SpatialLayerSourceCache {
-  const extension = options.extension ?? SOURCE_EXTENSION;
+  const extensions = options.extensions ?? SOURCE_EXTENSIONS;
   const states = new Map<DocumentId, SourceState>();
 
   return {
-    stateOf: (scene) => states.get(scene) ?? NONE,
+    // Не `none`: о сцене, про которую не спрашивали, кэш не вправе утверждать,
+    // что источника у неё нет.
+    stateOf: (scene) => states.get(scene) ?? UNKNOWN,
 
     forget(scene) {
       if (scene === undefined) states.clear();
@@ -150,16 +173,20 @@ export function createSourceCache(
     },
 
     async refresh(scene) {
-      const path = sourcePathOf(scene, extension);
-      let exists: boolean;
-      try {
-        exists = (await host.stat(path))?.kind === 'file';
-      } catch (error) {
-        const state: SourceState = { status: 'unavailable', path, reason: message(error) };
-        states.set(scene, state);
-        return state;
+      let path: ContentPath | null = null;
+      for (const extension of extensions) {
+        const candidate = sourcePathOf(scene, extension);
+        try {
+          if ((await host.stat(candidate))?.kind !== 'file') continue;
+        } catch (error) {
+          const state: SourceState = { status: 'unavailable', path: candidate, reason: message(error) };
+          states.set(scene, state);
+          return state;
+        }
+        path = candidate;
+        break;
       }
-      if (!exists) {
+      if (path === null) {
         // Ни одного чтения: у сцены без источника читать нечего, и попытка
         // чтения на каждой валидации была бы платой за отсутствующий файл.
         states.set(scene, NONE);
@@ -246,7 +273,7 @@ export function spatialLayerSyncRule(options: SpatialLayerSyncOptions): Validati
   return {
     id: SPATIAL_LAYER_SYNC_RULE,
     descriptionKey: ruleDescriptionKey(SPATIAL_LAYER_SYNC_RULE),
-    reasonCodes: [LAYER_DIVERGED, SOURCE_UNREADABLE, SOURCE_REJECTED],
+    reasonCodes: [LAYER_DIVERGED, SOURCE_UNREADABLE, SOURCE_REJECTED, SOURCE_UNREAD],
     appliesTo: [kinds.scene],
     severity: 'warning',
     check(run) {
@@ -254,6 +281,22 @@ export function spatialLayerSyncRule(options: SpatialLayerSyncOptions): Validati
       // Сцена без источника живёт как прежде: редактор и ручная правка —
       // полноправные авторы её слоя, и предупреждения нет (BLND-2).
       if (state.status === 'none') return;
+      if (state.status === 'unknown') {
+        // Сверки не было ни одной: у собирающего редактора обязанность
+        // обновить кэш до прогона, и невыполненная она обязана быть видимой.
+        // Молчание здесь означало бы «слой сошёлся», чего никто не проверял.
+        run.report({
+          path: [],
+          expected: {
+            kind: 'accepted',
+            by: SPATIAL_LAYER_SYNC_RULE,
+            detail: 'состояние источника не прочитано ни разу',
+          },
+          code: SOURCE_UNREAD,
+          params: { scene: run.document.id },
+        });
+        return;
+      }
       if (state.status === 'unavailable' || state.status === 'rejected') {
         run.report({
           path: [],
