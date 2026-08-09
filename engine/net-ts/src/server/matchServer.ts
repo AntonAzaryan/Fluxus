@@ -10,21 +10,28 @@
  * исполняется один и тот же код (NTR-12).
  */
 import {
+  createInputLog,
+  createRewindController,
   dispatch,
   filterSnapshot,
   snapshotToPlain,
   tick as advanceTick,
+  RingHistory,
   VIEWPOINT_ALL,
   type EventVisibility,
+  type ExemptField,
   type InputFrame,
+  type InputLog,
   type LocomotionOptions,
   type PhysicsOptions,
+  type RewindController,
   type ScenarioDef,
   type ScenarioSpawn,
   type SceneDef,
   type Snapshot,
   type TickObserver,
   type VisibilityOptions,
+  type WorldMode,
 } from '@game-mvp/core';
 import { buildMatchWorld } from '../match/world.js';
 import { createServerMetrics, type ServerMetrics } from '../metrics.js';
@@ -68,6 +75,12 @@ export interface MatchConfig {
    * корректно помеченный клиентом кадр не проходит проверку сервера.
    */
   readonly inputWindow?: number;
+  /**
+   * История для серверной перемотки (NET-11). Поле необязательное: матч без
+   * ульты отката снапшотов не снимает и переходов машины состояний не знает —
+   * интервал и глубина суть параметры провайдера, а не константы ядра (SNAP-4).
+   */
+  readonly rewind?: MatchRewindOptions;
   /** Порог молчания слота в тиках; по умолчанию 10 секунд при текущем `tickRate`. */
   readonly silenceTicks?: number;
   readonly allowObserver?: boolean;
@@ -77,6 +90,33 @@ export interface MatchConfig {
   /** Политика видимости событий (NET-13) — параметр, а не зашитое решение (NTR-9). */
   readonly eventVisibility?: EventVisibility;
   readonly observers?: readonly TickObserver[];
+}
+
+/** Настройки истории матча (SNAP-3, SNAP-4) плюс поля вне отката (REW-9). */
+export interface MatchRewindOptions {
+  /** Тиков между снапшотами. */
+  readonly interval: number;
+  /** Сколько снапшотов держится. */
+  readonly capacity: number;
+  /** Поля, переживающие откат, например cooldown самой ульты (REW-9). */
+  readonly exempt?: readonly ExemptField[];
+}
+
+/**
+ * Сегмент канонического лога (NTR-16): непрерывный прогон исполненных тиков в
+ * пределах одной эпохи. Матч без перемотки даёт ровно один сегмент, и его
+ * кадры совпадают с прежним плоским списком — сегментация обобщает форму лога,
+ * а не отменяет её.
+ */
+export interface MatchSegment {
+  readonly epoch: number;
+  readonly frames: readonly InputFrame[];
+}
+
+/** Внутренняя, дописываемая форма сегмента: наружу уходит только `MatchSegment`. */
+interface OpenSegment {
+  readonly epoch: number;
+  readonly frames: InputFrame[];
 }
 
 export type MatchPhase = 'lobby' | 'running' | 'ended';
@@ -106,6 +146,8 @@ const DEFAULTS = {
   silenceSeconds: 10,
 } as const;
 
+const EMPTY_FRAMES: readonly InputFrame[] = [];
+
 export class MatchServer {
   readonly config: MatchConfig;
   readonly worldInitHash: string;
@@ -117,10 +159,14 @@ export class MatchServer {
   private readonly inputDelay: number;
   private readonly inputWindow: number;
   private readonly silenceTicks: number;
-  private readonly maxLead: number;
 
   private readonly sim: ReturnType<typeof buildMatchWorld>['sim'];
   private readonly state: ReturnType<typeof buildMatchWorld>['state'];
+
+  /** Механизм перемотки (NET-11, WSM-1..6). `undefined` — матч поднят без истории. */
+  private readonly history: RingHistory | undefined;
+  private readonly inputLog: InputLog | undefined;
+  private readonly rewindController: RewindController | undefined;
 
   private readonly connections = new Map<ConnectionId, Connection>();
   /** Соединение, занимающее слот; `undefined` — слот свободен либо игрок отвалился. */
@@ -130,19 +176,29 @@ export class MatchServer {
   private readonly pending: Map<number, InputFrame>[];
   private readonly lastFrame: (InputFrame | undefined)[];
 
-  private readonly canonical: InputFrame[] = [];
+  /** Канонический лог сегментами (NTR-16); плоский список — его частный случай. */
+  private readonly segments: OpenSegment[] = [];
   private readonly outbox: Outgoing[] = [];
   private matchPhase: MatchPhase = 'lobby';
 
   /**
-   * Пара `(эпоха, тик)` последнего разосланного авторитетного состояния
-   * (NTR-16). Эпоха выводится из самой последовательности состояний, а не из
-   * наблюдения за переходами машины состояний мира: вход в `Rewinding` номера
-   * тика не двигает, а одно `seekTo` даёт до десятка восстановлений.
+   * Пара `(эпоха, тик)` последнего авторитетного состояния матча (NTR-16).
+   * Эпоха выводится из самой последовательности состояний, а не из наблюдения
+   * за переходами машины состояний мира: вход в `Rewinding` номера тика не
+   * двигает, а одно `seekTo` даёт до десятка восстановлений.
    */
   private currentEpoch = 0;
-  /** `-1` — не разослано ещё ничего, и сравнивать не с чем. */
-  private lastBroadcastTick = -1;
+  /**
+   * Тик последнего авторитетного состояния: исполненного тика либо
+   * восстановления. `-1` — состояний ещё не было, и сравнивать не с чем.
+   *
+   * Считать только разосланные состояния было бы мало: рассылка идёт по
+   * расписанию `snapshotRate` и отстаёт от живого тика, поэтому восстановление
+   * на тик между последней рассылкой и текущим тиком не увеличило бы эпоху —
+   * и переисполненные тики дописались бы в сегмент прежней эпохи вторыми
+   * кадрами на тот же номер.
+   */
+  private lastStateTick = -1;
 
   constructor(config: MatchConfig) {
     if (config.players.length === 0) throw new Error('MatchConfig: нужен хотя бы один слот');
@@ -180,10 +236,6 @@ export class MatchServer {
       );
     }
     this.silenceTicks = config.silenceTicks ?? this.tickRate * DEFAULTS.silenceSeconds;
-    // Окно приёма: запас задержки плюс секунда. Кадр дальше него — не опоздание
-    // и не спешка, а рассинхронизация оценки тика либо мусор, и молча копить его
-    // в памяти нельзя.
-    this.maxLead = this.inputDelay + this.tickRate;
 
     const built = buildMatchWorld({
       scene: config.scene,
@@ -204,6 +256,26 @@ export class MatchServer {
     this.slotClaimed = Array.from({ length: slots }, () => false);
     this.pending = Array.from({ length: slots }, () => new Map<number, InputFrame>());
     this.lastFrame = Array.from({ length: slots }, () => undefined);
+
+    if (config.rewind !== undefined) {
+      // Реплей внутри `seekTo` идёт по каноническим вводам (REW-2), поэтому лог
+      // ядра ведётся рядом с сегментами: сегменты — история матча, `InputLog` —
+      // рабочий буфер механизма восстановления.
+      const history = new RingHistory({
+        interval: config.rewind.interval,
+        capacity: config.rewind.capacity,
+      });
+      const inputLog = createInputLog();
+      // Состояние до первого тика — тоже точка восстановления (REW-1).
+      history.record(this.state);
+      this.history = history;
+      this.inputLog = inputLog;
+      this.rewindController = createRewindController(this.sim, this.state, {
+        history,
+        inputs: inputLog,
+        ...(config.rewind.exempt !== undefined ? { exempt: config.rewind.exempt } : {}),
+      });
+    }
   }
 
   get tick(): number {
@@ -229,9 +301,31 @@ export class MatchServer {
     return this.matchPhase;
   }
 
-  /** Канонический ввод матча, включая predicted-кадры (NTR-8). */
+  /** Режим мира (WSM-1). Читает драйвер и политика ульты — сервер её не подменяет. */
+  get mode(): WorldMode {
+    return this.state.mode;
+  }
+
+  /**
+   * Канонический лог матча сегментами (NTR-16) — модель, определённая и для
+   * матча с перемоткой.
+   */
+  get canonicalSegments(): readonly MatchSegment[] {
+    return this.segments;
+  }
+
+  /**
+   * Канонический ввод матча плоским списком, включая predicted-кадры (NTR-8).
+   *
+   * Форма определена для матча без перемотки — то есть ровно для одного
+   * сегмента (NTR-16). У матча с перемоткой один номер тика исполнен в
+   * нескольких эпохах, и «кадр тика 512» перестаёт называть одну величину:
+   * такой лог читается сегментами, а склейка ниже годится только на диагностику.
+   */
   get canonicalInputs(): readonly InputFrame[] {
-    return this.canonical;
+    if (this.segments.length === 0) return EMPTY_FRAMES;
+    if (this.segments.length === 1) return this.segments[0]!.frames;
+    return this.segments.flatMap((segment) => segment.frames);
   }
 
   /**
@@ -285,7 +379,7 @@ export class MatchServer {
           this.protocolError(id, 'protocol-error', 'ввод от соединения без игрового слота');
           return;
         }
-        this.ingest(connection.slot, message.frames);
+        this.ingest(connection.slot, message.epoch, message.frames);
         return;
       case 'Bye':
         // Осознанный уход отличается от разрыва канала: игрок сообщил намерение,
@@ -371,21 +465,49 @@ export class MatchServer {
     }
   }
 
-  private ingest(slot: number, frames: readonly WireInput[]): void {
+  /**
+   * Приём ввода (NTR-7). Порядок проверок — эпоха, верхняя граница окна,
+   * исполненный тик, дубль: эпоха относится к сообщению целиком, окно и
+   * исполненность к номеру тика, дедуп — к уже принятому кадру.
+   */
+  private ingest(slot: number, epoch: number, frames: readonly WireInput[]): void {
     const counters = this.metrics.slots[slot]!;
     const pending = this.pending[slot]!;
     const playerId = this.config.players[slot]!;
+
+    // Эпоха — величина сообщения, а не кадра (NTR-16): ввод, порождённый в
+    // стёртой перемоткой ветви истории, по номеру тика неотличим от свежего, и
+    // без этой проверки применялся бы тем успешнее, чем мельче был откат.
+    // Счётчик прежний, вышедших за окно (NTR-11): разошедшаяся эпоха — самый
+    // крупный случай разъехавшейся оценки тика, а не отдельный класс дефекта.
+    if (epoch !== this.currentEpoch) {
+      counters.outOfWindow += frames.length;
+      return;
+    }
+
     for (const wire of frames) {
-      if (wire.tick <= this.state.tick) {
-        // Мир назад не переигрывается (NET-1). Отброс наблюдаем, потому что
-        // «ввод теряется» и «ввод ощущается вяло» — разные дефекты (NTR-7).
-        counters.late++;
-        continue;
-      }
-      if (wire.tick > this.state.tick + this.maxLead) {
+      // Верхняя граница окна — конечная и заданная конфигом матча (NTR-7): без
+      // неё размер буфера неприменённого ввода на слот задавал бы клиент.
+      // Отсюда же оценка буфера: в `pending` попадают только тики из
+      // `(currentTick, currentTick + inputWindow]`, то есть не больше
+      // `inputWindow` записей на слот.
+      if (wire.tick > this.state.tick + this.inputWindow) {
         counters.outOfWindow++;
         continue;
       }
+      if (wire.tick <= this.state.tick) {
+        // Тик уже исполнен в текущей эпохе: он вошёл в канонический лог и
+        // разослан клиентам, и правка задним числом переписала бы историю
+        // незаметно для участников (NTR-7). Перемотка переписывает её иначе —
+        // целым сегментом и новой эпохой, то есть наблюдаемо.
+        counters.late++;
+        continue;
+      }
+      // Дедуп «первый выигрывает» на пару (слот, тик) в пределах эпохи (NTR-7).
+      // Молча и без счётчиков: избыточная отправка — штатный режим протокола
+      // (NTR-4), и счёт её как дефекта сделал бы метрики нечитаемыми ровно у
+      // исправного клиента.
+      if (pending.has(wire.tick)) continue;
       pending.set(wire.tick, toInputFrame(wire, playerId, wire.tick));
     }
   }
@@ -398,6 +520,11 @@ export class MatchServer {
    */
   advance(): void {
     if (this.matchPhase !== 'running') return;
+    // Вне `Running` живых тиков нет (REW-4): в `Paused` мир заморожен, в
+    // `Rewinding` темп задаёт механизм перемотки. Тик ядра это и сам знает, но
+    // до него дело доходить не должно — иначе канонический лог получил бы
+    // кадры на тик, которого не было.
+    if (this.state.mode !== 'Running') return;
 
     const tick = this.state.tick + 1;
     const frames: InputFrame[] = [];
@@ -405,13 +532,19 @@ export class MatchServer {
       frames.push(this.frameFor(slot, tick));
     }
     // Канонический лог пишется до тика: он и есть вход, который потом
-    // прогоняется через `runScenario` (NTR-8).
-    this.canonical.push(...frames);
+    // прогоняется через `runScenario` (NTR-8). Сегмент открывается здесь —
+    // первым ИСПОЛНЕННЫМ тиком новой эпохи (NTR-16).
+    this.segmentOfEpoch().frames.push(...frames);
+    this.inputLog?.record(tick, frames);
 
     const result = advanceTick(this.sim, this.state, frames);
     dispatch(result, this.config.observers ?? []);
+    this.history?.record(this.state);
+    // Исполненный тик — тоже авторитетное состояние матча, и последовательность,
+    // из которой выводится эпоха, состоит из них и из восстановлений.
+    this.lastStateTick = this.state.tick;
 
-    if (tick % this.snapshotEvery === 0) this.broadcastSnapshots(tick);
+    if (tick % this.snapshotEvery === 0) this.broadcastSnapshots();
 
     for (let slot = 0; slot < this.config.players.length; slot++) {
       if (this.metrics.slots[slot]!.silentTicks > this.silenceTicks) {
@@ -419,6 +552,20 @@ export class MatchServer {
         return;
       }
     }
+  }
+
+  /**
+   * Сегмент текущей эпохи, открываемый по требованию (NTR-16). Открытие именно
+   * здесь, на исполненном тике, и означает, что эпоха без исполненных тиков
+   * сегмента не порождает: промежуточные точки скраба (REW-7) в состоянии мира
+   * следа не оставляют.
+   */
+  private segmentOfEpoch(): OpenSegment {
+    const last = this.segments[this.segments.length - 1];
+    if (last !== undefined && last.epoch === this.currentEpoch) return last;
+    const opened: OpenSegment = { epoch: this.currentEpoch, frames: [] };
+    this.segments.push(opened);
+    return opened;
   }
 
   private frameFor(slot: number, tick: number): InputFrame {
@@ -455,14 +602,17 @@ export class MatchServer {
    * (NET-8) вводятся тогда, когда замер на десяти игроках покажет упор — это
    * ровно тот профиль нагрузки, который спека netcode просит замерить.
    */
-  private broadcastSnapshots(tick: number): void {
+  private broadcastSnapshots(): void {
+    // Номер тика берётся из самого состояния, а не из аргумента: рассылка идёт
+    // и по расписанию, и по факту восстановления (NTR-16), и вызывающая сторона
+    // не должна иметь способа разойтись номером с тем, что уедет на провод.
+    const tick = this.state.tick;
     // Единственное место, где эпоха увеличивается (NTR-16). Правило —
     // «тик очередного авторитетного состояния меньше тика предыдущего», и оно
-    // применяется здесь потому, что здесь формируется рассылка: любой будущий
-    // источник состояния (рассылка по факту восстановления во время
-    // `Rewinding`) проходит через эту же точку и второй нумерации не заводит.
-    if (this.lastBroadcastTick >= 0 && tick < this.lastBroadcastTick) this.currentEpoch++;
-    this.lastBroadcastTick = tick;
+    // применяется здесь потому, что здесь формируется рассылка: оба источника
+    // состояния проходят через эту точку и второй нумерации не заводят.
+    if (this.lastStateTick >= 0 && tick < this.lastStateTick) this.onEpochChanged();
+    this.lastStateTick = tick;
     const epoch = this.currentEpoch;
 
     for (const connection of this.connections.values()) {
@@ -477,6 +627,77 @@ export class MatchServer {
           : filterSnapshot(this.state, viewpoint, this.config.eventVisibility);
       this.send(connection.id, { type: 'Snapshot', epoch, tick, snapshot: snapshotToPlain(filtered) });
       this.metrics.snapshotsSent++;
+    }
+  }
+
+  /**
+   * Разрыв монотонности тика (NTR-16). Кроме самого счётчика здесь гасится
+   * накопленный, но ещё не применённый ввод всех слотов (NTR-7): он порождён в
+   * стёртой ветви истории, помечен прежней эпохой и после возобновления
+   * применялся бы тем успешнее, чем мельче был откат.
+   */
+  private onEpochChanged(): void {
+    this.currentEpoch++;
+    for (const pending of this.pending) pending.clear();
+  }
+
+  // -------------------------------------------------------------- перемотка
+
+  /**
+   * Механизм перемотки (WSM-5). Политика ульты — кто инициирует, на сколько
+   * отматывает, где останавливается — живёт системой поверх этих вызовов, и
+   * сервер её не подменяет: здесь только доставка её последствий клиентам.
+   */
+  private requireRewind(): RewindController {
+    if (this.rewindController === undefined) {
+      throw new Error('MatchServer: матч поднят без истории — перематывать нечем (NET-11, SNAP-4)');
+    }
+    return this.rewindController;
+  }
+
+  /** `Running → Paused` либо `Rewinding → Paused` (WSM-2). */
+  pause(): void {
+    this.requireRewind().pause();
+  }
+
+  /**
+   * `Paused → Rewinding` (WSM-2). Прямого входа из `Running` нет ни у политики,
+   * ни у сетевого слоя — единственный флоу `Running → Paused → Rewinding →
+   * Paused → Running` (NET-11).
+   */
+  beginRewind(): void {
+    this.requireRewind().beginRewind();
+  }
+
+  /** `Paused → Running` — продолжить с текущего, в том числе перемотанного, тика. */
+  resume(): void {
+    this.requireRewind().resume();
+  }
+
+  /**
+   * Восстановление целевого тика (REW-2) с рассылкой по факту, мимо расписания
+   * `snapshotRate` (NTR-16, NET-11): живых тиков во время `Rewinding` не
+   * исполняется, и расписанию не на чем срабатывать. Реплеевые тики внутри
+   * `seekTo` собственных рассылок не порождают — наблюдаемым результатом
+   * является одно восстановленное состояние, а не поток промежуточных.
+   */
+  seekTo(tick: number): void {
+    this.requireRewind().seekTo(tick);
+    this.adoptFramesOf(this.state.tick);
+    this.broadcastSnapshots();
+  }
+
+  /**
+   * Повторяемым «последним кадром» слота становится кадр, применённый на тике
+   * восстановления (NTR-7): мир вернулся в это состояние целиком, и повтор
+   * кадра из стёртого будущего означал бы ввод, которого в этой ветви истории
+   * не было. До первого кадра повторять снова нечего — нулевой ввод.
+   */
+  private adoptFramesOf(tick: number): void {
+    const restored = this.inputLog?.at(tick) ?? EMPTY_FRAMES;
+    for (let slot = 0; slot < this.config.players.length; slot++) {
+      const playerId = this.config.players[slot]!;
+      this.lastFrame[slot] = restored.find((frame) => frame.playerId === playerId);
     }
   }
 
@@ -515,15 +736,28 @@ export class MatchServer {
    * Матч как сценарий прогона (NTR-8): та же тройка, что принимает
    * `runScenario` ядра. Прогон обязан дать побитово то же состояние — это и
    * есть доказательство, что сетевой слой не сломал детерминизм.
+   *
+   * Форма документа плоская, и определена она ровно для матча без перемотки —
+   * одного сегмента (NTR-16). Матч с перемоткой отдаётся `canonicalSegments`:
+   * раскладка сегментов по документу сценария принадлежит `cli-testing` CLI-2,
+   * и до неё записать такой матч сценарием нечем. Отказ здесь явный, потому
+   * что плоский список с ключом-тиком у такого матча означал бы два разных
+   * кадра под одним номером — то есть тихо невоспроизводимую запись.
    */
   toScenario(): ScenarioDef {
+    if (this.segments.length > 1) {
+      throw new Error(
+        `MatchServer.toScenario: матч из ${this.segments.length} сегментов (NTR-16) — ` +
+          'плоская форма документа сценария определена только для матча без перемотки (CLI-2)',
+      );
+    }
     return {
       name: this.config.name ?? 'match',
       seed: this.config.seed,
       ticks: this.state.tick,
       scene: this.config.scene,
       initial: this.config.initial ?? [],
-      inputs: this.canonical,
+      inputs: this.canonicalInputs,
       players: this.config.players,
       ...(this.config.physics !== undefined ? { physics: this.config.physics } : {}),
       ...(this.config.locomotion !== undefined ? { locomotion: this.config.locomotion } : {}),

@@ -20,11 +20,15 @@ import {
   duelConfig,
   duelScene,
   harness,
+  hello,
+  inputMessage,
   placedScene,
   settle,
+  wireInput,
   STEP,
   type ConnectedClient,
 } from './fixtures.js';
+import { replaySegments } from '../src/match/replay.js';
 import type { InputSource } from '../src/client/host.js';
 import type { MatchConfig } from '../src/server/matchServer.js';
 
@@ -148,6 +152,130 @@ describe('матч двух игроков', () => {
     expect(a.client.metrics.snapshotsDropped).toBe(1);
     expect(a.client.metrics.snapshotsApplied).toBe(applied);
     expect(a.client.latest!.tick).toBe(lastTick);
+  });
+});
+
+/**
+ * Перемотка на сервере (NET-11) и сегментированный канонический лог (NTR-16).
+ *
+ * Матч гоняется по `MatchServer` напрямую: предмет проверки — что сервер
+ * рассылает восстановленное состояние и как выглядит лог, а не транспорт.
+ */
+describe('перемотка на сервере (NET-11, NTR-16)', () => {
+  function rewindableMatch() {
+    const config = duelConfig({ rewind: { interval: 1, capacity: 64 } });
+    const fixture = harness(config);
+    fixture.server.connect(1);
+    fixture.server.receive(1, hello('p1', config.version));
+    fixture.server.connect(2);
+    fixture.server.receive(2, hello('p2', config.version));
+    fixture.server.drain();
+    return { ...fixture, config };
+  }
+
+  it('матч без перемотки даёт ровно один сегмент, совпадающий с плоским логом', () => {
+    const { server } = rewindableMatch();
+    for (let tick = 1; tick <= 6; tick++) server.advance();
+
+    const segments = server.canonicalSegments;
+    expect(segments).toHaveLength(1);
+    expect(segments[0]!.epoch).toBe(0);
+    expect(segments[0]!.frames).toEqual(server.canonicalInputs);
+    // Документ сценария у такого матча прежний, и прогон ядра ему парен (NTR-8).
+    const replay = runScenario(server.toScenario());
+    expect(replay.ticks[replay.ticks.length - 1]).toEqual(snapshotToPlain(server.snapshot()));
+  });
+
+  it('восстановленное состояние рассылается по факту, мимо расписания, с новой эпохой', () => {
+    const { server } = rewindableMatch();
+    for (let tick = 1; tick <= 7; tick++) {
+      server.receive(1, inputMessage(wireInput(tick, tick, STEP)));
+      server.advance();
+    }
+    // Тик 7 не кратен `snapshotEvery` (60/30 = 2): очередной момент расписания
+    // ещё не наступил, и всё, что уедет дальше, послано именно восстановлением.
+    server.drain();
+
+    server.pause();
+    server.beginRewind();
+    server.seekTo(4);
+
+    expect(server.mode).toBe('Rewinding');
+    expect(server.tick).toBe(4);
+    expect(server.epoch).toBe(1);
+    const sent = server.drain().filter((entry) => entry.message.type === 'Snapshot');
+    expect(sent).toHaveLength(2);
+    expect(sent[0]!.message).toMatchObject({ type: 'Snapshot', epoch: 1, tick: 4 });
+  });
+
+  it('ввод прежней эпохи после перемотки отбрасывается как вышедший за окно (NTR-7)', () => {
+    const { server } = rewindableMatch();
+    for (let tick = 1; tick <= 6; tick++) server.advance();
+    server.pause();
+    server.beginRewind();
+    server.seekTo(3);
+    server.pause();
+    server.resume();
+
+    server.receive(1, inputMessage(wireInput(5, 42, STEP)));
+    expect(server.metrics.slots[0]!.outOfWindow).toBe(1);
+    expect(server.metrics.slots[0]!.late).toBe(0);
+  });
+
+  it('predicted-кадр после перемотки повторяет кадр тика восстановления (NTR-7)', () => {
+    const { server } = rewindableMatch();
+    for (let tick = 1; tick <= 8; tick++) {
+      server.receive(1, inputMessage(wireInput(tick, tick, STEP)));
+      server.advance();
+    }
+
+    server.pause();
+    server.beginRewind();
+    server.seekTo(4);
+    server.pause();
+    server.resume();
+    server.advance();
+
+    const segments = server.canonicalSegments;
+    expect(segments).toHaveLength(2);
+    // Повторён кадр тика 4, а не последний полученный сервером кадр тика 8.
+    expect(segments[1]!.frames[0]).toMatchObject({ playerId: 'p1', tick: 5, seq: 4 });
+  });
+
+  it('переисполненные тики уходят во второй сегмент, и его прогон парен серверу', () => {
+    const { server, config } = rewindableMatch();
+    for (let tick = 1; tick <= 8; tick++) {
+      server.receive(1, inputMessage(wireInput(tick, tick, STEP)));
+      server.advance();
+    }
+
+    server.pause();
+    server.beginRewind();
+    server.seekTo(4);
+    server.pause();
+    server.resume();
+    for (let tick = 5; tick <= 8; tick++) server.advance();
+
+    const segments = server.canonicalSegments;
+    expect(segments.map((segment) => segment.epoch)).toEqual([0, 1]);
+    expect(segments[0]!.frames.map((frame) => frame.tick)).toEqual([1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8]);
+    expect(segments[1]!.frames.map((frame) => frame.tick)).toEqual([5, 5, 6, 6, 7, 7, 8, 8]);
+
+    // Прогон сегментированной записи: перед первым кадром сегмента мир
+    // восстанавливается на предшествующий тик (NTR-16).
+    const replay = replaySegments({
+      scene: config.scene,
+      seed: config.seed,
+      players: config.players,
+      ...(config.initial !== undefined ? { initial: config.initial } : {}),
+      segments,
+    });
+    expect(replay.worldInitHash).toBe(server.worldInitHash);
+    expect(replay.tick).toBe(server.tick);
+    expect(snapshotToPlain(replay.snapshot)).toEqual(snapshotToPlain(server.snapshot()));
+
+    // Плоской формы документа у такого матча нет, и отказ явный (CLI-2).
+    expect(() => server.toScenario()).toThrow(/сегмент/);
   });
 });
 
