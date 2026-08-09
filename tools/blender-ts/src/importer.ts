@@ -30,11 +30,12 @@ import {
   type ValidationIssue,
   type ValidationRule,
 } from '@game-mvp/editor-core';
-import { parseGltf } from './gltf.js';
+import { parseGltf, type GltfDocument } from './gltf.js';
 import { generateSpatialLayer, hasErrors, type Finding, type SpatialLayer } from './layer.js';
+import { generateCellLayer, withCellLayer } from './maps.js';
 import { normalizeDocument, type SourceObject } from './normalize.js';
 import { IMPORT_SPATIAL_LAYER, importParams, registerBlenderOperations } from './operation.js';
-import { openImportTarget, type ImportKinds, type ImportTarget } from './project.js';
+import { openImportTarget, type ImportKinds, type ImportSlots, type ImportTarget } from './project.js';
 import { scenePathOf } from './pairing.js';
 
 export interface ImportRequest {
@@ -96,14 +97,32 @@ function message(error: unknown): string {
  * назывались путём источника: «файла нет» и «файл не разбирается» — разные
  * беды, и обе не про сцену.
  */
-async function readSource(host: ContentTreeHost, source: ContentPath): Promise<readonly SourceObject[]> {
+async function readSource(
+  host: ContentTreeHost,
+  source: ContentPath,
+): Promise<{ readonly document: GltfDocument; readonly objects: readonly SourceObject[] }> {
   let bytes: Uint8Array;
   try {
     bytes = new Uint8Array(await host.read(source));
   } catch (error) {
     throw new Error(`источник "${source}" не читается: ${message(error)}`);
   }
-  return normalizeDocument(parseGltf(bytes));
+  // Разобранный документ переживает нормализацию: клеточные данные читаются из
+  // его аксессоров и бинарного чанка (BLND-9, BLND-10), а объекты источника
+  // несут только адрес меша.
+  const document = parseGltf(bytes);
+  return { document, objects: normalizeDocument(document) };
+}
+
+/**
+ * Какие клеточные слои даёт источник. Считается ДО открытия цели: документ
+ * карты кривизны открывается и попадает в группу записи только под слой,
+ * который импорт действительно перепишет (BLND-2).
+ */
+function slotsOf(objects: readonly SourceObject[]): ImportSlots {
+  const has = (kind: string): boolean =>
+    objects.some((object) => object.semantics.length === 1 && object.semantics[0] === kind);
+  return { terrain: has('terrain'), curvature: has('curvature') };
 }
 
 export async function runImport(request: ImportRequest): Promise<ImportResult> {

@@ -71,12 +71,50 @@ export interface Finding {
 }
 
 /**
+ * Сетка ассета террейна цели (TERR-2): с ней обязан совпасть terrain-объект
+ * источника, и из неё же берётся сетка карты кривизны (ASSET-7). Размеры и
+ * `tileSize` импорт НЕ переписывает — они задают цель, а не приезжают из
+ * Blender (BLND-9: переписываются карты уровней и вида клеток).
+ */
+export interface TargetTerrain {
+  readonly width: number;
+  readonly height: number;
+  /** Размер клетки в Q16.16 (TERR-2). */
+  readonly tileSize: number;
+}
+
+/** Карты ассета террейна (TERR-3) — то единственное, что импорт в нём пишет. */
+export interface TerrainMaps {
+  readonly levels: readonly string[];
+  readonly flags: readonly string[];
+}
+
+/** Карта кривизны (ASSET-7): документ целиком — производные данные (BLND-2). */
+export interface CurvatureMap {
+  readonly width: number;
+  readonly height: number;
+  readonly rows: readonly string[];
+}
+
+/**
+ * Что клеточным слоям нужно знать о цели: сетка ассета террейна и адрес
+ * документа карты кривизны (его называет манифест — `terrain.curvatureMap`,
+ * ASSET-7). Оба — знание о ЦЕЛИ, а не об источнике: сетку импорт не выдумывает,
+ * а сверяет.
+ */
+export interface CellLayerContext {
+  readonly terrain?: TargetTerrain | null;
+  /** ID документа карты кривизны; `null` — манифест её не адресует. */
+  readonly curvatureMap?: string | null;
+}
+
+/**
  * Что импортёру нужно знать о цели, чтобы проверить источник до записи:
  * состав сцены (prefabs и схемы компонентов — SER-7) и манифест визуалов
  * (ASSET-9). Манифеста нет — ссылки `visual` не проверяются вовсе: отсутствие
  * документа не то же самое, что отсутствие в нём ключа.
  */
-export interface SpatialLayerContext {
+export interface SpatialLayerContext extends CellLayerContext {
   readonly components: readonly ComponentSchema[];
   readonly prefabs?: readonly PrefabDef[];
   readonly visuals?: VisualManifest | null;
@@ -85,15 +123,25 @@ export interface SpatialLayerContext {
 }
 
 /**
- * Целевой пространственный слой: два списка записей в порядке BLND-4. Значения
- * — уже JSON документов, а не промежуточная модель: второе представление
- * обязано было бы уметь превращаться обратно и разошлось бы с первым (ED-3).
+ * Целевой пространственный слой: два списка записей в порядке BLND-4 и — при
+ * соответствующих объектах источника — клеточные слои террейна и кривизны
+ * (BLND-9, BLND-10). Значения — уже JSON документов, а не промежуточная модель:
+ * второе представление обязано было бы уметь превращаться обратно и разошлось
+ * бы с первым (ED-3).
+ *
+ * Отсутствие слота значит «источник его не даёт»: ассет тогда не переписывается
+ * вовсе и остаётся за редактором и руками (BLND-2). Пустой слот и отсутствующий
+ * — разные вещи, поэтому поля необязательные, а не пустые по умолчанию.
  */
 export interface SpatialLayer {
   /** Записи `initial` конфига сцены (SER-8). */
   readonly initial: readonly JsonObject[];
   /** Записи `decorations` парного документа (PRES-2). */
   readonly decorations: readonly JsonObject[];
+  /** Карты ассета террейна сцены (TERR-3); нет — в источнике нет terrain-объекта. */
+  readonly terrain?: TerrainMaps;
+  /** Карта кривизны (ASSET-7); нет — в источнике нет curvature-объекта. */
+  readonly curvature?: CurvatureMap;
   readonly findings: readonly Finding[];
 }
 

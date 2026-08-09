@@ -13,6 +13,11 @@
  * подпроцессом и читает находки, вместо того чтобы заводить второй перечень
  * правил на своей стороне.
  *
+ * Режим `--watch` следит за источником и гоняет тот же импорт на каждое
+ * сохранение (BLND-12). Своей логики у него здесь тоже нет: слежение, дебаунс и
+ * «последний валидный результат при ошибке» — в `watch.ts`, а сюда приходит
+ * разбор флага и вызов.
+ *
  * Отчёт человеку идёт в stderr, машинный JSON — в stdout и только он: смешать
  * их значило бы сломать мост первым же предупреждением.
  */
@@ -20,35 +25,36 @@ import { resolve } from 'node:path';
 import {
   crossDocumentRules,
   engineValidationRules,
-  formatIssue,
-  StringResources,
   type ContentPath,
   type ContributionReader,
-  type ValidationIssue,
   type ValidationRule,
 } from '@game-mvp/editor-core';
-import { BLENDER_BUNDLES } from './i18n.js';
 import { runImport, type ImportResult } from './importer.js';
 import { createNodeHost } from './nodeHost.js';
 import { isSourcePath } from './pairing.js';
 import { DEFAULT_IMPORT_KINDS, DEFAULT_MANIFEST_PATH } from './project.js';
 import { DEFAULT_DECORATIONS_PATH, DEFAULT_INITIAL_PATH } from './operation.js';
+import { importResources, reportFindings } from './report.js';
+import { runImportWatch } from './watch.js';
 
 export interface CliOptions {
   readonly source: ContentPath;
   readonly root: string;
   readonly manifest: ContentPath | null;
   readonly dryRun: boolean;
+  /** Следить за источником и импортировать на каждое сохранение (BLND-12). */
+  readonly watch: boolean;
   readonly locale: string;
 }
 
 export class CliError extends Error {}
 
 const USAGE = [
-  'npm run import -- <путь к .glb|.gltf> [--dry-run] [--root <каталог>] [--manifest <путь>]',
+  'npm run import -- <путь к .glb|.gltf> [--dry-run | --watch] [--root <каталог>] [--manifest <путь>]',
   '',
   '  <путь>        экспорт источника; конфиг сцены находится по имени рядом (BLND-2)',
   '  --dry-run     те же проверки и тот же целевой слой, но без записи; результат JSON в stdout',
+  '  --watch       следить за источником и импортировать на каждое сохранение (BLND-12)',
   '  --root        корень дерева контента; по умолчанию — content/ рядом с рабочим каталогом',
   '  --manifest    манифест визуалов; по умолчанию — visuals/manifest.json, `none` — не проверять',
   '  --locale      локаль сообщений валидации (ru | en)',
@@ -75,6 +81,7 @@ export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
   let root: string | undefined;
   let manifest: string | undefined;
   let dryRun = false;
+  let watch = false;
   let locale = 'ru';
 
   for (let i = 0; i < argv.length; i++) {
@@ -86,6 +93,7 @@ export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
       return next;
     };
     if (arg === '--dry-run') dryRun = true;
+    else if (arg === '--watch') watch = true;
     else if (arg === '--root') root = value();
     else if (arg === '--manifest') manifest = value();
     else if (arg === '--locale') locale = value();
@@ -98,12 +106,17 @@ export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
   if (!isSourcePath(source)) {
     throw new CliError(`"${source}": импорт читает экспорт glTF — файл .glb либо .gltf (BLND-3)`);
   }
+  // Проверка без записи и слежение с записью — взаимоисключающие ответы на
+  // вопрос «пишем ли мы документы»; сведённые в один запуск, они значили бы
+  // «следи и ничего не делай», то есть не значили бы ничего.
+  if (dryRun && watch) throw new CliError(`"--dry-run" и "--watch" вместе не бывают\n\n${USAGE}`);
   const directory = resolve(cwd, root ?? 'content');
   return {
     source: contentPathOf(directory, resolve(cwd, source)),
     root: directory,
     manifest: manifest === 'none' ? null : (manifest ?? DEFAULT_MANIFEST_PATH),
     dryRun,
+    watch,
     locale,
   };
 }
@@ -140,11 +153,6 @@ export function cliValidationRules(): ContributionReader<ValidationRule> {
   const byId = new Map(rules.map((rule) => [rule.id, rule] as const));
   const all = Object.freeze([...byId.values()]);
   return { get: (id) => byId.get(id), has: (id) => byId.has(id), all: () => all };
-}
-
-/** Находка валидации человеку: та же строка ресурса, что увидел бы автор в редакторе (ED-28). */
-function describe(issue: ValidationIssue, resources: StringResources): string {
-  return `  ${issue.documentId}: ${formatIssue(issue, resources)}`;
 }
 
 /** Результат JSON'ом — мост для аддона (BLND-8) и для правила синхронизации. */
@@ -184,6 +192,20 @@ export async function main(argv: readonly string[], cwd: string, io: CliIo): Pro
   }
 
   const host = createNodeHost({ root: options.root });
+  if (options.watch) {
+    // Слежение — тот же импорт, только повторяемый: своей записи, своих правил
+    // и своего формата сообщений у него нет (BLND-12, design 12).
+    return runImportWatch({
+      host: host.content,
+      root: options.root,
+      source: options.source,
+      manifest: options.manifest,
+      rules: cliValidationRules(),
+      locale: options.locale,
+      io,
+    });
+  }
+
   let result: ImportResult;
   try {
     result = await runImport({
@@ -200,11 +222,7 @@ export async function main(argv: readonly string[], cwd: string, io: CliIo): Pro
 
   if (options.dryRun) io.out(resultJson(result));
 
-  const resources = new StringResources({ locale: options.locale, editor: BLENDER_BUNDLES });
-  for (const finding of result.findings) {
-    io.err(`  ${finding.severity === 'error' ? 'ошибка' : 'предупреждение'} — ${finding.object}: ${finding.message}`);
-  }
-  for (const issue of result.blocking) io.err(describe(issue, resources));
+  reportFindings(result, io.err, importResources(options.locale));
 
   if (!result.ok) {
     io.err(result.refusal ?? `импорт "${options.source}" отвергнут: на диск не записано ничего (BLND-6)`);

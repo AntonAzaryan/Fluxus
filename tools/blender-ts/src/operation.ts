@@ -13,16 +13,27 @@
  * ## Что операция пишет и чего не трогает
  *
  * Производные данные (BLND-2) и ничего кроме них: записи `initial` конфига
- * сцены (SER-8) и записи `decorations` парного документа (PRES-2). Прочие поля
- * обоих документов, порядок их ключей и все остальные документы дерева остаются
- * байт-в-байт прежними — операция их не читает и не пишет, а сохранение
- * канонично и ключей не переставляет (ED-21).
+ * сцены (SER-8), записи `decorations` парного документа (PRES-2), карты ассета
+ * террейна (BLND-9) и карта кривизны (BLND-10). Прочие поля этих документов,
+ * порядок их ключей и все остальные документы дерева остаются байт-в-байт
+ * прежними — операция их не читает и не пишет, а сохранение канонично и ключей
+ * не переставляет (ED-21).
  *
- * Слоты террейна (BLND-9) и кривизны (BLND-10) придут следующими фазами, и
- * форма входа под них уже рассчитана: слой — объект с ключом на слот, а ключ,
- * которого эта операция ещё не пишет, — ОТКАЗ, а не молчаливый пропуск.
- * Молчаливый пропуск означал бы, что вызывающий, подавший карту террейна старой
- * операции, получил бы «импорт прошёл» и не получил бы террейна.
+ * Перечень слотов закрыт: ключ слоя, которого операция не пишет, — ОТКАЗ, а не
+ * молчаливый пропуск. Молчаливый пропуск означал бы, что вызывающий, подавший
+ * карту старой операции, получил бы «импорт прошёл» и не получил бы карты.
+ *
+ * Слот, которого в слое НЕТ, — другое дело: источник без terrain-объекта не
+ * даёт слота террейна, и ассет остаётся за редактором и руками, не тронутый ни
+ * байтом (BLND-2). Отсутствие слота и пустой слот поэтому различимы.
+ *
+ * ## Что именно переписывается в ассете террейна
+ *
+ * Карты уровней и вида клеток, и только они (BLND-9). Размеры сетки и
+ * `tileSize` — цель, а не производное: их задаёт автор ассета, и совпадение с
+ * ними grid-объекта проверяет генерация слоя ДО вызова операции. У карты
+ * кривизны производен весь документ (BLND-2), поэтому её размеры операция
+ * пишет — но, как и ряды, только если они разошлись.
  *
  * ## Почему запись — не «стереть список и написать заново»
  *
@@ -73,11 +84,25 @@ export const DEFAULT_INITIAL_PATH: JsonPath = Object.freeze(['initial']);
 export const DEFAULT_DECORATIONS_PATH: JsonPath = Object.freeze(['decorations']);
 
 /**
- * Ключи слоя, которые операция умеет писать сегодня. Перечень закрыт: ключ вне
- * его — отказ (см. шапку), и следующая фаза добавляет сюда `terrain` и
- * `curvature` вместе со слотами записи.
+ * Где лежит ассет террейна (TERR-2). Умолчание — поле конфига сцены: так лежит
+ * террейн `duel` и так его адресуют правила редактора. Отдельным документом он
+ * лежать вправе, и тогда адрес приносит вызывающий (ED-25).
  */
-const KNOWN_SLOTS: readonly string[] = Object.freeze(['initial', 'decorations', 'findings']);
+export const DEFAULT_TERRAIN_PATH: JsonPath = Object.freeze(['terrain']);
+
+/** Имена карт внутри ассетов — поля формата (TERR-3, ASSET-7), а не выдумка операции. */
+const LEVEL_MAP = 'levels';
+const FLAG_MAP = 'flags';
+const OFFSET_MAP = 'rows';
+
+/** Ключи слоя, которые операция умеет писать. Перечень закрыт: ключ вне его — отказ. */
+const KNOWN_SLOTS: readonly string[] = Object.freeze([
+  'initial',
+  'decorations',
+  'terrain',
+  'curvature',
+  'findings',
+]);
 
 const SCENE: OperationParamSpec = {
   type: 'document',
@@ -102,6 +127,16 @@ const DECORATIONS_PATH: OperationParamSpec = {
   optional: true,
   descriptionKey: 'blender.operation.param.decorationsPath',
 };
+const TERRAIN_PATH: OperationParamSpec = {
+  type: 'path',
+  optional: true,
+  descriptionKey: 'blender.operation.param.terrainPath',
+};
+const CURVATURE: OperationParamSpec = {
+  type: 'document',
+  optional: true,
+  descriptionKey: 'blender.operation.param.curvature',
+};
 
 /** Сколько записей слота операция тронула — то, из чего вызывающий строит отчёт. */
 export interface SlotChange {
@@ -119,9 +154,17 @@ const NOTHING: SlotChange = Object.freeze({ set: 0, appended: 0, removed: 0 });
  * форм сегодня ничего не обещает завтра.
  */
 export function spatialLayerParam(layer: SpatialLayer): JsonValue {
+  const terrain = layer.terrain;
+  const curvature = layer.curvature;
   return {
     initial: layer.initial.map((record) => record as JsonValue),
     decorations: layer.decorations.map((record) => record as JsonValue),
+    // Слота, которого источник не дал, в параметре нет вовсе: ассет тогда не
+    // переписывается (BLND-2), и пустой слот сказал бы обратное.
+    ...(terrain === undefined ? {} : { terrain: { levels: [...terrain.levels], flags: [...terrain.flags] } }),
+    ...(curvature === undefined
+      ? {}
+      : { curvature: { width: curvature.width, height: curvature.height, rows: [...curvature.rows] } }),
     findings: layer.findings.map(
       (finding): JsonValue => ({
         severity: finding.severity,
@@ -136,16 +179,21 @@ export function spatialLayerParam(layer: SpatialLayer): JsonValue {
 export function importParams(input: {
   readonly scene: DocumentId;
   readonly presentation?: DocumentId;
+  /** Документ карты кривизны (ASSET-7); его адрес называет манифест. */
+  readonly curvature?: DocumentId | null;
   readonly layer: SpatialLayer;
   readonly initialPath?: JsonPath;
   readonly decorationsPath?: JsonPath;
+  readonly terrainPath?: JsonPath;
 }): OperationParams {
   return {
     scene: input.scene,
     ...(input.presentation === undefined ? {} : { presentation: input.presentation }),
+    ...(input.curvature === undefined || input.curvature === null ? {} : { curvature: input.curvature }),
     layer: spatialLayerParam(input.layer),
     ...(input.initialPath === undefined ? {} : { initialPath: [...input.initialPath] }),
     ...(input.decorationsPath === undefined ? {} : { decorationsPath: [...input.decorationsPath] }),
+    ...(input.terrainPath === undefined ? {} : { terrainPath: [...input.terrainPath] }),
   };
 }
 
@@ -211,6 +259,76 @@ function readFindings(id: string, layer: JsonObject): readonly Finding[] {
     }
     return { severity, object, message };
   });
+}
+
+/** Карта ассета — массив строк, по одной на ряд сетки (TERR-3, ASSET-7). */
+function readMap(id: string, slot: JsonObject, where: string, key: string): readonly string[] {
+  const value = slot[key];
+  if (!isJsonArray(value) || !value.every((row): row is string => typeof row === 'string')) {
+    throw new OperationError(id, `параметр "layer": "${where}.${key}" — карта строками, по одной на ряд`, {
+      param: 'layer',
+      received: value ?? null,
+    });
+  }
+  return value;
+}
+
+function readNumber(id: string, slot: JsonObject, where: string, key: string): number {
+  const value = slot[key];
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw new OperationError(id, `параметр "layer": "${where}.${key}" — целое число`, {
+      param: 'layer',
+      received: value ?? null,
+    });
+  }
+  return value;
+}
+
+function readSlotObject(id: string, layer: JsonObject, slot: string): JsonObject | null {
+  const value = layer[slot];
+  if (value === undefined) return null;
+  if (!isJsonObject(value)) {
+    throw new OperationError(id, `параметр "layer": слот "${slot}" — объект`, {
+      param: 'layer',
+      received: value,
+    });
+  }
+  return value;
+}
+
+/**
+ * Переписывает карту ассета РЯДАМИ, а не целиком: ряд и есть единица формата
+ * (TERR-3, ASSET-7), и мазок по одной полосе обязан оставить в диффе одну
+ * строку, а не весь файл (ED-21) — тем же правилом живёт кисть ED-10. Карты
+ * другой формы (нет вовсе, другой длины) переписываются целиком: рядов, которых
+ * нет, адресовать нечем.
+ */
+function writeMap(
+  ctx: OperationContext,
+  documentId: DocumentId,
+  path: JsonPath,
+  rows: readonly string[],
+): SlotChange {
+  const existing = ctx.readAt(documentId, path);
+  if (!isJsonArray(existing) || existing.length !== rows.length) {
+    if (sameJson(existing, [...rows])) return NOTHING;
+    ctx.setValue(documentId, path, [...rows]);
+    return { set: rows.length, appended: 0, removed: 0 };
+  }
+  let set = 0;
+  for (let y = 0; y < rows.length; y++) {
+    if (existing[y] === rows[y]) continue;
+    ctx.setValue(documentId, [...path, y], rows[y]!);
+    set++;
+  }
+  return { set, appended: 0, removed: 0 };
+}
+
+/** Скалярное поле документа — правка только при расхождении (BLND-4). */
+function writeScalar(ctx: OperationContext, documentId: DocumentId, path: JsonPath, value: JsonValue): number {
+  if (sameJson(ctx.readAt(documentId, path), value)) return 0;
+  ctx.setValue(documentId, path, value);
+  return 1;
 }
 
 /** Адрес находки — имя объекта Blender; пустое имя значит «находка не об объекте». */
@@ -279,9 +397,11 @@ export const importSpatialLayerOperation: AuthoringOperation = {
   params: {
     scene: SCENE,
     presentation: PRESENTATION,
+    curvature: CURVATURE,
     layer: LAYER,
     initialPath: INITIAL_PATH,
     decorationsPath: DECORATIONS_PATH,
+    terrainPath: TERRAIN_PATH,
   },
   apply(ctx, params) {
     const id = IMPORT_SPATIAL_LAYER;
@@ -305,6 +425,23 @@ export const importSpatialLayerOperation: AuthoringOperation = {
     const findings = readFindings(id, layer);
     const initial = readRecords(id, layer, 'initial');
     const decorations = readRecords(id, layer, 'decorations');
+    const terrainSlot = readSlotObject(id, layer, 'terrain');
+    const terrain =
+      terrainSlot === null
+        ? null
+        : {
+            levels: readMap(id, terrainSlot, 'terrain', LEVEL_MAP),
+            flags: readMap(id, terrainSlot, 'terrain', FLAG_MAP),
+          };
+    const curvatureSlot = readSlotObject(id, layer, 'curvature');
+    const curvature =
+      curvatureSlot === null
+        ? null
+        : {
+            width: readNumber(id, curvatureSlot, 'curvature', 'width'),
+            height: readNumber(id, curvatureSlot, 'curvature', 'height'),
+            rows: readMap(id, curvatureSlot, 'curvature', OFFSET_MAP),
+          };
     if (hasErrors(findings)) {
       const errors = findings.filter((finding) => finding.severity === 'error');
       throw new OperationError(
@@ -321,6 +458,16 @@ export const importSpatialLayerOperation: AuthoringOperation = {
         id,
         'слой содержит decorations, а парный presentation-документ не назван (PRES-1, PRES-2)',
         { param: 'presentation' },
+      );
+    }
+    const curvatureId = params['curvature'] === undefined ? null : asDocument(params, 'curvature');
+    if (curvatureId === null && curvature !== null) {
+      // Молчаливый пропуск карты — то же самое, что молчаливый пропуск слота:
+      // вызывающий получил бы «импорт прошёл» и не получил бы кривизны (ASSET-7).
+      throw new OperationError(
+        id,
+        'слой содержит карту кривизны, а документ карты не назван (ASSET-7 — его адресует манифест)',
+        { param: 'curvature' },
       );
     }
 
@@ -344,7 +491,34 @@ export const importSpatialLayerOperation: AuthoringOperation = {
             decorations,
           );
 
-    return { initial: { ...initialChange }, decorations: { ...decorationChange } };
+    // Ассеты — той же записью и в том же вызове: атомарность BLND-6 распространена
+    // на все производные данные, и «расстановка записана, террейн нет» не бывает.
+    const terrainPath = optionalPath(params, 'terrainPath', DEFAULT_TERRAIN_PATH);
+    const terrainChange =
+      terrain === null
+        ? null
+        : {
+            levels: writeMap(ctx, scene, [...terrainPath, LEVEL_MAP], terrain.levels),
+            flags: writeMap(ctx, scene, [...terrainPath, FLAG_MAP], terrain.flags),
+          };
+    const curvatureChange =
+      curvature === null || curvatureId === null
+        ? null
+        : {
+            size:
+              writeScalar(ctx, curvatureId, ['width'], curvature.width) +
+              writeScalar(ctx, curvatureId, ['height'], curvature.height),
+            rows: writeMap(ctx, curvatureId, [OFFSET_MAP], curvature.rows),
+          };
+
+    return {
+      initial: { ...initialChange },
+      decorations: { ...decorationChange },
+      // Слот, которого источник не дал, в отчёте не появляется: ассет не тронут
+      // вовсе, и нулевой счёт правок сказал бы «переписан без изменений».
+      ...(terrainChange === null ? {} : { terrain: terrainChange }),
+      ...(curvatureChange === null ? {} : { curvature: curvatureChange }),
+    };
   },
 };
 

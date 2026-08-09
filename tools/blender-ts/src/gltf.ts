@@ -340,3 +340,88 @@ export function meshPositions(document: GltfDocument, mesh: number): readonly (r
   }
   return rows;
 }
+
+/** Режим примитива, которым экспортируется геометрия: треугольники. */
+const MODE_TRIANGLES = 4;
+
+/**
+ * Геометрия меша в объёме, нужном клеточным данным (BLND-9, BLND-10): позиции
+ * вершин, грани и запрошенные пользовательские каналы вершин.
+ *
+ * Грани нужны потому, что адрес клетки восстанавливается по ГРАНИ, а не по
+ * порядку вершин: экспортёр вправе слить вершины с совпадающими позицией и
+ * атрибутами, и «по четыре вершины на клетку» перестаёт выполняться
+ * (`CONVENTIONS.md`, «Адресация клетки»).
+ */
+export interface MeshGeometry {
+  /** Позиции вершин в пространстве glTF, примитивы подряд в порядке объявления. */
+  readonly positions: readonly (readonly number[])[];
+  /** Индексы вершин треугольников — по три подряд; адресуют `positions`. */
+  readonly triangles: readonly number[];
+  /**
+   * Значения запрошенных каналов по вершинам. `null` — канала нет ни у одного
+   * примитива; отсутствие у ЧАСТИ примитивов даёт нули: ноль — значение нового
+   * атрибута по умолчанию, а не выдумка (`grids.py` аддона).
+   */
+  readonly attributes: Readonly<Record<string, readonly number[] | null>>;
+}
+
+export function readMeshGeometry(
+  document: GltfDocument,
+  mesh: number,
+  attributes: readonly string[] = [],
+): MeshGeometry {
+  const def = document.json.meshes?.[mesh];
+  if (def === undefined) throw new GltfParseError(`glTF: меш #${mesh} не объявлен`);
+  const positions: number[][] = [];
+  const triangles: number[] = [];
+  const channels = new Map<string, (number | null)[]>();
+  for (const name of attributes) channels.set(name, []);
+
+  for (const primitive of def.primitives ?? []) {
+    const mode = primitive.mode ?? MODE_TRIANGLES;
+    if (mode !== MODE_TRIANGLES) {
+      throw new GltfParseError(
+        `glTF: меш #${mesh}: примитив режима ${mode} — клеточные данные читаются с треугольников (mode 4)`,
+      );
+    }
+    const accessor = primitive.attributes['POSITION'];
+    if (accessor === undefined) continue;
+    const offset = positions.length;
+    const rows = readAccessor(document, accessor);
+    for (const row of rows) positions.push([...row]);
+
+    for (const name of attributes) {
+      const values = channels.get(name)!;
+      const index = primitive.attributes[name];
+      if (index === undefined) {
+        for (let i = 0; i < rows.length; i++) values.push(null);
+        continue;
+      }
+      const read = readAccessor(document, index);
+      if (read.length !== rows.length) {
+        throw new GltfParseError(
+          `glTF: меш #${mesh}: канал "${name}" даёт ${read.length} значений на ${rows.length} вершин`,
+        );
+      }
+      for (const row of read) values.push(row[0] ?? 0);
+    }
+
+    if (primitive.indices === undefined) {
+      // Неиндексированный примитив: вершины идут тройками — сами треугольники.
+      for (let i = 0; i < rows.length; i++) triangles.push(offset + i);
+    } else {
+      for (const row of readAccessor(document, primitive.indices)) triangles.push(offset + (row[0] ?? 0));
+    }
+  }
+
+  if (triangles.length % 3 !== 0) {
+    throw new GltfParseError(`glTF: меш #${mesh}: ${triangles.length} индексов вершин — не кратно трём`);
+  }
+  const out: Record<string, readonly number[] | null> = {};
+  for (const name of attributes) {
+    const values = channels.get(name)!;
+    out[name] = values.every((value) => value === null) ? null : values.map((value) => value ?? 0);
+  }
+  return { positions, triangles, attributes: out };
+}

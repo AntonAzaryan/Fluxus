@@ -93,6 +93,35 @@ export interface SourceObject {
   readonly extras: Readonly<Record<string, string | number | boolean>>;
   /** Меш узла — сырьё клеточных данных (BLND-9, BLND-10); `null` — узел без геометрии. */
   readonly mesh: number | null;
+  /**
+   * Мировая матрица узла 4×4 по столбцам. Разложение (`x`, `yaw`, …) отвечает
+   * на вопрос о САМОМ объекте, а клеточным данным нужны его ВЕРШИНЫ (BLND-9,
+   * BLND-10) — их и переводит в мир эта матрица через `worldPoint`.
+   */
+  readonly world: readonly number[];
+}
+
+/** Точка в величинах конвейера: те же оси, что у разложения трансформа. */
+export interface WorldPoint {
+  readonly x: number;
+  readonly y: number;
+  /** Вертикаль мира (glTF `+y`): высота клетки террейна и смещение кривизны. */
+  readonly elevation: number;
+}
+
+/**
+ * Точка меша в мировых величинах. Знаки соответствия осей — те же и отсюда же,
+ * что у `decompose`: второе их написание в модуле клеточных данных разошлось бы
+ * с первым при первой же правке конвенции (BLND-3).
+ */
+export function worldPoint(matrix: readonly number[], point: readonly number[]): WorldPoint {
+  const px = point[0] ?? 0;
+  const py = point[1] ?? 0;
+  const pz = point[2] ?? 0;
+  const gx = (matrix[0] ?? 0) * px + (matrix[4] ?? 0) * py + (matrix[8] ?? 0) * pz + (matrix[12] ?? 0);
+  const gy = (matrix[1] ?? 0) * px + (matrix[5] ?? 0) * py + (matrix[9] ?? 0) * pz + (matrix[13] ?? 0);
+  const gz = (matrix[2] ?? 0) * px + (matrix[6] ?? 0) * py + (matrix[10] ?? 0) * pz + (matrix[14] ?? 0);
+  return { x: gx, y: -gz, elevation: gy };
 }
 
 /** Единичная матрица 4×4 по столбцам — нейтраль умножения мировых трансформов. */
@@ -276,6 +305,7 @@ export function normalizeDocument(document: GltfDocument): readonly SourceObject
       mirrored: transform.mirrored,
       extras,
       mesh: node.mesh ?? null,
+      world,
     });
     for (const child of node.children ?? []) walk(child, world);
   };
