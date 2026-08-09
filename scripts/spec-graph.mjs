@@ -143,7 +143,8 @@ export function loadLayers(layersPath = DEFAULT_LAYERS_PATH) {
  * детерминировано, ссылаясь на sim/net; ECS-3 называет потребителей типов).
  * Слои и рёбра «вверх» отдаются диагностикой в `metrics()`. Единственное
  * направление-инвариант — граница механизма и политики: спека движка
- * MUST NOT ссылаться на game-content.
+ * MUST NOT ссылаться на game-content; capability слоя editor-content
+ * (редактор и форматы контент-документов) — сама сторона политики, ей можно.
  */
 export function lint(model, layers) {
   const findings = [];
@@ -203,7 +204,7 @@ export function lint(model, layers) {
   }
 
   for (const e of capEdges.values()) {
-    if (e.to === 'game-content' && e.from !== 'editor') {
+    if (e.to === 'game-content' && layers.layers[e.from] !== 'editor-content') {
       findings.push({
         rule: 'content-boundary',
         where: capabilities.get(e.from).file,

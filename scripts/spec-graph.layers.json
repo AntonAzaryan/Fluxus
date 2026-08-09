@@ -28,7 +28,8 @@
     "client-shell": "client",
     "input-devices": "client",
     "editor": "editor-content",
-    "game-content": "editor-content"
+    "game-content": "editor-content",
+    "presentation-scene": "editor-content"
   },
   "exceptions": [
     {
@@ -45,6 +46,16 @@
       "from": "serialization",
       "to": "editor",
       "reason": "Принято: канонический round-trip сохранения редактора нормируется в serialization (SER-7/SER-8, ED-21) — та же тройка stage 12."
+    },
+    {
+      "from": "rendering",
+      "to": "presentation-scene",
+      "reason": "Принято: набор decoration-инстансов (REND-18) — производная парного presentation-документа (PRES-1..4); то же ребро stage 12, что rendering -> editor."
+    },
+    {
+      "from": "assets",
+      "to": "presentation-scene",
+      "reason": "Принято: раздел decoration-видов манифеста (ASSET-9) существует ради размещений PRES-2 и вправе их называть — то же ребро stage 12."
     }
   ]
 }
