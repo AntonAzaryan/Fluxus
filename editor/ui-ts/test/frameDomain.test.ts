@@ -47,6 +47,7 @@ import { describe, expect, it } from 'vitest';
 const APP_FILES: Readonly<Record<string, string>> = {
   'assembly.ts': 'сборка редактора: реестры вкладов, открытый проект, группы записи',
   'contentEndpoint.ts': 'серверная половина веб-хоста среды (ED-12)',
+  'documentRefresh.ts': 'перечитывание документов, изменённых в дереве извне (ED-12, BLND-12)',
   'index.html': 'страница приложения',
   'main.ts': 'точка входа веб-среды: хост, заголовок вкладки, монтирование',
   'vite.config.ts': 'конфиг сборки приложения',

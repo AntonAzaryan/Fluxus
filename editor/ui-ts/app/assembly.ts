@@ -45,10 +45,12 @@ import {
   uiResources,
   type FieldEditor,
   type PaletteCommand,
+  type UiText,
   type WorkspaceArea,
   type WorkspaceFrame,
 } from '../src/index.js';
 import { presentationPathOf } from '@game-mvp/assets';
+import { watchExternalDocuments } from './documentRefresh.js';
 import { createAssetModule } from '../src/areas/assetModule.js';
 import {
   ASSETS_AREA_ID,
@@ -381,6 +383,36 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
         operations: () => describeOperations(session.operations),
         descriptions: catalogDescriptions(resources),
       }),
+  });
+
+  /**
+   * Правка дерева извне (ED-12) — цикл hot-reload конвейера Blender (BLND-12).
+   *
+   * Канал внешних изменений приносит среда (`main.ts` — сокет dev-сервера), а
+   * перечитывание в сессию делает `documentRefresh.ts`; отсюда правка едет во
+   * вьюпорт теми же событиями сессии, что и всякая другая (ED-15, REND-11,
+   * REND-14, REND-17, REND-18, CAM-7). Подписка живёт здесь по той же причине,
+   * по которой здесь живёт открытие проекта: какие документы открыты — знает
+   * сборка, а не каркас (ED-25).
+   *
+   * Показывается только то, чего автор иначе не заметил бы: перечитанный
+   * документ виден в кадре сам, а НЕ перечитанный — нет. Причина при этом
+   * приходит ресурсом (ED-27), а адрес документа — машинным хвостом к нему, как
+   * у подсказки с сочетанием клавиш.
+   */
+  const refreshNotice = (key: string, id: DocumentId): UiText => {
+    const suffix = ` — ${id}`;
+    return { origin: 'resource', value: `${resources.text(key)}${suffix}`, key, suffix };
+  };
+  watchExternalDocuments({
+    session,
+    host: host.content,
+    report: (outcome) => {
+      if (outcome.kind === 'kept') frame.setNotice(refreshNotice('ui.app.externalKept', outcome.id));
+      if (outcome.kind === 'failed') {
+        frame.setNotice(refreshNotice('ui.app.externalFailed', outcome.id));
+      }
+    },
   });
 
   // Несохранённое видно снаружи окна (ED-21): вкладка спрашивает о закрытии,

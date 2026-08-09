@@ -32,9 +32,15 @@ import {
   type SpatialLayer,
 } from '../src/index.js';
 import {
+  CURVATURE_ID,
+  CURVATURE_ROWS,
   PRESENTATION_ID,
   SCENE_ID,
+  TERRAIN_ASSET,
+  TERRAIN_FLAGS,
+  TERRAIN_LEVELS,
   context,
+  curvatureDocument,
   objectsOf,
   presentationDocument,
   sceneDocument,
@@ -165,7 +171,7 @@ describe('BLND-6: находки важности «ошибка» отверг�
     ).toThrow(/presentation/);
   });
 
-  it('слот, которого операция не пишет, — отказ, а не пропуск (заготовка BLND-9, BLND-10)', () => {
+  it('слот, которого операция не пишет, — отказ, а не пропуск', () => {
     const editor = session(sceneDocument(), presentationDocument());
     const layer = spatialLayerParam(layerOf()) as Record<string, JsonValue>;
 
@@ -173,10 +179,133 @@ describe('BLND-6: находки важности «ошибка» отверг�
       editor.applyOperation(IMPORT_SPATIAL_LAYER, {
         scene: SCENE_ID,
         presentation: PRESENTATION_ID,
-        layer: { ...layer, terrain: { width: 4, height: 4 } },
+        layer: { ...layer, lighting: { probes: [] } },
       }),
-    ).toThrow(/terrain/);
+    ).toThrow(/lighting/);
     expect(editor.dirtyDocumentIds()).toEqual([]);
+  });
+
+  it('слот карты кривизны без названного документа — отказ, а не молчаливая потеря', () => {
+    const editor = session(sceneDocument(), presentationDocument());
+    const layer = spatialLayerParam(layerOf()) as Record<string, JsonValue>;
+
+    expect(() =>
+      editor.applyOperation(IMPORT_SPATIAL_LAYER, {
+        scene: SCENE_ID,
+        presentation: PRESENTATION_ID,
+        layer: { ...layer, curvature: { width: 4, height: 4, rows: ['....'] } },
+      }),
+    ).toThrow(/кривизн/);
+    expect(editor.dirtyDocumentIds()).toEqual([]);
+  });
+});
+
+describe('BLND-9, BLND-10: карты ассетов пишет та же операция', () => {
+  /** Слой с клеточными слотами: сами карты считает `maps.ts`, здесь важна запись. */
+  function withMaps(layer: SpatialLayer): SpatialLayer {
+    return {
+      ...layer,
+      terrain: { levels: TERRAIN_LEVELS, flags: TERRAIN_FLAGS },
+      curvature: { width: 4, height: 4, rows: CURVATURE_ROWS },
+    };
+  }
+
+  function mapSession(scene: Record<string, unknown>, curvature: Record<string, unknown> | null): EditorSession {
+    const editor = session(scene, presentationDocument());
+    if (curvature !== null) {
+      editor.openDocument({ id: CURVATURE_ID, kind: 'curvature', value: curvature as JsonValue });
+    }
+    return editor;
+  }
+
+  const paramsWithMaps = (layer: SpatialLayer): ReturnType<typeof importParams> =>
+    importParams({
+      scene: SCENE_ID,
+      presentation: PRESENTATION_ID,
+      curvature: CURVATURE_ID,
+      layer: withMaps(layer),
+    });
+
+  it('карты уровней и вида клеток приходят в ассет, размеры сетки — нет (BLND-9)', () => {
+    const editor = mapSession(sceneDocument([], TERRAIN_ASSET), curvatureDocument());
+
+    editor.applyOperation(IMPORT_SPATIAL_LAYER, paramsWithMaps(layerOf()));
+
+    const terrain = (editor.documentValue(SCENE_ID) as { terrain: Record<string, unknown> }).terrain;
+    expect(terrain['levels']).toEqual([...TERRAIN_LEVELS]);
+    expect(terrain['flags']).toEqual([...TERRAIN_FLAGS]);
+    expect(terrain['width']).toBe(4);
+    expect(terrain['tileSize']).toBe(65536);
+    // Порядок ключей ассета прежний: импорт правит ряды карт, а не пересобирает
+    // документ (ED-21).
+    expect(Object.keys(terrain)).toEqual(Object.keys(TERRAIN_ASSET));
+  });
+
+  it('карта кривизны переписывается в своём документе (ASSET-7)', () => {
+    const editor = mapSession(sceneDocument([], TERRAIN_ASSET), curvatureDocument());
+
+    editor.applyOperation(IMPORT_SPATIAL_LAYER, paramsWithMaps(layerOf()));
+
+    expect(editor.documentValue(CURVATURE_ID)).toEqual({ width: 4, height: 4, rows: [...CURVATURE_ROWS] });
+  });
+
+  it('совпадающие карты правки не дают: дифф пуст по построению (BLND-4)', () => {
+    const editor = mapSession(
+      sceneDocument([], { ...TERRAIN_ASSET, levels: [...TERRAIN_LEVELS], flags: [...TERRAIN_FLAGS] }),
+      curvatureDocument(CURVATURE_ROWS),
+    );
+
+    const outcome = editor.applyOperation(IMPORT_SPATIAL_LAYER, paramsWithMaps(layerOf()));
+
+    expect(outcome.result).toMatchObject({
+      terrain: { levels: { set: 0 }, flags: { set: 0 } },
+      curvature: { size: 0, rows: { set: 0 } },
+    });
+    expect(editor.dirtyDocumentIds()).toEqual([SCENE_ID, PRESENTATION_ID]);
+  });
+
+  it('правка одного ряда карты трогает один ряд, а не весь ассет (ED-21)', () => {
+    const stale = ['0000', '0000', '1111', '1110'];
+    const editor = mapSession(
+      sceneDocument([], { ...TERRAIN_ASSET, levels: stale, flags: [...TERRAIN_FLAGS] }),
+      curvatureDocument(CURVATURE_ROWS),
+    );
+
+    const outcome = editor.applyOperation(IMPORT_SPATIAL_LAYER, paramsWithMaps(layerOf()));
+
+    expect(outcome.result).toMatchObject({ terrain: { levels: { set: 1 }, flags: { set: 0 } } });
+  });
+
+  it('слоя нет — ассет не тронут ни байтом и в отчёте не назван (BLND-2)', () => {
+    const editor = mapSession(sceneDocument([], TERRAIN_ASSET), curvatureDocument());
+    const before = text(editor.documentValue(SCENE_ID));
+
+    const outcome = editor.applyOperation(IMPORT_SPATIAL_LAYER, paramsOf(layerOf()));
+
+    expect(outcome.result).not.toHaveProperty('terrain');
+    expect(outcome.result).not.toHaveProperty('curvature');
+    const after = editor.documentValue(SCENE_ID) as Record<string, JsonValue>;
+    expect(text({ ...after, initial: [] })).toBe(text({ ...(JSON.parse(before) as object), initial: [] }));
+    expect(editor.documentValue(CURVATURE_ID)).toEqual(curvatureDocument());
+  });
+
+  it('импорт кривизны не меняет ни байта sim-документов (BLND-10, ED-11)', () => {
+    const editor = mapSession(sceneDocument([], TERRAIN_ASSET), curvatureDocument());
+    const before = text(editor.documentValue(SCENE_ID));
+
+    editor.applyOperation(
+      IMPORT_SPATIAL_LAYER,
+      importParams({
+        scene: SCENE_ID,
+        presentation: PRESENTATION_ID,
+        curvature: CURVATURE_ID,
+        // Слой без размещений и без террейна: в источнике один curvature-объект.
+        layer: { initial: [], decorations: [], curvature: { width: 4, height: 4, rows: CURVATURE_ROWS }, findings: [] },
+      }),
+    );
+
+    expect(text(editor.documentValue(SCENE_ID))).toBe(before);
+    expect(editor.dirtyDocumentIds()).toEqual([CURVATURE_ID]);
   });
 });
 
@@ -197,11 +326,13 @@ describe('ED-18, ED-29: операция обратима и видна в ка�
 
     expect(described).toHaveLength(1);
     expect(described[0]!.params.map((param) => param.name)).toEqual([
+      'curvature',
       'decorationsPath',
       'initialPath',
       'layer',
       'presentation',
       'scene',
+      'terrainPath',
     ]);
     for (const locale of ['ru', 'en']) {
       const resources = new StringResources({ locale, editor: BLENDER_BUNDLES });

@@ -18,19 +18,37 @@ import {
   type ContentTreeHost,
   type EditorSession,
 } from '@game-mvp/editor-core';
-import { IMPORT_SPATIAL_LAYER, generateSpatialLayer, importParams, openImportTarget } from '../src/index.js';
+import {
+  IMPORT_SPATIAL_LAYER,
+  generateCellLayer,
+  generateSpatialLayer,
+  importParams,
+  openImportTarget,
+  withCellLayer,
+} from '../src/index.js';
 import { createImportSession, runImport } from '../src/importer.js';
 import { normalizeDocument } from '../src/normalize.js';
 import { parseGltf } from '../src/gltf.js';
 import { createNodeHost } from '../src/nodeHost.js';
 import { cliValidationRules, main } from '../src/cli.js';
 import {
+  CURVATURE_GRID,
+  CURVATURE_ID,
+  CURVATURE_ROWS,
   MANIFEST_ID,
   PRESENTATION_ID,
   SCENE_ID,
   SOURCE_ID,
+  TERRAIN_ASSET,
+  TERRAIN_FLAGS,
+  TERRAIN_GRID,
+  TERRAIN_LEVELS,
   contentFiles,
+  curvatureDocument,
   fixtureBytes,
+  flagCells,
+  gridGltf,
+  levelHeights,
   presentationDocument,
   sceneDocument,
 } from './support.js';
@@ -76,17 +94,29 @@ async function runCli(root: string, args: readonly string[]): Promise<{ code: nu
 async function importAsEditor(root: string): Promise<EditorSession> {
   const host = createNodeHost({ root: join(root, 'content') });
   const session = createImportSession();
-  const target = await openImportTarget(session, host.content, { scene: SCENE_ID, manifest: MANIFEST_ID });
-  const objects = normalizeDocument(parseGltf(new Uint8Array(await host.content.read(SOURCE_ID))));
-  const layer = generateSpatialLayer(objects, target.context);
+  const document = parseGltf(new Uint8Array(await host.content.read(SOURCE_ID)));
+  const objects = normalizeDocument(document);
+  const has = (kind: string): boolean =>
+    objects.some((object) => object.semantics.length === 1 && object.semantics[0] === kind);
+  const target = await openImportTarget(session, host.content, {
+    scene: SCENE_ID,
+    manifest: MANIFEST_ID,
+    slots: { terrain: has('terrain'), curvature: has('curvature') },
+  });
+  const layer = withCellLayer(
+    generateSpatialLayer(objects, target.context),
+    generateCellLayer(document, objects, target.context),
+  );
   session.applyOperation(
     IMPORT_SPATIAL_LAYER,
     importParams({
       scene: target.sceneId,
       presentation: target.presentationId,
+      curvature: target.curvatureId,
       layer,
       initialPath: target.initialPath,
       decorationsPath: target.decorationsPath,
+      terrainPath: target.terrainPath,
     }),
   );
   await saveDocuments({ session, host: host.content, groups: [target.group], rules: cliValidationRules() });
@@ -104,6 +134,23 @@ describe('BLND-5: командная строка и операция дают �
     expect(run.code).toBe(0);
     for (const id of [SCENE_ID, PRESENTATION_ID]) {
       expect(await contentOf(viaCli, id)).toEqual(await contentOf(viaOperation, id));
+    }
+  });
+
+  it('ассеты обоими путями тоже совпадают байт-в-байт', async () => {
+    const files = (): Record<string, string | Uint8Array> =>
+      contentFiles(gridGltf([TERRAIN_GRID, CURVATURE_GRID]), sceneDocument([], TERRAIN_ASSET), presentationDocument(), {
+        [CURVATURE_ID]: JSON.stringify(curvatureDocument(), null, 2),
+      });
+    const viaCli = await tree(files());
+    const viaOperation = await tree(files());
+
+    const run = await runCli(viaCli, [`content/${SOURCE_ID}`]);
+    await importAsEditor(viaOperation);
+
+    expect(run.code).toBe(0);
+    for (const id of [SCENE_ID, PRESENTATION_ID, CURVATURE_ID]) {
+      expect(await contentOf(viaCli, id), id).toEqual(await contentOf(viaOperation, id));
     }
   });
 
@@ -339,5 +386,122 @@ describe('BLND-6: результат импорта прогоняется ва�
 
     expect(run.code).toBe(1);
     expect(await contentOf(root, SCENE_ID)).toEqual(before);
+  });
+});
+
+describe('BLND-9, BLND-10: ассеты в атомарной записи импорта', () => {
+  /** Дерево со сценой, у которой есть ассет террейна, и с картой кривизны рядом. */
+  const withAssets = (source: Uint8Array): Record<string, string | Uint8Array> =>
+    contentFiles(source, sceneDocument([], TERRAIN_ASSET), presentationDocument(), {
+      [CURVATURE_ID]: JSON.stringify(curvatureDocument(), null, 2),
+    });
+
+  it('terrain-объект переписывает карты ассета, прочие поля конфига — байт-в-байт прежние', async () => {
+    const root = await tree(withAssets(gridGltf([TERRAIN_GRID])));
+    const before = JSON.parse((await contentOf(root, SCENE_ID)).toString('utf8')) as Record<string, unknown>;
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(run.code).toBe(0);
+    const after = JSON.parse((await contentOf(root, SCENE_ID)).toString('utf8')) as Record<string, unknown>;
+    expect((after['terrain'] as Record<string, unknown>)['levels']).toEqual([...TERRAIN_LEVELS]);
+    expect((after['terrain'] as Record<string, unknown>)['flags']).toEqual([...TERRAIN_FLAGS]);
+    // Всё, кроме карт: состав ключей, размеры сетки, системы и схемы.
+    expect(Object.keys(after)).toEqual(Object.keys(before));
+    const stripped = (value: Record<string, unknown>): string =>
+      JSON.stringify({ ...value, terrain: { ...(value['terrain'] as object), levels: [], flags: [] }, initial: [] });
+    expect(stripped(after)).toBe(stripped(before));
+  });
+
+  it('источник без terrain-объекта ассета не трогает вовсе (BLND-2)', async () => {
+    const root = await tree(withAssets(fixtureBytes('placements.gltf')));
+    const before = await contentOf(root, SCENE_ID);
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(run.code).toBe(0);
+    const after = JSON.parse((await contentOf(root, SCENE_ID)).toString('utf8')) as Record<string, unknown>;
+    const wanted = JSON.parse(before.toString('utf8')) as Record<string, unknown>;
+    expect(after['terrain']).toEqual(wanted['terrain']);
+    // И карта кривизны тоже: у неё в источнике объекта нет — байт в байт.
+    expect(JSON.parse((await contentOf(root, CURVATURE_ID)).toString('utf8'))).toEqual(curvatureDocument());
+  });
+
+  it('curvature-объект переписывает карту, не меняя ни байта sim-документов (BLND-10)', async () => {
+    const root = await tree(withAssets(gridGltf([CURVATURE_GRID])));
+    const before = {
+      scene: await contentOf(root, SCENE_ID),
+      presentation: await contentOf(root, PRESENTATION_ID),
+    };
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(run.code).toBe(0);
+    expect(JSON.parse((await contentOf(root, CURVATURE_ID)).toString('utf8'))).toEqual({
+      width: 4,
+      height: 4,
+      rows: [...CURVATURE_ROWS],
+    });
+    // Ни ассет террейна, ни расстановка, ни decorations: у кривизны нет ни
+    // одного пути внутрь sim-документов, и это видно на диске.
+    expect(await contentOf(root, SCENE_ID)).toEqual(before.scene);
+    expect(await contentOf(root, PRESENTATION_ID)).toEqual(before.presentation);
+  });
+
+  it('ошибочный террейн отменяет запись целиком — включая законную карту кривизны (BLND-6)', async () => {
+    // Рампа в одну клетку: отказ приходит из `createTerrainGrid` — того же
+    // вызова, которым ассет проверяет правило редактора у кисти ED-10 (TERR-7).
+    const broken = {
+      ...TERRAIN_GRID,
+      heights: levelHeights(['0000', '0000', '1111', '1111']),
+      ramp: flagCells(['....', '.^..', '....', '....'], '^'),
+      noFloor: flagCells(['....', '....', '....', '....'], '_'),
+    };
+    const root = await tree(withAssets(gridGltf([broken, CURVATURE_GRID])));
+    const before = {
+      scene: await contentOf(root, SCENE_ID),
+      presentation: await contentOf(root, PRESENTATION_ID),
+      curvature: await contentOf(root, CURVATURE_ID),
+    };
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(run.code).toBe(1);
+    expect(run.err.join('\n')).toContain('TERR-7');
+    // Адрес — имя объекта Blender и адрес клетки (BLND-6).
+    expect(run.err.join('\n')).toContain('terrain:');
+    expect(await contentOf(root, SCENE_ID)).toEqual(before.scene);
+    expect(await contentOf(root, PRESENTATION_ID)).toEqual(before.presentation);
+    expect(await contentOf(root, CURVATURE_ID)).toEqual(before.curvature);
+  });
+
+  it('повторный импорт источника с ассетами не пишет ничего (BLND-4)', async () => {
+    const root = await tree(withAssets(gridGltf([TERRAIN_GRID, CURVATURE_GRID])));
+    await runCli(root, [`content/${SOURCE_ID}`]);
+    const first = {
+      scene: await contentOf(root, SCENE_ID),
+      curvature: await contentOf(root, CURVATURE_ID),
+    };
+
+    const again = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(again.code).toBe(0);
+    expect(again.err.join('\n')).toContain('записи не было');
+    expect(await contentOf(root, SCENE_ID)).toEqual(first.scene);
+    expect(await contentOf(root, CURVATURE_ID)).toEqual(first.curvature);
+  });
+
+  it('карты кривизны ещё нет в дереве — первый импорт её создаёт', async () => {
+    const files = contentFiles(gridGltf([CURVATURE_GRID]), sceneDocument([], TERRAIN_ASSET));
+    const root = await tree(files);
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(run.code).toBe(0);
+    expect(JSON.parse((await contentOf(root, CURVATURE_ID)).toString('utf8'))).toEqual({
+      width: 4,
+      height: 4,
+      rows: [...CURVATURE_ROWS],
+    });
   });
 });

@@ -5,6 +5,8 @@
   "ui.action.remove": "Удалить",
   "ui.action.save": "Сохранить",
   "ui.action.showJson": "Показать JSON",
+  "ui.app.externalFailed": "Изменение в дереве не прочитано",
+  "ui.app.externalKept": "Документ правится в редакторе — правка из дерева не подхвачена",
   "ui.app.search": "Поиск по проекту: объекты, системы, ассеты…",
   "ui.app.title": "Fluxus Editor",
   "ui.area.assets.assignModel": "Назначить моделью",
