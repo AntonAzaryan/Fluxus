@@ -13,7 +13,6 @@ export interface InputSystemOptions {
   /** Порядок задаёт слоты: индекс игрока в списке и есть его слот (TICK-5). */
   readonly players: readonly string[];
   readonly name?: string;
-  readonly order?: number;
   /** Компонент ввода; поля см. `INPUT_FIELDS`. */
   readonly component?: string;
   /** Компонент со слотом игрока и имя его поля. */
@@ -24,9 +23,11 @@ export interface InputSystemOptions {
 /** Что система пишет в компонент ввода. `prevButtons` — маска прошлого тика (TICK-4). */
 export const INPUT_FIELDS = ['aimDir', 'buttons', 'moveX', 'moveY', 'prevButtons', 'seq'] as const;
 
+/** Якорь шкалы `order` (DET-9); параметром сборки не является. */
+const ANCHOR_ORDER = -1000;
+
 const DEFAULTS = {
   name: 'Input',
-  order: -1000,
   component: 'Input',
   slotComponent: 'Player',
   slotField: 'slot',
@@ -34,7 +35,7 @@ const DEFAULTS = {
 
 export class InputSystem implements System {
   readonly name: string;
-  readonly order: number;
+  readonly order = ANCHOR_ORDER;
   private readonly component: string;
   private readonly slotComponent: string;
   private readonly slotField: string;
@@ -42,7 +43,6 @@ export class InputSystem implements System {
 
   constructor(options: InputSystemOptions) {
     this.name = options.name ?? DEFAULTS.name;
-    this.order = options.order ?? DEFAULTS.order;
     this.component = options.component ?? DEFAULTS.component;
     this.slotComponent = options.slotComponent ?? DEFAULTS.slotComponent;
     this.slotField = options.slotField ?? DEFAULTS.slotField;

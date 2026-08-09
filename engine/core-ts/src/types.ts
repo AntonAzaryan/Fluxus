@@ -431,7 +431,7 @@ export interface SystemContext {
 
 export interface System {
   readonly name: string;
-  /** Порядок исполнения; равные order недопустимы (DET-3). */
+  /** Место в тике (SYS-2); порядок задаёт DET-3, уникальность значений — DET-9. */
   readonly order: number;
   run(ctx: SystemContext): void;
 }

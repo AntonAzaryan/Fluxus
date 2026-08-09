@@ -33,8 +33,8 @@ export const ARENA_PREFAB = 'Arena';
 /** Компонент стороны границы на прошлом тике — им же контент и подписывает сущность на систему. */
 export const ARENA_STATE_COMPONENT = 'ArenaState';
 
-/** Арена сужается после физики: позиции за тик уже финальные (PhysicsSystem — 100). */
-const DEFAULT_ORDER = 110;
+/** Якорь шкалы `order` (DET-9); параметром сборки не является. */
+const ANCHOR_ORDER = 110;
 
 /** Ассет арены: то, что пишет редактор и читает загрузчик сцены (ARENA-1). */
 export interface ArenaDef {
@@ -129,10 +129,6 @@ export function createArenaApi(world: WorldState, def: ArenaDef, entity: EntityI
   };
 }
 
-export interface ArenaOptions {
-  readonly order?: number;
-}
-
 /**
  * Наблюдение за границей и полом (ARENA-3, ARENA-5). Система эмитит два
  * события и не делает больше ничего: убить, вернуть внутрь, уронить — политика.
@@ -146,11 +142,7 @@ export interface ArenaOptions {
  */
 export class ArenaSystem implements System {
   readonly name = 'Arena';
-  readonly order: number;
-
-  constructor(options: ArenaOptions = {}) {
-    this.order = options.order ?? DEFAULT_ORDER;
-  }
+  readonly order = ANCHOR_ORDER;
 
   run(ctx: SystemContext): void {
     const arena = ctx.arena;

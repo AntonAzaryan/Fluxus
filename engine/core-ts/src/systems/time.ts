@@ -35,8 +35,8 @@ import {
 export const TIME_SCALE_MIN: Fixed = 3276;
 export const TIME_SCALE_MAX: Fixed = fixed.fromInt(4);
 
-/** Раньше всех потребителей, но позже `InputSystem` (order −1000). */
-const DEFAULT_ORDER = -900;
+/** Якорь шкалы `order` (DET-9); параметром сборки не является. */
+const ANCHOR_ORDER = -900;
 
 /** Компонент множителя (TIME-2). Дефолт `1.0`: сущность без источников идёт в обычном темпе. */
 export const TIME_SCALE_SCHEMA: ComponentSchema = {
@@ -59,12 +59,11 @@ export function timeComponents(modifiers: ModifierList): readonly ComponentSchem
 
 export interface TimeScaleSystemOptions {
   readonly name?: string;
-  readonly order?: number;
 }
 
 export class TimeScaleSystem implements System {
   readonly name: string;
-  readonly order: number;
+  readonly order = ANCHOR_ORDER;
   // Явное поле вместо parameter property — по той же причине, что в
   // `VisibilitySystem`: strip-only режим Node не поддерживает этот сахар, а ядро
   // исполняется прямо из исходников, без шага сборки (CLI-1).
@@ -74,7 +73,6 @@ export class TimeScaleSystem implements System {
   constructor(modifiers: ModifierList, options: TimeScaleSystemOptions = {}) {
     this.modifiers = modifiers;
     this.name = options.name ?? 'TimeScale';
-    this.order = options.order ?? DEFAULT_ORDER;
   }
 
   run(ctx: SystemContext): void {

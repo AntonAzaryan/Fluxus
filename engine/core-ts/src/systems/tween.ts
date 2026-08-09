@@ -40,8 +40,8 @@ const EASINGS: readonly ((t: Fixed) => Fixed)[] = [
 /** 60 Hz в Q16.16 (TIME-1): tick rate фиксирован и от TimeScale не зависит. */
 const DEFAULT_GLOBAL_DELTA = fixed.div(FIXED_ONE, fixed.fromInt(60));
 
-/** Твин пишет поля до физики (order 100), но после геймплейных систем. */
-const DEFAULT_ORDER = 50;
+/** Якорь шкалы `order` (DET-9); параметром сборки не является. */
+const ANCHOR_ORDER = 50;
 
 /**
  * Компонент твина (TWEEN-1). `def` — индекс в таблице сцены, `easing` — одна из
@@ -80,7 +80,6 @@ export interface TweenDef {
 
 export interface TweenSystemOptions {
   readonly name?: string;
-  readonly order?: number;
   /** Шаг тика в Q16.16; по умолчанию 1/60 (TIME-1). */
   readonly globalDelta?: Fixed;
 }
@@ -103,13 +102,12 @@ function parseDef(def: TweenDef, index: number): ParsedDef {
 
 export class TweenSystem implements System {
   readonly name: string;
-  readonly order: number;
+  readonly order = ANCHOR_ORDER;
   private readonly globalDelta: Fixed;
   private readonly defs: readonly ParsedDef[];
 
   constructor(defs: readonly TweenDef[], options: TweenSystemOptions = {}) {
     this.name = options.name ?? 'Tween';
-    this.order = options.order ?? DEFAULT_ORDER;
     this.globalDelta = options.globalDelta ?? DEFAULT_GLOBAL_DELTA;
     // Путь разбирается один раз: битый target из конфига обязан падать на
     // сборке сцены, а не на первом же завершившемся твине посреди матча.
