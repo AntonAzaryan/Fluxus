@@ -165,6 +165,93 @@ describe('обрыв тика на системе посреди прохода 
   });
 });
 
+describe('отказ на применении команд отбрасывает буфер целиком (SYS-9, CMD-2)', () => {
+  /**
+   * Обрыв не в теле системы, а на `flush`: `spawn` упирается в ёмкость мира
+   * (ID-1). Проверять тут есть что именно потому, что часть команд системы к
+   * этому моменту уже была бы применена наивным проходом «применяй по одной».
+   */
+  const GREEDY: SystemDef = {
+    name: 'Greedy',
+    order: 20,
+    query: { all: ['Mark'] },
+    as: 'e',
+    do: [
+      { modifyComponent: { entity: v('e'), component: 'Mark', values: { second: nowFixed } } },
+      { emitEvent: { type: 'Greedy', data: {} } },
+      { spawnEntity: { prefab: 'Subject' } },
+      // Места под второй спавн уже нет: ёмкость 2, один субъект жив с начала.
+      { spawnEntity: { prefab: 'Subject' } },
+    ],
+  };
+
+  function greedySim(): { sim: Simulation; state: SimulationState; entity: number } {
+    const world = createWorld([Mark], PREFABS, 2);
+    const entity = spawn(world, 'Subject');
+    const registry = new SystemRegistry();
+    for (const def of [marker('First', 10, 'first'), GREEDY, marker('Third', 30, 'third')]) {
+      registry.registerFromJson(def, world);
+    }
+    return { sim: { systems: registry, worldSeed: 1, math: mathApi }, state: initialState(world, 1), entity };
+  }
+
+  it('ни одна команда упавшей системы до мира не доходит, а слитые системы целы', () => {
+    const { sim, state, entity } = greedySim();
+
+    expect(() => tick(sim, state)).toThrow(/превышена capacity \(2\)/);
+
+    expect(marks(state, entity)).toEqual({
+      first: F(1), // слита до отказа
+      second: 0, // запись поля отброшена вместе со спавном
+      third: 0, // система не запускалась вовсе
+      fourth: 0,
+    });
+    // Первый спавн буфера отброшен так же, как второй: буфер применяется целиком
+    // или не применяется вовсе.
+    expect(listAlive(state.world).length).toBe(1);
+  });
+
+  it('пост-условие обрыва то же, что у ошибки вычисления: тик увеличен, шина цела', () => {
+    const { sim, state } = greedySim();
+    expect(() => tick(sim, state)).toThrow();
+
+    expect(state.tick).toBe(1);
+    // События публикуются мимо буфера команд и обрыв их не отменяет (EVT-2).
+    expect(eventTypes(state)).toEqual(['First', 'Greedy']);
+  });
+
+  it('спавн в пределах ёмкости проходит: отказ — про ёмкость, а не про сам буфер', () => {
+    const world = createWorld([Mark], PREFABS, 3);
+    spawn(world, 'Subject');
+    const registry = new SystemRegistry();
+    registry.registerFromJson(GREEDY, world);
+    const state = initialState(world, 1);
+
+    expect(() => tick({ systems: registry, worldSeed: 1, math: mathApi }, state)).not.toThrow();
+    expect(listAlive(state.world).length).toBe(3);
+  });
+
+  it('слот, освобождённый destroy в том же буфере, достаётся следующему spawn', () => {
+    // Ёмкость исчерпана с начала: место под спавн появляется только из destroy,
+    // и проход валидации обязан считать пул так же, как его считает аллокация.
+    const recycler: SystemDef = {
+      name: 'Recycler',
+      order: 10,
+      query: { all: ['Mark'] },
+      as: 'e',
+      do: [{ destroyEntity: { entity: v('e') } }, { spawnEntity: { prefab: 'Subject' } }],
+    };
+    const world = createWorld([Mark], PREFABS, 1);
+    spawn(world, 'Subject');
+    const registry = new SystemRegistry();
+    registry.registerFromJson(recycler, world);
+    const state = initialState(world, 1);
+
+    expect(() => tick({ systems: registry, worldSeed: 1, math: mathApi }, state)).not.toThrow();
+    expect(listAlive(state.world).length).toBe(1);
+  });
+});
+
 describe('сообщение об ошибке класса 3 (SYS-9)', () => {
   it('называет систему, путь до узла и причину', () => {
     const { sim, state } = makeSim();

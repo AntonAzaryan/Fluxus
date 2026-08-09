@@ -4,6 +4,10 @@
  * порядке на flush (CMD-3) — до flush world не меняется, поэтому Query внутри
  * системы видит состояние на её начало (CMD-5, QUERY-3). flush per-system
  * вызывает планировщик (CMD-2), сам буфер за это не отвечает.
+ *
+ * flush идёт двумя проходами — сначала проверка всего буфера, потом применение
+ * (SYS-9): единица атомарности — система, и отказ на десятой команде из двадцати
+ * не вправе оставить в мире первые девять.
  */
 import type { CommandOutcome, CommandBuffer, EntityId, FieldOverrides, WorldState } from '../types.js';
 import { countCommands, nextSeq, record, traceFull } from '../debug.js';
@@ -59,12 +63,22 @@ function commandData(cmd: Command): Readonly<Record<string, number | string>> {
 }
 
 export interface CommandBufferHandle extends CommandBuffer {
-  /** Применяет накопленные команды к world state в порядке создания и очищает буфер (CMD-2, CMD-3). */
+  /**
+   * Применяет накопленные команды к world state в порядке создания и очищает
+   * буфер (CMD-2, CMD-3). Всё или ничего (SYS-9): отказ на любой команде
+   * оставляет мир нетронутым, а буфер — накопленным.
+   */
   flush(): void;
 }
 
 export function createCommandBuffer(state: WorldState): CommandBufferHandle {
   const commands: Command[] = [];
+  /**
+   * Сколько `destroy` в буфере. Счётчик, а не множество целей: он держит
+   * обратный проход `alreadyDead` выключенным в подавляющем большинстве
+   * буферов, где `destroy` нет вовсе, и не стоит ни одной аллокации.
+   */
+  let destroys = 0;
 
   /** Номер записи резервируется здесь — в момент заказа команды (DIAG-2, DIAG-5). */
   function enqueue(cmd: Command): void {
@@ -73,12 +87,71 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
     commands.push(cmd);
   }
 
+  /**
+   * Убила ли цель одна из предыдущих команд этого же буфера. Обратный проход по
+   * уже накопленному, а не множество уничтоженных: `destroy` в буфере единицы, а
+   * Set стоил бы аллокации на каждом тике (тот же приём и та же причина, что у
+   * `peekField`).
+   */
+  function alreadyDead(upto: number, entity: EntityId): boolean {
+    if (destroys === 0) return false;
+    for (let i = 0; i < upto; i++) {
+      const cmd = commands[i]!;
+      if (cmd.kind === 'destroy' && cmd.entity === entity) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Проход валидации перед применением (SYS-9). Всё, на чём мог бы бросить
+   * проход применения, проверяется здесь — до первой мутации мира: иначе
+   * исключение посреди применения оставило бы в мире часть команд упавшей
+   * системы, а единица атомарности у flush'а — система целиком.
+   *
+   * Условия и сообщения не копируются: их держит `world.ts` рядом с самими
+   * мутаторами, и оба прохода читают одни и те же функции.
+   *
+   * Аллокаций проход не делает — только счёт по уже накопленным записям.
+   */
+  function validate(): void {
+    // Ёмкость: `spawn` берёт слот из freeList, иначе очередной индекс (ID-2), а
+    // `destroy` внутри этого же прохода возвращает слот в пул.
+    let room = world.spawnRoom(state);
+    for (let i = 0; i < commands.length; i++) {
+      const cmd = commands[i]!;
+      if (cmd.kind === 'spawn') {
+        world.checkSpawn(state, cmd.prefab, cmd.overrides);
+        world.checkSpawnRoom(state, room);
+        room--;
+        continue;
+      }
+      // Та же проверка живой цели, что у прохода применения: команда, которую он
+      // отбросит, до мутатора не дойдёт и проверяться не должна.
+      if (!world.isAlive(state, cmd.entity) || alreadyDead(i, cmd.entity)) continue;
+      switch (cmd.kind) {
+        case 'destroy':
+          room++;
+          break;
+        case 'addComponent':
+          world.checkComponent(state, 'addComponent', cmd.component);
+          break;
+        case 'setField':
+          world.checkField(state, 'setField', cmd.component, cmd.field);
+          break;
+        case 'removeComponent':
+          // Тотален: незарегистрированный компонент — no-op, а не отказ.
+          break;
+      }
+    }
+  }
+
   return {
     spawn(prefab, overrides) {
       enqueue({ kind: 'spawn', prefab, overrides });
     },
     destroy(entity) {
       enqueue({ kind: 'destroy', entity });
+      destroys++;
     },
     addComponent(entity, component, values) {
       enqueue({ kind: 'addComponent', entity, component, values });
@@ -107,6 +180,10 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
       return undefined;
     },
     flush() {
+      // Сначала весь буфер проверяется, и только потом применяется: ниже по
+      // тексту действует инвариант «проход применения не бросает» (SYS-9).
+      validate();
+
       const traced = traceFull();
       // Исходы копятся и уходят в трейс ПОСЛЕ прохода: перекрытие (CMD-3)
       // становится известно только когда до мира дошла более поздняя запись в
@@ -172,6 +249,7 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
       }
 
       commands.length = 0;
+      destroys = 0;
     },
   };
 }
