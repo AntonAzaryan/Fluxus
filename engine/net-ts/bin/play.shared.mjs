@@ -91,9 +91,16 @@ export function reportClient(client, prefix, onClosed) {
     const metrics = client.metrics;
     const response = metrics.inputToVisibleMs === undefined ? '—' : `${metrics.inputToVisibleMs.toFixed(0)} мс`;
     const lag = metrics.bufferLagMs === undefined ? '—' : `${metrics.bufferLagMs.toFixed(0)} мс`;
+    // Поток событий — третий наблюдаемый выход рядом со снапшотами и откликом
+    // (NTR-15, NTR-11), и три его счётчика раздельны по причине: доставлено —
+    // факты, отданные потребителю (их сливает `ClientHost.step`), отброшено —
+    // цена избыточности, разрывы — единственный из трёх, который означает
+    // безвозвратно потерянные факты. Слитая «потеря» на вопрос «докрутить ли
+    // eventRepeat» не отвечает.
     process.stdout.write(
       `\r${prefix()}  снапшотов ${metrics.snapshotsApplied} (отброшено ${metrics.snapshotsDropped})  ` +
-        `нажал→увидел ${response}  буфер ${lag}   `,
+        `фактов ${metrics.eventBatchesDelivered} (повторов ${metrics.eventBatchesDropped}, ` +
+        `разрывов ${metrics.eventRangeGaps})  нажал→увидел ${response}  буфер ${lag}   `,
     );
   }, 500);
 }
