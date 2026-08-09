@@ -76,7 +76,7 @@ Violating any of these is a defect, not a trade-off. The same list, worded for s
 - The only entry into the simulation is `tick(state, inputs) → TickResult`; no I/O or side effects inside a tick — external consumers read `TickResult` afterwards.
 - Fixed-point Q16.16 everywhere in the simulation; floats are forbidden in gameplay math.
 - Data-driven: systems and gameplay are described in JSON, and the core is a universal evaluator of them.
-- ECS mutations go only through the Command Buffer; world mutators are deliberately not exported from `src/index.ts` (exporting them would be the side channel TICK-3 forbids).
+- ECS mutations go only through the Command Buffer; general-purpose world mutators are deliberately not exported from `src/index.ts` (exporting them would be the side channel TICK-3 forbids). The single exception TICK-3 itself requires: the `worldInit` placement helper (`worldInitSpawn`), published separately from the read-only surface and named for its scope — before the first tick.
 - A JSON-defined system and a native TS system are interchangeable behind the single `System` interface.
 - Server-authoritative netcode; each client's snapshot is filtered by visibility (FoW is part of the simulation, not the renderer).
 - The core has **zero** runtime dependencies — do not add libraries to `engine/core-ts` (ECS libraries and `json-logic-js` were deliberately rejected).
