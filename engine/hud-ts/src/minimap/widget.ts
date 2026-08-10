@@ -187,7 +187,7 @@ class MinimapWidget implements HudWidget {
     this.config = configFrom(params);
     // Резолв таблицы — при создании, по образцу резолва композиции (HUD-4):
     // ошибка конфигурации падает до монтирования и называет запись.
-    this.table = resolveMarkerTable(markerTableFromParams(params['markers']), renderers);
+    this.table = resolveMarkerTable(markerTableFromParams(params.markers), renderers);
     this.terrainSource = terrainSource;
   }
 
@@ -239,10 +239,10 @@ class MinimapWidget implements HudWidget {
     // До handshake и на сценах без террейна рисовать нечего (SHELL-5).
     if (grid === null) return;
     const transform = this.transformFor(grid);
-    const floor = (update.values['floor'] ?? null) as MinimapFloorValue | null;
+    const floor = (update.values.floor ?? null) as MinimapFloorValue | null;
     this.drawFloor(floor, transform, update.snap);
     this.drawMarkers(
-      update.values['entities'] as ReadonlyMap<number, MinimapEntityView> | undefined,
+      update.values.entities as ReadonlyMap<number, MinimapEntityView> | undefined,
       transform,
     );
   }

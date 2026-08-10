@@ -64,3 +64,16 @@ export { HUD_ZONE_ATTR, HudOverlayHost, interactive, overlayNode } from './host.
 // Исполнитель композиции и подписка на доставку (HUD-4, HUD-5).
 export { HudRuntime } from './runtime.js';
 export type { HudRuntimeOptions } from './runtime.js';
+
+// Иконки: asset ID контента, резолв через инъецируемый источник (HUD-4).
+export { iconTableFromParams, resolveIcon } from './icons.js';
+export type { HudIconSource, HudIconTable } from './icons.js';
+
+// Первые виджеты: статус матча и панель способностей (HUD-2, HUD-4).
+export * from './widgets/index.js';
+
+// Миникарта: canvas-2D виджет и таблица маркеров — данные (HUD-6).
+export * from './minimap/index.js';
+
+// Живой портрет: изолированный стенд модели на render-ts (HUD-7).
+export * from './portrait/index.js';

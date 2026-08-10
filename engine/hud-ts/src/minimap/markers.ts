@@ -250,21 +250,21 @@ export function resolveMarkerTable(
 
 // ------------------------------------------------- чтение таблицы из params
 
-function isRecord(value: HudJsonValue | undefined): value is { readonly [key: string]: HudJsonValue } {
+function isRecord(value: HudJsonValue | undefined): value is Readonly<Record<string, HudJsonValue>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function colorFrom(value: HudJsonValue | undefined, where: string): MinimapColorSpec {
   if (!isRecord(value)) throw new Error(`${where}: окраска должна быть объектом`);
-  const mode = value['mode'];
+  const mode = value.mode;
   if (mode === 'fixed') {
-    const color = value['color'];
+    const color = value.color;
     if (typeof color !== 'string') throw new Error(`${where}: у окраски "fixed" нужен строковый "color"`);
     return { mode, color };
   }
   if (mode === 'team') {
-    const byTeamValue = value['byTeam'];
-    const fallback = value['fallback'];
+    const byTeamValue = value.byTeam;
+    const fallback = value.fallback;
     if (!isRecord(byTeamValue)) throw new Error(`${where}: у окраски "team" нужен объект "byTeam"`);
     if (typeof fallback !== 'string') throw new Error(`${where}: у окраски "team" нужен строковый "fallback"`);
     const byTeam: Record<string, string> = {};
@@ -274,18 +274,18 @@ function colorFrom(value: HudJsonValue | undefined, where: string): MinimapColor
     }
     return { mode, byTeam, fallback };
   }
-  throw new Error(`${where}: неизвестный режим окраски "${String(mode)}"`);
+  throw new Error(`${where}: неизвестный режим окраски ${JSON.stringify(mode)}`);
 }
 
 function specFrom(value: HudJsonValue | undefined, where: string): MinimapMarkerSpec {
   if (!isRecord(value)) throw new Error(`${where}: запись маркера должна быть объектом`);
-  const renderer = value['renderer'];
-  const size = value['size'];
-  const priority = value['priority'];
+  const renderer = value.renderer;
+  const size = value.size;
+  const priority = value.priority;
   if (typeof renderer !== 'string') throw new Error(`${where}: нужно строковое имя "renderer"`);
   if (typeof size !== 'number') throw new Error(`${where}: нужен числовой "size"`);
   if (typeof priority !== 'number') throw new Error(`${where}: нужен числовой "priority"`);
-  return { renderer, color: colorFrom(value['color'], where), size, priority };
+  return { renderer, color: colorFrom(value.color, where), size, priority };
 }
 
 /**
@@ -299,7 +299,7 @@ export function markerTableFromParams(value: HudJsonValue | undefined): MinimapM
   if (!isRecord(value)) {
     throw new Error('миникарта: параметр "markers" обязателен и должен быть таблицей маркеров (HUD-6)');
   }
-  const markersValue = value['markers'];
+  const markersValue = value.markers;
   if (!isRecord(markersValue)) {
     throw new Error('миникарта: поле "markers" таблицы должно быть объектом «тип → запись» (HUD-6)');
   }
@@ -307,17 +307,17 @@ export function markerTableFromParams(value: HudJsonValue | undefined): MinimapM
   for (const [kind, spec] of Object.entries(markersValue)) {
     markers[kind] = specFrom(spec, `таблица маркеров, тип "${kind}"`);
   }
-  const unknownValue = value['unknownKind'];
+  const unknownValue = value.unknownKind;
   if (!isRecord(unknownValue)) {
     throw new Error('миникарта: таблица маркеров обязана объявлять политику "unknownKind" (HUD-6)');
   }
-  const policy = unknownValue['policy'];
+  const policy = unknownValue.policy;
   if (policy === 'skip') return { markers, unknownKind: { policy } };
   if (policy === 'default') {
     return {
       markers,
-      unknownKind: { policy, marker: specFrom(unknownValue['marker'], 'политика unknownKind') },
+      unknownKind: { policy, marker: specFrom(unknownValue.marker, 'политика unknownKind') },
     };
   }
-  throw new Error(`миникарта: неизвестная политика unknownKind "${String(policy)}" (HUD-6)`);
+  throw new Error(`миникарта: неизвестная политика unknownKind ${JSON.stringify(policy)} (HUD-6)`);
 }
