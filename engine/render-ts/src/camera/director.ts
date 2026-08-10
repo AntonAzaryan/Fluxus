@@ -98,6 +98,7 @@ function bindingValue(
   def: CameraEffectDef,
   name: string,
 ): number {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   const spec = description.binding[kind]?.find((param) => param.name === name);
   const value = def[name];
   if (typeof value !== 'number' || !Number.isFinite(value)) return spec?.defaultValue ?? 0;
@@ -211,11 +212,11 @@ export class CameraEffectsDirector {
     if (!Number.isFinite(radius) || radius <= 0) return 1;
     let x: number | null = null;
     let y: number | null = null;
-    if (data['x'] !== undefined && data['y'] !== undefined) {
-      x = data['x'] / FIXED_ONE;
-      y = data['y'] / FIXED_ONE;
+    if (data.x !== undefined && data.y !== undefined) {
+      x = data.x / FIXED_ONE;
+      y = data.y / FIXED_ONE;
     } else {
-      const source = data['entity'] ?? data['source'];
+      const source = data.entity ?? data.source;
       const entity = source === undefined ? undefined : view.entities.get(source);
       if (entity !== undefined) {
         x = entity.currX;

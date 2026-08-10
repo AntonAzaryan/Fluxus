@@ -89,7 +89,7 @@ function run(system: System, ticks: number): { world: ReturnType<typeof createWo
 
   const events: string[] = [];
   for (let i = 0; i < ticks; i++) {
-    for (const event of tick(sim, state).events) events.push(`${event.type}:${event.data['entity']}`);
+    for (const event of tick(sim, state).events) events.push(`${event.type}:${event.data.entity}`);
   }
   return { world, events };
 }
@@ -214,8 +214,8 @@ describe('JSON-система читает события тика (EVT-2, ACT-1
       ],
     };
 
-    expect(() => validateSystem(leaked, makeWorld())).toThrow(/переменная "hit" не связана/);
-    expect(() => validateSystem(computed, makeWorld())).toThrow(/ожидался строковый литерал/);
+    expect(() => { validateSystem(leaked, makeWorld()); }).toThrow(/переменная "hit" не связана/);
+    expect(() => { validateSystem(computed, makeWorld()); }).toThrow(/ожидался строковый литерал/);
   });
 });
 
@@ -248,18 +248,18 @@ describe('SystemRegistry.override (SYS-7)', () => {
 
   it('отвергает подмену с другим order', () => {
     const other: System = { name: 'Burning', order: 11, run: () => {} };
-    expect(() => registry().override(other)).toThrow(/order 10.*заявляет 11/);
+    expect(() => { registry().override(other); }).toThrow(/order 10.*заявляет 11/);
   });
 
   it('отвергает подмену незарегистрированной системы', () => {
-    expect(() => registry().override({ name: 'Ghost', order: 1, run: () => {} })).toThrow(/не зарегистрирована/);
+    expect(() => { registry().override({ name: 'Ghost', order: 1, run: () => {} }); }).toThrow(/не зарегистрирована/);
   });
 });
 
 describe('валидация на регистрации (SYS-3)', () => {
   const invalid = (patch: Partial<SystemDef>): (() => void) => {
     const world = makeWorld();
-    return () => validateSystem({ ...BURNING_JSON, ...patch }, world);
+    return () => { validateSystem({ ...BURNING_JSON, ...patch }, world); };
   };
 
   it('пропускает корректную систему', () => {
@@ -319,8 +319,8 @@ describe('валидация на регистрации (SYS-3)', () => {
       ],
     };
 
-    expect(() => validateSystem(bound, makeWorld())).not.toThrow();
-    expect(() => validateSystem(leaked, makeWorld())).toThrow(/переменная "dmg" не связана/);
+    expect(() => { validateSystem(bound, makeWorld()); }).not.toThrow();
+    expect(() => { validateSystem(leaked, makeWorld()); }).toThrow(/переменная "dmg" не связана/);
   });
 
   it('переменная из random видна в теле и не видна снаружи (RNG-6)', () => {
@@ -336,13 +336,13 @@ describe('валидация на регистрации (SYS-3)', () => {
       ],
     };
 
-    expect(() => validateSystem(bound, makeWorld())).not.toThrow();
-    expect(() => validateSystem(leaked, makeWorld())).toThrow(/переменная "face" не связана/);
+    expect(() => { validateSystem(bound, makeWorld()); }).not.toThrow();
+    expect(() => { validateSystem(leaked, makeWorld()); }).toThrow(/переменная "face" не связана/);
   });
 
   it('опечатка в имени случайного действия падает на регистрации (ACT-1)', () => {
     const typo = { ...BURNING_JSON, do: [{ randomBelwo: { as: 'r', bound: F(6), do: [] } }] } as SystemDef;
-    expect(() => validateSystem(typo, makeWorld())).toThrow(/неизвестное действие "randomBelwo"/);
+    expect(() => { validateSystem(typo, makeWorld()); }).toThrow(/неизвестное действие "randomBelwo"/);
   });
 
   it('ловит ошибку арности в неисполняемой ветке if (EXPR-8)', () => {
@@ -411,7 +411,7 @@ describe('валидация на регистрации (SYS-3)', () => {
 
   it('registerFromJson не регистрирует систему, не прошедшую валидацию', () => {
     const r = new SystemRegistry();
-    expect(() => r.registerFromJson({ ...BURNING_JSON, query: { all: ['Ghost'] } }, makeWorld())).toThrow();
+    expect(() => { r.registerFromJson({ ...BURNING_JSON, query: { all: ['Ghost'] } }, makeWorld()); }).toThrow();
     expect(r.ordered()).toEqual([]);
   });
 
@@ -432,7 +432,7 @@ describe('валидация на регистрации (SYS-3)', () => {
     };
     const world = makeWorld();
 
-    expect(() => validateSystem(grounded, world)).not.toThrow();
+    expect(() => { validateSystem(grounded, world); }).not.toThrow();
 
     const registry = new SystemRegistry();
     registry.registerFromJson(grounded, world);
@@ -454,7 +454,7 @@ describe('валидация на регистрации (SYS-3)', () => {
 describe('обязательные аргументы действий на регистрации (SYS-3, ACT-1)', () => {
   const invalid = (patch: Partial<SystemDef>): (() => void) => {
     const world = makeWorld();
-    return () => validateSystem({ ...BURNING_JSON, ...patch }, world);
+    return () => { validateSystem({ ...BURNING_JSON, ...patch }, world); };
   };
 
   /** Полный набор аргументов каждого действия — только обязательные, без единого лишнего. */
@@ -534,7 +534,7 @@ describe('обязательные аргументы действий на ре
     // `else` у ветвления, `values` у записи полей, `easing`/`ignoreTimeScale` у
     // твина, `subStream` у случайного действия, `overrides` у спавна.
     expect(invalid({ do: [{ if: { cond: true, then: [], else: [] } }] })).not.toThrow();
-    expect(invalid({ do: [{ addTween: FULL['addTween']! }] })).not.toThrow();
+    expect(invalid({ do: [{ addTween: FULL.addTween! }] })).not.toThrow();
     expect(invalid({ do: [{ random: { as: 'r', subStream: 'crits', do: [] } }] })).not.toThrow();
     expect(invalid({ do: [{ let: { bindings: { n: 1 }, do: [] } }] })).not.toThrow();
   });

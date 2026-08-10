@@ -104,7 +104,7 @@ const VALUE: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operatio
  * Читатели — приведение типа, а не вторая проверка: схему параметров уже сверил
  * слой операций к моменту вызова `apply` (ED-30).
  */
-const asDocument = (params: OperationParams): DocumentId => params['document'] as DocumentId;
+const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
 const asString = (params: OperationParams, name: string): string => params[name] as string;
 const asNumber = (params: OperationParams, name: string): number => params[name] as number;
 
@@ -427,8 +427,8 @@ export function emittedEventTypes(value: JsonValue | undefined): readonly string
       return;
     }
     if (!isJsonObject(node)) return;
-    const emit = node['emitEvent'];
-    if (isJsonObject(emit) && typeof emit['type'] === 'string') found.add(emit['type']);
+    const emit = node.emitEvent;
+    if (isJsonObject(emit) && typeof emit.type === 'string') found.add(emit.type);
     for (const child of Object.values(node)) walk(child);
   };
   walk(value);

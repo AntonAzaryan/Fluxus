@@ -107,7 +107,7 @@ function literal(node: unknown, path: string): string {
 
 function checkActions(list: unknown, world: WorldState, scope: ReadonlySet<string>, path: string): void {
   if (!Array.isArray(list)) fail(path, 'ожидался список действий');
-  list.forEach((node, i) => checkAction(node, world, scope, `${path}[${i}]`));
+  list.forEach((node, i) => { checkAction(node, world, scope, `${path}[${i}]`); });
 }
 
 /**
@@ -124,12 +124,12 @@ function checkAction(node: unknown, world: WorldState, scope: ReadonlySet<string
   // Имена, введённые этим действием, видны только его телу; `bindings` при
   // этом вычисляются снаружи (параллельное связывание, см. ACT-1).
   const inner = new Set(scope);
-  if (args['as'] !== undefined) inner.add(literal(args['as'], `${here}.as`));
-  if (args['bindings'] !== undefined) {
-    for (const key of Object.keys(asMap(args['bindings'], `${here}.bindings`))) inner.add(key);
+  if (args.as !== undefined) inner.add(literal(args.as, `${here}.as`));
+  if (args.bindings !== undefined) {
+    for (const key of Object.keys(asMap(args.bindings, `${here}.bindings`))) inner.add(key);
   }
 
-  const component = args['component'] === undefined ? undefined : literal(args['component'], `${here}.component`);
+  const component = args.component === undefined ? undefined : literal(args.component, `${here}.component`);
   if (component !== undefined && componentSchema(world, component) === undefined) {
     fail(`${here}.component`, `компонент "${component}" не зарегистрирован`);
   }
@@ -156,7 +156,7 @@ function checkAction(node: unknown, world: WorldState, scope: ReadonlySet<string
         checkQuery(value, world, scope, at);
         break;
       case 'overrides':
-        checkOverrides(value, world, scope, at, literal(args['prefab'], `${here}.prefab`));
+        checkOverrides(value, world, scope, at, literal(args.prefab, `${here}.prefab`));
         break;
       case 'prefab': {
         const prefab = literal(value, at);
@@ -230,11 +230,11 @@ function checkQuery(node: unknown, world: WorldState, scope: ReadonlySet<string>
       }
     });
   }
-  if (spec['withTag'] !== undefined) literal(spec['withTag'], `${path}.withTag`);
-  if (spec['withinRadius'] !== undefined) {
-    const within = asMap(spec['withinRadius'], `${path}.withinRadius`);
-    checkExpression(within['center'], world, scope, `${path}.withinRadius.center`);
-    checkExpression(within['radius'], world, scope, `${path}.withinRadius.radius`);
+  if (spec.withTag !== undefined) literal(spec.withTag, `${path}.withTag`);
+  if (spec.withinRadius !== undefined) {
+    const within = asMap(spec.withinRadius, `${path}.withinRadius`);
+    checkExpression(within.center, world, scope, `${path}.withinRadius.center`);
+    checkExpression(within.radius, world, scope, `${path}.withinRadius.radius`);
   }
 }
 

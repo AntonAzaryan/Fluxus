@@ -40,7 +40,7 @@ describe('guard: детерминизм ядра (CLI-8)', () => {
 
   it('манифест ядра не объявляет runtime-зависимостей (CORE-1)', () => {
     const pkg = JSON.parse(readFileSync(join(PKG_ROOT, 'package.json'), 'utf8')) as Record<string, unknown>;
-    expect(pkg['dependencies']).toBeUndefined();
+    expect(pkg.dependencies).toBeUndefined();
   });
 });
 

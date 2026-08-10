@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * Подсистема моделей (REND-3..6): пул инстансов по сущностям presentation-
  * состояния.
@@ -265,7 +266,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   constructor(manifest: VisualManifest, options: ModelsOptions = {}) {
     this.manifest = manifest;
     this.options = options;
-    this.warn = options.warn ?? ((message) => console.warn(message));
+    this.warn = options.warn ?? ((message) => { console.warn(message); });
   }
 
   init(ctx: RenderContext): void {
@@ -285,7 +286,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (view.freshEvents) {
       const fallEvent = this.options.fallEvent ?? DEFAULT_FALL_EVENT;
       for (const event of view.events) {
-        const caster = event.data['entity'] ?? event.data['source'];
+        const caster = event.data.entity ?? event.data.source;
         if (caster === undefined) continue;
         const record = this.instances.get(caster);
         if (record === undefined) continue;

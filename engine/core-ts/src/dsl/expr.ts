@@ -8,7 +8,7 @@
 import type { EntityId, Fixed, MathApi, ReadonlyEventLog, SystemContext, Vec2 } from '../types.js';
 
 /** Узел AST: литерал либо объект с ровно одним ключом-оператором (EXPR-1). */
-export type Expression = number | boolean | string | { readonly [op: string]: unknown };
+export type Expression = number | boolean | string | Readonly<Record<string, unknown>>;
 
 /** Все числа — сырой Q16.16 (EXPR-2); `i32`-поля приводятся оператором `fromInt`. */
 export type ExprValue = Fixed | boolean | Vec2;
@@ -38,6 +38,7 @@ const NO_VARS: ExprVars = {};
 
 export function evaluate(expr: Expression, world: ExprWorld, vars: ExprVars = NO_VARS): ExprValue {
   if (typeof expr === 'number' || typeof expr === 'boolean') return expr;
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   if (typeof expr !== 'object' || expr === null) {
     throw new Error(`строка допустима только как аргумент-имя оператора: ${JSON.stringify(expr)}`);
   }

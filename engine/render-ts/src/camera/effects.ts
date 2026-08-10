@@ -68,6 +68,7 @@ export type CameraEffectType = ImpulseEffectType | LastingEffectType;
  * константы умолчаний у эффекта нет: она жила бы рядом с дескриптором и
  * разошлась бы с ним при первой правке.
  */
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- baseline
 export function defaults<T>(spec: CameraEffectTypeSpec): T {
   const out: Record<string, number> = {};
   for (const param of spec.params) out[param.name] = param.defaultValue;

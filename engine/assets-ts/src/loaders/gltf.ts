@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * Загрузчик glTF 2.0 поверх ручного разбора JSON — без THREE.js и DOM
  * (ASSET-5), в духе `mdxLoader`. Разбирает обе упаковки одного и того же
@@ -607,22 +608,22 @@ export async function normalizeGltf(
         throw new Error(`glTF: mesh "${mesh.name}" — режим ${prim.mode} (нужен TRIANGLES=4)`);
       }
 
-      const posAcc = prim.attributes['POSITION'];
+      const posAcc = prim.attributes.POSITION;
       if (posAcc == null) throw new Error(`glTF: mesh "${mesh.name}" без POSITION`);
       const pos = readAccessor(doc, buffers, posAcc, false);
       const vcount = pos.count;
       const positions = new Float32Array(vcount * 3);
-      const normalsAcc = prim.attributes['NORMAL'];
+      const normalsAcc = prim.attributes.NORMAL;
       const norm = normalsAcc != null ? readAccessor(doc, buffers, normalsAcc, false) : null;
       const normals = norm != null ? new Float32Array(vcount * 3) : null;
 
-      const skinned = prim.attributes['JOINTS_0'] != null && prim.attributes['WEIGHTS_0'] != null;
+      const skinned = prim.attributes.JOINTS_0 != null && prim.attributes.WEIGHTS_0 != null;
       const skinIndices = new Uint16Array(vcount * 4);
       const skinWeights = new Float32Array(vcount * 4);
 
       if (skinned) {
-        const joints = readAccessor(doc, buffers, prim.attributes['JOINTS_0']!, false);
-        const weights = readAccessor(doc, buffers, prim.attributes['WEIGHTS_0']!, true);
+        const joints = readAccessor(doc, buffers, prim.attributes.JOINTS_0!, false);
+        const weights = readAccessor(doc, buffers, prim.attributes.WEIGHTS_0!, true);
         const jointNodes = skin?.joints ?? [];
         for (let v = 0; v < vcount; v++) {
           for (let k = 0; k < 4; k++) {
@@ -654,7 +655,7 @@ export async function normalizeGltf(
         }
       }
 
-      const uvAcc = prim.attributes['TEXCOORD_0'];
+      const uvAcc = prim.attributes.TEXCOORD_0;
       const uvs =
         uvAcc != null
           ? Float32Array.from(readAccessor(doc, buffers, uvAcc, false).values)
@@ -696,6 +697,7 @@ export async function normalizeGltf(
   // формата) добавляется в конец, если её кто-то занял, либо если своих
   // материалов у документа нет вовсе: меш обязан на что-то ссылаться.
   const materialsSource: readonly (GltfMaterial | undefined)[] =
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
     usesDefaultMaterial || defaultMaterialIndex === 0
       ? [...(doc.materials ?? []), undefined]
       : (doc.materials ?? []);

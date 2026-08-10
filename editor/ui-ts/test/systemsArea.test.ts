@@ -120,7 +120,7 @@ function slotField(root: UiNode, slot: string, tag = 'select'): UiNode | undefin
 
 /** Ввод: контрол отдаёт значение по `change` — от фокуса до подтверждения (ED-18). */
 function commit(node: UiNode | undefined, value: string): void {
-  const handler = node?.on?.['change'];
+  const handler = node?.on?.change;
   if (handler === undefined) throw new Error(`контрол не принимает ввод: ${String(node?.tag)}`);
   handler({ target: { value } } as unknown as Event);
 }
@@ -136,7 +136,7 @@ const namesOf = (session: EditorSession): readonly string[] =>
 /** Значения опций выбора — то, что автору вообще предлагается. */
 function optionsOf(node: UiNode | undefined): readonly string[] {
   return findAll(node ?? { tag: 'none' }, (child) => child.tag === 'option')
-    .map((child) => child.attrs?.['value'] ?? '')
+    .map((child) => child.attrs?.value ?? '')
     .filter((value) => value !== '');
 }
 

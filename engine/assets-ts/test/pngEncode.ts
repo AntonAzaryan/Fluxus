@@ -163,9 +163,7 @@ export async function encodePng(spec: PngSpec): Promise<ArrayBuffer> {
   return file.buffer;
 }
 
-declare const CompressionStream: {
-  new (format: string): {
+declare const CompressionStream: new (format: string) => {
     readable: { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }> } };
     writable: { getWriter(): { write(c: Uint8Array): Promise<void>; close(): Promise<void> } };
   };
-};

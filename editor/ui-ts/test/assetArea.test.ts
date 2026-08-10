@@ -182,7 +182,7 @@ describe('ED-20: ассет с отказом показан причиной и
     expect(fixture.stage.visuals.at(-1)?.entities[PREVIEW_ENTRY]?.model).toBe(ASSET_IDS.hero);
     // И клипы целой модели доехали до выбора автора (ED-20).
     const options = findAll(fixture.frame.view(), (node) => node.tag === 'option').map(
-      (node) => node.attrs?.['value'],
+      (node) => node.attrs?.value,
     );
     expect(options).toContain('Walk');
   });
@@ -342,7 +342,7 @@ describe('ED-20/ED-29: выбор пишется операцией и отме�
     const model = (): unknown =>
       (
         (fixture.session.documentValue(ASSET_IDS.visuals) as { entities: Record<string, { model: string }> })
-          .entities['Hero']
+          .entities.Hero
       )?.model;
 
     selectRow(fixture, ASSET_IDS.hero);
@@ -384,7 +384,7 @@ describe('ED-20/ED-29: выбор пишется операцией и отме�
         entities: Record<string, { skins?: Record<string, Record<string, string>> }>;
       }
     ).entities;
-    expect(entities['Hero']?.skins?.['red']?.['0']).toBe(ASSET_IDS.skin);
+    expect(entities.Hero?.skins?.red?.['0']).toBe(ASSET_IDS.skin);
     // Скин, которого нет, скином по умолчанию не становится: подменять нечего.
     expect(() =>
       session.applyOperation(VISUALS_OPERATIONS.setDefaultSkin, {
@@ -477,7 +477,7 @@ describe('ED-1: правила формата спрашиваются у мод
       session.documentValue(ASSET_IDS.visuals) as {
         entities: Record<string, { skins?: Record<string, unknown> }>;
       }
-    ).entities['Hero']?.skins;
+    ).entities.Hero?.skins;
 
   it('номер слота отвергает валидатор манифеста, а не копия его правила', () => {
     const session = opened();
@@ -493,7 +493,7 @@ describe('ED-1: правила формата спрашиваются у мод
       }),
     ).toThrow(/textureSlot/);
     // Отказ не оставил полуправки: скина, который заводила упавшая операция, нет.
-    expect(skinsOf(session)?.['red']).toBeUndefined();
+    expect(skinsOf(session)?.red).toBeUndefined();
   });
 
   it('скин по умолчанию сверяет с подменами тот же валидатор', () => {
@@ -525,7 +525,7 @@ describe('ED-1: правила формата спрашиваются у мод
     const entities = (
       session.documentValue(ASSET_IDS.visuals) as { entities: Record<string, { model: string }> }
     ).entities;
-    expect(entities['Hero']?.model).toBe(ASSET_IDS.broken);
+    expect(entities.Hero?.model).toBe(ASSET_IDS.broken);
   });
 });
 

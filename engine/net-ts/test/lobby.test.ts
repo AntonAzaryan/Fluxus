@@ -156,7 +156,7 @@ describe('отказы во входе', () => {
 describe('переход к матчу', () => {
   it('Begin уходит только после заморозки', async () => {
     const { lobby } = await assemble();
-    expect(() => lobby.begin('fluxus1.матч')).toThrow();
+    expect(() => { lobby.begin('fluxus1.матч'); }).toThrow();
   });
 
   it('Begin несёт адрес матча и ростер, после чего фаза лобби кончается', async () => {

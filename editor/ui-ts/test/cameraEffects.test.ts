@@ -258,7 +258,7 @@ function optionsOf(root: UiNode, label: string): readonly string[] {
   const select = findAll(root, (node) => node.labels?.ariaLabel?.key === label)[0];
   if (select === undefined) throw new Error(`нет списка с подписью "${label}"`);
   return findAll(select, (node) => node.tag === 'option').map(
-    (node) => node.attrs?.['value'] ?? '',
+    (node) => node.attrs?.value ?? '',
   );
 }
 

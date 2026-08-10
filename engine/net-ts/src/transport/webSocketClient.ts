@@ -17,8 +17,8 @@ class WebSocketClientTransport extends BaseTransport {
       const data: unknown = event.data;
       if (data instanceof ArrayBuffer) this.deliver(new Uint8Array(data));
     });
-    socket.addEventListener('close', () => this.closedByPeer());
-    socket.addEventListener('error', () => this.closedByPeer('ошибка сокета'));
+    socket.addEventListener('close', () => { this.closedByPeer(); });
+    socket.addEventListener('error', () => { this.closedByPeer('ошибка сокета'); });
   }
 
   send(bytes: Uint8Array): void {
@@ -35,8 +35,8 @@ class WebSocketClientTransport extends BaseTransport {
 export function connectWebSocket(url: string): Promise<Transport> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
-    socket.addEventListener('open', () => resolve(new WebSocketClientTransport(socket)), { once: true });
-    socket.addEventListener('error', () => reject(new Error(`не удалось подключиться к ${url}`)), {
+    socket.addEventListener('open', () => { resolve(new WebSocketClientTransport(socket)); }, { once: true });
+    socket.addEventListener('error', () => { reject(new Error(`не удалось подключиться к ${url}`)); }, {
       once: true,
     });
   });

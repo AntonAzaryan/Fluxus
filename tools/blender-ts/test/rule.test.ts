@@ -292,7 +292,7 @@ describe('ED-12, ED-20: среда без бинарного чтения отв
 
     expect(issues).toHaveLength(1);
     expect(issues[0]!.reasonKey).toBe('validation.reason.blender.spatialLayerSync.sourceUnreadable');
-    expect(issues[0]!.reasonParams['reason']).toContain('двоичные');
+    expect(issues[0]!.reasonParams.reason).toContain('двоичные');
     expect(issues[0]!.expected).toMatchObject({ kind: 'accepted' });
   });
 
@@ -306,7 +306,7 @@ describe('ED-12, ED-20: среда без бинарного чтения отв
 
     expect(issues).toHaveLength(1);
     expect(issues[0]!.reasonKey).toBe('validation.reason.blender.spatialLayerSync.sourceRejected');
-    expect(issues[0]!.reasonParams['reason']).toContain('gamma-ghost');
+    expect(issues[0]!.reasonParams.reason).toContain('gamma-ghost');
   });
 });
 
@@ -373,7 +373,7 @@ describe('BLND-2: производные данные — это и карты �
 
     const issues = issuesOf(editor, spatialLayerSyncRule({ sources }));
 
-    expect(issues.map((issue) => issue.reasonParams['slot'])).toEqual(['terrain.flags', 'terrain.flags']);
+    expect(issues.map((issue) => issue.reasonParams.slot)).toEqual(['terrain.flags', 'terrain.flags']);
     expect(issues[0]!.path).toEqual(['terrain', 'flags', 0]);
   });
 

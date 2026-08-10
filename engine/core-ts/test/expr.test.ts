@@ -257,13 +257,13 @@ const EXPR_8_TABLE: readonly string[] = [
  * `odd`, `literals` и `ranges` опущены там, где норма их не задаёт: умолчания —
  * `false`, пустой список, пустой список.
  */
-type ExpectedShape = {
+interface ExpectedShape {
   readonly min: number;
   readonly max: number;
   readonly odd?: boolean;
   readonly literals?: readonly number[];
   readonly ranges?: readonly (readonly [number, number, number])[];
-};
+}
 
 const EXPR_8_SHAPES: Readonly<Record<string, ExpectedShape>> = {
   // окружение и мир

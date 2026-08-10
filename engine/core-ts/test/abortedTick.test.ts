@@ -314,7 +314,7 @@ describe('сообщение об ошибке класса 3 (SYS-9)', () => {
 describe('система из данных валидна до тика (SYS-3)', () => {
   it('все системы этого файла проходят регистрацию: обрыв — не дефект формы', () => {
     const world = createWorld([Mark], PREFABS);
-    for (const def of SYSTEMS) expect(() => validateSystem(def, world)).not.toThrow();
+    for (const def of SYSTEMS) expect(() => { validateSystem(def, world); }).not.toThrow();
     // Исполнитель, а не валидатор: пустой диапазон вычисляется и на регистрации неизвестен.
     expect(new EvaluatedSystem(THIRD).name).toBe('Third');
   });

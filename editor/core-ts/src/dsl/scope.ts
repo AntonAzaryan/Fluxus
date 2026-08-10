@@ -86,11 +86,11 @@ export function boundNamesAt(
   for (const name of outer) add(names, name);
   if (!isJsonObject(system)) return Object.freeze(names.list);
 
-  const body = system['do'];
+  const body = system.do;
   if (path[0] === 'do' && body !== undefined) {
     // Сахар `query` (SYS-1): тело системы с запросом — тело развёрнутого
     // `forEach`, и его переменная итерации связана так же, как у действия.
-    if (system['query'] !== undefined) {
+    if (system.query !== undefined) {
       const as = system[BINDING_SLOT];
       add(names, typeof as === 'string' ? as : DEFAULT_ITERATION_NAME);
     }

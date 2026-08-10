@@ -75,7 +75,7 @@ const SLOT: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation
  * Читатели ниже — приведение типа, а не вторая проверка: схему параметров уже
  * сверил слой операций к моменту вызова `apply` (ED-30).
  */
-const asDocument = (params: OperationParams): DocumentId => params['document'] as DocumentId;
+const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
 const asString = (params: OperationParams, name: string): string => params[name] as string;
 
 /** Путь записи манифеста внутри документа. */

@@ -209,7 +209,7 @@ export function validatePresentationScene(
   if (list !== undefined && !Array.isArray(list)) {
     errors.push(`decorations: ожидался список записей размещения, получено ${typeName(list)}`);
   } else if (Array.isArray(list)) {
-    list.forEach((entry, index) => validateRecord(entry, `decorations[${index}]`, errors));
+    list.forEach((entry, index) => { validateRecord(entry, `decorations[${index}]`, errors); });
   }
   if (errors.length > 0) return { ok: false, errors };
   // Отсутствующий и пустой список неразличимы (PRES-2): наружу и то и другое

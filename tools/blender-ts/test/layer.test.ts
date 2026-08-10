@@ -43,7 +43,7 @@ describe('BLND-3: узел с prefab даёт запись расстановк�
   });
 
   it('проект, не назвавший, где лежит поворот, курса не хранит', () => {
-    expect(Object.keys(layer.initial[1]?.['overrides'] as object)).toEqual([
+    expect(Object.keys(layer.initial[1]?.overrides as object)).toEqual([
       'Locomotion',
       'Player',
       'Position',
@@ -80,8 +80,8 @@ describe('BLND-3: узел с visual даёт запись decoration', () => {
 
   it('сим-полей в записи нет ни под каким именем (PRES-2)', () => {
     for (const record of layer.decorations) {
-      expect(record['prefab']).toBeUndefined();
-      expect(record['overrides']).toBeUndefined();
+      expect(record.prefab).toBeUndefined();
+      expect(record.overrides).toBeUndefined();
     }
   });
 });
@@ -91,8 +91,8 @@ describe('BLND-4: порядок записей — лексикографиче
 
   it('расстановка упорядочена именами, а не порядком узлов glTF', () => {
     // В документе узлы идут zeta-hero, alpha-hero: порядок обхода другой.
-    expect(layer.initial.map((record) => record['prefab'])).toEqual(['Hero', 'Hero']);
-    expect(layer.initial[0]?.['overrides']).toEqual({
+    expect(layer.initial.map((record) => record.prefab)).toEqual(['Hero', 'Hero']);
+    expect(layer.initial[0]?.overrides).toEqual({
       Position: { x: fixed.fromFloat(-1.5), y: fixed.fromFloat(-2.25) },
     });
   });
@@ -125,8 +125,8 @@ describe('BLND-4: квантование выполняет импортёр д�
       object.name === 'beta-statue' ? { ...object, x: 1.23456789, yaw: 0.12345678 } : object,
     );
     const [record] = generateSpatialLayer(objects, context()).decorations;
-    expect(record?.['x']).toBe(1.235);
-    expect(record?.['yaw']).toBe(0.1235);
+    expect(record?.x).toBe(1.235);
+    expect(record?.yaw).toBe(0.1235);
   });
 });
 
@@ -184,7 +184,7 @@ describe('BLND-3, BLND-6: находки называют объект Blender',
     expect(messagesFor(layer.findings, 'alpha-hero')[0]).toContain('из трансформа объекта');
     expect(hasErrors(layer.findings)).toBe(true);
     // Значение custom property в запись не уехало: позиция осталась трансформной.
-    expect(layer.initial[0]?.['overrides']).toEqual({
+    expect(layer.initial[0]?.overrides).toEqual({
       Position: { x: fixed.fromFloat(-1.5), y: fixed.fromFloat(-2.25) },
     });
   });

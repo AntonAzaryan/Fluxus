@@ -232,10 +232,10 @@ describe('BLND-9, BLND-10: карты ассетов пишет та же опе
     editor.applyOperation(IMPORT_SPATIAL_LAYER, paramsWithMaps(layerOf()));
 
     const terrain = (editor.documentValue(SCENE_ID) as { terrain: Record<string, unknown> }).terrain;
-    expect(terrain['levels']).toEqual([...TERRAIN_LEVELS]);
-    expect(terrain['flags']).toEqual([...TERRAIN_FLAGS]);
-    expect(terrain['width']).toBe(4);
-    expect(terrain['tileSize']).toBe(65536);
+    expect(terrain.levels).toEqual([...TERRAIN_LEVELS]);
+    expect(terrain.flags).toEqual([...TERRAIN_FLAGS]);
+    expect(terrain.width).toBe(4);
+    expect(terrain.tileSize).toBe(65536);
     // Порядок ключей ассета прежний: импорт правит ряды карт, а не пересобирает
     // документ (ED-21).
     expect(Object.keys(terrain)).toEqual(Object.keys(TERRAIN_ASSET));

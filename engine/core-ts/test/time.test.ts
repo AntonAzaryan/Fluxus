@@ -86,7 +86,7 @@ function harness(scene: SceneDef = SCENE) {
 
 describe('компонент TimeScale (TIME-2, TIME-3)', () => {
   it('по умолчанию единица — без источников темп обычный', () => {
-    expect(TIME_SCALE_SCHEMA.defaults?.['value']).toBe(FIXED_ONE);
+    expect(TIME_SCALE_SCHEMA.defaults?.value).toBe(FIXED_ONE);
   });
 
   it('сущность без компонента получает globalDelta без изменений', () => {
@@ -100,7 +100,7 @@ describe('компонент TimeScale (TIME-2, TIME-3)', () => {
   it('источник 0.5 — половина шага за тик', () => {
     const h = harness();
     const entity = h.place('Slowable');
-    h.step((ctx) => h.mods.add(ctx, entity, 1, F(0.5)));
+    h.step((ctx) => { h.mods.add(ctx, entity, 1, F(0.5)); });
     expect(h.scaleOf(entity)).toBe(F(0.5));
     expect(h.deltaOf(entity)).toBe(F(0.125));
   });
@@ -113,23 +113,23 @@ describe('стакинг источников (TIME-7)', () => {
   it('два независимых замедления перемножаются', () => {
     const h = harness();
     const entity = h.place('Slowable');
-    h.step((ctx) => h.mods.add(ctx, entity, 1, F(0.5)));
-    h.step((ctx) => h.mods.add(ctx, entity, 2, F(0.5)));
+    h.step((ctx) => { h.mods.add(ctx, entity, 1, F(0.5)); });
+    h.step((ctx) => { h.mods.add(ctx, entity, 2, F(0.5)); });
     expect(h.scaleOf(entity)).toBe(F(0.25));
   });
 
   it('околонулевое произведение клампится снизу, а не делит на ~0', () => {
     const h = harness();
     const entity = h.place('Slowable');
-    h.step((ctx) => h.mods.add(ctx, entity, 1, F(0.001)));
+    h.step((ctx) => { h.mods.add(ctx, entity, 1, F(0.001)); });
     expect(h.scaleOf(entity)).toBe(TIME_SCALE_MIN);
   });
 
   it('ускорение клампится сверху', () => {
     const h = harness();
     const entity = h.place('Slowable');
-    h.step((ctx) => h.mods.add(ctx, entity, 1, fixed.fromInt(3)));
-    h.step((ctx) => h.mods.add(ctx, entity, 2, fixed.fromInt(3)));
+    h.step((ctx) => { h.mods.add(ctx, entity, 1, fixed.fromInt(3)); });
+    h.step((ctx) => { h.mods.add(ctx, entity, 2, fixed.fromInt(3)); });
     expect(h.scaleOf(entity)).toBe(TIME_SCALE_MAX);
   });
 
@@ -168,7 +168,7 @@ describe('распределение слотов (TIME-7, TIME-8)', () => {
   it('нулевой id источника запрещён', () => {
     const h = harness();
     const entity = h.place('Slowable');
-    expect(() => h.step((ctx) => h.mods.add(ctx, entity, 0, F(0.5)))).toThrow(/не может быть нулём/);
+    expect(() => h.step((ctx) => { h.mods.add(ctx, entity, 0, F(0.5)); })).toThrow(/не может быть нулём/);
   });
 
   it('имена слотов выравниваются нулями при числе слотов больше десяти (SER-6)', () => {
@@ -185,8 +185,8 @@ describe('распределение слотов (TIME-7, TIME-8)', () => {
     const b = second.place('Slowable');
 
     // Первая сцена занимает слот 0 своей сущности; вторая обязана начать с него же.
-    first.step((ctx) => first.mods.add(ctx, a, 1, F(0.5)));
-    second.step((ctx) => second.mods.add(ctx, b, 2, F(0.25)));
+    first.step((ctx) => { first.mods.add(ctx, a, 1, F(0.5)); });
+    second.step((ctx) => { second.mods.add(ctx, b, 2, F(0.25)); });
 
     expect(getField(first.world, a, 'TimeScaleModifiers', 'id0')).toBe(1);
     expect(getField(second.world, b, 'TimeScaleModifiers', 'id0')).toBe(2);
@@ -217,10 +217,10 @@ describe('управление источниками из систем (TIME-8)
   it('снятие источника возвращает обычный темп', () => {
     const h = harness();
     const entity = h.place('Slowable');
-    h.step((ctx) => h.mods.add(ctx, entity, 7, F(0.5)));
+    h.step((ctx) => { h.mods.add(ctx, entity, 7, F(0.5)); });
     expect(h.scaleOf(entity)).toBe(F(0.5));
 
-    h.step((ctx) => h.mods.remove(ctx, entity, 7));
+    h.step((ctx) => { h.mods.remove(ctx, entity, 7); });
     expect(h.scaleOf(entity)).toBe(FIXED_ONE);
     expect(h.deltaOf(entity)).toBe(GLOBAL_DELTA);
   });
@@ -228,7 +228,7 @@ describe('управление источниками из систем (TIME-8)
   it('неизменившееся значение не пишется — сущность не становится dirty', () => {
     const h = harness();
     const entity = h.place('Slowable');
-    h.step((ctx) => h.mods.add(ctx, entity, 1, F(0.5)));
+    h.step((ctx) => { h.mods.add(ctx, entity, 1, F(0.5)); });
     expect(h.step().changes.changedEntities(TIME_SCALE_COMPONENT).has(entity)).toBe(false);
     expect(h.scaleOf(entity)).toBe(F(0.5));
   });

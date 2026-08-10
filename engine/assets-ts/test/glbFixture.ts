@@ -125,7 +125,7 @@ export async function buildGlbFixture(): Promise<GlbFixture> {
   bin.set(JPEG_BYTES, jpegOffset);
 
   const bufferViews = [
-    ...(doc['bufferViews'] as Record<string, number>[]),
+    ...(doc.bufferViews as Record<string, number>[]),
     { buffer: 0, byteOffset: pngOffset, byteLength: png.length },
     { buffer: 0, byteOffset: jpegOffset, byteLength: JPEG_BYTES.length },
   ];

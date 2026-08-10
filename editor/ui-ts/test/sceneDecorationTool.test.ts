@@ -28,11 +28,11 @@ const AT_UNSEEN = { x: 50, y: 10 };
 const AT_EMPTY = { x: 90, y: 90 };
 
 const down = (f: LoadedFrameFixture, at: { x: number; y: number }, additive = false): void =>
-  f.pointer({ phase: 'down', ...at, additive });
+  { f.pointer({ phase: 'down', ...at, additive }); };
 const up = (f: LoadedFrameFixture, at: { x: number; y: number }): void =>
-  f.pointer({ phase: 'up', ...at, additive: false });
+  { f.pointer({ phase: 'up', ...at, additive: false }); };
 const move = (f: LoadedFrameFixture, at: { x: number; y: number }): void =>
-  f.pointer({ phase: 'move', ...at, additive: false });
+  { f.pointer({ phase: 'move', ...at, additive: false }); };
 
 const placementKeys = (f: LoadedFrameFixture): readonly string[] =>
   f.session.descriptors(FIXTURE_IDS.config, PLACEMENT_LIST);

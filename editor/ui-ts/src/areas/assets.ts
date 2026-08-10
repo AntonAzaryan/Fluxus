@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * @contribution Рабочая область просмотрщика presentation-ассетов (ED-20) —
  * вклад, а не часть каркаса.

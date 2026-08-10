@@ -168,7 +168,7 @@ function fields(
 }
 
 function overridesOf(a: Args, ctx: SystemContext, vars: ExprVars): FieldOverrides | undefined {
-  const raw = a['overrides'];
+  const raw = a.overrides;
   if (raw === undefined) return undefined;
   const byComponent = args(raw, 'spawnEntity');
   const result: Record<string, Record<string, number>> = {};
@@ -196,8 +196,8 @@ function querySpec(raw: unknown, ctx: SystemContext, vars: ExprVars): QuerySpec 
   };
 
   let withinRadius: { center: Vec2; radius: Fixed } | undefined;
-  if (q['withinRadius'] !== undefined) {
-    const spec = args(q['withinRadius'], 'forEach');
+  if (q.withinRadius !== undefined) {
+    const spec = args(q.withinRadius, 'forEach');
     const center = evaluate(argExpr(spec, 'center', 'forEach'), ctx, vars);
     if (typeof center !== 'object') throw new Error('действие "forEach": "center" — вектор');
     withinRadius = { center, radius: num(evaluate(argExpr(spec, 'radius', 'forEach'), ctx, vars), 'forEach') };
@@ -207,7 +207,7 @@ function querySpec(raw: unknown, ctx: SystemContext, vars: ExprVars): QuerySpec 
     all: names('all'),
     any: names('any'),
     not: names('not'),
-    withTag: q['withTag'] === undefined ? undefined : argStr(q, 'withTag', 'forEach'),
+    withTag: q.withTag === undefined ? undefined : argStr(q, 'withTag', 'forEach'),
     withinRadius,
   };
 }
@@ -224,7 +224,7 @@ function bindRandom(
   draw: (stream: RngStream) => number,
 ): void {
   const as = argStr(a, 'as', action);
-  const sub = a['subStream'];
+  const sub = a.subStream;
   const stream = sub === undefined ? ctx.rng.stream() : ctx.rng.stream(argStr(a, 'subStream', action));
   execute(argBody(a, 'do', action), ctx, { ...vars, [as]: draw(stream) }, 'do');
 }
@@ -331,9 +331,9 @@ const ACTIONS: Record<string, ActionFn> = {
     const at = evaluate(argExpr(a, 'at', 'carveFloor'), ctx, vars);
     if (typeof at !== 'object') throw new Error('действие "carveFloor": "at" — вектор');
     const radius =
-      a['radius'] === undefined
+      a.radius === undefined
         ? undefined
-        : num(evaluate(a['radius'] as Expression, ctx, vars), 'carveFloor');
+        : num(evaluate(a.radius as Expression, ctx, vars), 'carveFloor');
     carveFloorInTerrain(ctx, at, radius);
   },
   /** Снятие источника по `id` (TIME-8); отсутствующий id — не ошибка. */
@@ -347,7 +347,7 @@ const ACTIONS: Record<string, ActionFn> = {
   if: (a, ctx, vars) => {
     const cond = evaluate(argExpr(a, 'cond', 'if'), ctx, vars);
     if (typeof cond !== 'boolean') throw new Error(`действие "if": условие должно быть булевым, получено ${typeof cond}`);
-    const branch = cond ? argBody(a, 'then', 'if') : a['else'] === undefined ? [] : argBody(a, 'else', 'if');
+    const branch = cond ? argBody(a, 'then', 'if') : a.else === undefined ? [] : argBody(a, 'else', 'if');
     execute(branch, ctx, vars, cond ? 'then' : 'else');
   },
   /** Биндинги вычисляются во внешней области — параллельно, а не по цепочке: иначе результат зависел бы от порядка имён. */
@@ -383,7 +383,7 @@ const ACTIONS: Record<string, ActionFn> = {
     const body = argBody(a, 'do', 'forEach');
     // Результат материализован на момент вызова (QUERY-3), а мутации отложены
     // до flush (CMD-1) — итерация стабильна независимо от тела.
-    for (const entity of ctx.query(querySpec(a['query'], ctx, vars))) {
+    for (const entity of ctx.query(querySpec(a.query, ctx, vars))) {
       execute(body, ctx, { ...vars, [as]: entity }, 'do');
     }
   },

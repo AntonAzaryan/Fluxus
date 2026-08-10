@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * @contribution Рабочая область объектов (ED-7, ED-6, ED-19, ED-23) — вклад, а
  * не часть каркаса.

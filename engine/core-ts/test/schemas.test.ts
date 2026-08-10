@@ -15,7 +15,7 @@ import {
 const SCHEMA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'schemas');
 
 // `npm run schemas` перезаписывает файлы; обычный прогон только сверяет (SER-5).
-const UPDATE = process.env['UPDATE_SCHEMAS'] === '1';
+const UPDATE = process.env.UPDATE_SCHEMAS === '1';
 
 describe('engine/schemas (SER-5)', () => {
   if (UPDATE) {

@@ -137,7 +137,7 @@ describe('ED-25: реестры вкладов', () => {
   it('отвергает второй вклад с тем же id', () => {
     const contributions = createEditorContributions();
     contributions.areas.register(sceneArea);
-    expect(() => contributions.areas.register({ ...sceneArea, hotkey: 'F9' })).toThrow(
+    expect(() => { contributions.areas.register({ ...sceneArea, hotkey: 'F9' }); }).toThrow(
       /уже зарегистрирован/,
     );
   });
@@ -146,11 +146,11 @@ describe('ED-25: реестры вкладов', () => {
     const contributions = createEditorContributions();
     contributions.fieldEditors.register(numberField);
     expect(() =>
-      contributions.fieldEditors.register({ ...vectorField, fieldType: 'number' }),
+      { contributions.fieldEditors.register({ ...vectorField, fieldType: 'number' }); },
     ).toThrow(/тип поля "number" — за вкладом "field.number"/);
 
     contributions.areas.register(sceneArea);
-    expect(() => contributions.areas.register({ ...objectsArea, hotkey: 'F1' })).toThrow(
+    expect(() => { contributions.areas.register({ ...objectsArea, hotkey: 'F1' }); }).toThrow(
       /горячая клавиша "F1" — за вкладом "scene"/,
     );
   });
@@ -163,7 +163,7 @@ describe('ED-25: реестры вкладов', () => {
     expect(contributions.fieldEditors.get('field.number')).toBe(replacement);
     expect(contributions.fieldEditors.all()).toHaveLength(1);
 
-    expect(() => contributions.fieldEditors.override(vectorField)).toThrow(/не зарегистрирован/);
+    expect(() => { contributions.fieldEditors.override(vectorField); }).toThrow(/не зарегистрирован/);
   });
 
   it('отвергает вклад без ключа описания', () => {
@@ -171,12 +171,12 @@ describe('ED-25: реестры вкладов', () => {
     // пустое от отсутствующего внешний потребитель не отличит: ED-28 требует
     // показывать сам ключ, а не прятать отсутствие.
     const contributions = createEditorContributions();
-    expect(() => contributions.areas.register({ ...sceneArea, descriptionKey: ' ' })).toThrow(
+    expect(() => { contributions.areas.register({ ...sceneArea, descriptionKey: ' ' }); }).toThrow(
       /пустой ключ описания/,
     );
     contributions.fieldEditors.register(numberField);
     expect(() =>
-      contributions.fieldEditors.override({ ...numberField, descriptionKey: '' }),
+      { contributions.fieldEditors.override({ ...numberField, descriptionKey: '' }); },
     ).toThrow(/пустой ключ описания/);
   });
 

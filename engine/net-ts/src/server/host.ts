@@ -30,7 +30,7 @@ export class MatchHost {
     this.server = server;
     this.transports = transports;
     this.codec = serverCodec(options.serializer ?? DEFAULT_SERIALIZER);
-    this.transports.onConnection((transport) => this.attach(transport));
+    this.transports.onConnection((transport) => { this.attach(transport); });
   }
 
   private attach(transport: Transport): void {
@@ -83,7 +83,7 @@ export class MatchHost {
   start(): void {
     if (this.timer !== undefined) return;
     const periodMs = 1000 / this.server.pacing.tickRate;
-    this.timer = setInterval(() => this.step(), periodMs);
+    this.timer = setInterval(() => { this.step(); }, periodMs);
   }
 
   async stop(): Promise<void> {

@@ -276,7 +276,7 @@ describe('ED-12: среда, не прочитавшая источник, от�
     const issues = syncIssues(state);
     expect(issues).toHaveLength(1);
     expect(issues[0]!.reasonKey).toContain('sourceUnreadable');
-    expect(issues[0]!.reasonParams['reason']).toContain(reason);
+    expect(issues[0]!.reasonParams.reason).toContain(reason);
     // Причина доходит до автора текстом, с подставленным параметром: «прочитать
     // не удалось» и «расхождения нет» обязаны различаться на странице, а не
     // только в коде находки.

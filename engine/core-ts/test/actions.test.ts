@@ -202,13 +202,13 @@ describe('spawnEntity с переопределением полей prefab (CMD
   it('падает на компоненте, которого нет в prefab', () => {
     const h = harness();
     execute([{ spawnEntity: { prefab: 'Projectile', overrides: { Health: { current: F(1) } } } }], h.ctx);
-    expect(() => h.commands.flush()).toThrow(/не содержит компонент "Health"/);
+    expect(() => { h.commands.flush(); }).toThrow(/не содержит компонент "Health"/);
   });
 
   it('падает на несуществующем поле', () => {
     const h = harness();
     execute([{ spawnEntity: { prefab: 'Projectile', overrides: { Position: { z: F(1) } } } }], h.ctx);
-    expect(() => h.commands.flush()).toThrow(/нет поля "z"/);
+    expect(() => { h.commands.flush(); }).toThrow(/нет поля "z"/);
   });
 });
 
@@ -222,7 +222,7 @@ describe('итерация по событиям тика (ACT-1, EVT-2)', () =>
     },
   });
 
-  const types = (h: Harness): string[] => [...h.events].map((e) => `${e.type}:${e.data['n']}`);
+  const types = (h: Harness): string[] => [...h.events].map((e) => `${e.type}:${e.data.n}`);
 
   it('обходит только события своего типа, в порядке публикации', () => {
     const h = harness();
@@ -261,11 +261,11 @@ describe('итерация по событиям тика (ACT-1, EVT-2)', () =>
     h.events.emit('Collision', { n: 1 });
     const after: Action = { emitEvent: { type: 'Reacted', data: { n: { eventField: [{ var: 'hit' }, 'n'] } } } };
 
-    expect(() => execute([react('Collision'), after], h.ctx)).toThrow(/неизвестная переменная "hit"/);
+    expect(() => { execute([react('Collision'), after], h.ctx); }).toThrow(/неизвестная переменная "hit"/);
   });
 
   it('тип события — строковый литерал, а не выражение', () => {
-    expect(() => execute([{ forEachEvent: { type: { var: 'x' }, as: 'hit', do: [] } }], harness().ctx)).toThrow(
+    expect(() => { execute([{ forEachEvent: { type: { var: 'x' }, as: 'hit', do: [] } }], harness().ctx); }).toThrow(
       /строковый литерал/,
     );
   });
@@ -373,26 +373,26 @@ describe('управляющие действия', () => {
 
 describe('ошибки формы (ACT-1)', () => {
   it('падает на неизвестном действии', () => {
-    expect(() => execute([{ teleport: {} }], harness().ctx)).toThrow(/неизвестное действие "teleport"/);
+    expect(() => { execute([{ teleport: {} }], harness().ctx); }).toThrow(/неизвестное действие "teleport"/);
   });
 
   it('не разрешает имена из цепочки прототипов', () => {
-    expect(() => execute([{ constructor: {} }], harness().ctx)).toThrow(/неизвестное действие/);
+    expect(() => { execute([{ constructor: {} }], harness().ctx); }).toThrow(/неизвестное действие/);
   });
 
   it('падает на узле с двумя действиями', () => {
-    expect(() => execute([{ destroyEntity: { entity: 1 }, emitEvent: { type: 'X' } }], harness().ctx)).toThrow(
+    expect(() => { execute([{ destroyEntity: { entity: 1 }, emitEvent: { type: 'X' } }], harness().ctx); }).toThrow(
       /ровно одно действие/,
     );
   });
 
   it('требует строковый литерал в имени компонента', () => {
     const bad = { modifyComponent: { entity: 1, component: { var: 'c' }, values: {} } };
-    expect(() => execute([bad], harness().ctx)).toThrow(/строковый литерал/);
+    expect(() => { execute([bad], harness().ctx); }).toThrow(/строковый литерал/);
   });
 
   it('требует булево в условии if', () => {
-    expect(() => execute([{ if: { cond: F(1), then: [] } }], harness().ctx)).toThrow(/булевым/);
+    expect(() => { execute([{ if: { cond: F(1), then: [] } }], harness().ctx); }).toThrow(/булевым/);
   });
 
   it('addTween, addModifier и removeModifier в наборе (ACT-1)', () => {
@@ -481,14 +481,14 @@ describe('источники-модификаторы из DSL (ACT-1, TIME-8)',
     const hero = spawn(h.world, 'Hero');
 
     expect(() =>
-      execute(
+      { execute(
         [
           { addModifier: { entity: hero, component: SLOW.component, id: 1, value: F(0.5) } },
           { addModifier: { entity: hero, component: SLOW.component, id: 2, value: F(0.5) } },
           { addModifier: { entity: hero, component: SLOW.component, id: 3, value: F(0.5) } },
         ],
         h.ctx,
-      ),
+      ); },
     ).toThrow(/все 2 слот/);
   });
 
@@ -496,7 +496,7 @@ describe('источники-модификаторы из DSL (ACT-1, TIME-8)',
     const h = harness();
     const hero = spawn(h.world, 'Hero');
     expect(() =>
-      execute([{ addModifier: { entity: hero, component: SLOW.component, id: 0, value: F(0.5) } }], h.ctx),
+      { execute([{ addModifier: { entity: hero, component: SLOW.component, id: 0, value: F(0.5) } }], h.ctx); },
     ).toThrow(/не может быть нулём/);
   });
 
@@ -504,7 +504,7 @@ describe('источники-модификаторы из DSL (ACT-1, TIME-8)',
     const h = harness();
     const hero = spawn(h.world, 'Hero');
     expect(() =>
-      execute([{ addModifier: { entity: hero, component: 'Shield', id: 1, value: F(0.5) } }], h.ctx),
+      { execute([{ addModifier: { entity: hero, component: 'Shield', id: 1, value: F(0.5) } }], h.ctx); },
     ).toThrow(/не подключает/);
   });
 });
@@ -549,11 +549,11 @@ describe('random и randomBelow (ACT-1, RNG-6)', () => {
     const h = harness();
     const hero = spawn(h.world, 'Hero');
     const after = { modifyComponent: { entity: hero, component: 'Health', values: { current: { var: 'r' } } } };
-    expect(() => execute([{ random: { as: 'r', do: [] } }, after], h.ctx)).toThrow(/неизвестная переменная "r"/);
+    expect(() => { execute([{ random: { as: 'r', do: [] } }, after], h.ctx); }).toThrow(/неизвестная переменная "r"/);
   });
 
   it('subStream — строковый литерал, а не выражение', () => {
-    expect(() => execute([{ random: { as: 'r', subStream: { var: 'x' }, do: [] } }], harness().ctx)).toThrow(
+    expect(() => { execute([{ random: { as: 'r', subStream: { var: 'x' }, do: [] } }], harness().ctx); }).toThrow(
       /строковый литерал/,
     );
   });
@@ -620,7 +620,7 @@ describe('перечень обязательных аргументов и чт
     const hero = spawn(h.world, 'Hero');
     const args = { ...(Object.values(node)[0] as Record<string, unknown>) };
     // `entity` фиксируется на живую сущность уже поднятого мира.
-    if (args['entity'] !== undefined) args['entity'] = hero;
+    if (args.entity !== undefined) args.entity = hero;
     try {
       execute([{ [Object.keys(node)[0]!]: args }], h.ctx);
       return '';

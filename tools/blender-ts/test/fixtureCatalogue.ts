@@ -97,7 +97,7 @@ function narrowRampTerrain(): Uint8Array {
 /** Полный источник: размещения, terrain-объект и curvature-объект одним файлом. */
 function fullSource(): Uint8Array {
   const grids = gridSource([TERRAIN_GRID, CURVATURE_GRID]);
-  const nodes = [...(grids.json['nodes'] as Record<string, unknown>[]), ...PLACEMENT_NODES];
+  const nodes = [...(grids.json.nodes as Record<string, unknown>[]), ...PLACEMENT_NODES];
   return packGlb(
     { ...grids.json, nodes, scenes: [{ nodes: nodes.map((_, index) => index) }] },
     grids.binary,

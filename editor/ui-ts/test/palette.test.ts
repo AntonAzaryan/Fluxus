@@ -104,7 +104,7 @@ describe('ED-24, ED-30: операции приходят из каталога,
     // Параметры операции палитре взять неоткуда (ED-25), и она говорит об этом
     // недоступностью, а не молчанием (ED-26).
     expect(attr(row ?? { tag: 'div' }, 'aria-disabled')).toBe('true');
-    expect(row?.on?.['click']).toBeUndefined();
+    expect(row?.on?.click).toBeUndefined();
   });
 
   it('команда, взявшая операцию на себя, делает её исполнимой', () => {
@@ -134,7 +134,7 @@ describe('ED-24, ED-30: операции приходят из каталога,
       (node) => attr(node, 'data-id') === NAMED_OPERATION.id,
     )[0];
     expect(attr(row ?? { tag: 'div' }, 'aria-disabled')).toBeUndefined();
-    row?.on?.['click']?.({} as Event);
+    row?.on?.click?.({} as Event);
     expect(ran).toBe(1);
     // Палитра закрывается тем же действием: строка исполнена, показывать
     // собранный по прежнему состоянию список больше нечего.
@@ -264,7 +264,7 @@ describe('ED-24, ED-23: поиск по проекту находит докум
   it('строка запроса верхнего бара открывает палитру набранным', () => {
     const { frame } = buildFrame();
     const search = findAll(frame.view(), (node) => attr(node, 'type') === 'search')[0];
-    search?.on?.['input']?.({ target: { value: 'duel' } } as unknown as Event);
+    search?.on?.input?.({ target: { value: 'duel' } } as unknown as Event);
     expect(frame.searchQuery()).toBe('duel');
     expect(frame.paletteOpen()).toBe(true);
   });

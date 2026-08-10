@@ -255,9 +255,9 @@ describe('карта пола (TERR-6)', () => {
     const prefab = terrainPrefab(grid);
     const values = prefab.components[FLOOR_COMPONENT]!;
     // Клетки 0..39 без пола, 40..79 с полом: граница проходит внутри слова w1.
-    expect(values['w0']).toBe(0);
-    expect(values['w1']).toBe(0xffffff00 | 0);
-    expect(values['w2']).toBe(0xffff);
+    expect(values.w0).toBe(0);
+    expect(values.w1).toBe(0xffffff00 | 0);
+    expect(values.w2).toBe(0xffff);
   });
 
   it('начальные слова лежат в компоненте, а не в объекте террейна', () => {

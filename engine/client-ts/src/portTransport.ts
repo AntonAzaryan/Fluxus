@@ -31,6 +31,7 @@ class PortTransport extends BaseTransport {
     port.onMessage((raw) => {
       const message = raw as WireMessage;
       if (message.t === 'bytes') this.deliver(message.bytes);
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
       else if (message.t === 'close') this.closedByPeer(message.reason);
     });
   }

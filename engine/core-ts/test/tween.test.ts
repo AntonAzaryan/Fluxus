@@ -66,7 +66,7 @@ function addTween(a: TweenArgs): Action {
 function harness(defs: readonly TweenDef[] = DEFS) {
   const { world, systems } = loadScene(SCENE);
   let script: (ctx: SystemContext) => void = () => {};
-  const runner: System = { name: 'Script', order: -100, run: (ctx) => script(ctx) };
+  const runner: System = { name: 'Script', order: -100, run: (ctx) => { script(ctx); } };
   systems.register(runner);
   systems.register(new TweenSystem(defs, { globalDelta: GLOBAL_DELTA }));
 
@@ -127,7 +127,7 @@ describe('продвижение твинов (TWEEN-3, TWEEN-6)', () => {
   it('linear пишет долю пути в поле из target', () => {
     const h = harness();
     const target = h.place();
-    h.step((ctx) => execute([addTween({ entity: target, easing: EASING_LINEAR })], ctx));
+    h.step((ctx) => { execute([addTween({ entity: target, easing: EASING_LINEAR })], ctx); });
 
     expect(h.health(target)).toBe(F(25));
     h.step();
@@ -139,7 +139,7 @@ describe('продвижение твинов (TWEEN-3, TWEEN-6)', () => {
   it('на последнем шаге пишется ровно `to` и компонент снимается', () => {
     const h = harness();
     const target = h.place();
-    h.step((ctx) => execute([addTween({ entity: target })], ctx));
+    h.step((ctx) => { execute([addTween({ entity: target })], ctx); });
     for (let i = 0; i < 3; i++) h.step();
 
     expect(h.health(target)).toBe(F(100));
@@ -152,7 +152,7 @@ describe('продвижение твинов (TWEEN-3, TWEEN-6)', () => {
   it('интерполяция идёт от from, а не от текущего значения поля', () => {
     const h = harness();
     const target = h.place();
-    h.step((ctx) => execute([addTween({ entity: target, from: F(100), to: F(0) })], ctx));
+    h.step((ctx) => { execute([addTween({ entity: target, from: F(100), to: F(0) })], ctx); });
     expect(h.health(target)).toBe(F(75));
   });
 });
@@ -161,7 +161,7 @@ describe('easing (TWEEN-2)', () => {
   it('instant даёт скачок с первого тика, без твина нулевой длительности', () => {
     const h = harness();
     const target = h.place();
-    h.step((ctx) => execute([addTween({ entity: target, easing: EASING_INSTANT })], ctx));
+    h.step((ctx) => { execute([addTween({ entity: target, easing: EASING_INSTANT })], ctx); });
 
     expect(h.health(target)).toBe(F(100));
     expect(h.hasTween(target)).toBe(false);
@@ -170,14 +170,14 @@ describe('easing (TWEEN-2)', () => {
   it('нулевая длительность завершает твин сразу', () => {
     const h = harness();
     const target = h.place();
-    h.step((ctx) => execute([addTween({ entity: target, duration: 0 })], ctx));
+    h.step((ctx) => { execute([addTween({ entity: target, duration: 0 })], ctx); });
     expect(h.health(target)).toBe(F(100));
   });
 
   it('неизвестный easing — ошибка, а не молчаливый linear', () => {
     const h = harness();
     const target = h.place();
-    expect(() => h.step((ctx) => execute([addTween({ entity: target, easing: 42 })], ctx))).toThrow(
+    expect(() => h.step((ctx) => { execute([addTween({ entity: target, easing: 42 })], ctx); })).toThrow(
       /неизвестный easing 42/,
     );
   });
@@ -187,7 +187,7 @@ describe('onComplete (TWEEN-4)', () => {
   it('исполняется по завершении и получает сущность', () => {
     const h = harness();
     const target = h.place();
-    h.step((ctx) => execute([addTween({ entity: target, def: 1, duration: GLOBAL_DELTA })], ctx));
+    h.step((ctx) => { execute([addTween({ entity: target, def: 1, duration: GLOBAL_DELTA })], ctx); });
 
     // Первый же тик доводит elapsed до duration.
     const events = h.step();
@@ -199,7 +199,7 @@ describe('onComplete (TWEEN-4)', () => {
     const h = harness();
     const target = h.place();
     const events = h.step((ctx) =>
-      execute([addTween({ entity: target, def: 1, duration: GLOBAL_DELTA, easing: EASING_INSTANT })], ctx),
+      { execute([addTween({ entity: target, def: 1, duration: GLOBAL_DELTA, easing: EASING_INSTANT })], ctx); },
     );
     expect(events).toEqual([{ type: 'TweenDone', data: { who: target } }]);
   });
@@ -219,7 +219,7 @@ describe('onComplete (TWEEN-4)', () => {
     const target = h.place();
 
     expect(() =>
-      h.step((ctx) => execute([addTween({ entity: target, duration: GLOBAL_DELTA, easing: EASING_INSTANT })], ctx)),
+      h.step((ctx) => { execute([addTween({ entity: target, duration: GLOBAL_DELTA, easing: EASING_INSTANT })], ctx); }),
     ).toThrow(/система "Tween", узел \[0\]\.emitEvent: нет события с индексом 0/);
   });
 });
@@ -228,14 +228,14 @@ describe('учёт TimeScale per-tween (TWEEN-7)', () => {
   it('обычный твин на замедленной сущности идёт вдвое медленнее', () => {
     const h = harness();
     const slowed = h.place('Slowed');
-    h.step((ctx) => execute([addTween({ entity: slowed })], ctx));
+    h.step((ctx) => { execute([addTween({ entity: slowed })], ctx); });
     expect(h.health(slowed)).toBe(F(12.5));
   });
 
   it('помеченный ignoreTimeScale идёт в обычном темпе', () => {
     const h = harness();
     const slowed = h.place('Slowed');
-    h.step((ctx) => execute([addTween({ entity: slowed, ignoreTimeScale: 1 })], ctx));
+    h.step((ctx) => { execute([addTween({ entity: slowed, ignoreTimeScale: 1 })], ctx); });
     expect(h.health(slowed)).toBe(F(25));
   });
 });
@@ -249,7 +249,7 @@ describe('таблица определений', () => {
   it('индекс вне таблицы — ошибка с номером', () => {
     const h = harness();
     const target = h.place();
-    expect(() => h.step((ctx) => execute([addTween({ entity: target, def: 5 })], ctx))).toThrow(
+    expect(() => h.step((ctx) => { execute([addTween({ entity: target, def: 5 })], ctx); })).toThrow(
       /определение 5, в таблице их 2/,
     );
   });

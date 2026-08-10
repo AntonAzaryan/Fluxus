@@ -156,7 +156,7 @@ describe('декларативное сведение набора (REND-11)', (
 
   it('повторяющийся ключ в наборе — ошибка, а не тихая победа последнего (REND-11)', () => {
     const rig = makeRig();
-    expect(() => rig.source.apply([placed('a'), placed('a', { x: 5 })])).toThrow(/дважды/);
+    expect(() => { rig.source.apply([placed('a'), placed('a', { x: 5 })]); }).toThrow(/дважды/);
   });
 });
 

@@ -136,52 +136,52 @@ function version(value: unknown): GameVersion {
 
 export function parseLobbyClientMessage(value: unknown): LobbyClientMessage {
   const source = object(value, 'сообщение лобби');
-  switch (source['type']) {
+  switch (source.type) {
     case 'Join':
       return {
         type: 'Join',
         invite: str(source, 'invite', 'Join'),
         playerId: str(source, 'playerId', 'Join'),
-        version: version(source['version']),
+        version: version(source.version),
       };
     case 'Leave':
-      return { type: 'Leave', reason: typeof source['reason'] === 'string' ? source['reason'] : '' };
+      return { type: 'Leave', reason: typeof source.reason === 'string' ? source.reason : '' };
     default:
-      throw new LobbyProtocolError(`неизвестный тип сообщения лобби: ${JSON.stringify(source['type'])}`);
+      throw new LobbyProtocolError(`неизвестный тип сообщения лобби: ${JSON.stringify(source.type)}`);
   }
 }
 
 export function parseLobbyServerMessage(value: unknown): LobbyServerMessage {
   const source = object(value, 'сообщение лобби');
-  switch (source['type']) {
+  switch (source.type) {
     case 'Joined':
       return {
         type: 'Joined',
         playerId: str(source, 'playerId', 'Joined'),
-        roster: names(source['roster'], 'Joined.roster'),
+        roster: names(source.roster, 'Joined.roster'),
       };
     case 'Denied':
       return {
         type: 'Denied',
-        reason: denyReason(source['reason']),
-        detail: typeof source['detail'] === 'string' ? source['detail'] : '',
+        reason: denyReason(source.reason),
+        detail: typeof source.detail === 'string' ? source.detail : '',
       };
     case 'Roster':
-      return { type: 'Roster', players: names(source['players'], 'Roster.players') };
+      return { type: 'Roster', players: names(source.players, 'Roster.players') };
     case 'Begin':
       return {
         type: 'Begin',
         invite: str(source, 'invite', 'Begin'),
-        players: names(source['players'], 'Begin.players'),
+        players: names(source.players, 'Begin.players'),
       };
     case 'Closed':
       return {
         type: 'Closed',
-        reason: closeReason(source['reason']),
-        detail: typeof source['detail'] === 'string' ? source['detail'] : '',
+        reason: closeReason(source.reason),
+        detail: typeof source.detail === 'string' ? source.detail : '',
       };
     default:
-      throw new LobbyProtocolError(`неизвестный тип сообщения лобби: ${JSON.stringify(source['type'])}`);
+      throw new LobbyProtocolError(`неизвестный тип сообщения лобби: ${JSON.stringify(source.type)}`);
   }
 }
 

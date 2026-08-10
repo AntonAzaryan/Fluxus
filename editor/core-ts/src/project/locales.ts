@@ -38,6 +38,7 @@ export async function loadProjectBundles(
   for (const locale of locales) {
     const path = projectBundlePath(locale);
     const found = await host.stat(path);
+    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
     if (found === undefined || found.kind !== 'file') continue;
     let parsed: JsonValue;
     try {

@@ -25,5 +25,6 @@ export function canonicalJson(value: unknown): string {
   }
   // Все числовые значения ядра целые: Q16.16 хранится как i32 (FP-1), поэтому
   // вопроса дробной записи не возникает.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   return JSON.stringify(value) ?? 'null';
 }

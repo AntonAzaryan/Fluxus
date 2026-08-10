@@ -319,7 +319,7 @@ describe('Command Buffer (CMD-1..5)', () => {
     commands.addComponent(e, 'Stealth', { flag: 1 });
     commands.removeComponent(e, 'Health');
     commands.destroy(e);
-    expect(() => commands.flush()).not.toThrow();
+    expect(() => { commands.flush(); }).not.toThrow();
     expect(listAlive(world).length).toBe(0);
   });
 

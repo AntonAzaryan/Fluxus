@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * Мир: собственное SoA-хранилище компонентов по JSON-схемам (ECS-1, ECS-3),
  * prefabs (ECS-4), теги и generational ID (ID-1..5) поверх `entityIndex.ts`.
@@ -86,6 +87,7 @@ function validateSchemas(schemas: readonly ComponentSchema[]): Map<string, Compo
       throw new Error(`ECS-5: компонент "${schema.name}" объявлен дважды`);
     }
     for (const [field, type] of Object.entries(schema.fields)) {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
       if (type !== 'i32' && type !== 'fixed') {
         throw new Error(
           // `String(type)`: после двух сравнений тип сузился до `never`, но

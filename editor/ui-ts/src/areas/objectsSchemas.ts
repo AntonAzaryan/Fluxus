@@ -80,7 +80,7 @@ function objectAt(node: unknown, key: string): Record<string, unknown> | undefin
  */
 export function fieldTypeNames(): readonly string[] {
   const fields = objectAt(objectAt(schemaFiles[COMPONENT_SCHEMA_FILE], 'properties'), FIELDS_KEY);
-  const values = objectAt(fields, 'additionalProperties')?.['enum'];
+  const values = objectAt(fields, 'additionalProperties')?.enum;
   return Array.isArray(values) ? values.filter((value): value is string => typeof value === 'string') : [];
 }
 
@@ -116,7 +116,7 @@ export function componentRecords(
   if (!isJsonArray(list)) return [];
   const out: ComponentRecord[] = [];
   list.forEach((entry, index) => {
-    const name = isJsonObject(entry) ? entry['name'] : undefined;
+    const name = isJsonObject(entry) ? entry.name : undefined;
     const key = keys[index];
     if (typeof name !== 'string' || key === undefined) return;
     out.push({ key, name, fields: fieldsOf(entry) });
@@ -130,7 +130,7 @@ export function declaredComponentNames(config: JsonValue | undefined): readonly 
   if (!isJsonArray(list)) return [];
   const names: string[] = [];
   for (const entry of list) {
-    const name = isJsonObject(entry) ? entry['name'] : undefined;
+    const name = isJsonObject(entry) ? entry.name : undefined;
     if (typeof name === 'string') names.push(name);
   }
   return names;
@@ -354,9 +354,9 @@ const FIELD_TYPE: OperationParamSpec = {
  * Читатели — приведение типа, а не вторая проверка: схему параметров уже сверил
  * слой операций к моменту вызова `apply` (ED-30).
  */
-const asDocument = (params: OperationParams): DocumentId => params['document'] as DocumentId;
-const asList = (params: OperationParams): JsonPath => (params['list'] ?? []) as JsonPath;
-const asRecord = (params: OperationParams): string => params['record'] as string;
+const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
+const asList = (params: OperationParams): JsonPath => (params.list ?? []) as JsonPath;
+const asRecord = (params: OperationParams): string => params.record as string;
 const asString = (params: OperationParams, name: string): string => params[name] as string;
 
 function requireText(operationId: string, param: string, value: string): string {
@@ -472,7 +472,7 @@ export function componentEntry(
   const list = getAtPath(config ?? null, COMPONENT_LIST);
   if (!isJsonArray(list)) return undefined;
   for (const entry of list) {
-    if (isJsonObject(entry) && entry['name'] === name) return entry;
+    if (isJsonObject(entry) && entry.name === name) return entry;
   }
   return undefined;
 }

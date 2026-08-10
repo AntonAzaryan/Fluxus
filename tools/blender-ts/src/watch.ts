@@ -240,6 +240,7 @@ export function createWatchTrigger(options: WatchTriggerOptions): WatchTrigger {
     while (!closed) {
       again = false;
       await options.cycle();
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
       if (!again) return;
     }
   };
@@ -330,12 +331,13 @@ export function watchSourceFile(options: SourceWatchOptions): () => void {
     // каталога (см. шапку модуля). `filename === null` бывает на платформах,
     // не сообщающих имя, — тогда событие берётся целиком.
     const watcher = watchFs(directory, (_event, filename) => {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- baseline
       if (filename === null || basename(String(filename)) === name) announce();
     });
     watcher.on('error', (error: unknown) => {
       report(`наблюдение за "${directory}" сорвалось: ${message(error)}; остаётся опрос`);
     });
-    stopWatch = () => watcher.close();
+    stopWatch = () => { watcher.close(); };
   } catch (error) {
     report(`наблюдение за "${directory}" недоступно: ${message(error)}; остаётся опрос`);
   }

@@ -93,7 +93,7 @@ function makeRig(manifest: VisualManifest = makeManifest()): Rig {
     decorations: new DecorationSet(stage),
     ctx,
     assets,
-    frame: (dt) => stage.frame(dt, 1),
+    frame: (dt) => { stage.frame(dt, 1); },
   };
 }
 
@@ -164,7 +164,7 @@ describe('декларативное сведение набора decoration (R
 
   it('повторный ключ в одном наборе — отказ, а не молчаливая победа последнего', () => {
     const rig = makeRig();
-    expect(() => rig.decorations.apply([decoration('a'), decoration('a')])).toThrow(/REND-18/);
+    expect(() => { rig.decorations.apply([decoration('a'), decoration('a')]); }).toThrow(/REND-18/);
   });
 
   it('пустой набор гасит декорации, разделяемый ассет остаётся в кэше (REND-3)', () => {
@@ -327,7 +327,7 @@ describe('переподача манифеста действует и на dec
     expect(before.model).not.toBeNull();
 
     const next = makeManifest();
-    next.decorations!['Grass'] = { model: 'models/flower.mdx', scale: 1 };
+    next.decorations!.Grass = { model: 'models/flower.mdx', scale: 1 };
     rig.models.applyManifest(next);
     // Другая модель — инстанс пересобран под новую запись (REND-3, REND-17).
     expect(rig.assets.requests.some((r) => r.id === 'models/flower.mdx')).toBe(true);
@@ -393,7 +393,7 @@ function makePickRig(): PickRig {
     source: new DocumentSource(stage, { clock: () => 0 }),
     picking,
     assets,
-    frame: () => stage.frame(0.016, 1),
+    frame: () => { stage.frame(0.016, 1); },
   };
 }
 

@@ -331,6 +331,7 @@ export class PhysicsSystem implements System {
       if (hitMask !== 0) {
         const executed = union(boundsAt(from.x, from.y, collider), boundsAt(x, y, collider));
         const hitStatics = this.physicsWorld.queryByLayer(executed, hitMask);
+        // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
         for (let i = 0; i < hitStatics.length; i++) {
           ctx.events.emit('Overlap', { entity: mover, other: STATIC_COLLIDER });
         }

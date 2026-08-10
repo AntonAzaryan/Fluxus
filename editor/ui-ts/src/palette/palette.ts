@@ -157,6 +157,7 @@ export interface PaletteSpec {
 export function matchesQuery(query: string, ...texts: readonly (string | undefined)[]): boolean {
   const needle = query.trim().toLowerCase();
   if (needle === '') return true;
+  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
   return texts.some((text) => text !== undefined && text.toLowerCase().includes(needle));
 }
 
@@ -219,6 +220,7 @@ function operationEntries(spec: PaletteSpec): readonly PaletteEntry[] {
       detail: documentValue(operation.id),
       disabled: !enabled,
       run: () => {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
         if (enabled && command !== undefined) command.run(spec.target);
       },
     };

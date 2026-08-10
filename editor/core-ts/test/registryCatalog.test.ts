@@ -180,7 +180,7 @@ describe('ED-30: машинный каталог', () => {
     // машины и описание для человека на `en` — один текст (ED-30).
     expect(resources.locale).toBe('ru');
     expect(catalog.operations[0]?.description).toBe(
-      EDITOR_BUNDLES['en']![catalog.operations[0]!.descriptionKey],
+      EDITOR_BUNDLES.en![catalog.operations[0]!.descriptionKey],
     );
   });
 
@@ -306,7 +306,7 @@ describe('ED-30: машинный каталог', () => {
     expect(catalog.validationRules).toHaveLength(builtinValidationRules().length);
     for (const rule of catalog.validationRules) {
       expect(rule.descriptionKey, rule.id).toBe(ruleDescriptionKey(rule.id));
-      expect(rule.description, rule.id).toBe(EDITOR_BUNDLES['en']![rule.descriptionKey]);
+      expect(rule.description, rule.id).toBe(EDITOR_BUNDLES.en![rule.descriptionKey]);
       expect(rule.description, rule.id).not.toBe(rule.descriptionKey);
     }
     // Локаль пользователя русская, каталог всё равно английский (ED-30).

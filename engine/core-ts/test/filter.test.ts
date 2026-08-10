@@ -187,7 +187,7 @@ describe('скрытие не равно смерть (NET-14)', () => {
     // Ушедший в туман враг никакого события не получил: единственное событие —
     // то, что эмитила симуляция, и оно про другую сущность.
     expect(forTeam0.events.map((e) => e.type)).toEqual(['EntityDied']);
-    expect(forTeam0.events.every((e) => e.data['entity'] !== h.enemy)).toBe(true);
+    expect(forTeam0.events.every((e) => e.data.entity !== h.enemy)).toBe(true);
   });
 
   it('явная смерть невидимого врага до клиента не доходит, своя — доходит', () => {

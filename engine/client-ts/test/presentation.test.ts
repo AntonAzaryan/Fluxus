@@ -172,7 +172,7 @@ function makeHarness(options: { shared?: boolean } = {}): Harness {
     remote,
     requests: assets.requests,
     posted,
-    step: () => shell.stepTick(),
+    step: () => { shell.stepTick(); },
   };
 }
 

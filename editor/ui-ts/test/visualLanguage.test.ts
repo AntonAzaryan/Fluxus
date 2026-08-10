@@ -257,7 +257,7 @@ describe('ED-31: инструменты вьюпорта — знак, имя, �
     expect(disabled.length).toBeGreaterThan(0);
     for (const element of disabled) {
       // `aria-disabled`, а не `disabled`: из обхода элемент не выпадает.
-      expect(element.attrs?.['disabled']).toBeUndefined();
+      expect(element.attrs?.disabled).toBeUndefined();
       expect(element.labels?.ariaLabel?.origin).toBe('resource');
     }
   });

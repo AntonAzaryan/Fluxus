@@ -227,6 +227,7 @@ function fieldValue(
 function isBoundField(binding: PositionBinding, component: string, field: string): boolean {
   if (component === binding.component && (field === binding.x || field === binding.y)) return true;
   const rotation = binding.rotation;
+  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
   return rotation !== undefined && component === rotation.component && field === rotation.field;
 }
 
@@ -241,14 +242,14 @@ function put(overrides: Overrides, component: string, field: string, value: numb
 /** Ключи объекта в лексикографическом порядке — дифф не зависит от порядка обхода. */
 function sortedObject(source: Readonly<Record<string, number>>): JsonObject {
   const out: Record<string, JsonValue> = {};
-  for (const key of Object.keys(source).sort(compareObjectNames)) out[key] = source[key] as number;
+  for (const key of Object.keys(source).sort(compareObjectNames)) out[key] = source[key]!;
   return out;
 }
 
 function sortedOverrides(overrides: Overrides): JsonObject {
   const out: Record<string, JsonValue> = {};
   for (const component of Object.keys(overrides).sort(compareObjectNames)) {
-    out[component] = sortedObject(overrides[component] as Record<string, number>);
+    out[component] = sortedObject(overrides[component]!);
   }
   return out;
 }
@@ -330,7 +331,7 @@ function placementRecord(
       error(sink, source.name, `"${key}": значение поля компонента — число, а не строка "${raw}"`);
       continue;
     }
-    write(component, field, typeof raw === 'boolean' ? (raw ? 1 : 0) : (raw as number));
+    write(component, field, typeof raw === 'boolean' ? (raw ? 1 : 0) : (raw!));
   }
 
   return { prefab: name, overrides: sortedOverrides(overrides) };
@@ -390,9 +391,9 @@ function decorationRecord(sink: Sink, source: SourceObject, context: SpatialLaye
   // Порядок ключей — порядок состава записи в PRES-2: сохранение канонично, но
   // ключи оно не переставляет (ED-21), и порядок задаёт тот, кто записи строит.
   const record: Record<string, JsonValue> = { visual: key, x, y };
-  if (yaw !== 0) record['yaw'] = yaw;
-  if (scale !== 1) record['scale'] = scale;
-  if (skin !== undefined && skin !== '') record['skin'] = skin;
+  if (yaw !== 0) record.yaw = yaw;
+  if (scale !== 1) record.scale = scale;
+  if (skin !== undefined && skin !== '') record.skin = skin;
   return record;
 }
 

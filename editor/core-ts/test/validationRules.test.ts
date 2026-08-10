@@ -13,7 +13,6 @@ import {
   loadScene,
   validateSystem,
   type SceneDef,
-  type SystemDef,
   type TerrainDef,
 } from '@game-mvp/core';
 import type { CameraConfigDescription, CameraEffectsDescription } from '@game-mvp/assets';
@@ -192,11 +191,11 @@ describe('ED-8: JSON-система проверяется против мира
     expect(issue.expected).toEqual({
       kind: 'accepted',
       by: VALIDATE_SYSTEM,
-      detail: thrownBy(() => validateSystem(bad as unknown as SystemDef, loadScene(SCENE_VALUE as unknown as SceneDef).world)),
+      detail: thrownBy(() => { validateSystem(bad, loadScene(SCENE_VALUE as unknown as SceneDef).world); }),
     });
     // Против какой сцены проверялось — часть находки: система бывает годной для
     // одной сцены и негодной для другой.
-    expect(issue.reasonParams['against']).toBe(SCENE);
+    expect(issue.reasonParams.against).toBe(SCENE);
   });
 
   it('годная система находок не даёт', () => {
@@ -259,9 +258,9 @@ describe('ED-30: система адресуется своей записью �
     expect(issue.expected).toEqual({
       kind: 'accepted',
       by: VALIDATE_SYSTEM,
-      detail: thrownBy(() => validateSystem(bad as unknown as SystemDef, world())),
+      detail: thrownBy(() => { validateSystem(bad, world()); }),
     });
-    expect(issue.reasonParams['against']).toBe(SCENE);
+    expect(issue.reasonParams.against).toBe(SCENE);
     // Находка спрашивается по адресу записи — то, ради чего ED-30 требует путь.
     expect(report.at(SCENE, ['systems', 1])).toHaveLength(1);
   });
@@ -283,7 +282,7 @@ describe('ED-30: система адресуется своей записью �
     const issue = report.forDocument(MATCH).find((found) => found.ruleId === SYSTEM_RULE)!;
     expect(issue.path).toEqual(['systems', 0]);
     // Мир по-прежнему берётся у сцены: систему судит тот, кто знает компоненты.
-    expect(issue.reasonParams['against']).toBe(SCENE);
+    expect(issue.reasonParams.against).toBe(SCENE);
   });
 
   it('раскладки складываются: и список внутри конфига, и системы отдельными документами', () => {
@@ -590,7 +589,7 @@ describe('ED-11: ассет террейна внутри конфига сце�
     // Важность прежняя: рантайм переживает несовпадение игнором (ASSET-7).
     expect(issue.severity).toBe('warning');
     // С чем не совпало — документ-носитель сетки, то есть сам конфиг сцены.
-    expect(issue.reasonParams['against']).toBe(SCENE);
+    expect(issue.reasonParams.against).toBe(SCENE);
   });
 
   it('совпавшая сетка находок не даёт', () => {
@@ -723,7 +722,7 @@ describe('PRES-2: ссылка decoration на запись манифеста',
       .find((found) => found.ruleId === DECORATION_VISUAL_RULE)!;
     expect(issue.path).toEqual(['decorations', 1, 'visual']);
     expect(issue.received).toBe('ghost');
-    expect(issue.reasonParams['name']).toBe('ghost');
+    expect(issue.reasonParams.name).toBe('ghost');
     // Рантайм переживает это заглушкой (ASSET-6) — значит предупреждение, а не
     // запрет сохранять.
     expect(issue.severity).toBe('warning');

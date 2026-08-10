@@ -21,53 +21,53 @@ export function validateBindings(value: unknown): InputBindings {
     keyboardMouse: KeyboardMouseBindings;
     touch?: TouchBindings;
     gamepad?: GamepadBindings;
-  } = { keyboardMouse: validateKeyboardMouse(root['keyboardMouse']) };
-  if (root['touch'] !== undefined) result.touch = validateTouch(root['touch']);
-  if (root['gamepad'] !== undefined) result.gamepad = validateGamepad(root['gamepad']);
+  } = { keyboardMouse: validateKeyboardMouse(root.keyboardMouse) };
+  if (root.touch !== undefined) result.touch = validateTouch(root.touch);
+  if (root.gamepad !== undefined) result.gamepad = validateGamepad(root.gamepad);
   return result;
 }
 
 function validateKeyboardMouse(value: unknown): KeyboardMouseBindings {
   const kb = record(value, 'keyboardMouse');
-  const move = record(kb['move'], 'keyboardMouse.move');
+  const move = record(kb.move, 'keyboardMouse.move');
   for (const side of ['up', 'down', 'left', 'right'] as const) {
     nonEmptyString(move[side], `keyboardMouse.move.${side}`);
   }
   return {
     move: move as unknown as KeyboardMouseBindings['move'],
-    keys: actionMap(kb['keys'], 'keyboardMouse.keys'),
-    pointerButtons: actionMap(kb['pointerButtons'], 'keyboardMouse.pointerButtons'),
+    keys: actionMap(kb.keys, 'keyboardMouse.keys'),
+    pointerButtons: actionMap(kb.pointerButtons, 'keyboardMouse.pointerButtons'),
   };
 }
 
 function validateTouch(value: unknown): TouchBindings {
   const touch = record(value, 'touch');
-  const moveStick = stick(touch['moveStick'], 'touch.moveStick');
+  const moveStick = stick(touch.moveStick, 'touch.moveStick');
   const result: {
     moveStick: TouchBindings['moveStick'];
     aimStick?: TouchBindings['aimStick'];
     buttons?: TouchBindings['buttons'];
   } = { moveStick };
-  if (touch['aimStick'] !== undefined) {
-    const aim = record(touch['aimStick'], 'touch.aimStick');
+  if (touch.aimStick !== undefined) {
+    const aim = record(touch.aimStick, 'touch.aimStick');
     const base = stick(aim, 'touch.aimStick');
     result.aimStick = {
       ...base,
-      ...(aim['releaseAction'] !== undefined
-        ? { releaseAction: nonEmptyString(aim['releaseAction'], 'touch.aimStick.releaseAction') }
+      ...(aim.releaseAction !== undefined
+        ? { releaseAction: nonEmptyString(aim.releaseAction, 'touch.aimStick.releaseAction') }
         : {}),
-      ...(aim['deadzone'] !== undefined
-        ? { deadzone: fraction(aim['deadzone'], 'touch.aimStick.deadzone') }
+      ...(aim.deadzone !== undefined
+        ? { deadzone: fraction(aim.deadzone, 'touch.aimStick.deadzone') }
         : {}),
     };
   }
-  if (touch['buttons'] !== undefined) {
-    if (!Array.isArray(touch['buttons'])) throw fail('touch.buttons', 'ожидается массив');
-    result.buttons = touch['buttons'].map((b: unknown, i: number) => {
+  if (touch.buttons !== undefined) {
+    if (!Array.isArray(touch.buttons)) throw fail('touch.buttons', 'ожидается массив');
+    result.buttons = touch.buttons.map((b: unknown, i: number) => {
       const button = record(b, `touch.buttons[${i}]`);
       return {
-        zone: zone(button['zone'], `touch.buttons[${i}].zone`),
-        action: nonEmptyString(button['action'], `touch.buttons[${i}].action`),
+        zone: zone(button.zone, `touch.buttons[${i}].zone`),
+        action: nonEmptyString(button.action, `touch.buttons[${i}].action`),
       };
     });
   }
@@ -82,16 +82,16 @@ function validateGamepad(value: unknown): GamepadBindings {
     deadzone: number;
     buttons: Readonly<Record<string, string>>;
   } = {
-    moveAxes: axes(pad['moveAxes'], 'gamepad.moveAxes'),
-    deadzone: fraction(pad['deadzone'], 'gamepad.deadzone'),
-    buttons: actionMap(pad['buttons'], 'gamepad.buttons'),
+    moveAxes: axes(pad.moveAxes, 'gamepad.moveAxes'),
+    deadzone: fraction(pad.deadzone, 'gamepad.deadzone'),
+    buttons: actionMap(pad.buttons, 'gamepad.buttons'),
   };
   for (const key of Object.keys(result.buttons)) {
     if (!Number.isInteger(Number(key)) || Number(key) < 0) {
       throw fail(`gamepad.buttons.${key}`, 'ключ — индекс кнопки геймпада (целое ≥ 0)');
     }
   }
-  if (pad['aimAxes'] !== undefined) result.aimAxes = axes(pad['aimAxes'], 'gamepad.aimAxes');
+  if (pad.aimAxes !== undefined) result.aimAxes = axes(pad.aimAxes, 'gamepad.aimAxes');
   return result;
 }
 
@@ -139,11 +139,11 @@ function zone(value: unknown, path: string): TouchZone {
 
 function stick(value: unknown, path: string): { zone: TouchZone; radius: number } {
   const s = record(value, path);
-  const radius = s['radius'];
+  const radius = s.radius;
   if (typeof radius !== 'number' || !(radius > 0) || radius > 1) {
     throw fail(`${path}.radius`, 'ожидается доля меньшей стороны в (0..1]');
   }
-  return { zone: zone(s['zone'], `${path}.zone`), radius };
+  return { zone: zone(s.zone, `${path}.zone`), radius };
 }
 
 function axes(value: unknown, path: string): readonly [number, number] {

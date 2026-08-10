@@ -294,6 +294,6 @@ describe('ED-8, ED-25: набор правил проекта', () => {
     // ему дважды, уронил бы сборку, а не удвоил находки молча.
     const registry = new ContributionRegistry<ValidationRule>({ kind: 'rule' });
     registerValidationRules(registry, rules);
-    expect(() => registerValidationRules(registry, rules)).toThrow();
+    expect(() => { registerValidationRules(registry, rules); }).toThrow();
   });
 });

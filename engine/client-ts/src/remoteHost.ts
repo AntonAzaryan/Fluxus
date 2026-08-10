@@ -97,7 +97,7 @@ export class RemoteHost implements PresentationProducer {
   connect(port: ShellPort): this {
     if (this.port !== null) throw new Error('RemoteHost: порт уже подключён');
     this.port = port;
-    port.onMessage((message) => this.onMessage(message as WorkerToMain));
+    port.onMessage((message) => { this.onMessage(message as WorkerToMain); });
     return this;
   }
 

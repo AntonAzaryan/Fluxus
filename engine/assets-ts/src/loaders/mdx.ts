@@ -38,6 +38,7 @@ const MS_PER_SECOND = 1000;
  * строим ТОЛЬКО из многоключевой альфы — иначе базовое тело исчезнет целиком.
  */
 function isAnimatedAlpha(a: MdlModel.AnimVector | number | undefined): a is MdlModel.AnimVector {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   return a != null && typeof a !== 'number' && !!a.Keys && a.Keys.length >= 2;
 }
 
@@ -66,7 +67,7 @@ function channelInWindow(
   dim: number,
   base?: readonly number[],
 ): ChannelKeys | null {
-  if (!v || !v.Keys || v.Keys.length === 0) return null;
+  if (!v?.Keys || v.Keys.length === 0) return null;
   const kept: { t: number; vec: ArrayLike<number> }[] = [];
   let lastT = -Infinity;
   for (const key of v.Keys) {
@@ -158,6 +159,7 @@ function layerTextureSlot(mdl: MdlModel.Model, material: MdlModel.Material | und
   const tid = material?.Layers[0]?.TextureID;
   let slot = 0;
   if (typeof tid === 'number') slot = tid;
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   else if (tid?.Keys?.length) slot = tid.Keys[0]!.Vector[0] ?? 0;
   return slot >= 0 && slot < mdl.Textures.length ? slot : 0;
 }
@@ -264,6 +266,7 @@ export function normalizeMdx(mdl: MdlModel.Model): NormalizedModel {
     return Object.freeze({
       partId: gi,
       positions: g.Vertices,
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition, @typescript-eslint/prefer-optional-chain -- baseline
       normals: g.Normals && g.Normals.length === g.Vertices.length ? g.Normals : null,
       uvs: g.TVertices[0] ?? null,
       indices: g.Faces,
@@ -278,6 +281,7 @@ export function normalizeMdx(mdl: MdlModel.Model): NormalizedModel {
   // секунды от начала секвенции; Translation получает прибавку rest-pivot.
   // ==========================================================================
   const alphaByGeoset = new Map<number, MdlModel.AnimVector | number>();
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   for (const ga of mdl.GeosetAnims ?? []) {
     alphaByGeoset.set(ga.GeosetId, ga.Alpha);
   }

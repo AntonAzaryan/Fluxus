@@ -138,6 +138,7 @@ const UNKNOWN: SourceState = Object.freeze({ status: 'unknown' });
 /** FNV-1a по байтам: отпечаток нужен для сравнения «те же байты?», а не для криптографии. */
 function fingerprintOf(bytes: Uint8Array): string {
   let hash = 0x811c9dc5;
+  // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
   for (let i = 0; i < bytes.length; i++) {
     hash ^= bytes[i]!;
     hash = Math.imul(hash, 0x01000193) >>> 0;

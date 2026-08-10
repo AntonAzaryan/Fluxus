@@ -80,6 +80,7 @@ function isValueUsage(id: ts.Identifier): boolean {
     return false;
   }
   if (ts.isImportSpecifier(p) || ts.isExportSpecifier(p)) return false;
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   for (let a: ts.Node | undefined = p; a && !ts.isSourceFile(a); a = a.parent) {
     if (ts.isTypeNode(a)) return false; // `x: Promise<void>` — тип, ловим только значение
   }

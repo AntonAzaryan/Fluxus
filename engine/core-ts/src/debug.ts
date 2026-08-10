@@ -32,6 +32,7 @@ import type {
  * В релизе `DEBUG === false`, и все ветки с assert вырезаются минификатором.
  */
 export const DEBUG: boolean =
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production';
 
 /** Счётчики текущей системы для записи `systemEnd` (DIAG-3). */

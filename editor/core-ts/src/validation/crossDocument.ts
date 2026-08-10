@@ -172,7 +172,7 @@ function prefabNamesOf(value: JsonValue | undefined): readonly string[] {
   if (!isJsonArray(list)) return [];
   const names: string[] = [];
   for (const entry of list) {
-    if (isJsonObject(entry) && typeof entry['name'] === 'string') names.push(entry['name']);
+    if (isJsonObject(entry) && typeof entry.name === 'string') names.push(entry.name);
   }
   return names;
 }
@@ -221,7 +221,7 @@ export function visualForPrefabRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): Vali
       if (!isJsonArray(list)) return;
       list.forEach((entry, index) => {
         if (!isJsonObject(entry)) return;
-        const name = entry['name'];
+        const name = entry.name;
         if (typeof name !== 'string' || known.names.has(name)) return;
         run.report({
           path: [...PREFABS_PATH, index, 'name'],
@@ -282,7 +282,7 @@ export function placementPrefabRule(
         if (!isJsonArray(list)) continue;
         list.forEach((entry, index) => {
           if (!isJsonObject(entry)) return;
-          const name = entry['prefab'];
+          const name = entry.prefab;
           // Форму записи проверяет ядро (SER-8): не-строка — его нарушение, а
           // не отсутствующая ссылка, и второго сообщения о ней здесь не будет.
           if (typeof name !== 'string' || known.names.has(name)) return;
@@ -372,7 +372,7 @@ export function decorationVisualRule(
         if (!isJsonArray(list)) continue;
         list.forEach((entry, index) => {
           if (!isJsonObject(entry)) return;
-          const name = entry['visual'];
+          const name = entry.visual;
           // Форму записи проверяет формат (PRES-2): не-строка — его нарушение,
           // а не отсутствующая ссылка, и второго сообщения о ней здесь нет.
           if (typeof name !== 'string' || known.names.has(name)) return;
@@ -395,7 +395,7 @@ function componentNamesOf(value: JsonValue | undefined): readonly string[] {
   if (!isJsonArray(list)) return [];
   const names: string[] = [];
   for (const entry of list) {
-    if (isJsonObject(entry) && typeof entry['name'] === 'string') names.push(entry['name']);
+    if (isJsonObject(entry) && typeof entry.name === 'string') names.push(entry.name);
   }
   return names;
 }

@@ -73,8 +73,9 @@ function hintOf(row: Row): { readonly key: string; readonly text: string } {
 /** Ввод в поле: контрол отдаёт значение по `change` — от фокуса до подтверждения. */
 function commit(row: Row, value: string): void {
   const input = findAll(row.node, (node) => node.tag === 'input')[0];
-  const handler = input?.on?.['change'];
+  const handler = input?.on?.change;
   if (handler === undefined) throw new Error(`строка ${row.label} не принимает ввод`);
+  // eslint-disable-next-line @typescript-eslint/no-extraneous-class -- baseline
   handler({ target: Object.assign(new (class {})(), { value }) } as unknown as Event);
 }
 
@@ -148,7 +149,7 @@ describe('ED-24, ED-2: набор строк инспектора — это с�
     expect(options.map((node) => attr(node, 'value'))).toEqual(['1', '2.5']);
 
     const select = findAll(row.node, (node) => node.tag === 'select')[0];
-    select?.on?.['change']?.({ target: { value: '2.5' } } as unknown as Event);
+    select?.on?.change?.({ target: { value: '2.5' } } as unknown as Event);
     expect((session.documentValue('doc') as { speed: number }).speed).toBe(fixed.fromFloat(2.5));
   });
 
@@ -219,7 +220,7 @@ describe('ED-25: редактор поля — вклад, и подхватыв
     });
     const row = rowOf(view, 'odd');
     expect(row.note).toBe('quaternion');
-    expect(findAll(row.node, (node) => node.tag === 'input')[0]?.attrs?.['readonly']).toBe('');
+    expect(findAll(row.node, (node) => node.tag === 'input')[0]?.attrs?.readonly).toBe('');
   });
 });
 
@@ -276,8 +277,8 @@ describe('ED-24, ED-26, ED-29: адрес субъекта и поле, кото
       readOnly: true,
     });
     const input = findAll(rowOf(view, 'derived').node, (node) => node.tag === 'input')[0];
-    expect(input?.attrs?.['readonly']).toBe('');
-    expect(input?.on?.['change']).toBeUndefined();
+    expect(input?.attrs?.readonly).toBe('');
+    expect(input?.on?.change).toBeUndefined();
   });
 });
 
@@ -379,8 +380,8 @@ describe('ED-29, ED-18: правка поля — одна операция и �
     frame.togglePreview();
     expect(frame.mode()).toBe('preview');
     const input = findAll(rowOf(frame.view(), 'x').node, (node) => node.tag === 'input')[0];
-    expect(input?.attrs?.['readonly']).toBe('');
-    expect(input?.on?.['change']).toBeUndefined();
+    expect(input?.attrs?.readonly).toBe('');
+    expect(input?.on?.change).toBeUndefined();
     frame.stopPreview();
   });
 });

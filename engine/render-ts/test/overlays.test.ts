@@ -343,10 +343,10 @@ describe('декларативный набор (REND-16)', () => {
   it('дубликат ключа в наборе — ошибка, а не молча потерянное наложение', () => {
     const rig = makeRig();
     expect(() =>
-      rig.overlays.apply([
+      { rig.overlays.apply([
         { kind: 'grid', key: 'same' },
         { kind: 'grid', key: 'same' },
-      ]),
+      ]); },
     ).toThrow(/same/);
   });
 });

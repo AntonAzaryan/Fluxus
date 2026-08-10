@@ -259,7 +259,7 @@ class Tap implements Transport {
   constructor(inner: Transport, policy: Policy) {
     this.inner = inner;
     this.policy = policy;
-    inner.onMessage((bytes) => this.intake(bytes));
+    inner.onMessage((bytes) => { this.intake(bytes); });
     inner.onClose((reason) => this.closeHandler?.(reason));
   }
 
@@ -599,7 +599,7 @@ describe('поток событий на границе: ненадёжный к
     expect(match.a.client.metrics.eventRangeGaps).toBe(0);
     // Контроль: уроненное сообщение действительно везло пачку — иначе проверка
     // была бы о том, что ничего не терялось.
-    const dropped = match.a.tap.seen.filter((message) => message.type === 'Events')[1] as EventsMessage;
+    const dropped = match.a.tap.seen.filter((message) => message.type === 'Events')[1]!;
     expect(dropped.batches.map((batch) => batch.tick)).toEqual([3]);
     expect(eventsOnWire(match.a)).toHaveLength(4);
   });

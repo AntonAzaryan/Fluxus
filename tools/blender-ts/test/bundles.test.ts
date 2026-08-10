@@ -55,14 +55,14 @@ describe('ED-28: бандл конвейера и его вклады сходя
   });
 
   it('состав ключей у локалей один и тот же: ru и en равноправны (ED-27)', () => {
-    expect(Object.keys(BLENDER_BUNDLES['ru']!).sort()).toEqual(Object.keys(BLENDER_BUNDLES['en']!).sort());
+    expect(Object.keys(BLENDER_BUNDLES.ru!).sort()).toEqual(Object.keys(BLENDER_BUNDLES.en!).sort());
   });
 
   it('подстановки перевода те же, что в источнике: параметр не выдумывается и не теряется', () => {
     const placeholders = (text: string): readonly string[] =>
       [...text.matchAll(/\{([A-Za-z][A-Za-z0-9]*)\}/g)].map((match) => match[1]!).sort();
-    const en = BLENDER_BUNDLES['en']!;
-    const ru = BLENDER_BUNDLES['ru']!;
+    const en = BLENDER_BUNDLES.en!;
+    const ru = BLENDER_BUNDLES.ru!;
     for (const key of Object.keys(en)) {
       expect(placeholders(ru[key] ?? ''), key).toEqual(placeholders(en[key]!));
     }

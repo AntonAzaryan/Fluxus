@@ -250,17 +250,20 @@ export interface GridObjectSpec {
 
 /** Карта уровней (TERR-3) → высоты клеток: один уровень — одна мировая единица. */
 export function levelHeights(rows: readonly string[]): number[][] {
+  // eslint-disable-next-line @typescript-eslint/no-misused-spread -- baseline
   return rows.map((row) => [...row].map((char) => parseInt(char, 16)));
 }
 
 /** Ряды карты флагов (TERR-3) → значения канала: символ совпал — единица. */
 export function flagCells(rows: readonly string[], char: string): number[][] {
+  // eslint-disable-next-line @typescript-eslint/no-misused-spread -- baseline
   return rows.map((row) => [...row].map((cell) => (cell === char ? 1 : 0)));
 }
 
 /** Ряды карты кривизны (ASSET-7) → высоты клеток в долях шага высоты. */
 export function curvatureHeights(rows: readonly string[]): number[][] {
   return rows.map((row) =>
+    // eslint-disable-next-line @typescript-eslint/no-misused-spread -- baseline
     [...row].map((char) => {
       if (char === '.') return 0;
       if (char >= '1' && char <= '7') return (char.charCodeAt(0) - 0x30) / 16;
@@ -345,8 +348,8 @@ export function gridSource(specs: readonly GridObjectSpec[]): {
     }
 
     const attributes: Record<string, number> = { POSITION: push(floatChunk(positions, 3)) };
-    if (spec.ramp !== undefined) attributes['_RAMP'] = push(floatChunk(ramp, 1));
-    if (spec.noFloor !== undefined) attributes['_NOFLOOR'] = push(floatChunk(noFloor, 1));
+    if (spec.ramp !== undefined) attributes._RAMP = push(floatChunk(ramp, 1));
+    if (spec.noFloor !== undefined) attributes._NOFLOOR = push(floatChunk(noFloor, 1));
     const primitive = { attributes, indices: push(indexChunk(indices)), mode: 4 };
     meshes.push({ name: `${spec.name}-mesh`, primitives: [primitive] });
     nodes.push({ name: spec.name, mesh: meshes.length - 1, extras: { [spec.semantic]: 1 } });

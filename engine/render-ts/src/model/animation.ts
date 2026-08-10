@@ -113,7 +113,7 @@ export class AnimationController {
     this.mapping = mapping;
     this.crossfade = options.crossfade ?? DEFAULT_CROSSFADE;
     this.deathEvent = options.deathEvent ?? DEFAULT_DEATH_EVENT;
-    this.warn = options.warn ?? ((message) => console.warn(message));
+    this.warn = options.warn ?? ((message) => { console.warn(message); });
     // LoopOnce-действие сообщает о конце через микшер — здесь возврат в локомоцию.
     this.mixer.addEventListener('finished', (event) => {
       if (event.action !== this.oneShot) return;

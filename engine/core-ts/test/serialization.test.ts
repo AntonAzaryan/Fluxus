@@ -144,8 +144,8 @@ describe('детерминированный порядок ключей (SER-6)
     const straight = createWorld([{ name: 'P', fields: { x: 'i32', y: 'i32' } }]);
     const reversed = createWorld([{ name: 'P', fields: { y: 'i32', x: 'i32' } }]);
 
-    expect(Object.keys(toPlain(straight).components['P']!)).toEqual(['x', 'y']);
-    expect(Object.keys(toPlain(reversed).components['P']!)).toEqual(['x', 'y']);
+    expect(Object.keys(toPlain(straight).components.P!)).toEqual(['x', 'y']);
+    expect(Object.keys(toPlain(reversed).components.P!)).toEqual(['x', 'y']);
   });
 
   it('теги отсортированы и идут по возрастанию индекса', () => {

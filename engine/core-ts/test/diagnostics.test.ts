@@ -91,7 +91,7 @@ describe('DIAG-4/DI-5: приёмник инертен для симуляции
     const system: System = {
       name: 'Writer',
       order: 1,
-      run: (ctx) => ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 1),
+      run: (ctx) => { ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 1); },
     };
     const state = freshState();
     expect(() => tick(makeSim([system], boom), state)).toThrow(/sink диагностики бросил/);
@@ -109,10 +109,10 @@ describe('DIAG-6: трейс детерминирован', () => {
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) {
       const entry = JSON.parse(line) as Record<string, unknown>;
-      expect(entry['timestamp']).toBeUndefined();
-      expect(entry['time']).toBeUndefined();
-      expect(typeof entry['tick']).toBe('number');
-      expect(typeof entry['seq']).toBe('number');
+      expect(entry.timestamp).toBeUndefined();
+      expect(entry.time).toBeUndefined();
+      expect(typeof entry.tick).toBe('number');
+      expect(typeof entry.seq).toBe('number');
     }
   });
 
@@ -128,7 +128,7 @@ describe('DIAG-5: трейс потока Command Buffer', () => {
     const killer: System = {
       name: 'Killer',
       order: 1,
-      run: (ctx) => ctx.commands.destroy(ctx.query({ all: ['Health'] })[0]!),
+      run: (ctx) => { ctx.commands.destroy(ctx.query({ all: ['Health'] })[0]!); },
     };
     // Цель захватывается до тика: после `Killer` запрос её уже не вернёт.
     const state = freshState();
@@ -143,7 +143,7 @@ describe('DIAG-5: трейс потока Command Buffer', () => {
     const writer: System = {
       name: 'Writer',
       order: 2,
-      run: (ctx) => ctx.commands.setField(victim, 'Health', 'current', 999),
+      run: (ctx) => { ctx.commands.setField(victim, 'Health', 'current', 999); },
     };
 
     const { sink, entries } = collector('full');
@@ -178,7 +178,7 @@ describe('DIAG-5: трейс потока Command Buffer', () => {
     const writer: System = {
       name: 'Writer',
       order: 1,
-      run: (ctx) => ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5),
+      run: (ctx) => { ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5); },
     };
     const { sink, entries } = collector('full');
     tick(makeSim([writer], sink), freshState());
@@ -200,9 +200,9 @@ describe('DIAG-5: трейс потока Command Buffer', () => {
     const { sink, entries } = collector('full');
     tick(makeSim([mixed], sink), freshState());
 
-    const before = entries.find((e) => e.kind === 'event' && e.data?.['type'] === 'Before')!;
+    const before = entries.find((e) => e.kind === 'event' && e.data?.type === 'Before')!;
     const command = entries.find((e) => e.kind === 'command')!;
-    const after = entries.find((e) => e.kind === 'event' && e.data?.['type'] === 'After')!;
+    const after = entries.find((e) => e.kind === 'event' && e.data?.type === 'After')!;
     expect(before.seq).toBeLessThan(command.seq);
     expect(command.seq).toBeLessThan(after.seq);
   });
@@ -229,7 +229,7 @@ describe('DIAG-3: уровни детализации', () => {
     const writer: System = {
       name: 'Writer',
       order: 1,
-      run: (ctx) => ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5),
+      run: (ctx) => { ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5); },
     };
     const { sink, entries } = collector('systems');
     tick(makeSim([writer], sink), freshState());
@@ -242,7 +242,7 @@ describe('DIAG-3: уровни детализации', () => {
     const writer: System = {
       name: 'Writer',
       order: 1,
-      run: (ctx) => ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5),
+      run: (ctx) => { ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5); },
     };
     const { sink, entries } = collector('off');
     tick(makeSim([writer], sink), freshState());
@@ -255,7 +255,7 @@ describe('DIAG-7: диагностика недостижима изнутри �
     const writer: System = {
       name: 'Writer',
       order: 1,
-      run: (ctx) => ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5),
+      run: (ctx) => { ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5); },
     };
     const { sink } = collector('full');
     const result = tick(makeSim([writer], sink), freshState());
@@ -266,7 +266,7 @@ describe('DIAG-7: диагностика недостижима изнутри �
     const writer: System = {
       name: 'Writer',
       order: 1,
-      run: (ctx) => ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5),
+      run: (ctx) => { ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5); },
     };
     const { sink } = collector('full');
 
@@ -284,7 +284,7 @@ describe('DIAG-1/CLI-7: записи переживают обрыв тика', 
     const good: System = {
       name: 'Good',
       order: 1,
-      run: (ctx) => ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5),
+      run: (ctx) => { ctx.commands.setField(ctx.query({ all: ['Health'] })[0]!, 'Health', 'current', 5); },
     };
     const bad: System = {
       name: 'Bad',

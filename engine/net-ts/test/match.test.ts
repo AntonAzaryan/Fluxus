@@ -487,7 +487,7 @@ describe('перемотка на сервере (NET-11, NTR-16)', () => {
 
     server.pause();
     server.beginRewind();
-    expect(() => server.seekTo(9)).toThrow(/впереди/);
+    expect(() => { server.seekTo(9); }).toThrow(/впереди/);
     // Мир при этом не сдвинулся ни на тик: реплей по пустому логу не начался.
     expect(server.tick).toBe(8);
 
@@ -507,7 +507,7 @@ describe('перемотка на сервере (NET-11, NTR-16)', () => {
     expect(server.tick).toBe(7);
     server.pause();
     server.beginRewind();
-    expect(() => server.seekTo(8)).toThrow(/впереди/);
+    expect(() => { server.seekTo(8); }).toThrow(/впереди/);
   });
 
   it('ввод в замороженный мир до симуляции не доходит (NET-11, REW-5)', () => {

@@ -22,8 +22,8 @@ class WsTransport extends BaseTransport {
       // следующее сообщение, а разбор кадра переживает возврат из обработчика.
       this.deliver(new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)));
     });
-    socket.on('close', () => this.closedByPeer());
-    socket.on('error', (error: Error) => this.closedByPeer(error.message));
+    socket.on('close', () => { this.closedByPeer(); });
+    socket.on('error', (error: Error) => { this.closedByPeer(error.message); });
   }
 
   send(bytes: Uint8Array): void {
@@ -63,7 +63,7 @@ export function webSocketTransportServer(options: WebSocketServerOptions): Trans
     close() {
       return new Promise<void>((resolve) => {
         for (const client of wss.clients) client.close();
-        wss.close(() => resolve());
+        wss.close(() => { resolve(); });
       });
     },
   };
@@ -156,7 +156,7 @@ export async function webSocketChannelServer(
         close() {
           return new Promise<void>((resolve) => {
             for (const client of target.wss.clients) client.close();
-            target.wss.close(() => resolve());
+            target.wss.close(() => { resolve(); });
           });
         },
       };
@@ -167,7 +167,8 @@ export async function webSocketChannelServer(
           for (const client of target.wss.clients) client.close();
           target.wss.close();
         }
-        http.close(() => resolve());
+        http.close(() => { resolve(); });
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
         http.closeAllConnections?.();
       });
     },

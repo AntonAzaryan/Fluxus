@@ -116,7 +116,7 @@ describe('surfaceAlign и terrain в манифесте (ASSET-6)', () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.manifest.entities['unit']!.surfaceAlign).toEqual({ factor: 0.5, maxAngleDeg: 20 });
+    expect(result.manifest.entities.unit!.surfaceAlign).toEqual({ factor: 0.5, maxAngleDeg: 20 });
     expect(result.manifest.terrain?.curvatureMap).toBe('visuals/curve.json');
   });
 

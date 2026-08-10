@@ -179,7 +179,7 @@ export function dummyContext(): RenderContext {
 
 /** Синхронная пара портов: доставка немедленная, без клона — для unit-тестов. */
 export function syncPortPair(): [ShellPort, ShellPort] {
-  const handlers: Array<((message: unknown) => void) | null> = [null, null];
+  const handlers: (((message: unknown) => void) | null)[] = [null, null];
   const make = (self: number, other: number): ShellPort => ({
     post(message) {
       handlers[other]?.(message);

@@ -276,6 +276,7 @@ export class Extractor {
     const alive = world.listAlive(state);
     this.ensureCapacity(alive.length);
     let count = 0;
+    // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
     for (let i = 0; i < alive.length; i++) {
       const entity = alive[i]!;
       if (!world.hasComponent(state, entity, POSITION_COMPONENT)) continue;
@@ -417,7 +418,7 @@ export class Extractor {
   private captureAim(state: WorldState, tick: number, events: readonly RenderEvent[]): void {
     for (const event of events) {
       if (!this.aimEvents.has(event.type)) continue;
-      const caster = event.data['entity'] ?? event.data['source'];
+      const caster = event.data.entity ?? event.data.source;
       if (caster === undefined) continue;
       if (!world.isAlive(state, caster) || !world.hasComponent(state, caster, POSITION_COMPONENT)) {
         continue;
@@ -435,19 +436,19 @@ export class Extractor {
   }
 
   private aimYawOf(state: WorldState, event: RenderEvent, caster: EntityId): number | null {
-    const dirX = event.data['dirX'];
-    const dirY = event.data['dirY'];
+    const dirX = event.data.dirX;
+    const dirY = event.data.dirY;
     if (dirX !== undefined && dirY !== undefined && (dirX !== 0 || dirY !== 0)) {
       return Math.atan2(dirY / FIXED_ONE, dirX / FIXED_ONE);
     }
     const cx = world.getField(state, caster, POSITION_COMPONENT, 'x') / FIXED_ONE;
     const cy = world.getField(state, caster, POSITION_COMPONENT, 'y') / FIXED_ONE;
-    const px = event.data['x'];
-    const py = event.data['y'];
+    const px = event.data.x;
+    const py = event.data.y;
     if (px !== undefined && py !== undefined) {
       return Math.atan2(py / FIXED_ONE - cy, px / FIXED_ONE - cx);
     }
-    const target = event.data['target'];
+    const target = event.data.target;
     if (
       target !== undefined &&
       world.isAlive(state, target) &&

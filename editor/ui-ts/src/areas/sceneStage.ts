@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * @contribution Сборка вьюпорта сцены — часть вклада области, а не каркаса.
  *
@@ -508,7 +509,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     leftDrag = false;
     options.onPointer?.({ phase: 'cancel', x: 0, y: 0, additive: false });
   };
-  const onContextMenu = (event: Event): void => event.preventDefault();
+  const onContextMenu = (event: Event): void => { event.preventDefault(); };
   const onWheel = (event: WheelEvent): void => {
     event.preventDefault();
     // ~100 deltaY на щелчок колеса; трекпад копит дробные шаги.

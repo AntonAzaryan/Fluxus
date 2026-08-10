@@ -47,7 +47,7 @@ export function shellPort(port: DomPortLike | NodePortLike): ShellPort {
       if ('on' in port && typeof port.on === 'function') {
         port.on('message', handler);
       } else {
-        (port as DomPortLike).addEventListener('message', (event) => handler(event.data));
+        (port as DomPortLike).addEventListener('message', (event) => { handler(event.data); });
       }
       port.start?.();
     },

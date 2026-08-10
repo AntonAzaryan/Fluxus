@@ -54,16 +54,16 @@ describe('BLND-9/BLND-10: позиции вершин grid-меша', () => {
     // Сетка 4×4 отдельными квадами: 16 клеток по 4 вершины и по 2 треугольника.
     expect(geometry.positions).toHaveLength(64);
     expect(geometry.triangles).toHaveLength(96);
-    expect(geometry.attributes['_RAMP']).toHaveLength(64);
+    expect(geometry.attributes._RAMP).toHaveLength(64);
     // Канала нет ни у одного примитива — `null`, а не молчаливые нули: «нет
     // канала» и «канал из нулей» для конвенции одно и то же, но врать про
     // прочитанное парсер не должен.
-    expect(geometry.attributes['_ABSENT']).toBeNull();
+    expect(geometry.attributes._ABSENT).toBeNull();
   });
 
   it('примитив не-треугольного режима — отказ: клеточные данные читаются с граней', () => {
     const source = gridSource([TERRAIN_GRID]);
-    const meshes = source.json['meshes'] as { primitives: { mode: number }[] }[];
+    const meshes = source.json.meshes as { primitives: { mode: number }[] }[];
     meshes[0]!.primitives[0]!.mode = 1;
     expect(() => readMeshGeometry(parseGltf(packGlb(source.json, source.binary)), 0)).toThrow(/mode 4/);
   });

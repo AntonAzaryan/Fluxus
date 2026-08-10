@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * @contribution Блочная сборка действий и выражений (ED-5) — вклад, а не часть
  * каркаса.
@@ -180,11 +181,11 @@ function candidates(
     case 'prefab':
       return world.prefabNames;
     case 'componentField': {
-      const component = args['component'];
+      const component = args.component;
       return typeof component === 'string' ? world.fieldNames(component) : null;
     }
     case 'prefabComponent': {
-      const prefab = args['prefab'];
+      const prefab = args.prefab;
       return typeof prefab === 'string' ? world.prefabComponentNames(prefab) : null;
     }
   }
@@ -783,7 +784,7 @@ function slotControl(
     case 'query':
       return queryBlock(env, path, value);
     case 'overrides': {
-      const prefab = args['prefab'];
+      const prefab = args.prefab;
       return overridesBlock(env, path, value, typeof prefab === 'string' ? prefab : undefined);
     }
     case 'literal':

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * @contribution Рабочая область сцены — вклад, а не часть каркаса.
  *
@@ -1498,6 +1499,7 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
             ? null
             : brushSurface(project.configId, TERRAIN_ASSET, state.draft?.grid),
         curvature:
+          // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
           project === null || project.curvatureId === null
             ? null
             : brushSurface(project.curvatureId, [], state.draft?.curvature),

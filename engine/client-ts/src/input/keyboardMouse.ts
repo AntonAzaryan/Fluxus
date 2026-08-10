@@ -100,10 +100,10 @@ export class KeyboardMouseSource implements InputSource {
 
   /** Подключение к DOM-событиям; возвращает отписку. */
   bind(target: Window): () => void {
-    const onKeyDown = (e: KeyboardEvent): void => this.handleKeyDown(e.code, e.repeat);
-    const onKeyUp = (e: KeyboardEvent): void => this.handleKeyUp(e.code);
+    const onKeyDown = (e: KeyboardEvent): void => { this.handleKeyDown(e.code, e.repeat); };
+    const onKeyUp = (e: KeyboardEvent): void => { this.handleKeyUp(e.code); };
     const onMouseDown = (e: MouseEvent): void =>
-      this.handlePointerDown(e.button, e.clientX, e.clientY);
+      { this.handlePointerDown(e.button, e.clientX, e.clientY); };
     target.addEventListener('keydown', onKeyDown);
     target.addEventListener('keyup', onKeyUp);
     target.addEventListener('mousedown', onMouseDown);

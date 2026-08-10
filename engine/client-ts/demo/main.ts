@@ -133,6 +133,7 @@ function loadManifest(): Promise<VisualManifest> {
       unsubscribe?.();
     };
     unsubscribe = assets.subscribe(handle, onState);
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
     if (settled) unsubscribe();
   });
 }
@@ -323,7 +324,7 @@ window.addEventListener('mouseup', (e) => {
   if (e.button === 1) midDrag = false;
   if (e.button === 2) rightDrag = false;
 });
-window.addEventListener('contextmenu', (e) => e.preventDefault());
+window.addEventListener('contextmenu', (e) => { e.preventDefault(); });
 window.addEventListener('wheel', (e) => {
   e.preventDefault();
   // ~100 deltaY на щелчок колеса; трекпад копит дробные шаги.
@@ -363,6 +364,7 @@ function pushInput(): void {
 function updateHud(): void {
   if (hudStatus === null) return;
   const view = remote?.view ?? null;
+  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
   const alive = heroId !== null && view !== null && view.entities.has(heroId);
   const controller = heroId === null ? null : (models?.instanceFor(heroId)?.controller ?? null);
   const status = controller?.isDead === true ? 'мёртв (перезапуск — F5)' : alive ? 'жив' : '—';

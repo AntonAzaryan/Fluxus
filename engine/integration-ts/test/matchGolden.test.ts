@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
 import { duelConfig, fuzzInput, playMatch, propScene, walkRight, type PlayedMatch } from './fixtures.js';
 
 const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'golden');
-const UPDATE = process.env['UPDATE_MATCHES'] === '1';
+const UPDATE = process.env.UPDATE_MATCHES === '1';
 
 const FUZZ_TICKS = 60;
 const FUZZ_SEED = 977;

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * @contribution Инструмент вьюпорта сцены: выделение, picking и расстановка
  * (ED-16, ED-17) — вклад области, а не часть каркаса.
@@ -445,7 +446,7 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
       ? session.applyOperation(DECORATION_OPERATIONS.add, {
           document: documentOf('decoration'),
           list: options.decorationList ?? [],
-          visual: visual as string,
+          visual: visual!,
           x: snap(hit.x),
           y: snap(hit.y),
         })
@@ -453,7 +454,7 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
           ...bound,
           document: options.documentId,
           list: options.list,
-          prefab: prefab as string,
+          prefab: prefab!,
           x: snap(hit.x),
           y: snap(hit.y),
         });
@@ -476,6 +477,7 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
     const hit = picker.pick(event.x, event.y);
     // Клик по пустому месту снимает выделение (ED-17); с модификатором —
     // не снимает: набирающий мультивыделение промахивается чаще всего.
+    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
     if (hit === null || hit.kind !== 'entity' || hit.key === null) {
       if (!event.additive) select([]);
       return;

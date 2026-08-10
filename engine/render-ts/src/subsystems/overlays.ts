@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * Подсистема служебных наложений вьюпорта (REND-16): подсветка выделения,
  * ручки gizmo, набор клеток по поверхности и сетка по поверхности.
@@ -290,6 +291,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
    * читают. Исчезновение подсвеченной сущности видно через её прокси (REND-15),
    * а не через `view` — источник прокси и есть то, что рисуется.
    */
+  // eslint-disable-next-line @typescript-eslint/no-empty-function -- baseline
   syncTick(_view: TickView): void {}
 
   updateFrame(_dt: number, _alpha: number): void {
@@ -323,6 +325,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
       }
       seen.add(item.key);
       const existing = this.nodes.get(item.key);
+      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
       if (existing !== undefined && existing.item.kind === item.kind) {
         if (sameItem(existing.item, item)) continue;
         existing.item = item;
@@ -449,7 +452,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
     const outline = node.object.children[0];
     if (outline === undefined) return;
     const source = this.options.instances;
-    if (source === undefined || !source.proxyOf(item.entity, this.proxy, item.decoration === true)) {
+    if (!source?.proxyOf(item.entity, this.proxy, item.decoration === true)) {
       outline.visible = false;
       return;
     }

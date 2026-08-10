@@ -54,8 +54,8 @@ const HERO_LOCOMOTION = {
   windowTicks: 6,
 } as const;
 
-const HERO_HALF: number = 19661;
-const BOLT_HALF: number = 6554;
+const HERO_HALF = 19661;
+const BOLT_HALF = 6554;
 
 /**
  * Состав компонентов — как в `content/scenes/duel.scene.json`, но сцена

@@ -73,9 +73,9 @@ export class WorkerShell {
     this.sender = new ShellSender(config.port, config.sender);
     this.observer = {
       name: 'shell',
-      onTick: (result) => this.sender.push(config.extractor.extract(result)),
+      onTick: (result) => { this.sender.push(config.extractor.extract(result)); },
     };
-    config.port.onMessage((message) => this.onMessage(message as MainToWorker));
+    config.port.onMessage((message) => { this.onMessage(message as MainToWorker); });
   }
 
   /** Шлёт handshake (SHELL-5) и запускает тикер. */
@@ -156,7 +156,7 @@ export class WorkerShell {
   }
 
   private schedule(): void {
-    this.timer = setTimeout(() => this.onTimer(), Math.max(0, this.nextTickAt - this.clock()));
+    this.timer = setTimeout(() => { this.onTimer(); }, Math.max(0, this.nextTickAt - this.clock()));
   }
 
   private onTimer(): void {

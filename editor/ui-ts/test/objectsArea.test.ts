@@ -134,7 +134,7 @@ function rowInput(root: UiNode, name: string): UiNode | undefined {
 
 /** Ввод: контрол отдаёт значение по `change` — от фокуса до подтверждения (ED-18). */
 function commit(node: UiNode | undefined, value: string): void {
-  const handler = node?.on?.['change'];
+  const handler = node?.on?.change;
   if (handler === undefined) throw new Error(`контрол не принимает ввод: ${String(node?.tag)}`);
   handler({ target: { value } } as unknown as Event);
 }
@@ -355,8 +355,8 @@ describe('ED-6: синтезированные загрузчиком схемы
     // И в собранной странице тоже: контрол показан недоступным, а не молча не
     // принимающим ввод (ED-26).
     const input = rowInput(zoneOf(frame.view(), 'inspector'), 'radius');
-    expect(input?.attrs?.['readonly']).toBe('');
-    expect(input?.on?.['change']).toBeUndefined();
+    expect(input?.attrs?.readonly).toBe('');
+    expect(input?.on?.change).toBeUndefined();
   });
 
   it('операции, которая писала бы синтезированную схему, в наборе нет вовсе', async () => {
@@ -459,7 +459,7 @@ describe('ED-6: порядок схем не переставляется ни �
   const namesOf = (session: EditorSession): readonly string[] => {
     const list = getAtPath(configOf(session), COMPONENT_LIST);
     return isJsonArray(list)
-      ? list.map((entry) => (isJsonObject(entry) && typeof entry['name'] === 'string' ? entry['name'] : ''))
+      ? list.map((entry) => (isJsonObject(entry) && typeof entry.name === 'string' ? entry.name : ''))
       : [];
   };
 

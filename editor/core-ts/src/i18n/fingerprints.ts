@@ -62,6 +62,7 @@ export function confirmTranslations(
     const translatedPrint = fingerprint(translated[key] ?? '');
     const before = previous?.entries[key];
     entries[key] =
+      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
       before !== undefined && before.translated === translatedPrint
         ? before
         : { source: fingerprint(sourceText), translated: translatedPrint };
@@ -108,6 +109,7 @@ export function translationStatus(
       continue;
     }
     const entry = file.entries[key];
+    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
     if (entry === undefined || entry.translated !== fingerprint(translation)) {
       unconfirmed.push(key);
       continue;

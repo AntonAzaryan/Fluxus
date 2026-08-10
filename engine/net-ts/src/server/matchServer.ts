@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * Авторитетный сервер матча (NTR-3): владеет симуляцией, принимает разобранные
  * сообщения, отдаёт адресованные исходящие — и не делает ввода-вывода.
@@ -686,6 +687,7 @@ export class MatchServer {
    */
   private segmentOfEpoch(): OpenSegment {
     const last = this.segments[this.segments.length - 1];
+    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
     if (last !== undefined && last.epoch === this.currentEpoch) return last;
     const opened: OpenSegment = { epoch: this.currentEpoch, frames: [] };
     this.segments.push(opened);

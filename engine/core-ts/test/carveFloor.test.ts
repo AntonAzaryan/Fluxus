@@ -96,7 +96,7 @@ function harness(def: TerrainDef | null = TERRAIN): Harness {
   return {
     ctx,
     commands,
-    terrain: terrain as TerrainApi,
+    terrain: terrain!,
     state: initialState(world, 1),
     setFieldLog,
     bit: (cell) => {
@@ -234,19 +234,19 @@ describe('снятие пола: границы (TERR-8)', () => {
   it('отрицательный радиус — ошибка, а не пустая область', () => {
     const h = harness();
     expect(() =>
-      execute([{ carveFloor: { at: { vec: [at(1, 1).x, at(1, 1).y] }, radius: -TILE } }], h.ctx),
+      { execute([{ carveFloor: { at: { vec: [at(1, 1).x, at(1, 1).y] }, radius: -TILE } }], h.ctx); },
     ).toThrow(/TERR-8/);
   });
 
   it('"at" обязателен и должен быть вектором', () => {
     const h = harness();
-    expect(() => execute([{ carveFloor: { radius: TILE } }], h.ctx)).toThrow(/at/);
-    expect(() => execute([{ carveFloor: { at: fixed.fromInt(1) } }], h.ctx)).toThrow(/вектор/);
+    expect(() => { execute([{ carveFloor: { radius: TILE } }], h.ctx); }).toThrow(/at/);
+    expect(() => { execute([{ carveFloor: { at: fixed.fromInt(1) } }], h.ctx); }).toThrow(/вектор/);
   });
 
   it('сцена без террейна — ошибка, а не действие без эффекта', () => {
     const h = harness(null);
-    expect(() => execute([{ carveFloor: { at: { vec: [0, 0] } } }], h.ctx)).toThrow(/террейн/);
+    expect(() => { execute([{ carveFloor: { at: { vec: [0, 0] } } }], h.ctx); }).toThrow(/террейн/);
   });
 });
 

@@ -138,7 +138,7 @@ describe('расстановка конфига сцены (SER-7, SER-8)', () =
     // Расстановка сценария не замещает расстановку сцены: в мире три сущности,
     // и порядок «сцена, затем прогон» виден по значениям меток на первых слотах.
     expect(ticks[0]!.world.aliveCount).toBe(3);
-    expect(ticks[0]!.world.components['Mark']!['id']!.slice(0, 3)).toEqual([1, 2, 3]);
+    expect(ticks[0]!.world.components.Mark!.id!.slice(0, 3)).toEqual([1, 2, 3]);
   });
 
   it('отсутствующий и пустой initial неразличимы (SER-8)', () => {

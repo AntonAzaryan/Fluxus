@@ -44,6 +44,7 @@ export function buildSharedModel(model: NormalizedModel): SharedModelData {
     geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(mesh.skinIndices, 4));
     geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(mesh.skinWeights, 4));
     geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
     if (mesh.normals === null || mesh.normals.length !== mesh.positions.length) {
       geometry.computeVertexNormals();
     }

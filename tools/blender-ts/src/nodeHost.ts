@@ -95,6 +95,7 @@ export function createNodeHost(options: NodeHostOptions): NodeHost {
       return out.sort((a, b) => compareContentNames(a.name, b.name));
     },
     watch() {
+      // eslint-disable-next-line @typescript-eslint/no-empty-function -- baseline
       return () => {};
     },
   };
@@ -112,8 +113,11 @@ export function createNodeHost(options: NodeHostOptions): NodeHost {
       chooseDirectory: () => Promise.resolve(undefined),
     },
     window: {
+      // eslint-disable-next-line @typescript-eslint/no-empty-function -- baseline
       setTitle: () => {},
+      // eslint-disable-next-line @typescript-eslint/no-empty-function -- baseline
       setUnsaved: () => {},
+      // eslint-disable-next-line @typescript-eslint/no-empty-function -- baseline
       onCloseRequest: () => () => {},
     },
   };

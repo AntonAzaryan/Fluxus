@@ -271,17 +271,17 @@ const MAX_FRAMES_PER_MESSAGE = 64;
 
 export function parseClientMessage(value: unknown): ClientMessage {
   const source = object(value, 'сообщение');
-  const type = source['type'];
+  const type = source.type;
   switch (type) {
     case 'Hello':
       return {
         type: 'Hello',
         playerId: str(source, 'playerId', 'Hello'),
-        version: version(source['version']),
-        observer: source['observer'] === true,
+        version: version(source.version),
+        observer: source.observer === true,
       };
     case 'Input': {
-      const frames = source['frames'];
+      const frames = source.frames;
       if (!Array.isArray(frames)) throw new ProtocolError('Input: поле "frames" — массив');
       if (frames.length === 0) throw new ProtocolError('Input: пустой массив кадров');
       if (frames.length > MAX_FRAMES_PER_MESSAGE) {
@@ -299,7 +299,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
       };
     }
     case 'Bye':
-      return { type: 'Bye', reason: typeof source['reason'] === 'string' ? source['reason'] : '' };
+      return { type: 'Bye', reason: typeof source.reason === 'string' ? source.reason : '' };
     default:
       // Молча проигнорированное сообщение отлаживается по эффекту, а не по
       // сообщению — тот же принцип, по которому `InputSystem` не отбрасывает
@@ -335,7 +335,7 @@ function gameEvent(value: unknown): GameEvent {
   const source = object(value, 'Events.batches[].events[]');
   return {
     type: str(source, 'type', 'Events.batches[].events[]'),
-    data: eventData(source['data']),
+    data: eventData(source.data),
   };
 }
 
@@ -347,7 +347,7 @@ function gameEvent(value: unknown): GameEvent {
  */
 function eventBatch(value: unknown, from: number, to: number): EventBatch {
   const source = object(value, 'Events.batches[]');
-  const events = source['events'];
+  const events = source.events;
   if (!Array.isArray(events)) throw new ProtocolError('Events.batches[]: поле "events" — массив');
   return {
     tick: int(source, 'tick', 'Events.batches[]', from, to),
@@ -358,13 +358,13 @@ function eventBatch(value: unknown, from: number, to: number): EventBatch {
 /** Симметричный разбор на клиенте: сервер тоже недоверен ровно в той мере, в какой недоверен провод. */
 export function parseServerMessage(value: unknown): ServerMessage {
   const source = object(value, 'сообщение');
-  const type = source['type'];
+  const type = source.type;
   switch (type) {
     case 'Welcome': {
-      const match = object(source['match'], 'Welcome.match');
-      const initial = match['initial'];
-      const players = source['players'];
-      const pacing = object(source['pacing'], 'Welcome.pacing');
+      const match = object(source.match, 'Welcome.match');
+      const initial = match.initial;
+      const players = source.players;
+      const pacing = object(source.pacing, 'Welcome.pacing');
       if (!Array.isArray(players) || players.some((p) => typeof p !== 'string')) {
         throw new ProtocolError('Welcome: поле "players" — массив строк');
       }
@@ -392,7 +392,7 @@ export function parseServerMessage(value: unknown): ServerMessage {
       return {
         type: 'Reject',
         reason: str(source, 'reason', 'Reject') as RejectReason,
-        detail: typeof source['detail'] === 'string' ? source['detail'] : '',
+        detail: typeof source.detail === 'string' ? source.detail : '',
       };
     case 'Start':
       return { type: 'Start', tick: int(source, 'tick', 'Start', 0, Number.MAX_SAFE_INTEGER) };
@@ -401,10 +401,10 @@ export function parseServerMessage(value: unknown): ServerMessage {
         type: 'Snapshot',
         epoch: int(source, 'epoch', 'Snapshot', 0, Number.MAX_SAFE_INTEGER),
         tick: int(source, 'tick', 'Snapshot', 0, Number.MAX_SAFE_INTEGER),
-        snapshot: object(source['snapshot'], 'Snapshot.snapshot') as unknown as PlainSnapshot,
+        snapshot: object(source.snapshot, 'Snapshot.snapshot') as unknown as PlainSnapshot,
       };
     case 'Events': {
-      const batches = source['batches'];
+      const batches = source.batches;
       if (!Array.isArray(batches)) throw new ProtocolError('Events: поле "batches" — массив');
       // Пустой массив пачек легален и штатен: сообщение уходит на каждой
       // рассылке, в том числе когда во всём диапазоне не оказалось ни одного

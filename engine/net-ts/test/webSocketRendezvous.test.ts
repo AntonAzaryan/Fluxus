@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 function received(transport: Transport): Promise<Uint8Array> {
-  return new Promise((resolve) => transport.onMessage(resolve));
+  return new Promise((resolve) => { transport.onMessage(resolve); });
 }
 
 describe('рандеву поверх WebSocket', () => {
@@ -44,11 +44,11 @@ describe('рандеву поверх WebSocket', () => {
     const lobby = await rendezvous.publish('lobby');
     const match = await rendezvous.publish('match');
 
-    const inLobby: Promise<Uint8Array> = new Promise((resolve) => {
-      lobby.transports.onConnection((transport) => resolve(received(transport)));
+    const inLobby = new Promise<Uint8Array>((resolve) => {
+      lobby.transports.onConnection((transport) => { resolve(received(transport)); });
     });
     const matchSeen: Uint8Array[] = [];
-    match.transports.onConnection((transport) => transport.onMessage((bytes) => matchSeen.push(bytes)));
+    match.transports.onConnection((transport) => { transport.onMessage((bytes) => matchSeen.push(bytes)); });
 
     const client = await rendezvous.resolve(lobby.invite);
     client.send(Uint8Array.of(42));

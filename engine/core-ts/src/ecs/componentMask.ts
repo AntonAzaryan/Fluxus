@@ -51,21 +51,21 @@ export function setComponent(masks: ComponentMasks, index: number, componentId: 
   const slot = index * masks.wordsPerEntity + word;
   // `>>> 0`: `1 << bit` при bit === 31 даёт отрицательное число (знаковый int32) —
   // без нормализации к u32 бит 31 портил бы дальнейшие побитовые сравнения.
-  masks.words[slot] = ((masks.words[slot] as number) | (1 << bit)) >>> 0;
+  masks.words[slot] = ((masks.words[slot]!) | (1 << bit)) >>> 0;
 }
 
 export function clearComponent(masks: ComponentMasks, index: number, componentId: number): void {
   checkBounds(masks, index, componentId);
   const { word, bit } = bitPos(componentId);
   const slot = index * masks.wordsPerEntity + word;
-  masks.words[slot] = ((masks.words[slot] as number) & ~(1 << bit)) >>> 0;
+  masks.words[slot] = ((masks.words[slot]!) & ~(1 << bit)) >>> 0;
 }
 
 export function hasComponent(masks: ComponentMasks, index: number, componentId: number): boolean {
   checkBounds(masks, index, componentId);
   const { word, bit } = bitPos(componentId);
   const slot = index * masks.wordsPerEntity + word;
-  return (((masks.words[slot] as number) >>> bit) & 1) !== 0;
+  return (((masks.words[slot]!) >>> bit) & 1) !== 0;
 }
 
 export function clearEntity(masks: ComponentMasks, index: number): void {
@@ -82,12 +82,13 @@ export function buildQueryMask(masks: ComponentMasks, componentIds: readonly num
   for (const id of componentIds) {
     checkBounds(masks, 0, id);
     const { word, bit } = bitPos(id);
-    mask[word] = ((mask[word] as number) | (1 << bit)) >>> 0;
+    mask[word] = ((mask[word]!) | (1 << bit)) >>> 0;
   }
   return mask;
 }
 
 export function isEmptyMask(queryMask: Uint32Array): boolean {
+  // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
   for (let w = 0; w < queryMask.length; w++) {
     if (queryMask[w] !== 0) return false;
   }
@@ -102,8 +103,8 @@ export function matchesAll(masks: ComponentMasks, index: number, queryMask: Uint
   checkBounds(masks, index);
   const base = index * masks.wordsPerEntity;
   for (let w = 0; w < queryMask.length; w++) {
-    const q = queryMask[w] as number;
-    if ((((masks.words[base + w] as number) & q) >>> 0) !== q) return false;
+    const q = queryMask[w]!;
+    if ((((masks.words[base + w]!) & q) >>> 0) !== q) return false;
   }
   return true;
 }
@@ -118,7 +119,7 @@ export function matchesAny(masks: ComponentMasks, index: number, queryMask: Uint
   checkBounds(masks, index);
   const base = index * masks.wordsPerEntity;
   for (let w = 0; w < queryMask.length; w++) {
-    if ((((masks.words[base + w] as number) & (queryMask[w] as number)) >>> 0) !== 0) return true;
+    if ((((masks.words[base + w]!) & (queryMask[w]!)) >>> 0) !== 0) return true;
   }
   return false;
 }
@@ -128,7 +129,7 @@ export function matchesNone(masks: ComponentMasks, index: number, queryMask: Uin
   checkBounds(masks, index);
   const base = index * masks.wordsPerEntity;
   for (let w = 0; w < queryMask.length; w++) {
-    if ((((masks.words[base + w] as number) & (queryMask[w] as number)) >>> 0) !== 0) return false;
+    if ((((masks.words[base + w]!) & (queryMask[w]!)) >>> 0) !== 0) return false;
   }
   return true;
 }

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * CameraRig — клиентская камера как чистый конвейер позы (CAM-1): режимы
  * follow / free-RTS / fly (CAM-2) → логическая поза; эффекты (`effects.ts`)

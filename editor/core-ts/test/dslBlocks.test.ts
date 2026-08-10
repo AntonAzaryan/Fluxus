@@ -107,8 +107,8 @@ describe('ED-5: каталог блоков — закрытые наборы я
   });
 
   it('у каждого имени есть ключ описания, и он выведен из пути (ED-28)', () => {
-    const en = EDITOR_BUNDLES['en']!;
-    const ru = EDITOR_BUNDLES['ru']!;
+    const en = EDITOR_BUNDLES.en!;
+    const ru = EDITOR_BUNDLES.ru!;
     for (const block of catalog.actions) {
       expect(block.descriptionKey).toBe(descriptionKey(['action', block.name]));
       expect(en[block.descriptionKey], block.name).toBeDefined();
@@ -307,7 +307,7 @@ describe('ED-5: незаполненный слот в документ не у�
       name: 'modifyComponent',
       slots: { component: 'Health', values: { hp: 0 }, entity: buildExpression('var', ['e']) },
     });
-    expect(Object.keys(filled['modifyComponent'] as JsonObject)).toEqual(['values', 'entity', 'component']);
+    expect(Object.keys(filled.modifyComponent as JsonObject)).toEqual(['values', 'entity', 'component']);
     // Тот же блок, заполненный в другом порядке, даёт тот же JSON.
     const other = buildAction({
       name: 'modifyComponent',
@@ -318,7 +318,7 @@ describe('ED-5: незаполненный слот в документ не у�
 
   it('аргумент вне конвенции пишется следом и не теряется', () => {
     const node = buildAction({ name: 'addTween', slots: { duration: 60, entity: 0, def: 0 } });
-    expect(Object.keys(node['addTween'] as JsonObject)).toEqual(['entity', 'duration', 'def']);
+    expect(Object.keys(node.addTween as JsonObject)).toEqual(['entity', 'duration', 'def']);
   });
 
   it('аргументы выражения пишутся списком всегда, а читаются в обеих формах', () => {

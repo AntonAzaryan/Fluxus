@@ -50,7 +50,7 @@ class LoopbackTransport extends BaseTransport {
     if (peer === undefined) return;
     // Через планировщик, как и сообщения: закрытие — такое же событие канала, и
     // мгновенный разрыв прямо в `close()` дал бы порядок, которого в сети нет.
-    this.schedule(() => peer.closedByPeer(reason));
+    this.schedule(() => { peer.closedByPeer(reason); });
   }
 
   private receiveFromPeer(bytes: Uint8Array): void {

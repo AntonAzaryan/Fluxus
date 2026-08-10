@@ -29,7 +29,7 @@ export class LobbyHost {
     this.lobby = lobby;
     this.codec = lobbyServerCodec(options.serializer ?? DEFAULT_SERIALIZER);
     this.now = options.now ?? Date.now;
-    transports.onConnection((transport) => this.attach(transport));
+    transports.onConnection((transport) => { this.attach(transport); });
   }
 
   private attach(transport: Transport): void {

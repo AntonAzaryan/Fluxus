@@ -42,13 +42,13 @@ describe('SystemRegistry (DET-3, SYS-2)', () => {
   it('отвергает дублирующийся order — порядок обязан быть однозначен', () => {
     const registry = new SystemRegistry();
     registry.register(sys('A', 10));
-    expect(() => registry.register(sys('B', 10))).toThrow(/order 10/);
+    expect(() => { registry.register(sys('B', 10)); }).toThrow(/order 10/);
   });
 
   it('отвергает дублирующееся имя — имя определяет RNG-стрим системы (RNG-4)', () => {
     const registry = new SystemRegistry();
     registry.register(sys('A', 10));
-    expect(() => registry.register(sys('A', 20))).toThrow(/уже зарегистрирована/);
+    expect(() => { registry.register(sys('A', 20)); }).toThrow(/уже зарегистрирована/);
   });
 
   // DET-3: порядок регистрации не наблюдаем в результате. Проверка не на паре,
@@ -90,7 +90,7 @@ describe('Шкала order (DET-9)', () => {
     const registry = new SystemRegistry();
     registry.register(new ArenaSystem());
 
-    expect(() => registry.register(new EvaluatedSystem({ name: 'Border', order: 110, do: [] }))).toThrow(
+    expect(() => { registry.register(new EvaluatedSystem({ name: 'Border', order: 110, do: [] })); }).toThrow(
       /order 110 занят системой "Arena", на него же встаёт "Border"/,
     );
   });
@@ -104,12 +104,12 @@ describe('Шкала order (DET-9)', () => {
   it('равные order не разводятся по имени ни в каком порядке регистрации', () => {
     const first = new SystemRegistry();
     first.register(sys('A', 10));
-    expect(() => first.register(sys('B', 10))).toThrow(/order 10/);
+    expect(() => { first.register(sys('B', 10)); }).toThrow(/order 10/);
     expect(first.ordered().map((s) => s.name)).toEqual(['A']);
 
     const second = new SystemRegistry();
     second.register(sys('B', 10));
-    expect(() => second.register(sys('A', 10))).toThrow(/order 10/);
+    expect(() => { second.register(sys('A', 10)); }).toThrow(/order 10/);
     expect(second.ordered().map((s) => s.name)).toEqual(['B']);
   });
 

@@ -100,7 +100,7 @@ export const PLACEMENT_OPERATIONS = {
  * прежними.
  */
 function readLayer(operationId: string, params: OperationParams): PlacementLayer {
-  const raw = params['layer'];
+  const raw = params.layer;
   if (raw === undefined || raw === null) return 'sim';
   if (raw !== 'sim' && raw !== 'decoration') {
     throw new OperationError(operationId, 'параметр "layer": ожидался "sim" либо "decoration"', {
@@ -193,9 +193,9 @@ function readString(value: JsonValue | undefined): string | null {
  * Читатели ниже — приведение типа, а не вторая проверка: схему параметров уже
  * сверил слой операций к моменту вызова `apply` (ED-30).
  */
-const asDocument = (params: OperationParams): DocumentId => params['document'] as DocumentId;
-const asList = (params: OperationParams): JsonPath => (params['list'] ?? []) as JsonPath;
-const asRecord = (params: OperationParams): string => params['record'] as string;
+const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
+const asList = (params: OperationParams): JsonPath => (params.list ?? []) as JsonPath;
+const asRecord = (params: OperationParams): string => params.record as string;
 const asNumber = (params: OperationParams, name: string): number => params[name] as number;
 
 /**
@@ -203,7 +203,7 @@ const asNumber = (params: OperationParams, name: string): number => params[name]
  * позиции ничего, пользуется той, на которую опираются нативные системы ядра.
  */
 export function readBinding(operationId: string, params: OperationParams): PositionBinding {
-  const raw = params['binding'];
+  const raw = params.binding;
   if (raw === undefined || raw === null) return DEFAULT_POSITION_BINDING;
   if (!isJsonObject(raw)) {
     throw new OperationError(operationId, 'параметр "binding": ожидался объект привязки', {
@@ -211,9 +211,9 @@ export function readBinding(operationId: string, params: OperationParams): Posit
       received: raw,
     });
   }
-  const component = readString(raw['component']);
-  const x = readString(raw['x']);
-  const y = readString(raw['y']);
+  const component = readString(raw.component);
+  const x = readString(raw.x);
+  const y = readString(raw.y);
   if (component === null || x === null || y === null) {
     throw new OperationError(
       operationId,
@@ -221,10 +221,10 @@ export function readBinding(operationId: string, params: OperationParams): Posit
       { param: 'binding', received: raw },
     );
   }
-  const spin = raw['rotation'];
+  const spin = raw.rotation;
   if (spin === undefined || spin === null) return { component, x, y };
-  const spinComponent = isJsonObject(spin) ? readString(spin['component']) : null;
-  const spinField = isJsonObject(spin) ? readString(spin['field']) : null;
+  const spinComponent = isJsonObject(spin) ? readString(spin.component) : null;
+  const spinField = isJsonObject(spin) ? readString(spin.field) : null;
   if (spinComponent === null || spinField === null) {
     throw new OperationError(
       operationId,
@@ -288,14 +288,14 @@ export const addPlacementOperation: AuthoringOperation = {
       [binding.component, binding.x, requireQuantized(id, 'x', asNumber(params, 'x'))],
       [binding.component, binding.y, requireQuantized(id, 'y', asNumber(params, 'y'))],
     ];
-    const turns = params['turns'];
+    const turns = params.turns;
     if (typeof turns === 'number') {
       const spin = requireRotation(id, binding);
       entries.push([spin.component, spin.field, requireQuantized(id, 'turns', turns)]);
     }
     // Только в конец (SER-8): другого способа дописать запись у слоя нет.
     return ctx.appendRecord(asDocument(params), asList(params), {
-      prefab: params['prefab'] as string,
+      prefab: params.prefab as string,
       [OVERRIDES_KEY]: overridesOf(entries),
     });
   },
@@ -374,11 +374,11 @@ export const rotatePlacementOperation: AuthoringOperation = {
  */
 export function prefabNames(config: JsonValue | undefined): readonly string[] {
   if (!isJsonObject(config)) return [];
-  const list = config['prefabs'];
+  const list = config.prefabs;
   if (!isJsonArray(list)) return [];
   const names: string[] = [];
   for (const entry of list) {
-    const name = isJsonObject(entry) ? readString(entry['name']) : null;
+    const name = isJsonObject(entry) ? readString(entry.name) : null;
     if (name !== null) names.push(name);
   }
   return names;

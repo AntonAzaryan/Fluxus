@@ -1,0 +1,51 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  // baseline: 93 unused exports + 21 unused types + 1 duplicate export существовали
+  // до внедрения knip — категории временно выключены, чтобы гейт был зелёным.
+  // Счётчики и порядок разгребания — в LINT_BASELINE.md. Проверки files,
+  // dependencies, unlisted, unresolved — активны.
+  "rules": {
+    "exports": "off",
+    "types": "off",
+    "duplicates": "off"
+  },
+  "ignore": [
+    // baseline: рукописные типы к scripts/spec-graph.mjs — импортируются только
+    // редакторными LSP, из кода не референсятся.
+    "scripts/spec-graph.d.mts"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": [".claude/hooks/*.mjs", "engine/tests/guard/*.ts"],
+      "project": ["scripts/**", "engine/tests/guard/**", "*.ts", "*.js"]
+    },
+    "engine/core-ts": {
+      "entry": ["bin/*.mjs", "test/**/*.test.ts"]
+    },
+    "engine/net-ts": {
+      "entry": ["bin/*.mjs", "test/**/*.test.ts"]
+    },
+    "engine/render-ts": {
+      "entry": ["test/**/*.test.ts"]
+    },
+    "engine/assets-ts": {
+      "entry": ["test/**/*.test.ts"]
+    },
+    "engine/client-ts": {
+      "entry": ["demo/**/*.ts", "test/**/*.test.ts"]
+    },
+    "engine/integration-ts": {
+      "entry": ["test/**/*.test.ts"],
+      "project": ["test/**"]
+    },
+    "editor/core-ts": {
+      "entry": ["test/**/*.test.ts"]
+    },
+    "editor/ui-ts": {
+      "entry": ["app/**/*.ts", "test/**/*.test.ts"]
+    },
+    "tools/blender-ts": {
+      "entry": ["bin/*.mjs", "test/**/*.test.ts", "test/fixtures/build.mjs"]
+    }
+  }
+}

@@ -106,7 +106,7 @@ describe('ED-15: вьюпорт показывает документы, а не
     await settle();
 
     expect(stage.visuals.length).toBeGreaterThan(supplied);
-    expect(stage.visuals.at(-1)?.entities['Hero']?.model).toBe('visuals/models/champion.mdx');
+    expect(stage.visuals.at(-1)?.entities.Hero?.model).toBe('visuals/models/champion.mdx');
     // Инстансы при этом подаются по-прежнему набором (REND-11): решение о том,
     // что пересобрать, остаётся у подсистемы, а не размазывается по редактору.
     expect(stage.submitted.length).toBeGreaterThan(built);

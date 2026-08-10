@@ -71,7 +71,7 @@ describe('entityIndex', () => {
     const id = allocate(idx);
     free(idx, id);
 
-    expect(() => free(idx, id)).not.toThrow();
+    expect(() => { free(idx, id); }).not.toThrow();
     expect(idx.aliveCount).toBe(0);
   });
 
@@ -80,7 +80,7 @@ describe('entityIndex', () => {
     // но не стек от очереди — это различие пришпиливает следующий тест.
     const idx = createEntityIndex(16);
     const ids = Array.from({ length: 8 }, () => allocate(idx)); // индексы 0..7
-    free(idx, ids[7] as number);
+    free(idx, ids[7]!);
 
     const reused = allocate(idx);
 
@@ -96,8 +96,8 @@ describe('entityIndex', () => {
     const idx = createEntityIndex(8);
     const ids = Array.from({ length: 6 }, () => allocate(idx)); // индексы 0..5
 
-    free(idx, ids[2] as number);
-    free(idx, ids[5] as number);
+    free(idx, ids[2]!);
+    free(idx, ids[5]!);
 
     expect(indexOf(allocate(idx))).toBe(5);
     expect(indexOf(allocate(idx))).toBe(2);
@@ -143,7 +143,7 @@ describe('entityIndex', () => {
   it('ID-2: три спавна при непустом списке берут слоты из списка, счётчик не двигается', () => {
     const idx = createEntityIndex(8);
     const ids = Array.from({ length: 5 }, () => allocate(idx)); // индексы 0..4
-    for (const slot of [1, 3, 0]) free(idx, ids[slot] as number);
+    for (const slot of [1, 3, 0]) free(idx, ids[slot]!);
     const counterBefore = idx.nextIndex;
 
     const reused = [allocate(idx), allocate(idx), allocate(idx)].map(indexOf);
@@ -176,8 +176,8 @@ describe('entityIndex', () => {
       allocate(idx),
     ]; // raw-индексы 0..5
 
-    free(idx, ids[5] as number); // индекс 5
-    free(idx, ids[2] as number); // индекс 2, освобождён последним
+    free(idx, ids[5]!); // индекс 5
+    free(idx, ids[2]!); // индекс 2, освобождён последним
 
     const next1 = allocate(idx);
     expect(indexOf(next1)).toBe(2); // LIFO: последний освобождённый — первый переиспользованный
@@ -198,10 +198,10 @@ describe('entityIndex', () => {
     const idx = createEntityIndex(8);
     const ids = Array.from({ length: 6 }, () => allocate(idx)); // индексы 0..5
 
-    free(idx, ids[3] as number);
-    free(idx, ids[1] as number);
+    free(idx, ids[3]!);
+    free(idx, ids[1]!);
     allocate(idx); // переиспользует индекс 1 (последний освобождённый, LIFO)
-    free(idx, ids[5] as number);
+    free(idx, ids[5]!);
 
     const indices = Array.from(aliveEntities(idx), indexOf);
 
@@ -286,7 +286,7 @@ describe('entityIndex', () => {
 
     // free() не бросает: диагностика уходит в sink, а generation молча заворачивается к 0
     // через `% GENERATION_LIMIT` — то же самое значение, что было бы и в release-сборке.
-    expect(() => withDiagnostics(sink, 1, () => free(idx, staleId))).not.toThrow();
+    expect(() => { withDiagnostics(sink, 1, () => { free(idx, staleId); }); }).not.toThrow();
     expect(entries).toHaveLength(1);
     expect(entries[0]?.code).toBe('ENTITY_GENERATION_OVERFLOW');
     expect(idx.generations[0]).toBe(0);

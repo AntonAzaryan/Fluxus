@@ -57,6 +57,7 @@ export class InputRing {
   /** Кадр на конкретный тик — если он ещё не вытеснен из кольца. */
   at(tick: number): SentInput | undefined {
     const entry = this.slots[tick % this.slots.length];
+    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
     return entry !== undefined && entry.frame.tick === tick ? entry : undefined;
   }
 
@@ -69,6 +70,7 @@ export class InputRing {
    */
   bySeq(seq: number): SentInput | undefined {
     for (const entry of this.slots) {
+      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
       if (entry !== undefined && entry.frame.seq === seq) return entry;
     }
     return undefined;

@@ -57,14 +57,14 @@ export function decodeInvite(invite: string): InvitePayload {
   }
   if (typeof raw !== 'object' || raw === null) throw new RendezvousError('инвайт не разбирается: не объект');
   const source = raw as Record<string, unknown>;
-  const via = source['via'];
-  const channel = source['channel'];
-  const token = source['token'];
+  const via = source.via;
+  const channel = source.channel;
+  const token = source.token;
   if (typeof via !== 'string' || via === '') throw new RendezvousError('инвайт: поле "via" — непустая строка');
   if (channel !== 'lobby' && channel !== 'match') throw new RendezvousError('инвайт: поле "channel" — lobby или match');
   if (typeof token !== 'string' || token === '') throw new RendezvousError('инвайт: поле "token" — непустая строка');
-  const url = source['url'];
-  const expiresAt = source['expiresAt'];
+  const url = source.url;
+  const expiresAt = source.expiresAt;
   return {
     via,
     channel,

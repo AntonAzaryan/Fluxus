@@ -154,8 +154,8 @@ export function makeAssets(): AssetsStub {
   return {
     service,
     requests,
-    resolve: (kind, id, data) => set(kind, id, { status: 'ready', data }),
-    fail: (kind, id, reason) => set(kind, id, { status: 'failed', reason }),
+    resolve: (kind, id, data) => { set(kind, id, { status: 'ready', data }); },
+    fail: (kind, id, reason) => { set(kind, id, { status: 'failed', reason }); },
   };
 }
 

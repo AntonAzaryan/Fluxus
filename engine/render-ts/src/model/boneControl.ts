@@ -94,6 +94,7 @@ export class BoneControlState {
   setControls(controls: Readonly<Record<string, BoneControlDef>>): void {
     for (const [role, state] of this.roles) {
       const next = controls[role];
+      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
       if (next !== undefined && next.bone === state.bone) continue;
       this.roles.delete(role);
       this.abandoned.push(state);
@@ -111,7 +112,7 @@ export class BoneControlState {
     targetYaw: number | null,
     rootYaw: number,
     dt: number,
-    warn: (message: string) => void = (message) => console.warn(message),
+    warn: (message: string) => void = (message) => { console.warn(message); },
   ): void {
     this.releaseAbandoned(instance);
 
@@ -150,6 +151,7 @@ export class BoneControlState {
       }
       state.preOverride.copy(bone.quaternion);
       bone.quaternion.premultiply(this.quat.setFromAxisAngle(UP_Z, state.yaw));
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- baseline
       if (state.lastWritten === null) state.lastWritten = new THREE.Quaternion();
       state.lastWritten.copy(bone.quaternion);
     }

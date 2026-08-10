@@ -35,7 +35,7 @@ import {
 import { FIXTURE_IDS } from './support/project.js';
 
 /** Область без содержимого: нужна там, где проверяется каркас, а не вклад. */
-const blankArea: WorkspaceArea<object> = {
+const blankArea: WorkspaceArea = {
   id: 'area.blank',
   descriptionKey: 'blank.description',
   labelKey: 'blank.label',

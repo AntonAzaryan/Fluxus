@@ -146,6 +146,7 @@ export function multiplyMatrices(a: readonly number[], b: readonly number[]): nu
  * перенос.
  */
 export function localMatrixOf(node: GltfNode): number[] {
+  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
   if (node.matrix !== undefined && node.matrix.length === 16) return [...node.matrix];
   const [tx = 0, ty = 0, tz = 0] = node.translation ?? [];
   const [qx = 0, qy = 0, qz = 0, qw = 1] = node.rotation ?? [];
@@ -255,7 +256,7 @@ export function coerceExtra(value: GltfJsonValue): string | number | boolean | n
 }
 
 function coerceExtras(
-  extras: { readonly [key: string]: GltfJsonValue } | undefined,
+  extras: Readonly<Record<string, GltfJsonValue>> | undefined,
 ): Record<string, string | number | boolean> {
   const out: Record<string, string | number | boolean> = {};
   if (extras === undefined) return out;

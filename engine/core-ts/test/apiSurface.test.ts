@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 import * as api from '../src/index.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), 'api-surface.golden.json');
-const UPDATE = process.env['UPDATE_API'] === '1';
+const UPDATE = process.env.UPDATE_API === '1';
 
 describe('поверхность экспорта ядра (CLI-8)', () => {
   it('рантайм-экспорты src/index.ts совпадают с эталоном', () => {

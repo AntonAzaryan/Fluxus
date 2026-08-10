@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * Подсистема террейна (REND-7, REND-9): ступени из тех же данных, что видит
  * симуляция, плюс визуальная кривизна поверх них.
@@ -136,6 +137,7 @@ export function buildFloorGeometry(
           // Поля нет вовсе — только база: у площадки нормаль вертикальна, у
           // рампы постоянна, и вершины квада получают одну и ту же (REND-7).
           quadNormal(h00, h10, h11, h01, 0.5, 0.5, tile, scratch);
+          // eslint-disable-next-line max-depth -- baseline
           for (let i = 0; i < 4; i++) normals.push(scratch.x, scratch.y, scratch.z);
         } else {
           pushSurfaceNormal(normals, surface, x, y, x * tile, y * tile, scratch);
@@ -384,6 +386,7 @@ export function toBufferGeometry(data: TerrainGeometryData): THREE.BufferGeometr
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
+  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
   if (data.normals !== undefined && data.normals.length === data.positions.length) {
     geometry.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
   } else {

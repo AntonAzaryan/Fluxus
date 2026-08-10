@@ -229,7 +229,7 @@ describe('DI (DI-3, DI-4)', () => {
     const checker: System = {
       name: 'Checker',
       order: 10,
-      run: (ctx) => expect(ctx.physics).toBeUndefined(),
+      run: (ctx) => { expect(ctx.physics).toBeUndefined(); },
     };
     expect(() => tick(makeSim([checker]), freshState())).not.toThrow();
   });
@@ -239,7 +239,7 @@ describe('DI (DI-3, DI-4)', () => {
     const checker: System = {
       name: 'Checker',
       order: 10,
-      run: (ctx) => expect(ctx.physics).toBe(physics),
+      run: (ctx) => { expect(ctx.physics).toBe(physics); },
     };
     tick(makeSim([checker], physics), freshState());
   });
@@ -276,7 +276,7 @@ describe('наблюдаемость (OBS-1..3)', () => {
     const emitter: System = {
       name: 'DamageSystem',
       order: 10,
-      run: (ctx) => ctx.events.emit('DamageDealt', { amount: 7 }),
+      run: (ctx) => { ctx.events.emit('DamageDealt', { amount: 7 }); },
     };
 
     const seen: TickResult[] = [];

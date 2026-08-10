@@ -180,7 +180,7 @@ describe('ASSET-10: секция конфига камеры — presentation-д
     const doc = contentManifest();
     const edited = {
       ...doc,
-      cameraConfig: { ...(doc['cameraConfig'] as Record<string, number>), pitch: 0.6, distance: 24 },
+      cameraConfig: { ...(doc.cameraConfig as Record<string, number>), pitch: 0.6, distance: 24 },
     };
     const result = validateManifest(edited, { cameraConfig: CAMERA_CONFIG_DESCRIPTION });
     expect(result.ok).toBe(true);

@@ -144,14 +144,14 @@ const REFERENCES: OperationParamSpec = {
  * Читатели — приведение типа, а не вторая проверка: схему параметров уже сверил
  * слой операций к моменту вызова `apply` (ED-30).
  */
-const asDocument = (params: OperationParams): DocumentId => params['document'] as DocumentId;
-const asList = (params: OperationParams): JsonPath => (params['list'] ?? []) as JsonPath;
-const asRecord = (params: OperationParams): string => params['record'] as string;
+const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
+const asList = (params: OperationParams): JsonPath => (params.list ?? []) as JsonPath;
+const asRecord = (params: OperationParams): string => params.record as string;
 const asString = (params: OperationParams, name: string): string => params[name] as string;
 
 /** Документ манифеста из параметра; `null` — половины пары в этом вызове нет. */
 function visualsOf(params: OperationParams): DocumentId | null {
-  const raw = params['visuals'];
+  const raw = params.visuals;
   return typeof raw === 'string' && raw !== '' ? raw : null;
 }
 
@@ -223,10 +223,10 @@ function actionHits(
 /** Одно место ссылок, разобранное из параметра. `null` — запись не того вида. */
 function siteOf(value: JsonValue): PrefabReferenceSite | null {
   if (!isJsonObject(value)) return null;
-  const document = value['document'];
-  const list = value['list'];
-  const field = value['field'];
-  const action = value['action'];
+  const document = value.document;
+  const list = value.list;
+  const field = value.field;
+  const action = value.action;
   if (typeof document !== 'string' || !isJsonArray(list) || typeof field !== 'string') return null;
   const path = list.filter(
     (step): step is string | number => typeof step === 'string' || typeof step === 'number',
@@ -251,7 +251,7 @@ function rewriteReferences(
   from: string,
   to: string,
 ): number {
-  const raw = params['references'];
+  const raw = params.references;
   if (raw === undefined || raw === null) return 0;
   if (!isJsonArray(raw)) {
     throw new OperationError(operationId, 'параметр "references": ожидался список адресов', {

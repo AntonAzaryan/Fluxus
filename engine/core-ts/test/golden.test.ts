@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { runScenarioBytes, type ScenarioDef } from '../src/sim/scenario.js';
 
 const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'golden');
-const UPDATE = process.env['UPDATE_GOLDEN'] === '1';
+const UPDATE = process.env.UPDATE_GOLDEN === '1';
 const decoder = new TextDecoder();
 
 const scenarios = readdirSync(GOLDEN_DIR)

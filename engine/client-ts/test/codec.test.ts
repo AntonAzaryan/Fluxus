@@ -148,7 +148,7 @@ describe('кодек: roundtrip эквивалентен прямому вызо
     const rig = makeRig();
     const extractor = makeExtractor(rig);
     const ext = extractor.extract(tick(rig.sim, rig.state));
-    expect(() => writeTick(new ArrayBuffer(8), ext)).toThrow(/байт/);
+    expect(() => { writeTick(new ArrayBuffer(8), ext); }).toThrow(/байт/);
   });
 });
 
@@ -213,8 +213,8 @@ describe('кодек: значения на границах раскладки 
     ] as const) {
       const ext = syntheticTick({ count, floorDelta: new Uint32Array(pairs * 2) });
       const need = requiredBytes(count, pairs);
-      expect(() => writeTick(new ArrayBuffer(need), ext)).not.toThrow();
-      expect(() => writeTick(new ArrayBuffer(need - 1), ext)).toThrow(/байт/);
+      expect(() => { writeTick(new ArrayBuffer(need), ext); }).not.toThrow();
+      expect(() => { writeTick(new ArrayBuffer(need - 1), ext); }).toThrow(/байт/);
     }
   });
 });

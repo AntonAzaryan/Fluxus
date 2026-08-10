@@ -113,7 +113,7 @@ function objectsOf(value: JsonValue | undefined, key: string): readonly Record<s
  * отказывается назвать prefab неизвестным, что тоже правда.
  */
 function shaped(entry: Record<string, unknown>, member: string): boolean {
-  return typeof entry['name'] === 'string' && typeof entry[member] === 'object' && entry[member] !== null;
+  return typeof entry.name === 'string' && typeof entry[member] === 'object' && entry[member] !== null;
 }
 
 function componentsOf(value: JsonValue | undefined): readonly ComponentSchema[] {

@@ -99,7 +99,7 @@ export function prefabRecords(
   if (!isJsonArray(list)) return [];
   const out: PrefabRecord[] = [];
   list.forEach((entry, index) => {
-    const name = isJsonObject(entry) ? entry['name'] : undefined;
+    const name = isJsonObject(entry) ? entry.name : undefined;
     const key = keys[index];
     if (typeof name !== 'string' || key === undefined) return;
     const components = isJsonObject(entry) ? entry[PREFAB_COMPONENTS_KEY] : undefined;
@@ -117,7 +117,7 @@ export function prefabEntry(config: JsonValue | undefined, name: string): JsonVa
   const list = getAtPath(config ?? null, PREFAB_LIST);
   if (!isJsonArray(list)) return undefined;
   for (const entry of list) {
-    if (isJsonObject(entry) && entry['name'] === name) return entry;
+    if (isJsonObject(entry) && entry.name === name) return entry;
   }
   return undefined;
 }
@@ -133,7 +133,7 @@ function fieldsOfComponent(
   name: string,
 ): readonly (readonly [string, string])[] {
   const declared = componentEntry(config, name);
-  const fields = declared === undefined ? undefined : declared['fields'];
+  const fields = declared === undefined ? undefined : declared.fields;
   if (isJsonObject(fields)) {
     const out: (readonly [string, string])[] = [];
     for (const [field, type] of Object.entries(fields)) {

@@ -382,7 +382,7 @@ describe('ED-23, ED-25: области объектов и систем в со�
     expect(config.prefabs.map((prefab) => prefab.name)).toContain('Turret');
     expect(config.systems.map((system) => system.name)).toEqual(['Regen']);
     expect(
-      (session.documentValue(VISUALS) as { entities: Record<string, unknown> }).entities['Turret'],
+      (session.documentValue(VISUALS) as { entities: Record<string, unknown> }).entities.Turret,
     ).toEqual({ model: 'art/models/turret.mdx' });
 
     // История одна на сессию (ED-18, ED-23): обе правки снимаются подряд, и
@@ -438,7 +438,7 @@ describe('ED-23, ED-25: области объектов и систем в со�
       bar(),
       (node) => node.labels?.ariaLabel?.key === 'ui.area.objects.renameTo',
     )[0];
-    field?.on?.['change']?.({ target: { value: 'Box' } } as unknown as Event);
+    field?.on?.change?.({ target: { value: 'Box' } } as unknown as Event);
     press(buttonByKey(bar(), 'ui.area.objects.renamePrefab'));
     expect(objects.failure).toBeNull();
 

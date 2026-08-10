@@ -81,12 +81,12 @@ export async function buildDataUriFixture(): Promise<ArrayBuffer> {
  */
 export async function buildMultiPrimitiveFixture(): Promise<{ gltf: ArrayBuffer; bin: ArrayBuffer }> {
   const { doc, bin } = await readBase();
-  const meshes = [...(doc['meshes'] as Json[])];
+  const meshes = [...(doc.meshes as Json[])];
   const prop = meshes[PROP_MESH]!;
   meshes[PROP_MESH] = {
     ...prop,
     primitives: [
-      ...(prop['primitives'] as Json[]),
+      ...(prop.primitives as Json[]),
       { attributes: { POSITION: PROP_POSITION_ACCESSOR }, indices: PROP_INDICES_ACCESSOR },
     ],
   };
@@ -116,22 +116,22 @@ export async function buildUnnormalizedWeightsFixture(): Promise<{
   grown.set(weightBytes, bin.length);
 
   const bufferViews = [
-    ...(doc['bufferViews'] as Json[]),
+    ...(doc.bufferViews as Json[]),
     { buffer: 0, byteOffset: bin.length, byteLength: weightBytes.length },
   ];
   const accessors = [
-    ...(doc['accessors'] as Json[]),
+    ...(doc.accessors as Json[]),
     { bufferView: bufferViews.length - 1, componentType: 5126, count: VERTICES, type: 'VEC4' },
   ];
   const weightsAccessor = accessors.length - 1;
 
-  const meshes = [...(doc['meshes'] as Json[])];
+  const meshes = [...(doc.meshes as Json[])];
   const body = meshes[BODY_MESH]!;
-  const primitives = [...(body['primitives'] as Json[])];
+  const primitives = [...(body.primitives as Json[])];
   const first = primitives[0]!;
   primitives[0] = {
     ...first,
-    attributes: { ...(first['attributes'] as Json), WEIGHTS_0: weightsAccessor },
+    attributes: { ...(first.attributes as Json), WEIGHTS_0: weightsAccessor },
   };
   meshes[BODY_MESH] = { ...body, primitives };
 

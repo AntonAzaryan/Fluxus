@@ -10,29 +10,30 @@ function collector(trace: TraceLevel = 'off'): { sink: DiagnosticsSink; entries:
 describe('assert (FP-4): мягкая диагностика, не часть симуляции', () => {
   it('условие истинно — не зовёт sink', () => {
     const { sink, entries } = collector();
-    withDiagnostics(sink, 1, () => assert(true, 'unreachable'));
+    withDiagnostics(sink, 1, () => { assert(true, 'unreachable'); });
     expect(entries).toHaveLength(0);
   });
 
   it('условие ложно — пишет запись, НЕ бросает исключение', () => {
     const { sink, entries } = collector();
-    expect(() => withDiagnostics(sink, 7, () => assert(false, 'что-то не так', 'FIXED_OVERFLOW'))).not.toThrow();
+    expect(() => { withDiagnostics(sink, 7, () => { assert(false, 'что-то не так', 'FIXED_OVERFLOW'); }); }).not.toThrow();
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ tick: 7, kind: 'assert', level: 'warn', code: 'FIXED_OVERFLOW' });
     expect(entries[0]?.message).toContain('что-то не так');
   });
 
   it('без подключённого sink — молчаливо не бросает', () => {
-    expect(() => assert(false, 'без sink')).not.toThrow();
+    expect(() => { assert(false, 'без sink'); }).not.toThrow();
   });
 
   it('уровень трейса `off` не глушит диагностику инвариантов (DIAG-3)', () => {
     const { sink, entries } = collector('off');
-    withDiagnostics(sink, 1, () => assert(false, 'слышно и при выключенном трейсе'));
+    withDiagnostics(sink, 1, () => { assert(false, 'слышно и при выключенном трейсе'); });
     expect(entries).toHaveLength(1);
   });
 
   it('возвращаемого значения нет — assert не может повлиять на результат вызывающей операции', () => {
+    // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-invalid-void-type -- baseline
     const result: void = assert(false, 'x');
     expect(result).toBeUndefined();
   });
@@ -40,17 +41,17 @@ describe('assert (FP-4): мягкая диагностика, не часть с
 
 describe('assertInvariant (FP-4/ID-1): жёсткая граница, бросает в обоих режимах', () => {
   it('условие истинно — не бросает', () => {
-    expect(() => assertInvariant(true, 'unreachable')).not.toThrow();
+    expect(() => { assertInvariant(true, 'unreachable'); }).not.toThrow();
   });
 
   it('условие ложно — бросает исключение с сообщением', () => {
-    expect(() => assertInvariant(false, 'граница нарушена')).toThrow(/граница нарушена/);
+    expect(() => { assertInvariant(false, 'граница нарушена'); }).toThrow(/граница нарушена/);
   });
 
   it('запись уходит ДО броска — она переживает исключение из тика (DIAG-1)', () => {
     const { sink, entries } = collector();
     expect(() =>
-      withDiagnostics(sink, 3, () => assertInvariant(false, 'x', 'ENTITY_CAPACITY_EXCEEDED')),
+      { withDiagnostics(sink, 3, () => { assertInvariant(false, 'x', 'ENTITY_CAPACITY_EXCEEDED'); }); },
     ).toThrow();
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ tick: 3, kind: 'invariant', level: 'error', code: 'ENTITY_CAPACITY_EXCEEDED' });
@@ -63,8 +64,8 @@ describe('assertInvariant (FP-4/ID-1): жёсткая граница, броса
     try {
       const release = await import('../src/debug.js');
       expect(release.DEBUG).toBe(false);
-      expect(() => release.assertInvariant(false, 'жёсткая граница')).toThrow(/жёсткая граница/);
-      expect(() => release.assert(false, 'мягкая диагностика')).not.toThrow();
+      expect(() => { release.assertInvariant(false, 'жёсткая граница'); }).toThrow(/жёсткая граница/);
+      expect(() => { release.assert(false, 'мягкая диагностика'); }).not.toThrow();
     } finally {
       process.env.NODE_ENV = prev;
       vi.resetModules();
@@ -75,7 +76,7 @@ describe('assertInvariant (FP-4/ID-1): жёсткая граница, броса
 describe('область действия приёмника (DIAG-1): без модульного синглтона', () => {
   it('приёмник снимается после выхода из области', () => {
     const { sink, entries } = collector();
-    withDiagnostics(sink, 1, () => assert(false, 'внутри'));
+    withDiagnostics(sink, 1, () => { assert(false, 'внутри'); });
     assert(false, 'снаружи');
     expect(entries).toHaveLength(1);
     expect(entries[0]?.message).toContain('внутри');
@@ -85,7 +86,7 @@ describe('область действия приёмника (DIAG-1): без м
     const outer = collector();
     const inner = collector();
     withDiagnostics(outer.sink, 1, () => {
-      withDiagnostics(inner.sink, 2, () => assert(false, 'внутренний'));
+      withDiagnostics(inner.sink, 2, () => { assert(false, 'внутренний'); });
       assert(false, 'внешний');
     });
     expect(inner.entries).toHaveLength(1);
@@ -111,6 +112,6 @@ describe('область действия приёмника (DIAG-1): без м
         throw new Error('приёмник сломан');
       },
     };
-    expect(() => withDiagnostics(sink, 1, () => assert(false, 'x'))).toThrow(/sink диагностики бросил/);
+    expect(() => { withDiagnostics(sink, 1, () => { assert(false, 'x'); }); }).toThrow(/sink диагностики бросил/);
   });
 });

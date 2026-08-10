@@ -92,17 +92,17 @@ describe('InputSystem (TICK-4, TICK-5)', () => {
 
   it('фрейм слота без живой сущности — ошибка', () => {
     const h = harness(['p1', 'p2'], 1);
-    expect(() => h.step([frame('p2', 1)])).toThrow(/слота 1 без живой сущности/);
+    expect(() => { h.step([frame('p2', 1)]); }).toThrow(/слота 1 без живой сущности/);
   });
 
   it('фрейм игрока вне списка — ошибка', () => {
     const h = harness(['p1']);
-    expect(() => h.step([frame('p9', 1)])).toThrow(/"p9" не объявлен/);
+    expect(() => { h.step([frame('p9', 1)]); }).toThrow(/"p9" не объявлен/);
   });
 
   it('два фрейма одного игрока на тике — ошибка', () => {
     const h = harness(['p1']);
-    expect(() => h.step([frame('p1', 1), frame('p1', 1)])).toThrow(/два фрейма/);
+    expect(() => { h.step([frame('p1', 1), frame('p1', 1)]); }).toThrow(/два фрейма/);
   });
 
   it('дубликат в списке игроков — ошибка конструктора', () => {
@@ -137,6 +137,6 @@ describe('сценарий с вводом (CLI-2)', () => {
     };
 
     const out = runScenario(def);
-    expect(out.ticks[1]!.world.components['Input']!['moveX']![0]).toBe(F(3));
+    expect(out.ticks[1]!.world.components.Input!.moveX![0]).toBe(F(3));
   });
 });

@@ -125,7 +125,7 @@ const recordOf = (session: EditorSession, list: JsonPath, index: number): string
 function prefabRecord(session: EditorSession, name: string): string {
   const list = getAtPath(session.documentValue(CONFIG), PREFABS);
   const index = isJsonArray(list)
-    ? list.findIndex((entry) => isJsonObject(entry) && entry['name'] === name)
+    ? list.findIndex((entry) => isJsonObject(entry) && entry.name === name)
     : -1;
   return recordOf(session, PREFABS, index);
 }
@@ -133,7 +133,7 @@ function prefabRecord(session: EditorSession, name: string): string {
 const prefabNames = (session: EditorSession): readonly string[] => {
   const list = getAtPath(session.documentValue(CONFIG), PREFABS);
   return isJsonArray(list)
-    ? list.map((entry) => (isJsonObject(entry) && typeof entry['name'] === 'string' ? entry['name'] : ''))
+    ? list.map((entry) => (isJsonObject(entry) && typeof entry.name === 'string' ? entry.name : ''))
     : [];
 };
 
@@ -145,7 +145,7 @@ const entityKeys = (session: EditorSession): readonly string[] => {
 const placementPrefabs = (session: EditorSession): readonly string[] => {
   const list = getAtPath(session.documentValue(CONFIG), INITIAL);
   return isJsonArray(list)
-    ? list.map((entry) => (isJsonObject(entry) && typeof entry['prefab'] === 'string' ? entry['prefab'] : ''))
+    ? list.map((entry) => (isJsonObject(entry) && typeof entry.prefab === 'string' ? entry.prefab : ''))
     : [];
 };
 

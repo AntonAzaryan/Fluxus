@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * @contribution Рабочая область систем (ED-4, ED-5, ED-23) — вклад, а не часть
  * каркаса.
@@ -478,6 +479,7 @@ function eventBlock(
         children: [
           textField({
             label: documentValue(slot),
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- baseline
             value: documentValue(typeof literals[slot] === 'string' ? String(literals[slot]) : ''),
             readOnly: env.disabled,
             onCommit: (raw) => {

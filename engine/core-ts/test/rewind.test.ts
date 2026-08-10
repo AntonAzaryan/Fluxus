@@ -193,19 +193,19 @@ describe('машина состояний мира (WSM-1..3, WSM-5, REW-8, REW-
 
   it('прямой переход Running → Rewinding отклоняется (WSM-2)', () => {
     const wsm = controller(harness());
-    expect(() => wsm.beginRewind()).toThrow(/только через Paused/);
+    expect(() => { wsm.beginRewind(); }).toThrow(/только через Paused/);
   });
 
   it('перемотка внутри перемотки запрещена (REW-8)', () => {
     const wsm = controller(harness());
     wsm.pause();
     wsm.beginRewind();
-    expect(() => wsm.beginRewind()).toThrow(/REW-8/);
+    expect(() => { wsm.beginRewind(); }).toThrow(/REW-8/);
   });
 
   it('seekTo вне Rewinding отклоняется (WSM-5)', () => {
     const wsm = controller(harness());
-    expect(() => wsm.seekTo(0)).toThrow(/только в Rewinding/);
+    expect(() => { wsm.seekTo(0); }).toThrow(/только в Rewinding/);
   });
 
   it('обычные системы во время Paused и Rewinding выключены (REW-4)', () => {
@@ -525,7 +525,7 @@ describe('dirty-tracking (OBS-6, NET-8)', () => {
     const spawner: System = {
       name: 'Spawner',
       order: 5,
-      run: (ctx) => ctx.commands.spawn('mover'),
+      run: (ctx) => { ctx.commands.spawn('mover'); },
     };
     const registry = new SystemRegistry();
     registry.register(spawner);

@@ -372,7 +372,7 @@ describe('ED-19: пару «prefab — запись манифеста» про�
       .forDocument(FIXTURE_IDS.config)
       .filter((issue) => issue.ruleId === VISUAL_FOR_PREFAB_RULE);
     // У `Crate` записи манифеста нет — половина пары, и она названа адресом.
-    expect(found.map((issue) => issue.reasonParams['name'])).toEqual(['Crate']);
+    expect(found.map((issue) => issue.reasonParams.name)).toEqual(['Crate']);
     expect(found[0]?.path).toEqual(['prefabs', 1, 'name']);
   });
 });

@@ -40,8 +40,8 @@ import {
 } from '../src/validation/index.js';
 import { GROUP_WRITE_REASONS } from '../src/project/index.js';
 
-const en = EDITOR_BUNDLES['en']!;
-const ru = EDITOR_BUNDLES['ru']!;
+const en = EDITOR_BUNDLES.en!;
+const ru = EDITOR_BUNDLES.ru!;
 const companion = fileURLToPath(
   new URL('../src/i18n/locales/editor.ru.fingerprints.json', import.meta.url),
 );
@@ -125,11 +125,11 @@ describe('ED-28: пространство валидации в отчёте у�
 
 describe('ED-27: `ru` и `en` равноправны', () => {
   it('ни один ключ не остался без перевода', () => {
-    expect(translationStatus(en, ru, EDITOR_FINGERPRINTS['ru']!).missing).toEqual([]);
+    expect(translationStatus(en, ru, EDITOR_FINGERPRINTS.ru!).missing).toEqual([]);
   });
 
   it('переводы подтверждены и не протухли', () => {
-    const status = translationStatus(en, ru, EDITOR_FINGERPRINTS['ru']!);
+    const status = translationStatus(en, ru, EDITOR_FINGERPRINTS.ru!);
     expect(status.stale).toEqual([]);
     expect(status.unconfirmed).toEqual([]);
   });
@@ -138,9 +138,9 @@ describe('ED-27: `ru` и `en` равноправны', () => {
 describe('ED-28: спутник отпечатков пересобираем', () => {
   it('файл на диске совпадает с тем, что даёт генератор', () => {
     const expected = fingerprintFileContent(
-      confirmTranslations('ru', en, ru, EDITOR_FINGERPRINTS['ru'], SOURCE_LOCALE),
+      confirmTranslations('ru', en, ru, EDITOR_FINGERPRINTS.ru, SOURCE_LOCALE),
     );
-    if (process.env['UPDATE_FINGERPRINTS'] === '1') writeFileSync(companion, expected);
+    if (process.env.UPDATE_FINGERPRINTS === '1') writeFileSync(companion, expected);
     expect(readFileSync(companion, 'utf8')).toBe(expected);
   });
 });

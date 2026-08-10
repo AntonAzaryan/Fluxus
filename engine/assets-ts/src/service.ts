@@ -12,7 +12,7 @@ import type {
  * повторный запрос возвращает тот же handle и тот же ассет, не копию).
  */
 interface Entry {
-  readonly handle: Handle<unknown>;
+  readonly handle: Handle;
   readonly kind: AssetKind;
   state: AssetState<unknown>;
   readonly subscribers: Set<(s: AssetState<unknown>) => void>;
@@ -111,7 +111,7 @@ export class AssetService {
       }
       return existing.handle;
     }
-    const handle = Object.freeze({ id, kind }) as Handle<unknown>;
+    const handle = Object.freeze({ id, kind }) as Handle;
     const entry: Entry = {
       handle,
       kind,
@@ -157,8 +157,9 @@ export class AssetService {
     this.startLoad(entry);
   }
 
-  private entryOf(handle: Handle<unknown>): Entry {
+  private entryOf(handle: Handle): Entry {
     const entry = this.cache.get(handle.id);
+    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
     if (!entry || entry.kind !== handle.kind) {
       throw new Error(`handle "${handle.id}" (${handle.kind}) не выдавался этим сервисом`);
     }
@@ -221,7 +222,7 @@ export class AssetService {
         } catch (e) {
           throw new Error(
             `ассет "${id}": не удалось прочитать зависимость "${depId}" — ` +
-              `${e instanceof Error ? e.message : String(e)}`,
+              (e instanceof Error ? e.message : String(e)),
           );
         }
       },

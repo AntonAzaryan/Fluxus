@@ -122,8 +122,8 @@ const TARGET: OperationParamSpec = {
  */
 const asDocument = (params: OperationParams, name = 'document'): DocumentId =>
   params[name] as DocumentId;
-const asList = (params: OperationParams): JsonPath => (params['list'] ?? []) as JsonPath;
-const asRecord = (params: OperationParams): string => params['record'] as string;
+const asList = (params: OperationParams): JsonPath => (params.list ?? []) as JsonPath;
+const asRecord = (params: OperationParams): string => params.record as string;
 const asNumber = (params: OperationParams, name: string): number => params[name] as number;
 
 /** Квантованная длина (позиция, масштаб) либо отказ операции (PRES-3). */
@@ -198,9 +198,9 @@ export const addDecorationOperation: AuthoringOperation = {
   params: { document: DOCUMENT, list: LIST, visual: VISUAL, x: X, y: Y, turns: OPTIONAL_TURNS },
   apply(ctx, params) {
     const id = DECORATION_OPERATIONS.add;
-    const turns = params['turns'];
+    const turns = params.turns;
     const record: Record<string, JsonValue> = {
-      [DECORATION_FIELDS.visual]: requireVisual(id, params['visual']),
+      [DECORATION_FIELDS.visual]: requireVisual(id, params.visual),
       [DECORATION_FIELDS.x]: requireLength(id, 'x', asNumber(params, 'x')),
       [DECORATION_FIELDS.y]: requireLength(id, 'y', asNumber(params, 'y')),
     };
@@ -304,7 +304,7 @@ export const decorationToPropOperation: AuthoringOperation = {
     // (сессия возвращает документы к состоянию до него), и объект не окажется
     // потерянным ни в одном из двух документов.
     const created = ctx.appendRecord(asDocument(params, 'target'), asList(params), {
-      prefab: params['prefab'] as string,
+      prefab: params.prefab as string,
       [OVERRIDES_KEY]: overridesOf(entries),
     });
     ctx.removeRecord(source, descriptor);
@@ -355,7 +355,7 @@ export const propToDecorationOperation: AuthoringOperation = {
     // Q16.16 → доля мировой единицы делает ЯДРО (`fixed.toFloat`), а не деление
     // на 65536 здесь: второй реализации конверсии редактор не заводит (ED-1).
     const record: Record<string, JsonValue> = {
-      [DECORATION_FIELDS.visual]: requireVisual(id, params['visual']),
+      [DECORATION_FIELDS.visual]: requireVisual(id, params.visual),
       [DECORATION_FIELDS.x]: requireLength(id, 'x', fixed.toFloat(raw(binding.x))),
       [DECORATION_FIELDS.y]: requireLength(id, 'y', fixed.toFloat(raw(binding.y))),
     };

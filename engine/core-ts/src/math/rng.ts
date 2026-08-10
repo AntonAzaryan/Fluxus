@@ -19,6 +19,7 @@ export function utf8Bytes(text: string): Uint8Array {
 /** FNV-1a 32, побайтно (RNG-3). `Math.imul` — иначе `hash * prime` на числах у границы u32 вылетает за 53-битный safe integer. */
 export function fnv1a32(bytes: Uint8Array): number {
   let hash = FNV_OFFSET_BASIS;
+  // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
   for (let i = 0; i < bytes.length; i++) {
     hash = (hash ^ bytes[i]!) >>> 0; // i < bytes.length по циклу — индекс всегда валиден
     hash = Math.imul(hash, FNV_PRIME) >>> 0;

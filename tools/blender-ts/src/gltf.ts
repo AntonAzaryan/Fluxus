@@ -41,7 +41,7 @@ export interface GltfNode {
   readonly scale?: readonly number[];
   readonly children?: readonly number[];
   readonly mesh?: number;
-  readonly extras?: { readonly [key: string]: GltfJsonValue };
+  readonly extras?: Readonly<Record<string, GltfJsonValue>>;
 }
 
 export interface GltfAccessor {
@@ -66,7 +66,7 @@ export interface GltfBuffer {
 }
 
 export interface GltfPrimitive {
-  readonly attributes: { readonly [name: string]: number };
+  readonly attributes: Readonly<Record<string, number>>;
   readonly indices?: number;
   readonly mode?: number;
 }
@@ -333,8 +333,9 @@ export function meshPositions(document: GltfDocument, mesh: number): readonly (r
   const def = document.json.meshes?.[mesh];
   if (def === undefined) throw new GltfParseError(`glTF: меш #${mesh} не объявлен`);
   const rows: (readonly number[])[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   for (const primitive of def.primitives ?? []) {
-    const accessor = primitive.attributes['POSITION'];
+    const accessor = primitive.attributes.POSITION;
     if (accessor === undefined) continue;
     for (const row of readAccessor(document, accessor)) rows.push(row);
   }
@@ -378,6 +379,7 @@ export function readMeshGeometry(
   const channels = new Map<string, (number | null)[]>();
   for (const name of attributes) channels.set(name, []);
 
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   for (const primitive of def.primitives ?? []) {
     const mode = primitive.mode ?? MODE_TRIANGLES;
     if (mode !== MODE_TRIANGLES) {
@@ -385,7 +387,7 @@ export function readMeshGeometry(
         `glTF: меш #${mesh}: примитив режима ${mode} — клеточные данные читаются с треугольников (mode 4)`,
       );
     }
-    const accessor = primitive.attributes['POSITION'];
+    const accessor = primitive.attributes.POSITION;
     if (accessor === undefined) continue;
     const offset = positions.length;
     const rows = readAccessor(document, accessor);
@@ -395,6 +397,7 @@ export function readMeshGeometry(
       const values = channels.get(name)!;
       const index = primitive.attributes[name];
       if (index === undefined) {
+        // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
         for (let i = 0; i < rows.length; i++) values.push(null);
         continue;
       }

@@ -276,7 +276,7 @@ describe('VisualSurfaceSource (ASSET-7 → REND-9)', () => {
     });
     source.init(ctx);
     assets.resolve('terrain-curvature', 'visuals/wrong.json', curvatureOf(3, 3, ['...', '...', '...']));
-    expect(warnings.some((w) => /не совпадает с сеткой/.test(w))).toBe(true);
+    expect(warnings.some((w) => w.includes('не совпадает с сеткой'))).toBe(true);
     expect(source.current?.hasCurvature).toBe(false);
   });
 
@@ -289,7 +289,7 @@ describe('VisualSurfaceSource (ASSET-7 → REND-9)', () => {
     });
     source.init(ctx);
     assets.fail('terrain-curvature', 'visuals/missing.json', 'файл недоступен');
-    expect(warnings.some((w) => /не загрузилась/.test(w))).toBe(true);
+    expect(warnings.some((w) => w.includes('не загрузилась'))).toBe(true);
     expect(source.current?.hasCurvature).toBe(false);
   });
 
@@ -363,7 +363,7 @@ describe('VisualSurfaceSource: документные входы (ED-10, ED-11, 
     const source = new VisualSurfaceSource(flatGrid(), { warn: (m) => warnings.push(m) });
     source.init(ctx);
     source.setCurvature(curvatureOf(3, 3, ['...', '...', '...']));
-    expect(warnings.some((w) => /не совпадает с сеткой/.test(w))).toBe(true);
+    expect(warnings.some((w) => w.includes('не совпадает с сеткой'))).toBe(true);
     expect(source.current!.hasCurvature).toBe(false);
   });
 

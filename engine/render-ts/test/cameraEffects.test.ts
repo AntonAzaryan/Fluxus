@@ -320,9 +320,9 @@ describe('Описание типов эффектов (CAM-9)', () => {
       tables: { events: { Boom: { effect: 'gust', power: 99, amplitude: -5 } } },
     });
     director.onTick(makeTickView([], { freshEvents: true, events: [explosion(0, 0)] }), 0, 0, null);
-    expect(built[0]?.params['power']).toBe(2);
+    expect(built[0]?.params.power).toBe(2);
     // Незаданный параметр — умолчание описания, а не ноль.
-    expect(built[0]?.params['bias']).toBe(7);
+    expect(built[0]?.params.bias).toBe(7);
     // Параметр привязки приводится тем же правилом: кадр не место, где отказывают.
     expect(built[0]?.strength).toBe(0);
   });

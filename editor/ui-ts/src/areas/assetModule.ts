@@ -142,7 +142,7 @@ export function createAssetModule(host: EnvironmentHost): AssetModule {
    */
   const read = new Set<string>();
   /** Хэндлы, выданные текущим сервисом: чужой ему хэндл он не примет. */
-  const issued = new Map<string, Handle<unknown>>();
+  const issued = new Map<string, Handle>();
 
   const reading: ContentAssetSource = {
     read(id) {
@@ -189,6 +189,7 @@ export function createAssetModule(host: EnvironmentHost): AssetModule {
       // Хэндл прежнего сервиса: дерево изменилось, и кэш уже выброшен. Просьба
       // автора от этого не пропадает — она становится первым запросом к новому
       // кэшу, а он читает свежие байты (ASSET-2, ASSET-4).
+      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
       if (known === undefined || known.kind !== handle.kind) {
         issued.set(handle.id, service.request(handle.kind, handle.id));
         return;

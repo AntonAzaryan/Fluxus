@@ -45,12 +45,14 @@ describe('AssetService: кэш и идентичность (ASSET-2)', () => {
     const svc = new AssetService(new MemoryAssetSource(new Map([['unit.fake', bytesOf('x')]])));
     svc.registerLoader(fakeModelLoader());
     svc.request('model', 'unit.fake');
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- baseline
     expect(() => svc.request('texture', 'unit.fake')).toThrowError(/ASSET-2|уже запрошен/);
   });
 
   it('state/subscribe/retry по чужому handle — ошибка «не выдавался»', () => {
     const svc = new AssetService(new MemoryAssetSource(new Map()));
     const foreign = { id: 'nope.fake', kind: 'model' as const };
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- baseline
     expect(() => svc.state(foreign)).toThrowError(/не выдавался/);
   });
 });
@@ -364,7 +366,7 @@ describe('AssetService: retry (ASSET-4)', () => {
     expect(svc.state(h).status).toBe('failed');
 
     svc.registerLoader(fakeModelLoader()); // производит 'model', а не 'texture'
-    expect(() => svc.retry(h)).not.toThrow();
+    expect(() => { svc.retry(h); }).not.toThrow();
     const s = svc.state(h);
     expect(s.status).toBe('failed');
     if (s.status === 'failed') expect(s.reason).toMatch(/нет загрузчика для вида "texture"/);

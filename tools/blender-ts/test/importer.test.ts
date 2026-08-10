@@ -314,7 +314,7 @@ describe('BLND-4: детерминизм импорта', () => {
 
     const after = JSON.parse((await contentOf(root, SCENE_ID)).toString('utf8')) as typeof before;
     expect(after.initial.map((record) => record.prefab)).toEqual(before.initial.map((record) => record.prefab));
-    expect(after.initial[0]!.overrides['Position']).not.toEqual(before.initial[0]!.overrides['Position']);
+    expect(after.initial[0]!.overrides.Position).not.toEqual(before.initial[0]!.overrides.Position);
     expect(after.initial[1]).toEqual(before.initial[1]);
   });
 
@@ -435,12 +435,12 @@ describe('BLND-9, BLND-10: ассеты в атомарной записи им�
 
     expect(run.code).toBe(0);
     const after = JSON.parse((await contentOf(root, SCENE_ID)).toString('utf8')) as Record<string, unknown>;
-    expect((after['terrain'] as Record<string, unknown>)['levels']).toEqual([...TERRAIN_LEVELS]);
-    expect((after['terrain'] as Record<string, unknown>)['flags']).toEqual([...TERRAIN_FLAGS]);
+    expect((after.terrain as Record<string, unknown>).levels).toEqual([...TERRAIN_LEVELS]);
+    expect((after.terrain as Record<string, unknown>).flags).toEqual([...TERRAIN_FLAGS]);
     // Всё, кроме карт: состав ключей, размеры сетки, системы и схемы.
     expect(Object.keys(after)).toEqual(Object.keys(before));
     const stripped = (value: Record<string, unknown>): string =>
-      JSON.stringify({ ...value, terrain: { ...(value['terrain'] as object), levels: [], flags: [] }, initial: [] });
+      JSON.stringify({ ...value, terrain: { ...(value.terrain as object), levels: [], flags: [] }, initial: [] });
     expect(stripped(after)).toBe(stripped(before));
   });
 
@@ -453,7 +453,7 @@ describe('BLND-9, BLND-10: ассеты в атомарной записи им�
     expect(run.code).toBe(0);
     const after = JSON.parse((await contentOf(root, SCENE_ID)).toString('utf8')) as Record<string, unknown>;
     const wanted = JSON.parse(before.toString('utf8')) as Record<string, unknown>;
-    expect(after['terrain']).toEqual(wanted['terrain']);
+    expect(after.terrain).toEqual(wanted.terrain);
     // И карта кривизны тоже: у неё в источнике объекта нет — байт в байт.
     expect(JSON.parse((await contentOf(root, CURVATURE_ID)).toString('utf8'))).toEqual(curvatureDocument());
   });

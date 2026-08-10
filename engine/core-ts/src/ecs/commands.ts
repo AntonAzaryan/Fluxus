@@ -19,7 +19,7 @@ import * as world from './world.js';
  * порядок команд и событий внутри системы был бы искажён. Поле появляется
  * только при полном уровне трейса, при выключенном его нет.
  */
-type Traced = { seq?: number };
+interface Traced { seq?: number }
 
 type Command = Traced &
   (

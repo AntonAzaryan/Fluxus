@@ -144,7 +144,7 @@ const message = (error: unknown): string =>
 export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
   const opened = new Map<string, OpenedAsset>();
   /** Хэндл на ID: им и адресуется повторная попытка (ASSET-2, ASSET-4). */
-  const handles = new Map<string, Handle<unknown>>();
+  const handles = new Map<string, Handle>();
   const unsubscribes: (() => void)[] = [];
   let disposed = false;
   /** Отписка от инвалидации кэша; ставится ниже, когда `probe` уже собран. */
@@ -176,7 +176,7 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
       // Отказ без причины: сказать её модулю ассетов нечем — его здесь нет
       // вовсе. Словами это говорит ресурс интерфейса (ED-27), а не литерал.
       if (assets === null) return failed(kind, id, null);
-      let handle: Handle<unknown>;
+      let handle: Handle;
       try {
         handle = assets.request<unknown>(kind, id);
       } catch (error) {
@@ -208,6 +208,7 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
       const known = opened.get(id);
       const handle = handles.get(id);
       const assets = options.assets;
+      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
       if (known === undefined || known.status !== 'failed' || assets === null) return;
       if (handle === undefined) {
         // Хэндла нет — запрос отказал синхронно (ASSET-2) и загрузки не было
@@ -258,6 +259,7 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
 
 /** Данные модели открытого ассета; `null` — это не готовая модель (ASSET-5). */
 export function modelOf(asset: OpenedAsset | undefined): NormalizedModel | null {
+  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
   if (asset === undefined || asset.status !== 'ready' || asset.kind !== 'model') return null;
   return asset.data as NormalizedModel;
 }

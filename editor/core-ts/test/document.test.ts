@@ -81,7 +81,7 @@ describe('ED-29: править документ можно только зар�
     const editor = createEditorSession({ operations: registry });
     openScene(editor);
     editor.applyOperation('test.stash', { document: SCENE });
-    expect(() => stashed!.setValue(SCENE, ['later'], true)).toThrow(/только внутри `apply`/);
+    expect(() => { stashed!.setValue(SCENE, ['later'], true); }).toThrow(/только внутри `apply`/);
     expect((editor.documentValue(SCENE) as Record<string, unknown>).later).toBeUndefined();
   });
 });
@@ -321,7 +321,7 @@ describe('ED-18: границей операции служит взаимоде
     const editor = session();
     openScene(editor);
     const drag = editor.beginOperation('document.setValue', { document: SCENE, path: ['capacity'], value: 1 });
-    expect(() => editor.markSaved(SCENE)).toThrow(/во время взаимодействия/);
+    expect(() => { editor.markSaved(SCENE); }).toThrow(/во время взаимодействия/);
     expect(() => editor.openDocument({ id: 'content/y.json', kind: 'any', value: {} })).toThrow(
       /во время взаимодействия/,
     );
@@ -469,6 +469,6 @@ describe('закрытие документа', () => {
     openScene(editor);
     editor.applyOperation('document.setValue', { document: SCENE, path: ['capacity'], value: 8 });
     editor.markSaved(SCENE);
-    expect(() => editor.closeDocument(SCENE)).toThrow(/упомянут в истории/);
+    expect(() => { editor.closeDocument(SCENE); }).toThrow(/упомянут в истории/);
   });
 });

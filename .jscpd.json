@@ -1,0 +1,20 @@
+{
+  "threshold": 3,
+  "minLines": 10,
+  "format": ["typescript", "javascript"],
+  "gitignore": true,
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/test/**",
+    "**/*.test.ts",
+    "**/demo/**",
+    "content/**",
+    "openspec/**",
+    "engine/schemas/**",
+    "engine/tests/**",
+    "tools/blender-addon/**",
+    "coverage/**"
+  ],
+  "reporters": ["console"]
+}

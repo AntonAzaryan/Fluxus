@@ -30,20 +30,20 @@ describe('ED-25: реестр вкладов', () => {
   it('повторная регистрация того же id — отказ, а не замена', () => {
     const registry = createOperationRegistry();
     registry.register(noop);
-    expect(() => registry.register({ ...noop })).toThrow(/уже зарегистрирована/);
+    expect(() => { registry.register({ ...noop }); }).toThrow(/уже зарегистрирована/);
   });
 
   it('операция и её параметр без ключа описания не регистрируются', () => {
     const registry = createOperationRegistry();
-    expect(() => registry.register({ ...noop, id: 'a.op', descriptionKey: '' })).toThrow(
+    expect(() => { registry.register({ ...noop, id: 'a.op', descriptionKey: '' }); }).toThrow(
       /пустой ключ описания/,
     );
     expect(() =>
-      registry.register({
+      { registry.register({
         ...noop,
         id: 'b.op',
         params: { value: { type: 'json', descriptionKey: '  ' } },
-      }),
+      }); },
     ).toThrow(/пустой ключ описания параметра "value"/);
   });
 

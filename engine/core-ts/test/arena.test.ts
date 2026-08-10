@@ -89,7 +89,7 @@ function harness() {
       setField(world, entity, 'Position', 'y', F(y));
     },
     /** Сужение — обычная мутация поля (ARENA-4); здесь напрямую, в бою — командой политики. */
-    shrink: (radius: number) => setField(world, arena.entity, ARENA_COMPONENT, 'radius', F(radius)),
+    shrink: (radius: number) => { setField(world, arena.entity, ARENA_COMPONENT, 'radius', F(radius)); },
     breakFloor: (cell: number) => {
       const [floorEntity] = query(world, { all: [FLOOR_COMPONENT] });
       const word = `w${cell >>> 5}`;

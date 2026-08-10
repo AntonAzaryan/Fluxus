@@ -239,7 +239,7 @@ function readRecords(id: string, layer: JsonObject, slot: string): readonly Json
  * в документе этого не заменяет, а у отвергнутого импорта пути ещё и нет.
  */
 function readFindings(id: string, layer: JsonObject): readonly Finding[] {
-  const value = layer['findings'];
+  const value = layer.findings;
   if (value === undefined) return [];
   if (!isJsonArray(value)) {
     throw new OperationError(id, 'параметр "layer": "findings" — список находок', {
@@ -248,9 +248,9 @@ function readFindings(id: string, layer: JsonObject): readonly Finding[] {
     });
   }
   return value.map((entry): Finding => {
-    const severity = isJsonObject(entry) ? entry['severity'] : undefined;
-    const object = isJsonObject(entry) ? entry['object'] : undefined;
-    const message = isJsonObject(entry) ? entry['message'] : undefined;
+    const severity = isJsonObject(entry) ? entry.severity : undefined;
+    const object = isJsonObject(entry) ? entry.object : undefined;
+    const message = isJsonObject(entry) ? entry.message : undefined;
     if ((severity !== 'error' && severity !== 'warning') || typeof object !== 'string' || typeof message !== 'string') {
       throw new OperationError(id, 'параметр "layer": находка — severity, object и message', {
         param: 'layer',
@@ -405,7 +405,7 @@ export const importSpatialLayerOperation: AuthoringOperation = {
   },
   apply(ctx, params) {
     const id = IMPORT_SPATIAL_LAYER;
-    const layer = params['layer'];
+    const layer = params.layer;
     if (!isJsonObject(layer)) {
       throw new OperationError(id, 'параметр "layer": ожидался целевой слой объектом', {
         param: 'layer',
@@ -452,7 +452,7 @@ export const importSpatialLayerOperation: AuthoringOperation = {
     }
 
     const scene = asDocument(params, 'scene');
-    const presentation = params['presentation'] === undefined ? null : asDocument(params, 'presentation');
+    const presentation = params.presentation === undefined ? null : asDocument(params, 'presentation');
     if (presentation === null && decorations.length > 0) {
       throw new OperationError(
         id,
@@ -460,7 +460,7 @@ export const importSpatialLayerOperation: AuthoringOperation = {
         { param: 'presentation' },
       );
     }
-    const curvatureId = params['curvature'] === undefined ? null : asDocument(params, 'curvature');
+    const curvatureId = params.curvature === undefined ? null : asDocument(params, 'curvature');
     if (curvatureId === null && curvature !== null) {
       // Молчаливый пропуск карты — то же самое, что молчаливый пропуск слота:
       // вызывающий получил бы «импорт прошёл» и не получил бы кривизны (ASSET-7).

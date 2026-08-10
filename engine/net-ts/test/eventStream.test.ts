@@ -92,7 +92,7 @@ function playing(ticks = 4) {
     relay();
   }
 
-  const feed = (message: ServerMessage): void => client.receive(message, clock.ms);
+  const feed = (message: ServerMessage): void => { client.receive(message, clock.ms); };
   /** Снапшот сервера под нужной парой: состояние настоящее, номер — из теста. */
   const snapshot = (epoch: number, tick: number): void => {
     const plain = snapshotToPlain(server.snapshot());

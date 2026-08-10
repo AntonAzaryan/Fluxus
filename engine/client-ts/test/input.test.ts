@@ -15,7 +15,6 @@ import {
   validateBindings,
   type GamepadLike,
   type InputSource,
-  type TouchBindings,
 } from '../src/index.js';
 import demoBindings from '../demo/bindings.json';
 
@@ -69,7 +68,7 @@ describe('InputSampler: латчинг фронтов (INP-2)', () => {
     const sampler = makeSampler();
     const source = new StubSource('stub');
     sampler.add(source);
-    expect(() => source.press!('teleport')).toThrow(/teleport/);
+    expect(() => { source.press!('teleport'); }).toThrow(/teleport/);
   });
 
   it('бит вне u16 отвергается конструктором (TICK-2)', () => {
@@ -200,7 +199,7 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
 });
 
 describe('TouchSource (INP-1, INP-2, D6)', () => {
-  const bindings = validateBindings(demoBindings).touch as TouchBindings;
+  const bindings = validateBindings(demoBindings).touch!;
   const viewport = { width: 1000, height: 500 };
   const make = (): TouchSource => new TouchSource(bindings, () => viewport);
   // Ход стика: 0.12 × min(1000, 500) = 60 px.

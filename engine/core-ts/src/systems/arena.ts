@@ -74,7 +74,7 @@ export const ARENA_COMPONENTS: readonly ComponentSchema[] = [
  */
 export function checkArenaSupport(prefabs: readonly PrefabDef[]): void {
   for (const prefab of prefabs) {
-    const support = prefab.components[ARENA_STATE_COMPONENT]?.['support'];
+    const support = prefab.components[ARENA_STATE_COMPONENT]?.support;
     if (support === undefined) continue;
     if (!Number.isInteger(support) || support < 0 || support > FIXED_ONE) {
       throw new Error(

@@ -138,8 +138,8 @@ const OFFSET: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operati
  * Читатели ниже — приведение типа, а не вторая проверка: схему параметров уже
  * сверил слой операций к моменту вызова `apply` (ED-30).
  */
-const asDocument = (params: OperationParams): DocumentId => params['document'] as DocumentId;
-const asBase = (params: OperationParams): JsonPath => (params['path'] ?? []) as JsonPath;
+const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
+const asBase = (params: OperationParams): JsonPath => (params.path ?? []) as JsonPath;
 const asNumber = (params: OperationParams, name: string): number => params[name] as number;
 
 /**
@@ -222,7 +222,7 @@ export const setCellKindOperation: AuthoringOperation = {
   params: { document: DOCUMENT, path: ASSET_PATH, cellX: CELL_X, cellY: CELL_Y, kind: KIND },
   apply(ctx, params) {
     const id = TERRAIN_OPERATIONS.cell;
-    const kind = params['kind'] as string;
+    const kind = params.kind as string;
     const char = terrainFlagChar(kind);
     if (char === null) {
       throw new OperationError(

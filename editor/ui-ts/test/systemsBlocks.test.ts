@@ -99,7 +99,7 @@ async function opened(scene: unknown = SCENE): Promise<Opened> {
 }
 
 function commit(node: UiNode | undefined, value: string): void {
-  const handler = node?.on?.['change'];
+  const handler = node?.on?.change;
   if (handler === undefined) throw new Error(`контрол не принимает ввод: ${String(node?.tag)}`);
   handler({ target: { value } } as unknown as Event);
 }
@@ -138,7 +138,7 @@ function controlAt(root: UiNode, path: JsonPath, tag = 'select'): UiNode | undef
 
 function optionsOf(node: UiNode | undefined): readonly string[] {
   return findAll(node ?? { tag: 'none' }, (child) => child.tag === 'option')
-    .map((child) => child.attrs?.['value'] ?? '')
+    .map((child) => child.attrs?.value ?? '')
     .filter((value) => value !== '');
 }
 
@@ -209,7 +209,7 @@ describe('ED-5: формула строится блоками, а на диск
 
     // Вердикт выносит ядро: тот же вызов, которым систему принимает реестр.
     const record = getAtPath(session.documentValue(CONFIG), [...SYSTEM_LIST, 0]);
-    expect(() => validateSystem(record as unknown as SystemDef, scene.world)).not.toThrow();
+    expect(() => { validateSystem(record as unknown as SystemDef, scene.world); }).not.toThrow();
     expect(() => loadScene(session.documentValue(CONFIG) as unknown as SceneDef)).not.toThrow();
   });
 

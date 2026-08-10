@@ -23,13 +23,13 @@ const AT_SECOND = { x: 20, y: 10 };
 const AT_EMPTY = { x: 90, y: 90 };
 
 const down = (fixture: LoadedFrameFixture, at: { x: number; y: number }, additive = false): void =>
-  fixture.pointer({ phase: 'down', ...at, additive });
+  { fixture.pointer({ phase: 'down', ...at, additive }); };
 const move = (fixture: LoadedFrameFixture, at: { x: number; y: number }): void =>
-  fixture.pointer({ phase: 'move', ...at, additive: false });
+  { fixture.pointer({ phase: 'move', ...at, additive: false }); };
 const up = (fixture: LoadedFrameFixture, at: { x: number; y: number }): void =>
-  fixture.pointer({ phase: 'up', ...at, additive: false });
+  { fixture.pointer({ phase: 'up', ...at, additive: false }); };
 const cancel = (fixture: LoadedFrameFixture): void =>
-  fixture.pointer({ phase: 'cancel', x: 0, y: 0, additive: false });
+  { fixture.pointer({ phase: 'cancel', x: 0, y: 0, additive: false }); };
 
 /**
  * Перерисовка, которую в живом редакторе делает подписчик `frame/mount.ts` на

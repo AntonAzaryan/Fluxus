@@ -32,10 +32,10 @@ async function settle(rounds = 4): Promise<void> {
 function probe(): {
   subsystem: RenderSubsystem;
   views: unknown[];
-  events: Array<{ tick: number | undefined; type: string }>;
+  events: { tick: number | undefined; type: string }[];
 } {
   const views: unknown[] = [];
-  const events: Array<{ tick: number | undefined; type: string }> = [];
+  const events: { tick: number | undefined; type: string }[] = [];
   return {
     views,
     events,
@@ -89,7 +89,7 @@ describe('воркер-сборка против однопоточной (SHELL
       clock: () => 0,
     });
     const directViews: unknown[] = [];
-    const directEvents: Array<{ tick: number | undefined; type: string }> = [];
+    const directEvents: { tick: number | undefined; type: string }[] = [];
 
     shell.start(); // handshake; тикер не успеет — тики шагаем вручную
     shell.stop();
@@ -225,6 +225,7 @@ describe('conflation: состояние последнее, события вс
 
     for (let step = 0; step < 6; step++) frozenShell.stepTick();
     // Буфер появляется только теперь: как будто main вернул его после разморозки.
+    // eslint-disable-next-line @typescript-eslint/dot-notation -- намеренный доступ к private-полю в тесте
     frozenShell['sender'].ack(new ArrayBuffer(16 * 1024));
     frozenPorts.drain();
 
@@ -243,6 +244,7 @@ describe('ноль аллокаций канала в устоявшемся р�
     const spyPort: typeof workerPort = {
       post(message, transfer) {
         const envelope = message as TickEnvelope;
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
         if (envelope.t === 'tick') seen.add(envelope.buffer);
         workerPort.post(message, transfer);
       },

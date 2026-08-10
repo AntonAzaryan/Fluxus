@@ -31,12 +31,10 @@ interface ChunkWriter {
   write(chunk: Uint8Array): Promise<void>;
   close(): Promise<void>;
 }
-declare const DecompressionStream: {
-  new (format: string): {
+declare const DecompressionStream: new (format: string) => {
     readable: { getReader(): ChunkReader };
     writable: { getWriter(): ChunkWriter };
   };
-};
 
 /** 8-байтовая сигнатура PNG по спецификации. */
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;

@@ -57,7 +57,7 @@ export class InProcessRendezvous implements Rendezvous {
    * исполнитель `Promise` превращает синхронный бросок в отказ.
    */
   resolve(invite: string): Promise<Transport> {
-    return new Promise((resolve) => resolve(this.open(invite)));
+    return new Promise((resolve) => { resolve(this.open(invite)); });
   }
 
   private open(invite: string): Transport {

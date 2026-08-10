@@ -57,8 +57,8 @@ describe('validateManifest (ASSET-6)', () => {
     const result = validateManifest(validDoc);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.manifest.entities['skeleton']!.model).toBe('models/SkeletonBarbarian.mdx');
-    expect(result.manifest.entities['fireball']!.model).toBe('models/Fireball.mdx');
+    expect(result.manifest.entities.skeleton!.model).toBe('models/SkeletonBarbarian.mdx');
+    expect(result.manifest.entities.fireball!.model).toBe('models/Fireball.mdx');
   });
 
   it('минимальная запись — только model — валидна', () => {
@@ -262,7 +262,7 @@ describe('validateManifest: секция эффектов камеры (ASSET-8)
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.manifest.cameraEffects!.events!['FireballExploded']!.effect).toBe('shake');
+    expect(result.manifest.cameraEffects!.events!.FireballExploded!.effect).toBe('shake');
   });
 
   it('структурные ошибки — внятные, с путями до полей', () => {
@@ -339,16 +339,16 @@ describe('validateManifest: секция эффектов камеры (ASSET-8)
     });
     expect(result.ok).toBe(true);
     expect(result.warnings).toHaveLength(2);
-    expect(result.warnings.some((w) => /Drunk\.effect/.test(w) && /lasting/.test(w))).toBe(true);
-    expect(result.warnings.some((w) => /Boom\.loudness/.test(w))).toBe(true);
+    expect(result.warnings.some((w) => w.includes('Drunk.effect') && w.includes('lasting'))).toBe(true);
+    expect(result.warnings.some((w) => w.includes('Boom.loudness'))).toBe(true);
   });
 
   it('значение вне объявленного диапазона — ошибка с адресом до поля', () => {
     const result = checked({ events: { Boom: { effect: 'shake', decay: 99, amplitude: -1 } } });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.errors.some((e) => /cameraEffects\.events\.Boom\.decay/.test(e))).toBe(true);
-    expect(result.errors.some((e) => /cameraEffects\.events\.Boom\.amplitude/.test(e))).toBe(true);
+    expect(result.errors.some((e) => e.includes('cameraEffects.events.Boom.decay'))).toBe(true);
+    expect(result.errors.some((e) => e.includes('cameraEffects.events.Boom.amplitude'))).toBe(true);
   });
 
   /**
@@ -438,7 +438,7 @@ describe('validateManifest: секция конфига камеры (ASSET-10)'
     const result = checked({ pitch: 0.7, distance: 22, effectsMultiplier: 0 });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.manifest.cameraConfig!['distance']).toBe(22);
+    expect(result.manifest.cameraConfig!.distance).toBe(22);
     expect(result.warnings).toEqual([]);
   });
 
@@ -511,7 +511,7 @@ describe('validateManifest: вертикальное смещение инста
     const bare = validateManifest({ entities });
     expect(bare.ok).toBe(true);
     if (!bare.ok) return;
-    expect(bare.manifest.entities['x']!.verticalOffset).toBeUndefined();
+    expect(bare.manifest.entities.x!.verticalOffset).toBeUndefined();
   });
 
   it('отрицательные значения и опечатки — ошибки с путями до полей', () => {

@@ -114,7 +114,7 @@ describe('buildSharedModel: клипы из секвенций (REND-4)', () => 
     const chest = instance.bonesByName.get('Bone_Chest')!;
     const before = chest.quaternion.clone();
 
-    const action = instance.mixer.clipAction(shared.clips[0] as THREE.AnimationClip);
+    const action = instance.mixer.clipAction(shared.clips[0]!);
     action.play();
     instance.mixer.update(0.5); // середина клипа: identity → 90° вокруг Z
     expect(chest.quaternion.equals(before)).toBe(false);
@@ -146,7 +146,7 @@ describe('buildSharedModel: клипы из секвенций (REND-4)', () => 
     const mesh = instance.meshes[0]!;
     expect(mesh.visible).toBe(true);
 
-    instance.mixer.clipAction(shared.clips[0] as THREE.AnimationClip).play();
+    instance.mixer.clipAction(shared.clips[0]!).play();
     instance.mixer.update(0.75); // после ключа t=0.5 часть скрыта
     expect(mesh.visible).toBe(false);
   });

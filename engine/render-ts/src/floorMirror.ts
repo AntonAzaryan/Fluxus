@@ -69,6 +69,7 @@ export class FloorMirror {
     if (this.entity !== null && world.isAlive(state, this.entity)) return this.entity;
     this.entity = null;
     const alive = world.listAlive(state);
+    // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
     for (let i = 0; i < alive.length; i++) {
       const candidate = alive[i]!;
       if (

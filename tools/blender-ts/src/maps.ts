@@ -325,8 +325,10 @@ export function generateCellLayer(
           const map: CurvatureMap = { width: spec.width, height: spec.height, rows };
           // Та же проверка, что стоит правилом на документе кривизны (ASSET-7).
           const checked = validateCurvatureMap({ width: map.width, height: map.height, rows: [...rows] });
+          // eslint-disable-next-line max-depth -- baseline
           if (checked.ok) curvature = map;
           else {
+            // eslint-disable-next-line max-depth -- baseline
             for (const message of checked.errors) {
               error(sink, curvatureObject.name, `карта кривизны отвергнута проверкой (validateCurvatureMap): ${message}`);
             }

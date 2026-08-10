@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- baseline */
 /**
  * Манифест визуалов (ASSET-6): data-driven JSON-документ «sim-идентификатор
  * сущности → визуал», отдельный от конфига сцены. Ссылки направлены только из
@@ -147,6 +148,7 @@ export function cameraEffectParams(
   description: CameraEffectsDescription,
   type: CameraEffectTypeSpec,
 ): readonly CameraEffectParamSpec[] {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   return [...type.params, ...(description.binding[type.kind] ?? [])];
 }
 
@@ -462,9 +464,11 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
           continue;
         }
         for (const [slot, tex] of Object.entries(slots)) {
+          // eslint-disable-next-line max-depth -- baseline
           if (!/^\d+$/.test(slot)) {
             errors.push(`${skinPath}: ключ "${slot}" не является номером textureSlot`);
           }
+          // eslint-disable-next-line max-depth -- baseline
           if (typeof tex !== 'string' || tex.length === 0) {
             errors.push(`${skinPath}.${slot}: ожидался asset id текстуры (непустая строка), получено ${typeName(tex)}`);
           }
@@ -706,6 +710,7 @@ export function validateManifest(doc: unknown, options: ValidateManifestOptions 
       // разделах, сделало бы разрешение ключа зависящим от порядка просмотра.
       if (isRecord(doc.entities)) {
         for (const name of Object.keys(doc.decorations)) {
+          // eslint-disable-next-line max-depth -- baseline
           if (name in doc.entities) {
             errors.push(
               `decorations.${name}: имя занято записью сущности — ключи разделов лежат в одном пространстве (ASSET-9)`,

@@ -93,10 +93,10 @@ const EVENT_TYPE: OperationParamSpec = {
  * Читатели — приведение типа, а не вторая проверка: схему параметров уже сверил
  * слой операций к моменту вызова `apply` (ED-30).
  */
-const asDocument = (params: OperationParams): DocumentId => params['document'] as DocumentId;
-const asList = (params: OperationParams): JsonPath => (params['list'] ?? []) as JsonPath;
-const asRecord = (params: OperationParams): string => params['record'] as string;
-const asPath = (params: OperationParams): JsonPath => (params['path'] ?? []) as JsonPath;
+const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
+const asList = (params: OperationParams): JsonPath => (params.list ?? []) as JsonPath;
+const asRecord = (params: OperationParams): string => params.record as string;
+const asPath = (params: OperationParams): JsonPath => (params.path ?? []) as JsonPath;
 const asString = (params: OperationParams, name: string): string => params[name] as string;
 
 /** Все источники ED-4: перечень нужен операции, чтобы отвергнуть чужое слово. */
@@ -185,7 +185,7 @@ export const appendNodeOperation: AuthoringOperation = {
       });
     }
     const index = listAt(id, ctx, document, record, path).length;
-    ctx.setRecordValue(document, record, [...path, index], params['node'] ?? null);
+    ctx.setRecordValue(document, record, [...path, index], params.node ?? null);
     return index;
   },
 };
@@ -236,7 +236,7 @@ export const setTriggerSourceOperation: AuthoringOperation = {
     const around: readonly JsonValue[] = isJsonArray(outer) ? outer : [];
 
     if (source === 'event') {
-      const type = params['type'];
+      const type = params.type;
       ctx.setRecordValue(document, record, [BODY_KEY], [
         {
           [EVENT_ACTION]: {

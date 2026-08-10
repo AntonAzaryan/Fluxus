@@ -30,7 +30,7 @@ const host = createWebHost({
     ? {}
     : {
         changes: (listener: (path: ContentPath, kind: ContentChangeKind) => void) => {
-          hot.on('fx:content', (change) => listener(change.path, change.kind));
+          hot.on('fx:content', (change) => { listener(change.path, change.kind); });
           // Сокет живёт столько же, сколько вкладка: отписывать нечего.
           return () => undefined;
         },

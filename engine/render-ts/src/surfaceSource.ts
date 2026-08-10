@@ -55,7 +55,7 @@ export class VisualSurfaceSource {
   constructor(grid: TerrainGrid, options: VisualSurfaceSourceOptions = {}) {
     this.grid = grid;
     this.curvatureMapId = options.curvatureMapId;
-    this.warn = options.warn ?? ((message) => console.warn(message));
+    this.warn = options.warn ?? ((message) => { console.warn(message); });
   }
 
   /** Поверхность; null — ни одна подсистема ещё не вызвала init. */
@@ -76,6 +76,7 @@ export class VisualSurfaceSource {
   /** Идемпотентна: зовут обе подсистемы из своих init, работа делается один раз. */
   init(ctx: RenderContext): void {
     this.heightStep = ctx.config.heightStep;
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- baseline
     if (this.surface === null) {
       this.surface = createVisualSurface(this.grid, this.heightStep, this.curvature);
     }

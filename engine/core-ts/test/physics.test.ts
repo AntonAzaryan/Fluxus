@@ -300,7 +300,7 @@ describe('разрешение движения (PHYS-8)', () => {
     expect(h.position(blocked).x).toBe(0);
     expect(h.position(free).x).toBe(F(0.5));
     expect(events).toHaveLength(1);
-    expect(events[0]!.data['other']).not.toBe(STATIC_COLLIDER);
+    expect(events[0]!.data.other).not.toBe(STATIC_COLLIDER);
   });
 
   it('сущность внутри препятствия выходит наружу, но не глубже', () => {
@@ -313,7 +313,7 @@ describe('разрешение движения (PHYS-8)', () => {
     const events = h.step();
     expect(h.position(out).x).toBe(fixed.add(F(2.2), F(0.3)));
     expect(h.position(deeper).x).toBe(F(2.2));
-    expect(events.map((e) => e.data['entity'])).toEqual([deeper]);
+    expect(events.map((e) => e.data.entity)).toEqual([deeper]);
   });
 
   it('сущность, засунутая в обрыв, из него выбирается', () => {
@@ -361,7 +361,7 @@ describe('маски слоёв (PHYS-2)', () => {
     const events = h.step();
     expect(h.position(charger).x).toBe(0);
     expect(events.map((e) => e.type)).toEqual(['Collision']);
-    expect(events[0]!.data['other']).toBe(unit);
+    expect(events[0]!.data.other).toBe(unit);
   });
 
   it('условная блокировка — мутация blockMask между тиками', () => {
@@ -422,7 +422,7 @@ describe('направленный гейт обрыва (PHYS-11)', () => {
     const events = h.step();
     expect(h.position(mover).x).toBe(F(1.5));
     expect(events.map((e) => e.type)).toEqual(['Collision']);
-    expect(events[0]!.data['other']).toBe(STATIC_COLLIDER);
+    expect(events[0]!.data.other).toBe(STATIC_COLLIDER);
   });
 
   it('спуск при активном допуске свободен с любой высоты', () => {
@@ -501,8 +501,8 @@ describe('sensor-пересечения (PHYS-12)', () => {
       Collider: { hitMask: LAYER_STATIC | LAYER_UNIT },
     });
     const events = h.step().filter((e) => e.type === 'Overlap');
-    expect(events.map((e) => e.data['other'])).toEqual([STATIC_COLLIDER, target]);
-    expect(events.map((e) => e.data['entity'])).toEqual([bullet, bullet]);
+    expect(events.map((e) => e.data.other)).toEqual([STATIC_COLLIDER, target]);
+    expect(events.map((e) => e.data.entity)).toEqual([bullet, bullet]);
   });
 });
 
