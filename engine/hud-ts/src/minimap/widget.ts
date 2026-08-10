@@ -327,6 +327,8 @@ class MinimapWidget implements HudWidget {
     ctx.clearRect(0, 0, this.config.width, this.config.height);
     if (entities === undefined) return;
 
+    // ponytail: массив и обёртки аллоцируются на каждую доставку; при сотнях
+    // маркеров на реальной сцене — переиспользуемый буфер.
     const drawn: { entity: MinimapEntityView; marker: ResolvedMarker }[] = [];
     for (const entity of entities.values()) {
       // kind === null — сущность не рисуется и в основном виде; это не

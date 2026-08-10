@@ -52,6 +52,12 @@ export interface PortraitStageOptions {
    * кэша тем же handle, без повторной загрузки.
    */
   readonly assets: AssetService;
+  /**
+   * Сток жалоб анимаций (REND-4): запись манифеста, не резолвящаяся в клип,
+   * жалуется сюда — как у подсистемы моделей арены. Без него контроллер
+   * пишет в console.warn мимо стока сборки.
+   */
+  readonly warn?: (message: string) => void;
 }
 
 /** Фабрика стенда — точка подмены THREE-части заглушкой в тестах. */
