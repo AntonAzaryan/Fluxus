@@ -146,6 +146,8 @@ export interface DemoHud {
   readonly runtime: HudRuntime;
   /** Фасад действий — обычный источник ввода: `main.ts` добавляет его в сэмплер (HUD-2). */
   readonly facade: HudActionsFacade;
+  /** Корень оверлея: `main.ts` по нему понимает, что курсор над интерактивом HUD. */
+  readonly root: Element;
 }
 
 /**
@@ -156,7 +158,9 @@ export interface DemoHud {
  * корень и зоны для указателя прозрачны (`pointer-events: none`), поэтому
  * остановка здесь и есть «перехват в границах интерактива».
  */
-const INTERCEPTED_POINTER_EVENTS = ['mousedown', 'click', 'wheel', 'touchstart'] as const;
+// 'pointerdown' обязателен: TouchSource слушает pointer-события на window
+// (input/touch.ts), и без него тап по кнопке HUD дошёл бы до стиковых зон.
+const INTERCEPTED_POINTER_EVENTS = ['mousedown', 'pointerdown', 'click', 'wheel', 'touchstart'] as const;
 
 /** Сборка HUD демо: реестры, оверлей-хост, фасад действий и исполнитель (HUD-4). */
 export function createDemoHud(options: DemoHudOptions): DemoHud {
@@ -203,5 +207,5 @@ export function createDemoHud(options: DemoHudOptions): DemoHud {
     control: options.control,
   });
   const runtime = new HudRuntime({ registry, host, actions: facade });
-  return { runtime, facade };
+  return { runtime, facade, root: host.root };
 }

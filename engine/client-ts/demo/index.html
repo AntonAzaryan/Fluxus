@@ -103,10 +103,34 @@
       .hud-portrait--empty {
         opacity: 0.6;
       }
+      /* Клавиатурная справка демо: статична и прозрачна для указателя —
+         с HUD-3 не конфликтует, событий не перехватывает. */
+      #help {
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        padding: 10px 14px;
+        color: #e8e8f0;
+        font: 12px/1.5 ui-monospace, Menlo, monospace;
+        background: rgba(10, 10, 24, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 8px;
+        pointer-events: none;
+        user-select: none;
+      }
+      #help b {
+        color: #ffd479;
+      }
     </style>
   </head>
   <body>
     <div id="app"></div>
+    <div id="help">
+      <div><b>WASD / стрелки</b> — движение &nbsp; <b>Shift</b> — уклон (дважды — перекат) &nbsp; <b>Space</b> — прыжок</div>
+      <div><b>ЛКМ</b> — фаербол в точку клика (взрыв выбивает пол); шаг в дыру — смерть</div>
+      <div><b>T</b> — скин steel/ember &nbsp; <b>K</b> — смерть героя</div>
+      <div><b>C</b> — центр на герое &nbsp; <b>Y</b> — follow &nbsp; <b>F</b> — облёт &nbsp; край экрана — панорама</div>
+    </div>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

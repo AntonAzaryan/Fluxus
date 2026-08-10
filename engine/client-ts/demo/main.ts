@@ -206,13 +206,29 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.code === 'KeyC') camInput.centerTap = true;
-  if (e.code === 'KeyY') camInput.followToggle = true;
+  if (e.code === 'KeyY') {
+    camInput.followToggle = true;
+    // Возврат в follow отменяет отложенный перелёт миникарты — иначе он
+    // выстрелил бы в устаревшую точку при следующем откреплении.
+    pendingPan = null;
+  }
   if (e.code === 'KeyF') camInput.flyToggle = true;
   keys.add(e.code);
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 
+/**
+ * Корень оверлея HUD и признак «курсор над его интерактивом»: события над
+ * pointer-events:none частями оверлея таргетируют canvas, над интерактивом —
+ * элемент HUD. Пока курсор над HUD, edge-pan не считается: миникарта стоит в
+ * краевой полосе, и без этого клик по её краю гасился бы панорамой (CAM-3).
+ */
+let hudRoot: Element | null = null;
+let pointerOverHud = false;
+
 window.addEventListener('mousemove', (e) => {
+  pointerOverHud =
+    hudRoot !== null && e.target instanceof Element && hudRoot.contains(e.target);
   if (midDrag) {
     camInput.dragDX += e.movementX;
     camInput.dragDY += e.movementY;
@@ -340,7 +356,7 @@ function sampleCameraInput(): void {
   camInput.panY = (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0);
   const rect = renderer3.domElement.getBoundingClientRect();
   const margin = rig?.config.edgeMarginPx ?? 0;
-  const edge = edgePanAxes(pointerX, pointerY, rect, margin);
+  const edge = pointerOverHud ? { x: 0, y: 0 } : edgePanAxes(pointerX, pointerY, rect, margin);
   camInput.edgeX = edge.x;
   camInput.edgeY = edge.y;
   camInput.centerHeld = keys.has('KeyC');
@@ -525,6 +541,7 @@ async function main(): Promise<void> {
       sampler.add(hud.facade);
       remote!.register(hud.runtime.subsystem);
       hud.runtime.apply(DEMO_HUD_COMPOSITION);
+      hudRoot = hud.root;
 
       // Отладочная ручка ручного прогона (задача 5.3): read-only точка
       // наблюдения камеры — снаружи конвейера её иначе не видно, а проверке
