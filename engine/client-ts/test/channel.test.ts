@@ -253,6 +253,7 @@ describe('окно доставки через перемотку: реплее�
     });
     const shell = new WorkerShell({
       port: ports.worker,
+      mode: 'local',
       sim: rig.sim,
       state: rig.state,
       tickSeconds: TICK_SECONDS,
