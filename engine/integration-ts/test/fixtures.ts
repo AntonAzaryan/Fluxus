@@ -150,6 +150,60 @@ export function propScene(): SceneDef {
   };
 }
 
+/**
+ * Сцена дуэли с туманом войны, носителем карты пола (TERR-6) и носителем арены
+ * (ARENA-1). Компоненты FoW дописывает загрузчик по флагу `fog` (SER-7), а
+ * `Vision` герою выдаёт prefab: маску считает нативная `VisibilitySystem`, которую
+ * объявляет конфиг матча (NTR-14) — вертикаль обязана проверять настоящую FoW, а
+ * не расставленные руками биты.
+ *
+ * Радиус обзора мал намеренно: шаг за тик — `TICK_DELTA` (≈0.08), поэтому
+ * уходящий вправо герой покидает обзор противника за десяток тиков, и «ушёл в
+ * туман» наблюдается внутри короткого матча.
+ */
+export function fogScene(): SceneDef {
+  const scene = duelScene();
+  const hero = scene.prefabs![0]!;
+  return {
+    ...scene,
+    prefabs: [
+      {
+        ...hero,
+        components: {
+          ...hero.components,
+          Vision: { radius: fixed.fromInt(1) },
+          Visibility: { visibleTo: 0 },
+          Team: { id: 0 },
+          Stealth: { active: 0 },
+        },
+      },
+    ],
+    fog: true,
+    // Ровная площадка без обрывов: укрытий и разницы уровней в проверке нет —
+    // предмет её в том, что носители остаются в персональном снапшоте.
+    terrain: {
+      width: 8,
+      height: 8,
+      tileSize: fixed.fromInt(1),
+      levels: Array.from({ length: 8 }, () => '00000000'),
+      flags: Array.from({ length: 8 }, () => '........'),
+    },
+    arena: { center: { x: 0, y: 0 }, radius: fixed.fromInt(20) },
+  };
+}
+
+/** Конфиг матча на сцене с туманом: пересчёт видимости объявлен, как требует NTR-14. */
+export function fogConfig(overrides: Partial<MatchConfig> = {}): MatchConfig {
+  return duelConfig({
+    scene: fogScene(),
+    initial: [
+      { prefab: 'Hero', overrides: { Team: { id: 0 } } },
+      { prefab: 'Hero', overrides: { Player: { slot: 1 }, Team: { id: 1 } } },
+    ],
+    ...overrides,
+  });
+}
+
 export function duelConfig(overrides: Partial<MatchConfig> = {}): MatchConfig {
   const scene = overrides.scene ?? duelScene();
   return {
@@ -159,8 +213,13 @@ export function duelConfig(overrides: Partial<MatchConfig> = {}): MatchConfig {
     sceneRef: 'duel',
     scene,
     initial: [{ prefab: 'Hero' }, { prefab: 'Hero', overrides: { Player: { slot: 1 } } }],
-    // Зависимость сборки мира (NTR-14): без физики Velocity никто не интегрирует.
+    // Зависимости сборки мира (NTR-14): без физики Velocity никто не интегрирует,
+    // а без объявленного пересчёта видимости фильтрация по `Visibility.visibleTo`
+    // (NET-12) шла бы по маскам, которые никто не считает. Записанные матчи
+    // (CLI-10) объявляют пересчёт наравне с физикой, и на сцене без флага `fog`
+    // он ровно ничего не считает — компонентов тумана в ней нет.
     physics: {},
+    visibility: {},
     tickRate: TICK_RATE,
     // Снапшот каждый тик: интерполяция рендера идёт между соседними тиками,
     // и её ожидание в тесте считается без поправки на прореживание.
@@ -194,18 +253,27 @@ export interface ClientLink {
   connect(): Transport;
 }
 
+/**
+ * Клиент вертикали. Зависимости сборки мира он получает из ТОГО ЖЕ описания
+ * матча, что сервер (NTR-14): обе стороны поднимают мир общим путём
+ * `buildMatchWorld`, и состав систем у них обязан совпасть — это предпосылка
+ * предсказания (NTR-10) и условие входа на сцене с туманом войны.
+ */
 export function connectClient(
   hub: ClientLink,
   playerId: string,
   clock: Clock,
   scene: SceneDef,
   input?: InputSource,
+  build: Pick<MatchConfig, 'physics' | 'visibility'> = {},
 ): ConnectedClient {
   const pack = contentPack({ duel: scene });
   const client = new MatchClient({
     playerId,
     version: { buildId: BUILD_ID, contentPackHash: pack.hash },
     content: pack,
+    ...(build.physics !== undefined ? { physics: build.physics } : {}),
+    ...(build.visibility !== undefined ? { visibility: build.visibility } : {}),
   });
   const host = new ClientHost(client, hub.connect(), {
     now: () => clock.ms,
@@ -312,6 +380,7 @@ export class RenderBridge {
       initial: config.initial,
       ...(config.physics !== undefined ? { physics: config.physics } : {}),
       ...(config.locomotion !== undefined ? { locomotion: config.locomotion } : {}),
+      ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
     });
     this.scene = new THREE.Scene();
     // Ассеты вертикали не нужны: подсистема позиций их не читает; источник —
@@ -412,8 +481,12 @@ export async function playMatch(
 ): Promise<PlayedMatch> {
   const fixture = harness(config);
   const scene = config.scene;
-  const a = connectClient(fixture.hub, 'p1', fixture.clock, scene, inputs.a);
-  const b = connectClient(fixture.hub, 'p2', fixture.clock, scene, inputs.b);
+  const build = {
+    ...(config.physics !== undefined ? { physics: config.physics } : {}),
+    ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+  };
+  const a = connectClient(fixture.hub, 'p1', fixture.clock, scene, inputs.a, build);
+  const b = connectClient(fixture.hub, 'p2', fixture.clock, scene, inputs.b, build);
   const bridge = new RenderBridge(scene, config, fixture.clock);
   await settle();
 

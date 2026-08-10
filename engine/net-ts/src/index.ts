@@ -14,6 +14,7 @@ export {
   parseClientMessage,
   parseServerMessage,
   toInputFrame,
+  toWireSnapshot,
   ProtocolError,
 } from './protocol/messages.js';
 export type {
@@ -36,6 +37,7 @@ export type {
   StartMessage,
   WelcomeMessage,
   WireInput,
+  WireSnapshot,
 } from './protocol/messages.js';
 export {
   clientCodec,

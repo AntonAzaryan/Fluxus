@@ -43,6 +43,9 @@ const server = new MatchServer({
   // Зависимость сборки мира из файла матча (NTR-14): без неё сцена,
   // рассчитанная на интегрирующую физику, молча стояла бы на месте.
   ...(match.physics !== undefined ? { physics: match.physics } : {}),
+  // Пересчёт видимости — такая же зависимость сборки (NTR-14): сцена с туманом
+  // войны без него не собирается вовсе, а не идёт с замороженными масками.
+  ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
 });
 
 const host = new MatchHost(server, webSocketTransportServer({ port }), { serializer });

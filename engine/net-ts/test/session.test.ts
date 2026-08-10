@@ -23,6 +23,8 @@ import type { MatchConfig } from '../src/server/matchServer.js';
 function fogConfig(): MatchConfig {
   return duelConfig({
     scene: fogScene(),
+    // Сцена с флагом `fog` обязывает конфиг объявить пересчёт видимости (NTR-14).
+    visibility: {},
     snapshotRate: 60,
     initial: [
       { prefab: 'Hero', overrides: { Visibility: { visibleTo: 1 }, Team: { id: 0 } } },
@@ -40,9 +42,20 @@ function slotsIn(snapshot: PresentedState): number[] {
   return Array.from(entities, (entity) => coreWorld.getField(snapshot.world, entity, 'Player', 'slot')).sort();
 }
 
+/**
+ * Зависимости сборки мира клиент берёт из ТОГО ЖЕ описания матча, что сервер
+ * (NTR-14): обе стороны поднимают мир общим путём, и состав систем у них обязан
+ * совпасть. Для сцены с флагом `fog` это ещё и условие входа — клиент без
+ * объявленного пересчёта видимости мир матча не поднимет вовсе.
+ */
 function clientOptions(playerId: string, config: MatchConfig) {
   const pack = contentPack({ duel: config.scene });
-  return { playerId, version: versionOf(config.scene), content: pack };
+  return {
+    playerId,
+    version: versionOf(config.scene),
+    content: pack,
+    ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+  };
 }
 
 interface ListenFixture {

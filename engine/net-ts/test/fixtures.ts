@@ -11,6 +11,8 @@
 import {
   contentPackHash,
   fixed,
+  TEAM_SCHEMA,
+  VISIBILITY_SCHEMA,
   type SceneDef,
 } from '@game-mvp/core';
 import { contentPack } from '../src/content/pack.js';
@@ -85,7 +87,51 @@ export function duelScene(): SceneDef {
   };
 }
 
-/** Та же сцена с туманом: компоненты FoW добавляет загрузчик по флагу `fog` (SER-7). */
+/**
+ * Та же сцена, но компоненты FoW объявлены СЦЕНОЙ РУКАМИ, а не флагом `fog`
+ * (SER-7), и маску `Visibility` авторит расстановка либо JSON-система сцены.
+ *
+ * Нужна тестам, предмет которых — сетевой слой: `viewpoint` соединения и момент
+ * отбора, а не расчёт видимости. Пересчёта такая сцена не требует и не получает —
+ * отказ NTR-14 привязан к флагу `fog`, ровно тому признаку, по которому загрузчик
+ * и так решает, дописывать ли компоненты тумана (решение 5 дизайна
+ * `filter-ownership`), — поэтому нативная `VisibilitySystem` маску не
+ * перезаписывает и тест остаётся про сеть.
+ *
+ * Матч на сцене с флагом `fog` — это `fogScene()` ниже, и он пересчёт объявляет.
+ */
+export function authoredMaskScene(): SceneDef {
+  const scene = duelScene();
+  return {
+    ...scene,
+    components: [...scene.components, VISIBILITY_SCHEMA, TEAM_SCHEMA],
+    prefabs: [
+      {
+        name: 'Hero',
+        components: {
+          Player: { slot: 0 },
+          Input: { aimDir: 0, buttons: 0, moveX: 0, moveY: 0, prevButtons: 0, seq: 0 },
+          Position: { x: 0, y: 0 },
+          Visibility: { visibleTo: 0 },
+          Team: { id: 0 },
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * Та же сцена с туманом: компоненты FoW добавляет загрузчик по флагу `fog`
+ * (SER-7). Матч на ней ОБЯЗАН объявить пересчёт видимости (NTR-14), поэтому маску
+ * считает нативная `VisibilitySystem`, а не держит расстановка.
+ *
+ * Расстановка при этом ставит те же значения, которые посчитает система:
+ * наблюдателей с `Vision` в сцене нет, и маска сводится к биту собственной
+ * команды сущности (FOW-3). Совпадение сделано намеренно — тесту сетевого слоя
+ * нужен предсказуемый состав персонального снапшота, а не расчёт видимости (он
+ * покрыт FOW-тестами ядра). Сцена, где маску авторит контент и пересчёта нет
+ * вовсе, — `authoredMaskScene()` выше.
+ */
 export function fogScene(): SceneDef {
   const scene = duelScene();
   return {
@@ -97,9 +143,6 @@ export function fogScene(): SceneDef {
           Player: { slot: 0 },
           Input: { aimDir: 0, buttons: 0, moveX: 0, moveY: 0, prevButtons: 0, seq: 0 },
           Position: { x: 0, y: 0 },
-          // Маска видимости выставляется расстановкой, а не считается системой:
-          // предмет проверки — что сервер зовёт фильтр с верным `viewpoint`
-          // (NTR-9), а не как ядро вычисляет видимость (это покрыто FOW-тестами).
           Visibility: { visibleTo: 0 },
           Team: { id: 0 },
         },

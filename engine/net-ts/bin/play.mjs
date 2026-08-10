@@ -47,6 +47,7 @@ const clientOptions = {
   content: pack,
   observer,
   ...(match.physics !== undefined ? { physics: match.physics } : {}),
+  ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
 };
 
 let client;

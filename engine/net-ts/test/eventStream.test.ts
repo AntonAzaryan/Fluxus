@@ -10,11 +10,11 @@
  * не на моке (решение 7 дизайна).
  */
 import { describe, expect, it } from 'vitest';
-import { snapshotToPlain } from '@game-mvp/core';
 import { BUILD_ID, duelConfig, harness, hello } from './fixtures.js';
 import { contentPack } from '../src/content/pack.js';
 import { ClientHost } from '../src/client/host.js';
 import { MatchClient } from '../src/client/matchClient.js';
+import { toWireSnapshot } from '../src/protocol/messages.js';
 import type { EventBatch, ServerMessage } from '../src/protocol/messages.js';
 import type { Transport } from '../src/transport/transport.js';
 
@@ -95,7 +95,7 @@ function playing(ticks = 4) {
   const feed = (message: ServerMessage): void => { client.receive(message, clock.ms); };
   /** Снапшот сервера под нужной парой: состояние настоящее, номер — из теста. */
   const snapshot = (epoch: number, tick: number): void => {
-    const plain = snapshotToPlain(server.snapshot());
+    const plain = toWireSnapshot(server.snapshot());
     feed({ type: 'Snapshot', epoch, tick, snapshot: { ...plain, tick } });
   };
   return { server, client, clock, feed, snapshot };

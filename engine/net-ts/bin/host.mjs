@@ -62,6 +62,9 @@ const session = await HostSession.open({
     // Зависимости сборки мира — из файла матча (NTR-14), а не из кода запускалки.
     ...(match.physics !== undefined ? { physics: match.physics } : {}),
     ...(match.locomotion !== undefined ? { locomotion: match.locomotion } : {}),
+    // Пересчёт видимости — такая же зависимость сборки (NTR-14): сцена с
+    // туманом войны без него не собирается вовсе.
+    ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
   },
 });
 
@@ -101,7 +104,9 @@ const local = session.localClient(
     playerId: founder,
     version: { buildId: match.buildId, contentPackHash: pack.hash },
     content: pack,
+    // Обе стороны берут зависимости сборки из ОДНОГО описания матча (NTR-14).
     ...(match.physics !== undefined ? { physics: match.physics } : {}),
+    ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
   },
   { input: inputSource() },
 );

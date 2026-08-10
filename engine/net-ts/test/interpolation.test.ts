@@ -11,6 +11,8 @@ import type { Snapshot } from '@game-mvp/core';
 function fogMatch() {
   const config = duelConfig({
     scene: fogScene(),
+    // Сцена с флагом `fog` обязывает конфиг объявить пересчёт видимости (NTR-14).
+    visibility: {},
     snapshotRate: 60,
     initial: [
       { prefab: 'Hero', overrides: { Visibility: { visibleTo: 3 }, Team: { id: 0 } } },

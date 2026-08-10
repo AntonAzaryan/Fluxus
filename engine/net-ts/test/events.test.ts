@@ -13,9 +13,9 @@
 import { describe, expect, it } from 'vitest';
 import type { SceneDef } from '@game-mvp/core';
 import {
+  authoredMaskScene,
   duelConfig,
   duelScene,
-  fogScene,
   harness,
   hello,
   inputMessage,
@@ -76,14 +76,19 @@ function castScene(): SceneDef {
 }
 
 /**
- * Та же сцена с туманом. `flipTo` — маска видимости, которую герой слота 1
- * получает начиная с тика 2: ею и разводятся «ушёл в туман» и «вышел из тумана»
- * между публикацией события и рассылкой. Маска переставляется системой, а не
- * считается `VisibilitySystem`: предмет проверки — момент отбора, а не расчёт
- * видимости.
+ * Та же сцена с компонентами FoW. `flipTo` — маска видимости, которую герой слота
+ * 1 получает начиная с тика 2: ею и разводятся «ушёл в туман» и «вышел из тумана»
+ * между публикацией события и рассылкой.
+ *
+ * Маску переставляет система сцены, а не считает `VisibilitySystem`: предмет
+ * проверки — момент отбора, а не расчёт видимости. Поэтому и сцена берётся с
+ * компонентами, объявленными руками (`authoredMaskScene`), а не с флагом `fog`:
+ * флаг обязывал бы матч объявить пересчёт (NTR-14), и нативная система
+ * переписала бы авторскую маску битом собственной команды героя (FOW-3) — то
+ * есть отняла бы у теста его предмет.
  */
 function fogCastScene(flipTo?: number): SceneDef {
-  const fog = fogScene();
+  const fog = authoredMaskScene();
   const cast = castScene();
   return {
     ...fog,
@@ -682,7 +687,8 @@ describe('швы: снапшот и канонический лог', () => {
     // фактов разные правила отбрасывания, и одно сообщение вынуждало бы одно
     // правило на двоих (NTR-4).
     expect(Object.keys(snapshot).sort()).toEqual(['epoch', 'snapshot', 'tick', 'type']);
-    expect(Object.keys(snapshot.snapshot).sort()).toEqual(['events', 'mode', 'rng', 'tick', 'world']);
+    // Состав кадра — перечисленные NET-18 части, без состояний стримов RNG.
+    expect(Object.keys(snapshot.snapshot).sort()).toEqual(['events', 'mode', 'tick', 'world']);
     // Шина своего тика в кадре осталась (SNAP-1) и осталась именно шиной тика,
     // а не накопленным диапазоном.
     expect(snapshot.snapshot.events.map((event) => event.type)).toEqual(['Cast']);
@@ -691,7 +697,7 @@ describe('швы: снапшот и канонический лог', () => {
   it('шина в кадре — та же отобранная проекция, что и поток (NET-18, NET-13)', () => {
     // Каст невидимого врага НА тике рассылки: шина кадра и пачка потока отобраны
     // одним вызовом фильтра на одном тике, и разойтись им негде.
-    const server = running(fogConfig(2));
+    const server = running(fogConfig(2, undefined, { allowObserver: true }), true);
     server.receive(2, inputMessage(wireInput(2, 1, 0, 0, 1)));
     advance(server, 2);
 
@@ -706,6 +712,62 @@ describe('швы: снапшот и канонический лог', () => {
 
     expect(events.get(2)!.flatMap(ticksOf)).toEqual([2]);
     expect(frameOf(2).snapshot.events.map((event) => event.type)).toEqual(['Cast']);
+
+    // Наблюдателю (`viewpoint = ALL`) фильтр снимается ЦЕЛИКОМ, а не по каналам
+    // (NTR-9): и шина кадра, и пачка потока у него неотобраны. Разойдись каналы
+    // здесь — у одного из них появился бы собственный отбор, которого NET-13 не
+    // допускает ни у кого, включая наблюдателя.
+    expect(events.get(3)!.flatMap(ticksOf)).toEqual([2]);
+    expect(frameOf(3).snapshot.events.map((event) => event.type)).toEqual(['Cast']);
+  });
+
+  /**
+   * NET-13 «Действующий предикат» и NTR-9: предикат назван конфигом матча, и
+   * закрытие открытого геймплейного вопроса — смена ЭТОГО поля, а не правка ядра
+   * или сетевого слоя. Проверяется не сам предикат, а то, что названный конфигом
+   * действует и что действует он на ОБА канала одним вызовом: разойдись они,
+   * клиент увидел бы в состоянии факт, которого нет в потоке.
+   *
+   * Предикат взят нарочно не про видимость — «уходит только каст слота 0», — чтобы
+   * его действие нельзя было спутать с действием нормированного: тот на сцене без
+   * тумана пропускает оба каста.
+   */
+  it('предикат, названный конфигом матча, действует на кадр и на поток (NET-13, NTR-9)', () => {
+    const casts = (config: MatchConfig): { frame: number[]; stream: number[] } => {
+      const server = running(config);
+      // Каст обоих слотов на тике 1, и тик 1 же — тик рассылки (`snapshotRate`
+      // равен `tickRate`): шина кадра и пачка потока говорят об одном тике.
+      server.receive(1, inputMessage(wireInput(1, 1, 0, 0, 1)));
+      server.receive(2, inputMessage(wireInput(1, 1, 0, 0, 1)));
+      server.advance();
+
+      const outgoing = server.drain();
+      const frame = outgoing.find(
+        (entry) => entry.to === 1 && entry.message.type === 'Snapshot',
+      )!.message as SnapshotMessage;
+      const stream = eventsOf(outgoing).get(1)!;
+      return {
+        frame: frame.snapshot.events.map((event) => event.data.slot!),
+        stream: stream.flatMap((message) =>
+          message.batches.flatMap((batch) => batch.events.map((event) => event.data.slot!)),
+        ),
+      };
+    };
+
+    const base = { scene: castScene(), snapshotRate: 60, eventRepeat: 0 } as const;
+    const chosen = casts(
+      duelConfig({ ...base, eventVisibility: (event) => event.data.slot === 0 }),
+    );
+    expect(chosen.frame).toEqual([0]);
+    expect(chosen.stream).toEqual([0]);
+
+    // Отсутствие поля даёт нормированный NET-13 предикат, а не «ничего»: на сцене
+    // без тумана видимы оба каста, и оба доезжают обоими каналами. Без этой
+    // половины проверка не отличила бы действующий предикат конфига от того, что
+    // поле просто игнорируется.
+    const normed = casts(duelConfig(base));
+    expect(normed.frame).toEqual([0, 1]);
+    expect(normed.stream).toEqual([0, 1]);
   });
 
   it('канонический inputs[] от потока событий не зависит (NTR-8)', () => {
