@@ -9,6 +9,7 @@
     "engine/render-ts",
     "engine/assets-ts",
     "engine/client-ts",
+    "engine/hud-ts",
     "engine/integration-ts",
     "editor/core-ts",
     "editor/ui-ts",

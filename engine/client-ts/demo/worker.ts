@@ -11,11 +11,22 @@
  */
 import { shellPort, WorkerShell } from '@game-mvp/client';
 import { Extractor, kindByTags } from '@game-mvp/render';
-import type { SceneDef } from '@game-mvp/core';
+import {
+  RingHistory,
+  createInputLog,
+  createRewindController,
+  type SceneDef,
+} from '@game-mvp/core';
 import { PLAYER_ID, STATE_COMPONENTS, TICK_SECONDS, createDemoSimulation } from './sim.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 
 const { sim, state, playerId, grid } = createDemoSimulation(sceneJson as unknown as SceneDef);
+
+// Машина состояний мира (WSM-1..6): без контроллера оболочка игнорирует
+// команды управления, и пауза из HUD (HUD-2, сценарий «Пауза из HUD») не
+// имела бы адресата. История и лог вводов — по образцу channel-тестов оболочки.
+const history = new RingHistory({ interval: 1, capacity: 16 });
+const rewind = createRewindController(sim, state, { history, inputs: createInputLog() });
 
 const extractor = new Extractor({
   // Ключи манифеста визуалов = теги prefab'ов сцены (ASSET-6). У Fireball
@@ -39,6 +50,16 @@ const shell = new WorkerShell({
   tickSeconds: TICK_SECONDS,
   extractor,
   playerId: PLAYER_ID,
+  rewind,
+  // Снапшоты — только честных тиков (SNAP-1): реплей и пауза историю не пишут.
+  observers: [
+    {
+      name: 'history',
+      onTick: (result) => {
+        if (result.mode === 'Running' && !result.isReplay) history.record(result.state);
+      },
+    },
+  ],
   // ID сущности героя нужен main-сборке (камера, прицел); оболочка extra не трактует.
   helloExtra: { hero: playerId },
 });

@@ -242,6 +242,75 @@ describe('conflation: состояние последнее, события вс
   });
 });
 
+describe('окно доставки через перемотку: реплеевые дубликаты не доставляются (SHELL-4)', () => {
+  it('конверт несёт только новые события; каст до перемотки не проигрывается второй раз', () => {
+    const rig = makeRig({ castOnTicks: [2, 6] });
+    const ports = queuedPortPair();
+    const history = new RingHistory({ interval: 1, capacity: 16 });
+    const rewind = createRewindController(rig.sim, rig.state, {
+      history,
+      inputs: createInputLog(),
+    });
+    const shell = new WorkerShell({
+      port: ports.worker,
+      sim: rig.sim,
+      state: rig.state,
+      tickSeconds: TICK_SECONDS,
+      extractor: makeExtractor(rig),
+      playerId: PLAYER_ID,
+      rewind,
+      sender: { poolSize: 1 },
+      observers: [
+        {
+          name: 'history',
+          onTick: (result) => {
+            if (result.mode === 'Running' && !result.isReplay) history.record(result.state);
+          },
+        },
+      ],
+      clock: () => 0,
+    });
+    const remoteProbe = probe();
+    const remote = new RemoteHost(dummyContext(), {
+      clock: () => 0,
+      onReady: () => remote.register(remoteProbe.subsystem),
+    }).connect(ports.main);
+    shell.start();
+    shell.stop();
+
+    // Честные тики 1..3, каст в тике 2 — всё доставлено до перемотки.
+    for (let step = 0; step < 3; step++) shell.stepTick();
+    ports.drain();
+    ports.drain();
+    expect(remoteProbe.events).toEqual([{ tick: 2, type: 'CastFireball' }]);
+
+    // Main замирает: конверт замороженного тика съедает единственный буфер,
+    // дальше окно копится. Перемотка на тик 2 восстанавливает его снапшот,
+    // шина которого несёт уже доставленный каст (REW-10); замороженный тик в
+    // Rewinding отдаёт его extractor'у нечестным (freshEvents=false). После
+    // возобновления честные тики 3..6 приносят новый каст в тике 6.
+    remote.control('pause');
+    shell.stepTick();
+    remote.control('beginRewind');
+    remote.control('seekTo', 2);
+    shell.stepTick();
+    remote.control('pause');
+    remote.control('resume');
+    for (let step = 0; step < 4; step++) shell.stepTick();
+    ports.drain();
+    ports.drain();
+
+    // Конверт окна не смешал реплеевый дубликат с новым событием: каст тика 2
+    // обработан ровно один раз, тика 6 — доставлен (SHELL-4, match-hud HUD-5).
+    expect(remoteProbe.events).toEqual([
+      { tick: 2, type: 'CastFireball' },
+      { tick: 6, type: 'CastFireball' },
+    ]);
+    expect(remote.view!.tick).toBe(6);
+    expect(remote.view!.mode).toBe('Running');
+  });
+});
+
 describe('ноль аллокаций канала в устоявшемся режиме (SHELL-3, задача 2.3)', () => {
   it('буферы циркулируют по кругу; рост сцены перевыделяет разово', () => {
     const rig = makeRig();
