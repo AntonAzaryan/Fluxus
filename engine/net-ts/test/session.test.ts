@@ -7,7 +7,7 @@
  * сборкой.
  */
 import { describe, expect, it } from 'vitest';
-import { query, world as coreWorld, type Snapshot } from '@game-mvp/core';
+import { query, world as coreWorld } from '@game-mvp/core';
 import { contentPack } from '../src/content/pack.js';
 import { ClientHost } from '../src/client/host.js';
 import { MatchClient } from '../src/client/matchClient.js';
@@ -16,6 +16,7 @@ import { HostSession } from '../src/session/hostSession.js';
 import { joinMatch, joinSession, SessionJoinError } from '../src/session/joinSession.js';
 import { InProcessRendezvous } from '../src/session/rendezvous/inProcess.js';
 import { duelConfig, fogScene, settle, versionOf } from './fixtures.js';
+import type { PresentedState } from '../src/client/interpolation.js';
 import type { MatchConfig } from '../src/server/matchServer.js';
 
 /** Оба героя видимы только своей команде: слот 0 — биту 0, слот 1 — биту 1. */
@@ -34,7 +35,7 @@ function fogConfig(): MatchConfig {
 }
 
 /** Слоты, дожившие до снапшота: именно они и есть видимая часть мира (NET-12). */
-function slotsIn(snapshot: Snapshot): number[] {
+function slotsIn(snapshot: PresentedState): number[] {
   const entities = query(snapshot.world, { all: ['Player'] });
   return Array.from(entities, (entity) => coreWorld.getField(snapshot.world, entity, 'Player', 'slot')).sort();
 }

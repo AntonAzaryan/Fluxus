@@ -10,27 +10,36 @@
  * исполняется один и тот же код (NTR-12).
  */
 import {
+  createInputLog,
+  createRewindController,
   dispatch,
   filterSnapshot,
   snapshotToPlain,
   tick as advanceTick,
   VIEWPOINT_ALL,
   type EventVisibility,
+  type ExemptField,
   type InputFrame,
+  type InputLog,
   type LocomotionOptions,
   type PhysicsOptions,
+  type RewindController,
   type ScenarioDef,
   type ScenarioSpawn,
   type SceneDef,
   type Snapshot,
   type TickObserver,
   type VisibilityOptions,
+  type WorldMode,
 } from '@game-mvp/core';
+import { BranchHistory, type MatchHistory } from '../match/history.js';
 import { buildMatchWorld } from '../match/world.js';
 import { createServerMetrics, type ServerMetrics } from '../metrics.js';
 import type { ConnectionId } from '../transport/transport.js';
 import type {
   ClientMessage,
+  EventBatch,
+  EventsMessage,
   GameVersion,
   Pacing,
   RejectReason,
@@ -61,6 +70,30 @@ export interface MatchConfig {
   readonly tickRate?: number;
   readonly snapshotRate?: number;
   readonly inputDelay?: number;
+  /**
+   * Верхняя граница окна приёма ввода в тиках (NTR-7). Механизм — конечность
+   * границы, политика — само число: без неё размер буфера неприменённого ввода
+   * на слот задаёт клиент, а не конфиг матча. Не меньше `inputDelay`, иначе
+   * корректно помеченный клиентом кадр не проходит проверку сервера.
+   */
+  readonly inputWindow?: number;
+  /**
+   * Глубина повтора потока событий (NTR-15): сколько ПРЕДЫДУЩИХ рассылок
+   * повторяет каждое сообщение `Events`. Величина, а не константа, по той же
+   * причине, что `tickRate` и `snapshotRate` (NTR-7): она предъявляется замеру,
+   * и прибор для неё — счётчик разрывов диапазона (NTR-11).
+   *
+   * `0` легален и означает «без повтора»: на канале без потерь избыточность —
+   * чистый трафик. Умолчание 2 — «переживает две потери подряд», то есть каждая
+   * пачка едет трижды.
+   */
+  readonly eventRepeat?: number;
+  /**
+   * История для серверной перемотки (NET-11). Поле необязательное: матч без
+   * ульты отката снапшотов не снимает и переходов машины состояний не знает —
+   * интервал и глубина суть параметры провайдера, а не константы ядра (SNAP-4).
+   */
+  readonly rewind?: MatchRewindOptions;
   /** Порог молчания слота в тиках; по умолчанию 10 секунд при текущем `tickRate`. */
   readonly silenceTicks?: number;
   readonly allowObserver?: boolean;
@@ -70,6 +103,68 @@ export interface MatchConfig {
   /** Политика видимости событий (NET-13) — параметр, а не зашитое решение (NTR-9). */
   readonly eventVisibility?: EventVisibility;
   readonly observers?: readonly TickObserver[];
+}
+
+/** Настройки истории матча (SNAP-3, SNAP-4) плюс поля вне отката (REW-9). */
+export interface MatchRewindOptions {
+  /** Тиков между снапшотами. */
+  readonly interval: number;
+  /** Сколько снапшотов держится. */
+  readonly capacity: number;
+  /** Поля, переживающие откат, например cooldown самой ульты (REW-9). */
+  readonly exempt?: readonly ExemptField[];
+}
+
+/**
+ * Сегмент канонического лога (NTR-16): непрерывный прогон исполненных тиков в
+ * пределах одной эпохи. Матч без перемотки даёт ровно один сегмент, и его
+ * кадры совпадают с прежним плоским списком — сегментация обобщает форму лога,
+ * а не отменяет её.
+ */
+export interface MatchSegment {
+  readonly epoch: number;
+  readonly frames: readonly InputFrame[];
+}
+
+/** Внутренняя, дописываемая форма сегмента: наружу уходит только `MatchSegment`. */
+interface OpenSegment {
+  readonly epoch: number;
+  readonly frames: InputFrame[];
+}
+
+/**
+ * Разосланное окно потока событий (NTR-15): замкнутый диапазон тиков одной
+ * рассылки и непустые пачки внутри него. Тик диапазона, пачки которого нет,
+ * означает «на этом тике событий не было», поэтому пустые пачки не хранятся —
+ * покрытие держит объявленный диапазон, а не перечисление тиков.
+ */
+interface EventWindow {
+  readonly from: number;
+  readonly to: number;
+  readonly batches: readonly EventBatch[];
+}
+
+/**
+ * Накопитель потока событий одного `viewpoint` (NTR-15, решение 2 дизайна).
+ *
+ * По `viewpoint`, а не по соединению: два соединения одной команды получают
+ * один и тот же отобранный поток, и хранить его дважды незачем.
+ *
+ * Глубина накопления меряется в тиках и равна «период рассылки × (глубина
+ * повтора + 1)»: `repeats` держит `eventRepeat` уже разосланных окон по
+ * `snapshotEvery` тиков каждое, плюс открытое окно текущего периода. Границы в
+ * событиях или байтах здесь не появляются: тик, породивший много событий, — это
+ * бой, а не отказ протокола.
+ */
+interface EventStream {
+  /** Первый ещё не разосланный живой тик текущей эпохи; `-1` — окно не открыто. */
+  from: number;
+  /** Последний накопленный живой тик; значим только при `from >= 0`. */
+  to: number;
+  /** Непустые пачки открытого окна, в порядке возрастания тика. */
+  batches: EventBatch[];
+  /** Кольцо разосланных окон, повторяемых следующими сообщениями. */
+  readonly repeats: EventWindow[];
 }
 
 export type MatchPhase = 'lobby' | 'running' | 'ended';
@@ -94,8 +189,14 @@ const DEFAULTS = {
   tickRate: 60,
   snapshotRate: 30,
   inputDelay: 2,
+  /** Четверть секунды при 60 Гц (NTR-7): больше половины круга на играбельном канале и всё же конечная величина. */
+  inputWindow: 15,
+  /** Две предыдущие рассылки (NTR-15): пачка едет трижды и переживает две потери подряд. */
+  eventRepeat: 2,
   silenceSeconds: 10,
 } as const;
+
+const EMPTY_FRAMES: readonly InputFrame[] = [];
 
 export class MatchServer {
   readonly config: MatchConfig;
@@ -106,11 +207,17 @@ export class MatchServer {
   private readonly snapshotRate: number;
   private readonly snapshotEvery: number;
   private readonly inputDelay: number;
+  private readonly inputWindow: number;
+  private readonly eventRepeat: number;
   private readonly silenceTicks: number;
-  private readonly maxLead: number;
 
   private readonly sim: ReturnType<typeof buildMatchWorld>['sim'];
   private readonly state: ReturnType<typeof buildMatchWorld>['state'];
+
+  /** Механизм перемотки (NET-11, WSM-1..6). `undefined` — матч поднят без истории. */
+  private readonly history: MatchHistory | undefined;
+  private readonly inputLog: InputLog | undefined;
+  private readonly rewindController: RewindController | undefined;
 
   private readonly connections = new Map<ConnectionId, Connection>();
   /** Соединение, занимающее слот; `undefined` — слот свободен либо игрок отвалился. */
@@ -120,9 +227,52 @@ export class MatchServer {
   private readonly pending: Map<number, InputFrame>[];
   private readonly lastFrame: (InputFrame | undefined)[];
 
-  private readonly canonical: InputFrame[] = [];
+  /**
+   * Накопители потока событий по `viewpoint` (NTR-15). Ключей не больше, чем
+   * различных `viewpoint` матча, то есть числа слотов плюс наблюдатель: карта
+   * от длительности матча не растёт.
+   */
+  private readonly eventStreams = new Map<number, EventStream>();
+
+  /** Канонический лог сегментами (NTR-16); плоский список — его частный случай. */
+  private readonly segments: OpenSegment[] = [];
   private readonly outbox: Outgoing[] = [];
   private matchPhase: MatchPhase = 'lobby';
+
+  /**
+   * Пара `(эпоха, тик)` последнего авторитетного состояния матча (NTR-16).
+   * Эпоха выводится из самой последовательности состояний, а не из наблюдения
+   * за переходами машины состояний мира: вход в `Rewinding` номера тика не
+   * двигает, а одно `seekTo` даёт до десятка восстановлений.
+   */
+  private currentEpoch = 0;
+  /**
+   * Тик последнего авторитетного состояния: исполненного тика либо
+   * восстановления. `-1` — состояний ещё не было, и сравнивать не с чем.
+   *
+   * Считать только разосланные состояния было бы мало: рассылка идёт по
+   * расписанию `snapshotRate` и отстаёт от живого тика, поэтому восстановление
+   * на тик между последней рассылкой и текущим тиком не увеличило бы эпоху —
+   * и переисполненные тики дописались бы в сегмент прежней эпохи вторыми
+   * кадрами на тот же номер.
+   */
+  private lastStateTick = -1;
+  /**
+   * Наибольший тик, до которого достижимо доигрывание вперёд по ЖИВОЙ ветви:
+   * тик последнего исполненного живого тика. Восстановлением не двигается —
+   * скраб вперёд внутри перемотки (REW-7, NTR-16: «восстановленные состояния
+   * идут на тиках 480, 490, 470») доигрывает по тем же каноническим вводам, из
+   * которых эти тики и были исполнены.
+   *
+   * Сравнивать здесь с `state.tick` было бы неверно в обе стороны. Первый
+   * `seekTo(480)` опускает `state.tick` до 480, и `seekTo(490)` следом стал бы
+   * «перемоткой вперёд», хотя тик 490 в этой ветви исполнен и лежит в логе.
+   * Обратно: после возобновления с тика 480 и исполнения тика 481 записи лога
+   * на тики 482..500 принадлежат стёртой ветви — доигрывать по ним нельзя, и
+   * граница обязана опуститься. Живой тик её и опускает, потому что ставит её
+   * равной себе, а не максимуму за матч.
+   */
+  private liveFrontier = 0;
 
   constructor(config: MatchConfig) {
     if (config.players.length === 0) throw new Error('MatchConfig: нужен хотя бы один слот');
@@ -150,11 +300,24 @@ export class MatchServer {
     }
     this.snapshotEvery = this.tickRate / this.snapshotRate;
     this.inputDelay = config.inputDelay ?? DEFAULTS.inputDelay;
+    this.inputWindow = config.inputWindow ?? DEFAULTS.inputWindow;
+    // Окно уже запаса задержки означало бы, что сервер отвергает собственную
+    // разметку: клиент помечает кадр тиком `serverTick + inputDelay` по тому же
+    // конфигу, который прислал сервер (NTR-7).
+    if (this.inputWindow < this.inputDelay) {
+      throw new Error(
+        `MatchConfig: inputWindow (${this.inputWindow}) меньше inputDelay (${this.inputDelay})`,
+      );
+    }
+    this.eventRepeat = config.eventRepeat ?? DEFAULTS.eventRepeat;
+    // Ноль легален — «без повтора» (NTR-15); отрицательное и дробное не
+    // означают ничего: глубина считается в рассылках, а не в долях рассылки, и
+    // молча приведённое к нулю значение выдало бы канал без избыточности за
+    // настроенный.
+    if (!Number.isInteger(this.eventRepeat) || this.eventRepeat < 0) {
+      throw new Error(`MatchConfig: eventRepeat (${this.eventRepeat}) — целое, не меньше нуля (NTR-15)`);
+    }
     this.silenceTicks = config.silenceTicks ?? this.tickRate * DEFAULTS.silenceSeconds;
-    // Окно приёма: запас задержки плюс секунда. Кадр дальше него — не опоздание
-    // и не спешка, а рассинхронизация оценки тика либо мусор, и молча копить его
-    // в памяти нельзя.
-    this.maxLead = this.inputDelay + this.tickRate;
 
     const built = buildMatchWorld({
       scene: config.scene,
@@ -175,24 +338,84 @@ export class MatchServer {
     this.slotClaimed = Array.from({ length: slots }, () => false);
     this.pending = Array.from({ length: slots }, () => new Map<number, InputFrame>());
     this.lastFrame = Array.from({ length: slots }, () => undefined);
+
+    if (config.rewind !== undefined) {
+      // Реплей внутри `seekTo` идёт по каноническим вводам (REW-2), поэтому лог
+      // ядра ведётся рядом с сегментами: сегменты — история матча, `InputLog` —
+      // рабочий буфер механизма восстановления.
+      const history = new BranchHistory({
+        interval: config.rewind.interval,
+        capacity: config.rewind.capacity,
+      });
+      // Глубина лога вводов привязана к глубине истории, а не к умолчанию
+      // `createInputLog`: реплей внутри `seekTo` идёт от ближайшего снапшота
+      // (REW-2), то есть заглядывает назад на `depth` тиков от самого свежего
+      // снапшота плюс ещё до `interval - 1` тиков, на которые живой тик успел
+      // уйти вперёд от него. Умолчание в 1024 кадра при глубоком буфере
+      // (SNAP-4 — своё число у каждого провайдера) молча оставило бы реплей без
+      // вводов, и восстановленное состояние разошлось бы с исходным (DET-1).
+      const inputLog = createInputLog(history.depth + config.rewind.interval + 1);
+      // Состояние до первого тика — тоже точка восстановления (REW-1).
+      history.record(this.state);
+      this.history = history;
+      this.inputLog = inputLog;
+      this.rewindController = createRewindController(this.sim, this.state, {
+        history,
+        inputs: inputLog,
+        ...(config.rewind.exempt !== undefined ? { exempt: config.rewind.exempt } : {}),
+      });
+    }
   }
 
   get tick(): number {
     return this.state.tick;
   }
 
+  /** Текущая эпоха матча (NTR-16): в мир она не попадает и живёт только здесь. */
+  get epoch(): number {
+    return this.currentEpoch;
+  }
+
   /** Расписание матча. Читает драйвер — он держит темп, сервер часов не знает (NTR-3). */
   get pacing(): Pacing {
-    return { tickRate: this.tickRate, snapshotRate: this.snapshotRate, inputDelay: this.inputDelay };
+    return {
+      tickRate: this.tickRate,
+      snapshotRate: this.snapshotRate,
+      inputDelay: this.inputDelay,
+      inputWindow: this.inputWindow,
+      eventRepeat: this.eventRepeat,
+    };
   }
 
   get phase(): MatchPhase {
     return this.matchPhase;
   }
 
-  /** Канонический ввод матча, включая predicted-кадры (NTR-8). */
+  /** Режим мира (WSM-1). Читает драйвер и политика ульты — сервер её не подменяет. */
+  get mode(): WorldMode {
+    return this.state.mode;
+  }
+
+  /**
+   * Канонический лог матча сегментами (NTR-16) — модель, определённая и для
+   * матча с перемоткой.
+   */
+  get canonicalSegments(): readonly MatchSegment[] {
+    return this.segments;
+  }
+
+  /**
+   * Канонический ввод матча плоским списком, включая predicted-кадры (NTR-8).
+   *
+   * Форма определена для матча без перемотки — то есть ровно для одного
+   * сегмента (NTR-16). У матча с перемоткой один номер тика исполнен в
+   * нескольких эпохах, и «кадр тика 512» перестаёт называть одну величину:
+   * такой лог читается сегментами, а склейка ниже годится только на диагностику.
+   */
   get canonicalInputs(): readonly InputFrame[] {
-    return this.canonical;
+    if (this.segments.length === 0) return EMPTY_FRAMES;
+    if (this.segments.length === 1) return this.segments[0]!.frames;
+    return this.segments.flatMap((segment) => segment.frames);
   }
 
   /**
@@ -246,7 +469,7 @@ export class MatchServer {
           this.protocolError(id, 'protocol-error', 'ввод от соединения без игрового слота');
           return;
         }
-        this.ingest(connection.slot, message.frames);
+        this.ingest(connection.slot, message.epoch, message.frames);
         return;
       case 'Bye':
         // Осознанный уход отличается от разрыва канала: игрок сообщил намерение,
@@ -318,11 +541,7 @@ export class MatchServer {
       seed: this.config.seed,
       match: { sceneRef: this.config.sceneRef, initial: this.config.initial ?? [] },
       worldInitHash: this.worldInitHash,
-      pacing: {
-        tickRate: this.tickRate,
-        snapshotRate: this.snapshotRate,
-        inputDelay: this.inputDelay,
-      },
+      pacing: this.pacing,
     });
 
     if (this.slotClaimed.every(Boolean)) this.start();
@@ -336,21 +555,64 @@ export class MatchServer {
     }
   }
 
-  private ingest(slot: number, frames: readonly WireInput[]): void {
+  /**
+   * Приём ввода (NTR-7). Порядок проверок — эпоха, верхняя граница окна,
+   * исполненный тик, дубль: эпоха относится к сообщению целиком, окно и
+   * исполненность к номеру тика, дедуп — к уже принятому кадру.
+   */
+  private ingest(slot: number, epoch: number, frames: readonly WireInput[]): void {
     const counters = this.metrics.slots[slot]!;
     const pending = this.pending[slot]!;
     const playerId = this.config.players[slot]!;
+
+    // Мир не идёт — ввод не принимается вовсе (NET-11, REW-5). Проверка стоит
+    // перед проверкой эпохи, потому что клиент, пересинхронизировавшийся по
+    // первому снапшоту новой эпохи, шлёт кадры с ВЕРНОЙ эпохой и верными
+    // будущими тиками, пока мир ещё в `Rewinding` или `Paused`: они прошли бы
+    // все остальные проверки, дождались бы в `pending` возобновления и легли бы
+    // на мир залпом — «ввод, накопленный в замороженном мире и применённый
+    // скопом на возобновлении, дал бы залп действий, которых игрок в идущем
+    // матче не совершал» (NET-11).
+    //
+    // Молча и без счётчиков: NTR-11 такого класса не определяет, а канал здесь
+    // исправен — отправитель не видит, что мир остановлен, и его кадры не
+    // дефект ни канала, ни клиента. Пауза и перемотка для него неразличимы,
+    // поэтому правило одно на оба режима.
+    if (this.state.mode !== 'Running') return;
+
+    // Эпоха — величина сообщения, а не кадра (NTR-16): ввод, порождённый в
+    // стёртой перемоткой ветви истории, по номеру тика неотличим от свежего, и
+    // без этой проверки применялся бы тем успешнее, чем мельче был откат.
+    // Счётчик прежний, вышедших за окно (NTR-11): разошедшаяся эпоха — самый
+    // крупный случай разъехавшейся оценки тика, а не отдельный класс дефекта.
+    if (epoch !== this.currentEpoch) {
+      counters.outOfWindow += frames.length;
+      return;
+    }
+
     for (const wire of frames) {
-      if (wire.tick <= this.state.tick) {
-        // Мир назад не переигрывается (NET-1). Отброс наблюдаем, потому что
-        // «ввод теряется» и «ввод ощущается вяло» — разные дефекты (NTR-7).
-        counters.late++;
-        continue;
-      }
-      if (wire.tick > this.state.tick + this.maxLead) {
+      // Верхняя граница окна — конечная и заданная конфигом матча (NTR-7): без
+      // неё размер буфера неприменённого ввода на слот задавал бы клиент.
+      // Отсюда же оценка буфера: в `pending` попадают только тики из
+      // `(currentTick, currentTick + inputWindow]`, то есть не больше
+      // `inputWindow` записей на слот.
+      if (wire.tick > this.state.tick + this.inputWindow) {
         counters.outOfWindow++;
         continue;
       }
+      if (wire.tick <= this.state.tick) {
+        // Тик уже исполнен в текущей эпохе: он вошёл в канонический лог и
+        // разослан клиентам, и правка задним числом переписала бы историю
+        // незаметно для участников (NTR-7). Перемотка переписывает её иначе —
+        // целым сегментом и новой эпохой, то есть наблюдаемо.
+        counters.late++;
+        continue;
+      }
+      // Дедуп «первый выигрывает» на пару (слот, тик) в пределах эпохи (NTR-7).
+      // Молча и без счётчиков: избыточная отправка — штатный режим протокола
+      // (NTR-4), и счёт её как дефекта сделал бы метрики нечитаемыми ровно у
+      // исправного клиента.
+      if (pending.has(wire.tick)) continue;
       pending.set(wire.tick, toInputFrame(wire, playerId, wire.tick));
     }
   }
@@ -363,6 +625,11 @@ export class MatchServer {
    */
   advance(): void {
     if (this.matchPhase !== 'running') return;
+    // Вне `Running` живых тиков нет (REW-4): в `Paused` мир заморожен, в
+    // `Rewinding` темп задаёт механизм перемотки. Тик ядра это и сам знает, но
+    // до него дело доходить не должно — иначе канонический лог получил бы
+    // кадры на тик, которого не было.
+    if (this.state.mode !== 'Running') return;
 
     const tick = this.state.tick + 1;
     const frames: InputFrame[] = [];
@@ -370,13 +637,38 @@ export class MatchServer {
       frames.push(this.frameFor(slot, tick));
     }
     // Канонический лог пишется до тика: он и есть вход, который потом
-    // прогоняется через `runScenario` (NTR-8).
-    this.canonical.push(...frames);
+    // прогоняется через `runScenario` (NTR-8). Сегмент открывается здесь —
+    // первым ИСПОЛНЕННЫМ тиком новой эпохи (NTR-16).
+    this.segmentOfEpoch().frames.push(...frames);
+    this.inputLog?.record(tick, frames);
 
     const result = advanceTick(this.sim, this.state, frames);
     dispatch(result, this.config.observers ?? []);
+    this.history?.record(this.state);
+    // Исполненный тик — тоже авторитетное состояние матча, и последовательность,
+    // из которой выводится эпоха, состоит из них и из восстановлений.
+    this.lastStateTick = this.state.tick;
+    // Живой тик переписал запись лога на свой номер: дальше него запись
+    // принадлежит стёртой ветви, и доигрывать по ней нечего.
+    this.liveFrontier = this.state.tick;
 
-    if (tick % this.snapshotEvery === 0) this.broadcastSnapshots(tick);
+    // Персональные проекции ЭТОГО тика — на каждом исполненном тике, а не
+    // только на тиках рассылки (NTR-15, «Момент фильтрации»): видимость
+    // события оценивается по состоянию мира того тика, на котором событие
+    // опубликовано, а к рассылке мир уже другой. Отсюда же место в порядке
+    // обработки — то же, где формируются персональные снапшоты (NTR-3).
+    //
+    // `result.isReplay` здесь всегда `false`, и проверять это нечем: живой тик
+    // исполняется только этим вызовом `tick()`, а переисполненные тики
+    // (`isReplay = true`, REW-4) живут внутри `seekTo` ядра и наружу
+    // `TickResult` не отдают вовсе — накопителю их не видно по построению
+    // (NTR-15, `tick-loop` OBS-5). Гарда нет потому, что гардить нечего.
+    const filtered = this.filterByViewpoint();
+    this.collectEvents(filtered);
+    // Эпоха внутри `broadcastSnapshots` здесь не растёт: живой тик больше
+    // предыдущего авторитетного состояния по построению, и накопленное окно
+    // между отбором и рассылкой сброшено быть не может.
+    if (tick % this.snapshotEvery === 0) this.broadcastSnapshots(filtered);
 
     for (let slot = 0; slot < this.config.players.length; slot++) {
       if (this.metrics.slots[slot]!.silentTicks > this.silenceTicks) {
@@ -384,6 +676,20 @@ export class MatchServer {
         return;
       }
     }
+  }
+
+  /**
+   * Сегмент текущей эпохи, открываемый по требованию (NTR-16). Открытие именно
+   * здесь, на исполненном тике, и означает, что эпоха без исполненных тиков
+   * сегмента не порождает: промежуточные точки скраба (REW-7) в состоянии мира
+   * следа не оставляют.
+   */
+  private segmentOfEpoch(): OpenSegment {
+    const last = this.segments[this.segments.length - 1];
+    if (last !== undefined && last.epoch === this.currentEpoch) return last;
+    const opened: OpenSegment = { epoch: this.currentEpoch, frames: [] };
+    this.segments.push(opened);
+    return opened;
   }
 
   private frameFor(slot: number, tick: number): InputFrame {
@@ -412,35 +718,409 @@ export class MatchServer {
   }
 
   /**
-   * Тик исполнен один раз, снапшотов — по числу соединений (NET-12).
-   *
-   * ponytail: фильтрация зовётся на каждое соединение отдельно, даже когда у
-   * двух совпадает `viewpoint`, и каждый вызов копирует мир целиком. На двух
-   * игроках это две копии на рассылку; кэш по `viewpoint` и delta-компрессия
-   * (NET-8) вводятся тогда, когда замер на десяти игроках покажет упор — это
-   * ровно тот профиль нагрузки, который спека netcode просит замерить.
+   * `viewpoint` соединения (NET-12, NTR-9). Наблюдателю — `VIEWPOINT_ALL`,
+   * игроку — команда его слота либо сам слот. Одно место на все каналы:
+   * разойтись `viewpoint`'ом между снапшотом и потоком событий значило бы
+   * завести второй отбор там, где NET-13 требует один.
    */
-  private broadcastSnapshots(tick: number): void {
+  private viewpointOf(connection: Connection): number {
+    return connection.phase === 'observer'
+      ? VIEWPOINT_ALL
+      : (this.config.teams?.[connection.slot] ?? connection.slot);
+  }
+
+  /**
+   * Персональная проекция текущего состояния (NET-12, NET-18): отобранный мир и
+   * отобранная тем же вызовом шина. Наблюдателю (`VIEWPOINT_ALL`) фильтр
+   * снимается целиком — и с мира, и с шины, — а не по каналам (NTR-9).
+   *
+   * ponytail: отбор идёт единственным опубликованным входом ядра, а он копирует
+   * мир целиком (`engine/core-ts/src/sim/filter.ts`). Звать его на каждом тике
+   * на каждый `viewpoint` — вдвое больше копий, чем прежде, при `snapshotRate`
+   * вдвое меньше `tickRate`. Узкий вход «отфильтровать только события, без
+   * копирования мира» заводится ОТДЕЛЬНЫМ изменением ядра со своим требованием
+   * (NTR-1), а не правкой по ходу сетевой работы; до него живём копией и меряем.
+   */
+  private filterFor(viewpoint: number): Snapshot {
+    return this.config.eventVisibility === undefined
+      ? filterSnapshot(this.state, viewpoint)
+      : filterSnapshot(this.state, viewpoint, this.config.eventVisibility);
+  }
+
+  /**
+   * Проекции тика по одной на активный `viewpoint`, а не на соединение: два
+   * соединения одной команды видят одно и то же, и второй вызов фильтра дал бы
+   * ту же копию мира второй раз.
+   */
+  private filterByViewpoint(): Map<number, Snapshot> {
+    const filtered = new Map<number, Snapshot>();
     for (const connection of this.connections.values()) {
       if (connection.phase === 'greeting') continue;
-      const viewpoint =
-        connection.phase === 'observer'
-          ? VIEWPOINT_ALL
-          : (this.config.teams?.[connection.slot] ?? connection.slot);
-      const filtered =
-        this.config.eventVisibility === undefined
-          ? filterSnapshot(this.state, viewpoint)
-          : filterSnapshot(this.state, viewpoint, this.config.eventVisibility);
-      this.send(connection.id, { type: 'Snapshot', tick, snapshot: snapshotToPlain(filtered) });
-      this.metrics.snapshotsSent++;
+      const viewpoint = this.viewpointOf(connection);
+      if (filtered.has(viewpoint)) continue;
+      filtered.set(viewpoint, this.filterFor(viewpoint));
     }
+    return filtered;
+  }
+
+  private streamOf(viewpoint: number): EventStream {
+    const existing = this.eventStreams.get(viewpoint);
+    if (existing !== undefined) return existing;
+    const opened: EventStream = { from: -1, to: -1, batches: [], repeats: [] };
+    this.eventStreams.set(viewpoint, opened);
+    return opened;
+  }
+
+  /**
+   * Накопление УЖЕ ОТОБРАННОГО (NTR-15): в поток кладётся шина персональной
+   * проекции, а не шина тика. Отобрать позже нельзя, не изменив ответ, и оба
+   * направления ошибки дефектны — потерянный факт видимого врага и утёкший
+   * факт невидимого.
+   *
+   * Открытое окно ведёт диапазон, а не список тиков: тик без событий пачки не
+   * заводит, но в диапазон входит, и получатель читает его как «событий не
+   * было».
+   */
+  private collectEvents(filtered: ReadonlyMap<number, Snapshot>): void {
+    const tick = this.state.tick;
+    // Накопитель `viewpoint`, которого на этом тике нет вовсе (все его
+    // соединения отпали), выбрасывается, а не ждёт возвращения. Иначе
+    // объявленный диапазон солгал бы (NTR-15): окна в кольце остались бы от
+    // прежнего соединения, тики без соединения никем не собирались, и первое же
+    // сообщение вернувшегося наблюдателя объявило бы `from` из старого кольца —
+    // то есть покрытие интервала, который не считали, а событие внутри него
+    // читалось бы как «событий не было». Возобновившийся `viewpoint` начинает с
+    // чистого окна: разрыв в его потоке — это разрыв, а не тишина.
+    //
+    // Заодно карта перестаёт держать мёртвые накопители: ключей в ней не больше,
+    // чем активных `viewpoint` прямо сейчас.
+    for (const viewpoint of this.eventStreams.keys()) {
+      if (!filtered.has(viewpoint)) this.eventStreams.delete(viewpoint);
+    }
+    for (const [viewpoint, personal] of filtered) {
+      const stream = this.streamOf(viewpoint);
+      if (stream.from < 0) stream.from = tick;
+      stream.to = tick;
+      if (personal.events.length > 0) stream.batches.push({ tick, events: personal.events });
+    }
+  }
+
+  /**
+   * Закрыть открытое окно `viewpoint` и собрать из него сообщение (NTR-15).
+   *
+   * Объявленный диапазон — повторяемые окна плюс текущее. Окна смежны по
+   * построению (каждое открывается тиком, следующим за `to` предыдущего),
+   * поэтому склейка непрерывна и покрыта полностью. Повтор — избыточность
+   * вместо подтверждений: пачка едет `eventRepeat + 1` раз и переживает
+   * `eventRepeat` потерь подряд, а однократность держит курсор получателя.
+   */
+  private closeEventWindow(viewpoint: number, epoch: number): EventsMessage {
+    const stream = this.streamOf(viewpoint);
+    const closed: EventWindow = { from: stream.from, to: stream.to, batches: stream.batches };
+    const batches: EventBatch[] = [];
+    for (const window of stream.repeats) batches.push(...window.batches);
+    batches.push(...closed.batches);
+    const from = stream.repeats[0]?.from ?? closed.from;
+
+    stream.repeats.push(closed);
+    // Кольцо: разосланных окон держится ровно `eventRepeat`. При нуле окно
+    // вытесняется сразу же — «без повтора» (NTR-15).
+    while (stream.repeats.length > this.eventRepeat) stream.repeats.shift();
+    stream.from = -1;
+    stream.to = -1;
+    stream.batches = [];
+
+    return { type: 'Events', epoch, from, to: closed.to, batches };
+  }
+
+  /**
+   * Тик исполнен один раз, снапшотов — по числу соединений (NET-12).
+   *
+   * `filtered` — проекции ЭТОГО тика, снятые отбором событий (NTR-15): рассылка
+   * по расписанию берёт их готовыми, а не фильтрует мир второй раз. Тем самым
+   * шина в кадре `Snapshot` и поток `Events` отобраны буквально одним вызовом на
+   * одном тике — то, чего требует шов с NET-18: разойдись предикат или момент, и
+   * клиент увидел бы в состоянии факт, которого нет в потоке.
+   *
+   * Отсутствие `filtered` означает рассылку МИМО расписания — по факту
+   * восстановления во время `Rewinding` (NTR-16). Она фильтрует сама и потока
+   * событий не несёт: расписание у `Events` то же, что у снапшотов по NTR-7
+   * (NTR-15, «Расписание»), восстановленный тик исполнен в ПРЕЖНЕЙ эпохе и свои
+   * события в ней уже отдал, переисполненные тики в накопитель не попадают
+   * (REW-4, OBS-5), а живых тиков новой эпохи в этот момент ещё нет — то есть
+   * объявлять нечего: диапазон замкнут, и открыть его не с чего.
+   */
+  private broadcastSnapshots(filtered?: ReadonlyMap<number, Snapshot>): void {
+    // Номер тика берётся из самого состояния, а не из аргумента: рассылка идёт
+    // и по расписанию, и по факту восстановления (NTR-16), и вызывающая сторона
+    // не должна иметь способа разойтись номером с тем, что уедет на провод.
+    const tick = this.state.tick;
+    // Единственное место, где эпоха увеличивается (NTR-16). Правило —
+    // «тик очередного авторитетного состояния меньше тика предыдущего», и оно
+    // применяется здесь потому, что здесь формируется рассылка: оба источника
+    // состояния проходят через эту точку и второй нумерации не заводят.
+    if (this.lastStateTick >= 0 && tick < this.lastStateTick) this.onEpochChanged(tick);
+    this.lastStateTick = tick;
+    // Та же выведенная величина штампуется и в `Snapshot`, и в `Events`
+    // (NTR-16): считать эпоху заново на каждое сообщение значило бы завести
+    // второй вывод одной величины.
+    const epoch = this.currentEpoch;
+
+    // Сообщение потока — одно на `viewpoint`: два соединения одной команды
+    // делят и пачку, и кадр.
+    const events = filtered === undefined ? undefined : new Map<number, EventsMessage>();
+
+    for (const connection of this.connections.values()) {
+      if (connection.phase === 'greeting') continue;
+      const viewpoint = this.viewpointOf(connection);
+      const personal = filtered?.get(viewpoint) ?? this.filterFor(viewpoint);
+      this.send(connection.id, { type: 'Snapshot', epoch, tick, snapshot: snapshotToPlain(personal) });
+      this.metrics.snapshotsSent++;
+
+      // Поток идёт тем же путём и наблюдателю, и игроку — отдельной ветки для
+      // `VIEWPOINT_ALL` здесь нет (NTR-15). Условие на `filtered` — не про
+      // наблюдателя, а про то, что события этого тика для этого `viewpoint`
+      // отобраны: иначе объявленный диапазон утверждал бы покрытие, которого не
+      // считали.
+      if (events === undefined || filtered?.has(viewpoint) !== true) continue;
+      let message = events.get(viewpoint);
+      if (message === undefined) {
+        message = this.closeEventWindow(viewpoint, epoch);
+        events.set(viewpoint, message);
+      }
+      this.send(connection.id, message);
+    }
+  }
+
+  /**
+   * Разрыв монотонности тика (NTR-16). Кроме самого счётчика здесь гасится
+   * накопленный, но ещё не применённый ввод всех слотов (NTR-7): он порождён в
+   * стёртой ветви истории, помечен прежней эпохой и после возобновления
+   * применялся бы тем успешнее, чем мельче был откат.
+   *
+   * Здесь же сбрасываются накопители потока событий (NTR-15): пачки стёртой
+   * эпохи по паре `(эпоха, тик)` меньше курсора получателя и приняты быть не
+   * могут, сколько их ни повторяй. Кольцо уходит целиком — оно той же стёртой
+   * эпохи, — и первое сообщение новой эпохи откроет диапазон с первого ЖИВОГО
+   * тика новой ветви.
+   *
+   * Но открытое окно ПЕРЕД сбросом отдаётся: его префикс — тики от `stream.from`
+   * до тика восстановления — исполнен живьём и перемоткой НЕ стёрт, их эффекты
+   * лежат в восстановленном мире, и «события каждого исполненного тика SHALL
+   * доставляться» (NTR-15, «Накопление») относится к ним в полной мере.
+   * Выбросить их вместе с кольцом значило бы терять факты тем вернее, чем реже
+   * рассылка. Уходит это сообщением ПРЕЖНЕЙ эпохи и до того, как эпоха выросла:
+   * по паре оно выше курсора получателя, встык к последнему объявленному
+   * диапазону (`from` = первый несобранный тик, `to` = тик восстановления), а
+   * рост эпохи следом разрывом не считается (NTR-16, решение 8).
+   *
+   * Хвост за точкой восстановления — пачки стёртой ветви — отбрасывается вместе
+   * с кольцом: цена, записанная в решении 8 дизайна.
+   */
+  private onEpochChanged(restoredTick: number): void {
+    this.flushPrefixOfErasedEpoch(restoredTick);
+    this.currentEpoch++;
+    for (const pending of this.pending) pending.clear();
+    this.eventStreams.clear();
+  }
+
+  /**
+   * Префикс открытого окна каждого `viewpoint` — исполненные и не стёртые
+   * перемоткой тики — уходит сообщением прежней эпохи (см. `onEpochChanged`).
+   *
+   * Это последнее сообщение эпохи, следующего за ним не будет, поэтому оно
+   * максимально избыточно (NTR-15 «Избыточность», тот же довод, что у хвоста
+   * перед `End`): кольцо повторов вкладывается целиком, срезанное по точке
+   * восстановления. Тики за ней — ветвь, которую перемотка стёрла: их пачки
+   * не едут, а объявленный диапазон кончается на `restoredTick`, так что
+   * «покрыт полностью» остаётся правдой. Слать нечего только когда и окно, и
+   * кольцо целиком за точкой восстановления либо пусты.
+   */
+  private flushPrefixOfErasedEpoch(restoredTick: number): void {
+    const epoch = this.currentEpoch;
+    for (const [viewpoint, stream] of this.eventStreams) {
+      const from = stream.repeats[0]?.from ?? stream.from;
+      if (from < 0 || from > restoredTick) continue;
+      const batches: EventBatch[] = [];
+      for (const window of stream.repeats) batches.push(...window.batches);
+      if (stream.from >= 0) batches.push(...stream.batches);
+      this.sendToViewpoint(viewpoint, {
+        type: 'Events',
+        epoch,
+        from,
+        to: restoredTick,
+        batches: batches.filter((batch) => batch.tick <= restoredTick),
+      });
+    }
+  }
+
+  /**
+   * Одно сообщение — всем соединениям `viewpoint`, тем же объектом: пачка
+   * считается один раз на `viewpoint`, как и на рассылке.
+   */
+  private sendToViewpoint(viewpoint: number, message: ServerMessage): void {
+    for (const connection of this.connections.values()) {
+      if (connection.phase === 'greeting') continue;
+      if (this.viewpointOf(connection) !== viewpoint) continue;
+      this.send(connection.id, message);
+    }
+  }
+
+  // -------------------------------------------------------------- перемотка
+
+  /**
+   * Механизм перемотки (WSM-5). Политика ульты — кто инициирует, на сколько
+   * отматывает, где останавливается — живёт системой поверх этих вызовов, и
+   * сервер её не подменяет: здесь только доставка её последствий клиентам.
+   */
+  private requireRewind(): RewindController {
+    if (this.rewindController === undefined) {
+      throw new Error('MatchServer: матч поднят без истории — перематывать нечем (NET-11, SNAP-4)');
+    }
+    return this.rewindController;
+  }
+
+  /** `Running → Paused` либо `Rewinding → Paused` (WSM-2). */
+  pause(): void {
+    this.requireRewind().pause();
+  }
+
+  /**
+   * `Paused → Rewinding` (WSM-2). Прямого входа из `Running` нет ни у политики,
+   * ни у сетевого слоя — единственный флоу `Running → Paused → Rewinding →
+   * Paused → Running` (NET-11).
+   */
+  beginRewind(): void {
+    this.requireRewind().beginRewind();
+  }
+
+  /**
+   * `Paused → Running` — продолжить с текущего, в том числе перемотанного, тика.
+   *
+   * Накопленный неприменённый ввод гасится и здесь, а не только на смене эпохи:
+   * ввод в замороженный мир не принимается вовсе (`ingest`), но перемотка на
+   * тот же тик эпохи не двигает (NTR-16), и кадр, доехавший до `pause()`, ждал
+   * бы в `pending` возобновления. Залпа на возобновлении быть не должно
+   * (NET-11, REW-5), а лишний `clear` на переходе стоит ровно ничего.
+   */
+  resume(): void {
+    this.requireRewind().resume();
+    for (const pending of this.pending) pending.clear();
+  }
+
+  /**
+   * Восстановление целевого тика (REW-2) с рассылкой по факту, мимо расписания
+   * `snapshotRate` (NTR-16, NET-11): живых тиков во время `Rewinding` не
+   * исполняется, и расписанию не на чем срабатывать. Реплеевые тики внутри
+   * `seekTo` собственных рассылок не порождают — наблюдаемым результатом
+   * является одно восстановленное состояние, а не поток промежуточных.
+   *
+   * Потока событий эта рассылка не несёт (см. `broadcastSnapshots`): её тик
+   * исполнен в прежней эпохе и свои факты в ней уже отдал, а живых тиков новой
+   * эпохи ещё нет.
+   */
+  seekTo(tick: number): void {
+    const controller = this.requireRewind();
+    // Точка остановки лежит в уже исполненном прошлом живой ветви (REW-7). Без
+    // этой проверки `seekTo` на неисполненный тик доиграл бы мир вперёд
+    // реплеевыми тиками по ПУСТОМУ логу вводов — тики, которых в каноническом
+    // логе нет и не будет (NTR-16), то есть тихо невоспроизводимая запись.
+    // Ошибкой, как у соседей: перемотка вперёд — дефект вызывающей политики, а
+    // не штатный случай.
+    //
+    // Граница — `liveFrontier`, а не текущий тик: скраб вперёд внутри одной
+    // перемотки законен (NTR-16, «Инициатор ведёт точку остановки») и идёт по
+    // тем же каноническим вводам, что уже исполнены.
+    if (tick > this.liveFrontier) {
+      throw new Error(
+        `MatchServer.seekTo: точка остановки ${tick} впереди исполненного тика ${this.liveFrontier} (REW-7)`,
+      );
+    }
+    controller.seekTo(tick);
+    // Ветвь, которую перемотка стёрла, уходит из истории здесь же: живые тики
+    // новой эпохи пойдут по тем же номерам, и без обрезки в буфере оказались бы
+    // два снапшота одного тика — см. `BranchHistory`.
+    this.history?.dropAfter(this.state.tick);
+    this.adoptFramesOf(this.state.tick);
+    this.broadcastSnapshots();
+  }
+
+  /**
+   * Повторяемым «последним кадром» слота становится кадр, применённый на тике
+   * восстановления (NTR-7): мир вернулся в это состояние целиком, и повтор
+   * кадра из стёртого будущего означал бы ввод, которого в этой ветви истории
+   * не было. До первого кадра повторять снова нечего — нулевой ввод.
+   */
+  private adoptFramesOf(tick: number): void {
+    const restored = this.inputLog?.at(tick) ?? EMPTY_FRAMES;
+    for (let slot = 0; slot < this.config.players.length; slot++) {
+      const playerId = this.config.players[slot]!;
+      this.lastFrame[slot] = restored.find((frame) => frame.playerId === playerId);
+    }
+  }
+
+  /**
+   * Хвост потока перед `End` (NTR-15, «Завершение матча»): накопленное с
+   * последней рассылки уходит ДО закрытия соединения. Матч кончается событием —
+   * последним убийством, истёкшим таймером, — и потерять именно его значит
+   * потерять то единственное, ради чего поток заведён.
+   *
+   * Сообщение — максимально избыточное, а не минимальное: оно собирается как на
+   * рассылке (кольцо повторов плюс открытое окно), потому что у него нет
+   * СЛЕДУЮЩЕГО. «Каждое сообщение SHALL повторять события нескольких предыдущих
+   * рассылок» (NTR-15, «Избыточность») держится тем, что пачка едет
+   * `eventRepeat + 1` раз; окно, закрытое последней рассылкой по расписанию,
+   * уехало бы ровно один раз, и его потеря была бы невосполнима — при том что
+   * сам хвост доехал. Лишние байты последнего сообщения матча стоят дешевле
+   * потерянного последнего убийства.
+   *
+   * Отсюда же второй случай: слить нечего, но кольцо не пусто — сообщение всё
+   * равно уходит. Последнее сообщение матча обязано быть самым избыточным, а не
+   * самым скупым. Молчание остаётся ровно на «нечего слить вовсе»: ни хвоста, ни
+   * кольца — объявлять нечего.
+   *
+   * Кольцо при этом не трогается: матч кончился, повторять больше нечем и некуда.
+   */
+  private flushEvents(viewpoint: number, epoch: number): EventsMessage | undefined {
+    const stream = this.eventStreams.get(viewpoint);
+    if (stream === undefined) return undefined;
+    const last = stream.repeats[stream.repeats.length - 1];
+    if (stream.from < 0 && last === undefined) return undefined;
+
+    const batches: EventBatch[] = [];
+    for (const window of stream.repeats) batches.push(...window.batches);
+    batches.push(...stream.batches);
+    const message: EventsMessage = {
+      type: 'Events',
+      epoch,
+      from: stream.repeats[0]?.from ?? stream.from,
+      // Хвоста может не быть вовсе: тогда объявляется ровно то, что уже
+      // объявлялось последней рассылкой, — повтор, который получатель отбросит
+      // по курсору, если предыдущее сообщение доехало.
+      to: stream.from < 0 ? last!.to : stream.to,
+      batches,
+    };
+    stream.from = -1;
+    stream.to = -1;
+    stream.batches = [];
+    return message;
   }
 
   private end(reason: 'player-silent' | 'player-left' | 'server-stopped'): void {
     if (this.matchPhase === 'ended') return;
     this.matchPhase = 'ended';
+    const epoch = this.currentEpoch;
+    const tails = new Map<number, EventsMessage | undefined>();
     for (const connection of this.connections.values()) {
       if (connection.phase === 'greeting') continue;
+      const viewpoint = this.viewpointOf(connection);
+      // Хвост считается один раз на `viewpoint` — как и всякая пачка потока, —
+      // а уезжает каждому соединению этого `viewpoint`.
+      if (!tails.has(viewpoint)) tails.set(viewpoint, this.flushEvents(viewpoint, epoch));
+      const tail = tails.get(viewpoint);
+      // Порядок в одном `drain()` значим ровно здесь: `Events` раньше `End`,
+      // соединение закрывается после — исходящее с `closeAfter` последнее.
+      if (tail !== undefined) this.send(connection.id, tail);
       this.send(connection.id, { type: 'End', reason, tick: this.state.tick }, true);
     }
   }
@@ -471,15 +1151,28 @@ export class MatchServer {
    * Матч как сценарий прогона (NTR-8): та же тройка, что принимает
    * `runScenario` ядра. Прогон обязан дать побитово то же состояние — это и
    * есть доказательство, что сетевой слой не сломал детерминизм.
+   *
+   * Форма документа плоская, и определена она ровно для матча без перемотки —
+   * одного сегмента (NTR-16). Матч с перемоткой отдаётся `canonicalSegments`:
+   * раскладка сегментов по документу сценария принадлежит `cli-testing` CLI-2,
+   * и до неё записать такой матч сценарием нечем. Отказ здесь явный, потому
+   * что плоский список с ключом-тиком у такого матча означал бы два разных
+   * кадра под одним номером — то есть тихо невоспроизводимую запись.
    */
   toScenario(): ScenarioDef {
+    if (this.segments.length > 1) {
+      throw new Error(
+        `MatchServer.toScenario: матч из ${this.segments.length} сегментов (NTR-16) — ` +
+          'плоская форма документа сценария определена только для матча без перемотки (CLI-2)',
+      );
+    }
     return {
       name: this.config.name ?? 'match',
       seed: this.config.seed,
       ticks: this.state.tick,
       scene: this.config.scene,
       initial: this.config.initial ?? [],
-      inputs: this.canonical,
+      inputs: this.canonicalInputs,
       players: this.config.players,
       ...(this.config.physics !== undefined ? { physics: this.config.physics } : {}),
       ...(this.config.locomotion !== undefined ? { locomotion: this.config.locomotion } : {}),

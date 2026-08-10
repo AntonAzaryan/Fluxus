@@ -6,10 +6,27 @@ import type { Serializer } from '@game-mvp/core';
 import { clientCodec, DEFAULT_SERIALIZER, type Codec } from '../protocol/codec.js';
 import { ProtocolError, type ClientMessage, type ServerMessage } from '../protocol/messages.js';
 import type { Transport } from '../transport/transport.js';
-import type { InputSample, MatchClient } from './matchClient.js';
+import type { DeliveredEvents, InputSample, MatchClient, MatchSample } from './matchClient.js';
 
 /** Источник ввода: сценарий из файла, клавиатура или тест. `undefined` — на этом тике ввода нет. */
 export type InputSource = (tick: number) => InputSample | undefined;
+
+/**
+ * Наблюдаемый выход шага клиента: состояние на этот момент и факты, доехавшие к
+ * нему (NTR-15).
+ *
+ * Двумя полями, а не одним сэмплом с событиями внутри: сэмпл — состояние на
+ * момент времени, и его нет вовсе, пока буфер интерполяции не набрался, а факт
+ * однократен и ждать буфера не может. Связать их значило бы терять факты ровно
+ * там, где картинка ещё не поехала, — и очередь клиента копилась бы без
+ * потребителя.
+ */
+export interface ClientStep {
+  /** Состояние с признаком разрыва (SHELL-7); `undefined` — буфер ещё не набрался. */
+  readonly state: MatchSample | undefined;
+  /** Факты, слитые с прошлого шага, по возрастанию пары `(эпоха, тик)`. Каждый — ровно один раз. */
+  readonly events: readonly DeliveredEvents[];
+}
 
 export interface ClientHostOptions {
   readonly serializer?: Serializer;
@@ -66,8 +83,11 @@ export class ClientHost {
   /**
    * Шаг локального времени клиента: оценка серверного тика и сэмпл ввода.
    * Отдельно от `run()`, чтобы тест двигал клиента сам, без таймеров.
+   *
+   * Возвращает состояние на этот момент вместе с признаком разрыва — то, что
+   * рисует рендер (SHELL-7), — и факты, доехавшие к этому шагу (NTR-15).
    */
-  step(): void {
+  step(): ClientStep {
     const now = this.now();
     this.client.advance();
     if (this.input !== undefined && this.client.phase === 'playing') {
@@ -77,8 +97,19 @@ export class ClientHost {
     // Сэмпл буфера интерполяции — то, что на каждом кадре делает рендер. Здесь
     // он нужен и без рендера: иначе отставание буфера (NTR-11) никто не считает,
     // и headless-прогон не отвечает на треть вопроса про отклик.
-    this.client.sample(now);
+    //
+    // Сэмпл несёт признак разрыва (SHELL-7) и гасит его — значит, состояние в
+    // связке с этим хостом берут отсюда: рендер, поднятый поверх, читает
+    // возвращённый сэмпл, а не зовёт `sample()` вторым потребителем.
+    const state = this.client.sample(now);
+    // Очередь фактов сливается КАЖДЫЙ шаг и независимо от того, отдал ли буфер
+    // сэмпл: единица потока — факт, а не кадр (NTR-15). Слив здесь и делает
+    // хост тем потребителем, ради которого очередь заведена, — без него она
+    // копилась бы до конца матча, а «доставлено» означало бы «доехало до
+    // клиента», а не «отдано наверх».
+    const events = this.client.takeEvents();
     this.flush();
+    return { state, events };
   }
 
   /** Запускает собственный темп. Частота берётся из `Welcome`, до него — 60 Гц по умолчанию. */

@@ -11,7 +11,7 @@
  * соединение, а не содержимое сообщения. Поле в кадре означало бы, что клиент
  * вправе назваться чужим слотом, и это пришлось бы отдельно опровергать.
  */
-import type { Fixed, InputFrame, PlainSnapshot, ScenarioSpawn } from '@game-mvp/core';
+import type { Fixed, GameEvent, InputFrame, PlainSnapshot, ScenarioSpawn } from '@game-mvp/core';
 
 /** Пара версии игры (NET-16): непрозрачный идентификатор сборки и хеш контент-пака (NET-17). */
 export interface GameVersion {
@@ -60,8 +60,15 @@ export interface HelloMessage {
   readonly observer: boolean;
 }
 
+/**
+ * Эпоха живёт на сообщении, а не на `WireInput`: `InputFrame` — контракт ядра
+ * (TICK-2), он едет в канонический `inputs[]` и в golden-эталоны, а эпоха —
+ * величина слоя матча (NTR-16). Это эпоха, против которой ввод порождён, то
+ * есть эпоха последнего применённого клиентом снапшота (NTR-7).
+ */
 export interface InputMessage {
   readonly type: 'Input';
+  readonly epoch: number;
   readonly frames: readonly WireInput[];
 }
 
@@ -88,6 +95,16 @@ export interface Pacing {
   readonly tickRate: number;
   readonly snapshotRate: number;
   readonly inputDelay: number;
+  /** Верхняя граница окна приёма ввода в тиках (NTR-7): конечная и заданная конфигом матча, а не клиентом. */
+  readonly inputWindow: number;
+  /**
+   * Глубина повтора потока событий (NTR-15): сколько ПРЕДЫДУЩИХ рассылок
+   * повторяет каждое сообщение `Events`. `0` — без повтора. Клиент по нему
+   * ничего не решает — однократность держит его курсор, — но без него
+   * диагностика разрыва диапазона не читается: разрыв при глубине 2 и разрыв
+   * при глубине 0 суть разные наблюдения об одном и том же канале.
+   */
+  readonly eventRepeat: number;
 }
 
 export interface WelcomeMessage {
@@ -111,10 +128,60 @@ export interface StartMessage {
   readonly tick: number;
 }
 
+/**
+ * Номер авторитетного состояния — пара `(epoch, tick)` (NTR-16): номер тика при
+ * перемотке идёт назад, и один он состояние не называет.
+ */
 export interface SnapshotMessage {
   readonly type: 'Snapshot';
+  readonly epoch: number;
   readonly tick: number;
   readonly snapshot: PlainSnapshot;
+}
+
+/**
+ * События одного тика на проводе: номер тика и его отобранная шина в порядке
+ * публикации (EVT-2). Порядок внутри пачки значим и потому передаётся списком,
+ * а не картой: карта отдала бы упорядочивание сериализатору.
+ */
+export interface EventBatch {
+  readonly tick: number;
+  readonly events: readonly GameEvent[];
+}
+
+/**
+ * Поток фактов тиков (NTR-15) — отдельное сообщение закрытого набора (NTR-4), а
+ * не поле снапшота: у состояния и у фактов противоположные правила
+ * отбрасывания, и одно сообщение вынуждало бы одно правило на двоих.
+ *
+ * `from`..`to` — ЗАМКНУТЫЙ диапазон покрытых тиков, и покрыт он полностью: тик
+ * внутри диапазона, пачки которого в `batches` нет, означает «на этом тике
+ * событий не было», а не «пачка потерялась». Отсюда же пустое сообщение на
+ * рассылке без событий: без объявленного диапазона тишина и потеря
+ * неразличимы.
+ *
+ * `epoch` — эпоха ВСЕГО диапазона, одно поле на сообщение (NTR-16). Диапазон
+ * SHALL NOT пересекать границу эпохи: объявленный диапазон есть утверждение о
+ * полном покрытии, а через границу перемотки один номер тика принадлежит двум
+ * ветвям, и «покрыт полностью» перестаёт что-либо значить. Значит на смене
+ * эпохи диапазон закрывается, и следующее сообщение открывает новый — с
+ * эпохой новой ветви. Свойство структурное: на разборе проверять нечего сверх
+ * того, что `from`/`to`/`tick` — числа одного объявленного диапазона, а
+ * соблюдение этого при формировании сообщения держит сервер (задачи 3.8 и 3.9
+ * этого изменения).
+ *
+ * Потолка на число пачек здесь нет намеренно, в отличие от `Input`
+ * (`MAX_FRAMES_PER_MESSAGE`): границы накопления NTR-15 меряет в тиках, а не в
+ * событиях и не в байтах, и молча укороченная пачка есть ровно та потеря,
+ * против которой требование написано. Размер получившегося кадра — забота
+ * реализации транспорта (NTR-2).
+ */
+export interface EventsMessage {
+  readonly type: 'Events';
+  readonly epoch: number;
+  readonly from: number;
+  readonly to: number;
+  readonly batches: readonly EventBatch[];
 }
 
 export interface EndMessage {
@@ -128,6 +195,7 @@ export type ServerMessage =
   | RejectMessage
   | StartMessage
   | SnapshotMessage
+  | EventsMessage
   | EndMessage;
 
 // ------------------------------------------------------------------- разбор
@@ -219,7 +287,16 @@ export function parseClientMessage(value: unknown): ClientMessage {
       if (frames.length > MAX_FRAMES_PER_MESSAGE) {
         throw new ProtocolError(`Input: больше ${MAX_FRAMES_PER_MESSAGE} кадров в сообщении`);
       }
-      return { type: 'Input', frames: frames.map(wireInput) };
+      // Эпоха проверяется тем же способом, что и номер тика: целое,
+      // неотрицательное. Отсутствующее поле — разрыв соединения (NTR-4), а не
+      // умолчание: молча подставленный ноль означал бы, что ввод из стёртой
+      // перемоткой ветви истории приезжает помеченным нулевой эпохой и
+      // проходит проверку сервера у любого клиента постарше протокола.
+      return {
+        type: 'Input',
+        epoch: int(source, 'epoch', 'Input', 0, Number.MAX_SAFE_INTEGER),
+        frames: frames.map(wireInput),
+      };
     }
     case 'Bye':
       return { type: 'Bye', reason: typeof source['reason'] === 'string' ? source['reason'] : '' };
@@ -229,6 +306,53 @@ export function parseClientMessage(value: unknown): ClientMessage {
       // фрейм без сущности (NTR-4, TICK-5).
       throw new ProtocolError(`неизвестный тип сообщения: ${JSON.stringify(type)}`);
   }
+}
+
+/**
+ * Данные события с провода: ПЛОСКАЯ карта чисел (OBS-1). Вложенный объект,
+ * массив и строка отвергаются, а не сплющиваются: форма `GameEvent.data`
+ * нормирована ядром, и провод её расширять не вправе.
+ *
+ * Проверяется конечность, а не целочисленность: `Record<string, number>` —
+ * контракт ядра, и сужать его на границе значило бы завести на проводе вторую,
+ * более строгую норму состава события. `NaN` и `Infinity` при этом не проходят:
+ * они не число ни в одном смысле, полезном получателю.
+ */
+function eventData(value: unknown): Record<string, number> {
+  const source = object(value, 'Events.batches[].events[].data');
+  for (const key of Object.keys(source)) {
+    const field = source[key];
+    if (typeof field !== 'number' || !Number.isFinite(field)) {
+      throw new ProtocolError(
+        `Events.batches[].events[].data: поле "${key}" — число (OBS-1: плоская карта чисел)`,
+      );
+    }
+  }
+  return source as Record<string, number>;
+}
+
+function gameEvent(value: unknown): GameEvent {
+  const source = object(value, 'Events.batches[].events[]');
+  return {
+    type: str(source, 'type', 'Events.batches[].events[]'),
+    data: eventData(source['data']),
+  };
+}
+
+/**
+ * Пачка одного тика. Номер тика проверяется по объявленному диапазону, а не
+ * сам по себе: тик вне `from`..`to` означает сообщение, диапазон которого не
+ * описывает его собственное тело, и принять такое — значит принять покрытие,
+ * которого нет (NTR-15).
+ */
+function eventBatch(value: unknown, from: number, to: number): EventBatch {
+  const source = object(value, 'Events.batches[]');
+  const events = source['events'];
+  if (!Array.isArray(events)) throw new ProtocolError('Events.batches[]: поле "events" — массив');
+  return {
+    tick: int(source, 'tick', 'Events.batches[]', from, to),
+    events: events.map(gameEvent),
+  };
 }
 
 /** Симметричный разбор на клиенте: сервер тоже недоверен ровно в той мере, в какой недоверен провод. */
@@ -259,6 +383,8 @@ export function parseServerMessage(value: unknown): ServerMessage {
           tickRate: int(pacing, 'tickRate', 'Welcome.pacing', 1, 1000),
           snapshotRate: int(pacing, 'snapshotRate', 'Welcome.pacing', 1, 1000),
           inputDelay: int(pacing, 'inputDelay', 'Welcome.pacing', 0, 1000),
+          inputWindow: int(pacing, 'inputWindow', 'Welcome.pacing', 0, 1000),
+          eventRepeat: int(pacing, 'eventRepeat', 'Welcome.pacing', 0, 1000),
         },
       };
     }
@@ -273,9 +399,30 @@ export function parseServerMessage(value: unknown): ServerMessage {
     case 'Snapshot':
       return {
         type: 'Snapshot',
+        epoch: int(source, 'epoch', 'Snapshot', 0, Number.MAX_SAFE_INTEGER),
         tick: int(source, 'tick', 'Snapshot', 0, Number.MAX_SAFE_INTEGER),
         snapshot: object(source['snapshot'], 'Snapshot.snapshot') as unknown as PlainSnapshot,
       };
+    case 'Events': {
+      const batches = source['batches'];
+      if (!Array.isArray(batches)) throw new ProtocolError('Events: поле "batches" — массив');
+      // Пустой массив пачек легален и штатен: сообщение уходит на каждой
+      // рассылке, в том числе когда во всём диапазоне не оказалось ни одного
+      // события (NTR-15). Потолка на число пачек нет — см. `EventsMessage`.
+      const from = int(source, 'from', 'Events', 0, Number.MAX_SAFE_INTEGER);
+      const to = int(source, 'to', 'Events', from, Number.MAX_SAFE_INTEGER);
+      return {
+        type: 'Events',
+        // Эпоха диапазона — одно поле на сообщение (NTR-16), проверяемое тем же
+        // способом, что и номер тика. Отсутствующее поле — разрыв соединения
+        // (NTR-4), а не умолчание: пачки стёртой перемоткой ветви приехали бы
+        // помеченными нулевой эпохой и прошли бы курсор получателя.
+        epoch: int(source, 'epoch', 'Events', 0, Number.MAX_SAFE_INTEGER),
+        from,
+        to,
+        batches: batches.map((batch) => eventBatch(batch, from, to)),
+      };
+    }
     case 'End':
       return {
         type: 'End',

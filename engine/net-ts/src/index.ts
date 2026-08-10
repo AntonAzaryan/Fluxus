@@ -22,6 +22,8 @@ export type {
   ClientMessage,
   EndMessage,
   EndReason,
+  EventBatch,
+  EventsMessage,
   GameVersion,
   HelloMessage,
   InputMessage,
@@ -61,10 +63,24 @@ export type { LoadedContentPack } from './content/pack.js';
 // мир матча
 export { buildMatchWorld, orderedSchemas } from './match/world.js';
 export type { MatchWorld, MatchWorldDef } from './match/world.js';
+export { BranchHistory } from './match/history.js';
+export type { MatchHistory } from './match/history.js';
+export { replaySegments } from './match/replay.js';
+export type {
+  ReplaySegment,
+  SegmentedReplayDef,
+  SegmentedReplayResult,
+} from './match/replay.js';
 
 // сервер
 export { MatchServer } from './server/matchServer.js';
-export type { MatchConfig, MatchPhase, Outgoing } from './server/matchServer.js';
+export type {
+  MatchConfig,
+  MatchPhase,
+  MatchRewindOptions,
+  MatchSegment,
+  Outgoing,
+} from './server/matchServer.js';
 export { MatchHost } from './server/host.js';
 export type { MatchHostOptions } from './server/host.js';
 
@@ -73,15 +89,21 @@ export { MatchClient } from './client/matchClient.js';
 export type {
   ClientPhase,
   ContentPack,
+  DeliveredEvents,
   InputSample,
   MatchClientOptions,
+  MatchSample,
 } from './client/matchClient.js';
 export { ClientHost } from './client/host.js';
-export type { ClientHostOptions, InputSource } from './client/host.js';
+export type { ClientHostOptions, ClientStep, InputSource } from './client/host.js';
 export { InputRing, DEFAULT_RING_TICKS } from './client/inputRing.js';
 export type { SentInput } from './client/inputRing.js';
 export { InterpolationBuffer, vanishedEntities, DEFAULT_DELAY_MS } from './client/interpolation.js';
-export type { InterpolationOptions, InterpolationSample } from './client/interpolation.js';
+export type {
+  InterpolationOptions,
+  InterpolationSample,
+  PresentedState,
+} from './client/interpolation.js';
 
 // лобби (SES-4) — свой закрытый набор сообщений, отдельный от набора матча
 export {

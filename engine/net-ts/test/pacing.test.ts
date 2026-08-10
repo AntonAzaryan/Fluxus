@@ -97,6 +97,9 @@ describe('судьба кадра', () => {
 
     server.receive(1, inputMessage(wireInput(2, 5, STEP)));
     expect(server.metrics.slots[0]!.late).toBe(1);
+    // Ровно один класс, а не оба сразу: «ввод теряется» и «ввод ощущается вяло»
+    // суть разные дефекты с разными починками (NTR-11).
+    expect(server.metrics.slots[0]!.outOfWindow).toBe(0);
 
     // Мир назад не переигрывается (NET-1): состояние тика 2 уже посчитано.
     server.advance();
@@ -111,6 +114,56 @@ describe('судьба кадра', () => {
     const counters = server.metrics.slots[0]!;
     expect(counters.outOfWindow).toBe(1);
     expect(counters.late).toBe(0);
+  });
+
+  it('граница окна проходит ровно по currentTick + inputWindow (NTR-7)', () => {
+    const { server } = running({ inputWindow: 5 });
+    server.advance();
+    expect(server.tick).toBe(1);
+    const counters = server.metrics.slots[0]!;
+
+    // Обе стороны одного сравнения: на тик за границей — отброс, ровно на
+    // границе — приём. Сдвиг сравнения на единицу в любую сторону краснит тест.
+    server.receive(1, inputMessage(wireInput(1 + 5 + 1, 71, STEP)));
+    expect(counters.outOfWindow).toBe(1);
+    server.receive(1, inputMessage(wireInput(1 + 5, 70, STEP)));
+    expect(counters.outOfWindow).toBe(1);
+
+    // Принятый кадр дождался своего тика и применился — то есть он лёг в буфер
+    // неприменённого ввода, а не был сочтён принятым и потерян.
+    for (let tick = 2; tick <= 6; tick++) server.advance();
+    expect(counters.applied).toBe(1);
+    const own = server.canonicalInputs.filter((frame) => frame.playerId === 'p1');
+    expect(own.find((frame) => frame.tick === 6)).toMatchObject({ seq: 70 });
+    expect(own.some((frame) => frame.seq === 71)).toBe(false);
+  });
+
+  it('повтор кадра на ту же пару (слот, тик) гасится молча, и выигрывает первый (NTR-7)', () => {
+    const { server } = running();
+    // Избыточность штатна и на канале NTR-2 неизбежна: копия приходит и
+    // отдельным сообщением (слот 0), и второй записью в одном (слот 1).
+    server.receive(1, inputMessage(wireInput(1, 70, STEP)));
+    server.receive(1, inputMessage(wireInput(1, 71, -STEP)));
+    server.receive(2, inputMessage(wireInput(1, 80, STEP), wireInput(1, 81, -STEP)));
+    server.advance();
+
+    const atTick = server.canonicalInputs.filter((frame) => frame.tick === 1);
+    expect(atTick).toHaveLength(2);
+    // Применён первый принятый, а не последний: при «последний выигрывает»
+    // значение слота оставалось бы открытым до дедлайна и зависело бы от
+    // порядка обработки внутри сервера.
+    expect(atTick.map((frame) => frame.seq).sort((a, b) => a - b)).toEqual([70, 80]);
+    expect(atTick.every((frame) => frame.move.x === STEP)).toBe(true);
+
+    // Молча и без счётчиков: избыточная отправка — штатный режим протокола
+    // (NTR-4), и счёт её дефектом сделал бы метрики NTR-11 нечитаемыми ровно у
+    // исправного клиента.
+    for (const slot of [0, 1]) {
+      const counters = server.metrics.slots[slot]!;
+      expect(counters.applied).toBe(1);
+      expect(counters.late).toBe(0);
+      expect(counters.outOfWindow).toBe(0);
+    }
   });
 });
 
@@ -179,6 +232,19 @@ describe('молчание слота', () => {
 describe('конфиг темпа', () => {
   it('некратная частота рассылки отвергается на сборке матча', () => {
     expect(() => harness(duelConfig({ tickRate: 60, snapshotRate: 45 }))).toThrow(/не делит/);
+  });
+
+  it('inputWindow меньше inputDelay отвергается на сборке матча (NTR-7)', () => {
+    expect(() => harness(duelConfig({ inputDelay: 20, inputWindow: 15 }))).toThrow(/меньше inputDelay/);
+  });
+
+  it('глубина повтора событий — целое, не меньше нуля; ноль легален (NTR-15)', () => {
+    expect(() => harness(duelConfig({ eventRepeat: -1 }))).toThrow(/eventRepeat/);
+    expect(() => harness(duelConfig({ eventRepeat: 1.5 }))).toThrow(/eventRepeat/);
+    // Ноль означает «без повтора», а не «параметр не задан».
+    expect(harness(duelConfig({ eventRepeat: 0 })).server.pacing.eventRepeat).toBe(0);
+    // Умолчание — две предыдущие рассылки.
+    expect(harness(duelConfig()).server.pacing.eventRepeat).toBe(2);
   });
 
   it('число слотов — величина конфига, а не константа (NTR-6)', () => {
