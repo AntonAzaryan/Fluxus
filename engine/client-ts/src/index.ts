@@ -1,14 +1,17 @@
-// Клиентская оболочка веб-игры (client-shell SHELL-1..7): ядро в dedicated
-// Worker, рендер в главном потоке, канал — transferable ping-pong.
+// Клиентская оболочка веб-игры (client-shell SHELL-1..8): ядро в dedicated
+// Worker, рендер в главном потоке, канал — transferable ping-pong. Режимов ровно
+// два (SHELL-8): локальный — симуляция в воркере (`WorkerShell`), сетевой —
+// клиент матча и применение персональных снапшотов (`NetworkShell`).
 
-// Протокол канала и абстракция порта (SHELL-3, SHELL-5, SHELL-6).
-export { shellPort } from './protocol.js';
+// Протокол канала и абстракция порта (SHELL-3, SHELL-5, SHELL-6, SHELL-8).
+export { helloMessage, shellPort } from './protocol.js';
 export type {
   ControlMessage,
   HelloMessage,
   InputMessage,
   MainToWorker,
   ReturnBufferMessage,
+  ShellMode,
   ShellPort,
   TickEnvelope,
   WorkerToMain,
@@ -18,11 +21,15 @@ export type {
 export { CODEC_VERSION, readTick, requiredBytes, writeTick } from './codec.js';
 export type { WriteOverrides } from './codec.js';
 
-// Воркер-сторона: сериализация с ack-conflation и хост симуляции.
+// Воркер-сторона: сериализация с ack-conflation, общая для обоих режимов.
 export { ShellSender } from './sender.js';
 export type { SenderOptions } from './sender.js';
+// Локальный режим: хост симуляции с тикером (SHELL-8).
 export { WorkerShell } from './workerShell.js';
 export type { WorkerShellConfig } from './workerShell.js';
+// Сетевой режим: клиент матча и применение персональных снапшотов (SHELL-8, NTR-10).
+export { NetworkShell } from './networkShell.js';
+export type { ControlButtons, NetworkShellConfig } from './networkShell.js';
 
 // Main-сторона: зеркало RenderHost за каналом (SHELL-2).
 export { RemoteHost } from './remoteHost.js';

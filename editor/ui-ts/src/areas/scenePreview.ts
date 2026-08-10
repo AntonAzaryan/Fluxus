@@ -141,7 +141,10 @@ export function startPreviewSimulation(
     ...(scene.terrain !== undefined ? { terrainGrid: scene.terrain.grid } : {}),
   });
   // Слота локального игрока нет намеренно: прогон идёт без ввода (см. шапку).
+  // Режим локальный и объявлен явно (SHELL-8): превью редактора само тикает мир,
+  // сервера у него нет.
   const shell = new WorkerShell({
+    mode: 'local',
     port,
     sim,
     state,
