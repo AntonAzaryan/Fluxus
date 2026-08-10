@@ -6,15 +6,25 @@
  * меняется только план монтирования.
  *
  * Подписка — та же точка доставки, что у подсистем рендера (design Decision
- * 6): `remote.register(runtime.subsystem)`. События проигрываются только на
- * честных тиках (`freshEvents`, OBS-5) — при rewind/replay догоняющий реплей
- * не стреляет накопленной очередью повторно; каждая доставка несёт события,
- * накопленные с прошлой, поэтому «ровно один раз» держится конструктивно, а
- * не дедупликацией у виджетов (HUD-5).
+ * 6): `remote.register(runtime.subsystem)`. «Ровно один раз» (HUD-5) держится
+ * конструктивно, а не дедупликацией у виджетов, и на двух рубежах: аккумулятор
+ * оболочки копит только события честных тиков (`sender.ts` client-ts) — конверт
+ * реплеевых дубликатов не несёт; а `freshEvents` доставки гасит переэмиссии
+ * нечестного прохода там, где события приезжают прямо из extractor'а без
+ * аккумулятора (однопоточная сборка, OBS-5). Каждая доставка несёт события,
+ * накопленные с прошлой, каждое со своим тиком.
+ *
+ * Жизненный цикл: ОДИН `HudRuntime` на всё время жизни `RemoteHost` — у
+ * `PresentationStage.register` нет обратного `unregister`, поэтому подписка
+ * `subsystem` регистрируется однажды и не снимается. Смена HUD («другой
+ * арене — другой HUD») — это `apply()` с другим значением композиции (или
+ * `clear()`), а не второй runtime: пересоздание исполнителя оставило бы в
+ * сцене мёртвую подписку прежнего.
  */
 import type { HudActionsFacade } from './actions.js';
 import type { HudComposition } from './composition.js';
 import type { HudDeliveredEvent, HudDeliveredState, HudDeliverySubsystem } from './delivery.js';
+import type { HudNode } from './dom/node.js';
 import type { HudOverlayHost } from './host.js';
 import { resolveComposition, type HudRegistry, type ResolvedHudBinding, type ResolvedHudEntry } from './registry.js';
 import type { HudActionsPort, HudWidget } from './widget.js';
@@ -43,6 +53,13 @@ export class HudRuntime {
 
   private readonly options: HudRuntimeOptions;
   private mounted: MountedEntry[] = [];
+  /**
+   * Последнее доставленное состояние — им немедленно кормятся виджеты свежей
+   * композиции в `apply()`, не дожидаясь следующей доставки (HUD-5). Это
+   * живой объект продюсера (см. `delivery.ts`): между доставками он не
+   * меняется, к моменту `apply` равен последней доставке.
+   */
+  private lastDelivered: HudDeliveredState | null = null;
 
   constructor(options: HudRuntimeOptions) {
     this.options = options;
@@ -65,14 +82,44 @@ export class HudRuntime {
    * Применяет значение композиции: резолв целиком (ошибка — до монтирования),
    * снятие прежних виджетов, монтирование новых по зонам. Повторный вызов с
    * другим значением — «другой арене — другой HUD» (HUD-4).
+   *
+   * Атомарно относительно отказов фабрик и `mount`: сначала все виджеты новой
+   * композиции создаются и монтируются в отложенный план, и только когда все
+   * удались — прежние снимаются и новые встают в зоны. Упавшая посередине
+   * фабрика оставляет прежнюю композицию смонтированной и обновляемой;
+   * частично созданные виджеты получают `dispose`, ошибка уходит вызывающему.
+   *
+   * Свежесмонтированные виджеты немедленно получают последнее доставленное
+   * состояние (`snap: true` — монтирование для виджета разрыв, `events` пустые:
+   * они уже обработаны прежней композицией, «ровно один раз» HUD-5) — HUD не
+   * стоит пустым до следующей доставки.
    */
   apply(composition: HudComposition): void {
     const resolved = resolveComposition(this.options.registry, composition);
+
+    // Отложенный план: создать и смонтировать всё до того, как трогать текущее.
+    const created: HudWidget[] = [];
+    const staged: { widget: HudWidget; node: HudNode; entry: ResolvedHudEntry }[] = [];
+    try {
+      for (const entry of resolved.entries) {
+        const widget = entry.kind.create(entry.params);
+        created.push(widget);
+        staged.push({ widget, node: widget.mount(this.portFor(entry)), entry });
+      }
+    } catch (error) {
+      for (const widget of created) widget.dispose();
+      throw error;
+    }
+
     this.clear();
-    for (const entry of resolved.entries) {
-      const widget = entry.kind.create(entry.params);
-      const element = this.options.host.place(entry.zone, widget.mount(this.portFor(entry)));
-      this.mounted.push({ widget, element, bindings: entry.bindings });
+    for (const item of staged) {
+      const element = this.options.host.place(item.entry.zone, item.node);
+      this.mounted.push({ widget: item.widget, element, bindings: item.entry.bindings });
+    }
+
+    const view = this.lastDelivered;
+    if (view !== null) {
+      for (const entry of this.mounted) this.update(entry, view, true, NO_EVENTS);
     }
   }
 
@@ -103,17 +150,26 @@ export class HudRuntime {
 
   /** Одна доставка — одно обновление каждого виджета (HUD-5). */
   private deliver(view: HudDeliveredState): void {
+    this.lastDelivered = view;
     const events = view.freshEvents ? view.events : NO_EVENTS;
-    for (const entry of this.mounted) {
-      const values: Record<string, unknown> = {};
-      for (const binding of entry.bindings) values[binding.slot] = binding.selector(view);
-      entry.widget.update({
-        tick: view.tick,
-        mode: view.mode,
-        snap: view.snapAll,
-        values,
-        events,
-      });
-    }
+    for (const entry of this.mounted) this.update(entry, view, view.snapAll, events);
+  }
+
+  /** Обновление одного виджета: резолв селекторов записи и вызов `update`. */
+  private update(
+    entry: MountedEntry,
+    view: HudDeliveredState,
+    snap: boolean,
+    events: readonly HudDeliveredEvent[],
+  ): void {
+    const values: Record<string, unknown> = {};
+    for (const binding of entry.bindings) values[binding.slot] = binding.selector(view);
+    entry.widget.update({
+      tick: view.tick,
+      mode: view.mode,
+      snap,
+      values,
+      events,
+    });
   }
 }

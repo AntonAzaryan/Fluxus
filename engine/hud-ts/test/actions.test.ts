@@ -74,6 +74,16 @@ describe('кнопка неотличима от клавиши (HUD-2)', () => 
       ['seekTo', 120],
     ]);
   });
+
+  it('seekTo без числового tick — ошибка конфигурации, а не тихий no-op', () => {
+    const { registry, facade, controlCalls } = facadeBench();
+    registry.registerAction('seekButton', { target: 'control', action: 'seekTo' });
+    // Без нагрузки и с нечисловой нагрузкой воркер молча проигнорировал бы
+    // команду (WSM-5) — фасад обязан сказать об этом громко.
+    expect(() => { facade.dispatch('seekButton'); }).toThrow('нужен числовой "tick"');
+    expect(() => { facade.dispatch('seekButton', {}); }).toThrow('нужен числовой "tick"');
+    expect(controlCalls).toEqual([]);
+  });
 });
 
 describe('камера — локально (HUD-2)', () => {

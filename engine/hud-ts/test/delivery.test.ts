@@ -4,7 +4,12 @@
  * Сценарии спеки: «пять пропущенных тиков» и «перемотка».
  */
 import { describe, expect, it } from 'vitest';
-import { HudRegistry, type HudComposition, type HudDeliveredEvent } from '../src/index.js';
+import {
+  HudRegistry,
+  type HudComposition,
+  type HudDeliveredEvent,
+  type HudEntityView,
+} from '../src/index.js';
 import { captureKind, makeRuntime, makeView, type CaptureWidget } from './support/hud.js';
 
 const composition: HudComposition = {
@@ -62,6 +67,32 @@ describe('перемотка (HUD-5)', () => {
     const update = widget().updates[1]!;
     expect(update.snap).toBe(true);
     expect(update.mode).toBe('Rewinding');
+  });
+
+  it('пер-сущностный снап доходит до потребителя селектора', () => {
+    const created: CaptureWidget[] = [];
+    const registry = new HudRegistry();
+    registry.registerWidget(captureKind('heroPanel', created));
+    // Селектор отдаёт запись сущности целиком — виджет читает её поля сам.
+    registry.registerSelector('hero', (state) => state.entities.get(1));
+    const { runtime } = makeRuntime(registry);
+    runtime.apply({
+      entries: [{ widget: 'heroPanel', zone: 'left', bindings: { hero: 'hero' } }],
+    });
+
+    const heroAt = (snap: boolean): Map<number, HudEntityView> =>
+      new Map([
+        [1, { id: 1, kind: 'hero', currX: 2, currY: 3, currLevel: 0, snap, spawned: false, moving: false }],
+      ]);
+    runtime.subsystem.syncTick(makeView({ tick: 100, entities: heroAt(false) }));
+    // Доставка после перемотки: запись сущности несёт пер-сущностный снап —
+    // и он виден потребителю селектора, а не только полю snap всей доставки.
+    runtime.subsystem.syncTick(
+      makeView({ tick: 40, mode: 'Rewinding', snapAll: true, freshEvents: false, entities: heroAt(true) }),
+    );
+
+    const seen = created[0]!.updates.map((update) => (update.values.hero as HudEntityView).snap);
+    expect(seen).toEqual([false, true]);
   });
 
   it('нечестный проход (freshEvents=false) не проигрывает события повторно', () => {

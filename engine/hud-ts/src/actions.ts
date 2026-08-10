@@ -120,6 +120,13 @@ export class HudActionsFacade implements InputSource {
         if (control === undefined) {
           throw new Error(`действие "${name}": обратный канал команд не передан фасаду (SHELL-6)`);
         }
+        // seekTo без цели — ошибка конфигурации, а не команда: канал молча
+        // передал бы `undefined`, и воркер так же молча её проигнорировал бы.
+        if (decl.action === 'seekTo' && typeof payload?.tick !== 'number') {
+          throw new Error(
+            `действие "${name}": команде seekTo нужен числовой "tick" в нагрузке (WSM-5)`,
+          );
+        }
         control.control(decl.action, payload?.tick);
         return;
       }

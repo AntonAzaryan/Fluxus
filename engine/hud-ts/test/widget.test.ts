@@ -82,4 +82,66 @@ describe('другой арене — другой HUD (HUD-4)', () => {
     runtime.apply(arenaA);
     expect(() => { created[0]!.port!.trigger('cast'); }).toThrow('слот действия "cast" не объявлен');
   });
+
+  it('свежая композиция немедленно получает последнюю доставку: снап, без событий', () => {
+    const { created, registry } = bench();
+    const { runtime } = makeRuntime(registry);
+    runtime.apply(arenaA);
+    runtime.subsystem.syncTick(
+      makeView({ tick: 7, events: [{ type: 'kill', tick: 6, data: {} }] }),
+    );
+
+    // Смена композиции между доставками: новые виджеты не стоят пустыми до
+    // следующего конверта — их кормит кэш последней доставки (HUD-5).
+    runtime.apply(arenaB);
+    expect(created).toHaveLength(3);
+    const immediate = created[2]!.updates[0]!;
+    expect(immediate.values).toEqual({ value: 7 });
+    // Монтирование — разрыв для виджета: снап, не доигрывание.
+    expect(immediate.snap).toBe(true);
+    // События прошлой доставки уже обработаны прежней композицией — «ровно
+    // один раз» (HUD-5) переживает и смену состава.
+    expect(immediate.events).toEqual([]);
+  });
+
+  it('до первой доставки apply не обновляет: кормить нечем', () => {
+    const { created, registry } = bench();
+    const { runtime } = makeRuntime(registry);
+    runtime.apply(arenaA);
+    expect(created[0]!.updates).toHaveLength(0);
+  });
+});
+
+describe('атомарность apply при отказе фабрики (HUD-4)', () => {
+  it('упавшая вторая фабрика оставляет прежнюю композицию смонтированной и обновляемой', () => {
+    const { created, registry } = bench();
+    registry.registerWidget({
+      name: 'broken',
+      create: () => {
+        throw new Error('фабрика сломана');
+      },
+    });
+    const { runtime, host } = makeRuntime(registry);
+    runtime.apply(arenaA);
+
+    const failing: HudComposition = {
+      entries: [
+        { widget: 'statusPanel', zone: 'top', bindings: { value: 'tickNumber' } },
+        { widget: 'broken', zone: 'center' },
+      ],
+    };
+    expect(() => { runtime.apply(failing); }).toThrow('фабрика сломана');
+
+    // Прежний виджет не снят и продолжает получать доставки.
+    expect(created[0]!.disposed).toBe(false);
+    expect((host.zone('top-left') as unknown as { childElements: unknown[] }).childElements).toHaveLength(1);
+    runtime.subsystem.syncTick(makeView({ tick: 9 }));
+    expect(created[0]!.updates.at(-1)!.values).toEqual({ value: 9 });
+
+    // Успевший создаться виджет несостоявшейся композиции получил dispose и
+    // в зону не попал.
+    expect(created).toHaveLength(2);
+    expect(created[1]!.disposed).toBe(true);
+    expect((host.zone('top') as unknown as { childElements: unknown[] }).childElements).toHaveLength(0);
+  });
 });

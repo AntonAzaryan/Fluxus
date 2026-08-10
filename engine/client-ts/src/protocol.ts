@@ -68,8 +68,10 @@ export interface HelloMessage {
 
 /**
  * Конверт тика: плоский буфер состояния (transfer, conflatable) плюс
- * reliable-часть structured clone'ом — события всех тиков с прошлой доставки
- * (каждое с номером тика) и дословарь kind'ов (SHELL-4, SHELL-5).
+ * reliable-часть structured clone'ом — события честных тиков с прошлой
+ * доставки (каждое с номером тика; реплеевые переэмиссии в аккумулятор
+ * не попадают — «ровно один раз», см. `sender.ts`) и дословарь kind'ов
+ * (SHELL-4, SHELL-5).
  */
 export interface TickEnvelope {
   readonly t: 'tick';
