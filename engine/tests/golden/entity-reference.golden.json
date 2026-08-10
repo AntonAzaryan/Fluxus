@@ -1,0 +1,345 @@
+{
+  "scenario": "entity-reference",
+  "seed": 20260810,
+  "worldInitHash": "5b530c17",
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          3,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              2,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              0,
+              0,
+              0
+            ],
+            "target": [
+              -1,
+              -1,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          3,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              2,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              1,
+              0,
+              1
+            ],
+            "target": [
+              1,
+              -1,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 3,
+        "aliveCount": 2,
+        "generations": [
+          0,
+          1,
+          0
+        ],
+        "alive": [
+          1,
+          0,
+          1
+        ],
+        "freeList": [
+          1
+        ],
+        "maskWords": [
+          4,
+          0,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              2,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              1,
+              0,
+              2
+            ],
+            "target": [
+              1,
+              -1,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          1,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          1,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              3,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              1,
+              0,
+              3
+            ],
+            "target": [
+              1,
+              -1,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 4,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          1,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          1,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              3,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              1,
+              0,
+              4
+            ],
+            "target": [
+              1,
+              -1,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 5,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          1,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          1,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              3,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              1,
+              0,
+              5
+            ],
+            "target": [
+              1,
+              -1,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    }
+  ]
+}

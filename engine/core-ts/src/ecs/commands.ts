@@ -133,10 +133,12 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
           room++;
           break;
         case 'addComponent':
-          world.checkComponent(state, 'addComponent', cmd.component);
+          // Вместе с составом проверяются и значения: непредставимое значение —
+          // отказ записи (ECS-3), и узнать о нём обязан этот проход, а не мир.
+          world.checkComponent(state, 'addComponent', cmd.component, cmd.values);
           break;
         case 'setField':
-          world.checkField(state, 'setField', cmd.component, cmd.field);
+          world.checkField(state, 'setField', cmd.component, cmd.field, cmd.value);
           break;
         case 'removeComponent':
           // Тотален: незарегистрированный компонент — no-op, а не отказ.

@@ -1,0 +1,112 @@
+{
+  "name": "entity-reference",
+  "seed": 20260810,
+  "ticks": 5,
+  "scene": {
+    "components": [
+      { "name": "Mark", "fields": { "id": "i32" } },
+      { "name": "Doomed", "fields": { "at": "i32" } },
+      { "name": "Seeker", "fields": { "target": "entity", "hits": "i32" } }
+    ],
+    "prefabs": [
+      { "name": "Hunter", "components": { "Seeker": {} } },
+      { "name": "Victim", "components": { "Mark": { "id": 2 }, "Doomed": { "at": 2 } } },
+      { "name": "Newborn", "components": { "Mark": { "id": 3 } } }
+    ],
+    "systems": [
+      {
+        "name": "Aim",
+        "order": 10,
+        "query": { "all": ["Seeker"] },
+        "as": "s",
+        "do": [
+          {
+            "forEach": {
+              "query": { "all": ["Doomed"] },
+              "as": "v",
+              "do": [
+                {
+                  "if": {
+                    "cond": { "==": [{ "getComponent": [{ "var": "s" }, "Seeker", "target"] }, -1] },
+                    "then": [
+                      {
+                        "modifyComponent": {
+                          "entity": { "var": "s" },
+                          "component": "Seeker",
+                          "values": { "target": { "var": "v" } }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "Reaper",
+        "order": 20,
+        "query": { "all": ["Doomed"] },
+        "as": "e",
+        "do": [
+          {
+            "if": {
+              "cond": { "==": [{ "tick": [] }, { "getComponent": [{ "var": "e" }, "Doomed", "at"] }] },
+              "then": [{ "destroyEntity": { "entity": { "var": "e" } } }]
+            }
+          }
+        ]
+      },
+      {
+        "name": "Breeder",
+        "order": 30,
+        "do": [
+          {
+            "if": {
+              "cond": { "==": [{ "tick": [] }, 3] },
+              "then": [{ "spawnEntity": { "prefab": "Newborn" } }]
+            }
+          }
+        ]
+      },
+      {
+        "name": "Watcher",
+        "order": 40,
+        "query": { "all": ["Seeker"] },
+        "as": "s",
+        "do": [
+          {
+            "let": {
+              "bindings": { "t": { "getComponent": [{ "var": "s" }, "Seeker", "target"] } },
+              "do": [
+                {
+                  "if": {
+                    "cond": { "and": [{ "!=": [{ "var": "t" }, -1] }, { "isAlive": [{ "var": "t" }] }] },
+                    "then": [
+                      {
+                        "modifyComponent": {
+                          "entity": { "var": "s" },
+                          "component": "Seeker",
+                          "values": {
+                            "hits": { "+": [{ "getComponent": [{ "var": "s" }, "Seeker", "hits"] }, 1] }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "capacity": 8
+  },
+  "initial": [
+    { "prefab": "Hunter" },
+    { "prefab": "Victim" },
+    { "prefab": "Hunter", "overrides": { "Seeker": { "target": 0 } } }
+  ]
+}

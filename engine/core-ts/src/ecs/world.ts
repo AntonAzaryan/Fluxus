@@ -10,7 +10,15 @@
  * а не проверка по имени: фильтр запроса сводится к одному И по словам вместо
  * строкового поиска на каждую сущность.
  */
-import type { ComponentSchema, EntityId, FieldOverrides, WorldState } from '../types.js';
+import type {
+  ComponentSchema,
+  EntityId,
+  FieldArray,
+  FieldOverrides,
+  FieldType,
+  WorldState,
+} from '../types.js';
+import { FIELD_TYPES, NO_ENTITY } from '../types.js';
 import {
   allocate,
   assertRoom,
@@ -21,6 +29,7 @@ import {
   isAlive as indexIsAlive,
   aliveEntities as indexAliveEntities,
   room as indexRoom,
+  MAX_ENTITY_ID,
   type EntityIndex,
 } from './entityIndex.js';
 import {
@@ -44,8 +53,12 @@ interface ComponentStorage {
   readonly schema: ComponentSchema;
   /** Числовой id компонента — позиция его бита в маске. */
   readonly id: number;
-  /** SoA: поле → Int32Array ёмкостью `capacity`, индексируемый raw-индексом сущности (ECS-1). */
-  readonly fields: Readonly<Record<string, Int32Array>>;
+  /**
+   * SoA: поле → TypedArray ёмкостью `capacity`, индексируемый raw-индексом
+   * сущности (ECS-1). Тип массива выбирает тип поля (`fieldArray`): хранилище
+   * неоднородно ровно из-за `entity`, которому нужны 48 бит (ECS-6, ID-1).
+   */
+  readonly fields: Readonly<Record<string, FieldArray>>;
 }
 
 interface WorldInternal {
@@ -80,6 +93,63 @@ function toState(internal: WorldInternal): WorldState {
   return internal as unknown as WorldState;
 }
 
+// ------------------------------------------------- типы полей (ECS-3, ECS-6)
+
+/** Границы 32-битного поля (`i32`, `fixed`). */
+const INT32_MIN = -2147483648;
+const INT32_MAX = 2147483647;
+
+/** Набор строкой: имя типа приходит из JSON, и в рантайме там что угодно. */
+const FIELD_TYPE_NAMES: readonly string[] = FIELD_TYPES;
+
+function isKnownFieldType(name: string): boolean {
+  return FIELD_TYPE_NAMES.includes(name);
+}
+
+/**
+ * Контейнер поля по его типу. `entity` — 48 бит без потерь (ECS-6, ID-1):
+ * `Int32Array` усёк бы идентификатор молча, уже при `generation ≥ 256`.
+ * Заполняется «ссылки нет», а не нулём: ноль — валидный `EntityId`, и
+ * компонент, добавленный без значения, ссылался бы на сущность нулевого слота.
+ */
+function fieldArray(type: FieldType, capacity: number): FieldArray {
+  if (type !== 'entity') return new Int32Array(capacity);
+  return new Float64Array(capacity).fill(NO_ENTITY);
+}
+
+/**
+ * Нейтральное значение поля, для которого не объявлен `default` (ECS-3): ноль у
+ * `i32`/`fixed`, «ссылки нет» у `entity` (ECS-6).
+ */
+function neutralValue(type: FieldType): number {
+  return type === 'entity' ? NO_ENTITY : 0;
+}
+
+/**
+ * Представимо ли значение в типе поля (ECS-3). Проверка целости и два сравнения
+ * — без аллокаций и без зависимости от числа полей: точка вызова горячая (запись
+ * поля на каждую команду). Переполнение fixed-арифметики она не задевает:
+ * значение приходит завёрнутым по FP-4 и в 32 бита уже помещается.
+ */
+function representable(type: FieldType, value: number): boolean {
+  if (!Number.isInteger(value)) return false;
+  if (type === 'entity') return value === NO_ENTITY || (value >= 0 && value <= MAX_ENTITY_ID);
+  return value >= INT32_MIN && value <= INT32_MAX;
+}
+
+/** Сообщение об отказе записи — одно на все точки записи поля (ECS-3). */
+function valueError(
+  action: string,
+  component: string,
+  field: string,
+  type: FieldType,
+  value: number,
+): Error {
+  return new Error(
+    `${action}: компонент "${component}", поле "${field}" типа ${type} — значение ${value} непредставимо (ECS-3)`,
+  );
+}
+
 function validateSchemas(schemas: readonly ComponentSchema[]): Map<string, ComponentSchema> {
   const map = new Map<string, ComponentSchema>();
   for (const schema of schemas) {
@@ -87,20 +157,27 @@ function validateSchemas(schemas: readonly ComponentSchema[]): Map<string, Compo
       throw new Error(`ECS-5: компонент "${schema.name}" объявлен дважды`);
     }
     for (const [field, type] of Object.entries(schema.fields)) {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
-      if (type !== 'i32' && type !== 'fixed') {
+      if (!isKnownFieldType(type)) {
+        // Тип поля объявлен `FieldType`, но значение пришло из JSON — именно
+        // поэтому набор проверяется в рантайме, а не только компилятором.
         throw new Error(
-          // `String(type)`: после двух сравнений тип сузился до `never`, но
-          // значение пришло из JSON и в рантайме там что угодно.
-          `ECS-5: компонент "${schema.name}", поле "${field}": недопустимый тип "${String(type)}" (только i32/fixed, DET-2)`,
+          `ECS-5: компонент "${schema.name}", поле "${field}": неизвестный тип поля "${type}" — набор закрыт (ECS-3): ${FIELD_TYPE_NAMES.join(', ')}`,
         );
       }
     }
     if (schema.defaults) {
-      for (const field of Object.keys(schema.defaults)) {
-        if (!(field in schema.fields)) {
+      for (const [field, value] of Object.entries(schema.defaults)) {
+        const type = schema.fields[field];
+        if (type === undefined) {
           throw new Error(
             `ECS-5: компонент "${schema.name}": default ссылается на несуществующее поле "${field}"`,
+          );
+        }
+        // Непредставимый default — та же ошибка, что и запись (ECS-3), но
+        // поймана на загрузке: до первого тика она дешевле в разы.
+        if (!representable(type, value)) {
+          throw new Error(
+            `ECS-5: компонент "${schema.name}", поле "${field}" типа ${type}: default ${value} непредставим (ECS-3)`,
           );
         }
       }
@@ -124,11 +201,17 @@ function validatePrefabs(
       if (!schema) {
         throw new Error(`ECS-5: prefab "${prefab.name}" ссылается на неизвестный компонент "${component}"`);
       }
-      for (const field of Object.keys(values)) {
-        if (!(field in schema.fields)) {
+      for (const [field, value] of Object.entries(values)) {
+        const type = schema.fields[field];
+        if (type === undefined) {
           throw new Error(
             `ECS-5: prefab "${prefab.name}", компонент "${component}" ссылается на несуществующее поле "${field}"`,
           );
+        }
+        // Как и с defaults: непредставимое значение prefab'а — ошибка загрузки,
+        // а не отказ первого спавна (ECS-3).
+        if (!representable(type, value)) {
+          throw valueError(`ECS-5: prefab "${prefab.name}"`, component, field, type, value);
         }
       }
     }
@@ -149,9 +232,9 @@ export function createWorld(
   const stores = new Map<string, ComponentStorage>();
   let nextComponentId = 0;
   for (const schema of schemaMap.values()) {
-    const fields: Record<string, Int32Array> = {};
-    for (const field of Object.keys(schema.fields)) {
-      fields[field] = new Int32Array(capacity);
+    const fields: Record<string, FieldArray> = {};
+    for (const [field, type] of Object.entries(schema.fields)) {
+      fields[field] = fieldArray(type, capacity);
     }
     stores.set(schema.name, { schema, id: nextComponentId, fields });
     nextComponentId++;
@@ -316,7 +399,9 @@ export function cloneWorld(state: WorldState): WorldState {
 
   const stores = new Map<string, ComponentStorage>();
   for (const [name, store] of src.stores) {
-    const fields: Record<string, Int32Array> = {};
+    // `slice` сохраняет и содержимое, и вид массива — ширина поля клонируется
+    // вместе с ним, отдельного разбора по типу поля здесь не нужно.
+    const fields: Record<string, FieldArray> = {};
     for (const [field, arr] of Object.entries(store.fields)) {
       fields[field] = arr.slice();
     }
@@ -434,20 +519,67 @@ function storeOf(internal: WorldInternal, action: string, component: string): Co
   return store;
 }
 
-function fieldOf(internal: WorldInternal, action: string, component: string, field: string): Int32Array {
+function fieldOf(internal: WorldInternal, action: string, component: string, field: string): FieldArray {
   const arr = storeOf(internal, action, component).fields[field];
   if (!arr) throw new Error(`${action}: у компонента "${component}" нет поля "${field}"`);
   return arr;
 }
 
-/** Компонент зарегистрирован — иначе тот же отказ, что у мутатора с именем `action`. */
-export function checkComponent(state: WorldState, action: string, component: string): void {
-  storeOf(toInternal(state), action, component);
+/**
+ * Тип поля, отказывающий теми же словами, что мутатор: проверка представимости
+ * и сама запись читают его из одной функции.
+ */
+function fieldTypeOf(store: ComponentStorage, action: string, component: string, field: string): FieldType {
+  const type = store.schema.fields[field];
+  if (type === undefined) throw new Error(`${action}: у компонента "${component}" нет поля "${field}"`);
+  return type;
 }
 
-/** Компонент и его поле существуют — иначе тот же отказ, что у мутатора с именем `action`. */
-export function checkField(state: WorldState, action: string, component: string, field: string): void {
-  fieldOf(toInternal(state), action, component, field);
+/**
+ * Компонент зарегистрирован, а переданные значения представимы в типах своих
+ * полей (ECS-3) — иначе тот же отказ, что у мутатора с именем `action`.
+ */
+export function checkComponent(
+  state: WorldState,
+  action: string,
+  component: string,
+  values?: Readonly<Record<string, number>>,
+): void {
+  const store = storeOf(toInternal(state), action, component);
+  if (values === undefined) return;
+  // `for…in` с `hasOwn`, а не `Object.keys`/`entries`: проход валидации буфера
+  // команд не аллоцирует (см. `validate` в `commands.ts`), а `hasOwn` не даёт
+  // унаследованному свойству попасть в проверку — то же правило, что у чтения
+  // имён операторов (EXPR-6).
+  for (const field in values) {
+    if (!Object.hasOwn(values, field)) continue;
+    // Значение поля, которого у компонента нет, мутатор молча игнорирует —
+    // проверять его представимость незачем.
+    const type = store.schema.fields[field];
+    const value = values[field]!;
+    if (type !== undefined && !representable(type, value)) {
+      throw valueError(action, component, field, type, value);
+    }
+  }
+}
+
+/**
+ * Компонент и его поле существуют, а значение — если оно передано — представимо
+ * в типе поля (ECS-3): иначе тот же отказ, что у мутатора с именем `action`.
+ */
+export function checkField(
+  state: WorldState,
+  action: string,
+  component: string,
+  field: string,
+  value?: number,
+): void {
+  const internal = toInternal(state);
+  const store = storeOf(internal, action, component);
+  const type = fieldTypeOf(store, action, component, field);
+  if (value !== undefined && !representable(type, value)) {
+    throw valueError(action, component, field, type, value);
+  }
 }
 
 /**
@@ -495,7 +627,11 @@ export function spawn(state: WorldState, prefabName: string, overrides?: FieldOv
     setComponent(internal.masks, index, store.id);
     const override = overrides?.[component];
     for (const field of Object.keys(store.schema.fields)) {
-      const value = override?.[field] ?? values[field] ?? store.schema.defaults?.[field] ?? 0;
+      const type = store.schema.fields[field]!;
+      // Поле, которого не задали ни override, ни prefab, ни defaults, получает
+      // нейтральное значение своего типа: «ссылки нет» у `entity` (ECS-3, ECS-6).
+      const value = override?.[field] ?? values[field] ?? store.schema.defaults?.[field] ?? neutralValue(type);
+      if (!representable(type, value)) throw valueError('spawn', component, field, type, value);
       store.fields[field]![index] = value;
     }
   }
@@ -523,9 +659,12 @@ function validateOverrides(
     }
     const schema = internal.stores.get(component)?.schema;
     for (const field of Object.keys(fields)) {
-      if (schema?.fields[field] === undefined) {
+      const type = schema?.fields[field];
+      if (type === undefined) {
         throw new Error(`spawn: у компонента "${component}" нет поля "${field}"`);
       }
+      const value = fields[field]!;
+      if (!representable(type, value)) throw valueError('spawn', component, field, type, value);
     }
   }
 }
@@ -558,6 +697,11 @@ export function getField(state: WorldState, entity: EntityId, component: string,
   return fieldOf(toInternal(state), 'getField', component, field)[rawIndexOf(entity)] ?? 0;
 }
 
+/**
+ * Запись поля. Значение, не представимое в типе поля, — жёсткая ошибка, а не
+ * усечение (ECS-3): именно здесь идентификатор, положенный в поле `i32`,
+ * перестаёт молча портиться на `generation ≥ 256`.
+ */
 export function setField(
   state: WorldState,
   entity: EntityId,
@@ -566,11 +710,18 @@ export function setField(
   value: number,
 ): void {
   const internal = toInternal(state);
-  fieldOf(internal, 'setField', component, field)[rawIndexOf(entity)] = value;
+  const store = storeOf(internal, 'setField', component);
+  const type = fieldTypeOf(store, 'setField', component, field);
+  if (!representable(type, value)) throw valueError('setField', component, field, type, value);
+  store.fields[field]![rawIndexOf(entity)] = value;
   markDirty(internal, component, entity);
 }
 
-/** Добавляет компонент существующей сущности; отсутствующие поля берут default либо 0. */
+/**
+ * Добавляет компонент существующей сущности; отсутствующие поля берут `default`,
+ * а при его отсутствии — нейтральное значение своего типа (ECS-3): ноль у
+ * `i32`/`fixed` и «ссылки нет» у `entity` (ECS-6).
+ */
 export function addComponent(
   state: WorldState,
   entity: EntityId,
@@ -582,7 +733,9 @@ export function addComponent(
   const index = rawIndexOf(entity);
   setComponent(internal.masks, index, store.id);
   for (const field of Object.keys(store.schema.fields)) {
-    const value = values?.[field] ?? store.schema.defaults?.[field] ?? 0;
+    const type = store.schema.fields[field]!;
+    const value = values?.[field] ?? store.schema.defaults?.[field] ?? neutralValue(type);
+    if (!representable(type, value)) throw valueError('addComponent', component, field, type, value);
     store.fields[field]![index] = value;
   }
   markDirty(internal, component, entity);

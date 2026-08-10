@@ -73,7 +73,8 @@ const component: Json = {
       additionalProperties: { enum: [...FIELD_TYPES] },
     },
     defaults: {
-      $comment: 'Значения в Q16.16 для полей типа fixed (FP-1).',
+      $comment:
+        'Значения в Q16.16 для полей типа fixed (FP-1); для поля entity — полный EntityId либо -1, «ссылки нет» (ECS-6).',
       type: 'object',
       additionalProperties: { type: 'integer' },
     },

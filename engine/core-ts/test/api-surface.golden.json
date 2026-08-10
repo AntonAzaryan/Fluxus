@@ -28,6 +28,7 @@
   "LOCOMOTION_WINDOW",
   "LocomotionSystem",
   "MAX_TEAMS",
+  "NO_ENTITY",
   "POSITION_COMPONENT",
   "PhysicsSystem",
   "PhysicsWorld",
