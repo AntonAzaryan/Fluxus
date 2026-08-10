@@ -163,23 +163,54 @@ describe('пересчёт видимости в конфиге матча (NTR-
     expect(() => new MatchServer(duelConfig())).not.toThrow();
   });
 
-  it('объявленный пересчёт даёт систему в составе, и состав общий у обеих сторон', () => {
+  it('объявленный пересчёт даёт систему в составе матча', () => {
     const config = fogConfig();
-    const names = (seed: number): string[] =>
-      buildMatchWorld({
-        scene: config.scene,
-        seed,
-        players: config.players,
-        initial: config.initial!,
-        visibility: config.visibility!,
-      })
-        .sim.systems.ordered()
-        .map((system) => system.name);
+    const built = buildMatchWorld({
+      scene: config.scene,
+      seed: config.seed,
+      players: config.players,
+      initial: config.initial!,
+      visibility: config.visibility!,
+    });
+    expect(built.sim.systems.ordered().map((system) => system.name)).toContain('Visibility');
+  });
 
-    // Клиент поднимает мир тем же вызовом и с теми же зависимостями сборки,
-    // приехавшими из одного описания матча (NTR-14); своё у него только то, что
-    // приезжает в `Welcome`.
-    expect(names(config.seed)).toContain('Visibility');
-    expect(names(0)).toEqual(names(config.seed));
+  /**
+   * Обе стороны берут зависимости сборки из одного описания матча (NTR-14), и
+   * проверяется это КЛИЕНТСКИМ путём — хендшейком настоящего `MatchClient`, — а не
+   * вторым вызовом `buildMatchWorld` рядом: тот сравнивал бы функцию с собой.
+   *
+   * Наблюдаемая разница здесь резкая, и это и есть смысл отказа сборки: клиент,
+   * которому пересчёт не передали, в матч НЕ ВХОДИТ, вместо того чтобы войти с
+   * составом систем, отличным от серверного.
+   */
+  it('клиент входит в матч с туманом, только получив пересчёт из того же описания', () => {
+    const config = fogConfig();
+    const pack = contentPack({ duel: config.scene });
+    const greet = (visibility?: MatchConfig['visibility']): MatchClient => {
+      const { server } = harness(config);
+      const client = new MatchClient({
+        playerId: 'p1',
+        version: versionOf(config.scene),
+        content: pack,
+        ...(visibility !== undefined ? { visibility } : {}),
+      });
+      server.connect(1);
+      server.receive(1, hello('p1', config.version));
+      for (const outgoing of server.drain()) {
+        if (outgoing.to === 1) client.receive(outgoing.message, 0);
+      }
+      return client;
+    };
+
+    const withRecompute = greet(config.visibility);
+    expect(withRecompute.phase).toBe('lobby');
+    // Хеши сошлись — значит мир клиента поднялся тем же путём, что серверный.
+    expect(withRecompute.worldInitHash).toBe(new MatchServer(config).worldInitHash);
+
+    const without = greet();
+    expect(without.phase).toBe('closed');
+    expect(without.closeReason).toBe('data-mismatch');
+    expect(without.closeDetail).toMatch(/пересчёт видимости/);
   });
 });

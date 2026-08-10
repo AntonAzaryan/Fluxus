@@ -721,6 +721,55 @@ describe('швы: снапшот и канонический лог', () => {
     expect(frameOf(3).snapshot.events.map((event) => event.type)).toEqual(['Cast']);
   });
 
+  /**
+   * NET-13 «Действующий предикат» и NTR-9: предикат назван конфигом матча, и
+   * закрытие открытого геймплейного вопроса — смена ЭТОГО поля, а не правка ядра
+   * или сетевого слоя. Проверяется не сам предикат, а то, что названный конфигом
+   * действует и что действует он на ОБА канала одним вызовом: разойдись они,
+   * клиент увидел бы в состоянии факт, которого нет в потоке.
+   *
+   * Предикат взят нарочно не про видимость — «уходит только каст слота 0», — чтобы
+   * его действие нельзя было спутать с действием нормированного: тот на сцене без
+   * тумана пропускает оба каста.
+   */
+  it('предикат, названный конфигом матча, действует на кадр и на поток (NET-13, NTR-9)', () => {
+    const casts = (config: MatchConfig): { frame: number[]; stream: number[] } => {
+      const server = running(config);
+      // Каст обоих слотов на тике 1, и тик 1 же — тик рассылки (`snapshotRate`
+      // равен `tickRate`): шина кадра и пачка потока говорят об одном тике.
+      server.receive(1, inputMessage(wireInput(1, 1, 0, 0, 1)));
+      server.receive(2, inputMessage(wireInput(1, 1, 0, 0, 1)));
+      server.advance();
+
+      const outgoing = server.drain();
+      const frame = outgoing.find(
+        (entry) => entry.to === 1 && entry.message.type === 'Snapshot',
+      )!.message as SnapshotMessage;
+      const stream = eventsOf(outgoing).get(1)!;
+      return {
+        frame: frame.snapshot.events.map((event) => event.data.slot!),
+        stream: stream.flatMap((message) =>
+          message.batches.flatMap((batch) => batch.events.map((event) => event.data.slot!)),
+        ),
+      };
+    };
+
+    const base = { scene: castScene(), snapshotRate: 60, eventRepeat: 0 } as const;
+    const chosen = casts(
+      duelConfig({ ...base, eventVisibility: (event) => event.data.slot === 0 }),
+    );
+    expect(chosen.frame).toEqual([0]);
+    expect(chosen.stream).toEqual([0]);
+
+    // Отсутствие поля даёт нормированный NET-13 предикат, а не «ничего»: на сцене
+    // без тумана видимы оба каста, и оба доезжают обоими каналами. Без этой
+    // половины проверка не отличила бы действующий предикат конфига от того, что
+    // поле просто игнорируется.
+    const normed = casts(duelConfig(base));
+    expect(normed.frame).toEqual([0, 1]);
+    expect(normed.stream).toEqual([0, 1]);
+  });
+
   it('канонический inputs[] от потока событий не зависит (NTR-8)', () => {
     const inputs = [wireInput(1, 1, 0, 0, 1), wireInput(2, 2, 0, 0, 0), wireInput(3, 3)];
     const logOf = (scene: SceneDef) => {
