@@ -15,7 +15,7 @@ import {
   quantizedFixed,
   type Finding,
 } from '../src/layer.js';
-import { context, objectsOf } from './support.js';
+import { COMPONENTS, context, objectsOf } from './support.js';
 
 const ROTATION = { component: 'Facing', field: 'turns' } as const;
 
@@ -157,6 +157,26 @@ describe('BLND-3, BLND-6: находки называют объект Blender',
 
   it('нецелое значение в поле i32 не округляется', () => {
     expect(messagesFor(layer.findings, 'fractional-int')[0]).toContain('i32');
+  });
+
+  it('поле типа entity пространственным слоем не пишется — отказ (ECS-6)', () => {
+    // Ссылка на сущность — не координата, и идентификатора создаваемой той же
+    // расстановкой сущности до применения команды не существует.
+    const components = COMPONENTS.map((schema) =>
+      schema.name === 'Player' ? { ...schema, fields: { ...schema.fields, target: 'entity' as const } } : schema,
+    );
+    const objects = objectsOf('placements.gltf').map((object) =>
+      object.name === 'alpha-hero'
+        ? { ...object, extras: { ...object.extras, 'Player.target': 5 } }
+        : object,
+    );
+    const withEntityField = generateSpatialLayer(objects, context({ components }));
+    expect(messagesFor(withEntityField.findings, 'alpha-hero')[0]).toContain('поле типа entity');
+    expect(hasErrors(withEntityField.findings)).toBe(true);
+    // Значение в запись не уехало: переопределение осталось только позиционным.
+    expect(withEntityField.initial[0]?.overrides).toEqual({
+      Position: { x: fixed.fromFloat(-1.5), y: fixed.fromFloat(-2.25) },
+    });
   });
 
   it('все ошибки источника видны разом, и запись не выполняется целиком', () => {

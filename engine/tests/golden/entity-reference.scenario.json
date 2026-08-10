@@ -107,6 +107,7 @@
   "initial": [
     { "prefab": "Hunter" },
     { "prefab": "Victim" },
-    { "prefab": "Hunter", "overrides": { "Seeker": { "target": 0 } } }
+    { "prefab": "Hunter", "overrides": { "Seeker": { "target": 0 } } },
+    { "prefab": "Hunter", "overrides": { "Seeker": { "target": 5033164801 } } }
   ]
 }

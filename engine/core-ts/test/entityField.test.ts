@@ -91,6 +91,21 @@ describe('«ссылки нет» — -1, а не ноль (ECS-6)', () => {
     expect(getField(state, entity, 'Seeker', 'target')).toBe(NO_ENTITY);
   });
 
+  it('чтение по чужому идентификатору даёт «ссылки нет», а не сущность нулевого слота', () => {
+    const state = world();
+    const seeker = spawn(state, 'seeker');
+    setField(state, seeker, 'Seeker', 'target', seeker);
+    // Идентификатор за пределами мира: слот 999 при capacity 16. Массива под
+    // ним нет, и нейтральное значение обязано быть нейтральным для ТИПА поля —
+    // иначе мусорная ссылка читалась бы как валидная ссылка на слот 0.
+    const foreign = makeEntityId(999, 0);
+    expect(rawIndexOf(foreign)).toBeGreaterThan(16);
+    expect(getField(state, foreign, 'Seeker', 'target')).toBe(NO_ENTITY);
+    expect(getField(state, foreign, 'Seeker', 'hits')).toBe(0);
+    // То же для кода «ссылки нет», случайно попавшего в позицию адресата.
+    expect(getField(state, NO_ENTITY, 'Seeker', 'target')).toBe(NO_ENTITY);
+  });
+
   it('default схемы поверх типа задаёт своё значение', () => {
     const withDefault: ComponentSchema = {
       name: 'Bound',

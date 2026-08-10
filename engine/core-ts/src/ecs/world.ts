@@ -306,7 +306,10 @@ export function dirtyIsEmpty(state: WorldState): boolean {
  * опускается: опущенный ключ дал бы другой поток байт на тех же данных.
  *
  * Массивы обрезаны по `nextIndex`: счётчик монотонен (ID-2), поэтому слоты за
- * ним не занимались ни разу и нулевые по построению.
+ * ним не занимались ни разу — в них лежит начальное значение своего контейнера
+ * (ноль у `i32`/`fixed`, «ссылки нет» у `entity`, ECS-6), а не данные сущности.
+ * Обрезка поэтому не «отбрасывает нули», а отбрасывает никогда не занятое:
+ * граница задана счётчиком, а не содержимым слота.
  */
 export interface PlainWorld {
   readonly capacity: number;
@@ -519,19 +522,20 @@ function storeOf(internal: WorldInternal, action: string, component: string): Co
   return store;
 }
 
-function fieldOf(internal: WorldInternal, action: string, component: string, field: string): FieldArray {
-  const arr = storeOf(internal, action, component).fields[field];
-  if (!arr) throw new Error(`${action}: у компонента "${component}" нет поля "${field}"`);
-  return arr;
+/** Отсутствующее поле — один текст на чтение, запись и проверку. */
+function missingField(action: string, component: string, field: string): Error {
+  return new Error(`${action}: у компонента "${component}" нет поля "${field}"`);
 }
 
 /**
  * Тип поля, отказывающий теми же словами, что мутатор: проверка представимости
- * и сама запись читают его из одной функции.
+ * и сама запись берут и тип, и отказ из одной функции. Отдельного «достань
+ * массив поля» рядом нет намеренно: массив без своего типа теперь бесполезен —
+ * по типу выбирается и нейтральное значение, и граница диапазона.
  */
 function fieldTypeOf(store: ComponentStorage, action: string, component: string, field: string): FieldType {
   const type = store.schema.fields[field];
-  if (type === undefined) throw new Error(`${action}: у компонента "${component}" нет поля "${field}"`);
+  if (type === undefined) throw missingField(action, component, field);
   return type;
 }
 
@@ -693,8 +697,20 @@ export function hasComponent(state: WorldState, entity: EntityId, component: str
   return maskHas(internal.masks, rawIndexOf(entity), store.id);
 }
 
+/**
+ * Чтение поля. Индекс за границей массива (чужой или мусорный идентификатор)
+ * даёт нейтральное значение ТИПА поля, а не ноль: для поля `entity` ноль —
+ * валидный `EntityId` первого слота мира, то есть ровно та подмена ссылки, от
+ * которой ECS-6 защищает кодировкой «ссылки нет».
+ */
 export function getField(state: WorldState, entity: EntityId, component: string, field: string): number {
-  return fieldOf(toInternal(state), 'getField', component, field)[rawIndexOf(entity)] ?? 0;
+  const store = storeOf(toInternal(state), 'getField', component);
+  const arr = store.fields[field];
+  if (arr === undefined) throw missingField('getField', component, field);
+  const value = arr[rawIndexOf(entity)];
+  // Тип поля читается только на промахе индекса: на попадании он не нужен, а
+  // чтение поля — самый горячий вызов ядра.
+  return value ?? neutralValue(store.schema.fields[field]!);
 }
 
 /**

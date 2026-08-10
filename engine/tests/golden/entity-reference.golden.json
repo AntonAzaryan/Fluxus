@@ -1,20 +1,22 @@
 {
   "scenario": "entity-reference",
   "seed": 20260810,
-  "worldInitHash": "5b530c17",
+  "worldInitHash": "49720a15",
   "ticks": [
     {
       "tick": 0,
       "world": {
         "capacity": 8,
-        "nextIndex": 3,
-        "aliveCount": 3,
+        "nextIndex": 4,
+        "aliveCount": 4,
         "generations": [
+          0,
           0,
           0,
           0
         ],
         "alive": [
+          1,
           1,
           1,
           1
@@ -23,6 +25,7 @@
         "maskWords": [
           4,
           3,
+          4,
           4
         ],
         "components": {
@@ -30,6 +33,7 @@
             "at": [
               0,
               2,
+              0,
               0
             ]
           },
@@ -37,6 +41,7 @@
             "id": [
               0,
               2,
+              0,
               0
             ]
           },
@@ -44,12 +49,14 @@
             "hits": [
               0,
               0,
+              0,
               0
             ],
             "target": [
               -1,
               -1,
-              0
+              0,
+              5033164801
             ]
           }
         },
@@ -63,14 +70,16 @@
       "tick": 1,
       "world": {
         "capacity": 8,
-        "nextIndex": 3,
-        "aliveCount": 3,
+        "nextIndex": 4,
+        "aliveCount": 4,
         "generations": [
+          0,
           0,
           0,
           0
         ],
         "alive": [
+          1,
           1,
           1,
           1
@@ -79,6 +88,7 @@
         "maskWords": [
           4,
           3,
+          4,
           4
         ],
         "components": {
@@ -86,6 +96,7 @@
             "at": [
               0,
               2,
+              0,
               0
             ]
           },
@@ -93,6 +104,7 @@
             "id": [
               0,
               2,
+              0,
               0
             ]
           },
@@ -100,12 +112,14 @@
             "hits": [
               1,
               0,
-              1
+              1,
+              0
             ],
             "target": [
               1,
               -1,
-              0
+              0,
+              5033164801
             ]
           }
         },
@@ -119,16 +133,18 @@
       "tick": 2,
       "world": {
         "capacity": 8,
-        "nextIndex": 3,
-        "aliveCount": 2,
+        "nextIndex": 4,
+        "aliveCount": 3,
         "generations": [
           0,
           1,
+          0,
           0
         ],
         "alive": [
           1,
           0,
+          1,
           1
         ],
         "freeList": [
@@ -137,6 +153,7 @@
         "maskWords": [
           4,
           0,
+          4,
           4
         ],
         "components": {
@@ -144,6 +161,7 @@
             "at": [
               0,
               2,
+              0,
               0
             ]
           },
@@ -151,6 +169,7 @@
             "id": [
               0,
               2,
+              0,
               0
             ]
           },
@@ -158,12 +177,14 @@
             "hits": [
               1,
               0,
-              2
+              2,
+              0
             ],
             "target": [
               1,
               -1,
-              0
+              0,
+              5033164801
             ]
           }
         },
@@ -177,14 +198,16 @@
       "tick": 3,
       "world": {
         "capacity": 8,
-        "nextIndex": 3,
-        "aliveCount": 3,
+        "nextIndex": 4,
+        "aliveCount": 4,
         "generations": [
           0,
           1,
+          0,
           0
         ],
         "alive": [
+          1,
           1,
           1,
           1
@@ -193,6 +216,7 @@
         "maskWords": [
           4,
           1,
+          4,
           4
         ],
         "components": {
@@ -200,6 +224,7 @@
             "at": [
               0,
               2,
+              0,
               0
             ]
           },
@@ -207,6 +232,7 @@
             "id": [
               0,
               3,
+              0,
               0
             ]
           },
@@ -214,12 +240,14 @@
             "hits": [
               1,
               0,
-              3
+              3,
+              0
             ],
             "target": [
               1,
               -1,
-              0
+              0,
+              5033164801
             ]
           }
         },
@@ -233,14 +261,16 @@
       "tick": 4,
       "world": {
         "capacity": 8,
-        "nextIndex": 3,
-        "aliveCount": 3,
+        "nextIndex": 4,
+        "aliveCount": 4,
         "generations": [
           0,
           1,
+          0,
           0
         ],
         "alive": [
+          1,
           1,
           1,
           1
@@ -249,6 +279,7 @@
         "maskWords": [
           4,
           1,
+          4,
           4
         ],
         "components": {
@@ -256,6 +287,7 @@
             "at": [
               0,
               2,
+              0,
               0
             ]
           },
@@ -263,6 +295,7 @@
             "id": [
               0,
               3,
+              0,
               0
             ]
           },
@@ -270,12 +303,14 @@
             "hits": [
               1,
               0,
-              4
+              4,
+              0
             ],
             "target": [
               1,
               -1,
-              0
+              0,
+              5033164801
             ]
           }
         },
@@ -289,14 +324,16 @@
       "tick": 5,
       "world": {
         "capacity": 8,
-        "nextIndex": 3,
-        "aliveCount": 3,
+        "nextIndex": 4,
+        "aliveCount": 4,
         "generations": [
           0,
           1,
+          0,
           0
         ],
         "alive": [
+          1,
           1,
           1,
           1
@@ -305,6 +342,7 @@
         "maskWords": [
           4,
           1,
+          4,
           4
         ],
         "components": {
@@ -312,6 +350,7 @@
             "at": [
               0,
               2,
+              0,
               0
             ]
           },
@@ -319,6 +358,7 @@
             "id": [
               0,
               3,
+              0,
               0
             ]
           },
@@ -326,12 +366,14 @@
             "hits": [
               1,
               0,
-              5
+              5,
+              0
             ],
             "target": [
               1,
               -1,
-              0
+              0,
+              5033164801
             ]
           }
         },
