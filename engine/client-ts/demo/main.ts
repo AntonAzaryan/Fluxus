@@ -35,8 +35,10 @@ import {
   edgePanAxes,
   resetCameraInput,
   terrainGroundApi,
+  type CameraBounds,
   type RenderContext,
 } from '@game-mvp/render';
+import type { HudCameraContract } from '@game-mvp/hud';
 import {
   GamepadSource,
   InputSampler,
@@ -49,6 +51,7 @@ import {
   validateBindings,
 } from '@game-mvp/client';
 import { ACTION_BITS, STATE_COMPONENTS } from './sim.js';
+import { DEMO_HUD_COMPOSITION, createDemoHud } from './hud.js';
 import bindingsJson from './bindings.json';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
@@ -56,9 +59,10 @@ const HEIGHT_STEP = 0.6;
 
 // ------------------------------------------------------------------ three.js
 
-const app = document.getElementById('app');
-const hudStatus = document.getElementById('hud-status');
-if (app === null) throw new Error('демо: в index.html нет контейнера #app');
+const appElement = document.getElementById('app');
+if (appElement === null) throw new Error('демо: в index.html нет контейнера #app');
+/** Контейнер вьюпорта; тип без null — narrowing не пересекает границы замыканий. */
+const app: HTMLElement = appElement;
 
 const renderer3 = new THREE.WebGLRenderer({ antialias: true });
 renderer3.setSize(window.innerWidth, window.innerHeight);
@@ -199,7 +203,6 @@ window.addEventListener('keydown', (e) => {
     // T — смена скина (REND-6); S свободна под «юг» в WASD.
     currentSkin = currentSkin === 'steel' ? 'ember' : 'steel';
     if (heroId !== null) models?.setSkin(heroId, currentSkin);
-    updateHud();
     return;
   }
   if (e.code === 'KeyC') camInput.centerTap = true;
@@ -361,21 +364,52 @@ function pushInput(): void {
 
 // ------------------------------------------------------------- HUD и цикл
 
-function updateHud(): void {
-  if (hudStatus === null) return;
-  const view = remote?.view ?? null;
-  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-  const alive = heroId !== null && view !== null && view.entities.has(heroId);
-  const controller = heroId === null ? null : (models?.instanceFor(heroId)?.controller ?? null);
-  const status = controller?.isDead === true ? 'мёртв (перезапуск — F5)' : alive ? 'жив' : '—';
-  const modeName = { follow: 'follow', free: 'free', fly: 'fly' }[rig?.mode ?? 'follow'];
-  hudStatus.textContent =
-    `тик ${view?.tick ?? 0} | сущностей ${view?.entities.size ?? 0} | ` +
-    `скин ${currentSkin} | герой: ${status} | камера: ${modeName} ` +
-    `(стрелки/край/MMB — панорама, колесо — зум, C — к герою, Y — follow, F — полёт)`;
+/**
+ * Ничтожный «ввод панорамы» для открепления камеры от героя: follow не даёт
+ * кадрированию хода (CAM-2 — панорама открепляет, кадрирование нет), поэтому
+ * клик миникарты сначала открепляет камеру тем же правилом, что ручная
+ * панорама. Сдвиг от этого значения — единицы микрон мира, глазу не виден.
+ */
+const PAN_DETACH_PX = 1e-4;
+
+/**
+ * Просьба кадрирования от миникарты, отложенная до кадра, в котором камера
+ * уже откреплена: поданная в кадр с «вводом панорамы» она была бы им же и
+ * погашена (CAM-3 — ввод отменяет разовые перелёты).
+ */
+let pendingPan: { x: number; y: number } | null = null;
+
+/**
+ * Прямоугольник кадрирования вокруг точки клика миникарты: полуразмер подобран
+ * так, чтобы перелёт (CAM-8) сажал камеру на базовую дистанцию конфига —
+ * обратная формула вертикального ограничения `frameBounds`:
+ * `d = along · (sin p / tan v + cos p)` ⇒ `along = d / (…)`, а полуразмер
+ * квадрата — `along / (|cos yaw| + |sin yaw|)` (опорная функция квадрата).
+ */
+function panFramingRect(cfg: CameraRig['config'], x: number, y: number): CameraBounds {
+  const tanV = Math.tan(((cfg.fovDeg / 2) * Math.PI) / 180);
+  const along = cfg.distance / (Math.sin(cfg.pitch) / tanV + Math.cos(cfg.pitch));
+  const half = along / Math.max(Math.abs(Math.cos(cfg.yaw)) + Math.abs(Math.sin(cfg.yaw)), 1e-6);
+  return { minX: x - half, maxX: x + half, minY: y - half, maxY: y + half };
 }
 
-let hudCountdown = 0;
+/**
+ * Контракт камеры для presentation-действий HUD (HUD-2): узкая поверхность
+ * над тем же конвейером позы (CAM-1), что у клавиш и колеса, — второго способа
+ * двигать камеру не появляется. В воркер отсюда не уходит ничего.
+ */
+const hudCamera: HudCameraContract = {
+  panTo(x: number, y: number): void {
+    if (rig === null) return;
+    if (rig.mode === 'follow') camInput.dragDX += PAN_DETACH_PX;
+    pendingPan = { x, y };
+  },
+  focusOnHero(): void {
+    // Тот же фронт, что клавиша C: перелёт центрирования к герою (CAM-2).
+    camInput.centerTap = true;
+  },
+};
+
 let lastFrameAt: number | null = null;
 
 function frame(now: number): void {
@@ -385,6 +419,11 @@ function frame(now: number): void {
 
   // Тиков здесь нет (SHELL-1): симуляция идёт в воркере своим тикером,
   // кадр только шлёт ввод и интерполирует доставленное (REND-2).
+  // Отложенное кадрирование миникарты — когда камера уже не follow (см. panTo).
+  if (pendingPan !== null && rig !== null && rig.mode !== 'follow') {
+    rig.frameBounds({ rect: panFramingRect(rig.config, pendingPan.x, pendingPan.y), aspect: camera.aspect });
+    pendingPan = null;
+  }
   sampleCameraInput();
   pushInput();
   if (touchSource !== null) touchOverlay?.(touchSource.overlay());
@@ -411,21 +450,12 @@ function frame(now: number): void {
   }
 
   renderer3.render(scene3, camera);
-
-  hudCountdown -= dt;
-  if (hudCountdown <= 0) {
-    hudCountdown = 250;
-    updateHud();
-  }
 }
 
 // -------------------------------------------------------------------- запуск
 
 async function main(): Promise<void> {
-  if (hudStatus !== null) hudStatus.textContent = 'загрузка манифеста визуалов…';
   const manifest = await loadManifest();
-
-  if (hudStatus !== null) hudStatus.textContent = 'запуск воркера симуляции…';
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
 
   remote = new RemoteHost(context, {
@@ -476,13 +506,39 @@ async function main(): Promise<void> {
         syncTick: (view) => director?.onTick(view, rig!.focusX, rig!.focusY, heroId),
         updateFrame: () => {},
       });
+
+      // HUD на пакете (задача 5.2, HUD-1..7): реестры и композиция — demo/hud.ts.
+      // Общие объекты сборки: тот же asset-сервис и манифест, что у рендера
+      // (HUD-7), сам RemoteHost как источник сетки и обратный канал (SHELL-5,
+      // SHELL-6), контракт камеры над конвейером позы (HUD-2). Фасад действий —
+      // источник в ТОМ ЖЕ сэмплере, что клавиатура: мировое действие кнопки
+      // уходит тем же каноническим вводом (HUD-2); подписка на доставку — тот же
+      // register, что у подсистем рендера (HUD-1). apply — после handshake.
+      const hud = createDemoHud({
+        container: app,
+        assets,
+        visuals: manifest,
+        terrain: remote!,
+        camera: hudCamera,
+        control: remote!,
+      });
+      sampler.add(hud.facade);
+      remote!.register(hud.runtime.subsystem);
+      hud.runtime.apply(DEMO_HUD_COMPOSITION);
+
+      // Отладочная ручка ручного прогона (задача 5.3): read-only точка
+      // наблюдения камеры — снаружи конвейера её иначе не видно, а проверке
+      // «клик миникарты двигает камеру» нужно на что смотреть.
+      (window as { demoCameraFocus?: () => { x: number; y: number } }).demoCameraFocus = () => ({
+        x: rig?.focusX ?? 0,
+        y: rig?.focusY ?? 0,
+      });
+
       requestAnimationFrame(frame);
     },
   }).connect(shellPort(worker));
 }
 
 void main().catch((e: unknown) => {
-  const message = e instanceof Error ? e.message : String(e);
-  if (hudStatus !== null) hudStatus.textContent = `ошибка запуска: ${message}`;
   console.error('демо: запуск не удался', e);
 });
