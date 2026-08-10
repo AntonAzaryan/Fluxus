@@ -34,7 +34,7 @@
  * названо честно: переименование и добавление объекта двигают позиции записей
  * `initial`, то есть выданные ID и хеш `worldInit`.
  */
-import { fixed, FIXED_ONE, type ComponentSchema, type PrefabDef } from '@game-mvp/core';
+import { fixed, FIXED_ONE, type ComponentSchema, type FieldType, type PrefabDef } from '@game-mvp/core';
 import { quantizeDecorationLength, quantizeDecorationYaw, resolveVisual, type VisualManifest } from '@game-mvp/assets';
 import {
   DEFAULT_POSITION_BINDING,
@@ -186,16 +186,26 @@ function warning(sink: Sink, object: string, message: string): void {
  * Значение поля компонента в представлении его типа (SER-8): `fixed` — целым
  * Q16.16, `i32` — целым. Нецелое в `i32` не округляется: округление за автора
  * молча сдвинуло бы `worldInit` (тот же довод, что у высот террейна, BLND-9).
+ *
+ * Поле типа `entity` (`ecs-foundation` ECS-6) пространственным слоем не
+ * заполняется: значение такого поля — ссылка на сущность, а не координата, и
+ * идентификатора создаваемой той же расстановкой сущности до применения команды
+ * не существует. Привязка позиции, указавшая на такое поле, — ошибка находки, а
+ * не молчаливо записанное число.
  */
 function fieldValue(
   sink: Sink,
   object: string,
   component: string,
   field: string,
-  type: 'fixed' | 'i32',
+  type: FieldType,
   raw: number,
 ): number | null {
   const where = `${component}.${field}`;
+  if (type === 'entity') {
+    error(sink, object, `${where}: поле типа entity — ссылка на сущность, пространственным слоем не пишется (ECS-6)`);
+    return null;
+  }
   if (!Number.isFinite(raw)) {
     error(sink, object, `${where}: значение не является конечным числом`);
     return null;

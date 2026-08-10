@@ -392,7 +392,50 @@ describe('ошибки формы (ACT-1)', () => {
   });
 
   it('требует булево в условии if', () => {
-    expect(() => { execute([{ if: { cond: F(1), then: [] } }], harness().ctx); }).toThrow(/булевым/);
+    expect(() => { execute([{ if: { cond: F(1), then: [] } }], harness().ctx); }).toThrow(
+      /действие "if": "cond": ожидалось значение типа bool, получено number/,
+    );
+  });
+
+  /**
+   * Вектор в скалярное поле (EXPR-7): поля компонента и поля данных события
+   * скалярны (ECS-3), поэтому запись векторного выражения — ошибка вычисления, а
+   * не раскладка по угаданным именам `x`/`y`. Автор раскладывает сам — `vec.x`.
+   */
+  it('вектор в поле компонента и в данные события — ошибка вычисления (EXPR-7)', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+    const vector: Expression = { vec: [F(1), F(2)] };
+    expect(() => {
+      execute([{ modifyComponent: { entity: hero, component: 'Position', values: { x: vector } } }], h.ctx);
+    }).toThrow(/действие "modifyComponent": ожидалось значение типа number, получено vec2/);
+    expect(() => {
+      execute([{ emitEvent: { type: 'Aimed', data: { dir: vector } } }], h.ctx);
+    }).toThrow(/действие "emitEvent": ожидалось значение типа number, получено vec2/);
+    // Ни команды, ни события: отказ случился до постановки.
+    expect(h.events.length).toBe(0);
+    expect(h.commands.peekField(hero, 'Position', 'x')).toBeUndefined();
+  });
+
+  it('разложенный вектор в те же поля проходит (EXPR-2)', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+    const vector: Expression = { vec: [F(1), F(2)] };
+    execute(
+      [
+        {
+          modifyComponent: {
+            entity: hero,
+            component: 'Position',
+            values: { x: { 'vec.x': vector }, y: { 'vec.y': vector } },
+          },
+        },
+      ],
+      h.ctx,
+    );
+    h.commands.flush();
+    expect(getField(h.world, hero, 'Position', 'x')).toBe(F(1));
+    expect(getField(h.world, hero, 'Position', 'y')).toBe(F(2));
   });
 
   it('addTween, addModifier и removeModifier в наборе (ACT-1)', () => {

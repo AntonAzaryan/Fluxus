@@ -1,0 +1,387 @@
+{
+  "scenario": "entity-reference",
+  "seed": 20260810,
+  "worldInitHash": "49720a15",
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          3,
+          4,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              2,
+              0,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "target": [
+              -1,
+              -1,
+              0,
+              5033164801
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          3,
+          4,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              2,
+              0,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              1,
+              0,
+              1,
+              0
+            ],
+            "target": [
+              1,
+              -1,
+              0,
+              5033164801
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 4,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          1,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          0,
+          1,
+          1
+        ],
+        "freeList": [
+          1
+        ],
+        "maskWords": [
+          4,
+          0,
+          4,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              2,
+              0,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              1,
+              0,
+              2,
+              0
+            ],
+            "target": [
+              1,
+              -1,
+              0,
+              5033164801
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 3,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          1,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          1,
+          4,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              3,
+              0,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              1,
+              0,
+              3,
+              0
+            ],
+            "target": [
+              1,
+              -1,
+              0,
+              5033164801
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 4,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          1,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          1,
+          4,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              3,
+              0,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              1,
+              0,
+              4,
+              0
+            ],
+            "target": [
+              1,
+              -1,
+              0,
+              5033164801
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 5,
+      "world": {
+        "capacity": 8,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          1,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          4,
+          1,
+          4,
+          4
+        ],
+        "components": {
+          "Doomed": {
+            "at": [
+              0,
+              2,
+              0,
+              0
+            ]
+          },
+          "Mark": {
+            "id": [
+              0,
+              3,
+              0,
+              0
+            ]
+          },
+          "Seeker": {
+            "hits": [
+              1,
+              0,
+              5,
+              0
+            ],
+            "target": [
+              1,
+              -1,
+              0,
+              5033164801
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    }
+  ]
+}

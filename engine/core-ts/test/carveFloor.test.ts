@@ -241,7 +241,9 @@ describe('снятие пола: границы (TERR-8)', () => {
   it('"at" обязателен и должен быть вектором', () => {
     const h = harness();
     expect(() => { execute([{ carveFloor: { radius: TILE } }], h.ctx); }).toThrow(/at/);
-    expect(() => { execute([{ carveFloor: { at: fixed.fromInt(1) } }], h.ctx); }).toThrow(/вектор/);
+    expect(() => { execute([{ carveFloor: { at: fixed.fromInt(1) } }], h.ctx); }).toThrow(
+      /действие "carveFloor": "at": ожидалось значение типа vec2/,
+    );
   });
 
   it('сцена без террейна — ошибка, а не действие без эффекта', () => {

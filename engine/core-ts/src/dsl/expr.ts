@@ -10,7 +10,14 @@ import type { EntityId, Fixed, MathApi, ReadonlyEventLog, SystemContext, Vec2 } 
 /** Узел AST: литерал либо объект с ровно одним ключом-оператором (EXPR-1). */
 export type Expression = number | boolean | string | Readonly<Record<string, unknown>>;
 
-/** Все числа — сырой Q16.16 (EXPR-2); `i32`-поля приводятся оператором `fromInt`. */
+/**
+ * Три типа значения выражения и ровно три (EXPR-7): `number`, `bool`, `vec2`.
+ * Масштаб `number` — конвенция автора, а не часть типа: `i32`-поля приводятся
+ * оператором `fromInt` (EXPR-2). Ширина — не менее 48 бит: `EntityId` ходит по
+ * выражениям обычным числом (ECS-6), и 32-битное представление молча испортило
+ * бы его. Строкового типа значения нет: строка допустима только литеральным
+ * аргументом-именем и не вычисляется.
+ */
 export type ExprValue = Fixed | boolean | Vec2;
 
 /**
@@ -132,24 +139,46 @@ export function arityError(op: string, signature: OpSignature, count: number): s
   return `оператор "${op}": ожидалось аргументов не менее ${signature.min}, получено ${count}`;
 }
 
-// ------------------------------------------------------------------ коэрсии
+// --------------------------------------------------- проверки типов (EXPR-7)
+//
+// Неявных приведений нет ни в одну сторону: число в позиции условия — ошибка
+// вычисления, а не «ненулевое истинно» (правило истинности числа в Q16.16
+// неоднозначно: `65536` — это `1.0`, а `1` — `0.0000152`), булево в арифметике —
+// тоже ошибка, а не `0`/`1`. Сообщение называет оператор и полученный тип
+// именами самой модели типов, а не именами типов хоста: `vec2`, а не `object`.
+
+/** Имя типа значения в терминах EXPR-7 — то, что видно в тексте ошибки. */
+export function typeNameOf(v: ExprValue): 'number' | 'bool' | 'vec2' {
+  if (typeof v === 'number') return 'number';
+  if (typeof v === 'boolean') return 'bool';
+  return 'vec2';
+}
+
+/** Отказ по типу — одной формулировкой на все проверки (EXPR-7). */
+export function typeError(where: string, expected: string, got: ExprValue): Error {
+  return new Error(`${where}: ожидалось значение типа ${expected}, получено ${typeNameOf(got)}`);
+}
 
 function num(v: ExprValue, op: string): Fixed {
-  if (typeof v !== 'number') throw new Error(`оператор "${op}": ожидалось число, получено ${typeof v}`);
+  if (typeof v !== 'number') throw typeError(`оператор "${op}"`, 'number', v);
   return v;
 }
 
 function bool(v: ExprValue, op: string): boolean {
-  if (typeof v !== 'boolean') throw new Error(`оператор "${op}": ожидалось булево, получено ${typeof v}`);
+  if (typeof v !== 'boolean') throw typeError(`оператор "${op}"`, 'bool', v);
   return v;
 }
 
 function vec(v: ExprValue, op: string): Vec2 {
-  if (typeof v !== 'object') throw new Error(`оператор "${op}": ожидался вектор, получено ${typeof v}`);
+  if (typeof v !== 'object') throw typeError(`оператор "${op}"`, 'vec2', v);
   return v;
 }
 
-/** EntityId — сырое число, а не Q16.16: масштабировать его нельзя. */
+/**
+ * `EntityId` — обычное значение типа `number` (EXPR-7), а не Q16.16:
+ * масштабировать его нельзя, и усечения до 32 бит на этом пути нет — полный
+ * 48-битный идентификатор доживает до предиката живости целым (ECS-6, ID-1).
+ */
 function eid(v: ExprValue, op: string): EntityId {
   return num(v, op);
 }
@@ -215,18 +244,25 @@ const vec2 =
  * Равенство только над операндами одного типа (EXPR-8). Разнотипные операнды —
  * ошибка, а не `false`: «не равны» здесь и есть неявное приведение, спрятанное
  * в результате, а его запретил EXPR-7.
+ *
+ * Два отказа, а не один, и различие между ними — во входе, а не в строгости:
+ * «сравнивается не то, что задумано» — это ДВА вектора, у равенства которых своё
+ * правило; «сравнивается несравнимое» — операнды разных типов, включая вектор со
+ * скаляром. Второй случай идёт общим текстом несовпадения типа (EXPR-7), потому
+ * что текст про покомпонентное сравнение описывал бы не тот вход, который пришёл.
  */
 const equality =
   (op: string, negate: boolean): OpFn =>
   (args, w, v) => {
     const a = evaluate(args[0]!, w, v);
     const b = evaluate(args[1]!, w, v);
-    if (typeof a === 'object' || typeof b === 'object') {
+    if (typeof a === 'object' && typeof b === 'object') {
       throw new Error(`оператор "${op}": векторы сравниваются покомпонентно, а не целиком`);
     }
-    if (typeof a !== typeof b) {
-      throw new Error(`оператор "${op}": операнды разных типов, ${typeof a} и ${typeof b}`);
-    }
+    // Ожидание задаёт первый операнд: он же и решает, с чем сравнение имело
+    // смысл. Форма сообщения — та же, что у любого несовпадения типа, чтобы
+    // автор читал одну строку, а не вторую формулировку для того же класса.
+    if (typeof a !== typeof b) throw typeError(`оператор "${op}"`, typeNameOf(a), b);
     return (a === b) !== negate;
   };
 

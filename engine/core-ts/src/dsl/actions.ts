@@ -8,7 +8,7 @@
  * прямых мутаций в таблице действий нет, поэтому сломать детерминизм из
  * редактора нечем.
  */
-import { evaluate, type Expression, type ExprValue, type ExprVars } from './expr.js';
+import { evaluate, typeError, type Expression, type ExprValue, type ExprVars } from './expr.js';
 import { requireModifierList } from '../systems/modifiers.js';
 import { carveFloor as carveFloorInTerrain } from '../systems/terrain.js';
 import type {
@@ -140,8 +140,20 @@ function argFields(a: Args, key: string, action: string): Readonly<Record<string
 
 // ------------------------------------------------------------- вычисления
 
+/**
+ * Значение типа `number` (EXPR-7) — то, что принимают поля компонента, данные
+ * события и скалярные аргументы действий. Вектор здесь — ошибка вычисления, а не
+ * раскладка по угаданным именам полей: поля скалярны (ECS-3), и разложить вектор
+ * автор обязан сам, через `vec.x`/`vec.y` (EXPR-2).
+ */
 function num(value: ExprValue, action: string): Fixed {
-  if (typeof value !== 'number') throw new Error(`действие "${action}": ожидалось число, получено ${typeof value}`);
+  if (typeof value !== 'number') throw typeError(`действие "${action}"`, 'number', value);
+  return value;
+}
+
+/** Вектор в позиции, где действие ждёт именно его (`center`, `at`). */
+function vecOf(value: ExprValue, action: string, key: string): Vec2 {
+  if (typeof value !== 'object') throw typeError(`действие "${action}": "${key}"`, 'vec2', value);
   return value;
 }
 
@@ -198,8 +210,7 @@ function querySpec(raw: unknown, ctx: SystemContext, vars: ExprVars): QuerySpec 
   let withinRadius: { center: Vec2; radius: Fixed } | undefined;
   if (q.withinRadius !== undefined) {
     const spec = args(q.withinRadius, 'forEach');
-    const center = evaluate(argExpr(spec, 'center', 'forEach'), ctx, vars);
-    if (typeof center !== 'object') throw new Error('действие "forEach": "center" — вектор');
+    const center = vecOf(evaluate(argExpr(spec, 'center', 'forEach'), ctx, vars), 'forEach', 'center');
     withinRadius = { center, radius: num(evaluate(argExpr(spec, 'radius', 'forEach'), ctx, vars), 'forEach') };
   }
 
@@ -328,8 +339,7 @@ const ACTIONS: Record<string, ActionFn> = {
    * точкой, поэтому оно и отличимо от нуля — `argNum` здесь не годится.
    */
   carveFloor: (a, ctx, vars) => {
-    const at = evaluate(argExpr(a, 'at', 'carveFloor'), ctx, vars);
-    if (typeof at !== 'object') throw new Error('действие "carveFloor": "at" — вектор');
+    const at = vecOf(evaluate(argExpr(a, 'at', 'carveFloor'), ctx, vars), 'carveFloor', 'at');
     const radius =
       a.radius === undefined
         ? undefined
@@ -344,9 +354,13 @@ const ACTIONS: Record<string, ActionFn> = {
       argNum(a, 'id', 'removeModifier', ctx, vars),
     );
   },
+  /**
+   * `cond` требует `bool` строго (EXPR-7): числа в позиции условия нет, и
+   * проверка флагового поля пишется явным сравнением с нулём (ECS-3, FOW-3).
+   */
   if: (a, ctx, vars) => {
     const cond = evaluate(argExpr(a, 'cond', 'if'), ctx, vars);
-    if (typeof cond !== 'boolean') throw new Error(`действие "if": условие должно быть булевым, получено ${typeof cond}`);
+    if (typeof cond !== 'boolean') throw typeError('действие "if": "cond"', 'bool', cond);
     const branch = cond ? argBody(a, 'then', 'if') : a.else === undefined ? [] : argBody(a, 'else', 'if');
     execute(branch, ctx, vars, cond ? 'then' : 'else');
   },

@@ -28,6 +28,14 @@ const GENERATION_LIMIT = 2 ** INDEX_BITS; // 16 777 216
 const MAX_INDEX = GENERATION_LIMIT - 1;
 const MAX_GENERATION = GENERATION_LIMIT - 1;
 
+/**
+ * Предел упаковки: `makeEntityId(MAX_INDEX, MAX_GENERATION)`, то есть 2^48 - 1.
+ * Нужен проверке представимости значения в поле типа `entity` (ECS-3, ECS-6):
+ * граница диапазона там та же, что у самой упаковки, и второй её записи рядом
+ * быть не должно.
+ */
+export const MAX_ENTITY_ID = GENERATION_LIMIT * GENERATION_LIMIT - 1;
+
 export interface EntityIndex {
   readonly capacity: number;
   /** Поколение по raw-индексу (ID-3). */

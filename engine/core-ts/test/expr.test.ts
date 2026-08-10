@@ -187,7 +187,7 @@ describe('ошибки формы AST', () => {
 
   it('проверяет число аргументов и типы', () => {
     expect(() => evaluate({ '+': [F(1)] }, world)).toThrow(/ожидалось аргументов 2/);
-    expect(() => evaluate({ '+': [true, F(1)] }, world)).toThrow(/ожидалось число/);
+    expect(() => evaluate({ '+': [true, F(1)] }, world)).toThrow(/ожидалось значение типа number/);
     expect(() => evaluate({ if: [true, F(1)] }, world)).toThrow(/оператор "if"/);
     expect(() => evaluate({ '==': [position(1), position(2)] }, world)).toThrow(/покомпонентно/);
   });
@@ -426,10 +426,22 @@ describe('краевые случаи таблицы (EXPR-8)', () => {
 
   it('разнотипные операнды == и != — ошибка, а не false (EXPR-7)', () => {
     expect(() => evaluate({ '==': [F(1), true] }, world)).toThrow(
-      /оператор "==": операнды разных типов, number и boolean/,
+      /оператор "==": ожидалось значение типа number, получено bool/,
     );
     expect(() => evaluate({ '!=': [true, F(0)] }, world)).toThrow(
-      /оператор "!=": операнды разных типов, boolean и number/,
+      /оператор "!=": ожидалось значение типа bool, получено number/,
+    );
+    // Вектор со скаляром — то же несовпадение типа, а не «покомпонентно»:
+    // сообщение обязано называть тот вход, который пришёл.
+    expect(() => evaluate({ '==': [position(1), F(1)] }, world)).toThrow(
+      /оператор "==": ожидалось значение типа vec2, получено number/,
+    );
+    expect(() => evaluate({ '!=': [F(1), position(1)] }, world)).toThrow(
+      /оператор "!=": ожидалось значение типа number, получено vec2/,
+    );
+    // Два вектора — свой отказ: сравнивается не то, что задумано.
+    expect(() => evaluate({ '==': [position(1), position(2)] }, world)).toThrow(
+      /оператор "==": векторы сравниваются покомпонентно, а не целиком/,
     );
     // Однотипные сравниваются как прежде.
     expect(evaluate({ '==': [true, true] }, world)).toBe(true);
@@ -504,5 +516,74 @@ describe('bitTest (EXPR-2)', () => {
 
   it('номер бита вне 0..31 — ошибка', () => {
     expect(() => evaluate({ bitTest: [1, 32] }, world)).toThrow(/0\.\.31/);
+  });
+});
+
+describe('модель типов значения (EXPR-7)', () => {
+  it('число в позиции условия — ошибка вычисления, а не «ненулевое истинно»', () => {
+    // Обе трактовки числа защитимы (`65536` — это `1.0`, `1` — `0.0000152`),
+    // поэтому правила истинности числа в языке нет вовсе.
+    const nodes: Expression[] = [
+      { if: [F(1), F(1), F(0)] },
+      { and: [F(1), true] },
+      { or: [F(0), true] },
+      { '!': F(0) },
+    ];
+    for (const node of nodes) {
+      expect(() => evaluate(node, world)).toThrow(/ожидалось значение типа bool, получено number/);
+    }
+  });
+
+  it('флаговое поле читается сравнением с нулём (ECS-3, FOW-3)', () => {
+    const flag: Expression = { getComponent: [1, 'Ammo', 'count'] };
+    // Само поле условием быть не может — это `number`; сравнение даёт `bool`.
+    expect(() => evaluate({ '!': flag }, world)).toThrow(/ожидалось значение типа bool/);
+    expect(evaluate({ '!=': [flag, 0] }, world)).toBe(true);
+    expect(evaluate({ '==': [flag, 0] }, world)).toBe(false);
+  });
+
+  it('булево в арифметике — ошибка, а не 0/1 в сумме', () => {
+    expect(() => evaluate({ '+': [{ hasComponent: [1, 'Ammo'] }, F(1)] }, world)).toThrow(
+      /оператор "\+": ожидалось значение типа number, получено bool/,
+    );
+    expect(() => evaluate({ '<': [{ isAlive: [1] }, F(1)] }, world)).toThrow(
+      /оператор "<": ожидалось значение типа number, получено bool/,
+    );
+  });
+
+  it('вектор в скалярном операторе и сравнение векторов целиком — ошибки', () => {
+    expect(() => evaluate({ '+': [position(1), F(1)] }, world)).toThrow(
+      /оператор "\+": ожидалось значение типа number, получено vec2/,
+    );
+    expect(() => evaluate({ '!=': [position(1), position(2)] }, world)).toThrow(
+      /оператор "!=": векторы сравниваются покомпонентно, а не целиком/,
+    );
+  });
+
+  it('строка в позиции значения — ошибка: строкового типа значения нет', () => {
+    expect(() => evaluate({ '+': ['Ammo', F(1)] }, world)).toThrow(
+      /строка допустима только как аргумент-имя оператора/,
+    );
+    // В позиции литерального имени та же строка законна и не вычисляется.
+    expect(evaluate({ hasComponent: [1, 'Ammo'] }, world)).toBe(true);
+  });
+
+  it('идентификатор доживает до предиката живости целым, без усечения до 32 бит', () => {
+    // 48-битный EntityId: index 5, generation 300. Через `var` (биндинг
+    // `forEach … as`) и через поле-ссылку он обязан дойти как есть (ECS-6).
+    const reference = 5 + 300 * 2 ** 24;
+    const seen: number[] = [];
+    const probe: ExprWorld = {
+      ...world,
+      get: () => reference,
+      isAlive: (entity) => {
+        seen.push(entity);
+        return true;
+      },
+    };
+    expect(evaluate({ var: 'target' }, probe, { target: reference })).toBe(reference);
+    expect(evaluate({ isAlive: [{ var: 'target' }] }, probe, { target: reference })).toBe(true);
+    expect(evaluate({ isAlive: [{ getComponent: [1, 'Seeker', 'target'] }] }, probe)).toBe(true);
+    expect(seen).toEqual([reference, reference]);
   });
 });

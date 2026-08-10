@@ -182,20 +182,41 @@ export interface ArenaApi {
 /** Непрозрачный идентификатор: упаковка index+generation — деталь реализации (ID-1). */
 export type EntityId = number;
 
-/** Закрытый набор — из него же порождается JSON-схема компонента (SER-5). */
-export const FIELD_TYPES = ['i32', 'fixed'] as const;
+/**
+ * Закрытый набор типов поля компонента — из него же порождается JSON-схема
+ * компонента (SER-5). Состав, скалярность поля, отсутствие bool-типа, кодировку
+ * флага и судьбу непредставимого значения нормирует ECS-3; здесь только набор,
+ * и расширять его MUST NOT решением реализации.
+ */
+export const FIELD_TYPES = ['i32', 'fixed', 'entity'] as const;
 
 export type FieldType = (typeof FIELD_TYPES)[number];
 
-/** JSON-схема компонента (ECS-3). Float-полей нет по DET-2. */
+/**
+ * Код «ссылки нет» поля типа `entity` (ECS-6). Не ноль: `0` — валидный
+ * `EntityId` (index 0, generation 0), то есть первая же аллоцированная сущность
+ * мира, а нулём инициализируются все TypedArray. Значение нормативно — оно
+ * попадает в снапшот и влияет на побитовую парность реализаций (CLI-6).
+ */
+export const NO_ENTITY = -1;
+
+/** JSON-схема компонента (ECS-3): типы полей — из `FIELD_TYPES`, поля скалярны, bool-типа нет. */
 export interface ComponentSchema {
   readonly name: string;
   readonly fields: Readonly<Record<string, FieldType>>;
   readonly defaults?: Readonly<Record<string, number>>;
 }
 
+/**
+ * Контейнер одного поля. Ширину задаёт тип поля: `i32`/`fixed` — 32 бита,
+ * `entity` — 48 без потерь (ECS-6, ID-1), то есть `Float64Array` как контейнер
+ * точных целых, а не как числа с плавающей точкой (DET-2 не задет: значение
+ * поля всегда целое). Наружу поле остаётся числом.
+ */
+export type FieldArray = Int32Array | Float64Array;
+
 /** SoA-хранилище компонента: поле → TypedArray, индексируемый по index сущности (ECS-1). */
-export type ComponentStore = Readonly<Record<string, Int32Array>>;
+export type ComponentStore = Readonly<Record<string, FieldArray>>;
 
 /** Имя компонента позиции — единственная конвенция, на которую опирается `withinRadius`. */
 export const POSITION_COMPONENT = 'Position';
