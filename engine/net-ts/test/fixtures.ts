@@ -11,6 +11,8 @@
 import {
   contentPackHash,
   fixed,
+  TEAM_SCHEMA,
+  VISIBILITY_SCHEMA,
   type SceneDef,
 } from '@game-mvp/core';
 import { contentPack } from '../src/content/pack.js';
@@ -82,6 +84,39 @@ export function duelScene(): SceneDef {
       },
     ],
     capacity: 8,
+  };
+}
+
+/**
+ * Та же сцена, но компоненты FoW объявлены СЦЕНОЙ РУКАМИ, а не флагом `fog`
+ * (SER-7), и маску `Visibility` авторит расстановка либо JSON-система сцены.
+ *
+ * Нужна тестам, предмет которых — сетевой слой: `viewpoint` соединения и момент
+ * отбора, а не расчёт видимости. Пересчёта такая сцена не требует и не получает —
+ * отказ NTR-14 привязан к флагу `fog`, ровно тому признаку, по которому загрузчик
+ * и так решает, дописывать ли компоненты тумана (решение 5 дизайна
+ * `filter-ownership`), — поэтому нативная `VisibilitySystem` маску не
+ * перезаписывает и тест остаётся про сеть.
+ *
+ * Матч на сцене с флагом `fog` — это `fogScene()` ниже, и он пересчёт объявляет.
+ */
+export function authoredMaskScene(): SceneDef {
+  const scene = duelScene();
+  return {
+    ...scene,
+    components: [...scene.components, VISIBILITY_SCHEMA, TEAM_SCHEMA],
+    prefabs: [
+      {
+        name: 'Hero',
+        components: {
+          Player: { slot: 0 },
+          Input: { aimDir: 0, buttons: 0, moveX: 0, moveY: 0, prevButtons: 0, seq: 0 },
+          Position: { x: 0, y: 0 },
+          Visibility: { visibleTo: 0 },
+          Team: { id: 0 },
+        },
+      },
+    ],
   };
 }
 

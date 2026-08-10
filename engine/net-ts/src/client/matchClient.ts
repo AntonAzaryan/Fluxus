@@ -21,6 +21,7 @@ import {
   type Fixed,
   type InputFrame,
   type PhysicsOptions,
+  type PlainSnapshot,
   type SceneDef,
   type Snapshot,
   type Vec2,
@@ -44,6 +45,7 @@ import type {
   MatchDescriptor,
   Pacing,
   ServerMessage,
+  WireSnapshot,
 } from '../protocol/messages.js';
 
 /** Контент-пак клиента: сцена резолвится по ссылке локально — сервер её не раздаёт (NET-16). */
@@ -503,7 +505,14 @@ export class MatchClient {
 
     let snapshot: Snapshot;
     try {
-      const form = plain as Parameters<typeof snapshotFromPlain>[0];
+      const wire = plain as WireSnapshot;
+      // Проекция с провода не несёт состояний стримов (NET-18), а плоская форма
+      // ядра их требует: список стримов восстанавливается ПУСТЫМ, и это не
+      // потеря, а состав кадра. Клиент MVP `tick()` не исполняет (NTR-10), то
+      // есть тянуть случайность ему нечем и незачем; появится предсказание —
+      // источник случайности для него придёт отдельным требованием, а не
+      // возвратом серверных стримов в снапшот.
+      const form: PlainSnapshot = { ...wire, rng: [] };
       // Порядок компонентов задаёт битовые id (SER-7) и берётся из живого мира
       // клиента, а не пересобирается раскладкой загрузчика (см. `orderedSchemas`).
       this.schemas ??= orderedSchemas(world, form.world);

@@ -56,6 +56,11 @@ export interface MatchWorldDef {
   /** Зависимость сборки, а не данные сцены (DI-3) — поэтому здесь, а не в `SceneDef`. */
   readonly physics?: PhysicsOptions;
   readonly locomotion?: LocomotionOptions;
+  /**
+   * Включение и параметры пересчёта видимости (NTR-14), по той же форме, что поле
+   * `visibility` документа прогона сценария (CLI-2). Сцена с флагом `fog` без
+   * этого поля — отказ сборки (см. `buildMatchWorld`).
+   */
   readonly visibility?: VisibilityOptions;
 }
 
@@ -67,6 +72,23 @@ export interface MatchWorld {
 }
 
 export function buildMatchWorld(def: MatchWorldDef): MatchWorld {
+  // Матч со сценой, включающей туман войны, обязан объявлять пересчёт видимости
+  // (NTR-14), и отсутствие объявления — отказ сборки ДО первого тика, а не молча
+  // деградировавший матч. Тем пересчёт видимости и отличается от физики, недостача
+  // которой ниже деградирует одинаково у всех и видна глазами: фильтрация по
+  // маске, которую никто не пересчитывает (NET-12), идёт по значениям начальной
+  // расстановки, и её результат — пустой мир у одних, вечно видимый противник у
+  // других — читается как игровая ситуация, а не как дефект сборки.
+  //
+  // Отказ стоит здесь, в ОБЩЕМ пути сборки, а не в конструкторе сервера: сервер и
+  // клиент поднимают мир матча одним путём (NTR-14), и клиент, которому
+  // зависимости сборки не передали, обязан отвалиться так же явно.
+  if (def.scene.fog === true && def.visibility === undefined) {
+    throw new Error(
+      'конфиг матча: сцена включает туман войны (fog), а пересчёт видимости не объявлен — ' +
+        'добавьте поле "visibility" в конфиг матча (NTR-14, FOW-4)',
+    );
+  }
   const { world, systems, terrain, arena, modifiers } = loadScene(def.scene);
   systems.register(new InputSystem({ players: def.players }));
   if (def.locomotion !== undefined) systems.register(new LocomotionSystem(def.locomotion));
@@ -80,6 +102,8 @@ export function buildMatchWorld(def: MatchWorldDef): MatchWorld {
   }
 
   // После физики: видимость считается по финальным позициям тика (FOW-6).
+  // Регистрация — здесь, в общем пути сборки, а не в запускалке (NTR-14): состав
+  // систем матча определяют ровно два источника, сцена и конфиг матча.
   if (def.visibility !== undefined) {
     systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
   }

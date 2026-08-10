@@ -11,7 +11,15 @@
  * соединение, а не содержимое сообщения. Поле в кадре означало бы, что клиент
  * вправе назваться чужим слотом, и это пришлось бы отдельно опровергать.
  */
-import type { Fixed, GameEvent, InputFrame, PlainSnapshot, ScenarioSpawn } from '@game-mvp/core';
+import { snapshotToPlain } from '@game-mvp/core';
+import type {
+  Fixed,
+  GameEvent,
+  InputFrame,
+  PlainSnapshot,
+  ScenarioSpawn,
+  Snapshot,
+} from '@game-mvp/core';
 
 /** Пара версии игры (NET-16): непрозрачный идентификатор сборки и хеш контент-пака (NET-17). */
 export interface GameVersion {
@@ -129,14 +137,61 @@ export interface StartMessage {
 }
 
 /**
+ * Персональный снапшот НА ПРОВОДЕ (NET-18) — проекция снапшота мира (SNAP-1), а
+ * не он сам. Состав перечислен, а не унаследован: `Pick`, а не `Omit`, потому что
+ * норма звучит как «на провод едет перечисленное», и новая часть, добавленная в
+ * снапшот мира ради перемотки или диагностики, обязана попасть на провод только
+ * будучи названной здесь и в NET-18, а не молча приехать вместе с типом.
+ *
+ * В проекцию входят данные ECS уцелевших после фильтрации по видимости (NET-12)
+ * вместе со схемой идентификаторов персональной копии (ID-4), номер тика, машина
+ * состояний мира (WSM-1, NET-11, SHELL-7) и шина этого тика, отобранная тем же
+ * предикатом, что и поток `Events` (NET-13, NTR-15).
+ *
+ * Состояний стримов RNG (RNG-5) здесь нет и быть не может: состояние стрима есть
+ * вся его будущая последовательность, то есть каждый будущий крит и разброс до
+ * того, как они произойдут. Это утечка того же класса, что видимый в снапшоте
+ * невидимый враг, но видимостью не ограниченная вовсе, а клиенту MVP она не нужна
+ * — он не исполняет `tick()` (NTR-10). Тому, кому нужно воспроизвести симуляцию,
+ * служит канонический лог матча (NTR-8), а не поток снапшотов.
+ *
+ * Плоская форма ядра при этом не делится на две: `PlainSnapshot` обслуживает
+ * вывод CLI (CLI-3, где `rng` обязателен), а кадр строится из её подмножества —
+ * работа сетевого слоя, потому что «снапшот без rng» осмыслен только относительно
+ * провода, о котором ядро не знает (DI-3).
+ */
+export type WireSnapshot = Pick<PlainSnapshot, 'tick' | 'world' | 'events' | 'mode'>;
+
+/**
+ * Проекция на провод из персонального снапшота, отданного фильтром ядра.
+ *
+ * Исключение действует для ВСЕХ получателей, включая соединение наблюдателя
+ * (`viewpoint = ALL`, NET-15): отдельной ветки «спектейтору можно всё» здесь нет,
+ * потому что основание исключения не видимость, а назначение потока — снапшот на
+ * проводе есть представление, и ни один его получатель не тикает.
+ *
+ * ponytail: `snapshotToPlain` попутно перекладывает и состояния стримов, которые
+ * тут же выбрасываются, — лишняя копия нескольких мелких массивов на кадр.
+ * Убирается она узким входом ядра, а не правкой по ходу сетевой работы (NTR-1):
+ * плоская форма ядра одна, и разделять её надвое ради байтов рано.
+ */
+export function toWireSnapshot(snapshot: Snapshot): WireSnapshot {
+  const plain = snapshotToPlain(snapshot);
+  return { tick: plain.tick, world: plain.world, events: plain.events, mode: plain.mode };
+}
+
+/**
  * Номер авторитетного состояния — пара `(epoch, tick)` (NTR-16): номер тика при
  * перемотке идёт назад, и один он состояние не называет.
+ *
+ * Эпоха едет ПОЛЕМ СООБЩЕНИЯ, рядом с проекцией, а не внутри неё (NET-18): она
+ * свойство истории матча, а не мира, и в состояние мира не входит.
  */
 export interface SnapshotMessage {
   readonly type: 'Snapshot';
   readonly epoch: number;
   readonly tick: number;
-  readonly snapshot: PlainSnapshot;
+  readonly snapshot: WireSnapshot;
 }
 
 /**
@@ -355,6 +410,28 @@ function eventBatch(value: unknown, from: number, to: number): EventBatch {
   };
 }
 
+/**
+ * Проекция с провода — теми же перечисленными частями, что и на отправке
+ * (NET-18). Перечисление здесь не только симметрия: части ВЫБИРАЮТСЯ по именам, и
+ * поэтому состояния стримов, приехавшие от сервера постарше нормы или от чужой
+ * сборки, в декодированный кадр не попадают ни при каком `viewpoint` — а не
+ * попадают потому, что их некуда положить.
+ *
+ * Глубоко плоская форма мира здесь не проверяется, как не проверялась и до
+ * появления перечисления: её восстанавливает `snapshotFromPlain` ядра, и битая
+ * форма даёт клиенту исход «снапшот не восстанавливается» (NTR-5), а не тихую
+ * потерю поля.
+ */
+function wireSnapshot(value: unknown): WireSnapshot {
+  const source = object(value, 'Snapshot.snapshot');
+  return {
+    tick: int(source, 'tick', 'Snapshot.snapshot', 0, Number.MAX_SAFE_INTEGER),
+    world: source.world as WireSnapshot['world'],
+    events: source.events as WireSnapshot['events'],
+    mode: source.mode as WireSnapshot['mode'],
+  };
+}
+
 /** Симметричный разбор на клиенте: сервер тоже недоверен ровно в той мере, в какой недоверен провод. */
 export function parseServerMessage(value: unknown): ServerMessage {
   const source = object(value, 'сообщение');
@@ -401,7 +478,7 @@ export function parseServerMessage(value: unknown): ServerMessage {
         type: 'Snapshot',
         epoch: int(source, 'epoch', 'Snapshot', 0, Number.MAX_SAFE_INTEGER),
         tick: int(source, 'tick', 'Snapshot', 0, Number.MAX_SAFE_INTEGER),
-        snapshot: object(source.snapshot, 'Snapshot.snapshot') as unknown as PlainSnapshot,
+        snapshot: wireSnapshot(source.snapshot),
       };
     case 'Events': {
       const batches = source.batches;

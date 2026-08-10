@@ -9,10 +9,18 @@ import { describe, expect, it } from 'vitest';
 import { duelConfig, fogScene, harness, hello } from './fixtures.js';
 import type { SnapshotMessage } from '../src/protocol/messages.js';
 
-/** Оба героя видимы только своей команде: слот 0 — биту 0, слот 1 — биту 1. */
+/**
+ * Оба героя видимы только своей команде: слот 0 — биту 0, слот 1 — биту 1.
+ *
+ * Сцена включает флаг `fog`, поэтому конфиг ОБЯЗАН объявить пересчёт видимости
+ * (NTR-14) — без него матч не собирается. Расстановка при этом ставит те же
+ * маски, что посчитает `VisibilitySystem`: наблюдателей с `Vision` в сцене нет,
+ * и маска сущности сводится к биту её собственной команды (FOW-3).
+ */
 function fogConfig(overrides = {}) {
   return duelConfig({
     scene: fogScene(),
+    visibility: {},
     snapshotRate: 60,
     initial: [
       { prefab: 'Hero', overrides: { Visibility: { visibleTo: 1 }, Team: { id: 0 } } },

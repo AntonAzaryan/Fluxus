@@ -30,6 +30,7 @@ import {
   type ConnectedClient,
 } from './fixtures.js';
 import { replaySegments } from '../src/match/replay.js';
+import { toWireSnapshot } from '../src/protocol/messages.js';
 import type { InputSource } from '../src/client/host.js';
 import type { PresentedState } from '../src/client/interpolation.js';
 import type { MatchConfig, Outgoing } from '../src/server/matchServer.js';
@@ -147,7 +148,7 @@ describe('матч двух игроков', () => {
     const applied = a.client.metrics.snapshotsApplied;
     const lastTick = a.client.latest!.tick;
     a.client.receive(
-      { type: 'Snapshot', epoch: 0, tick: lastTick - 2, snapshot: snapshotToPlain(server.snapshot()) },
+      { type: 'Snapshot', epoch: 0, tick: lastTick - 2, snapshot: toWireSnapshot(server.snapshot()) },
       clock.ms,
     );
 
@@ -171,7 +172,7 @@ describe('матч двух игроков', () => {
         type: 'Snapshot',
         epoch: 1,
         tick: rewoundTo,
-        snapshot: { ...snapshotToPlain(server.snapshot()), tick: rewoundTo },
+        snapshot: { ...toWireSnapshot(server.snapshot()), tick: rewoundTo },
       },
       clock.ms,
     );
@@ -209,7 +210,7 @@ describe('матч двух игроков', () => {
         type: 'Snapshot',
         epoch: 1,
         tick: a.client.latest!.tick - 4,
-        snapshot: { ...snapshotToPlain(server.snapshot()), mode: 'Rewinding' },
+        snapshot: { ...toWireSnapshot(server.snapshot()), mode: 'Rewinding' },
       },
       clock.ms,
     );
@@ -554,7 +555,7 @@ describe('перемотка на сервере (NET-11, NTR-16)', () => {
 describe('клиент: номер состояния — пара (эпоха, тик) (NTR-10, NTR-16)', () => {
   async function playing() {
     const played = await playMatch(16);
-    const plain = snapshotToPlain(played.server.snapshot());
+    const plain = toWireSnapshot(played.server.snapshot());
     // Номер тика в плоской форме тот же, что в сообщении: снапшот тика T несёт
     // состояние тика T, и подложить одно под номером другого значило бы
     // проверять сравнение чисел вместо применения состояния.

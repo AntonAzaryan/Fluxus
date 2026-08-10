@@ -15,7 +15,6 @@ import {
   createRewindController,
   dispatch,
   filterSnapshot,
-  snapshotToPlain,
   tick as advanceTick,
   VIEWPOINT_ALL,
   type EventVisibility,
@@ -47,7 +46,7 @@ import type {
   ServerMessage,
   WireInput,
 } from '../protocol/messages.js';
-import { toInputFrame } from '../protocol/messages.js';
+import { toInputFrame, toWireSnapshot } from '../protocol/messages.js';
 
 export interface MatchConfig {
   /** Версия матча — версия серверной сборки (NET-16). */
@@ -100,8 +99,29 @@ export interface MatchConfig {
   readonly allowObserver?: boolean;
   readonly physics?: PhysicsOptions;
   readonly locomotion?: LocomotionOptions;
+  /**
+   * Включение и параметры пересчёта видимости (NTR-14) — третий нативный механизм
+   * конфига матча наравне с физикой и вводом: `VisibilitySystem` нативна и берёт
+   * `raycast` (FOW-4, PHYS-6), то есть является зависимостью сборки (DI-3), а не
+   * данными сцены, и JSON-системой сцены не выразима. Форма поля — та же, что у
+   * поля `visibility` документа прогона сценария (CLI-2): пустой объект включает
+   * пересчёт, отсутствие поля означает «пересчёта нет».
+   *
+   * Асимметрия с физикой в том, что матч со сценой, включающей туман войны (флаг
+   * `fog`, SER-7), без этого поля НЕ СОБИРАЕТСЯ — отказ живёт в общем пути сборки
+   * (`buildMatchWorld`), одинаково на сервере и на клиенте.
+   */
   readonly visibility?: VisibilityOptions;
-  /** Политика видимости событий (NET-13) — параметр, а не зашитое решение (NTR-9). */
+  /**
+   * Действующий предикат видимости события (NET-13) — параметр, а не зашитое
+   * решение (NTR-9): точная политика при разной видимости источника и цели
+   * остаётся открытым геймплейным вопросом, и закрытие его будет сменой ЭТОГО
+   * поля, а не правкой ядра или сетевого слоя.
+   *
+   * Отсутствие поля означает предикат, нормированный NET-13, — а не умолчание
+   * конкретной сборки: величина, приезжающая молчанием, была бы политикой,
+   * выбранной тем, кто первым написал код.
+   */
   readonly eventVisibility?: EventVisibility;
   readonly observers?: readonly TickObserver[];
 }
@@ -423,9 +443,14 @@ export class MatchServer {
    * Полное состояние матча копией — вход проверки парности (NTR-8) и дебага.
    * Копия, а не ссылка: наружу канонический мир не отдаётся, его читает только
    * сам сервер (NET-12).
+   *
+   * Идёт тем же `filterFor`, что и рассылка: предикат видимости события у матча
+   * один — тот, который называет его конфиг (NET-13, NTR-9), — и второй его
+   * источник рядом означал бы, что диагностика смотрит на мир не теми глазами,
+   * какими его видит клиент.
    */
   snapshot(viewpoint: number = VIEWPOINT_ALL): Snapshot {
-    return filterSnapshot(this.state, viewpoint);
+    return this.filterFor(viewpoint);
   }
 
   // ------------------------------------------------------------- соединения
@@ -876,7 +901,11 @@ export class MatchServer {
       if (connection.phase === 'greeting') continue;
       const viewpoint = this.viewpointOf(connection);
       const personal = filtered?.get(viewpoint) ?? this.filterFor(viewpoint);
-      this.send(connection.id, { type: 'Snapshot', epoch, tick, snapshot: snapshotToPlain(personal) });
+      // На провод уезжает ПРОЕКЦИЯ персонального снапшота — перечисленные NET-18
+      // части, а не объект ядра целиком: состояния стримов RNG в кадр не
+      // кладутся. Ветки «наблюдателю можно всё» здесь нет и не будет —
+      // `toWireSnapshot` один на всех получателей (NET-18, NET-15).
+      this.send(connection.id, { type: 'Snapshot', epoch, tick, snapshot: toWireSnapshot(personal) });
       this.metrics.snapshotsSent++;
 
       // Поток идёт тем же путём и наблюдателю, и игроку — отдельной ветки для
