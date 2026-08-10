@@ -178,6 +178,37 @@ describe('статика обрывов (PHYS-2, PHYS-10, TERR-5)', () => {
     expect(world.queryByLayer(across, 0)).toHaveLength(0);
   });
 
+  /**
+   * DET-2, условие 4: клетка broad-phase считается делением координаты, которая
+   * бывает отрицательной. Довод «конвенция округления ненаблюдаема, потому что
+   * вставка и запрос пользуются одной функцией» закрепляется здесь: статика с
+   * отрицательными координатами обязана находиться запросом по себе самой, и
+   * набор кандидатов не зависит от того, куда округляет деление.
+   */
+  it('статика с отрицательными координатами: разбиение остаётся разбиением (DET-2)', () => {
+    const cellSize = fixed.fromInt(1);
+    // Коробки в отрицательных клетках, включая пересекающую нуль: частное
+    // отрицательное во всех трёх режимах (|q| < 1, ровно -1, меньше -1).
+    const statics: StaticCollider[] = [
+      { minX: F(-0.5), maxX: F(-0.1), minY: F(-0.5), maxY: F(-0.1), tags: [BLOCKS_MOVEMENT], layer: LAYER_STATIC },
+      { minX: F(-1), maxX: F(-0.6), minY: F(-1), maxY: F(-0.6), tags: [BLOCKS_MOVEMENT], layer: LAYER_STATIC },
+      { minX: F(-3.5), maxX: F(-2.5), minY: F(-3.5), maxY: F(-2.5), tags: [BLOCKS_MOVEMENT], layer: LAYER_STATIC },
+    ];
+    // Анти-вакуумность: на этих координатах конвенции округления расходятся.
+    expect(Math.floor(F(-0.5) / cellSize)).toBe(-1);
+    expect(Math.trunc(F(-0.5) / cellSize) === 0).toBe(true);
+
+    const world = new PhysicsWorld(statics, cellSize);
+    for (const s of statics) {
+      // Запрос по AABB самой коробки: вставка и запрос идут через одну функцию
+      // клетки, поэтому коробка обязана найтись при любой конвенции.
+      const found = world.query({ minX: s.minX, minY: s.minY, maxX: s.maxX, maxY: s.maxY }, BLOCKS_MOVEMENT);
+      expect(found).toContain(s);
+    }
+    // Запрос, накрывающий всё, находит всё и в порядке индекса статики (DET-6).
+    expect(world.query({ minX: F(-4), minY: F(-4), maxX: F(1), maxY: F(1) }, BLOCKS_MOVEMENT)).toEqual(statics);
+  });
+
   it('касание границы не считается пересечением', () => {
     const world = new PhysicsWorld(staticsFromTerrain(createTerrainGrid(TERRAIN)), fixed.fromInt(1));
     expect(world.query({ minX: F(1.0), minY: F(0.1), maxX: F(2.0), maxY: F(0.9) }, BLOCKS_MOVEMENT)).toHaveLength(0);
@@ -549,6 +580,59 @@ describe('raycast (PHYS-6)', () => {
   it('луч нулевой длины не даёт попадания', () => {
     const h = harness();
     expect(h.physics.raycast(at(1, 1), at(1, 1))).toBeNull();
+  });
+
+  /**
+   * DET-2, условие 4 на единственной площадке, где конвенция округления
+   * НАБЛЮДАЕМА: `ratio` в луче против AABB. Частное дальней границы слэба лежит
+   * строго в `(-1, 0)` сырых единиц Q16.16 — округление к минус бесконечности
+   * даёт `-1`, и `near > far` (`0 > -1`) читается как промах; усечение к нулю
+   * дало бы `-0`, `0 > -0` ложно, и тот же луч вернул бы попадание в нулевой
+   * дистанции. Порт, выбравший усечение, отдаст другой набор попаданий (PHYS-7),
+   * поэтому `floor` здесь — норма площадки.
+   *
+   * Коробка ДИНАМИЧЕСКАЯ намеренно: у статики до этой ветки не дойти —
+   * AABB-префильтр broad-phase отбросит коробку, лежащую справа от луча.
+   */
+  it('дальняя граница слэба с частным в (-1, 0): floor даёт промах, усечение дало бы попадание (PHYS-7)', () => {
+    const from = { x: 0, y: 0 };
+    const to = { x: -300, y: 0 };
+
+    // Предпосылки теста — часть теста: без них он молча перестал бы стрелять
+    // туда, куда задуман.
+    const delta = mathApi.vec.sub(to, from);
+    const rayLength = mathApi.vec.length(delta);
+    const dir = mathApi.vec.normalize(delta);
+    expect(rayLength).toBe(256);
+    expect(dir.x).toBe(-76800);
+    expect(dir.y).toBe(0);
+
+    // Коробка целиком ПОЗАДИ луча, и её ближняя граница отстоит от источника на
+    // одну сырую единицу: частное дальней границы слэба попадает в (-1, 0).
+    const wallX = 32769;
+    const halfX = fixed.fromFloat(0.5);
+    const boxMinX = wallX - halfX;
+    expect(boxMinX).toBe(1);
+    const quotient = (boxMinX * 65536) / dir.x;
+    expect(quotient).toBeGreaterThan(-1);
+    expect(quotient).toBeLessThan(0);
+    expect(Math.floor(quotient)).toBe(-1);
+    expect(Math.trunc(quotient) === 0).toBe(true);
+
+    const h = harness(false);
+    h.place('Wall', { Position: { x: wallX, y: 0 } });
+    // Округление к минус бесконечности: промах.
+    expect(h.physics.raycast(from, to, { mask: BLOCKS_VISION })).toBeNull();
+    // Геометрия при этом настоящая: луч в обратную сторону в неё попадает.
+    expect(h.physics.raycast(from, { x: 300, y: 0 }, { mask: BLOCKS_VISION })).not.toBeNull();
+
+    // Через статику эта ветка недостижима: префильтр отбрасывает коробку до
+    // narrow-phase, поэтому различающий тест обязан идти через сущность.
+    const asStatic = new PhysicsWorld(
+      [{ minX: boxMinX, maxX: wallX + halfX, minY: -halfX, maxY: halfX, tags: [BLOCKS_VISION], layer: 0 }],
+      fixed.fromInt(1),
+    );
+    expect(asStatic.query({ minX: to.x, minY: 0, maxX: from.x, maxY: 0 }, BLOCKS_VISION)).toHaveLength(0);
   });
 
   it('статика вне сетки broad-phase всё равно находится', () => {

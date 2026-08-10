@@ -19,6 +19,7 @@ import type {
   WorldState,
 } from '../types.js';
 import { FIELD_TYPES, NO_ENTITY } from '../types.js';
+import { DEBUG, assert } from '../debug.js';
 import {
   allocate,
   assertRoom,
@@ -698,19 +699,52 @@ export function hasComponent(state: WorldState, entity: EntityId, component: str
 }
 
 /**
- * Чтение поля. Индекс за границей массива (чужой или мусорный идентификатор)
- * даёт нейтральное значение ТИПА поля, а не ноль: для поля `entity` ноль —
- * валидный `EntityId` первого слота мира, то есть ровно та подмена ссылки, от
- * которой ECS-6 защищает кодировкой «ссылки нет».
+ * Чтение поля — тотальное (ECS-7): результат есть у любой пары «сущность,
+ * поле», и ошибкой вычисления оно не бывает. Отсутствие владения (бит
+ * компонента в маске не выставлен, ECS-1) и не-живая сущность (ID-1) дают
+ * нейтральное значение ТИПА поля, а не содержимое ячейки: `removeComponent`
+ * гасит только бит (CMD-4), слоты переиспользуются стеком (ID-6), поэтому в
+ * ячейке лежит либо собственное прошлое сущности, либо значение прежнего
+ * владельца слота — величина детерминированная, но ничего не означающая.
+ * Ноль для `entity` был бы ещё и валидным `EntityId` первого слота мира, то
+ * есть той самой подменой ссылки, от которой ECS-6 защищает кодировкой
+ * «ссылки нет».
+ *
+ * Порядок проверок нормативен. Имена компонента и поля — факт текста системы,
+ * проверяемый до тика, и остаются броском (ECS-5): подмена опечатки нейтральным
+ * нулём сделала бы её поведением. Живость проверяется РАНЬШЕ маски: мусорный
+ * идентификатор несёт индекс за пределами `capacity`, а маску на таком индексе
+ * спрашивать нельзя — `hasComponent` маски читала бы чужое слово и в debug
+ * добавляла бы к находке шум `MASK_INDEX_OUT_OF_RANGE` о том же самом.
+ *
+ * Громкость уходит в отдельный канал (FP-4): мягкий assert debug-сборки, не
+ * влияющий ни на результат, ни на состояние мира, — прогоны debug и release на
+ * одном сценарии совпадают побитово. Guard `hasComponent` остаётся обязанностью
+ * контента: ECS-7 делает дефект воспроизводимым, а не корректным.
+ *
+ * Аллокаций на пути владеющего чтения нет — в release. В debug-сборке текст
+ * сообщения строится на ветке отказа (и `checkBounds` в маске строит свои
+ * сообщения безусловно — это уже действующий приём FP-4). Ценой владеющего
+ * чтения остаются второй `rawIndexOf` и деление в `generationOf` внутри
+ * `isAlive`; это осознанный обмен, записанный в Risks дизайна change'а.
  */
 export function getField(state: WorldState, entity: EntityId, component: string, field: string): number {
-  const store = storeOf(toInternal(state), 'getField', component);
+  const internal = toInternal(state);
+  const store = storeOf(internal, 'getField', component);
   const arr = store.fields[field];
   if (arr === undefined) throw missingField('getField', component, field);
-  const value = arr[rawIndexOf(entity)];
-  // Тип поля читается только на промахе индекса: на попадании он не нужен, а
-  // чтение поля — самый горячий вызов ядра.
-  return value ?? neutralValue(store.schema.fields[field]!);
+  const index = rawIndexOf(entity);
+  if (!indexIsAlive(internal.entities, entity) || !maskHas(internal.masks, index, store.id)) {
+    if (DEBUG) {
+      assert(
+        false,
+        `getField: сущность ${entity} не владеет компонентом "${component}" (ECS-7), поле "${field}"`,
+        'COMPONENT_READ_WITHOUT_OWNERSHIP',
+      );
+    }
+    return neutralValue(store.schema.fields[field]!);
+  }
+  return arr[index]!;
 }
 
 /**

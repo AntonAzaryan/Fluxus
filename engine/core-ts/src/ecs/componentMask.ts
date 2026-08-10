@@ -19,6 +19,14 @@ function bitPos(componentId: number): { word: number; bit: number } {
   return { word: componentId >>> 5, bit: componentId & 31 };
 }
 
+/**
+ * DET-2, условие 5: делимое — число компонентов сцены, неотрицательное целое,
+ * ограниченное самим фактом регистрации (каждый компонент — объявление в
+ * конфиге сцены, и SoA-хранилище под него уже аллоцировано). До 2^53 оно не
+ * дотягивается на много порядков, отрицательным не бывает — условие 4
+ * неприменимо. Площадка вне пути тика: маски создаются один раз при создании
+ * мира.
+ */
 export function createMasks(capacity: number, componentCount: number): ComponentMasks {
   const wordsPerEntity = Math.max(1, Math.ceil(componentCount / 32));
   return {
