@@ -13,8 +13,7 @@
     "noEmit": true,
     "resolveJsonModule": true,
     "lib": [
-      "ES2022",
-      "DOM"
+      "ES2022"
     ]
   },
   "include": [
