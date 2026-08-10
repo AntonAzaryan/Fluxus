@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import * as fixed from '../src/math/fixed.js';
 import { mathApi } from '../src/math/mathApi.js';
 import { getField, isAlive, listAlive, setField, spawn, toPlain } from '../src/ecs/world.js';
+import { query } from '../src/ecs/query.js';
 import { indexOf as rawIndexOf } from '../src/ecs/entityIndex.js';
+import { ARENA_COMPONENT } from '../src/systems/arena.js';
+import { FLOOR_COMPONENT } from '../src/systems/terrain.js';
 import { filterSnapshot, relevantEntityVisible, VIEWPOINT_ALL } from '../src/sim/filter.js';
 import { snapshotToPlain } from '../src/sim/serialization.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
@@ -42,6 +45,17 @@ const SCENE: SceneDef = {
     /** Обстановка без `Visibility`: секретом не является и режется не должна (NET-12). */
     { name: 'Rock', components: { Position: { x: 0, y: 0 } } },
   ],
+};
+
+/**
+ * Та же сцена с носителями карты пола (TERR-6) и арены (ARENA-1). Компонента
+ * `Visibility` загрузчик им не выдаёт, и это и есть предмет проверки NET-12:
+ * умолчание «публична» держит в снапшоте ровно их.
+ */
+const SCENE_WITH_CARRIERS: SceneDef = {
+  ...SCENE,
+  terrain: { width: 2, height: 2, tileSize: F(1), levels: ['00', '00'], flags: ['..', '..'] },
+  arena: { center: { x: 0, y: 0 }, radius: F(10) },
 };
 
 function harness() {
@@ -100,6 +114,41 @@ describe('per-client фильтрация снапшота (NET-12)', () => {
     for (const viewpoint of [0, 1, VIEWPOINT_ALL]) {
       expect(h.present(filterSnapshot(h.state, viewpoint), h.rock)).toBe(true);
     }
+  });
+
+  /**
+   * NET-12, сценарий «Носители карты пола и арены». Проверяется не обстановка
+   * вообще (это тест выше), а ровно те две сущности, потерей которых обратное
+   * умолчание было бы фатальным: без них клиент лишается данных, которые
+   * оболочка обязана получить до первого кадра (SHELL-5).
+   */
+  it('носители карты пола и арены остаются во всех персональных снапшотах', () => {
+    const { world, systems, terrain, arena, modifiers } = loadScene(SCENE_WITH_CARRIERS);
+    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+    const sim: Simulation = {
+      systems,
+      worldSeed: 1,
+      math: mathApi,
+      modifiers,
+      terrain: terrain!,
+      arena: arena!,
+    };
+    const state = initialState(world, 1);
+    spawn(world, 'Watcher', { Position: { x: F(0), y: F(0) } });
+    const enemy = spawn(world, 'Enemy', { Position: { x: F(50), y: F(50) } });
+    tick(sim, state);
+
+    const floorCarrier = [...query(world, { all: [FLOOR_COMPONENT] })][0]!;
+    const arenaCarrier = [...query(world, { all: [ARENA_COMPONENT] })][0]!;
+
+    for (const viewpoint of [0, 1, VIEWPOINT_ALL]) {
+      const personal = filterSnapshot(state, viewpoint);
+      expect(isAlive(personal.world, floorCarrier)).toBe(true);
+      expect(isAlive(personal.world, arenaCarrier)).toBe(true);
+    }
+    // Контроль: фильтр в этой сцене работает — невидимый враг из снапшота ушёл,
+    // и носители остались не потому, что резать было нечем.
+    expect(isAlive(filterSnapshot(state, 0).world, enemy)).toBe(false);
   });
 
   it('фильтрация не мутирует ни мир, ни исходный снапшот', () => {
@@ -200,7 +249,7 @@ describe('скрытие не равно смерть (NET-14)', () => {
 });
 
 describe('фильтрация событий (NET-13)', () => {
-  it('политика по умолчанию: уходит, если видима хоть одна упомянутая сторона', () => {
+  it('действующий предикат (норма NET-13): уходит, если видима хоть одна названная сторона', () => {
     const h = apart();
     h.state.events.emit('AbilityCast', { source: h.enemy });
     h.state.events.emit('DamageDealt', { source: h.enemy, target: h.watcher });
@@ -212,15 +261,18 @@ describe('фильтрация событий (NET-13)', () => {
     expect(types).toEqual(['DamageDealt', 'RoundEnded']);
   });
 
-  it('предикат подменяется целиком — политика живёт в netcode-слое', () => {
+  it('предикат подменяется целиком — он параметр механизма, а не константа', () => {
     const h = apart();
     h.state.events.emit('AbilityCast', { source: h.enemy });
     h.state.events.emit('RoundEnded', { winner: 1 });
 
+    // Подменяет предикат тот, кто его называет, — конфиг матча (NTR-9); ядро
+    // принимает величину параметром и своей политики поверх неё не имеет.
     const onlyRound = filterSnapshot(h.state, 0, (event) => event.type === 'RoundEnded');
     expect(onlyRound.events.map((e) => e.type)).toEqual(['RoundEnded']);
 
-    // Дефолт доступен и как обычная функция — netcode может строить поверх него.
+    // Нормированный предикат доступен и как обычная функция: он значение
+    // параметра, а не спрятанное умолчание.
     const nothingVisible = relevantEntityVisible({ type: 'AbilityCast', data: { source: h.enemy } }, () => false);
     expect(nothingVisible).toBe(false);
   });
@@ -232,18 +284,74 @@ describe('фильтрация событий (NET-13)', () => {
     expect(filterSnapshot(h.state, 0).events).toHaveLength(0);
     expect(filterSnapshot(h.state, 1).events).toHaveLength(1);
   });
+
+  /**
+   * NET-13, сценарий «Ссылка под именем вне набора». Набор имён закрыт нормой, и
+   * поле вне него видимости событию не добавляет — ни в плюс (незнакомое имя не
+   * делает событие видимым), ни в минус (событие, называющее сущность ТОЛЬКО
+   * таким полем, никого не называет и потому общее).
+   */
+  it('поле-ссылка с именем вне закрытого набора видимости не добавляет', () => {
+    const h = apart();
+    // `caster` в наборе `EVENT_ENTITY_FIELDS` не значится: для предиката событие
+    // не называет ни одной сущности и уходит всем как общее.
+    h.state.events.emit('Cast', { caster: h.enemy });
+    expect(filterSnapshot(h.state, 0).events.map((e) => e.type)).toEqual(['Cast']);
+
+    // А рядом с именем ИЗ набора незнакомое имя ничего не добавляет: видимость
+    // решает только `entity`, и невидимый враг событие не пропускает.
+    const h2 = apart();
+    h2.state.events.emit('Cast', { caster: h2.watcher, entity: h2.enemy });
+    expect(filterSnapshot(h2.state, 0).events).toHaveLength(0);
+    expect(filterSnapshot(h2.state, 1).events.map((e) => e.type)).toEqual(['Cast']);
+  });
+});
+
+/**
+ * NET-18, сценарий «Событие невидимого врага в шине снапшота». Шина внутри
+ * персонального снапшота — та же отобранная проекция, что уходит потоком, и
+ * отобрана она ОДНИМ вызовом фильтра: иначе отбор потока событий обходился бы
+ * состоянием, а состав проекции молча расширился бы обратно.
+ */
+describe('шина внутри персонального снапшота (NET-18)', () => {
+  it('событие невидимого врага в шине персонального снапшота отсутствует', () => {
+    const h = apart();
+    h.state.events.emit('AbilityCast', { source: h.enemy });
+
+    // Канонический мир событие знает — вырезано оно именно проекцией.
+    expect([...h.state.events].map((e) => e.type)).toEqual(['AbilityCast']);
+    expect(filterSnapshot(h.state, 0).events).toEqual([]);
+    // Своему тот же факт доезжает: отбор идёт по видимости, а не по каналу.
+    expect(filterSnapshot(h.state, 1).events.map((e) => e.type)).toEqual(['AbilityCast']);
+  });
+
+  it('наблюдателю шина не отбирается: фильтр снимается целиком, а не по каналам', () => {
+    const h = apart();
+    h.state.events.emit('AbilityCast', { source: h.enemy });
+    expect(filterSnapshot(h.state, VIEWPOINT_ALL).events.map((e) => e.type)).toEqual(['AbilityCast']);
+  });
 });
 
 describe('сцена без FoW (DI-3)', () => {
+  /**
+   * NET-12, сценарий «Сцена без тумана войны»: персональный снапшот совпадает по
+   * составу сущностей с каноническим, а не оказывается пустым. Проверяется при
+   * любом `viewpoint` — умолчание «публична» не зависит от точки зрения.
+   */
   it('без компонента Visibility фильтр ничего не режет', () => {
     const { world } = loadScene({
       components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }],
       prefabs: [{ name: 'Rock', components: { Position: { x: 0, y: 0 } } }],
     });
     spawn(world, 'Rock');
+    spawn(world, 'Rock');
     const state = initialState(world, 1);
+    const canonical = [...listAlive(world)];
+    expect(canonical).toHaveLength(2);
 
-    expect([...listAlive(filterSnapshot(state, 0).world)]).toEqual([...listAlive(world)]);
+    for (const viewpoint of [0, 31, VIEWPOINT_ALL]) {
+      expect([...listAlive(filterSnapshot(state, viewpoint).world)]).toEqual(canonical);
+    }
   });
 });
 
