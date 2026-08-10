@@ -61,6 +61,7 @@ describe('воркер-сборка против однопоточной (SHELL
 
     const channel = new MessageChannel();
     const shell = new WorkerShell({
+      mode: 'local',
       port: shellPort(channel.port1),
       sim: workerRig.sim,
       state: workerRig.state,
@@ -95,6 +96,9 @@ describe('воркер-сборка против однопоточной (SHELL
     shell.stop();
     await settle();
     expect(helloExtra).toEqual({ hero: 42 });
+    // Режим приезжает в handshake и до первой доставки состояния (SHELL-8):
+    // `WorkerShell` есть локальный режим, и объявляет он это сам.
+    expect(remote.mode).toBe('local');
     expect(remote.terrain).not.toBeNull();
     expect(remote.terrain!.width).toBe(2);
 
@@ -138,6 +142,7 @@ describe('conflation: состояние последнее, события вс
     const rig = makeRig({ castOnTicks: [2, 4], breakFloorOnTick: 3 });
     const ports = queuedPortPair();
     const shell = new WorkerShell({
+      mode: 'local',
       port: ports.worker,
       sim: rig.sim,
       state: rig.state,
@@ -175,6 +180,7 @@ describe('conflation: состояние последнее, события вс
     const rig = makeRig({ castOnTicks: [1] });
     const ports = queuedPortPair();
     const shell = new WorkerShell({
+      mode: 'local',
       port: ports.worker,
       sim: rig.sim,
       state: rig.state,
@@ -206,6 +212,7 @@ describe('conflation: состояние последнее, события вс
     const frozen = makeRig({ castOnTicks: [1] });
     const frozenPorts = queuedPortPair();
     const frozenShell = new WorkerShell({
+      mode: 'local',
       port: frozenPorts.worker,
       sim: frozen.sim,
       state: frozen.state,
@@ -253,6 +260,7 @@ describe('ноль аллокаций канала в устоявшемся р�
       },
     };
     const shell = new WorkerShell({
+      mode: 'local',
       port: spyPort,
       sim: rig.sim,
       state: rig.state,
@@ -277,6 +285,7 @@ describe('обратный канал: ввод и управление (SHELL-6
     const rig = makeRig({ castOnTicks: [] });
     const [workerPort, mainPort] = syncPortPair();
     const shell = new WorkerShell({
+      mode: 'local',
       port: workerPort,
       sim: rig.sim,
       state: rig.state,
@@ -309,6 +318,7 @@ describe('обратный канал: ввод и управление (SHELL-6
       inputs: createInputLog(),
     });
     const shell = new WorkerShell({
+      mode: 'local',
       port: workerPort,
       sim: rig.sim,
       state: rig.state,

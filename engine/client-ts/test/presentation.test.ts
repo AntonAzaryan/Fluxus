@@ -154,6 +154,7 @@ function makeHarness(options: { shared?: boolean } = {}): Harness {
   }).connect(mainPort);
 
   const shell = new WorkerShell({
+    mode: 'local',
     port: workerPort,
     sim: rig.sim,
     state: rig.state,

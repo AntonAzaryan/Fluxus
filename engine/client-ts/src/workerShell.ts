@@ -1,7 +1,14 @@
 /**
- * WorkerShell — воркер-сторона оболочки (SHELL-1): владеет симуляцией,
- * тикером и каналом. Главному потоку отсюда не видно ничего, кроме
- * handshake и конвертов тиков.
+ * WorkerShell — воркер-сторона ЛОКАЛЬНОГО режима оболочки (SHELL-1, SHELL-8):
+ * владеет симуляцией, тикером и каналом. Главному потоку отсюда не видно
+ * ничего, кроме handshake и конвертов тиков.
+ *
+ * Локальный режим означает, что состояние производит сама оболочка: воркер
+ * тикает симуляцию, держит `HistoryProvider` и исполняет переходы машины
+ * состояний у себя. Так поднимаются демо, редактор (`editor` ED-9) и
+ * офлайн-прогон. Клиент сетевого матча поднимает вторую воркер-сторону —
+ * `NetworkShell` (`networkShell.ts`), у которой симуляции нет вовсе; режим
+ * фиксируется на старте сессии и меняться по ходу MUST NOT (SHELL-8).
  *
  * Тикер — setTimeout-цикл с коррекцией дрейфа (design Decision 8): таймеры
  * dedicated worker'ов не душатся так, как main-thread (SHELL-1, сценарий
@@ -26,12 +33,19 @@ import {
 } from '@game-mvp/core';
 import type { Extractor } from '@game-mvp/render';
 import { ShellSender, type SenderOptions } from './sender.js';
-import type { ControlMessage, HelloMessage, MainToWorker, ShellPort } from './protocol.js';
+import { helloMessage, type ControlMessage, type MainToWorker, type ShellPort } from './protocol.js';
 
 /** Потолок навёрстывания за один проход таймера; дальше — пересинхронизация. */
 const MAX_CATCH_UP_TICKS = 4;
 
 export interface WorkerShellConfig {
+  /**
+   * Режим оболочки (SHELL-8), объявляемый сборкой. Тип — литерал: `WorkerShell`
+   * есть локальный режим, и другого значения у него не бывает. Поле при этом
+   * обязательное, а не выведенное умолчанием: умолчание сделало бы один из двух
+   * режимов неявной нормой, а SHELL-8 требует выбора на старте сессии.
+   */
+  readonly mode: 'local';
   readonly port: ShellPort;
   readonly sim: Simulation;
   readonly state: SimulationState;
@@ -78,15 +92,16 @@ export class WorkerShell {
     config.port.onMessage((message) => { this.onMessage(message as MainToWorker); });
   }
 
-  /** Шлёт handshake (SHELL-5) и запускает тикер. */
+  /** Шлёт handshake (SHELL-5, SHELL-8: с режимом) и запускает тикер. */
   start(): void {
-    const hello: HelloMessage = {
-      t: 'hello',
-      tickSeconds: this.config.tickSeconds,
-      terrain: this.config.sim.terrain?.grid ?? null,
-      ...(this.config.helloExtra !== undefined ? { extra: this.config.helloExtra } : {}),
-    };
-    this.config.port.post(hello);
+    this.config.port.post(
+      helloMessage({
+        mode: this.config.mode,
+        tickSeconds: this.config.tickSeconds,
+        terrain: this.config.sim.terrain?.grid ?? null,
+        ...(this.config.helloExtra !== undefined ? { extra: this.config.helloExtra } : {}),
+      }),
+    );
     this.nextTickAt = this.clock() + this.tickMs;
     this.schedule();
   }
@@ -136,6 +151,13 @@ export class WorkerShell {
     }
   }
 
+  /**
+   * Локальный режим исполняет запрошенный переход у себя, через core-API
+   * (SHELL-6, WSM-5): авторитет над состоянием здесь у оболочки. В сетевом
+   * режиме этого пути нет вовсе — запрос уезжает вводом на сервер
+   * (`NetworkShell`), потому что собственной перемотки у клиента MUST NOT быть
+   * ни при каких условиях (`netcode` NET-11).
+   */
   private onControl(message: ControlMessage): void {
     const rewind = this.config.rewind;
     if (rewind === undefined) return;

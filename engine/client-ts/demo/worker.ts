@@ -3,6 +3,11 @@
  * (`demo/sim.ts` — тот же headless-код, что и в однопоточной сборке),
  * Extractor рендера и `WorkerShell` — тикер, канал, ввод. Главный поток
  * (`main.ts`) не получает отсюда ничего, кроме handshake и конвертов тиков.
+ *
+ * Режим — локальный, и объявлен он явно (`mode: 'local'`, SHELL-8): состояние
+ * производит сама оболочка, перемотка исполняется здесь же. Сервера у демо нет
+ * вовсе, и умолчанием этот выбор не достаётся — иначе один из двух режимов стал
+ * бы неявной нормой.
  */
 import { shellPort, WorkerShell } from '@game-mvp/client';
 import { Extractor, kindByTags } from '@game-mvp/render';
@@ -27,6 +32,7 @@ const extractor = new Extractor({
 });
 
 const shell = new WorkerShell({
+  mode: 'local',
   port: shellPort(self as unknown as Worker),
   sim,
   state,

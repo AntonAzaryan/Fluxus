@@ -13,6 +13,15 @@
  * Обратный канал (SHELL-6): `sendInput` и `control` — единственное влияние
  * главного потока на симуляцию.
  *
+ * Режим оболочки (SHELL-8) main-сторону не ветвит: обе воркер-стороны — и
+ * локальная (`WorkerShell`), и сетевая (`NetworkShell`) — говорят одним
+ * протоколом, и хост читает конверты, не спрашивая, откуда приехал тик.
+ * Единственное, что режим здесь меняет, — что о нём ЗНАЮТ: он приезжает в
+ * handshake, доступен потребителю в `onReady` и полем `mode`, и по нему UI
+ * решает, существуют ли органы управления перемоткой. Отправку `control` хост не
+ * запрещает и в сетевом режиме: форма сообщений одна на оба режима (SHELL-6), а
+ * что с запросом произойдёт дальше, решает воркер-сторона.
+ *
  * Реестр подсистем и кадр живут в `PresentationStage` — общей части продюсеров
  * presentation-состояния (REND-11), ровно как у `RenderHost`. Хост от этого
  * остаётся потоком тиков и только им: документных веток здесь нет, а второй
@@ -34,6 +43,7 @@ import type {
   ControlMessage,
   HelloMessage,
   InputMessage,
+  ShellMode,
   ShellPort,
   TickEnvelope,
   WorkerToMain,
@@ -69,6 +79,11 @@ export class RemoteHost implements PresentationProducer {
 
   /** Сетка террейна из handshake; null до него и на сценах без террейна. */
   terrain: TerrainGrid | null = null;
+  /**
+   * Режим оболочки из handshake (SHELL-8); null до него — режим наблюдением за
+   * потоком доставок не выводится и до handshake неизвестен.
+   */
+  mode: ShellMode | null = null;
   /** Суммарно вытесненных лимитом аккумулятора событий (диагностика Risks). */
   expiredEvents = 0;
 
@@ -139,6 +154,7 @@ export class RemoteHost implements PresentationProducer {
 
   private onHello(hello: HelloMessage): void {
     this.terrain = hello.terrain;
+    this.mode = hello.mode;
     this.buffer = new ViewBuffer({
       tickSeconds: hello.tickSeconds,
       ...(this.config.snapDistance !== undefined
