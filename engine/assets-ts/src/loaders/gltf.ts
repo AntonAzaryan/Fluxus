@@ -17,12 +17,18 @@
  * свойство данных.
  *
  * ПОДДЕРЖАННОЕ ПОДМНОЖЕСТВО (осознанно уже, чем весь glTF 2.0):
- * - Один буфер: внешний (`buffers[0].uri`) либо BIN-чанк контейнера; встроенные
- *   data-URI и sparse-accessor'ы не разбираются — внятная ошибка вместо
+ * - Один буфер: внешний (`buffers[0].uri`), BIN-чанк контейнера либо
+ *   base64-data-URI внутри самого JSON — три упаковки одного и того же буфера,
+ *   и все три отдаёт штатный экспортёр Blender («Separate», «Binary»,
+ *   «Embedded»). Sparse-accessor'ы не разбираются — внятная ошибка вместо
  *   молчаливой потери данных.
- * - Из встроенных изображений декодируется PNG (модульный `decodePng`);
- *   формат без декодера (JPEG) даёт слот без источника и предупреждение.
- * - Примитивы TRIANGLES (mode по умолчанию), один primitive на mesh.
+ * - Из встроенных изображений (BIN-чанк или data-URI) декодируется PNG
+ *   (модульный `decodePng`); формат без декодера (JPEG) даёт слот без источника
+ *   и предупреждение.
+ * - Примитивы TRIANGLES (mode по умолчанию); каждый primitive — отдельная ЧАСТЬ
+ *   модели (`NormalizedMesh`), как геосет в MDX: экспортёр режет меш по
+ *   материалам, и взять из mesh только первый primitive значило бы тихо потерять
+ *   геометрию всех прочих материалов.
  * - Интерполяция каналов LINEAR и STEP переносятся как есть; CUBICSPLINE
  *   упрощается до LINEAR по значению ключа (без внутренней/внешней
  *   касательной) — как и `mdxLoader` для Hermite/Bezier, это фиксация
@@ -60,6 +66,42 @@ import type {
 import type { DecodedImage } from '../image.js';
 import { resolveDependencyPath } from '../service.js';
 import { decodePng } from './png.js';
+
+// ================================================================ data-URI
+//
+// «Embedded»-экспорт кладёт буфер и изображения прямо в JSON строкой
+// `data:<mime>;base64,<...>` (RFC 2397). Для модуля это тот же ВСТРОЕННЫЙ
+// источник, что и BIN-чанк контейнера: читать рядом нечего, `ctx.read` не при
+// делах — путь дерева контента из такой строки не следует (ASSET-2), и
+// разрешать её как относительный путь означало бы запрос несуществующего файла.
+
+/**
+ * `atob` есть и в Node >= 16, и в браузерах, но объявлен в `lib.dom`, которую
+ * пакет намеренно не подключает (ASSET-5: никакого DOM). Объявляем ровно то,
+ * чем пользуемся, — тем же приёмом, что `DecompressionStream` в `png.ts`.
+ */
+declare const atob: (data: string) => string;
+
+function isDataUri(uri: string): boolean {
+  return uri.slice(0, 5).toLowerCase() === 'data:';
+}
+
+/**
+ * Байты base64-data-URI. Текстовые (percent-encoded) data-URI отвергаются: ни
+ * буфер, ни изображение в них не приезжают, а молчаливо вернуть пустоту хуже,
+ * чем назвать причину.
+ */
+function dataUriBytes(uri: string): Uint8Array {
+  const comma = uri.indexOf(',');
+  const header = comma === -1 ? '' : uri.slice(0, comma);
+  if (comma === -1 || !header.toLowerCase().endsWith(';base64')) {
+    throw new Error('glTF: data-URI без base64-полезной нагрузки не поддержан');
+  }
+  const binary = atob(uri.slice(comma + 1));
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
 
 // ============================================================== glTF JSON
 
@@ -354,6 +396,27 @@ const LINE_TYPE: Readonly<Record<string, Interpolation>> = {
   CUBICSPLINE: 'linear', // упрощение: берём только значение ключа, без касательных (см. заголовок файла)
 };
 
+/**
+ * Веса скининга к сумме 1 на вершину — инвариант `NormalizedMesh.skinWeights`.
+ * Спецификация glTF требует того же от экспортёра, но требование к чужому коду
+ * инвариантом нашего представления не является: экспортёры выдают и слегка
+ * «уплывшую» сумму (квантование в UNSIGNED_BYTE), и вершины вовсе без весов.
+ * Вершина с нулевой суммой целиком отходит первому своему суставу — тем же
+ * правилом, что у `mdxLoader` для вершины без групп.
+ */
+function normalizeWeights(weights: Float32Array, vcount: number): void {
+  for (let v = 0; v < vcount; v++) {
+    const base = v * 4;
+    const sum = weights[base]! + weights[base + 1]! + weights[base + 2]! + weights[base + 3]!;
+    if (sum === 0) {
+      weights[base] = 1;
+      continue;
+    }
+    if (sum === 1) continue;
+    for (let k = 0; k < 4; k++) weights[base + k]! /= sum;
+  }
+}
+
 /** Индекс родителя каждого узла из `children[]` (glTF не хранит обратную ссылку). */
 function buildParentIndex(nodes: readonly GltfNode[]): Int32Array {
   const parent = new Int32Array(nodes.length).fill(-1);
@@ -426,8 +489,22 @@ async function decodeEmbeddedImages(
   const images = doc.images ?? [];
   for (let i = 0; i < images.length; i++) {
     const image = images[i]!;
-    if (image.uri != null || image.bufferView == null) continue; // внешний файл или пустая запись
-    const bytes = imageBytes(doc, buffers, image.bufferView);
+    let bytes: Uint8Array | null;
+    if (image.uri != null) {
+      if (!isDataUri(image.uri)) continue; // внешний файл — слот-ссылка, не наше дело
+      try {
+        bytes = dataUriBytes(image.uri);
+      } catch (e) {
+        console.warn(
+          `ассет "${assetId}": встроенное изображение ${i} — ${e instanceof Error ? e.message : String(e)}; слот останется без текстуры`,
+        );
+        continue;
+      }
+    } else if (image.bufferView != null) {
+      bytes = imageBytes(doc, buffers, image.bufferView);
+    } else {
+      continue; // пустая запись: ни файла, ни байтов
+    }
     if (bytes == null) {
       console.warn(
         `ассет "${assetId}": встроенное изображение ${i} ссылается на несуществующий bufferView ${image.bufferView} — слот останется без текстуры`,
@@ -498,105 +575,130 @@ export async function normalizeGltf(
 
   // ============================================================= B. Меши
   //
+  // Одна ЧАСТЬ модели (`NormalizedMesh`) = один primitive: экспортёр режет меш
+  // по материалам, и «только первый primitive узла» тихо терял бы геометрию
+  // всех остальных материалов. Номер части — сквозной по порядку обхода узлов
+  // и примитивов внутри узла; индекс в `doc.meshes` номером не годится, потому
+  // что на один mesh вправе ссылаться несколько узлов — части слились бы, а
+  // `hiddenParts` манифеста и треки видимости адресуют часть именно номером
+  // (как геосет в MDX).
+  //
   // Меш без скина (экипировка, привязанная узлом-родителем, не суставами) —
   // запекается в bind-пространство узла и жёстко привязывается к «суставу»
   // = самому этому узлу (вес 1); отсутствующий `inverseBind` для такого узла
   // рендер выведет из позы покоя сам (build.ts: `buildSkeleton`) — и это
   // ровно матрица, обратная его мировой матрице покоя, то есть корректно.
+  //
+  // Примитив без `material` получает материал ПО УМОЛЧАНИЮ (спецификация glTF,
+  // §3.7.2) отдельной строкой в конце таблицы, а не нулевой материал документа:
+  // материал 0 — такой же авторский, как любой другой, и подставить его значило
+  // бы покрасить деталь чужой краской.
+  const defaultMaterialIndex = (doc.materials ?? []).length;
+  let usesDefaultMaterial = false;
   const meshes: NormalizedMesh[] = [];
   nodes.forEach((n, nodeIndex) => {
     if (n.mesh == null) return;
     const mesh = doc.meshes[n.mesh];
     if (mesh == null) throw new Error(`glTF: mesh ${n.mesh} не существует (узел "${n.name}")`);
-    const prim = mesh.primitives[0];
-    if (prim == null) throw new Error(`glTF: mesh "${mesh.name}" без примитивов`);
-    if (prim.mode != null && prim.mode !== 4) {
-      throw new Error(`glTF: mesh "${mesh.name}" — режим ${prim.mode} (нужен TRIANGLES=4)`);
-    }
+    if (mesh.primitives.length === 0) throw new Error(`glTF: mesh "${mesh.name}" без примитивов`);
 
-    const posAcc = prim.attributes['POSITION'];
-    if (posAcc == null) throw new Error(`glTF: mesh "${mesh.name}" без POSITION`);
-    const pos = readAccessor(doc, buffers, posAcc, false);
-    const vcount = pos.count;
-    const positions = new Float32Array(vcount * 3);
-    const normalsAcc = prim.attributes['NORMAL'];
-    const norm = normalsAcc != null ? readAccessor(doc, buffers, normalsAcc, false) : null;
-    const normals = norm != null ? new Float32Array(vcount * 3) : null;
+    for (const prim of mesh.primitives) {
+      if (prim.mode != null && prim.mode !== 4) {
+        throw new Error(`glTF: mesh "${mesh.name}" — режим ${prim.mode} (нужен TRIANGLES=4)`);
+      }
 
-    const skinned = prim.attributes['JOINTS_0'] != null && prim.attributes['WEIGHTS_0'] != null;
-    const skinIndices = new Uint16Array(vcount * 4);
-    const skinWeights = new Float32Array(vcount * 4);
+      const posAcc = prim.attributes['POSITION'];
+      if (posAcc == null) throw new Error(`glTF: mesh "${mesh.name}" без POSITION`);
+      const pos = readAccessor(doc, buffers, posAcc, false);
+      const vcount = pos.count;
+      const positions = new Float32Array(vcount * 3);
+      const normalsAcc = prim.attributes['NORMAL'];
+      const norm = normalsAcc != null ? readAccessor(doc, buffers, normalsAcc, false) : null;
+      const normals = norm != null ? new Float32Array(vcount * 3) : null;
 
-    if (skinned) {
-      const joints = readAccessor(doc, buffers, prim.attributes['JOINTS_0']!, false);
-      const weights = readAccessor(doc, buffers, prim.attributes['WEIGHTS_0']!, true);
-      const jointNodes = skin?.joints ?? [];
-      for (let v = 0; v < vcount; v++) {
-        for (let k = 0; k < 4; k++) {
-          const j = joints.values[v * 4 + k]!;
-          skinIndices[v * 4 + k] = jointNodes[j] ?? 0;
-          skinWeights[v * 4 + k] = weights.values[v * 4 + k]!;
+      const skinned = prim.attributes['JOINTS_0'] != null && prim.attributes['WEIGHTS_0'] != null;
+      const skinIndices = new Uint16Array(vcount * 4);
+      const skinWeights = new Float32Array(vcount * 4);
+
+      if (skinned) {
+        const joints = readAccessor(doc, buffers, prim.attributes['JOINTS_0']!, false);
+        const weights = readAccessor(doc, buffers, prim.attributes['WEIGHTS_0']!, true);
+        const jointNodes = skin?.joints ?? [];
+        for (let v = 0; v < vcount; v++) {
+          for (let k = 0; k < 4; k++) {
+            const j = joints.values[v * 4 + k]!;
+            skinIndices[v * 4 + k] = jointNodes[j] ?? 0;
+            skinWeights[v * 4 + k] = weights.values[v * 4 + k]!;
+          }
+        }
+        normalizeWeights(skinWeights, vcount);
+        for (let v = 0; v < vcount; v++) {
+          positions.set(axisConvertVec3([pos.values[v * 3]!, pos.values[v * 3 + 1]!, pos.values[v * 3 + 2]!]), v * 3);
+          if (norm != null && normals != null) {
+            normals.set(axisConvertVec3([norm.values[v * 3]!, norm.values[v * 3 + 1]!, norm.values[v * 3 + 2]!]), v * 3);
+          }
+        }
+      } else {
+        // Не суставной меш: жёсткая привязка к своему узлу — вершины запекаются
+        // в мировое (bind) пространство узла ДО перевода осей (см. заголовок).
+        const world = restWorld[nodeIndex]!;
+        for (let v = 0; v < vcount; v++) skinIndices[v * 4] = nodeIndex;
+        for (let v = 0; v < vcount; v++) skinWeights[v * 4] = 1;
+        for (let v = 0; v < vcount; v++) {
+          const local: Vec3 = [pos.values[v * 3]!, pos.values[v * 3 + 1]!, pos.values[v * 3 + 2]!];
+          positions.set(axisConvertVec3(mat4TransformPoint(world, local)), v * 3);
+          if (norm != null && normals != null) {
+            const nLocal: Vec3 = [norm.values[v * 3]!, norm.values[v * 3 + 1]!, norm.values[v * 3 + 2]!];
+            normals.set(axisConvertVec3(mat4TransformDirection(world, nLocal)), v * 3);
+          }
         }
       }
-      for (let v = 0; v < vcount; v++) {
-        positions.set(axisConvertVec3([pos.values[v * 3]!, pos.values[v * 3 + 1]!, pos.values[v * 3 + 2]!]), v * 3);
-        if (norm != null && normals != null) {
-          normals.set(axisConvertVec3([norm.values[v * 3]!, norm.values[v * 3 + 1]!, norm.values[v * 3 + 2]!]), v * 3);
-        }
+
+      const uvAcc = prim.attributes['TEXCOORD_0'];
+      const uvs =
+        uvAcc != null
+          ? Float32Array.from(readAccessor(doc, buffers, uvAcc, false).values)
+          : null;
+
+      let indices: Uint16Array | Uint32Array;
+      if (prim.indices != null) {
+        const idx = readAccessor(doc, buffers, prim.indices, false);
+        indices =
+          doc.accessors[prim.indices]!.componentType === 5125
+            ? Uint32Array.from(idx.values)
+            : Uint16Array.from(idx.values);
+      } else {
+        // Без индексов — треугольники по порядку вершин (редкий, но валидный случай).
+        indices = vcount <= 65536 ? new Uint16Array(vcount) : new Uint32Array(vcount);
+        for (let i = 0; i < vcount; i++) indices[i] = i;
       }
-    } else {
-      // Не суставной меш: жёсткая привязка к своему узлу — вершины запекаются
-      // в мировое (bind) пространство узла ДО перевода осей (см. заголовок).
-      const world = restWorld[nodeIndex]!;
-      for (let v = 0; v < vcount; v++) skinIndices[v * 4] = nodeIndex;
-      for (let v = 0; v < vcount; v++) skinWeights[v * 4] = 1;
-      for (let v = 0; v < vcount; v++) {
-        const local: Vec3 = [pos.values[v * 3]!, pos.values[v * 3 + 1]!, pos.values[v * 3 + 2]!];
-        positions.set(axisConvertVec3(mat4TransformPoint(world, local)), v * 3);
-        if (norm != null && normals != null) {
-          const nLocal: Vec3 = [norm.values[v * 3]!, norm.values[v * 3 + 1]!, norm.values[v * 3 + 2]!];
-          normals.set(axisConvertVec3(mat4TransformDirection(world, nLocal)), v * 3);
-        }
-      }
+
+      if (prim.material == null) usesDefaultMaterial = true;
+      meshes.push(
+        Object.freeze({
+          partId: meshes.length,
+          positions,
+          normals,
+          uvs,
+          indices,
+          skinIndices,
+          skinWeights,
+          materialIndex: prim.material ?? defaultMaterialIndex,
+        }),
+      );
     }
-
-    const uvAcc = prim.attributes['TEXCOORD_0'];
-    const uvs =
-      uvAcc != null
-        ? Float32Array.from(readAccessor(doc, buffers, uvAcc, false).values)
-        : null;
-
-    let indices: Uint16Array | Uint32Array;
-    if (prim.indices != null) {
-      const idx = readAccessor(doc, buffers, prim.indices, false);
-      indices =
-        doc.accessors[prim.indices]!.componentType === 5125
-          ? Uint32Array.from(idx.values)
-          : Uint16Array.from(idx.values);
-    } else {
-      // Без индексов — треугольники по порядку вершин (редкий, но валидный случай).
-      indices = vcount <= 65536 ? new Uint16Array(vcount) : new Uint32Array(vcount);
-      for (let i = 0; i < vcount; i++) indices[i] = i;
-    }
-
-    meshes.push(
-      Object.freeze({
-        partId: n.mesh,
-        positions,
-        normals,
-        uvs,
-        indices,
-        skinIndices,
-        skinWeights,
-        materialIndex: prim.material ?? 0,
-      }),
-    );
   });
 
   // ========================================================= C. Материалы
   const textures = doc.textures ?? [];
   const images = doc.images ?? [];
-  const materialsSource = doc.materials != null && doc.materials.length > 0 ? doc.materials : [undefined];
+  // Строка материала по умолчанию (`undefined` — все значения из умолчаний
+  // формата) добавляется в конец, если её кто-то занял, либо если своих
+  // материалов у документа нет вовсе: меш обязан на что-то ссылаться.
+  const materialsSource: readonly (GltfMaterial | undefined)[] =
+    usesDefaultMaterial || defaultMaterialIndex === 0
+      ? [...(doc.materials ?? []), undefined]
+      : (doc.materials ?? []);
   const materials: NormalizedMaterial[] = materialsSource.map((m) => {
     const pbr = m?.pbrMetallicRoughness;
     return Object.freeze({
@@ -624,7 +726,7 @@ export async function normalizeGltf(
   const embedded = await decodeEmbeddedImages(doc, buffers, assetId);
   const textureSlots: TextureSlotRef[] = textures.map((t, slot) => {
     const image = images[t.source];
-    if (image?.uri != null) {
+    if (image?.uri != null && !isDataUri(image.uri)) {
       return Object.freeze({
         slot,
         source: 'file' as const,
@@ -791,17 +893,23 @@ export const gltfLoader: AssetLoader<NormalizedModel> = {
       throw new Error(`ассет "${ctx.id}": поддержан ровно один buffer, получено ${doc.buffers.length}`);
     }
 
-    // Буфер без `uri` — это BIN-чанк контейнера, а не ошибка: так его и
-    // задаёт спецификация. Ошибкой остаётся только буфер без uri ВНЕ
-    // контейнера (data-URI), которого мы по-прежнему не разбираем.
+    // Три упаковки одного буфера: data-URI внутри JSON, файл рядом по `uri`,
+    // BIN-чанк контейнера. Буфер без `uri` — это BIN-чанк, а не ошибка: так
+    // его и задаёт спецификация.
     const bufferUri = doc.buffers[0]!.uri;
     let buffer: Uint8Array;
-    if (bufferUri != null) {
+    if (bufferUri != null && isDataUri(bufferUri)) {
+      try {
+        buffer = dataUriBytes(bufferUri);
+      } catch (e) {
+        throw new Error(`ассет "${ctx.id}": буфер — ${e instanceof Error ? e.message : String(e)}`);
+      }
+    } else if (bufferUri != null) {
       buffer = new Uint8Array(await ctx.read(bufferUri));
     } else if (container?.bin != null) {
       buffer = container.bin;
     } else {
-      throw new Error(`ассет "${ctx.id}": buffers[0] без внешнего uri и без BIN-чанка (data-URI буферы не поддержаны)`);
+      throw new Error(`ассет "${ctx.id}": buffers[0] без внешнего uri и без BIN-чанка`);
     }
 
     return normalizeGltf(doc, [buffer], ctx.id);

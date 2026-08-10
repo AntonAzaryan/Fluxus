@@ -15,7 +15,28 @@ import {
   EXTERNAL_PNG_ID,
 } from './glbFixture.js';
 
+import {
+  buildDataUriFixture,
+  buildMultiPrimitiveFixture,
+  buildUnnormalizedWeightsFixture,
+  DATA_URI_ID,
+  MULTI_PRIM_ID,
+  UNNORMALIZED_ID,
+} from './gltfVariants.js';
+
 const MODEL_ID = 'gltf-mini/model.gltf';
+
+/** Загрузка одного ID зарегистрированным glTF-загрузчиком (ASSET-3). */
+async function loadFrom(source: MemoryAssetSource, id: string): Promise<NormalizedModel> {
+  const svc = new AssetService(source);
+  svc.registerLoader(gltfLoader);
+  const handle: Handle<NormalizedModel> = svc.request('model', id);
+  const state = await settled(svc, handle);
+  if (state.status !== 'ready') {
+    throw new Error(`модель "${id}" не загрузилась: ${state.status === 'failed' ? state.reason : state.status}`);
+  }
+  return state.data;
+}
 
 /** `Mc`: поворот +90° вокруг X, глТФ Y-вверх → канон Z-вверх, (x,y,z) → (x,-z,y). */
 const MC_QUAT = [Math.SQRT1_2, 0, 0, Math.SQRT1_2];
@@ -261,5 +282,119 @@ describe('Загрузчик glTF: контейнер .glb со встроенн
     const model = await loadModel(source, 'gltf-mini/misnamed.gltf');
     expect(model.bones).toEqual(packed.bones);
     expect(model.textureSlots[0]!.source).toBe('embedded');
+  });
+});
+
+describe('Загрузчик glTF: «Embedded»-упаковка — буфер и изображения data-URI', () => {
+  let source: MemoryAssetSource;
+  let model: NormalizedModel;
+  let warnings: string[];
+
+  beforeAll(async () => {
+    // В источнике ровно один файл — сама модель: у data-URI читать рядом нечего.
+    source = new MemoryAssetSource(new Map([[DATA_URI_ID, await buildDataUriFixture()]]));
+    warnings = [];
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    });
+    try {
+      model = await loadFrom(source, DATA_URI_ID);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('геометрия и скелет приезжают из буфера, зашитого в JSON', () => {
+    // Тот же скелет и те же меши, что у распакованной фикстуры: значит буфер
+    // разобран, а не подменён нулями.
+    expect(model.bones).toHaveLength(5);
+    const body = model.meshes.find((m) => m.partId === 0)!;
+    closeArray(body.positions, [0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    expect(source.reads).toEqual([DATA_URI_ID]);
+  });
+
+  it('изображение data-URI — встроенный слот с пикселями, а не путь к файлу', () => {
+    // Разрешать `data:image/png;base64,...` как относительный путь (ASSET-3)
+    // значило бы просить у дерева контента заведомо несуществующий файл.
+    const slot = model.textureSlots[0]!;
+    expect(slot.source).toBe('embedded');
+    if (slot.source !== 'embedded') return;
+    expect([...slot.image.pixels]).toEqual(EMBEDDED_PIXELS);
+  });
+
+  it('внешний uri в том же документе остаётся слотом-ссылкой', () => {
+    expect(model.textureSlots[1]).toEqual({
+      slot: 1,
+      source: 'file',
+      path: EXTERNAL_TEXTURE_PATH,
+    });
+  });
+
+  it('data-URI формата без декодера — слот без источника и предупреждение', () => {
+    expect(model.textureSlots[2]).toEqual({ slot: 2, source: 'none' });
+    expect(warnings.some((w) => w.includes('декодера нет'))).toBe(true);
+  });
+});
+
+describe('Загрузчик glTF: меш из нескольких примитивов (ASSET-5: часть модели)', () => {
+  let model: NormalizedModel;
+
+  beforeAll(async () => {
+    const fixture = await buildMultiPrimitiveFixture();
+    model = await loadFrom(
+      new MemoryAssetSource(
+        new Map([
+          [MULTI_PRIM_ID, fixture.gltf],
+          ['gltf-mini/model.bin', fixture.bin],
+        ]),
+      ),
+      MULTI_PRIM_ID,
+    );
+  });
+
+  it('каждый примитив — отдельная часть со сквозным номером', () => {
+    // Экспортёр режет меш по материалам: взять из mesh только первый primitive
+    // значило бы тихо потерять геометрию всех прочих материалов.
+    expect(model.meshes).toHaveLength(3);
+    expect(model.meshes.map((m) => m.partId)).toEqual([0, 1, 2]);
+    // Второй примитив "PropMesh" повторяет геометрию первого — и обе части на
+    // месте, с одинаковым запеканием в bind-пространство своего узла.
+    closeArray(model.meshes[2]!.positions, [...model.meshes[1]!.positions]);
+  });
+
+  it('примитив без material берёт материал по умолчанию, а не нулевой авторский', () => {
+    // Материал 0 документа — такой же авторский, как любой другой (ASSET-5:
+    // отсутствующее описание не восполняется чужими значениями).
+    expect(model.meshes[1]!.materialIndex).toBe(0);
+    expect(model.meshes[2]!.materialIndex).toBe(1);
+    expect(model.materials).toHaveLength(2);
+    const fallback = model.materials[1]!;
+    expect(fallback.baseColorFactor).toEqual([1, 1, 1, 1]);
+    expect(fallback.metallicFactor).toBe(1);
+    expect(fallback.roughnessFactor).toBe(1);
+    expect(fallback.alphaMode).toBe('opaque');
+    expect(fallback.doubleSided).toBe(false);
+    expect(fallback.baseColorTexture).toBeNull();
+  });
+});
+
+describe('Загрузчик glTF: ненормированные веса скининга', () => {
+  it('веса приводятся к сумме 1 на вершину', async () => {
+    const fixture = await buildUnnormalizedWeightsFixture();
+    const model = await loadFrom(
+      new MemoryAssetSource(
+        new Map([
+          [UNNORMALIZED_ID, fixture.gltf],
+          ['gltf-mini/model.bin', fixture.bin],
+        ]),
+      ),
+      UNNORMALIZED_ID,
+    );
+    // Сумма 1 — инвариант `NormalizedMesh.skinWeights`, а не обещание чужого
+    // экспортёра: `[2, 2, 0, 0]` приезжает как `[0.5, 0.5, 0, 0]`.
+    const body = model.meshes.find((m) => m.partId === 0)!;
+    for (let v = 0; v < 3; v++) {
+      closeArray(body.skinWeights.subarray(v * 4, v * 4 + 4), [0.5, 0.5, 0, 0]);
+    }
   });
 });

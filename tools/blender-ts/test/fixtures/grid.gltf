@@ -1,0 +1,28 @@
+{
+  "asset": { "version": "2.0", "generator": "рукописная фикстура конвейера (BLND-7)" },
+  "scene": 0,
+  "scenes": [{ "nodes": [0] }],
+  "nodes": [
+    {
+      "name": "terrain-grid",
+      "mesh": 0,
+      "extras": { "terrain": 1 }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "grid-3x3",
+      "primitives": [{ "attributes": { "POSITION": 0 } }]
+    }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 9, "type": "VEC3" }
+  ],
+  "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 108 }],
+  "buffers": [
+    {
+      "byteLength": 108,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAQAAAgD8AAAAAAAAAAAAAAAAAAIC/AACAPwAAgD8AAIC/AAAAQAAAgD8AAIC/AAAAAAAAgD8AAADAAACAPwAAgD8AAADAAAAAQAAAAEAAAADA"
+    }
+  ]
+}

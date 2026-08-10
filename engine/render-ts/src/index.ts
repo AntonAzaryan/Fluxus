@@ -81,6 +81,14 @@ export type {
 // по нему строит эффекты слой, проверяет секцию валидация манифеста (ASSET-8)
 // и рисует таблицы редактор (ED-14).
 export { CAMERA_EFFECTS_DESCRIPTION, CAMERA_EFFECT_TYPES } from './camera/effectTypes.js';
+// Машинный адрес конфига камеры (CAM-1): перечень параметров для валидации
+// секции манифеста (ASSET-10) и сборка частичного конфига из неё.
+export {
+  CAMERA_CONFIG_DESCRIPTION,
+  CAMERA_CONFIG_PARAMS,
+  cameraConfigFromManifest,
+} from './camera/config.js';
+export type { CameraConfigFromManifestOptions } from './camera/config.js';
 export type { CameraEffectsCatalog } from './camera/effectTypes.js';
 export { CameraEffectsDirector } from './camera/director.js';
 export type { CameraEffectsDirectorOptions } from './camera/director.js';

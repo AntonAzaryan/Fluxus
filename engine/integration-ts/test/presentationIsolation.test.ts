@@ -29,9 +29,14 @@ import {
 } from '@game-mvp/core';
 import { contentPack } from '@game-mvp/net';
 import {
+  CAMERA_CONFIG_DESCRIPTION,
+  CAMERA_CONFIG_PARAMS,
+  CameraRig,
   DecorationSet,
   ModelsSubsystem,
   PresentationStage,
+  cameraConfigFromManifest,
+  createCameraInput,
   type DecorationInstance,
   type RenderContext,
 } from '@game-mvp/render';
@@ -132,6 +137,64 @@ describe('PRES-4: прогон с декорациями и без совпад�
     const broken = validatePresentationScene({ decorations: [{ x: 1 }] });
     expect(broken.ok).toBe(false);
     expect(Buffer.from(runScenarioBytes(scenario(scene))).equals(Buffer.from(bare))).toBe(true);
+  });
+});
+
+/**
+ * Машинный адрес единого конфига камеры (`camera` CAM-1) — секция манифеста
+ * визуалов (`assets` ASSET-10). Утверждение межпакетное: документ лежит в
+ * дереве контента, читает его модуль ассетов, перечень параметров объявляет
+ * камера в рендере, а «не меняет ни байта симуляции» касается ядра.
+ */
+describe('ASSET-10: секция конфига камеры — presentation-данные', () => {
+  const contentManifest = (): Record<string, unknown> =>
+    JSON.parse(readFileSync(join(CONTENT_ROOT, 'visuals/manifest.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+
+  it('секция манифеста контента разбирается конфигом камеры без предупреждений', () => {
+    const result = validateManifest(contentManifest(), {
+      cameraConfig: CAMERA_CONFIG_DESCRIPTION,
+    });
+    expect(result.ok ? '' : result.errors.join('; ')).toBe('');
+    // Ни одного параметра, которого код камеры не знает: адрес секции указывает
+    // на существующие числа конфига, а не на выдуманные.
+    expect(result.warnings).toEqual([]);
+    if (!result.ok) return;
+    const config = cameraConfigFromManifest(result.manifest.cameraConfig, {
+      warn: (message) => expect.unreachable(message),
+    });
+    expect(Object.keys(config)).toEqual(CAMERA_CONFIG_PARAMS);
+  });
+
+  it('правка секции меняет кадр, но не хеш `worldInit` и не байты прогона (DET-1)', () => {
+    const scene = duelScene();
+    const before = {
+      init: runScenario(scenario(scene)).worldInitHash,
+      pack: contentPackHash(scene),
+      bytes: runScenarioBytes(scenario(scene)),
+    };
+
+    // Дизайнер правит наклон и дистанцию (сценарий ASSET-10).
+    const doc = contentManifest();
+    const edited = {
+      ...doc,
+      cameraConfig: { ...(doc['cameraConfig'] as Record<string, number>), pitch: 0.6, distance: 24 },
+    };
+    const result = validateManifest(edited, { cameraConfig: CAMERA_CONFIG_DESCRIPTION });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const rig = new CameraRig({ config: cameraConfigFromManifest(result.manifest.cameraConfig) });
+    // Кадр действительно построен по правке — слой поднят, а не лежит на диске.
+    expect(rig.update(createCameraInput(), 1 / 60, { x: 10, y: 10, snap: true }).pitch).toBe(0.6);
+    expect(rig.config.distance).toBe(24);
+
+    expect(runScenario(scenario(scene)).worldInitHash).toBe(before.init);
+    expect(contentPackHash(scene)).toBe(before.pack);
+    expect(Buffer.from(runScenarioBytes(scenario(scene))).equals(Buffer.from(before.bytes))).toBe(
+      true,
+    );
   });
 });
 

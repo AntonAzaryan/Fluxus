@@ -22,6 +22,7 @@ import {
   type VisualManifest,
 } from '@game-mvp/assets';
 import {
+  CAMERA_CONFIG_DESCRIPTION,
   CAMERA_EFFECTS_DESCRIPTION,
   CameraEffectsDirector,
   CameraRig,
@@ -29,6 +30,7 @@ import {
   TerrainSubsystem,
   VisualSurfaceSource,
   applyCameraPose,
+  cameraConfigFromManifest,
   createCameraInput,
   edgePanAxes,
   resetCameraInput,
@@ -106,8 +108,15 @@ assets.registerLoader(gltfLoader);
 assets.registerLoader(pngTextureLoader);
 // Описание типов эффектов камеры (CAM-9) подаёт тот, кто собирает клиента:
 // модуль ассетов о типах не знает, а с описанием проверяет по нему и секцию
-// эффектов манифеста (ASSET-8).
-assets.registerLoader(createManifestLoader({ cameraEffects: CAMERA_EFFECTS_DESCRIPTION }));
+// эффектов манифеста (ASSET-8). Тем же порядком приезжает описание конфига
+// камеры (CAM-1): с ним неизвестный параметр секции конфига (ASSET-10)
+// становится предупреждением на загрузке манифеста.
+assets.registerLoader(
+  createManifestLoader({
+    cameraEffects: CAMERA_EFFECTS_DESCRIPTION,
+    cameraConfig: CAMERA_CONFIG_DESCRIPTION,
+  }),
+);
 assets.registerLoader(curvatureLoader);
 
 /** Манифест визуалов через тот же сервис (kind 'manifest', ASSET-6). */
@@ -445,6 +454,9 @@ async function main(): Promise<void> {
         bounds: ground.bounds,
         startX: 11.5,
         startY: 11.5,
+        // Настроечные числа кадра — из секции манифеста поверх умолчаний кода
+        // (CAM-1, ASSET-10): нет секции или параметра — умолчание кода.
+        config: cameraConfigFromManifest(manifest.cameraConfig),
       });
       director = new CameraEffectsDirector({
         tables: manifest.cameraEffects,

@@ -5,6 +5,8 @@
   "ui.action.remove": "Remove",
   "ui.action.save": "Save",
   "ui.action.showJson": "Show JSON",
+  "ui.app.externalFailed": "Change in the tree was not read",
+  "ui.app.externalKept": "The document is being edited here — the change from the tree was not picked up",
   "ui.app.search": "Search the project: objects, systems, assets…",
   "ui.app.title": "Fluxus Editor",
   "ui.area.assets.assignModel": "Set as model",

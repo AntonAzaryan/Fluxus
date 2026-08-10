@@ -37,6 +37,8 @@ export interface VisualManifest {
   terrain?: { curvatureMap?: string };
   /** Секция эффектов камеры (ASSET-8); потребитель — `camera` CAM-6. */
   cameraEffects?: CameraEffectsSection;
+  /** Секция конфига камеры (ASSET-10); потребитель — конвейер `camera` CAM-1. */
+  cameraConfig?: CameraConfigSection;
 }
 
 /**
@@ -192,6 +194,66 @@ export function cameraEffectParamInRange(spec: CameraEffectParamSpec, value: num
 export function clampCameraEffectParam(spec: CameraEffectParamSpec, value: number): number {
   const low = spec.min === undefined ? value : Math.max(spec.min, value);
   return spec.max === undefined ? low : Math.min(spec.max, low);
+}
+
+/**
+ * Секция конфига камеры (ASSET-10): значения настроечных чисел единого конфига
+ * камеры (`camera` CAM-1) — наклон, дистанция и лимиты зума, FOV, скорости,
+ * константы сглаживания, ширина edge-зоны, глобальный множитель силы эффектов
+ * (CAM-6). Секция задаёт ЗНАЧЕНИЯ; состав параметров и их умолчания принадлежат
+ * коду камеры, и манифест их перечня не нормирует — отсюда открытая запись
+ * «имя параметра → число», а не именованные поля.
+ *
+ * Отсутствие секции или отдельного параметра означает умолчание кода.
+ */
+export type CameraConfigSection = Record<string, number>;
+
+/**
+ * Машинное описание конфига камеры (CAM-1) — вход валидации секции (ASSET-10),
+ * как описание типов эффектов у секции эффектов (ASSET-8). Перечень параметров
+ * живёт в коде камеры и приезжает сюда аргументом: второй перечень, заведённый
+ * в модуле ассетов, разошёлся бы с камерой молча.
+ */
+export interface CameraConfigDescription {
+  /** Имена параметров, которые знает код камеры. */
+  readonly params: readonly string[];
+}
+
+/**
+ * Секция конфига камеры (ASSET-10). Числовая природа значений проверяется
+ * всегда — это структура секции, и проверяют её все потребители одинаково,
+ * подали им описание или нет: иначе один и тот же документ был бы валиден у
+ * клиента и невалиден у редактора.
+ *
+ * Знание о СОСТАВЕ параметров приходит только описанием (CAM-1). Параметр, им
+ * не объявленный, — предупреждение и пропуск, а не ошибка: та же граница
+ * переживания манифестом кода, что у секции эффектов (ASSET-8), и документ,
+ * написанный для сборки камеры с другим набором параметров, обязан оставаться
+ * загружаемым.
+ */
+function validateCameraConfig(
+  section: unknown,
+  errors: string[],
+  warnings: string[],
+  description: CameraConfigDescription | undefined,
+): void {
+  const path = 'cameraConfig';
+  if (!isRecord(section)) {
+    errors.push(`${path}: ожидался объект «параметр камеры → число», получено ${typeName(section)}`);
+    return;
+  }
+  for (const [param, value] of Object.entries(section)) {
+    if (!isFiniteNumber(value)) {
+      errors.push(
+        `${path}.${param}: параметр конфига камеры — конечное число, получено ${typeName(value)}`,
+      );
+    }
+    if (description !== undefined && !description.params.includes(param)) {
+      warnings.push(
+        `${path}.${param}: параметр конфигом камеры не объявлен — он будет пропущен (допустимы: ${description.params.join(', ')})`,
+      );
+    }
+  }
 }
 
 /**
@@ -583,6 +645,12 @@ export interface ValidateManifestOptions {
    * (ASSET-8).
    */
   readonly cameraEffects?: CameraEffectsDescription;
+  /**
+   * Машинное описание конфига камеры (`camera` CAM-1). Без него секция конфига
+   * проверяется только структурно: перечня параметров у модуля ассетов нет
+   * (ASSET-10).
+   */
+  readonly cameraConfig?: CameraConfigDescription;
 }
 
 /** Результат валидации: находки двух последствий (ASSET-8). */
@@ -609,7 +677,7 @@ export function validateManifest(doc: unknown, options: ValidateManifestOptions 
   }
   checkUnknownKeys(
     doc,
-    ['entities', 'decorations', 'surfaceAlign', 'terrain', 'cameraEffects'],
+    ['entities', 'decorations', 'surfaceAlign', 'terrain', 'cameraEffects', 'cameraConfig'],
     'манифест',
     errors,
   );
@@ -649,6 +717,9 @@ export function validateManifest(doc: unknown, options: ValidateManifestOptions 
   }
   if ('cameraEffects' in doc) {
     validateCameraEffects(doc.cameraEffects, errors, warnings, options.cameraEffects);
+  }
+  if ('cameraConfig' in doc) {
+    validateCameraConfig(doc.cameraConfig, errors, warnings, options.cameraConfig);
   }
   if ('surfaceAlign' in doc) {
     validateSurfaceAlign(doc.surfaceAlign, 'surfaceAlign', errors);

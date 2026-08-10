@@ -50,6 +50,10 @@ export type {
   CameraEffectParamSpec,
   CameraEffectTypeSpec,
   CameraEffectsDescription,
+  // Секция конфига камеры (ASSET-10) — тем же порядком: формат здесь, состав
+  // параметров и умолчания в коде камеры (`camera` CAM-1).
+  CameraConfigSection,
+  CameraConfigDescription,
   ManifestValidation,
   ValidateManifestOptions,
 } from './manifest.js';

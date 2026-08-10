@@ -28,6 +28,7 @@
     "client-shell": "client",
     "input-devices": "client",
     "editor": "editor-content",
+    "blender-pipeline": "editor-content",
     "game-content": "editor-content",
     "presentation-scene": "editor-content"
   },

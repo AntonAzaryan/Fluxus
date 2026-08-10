@@ -1,0 +1,23 @@
+{
+  "asset": { "version": "2.0", "generator": "рукописная фикстура конвейера (BLND-7)" },
+  "$comment": "Ошибка ПОСРЕДИ законных объектов (BLND-6): по имени 'gamma-ghost' идёт вторым из трёх, и записано не должно быть ни одной записи — ни первой, ни третьей.",
+  "scene": 0,
+  "scenes": [{ "nodes": [0, 1, 2] }],
+  "nodes": [
+    {
+      "name": "alpha-hero",
+      "translation": [-1.5, 0, 2.25],
+      "extras": { "prefab": "Hero" }
+    },
+    {
+      "name": "gamma-ghost",
+      "translation": [2, 0, -2],
+      "extras": { "prefab": "Ghost" }
+    },
+    {
+      "name": "zeta-statue",
+      "translation": [5.5, 0, -18.5],
+      "extras": { "visual": "Statue" }
+    }
+  ]
+}

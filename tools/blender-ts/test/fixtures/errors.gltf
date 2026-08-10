@@ -1,0 +1,37 @@
+{
+  "asset": { "version": "2.0", "generator": "рукописная фикстура конвейера (BLND-7)" },
+  "scene": 0,
+  "scenes": [{ "nodes": [0, 1, 2, 3, 4, 5] }],
+  "nodes": [
+    {
+      "name": "both-layers",
+      "translation": [1, 0, -1],
+      "extras": { "prefab": "Hero", "visual": "Statue" }
+    },
+    {
+      "name": "ghost-prefab",
+      "translation": [2, 0, -2],
+      "extras": { "prefab": "Ghost" }
+    },
+    {
+      "name": "unknown-component",
+      "translation": [3, 0, -3],
+      "extras": { "prefab": "Hero", "Health.current": 50 }
+    },
+    {
+      "name": "unknown-field",
+      "translation": [4, 0, -4],
+      "extras": { "prefab": "Hero", "Player.team": 2 }
+    },
+    {
+      "name": "out-of-range",
+      "translation": [100000, 0, -1],
+      "extras": { "prefab": "Hero" }
+    },
+    {
+      "name": "fractional-int",
+      "translation": [5, 0, -5],
+      "extras": { "prefab": "Hero", "Player.slot": 1.5 }
+    }
+  ]
+}

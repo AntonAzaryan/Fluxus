@@ -1,0 +1,16 @@
+{
+  "blender.operation.importSpatialLayer": "Импортирует пространственный слой сцены из экспорта Blender: переписывает записи начальной расстановки конфига сцены, записи decorations парного presentation-документа, а при соответствующих объектах источника — карты ассета террейна (BLND-9) и карту кривизны (BLND-10). Прочие поля документов не трогает (BLND-2); находки важности «ошибка» отвергают импорт целиком (BLND-6).",
+  "blender.operation.param.scene": "Конфиг сцены — документ, чью начальную расстановку переписывает импорт. В нём же по умолчанию лежит ассет террейна.",
+  "blender.operation.param.presentation": "Парный presentation-документ сцены — документ, чьи decorations переписывает импорт. Не назван — слой без decorations; со списком decorations импорт тогда отказывает.",
+  "blender.operation.param.curvature": "Документ карты кривизны (ASSET-7) — его адрес называет манифест визуалов. Не назван — слой без карты кривизны; с картой импорт тогда отказывает.",
+  "blender.operation.param.layer": "Целевой пространственный слой: списки записей `initial` и `decorations`, карты ассета террейна и карты кривизны и находки разбора источника. Ключ, которого операция не пишет, — отказ, а не молчаливый пропуск; отсутствующий слот значит «ассет не трогать вовсе».",
+  "blender.operation.param.initialPath": "Где в конфиге сцены лежит список расстановки; нет — `initial` (SER-8).",
+  "blender.operation.param.decorationsPath": "Где в парном документе лежит список decorations; нет — `decorations` (PRES-2).",
+  "blender.operation.param.terrainPath": "Где в конфиге сцены лежит ассет террейна; нет — поле `terrain` (TERR-2). Переписываются только его карты уровней и вида клеток: размеры сетки и `tileSize` задают цель.",
+  "validation.rule.blender.spatialLayerSync": "Сверяет пространственный слой сцены с тем, что дал бы импорт её источника Blender. Расхождение — предупреждение: документ валиден, но правку перезапишет следующий импорт (BLND-2). У сцены без источника правило молчит.",
+  "validation.reason.blender.spatialLayerSync.layerDiverged": "Слой «{slot}» разошёлся с источником «{source}»: правку перезапишет следующий импорт — выполните импорт либо правьте в Blender (BLND-2)",
+  "validation.reason.blender.spatialLayerSync.sourceUnreadable": "Источник «{source}» лежит рядом со сценой, но среда его не прочитала: сверить слой не с чем: {reason}",
+  "validation.reason.blender.spatialLayerSync.sourceRejected": "Источник «{source}» не проходит импорт: сверять слой не с чем, пока источник не исправлен: {reason} (BLND-6)",
+  "validation.reason.blender.spatialLayerSync.sourceUnread": "Источник сцены «{scene}» не читан: слой не сверялся ни разу — обновите состояние источников (это делает сборка редактора до прогона валидации, BLND-2)",
+  "validation.reason.blender.spatialLayerSync.ruleFailed": "Правило валидации «{rule}» упало на этом документе: проверено не было ничего, и это дефект правила, а не документа."
+}

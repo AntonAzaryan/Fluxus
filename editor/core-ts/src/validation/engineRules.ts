@@ -50,6 +50,7 @@ import {
 import {
   validateCurvatureMap,
   validateManifest,
+  type CameraConfigDescription,
   type CameraEffectsDescription,
 } from '@game-mvp/assets';
 import {
@@ -117,9 +118,12 @@ function systemSitesOf(kinds: EngineRuleKinds, sites: readonly SystemSite[] | un
  * Описание типов эффектов камеры (`camera` CAM-9) импортом сюда прийти не может:
  * пакет headless и от `@game-mvp/render` не зависит — а описание живёт там.
  * Без него секция эффектов проверяется структурно (ASSET-8), с ним — по нему.
+ * Ровно теми же основаниями и тем же путём приходит описание конфига камеры
+ * (`camera` CAM-1) для секции конфига (ASSET-10).
  */
 export interface EngineRuleOptions {
   readonly cameraEffects?: CameraEffectsDescription;
+  readonly cameraConfig?: CameraConfigDescription;
 }
 
 /** Кто проверял — уезжает в ожидание находки, чтобы вопрос «чьё правило» не гадался. */
@@ -319,13 +323,16 @@ export function manifestRule(
       // Описание типов эффектов — вход валидации, а не знание правила (ASSET-8,
       // CAM-9): без него секция проверяется структурно, с ним — по нему, и
       // предупреждения о её записях доезжают до находок важности `warning`.
+      // Описание конфига камеры (CAM-1) — тем же путём: без него неизвестный
+      // параметр секции конфига (ASSET-10) не подсветился бы в редакторе, хотя
+      // у клиента он предупреждение (ED-14 требует тех же проверок).
       reportErrorList(
         run,
         { by: VALIDATE_MANIFEST },
-        validateManifest(
-          value,
-          options.cameraEffects === undefined ? {} : { cameraEffects: options.cameraEffects },
-        ),
+        validateManifest(value, {
+          ...(options.cameraEffects === undefined ? {} : { cameraEffects: options.cameraEffects }),
+          ...(options.cameraConfig === undefined ? {} : { cameraConfig: options.cameraConfig }),
+        }),
       );
     },
   };

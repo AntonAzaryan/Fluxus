@@ -21,13 +21,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## The repository
 
-`openspec/` is the spec, `engine/` its working implementation (the `*-ts` packages), `editor/` the content editor built on top of them (capability `editor`, roadmap stage 12), `content/` the game content the engine runs, `docs/` the non-normative overview. The npm workspace root is the repository root.
+`openspec/` is the spec, `engine/` its working implementation (the `*-ts` packages), `editor/` the content editor built on top of them (capability `editor`, roadmap stage 12), `tools/` the Blender level-design pipeline (capability `blender-pipeline`, roadmap stage 35), `content/` the game content the engine runs, `docs/` the non-normative overview. The npm workspace root is the repository root.
+
+Level design happens in Blender, not in our own editor. `<base>.blend` is paired to a scene by name, Blender's stock glTF exporter writes `<base>.glb` beside it, and the importer `tools/blender-ts` (`@game-mvp/blender-ts`, CLI `npm run import`) rewrites **only** the derived spatial layer — `initial` of the scene config (SER-7, SER-8), `decorations` of the paired presentation document (PRES-2), the terrain asset (TERR-3) and the curvature map (ASSET-7) — leaving every other field byte-for-byte (BLND-2). The pipeline is strictly one-directional, deterministic and atomic (BLND-1, BLND-4, BLND-6), and it writes through `editor/core-ts`'s operation layer and canonical save (BLND-5, ED-29, ED-21) — there is no second implementation of validation, serialization or ordering. The Blender add-on lives in `tools/blender-addon/` (Python, outside the npm workspace and outside the `check` gate) and is the main authoring surface, not the law: the guarantee is the import (BLND-8). glTF is the model format of content — the loader is registered in `assets-ts` by ASSET-3 with the canonical representation of ASSET-5, and MDX stays a historical registry format (BLND-11); the models under `content/visuals/` are still MDX until the manual migration lands. Neither the engine nor the client runtime reads `.blend`/`.glb`, and no test needs Blender (BLND-7); the editor keeps preview and data-driven authoring (systems, schemas, prefabs, the manifest), and its level-design direction is frozen.
 
 Game content lives in `content/` and never inside an engine package (`game-content` CONT-1, enforced by `engine/integration-ts/test/contentBoundary.test.ts`): `content/scenes/`, `content/matches/` are sim documents, each scene may have a paired presentation document beside it (`duel.presentation.json` — decorations, capability `presentation-scene` PRES-1), `content/visuals/` holds the visual manifest, models and textures, and an asset ID is a path from the tree root (ASSET-2). Engine test fixtures are **not** content and stay put — `engine/tests/golden/` and the scenes built inline in `engine/integration-ts/test/fixtures.ts` (CONT-4): an engine baseline goes red from an engine change, not from a designer retuning a number.
 
 ## The spec is the source of truth
 
-`openspec/specs/` (28 capabilities, 332 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
+`openspec/specs/` (29 capabilities, 350 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
 
 - Requirements carry historical IDs (`DET-1`, `NET-15`, `FOW-4`…) in `### Requirement:` headers — preserve them; a new requirement takes the next free number of its prefix.
 - Changes go through the OpenSpec workflow: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`, etc. (the `openspec-*` skills in `.claude/skills/`). Do not edit specs outside this process.
@@ -44,7 +46,7 @@ openspec validate --specs --strict  # format check
 
 ## Commands (repository root workspace)
 
-Node >= 22.18. The repository root is the npm workspace; its members are the engine packages (`engine/core-ts`, `engine/net-ts`, `engine/render-ts`, `engine/assets-ts`, `engine/client-ts` — the web client shell (worker hosting + channel, SHELL-1..7), `engine/integration-ts` — the cross-layer integration suite, CLI-9) plus the two editor packages (`editor/core-ts` — the headless authoring layer, `editor/ui-ts` — its DOM interface and web app). A single `npm install` from the root installs everything, and the check-everything gate before pushing is `npm run check` — it is `typecheck && lint && spec-graph check && test`, and running only a subset is how a lint or spec-graph failure reaches the remote:
+Node >= 22.18. The repository root is the npm workspace; its members are the engine packages (`engine/core-ts`, `engine/net-ts`, `engine/render-ts`, `engine/assets-ts`, `engine/client-ts` — the web client shell (worker hosting + channel, SHELL-1..7), `engine/integration-ts` — the cross-layer integration suite, CLI-9) plus the two editor packages (`editor/core-ts` — the headless authoring layer, `editor/ui-ts` — its DOM interface and web app) and the Blender importer (`tools/blender-ts` — glTF parsing, spatial-layer generation and the `import` CLI; the `tools/blender-addon/` add-on is Python and is **not** a workspace member). A single `npm install` from the root installs everything, and the check-everything gate before pushing is `npm run check` — it is `typecheck && lint && spec-graph check && test`, and running only a subset is how a lint or spec-graph failure reaches the remote:
 
 ```sh
 npm run check     # from the root: typecheck + lint + test — run this before pushing
@@ -66,6 +68,16 @@ npm run schemas                          # regenerate engine/schemas/*.json (UPD
 ```
 
 The editor's web app runs from the root as `npm run dev -w @game-mvp/editor-ui` (Vite; `app/vite.config.ts` serves `content/` as the content tree and adds the tree-listing endpoint the web environment host needs — a `vite build` has neither listing nor write, and says so, ED-12).
+
+The Blender import runs from the root (`tools/blender-ts/bin/import.mjs`):
+
+```sh
+npm run import -- <path to .glb|.gltf>              # import the spatial layer of the paired scene
+npm run import -- <src.glb> --dry-run               # same checks and same target layer, no write; result as JSON on stdout
+npm run import -- <src.glb> --watch                 # re-import on every save of the source (hot-reload, BLND-12)
+```
+
+`--root <dir>` overrides the content tree root (default — `content/` beside the working directory), `--manifest <path>` the visual manifest (`none` — do not check), `--locale ru|en` the language of validation findings. `--dry-run` and `--watch` are mutually exclusive. Blender itself is needed by none of this: the importer's tests run from committed `.gltf`/`.glb` fixtures, and `npm run check` is green without Blender (BLND-7).
 
 `engine/tests/golden/` holds `*.scenario.json` / `*.golden.json` pairs — bitwise baselines of a scenario run. `match-*` pairs are recorded loopback matches (CLI-10): the scenario is written by `integration-ts` (`npm run record`), the golden by the core adapter. `golden.test.ts` compares them exactly; if behavior changed **deliberately and per spec**, regenerate with `npm run golden` from the repository root (re-records matches, then rewrites core baselines) and include the baseline diff in the commit. JSON schemas in `engine/schemas/` are generated from the core — never edit by hand, only via `npm run schemas`.
 

@@ -1,0 +1,16 @@
+{
+  "blender.operation.importSpatialLayer": "Imports the spatial layer of a scene from a Blender export: rewrites the initial placement records of the scene config, the decoration records of the paired presentation document and — when the source carries the matching objects — the maps of the terrain asset (BLND-9) and the curvature map (BLND-10). It touches no other fields of those documents (BLND-2); findings of error severity reject the import as a whole (BLND-6).",
+  "blender.operation.param.scene": "The scene config — the document whose initial placement the import rewrites. By default the terrain asset lives in it as well.",
+  "blender.operation.param.presentation": "The paired presentation document of the scene — the document whose decorations the import rewrites. When it is not named the layer must carry no decorations, otherwise the import refuses.",
+  "blender.operation.param.curvature": "The curvature map document (ASSET-7) — the visual manifest names its address. When it is not named the layer must carry no curvature map, otherwise the import refuses.",
+  "blender.operation.param.layer": "The target spatial layer: the `initial` and `decorations` record lists, the terrain asset maps, the curvature map and the findings of parsing the source. A slot this operation does not write is a refusal, not a silent skip; an absent slot means the asset is not to be touched at all.",
+  "blender.operation.param.initialPath": "Where the placement list lives in the scene config; absent means `initial` (SER-8).",
+  "blender.operation.param.decorationsPath": "Where the decoration list lives in the paired document; absent means `decorations` (PRES-2).",
+  "blender.operation.param.terrainPath": "Where the terrain asset lives in the scene config; absent means the `terrain` field (TERR-2). Only its level and cell-kind maps are rewritten: the grid size and `tileSize` define the target.",
+  "validation.rule.blender.spatialLayerSync": "Compares the spatial layer of a scene with what importing its Blender source would produce. A divergence is a warning: the document is valid, but the next import will overwrite the edit (BLND-2). For a scene without a source the rule stays silent.",
+  "validation.reason.blender.spatialLayerSync.layerDiverged": "The \"{slot}\" layer diverged from source \"{source}\": the next import will overwrite this edit — run the import or edit in Blender (BLND-2)",
+  "validation.reason.blender.spatialLayerSync.sourceUnreadable": "Source \"{source}\" sits next to the scene but the environment did not read it: there is nothing to compare the layer against: {reason}",
+  "validation.reason.blender.spatialLayerSync.sourceRejected": "Source \"{source}\" does not pass the import: there is nothing to compare the layer against until the source is fixed: {reason} (BLND-6)",
+  "validation.reason.blender.spatialLayerSync.sourceUnread": "The source of scene \"{scene}\" has not been read: the layer was never compared — refresh the source state (the editor assembly does that before the validation pass, BLND-2)",
+  "validation.reason.blender.spatialLayerSync.ruleFailed": "Validation rule \"{rule}\" failed on this document: nothing was checked, and that is a defect of the rule, not of the document."
+}

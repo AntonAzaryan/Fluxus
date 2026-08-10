@@ -32,7 +32,7 @@ import {
   type ValidationRule,
 } from '@game-mvp/editor-core';
 import { presentationPathOf, type VisualManifest } from '@game-mvp/assets';
-import { CAMERA_EFFECTS_DESCRIPTION } from '@game-mvp/render';
+import { CAMERA_CONFIG_DESCRIPTION, CAMERA_EFFECTS_DESCRIPTION } from '@game-mvp/render';
 import { OBJECT_LISTS } from './objects.js';
 import { SYSTEM_DOCUMENT_KIND, SYSTEM_LISTS } from './systems.js';
 import { systemSites } from './systemsDocuments.js';
@@ -154,7 +154,9 @@ export function sceneValidationRules(): readonly ValidationRule[] {
         // системы, говорит третий аргумент.
         system: SYSTEM_DOCUMENT_KIND,
       },
-      { cameraEffects: CAMERA_EFFECTS_DESCRIPTION },
+      // Описания камеры — вход валидации манифеста (ASSET-8, ASSET-10): их
+      // приносит собирающий редактор, потому что перечни живут в коде камеры.
+      { cameraEffects: CAMERA_EFFECTS_DESCRIPTION, cameraConfig: CAMERA_CONFIG_DESCRIPTION },
       systemSites(SCENE_KINDS.config),
     ),
     ...crossDocumentRules(

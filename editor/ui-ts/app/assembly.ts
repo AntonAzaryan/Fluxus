@@ -45,10 +45,21 @@ import {
   uiResources,
   type FieldEditor,
   type PaletteCommand,
+  type UiText,
   type WorkspaceArea,
   type WorkspaceFrame,
 } from '../src/index.js';
 import { presentationPathOf } from '@game-mvp/assets';
+import {
+  BLENDER_BUNDLES,
+  SOURCE_EXTENSIONS,
+  createSourceCache,
+  registerBlenderOperations,
+  sourcePathOf,
+  spatialLayerSyncRule,
+  type SpatialLayerSourceCache,
+} from '@game-mvp/blender-ts';
+import { watchExternalDocuments } from './documentRefresh.js';
 import { createAssetModule } from '../src/areas/assetModule.js';
 import {
   ASSETS_AREA_ID,
@@ -62,6 +73,9 @@ import { SCENE_AREA_ID, createSceneArea, type SceneAreaState } from '../src/area
 import { discoverProject, type DiscoveredProject } from '../src/areas/sceneDiscovery.js';
 import {
   DECORATION_LIST,
+  PLACEMENT_LIST,
+  SCENE_KINDS,
+  TERRAIN_ASSET,
   openSceneProject,
   sceneValidationRules,
   type SceneProjectIds,
@@ -126,7 +140,11 @@ export interface EditorApp {
  */
 export async function createEditorApp(options: EditorAppOptions): Promise<EditorApp> {
   const { host } = options;
-  const resources = uiResources(options.locale ?? 'ru');
+  // Бандл вкладов конвейера Blender (ED-27) вливается в ресурсы здесь же, где
+  // регистрируются сами вклады: описание операции в каталоге (ED-30) и причина
+  // находки правила принадлежат объявившему их пакету, и второй их копии в
+  // редакторе не заводится (ED-28).
+  const resources = uiResources(options.locale ?? 'ru', undefined, BLENDER_BUNDLES);
 
   // Модуль ассетов один на редактор (ASSET-2): им рисует вьюпорт сцены, им же
   // просмотрщик отвечает на вопрос «загрузился ли этот ассет» (ED-20, ASSET-4).
@@ -157,15 +175,23 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
   // вклады областей, а не часть ядра редактора (ED-25, ED-29): реестр один и
   // тот же для интерфейса и для вызова без него. Сессия заводится ДО областей,
   // потому что открытие документов проекта — тоже дело сборки (см. ниже).
+  //
+  // Операция импорта конвейера Blender (`blender-pipeline` BLND-5) стоит в том
+  // же ряду и по тому же основанию: «импорт запускают командой workspace и
+  // операцией из работающего редактора — оба пути исполняют одну и ту же
+  // зарегистрированную операцию». Незарегистрированная в сборке, она была бы
+  // видна командной строке и не видна редактору — то есть путей стало бы два.
   const session = createEditorSession({
-    operations: registerSystemOperations(
-      registerPairOperations(
-        registerSchemaOperations(
-          registerCameraEffectsOperations(
-            registerVisualsOperations(
-              registerTerrainOperations(
-                registerDecorationOperations(
-                  registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+    operations: registerBlenderOperations(
+      registerSystemOperations(
+        registerPairOperations(
+          registerSchemaOperations(
+            registerCameraEffectsOperations(
+              registerVisualsOperations(
+                registerTerrainOperations(
+                  registerDecorationOperations(
+                    registerPlacementOperations(registerBuiltinOperations(createOperationRegistry())),
+                  ),
                 ),
               ),
             ),
@@ -174,6 +200,24 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
       ),
     ),
   });
+
+  /**
+   * Состояние источников конвейера (BLND-2): байты `.glb`/`.gltf`, лежащих
+   * рядом со сценами, разобранные один раз на набор байтов (ED-8).
+   *
+   * Живёт в сборке, а не в правиле, потому что чтение дерева асинхронно (ED-12),
+   * а правила исполняются синхронно на каждую правку (ED-8). Обновляется ровно
+   * двумя поводами, и оба — здесь: открытие проекта (до первого прогона правил)
+   * и правка дерева извне (канал ED-12, тот же, которым едет hot-reload BLND-12).
+   *
+   * Двоичные источники эта среда читает: `host.content.read` — тот же шов, по
+   * которому модуль ассетов берёт модели и текстуры (ASSET-2), и `.glb` для
+   * него ничем не отличается от `.mdx`. Среда, у которой чтения нет (статическая
+   * выкладка без эндпойнта дерева — см. шапку `src/host/web.ts`), отказывает
+   * причиной, и причину показывает та же находка правила: «прочитать не
+   * удалось» и «расхождения нет» — разные ответы (ED-12, ED-20).
+   */
+  const sources: SpatialLayerSourceCache = createSourceCache(host.content);
 
   /**
    * Открытие документов проекта — ОДНО на весь редактор, и делает его сборка.
@@ -201,6 +245,12 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
       if (failure !== null) throw new Error(failure);
       if (current === null) return null;
       await openSceneProject(session, host.content, current);
+      // Источник читается ДО того, как области спросят открытый проект, то есть
+      // до первого прогона правил: правило синхронно и ждать чтения не умеет, а
+      // «не читан» — это находка (BLND-2), а не молчание. Отказ чтения сюда не
+      // приходит — кэш возвращает его состоянием, и показывает его та же
+      // находка.
+      await sources.refresh(current.config);
       return current;
     })();
     return opening;
@@ -212,7 +262,9 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
     failure = found.failure;
     current = found.scenes[0] ?? null;
     // Прежнее открытие относилось к прежним документам: держать его значило бы
-    // отдать областям проект, которого больше нет.
+    // отдать областям проект, которого больше нет. Запомненные источники — тоже:
+    // они относились к прежним сценам.
+    sources.forget();
     opening = null;
   };
 
@@ -230,6 +282,26 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
   // один на редактор: раскладку документов проекта приносит область, а не
   // правило. Тот же реестр прогоняет сохранение по состоянию дерева (ED-21).
   registerValidationRules(contributions.validationRules, sceneValidationRules());
+  // Правило синхронизации пространственного слоя с источником Blender (BLND-2:
+  // «правка производных данных мимо импорта SHALL подсвечиваться валидацией
+  // редактора на общих основаниях (ED-8) правилом-вкладом (ED-25)»). Реестр тот
+  // же, что у остальных правил, — иначе находка была бы видна не там, где
+  // видны все прочие. Раскладку документов приносит сборка, как и соседям: и
+  // расстановка (SER-8), и ассет террейна (TERR-2) лежат полями конфига сцены.
+  registerValidationRules(contributions.validationRules, [
+    spatialLayerSyncRule({
+      sources,
+      kinds: {
+        scene: SCENE_KINDS.config,
+        presentation: SCENE_KINDS.presentation,
+        manifest: SCENE_KINDS.visuals,
+        curvature: SCENE_KINDS.curvature,
+      },
+      initialPath: PLACEMENT_LIST,
+      decorationsPath: DECORATION_LIST,
+      terrainPath: TERRAIN_ASSET,
+    }),
+  ]);
 
   contributions.areas.register(
     createSceneArea({
@@ -381,6 +453,67 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
         operations: () => describeOperations(session.operations),
         descriptions: catalogDescriptions(resources),
       }),
+  });
+
+  /**
+   * Правка дерева извне (ED-12) — цикл hot-reload конвейера Blender (BLND-12).
+   *
+   * Канал внешних изменений приносит среда (`main.ts` — сокет dev-сервера), а
+   * перечитывание в сессию делает `documentRefresh.ts`; отсюда правка едет во
+   * вьюпорт теми же событиями сессии, что и всякая другая (ED-15, REND-11,
+   * REND-14, REND-17, REND-18, CAM-7). Подписка живёт здесь по той же причине,
+   * по которой здесь живёт открытие проекта: какие документы открыты — знает
+   * сборка, а не каркас (ED-25).
+   *
+   * Показывается только то, чего автор иначе не заметил бы: перечитанный
+   * документ виден в кадре сам, а НЕ перечитанный — нет. Причина при этом
+   * приходит ресурсом (ED-27), а адрес документа — машинным хвостом к нему, как
+   * у подсказки с сочетанием клавиш.
+   */
+  const refreshNotice = (key: string, id: DocumentId): UiText => {
+    const suffix = ` — ${id}`;
+    return { origin: 'resource', value: `${resources.text(key)}${suffix}`, key, suffix };
+  };
+  watchExternalDocuments({
+    session,
+    host: host.content,
+    report: (outcome) => {
+      if (outcome.kind === 'kept') frame.setNotice(refreshNotice('ui.app.externalKept', outcome.id));
+      if (outcome.kind === 'failed') {
+        frame.setNotice(refreshNotice('ui.app.externalFailed', outcome.id));
+      }
+    },
+  });
+
+  /**
+   * Второй потребитель того же канала — источники конвейера (BLND-2, BLND-12).
+   *
+   * Экспорт `.glb` документом сессии не является и перечитыванию не подлежит:
+   * его читает не редактор, а правило синхронизации — через кэш. Поэтому здесь
+   * обновляется кэш, а не документ, и прогон правил зовётся явно: правка файла
+   * рядом с документом события сессии не порождает, и отчёт без этого вызова
+   * остался бы утверждением о состоянии, которого больше нет.
+   *
+   * Зовётся он только на СМЕНУ состояния источника: перезапись файла теми же
+   * байтами прогоном правил не оплачивается (ED-8), а кэш отвечает на это той
+   * же записью.
+   */
+  host.content.watch((change) => {
+    if (change.kind === 'removed') return;
+    const scene = current?.config;
+    // Пара считается ОТ СЦЕНЫ (BLND-2): «источник этой сцены — вот этот файл».
+    // Обратное правило («сцена этого источника») знает суффикс `.scene.json`
+    // соглашения репозитория, а редактор открывает сцену, найденную по
+    // содержимому, и имя её файла произвольно.
+    if (scene === undefined) return;
+    if (!SOURCE_EXTENSIONS.some((extension) => sourcePathOf(scene, extension) === change.path)) {
+      return;
+    }
+    const before = sources.stateOf(scene);
+    void sources.refresh(scene).then((after) => {
+      if (after === before) return;
+      (frame.stateOf(SCENE_AREA_ID) as SceneAreaState).revalidate();
+    });
   });
 
   // Несохранённое видно снаружи окна (ED-21): вкладка спрашивает о закрытии,
