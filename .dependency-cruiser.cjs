@@ -24,8 +24,17 @@ module.exports = {
       severity: 'error',
       from: { path: '^engine/core-ts/src' },
       to: {
-        path: '^(engine/(render|net|client|assets)-ts|editor/|tools/|node_modules/)',
+        path: '^(engine/(render|net|client|assets|hud)-ts|editor/|tools/|node_modules/)',
       },
+    },
+    {
+      name: 'no-reverse-hud',
+      comment:
+        'HUD — потребитель оболочки, вершина слоёв (match-hud HUD-1): рендер, ' +
+        'клиент, net и assets его не импортируют — обратная слоистость.',
+      severity: 'error',
+      from: { path: '^engine/(render|net|client|assets)-ts/src' },
+      to: { path: '^engine/hud-ts/' },
     },
     {
       name: 'client-no-server-code',
@@ -49,7 +58,7 @@ module.exports = {
         'Рантайм (engine/*) не тянет authoring-конвейер Blender и редактор — ' +
         'соответствует authoringBoundary-тесту (BLND-7).',
       severity: 'error',
-      from: { path: '^engine/(core|net|render|assets|client)-ts/src' },
+      from: { path: '^engine/(core|net|render|assets|client|hud)-ts/src' },
       to: { path: '^(tools/blender-ts/|editor/)' },
     },
     {

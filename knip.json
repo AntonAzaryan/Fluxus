@@ -34,6 +34,9 @@
     "engine/client-ts": {
       "entry": ["demo/**/*.ts", "test/**/*.test.ts"]
     },
+    "engine/hud-ts": {
+      "entry": ["test/**/*.test.ts"]
+    },
     "engine/integration-ts": {
       "entry": ["test/**/*.test.ts"],
       "project": ["test/**"]
