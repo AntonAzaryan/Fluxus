@@ -30,4 +30,4 @@
 
 ## 6. Финализация
 
-- [ ] 6.1 `openspec validate --specs --strict` и `npm run check` зелёные; сверка формулировок ссылок на SHELL-1/SHELL-6 с состоянием change `shell-modes`
+- [x] 6.1 `openspec validate --specs --strict` и `npm run check` зелёные; сверка формулировок ссылок на SHELL-1/SHELL-6 с состоянием change `shell-modes`
