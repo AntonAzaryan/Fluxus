@@ -8,9 +8,15 @@
  * интерполированному снапшоту (REND-2 поверх NET-3).
  */
 import { describe, expect, it } from 'vitest';
-import { FIXED_ONE, query, world as coreWorld } from '@game-mvp/core';
+import {
+  ARENA_COMPONENT,
+  FIXED_ONE,
+  FLOOR_COMPONENT,
+  query,
+  world as coreWorld,
+} from '@game-mvp/core';
 import type { PresentedState } from '@game-mvp/net';
-import { TICK_DELTA, TICK_RATE, playMatch, walkRight } from './fixtures.js';
+import { TICK_DELTA, TICK_RATE, fogConfig, playMatch, walkRight } from './fixtures.js';
 
 function slotX(snapshot: PresentedState, slot: number): number {
   for (const entity of query(snapshot.world, { all: ['Player', 'Position'] })) {
@@ -18,6 +24,14 @@ function slotX(snapshot: PresentedState, slot: number): number {
     return coreWorld.getField(snapshot.world, entity, 'Position', 'x');
   }
   throw new Error(`слот ${slot} не найден в снапшоте`);
+}
+
+/** Слоты, дожившие до снапшота: именно они и есть видимая часть мира (NET-12). */
+function slotsIn(snapshot: PresentedState): number[] {
+  const slots = Array.from(query(snapshot.world, { all: ['Player'] }), (entity) =>
+    coreWorld.getField(snapshot.world, entity, 'Player', 'slot'),
+  );
+  return slots.sort((a, b) => a - b);
 }
 
 function meshOfSlot(match: Awaited<ReturnType<typeof playMatch>>, slot: number) {
@@ -59,6 +73,39 @@ describe('вертикаль сервер → снапшот → клиент �
     // Молчащий игрок 2 остался в нуле — и в снапшоте, и в своём меше.
     expect(slotX(snapshot, 1)).toBe(0);
     expect(meshOfSlot(match, 1).position.x).toBe(0);
+  });
+
+  /**
+   * NET-12, NET-18 и NTR-14 разом, на настоящей вертикали: маску считает нативная
+   * `VisibilitySystem`, объявленная конфигом матча, фильтр ядра режет по ней
+   * персональный снапшот, а на провод уезжает проекция — и в ней остаётся всё, что
+   * оболочка обязана иметь до первого кадра (SHELL-5).
+   */
+  it('противник, ушедший в туман, теряется, а носители карты пола и арены — нет', async () => {
+    const config = fogConfig();
+    // На первых тиках герои стоят вплотную и видят друг друга; дальше слот 0
+    // уходит вправо и покидает обзор.
+    const near = await playMatch(2, { a: walkRight(1000) }, config);
+    expect(slotsIn(near.b.client.latest!)).toEqual([0, 1]);
+
+    const far = await playMatch(24, { a: walkRight(1000) }, config);
+    const personal = far.b.client.latest!;
+    // Противник ушёл в туман: сущности в персональном снапшоте нет физически, а
+    // не спрятана она в рендере (NET-12).
+    expect(slotsIn(personal)).toEqual([1]);
+    // Своя сущность остаётся всегда (NET-15) — иначе клиент терял бы себя.
+    expect(slotX(personal, 1)).toBe(0);
+
+    // Носители карты пола (TERR-6) и арены (ARENA-1) компонента `Visibility` не
+    // несут, а значит публичны и остаются в каждом персональном снапшоте: иначе
+    // клиент лишился бы карты пола и радиуса арены (SHELL-5), а по NET-14 это
+    // читалось бы как «арена ушла в туман».
+    expect(query(personal.world, { all: [FLOOR_COMPONENT] })).toHaveLength(1);
+    expect(query(personal.world, { all: [ARENA_COMPONENT] })).toHaveLength(1);
+
+    // Контроль: у сервера мир полный — потерян противник фильтрацией, а не
+    // симуляцией (NET-12: тик исполняется один раз).
+    expect(slotsIn(far.server.snapshot())).toEqual([0, 1]);
   });
 
   it('между тиками меш интерполируется между двумя последними снапшотами (REND-2)', async () => {

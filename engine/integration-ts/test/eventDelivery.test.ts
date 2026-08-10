@@ -18,7 +18,15 @@
  * поэтому прогон повторяем (DET-1 для теста ровно так же обязателен).
  */
 import { describe, expect, it } from 'vitest';
-import { query, world as coreWorld, type Action, type SceneDef, type SystemDef } from '@game-mvp/core';
+import {
+  query,
+  world as coreWorld,
+  TEAM_SCHEMA,
+  VISIBILITY_SCHEMA,
+  type Action,
+  type SceneDef,
+  type SystemDef,
+} from '@game-mvp/core';
 import {
   ClientHost,
   DEFAULT_SERIALIZER,
@@ -167,12 +175,23 @@ function markedScene(spec: SceneSpec): SceneDef {
 
   return {
     ...base,
-    components: [...base.components, { name: 'Mark', fields: { id: 'i32' } }],
+    // Компоненты видимости объявлены СЦЕНОЙ РУКАМИ, а не флагом `fog` (SER-7), и
+    // это осознанно: флаг обязывал бы конфиг матча объявить пересчёт видимости
+    // (NTR-14), а нативная `VisibilitySystem` (order 900) переписала бы
+    // авторскую маску битом собственной команды сущности (FOW-3) — то есть
+    // отняла бы у теста его предмет. Отказ NTR-14 привязан именно к флагу,
+    // ровно тому признаку, по которому загрузчик решает, дописывать ли
+    // компоненты тумана (решение 5 дизайна `filter-ownership`).
+    components: [
+      ...base.components,
+      { name: 'Mark', fields: { id: 'i32' } },
+      VISIBILITY_SCHEMA,
+      TEAM_SCHEMA,
+    ],
     prefabs: [
-      // Маски проставляются расстановкой и переставляются системой, а не
-      // считаются `VisibilitySystem`: она зависимость сборки (DI-3), матч
-      // поднят без неё, и предмет проверки — момент отбора, а не расчёт
-      // видимости (он покрыт FOW-тестами ядра).
+      // Маски проставляются расстановкой и переставляются системой сцены, а не
+      // считаются `VisibilitySystem`: предмет проверки — момент отбора, а не
+      // расчёт видимости (он покрыт FOW-тестами ядра).
       ...(base.prefabs ?? []).map((prefab) =>
         prefab.name === 'Hero'
           ? {
@@ -200,7 +219,6 @@ function markedScene(spec: SceneSpec): SceneDef {
       prefab: 'Marked',
       overrides: { Mark: { id: mark.id }, Visibility: { visibleTo: mark.visibleTo } },
     })),
-    fog: true,
   };
 }
 
@@ -212,6 +230,11 @@ function eventConfig(spec: SceneSpec, overrides: Partial<MatchConfig> = {}): Mat
     scene: markedScene(spec),
     snapshotRate: BROADCAST_RATE,
     eventRepeat: 0,
+    // Пересчёта видимости этот матч не объявляет намеренно: маску авторит сама
+    // сцена (см. `markedScene`), и требовать его сцена без флага `fog` не может
+    // (NTR-14). Явное `undefined` стоит здесь потому, что общая фикстура
+    // `duelConfig` пересчёт объявляет, как это делают записанные матчи.
+    visibility: undefined,
     ...overrides,
   });
 }
