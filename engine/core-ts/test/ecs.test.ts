@@ -179,6 +179,29 @@ describe('Query (QUERY-1..3)', () => {
     expect(Array.from(result)).toEqual([...ids].sort((a, b) => a - b));
     expect(listAlive(world).length).toBe(0); // мир действительно опустел
   });
+
+  it('QUERY-3: вложенный запрос не портит результат внешнего', () => {
+    const world = createWorld(schemas, [
+      prefab('P', { Health: {} }),
+      prefab('Q', { Health: {}, Stealth: {} }),
+    ]);
+    const outer = [spawn(world, 'P'), spawn(world, 'P'), spawn(world, 'P')];
+    spawn(world, 'Q');
+
+    const result = query(world, { all: ['Health'], not: ['Stealth'] });
+    const before = Array.from(result);
+
+    // Регресс на общий переиспользуемый буфер: будь результат общим, внутренний
+    // запрос с другой спецификацией затёр бы набор, по которому идёт обход.
+    const visited: number[] = [];
+    for (const entity of result) {
+      query(world, { all: ['Stealth'] });
+      visited.push(entity);
+    }
+
+    expect(visited).toEqual(outer);
+    expect(Array.from(result)).toEqual(before);
+  });
 });
 
 describe('чтение отложенного из буфера (CMD-5)', () => {
