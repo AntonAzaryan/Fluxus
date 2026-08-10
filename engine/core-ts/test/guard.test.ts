@@ -57,6 +57,22 @@ describe('guard: сканер ловит каждый вид нарушения 
     expect(scanSourceText('x.ts', 'const c = crypto.getRandomValues(buf);', 'strict')).toHaveLength(1);
   });
 
+  /**
+   * DET-2 называет запрещённое поимённо: «Функции libm хост-языка — `sqrt`,
+   * `sin`, `cos`, `pow`, `exp`, `log` и прочие — MUST NOT вызываться в симуляции
+   * ни при каких условиях». Проверка механическая (CLI-8), а не «глазами»: без
+   * неё правка `MATH_ALLOWED` тихо открыла бы любую из них.
+   */
+  it('весь названный DET-2 список libm краснит в ОБОИХ режимах', () => {
+    for (const name of ['sqrt', 'sin', 'cos', 'pow', 'exp', 'log', 'random']) {
+      for (const mode of ['strict', 'pure-cycle'] as const) {
+        const violations = scanSourceText('x.ts', `const v = Math.${name}(1);`, mode);
+        expect(violations, `${name} в режиме ${mode}`).toHaveLength(1);
+        expect(violations[0]!.rule).toBe('math-api');
+      }
+    }
+  });
+
   it('float-литерал краснит только в строгом режиме, hex с e-цифрой — нигде', () => {
     expect(scanSourceText('x.ts', 'const a = 0.5;', 'strict')).toHaveLength(1);
     expect(scanSourceText('x.ts', 'const a = 1e3;', 'strict')).toHaveLength(1);

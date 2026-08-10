@@ -69,6 +69,19 @@ export function query(state: WorldState, spec: QuerySpec): Float64Array {
   return count === result.length ? result : result.subarray(0, count);
 }
 
+/**
+ * Фильтр по радиусу. Владения `Position` он НЕ требует, а чтение поля тотально
+ * (ECS-7): сущность без `Position` читает нейтральный ноль по обеим осям, то
+ * есть оказывается в мировом начале координат — и попадает в любой радиус,
+ * этого начала достигающий. Прежде она попадала бы туда же по значению из
+ * ячейки, но невоспроизводимо; ECS-7 не создал этот эффект, а сделал его
+ * определённым.
+ *
+ * Должен ли `withinRadius` подразумевать `all: ['Position']` — открытый вопрос
+ * QUERY-1, а не следствие ECS-7: ответ на него ни одну норму чтения не меняет.
+ * Guard `hasComponent` тут не помогает — ядро читает поле внутри фильтра
+ * запроса, до всякого выражения контента.
+ */
 function withinRadius(state: WorldState, entity: number, center: Vec2, radius: number): boolean {
   if (componentId(state, POSITION_COMPONENT) === undefined) return false;
   const dx = getField(state, entity, POSITION_COMPONENT, 'x') - center.x;

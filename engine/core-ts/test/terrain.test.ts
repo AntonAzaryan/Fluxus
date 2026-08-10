@@ -6,6 +6,7 @@ import { mathApi } from '../src/math/mathApi.js';
 import { loadScene } from '../src/sim/scene.js';
 import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
 import {
+  cellAt,
   createTerrainGrid,
   terrainFlagChar,
   terrainLevelChar,
@@ -213,6 +214,46 @@ describe('запросы террейна (TERR-4)', () => {
     const { terrain } = scene(def);
     expect(terrain!.levelAt({ x: fixed.fromInt(-100), y: 0 })).toBe(0);
     expect(terrain!.levelAt({ x: fixed.fromInt(100), y: fixed.fromInt(100) })).toBe(2);
+  });
+
+  /**
+   * DET-2, условие 4: в `cellAt` делимое бывает отрицательным, и конвенция
+   * округления деления у хост-языков разная. Довод «зажим в `[0, width-1]`
+   * делает расхождение ненаблюдаемым» держится не на порядке строк, а на этом
+   * тесте: тот же расчёт с усечением к нулю обязан давать ту же клетку.
+   */
+  it('отрицательная координата: конвенция округления деления ненаблюдаема (DET-2)', () => {
+    const grid = createTerrainGrid(def);
+    /** Тот же `cellAt`, но с усечением к нулю — конвенция второй реализации ядра. */
+    const cellAtTrunc = (position: { x: number; y: number }): number => {
+      const clamp = (value: number, max: number): number => (value < 0 ? 0 : value > max ? max : value);
+      const x = clamp(Math.trunc(position.x / grid.tileSize), grid.width - 1);
+      const y = clamp(Math.trunc(position.y / grid.tileSize), grid.height - 1);
+      return y * grid.width + x;
+    };
+
+    // Три режима отрицательного частного: |q| < 1, ровно -1, меньше -1. Плюс
+    // положительные — там конвенции совпадают по определению.
+    const points = [-1, -TILE, -TILE - 1, -3 * TILE - 1, 0, TILE, 5 * TILE].flatMap((v) => [
+      { x: v, y: 0 },
+      { x: 0, y: v },
+      { x: v, y: v },
+    ]);
+
+    // Анти-вакуумность: расхождение конвенций существует — на первом же входе.
+    expect(Math.floor(-1 / TILE)).toBe(-1);
+    expect(Math.trunc(-1 / TILE) === 0).toBe(true);
+
+    // `-0` и `0` — один и тот же индекс массива, но не одно значение для
+    // `Object.is`, на котором стоит `toBe`; знак нуля здесь и есть та самая
+    // ненаблюдаемая разница, поэтому нормализуем сложением.
+    const sameIndex = (value: number): number => value + 0;
+    for (const point of points) {
+      expect(sameIndex(cellAt(grid, point))).toBe(sameIndex(cellAtTrunc(point)));
+    }
+    // И то же самое через публичный запрос уровня — клетка нулевая.
+    const { terrain } = scene(def);
+    expect(terrain!.levelAt({ x: -1, y: -1 })).toBe(0);
   });
 
   it('уровень сущности меняется от перемещения без мутации компонентов', () => {
