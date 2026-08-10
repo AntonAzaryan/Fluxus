@@ -1,0 +1,57 @@
+/**
+ * Единый интерфейс виджета HUD (HUD-4): виджет получает уже отрезолвленные
+ * значения селекторов и фасад действий — имён селекторов, реестров и самого
+ * доставленного состояния он не видит. Поэтому смена значения композиции
+ * («другой арене — другой HUD») и смена её источника (TS-значение →
+ * JSON-документ) кода виджетов не трогают.
+ */
+import type { HudActionPayload } from './actions.js';
+import type { HudParams } from './composition.js';
+import type { HudDeliveredEvent, HudWorldMode } from './delivery.js';
+import type { HudNode } from './dom/node.js';
+
+/** Значения слотов биндингов записи композиции: слот → результат селектора. */
+export type HudBindingValues = Readonly<Record<string, unknown>>;
+
+/**
+ * Одно обновление виджета — одна доставка состояния (HUD-5). Сравнение
+ * «изменилось ли» и точечное обновление DOM — забота виджета, не хоста
+ * (design Decision 6).
+ */
+export interface HudUpdate {
+  /** Номер последнего доставленного тика. */
+  readonly tick: number;
+  readonly mode: HudWorldMode;
+  /**
+   * Разрыв непрерывности (SHELL-7): таймеры, полосы и анимации применяют snap
+   * к доставленному состоянию, а не доигрываются через разрыв (HUD-5).
+   */
+  readonly snap: boolean;
+  readonly values: HudBindingValues;
+  /** Reliable-события с номерами тиков — каждое приходит ровно один раз (HUD-5). */
+  readonly events: readonly HudDeliveredEvent[];
+}
+
+/**
+ * Фасад действий глазами виджета: слот из записи композиции, не имя реестра.
+ * Куда действие ведёт — мир обратным каналом или камера локально — виджету
+ * не видно (HUD-2).
+ */
+export interface HudActionsPort {
+  trigger(slot: string, payload?: HudActionPayload): void;
+}
+
+export interface HudWidget {
+  /** Разметка виджета; материализует и размещает её хост. Вызывается один раз. */
+  mount(actions: HudActionsPort): HudNode;
+  update(update: HudUpdate): void;
+  /** Виджет отпускает свои ссылки; элемент из зоны убирает исполнитель. */
+  dispose(): void;
+}
+
+/** Вид виджета — именованная фабрика; регистрируется в реестре видов (HUD-4). */
+export interface HudWidgetKind {
+  readonly name: string;
+  /** Создаёт экземпляр по параметрам записи композиции. */
+  create(params: HudParams): HudWidget;
+}

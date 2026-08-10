@@ -49,7 +49,7 @@ module.exports = {
         'Рантайм (engine/*) не тянет authoring-конвейер Blender и редактор — ' +
         'соответствует authoringBoundary-тесту (BLND-7).',
       severity: 'error',
-      from: { path: '^engine/(core|net|render|assets|client)-ts/src' },
+      from: { path: '^engine/(core|net|render|assets|client|hud)-ts/src' },
       to: { path: '^(tools/blender-ts/|editor/)' },
     },
     {
