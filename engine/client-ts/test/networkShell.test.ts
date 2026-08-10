@@ -251,6 +251,14 @@ async function playTicks(rig: NetworkRig, count: number): Promise<void> {
   await settle();
 }
 
+/** Номера тиков доставленных фактов сцены, по возрастанию. */
+function pulseTicks(rig: NetworkRig): number[] {
+  return rig.probe.events
+    .filter((event) => event.type === PULSE_EVENT)
+    .map((event) => event.tick!)
+    .sort((left, right) => left - right);
+}
+
 function heroOf(state: SimulationState): EntityId {
   const [hero] = [...query(state.world, { all: ['Player', 'Position'] })];
   expect(hero).toBeDefined();
@@ -313,10 +321,7 @@ describe('сетевой режим: тонкий клиент против ло
     const rig = networkRig({ snapshotRate: TICK_RATE / 2 });
     await playTicks(rig, 12);
 
-    const ticks = rig.probe.events
-      .filter((event) => event.type === PULSE_EVENT)
-      .map((event) => event.tick as number)
-      .sort((left, right) => left - right);
+    const ticks = pulseTicks(rig);
     expect(ticks.length).toBeGreaterThan(4);
     expect(new Set(ticks).size).toBe(ticks.length);
     // Диапазон покрыт непрерывно: тик без снапшота фактами не обделён.
@@ -324,6 +329,37 @@ describe('сетевой режим: тонкий клиент против ло
     // И конвертов при этом вдвое меньше, чем тиков: состояние conflatable,
     // факты — нет (SHELL-4).
     expect(rig.client.metrics.snapshotsApplied).toBeLessThan(ticks.length);
+  });
+
+  it('хвост потока событий доезжает до main до остановки сессии (NTR-15, SHELL-4)', async () => {
+    // Конец матча — это `Events` с хвостом и `End`, без финального снапшота:
+    // сервер выпускает хвост, а не рассылает состояние. Факты этих тиков ждут
+    // доставки, которой не будет, — и терялись бы в каждом матче.
+    const rig = networkRig({ snapshotRate: TICK_RATE / 2 });
+    await playTicks(rig, 9);
+    const beforeEnd = pulseTicks(rig);
+    const lastDelivered = beforeEnd.at(-1)!;
+    const viewsBefore = rig.probe.views.length;
+
+    rig.server.stop();
+    rig.matchHost.flush();
+    await settle();
+    rig.shell.step();
+    await settle();
+
+    expect(rig.client.phase).toBe('closed');
+    const afterEnd = pulseTicks(rig);
+    // Хвост доехал: факты тиков после последней рассылки на main есть.
+    expect(afterEnd.at(-1)!).toBeGreaterThan(lastDelivered);
+    for (let i = 1; i < afterEnd.length; i++) expect(afterEnd[i]! - afterEnd[i - 1]!).toBe(1);
+    // Доставка — повтор последнего состояния, а не новый тик: состояние
+    // conflatable, факт — нет.
+    expect(rig.probe.views.length).toBe(viewsBefore + 1);
+    const tailView = rig.probe.views.at(-1) as { tick: number; freshEvents: boolean };
+    const stateView = rig.probe.views.at(-2) as { tick: number };
+    expect(tailView.tick).toBe(stateView.tick);
+    // И факты хвоста проигрываемы: иначе «доехали» означало бы «доехали и молчат».
+    expect(tailView.freshEvents).toBe(true);
   });
 
   it('ввод локально не применяется: состояние воркера не меняется до прихода снапшота (NTR-10)', async () => {
@@ -414,9 +450,16 @@ describe('сетевой режим: тонкий клиент против ло
 
     expect(rig.client.epoch).toBeGreaterThan(epochBefore);
     expect(rig.state.tick).toBe(target);
-    const delivered = rig.probe.views.at(-1) as { tick: number; snapAll: boolean };
+    const delivered = rig.probe.views.at(-1) as {
+      tick: number;
+      snapAll: boolean;
+      isReplay: boolean;
+    };
     expect(delivered.tick).toBe(target);
     // Смена эпохи — разрыв непрерывности: состояние рисуется snap'ом (SHELL-7).
+    // `isReplay` приезжает ТОЛЬКО из признака клиента (снапшот его не несёт), и
+    // потому пиннит именно путь признака, а не смену режима мира рядом с ним.
+    expect(delivered.isReplay).toBe(true);
     expect(delivered.snapAll).toBe(true);
     // Кольцо своих кадров (NET-9) в сетевой сборке есть, и видно это по величине,
     // которую только оно и даёт: сколько ввода игрока унесла перемотка (NTR-10).
@@ -429,6 +472,7 @@ describe('одна подсистема в обеих сборках оболо�
   it('локальная и сетевая сборки дают подсистеме один контракт доставки', async () => {
     // Сетевая сборка.
     const net = networkRig();
+    net.remote.sendInput({ x: STEP, y: 0 });
     await playTicks(net, 8);
 
     // Локальная сборка: та же подсистема-зонд, тот же `RemoteHost`, тот же
@@ -452,6 +496,9 @@ describe('одна подсистема в обеих сборках оболо�
     });
     shell.start();
     shell.stop();
+    // Ввод — тот же и в той же форме (SHELL-6): в локальном режиме он войдёт в
+    // `InputFrame` тика, в сетевом уехал серверу и вернулся снапшотом.
+    local.sendInput({ x: STEP, y: 0 });
     for (let i = 0; i < 8; i++) shell.stepTick();
 
     // Режим главному потоку известен и различается; всё остальное — нет.
@@ -462,15 +509,20 @@ describe('одна подсистема в обеих сборках оболо�
     expect(net.probe.views.length).toBeGreaterThan(0);
     const localView = localProbe.views.at(-1) as Record<string, unknown>;
     const netView = net.probe.views.at(-1) as Record<string, unknown>;
-    // Тот же состав presentation-состояния и тот же состав среза сущности:
-    // подсистема, написанная под один режим, работает во втором без правок.
-    expect(Object.keys(netView).sort()).toEqual(Object.keys(localView).sort());
     const localEntity = (localView.entities as Record<string, unknown>[])[0]!;
     const netEntity = (netView.entities as Record<string, unknown>[])[0]!;
-    expect(Object.keys(netEntity).sort()).toEqual(Object.keys(localEntity).sort());
-    // Зеркало карты пола приезжает в обоих режимах: террейн сцены есть у обеих.
-    expect(localView.floorBits).not.toBeNull();
-    expect(netView.floorBits).not.toBeNull();
+    // Подсистема получила в обеих сборках одно и то же ПО СУЩЕСТВУ, а не один
+    // набор ключей: визуальный тип из словаря kind'ов, доехавшего каналом
+    // (SHELL-5), режим мира, зеркало карты пола длиной сетки из handshake и
+    // производный признак движения (REND-4) — по нему видно, что ввод прошёл
+    // весь путь в обоих режимах: тиком и кругом до сервера.
+    expect(netEntity.kind).toBe('Hero');
+    expect(localEntity.kind).toBe('Hero');
+    expect(netView.mode).toBe(localView.mode);
+    expect(netView.mode).toBe('Running');
+    expect([...(netView.floorBits as number[])]).toEqual([...(localView.floorBits as number[])]);
+    expect(netEntity.moving).toBe(true);
+    expect(localEntity.moving).toBe(true);
     // Факты в обоих режимах приходят с номером тика (SHELL-4), хотя источники
     // разные: локальная шина тика и поток `Events` (NTR-15).
     expect(localProbe.events.every((event) => typeof event.tick === 'number')).toBe(true);

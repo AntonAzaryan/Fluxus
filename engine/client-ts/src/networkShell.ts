@@ -66,6 +66,15 @@ const NO_EVENTS: readonly GameEvent[] = [];
  * в `Extractor`, и смотрит он только на непустоту множества (TERR-6 → REND-7).
  * Поэтому непустоту метка и объявляет, а состав дельт — нет: перечитывание идёт
  * диффом по миру, и на неподвижном полу он вернёт пустой список.
+ *
+ * ponytail: цена — `FloorMirror.sync()` на КАЖДОЙ применённой доставке, то есть
+ * проход по всем клеткам сетки плюс свежий массив изменившихся, тогда как
+ * контракт зеркала рассчитан на вызов по дельте компонента. При `snapshotRate`
+ * 30 это 30 проходов в секунду по сетке сцены. Снимается не здесь: у `Extractor`
+ * должен появиться явный параметр «перечитывать пол каждый тик», и тогда
+ * поддельный `ChangeSet` уходит совсем. Отложено потому, что параметр — правка
+ * `render-ts`, которую эта работа не делает, а без метки сетевой режим терял бы
+ * выбитый пол вовсе.
  */
 const FLOOR_MARK: ReadonlySet<EntityId> = new Set<EntityId>([0]);
 const NO_ENTITIES: ReadonlySet<EntityId> = new Set<EntityId>();
@@ -144,6 +153,8 @@ export class NetworkShell {
   private lastTick = -1;
   /** Факты потока, чей тик обогнал применённое состояние: доедут следующей доставкой. */
   private pending: DeliveredEvents[] = [];
+  /** Снятый у клиента признак разрыва, ждущий доставки состояния (SHELL-7). */
+  private discontinuity = false;
   /** Запросы переходов, отброшенные за отсутствием отображения в кнопку. */
   private unmapped = 0;
 
@@ -205,6 +216,14 @@ export class NetworkShell {
    * вычисляет о мире, а переносит уже случившееся у сервера.
    */
   step(): void {
+    // Признак разрыва снимается `takeDiscontinuity()` — методом ровно для этого
+    // потребителя: того, кто рисует по `latest`, минуя буфер интерполяции
+    // (`MatchClient.takeDiscontinuity`). Снимается ДО шага хоста, потому что шаг
+    // берёт сэмпл буфера, а сэмпл гасит признак у себя, — второй потребитель
+    // остался бы без него. Копится ИЛИ-ем: доставки состояния на этом шаге может
+    // не случиться, а признак обязан дожить до неё, иначе рендер нарисует
+    // «проезд» между ветвями истории (SHELL-7).
+    this.discontinuity ||= this.client.takeDiscontinuity();
     const delivered = this.host.step();
     for (const batch of delivered.events) {
       // Факты стёртой перемоткой ветви истории до представления не доезжают: их
@@ -214,8 +233,13 @@ export class NetworkShell {
       if (batch.epoch < this.client.epoch) continue;
       this.pending.push(batch);
     }
-    this.applyLatest(delivered.state?.discontinuity ?? false);
-    if (this.client.phase === 'closed') this.stop();
+    this.applyLatest();
+    // Сессия кончилась: доставок состояния больше не будет, а факты последних
+    // тиков могут ещё ждать в очереди — выпустить их до остановки (NTR-15).
+    if (this.client.phase === 'closed') {
+      this.drainTail();
+      this.stop();
+    }
   }
 
   /**
@@ -225,13 +249,18 @@ export class NetworkShell {
    * перемотке номера тиков идут назад, и сравнение по одному тику погасило бы
    * ровно те состояния, которые `netcode` NET-11 велит показать.
    */
-  private applyLatest(discontinuity: boolean): void {
+  private applyLatest(): void {
     const latest = this.client.latest;
     if (latest === undefined) return;
     const epoch = this.client.epoch;
     if (epoch < this.lastEpoch || (epoch === this.lastEpoch && latest.tick <= this.lastTick)) {
       return;
     }
+
+    // Признак гаснет здесь и только здесь: гасит его тот, кто взял состояние
+    // (SHELL-7), а до доставки он живёт латчем `step()`.
+    const discontinuity = this.discontinuity;
+    this.discontinuity = false;
 
     // Факты тиков, предшествующих применяемому состоянию, уходят reliable-частью
     // конверта тем же путём, что события локального тика (SHELL-4); факты самого
@@ -258,7 +287,11 @@ export class NetworkShell {
       }
     }
     this.pending = rest;
-    if (before.length > 0) this.sender.pushEvents(before);
+    // Свежесть фактов гасится разрывом по той же причине, по которой её гасит
+    // `Extractor` (OBS-5, REND-2): конверт разрыва рисуется snap'ом, и играть в
+    // нём накопленные факты значило бы озвучивать историю, которую картинка
+    // перескочила.
+    if (before.length > 0) this.sender.pushEvents(before, !discontinuity);
 
     const state = this.config.state;
     restoreSnapshot(state, { ...latest, events: own.length > 0 ? own : NO_EVENTS });
@@ -280,6 +313,32 @@ export class NetworkShell {
 
     this.lastEpoch = epoch;
     this.lastTick = latest.tick;
+  }
+
+  /**
+   * Хвост потока событий на конце сессии (NTR-15).
+   *
+   * Конец матча приходит как `Events` с накопленным хвостом и `End`, и финального
+   * снапшота за ним НЕ следует: сервер выпускает хвост, а не рассылает состояние
+   * (`netcode-transport` NTR-15). Факты этих тиков поэтому лежат в ожидании
+   * тика, которого не будет, — и без этого выпуска терялись бы в каждом матче,
+   * включая последнее убийство. Состояние для них повторяется последним
+   * доставленным: оно conflatable, а факт — нет (SHELL-4).
+   */
+  private drainTail(): void {
+    const epoch = this.client.epoch;
+    const tail: RenderEvent[] = [];
+    for (const batch of [...this.pending].sort((left, right) => left.tick - right.tick)) {
+      if (batch.epoch < epoch) continue;
+      for (const event of batch.events) {
+        tail.push({ type: event.type, tick: batch.tick, data: event.data });
+      }
+    }
+    this.pending = [];
+    if (tail.length === 0) return;
+    // Факты хвоста — живых тиков текущей эпохи: они происходили и проигрываются.
+    this.sender.pushEvents(tail, true);
+    this.sender.flushEvents();
   }
 
   /** Латч ввода на отправку: `undefined` не возвращается — кадр уходит каждый шаг. */
