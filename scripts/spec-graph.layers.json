@@ -27,6 +27,7 @@
     "camera": "client",
     "client-shell": "client",
     "input-devices": "client",
+    "match-hud": "client",
     "editor": "editor-content",
     "blender-pipeline": "editor-content",
     "game-content": "editor-content",
