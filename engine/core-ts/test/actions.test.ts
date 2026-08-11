@@ -588,6 +588,37 @@ describe('упорядоченная выборка forEach (ACT-5)', () => {
     expect(visited(h)).toEqual([first, second, far]);
   });
 
+  /**
+   * Квадрат расстояния считается точной 64-битной арифметикой — той же, что у
+   * `withinRadius` (QUERY-1), а не приближением Q16.16. Оба случая ниже —
+   * ровно те, на которых приближение соврало бы: за пределом квадратичной
+   * арифметики (~181 единица) произведение в Q16.16 завернулось бы в
+   * отрицательное и утащило дальнюю цель в начало обхода, а на смещениях
+   * меньше кванта — схлопнуло бы разные расстояния в один ключ и подменило бы
+   * нормативный тай-брейк.
+   */
+  it('порядок верен за пределом квадратичной арифметики Q16.16', () => {
+    const h = harness();
+    const far = spawn(h.world, 'Hero', { Position: { x: F(200), y: 0 } });
+    const near = spawn(h.world, 'Hero', { Position: { x: F(1), y: 0 } });
+
+    execute([visit({ nearestTo: origin })], h.ctx);
+
+    expect(visited(h)).toEqual([near, far]);
+  });
+
+  it('различает расстояния меньше кванта Q16.16, а не схлопывает их в тай-брейк', () => {
+    const h = harness();
+    // Смещения 2 и 1 сырых единицы: их квадраты (4 и 1) меньше кванта Q16.16,
+    // и в приближённом ключе обе цели оказались бы равноудалёнными.
+    const further = spawn(h.world, 'Hero', { Position: { x: 2, y: 0 } });
+    const closer = spawn(h.world, 'Hero', { Position: { x: 1, y: 0 } });
+
+    execute([visit({ nearestTo: origin })], h.ctx);
+
+    expect(visited(h)).toEqual([closer, further]);
+  });
+
   it('сущность без Position стоит в начале координат (ECS-7)', () => {
     const h = harness();
     const away = spawn(h.world, 'Hero', { Position: { x: F(4), y: 0 } });

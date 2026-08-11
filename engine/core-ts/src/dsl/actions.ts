@@ -9,6 +9,7 @@
  * редактора нечем.
  */
 import { evaluate, ExprCell, typeError, type Expression, type ExprValue, type ExprVars } from './expr.js';
+import { distSqCompare } from '../math/fixed.js';
 import { requireModifierList } from '../systems/modifiers.js';
 import { carveFloor as carveFloorInTerrain } from '../systems/terrain.js';
 import { POSITION_COMPONENT } from '../types.js';
@@ -227,13 +228,18 @@ function querySpec(raw: unknown, ctx: SystemContext, vars: ExprVars): QuerySpec 
 // ------------------------------------------ упорядоченная выборка (ACT-5)
 
 /**
- * Буфер упорядоченной выборки: идентификаторы и ключи сортировки рядом.
- * `Float64Array` под id — `EntityId` 48-битный (ID-1); `Int32Array` под ключ —
- * квадрат расстояния обычное значение Q16.16 (FP-1).
+ * Буфер упорядоченной выборки: идентификатор сущности и смещение от `nearestTo`
+ * рядом. `Float64Array` под id — `EntityId` 48-битный (ID-1); `Int32Array` под
+ * смещения — это координаты Q16.16, то есть `i32` (FP-1).
+ *
+ * Хранится смещение, а не готовый ключ: квадрат расстояния в Q16.16 не
+ * помещается, и сравниваются они точной 64-битной арифметикой по паре
+ * смещений (`distSqCompare`) — той же, что решает `withinRadius`.
  */
 interface OrderedBuffer {
   readonly ids: Float64Array;
-  readonly keys: Int32Array;
+  readonly dx: Int32Array;
+  readonly dy: Int32Array;
 }
 
 /**
@@ -253,7 +259,11 @@ let orderedDepth = 0;
 function orderedBuffer(size: number): OrderedBuffer {
   const existing = orderedBuffers[orderedDepth];
   if (existing !== undefined && existing.ids.length >= size) return existing;
-  const grown: OrderedBuffer = { ids: new Float64Array(size), keys: new Int32Array(size) };
+  const grown: OrderedBuffer = {
+    ids: new Float64Array(size),
+    dx: new Int32Array(size),
+    dy: new Int32Array(size),
+  };
   orderedBuffers[orderedDepth] = grown;
   return grown;
 }
@@ -264,40 +274,35 @@ function positionOf(ctx: SystemContext, entity: EntityId, axis: 'x' | 'y'): Fixe
 }
 
 /**
- * Квадрат расстояния до позиции сущности — арифметикой квадратов Q16.16
- * (FP-2), той же и до той же позиции, что у `withinRadius` (QUERY-1). Предел
- * квадратичной арифметики (PHYS-6, ~181 единица) действует и здесь: дальше
- * квадрат в Q16.16 не помещается и порядок недостоверен — ответственность
- * контента, как в FOW-2.
- */
-function distSqTo(ctx: SystemContext, entity: EntityId, center: Vec2): Fixed {
-  const dx = ctx.math.sub(positionOf(ctx, entity, 'x'), center.x);
-  const dy = ctx.math.sub(positionOf(ctx, entity, 'y'), center.y);
-  return ctx.math.add(ctx.math.mul(dx, dx), ctx.math.mul(dy, dy));
-}
-
-/**
  * Выборка, упорядоченная по возрастанию квадрата расстояния до `center`
- * (ACT-5). Сортировка вставками, а не `Array.prototype.sort`: порядок сравнений
- * и устойчивость заданы здесь алгоритмом, а не реализацией JS-движка, — то,
- * чего требует нормативный тай-брейк для парности со второй реализацией ядра.
+ * (ACT-5). Расстояние — той же арифметикой квадратов и до той же позиции, что
+ * у `withinRadius` (QUERY-1): смещение считается через Math API (FP-4), как у
+ * арены, а квадраты сравниваются точной 64-битной `distSqCompare` — приближения
+ * Q16.16 здесь нет, и предела дальности у порядка тоже.
+ *
+ * Сортировка вставками, а не `Array.prototype.sort`: порядок сравнений и
+ * устойчивость заданы здесь алгоритмом, а не реализацией JS-движка, — то, чего
+ * требует нормативный тай-брейк для парности со второй реализацией ядра.
  *
  * Тай-брейк равных квадратов — порядок QUERY-2, и отдельного ключа он не
  * требует: вход отдан запросом по возрастанию raw-индекса, а вставка сдвигает
  * только строго большие ключи, поэтому равные остаются во входном порядке.
  */
 function nearestByDistance(ctx: SystemContext, found: Float64Array, center: Vec2): Float64Array {
-  const { ids, keys } = orderedBuffer(found.length);
+  const { ids, dx, dy } = orderedBuffer(found.length);
   for (let i = 0; i < found.length; i++) {
     const entity = found[i]!;
-    const key = distSqTo(ctx, entity, center);
+    const keyX = ctx.math.sub(positionOf(ctx, entity, 'x'), center.x);
+    const keyY = ctx.math.sub(positionOf(ctx, entity, 'y'), center.y);
     let j = i - 1;
-    while (j >= 0 && keys[j]! > key) {
-      keys[j + 1] = keys[j]!;
+    while (j >= 0 && distSqCompare(dx[j]!, dy[j]!, keyX, keyY) > 0) {
+      dx[j + 1] = dx[j]!;
+      dy[j + 1] = dy[j]!;
       ids[j + 1] = ids[j]!;
       j--;
     }
-    keys[j + 1] = key;
+    dx[j + 1] = keyX;
+    dy[j + 1] = keyY;
     ids[j + 1] = entity;
   }
   return ids;

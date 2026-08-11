@@ -302,3 +302,56 @@ describe('sin/cos — таблица первой четверти (FP-7, FP-8)'
     }
   });
 });
+
+/**
+ * Сравнение сумм квадратов (QUERY-1, ACT-5) — точное, а не приближённое: на нём
+ * стоят и фильтр `withinRadius`, и упорядочивание выборки по расстоянию, и
+ * приближение Q16.16 расходилось бы с ним ровно там, где расхождение и
+ * наблюдаемо — за пределом квадратичной арифметики и на смещениях меньше кванта.
+ */
+describe('distSqCompare/distSqLe — точная 64-битная арифметика квадратов', () => {
+  /** Эталон на BigInt — легален только в тестах (FP-2). */
+  const exact = (ax: number, ay: number, bx: number, by: number): number => {
+    const a = BigInt(ax) * BigInt(ax) + BigInt(ay) * BigInt(ay);
+    const b = BigInt(bx) * BigInt(bx) + BigInt(by) * BigInt(by);
+    return a < b ? -1 : a > b ? 1 : 0;
+  };
+
+  const CASES: readonly (readonly [number, number, number, number])[] = [
+    [0, 0, 0, 0],
+    [1, 0, 2, 0],
+    [2, 0, 1, 0],
+    [1, 2, 2, 1],
+    [-3, 4, 5, 0],
+    [F(200), 0, F(1), 0],
+    [F(-200), F(200), F(200), F(200)],
+    [fixed.INT32_MAX, 0, fixed.INT32_MAX, 1],
+    [fixed.INT32_MIN, fixed.INT32_MIN, fixed.INT32_MAX, fixed.INT32_MAX],
+    [F(0.5), F(0.5), F(0.7071), 0],
+  ];
+
+  it('совпадает с точным эталоном на всех парах, включая края i32', () => {
+    for (const [ax, ay, bx, by] of CASES) {
+      expect(fixed.distSqCompare(ax, ay, bx, by), `${ax},${ay} ~ ${bx},${by}`).toBe(exact(ax, ay, bx, by));
+    }
+  });
+
+  it('различает то, что приближение Q16.16 схлопнуло бы или перевернуло', () => {
+    // Квадраты меньше кванта: `mul` дал бы обоим нуль.
+    expect(fixed.mul(1, 1)).toBe(0);
+    expect(fixed.mul(2, 2)).toBe(0);
+    expect(fixed.distSqCompare(1, 0, 2, 0)).toBe(-1);
+    // За пределом квадратичной арифметики (~181 единица) `mul` заворачивается в
+    // отрицательное, то есть дальняя точка стала бы «ближней».
+    expect(fixed.mul(F(200), F(200))).toBeLessThan(0);
+    expect(fixed.distSqCompare(F(200), 0, F(1), 0)).toBe(1);
+  });
+
+  it('граница радиуса включающая, а сравнение симметрично (QUERY-1, ARENA-2)', () => {
+    expect(fixed.distSqLe(F(3), F(4), F(5))).toBe(true);
+    expect(fixed.distSqLe(F(3), F(4), F(4.9999))).toBe(false);
+    expect(fixed.distSqLe(0, 0, 0)).toBe(true);
+    // Знак смещения на результат не влияет: сравниваются квадраты.
+    expect(fixed.distSqCompare(F(-3), F(-4), F(3), F(4))).toBe(0);
+  });
+});
