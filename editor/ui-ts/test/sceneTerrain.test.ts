@@ -69,8 +69,8 @@ const setKind = (session: EditorSession, x: number, y: number, kind: string): vo
 const setOffset = (session: EditorSession, x: number, y: number, offset: number): void => {
   session.applyOperation(TERRAIN_OPERATIONS.curvature, {
     document: PAINT_IDS.curvature,
-    cellX: x,
-    cellY: y,
+    nodeX: x,
+    nodeY: y,
     offset,
   });
 };
@@ -202,22 +202,26 @@ describe('TERR-5, ED-10: cliff-геометрия производна и нап
 });
 
 describe('ED-11, ASSET-7: карта кривизны — отдельный слой данных', () => {
-  it('смещения round-trip через алфавит карты: их читает модуль ассетов', () => {
+  it('смещения round-trip через решётку карты: их читает модуль ассетов', () => {
     const session = paintSession();
     for (const offset of CURVATURE_OFFSETS) {
       setOffset(session, 2, 3, offset);
       const checked = validateCurvatureMap(session.documentValue(PAINT_IDS.curvature));
       expect(checked.ok).toBe(true);
       if (!checked.ok) return;
-      expect(checked.map.offsets[3 * PAINT_SIDE + 2]).toBe(offset);
+      expect(checked.map.offsets[3 * (PAINT_SIDE + 1) + 2]).toBe(offset);
     }
   });
 
-  it('смещение вне алфавита невыразимо и отвергается записью', () => {
+  it('амплитуда произвольна, а нецелое значение отвергается записью', () => {
     const session = paintSession();
+    // Больше целого шага высоты (48 > 32) — легальный рельеф (ASSET-7).
+    setOffset(session, 0, 0, 48);
+    const checked = validateCurvatureMap(session.documentValue(PAINT_IDS.curvature));
+    expect(checked.ok).toBe(true);
     const before = bytesOf(session, PAINT_IDS.curvature);
     expect(() => {
-      setOffset(session, 0, 0, 8);
+      setOffset(session, 0, 0, 0.5);
     }).toThrow(/ASSET-7/);
     expect(bytesOf(session, PAINT_IDS.curvature)).toBe(before);
   });
@@ -234,8 +238,8 @@ describe('ED-11, ASSET-7: карта кривизны — отдельный с�
         session.applyOperation(TERRAIN_OPERATIONS.curvature, {
           document: PAINT_IDS.config,
           path,
-          cellX: 1,
-          cellY: 1,
+          nodeX: 1,
+          nodeY: 1,
           offset: 3,
         });
       }, JSON.stringify(path)).toThrow();
@@ -270,12 +274,12 @@ describe('ED-11, ASSET-7: карта кривизны — отдельный с�
 
     const stroke = session.beginOperation(TERRAIN_OPERATIONS.curvature, {
       document: PAINT_IDS.curvature,
-      cellX: 2,
-      cellY: 2,
+      nodeX: 2,
+      nodeY: 2,
       offset: 3,
     });
-    for (const cell of [5, 6, 7]) {
-      stroke.extend({ document: PAINT_IDS.curvature, cellX: cell, cellY: 5, offset: 3 });
+    for (const node of [5, 6, 7]) {
+      stroke.extend({ document: PAINT_IDS.curvature, nodeX: node, nodeY: 5, offset: 3 });
     }
     stroke.commit();
 
@@ -327,15 +331,13 @@ describe('ED-18: непрерывный мазок — одна запись и�
 
 describe('ED-29: каждая операция кисти обратима', () => {
   it.each([
-    [TERRAIN_OPERATIONS.level, PAINT_IDS.config, { path: [...TERRAIN_ASSET], level: 3 }],
-    [TERRAIN_OPERATIONS.cell, PAINT_IDS.config, { path: [...TERRAIN_ASSET], kind: 'noFloor' }],
-    [TERRAIN_OPERATIONS.curvature, PAINT_IDS.curvature, { offset: -4 }],
+    [TERRAIN_OPERATIONS.level, PAINT_IDS.config, { path: [...TERRAIN_ASSET], cellX: 1, cellY: 1, level: 3 }],
+    [TERRAIN_OPERATIONS.cell, PAINT_IDS.config, { path: [...TERRAIN_ASSET], cellX: 1, cellY: 1, kind: 'noFloor' }],
+    [TERRAIN_OPERATIONS.curvature, PAINT_IDS.curvature, { nodeX: 1, nodeY: 1, offset: -4 }],
   ])('«применить, отменить, сравнить» проходит для %s', (operationId, document, params) => {
     const session = paintSession();
     const result = runOperationRoundTrip(session, operationId, {
       document,
-      cellX: 1,
-      cellY: 1,
       ...(params as Record<string, JsonValue>),
     });
     expect(result.findings).toEqual([]);

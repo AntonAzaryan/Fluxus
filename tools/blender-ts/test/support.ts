@@ -159,9 +159,16 @@ export function manifestDocument(): Record<string, unknown> {
 }
 
 /** Документ карты кривизны (ASSET-7) — «до импорта»: сетка та же, смещений нет. */
-export function curvatureDocument(rows: readonly string[] = ['....', '....', '....', '....']): Record<string, unknown> {
-  return { width: 4, height: 4, rows: [...rows] };
+export function curvatureDocument(
+  rows: readonly (readonly number[])[] = ZERO_CURVATURE_ROWS,
+): Record<string, unknown> {
+  return { width: 4, height: 4, rows: rows.map((row) => [...row]) };
 }
+
+/** Узловые ряды без смещений для сетки 4×4: узлов 5×5. */
+export const ZERO_CURVATURE_ROWS: readonly (readonly number[])[] = Object.freeze(
+  Array.from({ length: 5 }, () => Object.freeze(new Array<number>(5).fill(0))),
+);
 
 /**
  * Дерево контента цели: сцена, парный документ, манифест и экспорт источника.
@@ -237,7 +244,11 @@ export interface GridObjectSpec {
   /** Имя объекта Blender — адрес в находках (BLND-6). */
   readonly name: string;
   readonly semantic: 'terrain' | 'curvature';
-  /** Высота клетки в мировых единицах, по рядам сетки. */
+  /**
+   * Высоты в мировых единицах. У terrain-объекта — по клеткам (грань плоская,
+   * BLND-9); у curvature-объекта — по УЗЛАМ, рядов `height+1` длины `width+1`:
+   * скульпт свободен, значение несёт вершина (BLND-10).
+   */
   readonly heights: readonly (readonly number[])[];
   /** Значения канала `_RAMP` по клеткам; нет — канала в экспорте нет вовсе. */
   readonly ramp?: readonly (readonly number[])[];
@@ -260,16 +271,9 @@ export function flagCells(rows: readonly string[], char: string): number[][] {
   return rows.map((row) => [...row].map((cell) => (cell === char ? 1 : 0)));
 }
 
-/** Ряды карты кривизны (ASSET-7) → высоты клеток в долях шага высоты. */
-export function curvatureHeights(rows: readonly string[]): number[][] {
-  return rows.map((row) =>
-    // eslint-disable-next-line @typescript-eslint/no-misused-spread -- baseline
-    [...row].map((char) => {
-      if (char === '.') return 0;
-      if (char >= '1' && char <= '7') return (char.charCodeAt(0) - 0x30) / 16;
-      return -(char.charCodeAt(0) - 0x60) / 16;
-    }),
-  );
+/** Узловые ряды карты кривизны (ASSET-7) → высоты узлов: множитель 1/32 шага. */
+export function curvatureHeights(rows: readonly (readonly number[])[]): number[][] {
+  return rows.map((row) => row.map((offset) => offset / 32));
 }
 
 interface Chunk {
@@ -319,8 +323,10 @@ export function gridSource(specs: readonly GridObjectSpec[]): {
 
   for (const spec of specs) {
     const cell = spec.cellSize ?? 1;
-    const height = spec.heights.length;
-    const width = spec.heights[0]?.length ?? 0;
+    // Curvature-объект задан узлами: клеток на ряд меньше на одну (BLND-10).
+    const byNodes = spec.semantic === 'curvature';
+    const height = byNodes ? spec.heights.length - 1 : spec.heights.length;
+    const width = byNodes ? (spec.heights[0]?.length ?? 1) - 1 : (spec.heights[0]?.length ?? 0);
     const positions: number[] = [];
     const indices: number[] = [];
     const ramp: number[] = [];
@@ -328,13 +334,17 @@ export function gridSource(specs: readonly GridObjectSpec[]): {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const z = spec.heights[y]![x]!;
+        const z00 = byNodes ? spec.heights[y]![x]! : z;
+        const z10 = byNodes ? spec.heights[y]![x + 1]! : z;
+        const z11 = byNodes ? spec.heights[y + 1]![x + 1]! : z;
+        const z01 = byNodes ? spec.heights[y + 1]![x]! : z;
         const x0 = x * cell;
         const x1 = (x + 1) * cell;
         const y0 = -y * cell;
         const y1 = -(y + 1) * cell;
         const base = positions.length / 3;
         // Четыре угла клетки в порядке аддона; вертикаль мира — glTF `+y`.
-        positions.push(x0, z, y0, x1, z, y0, x1, z, y1, x0, z, y1);
+        positions.push(x0, z00, y0, x1, z10, y0, x1, z11, y1, x0, z01, y1);
         indices.push(
           ...(spec.flipDiagonal === true
             ? [base, base + 1, base + 3, base + 1, base + 2, base + 3]
@@ -406,8 +416,14 @@ export const TERRAIN_GRID: GridObjectSpec = {
   noFloor: flagCells(TERRAIN_FLAGS, '_'),
 };
 
-/** Ряды, которые даёт `CURVATURE_GRID`. */
-export const CURVATURE_ROWS: readonly string[] = ['.123', 'abc.', '7g..', '....'];
+/** Узловые ряды, которые даёт `CURVATURE_GRID`: амплитуда и сверх шага (40 > 32). */
+export const CURVATURE_ROWS: readonly (readonly number[])[] = [
+  [0, 1, 2, 3, 40],
+  [-1, -2, -3, 0, 0],
+  [14, -14, 0, 0, 0],
+  [0, 0, 0, 0, -33],
+  [0, 0, 0, 0, 0],
+];
 
 export const CURVATURE_GRID: GridObjectSpec = {
   name: 'curvature',

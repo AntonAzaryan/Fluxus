@@ -46,7 +46,8 @@ export const PAINT_SCENE = {
 export const PAINT_CURVATURE = {
   width: PAINT_SIDE,
   height: PAINT_SIDE,
-  rows: rows('.'),
+  // Узловые ряды (PAINT_SIDE+1)² нулей (ASSET-7).
+  rows: Array.from({ length: PAINT_SIDE + 1 }, () => new Array<number>(PAINT_SIDE + 1).fill(0)),
 };
 
 /**

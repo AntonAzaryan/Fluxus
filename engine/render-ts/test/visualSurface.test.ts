@@ -1,8 +1,8 @@
 /**
  * Визуальная поверхность террейна (REND-9): гладкость внутри уровня (C1 —
- * сходятся и высота, и наклон), отсутствие «перетекания» кривизны через
- * cliff-границу, амплитуда меньше полушага, источник поверхности с догрузкой
- * карты и несовпадением сетки.
+ * сходятся и высота, и наклон), точный перепад на cliff-границе (узел двигает
+ * оба уровня одним значением), произвольная амплитуда без стенок, источник
+ * поверхности с догрузкой карты и несовпадением сетки.
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
@@ -20,10 +20,30 @@ import { makeAssets } from './fixtures.js';
 
 const STEP = 0.5;
 
-function curvatureOf(width: number, height: number, rows: string[]): TerrainCurvatureMap {
+function curvatureOf(width: number, height: number, rows: number[][]): TerrainCurvatureMap {
   const result = validateCurvatureMap({ width, height, rows });
   if (!result.ok) throw new Error(result.errors.join('; '));
   return result.map;
+}
+
+/** Карта из нулей с одним узлом (nx, ny) = value. */
+function bumpAt(width: number, height: number, nx: number, ny: number, value: number) {
+  const rows = Array.from({ length: height + 1 }, () => new Array<number>(width + 1).fill(0));
+  rows[ny]![nx] = value;
+  return curvatureOf(width, height, rows);
+}
+
+/** Карта, где столбец узлов nx равен value, остальное — нули. */
+function columnAt(width: number, height: number, nx: number, value: number) {
+  const rows = Array.from({ length: height + 1 }, () => new Array<number>(width + 1).fill(0));
+  for (const row of rows) row[nx] = value;
+  return curvatureOf(width, height, rows);
+}
+
+/** Карта, целиком заполненная value. */
+function uniform(width: number, height: number, value: number) {
+  const rows = Array.from({ length: height + 1 }, () => new Array<number>(width + 1).fill(value));
+  return curvatureOf(width, height, rows);
 }
 
 /** 4×2, плоский уровень 0. */
@@ -71,12 +91,20 @@ describe('createVisualSurface (REND-9)', () => {
     expect(n.z).toBeCloseTo(1, 6);
   });
 
-  it('выпуклость поднимает поверхность, вогнутость опускает; высота и нормаль непрерывны внутри уровня', () => {
+  it('выпуклость поднимает поверхность, вогнутость опускает; высота непрерывна внутри уровня', () => {
     const grid = flatGrid();
-    const surface = createVisualSurface(grid, STEP, curvatureOf(4, 2, ['.7g.', '.7g.']));
-    // Центры клеток: бугор под "7", впадина под "g".
-    expect(surface.heightAt(1.5, 1)).toBeGreaterThan(0);
-    expect(surface.heightAt(2.5, 1)).toBeLessThan(0);
+    // Столбец узлов x=1 поднят, x=3 опущен: бугор у клетки 1, впадина у клетки 3.
+    const surface = createVisualSurface(
+      grid,
+      STEP,
+      curvatureOf(4, 2, [
+        [0, 16, 0, -16, 0],
+        [0, 16, 0, -16, 0],
+        [0, 16, 0, -16, 0],
+      ]),
+    );
+    expect(surface.heightAt(1.2, 1)).toBeGreaterThan(0);
+    expect(surface.heightAt(2.8, 1)).toBeLessThan(0);
     // Высота непрерывна на границах клеток.
     for (const border of [1, 2, 3]) {
       expect(surface.heightAt(border - 1e-6, 0.7)).toBeCloseTo(surface.heightAt(border + 1e-6, 0.7), 4);
@@ -88,12 +116,18 @@ describe('createVisualSurface (REND-9)', () => {
   });
 
   it('на границе клеток одного уровня сходятся и высота, и наклон (C1)', () => {
-    // Смещения разные по обеим осям — иначе тангенциальная производная нулевая
-    // с обеих сторон и сравнивать было бы нечего.
+    // Узловые смещения разные по обеим осям — иначе тангенциальная производная
+    // нулевая с обеих сторон и сравнивать было бы нечего.
     const surface = createVisualSurface(
       plateauGrid(),
       STEP,
-      curvatureOf(4, 4, ['.7g.', '7.g5', 'g5..', '..71']),
+      curvatureOf(4, 4, [
+        [0, 7, -7, 0, 3],
+        [7, 0, -7, 5, 0],
+        [-7, 5, 0, 0, 2],
+        [0, 0, 7, 1, 0],
+        [2, 0, 0, 4, 0],
+      ]),
     );
 
     let tilted = 0;
@@ -120,45 +154,63 @@ describe('createVisualSurface (REND-9)', () => {
     expect(Math.abs(surface.normalAt(1.5, 1.5, normal()).x)).toBeGreaterThan(1e-3);
   });
 
-  it('амплитуда ограничена меньше полушага: бугор не прочитывается как соседний уровень (REND-7)', () => {
+  it('амплитуда произвольна: холм выше шага уровня легален и стенок не порождает', () => {
     const grid = flatGrid();
-    // Максимальная выпуклость всюду — предельный случай алфавита.
-    const surface = createVisualSurface(grid, STEP, curvatureOf(4, 2, ['7777', '7777']));
-    for (const [x, y] of [[0.5, 0.5], [1.5, 1.5], [3.5, 0.5], [2, 1]] as const) {
-      expect(Math.abs(surface.heightAt(x, y))).toBeLessThan(STEP / 2);
-    }
+    // |40| > 32 — рельеф крупнее целого шага высоты; предела формата нет (ASSET-7).
+    const surface = createVisualSurface(grid, STEP, uniform(4, 2, 40));
+    expect(surface.heightAt(2, 1)).toBeCloseTo((40 / 32) * STEP, 5);
+    expect(surface.heightAt(2, 1)).toBeGreaterThan(STEP);
+    // Кривизна не порождает cliff-геометрию: стенок на плоской арене нет (REND-9).
+    const walls = buildWallGeometry(grid, STEP, surface);
+    expect(walls.positions.length).toBe(0);
   });
 
-  it('кривизна не перетекает через cliff-границу: плато вздувается, низина не тронута', () => {
+  it('узел на cliff-границе двигает оба уровня одним значением: перепад точен, стенка вертикальна', () => {
     const grid = cliffGrid();
-    // Вся кривизна — на правом столбце (уровень 1).
-    const surface = createVisualSurface(grid, STEP, curvatureOf(2, 2, ['.7', '.7']));
-    // Углы низины на самой границе x=1 остаются на нулевой высоте.
-    expect(surface.heightAt(1 - 1e-6, 0.5)).toBeCloseTo(0, 5);
-    expect(surface.heightAt(1 - 1e-6, 1.5)).toBeCloseTo(0, 5);
-    // Плато у границы поднято.
-    expect(surface.heightAt(1 + 1e-6, 1)).toBeGreaterThan(STEP);
-    // Нормаль в низине вертикальна: чужая кривизна на неё не влияет.
+    // Весь столбец узлов кромки x=1 поднят.
+    const surface = createVisualSurface(grid, STEP, columnAt(2, 2, 1, 16));
+    // Кромка низины и кромка плато поднялись на одно и то же 16/32 шага.
+    expect(surface.heightInCell(0, 0, 1, 0.5)).toBeCloseTo((16 / 32) * STEP, 5);
+    expect(surface.heightInCell(1, 0, 1, 0.5)).toBeCloseTo(STEP + (16 / 32) * STEP, 5);
+    // Перепад — ровно ступень: обрыв нельзя «закопать» кривизной по построению.
+    expect(surface.heightInCell(1, 0, 1, 0.5) - surface.heightInCell(0, 0, 1, 0.5)).toBeCloseTo(
+      STEP,
+      6,
+    );
+  });
+
+  it('кривизна вдали от кромки не трогает соседний уровень: своих узлов у него нет', () => {
+    const grid = cliffGrid();
+    // Поднят только дальний столбец узлов плато x=2; узлы кромки x=1 нулевые.
+    const surface = createVisualSurface(grid, STEP, columnAt(2, 2, 2, 16));
+    // Низина плоская: все её узлы нулевые.
+    expect(surface.heightAt(0.5, 1)).toBeCloseTo(0, 6);
     const n = surface.normalAt(0.5, 1, normal());
     expect(n.x).toBeCloseTo(0, 6);
     expect(n.y).toBeCloseTo(0, 6);
+    // Плато наклонено к дальнему краю, высоты на кромке расходятся на ступень.
+    expect(Math.abs(surface.normalInCell(1, 0, 1.5, 0.5, normal()).x)).toBeGreaterThan(1e-2);
+    expect(surface.heightInCell(1, 0, 1, 0.5) - surface.heightInCell(0, 0, 1, 0.5)).toBeCloseTo(
+      STEP,
+      6,
+    );
   });
 
-  it('через cliff-границу не усредняются и нормали: кромка плато не скругляется', () => {
+  it('через cliff-границу не усредняются нормали: кромка плато не скругляется', () => {
     const grid = cliffGrid();
-    // Кривизна только у верхней клетки плато — плато наклонено вдоль кромки.
-    const surface = createVisualSurface(grid, STEP, curvatureOf(2, 2, ['.7', '..']));
+    // Кривизна меняется вдоль кромки: узел (1, 1) поднят — плато и низина
+    // наклонены вдоль границы, но каждая клетка считает нормаль по своим углам.
+    const surface = createVisualSurface(grid, STEP, bumpAt(2, 2, 1, 1, 16));
     const lower = surface.normalInCell(0, 0, 1, 0.5, normal());
     const upper = surface.normalInCell(1, 0, 1, 0.5, normal());
-    // Одна и та же мировая точка на кромке: снизу — нормаль низины, сверху —
-    // нормаль плато. Усреднить их некому, потому что усреднения нет вовсе.
-    expect(lower.x).toBeCloseTo(0, 6);
-    expect(lower.y).toBeCloseTo(0, 6);
-    expect(lower.z).toBeCloseTo(1, 6);
+    // Одна и та же мировая точка на кромке даёт две нормали — свою у каждого
+    // уровня; усреднить их некому, потому что усреднения нет вовсе.
+    expect(Math.abs(lower.y)).toBeGreaterThan(1e-2);
     expect(Math.abs(upper.y)).toBeGreaterThan(1e-2);
-    // И высоты на кромке расходятся на ступень — силуэт остался резким.
-    expect(surface.heightInCell(1, 0, 1, 0.5) - surface.heightInCell(0, 0, 1, 0.5)).toBeGreaterThan(
-      STEP / 2,
+    // Высоты на кромке расходятся ровно на ступень — силуэт остался резким.
+    expect(surface.heightInCell(1, 0, 1, 0.5) - surface.heightInCell(0, 0, 1, 0.5)).toBeCloseTo(
+      STEP,
+      6,
     );
   });
 
@@ -173,25 +225,25 @@ describe('createVisualSurface (REND-9)', () => {
 describe('геометрия с кривизной (REND-9)', () => {
   it('пол с поверхностью повторяет её форму; без поверхности — прежние ступени', () => {
     const grid = flatGrid();
-    const surface = createVisualSurface(grid, STEP, curvatureOf(4, 2, ['7777', '7777']));
+    const surface = createVisualSurface(grid, STEP, uniform(4, 2, 7));
     const curved = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 4, 2, surface);
     const flat = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 4, 2);
-    // Все внутренние углы подняты, но меньше полушага.
+    // Все углы подняты на равномерное поле 7/32 шага.
     let raised = 0;
     for (let i = 2; i < curved.positions.length; i += 3) {
       const z = curved.positions[i]!;
-      expect(z).toBeLessThan(STEP / 2);
+      expect(z).toBeCloseTo((7 / 32) * STEP, 6);
       if (z > 0) raised++;
     }
     expect(raised).toBeGreaterThan(0);
     for (let i = 2; i < flat.positions.length; i += 3) expect(flat.positions[i]).toBe(0);
   });
 
-  it('сцена без карты кривизны собирает ТУ ЖЕ геометрию, что карта из одних точек', () => {
+  it('сцена без карты кривизны собирает ТУ ЖЕ геометрию, что карта из одних нулей', () => {
     const grid = flatGrid();
     // Карта задана, но пустая: узловые смещения нулевые — клетка остаётся одним
     // квадом, и позиции совпадают с прежними ступенями побитово.
-    const empty = createVisualSurface(grid, STEP, curvatureOf(4, 2, ['....', '....']));
+    const empty = createVisualSurface(grid, STEP, uniform(4, 2, 0));
     const none = createVisualSurface(grid, STEP, null);
     const withMap = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 4, 2, empty);
     const withSurface = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 4, 2, none);
@@ -212,7 +264,7 @@ describe('геометрия с кривизной (REND-9)', () => {
     // Стенок на плоской арене нет ни там, ни там; на обрыве без кривизны —
     // прежний одиночный квад на отрезок.
     const cliff = cliffGrid();
-    const flatCliff = createVisualSurface(cliff, STEP, curvatureOf(2, 2, ['..', '..']));
+    const flatCliff = createVisualSurface(cliff, STEP, uniform(2, 2, 0));
     const wallsPlain = buildWallGeometry(cliff, STEP);
     const wallsField = buildWallGeometry(cliff, STEP, flatCliff);
     expect([...wallsField.positions]).toEqual([...wallsPlain.positions]);
@@ -220,7 +272,7 @@ describe('геометрия с кривизной (REND-9)', () => {
 
   it('стенка тянется до фактических визуальных кромок (skirt)', () => {
     const grid = cliffGrid();
-    const surface = createVisualSurface(grid, STEP, curvatureOf(2, 2, ['.7', '.7']));
+    const surface = createVisualSurface(grid, STEP, columnAt(2, 2, 1, 16));
     const walls = buildWallGeometry(grid, STEP, surface);
     // Верхние кромки стенок идут по полю плато, а не по level × step.
     const tops: number[] = [];
@@ -261,10 +313,10 @@ describe('VisualSurfaceSource (ASSET-7 → REND-9)', () => {
     expect(source.current?.hasCurvature).toBe(false);
     expect(assets.requests.filter((r) => r.kind === 'terrain-curvature').length).toBe(1);
 
-    assets.resolve('terrain-curvature', 'visuals/curve.json', curvatureOf(4, 2, ['.7..', '....']));
+    assets.resolve('terrain-curvature', 'visuals/curve.json', bumpAt(4, 2, 2, 1, 16));
     expect(changes).toBe(1);
     expect(source.current?.hasCurvature).toBe(true);
-    expect(source.current!.heightAt(1.5, 0.5)).toBeGreaterThan(0);
+    expect(source.current!.heightAt(2, 1)).toBeGreaterThan(0);
   });
 
   it('несовпадение сетки — предупреждение и рендер без кривизны (ASSET-7)', () => {
@@ -275,7 +327,7 @@ describe('VisualSurfaceSource (ASSET-7 → REND-9)', () => {
       warn: (m) => warnings.push(m),
     });
     source.init(ctx);
-    assets.resolve('terrain-curvature', 'visuals/wrong.json', curvatureOf(3, 3, ['...', '...', '...']));
+    assets.resolve('terrain-curvature', 'visuals/wrong.json', uniform(3, 3, 0));
     expect(warnings.some((w) => w.includes('не совпадает с сеткой'))).toBe(true);
     expect(source.current?.hasCurvature).toBe(false);
   });
@@ -332,29 +384,29 @@ describe('VisualSurfaceSource: документные входы (ED-10, ED-11, 
     source.onChange((cells) => changes.push(cells));
     source.init(ctx);
 
-    source.setCurvature(curvatureOf(4, 2, ['.7..', '....']));
+    source.setCurvature(bumpAt(4, 2, 2, 1, 16));
     expect(assets.requests.length).toBe(0); // документ, а не ассет
     expect(source.current!.hasCurvature).toBe(true);
-    expect(source.current!.heightAt(1.5, 0.5)).toBeGreaterThan(0);
-    // Изменилась одна клетка — её и получил подписчик, а не «вся поверхность».
-    expect(changes).toEqual([[1]]);
+    expect(source.current!.heightAt(2, 1)).toBeGreaterThan(0);
+    // Узел — общий угол четырёх клеток: их и получил подписчик, а не «всю поверхность».
+    expect(changes).toEqual([[1, 2, 5, 6]]);
 
     // Снятие карты возвращает плоские ступени REND-7.
     source.setCurvature(null);
     expect(source.current!.hasCurvature).toBe(false);
-    expect(source.current!.heightAt(1.5, 0.5)).toBeCloseTo(0, 6);
+    expect(source.current!.heightAt(2, 1)).toBeCloseTo(0, 6);
   });
 
   it('карта из памяти главнее догруженного ассета: она и есть текущий документ', () => {
     const { assets, ctx } = makeCtx();
     const source = new VisualSurfaceSource(flatGrid(), { curvatureMapId: 'visuals/curve.json' });
     source.init(ctx);
-    source.setCurvature(curvatureOf(4, 2, ['.7..', '....']));
+    source.setCurvature(bumpAt(4, 2, 2, 1, 16));
 
-    assets.resolve('terrain-curvature', 'visuals/curve.json', curvatureOf(4, 2, ['...7', '....']));
-    // Ассет не перебил правку: поднята клетка кисти, а не клетка ассета.
-    expect(source.current!.heightAt(1.5, 0.5)).toBeGreaterThan(0);
-    expect(source.current!.heightAt(3.5, 0.5)).toBeCloseTo(0, 6);
+    assets.resolve('terrain-curvature', 'visuals/curve.json', bumpAt(4, 2, 4, 1, 16));
+    // Ассет не перебил правку: поднят узел кисти, а не узел ассета.
+    expect(source.current!.heightAt(2, 1)).toBeGreaterThan(0);
+    expect(source.current!.heightAt(3.9, 0.5)).toBeCloseTo(0, 4);
   });
 
   it('несовпадение сетки карты из памяти — предупреждение и игнор (ASSET-7)', () => {
@@ -362,7 +414,7 @@ describe('VisualSurfaceSource: документные входы (ED-10, ED-11, 
     const warnings: string[] = [];
     const source = new VisualSurfaceSource(flatGrid(), { warn: (m) => warnings.push(m) });
     source.init(ctx);
-    source.setCurvature(curvatureOf(3, 3, ['...', '...', '...']));
+    source.setCurvature(uniform(3, 3, 0));
     expect(warnings.some((w) => w.includes('не совпадает с сеткой'))).toBe(true);
     expect(source.current!.hasCurvature).toBe(false);
   });
@@ -390,18 +442,20 @@ describe('VisualSurfaceSource: документные входы (ED-10, ED-11, 
     expect(changes.length).toBe(1);
   });
 
-  it('кривизна пересчитывается по новым уровням: cliff-граница держит её на месте', () => {
+  it('кривизна безразлична к уровням: подъём клетки сдвигает базу, узлы остаются', () => {
     const { ctx } = makeCtx();
     const source = new VisualSurfaceSource(flatGrid());
     source.init(ctx);
-    // Кривизна на клетках 1 и 2, пока обе на уровне 0 — усреднение их связывает.
-    source.setCurvature(curvatureOf(4, 2, ['.77.', '....']));
-    const joined = source.current!.heightAt(2 - 1e-6, 0.5);
-    expect(joined).toBeGreaterThan(0);
+    // Столбец узлов x=2 — граница клеток 1 и 2, пока обе на уровне 0.
+    const lift = (16 / 32) * STEP;
+    source.setCurvature(columnAt(4, 2, 2, 16));
+    expect(source.current!.heightAt(2 - 1e-6, 0.5)).toBeCloseTo(lift, 4);
+    expect(source.current!.heightAt(2 + 1e-6, 0.5)).toBeCloseTo(lift, 4);
 
-    // Клетка 1 поднялась: угол на границе усредняется только по своему уровню.
+    // Клетка 1 поднялась: её кромка — база плюс то же узловое смещение, кромка
+    // соседа — только смещение; перепад между ними ровно ступень (REND-9).
     source.setGrid(raisedGrid(1));
-    expect(source.current!.heightAt(2 - 1e-6, 0.5)).toBeGreaterThan(STEP);
-    expect(source.current!.heightAt(2 + 1e-6, 0.5)).toBeLessThan(STEP / 2);
+    expect(source.current!.heightInCell(1, 0, 2, 0.5)).toBeCloseTo(STEP + lift, 4);
+    expect(source.current!.heightInCell(2, 0, 2, 0.5)).toBeCloseTo(lift, 4);
   });
 });

@@ -93,7 +93,8 @@ export interface TerrainMaps {
 export interface CurvatureMap {
   readonly width: number;
   readonly height: number;
-  readonly rows: readonly string[];
+  /** Узловые ряды `(height+1) × (width+1)` — целые множители 1/32 шага высоты. */
+  readonly rows: readonly (readonly number[])[];
 }
 
 /**

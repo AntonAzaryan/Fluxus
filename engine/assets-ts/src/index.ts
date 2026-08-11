@@ -73,7 +73,7 @@ export {
 
 // карта кривизны террейна (ASSET-7)
 export type { TerrainCurvatureMap } from './curvature.js';
-export { validateCurvatureMap, curvatureOffsetOf, CURVATURE_SCALE } from './curvature.js';
+export { validateCurvatureMap, CURVATURE_SCALE } from './curvature.js';
 
 // парный presentation-документ сцены (`presentation-scene` PRES-1..3)
 export type { DecorationRecord, PresentationScene } from './presentation.js';

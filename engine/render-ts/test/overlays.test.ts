@@ -95,10 +95,15 @@ function grid4(): TerrainGrid {
   });
 }
 
-function curvature(rows: string[]): TerrainCurvatureMap {
+function curvature(rows: number[][]): TerrainCurvatureMap {
   const result = validateCurvatureMap({ width: 4, height: 4, rows });
   if (!result.ok) throw new Error(result.errors.join('; '));
   return result.map;
+}
+
+/** Узловые ряды 5×5: один и тот же ряд на все узловые линии. */
+function nodeColumns(row: number[]): number[][] {
+  return Array.from({ length: 5 }, () => [...row]);
 }
 
 interface Rig {
@@ -179,7 +184,7 @@ describe('пустой набор (REND-16, ED-22)', () => {
 describe('подсветка выделения (REND-16)', () => {
   it('стоит в видимой позе инстанса и наследует его наклон по поверхности (REND-10)', () => {
     const rig = makeRig();
-    rig.source.setCurvature(curvature(['g.7.', 'g.7.', 'g.7.', 'g.7.']));
+    rig.source.setCurvature(curvature(nodeColumns([-14, -7, 7, 7, 0])));
     placeBox(rig);
     rig.overlays.apply([{ kind: 'highlight', key: 'sel', entity: 1 }]);
     rig.overlays.updateFrame(0.016, 1);
@@ -245,7 +250,13 @@ describe('наложения по визуальной поверхности (R
 
   it('ячейка на холме строится той же выборкой, что пол: не проваливается и не висит (REND-9)', () => {
     const rig = makeRig();
-    rig.source.setCurvature(curvature(['.7..', '.7..', '....', '....']));
+    rig.source.setCurvature(curvature([
+      [0, 14, 14, 0, 0],
+      [0, 14, 14, 0, 0],
+      [0, 14, 14, 0, 0],
+      [0, 0, 0, 0, 0],
+      [0, 0, 0, 0, 0],
+    ]));
     rig.overlays.apply([{ kind: 'cells', key: 'brush', cells: [1 * 4 + 1] }]);
 
     const surface = rig.source.current!;
@@ -267,7 +278,7 @@ describe('наложения по визуальной поверхности (R
 
   it('сетка идёт по клеткам той же поверхности; клетка с кривизной — ломаная по полю', () => {
     const rig = makeRig();
-    rig.source.setCurvature(curvature(['7777', '7777', '7777', '7777']));
+    rig.source.setCurvature(curvature(nodeColumns([14, 14, 14, 14, 14])));
     rig.overlays.apply([{ kind: 'grid', key: 'grid', x0: 1, y0: 1, x1: 1, y1: 1 }]);
 
     const surface = rig.source.current!;

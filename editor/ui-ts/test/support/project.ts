@@ -88,7 +88,13 @@ export const FIXTURE_VISUALS = {
 export const FIXTURE_CURVATURE = {
   width: 4,
   height: 4,
-  rows: ['....', '.1a.', '.a1.', '....'],
+  rows: [
+    [0, 0, 0, 0, 0],
+    [0, 1, -1, 0, 0],
+    [0, -1, 1, 0, 0],
+    [0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0],
+  ],
 };
 
 /**

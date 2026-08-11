@@ -9,9 +9,10 @@
 **Снап по построению (BLND-9, design 7).** Кисть уровня двигает клетку целыми
 уровнями и записывает высоту как `уровень × LEVEL_UNIT`: «высота между
 уровнями» мазком недостижима, и отказ импорта по этой причине означает правку
-мимо кисти — тогда он уместен. Кисть кривизны ходит удобным шагом, но правилом
-это не делает: квантование в алфавит и кламп амплитуды выполняет импорт
-(BLND-10).
+мимо кисти — тогда он уместен. Кисть кривизны двигает УЗЛЫ — общие вершины
+связной сетки — удобным шагом, но правилом это не делает: квантование к
+решётке 1/32 выполняет импорт, а клампа амплитуды нет вовсе (BLND-10) —
+читаемость перепадов в кадре держит cliff-кромка (REND-9).
 
 Клетка под курсором ищется лучом по BVH, собранному из ИСХОДНОГО меша, а не по
 `Object.ray_cast`: у объекта висит превью-модификатор Geometry Nodes, и
@@ -267,7 +268,7 @@ class FLUXUS_OT_terrain_flag_brush(GridBrushBase, bpy.types.Operator):
 
 
 class FLUXUS_OT_curvature_brush(GridBrushBase, bpy.types.Operator):
-    """Кисть кривизны: визуальное смещение клетки (BLND-10)"""
+    """Кисть кривизны: визуальное смещение узлов сетки (BLND-10)"""
 
     bl_idname = "fluxus.curvature_brush"
     bl_label = "Кисть кривизны"
@@ -284,15 +285,32 @@ class FLUXUS_OT_curvature_brush(GridBrushBase, bpy.types.Operator):
         default="UP",
     )
 
-    def apply_to_cell(self, context, mesh, index, weight):
+    def _paint(self, context, event):
+        """
+        Мазок по узлам: вершины у сетки кривизны общие (build_node_grid_mesh),
+        и единица мазка — вершина-узел, а не клетка; каждый узел за мазок
+        двигается один раз, сколько бы клеток радиуса его ни разделяло.
+        """
+        index = self._cell_under_mouse(context, event)
+        if index is None:
+            return
+        mesh = self.grid.data
         settings = context.scene.fluxus
-        step = settings.brush_curvature_step * LEVEL_UNIT
-        if settings.brush_curvature_falloff:
-            step *= weight
-        if self.direction == "DOWN":
-            step = -step
-        set_cell_height(mesh, index, cell_height(mesh, index) + step)
-        return True
+        changed = False
+        for cell, weight in self._cells_in_radius(index):
+            step = settings.brush_curvature_step * LEVEL_UNIT
+            if settings.brush_curvature_falloff:
+                step *= weight
+            if self.direction == "DOWN":
+                step = -step
+            for vertex in mesh.polygons[cell].vertices:
+                if vertex in self.painted:
+                    continue
+                self.painted.add(vertex)
+                mesh.vertices[vertex].co.z += step
+                changed = True
+        if changed:
+            mesh.update()
 
 
 def _draw_level_settings(context, layout, tool):

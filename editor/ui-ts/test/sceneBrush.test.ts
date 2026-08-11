@@ -254,9 +254,9 @@ describe('ED-11: кисть кривизны живёт в своём слое',
     expect(bytesOf(session, PAINT_IDS.config)).toBe(before);
     const rows = getAtPath(session.documentValue(PAINT_IDS.curvature), [
       'rows',
-    ]) as readonly string[];
-    // `c` — третья буква алфавита вогнутости (ASSET-7): −3/16 шага высоты.
-    expect(rows[0]).toBe('cccccccc');
+    ]) as readonly (readonly number[])[];
+    // Кисть красит узлы — углы клеток мазка: −3/32 шага высоты (ASSET-7).
+    expect(rows[0]).toEqual(new Array(PAINT_SIDE + 1).fill(-3));
     expect(session.history().undo).toHaveLength(1);
   });
 

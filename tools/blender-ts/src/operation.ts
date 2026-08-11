@@ -261,7 +261,7 @@ function readFindings(id: string, layer: JsonObject): readonly Finding[] {
   });
 }
 
-/** Карта ассета — массив строк, по одной на ряд сетки (TERR-3, ASSET-7). */
+/** Карта ассета террейна — массив строк, по одной на ряд сетки (TERR-3). */
 function readMap(id: string, slot: JsonObject, where: string, key: string): readonly string[] {
   const value = slot[key];
   if (!isJsonArray(value) || !value.every((row): row is string => typeof row === 'string')) {
@@ -269,6 +269,30 @@ function readMap(id: string, slot: JsonObject, where: string, key: string): read
       param: 'layer',
       received: value ?? null,
     });
+  }
+  return value;
+}
+
+/** Карта кривизны — числовые ряды узлов (ASSET-7): целые множители решётки. */
+function readNodeRows(
+  id: string,
+  slot: JsonObject,
+  where: string,
+  key: string,
+): readonly (readonly number[])[] {
+  const value = slot[key];
+  if (
+    !isJsonArray(value) ||
+    !value.every(
+      (row): row is number[] =>
+        Array.isArray(row) && row.every((node) => typeof node === 'number' && Number.isSafeInteger(node)),
+    )
+  ) {
+    throw new OperationError(
+      id,
+      `параметр "layer": "${where}.${key}" — числовые ряды узлов, по одному на узловую линию`,
+      { param: 'layer', received: value ?? null },
+    );
   }
   return value;
 }
@@ -307,18 +331,22 @@ function writeMap(
   ctx: OperationContext,
   documentId: DocumentId,
   path: JsonPath,
-  rows: readonly string[],
+  rows: readonly (string | readonly number[])[],
 ): SlotChange {
+  const rowValue = (row: string | readonly number[]): JsonValue =>
+    typeof row === 'string' ? row : [...row];
   const existing = ctx.readAt(documentId, path);
   if (!isJsonArray(existing) || existing.length !== rows.length) {
-    if (sameJson(existing, [...rows])) return NOTHING;
-    ctx.setValue(documentId, path, [...rows]);
+    const wanted = rows.map(rowValue);
+    if (sameJson(existing, wanted)) return NOTHING;
+    ctx.setValue(documentId, path, wanted);
     return { set: rows.length, appended: 0, removed: 0 };
   }
   let set = 0;
   for (let y = 0; y < rows.length; y++) {
-    if (existing[y] === rows[y]) continue;
-    ctx.setValue(documentId, [...path, y], rows[y]!);
+    const wanted = rowValue(rows[y]!);
+    if (sameJson(existing[y] ?? null, wanted)) continue;
+    ctx.setValue(documentId, [...path, y], wanted);
     set++;
   }
   return { set, appended: 0, removed: 0 };
@@ -440,7 +468,7 @@ export const importSpatialLayerOperation: AuthoringOperation = {
         : {
             width: readNumber(id, curvatureSlot, 'curvature', 'width'),
             height: readNumber(id, curvatureSlot, 'curvature', 'height'),
-            rows: readMap(id, curvatureSlot, 'curvature', OFFSET_MAP),
+            rows: readNodeRows(id, curvatureSlot, 'curvature', OFFSET_MAP),
           };
     if (hasErrors(findings)) {
       const errors = findings.filter((finding) => finding.severity === 'error');

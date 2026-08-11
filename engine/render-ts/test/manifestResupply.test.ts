@@ -79,7 +79,17 @@ function makeRig(manifest: VisualManifest = makeManifest()): Rig {
   });
   subsystem.init(ctx);
 
-  const map = validateCurvatureMap({ width: 4, height: 4, rows: ['....', '.77.', '.77.', '....'] });
+  const map = validateCurvatureMap({
+    width: 4,
+    height: 4,
+    rows: [
+      [0, 0, 0, 0, 0],
+      [0, 14, 14, 14, 0],
+      [0, 14, 14, 14, 0],
+      [0, 14, 14, 14, 0],
+      [0, 0, 0, 0, 0],
+    ],
+  });
   if (!map.ok) throw new Error(map.errors.join('; '));
   assets.resolve('terrain-curvature', 'visuals/curve.json', map.map);
   return { subsystem, ctx, source, assets, warnings };

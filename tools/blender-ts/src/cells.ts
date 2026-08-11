@@ -94,6 +94,109 @@ interface CellSlot {
   readonly channels: number[];
 }
 
+/** Узловые данные grid-объекта: по одному значению на узел (угол клетки), построчно. */
+export interface NodeGrid {
+  readonly width: number;
+  readonly height: number;
+  /** Высоты узлов в мировых единицах, ряды длины `width + 1`, рядов `height + 1`. */
+  readonly heights: readonly number[];
+}
+
+/** Результат чтения узлов: сетка либо перечень ошибок с адресами узлов (BLND-6). */
+export interface NodeGridRead {
+  readonly grid: NodeGrid | null;
+  readonly errors: readonly string[];
+}
+
+/**
+ * Узловые данные объекта: вершины grid-меша — узлы сетки, углы клеток
+ * (BLND-10). В отличие от клеточного читателя, грань здесь не обязана быть
+ * плоской — скульпт свободен, значение несёт каждый узел сам.
+ *
+ * Вершина обязана попасть в узел с допуском четверти клетки (несведённый
+ * трансформ ловится, шум float32 — нет); совпавшие в узле вершины обязаны
+ * согласиться по высоте с точностью `HEIGHT_EPSILON` — так переживается
+ * сварка вершин экспортёром. Узел без вершины — ошибка покрытия (TERR-2).
+ */
+export function readNodeGrid(document: GltfDocument, object: SourceObject, spec: CellGridSpec): NodeGridRead {
+  const errors: string[] = [];
+  const fail = (message: string): void => {
+    if (errors.length < ERROR_LIMIT) errors.push(message);
+  };
+
+  if (object.mesh === null) {
+    return { grid: null, errors: ['объект без геометрии: узловые данные читаются с grid-меша (BLND-10)'] };
+  }
+  if (!Number.isFinite(spec.cellSize) || spec.cellSize <= 0) {
+    return { grid: null, errors: [`размер клетки ${spec.cellSize} не положителен (TERR-2)`] };
+  }
+
+  let geometry;
+  try {
+    geometry = readMeshGeometry(document, object.mesh, []);
+  } catch (error) {
+    return { grid: null, errors: [error instanceof GltfParseError ? error.message : String(error)] };
+  }
+
+  const nodesX = spec.width + 1;
+  const nodesY = spec.height + 1;
+  const total = nodesX * nodesY;
+  const heights = new Array<number | null>(total).fill(null);
+
+  for (let index = 0; index < geometry.positions.length; index++) {
+    const point = worldPoint(object.world, geometry.positions[index]!);
+    if (![point.x, point.y, point.elevation].every((value) => Number.isFinite(value))) {
+      fail(`вершина ${index}: координата не является конечным числом`);
+      continue;
+    }
+    const u = point.x / spec.cellSize;
+    const v = point.y / spec.cellSize;
+    const nx = Math.round(u);
+    const ny = Math.round(v);
+    if (Math.abs(u - nx) > CENTER_TOLERANCE || Math.abs(v - ny) > CENTER_TOLERANCE) {
+      fail(
+        `вершина (${formatHeight(point.x)}, ${formatHeight(point.y)}) не попадает в узел сетки: ` +
+          `сетка сдвинута либо её трансформ не применён (CONVENTIONS.md)`,
+      );
+      continue;
+    }
+    if (nx < 0 || ny < 0 || nx >= nodesX || ny >= nodesY) {
+      fail(`вершина адресует узел (${nx}, ${ny}) вне узловой сетки ${nodesX}×${nodesY} (TERR-2)`);
+      continue;
+    }
+    const at = ny * nodesX + nx;
+    const known = heights[at];
+    if (known == null) {
+      heights[at] = point.elevation;
+      continue;
+    }
+    if (Math.abs(known - point.elevation) > HEIGHT_EPSILON) {
+      fail(
+        `узел (${nx}, ${ny}): вершины узла лежат на разной высоте ` +
+          `(${formatHeight(known)} и ${formatHeight(point.elevation)})`,
+      );
+    }
+  }
+
+  const missing: string[] = [];
+  for (let y = 0; y < nodesY && missing.length < 4; y++) {
+    for (let x = 0; x < nodesX && missing.length < 4; x++) {
+      if (heights[y * nodesX + x] === null) missing.push(`(${x}, ${y})`);
+    }
+  }
+  if (missing.length > 0) {
+    fail(
+      `узловая сетка не покрыта вершинами целиком: ${missing.length === 1 ? 'узел' : 'узлы'} ${missing.join(', ')}` +
+        `${missing.length === 4 ? ' и далее' : ''} — сетка мельче ассета ${nodesX}×${nodesY} (TERR-2)`,
+    );
+  }
+  if (errors.length > 0) return { grid: null, errors };
+  return {
+    grid: { width: spec.width, height: spec.height, heights: heights.map((value) => value!) },
+    errors: [],
+  };
+}
+
 /**
  * Клеточные данные объекта. Ошибки собираются все до предела перечисления и
  * возвращаются вместе с `null`: решать «писать или не писать» — вызывающему

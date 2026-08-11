@@ -193,7 +193,7 @@ describe('BLND-6: находки важности «ошибка» отверг�
       editor.applyOperation(IMPORT_SPATIAL_LAYER, {
         scene: SCENE_ID,
         presentation: PRESENTATION_ID,
-        layer: { ...layer, curvature: { width: 4, height: 4, rows: ['....'] } },
+        layer: { ...layer, curvature: { width: 4, height: 4, rows: [[0, 0, 0, 0, 0]] } },
       }),
     ).toThrow(/кривизн/);
     expect(editor.dirtyDocumentIds()).toEqual([]);

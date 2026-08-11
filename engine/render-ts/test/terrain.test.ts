@@ -179,9 +179,16 @@ function docGridRaised(x: number, y: number) {
 }
 
 function docCurvature(cells: readonly (readonly [number, number])[]): TerrainCurvatureMap {
-  const map = rows('.');
+  // Мазок по клетке поднимает четыре её узла — узловой эквивалент прежнего
+  // per-cell значения 7/16 (14/32 шага высоты).
+  const map = Array.from({ length: DOC_HEIGHT + 1 }, () =>
+    new Array<number>(DOC_WIDTH + 1).fill(0),
+  );
   for (const [x, y] of cells) {
-    map[y] = `${map[y]!.slice(0, x)}7${map[y]!.slice(x + 1)}`;
+    map[y]![x] = 14;
+    map[y]![x + 1] = 14;
+    map[y + 1]![x] = 14;
+    map[y + 1]![x + 1] = 14;
   }
   const result = validateCurvatureMap({ width: DOC_WIDTH, height: DOC_HEIGHT, rows: map });
   if (!result.ok) throw new Error(result.errors.join('; '));

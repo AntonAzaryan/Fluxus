@@ -107,7 +107,7 @@ function makeManifest(): VisualManifest {
   };
 }
 
-function curvature(width: number, height: number, rows: string[]): TerrainCurvatureMap {
+function curvature(width: number, height: number, rows: number[][]): TerrainCurvatureMap {
   const result = validateCurvatureMap({ width, height, rows });
   if (!result.ok) throw new Error(result.errors.join('; '));
   return result.map;
@@ -272,7 +272,12 @@ describe('попадание в поверхность (REND-15)', () => {
   it('попадание по холму считается по сглаженному полю, а не по билинейной хорде (REND-9)', () => {
     const { picking, source } = makeRig(flatGrid(3, 3));
     // Северный ряд поднят кривизной: внутри клетки (1,1) поле меняется по Y.
-    source.setCurvature(curvature(3, 3, ['777', '...', '...']));
+    source.setCurvature(curvature(3, 3, [
+      [14, 14, 14, 14],
+      [7, 7, 7, 7],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+    ]));
     const surface = source.current!;
     expect(surface.hasCellCurvature(1, 1)).toBe(true);
 
@@ -333,7 +338,12 @@ describe('попадание в размещённый объект (REND-15, ED
   it('клик по юниту на склоне кривизны выделяет его — расчёт по высоте уровня промахнулся бы', () => {
     const { picking, models, source, assets } = makeRig(flatGrid(3, 3));
     // Ступенька кривизны поперёк арены: слева вогнутость, справа выпуклость.
-    source.setCurvature(curvature(3, 3, ['g.7', 'g.7', 'g.7']));
+    source.setCurvature(curvature(3, 3, [
+      [-14, -7, 7, 14],
+      [-14, -7, 7, 14],
+      [-14, -7, 7, 14],
+      [-14, -7, 7, 14],
+    ]));
     assets.resolve('model', MODEL_ID, makeBoxModel(0.2, 2));
     models.syncTick(makeTickView([makeEntityView(1, { kind: 'Box', currX: 1.5, currY: 1.5, prevX: 1.5, prevY: 1.5 })]));
     models.updateFrame(0.016, 1);

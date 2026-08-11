@@ -1,7 +1,7 @@
 /**
- * Клеточные слои источника: карты ассета террейна (BLND-9) и карта кривизны
- * (BLND-10). Считаются здесь, в память; пишет их та же операция авторинга, что
- * и расстановку (BLND-5) — второго пути записи у конвейера нет.
+ * Клеточные и узловые слои источника: карты ассета террейна (BLND-9) и карта
+ * кривизны (BLND-10). Считаются здесь, в память; пишет их та же операция
+ * авторинга, что и расстановку (BLND-5) — второго пути записи у конвейера нет.
  *
  * ## Ни одного своего правила формата
  *
@@ -12,11 +12,8 @@
  * сетки и ширина рампы (TERR-7) приходят из него, а не из второй реализации
  * рядом (BLND-9 «те же правила и та же реализация», ED-1, CORE-3).
  *
- * Алфавит карты кривизны принадлежит модулю ассетов, и обратная таблица
- * выводится обходом его же разбора `curvatureOffsetOf` (ASSET-7) — тем же
- * приёмом и по той же причине, что у кисти ED-11 (`editor/ui-ts`,
- * `areas/sceneTerrain.ts`): у алфавита один владелец, а таблица рядом с ним
- * разошлась бы молча. Проверка получившейся карты — `validateCurvatureMap`, тот
+ * Решётка карты кривизны (`1/CURVATURE_SCALE` шага высоты) принадлежит модулю
+ * ассетов (ASSET-7). Проверка получившейся карты — `validateCurvatureMap`, тот
  * же вызов, что стоит правилом на документе кривизны.
  *
  * ## Дискретность уровней: отказ вместо округления
@@ -28,12 +25,14 @@
  * `readCellGrid` — про шум float32 экспорта, а не про свободу автора: клетка на
  * высоте 1.4 отказывает, клетка на 1.0000001 — нет.
  *
- * ## Кривизна: кламп вместо отказа
+ * ## Кривизна: произвольная амплитуда, квантование к решётке
  *
- * Слой presentation: цена ошибки — вид, а не симуляция, и отказ запер бы автора
- * там, где симуляции ничто не грозит. Поэтому значение за пределами амплитуды
- * приводится к крайней ступени алфавита с ПРЕДУПРЕЖДЕНИЕМ и адресом клетки
- * (BLND-10) — симметрия с политикой заглушек ASSET-4/PRES-2.
+ * Слой presentation: скульпт свободен, вершины curvature-объекта — узлы сетки
+ * (углы клеток), значение узла квантуется к решётке `1/CURVATURE_SCALE` шага и
+ * переносится как есть — клампа и предупреждения об амплитуде нет (BLND-10):
+ * читаемость перепадов уровней в кадре держит cliff-кромка (REND-9), а не
+ * ограничение конвейера. Ошибка представления (не конечное число, вне
+ * безопасного целого диапазона) — отказ с адресом узла (BLND-6).
  */
 import {
   TERRAIN_LEVEL_MAX,
@@ -43,15 +42,17 @@ import {
   terrainLevelChar,
   type TerrainDef,
 } from '@game-mvp/core';
-import { CURVATURE_SCALE, curvatureOffsetOf, validateCurvatureMap } from '@game-mvp/assets';
+import { CURVATURE_SCALE, validateCurvatureMap } from '@game-mvp/assets';
 import {
   HEIGHT_EPSILON,
   NOFLOOR_CHANNEL,
   formatHeight,
   RAMP_CHANNEL,
   readCellGrid,
+  readNodeGrid,
   type CellGrid,
   type CellGridSpec,
+  type NodeGrid,
 } from './cells.js';
 import type { GltfDocument } from './gltf.js';
 import { compareObjectNames } from './layer.js';
@@ -72,26 +73,6 @@ import type { SourceObject } from './normalize.js';
  */
 export const LEVEL_UNIT = 1;
 
-/**
- * Смещение → символ карты кривизны (ASSET-7). Таблица ВЫВЕДЕНА из разбора
- * владельца алфавита, а не записана рядом с ним: печатаемый ASCII — то
- * множество, из которого алфавит вообще выбирается, и обход его через
- * `curvatureOffsetOf` даёт ровно обратное отображение.
- */
-const CURVATURE_CHARS: ReadonlyMap<number, string> = (() => {
-  const chars = new Map<number, string>();
-  for (let code = 0x21; code <= 0x7e; code++) {
-    const char = String.fromCharCode(code);
-    const offset = curvatureOffsetOf(char);
-    if (offset !== null && !chars.has(offset)) chars.set(offset, char);
-  }
-  return chars;
-})();
-
-/** Амплитуда карты — то, что выразимо алфавитом, и ничего сверх него. */
-export const MIN_CURVATURE_OFFSET = Math.min(...CURVATURE_CHARS.keys());
-export const MAX_CURVATURE_OFFSET = Math.max(...CURVATURE_CHARS.keys());
-
 /** Клеточные слои источника: то, что импорт перепишет в ассетах. */
 export interface CellLayer {
   readonly terrain?: TerrainMaps;
@@ -105,10 +86,6 @@ interface Sink {
 
 function error(sink: Sink, object: string, message: string): void {
   sink.findings.push({ severity: 'error', object, message });
-}
-
-function warning(sink: Sink, object: string, message: string): void {
-  sink.findings.push({ severity: 'warning', object, message });
 }
 
 /**
@@ -203,42 +180,43 @@ function terrainMapsOf(sink: Sink, object: SourceObject, grid: CellGrid): Terrai
   return failed ? null : { levels, flags };
 }
 
-/** Ряды карты кривизны из клеточных данных: квантование и кламп (BLND-10). */
-function curvatureRowsOf(sink: Sink, object: SourceObject, grid: CellGrid): readonly string[] | null {
-  const rows: string[] = [];
+/** Ряды карты кривизны из узловых данных: квантование к решётке 1/32 (BLND-10). */
+function curvatureRowsOf(
+  sink: Sink,
+  object: SourceObject,
+  grid: NodeGrid,
+): readonly (readonly number[])[] | null {
+  const nodesX = grid.width + 1;
+  const nodesY = grid.height + 1;
+  const rows: number[][] = [];
   let failed = false;
-  for (let y = 0; y < grid.height; y++) {
-    let row = '';
-    for (let x = 0; x < grid.width; x++) {
-      const value = grid.heights[y * grid.width + x]! / LEVEL_UNIT;
+  for (let y = 0; y < nodesY; y++) {
+    const row: number[] = [];
+    for (let x = 0; x < nodesX; x++) {
+      const value = grid.heights[y * nodesX + x]! / LEVEL_UNIT;
       if (!Number.isFinite(value)) {
-        // Кламп применим к числу; «не число» клампить не к чему, и это ошибка
-        // разбора источника, а не выход за амплитуду (BLND-10).
-        error(sink, object.name, `клетка (${x}, ${y}): смещение не является конечным числом`);
+        error(sink, object.name, `узел (${x}, ${y}): смещение не является конечным числом`);
         failed = true;
         continue;
       }
       // Симметрично для выпуклости и вогнутости: `Math.round` половину тянет к
       // плюс бесконечности, и ступень −0.5 ушла бы не туда, куда +0.5.
       const scaled = value * CURVATURE_SCALE;
-      const exact = Math.sign(scaled) * Math.round(Math.abs(scaled));
-      const offset = Math.min(MAX_CURVATURE_OFFSET, Math.max(MIN_CURVATURE_OFFSET, exact));
-      if (offset !== exact) {
-        warning(
+      const offset = Math.sign(scaled) * Math.round(Math.abs(scaled));
+      if (!Number.isSafeInteger(offset)) {
+        // Амплитуда произвольна, но представление — целое JSON: за его пределом
+        // отказ, а не молчаливое приведение (BLND-4, BLND-6).
+        error(
           sink,
           object.name,
-          `клетка (${x}, ${y}): смещение ${formatHeight(value)} шага высоты вне амплитуды алфавита ` +
-            `[${MIN_CURVATURE_OFFSET}/${CURVATURE_SCALE}, ${MAX_CURVATURE_OFFSET}/${CURVATURE_SCALE}] — ` +
-            `записана крайняя ступень (BLND-10)`,
+          `узел (${x}, ${y}): смещение ${formatHeight(value)} шага высоты не выражается ` +
+            `целым множителем 1/${CURVATURE_SCALE} (ASSET-7)`,
         );
-      }
-      const char = CURVATURE_CHARS.get(offset);
-      if (char === undefined) {
-        error(sink, object.name, `клетка (${x}, ${y}): ступень ${offset} не выражается алфавитом карты (ASSET-7)`);
         failed = true;
         continue;
       }
-      row += char;
+      // -0 нормализуется в 0: у карты одно представление нуля (BLND-4).
+      row.push(offset === 0 ? 0 : offset);
     }
     rows.push(row);
   }
@@ -317,14 +295,18 @@ export function generateCellLayer(
         'манифест визуалов не адресует карту кривизны ("terrain.curvatureMap", ASSET-7): переписывать нечего',
       );
     } else {
-      const read = readCellGrid(document, curvatureObject, spec);
+      const read = readNodeGrid(document, curvatureObject, spec);
       for (const message of read.errors) error(sink, curvatureObject.name, message);
       if (read.grid !== null) {
         const rows = curvatureRowsOf(sink, curvatureObject, read.grid);
         if (rows !== null) {
           const map: CurvatureMap = { width: spec.width, height: spec.height, rows };
           // Та же проверка, что стоит правилом на документе кривизны (ASSET-7).
-          const checked = validateCurvatureMap({ width: map.width, height: map.height, rows: [...rows] });
+          const checked = validateCurvatureMap({
+            width: map.width,
+            height: map.height,
+            rows: rows.map((row) => [...row]),
+          });
           // eslint-disable-next-line max-depth -- baseline
           if (checked.ok) curvature = map;
           else {

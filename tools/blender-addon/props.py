@@ -211,11 +211,11 @@ class FluxusSceneProps(bpy.types.PropertyGroup):
         name="Шаг кривизны",
         description=(
             "Шаг мазка кривизны в долях шага высоты. Ориентир авторинга, а не правило: "
-            "квантование и кламп в алфавит делает импорт (BLND-10)"
+            "квантование к решётке 1/32 делает импорт, предела амплитуды нет (BLND-10)"
         ),
-        default=1.0 / 16.0,
+        default=1.0 / 32.0,
         min=0.001,
-        max=1.0,
+        max=4.0,
         precision=4,
     )
     brush_curvature_falloff: BoolProperty(

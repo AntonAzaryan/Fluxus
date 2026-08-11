@@ -395,6 +395,7 @@ describe('BLND-2: производные данные — это и карты �
       ['rows', 0],
       ['rows', 1],
       ['rows', 2],
+      ['rows', 3],
     ]);
     expect(issues[0]!.reasonParams).toMatchObject({ slot: 'curvature.rows' });
   });

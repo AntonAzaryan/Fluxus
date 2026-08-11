@@ -3,7 +3,6 @@ import {
   AssetService,
   CURVATURE_SCALE,
   curvatureLoader,
-  curvatureOffsetOf,
   resolveSurfaceAlign,
   validateCurvatureMap,
   validateManifest,
@@ -11,10 +10,16 @@ import {
 } from '../src/index.js';
 import { MemoryAssetSource, bytesOf, settled } from './helpers.js';
 
+// Сетка 4×3 клетки → узлы 5×4.
 const validDoc = {
   width: 4,
   height: 3,
-  rows: ['..17', '.a.g', '....'],
+  rows: [
+    [0, 0, 1, 7, 40],
+    [0, -1, 0, -7, 0],
+    [0, 0, 0, 0, 0],
+    [0, 0, 0, 0, -33],
+  ],
 };
 
 function expectErrors(doc: unknown, ...patterns: RegExp[]): void {
@@ -30,44 +35,68 @@ function expectErrors(doc: unknown, ...patterns: RegExp[]): void {
 }
 
 describe('validateCurvatureMap (ASSET-7)', () => {
-  it('валидная карта: смещения разобраны по алфавиту', () => {
+  it('валидная карта: узловые смещения разобраны как есть', () => {
     const result = validateCurvatureMap(validDoc);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const map = result.map;
     expect(map.width).toBe(4);
     expect(map.height).toBe(3);
-    expect(Array.from(map.offsets.subarray(0, 4))).toEqual([0, 0, 1, 7]);
-    expect(Array.from(map.offsets.subarray(4, 8))).toEqual([0, -1, 0, -7]);
+    expect(Array.from(map.offsets.subarray(0, 5))).toEqual([0, 0, 1, 7, 40]);
+    expect(Array.from(map.offsets.subarray(5, 10))).toEqual([0, -1, 0, -7, 0]);
   });
 
-  it('максимум шкалы меньше полушага высоты (инвариант REND-9)', () => {
-    // 7/16 < 1/2 — ограничение амплитуды обеспечено алфавитом по построению.
-    expect(7 / CURVATURE_SCALE).toBeLessThan(0.5);
-    expect(curvatureOffsetOf('7')).toBe(7);
-    expect(curvatureOffsetOf('g')).toBe(-7);
-    expect(curvatureOffsetOf('.')).toBe(0);
+  it('амплитуда больше шага уровня валидна: предела у формата нет', () => {
+    // |40| > CURVATURE_SCALE — смещение больше целого шага высоты; читаемость
+    // перепадов обеспечивает cliff-кромка (REND-9), а не ограничение ассета.
+    expect(Math.abs(40) / CURVATURE_SCALE).toBeGreaterThan(1);
+    const result = validateCurvatureMap(validDoc);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.map.offsets[4]).toBe(40);
+    expect(result.map.offsets[19]).toBe(-33);
   });
 
-  it('символ вне алфавита отвергается с адресом клетки', () => {
-    expectErrors({ width: 2, height: 1, rows: ['.8'] }, /rows\[0\], клетка 1: символ "8"/);
-    expectErrors({ width: 2, height: 1, rows: ['.h'] }, /символ "h"/);
-    // Верхний регистр невалиден: одно текстовое представление у карты.
-    expectErrors({ width: 2, height: 1, rows: ['.A'] }, /символ "A"/);
-    expectErrors({ width: 2, height: 1, rows: ['.0'] }, /символ "0"/);
+  it('нецелое или нечисловое значение отвергается с адресом узла', () => {
+    expectErrors(
+      { width: 1, height: 1, rows: [[0, 0.5], [0, 0]] },
+      /rows\[0\], узел 1: .*получено 0\.5/,
+    );
+    expectErrors(
+      { width: 1, height: 1, rows: [[0, 0], ['x', 0]] },
+      /rows\[1\], узел 0: .*получено string/,
+    );
+    // За безопасным целым диапазоном JSON — отказ, а не молчаливое усечение.
+    expectErrors(
+      { width: 1, height: 1, rows: [[0, 0], [0, 2 ** 53]] },
+      /rows\[1\], узел 1/,
+    );
   });
 
-  it('рваная сетка отвергается, а не достраивается', () => {
-    expectErrors({ width: 4, height: 2, rows: ['....', '...'] }, /rows\[1\]: длина 3, а width = 4/);
-    expectErrors({ width: 2, height: 3, rows: ['..', '..'] }, /rows: рядов 2, а height = 3/);
+  it('прежний строковый формат отвергается адресно', () => {
+    expectErrors(
+      { width: 4, height: 3, rows: ['..17', '.a.g', '....'] },
+      /прежний per-cell формат/,
+    );
+  });
+
+  it('рваная узловая сетка отвергается, а не достраивается', () => {
+    expectErrors(
+      { width: 4, height: 1, rows: [[0, 0, 0, 0, 0], [0, 0, 0]] },
+      /rows\[1\]: узлов 3, а width \+ 1 = 5/,
+    );
+    expectErrors(
+      { width: 1, height: 3, rows: [[0, 0], [0, 0]] },
+      /rows: рядов 2, а узловых рядов height \+ 1 = 4/,
+    );
   });
 
   it('не-объект, кривые размеры и неизвестные поля — внятные ошибки', () => {
     expectErrors(null, /ожидался объект.*null/);
-    expectErrors({ width: 0, height: 1, rows: [''] }, /width: ожидалось целое > 0/);
-    expectErrors({ width: 1, height: 1.5, rows: ['.'] }, /height: ожидалось целое > 0/);
-    expectErrors({ width: 1, height: 1, rows: ['.'], extra: 1 }, /extra: неизвестное поле/);
-    expectErrors({ width: 1, height: 1, rows: '.' }, /rows: ожидался массив строк/);
+    expectErrors({ width: 0, height: 1, rows: [[]] }, /width: ожидалось целое > 0/);
+    expectErrors({ width: 1, height: 1.5, rows: [[]] }, /height: ожидалось целое > 0/);
+    expectErrors({ width: 1, height: 1, rows: [[0, 0], [0, 0]], extra: 1 }, /extra: неизвестное поле/);
+    expectErrors({ width: 1, height: 1, rows: 7 }, /rows: ожидался массив числовых рядов/);
   });
 });
 
@@ -88,8 +117,8 @@ describe('curvatureLoader (ASSET-3, ASSET-7)', () => {
     expect(state.data.offsets[3]).toBe(7);
   });
 
-  it('невалидная карта — failed с адресом клетки', async () => {
-    const doc = { width: 2, height: 1, rows: ['.z'] };
+  it('невалидная карта — failed с адресом узла', async () => {
+    const doc = { width: 1, height: 1, rows: [[0, 0], [0, 1.25]] };
     const source = new MemoryAssetSource(
       new Map([['visuals/bad.json', bytesOf(JSON.stringify(doc))]]),
     );
@@ -101,7 +130,7 @@ describe('curvatureLoader (ASSET-3, ASSET-7)', () => {
     );
     expect(state.status).toBe('failed');
     if (state.status !== 'failed') return;
-    expect(state.reason).toMatch(/rows\[0\], клетка 1/);
+    expect(state.reason).toMatch(/rows\[1\], узел 1/);
   });
 });
 

@@ -103,6 +103,30 @@ def build_grid_mesh(name, width, height, cell_size, heights=None):
     return mesh
 
 
+def build_node_grid_mesh(name, width, height, cell_size, node_heights=None):
+    """
+    Связная сетка `width × height` клеток с ОБЩИМИ вершинами-узлами
+    `(width+1) × (height+1)` — форма curvature-объекта (BLND-10): вершина и
+    есть узел карты, скульпт свободен, импорт читает узлы 1:1. `node_heights`
+    — высоты узлов в единицах Blender построчно; пусто — плоскость на нуле.
+    """
+    verts = []
+    for ny in range(height + 1):
+        for nx in range(width + 1):
+            index = ny * (width + 1) + nx
+            z = 0.0 if node_heights is None else float(node_heights[index])
+            verts.append((nx * cell_size, ny * cell_size, z))
+    faces = []
+    for y in range(height):
+        for x in range(width):
+            base = y * (width + 1) + x
+            faces.append((base, base + 1, base + width + 2, base + width + 1))
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+    return mesh
+
+
 def ensure_int_attribute(mesh, name):
     """Целочисленный атрибут на домене точек; уже есть — возвращается он же."""
     attribute = mesh.attributes.get(name)
@@ -232,22 +256,8 @@ def _flags_from_asset(snapshot):
     return ramp, noflo
 
 
-def _curvature_offset(char):
-    """
-    Символ карты кривизны → смещение в 1/16 шага высоты (ASSET-7).
-
-    Читается ТОЛЬКО ради затравки сетки существующей картой; правило записи
-    (квантование и кламп амплитуды) остаётся за импортом (BLND-10), и при
-    расхождении прав импорт. Алфавит карты движок не публикует схемой — при
-    его появлении в `engine/schemas/` эту функцию заменяет чтение схемы.
-    """
-    if char == ".":
-        return 0
-    if "1" <= char <= "7":
-        return ord(char) - ord("0")
-    if "a" <= char <= "g":
-        return -(ord(char) - ord("a") + 1)
-    return None
+#: Знаменатель решётки карты кривизны (ASSET-7): смещение узла — n/32 шага высоты.
+CURVATURE_SCALE = 32
 
 
 class FLUXUS_OT_create_terrain_grid(bpy.types.Operator):
@@ -340,20 +350,13 @@ class FLUXUS_OT_create_curvature_grid(bpy.types.Operator):
                     % (curvature.width, curvature.height, width, height),
                 )
             else:
-                heights = [0.0] * (width * height)
-                for y in range(min(height, len(curvature.rows))):
-                    row = curvature.rows[y]
-                    for x in range(min(width, len(row))):
-                        offset = _curvature_offset(row[x])
-                        if offset is None:
-                            self.report(
-                                {"WARNING"},
-                                "символ %r ряда %d вне алфавита карты кривизны" % (row[x], y),
-                            )
-                            offset = 0
-                        heights[cell_index(x, y, width)] = offset / 16.0 * LEVEL_UNIT
+                heights = [0.0] * ((width + 1) * (height + 1))
+                for ny in range(min(height + 1, len(curvature.rows))):
+                    row = curvature.rows[ny]
+                    for nx in range(min(width + 1, len(row))):
+                        heights[ny * (width + 1) + nx] = row[nx] / float(CURVATURE_SCALE) * LEVEL_UNIT
 
-        mesh = build_grid_mesh(DEFAULT_CURVATURE_NAME, width, height, cell_size, heights)
+        mesh = build_node_grid_mesh(DEFAULT_CURVATURE_NAME, width, height, cell_size, heights)
         obj = bpy.data.objects.new(DEFAULT_CURVATURE_NAME, mesh)
         obj[CURVATURE_KEY] = 1
         context.collection.objects.link(obj)

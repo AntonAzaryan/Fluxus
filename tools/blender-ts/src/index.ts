@@ -90,13 +90,7 @@ export {
 } from './cells.js';
 export type { CellGrid, CellGridRead, CellGridSpec } from './cells.js';
 
-export {
-  LEVEL_UNIT,
-  MAX_CURVATURE_OFFSET,
-  MIN_CURVATURE_OFFSET,
-  generateCellLayer,
-  withCellLayer,
-} from './maps.js';
+export { LEVEL_UNIT, generateCellLayer, withCellLayer } from './maps.js';
 export type { CellLayer } from './maps.js';
 
 export {

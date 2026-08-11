@@ -159,7 +159,7 @@ export class VisualSurfaceSource {
     }
     const previous = this.curvature;
     this.curvature = map;
-    this.refresh(diffOffsets(previous, map, this.grid.width * this.grid.height));
+    this.refresh(diffOffsets(previous, map, this.grid.width, this.grid.height));
   }
 
   /**
@@ -216,17 +216,36 @@ function diffShape(previous: TerrainGrid, next: TerrainGrid): number[] {
   return changed;
 }
 
-/** Клетки, у которых изменилось смещение кривизны; отсутствующая карта — нули. */
+/** Клетки, затронутые изменением узловых смещений; отсутствующая карта — нули. */
 function diffOffsets(
   previous: TerrainCurvatureMap | null,
   next: TerrainCurvatureMap | null,
-  cells: number,
+  width: number,
+  height: number,
 ): number[] {
-  const changed: number[] = [];
-  for (let cell = 0; cell < cells; cell++) {
-    const before = previous?.offsets[cell] ?? 0;
-    const after = next?.offsets[cell] ?? 0;
-    if (before !== after) changed.push(cell);
+  const changed = new Set<number>();
+  const nodesX = width + 1;
+  const nodesY = height + 1;
+  for (let ny = 0; ny < nodesY; ny++) {
+    for (let nx = 0; nx < nodesX; nx++) {
+      const node = ny * nodesX + nx;
+      const before = previous?.offsets[node] ?? 0;
+      const after = next?.offsets[node] ?? 0;
+      if (before === after) continue;
+      markNodeCells(changed, nx, ny, width, height);
+    }
   }
-  return changed;
+  return [...changed];
+}
+
+/** Узел — общий угол до четырёх клеток: изменились все, кому он принадлежит. */
+function markNodeCells(changed: Set<number>, nx: number, ny: number, width: number, height: number): void {
+  for (let dy = -1; dy <= 0; dy++) {
+    for (let dx = -1; dx <= 0; dx++) {
+      const cx = nx + dx;
+      const cy = ny + dy;
+      if (cx < 0 || cy < 0 || cx >= width || cy >= height) continue;
+      changed.add(cy * width + cx);
+    }
+  }
 }

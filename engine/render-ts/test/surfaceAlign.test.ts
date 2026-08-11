@@ -31,10 +31,17 @@ function bumpyGrid() {
 }
 
 function makeSurface(): VisualSurfaceSource {
+  // Узлы 5×5: центральный блок 3×3 поднят — бугор посреди арены.
   const map = validateCurvatureMap({
     width: 4,
     height: 4,
-    rows: ['....', '.77.', '.77.', '....'],
+    rows: [
+      [0, 0, 0, 0, 0],
+      [0, 14, 14, 14, 0],
+      [0, 14, 14, 14, 0],
+      [0, 14, 14, 14, 0],
+      [0, 0, 0, 0, 0],
+    ],
   });
   if (!map.ok) throw new Error(map.errors.join('; '));
   const source = new VisualSurfaceSource(bumpyGrid(), { curvatureMapId: 'visuals/curve.json' });

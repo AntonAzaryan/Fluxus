@@ -135,7 +135,7 @@ export interface BrushTool {
   setMode(mode: TerrainBrushMode): void;
   readonly level: number;
   setLevel(level: number): void;
-  /** Смещение кривизны в шестнадцатых долях шага высоты (ASSET-7). */
+  /** Смещение кривизны — целый множитель решётки 1/32 шага высоты (ASSET-7). */
   readonly offset: number;
   setOffset(offset: number): void;
   readonly size: number;
@@ -205,17 +205,33 @@ export function createBrushTool(options: BrushToolOptions): BrushTool {
     return cells;
   };
 
-  const paramsFor = (target: BrushTarget, cell: Cell): OperationParams => ({
-    document: target.document,
-    path: [...target.path],
-    cellX: cell.x,
-    cellY: cell.y,
-    ...(layer === 'curvature'
-      ? { offset }
-      : mode === 'level'
-        ? { level }
-        : { kind: KIND_OF[mode] }),
-  });
+  const paramsFor = (target: BrushTarget, cell: Cell): OperationParams =>
+    layer === 'curvature'
+      ? // Кисть кривизны красит узлы — углы клеток мазка (ED-11, ASSET-7).
+        { document: target.document, path: [...target.path], nodeX: cell.x, nodeY: cell.y, offset }
+      : {
+          document: target.document,
+          path: [...target.path],
+          cellX: cell.x,
+          cellY: cell.y,
+          ...(mode === 'level' ? { level } : { kind: KIND_OF[mode] }),
+        };
+
+  /**
+   * Узлы под квадратом мазка: углы покрытых клеток. Узловая сетка на единицу
+   * шире и выше клеточной (ASSET-7), поэтому границы включают width и height.
+   */
+  const nodesAround = (centre: Cell, grid: BrushGrid): readonly Cell[] => {
+    const radius = (size - 1) / 2;
+    const nodes: Cell[] = [];
+    for (let y = centre.y - radius; y <= centre.y + radius + 1; y++) {
+      for (let x = centre.x - radius; x <= centre.x + radius + 1; x++) {
+        if (x < 0 || y < 0 || x > grid.width || y > grid.height) continue;
+        nodes.push({ x, y });
+      }
+    }
+    return nodes;
+  };
 
   const operationId = (): string =>
     layer === 'curvature'
@@ -255,9 +271,11 @@ export function createBrushTool(options: BrushToolOptions): BrushTool {
     const hit = picker.pickSurface(event.x, event.y);
     // Курсор ушёл за арену: красить нечего, а мазок при этом не прерывается.
     if (hit === null) return;
+    const centre = { x: hit.cellX, y: hit.cellY };
+    const targets = layer === 'curvature' ? nodesAround(centre, grid) : cellsAround(centre, grid);
     try {
-      for (const cell of cellsAround({ x: hit.cellX, y: hit.cellY }, grid)) {
-        const index = cell.y * grid.width + cell.x;
+      for (const cell of targets) {
+        const index = cell.y * (grid.width + 1) + cell.x;
         if (open.painted.has(index)) continue;
         open.painted.add(index);
         const params = paramsFor(surface.target, cell);

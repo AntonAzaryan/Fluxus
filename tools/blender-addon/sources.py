@@ -66,11 +66,11 @@ class TerrainAsset:
 
 @dataclass
 class CurvatureMap:
-    """Карта кривизны (ASSET-7): сетка та же, значение клетки — 1/16 шага высоты."""
+    """Карта кривизны (ASSET-7): узловые ряды (height+1)×(width+1), значение узла — 1/32 шага высоты."""
 
     width: int
     height: int
-    rows: List[str] = field(default_factory=list)
+    rows: List[List[int]] = field(default_factory=list)
     path: str = ""
 
 
@@ -335,7 +335,13 @@ def _load_manifest(manifest_path: str, content_dir: Optional[str], result: Sourc
                 result.curvature = CurvatureMap(
                     width=width,
                     height=height,
-                    rows=[str(row) for row in rows] if isinstance(rows, list) else [],
+                    rows=[
+                        [int(node) for node in row if isinstance(node, (int, float))]
+                        for row in rows
+                        if isinstance(row, list)
+                    ]
+                    if isinstance(rows, list)
+                    else [],
                     path=curvature_path,
                 )
 

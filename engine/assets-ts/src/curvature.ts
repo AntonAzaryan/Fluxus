@@ -1,26 +1,33 @@
 /**
- * Карта кривизны террейна (ASSET-7): presentation-ассет per-cell знаковых
- * визуальных смещений высоты поверх ступеней REND-7. Сетка обязана совпадать
- * с сеткой sim-террейна сцены (TERR-2); проверка совпадения — на потребителе,
+ * Карта кривизны террейна (ASSET-7): presentation-ассет — heightfield знаковых
+ * визуальных смещений высоты по узлам сетки поверх ступеней REND-7. Сетка
+ * обязана совпадать с сеткой sim-террейна сцены (TERR-2): узлы — углы клеток,
+ * узловая сетка (width+1) × (height+1). Проверка совпадения — на потребителе,
  * у которого есть обе (несовпадение — предупреждение и игнор, не ошибка).
  *
- * Смещение измеряется в 1/16 шага высоты рендера: максимум 7/16 меньше
- * полушага, поэтому ограничение амплитуды REND-9 обеспечено алфавитом по
- * построению — невалидная амплитуда невыразима.
+ * Смещение узла — целый множитель решётки 1/32 шага высоты рендера; амплитуда
+ * произвольна, читаемость перепадов уровней обеспечивает cliff-кромка
+ * (REND-9), а не предел формата. Целые в JSON — детерминизм повторного
+ * сохранения и импорта (BLND-4) и построчно читаемый дифф.
  *
  * Правка карты не меняет `worldInit`, снапшоты и golden-файлы: ассет живёт
  * в модуле presentation-ассетов и в симуляцию не ходит (ASSET-1).
  */
 
-/** Смещения клеток в 1/16 шага высоты, row-major, диапазон [-7..7]. */
+/**
+ * Узловые смещения в 1/32 шага высоты, row-major по узлам: индекс узла
+ * `ny * (width + 1) + nx`, рядов `height + 1`. `width`/`height` — размеры
+ * сетки террейна в клетках. Float64 хранит безопасные целые точно; Int32 был
+ * бы молчаливым усечением значений за его диапазоном.
+ */
 export interface TerrainCurvatureMap {
   readonly width: number;
   readonly height: number;
-  readonly offsets: Int8Array;
+  readonly offsets: Float64Array;
 }
 
-/** Знаменатель шкалы смещений: `offsets[i] / CURVATURE_SCALE` — доля шага высоты. */
-export const CURVATURE_SCALE = 16;
+/** Знаменатель решётки смещений: `offsets[i] / CURVATURE_SCALE` — доля шага высоты. */
+export const CURVATURE_SCALE = 32;
 
 function typeName(v: unknown): string {
   if (v === null) return 'null';
@@ -29,22 +36,8 @@ function typeName(v: unknown): string {
 }
 
 /**
- * Символ клетки → смещение: `.` — ноль, `1`–`7` — выпуклость (вверх),
- * `a`–`g` — вогнутость (вниз). Null — символ вне алфавита. Верхний регистр
- * невалиден: одна карта не должна иметь двух текстовых представлений (TERR-3
- * — тот же принцип).
- */
-export function curvatureOffsetOf(char: string): number | null {
-  if (char === '.') return 0;
-  const code = char.charCodeAt(0);
-  if (code >= 0x31 && code <= 0x37) return code - 0x30; // '1'..'7'
-  if (code >= 0x61 && code <= 0x67) return -(code - 0x60); // 'a'..'g'
-  return null;
-}
-
-/**
  * Валидация документа карты кривизны (ASSET-7). Ошибки собираются все разом,
- * каждая с адресом ряда/клетки — правка руками не должна быть угадыванием.
+ * каждая с адресом ряда/узла — правка руками не должна быть угадыванием.
  */
 export function validateCurvatureMap(
   doc: unknown,
@@ -68,34 +61,46 @@ export function validateCurvatureMap(
     errors.push(`height: ожидалось целое > 0, получено ${typeName(height)}`);
   }
   const rows = record.rows;
-  if (!Array.isArray(rows) || !rows.every((r): r is string => typeof r === 'string')) {
-    errors.push(`rows: ожидался массив строк «символ на клетку», получено ${typeName(rows)}`);
+  if (!Array.isArray(rows)) {
+    errors.push(`rows: ожидался массив числовых рядов узлов, получено ${typeName(rows)}`);
+  } else if (rows.some((r) => typeof r === 'string')) {
+    // Прежний формат нарочно отвергается адресно: молчаливый ноль спрятал бы
+    // непрошедшую миграцию карты.
+    errors.push(
+      'rows: ряды-строки — прежний per-cell формат (алфавит "."/"1"-"7"/"a"-"g"); ' +
+        'теперь карта — числовые ряды узлов (width+1) × (height+1) в 1/32 шага высоты',
+    );
+  } else if (!rows.every((r): r is unknown[] => Array.isArray(r))) {
+    errors.push(`rows: ожидался массив числовых рядов узлов, получено ${typeName(rows)}`);
   }
   if (errors.length > 0) return { ok: false, errors };
 
   const w = width as number;
   const h = height as number;
-  const lines = rows as string[];
-  if (lines.length !== h) {
-    errors.push(`rows: рядов ${lines.length}, а height = ${h}`);
+  const nodesX = w + 1;
+  const nodesY = h + 1;
+  const lines = rows as unknown[][];
+  if (lines.length !== nodesY) {
+    errors.push(`rows: рядов ${lines.length}, а узловых рядов height + 1 = ${nodesY}`);
   }
-  const offsets = new Int8Array(w * h);
-  for (let y = 0; y < Math.min(lines.length, h); y++) {
+  const offsets = new Float64Array(nodesX * nodesY);
+  for (let y = 0; y < Math.min(lines.length, nodesY); y++) {
     const line = lines[y]!;
-    if (line.length !== w) {
+    if (line.length !== nodesX) {
       // Рваная сетка отвергается, а не достраивается (TERR-3 — тот же принцип).
-      errors.push(`rows[${y}]: длина ${line.length}, а width = ${w}`);
+      errors.push(`rows[${y}]: узлов ${line.length}, а width + 1 = ${nodesX}`);
       continue;
     }
-    for (let x = 0; x < w; x++) {
-      const offset = curvatureOffsetOf(line[x]!);
-      if (offset === null) {
+    for (let x = 0; x < nodesX; x++) {
+      const value = line[x];
+      if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
         errors.push(
-          `rows[${y}], клетка ${x}: символ "${line[x]}" вне алфавита (допустимы ".", "1"-"7", "a"-"g")`,
+          `rows[${y}], узел ${x}: ожидался целый множитель 1/${CURVATURE_SCALE} шага высоты, ` +
+            `получено ${typeof value === 'number' ? value : typeName(value)}`,
         );
         continue;
       }
-      offsets[y * w + x] = offset;
+      offsets[y * nodesX + x] = value;
     }
   }
   if (errors.length > 0) return { ok: false, errors };

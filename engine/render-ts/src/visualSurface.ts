@@ -11,9 +11,10 @@
  * `base` — уровень клетки × heightStep с рампами по `cornerLevels`,
  * интерполированный билинейно; `curv` — узловые смещения карты кривизны
  * (ASSET-7), тоже билинейно, но по параметрам, пропущенным через smoothstep.
- * Усреднение в угле идёт только по смежным клеткам уровня самого угла:
- * выпуклость плато не «перетекает» через cliff-границу на нижний уровень, а
- * рампа смыкается с плато без щели.
+ * Смещение задано прямо в узле и общее для всех примыкающих к узлу уровней:
+ * на cliff-границе кромка плато и кромка низины сдвигаются одним значением,
+ * перепад уровней сохраняется в поле точно, стенка остаётся вертикальной той
+ * же высоты — обрыв нельзя «закопать» кривизной по построению (REND-9).
  *
  * Разделение слагаемых и есть причина, по которой поверхность внутри уровня
  * гладкая (C1), а рампа остаётся плоскостью: `S'(0) = S'(1) = 0`, поэтому
@@ -126,9 +127,10 @@ export interface VisualSurface {
   ): SurfaceNormal;
   /**
    * Есть ли у клетки кривизна — «хотя бы одно из четырёх УЗЛОВЫХ смещений
-   * ненулевое». Это порог разбиения геометрии (REND-9), а не проверка карты:
-   * узловое смещение уже вобрало соседей, поэтому клетка рядом с холмом честно
-   * попадает в разбиваемые, а плоская область арены с картой кривизны —  нет.
+   * ненулевое». Это порог разбиения геометрии (REND-9): поле внутри клетки
+   * зависит только от её четырёх узлов, поэтому клетка с нулевыми узлами —
+   * ровно плоский квад без швов с разбитым соседом, а клетка на краю холма
+   * (общие узлы ненулевые) честно попадает в разбиваемые.
    */
   hasCellCurvature(x: number, y: number): boolean;
 }
@@ -146,9 +148,9 @@ export interface MutableVisualSurface extends VisualSurface {
    * (`x1 < x0`) меняет только ссылки — так уходит сетка, отличающаяся лишь
    * картой пола: пола поверхность не видит.
    *
-   * Прямоугольник задаётся в ИЗМЕНИВШИХСЯ клетках: угол клетки усредняется по
-   * смежным с ним клеткам, поэтому расширение на клетку по каждой стороне
-   * поверхность делает сама. Размеры сетки и `tileSize` менять нельзя — другая
+   * Прямоугольник задаётся в ИЗМЕНИВШИХСЯ клетках: узлы общие у смежных
+   * клеток, а углы рампы зависят от уровней соседей, поэтому расширение на
+   * клетку по каждой стороне поверхность делает сама. Размеры сетки и `tileSize` менять нельзя — другая
    * арена требует другой раскладки углов, то есть новой поверхности.
    */
   update(
@@ -160,14 +162,6 @@ export interface MutableVisualSurface extends VisualSurface {
     y1: number,
   ): void;
 }
-
-/** Смежные с узлом (nx, ny) клетки — до четырёх; используется усреднением углов. */
-const NODE_CELLS: readonly (readonly [number, number])[] = [
-  [-1, -1],
-  [0, -1],
-  [-1, 0],
-  [0, 0],
-];
 
 export function createVisualSurface(
   initialGrid: TerrainGrid,
@@ -188,21 +182,12 @@ export function createVisualSurface(
   // база. Держатся рядом, а не вычитаются обратно, потому что по ним спрашивают
   // порог разбиения (`hasCellCurvature`) и считают слагаемое `curv` (REND-9).
   const offsets = new Float32Array(width * height * 4);
-  const offsetOfCorner = (cornerLevel: number, nodeX: number, nodeY: number): number => {
+  // Узел карты — угол клетки, значение — целый множитель 1/CURVATURE_SCALE
+  // шага высоты (ASSET-7). Уровень угла узлу безразличен: одно смещение
+  // двигает поверхность каждого примыкающего уровня одинаково.
+  const offsetOfNode = (nodeX: number, nodeY: number): number => {
     if (curvature === null) return 0;
-    let sum = 0;
-    let count = 0;
-    for (const [dx, dy] of NODE_CELLS) {
-      const cx = nodeX + dx;
-      const cy = nodeY + dy;
-      if (cx < 0 || cy < 0 || cx >= width || cy >= height) continue;
-      const cell = cy * width + cx;
-      // Только клетки уровня самого угла: через cliff-границу не усредняем.
-      if (grid.levels[cell] !== cornerLevel) continue;
-      sum += curvature.offsets[cell]!;
-      count++;
-    }
-    return count === 0 ? 0 : (sum / count / CURVATURE_SCALE) * heightStep;
+    return (curvature.offsets[nodeY * (width + 1) + nodeX]! / CURVATURE_SCALE) * heightStep;
   };
 
   /** Пересчёт углов клеток прямоугольника; границы клампятся по сетке. */
@@ -215,10 +200,10 @@ export function createVisualSurface(
       for (let x = fromX; x <= toX; x++) {
         const levels = cornerLevels(grid, x, y);
         const base = (y * width + x) * 4;
-        const o00 = offsetOfCorner(levels[0], x, y);
-        const o10 = offsetOfCorner(levels[1], x + 1, y);
-        const o11 = offsetOfCorner(levels[2], x + 1, y + 1);
-        const o01 = offsetOfCorner(levels[3], x, y + 1);
+        const o00 = offsetOfNode(x, y);
+        const o10 = offsetOfNode(x + 1, y);
+        const o11 = offsetOfNode(x + 1, y + 1);
+        const o01 = offsetOfNode(x, y + 1);
         offsets[base] = o00;
         offsets[base + 1] = o10;
         offsets[base + 2] = o11;
@@ -332,7 +317,8 @@ export function createVisualSurface(
       // инициализации (REND-1, REND-14, TERR-2).
       tile = grid.tileSize / FIXED_ONE;
       if (x1 < x0 || y1 < y0) return;
-      // Угол усредняется по смежным клеткам — правка клетки трогает соседей.
+      // Узел общий у смежных клеток, а углы рампы зависят от уровней соседей —
+      // правка клетки трогает соседей, расширение на клетку делает поверхность.
       computeCells(x0 - 1, y0 - 1, x1 + 1, y1 + 1);
     },
 
@@ -388,9 +374,9 @@ export function createVisualSurface(
 
 /**
  * Сглаживающий параметр `S(t) = t² · (3 − 2t)`: монотонна на [0, 1], не выходит
- * за его пределы (амплитуда слагаемого кривизны остаётся под полушагом REND-7
- * по построению) и обнуляет производную на обоих концах — этим и убирается
- * излом поверхности в узле сетки (REND-9).
+ * за его пределы (слагаемое кривизны не выходит за пределы узловых смещений
+ * клетки — сплайновых выбросов нет) и обнуляет производную на обоих концах —
+ * этим и убирается излом поверхности в узле сетки (REND-9).
  */
 function smoothstep(t: number): number {
   return t * t * (3 - 2 * t);

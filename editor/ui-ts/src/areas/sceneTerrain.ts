@@ -39,12 +39,12 @@
  * определению (ED-1, CORE-3). Диапазон уровней тем же порядком: `MAX_LEVEL` —
  * это `TERRAIN_LEVEL_MAX` ядра, а не второе число рядом с ним.
  *
- * Карта кривизны: обратная таблица выводится обходом `curvatureOffsetOf` —
- * экспортированного разбора символа (ASSET-7). Тот же принцип, только владелец
- * другой: алфавит presentation-ассета принадлежит модулю ассетов, и диапазон
- * смещений — то, что в этом алфавите выразимо.
+ * Карта кривизны: числовые ряды узлов, значение — целый множитель решётки
+ * `1/CURVATURE_SCALE` шага высоты (ASSET-7). Знаменатель решётки принадлежит
+ * модулю ассетов; предела амплитуды у формата нет — читаемость перепадов
+ * обеспечивает cliff-кромка (REND-9), а не кисть.
  */
-import { curvatureOffsetOf } from '@game-mvp/assets';
+import { CURVATURE_SCALE } from '@game-mvp/assets';
 import {
   TERRAIN_CELL_KINDS,
   TERRAIN_LEVEL_MAX,
@@ -94,30 +94,17 @@ export const MAX_LEVEL = TERRAIN_LEVEL_MAX;
 export { TERRAIN_CELL_KINDS };
 export type { TerrainCellKind };
 
+/** Переизлучение знаменателя решётки (ASSET-7) для панелей и тестов кисти. */
+export { CURVATURE_SCALE };
+
 /**
- * Смещение → символ карты кривизны (ASSET-7). Таблица выведена из разбора
- * ядра, а не записана рядом с ним: печатаемый ASCII — то множество, из которого
- * алфавит карты вообще выбирается, и обход его через `curvatureOffsetOf` даёт
- * ровно обратное отображение.
+ * Палитра смещений панели кисти — UI-подборка, а не диапазон формата: формат
+ * предела не несёт (ASSET-7), и операция принимает любой целый множитель.
+ * Ступени — от четверти решётки до полутора шагов высоты в обе стороны.
  */
-const CURVATURE_CHARS: ReadonlyMap<number, string> = (() => {
-  const chars = new Map<number, string>();
-  for (let code = 0x21; code <= 0x7e; code++) {
-    const char = String.fromCharCode(code);
-    const offset = curvatureOffsetOf(char);
-    if (offset !== null && !chars.has(offset)) chars.set(offset, char);
-  }
-  return chars;
-})();
-
-/** Диапазон смещений — то, что выразимо алфавитом, и ничего сверх него. */
-export const MIN_OFFSET = Math.min(...CURVATURE_CHARS.keys());
-export const MAX_OFFSET = Math.max(...CURVATURE_CHARS.keys());
-
-/** Смещения по возрастанию — из них автор и выбирает, чем красить. */
-export const CURVATURE_OFFSETS: readonly number[] = Object.freeze(
-  [...CURVATURE_CHARS.keys()].sort((a, b) => a - b),
-);
+export const CURVATURE_OFFSETS: readonly number[] = Object.freeze([
+  -48, -32, -24, -16, -12, -8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 24, 32, 48,
+]);
 
 const DOCUMENT: OperationParamSpec = {
   type: 'document',
@@ -130,6 +117,8 @@ const ASSET_PATH: OperationParamSpec = {
 };
 const CELL_X: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.cellX' };
 const CELL_Y: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.cellY' };
+const NODE_X: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.nodeX' };
+const NODE_Y: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.nodeY' };
 const LEVEL: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.level' };
 const KIND: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.cellKind' };
 const OFFSET: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.offset' };
@@ -237,26 +226,52 @@ export const setCellKindOperation: AuthoringOperation = {
 };
 
 /**
- * Смещение клетки в карте кривизны (ED-11, ASSET-7). Величина — шестнадцатые
- * доли шага высоты рендера, и амплитуда за пределами алфавита невыразима по
- * построению: символа для неё просто нет.
+ * Смещение узла карты кривизны (ED-11, ASSET-7). Значение — целый множитель
+ * решётки `1/CURVATURE_SCALE` шага высоты; предела амплитуды у операции нет —
+ * его нет и у формата, а читаемость перепадов держит cliff-кромка (REND-9).
+ * Ряд узлов — массив чисел, правка целится в один узел: в диффе — одна строка
+ * ряда, а не вся карта (ED-21).
  */
 export const setCurvatureOperation: AuthoringOperation = {
   id: TERRAIN_OPERATIONS.curvature,
   descriptionKey: 'ui.operation.scene.curvature.offset',
-  params: { document: DOCUMENT, path: ASSET_PATH, cellX: CELL_X, cellY: CELL_Y, offset: OFFSET },
+  params: { document: DOCUMENT, path: ASSET_PATH, nodeX: NODE_X, nodeY: NODE_Y, offset: OFFSET },
   apply(ctx, params) {
     const id = TERRAIN_OPERATIONS.curvature;
     const offset = asNumber(params, 'offset');
-    const char = Number.isInteger(offset) ? CURVATURE_CHARS.get(offset) : undefined;
-    if (char === undefined) {
+    if (!Number.isSafeInteger(offset)) {
       throw new OperationError(
         id,
-        `параметр "offset": смещение вне [${MIN_OFFSET}, ${MAX_OFFSET}] (ASSET-7)`,
+        `параметр "offset": целый множитель 1/${CURVATURE_SCALE} шага высоты (ASSET-7)`,
         { param: 'offset', received: offset },
       );
     }
-    paintCell(ctx, id, params, OFFSET_MAP, char);
+    const document = asDocument(params);
+    const mapPath: JsonPath = [...asBase(params), OFFSET_MAP];
+    const rows: JsonValue | undefined = ctx.readAt(document, mapPath);
+    if (!isJsonArray(rows)) {
+      throw new OperationError(
+        id,
+        `${formatPath(mapPath)}: карта — массив числовых рядов узлов, по одному на узловую линию`,
+        { received: rows ?? null },
+      );
+    }
+    const y = asNumber(params, 'nodeY');
+    const x = asNumber(params, 'nodeX');
+    const row = Number.isInteger(y) && y >= 0 ? rows[y] : undefined;
+    if (!isJsonArray(row)) {
+      throw new OperationError(id, `узел (${x}, ${y}): рядов в карте ${rows.length}`, {
+        param: 'nodeY',
+        received: y,
+      });
+    }
+    if (!Number.isInteger(x) || x < 0 || x >= row.length) {
+      throw new OperationError(id, `узел (${x}, ${y}): узлов в ряду ${row.length}`, {
+        param: 'nodeX',
+        received: x,
+      });
+    }
+    ctx.setValue(document, [...mapPath, y, x], offset);
     return undefined;
   },
 };

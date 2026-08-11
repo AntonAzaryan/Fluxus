@@ -163,7 +163,7 @@
   "validation.reason.editor.visualForPrefab.ruleFailed": "Validation rule \"{rule}\" failed on this document: nothing was checked, and that is a defect of the rule, not of the document.",
   "validation.reason.save.group.writeTogether.memberLeftUnsaved": "This save would write the rest of group \"{group}\" and leave this document edited: edits of one group reach disk in a single write (ED-21)",
   "validation.reason.save.group.writeTogether.ruleFailed": "Validation rule \"{rule}\" failed on this document: nothing was checked, and that is a defect of the rule, not of the document.",
-  "validation.rule.assets.curvature": "Checks a terrain curvature map with the assets validator: row alphabet, offset range and grid shape.",
+  "validation.rule.assets.curvature": "Checks a terrain curvature map with the assets validator: integer node offsets and node grid shape.",
   "validation.rule.assets.manifest": "Checks a visual manifest with the assets validator: entity records, models, textures, skins and animation names.",
   "validation.rule.core.scene": "Checks a scene config with the engine scene loader: component set, prefabs, systems, initial placement and arena assets — the same call the game client makes on load.",
   "validation.rule.core.system": "Checks a JSON system against every open scene: the engine resolves the component and prefab names the system refers to, then builds its body.",

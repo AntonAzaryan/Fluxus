@@ -1,7 +1,7 @@
 /**
  * Клеточные слои источника: карты ассета террейна (BLND-9) и карта кривизны
  * (BLND-10) — чтение сетки, дискретность уровней, валидация той же реализацией,
- * что у кистей ED-10/ED-11, и кламп амплитуды.
+ * что у кистей ED-10/ED-11, и квантование узловых смещений к решётке 1/32.
  *
  * Blender не зовётся ни в какой форме (BLND-7): сетки строятся в памяти из
  * читаемых карт (`support.ts`), а бинарный чанк — тот же, что собрал бы
@@ -17,6 +17,7 @@ import type { CellLayer } from '../src/maps.js';
 import {
   CURVATURE_GRID,
   CURVATURE_ROWS,
+  ZERO_CURVATURE_ROWS,
   TARGET_TERRAIN,
   TERRAIN_FLAGS,
   TERRAIN_GRID,
@@ -191,8 +192,8 @@ describe('BLND-9, TERR-7: валидация — та же реализация,
   });
 });
 
-describe('BLND-10: карта кривизны из клеточных данных', () => {
-  it('смещения квантуются в алфавит ASSET-7', () => {
+describe('BLND-10: карта кривизны из узловых данных', () => {
+  it('узловые смещения квантуются к решётке 1/32 (ASSET-7)', () => {
     const layer = cellsOf([CURVATURE_GRID]);
 
     expect(messages(layer, 'error')).toEqual([]);
@@ -200,32 +201,24 @@ describe('BLND-10: карта кривизны из клеточных данн�
   });
 
   it('промежуточное смещение садится на ближайшую ступень симметрично знаку', () => {
-    const layer = cellsOf([
-      {
-        ...CURVATURE_GRID,
-        // 2.4/16 и −2.4/16: обе ступени обязаны получиться второй, а не разными.
-        heights: [[2.4 / 16, -2.4 / 16, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
-      },
-    ]);
+    const rows = curvatureHeights(ZERO_CURVATURE_ROWS);
+    // 2.4/32 и −2.4/32: обе ступени обязаны получиться второй, а не разными.
+    rows[0] = [2.4 / 32, -2.4 / 32, 0, 0, 0];
+    const layer = cellsOf([{ ...CURVATURE_GRID, heights: rows }]);
 
-    expect(layer.curvature?.rows[0]).toBe('2b..');
+    expect(layer.curvature?.rows[0]).toEqual([2, -2, 0, 0, 0]);
   });
 
-  it('выход за амплитуду — крайняя ступень и ПРЕДУПРЕЖДЕНИЕ с адресом клетки, не отказ', () => {
-    const layer = cellsOf([
-      {
-        ...CURVATURE_GRID,
-        heights: [[12 / 16, 0, 0, 0], [-12 / 16, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
-      },
-    ]);
+  it('амплитуда сверх шага уровня переносится как есть: ни клампа, ни предупреждения (BLND-10)', () => {
+    const rows = curvatureHeights(ZERO_CURVATURE_ROWS);
+    rows[0] = [40 / 32, 0, 0, 0, 0];
+    rows[1] = [-77 / 32, 0, 0, 0, 0];
+    const layer = cellsOf([{ ...CURVATURE_GRID, heights: rows }]);
 
     expect(messages(layer, 'error')).toEqual([]);
-    expect(layer.curvature?.rows[0]).toBe('7...');
-    expect(layer.curvature?.rows[1]).toBe('g...');
-    expect(messages(layer, 'warning')).toEqual([
-      expect.stringContaining('клетка (0, 0)'),
-      expect.stringContaining('клетка (0, 1)'),
-    ]);
+    expect(layer.curvature?.rows[0]).toEqual([40, 0, 0, 0, 0]);
+    expect(layer.curvature?.rows[1]).toEqual([-77, 0, 0, 0, 0]);
+    expect(messages(layer, 'warning')).toEqual([]);
   });
 
   it('манифест не адресует карту кривизны — отказ с именем объекта, а не молчание', () => {
@@ -274,7 +267,7 @@ describe('BLND-9: клетки без граней и грани мимо сет
 
   it('сетка мельче ассета — отказ, называющий непокрытые клетки', () => {
     const document = parseGltf(
-      gridGlb([{ name: 'terrain', semantic: 'terrain', heights: curvatureHeights(['....']) }]),
+      gridGlb([{ name: 'terrain', semantic: 'terrain', heights: [[0, 0, 0, 0]] }]),
     );
     const objects = normalizeDocument(document);
 

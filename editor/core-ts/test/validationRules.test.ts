@@ -73,7 +73,7 @@ const TERRAIN_VALUE = {
   flags: ['..', '..'],
 };
 
-const CURVATURE_VALUE = { width: 2, height: 2, rows: ['..', '..'] };
+const CURVATURE_VALUE = { width: 2, height: 2, rows: [[0, 0, 0], [0, 0, 0], [0, 0, 0]] };
 
 const ALL_RULES: readonly ValidationRule[] = [...engineValidationRules(), ...crossDocumentRules()];
 
@@ -532,19 +532,19 @@ describe('ED-8: имя состояния в таблице длящихся э�
 });
 
 describe('ED-11: карта кривизны', () => {
-  it('символ вне алфавита адресуется рядом карты', () => {
-    const value = { ...CURVATURE_VALUE, rows: ['.z', '..'] };
+  it('нецелое значение адресуется рядом карты', () => {
+    const value = { ...CURVATURE_VALUE, rows: [[0, 0.5, 0], [0, 0, 0], [0, 0, 0]] };
     const report = check({ [CURVATURE]: { kind: 'curvature', value } });
     const issue = report.forDocument(CURVATURE)[0]!;
     expect(issue.ruleId).toBe(CURVATURE_RULE);
     expect(issue.path).toEqual(['rows', 0]);
-    expect(issue.received).toBe('.z');
+    expect(issue.received).toEqual([0, 0.5, 0]);
   });
 
   it('несовпадение сетки с террейном видно сразу и является предупреждением', () => {
     const report = check({
       [TERRAIN]: { kind: 'terrain', value: TERRAIN_VALUE },
-      [CURVATURE]: { kind: 'curvature', value: { width: 3, height: 2, rows: ['...', '...'] } },
+      [CURVATURE]: { kind: 'curvature', value: { width: 3, height: 2, rows: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] } },
     });
     const issue = report.forDocument(CURVATURE).find((found) => found.ruleId === CURVATURE_GRID_RULE)!;
     expect(issue.path).toEqual(['width']);
@@ -555,7 +555,7 @@ describe('ED-11: карта кривизны', () => {
 
   it('без открытого террейна о сетке не судят', () => {
     const report = check({
-      [CURVATURE]: { kind: 'curvature', value: { width: 3, height: 2, rows: ['...', '...'] } },
+      [CURVATURE]: { kind: 'curvature', value: { width: 3, height: 2, rows: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] } },
     });
     expect(report.issues).toHaveLength(0);
   });
@@ -572,7 +572,7 @@ describe('ED-11: ассет террейна внутри конфига сце�
   const TERRAIN_IN_SCENE: readonly TerrainSite[] = [{ kind: 'scene', path: ['terrain'] }];
   const RULES = crossDocumentRules(DEFAULT_PAIR_KINDS, DEFAULT_PLACEMENT_SITES, TERRAIN_IN_SCENE);
   const NESTED_SCENE = { ...SCENE_VALUE, terrain: TERRAIN_VALUE };
-  const WIDER_CURVATURE = { width: 3, height: 2, rows: ['...', '...'] };
+  const WIDER_CURVATURE = { width: 3, height: 2, rows: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] };
 
   it('несовпадение сетки видно, хотя документа вида terrain в проекте нет', () => {
     const report = check(
