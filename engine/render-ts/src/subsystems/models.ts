@@ -393,6 +393,14 @@ interface InstanceRecord {
   skinIndex: number;
   /** Уровень детализации записи (REND-22); у детального яруса всегда 0. */
   lodLevel: number;
+  /**
+   * Консервативные границы по всем клипам модели (`assets` ASSET-12) в осях
+   * инстанса — вход отсечения (REND-21). У батчевой записи их держит батч
+   * (они общие на запись), у детальной — сам инстанс: масштаб записи у него
+   * свой и переставляется на живом инстансе. null — производных у модели нет,
+   * и отсечение идёт по габаритам bind-позы с запасом.
+   */
+  cullBounds: ModelBounds | null;
   controller: AnimationController | null;
   boneControl: BoneControlState | null;
   skinApp: SkinApplication | null;
@@ -885,6 +893,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       this.applyEntryParams(record);
       // Масштаб записи — нормализующая обёртка: переставляется на живом инстансе.
       record.model?.setScale(record.visual?.scale ?? 1);
+      this.rescaleDetailedCull(record, null);
       this.syncBatchEntry(record);
       record.controller?.setMapping(record.visual?.animations ?? {});
       this.syncBoneControls(record);
@@ -1143,6 +1152,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       vat: null,
       skinIndex: 0,
       lodLevel: 0,
+      cullBounds: null,
       controller: null,
       boneControl: null,
       skinApp: null,
@@ -1323,6 +1333,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   /** Детальный ярус: пер-инстансное поддерево со скелетом и микшером (REND-20). */
   private attachDetailed(record: InstanceRecord, shared: SharedModelData): void {
     const ctx = this.requireCtx();
+    // Запечённые границы есть и у детальной записи, когда модель их даёт: они
+    // производны от МОДЕЛИ, а не от яруса, и отсечение по ним точнее запаса
+    // (REND-21). Батчевый ярус тут ни при чём — деградировавшая запись тоже их
+    // получает.
+    const baked = this.shared.get(record.visual?.model ?? '')?.derivatives ?? null;
+    record.cullBounds = baked === null ? null : boundsFromBaked(baked);
+    this.rescaleDetailedCull(record, shared);
     const instanceOptions: { scale?: number; hiddenParts?: readonly number[] } = {};
     if (record.visual?.scale !== undefined) instanceOptions.scale = record.visual.scale;
     if (record.visual?.hiddenParts !== undefined) {
@@ -1340,6 +1357,19 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     record.boneControl = controls === undefined ? null : new BoneControlState(controls);
 
     this.applyInstanceSkin(record, model);
+  }
+
+  /**
+   * Границы отсечения детальной записи под масштабом записи манифеста: тот же
+   * множитель нормализации, каким отмасштабирован сам инстанс (REND-17).
+   */
+  private rescaleDetailedCull(record: InstanceRecord, shared: SharedModelData | null): void {
+    if (record.cullBounds === null) return;
+    const model = shared?.model ?? this.shared.get(record.visual?.model ?? '')?.data?.model;
+    const baked = this.shared.get(record.visual?.model ?? '')?.derivatives;
+    if (model === undefined || baked == null) return;
+    const normalized = (record.visual?.scale ?? 1) / Math.max(model.height, MIN_MODEL_HEIGHT);
+    scaleBounds(boundsFromBaked(baked), normalized, record.cullBounds);
   }
 
   /** Батчевый ярус: запись в разделяемом инстанс-меше (REND-20). */
@@ -1555,6 +1585,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     record.controller = null;
     record.boneControl = null;
     record.vat = null;
+    record.cullBounds = null;
     if (record.batch !== null) {
       const batch = record.batch.batch;
       batch.release(record.slot);
@@ -1706,7 +1737,7 @@ function boundsOf(record: InstanceRecord): ModelBounds | null {
  * — производных у модели нет, и отсечение идёт по габаритам с запасом.
  */
 function cullBoundsOf(record: InstanceRecord): ModelBounds | null {
-  return record.batch?.cullBounds ?? null;
+  return record.batch?.cullBounds ?? record.cullBounds;
 }
 
 /**

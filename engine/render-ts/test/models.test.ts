@@ -394,25 +394,39 @@ describe('отсечение невидимых инстансов (REND-21)', (
     expect(subsystem.instanceFor(2)!.visible).toBe(true);
   });
 
-  it('границы консервативны: запас держит в кадре то, что габариты уже срезали', () => {
-    // Инстанс за краем пирамиды ровно настолько, что его габариты кончаются
-    // снаружи, а запас — внутри: без запаса выпад клипа у края экрана исчезал
-    // бы раньше самого инстанса (REND-21).
+  it('границы консервативны по клипам, а запас остаётся моделям без производных', () => {
+    // Инстанс за краем пирамиды ровно настолько, что габариты bind-позы
+    // кончаются снаружи: без консервативности выпад клипа у края экрана
+    // исчезал бы раньше самого инстанса (REND-21).
     const edgeY = 10 * Math.tan((22.5 * Math.PI) / 180) + 0.4;
-    const place = (subsystem: ModelsSubsystem, assets: AssetsStub): void => {
+    const place = (
+      subsystem: ModelsSubsystem,
+      assets: AssetsStub,
+      model = makeModel(),
+    ): void => {
       subsystem.syncTick(
         makeTickView([makeEntityView(1, { prevX: 10, currX: 10, prevY: edgeY, currY: edgeY })]),
       );
-      assets.resolve('model', MODEL_ID, makeModel());
+      assets.resolve('model', MODEL_ID, model);
       subsystem.updateFrame(1 / 60, 1);
     };
 
+    // Модель с запечёнными производными (ASSET-12): границы по всем кадрам всех
+    // клипов консервативны сами по себе, и запас к ним не добавляется — нулевой
+    // `cullMargin` инстанс не срезает.
+    const baked = makeCullRig(makeCamera(), 0);
+    place(baked.subsystem, baked.assets);
+    expect(baked.subsystem.instanceFor(1)!.visible).toBe(true);
+
+    // Модель без костей запечь нечем: у неё границы — bind-поза, и единственное,
+    // чем выражена консервативность, остаётся запас.
+    const boneless = { ...makeModel(), bones: [], sequences: [] };
     const generous = makeCullRig(makeCamera());
-    place(generous.subsystem, generous.assets);
+    place(generous.subsystem, generous.assets, boneless);
     expect(generous.subsystem.instanceFor(1)!.visible).toBe(true);
 
     const strict = makeCullRig(makeCamera(), 0);
-    place(strict.subsystem, strict.assets);
+    place(strict.subsystem, strict.assets, boneless);
     expect(strict.subsystem.instanceFor(1)!.visible).toBe(false);
   });
 });
