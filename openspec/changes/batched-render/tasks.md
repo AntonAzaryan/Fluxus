@@ -36,5 +36,5 @@
 
 ## 5. Завершение
 
-- [ ] 5.1 Обновить `docs/architecture.md` (ярусы рендера) и координацию спек: `npm run spec-graph -- check` после `/opsx:archive`
-- [ ] 5.2 Полный `npm run check` + `npm run coverage` (аггрегатный) — батчевые ветки исполняются тестами
+- [x] 5.1 Обновить `docs/architecture.md` (ярусы рендера) и координацию спек: `npm run spec-graph -- check` после `/opsx:archive`
+- [x] 5.2 Полный `npm run check` + `npm run coverage` (аггрегатный) — батчевые ветки исполняются тестами
