@@ -53,6 +53,7 @@ export type {
 export {
   SEMANTIC_KEYS,
   SKIN_KEY,
+  WALKABLE_KEY,
   coerceExtra,
   decompose,
   localMatrixOf,

@@ -67,7 +67,11 @@ export const MANIFEST: VisualManifest = {
     Rock: { model: 'visuals/models/rock.gltf' },
     Marker: { model: 'visuals/models/marker.gltf' },
   },
-  decorations: { Statue: { model: 'visuals/models/statue.gltf' } },
+  decorations: {
+    Statue: { model: 'visuals/models/statue.gltf' },
+    // Вид настила моста: цель walkable-фикстур (BLND-3, PRES-2).
+    Bridge: { model: 'visuals/models/bridge.gltf' },
+  },
   // Адрес карты кривизны называет манифест (ASSET-7): своей конвенции имени у
   // неё нет, и импорт её не выдумывает (BLND-10).
   terrain: { curvatureMap: 'visuals/arena-curvature.json' },

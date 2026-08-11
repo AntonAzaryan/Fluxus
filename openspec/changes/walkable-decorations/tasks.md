@@ -25,9 +25,9 @@
 
 ## 5. Конвейер Blender (tools/blender-ts, tools/blender-addon)
 
-- [ ] 5.1 Импорт custom property `walkable` в запись decoration (BLND-3): `true`/`1` → поле, `false`/`0`/отсутствие → поля нет; иное значение и walkable не на visual-объекте — адресная ошибка (BLND-6)
-- [ ] 5.2 Фикстуры `.gltf`/`.glb` и тесты импортёра: мост (terrain + walkable-объект), повторный импорт — пустой дифф (BLND-4), ошибочные значения
-- [ ] 5.3 Чекбокс `walkable` в панели свойств размещения аддона (BLND-8); превью посадки не заводится (design, Open Questions §4)
+- [x] 5.1 Импорт custom property `walkable` в запись decoration (BLND-3): `true`/`1` → поле, `false`/`0`/отсутствие → поля нет; иное значение и walkable не на visual-объекте — адресная ошибка (BLND-6)
+- [x] 5.2 Фикстуры `.gltf`/`.glb` и тесты импортёра: мост (terrain + walkable-объект), повторный импорт — пустой дифф (BLND-4), ошибочные значения
+- [x] 5.3 Чекбокс `walkable` в панели свойств размещения аддона (BLND-8); превью посадки не заводится (design, Open Questions §4)
 
 ## 6. Финал
 
