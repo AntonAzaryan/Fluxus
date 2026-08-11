@@ -139,6 +139,23 @@ describe('маска видимости частей по кадрам (ASSET-12
   });
 });
 
+describe('LOD-цепочка в производных (ASSET-12 → REND-22)', () => {
+  it('модель без цепочки отдаёт пустую: децимации запекание не выдумывает', () => {
+    expect(bakeOrThrow(makeModel([turnSequence('Walk', 1)])).lod).toEqual([]);
+  });
+
+  it('цепочка модели переносится в производные уровень за уровнем', () => {
+    const base = makeModel([turnSequence('Walk', 1)]);
+    const coarse = [base.meshes[0]!];
+    const model: NormalizedModel = { ...base, lodMeshes: [coarse, coarse] };
+    const baked = bakeOrThrow(model);
+    expect(baked.lod.length).toBe(2);
+    // Геометрия уровня — та же, что дала модель: копии здесь не делается,
+    // уровни разделяемы наравне с остальными данными ассета (ASSET-5).
+    expect(baked.lod[0]!.meshes[0]).toBe(coarse[0]);
+  });
+});
+
 describe('детерминизм и кэш (ASSET-12, ASSET-2)', () => {
   it('двойное запекание даёт побитово одинаковые буферы', () => {
     const sequences = [turnSequence('Walk', 1), hideSequence('Hide', 0.7), turnSequence('Idle', 1.3, 'step')];

@@ -31,6 +31,7 @@
 import * as THREE from 'three';
 import {
   AnimationController,
+  MixerAnimationBackend,
   applySkin,
   buildSharedModel,
   createModelInstance,
@@ -173,9 +174,11 @@ export function createThreePortraitStage(options: PortraitStageOptions): Portrai
       // Idle-клип — из таблицы манифеста, тем же контроллером, что у арены
       // (REND-4): запись без 'idle' оставляет позу покоя, без предупреждений;
       // запись, не резолвящаяся в клип, жалуется в сток сборки (options.warn).
-      controller = new AnimationController(instance.mixer, shared.clips, visual.animations ?? {}, {
-        warn: options.warn,
-      });
+      controller = new AnimationController(
+        new MixerAnimationBackend(instance.mixer, shared.clips),
+        visual.animations ?? {},
+        { warn: options.warn },
+      );
       controller.setState(STAND_STATE);
       frameModel(instance);
       ensureLoop();

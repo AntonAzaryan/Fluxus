@@ -43,6 +43,10 @@ function makeManifest(): VisualManifest {
     entities: {
       Runner: {
         model: MODEL_ID,
+        // Ярус назван явно (ASSET-13): без него снятие `boneControls` меняло бы
+        // и ярус записи, а тест здесь ровно про то, что инстанс переподачу
+        // ПЕРЕЖИВАЕТ (REND-17), а не пересобирается.
+        tier: 'detailed',
         defaultSkin: 'red',
         skins: { red: { '0': 'tex/red.png' }, blue: { '0': 'tex/blue.png' } },
         animations: { states: { idle: 'Stand', move: 'Walk' } },
@@ -51,7 +55,7 @@ function makeManifest(): VisualManifest {
       },
       // Вторая запись на той же модели: по ней видно, что правка соседней
       // записи чужих инстансов не касается.
-      Keeper: { model: MODEL_ID },
+      Keeper: { model: MODEL_ID, tier: 'detailed' },
     },
   };
 }
@@ -292,7 +296,7 @@ describe('пересборка инстанса при смене модели (
     expect(subsystem.instanceFor(HERO)!.model).toBeNull();
 
     const next = makeManifest();
-    next.entities.Ghost = { model: MODEL_ID };
+    next.entities.Ghost = { model: MODEL_ID, tier: 'detailed' };
     subsystem.applyManifest(next);
     assets.resolve('model', MODEL_ID, makeModel());
 

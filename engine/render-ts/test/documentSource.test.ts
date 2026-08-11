@@ -42,6 +42,10 @@ function makeManifest(): VisualManifest {
       Runner: {
         model: MODEL_ID,
         scale: 1,
+        // Тесты набора наблюдают инстанс через `ModelInstance` (скелет,
+        // материалы) — это представление ДЕТАЛЬНОГО яруса, и запись называет
+        // его явно (ASSET-13). Батчевый ярус проверяется своим набором тестов.
+        tier: 'detailed',
         defaultSkin: 'red',
         skins: {
           red: { '0': 'tex/red.png' },
@@ -52,7 +56,7 @@ function makeManifest(): VisualManifest {
           events: { EntityDied: 'Death' },
         },
       },
-      Tower: { model: 'models/tower.mdx' },
+      Tower: { model: 'models/tower.mdx', tier: 'detailed' },
     },
   };
 }

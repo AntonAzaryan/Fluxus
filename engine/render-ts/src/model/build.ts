@@ -18,6 +18,7 @@ import type {
   Interpolation,
   NormalizedBone,
   NormalizedMaterial,
+  NormalizedMesh,
   NormalizedModel,
   NormalizedSequence,
 } from '@game-mvp/assets';
@@ -46,25 +47,36 @@ export interface SharedModelData {
   readonly textureTargets: ReadonlyMap<number, readonly TextureTarget[]>;
 }
 
+/**
+ * Геометрия одной части модели (ASSET-5). Отдельная функция потому, что тем же
+ * способом строятся геометрии уровней LOD-цепочки (`assets` ASSET-12, REND-22):
+ * уровень — те же части с упрощённой геометрией, и второй сборки они не требуют.
+ */
+export function geometryFromMesh(mesh: NormalizedMesh): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
+  if (mesh.normals !== null && mesh.normals.length === mesh.positions.length) {
+    geometry.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
+  }
+  if (mesh.uvs !== null) {
+    geometry.setAttribute('uv', new THREE.BufferAttribute(mesh.uvs, 2));
+  }
+  geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(mesh.skinIndices, 4));
+  geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(mesh.skinWeights, 4));
+  geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
+  if (mesh.normals === null || mesh.normals.length !== mesh.positions.length) {
+    geometry.computeVertexNormals();
+  }
+  return geometry;
+}
+
 export function buildSharedModel(model: NormalizedModel): SharedModelData {
-  const meshes: SharedMeshData[] = model.meshes.map((mesh) => {
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
-    if (mesh.normals !== null && mesh.normals.length === mesh.positions.length) {
-      geometry.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
-    }
-    if (mesh.uvs !== null) {
-      geometry.setAttribute('uv', new THREE.BufferAttribute(mesh.uvs, 2));
-    }
-    geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(mesh.skinIndices, 4));
-    geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(mesh.skinWeights, 4));
-    geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
-    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-    if (mesh.normals === null || mesh.normals.length !== mesh.positions.length) {
-      geometry.computeVertexNormals();
-    }
-    return { geometry, partId: mesh.partId, materialIndex: mesh.materialIndex };
-  });
+  const meshes: SharedMeshData[] = model.meshes.map((mesh) => ({
+    geometry: geometryFromMesh(mesh),
+    partId: mesh.partId,
+    materialIndex: mesh.materialIndex,
+  }));
 
   const materials = model.materials.map(materialFromAsset);
   return {

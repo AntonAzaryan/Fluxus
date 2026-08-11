@@ -35,7 +35,7 @@
  * Математика — обычный double: модуль presentation-стороны, запрет float
  * действует на симуляцию, в которую отсюда хода нет (ASSET-1).
  */
-import type { NormalizedModel, NormalizedSequence } from './model.js';
+import type { NormalizedMesh, NormalizedModel, NormalizedSequence } from './model.js';
 import { bakePartVisibility, boneRadii, emptyBounds, growBoundsByBone } from './clipCoverage.js';
 import { multiplyMat4 } from './mat4.js';
 import { TRS_STRIDE, inverseBindOf, poseAt, restPose, type PoseScratch } from './pose.js';
@@ -117,6 +117,16 @@ export interface BakedPartVisibility {
   readonly mask: Uint32Array;
 }
 
+/**
+ * Уровень LOD-цепочки (ASSET-12, `rendering` REND-22): упрощённые геометрии тех
+ * же частей модели. Отдельный тип, а не голый массив мешей, — уровню предстоит
+ * обрасти собственными данными (порог автора, бюджет), и менять при этом
+ * сигнатуру производных не придётся.
+ */
+export interface BakedLodLevel {
+  readonly meshes: readonly NormalizedMesh[];
+}
+
 /** Запечённые производные одной модели (ASSET-12). */
 export interface BakedDerivatives {
   /** Частота сэмплирования, с которой запечены кадры. */
@@ -133,6 +143,13 @@ export interface BakedDerivatives {
   /** Консервативные границы по всем кадрам всех клипов — вход REND-21. */
   readonly bounds: ModelSurfaceBounds;
   readonly partVisibility: BakedPartVisibility;
+  /**
+   * Цепочка уровней детализации от грубого к грубейшему (`rendering` REND-22);
+   * пустая — у модели цепочки нет, и рисуется она единственным уровнем. Данные
+   * приходят из модели (`NormalizedModel.lodMeshes`) как есть: запекание их не
+   * ПОРОЖДАЕТ — децимация геометрии авторская работа, а не производная.
+   */
+  readonly lod: readonly BakedLodLevel[];
 }
 
 /**
@@ -235,6 +252,10 @@ export function bakeDerivatives(model: NormalizedModel, params: BakeParams = {})
       restFrame: 0,
       bounds: { min: [bounds[0]!, bounds[1]!, bounds[2]!], max: [bounds[3]!, bounds[4]!, bounds[5]!] },
       partVisibility: bakePartVisibility(model, clips, fps, frameCount),
+      // Цепочка переносится из модели как есть: уровня, которого в данных нет,
+      // запекание не выдумывает (REND-22 — модель без цепочки рисуется одним
+      // уровнем, и это прежнее поведение).
+      lod: (model.lodMeshes ?? []).map((meshes) => ({ meshes })),
     },
   };
 }

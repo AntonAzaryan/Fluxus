@@ -162,7 +162,10 @@ describe('декларативное сведение набора decoration (R
     const requested = rig.assets.requests.filter((r) => r.kind === 'model').map((r) => r.id);
     expect(requested).toContain(MODEL_ID);
     expect(requested).toContain(GRASS_ID);
-    expect(instanceOf(rig, 'grass')!.model).not.toBeNull();
+    // Запись `Grass` без контроля костей — батчевый ярус (REND-20): модели
+    // детального яруса у неё нет, а заглушка снята — модель доехала.
+    expect(instanceOf(rig, 'grass')!.tier).toBe('batched');
+    expect(instanceOf(rig, 'grass')!.placeholder).toBe(false);
   });
 
   it('повторный ключ в одном наборе — отказ, а не молчаливая победа последнего', () => {
@@ -327,14 +330,14 @@ describe('переподача манифеста действует и на dec
     rig.decorations.apply([decoration('a', { kind: 'Grass' })]);
     rig.assets.resolve('model', GRASS_ID, makeModel());
     const before = instanceOf(rig, 'a')!;
-    expect(before.model).not.toBeNull();
+    expect(before.placeholder).toBe(false);
 
     const next = makeManifest();
     next.decorations!.Grass = { model: 'models/flower.mdx', scale: 1 };
     rig.models.applyManifest(next);
     // Другая модель — инстанс пересобран под новую запись (REND-3, REND-17).
     expect(rig.assets.requests.some((r) => r.id === 'models/flower.mdx')).toBe(true);
-    expect(instanceOf(rig, 'a')!.model).toBeNull();
+    expect(instanceOf(rig, 'a')!.placeholder).toBe(true);
   });
 });
 

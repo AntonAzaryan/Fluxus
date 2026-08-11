@@ -83,7 +83,11 @@ function makeBoxModel(halfWidth: number, height: number): NormalizedModel {
   };
 }
 
-const MANIFEST: VisualManifest = { entities: { Box: { model: MODEL_ID, scale: 2 } } };
+// Ярус явный (ASSET-13): тест смотрит на материалы инстанса — представление
+// детального яруса (REND-20).
+const MANIFEST: VisualManifest = {
+  entities: { Box: { model: MODEL_ID, scale: 2, tier: 'detailed' } },
+};
 
 function grid4(): TerrainGrid {
   return createTerrainGrid({

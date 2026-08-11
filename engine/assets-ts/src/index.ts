@@ -48,6 +48,7 @@ export type {
   BakeParams,
   BakedClip,
   BakedDerivatives,
+  BakedLodLevel,
   BakedPartVisibility,
   BoneVat,
   ModelDerivatives,
