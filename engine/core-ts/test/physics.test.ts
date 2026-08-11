@@ -577,6 +577,27 @@ describe('raycast (PHYS-6)', () => {
     expect(h.physics.raycast(at(0, 0), at(5, 0), { mask: 'somethingElse' })).toBeNull();
   });
 
+  /**
+   * Маска ФИЛЬТРУЕТ коллайдеры (PHYS-6), поэтому её отсутствие — не фильтр по
+   * какому-то умолчанию, а его отсутствие: иначе луч, пущенный из выражения без
+   * маски (EXPR-8), молча считался бы по одному чужому тегу.
+   */
+  it('без маски пересечение считается по всем коллайдерам', () => {
+    const h = harness(false);
+    // У `Bullet` тега обзора нет: маска `blocksVision` его не видит, а луч без
+    // маски — видит.
+    const bullet = h.place('Bullet', { Position: { x: F(2), y: F(0) } });
+    expect(h.physics.raycast(at(0, 0), at(5, 0), { mask: BLOCKS_VISION })).toBeNull();
+    expect(h.physics.raycast(at(0, 0), at(5, 0))!.entity).toBe(bullet);
+  });
+
+  it('без маски видна и статика: тега у обрыва она не спрашивает', () => {
+    const h = harness();
+    const hit = h.physics.raycast(at(1.5, 0.5), at(3, 0.5));
+    expect(hit).not.toBeNull();
+    expect(hit!.entity).toBeUndefined();
+  });
+
   it('луч нулевой длины не даёт попадания', () => {
     const h = harness();
     expect(h.physics.raycast(at(1, 1), at(1, 1))).toBeNull();

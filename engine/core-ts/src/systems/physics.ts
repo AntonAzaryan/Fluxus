@@ -162,9 +162,13 @@ export class PhysicsWorld {
     return Math.floor(coordinate / this.cellSize);
   }
 
-  /** Статика, чей AABB пересекает `bounds` и у которой есть тег `tag`. Порядок — по индексу (DET-6). */
-  query(bounds: Bounds, tag: string): StaticCollider[] {
-    return this.collect(bounds, tag, 0);
+  /**
+   * Статика, чей AABB пересекает `bounds` и у которой есть тег `tag`; без тега
+   * — вся статика, попавшая в `bounds` (PHYS-6: маска ФИЛЬТРУЕТ, и её
+   * отсутствие фильтром быть не может). Порядок — по индексу (DET-6).
+   */
+  query(bounds: Bounds, tag?: string): StaticCollider[] {
+    return this.collect(bounds, tag, undefined);
   }
 
   /** Статика, чей AABB пересекает `bounds` и чей `layer` попал в маску (PHYS-2). Порядок — по индексу (DET-6). */
@@ -172,8 +176,11 @@ export class PhysicsWorld {
     return this.collect(bounds, undefined, mask);
   }
 
-  /** Общий обход клеток обоих запросов: фильтр — тег (raycast) либо маска (движение, сенсоры). */
-  private collect(bounds: Bounds, tag: string | undefined, mask: number): StaticCollider[] {
+  /**
+   * Общий обход клеток обоих запросов: фильтр — тег (raycast; без тега фильтра
+   * нет вовсе) либо маска слоёв (движение, сенсоры).
+   */
+  private collect(bounds: Bounds, tag: string | undefined, mask: number | undefined): StaticCollider[] {
     this.queryId++;
     const found: number[] = [];
     for (let cy = this.cell(bounds.minY); cy <= this.cell(bounds.maxY); cy++) {
@@ -182,7 +189,8 @@ export class PhysicsWorld {
           if (this.stamp[index] === this.queryId) continue;
           this.stamp[index] = this.queryId;
           const s = this.statics[index]!;
-          if (tag !== undefined ? !s.tags.includes(tag) : (s.layer & mask) === 0) continue;
+          const rejected = mask === undefined ? tag !== undefined && !s.tags.includes(tag) : (s.layer & mask) === 0;
+          if (rejected) continue;
           if (!overlaps(bounds, s)) continue;
           found.push(index);
         }
@@ -483,7 +491,11 @@ export function createPhysicsApi(
 
   return {
     raycast: (from, to, rayOptions) => {
-      const tag = rayOptions?.mask ?? BLOCKS_VISION;
+      // Маска ФИЛЬТРУЕТ коллайдеры (PHYS-6): её отсутствие — пересечение по
+      // всем, а не по коллайдерам какого-то одного тега. LoS свой тег называет
+      // сам (`VisibilitySystem`), и подставленное умолчание молча сужало бы
+      // луч, пущенный из выражения без маски (EXPR-8).
+      const tag = rayOptions?.mask;
       const delta = vec.sub(to, from);
       const rayLength = vec.length(delta);
       if (rayLength === 0) return null;
@@ -538,8 +550,11 @@ export function createPhysicsApi(
   };
 }
 
-/** Коллайдеры с нужным тегом. Порядок — по индексу сущности (QUERY-2), поэтому и разрешение ничьей детерминировано. */
-function queryColliders(world: WorldState, component: string, tag: string): Float64Array {
+/**
+ * Коллайдеры с нужным тегом; без тега — все коллайдеры мира (PHYS-6). Порядок —
+ * по индексу сущности (QUERY-2), поэтому и разрешение ничьей детерминировано.
+ */
+function queryColliders(world: WorldState, component: string, tag: string | undefined): Float64Array {
   return query(world, { all: [POSITION_COMPONENT, component], withTag: tag });
 }
 

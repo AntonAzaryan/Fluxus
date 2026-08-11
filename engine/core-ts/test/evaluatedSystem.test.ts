@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EvaluatedSystem, validateSystem, type SystemDef } from '../src/dsl/evaluatedSystem.js';
-import { actionNames, requiredArgs } from '../src/dsl/actions.js';
+import { actionNames, requiredArgs, type Action } from '../src/dsl/actions.js';
 import { SystemRegistry } from '../src/systems/registry.js';
 import { initialState, tick, type Simulation } from '../src/sim/tick.js';
 import * as fixed from '../src/math/fixed.js';
@@ -323,6 +323,52 @@ describe('валидация на регистрации (SYS-3)', () => {
     expect(() => { validateSystem(leaked, makeWorld()); }).toThrow(/переменная "dmg" не связана/);
   });
 
+  /**
+   * Вид связывания известен статически (ACT-4), поэтому и адресат `set`
+   * проверяется на регистрации — как несвязанный `var`, и по той же причине:
+   * ждать срабатывания ветки, в которой присваивание написано, незачем.
+   */
+  it('set: присваивание переменной итерации и несвязанному имени падает на регистрации (ACT-4)', () => {
+    const accumulate: SystemDef = {
+      ...BURNING_JSON,
+      do: [
+        {
+          let: {
+            bindings: { total: 0 },
+            do: [{ set: { name: 'total', value: { '+': [v('total'), F(1)] } } }],
+          },
+        },
+      ],
+    };
+    const overIteration: SystemDef = {
+      ...BURNING_JSON,
+      do: [{ set: { name: 'e', value: F(1) } }],
+    };
+    const unbound: SystemDef = {
+      ...BURNING_JSON,
+      do: [{ set: { name: 'total', value: F(1) } }],
+    };
+
+    expect(() => { validateSystem(accumulate, makeWorld()); }).not.toThrow();
+    expect(() => { validateSystem(overIteration, makeWorld()); }).toThrow(
+      /система "Burning"\[0\]\.forEach\.do\[0\]\.set\.name: переменная "e" связана как "as" и неизменяема/,
+    );
+    expect(() => { validateSystem(unbound, makeWorld()); }).toThrow(
+      /система "Burning"\[0\]\.forEach\.do\[0\]\.set\.name: переменная "total" не связана/,
+    );
+  });
+
+  it('set: привязка не переживает тело своего let (ACT-1, ACT-4)', () => {
+    const leaked: SystemDef = {
+      ...BURNING_JSON,
+      do: [
+        { let: { bindings: { total: 0 }, do: [] } },
+        { set: { name: 'total', value: F(1) } },
+      ],
+    };
+    expect(() => { validateSystem(leaked, makeWorld()); }).toThrow(/переменная "total" не связана/);
+  });
+
   it('переменная из random видна в теле и не видна снаружи (RNG-6)', () => {
     const bound: SystemDef = {
       ...BURNING_JSON,
@@ -440,6 +486,65 @@ describe('валидация на регистрации (SYS-3)', () => {
       /система "Grounded", узел \[0\]\.if: оператор "hasFloorAt": сцена без террейна/,
     );
   });
+
+  it('raycast в сцене без Physics API проходит регистрацию и падает при вычислении (SYS-5, SYS-9)', () => {
+    // Наличие физики — факт сборки сцены (DI-3), а не зарегистрированного мира:
+    // то же правило, что у террейна выше.
+    const los: SystemDef = {
+      name: 'LineOfSight',
+      order: 10,
+      do: [
+        {
+          if: {
+            cond: { '!': [{ raycastHit: [{ vec: [0, 0] }, { vec: [F(1), 0] }, -1, 'blocksVision'] }] },
+            then: [{ emitEvent: { type: 'Clear', data: {} } }],
+          },
+        },
+      ],
+    };
+    const world = makeWorld();
+
+    expect(() => { validateSystem(los, world); }).not.toThrow();
+
+    const registry = new SystemRegistry();
+    registry.registerFromJson(los, world);
+    expect(() => tick({ systems: registry, worldSeed: 1, math: mathApi }, initialState(world, 1))).toThrow(
+      /система "LineOfSight", узел \[0\]\.if: оператор "raycastHit": сцена без Physics API/,
+    );
+  });
+
+  it('raycast: арность и литеральная маска проверяются на регистрации (SYS-3, EXPR-8)', () => {
+    const cast = (args: readonly unknown[]): Partial<SystemDef> => ({
+      do: [{ if: { cond: { raycastHit: args }, then: [] } }],
+    });
+
+    expect(invalid(cast([{ vec: [0, 0] }, { vec: [F(1), 0] }, v('e')]))).not.toThrow();
+    expect(invalid(cast([{ vec: [0, 0] }, { vec: [F(1), 0] }, v('e'), 'blocksVision']))).not.toThrow();
+    expect(invalid(cast([{ vec: [0, 0] }, { vec: [F(1), 0] }]))).toThrow(
+      /оператор "raycastHit": ожидалось аргументов от 3 до 4, получено 2/,
+    );
+    // Маска — имя тега, а не выражение: состав тегов известен статически.
+    expect(invalid(cast([{ vec: [0, 0] }, { vec: [F(1), 0] }, v('e'), v('e')]))).toThrow(
+      /\.raycastHit\[3\]: ожидался строковый литерал/,
+    );
+    // Несвязанное имя внутри луча ловится тем же обходом, что и везде.
+    expect(invalid(cast([{ vec: [0, 0] }, { vec: [F(1), 0] }, v('nope')]))).toThrow(
+      /переменная "nope" не связана/,
+    );
+  });
+
+  it('nearestTo и limit forEach — выражения внешней области (ACT-5, SYS-3)', () => {
+    const ordered = (args: Readonly<Record<string, unknown>>): Partial<SystemDef> => ({
+      do: [{ forEach: { query: { all: ['Health'] }, as: 'target', ...args, do: [] } }],
+    });
+
+    expect(invalid(ordered({ nearestTo: { vec: [0, 0] }, limit: F(1) }))).not.toThrow();
+    expect(invalid(ordered({ nearestTo: { vec: [0, 0, 0] } }))).toThrow(
+      /оператор "vec": ожидалось аргументов 2, получено 3/,
+    );
+    // Переменная итерации связана телом, а не аргументами самого обхода.
+    expect(invalid(ordered({ limit: v('target') }))).toThrow(/переменная "target" не связана/);
+  });
 });
 
 /**
@@ -477,7 +582,17 @@ describe('обязательные аргументы действий на ре
     randomBelow: { as: 'r', bound: F(2), do: [] },
     forEach: { query: {}, as: 'x', do: [] },
     forEachEvent: { type: 'Died', as: 'ev', do: [] },
+    set: { name: 'acc', value: F(1) },
   };
+
+  /**
+   * Узел ставится внутрь `let`: `set` адресует изменяемую привязку (ACT-4), и
+   * без объемлющего `let` он не прошёл бы регистрацию по связанности имени, а не
+   * по составу аргументов. Остальным действиям объемлющая область нейтральна.
+   */
+  const scoped = (node: Record<string, unknown>): Action => ({
+    let: { bindings: { acc: 0 }, do: [node] },
+  });
 
   /** Тот же набор без одного ключа — узел, который автор недописал. */
   const without = (name: string, key: string): Record<string, unknown> => {
@@ -498,7 +613,7 @@ describe('обязательные аргументы действий на ре
 
   it('полный набор аргументов принимается у каждого действия', () => {
     for (const name of actionNames) {
-      expect(invalid({ do: [{ [name]: FULL[name]! }] }), name).not.toThrow();
+      expect(invalid({ do: [scoped({ [name]: FULL[name]! })] }), name).not.toThrow();
     }
   });
 
@@ -508,7 +623,7 @@ describe('обязательные аргументы действий на ре
       expect(required.length, `${name}: перечень пуст`).toBeGreaterThan(0);
       for (const key of required) {
         // Ключ обязателен: полный набор без него — уже не система.
-        expect(invalid({ do: [without(name, key)] }), `${name}.${key}`).toThrow(
+        expect(invalid({ do: [scoped(without(name, key))] }), `${name}.${key}`).toThrow(
           new RegExp(`не задан обязательный аргумент "${key}"`),
         );
       }

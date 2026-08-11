@@ -149,6 +149,9 @@ const WORLD_OPS: readonly string[] = [
   'eventField',
   'bitTest',
   'hasFloorAt',
+  'raycastHit',
+  'raycastEntity',
+  'raycastPoint',
 ];
 
 describe('проводка операторов в Math API (EXPR-2)', () => {

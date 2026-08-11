@@ -128,7 +128,23 @@ describe('ED-5: каталог блоков — закрытые наборы я
 
   it('форму имеют ровно те операторы, у которых ядро называет литеральные позиции', () => {
     const structured = catalog.operators.filter((block) => !block.variadic).map((block) => block.name);
-    expect(structured).toEqual(['eventField', 'getComponent', 'hasComponent', 'var']);
+    expect(structured).toEqual([
+      'eventField',
+      'getComponent',
+      'hasComponent',
+      'raycastEntity',
+      'raycastHit',
+      'raycastPoint',
+      'var',
+    ]);
+    // Необязательная литеральная позиция формы не отменяет: маска луча —
+    // четвёртый аргумент, а первые три остаются выражениями (EXPR-8).
+    expect(catalog.operators.find((block) => block.name === 'raycastHit')?.args).toEqual([
+      'expression',
+      'expression',
+      'expression',
+      'tag',
+    ]);
     expect(catalog.operators.find((block) => block.name === 'getComponent')?.args).toEqual([
       'expression',
       'component',
@@ -188,6 +204,10 @@ describe('ED-1: слоты блока — те аргументы, которы�
     entity: { entity: { nope: [] } },
     cond: { cond: { nope: [] } },
     bound: { bound: { nope: [] } },
+    value: { value: { nope: [] } },
+    nearestTo: { nearestTo: { nope: [] } },
+    limit: { limit: { nope: [] } },
+    name: { name: 42 },
     query: { query: { all: ['Nope'] } },
     overrides: { prefab: 'grunt', overrides: { Nope: {} } },
     component: { component: 'Nope' },
