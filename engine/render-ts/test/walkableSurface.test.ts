@@ -19,14 +19,18 @@ import {
   ModelsSubsystem,
   PresentationStage,
   VisualSurfaceSource,
+  WalkableSurfaceRegistry,
   type RenderContext,
   type SurfaceNormal,
+  type TerrainFormSampler,
+  type WalkablePlacement,
 } from '../src/index.js';
 import { makeAssets, makeEntityView, makeTickView, type AssetsStub } from './fixtures.js';
 
 const STEP = 2;
 const BRIDGE_ID = 'models/bridge.glb';
 const PLANK_ID = 'models/plank.glb';
+const DECK_ID = 'models/deck.glb';
 const UNIT_ID = 'models/runner.mdx';
 
 /**
@@ -90,6 +94,29 @@ function makeBoxModel(halfWidth: number, height: number): NormalizedModel {
   };
 }
 
+/**
+ * Модель из двух частей: part 0 — горизонтальный квад [-1,1]² на z=1, part 1 —
+ * такой же на z=2. Высота модели 2; масштаб записи 2 даёт множитель 1 —
+ * мировые высоты частей совпадают с каноническими.
+ */
+function makeTwoDeckModel(): NormalizedModel {
+  const deckMesh = (partId: number, z: number): NormalizedModel['meshes'][number] => ({
+    partId,
+    positions: new Float32Array([-1, -1, z, 1, -1, z, 1, 1, z, -1, 1, z]),
+    normals: null,
+    uvs: null,
+    indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
+    skinIndices: new Uint16Array(4 * 4),
+    skinWeights: new Float32Array(Array.from({ length: 4 }, () => [1, 0, 0, 0]).flat()),
+    materialIndex: 0,
+  });
+  const box = makeBoxModel(1, 2);
+  return {
+    ...box,
+    meshes: [deckMesh(0, 1), deckMesh(1, 2)],
+  };
+}
+
 function makeManifest(): VisualManifest {
   return {
     entities: {
@@ -101,6 +128,9 @@ function makeManifest(): VisualManifest {
       Bridge: { model: BRIDGE_ID, scale: 1 },
       // Второй настил повыше — для правила max.
       Plank: { model: PLANK_ID, scale: 1.5 },
+      // Двухэтажная модель: с записью «верх скрыт» и без — для hiddenParts.
+      Deck: { model: DECK_ID, scale: 2, hiddenParts: [1] },
+      DeckFull: { model: DECK_ID, scale: 2 },
     },
   };
 }
@@ -285,6 +315,22 @@ describe('walkable-вклад поля высот (REND-9)', () => {
     expect(rig.source.current!.heightAt(2, 2)).toBeCloseTo(1.5, 6);
   });
 
+  it('hiddenParts записи: в поле попадает только нарисованная часть (REND-9)', () => {
+    // Запись Deck скрывает верхний квад (part 1): поверхность обязана совпадать
+    // с картинкой — поле отдаёт верх видимой части, а не скрытой геометрии.
+    const rig = makeRig();
+    rig.assets.resolve('model', DECK_ID, makeTwoDeckModel());
+    rig.decorations.apply([{ key: 'deck', kind: 'Deck', x: 2, y: 2, walkable: true }]);
+    expect(rig.source.current!.heightAt(2, 2)).toBeCloseTo(1, 6);
+
+    // Контроль: та же модель без hiddenParts даёт верх скрытой ранее части —
+    // индексы по разным наборам частей не путаются (ASSET-11).
+    const control = makeRig();
+    control.assets.resolve('model', DECK_ID, makeTwoDeckModel());
+    control.decorations.apply([{ key: 'deck', kind: 'DeckFull', x: 2, y: 2, walkable: true }]);
+    expect(control.source.current!.heightAt(2, 2)).toBeCloseTo(2, 6);
+  });
+
   it('нормаль на настиле — нормаль треугольника меша, вне bbox — прежняя нормаль поля', () => {
     const rig = makeRig();
     rig.assets.resolve('model', BRIDGE_ID, makeBoxModel(1, 1));
@@ -380,5 +426,53 @@ describe('правка walkable-записи (REND-18 → REND-9)', () => {
     }));
     expect(rig.source.current!.terrainFormHeightAt(2, 2)).toBeCloseTo(STEP, 6);
     expect(rig.source.current!.heightAt(2, 2)).toBeCloseTo(STEP + 1, 6);
+  });
+});
+
+// ------------------------------------------------------- смена размера арены
+
+describe('WalkableSurfaceRegistry: смена размера арены', () => {
+  const flatForm: TerrainFormSampler = {
+    terrainFormHeightAt: () => 0,
+    terrainFormNormalAt: (_wx, _wy, out) => {
+      out.x = 0;
+      out.y = 0;
+      out.z = 1;
+      return out;
+    },
+  };
+
+  function placementAt(x: number, y: number): WalkablePlacement {
+    return {
+      x,
+      y,
+      yaw: 0,
+      tiltFactor: 0,
+      tiltMaxRad: null,
+      scale: 1,
+      model: makeBoxModel(1, 1),
+    };
+  }
+
+  it('удаление записи после resize не оставляет фантомных клеток (регрессия)', () => {
+    // Ключ клетки — cy * width + cx: привязки, сделанные под шириной 8, нельзя
+    // снимать по формуле ширины 16. Порядок вызовов — как у setGrid источника:
+    // configure ДО reseatAll.
+    const registry = new WalkableSurfaceRegistry();
+    registry.configure(8, 8, 1);
+    registry.set(1, placementAt(2, 2), flatForm);
+    expect(registry.coversCell(2 * 8 + 2)).toBe(true);
+
+    registry.configure(16, 16, 1);
+    registry.reseatAll(flatForm);
+    expect(registry.coversCell(2 * 16 + 2)).toBe(true);
+
+    registry.set(1, null, flatForm);
+    expect(registry.size).toBe(0);
+    // Ни одной накрытой клетки не осталось — в том числе клеток старой
+    // раскладки [9, 10, 11, 25, 26, 27], которые терялись до исправления.
+    for (let cell = 0; cell < 16 * 16; cell++) {
+      expect(registry.coversCell(cell)).toBe(false);
+    }
   });
 });

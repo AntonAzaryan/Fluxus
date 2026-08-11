@@ -919,6 +919,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // мировая единица × масштаб записи, поверх — масштаб набора (REND-11).
       scale: (view.scale ?? 1) * ((visual.scale ?? 1) / Math.max(model.height, MIN_MODEL_HEIGHT)),
       model,
+      // Скрытые части записи (ASSET-6) не рисуются — и в поле не попадают:
+      // индекс реестра обязан совпадать с нарисованным набором частей (REND-9).
+      hiddenParts: visual.hiddenParts,
     });
   }
 

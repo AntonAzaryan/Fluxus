@@ -102,14 +102,21 @@ interface TriangleSoup {
   readonly triBase: Uint32Array;
 }
 
-function collectTriangles(model: NormalizedModel): TriangleSoup {
+function collectTriangles(model: NormalizedModel, hidden: ReadonlySet<number> | null): TriangleSoup {
   let count = 0;
   // Неполный хвост `indices` молча отбрасывается — так же его игнорирует рендер.
-  for (const mesh of model.meshes) count += Math.floor(mesh.indices.length / 3);
+  // Скрытые части (`hiddenParts` записи манифеста) отсеиваются тем же критерием,
+  // что у инстанса и его bbox — по `partId` меша: поверхность обязана совпадать
+  // с нарисованным набором частей (REND-9, REND-15).
+  for (const mesh of model.meshes) {
+    if (hidden?.has(mesh.partId) === true) continue;
+    count += Math.floor(mesh.indices.length / 3);
+  }
   const triMesh = new Uint32Array(count);
   const triBase = new Uint32Array(count);
   let tri = 0;
   for (let m = 0; m < model.meshes.length; m++) {
+    if (hidden?.has(model.meshes[m]!.partId) === true) continue;
     const triangles = Math.floor(model.meshes[m]!.indices.length / 3);
     for (let k = 0; k < triangles; k++) {
       triMesh[tri] = m;
@@ -271,9 +278,9 @@ class SurfaceIndex implements ModelSurfaceIndex {
   private bestT = Infinity;
   private bestTri = -1;
 
-  constructor(model: NormalizedModel) {
+  constructor(model: NormalizedModel, hidden: ReadonlySet<number> | null) {
     this.meshes = model.meshes;
-    const soup = collectTriangles(model);
+    const soup = collectTriangles(model, hidden);
     this.triangleCount = soup.count;
     if (soup.count === 0) {
       // Модель без треугольной геометрии — валидный ассет: любой запрос ответит
@@ -483,23 +490,45 @@ class SurfaceIndex implements ModelSurfaceIndex {
 }
 
 /**
- * Кэш индексов НА АССЕТЕ: ключ — объект модели, поэтому все потребители одного
- * ассета делят один индекс, а с уходом ассета из кэша сервиса уходит и индекс.
+ * Кэш индексов НА АССЕТЕ: внешний ключ — объект модели, поэтому все потребители
+ * одного ассета делят индексы, а с уходом ассета из кэша сервиса уходят и они.
+ * Внутренний ключ — каноническая подпись набора скрытых частей: у записи с
+ * `hiddenParts` свой индекс (поверхность = картинка, REND-9), но все инстансы
+ * одной записи — десять мостов одного набора частей — делят один (ASSET-11).
  */
-const indexCache = new WeakMap<NormalizedModel, SurfaceIndex>();
+const indexCache = new WeakMap<NormalizedModel, Map<string, SurfaceIndex>>();
+
+/** Каноническая подпись набора скрытых частей: отсортированные уникальные id; '' — скрытых нет. */
+function hiddenSignature(hiddenParts: readonly number[] | undefined): string {
+  if (hiddenParts === undefined || hiddenParts.length === 0) return '';
+  return [...new Set(hiddenParts)].sort((a, b) => a - b).join(',');
+}
 
 /**
  * Индекс поверхности модели (ASSET-11): строится лениво при первом обращении
- * и разделяется — повторный вызов для того же объекта модели возвращает тот же
- * индекс. Модель обязана быть канонической и неизменной (ASSET-5): байты
- * буферов после построения индекса трогать нельзя — та же дисциплина, что у
- * остальных потребителей ассета.
+ * и разделяется — повторный вызов для того же объекта модели и того же НАБОРА
+ * скрытых частей возвращает тот же индекс (порядок и дубли в `hiddenParts` —
+ * не различия). Скрытые части записи манифеста в индекс не попадают — так же,
+ * как их не рисует инстанс и не считает его bbox (REND-9, REND-15); без
+ * `hiddenParts` поведение прежнее — индекс по всей геометрии. Модель обязана
+ * быть канонической и неизменной (ASSET-5): байты буферов после построения
+ * индекса трогать нельзя — та же дисциплина, что у остальных потребителей
+ * ассета.
  */
-export function modelSurfaceIndex(model: NormalizedModel): ModelSurfaceIndex {
-  let index = indexCache.get(model);
+export function modelSurfaceIndex(
+  model: NormalizedModel,
+  hiddenParts?: readonly number[],
+): ModelSurfaceIndex {
+  let byHidden = indexCache.get(model);
+  if (byHidden === undefined) {
+    byHidden = new Map();
+    indexCache.set(model, byHidden);
+  }
+  const signature = hiddenSignature(hiddenParts);
+  let index = byHidden.get(signature);
   if (index === undefined) {
-    index = new SurfaceIndex(model);
-    indexCache.set(model, index);
+    index = new SurfaceIndex(model, signature === '' ? null : new Set(hiddenParts));
+    byHidden.set(signature, index);
   }
   return index;
 }

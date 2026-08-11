@@ -46,6 +46,12 @@ export interface WalkablePlacement {
   readonly scale: number;
   /** Готовая модель (ASSET-4): до `ready` инстанс в реестр не попадает (REND-9). */
   readonly model: NormalizedModel;
+  /**
+   * Скрытые части записи манифеста (ASSET-6): инстанс их не рисует, значит и
+   * поверхность их не видит — поле обязано совпадать с картинкой (REND-9), а
+   * наведение — с нарисованными частями (REND-15).
+   */
+  readonly hiddenParts?: readonly number[];
 }
 
 /**
@@ -124,6 +130,21 @@ export class WalkableSurfaceRegistry implements WalkableField {
 
   /** Раскладка арены; смена размера или шага требует полной пересадки (`reseatAll`). */
   configure(width: number, height: number, tile: number): void {
+    if (width !== this.width || height !== this.height) {
+      // Смена размера меняет формулу ключа клетки (cy * width + cx): привязки,
+      // сделанные под старой шириной, новым ключом не снять — остались бы
+      // фантомные `coversCell` и удалённые записи в списках. Карта клеток
+      // сбрасывается целиком, диапазоны записей помечаются «не привязан», и
+      // последующая пересадка (`reseatAll`) привязывает всё заново, а
+      // `detachCells` по сброшенному диапазону — no-op (REND-9).
+      this.cells.clear();
+      for (const entry of this.entries.values()) {
+        entry.cx0 = 0;
+        entry.cy0 = 0;
+        entry.cx1 = -1;
+        entry.cy1 = -1;
+      }
+    }
     this.width = width;
     this.height = height;
     this.tile = tile;
@@ -153,7 +174,7 @@ export class WalkableSurfaceRegistry implements WalkableField {
     if (existing === undefined) {
       entry = {
         placement,
-        index: modelSurfaceIndex(placement.model),
+        index: modelSurfaceIndex(placement.model, placement.hiddenParts),
         matrix: new THREE.Matrix4(),
         inverse: new THREE.Matrix4(),
         minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0,
@@ -165,8 +186,9 @@ export class WalkableSurfaceRegistry implements WalkableField {
       this.detachCells(existing);
       entry = existing;
       entry.placement = placement;
-      // Индекс кэширован НА АССЕТЕ (ASSET-11): правка трансформа его не трогает.
-      entry.index = modelSurfaceIndex(placement.model);
+      // Индекс кэширован НА АССЕТЕ по набору частей (ASSET-11): правка
+      // трансформа его не трогает.
+      entry.index = modelSurfaceIndex(placement.model, placement.hiddenParts);
     }
     if (form !== null) this.seat(entry, form);
     this.attachCells(entry);
@@ -375,7 +397,7 @@ export class WalkableSurfaceRegistry implements WalkableField {
   }
 }
 
-/** Один и тот же вклад: те же место, курс, наклон, масштаб и тот же ассет. */
+/** Один и тот же вклад: те же место, курс, наклон, масштаб, ассет и набор частей. */
 function samePlacement(a: WalkablePlacement, b: WalkablePlacement): boolean {
   return (
     a.x === b.x &&
@@ -384,8 +406,17 @@ function samePlacement(a: WalkablePlacement, b: WalkablePlacement): boolean {
     a.tiltFactor === b.tiltFactor &&
     a.tiltMaxRad === b.tiltMaxRad &&
     a.scale === b.scale &&
-    a.model === b.model
+    a.model === b.model &&
+    sameHiddenParts(a.hiddenParts, b.hiddenParts)
   );
+}
+
+/** Один и тот же набор скрытых частей (ASSET-6): порядок и отсутствие — не различия. */
+function sameHiddenParts(a?: readonly number[], b?: readonly number[]): boolean {
+  if (a === b) return true;
+  const before = a ?? [];
+  const after = b ?? [];
+  return before.length === after.length && before.every((part) => after.includes(part));
 }
 
 /** Пересечение луча с мировым AABB записи (слэбы); ближе `tBest` — иначе false. */

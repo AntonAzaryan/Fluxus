@@ -192,6 +192,35 @@ describe('modelSurfaceIndex (ASSET-11)', () => {
     expect(modelSurfaceIndex(other)).toBe(modelSurfaceIndex(other));
   });
 
+  it('hiddenParts: скрытая часть в индекс не попадает — поверхность совпадает с нарисованной (REND-9)', () => {
+    // Часть 0 — настил на z=2, часть 1 — «лощина» на z=1.
+    const model = makeModel([quad(2, 0, 0, 4, 4), quad(1, -1, -1, 5, 5)]);
+    const full = modelSurfaceIndex(model);
+    expect(full.triangleCount).toBe(4);
+    expect(full.topAt(2, 2)!.point[2]).toBeCloseTo(2, 9);
+
+    // Настил скрыт записью манифеста: верх под той же точкой — нижняя часть,
+    // границы — только по видимой геометрии.
+    const partial = modelSurfaceIndex(model, [0]);
+    expect(partial.triangleCount).toBe(2);
+    expect(partial.topAt(2, 2)!.point[2]).toBeCloseTo(1, 9);
+    expect([...partial.bounds!.max]).toEqual([5, 5, 1]);
+
+    // Пустой список скрытых — то же, что отсутствие аргумента: индекс общий.
+    expect(modelSurfaceIndex(model, [])).toBe(full);
+  });
+
+  it('индекс кэшируется по набору скрытых частей: порядок и дубли — не различия (ASSET-11)', () => {
+    const model = makeModel([quad(2, 0, 0, 4, 4), quad(1, -1, -1, 5, 5)]);
+    // Десять мостов одной записи — один индекс: тот же набор в любом порядке.
+    const first = modelSurfaceIndex(model, [1, 0]);
+    expect(modelSurfaceIndex(model, [0, 1, 1])).toBe(first);
+    // Другой набор частей и полный индекс — другие структуры.
+    expect(modelSurfaceIndex(model, [0])).not.toBe(first);
+    expect(modelSurfaceIndex(model)).not.toBe(first);
+    expect(modelSurfaceIndex(model)).not.toBe(modelSurfaceIndex(model, [0]));
+  });
+
   it('модель без треугольников — «нет пересечения», не ошибка', () => {
     const empty = makeModel([]);
     const index = modelSurfaceIndex(empty);
