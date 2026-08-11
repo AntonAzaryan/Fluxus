@@ -193,7 +193,7 @@ describe('validateManifest (ASSET-6)', () => {
     );
   });
 
-  it('tier и lodThresholds записи: перечень ярусов закрыт, пороги строго убывают (ASSET-12)', () => {
+  it('tier и lodThresholds записи: перечень ярусов закрыт, пороги строго убывают (ASSET-13)', () => {
     const ok = validateManifest({
       entities: { orc: { model: 'm.mdx', tier: 'detailed', lodThresholds: [0.3, 0.1] } },
       decorations: { rock: { model: 'r.mdx', tier: 'batched' } },
@@ -219,7 +219,7 @@ describe('validateManifest (ASSET-6)', () => {
     );
   });
 
-  it('умолчания яруса и порогов: батчевый, детальный — при контроле костей (ASSET-12)', () => {
+  it('умолчания яруса и порогов: батчевый, детальный — при контроле костей (ASSET-13)', () => {
     const result = validateManifest({
       entities: {
         plain: { model: 'm.mdx' },

@@ -41,9 +41,9 @@ export type { DecodedImage } from './image.js';
 export type { ModelSurfaceHit, ModelSurfaceBounds, ModelSurfaceIndex } from './surface.js';
 export { modelSurfaceIndex } from './surface.js';
 
-// запечённые производные модели (ASSET-11) — bone-VAT, таблица клипов,
+// запечённые производные модели (ASSET-12) — bone-VAT, таблица клипов,
 // консервативные границы по клипам и маска видимости частей; и набор вариантов
-// скинов записи манифеста (ASSET-11 же, но производная ЗАПИСИ, а не модели)
+// скинов записи манифеста (ASSET-12 же, но производная ЗАПИСИ, а не модели)
 export type {
   BakeParams,
   BakedClip,
@@ -76,7 +76,7 @@ export type {
   CameraConfigDescription,
   ManifestValidation,
   ValidateManifestOptions,
-  // параметры яруса и LOD записи (ASSET-12)
+  // параметры яруса и LOD записи (ASSET-13)
   VisualTier,
 } from './manifest.js';
 export {

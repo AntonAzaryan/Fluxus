@@ -1,5 +1,5 @@
 /**
- * Набор вариантов скинов записи (ASSET-11): раскладка под массив текстур —
+ * Набор вариантов скинов записи (ASSET-12): раскладка под массив текстур —
  * слой на вариант, сквозные индексы, нормализация размеров. Headless
  * (ASSET-5): на входе декодированные пиксели, на выходе байты и раскладка.
  */
@@ -38,7 +38,7 @@ function pixelAt(
   return [...slot.pixels.subarray(base, base + 4)];
 }
 
-describe('bakeSkinVariants (ASSET-11 → REND-6)', () => {
+describe('bakeSkinVariants (ASSET-12 → REND-6)', () => {
   it('слой на вариант, индексы сквозные и в порядке подачи', () => {
     const set = bakeSkinVariants([
       variant('', [[0, solid(2, 2, 10, 0, 0)]]),
@@ -105,7 +105,7 @@ describe('bakeSkinVariants (ASSET-11 → REND-6)', () => {
     const first = bakeSkinVariants(sources());
     const second = bakeSkinVariants(sources());
     // Порядок слотов не зависит от порядка вставки в Map — иначе побитового
-    // совпадения не добиться (ASSET-11).
+    // совпадения не добиться (ASSET-12).
     expect(second.slots.map((slot) => slot.slot)).toEqual([0, 3]);
     first.slots.forEach((slot, i) => {
       expect(second.slots[i]!.pixels).toEqual(slot.pixels);

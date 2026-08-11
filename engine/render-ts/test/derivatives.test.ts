@@ -1,5 +1,5 @@
 /**
- * Сверка запечённой позы (`assets` ASSET-11) с позой настоящего скелета —
+ * Сверка запечённой позы (`assets` ASSET-12) с позой настоящего скелета —
  * оракулом здесь работает детальный ярус: микшер и `THREE.Skeleton` считают
  * ту же позу другой реализацией, и расхождение ярусов (design, Risks) видно
  * этим сравнением, а не глазами на арене.
@@ -28,7 +28,7 @@ function bakedMatrix(baked: BakedDerivatives, frame: number, bone: number): numb
   return [...baked.vat.data.subarray(base, base + 16)];
 }
 
-describe('поза VAT против позы скелета (ASSET-11 → REND-20)', () => {
+describe('поза VAT против позы скелета (ASSET-12 → REND-20)', () => {
   const model = makeModel();
   const shared = buildSharedModel(model);
   const result = bakeDerivatives(model, { fps: FPS });

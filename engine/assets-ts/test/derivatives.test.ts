@@ -1,5 +1,5 @@
 /**
- * Запечённые производные модели (ASSET-11): раскладка bone-VAT и таблица
+ * Запечённые производные модели (ASSET-12): раскладка bone-VAT и таблица
  * клипов, консервативные границы по всем клипам, маска видимости частей, кэш по
  * идентичности ассета и побитовый детерминизм.
  *
@@ -31,7 +31,7 @@ function bakeOrThrow(model: NormalizedModel, fps?: number): BakedDerivatives {
   return result.derivatives;
 }
 
-describe('bakeDerivatives: раскладка VAT и таблица клипов (ASSET-11)', () => {
+describe('bakeDerivatives: раскладка VAT и таблица клипов (ASSET-12)', () => {
   it('строка — кадр, четыре текселя — матрица кости; поза покоя лежит первой', () => {
     const baked = bakeOrThrow(makeModel([turnSequence('Walk', 1)]), 10);
     expect(baked.fps).toBe(10);
@@ -100,7 +100,7 @@ describe('bakeDerivatives: раскладка VAT и таблица клипов
   });
 });
 
-describe('консервативные границы по клипам (ASSET-11 → REND-21)', () => {
+describe('консервативные границы по клипам (ASSET-12 → REND-21)', () => {
   it('объём накрывает вершины во всех кадрах, а не только бинд-позу', () => {
     // Клип уводит кость 1 поворотом на 90°: её треугольник, лежавший вдоль +X,
     // встаёт вдоль +Y — и границы обязаны это увидеть.
@@ -118,7 +118,7 @@ describe('консервативные границы по клипам (ASSET-1
   });
 });
 
-describe('маска видимости частей по кадрам (ASSET-11)', () => {
+describe('маска видимости частей по кадрам (ASSET-12)', () => {
   it('часть без трека видима; трек гасит её с того кадра, где ключ сработал', () => {
     const baked = bakeOrThrow(makeModel([hideSequence('Hide', 1)]), 4);
     const clip = baked.clips[0]!;
@@ -139,7 +139,7 @@ describe('маска видимости частей по кадрам (ASSET-11
   });
 });
 
-describe('детерминизм и кэш (ASSET-11, ASSET-2)', () => {
+describe('детерминизм и кэш (ASSET-12, ASSET-2)', () => {
   it('двойное запекание даёт побитово одинаковые буферы', () => {
     const sequences = [turnSequence('Walk', 1), hideSequence('Hide', 0.7), turnSequence('Idle', 1.3, 'step')];
     const first = bakeOrThrow(makeModel(sequences), 24);

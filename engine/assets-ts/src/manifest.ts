@@ -290,13 +290,13 @@ export interface VerticalOffset {
 
 /**
  * Ярус представления инстанса (`rendering` REND-20), заданный записью явно
- * (ASSET-12). Батчевый — разделяемый батч со скиннингом по запечённым данным;
+ * (ASSET-13). Батчевый — разделяемый батч со скиннингом по запечённым данным;
  * детальный — пер-инстансное поддерево со скелетом.
  */
 export type VisualTier = 'batched' | 'detailed';
 
 /**
- * Пороги LOD по умолчанию (ASSET-12, `rendering` REND-22): доля высоты кадра,
+ * Пороги LOD по умолчанию (ASSET-13, `rendering` REND-22): доля высоты кадра,
  * ниже которой инстанс переходит на следующий уровень цепочки. Это УМОЛЧАНИЕ
  * кода, а не политика: запись, которой числа важны, задаёт свои — художник
  * правит манифест, а не рендер.
@@ -304,7 +304,7 @@ export type VisualTier = 'batched' | 'detailed';
 export const DEFAULT_LOD_THRESHOLDS: readonly number[] = Object.freeze([0.12, 0.05]);
 
 /**
- * Ярус записи (ASSET-12): явное поле записи → умолчание. Умолчание — батчевый,
+ * Ярус записи (ASSET-13): явное поле записи → умолчание. Умолчание — батчевый,
  * кроме записей с настроенным процедурным контролем костей (`rendering`
  * REND-5): им нужен настоящий скелет, и батчевого яруса они не переживут.
  *
@@ -317,7 +317,7 @@ export function resolveVisualTier(visual: EntityVisual | undefined): VisualTier 
   return visual?.boneControls === undefined ? 'batched' : 'detailed';
 }
 
-/** Пороги LOD записи: свои → умолчание кода (ASSET-12). */
+/** Пороги LOD записи: свои → умолчание кода (ASSET-13). */
 export function resolveLodThresholds(visual: EntityVisual | undefined): readonly number[] {
   return visual?.lodThresholds ?? DEFAULT_LOD_THRESHOLDS;
 }
@@ -364,14 +364,14 @@ export interface EntityVisual {
   /** Дуга прыжка и снижение при провале (REND-12); без секции — смещения нет. */
   verticalOffset?: VerticalOffset;
   /**
-   * Ярус представления инстанса (ASSET-12, `rendering` REND-20). Без поля —
+   * Ярус представления инстанса (ASSET-13, `rendering` REND-20). Без поля —
    * умолчание `resolveVisualTier`: батчевый, кроме записей с `boneControls`.
    * Поле — политика вида: художник переводит штучную крупную модель в детальный
    * ярус, не правя код рендера.
    */
   tier?: VisualTier;
   /**
-   * Пороги переключения LOD-цепочки (ASSET-12, `rendering` REND-22): доли
+   * Пороги переключения LOD-цепочки (ASSET-13, `rendering` REND-22): доли
    * высоты кадра, строго убывающие. Без поля — умолчания
    * `DEFAULT_LOD_THRESHOLDS`; модель без цепочки уровней порогов не замечает.
    */
@@ -452,11 +452,11 @@ function validateVerticalOffset(v: unknown, path: string, errors: string[]): voi
   }
 }
 
-/** Ярусы, которые запись вправе назвать (ASSET-12); перечень закрыт рендером. */
+/** Ярусы, которые запись вправе назвать (ASSET-13); перечень закрыт рендером. */
 const VISUAL_TIERS: readonly VisualTier[] = ['batched', 'detailed'];
 
 /**
- * `lodThresholds` записи (ASSET-12): доли высоты кадра в `(0..1]`, строго
+ * `lodThresholds` записи (ASSET-13): доли высоты кадра в `(0..1]`, строго
  * убывающие. Строгое убывание — не придирка: порог, не меньший предыдущего,
  * означает уровень, который не выбирается никогда, и молча пропасть такая
  * запись не должна.
@@ -508,7 +508,7 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
     validateSurfaceAlign(entity.surfaceAlign, `${path}.surfaceAlign`, errors);
   }
 
-  // Параметры батчевой отрисовки (ASSET-12): действуют одинаково на оба
+  // Параметры батчевой отрисовки (ASSET-13): действуют одинаково на оба
   // раздела манифеста — запись decoration задаёт их так же, как запись
   // сущности, и валидируются они тем же проходом.
   if ('tier' in entity && !VISUAL_TIERS.includes(entity.tier as VisualTier)) {
