@@ -36,6 +36,11 @@ export type {
 // декодированное изображение — вид текстурного ассета (ASSET-5)
 export type { DecodedImage } from './image.js';
 
+// выборка поверхности канонической модели (ASSET-11) — для walkable-вклада
+// поля высот и picking'а рендера (REND-9, REND-15)
+export type { ModelSurfaceHit, ModelSurfaceBounds, ModelSurfaceIndex } from './surface.js';
+export { modelSurfaceIndex } from './surface.js';
+
 // манифест визуалов (ASSET-6)
 export type {
   VerticalOffset,

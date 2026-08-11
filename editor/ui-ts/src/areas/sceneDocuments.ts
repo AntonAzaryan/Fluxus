@@ -343,6 +343,9 @@ export function decorationsOf(input: SceneDraftInput): readonly SceneDecoration[
       yaw: turns * TURN_RADIANS,
       ...(record.scale === undefined ? {} : { scale: record.scale }),
       ...(record.skin === undefined ? {} : { skin: record.skin }),
+      // Флаг walkable-поверхности (PRES-2) едет в набор как есть: его читает
+      // единое поле высот (REND-9), а не редактор.
+      ...(record.walkable === undefined ? {} : { walkable: record.walkable }),
     };
   });
 }

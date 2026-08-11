@@ -208,6 +208,48 @@ describe('ED-21, PRES-3: парный документ переживает «о
     expect(lines).toHaveLength(1);
   });
 
+  it('walkable записи переживает «открыл — сохранил» как есть: true, явный false, отсутствие (PRES-2)', async () => {
+    // Неразличимость false и отсутствия (PRES-2) — правило ЗАПИСЫВАЮЩЕЙ
+    // операции (false не пишется), а не сохранения: канонический вид значение
+    // сохраняет как есть (ED-21), и рукописный `walkable: false` не
+    // выбрасывается и не дописывается — как и у остальных необязательных полей.
+    const handwritten = encodeDocument({
+      decorations: [
+        { visual: 'Bridge', x: 1, y: 2, walkable: true },
+        { visual: 'Bridge', x: 3, y: 4, walkable: false },
+        { visual: 'Bridge', x: 5, y: 6 },
+      ],
+    });
+    const host = createMemoryHost({ files: { [PRESENTATION_PATH]: handwritten } });
+    const session = newSession();
+    await openDocumentFromHost(session, host.content, {
+      id: PRESENTATION_PATH,
+      kind: 'presentation',
+      lists: [['decorations']],
+    });
+
+    // «Открыл — сохранил без правок»: ни байта диффа.
+    const untouched = await saveDocuments({ session, host: host.content });
+    expect(untouched).toMatchObject({ refused: false, written: [] });
+    expect(host.bytes(PRESENTATION_PATH)).toEqual(handwritten);
+
+    // Правка другой записи не трогает walkable-поля соседей (ED-21).
+    session.applyOperation('document.list.setValue', {
+      document: PRESENTATION_PATH,
+      record: session.descriptors(PRESENTATION_PATH, ['decorations'])[2]!,
+      path: ['x'],
+      value: 7,
+    });
+    await saveDocuments({ session, host: host.content });
+
+    const saved = decodeDocument(host.bytes(PRESENTATION_PATH)) as {
+      decorations: readonly Record<string, JsonValue>[];
+    };
+    expect(saved.decorations[0]).toEqual({ visual: 'Bridge', x: 1, y: 2, walkable: true });
+    expect(saved.decorations[1]).toEqual({ visual: 'Bridge', x: 3, y: 4, walkable: false });
+    expect(saved.decorations[2]).toEqual({ visual: 'Bridge', x: 7, y: 6 });
+  });
+
   it('парный документ — член группы записи тройки (ED-19)', () => {
     const [group] = pairingGroups([
       { scene: SCENE_PATH, manifest: MANIFEST_PATH, presentation: PRESENTATION_PATH },

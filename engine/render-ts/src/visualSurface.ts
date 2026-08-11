@@ -26,6 +26,18 @@
  * Нормаль — аналитическая производная той же формы, без численного
  * дифференцирования по кадрам.
  *
+ * Поверх террейн-формы в поле входят walkable-поверхности (REND-9): в точке,
+ * накрытой bbox walkable-инстанса, высота поля — максимум террейн-формы и
+ * верхней walkable-поверхности меша, а нормаль — нормаль треугольника под
+ * точкой. Реестр walkable-инстансов (`walkableSurface.ts`) принадлежит
+ * источнику поверхности; здесь он только читается, и клетка вне bbox'ов идёт
+ * ровно прежним путём — сцена без walkable-декораций даёт побитово то же поле.
+ * Террейн-форма при этом остаётся доступной отдельными аксессорами
+ * (`terrainForm*`): по ней сажаются сами walkable-инстансы (без взаимной
+ * рекурсии, REND-9), по ней строится геометрия террейна (walkable в неё не
+ * попадает — настил рисует меш декорации) и по ней идёт марш picking'а
+ * (REND-15: walkable-ветвь там считается рейкастом по мешам).
+ *
  * В матче сетка и карта кривизны иммутабельны (TERR-6) — углы считаются один
  * раз. У документного источника террейна (REND-14) они мутабельны: кисти редактора
  * правят уровни и кривизну (ED-10, ED-11), поэтому поверхность умеет
@@ -35,6 +47,8 @@
  */
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
 import { CURVATURE_SCALE, type TerrainCurvatureMap } from '@game-mvp/assets';
+// Только тип: walkable-реестр создаёт источник поверхности, здесь он читается.
+import type { WalkableField } from './walkableSurface.js';
 
 /**
  * Уровни четырёх углов клетки в порядке [c00, c10, c11, c01] (x,y → x+1,y →
@@ -96,20 +110,22 @@ export interface VisualSurface {
   readonly hasCurvature: boolean;
   /** Мировые высоты углов клетки [c00, c10, c11, c01] — вход генераторов геометрии. */
   cornerHeights(x: number, y: number): [number, number, number, number];
-  /** Высота в мировой точке; тотальна — за краем сетки отвечает ближайшая клетка. */
+  /**
+   * Высота ПОЛЯ в мировой точке — террейн-форма плюс правило max с walkable-
+   * поверхностями (REND-9); тотальна — за краем сетки отвечает ближайшая клетка.
+   */
   heightAt(wx: number, wy: number): number;
   /**
    * Высота в мировой точке, посчитанная по углам ЗАДАННОЙ клетки; точка вне
    * клетки клампится к её границам. Нужна там, где клетку выбирает вызывающий,
-   * а не округление координаты: марш picking'а по полю высот (REND-15) на
-   * границе двух клеток обязан считать по той, в которую вошёл, — иначе
-   * попадание в стенку обрыва разрешалось бы в клетку под ней.
-   *
-   * Формула та же, что у `heightAt`: обе зовут одну билинейную выборку, второй
-   * реализации поля высот не появляется (REND-9).
+   * а не округление координаты. Walkable-вклад учитывается в клампленной точке
+   * тем же правилом max, что у `heightAt` (REND-9).
    */
   heightInCell(cellX: number, cellY: number, wx: number, wy: number): number;
-  /** Единичная нормаль в мировой точке; пишет в out и возвращает его. */
+  /**
+   * Единичная нормаль поля в мировой точке; на walkable-поверхности — нормаль
+   * треугольника меша под точкой (REND-9). Пишет в out и возвращает его.
+   */
   normalAt(wx: number, wy: number, out: SurfaceNormal): SurfaceNormal;
   /**
    * Нормаль, посчитанная по углам ЗАДАННОЙ клетки — близнец `heightInCell` с
@@ -126,13 +142,39 @@ export interface VisualSurface {
     out: SurfaceNormal,
   ): SurfaceNormal;
   /**
+   * Террейн-форма поля — база + кривизна БЕЗ walkable-вкладов (REND-9). Ею
+   * сажаются сами walkable-инстансы (иначе два моста сажались бы друг на друга
+   * по кругу), строится геометрия террейна (walkable в неё не попадает) и идёт
+   * марш picking'а (REND-15). Формула — та же единственная выборка, что у
+   * `heightAt`: это не второе поле, а его слагаемое.
+   */
+  terrainFormHeightAt(wx: number, wy: number): number;
+  terrainFormHeightInCell(cellX: number, cellY: number, wx: number, wy: number): number;
+  terrainFormNormalAt(wx: number, wy: number, out: SurfaceNormal): SurfaceNormal;
+  terrainFormNormalInCell(
+    cellX: number,
+    cellY: number,
+    wx: number,
+    wy: number,
+    out: SurfaceNormal,
+  ): SurfaceNormal;
+  /**
    * Есть ли у клетки кривизна — «хотя бы одно из четырёх УЗЛОВЫХ смещений
    * ненулевое». Это порог разбиения геометрии (REND-9): поле внутри клетки
    * зависит только от её четырёх узлов, поэтому клетка с нулевыми узлами —
    * ровно плоский квад без швов с разбитым соседом, а клетка на краю холма
    * (общие узлы ненулевые) честно попадает в разбиваемые.
+   * Walkable-вклад сюда НЕ входит: подклеток пола он не добавляет никогда —
+   * настил рисует меш самой декорации (REND-9).
    */
   hasCellCurvature(x: number, y: number): boolean;
+  /**
+   * Накрыта ли клетка bbox'ом walkable-инстанса (REND-9). Порог для
+   * потребителей, у которых есть быстрый путь по углам клетки (наложения
+   * REND-16): в накрытой клетке высота внутри клетки не выводится из углов, и
+   * читать её нужно выборкой поля.
+   */
+  hasCellWalkable(x: number, y: number): boolean;
 }
 
 /**
@@ -167,6 +209,8 @@ export function createVisualSurface(
   initialGrid: TerrainGrid,
   heightStep: number,
   initialCurvature: TerrainCurvatureMap | null = null,
+  // Реестр walkable-инстансов (REND-9); null — поле равно террейн-форме.
+  walkable: WalkableField | null = null,
 ): MutableVisualSurface {
   const { width, height } = initialGrid;
   let grid = initialGrid;
@@ -292,6 +336,16 @@ export function createVisualSurface(
     return out;
   };
 
+  /**
+   * Быстрый отвод мимо walkable-ветви: пустой реестр или ненакрытая клетка —
+   * и выборка идёт ровно прежним кодом, побитово (REND-9).
+   */
+  const walkableCovers = (cell: number): boolean =>
+    walkable !== null && walkable.size > 0 && walkable.coversCell(cell);
+
+  /** Скретч нормали walkable-победителя — аллокаций на выборку нет. */
+  const walkableNormal: SurfaceNormal = { x: 0, y: 0, z: 1 };
+
   return {
     get hasCurvature(): boolean {
       return curvature !== null;
@@ -329,7 +383,11 @@ export function createVisualSurface(
 
     heightAt(wx: number, wy: number): number {
       locate(wx, wy);
-      return sample(scratch.cell, scratch.u, scratch.v);
+      const h = sample(scratch.cell, scratch.u, scratch.v);
+      if (!walkableCovers(scratch.cell)) return h;
+      // Правило верха — max (REND-9): юнит стоит на самой верхней поверхности.
+      const top = walkable!.topInCell(scratch.cell, wx, wy, null);
+      return top > h ? top : h;
     },
 
     heightInCell(cellX: number, cellY: number, wx: number, wy: number): number {
@@ -337,15 +395,69 @@ export function createVisualSurface(
       const cy = Math.min(Math.max(cellY, 0), height - 1);
       const u = Math.min(Math.max(wx / tile - cx, 0), 1);
       const v = Math.min(Math.max(wy / tile - cy, 0), 1);
-      return sample(cy * width + cx, u, v);
+      const cell = cy * width + cx;
+      const h = sample(cell, u, v);
+      if (!walkableCovers(cell)) return h;
+      // Walkable спрашивается в той же клампленной точке, что и террейн-форма.
+      const top = walkable!.topInCell(cell, (cx + u) * tile, (cy + v) * tile, null);
+      return top > h ? top : h;
     },
 
     normalAt(wx: number, wy: number, out: SurfaceNormal): SurfaceNormal {
       locate(wx, wy);
-      return normalOf(scratch.cell, scratch.u, scratch.v, out);
+      if (!walkableCovers(scratch.cell)) return normalOf(scratch.cell, scratch.u, scratch.v, out);
+      const h = sample(scratch.cell, scratch.u, scratch.v);
+      const top = walkable!.topInCell(scratch.cell, wx, wy, walkableNormal);
+      if (top <= h) return normalOf(scratch.cell, scratch.u, scratch.v, out);
+      // Победил walkable: нормаль поля — нормаль треугольника меша (REND-9);
+      // геометрического сглаживания по рёбрам нет — резкие грани честные.
+      out.x = walkableNormal.x;
+      out.y = walkableNormal.y;
+      out.z = walkableNormal.z;
+      return out;
     },
 
     normalInCell(
+      cellX: number,
+      cellY: number,
+      wx: number,
+      wy: number,
+      out: SurfaceNormal,
+    ): SurfaceNormal {
+      const cx = Math.min(Math.max(cellX, 0), width - 1);
+      const cy = Math.min(Math.max(cellY, 0), height - 1);
+      const u = Math.min(Math.max(wx / tile - cx, 0), 1);
+      const v = Math.min(Math.max(wy / tile - cy, 0), 1);
+      const cell = cy * width + cx;
+      if (!walkableCovers(cell)) return normalOf(cell, u, v, out);
+      const h = sample(cell, u, v);
+      const top = walkable!.topInCell(cell, (cx + u) * tile, (cy + v) * tile, walkableNormal);
+      if (top <= h) return normalOf(cell, u, v, out);
+      out.x = walkableNormal.x;
+      out.y = walkableNormal.y;
+      out.z = walkableNormal.z;
+      return out;
+    },
+
+    terrainFormHeightAt(wx: number, wy: number): number {
+      locate(wx, wy);
+      return sample(scratch.cell, scratch.u, scratch.v);
+    },
+
+    terrainFormHeightInCell(cellX: number, cellY: number, wx: number, wy: number): number {
+      const cx = Math.min(Math.max(cellX, 0), width - 1);
+      const cy = Math.min(Math.max(cellY, 0), height - 1);
+      const u = Math.min(Math.max(wx / tile - cx, 0), 1);
+      const v = Math.min(Math.max(wy / tile - cy, 0), 1);
+      return sample(cy * width + cx, u, v);
+    },
+
+    terrainFormNormalAt(wx: number, wy: number, out: SurfaceNormal): SurfaceNormal {
+      locate(wx, wy);
+      return normalOf(scratch.cell, scratch.u, scratch.v, out);
+    },
+
+    terrainFormNormalInCell(
       cellX: number,
       cellY: number,
       wx: number,
@@ -368,6 +480,11 @@ export function createVisualSurface(
         offsets[at + 2] !== 0 ||
         offsets[at + 3] !== 0
       );
+    },
+
+    hasCellWalkable(x: number, y: number): boolean {
+      if (x < 0 || y < 0 || x >= width || y >= height) return false;
+      return walkableCovers(y * width + x);
     },
   };
 }

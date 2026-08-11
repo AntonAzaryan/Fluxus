@@ -60,7 +60,7 @@ import type { VisualSurfaceSource } from '../surfaceSource.js';
 import type { SurfaceNormal, VisualSurface } from '../visualSurface.js';
 import { createPickProxy, type InstanceProxySource, type PickProxy, type PickProxyVisitor } from '../picking.js';
 import type { ModelBounds } from '../model/build.js';
-import { smoothTilt, tiltTarget, type TiltVector } from '../model/surfaceAlign.js';
+import { orientFromTiltYaw, smoothTilt, tiltTarget, type TiltVector } from '../model/surfaceAlign.js';
 import {
   buildSharedModel,
   createModelInstance,
@@ -126,13 +126,11 @@ const PLACEHOLDER_BOUNDS: ModelBounds = {
 const DEFAULT_FALL_EVENT = 'FellThroughFloor';
 
 // Переиспользуемые между кадрами объекты — аллокаций на инстанс на кадр нет.
-const WORLD_UP = new THREE.Vector3(0, 0, 1);
 const SCRATCH_NORMAL: SurfaceNormal = { x: 0, y: 0, z: 1 };
 const SCRATCH_TILT: TiltVector = { x: 0, y: 0 };
-const SCRATCH_AXIS = new THREE.Vector3();
-const SCRATCH_Q_TILT = new THREE.Quaternion();
-const SCRATCH_Q_YAW = new THREE.Quaternion();
 const SCRATCH_ENDS: ManeuverEnds = { takeoffX: 0, takeoffY: 0, landingX: 0, landingY: 0 };
+/** Наименьшая высота нормализации модели — как у `createModelInstance`. */
+const MIN_MODEL_HEIGHT = 1e-3;
 
 /**
  * Закрытый словарь состояний анимации (REND-4). Какие состояния бывают —
@@ -351,6 +349,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
         record.holder.scale.setScalar(entityView.scale ?? 1);
       }
       this.applyAnimation(record);
+      // Правка walkable-записи (позиция, курс, масштаб, сам флаг) доводит
+      // walkable-вклад поля до нового размещения (REND-9, REND-18); правка
+      // не-walkable полей (скин) реестр не трогает — вклад тот же.
+      if (decoration) this.syncWalkable(record);
     }
 
     // Исчезнувшие: инстанс убирается, разделяемый ассет остаётся в кэше (REND-3).
@@ -391,6 +393,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       const t = view.snap ? 1 : alpha;
       const x = view.prevX + (view.currX - view.prevX) * t;
       const y = view.prevY + (view.currY - view.prevY) * t;
+      // Walkable-инстанс сажается и наклоняется по террейн-форме — без
+      // walkable-вкладов, в том числе чужих: иначе два моста сажались бы друг
+      // на друга по кругу (REND-9). Все прочие читают поле целиком — юнит на
+      // настиле стоит на настиле (REND-10).
+      const walkableSeat = record.decoration && view.walkable === true;
       // Сущность на поверхности стоит на визуальной поверхности (рампы и
       // кривизна, REND-9); с override уровня (TERR-4) — на высоте уровня.
       // Летящая — на переходе между высотами отрыва и приземления (REND-12):
@@ -417,7 +424,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
           phase,
         );
       } else if (surface !== null && !view.levelOverride) {
-        base = surface.heightAt(x, y);
+        base = walkableSeat ? surface.terrainFormHeightAt(x, y) : surface.heightAt(x, y);
       } else {
         base = (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
       }
@@ -438,7 +445,8 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // Наклон по нормали поверхности (REND-10): только для сущностей на
       // поверхности; сглажен по кадрам, при snap — мгновенно (REND-2).
       if (surface !== null && record.tiltFactor > 0 && !view.levelOverride) {
-        surface.normalAt(x, y, SCRATCH_NORMAL);
+        if (walkableSeat) surface.terrainFormNormalAt(x, y, SCRATCH_NORMAL);
+        else surface.normalAt(x, y, SCRATCH_NORMAL);
         tiltTarget(SCRATCH_NORMAL, record.tiltFactor, record.tiltMaxRad, SCRATCH_TILT);
         if (record.snapPending) {
           record.tilt.x = SCRATCH_TILT.x;
@@ -468,17 +476,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
   }
 
-  /** Ориентация holder'а: сперва курс вокруг вертикали, поверх — наклон в мировых осях. */
+  /**
+   * Ориентация holder'а: сперва курс вокруг вертикали, поверх — наклон в
+   * мировых осях. Композиция общая с walkable-реестром поля (REND-9): трансформ
+   * walkable-поверхности — тот же, каким инстанс нарисован, а не второй расчёт.
+   */
   private applyOrientation(record: InstanceRecord): void {
-    const angle = Math.hypot(record.tilt.x, record.tilt.y);
-    if (angle < 1e-6) {
-      record.holder.rotation.set(0, 0, record.yaw);
-      return;
-    }
-    SCRATCH_AXIS.set(record.tilt.x / angle, record.tilt.y / angle, 0);
-    SCRATCH_Q_TILT.setFromAxisAngle(SCRATCH_AXIS, angle);
-    SCRATCH_Q_YAW.setFromAxisAngle(WORLD_UP, record.yaw);
-    record.holder.quaternion.multiplyQuaternions(SCRATCH_Q_TILT, SCRATCH_Q_YAW);
+    orientFromTiltYaw(record.tilt, record.yaw, record.holder.quaternion);
   }
 
   // ------------------------------------------------------------ публичное
@@ -538,6 +542,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       record.controller?.setMapping(record.visual?.animations ?? {});
       this.syncBoneControls(record);
       this.syncSkin(record, before);
+      // Правка записи (масштаб, наклон, перёд) двигает и walkable-поверхность
+      // вместе с картинкой (REND-17 → REND-9).
+      if (record.decoration) this.syncWalkable(record);
     }
   }
 
@@ -694,6 +701,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     this.applyEntryParams(record);
     if (!record.skinChosen) record.skin = record.visual?.defaultSkin;
     this.attachVisual(ctx, record);
+    // Другая модель записи: до её готовности walkable-вклада нет (ASSET-4,
+    // REND-9) — кэшированный ассет вернёт его сразу же через attachModel.
+    if (record.decoration) this.syncWalkable(record);
   }
 
   /**
@@ -855,6 +865,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     record.boneControl = controls === undefined ? null : new BoneControlState(controls);
 
     this.applyInstanceSkin(record, model);
+
+    // Модель готова — walkable-вклад появляется в поле, и подписчики поверхности
+    // узнают о клетках под bbox не позже следующего кадра (ASSET-4 → REND-9).
+    if (record.decoration) this.syncWalkable(record);
   }
 
   private applyInstanceSkin(record: InstanceRecord, model: ModelInstance): void {
@@ -869,8 +883,46 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   }
 
   private remove(ctx: RenderContext, record: InstanceRecord): void {
+    // Исчезнувшая walkable-декорация забирает свой вклад из поля; подписчики
+    // получают клетки под прежним bbox (REND-9, REND-18).
+    if (record.decoration) this.options.surface?.setWalkable(record.entity, null);
     ctx.scene.remove(record.holder);
     this.detachModel(record);
+  }
+
+  /**
+   * Сведение walkable-вклада инстанса с реестром поля (REND-9): вклад есть
+   * ровно тогда, когда декорация несёт флаг записи (PRES-2 → REND-18) и её
+   * модель готова (ASSET-4). Размещение — те же величины, которыми `poseAll`
+   * ставит узел в кадре: позиция набора, курс с поправкой переда (REND-13),
+   * k/limit наклона записи, итоговый масштаб меша как у `createModelInstance`.
+   * Посадку по террейн-форме реестр считает сам — тем же расчётом (REND-9).
+   */
+  private syncWalkable(record: InstanceRecord): void {
+    const source = this.options.surface;
+    if (source === undefined) return;
+    const visual = record.visual;
+    const entry = visual === undefined ? undefined : this.shared.get(visual.model);
+    const model = entry?.data?.model;
+    const view = record.view;
+    if (view.walkable !== true || visual === undefined || model === undefined) {
+      source.setWalkable(record.entity, null);
+      return;
+    }
+    source.setWalkable(record.entity, {
+      x: view.currX,
+      y: view.currY,
+      yaw: view.facingYaw + record.facingOffset,
+      tiltFactor: record.tiltFactor,
+      tiltMaxRad: record.tiltMaxRad,
+      // Нормализация — та же, что у `createModelInstance`: высота модели → 1
+      // мировая единица × масштаб записи, поверх — масштаб набора (REND-11).
+      scale: (view.scale ?? 1) * ((visual.scale ?? 1) / Math.max(model.height, MIN_MODEL_HEIGHT)),
+      model,
+      // Скрытые части записи (ASSET-6) не рисуются — и в поле не попадают:
+      // индекс реестра обязан совпадать с нарисованным набором частей (REND-9).
+      hiddenParts: visual.hiddenParts,
+    });
   }
 
   /**

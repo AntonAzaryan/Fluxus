@@ -2,8 +2,8 @@
 Типизированный вид над сырыми custom properties (BLND-8).
 
 Носитель данных один — сырые custom properties объекта: `prefab`, `visual`,
-`terrain`, `curvature`, `skin` и переопределения вида `<Компонент>.<поле>`
-(BLND-3). PropertyGroup здесь ничего не хранит: каждое его свойство —
+`terrain`, `curvature`, `skin`, `walkable` и переопределения вида
+`<Компонент>.<поле>` (BLND-3). PropertyGroup здесь ничего не хранит: каждое его свойство —
 пара `get`/`set` поверх той самой сырой пары ключ-значение, которую прочитает
 импортёр. Второе хранилище рассинхронизировалось бы с первым молча, а закон —
 импорт (BLND-6), и правка сырого свойства руками обязана быть видна в панели
@@ -36,6 +36,10 @@ SEMANTIC_KEYS = ("prefab", "visual", "terrain", "curvature")
 #: Custom property скина decoration (PRES-2). Семантикой объекта не является.
 SKIN_KEY = "skin"
 
+#: Custom property walkable-флага decoration (BLND-3, PRES-2): поверхность меша
+#: вида входит в единое поле высот рендера (REND-9). Семантикой не является.
+WALKABLE_KEY = "walkable"
+
 #: Разделитель свойства-переопределения `<Компонент>.<поле>` (BLND-3).
 FIELD_SEPARATOR = "."
 
@@ -55,7 +59,7 @@ def override_keys(obj):
     """
     keys = []
     for key in obj.keys():
-        if not isinstance(key, str) or key in SEMANTIC_KEYS or key == SKIN_KEY:
+        if not isinstance(key, str) or key in SEMANTIC_KEYS or key in (SKIN_KEY, WALKABLE_KEY):
             continue
         separator = key.find(FIELD_SEPARATOR)
         if separator <= 0 or separator == len(key) - 1:
@@ -100,6 +104,25 @@ def _string_view(key):
 _prefab_get, _prefab_set = _string_view("prefab")
 _visual_get, _visual_set = _string_view("visual")
 _skin_get, _skin_set = _string_view(SKIN_KEY)
+
+
+def _walkable_get(self):
+    value = self.id_data.get(WALKABLE_KEY)
+    # Целые 0/1 экспорта равноправны булеву (BLND-3): панель показывает ровно
+    # то, что прочитает импортёр, а не своё второе толкование.
+    return value is True or value == 1
+
+
+def _walkable_set(self, value):
+    obj = self.id_data
+    if value:
+        obj[WALKABLE_KEY] = True
+        return
+    # Выключенный флаг — отсутствие свойства, а не `False` в `extras`:
+    # отсутствующее и ложное в документе неразличимы (PRES-2), и лишний ключ
+    # был бы шумом — та же конвенция, что у пустого `skin` выше.
+    if WALKABLE_KEY in obj.keys():
+        del obj[WALKABLE_KEY]
 
 
 def _semantic_get(self):
@@ -151,6 +174,16 @@ class FluxusObjectProps(bpy.types.PropertyGroup):
         description="Имя скина записи вида (REND-6); пусто — скин записи манифеста",
         get=_skin_get,
         set=_skin_set,
+    )
+    walkable: BoolProperty(
+        name="Walkable",
+        description=(
+            "Поверхность меша вида входит в единое поле высот рендера (REND-9): "
+            "юнит визуально стоит на ней. Только картинка — проходимость задают "
+            "клетки уровней и рамп террейна (PRES-2)"
+        ),
+        get=_walkable_get,
+        set=_walkable_set,
     )
 
 

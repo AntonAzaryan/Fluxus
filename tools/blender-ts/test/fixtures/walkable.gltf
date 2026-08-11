@@ -1,0 +1,27 @@
+{
+  "asset": { "version": "2.0", "generator": "рукописная фикстура конвейера (BLND-7)" },
+  "scene": 0,
+  "scenes": [{ "nodes": [0, 1, 2, 3] }],
+  "nodes": [
+    {
+      "name": "a-deck-bool",
+      "translation": [1, 0, -2],
+      "extras": { "visual": "Bridge", "walkable": true }
+    },
+    {
+      "name": "b-deck-int",
+      "translation": [2, 0, -3],
+      "extras": { "visual": "Bridge", "walkable": 1 }
+    },
+    {
+      "name": "c-ground-zero",
+      "translation": [3, 0, -1],
+      "extras": { "visual": "Statue", "walkable": 0 }
+    },
+    {
+      "name": "d-ground-false",
+      "translation": [0.5, 0, -0.5],
+      "extras": { "visual": "Statue", "walkable": false }
+    }
+  ]
+}

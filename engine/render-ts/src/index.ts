@@ -100,8 +100,12 @@ export { cornerLevels, createVisualSurface } from './visualSurface.js';
 export type { MutableVisualSurface, SurfaceNormal, VisualSurface } from './visualSurface.js';
 export { VisualSurfaceSource } from './surfaceSource.js';
 export type { SurfaceChangeListener, VisualSurfaceSourceOptions } from './surfaceSource.js';
-export { tiltTarget, smoothTilt } from './model/surfaceAlign.js';
+export { tiltTarget, smoothTilt, orientFromTiltYaw } from './model/surfaceAlign.js';
 export type { TiltVector } from './model/surfaceAlign.js';
+// Walkable-вклад поля высот (REND-9): реестр walkable-инстансов у источника
+// поверхности; кормит его подсистема моделей данными записи (REND-18).
+export { WalkableSurfaceRegistry } from './walkableSurface.js';
+export type { TerrainFormSampler, WalkableField, WalkablePlacement } from './walkableSurface.js';
 
 // Вертикальное смещение инстанса: дуга прыжка и снижение при провале (REND-12).
 export { jumpArc, jumpBase, maneuverEnds, advanceFall } from './model/verticalOffset.js';
