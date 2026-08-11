@@ -122,7 +122,7 @@ export const GENERATED_FIXTURES: readonly GeneratedFixture[] = Object.freeze([
   },
   {
     name: 'curvature-grid.glb',
-    why: 'curvature-объект (BLND-10): смещения клеток в бинарном чанке, квантование в алфавит ASSET-7',
+    why: 'curvature-объект (BLND-10): узловые смещения в бинарном чанке, квантование к решётке 1/32 ASSET-7',
     build: () => gridGlb([CURVATURE_GRID]),
   },
   {

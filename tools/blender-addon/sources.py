@@ -332,18 +332,44 @@ def _load_manifest(manifest_path: str, content_dir: Optional[str], result: Sourc
             height = document.get("height")
             rows = document.get("rows")
             if isinstance(width, int) and isinstance(height, int):
-                result.curvature = CurvatureMap(
-                    width=width,
-                    height=height,
-                    rows=[
-                        [int(node) for node in row if isinstance(node, (int, float))]
-                        for row in rows
-                        if isinstance(row, list)
-                    ]
-                    if isinstance(rows, list)
-                    else [],
-                    path=curvature_path,
-                )
+                parsed = _curvature_rows(rows, width, height)
+                if parsed is None:
+                    # Молчаливая пустая затравка спрятала бы немигрированную или
+                    # битую карту; правда о формате — у импорта (ASSET-7).
+                    result.messages.append(
+                        "карта кривизны %s не в формате числовых рядов узлов "
+                        "(width+1) × (height+1) (ASSET-7) — затравка недоступна" % curvature_id
+                    )
+                else:
+                    result.curvature = CurvatureMap(
+                        width=width,
+                        height=height,
+                        rows=parsed,
+                        path=curvature_path,
+                    )
+
+
+def _curvature_rows(rows, width, height):
+    """
+    Числовые ряды узлов карты кривизны (ASSET-7) либо None: ряды-строки старого
+    формата, нечисловые и нецелые значения, неверная форма сетки — всё отказ,
+    а не подгонка. Правило одно и живёт у импорта; здесь только распознавание.
+    """
+    if not isinstance(rows, list) or len(rows) != height + 1:
+        return None
+    parsed = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) != width + 1:
+            return None
+        out = []
+        for node in row:
+            if isinstance(node, bool) or not isinstance(node, (int, float)):
+                return None
+            if float(node) != int(node):
+                return None
+            out.append(int(node))
+        parsed.append(out)
+    return parsed
 
 
 def refresh(blend_path: str) -> Sources:

@@ -44,7 +44,7 @@ node tools/blender-ts/test/fixtures/build.mjs --check  # только свери
 | `placements.glb` | контейнер той же сцены размещений |
 | `errors.glb` | контейнер ошибочных случаев: отказ одинаков из обеих форм |
 | `terrain-grid.glb` | terrain-объект: карты уровней и вида клеток из бинарного чанка (BLND-9) |
-| `curvature-grid.glb` | curvature-объект: смещения клеток, квантование в алфавит ASSET-7 (BLND-10) |
+| `curvature-grid.glb` | curvature-объект: узловые смещения, квантование к решётке 1/32 ASSET-7 (BLND-10) |
 | `full.glb` | полный источник сцены — размещения, decoration, terrain и curvature одним файлом; вход сквозной проверки |
 | `terrain-fractional.glb` | клетка между уровнями: отказ с адресом клетки, а не округление (BLND-9) |
 | `terrain-narrow-ramp.glb` | рампа в одну клетку: отказ той же реализацией, что у кисти ED-10 (TERR-7) |

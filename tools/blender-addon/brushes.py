@@ -285,11 +285,35 @@ class FLUXUS_OT_curvature_brush(GridBrushBase, bpy.types.Operator):
         default="UP",
     )
 
+    def _nodes_in_radius(self, index):
+        """
+        Узлы мазка с весом от СОБСТВЕННОГО расстояния узла до клетки курсора —
+        не от порядка обхода клеток: четыре узла центральной клетки получают
+        полный вес, каждое кольцо дальше затухает как у клеточного мазка.
+        """
+        radius = self.radius
+        cx = index % self.width
+        cy = index // self.width
+        nodes_x = self.width + 1
+        out = []
+        for ny in range(max(cy - radius, 0), min(cy + radius + 1, self.height) + 1):
+            for nx in range(max(cx - radius, 0), min(cx + radius + 1, self.width) + 1):
+                # Расстояние узла до узлового пролёта центральной клетки
+                # [cx..cx+1] × [cy..cy+1]; узлы самой клетки — ноль.
+                dx = max(cx - nx, nx - (cx + 1), 0)
+                dy = max(cy - ny, ny - (cy + 1), 0)
+                distance = max(dx, dy)
+                if distance > radius:
+                    continue
+                weight = 1.0 - distance / float(radius + 1)
+                out.append((ny * nodes_x + nx, weight))
+        return out
+
     def _paint(self, context, event):
         """
         Мазок по узлам: вершины у сетки кривизны общие (build_node_grid_mesh),
-        и единица мазка — вершина-узел, а не клетка; каждый узел за мазок
-        двигается один раз, сколько бы клеток радиуса его ни разделяло.
+        вершина и есть узел; каждый узел за мазок двигается один раз, со своим
+        весом затухания, сколько бы клеток радиуса его ни разделяло.
         """
         index = self._cell_under_mouse(context, event)
         if index is None:
@@ -297,18 +321,17 @@ class FLUXUS_OT_curvature_brush(GridBrushBase, bpy.types.Operator):
         mesh = self.grid.data
         settings = context.scene.fluxus
         changed = False
-        for cell, weight in self._cells_in_radius(index):
+        for node, weight in self._nodes_in_radius(index):
+            if node in self.painted:
+                continue
+            self.painted.add(node)
             step = settings.brush_curvature_step * LEVEL_UNIT
             if settings.brush_curvature_falloff:
                 step *= weight
             if self.direction == "DOWN":
                 step = -step
-            for vertex in mesh.polygons[cell].vertices:
-                if vertex in self.painted:
-                    continue
-                self.painted.add(vertex)
-                mesh.vertices[vertex].co.z += step
-                changed = True
+            mesh.vertices[node].co.z += step
+            changed = True
         if changed:
             mesh.update()
 

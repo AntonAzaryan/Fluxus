@@ -338,7 +338,7 @@ export function manifestRule(
   };
 }
 
-/** Карта кривизны (ASSET-7) — алфавит и форма сетки; ED-11 требует их сразу. */
+/** Карта кривизны (ASSET-7) — целые узловые смещения и форма узловой сетки; ED-11 требует их сразу. */
 export function curvatureRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): ValidationRule {
   return {
     id: CURVATURE_RULE,

@@ -206,7 +206,7 @@
   "ui.operation.param.node": "The node appended to the list: an action, an expression or a component name.",
   "ui.operation.param.nodeX": "Node index along the horizontal axis — a cell corner, a whole number of the node grid (width + 1).",
   "ui.operation.param.nodeY": "Node index along the vertical axis — a cell corner, a whole number of the node grid (height + 1).",
-  "ui.operation.param.offset": "Signed visual offset of the cell in sixteenths of the render height step.",
+  "ui.operation.param.offset": "Visual offset of the node — an integer multiple of the 1/32 render-height-step lattice; the format has no amplitude limit (ASSET-7).",
   "ui.operation.param.path": "Path to a place inside the record: field names and list indices counted from its root.",
   "ui.operation.param.prefab": "Name of the prefab whose instance is placed on the arena.",
   "ui.operation.param.prefabName": "Name of the object being created: it is both the prefab name and the key of the visual manifest entry.",
