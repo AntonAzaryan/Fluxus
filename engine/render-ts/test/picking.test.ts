@@ -14,6 +14,7 @@ import {
   type VisualManifest,
 } from '@game-mvp/assets';
 import {
+  DecorationSet,
   DocumentSource,
   ModelsSubsystem,
   OverlaySubsystem,
@@ -30,6 +31,7 @@ import { makeAssets, makeEntityView, makeTickView, type AssetsStub } from './fix
 const STEP = 2;
 const MODEL_ID = 'models/box.mdx';
 const TALL_ID = 'models/tower.mdx';
+const BRIDGE_ID = 'models/bridge.glb';
 
 // -------------------------------------------------------------------- фикстуры
 
@@ -103,6 +105,10 @@ function makeManifest(): VisualManifest {
       // габариты инстанса совпадают с каноническими (проверять проще).
       Box: { model: MODEL_ID, scale: 2 },
       Tower: { model: TALL_ID, scale: 4 },
+    },
+    decorations: {
+      // Walkable-настил REND-9: коробка 2×2×1, верх на высоте 1.
+      Bridge: { model: BRIDGE_ID, scale: 1 },
     },
   };
 }
@@ -600,5 +606,92 @@ describe('порядок разрешения (REND-15)', () => {
   it('курсор мимо арены не попадает ни во что', () => {
     const { picking } = makeRig(flatGrid());
     expect(picking.pick(lookDown(-5, -5), VIEWPORT)).toBeNull();
+  });
+});
+
+// -------------------------------------------------- walkable-поверхности
+
+describe('попадание в walkable-поверхность (REND-15, REND-9)', () => {
+  /** Рядом с обычным rig'ом — набор декораций, кормящий подсистему моделей. */
+  function makeWalkableRig(grid: TerrainGrid): Rig & { decorations: DecorationSet } {
+    const rig = makeRig(grid);
+    const stage = new PresentationStage(rig.ctx).register(rig.models);
+    return { ...rig, decorations: new DecorationSet(stage) };
+  }
+
+  it('кисть по настилу попадает в настил, а не в лощину под ним; клетка — под мировой точкой', () => {
+    const grid = flatGrid(4, 4, ['....', '.._.', '....', '....']);
+    const rig = makeWalkableRig(grid);
+    rig.assets.resolve('model', BRIDGE_ID, makeBoxModel(1, 1));
+    rig.decorations.apply([{ key: 'bridge', kind: 'Bridge', x: 2, y: 2, walkable: true }]);
+
+    // Запрос только поверхности — путь кистей: побеждает настил (min-t),
+    // а не марш до террейн-формы под ним.
+    const hit = rig.picking.pickSurface(lookDown(2.2, 1.8), VIEWPORT)!;
+    expect(hit.kind).toBe('surface');
+    expect(hit.z).toBeCloseTo(1, 4); // верх настила, террейн-форма здесь 0
+    expect(hit.x).toBeCloseTo(2.2, 4);
+    expect(hit.y).toBeCloseTo(1.8, 4);
+    // Клетка сетки — под мировой точкой попадания (REND-15); стенкой не является.
+    expect(hit.cellX).toBe(2);
+    expect(hit.cellY).toBe(1);
+    expect(hit.wall).toBe(false);
+    // Дыра в полу под настилом остаётся видимой в ответе: noFloor — из клетки.
+    const overHole = rig.picking.pickSurface(lookDown(2.5, 1.5), VIEWPORT)!;
+    expect(overHole.z).toBeCloseTo(1, 4);
+    expect(overHole.noFloor).toBe(true);
+  });
+
+  it('в общем порядке клик по мосту разрешается в его decoration-инстанс раньше поверхности', () => {
+    const rig = makeWalkableRig(flatGrid());
+    rig.assets.resolve('model', BRIDGE_ID, makeBoxModel(1, 1));
+    rig.decorations.apply([{ key: 'bridge', kind: 'Bridge', x: 2, y: 2, walkable: true }]);
+    rig.models.updateFrame(0.016, 1);
+
+    const hit = rig.picking.pick(lookDown(2, 2), VIEWPORT)!;
+    expect(hit.kind).toBe('entity');
+    expect(hit.decoration).toBe(true);
+    expect(hit.entity).toBe(rig.decorations.entityOf('bridge'));
+    // Запрос только поверхности тем же лучом — walkable-поверхность как поверхность.
+    const surface = rig.picking.pickSurface(lookDown(2, 2), VIEWPORT)!;
+    expect(surface.kind).toBe('surface');
+    expect(surface.z).toBeCloseTo(1, 4);
+  });
+
+  it('walkable незагруженной модели в поверхность не входит — попадать нечем (ASSET-4)', () => {
+    const rig = makeWalkableRig(flatGrid());
+    // Модель не резолвится: вклада в поле нет, и рейкаст по мешу невозможен.
+    rig.decorations.apply([{ key: 'bridge', kind: 'Bridge', x: 2, y: 2, walkable: true }]);
+    const hit = rig.picking.pickSurface(lookDown(2, 2), VIEWPORT)!;
+    expect(hit.kind).toBe('surface');
+    expect(hit.z).toBeCloseTo(0, 4); // террейн-форма, настила в поле нет
+
+    // Ассет доехал — тот же запрос попадает в настил (REND-9: не позже
+    // следующего кадра; пересоздания picking'а не требуется).
+    rig.assets.resolve('model', BRIDGE_ID, makeBoxModel(1, 1));
+    expect(rig.picking.pickSurface(lookDown(2, 2), VIEWPORT)!.z).toBeCloseTo(1, 4);
+  });
+
+  it('террейн ближе настила побеждает по min-t: марш не обрезается раньше времени', () => {
+    // Настил посажен в низине (верх на 1), его bbox заходит под кромку плато
+    // уровня 1 (высота 2): луч сверху вниз над плато обязан попасть в площадку
+    // плато — она ближе по лучу, хотя walkable-меш под ней есть.
+    const grid = createTerrainGrid({
+      width: 4,
+      height: 4,
+      tileSize: FIXED_ONE,
+      levels: ['0000', '0000', '1100', '1100'],
+      flags: ['....', '....', '....', '....'],
+    });
+    const rig = makeWalkableRig(grid);
+    rig.assets.resolve('model', BRIDGE_ID, makeBoxModel(1, 1));
+    rig.decorations.apply([{ key: 'bridge', kind: 'Bridge', x: 1, y: 1.4, walkable: true }]);
+    // Настил стоит на террейн-форме низины, а bbox накрывает точку пробы.
+    expect(rig.source.current!.terrainFormHeightAt(1, 1.4)).toBeCloseTo(0, 6);
+
+    const hit = rig.picking.pickSurface(lookDown(1, 2.2), VIEWPORT)!;
+    expect(hit.kind).toBe('surface');
+    expect(hit.z).toBeCloseTo(STEP, 4); // площадка плато выше настила
+    expect(hit.cellY).toBe(2);
   });
 });

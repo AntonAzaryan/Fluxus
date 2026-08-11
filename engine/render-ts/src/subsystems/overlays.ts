@@ -532,7 +532,10 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
       if (cell < 0 || cell >= grid.width * grid.height) continue;
       const x = cell % grid.width;
       const y = Math.floor(cell / grid.width);
-      if (!surface.hasCellCurvature(x, y)) {
+      // Быстрый путь по углам клетки не годится ни при кривизне, ни под
+      // walkable-поверхностью (REND-9): в накрытой клетке высота поля не
+      // выводится из углов — ячейка ложится на настил той же выборкой поля.
+      if (!surface.hasCellCurvature(x, y) && !surface.hasCellWalkable(x, y)) {
         const [h00, h10, h11, h01] = surface.cornerHeights(x, y);
         const base = positions.length / 3;
         positions.push(
@@ -631,7 +634,8 @@ function pushCellOutline(
   const y0 = y * tile;
   const x1 = (x + 1) * tile;
   const y1 = (y + 1) * tile;
-  if (!surface.hasCellCurvature(x, y)) {
+  // Как у ячеек: под walkable-поверхностью контур идёт выборкой поля (REND-9).
+  if (!surface.hasCellCurvature(x, y) && !surface.hasCellWalkable(x, y)) {
     const [h00, h10, h11, h01] = surface.cornerHeights(x, y);
     const z00 = h00 + lift;
     const z10 = h10 + lift;

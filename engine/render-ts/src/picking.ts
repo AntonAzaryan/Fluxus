@@ -319,16 +319,45 @@ export class ViewportPicking {
     const ray = this.ray(pose, point);
     if (this.pickProxies(ray, this.options.handles, 'handle')) return this.hit;
     if (this.pickProxies(ray, this.options.instances, 'entity')) return this.hit;
-    return this.marchSurface(ray) ? this.hit : null;
+    return this.pickSurfaceRay(ray) ? this.hit : null;
   }
 
   /**
    * Только поверхность: кистям террейна (ED-10, ED-11) клетка нужна и тогда,
    * когда над ней стоит объект. Порядок разрешения этим не отменяется — им
    * пользуется `pick`, а инструмент вправе спросить именно поверхность.
+   * Walkable-поверхность — часть поверхности (REND-15): кисть по настилу
+   * попадает в настил, а не в лощину под ним.
    */
   pickSurface(pose: CameraPose, point: ViewportPoint): PickHit | null {
-    return this.marchSurface(this.ray(pose, point)) ? this.hit : null;
+    return this.pickSurfaceRay(this.ray(pose, point)) ? this.hit : null;
+  }
+
+  /**
+   * Попадание в поверхность — min-t двух ветвей (REND-15): марш по террейн-
+   * форме и рейкаст по walkable-мешам тем же преобразованием, каким они
+   * нарисованы (ASSET-11 — второй реализации пересечения с мешом нет).
+   * Walkable-`t` ограничивает марш сверху: террейн-попадание дальше него
+   * не ищется — побеждает walkable.
+   */
+  private pickSurfaceRay(ray: PickRay): boolean {
+    const tWalk = this.options.surface.walkableRaycast(
+      ray.originX, ray.originY, ray.originZ,
+      ray.dirX, ray.dirY, ray.dirZ,
+    );
+    const limit = tWalk < 0 ? Number.POSITIVE_INFINITY : tWalk;
+    if (this.marchSurface(ray, limit)) return true;
+    if (tWalk < 0) return false;
+    // Walkable-победа: surface-hit с клеткой сетки ПОД мировой точкой попадания
+    // (REND-15) — noFloor из неё же, стенкой обрыва попадание не является.
+    const grid = this.options.surface.terrain;
+    const tile = grid.tileSize / FIXED_ONE;
+    const wx = ray.originX + ray.dirX * tWalk;
+    const wy = ray.originY + ray.dirY * tWalk;
+    const cx = clampIndex(Math.floor(wx / tile), grid.width);
+    const cy = clampIndex(Math.floor(wy / tile), grid.height);
+    this.writeSurfaceHit(ray, tWalk, cx, cy, false);
+    return true;
   }
 
   // ------------------------------------------------------------- прокси
@@ -444,15 +473,19 @@ export class ViewportPicking {
   // --------------------------------------------------------- поверхность
 
   /**
-   * Марш луча по полю высот визуальной поверхности (REND-9): по клеткам, с
-   * уточнением корня внутри клетки. Поверхность и сетка читаются ТЕКУЩИЕ —
-   * правка кистью меняет ответ, пересоздания сервиса для этого не требуется.
+   * Марш луча по ТЕРРЕЙН-ФОРМЕ поля (REND-9): по клеткам, с уточнением корня
+   * внутри клетки. Walkable-высота внутри клетки не гладкая функция углов, и
+   * аналитическому маршу не поддаётся — walkable-ветвь считается рейкастом по
+   * мешам в `pickSurfaceRay`, а `tLimit` (ближайший walkable-`t`) обрезает марш
+   * сверху: террейн-попадание дальше walkable уже не победит (REND-15).
+   * Поверхность и сетка читаются ТЕКУЩИЕ — правка кистью меняет ответ,
+   * пересоздания сервиса для этого не требуется.
    *
    * Вход в клетку, чья поверхность уже выше луча, — это пересечение вертикальной
    * стенки обрыва: попадание разрешается в ЭТУ клетку, то есть в верхнюю, чью
    * площадку стенка подпирает (REND-7, REND-15).
    */
-  private marchSurface(ray: PickRay): boolean {
+  private marchSurface(ray: PickRay, tLimit = Number.POSITIVE_INFINITY): boolean {
     const source = this.options.surface;
     const surface = source.current;
     if (surface === null) return false;
@@ -492,13 +525,15 @@ export class ViewportPicking {
       if (t2 < tExit) tExit = t2;
     }
     if (tEnter > tExit) return false;
+    // Walkable ближе входа в арену — терренной ветви уже не победить.
+    if (tEnter > tLimit) return false;
 
     let t = tEnter;
     let px = ray.originX + ray.dirX * t;
     let py = ray.originY + ray.dirY * t;
     let cx = clampIndex(Math.floor(px / tile), grid.width);
     let cy = clampIndex(Math.floor(py / tile), grid.height);
-    let f = ray.originZ + ray.dirZ * t - surface.heightInCell(cx, cy, px, py);
+    let f = ray.originZ + ray.dirZ * t - surface.terrainFormHeightInCell(cx, cy, px, py);
     if (f <= 0) {
       this.writeSurfaceHit(ray, t, cx, cy, f < -WALL_EPS);
       return true;
@@ -511,7 +546,8 @@ export class ViewportPicking {
       // находится прямо, без марша. Отдельная ветка нужна ещё и потому, что
       // прямоугольник арены такой луч не ограничивает — выхода из него нет.
       if (ray.dirZ >= 0) return false;
-      const t = (surface.heightInCell(cx, cy, px, py) - ray.originZ) / ray.dirZ;
+      const t = (surface.terrainFormHeightInCell(cx, cy, px, py) - ray.originZ) / ray.dirZ;
+      if (t > tLimit) return false;
       this.writeSurfaceHit(ray, t, cx, cy, false);
       return true;
     }
@@ -535,15 +571,21 @@ export class ViewportPicking {
       // Подшаги: вдоль отрезка внутри клетки высота — квадратичная, и выпуклость
       // может уйти под луч и вернуться между концами отрезка.
       for (let i = 1; i <= this.cellSteps; i++) {
-        const ts = t + ((tNext - t) * i) / this.cellSteps;
+        let ts = t + ((tNext - t) * i) / this.cellSteps;
+        // Подшаг обрезается walkable-`t`: корень за ним террейну не отдаётся,
+        // а корень ДО него марш обязан найти (REND-15) — поэтому кламп, а не
+        // немедленный выход.
+        const capped = ts >= tLimit;
+        if (capped) ts = tLimit;
         px = ray.originX + ray.dirX * ts;
         py = ray.originY + ray.dirY * ts;
-        const fs = ray.originZ + ray.dirZ * ts - surface.heightInCell(cx, cy, px, py);
+        const fs = ray.originZ + ray.dirZ * ts - surface.terrainFormHeightInCell(cx, cy, px, py);
         if (fs <= 0) {
           const tHit = this.refine(ray, surface, cx, cy, tPrev, ts);
           this.writeSurfaceHit(ray, tHit, cx, cy, false);
           return true;
         }
+        if (capped) return false;
         tPrev = ts;
       }
       if (tNext >= tExit) return false;
@@ -561,7 +603,7 @@ export class ViewportPicking {
 
       px = ray.originX + ray.dirX * t;
       py = ray.originY + ray.dirY * t;
-      f = ray.originZ + ray.dirZ * t - surface.heightInCell(cx, cy, px, py);
+      f = ray.originZ + ray.dirZ * t - surface.terrainFormHeightInCell(cx, cy, px, py);
       if (f <= 0) {
         this.writeSurfaceHit(ray, t, cx, cy, f < -WALL_EPS);
         return true;
@@ -585,7 +627,7 @@ export class ViewportPicking {
       const mid = (lo + hi) / 2;
       const mx = ray.originX + ray.dirX * mid;
       const my = ray.originY + ray.dirY * mid;
-      if (ray.originZ + ray.dirZ * mid - surface.heightInCell(cx, cy, mx, my) > 0) lo = mid;
+      if (ray.originZ + ray.dirZ * mid - surface.terrainFormHeightInCell(cx, cy, mx, my) > 0) lo = mid;
       else hi = mid;
     }
     return hi;
