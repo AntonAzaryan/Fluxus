@@ -208,7 +208,7 @@ describe('walkable-вклад поля высот (REND-9)', () => {
       makeTickView([makeEntityView(1, { currX: 2, currY: 2, prevX: 2, prevY: 2 })]),
     );
     rig.frame();
-    expect(rig.models.instanceFor(1)!.holder.position.z).toBeCloseTo(1, 6);
+    expect(rig.models.instanceFor(1)!.pose.z).toBeCloseTo(1, 6);
   });
 
   it('пересечение двух walkable-мешей — правило max, порядок записей не влияет', () => {
@@ -310,8 +310,8 @@ describe('walkable-вклад поля высот (REND-9)', () => {
     // рекурсии посадки нет (REND-9); поле при этом — max их верхов.
     const bridge = rig.models.instanceFor(rig.decorations.entityOf('bridge')!, true)!;
     const plank = rig.models.instanceFor(rig.decorations.entityOf('plank')!, true)!;
-    expect(bridge.holder.position.z).toBeCloseTo(0, 6);
-    expect(plank.holder.position.z).toBeCloseTo(0, 6);
+    expect(bridge.pose.z).toBeCloseTo(0, 6);
+    expect(plank.pose.z).toBeCloseTo(0, 6);
     expect(rig.source.current!.heightAt(2, 2)).toBeCloseTo(1.5, 6);
   });
 

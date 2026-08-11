@@ -354,13 +354,16 @@ describe('попадание в размещённый объект (REND-15, ED
     models.syncTick(makeTickView([makeEntityView(1, { kind: 'Box', currX: 1.5, currY: 1.5, prevX: 1.5, prevY: 1.5 })]));
     models.updateFrame(0.016, 1);
 
-    const holder = models.instanceFor(1)!.holder;
-    holder.updateWorldMatrix(true, false);
+    const pose = models.instanceFor(1)!.pose;
+    const quaternion = new THREE.Quaternion(pose.qx, pose.qy, pose.qz, pose.qw);
     // Инстанс наклонён: его верх ушёл по X далеко за габариты вертикальной позы.
-    expect(Math.abs(holder.rotation.y)).toBeGreaterThan(0.5);
+    expect(Math.abs(new THREE.Euler().setFromQuaternion(quaternion).y)).toBeGreaterThan(0.5);
 
     // Верх модели в НАРИСОВАННОЙ позе уехал по X далеко от основания...
-    const top = holder.localToWorld(new THREE.Vector3(0, 0, 2));
+    const top = new THREE.Vector3(0, 0, 2)
+      .multiplyScalar(pose.scale)
+      .applyQuaternion(quaternion)
+      .add(new THREE.Vector3(pose.x, pose.y, pose.z));
     expect(top.x).toBeLessThan(0.5);
     // ...а точка пробы лежит под силуэтом наклонённой модели и при этом вне
     // габаритов вертикального инстанса на высоте уровня ([1.3..1.7] по X).
@@ -451,13 +454,16 @@ describe('попадание в размещённый объект (REND-15, ED
   });
 
   it('объём заглушки — габариты её же геометрии, а не отдельно назначенный размер', () => {
-    const { models } = makeRig(flatGrid());
+    const { models, ctx } = makeRig(flatGrid());
     models.syncTick(
       makeTickView([makeEntityView(1, { kind: 'Box', currX: 1.5, currY: 1.5, prevX: 1.5, prevY: 1.5 })]),
     );
     models.updateFrame(0.016, 1);
 
-    const placeholder = models.instanceFor(1)!.holder.children[0] as THREE.Mesh;
+    // Заглушку тест находит в сцене, а не в контракте подсистемы: узлов наружу
+    // рендер не отдаёт (REND-3), а сравнивать нужно именно с НАРИСОВАННЫМ.
+    expect(models.instanceFor(1)!.placeholder).toBe(true);
+    const placeholder = ctx.scene.getObjectByName('entity:1')!.children[0] as THREE.Mesh;
     placeholder.geometry.computeBoundingBox();
     const box = placeholder.geometry.boundingBox!;
     const proxy = createPickProxy();

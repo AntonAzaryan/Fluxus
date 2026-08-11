@@ -4,10 +4,19 @@
  * состояния.
  *
  * Появление сущности в presentation-состоянии создаёт инстанс, исчезновение —
- * убирает. Разделяемая часть ассета (геометрия, клипы) строится один раз и
- * кэшируется здесь; скелет, материалы и анимационное состояние — свои на
- * инстанс. Всё поведение — из манифеста визуалов (ASSET-6): модель, скины,
- * маппинг анимаций, параметры bone-контроля.
+ * убирает. Разделяемая часть ассета (геометрия, клипы, материалы) строится один
+ * раз и кэшируется здесь; скелет и анимационное состояние — свои на инстанс, а
+ * материалы становятся своими только с первой подменой скина (REND-6,
+ * copy-on-write в `model/build.ts`). Всё поведение — из манифеста визуалов
+ * (ASSET-6): модель, скины, маппинг анимаций, параметры bone-контроля.
+ *
+ * Наружу инстанс виден ПРЕОБРАЗОВАНИЕМ И ГРАНИЦАМИ, а не узлом сцены (REND-3):
+ * объём-прокси picking'а (REND-15), подсветка (REND-16) и `instanceFor` отдают
+ * числа. Узел — представление детального яруса, и обещать его наружу нельзя:
+ * у батчевой записи (REND-20) его не существует.
+ *
+ * Инстансы, целиком вне пирамиды видимости камеры, гасятся (REND-21). Это
+ * стоимость кадра и только она: набор, picking и сведение отсечения не видят.
  *
  * Кто наполнил presentation-состояние — поток тиков или документный набор
  * инстансов редактора (REND-11), — подсистеме не видно и знать не положено:
@@ -79,6 +88,48 @@ import { BoneControlState } from '../model/boneControl.js';
 import { smoothYaw } from '../model/boneControl.js';
 import { applySkin, skinTextureSources, type SkinApplication } from '../model/skins.js';
 
+/**
+ * Видимая поза инстанса (REND-3): преобразование, которым он нарисован в этом
+ * кадре. Числа, а не узел сцены: узел — представление ДЕТАЛЬНОГО яруса, и у
+ * батчевой записи (REND-20) его не существует.
+ */
+export interface InstancePose {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  /** Кватернион ориентации `(x, y, z, w)`: курс поверх наклона по поверхности. */
+  readonly qx: number;
+  readonly qy: number;
+  readonly qz: number;
+  readonly qw: number;
+  /** Курс с поправкой переда записи (REND-13), радианы — он же в кватернионе. */
+  readonly yaw: number;
+  /** Масштаб набора инстансов (REND-11); масштаб записи уже внутри `bounds`. */
+  readonly scale: number;
+}
+
+/**
+ * Публичный вид инстанса — вход отладки, демо и тестов. Объект СТАБИЛЕН на всё
+ * время жизни инстанса: им и наблюдается «инстанс тот же» при переподаче
+ * манифеста (REND-17). Узла сцены здесь нет по тем же основаниям, что у
+ * `PickProxy` (REND-3): наружу инстанс виден преобразованием и границами.
+ */
+export interface ModelInstanceView {
+  readonly entity: EntityId;
+  /** Инстанс — decoration (REND-18), а не сущность presentation-состояния. */
+  readonly decoration: boolean;
+  /** Модель детального яруса; null — она ещё грузится либо записи нет. */
+  readonly model: ModelInstance | null;
+  readonly controller: AnimationController | null;
+  /** В кадре стоит заглушка (ASSET-4), а не модель. */
+  readonly placeholder: boolean;
+  /** Инстанс попал в пирамиду видимости этого кадра (REND-21). */
+  readonly visible: boolean;
+  readonly pose: InstancePose;
+  /** Габариты в осях инстанса; null — нарисованного нет, попадать не во что. */
+  readonly bounds: ModelBounds | null;
+}
+
 export interface ModelsOptions {
   /** Тип события смерти — конвенция ядра. */
   readonly deathEvent?: string;
@@ -92,12 +143,40 @@ export interface ModelsOptions {
   readonly surface?: VisualSurfaceSource;
   /** Скорость сглаживания наклона по поверхности, 1/с (REND-10). */
   readonly tiltRate?: number;
+  /**
+   * Камера, которой рисуется кадр, — вход отсечения невидимых инстансов
+   * (REND-21). Не задана — отсечения нет и все инстансы остаются в кадре:
+   * стоимость, а не поведение, и сборка без камеры (тесты, headless) обязана
+   * рисовать то же самое.
+   *
+   * Камера приходит опцией подсистемы, а не контекстом (REND-8): контракт
+   * подсистем от отсечения не меняется, а знать позу камеры нужно ровно ей.
+   * Собирающий обязан посадить позу на камеру ДО кадра подсистем — тем же
+   * `applyCameraPose`, которым рисуется кадр (CAM-1).
+   */
+  readonly camera?: THREE.Camera;
+  /**
+   * Запас консервативности границ отсечения — доля радиуса габаритов инстанса
+   * (REND-21). Границы детального яруса считаются по bind-позе, а анимация
+   * выводит вершины за неё: без запаса выпад у края экрана срезался бы вместе с
+   * мечом. Запас уйдёт, когда придут консервативные границы по клипам
+   * (`assets` ASSET-11) — до тех пор это единственное, чем консервативность
+   * выражена.
+   */
+  readonly cullMargin?: number;
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
 }
 
 const DEFAULT_TURN_RATE = 12;
 const DEFAULT_TILT_RATE = 10;
+/**
+ * Половина радиуса габаритов сверх них самих: столько добавляет отсечению
+ * консервативности запас по умолчанию (REND-21). Порядок величины взят от
+ * размаха обычного клипа — выпад руки с оружием у нормализованной по высоте
+ * модели, — а не от вкуса: меньше половины радиуса срезало бы такой клип.
+ */
+const DEFAULT_CULL_MARGIN = 0.5;
 /**
  * Перёд модели, когда запись манифеста его не называет (REND-13): соглашение
  * первого поддержанного формата — у MDX лицо вдоль `+X`, то есть 0. Так модели,
@@ -129,6 +208,14 @@ const DEFAULT_FALL_EVENT = 'FellThroughFloor';
 const SCRATCH_NORMAL: SurfaceNormal = { x: 0, y: 0, z: 1 };
 const SCRATCH_TILT: TiltVector = { x: 0, y: 0 };
 const SCRATCH_ENDS: ManeuverEnds = { takeoffX: 0, takeoffY: 0, landingX: 0, landingY: 0 };
+/**
+ * Геометрия и материал заглушки — общие на все заглушки процесса: заглушка у
+ * них одна и та же (ASSET-4), и пер-инстансного в ней нет ничего. Строятся
+ * лениво и не освобождаются вместе с инстансом — иначе следующая заглушка
+ * строила бы их заново.
+ */
+let placeholderGeometry: THREE.BufferGeometry | null = null;
+let placeholderMaterial: THREE.MeshStandardMaterial | null = null;
 /** Наименьшая высота нормализации модели — как у `createModelInstance`. */
 const MIN_MODEL_HEIGHT = 1e-3;
 
@@ -171,6 +258,12 @@ function isAirborne(view: EntityView): boolean {
 interface SharedEntry {
   data: SharedModelData | null;
   failed: string | null;
+  /**
+   * Текстуры САМОЙ модели на её разделяемых материалах (REND-3): ставятся один
+   * раз на ассет, живут вместе с ним. Инстанс, чей скин ничего не подменяет,
+   * рисуется ими и своей копии материала не заводит (REND-6).
+   */
+  baseSkin: SkinApplication | null;
   /** Инстансы, ждущие готовности ассета. */
   readonly waiting: Set<InstanceRecord>;
 }
@@ -240,6 +333,14 @@ interface InstanceRecord {
    * в ненарисованное (REND-15).
    */
   posed: boolean;
+  /**
+   * Инстанс попал в пирамиду видимости последнего кадра (REND-21). Без камеры
+   * отсечения нет, и признак остаётся истинным: невидимых в таком кадре не
+   * бывает.
+   */
+  visible: boolean;
+  /** Публичный вид инстанса; строится лениво и живёт с инстансом (REND-17). */
+  publicView: ModelInstanceView | null;
 }
 
 export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
@@ -260,6 +361,15 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private readonly warnedKinds = new Set<string>();
   /** Переиспользуемая запись прокси обхода (REND-15): валидна внутри визита. */
   private readonly proxy: PickProxy = createPickProxy();
+  /**
+   * Переиспользуемое хозяйство отсечения (REND-21): пирамида, матрица кадра и
+   * сфера инстанса. Аллокаций на кадр и на инстанс у отсечения нет — иначе оно
+   * платило бы за себя тем же, что экономит.
+   */
+  private readonly frustum = new THREE.Frustum();
+  private readonly frustumMatrix = new THREE.Matrix4();
+  private readonly cullSphere = new THREE.Sphere();
+  private readonly cullCenter = new THREE.Vector3();
 
   constructor(manifest: VisualManifest, options: ModelsOptions = {}) {
     this.manifest = manifest;
@@ -376,6 +486,55 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // декорация в кадре игрока обязаны быть одним изображением (REND-18).
     this.poseAll(this.instances, dt, alpha, heightStep, turnRate, tiltRate, surface);
     this.poseAll(this.decorations, dt, alpha, heightStep, turnRate, tiltRate, surface);
+
+    // Отсечение — после позы: видимость считается по тому преобразованию,
+    // которым инстанс нарисован в ЭТОМ кадре (REND-21).
+    this.cullAll();
+  }
+
+  /**
+   * Отсечение невидимых инстансов (REND-21): консервативная сфера инстанса
+   * против пирамиды видимости камеры. Невидимый holder гасится — рендерер не
+   * обходит его поддерево и не обновляет скелет, — а из набора не убирается:
+   * picking (REND-15) и сведение (REND-3, REND-18) идут по полному набору, и
+   * других наблюдаемых последствий у отсечения нет.
+   */
+  private cullAll(): void {
+    const camera = this.options.camera;
+    if (camera === undefined) return;
+    // Матрицы камеры — те, с которыми кадр и будет нарисован: позу на неё
+    // сажает сборка до кадра подсистем (CAM-1), второго расчёта здесь нет.
+    camera.updateMatrixWorld();
+    this.frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.frustumMatrix);
+    const margin = this.options.cullMargin ?? DEFAULT_CULL_MARGIN;
+    this.cullPool(this.instances, margin);
+    this.cullPool(this.decorations, margin);
+  }
+
+  private cullPool(pool: ReadonlyMap<EntityId, InstanceRecord>, margin: number): void {
+    for (const record of pool.values()) {
+      const bounds = boundsOf(record);
+      // Рисовать нечего — и отсекать нечего: невизуальная сущность в кадре не
+      // участвует вовсе, а не «участвует невидимой».
+      if (bounds === null || !record.posed) continue;
+      const scale = record.view.scale ?? 1;
+      // Центр габаритов в осях инстанса → мировые оси тем же преобразованием,
+      // которым инстанс нарисован; радиус — половина диагонали с запасом.
+      this.cullCenter
+        .set((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2, (bounds.minZ + bounds.maxZ) / 2)
+        .multiplyScalar(scale)
+        .applyQuaternion(record.holder.quaternion)
+        .add(record.holder.position);
+      const radius =
+        (Math.hypot(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) / 2) *
+        Math.abs(scale) *
+        (1 + margin);
+      this.cullSphere.center.copy(this.cullCenter);
+      this.cullSphere.radius = radius;
+      record.visible = this.frustum.intersectsSphere(this.cullSphere);
+      record.holder.visible = record.visible;
+    }
   }
 
   private poseAll(
@@ -550,11 +709,15 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
   /**
    * Объёмы-прокси нарисованных инстансов — вход picking'а вьюпорта (REND-15) и
-   * подсветки выделения (REND-16). Подсистема отдаёт УЗЕЛ, а не позу: то самое
-   * преобразование, которым инстанс нарисован в этом кадре, — посадка на
-   * визуальную поверхность (REND-9), вертикальное смещение (REND-12), наклон
-   * (REND-10), курс с поправкой переда (REND-13) и масштаб (REND-11) уже в нём.
-   * Пересчитывать их второй раз было бы вторым ответом на один вопрос.
+   * подсветки выделения (REND-16). Подсистема отдаёт ТО САМОЕ ПРЕОБРАЗОВАНИЕ,
+   * которым инстанс нарисован в этом кадре, — посадка на визуальную поверхность
+   * (REND-9), вертикальное смещение (REND-12), наклон (REND-10), курс с
+   * поправкой переда (REND-13) и масштаб (REND-11) уже в нём. Пересчитывать их
+   * второй раз было бы вторым ответом на один вопрос, а отдавать узлом — обещать
+   * наружу то, чего у батчевой записи (REND-20) нет.
+   *
+   * Отсечение (REND-21) обход не сокращает: невидимый инстанс из набора не
+   * исчезает, и picking по нему промахивается лучом, а не отсутствием.
    */
   eachProxy(visit: PickProxyVisitor): void {
     for (const record of this.instances.values()) {
@@ -592,12 +755,22 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    */
   private fillProxy(record: InstanceRecord, out: PickProxy): boolean {
     if (!record.posed) return false;
-    const bounds = record.model?.bounds ?? (record.placeholder === null ? null : PLACEHOLDER_BOUNDS);
+    const bounds = boundsOf(record);
     if (bounds === null) return false;
     out.entity = record.entity;
     out.decoration = record.decoration;
     out.handle = null;
-    out.node = record.holder;
+    const holder = record.holder;
+    out.posX = holder.position.x;
+    out.posY = holder.position.y;
+    out.posZ = holder.position.z;
+    out.quatX = holder.quaternion.x;
+    out.quatY = holder.quaternion.y;
+    out.quatZ = holder.quaternion.z;
+    out.quatW = holder.quaternion.w;
+    out.scaleX = holder.scale.x;
+    out.scaleY = holder.scale.y;
+    out.scaleZ = holder.scale.z;
     out.minX = bounds.minX;
     out.minY = bounds.minY;
     out.minZ = bounds.minZ;
@@ -607,18 +780,17 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     return true;
   }
 
-  /** Инстанс сущности — для тестов и отладки. */
-  instanceFor(
-    entity: EntityId,
-    decoration = false,
-  ): {
-    readonly holder: THREE.Group;
-    readonly model: ModelInstance | null;
-    readonly controller: AnimationController | null;
-  } | null {
+  /**
+   * Инстанс сущности — для отладки и тестов. Объект стабилен на всё время жизни
+   * инстанса: им и наблюдается «инстанс тот же», когда переподача манифеста
+   * пересобирает построенное из ассета, а размещённый объект оставляет на месте
+   * (REND-17). Узла сцены он не отдаёт (REND-3).
+   */
+  instanceFor(entity: EntityId, decoration = false): ModelInstanceView | null {
     const record = (decoration ? this.decorations : this.instances).get(entity);
     if (record === undefined) return null;
-    return { holder: record.holder, model: record.model, controller: record.controller };
+    record.publicView ??= viewOf(record);
+    return record.publicView;
   }
 
   // ------------------------------------------------------------ внутреннее
@@ -758,6 +930,8 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       falling: false,
       fallOffset: 0,
       posed: false,
+      visible: true,
+      publicView: null,
     };
     this.applyEntryParams(record);
     record.yaw = view.facingYaw + record.facingOffset;
@@ -796,11 +970,19 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
   }
 
+  /**
+   * Заглушка инстанса (ASSET-4). Геометрия и материал у всех заглушек ОБЩИЕ:
+   * пер-инстансного в заглушке нет ничего, а своя пара на инстанс — это лишний
+   * буфер и лишний материал на каждую незагруженную модель.
+   */
   private makePlaceholder(holder: THREE.Group): THREE.Mesh {
-    const geometry = new THREE.BoxGeometry(PLACEHOLDER_WIDTH, PLACEHOLDER_WIDTH, PLACEHOLDER_HEIGHT);
-    geometry.translate(0, 0, PLACEHOLDER_HEIGHT / 2); // стоит на земле, а не тонет в ней
-    const material = new THREE.MeshStandardMaterial({ color: PLACEHOLDER_COLOR });
-    const mesh = new THREE.Mesh(geometry, material);
+    if (placeholderGeometry === null) {
+      const geometry = new THREE.BoxGeometry(PLACEHOLDER_WIDTH, PLACEHOLDER_WIDTH, PLACEHOLDER_HEIGHT);
+      geometry.translate(0, 0, PLACEHOLDER_HEIGHT / 2); // стоит на земле, а не тонет в ней
+      placeholderGeometry = geometry;
+    }
+    placeholderMaterial ??= new THREE.MeshStandardMaterial({ color: PLACEHOLDER_COLOR });
+    const mesh = new THREE.Mesh(placeholderGeometry, placeholderMaterial);
     holder.add(mesh);
     return mesh;
   }
@@ -808,7 +990,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private ensureShared(ctx: RenderContext, modelId: string): SharedEntry {
     const existing = this.shared.get(modelId);
     if (existing !== undefined) return existing;
-    const entry: SharedEntry = { data: null, failed: null, waiting: new Set() };
+    const entry: SharedEntry = { data: null, failed: null, baseSkin: null, waiting: new Set() };
     this.shared.set(modelId, entry);
 
     const handle = ctx.assets.request<NormalizedModel>('model', modelId);
@@ -871,13 +1053,47 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (record.decoration) this.syncWalkable(record);
   }
 
+  /**
+   * Скин на инстансе (REND-6). Пока выбранный скин ничего не подменяет, инстанс
+   * рисуется РАЗДЕЛЯЕМЫМИ материалами ассета с его же текстурами: своей копии
+   * ему незачем — от ассета он не отличается ничем. Первая же подмена переводит
+   * материалы в собственные (copy-on-write) и ставит в них полный набор
+   * «слот → источник»: соседние инстансы и разделяемые данные не затронуты.
+   *
+   * Обратного пути нет намеренно: инстанс, однажды получивший свои материалы,
+   * их и оставляет — снятие скина применяется к ним же полным набором, а
+   * возврат к разделяемым сэкономил бы один материал ценой ветки, которой не
+   * видно из кадра.
+   */
   private applyInstanceSkin(record: InstanceRecord, model: ModelInstance): void {
     const entry = record.visual === undefined ? undefined : this.shared.get(record.visual.model);
     if (entry?.data === undefined || entry.data === null) return;
+    const overrides = record.skin === undefined ? undefined : record.visual?.skins?.[record.skin];
+    if (!model.ownsMaterials && (overrides === undefined || Object.keys(overrides).length === 0)) {
+      record.skinApp?.dispose();
+      record.skinApp = null;
+      this.ensureBaseSkin(entry);
+      return;
+    }
     record.skinApp?.dispose();
     record.skinApp = applySkin(
-      model.textureTargets,
+      model.ownTextureTargets(),
       skinTextureSources(entry.data.model, record.visual, record.skin),
+      this.requireCtx().assets,
+    );
+  }
+
+  /**
+   * Текстуры САМОЙ модели на её разделяемых материалах — один раз на ассет
+   * (REND-3). Лениво, по первому инстансу, которому скин ничего не подменяет:
+   * модель, все записи которой перекрывают её слоты, своих текстур не грузит
+   * вовсе — они бы никогда не были видны.
+   */
+  private ensureBaseSkin(entry: SharedEntry): void {
+    if (entry.baseSkin !== null || entry.data === null) return;
+    entry.baseSkin = applySkin(
+      entry.data.textureTargets,
+      skinTextureSources(entry.data.model, undefined, undefined),
       this.requireCtx().assets,
     );
   }
@@ -945,13 +1161,55 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
   }
 
+  /**
+   * Снимает заглушку с инстанса. Геометрию и материал НЕ освобождает: они общие
+   * на все заглушки (см. `makePlaceholder`), и освобождение здесь погасило бы
+   * заглушки всех остальных инстансов.
+   */
   private disposePlaceholder(record: InstanceRecord): void {
     if (record.placeholder === null) return;
     record.placeholder.removeFromParent();
-    record.placeholder.geometry.dispose();
-    (record.placeholder.material as THREE.Material).dispose();
     record.placeholder = null;
   }
+}
+
+/**
+ * Габариты нарисованного инстанса в его собственных осях: модель, а до её
+ * готовности — заглушка (ASSET-4). null — рисовать нечего, и попадать не во что
+ * (REND-15). Один ответ на весь файл: прокси picking'а и границы отсечения
+ * (REND-21) обязаны говорить об одном и том же объёме.
+ */
+function boundsOf(record: InstanceRecord): ModelBounds | null {
+  return record.model?.bounds ?? (record.placeholder === null ? null : PLACEHOLDER_BOUNDS);
+}
+
+/**
+ * Публичный вид инстанса поверх его записи: геттеры, а не копия полей, —
+ * потребитель, взявший вид один раз, обязан видеть позу текущего кадра, а не ту,
+ * что была в момент вызова.
+ */
+function viewOf(record: InstanceRecord): ModelInstanceView {
+  const pose: InstancePose = {
+    get x(): number { return record.holder.position.x; },
+    get y(): number { return record.holder.position.y; },
+    get z(): number { return record.holder.position.z; },
+    get qx(): number { return record.holder.quaternion.x; },
+    get qy(): number { return record.holder.quaternion.y; },
+    get qz(): number { return record.holder.quaternion.z; },
+    get qw(): number { return record.holder.quaternion.w; },
+    get yaw(): number { return record.yaw; },
+    get scale(): number { return record.holder.scale.x; },
+  };
+  return {
+    entity: record.entity,
+    decoration: record.decoration,
+    get model(): ModelInstance | null { return record.model; },
+    get controller(): AnimationController | null { return record.controller; },
+    get placeholder(): boolean { return record.placeholder !== null; },
+    get visible(): boolean { return record.visible; },
+    pose,
+    get bounds(): ModelBounds | null { return boundsOf(record); },
+  };
 }
 
 /**

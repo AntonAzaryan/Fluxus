@@ -19,9 +19,9 @@
  * - поверхность — `VisualSurface` (REND-9), то самое поле высот, по которому
  *   построена геометрия террейна;
  * - объект — объём-прокси инстанса, преобразованный НЕ повторным расчётом позы,
- *   а МАТРИЦЕЙ ТОГО ЖЕ УЗЛА, который подсистема моделей поставила в кадре
+ *   а ТЕМ ЖЕ ПРЕОБРАЗОВАНИЕМ, которым подсистема моделей нарисовала его в кадре
  *   (посадка на поверхность REND-9, вертикальное смещение REND-12, наклон
- *   REND-10, курс с поправкой переда REND-13, масштаб REND-11 — всё уже в ней).
+ *   REND-10, курс с поправкой переда REND-13, масштаб REND-11 — всё уже в нём).
  *
  * Детерминированный raycast ядра (PHYS-6) здесь не используется намеренно: он
  * считает по коллайдерам симуляционного мира, которого в режиме правки нет
@@ -41,9 +41,15 @@ import type { VisualSurface } from './visualSurface.js';
 // ------------------------------------------------------------------- прокси
 
 /**
- * Объём-прокси участника picking'а: узел ВИДИМОГО преобразования и габариты в
- * его локальных осях. Запись переиспользуется источником, поэтому читать её
- * можно только внутри визита — по образцу `TickResult` ядра (OBS-3).
+ * Объём-прокси участника picking'а: ВИДИМОЕ ПРЕОБРАЗОВАНИЕ и габариты в его
+ * локальных осях. Запись переиспользуется источником, поэтому читать её можно
+ * только внутри визита — по образцу `TickResult` ядра (OBS-3).
+ *
+ * Преобразование приходит числами (позиция, кватернион, масштаб), а не узлом
+ * сцены: узел — представление инстанса детального яруса, и у батчевой записи
+ * (REND-20) его не существует вовсе. Публичный контракт рендера узлов конкретной
+ * библиотеки не отдаёт (REND-3); алгоритм пересечения от этого не меняется —
+ * матрица собирается из тех же величин, которыми объект нарисован.
  */
 export interface PickProxy {
   /** Сущность presentation-состояния; 0 — прокси не сущности, а ручки. */
@@ -56,8 +62,19 @@ export interface PickProxy {
   decoration: boolean;
   /** Идентичность ручки наложения (REND-16); null — прокси инстанса. */
   handle: string | null;
-  /** Узел, чьей мировой матрицей инстанс или ручка нарисованы. */
-  node: THREE.Object3D;
+  /** Позиция видимого преобразования, мировые оси. */
+  posX: number;
+  posY: number;
+  posZ: number;
+  /** Кватернион видимого преобразования `(x, y, z, w)`. */
+  quatX: number;
+  quatY: number;
+  quatZ: number;
+  quatW: number;
+  /** Масштаб видимого преобразования по осям. */
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
   minX: number;
   minY: number;
   minZ: number;
@@ -94,7 +111,16 @@ export function createPickProxy(): PickProxy {
     entity: 0,
     decoration: false,
     handle: null,
-    node: EMPTY_NODE,
+    posX: 0,
+    posY: 0,
+    posZ: 0,
+    quatX: 0,
+    quatY: 0,
+    quatZ: 0,
+    quatW: 1,
+    scaleX: 1,
+    scaleY: 1,
+    scaleZ: 1,
     minX: 0,
     minY: 0,
     minZ: 0,
@@ -103,9 +129,6 @@ export function createPickProxy(): PickProxy {
     maxZ: 0,
   };
 }
-
-/** Узел-пустышка новой записи; попадания не даёт — объём вырожден. */
-const EMPTY_NODE = new THREE.Object3D();
 
 // -------------------------------------------------------------- контракты
 
@@ -245,6 +268,10 @@ export class ViewportPicking {
   private readonly inverse = new THREE.Matrix4();
   private readonly localOrigin = new THREE.Vector3();
   private readonly localTip = new THREE.Vector3();
+  /** Скретчи сборки матрицы прокси из его преобразования; между вызовами живут. */
+  private readonly proxyPosition = new THREE.Vector3();
+  private readonly proxyQuaternion = new THREE.Quaternion();
+  private readonly proxyScale = new THREE.Vector3();
 
   /** Состояние поиска ближайшего прокси — поля, а не замыкание: визит зовётся на каждый инстанс. */
   private searchRay: PickRay = this.rayScratch;
@@ -395,18 +422,20 @@ export class ViewportPicking {
   }
 
   /**
-   * Пересечение луча с объёмом прокси. Луч переводится в локальные оси УЗЛА, то
-   * есть той матрицей, которой узел и нарисован: позы инстанса здесь не
-   * вычисляются заново — ни посадки на поверхность, ни наклона, ни курса.
-   * Параметр `t` при этом остаётся мировым: направление переводится как вектор
-   * без нормировки, поэтому шкала параметра сохраняется.
+   * Пересечение луча с объёмом прокси. Луч переводится в ЛОКАЛЬНЫЕ ОСИ ПРОКСИ —
+   * матрицей, собранной из того самого преобразования, которым объект нарисован:
+   * позы инстанса здесь не вычисляются заново — ни посадки на поверхность, ни
+   * наклона, ни курса. Параметр `t` при этом остаётся мировым: направление
+   * переводится как вектор без нормировки, поэтому шкала параметра сохраняется.
+   *
+   * Алгоритм — тот же слэбовый тест AABB, что и до перехода прокси с узла сцены
+   * на преобразование: сменился источник матрицы, а не пересечение (REND-15).
    */
   private intersectProxy(ray: PickRay, proxy: PickProxy): number {
-    const node = proxy.node;
-    // Мировые матрицы обновляет рендерер перед отрисовкой; наведение спрашивают
-    // и между кадрами, поэтому матрица узла подтягивается из его же позы.
-    node.updateWorldMatrix(true, false);
-    this.inverse.copy(node.matrixWorld).invert();
+    this.proxyPosition.set(proxy.posX, proxy.posY, proxy.posZ);
+    this.proxyQuaternion.set(proxy.quatX, proxy.quatY, proxy.quatZ, proxy.quatW);
+    this.proxyScale.set(proxy.scaleX, proxy.scaleY, proxy.scaleZ);
+    this.inverse.compose(this.proxyPosition, this.proxyQuaternion, this.proxyScale).invert();
     this.localOrigin.set(ray.originX, ray.originY, ray.originZ).applyMatrix4(this.inverse);
     this.localTip
       .set(ray.originX + ray.dirX, ray.originY + ray.dirY, ray.originZ + ray.dirZ)

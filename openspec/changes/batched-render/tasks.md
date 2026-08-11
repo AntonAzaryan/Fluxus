@@ -1,10 +1,10 @@
 ## 1. Фаза 1 — публичный контракт без Object3D, culling, шаринг материалов
 
-- [ ] 1.1 Перевести `PickProxy` с `node: Object3D` на трансформ (позиция/кватернион/масштаб) + `ModelBounds`; обновить `picking.ts` (тот же AABB-алгоритм, другой источник трансформа) и `eachProxy`/`proxyOf`/`fillProxy` в `models.ts`
-- [ ] 1.2 Перевести потребителей прокси и `instanceFor` (overlays REND-16, editor `sceneStage`, тесты render-ts/editor, HUD-портрет) на трансформ+границы; `instanceFor` больше не отдаёт `holder`
-- [ ] 1.3 Frustum culling детального яруса: консервативные границы инстанса, тест против пирамиды камеры в `updateFrame`, скрытие невидимых holder'ов; без аллокаций на кадр
-- [ ] 1.4 Шаринг материалов детального инстанса до первой подмены скина (copy-on-write в `createModelInstance`/`applySkin`); общая геометрия и материал заглушек
-- [ ] 1.5 Прогнать `npm run check`; убедиться, что кадр редактора и демо визуально прежний (запуск `npm run dev -w @game-mvp/editor-ui`)
+- [x] 1.1 Перевести `PickProxy` с `node: Object3D` на трансформ (позиция/кватернион/масштаб) + `ModelBounds`; обновить `picking.ts` (тот же AABB-алгоритм, другой источник трансформа) и `eachProxy`/`proxyOf`/`fillProxy` в `models.ts`
+- [x] 1.2 Перевести потребителей прокси и `instanceFor` (overlays REND-16, editor `sceneStage`, тесты render-ts/editor, HUD-портрет) на трансформ+границы; `instanceFor` больше не отдаёт `holder`
+- [x] 1.3 Frustum culling детального яруса: консервативные границы инстанса, тест против пирамиды камеры в `updateFrame`, скрытие невидимых holder'ов; без аллокаций на кадр
+- [x] 1.4 Шаринг материалов детального инстанса до первой подмены скина (copy-on-write в `createModelInstance`/`applySkin`); общая геометрия и материал заглушек
+- [x] 1.5 Прогнать `npm run check`; убедиться, что кадр редактора и демо визуально прежний (запуск `npm run dev -w @game-mvp/editor-ui`)
 
 ## 2. Фаза 2 — запечённые производные в assets-ts (ASSET-11, ASSET-12)
 

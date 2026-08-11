@@ -121,21 +121,21 @@ describe('декларативное сведение набора (REND-11)', (
     expect(instanceOf(rig, 'c')).not.toBeNull();
 
     rig.frame(16);
-    expect(instanceOf(rig, 'a')!.holder.position.x).toBeCloseTo(3, 6);
-    expect(instanceOf(rig, 'c')!.holder.position.x).toBeCloseTo(4, 6);
+    expect(instanceOf(rig, 'a')!.pose.x).toBeCloseTo(3, 6);
+    expect(instanceOf(rig, 'c')!.pose.x).toBeCloseTo(4, 6);
   });
 
   it('повторное появление ключа создаёт инстанс заново (REND-3 через REND-11)', () => {
     const rig = makeRig();
     rig.source.apply([placed('a')]);
-    const first = instanceOf(rig, 'a')!.holder;
+    const first = instanceOf(rig, 'a')!;
 
     rig.source.apply([]); // удаление либо откат операции авторинга (ED-18)
     expect(rig.source.entityOf('a')).toBeUndefined();
     expect(rig.ctx.scene.children.length).toBe(0);
 
     rig.source.apply([placed('a')]);
-    expect(instanceOf(rig, 'a')!.holder).not.toBe(first);
+    expect(instanceOf(rig, 'a')).not.toBe(first);
     expect(rig.ctx.scene.children.length).toBe(1);
   });
 
@@ -176,15 +176,16 @@ describe('ключ — идентичность размещённого, а н�
     rig.frame(32);
 
     const after = rig.models.instanceFor(entity!)!;
-    // Тот же ID, тот же holder, тот же инстанс модели: подсистемное состояние
+    // Тот же ID, тот же инстанс, тот же инстанс модели: подсистемное состояние
     // (материалы скина REND-6, фаза анимации, сглаженный наклон REND-10) цело.
+    // Вид инстанса стабилен на всё время его жизни — им это и наблюдается.
     expect(rig.source.entityOf('a')).toBe(entity);
-    expect(after.holder).toBe(before.holder);
+    expect(after).toBe(before);
     expect(after.model).toBe(before.model);
     expect(after.controller).toBe(before.controller);
-    expect(after.holder.position.x).toBeCloseTo(4, 6);
-    expect(after.holder.position.y).toBeCloseTo(5, 6);
-    expect(after.holder.scale.x).toBeCloseTo(2, 6);
+    expect(after.pose.x).toBeCloseTo(4, 6);
+    expect(after.pose.y).toBeCloseTo(5, 6);
+    expect(after.pose.scale).toBeCloseTo(2, 6);
     expect(rig.ctx.scene.children.length).toBe(1);
   });
 
@@ -207,10 +208,10 @@ describe('ключ — идентичность размещённого, а н�
   it('смена визуального типа — другая запись манифеста, инстанс строится заново', () => {
     const rig = makeRig();
     rig.source.apply([placed('a')]);
-    const before = instanceOf(rig, 'a')!.holder;
+    const before = instanceOf(rig, 'a')!;
 
     rig.source.apply([placed('a', { kind: 'Tower' })]);
-    expect(instanceOf(rig, 'a')!.holder).not.toBe(before);
+    expect(instanceOf(rig, 'a')).not.toBe(before);
     // Ключ остался ключом того же размещённого объекта.
     expect(rig.source.entityOf('a')).not.toBeUndefined();
     expect(rig.ctx.scene.children.length).toBe(1);
@@ -248,14 +249,14 @@ describe('производного от TickResult в документном р�
     const rig = makeRig();
     rig.source.apply([placed('a', { x: 0 })]);
     rig.frame(16);
-    expect(instanceOf(rig, 'a')!.holder.position.x).toBeCloseTo(0, 6);
+    expect(instanceOf(rig, 'a')!.pose.x).toBeCloseTo(0, 6);
 
     rig.source.apply([placed('a', { x: 10, yaw: 1 })]);
     // Первый же кадр после правки — в новой позе целиком, без «доезжания».
     rig.frame(32);
-    const holder = instanceOf(rig, 'a')!.holder;
-    expect(holder.position.x).toBeCloseTo(10, 6);
-    expect(holder.rotation.z).toBeCloseTo(1, 6);
+    const pose = instanceOf(rig, 'a')!.pose;
+    expect(pose.x).toBeCloseTo(10, 6);
+    expect(pose.yaw).toBeCloseTo(1, 6);
   });
 
   it('в наборе нет событий тика: one-shot клипы и цель доворота костей отсутствуют', () => {
@@ -413,7 +414,7 @@ describe('превью ассета — вырожденный набор из �
     expect(instance.controller!.currentClipName).toBe('Walk Fast');
 
     rig.frame(16);
-    expect(instance.holder.position.x).toBeCloseTo(0, 6);
+    expect(instance.pose.x).toBeCloseTo(0, 6);
 
     // Смена клипа в просмотрщике — та же правка набора, инстанс тот же.
     rig.source.apply([placed('only', { clip: 'Roll' })]);

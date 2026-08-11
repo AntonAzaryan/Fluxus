@@ -121,8 +121,9 @@ export {
 export type { CellRect, TerrainGeometryData, TerrainOptions } from './subsystems/terrain.js';
 
 // Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).
+// Наружу инстанс виден преобразованием и границами, а не узлом сцены (REND-3).
 export { ModelsSubsystem } from './subsystems/models.js';
-export type { ModelsOptions } from './subsystems/models.js';
+export type { InstancePose, ModelInstanceView, ModelsOptions } from './subsystems/models.js';
 
 // Сервисы вьюпорта редактора: picking по видимому изображению (REND-15) и
 // служебные наложения подсистемой рендера (REND-16). Игровой клиент ни того, ни

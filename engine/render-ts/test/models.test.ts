@@ -34,6 +34,13 @@ function makeManifest(): VisualManifest {
   };
 }
 
+/** Тот же манифест без выбранного скина по умолчанию: подмен слотов нет. */
+function plainManifest(): VisualManifest {
+  const manifest = makeManifest();
+  delete manifest.entities.Runner!.defaultSkin;
+  return manifest;
+}
+
 function makeRig(manifest: VisualManifest = makeManifest()): {
   subsystem: ModelsSubsystem;
   ctx: RenderContext;
@@ -59,10 +66,9 @@ describe('пул инстансов по снапшоту (REND-3)', () => {
     const { subsystem, ctx, assets } = makeRig();
 
     subsystem.syncTick(makeTickView([makeEntityView(1)]));
-    expect(ctx.scene.children.length).toBe(1); // holder сущности
+    expect(ctx.scene.children.length).toBe(1); // сценовый объект сущности
     expect(assets.requests).toContainEqual({ kind: 'model', id: MODEL_ID });
-    const holder = subsystem.instanceFor(1)!.holder;
-    expect(holder.children.length).toBe(1); // заглушка на время загрузки (ASSET-4)
+    expect(subsystem.instanceFor(1)!.placeholder).toBe(true); // на время загрузки (ASSET-4)
     expect(subsystem.instanceFor(1)!.model).toBeNull();
 
     subsystem.syncTick(makeTickView([])); // сущность исчезла
@@ -82,6 +88,7 @@ describe('пул инстансов по снапшоту (REND-3)', () => {
     expect(a).not.toBeNull();
     expect(a.meshes[0]!.geometry).toBe(b.meshes[0]!.geometry); // общие буферы
     expect(a.skeleton).not.toBe(b.skeleton); // скелет свой на инстанс
+    // Записи с подменой слота скином: материалы у инстансов свои (REND-6).
     expect(a.materials[0]).not.toBe(b.materials[0]);
   });
 
@@ -90,14 +97,17 @@ describe('пул инстансов по снапшоту (REND-3)', () => {
     subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Ghost' })]));
     subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Ghost' }), makeEntityView(2, { kind: 'Ghost' })]));
     expect(warnings.filter((message) => message.includes('Ghost')).length).toBe(1);
-    expect(subsystem.instanceFor(1)!.holder.children.length).toBe(1); // заглушка
+    expect(subsystem.instanceFor(1)!.placeholder).toBe(true);
     expect(subsystem.instanceFor(1)!.model).toBeNull();
   });
 
   it('kind === null — сущность не рисуется и не шумит', () => {
     const { subsystem, warnings } = makeRig();
     subsystem.syncTick(makeTickView([makeEntityView(1, { kind: null })]));
-    expect(subsystem.instanceFor(1)!.holder.children.length).toBe(0);
+    const instance = subsystem.instanceFor(1)!;
+    expect(instance.placeholder).toBe(false);
+    expect(instance.model).toBeNull();
+    expect(instance.bounds).toBeNull(); // рисовать нечего — и попадать не во что
     expect(warnings.length).toBe(0);
   });
 });
@@ -116,6 +126,25 @@ describe('скины пер-инстанс (REND-6)', () => {
     subsystem.setSkin(1, 'blue');
     const blueRequests = assets.requests.filter((request) => request.id === 'tex/blue.png');
     expect(blueRequests.length).toBe(1); // только перекрашенный инстанс
+  });
+
+  it('материалы разделяются до подмены скина и копируются на ней (REND-3, REND-6)', () => {
+    const { subsystem, assets } = makeRig(plainManifest());
+    subsystem.syncTick(makeTickView([makeEntityView(1), makeEntityView(2)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    const a = subsystem.instanceFor(1)!.model!;
+    const b = subsystem.instanceFor(2)!.model!;
+    // Записи без скинов: инстансы от ассета не отличаются ничем.
+    expect(a.ownsMaterials).toBe(false);
+    expect(a.materials[0]).toBe(b.materials[0]);
+    expect(a.meshes[0]!.material).toBe(b.meshes[0]!.material);
+
+    // Первая подмена — и только у того, кому подменили: copy-on-write.
+    subsystem.setSkin(1, 'blue');
+    expect(a.ownsMaterials).toBe(true);
+    expect(b.ownsMaterials).toBe(false);
+    expect(a.materials[0]).not.toBe(b.materials[0]);
+    expect(a.meshes[0]!.material).not.toBe(b.meshes[0]!.material);
   });
 });
 
@@ -199,9 +228,9 @@ describe('покадровое обновление (REND-2, REND-5)', () => {
     });
     subsystem.syncTick(makeTickView([view]));
     subsystem.updateFrame(0.016, 0.5);
-    const holder = subsystem.instanceFor(1)!.holder;
-    expect(holder.position.x).toBeCloseTo(0.5, 6);
-    expect(holder.position.z).toBeCloseTo(0.5, 6); // уровень 1 × heightStep 0.5
+    const pose = subsystem.instanceFor(1)!.pose;
+    expect(pose.x).toBeCloseTo(0.5, 6);
+    expect(pose.z).toBeCloseTo(0.5, 6); // уровень 1 × heightStep 0.5
 
     // snap-тик рисуется без интерполяции.
     view.snap = true;
@@ -209,7 +238,7 @@ describe('покадровое обновление (REND-2, REND-5)', () => {
     view.currX = 5;
     subsystem.syncTick(makeTickView([view]));
     subsystem.updateFrame(0.016, 0.25);
-    expect(holder.position.x).toBeCloseTo(5, 6);
+    expect(pose.x).toBeCloseTo(5, 6);
   });
 
   it('торс доворачивается к aimYaw после mixer.update (REND-5)', () => {
@@ -270,7 +299,7 @@ describe('перёд модели — данные записи манифест
     );
     subsystem.updateFrame(1 / 60, 1); // snapPending: доворот мгновенный
 
-    const yawOf = (id: number): number => subsystem.instanceFor(id)!.holder.rotation.z;
+    const yawOf = (id: number): number => subsystem.instanceFor(id)!.pose.yaw;
     expect(yawOf(1)).toBeCloseTo(heading, 6);
     // Лицо смотрит на −90°, значит инстанс доворачивается на +90°.
     expect(yawOf(2)).toBeCloseTo(heading + Math.PI / 2, 6);
@@ -287,7 +316,103 @@ describe('перёд модели — данные записи манифест
       ]),
     );
     subsystem.updateFrame(1 / 60, 1);
-    expect(subsystem.instanceFor(1)!.holder.rotation.z).toBeCloseTo(0, 6);
-    expect(subsystem.instanceFor(2)!.holder.rotation.z).toBeCloseTo(Math.PI / 2, 6);
+    expect(subsystem.instanceFor(1)!.pose.yaw).toBeCloseTo(0, 6);
+    expect(subsystem.instanceFor(2)!.pose.yaw).toBeCloseTo(Math.PI / 2, 6);
+  });
+});
+
+// -------------------------------------------------------------- отсечение
+
+describe('отсечение невидимых инстансов (REND-21)', () => {
+  /**
+   * Камера смотрит вдоль +X из начала координат: всё, что позади неё по X,
+   * заведомо вне пирамиды видимости. Матрицы считаются один раз — подсистема
+   * читает их такими, какими кадр и будет нарисован.
+   */
+  function makeCamera(): THREE.PerspectiveCamera {
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+    camera.up.set(0, 0, 1);
+    camera.position.set(0, 0, 1);
+    camera.lookAt(10, 0, 1);
+    camera.updateMatrixWorld(true);
+    return camera;
+  }
+
+  function makeCullRig(
+    camera?: THREE.PerspectiveCamera,
+    cullMargin?: number,
+  ): { subsystem: ModelsSubsystem; assets: AssetsStub } {
+    const assets = makeAssets();
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 0.5 },
+    };
+    const subsystem = new ModelsSubsystem(makeManifest(), {
+      warn: () => {},
+      ...(camera === undefined ? {} : { camera }),
+      ...(cullMargin === undefined ? {} : { cullMargin }),
+    });
+    subsystem.init(ctx);
+    return { subsystem, assets };
+  }
+
+  /** Инстанс перед камерой и инстанс у неё за спиной. */
+  function placePair(subsystem: ModelsSubsystem, assets: AssetsStub): void {
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, { prevX: 10, currX: 10, prevY: 0, currY: 0 }),
+        makeEntityView(2, { prevX: -10, currX: -10, prevY: 0, currY: 0 }),
+      ]),
+    );
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.updateFrame(1 / 60, 1);
+  }
+
+  it('инстанс вне пирамиды видимости гаснет, инстанс в кадре — нет', () => {
+    const { subsystem, assets } = makeCullRig(makeCamera());
+    placePair(subsystem, assets);
+    expect(subsystem.instanceFor(1)!.visible).toBe(true);
+    expect(subsystem.instanceFor(2)!.visible).toBe(false);
+  });
+
+  it('отсечённый инстанс остаётся в наборе и в прокси picking’а (REND-15)', () => {
+    const { subsystem, assets } = makeCullRig(makeCamera());
+    placePair(subsystem, assets);
+    // Отсечение — стоимость кадра, а не состав набора: инстанс никуда не делся,
+    // и объём-прокси у него прежний.
+    const seen: number[] = [];
+    subsystem.eachProxy((proxy) => seen.push(proxy.entity));
+    expect(seen).toEqual([1, 2]);
+    expect(subsystem.instanceFor(2)).not.toBeNull();
+  });
+
+  it('сборка без камеры отсечения не делает: кадр тот же, что до его появления', () => {
+    const { subsystem, assets } = makeCullRig();
+    placePair(subsystem, assets);
+    expect(subsystem.instanceFor(1)!.visible).toBe(true);
+    expect(subsystem.instanceFor(2)!.visible).toBe(true);
+  });
+
+  it('границы консервативны: запас держит в кадре то, что габариты уже срезали', () => {
+    // Инстанс за краем пирамиды ровно настолько, что его габариты кончаются
+    // снаружи, а запас — внутри: без запаса выпад клипа у края экрана исчезал
+    // бы раньше самого инстанса (REND-21).
+    const edgeY = 10 * Math.tan((22.5 * Math.PI) / 180) + 0.4;
+    const place = (subsystem: ModelsSubsystem, assets: AssetsStub): void => {
+      subsystem.syncTick(
+        makeTickView([makeEntityView(1, { prevX: 10, currX: 10, prevY: edgeY, currY: edgeY })]),
+      );
+      assets.resolve('model', MODEL_ID, makeModel());
+      subsystem.updateFrame(1 / 60, 1);
+    };
+
+    const generous = makeCullRig(makeCamera());
+    place(generous.subsystem, generous.assets);
+    expect(generous.subsystem.instanceFor(1)!.visible).toBe(true);
+
+    const strict = makeCullRig(makeCamera(), 0);
+    place(strict.subsystem, strict.assets);
+    expect(strict.subsystem.instanceFor(1)!.visible).toBe(false);
   });
 });

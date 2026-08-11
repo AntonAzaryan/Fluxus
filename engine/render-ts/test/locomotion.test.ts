@@ -427,19 +427,19 @@ describe('ModelsSubsystem: вертикальное смещение (REND-12)',
     subsystem.syncTick(makeTickView([jumping(Number.NaN, 0)]));
     assets.resolve('model', MODEL_ID, makeModel());
     subsystem.updateFrame(0.016, 1);
-    expect(subsystem.instanceFor(1)!.holder.position.z).toBeCloseTo(0, 6);
+    expect(subsystem.instanceFor(1)!.pose.z).toBeCloseTo(0, 6);
 
     subsystem.syncTick(makeTickView([jumping(0.25, 0.5)]));
     subsystem.updateFrame(0.016, 1);
-    expect(subsystem.instanceFor(1)!.holder.position.z).toBeCloseTo(2, 6);
+    expect(subsystem.instanceFor(1)!.pose.z).toBeCloseTo(2, 6);
     // Половина тика между фазами 0.25 и 0.5 — среднее вкладов (REND-2).
     subsystem.updateFrame(0.016, 0.5);
-    expect(subsystem.instanceFor(1)!.holder.position.z).toBeCloseTo(1.75, 6);
+    expect(subsystem.instanceFor(1)!.pose.z).toBeCloseTo(1.75, 6);
 
     // Тик приземления: манёвра больше нет — инстанс на поверхности.
     subsystem.syncTick(makeTickView([makeEntityView(1)]));
     subsystem.updateFrame(0.016, 1);
-    expect(subsystem.instanceFor(1)!.holder.position.z).toBeCloseTo(0, 6);
+    expect(subsystem.instanceFor(1)!.pose.z).toBeCloseTo(0, 6);
   });
 
   it('без параметров манифеста дуги нет', () => {
@@ -447,7 +447,7 @@ describe('ModelsSubsystem: вертикальное смещение (REND-12)',
     subsystem.syncTick(makeTickView([jumping(0.25, 0.5)]));
     assets.resolve('model', MODEL_ID, makeModel());
     subsystem.updateFrame(0.016, 1);
-    expect(subsystem.instanceFor(1)!.holder.position.z).toBe(0);
+    expect(subsystem.instanceFor(1)!.pose.z).toBe(0);
   });
 
   it('провал опускает инстанс до глубины, snap возвращает на поверхность', () => {
@@ -462,14 +462,14 @@ describe('ModelsSubsystem: вертикальное смещение (REND-12)',
       }),
     );
     subsystem.updateFrame(0.1, 1);
-    expect(subsystem.instanceFor(1)!.holder.position.z).toBeCloseTo(-0.6, 6);
+    expect(subsystem.instanceFor(1)!.pose.z).toBeCloseTo(-0.6, 6);
     subsystem.updateFrame(1, 1);
-    expect(subsystem.instanceFor(1)!.holder.position.z).toBe(-3); // упёрлось в глубину
+    expect(subsystem.instanceFor(1)!.pose.z).toBe(-3); // упёрлось в глубину
 
     // Респавн телепортом — разрыв непрерывности: снижение отменено (REND-2).
     subsystem.syncTick(makeTickView([makeEntityView(1, { snap: true })]));
     subsystem.updateFrame(0.1, 1);
-    expect(subsystem.instanceFor(1)!.holder.position.z).toBe(0);
+    expect(subsystem.instanceFor(1)!.pose.z).toBe(0);
     expect(subsystem.instanceFor(1)!.controller!.currentClipName).toBe('Stand - 1');
   });
 });
@@ -526,7 +526,7 @@ function hop(prevX: number, currX: number, phasePrev: number, phaseCurr: number)
 function heightAfter(subsystem: ModelsSubsystem, view: ReturnType<typeof hop>): number {
   subsystem.syncTick(makeTickView([view]));
   subsystem.updateFrame(0.016, 1);
-  return subsystem.instanceFor(1)!.holder.position.z;
+  return subsystem.instanceFor(1)!.pose.z;
 }
 
 describe('ModelsSubsystem: прыжок между уровнями (REND-12)', () => {

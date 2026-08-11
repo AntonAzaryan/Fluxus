@@ -449,14 +449,16 @@ function frame(now: number): void {
   // инстанса (x/y; высоту rig берёт с поверхности, CAM-2), поза → эффекты →
   // применение к THREE-камере.
   if (rig !== null) {
+    // Цель слежения — видимая поза инстанса (REND-3): узла сцены рендер наружу
+    // не отдаёт, и камера ведёт по тем же числам, которыми он нарисован.
     const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
     const heroView = heroId === null ? undefined : remote?.view?.entities.get(heroId);
     const target =
       instance === null
         ? null
         : {
-            x: instance.holder.position.x,
-            y: instance.holder.position.y,
+            x: instance.pose.x,
+            y: instance.pose.y,
             snap: (heroView?.snap ?? false) || (remote?.view?.snapAll ?? false),
           };
     const dtSec = dt / 1000;
@@ -491,7 +493,11 @@ async function main(): Promise<void> {
       // Перёд модели больше не параметр сборки: он описан в записи манифеста
       // (ASSET-6 `facingDeg`, REND-13), поэтому модели разных форматов с разным
       // передом уживаются в одной сцене без общего для всех значения.
-      models = new ModelsSubsystem(manifest, { surface });
+      // Камера подсистеме — вход отсечения невидимых инстансов (REND-21): та же
+      // самая, которой рисуется кадр. Её поза здесь на один кадр старше кадра
+      // подсистем (цель слежения берётся из уже посаженной позы инстанса), и
+      // запас консервативности границ покрывает это наравне с размахом клипов.
+      models = new ModelsSubsystem(manifest, { surface, camera });
       remote!.register(models);
 
       // Камера: поверхность и границы — из той же сетки, что рендер террейна
