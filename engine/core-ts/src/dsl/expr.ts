@@ -5,7 +5,17 @@
  * `add_operation` — глобальная мутация синглтона (мимо DI-1). Форма AST при
  * этом сохранена — с ней работает редактор.
  */
-import type { EntityId, Fixed, MathApi, ReadonlyEventLog, SystemContext, Vec2 } from '../types.js';
+import { NO_ENTITY } from '../types.js';
+import type {
+  EntityId,
+  Fixed,
+  MathApi,
+  RaycastHit,
+  RaycastOptions,
+  ReadonlyEventLog,
+  SystemContext,
+  Vec2,
+} from '../types.js';
 
 /** Узел AST: литерал либо объект с ровно одним ключом-оператором (EXPR-1). */
 export type Expression = number | boolean | string | Readonly<Record<string, unknown>>;
@@ -27,14 +37,39 @@ export type ExprValue = Fixed | boolean | Vec2;
  */
 export type ExprWorld = Pick<
   SystemContext,
-  'tick' | 'get' | 'has' | 'isAlive' | 'math' | 'terrain'
+  'tick' | 'get' | 'has' | 'isAlive' | 'math' | 'terrain' | 'physics'
 > & {
   /** Шина текущего тика (EVT-2); читается оператором `eventField`. */
   readonly events: ReadonlyEventLog;
 };
 
-/** Локальные переменные: аргументы системы и биндинги `let` из Action DSL. */
-export type ExprVars = Readonly<Record<string, ExprValue>>;
+/**
+ * Ячейка изменяемой привязки `let` (ACT-4): значение живёт в ней, а не прямо в
+ * объекте области видимости. Вложенное тело получает КОПИЮ этого объекта
+ * (`{ ...vars }`), поэтому запись в копию наружу не видна — а запись в общую
+ * ячейку видна, и именно это делает `let` аккумулятором свёртки.
+ *
+ * Привязки `as` (`forEach`, `forEachEvent`, `random`, `randomBelow`) остаются
+ * голыми значениями: это и есть механическая форма запрета `set` на переменную
+ * итерации, поверх статической проверки на регистрации (SYS-3).
+ *
+ * Класс, а не объект-литерал `{ value }`: `Vec2` — тоже объект, и различать их
+ * проверкой по имени поля значило бы гадать по форме, а не знать по типу.
+ */
+export class ExprCell {
+  value: ExprValue;
+
+  constructor(value: ExprValue) {
+    this.value = value;
+  }
+}
+
+/**
+ * Локальные переменные: аргументы системы и биндинги `let` из Action DSL.
+ * Привязка — либо значение, либо ячейка (ACT-4); `var` разворачивает ячейку при
+ * чтении, поэтому разница видна исполнителю действий, но не автору выражения.
+ */
+export type ExprVars = Readonly<Record<string, ExprValue | ExprCell>>;
 
 /** Точка подмены реализации (EXPR-4). */
 export interface ExpressionEvaluator {
@@ -132,6 +167,11 @@ export function arityError(op: string, signature: OpSignature, count: number): s
   }
   if (signature.min === signature.max) {
     return `оператор "${op}": ожидалось аргументов ${signature.min}, получено ${count}`;
+  }
+  // Верхняя граница есть только у операторов с необязательным хвостом
+  // (raycast-операторы, EXPR-8): «не менее трёх» о них сказало бы неправду.
+  if (signature.max !== Infinity) {
+    return `оператор "${op}": ожидалось аргументов от ${signature.min} до ${signature.max}, получено ${count}`;
   }
   if (signature.odd) {
     return `оператор "${op}": ожидалось [cond, then, …, else] — нечётное число аргументов не менее ${signature.min}, получено ${count}`;
@@ -241,6 +281,36 @@ const vec2 =
     fn(w.math, vec(evaluate(args[0]!, w, v), op), vec(evaluate(args[1]!, w, v), op));
 
 /**
+ * Общая часть трёх raycast-операторов (EXPR-2, EXPR-8): детерминированный луч
+ * Physics API, открытый выражению так же, как `hasFloorAt` открывает запрос
+ * террейна. Семантику пересечения, исключение источника, выбор ближайшего
+ * попадания и порядок hit'ов задают PHYS-6 и PHYS-7 — здесь только вызов.
+ *
+ * По лучу на оператор, без кэша: три чтения одного отрезка — три вызова
+ * (осознанный размен, выражения чисты и детерминизм от него не страдает).
+ *
+ * `ignore` тотален: значение, не адресующее живую сущность (в том числе
+ * «ссылки нет» `-1`, ECS-6), не совпадает ни с одной сущностью обхода и потому
+ * не исключает никого. `mask` — необязательное литеральное имя тега; без него
+ * пересечение считается по всем коллайдерам.
+ */
+const ray =
+  (op: string, pick: (hit: RaycastHit | null, to: Vec2) => ExprValue): OpFn =>
+  (args, w, v) => {
+    const from = vec(evaluate(args[0]!, w, v), op);
+    const to = vec(evaluate(args[1]!, w, v), op);
+    const ignore = eid(evaluate(args[2]!, w, v), op);
+    // Сцена без Physics API — ошибка вычисления, а не «попадания нет» (EXPR-2):
+    // то же правило и та же причина, что у `hasFloorAt` без террейна.
+    if (w.physics === undefined) throw new Error(`оператор "${op}": сцена без Physics API`);
+    const options: RaycastOptions = args.length > 3 ? { mask: str(args[3]!, op), ignore } : { ignore };
+    return pick(w.physics.raycast(from, to, options), to);
+  };
+
+/** Форма raycast-операторов: 3 или 4 аргумента, последний — литеральное имя тега (EXPR-8). */
+const RAY: Partial<OpSignature> = { max: 4, literals: [3] };
+
+/**
  * Равенство только над операндами одного типа (EXPR-8). Разнотипные операнды —
  * ошибка, а не `false`: «не равны» здесь и есть неявное приведение, спрятанное
  * в результате, а его запретил EXPR-7.
@@ -278,7 +348,10 @@ const OPS: Record<string, OpDef> = Object.freeze({
     (args, _w, v) => {
       const key = str(args[0]!, 'var');
       if (!Object.hasOwn(v, key)) throw new Error(`неизвестная переменная "${key}"`);
-      return v[key]!;
+      const bound = v[key]!;
+      // Ячейка разворачивается при чтении (ACT-4): изменяемость привязки — дело
+      // исполнителя действий, а выражение видит обычное значение.
+      return bound instanceof ExprCell ? bound.value : bound;
     },
     { literals: [0] },
   ),
@@ -310,6 +383,19 @@ const OPS: Record<string, OpDef> = Object.freeze({
     if (w.terrain === undefined) throw new Error('оператор "hasFloorAt": сцена без террейна');
     return w.terrain.hasFloorAt(position);
   }),
+  /** Есть ли попадание на отрезке (EXPR-8); различает статику и пустоту, чего `raycastEntity` не умеет. */
+  raycastHit: def(3, ray('raycastHit', (hit) => hit !== null), RAY),
+  /**
+   * Сущность ближайшего попадания (PHYS-7). Попадание в статический коллайдер
+   * и отсутствие попадания — одно и то же значение «ссылки нет» `-1` (ECS-6):
+   * различает их `raycastHit`, а сигнального третьего значения в языке нет.
+   */
+  raycastEntity: def(3, ray('raycastEntity', (hit) => hit?.entity ?? NO_ENTITY), RAY),
+  /**
+   * Точка ближайшего попадания; без попадания — `to`, дальняя достижимая точка
+   * отрезка. Тотальность вместо сигнального значения: у `vec2` его и нет.
+   */
+  raycastPoint: def(3, ray('raycastPoint', (hit, to) => hit?.point ?? to), RAY),
   /**
    * Поле данных события, на которое ссылается имя, связанное `forEachEvent`
    * (ACT-1). Ссылка — индекс в шине тика, как `EntityId` — непрозрачное число.

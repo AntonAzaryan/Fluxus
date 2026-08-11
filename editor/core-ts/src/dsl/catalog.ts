@@ -57,7 +57,13 @@ export type OperatorArg =
    * ядре нет вовсе — состав данных задаёт эмитент, в том числе нативный
    * (EXPR-2), — и подсказывать здесь нечем.
    */
-  | 'eventField';
+  | 'eventField'
+  /**
+   * Имя тега коллайдеров — маска луча (EXPR-8). Кандидатов нет по той же
+   * причине, что у `withTag` запроса: теги объявляет контент в prefab'ах, и
+   * реестра, который ядро принимало бы, у них нет.
+   */
+  | 'tag';
 
 export interface ActionBlock {
   readonly name: string;
@@ -96,6 +102,9 @@ const LITERAL_KINDS: Readonly<Record<string, readonly OperatorArg[]>> = Object.f
   getComponent: Object.freeze<OperatorArg[]>(['component', 'field']),
   hasComponent: Object.freeze<OperatorArg[]>(['component']),
   eventField: Object.freeze<OperatorArg[]>(['eventField']),
+  raycastHit: Object.freeze<OperatorArg[]>(['tag']),
+  raycastEntity: Object.freeze<OperatorArg[]>(['tag']),
+  raycastPoint: Object.freeze<OperatorArg[]>(['tag']),
 });
 
 const NO_ARGS: readonly OperatorArg[] = Object.freeze([]);

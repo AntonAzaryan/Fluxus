@@ -1,0 +1,248 @@
+{
+  "scenario": "dsl-fold",
+  "seed": 20260811,
+  "worldInitHash": "c3149b70",
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          5,
+          3,
+          3,
+          3
+        ],
+        "components": {
+          "Blast": {
+            "count": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "radius": [
+              196608,
+              0,
+              0,
+              0
+            ],
+            "total": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "Health": {
+            "current": [
+              0,
+              655360,
+              1310720,
+              1966080
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              65536,
+              131072,
+              655360
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          5,
+          3,
+          3,
+          3
+        ],
+        "components": {
+          "Blast": {
+            "count": [
+              2,
+              0,
+              0,
+              0
+            ],
+            "radius": [
+              196608,
+              0,
+              0,
+              0
+            ],
+            "total": [
+              1966080,
+              0,
+              0,
+              0
+            ]
+          },
+          "Health": {
+            "current": [
+              0,
+              589824,
+              1245184,
+              1900544
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              65536,
+              131072,
+              655360
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Summed",
+          "data": {
+            "count": 2,
+            "total": 1966080
+          }
+        }
+      ],
+      "mode": "Running"
+    },
+    {
+      "tick": 2,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 4,
+        "aliveCount": 4,
+        "generations": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          5,
+          3,
+          3,
+          3
+        ],
+        "components": {
+          "Blast": {
+            "count": [
+              2,
+              0,
+              0,
+              0
+            ],
+            "radius": [
+              196608,
+              0,
+              0,
+              0
+            ],
+            "total": [
+              1835008,
+              0,
+              0,
+              0
+            ]
+          },
+          "Health": {
+            "current": [
+              0,
+              524288,
+              1179648,
+              1835008
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              65536,
+              131072,
+              655360
+            ],
+            "y": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": []
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "Summed",
+          "data": {
+            "count": 2,
+            "total": 1835008
+          }
+        }
+      ],
+      "mode": "Running"
+    }
+  ]
+}

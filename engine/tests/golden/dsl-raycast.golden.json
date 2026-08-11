@@ -1,0 +1,290 @@
+{
+  "scenario": "dsl-raycast",
+  "seed": 20260811,
+  "worldInitHash": "a0fe177e",
+  "ticks": [
+    {
+      "tick": 0,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          16,
+          13,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0
+            ],
+            "halfX": [
+              0,
+              16384,
+              16384
+            ],
+            "halfY": [
+              0,
+              16384,
+              16384
+            ],
+            "hitMask": [
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              2,
+              1
+            ],
+            "radius": [
+              0,
+              16384,
+              16384
+            ],
+            "shape": [
+              0,
+              1,
+              0
+            ]
+          },
+          "Eye": {
+            "range": [
+              0,
+              98304,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              32768,
+              98304
+            ],
+            "y": [
+              0,
+              32768,
+              32768
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              255,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "blocksVision"
+            ]
+          ],
+          [
+            2,
+            [
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [],
+      "mode": "Running"
+    },
+    {
+      "tick": 1,
+      "world": {
+        "capacity": 16,
+        "nextIndex": 3,
+        "aliveCount": 3,
+        "generations": [
+          0,
+          0,
+          0
+        ],
+        "alive": [
+          1,
+          1,
+          1
+        ],
+        "freeList": [],
+        "maskWords": [
+          16,
+          13,
+          5
+        ],
+        "components": {
+          "Collider": {
+            "blockMask": [
+              0,
+              0,
+              0
+            ],
+            "cliffRise": [
+              0,
+              0,
+              0
+            ],
+            "halfX": [
+              0,
+              16384,
+              16384
+            ],
+            "halfY": [
+              0,
+              16384,
+              16384
+            ],
+            "hitMask": [
+              0,
+              0,
+              0
+            ],
+            "layer": [
+              0,
+              2,
+              1
+            ],
+            "radius": [
+              0,
+              16384,
+              16384
+            ],
+            "shape": [
+              0,
+              1,
+              0
+            ]
+          },
+          "Eye": {
+            "range": [
+              0,
+              98304,
+              0
+            ]
+          },
+          "Position": {
+            "x": [
+              0,
+              32768,
+              98304
+            ],
+            "y": [
+              0,
+              32768,
+              32768
+            ]
+          },
+          "TerrainFloor": {
+            "w0": [
+              255,
+              0,
+              0
+            ]
+          },
+          "Velocity": {
+            "x": [
+              0,
+              0,
+              0
+            ],
+            "y": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "tags": [
+          [
+            0,
+            [
+              "terrain"
+            ]
+          ],
+          [
+            1,
+            [
+              "blocksVision"
+            ]
+          ],
+          [
+            2,
+            [
+              "blocksVision"
+            ]
+          ]
+        ]
+      },
+      "rng": [],
+      "events": [
+        {
+          "type": "AtCover",
+          "data": {
+            "entity": 2,
+            "hit": 1,
+            "x": 81920
+          }
+        },
+        {
+          "type": "AtCliff",
+          "data": {
+            "entity": -1,
+            "hit": 1,
+            "x": 131072
+          }
+        },
+        {
+          "type": "AtNothing",
+          "data": {
+            "entity": -1,
+            "hit": 0,
+            "x": 98304
+          }
+        }
+      ],
+      "mode": "Running"
+    }
+  ]
+}

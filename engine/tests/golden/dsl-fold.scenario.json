@@ -1,0 +1,113 @@
+{
+  "name": "dsl-fold",
+  "seed": 20260811,
+  "ticks": 2,
+  "scene": {
+    "components": [
+      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Health", "fields": { "current": "fixed" } },
+      { "name": "Blast", "fields": { "radius": "fixed", "total": "fixed", "count": "i32" } }
+    ],
+    "prefabs": [
+      {
+        "name": "Caster",
+        "components": {
+          "Position": { "x": 0, "y": 0 },
+          "Blast": { "radius": 196608, "total": 0, "count": 0 }
+        }
+      },
+      {
+        "name": "Target",
+        "components": {
+          "Position": { "x": 0, "y": 0 },
+          "Health": { "current": 655360 }
+        }
+      }
+    ],
+    "systems": [
+      {
+        "name": "AreaSum",
+        "order": 10,
+        "query": { "all": ["Blast"] },
+        "as": "caster",
+        "do": [
+          {
+            "let": {
+              "bindings": { "count": 0, "total": 0 },
+              "do": [
+                {
+                  "forEach": {
+                    "query": {
+                      "all": ["Health"],
+                      "withinRadius": {
+                        "center": {
+                          "vec": [
+                            { "getComponent": [{ "var": "caster" }, "Position", "x"] },
+                            { "getComponent": [{ "var": "caster" }, "Position", "y"] }
+                          ]
+                        },
+                        "radius": { "getComponent": [{ "var": "caster" }, "Blast", "radius"] }
+                      }
+                    },
+                    "as": "victim",
+                    "do": [
+                      {
+                        "set": {
+                          "name": "total",
+                          "value": {
+                            "+": [
+                              { "var": "total" },
+                              { "getComponent": [{ "var": "victim" }, "Health", "current"] }
+                            ]
+                          }
+                        }
+                      },
+                      { "set": { "name": "count", "value": { "+": [{ "var": "count" }, 1] } } }
+                    ]
+                  }
+                },
+                {
+                  "modifyComponent": {
+                    "entity": { "var": "caster" },
+                    "component": "Blast",
+                    "values": { "count": { "var": "count" }, "total": { "var": "total" } }
+                  }
+                },
+                {
+                  "emitEvent": {
+                    "type": "Summed",
+                    "data": { "count": { "var": "count" }, "total": { "var": "total" } }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "Decay",
+        "order": 20,
+        "query": { "all": ["Health"] },
+        "as": "e",
+        "do": [
+          {
+            "modifyComponent": {
+              "entity": { "var": "e" },
+              "component": "Health",
+              "values": {
+                "current": { "-": [{ "getComponent": [{ "var": "e" }, "Health", "current"] }, 65536] }
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "capacity": 16
+  },
+  "initial": [
+    { "prefab": "Caster" },
+    { "prefab": "Target", "overrides": { "Position": { "x": 65536 }, "Health": { "current": 655360 } } },
+    { "prefab": "Target", "overrides": { "Position": { "x": 131072 }, "Health": { "current": 1310720 } } },
+    { "prefab": "Target", "overrides": { "Position": { "x": 655360 }, "Health": { "current": 1966080 } } }
+  ]
+}

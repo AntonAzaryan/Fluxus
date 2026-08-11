@@ -172,7 +172,11 @@ function candidates(
   env: BlockEnvironment,
   source: NameSource | undefined,
   args: Readonly<Record<string, JsonValue>>,
+  path: JsonPath,
 ): readonly string[] | null {
+  // Имена области видимости считаются по месту в записи, а не по миру: тем же
+  // спуском, каким их получает пикер `var` (`scope.ts`).
+  if (source === 'variable') return boundNamesAt(env.system ?? null, path);
   const world = env.world;
   if (world === null || source === undefined || source === 'free') return null;
   switch (source) {
@@ -309,6 +313,10 @@ function operatorArgControl(
     case 'eventField':
       // Реестра типов событий и их полей в ядре нет вовсе (EXPR-2): состав
       // данных задаёт эмитент, и подсказывать здесь нечем.
+      return namePicker(env, path, value, null);
+    case 'tag':
+      // Теги объявляет контент в prefab'ах, реестра у ядра нет — как и у
+      // `withTag` запроса, кандидатов здесь не бывает (EXPR-8).
       return namePicker(env, path, value, null);
     default:
       // Формы у этого места каталог не назвал: показывается выражением, как
@@ -778,7 +786,7 @@ function slotControl(
     case 'actions':
       return actionListBlock(env, path, value);
     case 'fields':
-      return fieldsBlock(env, path, value, candidates(env, slot.names, args));
+      return fieldsBlock(env, path, value, candidates(env, slot.names, args, path));
     case 'expression':
       return expressionBlock(env, path, value);
     case 'query':
@@ -788,7 +796,7 @@ function slotControl(
       return overridesBlock(env, path, value, typeof prefab === 'string' ? prefab : undefined);
     }
     case 'literal':
-      return namePicker(env, path, value, candidates(env, slot.names, args));
+      return namePicker(env, path, value, candidates(env, slot.names, args, path));
   }
 }
 

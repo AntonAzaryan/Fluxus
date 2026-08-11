@@ -371,6 +371,319 @@ describe('управляющие действия', () => {
   });
 });
 
+/**
+ * Свёртка (ACT-4): `let` — аккумулятор, `set` — присваивание ему. Проверяется
+ * то, ради чего механизм и заведён: значение, накопленное во вложенном теле,
+ * читается ПОСЛЕ выхода из него — иначе `forEach` свёрткой не станет.
+ */
+describe('изменяемая привязка let и действие set (ACT-4)', () => {
+  /** Значение привязки, вынесенное наружу событием: иного выхода у скоупа нет. */
+  const report = (name: string): Action => ({
+    emitEvent: { type: 'Result', data: { value: { var: name } } },
+  });
+
+  const results = (h: Harness): number[] =>
+    [...h.events].filter((e) => e.type === 'Result').map((e) => e.data.value!);
+
+  it('сумма по forEach видна после цикла', () => {
+    const h = harness();
+    spawn(h.world, 'Hero');
+    spawn(h.world, 'Hero', { Health: { current: F(40) } });
+    spawn(h.world, 'Hero', { Health: { current: F(10) } });
+
+    execute(
+      [
+        {
+          let: {
+            bindings: { total: 0 },
+            do: [
+              {
+                forEach: {
+                  query: { all: ['Health'] },
+                  as: 'target',
+                  do: [
+                    {
+                      set: {
+                        name: 'total',
+                        value: {
+                          '+': [{ var: 'total' }, { getComponent: [{ var: 'target' }, 'Health', 'current'] }],
+                        },
+                      },
+                    },
+                  ],
+                },
+              },
+              report('total'),
+            ],
+          },
+        },
+      ],
+      h.ctx,
+    );
+
+    expect(results(h)).toEqual([F(150)]);
+  });
+
+  it('присваивание из вложенных тел if, forEachEvent и вложенного let видно снаружи', () => {
+    const h = harness();
+    h.events.emit('Collision', { n: F(2) });
+    h.events.emit('Collision', { n: F(3) });
+
+    execute(
+      [
+        {
+          let: {
+            bindings: { acc: F(1) },
+            do: [
+              {
+                forEachEvent: {
+                  type: 'Collision',
+                  as: 'hit',
+                  do: [
+                    {
+                      if: {
+                        cond: true,
+                        then: [
+                          {
+                            let: {
+                              bindings: { step: { eventField: [{ var: 'hit' }, 'n'] } },
+                              do: [{ set: { name: 'acc', value: { '*': [{ var: 'acc' }, { var: 'step' }] } } }],
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+              report('acc'),
+            ],
+          },
+        },
+      ],
+      h.ctx,
+    );
+
+    expect(results(h)).toEqual([F(6)]);
+  });
+
+  it('внутренний let затеняет внешний: присваивание достаётся ближайшему', () => {
+    const h = harness();
+
+    execute(
+      [
+        {
+          let: {
+            bindings: { acc: F(1) },
+            do: [
+              {
+                let: {
+                  bindings: { acc: F(10) },
+                  do: [{ set: { name: 'acc', value: F(20) } }, report('acc')],
+                },
+              },
+              report('acc'),
+            ],
+          },
+        },
+      ],
+      h.ctx,
+    );
+
+    // Внутреннее тело видит своё значение, внешнее — своё нетронутым (ACT-1).
+    expect(results(h)).toEqual([F(20), F(1)]);
+  });
+
+  it('тип значения привязки — тип последнего присвоенного (EXPR-7)', () => {
+    const h = harness();
+
+    execute(
+      [
+        {
+          let: {
+            bindings: { any: F(1) },
+            do: [
+              { set: { name: 'any', value: { vec: [F(2), F(3)] } } },
+              { emitEvent: { type: 'Result', data: { value: { 'vec.y': [{ var: 'any' }] } } } },
+            ],
+          },
+        },
+      ],
+      h.ctx,
+    );
+
+    expect(results(h)).toEqual([F(3)]);
+  });
+
+  /**
+   * Оба отказа ловит регистрация (SYS-3) — здесь проверяется последний рубеж
+   * исполнителя: до него доходит только система, зарегистрированная в обход.
+   */
+  it('переменная итерации и несвязанное имя неизменяемы', () => {
+    const h = harness();
+    spawn(h.world, 'Hero');
+
+    expect(() => {
+      execute(
+        [
+          {
+            forEach: {
+              query: { all: ['Health'] },
+              as: 'target',
+              do: [{ set: { name: 'target', value: F(0) } }],
+            },
+          },
+        ],
+        h.ctx,
+      );
+    }).toThrow(/переменная "target" связана не действием let и неизменяема/);
+
+    expect(() => { execute([{ set: { name: 'nope', value: F(0) } }], h.ctx); }).toThrow(
+      /неизвестная переменная "nope"/,
+    );
+  });
+
+  it('действие входит в закрытый набор', () => {
+    expect(actionNames).toContain('set');
+  });
+});
+
+/**
+ * Упорядоченная выборка (ACT-5). Порядок обхода наблюдается событиями: иного
+ * выхода у обхода нет, а событие несёт идентификатор сущности как есть.
+ */
+describe('упорядоченная выборка forEach (ACT-5)', () => {
+  const visit = (args: Readonly<Record<string, unknown>>): Action => ({
+    forEach: {
+      query: { all: ['Position'] },
+      as: 'target',
+      ...args,
+      do: [{ emitEvent: { type: 'Visited', data: { entity: { var: 'target' } } } }],
+    },
+  });
+
+  const visited = (h: Harness): number[] => [...h.events].map((e) => e.data.entity!);
+
+  const origin: Expression = { vec: [0, 0] };
+
+  it('ближайшая цель: limit 1 при nearestTo обходит ровно одну — ближайшую', () => {
+    const h = harness();
+    spawn(h.world, 'Hero', { Position: { x: F(5), y: 0 } });
+    const near = spawn(h.world, 'Hero', { Position: { x: F(1), y: 0 } });
+
+    execute([visit({ nearestTo: origin, limit: F(1) })], h.ctx);
+
+    expect(visited(h)).toEqual([near]);
+  });
+
+  it('равноудалённые обходятся в порядке raw-индекса (QUERY-2)', () => {
+    const h = harness();
+    // Одинаковый квадрат расстояния до начала координат, разные позиции.
+    const first = spawn(h.world, 'Hero', { Position: { x: F(2), y: 0 } });
+    const second = spawn(h.world, 'Hero', { Position: { x: 0, y: F(-2) } });
+    const far = spawn(h.world, 'Hero', { Position: { x: F(3), y: 0 } });
+
+    execute([visit({ nearestTo: origin })], h.ctx);
+
+    expect(visited(h)).toEqual([first, second, far]);
+  });
+
+  it('сущность без Position стоит в начале координат (ECS-7)', () => {
+    const h = harness();
+    const away = spawn(h.world, 'Hero', { Position: { x: F(4), y: 0 } });
+    // Выборка идёт по `Health`, поэтому сущность без `Position` из неё не
+    // выпадает: позиция читается тотально и ставит её в начало координат —
+    // то есть ближе всех, а не в конец обхода.
+    const homeless = spawn(h.world, 'Hero', { Position: { x: F(9), y: 0 } });
+    h.commands.removeComponent(homeless, 'Position');
+    h.commands.flush();
+
+    execute(
+      [
+        {
+          forEach: {
+            query: { all: ['Health'] },
+            as: 'target',
+            nearestTo: origin,
+            do: [{ emitEvent: { type: 'Visited', data: { entity: { var: 'target' } } } }],
+          },
+        },
+      ],
+      h.ctx,
+    );
+
+    expect(visited(h)).toEqual([homeless, away]);
+  });
+
+  it('limit без nearestTo обрывает обход в порядке QUERY-2', () => {
+    const h = harness();
+    const first = spawn(h.world, 'Hero', { Position: { x: F(5), y: 0 } });
+    spawn(h.world, 'Hero', { Position: { x: F(1), y: 0 } });
+
+    execute([visit({ limit: F(1) })], h.ctx);
+
+    expect(visited(h)).toEqual([first]);
+  });
+
+  it('нулевой limit — пустой обход, отрицательный — ошибка вычисления (SYS-9)', () => {
+    const h = harness();
+    spawn(h.world, 'Hero');
+
+    execute([visit({ nearestTo: origin, limit: 0 })], h.ctx);
+    expect(visited(h)).toEqual([]);
+
+    expect(() => { execute([visit({ limit: F(-1) })], h.ctx); }).toThrow(
+      /действие "forEach": "limit" не может быть отрицательным/,
+    );
+  });
+
+  it('limit больше выборки безопасен, а сама выборка не меняется', () => {
+    const h = harness();
+    const only = spawn(h.world, 'Hero');
+
+    execute([visit({ nearestTo: origin, limit: F(10) })], h.ctx);
+
+    expect(visited(h)).toEqual([only]);
+  });
+
+  /**
+   * Вложенные упорядоченные обходы: у каждого уровня свой буфер сортировки,
+   * иначе внутренний портил бы порядок внешнего прямо посреди его обхода.
+   */
+  it('вложенный упорядоченный forEach не портит порядок внешнего', () => {
+    const h = harness();
+    const a = spawn(h.world, 'Hero', { Position: { x: F(1), y: 0 } });
+    const b = spawn(h.world, 'Hero', { Position: { x: F(2), y: 0 } });
+
+    execute(
+      [
+        {
+          forEach: {
+            query: { all: ['Position'] },
+            as: 'outer',
+            nearestTo: origin,
+            do: [
+              {
+                forEach: {
+                  query: { all: ['Position'] },
+                  as: 'inner',
+                  nearestTo: { vec: [F(9), 0] },
+                  do: [{ emitEvent: { type: 'Visited', data: { entity: { var: 'inner' } } } }],
+                },
+              },
+              { emitEvent: { type: 'Visited', data: { entity: { var: 'outer' } } } },
+            ],
+          },
+        },
+      ],
+      h.ctx,
+    );
+
+    // Внутренний обход идёт от дальней точки — порядок обратный внешнему.
+    expect(visited(h)).toEqual([b, a, a, b, a, b]);
+  });
+});
+
 describe('ошибки формы (ACT-1)', () => {
   it('падает на неизвестном действии', () => {
     expect(() => { execute([{ teleport: {} }], harness().ctx); }).toThrow(/неизвестное действие "teleport"/);
@@ -636,6 +949,10 @@ describe('перечень обязательных аргументов и чт
     bound: F(2),
     as: 'r',
     id: 1,
+    // Имя изменяемой привязки (ACT-4). Связывающего `let` вокруг здесь нет —
+    // и не нужно: отказ по несвязанному имени про аргументы ничего не говорит,
+    // а этот блок проверяет именно их.
+    name: 'acc',
     value: F(1),
     def: 0,
     from: 0,
