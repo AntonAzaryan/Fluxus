@@ -204,10 +204,11 @@ export interface ModelsOptions {
   readonly camera?: THREE.Camera;
   /**
    * Запас консервативности границ отсечения — доля радиуса габаритов инстанса
-   * (REND-21). Действует ТОЛЬКО там, где запечённых границ по клипам нет
-   * (`assets` ASSET-12): границы bind-позы анимация выводит за себя, и без
-   * запаса выпад у края экрана срезался бы вместе с мечом. У модели с
-   * производными границы уже консервативны, и запас к ним не добавляется.
+   * (REND-21). Берётся ВСЕГДА, а не только там, где запечённых границ по клипам
+   * нет (`assets` ASSET-12): границы bind-позы анимация выводит за себя, и без
+   * запаса выпад у края экрана срезался бы вместе с мечом, — но и запечённые
+   * границы описывают ровно позы клипов, а не оверлеи над инстансом (REND-16),
+   * доворот костей (REND-5) и погрешность объемлющей сферы.
    */
   readonly cullMargin?: number;
   /** Куда писать предупреждения; по умолчанию console.warn. */
@@ -346,7 +347,24 @@ interface BatchEntry {
   readonly key: string;
   readonly batch: ModelBatch;
   readonly materials: readonly VatMaterial[];
-  readonly skins: BatchSkinLoader;
+  /**
+   * Живой набор вариантов скина записи (REND-6). НЕ readonly: варианты — это
+   * таблица `skins` записи, а её переподача манифеста меняет (REND-17), и
+   * пересобрать массив слоёв иначе как заново нечем.
+   */
+  skins: BatchSkinLoader;
+  /**
+   * Таблица скинов, по которой собран текущий набор вариантов. Сравнивается
+   * ПО ЗНАЧЕНИЮ: редактор отдаёт разобранный документ, и после любой правки
+   * все объекты в нём новые (REND-17).
+   */
+  skinTable: EntityVisual['skins'] | undefined;
+  /**
+   * Массивы текстур, поставленные в материалы батча последним набором слоёв.
+   * Принадлежат БАТЧУ, а не ассету (REND-3): пересборка набора освобождает их,
+   * иначе каждая переподача манифеста оставляла бы за собой прежние слои.
+   */
+  readonly skinTextures: THREE.DataArrayTexture[];
   readonly model: NormalizedModel;
   /** Границы модели в канонических осях — до нормализации по высоте. */
   readonly canonical: ModelBounds;
@@ -657,15 +675,17 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     screen: ScreenScale | null,
   ): void {
     for (const record of pool.values()) {
-      const conservative = cullBoundsOf(record);
-      const bounds = conservative ?? boundsOf(record);
+      const bounds = cullBoundsOf(record) ?? boundsOf(record);
       // Рисовать нечего — и отсекать нечего: невизуальная сущность в кадре не
       // участвует вовсе, а не «участвует невидимой».
       if (bounds === null || !record.posed) continue;
       const scale = record.scale;
       // Центр габаритов в осях инстанса → мировые оси тем же преобразованием,
-      // которым инстанс нарисован; радиус — половина диагонали. Запас нужен
-      // только границам bind-позы: запечённые уже консервативны (ASSET-12).
+      // которым инстанс нарисован; радиус — половина диагонали. Запас берётся
+      // ВСЕГДА, а не только к границам bind-позы: консервативность запечённых
+      // границ (ASSET-12) отвечает за позы клипов, но не за то, чего в границах
+      // модели нет вовсе, — оверлеи (REND-16), контроль костей (REND-5) и
+      // погрешность самой сферы у вытянутых моделей.
       this.cullCenter
         .set((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2, (bounds.minZ + bounds.maxZ) / 2)
         .multiplyScalar(scale)
@@ -674,7 +694,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       const radius =
         (Math.hypot(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) / 2) *
         Math.abs(scale) *
-        (conservative === null ? 1 + margin : 1);
+        (1 + margin);
       this.cullSphere.center.copy(this.cullCenter);
       this.cullSphere.radius = radius;
       record.visible = this.frustum.intersectsSphere(this.cullSphere);
@@ -1065,12 +1085,47 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const entry = record.batch;
     if (entry === null) return;
     entry.thresholds = resolveLodThresholds(record.visual);
+    this.syncBatchSkins(entry, record.visual);
     const normalized =
       (record.visual?.scale ?? 1) / Math.max(entry.model.height, MIN_MODEL_HEIGHT);
     if (normalized === entry.normalized) return;
     entry.normalized = normalized;
     scaleBounds(entry.canonical, normalized, entry.bounds);
     scaleBounds(entry.canonicalCull, normalized, entry.cullBounds);
+  }
+
+  /**
+   * Набор вариантов скина батча после переподачи (REND-17, REND-6). Варианты —
+   * свойство ЗАПИСИ, а не инстанса: новый вариант в таблице сдвигает сквозные
+   * индексы, а правленый путь существующего меняет пиксели слоя, — и то и
+   * другое пересобирает массив слоёв целиком, потому что собран он один раз на
+   * батч (ASSET-12).
+   *
+   * Пересобирается РОВНО набор: позы записей батча, фазы их клипов и сглаженные
+   * наклоны остаются на месте — пересборки инстансов здесь нет (REND-11).
+   * Запись, чья таблица скинов не изменилась, не получает и этого: таблицы
+   * сравниваются по значению, как и всё прочее в переподаче (REND-17).
+   */
+  private syncBatchSkins(entry: BatchEntry, visual: EntityVisual | undefined): void {
+    if (sameSkinTables(entry.skinTable, visual?.skins)) return;
+    entry.skinTable = visual?.skins;
+    entry.skins.dispose();
+    entry.skins = new BatchSkinLoader(
+      entry.model,
+      visual,
+      this.requireCtx().assets,
+      batchSkinListener(entry.model, entry.materials, entry.skinTextures),
+    );
+    // Сквозные индексы вариантов поехали — каждой записи батча заново (REND-6).
+    // Записям, чей скин переподача ещё будет менять, индекс перепишет их
+    // собственный `assignSkin`: он идёт после этого места и по тому же набору.
+    for (const pool of [this.instances, this.decorations]) {
+      for (const record of pool.values()) {
+        if (record.batch !== entry) continue;
+        record.skinIndex = entry.skins.indexOf(record.skin);
+        entry.batch.setSkin(record.slot, record.skinIndex);
+      }
+    }
   }
 
   /** Параметры контроля костей записи на живом инстансе (REND-5, REND-17). */
@@ -1430,7 +1485,14 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const visual = record.visual;
     const key = batchKeyOf(record);
     const existing = this.batches.get(key);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      // Батч из кэша мог опустеть ЕЩЁ ДО правки скинов записи — например,
+      // когда переподача сперва увела запись в другой набор частей, а затем
+      // вернула обратно. Набор вариантов сводится с записью здесь же, а не
+      // только в `syncBatchEntry`: пустой батч тот проход не видит (REND-17).
+      this.syncBatchSkins(existing, visual);
+      return existing;
+    }
 
     skinPlaceholder ??= createSkinPlaceholder();
     const placeholder = skinPlaceholder;
@@ -1453,13 +1515,19 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const canonical = modelBounds(shared.model, visual?.hiddenParts);
     const canonicalCull = boundsFromBaked(derivatives);
     const normalized = (visual?.scale ?? 1) / Math.max(shared.model.height, MIN_MODEL_HEIGHT);
+    const skinTextures: THREE.DataArrayTexture[] = [];
     const entry: BatchEntry = {
       key,
       batch,
       materials,
-      skins: new BatchSkinLoader(shared.model, visual, this.requireCtx().assets, (set) => {
-        applySkinArrays(shared.model, materials, set);
-      }),
+      skins: new BatchSkinLoader(
+        shared.model,
+        visual,
+        this.requireCtx().assets,
+        batchSkinListener(shared.model, materials, skinTextures),
+      ),
+      skinTable: visual?.skins,
+      skinTextures,
       model: shared.model,
       canonical,
       canonicalCull,
@@ -1579,6 +1647,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    */
   private detachModel(record: InstanceRecord): void {
     for (const entry of this.shared.values()) entry.waiting.delete(record);
+    // Ярус — свойство НАРИСОВАННОГО (REND-20): пока построенного из ассета у
+    // записи нет, рисуется заглушка, и она детальная. Оставить прежний ярус
+    // значило бы отдавать наружу (`instanceFor`) ярус, которым в кадре ничего
+    // не нарисовано; `attachModel` проставит настоящий, как только сможет.
+    record.tier = 'detailed';
     this.disposePlaceholder(record);
     record.skinApp?.dispose();
     record.skinApp = null;
@@ -1646,18 +1719,38 @@ function boundsFromBaked(derivatives: BakedDerivatives): ModelBounds {
  */
 function batchKeyOf(record: InstanceRecord): string {
   const hidden = [...(record.visual?.hiddenParts ?? [])].sort((a, b) => a - b).join(',');
-  return `${record.visual?.model ?? ''} ${hidden} ${record.kind ?? ''}`;
+  return JSON.stringify([record.visual?.model ?? '', hidden, record.kind ?? '']);
+}
+
+/**
+ * Слушатель готовых слоёв батча: набор приезжает асинхронно (ASSET-4) и может
+ * приехать ПОВТОРНО — после переподачи манифеста, правившей таблицу скинов
+ * записи (REND-17). Прежние массивы текстур освобождаются здесь: они
+ * принадлежат батчу, а не ассету (REND-3).
+ */
+function batchSkinListener(
+  model: NormalizedModel,
+  materials: readonly VatMaterial[],
+  textures: THREE.DataArrayTexture[],
+): (set: BakedSkinSet) => void {
+  return (set) => {
+    for (const texture of textures) texture.dispose();
+    textures.length = 0;
+    applySkinArrays(model, materials, set, textures);
+  };
 }
 
 /**
  * Готовые слои вариантов — в материалы батча (REND-6). Массив текстур один на
  * пару «слот × вид карты»: цветовое пространство у карты нормалей своё, и
- * делить с ней текстуру базового цвета нельзя.
+ * делить с ней текстуру базового цвета нельзя. Созданные массивы собираются в
+ * `created`: освобождать их — дело того, кто их поставил.
  */
 function applySkinArrays(
   model: NormalizedModel,
   materials: readonly VatMaterial[],
   set: BakedSkinSet,
+  created: THREE.DataArrayTexture[],
 ): void {
   const cache = new Map<string, THREE.DataArrayTexture | null>();
   const slotOf = (source: NormalizedModel['materials'][number], kind: VatMapKind): number | null => {
@@ -1677,6 +1770,7 @@ function applySkinArrays(
       if (texture === undefined) {
         texture = skinArrayTexture(set, slot, kind);
         cache.set(cacheKey, texture);
+        if (texture !== null) created.push(texture);
       }
       if (texture === null) continue;
       if (kind === 'base') material.uniforms.vatSkinBase.value = texture;
@@ -1808,8 +1902,32 @@ function sameSkinSlots(
 ): boolean {
   // Скина нет — подмен нет ни до, ни после: слоты модели идут как есть.
   if (skin === undefined) return true;
-  const a = before?.skins?.[skin];
-  const b = after?.skins?.[skin];
+  return sameSlotMaps(before?.skins?.[skin], after?.skins?.[skin]);
+}
+
+/**
+ * Совпадают ли таблицы скинов двух записей ЦЕЛИКОМ (REND-6). Этим и меряется
+ * набор вариантов батча: он производен от всей таблицы — от списка имён (он
+ * задаёт сквозные индексы) и от подмен каждого имени (они задают пиксели
+ * слоёв), — а не от одного выбранного скина.
+ */
+function sameSkinTables(
+  before: EntityVisual['skins'] | undefined,
+  after: EntityVisual['skins'] | undefined,
+): boolean {
+  if (before === after) return true;
+  const a = before ?? {};
+  const b = after ?? {};
+  const names = Object.keys(a);
+  if (names.length !== Object.keys(b).length) return false;
+  return names.every((name) => sameSlotMaps(a[name], b[name]));
+}
+
+/** Один и тот же набор подмен «слот → путь»; отсутствие обеих — совпадение. */
+function sameSlotMaps(
+  a: Readonly<Record<string, string>> | undefined,
+  b: Readonly<Record<string, string>> | undefined,
+): boolean {
   if (a === b) return true;
   if (a === undefined || b === undefined) return false;
   const slots = Object.keys(a);

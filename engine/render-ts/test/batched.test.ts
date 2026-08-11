@@ -71,6 +71,37 @@ function poseAttribute(subsystem: ModelsSubsystem): Float32Array {
   return mesh.geometry.getAttribute('instancePose').array as Float32Array;
 }
 
+/**
+ * Манифест с СОСЕДНЕЙ записью на той же модели: у неё свой батч (ключ включает
+ * запись, REND-20) и своя таблица скинов — по ней и видно, что правка чужих
+ * вариантов её набора не пересобирает.
+ */
+function withNeighbour(): VisualManifest {
+  const manifest = makeManifest();
+  manifest.entities.Keeper = {
+    model: MODEL_ID,
+    scale: 1,
+    defaultSkin: 'gold',
+    skins: { gold: { '0': 'tex/gold.png' } },
+  };
+  return manifest;
+}
+
+/** Батчи в порядке заведения: сперва `Runner`, затем сосед `Keeper`. */
+const RUNNER_BATCH = 0;
+const KEEPER_BATCH = 1;
+
+/** Слой скина записи батча — четвёртое число её инстанс-позы (REND-6). */
+function layerOf(subsystem: ModelsSubsystem, batch: number, record: number): number {
+  const mesh = subsystem.batchMeshes()[batch]!;
+  const pose = mesh.geometry.getAttribute('instancePose').array as Float32Array;
+  return pose[record * 4 + 3]!;
+}
+
+function requestCount(assets: AssetsStub, id: string): number {
+  return assets.requests.filter((request) => request.id === id).length;
+}
+
 // ------------------------------------------------------- жизненный цикл
 
 describe('жизненный цикл записи батча (REND-3, REND-20)', () => {
@@ -408,6 +439,81 @@ describe('переподача манифеста для батчевого яр
     subsystem.applyManifest(next);
     // Другой набор рисуемых частей — другой батч; прежний остался в кэше пустым.
     expect(subsystem.batchStats()).toMatchObject({ batches: 2, records: 1 });
+
+    // Возврат к прежним частям возвращает и прежний батч — а он всё это время
+    // стоял пустым и правки скинов не видел. Набор вариантов сводится с записью
+    // и на этом пути (REND-17): иначе новый скин клампился бы в базовый.
+    const back = makeManifest();
+    back.entities.Runner!.defaultSkin = 'azure';
+    back.entities.Runner!.skins!.azure = { '0': 'tex/azure.png' };
+    subsystem.applyManifest(back);
+    subsystem.updateFrame(1 / 60, 1);
+    expect(subsystem.batchStats()).toMatchObject({ batches: 2, records: 1 });
+    // Варианты: базовый, `azure`, `blue`, `red` — умолчательный лежит слоем 1.
+    expect(requestCount(assets, 'tex/azure.png')).toBe(1);
+    expect(layerOf(subsystem, RUNNER_BATCH, 0)).toBe(1);
+  });
+
+  it('переподача манифеста меняет скин батчевой записи', () => {
+    // Соседняя запись на той же модели: свой батч (ключ включает запись) и свои
+    // варианты — по ней видно, что правка чужих скинов её не трогает.
+    const manifest = withNeighbour();
+    const { subsystem, assets } = makeRig(manifest);
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1), makeEntityView(2), makeEntityView(3, { kind: 'Keeper' })]),
+    );
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.setSkin(2, 'blue');
+    subsystem.updateFrame(1 / 60, 1);
+
+    const first = subsystem.instanceFor(1)!;
+    const second = subsystem.instanceFor(2)!;
+    const controller = first.controller!;
+    // Варианты записи: базовый, `blue`, `red` — скин записи лежит слоем 2.
+    expect(layerOf(subsystem, RUNNER_BATCH, 0)).toBe(2);
+    expect(layerOf(subsystem, RUNNER_BATCH, 1)).toBe(1);
+    expect(requestCount(assets, 'tex/gold.png')).toBe(1);
+
+    // Фаза клипа отматывается: по ней и видно, пересобрана ли запись (REND-11).
+    for (let i = 0; i < 20; i++) subsystem.updateFrame(1 / 60, 1);
+    const phase = poseAttribute(subsystem)[0]!;
+    expect(phase).toBeGreaterThan(0);
+
+    // Новый вариант в таблице: имя сортируется ПЕРЕД `blue`, и сквозные индексы
+    // всех вариантов записи сдвигаются — старый набор клампил бы их в базовый.
+    const next = withNeighbour();
+    next.entities.Runner!.defaultSkin = 'azure';
+    next.entities.Runner!.skins!.azure = { '0': 'tex/azure.png' };
+    subsystem.applyManifest(next);
+    subsystem.updateFrame(1 / 60, 1);
+
+    // Варианты стали: базовый, `azure`, `blue`, `red`.
+    expect(requestCount(assets, 'tex/azure.png')).toBe(1);
+    expect(layerOf(subsystem, RUNNER_BATCH, 0)).toBe(1); // невыбранный переехал на новый умолчательный
+    expect(layerOf(subsystem, RUNNER_BATCH, 1)).toBe(2); // выбранный поимённо остался синим (REND-11)
+    // Пересобран НАБОР ВАРИАНТОВ, а не записи: инстансы, контроллер и фаза те же.
+    expect(subsystem.instanceFor(1)).toBe(first);
+    expect(subsystem.instanceFor(2)).toBe(second);
+    expect(first.controller).toBe(controller);
+    expect(poseAttribute(subsystem)[0]!).toBeGreaterThanOrEqual(phase);
+    expect(subsystem.batchStats()).toMatchObject({ batches: 2, records: 3 });
+
+    // Правленый путь существующего варианта: пиксели слоя другие — набор
+    // перезапрашивается, хотя список имён не изменился.
+    const edited = withNeighbour();
+    edited.entities.Runner!.defaultSkin = 'azure';
+    edited.entities.Runner!.skins!.azure = { '0': 'tex/azure.png' };
+    edited.entities.Runner!.skins!.blue = { '0': 'tex/cyan.png' };
+    subsystem.applyManifest(edited);
+    subsystem.updateFrame(1 / 60, 1);
+
+    expect(requestCount(assets, 'tex/cyan.png')).toBe(1);
+    expect(layerOf(subsystem, RUNNER_BATCH, 1)).toBe(2); // тот же слой, другие пиксели
+
+    // Соседняя запись за обе переподачи не тронута: её таблица скинов та же,
+    // и перезапрашивать её вариант незачем (REND-17).
+    expect(requestCount(assets, 'tex/gold.png')).toBe(1);
+    expect(layerOf(subsystem, KEEPER_BATCH, 0)).toBe(1);
   });
 });
 

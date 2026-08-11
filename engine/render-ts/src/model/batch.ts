@@ -206,8 +206,14 @@ export class ModelBatch {
       for (const buffers of entry.buffers) buffers.count = 0;
       if (this.uniformVisibility) this.compactShared(entry, level);
       else this.compactPerPart(entry, level);
+      // На GPU уезжает РОВНО скомпактованный кусок буфера, а не весь атрибут по
+      // ёмкости батча: хвост за `count` — прошлый кадр, и заливать его нечем.
       for (const buffers of entry.buffers) {
+        buffers.matrix.clearUpdateRanges();
+        buffers.matrix.addUpdateRange(0, buffers.count * MATRIX_STRIDE);
         buffers.matrix.needsUpdate = true;
+        buffers.pose.clearUpdateRanges();
+        buffers.pose.addUpdateRange(0, buffers.count * POSE_STRIDE);
         buffers.pose.needsUpdate = true;
       }
     }
@@ -271,18 +277,23 @@ export class ModelBatch {
     return ((word >>> (bit & 31)) & 1) === 1;
   }
 
+  /**
+   * Запись слота в конец инстанс-буферов. Копирование поэлементное, а не через
+   * `subarray`: `subarray` создаёт новый объект TypedArray НА КАЖДЫЙ вызов, то
+   * есть на каждую видимую запись каждого кадра, — и компактация, которой
+   * аллокаций иметь не положено (design D7), платила бы мусором ровно по числу
+   * инстансов. Длины здесь константы, и цикл разворачивается сам.
+   */
   private writeInto(buffers: BatchBuffers, slot: number): void {
     const index = buffers.count++;
     const matrix = buffers.matrix.array as Float32Array;
-    matrix.set(
-      this.matrices.subarray(slot * MATRIX_STRIDE, slot * MATRIX_STRIDE + MATRIX_STRIDE),
-      index * MATRIX_STRIDE,
-    );
+    const matrixFrom = slot * MATRIX_STRIDE;
+    const matrixTo = index * MATRIX_STRIDE;
+    for (let k = 0; k < MATRIX_STRIDE; k++) matrix[matrixTo + k] = this.matrices[matrixFrom + k]!;
     const pose = buffers.pose.array as Float32Array;
-    pose.set(
-      this.poses.subarray(slot * POSE_STRIDE, slot * POSE_STRIDE + POSE_STRIDE),
-      index * POSE_STRIDE,
-    );
+    const poseFrom = slot * POSE_STRIDE;
+    const poseTo = index * POSE_STRIDE;
+    for (let k = 0; k < POSE_STRIDE; k++) pose[poseTo + k] = this.poses[poseFrom + k]!;
   }
 
   /**

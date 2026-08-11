@@ -53,7 +53,13 @@ export type {
   BoneVat,
   ModelDerivatives,
 } from './derivatives.js';
-export { DEFAULT_BAKE_FPS, VAT_TEXELS_PER_BONE, bakeDerivatives, modelDerivatives } from './derivatives.js';
+export {
+  DEFAULT_BAKE_FPS,
+  DEFAULT_MAX_VAT_SIZE,
+  VAT_TEXELS_PER_BONE,
+  bakeDerivatives,
+  modelDerivatives,
+} from './derivatives.js';
 export type { BakeSkinParams, BakedSkinSet, BakedSkinSlot, SkinVariantSource } from './skinVariants.js';
 export { DEFAULT_SKIN_MAX_SIZE, bakeSkinVariants, skinVariantIndex } from './skinVariants.js';
 

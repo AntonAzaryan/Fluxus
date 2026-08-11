@@ -36,7 +36,14 @@
  * действует на симуляцию, в которую отсюда хода нет (ASSET-1).
  */
 import type { NormalizedMesh, NormalizedModel, NormalizedSequence } from './model.js';
-import { bakePartVisibility, boneRadii, emptyBounds, growBoundsByBone } from './clipCoverage.js';
+import {
+  bakePartVisibility,
+  boneRadii,
+  boundsEmpty,
+  emptyBounds,
+  growBoundsByBindPose,
+  growBoundsByBone,
+} from './clipCoverage.js';
 import { multiplyMat4 } from './mat4.js';
 import { TRS_STRIDE, inverseBindOf, poseAt, restPose, type PoseScratch } from './pose.js';
 import type { ModelSurfaceBounds } from './surface.js';
@@ -54,6 +61,16 @@ export const VAT_TEXELS_PER_BONE = 4;
 /** Частота сэмплирования клипов по умолчанию, кадров в секунду. */
 export const DEFAULT_BAKE_FPS = 30;
 
+/**
+ * Предельная сторона VAT-текстуры в текселях по умолчанию. WebGL2 гарантирует
+ * `MAX_TEXTURE_SIZE` не меньше 2048, реальные реализации дают 4096 и больше;
+ * 4096 — граница, за которой запекание перестаёт быть переносимым, а Float32 в
+ * четыре канала на тексель делает такую текстуру ещё и дорогой по памяти.
+ * Модель за границей рисуема — просто ДЕТАЛЬНЫМ ярусом (REND-20), и механизм
+ * деградации для этого уже есть.
+ */
+export const DEFAULT_MAX_VAT_SIZE = 4096;
+
 /** Параметры запекания — часть его входа: детерминизм считается по паре (модель, параметры). */
 export interface BakeParams {
   /**
@@ -62,6 +79,13 @@ export interface BakeParams {
    * поиском по таблице времён.
    */
   readonly fps?: number;
+  /**
+   * Предельная сторона VAT-текстуры в текселях (ASSET-12). Бюджет считается ДО
+   * выделения буфера: модель с тысячей костей или получасом клипов иначе
+   * запеклась бы в текстуру, которой GPU не примет, — и узнали бы об этом
+   * только при отрисовке.
+   */
+  readonly maxTextureSize?: number;
 }
 
 /**
@@ -197,15 +221,29 @@ export function bakeDerivatives(model: NormalizedModel, params: BakeParams = {})
     frameCount += length;
   }
 
+  // Бюджет текстуры — до выделения буфера: строк столько же, сколько кадров, а
+  // текселей в строке — по четыре на кость. За границей запекания нет, и запись
+  // деградирует в детальный ярус тем же путём, что модель без костей (REND-20).
+  const maxTextureSize = params.maxTextureSize ?? DEFAULT_MAX_VAT_SIZE;
+  const width = boneCount * VAT_TEXELS_PER_BONE;
+  if (width > maxTextureSize || frameCount > maxTextureSize) {
+    return {
+      ok: false,
+      reason:
+        `VAT не помещается в текстуру ${maxTextureSize}×${maxTextureSize}: ` +
+        `${width}×${frameCount} текселей (${boneCount} костей, ${frameCount} кадров)`,
+    };
+  }
+
   // B. Поза покоя и обратная привязка — общий вход всех кадров.
   const rest = restPose(model);
   const inverseBind = inverseBindOf(model, rest);
 
   const vat: BoneVat = {
-    width: boneCount * VAT_TEXELS_PER_BONE,
+    width,
     height: frameCount,
     boneCount,
-    data: new Float32Array(boneCount * VAT_TEXELS_PER_BONE * 4 * frameCount),
+    data: new Float32Array(width * 4 * frameCount),
   };
 
   // C. Границы: радиус влияния кости считается один раз по бинд-позе, а по
@@ -240,7 +278,15 @@ export function bakeDerivatives(model: NormalizedModel, params: BakeParams = {})
     }
   });
 
-  // D. Замкнутость клипа — сравнение запечённых кадров, а не догадка о формате.
+  // D. Объём остался пустым — ни одна кость ни на что не влияет. Границы берутся
+  // с бинд-позы, а у модели без вершин вырождаются в точку: конечные числа
+  // лучше перевёрнутых, отсечение по ним просто промахивается (REND-21).
+  if (boundsEmpty(bounds)) {
+    growBoundsByBindPose(bounds, model);
+    if (boundsEmpty(bounds)) bounds.fill(0);
+  }
+
+  // E. Замкнутость клипа — сравнение запечённых кадров, а не догадка о формате.
   const closed = clips.map((clip) => framesEqual(vat, clip.offset, clip.offset + clip.length - 1));
 
   return {
@@ -265,10 +311,15 @@ export function bakeDerivatives(model: NormalizedModel, params: BakeParams = {})
  * ровно `1/fps`, последний кадр лежит на конце клипа или сразу за ним (время
  * кадра обрезается длительностью) — так фаза переводится в номер строки
  * умножением, а клип нулевой длины остаётся одним кадром.
+ *
+ * Округление ВВЕРХ, а не к ближайшему: при округлении вниз время предпоследнего
+ * кадра уже перевалило бы за длительность, обрезалось ею — и конец клипа
+ * оказался бы запечён дважды. Клип от этого замирал бы на хвосте, а сравнение
+ * первого кадра с последним (`framesEqual`) объявляло бы замкнутым незамкнутый.
  */
 function frameLengthOf(duration: number, fps: number): number {
   if (!(duration > 0)) return 1;
-  return Math.max(1, Math.round(duration * fps)) + 1;
+  return Math.max(1, Math.ceil(duration * fps)) + 1;
 }
 
 // ------------------------------------------------------------------ VAT
@@ -315,7 +366,9 @@ export function modelDerivatives(
     byParams = new Map();
     derivativesCache.set(model, byParams);
   }
-  const signature = String(params.fps ?? DEFAULT_BAKE_FPS);
+  // Ключ второго уровня — ВСЕ параметры запекания: они часть входа, и два
+  // разных бюджета текстуры не должны делить один запечённый результат.
+  const signature = `${params.fps ?? DEFAULT_BAKE_FPS}:${params.maxTextureSize ?? DEFAULT_MAX_VAT_SIZE}`;
   let baked = byParams.get(signature);
   if (baked === undefined) {
     baked = bakeDerivatives(model, params);

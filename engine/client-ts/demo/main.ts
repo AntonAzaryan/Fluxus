@@ -443,11 +443,16 @@ function frame(now: number): void {
   sampleCameraInput();
   pushInput();
   if (touchSource !== null) touchOverlay?.(touchSource.overlay());
-  remote?.frame(now);
 
   // Конвейер камеры (CAM-1): follow-цель — интерполированная горизонталь
   // инстанса (x/y; высоту rig берёт с поверхности, CAM-2), поза → эффекты →
   // применение к THREE-камере.
+  //
+  // ДО кадра подсистем, а не после: отсечение и выбор уровня детализации идут
+  // по матрицам камеры (REND-21, REND-22), и камера, посаженная после кадра,
+  // отсекала бы по пирамиде ПРОШЛОГО кадра — быстрым разворотом инстансы
+  // вырезались бы у края экрана. Цель слежения при этом на кадр старше, но
+  // конвейер камеры её и так сглаживает — тот же порядок у сцены редактора.
   if (rig !== null) {
     // Цель слежения — видимая поза инстанса (REND-3): узла сцены рендер наружу
     // не отдаёт, и камера ведёт по тем же числам, которыми он нарисован.
@@ -467,6 +472,7 @@ function frame(now: number): void {
     applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, dtSec));
   }
 
+  remote?.frame(now);
   renderer3.render(scene3, camera);
 }
 

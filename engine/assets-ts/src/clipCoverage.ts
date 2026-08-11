@@ -52,6 +52,32 @@ export function emptyBounds(): Float64Array {
   return Float64Array.from([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
 }
 
+/** Объём пуст: ни одна сфера в него не попала, и он так и остался перевёрнутым. */
+export function boundsEmpty(bounds: Float64Array): boolean {
+  return !(bounds[0]! <= bounds[3]!);
+}
+
+/**
+ * Расширяет объём вершинами модели в бинд-позе. Запасной путь для модели, у
+ * которой скелет есть, а весов скиннинга нет ни у одной вершины: радиусы
+ * влияния костей тогда нулевые, сферы пусты, и объединять нечего — объём
+ * остался бы перевёрнутым, а отсечение по перевёрнутому вырезало бы модель из
+ * кадра насовсем (`rendering` REND-21). Нарисована при этом она вполне: без
+ * весов вершины стоят ровно там, где лежат в данных.
+ */
+export function growBoundsByBindPose(bounds: Float64Array, model: NormalizedModel): void {
+  for (const mesh of model.meshes) {
+    const vertices = Math.floor(mesh.positions.length / 3);
+    for (let v = 0; v < vertices; v++) {
+      for (let axis = 0; axis < 3; axis++) {
+        const value = mesh.positions[v * 3 + axis]!;
+        if (value < bounds[axis]!) bounds[axis] = value;
+        if (value > bounds[3 + axis]!) bounds[3 + axis] = value;
+      }
+    }
+  }
+}
+
 /** Расширяет объём сферой кости в этом кадре: центр — начало кости, радиус — с её масштабом. */
 export function growBoundsByBone(
   bounds: Float64Array,

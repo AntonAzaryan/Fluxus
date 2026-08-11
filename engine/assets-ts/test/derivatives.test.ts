@@ -66,6 +66,21 @@ describe('bakeDerivatives: раскладка VAT и таблица клипов
     expect(last[1]).toBeCloseTo(1, 6);
   });
 
+  it('длительность не кратна шагу — конец клипа всё равно запечён отдельным кадром', () => {
+    // 0.7 с при 4 к/с — это 2.8 шага: округление к БЛИЖАЙШЕМУ отдало бы клипу
+    // три кадра (0, 0.25, 0.5), и конечная поза не попала бы в VAT вовсе, а
+    // предпоследний кадр совпал бы с последним — клип замирал бы на хвосте.
+    const baked = bakeOrThrow(makeModel([turnSequence('Walk', 0.7)]), 4);
+    const clip = baked.clips[0]!;
+    expect(clip.length).toBe(4); // t = 0, 0.25, 0.5, 0.7 (последний обрезан длительностью)
+    // Последний кадр — конец клипа, поворот на 90°.
+    const last = matrixAt(baked, clip.offset + clip.length - 1, 1);
+    expect(last[0]).toBeCloseTo(0, 6);
+    expect(last[1]).toBeCloseTo(1, 6);
+    // Предпоследний до конца не дошёл: хвост клипа не продублирован.
+    expect(matrixAt(baked, clip.offset + clip.length - 2, 1)[0]).toBeGreaterThan(0.1);
+  });
+
   it('ступенчатый канал не интерполируется: до последнего ключа держится первый', () => {
     const baked = bakeOrThrow(makeModel([turnSequence('Step', 1, 'step')]), 4);
     const clip = baked.clips[0]!;
@@ -115,6 +130,58 @@ describe('консервативные границы по клипам (ASSET-1
     const baked = bakeOrThrow(makeModel());
     expect(baked.bounds.max[0]).toBeGreaterThanOrEqual(3);
     expect(baked.bounds.max[1]).toBeGreaterThanOrEqual(1);
+  });
+
+  it('скелет без весов скиннинга даёт границы бинд-позы, а не перевёрнутый объём', () => {
+    // Кости есть, но ни одна вершина на них не завешена: радиусы влияния
+    // нулевые, сферы пусты — и объём остался бы [+∞, −∞], а отсечение по нему
+    // вырезало бы модель из кадра насовсем (REND-21).
+    const base = makeModel([turnSequence('Walk', 1)]);
+    const model: NormalizedModel = {
+      ...base,
+      meshes: base.meshes.map((mesh) => ({
+        ...mesh,
+        skinWeights: new Float32Array(mesh.skinWeights.length),
+      })),
+    };
+    const baked = bakeOrThrow(model, 4);
+    for (let axis = 0; axis < 3; axis++) {
+      expect(Number.isFinite(baked.bounds.min[axis]!)).toBe(true);
+      expect(Number.isFinite(baked.bounds.max[axis]!)).toBe(true);
+      expect(baked.bounds.max[axis]!).toBeGreaterThanOrEqual(baked.bounds.min[axis]!);
+    }
+    // Объём накрывает вершины как они лежат в данных.
+    expect(baked.bounds.max[0]).toBeGreaterThanOrEqual(1);
+  });
+
+  it('у модели без вершин объём вырожден в точку, а не перевёрнут', () => {
+    const model: NormalizedModel = { ...makeModel(), meshes: [] };
+    const baked = bakeOrThrow(model);
+    expect([...baked.bounds.min, ...baked.bounds.max]).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+});
+
+describe('бюджет VAT-текстуры (ASSET-12 → REND-20)', () => {
+  it('текстура за пределом стороны производных не даёт, и причина названа', () => {
+    // Клип на полчаса при 30 к/с — 54 тысячи строк: столько не примет ни один
+    // GPU, и узнавать об этом при отрисовке поздно.
+    const result = bakeDerivatives(makeModel([turnSequence('Long', 1800)]));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/VAT не помещается/);
+  });
+
+  it('предел — параметр запекания, и он часть ключа кэша', () => {
+    const model = makeModel([turnSequence('Walk', 1)]);
+    // Две кости — восемь текселей в строке; предел 4 не пропускает ширину.
+    expect(bakeDerivatives(model, { maxTextureSize: 4 }).ok).toBe(false);
+    expect(bakeDerivatives(model, { maxTextureSize: 4096 }).ok).toBe(true);
+    // Кэш параметры различает: тот же результат при тех же, разный при разных.
+    expect(modelDerivatives(model, { maxTextureSize: 4 })).toBe(
+      modelDerivatives(model, { maxTextureSize: 4 }),
+    );
+    expect(modelDerivatives(model, { maxTextureSize: 4 }).ok).toBe(false);
+    expect(modelDerivatives(model).ok).toBe(true);
   });
 });
 
