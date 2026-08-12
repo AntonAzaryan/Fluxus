@@ -37,6 +37,9 @@
     "engine/hud-ts": {
       "entry": ["test/**/*.test.ts"]
     },
+    "engine/bot-ts": {
+      "entry": ["src/worker/*.ts", "test/**/*.test.ts"]
+    },
     "engine/integration-ts": {
       "entry": ["test/**/*.test.ts"],
       "project": ["test/**"]

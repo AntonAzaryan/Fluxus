@@ -10,6 +10,7 @@
     "engine/assets-ts",
     "engine/client-ts",
     "engine/hud-ts",
+    "engine/bot-ts",
     "engine/integration-ts",
     "editor/core-ts",
     "editor/ui-ts",
