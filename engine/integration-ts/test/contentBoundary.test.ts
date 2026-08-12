@@ -35,8 +35,12 @@ describe('guard: сканер границы контента ловит каж�
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), 'content-guard-'));
     mkdirSync(join(root, 'pkg-ts/src'), { recursive: true });
+    mkdirSync(join(root, 'pkg-ts/src/bots'), { recursive: true });
     mkdirSync(join(root, 'pkg-ts/node_modules/dep'), { recursive: true });
     mkdirSync(join(root, 'tests/golden'), { recursive: true });
+    // Профиль бота (bot-player BOT-6) опознаётся директорией: имя файла —
+    // уровень сложности, по суффиксу от любого JSON его не отличить.
+    writeFileSync(join(root, 'pkg-ts/src/bots/easy.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/duel.scene.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/duel.presentation.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/duel.match.json'), '{}');
@@ -56,9 +60,10 @@ describe('guard: сканер границы контента ловит каж�
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('сцена, парный слой, матч, манифест, модель и текстура краснят', () => {
+  it('сцена, парный слой, матч, манифест, модель, текстура и профиль бота краснят', () => {
     const files = scanContentLocation({ rootDir: root }).map((v) => v.file);
     expect(files).toEqual([
+      'pkg-ts/src/bots/easy.json',
       'pkg-ts/src/duel.match.json',
       'pkg-ts/src/duel.presentation.json',
       'pkg-ts/src/duel.scene.json',
@@ -90,7 +95,8 @@ describe('guard: сканер границы контента ловит каж�
   });
 
   it('нарушение называет файл, правило и вид документа', () => {
-    const [first] = scanContentLocation({ rootDir: root });
+    const violations = scanContentLocation({ rootDir: root });
+    const first = violations.find((v) => v.file === 'pkg-ts/src/duel.match.json');
     expect(first!.rule).toBe('content-in-engine');
     expect(first!.message).toContain('конфиг матча');
     expect(first!.message).toContain('CONT-1');
