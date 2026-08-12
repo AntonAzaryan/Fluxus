@@ -5,14 +5,14 @@
  * бота тот же код, что для человека, и специального пути у бота нет ни в
  * сообщениях, ни в ростере (`net-session` SES-2). Второе — что медленный мозг не
  * сбивает каденс: съём ввода синхронен, и опоздавшее намерение уезжает позже,
- * как запоздавший ввод человека (NTR-6).
+ * как запоздавший ввод человека (NTR-7).
  */
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SERIALIZER, serverCodec, type ClientMessage, type Transport } from '@game-mvp/net';
 import { BotHost } from '../src/host.js';
 import { walkToCenter } from '../src/brains/scripted.js';
 import type { BotBrain, BotBrainFactory } from '../src/brain.js';
-import { toInputSample } from '../src/boundary.js';
+import type { BotIntent } from '../src/boundary.js';
 import {
   connectBot,
   connectHuman,
@@ -49,11 +49,11 @@ function spy(transport: Transport, sink: string[]): Transport {
 function slowBrain(thinkTicks: number, counters: { samples: number; undefineds: number }): BotBrainFactory {
   return (): BotBrain => {
     let seen = 0;
-    let ready: ReturnType<typeof toInputSample> | undefined;
+    let ready: BotIntent | undefined;
     return {
       observe() {
         seen++;
-        if (seen % thinkTicks === 0) ready = toInputSample({ moveX: 1, moveY: 0, aimRadians: 0 });
+        if (seen % thinkTicks === 0) ready = { moveX: 1, moveY: 0, aimRadians: 0 };
       },
       sample() {
         counters.samples++;

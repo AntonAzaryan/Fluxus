@@ -9,6 +9,7 @@
  * dev-сборка вкладки и нагрузочный прогон node пользуются одним кодом.
  */
 import { botWorkerInit, type BotWorkerSeat, type MessageChannelLike, type PortConnections, type RawPort } from '../assembly.js';
+import type { WorldViewNames } from '../worldView.js';
 import type { PhysicsOptions, SceneDef, VisibilityOptions } from '@game-mvp/core';
 
 /** Структурный минимум воркера: только отправка сообщения с переносом портов. */
@@ -28,6 +29,7 @@ export interface AttachBotsOptions {
   readonly scene: SceneDef;
   readonly physics?: PhysicsOptions;
   readonly visibility?: VisibilityOptions;
+  readonly names?: WorldViewNames;
 }
 
 /**
@@ -45,6 +47,7 @@ export function attachBots(options: AttachBotsOptions): void {
     scene: options.scene,
     ...(options.physics !== undefined ? { physics: options.physics } : {}),
     ...(options.visibility !== undefined ? { visibility: options.visibility } : {}),
+    ...(options.names !== undefined ? { names: options.names } : {}),
   });
   options.worker.postMessage(init, ports);
 }

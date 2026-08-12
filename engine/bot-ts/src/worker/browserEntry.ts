@@ -11,7 +11,8 @@
  * ```ts
  * const worker = new Worker(new URL('.../browserEntry.ts', import.meta.url), { type: 'module' });
  * const channel = new MessageChannel();
- * const botPort = connections.open(channel);        // серверный конец — MatchHost
+ * const botPort = connections.open(channel);        // серверный конец ушёл MatchHost,
+ *                                                   // вернулся ботский
  * worker.postMessage(botWorkerInit({ ..., ports: [botPort] }), [botPort as MessagePort]);
  * ```
  */

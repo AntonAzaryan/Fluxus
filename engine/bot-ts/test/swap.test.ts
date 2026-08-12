@@ -59,9 +59,12 @@ describe('замена реализации мозга — замена сбор
   });
 
   it('реестр разворачивает имя мозга в фабрику — так его выбирает воркер', () => {
+    const assembly = { center: { x: 0, y: 0 } };
     for (const kind of BRAIN_KINDS) {
-      expect(typeof brainFactoryByKind(kind)).toBe('function');
+      expect(typeof brainFactoryByKind(kind, assembly)).toBe('function');
     }
-    expect(() => brainFactoryByKind('ml' as (typeof BRAIN_KINDS)[number])).toThrow(/неизвестный мозг/);
+    expect(() =>
+      brainFactoryByKind('ml' as (typeof BRAIN_KINDS)[number], assembly),
+    ).toThrow(/неизвестный мозг/);
   });
 });

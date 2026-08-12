@@ -137,7 +137,10 @@ export function parseBotProfile(input: unknown, source = 'профиль бот�
   const root = record(input, source, findings);
 
   const schema = num(root, 'schema', source, { min: 1, max: 1_000_000, int: true }, findings);
-  if (schema !== BOT_PROFILE_SCHEMA && findings.issues.length === 0) {
+  // Расхождение формы называется ВСЕГДА, а не только когда прочих находок нет:
+  // документ будущей формы шумит несовпадением полей, и именно версия
+  // объясняет этот шум — промолчать о ней значит спрятать причину за следствием.
+  if (schema !== BOT_PROFILE_SCHEMA) {
     findings.issues.push(
       `${source}.schema: ${schema} — реализация читает форму ${BOT_PROFILE_SCHEMA}`,
     );

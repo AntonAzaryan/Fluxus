@@ -30,7 +30,7 @@ import {
   testProfile,
 } from './fixtures.js';
 
-const SELF = { playerId: 'bot-1', slot: 1 };
+const SELF = { playerId: 'bot-1', slot: 1, tickRate: 60 };
 const random = () => brainRandom(7, 'test');
 
 function world(overrides: Partial<PerceivedWorld> = {}): PerceivedWorld {
@@ -328,6 +328,21 @@ describe('микро-слой на Yuka (задача 3.3)', () => {
     // не дрожит каждый тик.
     expect(noisy.step(plan, scene, 5).aimRadians).toBeCloseTo(first, 9);
     expect(noisy.step(plan, scene, 11).aimRadians).not.toBeCloseTo(first, 9);
+  });
+
+  it('шум не накапливается: стоящий без цели бот не проворачивается вокруг себя', () => {
+    const profile = testProfile({ aim: { noiseDegrees: 30, noisePeriodTicks: 3 } });
+    const layer = micro(profile);
+    // Ни врага, ни движения: цель — там, где бот стоит. Прицел обязан дрожать
+    // вокруг одного направления, а не уходить случайным блужданием.
+    const scene = world();
+    const plan = planFor('retreat', scene, profile, { x: 0, y: 0 });
+    const limit = (30 * Math.PI) / 180 + 1e-9;
+    let maxDrift = 0;
+    for (let tick = 0; tick < 200; tick++) {
+      maxDrift = Math.max(maxDrift, Math.abs(layer.step(plan, scene, tick).aimRadians));
+    }
+    expect(maxDrift).toBeLessThanOrEqual(limit);
   });
 });
 

@@ -24,6 +24,7 @@ import {
   settle,
   stepMatch,
   testProfile,
+  TICK_RATE,
 } from './fixtures.js';
 
 interface Recorded {
@@ -74,10 +75,14 @@ describe('мозг конструируется без ссылки на мир 
     expect(recorded.args).toHaveLength(1);
     const [call] = recorded.args;
     expect(call!.count).toBe(2);
-    // «Кто я» — две скалярные величины и ничего больше: передать мир этой
-    // подписью нельзя, даже задавшись целью (BOT-3).
-    expect(Object.keys(call!.self).sort()).toEqual(['playerId', 'slot']);
-    expect(call!.self).toEqual({ playerId: 'bot-1', slot: 1 });
+    // «Кто я» — три скалярные величины и ничего больше, и все три пришли из
+    // `Welcome` собственного клиента: передать мир этой подписью нельзя, даже
+    // задавшись целью (BOT-3).
+    expect(Object.keys(call!.self).sort()).toEqual(['playerId', 'slot', 'tickRate']);
+    expect(call!.self).toEqual({ playerId: 'bot-1', slot: 1, tickRate: TICK_RATE });
+    for (const value of Object.values(call!.self)) {
+      expect(['string', 'number']).toContain(typeof value);
+    }
     // Профиль — документ контента и ничего кроме: сериализуется целиком, то
     // есть ссылке на живой мир в нём взяться неоткуда (BOT-6).
     expect(JSON.parse(JSON.stringify(call!.profile))).toEqual(call!.profile);

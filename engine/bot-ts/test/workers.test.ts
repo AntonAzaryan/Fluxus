@@ -13,12 +13,13 @@
  */
 import { MessageChannel } from 'node:worker_threads';
 import { afterEach, describe, expect, it } from 'vitest';
+import { fixed, query, world as coreWorld } from '@game-mvp/core';
 import { MatchHost, MatchServer } from '@game-mvp/net';
 import { PortConnections, botWorkerInit, isBotWorkerInit } from '../src/assembly.js';
 import { attachBots } from '../src/worker/spawn.js';
 import { startBotWorker } from '../src/worker/botWorker.js';
 import type { BotHost } from '../src/host.js';
-import { BUILD_ID, duelConfig, testProfile } from './fixtures.js';
+import { BUILD_ID, duelConfig, duelScene, testProfile } from './fixtures.js';
 
 const channels: MessageChannel[] = [];
 
@@ -92,6 +93,73 @@ describe('матч, заполненный ботами через порты (B
 
     bots.dispose();
     await matchHost.stop();
+  });
+});
+
+describe('данные сцены доезжают до мозга сборкой (BOT-6, ARENA-1, NTR-7)', () => {
+  it('арена со смещённым центром и темп 30 Гц: бот идёт в НАСТОЯЩИЙ центр', async () => {
+    // Центр арены живёт в ассете сцены, а не в компоненте: возьми мозг
+    // умолчание «начало координат» — и «иди в центр» увело бы его в угол.
+    const scene = duelScene({ centerX: 6, centerY: 6, radius: 20 });
+    const config = duelConfig({ scene, players: ['bot-1'], tickRate: 30, snapshotRate: 30 });
+    const server = new MatchServer(config);
+    const connections = new PortConnections();
+    const matchHost = new MatchHost(server, connections);
+    const port = openChannel(connections);
+
+    const bots = startBotWorker(
+      botWorkerInit({
+        seats: [{ playerId: 'bot-1', brain: 'scripted', profile: testProfile() }],
+        ports: [port],
+        buildId: BUILD_ID,
+        sceneRef: 'duel',
+        scene,
+        physics: {},
+        visibility: {},
+      }),
+      { autoRun: false },
+    );
+    await flush();
+    for (let i = 0; i < 60; i++) {
+      bots.step();
+      await flush();
+      matchHost.step();
+      await flush();
+    }
+
+    // Темп матча доехал до бота из `Welcome`, а не из константы 60 (NTR-7).
+    expect(bots.seats[0]!.client.pacing?.tickRate).toBe(30);
+
+    const snapshot = server.snapshot();
+    const [hero] = [...query(snapshot.world, { all: ['Player', 'Position'] })];
+    const x = fixed.toFloat(coreWorld.getField(snapshot.world, hero!, 'Position', 'x'));
+    const y = fixed.toFloat(coreWorld.getField(snapshot.world, hero!, 'Position', 'y'));
+    // Стартовал в начале координат — ушёл в сторону (6, 6), а не остался.
+    expect(x).toBeGreaterThan(0.5);
+    expect(y).toBeGreaterThan(0.5);
+    expect(Math.abs(x - y)).toBeLessThan(0.5);
+
+    bots.dispose();
+    await matchHost.stop();
+  });
+
+  it('битый профиль в init-сообщении отвергается на конструировании (BOT-6)', () => {
+    const config = duelConfig({ players: ['bot-1'] });
+    const connections = new PortConnections();
+    const port = openChannel(connections);
+    const broken = { ...testProfile(), aggression: 12 };
+    expect(() =>
+      startBotWorker(
+        botWorkerInit({
+          seats: [{ playerId: 'bot-1', brain: 'classic', profile: broken }],
+          ports: [port],
+          buildId: BUILD_ID,
+          sceneRef: 'duel',
+          scene: config.scene,
+        }),
+        { autoRun: false },
+      ),
+    ).toThrow(/bot-1[\s\S]*aggression/);
   });
 });
 

@@ -19,6 +19,7 @@ import { shellPort } from '@game-mvp/client/protocol';
 import { portTransport } from '@game-mvp/client/portTransport';
 import type { BotProfile } from './profile.js';
 import type { BrainKind } from './brains/registry.js';
+import type { WorldViewNames } from './worldView.js';
 
 /** Сырой порт до оборачивания в `ShellPort`: DOM `MessagePort` или node-порт. */
 export type RawPort = Parameters<typeof shellPort>[0];
@@ -92,6 +93,11 @@ export interface BotWorkerInit {
   /** Зависимости сборки мира (NTR-14) — те же значения, что у сервера матча. */
   readonly physics?: PhysicsOptions;
   readonly visibility?: VisibilityOptions;
+  /**
+   * Имена компонентов сцены (TICK-4), если они отличаются от умолчаний клиента.
+   * Центр арены сюда не входит: он читается из самой сцены (`arena` ARENA-1).
+   */
+  readonly names?: WorldViewNames;
 }
 
 /** Узнавание init-сообщения на входе воркера: чужое сообщение — не бот. */

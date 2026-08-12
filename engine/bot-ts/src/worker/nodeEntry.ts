@@ -7,7 +7,8 @@
  * ```ts
  * const worker = new Worker(new URL('.../nodeEntry.js', import.meta.url));
  * const channel = new MessageChannel();
- * const botPort = connections.open(channel);        // серверный конец — MatchHost
+ * const botPort = connections.open(channel);        // серверный конец ушёл MatchHost,
+ *                                                   // вернулся ботский
  * worker.postMessage(botWorkerInit({ ..., ports: [botPort] }), [botPort as MessagePort]);
  * ```
  */

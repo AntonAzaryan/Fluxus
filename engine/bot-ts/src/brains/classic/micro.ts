@@ -25,8 +25,10 @@ const DEGREES = Math.PI / 180;
 
 export interface MicroOptions {
   /**
-   * Длительность тика, секунды: шаг интегрирования steering. Параметр сборки —
-   * темп матча приезжает клиенту в `Welcome` (NTR-5), а не задаётся дизайнером.
+   * Длительность тика, секунды: шаг интегрирования steering. Величина матча, а
+   * не дизайнерская ручка, — темп приезжает клиенту в `Welcome` (NTR-5, NTR-7)
+   * и доходит сюда через `BotSelf.tickRate`. На 30 Гц шаг вдвое длиннее, и
+   * зашитая константа сделала бы микро-слой вдвое резвее реальности.
    */
   readonly tickSeconds: number;
 }
@@ -46,7 +48,13 @@ export class MicroLayer {
   private readonly arrive = new ArriveBehavior();
   private aimNoise = 0;
   private noiseUntilTick = -Infinity;
-  private aimRadians = 0;
+  /**
+   * Направление прицела БЕЗ шума. Хранится чистым намеренно: сложи шум обратно
+   * в базу — и ошибка начнёт накапливаться, а неподвижный бот без цели за пару
+   * сотен тиков провернётся вокруг себя (случайное блуждание вместо дрожания
+   * руки).
+   */
+  private baseAim = 0;
 
   constructor(profile: BotProfile, random: BrainRandom, options: MicroOptions) {
     this.profile = profile;
@@ -78,14 +86,13 @@ export class MicroLayer {
     const moveY = this.vehicle.velocity.z * speed;
 
     const aimTarget = plan.aim;
-    const base =
+    this.baseAim =
       aimTarget !== undefined
         ? Math.atan2(aimTarget.y - world.self.y, aimTarget.x - world.self.x)
         : moveX === 0 && moveY === 0
-          ? this.aimRadians
+          ? this.baseAim
           : Math.atan2(moveY, moveX);
-    this.aimRadians = base + this.noise(tick);
-    return { moveX, moveY, aimRadians: this.aimRadians };
+    return { moveX, moveY, aimRadians: this.baseAim + this.noise(tick) };
   }
 
   /**

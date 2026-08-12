@@ -13,9 +13,9 @@
  * `InputSample`, а он — канонические данные, от которых реплей воспроизводится
  * без единого запуска мозга.
  */
-import type { ClientStep, InputSample } from '@game-mvp/net';
+import type { ClientStep } from '@game-mvp/net';
 import type { BotBrain, BotBrainFactory, BotSelf } from '../../brain.js';
-import { toInputSample } from '../../boundary.js';
+import type { BotIntent } from '../../boundary.js';
 import type { BotProfile } from '../../profile.js';
 import type { WorldViewNames } from '../../worldView.js';
 import { MicroLayer } from './micro.js';
@@ -29,13 +29,18 @@ export interface ClassicBrainOptions {
   /**
    * Центр арены. Радиус мозг читает из состояния (`arena` ARENA-1), а центр в
    * компонентах не живёт вовсе — он в ассете сцены, поэтому приезжает сборкой.
+   * Умолчание — начало координат: на арене со смещённым центром сборка обязана
+   * передать настоящий, иначе «отступить к центру» уводит бота за край.
    */
   readonly center?: ArenaCenter;
-  /** Длительность тика матча, секунды: шаг интегрирования steering. */
+  /**
+   * Длительность тика, секунды — ПЕРЕОПРЕДЕЛЕНИЕ. Обычно её знать не нужно:
+   * темп матча приезжает клиенту в `Welcome` (NTR-7) и достаётся мозгу в
+   * `BotSelf.tickRate`. Поле оставлено прогонам, которые двигают бота сами.
+   */
   readonly tickSeconds?: number;
 }
 
-const DEFAULT_TICK_SECONDS = 1 / 60;
 const DEFAULT_SEED = 1;
 
 class ClassicBrain implements BotBrain {
@@ -45,7 +50,7 @@ class ClassicBrain implements BotBrain {
   private readonly perception: Perception;
   private readonly utility: UtilityLayer;
   private readonly micro: MicroLayer;
-  private intent: InputSample | undefined;
+  private intent: BotIntent | undefined;
   private abilityReadyAtTick = -Infinity;
 
   constructor(profile: BotProfile, self: BotSelf, options: ClassicBrainOptions) {
@@ -58,7 +63,10 @@ class ClassicBrain implements BotBrain {
     this.perception = new Perception(profile, self, this.random, options.names ?? {});
     this.utility = new UtilityLayer(profile, this.random);
     this.micro = new MicroLayer(profile, this.random, {
-      tickSeconds: options.tickSeconds ?? DEFAULT_TICK_SECONDS,
+      // Настоящий темп матча, а не константа: на 30 Гц шаг интегрирования
+      // steering вдвое длиннее, и зашитые 60 сделали бы микро-слой вдвое
+      // резвее реальности (NTR-7).
+      tickSeconds: options.tickSeconds ?? 1 / self.tickRate,
     });
   }
 
@@ -66,7 +74,7 @@ class ClassicBrain implements BotBrain {
     this.perception.observe(step);
   }
 
-  sample(tick: number): InputSample | undefined {
+  sample(tick: number): BotIntent | undefined {
     const world = this.perception.perceive(tick);
     if (world === undefined) return this.intent;
     const abilityReady = tick >= this.abilityReadyAtTick;
@@ -83,12 +91,12 @@ class ClassicBrain implements BotBrain {
       this.abilityReadyAtTick =
         tick + cooldownTicks + (jitter === 0 ? 0 : this.random.below(jitter + 1));
     }
-    this.intent = toInputSample({
+    this.intent = {
       moveX: micro.moveX,
       moveY: micro.moveY,
       aimRadians: micro.aimRadians,
       buttons: fire ? 1 << this.profile.ability.button : 0,
-    });
+    };
     return this.intent;
   }
 }

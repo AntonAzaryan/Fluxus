@@ -32,6 +32,7 @@ import {
   type Transport,
 } from '@game-mvp/net';
 import type { BotBrain, BotBrainFactory } from './brain.js';
+import { toInputSample } from './boundary.js';
 import type { BotProfile } from './profile.js';
 
 export interface BotSeatOptions {
@@ -56,23 +57,26 @@ export interface BotSeatOptions {
 /**
  * Один бот: клиент матча, его хост и мозг за контрактом.
  *
- * Мозг конструируется не в конструкторе, а на первом шаге, где известен слот:
- * своя сущность опознаётся в персональном снапшоте полем `Player.slot`
- * (`tick-loop` TICK-5), а слот приезжает в `Welcome` (NTR-5). Ждать его —
- * честнее, чем выдумывать: до `Welcome` наблюдать ещё нечего, состояния клиент
- * не отдаёт вовсе.
+ * Мозг конструируется не в конструкторе, а на первом шаге после `Welcome`
+ * (NTR-5): оттуда приезжают обе величины, которые мозг обязан знать о матче, —
+ * слот, которым опознаётся своя сущность в персональном снапшоте (`tick-loop`
+ * TICK-5), и темп, по которому считается всё, что мозг интегрирует по времени
+ * (NTR-7). Ждать их честнее, чем выдумывать: до `Welcome` наблюдать ещё нечего,
+ * состояния клиент не отдаёт вовсе.
  */
 export class BotSeat {
   readonly playerId: string;
   readonly client: MatchClient;
   readonly host: ClientHost;
 
+  private readonly transport: Transport;
   private readonly factory: BotBrainFactory;
   private readonly profile: BotProfile;
   private current: BotBrain | undefined;
 
   constructor(options: BotSeatOptions) {
     this.playerId = options.playerId;
+    this.transport = options.transport;
     this.factory = options.brain;
     this.profile = options.profile;
     this.client = new MatchClient({
@@ -99,6 +103,15 @@ export class BotSeat {
     return this.current;
   }
 
+  /**
+   * Бот доиграл: канал закрыт с той или с этой стороны либо клиент закрылся сам
+   * (`End`, отказ хендшейка, разрыв). Читается хостом, чтобы остановить темп:
+   * тикать мёртвого клиента — работа без потребителя.
+   */
+  get closed(): boolean {
+    return this.transport.isClosed || this.client.phase === 'closed';
+  }
+
   start(): void {
     this.host.start();
   }
@@ -118,29 +131,51 @@ export class BotSeat {
     return step;
   }
 
+  /**
+   * Уход бота из матча: канал закрывается ЗДЕСЬ и явно.
+   *
+   * Молча брошенное соединение сервер держал бы до порога молчания слота
+   * (NTR-6), подставляя за бота predicted-фреймы, а на портах утёк бы сам порт.
+   * Уход человека выглядит для сервера так же — закрытым каналом.
+   */
   dispose(): void {
     this.host.stop();
     this.current?.dispose?.();
     this.current = undefined;
+    if (!this.transport.isClosed) this.transport.close('bot-disposed');
   }
 
   /**
    * Съём ввода на тик (BOT-2): синхронный и без ожидания. Мозг, не успевший
    * решить, отдаёт `undefined` — каденс отправки клиента не сбивается, а
    * опоздавшее намерение уедет вводом на более поздний тик, как запоздавший
-   * ввод человека (NTR-6).
+   * ввод человека (NTR-7).
+   *
+   * Здесь же и единственная точка ограничения доменов (BOT-5, INP-3): мозг
+   * отдаёт намерение, ввод из него делает `toInputSample`. Другого пути от
+   * мозга к клиенту нет, поэтому «обойти клампы бот не может» — свойство
+   * конструкции, а не договорённости.
    */
   private sampleInput(tick: number): InputSample | undefined {
-    return this.ensureBrain()?.sample(tick);
+    const intent = this.ensureBrain()?.sample(tick);
+    return intent === undefined ? undefined : toInputSample(intent);
   }
 
   private ensureBrain(): BotBrain | undefined {
     if (this.current !== undefined) return this.current;
     const slot = this.client.slot;
-    if (slot === undefined) return undefined;
+    const pacing = this.client.pacing;
+    // Слот и темп приезжают одним `Welcome` (NTR-5) — потому мозг и строится
+    // здесь, а не в конструкторе: до хендшейка обе величины неизвестны, а
+    // выдумывать их значило бы дать мозгу неправду о матче.
+    if (slot === undefined || pacing === undefined) return undefined;
     // Мозгу передаётся профиль и то, кто он в матче, — и ничего больше (BOT-3):
     // ссылки на мир сервера в этих аргументах нет и появиться ей неоткуда.
-    this.current = this.factory(this.profile, { playerId: this.playerId, slot });
+    this.current = this.factory(this.profile, {
+      playerId: this.playerId,
+      slot,
+      tickRate: pacing.tickRate,
+    });
     return this.current;
   }
 }
@@ -170,9 +205,20 @@ export class BotHost {
     for (const seat of this.seatList) seat.start();
   }
 
+  /**
+   * Все ли боты хоста доиграли: матч кончился, каналы закрыты. Пустой хост
+   * доигравшим не считается — ботов ему ещё могут добавить.
+   */
+  get finished(): boolean {
+    return this.seatList.length > 0 && this.seatList.every((seat) => seat.closed);
+  }
+
   /** Один шаг всех ботов. Отдельно от `run()`, чтобы тест двигал матч сам (NTR-12). */
   step(): void {
-    for (const seat of this.seatList) seat.step();
+    for (const seat of this.seatList) {
+      if (seat.closed) continue;
+      seat.step();
+    }
   }
 
   /** Собственный темп: частота из `Welcome` первого бота, до него — 60 Гц. */
@@ -201,6 +247,11 @@ export class BotHost {
       const actual = this.seatList[0]?.client.pacing?.tickRate;
       if (actual !== undefined && actual !== this.timerRate) this.ensureTimer(actual);
       this.step();
+      // Темп ведёт хост, а не `ClientHost.run()` (см. `BotSeat.step`), поэтому
+      // и самоостановка клиента на закрытии канала здесь не сработала бы:
+      // остановиться обязан тот, кто тикает. Без этого воркер доигравшего матча
+      // крутил бы таймер на 60 Гц до конца процесса.
+      if (this.finished) this.stop();
     }, 1000 / rate);
   }
 }

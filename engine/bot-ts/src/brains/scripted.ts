@@ -12,12 +12,17 @@
  * человечность скриптовому мозгу не нужна, его назначение — предсказуемость.
  */
 import type { BotBrain, BotBrainFactory, BotSelf } from '../brain.js';
-import { toInputSample, type BotIntent } from '../boundary.js';
+import type { BotIntent } from '../boundary.js';
 import type { BotProfile } from '../profile.js';
 import { readWorldView, type WorldViewNames } from '../worldView.js';
-import type { ClientStep, InputSample } from '@game-mvp/net';
+import type { ClientStep } from '@game-mvp/net';
 
-/** Куда идти. Центр арены — (0, 0): начало координат сцены (`arena` ARENA-1). */
+/**
+ * Куда идти. Умолчание — начало координат, но сборка обязана передавать сюда
+ * настоящий центр арены сцены (`arena` ARENA-1): он живёт в ассете сцены, а не
+ * в компоненте, и на арене со смещённым центром «иди в центр» без него означало
+ * бы «иди в начало координат» — то есть за край.
+ */
 export interface ScriptedTarget {
   readonly x: number;
   readonly y: number;
@@ -63,10 +68,11 @@ class WalkToPointBrain implements BotBrain {
     };
   }
 
-  sample(_tick: number): InputSample | undefined {
+  sample(_tick: number): BotIntent | undefined {
     // Ввода нет, пока не было ни одного наблюдения: молчание на границе
-    // выражается отсутствием кадра, а не нулевым кадром (BOT-2).
-    return this.intent === undefined ? undefined : toInputSample(this.intent);
+    // выражается отсутствием кадра, а не нулевым кадром (BOT-2). Клампы и
+    // квантование — забота хостинга (BOT-5), мозг их не касается.
+    return this.intent;
   }
 }
 

@@ -28,7 +28,16 @@ export const BUILD_ID = 'bot-build-0001';
 export const TICK_RATE = 60;
 export const STEP: number = fixed.fromInt(1);
 
-export function duelScene(): SceneDef {
+/** Арена сцены (ARENA-1): центр живёт в ассете, а не в компоненте. */
+export interface ArenaSpec {
+  readonly centerX: number;
+  readonly centerY: number;
+  readonly radius: number;
+}
+
+const DEFAULT_ARENA: ArenaSpec = { centerX: 0, centerY: 0, radius: 20 };
+
+export function duelScene(arena: ArenaSpec = DEFAULT_ARENA): SceneDef {
   return {
     components: [
       { name: 'Player', fields: { slot: 'i32' } },
@@ -123,7 +132,10 @@ export function duelScene(): SceneDef {
         ],
       },
     ],
-    arena: { center: { x: 0, y: 0 }, radius: fixed.fromInt(20) },
+    arena: {
+      center: { x: fixed.fromInt(arena.centerX), y: fixed.fromInt(arena.centerY) },
+      radius: fixed.fromInt(arena.radius),
+    },
     capacity: 16,
   };
 }

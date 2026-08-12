@@ -32,16 +32,16 @@ describe('референсные профили контента (BOT-6)', () =>
     }
   });
 
-  it('лёгкий и сложный различаются только числами: код мозга один', () => {
-    const easy = parseBotProfile(read('easy'), 'easy');
-    const normal = parseBotProfile(read('normal'), 'normal');
-    // Человечность лёгкого профиля выражена именно теми ручками, ради которых
-    // BOT-6 написан: реакция медленнее, прицел грязнее, решения реже.
-    expect(easy.reaction.delayTicks).toBeGreaterThan(normal.reaction.delayTicks);
-    expect(easy.aim.noiseDegrees).toBeGreaterThan(normal.aim.noiseDegrees);
-    expect(easy.decision.intervalTicks).toBeGreaterThan(normal.decision.intervalTicks);
-    expect(easy.aggression).toBeLessThan(normal.aggression);
-    expect(Object.keys(easy).sort()).toEqual(Object.keys(normal).sort());
+  /**
+   * Сравнений «лёгкий медленнее сложного» здесь нет намеренно: это числа,
+   * которые тюнит геймдизайнер (BOT-6), и утверждение о их порядке связало бы
+   * прогон движка с балансом — ровно та связь, которую CONT-4 запрещает.
+   * Проверяется форма документа и то, что реализация его понимает.
+   */
+  it.each(['easy', 'normal'])('%s переживает round-trip разбора', (name) => {
+    const document = read(name);
+    const profile = parseBotProfile(document, name);
+    expect(parseBotProfile(JSON.parse(JSON.stringify(profile)), name)).toEqual(profile);
   });
 });
 
@@ -54,6 +54,12 @@ describe('валидация профиля на конструировании 
 
   it('чужая версия формы документа отвергается', () => {
     expect(() => parseBotProfile({ ...valid(), schema: 99 })).toThrow(/schema/);
+  });
+
+  it('версия формы называется и тогда, когда полей тоже не хватает', () => {
+    // Документ будущей формы шумит несовпадением полей, и объясняет этот шум
+    // именно версия: промолчать о ней значит спрятать причину за следствием.
+    expect(() => parseBotProfile({ schema: 99, name: 'future' })).toThrow(/schema: 99/);
   });
 
   it('бит способности вне ширины `buttons` отвергается (TICK-2)', () => {

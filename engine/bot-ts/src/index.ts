@@ -49,7 +49,7 @@ export type { ScriptedBrainOptions, ScriptedTarget } from './brains/scripted.js'
 export { classicBrain } from './brains/classic/classicBrain.js';
 export type { ClassicBrainOptions } from './brains/classic/classicBrain.js';
 export { brainFactoryByKind, BRAIN_KINDS } from './brains/registry.js';
-export type { BrainKind } from './brains/registry.js';
+export type { BrainAssembly, BrainKind } from './brains/registry.js';
 
 // воркер-стороны (design D3)
 export { startBotWorker } from './worker/botWorker.js';
