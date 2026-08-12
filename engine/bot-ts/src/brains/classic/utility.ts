@@ -225,6 +225,10 @@ export class UtilityLayer {
     if (tick < this.nextDecisionTick) return this.chosen;
     const scores = scoreBehaviors(world, this.profile, options);
     this.lastScores = scores;
+    // Ноль как нижняя граница, а не -Infinity: поведение с нулевой полезностью
+    // не выбирается вовсе, и когда очков не набрал никто — врага не видно, край
+    // далеко, снаряды мимо, — остаётся умолчание «к центру»: там бот видит
+    // больше и не падает с арены.
     let best: BotBehavior = 'retreat';
     let bestScore = 0;
     for (const behavior of BOT_BEHAVIORS) {
@@ -234,8 +238,6 @@ export class UtilityLayer {
         best = behavior;
       }
     }
-    // Ни одно поведение не набрало очков — врага не видно, край далеко, снаряды
-    // мимо. Умолчание — к центру: там бот видит больше и не падает с арены.
     this.chosen = best;
     const { intervalTicks, jitterTicks } = this.profile.decision;
     const jitter = jitterTicks === 0 ? 0 : this.random.below(jitterTicks + 1);
