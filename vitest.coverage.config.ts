@@ -32,6 +32,7 @@ export default defineConfig({
       'engine/assets-ts',
       'engine/client-ts',
       'engine/hud-ts',
+      'engine/bot-ts',
       'engine/integration-ts',
     ].map((pkg) => root + pkg),
     coverage: {
