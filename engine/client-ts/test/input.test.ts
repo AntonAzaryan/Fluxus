@@ -29,7 +29,7 @@ import {
 } from '../src/index.js';
 import demoBindings from '../demo/bindings.json';
 
-const BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
+const BITS = { cast: 0, shield: 1, dodge: 2, jump: 3, catch: 4 } as const;
 
 const makeSampler = (): InputSampler => new InputSampler({ actionBits: BITS });
 
@@ -75,8 +75,8 @@ describe('InputSampler: латчинг фронтов (INP-2)', () => {
     sampler.add(a);
     sampler.add(b);
     a.press!('cast');
-    b.press!('kill');
-    expect(sampler.sample().buttons).toBe((1 << BITS.cast) | (1 << BITS.kill));
+    b.press!('shield');
+    expect(sampler.sample().buttons).toBe((1 << BITS.cast) | (1 << BITS.shield));
   });
 
   it('неизвестное действие — ошибка конфигурации, не тишина', () => {
@@ -247,9 +247,9 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
     const source = kb();
     const pressed: string[] = [];
     source.start((a) => pressed.push(a));
-    source.handleKeyDown('KeyK');
-    source.handleKeyDown('KeyK', true);
-    expect(pressed).toEqual(['kill']);
+    source.handleKeyDown('KeyE');
+    source.handleKeyDown('KeyE', true);
+    expect(pressed).toEqual(['shield']);
   });
 
   it('зажатая клавиша держит бит все тики, отпускание — falling edge (INP-2)', () => {
@@ -266,10 +266,10 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
     const sampler = makeSampler();
     const source = kb();
     sampler.add(source);
-    source.handleKeyDown('KeyK');
-    expect(sampler.sample().buttons).toBe(1 << BITS.kill);
-    source.handleKeyDown('KeyK', true);
-    expect(sampler.sample().buttons).toBe(1 << BITS.kill);
+    source.handleKeyDown('KeyE');
+    expect(sampler.sample().buttons).toBe(1 << BITS.shield);
+    source.handleKeyDown('KeyE', true);
+    expect(sampler.sample().buttons).toBe(1 << BITS.shield);
   });
 
   it('потеря фокуса окна сбрасывает удержания — залипания нет (INP-5)', () => {

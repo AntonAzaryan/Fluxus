@@ -41,7 +41,20 @@ export const PLAYER_ID = 'p1';
  * (`LocomotionSystem` — индексы) и сэмплер ввода (`InputSampler.actionBits`);
  * раскладку кнопок ядро не знает (LOC-1).
  */
-export const ACTION_BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
+export const ACTION_BITS = { cast: 0, shield: 1, dodge: 2, jump: 3, catch: 4 } as const;
+
+/**
+ * Компонент селективного лока действий и бит «манёвры запрещены» (LOC-7).
+ * Знание СБОРКИ, как и раскладка битов кнопок: ядру имя компонента и смысл
+ * бита неизвестны, а системы сцены (`FireballCast`, `CatchCast`) ставят ровно
+ * эту маску, пока герой копит заряд или держит пойманный снаряд.
+ *
+ * Те же два значения едут в `LocomotionSystem` матча полем `locomotion`
+ * документа `content/matches/duel.match.json` (NTR-14): сборка одиночного
+ * прогона и сборка матча обязаны собирать локомоушен одинаково, иначе локи
+ * в них разъедутся при одной и той же сцене.
+ */
+export const ACTION_LOCK = { component: 'ActionLock', maneuverBit: 0 } as const;
 
 /**
  * Компоненты-состояния, зеркалируемые в `EntityView.states` (CAM-6): порядок
@@ -52,11 +65,18 @@ export const ACTION_BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
  * `effects.byState` (REND-23). Два списка разошлись бы молча: эффект просто не
  * включался бы, а автор увидел бы только его отсутствие.
  *
- * `Shielded` — имя компонента щита, который поставит геймплейная фаза; пока
- * его в сцене нет, бит не выставляется никогда, и сфера щита не появляется.
- * Объявлено заранее ровно затем, чтобы механизм был готов до контента.
+ * Состав — состояния боя сцены демо: `Falling` (провал в пустоту), `Shielded`
+ * (щит держит урон), `Charging` (копится заряд фаербола), `Catching` (открыта
+ * зона перехвата), `Carrying` (пойманный снаряд в руках). Колонка `flags`
+ * вмещает шесть (`MAX_STATE_COMPONENTS`), поэтому запас ещё есть.
  */
-export const STATE_COMPONENTS: readonly string[] = Object.freeze(['Falling', 'Shielded']);
+export const STATE_COMPONENTS: readonly string[] = Object.freeze([
+  'Falling',
+  'Shielded',
+  'Charging',
+  'Catching',
+  'Carrying',
+]);
 
 /**
  * Полный путь снаряда в тиках — поле `Lifetime.ticks` prefab'а `Fireball`
@@ -64,7 +84,7 @@ export const STATE_COMPONENTS: readonly string[] = Object.freeze(['Falling', 'Sh
  * (REND-12), а рендер по ней рисует полётную дугу. Расходится с prefab'ом —
  * расходится только дуга: симуляция этого числа здесь не читает.
  */
-export const FIREBALL_LIFETIME_TICKS = 50;
+export const FIREBALL_LIFETIME_TICKS = 90;
 
 /**
  * Имена доставляемых статов демо (`match-hud` HUD-8) — общий словарь двух
@@ -72,10 +92,9 @@ export const FIREBALL_LIFETIME_TICKS = 50;
  * биндятся на те же имена в композиции HUD (`hud.ts`). Имена принадлежат
  * СБОРКЕ, а не ядру: кодек и HUD их смысла не знают.
  *
- * Часть статов приезжает не всегда: компонентов здоровья, кулдаунов и счёта в
- * сцене демо ещё нет — их добавит геймплейная фаза. Виджет, не нашедший стата,
- * показывает пустое состояние, а не ноль (HUD-8), поэтому объявление их здесь
- * заранее ничего не ломает и ничего не выдумывает.
+ * Стат едет только у той сущности, у которой источник есть: снаряд без
+ * `Health` не везёт ни `hp`, ни `hpMax`, и виджет видит пустое состояние, а не
+ * выдуманный ноль (HUD-8).
  */
 export const STATS = {
   /** Слот игрока — по нему счётчики раскладываются по игрокам. */
@@ -88,8 +107,13 @@ export const STATS = {
   cooldownMax: (ability: string): string => `${ability}.cdMax`,
 } as const;
 
-/** Способности демо, у которых виджет показывает кулдаун (те же имена, что INP-4). */
-export const COOLDOWN_ABILITIES: readonly string[] = Object.freeze(['cast', 'dodge', 'jump']);
+/**
+ * Способности демо, у которых виджет показывает кулдаун (те же имена, что
+ * INP-4, и те же поля компонента `Cooldowns` сцены). Уклон и прыжок в списке
+ * не значатся: перезарядки у них нет, и оверлей у их кнопок был бы вечно
+ * пустым — на экране их держат собственные кнопки раскладки (`bindings.json`).
+ */
+export const COOLDOWN_ABILITIES: readonly string[] = Object.freeze(['cast', 'shield', 'catch']);
 
 // ------------------------------------------------------------------- сборка
 
@@ -116,8 +140,15 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   // Передвижение героя: разгон/торможение и манёвры уклона, переката и прыжка
   // (LOC-1..6). Конфигурация — поля компонента `Locomotion` у prefab'а Hero,
   // здесь только раскладка кнопок демо.
+  // Селективный лок манёвров (LOC-7) — те же имя компонента и бит, что у
+  // сборки матча: их держит `ACTION_LOCK`, и обе половины читают его.
   scene.systems.register(
-    new LocomotionSystem({ dodgeButton: ACTION_BITS.dodge, jumpButton: ACTION_BITS.jump }),
+    new LocomotionSystem({
+      dodgeButton: ACTION_BITS.dodge,
+      jumpButton: ACTION_BITS.jump,
+      lockComponent: ACTION_LOCK.component,
+      maneuverLockBit: ACTION_LOCK.maneuverBit,
+    }),
   );
   // Физика ядра: статика обрывов из террейна — игрок не сойдёт с плато мимо
   // рампы (PHYS-8, TERR-5). Снаряд без коллайдера — летит поверх обрывов.
