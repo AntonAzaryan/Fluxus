@@ -64,12 +64,28 @@ export interface Finding {
   rule:
     | 'duplicate-id'
     | 'dangling'
+    | 'dangling-code'
     | 'attribution-mismatch'
     | 'missing-modality'
     | 'unmapped-capability'
     | 'content-boundary';
   where: string;
   message: string;
+}
+
+export type CodeCategory = 'src' | 'test' | 'generated';
+
+export interface CodeMention {
+  id: string;
+  file: string;
+  line: number;
+  category: CodeCategory;
+}
+
+export interface CodeIndex {
+  roots: string[];
+  mentions: CodeMention[];
+  byId: Map<string, CodeMention[]>;
 }
 
 export interface SpecMetrics {
@@ -89,7 +105,13 @@ export interface SpecMetrics {
 
 export declare const DEFAULT_SPECS_DIR: string;
 export declare const DEFAULT_LAYERS_PATH: string;
+export declare const DEFAULT_CODE_ROOTS: string[];
 export declare function buildModel(specsDir?: string): SpecModel;
 export declare function loadLayers(layersPath?: string): LayersConfig;
-export declare function lint(model: SpecModel, layers: LayersConfig): Finding[];
+export declare function buildCodeIndex(roots?: string[]): CodeIndex;
+export declare function lint(
+  model: SpecModel,
+  layers: LayersConfig,
+  codeIndex?: CodeIndex | null,
+): Finding[];
 export declare function metrics(model: SpecModel, layers: LayersConfig): SpecMetrics;

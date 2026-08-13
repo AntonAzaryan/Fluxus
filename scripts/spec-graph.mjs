@@ -12,12 +12,15 @@
  * при апгрейде CLI ловит тест specGraph.test.ts в integration-ts.
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, extname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_SPECS_DIR = join(REPO_ROOT, 'openspec', 'specs');
 export const DEFAULT_LAYERS_PATH = join(REPO_ROOT, 'scripts', 'spec-graph.layers.json');
+export const DEFAULT_CODE_ROOTS = ['engine', 'editor', 'tools', 'scripts'].map((d) =>
+  join(REPO_ROOT, d),
+);
 
 const ID_RE = /\b([A-Z]{2,6}-[0-9]+)\b/g;
 const HEADER_RE = /^### Requirement:\s+([A-Z]{2,6}-[0-9]+)\s*(.*)$/;
@@ -133,10 +136,64 @@ export function loadLayers(layersPath = DEFAULT_LAYERS_PATH) {
   return JSON.parse(readFileSync(layersPath, 'utf8'));
 }
 
+// Расширения, в которых цитируются ID (конвенция репы: комментарии кода,
+// имена тестов, описания в сгенерированных схемах). Python — ради add-on'а.
+const CODE_EXTS = new Set(['.ts', '.mts', '.mjs', '.js', '.py', '.json']);
+// node_modules/dist — чужое; golden — bitwise-эталоны, не код.
+const CODE_SKIP_DIRS = new Set(['node_modules', 'dist', 'golden', '.git']);
+
+/**
+ * Категория файла в индексе кода: `generated` — сгенерированные схемы
+ * (каталог schemas/, правится только через npm run schemas), `test` —
+ * каталоги test(s)/ и файлы *.test.*, остальное — `src`.
+ * Цитата ID в коде — это «где требование упоминается», НЕ «где реализовано»:
+ * отсутствие цитаты не означает отсутствия реализации.
+ */
+function categorize(file) {
+  const parts = file.split(sep);
+  if (parts.includes('schemas')) return 'generated';
+  if (parts.includes('test') || parts.includes('tests') || /\.test\.[a-z]+$/.test(file)) return 'test';
+  return 'src';
+}
+
+/**
+ * Индекс кода: все вхождения паттерна ID в кодовых деревьях. Stateless, как
+ * и граф спек — каждый вызов сканирует дерево заново (сотни файлов,
+ * миллисекунды). Известность префикса и определённость ID здесь не
+ * проверяются — это дело lint().
+ */
+export function buildCodeIndex(roots = DEFAULT_CODE_ROOTS) {
+  const mentions = []; // {id, file, line, category}
+  const byId = new Map(); // id -> mentions[]
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (!CODE_SKIP_DIRS.has(entry.name)) walk(join(dir, entry.name));
+        continue;
+      }
+      if (!CODE_EXTS.has(extname(entry.name))) continue;
+      const file = join(dir, entry.name);
+      const lines = readFileSync(file, 'utf8').split('\n');
+      const category = categorize(file);
+      for (let i = 0; i < lines.length; i++) {
+        for (const m of lines[i].matchAll(ID_RE)) {
+          const mention = { id: m[1], file, line: i + 1, category };
+          mentions.push(mention);
+          if (!byId.has(m[1])) byId.set(m[1], []);
+          byId.get(m[1]).push(mention);
+        }
+      }
+    }
+  };
+  for (const root of roots) if (existsSync(root)) walk(root);
+  return { roots, mentions, byId };
+}
+
 /**
  * Линт-инварианты графа. Возвращает находки; пустой список — дерево зелёное.
  * Классы: dangling, duplicate-id, attribution-mismatch, missing-modality,
- * unmapped-capability, content-boundary.
+ * unmapped-capability, content-boundary; с переданным индексом кода — ещё
+ * dangling-code (код цитирует ID, не определённый ни в одной спеке).
  *
  * Направление ссылок между слоями — НЕ инвариант: на реальном дереве ссылка
  * «вверх» — принятая конвенция прозы (determinism-core перечисляет, что
@@ -146,7 +203,7 @@ export function loadLayers(layersPath = DEFAULT_LAYERS_PATH) {
  * MUST NOT ссылаться на game-content; capability слоя editor-content
  * (редактор и форматы контент-документов) — сама сторона политики, ей можно.
  */
-export function lint(model, layers) {
+export function lint(model, layers, codeIndex = null) {
   const findings = [];
   const { requirements, capabilities, duplicates, dangling, capEdges } = model;
 
@@ -159,7 +216,7 @@ export function lint(model, layers) {
   }
 
   // Висячей считается ссылка с ИЗВЕСТНЫМ префиксом на неопределённый номер
-  // (DET-99 — опечатка). Незнакомый префикс — не ссылка на требование вовсе
+  // (опечатка в номере). Незнакомый префикс — не ссылка на требование вовсе
   // («UTF-8» в прозе матчится паттерном ID, но требованием не является).
   const knownPrefixes = new Set([...requirements.keys()].map((id) => id.split('-')[0]));
   for (const m of dangling) {
@@ -169,6 +226,20 @@ export function lint(model, layers) {
       where: `${m.file}:${m.line}`,
       message: `${m.fromId} ссылается на ${m.toId}, который нигде не определён`,
     });
+  }
+
+  // Та же логика для кода: цитата с известным префиксом, но без определения —
+  // требование удалили/переименовали, а код не догнал.
+  if (codeIndex) {
+    for (const m of codeIndex.mentions) {
+      if (requirements.has(m.id)) continue;
+      if (!knownPrefixes.has(m.id.split('-')[0])) continue;
+      findings.push({
+        rule: 'dangling-code',
+        where: `${m.file}:${m.line}`,
+        message: `код цитирует ${m.id}, который не определён ни в одной спеке`,
+      });
+    }
   }
 
   for (const m of model.edges) {
@@ -280,10 +351,11 @@ const HELP = `spec-graph — навигация и линт по графу сп
   where <ID>            capability, файл:строка, заголовок
   show <ID...>          секция требования (+ Purpose его capability); --capability — вся спека
   refs <ID>             кого цитирует и кто цитирует
-  impact <ID>           транзитивное замыкание зависимых (кто устареет от правки)
+  impact <ID>           транзитивное замыкание зависимых (кто устареет от правки) + цитаты ID в коде
+  code [ID...]          где ID цитируется в коде (src/test/generated); без ID — счётчики по всем требованиям
   deps <capability>     рёбра capability-уровня: от кого зависит и кто зависит
   graph [--mermaid]     весь граф capability-уровня
-  check [--metrics]     линт-инварианты (exit 1 при находках); --metrics — диагностика, всегда exit 0
+  check [--metrics]     линт-инварианты, включая dangling-ID в коде (exit 1 при находках); --metrics — диагностика, всегда exit 0
 
 Флаги: --json на любой команде — структурный вывод.
 
@@ -384,7 +456,7 @@ function cmdRefs(model, args, json) {
   ]);
 }
 
-function cmdImpact(model, args, json) {
+function cmdImpact(model, codeIndex, args, json) {
   const req = requireReq(model, args[0]);
   const reverse = new Map();
   for (const e of model.edges) {
@@ -406,10 +478,53 @@ function cmdImpact(model, args, json) {
   const byDepth = [...depth.entries()]
     .map(([id, d]) => ({ id, depth: d, title: model.requirements.get(id).title, capability: model.requirements.get(id).capability }))
     .sort((a, b) => a.depth - b.depth || a.id.localeCompare(b.id));
-  out(json, { id: req.id, dependents: byDepth }, [
+  const code = (codeIndex.byId.get(req.id) ?? []).map((m) => ({
+    file: m.file,
+    line: m.line,
+    category: m.category,
+  }));
+  out(json, { id: req.id, dependents: byDepth, code }, [
     `От правки ${req.id} могут устареть (${byDepth.length}, по удалённости):`,
     ...byDepth.map((r) => `  [${r.depth}] ${r.id}\t${r.title}\t(${r.capability})`),
+    `Код, цитирующий ${req.id} (${code.length}):`,
+    ...code.map((m) => `  ${m.file}:${m.line} [${m.category}]`),
   ]);
+}
+
+const CODE_CATEGORIES = ['src', 'test', 'generated'];
+
+function cmdCode(model, codeIndex, args, json) {
+  // Без аргументов — обзорные счётчики по всем требованиям (вход spec-coverage).
+  if (!args.length) {
+    const rows = [...model.requirements.values()].map((req) => {
+      const counts = { src: 0, test: 0, generated: 0 };
+      for (const m of codeIndex.byId.get(req.id) ?? []) counts[m.category] += 1;
+      return { id: req.id, capability: req.capability, ...counts };
+    });
+    out(json, rows, [
+      'ID\tsrc/test/generated\tcapability',
+      ...rows.map((r) => `${r.id}\t${r.src}/${r.test}/${r.generated}\t(${r.capability})`),
+    ]);
+    return;
+  }
+  const result = [];
+  const lines = [];
+  for (const id of args) {
+    const defined = model.requirements.has(id);
+    const mentions = codeIndex.byId.get(id) ?? [];
+    const by = { src: [], test: [], generated: [] };
+    for (const m of mentions) by[m.category].push({ file: m.file, line: m.line });
+    result.push({ id, defined, ...by });
+    lines.push(`${id}${defined ? '' : ' (НЕ определён в спеках!)'} — цитат в коде: ${mentions.length}`);
+    for (const cat of CODE_CATEGORIES) {
+      if (!by[cat].length) continue;
+      lines.push(`  ${cat} (${by[cat].length}):`);
+      for (const m of by[cat]) lines.push(`    ${m.file}:${m.line}`);
+    }
+    if (!mentions.length && defined)
+      lines.push('  (нет цитат — это не значит «не реализовано»: проверь модуль по карте CLAUDE.md)');
+  }
+  out(json, result, lines);
 }
 
 function cmdDeps(model, args, json) {
@@ -446,7 +561,7 @@ function cmdGraph(model, layers, json, flags) {
   );
 }
 
-function cmdCheck(model, layers, json, flags) {
+function cmdCheck(model, layers, codeIndex, json, flags) {
   if (flags.has('--metrics')) {
     const m = metrics(model, layers);
     out(json, m, [
@@ -465,7 +580,7 @@ function cmdCheck(model, layers, json, flags) {
     ]);
     return;
   }
-  const findings = lint(model, layers);
+  const findings = lint(model, layers, codeIndex);
   const byRule = new Map();
   for (const f of findings) {
     if (!byRule.has(f.rule)) byRule.set(f.rule, []);
@@ -500,10 +615,11 @@ function main() {
     case 'where': return cmdWhere(model, rest, json);
     case 'show': return cmdShow(model, rest, json, flags);
     case 'refs': return cmdRefs(model, rest, json);
-    case 'impact': return cmdImpact(model, rest, json);
+    case 'impact': return cmdImpact(model, buildCodeIndex(), rest, json);
+    case 'code': return cmdCode(model, buildCodeIndex(), rest, json);
     case 'deps': return cmdDeps(model, rest, json);
     case 'graph': return cmdGraph(model, layers, json, flags);
-    case 'check': return cmdCheck(model, layers, json, flags);
+    case 'check': return cmdCheck(model, layers, buildCodeIndex(), json, flags);
     default: fail(`Неизвестная команда «${cmd}». spec-graph --help`);
   }
 }
