@@ -32,77 +32,100 @@ import {
   type MinimapTerrainSource,
 } from '@game-mvp/hud';
 
+/** Что даёт оболочка этой сборки: от этого зависит состав HUD (SHELL-8). */
+export interface DemoShellCapabilities {
+  /**
+   * Есть ли у оболочки машина состояний мира: пауза и перемотка. У локальной
+   * (`WorkerShell`) есть, у тонкого сетевого клиента нет и быть не может
+   * (`netcode` NET-11, `snapshot-rewind` REW-6) — там эти кнопки не прячутся
+   * стилем, а не появляются вовсе (design D5).
+   */
+  readonly controls: boolean;
+}
+
 /**
  * Композиция HUD демо — значение, а не код (HUD-4): виджеты по зонам, все
  * ссылки — имена реестров. Таблица маркеров миникарты покрывает оба визуальных
  * типа демо-сцены (`worker.ts`, `kindByTags(['Hero', 'Fireball'])`); тип без
  * записи получает default-маркер по политике таблицы, а не ошибку (HUD-6).
  * Иконки способностей — asset ID дерева контента (ASSET-2), не URL.
+ *
+ * Функция от возможностей оболочки, а не константа: сборок у демо две, и
+ * различие между ними — деградация ровно одного виджета. Остальные (миникарта,
+ * портрет, панель способностей) работают от той же доставки SHELL-2..5, и им
+ * всё равно, кто тикает.
  */
-export const DEMO_HUD_COMPOSITION: HudComposition = {
-  entries: [
-    {
-      widget: 'match-status',
-      zone: 'top-left',
-      actions: { pause: 'match.pause', resume: 'match.resume' },
-    },
-    {
-      widget: 'ability-bar',
-      zone: 'bottom',
-      params: {
-        // Имена семантических действий словаря биндингов демо (INP-4, sim.ts).
-        abilities: ['cast', 'dodge', 'jump'],
-        icons: {
-          cast: 'visuals/icons/cast.svg',
-          dodge: 'visuals/icons/dodge.svg',
-          jump: 'visuals/icons/jump.svg',
-        },
+export function demoHudComposition(capabilities: DemoShellCapabilities): HudComposition {
+  return {
+    entries: [
+      {
+        widget: 'match-status',
+        zone: 'top-left',
+        params: { controls: capabilities.controls },
+        // Слоты действий ведут в реестр только там, где им есть куда вести:
+        // запрос паузы от тонкого клиента не исполнил бы никто (SHELL-6).
+        ...(capabilities.controls
+          ? { actions: { pause: 'match.pause', resume: 'match.resume' } }
+          : {}),
       },
-      actions: { cast: 'hero.cast', dodge: 'hero.dodge', jump: 'hero.jump' },
-    },
-    {
-      widget: 'minimap',
-      zone: 'bottom-right',
-      params: {
-        width: 180,
-        height: 180,
-        markers: {
+      {
+        widget: 'ability-bar',
+        zone: 'bottom',
+        params: {
+          // Имена семантических действий словаря биндингов демо (INP-4, sim.ts).
+          abilities: ['cast', 'dodge', 'jump'],
+          icons: {
+            cast: 'visuals/icons/cast.svg',
+            dodge: 'visuals/icons/dodge.svg',
+            jump: 'visuals/icons/jump.svg',
+          },
+        },
+        actions: { cast: 'hero.cast', dodge: 'hero.dodge', jump: 'hero.jump' },
+      },
+      {
+        widget: 'minimap',
+        zone: 'bottom-right',
+        params: {
+          width: 180,
+          height: 180,
           markers: {
-            Hero: {
-              renderer: 'dot',
-              color: { mode: 'fixed', color: '#ffd479' },
-              size: 9,
-              priority: 10,
+            markers: {
+              Hero: {
+                renderer: 'dot',
+                color: { mode: 'fixed', color: '#ffd479' },
+                size: 9,
+                priority: 10,
+              },
+              Fireball: {
+                renderer: 'triangle',
+                color: { mode: 'fixed', color: '#ff7a45' },
+                size: 7,
+                priority: 5,
+              },
             },
-            Fireball: {
-              renderer: 'triangle',
-              color: { mode: 'fixed', color: '#ff7a45' },
-              size: 7,
-              priority: 5,
-            },
-          },
-          unknownKind: {
-            policy: 'default',
-            marker: {
-              renderer: 'square',
-              color: { mode: 'fixed', color: '#9aa3b2' },
-              size: 5,
-              priority: 0,
+            unknownKind: {
+              policy: 'default',
+              marker: {
+                renderer: 'square',
+                color: { mode: 'fixed', color: '#9aa3b2' },
+                size: 5,
+                priority: 0,
+              },
             },
           },
         },
+        bindings: { entities: 'minimap.entities', floor: 'minimap.floor' },
+        actions: { pan: 'camera.pan' },
       },
-      bindings: { entities: 'minimap.entities', floor: 'minimap.floor' },
-      actions: { pan: 'camera.pan' },
-    },
-    {
-      widget: 'portrait',
-      zone: 'bottom-left',
-      params: { size: 144 },
-      bindings: { hero: 'hero.entity' },
-    },
-  ],
-};
+      {
+        widget: 'portrait',
+        zone: 'bottom-left',
+        params: { size: 144 },
+        bindings: { hero: 'hero.entity' },
+      },
+    ],
+  };
+}
 
 /**
  * Резолв иконок: asset ID → URL тем же корнем дерева контента, каким

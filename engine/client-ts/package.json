@@ -28,6 +28,7 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@game-mvp/bot": "*",
     "@game-mvp/hud": "*",
     "@types/node": "^22.0.0",
     "@types/three": "^0.185.4",

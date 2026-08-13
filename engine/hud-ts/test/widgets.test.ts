@@ -130,6 +130,24 @@ describe('статус матча: пауза из HUD (HUD-2)', () => {
     expect((root.getAttribute('class') ?? '').includes(MATCH_STATUS_PAUSED_CLASS)).toBe(true);
   });
 
+  it('оболочка без управления миром не получает кнопки вовсе (D5 демо, NET-11)', () => {
+    // Тонкому сетевому клиенту перематывать и ставить на паузу нечего: своей
+    // машины состояний у него нет (`snapshot-rewind` REW-6). Композиция такой
+    // сборки не ведёт слоты действий никуда, а виджет не строит кнопку —
+    // показанная и неработающая, она обещала бы то, чего сборка не сделает.
+    const { runtime, host } = bench(NO_ICONS);
+    runtime.apply({
+      entries: [{ widget: 'match-status', zone: 'top-left', params: { controls: false } }],
+    });
+    runtime.subsystem.syncTick(makeView({ tick: 7, mode: 'Running' }));
+
+    const zone = host.zone('top-left');
+    // Тик и режим на месте: доставленное состояние виджет показывает по-прежнему.
+    expect(findByClass(zone, 'hud-match-status__tick').textContent).toBe('7');
+    expect(findByClass(zone, 'hud-match-status__mode').textContent).toBe('Running');
+    expect(() => findByClass(zone, 'hud-match-status__pause')).toThrow();
+  });
+
   it('точечные обновления: одинаковая доставка не пишет в DOM повторно', () => {
     const { runtime, host } = bench(NO_ICONS);
     runtime.apply(statusComposition);
