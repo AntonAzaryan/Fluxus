@@ -98,7 +98,7 @@
     },
     { "name": "ActionLock", "fields": { "mask": "i32" } },
     { "name": "Charging", "fields": { "ticks": "i32" } },
-    { "name": "Catching", "fields": { "ticks": "i32" } },
+    { "name": "Catching", "fields": { "since": "i32" } },
     { "name": "Carrying", "fields": { "projectile": "entity", "since": "i32" } },
     { "name": "Shielded", "fields": { "ticks": "i32" } },
     { "name": "Owner", "fields": { "entity": "entity" } },
@@ -1053,7 +1053,7 @@
                       "addComponent": {
                         "entity": { "var": "e" },
                         "component": "Catching",
-                        "values": { "ticks": 0 }
+                        "values": { "since": { "tick": [] } }
                       }
                     },
                     {
