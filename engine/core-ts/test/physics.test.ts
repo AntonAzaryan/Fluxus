@@ -487,6 +487,71 @@ describe('нормаль поверхности в событии столкно
     expect(unitLength(events[0]!)).toBeCloseTo(1, 3);
   });
 
+  it('плоская стена из соседних отрезков статики даёт осевую нормаль у стыка', () => {
+    // Стена мира — цепочка односкелеточных отрезков (TERR-5): статика x = 2,
+    // y ∈ [0, 1] и y ∈ [1, 2]. Удар рядом со стыком блокируют оба звена, и
+    // нормаль обязана прийти от ближайшего — иначе ближайшая точка дальнего
+    // звена (его внутренний стык) дала бы ложную диагональ.
+    const h = harness();
+    h.place('Mover', {
+      Position: { x: F(1.5), y: F(1.4) },
+      Velocity: { x: F(0.4) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.5) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.other).toBe(STATIC_COLLIDER);
+    expect(events[0]!.data).toMatchObject({ nx: fixed.fromInt(-1), ny: 0 });
+  });
+
+  it('пара кругов: нормаль по линии центров', () => {
+    const h = harness(false);
+    const shield = h.place('Ball', {
+      Position: { x: F(2), y: F(0) },
+      Collider: { layer: LAYER_STATIC },
+    });
+    // Оба участника — круги: и препятствие, и движущийся.
+    h.place('Mover', {
+      Position: { x: F(1), y: F(0.4) },
+      Velocity: { x: F(0.5) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.other).toBe(shield);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    const distance = Math.hypot(1, 0.4);
+    expect(fixed.toFloat(nx)).toBeCloseTo(-1 / distance, 3);
+    expect(fixed.toFloat(ny)).toBeCloseTo(0.4 / distance, 3);
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 3);
+  });
+
+  it('малый разнос центров: точность нормали ограничена Q16.16', () => {
+    // Разнос центров ~0.028 юнита: квадраты в `normalize` уходят в младшие
+    // разряды Q16.16, и единичность держится с точностью порядка процента.
+    // Тест документирует достижимый допуск, а не требует большего.
+    const h = harness(false);
+    h.place('Ball', { Position: { x: F(2), y: F(0) }, Collider: { layer: LAYER_STATIC } });
+    h.place('Mover', {
+      Position: { x: F(1.98), y: F(0.02) },
+      Velocity: { x: F(0.02) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    expect(nx).toBeLessThan(0);
+    expect(ny).toBeGreaterThan(0);
+    expect(fixed.toFloat(nx)).toBeCloseTo(-Math.SQRT1_2, 2);
+    expect(fixed.toFloat(ny)).toBeCloseTo(Math.SQRT1_2, 2);
+    // Замеренное отклонение длины — 0.4%: детерминированное, но на порядок
+    // хуже, чем на боевых расстояниях (там 1e-4).
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 2);
+  });
+
   it('вырожденный случай — детерминированный фолбэк на осевую нормаль', () => {
     const h = harness(false);
     h.place('Wall', { Position: { x: F(2), y: F(0) } });

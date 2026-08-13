@@ -59,6 +59,12 @@ export interface Move {
   readonly axis: 'x' | 'y';
   /** Шаг оси после TimeScale: гейту обрыва (PHYS-11) нужен знак — сторона захода. */
   readonly step: Fixed;
+  /**
+   * Центр движущегося на момент шага (позиция блокировки). От него считаются и
+   * выбор ближайшего препятствия, и нормаль поверхности (PHYS-9).
+   */
+  readonly centerX: Fixed;
+  readonly centerY: Fixed;
 }
 
 /** Препятствие, заблокировавшее шаг оси: исходные данные нормали (PHYS-9). */
@@ -145,10 +151,39 @@ export function cliffGateOpen(move: Move, s: StaticCollider, cliffRise: number):
 }
 
 /**
+ * Ближайшая к точке точка прямоугольника — контакт круга с прямоугольной
+ * поверхностью: на грани это проекция по нормали, за краем — угол.
+ */
+export function closestPointOn(bounds: Readonly<Bounds>, x: Fixed, y: Fixed): Vec2 {
+  return {
+    x: fixed.clamp(x, bounds.minX, bounds.maxX),
+    y: fixed.clamp(y, bounds.minY, bounds.maxY),
+  };
+}
+
+/**
+ * Квадрат расстояния от точки до огибающей препятствия — мера «ближе» при
+ * выборе препятствия, чья поверхность и дала контакт (PHYS-9). Сравниваются
+ * только такие величины между собой, поэтому считается в СЫРЫХ единицах
+ * Q16.16 без обратного сдвига: `fixed.mul` на долях единицы округлял бы малые
+ * расстояния в ноль и ломал бы сравнение.
+ *
+ * DET-2, условие 3: препятствие пересекает заметаемый объём, поэтому каждая
+ * разность по модулю не больше суммы полуразмера и шага — предел PHYS-6 (~181
+ * единица) даёт квадрат порядка 2^47, и сумма двух точна в double (в
+ * Rust-порте — i64).
+ */
+export function closestDistanceSq(bounds: Readonly<Bounds>, x: Fixed, y: Fixed): number {
+  const dx = x - fixed.clamp(x, bounds.minX, bounds.maxX);
+  const dy = y - fixed.clamp(y, bounds.minY, bounds.maxY);
+  return dx * dx + dy * dy;
+}
+
+/**
  * Осевая нормаль против движения: сторона удара по заблокированной оси. Для
  * пары прямоугольников она и есть нормаль поверхности (PHYS-9).
  */
-export function axisNormalOf(move: Move): Vec2 {
+function axisNormalOf(move: Move): Vec2 {
   const sign = move.step > 0 ? -1 : 1;
   return {
     x: move.axis === 'x' ? fixed.fromInt(sign) : 0,
@@ -158,10 +193,16 @@ export function axisNormalOf(move: Move): Vec2 {
 
 /**
  * Нормаль поверхности препятствия в точке контакта, единичная в Q16.16
- * (PHYS-9). Круглое препятствие — по линии центров от него к движущемуся;
- * круг о прямоугольник — от ближайшей к центру круга точки прямоугольника
- * (на грани это ровно осевая нормаль, на углу — диагональная); пара
- * прямоугольников — осевая.
+ * (PHYS-9). Круглое ПРЕПЯТСТВИЕ — по линии центров от него к движущемуся;
+ * круглый ДВИЖУЩИЙСЯ о прямоугольник — от ближайшей к его центру точки
+ * прямоугольника к центру (на грани это ровно осевая нормаль, на углу —
+ * диагональная); пара прямоугольников — осевая.
+ *
+ * Препятствие сюда приходит ближайшее (`nearestBlocker`), а не первое по
+ * порядку обхода: прямая стена в мире — цепочка соседних односкелеточных
+ * отрезков статики (TERR-5), и у дальнего звена цепочки ближайшая точка
+ * оказалась бы его внутренним стыком, дав ложную диагональ вместо нормали
+ * грани.
  *
  * Вырождение (совпавшие центры, центр круга внутри прямоугольника) — фолбэк на
  * осевую: единичный вектор из нулевого не восстановить, а событие обязано
@@ -172,21 +213,15 @@ export function axisNormalOf(move: Move): Vec2 {
  * наследует ту же аппроксимацию — направленно верную и достаточную для
  * рикошета.
  */
-export function surfaceNormal(
-  center: Vec2,
-  moverShape: number,
-  blocker: Blocker,
-  axisNormal: Vec2,
-): Vec2 {
+export function surfaceNormal(move: Move, moverShape: number, blocker: Blocker): Vec2 {
+  const axisNormal = axisNormalOf(move);
+  const center: Vec2 = { x: move.centerX, y: move.centerY };
   if (blocker.shape === SHAPE_CIRCLE) {
     const fromObstacle = vec.sub(center, { x: blocker.centerX, y: blocker.centerY });
     return orAxis(vec.normalize(fromObstacle), axisNormal);
   }
   if (moverShape === SHAPE_CIRCLE) {
-    const closest: Vec2 = {
-      x: fixed.clamp(center.x, blocker.bounds.minX, blocker.bounds.maxX),
-      y: fixed.clamp(center.y, blocker.bounds.minY, blocker.bounds.maxY),
-    };
+    const closest = closestPointOn(blocker.bounds, center.x, center.y);
     return orAxis(vec.normalize(vec.sub(center, closest)), axisNormal);
   }
   return axisNormal;

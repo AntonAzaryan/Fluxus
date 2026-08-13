@@ -14,10 +14,10 @@
 import * as fixed from '../math/fixed.js';
 import * as vec from '../math/vector.js';
 import {
-  axisNormalOf,
   blocks,
   boundsAt,
   cliffGateOpen,
+  closestDistanceSq,
   overlaps,
   surfaceNormal,
   union,
@@ -300,29 +300,39 @@ export class PhysicsSystem implements System {
         if (step === 0) continue;
         const nextX = axis === 'x' ? fixed.add(x, step) : x;
         const nextY = axis === 'y' ? fixed.add(y, step) : y;
-        const current = boundsAt(x, y, collider);
-        const next = boundsAt(nextX, nextY, collider);
-        const move: Move = { current, next, swept: union(current, next), axis, step };
 
-        const hit =
-          blockMask !== 0 &&
-          this.firstBlocker(ctx, move, mover, obstacles, positionOf, blockMask, cliffRise);
-        if (!hit) {
-          x = nextX;
-          y = nextY;
-          continue;
+        // Пустая маска блокировки не порождает ни огибающих, ни поиска: сквозной
+        // снаряд проходит ось, не заплатив за narrow-phase (PHYS-2).
+        if (blockMask !== 0) {
+          const current = boundsAt(x, y, collider);
+          const next = boundsAt(nextX, nextY, collider);
+          const move: Move = {
+            current,
+            next,
+            swept: union(current, next),
+            axis,
+            step,
+            centerX: x,
+            centerY: y,
+          };
+          if (this.nearestBlocker(ctx, move, mover, obstacles, positionOf, blockMask, cliffRise)) {
+            // Нормаль поверхности в точке контакта (PHYS-9); осевая против
+            // движения — её фолбэк и полный ответ для пары прямоугольников.
+            // Политике (отскок, кнокбэк, урон о стену) нужна сторона удара, а
+            // не факт остановки.
+            const normal = surfaceNormal(move, collider.shape, this.blocker);
+            ctx.events.emit('Collision', {
+              entity: mover,
+              other: this.blocker.other,
+              nx: normal.x,
+              ny: normal.y,
+            });
+            continue; // ось погашена: движущийся остаётся на старой координате
+          }
         }
-        // Нормаль поверхности в точке контакта (PHYS-9); осевая против
-        // движения — её фолбэк и полный ответ для пары прямоугольников.
-        // Политике (отскок, кнокбэк, урон о стену) нужна сторона удара, а не
-        // факт остановки.
-        const normal = surfaceNormal({ x, y }, collider.shape, this.blocker, axisNormalOf(move));
-        ctx.events.emit('Collision', {
-          entity: mover,
-          other: this.blocker.other,
-          nx: normal.x,
-          ny: normal.y,
-        });
+
+        x = nextX;
+        y = nextY;
       }
 
       // Сенсоры (PHYS-12): объём — фактически исполненный ход тика, обе оси
@@ -356,11 +366,18 @@ export class PhysicsSystem implements System {
   }
 
   /**
-   * Первый блокирующий по маске (PHYS-2): статика идёт раньше динамики,
-   * динамика — по порядку запроса (QUERY-2). Найденное препятствие пишется в
+   * Блокирующее препятствие по маске (PHYS-2), ближайшее к центру движущегося;
+   * при равном расстоянии — первое по порядку обхода: статика раньше динамики,
+   * динамика — по порядку запроса (QUERY-2). Найденное пишется в
    * `this.blocker` — нормаль события считается по его форме (PHYS-9).
+   *
+   * Ход гасит любой блокирующий, и выбор между ними наблюдаем только через
+   * событие. Ближайший — тот, чья поверхность и дала контакт: прямая стена
+   * мира собрана из соседних односкелеточных отрезков статики (TERR-5), и
+   * «первый по индексу» брал бы нормаль у звена, до которого движущийся не
+   * доехал, — по его внутреннему стыку, то есть ложную диагональ.
    */
-  private firstBlocker(
+  private nearestBlocker(
     ctx: SystemContext,
     move: Move,
     mover: EntityId,
@@ -369,14 +386,22 @@ export class PhysicsSystem implements System {
     blockMask: number,
     cliffRise: number,
   ): boolean {
+    let bestDistanceSq = 0;
+    let found = false;
     for (const s of this.physicsWorld.queryByLayer(move.swept, blockMask)) {
       if (!blocks(move, s)) continue;
       if (cliffGateOpen(move, s, cliffRise)) continue;
-      // Статика — всегда прямоугольник (обрыв — вырожденный в отрезок).
+      const distanceSq = closestDistanceSq(s, move.centerX, move.centerY);
+      if (found && distanceSq >= bestDistanceSq) continue;
+      bestDistanceSq = distanceSq;
+      found = true;
+      // Статика — всегда прямоугольник (обрыв — вырожденный в отрезок); центр
+      // круга у неё не определён и обнуляется, чтобы не пережить чужую запись.
       this.blocker.other = STATIC_COLLIDER;
       this.blocker.shape = SHAPE_AABB;
+      this.blocker.centerX = 0;
+      this.blocker.centerY = 0;
       this.blocker.bounds = s;
-      return true;
     }
     for (const other of obstacles) {
       if (other === mover) continue;
@@ -385,14 +410,17 @@ export class PhysicsSystem implements System {
       const collider = colliderOf(ctx.get, other, this.colliderComponent);
       const bounds = boundsAt(position.x, position.y, collider);
       if (!blocks(move, bounds)) continue;
+      const distanceSq = closestDistanceSq(bounds, move.centerX, move.centerY);
+      if (found && distanceSq >= bestDistanceSq) continue;
+      bestDistanceSq = distanceSq;
+      found = true;
       this.blocker.other = other;
       this.blocker.shape = collider.shape;
       this.blocker.centerX = position.x;
       this.blocker.centerY = position.y;
       this.blocker.bounds = bounds;
-      return true;
     }
-    return false;
+    return found;
   }
 }
 
