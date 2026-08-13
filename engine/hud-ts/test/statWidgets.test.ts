@@ -189,6 +189,46 @@ describe('панель кулдаунов (HUD-8, сценарий «Кулда�
     expect(presses).toEqual(['dodge']);
   });
 
+  it('иконки — asset ID через шов сборки; URL в композиции отвергается (HUD-4)', () => {
+    const requested: string[] = [];
+    const registry = new HudRegistry();
+    registry.registerWidget(
+      cooldownsKind({
+        resolveIconUrl: (assetId) => {
+          requested.push(assetId);
+          return `resolved://root/${assetId}`;
+        },
+      }),
+    );
+    registry.registerSelector('hero', () => null);
+    registry.registerAction('hero.cast', { target: 'world', action: 'cast' });
+    registry.registerAction('hero.dodge', { target: 'world', action: 'dodge' });
+    const { runtime, host } = makeRuntime(registry);
+    runtime.apply(cooldownComposition);
+
+    // К шву ушли ровно asset ID записей — по одному на кнопку.
+    expect(requested).toEqual(['visuals/icons/cast.svg', 'visuals/icons/dodge.svg']);
+    expect(findByClass(host.zone('bottom'), 'hud-cooldowns__icon').getAttribute('src')).toBe(
+      'resolved://root/visuals/icons/cast.svg',
+    );
+    // Композиция — чистые asset ID: резолвленный URL в неё не просочился.
+    expect(JSON.stringify(cooldownComposition)).not.toContain('://');
+
+    // URL вместо asset ID валит `apply` до монтирования и называет запись.
+    expect(() => {
+      runtime.apply({
+        entries: [
+          {
+            widget: 'cooldowns',
+            zone: 'bottom',
+            params: { abilities: [{ action: 'cast', icon: 'https://cdn.example/cast.png' }] },
+            actions: { cast: 'hero.cast' },
+          },
+        ],
+      });
+    }).toThrow('выглядит как URL');
+  });
+
   it('раскладка рядов — данные композиции, а не код виджета', () => {
     const { host } = bench(cooldownComposition, entityWith(1, {}));
     const panel = findByClass(host.zone('bottom'), 'hud-cooldowns');

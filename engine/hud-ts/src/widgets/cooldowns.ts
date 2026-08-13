@@ -18,7 +18,7 @@ import type { HudJsonValue, HudParams } from '../composition.js';
 import { entityStat, type HudEntityView } from '../delivery.js';
 import { el, type HudNode } from '../dom/node.js';
 import { interactive } from '../host.js';
-import { resolveIcon, type HudIconSource, type HudIconTable } from '../icons.js';
+import { assetIdParam, resolveIcon, type HudIconSource, type HudIconTable } from '../icons.js';
 import { setAttr, setText } from '../dom/render.js';
 import type { HudActionsPort, HudUpdate, HudWidget, HudWidgetKind } from '../widget.js';
 
@@ -75,13 +75,12 @@ function specOf(item: HudJsonValue, index: number): AbilitySpec {
   }
   const record = item as Readonly<Record<string, HudJsonValue>>;
   const action = record.action;
-  const icon = record.icon;
   if (typeof action !== 'string' || action.length === 0) {
     throw new Error(`${where}: "action" — имя семантического действия (INP-4), непустая строка`);
   }
-  if (typeof icon !== 'string' || icon.length === 0) {
-    throw new Error(`${where}: "icon" — asset ID иконки (ASSET-2), непустая строка`);
-  }
+  // Иконка — asset ID дерева контента, а не URL: проверка одна на все виджеты
+  // с иконками (`icons.ts`, design Decision 7).
+  const icon = assetIdParam(record.icon, `${where}, "icon"`);
   return {
     action,
     icon,

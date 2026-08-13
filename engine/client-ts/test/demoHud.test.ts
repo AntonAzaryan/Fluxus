@@ -110,6 +110,6 @@ describe('headless-прогон демо: статы и фаза полёта д
     expect(fireball!.flightPhase).toBeGreaterThan(0);
     expect(fireball!.flightPhase).toBeLessThan(1);
     // У героя фазы полёта нет — он не летит (REND-12).
-    expect(Number.isNaN(hero.flightPhase!)).toBe(true);
+    expect(Number.isNaN(hero.flightPhase)).toBe(true);
   });
 });
