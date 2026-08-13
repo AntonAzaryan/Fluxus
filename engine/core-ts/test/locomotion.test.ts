@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import * as fixed from '../src/math/fixed.js';
-import { getField, hasComponent, setField, spawn } from '../src/ecs/world.js';
+import {
+  addComponent,
+  getField,
+  hasComponent,
+  removeComponent,
+  setField,
+  spawn,
+} from '../src/ecs/world.js';
 import { mathApi } from '../src/math/mathApi.js';
 import {
   LocomotionSystem,
@@ -27,6 +34,11 @@ const F = fixed.fromFloat;
 /** Биты кнопок — дефолты системы: уклон 1, прыжок 2. */
 const DODGE = 1 << 1;
 const JUMP = 1 << 2;
+
+/** Имя компонента лока и бит манёвров — параметры сборки, а не ядра (LOC-7). */
+const LOCK_COMPONENT = 'ActionLock';
+const MANEUVER_LOCK_BIT = 1;
+const MANEUVER_LOCK = 1 << MANEUVER_LOCK_BIT;
 
 const RIGHT: Vec2 = { x: F(1), y: 0 };
 const UP: Vec2 = { x: 0, y: F(1) };
@@ -98,6 +110,8 @@ const SCENE: SceneDef = {
       fields: { state: 'i32', ticksLeft: 'i32', dirX: 'fixed', dirY: 'fixed' },
     },
     { name: LEVEL_OVERRIDE_COMPONENT, fields: { level: 'i32' } },
+    // Компонент-лок (LOC-7): на префабе его нет — контент ставит его сам.
+    { name: LOCK_COMPONENT, fields: { mask: 'i32' } },
   ],
   prefabs: [
     {
@@ -116,11 +130,19 @@ const SCENE: SceneDef = {
   terrain: TERRAIN,
 };
 
-/** Мир с одним героем и конвейером Input → Locomotion; физика не участвует. */
-function harness() {
+/**
+ * Мир с одним героем и конвейером Input → Locomotion; физика не участвует.
+ * `lock` — сборка с параметрами селективного лока (LOC-7); без него система
+ * собирается ровно как в остальных тестах файла.
+ */
+function harness(lock = false) {
   const { world, terrain, systems } = loadScene(SCENE);
   systems.register(new InputSystem({ players: ['p1'] }));
-  systems.register(new LocomotionSystem());
+  systems.register(
+    new LocomotionSystem(
+      lock ? { lockComponent: LOCK_COMPONENT, maneuverLockBit: MANEUVER_LOCK_BIT } : {},
+    ),
+  );
   const hero = spawn(world, 'Hero');
   const sim: Simulation = { systems, worldSeed: 1, math: mathApi, terrain: terrain! };
   const state = initialState(world, 1);
@@ -142,6 +164,14 @@ function harness() {
       y: getField(world, hero, 'Velocity', 'y'),
     }),
     st: (field: string) => getField(world, hero, 'LocomotionState', field),
+    /** Постановка лока — то, что контент делает через Command Buffer. */
+    setLock: (mask: number): void => {
+      if (hasComponent(world, hero, LOCK_COMPONENT)) setField(world, hero, LOCK_COMPONENT, 'mask', mask);
+      else addComponent(world, hero, LOCK_COMPONENT, { mask });
+    },
+    clearLock: (): void => {
+      removeComponent(world, hero, LOCK_COMPONENT);
+    },
     cliffRise: () => getField(world, hero, 'Collider', 'cliffRise'),
     airborne: () => hasComponent(world, hero, LEVEL_OVERRIDE_COMPONENT),
   };
@@ -363,5 +393,111 @@ describe('состояние манёвра в снапшоте (LOC-3, SNAP-1)'
     expect(h.st('state')).toBe(LOCOMOTION_WINDOW);
     expect(h.st('ticksLeft')).toBe(CONFIG.windowTicks);
     expect(h.vel().x).toBe(F(6));
+  });
+});
+
+describe('селективный лок манёвров (LOC-7)', () => {
+  it('без параметров лока система его не читает — компонент на сущности ничего не меняет', () => {
+    const h = harness(); // сборка без lockComponent
+    h.setLock(MANEUVER_LOCK);
+    h.step({ move: RIGHT, buttons: DODGE });
+    expect(h.st('state')).toBe(LOCOMOTION_DODGE);
+  });
+
+  it('лок запрещает уклон, но не ходьбу: разгон и торможение штатные', () => {
+    const h = harness(true);
+    h.setLock(MANEUVER_LOCK);
+    h.step({ move: RIGHT, buttons: DODGE });
+    expect(h.st('state')).toBe(LOCOMOTION_NORMAL);
+    expect(h.vel().x).toBe(F(1.5)); // разгон идёт как обычно (LOC-2)
+    h.step({ move: RIGHT });
+    expect(h.vel().x).toBe(F(3));
+    h.step();
+    expect(h.vel().x).toBe(F(0.5)); // торможение тоже
+  });
+
+  it('лок запрещает прыжок', () => {
+    const h = harness(true);
+    h.setLock(MANEUVER_LOCK);
+    h.step({ move: RIGHT, buttons: JUMP });
+    expect(h.st('state')).toBe(LOCOMOTION_NORMAL);
+    expect(h.airborne()).toBe(false);
+  });
+
+  it('лок запрещает перекат: окно даблтапа истекает в Normal', () => {
+    const h = harness(true);
+    h.step({ move: RIGHT, buttons: DODGE });
+    while (h.st('state') === LOCOMOTION_DODGE) h.step();
+    expect(h.st('state')).toBe(LOCOMOTION_WINDOW);
+
+    h.setLock(MANEUVER_LOCK);
+    h.step({ move: RIGHT, buttons: DODGE });
+    expect(h.st('state')).toBe(LOCOMOTION_WINDOW); // перекат не стартовал
+    h.step({ move: RIGHT });
+    h.step({ move: RIGHT });
+    expect(h.st('state')).toBe(LOCOMOTION_NORMAL); // окно дотикало
+  });
+
+  it('чужие биты маски ядро не интерпретирует', () => {
+    const h = harness(true);
+    h.setLock(1 << 3); // бит запрета каста — конвенция контента
+    h.step({ move: RIGHT, buttons: DODGE });
+    expect(h.st('state')).toBe(LOCOMOTION_DODGE);
+  });
+
+  it('лок посреди уклона его не прерывает: гейтится только старт', () => {
+    const h = harness(true);
+    h.step({ move: RIGHT, buttons: DODGE });
+    expect(h.st('state')).toBe(LOCOMOTION_DODGE);
+    h.setLock(MANEUVER_LOCK); // лок пришёл посреди манёвра
+    h.step();
+    expect(h.st('state')).toBe(LOCOMOTION_DODGE);
+    expect(h.vel().x).toBe(F(6)); // манёвр по-прежнему владеет скоростью
+    h.step();
+    expect(h.st('state')).toBe(LOCOMOTION_WINDOW); // доиграл до конца
+  });
+
+  it('проигнорированный фронт не буферизуется: нужно новое нажатие', () => {
+    const h = harness(true);
+    h.setLock(MANEUVER_LOCK);
+    h.step({ move: RIGHT, buttons: DODGE });
+    expect(h.st('state')).toBe(LOCOMOTION_NORMAL);
+
+    // Кнопка всё ещё зажата, лок снят — фронта нет, манёвр не стартует.
+    h.clearLock();
+    h.step({ move: RIGHT, buttons: DODGE });
+    expect(h.st('state')).toBe(LOCOMOTION_NORMAL);
+
+    // Отпустил и нажал заново — стартует.
+    h.step({ move: RIGHT });
+    h.step({ move: RIGHT, buttons: DODGE });
+    expect(h.st('state')).toBe(LOCOMOTION_DODGE);
+  });
+
+  it('перемотка с локом детерминирована: лок пришёл из снапшота (SNAP-1)', () => {
+    const h = harness(true);
+    h.setLock(MANEUVER_LOCK);
+    h.step({ move: RIGHT });
+    const snapshot = takeSnapshot(h.state);
+
+    h.step({ move: RIGHT, buttons: DODGE });
+    expect(h.st('state')).toBe(LOCOMOTION_NORMAL);
+    const blocked = h.vel();
+
+    // Снятие лока ПОСЛЕ снапшота откатом отменяется — иначе повтор разошёлся бы.
+    h.clearLock();
+    restoreSnapshot(h.state, snapshot);
+    expect(hasComponent(h.world, h.hero, LOCK_COMPONENT)).toBe(true);
+
+    h.step({ move: RIGHT, buttons: DODGE });
+    expect(h.st('state')).toBe(LOCOMOTION_NORMAL);
+    expect(h.vel()).toEqual(blocked);
+  });
+
+  it('maneuverLockBit без компонента — ошибка конфигурации, не тишина', () => {
+    expect(() => new LocomotionSystem({ maneuverLockBit: 1 })).toThrow(/lockComponent/);
+    expect(() => new LocomotionSystem({ lockComponent: 'ActionLock', maneuverLockBit: 31 })).toThrow(
+      /0\.\.30/,
+    );
   });
 });
