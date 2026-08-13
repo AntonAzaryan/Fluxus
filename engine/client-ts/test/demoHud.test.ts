@@ -101,8 +101,11 @@ describe('headless-прогон демо: статы и фаза полёта д
     const hero = view.entities.get(playerId)!;
     // Слот игрока есть — компонент в сцене живой.
     expect(hero.stats!.get(STATS.slot)).toBe(0);
-    // Здоровья в сцене пока нет: стат объявлен, но не доехал — «нет данных».
-    expect(hero.stats!.has(STATS.hp)).toBe(false);
+    // Здоровье героя — доставленный стат в МИРОВЫХ единицах: поле схемы
+    // объявлено `fixed`, и границу оно пересекает уже поделённым (REND-1).
+    expect(hero.stats!.get(STATS.hp)).toBe(500);
+    expect(hero.stats!.get(STATS.hpMax)).toBe(500);
+    // У снаряда здоровья нет — и стат к нему не едет вовсе (HUD-8).
 
     const fireball = [...view.entities.values()].find((entity) => entity.kind === 'Fireball');
     expect(fireball).toBeDefined();

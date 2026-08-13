@@ -279,10 +279,10 @@ describe('демо по умолчанию: матч против бота на 
     // Имена доехали до доставленного состояния — на них и биндится HUD.
     expect(view.statNames).toContain(STATS.slot);
     const hero = view.entities.get(rig.joined.hero)!;
-    // Слот игрока — доставленный стат; здоровья в сцене пока нет, и его стата
-    // у сущности НЕТ (а не ноль) — ровно пустое состояние HUD-8.
+    // Слот игрока и здоровье — доставленные статы; ноль здесь означал бы
+    // мёртвого героя, а «нет данных» — отсутствие компонента (HUD-8).
     expect(hero.stats!.get(STATS.slot)).toBe(0);
-    expect(hero.stats!.has(STATS.hp)).toBe(false);
+    expect(hero.stats!.get(STATS.hpMax)).toBe(500);
     // Фаза полёта: у снаряда она посчитана воркером, у героя её нет (REND-12).
     const fireball = [...view.entities.values()].find((entity) => entity.kind === 'Fireball')!;
     expect(fireball).toBeDefined();

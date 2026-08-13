@@ -169,10 +169,11 @@ describe('демо-сцена: кромка диска и смерть в пус
 
       expect(coreWorld.hasComponent(state.world, playerId, 'Dead')).toBe(true);
       expect(coreWorld.hasComponent(state.world, playerId, 'Falling')).toBe(true);
-      // Управление отобрано на входе в провал: конфигурации локомоушена нет.
-      // Скорость при этом не трогается — импульс, с которым герой ушёл за кромку,
-      // сохраняется, и он падает по дуге, а не оседает отвесно на месте.
-      expect(coreWorld.hasComponent(state.world, playerId, 'Locomotion')).toBe(false);
+      // Управление отобрано на входе в провал: машины манёвров у героя больше
+      // нет, и в запрос `LocomotionSystem` он не попадает. Скорость при этом не
+      // трогается — импульс, с которым герой ушёл за кромку, сохраняется, и он
+      // падает по дуге, а не оседает отвесно на месте.
+      expect(coreWorld.hasComponent(state.world, playerId, 'LocomotionState')).toBe(false);
       expect(
         coreWorld.getField(state.world, playerId, 'Velocity', 'x') * direction,
       ).toBeGreaterThan(0);
@@ -182,12 +183,12 @@ describe('демо-сцена: кромка диска и смерть в пус
     });
   }
 
-  it('зажатая кнопка каста не спамит фаерболы: каст ловит фронт (INP-2)', () => {
-    // Held-семантика ввода (INP-2) даёт бит во всех тиках удержания; детектор
-    // фронта в JSON-системе `Cast` (`buttons && !prevButtons`) обязан сработать
-    // ровно один раз на нажатие — иначе слой ввода сломал бы существующий
-    // контент.
-    const { sim, state } = createDemoSimulation(SCENE);
+  it('зажатая кнопка каста копит заряд, а не спамит фаерболами (INP-2)', () => {
+    // Held-семантика ввода (INP-2) даёт бит во всех тиках удержания. Система
+    // `FireballCast` ловит по нему ДВА фронта: нажатие открывает заряд,
+    // отпускание стреляет накопленным. Ни одного снаряда, пока кнопка зажата,
+    // — иначе слой ввода сломал бы существующий контент.
+    const { sim, state, playerId } = createDemoSimulation(SCENE);
     const CAST = 1 << 0;
     const fireballs = (): number => {
       let count = 0;
@@ -202,16 +203,15 @@ describe('демо-сцена: кромка диска и смерть в пус
         { tick, playerId: PLAYER_ID, seq: tick, move: { x: 0, y: 0 }, aimDir: 0, buttons: CAST },
       ]);
     }
-    expect(fireballs()).toBe(1);
+    expect(fireballs()).toBe(0);
+    expect(coreWorld.hasComponent(state.world, playerId, 'Charging')).toBe(true);
 
-    // Отпустил и нажал снова — второй фаербол, фронт не потерялся.
+    // Отпустил — ровно один снаряд, и заряд закрылся.
     simTick(sim, state, [
       { tick: 11, playerId: PLAYER_ID, seq: 11, move: { x: 0, y: 0 }, aimDir: 0, buttons: 0 },
     ]);
-    simTick(sim, state, [
-      { tick: 12, playerId: PLAYER_ID, seq: 12, move: { x: 0, y: 0 }, aimDir: 0, buttons: CAST },
-    ]);
-    expect(fireballs()).toBe(2);
+    expect(fireballs()).toBe(1);
+    expect(coreWorld.hasComponent(state.world, playerId, 'Charging')).toBe(false);
   });
 
   it('на полу событий провала нет и герой жив', () => {
