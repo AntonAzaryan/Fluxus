@@ -552,7 +552,7 @@ describe('отпускание кнопки в симуляции (INP-2, TICK-4
       },
     ],
     capacity: 8,
-  } as unknown as SceneDef;
+  };
 
   /** Сборка «сэмплер → тик»: сэмпл границы тика уходит во фрейм как есть. */
   function harness() {

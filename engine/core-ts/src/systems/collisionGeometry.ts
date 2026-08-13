@@ -44,12 +44,15 @@ export interface Bounds {
   maxY: Fixed;
 }
 
-export interface Collider {
-  readonly halfX: Fixed;
-  readonly halfY: Fixed;
-  readonly shape: number;
-  readonly radius: Fixed;
+/** Буфер коллайдера: заполняется на месте при обходе кандидатов (`colliderInto`). */
+export interface MutableCollider {
+  halfX: Fixed;
+  halfY: Fixed;
+  shape: number;
+  radius: Fixed;
 }
+
+export type Collider = Readonly<MutableCollider>;
 
 /** Шаг одной оси: исходные данные и предиката блокировки, и нормали события. */
 export interface Move {
@@ -75,17 +78,29 @@ export interface Blocker {
   /** Центр круглого препятствия; у прямоугольного не используется. */
   centerX: Fixed;
   centerY: Fixed;
-  /** Ссылка на огибающую препятствия — читается, но не мутируется. */
-  bounds: Readonly<Bounds>;
+  /** Собственная огибающая препятствия: копия, а не ссылка на чужой буфер. */
+  readonly bounds: Bounds;
 }
 
 export function boundsAt(x: Fixed, y: Fixed, collider: Collider): Bounds {
-  return {
-    minX: fixed.sub(x, collider.halfX),
-    minY: fixed.sub(y, collider.halfY),
-    maxX: fixed.add(x, collider.halfX),
-    maxY: fixed.add(y, collider.halfY),
-  };
+  const bounds: Bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  boundsInto(bounds, x, y, collider);
+  return bounds;
+}
+
+/** Огибающая в готовый буфер: обход кандидатов не аллоцирует по одной на каждого. */
+export function boundsInto(target: Bounds, x: Fixed, y: Fixed, collider: Collider): void {
+  target.minX = fixed.sub(x, collider.halfX);
+  target.minY = fixed.sub(y, collider.halfY);
+  target.maxX = fixed.add(x, collider.halfX);
+  target.maxY = fixed.add(y, collider.halfY);
+}
+
+export function copyBounds(target: Bounds, source: Readonly<Bounds>): void {
+  target.minX = source.minX;
+  target.minY = source.minY;
+  target.maxX = source.maxX;
+  target.maxY = source.maxY;
 }
 
 /** Касание не считается пересечением: сущность, вставшая вплотную к стене, не заблокирована. */
@@ -154,7 +169,7 @@ export function cliffGateOpen(move: Move, s: StaticCollider, cliffRise: number):
  * Ближайшая к точке точка прямоугольника — контакт круга с прямоугольной
  * поверхностью: на грани это проекция по нормали, за краем — угол.
  */
-export function closestPointOn(bounds: Readonly<Bounds>, x: Fixed, y: Fixed): Vec2 {
+function closestPointOn(bounds: Readonly<Bounds>, x: Fixed, y: Fixed): Vec2 {
   return {
     x: fixed.clamp(x, bounds.minX, bounds.maxX),
     y: fixed.clamp(y, bounds.minY, bounds.maxY),
@@ -207,6 +222,15 @@ function axisNormalOf(move: Move): Vec2 {
  * Вырождение (совпавшие центры, центр круга внутри прямоугольника) — фолбэк на
  * осевую: единичный вектор из нулевого не восстановить, а событие обязано
  * нести детерминированную нормаль.
+ *
+ * Единичность — с точностью Q16.16, а не точная: `fixed.sqrt` округляет вниз,
+ * поэтому длина бывает и чуть больше единицы (наблюдалось `-65538` при
+ * `FIXED_ONE = 65536`), а на разносе центров в сотые доли юнита ошибка
+ * доходит до процента. Величина детерминирована (одни и те же входы дают тот
+ * же результат во всех реализациях), но потребителю нормаль нужна
+ * НАПРАВЛЕННО: отражение через скалярное произведение, сравнение знаков.
+ * Сравнивать нормаль на точное равенство с ±1 или с другой нормалью —
+ * ошибка потребителя.
  *
  * Момент контакта — позиция блокировки, а не точное касание: разрешение
  * движения работает по огибающим AABB (`ponytail` в `physics.ts`), и нормаль

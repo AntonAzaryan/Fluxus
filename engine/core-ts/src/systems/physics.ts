@@ -16,8 +16,10 @@ import * as vec from '../math/vector.js';
 import {
   blocks,
   boundsAt,
+  boundsInto,
   cliffGateOpen,
   closestDistanceSq,
+  copyBounds,
   overlaps,
   surfaceNormal,
   union,
@@ -27,6 +29,7 @@ import {
   type Bounds,
   type Collider,
   type Move,
+  type MutableCollider,
   type StaticCollider,
 } from './collisionGeometry.js';
 import { getField, hasComponent } from '../ecs/world.js';
@@ -196,16 +199,25 @@ export class PhysicsWorld {
 // ------------------------------------------------------------- коллайдеры ECS
 
 function colliderOf(read: FieldReader, entity: EntityId, component: string): Collider {
+  const collider: MutableCollider = { halfX: 0, halfY: 0, shape: 0, radius: 0 };
+  colliderInto(read, entity, component, collider);
+  return collider;
+}
+
+/** Тот же разбор в готовый буфер: обход кандидатов не аллоцирует (PHYS-5). */
+function colliderInto(
+  read: FieldReader,
+  entity: EntityId,
+  component: string,
+  out: MutableCollider,
+): void {
   const shape = read(entity, component, 'shape');
   const radius = read(entity, component, 'radius');
-  return shape === SHAPE_CIRCLE
-    ? { halfX: radius, halfY: radius, shape, radius }
-    : {
-        halfX: read(entity, component, 'halfX'),
-        halfY: read(entity, component, 'halfY'),
-        shape,
-        radius,
-      };
+  out.shape = shape;
+  out.radius = radius;
+  // У круга огибающая — квадрат по радиусу: полуоси коллайдера не читаются.
+  out.halfX = shape === SHAPE_CIRCLE ? radius : read(entity, component, 'halfX');
+  out.halfY = shape === SHAPE_CIRCLE ? radius : read(entity, component, 'halfY');
 }
 
 type FieldReader = (entity: EntityId, component: string, field: string) => number;
@@ -258,6 +270,19 @@ export class PhysicsSystem implements System {
     centerY: 0,
     bounds: { minX: 0, minY: 0, maxX: 0, maxY: 0 },
   };
+  /**
+   * Буферы кандидата в обходе препятствий: выбор ближайшего обязан осмотреть
+   * всех блокирующих, и без них каждый кандидат стоил бы коллайдера и
+   * огибающей в куче — аллокация, пропорциональная числу препятствий на
+   * каждом шаге оси каждого движущегося.
+   */
+  private readonly candidateCollider: MutableCollider = {
+    halfX: 0,
+    halfY: 0,
+    shape: SHAPE_AABB,
+    radius: 0,
+  };
+  private readonly candidateBounds: Bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
 
   constructor(physicsWorld: PhysicsWorld, options: PhysicsOptions = {}) {
     this.physicsWorld = physicsWorld;
@@ -315,7 +340,7 @@ export class PhysicsSystem implements System {
             centerX: x,
             centerY: y,
           };
-          if (this.nearestBlocker(ctx, move, mover, obstacles, positionOf, blockMask, cliffRise)) {
+          if (this.nearestBlocker(ctx, move, mover, obstacles, resolved, blockMask, cliffRise)) {
             // Нормаль поверхности в точке контакта (PHYS-9); осевая против
             // движения — её фолбэк и полный ответ для пары прямоугольников.
             // Политике (отскок, кнокбэк, урон о стену) нужна сторона удара, а
@@ -382,7 +407,7 @@ export class PhysicsSystem implements System {
     move: Move,
     mover: EntityId,
     obstacles: Float64Array,
-    positionOf: (entity: EntityId) => Vec2,
+    resolved: ReadonlyMap<EntityId, Vec2>,
     blockMask: number,
     cliffRise: number,
   ): boolean {
@@ -401,24 +426,30 @@ export class PhysicsSystem implements System {
       this.blocker.shape = SHAPE_AABB;
       this.blocker.centerX = 0;
       this.blocker.centerY = 0;
-      this.blocker.bounds = s;
+      copyBounds(this.blocker.bounds, s);
     }
     for (const other of obstacles) {
       if (other === mover) continue;
       if ((ctx.get(other, this.colliderComponent, 'layer') & blockMask) === 0) continue;
-      const position = positionOf(other);
-      const collider = colliderOf(ctx.get, other, this.colliderComponent);
-      const bounds = boundsAt(position.x, position.y, collider);
-      if (!blocks(move, bounds)) continue;
-      const distanceSq = closestDistanceSq(bounds, move.centerX, move.centerY);
+      // Позиция читается без объекта-обёртки: уже разрешённый сосед отдаёт
+      // свою (Command Buffer вливается только в конце системы), остальные —
+      // живое поле мира.
+      const position = resolved.get(other);
+      const px = position?.x ?? ctx.get(other, POSITION_COMPONENT, 'x');
+      const py = position?.y ?? ctx.get(other, POSITION_COMPONENT, 'y');
+      colliderInto(ctx.get, other, this.colliderComponent, this.candidateCollider);
+      boundsInto(this.candidateBounds, px, py, this.candidateCollider);
+      if (!blocks(move, this.candidateBounds)) continue;
+      const distanceSq = closestDistanceSq(this.candidateBounds, move.centerX, move.centerY);
       if (found && distanceSq >= bestDistanceSq) continue;
       bestDistanceSq = distanceSq;
       found = true;
       this.blocker.other = other;
-      this.blocker.shape = collider.shape;
-      this.blocker.centerX = position.x;
-      this.blocker.centerY = position.y;
-      this.blocker.bounds = bounds;
+      this.blocker.shape = this.candidateCollider.shape;
+      this.blocker.centerX = px;
+      this.blocker.centerY = py;
+      // Копия, а не ссылка: буфер кандидата перезапишет следующий претендент.
+      copyBounds(this.blocker.bounds, this.candidateBounds);
     }
     return found;
   }
