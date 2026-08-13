@@ -68,12 +68,14 @@ function filler(
 ): BotSlotFiller {
   return new BotSlotFiller({
     players: fixture.config.players,
-    attach: (playerId) =>
-      connectBot(fixture, bots, {
-        playerId,
-        profile: testProfile(),
-        brain: steadyBrain(options.intent ?? { moveX: 0, moveY: 0, aimRadians: 0 }),
-      }),
+    attach: (playerIds) =>
+      playerIds.map((playerId) =>
+        connectBot(fixture, bots, {
+          playerId,
+          profile: testProfile(),
+          brain: steadyBrain(options.intent ?? { moveX: 0, moveY: 0, aimRadians: 0 }),
+        }),
+      ),
     frozen: () => fixture.server.phase !== 'lobby',
     ...(options.reserved !== undefined ? { reserved: options.reserved } : {}),
     ...(options.schedule !== undefined ? { schedule: options.schedule } : {}),
@@ -131,14 +133,17 @@ describe('бот держит слот до заморозки ростера (B
 
     timer.run();
     await settle();
-    const [bot] = fill.seats;
     expect(fill.seats).toHaveLength(1);
-    expect(bot!.playerId).toBe('p2');
-    expect(bot!.client.slot).toBe(1);
+    expect(fill.seats[0]!.playerId).toBe('p2');
+    // Место — обычный `BotSeat` хоста ботов: заполнитель не заводит второй
+    // сборки, он лишь выбирает момент.
+    const bot = bots.seats[0]!;
+    expect(bot.playerId).toBe('p2');
+    expect(bot.client.slot).toBe(1);
     expect(fixture.server.phase).toBe('running');
     expect(fill.prune()).toBe(0);
 
-    for (let i = 0; i < 5; i++) await stepMatch(fixture, [founder.host, bot!]);
+    for (let i = 0; i < 5; i++) await stepMatch(fixture, [founder.host, bot]);
     expect(fixture.server.tick).toBe(5);
     // Бот присутствует в каноническом логе как обычный слот (BOT-1).
     const bots1 = fixture.server.canonicalInputs.filter((frame) => frame.playerId === 'p2');
@@ -165,10 +170,10 @@ describe('бот держит слот до заморозки ростера (B
     expect(late.client.closeReason).toBe('rejected');
     expect(late.client.closeDetail).toContain('match-in-progress');
     // Бот доигрывает свой матч: состав заморожен.
-    expect(fill.seats[0]!.client.phase).toBe('playing');
+    expect(bots.seats[0]!.client.phase).toBe('playing');
     expect(fill.prune()).toBe(0);
 
-    await stepMatch(fixture, [founder.host, fill.seats[0]!]);
+    await stepMatch(fixture, [founder.host, bots.seats[0]!]);
     expect(fixture.server.phase).toBe('running');
     bots.dispose();
   });
@@ -242,7 +247,7 @@ describe('сервер ботов от людей не отличает (BOT-1, 
     await settle();
     fill.fill();
     await settle();
-    for (let i = 0; i < ticks; i++) await stepMatch(botFixture, [lone.host, fill.seats[0]!]);
+    for (let i = 0; i < ticks; i++) await stepMatch(botFixture, [lone.host, bots.seats[0]!]);
 
     expect(shape(botFixture.server.canonicalInputs)).toEqual(
       shape(humanFixture.server.canonicalInputs),

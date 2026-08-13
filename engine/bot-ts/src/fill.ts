@@ -23,10 +23,26 @@
  * его, а человек, пришедший позже, получает штатный отказ сервера — этим
  * механизм замены посреди матча не вводится и вводить его не должен.
  */
-import type { BotSeat } from './host.js';
 
 /** Планировщик дедлайна: подменяется тестом и прогоном, который двигает время сам. */
 export type FillSchedule = (run: () => void, delayMs: number) => unknown;
+
+/**
+ * Посаженное место глазами заполнителя — структурный минимум `BotSeat`.
+ *
+ * Минимум, а не сам `BotSeat`, потому что хост ботов живёт вне потока сервера
+ * (BOT-4): у сборки, отдавшей ботов воркеру, объектов мест на этой стороне нет
+ * вовсе, и `attach` вправе вернуть пустой список — заполнитель от этого не
+ * ломается, он просто не наблюдает исход посадки. Там, где хост в том же
+ * процессе (автотест, браузерный sim-воркер), места видны, и `prune()` убирает
+ * те, которым сервер отказал.
+ */
+export interface BotFillSeat {
+  readonly playerId: string;
+  /** Клиент места: отказ сервера читается отсюда и ниоткуда больше. */
+  readonly client: { readonly closeReason: string | undefined };
+  dispose(): void;
+}
 
 export interface BotSlotFillerOptions {
   /**
@@ -36,11 +52,16 @@ export interface BotSlotFillerOptions {
    */
   readonly players: readonly string[];
   /**
-   * Посадить бота в слот: создать место, канал и запустить его. Делает это
-   * сборка, потому что транспорт — её выбор (NTR-2): loopback в автотесте,
-   * пара портов в браузере, сокет на выделенном сервере.
+   * Посадить ботов в перечисленные слоты: создать места, каналы и запустить их.
+   * Делает это сборка, потому что транспорт — её выбор (NTR-2): loopback в
+   * автотесте, пара портов к воркеру в браузере и на выделенном сервере.
+   *
+   * Одним вызовом на все слоты, а не по вызову на слот: хост ботов вправе быть
+   * один на несколько мест (BOT-4), и init-сообщение воркеру тоже одно. Что
+   * вернётся — те места, которые сборке ВИДНЫ (см. `BotFillSeat`); пустой
+   * список законен и означает «боты уехали в другой поток».
    */
-  readonly attach: (playerId: string) => BotSeat;
+  readonly attach: (playerIds: readonly string[]) => readonly BotFillSeat[];
   /**
    * Слоты, которые основатель держит за СВОИМИ людьми — теми, кого он хостит
    * сам и о которых знает без сервера (браузерная сборка знает, что p1 — это
@@ -74,7 +95,7 @@ const defaultCancel = (handle: unknown): void => {
 export class BotSlotFiller {
   private readonly options: BotSlotFillerOptions;
   private readonly reserved: ReadonlySet<string>;
-  private readonly attached: BotSeat[] = [];
+  private readonly attached: BotFillSeat[] = [];
 
   private handle: unknown;
   private armed = false;
@@ -91,7 +112,7 @@ export class BotSlotFiller {
   }
 
   /** Места, посаженные заполнителем. До дедлайна список пуст — в этом всё (BOT-7). */
-  get seats(): readonly BotSeat[] {
+  get seats(): readonly BotFillSeat[] {
     return this.attached;
   }
 
@@ -123,17 +144,16 @@ export class BotSlotFiller {
    * Заморозка: боты садятся в слоты, которых не занял человек. Однократна —
    * повторный вызов отдаёт уже посаженных, а не сажает вторых.
    */
-  fill(): readonly BotSeat[] {
+  fill(): readonly BotFillSeat[] {
     if (this.done) return this.attached;
     this.done = true;
     this.clearTimer();
     // Ростер успели занять люди — заполнять нечего, и это первый сценарий
     // BOT-7: бот в такой матч не входит вовсе, а сервер уступки не видел.
     if (this.options.frozen?.() === true) return this.attached;
-    for (const playerId of this.options.players) {
-      if (this.reserved.has(playerId)) continue;
-      this.attached.push(this.options.attach(playerId));
-    }
+    const free = this.options.players.filter((playerId) => !this.reserved.has(playerId));
+    if (free.length === 0) return this.attached;
+    this.attached.push(...this.options.attach(free));
     return this.attached;
   }
 

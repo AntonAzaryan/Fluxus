@@ -41,7 +41,7 @@ export type { BotSeatOptions } from './host.js';
 
 // заполнение слота (BOT-7): политика сборки-основателя, а не сервера
 export { BotSlotFiller } from './fill.js';
-export type { BotSlotFillerOptions, FillSchedule } from './fill.js';
+export type { BotFillSeat, BotSlotFillerOptions, FillSchedule } from './fill.js';
 
 // сборка: пара портов серверу и боту (design D3)
 export { PortConnections, botWorkerInit, isBotWorkerInit } from './assembly.js';

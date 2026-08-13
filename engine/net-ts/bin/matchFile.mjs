@@ -1,26 +1,10 @@
 /**
- * Общее для обоих запускалок: хук резолва и чтение файла матча.
- *
- * Шага сборки нет по той же причине, что у `core-ts/bin/sim.mjs`: типы Node
- * стрипает сам (>=22.18), а хук добавляет единственное, чего ему не хватает, —
- * исходники импортируют './x.js', и это './x.ts'.
+ * Общее для запускалок: хук резолва (`tsHook.mjs`, импортируется ради его
+ * побочного действия) и чтение файла матча.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { registerHooks } from 'node:module';
-
-registerHooks({
-  resolve(specifier, context, next) {
-    if (specifier.startsWith('.') && specifier.endsWith('.js')) {
-      try {
-        return next(`${specifier.slice(0, -3)}.ts`, context);
-      } catch {
-        // Настоящего .ts нет — резолвим как просили.
-      }
-    }
-    return next(specifier, context);
-  },
-});
+import './tsHook.mjs';
 
 /**
  * Файл матча описывает и данные матча, и контент-пак, которым его поднимать.
