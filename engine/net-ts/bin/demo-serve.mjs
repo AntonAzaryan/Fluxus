@@ -32,7 +32,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { MessageChannel, Worker } from 'node:worker_threads';
-import { flag, option, readMatchFile } from './matchFile.mjs';
+import { flag, matchConfigOf, option, readMatchFile } from './matchFile.mjs';
 
 const fromRepo = (relative) => fileURLToPath(new URL(`../../../${relative}`, import.meta.url));
 
@@ -65,28 +65,14 @@ const serializer = flag('json') ? jsonSerializer : msgpackSerializer;
 const tickRate = match.tickRate ?? 60;
 const scene = pack.scene(match.sceneRef);
 
-/** Конфиг матча — один на все рестарты: следующий матч играется тем же (D3). */
+/**
+ * Конфиг матча — один на все рестарты: следующий матч играется тем же (D3).
+ * Раскладка общая с `serve.mjs` (`matchConfigOf`), включая зависимости сборки
+ * мира (NTR-14): те же значения предъявит клиент, иначе хеш `worldInit`
+ * разойдётся ещё на входе (NTR-5).
+ */
 function matchConfig() {
-  return {
-    version: { buildId: match.buildId, contentPackHash: pack.hash },
-    players: match.players,
-    seed: match.seed,
-    sceneRef: match.sceneRef,
-    scene,
-    initial: match.initial ?? [],
-    name: match.name,
-    tickRate,
-    snapshotRate: match.snapshotRate ?? 30,
-    inputDelay: match.inputDelay ?? 2,
-    ...(match.inputWindow !== undefined ? { inputWindow: match.inputWindow } : {}),
-    ...(match.eventRepeat !== undefined ? { eventRepeat: match.eventRepeat } : {}),
-    silenceTicks: (match.silenceSeconds ?? 10) * tickRate,
-    // Зависимости сборки мира (NTR-14) — те же, что предъявит клиент: без них
-    // расчёт разошёлся бы, а хеш `worldInit` разошёлся бы ещё на входе (NTR-5).
-    ...(match.physics !== undefined ? { physics: match.physics } : {}),
-    ...(match.locomotion !== undefined ? { locomotion: match.locomotion } : {}),
-    ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
-  };
+  return matchConfigOf(match, pack);
 }
 
 // ------------------------------------------------- слушающая сторона стенда
