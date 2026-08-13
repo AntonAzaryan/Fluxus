@@ -51,7 +51,59 @@
     { "name": "Lifetime", "fields": { "ticks": "i32" } },
     { "name": "Dead", "fields": { "atTick": "i32" } },
     { "name": "FallConfig", "fields": { "deathDepth": "fixed", "speed": "fixed" } },
-    { "name": "Falling", "fields": { "depth": "fixed" } }
+    { "name": "Falling", "fields": { "depth": "fixed" } },
+    {
+      "name": "Health",
+      "fields": {
+        "hp": "fixed",
+        "hpMax": "fixed",
+        "regenAmount": "fixed",
+        "regenPeriod": "i32",
+        "regenTicks": "i32"
+      }
+    },
+    { "name": "Score", "fields": { "deaths": "i32" } },
+    {
+      "name": "Cooldowns",
+      "fields": {
+        "cast": "i32",
+        "castMax": "i32",
+        "catch": "i32",
+        "catchMax": "i32",
+        "shield": "i32",
+        "shieldMax": "i32"
+      }
+    },
+    { "name": "Respawn", "fields": { "delay": "i32", "ticks": "i32", "x": "fixed", "y": "fixed" } },
+    {
+      "name": "Combat",
+      "fields": {
+        "baseDamage": "fixed",
+        "blastDamage": "fixed",
+        "blastRadius": "fixed",
+        "carryOffset": "fixed",
+        "carryTicks": "i32",
+        "castOffset": "fixed",
+        "catchCone": "fixed",
+        "catchMinRange": "fixed",
+        "catchRange": "fixed",
+        "chargeDamage": "fixed",
+        "chargeTicks": "i32",
+        "overchargeTicks": "i32",
+        "projectileRadius": "fixed",
+        "projectileSpeed": "fixed",
+        "projectileTicks": "i32",
+        "shieldTicks": "i32"
+      }
+    },
+    { "name": "ActionLock", "fields": { "mask": "i32" } },
+    { "name": "Charging", "fields": { "ticks": "i32" } },
+    { "name": "Catching", "fields": { "ticks": "i32" } },
+    { "name": "Carrying", "fields": { "projectile": "entity", "since": "i32" } },
+    { "name": "Shielded", "fields": { "ticks": "i32" } },
+    { "name": "Owner", "fields": { "entity": "entity" } },
+    { "name": "Damage", "fields": { "amount": "fixed" } },
+    { "name": "Follow", "fields": { "offset": "fixed" } }
   ],
   "prefabs": [
     {
@@ -86,7 +138,35 @@
         },
         "LocomotionState": { "dirX": 0, "dirY": 0, "state": 0, "ticksLeft": 0 },
         "ArenaState": { "support": 0 },
-        "FallConfig": { "deathDepth": 4915200, "speed": 16384 }
+        "FallConfig": { "deathDepth": 4915200, "speed": 16384 },
+        "Health": {
+          "hp": 32768000,
+          "hpMax": 32768000,
+          "regenAmount": 65536,
+          "regenPeriod": 6,
+          "regenTicks": 0
+        },
+        "Score": { "deaths": 0 },
+        "Cooldowns": { "cast": 0, "castMax": 90, "catch": 0, "catchMax": 120, "shield": 0, "shieldMax": 180 },
+        "Respawn": { "delay": 180, "ticks": 0, "x": 557056, "y": 1605632 },
+        "Combat": {
+          "baseDamage": 6553600,
+          "blastDamage": 16384000,
+          "blastRadius": 163840,
+          "carryOffset": 39322,
+          "carryTicks": 24,
+          "castOffset": 29491,
+          "catchCone": 56756,
+          "catchMinRange": 19661,
+          "catchRange": 196608,
+          "chargeDamage": 19660800,
+          "chargeTicks": 60,
+          "overchargeTicks": 18,
+          "projectileRadius": 9830,
+          "projectileSpeed": 16384,
+          "projectileTicks": 90,
+          "shieldTicks": 18
+        }
       },
       "tags": ["Hero"]
     },
@@ -96,60 +176,122 @@
         "Position": { "x": 0, "y": 0 },
         "Velocity": { "x": 0, "y": 0 },
         "Collider": {
-          "blockMask": 0,
+          "blockMask": 8,
           "cliffRise": 0,
-          "halfX": 6554,
-          "halfY": 6554,
+          "halfX": 9830,
+          "halfY": 9830,
           "hitMask": 2,
           "layer": 4,
-          "radius": 6554,
+          "radius": 9830,
           "shape": 0
         },
-        "Lifetime": { "ticks": 50 }
+        "Lifetime": { "ticks": 90 },
+        "Owner": { "entity": -1 },
+        "Damage": { "amount": 6553600 }
       },
       "tags": ["Fireball"]
+    },
+    {
+      "name": "Shield",
+      "components": {
+        "Position": { "x": 0, "y": 0 },
+        "Collider": {
+          "blockMask": 0,
+          "cliffRise": 0,
+          "halfX": 25559,
+          "halfY": 25559,
+          "hitMask": 0,
+          "layer": 8,
+          "radius": 25559,
+          "shape": 0
+        },
+        "Lifetime": { "ticks": 18 },
+        "Owner": { "entity": -1 },
+        "Follow": { "offset": 0 }
+      },
+      "tags": ["Shield"]
+    },
+    {
+      "name": "CatchZone",
+      "components": { "Position": { "x": 0, "y": 0 }, "Owner": { "entity": -1 }, "Follow": { "offset": 104858 } },
+      "tags": ["CatchZone"]
     }
   ],
   "systems": [
     {
-      "name": "KillSwitch",
-      "order": 20,
-      "query": { "all": ["Player", "Input", "Velocity"], "not": ["Dead"] },
+      "name": "CooldownTick",
+      "order": 10,
+      "query": { "all": ["Cooldowns"] },
       "as": "e",
       "do": [
         {
-          "if": {
-            "cond": {
-              "and": [
-                { "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 1] },
-                { "!": [{ "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "prevButtons"] }, 1] }] }
-              ]
-            },
-            "then": [
-              {
-                "addComponent": {
-                  "entity": { "var": "e" },
-                  "component": "Dead",
-                  "values": { "atTick": { "tick": [] } }
-                }
+          "modifyComponent": {
+            "entity": { "var": "e" },
+            "component": "Cooldowns",
+            "values": {
+              "cast": {
+                "max": [0, { "-": [{ "getComponent": [{ "var": "e" }, "Cooldowns", "cast"] }, 1] }]
               },
-              {
-                "removeComponent": {
-                  "entity": { "var": "e" },
-                  "component": "Locomotion"
-                }
+              "catch": {
+                "max": [0, { "-": [{ "getComponent": [{ "var": "e" }, "Cooldowns", "catch"] }, 1] }]
               },
+              "shield": {
+                "max": [0, { "-": [{ "getComponent": [{ "var": "e" }, "Cooldowns", "shield"] }, 1] }]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "HealthRegen",
+      "order": 12,
+      "query": { "all": ["Health"], "not": ["Dead"] },
+      "as": "e",
+      "do": [
+        {
+          "let": {
+            "bindings": { "acc": { "+": [{ "getComponent": [{ "var": "e" }, "Health", "regenTicks"] }, 1] } },
+            "do": [
               {
-                "modifyComponent": {
-                  "entity": { "var": "e" },
-                  "component": "Velocity",
-                  "values": { "x": 0, "y": 0 }
-                }
-              },
-              {
-                "emitEvent": {
-                  "type": "EntityDied",
-                  "data": { "entity": { "var": "e" } }
+                "if": {
+                  "cond": {
+                    ">=": [
+                      { "var": "acc" },
+                      { "getComponent": [{ "var": "e" }, "Health", "regenPeriod"] }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Health",
+                        "values": {
+                          "hp": {
+                            "min": [
+                              { "getComponent": [{ "var": "e" }, "Health", "hpMax"] },
+                              {
+                                "+": [
+                                  { "getComponent": [{ "var": "e" }, "Health", "hp"] },
+                                  { "getComponent": [{ "var": "e" }, "Health", "regenAmount"] }
+                                ]
+                              }
+                            ]
+                          },
+                          "regenTicks": 0
+                        }
+                      }
+                    }
+                  ],
+                  "else": [
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Health",
+                        "values": { "regenTicks": { "var": "acc" } }
+                      }
+                    }
+                  ]
                 }
               }
             ]
@@ -158,65 +300,771 @@
       ]
     },
     {
-      "name": "Cast",
+      "name": "ShieldExpire",
+      "order": 14,
+      "query": { "all": ["Shielded"] },
+      "as": "e",
+      "do": [
+        {
+          "let": {
+            "bindings": { "left": { "-": [{ "getComponent": [{ "var": "e" }, "Shielded", "ticks"] }, 1] } },
+            "do": [
+              {
+                "if": {
+                  "cond": { "<=": [{ "var": "left" }, 0] },
+                  "then": [{ "removeComponent": { "entity": { "var": "e" }, "component": "Shielded" } }],
+                  "else": [
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Shielded",
+                        "values": { "ticks": { "var": "left" } }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "RespawnTick",
+      "order": 20,
+      "query": { "all": ["Dead", "Respawn", "Health", "Position"] },
+      "as": "e",
+      "do": [
+        {
+          "let": {
+            "bindings": { "left": { "-": [{ "getComponent": [{ "var": "e" }, "Respawn", "ticks"] }, 1] } },
+            "do": [
+              {
+                "if": {
+                  "cond": { "<=": [{ "var": "left" }, 0] },
+                  "then": [
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Position",
+                        "values": {
+                          "x": { "getComponent": [{ "var": "e" }, "Respawn", "x"] },
+                          "y": { "getComponent": [{ "var": "e" }, "Respawn", "y"] }
+                        }
+                      }
+                    },
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Velocity",
+                        "values": { "x": 0, "y": 0 }
+                      }
+                    },
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Health",
+                        "values": {
+                          "hp": { "getComponent": [{ "var": "e" }, "Health", "hpMax"] },
+                          "regenTicks": 0
+                        }
+                      }
+                    },
+                    {
+                      "modifyComponent": { "entity": { "var": "e" }, "component": "Respawn", "values": { "ticks": 0 } }
+                    },
+                    { "removeComponent": { "entity": { "var": "e" }, "component": "Dead" } },
+                    { "removeComponent": { "entity": { "var": "e" }, "component": "Falling" } },
+                    {
+                      "removeComponent": { "entity": { "var": "e" }, "component": "LevelOverride" }
+                    },
+                    { "removeComponent": { "entity": { "var": "e" }, "component": "ActionLock" } },
+                    {
+                      "addComponent": {
+                        "entity": { "var": "e" },
+                        "component": "LocomotionState",
+                        "values": { "dirX": 0, "dirY": 0, "state": 0, "ticksLeft": 0 }
+                      }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "EntityRespawned",
+                        "data": {
+                          "entity": { "var": "e" },
+                          "x": { "getComponent": [{ "var": "e" }, "Respawn", "x"] },
+                          "y": { "getComponent": [{ "var": "e" }, "Respawn", "y"] }
+                        }
+                      }
+                    }
+                  ],
+                  "else": [
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Respawn",
+                        "values": { "ticks": { "var": "left" } }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "FireballCast",
       "order": 30,
-      "query": { "all": ["Input", "Player"], "not": ["Dead"] },
+      "query": { "all": ["Input", "Player", "Combat", "Cooldowns", "Position"], "not": ["Dead"] },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": { "hasComponent": [{ "var": "e" }, "Charging"] },
+            "then": [
+              {
+                "if": {
+                  "cond": {
+                    "!": [{ "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 0] }]
+                  },
+                  "then": [
+                    {
+                      "let": {
+                        "bindings": {
+                          "charged": { "getComponent": [{ "var": "e" }, "Charging", "ticks"] },
+                          "dir": {
+                            "vec": [
+                              { "cos": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] },
+                              { "sin": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] }
+                            ]
+                          }
+                        },
+                        "do": [
+                          {
+                            "let": {
+                              "bindings": {
+                                "ratio": {
+                                  "/": [
+                                    {
+                                      "fromInt": [
+                                        {
+                                          "min": [
+                                            { "var": "charged" },
+                                            {
+                                              "getComponent": [{ "var": "e" }, "Combat", "chargeTicks"]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "fromInt": [
+                                        {
+                                          "getComponent": [{ "var": "e" }, "Combat", "chargeTicks"]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              },
+                              "do": [
+                                {
+                                  "spawnEntity": {
+                                    "prefab": "Fireball",
+                                    "overrides": {
+                                      "Position": {
+                                        "x": {
+                                          "+": [
+                                            { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                                            {
+                                              "*": [
+                                                { "vec.x": [{ "var": "dir" }] },
+                                                {
+                                                  "getComponent": [{ "var": "e" }, "Combat", "castOffset"]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        "y": {
+                                          "+": [
+                                            { "getComponent": [{ "var": "e" }, "Position", "y"] },
+                                            {
+                                              "*": [
+                                                { "vec.y": [{ "var": "dir" }] },
+                                                {
+                                                  "getComponent": [{ "var": "e" }, "Combat", "castOffset"]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "Velocity": {
+                                        "x": {
+                                          "*": [
+                                            { "vec.x": [{ "var": "dir" }] },
+                                            {
+                                              "getComponent": [{ "var": "e" }, "Combat", "projectileSpeed"]
+                                            }
+                                          ]
+                                        },
+                                        "y": {
+                                          "*": [
+                                            { "vec.y": [{ "var": "dir" }] },
+                                            {
+                                              "getComponent": [{ "var": "e" }, "Combat", "projectileSpeed"]
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "Collider": {
+                                        "halfX": {
+                                          "*": [
+                                            {
+                                              "getComponent": [{ "var": "e" }, "Combat", "projectileRadius"]
+                                            },
+                                            { "+": [65536, { "var": "ratio" }] }
+                                          ]
+                                        },
+                                        "halfY": {
+                                          "*": [
+                                            {
+                                              "getComponent": [{ "var": "e" }, "Combat", "projectileRadius"]
+                                            },
+                                            { "+": [65536, { "var": "ratio" }] }
+                                          ]
+                                        },
+                                        "radius": {
+                                          "*": [
+                                            {
+                                              "getComponent": [{ "var": "e" }, "Combat", "projectileRadius"]
+                                            },
+                                            { "+": [65536, { "var": "ratio" }] }
+                                          ]
+                                        }
+                                      },
+                                      "Damage": {
+                                        "amount": {
+                                          "+": [
+                                            {
+                                              "getComponent": [{ "var": "e" }, "Combat", "baseDamage"]
+                                            },
+                                            {
+                                              "*": [
+                                                {
+                                                  "getComponent": [{ "var": "e" }, "Combat", "chargeDamage"]
+                                                },
+                                                { "var": "ratio" }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "Lifetime": {
+                                        "ticks": {
+                                          "getComponent": [{ "var": "e" }, "Combat", "projectileTicks"]
+                                        }
+                                      },
+                                      "Owner": { "entity": { "var": "e" } }
+                                    }
+                                  }
+                                },
+                                {
+                                  "emitEvent": {
+                                    "type": "CastFireball",
+                                    "data": {
+                                      "dirX": { "vec.x": [{ "var": "dir" }] },
+                                      "dirY": { "vec.y": [{ "var": "dir" }] },
+                                      "entity": { "var": "e" },
+                                      "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] },
+                                      "tick": { "tick": [] }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    { "removeComponent": { "entity": { "var": "e" }, "component": "Charging" } },
+                    { "removeComponent": { "entity": { "var": "e" }, "component": "ActionLock" } },
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Cooldowns",
+                        "values": { "cast": { "getComponent": [{ "var": "e" }, "Cooldowns", "castMax"] } }
+                      }
+                    }
+                  ],
+                  "else": [
+                    {
+                      "let": {
+                        "bindings": {
+                          "held": { "+": [{ "getComponent": [{ "var": "e" }, "Charging", "ticks"] }, 1] }
+                        },
+                        "do": [
+                          {
+                            "if": {
+                              "cond": {
+                                ">": [
+                                  { "var": "held" },
+                                  {
+                                    "+": [
+                                      { "getComponent": [{ "var": "e" }, "Combat", "chargeTicks"] },
+                                      {
+                                        "getComponent": [{ "var": "e" }, "Combat", "overchargeTicks"]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "let": {
+                                    "bindings": {
+                                      "at": {
+                                        "vec": [
+                                          { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                                          { "getComponent": [{ "var": "e" }, "Position", "y"] }
+                                        ]
+                                      }
+                                    },
+                                    "do": [
+                                      {
+                                        "forEach": {
+                                          "query": {
+                                            "all": ["Health", "Position"],
+                                            "not": ["Dead", "Shielded"],
+                                            "withinRadius": {
+                                              "center": { "var": "at" },
+                                              "radius": {
+                                                "getComponent": [{ "var": "e" }, "Combat", "blastRadius"]
+                                              }
+                                            }
+                                          },
+                                          "as": "t",
+                                          "do": [
+                                            {
+                                              "modifyComponent": {
+                                                "entity": { "var": "t" },
+                                                "component": "Health",
+                                                "values": {
+                                                  "hp": {
+                                                    "max": [
+                                                      0,
+                                                      {
+                                                        "-": [
+                                                          {
+                                                            "getComponent": [{ "var": "t" }, "Health", "hp"]
+                                                          },
+                                                          {
+                                                            "getComponent": [
+                                                              { "var": "e" },
+                                                              "Combat",
+                                                              "blastDamage"
+                                                            ]
+                                                          }
+                                                        ]
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "emitEvent": {
+                                          "type": "FireballExploded",
+                                          "data": {
+                                            "entity": { "var": "e" },
+                                            "x": { "vec.x": [{ "var": "at" }] },
+                                            "y": { "vec.y": [{ "var": "at" }] }
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "removeComponent": { "entity": { "var": "e" }, "component": "Charging" }
+                                },
+                                {
+                                  "removeComponent": { "entity": { "var": "e" }, "component": "ActionLock" }
+                                },
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "e" },
+                                    "component": "Cooldowns",
+                                    "values": {
+                                      "cast": { "getComponent": [{ "var": "e" }, "Cooldowns", "castMax"] }
+                                    }
+                                  }
+                                }
+                              ],
+                              "else": [
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "e" },
+                                    "component": "Charging",
+                                    "values": { "ticks": { "var": "held" } }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "else": [
+              {
+                "if": {
+                  "cond": {
+                    "and": [
+                      {
+                        "and": [
+                          {
+                            "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 0]
+                          },
+                          {
+                            "!": [
+                              {
+                                "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "prevButtons"] }, 0]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      { "!": [{ "hasComponent": [{ "var": "e" }, "Carrying"] }] },
+                      { "<=": [{ "getComponent": [{ "var": "e" }, "Cooldowns", "cast"] }, 0] }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "addComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Charging",
+                        "values": { "ticks": 0 }
+                      }
+                    },
+                    {
+                      "addComponent": {
+                        "entity": { "var": "e" },
+                        "component": "ActionLock",
+                        "values": { "mask": 1 }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "ShieldCast",
+      "order": 32,
+      "query": {
+        "all": ["Input", "Combat", "Cooldowns", "Position"],
+        "not": ["Dead", "Charging", "Carrying", "Shielded"]
+      },
       "as": "e",
       "do": [
         {
           "if": {
             "cond": {
               "and": [
-                { "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 0] },
-                { "!": [{ "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "prevButtons"] }, 0] }] }
+                {
+                  "and": [
+                    { "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 1] },
+                    {
+                      "!": [
+                        {
+                          "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "prevButtons"] }, 1]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                { "<=": [{ "getComponent": [{ "var": "e" }, "Cooldowns", "shield"] }, 0] }
               ]
             },
             "then": [
               {
-                "let": {
-                  "bindings": {
-                    "dir": {
-                      "vec": [
-                        { "cos": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] },
-                        { "sin": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] }
-                      ]
-                    }
+                "spawnEntity": {
+                  "prefab": "Shield",
+                  "overrides": {
+                    "Position": {
+                      "x": { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                      "y": { "getComponent": [{ "var": "e" }, "Position", "y"] }
+                    },
+                    "Lifetime": { "ticks": { "getComponent": [{ "var": "e" }, "Combat", "shieldTicks"] } },
+                    "Owner": { "entity": { "var": "e" } }
+                  }
+                }
+              },
+              {
+                "addComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Shielded",
+                  "values": { "ticks": { "getComponent": [{ "var": "e" }, "Combat", "shieldTicks"] } }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Cooldowns",
+                  "values": { "shield": { "getComponent": [{ "var": "e" }, "Cooldowns", "shieldMax"] } }
+                }
+              },
+              {
+                "emitEvent": {
+                  "type": "CastShield",
+                  "data": {
+                    "entity": { "var": "e" },
+                    "x": { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                    "y": { "getComponent": [{ "var": "e" }, "Position", "y"] }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "CatchCast",
+      "order": 34,
+      "query": {
+        "all": ["Input", "Combat", "Cooldowns", "Position"],
+        "not": ["Dead", "Charging", "Carrying"]
+      },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": { "hasComponent": [{ "var": "e" }, "Catching"] },
+            "then": [
+              {
+                "if": {
+                  "cond": {
+                    "!": [{ "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 4] }]
                   },
-                  "do": [
+                  "then": [
+                    { "removeComponent": { "entity": { "var": "e" }, "component": "Catching" } },
                     {
-                      "spawnEntity": {
-                        "prefab": "Fireball",
-                        "overrides": {
-                          "Position": {
-                            "x": {
-                              "+": [
-                                { "getComponent": [{ "var": "e" }, "Position", "x"] },
-                                { "*": [{ "vec.x": [{ "var": "dir" }] }, 29491] }
-                              ]
-                            },
-                            "y": {
-                              "+": [
-                                { "getComponent": [{ "var": "e" }, "Position", "y"] },
-                                { "*": [{ "vec.y": [{ "var": "dir" }] }, 29491] }
-                              ]
-                            }
-                          },
-                          "Velocity": {
-                            "x": { "*": [{ "vec.x": [{ "var": "dir" }] }, 16384] },
-                            "y": { "*": [{ "vec.y": [{ "var": "dir" }] }, 16384] }
-                          }
-                        }
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Cooldowns",
+                        "values": { "catch": { "getComponent": [{ "var": "e" }, "Cooldowns", "catchMax"] } }
                       }
                     },
                     {
-                      "emitEvent": {
-                        "type": "CastFireball",
-                        "data": {
-                          "dirX": { "vec.x": [{ "var": "dir" }] },
-                          "dirY": { "vec.y": [{ "var": "dir" }] },
-                          "entity": { "var": "e" },
-                          "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] },
-                          "tick": { "tick": [] }
+                      "let": {
+                        "bindings": {
+                          "aim": {
+                            "vec": [
+                              { "cos": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] },
+                              { "sin": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] }
+                            ]
+                          },
+                          "at": {
+                            "vec": [
+                              { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                              { "getComponent": [{ "var": "e" }, "Position", "y"] }
+                            ]
+                          },
+                          "caught": 0
+                        },
+                        "do": [
+                          {
+                            "forEach": {
+                              "query": {
+                                "all": ["Damage", "Velocity", "Owner", "Position"],
+                                "not": ["Follow"],
+                                "withTag": "Fireball",
+                                "withinRadius": {
+                                  "center": { "var": "at" },
+                                  "radius": { "getComponent": [{ "var": "e" }, "Combat", "catchRange"] }
+                                }
+                              },
+                              "as": "p",
+                              "nearestTo": { "var": "at" },
+                              "do": [
+                                {
+                                  "let": {
+                                    "bindings": {
+                                      "delta": {
+                                        "vec.sub": [
+                                          {
+                                            "vec": [
+                                              { "getComponent": [{ "var": "p" }, "Position", "x"] },
+                                              { "getComponent": [{ "var": "p" }, "Position", "y"] }
+                                            ]
+                                          },
+                                          { "var": "at" }
+                                        ]
+                                      }
+                                    },
+                                    "do": [
+                                      {
+                                        "if": {
+                                          "cond": {
+                                            "and": [
+                                              { "==": [{ "var": "caught" }, 0] },
+                                              {
+                                                "!=": [
+                                                  {
+                                                    "getComponent": [{ "var": "p" }, "Owner", "entity"]
+                                                  },
+                                                  { "var": "e" }
+                                                ]
+                                              },
+                                              {
+                                                ">=": [
+                                                  { "vec.length": [{ "var": "delta" }] },
+                                                  {
+                                                    "getComponent": [{ "var": "e" }, "Combat", "catchMinRange"]
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                ">=": [
+                                                  {
+                                                    "vec.dot": [
+                                                      { "vec.normalize": [{ "var": "delta" }] },
+                                                      { "var": "aim" }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "getComponent": [{ "var": "e" }, "Combat", "catchCone"]
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          "then": [
+                                            { "set": { "name": "caught", "value": 1 } },
+                                            {
+                                              "modifyComponent": {
+                                                "entity": { "var": "p" },
+                                                "component": "Velocity",
+                                                "values": { "x": 0, "y": 0 }
+                                              }
+                                            },
+                                            {
+                                              "modifyComponent": {
+                                                "entity": { "var": "p" },
+                                                "component": "Owner",
+                                                "values": { "entity": { "var": "e" } }
+                                              }
+                                            },
+                                            {
+                                              "addComponent": {
+                                                "entity": { "var": "p" },
+                                                "component": "Follow",
+                                                "values": {
+                                                  "offset": {
+                                                    "getComponent": [{ "var": "e" }, "Combat", "carryOffset"]
+                                                  }
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "removeComponent": { "entity": { "var": "p" }, "component": "Lifetime" }
+                                            },
+                                            {
+                                              "addComponent": {
+                                                "entity": { "var": "e" },
+                                                "component": "Carrying",
+                                                "values": {
+                                                  "projectile": { "var": "p" },
+                                                  "since": { "tick": [] }
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "addComponent": {
+                                                "entity": { "var": "e" },
+                                                "component": "ActionLock",
+                                                "values": { "mask": 1 }
+                                              }
+                                            },
+                                            {
+                                              "emitEvent": {
+                                                "type": "CaughtFireball",
+                                                "data": {
+                                                  "entity": { "var": "e" },
+                                                  "target": { "var": "p" },
+                                                  "x": { "vec.x": [{ "var": "at" }] },
+                                                  "y": { "vec.y": [{ "var": "at" }] }
+                                                }
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "else": [
+              {
+                "if": {
+                  "cond": {
+                    "and": [
+                      {
+                        "and": [
+                          {
+                            "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 4]
+                          },
+                          {
+                            "!": [
+                              {
+                                "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "prevButtons"] }, 4]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      { "<=": [{ "getComponent": [{ "var": "e" }, "Cooldowns", "catch"] }, 0] }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "addComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Catching",
+                        "values": { "ticks": 0 }
+                      }
+                    },
+                    {
+                      "spawnEntity": {
+                        "prefab": "CatchZone",
+                        "overrides": {
+                          "Position": {
+                            "x": { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                            "y": { "getComponent": [{ "var": "e" }, "Position", "y"] }
+                          },
+                          "Owner": { "entity": { "var": "e" } }
                         }
                       }
                     }
@@ -229,54 +1077,392 @@
       ]
     },
     {
-      "name": "FireballFlight",
-      "order": 40,
-      "query": { "all": ["Position", "Velocity", "Lifetime"] },
+      "name": "LifetimeTick",
+      "order": 50,
+      "query": { "all": ["Lifetime"] },
       "as": "e",
       "do": [
         {
-          "modifyComponent": {
-            "entity": { "var": "e" },
-            "component": "Lifetime",
-            "values": {
-              "ticks": { "-": [{ "getComponent": [{ "var": "e" }, "Lifetime", "ticks"] }, 1] }
-            }
+          "let": {
+            "bindings": { "left": { "-": [{ "getComponent": [{ "var": "e" }, "Lifetime", "ticks"] }, 1] } },
+            "do": [
+              {
+                "if": {
+                  "cond": { "<=": [{ "var": "left" }, 0] },
+                  "then": [{ "destroyEntity": { "entity": { "var": "e" } } }],
+                  "else": [
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Lifetime",
+                        "values": { "ticks": { "var": "left" } }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
           }
         }
       ]
     },
     {
-      "name": "FireballImpact",
-      "order": 60,
-      "query": { "all": ["Position", "Lifetime"] },
+      "name": "CarryTick",
+      "order": 55,
+      "query": { "all": ["Carrying", "Input", "Combat", "Position"] },
       "as": "e",
       "do": [
         {
-          "if": {
-            "cond": { "<=": [{ "getComponent": [{ "var": "e" }, "Lifetime", "ticks"] }, 0] },
-            "then": [
+          "let": {
+            "bindings": { "ball": { "getComponent": [{ "var": "e" }, "Carrying", "projectile"] } },
+            "do": [
+              {
+                "if": {
+                  "cond": { "!": [{ "isAlive": [{ "var": "ball" }] }] },
+                  "then": [
+                    { "removeComponent": { "entity": { "var": "e" }, "component": "Carrying" } },
+                    { "removeComponent": { "entity": { "var": "e" }, "component": "ActionLock" } }
+                  ],
+                  "else": [
+                    {
+                      "if": {
+                        "cond": {
+                          "and": [
+                            {
+                              "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 0]
+                            },
+                            {
+                              "!": [
+                                {
+                                  "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "prevButtons"] }, 0]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        "then": [
+                          {
+                            "let": {
+                              "bindings": {
+                                "dir": {
+                                  "vec": [
+                                    {
+                                      "cos": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }]
+                                    },
+                                    {
+                                      "sin": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }]
+                                    }
+                                  ]
+                                }
+                              },
+                              "do": [
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "ball" },
+                                    "component": "Position",
+                                    "values": {
+                                      "x": {
+                                        "+": [
+                                          { "getComponent": [{ "var": "e" }, "Position", "x"] },
+                                          {
+                                            "*": [
+                                              { "vec.x": [{ "var": "dir" }] },
+                                              {
+                                                "getComponent": [{ "var": "e" }, "Combat", "castOffset"]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      "y": {
+                                        "+": [
+                                          { "getComponent": [{ "var": "e" }, "Position", "y"] },
+                                          {
+                                            "*": [
+                                              { "vec.y": [{ "var": "dir" }] },
+                                              {
+                                                "getComponent": [{ "var": "e" }, "Combat", "castOffset"]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "ball" },
+                                    "component": "Velocity",
+                                    "values": {
+                                      "x": {
+                                        "*": [
+                                          { "vec.x": [{ "var": "dir" }] },
+                                          {
+                                            "getComponent": [{ "var": "e" }, "Combat", "projectileSpeed"]
+                                          }
+                                        ]
+                                      },
+                                      "y": {
+                                        "*": [
+                                          { "vec.y": [{ "var": "dir" }] },
+                                          {
+                                            "getComponent": [{ "var": "e" }, "Combat", "projectileSpeed"]
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "ball" },
+                                    "component": "Owner",
+                                    "values": { "entity": { "var": "e" } }
+                                  }
+                                },
+                                {
+                                  "addComponent": {
+                                    "entity": { "var": "ball" },
+                                    "component": "Lifetime",
+                                    "values": {
+                                      "ticks": {
+                                        "getComponent": [{ "var": "e" }, "Combat", "projectileTicks"]
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "removeComponent": { "entity": { "var": "ball" }, "component": "Follow" }
+                                },
+                                {
+                                  "emitEvent": {
+                                    "type": "CastFireball",
+                                    "data": {
+                                      "dirX": { "vec.x": [{ "var": "dir" }] },
+                                      "dirY": { "vec.y": [{ "var": "dir" }] },
+                                      "entity": { "var": "e" },
+                                      "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] },
+                                      "tick": { "tick": [] }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "removeComponent": { "entity": { "var": "e" }, "component": "Carrying" }
+                          },
+                          {
+                            "removeComponent": { "entity": { "var": "e" }, "component": "ActionLock" }
+                          }
+                        ],
+                        "else": [
+                          {
+                            "let": {
+                              "bindings": {
+                                "held": {
+                                  "-": [
+                                    { "tick": [] },
+                                    { "getComponent": [{ "var": "e" }, "Carrying", "since"] }
+                                  ]
+                                }
+                              },
+                              "do": [
+                                {
+                                  "if": {
+                                    "cond": {
+                                      ">": [
+                                        { "var": "held" },
+                                        { "getComponent": [{ "var": "e" }, "Combat", "carryTicks"] }
+                                      ]
+                                    },
+                                    "then": [
+                                      {
+                                        "let": {
+                                          "bindings": {
+                                            "at": {
+                                              "vec": [
+                                                {
+                                                  "getComponent": [{ "var": "e" }, "Position", "x"]
+                                                },
+                                                {
+                                                  "getComponent": [{ "var": "e" }, "Position", "y"]
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "do": [
+                                            {
+                                              "forEach": {
+                                                "query": {
+                                                  "all": ["Health", "Position"],
+                                                  "not": ["Dead", "Shielded"],
+                                                  "withinRadius": {
+                                                    "center": { "var": "at" },
+                                                    "radius": {
+                                                      "getComponent": [{ "var": "e" }, "Combat", "blastRadius"]
+                                                    }
+                                                  }
+                                                },
+                                                "as": "t",
+                                                "do": [
+                                                  {
+                                                    "modifyComponent": {
+                                                      "entity": { "var": "t" },
+                                                      "component": "Health",
+                                                      "values": {
+                                                        "hp": {
+                                                          "max": [
+                                                            0,
+                                                            {
+                                                              "-": [
+                                                                {
+                                                                  "getComponent": [{ "var": "t" }, "Health", "hp"]
+                                                                },
+                                                                {
+                                                                  "getComponent": [
+                                                                    { "var": "e" },
+                                                                    "Combat",
+                                                                    "blastDamage"
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "emitEvent": {
+                                                "type": "FireballExploded",
+                                                "data": {
+                                                  "entity": { "var": "e" },
+                                                  "x": { "vec.x": [{ "var": "at" }] },
+                                                  "y": { "vec.y": [{ "var": "at" }] }
+                                                }
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      { "destroyEntity": { "entity": { "var": "ball" } } },
+                                      {
+                                        "removeComponent": { "entity": { "var": "e" }, "component": "Carrying" }
+                                      },
+                                      {
+                                        "removeComponent": { "entity": { "var": "e" }, "component": "ActionLock" }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Followers",
+      "order": 105,
+      "do": [
+        {
+          "forEach": {
+            "query": { "all": ["Follow", "Owner", "Position"] },
+            "as": "f",
+            "do": [
               {
                 "let": {
-                  "bindings": {
-                    "at": {
-                      "vec": [
-                        { "getComponent": [{ "var": "e" }, "Position", "x"] },
-                        { "getComponent": [{ "var": "e" }, "Position", "y"] }
-                      ]
-                    }
-                  },
+                  "bindings": { "owner": { "getComponent": [{ "var": "f" }, "Owner", "entity"] } },
                   "do": [
-                    { "carveFloor": { "at": { "var": "at" } } },
                     {
-                      "emitEvent": {
-                        "type": "FireballExploded",
-                        "data": {
-                          "x": { "vec.x": [{ "var": "at" }] },
-                          "y": { "vec.y": [{ "var": "at" }] }
-                        }
+                      "if": {
+                        "cond": { "!": [{ "isAlive": [{ "var": "owner" }] }] },
+                        "then": [{ "destroyEntity": { "entity": { "var": "f" } } }],
+                        "else": [
+                          {
+                            "modifyComponent": {
+                              "entity": { "var": "f" },
+                              "component": "Position",
+                              "values": {
+                                "x": {
+                                  "+": [
+                                    { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                                    {
+                                      "*": [
+                                        {
+                                          "cos": [
+                                            {
+                                              "getComponent": [{ "var": "owner" }, "Input", "aimDir"]
+                                            }
+                                          ]
+                                        },
+                                        { "getComponent": [{ "var": "f" }, "Follow", "offset"] }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "y": {
+                                  "+": [
+                                    { "getComponent": [{ "var": "owner" }, "Position", "y"] },
+                                    {
+                                      "*": [
+                                        {
+                                          "sin": [
+                                            {
+                                              "getComponent": [{ "var": "owner" }, "Input", "aimDir"]
+                                            }
+                                          ]
+                                        },
+                                        { "getComponent": [{ "var": "f" }, "Follow", "offset"] }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
                       }
-                    },
-                    { "destroyEntity": { "entity": { "var": "e" } } }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "forEach": {
+            "query": { "all": ["Owner"], "withTag": "CatchZone" },
+            "as": "z",
+            "do": [
+              {
+                "let": {
+                  "bindings": { "owner": { "getComponent": [{ "var": "z" }, "Owner", "entity"] } },
+                  "do": [
+                    {
+                      "if": {
+                        "cond": {
+                          "or": [
+                            { "!": [{ "isAlive": [{ "var": "owner" }] }] },
+                            { "!": [{ "hasComponent": [{ "var": "owner" }, "Catching"] }] }
+                          ]
+                        },
+                        "then": [{ "destroyEntity": { "entity": { "var": "z" } } }]
+                      }
+                    }
                   ]
                 }
               }
@@ -317,10 +1503,7 @@
                             }
                           },
                           {
-                            "removeComponent": {
-                              "entity": { "var": "e" },
-                              "component": "Locomotion"
-                            }
+                            "removeComponent": { "entity": { "var": "e" }, "component": "LocomotionState" }
                           }
                         ]
                       }
@@ -373,10 +1556,356 @@
                         "values": { "atTick": { "tick": [] } }
                       }
                     },
+                    { "emitEvent": { "type": "EntityDied", "data": { "entity": { "var": "e" } } } }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "FireballRicochet",
+      "order": 140,
+      "query": { "all": ["Damage", "Velocity", "Position"], "withTag": "Fireball" },
+      "as": "p",
+      "do": [
+        {
+          "let": {
+            "bindings": { "hit": 0, "nx": 0, "ny": 0, "source": -1 },
+            "do": [
+              {
+                "forEachEvent": {
+                  "type": "Collision",
+                  "as": "ev",
+                  "do": [
+                    {
+                      "let": {
+                        "bindings": { "other": { "eventField": [{ "var": "ev" }, "other"] } },
+                        "do": [
+                          {
+                            "if": {
+                              "cond": {
+                                "and": [
+                                  { "==": [{ "var": "hit" }, 0] },
+                                  {
+                                    "==": [{ "eventField": [{ "var": "ev" }, "entity"] }, { "var": "p" }]
+                                  },
+                                  { "!=": [{ "var": "other" }, -1] },
+                                  { "hasComponent": [{ "var": "other" }, "Owner"] }
+                                ]
+                              },
+                              "then": [
+                                { "set": { "name": "hit", "value": 1 } },
+                                {
+                                  "set": {
+                                    "name": "nx",
+                                    "value": { "eventField": [{ "var": "ev" }, "nx"] }
+                                  }
+                                },
+                                {
+                                  "set": {
+                                    "name": "ny",
+                                    "value": { "eventField": [{ "var": "ev" }, "ny"] }
+                                  }
+                                },
+                                {
+                                  "set": {
+                                    "name": "source",
+                                    "value": { "getComponent": [{ "var": "other" }, "Owner", "entity"] }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "cond": { "==": [{ "var": "hit" }, 1] },
+                  "then": [
+                    {
+                      "let": {
+                        "bindings": {
+                          "twice": {
+                            "*": [
+                              131072,
+                              {
+                                "+": [
+                                  {
+                                    "*": [
+                                      { "getComponent": [{ "var": "p" }, "Velocity", "x"] },
+                                      { "var": "nx" }
+                                    ]
+                                  },
+                                  {
+                                    "*": [
+                                      { "getComponent": [{ "var": "p" }, "Velocity", "y"] },
+                                      { "var": "ny" }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "do": [
+                          {
+                            "modifyComponent": {
+                              "entity": { "var": "p" },
+                              "component": "Velocity",
+                              "values": {
+                                "x": {
+                                  "-": [
+                                    { "getComponent": [{ "var": "p" }, "Velocity", "x"] },
+                                    { "*": [{ "var": "twice" }, { "var": "nx" }] }
+                                  ]
+                                },
+                                "y": {
+                                  "-": [
+                                    { "getComponent": [{ "var": "p" }, "Velocity", "y"] },
+                                    { "*": [{ "var": "twice" }, { "var": "ny" }] }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "p" },
+                        "component": "Owner",
+                        "values": { "entity": { "var": "source" } }
+                      }
+                    },
                     {
                       "emitEvent": {
-                        "type": "EntityDied",
-                        "data": { "entity": { "var": "e" } }
+                        "type": "FireballRicochet",
+                        "data": {
+                          "entity": { "var": "p" },
+                          "x": { "getComponent": [{ "var": "p" }, "Position", "x"] },
+                          "y": { "getComponent": [{ "var": "p" }, "Position", "y"] }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "FireballHit",
+      "order": 150,
+      "do": [
+        {
+          "forEachEvent": {
+            "type": "Overlap",
+            "as": "ev",
+            "do": [
+              {
+                "let": {
+                  "bindings": {
+                    "mover": { "eventField": [{ "var": "ev" }, "entity"] },
+                    "target": { "eventField": [{ "var": "ev" }, "other"] }
+                  },
+                  "do": [
+                    {
+                      "if": {
+                        "cond": {
+                          "and": [
+                            { "!=": [{ "var": "target" }, -1] },
+                            { "isAlive": [{ "var": "mover" }] },
+                            { "isAlive": [{ "var": "target" }] },
+                            { "hasComponent": [{ "var": "mover" }, "Damage"] },
+                            { "!": [{ "hasComponent": [{ "var": "mover" }, "Follow"] }] },
+                            { "hasComponent": [{ "var": "target" }, "Health"] },
+                            { "!": [{ "hasComponent": [{ "var": "target" }, "Dead"] }] },
+                            { "!": [{ "hasComponent": [{ "var": "target" }, "Shielded"] }] },
+                            {
+                              "!=": [
+                                { "var": "target" },
+                                { "getComponent": [{ "var": "mover" }, "Owner", "entity"] }
+                              ]
+                            }
+                          ]
+                        },
+                        "then": [
+                          {
+                            "modifyComponent": {
+                              "entity": { "var": "target" },
+                              "component": "Health",
+                              "values": {
+                                "hp": {
+                                  "max": [
+                                    0,
+                                    {
+                                      "-": [
+                                        { "getComponent": [{ "var": "target" }, "Health", "hp"] },
+                                        { "getComponent": [{ "var": "mover" }, "Damage", "amount"] }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "emitEvent": {
+                              "type": "FireballHit",
+                              "data": {
+                                "entity": { "var": "target" },
+                                "source": { "var": "mover" },
+                                "x": { "getComponent": [{ "var": "mover" }, "Position", "x"] },
+                                "y": { "getComponent": [{ "var": "mover" }, "Position", "y"] }
+                              }
+                            }
+                          },
+                          { "destroyEntity": { "entity": { "var": "mover" } } }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "LethalDamage",
+      "order": 160,
+      "query": { "all": ["Health"], "not": ["Dead"] },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": { "<=": [{ "getComponent": [{ "var": "e" }, "Health", "hp"] }, 0] },
+            "then": [
+              {
+                "addComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Dead",
+                  "values": { "atTick": { "tick": [] } }
+                }
+              },
+              { "emitEvent": { "type": "EntityDied", "data": { "entity": { "var": "e" } } } }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "DeathToll",
+      "order": 170,
+      "do": [
+        {
+          "forEachEvent": {
+            "type": "EntityDied",
+            "as": "ev",
+            "do": [
+              {
+                "let": {
+                  "bindings": { "dead": { "eventField": [{ "var": "ev" }, "entity"] } },
+                  "do": [
+                    {
+                      "if": {
+                        "cond": { "isAlive": [{ "var": "dead" }] },
+                        "then": [
+                          {
+                            "if": {
+                              "cond": { "hasComponent": [{ "var": "dead" }, "Score"] },
+                              "then": [
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "dead" },
+                                    "component": "Score",
+                                    "values": {
+                                      "deaths": {
+                                        "+": [
+                                          { "getComponent": [{ "var": "dead" }, "Score", "deaths"] },
+                                          1
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": { "hasComponent": [{ "var": "dead" }, "Respawn"] },
+                              "then": [
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "dead" },
+                                    "component": "Respawn",
+                                    "values": {
+                                      "ticks": { "getComponent": [{ "var": "dead" }, "Respawn", "delay"] }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": { "hasComponent": [{ "var": "dead" }, "Carrying"] },
+                              "then": [
+                                {
+                                  "destroyEntity": {
+                                    "entity": {
+                                      "getComponent": [{ "var": "dead" }, "Carrying", "projectile"]
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": { "!": [{ "hasComponent": [{ "var": "dead" }, "Falling"] }] },
+                              "then": [
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "dead" },
+                                    "component": "Velocity",
+                                    "values": { "x": 0, "y": 0 }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "removeComponent": { "entity": { "var": "dead" }, "component": "LocomotionState" }
+                          },
+                          {
+                            "removeComponent": { "entity": { "var": "dead" }, "component": "ActionLock" }
+                          },
+                          {
+                            "removeComponent": { "entity": { "var": "dead" }, "component": "Charging" }
+                          },
+                          {
+                            "removeComponent": { "entity": { "var": "dead" }, "component": "Catching" }
+                          },
+                          {
+                            "removeComponent": { "entity": { "var": "dead" }, "component": "Carrying" }
+                          },
+                          {
+                            "removeComponent": { "entity": { "var": "dead" }, "component": "Shielded" }
+                          }
+                        ]
                       }
                     }
                   ]
