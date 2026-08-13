@@ -7,8 +7,30 @@
  * подсистема рендера различала бы режимы, чего REND-8 не допускает.
  */
 import type { TerrainGrid } from '@game-mvp/core';
-import { Extractor, kindByTags } from '@game-mvp/render';
-import { FIREBALL_LIFETIME_TICKS, STATE_COMPONENTS } from './sim.js';
+import { Extractor, kindByTags, type StatSource } from '@game-mvp/render';
+import { COOLDOWN_ABILITIES, FIREBALL_LIFETIME_TICKS, STATE_COMPONENTS, STATS } from './sim.js';
+
+/**
+ * Конфигурация доставляемых статов демо (HUD-8): «имя доставки → компонент и
+ * поле мира». Это ДАННЫЕ сборки, а не код кодека: новый стат — запись в этом
+ * списке плюс биндинг в композиции HUD, и ни экстрактор, ни кодек, ни виджет
+ * при этом не правятся.
+ *
+ * Компоненты здоровья, счёта и кулдаунов сцена демо пока не содержит — их
+ * добавит геймплейная фаза. Запись без компонента-источника молча не едет
+ * (`hasComponent` мира отвечает «нет»), и виджет показывает пустое состояние —
+ * ровно тот сценарий, который HUD-8 и описывает.
+ */
+export const DEMO_STATS: readonly StatSource[] = Object.freeze([
+  { name: STATS.slot, component: 'Player', field: 'slot' },
+  { name: STATS.hp, component: 'Health', field: 'hp' },
+  { name: STATS.hpMax, component: 'Health', field: 'hpMax' },
+  { name: STATS.deaths, component: 'Score', field: 'deaths' },
+  ...COOLDOWN_ABILITIES.flatMap((ability) => [
+    { name: STATS.cooldown(ability), component: 'Cooldowns', field: ability },
+    { name: STATS.cooldownMax(ability), component: 'Cooldowns', field: `${ability}Max` },
+  ]),
+]);
 
 export function createDemoExtractor(grid: TerrainGrid | undefined): Extractor {
   return new Extractor({
@@ -26,5 +48,8 @@ export function createDemoExtractor(grid: TerrainGrid | undefined): Extractor {
     // тики вниз, полное число — константа сборки. Рендер фазу не вычисляет —
     // он получает её плоской формой и по ней рисует низкую дугу (SHELL-2).
     flight: { component: 'Lifetime', field: 'ticks', total: FIREBALL_LIFETIME_TICKS },
+    // Геймплейные статы доставки (HUD-8): имена уезжают один раз в handshake,
+    // значения — разреженными парами в кадре.
+    stats: DEMO_STATS,
   });
 }

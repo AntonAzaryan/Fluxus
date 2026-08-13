@@ -31,7 +31,7 @@
 import type * as THREE from 'three';
 import type { EntityId, TerrainGrid, WorldMode, WorldState } from '@game-mvp/core';
 import type { AssetService } from '@game-mvp/assets';
-import type { FlightPhaseSource } from './extractor.js';
+import type { FlightPhaseSource } from './statSources.js';
 // Только тип: цикл `types` ↔ `stage` стирается компиляцией и в рантайме не существует.
 import type { PresentationStage } from './stage.js';
 
@@ -83,6 +83,17 @@ export interface EntityView {
    * (REND-11, REND-18) поля не касаются — полёта у размещённого объекта нет.
    */
   flightPhase?: number;
+  /**
+   * Именованные геймплейные статы сущности (`match-hud` HUD-8): hp, оставшиеся
+   * тики кулдауна, счёт смертей — что объявила конфигурация сборки воркера, то
+   * и едет. Имена принадлежат контенту, и смысла им ни рендер, ни HUD не
+   * придают; стата, которого у сущности нет, в словаре НЕТ — «нет данных» и
+   * «ноль» обязаны различаться.
+   *
+   * Словарь принадлежит продюсеру и переиспользуется между доставками, как и
+   * сама запись: потребитель, удерживающий значение между тиками, копирует его.
+   */
+  stats?: ReadonlyMap<string, number>;
   /** Override уровня (TERR-4): сущность не «на поверхности», наклон не применяется (REND-10). */
   levelOverride: boolean;
   /** Последний курс движения, радианы; сохраняется, пока сущность стоит. */
@@ -158,6 +169,12 @@ export interface TickView {
   /** Первый честный проход тика: события можно проигрывать (OBS-5 — дедуп на потребителе). */
   freshEvents: boolean;
   readonly entities: ReadonlyMap<EntityId, EntityView>;
+  /**
+   * Имена статов доставки (`match-hud` HUD-8) — словарь конфигурации сборки
+   * воркера, общий на все сущности; пустой список — статов сборка не объявила.
+   * Потребители биндятся на ИМЕНА: индексы — дело канала, и наружу их нет.
+   */
+  statNames: readonly string[];
   events: readonly RenderEvent[];
   /** Зеркало карты пола (1 — пол есть), row-major; null — сцена без террейна. */
   floorBits: Uint8Array | null;

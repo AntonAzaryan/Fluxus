@@ -61,6 +61,31 @@ export const STATE_COMPONENTS: readonly string[] = Object.freeze(['Falling']);
  */
 export const FIREBALL_LIFETIME_TICKS = 50;
 
+/**
+ * Имена доставляемых статов демо (`match-hud` HUD-8) — общий словарь двух
+ * половин сборки: воркер объявляет по ним источники (`extractor.ts`), виджеты
+ * биндятся на те же имена в композиции HUD (`hud.ts`). Имена принадлежат
+ * СБОРКЕ, а не ядру: кодек и HUD их смысла не знают.
+ *
+ * Часть статов приезжает не всегда: компонентов здоровья, кулдаунов и счёта в
+ * сцене демо ещё нет — их добавит геймплейная фаза. Виджет, не нашедший стата,
+ * показывает пустое состояние, а не ноль (HUD-8), поэтому объявление их здесь
+ * заранее ничего не ломает и ничего не выдумывает.
+ */
+export const STATS = {
+  /** Слот игрока — по нему счётчики раскладываются по игрокам. */
+  slot: 'slot',
+  hp: 'hp',
+  hpMax: 'hpMax',
+  deaths: 'deaths',
+  /** Оставшиеся тики кулдауна способности и его полная длительность. */
+  cooldown: (ability: string): string => `${ability}.cd`,
+  cooldownMax: (ability: string): string => `${ability}.cdMax`,
+} as const;
+
+/** Способности демо, у которых виджет показывает кулдаун (те же имена, что INP-4). */
+export const COOLDOWN_ABILITIES: readonly string[] = Object.freeze(['cast', 'dodge', 'jump']);
+
 // ------------------------------------------------------------------- сборка
 
 export interface DemoSimulation {

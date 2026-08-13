@@ -193,6 +193,7 @@ export function makeTickView(entities: EntityView[], partial: Partial<TickView> 
     snapAll: false,
     freshEvents: false,
     entities: new Map(entities.map((entity) => [entity.id, entity])),
+    statNames: [],
     events: [],
     floorBits: null,
     floorChangedCells: [],

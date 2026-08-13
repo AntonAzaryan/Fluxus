@@ -19,7 +19,8 @@ export type {
   HudParams,
 } from './composition.js';
 
-// Доставленное состояние глазами HUD (HUD-1, HUD-5).
+// Доставленное состояние глазами HUD (HUD-1, HUD-5) и чтение статов (HUD-8).
+export { entityStat } from './delivery.js';
 export type {
   HudDeliveredEvent,
   HudDeliveredState,

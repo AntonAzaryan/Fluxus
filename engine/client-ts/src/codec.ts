@@ -11,25 +11,34 @@
  * События, дословарь kind'ов и terrain-handshake — structured clone в
  * конверте сообщения (SHELL-4, SHELL-5): они мелкие, редкие и разноформенные.
  *
+ * Статы (`match-hud` HUD-8) едут РАЗРЕЖЕННО и без имён: имена — словарь
+ * сборки, неизменный за сессию, и уезжают один раз в handshake (SHELL-5), а
+ * кадр несёт пары «индекс имени → значение» и число пар на сущность. Так
+ * буферная дисциплина остаётся прежней: кадр без статов длиннее не стал, а
+ * кадр со статами растёт ровно на реально доставленные значения.
+ *
  * Раскладка (все секции подряд, смещения выровнены по типу):
- *   заголовок   u32×8: версия, tick, mode, флаги, count, floorPairs, резерв×2
+ *   заголовок   u32×8: версия, tick, mode, флаги, count, floorPairs, statPairs, резерв
  *   id          f64×count   — 48-битный generational EntityId, точен во f64
+ *   statValue   f64×pairs   — значения статов подряд по сущностям (HUD-8)
  *   x, y        f32×count   — мировые координаты (уже float, REND-1)
  *   facingYaw   f32×count   — NaN: стоит, курс не обновлять
  *   aimYaw      f32×count   — NaN: цели нет
  *   motionPhase f32×count   — фаза манёвра локомоушена, NaN: манёвра нет (REND-12)
  *   flightPhase f32×count   — фаза полёта, NaN: сущность не летит (REND-12)
  *   kind        i32×count   — индекс в словаре kind'ов, −1: не рисуется
+ *   statIndex   i32×pairs   — индексы имён статов в том же порядке (HUD-8)
  *   floor       u32×2×pairs — пары (клетка, бит пола)
  *   level       u8×count
  *   flags       u8×count    — бит 0: moving
  *   motion      u8×count    — состояние машины локомоушена (LOC-3, REND-4)
+ *   statCount   u8×count    — сколько пар статов у сущности (HUD-8)
  */
 import type { ExtractedTick, RenderEvent } from '@game-mvp/render';
 import type { WorldMode } from '@game-mvp/core';
 
-/** 3: добавлена колонка фазы полёта (REND-12). */
-export const CODEC_VERSION = 3;
+/** 4: добавлены колонка фазы полёта (REND-12) и разреженные статы (HUD-8). */
+export const CODEC_VERSION = 4;
 
 const HEADER_WORDS = 8;
 const HEADER_BYTES = HEADER_WORDS * 4;
@@ -40,6 +49,7 @@ const H_MODE = 2;
 const H_FLAGS = 3;
 const H_COUNT = 4;
 const H_FLOOR_PAIRS = 5;
+const H_STAT_PAIRS = 6;
 
 const FLAG_IS_REPLAY = 1;
 const FLAG_SNAP_ALL = 2;
@@ -68,31 +78,51 @@ const F32_COLUMNS = 6;
 
 interface Layout {
   id: number;
+  statValue: number;
   f32: number; // x, затем y, facingYaw, aimYaw, motionPhase, flightPhase подряд
   kind: number;
+  statIndex: number;
   floor: number;
   level: number;
   flags: number;
   motion: number;
+  statCount: number;
   total: number;
 }
 
-function layout(count: number, floorPairs: number): Layout {
+function layout(count: number, floorPairs: number, statPairs: number): Layout {
   const id = align8(HEADER_BYTES);
-  const f32 = id + count * 8;
+  // Секция f64 статов идёт сразу за id — обе восьмибайтные, и выравнивание
+  // держится без дополнения между ними.
+  const statValue = id + count * 8;
+  const f32 = statValue + statPairs * 8;
   const kind = f32 + count * 4 * F32_COLUMNS;
-  const floor = kind + count * 4;
+  const statIndex = kind + count * 4;
+  const floor = statIndex + statPairs * 4;
   const level = floor + floorPairs * 8;
   const flags = level + count;
   const motion = flags + count;
+  const statCount = motion + count;
   // Полный размер выровнен по 8: буфер из пула остаётся пригоден под секцию
   // f64 при любом count, и целочисленные view поверх всего кадра законны.
-  return { id, f32, kind, floor, level, flags, motion, total: align8Safe(motion + count) };
+  return {
+    id,
+    statValue,
+    f32,
+    kind,
+    statIndex,
+    floor,
+    level,
+    flags,
+    motion,
+    statCount,
+    total: align8Safe(statCount + count),
+  };
 }
 
 /** Сколько байт нужно под тик; вход для перевыделения пула (SHELL-3). */
-export function requiredBytes(count: number, floorPairs: number): number {
-  return layout(count, floorPairs).total;
+export function requiredBytes(count: number, floorPairs: number, statPairs = 0): number {
+  return layout(count, floorPairs, statPairs).total;
 }
 
 /**
@@ -116,7 +146,8 @@ export function writeTick(
   const count = ext.count;
   const floorDelta = overrides?.floorDelta ?? ext.floorDelta;
   const floorPairs = floorDelta.length >>> 1;
-  const at = layout(count, floorPairs);
+  const statPairs = ext.statPairs;
+  const at = layout(count, floorPairs, statPairs);
   if (buffer.byteLength < at.total) {
     throw new Error(`codec: буфер ${buffer.byteLength} байт, нужно ${at.total}`);
   }
@@ -141,8 +172,10 @@ export function writeTick(
     (freshEvents ? FLAG_FRESH_EVENTS : 0);
   header[H_COUNT] = count;
   header[H_FLOOR_PAIRS] = floorPairs;
+  header[H_STAT_PAIRS] = statPairs;
 
   new Float64Array(buffer, at.id, count).set(ext.id.subarray(0, count));
+  new Float64Array(buffer, at.statValue, statPairs).set(ext.statValue.subarray(0, statPairs));
   const f32 = new Float32Array(buffer, at.f32, count * F32_COLUMNS);
   f32.set(ext.x.subarray(0, count), 0);
   f32.set(ext.y.subarray(0, count), count);
@@ -151,12 +184,17 @@ export function writeTick(
   f32.set(ext.motionPhase.subarray(0, count), count * 4);
   f32.set(ext.flightPhase.subarray(0, count), count * 5);
   new Int32Array(buffer, at.kind, count).set(ext.kind.subarray(0, count));
+  new Int32Array(buffer, at.statIndex, statPairs).set(ext.statIndex.subarray(0, statPairs));
   const floor = new Uint32Array(buffer, at.floor, floorPairs * 2);
   for (let i = 0; i < floorPairs * 2; i++) floor[i] = floorDelta[i]!;
   new Uint8Array(buffer, at.level, count).set(ext.level.subarray(0, count));
   new Uint8Array(buffer, at.flags, count).set(ext.flags.subarray(0, count));
   new Uint8Array(buffer, at.motion, count).set(ext.motion.subarray(0, count));
+  new Uint8Array(buffer, at.statCount, count).set(ext.statCount.subarray(0, count));
 }
+
+/** Словарь статов сборки, которая их не объявила (HUD-8): статов не бывает. */
+const EMPTY_STAT_NAMES: readonly string[] = [];
 
 /**
  * Прочитанный тик: колонки — view'ы В БУФЕР, валидные до его возврата
@@ -168,6 +206,7 @@ export function readTick(
   buffer: ArrayBuffer,
   events: readonly RenderEvent[],
   kindTable: readonly string[],
+  statNames: readonly string[] = EMPTY_STAT_NAMES,
 ): ExtractedTick {
   // Заголовок читается только после проверки, что он вообще есть: на буфере
   // короче восьми слов конструктор Uint32Array бросит RangeError, и разговор о
@@ -181,7 +220,8 @@ export function readTick(
   }
   const count = header[H_COUNT]!;
   const floorPairs = header[H_FLOOR_PAIRS]!;
-  const at = layout(count, floorPairs);
+  const statPairs = header[H_STAT_PAIRS]!;
+  const at = layout(count, floorPairs, statPairs);
   /**
    * `count`/`floorPairs` приезжают из заголовка, то есть определяют раскладку
    * данными самого кадра. Без этой проверки несогласованный кадр вылетал бы
@@ -191,7 +231,7 @@ export function readTick(
    */
   if (buffer.byteLength < at.total) {
     throw new Error(
-      `codec: кадр ${buffer.byteLength} байт, заголовок обещает ${at.total} (count=${count}, floorPairs=${floorPairs})`,
+      `codec: кадр ${buffer.byteLength} байт, заголовок обещает ${at.total} (count=${count}, floorPairs=${floorPairs}, statPairs=${statPairs})`,
     );
   }
   const mode = MODES[header[H_MODE]!];
@@ -219,6 +259,11 @@ export function readTick(
     level: new Uint8Array(buffer, at.level, count),
     flags: new Uint8Array(buffer, at.flags, count),
     motion: new Uint8Array(buffer, at.motion, count),
+    statNames,
+    statCount: new Uint8Array(buffer, at.statCount, count),
+    statIndex: new Int32Array(buffer, at.statIndex, statPairs),
+    statValue: new Float64Array(buffer, at.statValue, statPairs),
+    statPairs,
     events,
     kindTable,
   };

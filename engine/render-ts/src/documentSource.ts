@@ -124,6 +124,9 @@ export class DocumentSource implements PresentationProducer {
       // Событий тика нет — one-shot клипы и доворот костей не проигрываются.
       freshEvents: false,
       entities: this.entities,
+      // Геймплейных статов у документного набора нет (HUD-8): их источник —
+      // компоненты мира, а мира в режиме правки не идёт.
+      statNames: [],
       events: [],
       // Террейн приезжает подсистеме сеткой (REND-8), а не набором инстансов:
       // документная правка уровней и пола идёт через `TerrainSubsystem.applyGrid`.
