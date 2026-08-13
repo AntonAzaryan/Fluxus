@@ -8,10 +8,10 @@
   "physics": {},
   "locomotion": { "dodgeButton": 2, "jumpButton": 3 },
   "initial": [
-    { "prefab": "Hero", "overrides": { "Position": { "x": 524288, "y": 1572864 } } },
+    { "prefab": "Hero", "overrides": { "Position": { "x": 557056, "y": 1605632 } } },
     {
       "prefab": "Hero",
-      "overrides": { "Player": { "slot": 1 }, "Position": { "x": 2621440, "y": 1572864 } }
+      "overrides": { "Player": { "slot": 1 }, "Position": { "x": 2588672, "y": 1605632 } }
     }
   ],
   "tickRate": 60,

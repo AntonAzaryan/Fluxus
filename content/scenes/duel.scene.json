@@ -59,7 +59,7 @@
       "components": {
         "Player": { "slot": 0 },
         "Input": { "aimDir": 0, "buttons": 0, "moveX": 0, "moveY": 0, "prevButtons": 0, "seq": 0 },
-        "Position": { "x": 524288, "y": 1572864 },
+        "Position": { "x": 557056, "y": 1605632 },
         "Velocity": { "x": 0, "y": 0 },
         "Collider": {
           "blockMask": 1,
@@ -390,7 +390,7 @@
   ],
   "arena": {
     "center": { "x": 1572864, "y": 1572864 },
-    "radius": 1441792
+    "radius": 1376256
   },
   "terrain": {
     "width": 48,
