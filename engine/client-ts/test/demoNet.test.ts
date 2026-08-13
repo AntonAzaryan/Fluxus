@@ -30,7 +30,7 @@ import { portTransport } from '../src/portTransport.js';
 import { shellPort } from '../src/protocol.js';
 import { DEMO_PLAYERS, demoMatchConfig } from '../demo/match.js';
 import { openLocalSession, type DemoLocalSession } from '../demo/localSession.js';
-import { joinDemoMatch, type DemoJoinResult } from '../demo/netClient.js';
+import { bufferedShellPort, joinDemoMatch, type DemoJoinResult } from '../demo/netClient.js';
 import { demoHudComposition } from '../demo/hud.js';
 import { demoMode, localModeUrl, serverModeUrl, slotCandidates } from '../demo/mode.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
@@ -123,6 +123,8 @@ interface Rig {
   readonly joined: DemoJoinResult;
   readonly remote: RemoteHost;
   readonly probe: Probe;
+  /** Всё, что воркер отправил главному потоку: порядок и состав handshake. */
+  readonly posted: unknown[];
 }
 
 /** Вход человека в поднятый матч тем же путём, каким входит вкладка. */
@@ -131,7 +133,17 @@ async function join(
   candidates: readonly string[],
   clock: { ms: number },
 ): Promise<Rig> {
-  const [workerPort, mainPort] = syncPortPair();
+  const [rawWorkerPort, mainPort] = syncPortPair();
+  const posted: unknown[] = [];
+  const workerPort: ShellPort = {
+    post(message, transfer) {
+      posted.push(message);
+      rawWorkerPort.post(message, transfer);
+    },
+    onMessage(handler) {
+      rawWorkerPort.onMessage(handler);
+    },
+  };
   const shellProbe = probe();
   const remote: RemoteHost = new RemoteHost(dummyContext(), {
     clock: () => clock.ms,
@@ -145,7 +157,15 @@ async function join(
     settle: () => flush(1),
     timeoutMs: 2000,
   });
-  return { joined, remote, probe: shellProbe };
+  return { joined, remote, probe: shellProbe, posted };
+}
+
+/** Конверты handshake, доехавшие до главного потока (SHELL-5). */
+function hellos(rig: Rig): { extra?: { hero: number; playerId: string; slot: number } }[] {
+  return rig.posted.filter(
+    (message): message is { t: 'hello'; extra?: { hero: number; playerId: string; slot: number } } =>
+      (message as { t?: string }).t === 'hello',
+  );
 }
 
 describe('демо по умолчанию: матч против бота на сетевом стеке (D1, SES-1)', () => {
@@ -161,6 +181,12 @@ describe('демо по умолчанию: матч против бота на 
     // Handshake доехал ровно один и с режимом (SHELL-5, SHELL-8), а id своей
     // сущности в нём — тот, что известен только после `Welcome` (NTR-5).
     expect(rig.remote.mode).toBe('network');
+    expect(hellos(rig)).toHaveLength(1);
+    expect(hellos(rig)[0]!.extra).toEqual({
+      hero: rig.joined.hero,
+      playerId: DEMO_PLAYERS[0],
+      slot: 0,
+    });
 
     // Таймер оболочки снимается: шаги делает тест (NTR-12).
     rig.joined.shell.stop();
@@ -221,6 +247,14 @@ describe('демо по умолчанию: матч против бота на 
     expect(second.joined.playerId).toBe(DEMO_PLAYERS[1]);
     expect(second.joined.client.slot).toBe(1);
     expect(opened.server.phase).toBe('running');
+    // Откат не оставил следа в главном потоке: handshake отвергнутой попытки
+    // выброшен, доехал ровно один — и с id сущности ВТОРОГО слота (SHELL-5).
+    expect(hellos(second)).toHaveLength(1);
+    expect(hellos(second)[0]!.extra).toEqual({
+      hero: second.joined.hero,
+      playerId: DEMO_PLAYERS[1],
+      slot: 1,
+    });
     if (first.joined.ok) first.joined.shell.stop();
     second.joined.shell.stop();
   });
@@ -239,6 +273,47 @@ describe('демо по умолчанию: матч против бота на 
     expect(third.joined.reason).toContain('match-in-progress');
     if (first.joined.ok) first.joined.shell.stop();
     if (second.joined.ok) second.joined.shell.stop();
+  });
+});
+
+describe('порт попыток входа: один живой потребитель (SHELL-3, D4)', () => {
+  it('после отката оболочка отвергнутой попытки не получает ничего', () => {
+    // Под `ShellPort` лежит `addEventListener`, то есть подписки
+    // НАКАПЛИВАЮТСЯ, а `NetworkShell.stop()` от порта не отписывается: без
+    // отцепления оболочка мёртвой попытки продолжала бы принимать каждый `ret`
+    // главного потока и складывать буферы в пул, который никто не дренирует.
+    const delivered: unknown[] = [];
+    // Держатель, а не переменная: подписку ставит замыкание, и сужение типа по
+    // потоку управления иначе решило бы, что она так и осталась null.
+    const inbound: { handler: ((message: unknown) => void) | null } = { handler: null };
+    const real: ShellPort = {
+      post: (message) => delivered.push(message),
+      onMessage: (handler) => {
+        inbound.handler = handler;
+      },
+    };
+
+    const buffered = bufferedShellPort(real);
+    const first: unknown[] = [];
+    buffered.port.onMessage((message) => first.push(message));
+    buffered.port.post({ t: 'hello', mode: 'network', extra: { hero: 0 } });
+
+    // Попытка не удалась: конверт выброшен, потребитель отцеплен.
+    buffered.discard();
+    inbound.handler?.({ t: 'ret' });
+    expect(first).toHaveLength(0);
+    expect(delivered).toHaveLength(0);
+
+    // Вторая попытка удалась: доезжает её handshake и её сообщения.
+    const second: unknown[] = [];
+    buffered.port.onMessage((message) => second.push(message));
+    buffered.port.post({ t: 'hello', mode: 'network', extra: { hero: 0 } });
+    buffered.commit({ hero: 42 });
+    inbound.handler?.({ t: 'ret' });
+
+    expect(first).toHaveLength(0);
+    expect(second).toEqual([{ t: 'ret' }]);
+    expect(delivered).toEqual([{ t: 'hello', mode: 'network', extra: { hero: 42 } }]);
   });
 });
 

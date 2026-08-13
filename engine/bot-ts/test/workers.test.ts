@@ -14,7 +14,9 @@
 import { MessageChannel } from 'node:worker_threads';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fixed, query, world as coreWorld } from '@game-mvp/core';
-import { MatchHost, MatchServer } from '@game-mvp/net';
+import { ClientHost, MatchClient, MatchHost, MatchServer, contentPack, jsonSerializer } from '@game-mvp/net';
+import { shellPort } from '@game-mvp/client/protocol';
+import { portTransport } from '@game-mvp/client/portTransport';
 import { PortConnections, botWorkerInit, isBotWorkerInit } from '../src/assembly.js';
 import { attachBots } from '../src/worker/spawn.js';
 import { startBotWorker } from '../src/worker/botWorker.js';
@@ -140,6 +142,88 @@ describe('данные сцены доезжают до мозга сборко�
     expect(Math.abs(x - y)).toBeLessThan(0.5);
 
     bots.dispose();
+    await matchHost.stop();
+  });
+
+  it('формат кадра приезжает init-сообщением: бот говорит форматом сервера (SER-3)', async () => {
+    // Формат — свойство сборки и полем сообщения не объявляется
+    // (`protocol/codec.ts`), поэтому сборка, поднявшая сервер в дебаг-формате,
+    // обязана сказать об этом боту. Не скажет — `Hello` бота сервер не разберёт,
+    // и матч встанет в лобби навсегда: не отказ, а тишина.
+    const config = duelConfig({ players: ['bot-1'] });
+    const server = new MatchServer(config);
+    const connections = new PortConnections();
+    const matchHost = new MatchHost(server, connections, { serializer: jsonSerializer });
+    const port = openChannel(connections);
+
+    const bots = startBotWorker(
+      botWorkerInit({
+        seats: [{ playerId: 'bot-1', brain: 'scripted', profile: testProfile() }],
+        ports: [port],
+        buildId: BUILD_ID,
+        sceneRef: 'duel',
+        scene: config.scene,
+        wireFormat: 'json',
+      }),
+      { autoRun: false },
+    );
+    await flush();
+    matchHost.step();
+    await flush();
+
+    expect(bots.seats[0]!.client.slot).toBe(0);
+    expect(server.phase).toBe('running');
+
+    bots.dispose();
+    await matchHost.stop();
+  });
+
+  it('темп берётся у ПРИНЯТОГО места, а не у первого в списке (NTR-7, BOT-7)', async () => {
+    // Заполнитель слотов предлагает бота и на слот, занятый человеком (BOT-7):
+    // первым в списке хоста оказывается отвергнутое место, и `Welcome` ему не
+    // приезжает никогда. Темп обязан прийти от того, кого сервер впустил.
+    const config = duelConfig({ players: ['p1', 'bot-1'], tickRate: 30, snapshotRate: 30 });
+    const server = new MatchServer(config);
+    const connections = new PortConnections();
+    const matchHost = new MatchHost(server, connections);
+    // Слот p1 занят «человеком» — обычным клиентом на своём канале.
+    const humanPort = openChannel(connections);
+    const human = new MatchClient({
+      playerId: 'p1',
+      version: config.version,
+      content: contentPack({ duel: config.scene }),
+    });
+    const humanHost = new ClientHost(human, portTransport(shellPort(humanPort)));
+    humanHost.start();
+    await flush();
+
+    const bots = startBotWorker(
+      botWorkerInit({
+        // Порядок мест повторяет порядок ростера: первое — обречённое.
+        seats: (['p1', 'bot-1'] as const).map((playerId) => ({
+          playerId,
+          brain: 'scripted' as const,
+          profile: testProfile(),
+        })),
+        ports: [openChannel(connections), openChannel(connections)],
+        buildId: BUILD_ID,
+        sceneRef: 'duel',
+        scene: config.scene,
+      }),
+      { autoRun: false },
+    );
+    await flush();
+    matchHost.step();
+    await flush();
+
+    expect(bots.seats[0]!.client.closeReason).toBe('rejected');
+    expect(bots.seats[0]!.client.pacing).toBeUndefined();
+    expect(bots.seats[1]!.client.slot).toBe(1);
+    // Именно этот темп поедет в таймер `run()`, а не запасные 60 Гц.
+    expect(bots.seats[1]!.client.pacing?.tickRate).toBe(30);
+
+    bots.dispose();
+    humanHost.stop();
     await matchHost.stop();
   });
 

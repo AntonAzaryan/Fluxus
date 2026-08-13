@@ -50,7 +50,8 @@ const { MatchHost } = await import('../src/server/host.ts');
 const { webSocketTransportServer } = await import('../src/transport/webSocketServer.ts');
 const { mergeTransportServers } = await import('../src/transport/merged.ts');
 const { jsonSerializer, msgpackSerializer } = await import('../src/protocol/codec.ts');
-const { BotSlotFiller, PortConnections, attachBots, parseBotProfile } = await import('@game-mvp/bot');
+const { BRAIN_KINDS, BotSlotFiller, PortConnections, attachBots, parseBotProfile } =
+  await import('@game-mvp/bot');
 
 const match = readMatchFile(option('match', fromRepo('content/matches/duel.match.json')));
 const pack = contentPack(match.scenes);
@@ -59,8 +60,20 @@ const profile = parseBotProfile(
   'профиль бота стенда',
 );
 const brain = option('brain', 'classic');
+// Имя мозга проверяется ЗДЕСЬ, до первого подключения: неизвестное имя иначе
+// обнаружилось бы падением потока ботов на дедлайне — то есть матчем, который
+// молча не стартовал (BOT-2).
+if (!BRAIN_KINDS.includes(brain)) {
+  process.stderr.write(`неизвестный мозг "${brain}"; известные: ${BRAIN_KINDS.join(', ')}\n`);
+  process.exit(2);
+}
 const port = Number(option('port', '8080'));
 const botFillMs = Number(option('bot-fill-ms', '5000'));
+// Формат кадра — свойство сборки, а не поле протокола, и он один на ВСЕХ
+// участников матча: сервер, люди и боты. Дебаг-формат, объявленный только
+// серверу, дал бы не отказ, а тишину — бот шлёт `Hello`, которого сервер не
+// разбирает (SER-3, `protocol/codec.ts`).
+const wireFormat = flag('json') ? 'json' : 'msgpack';
 const serializer = flag('json') ? jsonSerializer : msgpackSerializer;
 const tickRate = match.tickRate ?? 60;
 const scene = pack.scene(match.sceneRef);
@@ -88,6 +101,10 @@ const waiting = [];
 let onArrival = () => {};
 
 sockets.onConnection((transport) => {
+  // Отвалившиеся соединения выметаются при каждом новом: обработчик закрытия у
+  // транспорта ровно один (`BaseTransport.onClose`), и принадлежит он
+  // `MatchHost`, — отсюда чистка по признаку, а не по событию.
+  live = live.filter((existing) => !existing.isClosed);
   live.push(transport);
   onArrival();
   if (session === undefined) waiting.push(transport);
@@ -122,25 +139,45 @@ process.stdout.write(
 );
 
 let round = 0;
+let failed = false;
 for (;;) {
   round++;
-  await runMatch(round);
+  failed = await runMatch(round);
   if (flag('once')) break;
   process.stdout.write('\nматч завершён — поднимаю следующий тем же конфигом\n');
 }
-await shutdown(0);
+// Одиночный прогон — это проверка, и её исход обязан быть в коде возврата:
+// «бот не сел, а слоты пустые» — отказ стенда, а не тихая строка в логе.
+await shutdown(failed ? 1 : 0);
 
 /**
  * Один матч от подъёма до `End`. Всё, что здесь создаётся, здесь же и
  * закрывается: следующий матч начинается с чистого сервера, чистого хоста и
- * нового потока ботов.
+ * нового потока ботов. Возвращает признак отказа стенда — того, что требует
+ * внимания человека, а не очередного рестарта.
  */
 async function runMatch(number) {
+  // Подключившиеся, пока прежний матч сворачивался, ждут в очереди и станут
+  // участниками ЭТОГО матча — их раздаст конструктор `MatchHost` ниже. Для них
+  // отсчёт до заморозки уже идёт: без этой строки одинокий клиент, попавший в
+  // окно рестарта, ждал бы бота вечно (дедлайн взводится только подключением).
+  let arrived = waiting.length;
+  onArrival = () => { arrived++; };
+
   const server = new MatchServer(matchConfig());
   const connections = new PortConnections();
   const host = new MatchHost(server, mergeTransportServers(sessionServer, connections), { serializer });
 
   let botWorker = null;
+  let failure = null;
+  /** Сворачивание матча: остановка потока ботов — не его падение. */
+  let stopping = false;
+  /** Отказ стенда: называется громко и один раз. */
+  const fail = (message) => {
+    if (failure !== null) return;
+    failure = message;
+    process.stderr.write(`\nстенд: ${message}\n`);
+  };
   const filler = new BotSlotFiller({
     players: match.players,
     deadlineMs: botFillMs,
@@ -156,6 +193,13 @@ async function runMatch(number) {
     attach: (playerIds) => {
       botWorker = new Worker(new URL('./demoBot.worker.mjs', import.meta.url));
       botWorker.unref();
+      // Упавший поток ботов — самый тихий из отказов: матч просто не стартует.
+      // Поэтому и `error`, и ненулевой `exit` называются вслух.
+      botWorker.on('error', (error) => { fail(`поток ботов упал: ${error.message}`); });
+      botWorker.on('exit', (code) => {
+        // `terminate()` на сворачивании матча даёт код 1 — это не отказ.
+        if (code !== 0 && !stopping) fail(`поток ботов вышел с кодом ${code}`);
+      });
       botWorker.on('message', (report) => {
         if (report?.t !== 'bot-report') return;
         const taken = report.seats.filter((seat) => seat.slot !== null);
@@ -163,6 +207,15 @@ async function runMatch(number) {
           `\nбот сел в слоты: ${taken.map((seat) => seat.playerId).join(', ') || '—'}` +
             `; отказано: ${report.seats.filter((seat) => seat.rejected !== null).length}\n`,
         );
+        // Ни одного занятого слота при незамороженном ростере означает, что
+        // заполнитель не сработал: разошёлся формат кадра, версия или контент.
+        // Матч в этом состоянии стоит в лобби вечно, и молчать об этом нельзя.
+        if (taken.length === 0 && server.phase === 'lobby') {
+          fail(
+            'бот не занял ни одного слота, а матч всё ещё в лобби — ' +
+              'проверьте формат кадра (--json), версию сборки и контент-пак (NTR-5)',
+          );
+        }
       });
       attachBots({
         worker: botWorker,
@@ -172,6 +225,9 @@ async function runMatch(number) {
         buildId: match.buildId,
         sceneRef: match.sceneRef,
         scene,
+        // Тот же формат, которым говорит сервер (SER-3): бот — обычный участник
+        // матча, и «свойство сборки» относится к нему наравне с людьми.
+        wireFormat,
         ...(match.physics !== undefined ? { physics: match.physics } : {}),
         ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
       });
@@ -180,7 +236,13 @@ async function runMatch(number) {
       return [];
     },
   });
-  onArrival = () => { filler.arm(); };
+  onArrival = () => {
+    arrived++;
+    filler.arm();
+  };
+  // Участники, доставшиеся этому матчу из очереди рестарта, дедлайн уже
+  // «нажали» — взводим его за них.
+  if (arrived > 0) filler.arm();
 
   process.stdout.write(`матч #${number}: жду участников на ws://127.0.0.1:${port}\n`);
   host.start();
@@ -204,11 +266,15 @@ async function runMatch(number) {
   });
 
   clearInterval(report);
-  onArrival = () => {};
+  onArrival = () => { arrived++; };
   filler.dispose();
+  // `host.stop()` закрывает слушающие стороны обоих транспортов — и вид сокета,
+  // и портовые каналы ботов (`mergeTransportServers`), — поэтому второго
+  // закрытия здесь нет.
   await host.stop();
-  await connections.close();
+  stopping = true;
   await botWorker?.terminate();
+  return failure !== null;
 }
 
 async function shutdown(code) {

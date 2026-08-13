@@ -134,6 +134,11 @@ export class DemoLocalSession {
     this.info.phase = 'ended';
     this.filler.dispose();
     await this.host.stop();
+    // Каналы участников закрываются здесь и явно: порты — ресурс среды, и
+    // брошенная пара переживает сессию, держа воркер бота на связи с матчем,
+    // которого больше нет. `host.stop()` закрывает ту слушающую сторону,
+    // которую ему отдали, — а отдана ему могла быть склейка (`extraTransports`).
+    await this.connections.close();
   }
 }
 

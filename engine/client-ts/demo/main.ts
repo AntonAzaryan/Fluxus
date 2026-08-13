@@ -552,11 +552,14 @@ function wireConnectButton(mode: DemoMode): void {
 }
 
 async function main(): Promise<void> {
-  const manifest = await loadManifest();
   // Режим выбирается ОДИН раз, до создания воркеров: переключение режима — это
   // перезагрузка страницы с другим параметром (SHELL-8).
   const mode = demoMode(window.location.search);
+  // Кнопка режима — ДО загрузки манифеста: она и есть дорога со сломанной
+  // страницы. Упади манифест (нет ассета, нет сети) — переключиться было бы
+  // нечем, а это единственный орган управления, которому матч не нужен вовсе.
   wireConnectButton(mode);
+  const manifest = await loadManifest();
   const worker = spawnShellWorker(mode);
 
   remote = new RemoteHost(context, {

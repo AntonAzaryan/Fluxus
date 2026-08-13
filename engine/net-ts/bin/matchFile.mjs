@@ -53,6 +53,17 @@ export function matchConfigOf(match, pack) {
   };
 }
 
+/**
+ * Те же данные матча БЕЗ «кто играет»: версию и ростер лобби собирает само
+ * (`net-session` SES-4), поэтому `HostSession` принимает конфиг без них.
+ */
+export function matchDataOf(match, pack) {
+  const config = { ...matchConfigOf(match, pack) };
+  delete config.version;
+  delete config.players;
+  return config;
+}
+
 export function flag(name) {
   return process.argv.includes(`--${name}`);
 }

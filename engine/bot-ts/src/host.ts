@@ -221,9 +221,25 @@ export class BotHost {
     }
   }
 
-  /** Собственный темп: частота из `Welcome` первого бота, до него — 60 Гц. */
+  /**
+   * Темп матча по данным ПРИНЯТОГО места (NTR-7): `Welcome` приезжает только
+   * тому, кого сервер впустил, и место, которому отказали, темпа не знает
+   * никогда. Брать первое место списка нельзя по этой самой причине —
+   * заполнитель слотов предлагает бота и на слоты, занятые людьми (BOT-7), и
+   * первым в списке вполне оказывается отвергнутый: хост навсегда остался бы на
+   * запасных 60 Гц, тикая ботов не в темпе матча.
+   */
+  private get matchRate(): number | undefined {
+    for (const seat of this.seatList) {
+      const rate = seat.client.pacing?.tickRate;
+      if (rate !== undefined) return rate;
+    }
+    return undefined;
+  }
+
+  /** Собственный темп: частота из `Welcome` принятого бота, до него — 60 Гц. */
   run(): void {
-    this.ensureTimer(this.seatList[0]?.client.pacing?.tickRate ?? 60);
+    this.ensureTimer(this.matchRate ?? 60);
   }
 
   stop(): void {
@@ -244,7 +260,7 @@ export class BotHost {
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timerRate = rate;
     this.timer = setInterval(() => {
-      const actual = this.seatList[0]?.client.pacing?.tickRate;
+      const actual = this.matchRate;
       if (actual !== undefined && actual !== this.timerRate) this.ensureTimer(actual);
       this.step();
       // Темп ведёт хост, а не `ClientHost.run()` (см. `BotSeat.step`), поэтому

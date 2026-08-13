@@ -11,6 +11,7 @@ import { connectWebSocket, type Transport } from '@game-mvp/net';
 import { portTransport } from '../src/portTransport.js';
 import { shellPort } from '../src/protocol.js';
 import { DEMO_PLAYERS } from './match.js';
+import { slotCandidates } from './mode.js';
 import { joinDemoMatch } from './netClient.js';
 import { isDemoClientInit, type DemoClientInit, type DemoNotice } from './wiring.js';
 
@@ -37,10 +38,15 @@ function transportFactory(init: DemoClientInit): () => Promise<Transport> {
 scope.addEventListener('message', (event) => {
   if (!isDemoClientInit(event.data)) return;
   const init = event.data;
-  // Порт матча одноразовый: перебирать слоты по нему нечем и незачем — второй
-  // слот своей вкладки держит бот (BOT-7). У стенда кандидатов столько же,
-  // сколько имён в ростере (design D4).
-  const candidates = init.port !== undefined ? DEMO_PLAYERS.slice(0, 1) : DEMO_PLAYERS;
+  // Политика выбора слота — одна и та же величина, что у главного потока
+  // (`mode.ts`): порт матча своей вкладки одноразовый, и перебирать по нему
+  // нечего — второй слот держит бот (BOT-7); у стенда кандидатов столько же,
+  // сколько имён в ростере (design D4). Второй копии этого правила в сборке
+  // нет: разойдись они, и тестировался бы не тот код, который поехал.
+  const candidates = slotCandidates(
+    init.port !== undefined ? { kind: 'local' } : { kind: 'server', url: init.url ?? '' },
+    DEMO_PLAYERS,
+  );
   void joinDemoMatch({ port, connect: transportFactory(init), candidates }).then((joined) => {
     if (joined.ok) return;
     const notice: DemoNotice = { t: 'demo-notice', message: joined.reason };

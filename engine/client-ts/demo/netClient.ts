@@ -76,9 +76,21 @@ export interface DemoJoinFailed {
 export type DemoJoinResult = DemoJoined | DemoJoinFailed;
 
 /**
- * Порт с отложенной публикацией: сообщения копятся, пока сборка не решила, что
- * попытка удалась. `commit` дописывает `extra` в handshake — то, что известно
- * только после `Welcome`; `discard` выбрасывает конверт неудачной попытки.
+ * Порт попыток входа: один настоящий порт — сколько угодно попыток, но ровно
+ * один живой потребитель.
+ *
+ * Отложенная публикация: сообщения копятся, пока сборка не решила, что попытка
+ * удалась. `commit` дописывает `extra` в handshake — то, что известно только
+ * после `Welcome`, — и дальше порт работает насквозь; `discard` выбрасывает
+ * конверт неудачной попытки И ОТЦЕПЛЯЕТ её оболочку.
+ *
+ * Отцепление здесь не гигиена, а контракт: `ShellPort.onMessage` держит одного
+ * потребителя (`protocol.ts`), а под ним лежит `addEventListener`, то есть
+ * подписки НАКАПЛИВАЮТСЯ. Оболочка отвергнутой попытки не умирает от
+ * `stop()` — она продолжала бы получать каждый `ret` главного потока, а её
+ * `ShellSender` складывал бы возвращённые буферы в пул, который никто не
+ * дренирует. Поэтому к настоящему порту подписка идёт ровно одна, а кто за ней
+ * стоит — решает эта обёртка.
  */
 export function bufferedShellPort(real: ShellPort): {
   readonly port: ShellPort;
@@ -86,6 +98,8 @@ export function bufferedShellPort(real: ShellPort): {
   discard(): void;
 } {
   let buffered: unknown[] | null = [];
+  let consumer: ((message: unknown) => void) | null = null;
+  let subscribed = false;
   return {
     port: {
       post(message, transfer) {
@@ -93,7 +107,10 @@ export function bufferedShellPort(real: ShellPort): {
         else buffered.push(message);
       },
       onMessage(handler) {
-        real.onMessage(handler);
+        consumer = handler;
+        if (subscribed) return;
+        subscribed = true;
+        real.onMessage((message) => consumer?.(message));
       },
     },
     commit(extra) {
@@ -106,6 +123,7 @@ export function bufferedShellPort(real: ShellPort): {
     },
     discard() {
       buffered = [];
+      consumer = null;
     },
   };
 }
@@ -158,6 +176,9 @@ export async function joinDemoMatch(options: DemoClientOptions): Promise<DemoJoi
   const settle = options.settle ?? (() => new Promise<void>((done) => setTimeout(done, 16)));
   const timeoutMs = options.timeoutMs ?? JOIN_TIMEOUT_MS;
   let lastReason = 'матч занят: свободных слотов нет';
+  // Обёртка одна на все попытки: подписка к настоящему порту единственная, и
+  // живым потребителем остаётся ровно одна оболочка (см. `bufferedShellPort`).
+  const buffered = bufferedShellPort(options.port);
 
   for (const playerId of options.candidates) {
     let transport: Transport;
@@ -184,7 +205,6 @@ export async function joinDemoMatch(options: DemoClientOptions): Promise<DemoJoi
       ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
     });
     const grid = world.sim.terrain?.grid;
-    const buffered = bufferedShellPort(options.port);
     const shell = new NetworkShell({
       mode: 'network',
       port: buffered.port,

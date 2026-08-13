@@ -11,11 +11,11 @@
  * пришло от другого потока и типом не гарантировано ничем. Поэтому профиль
  * разбирается и проверяется на этой стороне (BOT-6), а не принимается на веру.
  */
-import { fixed, type SceneDef } from '@game-mvp/core';
-import { contentPack, type ContentPack } from '@game-mvp/net';
+import { fixed, type SceneDef, type Serializer } from '@game-mvp/core';
+import { contentPack, jsonSerializer, msgpackSerializer, type ContentPack } from '@game-mvp/net';
 import { shellPort } from '@game-mvp/client/protocol';
 import { portTransport } from '@game-mvp/client/portTransport';
-import type { BotWorkerInit } from '../assembly.js';
+import type { BotWireFormat, BotWorkerInit } from '../assembly.js';
 import { brainFactoryByKind } from '../brains/registry.js';
 import type { ArenaCenter } from '../brains/classic/utility.js';
 import { BotHost } from '../host.js';
@@ -43,6 +43,28 @@ function arenaCenter(scene: SceneDef): ArenaCenter {
 }
 
 /**
+ * Формат кадра по имени (SER-3). Резолвится ЗДЕСЬ, как и фабрика мозга: через
+ * structured clone едут данные, а не объекты с функциями. Неизвестное имя —
+ * отказ, а не тихое умолчание: бот, заговоривший не тем форматом, не отвергается
+ * сервером, а просто не понимается им, и матч встаёт в лобби навсегда.
+ */
+const WIRE_FORMATS: Readonly<Record<string, Serializer>> = {
+  json: jsonSerializer,
+  msgpack: msgpackSerializer,
+};
+
+function serializerOf(format: BotWireFormat | undefined): Serializer | undefined {
+  if (format === undefined) return undefined;
+  // Имя приехало структурным клоном, то есть типом не гарантировано ничем —
+  // проверка настоящая, а не формальность (как и разбор профиля рядом).
+  const serializer = WIRE_FORMATS[format];
+  if (serializer === undefined) {
+    throw new Error(`startBotWorker: неизвестный формат кадра "${format}" (SER-3)`);
+  }
+  return serializer;
+}
+
+/**
  * Поднимает ботов init-сообщения: по `MatchClient` на слот, по транспорту на
  * порт, мозг — по имени из реестра (BOT-2, BOT-4).
  */
@@ -52,6 +74,7 @@ export function startBotWorker(init: BotWorkerInit, options: BotWorkerOptions = 
     center: arenaCenter(init.scene),
     ...(init.names !== undefined ? { names: init.names } : {}),
   };
+  const serializer = serializerOf(init.wireFormat);
   const host = new BotHost();
   for (const [index, seat] of init.seats.entries()) {
     const port = init.ports[index];
@@ -70,6 +93,7 @@ export function startBotWorker(init: BotWorkerInit, options: BotWorkerOptions = 
       version: { buildId: init.buildId, contentPackHash: pack.hash },
       ...(init.physics !== undefined ? { physics: init.physics } : {}),
       ...(init.visibility !== undefined ? { visibility: init.visibility } : {}),
+      ...(serializer !== undefined ? { serializer } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
   }

@@ -8,7 +8,7 @@
  * а воркер здесь — что угодно, умеющее `postMessage` с transfer-списком. Так
  * dev-сборка вкладки и нагрузочный прогон node пользуются одним кодом.
  */
-import { botWorkerInit, type BotWorkerSeat, type MessageChannelLike, type PortConnections, type RawPort } from '../assembly.js';
+import { botWorkerInit, type BotWireFormat, type BotWorkerSeat, type MessageChannelLike, type PortConnections, type RawPort } from '../assembly.js';
 import type { WorldViewNames } from '../worldView.js';
 import type { PhysicsOptions, SceneDef, VisibilityOptions } from '@game-mvp/core';
 
@@ -27,6 +27,8 @@ export interface AttachBotsOptions {
   readonly buildId: string;
   readonly sceneRef: string;
   readonly scene: SceneDef;
+  /** Формат кадра сервера матча (SER-3); отсутствие — умолчание протокола. */
+  readonly wireFormat?: BotWireFormat;
   readonly physics?: PhysicsOptions;
   readonly visibility?: VisibilityOptions;
   readonly names?: WorldViewNames;
@@ -45,6 +47,7 @@ export function attachBots(options: AttachBotsOptions): void {
     buildId: options.buildId,
     sceneRef: options.sceneRef,
     scene: options.scene,
+    ...(options.wireFormat !== undefined ? { wireFormat: options.wireFormat } : {}),
     ...(options.physics !== undefined ? { physics: options.physics } : {}),
     ...(options.visibility !== undefined ? { visibility: options.visibility } : {}),
     ...(options.names !== undefined ? { names: options.names } : {}),
