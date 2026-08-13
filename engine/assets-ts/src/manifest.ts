@@ -36,6 +36,8 @@ export interface VisualManifest {
   surfaceAlign?: SurfaceAlign;
   /** Presentation-данные террейна арены. */
   terrain?: { curvatureMap?: string };
+  /** Секция транзиентных эффектов сцены (REND-23); потребитель — подсистема эффектов. */
+  effects?: VisualEffectsSection;
   /** Секция эффектов камеры (ASSET-8); потребитель — `camera` CAM-6. */
   cameraEffects?: CameraEffectsSection;
   /** Секция конфига камеры (ASSET-10); потребитель — конвейер `camera` CAM-1. */
@@ -58,6 +60,27 @@ export function resolveVisual(
 }
 
 /**
+ * Эффект-оболочка визуального типа (REND-23) — одно место разрешения на всех
+ * потребителей: подсистема эффектов рисует по нему, а подсистема моделей по
+ * нему же понимает, что сущность рисуется НЕ моделью и заглушка ей не нужна
+ * (ASSET-4 — заглушка означает «ассет не доехал», а не «записи нет»).
+ */
+export function resolveEffectByKind(
+  manifest: Pick<VisualManifest, 'effects'>,
+  kind: string,
+): VisualEffect | undefined {
+  return manifest.effects?.byKind?.[kind];
+}
+
+/** Эффект-вспышка типа события (REND-23, REND-4: реакция на событие — данные). */
+export function resolveEffectByEvent(
+  manifest: Pick<VisualManifest, 'effects'>,
+  event: string,
+): VisualEffect | undefined {
+  return manifest.effects?.byEvent?.[event];
+}
+
+/**
  * Все визуальные ключи манифеста в одном пространстве (ASSET-9) — то, из чего
  * автор выбирает вид для размещения (`presentation-scene` PRES-2) и по чему
  * валидация редактора судит о разрешимости ссылки.
@@ -66,6 +89,58 @@ export function visualKeys(
   manifest: Pick<VisualManifest, 'entities' | 'decorations'>,
 ): readonly string[] {
   return [...Object.keys(manifest.entities), ...Object.keys(manifest.decorations ?? {})];
+}
+
+/**
+ * Секция транзиентных эффектов (`rendering` REND-23): две таблицы — эффект по
+ * визуальному типу сущности (оболочка: живёт, пока живёт сущность) и эффект по
+ * типу reliable-события (вспышка: проигрывает свою длительность и исчезает).
+ *
+ * Пространства ключей у таблиц РАЗНЫЕ и пересекаться им не запрещено: слева
+ * визуальные типы, справа типы событий, и одноимённые записи значат разное.
+ * Это не то же самое, что разделы записей инстансов (ASSET-9), где ключ один
+ * и разрешается одной функцией.
+ */
+export interface VisualEffectsSection {
+  /** Визуальный тип сущности → эффект-оболочка. */
+  byKind?: Record<string, VisualEffect>;
+  /** Тип события тика → эффект-вспышка. */
+  byEvent?: Record<string, VisualEffect>;
+}
+
+/**
+ * Запись эффекта (REND-23): примитив и его числа. Перечня примитивов и кривых
+ * у модуля ассетов нет намеренно — их называет рендер, а манифест переживает
+ * код: неизвестное имя подсистема пропускает с предупреждением, как и
+ * неизвестный тип эффекта камеры (ASSET-8).
+ */
+export interface VisualEffect {
+  /** Имя примитива; рендер сегодня умеет `sphere`. */
+  primitive: string;
+  /** Цвет в форме, которую понимает рендер (`#rrggbb`). */
+  color: string;
+  /** Радиус в начале жизни, мировые единицы. */
+  radius: number;
+  /** Радиус в конце жизни; без него радиус постоянен. */
+  radiusTo?: number;
+  /** Прозрачность в начале жизни, [0..1]; без неё — 1. */
+  alpha?: number;
+  /** Прозрачность в конце жизни; без неё альфа постоянна. */
+  alphaTo?: number;
+  /** Длительность вспышки, мс. У оболочки длительности нет — она живёт с сущностью. */
+  durationMs?: number;
+  /** Имя кривой фазы жизни; рендер сегодня умеет `linear` и `easeOut`. */
+  curve?: string;
+  /** Подъём центра примитива над опорной высотой, мировые единицы. */
+  height?: number;
+  /**
+   * Вертикальное смещение записи (REND-12) — для эффекта-оболочки, который и
+   * есть изображение сущности: полётная дуга снаряда живёт здесь по той же
+   * причине, по какой дуга прыжка живёт в записи инстанса, — это ЕГО запись
+   * манифеста. Виды смещения, к оболочке неприменимые (дуги манёвров,
+   * снижение при провале), смысла не имеют, как и у записи decoration (ASSET-9).
+   */
+  verticalOffset?: VerticalOffset;
 }
 
 /**
@@ -654,6 +729,89 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
   }
 }
 
+/** Поля записи эффекта (REND-23) — они же перечень допустимых ключей. */
+const EFFECT_FIELDS = [
+  'primitive',
+  'color',
+  'radius',
+  'radiusTo',
+  'alpha',
+  'alphaTo',
+  'durationMs',
+  'curve',
+  'height',
+  'verticalOffset',
+] as const;
+
+/** Числовые поля записи эффекта и их границы; вне границ — ошибка документа. */
+const EFFECT_NUMBERS: readonly { readonly name: string; readonly min: number; readonly max?: number }[] = [
+  { name: 'radius', min: 0 },
+  { name: 'radiusTo', min: 0 },
+  { name: 'alpha', min: 0, max: 1 },
+  { name: 'alphaTo', min: 0, max: 1 },
+  { name: 'durationMs', min: 0 },
+  { name: 'height', min: Number.NEGATIVE_INFINITY },
+];
+
+/**
+ * Запись эффекта (REND-23). Структура проверяется строго — опечатка в поле
+ * data-driven документа почти всегда ошибка автора, — а имена примитива и
+ * кривой не проверяются вовсе: их перечень принадлежит рендеру, и второй
+ * перечень здесь разошёлся бы с ним молча (то же основание, что у ASSET-8).
+ */
+function validateEffect(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(`${path}: ожидался объект { primitive, color, radius, … }, получено ${typeName(v)}`);
+    return;
+  }
+  checkUnknownKeys(v, EFFECT_FIELDS, path, errors);
+  for (const field of ['primitive', 'color'] as const) {
+    const value = v[field];
+    if (typeof value !== 'string' || value.length === 0) {
+      errors.push(`${path}.${field}: обязательное поле — непустая строка, получено ${typeName(value)}`);
+    }
+  }
+  if (!isFiniteNumber(v.radius) || v.radius < 0) {
+    errors.push(`${path}.radius: обязательное поле — неотрицательный радиус, получено ${typeName(v.radius)}`);
+  }
+  for (const spec of EFFECT_NUMBERS) {
+    if (!(spec.name in v) || spec.name === 'radius') continue;
+    const value = v[spec.name];
+    if (
+      !isFiniteNumber(value) ||
+      value < spec.min ||
+      (spec.max !== undefined && value > spec.max)
+    ) {
+      const range = spec.max === undefined ? `>= ${spec.min}` : `в [${spec.min}..${spec.max}]`;
+      errors.push(`${path}.${spec.name}: ожидалось число ${range}, получено ${typeName(value)}`);
+    }
+  }
+  if ('verticalOffset' in v) {
+    validateVerticalOffset(v.verticalOffset, `${path}.verticalOffset`, errors);
+  }
+}
+
+/** Секция транзиентных эффектов (REND-23): две таблицы «имя → запись эффекта». */
+function validateEffects(section: unknown, errors: string[]): void {
+  const path = 'effects';
+  if (!isRecord(section)) {
+    errors.push(`${path}: ожидался объект { byKind?, byEvent? }, получено ${typeName(section)}`);
+    return;
+  }
+  checkUnknownKeys(section, ['byKind', 'byEvent'], path, errors);
+  for (const table of ['byKind', 'byEvent'] as const) {
+    if (!(table in section)) continue;
+    const entries = section[table];
+    if (!isRecord(entries)) {
+      errors.push(`${path}.${table}: ожидался объект «имя → эффект», получено ${typeName(entries)}`);
+      continue;
+    }
+    for (const [name, def] of Object.entries(entries)) {
+      validateEffect(def, `${path}.${table}.${name}`, errors);
+    }
+  }
+}
+
 /** Вид эффекта, законный в таблице секции: у `events` — импульсный, у `states` — длящийся. */
 const TABLE_KIND: Readonly<Record<'events' | 'states', CameraEffectKind>> = Object.freeze({
   events: 'impulse',
@@ -796,7 +954,7 @@ export function validateManifest(doc: unknown, options: ValidateManifestOptions 
   }
   checkUnknownKeys(
     doc,
-    ['entities', 'decorations', 'surfaceAlign', 'terrain', 'cameraEffects', 'cameraConfig'],
+    ['entities', 'decorations', 'surfaceAlign', 'terrain', 'effects', 'cameraEffects', 'cameraConfig'],
     'манифест',
     errors,
   );
@@ -834,6 +992,9 @@ export function validateManifest(doc: unknown, options: ValidateManifestOptions 
         }
       }
     }
+  }
+  if ('effects' in doc) {
+    validateEffects(doc.effects, errors);
   }
   if ('cameraEffects' in doc) {
     validateCameraEffects(doc.cameraEffects, errors, warnings, options.cameraEffects);

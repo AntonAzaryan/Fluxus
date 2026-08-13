@@ -34,6 +34,7 @@ import {
   CAMERA_EFFECTS_DESCRIPTION,
   CameraEffectsDirector,
   CameraRig,
+  EffectsSubsystem,
   ModelsSubsystem,
   TerrainSubsystem,
   VisualSurfaceSource,
@@ -585,6 +586,10 @@ async function main(): Promise<void> {
       // запас консервативности границ покрывает это наравне с размахом клипов.
       models = new ModelsSubsystem(manifest, { surface, camera });
       remote!.register(models);
+      // Транзиентные эффекты (REND-23) — после моделей: оболочки рисуются
+      // поверх инстансов, а шарик снаряда и вовсе заменяет ему модель. Записи
+      // — в манифесте (`effects`), кода сцены они не требуют.
+      remote!.register(new EffectsSubsystem(manifest, { surface }));
 
       // Камера: поверхность и границы — из той же сетки, что рендер террейна
       // (CAM-2, CAM-3); эффекты — по таблицам манифеста (ASSET-7, CAM-6).

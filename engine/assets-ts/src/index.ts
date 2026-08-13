@@ -69,6 +69,9 @@ export type {
   VisualManifest,
   EntityVisual,
   SurfaceAlign,
+  // секция транзиентных эффектов (`rendering` REND-23)
+  VisualEffect,
+  VisualEffectsSection,
   CameraEffectsSection,
   CameraEffectDef,
   // Форма машинного описания типов эффектов (`camera` CAM-9): контракт живёт
@@ -91,6 +94,8 @@ export {
   resolveSurfaceAlign,
   resolveVisual,
   resolveVisualTier,
+  resolveEffectByKind,
+  resolveEffectByEvent,
   resolveLodThresholds,
   DEFAULT_LOD_THRESHOLDS,
   visualKeys,

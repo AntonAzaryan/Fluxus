@@ -7,6 +7,8 @@ import {
   clampCameraEffectParam,
   createManifestLoader,
   manifestLoader,
+  resolveEffectByEvent,
+  resolveEffectByKind,
   resolveLodThresholds,
   resolveVisual,
   resolveVisualTier,
@@ -589,6 +591,92 @@ describe('validateManifest: вертикальное смещение инста
       { entities: { x: { model: 'm.mdx', verticalOffset: 1.5 } } },
       /verticalOffset: ожидался объект/,
     );
+  });
+
+  it('дуги называются на вид манёвра и на полёт — каждая своим полем (REND-12)', () => {
+    const result = validateManifest({
+      entities: {
+        x: { model: 'm.mdx', verticalOffset: { jumpArc: 0.9, maneuverArc: 0.25, flightArc: 0.35 } },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const offset = result.manifest.entities.x!.verticalOffset!;
+    expect(offset.maneuverArc).toBe(0.25);
+    expect(offset.flightArc).toBe(0.35);
+    // Отсутствие поля — отсутствие дуги этого вида, а не чужая высота.
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', verticalOffset: { maneuverArc: -0.1 } } } },
+      /verticalOffset\.maneuverArc: ожидалось неотрицательное число/,
+    );
+  });
+});
+
+describe('validateManifest: секция транзиентных эффектов (REND-23)', () => {
+  const effects = {
+    byKind: {
+      Fireball: {
+        primitive: 'sphere',
+        color: '#ff8a3c',
+        radius: 0.25,
+        alpha: 0.95,
+        height: 0.6,
+        verticalOffset: { flightArc: 0.35 },
+      },
+    },
+    byEvent: {
+      FireballExploded: {
+        primitive: 'sphere',
+        color: '#ff4020',
+        radius: 0.2,
+        radiusTo: 1.6,
+        alpha: 0.7,
+        alphaTo: 0,
+        durationMs: 400,
+        curve: 'easeOut',
+      },
+    },
+  };
+
+  it('обе таблицы опциональны, записи разрешаются по имени', () => {
+    const result = validateManifest({ entities: {}, effects });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(resolveEffectByKind(result.manifest, 'Fireball')!.color).toBe('#ff8a3c');
+    expect(resolveEffectByEvent(result.manifest, 'FireballExploded')!.durationMs).toBe(400);
+    // Пространства ключей разные: имя события не разрешается как визуальный тип.
+    expect(resolveEffectByKind(result.manifest, 'FireballExploded')).toBeUndefined();
+    expect(validateManifest({ entities: {} }).ok).toBe(true);
+  });
+
+  it('имена примитива и кривой рендеру принадлежат — документ с ними валиден', () => {
+    // Перечня примитивов у модуля ассетов нет намеренно (то же, что ASSET-8):
+    // неизвестное имя разбирает потребитель, а не валидация формата.
+    const result = validateManifest({
+      entities: {},
+      effects: { byKind: { X: { primitive: 'ribbon', color: '#fff', radius: 1, curve: 'bounce' } } },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('структурные нарушения — ошибки с путями до полей', () => {
+    expectErrors(
+      { entities: {}, effects: { byKind: { X: { color: '#fff', radius: 1 } } } },
+      /effects\.byKind\.X\.primitive: обязательное поле/,
+    );
+    expectErrors(
+      { entities: {}, effects: { byKind: { X: { primitive: 'sphere', color: '#fff' } } } },
+      /effects\.byKind\.X\.radius: обязательное поле/,
+    );
+    expectErrors(
+      { entities: {}, effects: { byEvent: { X: { primitive: 'sphere', color: '#fff', radius: 1, alpha: 2 } } } },
+      /effects\.byEvent\.X\.alpha: ожидалось число в \[0\.\.1\]/,
+    );
+    expectErrors(
+      { entities: {}, effects: { byKind: { X: { primitive: 'sphere', color: '#fff', radius: 1, radus: 2 } } } },
+      /effects\.byKind\.X\.radus: неизвестное поле/,
+    );
+    expectErrors({ entities: {}, effects: [] }, /effects: ожидался объект/);
   });
 });
 

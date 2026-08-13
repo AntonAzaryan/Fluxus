@@ -71,6 +71,47 @@
       }
     }
   },
+  "effects": {
+    "byKind": {
+      "Fireball": {
+        "primitive": "sphere",
+        "color": "#ff8a3c",
+        "radius": 0.22,
+        "alpha": 0.95,
+        "height": 0.55,
+        "verticalOffset": {
+          "flightArc": 0.35
+        }
+      },
+      "Shield": {
+        "primitive": "sphere",
+        "color": "#4aa3ff",
+        "radius": 0.85,
+        "alpha": 0.3,
+        "height": 0.9
+      },
+      "CatchZone": {
+        "primitive": "sphere",
+        "color": "#8affc8",
+        "radius": 1.2,
+        "alpha": 0.16,
+        "height": 0.2
+      }
+    },
+    "byEvent": {
+      "FireballExploded": {
+        "primitive": "sphere",
+        "color": "#ff5a2a",
+        "radius": 0.3,
+        "radiusTo": 2.2,
+        "alpha": 0.55,
+        "alphaTo": 0,
+        "durationMs": 420,
+        "curve": "easeOut",
+        "height": 0.4
+      }
+    }
+  },
   "surfaceAlign": {
     "factor": 1
   },

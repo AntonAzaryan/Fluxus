@@ -79,6 +79,7 @@ import {
 } from '@game-mvp/core';
 import {
   modelDerivatives,
+  resolveEffectByKind,
   resolveLodThresholds,
   resolveSurfaceAlign,
   resolveVisual,
@@ -1286,6 +1287,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
     const visual = record.visual;
     if (visual === undefined) {
+      // Тип, который манифест описал записью ЭФФЕКТА (REND-23), рисуется не
+      // моделью — и заглушки ему не полагается: заглушка означает «ассет ещё не
+      // доехал» (ASSET-4), а тут доезжать нечему. Молчит подсистема по той же
+      // причине: запись в манифесте есть, просто не её.
+      if (resolveEffectByKind(this.manifest, kind) !== undefined) return;
       // Сущность без записи в манифесте: заглушка и предупреждение один раз (ASSET-6).
       if (!this.warnedKinds.has(kind)) {
         this.warnedKinds.add(kind);

@@ -125,6 +125,11 @@ export type { CellRect, TerrainGeometryData, TerrainOptions } from './subsystems
 export { ModelsSubsystem } from './subsystems/models.js';
 export type { InstancePose, ModelInstanceView, ModelsOptions } from './subsystems/models.js';
 
+// Подсистема транзиентных эффектов (REND-23): процедурные примитивы по записям
+// манифеста — оболочки от доставленного состояния и вспышки от событий.
+export { EffectsSubsystem } from './subsystems/effects.js';
+export type { EffectsOptions } from './subsystems/effects.js';
+
 // Сервисы вьюпорта редактора: picking по видимому изображению (REND-15) и
 // служебные наложения подсистемой рендера (REND-16). Игровой клиент ни того, ни
 // другого не собирает — наложений в его кадре нет по конструкции.
