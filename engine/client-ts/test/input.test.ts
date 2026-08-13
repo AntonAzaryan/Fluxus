@@ -4,7 +4,18 @@
  * (design D8). Поведенческий контракт закреплён до миграции демо.
  */
 import { describe, expect, it } from 'vitest';
-import { fixed } from '@game-mvp/core';
+import {
+  InputSystem,
+  fixed,
+  initialState,
+  loadScene,
+  mathApi,
+  tick as simTick,
+  world as coreWorld,
+  worldInitSpawn,
+  type SceneDef,
+  type Simulation,
+} from '@game-mvp/core';
 import {
   GamepadSource,
   HeldActions,
@@ -473,5 +484,134 @@ describe('Биндинги — данные с валидацией (INP-4)', ()
         gamepad: { moveAxes: [0], deadzone: 0.25, buttons: {} },
       }),
     ).toThrow(/moveAxes/);
+  });
+});
+
+/**
+ * Отпускание доезжает до симуляции (INP-2 + `tick-loop` TICK-4): весь путь
+ * целиком — источник → сэмплер → `InputFrame` → `InputSystem` → JSON-система,
+ * которая ловит falling edge обычным выражением DSL. Зеркало теста «каст не
+ * спамится при зажатой кнопке» (`demoScene.test.ts`) с другого конца нажатия.
+ */
+describe('отпускание кнопки в симуляции (INP-2, TICK-4)', () => {
+  /** Мини-сцена: игрок, счётчик отпусканий и системa-политика на falling edge. */
+  const SCENE: SceneDef = {
+    components: [
+      { name: 'Player', fields: { slot: 'i32' } },
+      {
+        name: 'Input',
+        fields: {
+          aimDir: 'fixed',
+          buttons: 'i32',
+          moveX: 'fixed',
+          moveY: 'fixed',
+          prevButtons: 'i32',
+          seq: 'i32',
+        },
+      },
+      { name: 'Released', fields: { count: 'i32' } },
+    ],
+    prefabs: [
+      { name: 'Hero', components: { Player: { slot: 0 }, Input: {}, Released: { count: 0 } } },
+    ],
+    systems: [
+      {
+        name: 'ReleaseCounter',
+        order: 10,
+        query: { all: ['Input', 'Released'] },
+        as: 'e',
+        do: [
+          {
+            if: {
+              cond: {
+                and: [
+                  { bitTest: [{ getComponent: [{ var: 'e' }, 'Input', 'prevButtons'] }, BITS.cast] },
+                  {
+                    '!': [
+                      { bitTest: [{ getComponent: [{ var: 'e' }, 'Input', 'buttons'] }, BITS.cast] },
+                    ],
+                  },
+                ],
+              },
+              then: [
+                {
+                  modifyComponent: {
+                    entity: { var: 'e' },
+                    component: 'Released',
+                    values: {
+                      count: {
+                        '+': [{ getComponent: [{ var: 'e' }, 'Released', 'count'] }, 1],
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+    capacity: 8,
+  } as unknown as SceneDef;
+
+  /** Сборка «сэмплер → тик»: сэмпл границы тика уходит во фрейм как есть. */
+  function harness() {
+    const { world, systems } = loadScene(SCENE);
+    systems.register(new InputSystem({ players: ['p1'] }));
+    const hero = worldInitSpawn(world, 'Hero');
+    const sim: Simulation = { systems, worldSeed: 1, math: mathApi };
+    const state = initialState(world, 1);
+    const sampler = makeSampler();
+    const source = new KeyboardMouseSource({
+      bindings: validateBindings(demoBindings).keyboardMouse,
+      aimAt: () => 0,
+    });
+    sampler.add(source);
+
+    let at = 0;
+    return {
+      source,
+      /** Один тик: выборка ввода и прогон систем — как делает оболочка (SHELL-6). */
+      step: (): void => {
+        at += 1;
+        const input = sampler.sample();
+        simTick(sim, state, [{ tick: at, playerId: 'p1', seq: at, ...input }]);
+      },
+      released: (): number => coreWorld.getField(state.world, hero, 'Released', 'count'),
+    };
+  }
+
+  it('система на falling edge срабатывает ровно один раз на отпускание', () => {
+    const h = harness();
+    // Кнопка каста — левая кнопка мыши демо-раскладки (INP-4).
+    h.source.handlePointerDown(0, 10, 20);
+    for (let i = 0; i < 4; i++) h.step();
+    expect(h.released()).toBe(0); // удержание — не отпускание
+
+    h.source.handlePointerUp(0);
+    h.step();
+    expect(h.released()).toBe(1);
+    h.step();
+    h.step();
+    expect(h.released()).toBe(1); // отпускание не повторяется
+
+    // Второе нажатие и отпускание — второй раз.
+    h.source.handlePointerDown(0, 10, 20);
+    h.step();
+    h.source.handlePointerUp(0);
+    h.step();
+    expect(h.released()).toBe(2);
+  });
+
+  it('тап между тиками виден как нажатие и следом как отпускание', () => {
+    const h = harness();
+    // Нажатие и отпускание целиком между тиками: латч даёт бит одного тика,
+    // следующий тик — уже falling edge.
+    h.source.handlePointerDown(0, 10, 20);
+    h.source.handlePointerUp(0);
+    h.step();
+    expect(h.released()).toBe(0);
+    h.step();
+    expect(h.released()).toBe(1);
   });
 });

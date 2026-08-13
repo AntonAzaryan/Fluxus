@@ -34,6 +34,8 @@ export class GamepadSource implements InputSource {
   /** Детектор фронтов опросного устройства (INP-2). */
   private readonly edges = new HeldActions();
   private readonly current = new Set<string>();
+  /** Было ли устройство на последнем опросе: неактивный источник — `null` (INP-5). */
+  private connected = false;
   private lastAim: number | null = null;
 
   constructor(bindings: GamepadBindings, getGamepad: () => GamepadLike | null) {
@@ -49,6 +51,7 @@ export class GamepadSource implements InputSource {
     this.press = null;
     this.edges.reset();
     this.current.clear();
+    this.connected = false;
   }
 
   /**
@@ -56,7 +59,7 @@ export class GamepadSource implements InputSource {
    * (INP-2): та же гарантия, что у событийной клавиатуры.
    */
   held(): ReadonlySet<string> | null {
-    return this.current;
+    return this.connected ? this.current : null;
   }
 
   poll(): ContinuousSample | null {
@@ -65,8 +68,10 @@ export class GamepadSource implements InputSource {
       // Отключение: кнопки не «дожаты» при переподключении, движение — нейтраль.
       this.edges.reset();
       this.current.clear();
+      this.connected = false;
       return null;
     }
+    this.connected = true;
 
     this.current.clear();
     for (const [index, action] of Object.entries(this.bindings.buttons)) {
