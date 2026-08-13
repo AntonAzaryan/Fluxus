@@ -800,14 +800,14 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       }
       // Вертикальное смещение — чистое представление (REND-12): дуга манёвра
       // смешивается по тем же двум тикам, что позиция, снижение идёт по кадрам.
-      // Высота дуги выбирается по ВИДУ манёвра последнего тика: прыжковая к
-      // уклону не переносится, а вид без параметра дуги не получает вовсе.
-      const arcHeight = arcHeightOf(record, view.motion);
-      const arcPrev = jumpArc(view.prevMotionPhase, arcHeight);
-      const arcCurr = jumpArc(view.currMotionPhase, arcHeight);
+      // Высота КАЖДОГО вклада берётся по виду манёвра ЕГО тика: прыжковая
+      // высота к уклону не переносится, а тик приземления (манёвра уже нет)
+      // доигрывает спуск прошлого тика вместо мгновенного обнуления.
+      const arcPrev = jumpArc(view.prevMotionPhase, arcHeightOf(record, view.prevMotion));
+      const arcCurr = jumpArc(view.currMotionPhase, arcHeightOf(record, view.motion));
       // Полётная дуга — по фазе полёта плоской формы (REND-12): её приносит
       // сборка воркера (SHELL-2), и без неё дуги нет независимо от манифеста.
-      const flightArc = jumpArc(view.flightPhase ?? Number.NaN, record.flightArcHeight);
+      const flightArc = jumpArc(view.flightPhase, record.flightArcHeight);
       if (record.falling) {
         record.fallOffset = advanceFall(record.fallOffset, record.fallSpeed, record.fallDepth, dt);
       }

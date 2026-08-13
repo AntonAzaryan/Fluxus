@@ -40,6 +40,7 @@ interface EntityRecord extends EntityView {
   aimYaw: number | null;
   states: number;
   motion: number;
+  prevMotion: number;
   prevMotionPhase: number;
   currMotionPhase: number;
   /** Фаза полёта последнего доставленного тика; `NaN` — сущность не летит (REND-12). */
@@ -171,8 +172,12 @@ export class ViewBuffer {
       const y = ext.y[i]!;
       const level = ext.level[i]!;
       // Фаза манёвра скользит по тем же двум тикам, что позиция (REND-12):
-      // дуга прыжка интерполируется вместе с ней, а не ступеньками по тикам.
+      // дуга манёвра интерполируется вместе с ней, а не ступеньками по тикам.
       const phase = ext.motionPhase[i]!;
+      // Вид манёвра скользит ВМЕСТЕ с фазой: высота дуги задана на вид, и
+      // вклад прошлого тика обязан считаться высотой того манёвра, который на
+      // нём и шёл (REND-12).
+      const motion = ext.motion[i]!;
 
       let record = this.records.get(id);
       if (record === undefined) {
@@ -194,6 +199,7 @@ export class ViewBuffer {
           aimYaw: null,
           states: 0,
           motion: LOCOMOTION_NORMAL,
+          prevMotion: LOCOMOTION_NORMAL,
           prevMotionPhase: phase,
           currMotionPhase: phase,
           flightPhase: Number.NaN,
@@ -204,6 +210,7 @@ export class ViewBuffer {
         record.prevY = record.currY = y;
         record.prevLevel = record.currLevel = level;
         record.prevMotionPhase = record.currMotionPhase = phase;
+        record.prevMotion = motion;
         record.snap = true;
         record.spawned = false;
       } else if (!tickAdvanced) {
@@ -217,6 +224,7 @@ export class ViewBuffer {
         record.prevY = teleport ? y : record.currY;
         record.prevLevel = teleport ? level : record.currLevel;
         record.prevMotionPhase = teleport ? phase : record.currMotionPhase;
+        record.prevMotion = teleport ? motion : record.motion;
         record.currX = x;
         record.currY = y;
         record.currLevel = level;
@@ -225,7 +233,7 @@ export class ViewBuffer {
         record.spawned = false;
       }
 
-      record.motion = ext.motion[i]!;
+      record.motion = motion;
       // Фаза полёта — величина последнего доставленного тика, а не пара для
       // интерполяции (REND-12): дуга производна от неё, и conflation (SHELL-4)
       // ей не вредит — пропущенный тик просто не был показан.

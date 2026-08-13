@@ -243,8 +243,11 @@ export class DocumentSource implements PresentationProducer {
       moving: false,
       // Машина локомоушена — часть симуляции; манёвра в наборе быть не может.
       motion: LOCOMOTION_NORMAL,
+      prevMotion: LOCOMOTION_NORMAL,
       prevMotionPhase: Number.NaN,
       currMotionPhase: Number.NaN,
+      // Полёт — состояние идущего мира: у документного инстанса его нет (REND-12).
+      flightPhase: Number.NaN,
       // Уровень производен от позиции: посадку делает визуальная поверхность (REND-10).
       levelOverride: false,
       facingYaw: 0,

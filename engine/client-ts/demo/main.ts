@@ -588,8 +588,12 @@ async function main(): Promise<void> {
       remote!.register(models);
       // Транзиентные эффекты (REND-23) — после моделей: оболочки рисуются
       // поверх инстансов, а шарик снаряда и вовсе заменяет ему модель. Записи
-      // — в манифесте (`effects`), кода сцены они не требуют.
-      remote!.register(new EffectsSubsystem(manifest, { surface }));
+      // — в манифесте (`effects`), кода сцены они не требуют. Список состояний
+      // тот же, что у Extractor'а и диспетчера камеры (`sim.ts`): по нему
+      // запись `effects.byState` находит свой бит доставленных состояний.
+      remote!.register(
+        new EffectsSubsystem(manifest, { surface, stateComponents: STATE_COMPONENTS }),
+      );
 
       // Камера: поверхность и границы — из той же сетки, что рендер террейна
       // (CAM-2, CAM-3); эффекты — по таблицам манифеста (ASSET-7, CAM-6).

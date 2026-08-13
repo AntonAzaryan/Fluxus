@@ -95,6 +95,7 @@ export {
   resolveVisual,
   resolveVisualTier,
   resolveEffectByKind,
+  resolveEffectByState,
   resolveEffectByEvent,
   resolveLodThresholds,
   DEFAULT_LOD_THRESHOLDS,

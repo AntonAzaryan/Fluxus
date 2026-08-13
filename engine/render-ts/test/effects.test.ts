@@ -27,7 +27,9 @@ function makeManifest(): VisualManifest {
           height: 0.6,
           verticalOffset: { flightArc: 0.4 },
         },
-        Shield: { primitive: 'sphere', color: '#4aa3ff', radius: 0.9, alpha: 0.3, height: 0.9 },
+      },
+      byState: {
+        Shielded: { primitive: 'sphere', color: '#4aa3ff', radius: 0.9, alpha: 0.3, height: 0.9 },
       },
       byEvent: {
         FireballExploded: {
@@ -44,12 +46,20 @@ function makeManifest(): VisualManifest {
   };
 }
 
+/** Порядок состояний сборки — он же словарь битов `EntityView.states` (CAM-6). */
+const STATE_COMPONENTS = ['Falling', 'Shielded'];
+/** Бит состояния `Shielded` в маске доставленных состояний. */
+const SHIELDED = 1 << 1;
+
 function makeRig(manifest: VisualManifest = makeManifest()) {
   const assets = makeAssets();
   const scene = new THREE.Scene();
   const ctx: RenderContext = { scene, assets: assets.service, config: { heightStep: 0.5 } };
   const warnings: string[] = [];
-  const subsystem = new EffectsSubsystem(manifest, { warn: (m) => warnings.push(m) });
+  const subsystem = new EffectsSubsystem(manifest, {
+    stateComponents: STATE_COMPONENTS,
+    warn: (m) => warnings.push(m),
+  });
   subsystem.init(ctx);
   return { subsystem, scene, warnings, assets, ctx };
 }
@@ -93,6 +103,57 @@ describe('EffectsSubsystem: оболочка живёт с сущностью (R
     subsystem.syncTick(makeTickView([flying(1)]));
     subsystem.updateFrame(0.016, 1);
     expect(object.position.z).toBeCloseTo(0.6, 6);
+  });
+});
+
+describe('EffectsSubsystem: оболочка по доставленному состоянию (REND-23)', () => {
+  const hero = (states: number) => makeEntityView(1, { kind: 'Hero', states });
+
+  it('состояние появилось — сфера появилась; исчезло — исчезла (сценарий «Сфера щита»)', () => {
+    const { subsystem } = makeRig();
+    subsystem.syncTick(makeTickView([hero(0)]));
+    expect(subsystem.activeCount).toBe(0);
+
+    subsystem.syncTick(makeTickView([hero(SHIELDED)]));
+    expect(subsystem.effectFor(1, 'state:Shielded')!.record.color).toBe('#4aa3ff');
+    expect(subsystem.activeCount).toBe(1);
+
+    subsystem.syncTick(makeTickView([hero(0)]));
+    expect(subsystem.effectFor(1, 'state:Shielded')).toBeNull();
+    expect(subsystem.activeCount).toBe(0);
+  });
+
+  it('перемотка восстанавливает оболочку из доставленного состояния (REND-2)', () => {
+    const { subsystem } = makeRig();
+    subsystem.syncTick(makeTickView([hero(SHIELDED)]));
+    // Разрыв непрерывности: состояние в доставке есть — оболочка остаётся,
+    // потому что она производна от него, а не от собственного счётчика.
+    subsystem.syncTick(makeTickView([hero(SHIELDED)], { snapAll: true }));
+    expect(subsystem.effectFor(1, 'state:Shielded')).not.toBeNull();
+    // Отмотали в тик до щита — оболочки нет.
+    subsystem.syncTick(makeTickView([hero(0)], { snapAll: true }));
+    expect(subsystem.activeCount).toBe(0);
+  });
+
+  it('оболочки типа и состояния сосуществуют на одной сущности', () => {
+    const { subsystem } = makeRig();
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { kind: 'Fireball', states: SHIELDED })]),
+    );
+    expect(subsystem.activeCount).toBe(2);
+    expect(subsystem.effectFor(1, 'kind:Fireball')!.record.color).toBe('#ff8a3c');
+    expect(subsystem.effectFor(1, 'state:Shielded')!.record.color).toBe('#4aa3ff');
+  });
+
+  it('состояние вне списка сборки — предупреждение один раз, а не молчание', () => {
+    const { subsystem, warnings } = makeRig({
+      entities: {},
+      effects: { byState: { Burning: { primitive: 'sphere', color: '#f80', radius: 0.5 } } },
+    });
+    subsystem.syncTick(makeTickView([makeEntityView(1, { states: 0xff })]));
+    subsystem.syncTick(makeTickView([makeEntityView(1, { states: 0xff })]));
+    expect(subsystem.activeCount).toBe(0);
+    expect(warnings.filter((message) => message.includes('Burning'))).toHaveLength(1);
   });
 });
 

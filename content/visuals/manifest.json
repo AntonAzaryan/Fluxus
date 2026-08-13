@@ -83,19 +83,21 @@
           "flightArc": 0.35
         }
       },
-      "Shield": {
-        "primitive": "sphere",
-        "color": "#4aa3ff",
-        "radius": 0.85,
-        "alpha": 0.3,
-        "height": 0.9
-      },
       "CatchZone": {
         "primitive": "sphere",
         "color": "#8affc8",
         "radius": 1.2,
         "alpha": 0.16,
         "height": 0.2
+      }
+    },
+    "byState": {
+      "Shielded": {
+        "primitive": "sphere",
+        "color": "#4aa3ff",
+        "radius": 0.85,
+        "alpha": 0.3,
+        "height": 0.9
       }
     },
     "byEvent": {

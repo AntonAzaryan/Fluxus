@@ -72,6 +72,17 @@ export function resolveEffectByKind(
   return manifest.effects?.byKind?.[kind];
 }
 
+/**
+ * Эффект-оболочка доставленного состояния сущности (REND-23): сфера щита живёт,
+ * пока состояние доставляется, и исчезает вместе с ним.
+ */
+export function resolveEffectByState(
+  manifest: Pick<VisualManifest, 'effects'>,
+  state: string,
+): VisualEffect | undefined {
+  return manifest.effects?.byState?.[state];
+}
+
 /** Эффект-вспышка типа события (REND-23, REND-4: реакция на событие — данные). */
 export function resolveEffectByEvent(
   manifest: Pick<VisualManifest, 'effects'>,
@@ -92,18 +103,28 @@ export function visualKeys(
 }
 
 /**
- * Секция транзиентных эффектов (`rendering` REND-23): две таблицы — эффект по
- * визуальному типу сущности (оболочка: живёт, пока живёт сущность) и эффект по
- * типу reliable-события (вспышка: проигрывает свою длительность и исчезает).
+ * Секция транзиентных эффектов (`rendering` REND-23): три таблицы — эффект по
+ * визуальному типу сущности (оболочка живёт, пока живёт сущность), эффект по
+ * доставленному СОСТОЯНИЮ сущности (оболочка живёт, пока состояние доставляется
+ * — щит) и эффект по типу reliable-события (вспышка проигрывает свою
+ * длительность и исчезает).
  *
  * Пространства ключей у таблиц РАЗНЫЕ и пересекаться им не запрещено: слева
- * визуальные типы, справа типы событий, и одноимённые записи значат разное.
- * Это не то же самое, что разделы записей инстансов (ASSET-9), где ключ один
- * и разрешается одной функцией.
+ * визуальные типы, посередине имена компонент-состояний, справа типы событий, и
+ * одноимённые записи значат разное. Это не то же самое, что разделы записей
+ * инстансов (ASSET-9), где ключ один и разрешается одной функцией.
  */
 export interface VisualEffectsSection {
   /** Визуальный тип сущности → эффект-оболочка. */
   byKind?: Record<string, VisualEffect>;
+  /**
+   * Имя компоненты-состояния сущности → эффект-оболочка (REND-23: «пока жива
+   * сущность И ЕЁ СОСТОЯНИЕ ЕГО ТРЕБУЕТ»). Состояния доезжают битами
+   * `EntityView.states` — тем же списком `stateComponents` сборки, что кормит
+   * длящиеся эффекты камеры (ASSET-8, CAM-6): второго способа назвать состояние
+   * в манифесте не появляется.
+   */
+  byState?: Record<string, VisualEffect>;
   /** Тип события тика → эффект-вспышка. */
   byEvent?: Record<string, VisualEffect>;
 }
@@ -744,13 +765,15 @@ const EFFECT_FIELDS = [
 ] as const;
 
 /** Числовые поля записи эффекта и их границы; вне границ — ошибка документа. */
-const EFFECT_NUMBERS: readonly { readonly name: string; readonly min: number; readonly max?: number }[] = [
+const EFFECT_NUMBERS: readonly { readonly name: string; readonly min?: number; readonly max?: number }[] = [
   { name: 'radius', min: 0 },
   { name: 'radiusTo', min: 0 },
   { name: 'alpha', min: 0, max: 1 },
   { name: 'alphaTo', min: 0, max: 1 },
   { name: 'durationMs', min: 0 },
-  { name: 'height', min: Number.NEGATIVE_INFINITY },
+  // Подъём может быть отрицательным (эффект под ногами): границы у него нет,
+  // и требуется от него ровно конечность числа.
+  { name: 'height' },
 ];
 
 /**
@@ -779,11 +802,16 @@ function validateEffect(v: unknown, path: string, errors: string[]): void {
     const value = v[spec.name];
     if (
       !isFiniteNumber(value) ||
-      value < spec.min ||
+      (spec.min !== undefined && value < spec.min) ||
       (spec.max !== undefined && value > spec.max)
     ) {
-      const range = spec.max === undefined ? `>= ${spec.min}` : `в [${spec.min}..${spec.max}]`;
-      errors.push(`${path}.${spec.name}: ожидалось число ${range}, получено ${typeName(value)}`);
+      const range =
+        spec.min === undefined
+          ? 'конечное число'
+          : spec.max === undefined
+            ? `число >= ${spec.min}`
+            : `число в [${spec.min}..${spec.max}]`;
+      errors.push(`${path}.${spec.name}: ожидалось ${range}, получено ${typeName(value)}`);
     }
   }
   if ('verticalOffset' in v) {
@@ -798,8 +826,8 @@ function validateEffects(section: unknown, errors: string[]): void {
     errors.push(`${path}: ожидался объект { byKind?, byEvent? }, получено ${typeName(section)}`);
     return;
   }
-  checkUnknownKeys(section, ['byKind', 'byEvent'], path, errors);
-  for (const table of ['byKind', 'byEvent'] as const) {
+  checkUnknownKeys(section, ['byKind', 'byState', 'byEvent'], path, errors);
+  for (const table of ['byKind', 'byState', 'byEvent'] as const) {
     if (!(table in section)) continue;
     const entries = section[table];
     if (!isRecord(entries)) {

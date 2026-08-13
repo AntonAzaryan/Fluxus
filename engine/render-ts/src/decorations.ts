@@ -163,8 +163,11 @@ export class DecorationSet {
       moving: false,
       // Манёвров у декорации не бывает — отсюда же отсутствие дуги прыжка.
       motion: LOCOMOTION_NORMAL,
+      prevMotion: LOCOMOTION_NORMAL,
       prevMotionPhase: Number.NaN,
       currMotionPhase: Number.NaN,
+      // Полёта у декорации не бывает — фазы нет (REND-12).
+      flightPhase: Number.NaN,
       levelOverride: false,
       facingYaw: 0,
       // Цели атаки/каста нет — доворот костей к ней не проигрывается (REND-5).

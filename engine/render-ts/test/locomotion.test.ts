@@ -325,7 +325,12 @@ describe('Extractor: фаза полёта — конфигурация сбор
 
 describe('ViewBuffer: скольжение фазы манёвра (REND-2)', () => {
   /** Синтетический тик на одну сущность: проверяются правила буфера, не мир. */
-  const extOf = (tickNumber: number, phase: number, snapAll = false) => ({
+  const extOf = (
+    tickNumber: number,
+    phase: number,
+    snapAll = false,
+    motion = LOCOMOTION_AIRBORNE,
+  ) => ({
     tick: tickNumber,
     mode: 'Running' as const,
     isReplay: false,
@@ -340,7 +345,7 @@ describe('ViewBuffer: скольжение фазы манёвра (REND-2)', ()
     flags: new Uint8Array([0]),
     facingYaw: new Float32Array([Number.NaN]),
     aimYaw: new Float32Array([Number.NaN]),
-    motion: new Uint8Array([LOCOMOTION_AIRBORNE]),
+    motion: new Uint8Array([motion]),
     motionPhase: new Float32Array([phase]),
     flightPhase: new Float32Array([Number.NaN]),
     statNames: [],
@@ -378,6 +383,26 @@ describe('ViewBuffer: скольжение фазы манёвра (REND-2)', ()
     buffer.apply(extOf(3, 0.5, true));
     expect(view().prevMotionPhase).toBeCloseTo(0.5, 6);
     expect(view().currMotionPhase).toBeCloseTo(0.5, 6);
+  });
+
+  it('вид манёвра скользит вместе с фазой — по нему считается вклад прошлого тика (REND-12)', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    const view = () => buffer.view.entities.get(5)!;
+    buffer.apply(extOf(1, 0.5));
+    buffer.apply(extOf(2, 0.75));
+    expect(view().prevMotion).toBe(LOCOMOTION_AIRBORNE);
+    expect(view().motion).toBe(LOCOMOTION_AIRBORNE);
+
+    // Приземление: манёвра на тике нет, но прошлый тик был прыжком — и вклад
+    // его фазы обязан считаться прыжковой высотой.
+    buffer.apply(extOf(3, Number.NaN, false, LOCOMOTION_NORMAL));
+    expect(view().prevMotion).toBe(LOCOMOTION_AIRBORNE);
+    expect(view().motion).toBe(LOCOMOTION_NORMAL);
+    expect(view().prevMotionPhase).toBeCloseTo(0.75, 6);
+
+    // Разрыв непрерывности схлопывает и вид: доигрывать через него нечего.
+    buffer.apply(extOf(4, 0.25, true, LOCOMOTION_DODGE));
+    expect(view().prevMotion).toBe(LOCOMOTION_DODGE);
   });
 });
 
@@ -562,6 +587,53 @@ describe('ModelsSubsystem: дуга по виду манёвра (REND-12)', () 
     expect(heightOf(subsystem, maneuver(LOCOMOTION_ROLL, 0.5))).toBe(0);
     // Прыжок при этом свою дугу получает: гейт по виду, а не выключение дуг.
     expect(heightOf(subsystem, maneuver(LOCOMOTION_AIRBORNE, 0.5))).toBeCloseTo(2, 6);
+  });
+
+  it('тик приземления доигрывает спуск прошлого тика, а не обнуляет его скачком', () => {
+    const { subsystem, assets } = makeModelsRig({ jumpArc: 2 });
+    subsystem.syncTick(makeTickView([maneuver(LOCOMOTION_AIRBORNE, 0.75)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.updateFrame(0.016, 1);
+    const before = subsystem.instanceFor(1)!.pose.z;
+    expect(before).toBeCloseTo(1.5, 6); // 4·0.75·0.25·2
+
+    // Приземление: манёвра на этом тике уже нет (фаза NaN, вид Normal), но
+    // ВКЛАД ПРОШЛОГО тика считается его собственной высотой — кадр в середине
+    // тика показывает половину спуска, а не мгновенный сброс на землю.
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, { prevMotion: LOCOMOTION_AIRBORNE, prevMotionPhase: 0.75 }),
+      ]),
+    );
+    subsystem.updateFrame(0.016, 0.5);
+    expect(subsystem.instanceFor(1)!.pose.z).toBeCloseTo(before / 2, 6);
+    subsystem.updateFrame(0.016, 1);
+    expect(subsystem.instanceFor(1)!.pose.z).toBeCloseTo(0, 6);
+  });
+
+  it('переход «прыжок → уклон» не смешивает высоты двух видов', () => {
+    const { subsystem, assets } = makeModelsRig({ jumpArc: 2, maneuverArc: 0.5 });
+    subsystem.syncTick(makeTickView([maneuver(LOCOMOTION_AIRBORNE, 0.5)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.updateFrame(0.016, 1);
+
+    // Первый тик уклона сразу после прыжка: прошлый вклад — прыжковый (2 на
+    // фазе 0.5), текущий — уклонный (0.5 на фазе 0.5). Середина кадра — их
+    // среднее; ни один тик не получает чужой высоты.
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, {
+          motion: LOCOMOTION_DODGE,
+          prevMotion: LOCOMOTION_AIRBORNE,
+          prevMotionPhase: 0.5,
+          currMotionPhase: 0.5,
+        }),
+      ]),
+    );
+    subsystem.updateFrame(0.016, 0.5);
+    expect(subsystem.instanceFor(1)!.pose.z).toBeCloseTo((2 + 0.5) / 2, 6);
+    subsystem.updateFrame(0.016, 1);
+    expect(subsystem.instanceFor(1)!.pose.z).toBeCloseTo(0.5, 6);
   });
 
   it('окно даблтапа манёвром не является — дуги нет и у записи с обеими высотами', () => {

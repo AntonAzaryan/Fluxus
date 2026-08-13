@@ -8,16 +8,23 @@
  * общего с инстансом у него только место в кадре. Кусок маленький и заменяемый:
  * появится настоящая система частиц — она встанет сюда же, не трогая моделей.
  *
- * Два источника, и оба — уже ДОСТАВЛЕННОЕ presentation-состояние (REND-23):
+ * Три источника, и все — уже ДОСТАВЛЕННОЕ presentation-состояние (REND-23):
  *
- * - **оболочка** (`effects.byKind`): живёт, пока в доставленном состоянии есть
- *   сущность такого визуального типа. Собственного состояния у неё нет —
- *   исчезла сущность, исчезла оболочка, и восстановленное перемоткой состояние
- *   воспроизводит её само (REND-2);
+ * - **оболочка типа** (`effects.byKind`): живёт, пока в доставленном состоянии
+ *   есть сущность такого визуального типа (шарик снаряда);
+ * - **оболочка состояния** (`effects.byState`): живёт, пока доставленные
+ *   состояния сущности несут названное состояние (сфера щита). Состояния
+ *   приезжают битами `EntityView.states`, а какой бит какому имени соответствует
+ *   — говорит список `stateComponents` сборки, тот же, что у длящихся эффектов
+ *   камеры (CAM-6): второго словаря состояний не заводится;
  * - **вспышка** (`effects.byEvent`): reliable-событие тика запускает её на
  *   `durationMs`, и фаза жизни идёт по ЧАСАМ КАДРА главного потока (SHELL-7),
  *   а не по тикам: события не тикают, а доставка их только переносит. Разрыв
  *   непрерывности (REND-2) вспышки гасит — доигрывать через перемотку нечего.
+ *
+ * Собственного состояния у оболочек нет: исчезла сущность или её состояние —
+ * исчезла оболочка, а восстановленное перемоткой состояние воспроизводит её
+ * само (REND-2).
  *
  * Параметры — примитив, цвет, альфа, радиусы, длительность, кривая — данные
  * манифеста (REND-23, REND-4: реакция на событие — данные). Новый эффект есть
@@ -27,7 +34,13 @@
  *
  * Геометрия примитива разделяется всеми эффектами (REND-3), пер-инстансны
  * только материал и трансформ; меши берутся из пула и в него возвращаются —
- * аллокаций на кадр, растущих с числом эффектов, нет.
+ * аллокаций на кадр, растущих с числом эффектов, нет. Освобождения пула нет
+ * НАМЕРЕННО: он ограничен пиком одновременных эффектов сцены (единицы-десятки
+ * мешей со своим материалом), а геометрия и материалы живут столько же, сколько
+ * сама подсистема, — как разделяемые данные ассета у подсистемы моделей
+ * (REND-3). Возвращённый в пул узел не держит ни записи манифеста, ни
+ * presentation-среза: ссылки на них живут в оболочке и вспышке, а те исчезают
+ * вместе с эффектом.
  *
  * Симуляции подсистема не читает (её вход — `TickView`, как у всех), в picking
  * не участвует (REND-15): источника прокси она не реализует, и попасть лучом в
@@ -38,6 +51,7 @@ import { FIXED_ONE, type EntityId } from '@game-mvp/core';
 import {
   resolveEffectByEvent,
   resolveEffectByKind,
+  resolveEffectByState,
   type VisualEffect,
   type VisualManifest,
 } from '@game-mvp/assets';
@@ -65,24 +79,41 @@ export interface EffectsOptions {
    * как инстанс. Не задан — опорной высотой служит высота уровня (REND-7).
    */
   readonly surface?: VisualSurfaceSource;
+  /**
+   * Компоненты-состояния в порядке, которым Extractor сборки выставляет биты
+   * `EntityView.states` (CAM-6, SHELL-2): по нему запись `effects.byState`
+   * находит свой бит. Список не задан — оболочек состояния не бывает, и запись
+   * таблицы получает предупреждение один раз, а не молчание.
+   */
+  readonly stateComponents?: readonly string[];
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
 }
 
-/** Живой эффект: меш из пула со своим материалом и своей записью манифеста. */
+/**
+ * Узел пула: меш с собственным материалом и НИЧЕГО больше. Ни записи манифеста,
+ * ни presentation-среза он не держит — иначе возвращённый в пул узел удерживал
+ * бы сущность, которой давно нет.
+ */
 interface EffectNode {
   readonly mesh: THREE.Mesh;
   readonly material: THREE.MeshBasicMaterial;
 }
 
-/** Оболочка: эффект, привязанный к сущности доставленного состояния. */
-interface Shell extends EffectNode {
+/**
+ * Оболочка: эффект, привязанный к сущности доставленного состояния. Ключ —
+ * пара «сущность + источник» (`kind:<тип>` либо `state:<состояние>`): на одной
+ * сущности законны обе — шарик снаряда и сфера щита поверх героя.
+ */
+interface Shell {
+  readonly node: EffectNode;
   record: VisualEffect;
   view: EntityView;
 }
 
 /** Вспышка: эффект, проигрывающий свою длительность по часам кадра. */
-interface Flash extends EffectNode {
+interface Flash {
+  readonly node: EffectNode;
   readonly record: VisualEffect;
   readonly x: number;
   readonly y: number;
@@ -90,6 +121,11 @@ interface Flash extends EffectNode {
   /** Сколько миллисекунд кадров прожито; `durationMs` — конец жизни. */
   ageMs: number;
   readonly durationMs: number;
+}
+
+/** Ключ оболочки: сущность плюс имя источника (тип или состояние). */
+function shellKey(entity: EntityId, source: string): string {
+  return `${String(entity)}|${source}`;
 }
 
 /** Фаза жизни по кривой записи: `linear` как есть, `easeOut` — с замедлением. */
@@ -109,13 +145,18 @@ export class EffectsSubsystem implements RenderSubsystem {
 
   private manifest: VisualManifest;
   private readonly options: EffectsOptions;
+  /** Порядок состояний сборки — словарь битов `EntityView.states` (CAM-6). */
+  private readonly stateComponents: readonly string[];
   private readonly warn: (message: string) => void;
 
   private ctx: RenderContext | null = null;
   private readonly group = new THREE.Group();
   private geometry: THREE.SphereGeometry | null = null;
 
-  private readonly shells = new Map<EntityId, Shell>();
+  /** Оболочки по ключу «сущность + источник» (см. `shellKey`). */
+  private readonly shells = new Map<string, Shell>();
+  /** Переиспользуемый набор ключей живых оболочек: сведение без аллокаций на кадр. */
+  private readonly liveShells = new Set<string>();
   private flashes: Flash[] = [];
   /** Свободные меши пула: аллокация — только когда эффектов стало больше, чем было. */
   private readonly pool: EffectNode[] = [];
@@ -128,6 +169,7 @@ export class EffectsSubsystem implements RenderSubsystem {
   constructor(manifest: VisualManifest, options: EffectsOptions = {}) {
     this.manifest = manifest;
     this.options = options;
+    this.stateComponents = options.stateComponents ?? [];
     this.warn = options.warn ?? ((message) => { console.warn(message); });
     this.group.name = 'effects';
   }
@@ -170,18 +212,10 @@ export class EffectsSubsystem implements RenderSubsystem {
   applyManifest(next: VisualManifest): void {
     if (next === this.manifest) return;
     this.manifest = next;
-    for (const [entity, shell] of this.shells) {
-      const record = shell.view.kind === null
-        ? undefined
-        : resolveEffectByKind(this.manifest, shell.view.kind);
-      if (record === undefined) {
-        this.release(shell);
-        this.shells.delete(entity);
-        continue;
-      }
-      shell.record = record;
-      this.applyStatic(shell, record);
-    }
+    // Сведение оболочек с новым документом — обычным проходом по последнему
+    // доставленному состоянию: правило «какие оболочки существуют» одно, и
+    // второй его копии для переподачи не заводится (REND-17).
+    if (this.view !== null) this.syncShells(this.view);
   }
 
   /** Сколько эффектов нарисовано сейчас — вход отладки и тестов. */
@@ -194,38 +228,95 @@ export class EffectsSubsystem implements RenderSubsystem {
     return this.pool.length + this.activeCount;
   }
 
-  /** Оболочка сущности — вход тестов; null — эффекта на ней нет. */
-  effectFor(entity: EntityId): { readonly record: VisualEffect; readonly object: THREE.Object3D } | null {
-    const shell = this.shells.get(entity);
-    return shell === undefined ? null : { record: shell.record, object: shell.mesh };
+  /**
+   * Оболочка сущности — вход отладки и тестов. `source` называет источник
+   * (`kind:<тип>` или `state:<состояние>`); без него отдаётся первая оболочка
+   * этой сущности в порядке создания. null — оболочки нет.
+   */
+  effectFor(
+    entity: EntityId,
+    source?: string,
+  ): { readonly record: VisualEffect; readonly object: THREE.Object3D } | null {
+    if (source !== undefined) {
+      const exact = this.shells.get(shellKey(entity, source));
+      return exact === undefined ? null : { record: exact.record, object: exact.node.mesh };
+    }
+    for (const [key, shell] of this.shells) {
+      if (key.startsWith(`${String(entity)}|`)) {
+        return { record: shell.record, object: shell.node.mesh };
+      }
+    }
+    return null;
   }
 
   // ------------------------------------------------------------- оболочки
 
   private syncShells(view: TickView): void {
+    const live = this.liveShells;
+    live.clear();
+    const states = this.manifest.effects?.byState;
     for (const entityView of view.entities.values()) {
-      const record =
-        entityView.kind === null ? undefined : resolveEffectByKind(this.manifest, entityView.kind);
-      if (record === undefined) continue;
-      let shell = this.shells.get(entityView.id);
-      if (shell === undefined) {
-        const node = this.acquire(record);
-        if (node === null) continue; // неизвестный примитив — пропуск с предупреждением
-        shell = { ...node, record, view: entityView };
-        this.shells.set(entityView.id, shell);
+      // Оболочка визуального типа: живёт, пока жива сущность такого типа.
+      if (entityView.kind !== null) {
+        const record = resolveEffectByKind(this.manifest, entityView.kind);
+        if (record !== undefined) {
+          this.ensureShell(entityView, `kind:${entityView.kind}`, record, live);
+        }
       }
-      shell.view = entityView;
-      if (shell.record !== record) {
-        shell.record = record;
-        this.applyStatic(shell, record);
+      // Оболочка состояния: живёт, пока состояние доставляется (REND-23).
+      if (states === undefined) continue;
+      for (const name of Object.keys(states)) {
+        if (!this.hasState(entityView, name)) continue;
+        const record = resolveEffectByState(this.manifest, name);
+        if (record !== undefined) this.ensureShell(entityView, `state:${name}`, record, live);
       }
     }
-    for (const [entity, shell] of this.shells) {
-      const kind = view.entities.get(entity)?.kind ?? null;
-      if (kind !== null && resolveEffectByKind(this.manifest, kind) !== undefined) continue;
-      this.release(shell);
-      this.shells.delete(entity);
+    for (const [key, shell] of this.shells) {
+      if (live.has(key)) continue;
+      this.release(shell.node);
+      this.shells.delete(key);
     }
+  }
+
+  /** Создаёт оболочку источника либо обновляет существующую; помечает её живой. */
+  private ensureShell(
+    view: EntityView,
+    source: string,
+    record: VisualEffect,
+    live: Set<string>,
+  ): void {
+    const key = shellKey(view.id, source);
+    let shell = this.shells.get(key);
+    if (shell === undefined) {
+      const node = this.acquire(record);
+      if (node === null) return; // неизвестный примитив — пропуск с предупреждением
+      shell = { node, record, view };
+      this.shells.set(key, shell);
+    }
+    shell.view = view;
+    if (shell.record !== record) {
+      shell.record = record;
+      this.applyStatic(shell.node, record);
+    }
+    live.add(key);
+  }
+
+  /**
+   * Несёт ли доставленное состояние сущности названное состояние (REND-23).
+   * Бит ищется в списке `stateComponents` сборки — том же, которым Extractor
+   * их и зеркалировал (SHELL-2, CAM-6); имени вне списка соответствовать
+   * нечему, и об этом говорится один раз, а не молча.
+   */
+  private hasState(view: EntityView, name: string): boolean {
+    const bit = this.stateComponents.indexOf(name);
+    if (bit < 0) {
+      this.warnOnce(
+        `state-bit:${name}`,
+        `render: состояние "${name}" не зеркалируется Extractor'ом (stateComponents) — эффект-оболочка не появится (REND-23)`,
+      );
+      return false;
+    }
+    return ((view.states >>> bit) & 1) === 1;
   }
 
   /**
@@ -246,11 +337,8 @@ export class EffectsSubsystem implements RenderSubsystem {
         surface !== null && !view.levelOverride
           ? surface.heightAt(x, y)
           : (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
-      const arc = jumpArc(
-        view.flightPhase ?? Number.NaN,
-        shell.record.verticalOffset?.flightArc ?? 0,
-      );
-      shell.mesh.position.set(x, y, base + (shell.record.height ?? 0) + arc);
+      const arc = jumpArc(view.flightPhase, shell.record.verticalOffset?.flightArc ?? 0);
+      shell.node.mesh.position.set(x, y, base + (shell.record.height ?? 0) + arc);
     }
   }
 
@@ -284,7 +372,7 @@ export class EffectsSubsystem implements RenderSubsystem {
     const surface = this.options.surface?.current ?? null;
     const base = surface === null ? 0 : surface.heightAt(x, y);
     const flash: Flash = {
-      ...node,
+      node,
       record,
       x,
       y,
@@ -292,7 +380,7 @@ export class EffectsSubsystem implements RenderSubsystem {
       ageMs: 0,
       durationMs: record.durationMs ?? DEFAULT_FLASH_MS,
     };
-    flash.mesh.position.set(x, y, flash.z);
+    flash.node.mesh.position.set(x, y, flash.z);
     this.flashes.push(flash);
     this.applyPhase(flash, 0);
   }
@@ -309,7 +397,7 @@ export class EffectsSubsystem implements RenderSubsystem {
       flash.ageMs += dt * 1000;
       const phase = flash.durationMs <= 0 ? 1 : flash.ageMs / flash.durationMs;
       if (phase >= 1) {
-        this.release(flash);
+        this.release(flash.node);
         continue;
       }
       this.applyPhase(flash, phase);
@@ -319,7 +407,7 @@ export class EffectsSubsystem implements RenderSubsystem {
   }
 
   private dropFlashes(): void {
-    for (const flash of this.flashes) this.release(flash);
+    for (const flash of this.flashes) this.release(flash.node);
     this.flashes.length = 0;
   }
 
@@ -384,8 +472,8 @@ export class EffectsSubsystem implements RenderSubsystem {
   private applyPhase(flash: Flash, phase: number): void {
     const record = flash.record;
     const curved = curveOf(record.curve, phase);
-    flash.mesh.scale.setScalar(lerpParam(record.radius, record.radiusTo, curved));
-    flash.material.opacity = lerpParam(record.alpha ?? 1, record.alphaTo, curved);
+    flash.node.mesh.scale.setScalar(lerpParam(record.radius, record.radiusTo, curved));
+    flash.node.material.opacity = lerpParam(record.alpha ?? 1, record.alphaTo, curved);
   }
 
   private warnOnce(key: string, message: string): void {
