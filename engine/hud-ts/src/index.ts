@@ -19,7 +19,8 @@ export type {
   HudParams,
 } from './composition.js';
 
-// Доставленное состояние глазами HUD (HUD-1, HUD-5).
+// Доставленное состояние глазами HUD (HUD-1, HUD-5) и чтение статов (HUD-8).
+export { entityStat } from './delivery.js';
 export type {
   HudDeliveredEvent,
   HudDeliveredState,
@@ -66,7 +67,7 @@ export { HudRuntime } from './runtime.js';
 export type { HudRuntimeOptions } from './runtime.js';
 
 // Иконки: asset ID контента, резолв через инъецируемый источник (HUD-4).
-export { iconTableFromParams, resolveIcon } from './icons.js';
+export { assetIdParam, resolveIcon } from './icons.js';
 export type { HudIconSource, HudIconTable } from './icons.js';
 
 // Первые виджеты: статус матча и панель способностей (HUD-2, HUD-4).

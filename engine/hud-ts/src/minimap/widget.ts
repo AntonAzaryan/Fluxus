@@ -31,9 +31,15 @@
  * `s = min(width / worldW, height / worldH)` с центрированием
  * `offset = (canvas − world·s) / 2`; клетка (cx, cy) занимает мировой квадрат
  * `[cx·tile, (cx+1)·tile] × [cy·tile, (cy+1)·tile]` от начала координат — как
- * у геометрии пола render-ts. Клик обращает то же преобразование:
- * `world = (px − offset) / s`, точка в полях центрирования прижимается к краю
- * арены.
+ * у геометрии пола render-ts.
+ *
+ * Вертикаль ПЕРЕВЁРНУТА (HUD-6): мировая `+Y` идёт на экране вверх, а `y`
+ * canvas растёт вниз, поэтому `py = offsetY + (worldH − y)·s`. Без переворота
+ * миникарта зеркалила основной вид: сущность, уходящая вверх экрана, ползла
+ * вниз по схеме. Отображение одно на всё — маркеры, клетки пола и обратное
+ * преобразование клика (`y = worldH − (py − offsetY)/s`), — иначе клик попадал
+ * бы не туда, куда показывает маркер. Точка в полях центрирования прижимается
+ * к краю арены.
  *
  * Клик — presentation-действие (HUD-2, сценарий «клик миникарты двигает
  * камеру»): виджет дёргает слот `pan` с мировыми `{ x, y }`, композиция ведёт
@@ -161,6 +167,21 @@ interface MinimapCanvasLike {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+/**
+ * Мировая ордината → пиксель canvas (HUD-6): вертикаль перевёрнута, чтобы
+ * «вверх экрана» основного вида было «вверх» и здесь. Одна функция на отрисовку
+ * и на клик — переворот, сделанный дважды по-разному, и есть тот дефект,
+ * который HUD-6 запрещает.
+ */
+function pixelY(worldY: number, t: MinimapTransform): number {
+  return t.offsetY + (t.worldHeight - worldY) * t.scale;
+}
+
+/** Обратное к `pixelY`: пиксель canvas → мировая ордината. */
+function worldYOf(pixel: number, t: MinimapTransform): number {
+  return t.worldHeight - (pixel - t.offsetY) / t.scale;
 }
 
 class MinimapWidget implements HudWidget {
@@ -310,7 +331,8 @@ class MinimapWidget implements HudWidget {
     const cy = Math.floor(cell / t.gridWidth);
     const cellPx = t.tile * t.scale;
     ctx.fillStyle = bits[cell] === 0 ? this.config.holeColor : this.config.floorColor;
-    ctx.fillRect(t.offsetX + cx * cellPx, t.offsetY + cy * cellPx, cellPx, cellPx);
+    // Верхний край клетки на экране — её ДАЛЬНЯЯ по миру сторона (HUD-6).
+    ctx.fillRect(t.offsetX + cx * cellPx, pixelY((cy + 1) * t.tile, t), cellPx, cellPx);
   }
 
   /**
@@ -346,7 +368,7 @@ class MinimapWidget implements HudWidget {
       marker.render(
         ctx,
         t.offsetX + entity.currX * t.scale,
-        t.offsetY + entity.currY * t.scale,
+        pixelY(entity.currY, t),
         entity,
         { color: markerColor(marker.spec.color, entity), size: marker.spec.size, spec: marker.spec },
       );
@@ -366,7 +388,9 @@ class MinimapWidget implements HudWidget {
     if (typeof point.offsetX !== 'number' || typeof point.offsetY !== 'number') return;
     port.trigger(MINIMAP_PAN_SLOT, {
       x: clamp((point.offsetX - t.offsetX) / t.scale, 0, t.worldWidth),
-      y: clamp((point.offsetY - t.offsetY) / t.scale, 0, t.worldHeight),
+      // Обратное к отрисовке — тем же переворотом (HUD-6): точка под отметкой и
+      // точка, в которую придёт камера, обязаны совпасть.
+      y: clamp(worldYOf(point.offsetY, t), 0, t.worldHeight),
     });
   }
 }

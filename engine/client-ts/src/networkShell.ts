@@ -195,6 +195,8 @@ export class NetworkShell {
         mode: this.config.mode,
         tickSeconds: this.config.tickSeconds,
         terrain: this.config.terrain ?? null,
+        // Словарь статов доставки — один раз в handshake (HUD-8, SHELL-5).
+        statNames: this.config.extractor.statNames,
         ...(this.config.helloExtra !== undefined ? { extra: this.config.helloExtra } : {}),
       }),
     );

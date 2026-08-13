@@ -27,6 +27,7 @@ export function makeView(partial: Partial<HudDeliveredState> = {}): HudDelivered
     snapAll: false,
     freshEvents: true,
     entities: new Map(),
+    statNames: [],
     events: [],
     floorBits: null,
     floorChangedCells: [],

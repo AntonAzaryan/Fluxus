@@ -34,6 +34,7 @@ import {
   CAMERA_EFFECTS_DESCRIPTION,
   CameraEffectsDirector,
   CameraRig,
+  EffectsSubsystem,
   ModelsSubsystem,
   TerrainSubsystem,
   VisualSurfaceSource,
@@ -585,6 +586,14 @@ async function main(): Promise<void> {
       // запас консервативности границ покрывает это наравне с размахом клипов.
       models = new ModelsSubsystem(manifest, { surface, camera });
       remote!.register(models);
+      // Транзиентные эффекты (REND-23) — после моделей: оболочки рисуются
+      // поверх инстансов, а шарик снаряда и вовсе заменяет ему модель. Записи
+      // — в манифесте (`effects`), кода сцены они не требуют. Список состояний
+      // тот же, что у Extractor'а и диспетчера камеры (`sim.ts`): по нему
+      // запись `effects.byState` находит свой бит доставленных состояний.
+      remote!.register(
+        new EffectsSubsystem(manifest, { surface, stateComponents: STATE_COMPONENTS }),
+      );
 
       // Камера: поверхность и границы — из той же сетки, что рендер террейна
       // (CAM-2, CAM-3); эффекты — по таблицам манифеста (ASSET-7, CAM-6).
@@ -635,7 +644,14 @@ async function main(): Promise<void> {
       // Состав HUD — от того, что даёт оболочка (design D5): пауза и перемотка
       // существуют только у локальной, и режим приезжает в handshake (SHELL-8),
       // а не выводится наблюдением за потоком доставок.
-      hud.runtime.apply(demoHudComposition({ controls: hello.mode === 'local' }));
+      hud.runtime.apply(
+        demoHudComposition({
+          controls: hello.mode === 'local',
+          // Длительность тика — из того же handshake: по ней кулдаун переводит
+          // доставленные тики в секунды (SHELL-5, HUD-8).
+          tickMs: hello.tickSeconds * 1000,
+        }),
+      );
       hudRoot = hud.root;
 
       // Отладочная ручка ручного прогона (задача 5.3): read-only точка

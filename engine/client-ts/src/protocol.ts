@@ -86,6 +86,13 @@ export interface HelloMessage {
   readonly tickSeconds: number;
   /** Сетка террейна целиком (structured clone — копия); null — сцена без террейна. */
   readonly terrain: TerrainGrid | null;
+  /**
+   * Имена статов доставки (`match-hud` HUD-8) — словарь конфигурации сборки
+   * воркера. Едет ОДИН РАЗ и здесь: словарь неизменен за сессию, а кадры несут
+   * индексы в нём (SHELL-3 — раскладка кадра не растёт строками). Нет поля —
+   * сборка статов не объявила, и у сущностей их не будет.
+   */
+  readonly statNames?: readonly string[];
   /** Полезная нагрузка сборки (id локального игрока и прочее) — оболочка её не трактует. */
   readonly extra?: unknown;
 }
@@ -100,6 +107,7 @@ export function helloMessage(init: {
   readonly mode: ShellMode;
   readonly tickSeconds: number;
   readonly terrain: TerrainGrid | null;
+  readonly statNames?: readonly string[];
   readonly extra?: unknown;
 }): HelloMessage {
   return {
@@ -107,6 +115,11 @@ export function helloMessage(init: {
     mode: init.mode,
     tickSeconds: init.tickSeconds,
     terrain: init.terrain,
+    // Пустой словарь не едет: «статов нет» и «поля нет» — одно и то же, а
+    // конверт handshake остаётся тем же, каким был у сборки без статов.
+    ...(init.statNames !== undefined && init.statNames.length > 0
+      ? { statNames: [...init.statNames] }
+      : {}),
     ...(init.extra !== undefined ? { extra: init.extra } : {}),
   };
 }

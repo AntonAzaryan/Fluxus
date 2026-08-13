@@ -79,6 +79,7 @@ import {
 } from '@game-mvp/core';
 import {
   modelDerivatives,
+  resolveEffectByKind,
   resolveLodThresholds,
   resolveSurfaceAlign,
   resolveVisual,
@@ -313,6 +314,21 @@ function isAirborne(view: EntityView): boolean {
   return view.motion === LOCOMOTION_AIRBORNE && Number.isFinite(view.currMotionPhase);
 }
 
+/**
+ * Высота дуги ЭТОГО манёвра (REND-12): прыжок и наземные манёвры называют свои
+ * высоты независимо, и дуга одного вида к другому не применяется. Манёвр, для
+ * чьего вида запись высоты не задала, дуги не получает — ноль здесь означает
+ * «параметра нет», а не «подставить чужой».
+ *
+ * Гейт по виду манёвра, а не по одной высоте на всё: фаза манёвра (`REND-12`)
+ * конечна и у `Dodge`/`Roll`, поэтому без него уклон ехал бы по прыжковой дуге.
+ */
+function arcHeightOf(record: InstanceRecord, motion: number): number {
+  if (motion === LOCOMOTION_AIRBORNE) return record.jumpArcHeight;
+  if (motion === LOCOMOTION_DODGE || motion === LOCOMOTION_ROLL) return record.maneuverArcHeight;
+  return 0;
+}
+
 interface SharedEntry {
   data: SharedModelData | null;
   failed: string | null;
@@ -462,6 +478,10 @@ interface InstanceRecord {
   readonly tilt: TiltVector;
   /** Параметры вертикального смещения записи (ASSET-6); нули — смещения нет (REND-12). */
   jumpArcHeight: number;
+  /** Высота дуги наземного манёвра (`Dodge`/`Roll`) — своя, не доля прыжковой. */
+  maneuverArcHeight: number;
+  /** Высота полётной дуги; применяется только при доставленной фазе полёта. */
+  flightArcHeight: number;
   fallSpeed: number;
   fallDepth: number;
   /**
@@ -778,14 +798,24 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       } else {
         base = (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
       }
-      // Вертикальное смещение — чистое представление (REND-12): дуга прыжка
+      // Вертикальное смещение — чистое представление (REND-12): дуга манёвра
       // смешивается по тем же двум тикам, что позиция, снижение идёт по кадрам.
-      const arcPrev = jumpArc(view.prevMotionPhase, record.jumpArcHeight);
-      const arcCurr = jumpArc(view.currMotionPhase, record.jumpArcHeight);
+      // Высота КАЖДОГО вклада берётся по виду манёвра ЕГО тика: прыжковая
+      // высота к уклону не переносится, а тик приземления (манёвра уже нет)
+      // доигрывает спуск прошлого тика вместо мгновенного обнуления.
+      const arcPrev = jumpArc(view.prevMotionPhase, arcHeightOf(record, view.prevMotion));
+      const arcCurr = jumpArc(view.currMotionPhase, arcHeightOf(record, view.motion));
+      // Полётная дуга — по фазе полёта плоской формы (REND-12): её приносит
+      // сборка воркера (SHELL-2), и без неё дуги нет независимо от манифеста.
+      const flightArc = jumpArc(view.flightPhase, record.flightArcHeight);
       if (record.falling) {
         record.fallOffset = advanceFall(record.fallOffset, record.fallSpeed, record.fallDepth, dt);
       }
-      record.pos.set(x, y, base + arcPrev + (arcCurr - arcPrev) * t + record.fallOffset);
+      record.pos.set(
+        x,
+        y,
+        base + arcPrev + (arcCurr - arcPrev) * t + flightArc + record.fallOffset,
+      );
 
       // Курс: цель из данных тика, доворот сглажен по кадрам; при snap —
       // мгновенно. Поправка на перёд модели — своя у каждой записи (REND-13).
@@ -1072,6 +1102,8 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // этой секцией остаётся валидной (ASSET-9), но смысла ей здесь не придаётся.
     const offset = record.decoration ? undefined : visual?.verticalOffset;
     record.jumpArcHeight = offset?.jumpArc ?? 0;
+    record.maneuverArcHeight = offset?.maneuverArc ?? 0;
+    record.flightArcHeight = offset?.flightArc ?? 0;
     record.fallSpeed = offset?.fallSpeed ?? 0;
     record.fallDepth = offset?.fallDepth ?? 0;
   }
@@ -1227,6 +1259,8 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       tiltMaxRad: null,
       tilt: { x: 0, y: 0 },
       jumpArcHeight: 0,
+      maneuverArcHeight: 0,
+      flightArcHeight: 0,
       fallSpeed: 0,
       fallDepth: 0,
       falling: false,
@@ -1253,6 +1287,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
     const visual = record.visual;
     if (visual === undefined) {
+      // Тип, который манифест описал записью ЭФФЕКТА (REND-23), рисуется не
+      // моделью — и заглушки ему не полагается: заглушка означает «ассет ещё не
+      // доехал» (ASSET-4), а тут доезжать нечему. Молчит подсистема по той же
+      // причине: запись в манифесте есть, просто не её.
+      if (resolveEffectByKind(this.manifest, kind) !== undefined) return;
       // Сущность без записи в манифесте: заглушка и предупреждение один раз (ASSET-6).
       if (!this.warnedKinds.has(kind)) {
         this.warnedKinds.add(kind);

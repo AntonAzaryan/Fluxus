@@ -30,6 +30,9 @@ export type { DecorationInstance } from './decorations.js';
 // воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
 export { Extractor, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';
 export type { ExtractedTick, ExtractorConfig } from './extractor.js';
+// Объявляемые сборкой источники величин: фаза полёта (REND-12) и статы (HUD-8).
+export { MAX_STATS } from './statSources.js';
+export type { FlightPhaseSource, StatSource } from './statSources.js';
 export { ViewBuffer } from './viewBuffer.js';
 export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 
@@ -124,6 +127,11 @@ export type { CellRect, TerrainGeometryData, TerrainOptions } from './subsystems
 // Наружу инстанс виден преобразованием и границами, а не узлом сцены (REND-3).
 export { ModelsSubsystem } from './subsystems/models.js';
 export type { InstancePose, ModelInstanceView, ModelsOptions } from './subsystems/models.js';
+
+// Подсистема транзиентных эффектов (REND-23): процедурные примитивы по записям
+// манифеста — оболочки от доставленного состояния и вспышки от событий.
+export { EffectsSubsystem } from './subsystems/effects.js';
+export type { EffectsOptions } from './subsystems/effects.js';
 
 // Сервисы вьюпорта редактора: picking по видимому изображению (REND-15) и
 // служебные наложения подсистемой рендера (REND-16). Игровой клиент ни того, ни

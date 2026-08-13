@@ -45,6 +45,29 @@ export interface HudEntityView {
   readonly snap: boolean;
   readonly spawned: boolean;
   readonly moving: boolean;
+  /**
+   * Именованные геймплейные статы сущности (HUD-8): что объявила конфигурация
+   * сборки воркера, то и доехало. Стата, которого у сущности нет, в словаре
+   * НЕТ — виджет обязан показать «нет данных», а не ноль (HUD-4, пустое
+   * состояние). Смысла имён HUD не знает: они принадлежат контенту.
+   *
+   * Словарь — живой объект продюсера, как и сама запись: значение, которое
+   * виджет держит между доставками, он копирует.
+   */
+  readonly stats?: ReadonlyMap<string, number>;
+}
+
+/**
+ * Стат сущности по имени (HUD-8): `undefined` — данных нет, и это ОТВЕТ, а не
+ * отсутствие ответа. Одно место чтения на все виджеты, чтобы «нет стата» не
+ * превращалось в ноль по невнимательности в каждом из них.
+ */
+export function entityStat(
+  entity: HudEntityView | null | undefined,
+  name: string | undefined,
+): number | undefined {
+  if (entity === null || entity === undefined || name === undefined) return undefined;
+  return entity.stats?.get(name);
 }
 
 /**
@@ -66,6 +89,12 @@ export interface HudDeliveredState {
   /** Первый честный проход тика: события можно проигрывать (OBS-5, дедуп у потребителя). */
   readonly freshEvents: boolean;
   readonly entities: ReadonlyMap<number, HudEntityView>;
+  /**
+   * Имена статов доставки (HUD-8) — словарь конфигурации сборки воркера,
+   * приехавший в handshake (SHELL-5). Пустой список — сборка статов не
+   * объявила, и виджеты, забинденные на имена, показывают пустое состояние.
+   */
+  readonly statNames: readonly string[];
   /** События всех тиков с прошлой доставки, каждое со своим тиком (SHELL-4). */
   readonly events: readonly HudDeliveredEvent[];
   /** Зеркало карты пола (1 — пол есть), row-major; null — сцена без террейна (SHELL-5). */

@@ -34,6 +34,7 @@ import { openLocalSession, type DemoLocalSession } from '../demo/localSession.js
 import { bufferedShellPort, joinDemoMatch, type DemoJoinResult } from '../demo/netClient.js';
 import { demoHudComposition } from '../demo/hud.js';
 import { demoMode, localModeUrl, serverModeUrl, slotCandidates } from '../demo/mode.js';
+import { ACTION_BITS, STATS } from '../demo/sim.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
 import botProfileJson from '../../../content/bots/normal.json';
 
@@ -240,6 +241,56 @@ describe('демо по умолчанию: матч против бота на 
     expect(heroes).toHaveLength(2);
   });
 
+  it('словарь статов едет handshake\'ом, статы и фаза полёта — кадром (HUD-8, REND-12)', async () => {
+    const clock = { ms: 0 };
+    const opened = session(DEMO_PLAYERS.slice(0, 1));
+    const rig = await join(opened, slotCandidates({ kind: 'local' }, DEMO_PLAYERS), clock);
+    expect(rig.joined.ok).toBe(true);
+    if (!rig.joined.ok) return;
+    rig.joined.shell.stop();
+
+    // Словарь статов сборки уехал ОДИН раз и до первой доставки состояния
+    // (SHELL-5): в сетевом режиме его кладёт `NetworkShell`, а не тик.
+    const hello = rig.posted.find(
+      (message): message is { t: 'hello'; statNames?: readonly string[] } =>
+        (message as { t?: string }).t === 'hello',
+    )!;
+    expect(hello.statNames).toContain(STATS.slot);
+    expect(hello.statNames).toContain(STATS.hp);
+
+    opened.filler.fill();
+    await flush();
+    expect(opened.server.phase).toBe('running');
+
+    // Каст фаербола: бит 0 словаря биндингов демо (`ACTION_BITS.cast`).
+    rig.remote.sendInput({ x: 0, y: 0 }, 0, 1 << ACTION_BITS.cast);
+    for (let i = 0; i < 20; i++) {
+      clock.ms += 1000 / 60;
+      rig.joined.shell.step();
+      bots!.step();
+      await flush(1);
+      opened.host.step();
+      await flush(1);
+    }
+    rig.joined.shell.step();
+    await flush();
+
+    const view = rig.probe.views.at(-1)!;
+    // Имена доехали до доставленного состояния — на них и биндится HUD.
+    expect(view.statNames).toContain(STATS.slot);
+    const hero = view.entities.get(rig.joined.hero)!;
+    // Слот игрока — доставленный стат; здоровья в сцене пока нет, и его стата
+    // у сущности НЕТ (а не ноль) — ровно пустое состояние HUD-8.
+    expect(hero.stats!.get(STATS.slot)).toBe(0);
+    expect(hero.stats!.has(STATS.hp)).toBe(false);
+    // Фаза полёта: у снаряда она посчитана воркером, у героя её нет (REND-12).
+    const fireball = [...view.entities.values()].find((entity) => entity.kind === 'Fireball')!;
+    expect(fireball).toBeDefined();
+    expect(fireball.flightPhase).toBeGreaterThanOrEqual(0);
+    expect(fireball.flightPhase).toBeLessThan(1);
+    expect(Number.isNaN(hero.flightPhase)).toBe(true);
+  });
+
   it('формат кадра сессии доезжает до бота: дебаг-формат не вешает лобби (SER-3)', async () => {
     const clock = { ms: 0 };
     // Сессия в дебаг-формате: сервер, человек и бот обязаны говорить одним —
@@ -367,10 +418,13 @@ describe('режим страницы выбирается при старте (
   });
 });
 
+/** Длительность тика — та, что приезжает handshake'ом (SHELL-5). */
+const TICK_MS = 1000 / 60;
+
 describe('HUD деградирует по контракту оболочки (D5)', () => {
   it('сетевая сборка не заводит слотов паузы у статуса матча', () => {
-    const local = demoHudComposition({ controls: true }).entries[0]!;
-    const network = demoHudComposition({ controls: false }).entries[0]!;
+    const local = demoHudComposition({ controls: true, tickMs: TICK_MS }).entries[0]!;
+    const network = demoHudComposition({ controls: false, tickMs: TICK_MS }).entries[0]!;
 
     expect(local.widget).toBe('match-status');
     expect(local.actions).toEqual({ pause: 'match.pause', resume: 'match.resume' });
@@ -382,8 +436,8 @@ describe('HUD деградирует по контракту оболочки (D
     expect(network.actions).toBeUndefined();
     expect(network.params).toEqual({ controls: false });
     // Прочие виджеты не различаются: им всё равно, кто тикает (SHELL-2..5).
-    expect(demoHudComposition({ controls: false }).entries.slice(1)).toEqual(
-      demoHudComposition({ controls: true }).entries.slice(1),
+    expect(demoHudComposition({ controls: false, tickMs: TICK_MS }).entries.slice(1)).toEqual(
+      demoHudComposition({ controls: true, tickMs: TICK_MS }).entries.slice(1),
     );
   });
 });

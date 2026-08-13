@@ -62,6 +62,7 @@ export class RenderHost implements TickObserver, PresentationProducer {
         ? { stateComponents: config.stateComponents }
         : {}),
       ...(config.locomotion !== undefined ? { locomotion: config.locomotion } : {}),
+      ...(config.flight !== undefined ? { flight: config.flight } : {}),
     });
     this.buffer = new ViewBuffer({
       tickSeconds: config.tickSeconds,

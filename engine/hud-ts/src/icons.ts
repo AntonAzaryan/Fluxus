@@ -13,7 +13,7 @@
  * значит переезжает в JSON-документ HUD вместе с ней. Симуляция и доставляемая
  * плоская форма сведений об изображениях не несут — они здесь и не читаются.
  */
-import type { HudJsonValue, HudParams } from './composition.js';
+import type { HudJsonValue } from './composition.js';
 
 /**
  * Шов резолва иконок: asset ID (путь от корня дерева контента, ASSET-2) →
@@ -41,7 +41,16 @@ function looksLikeUrl(value: string): boolean {
   return value.includes('://') || value.startsWith('/') || value.startsWith('data:');
 }
 
-function assertAssetId(value: string, where: string): void {
+/**
+ * Проверяет значение из params как asset ID: непустая строка и не URL. Ошибка —
+ * до монтирования и с местом в композиции, как у резолва имён (`registry.ts`).
+ * Одно место проверки на все виджеты с иконками: URL в композиции минует
+ * манифест и ломает переносимость дерева контента (design Decision 7).
+ */
+export function assetIdParam(value: HudJsonValue | undefined, where: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${where}: asset ID обязан быть строкой`);
+  }
   if (value === '') {
     throw new Error(`${where}: пустой asset ID`);
   }
@@ -50,31 +59,7 @@ function assertAssetId(value: string, where: string): void {
       `${where}: "${value}" выглядит как URL — в композиции допустим только asset ID, путь от корня дерева контента (ASSET-2)`,
     );
   }
-}
-
-function isRecord(value: HudJsonValue | undefined): value is Readonly<Record<string, HudJsonValue>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * Читает таблицу иконок из params записи композиции и проверяет её форму:
- * каждое значение — строка-`asset ID`, не URL. Ошибка — до монтирования, с
- * именем параметра и записи, как у резолва композиции (`registry.ts`).
- */
-export function iconTableFromParams(params: HudParams, key: string): HudIconTable {
-  const raw = params[key];
-  if (!isRecord(raw)) {
-    throw new Error(`параметр "${key}": ожидалась таблица «идентификатор → asset ID»`);
-  }
-  const table: Record<string, string> = {};
-  for (const [id, assetId] of Object.entries(raw)) {
-    if (typeof assetId !== 'string') {
-      throw new Error(`параметр "${key}", запись "${id}": asset ID обязан быть строкой`);
-    }
-    assertAssetId(assetId, `параметр "${key}", запись "${id}"`);
-    table[id] = assetId;
-  }
-  return table;
+  return value;
 }
 
 /**
