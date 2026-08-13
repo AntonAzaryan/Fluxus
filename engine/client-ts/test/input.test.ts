@@ -22,7 +22,7 @@ const BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
 
 const makeSampler = (): InputSampler => new InputSampler({ actionBits: BITS });
 
-/** Источник-стенд: непрерывное состояние задаётся тестом напрямую. */
+/** Источник-стенд: непрерывное состояние и удержания задаются тестом напрямую. */
 class StubSource implements InputSource {
   press: ((action: string) => void) | null = null;
   state: { moveX: number; moveY: number; aim: number | null } | null = {
@@ -30,6 +30,7 @@ class StubSource implements InputSource {
     moveY: 0,
     aim: null,
   };
+  readonly heldActions = new Set<string>();
   constructor(readonly id: string) {}
   start(press: (action: string) => void): void {
     this.press = press;
@@ -39,6 +40,9 @@ class StubSource implements InputSource {
   }
   poll(): { moveX: number; moveY: number; aim: number | null } | null {
     return this.state;
+  }
+  held(): ReadonlySet<string> {
+    return this.heldActions;
   }
 }
 
@@ -74,6 +78,61 @@ describe('InputSampler: латчинг фронтов (INP-2)', () => {
   it('бит вне u16 отвергается конструктором (TICK-2)', () => {
     expect(() => new InputSampler({ actionBits: { cast: 16 } })).toThrow(/0\.\.15/);
     expect(() => new InputSampler({ actionBits: { cast: -1 } })).toThrow(/0\.\.15/);
+  });
+});
+
+describe('InputSampler: удержание и отпускание (INP-2)', () => {
+  it('удержание десять тиков — бит стоит все десять выборок подряд', () => {
+    const sampler = makeSampler();
+    const source = new StubSource('stub');
+    sampler.add(source);
+    source.heldActions.add('cast');
+    for (let i = 0; i < 10; i++) expect(sampler.sample().buttons).toBe(1 << BITS.cast);
+    // Отпускание наблюдаемо как falling edge между соседними масками.
+    source.heldActions.clear();
+    expect(sampler.sample().buttons).toBe(0);
+  });
+
+  it('удержание не съедает фронт чужого действия — маски объединяются', () => {
+    const sampler = makeSampler();
+    const source = new StubSource('stub');
+    sampler.add(source);
+    source.heldActions.add('cast');
+    source.press!('jump');
+    expect(sampler.sample().buttons).toBe((1 << BITS.cast) | (1 << BITS.jump));
+    // Латч обнулён, удержание — нет.
+    expect(sampler.sample().buttons).toBe(1 << BITS.cast);
+  });
+
+  it('удержания разных источников объединяются по OR (INP-5)', () => {
+    const sampler = makeSampler();
+    const a = new StubSource('a');
+    const b = new StubSource('b');
+    sampler.add(a);
+    sampler.add(b);
+    a.heldActions.add('cast');
+    b.heldActions.add('dodge');
+    expect(sampler.sample().buttons).toBe((1 << BITS.cast) | (1 << BITS.dodge));
+  });
+
+  it('удержание неизвестного действия — ошибка конфигурации, не тишина', () => {
+    const sampler = makeSampler();
+    const source = new StubSource('stub');
+    sampler.add(source);
+    source.heldActions.add('teleport');
+    expect(() => sampler.sample()).toThrow(/teleport/);
+  });
+
+  it('источник без удержаний работает как раньше — метод опционален', () => {
+    const sampler = makeSampler();
+    const edgesOnly: InputSource = {
+      id: 'edges-only',
+      start: () => {},
+      stop: () => {},
+      poll: () => null,
+    };
+    sampler.add(edgesOnly);
+    expect(sampler.sample().buttons).toBe(0);
   });
 });
 
@@ -182,6 +241,60 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
     expect(pressed).toEqual(['kill']);
   });
 
+  it('зажатая клавиша держит бит все тики, отпускание — falling edge (INP-2)', () => {
+    const sampler = makeSampler();
+    const source = kb();
+    sampler.add(source);
+    source.handleKeyDown('Space');
+    for (let i = 0; i < 3; i++) expect(sampler.sample().buttons).toBe(1 << BITS.jump);
+    source.handleKeyUp('Space');
+    expect(sampler.sample().buttons).toBe(0);
+  });
+
+  it('автоповтор ОС удержание не ломает: бит один и тот же', () => {
+    const sampler = makeSampler();
+    const source = kb();
+    sampler.add(source);
+    source.handleKeyDown('KeyK');
+    expect(sampler.sample().buttons).toBe(1 << BITS.kill);
+    source.handleKeyDown('KeyK', true);
+    expect(sampler.sample().buttons).toBe(1 << BITS.kill);
+  });
+
+  it('потеря фокуса окна сбрасывает удержания — залипания нет (INP-5)', () => {
+    const sampler = makeSampler();
+    const source = kb();
+    sampler.add(source);
+    source.handleKeyDown('Space');
+    source.handleKeyDown('KeyW');
+    expect(sampler.sample().buttons).toBe(1 << BITS.jump);
+    source.handleBlur();
+    expect(sampler.sample().buttons).toBe(0);
+    expect(source.poll()).toMatchObject({ moveX: 0, moveY: 0 }); // и движение тоже
+  });
+
+  it('зажатая кнопка мыши держит бит до отпускания', () => {
+    const sampler = makeSampler();
+    const source = kb();
+    sampler.add(source);
+    source.handlePointerDown(0, 10, 20);
+    expect(sampler.sample().buttons).toBe(1 << BITS.cast);
+    expect(sampler.sample().buttons).toBe(1 << BITS.cast);
+    source.handlePointerUp(0);
+    expect(sampler.sample().buttons).toBe(0);
+  });
+
+  it('клик без направления не создаёт удержания', () => {
+    const sampler = makeSampler();
+    const source = new KeyboardMouseSource({
+      bindings: validateBindings(demoBindings).keyboardMouse,
+      aimAt: () => null,
+    });
+    sampler.add(source);
+    source.handlePointerDown(0, 10, 20);
+    expect(sampler.sample().buttons).toBe(0);
+  });
+
   it('клик даёт фронт с прицелом; клик без направления — не действие', () => {
     const withAim = new KeyboardMouseSource({
       bindings: validateBindings(demoBindings).keyboardMouse,
@@ -253,6 +366,18 @@ describe('TouchSource (INP-1, INP-2, D6)', () => {
     source.handlePointerDown(1, 900, 40); // зона jump
     source.handlePointerUp(1);
     expect(sampler.sample().buttons).toBe(1 << BITS.jump);
+    // Тап уложился между тиками: ровно один тик с битом.
+    expect(sampler.sample().buttons).toBe(0);
+  });
+
+  it('палец на кнопке действия держит бит до отрыва (INP-2)', () => {
+    const sampler = makeSampler();
+    const source = make();
+    sampler.add(source);
+    source.handlePointerDown(1, 900, 40); // зона jump
+    for (let i = 0; i < 3; i++) expect(sampler.sample().buttons).toBe(1 << BITS.jump);
+    source.handlePointerUp(1);
+    expect(sampler.sample().buttons).toBe(0);
   });
 });
 
@@ -296,6 +421,24 @@ describe('GamepadSource (INP-3, INP-5, D7)', () => {
     current = pad([0, 0, 0, 0], [5]); // переподключение с той же зажатой
     source.poll();
     expect(pressed).toEqual(['cast', 'cast']); // новый фронт, не залипание
+  });
+
+  it('удержание кнопки геймпада семантически равно клавиатурному (INP-2)', () => {
+    let current: GamepadLike | null = pad([0, 0, 0, 0], [5]); // cast зажат
+    const sampler = makeSampler();
+    sampler.add(new GamepadSource(bindings, () => current));
+    for (let i = 0; i < 3; i++) expect(sampler.sample().buttons).toBe(1 << BITS.cast);
+    current = pad([0, 0, 0, 0]); // отпустили
+    expect(sampler.sample().buttons).toBe(0);
+  });
+
+  it('отключение с зажатой кнопкой снимает бит — залипания нет (INP-5)', () => {
+    let current: GamepadLike | null = pad([0, 0, 0, 0], [5]);
+    const sampler = makeSampler();
+    sampler.add(new GamepadSource(bindings, () => current));
+    expect(sampler.sample().buttons).toBe(1 << BITS.cast);
+    current = null;
+    expect(sampler.sample().buttons).toBe(0);
   });
 
   it('отключение при наклонённом стике — нейтраль через сэмплер (INP-5)', () => {

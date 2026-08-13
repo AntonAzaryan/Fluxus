@@ -54,13 +54,18 @@ export class InputSampler {
     this.actionBits = options.actionBits;
   }
 
-  /** Латч фронта; неизвестное действие — ошибка конфигурации, не тишина. */
-  private readonly press: ActionSink = (action) => {
+  /** Бит действия; неизвестное действие — ошибка конфигурации, не тишина. */
+  private bitOf(action: string): number {
     const bit = this.actionBits[action];
     if (bit === undefined) {
       throw new Error(`InputSampler: действие "${action}" не объявлено в actionBits`);
     }
-    this.latched |= 1 << bit;
+    return 1 << bit;
+  }
+
+  /** Латч фронта до ближайшей выборки (INP-2). */
+  private readonly press: ActionSink = (action) => {
+    this.latched |= this.bitOf(action);
   };
 
   add(source: InputSource): void {
@@ -88,14 +93,21 @@ export class InputSampler {
 
   /**
    * Выборка на границе тика: опрос источников (опросные пушат фронты внутри
-   * `poll`), свёртка — действия OR через латч, непрерывные от последнего
-   * активного источника, — затем кламп и квантование (INP-3).
+   * `poll`), свёртка — действия OR удержаний и латча фронтов, непрерывные от
+   * последнего активного источника, — затем кламп и квантование (INP-3).
    */
   sample(): CanonicalInput {
     this.counter += 1;
+    // Удержания собираются заново каждую выборку: залипание невозможно по
+    // построению — бит живёт ровно пока источник о нём сообщает (INP-2).
+    let held = 0;
     for (const t of this.tracked) {
       const s = t.source.poll();
       t.current = s;
+      // Свёртка удержаний нескольких источников — OR (INP-5): клавиатура и
+      // геймпад одного игрока дают одно и то же действие.
+      const heldActions = t.source.held?.();
+      if (heldActions != null) for (const action of heldActions) held |= this.bitOf(action);
       if (s === null) continue;
       if (s.moveX !== t.prevMoveX || s.moveY !== t.prevMoveY) t.moveChangedAt = this.counter;
       if (s.aim !== t.prevAim) t.aimChangedAt = this.counter;
@@ -133,7 +145,9 @@ export class InputSampler {
       moveY /= length;
     }
 
-    const buttons = this.latched;
+    // Обнуляется только латч: удержание пересобирается опросом источников, и
+    // короткий тап между тиками остаётся ровно одним тиком с битом (INP-2).
+    const buttons = held | this.latched;
     this.latched = 0;
     return {
       move: { x: fixed.fromFloat(moveX), y: fixed.fromFloat(moveY) },
