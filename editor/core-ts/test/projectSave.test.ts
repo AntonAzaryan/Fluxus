@@ -165,8 +165,13 @@ describe('ED-21, PRES-3: парный документ переживает «о
         value,
       });
     };
-    edit(7.125);
-    edit(5.5);
+    // Возвращаемое значение читается из документа, а не пишется числом: тест
+    // пиннится на настоящем контенте, а координаты декораций — дело дизайнера.
+    const original = (
+      decodeDocument(canonical) as { decorations: readonly { x: number }[] }
+    ).decorations[0]!.x;
+    edit(original + 1.625);
+    edit(original);
 
     const result = await saveDocuments({ session, host: host.content });
 
@@ -327,6 +332,7 @@ describe('ED-21, SER-8: порядок записей расстановки п�
     // Правится ПЕРВАЯ запись — та, чья перестановка сдвинула бы ID всех
     // остальных, то есть изменила бы `worldInit` документа, который автор
     // в остальном не трогал.
+    const before = initialOf(decodeDocument(canonical));
     const first = session.descriptors(MATCH_PATH, ['initial'])[0]!;
     session.applyOperation('document.list.setValue', {
       document: MATCH_PATH,
@@ -336,10 +342,13 @@ describe('ED-21, SER-8: порядок записей расстановки п�
     });
     await saveDocuments({ session, host: host.content });
 
+    // Ожидание строится из прочитанного документа, а не из переписанного сюда
+    // контента: остальные поля записей — дело дизайнера, а тест про порядок.
+    const patched = before[0] as { overrides?: Record<string, JsonValue> };
     const after = initialOf(decodeDocument(host.bytes(MATCH_PATH)));
     expect(after).toEqual([
-      { prefab: 'Hero', overrides: { Player: { slot: 7 } } },
-      { prefab: 'Hero', overrides: { Player: { slot: 1 } } },
+      { ...patched, overrides: { ...patched.overrides, Player: { slot: 7 } } },
+      before[1],
     ]);
   });
 });
