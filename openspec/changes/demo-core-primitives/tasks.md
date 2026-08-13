@@ -19,5 +19,5 @@
 
 ## 4. Спеки и ворота
 
-- [ ] 4.1 `openspec validate demo-core-primitives --strict` и `npm run spec-graph -- check` зелёные
-- [ ] 4.2 `npm run check` из корня зелёный
+- [x] 4.1 `openspec validate demo-core-primitives --strict` и `npm run spec-graph -- check` зелёные
+- [x] 4.2 `npm run check` из корня зелёный
