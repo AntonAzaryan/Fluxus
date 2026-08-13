@@ -30,12 +30,31 @@ import {
   PortConnections,
   attachBots,
   type BotProfile,
+  type BotWireFormat,
   type BrainKind,
   type FillSchedule,
   type MessageChannelLike,
   type RawPort,
   type WorkerLike,
 } from '@game-mvp/bot';
+
+/**
+ * Формат кадра, которым говорит эта сессия (`serialization` SER-3).
+ *
+ * Выводится из САМОГО сериализатора, а не выбирается вторым решением рядом:
+ * формат полем протокола не согласовывается, и сборка, отдавшая серверу один
+ * формат, а боту другой, получила бы не отказ, а тишину — `Hello` бота сервер
+ * просто не разберёт, и матч навсегда останется в лобби. Незнакомое имя —
+ * отказ сборки здесь и сейчас: назвать его боту нечем.
+ */
+function wireFormatOf(serializer: Serializer | undefined): BotWireFormat | undefined {
+  if (serializer === undefined) return undefined;
+  if (serializer.name === 'json' || serializer.name === 'msgpack') return serializer.name;
+  throw new Error(
+    `сессия демо: боту нечем назвать формат "${serializer.name}" — ` +
+      'участники матча обязаны говорить одним форматом (SER-3)',
+  );
+}
 
 /** Сборка бота: где он исполняется и кем является (BOT-2, BOT-4, BOT-6). */
 export interface DemoBotAssembly {
@@ -82,6 +101,7 @@ export class DemoLocalSession {
     this.info.phase = 'lobby';
 
     const { bots, config } = options;
+    const wireFormat = wireFormatOf(options.serializer);
     this.filler = new BotSlotFiller({
       players: config.players,
       reserved: options.reserved,
@@ -100,6 +120,10 @@ export class DemoLocalSession {
           buildId: config.version.buildId,
           sceneRef: config.sceneRef,
           scene: config.scene,
+          // Тот же формат, который получил `MatchHost` выше: бот — обычный
+          // участник, и «формат — свойство сборки» относится к нему наравне с
+          // человеком (SER-3).
+          ...(wireFormat !== undefined ? { wireFormat } : {}),
           ...(config.physics !== undefined ? { physics: config.physics } : {}),
           ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
         });

@@ -16,7 +16,7 @@
  */
 import { MessageChannel } from 'node:worker_threads';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fixed } from '@game-mvp/core';
+import { fixed, type Serializer } from '@game-mvp/core';
 import {
   isBotWorkerInit,
   parseBotProfile,
@@ -25,6 +25,7 @@ import {
   type WorkerLike,
 } from '@game-mvp/bot';
 import type { RenderSubsystem, TickView } from '@game-mvp/render';
+import { jsonSerializer } from '@game-mvp/net';
 import { RemoteHost, type ShellPort } from '../src/index.js';
 import { portTransport } from '../src/portTransport.js';
 import { shellPort } from '../src/protocol.js';
@@ -80,10 +81,14 @@ function botThread(): WorkerLike {
   };
 }
 
-function session(reserved: readonly string[]): DemoLocalSession {
+function session(
+  reserved: readonly string[],
+  serializer?: Serializer,
+): DemoLocalSession {
   const opened = openLocalSession({
     config: demoMatchConfig(),
     reserved,
+    ...(serializer !== undefined ? { serializer } : {}),
     bots: {
       worker: botThread(),
       channel: () => makeChannel(),
@@ -132,6 +137,7 @@ async function join(
   opened: DemoLocalSession,
   candidates: readonly string[],
   clock: { ms: number },
+  serializer?: Serializer,
 ): Promise<Rig> {
   const [rawWorkerPort, mainPort] = syncPortPair();
   const posted: unknown[] = [];
@@ -156,6 +162,7 @@ async function join(
     clock: () => clock.ms,
     settle: () => flush(1),
     timeoutMs: 2000,
+    ...(serializer !== undefined ? { serializer } : {}),
   });
   return { joined, remote, probe: shellProbe, posted };
 }
@@ -231,6 +238,22 @@ describe('демо по умолчанию: матч против бота на 
     // Прочие визуальные типы сцены (снаряд) кадру не мешают.
     const heroes = [...view.entities.values()].filter((entity) => entity.kind === 'Hero');
     expect(heroes).toHaveLength(2);
+  });
+
+  it('формат кадра сессии доезжает до бота: дебаг-формат не вешает лобби (SER-3)', async () => {
+    const clock = { ms: 0 };
+    // Сессия в дебаг-формате: сервер, человек и бот обязаны говорить одним —
+    // полем протокола формат не согласовывается, и разошедшийся дал бы не
+    // отказ, а вечное лобби.
+    const opened = session(DEMO_PLAYERS.slice(0, 1), jsonSerializer);
+    const rig = await join(opened, [DEMO_PLAYERS[0]!], clock, jsonSerializer);
+    expect(rig.joined.ok).toBe(true);
+
+    opened.filler.fill();
+    await flush();
+    expect(bots?.seats[0]!.client.slot).toBe(1);
+    expect(opened.server.phase).toBe('running');
+    if (rig.joined.ok) rig.joined.shell.stop();
   });
 
   it('слот занят — клиент берёт следующий, а не падает (D4)', async () => {
