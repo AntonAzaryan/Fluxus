@@ -70,6 +70,9 @@ const CURVE_EASE_OUT = 'easeOut';
 const SPHERE_SEGMENTS = 16;
 const SPHERE_RINGS = 12;
 
+/** Пустой список имён состояний — чтобы тик без таблицы `byState` не аллоцировал. */
+const NO_STATE_NAMES: readonly string[] = [];
+
 /** Длительность вспышки, если запись её не назвала: короткая, но видимая. */
 const DEFAULT_FLASH_MS = 300;
 
@@ -255,6 +258,8 @@ export class EffectsSubsystem implements RenderSubsystem {
     const live = this.liveShells;
     live.clear();
     const states = this.manifest.effects?.byState;
+    // Имена таблицы состояний снимаются один раз на тик, а не на сущность.
+    const stateNames = states === undefined ? NO_STATE_NAMES : Object.keys(states);
     for (const entityView of view.entities.values()) {
       // Оболочка визуального типа: живёт, пока жива сущность такого типа.
       if (entityView.kind !== null) {
@@ -264,8 +269,7 @@ export class EffectsSubsystem implements RenderSubsystem {
         }
       }
       // Оболочка состояния: живёт, пока состояние доставляется (REND-23).
-      if (states === undefined) continue;
-      for (const name of Object.keys(states)) {
+      for (const name of stateNames) {
         if (!this.hasState(entityView, name)) continue;
         const record = resolveEffectByState(this.manifest, name);
         if (record !== undefined) this.ensureShell(entityView, `state:${name}`, record, live);

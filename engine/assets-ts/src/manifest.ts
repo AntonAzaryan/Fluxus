@@ -823,7 +823,7 @@ function validateEffect(v: unknown, path: string, errors: string[]): void {
 function validateEffects(section: unknown, errors: string[]): void {
   const path = 'effects';
   if (!isRecord(section)) {
-    errors.push(`${path}: ожидался объект { byKind?, byEvent? }, получено ${typeName(section)}`);
+    errors.push(`${path}: ожидался объект { byKind?, byState?, byEvent? }, получено ${typeName(section)}`);
     return;
   }
   checkUnknownKeys(section, ['byKind', 'byState', 'byEvent'], path, errors);
