@@ -39,9 +39,13 @@ export type { BotEntityView, BotWorldView, WorldViewNames } from './worldView.js
 export { BotHost, BotSeat } from './host.js';
 export type { BotSeatOptions } from './host.js';
 
+// заполнение слота (BOT-7): политика сборки-основателя, а не сервера
+export { BotSlotFiller } from './fill.js';
+export type { BotFillSeat, BotSlotFillerOptions, FillSchedule } from './fill.js';
+
 // сборка: пара портов серверу и боту (design D3)
 export { PortConnections, botWorkerInit, isBotWorkerInit } from './assembly.js';
-export type { BotWorkerInit, BotWorkerSeat, MessageChannelLike, RawPort } from './assembly.js';
+export type { BotWireFormat, BotWorkerInit, BotWorkerSeat, MessageChannelLike, RawPort } from './assembly.js';
 
 // мозги за контрактом
 export { scriptedBrain, walkToCenter } from './brains/scripted.js';

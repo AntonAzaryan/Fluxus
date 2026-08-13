@@ -1,26 +1,10 @@
 /**
- * Общее для обоих запускалок: хук резолва и чтение файла матча.
- *
- * Шага сборки нет по той же причине, что у `core-ts/bin/sim.mjs`: типы Node
- * стрипает сам (>=22.18), а хук добавляет единственное, чего ему не хватает, —
- * исходники импортируют './x.js', и это './x.ts'.
+ * Общее для запускалок: хук резолва (`tsHook.mjs`, импортируется ради его
+ * побочного действия) и чтение файла матча.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { registerHooks } from 'node:module';
-
-registerHooks({
-  resolve(specifier, context, next) {
-    if (specifier.startsWith('.') && specifier.endsWith('.js')) {
-      try {
-        return next(`${specifier.slice(0, -3)}.ts`, context);
-      } catch {
-        // Настоящего .ts нет — резолвим как просили.
-      }
-    }
-    return next(specifier, context);
-  },
-});
+import './tsHook.mjs';
 
 /**
  * Файл матча описывает и данные матча, и контент-пак, которым его поднимать.
@@ -37,6 +21,47 @@ export function readMatchFile(path) {
     scenes[ref] = JSON.parse(readFileSync(resolve(base, scenePath), 'utf8'));
   }
   return { ...raw, scenes };
+}
+
+/**
+ * Документ матча → `MatchConfig`. Одно место на все запускалки: разойдись они
+ * в раскладке, и два стенда с одним файлом матча подняли бы разные миры — то
+ * есть разошлись бы хешем `worldInit` (NTR-5) на честных данных.
+ *
+ * Зависимости сборки мира (NTR-14) едут отсюда же и целиком: физика, локомоция
+ * и пересчёт видимости — свойства матча, а не умолчания запускалки.
+ */
+export function matchConfigOf(match, pack) {
+  const tickRate = match.tickRate ?? 60;
+  return {
+    version: { buildId: match.buildId, contentPackHash: pack.hash },
+    players: match.players,
+    seed: match.seed,
+    sceneRef: match.sceneRef,
+    scene: pack.scene(match.sceneRef),
+    initial: match.initial ?? [],
+    name: match.name,
+    tickRate,
+    snapshotRate: match.snapshotRate ?? 30,
+    inputDelay: match.inputDelay ?? 2,
+    ...(match.inputWindow !== undefined ? { inputWindow: match.inputWindow } : {}),
+    ...(match.eventRepeat !== undefined ? { eventRepeat: match.eventRepeat } : {}),
+    silenceTicks: (match.silenceSeconds ?? 10) * tickRate,
+    ...(match.physics !== undefined ? { physics: match.physics } : {}),
+    ...(match.locomotion !== undefined ? { locomotion: match.locomotion } : {}),
+    ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
+  };
+}
+
+/**
+ * Те же данные матча БЕЗ «кто играет»: версию и ростер лобби собирает само
+ * (`net-session` SES-4), поэтому `HostSession` принимает конфиг без них.
+ */
+export function matchDataOf(match, pack) {
+  const config = { ...matchConfigOf(match, pack) };
+  delete config.version;
+  delete config.players;
+  return config;
 }
 
 export function flag(name) {

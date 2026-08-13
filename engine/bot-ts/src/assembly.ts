@@ -75,6 +75,20 @@ export interface BotWorkerSeat {
 }
 
 /**
+ * Формат кадра на проводе (`serialization` SER-2, SER-3) — ИМЕНЕМ, а не
+ * объектом: `Serializer` несёт функции и structured clone не переживает, а
+ * формат при этом обязан совпадать у всех участников матча, потому что полем
+ * сообщения он не объявляется (`protocol/codec.ts`: «формат — свойство
+ * сборки»). Сборка, поднявшая сервер в дебаг-формате и забывшая сказать об
+ * этом боту, получила бы не ошибку, а вечное лобби: бот шлёт `Hello`, которого
+ * сервер не разбирает.
+ *
+ * Отсутствие поля означает умолчание протокола (msgpack) — то же, что у
+ * `ClientHost` без опции.
+ */
+export type BotWireFormat = 'json' | 'msgpack';
+
+/**
  * Init-сообщение бот-воркеру — данные, и только данные: фабрику мозга по имени
  * резолвит сам воркер (`brains/registry.ts`), потому что функция через
  * structured clone не ездит, а имя мозга — такой же параметр сборки, как профиль.
@@ -90,6 +104,8 @@ export interface BotWorkerInit {
   readonly buildId: string;
   readonly sceneRef: string;
   readonly scene: SceneDef;
+  /** Формат кадра сервера матча; отсутствие — умолчание протокола (SER-3). */
+  readonly wireFormat?: BotWireFormat;
   /** Зависимости сборки мира (NTR-14) — те же значения, что у сервера матча. */
   readonly physics?: PhysicsOptions;
   readonly visibility?: VisibilityOptions;

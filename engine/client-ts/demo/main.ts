@@ -1,9 +1,17 @@
 /**
- * Демо воркер-сборки (client-shell SHELL-1..7): симуляция в dedicated Worker
- * (`worker.ts`), здесь — только THREE, ввод и UI. Presentation-состояние
- * приезжает конвертами тиков через `RemoteHost`; подсистемы террейна и
- * моделей — те же, что в однопоточной сборке (SHELL-2), обратный канал —
- * `sendInput`/`control` (SHELL-6).
+ * Демо воркер-сборки (client-shell SHELL-1..7): состояние производит воркер,
+ * здесь — только THREE, ввод и UI. Presentation-состояние приезжает конвертами
+ * тиков через `RemoteHost`; подсистемы террейна и моделей — те же, что в
+ * однопоточной сборке (SHELL-2), обратный канал — `sendInput`/`control`
+ * (SHELL-6).
+ *
+ * Воркер-сторон три, и выбирается она ПРИ СТАРТЕ страницы (SHELL-8, `mode.ts`):
+ * дефолт — матч против бота на сетевом стеке (сервер вкладки `serverWorker.ts`
+ * плюс тонкий клиент `clientWorker.ts`, design D1), `?server=ws://…` — тот же
+ * тонкий клиент против выделенного стенда, `?solo` — прежняя одиночная
+ * симуляция (`worker.ts`), где живут пауза и отладочная перемотка. Главный
+ * поток об этом различии не знает ничего, кроме режима из handshake: конверты
+ * тиков одни и те же (SHELL-8).
  *
  * Кадр отвязан от тика (REND-2): `remote.frame(now)` интерполирует между
  * двумя последними доставленными тиками по часам этого потока (SHELL-7).
@@ -51,7 +59,9 @@ import {
   validateBindings,
 } from '@game-mvp/client';
 import { ACTION_BITS, STATE_COMPONENTS } from './sim.js';
-import { DEMO_HUD_COMPOSITION, createDemoHud } from './hud.js';
+import { createDemoHud, demoHudComposition } from './hud.js';
+import { DEMO_SERVER_URL, demoMode, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
+import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
 import bindingsJson from './bindings.json';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
@@ -478,9 +488,79 @@ function frame(now: number): void {
 
 // -------------------------------------------------------------------- запуск
 
+/**
+ * Воркер-сторона режима (SHELL-8). Соло-режим — один воркер с симуляцией;
+ * сетевые — воркер тонкого клиента, которому сборка сообщает, как добраться до
+ * сервера матча: порт матча своей вкладки либо адрес стенда (SES-1).
+ *
+ * Порт участника создаёт сервер вкладки и присылает сюда — главный поток лишь
+ * передаёт его клиенту transfer'ом. Своего пути в матч у него нет: он не
+ * участник, он рисует (SHELL-2).
+ */
+function spawnShellWorker(mode: DemoMode): Worker {
+  if (mode.kind === 'solo') {
+    return new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+  }
+  const client = new Worker(new URL('./clientWorker.ts', import.meta.url), { type: 'module' });
+  client.addEventListener('message', (event: MessageEvent) => {
+    if (isDemoNotice(event.data)) showNotice(event.data.message);
+  });
+  if (mode.kind === 'server') {
+    const init: DemoClientInit = { t: 'demo-client-init', url: mode.url };
+    client.postMessage(init);
+    return client;
+  }
+  const server = new Worker(new URL('./serverWorker.ts', import.meta.url), { type: 'module' });
+  server.addEventListener('message', (event: MessageEvent) => {
+    if (!isDemoServerReady(event.data)) return;
+    const init: DemoClientInit = { t: 'demo-client-init', port: event.data.port };
+    client.postMessage(init, [event.data.port]);
+  });
+  const init: DemoServerInit = { t: 'demo-server-init' };
+  server.postMessage(init);
+  return client;
+}
+
+/** Сообщение человеку поверх вьюпорта: матч занят, сервер не отвечает и т. п. */
+function showNotice(message: string): void {
+  const notice = document.getElementById('notice');
+  if (notice === null) return;
+  notice.textContent = message;
+  notice.style.display = 'block';
+}
+
+/**
+ * Кнопка подключения — DOM демо-приложения, а не виджет HUD (design D4):
+ * композиция HUD описывает то, что живёт внутри матча, а это переход между
+ * режимами страницы, то есть новый старт оболочки (SHELL-8).
+ */
+function wireConnectButton(mode: DemoMode): void {
+  const button = document.getElementById('connect');
+  if (!(button instanceof HTMLAnchorElement)) return;
+  if (mode.kind === 'server') {
+    button.textContent = '← матч с ботом';
+    button.title = `сейчас: ${mode.url}`;
+    button.href = localModeUrl(window.location.href);
+    return;
+  }
+  button.textContent = 'играть по сети →';
+  // Адрес — константа сборки (D4). Страница едет по http с dev-сервера, поэтому
+  // ws:// из неё разрешён; со страницы по https браузер такое соединение
+  // заблокирует (mixed content) — стенд для LAN, а не для интернета.
+  button.title = `подключиться к стенду ${DEMO_SERVER_URL}`;
+  button.href = serverModeUrl(window.location.href);
+}
+
 async function main(): Promise<void> {
+  // Режим выбирается ОДИН раз, до создания воркеров: переключение режима — это
+  // перезагрузка страницы с другим параметром (SHELL-8).
+  const mode = demoMode(window.location.search);
+  // Кнопка режима — ДО загрузки манифеста: она и есть дорога со сломанной
+  // страницы. Упади манифест (нет ассета, нет сети) — переключиться было бы
+  // нечем, а это единственный орган управления, которому матч не нужен вовсе.
+  wireConnectButton(mode);
   const manifest = await loadManifest();
-  const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+  const worker = spawnShellWorker(mode);
 
   remote = new RemoteHost(context, {
     onReady: (hello) => {
@@ -552,7 +632,10 @@ async function main(): Promise<void> {
       });
       sampler.add(hud.facade);
       remote!.register(hud.runtime.subsystem);
-      hud.runtime.apply(DEMO_HUD_COMPOSITION);
+      // Состав HUD — от того, что даёт оболочка (design D5): пауза и перемотка
+      // существуют только у локальной, и режим приезжает в handshake (SHELL-8),
+      // а не выводится наблюдением за потоком доставок.
+      hud.runtime.apply(demoHudComposition({ controls: hello.mode === 'local' }));
       hudRoot = hud.root;
 
       // Отладочная ручка ручного прогона (задача 5.3): read-only точка

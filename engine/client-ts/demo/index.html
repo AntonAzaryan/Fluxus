@@ -121,6 +121,43 @@
       #help b {
         color: #ffd479;
       }
+      /* Кнопка подключения к стенду (design D4): DOM демо-приложения, а не
+         виджет HUD — это переход между режимами страницы, то есть новый старт
+         оболочки (SHELL-8), а не действие внутри матча. */
+      #connect {
+        position: fixed;
+        right: 12px;
+        bottom: 12px;
+        padding: 6px 10px;
+        color: #e8e8f0;
+        font: 12px/1.4 ui-monospace, Menlo, monospace;
+        text-decoration: none;
+        background: rgba(10, 10, 24, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 8px;
+        z-index: 20;
+      }
+      #connect:hover {
+        border-color: #ffd479;
+      }
+      /* Сообщение сборки: матч занят, стенд не отвечает. Скрыто, пока нечего
+         сказать; текст ставит main.ts. */
+      #notice {
+        display: none;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        max-width: 60ch;
+        transform: translate(-50%, -50%);
+        padding: 14px 18px;
+        color: #ffd479;
+        font: 13px/1.6 ui-monospace, Menlo, monospace;
+        text-align: center;
+        background: rgba(10, 10, 24, 0.9);
+        border: 1px solid #ffd479;
+        border-radius: 10px;
+        z-index: 30;
+      }
     </style>
   </head>
   <body>
@@ -131,6 +168,8 @@
       <div><b>T</b> — скин steel/ember &nbsp; <b>K</b> — смерть героя</div>
       <div><b>C</b> — центр на герое &nbsp; <b>Y</b> — follow &nbsp; <b>F</b> — облёт &nbsp; край экрана — панорама</div>
     </div>
+    <div id="notice"></div>
+    <a id="connect" href="#">играть по сети →</a>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

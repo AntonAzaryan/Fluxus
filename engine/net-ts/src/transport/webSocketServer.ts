@@ -104,7 +104,13 @@ interface ChannelState {
 export async function webSocketChannelServer(
   options: WebSocketServerOptions,
 ): Promise<WebSocketChannelServer> {
-  const { createServer } = await import('node:http');
+  // Динамический импорт node-only модуля, спрятанный от статического анализа
+  // бандлеров: этот файл целиком node-only (браузер сервером не бывает), но
+  // попадает в граф браузерной сборки через барьер пакета — оттуда его выносит
+  // tree-shaking, а вот предупреждение «модуль externalized» бандлер печатает
+  // ещё до него, на разборе. Пометка гасит именно предупреждение; поведение в
+  // Node прежнее — обычный динамический импорт.
+  const { createServer } = await import(/* @vite-ignore */ 'node:http');
   const http = createServer();
   const channels = new Map<string, ChannelState>();
 
