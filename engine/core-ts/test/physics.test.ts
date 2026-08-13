@@ -411,6 +411,126 @@ describe('маски слоёв (PHYS-2)', () => {
   });
 });
 
+describe('нормаль поверхности в событии столкновения (PHYS-9)', () => {
+  /** Длина нормали в Q16.16: единичная с точностью fixed-арифметики. */
+  const unitLength = (event: GameEvent): number =>
+    Math.hypot(fixed.toFloat(event.data.nx!), fixed.toFloat(event.data.ny!));
+
+  it('рикошет от круглого щита: нормаль по линии центров, не по оси движения', () => {
+    const h = harness(false);
+    // Круглое препятствие в слое статики; движущийся идёт мимо его центра.
+    const shield = h.place('Ball', {
+      Position: { x: F(2), y: F(0) },
+      Collider: { layer: LAYER_STATIC },
+    });
+    h.place('Mover', { Position: { x: F(1), y: F(0.3) }, Velocity: { x: F(0.5) } });
+    const events = h.step();
+
+    expect(events.map((e) => e.type)).toEqual(['Collision']);
+    expect(events[0]!.data.other).toBe(shield);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    // Направление — от щита к снаряду: осевая (-1, 0) была бы физически неверна.
+    expect(nx).toBeLessThan(0);
+    expect(ny).toBeGreaterThan(0);
+    expect(fixed.toFloat(nx)).toBeCloseTo(-1 / Math.hypot(1, 0.3), 3);
+    expect(fixed.toFloat(ny)).toBeCloseTo(0.3 / Math.hypot(1, 0.3), 3);
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 3);
+  });
+
+  it('круг о грань прямоугольника даёт ровно осевую нормаль', () => {
+    const h = harness(false);
+    h.place('Wall', { Position: { x: F(2), y: F(0) } });
+    h.place('Mover', {
+      Position: { x: F(1), y: F(0) },
+      Velocity: { x: F(0.5) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toMatchObject({ nx: fixed.fromInt(-1), ny: 0 });
+  });
+
+  it('круг об угол прямоугольника даёт диагональную нормаль единичной длины', () => {
+    const h = harness(false);
+    h.place('Wall', { Position: { x: F(2), y: F(0) } }); // угол (1.5, 0.5)
+    h.place('Mover', {
+      Position: { x: F(1), y: F(0.7) },
+      Velocity: { x: F(0.5) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    const distance = Math.hypot(0.5, 0.2);
+    expect(fixed.toFloat(nx)).toBeCloseTo(-0.5 / distance, 3);
+    expect(fixed.toFloat(ny)).toBeCloseTo(0.2 / distance, 3);
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 3);
+  });
+
+  it('круг об угол статики обрыва — тот же расчёт, что и для сущности-прямоугольника', () => {
+    const h = harness(); // статика обрыва: отрезок x = 2, y ∈ [0, 1]
+    h.place('Mover', {
+      Position: { x: F(1.5), y: F(-0.2) },
+      Velocity: { x: F(0.5) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.other).toBe(STATIC_COLLIDER);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    const distance = Math.hypot(0.5, 0.2);
+    expect(fixed.toFloat(nx)).toBeCloseTo(-0.5 / distance, 3);
+    expect(fixed.toFloat(ny)).toBeCloseTo(-0.2 / distance, 3);
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 3);
+  });
+
+  it('вырожденный случай — детерминированный фолбэк на осевую нормаль', () => {
+    const h = harness(false);
+    h.place('Wall', { Position: { x: F(2), y: F(0) } });
+    // Центр круга внутри прямоугольника: ближайшая точка совпадает с центром,
+    // единичный вектор из нулевого не восстановить.
+    h.place('Mover', {
+      Position: { x: F(1.9), y: F(0.2) },
+      Velocity: { x: F(0.1) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toMatchObject({ nx: fixed.fromInt(-1), ny: 0 });
+  });
+
+  it('пара прямоугольников: нормаль осевая, как раньше', () => {
+    const h = harness(false);
+    h.place('Wall', { Position: { x: F(2), y: F(0.3) } });
+    h.place('Mover', { Position: { x: F(1), y: F(0) }, Velocity: { x: F(0.5) } });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toMatchObject({ nx: fixed.fromInt(-1), ny: 0 });
+  });
+
+  it('нормаль по оси Y считается по той же поверхности', () => {
+    const h = harness(false);
+    const shield = h.place('Ball', {
+      Position: { x: F(0), y: F(2) },
+      Collider: { layer: LAYER_STATIC },
+    });
+    h.place('Mover', { Position: { x: F(0.3), y: F(1) }, Velocity: { y: F(0.5) } });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.other).toBe(shield);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    expect(nx).toBeGreaterThan(0);
+    expect(ny).toBeLessThan(0);
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 3);
+  });
+});
+
 describe('TimeScale в точке интеграции (PHYS-8, TIME-4)', () => {
   it('TimeScale 0.5 — половина смещения за тик, скорость не мутируется', () => {
     const h = harness(false);
