@@ -73,6 +73,38 @@ describe('демо-сцена: падение в дыру и смерть (ARENA
     expect(coreWorld.hasComponent(state.world, playerId, 'LevelOverride')).toBe(true);
   });
 
+  it('зажатая кнопка каста не спамит фаерболы: каст ловит фронт (INP-2)', () => {
+    // Held-семантика ввода (INP-2) даёт бит во всех тиках удержания; детектор
+    // фронта в JSON-системе `Cast` (`buttons && !prevButtons`) обязан сработать
+    // ровно один раз на нажатие — иначе слой ввода сломал бы существующий
+    // контент.
+    const { sim, state } = createDemoSimulation(SCENE);
+    const CAST = 1 << 0;
+    const fireballs = (): number => {
+      let count = 0;
+      for (const entity of coreWorld.listAlive(state.world)) {
+        if (coreWorld.hasTag(state.world, entity, 'Fireball')) count += 1;
+      }
+      return count;
+    };
+
+    for (let tick = 1; tick <= 10; tick++) {
+      simTick(sim, state, [
+        { tick, playerId: PLAYER_ID, seq: tick, move: { x: 0, y: 0 }, aimDir: 0, buttons: CAST },
+      ]);
+    }
+    expect(fireballs()).toBe(1);
+
+    // Отпустил и нажал снова — второй фаербол, фронт не потерялся.
+    simTick(sim, state, [
+      { tick: 11, playerId: PLAYER_ID, seq: 11, move: { x: 0, y: 0 }, aimDir: 0, buttons: 0 },
+    ]);
+    simTick(sim, state, [
+      { tick: 12, playerId: PLAYER_ID, seq: 12, move: { x: 0, y: 0 }, aimDir: 0, buttons: CAST },
+    ]);
+    expect(fireballs()).toBe(2);
+  });
+
   it('на полу событий провала нет и герой жив', () => {
     const { sim, state, playerId } = createDemoSimulation(SCENE);
     for (let tick = 1; tick <= 60; tick++) {

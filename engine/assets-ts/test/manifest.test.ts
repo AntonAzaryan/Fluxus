@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   AssetService,
+  DEFAULT_LOD_THRESHOLDS,
   POSITIVE_MIN,
   cameraEffectRangeText,
   clampCameraEffectParam,
   createManifestLoader,
   manifestLoader,
+  resolveLodThresholds,
   resolveVisual,
+  resolveVisualTier,
   validateManifest,
   visualKeys,
   type CameraEffectsDescription,
@@ -34,6 +37,8 @@ const validDoc = {
         head: { bone: 'Bone_Head', maxYawDeg: 45, smoothing: 0.35 },
       },
       hiddenParts: [3],
+      tier: 'detailed',
+      lodThresholds: [0.3, 0.1],
     },
     fireball: { model: 'models/Fireball.mdx' },
   },
@@ -186,6 +191,59 @@ describe('validateManifest (ASSET-6)', () => {
       /entities\.orc\.hiddenParts\[1\]/,
       /entities\.orc\.hiddenParts\[2\]/,
     );
+  });
+
+  it('tier и lodThresholds записи: перечень ярусов закрыт, пороги строго убывают (ASSET-13)', () => {
+    const ok = validateManifest({
+      entities: { orc: { model: 'm.mdx', tier: 'detailed', lodThresholds: [0.3, 0.1] } },
+      decorations: { rock: { model: 'r.mdx', tier: 'batched' } },
+    });
+    expect(ok.ok).toBe(true);
+
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', tier: 'instanced' } } },
+      /entities\.orc\.tier: ожидался ярус представления/,
+    );
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', lodThresholds: 0.5 } } },
+      /entities\.orc\.lodThresholds: ожидался массив/,
+    );
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', lodThresholds: [1.5] } } },
+      /entities\.orc\.lodThresholds\[0\]: ожидалась доля/,
+    );
+    // Порог, не меньший предыдущего, дал бы уровень, который не выбирается.
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', lodThresholds: [0.2, 0.2] } } },
+      /entities\.orc\.lodThresholds\[1\]: пороги должны строго убывать/,
+    );
+  });
+
+  it('умолчания яруса и порогов: батчевый, детальный — при контроле костей (ASSET-13)', () => {
+    const result = validateManifest({
+      entities: {
+        plain: { model: 'm.mdx' },
+        bones: { model: 'm.mdx', boneControls: { torso: { bone: 'b', maxYawDeg: 10, smoothing: 1 } } },
+        explicit: {
+          model: 'm.mdx',
+          tier: 'batched',
+          boneControls: { torso: { bone: 'b', maxYawDeg: 10, smoothing: 1 } },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const entities = result.manifest.entities;
+    expect(resolveVisualTier(entities.plain)).toBe('batched');
+    // Процедурному контролю костей нужен настоящий скелет (REND-5).
+    expect(resolveVisualTier(entities.bones)).toBe('detailed');
+    // Явное поле записи умолчание переопределяет — и в эту сторону тоже.
+    expect(resolveVisualTier(entities.explicit)).toBe('batched');
+    // Записи без записи вовсе (невизуальный ключ) умолчание тоже касается.
+    expect(resolveVisualTier(undefined)).toBe('batched');
+
+    expect(resolveLodThresholds(entities.plain)).toBe(DEFAULT_LOD_THRESHOLDS);
+    expect(resolveLodThresholds({ model: 'm.mdx', lodThresholds: [0.4] })).toEqual([0.4]);
   });
 
   it('неизвестное поле записи — ошибка (опечатки ловятся схемой)', () => {

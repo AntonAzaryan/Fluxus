@@ -98,7 +98,7 @@ describe('applySkin (REND-6)', () => {
     const instance = createModelInstance(buildSharedModel(makeModel()));
     assets.resolve('texture', 'tex/base.png', image(10, 20, 30));
 
-    applySkin(instance.textureTargets, new Map([[0, path('tex/base.png')]]), assets.service);
+    applySkin(instance.ownTextureTargets(), new Map([[0, path('tex/base.png')]]), assets.service);
 
     const map = skinTexture(instance.materials[0]!);
     expect(map.image.width).toBe(1);
@@ -112,7 +112,7 @@ describe('applySkin (REND-6)', () => {
     const instance = createModelInstance(buildSharedModel(makeModel()));
 
     applySkin(
-      instance.textureTargets,
+      instance.ownTextureTargets(),
       new Map([[0, { kind: 'image' as const, image: image(3, 4, 5) }]]),
       assets.service,
     );
@@ -128,7 +128,7 @@ describe('applySkin (REND-6)', () => {
     const instance = createModelInstance(buildSharedModel(makeModel()));
 
     expect(() =>
-      applySkin(instance.textureTargets, new Map([[0, path('tex/base.png')]]), assets.service),
+      applySkin(instance.ownTextureTargets(), new Map([[0, path('tex/base.png')]]), assets.service),
     ).not.toThrow();
     expect(instance.materials[0]!.map).toBeNull();
 
@@ -145,16 +145,16 @@ describe('applySkin (REND-6)', () => {
     assets.resolve('texture', 'tex/base.png', image(1, 1, 1));
     assets.resolve('texture', 'tex/ember.png', image(9, 9, 9));
 
-    applySkin(first.textureTargets, new Map([[0, path('tex/base.png')]]), assets.service);
+    applySkin(first.ownTextureTargets(), new Map([[0, path('tex/base.png')]]), assets.service);
     const application = applySkin(
-      second.textureTargets,
+      second.ownTextureTargets(),
       new Map([[0, path('tex/base.png')]]),
       assets.service,
     );
 
     // Смена скина второго инстанса: старое применение снимается, ставится новое.
     application.dispose();
-    applySkin(second.textureTargets, new Map([[0, path('tex/ember.png')]]), assets.service);
+    applySkin(second.ownTextureTargets(), new Map([[0, path('tex/ember.png')]]), assets.service);
 
     expect(skinPixels(second.materials[0]!)).toEqual([9, 9, 9, 255]);
     expect(skinPixels(first.materials[0]!)).toEqual([1, 1, 1, 255]);
@@ -169,7 +169,7 @@ describe('applySkin (REND-6)', () => {
     const assets = makeAssets();
     const instance = createModelInstance(buildSharedModel(makeModel()));
     const application = applySkin(
-      instance.textureTargets,
+      instance.ownTextureTargets(),
       new Map([[0, path('tex/base.png')]]),
       assets.service,
     );
@@ -182,7 +182,7 @@ describe('applySkin (REND-6)', () => {
   it('слот, который никем не используется, пропускается без запроса', () => {
     const assets = makeAssets();
     const instance = createModelInstance(buildSharedModel(makeModel()));
-    applySkin(instance.textureTargets, new Map([[42, path('tex/ghost.png')]]), assets.service);
+    applySkin(instance.ownTextureTargets(), new Map([[42, path('tex/ghost.png')]]), assets.service);
     expect(assets.requests).toEqual([]);
   });
 });

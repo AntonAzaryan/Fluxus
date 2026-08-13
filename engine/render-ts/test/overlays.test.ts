@@ -83,7 +83,11 @@ function makeBoxModel(halfWidth: number, height: number): NormalizedModel {
   };
 }
 
-const MANIFEST: VisualManifest = { entities: { Box: { model: MODEL_ID, scale: 2 } } };
+// Ярус явный (ASSET-13): тест смотрит на материалы инстанса — представление
+// детального яруса (REND-20).
+const MANIFEST: VisualManifest = {
+  entities: { Box: { model: MODEL_ID, scale: 2, tier: 'detailed' } },
+};
 
 function grid4(): TerrainGrid {
   return createTerrainGrid({
@@ -164,7 +168,7 @@ describe('пустой набор (REND-16, ED-22)', () => {
     const instance = rig.models.instanceFor(1)!;
     const material = instance.model!.materials[0]!;
     const color = material.color.getHex();
-    const holderChildren = instance.holder.children.length;
+    const sceneChildren = rig.ctx.scene.children.length;
 
     rig.overlays.apply([
       { kind: 'highlight', key: 'sel', entity: 1 },
@@ -175,7 +179,9 @@ describe('пустой набор (REND-16, ED-22)', () => {
     // Подсветка — собственный объект наложения, а не подмена материала (REND-6).
     expect(instance.model!.materials[0]).toBe(material);
     expect(material.color.getHex()).toBe(color);
-    expect(instance.holder.children.length).toBe(holderChildren);
+    // Наложения живут в своей группе: сценовых объектов подсистемы моделей от
+    // них не прибавляется (ED-22).
+    expect(rig.ctx.scene.children.length).toBe(sceneChildren + 1);
   });
 });
 
@@ -189,14 +195,16 @@ describe('подсветка выделения (REND-16)', () => {
     rig.overlays.apply([{ kind: 'highlight', key: 'sel', entity: 1 }]);
     rig.overlays.updateFrame(0.016, 1);
 
-    const holder = rig.models.instanceFor(1)!.holder;
-    holder.updateWorldMatrix(true, false);
+    const pose = rig.models.instanceFor(1)!.pose;
     const drawn = rig.ctx.scene.getObjectByName('highlight:1')!;
     expect(drawn).toBeDefined();
 
-    // Рамка получена ТОЙ ЖЕ матрицей, которой нарисован инстанс: её центр —
-    // центр объёма-прокси, переведённый матрицей узла.
-    const expected = holder.localToWorld(new THREE.Vector3(0, 0, 1));
+    // Рамка получена ТЕМ ЖЕ преобразованием, которым нарисован инстанс: её
+    // центр — центр объёма-прокси, переведённый матрицей инстанса.
+    const expected = new THREE.Vector3(0, 0, 1)
+      .multiplyScalar(pose.scale)
+      .applyQuaternion(new THREE.Quaternion(pose.qx, pose.qy, pose.qz, pose.qw))
+      .add(new THREE.Vector3(pose.x, pose.y, pose.z));
     const position = new THREE.Vector3();
     const quaternion = new THREE.Quaternion();
     const scale = new THREE.Vector3();

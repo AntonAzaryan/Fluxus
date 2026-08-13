@@ -100,8 +100,12 @@ export { cornerLevels, createVisualSurface } from './visualSurface.js';
 export type { MutableVisualSurface, SurfaceNormal, VisualSurface } from './visualSurface.js';
 export { VisualSurfaceSource } from './surfaceSource.js';
 export type { SurfaceChangeListener, VisualSurfaceSourceOptions } from './surfaceSource.js';
-export { tiltTarget, smoothTilt } from './model/surfaceAlign.js';
+export { tiltTarget, smoothTilt, orientFromTiltYaw } from './model/surfaceAlign.js';
 export type { TiltVector } from './model/surfaceAlign.js';
+// Walkable-вклад поля высот (REND-9): реестр walkable-инстансов у источника
+// поверхности; кормит его подсистема моделей данными записи (REND-18).
+export { WalkableSurfaceRegistry } from './walkableSurface.js';
+export type { TerrainFormSampler, WalkableField, WalkablePlacement } from './walkableSurface.js';
 
 // Вертикальное смещение инстанса: дуга прыжка и снижение при провале (REND-12).
 export { jumpArc, jumpBase, maneuverEnds, advanceFall } from './model/verticalOffset.js';
@@ -117,8 +121,9 @@ export {
 export type { CellRect, TerrainGeometryData, TerrainOptions } from './subsystems/terrain.js';
 
 // Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).
+// Наружу инстанс виден преобразованием и границами, а не узлом сцены (REND-3).
 export { ModelsSubsystem } from './subsystems/models.js';
-export type { ModelsOptions } from './subsystems/models.js';
+export type { InstancePose, ModelInstanceView, ModelsOptions } from './subsystems/models.js';
 
 // Сервисы вьюпорта редактора: picking по видимому изображению (REND-15) и
 // служебные наложения подсистемой рендера (REND-16). Игровой клиент ни того, ни
@@ -155,6 +160,7 @@ export {
   buildClips,
   buildSharedModel,
   createModelInstance,
+  geometryFromMesh,
   modelBounds,
 } from './model/build.js';
 export type {
@@ -166,13 +172,36 @@ export type {
   SkeletonBuild,
 } from './model/build.js';
 
-// Анимационный контроллер (REND-4).
-export { AnimationController, resolveClip } from './model/animation.js';
+// Анимационный контроллер (REND-4): одна машина состояний, два носителя
+// воспроизведения — микшер детального яруса и скаляры батчевого (REND-20).
+export { AnimationController, MixerAnimationBackend, resolveClip } from './model/animation.js';
 export type {
+  AnimationBackend,
   AnimationControllerOptions,
   AnimationMapping,
   ClipResolution,
+  NamedClip,
 } from './model/animation.js';
+export { VatAnimationBackend } from './model/vatAnimation.js';
+
+// Батчевый ярус (REND-20): батч инстансов, VAT-материал и набор вариантов скина.
+export { ModelBatch, batchLevels } from './model/batch.js';
+export type { BatchPartSource, ModelBatchOptions } from './model/batch.js';
+export {
+  VAT_MAP_KINDS,
+  createSkinPlaceholder,
+  createVatMaterial,
+  createVatTexture,
+  materialMapKinds,
+} from './model/vatMaterial.js';
+export type { VatMapKind, VatMaterial, VatMaterialUniforms } from './model/vatMaterial.js';
+export {
+  BASE_SKIN_VARIANT,
+  BatchSkinLoader,
+  skinArrayTexture,
+  skinVariantNames,
+  variantSources,
+} from './model/batchSkins.js';
 
 // Bone-контроль (REND-5).
 export {

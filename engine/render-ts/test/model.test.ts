@@ -55,14 +55,35 @@ describe('createModelInstance: скелет и биндинг', () => {
     expect(instance.meshes[0]!.name).toBe('part0'); // под треки видимости
   });
 
-  it('геометрия разделяется между инстансами, материалы — свои (REND-3, REND-6)', () => {
+  it('геометрия и материалы разделяются, скелет — свой (REND-3)', () => {
     const shared = buildSharedModel(makeModel());
     const a = createModelInstance(shared);
     const b = createModelInstance(shared);
     expect(a.meshes[0]!.geometry).toBe(b.meshes[0]!.geometry);
     expect(a.meshes[0]!.geometry).toBe(shared.meshes[0]!.geometry);
     expect(a.skeleton).not.toBe(b.skeleton);
-    expect(a.materials[0]).not.toBe(b.materials[0]);
+    // Материалы общие с ассетом, пока скин ничего не подменил (REND-6).
+    expect(a.materials[0]).toBe(shared.materials[0]);
+    expect(a.materials[0]).toBe(b.materials[0]);
+    expect(a.ownsMaterials).toBe(false);
+  });
+
+  it('первая подмена скина даёт инстансу свои материалы (copy-on-write, REND-6)', () => {
+    const shared = buildSharedModel(makeModel());
+    const a = createModelInstance(shared);
+    const b = createModelInstance(shared);
+
+    const targets = a.ownTextureTargets();
+    expect(a.ownsMaterials).toBe(true);
+    expect(b.ownsMaterials).toBe(false);
+    // Копия встала и в меши: инстанс рисуется своим материалом, а не ассетным.
+    expect(a.materials[0]).not.toBe(shared.materials[0]);
+    expect(a.meshes[0]!.material).toBe(a.materials[0]);
+    expect(b.meshes[0]!.material).toBe(shared.materials[0]);
+    // Места употребления слота указывают на копию, а не на разделяемый материал.
+    expect(targets.get(0)?.[0]?.material).toBe(a.materials[0]);
+    // Повторный вызов копию не удваивает.
+    expect(a.ownTextureTargets()).toBe(targets);
   });
 
   it('нормализация масштаба: высота модели → одна единица × scale манифеста', () => {

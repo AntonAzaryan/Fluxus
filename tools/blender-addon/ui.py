@@ -108,6 +108,9 @@ class FLUXUS_PT_object(FluxusPanel, bpy.types.Panel):
             elif snapshot.visuals and settings.visual not in snapshot.visuals:
                 layout.label(text="нет в манифесте — импорт предупредит", icon="INFO")
             layout.prop_search(settings, "skin", lists, "skins", text="Skin")
+            # Только чекбокс свойства: превью walkable-посадки аддон не ведёт —
+            # правда — кадр движка через watch (BLND-12), правил у аддона нет (BLND-8).
+            layout.prop(settings, "walkable")
             layout.label(text="позиция, yaw и scale — из трансформа", icon="INFO")
         elif kind in {"TERRAIN", "CURVATURE"}:
             layout.label(text="клеточные данные правятся кистями", icon="BRUSH_DATA")

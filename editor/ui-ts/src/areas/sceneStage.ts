@@ -547,7 +547,14 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       terrain = new TerrainSubsystem(first, { surface });
       presentation.register(terrain);
     }
-    models = new ModelsSubsystem(visuals, surface === null ? {} : { surface });
+    // Камера подсистеме — вход отсечения невидимых инстансов (REND-21): та же
+    // самая (`camera3`), которой рисуется кадр и считается луч наведения. Позу
+    // на неё сажает `applyCameraPose` до кадра подсистем (см. `frame`), поэтому
+    // отсекается по пирамиде ЭТОГО кадра, а не прошлого.
+    models = new ModelsSubsystem(visuals, {
+      camera: camera3,
+      ...(surface === null ? {} : { surface }),
+    });
     presentation.register(models);
     if (surface !== null) {
       // Подсистему наложений регистрирует только вьюпорт редактора (REND-16):

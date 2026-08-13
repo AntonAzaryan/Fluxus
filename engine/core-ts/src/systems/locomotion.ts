@@ -1,5 +1,5 @@
 /**
- * Локомоушен (LOC-1..LOC-6): разгон/торможение к желаемой скорости и машина
+ * Локомоушен (LOC-1..LOC-7): разгон/торможение к желаемой скорости и машина
  * манёвров Dodge/Window/Roll/Airborne. Система читает компонент ввода и
  * конфигурацию из компонентов сущности, а пишет скорость и своё состояние
  * только через Command Buffer (DET-7); позицией и столкновениями занимается
@@ -13,8 +13,11 @@
  *
  * Имена компонентов и биты кнопок — опции конструктора, а не конвенция ядра
  * (LOC-1, D2); все балансные числа — поля конфиг-компонента, заполняемые
- * контентом. Состояние манёвра целиком лежит в компонентах мира: оно обязано
- * попадать в снапшот и переживать rewind (LOC-3, SNAP-1).
+ * контентом. Тем же порядком задан и селективный лок манёвров (LOC-7): имя
+ * компонента-маски и бит «манёвры запрещены» — опции, без них система лока не
+ * знает и ведёт себя ровно как прежде. Состояние манёвра целиком лежит в
+ * компонентах мира: оно обязано попадать в снапшот и переживать rewind
+ * (LOC-3, SNAP-1).
  */
 import { abs, add, clamp, mul, sub } from '../math/fixed.js';
 import * as vec from '../math/vector.js';
@@ -53,6 +56,16 @@ export interface LocomotionOptions {
   /** Индексы битов в маске кнопок; раскладку ввода ядро не знает (LOC-1). */
   readonly dodgeButton?: number;
   readonly jumpButton?: number;
+  /**
+   * Компонент селективного лока действий (LOC-7): поле `mask` — битовая маска
+   * заблокированных классов. Не задан — система лок не читает вовсе.
+   */
+  readonly lockComponent?: string;
+  /**
+   * Индекс бита «манёвры запрещены» в маске лока. Смысл остальных битов —
+   * конвенция контента, ядро их не интерпретирует (LOC-7).
+   */
+  readonly maneuverLockBit?: number;
 }
 
 /** Якорь шкалы `order` (DET-9); параметром сборки не является. */
@@ -67,7 +80,15 @@ const DEFAULTS = {
   colliderComponent: 'Collider',
   dodgeButton: 1,
   jumpButton: 2,
+  maneuverLockBit: 0,
 } as const;
+
+/**
+ * Поле маски в компоненте лока (LOC-7). Имя поля — часть контракта системы,
+ * как `state`/`ticksLeft` у компонента состояния манёвра: параметризуется имя
+ * компонента, а не раскладка его полей.
+ */
+const LOCK_MASK_FIELD = 'mask';
 
 /** Фронт кнопки — бит установлен сейчас и снят в прошлой маске (LOC-3, TICK-4). */
 function buttonEdge(buttons: number, prevButtons: number, bit: number): boolean {
@@ -95,6 +116,9 @@ export class LocomotionSystem implements System {
   private readonly collider: string;
   private readonly dodgeButton: number;
   private readonly jumpButton: number;
+  /** `undefined` — лока в сборке нет: ни одного нового чтения мира (LOC-7). */
+  private readonly lock: string | undefined;
+  private readonly maneuverLockMask: number;
   private readonly querySpec: QuerySpec;
 
   constructor(options: LocomotionOptions = {}) {
@@ -106,6 +130,15 @@ export class LocomotionSystem implements System {
     this.collider = options.colliderComponent ?? DEFAULTS.colliderComponent;
     this.dodgeButton = options.dodgeButton ?? DEFAULTS.dodgeButton;
     this.jumpButton = options.jumpButton ?? DEFAULTS.jumpButton;
+    const lockBit = options.maneuverLockBit ?? DEFAULTS.maneuverLockBit;
+    if (!Number.isInteger(lockBit) || lockBit < 0 || lockBit > 30) {
+      throw new Error(`LocomotionSystem: maneuverLockBit вне 0..30: ${lockBit}`);
+    }
+    if (options.lockComponent === undefined && options.maneuverLockBit !== undefined) {
+      throw new Error('LocomotionSystem: maneuverLockBit без lockComponent — лок читать неоткуда');
+    }
+    this.lock = options.lockComponent;
+    this.maneuverLockMask = 1 << lockBit;
     // Участие определяется составом компонентов (LOC-1); спецификация запроса
     // строится один раз — горячий путь тика не аллоцирует её заново.
     this.querySpec = { all: [this.config, this.state, this.input, this.velocity] };
@@ -135,8 +168,12 @@ export class LocomotionSystem implements System {
     const prevButtons = ctx.get(entity, this.input, 'prevButtons');
     const moveX = ctx.get(entity, this.input, 'moveX');
     const moveY = ctx.get(entity, this.input, 'moveY');
+    // Лок гейтит только старты манёвров (LOC-7): разгон и торможение ниже он не
+    // трогает, а проигнорированный фронт нигде не копится — после снятия лока
+    // манёвр стартует только новым нажатием.
+    const locked = this.maneuversLocked(ctx, entity);
 
-    if (buttonEdge(buttons, prevButtons, this.dodgeButton)) {
+    if (!locked && buttonEdge(buttons, prevButtons, this.dodgeButton)) {
       if (state === LOCOMOTION_WINDOW) {
         this.startRoll(ctx, entity, moveX, moveY);
         return;
@@ -150,7 +187,7 @@ export class LocomotionSystem implements System {
     }
 
     // Прыжок — только из `Normal` (LOC-5): окно даблтапа его не открывает.
-    if (state === LOCOMOTION_NORMAL && buttonEdge(buttons, prevButtons, this.jumpButton)) {
+    if (!locked && state === LOCOMOTION_NORMAL && buttonEdge(buttons, prevButtons, this.jumpButton)) {
       this.startJump(ctx, entity, moveX, moveY);
       return;
     }
@@ -164,6 +201,17 @@ export class LocomotionSystem implements System {
         ctx.commands.setField(entity, this.state, 'state', LOCOMOTION_NORMAL);
       }
     }
+  }
+
+  /**
+   * Запрещены ли сущности старты манёвров (LOC-7). Лок — обычный компонент
+   * мира: его ставит и снимает контент через Command Buffer, он попадает в
+   * снапшот на общих основаниях (SNAP-1), и своего состояния система не
+   * заводит. Идущий манёвр сюда не заходит вовсе — гейтится только старт.
+   */
+  private maneuversLocked(ctx: SystemContext, entity: EntityId): boolean {
+    if (this.lock === undefined || !ctx.has(entity, this.lock)) return false;
+    return (ctx.get(entity, this.lock, LOCK_MASK_FIELD) & this.maneuverLockMask) !== 0;
   }
 
   /**

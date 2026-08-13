@@ -74,6 +74,10 @@ export class TouchSource implements InputSource {
   private lastAim: number | null = null;
   /** Активен после первого касания (INP-5): до него источник «не появился». */
   private touched = false;
+  /** Зажатые кнопки действий: `pointerId` → имя действия (состояние жеста). */
+  private readonly heldButtons = new Map<number, string>();
+  /** Ответ `held()`; пересобирается на месте — выборка не аллоцирует. */
+  private readonly heldActions = new Set<string>();
 
   constructor(bindings: TouchBindings, viewport: () => TouchViewport) {
     this.bindings = bindings;
@@ -88,6 +92,17 @@ export class TouchSource implements InputSource {
     this.press = null;
     this.moveStick = null;
     this.aimStick = null;
+    this.heldButtons.clear();
+  }
+
+  /**
+   * Удержания тача — состояние жеста (INP-2): палец на кнопке действия держит
+   * её бит, пока не поднят; `pointercancel` идёт тем же путём, что `pointerup`.
+   */
+  held(): ReadonlySet<string> {
+    this.heldActions.clear();
+    for (const action of this.heldButtons.values()) this.heldActions.add(action);
+    return this.heldActions;
   }
 
   handlePointerDown(pointerId: number, clientX: number, clientY: number): void {
@@ -95,6 +110,7 @@ export class TouchSource implements InputSource {
     const vp = this.viewport();
     for (const button of this.bindings.buttons ?? []) {
       if (inZone(button.zone, clientX, clientY, vp)) {
+        this.heldButtons.set(pointerId, button.action);
         this.press?.(button.action);
         return;
       }
@@ -125,6 +141,7 @@ export class TouchSource implements InputSource {
   }
 
   handlePointerUp(pointerId: number): void {
+    this.heldButtons.delete(pointerId);
     if (this.moveStick?.pointerId === pointerId) this.moveStick = null;
     const aim = this.bindings.aimStick;
     if (aim !== undefined && this.aimStick?.pointerId === pointerId) {

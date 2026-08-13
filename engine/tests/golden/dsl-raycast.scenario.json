@@ -1,0 +1,268 @@
+{
+  "name": "dsl-raycast",
+  "seed": 20260811,
+  "ticks": 1,
+  "physics": {},
+  "scene": {
+    "components": [
+      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Velocity", "fields": { "x": "fixed", "y": "fixed" } },
+      {
+        "name": "Collider",
+        "fields": {
+          "blockMask": "i32",
+          "cliffRise": "i32",
+          "halfX": "fixed",
+          "halfY": "fixed",
+          "hitMask": "i32",
+          "layer": "i32",
+          "radius": "fixed",
+          "shape": "i32"
+        }
+      },
+      { "name": "Eye", "fields": { "range": "fixed" } }
+    ],
+    "prefabs": [
+      {
+        "name": "Watcher",
+        "components": {
+          "Position": { "x": 32768, "y": 32768 },
+          "Collider": {
+            "blockMask": 0,
+            "cliffRise": 0,
+            "halfX": 16384,
+            "halfY": 16384,
+            "hitMask": 0,
+            "layer": 2,
+            "radius": 16384,
+            "shape": 1
+          },
+          "Eye": { "range": 98304 }
+        },
+        "tags": ["blocksVision"]
+      },
+      {
+        "name": "Cover",
+        "components": {
+          "Position": { "x": 98304, "y": 32768 },
+          "Collider": {
+            "blockMask": 0,
+            "cliffRise": 0,
+            "halfX": 16384,
+            "halfY": 16384,
+            "hitMask": 0,
+            "layer": 1,
+            "radius": 16384,
+            "shape": 0
+          }
+        },
+        "tags": ["blocksVision"]
+      },
+      {
+        "name": "Debris",
+        "components": {
+          "Position": { "x": 65536, "y": 32768 },
+          "Collider": {
+            "blockMask": 0,
+            "cliffRise": 0,
+            "halfX": 8192,
+            "halfY": 8192,
+            "hitMask": 0,
+            "layer": 1,
+            "radius": 8192,
+            "shape": 0
+          }
+        }
+      }
+    ],
+    "systems": [
+      {
+        "name": "Scan",
+        "order": 10,
+        "query": { "all": ["Eye"] },
+        "as": "self",
+        "do": [
+          {
+            "let": {
+              "bindings": {
+                "from": {
+                  "vec": [
+                    { "getComponent": [{ "var": "self" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "self" }, "Position", "y"] }
+                  ]
+                }
+              },
+              "do": [
+                {
+                  "let": {
+                    "bindings": {
+                      "to": {
+                        "vec": [
+                          {
+                            "+": [
+                              { "getComponent": [{ "var": "self" }, "Position", "x"] },
+                              { "getComponent": [{ "var": "self" }, "Eye", "range"] }
+                            ]
+                          },
+                          { "getComponent": [{ "var": "self" }, "Position", "y"] }
+                        ]
+                      }
+                    },
+                    "do": [
+                      {
+                        "emitEvent": {
+                          "type": "AtCover",
+                          "data": {
+                            "entity": {
+                              "raycastEntity": [
+                                { "var": "from" },
+                                { "var": "to" },
+                                { "var": "self" },
+                                "blocksVision"
+                              ]
+                            },
+                            "hit": {
+                              "if": [
+                                {
+                                  "raycastHit": [
+                                    { "var": "from" },
+                                    { "var": "to" },
+                                    { "var": "self" },
+                                    "blocksVision"
+                                  ]
+                                },
+                                1,
+                                0
+                              ]
+                            },
+                            "x": {
+                              "vec.x": [
+                                {
+                                  "raycastPoint": [
+                                    { "var": "from" },
+                                    { "var": "to" },
+                                    { "var": "self" },
+                                    "blocksVision"
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "emitEvent": {
+                          "type": "AtAnyCollider",
+                          "data": {
+                            "entity": {
+                              "raycastEntity": [
+                                { "var": "from" },
+                                { "var": "to" },
+                                { "var": "self" }
+                              ]
+                            },
+                            "hit": {
+                              "if": [
+                                {
+                                  "raycastHit": [
+                                    { "var": "from" },
+                                    { "var": "to" },
+                                    { "var": "self" }
+                                  ]
+                                },
+                                1,
+                                0
+                              ]
+                            },
+                            "x": {
+                              "vec.x": [
+                                {
+                                  "raycastPoint": [
+                                    { "var": "from" },
+                                    { "var": "to" },
+                                    { "var": "self" }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "let": {
+              "bindings": { "from": { "vec": [32768, 98304] }, "to": { "vec": [229376, 98304] } },
+              "do": [
+                {
+                  "emitEvent": {
+                    "type": "AtCliff",
+                    "data": {
+                      "entity": {
+                        "raycastEntity": [{ "var": "from" }, { "var": "to" }, -1, "blocksVision"]
+                      },
+                      "hit": {
+                        "if": [
+                          { "raycastHit": [{ "var": "from" }, { "var": "to" }, -1, "blocksVision"] },
+                          1,
+                          0
+                        ]
+                      },
+                      "x": {
+                        "vec.x": [
+                          { "raycastPoint": [{ "var": "from" }, { "var": "to" }, -1, "blocksVision"] }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "let": {
+              "bindings": { "from": { "vec": [16384, 98304] }, "to": { "vec": [98304, 98304] } },
+              "do": [
+                {
+                  "emitEvent": {
+                    "type": "AtNothing",
+                    "data": {
+                      "entity": {
+                        "raycastEntity": [{ "var": "from" }, { "var": "to" }, -1, "blocksVision"]
+                      },
+                      "hit": {
+                        "if": [
+                          { "raycastHit": [{ "var": "from" }, { "var": "to" }, -1, "blocksVision"] },
+                          1,
+                          0
+                        ]
+                      },
+                      "x": {
+                        "vec.x": [
+                          { "raycastPoint": [{ "var": "from" }, { "var": "to" }, -1, "blocksVision"] }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "terrain": {
+      "width": 4,
+      "height": 2,
+      "tileSize": 65536,
+      "levels": ["0011", "0011"],
+      "flags": ["....", "...."]
+    },
+    "capacity": 16
+  },
+  "initial": [{ "prefab": "Watcher" }, { "prefab": "Cover" }, { "prefab": "Debris" }]
+}

@@ -200,8 +200,8 @@ describe('превью над сценой редактора: продюсер�
     source.apply(documents);
     expect(stage.activeProducer).toBe(source);
     expect(rig.scene.children).toHaveLength(documents.length);
-    const documentHolders = documents.map((doc) => rig.models.instanceFor(source.entityOf(doc.key)!)!.holder);
-    const collidingHolder = rig.models.instanceFor(hero)!.holder;
+    const documentKeys = documents.map((doc) => source.entityOf(doc.key)!);
+    const collidingInstance = rig.models.instanceFor(hero)!;
     expect(rig.requests).toContain(`model:${DOC_MODEL}`);
     expect(rig.requests).not.toContain(`model:${HERO_MODEL}`);
 
@@ -210,20 +210,27 @@ describe('превью над сценой редактора: продюсер�
     expect(stage.activeProducer).toBe(rig.remote);
     // В кадре одна сущность мира, а не она же плюс набор документа.
     expect(rig.scene.children).toHaveLength(1);
-    for (const holder of documentHolders) expect(holder.parent).toBeNull();
+    // Инстансы набора убраны штатным правилом REND-3: подсистема их больше не
+    // знает — узла сцены для проверки контракт не отдаёт (REND-3). ID героя из
+    // проверки исключён: его занимает сущность мира, и он проверяется ниже.
+    for (const entity of documentKeys) {
+      if (entity === hero) continue;
+      expect(rig.models.instanceFor(entity)).toBeNull();
+    }
 
     // Сущность мира с ID документного инстанса — другая запись манифеста, и
     // инстанс собран заново: без гашения набора инстанс документа достался бы
     // сущности мира молча, и в кадре под ней стояла бы документная модель.
-    const heroHolder = rig.models.instanceFor(hero)!.holder;
-    expect(heroHolder).not.toBe(collidingHolder);
+    const heroInstance = rig.models.instanceFor(hero)!;
+    expect(heroInstance).not.toBe(collidingInstance);
     expect(rig.requests).toContain(`model:${HERO_MODEL}`);
 
     // Выход из превью: набор документа снова наполняет presentation-состояние.
     source.apply(documents);
     expect(stage.activeProducer).toBe(source);
     expect(rig.scene.children).toHaveLength(documents.length);
-    expect(heroHolder.parent).toBeNull();
+    // Инстанс сущности мира убран, а на его номере снова документный — другой.
+    expect(rig.models.instanceFor(hero)).not.toBe(heroInstance);
 
     // Смена продюсера и кадры обратного канала не трогают (SHELL-6, ED-13):
     // из главного потока в воркер за весь сценарий ушёл только возврат буфера.

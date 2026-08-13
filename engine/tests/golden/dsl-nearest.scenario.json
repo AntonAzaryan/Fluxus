@@ -1,0 +1,76 @@
+{
+  "name": "dsl-nearest",
+  "seed": 20260811,
+  "ticks": 1,
+  "scene": {
+    "components": [
+      { "name": "Position", "fields": { "x": "fixed", "y": "fixed" } },
+      { "name": "Seeker", "fields": { "limit": "fixed" } },
+      { "name": "Mark", "fields": { "rank": "i32" } }
+    ],
+    "prefabs": [
+      {
+        "name": "Hunter",
+        "components": { "Position": { "x": 0, "y": 0 }, "Seeker": { "limit": 196608 } }
+      },
+      {
+        "name": "Target",
+        "components": { "Position": { "x": 0, "y": 0 }, "Mark": { "rank": 0 } }
+      }
+    ],
+    "systems": [
+      {
+        "name": "Nearest",
+        "order": 10,
+        "query": { "all": ["Seeker"] },
+        "as": "seeker",
+        "do": [
+          {
+            "let": {
+              "bindings": { "rank": 0 },
+              "do": [
+                {
+                  "forEach": {
+                    "query": { "all": ["Mark"] },
+                    "nearestTo": {
+                      "vec": [
+                        { "getComponent": [{ "var": "seeker" }, "Position", "x"] },
+                        { "getComponent": [{ "var": "seeker" }, "Position", "y"] }
+                      ]
+                    },
+                    "limit": { "getComponent": [{ "var": "seeker" }, "Seeker", "limit"] },
+                    "as": "target",
+                    "do": [
+                      { "set": { "name": "rank", "value": { "+": [{ "var": "rank" }, 1] } } },
+                      {
+                        "modifyComponent": {
+                          "entity": { "var": "target" },
+                          "component": "Mark",
+                          "values": { "rank": { "var": "rank" } }
+                        }
+                      },
+                      {
+                        "emitEvent": {
+                          "type": "Picked",
+                          "data": { "rank": { "var": "rank" }, "target": { "var": "target" } }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "capacity": 16
+  },
+  "initial": [
+    { "prefab": "Hunter" },
+    { "prefab": "Target", "overrides": { "Position": { "x": 131072 } } },
+    { "prefab": "Target", "overrides": { "Position": { "y": -131072 } } },
+    { "prefab": "Target", "overrides": { "Position": { "x": 65536 } } },
+    { "prefab": "Target", "overrides": { "Position": { "x": 327680 } } }
+  ]
+}

@@ -135,6 +135,7 @@
           "randomBelow",
           "removeComponent",
           "removeModifier",
+          "set",
           "spawnEntity"
         ]
       }
@@ -232,6 +233,9 @@
               "max",
               "min",
               "or",
+              "raycastEntity",
+              "raycastHit",
+              "raycastPoint",
               "sin",
               "sqrt",
               "tick",

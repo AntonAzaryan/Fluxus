@@ -24,7 +24,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^engine/core-ts/src' },
       to: {
-        path: '^(engine/(render|net|client|assets|hud)-ts|editor/|tools/|node_modules/)',
+        path: '^(engine/(render|net|client|assets|hud|bot)-ts|editor/|tools/|node_modules/)',
       },
     },
     {
@@ -58,7 +58,7 @@ module.exports = {
         'Рантайм (engine/*) не тянет authoring-конвейер Blender и редактор — ' +
         'соответствует authoringBoundary-тесту (BLND-7).',
       severity: 'error',
-      from: { path: '^engine/(core|net|render|assets|client|hud)-ts/src' },
+      from: { path: '^engine/(core|net|render|assets|client|hud|bot)-ts/src' },
       to: { path: '^(tools/blender-ts/|editor/)' },
     },
     {
@@ -67,7 +67,7 @@ module.exports = {
         'three — деталь слоя представления: рендерер, клиент, editor-ui и их ' +
         'тесты. Ядру, net, assets и editor-core он запрещён.',
       severity: 'error',
-      from: { path: '^(engine/(core|net|assets)-ts|editor/core-ts|tools/)' },
+      from: { path: '^(engine/(core|net|assets|bot)-ts|editor/core-ts|tools/)' },
       to: { path: '^node_modules/three/' },
     },
   ],

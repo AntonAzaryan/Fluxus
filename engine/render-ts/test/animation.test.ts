@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { AnimationController, resolveClip } from '../src/index.js';
+import { AnimationController, MixerAnimationBackend, resolveClip } from '../src/index.js';
 
 function makeClip(name: string, duration: number): THREE.AnimationClip {
   // Трек на реальную ноду 'b0' — чтобы PropertyBinding резолвился без warning.
@@ -37,8 +37,8 @@ function makeController(
   root.add(bone);
   const mixer = new THREE.AnimationMixer(root);
   const warnings: string[] = [];
-  const controller = new AnimationController(mixer, clips, mapping, {
-    warn: (message) => warnings.push(message),
+  const controller = new AnimationController(new MixerAnimationBackend(mixer, clips), mapping, {
+    warn: (message: string) => warnings.push(message),
   });
   return { controller, mixer, warnings };
 }

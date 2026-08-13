@@ -159,6 +159,15 @@ export default defineConfig([
     files: ['engine/integration-ts/**/*.ts', 'engine/tests/**/*.ts'],
     languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
+  /**
+   * Бот живёт в обоих окружениях из одного кода (`bot-player` BOT-4): entry
+   * браузерного воркера видит `self`, entry node — `worker_threads`, а сам
+   * хостинг рантайм-агностичен.
+   */
+  {
+    files: ['engine/bot-ts/**/*.ts'],
+    languageOptions: { globals: { ...globals.node, ...globals.worker } },
+  },
 
   /**
    * CLI-бины на `.mjs`: в tsconfig они не входят (пакеты включают только `src` и

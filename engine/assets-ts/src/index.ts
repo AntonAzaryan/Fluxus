@@ -36,6 +36,33 @@ export type {
 // декодированное изображение — вид текстурного ассета (ASSET-5)
 export type { DecodedImage } from './image.js';
 
+// выборка поверхности канонической модели (ASSET-11) — для walkable-вклада
+// поля высот и picking'а рендера (REND-9, REND-15)
+export type { ModelSurfaceHit, ModelSurfaceBounds, ModelSurfaceIndex } from './surface.js';
+export { modelSurfaceIndex } from './surface.js';
+
+// запечённые производные модели (ASSET-12) — bone-VAT, таблица клипов,
+// консервативные границы по клипам и маска видимости частей; и набор вариантов
+// скинов записи манифеста (ASSET-12 же, но производная ЗАПИСИ, а не модели)
+export type {
+  BakeParams,
+  BakedClip,
+  BakedDerivatives,
+  BakedLodLevel,
+  BakedPartVisibility,
+  BoneVat,
+  ModelDerivatives,
+} from './derivatives.js';
+export {
+  DEFAULT_BAKE_FPS,
+  DEFAULT_MAX_VAT_SIZE,
+  VAT_TEXELS_PER_BONE,
+  bakeDerivatives,
+  modelDerivatives,
+} from './derivatives.js';
+export type { BakeSkinParams, BakedSkinSet, BakedSkinSlot, SkinVariantSource } from './skinVariants.js';
+export { DEFAULT_SKIN_MAX_SIZE, bakeSkinVariants, skinVariantIndex } from './skinVariants.js';
+
 // манифест визуалов (ASSET-6)
 export type {
   VerticalOffset,
@@ -56,11 +83,16 @@ export type {
   CameraConfigDescription,
   ManifestValidation,
   ValidateManifestOptions,
+  // параметры яруса и LOD записи (ASSET-13)
+  VisualTier,
 } from './manifest.js';
 export {
   validateManifest,
   resolveSurfaceAlign,
   resolveVisual,
+  resolveVisualTier,
+  resolveLodThresholds,
+  DEFAULT_LOD_THRESHOLDS,
   visualKeys,
   cameraEffectParams,
   cameraEffectParamInRange,

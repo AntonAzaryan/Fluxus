@@ -31,6 +31,7 @@
 import * as THREE from 'three';
 import {
   AnimationController,
+  MixerAnimationBackend,
   applySkin,
   buildSharedModel,
   createModelInstance,
@@ -128,9 +129,11 @@ export function createThreePortraitStage(options: PortraitStageOptions): Portrai
       model.dispose();
       model = null;
     }
-    // Геометрия THREE-сборки принадлежит стенду (см. шапку) — освобождаем.
+    // Геометрия и материалы THREE-сборки принадлежат стенду (см. шапку) —
+    // освобождаем: у арены их держит кэш подсистемы, у стенда — он сам.
     if (shared !== null) {
       for (const mesh of shared.meshes) mesh.geometry.dispose();
+      for (const material of shared.materials) material.dispose();
       shared = null;
     }
   };
@@ -161,17 +164,21 @@ export function createThreePortraitStage(options: PortraitStageOptions): Portrai
       model = instance;
       // Текстуры скина — через ОБЩИЙ asset-сервис (ASSET-2): уже загруженное
       // ареной приходит из общего кэша тем же handle, повторной загрузки нет.
+      // Материалы стенд берёт себе сразу (REND-6): сборка у него своя и
+      // одноинстансная, разделять их не с кем.
       skinApp = applySkin(
-        instance.textureTargets,
+        instance.ownTextureTargets(),
         skinTextureSources(data, visual, visual.defaultSkin),
         options.assets,
       );
       // Idle-клип — из таблицы манифеста, тем же контроллером, что у арены
       // (REND-4): запись без 'idle' оставляет позу покоя, без предупреждений;
       // запись, не резолвящаяся в клип, жалуется в сток сборки (options.warn).
-      controller = new AnimationController(instance.mixer, shared.clips, visual.animations ?? {}, {
-        warn: options.warn,
-      });
+      controller = new AnimationController(
+        new MixerAnimationBackend(instance.mixer, shared.clips),
+        visual.animations ?? {},
+        { warn: options.warn },
+      );
       controller.setState(STAND_STATE);
       frameModel(instance);
       ensureLoop();

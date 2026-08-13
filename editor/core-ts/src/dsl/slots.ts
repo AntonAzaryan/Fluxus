@@ -65,6 +65,13 @@ export type NameSource =
   | 'componentField'
   /** Компоненты названного prefab'а: с ними сверяет ключи `checkOverrides` (CMD-6). */
   | 'prefabComponent'
+  /**
+   * Имя изменяемой привязки `let` (ACT-4): ровно то, что `checkAction` сверяет
+   * с областью видимости — и тем же способом, каким её считает пикер `var`
+   * (`scope.ts`). Вид связывания при этом остаётся за ядром: имя, связанное
+   * `as`, оно отвергает само.
+   */
+  | 'variable'
   /** Ядро содержимого не сверяет ни с чем: кандидатов нет, есть свободный ввод. */
   | 'free';
 
@@ -91,6 +98,10 @@ export const CONVENTION_SLOTS: readonly ConventionSlot[] = Object.freeze([
   Object.freeze({ name: 'entity', kind: 'expression' } as const),
   Object.freeze({ name: 'cond', kind: 'expression' } as const),
   Object.freeze({ name: 'bound', kind: 'expression' } as const),
+  Object.freeze({ name: 'value', kind: 'expression' } as const),
+  Object.freeze({ name: 'nearestTo', kind: 'expression' } as const),
+  Object.freeze({ name: 'limit', kind: 'expression' } as const),
+  Object.freeze({ name: 'name', kind: 'literal', names: 'variable' } as const),
   Object.freeze({ name: 'query', kind: 'query' } as const),
   Object.freeze({ name: 'overrides', kind: 'overrides', names: 'prefabComponent' } as const),
   Object.freeze({ name: 'component', kind: 'literal', names: 'component' } as const),

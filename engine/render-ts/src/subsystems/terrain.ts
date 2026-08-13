@@ -175,7 +175,12 @@ export function buildFloorGeometry(
   };
 }
 
-/** Вершина на поле: позиция и нормаль читаются в клетке-владельце (REND-9). */
+/**
+ * Вершина на поле: позиция и нормаль читаются в клетке-владельце (REND-9).
+ * Выборка — ТЕРРЕЙН-ФОРМА: walkable-поверхность в геометрию террейна не
+ * попадает — настил рисует меш самой декорации, и подклетки пола под ним были
+ * бы вторым изображением той же поверхности (REND-9).
+ */
 function pushSurfaceVertex(
   positions: number[],
   normals: number[],
@@ -186,7 +191,7 @@ function pushSurfaceVertex(
   wy: number,
   scratch: SurfaceNormal,
 ): void {
-  positions.push(wx, wy, surface.heightInCell(cellX, cellY, wx, wy));
+  positions.push(wx, wy, surface.terrainFormHeightInCell(cellX, cellY, wx, wy));
   pushSurfaceNormal(normals, surface, cellX, cellY, wx, wy, scratch);
 }
 
@@ -199,7 +204,7 @@ function pushSurfaceNormal(
   wy: number,
   scratch: SurfaceNormal,
 ): void {
-  surface.normalInCell(cellX, cellY, wx, wy, scratch);
+  surface.terrainFormNormalInCell(cellX, cellY, wx, wy, scratch);
   normals.push(scratch.x, scratch.y, scratch.z);
 }
 
@@ -364,7 +369,11 @@ export function buildWallGeometry(
   return { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
 }
 
-/** Высота поля в клетке стороны отрезка; без поля — плоская ступень уровня. */
+/**
+ * Высота поля в клетке стороны отрезка; без поля — плоская ступень уровня.
+ * Террейн-форма, как у пола: кромка стенки идёт под кромкой пола, а walkable
+ * в геометрию террейна не входит (REND-9).
+ */
 function sampleWallSide(
   grid: TerrainGrid,
   heightStep: number,
@@ -374,7 +383,7 @@ function sampleWallSide(
   wy: number,
 ): number {
   if (surface === undefined) return grid.levels[cell]! * heightStep;
-  return surface.heightInCell(cell % grid.width, Math.floor(cell / grid.width), wx, wy);
+  return surface.terrainFormHeightInCell(cell % grid.width, Math.floor(cell / grid.width), wx, wy);
 }
 
 /**
@@ -473,7 +482,10 @@ export class TerrainSubsystem implements RenderSubsystem {
     // правкой документа (ED-10, ED-11); в первом случае меняется вся, во втором
     // — перечисленные клетки, и пересобираются только их чанки.
     this.surfaceSource?.init(ctx);
-    this.surfaceSource?.onChange((cells) => {
+    this.surfaceSource?.onChange((cells, walkableOnly) => {
+      // Walkable-вклад геометрию террейна не меняет (REND-9): настил рисует меш
+      // декорации, и пересборка квадов под его клетками дала бы те же квады.
+      if (walkableOnly === true) return;
       if (cells === null) this.markAllChunks();
       else for (const cell of cells) this.markShapeCell(cell);
     });
