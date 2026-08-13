@@ -30,6 +30,6 @@
 
 ## 5. Ворота
 
-- [ ] 5.1 `openspec validate demo-render-hud --strict`, `npm run spec-graph -- check` зелёные
-- [ ] 5.2 `npm run check` из корня зелёный; golden-эталоны и `engine/schemas/` без диффа; `npm run demo:build -w @game-mvp/client` зелёный
+- [x] 5.1 `openspec validate demo-render-hud --strict`, `npm run spec-graph -- check` зелёные
+- [x] 5.2 `npm run check` из корня зелёный; golden-эталоны и `engine/schemas/` без диффа; `npm run demo:build -w @game-mvp/client` зелёный
 - [x] 5.3 Headless-прогон демо-сборки: статы и flightPhase доезжают до `HudDeliveredState`/`TickView` в интеграционном тесте
