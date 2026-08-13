@@ -17,12 +17,15 @@ import {
   HudOverlayHost,
   HudRegistry,
   HudRuntime,
-  abilityBarKind,
+  cooldownsKind,
   createPortraitKind,
+  deathsKind,
+  hpBarKind,
   matchStatusKind,
   minimapEntitiesSelector,
   minimapFloorSelector,
   minimapWidgetKind,
+  runtimeKind,
   type HudCameraContract,
   type HudComposition,
   type HudControlChannel,
@@ -31,6 +34,7 @@ import {
   type HudIconSource,
   type MinimapTerrainSource,
 } from '@game-mvp/hud';
+import { COOLDOWN_ABILITIES, STATS } from './sim.js';
 
 /** Что даёт оболочка этой сборки: от этого зависит состав HUD (SHELL-8). */
 export interface DemoShellCapabilities {
@@ -41,7 +45,20 @@ export interface DemoShellCapabilities {
    * стилем, а не появляются вовсе (design D5).
    */
   readonly controls: boolean;
+  /**
+   * Длительность тика в миллисекундах — из handshake (SHELL-5). Оверлей
+   * кулдауна переводит по ней доставленные ТИКИ в секунды (HUD-8): сам он не
+   * тикает и своих часов не заводит.
+   */
+  readonly tickMs: number;
 }
+
+/** Иконки способностей демо — asset ID дерева контента (ASSET-2), не URL. */
+const ABILITY_ICONS: Readonly<Record<string, string>> = {
+  cast: 'visuals/icons/cast.svg',
+  dodge: 'visuals/icons/dodge.svg',
+  jump: 'visuals/icons/jump.svg',
+};
 
 /**
  * Композиция HUD демо — значение, а не код (HUD-4): виджеты по зонам, все
@@ -68,23 +85,45 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
           ? { actions: { pause: 'match.pause', resume: 'match.resume' } }
           : {}),
       },
+      // Рантайм-панель (design D5): кадры главного потока, тик доставки и число
+      // доставленных сущностей. Помощь по управлению уехала в README демо —
+      // статический блок поверх вьюпорта на её месте больше не висит.
       {
-        widget: 'ability-bar',
+        widget: 'runtime',
+        zone: 'top-left',
+        bindings: { entities: 'entities' },
+      },
+      // Счётчики смертей по слотам игроков (HUD-8): пока геймплейная система
+      // счёт не ведёт, строки показывают прочерк — «нет данных», а не 0.
+      {
+        widget: 'deaths',
+        zone: 'top',
+        params: { slotStat: STATS.slot, deathsStat: STATS.deaths },
+        bindings: { entities: 'entities' },
+      },
+      {
+        widget: 'cooldowns',
         zone: 'bottom',
         params: {
-          // Имена семантических действий словаря биндингов демо (INP-4, sim.ts).
-          abilities: ['cast', 'dodge', 'jump'],
-          icons: {
-            cast: 'visuals/icons/cast.svg',
-            dodge: 'visuals/icons/dodge.svg',
-            jump: 'visuals/icons/jump.svg',
-          },
+          // Имена семантических действий словаря биндингов демо (INP-4, sim.ts)
+          // плюс имена статов кулдауна — биндинг виджета на доставку (HUD-8).
+          abilities: COOLDOWN_ABILITIES.map((ability) => ({
+            action: ability,
+            icon: ABILITY_ICONS[ability] ?? '',
+            stat: STATS.cooldown(ability),
+            maxStat: STATS.cooldownMax(ability),
+          })),
+          // Два ряда снизу по центру (design D5).
+          perRow: 2,
+          tickMs: capabilities.tickMs,
         },
+        bindings: { entity: 'hero.entity' },
         actions: { cast: 'hero.cast', dodge: 'hero.dodge', jump: 'hero.jump' },
       },
       {
+        // Миникарта — слева, под рантайм-панелью (design D5).
         widget: 'minimap',
-        zone: 'bottom-right',
+        zone: 'left',
         params: {
           width: 180,
           height: 180,
@@ -118,10 +157,19 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
         actions: { pan: 'camera.pan' },
       },
       {
+        // Портрет −15% от прежних 144 px: размер — параметр композиции, а не
+        // константа виджета (design D5).
         widget: 'portrait',
         zone: 'bottom-left',
-        params: { size: 144 },
+        params: { size: 122 },
         bindings: { hero: 'hero.entity' },
+      },
+      {
+        // Полоса здоровья под портретом — та же зона, следующая запись.
+        widget: 'hp-bar',
+        zone: 'bottom-left',
+        params: { stat: STATS.hp, maxStat: STATS.hpMax },
+        bindings: { entity: 'hero.entity' },
       },
     ],
   };
@@ -185,17 +233,30 @@ export interface DemoHud {
 // (input/touch.ts), и без него тап по кнопке HUD дошёл бы до стиковых зон.
 const INTERCEPTED_POINTER_EVENTS = ['mousedown', 'pointerdown', 'click', 'wheel', 'touchstart'] as const;
 
-/** Сборка HUD демо: реестры, оверлей-хост, фасад действий и исполнитель (HUD-4). */
-export function createDemoHud(options: DemoHudOptions): DemoHud {
+/**
+ * Реестры демо: виды виджетов, селекторы над доставленным состоянием и
+ * действия (HUD-4). Отдельно от сборки HUD, потому что композиция резолвится
+ * против РЕЕСТРОВ, а не против DOM: так «композиция демо валидна» проверяется
+ * без браузера — тем же резолвом, который выполнит `apply`.
+ */
+export function createDemoHudRegistry(
+  options: Pick<DemoHudOptions, 'assets' | 'visuals' | 'terrain'>,
+): HudRegistry {
   const registry = new HudRegistry();
   registry.registerWidget(matchStatusKind);
-  registry.registerWidget(abilityBarKind(iconSource));
+  registry.registerWidget(cooldownsKind(iconSource));
   registry.registerWidget(minimapWidgetKind({ terrain: options.terrain }));
   registry.registerWidget(createPortraitKind({ assets: options.assets, visuals: options.visuals }));
+  registry.registerWidget(hpBarKind);
+  registry.registerWidget(deathsKind);
+  registry.registerWidget(runtimeKind);
 
   registry.registerSelector('hero.entity', heroEntitySelector);
   registry.registerSelector('minimap.entities', minimapEntitiesSelector);
   registry.registerSelector('minimap.floor', minimapFloorSelector);
+  // Все доставленные сущности: вход счётчиков смертей и рантайм-панели.
+  // Скрытых туманом здесь нет по построению (HUD-1).
+  registry.registerSelector('entities', (state: HudDeliveredState) => state.entities);
 
   // Мировые действия — имена словаря биндингов (INP-4): в воркер уходит тот же
   // канонический ввод, что от назначенной клавиши (HUD-2).
@@ -216,6 +277,12 @@ export function createDemoHud(options: DemoHudOptions): DemoHud {
       }
     },
   });
+  return registry;
+}
+
+/** Сборка HUD демо: реестры, оверлей-хост, фасад действий и исполнитель (HUD-4). */
+export function createDemoHud(options: DemoHudOptions): DemoHud {
+  const registry = createDemoHudRegistry(options);
 
   const host = new HudOverlayHost(options.container);
   for (const type of INTERCEPTED_POINTER_EVENTS) {

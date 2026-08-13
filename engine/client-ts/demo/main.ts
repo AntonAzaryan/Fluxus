@@ -640,7 +640,14 @@ async function main(): Promise<void> {
       // Состав HUD — от того, что даёт оболочка (design D5): пауза и перемотка
       // существуют только у локальной, и режим приезжает в handshake (SHELL-8),
       // а не выводится наблюдением за потоком доставок.
-      hud.runtime.apply(demoHudComposition({ controls: hello.mode === 'local' }));
+      hud.runtime.apply(
+        demoHudComposition({
+          controls: hello.mode === 'local',
+          // Длительность тика — из того же handshake: по ней кулдаун переводит
+          // доставленные тики в секунды (SHELL-5, HUD-8).
+          tickMs: hello.tickSeconds * 1000,
+        }),
+      );
       hudRoot = hud.root;
 
       // Отладочная ручка ручного прогона (задача 5.3): read-only точка

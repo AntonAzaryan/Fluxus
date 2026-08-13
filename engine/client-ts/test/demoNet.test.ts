@@ -367,10 +367,13 @@ describe('режим страницы выбирается при старте (
   });
 });
 
+/** Длительность тика — та, что приезжает handshake'ом (SHELL-5). */
+const TICK_MS = 1000 / 60;
+
 describe('HUD деградирует по контракту оболочки (D5)', () => {
   it('сетевая сборка не заводит слотов паузы у статуса матча', () => {
-    const local = demoHudComposition({ controls: true }).entries[0]!;
-    const network = demoHudComposition({ controls: false }).entries[0]!;
+    const local = demoHudComposition({ controls: true, tickMs: TICK_MS }).entries[0]!;
+    const network = demoHudComposition({ controls: false, tickMs: TICK_MS }).entries[0]!;
 
     expect(local.widget).toBe('match-status');
     expect(local.actions).toEqual({ pause: 'match.pause', resume: 'match.resume' });
@@ -382,8 +385,8 @@ describe('HUD деградирует по контракту оболочки (D
     expect(network.actions).toBeUndefined();
     expect(network.params).toEqual({ controls: false });
     // Прочие виджеты не различаются: им всё равно, кто тикает (SHELL-2..5).
-    expect(demoHudComposition({ controls: false }).entries.slice(1)).toEqual(
-      demoHudComposition({ controls: true }).entries.slice(1),
+    expect(demoHudComposition({ controls: false, tickMs: TICK_MS }).entries.slice(1)).toEqual(
+      demoHudComposition({ controls: true, tickMs: TICK_MS }).entries.slice(1),
     );
   });
 });

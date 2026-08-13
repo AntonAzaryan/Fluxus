@@ -18,3 +18,21 @@ export {
   ABILITY_BAR_WIDGET,
   abilityBarKind,
 } from './abilities.js';
+// Виджеты на доставленных статах (HUD-8) и на величинах главного потока.
+export { HP_BAR_EMPTY_CLASS, HP_BAR_ENTITY_SLOT, HP_BAR_WIDGET, hpBarKind } from './hpBar.js';
+export {
+  COOLDOWNS_ABILITIES_PARAM,
+  COOLDOWNS_ENTITY_SLOT,
+  COOLDOWNS_WIDGET,
+  cooldownModel,
+  cooldownsKind,
+} from './cooldowns.js';
+export type { CooldownModel } from './cooldowns.js';
+export { DEATHS_ENTITIES_SLOT, DEATHS_WIDGET, deathsKind, deathsRows } from './deaths.js';
+export type { DeathsRow } from './deaths.js';
+export {
+  FrameRateMeter,
+  RUNTIME_ENTITIES_SLOT,
+  RUNTIME_WIDGET,
+  runtimeKind,
+} from './runtimePanel.js';
