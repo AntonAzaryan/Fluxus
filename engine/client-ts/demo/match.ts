@@ -15,7 +15,7 @@ import { contentPack, type LoadedContentPack, type MatchConfig } from '@game-mvp
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 
-/** Документ матча (`serialization` SER-9) в объёме, который читает эта сборка. */
+/** Документ матча (`netcode-transport` NTR-14) в объёме, который читает эта сборка. */
 interface DemoMatchDoc {
   readonly name: string;
   readonly buildId: string;
