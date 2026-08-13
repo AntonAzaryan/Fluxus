@@ -56,6 +56,8 @@ export interface DemoShellCapabilities {
 /** Иконки способностей демо — asset ID дерева контента (ASSET-2), не URL. */
 const ABILITY_ICONS: Readonly<Record<string, string>> = {
   cast: 'visuals/icons/cast.svg',
+  shield: 'visuals/icons/shield.svg',
+  catch: 'visuals/icons/catch.svg',
   dodge: 'visuals/icons/dodge.svg',
   jump: 'visuals/icons/jump.svg',
 };
@@ -113,12 +115,12 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
             stat: STATS.cooldown(ability),
             maxStat: STATS.cooldownMax(ability),
           })),
-          // Два ряда снизу по центру (design D5).
-          perRow: 2,
+          // Три кнопки боя в один ряд снизу по центру (design D5).
+          perRow: 3,
           tickMs: capabilities.tickMs,
         },
         bindings: { entity: 'hero.entity' },
-        actions: { cast: 'hero.cast', dodge: 'hero.dodge', jump: 'hero.jump' },
+        actions: { cast: 'hero.cast', shield: 'hero.shield', catch: 'hero.catch' },
       },
       {
         // Миникарта — слева, под рантайм-панелью (design D5).
@@ -140,6 +142,14 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
                 color: { mode: 'fixed', color: '#ff7a45' },
                 size: 7,
                 priority: 5,
+              },
+              // Зона перехвата живёт доли секунды и на карте только мешала бы
+              // читать позиции — её маркер нарочно самый мелкий и тусклый.
+              CatchZone: {
+                renderer: 'square',
+                color: { mode: 'fixed', color: '#8affc8' },
+                size: 4,
+                priority: 1,
               },
             },
             unknownKind: {
@@ -261,6 +271,8 @@ export function createDemoHudRegistry(
   // Мировые действия — имена словаря биндингов (INP-4): в воркер уходит тот же
   // канонический ввод, что от назначенной клавиши (HUD-2).
   registry.registerAction('hero.cast', { target: 'world', action: 'cast' });
+  registry.registerAction('hero.shield', { target: 'world', action: 'shield' });
+  registry.registerAction('hero.catch', { target: 'world', action: 'catch' });
   registry.registerAction('hero.dodge', { target: 'world', action: 'dodge' });
   registry.registerAction('hero.jump', { target: 'world', action: 'jump' });
   // Команды машины состояний мира — обратным каналом (SHELL-6, WSM-1); паузу

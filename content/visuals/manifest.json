@@ -98,6 +98,20 @@
         "radius": 0.85,
         "alpha": 0.3,
         "height": 0.9
+      },
+      "Charging": {
+        "primitive": "sphere",
+        "color": "#ffb14a",
+        "radius": 0.45,
+        "alpha": 0.35,
+        "height": 1
+      },
+      "Carrying": {
+        "primitive": "sphere",
+        "color": "#8affc8",
+        "radius": 0.4,
+        "alpha": 0.4,
+        "height": 1
       }
     },
     "byEvent": {
@@ -105,12 +119,45 @@
         "primitive": "sphere",
         "color": "#ff5a2a",
         "radius": 0.3,
-        "radiusTo": 2.2,
+        "radiusTo": 2.5,
         "alpha": 0.55,
         "alphaTo": 0,
         "durationMs": 420,
         "curve": "easeOut",
         "height": 0.4
+      },
+      "FireballHit": {
+        "primitive": "sphere",
+        "color": "#ffb14a",
+        "radius": 0.2,
+        "radiusTo": 0.9,
+        "alpha": 0.7,
+        "alphaTo": 0,
+        "durationMs": 220,
+        "curve": "easeOut",
+        "height": 0.6
+      },
+      "FireballRicochet": {
+        "primitive": "sphere",
+        "color": "#9fd0ff",
+        "radius": 0.15,
+        "radiusTo": 0.7,
+        "alpha": 0.7,
+        "alphaTo": 0,
+        "durationMs": 200,
+        "curve": "easeOut",
+        "height": 0.6
+      },
+      "CaughtFireball": {
+        "primitive": "sphere",
+        "color": "#8affc8",
+        "radius": 0.9,
+        "radiusTo": 0.2,
+        "alpha": 0.6,
+        "alphaTo": 0,
+        "durationMs": 260,
+        "curve": "easeOut",
+        "height": 0.7
       }
     }
   },
@@ -124,9 +171,9 @@
     "pitch": 0.8726646259971648,
     "yaw": 1.5707963267948966,
     "fovDeg": 45,
-    "distance": 16,
+    "distance": 22,
     "minDistance": 8,
-    "maxDistance": 28,
+    "maxDistance": 44,
     "zoomStep": 1.15,
     "followSmoothing": 6,
     "zoomSmoothing": 8,

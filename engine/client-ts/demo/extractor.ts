@@ -16,10 +16,10 @@ import { COOLDOWN_ABILITIES, FIREBALL_LIFETIME_TICKS, STATE_COMPONENTS, STATS } 
  * списке плюс биндинг в композиции HUD, и ни экстрактор, ни кодек, ни виджет
  * при этом не правятся.
  *
- * Компоненты здоровья, счёта и кулдаунов сцена демо пока не содержит — их
- * добавит геймплейная фаза. Запись без компонента-источника молча не едет
- * (`hasComponent` мира отвечает «нет»), и виджет показывает пустое состояние —
- * ровно тот сценарий, который HUD-8 и описывает.
+ * Запись без компонента-источника молча не едет (`hasComponent` мира отвечает
+ * «нет»), и виджет показывает пустое состояние — ровно тот сценарий, который
+ * HUD-8 и описывает: у снаряда нет ни здоровья, ни кулдаунов, и ни одного
+ * выдуманного нуля к нему не приезжает.
  */
 export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   { name: STATS.slot, component: 'Player', field: 'slot' },
@@ -36,7 +36,7 @@ export function createDemoExtractor(grid: TerrainGrid | undefined): Extractor {
   return new Extractor({
     // Ключи манифеста визуалов = теги prefab'ов сцены (ASSET-6). Снаряд
     // рисуется записью эффекта, а не моделью, — ключ ему нужен тот же.
-    kindOf: kindByTags(['Hero', 'Fireball']),
+    kindOf: kindByTags(['Hero', 'Fireball', 'CatchZone']),
     ...(grid !== undefined ? { terrainGrid: grid } : {}),
     // Доворот торса (REND-5) — по направлению каста: одно каноническое событие
     // сцены несёт и факт каста, и `dirX`/`dirY`.
