@@ -53,6 +53,14 @@ export const ACTION_BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
  */
 export const STATE_COMPONENTS: readonly string[] = Object.freeze(['Falling']);
 
+/**
+ * Полный путь снаряда в тиках — поле `Lifetime.ticks` prefab'а `Fireball`
+ * сцены демо. Знание СБОРКИ, а не ядра: из него Extractor выводит фазу полёта
+ * (REND-12), а рендер по ней рисует полётную дугу. Расходится с prefab'ом —
+ * расходится только дуга: симуляция этого числа здесь не читает.
+ */
+export const FIREBALL_LIFETIME_TICKS = 50;
+
 // ------------------------------------------------------------------- сборка
 
 export interface DemoSimulation {

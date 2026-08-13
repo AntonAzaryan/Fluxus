@@ -59,6 +59,7 @@ function syntheticTick(overrides: Partial<ExtractedTick> = {}): ExtractedTick {
     aimYaw: zeros((n) => new Float32Array(n)),
     motion: zeros((n) => new Uint8Array(n)),
     motionPhase: zeros((n) => new Float32Array(n)),
+    flightPhase: zeros((n) => new Float32Array(n)),
     events: [],
     floorDelta: [],
     kindTable: [],
@@ -130,12 +131,18 @@ describe('кодек: roundtrip эквивалентен прямому вызо
       count: 3,
       motion: new Uint8Array([0, 2, 3]),
       motionPhase: new Float32Array([Number.NaN, 0.25, 0.75]),
+      flightPhase: new Float32Array([Number.NaN, 0.5, 1]),
     });
     const wire = readTick(frameOf(ext), [], []);
     expect([...wire.motion]).toEqual([0, 2, 3]);
     expect(wire.motionPhase[0]).toBeNaN();
     expect(wire.motionPhase[1]).toBeCloseTo(0.25, 6);
     expect(wire.motionPhase[2]).toBeCloseTo(0.75, 6);
+    // Фаза полёта — своя колонка (REND-12): «не летит» едет как NaN, а не как
+    // ноль, иначе рендер нарисовал бы начало дуги каждой стоящей сущности.
+    expect(wire.flightPhase[0]).toBeNaN();
+    expect(wire.flightPhase[1]).toBeCloseTo(0.5, 6);
+    expect(wire.flightPhase[2]).toBeCloseTo(1, 6);
   });
 
   it('чужая версия раскладки — ошибка, а не мусор в кадре', () => {

@@ -425,6 +425,7 @@ describe('EntityView.states: зеркалирование битов состо�
       aimYaw: new Float32Array([Number.NaN]),
       motion: new Uint8Array([0]),
       motionPhase: new Float32Array([Number.NaN]),
+      flightPhase: new Float32Array([Number.NaN]),
       events: [],
       floorDelta: [],
       kindTable: [],

@@ -107,6 +107,13 @@ export interface ExtractedTick {
    * в манёвр, и главному потоку не от чего было бы её отсчитать (REND-12).
    */
   motionPhase: Float32Array;
+  /**
+   * Фаза полёта — доля пройденного пути `[0..1]`; `NaN` — сущность не летит
+   * (или сборка фазы не объявила). Вход полётной дуги (REND-12): считается
+   * здесь, в воркере, потому что источник — компонент мира, а рендер фазу
+   * MUST NOT вычислять сам.
+   */
+  flightPhase: Float32Array;
   /** События этого тика (копии, OBS-3), с номером тика — для reliable-доставки (SHELL-4). */
   events: readonly RenderEvent[];
   /** Пары (клетка, бит) реально изменившихся клеток пола (TERR-6 → REND-7). ArrayLike — читатель канала подставляет view в буфер доставки. */
@@ -143,6 +150,25 @@ export interface ExtractorConfig {
     readonly stateComponent?: string;
     readonly configComponent?: string;
   };
+  /**
+   * Источник фазы полёта (REND-12) — конфигурация СБОРКИ, а не конвенция ядра:
+   * какой компонент считает оставшийся путь снаряда и сколько его всего.
+   * Компонента у сущности нет — фазы нет (`NaN`), и полётной дуги не будет.
+   *
+   * Поле названо оставшимся ресурсом, а не пройденным, потому что именно так
+   * его ведут системы контента (счётчик вниз до нуля); фаза — производная
+   * `(total − left) / total`.
+   */
+  readonly flight?: FlightPhaseSource;
+}
+
+/** Откуда сборка берёт фазу полёта (REND-12): компонент, поле и полный путь. */
+export interface FlightPhaseSource {
+  readonly component: string;
+  /** Поле с ОСТАВШИМИСЯ единицами пути (тиками жизни снаряда). */
+  readonly field: string;
+  /** Полное число тех же единиц — знаменатель фазы; <= 0 отключает фазу. */
+  readonly total: number;
 }
 
 const EMPTY_EVENTS: readonly RenderEvent[] = [];
@@ -163,6 +189,7 @@ export class Extractor {
   private readonly stateComponents: readonly string[];
   private readonly locomotionState: string;
   private readonly locomotionConfig: string;
+  private readonly flight: FlightPhaseSource | undefined;
   private readonly grid: TerrainGrid | undefined;
   private readonly mirror: FloorMirror | null;
 
@@ -198,6 +225,7 @@ export class Extractor {
       config.locomotion?.stateComponent ?? DEFAULT_LOCOMOTION_STATE_COMPONENT;
     this.locomotionConfig =
       config.locomotion?.configComponent ?? DEFAULT_LOCOMOTION_CONFIG_COMPONENT;
+    this.flight = config.flight;
     this.grid = config.terrainGrid;
     this.mirror = this.grid === undefined ? null : new FloorMirror(this.grid);
     this.out = {
@@ -217,6 +245,7 @@ export class Extractor {
       aimYaw: new Float32Array(0),
       motion: new Uint8Array(0),
       motionPhase: new Float32Array(0),
+      flightPhase: new Float32Array(0),
       events: EMPTY_EVENTS,
       floorDelta: EMPTY_DELTA,
       kindTable: this.kindTable,
@@ -314,6 +343,7 @@ export class Extractor {
       out.flags[count] = flags;
       out.facingYaw[count] = yaw;
       this.readMotion(state, entity, count);
+      out.flightPhase[count] = this.readFlightPhase(state, entity);
 
       const aim = this.aim.get(entity);
       out.aimYaw[count] =
@@ -345,6 +375,21 @@ export class Extractor {
     out.aimYaw = new Float32Array(capacity);
     out.motion = new Uint8Array(capacity);
     out.motionPhase = new Float32Array(capacity);
+    out.flightPhase = new Float32Array(capacity);
+  }
+
+  /**
+   * Фаза полёта сущности (REND-12): `(total − оставшееся) / total` по записи
+   * конфигурации сборки. Нет записи, нет компонента или вырожденный полный путь
+   * — `NaN`: «фазы нет», и рендер дуги не нарисует.
+   */
+  private readFlightPhase(state: WorldState, entity: EntityId): number {
+    const flight = this.flight;
+    if (flight === undefined || flight.total <= 0) return Number.NaN;
+    if (!world.hasComponent(state, entity, flight.component)) return Number.NaN;
+    const left = world.getField(state, entity, flight.component, flight.field);
+    const phase = (flight.total - left) / flight.total;
+    return phase < 0 ? 0 : phase > 1 ? 1 : phase;
   }
 
   /**

@@ -42,6 +42,8 @@ interface EntityRecord extends EntityView {
   motion: number;
   prevMotionPhase: number;
   currMotionPhase: number;
+  /** Фаза полёта последнего доставленного тика; `NaN` — сущность не летит (REND-12). */
+  flightPhase: number;
 }
 
 export interface ViewBufferConfig {
@@ -180,6 +182,7 @@ export class ViewBuffer {
           motion: LOCOMOTION_NORMAL,
           prevMotionPhase: phase,
           currMotionPhase: phase,
+          flightPhase: Number.NaN,
         };
         this.records.set(id, record);
       } else if (snapAll) {
@@ -209,6 +212,10 @@ export class ViewBuffer {
       }
 
       record.motion = ext.motion[i]!;
+      // Фаза полёта — величина последнего доставленного тика, а не пара для
+      // интерполяции (REND-12): дуга производна от неё, и conflation (SHELL-4)
+      // ей не вредит — пропущенный тик просто не был показан.
+      record.flightPhase = ext.flightPhase[i]!;
       record.moving = (ext.flags[i]! & ENTITY_MOVING) !== 0;
       record.levelOverride = (ext.flags[i]! & ENTITY_LEVEL_OVERRIDE) !== 0;
       record.states = ext.flags[i]! >>> STATE_BITS_SHIFT;

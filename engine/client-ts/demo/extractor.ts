@@ -8,12 +8,12 @@
  */
 import type { TerrainGrid } from '@game-mvp/core';
 import { Extractor, kindByTags } from '@game-mvp/render';
-import { STATE_COMPONENTS } from './sim.js';
+import { FIREBALL_LIFETIME_TICKS, STATE_COMPONENTS } from './sim.js';
 
 export function createDemoExtractor(grid: TerrainGrid | undefined): Extractor {
   return new Extractor({
-    // Ключи манифеста визуалов = теги prefab'ов сцены (ASSET-6). У Fireball
-    // записи в манифесте нет НАМЕРЕННО: частицы отложены, снаряд — заглушка.
+    // Ключи манифеста визуалов = теги prefab'ов сцены (ASSET-6). Снаряд
+    // рисуется записью эффекта, а не моделью, — ключ ему нужен тот же.
     kindOf: kindByTags(['Hero', 'Fireball']),
     ...(grid !== undefined ? { terrainGrid: grid } : {}),
     // Доворот торса (REND-5) — по направлению каста: одно каноническое событие
@@ -22,5 +22,9 @@ export function createDemoExtractor(grid: TerrainGrid | undefined): Extractor {
     // Компоненты-состояния, зеркалируемые в `EntityView.states` (CAM-6): список
     // общий с главным потоком (`sim.ts`) — порядок задаёт биты.
     stateComponents: STATE_COMPONENTS,
+    // Фаза полёта снаряда (REND-12): `Lifetime.ticks` сцены считает оставшиеся
+    // тики вниз, полное число — константа сборки. Рендер фазу не вычисляет —
+    // он получает её плоской формой и по ней рисует низкую дугу (SHELL-2).
+    flight: { component: 'Lifetime', field: 'ticks', total: FIREBALL_LIFETIME_TICKS },
   });
 }

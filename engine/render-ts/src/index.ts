@@ -29,7 +29,7 @@ export type { DecorationInstance } from './decorations.js';
 // Половины хоста по границе потоков (client-shell SHELL-2): Extractor —
 // воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
 export { Extractor, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';
-export type { ExtractedTick, ExtractorConfig } from './extractor.js';
+export type { ExtractedTick, ExtractorConfig, FlightPhaseSource } from './extractor.js';
 export { ViewBuffer } from './viewBuffer.js';
 export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 

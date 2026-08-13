@@ -31,6 +31,7 @@
 import type * as THREE from 'three';
 import type { EntityId, TerrainGrid, WorldMode, WorldState } from '@game-mvp/core';
 import type { AssetService } from '@game-mvp/assets';
+import type { FlightPhaseSource } from './extractor.js';
 // Только тип: цикл `types` ↔ `stage` стирается компиляцией и в рантайме не существует.
 import type { PresentationStage } from './stage.js';
 
@@ -70,10 +71,18 @@ export interface EntityView {
   motion: number;
   /**
    * Фаза манёвра на тех же двух тиках, что позиция, — доля пройденных тиков
-   * манёвра; `NaN` — манёвра на этом тике не было. Вход дуги прыжка (REND-12).
+   * манёвра; `NaN` — манёвра на этом тике не было. Вход дуги манёвра (REND-12).
    */
   prevMotionPhase: number;
   currMotionPhase: number;
+  /**
+   * Фаза полёта — доля пройденного пути от нуля к единице (REND-12). Вход
+   * полётной дуги; `NaN`/`undefined` — фазы нет, и дуги не будет независимо от
+   * манифеста: рендер фазу MUST NOT вычислять и MUST NOT выдумывать. Заполняет
+   * её сборка воркера (`client-shell` SHELL-2), поток тиков; наборы инстансов
+   * (REND-11, REND-18) поля не касаются — полёта у размещённого объекта нет.
+   */
+  flightPhase?: number;
   /** Override уровня (TERR-4): сущность не «на поверхности», наклон не применяется (REND-10). */
   levelOverride: boolean;
   /** Последний курс движения, радианы; сохраняется, пока сущность стоит. */
@@ -245,6 +254,8 @@ export interface RenderHostConfig {
   readonly stateComponents?: readonly string[];
   /** Имена компонентов локомоушена (LOC-1); дефолты — как у системы ядра. */
   readonly locomotion?: { readonly stateComponent?: string; readonly configComponent?: string };
+  /** Источник фазы полёта снаряда (REND-12) — конфигурация сборки, не конвенция ядра. */
+  readonly flight?: FlightPhaseSource;
   /** Часы в миллисекундах; по умолчанию performance.now — параметр ради тестов. */
   readonly clock?: () => number;
 }

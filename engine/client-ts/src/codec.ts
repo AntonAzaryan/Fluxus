@@ -18,6 +18,7 @@
  *   facingYaw   f32×count   — NaN: стоит, курс не обновлять
  *   aimYaw      f32×count   — NaN: цели нет
  *   motionPhase f32×count   — фаза манёвра локомоушена, NaN: манёвра нет (REND-12)
+ *   flightPhase f32×count   — фаза полёта, NaN: сущность не летит (REND-12)
  *   kind        i32×count   — индекс в словаре kind'ов, −1: не рисуется
  *   floor       u32×2×pairs — пары (клетка, бит пола)
  *   level       u8×count
@@ -27,8 +28,8 @@
 import type { ExtractedTick, RenderEvent } from '@game-mvp/render';
 import type { WorldMode } from '@game-mvp/core';
 
-/** 2: добавлены колонки состояния и фазы манёвра локомоушена (REND-4, REND-12). */
-export const CODEC_VERSION = 2;
+/** 3: добавлена колонка фазы полёта (REND-12). */
+export const CODEC_VERSION = 3;
 
 const HEADER_WORDS = 8;
 const HEADER_BYTES = HEADER_WORDS * 4;
@@ -57,12 +58,17 @@ const align8 = (bytes: number): number => (bytes + 7) & ~7;
  */
 const align8Safe = (bytes: number): number => Math.ceil(bytes / 8) * 8;
 
-/** Сколько f32-колонок идёт подряд в секции `f32`: x, y, facingYaw, aimYaw, motionPhase. */
-const F32_COLUMNS = 5;
+/**
+ * Сколько f32-колонок идёт подряд в секции `f32`: x, y, facingYaw, aimYaw,
+ * motionPhase, flightPhase. Фаза полёта — колонка, а не отдельная секция «есть
+ * или нет»: раскладка не ветвится по содержимому кадра (SHELL-3), а её
+ * ОТСУТСТВИЕ у сущности выражено `NaN` — тем же способом, что у курса и цели.
+ */
+const F32_COLUMNS = 6;
 
 interface Layout {
   id: number;
-  f32: number; // x, затем y, facingYaw, aimYaw, motionPhase подряд
+  f32: number; // x, затем y, facingYaw, aimYaw, motionPhase, flightPhase подряд
   kind: number;
   floor: number;
   level: number;
@@ -143,6 +149,7 @@ export function writeTick(
   f32.set(ext.facingYaw.subarray(0, count), count * 2);
   f32.set(ext.aimYaw.subarray(0, count), count * 3);
   f32.set(ext.motionPhase.subarray(0, count), count * 4);
+  f32.set(ext.flightPhase.subarray(0, count), count * 5);
   new Int32Array(buffer, at.kind, count).set(ext.kind.subarray(0, count));
   const floor = new Uint32Array(buffer, at.floor, floorPairs * 2);
   for (let i = 0; i < floorPairs * 2; i++) floor[i] = floorDelta[i]!;
@@ -206,6 +213,7 @@ export function readTick(
     facingYaw: new Float32Array(buffer, f32 + count * 8, count),
     aimYaw: new Float32Array(buffer, f32 + count * 12, count),
     motionPhase: new Float32Array(buffer, f32 + count * 16, count),
+    flightPhase: new Float32Array(buffer, f32 + count * 20, count),
     kind: new Int32Array(buffer, at.kind, count),
     floorDelta: new Uint32Array(buffer, at.floor, floorPairs * 2),
     level: new Uint8Array(buffer, at.level, count),

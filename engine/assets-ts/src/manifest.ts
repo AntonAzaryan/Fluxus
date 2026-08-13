@@ -273,15 +273,32 @@ export interface SurfaceAlign {
 export const DEFAULT_SURFACE_ALIGN: Readonly<SurfaceAlign> = Object.freeze({ factor: 1 });
 
 /**
- * Вертикальное смещение инстанса (REND-12): дуга прыжка и снижение при
+ * Вертикальное смещение инстанса (REND-12): дуги движения и снижение при
  * провале. Вертикали в симуляции нет (`locomotion` LOC-5), поэтому числа
  * художественные и живут только здесь. Все поля опциональны, отсутствие
  * означает отсутствие смещения — глобального дефолта у секции намеренно нет:
  * высота прыжка — свойство персонажа, а не мира (в отличие от наклона).
+ *
+ * Высота дуги называется НА ВИД манёвра (REND-12): прыжок и наземные манёвры
+ * независимы, и дуга одного вида к другому не применяется. Отсутствие поля —
+ * отсутствие дуги у этого вида, а не заимствование чужой высоты.
  */
 export interface VerticalOffset {
-  /** Максимум дуги прыжка в мировых единицах; без него дуги нет. */
+  /** Максимум дуги прыжка (`Airborne`) в мировых единицах; без него дуги нет. */
   jumpArc?: number;
+  /**
+   * Максимум дуги наземного манёвра (`Dodge`, `Roll` — `locomotion` LOC-3).
+   * Отдельное число, а не доля прыжковой высоты: перекат подпрыгивает иначе,
+   * чем прыжок, и заимствование одного числа двумя видами и есть тот дефект,
+   * который REND-12 запрещает.
+   */
+  maneuverArc?: number;
+  /**
+   * Максимум полётной дуги — по фазе полёта плоской формы (REND-12). Фазу
+   * заполняет сборка воркера (`client-shell` SHELL-2); нет фазы — нет и дуги,
+   * сколько бы ни было записано здесь.
+   */
+  flightArc?: number;
   /** Скорость снижения при провале, мировых единиц в секунду. */
   fallSpeed?: number;
   /** На сколько инстанс уходит вниз и там останавливается. */
@@ -434,15 +451,24 @@ function validateSurfaceAlign(v: unknown, path: string, errors: string[]): void 
   }
 }
 
+/** Поля `verticalOffset` — они же перечень допустимых ключей секции (REND-12). */
+const VERTICAL_OFFSET_FIELDS = [
+  'jumpArc',
+  'maneuverArc',
+  'flightArc',
+  'fallSpeed',
+  'fallDepth',
+] as const;
+
 /** `verticalOffset` записи: все поля опциональны и неотрицательны (REND-12). */
 function validateVerticalOffset(v: unknown, path: string, errors: string[]): void {
   if (!isRecord(v)) {
     errors.push(
-      `${path}: ожидался объект { jumpArc?, fallSpeed?, fallDepth? }, получено ${typeName(v)}`,
+      `${path}: ожидался объект { ${VERTICAL_OFFSET_FIELDS.map((f) => `${f}?`).join(', ')} }, получено ${typeName(v)}`,
     );
     return;
   }
-  const fields = ['jumpArc', 'fallSpeed', 'fallDepth'] as const;
+  const fields = VERTICAL_OFFSET_FIELDS;
   checkUnknownKeys(v, fields, path, errors);
   for (const field of fields) {
     const value = v[field];
