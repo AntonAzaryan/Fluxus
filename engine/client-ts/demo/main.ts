@@ -601,8 +601,11 @@ async function main(): Promise<void> {
       rig = new CameraRig({
         groundHeightAt: ground.groundHeightAt,
         bounds: ground.bounds,
-        startX: 11.5,
-        startY: 11.5,
+        // Стартовая цель — середина арены, выведенная из тех же границ сетки
+        // (CAM-3), а не записанная числом: размер арены — дело контента, и
+        // переехавшая сцена не должна оставлять камеру над прежним углом.
+        startX: (ground.bounds.minX + ground.bounds.maxX) / 2,
+        startY: (ground.bounds.minY + ground.bounds.maxY) / 2,
         // Настроечные числа кадра — из секции манифеста поверх умолчаний кода
         // (CAM-1, ASSET-10): нет секции или параметра — умолчание кода.
         config: cameraConfigFromManifest(manifest.cameraConfig),
