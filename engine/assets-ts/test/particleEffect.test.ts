@@ -9,8 +9,6 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   AssetService,
-  PARTICLE_EFFECT_SUFFIX,
-  isParticleEffectPath,
   manifestLoader,
   particleEffectLoader,
   validateParticleEffect,
@@ -131,12 +129,6 @@ describe('ASSET-14: форма документа эффекта', () => {
       { object: { uuid: 'r', type: 'ParticleEmitter', children: {} } },
       /object\.children: ожидался список узлов графа/,
     );
-  });
-
-  it('эмиттерный ассет узнаётся по суффиксу имени', () => {
-    expect(PARTICLE_EFFECT_SUFFIX).toBe('.effect.json');
-    expect(isParticleEffectPath('visuals/effects/torch.effect.json')).toBe(true);
-    expect(isParticleEffectPath('visuals/manifest.json')).toBe(false);
   });
 });
 

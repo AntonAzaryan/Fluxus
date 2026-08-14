@@ -122,11 +122,7 @@ export {
 
 // эмиттерный ассет — документ эффекта частиц (ASSET-14)
 export type { ParticleEffectDocument, ParticleEffectNode } from './particleEffect.js';
-export {
-  PARTICLE_EFFECT_SUFFIX,
-  isParticleEffectPath,
-  validateParticleEffect,
-} from './particleEffect.js';
+export { validateParticleEffect } from './particleEffect.js';
 
 // карта кривизны террейна (ASSET-7)
 export type { TerrainCurvatureMap } from './curvature.js';

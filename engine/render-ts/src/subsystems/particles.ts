@@ -32,9 +32,11 @@
  * (её вход — `TickView`, как у всех) и в picking не участвует (REND-15):
  * попасть лучом в частицу нельзя по построению.
  *
- * Разрыв непрерывности (REND-2) гасит выстрелы и живые частицы; оболочки
- * восстанавливаются из доставленного состояния сами — собственного игрового
- * состояния у эмиттера нет.
+ * Разрыв непрерывности (REND-2) гасит выстрелы и живые частицы ОБОЛОЧЕК
+ * ПРЕЗЕНТАЦИОННОГО СОСТОЯНИЯ; оболочки восстанавливаются из доставленного
+ * состояния сами — собственного игрового состояния у эмиттера нет. Набора
+ * декораций разрыв не касается (REND-18): он приходит с потоком тиков, а
+ * украшенная автором сцена украшена и по обе стороны переключения режима.
  *
  * ## Один батч-рендерер на сцену
  *
@@ -86,6 +88,13 @@ import {
   restartInstance,
   type EffectInstance,
 } from '../particleEffects.js';
+import {
+  dropSocketCache,
+  resolveSocketNode,
+  type SocketSource,
+} from '../particleSockets.js';
+
+export type { SocketInstance, SocketSource } from '../particleSockets.js';
 
 /** Пустой список имён состояний — чтобы тик без таблицы `byState` не аллоцировал. */
 const NO_STATE_NAMES: readonly string[] = [];
@@ -97,19 +106,6 @@ const EFFECT_ASSET_KIND = 'particle-effect';
 const SCRATCH_POSITION = new THREE.Vector3();
 const SCRATCH_QUATERNION = new THREE.Quaternion();
 const SCRATCH_SCALE = new THREE.Vector3();
-
-/**
- * Инстансы моделей глазами подсистемы частиц — источник узлов-сокетов (REND-24).
- * Подсистема моделей удовлетворяет этому интерфейсу по форме, а импорта её сюда
- * нет: подсистемы друг о друге не знают (REND-8), и знать нужно ровно одно —
- * корень нарисованного инстанса, в котором ищется названный узел.
- */
-export interface SocketSource {
-  instanceFor(
-    entity: EntityId,
-    decoration?: boolean,
-  ): { readonly model: { readonly root: THREE.Object3D } | null } | null;
-}
 
 export interface ParticlesOptions {
   /**
@@ -163,8 +159,9 @@ interface Shell {
   effect: string;
   socketName: string | undefined;
   scale: number;
-  /** Узел-сокет: `undefined` — ещё не нашли, `null` — играем в позиции сущности. */
-  socket: THREE.Object3D | null | undefined;
+  /** Кэш найденного узла-сокета и корня, из которого он взят (`particleSockets.ts`). */
+  socket: THREE.Object3D | null;
+  socketRoot: THREE.Object3D | null;
   view: EntityView;
   readonly decoration: boolean;
 }
@@ -290,6 +287,10 @@ export class ParticlesSubsystem implements RenderSubsystem {
   applyManifest(next: VisualManifest): void {
     if (next === this.manifest) return;
     this.manifest = next;
+    // Кэш сокетов сбрасывается ЗАРАНЕЕ: правленая запись меняет ярус и модель
+    // инстанса (REND-20, REND-3), а с ними и дерево узлов, — держаться за узел,
+    // найденный в прежнем дереве, после переподачи нельзя (REND-17).
+    this.dropSocketCaches();
     if (this.view !== null) this.syncShells(this.view);
     if (this.decorations !== null) this.syncDecorations(this.decorations);
   }
@@ -352,7 +353,15 @@ export class ParticlesSubsystem implements RenderSubsystem {
     live.clear();
     const states = this.manifest.particles?.byState;
     // Имена таблицы состояний снимаются один раз на тик, а не на сущность.
-    const stateNames = states === undefined ? NO_STATE_NAMES : Object.keys(states);
+    // Пустой словарь сборки — ЛЕГАЛЬНАЯ сборка без доставленных состояний
+    // (вьюпорт редактора: тика в кадре правки нет, ED-15), а не забытая
+    // прокидка: оболочек состояния в ней не бывает по построению, и таблица
+    // пропускается целиком — молча. Предупреждает `hasState` о другом: о списке,
+    // который есть, но названного состояния не несёт.
+    const stateNames =
+      states === undefined || this.stateComponents.length === 0
+        ? NO_STATE_NAMES
+        : Object.keys(states);
     for (const entityView of view.entities.values()) {
       if (entityView.kind !== null) {
         const record = resolveParticlesByKind(this.manifest, entityView.kind);
@@ -405,7 +414,8 @@ export class ParticlesSubsystem implements RenderSubsystem {
         effect: record.effect,
         socketName: record.socket,
         scale: record.scale ?? 1,
-        socket: undefined,
+        socket: null,
+        socketRoot: null,
         view,
         decoration,
       };
@@ -415,7 +425,8 @@ export class ParticlesSubsystem implements RenderSubsystem {
     shell.scale = record.scale ?? 1;
     if (shell.socketName !== record.socket) {
       shell.socketName = record.socket;
-      shell.socket = undefined; // имя сокета правлено — ищем узел заново
+      shell.socketRoot = null; // имя сокета правлено — ищем узел заново
+      shell.socket = null;
     }
     live.add(key);
   }
@@ -423,8 +434,9 @@ export class ParticlesSubsystem implements RenderSubsystem {
   /**
    * Несёт ли доставленное состояние сущности названное состояние (REND-24).
    * Бит ищется в списке `stateComponents` сборки — том же, которым Extractor
-   * их и зеркалировал (SHELL-2, CAM-6); имени вне списка соответствовать
-   * нечему, и об этом говорится один раз, а не молча.
+   * их и зеркалировал (SHELL-2, CAM-6); имени вне НЕПУСТОГО списка
+   * соответствовать нечему, и об этом говорится один раз, а не молча. Пустой
+   * список сюда не доходит вовсе — его отсекает `syncShells`.
    */
   private hasState(view: EntityView, name: string): boolean {
     const bit = this.stateComponents.indexOf(name);
@@ -463,7 +475,9 @@ export class ParticlesSubsystem implements RenderSubsystem {
     // (REND-11, REND-18), и от сокета он не зависит: нормализация модели по
     // высоте — свойство инстанса, а размер эффекта назначает автор эффекта.
     object.scale.setScalar(shell.scale * (shell.view.scale ?? 1));
-    const node = this.resolveSocket(shell);
+    const node = resolveSocketNode(shell, shell.view.id, this.options.sockets, (key, message) => {
+      this.warnOnce(key, message);
+    });
     if (node !== null) {
       // Мировая поза узла инстанса — каждый кадр: инстанс уже поставлен
       // подсистемой моделей, а мировая матрица узла обновляется по цепочке
@@ -488,45 +502,23 @@ export class ParticlesSubsystem implements RenderSubsystem {
   }
 
   /**
-   * Узел-сокет оболочки (REND-24). Ищется один раз и кэшируется на оболочке;
-   * пока инстанс не построен (модель грузится, ASSET-4), поиск повторяется
-   * следующим кадром — иначе эмиттер навсегда оставался бы у ног сущности из-за
-   * того, что ассет ещё ехал. Инстанс есть, а узла в нём нет — предупреждение
-   * один раз и позиция сущности, как у эффектов (REND-23).
+   * Разрыв непрерывности гасит и живые частицы оболочек (REND-2, REND-24).
+   *
+   * Оболочек ПРЕЗЕНТАЦИОННОГО состояния — и только их: разрыв непрерывности
+   * приходит с потоком тиков (перемотка, смена продюсера, вход и выход из
+   * превью), а набор декораций от него независим (REND-18) — сцена, которую
+   * автор украсил, украшена и до, и после переключения режима. Гасить факелы
+   * ареной вместе с перемоткой значило бы поджигать их заново на каждом
+   * переключении.
    */
-  private resolveSocket(shell: Shell): THREE.Object3D | null {
-    if (shell.socket !== undefined) return shell.socket;
-    const name = shell.socketName;
-    if (name === undefined) {
-      shell.socket = null;
-      return null;
-    }
-    const sockets = this.options.sockets;
-    if (sockets === undefined) {
-      this.warnOnce(
-        'socket-source',
-        `render: запись эмиттера называет сокет "${name}", но источник инстансов подсистеме не передан — эмиттер играет в позиции сущности (REND-24)`,
-      );
-      shell.socket = null;
-      return null;
-    }
-    const root = sockets.instanceFor(shell.view.id, shell.decoration)?.model?.root ?? null;
-    if (root === null) return null; // инстанса ещё нет — попробуем в следующем кадре
-    const node = root.getObjectByName(name) ?? null;
-    if (node === null) {
-      this.warnOnce(
-        `socket:${name}`,
-        `render: узла-сокета "${name}" в инстансе нет — эмиттер играет в позиции сущности (REND-24)`,
-      );
-    }
-    shell.socket = node;
-    return node;
-  }
-
-  /** Разрыв непрерывности гасит и живые частицы оболочек (REND-2, REND-24). */
   private restartShells(): void {
     for (const shell of this.shells.values()) restartInstance(shell.instance);
-    for (const shell of this.decorationShells.values()) restartInstance(shell.instance);
+  }
+
+  /** Кэш найденных узлов-сокетов обоих наборов — заново (REND-17). */
+  private dropSocketCaches(): void {
+    for (const shell of this.shells.values()) dropSocketCache(shell);
+    for (const shell of this.decorationShells.values()) dropSocketCache(shell);
   }
 
   // -------------------------------------------------------------- выстрелы
@@ -615,17 +607,30 @@ export class ParticlesSubsystem implements RenderSubsystem {
     this.assets.set(id, asset);
     const ctx = this.ctx;
     if (ctx === null) throw new Error('ParticlesSubsystem: init() не вызван (REND-8)');
-    const handle = ctx.assets.request<ParticleEffectDocument>(EFFECT_ASSET_KIND, id);
-    ctx.assets.subscribe(handle, (state: AssetState<ParticleEffectDocument>) => {
-      if (state.status === 'ready') {
-        asset.doc = state.data;
-      } else if (state.status === 'failed') {
-        this.warnOnce(
-          `effect:${id}`,
-          `render: эмиттерный ассет "${id}" недоступен (${state.reason}) — запись пропущена (REND-24)`,
-        );
-      }
-    });
+    // Сам ЗАПРОС тоже способен отказать синхронно — например, когда тот же
+    // адрес уже загружен под другим видом ассета (ASSET-3: ключ реестра — пара
+    // «вид + формат», и модель по адресу эффекта — конфликт видов). Для
+    // подсистемы это такая же негодная ссылка, как отказ загрузки, и ответ на
+    // неё тот же: предупреждение один раз и пропуск записи, а не отказ кадра
+    // (REND-24, ASSET-6) — исключение отсюда роняло бы весь кадровый цикл.
+    try {
+      const handle = ctx.assets.request<ParticleEffectDocument>(EFFECT_ASSET_KIND, id);
+      ctx.assets.subscribe(handle, (state: AssetState<ParticleEffectDocument>) => {
+        if (state.status === 'ready') {
+          asset.doc = state.data;
+        } else if (state.status === 'failed') {
+          this.warnOnce(
+            `effect:${id}`,
+            `render: эмиттерный ассет "${id}" недоступен (${state.reason}) — запись пропущена (REND-24)`,
+          );
+        }
+      });
+    } catch (e) {
+      this.warnOnce(
+        `effect:${id}`,
+        `render: эмиттерный ассет "${id}" не запрашивается (${e instanceof Error ? e.message : String(e)}) — запись пропущена (REND-24)`,
+      );
+    }
     // Подписка приносит текущее состояние немедленно (ASSET-4): уже загруженный
     // документ доступен на первом же обращении, а не со следующего кадра.
     return asset.doc;

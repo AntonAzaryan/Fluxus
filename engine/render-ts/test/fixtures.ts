@@ -110,6 +110,13 @@ export interface AssetsStub {
   readonly requests: { kind: AssetKind; id: string }[];
   resolve(kind: AssetKind, id: string, data: unknown): void;
   fail(kind: AssetKind, id: string, reason: string): void;
+  /**
+   * Адрес, запрос которого отказывает СИНХРОННО (ASSET-3): ключ реестра — пара
+   * «вид + формат», и тот же адрес, уже загруженный под другим видом, — не
+   * «ассет недоступен», а брошенное из `request` исключение. Потребитель обязан
+   * пережить его предупреждением и пропуском, а не отказом кадра.
+   */
+  collide(kind: AssetKind, id: string, message: string): void;
 }
 
 /** Стаб AssetService: состояния переключаются вручную из теста. */
@@ -117,6 +124,7 @@ export function makeAssets(): AssetsStub {
   const requests: { kind: AssetKind; id: string }[] = [];
   const states = new Map<string, AssetState<unknown>>();
   const subscribers = new Map<string, Set<(s: AssetState<unknown>) => void>>();
+  const collisions = new Map<string, string>();
   const key = (kind: AssetKind, id: string): string => `${kind}:${id}`;
 
   const set = (kind: AssetKind, id: string, state: AssetState<unknown>): void => {
@@ -128,6 +136,8 @@ export function makeAssets(): AssetsStub {
     registerLoader(): void {},
     request(kind: AssetKind, id: string) {
       requests.push({ kind, id });
+      const collision = collisions.get(key(kind, id));
+      if (collision !== undefined) throw new Error(collision);
       if (!states.has(key(kind, id))) states.set(key(kind, id), { status: 'loading' });
       return { id, kind };
     },
@@ -156,6 +166,7 @@ export function makeAssets(): AssetsStub {
     requests,
     resolve: (kind, id, data) => { set(kind, id, { status: 'ready', data }); },
     fail: (kind, id, reason) => { set(kind, id, { status: 'failed', reason }); },
+    collide: (kind, id, message) => { collisions.set(key(kind, id), message); },
   };
 }
 

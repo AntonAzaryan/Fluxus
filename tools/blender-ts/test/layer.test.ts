@@ -15,7 +15,7 @@ import {
   quantizedFixed,
   type Finding,
 } from '../src/layer.js';
-import { COMPONENTS, context, objectsOf } from './support.js';
+import { COMPONENTS, MANIFEST, context, objectsOf } from './support.js';
 
 const ROTATION = { component: 'Facing', field: 'turns' } as const;
 
@@ -300,6 +300,22 @@ describe('BLND-6: ключ visual без записи манифеста — п�
   it('манифеста нет вовсе — ссылки не проверяются: это не то же, что ключа в нём нет', () => {
     const findings = generateSpatialLayer(objectsOf('warnings.gltf'), context({ visuals: null })).findings;
     expect(messagesFor(findings, 'ghost-visual')).toEqual([]);
+  });
+
+  it('эмиттерный вид разрешается наравне с модельным (ASSET-14): факел из Blender не ругается', () => {
+    // Пространство визуальных ключей одно, а родов записи два (ASSET-9,
+    // ASSET-14): размещение ссылается на оба одним полем `visual`, и проверка
+    // только модельного рода ругалась бы на каждый импортированный факел.
+    const visuals = {
+      ...MANIFEST,
+      decorations: {
+        ...MANIFEST.decorations,
+        NoSuchVisual: { effect: 'visuals/effects/torch.effect.json' },
+      },
+    };
+    const findings = generateSpatialLayer(objectsOf('warnings.gltf'), context({ visuals })).findings;
+    expect(messagesFor(findings, 'ghost-visual')).toEqual([]);
+    expect(hasErrors(findings)).toBe(false);
   });
 
   it('неодинаковый по осям масштаб — предупреждение с названным выбором', () => {

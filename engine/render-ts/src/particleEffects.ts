@@ -20,14 +20,20 @@
  *   пиком одновременных эмиттеров сцены, а приостановленная система частиц не
  *   симулируется и не рисует ничего.
  *
+ * Из этих трёх правил следуют две поправки к тому, что отдаёт библиотека, —
+ * `relinkSubEmitters` и снятие `autoDestroy`; обе объяснены в своих местах и обе
+ * сводятся к одному: жизненным циклом экземпляра владеет ПУЛ, а не документ.
+ *
  * Битый документ и неразворачиваемый эффект — предупреждение один раз и пропуск
  * записи, а не отказ кадра (REND-24, ASSET-6).
  */
 import * as THREE from 'three';
 import {
+  EmitSubParticleSystem,
   ParticleEmitter,
   QuarksLoader,
   type BatchedRenderer,
+  type IEmitter,
   type ParticleSystem,
 } from 'three.quarks';
 import type { ParticleEffectDocument } from '@game-mvp/assets';
@@ -84,7 +90,7 @@ export class ParticleEffectPool {
   acquire(id: string, doc: ParticleEffectDocument, parent: THREE.Object3D): EffectInstance | null {
     const entry = this.expand(id, doc);
     if (entry.template === null) return null;
-    const instance = entry.pool.pop() ?? this.create(entry, entry.template);
+    const instance = entry.pool.pop() ?? this.create(id, entry, entry.template);
     parent.add(instance.object);
     instance.object.visible = true;
     restartInstance(instance);
@@ -118,12 +124,19 @@ export class ParticleEffectPool {
     return entry;
   }
 
-  private create(entry: EffectEntry, template: THREE.Object3D): EffectInstance {
+  private create(id: string, entry: EffectEntry, template: THREE.Object3D): EffectInstance {
     const object = template.clone();
+    this.relinkSubEmitters(id, template, object);
     const systems: EffectSystem[] = [];
     object.traverse((child) => {
       if (!(child instanceof ParticleEmitter)) return;
       const system = child.system as ParticleSystem;
+      // Жизненным циклом экземпляра владеет ПУЛ (design D6), а не документ:
+      // `autoDestroy` документа заставил бы библиотеку по концу проигрывания
+      // снять систему с батча и отцепить эмиттер от сцены — и экземпляр,
+      // вернувшийся в пул, был бы мёртв навсегда, а не готов к следующему
+      // употреблению. Значение снимается с ЭКЗЕМПЛЯРА; документ не трогается.
+      system.autoDestroy = false;
       // Один батч-рендерер на сцену (REND-24): система регистрируется в нём один
       // раз на всю жизнь экземпляра — и пока экземпляр лежит в пуле тоже.
       this.batchRenderer.addSystem(system);
@@ -132,6 +145,78 @@ export class ParticleEffectPool {
     entry.created += 1;
     return { object, entry, systems };
   }
+
+  /**
+   * Суб-эмиттеры клона — на СВОИ системы, а не на системы образца (REND-24).
+   *
+   * `EmitSubParticleSystem.clone()` библиотеки копирует ссылки как есть: и
+   * подчинённый эмиттер, и систему-владельца клон наследует ОТ ОБРАЗЦА. Двух
+   * последствий это стоит сразу: суб-частицы всех экземпляров эмитируются в
+   * систему образца — которая в сцену не добавлена и потому не рисуется и
+   * ничего не выбрасывает, — а её счётчик частиц растёт неограниченно, пока
+   * играет хоть один экземпляр. Поэтому связи клона переписываются здесь.
+   *
+   * Переписываются они ПУБЛИЧНЫМ конструктором поведения, а не присваиванием в
+   * его поля: конструктор — часть контракта библиотеки (им же пользуются её
+   * собственные `fromJSON` и `clone`), а внутренности поведения — нет.
+   * Соответствие узлов образца и клона снимается параллельным обходом: `Object3D.copy`
+   * добавляет детей в том же порядке, в каком они у источника, и порядок обхода
+   * оттого один и тот же. Не нашедшийся подчинённый узел — предупреждение один
+   * раз и суб-эмиттер без цели (поведение молчит), а не ссылка на образец.
+   */
+  private relinkSubEmitters(id: string, template: THREE.Object3D, clone: THREE.Object3D): void {
+    // Соответствие узлов строится ЛЕНИВО: у эффекта без суб-эмиттеров —
+    // подавляющего большинства — обхода образца не случается вовсе.
+    let twins: ReadonlyMap<unknown, THREE.Object3D> | null = null;
+    const twinOf = (target: unknown): THREE.Object3D | undefined => {
+      twins ??= parallelTwins(template, clone);
+      return twins.get(target);
+    };
+    clone.traverse((node) => {
+      if (!(node instanceof ParticleEmitter)) return;
+      const system = node.system as ParticleSystem;
+      const behaviors = system.behaviors;
+      for (let i = 0; i < behaviors.length; i++) {
+        const behavior = behaviors[i];
+        if (!(behavior instanceof EmitSubParticleSystem)) continue;
+        const target = behavior.subParticleSystem;
+        const twin = target === undefined ? undefined : twinOf(target);
+        if (target !== undefined && twin === undefined) {
+          this.warnOnce(
+            `sub-emitter:${id}`,
+            `render: подчинённый эмиттер эффекта "${id}" не принадлежит его документу — суб-частицы не играют (REND-24)`,
+          );
+        }
+        behaviors[i] = new EmitSubParticleSystem(
+          system,
+          behavior.useVelocityAsBasis,
+          twin as IEmitter | undefined,
+          behavior.mode,
+          behavior.emitProbability,
+        );
+      }
+    });
+  }
+}
+
+/**
+ * Соответствие «узел образца → узел клона». Строится параллельным обходом:
+ * `Object3D.copy` добавляет детей в порядке источника, поэтому обход клона идёт
+ * по тем же узлам и в том же порядке, что обход образца.
+ */
+function parallelTwins(
+  template: THREE.Object3D,
+  clone: THREE.Object3D,
+): ReadonlyMap<unknown, THREE.Object3D> {
+  const originals: THREE.Object3D[] = [];
+  template.traverse((node) => originals.push(node));
+  const twins = new Map<unknown, THREE.Object3D>();
+  let index = 0;
+  clone.traverse((node) => {
+    const original = originals[index++];
+    if (original !== undefined) twins.set(original, node);
+  });
+  return twins;
 }
 
 /**
