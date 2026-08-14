@@ -79,6 +79,7 @@ import {
   gltfLoader,
   manifestLoader,
   mdxLoader,
+  particleEffectLoader,
   pngTextureLoader,
   type AssetKind,
   type AssetState,
@@ -124,6 +125,10 @@ function build(source: ContentAssetSource): AssetService {
   assets.registerLoader(pngTextureLoader);
   assets.registerLoader(manifestLoader);
   assets.registerLoader(curvatureLoader);
+  // Эмиттерный ассет (ASSET-14): им рисует вьюпорт свои decoration-эмиттеры
+  // (`rendering` REND-24), поэтому загрузчик — часть комплектации редактора, а
+  // не только игрового клиента.
+  assets.registerLoader(particleEffectLoader);
   return assets;
 }
 

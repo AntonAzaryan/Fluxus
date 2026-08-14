@@ -1,0 +1,262 @@
+{
+  "metadata": {
+    "version": 4.7,
+    "type": "Object",
+    "generator": "Object3D.toJSON"
+  },
+  "geometries": [
+    {
+      "uuid": "9f4a1505-fd74-4932-ee26-04a89fc0c0e5",
+      "type": "PlaneGeometry",
+      "width": 1,
+      "height": 1,
+      "widthSegments": 1,
+      "heightSegments": 1
+    }
+  ],
+  "materials": [
+    {
+      "uuid": "7dd6567c-8641-e1ae-47e4-2ab1404fb4b9",
+      "type": "MeshBasicMaterial",
+      "color": 16777215,
+      "envMapRotation": [
+        0,
+        0,
+        0,
+        "XYZ"
+      ],
+      "reflectivity": 1,
+      "refractionRatio": 0.98,
+      "blending": 2,
+      "transparent": true,
+      "blendColor": 0,
+      "depthWrite": false
+    }
+  ],
+  "object": {
+    "uuid": "55391d95-d68a-dff2-44b4-bbd4ece2997d",
+    "type": "Group",
+    "name": "torch",
+    "layers": 1,
+    "matrix": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "children": [
+      {
+        "uuid": "db0adab3-4f8d-268a-9eb1-2fdc03f75cf9",
+        "type": "ParticleEmitter",
+        "name": "torch",
+        "layers": 1,
+        "matrix": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        "up": [
+          0,
+          1,
+          0
+        ],
+        "ps": {
+          "version": "3.0",
+          "autoDestroy": false,
+          "looping": true,
+          "prewarm": false,
+          "duration": 1,
+          "shape": {
+            "type": "cone",
+            "radius": 0.06,
+            "arc": 6.283185307179586,
+            "thickness": 1,
+            "angle": 0.2,
+            "mode": 0,
+            "spread": 0,
+            "speed": {
+              "type": "ConstantValue",
+              "value": 1
+            }
+          },
+          "startLife": {
+            "type": "IntervalValue",
+            "a": 0.5,
+            "b": 1
+          },
+          "startSpeed": {
+            "type": "IntervalValue",
+            "a": 0.5,
+            "b": 0.9
+          },
+          "startRotation": {
+            "type": "ConstantValue",
+            "value": 0
+          },
+          "startSize": {
+            "type": "IntervalValue",
+            "a": 0.12,
+            "b": 0.26
+          },
+          "startColor": {
+            "type": "Gradient",
+            "color": {
+              "type": "CLinearFunction",
+              "subType": "Color",
+              "keys": [
+                {
+                  "value": {
+                    "r": 1,
+                    "g": 0.72,
+                    "b": 0.28
+                  },
+                  "pos": 0
+                },
+                {
+                  "value": {
+                    "r": 1,
+                    "g": 0.34,
+                    "b": 0.08
+                  },
+                  "pos": 1
+                }
+              ]
+            },
+            "alpha": {
+              "type": "CLinearFunction",
+              "subType": "Number",
+              "keys": [
+                {
+                  "value": 1,
+                  "pos": 0
+                },
+                {
+                  "value": 1,
+                  "pos": 1
+                }
+              ]
+            }
+          },
+          "emissionOverTime": {
+            "type": "ConstantValue",
+            "value": 34
+          },
+          "emissionOverDistance": {
+            "type": "ConstantValue",
+            "value": 0
+          },
+          "emissionBursts": [],
+          "onlyUsedByOther": false,
+          "instancingGeometry": "9f4a1505-fd74-4932-ee26-04a89fc0c0e5",
+          "renderOrder": 0,
+          "renderMode": 0,
+          "rendererEmitterSettings": {},
+          "material": "7dd6567c-8641-e1ae-47e4-2ab1404fb4b9",
+          "layers": 1,
+          "startTileIndex": {
+            "type": "ConstantValue",
+            "value": 0
+          },
+          "uTileCount": 1,
+          "vTileCount": 1,
+          "blendTiles": false,
+          "softParticles": false,
+          "softFarFade": 0,
+          "softNearFade": 0,
+          "behaviors": [
+            {
+              "type": "SizeOverLife",
+              "size": {
+                "type": "PiecewiseBezier",
+                "functions": [
+                  {
+                    "function": {
+                      "p0": 1,
+                      "p1": 0.85,
+                      "p2": 0.5,
+                      "p3": 0
+                    },
+                    "start": 0
+                  }
+                ]
+              }
+            },
+            {
+              "type": "ColorOverLife",
+              "color": {
+                "type": "Gradient",
+                "color": {
+                  "type": "CLinearFunction",
+                  "subType": "Color",
+                  "keys": [
+                    {
+                      "value": {
+                        "r": 1,
+                        "g": 0.75,
+                        "b": 0.35
+                      },
+                      "pos": 0
+                    },
+                    {
+                      "value": {
+                        "r": 0.7,
+                        "g": 0.2,
+                        "b": 0.05
+                      },
+                      "pos": 1
+                    }
+                  ]
+                },
+                "alpha": {
+                  "type": "CLinearFunction",
+                  "subType": "Number",
+                  "keys": [
+                    {
+                      "value": 1,
+                      "pos": 0
+                    },
+                    {
+                      "value": 0,
+                      "pos": 1
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "worldSpace": false
+        }
+      }
+    ]
+  }
+}

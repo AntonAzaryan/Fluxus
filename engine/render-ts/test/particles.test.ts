@@ -340,6 +340,31 @@ describe('ParticlesSubsystem: данные, а не код (REND-24, REND-17)', 
     expect(subsystem.activeCount).toBe(0);
   });
 
+  it('манифест без секции частиц: ни запроса ассета, ни объекта, ни предупреждения', () => {
+    // Подсистема зарегистрирована в каждой сборке рендера (задача 3.1), и цена
+    // её присутствия для сцены, частиц не заводившей, обязана быть нулевой:
+    // секции нет, эмиттерных decoration-видов нет — рисовать нечего и спросить
+    // не у кого. Иначе «добавили подсистему» означало бы «изменили каждую
+    // существующую сцену».
+    const { subsystem, assets, warnings } = makeRig({
+      manifest: { entities: { Hero: { model: 'models/hero.mdx' } }, decorations: { Rock: { model: 'models/rock.mdx' } } },
+    });
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { kind: 'Hero', states: POISONED })], {
+        freshEvents: true,
+        events: [{ type: 'FireballExploded', data: { x: 0, y: 0 } }],
+      }),
+    );
+    subsystem.syncDecorations(new Map([[2, makeEntityView(2, { kind: 'Rock' })]]));
+    frames(subsystem, 3);
+
+    expect(assets.requests).toEqual([]);
+    expect(subsystem.activeCount).toBe(0);
+    expect(subsystem.particleCount).toBe(0);
+    expect(subsystem.batchCount).toBe(0);
+    expect(warnings).toEqual([]);
+  });
+
   it('недоступный эмиттерный ассет — предупреждение один раз и пропуск, а не отказ кадра', () => {
     const { subsystem, assets, warnings } = makeRig({ missing: true });
     subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball' })]));
