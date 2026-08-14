@@ -6,11 +6,16 @@ import {
   cameraEffectRangeText,
   clampCameraEffectParam,
   createManifestLoader,
+  isEmitterVisual,
   manifestLoader,
   resolveEffectByEvent,
   resolveEffectByKind,
   resolveLodThresholds,
+  resolveParticlesByEvent,
+  resolveParticlesByKind,
+  resolveParticlesByState,
   resolveVisual,
+  resolveVisualEmitter,
   resolveVisualTier,
   validateManifest,
   visualKeys,
@@ -733,6 +738,152 @@ describe('validateManifest: раздел decoration-видов (ASSET-9)', () =>
           animations: { states: { idle: 'Stand' }, events: { death: 'Death' } },
           boneControls: { head: { bone: 'Bone_Head', maxYawDeg: 30, smoothing: 0.2 } },
           verticalOffset: { jumpArc: 2, fallSpeed: 5, fallDepth: 3 },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('validateManifest: секция эмиттеров частиц (ASSET-14)', () => {
+  const particles = {
+    byKind: {
+      Fireball: { effect: 'visuals/effects/trail.effect.json', socket: 'Bone_Tail', scale: 0.5 },
+    },
+    byState: { Poisoned: { effect: 'visuals/effects/poison.effect.json' } },
+    byEvent: { FireballExploded: { effect: 'visuals/effects/boom.effect.json' } },
+  };
+
+  it('три таблицы опциональны, записи разрешаются по имени своей секции', () => {
+    const result = validateManifest({ entities: {}, particles });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(resolveParticlesByKind(result.manifest, 'Fireball')!.socket).toBe('Bone_Tail');
+    expect(resolveParticlesByState(result.manifest, 'Poisoned')!.effect).toBe(
+      'visuals/effects/poison.effect.json',
+    );
+    expect(resolveParticlesByEvent(result.manifest, 'FireballExploded')).toBeDefined();
+    // Пространства ключей таблиц разные — как и у секции эффектов (REND-23).
+    expect(resolveParticlesByKind(result.manifest, 'Poisoned')).toBeUndefined();
+    // Секция опциональна: манифест без частиц валиден и рисуется как раньше.
+    expect(validateManifest({ entities: {} }).ok).toBe(true);
+  });
+
+  it('запись разрешается по своей секции, не заглядывая в чужую (REND-23)', () => {
+    const result = validateManifest({
+      entities: {},
+      effects: { byKind: { Shield: { primitive: 'sphere', color: '#08f', radius: 1 } } },
+      particles: { byKind: { Torchlight: { effect: 'visuals/effects/torch.effect.json' } } },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(resolveParticlesByKind(result.manifest, 'Shield')).toBeUndefined();
+    expect(resolveEffectByKind(result.manifest, 'Torchlight')).toBeUndefined();
+  });
+
+  it('состав записи закрыт: неизвестный ключ — ошибка, а не молчаливый игнор', () => {
+    expectErrors(
+      { entities: {}, particles: { byState: { Poisoned: { effect: 'p.effect.json', socet: 'Head' } } } },
+      /particles\.byState\.Poisoned\.socet: неизвестное поле \(допустимы: effect, socket, scale\)/,
+    );
+    // Числа самого эффекта живут в его документе, а не в записи манифеста.
+    expectErrors(
+      { entities: {}, particles: { byKind: { X: { effect: 'p.effect.json', startLife: 2 } } } },
+      /particles\.byKind\.X\.startLife: неизвестное поле/,
+    );
+  });
+
+  it('структурные нарушения — ошибки с путями до полей', () => {
+    expectErrors(
+      { entities: {}, particles: { byKind: { X: { socket: 'Bone' } } } },
+      /particles\.byKind\.X\.effect: обязательное поле — asset id эмиттерного ассета/,
+    );
+    expectErrors(
+      { entities: {}, particles: { byKind: { X: { effect: '' } } } },
+      /particles\.byKind\.X\.effect/,
+    );
+    expectErrors(
+      { entities: {}, particles: { byEvent: { X: { effect: 'p.effect.json', socket: '' } } } },
+      /particles\.byEvent\.X\.socket: ожидалось имя узла-сокета/,
+    );
+    expectErrors(
+      { entities: {}, particles: { byState: { X: { effect: 'p.effect.json', scale: 0 } } } },
+      /particles\.byState\.X\.scale: ожидалось положительное число/,
+    );
+    expectErrors({ entities: {}, particles: { byKind: { X: 'p.effect.json' } } }, /particles\.byKind\.X: ожидался объект/);
+    expectErrors({ entities: {}, particles: { byKind: [] } }, /particles\.byKind: ожидался объект «имя → эмиттер»/);
+    expectErrors({ entities: {}, particles: { byNothing: {} } }, /particles\.byNothing: неизвестное поле/);
+    expectErrors({ entities: {}, particles: [] }, /particles: ожидался объект/);
+  });
+});
+
+describe('validateManifest: эмиттерный decoration-вид (ASSET-14)', () => {
+  const entities = { rock: { model: 'models/Rock.mdx' } };
+
+  it('вид со ссылкой на эффект вместо модели валиден и разрешается своим родом', () => {
+    const result = validateManifest({
+      entities,
+      decorations: {
+        torch: { effect: 'visuals/effects/torch.effect.json', scale: 1.5 },
+        grass: { model: 'models/Grass.mdx' },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(resolveVisualEmitter(result.manifest, 'torch')!.effect).toBe(
+      'visuals/effects/torch.effect.json',
+    );
+    // Подсистеме моделей эмиттерный вид не достаётся: рисует его подсистема
+    // частиц (REND-24), а заглушка означала бы «ассет не доехал» (ASSET-4).
+    expect(resolveVisual(result.manifest, 'torch')).toBeUndefined();
+    expect(resolveVisualEmitter(result.manifest, 'grass')).toBeUndefined();
+    expect(resolveVisual(result.manifest, 'grass')?.model).toBe('models/Grass.mdx');
+    // Пространство визуальных ключей одно (ASSET-9): размещение ссылается на
+    // эмиттерный вид тем же полем `visual`, что на модельный.
+    expect(visualKeys(result.manifest)).toEqual(['rock', 'torch', 'grass']);
+    expect(isEmitterVisual(result.manifest.decorations!.torch!)).toBe(true);
+    expect(isEmitterVisual(result.manifest.decorations!.grass!)).toBe(false);
+  });
+
+  it('имя эмиттерного вида в общем пространстве ключей: пересечение отвергается', () => {
+    const errors = expectErrors(
+      { entities, decorations: { rock: { effect: 'visuals/effects/torch.effect.json' } } },
+      /decorations\.rock: имя занято записью сущности/,
+    );
+    expect(errors.join('\n')).toContain('ASSET-9');
+  });
+
+  it('модель и эффект в одной записи взаимоисключающи', () => {
+    expectErrors(
+      { entities, decorations: { torch: { model: 'models/Torch.mdx', effect: 't.effect.json' } } },
+      /decorations\.torch: вид рисуется либо моделью, либо частицами/,
+    );
+    expectErrors(
+      { entities, decorations: { torch: { effect: 42 } } },
+      /decorations\.torch\.effect: ожидался asset id эмиттерного ассета/,
+    );
+  });
+
+  it('эмиттером вправе быть только decoration-вид: эмиттер сущности — секция particles', () => {
+    const errors = expectErrors(
+      { entities: { fire: { effect: 'visuals/effects/fire.effect.json' } } },
+      /entities\.fire\.effect: эмиттерным вправе быть только decoration-вид/,
+    );
+    expect(errors.join('\n')).toContain('particles');
+  });
+
+  it('неприменимые к эмиттеру части записи вида ошибкой не считаются', () => {
+    // Скины, клипы и наклон эмиттеру смысла не придают, но и запретом не
+    // становятся — то же основание, что у модельного decoration-вида (ASSET-9).
+    const result = validateManifest({
+      entities,
+      decorations: {
+        torch: {
+          effect: 'visuals/effects/torch.effect.json',
+          defaultSkin: 'lit',
+          skins: { lit: { '0': 'textures/fire.png' } },
+          animations: { states: { idle: 'Stand' } },
+          surfaceAlign: { factor: 0.5 },
         },
       },
     });
