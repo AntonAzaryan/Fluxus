@@ -14,9 +14,10 @@
  * они здесь понадобились, это и было бы доказательством, что граница протекла.
  *
  * Реализация на чистом Node (`hostBridge.contract.test.ts`) — та, что живёт в
- * гейте. Прогон в настоящем контейнере поднимает ту же функцию `open` поверх
- * Electron и в `npm run check` не входит (DSK-6, «полный прогон в контейнере —
- * отдельная проверка вне гейта»).
+ * гейте. Ту же функцию `open` поверх настоящего контейнера поднимает
+ * `test/electron/contract.ts` (`npm run contract:electron`): окно, preload,
+ * IPC, protocol handler. В `npm run check` этот прогон не входит — «полный
+ * прогон в контейнере — отдельная проверка вне гейта» (DSK-6).
  */
 import { describe, expect, it } from 'vitest';
 import type { BridgeCapability, BridgeChange, DesktopBridge } from '../src/bridge/types.js';
@@ -54,6 +55,14 @@ export interface ContractSession {
    * недоступны, метода не даёт — и проверка обхода пропускается.
    */
   linkOutside?(path: string): Promise<void>;
+  /**
+   * Ждёт, пока поданное мосту доедет до реализации. Нужен там, где сьют правит
+   * дерево МИМО моста: подписка объявлена синхронной, но у реализации, где мост
+   * едет через IPC, она устанавливается за границей окна, и правка, поданная в
+   * ту же миллисекунду, обгоняет её. Реализация, у которой ждать нечего, метода
+   * не даёт.
+   */
+  flush?(): Promise<void>;
   /** Что лежит на диске мимо моста: проверка, что запись доехала. */
   peek(path: string): Promise<string | undefined>;
   /** Запрос к раздаче контейнера (DSK-4). */
@@ -197,6 +206,7 @@ export function describeContainerContract(name: string, open: ContainerUnderTest
       await authoring(async (session) => {
         const seen: BridgeChange[] = [];
         const stop = session.bridge.watch!(CONTENT, (change) => seen.push(change));
+        await session.flush?.();
         await session.bridge.write!(CONTENT, 'scenes/new.scene.json', encode('{"scene":"new"}'));
         expect(await session.peek('scenes/new.scene.json')).toBe('{"scene":"new"}');
         await until(() => seen.some((change) => change.path === 'scenes/new.scene.json'));
@@ -226,6 +236,7 @@ export function describeContainerContract(name: string, open: ContainerUnderTest
       await authoring(async (session) => {
         const seen: BridgeChange[] = [];
         const stop = session.bridge.watch!(CONTENT, (change) => seen.push(change));
+        await session.flush?.();
         await session.touch('scenes/duel.scene.json', '{"scene":"правлено"}');
         await until(() => seen.some((change) => change.path === 'scenes/duel.scene.json'));
         expect(seen.map((change) => change.path)).toContain('scenes/duel.scene.json');
@@ -241,6 +252,9 @@ export function describeContainerContract(name: string, open: ContainerUnderTest
         const seen: BridgeChange[] = [];
         const stop = session.bridge.watch!(CONTENT, (change) => seen.push(change));
         stop();
+        // Ждём и подписку, и отписку: тишина обязана быть следствием отписки, а
+        // не того, что подписка не успела дойти.
+        await session.flush?.();
         await session.touch('scenes/duel.scene.json', '{"scene":"после отписки"}');
         await settle();
         expect(seen).toEqual([]);

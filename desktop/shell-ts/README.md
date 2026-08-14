@@ -15,7 +15,7 @@
 |---|---|---|
 | `src/bridge/` | Контракт границы: типы моста и схема профиля. **Ноль импортов** — эти типы вправе брать и контейнер, и приложения | гейт |
 | `src/host/` | Чистый Node: корни профиля, атомарная запись, наблюдение, раздача байтов, сборка моста по whitelist | гейт, контрактный сьют |
-| `src/electron/` | Тонкий клей: главный процесс, preload, protocol handler | вне гейта: `typecheck:electron`, smoke-прогон |
+| `src/electron/` | Тонкий клей: главный процесс, preload, protocol handler | вне гейта: `typecheck:electron`, тот же контрактный сьют в контейнере, smoke-прогон |
 
 Пакетов движка и редактора здесь нет ни одного, и это не соглашение:
 `engine/integration-ts/test/desktopBoundary.test.ts` краснеет на импорте и на
@@ -24,6 +24,11 @@
 `npm run check` зелёный в окружении **без установленного Electron** (DSK-6):
 клей не входит ни в гейтовый tsconfig, ни в типизированный линт, а контрактный
 сьют работает на чистом Node.
+
+Сьют при этом один на все реализации, и Electron проходит его целиком — только
+вне гейта: `npm run contract:electron -w @game-mvp/desktop-shell` поднимает те
+же случаи в настоящем окне (preload, IPC, protocol handler). Вторая реализация
+контейнера регистрируется тем же вызовом `describeContainerContract`.
 
 ## Профили
 
@@ -50,6 +55,7 @@ npm run demo:build:desktop -w @game-mvp/client      # бандл демо игр
 npm run start:editor -w @game-mvp/desktop-shell     # окно редактора
 npm run start:game -w @game-mvp/desktop-shell       # окно игры
 
+npm run contract:electron -w @game-mvp/desktop-shell  # контрактный сьют в контейнере (вне гейта)
 npm run smoke -w @game-mvp/desktop-shell            # прогон обоих профилей вне гейта
 npm run pack -w @game-mvp/desktop-shell -- game     # дистрибутив одного профиля
 ```
@@ -59,8 +65,9 @@ npm run pack -w @game-mvp/desktop-shell -- game     # дистрибутив о�
 что у CLI ядра и импортёра конвейера. Цена та же: в `bridge/` и `host/` нет ни
 enum, ни namespace, ни parameter properties.
 
-На машине без дисплея smoke-прогон идёт под `xvfb-run -a`; под root Chromium
-требует `--no-sandbox` (скрипт добавляет его сам).
+На машине без дисплея прогоны в контейнере идут под `xvfb-run -a`; под root
+Chromium требует `--no-sandbox` (и smoke, и контрактный прогон добавляют его
+сами).
 
 ## Что остаётся открытым
 

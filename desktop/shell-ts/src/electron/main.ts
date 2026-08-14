@@ -310,6 +310,15 @@ async function start(): Promise<void> {
 
   await target.loadURL(`${BASE}${profile.entry}`);
 
+  // Контрактный прогон (DSK-6): общий сьют границы поверх ЭТОГО клея. Модуль
+  // грузится только под флагом — обычному запуску он не нужен, а гейту не нужен
+  // и сам контейнер.
+  if (process.argv.includes('--contract')) {
+    const { serveContract } = await import('./contract.js');
+    await serveContract(target, opened);
+    return;
+  }
+
   if (process.argv.includes('--smoke')) {
     const at = process.argv.indexOf('--probe');
     const trip = process.argv.indexOf('--roundtrip');
