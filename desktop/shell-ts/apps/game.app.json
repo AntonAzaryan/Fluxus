@@ -1,0 +1,17 @@
+{
+  "id": "game",
+  "title": "Fluxus",
+  "bundle": "../../../engine/client-ts/demo/dist-desktop",
+  "entry": "index.html",
+  "roots": [
+    {
+      "id": "content",
+      "label": "content",
+      "directory": "../../../content",
+      "writable": false,
+      "serve": true
+    }
+  ],
+  "capabilities": [],
+  "window": { "width": 1280, "height": 720 }
+}

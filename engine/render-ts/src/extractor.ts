@@ -34,6 +34,12 @@ import {
   type WorldState,
 } from '@game-mvp/core';
 import { FloorMirror } from './floorMirror.js';
+import {
+  StatReader,
+  flightPhaseOf,
+  type FlightPhaseSource,
+  type StatSource,
+} from './statSources.js';
 import type { RenderEvent } from './types.js';
 
 /** Конвенция физики ядра: компонент скорости с полями `x`/`y` (Q16.16 за тик). */
@@ -107,6 +113,31 @@ export interface ExtractedTick {
    * в манёвр, и главному потоку не от чего было бы её отсчитать (REND-12).
    */
   motionPhase: Float32Array;
+  /**
+   * Фаза полёта — доля пройденного пути `[0..1]`; `NaN` — сущность не летит
+   * (или сборка фазы не объявила). Вход полётной дуги (REND-12): считается
+   * здесь, в воркере, потому что источник — компонент мира, а рендер фазу
+   * MUST NOT вычислять сам.
+   */
+  flightPhase: Float32Array;
+  /**
+   * Имена статов доставки (`match-hud` HUD-8) — словарь конфигурации сборки,
+   * общий на все сущности и НЕИЗМЕННЫЙ за сессию: индексы пар ниже — позиции в
+   * нём. Пустой список — сборка статов не объявила.
+   */
+  statNames: readonly string[];
+  /**
+   * Сколько пар «индекс имени → значение» у сущности `i`. Форма разреженная:
+   * стат, которого у сущности нет, не едет вовсе, а не едет нулём (HUD-8 —
+   * «нет данных» и «ноль» обязаны различаться).
+   */
+  statCount: Uint8Array;
+  /** Индексы имён подряд по сущностям, длиной `statPairs`. */
+  statIndex: Int32Array;
+  /** Значения в том же порядке, длиной `statPairs`. */
+  statValue: Float64Array;
+  /** Сколько пар всего в этом тике — длина двух секций выше. */
+  statPairs: number;
   /** События этого тика (копии, OBS-3), с номером тика — для reliable-доставки (SHELL-4). */
   events: readonly RenderEvent[];
   /** Пары (клетка, бит) реально изменившихся клеток пола (TERR-6 → REND-7). ArrayLike — читатель канала подставляет view в буфер доставки. */
@@ -143,6 +174,23 @@ export interface ExtractorConfig {
     readonly stateComponent?: string;
     readonly configComponent?: string;
   };
+  /**
+   * Источник фазы полёта (REND-12) — конфигурация СБОРКИ, а не конвенция ядра:
+   * какой компонент считает оставшийся путь снаряда и сколько его всего.
+   * Компонента у сущности нет — фазы нет (`NaN`), и полётной дуги не будет.
+   *
+   * Поле названо оставшимся ресурсом, а не пройденным, потому что именно так
+   * его ведут системы контента (счётчик вниз до нуля); фаза — производная
+   * `(total − left) / total`.
+   */
+  readonly flight?: FlightPhaseSource;
+  /**
+   * Геймплейные статы доставки (`match-hud` HUD-8): какие компоненты и поля
+   * мира едут в плоскую форму и под какими именами. Объявление — данные
+   * СБОРКИ: имена компонентов принадлежат контенту, и ни кодек, ни HUD их
+   * смысла не знают. Новый стат — запись этого списка, а не правка кода.
+   */
+  readonly stats?: readonly StatSource[];
 }
 
 const EMPTY_EVENTS: readonly RenderEvent[] = [];
@@ -163,6 +211,9 @@ export class Extractor {
   private readonly stateComponents: readonly string[];
   private readonly locomotionState: string;
   private readonly locomotionConfig: string;
+  private readonly flight: FlightPhaseSource | undefined;
+  /** Читатель статов сборки (HUD-8); порядок записей задаёт индексы имён. */
+  private readonly stats: StatReader;
   private readonly grid: TerrainGrid | undefined;
   private readonly mirror: FloorMirror | null;
 
@@ -198,6 +249,8 @@ export class Extractor {
       config.locomotion?.stateComponent ?? DEFAULT_LOCOMOTION_STATE_COMPONENT;
     this.locomotionConfig =
       config.locomotion?.configComponent ?? DEFAULT_LOCOMOTION_CONFIG_COMPONENT;
+    this.flight = config.flight;
+    this.stats = new StatReader(config.stats ?? []);
     this.grid = config.terrainGrid;
     this.mirror = this.grid === undefined ? null : new FloorMirror(this.grid);
     this.out = {
@@ -217,10 +270,24 @@ export class Extractor {
       aimYaw: new Float32Array(0),
       motion: new Uint8Array(0),
       motionPhase: new Float32Array(0),
+      flightPhase: new Float32Array(0),
+      statNames: this.stats.names,
+      statCount: new Uint8Array(0),
+      statIndex: new Int32Array(0),
+      statValue: new Float64Array(0),
+      statPairs: 0,
       events: EMPTY_EVENTS,
       floorDelta: EMPTY_DELTA,
       kindTable: this.kindTable,
     };
+  }
+
+  /**
+   * Имена статов сборки (HUD-8) — то, что оболочка кладёт в handshake (SHELL-5):
+   * словарь неизменен за сессию, и возить его в каждом кадре незачем.
+   */
+  get statNames(): readonly string[] {
+    return this.out.statNames;
   }
 
   /** Читает `TickResult` и возвращает плоскую форму; валидна до следующего вызова. */
@@ -276,6 +343,7 @@ export class Extractor {
     const alive = world.listAlive(state);
     this.ensureCapacity(alive.length);
     let count = 0;
+    out.statPairs = 0;
     // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
     for (let i = 0; i < alive.length; i++) {
       const entity = alive[i]!;
@@ -314,6 +382,8 @@ export class Extractor {
       out.flags[count] = flags;
       out.facingYaw[count] = yaw;
       this.readMotion(state, entity, count);
+      out.flightPhase[count] = flightPhaseOf(state, entity, this.flight);
+      this.stats.read(state, entity, count, out);
 
       const aim = this.aim.get(entity);
       out.aimYaw[count] =
@@ -345,6 +415,12 @@ export class Extractor {
     out.aimYaw = new Float32Array(capacity);
     out.motion = new Uint8Array(capacity);
     out.motionPhase = new Float32Array(capacity);
+    out.flightPhase = new Float32Array(capacity);
+    out.statCount = new Uint8Array(capacity);
+    // Худший случай — все статы у всех сущностей; перевыделение идёт вместе с
+    // прочими колонками, то есть только при росте сцены (SHELL-3).
+    out.statIndex = new Int32Array(capacity * this.stats.size);
+    out.statValue = new Float64Array(capacity * this.stats.size);
   }
 
   /**

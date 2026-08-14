@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  buildCodeIndex,
   buildModel,
   lint,
   loadLayers,
@@ -63,6 +64,29 @@ describe('spec-graph: формат дерева спек не уехал', () =>
     const layers = loadLayers();
     const findings = lint(model, layers);
     expect(findings.filter((f) => f.rule === 'unmapped-capability')).toEqual([]);
+  });
+});
+
+describe('spec-graph: индекс код⇄спека на реальном дереве', () => {
+  const model = buildModel(SPECS_DIR);
+  const index = buildCodeIndex();
+
+  it('индекс не вырожден и видит все три категории', () => {
+    // ~2.5k цитат на текущем дереве; порог с запасом — от вырождения обхода
+    // (уехали корни или расширения), а не от изменения объёма цитирования.
+    expect(index.mentions.length).toBeGreaterThan(1000);
+    const categories = new Set(index.mentions.map((m) => m.category));
+    expect(categories).toEqual(new Set(['src', 'test', 'generated']));
+  });
+
+  it('якорь конвенции: TICK-1 цитируется в src ядра', () => {
+    const tick = index.byId.get('TICK-1') ?? [];
+    expect(tick.some((m) => m.category === 'src' && m.file.includes('core-ts'))).toBe(true);
+  });
+
+  it('код не цитирует ID, которых нет в спеках (dangling-code)', () => {
+    const findings = lint(model, loadLayers(), index);
+    expect(findings.filter((f) => f.rule === 'dangling-code')).toEqual([]);
   });
 });
 
@@ -156,5 +180,22 @@ describe('spec-graph: линт ловит каждый класс дефекта
     const findings = lint(model, { ...LAYERS, layers: { alpha: 'foundation' } });
     const unmapped = findings.filter((f) => f.rule === 'unmapped-capability');
     expect(unmapped.length).toBeGreaterThanOrEqual(2); // beta и game-content
+  });
+
+  it('dangling-code ловит известный префикс без определения и молчит про незнакомый', () => {
+    const codeDir = mkdtempSync(join(tmpdir(), 'spec-code-fixture-'));
+    try {
+      writeFileSync(
+        join(codeDir, 'a.ts'),
+        '// AL-1 определён, AL-77 — опечатка, UTF-8 — вовсе не ID требования\n',
+      );
+      const model = buildModel(dir);
+      const findings = lint(model, LAYERS, buildCodeIndex([codeDir]));
+      const danglingCode = findings.filter((f) => f.rule === 'dangling-code');
+      expect(danglingCode).toHaveLength(1);
+      expect(danglingCode[0]?.message).toContain('AL-77');
+    } finally {
+      rmSync(codeDir, { recursive: true, force: true });
+    }
   });
 });

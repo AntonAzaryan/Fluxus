@@ -11,12 +11,12 @@ compatibility: openspec CLI, run from the repository root
 ## Сбор данных
 
 1. Список требований: `openspec list --specs` из корня репозитория, затем по каждой capability — `openspec spec show <name>` (ID лежат в заголовках `### Requirement:`).
-2. Упоминания ID в реализации и тестах — ID цитируются в комментариях и именах тестов, это рабочая конвенция репы:
+2. Упоминания ID в реализации и тестах — ID цитируются в комментариях и именах тестов, это рабочая конвенция репы. Индекс отдаёт spec-graph (не грепай вручную — логика извлечения одна):
    ```sh
-   grep -rnoE '\b[A-Z]{2,6}-[0-9]+\b' engine/core-ts/src engine/net-ts/src engine/integration-ts \
-     engine/assets-ts engine/render-ts --include='*.ts' | sort | uniq
+   npm run spec-graph -- code --json   # счётчики src/test/generated по каждому требованию
+   npm run spec-graph -- code NET-15   # конкретные файлы:строки по одному ID
    ```
-   Разделяй вхождения в `src/` (реализация) и в `test/` (проверка).
+   `src` — реализация, `test` — проверка, `generated` — схемы из `engine/schemas/` (в покрытие не считаются).
 3. Валидация формата спек заодно: `openspec validate --specs --strict`.
 
 ## Классификация каждого требования

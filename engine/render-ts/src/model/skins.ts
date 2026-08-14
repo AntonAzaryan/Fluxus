@@ -87,24 +87,23 @@ export function textureFromImage(image: DecodedImage, map: TextureTarget['map'])
   return texture;
 }
 
-/** Живое применение скина: держит подписки на текстуры до `dispose`. */
+/** Живое применение скина: держит подписки и созданные им текстуры до `dispose`. */
 export interface SkinApplication {
   dispose(): void;
 }
 
-/** Постановка текстуры в нужную карту материала. */
+/**
+ * Постановка текстуры в нужную карту материала. Прежнюю текстуру НЕ освобождает:
+ * материалы разделяются инстансами до подмены скина (REND-3, REND-6), и карта,
+ * поставленная не этим применением, принадлежит не ему — освободить её значило
+ * бы погасить текстуру у соседей. Владение односторонее: применение освобождает
+ * то, что создало само (см. `applySkin`).
+ */
 function assignTexture(target: TextureTarget, texture: THREE.Texture): void {
   const { material, map } = target;
-  if (map === 'normal') {
-    material.normalMap?.dispose();
-    material.normalMap = texture;
-  } else if (map === 'emissive') {
-    material.emissiveMap?.dispose();
-    material.emissiveMap = texture;
-  } else {
-    material.map?.dispose();
-    material.map = texture;
-  }
+  if (map === 'normal') material.normalMap = texture;
+  else if (map === 'emissive') material.emissiveMap = texture;
+  else material.map = texture;
   material.needsUpdate = true;
 }
 
@@ -123,25 +122,33 @@ export function applySkin(
   assets: AssetService,
 ): SkinApplication {
   const unsubscribes: (() => void)[] = [];
+  // Текстуры, СОЗДАННЫЕ этим применением: только их оно и освобождает. Ключ —
+  // место употребления, поэтому повторная постановка (ассет доехал вторым
+  // состоянием) освобождает свою же прежнюю, а не чужую.
+  const created = new Map<TextureTarget, THREE.Texture>();
   let disposed = false;
+
+  const put = (target: TextureTarget, texture: THREE.Texture): void => {
+    created.get(target)?.dispose();
+    created.set(target, texture);
+    assignTexture(target, texture);
+  };
 
   for (const [slot, source] of sources) {
     const targets = textureTargets.get(slot);
     if (targets === undefined || targets.length === 0) continue; // слот никем не используется
 
     // Своя THREE-текстура на каждое употребление слота: разделяемое здесь —
-    // пиксели ассета, а GPU-объект пер-инстансный (REND-3).
+    // пиксели ассета, а GPU-объект принадлежит применению (REND-3).
     if (source.kind === 'image') {
-      for (const target of targets) {
-        assignTexture(target, textureFromImage(source.image, target.map));
-      }
+      for (const target of targets) put(target, textureFromImage(source.image, target.map));
       continue;
     }
 
     const handle = assets.request<DecodedImage>('texture', source.path);
     const applyState = (state: AssetState<DecodedImage>): void => {
       if (disposed || state.status !== 'ready') return;
-      for (const target of targets) assignTexture(target, textureFromImage(state.data, target.map));
+      for (const target of targets) put(target, textureFromImage(state.data, target.map));
     };
     // subscribe сам зовёт колбэк с текущим состоянием — отдельный вызов
     // applyState здесь означал бы повторную загрузку уже готовой текстуры.
@@ -152,6 +159,8 @@ export function applySkin(
     dispose(): void {
       disposed = true;
       for (const unsubscribe of unsubscribes) unsubscribe();
+      for (const texture of created.values()) texture.dispose();
+      created.clear();
     },
   };
 }

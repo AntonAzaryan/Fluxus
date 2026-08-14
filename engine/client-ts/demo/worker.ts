@@ -10,14 +10,14 @@
  * бы неявной нормой.
  */
 import { shellPort, WorkerShell } from '@game-mvp/client';
-import { Extractor, kindByTags } from '@game-mvp/render';
 import {
   RingHistory,
   createInputLog,
   createRewindController,
   type SceneDef,
 } from '@game-mvp/core';
-import { PLAYER_ID, STATE_COMPONENTS, TICK_SECONDS, createDemoSimulation } from './sim.js';
+import { PLAYER_ID, TICK_SECONDS, createDemoSimulation } from './sim.js';
+import { createDemoExtractor } from './extractor.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 
 const { sim, state, playerId, grid } = createDemoSimulation(sceneJson as unknown as SceneDef);
@@ -28,19 +28,9 @@ const { sim, state, playerId, grid } = createDemoSimulation(sceneJson as unknown
 const history = new RingHistory({ interval: 1, capacity: 16 });
 const rewind = createRewindController(sim, state, { history, inputs: createInputLog() });
 
-const extractor = new Extractor({
-  // Ключи манифеста визуалов = теги prefab'ов сцены (ASSET-6). У Fireball
-  // записи в манифесте нет НАМЕРЕННО: частицы отложены, снаряд — заглушка.
-  kindOf: kindByTags(['Hero', 'Fireball']),
-  terrainGrid: grid,
-  // Доворот торса (REND-5) — по направлению каста: одно каноническое событие
-  // сцены несёт и факт каста, и `dirX`/`dirY`.
-  aimEvents: ['CastFireball'],
-  // Компоненты-состояния, зеркалируемые в `EntityView.states` (CAM-6): по ним
-  // диспетчер включает длящиеся эффекты манифеста. Список общий с главным
-  // потоком (`sim.ts`) — порядок задаёт биты, и разойтись половинам нельзя.
-  stateComponents: STATE_COMPONENTS,
-});
+// Extractor — общий с сетевой сборкой (`extractor.ts`): presentation-состояние
+// обязано выглядеть одинаково, кто бы ни произвёл тик (SHELL-8, REND-8).
+const extractor = createDemoExtractor(grid);
 
 const shell = new WorkerShell({
   mode: 'local',

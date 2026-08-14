@@ -59,6 +59,13 @@ export interface DecorationInstance {
   readonly skin?: string;
   /** Множитель масштаба поверх масштаба записи манифеста; нет — 1. */
   readonly scale?: number;
+  /**
+   * Поверхность меша входит в единое поле высот (REND-9) — флаг `walkable`
+   * записи парного документа (PRES-2); нет — false, и отсутствие с явным false
+   * неразличимы. Правка флага — обновление инстанса, а не пересоздание: ключ
+   * тот же, объект в кадре не мигает (REND-18).
+   */
+  readonly walkable?: boolean;
 }
 
 export class DecorationSet {
@@ -156,8 +163,11 @@ export class DecorationSet {
       moving: false,
       // Манёвров у декорации не бывает — отсюда же отсутствие дуги прыжка.
       motion: LOCOMOTION_NORMAL,
+      prevMotion: LOCOMOTION_NORMAL,
       prevMotionPhase: Number.NaN,
       currMotionPhase: Number.NaN,
+      // Полёта у декорации не бывает — фазы нет (REND-12).
+      flightPhase: Number.NaN,
       levelOverride: false,
       facingYaw: 0,
       // Цели атаки/каста нет — доворот костей к ней не проигрывается (REND-5).
@@ -179,6 +189,10 @@ export class DecorationSet {
     view.snap = true;
     view.skin = instance.skin;
     view.scale = instance.scale;
+    // Walkable-вклад поля (REND-9) ведёт подсистема моделей по этому полю:
+    // у неё запись манифеста и готовность модели, а идентичность инстанса
+    // при правке флага сохраняется — сведение выше её не пересоздало.
+    view.walkable = instance.walkable;
   }
 
   private drop(key: string): void {

@@ -80,8 +80,10 @@ function makeRig(manifest: VisualManifest): {
 
 /** Угол up-вектора инстанса от вертикали, радианы. */
 function tiltAngleOf(subsystem: ModelsSubsystem, entity: EntityId): number {
-  const holder = subsystem.instanceFor(entity)!.holder;
-  const up = new THREE.Vector3(0, 0, 1).applyQuaternion(holder.quaternion);
+  const pose = subsystem.instanceFor(entity)!.pose;
+  const up = new THREE.Vector3(0, 0, 1).applyQuaternion(
+    new THREE.Quaternion(pose.qx, pose.qy, pose.qz, pose.qw),
+  );
   return Math.acos(Math.min(Math.max(up.z, -1), 1));
 }
 
@@ -188,10 +190,10 @@ describe('наклон по нормали поверхности (REND-10)', ()
     const center = makeEntityView(HERO, { currX: 2, currY: 2, prevX: 2, prevY: 2 });
     subsystem.syncTick(makeTickView([center]));
     subsystem.updateFrame(1 / 60, 1);
-    const holder = subsystem.instanceFor(HERO)!.holder;
+    const pose = subsystem.instanceFor(HERO)!.pose;
     const height = source.current!.heightAt(2, 2);
     expect(height).toBeGreaterThan(0);
-    expect(holder.position.z).toBeCloseTo(height, 6);
+    expect(pose.z).toBeCloseTo(height, 6);
   });
 });
 

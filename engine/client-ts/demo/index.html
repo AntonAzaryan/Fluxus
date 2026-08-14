@@ -52,7 +52,7 @@
         color: #ffd479;
       }
       .hud-match-status__pause,
-      .hud-ability-bar__button {
+      .hud-cooldowns__button {
         font: inherit;
         color: inherit;
         background: rgba(255, 255, 255, 0.08);
@@ -61,24 +61,114 @@
         cursor: pointer;
       }
       .hud-match-status__pause:active,
-      .hud-ability-bar__button:active {
+      .hud-cooldowns__button:active {
         border-color: #ffd479;
       }
-      .hud-ability-bar {
-        display: flex;
+      /* Панель способностей: сетка в два ряда — число колонок ставит виджет
+         инлайн-стилем по параметру композиции (HUD-4). */
+      .hud-cooldowns {
+        display: grid;
         gap: 8px;
         margin: 12px;
       }
-      .hud-ability-bar__button {
+      .hud-cooldowns__button {
+        position: relative;
         width: 52px;
         height: 52px;
         padding: 8px;
         border-radius: 10px;
+        overflow: hidden;
       }
-      .hud-ability-bar__icon {
+      .hud-cooldowns__icon {
         display: block;
         width: 100%;
         height: 100%;
+      }
+      /* Оверлей кулдауна в стиле доты: затемнение по доле из CSS-переменной,
+         которую виджет пишет из доставленных статов (HUD-8). */
+      .hud-cooldowns__overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: conic-gradient(
+          rgba(6, 8, 16, 0.72) calc(var(--cooldown, 0) * 360deg),
+          transparent 0
+        );
+      }
+      .hud-cooldowns__seconds {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        font: 600 16px/1 ui-monospace, Menlo, monospace;
+        color: #ffd479;
+        text-shadow: 0 1px 2px #000;
+        pointer-events: none;
+      }
+      /* Полоса здоровья под портретом (HUD-8). */
+      .hud-hp-bar {
+        position: relative;
+        width: 122px;
+        height: 14px;
+        margin: 0 12px 12px;
+        background: rgba(10, 10, 24, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      .hud-hp-bar__fill {
+        height: 100%;
+        background: linear-gradient(90deg, #d0453c, #7ec96a);
+      }
+      .hud-hp-bar__text {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        font: 11px/1 ui-monospace, Menlo, monospace;
+      }
+      .hud-hp-bar.is-empty .hud-hp-bar__text {
+        opacity: 0.5;
+      }
+      /* Счётчики смертей сверху по центру. */
+      .hud-deaths__rows {
+        display: flex;
+        gap: 10px;
+        margin: 12px;
+      }
+      .hud-deaths__row {
+        min-width: 34px;
+        padding: 4px 8px;
+        text-align: center;
+        background: rgba(10, 10, 24, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 6px;
+      }
+      .hud-deaths__row::before {
+        content: 'слот ' attr(data-slot) ': ';
+        opacity: 0.6;
+      }
+      /* Рантайм-панель слева сверху: кадры, тик, сущности. */
+      .hud-runtime {
+        display: flex;
+        gap: 10px;
+        margin: 0 12px 12px;
+        padding: 6px 10px;
+        background: rgba(10, 10, 24, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 8px;
+      }
+      .hud-runtime__fps::after {
+        content: ' fps';
+        opacity: 0.6;
+      }
+      .hud-runtime__tick::before {
+        content: 'тик ';
+        opacity: 0.6;
+      }
+      .hud-runtime__entities::after {
+        content: ' сущн.';
+        opacity: 0.6;
       }
       .hud-minimap {
         margin: 12px;
@@ -103,34 +193,49 @@
       .hud-portrait--empty {
         opacity: 0.6;
       }
-      /* Клавиатурная справка демо: статична и прозрачна для указателя —
-         с HUD-3 не конфликтует, событий не перехватывает. */
-      #help {
+      /* Кнопка подключения к стенду (design D4): DOM демо-приложения, а не
+         виджет HUD — это переход между режимами страницы, то есть новый старт
+         оболочки (SHELL-8), а не действие внутри матча. */
+      #connect {
         position: fixed;
-        top: 12px;
         right: 12px;
-        padding: 10px 14px;
+        bottom: 12px;
+        padding: 6px 10px;
         color: #e8e8f0;
-        font: 12px/1.5 ui-monospace, Menlo, monospace;
+        font: 12px/1.4 ui-monospace, Menlo, monospace;
+        text-decoration: none;
         background: rgba(10, 10, 24, 0.72);
-        border: 1px solid rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.24);
         border-radius: 8px;
-        pointer-events: none;
-        user-select: none;
+        z-index: 20;
       }
-      #help b {
+      #connect:hover {
+        border-color: #ffd479;
+      }
+      /* Сообщение сборки: матч занят, стенд не отвечает. Скрыто, пока нечего
+         сказать; текст ставит main.ts. */
+      #notice {
+        display: none;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        max-width: 60ch;
+        transform: translate(-50%, -50%);
+        padding: 14px 18px;
         color: #ffd479;
+        font: 13px/1.6 ui-monospace, Menlo, monospace;
+        text-align: center;
+        background: rgba(10, 10, 24, 0.9);
+        border: 1px solid #ffd479;
+        border-radius: 10px;
+        z-index: 30;
       }
     </style>
   </head>
   <body>
     <div id="app"></div>
-    <div id="help">
-      <div><b>WASD / стрелки</b> — движение &nbsp; <b>Shift</b> — уклон (дважды — перекат) &nbsp; <b>Space</b> — прыжок</div>
-      <div><b>ЛКМ</b> — фаербол в точку клика (взрыв выбивает пол); шаг в дыру — смерть</div>
-      <div><b>T</b> — скин steel/ember &nbsp; <b>K</b> — смерть героя</div>
-      <div><b>C</b> — центр на герое &nbsp; <b>Y</b> — follow &nbsp; <b>F</b> — облёт &nbsp; край экрана — панорама</div>
-    </div>
+    <div id="notice"></div>
+    <a id="connect" href="#">играть по сети →</a>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

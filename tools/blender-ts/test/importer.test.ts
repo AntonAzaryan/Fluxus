@@ -48,7 +48,9 @@ import {
   fixtureBytes,
   flagCells,
   gridGltf,
+  gridSource,
   levelHeights,
+  packGlb,
   presentationDocument,
   sceneDocument,
 } from './support.js';
@@ -338,6 +340,75 @@ describe('BLND-4: детерминизм импорта', () => {
     expect(after.initial).toHaveLength(before.initial.length);
     expect(after.initial[0]).toEqual(before.initial[1]);
     expect(after.initial[1]).toEqual(before.initial[0]);
+  });
+});
+
+describe('BLND-3: мост — terrain-объект и walkable-декорация одним источником', () => {
+  /**
+   * Источник сценария «Мост в Blender»: перепад задан клетками terrain-объекта,
+   * а поверх стоит объект настила с `visual` и `walkable: true` (PRES-2 —
+   * пара «уровни ↔ walkable-меш»). Собирается в памяти тем же приёмом, что
+   * `full.glb` перечня фикстур.
+   */
+  const bridgeSource = (): Uint8Array => {
+    const grids = gridSource([TERRAIN_GRID]);
+    const nodes = [
+      ...(grids.json.nodes as Record<string, unknown>[]),
+      { name: 'deck', translation: [1, 0, -2], extras: { visual: 'Bridge', walkable: true } },
+    ];
+    return packGlb(
+      { ...grids.json, nodes, scenes: [{ nodes: nodes.map((_, index) => index) }] },
+      grids.binary,
+    );
+  };
+
+  it('импорт переписывает ассет террейна и кладёт запись decoration с walkable: true', async () => {
+    const root = await tree(contentFiles(bridgeSource(), sceneDocument([], TERRAIN_ASSET)));
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(run.code).toBe(0);
+    const presentation = JSON.parse((await contentOf(root, PRESENTATION_ID)).toString('utf8')) as {
+      decorations: unknown[];
+    };
+    expect(presentation.decorations).toEqual([{ visual: 'Bridge', x: 1, y: 2, walkable: true }]);
+    const scene = JSON.parse((await contentOf(root, SCENE_ID)).toString('utf8')) as {
+      terrain: { levels: string[] };
+    };
+    expect(scene.terrain.levels).toEqual([...TERRAIN_LEVELS]);
+  });
+
+  it('повторный импорт неизменного источника даёт пустой дифф (BLND-4)', async () => {
+    const root = await tree(contentFiles(bridgeSource(), sceneDocument([], TERRAIN_ASSET)));
+    await runCli(root, [`content/${SOURCE_ID}`]);
+    const first = {
+      scene: await contentOf(root, SCENE_ID),
+      presentation: await contentOf(root, PRESENTATION_ID),
+    };
+
+    const again = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(again.code).toBe(0);
+    expect(again.err.join('\n')).toContain('записи не было');
+    expect(await contentOf(root, SCENE_ID)).toEqual(first.scene);
+    expect(await contentOf(root, PRESENTATION_ID)).toEqual(first.presentation);
+  });
+
+  it('ошибочный walkable отвергает импорт целиком: на диске ни байта (BLND-6)', async () => {
+    const root = await tree(contentFiles('walkable-errors.gltf'));
+    const before = {
+      scene: await contentOf(root, SCENE_ID),
+      presentation: await contentOf(root, PRESENTATION_ID),
+    };
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(run.code).toBe(1);
+    // Адрес отказа — имена объектов Blender (BLND-6).
+    expect(run.err.join('\n')).toContain('bad-string');
+    expect(run.err.join('\n')).toContain('walkable-prefab');
+    expect(await contentOf(root, SCENE_ID)).toEqual(before.scene);
+    expect(await contentOf(root, PRESENTATION_ID)).toEqual(before.presentation);
   });
 });
 

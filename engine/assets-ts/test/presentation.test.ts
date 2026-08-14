@@ -57,7 +57,7 @@ describe('PRES-2: состав документа и записи закрыт',
     const result = validatePresentationScene({
       decorations: [
         { visual: 'rock', x: 3.5, y: -2.25 },
-        { visual: 'grass', x: 1, y: 1, yaw: 0.125, scale: 1.5, skin: 'dry' },
+        { visual: 'grass', x: 1, y: 1, yaw: 0.125, scale: 1.5, skin: 'dry', walkable: true },
       ],
     });
     expect(result.ok).toBe(true);
@@ -70,7 +70,37 @@ describe('PRES-2: состав документа и записи закрыт',
       yaw: 0.125,
       scale: 1.5,
       skin: 'dry',
+      walkable: true,
     });
+  });
+
+  it('walkable — необязательный булев: валидны true, явный false и отсутствие (PRES-2)', () => {
+    // Явный false валиден наравне с отсутствием: неразличимость этих двух форм —
+    // правило записывающей операции (false не пишется), а не валидации, и файл,
+    // написанный руками с `walkable: false`, отвергать не за что (ED-21).
+    const result = validatePresentationScene({
+      decorations: [
+        { visual: 'bridge', x: 0, y: 0, walkable: true },
+        { visual: 'bridge', x: 1, y: 1, walkable: false },
+        { visual: 'bridge', x: 2, y: 2 },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.decorations.map((d) => d.walkable)).toEqual([true, false, undefined]);
+  });
+
+  it('небулево значение walkable отвергается адресно (PRES-2)', () => {
+    expectErrors(
+      { decorations: [{ visual: 'bridge', x: 0, y: 0, walkable: 'yes' }] },
+      /decorations\[0\]\.walkable: ожидался булев флаг/,
+    );
+    // 0/1 Blender-экспорта нормализует импортёр (BLND-3); формату они не булевы.
+    expectErrors({ decorations: [{ visual: 'bridge', x: 0, y: 0, walkable: 1 }] }, /decorations\[0\]\.walkable/);
+    expectErrors(
+      { decorations: [{ visual: 'bridge', x: 0, y: 0, walkable: null }] },
+      /decorations\[0\]\.walkable.*null/,
+    );
   });
 
   it('отсутствующий и пустой список неразличимы', () => {

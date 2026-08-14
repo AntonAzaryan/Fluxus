@@ -154,7 +154,7 @@ export class ShellSender {
     if (buffer === undefined) return;
 
     const floorDelta = this.flattenFloor();
-    const needed = requiredBytes(ext.count, floorDelta.length >>> 1);
+    const needed = requiredBytes(ext.count, floorDelta.length >>> 1, ext.statPairs);
     if (buffer.byteLength < needed) {
       // Единственное легальное место аллокации канала: рост сцены (SHELL-3).
       buffer = new ArrayBuffer(Math.ceil(needed * 1.5));

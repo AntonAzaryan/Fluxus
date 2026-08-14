@@ -74,6 +74,8 @@ export class RemoteHost implements PresentationProducer {
   private readonly presentation: PresentationStage;
   private readonly config: RemoteHostConfig;
   private readonly kindTable: string[] = [];
+  /** Словарь статов из handshake (HUD-8, SHELL-5); пустой — сборка их не объявила. */
+  private statNames: readonly string[] = [];
   private port: ShellPort | null = null;
   private buffer: ViewBuffer | null = null;
 
@@ -155,6 +157,7 @@ export class RemoteHost implements PresentationProducer {
   private onHello(hello: HelloMessage): void {
     this.terrain = hello.terrain;
     this.mode = hello.mode;
+    this.statNames = hello.statNames ?? [];
     this.buffer = new ViewBuffer({
       tickSeconds: hello.tickSeconds,
       ...(this.config.snapDistance !== undefined
@@ -176,7 +179,7 @@ export class RemoteHost implements PresentationProducer {
     // Публикация потоком тиков: если состояние наполнял документный источник,
     // его набор гасится здесь же — объект не попадёт в кадр дважды (REND-11).
     // Гашение и `syncTick` идут до возврата буфера, как и раньше.
-    buffer.apply(readTick(envelope.buffer, envelope.events, this.kindTable));
+    buffer.apply(readTick(envelope.buffer, envelope.events, this.kindTable, this.statNames));
     this.presentation.publish(this, buffer.view);
 
     this.requirePort().post({ t: 'ret', buffer: envelope.buffer }, [envelope.buffer]);

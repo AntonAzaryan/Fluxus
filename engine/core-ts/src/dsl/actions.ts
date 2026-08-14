@@ -8,9 +8,11 @@
  * прямых мутаций в таблице действий нет, поэтому сломать детерминизм из
  * редактора нечем.
  */
-import { evaluate, typeError, type Expression, type ExprValue, type ExprVars } from './expr.js';
+import { evaluate, ExprCell, typeError, type Expression, type ExprValue, type ExprVars } from './expr.js';
+import { distSqCompare } from '../math/fixed.js';
 import { requireModifierList } from '../systems/modifiers.js';
 import { carveFloor as carveFloorInTerrain } from '../systems/terrain.js';
+import { POSITION_COMPONENT } from '../types.js';
 import type {
   EntityId,
   Fixed,
@@ -223,6 +225,105 @@ function querySpec(raw: unknown, ctx: SystemContext, vars: ExprVars): QuerySpec 
   };
 }
 
+// ------------------------------------------ упорядоченная выборка (ACT-5)
+
+/**
+ * Буфер упорядоченной выборки: идентификатор сущности и смещение от `nearestTo`
+ * рядом. `Float64Array` под id — `EntityId` 48-битный (ID-1); `Int32Array` под
+ * смещения — это координаты Q16.16, то есть `i32` (FP-1).
+ *
+ * Хранится смещение, а не готовый ключ: квадрат расстояния в Q16.16 не
+ * помещается, и сравниваются они точной 64-битной арифметикой по паре
+ * смещений (`distSqCompare`) — той же, что решает `withinRadius`.
+ */
+interface OrderedBuffer {
+  readonly ids: Float64Array;
+  readonly dx: Int32Array;
+  readonly dy: Int32Array;
+}
+
+/**
+ * Буферы — по одному на уровень вложенности `forEach`: внешний обход идёт по
+ * своему буферу, пока тело исполняет внутренний, и один буфер на всех испортил
+ * бы внешний. Живут в модуле, а не на инстансе системы: исполнитель — функция,
+ * инстанса у него нет. Состоянием симуляции они при этом не становятся: наружу
+ * буфер не отдаётся и целиком перезаписывается перед каждым обходом, поэтому в
+ * снапшот попасть ему нечем (SNAP-1).
+ *
+ * Растут до наибольшей встреченной выборки и переиспользуются — аллокации,
+ * пропорциональной числу сущностей, на каждый тик нет.
+ */
+const orderedBuffers: OrderedBuffer[] = [];
+let orderedDepth = 0;
+
+function orderedBuffer(size: number): OrderedBuffer {
+  const existing = orderedBuffers[orderedDepth];
+  if (existing !== undefined && existing.ids.length >= size) return existing;
+  const grown: OrderedBuffer = {
+    ids: new Float64Array(size),
+    dx: new Int32Array(size),
+    dy: new Int32Array(size),
+  };
+  orderedBuffers[orderedDepth] = grown;
+  return grown;
+}
+
+/** Позиция сущности читается тотально (ECS-7): без компонента — мировое начало координат. */
+function positionOf(ctx: SystemContext, entity: EntityId, axis: 'x' | 'y'): Fixed {
+  return ctx.has(entity, POSITION_COMPONENT) ? ctx.get(entity, POSITION_COMPONENT, axis) : 0;
+}
+
+/**
+ * Выборка, упорядоченная по возрастанию квадрата расстояния до `center`
+ * (ACT-5). Расстояние — той же арифметикой квадратов и до той же позиции, что
+ * у `withinRadius` (QUERY-1): смещение считается через Math API (FP-4), как у
+ * арены, а квадраты сравниваются точной 64-битной `distSqCompare` — приближения
+ * Q16.16 здесь нет, и предела дальности у порядка тоже.
+ *
+ * Сортировка вставками, а не `Array.prototype.sort`: порядок сравнений и
+ * устойчивость заданы здесь алгоритмом, а не реализацией JS-движка, — то, чего
+ * требует нормативный тай-брейк для парности со второй реализацией ядра.
+ *
+ * Тай-брейк равных квадратов — порядок QUERY-2, и отдельного ключа он не
+ * требует: вход отдан запросом по возрастанию raw-индекса, а вставка сдвигает
+ * только строго большие ключи, поэтому равные остаются во входном порядке.
+ */
+function nearestByDistance(ctx: SystemContext, found: Float64Array, center: Vec2): Float64Array {
+  const { ids, dx, dy } = orderedBuffer(found.length);
+  for (let i = 0; i < found.length; i++) {
+    const entity = found[i]!;
+    const keyX = ctx.math.sub(positionOf(ctx, entity, 'x'), center.x);
+    const keyY = ctx.math.sub(positionOf(ctx, entity, 'y'), center.y);
+    let j = i - 1;
+    while (j >= 0 && distSqCompare(dx[j]!, dy[j]!, keyX, keyY) > 0) {
+      dx[j + 1] = dx[j]!;
+      dy[j + 1] = dy[j]!;
+      ids[j + 1] = ids[j]!;
+      j--;
+    }
+    dx[j + 1] = keyX;
+    dy[j + 1] = keyY;
+    ids[j + 1] = entity;
+  }
+  return ids;
+}
+
+/**
+ * `limit` — выражение в Q16.16, приводимое к целому внутри действия, как
+ * `bound` у `randomBelow`. Отрицательное значение — ошибка вычисления (SYS-9):
+ * отрицательного числа целей не бывает, и молчаливый пустой обход спрятал бы
+ * дефект формулы. Нулевое — пустой обход, а не ошибка: «не больше нуля целей» —
+ * валидная граница политики, в отличие от пустого диапазона `randomBelow`.
+ */
+function limitOf(a: Args, ctx: SystemContext, vars: ExprVars, count: number): number {
+  if (a.limit === undefined) return count;
+  const limit = ctx.math.toInt(num(evaluate(a.limit as Expression, ctx, vars), 'forEach'));
+  if (limit < 0) {
+    throw new Error(`действие "forEach": "limit" не может быть отрицательным, получено ${limit}`);
+  }
+  return Math.min(limit, count);
+}
+
 /**
  * Общая часть `random` и `randomBelow`: стрим системы либо её суб-стрим
  * (RNG-4, RNG-7), значение — в тело как обычная переменная.
@@ -364,14 +465,47 @@ const ACTIONS: Record<string, ActionFn> = {
     const branch = cond ? argBody(a, 'then', 'if') : a.else === undefined ? [] : argBody(a, 'else', 'if');
     execute(branch, ctx, vars, cond ? 'then' : 'else');
   },
-  /** Биндинги вычисляются во внешней области — параллельно, а не по цепочке: иначе результат зависел бы от порядка имён. */
+  /**
+   * Биндинги вычисляются во внешней области — параллельно, а не по цепочке:
+   * иначе результат зависел бы от порядка имён.
+   *
+   * Каждое имя связывается ЯЧЕЙКОЙ (ACT-4): вложенное тело получает копию
+   * объекта области видимости, но ту же ячейку, поэтому `set` из него виден
+   * после выхода — и `let` работает аккумулятором свёртки. Затенение при этом
+   * цело: внутренний `let` кладёт в свою копию новую ячейку, а внешняя остаётся
+   * нетронутой.
+   *
+   * ponytail: ячейка — аллокация на исполнение биндинга, то есть внутри тела
+   * `forEach` она пропорциональна числу сущностей. Она стоит рядом с копией
+   * самого объекта области видимости, которая была здесь и раньше: убирать их
+   * имеет смысл только вместе — пулом областей видимости, — и по профилю на
+   * реальной сцене, а не по вкусу.
+   */
   let: (a, ctx, vars) => {
     const bindings = argFields(a, 'bindings', 'let');
-    const scope: Record<string, ExprValue> = { ...vars };
+    const scope: Record<string, ExprValue | ExprCell> = { ...vars };
     for (const key of Object.keys(bindings).sort()) {
-      scope[key] = evaluate(bindings[key]!, ctx, vars);
+      scope[key] = new ExprCell(evaluate(bindings[key]!, ctx, vars));
     }
     execute(argBody(a, 'do', 'let'), ctx, scope, 'do');
+  },
+  /**
+   * Присваивание изменяемой привязке `let` (ACT-4). Ячейку даёт ближайший
+   * объемлющий `let`, связавший имя: у более внешнего своя, и до неё
+   * присваивание не доходит — область видимости перекрыта.
+   *
+   * Обе ошибки ниже до тика не доживают — их отвергает регистрация системы
+   * (SYS-3); проверки здесь последний рубеж, а не рабочий способ их найти.
+   */
+  set: (a, ctx, vars) => {
+    const name = argStr(a, 'name', 'set');
+    const value = evaluate(argExpr(a, 'value', 'set'), ctx, vars);
+    if (!Object.hasOwn(vars, name)) throw new Error(`действие "set": неизвестная переменная "${name}"`);
+    const bound = vars[name]!;
+    if (!(bound instanceof ExprCell)) {
+      throw new Error(`действие "set": переменная "${name}" связана не действием let и неизменяема`);
+    }
+    bound.value = value;
   },
   /**
    * Значение стрима, связанное с именем в теле (RNG-6). Действие, а не
@@ -392,13 +526,33 @@ const ACTIONS: Record<string, ActionFn> = {
     if (bound < 1) throw new Error(`действие "randomBelow": "bound" должен быть не меньше 1, получено ${bound}`);
     bindRandom(a, ctx, vars, 'randomBelow', (stream) => stream.nextBelow(bound));
   },
+  /**
+   * Аргументы читаются в порядке ACT-1 (`query`, `nearestTo`, `limit`): все три
+   * вычисляются во внешней области до обхода, и порядок между ними наблюдаем
+   * ошибкой вычисления, а не результатом.
+   *
+   * Результат материализован на момент вызова (QUERY-3), а мутации отложены до
+   * flush (CMD-1) — итерация стабильна независимо от тела.
+   */
   forEach: (a, ctx, vars) => {
     const as = argStr(a, 'as', 'forEach');
     const body = argBody(a, 'do', 'forEach');
-    // Результат материализован на момент вызова (QUERY-3), а мутации отложены
-    // до flush (CMD-1) — итерация стабильна независимо от тела.
-    for (const entity of ctx.query(querySpec(a.query, ctx, vars))) {
-      execute(body, ctx, { ...vars, [as]: entity }, 'do');
+    const found = ctx.query(querySpec(a.query, ctx, vars));
+    const nearestTo =
+      a.nearestTo === undefined
+        ? undefined
+        : vecOf(evaluate(a.nearestTo as Expression, ctx, vars), 'forEach', 'nearestTo');
+    const limit = limitOf(a, ctx, vars, found.length);
+    // Без `nearestTo` упорядочивать нечего: обход идёт порядком QUERY-2, и
+    // `limit` лишь обрывает его — буфер сортировки не нужен вовсе (ACT-5).
+    const order = nearestTo === undefined ? found : nearestByDistance(ctx, found, nearestTo);
+    orderedDepth += nearestTo === undefined ? 0 : 1;
+    try {
+      for (let i = 0; i < limit; i++) {
+        execute(body, ctx, { ...vars, [as]: order[i]! }, 'do');
+      }
+    } finally {
+      orderedDepth -= nearestTo === undefined ? 0 : 1;
     }
   },
   /**
@@ -455,6 +609,7 @@ export const requiredArgs: Readonly<Record<string, readonly string[]>> = Object.
   carveFloor: Object.freeze(['at']),
   if: Object.freeze(['cond', 'then']),
   let: Object.freeze(['do']),
+  set: Object.freeze(['name', 'value']),
   random: Object.freeze(['as', 'do']),
   randomBelow: Object.freeze(['as', 'bound', 'do']),
   forEach: Object.freeze(['query', 'as', 'do']),

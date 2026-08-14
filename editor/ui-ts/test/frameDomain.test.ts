@@ -49,9 +49,13 @@ const APP_FILES: Readonly<Record<string, string>> = {
   'contentEndpoint.ts': 'серверная половина веб-хоста среды (ED-12)',
   'documentRefresh.ts': 'перечитывание документов, изменённых в дереве извне (ED-12, BLND-12)',
   'index.html': 'страница приложения',
-  'main.ts': 'точка входа веб-среды: хост, заголовок вкладки, монтирование',
+  'main.ts': 'точка входа: выбор среды по наличию моста контейнера, заголовок вкладки, монтирование',
   'vite.config.ts': 'конфиг сборки приложения',
+  'vite.desktop.config.ts': 'та же сборка для десктоп-контейнера, без копии дерева контента (DSK-4)',
 };
+
+/** Артефакты сборки: они в .gitignore и исходниками приложения не являются. */
+const APP_ARTIFACTS = new Set(['dist', 'dist-desktop']);
 
 /** Тот же список, что у headless-каркаса: одно требование — одно понятие. */
 const DOMAIN_WORDS = [
@@ -178,7 +182,8 @@ describe('ED-25: каркас интерфейса без доменных им�
   it('вне библиотеки лежит только заявленное: сборка, а не вынесенный каркас', () => {
     // Сканер смотрит в `src/`, и «перенести файл в app/» не должно быть
     // способом выйти из-под него. Состав каталога поэтому назван поимённо.
-    expect(readdirSync(APP).sort()).toEqual(Object.keys(APP_FILES).sort());
+    const present = readdirSync(APP).filter((entry) => !APP_ARTIFACTS.has(entry));
+    expect(present.sort()).toEqual(Object.keys(APP_FILES).sort());
   });
 
   it('каркас в сборку не переехал: его модули по-прежнему в библиотеке', () => {

@@ -72,12 +72,24 @@ export class EvaluatedSystem implements System {
 // ------------------------------------------------------------- валидация
 
 /**
+ * Вид связывания имени. Различается ради `set`: присваивать можно только тому,
+ * что связано `bindings` действия `let` (ACT-4), а переменная итерации `as`
+ * неизменяема — и вид известен статически, поэтому вердикт выносится здесь, а
+ * не на первом срабатывании ветки.
+ */
+type BindingKind = 'let' | 'as';
+
+/** Область видимости на регистрации: имя → чем оно связано. */
+type Scope = ReadonlyMap<string, BindingKind>;
+
+/**
  * Проверяет дерево до старта матча (SYS-3). `bound` — имена, считающиеся
  * связанными снаружи: сейчас пусто, параметр под входные параметры систем
- * (этап 9).
+ * (этап 9). Внешнее имя неизменяемо — параметр системы не привязка `let`.
  */
 export function validateSystem(def: SystemDef, world: WorldState, bound: readonly string[] = []): void {
-  checkActions(bodyOf(def), world, new Set(bound), `система "${def.name}"`);
+  const scope = new Map<string, BindingKind>(bound.map((name) => [name, 'as']));
+  checkActions(bodyOf(def), world, scope, `система "${def.name}"`);
 }
 
 function fail(path: string, message: string): never {
@@ -105,7 +117,7 @@ function literal(node: unknown, path: string): string {
   return node;
 }
 
-function checkActions(list: unknown, world: WorldState, scope: ReadonlySet<string>, path: string): void {
+function checkActions(list: unknown, world: WorldState, scope: Scope, path: string): void {
   if (!Array.isArray(list)) fail(path, 'ожидался список действий');
   list.forEach((node, i) => { checkAction(node, world, scope, `${path}[${i}]`); });
 }
@@ -115,18 +127,19 @@ function checkActions(list: unknown, world: WorldState, scope: ReadonlySet<strin
  * (SYS-3), а не на вторую таблицу рядом с таблицей действий: таблица-дубль
  * рассинхронизировалась бы с оригиналом при первом же новом действии.
  */
-function checkAction(node: unknown, world: WorldState, scope: ReadonlySet<string>, path: string): void {
+function checkAction(node: unknown, world: WorldState, scope: Scope, path: string): void {
   const [name, rawArgs] = onlyKey(node, path, 'действие');
   if (!actionNames.includes(name)) fail(path, `неизвестное действие "${name}"`);
   const here = `${path}.${name}`;
   const args = asMap(rawArgs, here);
 
   // Имена, введённые этим действием, видны только его телу; `bindings` при
-  // этом вычисляются снаружи (параллельное связывание, см. ACT-1).
-  const inner = new Set(scope);
-  if (args.as !== undefined) inner.add(literal(args.as, `${here}.as`));
+  // этом вычисляются снаружи (параллельное связывание, см. ACT-1). Вид
+  // связывания запоминается вместе с именем — по нему решается `set` (ACT-4).
+  const inner = new Map(scope);
+  if (args.as !== undefined) inner.set(literal(args.as, `${here}.as`), 'as');
   if (args.bindings !== undefined) {
-    for (const key of Object.keys(asMap(args.bindings, `${here}.bindings`))) inner.add(key);
+    for (const key of Object.keys(asMap(args.bindings, `${here}.bindings`))) inner.set(key, 'let');
   }
 
   const component = args.component === undefined ? undefined : literal(args.component, `${here}.component`);
@@ -150,8 +163,21 @@ function checkAction(node: unknown, world: WorldState, scope: ReadonlySet<string
       case 'entity':
       case 'cond':
       case 'bound':
+      case 'value':
+      case 'nearestTo':
+      case 'limit':
         checkExpression(value, world, scope, at);
         break;
+      // Имя изменяемой привязки (ACT-4): вид связывания известен статически,
+      // поэтому и несвязанное имя, и связанное `as` отвергаются здесь — как
+      // несвязанный `var`, и по той же причине.
+      case 'name': {
+        const target = literal(value, at);
+        const kind = scope.get(target);
+        if (kind === undefined) fail(at, `переменная "${target}" не связана`);
+        if (kind !== 'let') fail(at, `переменная "${target}" связана как "as" и неизменяема`);
+        break;
+      }
       case 'query':
         checkQuery(value, world, scope, at);
         break;
@@ -187,7 +213,7 @@ function checkAction(node: unknown, world: WorldState, scope: ReadonlySet<string
 function checkFields(
   node: unknown,
   world: WorldState,
-  scope: ReadonlySet<string>,
+  scope: Scope,
   path: string,
   component: string | undefined,
 ): void {
@@ -203,7 +229,7 @@ function checkFields(
 function checkOverrides(
   node: unknown,
   world: WorldState,
-  scope: ReadonlySet<string>,
+  scope: Scope,
   path: string,
   prefabName: string,
 ): void {
@@ -217,7 +243,7 @@ function checkOverrides(
   }
 }
 
-function checkQuery(node: unknown, world: WorldState, scope: ReadonlySet<string>, path: string): void {
+function checkQuery(node: unknown, world: WorldState, scope: Scope, path: string): void {
   const spec = asMap(node, path);
   for (const key of ['all', 'any', 'not'] as const) {
     const names = spec[key];
@@ -247,7 +273,7 @@ function checkQuery(node: unknown, world: WorldState, scope: ReadonlySet<string>
  * Именами проверяемое (переменная связана, компонент и поле существуют) остаётся
  * здесь: это уже не форма узла, а сверка с зарегистрированным миром (SYS-3).
  */
-function checkExpression(node: unknown, world: WorldState, scope: ReadonlySet<string>, path: string): void {
+function checkExpression(node: unknown, world: WorldState, scope: Scope, path: string): void {
   if (typeof node === 'number' || typeof node === 'boolean') return;
   if (typeof node === 'string') {
     fail(path, 'ожидалось выражение: строка допустима только в позиции имени');
@@ -264,8 +290,12 @@ function checkExpression(node: unknown, world: WorldState, scope: ReadonlySet<st
   if (wrongArity !== undefined) fail(at, wrongArity);
 
   // Литеральные позиции — только имена; в остальных позициях строка отвергается
-  // рекурсивным вызовом ниже.
-  for (const i of signature.literals) literal(args[i], `${at}[${i}]`);
+  // рекурсивным вызовом ниже. Позиция за концом списка не проверяется: она
+  // бывает только у оператора с необязательным хвостом (`mask` у raycast,
+  // EXPR-8), а её отсутствие уже разрешено арностью.
+  for (const i of signature.literals) {
+    if (i < args.length) literal(args[i], `${at}[${i}]`);
+  }
 
   // Область определения целого литерала (SYS-3): на сегодняшнем составе это
   // только номер бита `bitTest`. Вычисляемый аргумент в той же позиции остаётся

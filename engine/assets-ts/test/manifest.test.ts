@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   AssetService,
+  DEFAULT_LOD_THRESHOLDS,
   POSITIVE_MIN,
   cameraEffectRangeText,
   clampCameraEffectParam,
   createManifestLoader,
   manifestLoader,
+  resolveEffectByEvent,
+  resolveEffectByKind,
+  resolveLodThresholds,
   resolveVisual,
+  resolveVisualTier,
   validateManifest,
   visualKeys,
   type CameraEffectsDescription,
@@ -34,6 +39,8 @@ const validDoc = {
         head: { bone: 'Bone_Head', maxYawDeg: 45, smoothing: 0.35 },
       },
       hiddenParts: [3],
+      tier: 'detailed',
+      lodThresholds: [0.3, 0.1],
     },
     fireball: { model: 'models/Fireball.mdx' },
   },
@@ -186,6 +193,59 @@ describe('validateManifest (ASSET-6)', () => {
       /entities\.orc\.hiddenParts\[1\]/,
       /entities\.orc\.hiddenParts\[2\]/,
     );
+  });
+
+  it('tier и lodThresholds записи: перечень ярусов закрыт, пороги строго убывают (ASSET-13)', () => {
+    const ok = validateManifest({
+      entities: { orc: { model: 'm.mdx', tier: 'detailed', lodThresholds: [0.3, 0.1] } },
+      decorations: { rock: { model: 'r.mdx', tier: 'batched' } },
+    });
+    expect(ok.ok).toBe(true);
+
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', tier: 'instanced' } } },
+      /entities\.orc\.tier: ожидался ярус представления/,
+    );
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', lodThresholds: 0.5 } } },
+      /entities\.orc\.lodThresholds: ожидался массив/,
+    );
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', lodThresholds: [1.5] } } },
+      /entities\.orc\.lodThresholds\[0\]: ожидалась доля/,
+    );
+    // Порог, не меньший предыдущего, дал бы уровень, который не выбирается.
+    expectErrors(
+      { entities: { orc: { model: 'm.mdx', lodThresholds: [0.2, 0.2] } } },
+      /entities\.orc\.lodThresholds\[1\]: пороги должны строго убывать/,
+    );
+  });
+
+  it('умолчания яруса и порогов: батчевый, детальный — при контроле костей (ASSET-13)', () => {
+    const result = validateManifest({
+      entities: {
+        plain: { model: 'm.mdx' },
+        bones: { model: 'm.mdx', boneControls: { torso: { bone: 'b', maxYawDeg: 10, smoothing: 1 } } },
+        explicit: {
+          model: 'm.mdx',
+          tier: 'batched',
+          boneControls: { torso: { bone: 'b', maxYawDeg: 10, smoothing: 1 } },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const entities = result.manifest.entities;
+    expect(resolveVisualTier(entities.plain)).toBe('batched');
+    // Процедурному контролю костей нужен настоящий скелет (REND-5).
+    expect(resolveVisualTier(entities.bones)).toBe('detailed');
+    // Явное поле записи умолчание переопределяет — и в эту сторону тоже.
+    expect(resolveVisualTier(entities.explicit)).toBe('batched');
+    // Записи без записи вовсе (невизуальный ключ) умолчание тоже касается.
+    expect(resolveVisualTier(undefined)).toBe('batched');
+
+    expect(resolveLodThresholds(entities.plain)).toBe(DEFAULT_LOD_THRESHOLDS);
+    expect(resolveLodThresholds({ model: 'm.mdx', lodThresholds: [0.4] })).toEqual([0.4]);
   });
 
   it('неизвестное поле записи — ошибка (опечатки ловятся схемой)', () => {
@@ -531,6 +591,92 @@ describe('validateManifest: вертикальное смещение инста
       { entities: { x: { model: 'm.mdx', verticalOffset: 1.5 } } },
       /verticalOffset: ожидался объект/,
     );
+  });
+
+  it('дуги называются на вид манёвра и на полёт — каждая своим полем (REND-12)', () => {
+    const result = validateManifest({
+      entities: {
+        x: { model: 'm.mdx', verticalOffset: { jumpArc: 0.9, maneuverArc: 0.25, flightArc: 0.35 } },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const offset = result.manifest.entities.x!.verticalOffset!;
+    expect(offset.maneuverArc).toBe(0.25);
+    expect(offset.flightArc).toBe(0.35);
+    // Отсутствие поля — отсутствие дуги этого вида, а не чужая высота.
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', verticalOffset: { maneuverArc: -0.1 } } } },
+      /verticalOffset\.maneuverArc: ожидалось неотрицательное число/,
+    );
+  });
+});
+
+describe('validateManifest: секция транзиентных эффектов (REND-23)', () => {
+  const effects = {
+    byKind: {
+      Fireball: {
+        primitive: 'sphere',
+        color: '#ff8a3c',
+        radius: 0.25,
+        alpha: 0.95,
+        height: 0.6,
+        verticalOffset: { flightArc: 0.35 },
+      },
+    },
+    byEvent: {
+      FireballExploded: {
+        primitive: 'sphere',
+        color: '#ff4020',
+        radius: 0.2,
+        radiusTo: 1.6,
+        alpha: 0.7,
+        alphaTo: 0,
+        durationMs: 400,
+        curve: 'easeOut',
+      },
+    },
+  };
+
+  it('обе таблицы опциональны, записи разрешаются по имени', () => {
+    const result = validateManifest({ entities: {}, effects });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(resolveEffectByKind(result.manifest, 'Fireball')!.color).toBe('#ff8a3c');
+    expect(resolveEffectByEvent(result.manifest, 'FireballExploded')!.durationMs).toBe(400);
+    // Пространства ключей разные: имя события не разрешается как визуальный тип.
+    expect(resolveEffectByKind(result.manifest, 'FireballExploded')).toBeUndefined();
+    expect(validateManifest({ entities: {} }).ok).toBe(true);
+  });
+
+  it('имена примитива и кривой рендеру принадлежат — документ с ними валиден', () => {
+    // Перечня примитивов у модуля ассетов нет намеренно (то же, что ASSET-8):
+    // неизвестное имя разбирает потребитель, а не валидация формата.
+    const result = validateManifest({
+      entities: {},
+      effects: { byKind: { X: { primitive: 'ribbon', color: '#fff', radius: 1, curve: 'bounce' } } },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('структурные нарушения — ошибки с путями до полей', () => {
+    expectErrors(
+      { entities: {}, effects: { byKind: { X: { color: '#fff', radius: 1 } } } },
+      /effects\.byKind\.X\.primitive: обязательное поле/,
+    );
+    expectErrors(
+      { entities: {}, effects: { byKind: { X: { primitive: 'sphere', color: '#fff' } } } },
+      /effects\.byKind\.X\.radius: обязательное поле/,
+    );
+    expectErrors(
+      { entities: {}, effects: { byEvent: { X: { primitive: 'sphere', color: '#fff', radius: 1, alpha: 2 } } } },
+      /effects\.byEvent\.X\.alpha: ожидалось число в \[0\.\.1\]/,
+    );
+    expectErrors(
+      { entities: {}, effects: { byKind: { X: { primitive: 'sphere', color: '#fff', radius: 1, radus: 2 } } } },
+      /effects\.byKind\.X\.radus: неизвестное поле/,
+    );
+    expectErrors({ entities: {}, effects: [] }, /effects: ожидался объект/);
   });
 });
 

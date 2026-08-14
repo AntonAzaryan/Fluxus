@@ -10,6 +10,7 @@ import {
 import { EventBus } from '../src/ecs/events.js';
 import * as fixed from '../src/math/fixed.js';
 import { mathApi } from '../src/math/mathApi.js';
+import { NO_ENTITY, type RaycastHit, type RaycastOptions, type Vec2 } from '../src/types.js';
 
 const F = fixed.fromFloat;
 
@@ -102,6 +103,121 @@ describe('доступ к миру', () => {
     expect(evaluate({ hasComponent: [2, 'Ammo'] }, world)).toBe(false);
     expect(evaluate({ isAlive: [99] }, world)).toBe(false);
     expect(evaluate({ tick: [] }, world)).toBe(42);
+  });
+});
+
+/**
+ * Лучевые запросы (EXPR-2, EXPR-8). Physics API здесь стаб: семантика самого
+ * луча — предмет `physics.test.ts` (PHYS-6, PHYS-7), а таблица операторов лишь
+ * открывает её выражениям. Проверяется ровно то, что принадлежит таблице:
+ * передача аргументов, разложение результата по типам EXPR-7 и краевые случаи.
+ */
+describe('лучевые запросы физики (EXPR-2, EXPR-8)', () => {
+  const FROM = { x: F(0), y: F(0) };
+  const TO = { x: F(10), y: F(0) };
+  const vecOf = (v: { x: number; y: number }): Expression => ({ vec: [v.x, v.y] });
+
+  interface Call {
+    readonly from: Vec2;
+    readonly to: Vec2;
+    readonly options: RaycastOptions | undefined;
+  }
+
+  /** Мир со стабом физики, отвечающим заданным попаданием, и журналом вызовов. */
+  function withPhysics(hit: RaycastHit | null): { world: ExprWorld; calls: Call[] } {
+    const calls: Call[] = [];
+    return {
+      calls,
+      world: {
+        ...world,
+        physics: {
+          raycast: (from, to, options) => {
+            calls.push({ from, to, options });
+            return hit;
+          },
+          inradiusOf: () => undefined,
+        },
+      },
+    };
+  }
+
+  const ray = (op: string, mask?: string): Expression => ({
+    [op]: mask === undefined ? [vecOf(FROM), vecOf(TO), 1] : [vecOf(FROM), vecOf(TO), 1, mask],
+  });
+
+  it('попадание в сущность: истина, идентификатор и точка', () => {
+    const point = { x: F(4), y: F(0) };
+    const { world: w } = withPhysics({ entity: 2, point });
+    expect(evaluate(ray('raycastHit'), w)).toBe(true);
+    expect(evaluate(ray('raycastEntity'), w)).toBe(2);
+    expect(evaluate(ray('raycastPoint'), w)).toEqual(point);
+  });
+
+  it('попадание в статику: сущности у него нет, и это «ссылки нет» -1 (ECS-6)', () => {
+    const point = { x: F(6), y: F(0) };
+    const { world: w } = withPhysics({ point });
+    // Попадание есть, сущности у него нет — различить их можно только парой
+    // операторов: сигнального третьего значения у `number` нет.
+    expect(evaluate(ray('raycastHit'), w)).toBe(true);
+    expect(evaluate(ray('raycastEntity'), w)).toBe(NO_ENTITY);
+    expect(evaluate(ray('raycastPoint'), w)).toEqual(point);
+  });
+
+  it('без попадания: ложь, -1 и дальняя точка отрезка', () => {
+    const { world: w } = withPhysics(null);
+    expect(evaluate(ray('raycastHit'), w)).toBe(false);
+    expect(evaluate(ray('raycastEntity'), w)).toBe(NO_ENTITY);
+    expect(evaluate(ray('raycastPoint'), w)).toEqual(TO);
+  });
+
+  it('маска необязательна и уходит в запрос как есть', () => {
+    const { world: w, calls } = withPhysics(null);
+    evaluate(ray('raycastHit', 'blocksVision'), w);
+    evaluate(ray('raycastHit'), w);
+    expect(calls[0]!.options).toEqual({ mask: 'blocksVision', ignore: 1 });
+    // Без маски — пересечение по всем коллайдерам: подставленного тега здесь нет.
+    expect(calls[1]!.options).toEqual({ ignore: 1 });
+    expect(calls[0]!.from).toEqual(FROM);
+    expect(calls[0]!.to).toEqual(TO);
+  });
+
+  it('исключаемая сущность вычисляется и передаётся как есть, включая «ссылки нет»', () => {
+    const { world: w, calls } = withPhysics(null);
+    // Не-живая сущность (в том числе -1) не исключает никого: совпасть ей не с
+    // чем, и отдельной проверки живости оператор не делает.
+    evaluate({ raycastHit: [vecOf(FROM), vecOf(TO), NO_ENTITY] }, w);
+    evaluate({ raycastHit: [vecOf(FROM), vecOf(TO), { var: 'self' }] }, w, { self: 2 });
+    expect(calls.map((call) => call.options?.ignore)).toEqual([NO_ENTITY, 2]);
+  });
+
+  it('сцена без Physics API — ошибка вычисления, а не «попадания нет» (SYS-9)', () => {
+    for (const op of ['raycastHit', 'raycastEntity', 'raycastPoint']) {
+      expect(() => evaluate(ray(op), world), op).toThrow(
+        new RegExp(`оператор "${op}": сцена без Physics API`),
+      );
+    }
+  });
+
+  it('арность 3 или 4, маска — имя строкой, точки — векторы', () => {
+    const { world: w } = withPhysics(null);
+    expect(() => evaluate({ raycastHit: [vecOf(FROM), vecOf(TO)] }, w)).toThrow(
+      /оператор "raycastHit": ожидалось аргументов от 3 до 4, получено 2/,
+    );
+    expect(() => evaluate({ raycastHit: [vecOf(FROM), vecOf(TO), 1, 'a', 'b'] }, w)).toThrow(
+      /ожидалось аргументов от 3 до 4, получено 5/,
+    );
+    expect(() => evaluate({ raycastHit: [vecOf(FROM), vecOf(TO), 1, { var: 'm' }] }, w, { m: 1 })).toThrow(
+      /оператор "raycastHit": ожидалось имя строкой/,
+    );
+    expect(() => evaluate({ raycastHit: [F(1), vecOf(TO), 1] }, w)).toThrow(
+      /оператор "raycastHit": ожидалось значение типа vec2/,
+    );
+  });
+
+  it('операторы входят в закрытую таблицу', () => {
+    expect(operators).toContain('raycastHit');
+    expect(operators).toContain('raycastEntity');
+    expect(operators).toContain('raycastPoint');
   });
 });
 
@@ -206,6 +322,9 @@ const EXPR_8_TABLE: readonly string[] = [
   'hasComponent',
   'isAlive',
   'hasFloorAt',
+  'raycastHit',
+  'raycastEntity',
+  'raycastPoint',
   'eventField',
   // арифметика
   '+',
@@ -273,6 +392,9 @@ const EXPR_8_SHAPES: Readonly<Record<string, ExpectedShape>> = {
   hasComponent: { min: 2, max: 2, literals: [1] },
   isAlive: { min: 1, max: 1 },
   hasFloorAt: { min: 1, max: 1 },
+  raycastHit: { min: 3, max: 4, literals: [3] },
+  raycastEntity: { min: 3, max: 4, literals: [3] },
+  raycastPoint: { min: 3, max: 4, literals: [3] },
   eventField: { min: 2, max: 2, literals: [1] },
   // арифметика
   '+': { min: 2, max: 2 },
@@ -343,9 +465,9 @@ describe('состав таблицы операторов (EXPR-8)', () => {
     expect([...operators].sort()).toEqual([...EXPR_8_TABLE].sort());
   });
 
-  it('в таблице ровно 41 оператор', () => {
-    expect(EXPR_8_TABLE.length).toBe(41);
-    expect(new Set(EXPR_8_TABLE).size).toBe(41);
+  it('в таблице ровно 44 оператора', () => {
+    expect(EXPR_8_TABLE.length).toBe(44);
+    expect(new Set(EXPR_8_TABLE).size).toBe(44);
   });
 
   it('перечень форм покрывает таблицу целиком и ничего сверх неё', () => {

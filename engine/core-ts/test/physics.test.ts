@@ -411,6 +411,191 @@ describe('маски слоёв (PHYS-2)', () => {
   });
 });
 
+describe('нормаль поверхности в событии столкновения (PHYS-9)', () => {
+  /** Длина нормали в Q16.16: единичная с точностью fixed-арифметики. */
+  const unitLength = (event: GameEvent): number =>
+    Math.hypot(fixed.toFloat(event.data.nx!), fixed.toFloat(event.data.ny!));
+
+  it('рикошет от круглого щита: нормаль по линии центров, не по оси движения', () => {
+    const h = harness(false);
+    // Круглое препятствие в слое статики; движущийся идёт мимо его центра.
+    const shield = h.place('Ball', {
+      Position: { x: F(2), y: F(0) },
+      Collider: { layer: LAYER_STATIC },
+    });
+    h.place('Mover', { Position: { x: F(1), y: F(0.3) }, Velocity: { x: F(0.5) } });
+    const events = h.step();
+
+    expect(events.map((e) => e.type)).toEqual(['Collision']);
+    expect(events[0]!.data.other).toBe(shield);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    // Направление — от щита к снаряду: осевая (-1, 0) была бы физически неверна.
+    expect(nx).toBeLessThan(0);
+    expect(ny).toBeGreaterThan(0);
+    expect(fixed.toFloat(nx)).toBeCloseTo(-1 / Math.hypot(1, 0.3), 3);
+    expect(fixed.toFloat(ny)).toBeCloseTo(0.3 / Math.hypot(1, 0.3), 3);
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 3);
+  });
+
+  it('круг о грань прямоугольника даёт ровно осевую нормаль', () => {
+    const h = harness(false);
+    h.place('Wall', { Position: { x: F(2), y: F(0) } });
+    h.place('Mover', {
+      Position: { x: F(1), y: F(0) },
+      Velocity: { x: F(0.5) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toMatchObject({ nx: fixed.fromInt(-1), ny: 0 });
+  });
+
+  it('круг об угол прямоугольника даёт диагональную нормаль единичной длины', () => {
+    const h = harness(false);
+    h.place('Wall', { Position: { x: F(2), y: F(0) } }); // угол (1.5, 0.5)
+    h.place('Mover', {
+      Position: { x: F(1), y: F(0.7) },
+      Velocity: { x: F(0.5) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    const distance = Math.hypot(0.5, 0.2);
+    expect(fixed.toFloat(nx)).toBeCloseTo(-0.5 / distance, 3);
+    expect(fixed.toFloat(ny)).toBeCloseTo(0.2 / distance, 3);
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 3);
+  });
+
+  it('круг об угол статики обрыва — тот же расчёт, что и для сущности-прямоугольника', () => {
+    const h = harness(); // статика обрыва: отрезок x = 2, y ∈ [0, 1]
+    h.place('Mover', {
+      Position: { x: F(1.5), y: F(-0.2) },
+      Velocity: { x: F(0.5) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.other).toBe(STATIC_COLLIDER);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    const distance = Math.hypot(0.5, 0.2);
+    expect(fixed.toFloat(nx)).toBeCloseTo(-0.5 / distance, 3);
+    expect(fixed.toFloat(ny)).toBeCloseTo(-0.2 / distance, 3);
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 3);
+  });
+
+  it('плоская стена из соседних отрезков статики даёт осевую нормаль у стыка', () => {
+    // Стена мира — цепочка односкелеточных отрезков (TERR-5): статика x = 2,
+    // y ∈ [0, 1] и y ∈ [1, 2]. Удар рядом со стыком блокируют оба звена, и
+    // нормаль обязана прийти от ближайшего — иначе ближайшая точка дальнего
+    // звена (его внутренний стык) дала бы ложную диагональ.
+    const h = harness();
+    h.place('Mover', {
+      Position: { x: F(1.5), y: F(1.4) },
+      Velocity: { x: F(0.4) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.5) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.other).toBe(STATIC_COLLIDER);
+    expect(events[0]!.data).toMatchObject({ nx: fixed.fromInt(-1), ny: 0 });
+  });
+
+  it('пара кругов: нормаль по линии центров', () => {
+    const h = harness(false);
+    const shield = h.place('Ball', {
+      Position: { x: F(2), y: F(0) },
+      Collider: { layer: LAYER_STATIC },
+    });
+    // Оба участника — круги: и препятствие, и движущийся.
+    h.place('Mover', {
+      Position: { x: F(1), y: F(0.4) },
+      Velocity: { x: F(0.5) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.other).toBe(shield);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    const distance = Math.hypot(1, 0.4);
+    expect(fixed.toFloat(nx)).toBeCloseTo(-1 / distance, 3);
+    expect(fixed.toFloat(ny)).toBeCloseTo(0.4 / distance, 3);
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 3);
+  });
+
+  it('малый разнос центров: точность нормали ограничена Q16.16', () => {
+    // Разнос центров ~0.028 юнита: квадраты в `normalize` уходят в младшие
+    // разряды Q16.16, и единичность держится с точностью порядка процента.
+    // Тест документирует достижимый допуск, а не требует большего.
+    const h = harness(false);
+    h.place('Ball', { Position: { x: F(2), y: F(0) }, Collider: { layer: LAYER_STATIC } });
+    h.place('Mover', {
+      Position: { x: F(1.98), y: F(0.02) },
+      Velocity: { x: F(0.02) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    expect(nx).toBeLessThan(0);
+    expect(ny).toBeGreaterThan(0);
+    expect(fixed.toFloat(nx)).toBeCloseTo(-Math.SQRT1_2, 2);
+    expect(fixed.toFloat(ny)).toBeCloseTo(Math.SQRT1_2, 2);
+    // Замеренное отклонение длины — 0.4%: детерминированное, но на порядок
+    // хуже, чем на боевых расстояниях (там 1e-4).
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 2);
+  });
+
+  it('вырожденный случай — детерминированный фолбэк на осевую нормаль', () => {
+    const h = harness(false);
+    h.place('Wall', { Position: { x: F(2), y: F(0) } });
+    // Центр круга внутри прямоугольника: ближайшая точка совпадает с центром,
+    // единичный вектор из нулевого не восстановить.
+    h.place('Mover', {
+      Position: { x: F(1.9), y: F(0.2) },
+      Velocity: { x: F(0.1) },
+      Collider: { shape: SHAPE_CIRCLE, radius: F(0.25) },
+    });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toMatchObject({ nx: fixed.fromInt(-1), ny: 0 });
+  });
+
+  it('пара прямоугольников: нормаль осевая, как раньше', () => {
+    const h = harness(false);
+    h.place('Wall', { Position: { x: F(2), y: F(0.3) } });
+    h.place('Mover', { Position: { x: F(1), y: F(0) }, Velocity: { x: F(0.5) } });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toMatchObject({ nx: fixed.fromInt(-1), ny: 0 });
+  });
+
+  it('нормаль по оси Y считается по той же поверхности', () => {
+    const h = harness(false);
+    const shield = h.place('Ball', {
+      Position: { x: F(0), y: F(2) },
+      Collider: { layer: LAYER_STATIC },
+    });
+    h.place('Mover', { Position: { x: F(0.3), y: F(1) }, Velocity: { y: F(0.5) } });
+    const events = h.step();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.other).toBe(shield);
+    const { nx, ny } = events[0]!.data as { nx: number; ny: number };
+    expect(nx).toBeGreaterThan(0);
+    expect(ny).toBeLessThan(0);
+    expect(unitLength(events[0]!)).toBeCloseTo(1, 3);
+  });
+});
+
 describe('TimeScale в точке интеграции (PHYS-8, TIME-4)', () => {
   it('TimeScale 0.5 — половина смещения за тик, скорость не мутируется', () => {
     const h = harness(false);
@@ -575,6 +760,27 @@ describe('raycast (PHYS-6)', () => {
     const wall = h.place('Wall', { Position: { x: F(2), y: F(0) } });
     expect(h.physics.raycast(at(2, 0), at(5, 0), { mask: BLOCKS_VISION, ignore: wall })).toBeNull();
     expect(h.physics.raycast(at(0, 0), at(5, 0), { mask: 'somethingElse' })).toBeNull();
+  });
+
+  /**
+   * Маска ФИЛЬТРУЕТ коллайдеры (PHYS-6), поэтому её отсутствие — не фильтр по
+   * какому-то умолчанию, а его отсутствие: иначе луч, пущенный из выражения без
+   * маски (EXPR-8), молча считался бы по одному чужому тегу.
+   */
+  it('без маски пересечение считается по всем коллайдерам', () => {
+    const h = harness(false);
+    // У `Bullet` тега обзора нет: маска `blocksVision` его не видит, а луч без
+    // маски — видит.
+    const bullet = h.place('Bullet', { Position: { x: F(2), y: F(0) } });
+    expect(h.physics.raycast(at(0, 0), at(5, 0), { mask: BLOCKS_VISION })).toBeNull();
+    expect(h.physics.raycast(at(0, 0), at(5, 0))!.entity).toBe(bullet);
+  });
+
+  it('без маски видна и статика: тега у обрыва она не спрашивает', () => {
+    const h = harness();
+    const hit = h.physics.raycast(at(1.5, 0.5), at(3, 0.5));
+    expect(hit).not.toBeNull();
+    expect(hit!.entity).toBeUndefined();
   });
 
   it('луч нулевой длины не даёт попадания', () => {

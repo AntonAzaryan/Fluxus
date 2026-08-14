@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "name": "normal",
+  "reaction": {
+    "delayTicks": 10,
+    "jitterTicks": 4,
+    "memoryTicks": 180
+  },
+  "aim": {
+    "noiseDegrees": 5,
+    "noisePeriodTicks": 12
+  },
+  "decision": {
+    "intervalTicks": 6,
+    "jitterTicks": 3
+  },
+  "movement": {
+    "maxSpeed": 1,
+    "arriveTolerance": 0.25,
+    "edgeMargin": 2
+  },
+  "ability": {
+    "button": 0,
+    "cooldownTicks": 45,
+    "range": 8
+  },
+  "utility": {
+    "pressure": 1,
+    "kite": 0.8,
+    "retreat": 1,
+    "dodge": 1.2,
+    "ability": 1
+  },
+  "aggression": 0.6,
+  "seed": 2
+}

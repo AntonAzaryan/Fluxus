@@ -38,6 +38,7 @@ import {
   kindByTags,
   type CameraPose,
   type DecorationInstance,
+  type ModelInstanceView,
   type RenderContext,
   type ViewportPoint,
 } from '../src/index.js';
@@ -122,8 +123,8 @@ describe('декларативное сведение набора decoration (R
     expect(rig.decorations.entityOf('b')).toBeUndefined();
 
     rig.frame(0.016);
-    expect(instanceOf(rig, 'a')!.holder.position.x).toBeCloseTo(3, 6);
-    expect(instanceOf(rig, 'c')!.holder.position.x).toBeCloseTo(4, 6);
+    expect(instanceOf(rig, 'a')!.pose.x).toBeCloseTo(3, 6);
+    expect(instanceOf(rig, 'c')!.pose.x).toBeCloseTo(4, 6);
   });
 
   it('ключ устойчив к правке полей: инстанс обновляется, а не пересоздаётся', () => {
@@ -135,19 +136,21 @@ describe('декларативное сведение набора decoration (R
     // Правка позиции, курса, масштаба и скина — всё это одна и та же запись.
     rig.decorations.apply([decoration('a', { x: 5, y: 6, yaw: 0.7, scale: 2, skin: 'mossy' })]);
     const after = instanceOf(rig, 'a')!;
-    expect(after.holder).toBe(before.holder);
+    // Вид инстанса стабилен на всё время его жизни: тот же объект — тот же
+    // инстанс, пересоздания не было (REND-3, REND-18).
+    expect(after).toBe(before);
     expect(after.model).toBe(before.model);
     rig.frame(0.016);
-    expect(after.holder.position.x).toBeCloseTo(5, 6);
-    expect(after.holder.scale.x).toBeCloseTo(2, 6);
+    expect(after.pose.x).toBeCloseTo(5, 6);
+    expect(after.pose.scale).toBeCloseTo(2, 6);
   });
 
   it('смена вида пересоздаёт инстанс — это другая модель, а не правка поля', () => {
     const rig = makeRig();
     rig.decorations.apply([decoration('a')]);
-    const before = instanceOf(rig, 'a')!.holder;
+    const before = instanceOf(rig, 'a')!;
     rig.decorations.apply([decoration('a', { kind: 'Grass' })]);
-    expect(instanceOf(rig, 'a')!.holder).not.toBe(before);
+    expect(instanceOf(rig, 'a')).not.toBe(before);
     expect(rig.models.decorationCount).toBe(1);
   });
 
@@ -159,7 +162,10 @@ describe('декларативное сведение набора decoration (R
     const requested = rig.assets.requests.filter((r) => r.kind === 'model').map((r) => r.id);
     expect(requested).toContain(MODEL_ID);
     expect(requested).toContain(GRASS_ID);
-    expect(instanceOf(rig, 'grass')!.model).not.toBeNull();
+    // Запись `Grass` без контроля костей — батчевый ярус (REND-20): модели
+    // детального яруса у неё нет, а заглушка снята — модель доехала.
+    expect(instanceOf(rig, 'grass')!.tier).toBe('batched');
+    expect(instanceOf(rig, 'grass')!.placeholder).toBe(false);
   });
 
   it('повторный ключ в одном наборе — отказ, а не молчаливая победа последнего', () => {
@@ -196,14 +202,14 @@ describe('производного от TickResult у decoration нет (REND-18
     const rig = makeRig();
     rig.decorations.apply([decoration('a', { x: 0 })]);
     rig.frame(0.016);
-    expect(instanceOf(rig, 'a')!.holder.position.x).toBeCloseTo(0, 6);
+    expect(instanceOf(rig, 'a')!.pose.x).toBeCloseTo(0, 6);
 
     rig.decorations.apply([decoration('a', { x: 10, yaw: 1 })]);
     // Первый же кадр после правки — в новой позе целиком, без «доезжания».
     rig.frame(0.016);
-    const holder = instanceOf(rig, 'a')!.holder;
-    expect(holder.position.x).toBeCloseTo(10, 6);
-    expect(holder.rotation.z).toBeCloseTo(1, 6);
+    const pose = instanceOf(rig, 'a')!.pose;
+    expect(pose.x).toBeCloseTo(10, 6);
+    expect(pose.yaw).toBeCloseTo(1, 6);
   });
 
   it('клип — состояние покоя записи манифеста; событийных клипов нет', () => {
@@ -219,7 +225,7 @@ describe('производного от TickResult у decoration нет (REND-18
     rig.assets.resolve('model', MODEL_ID, makeModel());
     rig.frame(0.5);
     // Инстанс на нуле: ни дуги прыжка, ни снижения — манёвров у него не бывает.
-    expect(instanceOf(rig, 'a')!.holder.position.z).toBeCloseTo(0, 6);
+    expect(instanceOf(rig, 'a')!.pose.z).toBeCloseTo(0, 6);
   });
 });
 
@@ -273,21 +279,21 @@ describe('набор сосуществует с любым продюсером
     decorations.apply([decoration('grass', { kind: 'Grass', x: 1, y: 1 })]);
     source.apply([{ key: 'unit', kind: 'Runner', x: 0.5, y: 0.5 }]);
     expect(ctx.scene.children.length).toBe(2);
-    const decorationHolder = instanceHolder(models, decorations, 'grass');
+    const decorationInstance = instanceView(models, decorations, 'grass');
 
     // Вход в превью: документные инстансы гасятся сменой продюсера…
     dispatch(tick(sim, state), [host]);
     expect(stage.activeProducer).toBe(host);
     // …а декорация остаётся тем же самым инстансом — её набор от смены не зависит.
     expect(models.decorationCount).toBe(1);
-    expect(instanceHolder(models, decorations, 'grass')).toBe(decorationHolder);
+    expect(instanceView(models, decorations, 'grass')).toBe(decorationInstance);
     expect(ctx.scene.children.length).toBe(2);
 
     // Выход из превью: тоже без удвоения и без гашения декорации.
     source.apply([{ key: 'unit', kind: 'Runner', x: 0.5, y: 0.5 }]);
     expect(stage.activeProducer).toBe(source);
     expect(models.decorationCount).toBe(1);
-    expect(instanceHolder(models, decorations, 'grass')).toBe(decorationHolder);
+    expect(instanceView(models, decorations, 'grass')).toBe(decorationInstance);
     expect(ctx.scene.children.length).toBe(2);
   });
 
@@ -324,14 +330,14 @@ describe('переподача манифеста действует и на dec
     rig.decorations.apply([decoration('a', { kind: 'Grass' })]);
     rig.assets.resolve('model', GRASS_ID, makeModel());
     const before = instanceOf(rig, 'a')!;
-    expect(before.model).not.toBeNull();
+    expect(before.placeholder).toBe(false);
 
     const next = makeManifest();
     next.decorations!.Grass = { model: 'models/flower.mdx', scale: 1 };
     rig.models.applyManifest(next);
     // Другая модель — инстанс пересобран под новую запись (REND-3, REND-17).
     expect(rig.assets.requests.some((r) => r.id === 'models/flower.mdx')).toBe(true);
-    expect(instanceOf(rig, 'a')!.model).toBeNull();
+    expect(instanceOf(rig, 'a')!.placeholder).toBe(true);
   });
 });
 
@@ -343,13 +349,13 @@ function lookDown(x: number, y: number, z = 10): CameraPose {
   return { posX: x, posY: y, posZ: z, yaw: 0, pitch: Math.PI / 2, roll: 0, fovDeg: 45 };
 }
 
-function instanceHolder(
+function instanceView(
   models: ModelsSubsystem,
   set: DecorationSet,
   key: string,
-): THREE.Group | null {
+): ModelInstanceView | null {
   const entity = set.entityOf(key);
-  return entity === undefined ? null : (models.instanceFor(entity, true)?.holder ?? null);
+  return entity === undefined ? null : models.instanceFor(entity, true);
 }
 
 function curvedGrid(): TerrainGrid {
@@ -409,8 +415,8 @@ describe('picking и наложения по decoration-инстансам (REND
     // посажена на визуальную поверхность тем же путём, что сим-объект (REND-9,
     // REND-10): плато уровня 1 при шаге высоты 2 — это z = 2, и разрешись
     // picking по «документной» позе на нуле, попадание разошлось бы с картинкой.
-    const holder = instanceHolder(rig.models, rig.decorations, 'rock')!;
-    expect(holder.position.z).toBeCloseTo(2, 6);
+    const pose = instanceView(rig.models, rig.decorations, 'rock')!.pose;
+    expect(pose.z).toBeCloseTo(2, 6);
 
     const hit = rig.picking.pick(lookDown(2.5, 1.5, 12), VIEWPORT)!;
     expect(hit.kind).toBe('entity');

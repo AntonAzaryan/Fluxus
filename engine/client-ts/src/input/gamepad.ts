@@ -31,8 +31,11 @@ export class GamepadSource implements InputSource {
   private readonly bindings: GamepadBindings;
   private readonly getGamepad: () => GamepadLike | null;
   private press: ActionSink | null = null;
-  private readonly held = new HeldActions();
+  /** Детектор фронтов опросного устройства (INP-2). */
+  private readonly edges = new HeldActions();
   private readonly current = new Set<string>();
+  /** Было ли устройство на последнем опросе: неактивный источник — `null` (INP-5). */
+  private connected = false;
   private lastAim: number | null = null;
 
   constructor(bindings: GamepadBindings, getGamepad: () => GamepadLike | null) {
@@ -46,22 +49,35 @@ export class GamepadSource implements InputSource {
 
   stop(): void {
     this.press = null;
-    this.held.reset();
+    this.edges.reset();
+    this.current.clear();
+    this.connected = false;
+  }
+
+  /**
+   * Удержания опросного устройства — состояние кнопок последнего `poll()`
+   * (INP-2): та же гарантия, что у событийной клавиатуры.
+   */
+  held(): ReadonlySet<string> | null {
+    return this.connected ? this.current : null;
   }
 
   poll(): ContinuousSample | null {
     const pad = this.getGamepad();
     if (pad === null) {
       // Отключение: кнопки не «дожаты» при переподключении, движение — нейтраль.
-      this.held.reset();
+      this.edges.reset();
+      this.current.clear();
+      this.connected = false;
       return null;
     }
+    this.connected = true;
 
     this.current.clear();
     for (const [index, action] of Object.entries(this.bindings.buttons)) {
       if (pad.buttons[Number(index)]?.pressed === true) this.current.add(action);
     }
-    if (this.press !== null) this.held.update(this.current, this.press);
+    if (this.press !== null) this.edges.update(this.current, this.press);
 
     const [mxAxis, myAxis] = this.bindings.moveAxes;
     const move = radialDeadzone(pad.axes[mxAxis] ?? 0, pad.axes[myAxis] ?? 0, this.bindings.deadzone);

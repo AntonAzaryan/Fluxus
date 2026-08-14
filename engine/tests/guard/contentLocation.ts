@@ -51,6 +51,15 @@ const CONTENT_NAMES = new Map<string, string>([
   ['manifest.json', 'манифест визуалов (assets ASSET-6)'],
 ]);
 
+/**
+ * Документы контента, опознаваемые по директории: имя файла ничего о виде не
+ * говорит, а место — говорит. Профиль бота (`bot-player` BOT-6) назван уровнем
+ * сложности (`easy.json`), и по суффиксу его не отличить от любого JSON.
+ */
+const CONTENT_DIRS = new Map<string, string>([
+  ['bots', 'профиль поведения бота (bot-player BOT-6)'],
+]);
+
 /** Не обходятся никогда: сборочный мусор и чужие пакеты — не исходники репозитория. */
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.vite']);
 
@@ -64,12 +73,13 @@ export const ENGINE_FIXTURE_EXCLUSIONS: readonly ContentExclusion[] = [
   { dir: 'assets-ts/test/fixtures', reason: 'фикстуры парсеров модуля ассетов' },
 ];
 
-function classify(name: string): string | undefined {
+function classify(name: string, dir: string): string | undefined {
   const byName = CONTENT_NAMES.get(name);
   if (byName !== undefined) return byName;
   for (const [suffix, kind] of CONTENT_SUFFIXES) {
     if (name.endsWith(suffix)) return kind;
   }
+  if (name.endsWith('.json')) return CONTENT_DIRS.get(dir);
   return undefined;
 }
 
@@ -83,7 +93,7 @@ function walk(dir: string, rootDir: string, excluded: ReadonlySet<string>, out: 
       walk(full, rootDir, excluded, out);
       continue;
     }
-    const kind = classify(entry);
+    const kind = classify(entry, dir.split(sep).pop() ?? '');
     if (kind === undefined) continue;
     out.push({
       file: rel,

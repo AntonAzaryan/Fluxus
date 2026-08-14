@@ -6,8 +6,25 @@
  * Политика — таблицы манифеста «состояние → клип» и «событие → one-shot клип»
  * (ASSET-6); привязка конкретных клипов к состояниям и событиям кодом не
  * задаётся.
+ *
+ * МАШИНА СОСТОЯНИЙ ОДНА НА ОБА ЯРУСА (REND-20). Носитель воспроизведения —
+ * `AnimationBackend`: у детального инстанса это `THREE.AnimationMixer` со
+ * скелетом (`MixerAnimationBackend`), у батчевой записи — пара скаляров
+ * «строка VAT + вес перехода» (`VatAnimationBackend`, `vatAnimation.ts`).
+ * Разводить машину по ярусам было бы двумя реализациями REND-4, а требование
+ * прямо велит поведению ярусов совпадать: одно и то же событие обязано дать
+ * один и тот же клип независимо от того, чем инстанс нарисован.
  */
 import * as THREE from 'three';
+
+/**
+ * Клип с точки зрения разрешения записи манифеста (REND-4): имя — всё, что
+ * механизму нужно. Так одна реализация разрешения обслуживает и клипы THREE
+ * детального яруса, и запечённые клипы батчевого (`assets` ASSET-12).
+ */
+export interface NamedClip {
+  readonly name: string;
+}
 
 /**
  * Итог разрешения записи манифеста в клип (REND-4). Не `clip | null`: чтобы
@@ -15,8 +32,8 @@ import * as THREE from 'three';
  * совпавшую ни с чем (опечатка), от записи, совпавшей с несколькими клипами —
  * и во втором случае знать, с какими именно.
  */
-export type ClipResolution =
-  | { readonly status: 'resolved'; readonly clip: THREE.AnimationClip }
+export type ClipResolution<TClip extends NamedClip = THREE.AnimationClip> =
+  | { readonly status: 'resolved'; readonly clip: TClip; readonly index: number }
   | { readonly status: 'missing' }
   | { readonly status: 'ambiguous'; readonly candidates: readonly string[] };
 
@@ -34,29 +51,140 @@ export type ClipResolution =
  * ровно то, что REND-4 запрещает, а порядок клипов задаёт файл модели, а не
  * автор манифеста.
  */
-export function resolveClip(
-  clips: readonly THREE.AnimationClip[],
+export function resolveClip<TClip extends NamedClip>(
+  clips: readonly TClip[],
   entry: string,
-): ClipResolution {
+): ClipResolution<TClip> {
   const needle = entry.toLowerCase();
 
   // Фаза 1: точное совпадение. Оно обязано бить совпадение по подстроке, иначе
   // на модель, где имя одного клипа — подстрока имени другого, на первый клип
   // сослаться нечем (REND-4).
-  const exact = clips.filter((clip) => clip.name.toLowerCase() === needle);
-  if (exact.length === 1) return { status: 'resolved', clip: exact[0]! };
+  const exact = indicesOf(clips, (name) => name === needle);
+  if (exact.length === 1) return resolved(clips, exact[0]!);
   // Два клипа с одним именем: точную ссылку выразить нечем — это та же
   // неоднозначность, а не повод выбрать любой из них.
-  if (exact.length > 1) return { status: 'ambiguous', candidates: exact.map((clip) => clip.name) };
+  if (exact.length > 1) return ambiguous(clips, exact);
 
   // Фаза 2: подстрока. Остаётся потому, что у MDX-моделей имена секвенций несут
   // суффиксы вариантов (`Attack Slam`, `Attack Slam Two`), и подстрока — рабочий
   // способ сослаться на семейство; достаточно, чтобы точное совпадение её било.
-  const partial = clips.filter((clip) => clip.name.toLowerCase().includes(needle));
-  if (partial.length === 1) return { status: 'resolved', clip: partial[0]! };
+  const partial = indicesOf(clips, (name) => name.includes(needle));
+  if (partial.length === 1) return resolved(clips, partial[0]!);
   if (partial.length === 0) return { status: 'missing' };
-  return { status: 'ambiguous', candidates: partial.map((clip) => clip.name) };
+  return ambiguous(clips, partial);
 }
+
+function indicesOf(
+  clips: readonly NamedClip[],
+  match: (lowerName: string) => boolean,
+): number[] {
+  const found: number[] = [];
+  clips.forEach((clip, index) => {
+    if (match(clip.name.toLowerCase())) found.push(index);
+  });
+  return found;
+}
+
+function resolved<TClip extends NamedClip>(
+  clips: readonly TClip[],
+  index: number,
+): ClipResolution<TClip> {
+  return { status: 'resolved', clip: clips[index]!, index };
+}
+
+function ambiguous<TClip extends NamedClip>(
+  clips: readonly TClip[],
+  indices: readonly number[],
+): ClipResolution<TClip> {
+  return { status: 'ambiguous', candidates: indices.map((index) => clips[index]!.name) };
+}
+
+// ------------------------------------------------------------------ бэкенд
+
+/**
+ * Носитель воспроизведения клипа — то единственное, чем ярусы (REND-20)
+ * различаются в анимации. Контроллер знает про клипы только их номер: имена
+ * разрешаются здесь же, в машине, а как номер превращается в позу — дело
+ * бэкенда.
+ */
+export interface AnimationBackend {
+  /** Клипы модели в порядке индексов — вход разрешения записи (REND-4). */
+  readonly clips: readonly NamedClip[];
+  /** Индекс звучащего клипа; -1 — ни одного. */
+  readonly currentClip: number;
+  /** Зацикленный клип с кроссфейдом от того, что звучало. */
+  playLoop(index: number, crossfade: number): void;
+  /** One-shot с фиксацией последнего кадра до возврата в локомоцию. */
+  playOnce(index: number, crossfade: number): void;
+  /** Покадровое продвижение; здесь же срабатывает завершение one-shot. */
+  update(dt: number): void;
+  /**
+   * Кого звать по завершении one-shot; ставит контроллер при создании.
+   * Обратный вызов, а не флаг, потому что момент завершения знает бэкенд
+   * (микшер сообщает событием, скаляры — переполнением фазы), а решение
+   * «возвращаться ли в локомоцию» принимает машина.
+   */
+  onOneShotFinished: (() => void) | null;
+}
+
+/** Бэкенд детального яруса: `THREE.AnimationMixer` поверх скелета инстанса. */
+export class MixerAnimationBackend implements AnimationBackend {
+  onOneShotFinished: (() => void) | null = null;
+
+  readonly clips: readonly THREE.AnimationClip[];
+  private readonly mixer: THREE.AnimationMixer;
+  /** Активное действие (то, что сейчас вкроссфейжено). */
+  private active: THREE.AnimationAction | null = null;
+  /** Проигрываемый one-shot; по завершении о нём сообщает микшер. */
+  private oneShot: THREE.AnimationAction | null = null;
+  private current = -1;
+
+  constructor(mixer: THREE.AnimationMixer, clips: readonly THREE.AnimationClip[]) {
+    this.mixer = mixer;
+    this.clips = clips;
+    // LoopOnce-действие сообщает о конце через микшер — здесь возврат в локомоцию.
+    this.mixer.addEventListener('finished', (event) => {
+      if (event.action !== this.oneShot) return;
+      this.oneShot = null;
+      this.onOneShotFinished?.();
+    });
+  }
+
+  get currentClip(): number {
+    return this.current;
+  }
+
+  playLoop(index: number, crossfade: number): void {
+    const action = this.mixer.clipAction(this.clips[index]!);
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    action.clampWhenFinished = false;
+    this.fadeTo(action, crossfade);
+    this.current = index;
+  }
+
+  playOnce(index: number, crossfade: number): void {
+    const action = this.mixer.clipAction(this.clips[index]!);
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true; // держим последний кадр до возврата в локомоцию
+    this.fadeTo(action, crossfade);
+    this.oneShot = action;
+    this.current = index;
+  }
+
+  update(dt: number): void {
+    this.mixer.update(dt);
+  }
+
+  private fadeTo(next: THREE.AnimationAction, crossfade: number): void {
+    const previous = this.active;
+    next.reset().fadeIn(crossfade).play();
+    if (previous !== null && previous !== next) previous.fadeOut(crossfade);
+    this.active = next;
+  }
+}
+
+// -------------------------------------------------------------- контроллер
 
 /** Маппинг манифеста визуалов (ASSET-6): состояние → клип, событие → one-shot клип. */
 export interface AnimationMapping {
@@ -77,8 +205,7 @@ const DEFAULT_CROSSFADE = 0.15;
 const DEFAULT_DEATH_EVENT = 'EntityDied';
 
 export class AnimationController {
-  private readonly mixer: THREE.AnimationMixer;
-  private readonly clips: readonly THREE.AnimationClip[];
+  private readonly backend: AnimationBackend;
   /** Таблицы манифеста; переподаваемы вместе с ним (REND-17). */
   private mapping: AnimationMapping;
   private readonly crossfade: number;
@@ -92,10 +219,8 @@ export class AnimationController {
    */
   private readonly warnedEntries = new Set<string>();
 
-  /** Активное действие (то, что сейчас вкроссфейжено). */
-  private active: THREE.AnimationAction | null = null;
-  /** Проигрываемый one-shot; по завершении возвращаемся в локомоцию. */
-  private oneShot: THREE.AnimationAction | null = null;
+  /** Идёт one-shot: смены состояния копятся и применяются по его завершении. */
+  private oneShotPlaying = false;
   /** Текущее состояние локомоции ('idle'/'move' в MVP). */
   private state: string | null = null;
   /** Клип, назначенный набором инстансов поверх состояния (REND-11); undefined — не назначен. */
@@ -103,23 +228,19 @@ export class AnimationController {
   private dead = false;
 
   constructor(
-    mixer: THREE.AnimationMixer,
-    clips: readonly THREE.AnimationClip[],
+    backend: AnimationBackend,
     mapping: AnimationMapping,
     options: AnimationControllerOptions = {},
   ) {
-    this.mixer = mixer;
-    this.clips = clips;
+    this.backend = backend;
     this.mapping = mapping;
     this.crossfade = options.crossfade ?? DEFAULT_CROSSFADE;
     this.deathEvent = options.deathEvent ?? DEFAULT_DEATH_EVENT;
     this.warn = options.warn ?? ((message) => { console.warn(message); });
-    // LoopOnce-действие сообщает о конце через микшер — здесь возврат в локомоцию.
-    this.mixer.addEventListener('finished', (event) => {
-      if (event.action !== this.oneShot) return;
-      this.oneShot = null;
+    backend.onOneShotFinished = (): void => {
+      this.oneShotPlaying = false;
       if (!this.dead) this.resumeLoop();
-    });
+    };
   }
 
   get isDead(): boolean {
@@ -128,7 +249,8 @@ export class AnimationController {
 
   /** Имя активного клипа — для тестов и отладки. */
   get currentClipName(): string | null {
-    return this.active?.getClip().name ?? null;
+    const index = this.backend.currentClip;
+    return index < 0 ? null : (this.backend.clips[index]?.name ?? null);
   }
 
   /**
@@ -140,7 +262,7 @@ export class AnimationController {
     this.state = state;
     // Назначенный клип бьёт состояние: в документном режиме состояние всё равно
     // производить не из чего, а в игровом override не ставится (REND-11).
-    if (this.oneShot !== null || this.override !== undefined) return;
+    if (this.oneShotPlaying || this.override !== undefined) return;
     this.playState(state);
   }
 
@@ -153,7 +275,7 @@ export class AnimationController {
   setClipOverride(entry: string | undefined): void {
     if (this.override === entry) return;
     this.override = entry;
-    if (this.dead || this.oneShot !== null) return;
+    if (this.dead || this.oneShotPlaying) return;
     this.resumeLoop();
   }
 
@@ -170,7 +292,7 @@ export class AnimationController {
   setMapping(mapping: AnimationMapping): void {
     const before = this.playingEntry();
     this.mapping = mapping;
-    if (this.dead || this.oneShot !== null) return;
+    if (this.dead || this.oneShotPlaying) return;
     if (this.playingEntry() === before) return;
     this.resumeLoop();
   }
@@ -193,20 +315,17 @@ export class AnimationController {
     const clip = this.clipFor(entry);
     // Запись есть, но не разрешилась — предупреждение уже выдано, one-shot не
     // играем: текущий клип остаётся, произвольный не подставляется (REND-4).
-    if (clip === null) return false;
+    if (clip < 0) return false;
 
-    const action = this.mixer.clipAction(clip);
-    action.setLoop(THREE.LoopOnce, 1);
-    action.clampWhenFinished = true; // держим последний кадр до возврата в локомоцию
-    this.fadeTo(action);
-    this.oneShot = action;
+    this.oneShotPlaying = true;
+    this.backend.playOnce(clip, this.crossfade);
     if (type === this.deathEvent) this.dead = true;
     return true;
   }
 
-  /** Покадровое продвижение микшера; здесь же срабатывает возврат из one-shot. */
+  /** Покадровое продвижение бэкенда; здесь же срабатывает возврат из one-shot. */
   update(dt: number): void {
-    this.mixer.update(dt);
+    this.backend.update(dt);
   }
 
   /** Зацикленный клип, к которому возвращаются: назначенный набором либо клип состояния. */
@@ -230,22 +349,18 @@ export class AnimationController {
 
   private playLoop(entry: string): void {
     const clip = this.clipFor(entry);
-    if (clip === null) return;
-
-    const action = this.mixer.clipAction(clip);
-    action.setLoop(THREE.LoopRepeat, Infinity);
-    action.clampWhenFinished = false;
-    this.fadeTo(action);
+    if (clip < 0) return;
+    this.backend.playLoop(clip, this.crossfade);
   }
 
   /**
-   * Запись манифеста → клип, либо null с предупреждением, называющим запись
-   * (REND-4). Тот же контракт, что у ссылки на отсутствующую кость в REND-5:
-   * диагностировать и пропустить, а не подставить что-нибудь молча.
+   * Запись манифеста → индекс клипа, либо -1 с предупреждением, называющим
+   * запись (REND-4). Тот же контракт, что у ссылки на отсутствующую кость в
+   * REND-5: диагностировать и пропустить, а не подставить что-нибудь молча.
    */
-  private clipFor(entry: string): THREE.AnimationClip | null {
-    const resolution = resolveClip(this.clips, entry);
-    if (resolution.status === 'resolved') return resolution.clip;
+  private clipFor(entry: string): number {
+    const resolution = resolveClip(this.backend.clips, entry);
+    if (resolution.status === 'resolved') return resolution.index;
     if (!this.warnedEntries.has(entry)) {
       this.warnedEntries.add(entry);
       this.warn(
@@ -254,13 +369,6 @@ export class AnimationController {
           : `render: запись анимации "${entry}" не совпала ни с одним клипом модели — клип не сменён (REND-4)`,
       );
     }
-    return null;
-  }
-
-  private fadeTo(next: THREE.AnimationAction): void {
-    const previous = this.active;
-    next.reset().fadeIn(this.crossfade).play();
-    if (previous !== null && previous !== next) previous.fadeOut(this.crossfade);
-    this.active = next;
+    return -1;
   }
 }

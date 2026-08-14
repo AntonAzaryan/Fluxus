@@ -43,6 +43,10 @@ function makeManifest(): VisualManifest {
     entities: {
       Runner: {
         model: MODEL_ID,
+        // Ярус назван явно (ASSET-13): без него снятие `boneControls` меняло бы
+        // и ярус записи, а тест здесь ровно про то, что инстанс переподачу
+        // ПЕРЕЖИВАЕТ (REND-17), а не пересобирается.
+        tier: 'detailed',
         defaultSkin: 'red',
         skins: { red: { '0': 'tex/red.png' }, blue: { '0': 'tex/blue.png' } },
         animations: { states: { idle: 'Stand', move: 'Walk' } },
@@ -51,7 +55,7 @@ function makeManifest(): VisualManifest {
       },
       // Вторая запись на той же модели: по ней видно, что правка соседней
       // записи чужих инстансов не касается.
-      Keeper: { model: MODEL_ID },
+      Keeper: { model: MODEL_ID, tier: 'detailed' },
     },
   };
 }
@@ -108,8 +112,10 @@ function onSlope(id: EntityId = HERO, partial: Parameters<typeof makeEntityView>
 
 /** Угол up-вектора инстанса от вертикали, радианы. */
 function tiltAngleOf(subsystem: ModelsSubsystem, entity: EntityId): number {
-  const holder = subsystem.instanceFor(entity)!.holder;
-  const up = new THREE.Vector3(0, 0, 1).applyQuaternion(holder.quaternion);
+  const pose = subsystem.instanceFor(entity)!.pose;
+  const up = new THREE.Vector3(0, 0, 1).applyQuaternion(
+    new THREE.Quaternion(pose.qx, pose.qy, pose.qz, pose.qw),
+  );
   return Math.acos(Math.min(Math.max(up.z, -1), 1));
 }
 
@@ -155,7 +161,7 @@ describe('переподача манифеста обновляет инста�
     expect(after.model).toBe(before.model);
     expect(after.model!.skeleton).toBe(before.model!.skeleton);
     expect(after.controller).toBe(before.controller);
-    expect(after.holder).toBe(before.holder);
+    expect(after).toBe(before);
     // Ассеты заново не запрашивались — модель не перезагружалась.
     expect(assets.requests.length).toBe(requestsBefore);
 
@@ -175,7 +181,7 @@ describe('переподача манифеста обновляет инста�
     assets.resolve('model', MODEL_ID, makeModel());
     subsystem.updateFrame(1 / 60, 1);
     const model = subsystem.instanceFor(HERO)!.model;
-    expect(subsystem.instanceFor(HERO)!.holder.rotation.z).toBeCloseTo(0, 6);
+    expect(subsystem.instanceFor(HERO)!.pose.yaw).toBeCloseTo(0, 6);
 
     const next = makeManifest();
     next.entities.Runner!.facingDeg = -90;
@@ -185,7 +191,7 @@ describe('переподача манифеста обновляет инста�
     subsystem.updateFrame(1 / 60, 1);
 
     expect(subsystem.instanceFor(HERO)!.model).toBe(model);
-    expect(subsystem.instanceFor(HERO)!.holder.rotation.z).toBeCloseTo(Math.PI / 2, 6);
+    expect(subsystem.instanceFor(HERO)!.pose.yaw).toBeCloseTo(Math.PI / 2, 6);
   });
 
   it('правка масштаба записи меняет размер и габариты инстанса без пересборки (REND-15)', () => {
@@ -290,15 +296,15 @@ describe('пересборка инстанса при смене модели (
     expect(subsystem.instanceFor(HERO)!.model).toBeNull();
 
     const next = makeManifest();
-    next.entities.Ghost = { model: MODEL_ID };
+    next.entities.Ghost = { model: MODEL_ID, tier: 'detailed' };
     subsystem.applyManifest(next);
     assets.resolve('model', MODEL_ID, makeModel());
 
     expect(subsystem.instanceFor(HERO)!.model).not.toBeNull();
-    // Инстанс тот же: второго holder'а на ту же сущность не появилось, а
-    // заглушка снята — под holder'ом только модель.
+    // Инстанс тот же: второго сценового объекта на ту же сущность не появилось,
+    // а заглушка снята — в кадре только модель.
     expect(ctx.scene.children.length).toBe(1);
-    expect(subsystem.instanceFor(HERO)!.holder.children.length).toBe(1);
+    expect(subsystem.instanceFor(HERO)!.placeholder).toBe(false);
   });
 });
 

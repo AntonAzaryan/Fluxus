@@ -24,7 +24,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^engine/core-ts/src' },
       to: {
-        path: '^(engine/(render|net|client|assets|hud)-ts|editor/|tools/|node_modules/)',
+        path: '^(engine/(render|net|client|assets|hud|bot)-ts|editor/|tools/|node_modules/)',
       },
     },
     {
@@ -39,8 +39,15 @@ module.exports = {
     {
       name: 'client-no-server-code',
       comment:
-        'Клиент не импортирует серверную сторону net: общий слой — протокол/' +
-        'транспорт/сессия net-ts, серверные хосты (server/, lobby/) — нет.',
+        'Ни библиотека оболочки, ни её демо не лезут ВНУТРЬ серверной стороны ' +
+        'net: путь туда — опубликованная поверхность пакета (барьер @game-mvp/net), ' +
+        'а не файл под src/server или src/lobby.\n' +
+        'Исключение названо явно, а не проходит по недосмотру: сборка демо — ' +
+        'основатель сессии `local` (net-session SES-1, change demo-net-play D1), ' +
+        'и MatchServer во вкладке она поднимает законно. Законно ИМЕННО барьером: ' +
+        'сессия отличается от выделенной только сборкой (SES-2), и знать о ' +
+        'внутренностях сервера ей для этого не требуется. Библиотеке (src/) ' +
+        'сервер не нужен вовсе — там запрет абсолютный по обоим измерениям.',
       severity: 'error',
       from: { path: '^engine/client-ts/(src|demo)' },
       to: { path: '^engine/net-ts/src/(server|lobby)/' },
@@ -58,7 +65,7 @@ module.exports = {
         'Рантайм (engine/*) не тянет authoring-конвейер Blender и редактор — ' +
         'соответствует authoringBoundary-тесту (BLND-7).',
       severity: 'error',
-      from: { path: '^engine/(core|net|render|assets|client|hud)-ts/src' },
+      from: { path: '^engine/(core|net|render|assets|client|hud|bot)-ts/src' },
       to: { path: '^(tools/blender-ts/|editor/)' },
     },
     {
@@ -67,7 +74,7 @@ module.exports = {
         'three — деталь слоя представления: рендерер, клиент, editor-ui и их ' +
         'тесты. Ядру, net, assets и editor-core он запрещён.',
       severity: 'error',
-      from: { path: '^(engine/(core|net|assets)-ts|editor/core-ts|tools/)' },
+      from: { path: '^(engine/(core|net|assets|bot)-ts|editor/core-ts|tools/)' },
       to: { path: '^node_modules/three/' },
     },
   ],

@@ -161,8 +161,14 @@ export function makeAssets(): AssetsStub {
 
 // ----------------------------------------------- presentation-состояние
 
+/**
+ * Presentation-срез сущности с умолчаниями. Вид манёвра прошлого тика по
+ * умолчанию совпадает с текущим: тест, назвавший манёвр, описывает кадр ВНУТРИ
+ * него, а переход между видами (и тик приземления) задаётся `prevMotion` явно —
+ * иначе каждый такой тест молча проверял бы вход в манёвр.
+ */
 export function makeEntityView(id: EntityId, partial: Partial<EntityView> = {}): EntityView {
-  return {
+  const view: EntityView = {
     id,
     kind: 'Runner',
     prevX: 0,
@@ -179,10 +185,13 @@ export function makeEntityView(id: EntityId, partial: Partial<EntityView> = {}):
     aimYaw: null,
     states: 0,
     motion: LOCOMOTION_NORMAL,
+    prevMotion: LOCOMOTION_NORMAL,
     prevMotionPhase: Number.NaN,
     currMotionPhase: Number.NaN,
+    flightPhase: Number.NaN,
     ...partial,
   };
+  return partial.prevMotion === undefined ? { ...view, prevMotion: view.motion } : view;
 }
 
 export function makeTickView(entities: EntityView[], partial: Partial<TickView> = {}): TickView {
@@ -193,6 +202,7 @@ export function makeTickView(entities: EntityView[], partial: Partial<TickView> 
     snapAll: false,
     freshEvents: false,
     entities: new Map(entities.map((entity) => [entity.id, entity])),
+    statNames: [],
     events: [],
     floorBits: null,
     floorChangedCells: [],

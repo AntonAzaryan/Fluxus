@@ -51,6 +51,7 @@ export class PresentationStage {
     snapAll: true,
     freshEvents: false,
     entities: NO_ENTITIES,
+    statNames: [],
     events: [],
     floorBits: null,
     floorChangedCells: [],

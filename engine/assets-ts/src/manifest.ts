@@ -36,6 +36,8 @@ export interface VisualManifest {
   surfaceAlign?: SurfaceAlign;
   /** Presentation-данные террейна арены. */
   terrain?: { curvatureMap?: string };
+  /** Секция транзиентных эффектов сцены (REND-23); потребитель — подсистема эффектов. */
+  effects?: VisualEffectsSection;
   /** Секция эффектов камеры (ASSET-8); потребитель — `camera` CAM-6. */
   cameraEffects?: CameraEffectsSection;
   /** Секция конфига камеры (ASSET-10); потребитель — конвейер `camera` CAM-1. */
@@ -58,6 +60,38 @@ export function resolveVisual(
 }
 
 /**
+ * Эффект-оболочка визуального типа (REND-23) — одно место разрешения на всех
+ * потребителей: подсистема эффектов рисует по нему, а подсистема моделей по
+ * нему же понимает, что сущность рисуется НЕ моделью и заглушка ей не нужна
+ * (ASSET-4 — заглушка означает «ассет не доехал», а не «записи нет»).
+ */
+export function resolveEffectByKind(
+  manifest: Pick<VisualManifest, 'effects'>,
+  kind: string,
+): VisualEffect | undefined {
+  return manifest.effects?.byKind?.[kind];
+}
+
+/**
+ * Эффект-оболочка доставленного состояния сущности (REND-23): сфера щита живёт,
+ * пока состояние доставляется, и исчезает вместе с ним.
+ */
+export function resolveEffectByState(
+  manifest: Pick<VisualManifest, 'effects'>,
+  state: string,
+): VisualEffect | undefined {
+  return manifest.effects?.byState?.[state];
+}
+
+/** Эффект-вспышка типа события (REND-23, REND-4: реакция на событие — данные). */
+export function resolveEffectByEvent(
+  manifest: Pick<VisualManifest, 'effects'>,
+  event: string,
+): VisualEffect | undefined {
+  return manifest.effects?.byEvent?.[event];
+}
+
+/**
  * Все визуальные ключи манифеста в одном пространстве (ASSET-9) — то, из чего
  * автор выбирает вид для размещения (`presentation-scene` PRES-2) и по чему
  * валидация редактора судит о разрешимости ссылки.
@@ -66,6 +100,68 @@ export function visualKeys(
   manifest: Pick<VisualManifest, 'entities' | 'decorations'>,
 ): readonly string[] {
   return [...Object.keys(manifest.entities), ...Object.keys(manifest.decorations ?? {})];
+}
+
+/**
+ * Секция транзиентных эффектов (`rendering` REND-23): три таблицы — эффект по
+ * визуальному типу сущности (оболочка живёт, пока живёт сущность), эффект по
+ * доставленному СОСТОЯНИЮ сущности (оболочка живёт, пока состояние доставляется
+ * — щит) и эффект по типу reliable-события (вспышка проигрывает свою
+ * длительность и исчезает).
+ *
+ * Пространства ключей у таблиц РАЗНЫЕ и пересекаться им не запрещено: слева
+ * визуальные типы, посередине имена компонент-состояний, справа типы событий, и
+ * одноимённые записи значат разное. Это не то же самое, что разделы записей
+ * инстансов (ASSET-9), где ключ один и разрешается одной функцией.
+ */
+export interface VisualEffectsSection {
+  /** Визуальный тип сущности → эффект-оболочка. */
+  byKind?: Record<string, VisualEffect>;
+  /**
+   * Имя компоненты-состояния сущности → эффект-оболочка (REND-23: «пока жива
+   * сущность И ЕЁ СОСТОЯНИЕ ЕГО ТРЕБУЕТ»). Состояния доезжают битами
+   * `EntityView.states` — тем же списком `stateComponents` сборки, что кормит
+   * длящиеся эффекты камеры (ASSET-8, CAM-6): второго способа назвать состояние
+   * в манифесте не появляется.
+   */
+  byState?: Record<string, VisualEffect>;
+  /** Тип события тика → эффект-вспышка. */
+  byEvent?: Record<string, VisualEffect>;
+}
+
+/**
+ * Запись эффекта (REND-23): примитив и его числа. Перечня примитивов и кривых
+ * у модуля ассетов нет намеренно — их называет рендер, а манифест переживает
+ * код: неизвестное имя подсистема пропускает с предупреждением, как и
+ * неизвестный тип эффекта камеры (ASSET-8).
+ */
+export interface VisualEffect {
+  /** Имя примитива; рендер сегодня умеет `sphere`. */
+  primitive: string;
+  /** Цвет в форме, которую понимает рендер (`#rrggbb`). */
+  color: string;
+  /** Радиус в начале жизни, мировые единицы. */
+  radius: number;
+  /** Радиус в конце жизни; без него радиус постоянен. */
+  radiusTo?: number;
+  /** Прозрачность в начале жизни, [0..1]; без неё — 1. */
+  alpha?: number;
+  /** Прозрачность в конце жизни; без неё альфа постоянна. */
+  alphaTo?: number;
+  /** Длительность вспышки, мс. У оболочки длительности нет — она живёт с сущностью. */
+  durationMs?: number;
+  /** Имя кривой фазы жизни; рендер сегодня умеет `linear` и `easeOut`. */
+  curve?: string;
+  /** Подъём центра примитива над опорной высотой, мировые единицы. */
+  height?: number;
+  /**
+   * Вертикальное смещение записи (REND-12) — для эффекта-оболочки, который и
+   * есть изображение сущности: полётная дуга снаряда живёт здесь по той же
+   * причине, по какой дуга прыжка живёт в записи инстанса, — это ЕГО запись
+   * манифеста. Виды смещения, к оболочке неприменимые (дуги манёвров,
+   * снижение при провале), смысла не имеют, как и у записи decoration (ASSET-9).
+   */
+  verticalOffset?: VerticalOffset;
 }
 
 /**
@@ -273,19 +369,70 @@ export interface SurfaceAlign {
 export const DEFAULT_SURFACE_ALIGN: Readonly<SurfaceAlign> = Object.freeze({ factor: 1 });
 
 /**
- * Вертикальное смещение инстанса (REND-12): дуга прыжка и снижение при
+ * Вертикальное смещение инстанса (REND-12): дуги движения и снижение при
  * провале. Вертикали в симуляции нет (`locomotion` LOC-5), поэтому числа
  * художественные и живут только здесь. Все поля опциональны, отсутствие
  * означает отсутствие смещения — глобального дефолта у секции намеренно нет:
  * высота прыжка — свойство персонажа, а не мира (в отличие от наклона).
+ *
+ * Высота дуги называется НА ВИД манёвра (REND-12): прыжок и наземные манёвры
+ * независимы, и дуга одного вида к другому не применяется. Отсутствие поля —
+ * отсутствие дуги у этого вида, а не заимствование чужой высоты.
  */
 export interface VerticalOffset {
-  /** Максимум дуги прыжка в мировых единицах; без него дуги нет. */
+  /** Максимум дуги прыжка (`Airborne`) в мировых единицах; без него дуги нет. */
   jumpArc?: number;
+  /**
+   * Максимум дуги наземного манёвра (`Dodge`, `Roll` — `locomotion` LOC-3).
+   * Отдельное число, а не доля прыжковой высоты: перекат подпрыгивает иначе,
+   * чем прыжок, и заимствование одного числа двумя видами и есть тот дефект,
+   * который REND-12 запрещает.
+   */
+  maneuverArc?: number;
+  /**
+   * Максимум полётной дуги — по фазе полёта плоской формы (REND-12). Фазу
+   * заполняет сборка воркера (`client-shell` SHELL-2); нет фазы — нет и дуги,
+   * сколько бы ни было записано здесь.
+   */
+  flightArc?: number;
   /** Скорость снижения при провале, мировых единиц в секунду. */
   fallSpeed?: number;
   /** На сколько инстанс уходит вниз и там останавливается. */
   fallDepth?: number;
+}
+
+/**
+ * Ярус представления инстанса (`rendering` REND-20), заданный записью явно
+ * (ASSET-13). Батчевый — разделяемый батч со скиннингом по запечённым данным;
+ * детальный — пер-инстансное поддерево со скелетом.
+ */
+export type VisualTier = 'batched' | 'detailed';
+
+/**
+ * Пороги LOD по умолчанию (ASSET-13, `rendering` REND-22): доля высоты кадра,
+ * ниже которой инстанс переходит на следующий уровень цепочки. Это УМОЛЧАНИЕ
+ * кода, а не политика: запись, которой числа важны, задаёт свои — художник
+ * правит манифест, а не рендер.
+ */
+export const DEFAULT_LOD_THRESHOLDS: readonly number[] = Object.freeze([0.12, 0.05]);
+
+/**
+ * Ярус записи (ASSET-13): явное поле записи → умолчание. Умолчание — батчевый,
+ * кроме записей с настроенным процедурным контролем костей (`rendering`
+ * REND-5): им нужен настоящий скелет, и батчевого яруса они не переживут.
+ *
+ * Один ответ на весь репозиторий: выбор яруса не должен становиться решением
+ * каждого потребителя — иначе рендер и редактор разошлись бы в том, что автор
+ * увидит в кадре.
+ */
+export function resolveVisualTier(visual: EntityVisual | undefined): VisualTier {
+  if (visual?.tier !== undefined) return visual.tier;
+  return visual?.boneControls === undefined ? 'batched' : 'detailed';
+}
+
+/** Пороги LOD записи: свои → умолчание кода (ASSET-13). */
+export function resolveLodThresholds(visual: EntityVisual | undefined): readonly number[] {
+  return visual?.lodThresholds ?? DEFAULT_LOD_THRESHOLDS;
 }
 
 /** Параметры наклона записи: свои → дефолт манифеста → дефолт спеки (ASSET-6). */
@@ -329,6 +476,19 @@ export interface EntityVisual {
   surfaceAlign?: SurfaceAlign;
   /** Дуга прыжка и снижение при провале (REND-12); без секции — смещения нет. */
   verticalOffset?: VerticalOffset;
+  /**
+   * Ярус представления инстанса (ASSET-13, `rendering` REND-20). Без поля —
+   * умолчание `resolveVisualTier`: батчевый, кроме записей с `boneControls`.
+   * Поле — политика вида: художник переводит штучную крупную модель в детальный
+   * ярус, не правя код рендера.
+   */
+  tier?: VisualTier;
+  /**
+   * Пороги переключения LOD-цепочки (ASSET-13, `rendering` REND-22): доли
+   * высоты кадра, строго убывающие. Без поля — умолчания
+   * `DEFAULT_LOD_THRESHOLDS`; модель без цепочки уровней порогов не замечает.
+   */
+  lodThresholds?: number[];
 }
 
 function typeName(v: unknown): string {
@@ -387,15 +547,24 @@ function validateSurfaceAlign(v: unknown, path: string, errors: string[]): void 
   }
 }
 
+/** Поля `verticalOffset` — они же перечень допустимых ключей секции (REND-12). */
+const VERTICAL_OFFSET_FIELDS = [
+  'jumpArc',
+  'maneuverArc',
+  'flightArc',
+  'fallSpeed',
+  'fallDepth',
+] as const;
+
 /** `verticalOffset` записи: все поля опциональны и неотрицательны (REND-12). */
 function validateVerticalOffset(v: unknown, path: string, errors: string[]): void {
   if (!isRecord(v)) {
     errors.push(
-      `${path}: ожидался объект { jumpArc?, fallSpeed?, fallDepth? }, получено ${typeName(v)}`,
+      `${path}: ожидался объект { ${VERTICAL_OFFSET_FIELDS.map((f) => `${f}?`).join(', ')} }, получено ${typeName(v)}`,
     );
     return;
   }
-  const fields = ['jumpArc', 'fallSpeed', 'fallDepth'] as const;
+  const fields = VERTICAL_OFFSET_FIELDS;
   checkUnknownKeys(v, fields, path, errors);
   for (const field of fields) {
     const value = v[field];
@@ -403,6 +572,33 @@ function validateVerticalOffset(v: unknown, path: string, errors: string[]): voi
       errors.push(`${path}.${field}: ожидалось неотрицательное число мировых единиц`);
     }
   }
+}
+
+/** Ярусы, которые запись вправе назвать (ASSET-13); перечень закрыт рендером. */
+const VISUAL_TIERS: readonly VisualTier[] = ['batched', 'detailed'];
+
+/**
+ * `lodThresholds` записи (ASSET-13): доли высоты кадра в `(0..1]`, строго
+ * убывающие. Строгое убывание — не придирка: порог, не меньший предыдущего,
+ * означает уровень, который не выбирается никогда, и молча пропасть такая
+ * запись не должна.
+ */
+function validateLodThresholds(v: unknown, path: string, errors: string[]): void {
+  if (!Array.isArray(v)) {
+    errors.push(`${path}: ожидался массив порогов переключения LOD, получено ${typeName(v)}`);
+    return;
+  }
+  let previous = Number.POSITIVE_INFINITY;
+  v.forEach((value, i) => {
+    if (!isFiniteNumber(value) || value <= 0 || value > 1) {
+      errors.push(`${path}[${i}]: ожидалась доля высоты кадра в (0..1], получено ${typeName(value)}`);
+      return;
+    }
+    if (value >= previous) {
+      errors.push(`${path}[${i}]: пороги должны строго убывать, а ${value} не меньше ${previous}`);
+    }
+    previous = value;
+  });
 }
 
 function validateEntity(entity: unknown, path: string, errors: string[]): void {
@@ -423,6 +619,8 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
       'hiddenParts',
       'surfaceAlign',
       'verticalOffset',
+      'tier',
+      'lodThresholds',
     ],
     path,
     errors,
@@ -430,6 +628,19 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
 
   if ('surfaceAlign' in entity) {
     validateSurfaceAlign(entity.surfaceAlign, `${path}.surfaceAlign`, errors);
+  }
+
+  // Параметры батчевой отрисовки (ASSET-13): действуют одинаково на оба
+  // раздела манифеста — запись decoration задаёт их так же, как запись
+  // сущности, и валидируются они тем же проходом.
+  if ('tier' in entity && !VISUAL_TIERS.includes(entity.tier as VisualTier)) {
+    errors.push(
+      `${path}.tier: ожидался ярус представления (${VISUAL_TIERS.join(' | ')}), получено ${typeName(entity.tier)}`,
+    );
+  }
+
+  if ('lodThresholds' in entity) {
+    validateLodThresholds(entity.lodThresholds, `${path}.lodThresholds`, errors);
   }
 
   if ('verticalOffset' in entity) {
@@ -535,6 +746,96 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
           errors.push(`${path}.hiddenParts[${i}]: ожидался целый индекс части модели >= 0, получено ${typeName(g)}`);
         }
       });
+    }
+  }
+}
+
+/** Поля записи эффекта (REND-23) — они же перечень допустимых ключей. */
+const EFFECT_FIELDS = [
+  'primitive',
+  'color',
+  'radius',
+  'radiusTo',
+  'alpha',
+  'alphaTo',
+  'durationMs',
+  'curve',
+  'height',
+  'verticalOffset',
+] as const;
+
+/** Числовые поля записи эффекта и их границы; вне границ — ошибка документа. */
+const EFFECT_NUMBERS: readonly { readonly name: string; readonly min?: number; readonly max?: number }[] = [
+  { name: 'radius', min: 0 },
+  { name: 'radiusTo', min: 0 },
+  { name: 'alpha', min: 0, max: 1 },
+  { name: 'alphaTo', min: 0, max: 1 },
+  { name: 'durationMs', min: 0 },
+  // Подъём может быть отрицательным (эффект под ногами): границы у него нет,
+  // и требуется от него ровно конечность числа.
+  { name: 'height' },
+];
+
+/**
+ * Запись эффекта (REND-23). Структура проверяется строго — опечатка в поле
+ * data-driven документа почти всегда ошибка автора, — а имена примитива и
+ * кривой не проверяются вовсе: их перечень принадлежит рендеру, и второй
+ * перечень здесь разошёлся бы с ним молча (то же основание, что у ASSET-8).
+ */
+function validateEffect(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(`${path}: ожидался объект { primitive, color, radius, … }, получено ${typeName(v)}`);
+    return;
+  }
+  checkUnknownKeys(v, EFFECT_FIELDS, path, errors);
+  for (const field of ['primitive', 'color'] as const) {
+    const value = v[field];
+    if (typeof value !== 'string' || value.length === 0) {
+      errors.push(`${path}.${field}: обязательное поле — непустая строка, получено ${typeName(value)}`);
+    }
+  }
+  if (!isFiniteNumber(v.radius) || v.radius < 0) {
+    errors.push(`${path}.radius: обязательное поле — неотрицательный радиус, получено ${typeName(v.radius)}`);
+  }
+  for (const spec of EFFECT_NUMBERS) {
+    if (!(spec.name in v) || spec.name === 'radius') continue;
+    const value = v[spec.name];
+    if (
+      !isFiniteNumber(value) ||
+      (spec.min !== undefined && value < spec.min) ||
+      (spec.max !== undefined && value > spec.max)
+    ) {
+      const range =
+        spec.min === undefined
+          ? 'конечное число'
+          : spec.max === undefined
+            ? `число >= ${spec.min}`
+            : `число в [${spec.min}..${spec.max}]`;
+      errors.push(`${path}.${spec.name}: ожидалось ${range}, получено ${typeName(value)}`);
+    }
+  }
+  if ('verticalOffset' in v) {
+    validateVerticalOffset(v.verticalOffset, `${path}.verticalOffset`, errors);
+  }
+}
+
+/** Секция транзиентных эффектов (REND-23): две таблицы «имя → запись эффекта». */
+function validateEffects(section: unknown, errors: string[]): void {
+  const path = 'effects';
+  if (!isRecord(section)) {
+    errors.push(`${path}: ожидался объект { byKind?, byState?, byEvent? }, получено ${typeName(section)}`);
+    return;
+  }
+  checkUnknownKeys(section, ['byKind', 'byState', 'byEvent'], path, errors);
+  for (const table of ['byKind', 'byState', 'byEvent'] as const) {
+    if (!(table in section)) continue;
+    const entries = section[table];
+    if (!isRecord(entries)) {
+      errors.push(`${path}.${table}: ожидался объект «имя → эффект», получено ${typeName(entries)}`);
+      continue;
+    }
+    for (const [name, def] of Object.entries(entries)) {
+      validateEffect(def, `${path}.${table}.${name}`, errors);
     }
   }
 }
@@ -681,7 +982,7 @@ export function validateManifest(doc: unknown, options: ValidateManifestOptions 
   }
   checkUnknownKeys(
     doc,
-    ['entities', 'decorations', 'surfaceAlign', 'terrain', 'cameraEffects', 'cameraConfig'],
+    ['entities', 'decorations', 'surfaceAlign', 'terrain', 'effects', 'cameraEffects', 'cameraConfig'],
     'манифест',
     errors,
   );
@@ -719,6 +1020,9 @@ export function validateManifest(doc: unknown, options: ValidateManifestOptions 
         }
       }
     }
+  }
+  if ('effects' in doc) {
+    validateEffects(doc.effects, errors);
   }
   if ('cameraEffects' in doc) {
     validateCameraEffects(doc.cameraEffects, errors, warnings, options.cameraEffects);

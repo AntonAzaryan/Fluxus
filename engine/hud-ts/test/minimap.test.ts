@@ -186,7 +186,9 @@ describe('маркеры по таблице данных (HUD-6)', () => {
     runtime.subsystem.syncTick(viewWith([entity(1, 'hero', 2, 3, 0)]));
     const arcs = markerCtx.ops('arc');
     expect(arcs).toHaveLength(1);
-    expect(arcs[0]!.args).toEqual([16, 24, 3, 0, Math.PI * 2]);
+    // Вертикаль перевёрнута (HUD-6): мировая y = 3 на арене 8×8 — это 40 px
+    // сверху, а не 24; «вверх мира» и «вверх canvas» совпадают.
+    expect(arcs[0]!.args).toEqual([16, 40, 3, 0, Math.PI * 2]);
     expect(arcs[0]!.fillStyle).toBe('#3af');
   });
 
@@ -252,7 +254,7 @@ describe('маркеры по таблице данных (HUD-6)', () => {
     runtime.subsystem.syncTick(viewWith([entity(1, 'hero', 2, 3, 0)], { tick: 1 }));
     expect(markerCtx.ops('clearRect')).toHaveLength(1);
     expect(markerCtx.ops('arc')).toHaveLength(1);
-    expect(markerCtx.ops('arc')[0]!.args.slice(0, 2)).toEqual([16, 24]);
+    expect(markerCtx.ops('arc')[0]!.args.slice(0, 2)).toEqual([16, 40]);
   });
 
   it('порядок отрисовки детерминирован: приоритет возрастанием, при равенстве — id', () => {
@@ -278,7 +280,7 @@ describe('маркеры по таблице данных (HUD-6)', () => {
     ]);
     const lows = markerCtx.ops('fillRect').slice(0, 2);
     expect(lows[0]!.args.slice(0, 2)).toEqual([31, 31]); // id 2 в (4,4) → центр 32 − 1
-    expect(lows[1]!.args.slice(0, 2)).toEqual([7, 7]); // id 9 в (1,1) → центр 8 − 1
+    expect(lows[1]!.args.slice(0, 2)).toEqual([7, 55]); // id 9 в (1,1) → центр (8, 56) − 1
   });
 });
 
@@ -299,7 +301,8 @@ describe('фон из зеркала пола (HUD-6)', () => {
     expect(floorCtx.ops('clearRect')).toHaveLength(0);
     const delta = floorCtx.ops('fillRect');
     expect(delta).toHaveLength(1);
-    expect(delta[0]!.args).toEqual([16, 8, 8, 8]);
+    // Клетка (2,1) занимает мир [1..2] по y → верхний край на 48 px (HUD-6).
+    expect(delta[0]!.args).toEqual([16, 48, 8, 8]);
     expect(delta[0]!.fillStyle).toBe('#14161a');
 
     // Дельт нет — фон не трогается вовсе.
@@ -326,8 +329,9 @@ describe('клик миникарты — presentation-действие каме
     const { runtime, camera, controlCalls, pressed, markerCanvas } = bench();
     runtime.subsystem.syncTick(viewWith([]));
 
-    // px (16, 24) → мир (2, 3) — обратное преобразование того же аффинного.
-    markerCanvas.dispatch('click', { offsetX: 16, offsetY: 24 });
+    // px (16, 40) → мир (2, 3): обратное преобразование ТОГО ЖЕ отображения,
+    // которым нарисован маркер, — точка под отметкой и точка камеры совпадают.
+    markerCanvas.dispatch('click', { offsetX: 16, offsetY: 40 });
     expect(camera.panned).toEqual([[2, 3]]);
     // Камера двигается локально в главном потоке (сценарий «клик миникарты
     // двигает камеру»): ни фронтов мирового ввода, ни команд обратного канала.
@@ -343,12 +347,31 @@ describe('клик миникарты — presentation-действие каме
     markerCanvas.dispatch('click', { offsetX: 40, offsetY: 32 });
     expect(camera.panned).toEqual([[5, 2]]);
 
-    // Клик выше арены (в поле центрирования) — прижат к краю, не отрицательный.
+    // Клик выше арены (в поле центрирования) — прижат к дальнему краю: при
+    // перевёрнутой вертикали «выше» значит «дальше по +Y», а не «до нуля».
     markerCanvas.dispatch('click', { offsetX: 10, offsetY: 4 });
     expect(camera.panned).toEqual([
       [5, 2],
-      [1.25, 0],
+      [1.25, 4],
     ]);
+  });
+
+  it('движение на экране и на миникарте совпадают, клик обратен отрисовке (HUD-6)', () => {
+    const { runtime, camera, markerCtx, markerCanvas } = bench();
+    // Сущность идёт на «север» основного вида — в сторону растущей мировой y.
+    runtime.subsystem.syncTick(viewWith([entity(1, 'hero', 2, 1, 0)]));
+    const first = markerCtx.ops('arc')[0]!.args[1]!;
+    markerCtx.calls.length = 0;
+    runtime.subsystem.syncTick(viewWith([entity(1, 'hero', 2, 5, 0)], { tick: 1 }));
+    const second = markerCtx.ops('arc')[0]!.args[1]!;
+    // «Вверх экрана» на миникарте — меньшая координата canvas: маркер поехал
+    // вверх, а не вниз, как было до переворота.
+    expect(second).toBeLessThan(first);
+
+    // Клик по отметке возвращает ровно ту точку мира, над которой она стоит.
+    const px = markerCtx.ops('arc')[0]!.args[0]!;
+    markerCanvas.dispatch('click', { offsetX: px, offsetY: second });
+    expect(camera.panned).toEqual([[2, 5]]);
   });
 
   it('клик до первой доставки — no-op: преобразования ещё нет', () => {

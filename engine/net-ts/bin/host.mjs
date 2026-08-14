@@ -15,7 +15,7 @@
  * порта. Хост во вкладке — это рандеву поверх WebRTC, и встаёт оно под тот же
  * интерфейс (SES-3).
  */
-import { flag, option, readMatchFile } from './matchFile.mjs';
+import { flag, matchDataOf, option, readMatchFile } from './matchFile.mjs';
 import { inputSource, reportClient } from './play.shared.mjs';
 
 const file = process.argv[2];
@@ -34,7 +34,9 @@ const founder = option('player', match.players[0]);
 const port = Number(option('port', '8080'));
 const pack = contentPack(match.scenes);
 const serializer = flag('json') ? jsonSerializer : msgpackSerializer;
-const tickRate = match.tickRate ?? 60;
+// Раскладка документа матча — общая с `serve.mjs` и стендом (`matchDataOf`):
+// одна запускалка не должна поднимать мир иначе, чем другая (NTR-5, NTR-14).
+const matchData = matchDataOf(match, pack);
 
 const rendezvous = new WebSocketRendezvous({
   port,
@@ -47,25 +49,7 @@ const session = await HostSession.open({
   founder,
   slots: match.players.length,
   serializer,
-  match: {
-    seed: match.seed,
-    sceneRef: match.sceneRef,
-    scene: pack.scene(match.sceneRef),
-    initial: match.initial ?? [],
-    name: match.name,
-    tickRate,
-    snapshotRate: match.snapshotRate ?? 30,
-    inputDelay: match.inputDelay ?? 2,
-    ...(match.inputWindow !== undefined ? { inputWindow: match.inputWindow } : {}),
-  ...(match.eventRepeat !== undefined ? { eventRepeat: match.eventRepeat } : {}),
-    silenceTicks: (match.silenceSeconds ?? 10) * tickRate,
-    // Зависимости сборки мира — из файла матча (NTR-14), а не из кода запускалки.
-    ...(match.physics !== undefined ? { physics: match.physics } : {}),
-    ...(match.locomotion !== undefined ? { locomotion: match.locomotion } : {}),
-    // Пересчёт видимости — такая же зависимость сборки (NTR-14): сцена с
-    // туманом войны без него не собирается вовсе.
-    ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
-  },
+  match: matchData,
 });
 
 process.stdout.write(

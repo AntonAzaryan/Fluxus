@@ -40,6 +40,8 @@ node tools/blender-ts/test/fixtures/build.mjs --check  # только свери
 | `errors.gltf` | ошибочные случаи разбора: два слоя сразу, неизвестный prefab, поле вне схемы, значение вне Q16.16 (BLND-6) |
 | `warnings.gltf` | `visual` без записи манифеста — предупреждение, а не отказ (BLND-6) |
 | `mixed.gltf` | объект с двумя семантическими свойствами (BLND-3) |
+| `walkable.gltf` | custom property `walkable` на visual-объектах: `true`/`1` → поле записи, `false`/`0` → поля нет (BLND-3, PRES-2) |
+| `walkable-errors.gltf` | ошибочный walkable: небулево значение и флаг на объекте с `prefab` (BLND-3, BLND-6) |
 | `grid.gltf` | grid-mesh в текстовой форме: клеточные данные едут `data:`-URI |
 | `placements.glb` | контейнер той же сцены размещений |
 | `errors.glb` | контейнер ошибочных случаев: отказ одинаков из обеих форм |

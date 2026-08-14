@@ -28,15 +28,30 @@ export const MATCH_STATUS_RESUME_SLOT = 'resume';
 /** Класс-модификатор паузы на корне виджета — ставится только доставкой. */
 export const MATCH_STATUS_PAUSED_CLASS = 'is-paused';
 
+/**
+ * Есть ли у оболочки органы управления машиной состояний мира. Параметр записи
+ * композиции, а не догадка виджета: у тонкого сетевого клиента своей перемотки
+ * нет и быть не может (`netcode` NET-11, `snapshot-rewind` REW-6), и кнопка,
+ * которой некуда вести, — обещание, которого сборка не выполнит. Умолчание
+ * `true` сохраняет прежнее поведение локальной сборки.
+ */
+export const MATCH_STATUS_CONTROLS_PARAM = 'controls';
+
 /** Строки виджета — из композиции (design, Open Questions), с умолчаниями. */
 function stringParam(params: HudParams, key: string, fallback: string): string {
   const value = params[key];
   return typeof value === 'string' ? value : fallback;
 }
 
+function boolParam(params: HudParams, key: string, fallback: boolean): boolean {
+  const value = params[key];
+  return typeof value === 'boolean' ? value : fallback;
+}
+
 class MatchStatusWidget implements HudWidget {
   private readonly pauseLabel: string;
   private readonly resumeLabel: string;
+  private readonly controls: boolean;
 
   private actions: HudActionsPort | null = null;
   private root: Element | null = null;
@@ -52,6 +67,7 @@ class MatchStatusWidget implements HudWidget {
   constructor(params: HudParams) {
     this.pauseLabel = stringParam(params, 'pauseLabel', 'Пауза');
     this.resumeLabel = stringParam(params, 'resumeLabel', 'Продолжить');
+    this.controls = boolParam(params, MATCH_STATUS_CONTROLS_PARAM, true);
   }
 
   mount(actions: HudActionsPort): HudNode {
@@ -77,21 +93,28 @@ class MatchStatusWidget implements HudWidget {
           },
         }),
         // Интерактивна только кнопка: контейнер указатель не перехватывает (HUD-3).
-        interactive(
-          el('button', {
-            classes: ['hud-match-status__pause'],
-            attrs: { type: 'button' },
-            text: this.pauseLabel,
-            on: {
-              click: () => {
-                this.togglePause();
-              },
-            },
-            ref: (element) => {
-              this.buttonElement = element;
-            },
-          }),
-        ),
+        // Оболочки без управления машиной состояний кнопки не получают вовсе —
+        // не спрятанную стилем, а не построенную: показанная и неработающая
+        // кнопка врала бы о том, что матч можно остановить.
+        ...(this.controls
+          ? [
+              interactive(
+                el('button', {
+                  classes: ['hud-match-status__pause'],
+                  attrs: { type: 'button' },
+                  text: this.pauseLabel,
+                  on: {
+                    click: () => {
+                      this.togglePause();
+                    },
+                  },
+                  ref: (element) => {
+                    this.buttonElement = element;
+                  },
+                }),
+              ),
+            ]
+          : []),
       ],
     });
   }
