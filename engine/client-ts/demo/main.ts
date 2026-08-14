@@ -61,7 +61,7 @@ import {
   validateBindings,
   type InputSource,
 } from '@game-mvp/client';
-import { ACTION_BITS, STATE_COMPONENTS, captureZoneOf } from './sim.js';
+import { ACTION_BITS, STATE_COMPONENTS, STATS, captureZoneOf, stateBit } from './sim.js';
 import { createDemoHud, demoHudComposition } from './hud.js';
 import { DEMO_SERVER_URL, demoMode, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
@@ -165,12 +165,21 @@ let currentSkin: 'steel' | 'ember' = 'steel';
 /** Последняя позиция указателя — edge-pan считается по кадрам (CAM-3). */
 let pointerX = -1;
 let pointerY = -1;
+/**
+ * Счётчик движений указателя. Источник прицела сравнивает его со своим
+ * прошлым значением: «указатель двигался с прошлого опроса» — не то же самое,
+ * что «указатель где-то стоит» (см. `pointerAimSource`).
+ */
+let pointerMoves = 0;
 /** Зажатые кнопки мыши: 1 — drag-панорама (MMB), 2 — осмотр в fly (RMB). */
 let midDrag = false;
 let rightDrag = false;
 
 const raycaster = new THREE.Raycaster();
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+/** Временные значения луча: `groundPoint` зовётся с частотой кадра — не аллоцирует. */
+const ndcScratch = new THREE.Vector2();
+const hitScratch = new THREE.Vector3();
 
 // --------------------------------------------------------- воркер и рендер
 
@@ -191,16 +200,15 @@ let remote: RemoteHost | null = null;
 function groundPoint(clientX: number, clientY: number): { x: number; y: number } | null {
   const rect = renderer3.domElement.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
-  const ndc = new THREE.Vector2(
+  ndcScratch.set(
     ((clientX - rect.left) / rect.width) * 2 - 1,
     -((clientY - rect.top) / rect.height) * 2 + 1,
   );
-  raycaster.setFromCamera(ndc, camera);
+  raycaster.setFromCamera(ndcScratch, camera);
   groundPlane.constant = -(rig?.groundZ ?? 0);
-  const point = new THREE.Vector3();
-  return raycaster.ray.intersectPlane(groundPlane, point) === null
+  return raycaster.ray.intersectPlane(groundPlane, hitScratch) === null
     ? null
-    : { x: point.x, y: point.y };
+    : { x: hitScratch.x, y: hitScratch.y };
 }
 
 /**
@@ -255,6 +263,7 @@ window.addEventListener('mousemove', (e) => {
   }
   pointerX = e.clientX;
   pointerY = e.clientY;
+  pointerMoves += 1;
 });
 
 // -------------------------------------------------- источники ввода и сэмплер
@@ -307,45 +316,52 @@ if (bindings.gamepad !== undefined) {
 }
 
 /**
+ * Прицел этого кадра, посчитанный ОДИН раз (см. `frame`): и сэмплер, и превью
+ * зоны захвата берут одно и то же число — иначе превью обещало бы игроку не тот
+ * сектор, по которому решит тик. `null` — указатель ещё не двигался или луч
+ * прошёл мимо пола.
+ */
+let frameAim: number | null = null;
+
+/**
  * Прицел под курсором как НЕПРЕРЫВНЫЙ источник (INP-1): `KeyboardMouseSource`
  * владеет прицелом только в момент клика, а способностям с удержанием (захват
  * снаряда) направление нужно на каждом тике удержания — иначе отпускание
  * разрешалось бы по направлению последнего клика. Органов управления источник
  * не держит (`held` не реализует), поэтому на биты кнопок он не влияет вовсе;
  * сэмплер берёт прицел у того источника, который менял его последним (INP-5).
+ *
+ * Прицел отдаётся ТОЛЬКО в опрос после движения указателя. Иначе он менялся бы
+ * на каждом опросе сам собой — герой идёт, курсор стоит, угол «герой → курсор»
+ * плывёт, — и по правилу «последний менявший» этот источник навсегда
+ * перебивал бы стик геймпада и тач, у которых прицел при неподвижном стике
+ * замирает. Молчание источника прицел не гасит: сэмплер держит последнее
+ * направление (INP-5).
  */
+let polledPointerMoves = -1;
 const pointerAimSource: InputSource = {
   id: 'pointer-aim',
   start: () => {},
   stop: () => {},
-  poll: () => ({
-    moveX: 0,
-    moveY: 0,
-    // Указатель ещё не двигался — прицела нет: тач и геймпад владеют им сами.
-    aim: pointerX < 0 ? null : aimAtPointer(pointerX, pointerY),
-  }),
+  poll: () => {
+    const moved = pointerMoves !== polledPointerMoves;
+    polledPointerMoves = pointerMoves;
+    return { moveX: 0, moveY: 0, aim: moved ? frameAim : null };
+  },
 };
 sampler.add(pointerAimSource);
 
 // ------------------------------------------------- превью зоны захвата (R)
-
-/**
- * Превью зоны захвата — presentation, и только presentation: оно следует за
- * курсором МЕЖДУ тиками (REND-2), а захват симуляция разрешает по `aimDir`
- * того тика, на котором кнопка отпущена. Поэтому сектор живёт здесь, в главном
- * потоке, а не записью `effects` манифеста: у оболочки эффекта нет ни
- * ориентации, ни угла раствора (REND-23).
- *
- * Числа — те же, по которым решает JSON-система `CaptureRelease`: они читаются
- * из `AbilityConfig` prefab'а `Hero` (`captureZoneOf`), а не выписываются здесь
- * второй раз. Разошлись бы — превью обещало бы игроку не то, что проверит тик.
- */
-const captureZone = captureZoneOf(sceneJson as unknown as SceneDef);
-
-/** Клавиша захвата — из тех же биндингов (INP-4), а не литералом рядом с ними. */
-const captureKey =
-  Object.entries(bindings.keyboardMouse.keys).find(([, action]) => action === 'capture')?.[0] ??
-  null;
+//
+// Превью зоны захвата — presentation, и только presentation: оно следует за
+// курсором МЕЖДУ тиками (REND-2), а захват симуляция разрешает по `aimDir`
+// того тика, на котором кнопка отпущена. Поэтому сектор живёт здесь, в главном
+// потоке, а не записью `effects` манифеста: у оболочки эффекта нет ни
+// ориентации, ни угла раствора (REND-23).
+//
+// Числа — те же, по которым решает JSON-система `CaptureRelease`: они читаются
+// из `AbilityConfig` prefab'а `Hero` (`captureZoneOf`), а не выписываются здесь
+// второй раз. Разошлись бы — превью обещало бы игроку не то, что проверит тик.
 
 /** Подъём над полом: без него сектор тонет в ступени террейна (REND-7). */
 const CAPTURE_PREVIEW_LIFT = 0.05;
@@ -367,24 +383,58 @@ function captureSectorGeometry(radius: number, halfAngleTurns: number): THREE.Bu
   return geometry;
 }
 
-const capturePreview = new THREE.Mesh(
-  captureSectorGeometry(captureZone.radius, captureZone.halfAngleTurns),
-  new THREE.MeshBasicMaterial({
-    color: 0x8affc8,
-    transparent: true,
-    opacity: 0.22,
-    side: THREE.DoubleSide,
-    depthWrite: false,
-  }),
-);
-capturePreview.visible = false;
-scene3.add(capturePreview);
+/**
+ * Меш превью появляется в `main`, а не на загрузке модуля: числа зоны читаются
+ * из сцены и отсутствие поля — жёсткая ошибка (`captureZoneOf`), а брошенная на
+ * верхнем уровне модуля она унесла бы с собой всю страницу — включая кнопку
+ * смены режима, единственную дорогу со сломанной страницы.
+ */
+let capturePreview: THREE.Mesh | null = null;
 
-/** Кадр превью: видно, пока зажата клавиша захвата; курс — текущий прицел. */
+function createCapturePreview(): void {
+  const zone = captureZoneOf(sceneJson as unknown as SceneDef);
+  capturePreview = new THREE.Mesh(
+    captureSectorGeometry(zone.radius, zone.halfAngleTurns),
+    new THREE.MeshBasicMaterial({
+      color: 0x8affc8,
+      transparent: true,
+      opacity: 0.22,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  capturePreview.visible = false;
+  scene3.add(capturePreview);
+}
+
+/** Бит состояния «снаряд в руках» доставленной маски (CAM-6, `sim.ts`). */
+const HOLDING_STATE = stateBit('Holding');
+/** Имя доставленного стата кулдауна захвата (HUD-8) — то же, что у панели HUD. */
+const CAPTURE_COOLDOWN_STAT = STATS.cooldown('capture');
+
+/**
+ * Кадр превью: видно, пока зажата клавиша захвата и захват ВОЗМОЖЕН. Удержание
+ * берётся у `KeyboardMouseSource` — у той же истины, из которой бит уезжает в
+ * тик (INP-2), а не у собственного набора клавиш: у источника есть сброс по
+ * потере фокуса, и alt-tab с зажатой `R` не оставляет сектор нарисованным.
+ *
+ * Гасится по ДОСТАВЛЕННОМУ состоянию (HUD-1): неостывший кулдаун и снаряд уже в
+ * руках — два случая, в которых `CaptureRelease` не сработает, и рисовать в них
+ * зону значило бы обещать игроку захват, которого не будет.
+ */
 function updateCapturePreview(): void {
+  if (capturePreview === null) return;
   const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
-  const aim = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
-  if (captureKey === null || !keys.has(captureKey) || instance === null || aim === null) {
+  const hero = heroId === null ? undefined : remote?.view?.entities.get(heroId);
+  const onCooldown = (hero?.stats?.get(CAPTURE_COOLDOWN_STAT) ?? 0) > 0;
+  const holding = ((hero?.states ?? 0) & HOLDING_STATE) !== 0;
+  if (
+    !kbmSource.held().has('capture') ||
+    onCooldown ||
+    holding ||
+    instance === null ||
+    frameAim === null
+  ) {
     capturePreview.visible = false;
     return;
   }
@@ -394,7 +444,7 @@ function updateCapturePreview(): void {
     instance.pose.y,
     instance.pose.z + CAPTURE_PREVIEW_LIFT,
   );
-  capturePreview.rotation.set(0, 0, (aim / TURN_UNITS) * Math.PI * 2);
+  capturePreview.rotation.set(0, 0, (frameAim / TURN_UNITS) * Math.PI * 2);
 }
 
 /**
@@ -540,6 +590,12 @@ function frame(now: number): void {
   const dt = lastFrameAt === null ? 0 : Math.min(now - lastFrameAt, 250);
   lastFrameAt = now;
 
+  // Прицел кадра — ОДИН raycast на кадр (design Decision 6): его читают и
+  // сэмплер через `pointerAimSource`, и превью зоны захвата. Считается ДО
+  // конвейера камеры — по той же позе, по которой игрок видел кадр, когда
+  // ставил курсор, и одинаково для обоих потребителей.
+  frameAim = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
+
   // Тиков здесь нет (SHELL-1): симуляция идёт в воркере своим тикером,
   // кадр только шлёт ввод и интерполирует доставленное (REND-2).
   // Отложенное кадрирование миникарты — когда камера уже не follow (см. panTo).
@@ -658,6 +714,9 @@ async function main(): Promise<void> {
   // страницы. Упади манифест (нет ассета, нет сети) — переключиться было бы
   // нечем, а это единственный орган управления, которому матч не нужен вовсе.
   wireConnectButton(mode);
+  // Превью зоны захвата — после кнопки режима по той же причине: числа зоны
+  // приходят из сцены, и дыра в контенте не должна уносить страницу целиком.
+  createCapturePreview();
   const manifest = await loadManifest();
   const worker = spawnShellWorker(mode);
 

@@ -104,7 +104,10 @@
         "color": "#8affc8",
         "radius": 0.42,
         "alpha": 0.45,
-        "height": 0.55
+        "height": 0.55,
+        "verticalOffset": {
+          "flightArc": 0.35
+        }
       }
     },
     "byEvent": {
