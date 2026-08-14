@@ -104,6 +104,8 @@
   "schema.scenario.locomotion.dodgeButton": "Индекс бита уклона в маске кнопок; раскладку ввода ядро не знает.",
   "schema.scenario.locomotion.inputComponent": "Имя компонента ввода: его поля пишет система ввода.",
   "schema.scenario.locomotion.jumpButton": "Индекс бита прыжка в маске кнопок; раскладку ввода ядро не знает.",
+  "schema.scenario.locomotion.lockComponent": "Имя компонента селективного лока действий с полем `mask`: пока бит манёвров установлен, уклон, перекат и прыжок не стартуют, а обычное передвижение работает как прежде. Не задан — лок не читается вовсе.",
+  "schema.scenario.locomotion.maneuverLockBit": "Индекс бита запрета манёвров в маске лока; смысл остальных битов — конвенция контента. Требует компонента лока.",
   "schema.scenario.locomotion.name": "Имя системы локомоушена: имя её RNG-стрима и ключ, по которому её подменяют.",
   "schema.scenario.locomotion.stateComponent": "Имя компонента состояния машины манёвров: уклон, окно даблтапа, перекат, полёт.",
   "schema.scenario.locomotion.velocityComponent": "Имя компонента скорости, которую интегрирует физика.",

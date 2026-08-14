@@ -296,6 +296,18 @@ const scenario: Json = {
           minimum: 0,
           maximum: 15,
         },
+        lockComponent: {
+          $comment: 'Компонент-маска селективного лока, поле `mask` (LOC-7). Не задан — лок не читается вовсе.',
+          type: 'string',
+          minLength: 1,
+        },
+        maneuverLockBit: {
+          $comment:
+            'Индекс бита «манёвры запрещены» в маске лока (LOC-7); смысл остальных битов ядро не знает. Без `lockComponent` его отвергает загрузчик.',
+          type: 'integer',
+          minimum: 0,
+          maximum: 30,
+        },
       },
     },
     players: {
