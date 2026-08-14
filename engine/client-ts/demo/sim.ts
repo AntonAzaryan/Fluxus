@@ -67,6 +67,10 @@ export const ACTION_BITS = {
  * `Holding` — обратная сторона той же пары, уже на ГЕРОЕ: записи эффекта у неё
  * нет, и доставляется она затем, чтобы превью зоны захвата гасло, пока снаряд
  * в руках (`main.ts`), — состояние симуляции, а не догадка главного потока.
+ * `Charging` — герой копит заряд каста: записи эффекта у него тоже нет (шар
+ * заряда рисует главный поток, см. `chargeVisualOf`), а доставляется оно затем,
+ * чтобы гасить превью зоны захвата — во время заряда `CaptureRelease` не
+ * сработает.
  *
  * Порядок ДОБАВЛЕНИЯ важнее алфавита: бит существующего имени не должен
  * поехать — новое состояние дописывается в конец.
@@ -76,6 +80,7 @@ export const STATE_COMPONENTS: readonly string[] = Object.freeze([
   'Shielded',
   'Held',
   'Holding',
+  'Charging',
 ]);
 
 /** Бит состояния в `EntityView.states` (CAM-6); неизвестное имя — ошибка сборки. */
@@ -131,6 +136,61 @@ export function captureZoneOf(def: SceneDef): { radius: number; halfAngleTurns: 
 }
 
 /**
+ * Геометрия и тайминг ШАРА ЗАРЯДА в мировых единицах — то, из чего главный
+ * поток рисует растущий шар перед кастером, пока зажата ЛКМ.
+ *
+ * Причина та же, что у превью зоны захвата: заряд растёт МЕЖДУ тиками, а
+ * оболочка эффекта `effects.byKind` радиуса на сущность не знает — её радиус
+ * задан записью манифеста и один на весь тип (REND-23). Поэтому шар живёт в
+ * главном потоке, а числа берутся из той же записи `AbilityConfig`, по которой
+ * решает JSON-система `ChargeRelease`: второго набора балансных чисел не
+ * заводится.
+ *
+ * `ticks`/`graceTicks` — сырые тики (их же считает `Charging.ticks`),
+ * `maxScale` — множитель размера в конце заряда, `offset` — вынос шара перед
+ * кастером в клетках мира.
+ */
+export function chargeVisualOf(def: SceneDef): {
+  ticks: number;
+  graceTicks: number;
+  maxScale: number;
+  offset: number;
+} {
+  const hero = def.prefabs?.find((prefab) => prefab.name === 'Hero');
+  const config = hero?.components.AbilityConfig;
+  if (config === undefined) throw new Error("демо: у prefab'а Hero нет AbilityConfig");
+  const { chargeTicks, chargeGraceTicks, chargeMaxScale, throwOffset } = config;
+  // Отсутствующее поле — не ноль: нулевой заряд невидим, и шар молча перестал
+  // бы существовать вместо того, чтобы сообщить о дыре в контенте.
+  if (
+    chargeTicks === undefined ||
+    chargeGraceTicks === undefined ||
+    chargeMaxScale === undefined ||
+    throwOffset === undefined
+  ) {
+    throw new Error(
+      "демо: в AbilityConfig prefab'а Hero нет chargeTicks/chargeGraceTicks/chargeMaxScale/throwOffset — шар заряда рисовать нечем",
+    );
+  }
+  return {
+    ticks: chargeTicks,
+    graceTicks: chargeGraceTicks,
+    maxScale: chargeMaxScale / FIXED_ONE,
+    offset: throwOffset / FIXED_ONE,
+  };
+}
+
+/**
+ * Накопленные тики заряда по доставленному `Charging.ticks` (стат `charge`).
+ * Тик НАЖАТИЯ окном заряда не считается: самый быстрый тап отпускается на
+ * следующем тике и обязан дать обычный шар, а не «чуть заряженный». Ровно эту
+ * же поправку делает `ChargeRelease` в сцене — держать их врозь нельзя.
+ */
+export function chargeHeld(ticks: number, maxTicks: number): number {
+  return Math.max(0, Math.min(ticks - 1, maxTicks));
+}
+
+/**
  * Имена доставляемых статов демо (`match-hud` HUD-8) — общий словарь двух
  * половин сборки: воркер объявляет по ним источники (`extractor.ts`), виджеты
  * биндятся на те же имена в композиции HUD (`hud.ts`). Имена принадлежат
@@ -146,6 +206,13 @@ export const STATS = {
   hp: 'hp',
   hpMax: 'hpMax',
   deaths: 'deaths',
+  /**
+   * Накопленные тики заряда каста (`Charging.ticks`). Стат, а не состояние:
+   * биту `EntityView.states` величины не передать, а шар заряда рисуется по
+   * ней покадрово (`chargeVisualOf`). Компонента нет — стата НЕТ, и главный
+   * поток отличает «не заряжает» от «заряд нулевой» (HUD-8).
+   */
+  charge: 'charge',
   /** Оставшиеся тики кулдауна способности и его полная длительность. */
   cooldown: (ability: string): string => `${ability}.cd`,
   cooldownMax: (ability: string): string => `${ability}.cdMax`,
@@ -153,9 +220,9 @@ export const STATS = {
 
 /**
  * Способности демо, у которых виджет показывает кулдаун (те же имена, что
- * INP-4). Перезарядку в сцене имеют только две последние — `cast`, `dodge` и
- * `jump` держат в компоненте `Cooldowns` нулевой предел и потому всегда готовы;
- * виджет читает те же доставленные статы и рисует их кнопки без затемнения.
+ * INP-4). Перезарядку в сцене имеют `cast`, `slowDome` и `capture`; `dodge` и
+ * `jump` держат в компоненте `Cooldowns` нулевой предел и потому всегда готовы
+ * — виджет читает те же доставленные статы и рисует их кнопки без затемнения.
  */
 export const COOLDOWN_ABILITIES: readonly string[] = Object.freeze([
   'cast',
