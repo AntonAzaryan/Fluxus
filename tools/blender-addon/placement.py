@@ -250,6 +250,82 @@ class FLUXUS_OT_override_remove(bpy.types.Operator):
         return {"FINISHED"}
 
 
+#: Семантики объектов-носителей рельефа: по ним оператор посадки ищет поверхность.
+_RELIEF_KEYS = ("sculpt", "terrain", "curvature")
+
+#: Высота, с которой бросается луч посадки: заведомо выше любого рельефа сцены.
+_SNAP_CEILING = 1.0e5
+
+
+def _relief_height(depsgraph, scene, x, y):
+    """
+    Высота рельефа под точкой плана: максимум по вертикальным попаданиям в меши
+    объектов с семантикой рельефа. Считается по evaluated-геометрии — скалпт с
+    незаприменёнными модификаторами (Multires, Subdivision) сажает по тому, что
+    автор видит.
+    """
+    from mathutils import Vector
+
+    best = None
+    for obj in scene.objects:
+        if obj.type != "MESH" or not any(key in obj.keys() for key in _RELIEF_KEYS):
+            continue
+        evaluated = obj.evaluated_get(depsgraph)
+        matrix = evaluated.matrix_world
+        try:
+            inverted = matrix.inverted()
+        except ValueError:
+            # Вырожденный трансформ (нулевой масштаб) луч не примет.
+            continue
+        origin = inverted @ Vector((x, y, _SNAP_CEILING))
+        direction = (inverted.to_3x3() @ Vector((0.0, 0.0, -1.0))).normalized()
+        hit, location, _normal, _index = evaluated.ray_cast(origin, direction)
+        if not hit:
+            continue
+        world_z = (matrix @ location).z
+        if best is None or world_z > best:
+            best = world_z
+    return best
+
+
+class FLUXUS_OT_snap_to_relief(bpy.types.Operator):
+    """Посадить выделенные размещения на рельеф: z — по верхней поверхности скалпта или сетки"""
+
+    bl_idname = "fluxus.snap_to_relief"
+    bl_label = "Посадить на рельеф"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.selected_objects)
+
+    def execute(self, context):
+        depsgraph = context.evaluated_depsgraph_get()
+        snapped = 0
+        missed = 0
+        for obj in context.selected_objects:
+            # Носители рельефа не сажаются сами на себя.
+            if any(key in obj.keys() for key in _RELIEF_KEYS):
+                continue
+            location = obj.matrix_world.translation
+            height = _relief_height(depsgraph, context.scene, location.x, location.y)
+            if height is None:
+                missed += 1
+                continue
+            world = obj.matrix_world.copy()
+            world.translation.z = height
+            obj.matrix_world = world
+            snapped += 1
+        if snapped == 0 and missed == 0:
+            self.report({"WARNING"}, "среди выделенного нет размещений: носители рельефа не сажаются")
+            return {"CANCELLED"}
+        message = "посажено объектов: %d" % snapped
+        if missed:
+            message += "; без рельефа под собой: %d" % missed
+        self.report({"INFO"} if snapped else {"WARNING"}, message)
+        return {"FINISHED"}
+
+
 class FLUXUS_OT_sync_preview_camera(bpy.types.Operator):
     """Построить камеру превью из секции конфига камеры манифеста (CAM-1, ASSET-10, BLND-11)"""
 
@@ -314,6 +390,7 @@ CLASSES = (
     FLUXUS_OT_add_decoration,
     FLUXUS_OT_override_add,
     FLUXUS_OT_override_remove,
+    FLUXUS_OT_snap_to_relief,
     FLUXUS_OT_sync_preview_camera,
 )
 
