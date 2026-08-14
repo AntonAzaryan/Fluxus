@@ -152,6 +152,15 @@ function connect(child: ChildProcess, ready: () => void, log: string[]): Channel
     else waiting.no(new Error(message.error ?? 'контейнер отказал без причины'));
   });
   child.stderr?.on('data', (chunk: Buffer) => log.push(String(chunk)));
+  // Контейнер, упавший посреди прогона, обязан краснить сразу и с причиной:
+  // без этого повисшие вызовы досидели бы до срока теста, и «контейнер упал»
+  // выглядело бы как «граница молчит».
+  child.on('close', (code) => {
+    for (const waiting of pending.values()) {
+      waiting.no(new Error(`контейнер закрылся посреди прогона (код ${String(code)}):\n${log.join('\n')}`));
+    }
+    pending.clear();
+  });
 
   const send = (op: string, payload: Record<string, unknown> = {}): Promise<unknown> =>
     new Promise((ok, no) => {
