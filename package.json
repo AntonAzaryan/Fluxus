@@ -14,7 +14,8 @@
     "engine/integration-ts",
     "editor/core-ts",
     "editor/ui-ts",
-    "tools/blender-ts"
+    "tools/blender-ts",
+    "desktop/shell-ts"
   ],
   "scripts": {
     "test": "npm run test --workspaces",

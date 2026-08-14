@@ -2,8 +2,8 @@
 
 ## 1. Каркас пакета и контракт моста
 
-- [ ] 1.1 Создать workspace-member `desktop/shell-ts` (`@game-mvp/desktop-shell`): package.json (Electron и упаковщик — devDependencies только здесь), tsconfig, vitest; подключить к корневым `typecheck`/`lint`/`test`
-- [ ] 1.2 Описать типы поверхности моста в `src/bridge/`: fs-примитивы (list/read/write/watch по путям в объявленных корнях), диалоги, оконные события, схема профиля (бандл, корень контента, whitelist возможностей) — без единого импорта извне (DSK-2, DSK-5)
+- [x] 1.1 Создать workspace-member `desktop/shell-ts` (`@game-mvp/desktop-shell`): package.json (Electron и упаковщик — devDependencies только здесь), tsconfig, vitest; подключить к корневым `typecheck`/`lint`/`test`
+- [x] 1.2 Описать типы поверхности моста в `src/bridge/`: fs-примитивы (list/read/write/watch по путям в объявленных корнях), диалоги, оконные события, схема профиля (бандл, корень контента, whitelist возможностей) — без единого импорта извне (DSK-2, DSK-5)
 - [ ] 1.3 Тест независимости от движка по образцу `engine/integration-ts/test/contentBoundary.test.ts`: `desktop/shell-ts` не импортирует `@game-mvp/*`; добавить lint-ограничение импортов (DSK-3)
 
 ## 2. Node-слой хоста и контрактный сьют
