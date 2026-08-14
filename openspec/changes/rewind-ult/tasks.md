@@ -19,7 +19,7 @@
 
 ## 4. Render: обратный ход презентации
 
-- [ ] 4.1 `viewBuffer.frame()`: знак dt от `TickView.mode` (`Running` +, `Paused` 0, `Rewinding` −), кламп по модулю; тест REND-24 (пауза замораживает, скраб реверсирует)
+- [ ] 4.1 `viewBuffer.frame()`: знак dt от `TickView.mode` (`Running` +, `Paused` 0, `Rewinding` −), кламп по модулю; тест REND-25 (пауза замораживает, скраб реверсирует)
 - [ ] 4.2 `VatAnimationBackend`: заворот отрицательной фазы, снятие клампа нулевого кадра, дренаж фейда по |dt|; тест
 - [ ] 4.3 `MixerAnimationBackend`: `timeScale = dir`, one-shot при реверсе отступает к началу и снимается; тест
 - [ ] 4.4 `ModelsSubsystem`: гейт «вне `Running` время вперёд не идёт»; тест сценария «мир замер — клипы замерли»
