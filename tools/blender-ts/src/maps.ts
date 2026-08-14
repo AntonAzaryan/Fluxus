@@ -284,7 +284,18 @@ function sculptCellLayer(
     return { findings: sink.findings };
   }
 
-  const cells = deriveSculptCells(read.sampler, spec, jump.value, LEVEL_UNIT);
+  const cells = deriveSculptCells(read.sampler, spec, jump.value, TERRAIN_LEVEL_MAX, LEVEL_UNIT);
+  for (const cell of cells.outOfRange) {
+    // Отказ называет клетку и СЫРУЮ высоту (BLND-13): квантованный уровень
+    // автору ни о чём — править он будет высоту скалпта.
+    error(
+      sink,
+      anchor.name,
+      `клетка (${cell.x}, ${cell.y}): высота ${formatHeight(cell.height)} даёт уровень вне диапазона ` +
+        `[0, ${TERRAIN_LEVEL_MAX}] (TERR-3) — клампа за автора нет (BLND-13)`,
+    );
+  }
+  if (cells.outOfRange.length > 0) return { findings: sink.findings };
   const grid: CellGrid = {
     width: spec.width,
     height: spec.height,

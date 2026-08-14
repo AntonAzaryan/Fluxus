@@ -128,6 +128,14 @@ class FLUXUS_PT_object(FluxusPanel, bpy.types.Panel):
             layout.label(text="скалпт-поверхность: рельеф дискретизирует", icon="SCULPTMODE_HLT")
             layout.label(text="импорт — уровни, рампы, пол, кривизна (BLND-13)")
             layout.prop(settings, "cliff_jump")
+            raw = obj.get(props.CLIFF_JUMP_KEY)
+            if raw is not None and (
+                isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0
+            ):
+                # Вид FloatProperty такое значение показать не может и подставил
+                # бы умолчание — а импорт откажет; молчать о расхождении нельзя.
+                layout.label(text="cliffJump: %r — не положительное число," % (raw,), icon="ERROR")
+                layout.label(text="импорт откажет (BLND-13)")
             layout.label(text="объектов сколько угодно: рельеф — их объединение", icon="INFO")
             layout.label(text="дыра в меше — клетка без пола", icon="INFO")
         else:

@@ -59,8 +59,13 @@ export const DEFAULT_CLIFF_JUMP = 0.5;
  */
 const EDGE_INSET_RATIO = 1 / 64;
 
-/** Отступ пробы непрерывности от границы пары клеток — в долях клетки. */
-const PROBE_INSET_RATIO = 1 / 16;
+/**
+ * Число интервалов выборки непрерывности на отрезке между центрами пары клеток.
+ * Обрыв ловится ЛЮБОЙ своей позицией внутри пары: скачок целого уровня попадает
+ * в один из интервалов и превышает порог, а гладкий склон проходит, пока его
+ * крутизна ниже `порог × интервалы` уровней на клетку (при умолчаниях — 4).
+ */
+const CONTINUITY_INTERVALS = 8;
 
 /** Относительный допуск принадлежности точки проекции треугольника. */
 const BARYCENTRIC_TOLERANCE = 1e-9;
@@ -115,6 +120,14 @@ export function buildSculptSampler(
 
   if (!Number.isFinite(spec.cellSize) || spec.cellSize <= 0) {
     return { sampler: null, errors: [{ object: objects[0]?.name ?? '', message: `размер клетки ${spec.cellSize} не положителен (TERR-2)` }] };
+  }
+  if (!Number.isInteger(spec.width) || !Number.isInteger(spec.height) || spec.width <= 0 || spec.height <= 0) {
+    // Ассет с нецелой или неположительной сеткой отвергает и ядро; здесь отказ
+    // нужен ДО раскладки по клеткам — иначе индекс корзины уехал бы за массив.
+    return {
+      sampler: null,
+      errors: [{ object: objects[0]?.name ?? '', message: `сетка ${spec.width}×${spec.height} не является целой положительной (TERR-2)` }],
+    };
   }
 
   const triangles: Triangle[] = [];
@@ -196,7 +209,10 @@ export function buildSculptSampler(
       const wa = ((t.bx - x) * (t.cy - y) - (t.by - y) * (t.cx - x)) / area;
       const wb = ((t.cx - x) * (t.ay - y) - (t.cy - y) * (t.ax - x)) / area;
       const wc = 1 - wa - wb;
-      const slack = tolerance / scale;
+      // Кламп сверху: у почти вырожденного треугольника `tolerance / scale`
+      // растёт без предела, и точка ВНЕ его проекции принималась бы с
+      // экстраполированной высотой.
+      const slack = Math.min(tolerance / scale, 1e-6);
       if (wa < -slack || wb < -slack || wc < -slack) continue;
       const elevation = wa * t.az + wb * t.bz + wc * t.cz;
       if (best === null || elevation > best) best = elevation;
@@ -231,7 +247,10 @@ export function cliffJumpOf(objects: readonly SourceObject[]): {
       found = { object: object.name, value: raw };
       continue;
     }
-    if (raw !== found.value) {
+    // Допуск — про float32: значение из панели аддона хранится одинарной
+    // точностью, а то же число, введённое руками в Custom Properties, — двойной,
+    // и «0.7 ≠ 0.7» превращалось бы в ложный отказ «разные значения».
+    if (Math.abs(raw - found.value) > 1e-6) {
       errors.push({
         object: object.name,
         message:
@@ -245,26 +264,36 @@ export function cliffJumpOf(objects: readonly SourceObject[]): {
 
 /** Клеточные данные, выведенные из скалпта, — числа до перевода в символы карт. */
 export interface SculptCells {
-  /** Высота клетки в единицах Blender: `уровень × LEVEL_UNIT`, у клетки без пола 0. */
+  /** Высота клетки в единицах Blender: `уровень × LEVEL_UNIT`. */
   readonly heights: readonly number[];
   readonly ramps: readonly number[];
   readonly noFloor: readonly number[];
+  /** Клетки, чья высота даёт уровень вне алфавита, — с сырой высотой для отказа. */
+  readonly outOfRange: readonly { readonly x: number; readonly y: number; readonly height: number }[];
 }
 
 /**
  * Уровни, пол и рампы из объединения скалпта (BLND-13):
  *
- * - уровень — высота центра клетки, квантованная к ближайшему целому (диапазон
- *   алфавита проверяет перевод в символы — `terrainMapsOf`, как у grid-пути);
+ * - уровень — высота центра клетки, квантованная к ближайшему целому; уровень
+ *   вне алфавита схемы собирается в `outOfRange` вместе с сырой высотой — отказ
+ *   обязан называть клетку И ЕЁ ВЫСОТУ, а не уже квантованный уровень;
  * - нет пересечения над центром — клетка без пола `_` (дыра — инструмент);
- * - рампа — по-граничное правило: у пары соседних клеток с перепадом уровня в
- *   единицу проба по обе стороны середины общей границы; скачок ниже порога
- *   обрыва — склон непрерывен, рампу получает НИЖНЯЯ клетка пары (TERR-5).
+ *   уровень такой клетки — уровень БЛИЖАЙШЕЙ клетки с полом (при равных
+ *   расстояниях — старший): уровень дыры не мёртвые данные, из него строятся
+ *   клифы (TERR-5) и высота восстановленного по ходу матча пола (TERR-3), и
+ *   ноль дырявил бы плато ложным кольцом обрывов;
+ * - рампа — непрерывность на отрезке между центрами пары клеток с перепадом в
+ *   единицу: отрезок сэмплируется `CONTINUITY_INTERVALS` интервалами, и если
+ *   максимальный скачок между соседними выборками ниже порога обрыва, рампу
+ *   получает НИЖНЯЯ клетка пары (TERR-5). Обрыв ловится любой своей позицией
+ *   внутри пары, а не только у самой границы.
  */
 export function deriveSculptCells(
   sampler: SculptSampler,
   spec: CellGridSpec,
   cliffJump: number,
+  maxLevel: number,
   levelUnit: number,
 ): SculptCells {
   const { width, height, cellSize } = spec;
@@ -273,6 +302,7 @@ export function deriveSculptCells(
   const levels = new Array<number | null>(total).fill(null);
   const ramps = new Array<number>(total).fill(0);
   const noFloor = new Array<number>(total).fill(0);
+  const outOfRange: { x: number; y: number; height: number }[] = [];
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -283,43 +313,88 @@ export function deriveSculptCells(
         continue;
       }
       const level = Math.round(sampled / levelUnit);
+      if (level < 0 || level > maxLevel) {
+        outOfRange.push({ x, y, height: sampled });
+        continue;
+      }
       levels[at] = level;
       heights[at] = level * levelUnit;
     }
   }
 
-  const probe = cellSize * PROBE_INSET_RATIO;
+  // Уровень клеток без пола — волной от клеток с полом: кольцо за кольцом,
+  // в кольце каждая дыра берёт СТАРШИЙ уровень среди примыкающих присвоенных.
+  // Порядок обхода на результат не влияет (максимум коммутативен), недостижимые
+  // дырами от края до края клетки остаются на нуле.
+  let frontier: number[] = [];
+  for (let at = 0; at < total; at++) if (levels[at] !== null) frontier.push(at);
+  while (frontier.length > 0) {
+    const ring = new Map<number, number>();
+    for (const at of frontier) {
+      const x = at % width;
+      const y = (at - x) / width;
+      const level = levels[at]!;
+      for (const neighbor of [
+        x > 0 ? at - 1 : -1,
+        x + 1 < width ? at + 1 : -1,
+        y > 0 ? at - width : -1,
+        y + 1 < height ? at + width : -1,
+      ]) {
+        if (neighbor < 0 || noFloor[neighbor] !== 1 || levels[neighbor] !== null) continue;
+        const known = ring.get(neighbor);
+        if (known === undefined || level > known) ring.set(neighbor, level);
+      }
+    }
+    frontier = [...ring.keys()].sort((a, b) => a - b);
+    for (const at of frontier) {
+      const level = ring.get(at)!;
+      levels[at] = level;
+      heights[at] = level * levelUnit;
+    }
+  }
+
   const threshold = cliffJump * levelUnit;
-  // Пара соседних клеток с |Δ| = 1: непрерывность через общую границу решает,
-  // рампа это или обрыв. Обход строчный — но помечается всегда нижняя клетка
-  // пары, поэтому от порядка обхода результат не зависит.
-  const consider = (aX: number, aY: number, bX: number, bY: number, borderX: number, borderY: number): void => {
+  // Пара соседних клеток с |Δ| = 1: непрерывность скалпта между их центрами
+  // решает, рампа это или обрыв. Помечается всегда нижняя клетка пары, поэтому
+  // от порядка обхода результат не зависит.
+  const consider = (aX: number, aY: number, bX: number, bY: number): void => {
     const a = aY * width + aX;
     const b = bY * width + bX;
     if (noFloor[a] === 1 || noFloor[b] === 1) return;
-    const levelA = levels[a]!;
-    const levelB = levels[b]!;
-    if (Math.abs(levelA - levelB) !== 1) return;
-    const alongX = aY === bY;
-    const hA = sampler.heightAt(borderX - (alongX ? probe : 0), borderY - (alongX ? 0 : probe));
-    const hB = sampler.heightAt(borderX + (alongX ? probe : 0), borderY + (alongX ? 0 : probe));
-    if (hA === null || hB === null) return;
-    if (Math.abs(hA - hB) >= threshold) return;
+    const levelA = levels[a] ?? null;
+    const levelB = levels[b] ?? null;
+    if (levelA === null || levelB === null || Math.abs(levelA - levelB) !== 1) return;
+    const fromX = (aX + 0.5) * cellSize;
+    const fromY = (aY + 0.5) * cellSize;
+    const stepX = ((bX - aX) * cellSize) / CONTINUITY_INTERVALS;
+    const stepY = ((bY - aY) * cellSize) / CONTINUITY_INTERVALS;
+    let previous: number | null = null;
+    for (let i = 0; i <= CONTINUITY_INTERVALS; i++) {
+      const sampled = sampler.heightAt(fromX + stepX * i, fromY + stepY * i);
+      // Разрыв геометрии на отрезке (щель уже клетки) — та же непроходимость,
+      // что и скачок: рампы нет.
+      if (sampled === null) return;
+      if (previous !== null && Math.abs(sampled - previous) >= threshold) return;
+      previous = sampled;
+    }
     const lower = levelA < levelB ? a : b;
     ramps[lower] = 1;
   };
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (x + 1 < width) consider(x, y, x + 1, y, (x + 1) * cellSize, (y + 0.5) * cellSize);
-      if (y + 1 < height) consider(x, y, x, y + 1, (x + 0.5) * cellSize, (y + 1) * cellSize);
+      if (x + 1 < width) consider(x, y, x + 1, y);
+      if (y + 1 < height) consider(x, y, x, y + 1);
     }
   }
-  return { heights, ramps, noFloor };
+  return { heights, ramps, noFloor, outOfRange };
 }
 
 /**
- * Выборка скалпта в узле сетки: крайние узлы уводятся внутрь арены на отступ —
- * край меша совпадает с краем арены с точностью шума float32 экспорта.
+ * Выборка скалпта в узле сетки. Узел сэмплируется в своей точной позиции;
+ * крайний узел арены при промахе (край меша разошёлся с краем арены на шум
+ * float32 экспорта) пересэмплируется с отступом внутрь. Отступ — запасной ход,
+ * а не правило: на наклонной поверхности выборка с отступом сдвинула бы
+ * крайний узел на пол-кванта решётки, и у арены появился бы шов из ничего.
  */
 export function sampleNodeHeight(
   sampler: SculptSampler,
@@ -327,6 +402,10 @@ export function sampleNodeHeight(
   nodeX: number,
   nodeY: number,
 ): number | null {
+  const exact = sampler.heightAt(nodeX * spec.cellSize, nodeY * spec.cellSize);
+  if (exact !== null) return exact;
+  const boundary = nodeX === 0 || nodeY === 0 || nodeX === spec.width || nodeY === spec.height;
+  if (!boundary) return null;
   const inset = spec.cellSize * EDGE_INSET_RATIO;
   const x = nodeX === 0 ? inset : nodeX === spec.width ? spec.width * spec.cellSize - inset : nodeX * spec.cellSize;
   const y = nodeY === 0 ? inset : nodeY === spec.height ? spec.height * spec.cellSize - inset : nodeY * spec.cellSize;

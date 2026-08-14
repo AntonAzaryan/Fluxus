@@ -8,11 +8,27 @@
  * контейнером, что у grid-фикстур.
  */
 import { describe, expect, it } from 'vitest';
+import { createMemoryHost } from '@game-mvp/editor-core';
 import { parseGltf } from '../src/gltf.js';
+import { runImport } from '../src/importer.js';
 import { generateCellLayer, type CellLayer } from '../src/maps.js';
 import { generateSpatialLayer } from '../src/layer.js';
 import { normalizeDocument } from '../src/normalize.js';
-import { TARGET_TERRAIN, context, packGlb } from './support.js';
+import {
+  CURVATURE_ID,
+  MANIFEST_ID,
+  PRESENTATION_ID,
+  SCENE_ID,
+  SOURCE_ID,
+  TARGET_TERRAIN,
+  TERRAIN_ASSET,
+  contentFiles,
+  context,
+  curvatureDocument,
+  packGlb,
+  presentationDocument,
+  sceneDocument,
+} from './support.js';
 
 /** Треугольник в мировых величинах: [x, y, elevation] на вершину. */
 type WorldTriangle = readonly (readonly [number, number, number])[];
@@ -175,7 +191,37 @@ describe('BLND-13: уровни, пол и рампы из скалпта', () =
     expect(errorsOf(layer)).toEqual([]);
     expect(layer.terrain?.levels).toEqual(['1234', '1234', '1234', '1234']);
     expect(layer.terrain?.flags).toEqual(['^^^.', '^^^.', '^^^.', '^^^.']);
-    expect(layer.curvature).toBeDefined();
+    // Остаток пиннится числом: узловая база цепочки рамп — верхняя сторона
+    // узла (max по cornerLevels), и совпадение со скалптом гарантировано только
+    // по ней — известный предел правила углов REND-9 (BLND-13, change
+    // ramp-chain-surface). Крайний узел x=4 сэмплируется точно на краю → 0.
+    expect(layer.curvature?.rows).toEqual(new Array(5).fill([-32, -32, -32, -32, 0]));
+  });
+
+  it('обрыв внутри клетки — тоже обрыв: стенка не обязана совпадать с границей', () => {
+    // Стенка на x=2.3 — внутри клетки x=2, не на границе клеток. Непрерывность
+    // проверяется вдоль отрезка между центрами, и скачок ловится любой позицией.
+    const glb = sculptGlb([
+      { name: 'low', triangles: plate(0, 0, 2.3, ARENA, 0) },
+      { name: 'high', triangles: box(2.3, 0, ARENA, ARENA, 0, 1) },
+    ]);
+    const layer = cellsOf(glb);
+
+    expect(errorsOf(layer)).toEqual([]);
+    expect(layer.terrain?.levels).toEqual(['0011', '0011', '0011', '0011']);
+    expect(layer.terrain?.flags).toEqual(['....', '....', '....', '....']);
+  });
+
+  it('навес: считается верхняя поверхность, пространство под ним в модель не попадает', () => {
+    const glb = sculptGlb([
+      { name: 'floor', triangles: plate(0, 0, ARENA, ARENA, 0) },
+      { name: 'canopy', triangles: plate(1, 1, 2, 2, 3) },
+    ]);
+    const layer = cellsOf(glb);
+
+    expect(errorsOf(layer)).toEqual([]);
+    expect(layer.terrain?.levels).toEqual(['0000', '0300', '0000', '0000']);
+    expect(layer.terrain?.flags).toEqual(['....', '....', '....', '....']);
   });
 
   it('порог обрыва — свойство автора: cliffJump выше скачка превращает обрыв в рампу', () => {
@@ -204,10 +250,30 @@ describe('BLND-13: уровни, пол и рампы из скалпта', () =
     expect(layer.terrain?.levels).toEqual(['0000', '0000', '0000', '0000']);
   });
 
-  it('высота вне алфавита уровней — отказ с адресом клетки, не кламп', () => {
-    const layer = cellsOf(sculptGlb([{ name: 'tower', triangles: plate(0, 0, ARENA, ARENA, 20) }]));
+  it('дыра в плато наследует уровень плато: ложного кольца обрывов нет', () => {
+    // Уровень клетки-дыры — уровень ближайшей клетки с полом (BLND-13): из него
+    // строятся клифы и высота восстановленного пола, и ноль дырявил бы плато
+    // кольцом обрывов, блокирующим движение и обзор.
+    const cells: WorldTriangle[] = [];
+    for (let y = 0; y < ARENA; y++) {
+      for (let x = 0; x < ARENA; x++) {
+        if (x === 1 && y === 1) continue;
+        cells.push(...plate(x, y, x + 1, y + 1, 2));
+      }
+    }
+    const layer = cellsOf(sculptGlb([{ name: 'plateau', triangles: cells }]));
 
-    expect(errorsOf(layer).join('\n')).toContain('вне диапазона');
+    expect(errorsOf(layer)).toEqual([]);
+    expect(layer.terrain?.levels).toEqual(['2222', '2222', '2222', '2222']);
+    expect(layer.terrain?.flags).toEqual(['....', '._..', '....', '....']);
+  });
+
+  it('высота вне алфавита уровней — отказ с адресом клетки и сырой высотой, не кламп', () => {
+    const layer = cellsOf(sculptGlb([{ name: 'tower', triangles: plate(0, 0, ARENA, ARENA, 19.75) }]));
+
+    const errors = errorsOf(layer).join('\n');
+    expect(errors).toContain('вне диапазона');
+    expect(errors).toContain('19.75');
     expect(layer.terrain).toBeUndefined();
   });
 });
@@ -319,5 +385,53 @@ describe('BLND-13: границы формата', () => {
     expect(
       layer.findings.filter((finding) => finding.severity === 'error').map((finding) => finding.message).join('\n'),
     ).toContain('walkable');
+  });
+
+  it('sculpt-объект не порождает записей размещений и decorations', () => {
+    const document = parseGltf(sculptGlb([{ name: 'arena', triangles: plate(0, 0, ARENA, ARENA, 0) }]));
+    const layer = generateSpatialLayer(normalizeDocument(document), context({ terrain: TARGET_TERRAIN }));
+
+    expect(layer.findings).toEqual([]);
+    expect(layer.initial).toEqual([]);
+    expect(layer.decorations).toEqual([]);
+  });
+});
+
+describe('BLND-13: импорт целиком', () => {
+  it('sculpt-источник переписывает оба слоя и не трогает initial и presentation', async () => {
+    // Пластина на 0.25: уровни нулевые (перепишут ассет цели), остаток 8/32 в
+    // каждом узле (перепишет нулевую карту кривизны цели).
+    const glb = sculptGlb([{ name: 'arena', triangles: plate(0, 0, ARENA, ARENA, 0.25) }]);
+    const files = contentFiles(glb, sceneDocument([], TERRAIN_ASSET), presentationDocument(), {
+      [CURVATURE_ID]: JSON.stringify(curvatureDocument(), null, 2),
+    });
+    const memory = createMemoryHost({ files });
+    const sceneBefore = JSON.parse(new TextDecoder().decode(await memory.content.read(SCENE_ID))) as {
+      initial: unknown[];
+    };
+
+    const result = await runImport({ host: memory.content, source: SOURCE_ID, manifest: MANIFEST_ID });
+
+    expect(result.ok).toBe(true);
+    expect(result.written).toContain(CURVATURE_ID);
+    const sceneAfter = JSON.parse(new TextDecoder().decode(await memory.content.read(SCENE_ID))) as {
+      initial: unknown[];
+      terrain: { levels: string[] };
+    };
+    expect(sceneAfter.terrain.levels).toEqual(['0000', '0000', '0000', '0000']);
+    const curvature = JSON.parse(new TextDecoder().decode(await memory.content.read(CURVATURE_ID))) as {
+      rows: number[][];
+    };
+    expect(curvature.rows).toEqual(new Array(5).fill(new Array(5).fill(8)));
+    expect(sceneAfter.initial).toEqual(sceneBefore.initial);
+    const presentation = JSON.parse(new TextDecoder().decode(await memory.content.read(PRESENTATION_ID))) as {
+      decorations?: unknown[];
+    };
+    expect(presentation.decorations ?? []).toEqual([]);
+
+    // Повторный импорт того же источника не пишет ничего (BLND-4).
+    const again = await runImport({ host: memory.content, source: SOURCE_ID, manifest: MANIFEST_ID });
+    expect(again.ok).toBe(true);
+    expect(again.written).toEqual([]);
   });
 });

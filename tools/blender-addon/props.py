@@ -168,6 +168,10 @@ def _semantic_set(self, value):
     for key in SEMANTIC_KEYS:
         if key != chosen and key in obj.keys():
             del obj[key]
+    if chosen != "sculpt" and CLIFF_JUMP_KEY in obj.keys():
+        # Порог обрыва — параметр sculpt-семантики: оставшись на объекте другой
+        # роли, он был бы мусорным свойством в `extras`.
+        del obj[CLIFF_JUMP_KEY]
     if chosen is None or chosen in obj.keys():
         return
     # `prefab` и `visual` — строки (имя prefab'а, ключ манифеста); `terrain` и
