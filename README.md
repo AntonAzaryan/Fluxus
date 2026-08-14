@@ -43,8 +43,9 @@ capability без кода в `engine/`.
 - `render-ts/` — **рендер** на three.js: extractor, host, viewBuffer, подсистемы террейна
   и моделей, визуальная поверхность с кривизной (`visualSurface.ts`, `surfaceSource.ts`),
   зеркало пола (`floorMirror.ts`) и конвейер камеры (`camera/`, CAM-1..7)
-- `client-ts/` — **shell веб-клиента** (SHELL-1..7): ядро в воркере, канал поверх
-  transferable-буферов; демо на vite
+- `client-ts/` — **shell веб-клиента** (SHELL-1..8): ядро в воркере, канал поверх
+  transferable-буферов, ввод. Библиотека без собственного приложения — саму игру
+  на ней собирает `game/demo-ts`
 - `integration-ts/` — **кросс-слойная сюита** (CLI-9): вертикальный прогон, фазз,
   запись golden-матчей
 
@@ -65,6 +66,7 @@ npm test          # тесты всех пакетов
 npm run typecheck # tsc --noEmit всех пакетов
 npm run lint      # eslint . --max-warnings 0
 npm run golden    # перезаписать golden-эталоны (сначала матчи, затем ядро)
+npm run demo      # демо-игра в браузере (vite; = npm run dev -w @game-mvp/demo)
 
 openspec list --specs               # список capability
 openspec spec show netcode          # одна спецификация
@@ -80,9 +82,6 @@ cd engine/core-ts
 npm run sim -- ../tests/golden/movement.scenario.json   # прогон сценария через CLI
 npm run schemas     # обновить JSON-схемы (UPDATE_SCHEMAS=1)
 
-cd ../client-ts
-npm run dev         # демо веб-клиента (vite)
-
 cd ../net-ts
 npm run serve ../../content/matches/duel.match.json -- --port 8080        # сервер матча
 npm run play  ../../content/matches/duel.match.json -- --player p1 --keys # клиент (второй — p2)
@@ -90,3 +89,10 @@ npm run play  ../../content/matches/duel.match.json -- --player p1 --keys # кл
 
 Локальный матч на двух игроков — три процесса; что смотреть в счётчиках и какие
 величины отвечают на «вяло ли ощущается дэш», описано в `engine/net-ts/README.md`.
+
+## `game/`
+
+**Игровые приложения на движке** — сегодня одно, `demo-ts`: демо-арена поверх shell'а
+веб-клиента (`app/` — vite-приложение, воркеры, HUD, привязки ввода). Движку читать
+дерево контента нельзя, игре — можно: она и есть игра (CONT-4). Запускается из корня
+как `npm run demo`.

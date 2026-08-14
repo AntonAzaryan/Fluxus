@@ -18,8 +18,10 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_SPECS_DIR = join(REPO_ROOT, 'openspec', 'specs');
 export const DEFAULT_LAYERS_PATH = join(REPO_ROOT, 'scripts', 'spec-graph.layers.json');
-export const DEFAULT_CODE_ROOTS = ['engine', 'editor', 'tools', 'scripts'].map((d) =>
-  join(REPO_ROOT, d),
+// Все кодовые деревья репозитория: цитата, уехавшая из корня, молча выпадает
+// и из `code <ID>`, и из линта dangling-code — корни держатся полными.
+export const DEFAULT_CODE_ROOTS = ['engine', 'editor', 'game', 'tools', 'desktop', 'scripts'].map(
+  (d) => join(REPO_ROOT, d),
 );
 
 const ID_RE = /\b([A-Z]{2,6}-[0-9]+)\b/g;
