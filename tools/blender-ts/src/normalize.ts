@@ -48,7 +48,7 @@ import {
  * объекта: имя — ключ порядка записей (BLND-4), и нагружать его вторым смыслом
  * значило бы связать порядок с семантикой.
  */
-export const SEMANTIC_KEYS = ['prefab', 'visual', 'terrain', 'curvature'] as const;
+export const SEMANTIC_KEYS = ['prefab', 'visual', 'terrain', 'curvature', 'sculpt'] as const;
 
 export type SemanticKind = (typeof SEMANTIC_KEYS)[number];
 

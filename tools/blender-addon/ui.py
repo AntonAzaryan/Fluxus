@@ -14,6 +14,9 @@ import bpy
 from . import exporter, livecheck, props, sources
 from .grids import CURVATURE_KEY, NOFLOOR_ATTRIBUTE, RAMP_ATTRIBUTE, TERRAIN_KEY
 
+#: Семантика скалпт-поверхности (BLND-13) — сырое свойство, как у grid-объектов.
+SCULPT_KEY = "sculpt"
+
 CATEGORY = "Fluxus"
 
 
@@ -84,6 +87,7 @@ class FLUXUS_PT_object(FluxusPanel, bpy.types.Panel):
         row = layout.row(align=True)
         row.operator("fluxus.add_placement", icon="OUTLINER_OB_EMPTY")
         row.operator("fluxus.add_decoration", icon="OUTLINER_OB_MESH")
+        layout.operator("fluxus.snap_to_relief", icon="SNAP_ON")
 
         obj = context.object
         if obj is None:
@@ -115,6 +119,25 @@ class FLUXUS_PT_object(FluxusPanel, bpy.types.Panel):
         elif kind in {"TERRAIN", "CURVATURE"}:
             layout.label(text="клеточные данные правятся кистями", icon="BRUSH_DATA")
             layout.label(text="применяйте трансформ перед экспортом", icon="INFO")
+            if any(SCULPT_KEY in other.keys() for other in context.scene.objects):
+                # Правда — находки импорта (BLND-6); панель лишь предупреждает
+                # заранее о взаимоисключении BLND-13.
+                layout.label(text="в сцене есть sculpt-объект: grid-сетка", icon="ERROR")
+                layout.label(text="вместе с ним — ошибка импорта (BLND-13)")
+        elif kind == "SCULPT":
+            layout.label(text="скалпт-поверхность: рельеф дискретизирует", icon="SCULPTMODE_HLT")
+            layout.label(text="импорт — уровни, рампы, пол, кривизна (BLND-13)")
+            layout.prop(settings, "cliff_jump")
+            raw = obj.get(props.CLIFF_JUMP_KEY)
+            if raw is not None and (
+                isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0
+            ):
+                # Вид FloatProperty такое значение показать не может и подставил
+                # бы умолчание — а импорт откажет; молчать о расхождении нельзя.
+                layout.label(text="cliffJump: %r — не положительное число," % (raw,), icon="ERROR")
+                layout.label(text="импорт откажет (BLND-13)")
+            layout.label(text="объектов сколько угодно: рельеф — их объединение", icon="INFO")
+            layout.label(text="дыра в меше — клетка без пола", icon="INFO")
         else:
             layout.label(text="вспомогательный объект: импорт его игнорирует", icon="INFO")
 
@@ -160,6 +183,9 @@ class FLUXUS_PT_terrain(FluxusPanel, bpy.types.Panel):
             layout.label(text="объекта со свойством `terrain` в сцене нет", icon="INFO")
         if not found_curvature:
             layout.label(text="объекта со свойством `curvature` в сцене нет", icon="INFO")
+        if any(SCULPT_KEY in obj.keys() for obj in scene.objects):
+            layout.label(text="в сцене sculpt-объект: рельеф ведёт он, grid-", icon="ERROR")
+            layout.label(text="сетки вместе с ним — ошибка импорта (BLND-13)")
 
         box = layout.box()
         box.label(text="Кисти — на панели инструментов (T)", icon="BRUSH_DATA")

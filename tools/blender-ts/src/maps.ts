@@ -56,6 +56,14 @@ import {
 } from './cells.js';
 import type { GltfDocument } from './gltf.js';
 import { compareObjectNames } from './layer.js';
+import {
+  buildSculptSampler,
+  cliffJumpOf,
+  deriveSculptCells,
+  nodeBaseLevels,
+  sampleNodeHeight,
+  sculptObjectsOf,
+} from './sculpt.js';
 import type {
   CellLayerContext,
   CurvatureMap,
@@ -224,6 +232,124 @@ function curvatureRowsOf(
 }
 
 /**
+ * Клеточные слои из скалпт-поверхности (BLND-13): объединение sculpt-мешей
+ * дискретизируется в ОБА слоя — карты террейна и карту кривизны. Перевод чисел
+ * в символы и валидация — те же вызовы, что у grid-пути (`terrainMapsOf`,
+ * `createTerrainGrid`, `curvatureRowsOf`, `validateCurvatureMap`): sculpt меняет
+ * источник высот, а не формат и не правила.
+ */
+function sculptCellLayer(
+  sink: Sink,
+  document: GltfDocument,
+  sculptObjects: readonly SourceObject[],
+  terrainObject: SourceObject | null,
+  curvatureObject: SourceObject | null,
+  target: { readonly width: number; readonly height: number; readonly tileSize: number } | null,
+  context: CellLayerContext,
+): CellLayer {
+  // У слоя один источник: grid-объект рядом со скалптом — ошибка, а не тихий
+  // приоритет (BLND-13). Ошибка стоит на grid-объекте: выбор за автором.
+  for (const grid of [terrainObject, curvatureObject]) {
+    if (grid === null) continue;
+    error(
+      sink,
+      grid.name,
+      `grid-объект "${grid.semantics[0]}" вместе со sculpt-поверхностью: у слоя один источник (BLND-13)`,
+    );
+  }
+  const anchor = sculptObjects[0]!;
+  if (target === null) {
+    error(
+      sink,
+      anchor.name,
+      'в конфиге сцены нет ассета террейна: сетки, по которой дискретизируется скалпт, не существует (TERR-2)',
+    );
+    return { findings: sink.findings };
+  }
+  if (context.curvatureMap === null || context.curvatureMap === undefined) {
+    // Скалпт переписывает ОБА слоя: молчаливый пропуск кривизны означал бы
+    // «импорт прошёл» при потерянном рельефе (тот же довод, что у grid-пути).
+    error(
+      sink,
+      anchor.name,
+      'манифест визуалов не адресует карту кривизны ("terrain.curvatureMap", ASSET-7): переписывать нечего',
+    );
+  }
+  const jump = cliffJumpOf(sculptObjects);
+  for (const found of jump.errors) error(sink, found.object, found.message);
+  const spec = specOf(target);
+  const read = buildSculptSampler(document, sculptObjects, spec);
+  for (const found of read.errors) error(sink, found.object, found.message);
+  if (read.sampler === null || sink.findings.some((finding) => finding.severity === 'error')) {
+    return { findings: sink.findings };
+  }
+
+  const cells = deriveSculptCells(read.sampler, spec, jump.value, TERRAIN_LEVEL_MAX, LEVEL_UNIT);
+  for (const cell of cells.outOfRange) {
+    // Отказ называет клетку и СЫРУЮ высоту (BLND-13): квантованный уровень
+    // автору ни о чём — править он будет высоту скалпта.
+    error(
+      sink,
+      anchor.name,
+      `клетка (${cell.x}, ${cell.y}): высота ${formatHeight(cell.height)} даёт уровень вне диапазона ` +
+        `[0, ${TERRAIN_LEVEL_MAX}] (TERR-3) — клампа за автора нет (BLND-13)`,
+    );
+  }
+  if (cells.outOfRange.length > 0) return { findings: sink.findings };
+  const grid: CellGrid = {
+    width: spec.width,
+    height: spec.height,
+    heights: cells.heights,
+    channels: { [RAMP_CHANNEL]: cells.ramps, [NOFLOOR_CHANNEL]: cells.noFloor },
+  };
+  const maps = terrainMapsOf(sink, anchor, grid);
+  if (maps === null) return { findings: sink.findings };
+  const def: TerrainDef = { ...target, levels: [...maps.levels], flags: [...maps.flags] };
+  let terrainGrid;
+  try {
+    terrainGrid = createTerrainGrid(def);
+  } catch (rejected) {
+    // Та же проверка ядра, что у grid-пути: авто-рампа шириной в одну клетку
+    // (узкий склон скалпта) отказывает здесь ровно потому, что отказала бы там
+    // (TERR-7) — чинится формой скалпта, источник правды один.
+    error(
+      sink,
+      anchor.name,
+      `ассет террейна отвергнут проверкой ядра (createTerrainGrid): ${
+        rejected instanceof Error ? rejected.message : String(rejected)
+      }`,
+    );
+    return { findings: sink.findings };
+  }
+
+  // Остаток кривизны: скалпт минус узловая высота ступенчатой террейн-формы по
+  // правилу углов рендера (BLND-13, design 3). Узел без геометрии — ноль:
+  // кривизна принадлежит полу, которого здесь нет.
+  const bases = nodeBaseLevels(terrainGrid);
+  const nodesX = spec.width + 1;
+  const nodesY = spec.height + 1;
+  const residuals = new Array<number>(nodesX * nodesY).fill(0);
+  for (let nodeY = 0; nodeY < nodesY; nodeY++) {
+    for (let nodeX = 0; nodeX < nodesX; nodeX++) {
+      const sampled = sampleNodeHeight(read.sampler, spec, nodeX, nodeY);
+      if (sampled === null) continue;
+      residuals[nodeY * nodesX + nodeX] = sampled - bases[nodeY * nodesX + nodeX]! * LEVEL_UNIT;
+    }
+  }
+  const rows = curvatureRowsOf(sink, anchor, { width: spec.width, height: spec.height, heights: residuals });
+  if (rows === null) return { terrain: maps, findings: sink.findings };
+  const map: CurvatureMap = { width: spec.width, height: spec.height, rows };
+  const checked = validateCurvatureMap({ width: map.width, height: map.height, rows: rows.map((row) => [...row]) });
+  if (!checked.ok) {
+    for (const message of checked.errors) {
+      error(sink, anchor.name, `карта кривизны отвергнута проверкой (validateCurvatureMap): ${message}`);
+    }
+    return { terrain: maps, findings: sink.findings };
+  }
+  return { terrain: maps, curvature: map, findings: sink.findings };
+}
+
+/**
  * Клеточные слои источника целиком. Ошибки собираются все до одной и
  * возвращаются вместе со слоями: решение «писать или не писать» принимает
  * вызывающий (BLND-6).
@@ -238,6 +364,10 @@ export function generateCellLayer(
 
   const terrainObject = singleObject(sink, objects, 'terrain');
   const curvatureObject = singleObject(sink, objects, 'curvature');
+  const sculptObjects = sculptObjectsOf(objects);
+  if (sculptObjects.length > 0) {
+    return sculptCellLayer(sink, document, sculptObjects, terrainObject, curvatureObject, target, context);
+  }
   if (terrainObject === null && curvatureObject === null) return { findings: sink.findings };
 
   // Сетка у обоих объектов одна и берётся у ассета террейна сцены (TERR-2,

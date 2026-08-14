@@ -31,7 +31,15 @@ from bpy.props import (
 
 # Семантические свойства объекта (BLND-3). Порядок совпадает с порядком
 # `SEMANTIC_ITEMS` ниже: `get`/`set` перечисления отображают индекс в ключ.
-SEMANTIC_KEYS = ("prefab", "visual", "terrain", "curvature")
+SEMANTIC_KEYS = ("prefab", "visual", "terrain", "curvature", "sculpt")
+
+#: Custom property порога обрыва на sculpt-объекте (BLND-13): скачок высоты на
+#: границе клеток не ниже порога — обрыв, ниже — рампа. Семантикой не является.
+CLIFF_JUMP_KEY = "cliffJump"
+
+#: Умолчание порога обрыва — пол-уровня (CONVENTIONS.md, «Sculpt-объекты»).
+#: Показ панели; правило применяет импортёр (BLND-8).
+DEFAULT_CLIFF_JUMP = 0.5
 
 #: Custom property скина decoration (PRES-2). Семантикой объекта не является.
 SKIN_KEY = "skin"
@@ -49,6 +57,7 @@ SEMANTIC_ITEMS = (
     ("VISUAL", "Visual", "Decoration: запись парного presentation-документа (PRES-2)"),
     ("TERRAIN", "Terrain", "Grid-mesh клеточных данных террейна (BLND-9)"),
     ("CURVATURE", "Curvature", "Grid-mesh карты кривизны (BLND-10)"),
+    ("SCULPT", "Sculpt", "Скалпт-поверхность арены: рельеф дискретизирует импорт (BLND-13)"),
 )
 
 
@@ -125,6 +134,25 @@ def _walkable_set(self, value):
         del obj[WALKABLE_KEY]
 
 
+def _cliff_jump_get(self):
+    value = self.id_data.get(CLIFF_JUMP_KEY)
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return DEFAULT_CLIFF_JUMP
+
+
+def _cliff_jump_set(self, value):
+    obj = self.id_data
+    if value > 0 and abs(value - DEFAULT_CLIFF_JUMP) > 1e-9:
+        obj[CLIFF_JUMP_KEY] = float(value)
+        return
+    # Умолчание — отсутствие свойства: у параметра один источник (BLND-13), и
+    # проставленное на каждом объекте число превращало бы правку умолчания
+    # конвенций в обход всех сцен.
+    if CLIFF_JUMP_KEY in obj.keys():
+        del obj[CLIFF_JUMP_KEY]
+
+
 def _semantic_get(self):
     obj = self.id_data
     keys = obj.keys()
@@ -140,6 +168,10 @@ def _semantic_set(self, value):
     for key in SEMANTIC_KEYS:
         if key != chosen and key in obj.keys():
             del obj[key]
+    if chosen != "sculpt" and CLIFF_JUMP_KEY in obj.keys():
+        # Порог обрыва — параметр sculpt-семантики: оставшись на объекте другой
+        # роли, он был бы мусорным свойством в `extras`.
+        del obj[CLIFF_JUMP_KEY]
     if chosen is None or chosen in obj.keys():
         return
     # `prefab` и `visual` — строки (имя prefab'а, ключ манифеста); `terrain` и
@@ -184,6 +216,18 @@ class FluxusObjectProps(bpy.types.PropertyGroup):
         ),
         get=_walkable_get,
         set=_walkable_set,
+    )
+    cliff_jump: FloatProperty(
+        name="Порог обрыва",
+        description=(
+            "Скачок высоты скалпта на границе клеток НЕ НИЖЕ порога — обрыв, "
+            "ниже — рампа (BLND-13). В шагах высоты; умолчание 0.5 — отсутствие "
+            "свойства. Правило применяет импорт, панель — вид над `cliffJump`"
+        ),
+        min=0.0,
+        soft_max=4.0,
+        get=_cliff_jump_get,
+        set=_cliff_jump_set,
     )
 
 
