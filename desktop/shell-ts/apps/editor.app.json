@@ -1,0 +1,17 @@
+{
+  "id": "editor",
+  "title": "Fluxus — редактор",
+  "bundle": "../../../editor/ui-ts/app/dist-desktop",
+  "entry": "index.html",
+  "roots": [
+    {
+      "id": "content",
+      "label": "content",
+      "directory": "../../../content",
+      "writable": true,
+      "serve": true
+    }
+  ],
+  "capabilities": ["read", "write", "watch", "dialog", "window"],
+  "window": { "width": 1600, "height": 1000 }
+}

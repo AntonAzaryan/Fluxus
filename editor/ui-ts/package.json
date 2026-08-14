@@ -13,7 +13,8 @@
     "build": "vite build --config app/vite.config.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:desktop": "vite build --config app/vite.desktop.config.ts"
   },
   "engines": {
     "node": ">=22.18"
@@ -23,6 +24,7 @@
     "@game-mvp/blender-ts": "*",
     "@game-mvp/client": "*",
     "@game-mvp/core": "*",
+    "@game-mvp/desktop-shell": "*",
     "@game-mvp/editor-core": "*",
     "@game-mvp/render": "*",
     "three": "^0.185.1"

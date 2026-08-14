@@ -14,7 +14,8 @@
     "engine/integration-ts",
     "editor/core-ts",
     "editor/ui-ts",
-    "tools/blender-ts"
+    "tools/blender-ts",
+    "desktop/shell-ts"
   ],
   "scripts": {
     "test": "npm run test --workspaces",
@@ -27,7 +28,7 @@
     "lint:fix": "eslint . --fix",
     "lint:dead": "knip",
     "lint:dup": "jscpd .",
-    "lint:arch": "depcruise engine editor tools scripts",
+    "lint:arch": "depcruise engine editor tools desktop scripts",
     "lint:all": "npm run typecheck && npm run lint && npm run lint:dead && npm run lint:dup && npm run lint:arch",
     "check": "npm run typecheck && npm run lint && npm run spec-graph -- check && npm test",
     "golden": "npm run record -w @game-mvp/integration && npm run golden -w @game-mvp/core",
