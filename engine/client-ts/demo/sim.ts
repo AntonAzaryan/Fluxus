@@ -11,6 +11,7 @@
  * движка, которому в JSON не место (TICK-4, DI-3).
  */
 import {
+  FIXED_ONE,
   InputSystem,
   LocomotionSystem,
   PhysicsSystem,
@@ -41,7 +42,14 @@ export const PLAYER_ID = 'p1';
  * (`LocomotionSystem` — индексы) и сэмплер ввода (`InputSampler.actionBits`);
  * раскладку кнопок ядро не знает (LOC-1).
  */
-export const ACTION_BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
+export const ACTION_BITS = {
+  cast: 0,
+  kill: 1,
+  dodge: 2,
+  jump: 3,
+  slowDome: 4,
+  capture: 5,
+} as const;
 
 /**
  * Компоненты-состояния, зеркалируемые в `EntityView.states` (CAM-6): порядок
@@ -52,19 +60,75 @@ export const ACTION_BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
  * `effects.byState` (REND-23). Два списка разошлись бы молча: эффект просто не
  * включался бы, а автор увидел бы только его отсутствие.
  *
- * `Shielded` — имя компонента щита, который поставит геймплейная фаза; пока
- * его в сцене нет, бит не выставляется никогда, и сфера щита не появляется.
- * Объявлено заранее ровно затем, чтобы механизм был готов до контента.
+ * `Shielded` — имя компонента щита, которого в сцене пока нет: бит не
+ * выставляется никогда, и сфера щита не появляется. Объявлено заранее ровно
+ * затем, чтобы механизм был готов до контента. `Held` — снаряд, пойманный
+ * захватом: пока он висит на держателе, его рисует оболочка `effects.byState`.
+ * `Holding` — обратная сторона той же пары, уже на ГЕРОЕ: записи эффекта у неё
+ * нет, и доставляется она затем, чтобы превью зоны захвата гасло, пока снаряд
+ * в руках (`main.ts`), — состояние симуляции, а не догадка главного потока.
+ *
+ * Порядок ДОБАВЛЕНИЯ важнее алфавита: бит существующего имени не должен
+ * поехать — новое состояние дописывается в конец.
  */
-export const STATE_COMPONENTS: readonly string[] = Object.freeze(['Falling', 'Shielded']);
+export const STATE_COMPONENTS: readonly string[] = Object.freeze([
+  'Falling',
+  'Shielded',
+  'Held',
+  'Holding',
+]);
+
+/** Бит состояния в `EntityView.states` (CAM-6); неизвестное имя — ошибка сборки. */
+export function stateBit(component: string): number {
+  const index = STATE_COMPONENTS.indexOf(component);
+  if (index === -1) throw new Error(`демо: состояние "${component}" не зеркалируется Extractor'ом`);
+  return 1 << index;
+}
 
 /**
- * Полный путь снаряда в тиках — поле `Lifetime.ticks` prefab'а `Fireball`
- * сцены демо. Знание СБОРКИ, а не ядра: из него Extractor выводит фазу полёта
- * (REND-12), а рендер по ней рисует полётную дугу. Расходится с prefab'ом —
- * расходится только дуга: симуляция этого числа здесь не читает.
+ * Полный путь снаряда в тиках — ЗЕРКАЛО поля `AbilityConfig.throwLifetime`
+ * prefab'а `Hero`, которым `Cast` и `ThrowHeld` заполняют `Lifetime.ticks`
+ * (и умолчания `Lifetime` у prefab'а `Fireball`, которое ни один из них не
+ * оставляет в силе). Знание СБОРКИ, а не ядра: из него Extractor выводит фазу
+ * полёта (REND-12), а рендер по ней рисует полётную дугу. Расходится с
+ * `AbilityConfig` — расходится только дуга: симуляция этого числа не читает.
+ * Ретюнить оба вместе.
  */
 export const FIREBALL_LIFETIME_TICKS = 50;
+
+/**
+ * Компонент селективного лока действий (LOC-7), который сцена вешает на героя
+ * с пойманным снарядом: манёвры на это время запрещены, ходьба — нет. Имя —
+ * знание СБОРКИ: ядро смысла бита не знает, а JSON-системы сцены и опции
+ * `LocomotionSystem` обязаны называть один и тот же компонент.
+ */
+export const ACTION_LOCK_COMPONENT = 'ActionLock';
+
+/**
+ * Геометрия зоны захвата в МИРОВЫХ единицах — то, из чего главный поток рисует
+ * превью конуса под курсором (превью покадровое, симуляции о нём знать нечего).
+ * Числа берутся из той же записи `AbilityConfig` prefab'а `Hero`, по которой
+ * решает JSON-система `CaptureRelease`: второго набора балансных чисел не
+ * заводится, а расхождение превью с проверкой стало бы обманом игрока.
+ *
+ * `halfAngleTurns` — доля оборота (FP-7, единица угла ядра), радиус — клетки
+ * мира: Q16.16 за границу симуляции не выходит (REND-1).
+ */
+export function captureZoneOf(def: SceneDef): { radius: number; halfAngleTurns: number } {
+  const hero = def.prefabs?.find((prefab) => prefab.name === 'Hero');
+  const config = hero?.components.AbilityConfig;
+  if (config === undefined) throw new Error("демо: у prefab'а Hero нет AbilityConfig");
+  const radius = config.captureRadius;
+  const halfAngle = config.captureHalfAngle;
+  // Отсутствующее поле — не ноль: нулевой сектор невидим, и превью молча
+  // перестало бы существовать вместо того, чтобы сообщить о дыре в контенте.
+  if (radius === undefined || halfAngle === undefined) {
+    throw new Error(
+      "демо: в AbilityConfig prefab'а Hero нет captureRadius/captureHalfAngle — превью зоны рисовать нечем",
+    );
+  }
+  return { radius: radius / FIXED_ONE, halfAngleTurns: halfAngle / FIXED_ONE };
+}
 
 /**
  * Имена доставляемых статов демо (`match-hud` HUD-8) — общий словарь двух
@@ -72,10 +136,9 @@ export const FIREBALL_LIFETIME_TICKS = 50;
  * биндятся на те же имена в композиции HUD (`hud.ts`). Имена принадлежат
  * СБОРКЕ, а не ядру: кодек и HUD их смысла не знают.
  *
- * Часть статов приезжает не всегда: компонентов здоровья, кулдаунов и счёта в
- * сцене демо ещё нет — их добавит геймплейная фаза. Виджет, не нашедший стата,
- * показывает пустое состояние, а не ноль (HUD-8), поэтому объявление их здесь
- * заранее ничего не ломает и ничего не выдумывает.
+ * Часть статов приезжает не всегда: компонента счёта в сцене демо ещё нет.
+ * Виджет, не нашедший стата, показывает пустое состояние, а не ноль (HUD-8),
+ * поэтому объявление его здесь заранее ничего не ломает и ничего не выдумывает.
  */
 export const STATS = {
   /** Слот игрока — по нему счётчики раскладываются по игрокам. */
@@ -88,8 +151,19 @@ export const STATS = {
   cooldownMax: (ability: string): string => `${ability}.cdMax`,
 } as const;
 
-/** Способности демо, у которых виджет показывает кулдаун (те же имена, что INP-4). */
-export const COOLDOWN_ABILITIES: readonly string[] = Object.freeze(['cast', 'dodge', 'jump']);
+/**
+ * Способности демо, у которых виджет показывает кулдаун (те же имена, что
+ * INP-4). Перезарядку в сцене имеют только две последние — `cast`, `dodge` и
+ * `jump` держат в компоненте `Cooldowns` нулевой предел и потому всегда готовы;
+ * виджет читает те же доставленные статы и рисует их кнопки без затемнения.
+ */
+export const COOLDOWN_ABILITIES: readonly string[] = Object.freeze([
+  'cast',
+  'dodge',
+  'jump',
+  'slowDome',
+  'capture',
+]);
 
 // ------------------------------------------------------------------- сборка
 
@@ -115,9 +189,14 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   scene.systems.register(new InputSystem({ players: [PLAYER_ID] }));
   // Передвижение героя: разгон/торможение и манёвры уклона, переката и прыжка
   // (LOC-1..6). Конфигурация — поля компонента `Locomotion` у prefab'а Hero,
-  // здесь только раскладка кнопок демо.
+  // здесь только раскладка кнопок демо и имя компонента селективного лока
+  // (LOC-7): его вешает на героя JSON-система захвата, пока снаряд в руках.
   scene.systems.register(
-    new LocomotionSystem({ dodgeButton: ACTION_BITS.dodge, jumpButton: ACTION_BITS.jump }),
+    new LocomotionSystem({
+      dodgeButton: ACTION_BITS.dodge,
+      jumpButton: ACTION_BITS.jump,
+      lockComponent: ACTION_LOCK_COMPONENT,
+    }),
   );
   // Физика ядра: статика обрывов из террейна — игрок не сойдёт с плато мимо
   // рампы (PHYS-8, TERR-5). Снаряд без коллайдера — летит поверх обрывов.

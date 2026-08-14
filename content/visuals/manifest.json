@@ -86,12 +86,12 @@
           "flightArc": 0.35
         }
       },
-      "CatchZone": {
+      "SlowDome": {
         "primitive": "sphere",
-        "color": "#8affc8",
-        "radius": 1.2,
-        "alpha": 0.16,
-        "height": 0.2
+        "color": "#6fd3ff",
+        "radius": 1.05,
+        "alpha": 0.2,
+        "height": 0
       }
     },
     "byState": {
@@ -101,6 +101,16 @@
         "radius": 0.85,
         "alpha": 0.3,
         "height": 0.9
+      },
+      "Held": {
+        "primitive": "sphere",
+        "color": "#8affc8",
+        "radius": 0.42,
+        "alpha": 0.45,
+        "height": 0.55,
+        "verticalOffset": {
+          "flightArc": 0.35
+        }
       }
     },
     "byEvent": {

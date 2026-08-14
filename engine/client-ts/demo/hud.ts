@@ -58,13 +58,17 @@ const ABILITY_ICONS: Readonly<Record<string, string>> = {
   cast: 'visuals/icons/cast.svg',
   dodge: 'visuals/icons/dodge.svg',
   jump: 'visuals/icons/jump.svg',
+  slowDome: 'visuals/icons/slow-dome.svg',
+  capture: 'visuals/icons/capture.svg',
 };
 
 /**
  * Композиция HUD демо — значение, а не код (HUD-4): виджеты по зонам, все
- * ссылки — имена реестров. Таблица маркеров миникарты покрывает оба визуальных
- * типа демо-сцены (`worker.ts`, `kindByTags(['Hero', 'Fireball'])`); тип без
- * записи получает default-маркер по политике таблицы, а не ошибку (HUD-6).
+ * ссылки — имена реестров. Таблица маркеров миникарты покрывает ВСЕ визуальные
+ * типы демо-сцены (`extractor.ts`, `kindByTags(['Hero', 'Fireball',
+ * 'SlowDome'])`); тип без записи получает default-маркер по политике таблицы, а
+ * не ошибку (HUD-6) — но безымянный серый квадрат на месте способности читается
+ * как «что-то сломалось», поэтому у купола запись своя.
  * Иконки способностей — asset ID дерева контента (ASSET-2), не URL.
  *
  * Функция от возможностей оболочки, а не константа: сборок у демо две, и
@@ -118,7 +122,13 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
           tickMs: capabilities.tickMs,
         },
         bindings: { entity: 'hero.entity' },
-        actions: { cast: 'hero.cast', dodge: 'hero.dodge', jump: 'hero.jump' },
+        actions: {
+          cast: 'hero.cast',
+          dodge: 'hero.dodge',
+          jump: 'hero.jump',
+          slowDome: 'hero.slowDome',
+          capture: 'hero.capture',
+        },
       },
       {
         // Миникарта — слева, под рантайм-панелью (design D5).
@@ -140,6 +150,15 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
                 color: { mode: 'fixed', color: '#ff7a45' },
                 size: 7,
                 priority: 5,
+              },
+              // Купол — зона, а не цель: крупная тусклая точка того же голубого,
+              // что оболочка эффекта в манифесте, и НИЖЕ всех по приоритету —
+              // герой внутри купола перекрывает его, а не наоборот.
+              SlowDome: {
+                renderer: 'dot',
+                color: { mode: 'fixed', color: '#6fd3ff' },
+                size: 11,
+                priority: 1,
               },
             },
             unknownKind: {
@@ -263,6 +282,10 @@ export function createDemoHudRegistry(
   registry.registerAction('hero.cast', { target: 'world', action: 'cast' });
   registry.registerAction('hero.dodge', { target: 'world', action: 'dodge' });
   registry.registerAction('hero.jump', { target: 'world', action: 'jump' });
+  // Купол ловит фронт, захват — отпускание: фасад даёт кнопке ровно один тик с
+  // битом, и следующий тик уже без него читается сценой как falling edge (INP-2).
+  registry.registerAction('hero.slowDome', { target: 'world', action: 'slowDome' });
+  registry.registerAction('hero.capture', { target: 'world', action: 'capture' });
   // Команды машины состояний мира — обратным каналом (SHELL-6, WSM-1); паузу
   // на экране поставит только доставленный режим, не клик (HUD-2).
   registry.registerAction('match.pause', { target: 'control', action: 'pause' });
