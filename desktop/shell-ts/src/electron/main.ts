@@ -25,6 +25,7 @@
  * файловой системе и процессам у страницы нет.
  */
 import { app, BrowserWindow, dialog, ipcMain, protocol } from 'electron';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { BridgeChange, BridgeChoiceRequest, BridgeRootId } from '../bridge/types.js';
@@ -100,13 +101,27 @@ async function reportSmoke(
   process.stdout.write(`SMOKE ${JSON.stringify({ app: profile.id, seen, complaints })}\n`);
 }
 
+/**
+ * Какой профиль запускать. Аргументом — при запуске из репозитория; в
+ * дистрибутиве его называет манифест самого приложения (`fluxus.app`, кладёт
+ * `bin/pack.mjs`). Без профиля контейнер не стартует вовсе: профиль — это
+ * выданные возможности, и умолчания у него быть не может (DSK-5).
+ */
 function manifestFrom(argv: readonly string[]): string {
   const at = argv.indexOf('--app');
   const value = at < 0 ? undefined : argv[at + 1];
-  if (value === undefined) {
-    throw new Error('контейнер запускается с профилем: `--app <манифест.app.json>` (DSK-5)');
+  if (value !== undefined) return value;
+  const home = app.getAppPath();
+  try {
+    const own = JSON.parse(readFileSync(join(home, 'package.json'), 'utf8')) as {
+      fluxus?: { app?: unknown };
+    };
+    const named = own.fluxus?.app;
+    if (typeof named === 'string') return join(home, named);
+  } catch {
+    // Манифеста приложения нет или он не читается — отказ ниже, общий.
   }
-  return value;
+  throw new Error('контейнер запускается с профилем: `--app <манифест.app.json>` (DSK-5)');
 }
 
 protocol.registerSchemesAsPrivileged([
