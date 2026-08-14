@@ -58,6 +58,8 @@ const ABILITY_ICONS: Readonly<Record<string, string>> = {
   cast: 'visuals/icons/cast.svg',
   dodge: 'visuals/icons/dodge.svg',
   jump: 'visuals/icons/jump.svg',
+  slowDome: 'visuals/icons/slow-dome.svg',
+  capture: 'visuals/icons/capture.svg',
 };
 
 /**
@@ -118,7 +120,13 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
           tickMs: capabilities.tickMs,
         },
         bindings: { entity: 'hero.entity' },
-        actions: { cast: 'hero.cast', dodge: 'hero.dodge', jump: 'hero.jump' },
+        actions: {
+          cast: 'hero.cast',
+          dodge: 'hero.dodge',
+          jump: 'hero.jump',
+          slowDome: 'hero.slowDome',
+          capture: 'hero.capture',
+        },
       },
       {
         // Миникарта — слева, под рантайм-панелью (design D5).
@@ -263,6 +271,10 @@ export function createDemoHudRegistry(
   registry.registerAction('hero.cast', { target: 'world', action: 'cast' });
   registry.registerAction('hero.dodge', { target: 'world', action: 'dodge' });
   registry.registerAction('hero.jump', { target: 'world', action: 'jump' });
+  // Купол ловит фронт, захват — отпускание: фасад даёт кнопке ровно один тик с
+  // битом, и следующий тик уже без него читается сценой как falling edge (INP-2).
+  registry.registerAction('hero.slowDome', { target: 'world', action: 'slowDome' });
+  registry.registerAction('hero.capture', { target: 'world', action: 'capture' });
   // Команды машины состояний мира — обратным каналом (SHELL-6, WSM-1); паузу
   // на экране поставит только доставленный режим, не клик (HUD-2).
   registry.registerAction('match.pause', { target: 'control', action: 'pause' });

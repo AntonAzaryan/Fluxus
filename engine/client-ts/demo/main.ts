@@ -17,7 +17,7 @@
  * двумя последними доставленными тиками по часам этого потока (SHELL-7).
  */
 import * as THREE from 'three';
-import type { EntityId } from '@game-mvp/core';
+import type { EntityId, SceneDef } from '@game-mvp/core';
 import {
   AssetService,
   createManifestLoader,
@@ -53,17 +53,20 @@ import {
   InputSampler,
   KeyboardMouseSource,
   RemoteHost,
+  TURN_UNITS,
   TouchSource,
   aimAngle,
   navigatorGamepad,
   shellPort,
   validateBindings,
+  type InputSource,
 } from '@game-mvp/client';
-import { ACTION_BITS, STATE_COMPONENTS } from './sim.js';
+import { ACTION_BITS, STATE_COMPONENTS, captureZoneOf } from './sim.js';
 import { createDemoHud, demoHudComposition } from './hud.js';
 import { DEMO_SERVER_URL, demoMode, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
 import bindingsJson from './bindings.json';
+import sceneJson from '../../../content/scenes/duel.scene.json';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
 const HEIGHT_STEP = 0.6;
@@ -223,7 +226,9 @@ window.addEventListener('keydown', (e) => {
     // выстрелил бы в устаревшую точку при следующем откреплении.
     pendingPan = null;
   }
-  if (e.code === 'KeyF') camInput.flyToggle = true;
+  // V, а не F: F ушла герою под купол замедления (`bindings.json`), и две
+  // роли на одной клавише — это молча несработавшая способность.
+  if (e.code === 'KeyV') camInput.flyToggle = true;
   keys.add(e.code);
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
@@ -299,6 +304,97 @@ if (bindings.touch !== undefined) {
 
 if (bindings.gamepad !== undefined) {
   sampler.add(new GamepadSource(bindings.gamepad, navigatorGamepad(window)));
+}
+
+/**
+ * Прицел под курсором как НЕПРЕРЫВНЫЙ источник (INP-1): `KeyboardMouseSource`
+ * владеет прицелом только в момент клика, а способностям с удержанием (захват
+ * снаряда) направление нужно на каждом тике удержания — иначе отпускание
+ * разрешалось бы по направлению последнего клика. Органов управления источник
+ * не держит (`held` не реализует), поэтому на биты кнопок он не влияет вовсе;
+ * сэмплер берёт прицел у того источника, который менял его последним (INP-5).
+ */
+const pointerAimSource: InputSource = {
+  id: 'pointer-aim',
+  start: () => {},
+  stop: () => {},
+  poll: () => ({
+    moveX: 0,
+    moveY: 0,
+    // Указатель ещё не двигался — прицела нет: тач и геймпад владеют им сами.
+    aim: pointerX < 0 ? null : aimAtPointer(pointerX, pointerY),
+  }),
+};
+sampler.add(pointerAimSource);
+
+// ------------------------------------------------- превью зоны захвата (R)
+
+/**
+ * Превью зоны захвата — presentation, и только presentation: оно следует за
+ * курсором МЕЖДУ тиками (REND-2), а захват симуляция разрешает по `aimDir`
+ * того тика, на котором кнопка отпущена. Поэтому сектор живёт здесь, в главном
+ * потоке, а не записью `effects` манифеста: у оболочки эффекта нет ни
+ * ориентации, ни угла раствора (REND-23).
+ *
+ * Числа — те же, по которым решает JSON-система `CaptureRelease`: они читаются
+ * из `AbilityConfig` prefab'а `Hero` (`captureZoneOf`), а не выписываются здесь
+ * второй раз. Разошлись бы — превью обещало бы игроку не то, что проверит тик.
+ */
+const captureZone = captureZoneOf(sceneJson as unknown as SceneDef);
+
+/** Клавиша захвата — из тех же биндингов (INP-4), а не литералом рядом с ними. */
+const captureKey =
+  Object.entries(bindings.keyboardMouse.keys).find(([, action]) => action === 'capture')?.[0] ??
+  null;
+
+/** Подъём над полом: без него сектор тонет в ступени террейна (REND-7). */
+const CAPTURE_PREVIEW_LIFT = 0.05;
+const CAPTURE_PREVIEW_SEGMENTS = 24;
+
+/** Сектор в плоскости XY: вершина в начале координат, раствор вокруг оси +X. */
+function captureSectorGeometry(radius: number, halfAngleTurns: number): THREE.BufferGeometry {
+  const half = halfAngleTurns * Math.PI * 2;
+  const positions: number[] = [0, 0, 0];
+  for (let i = 0; i <= CAPTURE_PREVIEW_SEGMENTS; i++) {
+    const angle = -half + (2 * half * i) / CAPTURE_PREVIEW_SEGMENTS;
+    positions.push(Math.cos(angle) * radius, Math.sin(angle) * radius, 0);
+  }
+  const index: number[] = [];
+  for (let i = 1; i <= CAPTURE_PREVIEW_SEGMENTS; i++) index.push(0, i, i + 1);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(index);
+  return geometry;
+}
+
+const capturePreview = new THREE.Mesh(
+  captureSectorGeometry(captureZone.radius, captureZone.halfAngleTurns),
+  new THREE.MeshBasicMaterial({
+    color: 0x8affc8,
+    transparent: true,
+    opacity: 0.22,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  }),
+);
+capturePreview.visible = false;
+scene3.add(capturePreview);
+
+/** Кадр превью: видно, пока зажата клавиша захвата; курс — текущий прицел. */
+function updateCapturePreview(): void {
+  const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
+  const aim = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
+  if (captureKey === null || !keys.has(captureKey) || instance === null || aim === null) {
+    capturePreview.visible = false;
+    return;
+  }
+  capturePreview.visible = true;
+  capturePreview.position.set(
+    instance.pose.x,
+    instance.pose.y,
+    instance.pose.z + CAPTURE_PREVIEW_LIFT,
+  );
+  capturePreview.rotation.set(0, 0, (aim / TURN_UNITS) * Math.PI * 2);
 }
 
 /**
@@ -484,6 +580,8 @@ function frame(now: number): void {
   }
 
   remote?.frame(now);
+  // После кадра подсистем: сектор садится на позу инстанса ЭТОГО кадра.
+  updateCapturePreview();
   renderer3.render(scene3, camera);
 }
 

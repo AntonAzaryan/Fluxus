@@ -101,8 +101,13 @@ describe('headless-прогон демо: статы и фаза полёта д
     const hero = view.entities.get(playerId)!;
     // Слот игрока есть — компонент в сцене живой.
     expect(hero.stats!.get(STATS.slot)).toBe(0);
-    // Здоровья в сцене пока нет: стат объявлен, но не доехал — «нет данных».
-    expect(hero.stats!.has(STATS.hp)).toBe(false);
+    // Здоровье приехало вместе с геймплейной фазой: компонент `Health` у героя
+    // сцены есть, и стат доезжает значением, а не отсутствием.
+    expect(hero.stats!.get(STATS.hp)).toBe(1000);
+    expect(hero.stats!.get(STATS.hpMax)).toBe(1000);
+    // А счёта в сцене по-прежнему нет: стат объявлен, но не доехал — «нет
+    // данных», ровно тот сценарий пустого состояния, который описывает HUD-8.
+    expect(hero.stats!.has(STATS.deaths)).toBe(false);
 
     const fireball = [...view.entities.values()].find((entity) => entity.kind === 'Fireball');
     expect(fireball).toBeDefined();

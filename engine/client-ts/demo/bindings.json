@@ -5,7 +5,9 @@
       "ShiftLeft": "dodge",
       "ShiftRight": "dodge",
       "Space": "jump",
-      "KeyK": "kill"
+      "KeyK": "kill",
+      "KeyF": "slowDome",
+      "KeyR": "capture"
     },
     "pointerButtons": { "0": "cast" }
   },
@@ -22,13 +24,15 @@
     },
     "buttons": [
       { "zone": { "left": 0.86, "top": 0.05, "width": 0.12, "height": 0.1 }, "action": "jump" },
-      { "zone": { "left": 0.72, "top": 0.05, "width": 0.12, "height": 0.1 }, "action": "dodge" }
+      { "zone": { "left": 0.72, "top": 0.05, "width": 0.12, "height": 0.1 }, "action": "dodge" },
+      { "zone": { "left": 0.86, "top": 0.17, "width": 0.12, "height": 0.1 }, "action": "slowDome" },
+      { "zone": { "left": 0.72, "top": 0.17, "width": 0.12, "height": 0.1 }, "action": "capture" }
     ]
   },
   "gamepad": {
     "moveAxes": [0, 1],
     "aimAxes": [2, 3],
     "deadzone": 0.25,
-    "buttons": { "0": "jump", "1": "dodge", "5": "cast", "8": "kill" }
+    "buttons": { "0": "jump", "1": "dodge", "2": "capture", "3": "slowDome", "5": "cast", "8": "kill" }
   }
 }
