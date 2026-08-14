@@ -133,6 +133,12 @@ export type { InstancePose, ModelInstanceView, ModelsOptions } from './subsystem
 export { EffectsSubsystem } from './subsystems/effects.js';
 export type { EffectsOptions } from './subsystems/effects.js';
 
+// Подсистема частиц (REND-24): эмиттеры по записям манифеста поверх эмиттерных
+// ассетов (ASSET-14) — оболочки от доставленного состояния, one-shot'ы от
+// событий и decoration-эмиттеры, все в одном батч-рендерере сцены.
+export { ParticlesSubsystem } from './subsystems/particles.js';
+export type { ParticlesOptions, SocketSource } from './subsystems/particles.js';
+
 // Сервисы вьюпорта редактора: picking по видимому изображению (REND-15) и
 // служебные наложения подсистемой рендера (REND-16). Игровой клиент ни того, ни
 // другого не собирает — наложений в его кадре нет по конструкции.

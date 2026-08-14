@@ -24,6 +24,7 @@ import {
   curvatureLoader,
   gltfLoader,
   mdxLoader,
+  particleEffectLoader,
   pngTextureLoader,
   type AssetSource,
   type AssetState,
@@ -36,6 +37,7 @@ import {
   CameraRig,
   EffectsSubsystem,
   ModelsSubsystem,
+  ParticlesSubsystem,
   TerrainSubsystem,
   VisualSurfaceSource,
   applyCameraPose,
@@ -121,6 +123,10 @@ const assets = new AssetService(assetSource);
 assets.registerLoader(mdxLoader);
 assets.registerLoader(gltfLoader);
 assets.registerLoader(pngTextureLoader);
+// Эмиттерный ассет (ASSET-14): без него ссылка записи манифеста на эффект
+// частиц разрешалась бы в `failed` «нет загрузчика под пару вид+формат»
+// (ASSET-3), и подсистема частиц молча пропускала бы каждую запись.
+assets.registerLoader(particleEffectLoader);
 // Описание типов эффектов камеры (CAM-9) подаёт тот, кто собирает клиента:
 // модуль ассетов о типах не знает, а с описанием проверяет по нему и секцию
 // эффектов манифеста (ASSET-8). Тем же порядком приезжает описание конфига
@@ -593,6 +599,19 @@ async function main(): Promise<void> {
       // запись `effects.byState` находит свой бит доставленных состояний.
       remote!.register(
         new EffectsSubsystem(manifest, { surface, stateComponents: STATE_COMPONENTS }),
+      );
+      // Частицы (REND-24) — после моделей: сокет эмиттера снимается с позы узла
+      // инстанса, посаженного В ЭТОМ ЖЕ кадре, а не в прошлом. Источник узлов —
+      // сама подсистема моделей (`sockets`), словарь состояний — тот же список
+      // сборки, что у эффектов и камеры: второго словаря не заводится.
+      // Decoration-эмиттеры (факелы арены) приезжают сюда общим входом набора
+      // декораций, который хост рассылает всем подсистемам (REND-18).
+      remote!.register(
+        new ParticlesSubsystem(manifest, {
+          surface,
+          stateComponents: STATE_COMPONENTS,
+          sockets: models,
+        }),
       );
 
       // Камера: поверхность и границы — из той же сетки, что рендер террейна

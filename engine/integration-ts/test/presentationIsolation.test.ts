@@ -43,7 +43,9 @@ import {
 import {
   presentationPathOf,
   resolveVisual,
+  resolveVisualEmitter,
   validateManifest,
+  validateParticleEffect,
   validatePresentationScene,
   type PresentationScene,
 } from '@game-mvp/assets';
@@ -277,7 +279,41 @@ describe('CONT-1: демонстрационный слой лежит в дер
     );
     if (!manifest.ok || !parsed.ok) return;
     for (const record of parsed.scene.decorations) {
-      expect(resolveVisual(manifest.manifest, record.visual), record.visual).toBeDefined();
+      // Пространство визуальных ключей одно, а родов записи два (ASSET-9,
+      // ASSET-14): модельный вид рисует подсистема моделей, эмиттерный —
+      // подсистема частиц (`rendering` REND-24). Размещение ссылается на оба
+      // одним и тем же полем `visual`, поэтому «ссылка разрешается» здесь
+      // значит «разрешается хоть одним из двух», а не «моделью».
+      const visual =
+        resolveVisual(manifest.manifest, record.visual) ??
+        resolveVisualEmitter(manifest.manifest, record.visual);
+      expect(visual, record.visual).toBeDefined();
+    }
+  });
+
+  it('каждая ссылка на эмиттерный ассет разрешается в документ эффекта (ASSET-14)', () => {
+    const manifest = validateManifest(
+      JSON.parse(readFileSync(join(CONTENT_ROOT, 'visuals/manifest.json'), 'utf8')),
+    );
+    expect(manifest.ok ? '' : manifest.errors.join('; ')).toBe('');
+    if (!manifest.ok) return;
+    const { particles, decorations } = manifest.manifest;
+    const referenced = [
+      ...Object.values(particles?.byKind ?? {}).map((r) => r.effect),
+      ...Object.values(particles?.byState ?? {}).map((r) => r.effect),
+      ...Object.values(particles?.byEvent ?? {}).map((r) => r.effect),
+      ...Object.keys(decorations ?? {})
+        .map((key) => resolveVisualEmitter(manifest.manifest, key)?.effect)
+        .filter((id): id is string => id !== undefined),
+    ];
+    // Демо-контент частиц заведён (задача 3.2): пустой список означал бы, что
+    // проверка сторожит несуществующее.
+    expect(referenced.length).toBeGreaterThan(0);
+    for (const id of referenced) {
+      const parsed = validateParticleEffect(
+        JSON.parse(readFileSync(join(CONTENT_ROOT, id), 'utf8')),
+      );
+      expect(parsed.ok ? '' : parsed.errors.join('; '), id).toBe('');
     }
   });
 

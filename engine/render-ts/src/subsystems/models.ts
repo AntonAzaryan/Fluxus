@@ -83,6 +83,7 @@ import {
   resolveLodThresholds,
   resolveSurfaceAlign,
   resolveVisual,
+  resolveVisualEmitter,
   resolveVisualTier,
   type AssetState,
   type BakedDerivatives,
@@ -256,6 +257,29 @@ const PLACEHOLDER_BOUNDS: ModelBounds = {
   maxY: PLACEHOLDER_WIDTH / 2,
   maxZ: PLACEHOLDER_HEIGHT,
 };
+/**
+ * Объём-прокси эмиттерного вида (ASSET-14). Частиц подсистема моделей не рисует
+ * — их рисует подсистема частиц (REND-24), — но ПОПАДАТЬ автор обязан и в них:
+ * размещение факела — такая же запись `decorations`, как размещение статуи, и
+ * выделять, двигать и удалять её во вьюпорте нужно тем же способом (REND-18,
+ * ED-17). Источник объёмов-прокси при этом остаётся ОДИН (REND-15): подсистема
+ * частиц в picking'е не участвует и участвовать не начинает.
+ *
+ * Размер фиксированный: у эмиттера нет ни модели, ни границ — облако частиц
+ * меняет размер каждый кадр, и производить объём попадания от него значило бы
+ * заводить мерцающую цель. Габариты — по заглушке (ASSET-4) в ширину и метр в
+ * высоту: столько занимает на арене типовой факел, и в эту величину автор целит.
+ */
+const EMITTER_WIDTH = PLACEHOLDER_WIDTH;
+const EMITTER_HEIGHT = 1;
+const EMITTER_BOUNDS: ModelBounds = {
+  minX: -EMITTER_WIDTH / 2,
+  minY: -EMITTER_WIDTH / 2,
+  minZ: 0,
+  maxX: EMITTER_WIDTH / 2,
+  maxY: EMITTER_WIDTH / 2,
+  maxZ: EMITTER_HEIGHT,
+};
 /** Конвенция арены ядра (ARENA-5); имя переопределяется опцией. */
 const DEFAULT_FALL_EVENT = 'FellThroughFloor';
 
@@ -415,6 +439,12 @@ interface InstanceRecord {
    */
   holder: THREE.Group | null;
   placeholder: THREE.Mesh | null;
+  /**
+   * Ключ записи разрешился в ЭМИТТЕРНЫЙ вид (ASSET-14): рисуют его частицы
+   * (REND-24), а этот пул даёт ему только объём-прокси (`EMITTER_BOUNDS`) —
+   * чтобы попадать в размещённый факел было чем (REND-15, REND-18).
+   */
+  emitter: boolean;
   /** Ярус, которым инстанс нарисован (REND-20) — с учётом деградации. */
   tier: VisualTier;
   model: ModelInstance | null;
@@ -1232,6 +1262,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       view,
       holder: null,
       placeholder: null,
+      emitter: false,
       tier: 'detailed',
       model: null,
       batch: null,
@@ -1281,6 +1312,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * общая часть создания инстанса и его пересборки под новой записью (REND-17).
    */
   private attachVisual(ctx: RenderContext, record: InstanceRecord): void {
+    record.emitter = false;
     const kind = record.kind;
     // Резолвер явно отнёс сущность к невизуальным — не рисуем и не шумим.
     if (kind === null) return;
@@ -1292,6 +1324,18 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // доехал» (ASSET-4), а тут доезжать нечему. Молчит подсистема по той же
       // причине: запись в манифесте есть, просто не её.
       if (resolveEffectByKind(this.manifest, kind) !== undefined) return;
+      // Ровно то же и по той же причине — эмиттерный вид (ASSET-14): его
+      // изображение частицы, и рисует его подсистема частиц (REND-24).
+      // `resolveVisual` отдаёт по такому ключу пусто НАМЕРЕННО — чтобы
+      // подсистема моделей не рисовала того, чего ей рисовать нечем; принять
+      // это за отсутствующую запись значило бы поставить на факел заглушку.
+      // Объём-прокси такой записи, однако, даёт всё-таки этот пул: источник
+      // прокси один (REND-15), а попадать в размещённый факел автор обязан
+      // тем же способом, что в статую (REND-18, ED-17).
+      if (resolveVisualEmitter(this.manifest, kind) !== undefined) {
+        record.emitter = true;
+        return;
+      }
       // Сущность без записи в манифесте: заглушка и предупреждение один раз (ASSET-6).
       if (!this.warnedKinds.has(kind)) {
         this.warnedKinds.add(kind);
@@ -1862,6 +1906,9 @@ function screenSize(radius: number, distance: number, screen: ScreenScale): numb
 function boundsOf(record: InstanceRecord): ModelBounds | null {
   if (record.model !== null) return record.model.bounds;
   if (record.batch !== null) return record.batch.bounds;
+  // Эмиттерный вид (ASSET-14) рисуется частицами, а попадать в него нужно тем
+  // же способом, что в модельный (REND-15, REND-18): фиксированный объём.
+  if (record.emitter) return EMITTER_BOUNDS;
   return record.placeholder === null ? null : PLACEHOLDER_BOUNDS;
 }
 

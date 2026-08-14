@@ -35,7 +35,13 @@
  * `initial`, то есть выданные ID и хеш `worldInit`.
  */
 import { fixed, FIXED_ONE, type ComponentSchema, type FieldType, type PrefabDef } from '@game-mvp/core';
-import { quantizeDecorationLength, quantizeDecorationYaw, resolveVisual, type VisualManifest } from '@game-mvp/assets';
+import {
+  quantizeDecorationLength,
+  quantizeDecorationYaw,
+  resolveVisual,
+  resolveVisualEmitter,
+  type VisualManifest,
+} from '@game-mvp/assets';
 import {
   DEFAULT_POSITION_BINDING,
   type JsonObject,
@@ -361,7 +367,15 @@ function decorationRecord(sink: Sink, source: SourceObject, context: SpatialLaye
     return null;
   }
   const visuals = context.visuals;
-  if (visuals != null && resolveVisual(visuals, key) === undefined) {
+  // Пространство визуальных ключей одно, а родов записи два (ASSET-9,
+  // ASSET-14): модельный вид рисует подсистема моделей, эмиттерный (факел,
+  // костёр) — подсистема частиц (`rendering` REND-24). Размещение ссылается на
+  // оба одним и тем же полем `visual`, поэтому «ключ разрешается» здесь значит
+  // «разрешается хоть одним из двух»: проверять только модельный род означало
+  // бы ругаться на каждый импортированный из Blender факел.
+  const resolved =
+    visuals == null ? undefined : (resolveVisual(visuals, key) ?? resolveVisualEmitter(visuals, key));
+  if (visuals != null && resolved === undefined) {
     // Предупреждение, а не отказ (BLND-6): в рантайме такая запись даёт
     // заглушку (PRES-2), и чинится она правкой манифеста — отказ запер бы автора.
     warning(sink, source.name, `ключ "${key}" не разрешается в запись манифеста визуалов (ASSET-9)`);
