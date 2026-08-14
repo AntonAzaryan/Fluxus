@@ -83,6 +83,7 @@ import {
   resolveLodThresholds,
   resolveSurfaceAlign,
   resolveVisual,
+  resolveVisualEmitter,
   resolveVisualTier,
   type AssetState,
   type BakedDerivatives,
@@ -1292,6 +1293,12 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // доехал» (ASSET-4), а тут доезжать нечему. Молчит подсистема по той же
       // причине: запись в манифесте есть, просто не её.
       if (resolveEffectByKind(this.manifest, kind) !== undefined) return;
+      // Ровно то же и по той же причине — эмиттерный вид (ASSET-14): его
+      // изображение частицы, и рисует его подсистема частиц (REND-24).
+      // `resolveVisual` отдаёт по такому ключу пусто НАМЕРЕННО — чтобы
+      // подсистема моделей не рисовала того, чего ей рисовать нечем; принять
+      // это за отсутствующую запись значило бы поставить на факел заглушку.
+      if (resolveVisualEmitter(this.manifest, kind) !== undefined) return;
       // Сущность без записи в манифесте: заглушка и предупреждение один раз (ASSET-6).
       if (!this.warnedKinds.has(kind)) {
         this.warnedKinds.add(kind);
