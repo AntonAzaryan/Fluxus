@@ -18,7 +18,8 @@
  * Запуск: `npm run smoke -w @game-mvp/desktop-shell` (или `-- editor`, `-- game`).
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -27,6 +28,8 @@ const PACKAGE = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = join(PACKAGE, 'src/electron/entry.mjs');
 /** Ассет дерева, который страница просит по ID-пути (ASSET-2): проба раздачи. */
 const PROBE = '/visuals/manifest.json';
+/** Куда пишет сквозная проверка правки. Пишущий профиль — во временное дерево. */
+const ROUNDTRIP = 'scenes/smoke.scene.json';
 
 /** Путь к бинарю Electron; `null` — пакет есть, а бинаря нет (или нет и пакета). */
 function electronBinary() {
@@ -44,6 +47,25 @@ function profileOf(name) {
   if (!existsSync(manifest)) throw new Error(`профиля "${name}" нет: ${manifest}`);
   const raw = JSON.parse(readFileSync(manifest, 'utf8'));
   return { name, manifest, bundle: resolve(dirname(manifest), raw.bundle), capabilities: raw.capabilities };
+}
+
+/**
+ * Временное дерево контента для пишущего профиля: сквозная правка не трогает
+ * `content/` репозитория — прогон обязан ничего за собой не оставлять.
+ * Возвращает профиль-двойник с подменённым корнем.
+ */
+function temporaryTree(profile) {
+  const workspace = mkdtempSync(join(tmpdir(), 'fluxus-smoke-'));
+  const directory = join(workspace, 'content');
+  mkdirSync(join(directory, 'visuals'), { recursive: true });
+  mkdirSync(join(directory, 'scenes'), { recursive: true });
+  writeFileSync(join(directory, PROBE.slice(1)), '{"entities":{}}\n');
+  const raw = JSON.parse(readFileSync(profile.manifest, 'utf8'));
+  raw.bundle = profile.bundle;
+  raw.roots = raw.roots.map((root) => ({ ...root, directory }));
+  const manifest = join(workspace, 'profile.app.json');
+  writeFileSync(manifest, JSON.stringify(raw));
+  return { ...profile, manifest, workspace, directory };
 }
 
 /** Один прогон: поднять контейнер, дождаться строки отчёта, сверить поверхность. */
@@ -69,6 +91,7 @@ function run(binary, profile) {
         '--smoke',
         '--probe',
         PROBE,
+        ...(profile.workspace === undefined ? [] : ['--roundtrip', ROUNDTRIP]),
       ],
       {
         cwd: PACKAGE,
@@ -130,13 +153,28 @@ function run(binary, profile) {
         done({ ok: false, why: `ассет "${PROBE}" страницей не получен: ${JSON.stringify(seen.probe)}` });
         return;
       }
+      // Сквозная правка: страница записала документ мостом, прочитала его
+      // обратно, а на диске лежат ровно те же байты (ED-21, DSK-2).
+      if (profile.workspace !== undefined) {
+        if (seen.trip === null || seen.trip === undefined) {
+          done({ ok: false, why: 'сквозной правки не случилось: моста записи в странице нет' });
+          return;
+        }
+        const onDisk = readFileSync(join(profile.directory, ROUNDTRIP), 'utf8');
+        if (!seen.trip.same || onDisk !== seen.trip.text) {
+          done({ ok: false, why: `байты разошлись: страница ${JSON.stringify(seen.trip)}, диск ${JSON.stringify(onDisk)}` });
+          return;
+        }
+      }
       if (complaints.length > 0) {
         done({ ok: false, why: `страница жалуется: ${complaints.slice(0, 3).join(' | ')}` });
         return;
       }
       done({
         ok: true,
-        why: `мост [${got || 'пуст'}], база ${seen.roots[0]?.base ?? '—'}, ассет ${seen.probe.bytes} Б, Worker ${seen.workers}`,
+        why:
+          `мост [${got || 'пуст'}], база ${seen.roots[0]?.base ?? '—'}, ассет ${seen.probe.bytes} Б, ` +
+          `Worker ${seen.workers}${profile.workspace === undefined ? '' : ', сквозная правка сошлась побайтно'}`,
       });
     });
   });
@@ -159,8 +197,15 @@ for (const name of names) {
     failed += 1;
     continue;
   }
-  const result = await run(binary, profile);
-  console.error(`[${name}] ${result.ok ? 'ок' : 'ОТКАЗ'}: ${result.why}`);
-  if (!result.ok) failed += 1;
+  // Пишущий профиль правит дерево, поэтому правит он временное: прогон не
+  // оставляет следов в `content/` репозитория.
+  const target = profile.capabilities.includes('write') ? temporaryTree(profile) : profile;
+  try {
+    const result = await run(binary, target);
+    console.error(`[${name}] ${result.ok ? 'ок' : 'ОТКАЗ'}: ${result.why}`);
+    if (!result.ok) failed += 1;
+  } finally {
+    if (target.workspace !== undefined) rmSync(target.workspace, { recursive: true, force: true });
+  }
 }
 process.exit(failed === 0 ? 0 : 1);

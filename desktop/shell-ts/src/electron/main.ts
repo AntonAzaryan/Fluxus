@@ -55,6 +55,7 @@ async function reportSmoke(
   window: BrowserWindow,
   profile: { id: string },
   probe: string,
+  roundtrip: string | null,
   complaints: readonly string[],
 ): Promise<void> {
   // Проба раздачи идёт ИЗ СТРАНИЦЫ и обычным `fetch` по пути от корня дерева —
@@ -69,7 +70,19 @@ async function reportSmoke(
         }))
         .catch((error) => ({ status: 0, error: String(error) }));
       if (bridge === undefined) return { bridge: false, probe };
+      // Сквозная правка (ED-21, DSK-2): страница пишет документ мостом и
+      // читает его обратно; байты на диске сверяет вызывающий прогон.
+      let trip = null;
+      const path = ${JSON.stringify(roundtrip)};
+      if (path !== null && typeof bridge.write === 'function') {
+        const root = bridge.session.roots[0].id;
+        const text = '{"smoke":"правка из страницы"}\\n';
+        await bridge.write(root, path, new TextEncoder().encode(text));
+        const back = new TextDecoder().decode(await bridge.read(root, path));
+        trip = { path, text, back, same: back === text };
+      }
       return {
+        trip,
         bridge: true,
         api: bridge.api,
         version: bridge.version,
@@ -284,7 +297,14 @@ async function start(): Promise<void> {
 
   if (process.argv.includes('--smoke')) {
     const at = process.argv.indexOf('--probe');
-    await reportSmoke(target, profile, at < 0 ? '/' : (process.argv[at + 1] ?? '/'), complaints);
+    const trip = process.argv.indexOf('--roundtrip');
+    await reportSmoke(
+      target,
+      profile,
+      at < 0 ? '/' : (process.argv[at + 1] ?? '/'),
+      trip < 0 ? null : (process.argv[trip + 1] ?? null),
+      complaints,
+    );
     closing = true;
     app.exit(0);
   }

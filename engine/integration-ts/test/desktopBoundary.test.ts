@@ -18,11 +18,11 @@
  * Обратное направление — приложение → контракт моста — законно и запретом не
  * покрывается: `editor/ui-ts` импортирует типы `@game-mvp/desktop-shell/bridge`
  * своим адаптером хостового шва (ED-12), и это зависимость приложения от
- * ГРАНИЦЫ, а не контейнера от движка. Здесь проверяется обратное: что имён
- * предметного шва редактора в контейнере нет ни одного — адаптер не начал
- * переезжать через границу (DSK-2).
+ * ГРАНИЦЫ, а не контейнера от движка. Здесь проверяется обратное: адаптер
+ * лежит у редактора и говорит на типах шва, а имён этого шва в контейнере нет
+ * ни одного — переехать через границу он не начал (DSK-2).
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +36,10 @@ import {
 
 const ENGINE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const DESKTOP_ROOT = join(ENGINE_ROOT, '../desktop');
+const EDITOR_ROOT = join(ENGINE_ROOT, '../editor');
+
+/** Адаптер десктопного хоста: он живёт у приложения, а не у контейнера (DSK-2). */
+const EDITOR_ADAPTER = 'ui-ts/src/host/desktop.ts';
 
 /**
  * Чего контейнеру нельзя. Три записи, а не одна: имя пакета ловит обычный
@@ -74,11 +78,13 @@ describe('guard: контейнер не зависит от движка и р�
     expect(formatAuthoringViolations(violations)).toBe('');
   });
 
-  it('предметных интерфейсов приложений в контейнере нет (DSK-2)', () => {
+  it('адаптер хостового шва лежит на стороне редактора, а не в контейнере (DSK-2)', () => {
     // DSK-2: «адаптеры, превращающие мост в предметные интерфейсы приложений,
     // SHALL жить на стороне приложений; контейнер MUST NOT содержать их
-    // реализации». Имена шва среды редактора — самый дешёвый признак того, что
-    // адаптер начал переезжать в контейнер.
+    // реализации». Проверяется с обеих сторон: адаптер есть у редактора и
+    // говорит на типах шва, а имён шва в контейнере нет ни одного.
+    const adapter = readFileSync(join(EDITOR_ROOT, EDITOR_ADAPTER), 'utf8');
+    expect(adapter).toContain('EnvironmentHost');
     const leaked = scanAuthoringBoundary({
       rootDir: DESKTOP_ROOT,
       text: [
