@@ -34,9 +34,13 @@ const PACKAGE = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BUILD = join(PACKAGE, 'build');
 
 const argv = process.argv.slice(2);
-const app = argv.find((arg) => !arg.startsWith('-')) ?? 'game';
+// Свои здесь только имя приложения (первый аргумент без дефиса) и `--stage`;
+// всё остальное уезжает упаковщику как есть — включая значения флагов без `=`
+// (`--linux dir`), которые фильтр «только с дефисом» молча терял бы.
+const appIndex = argv.findIndex((arg) => !arg.startsWith('-'));
+const app = appIndex === -1 ? 'game' : argv[appIndex];
 const stageOnly = argv.includes('--stage');
-const passthrough = argv.filter((arg) => arg.startsWith('-') && arg !== '--stage');
+const passthrough = argv.filter((arg, index) => index !== appIndex && arg !== '--stage');
 
 const manifestPath = join(PACKAGE, 'apps', `${app}.app.json`);
 if (!existsSync(manifestPath)) {
