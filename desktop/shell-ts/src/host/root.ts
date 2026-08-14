@@ -4,13 +4,22 @@
  *
  * ## Границу держит корень, а не вызывающий
  *
- * Каждый путь проходит `normalizeHostPath` и, сверх того, сверяется по
- * абсолютному пути с каталогом корня. Две проверки, а не одна, потому что они
- * ловят разное: первая — путь, написанный вызывающим (`../../etc/passwd`),
- * вторая — всё, что добавит сама файловая система при разрешении. Тот же приём
- * стоит в эндпойнте дерева у веб-среды редактора (`resolveInside`), и
- * повторяется он здесь не по инерции: у контейнера это единственная дверь между
- * страницей и диском (DSK-5).
+ * Каждый путь проходит две проверки, и они ловят разное. `normalizeHostPath` —
+ * про то, что написал вызывающий: `../../etc/passwd`, NUL, абсолютный путь
+ * Windows. Вторая — про то, что скажет файловая система: цель разрешается
+ * `realpath`'ом и сверяется с РЕАЛЬНЫМ путём каталога корня.
+ *
+ * Одной лексики мало, и это не теория: `path.resolve` диска не касается вовсе,
+ * поэтому symlink, лежащий внутри дерева, увёл бы чтение, запись, перечисление
+ * и раздачу наружу, не написав в пути ни одной точки. Создать ссылку страница
+ * не может — но дерево контента приезжает и не от неё (дистрибутив, чужой
+ * инструмент, репозиторий), а DSK-5 требует недостижимости «ни вызовом, ни
+ * обходным путём». Ссылка в дереве — ровно обходной путь.
+ *
+ * У цели, которой ещё нет (запись нового документа), реален только ближайший
+ * существующий предок — по нему и проверяется: то, чего нет, окажется ровно
+ * там, куда указывает он. Проверка идёт ДО `mkdir`: создать каталог сквозь
+ * ссылку значит уже выйти за корень.
  *
  * ## Запись атомарна
  *
@@ -32,7 +41,8 @@
  * `created`. Потребителю обе формы означают «перечитай», и строить ради
  * различения индекс всего дерева на старте — платить деревом за уведомление.
  */
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
+import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type {
   BridgeChange,
@@ -84,6 +94,69 @@ function refuse(root: BridgeRootId, path: string, why: string): Error {
   return new Error(`корень "${root}": "${path}" — ${why}`);
 }
 
+/** Лежит ли путь внутри каталога. Оба пути — реальные либо оба лексические. */
+function contains(directory: string, full: string): boolean {
+  return full === directory || full.startsWith(directory + sep);
+}
+
+/**
+ * Цепочка «цель → … → корень»: по ней ищется ближайший предок, который
+ * файловая система разрешает. Выше корня цепочка не идёт — там начинается чужое
+ * дерево, и подниматься туда незачем; пустая цепочка означает, что путь не
+ * лежит внутри корня даже лексически.
+ */
+function chainToRoot(absolute: string, directory: string): string[] {
+  const chain: string[] = [];
+  let probe = absolute;
+  while (contains(directory, probe)) {
+    chain.push(probe);
+    if (probe === directory) break;
+    const parent = dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  return chain;
+}
+
+/**
+ * Разрешается ли цель внутрь корня НА САМОМ ДЕЛЕ. Решает первый предок, который
+ * существует: то, чего ещё нет, окажется там, куда указывает он. Не разрешается
+ * даже сам корень — корня ещё нет на диске, и ссылке, ведущей наружу, взяться
+ * неоткуда: недостающие каталоги создаст сама запись.
+ */
+async function realInside(absolute: string, directory: string, real: string): Promise<boolean> {
+  const chain = chainToRoot(absolute, directory);
+  if (chain.length === 0) return false;
+  for (const probe of chain) {
+    const resolved = await realpath(probe).then(
+      (value) => value,
+      () => null,
+    );
+    if (resolved !== null) return contains(real, resolved);
+  }
+  return true;
+}
+
+/** Синхронный близнец `realInside` — для `resolve`, который синхронен. */
+function realInsideSync(absolute: string, directory: string, real: string): boolean {
+  const chain = chainToRoot(absolute, directory);
+  if (chain.length === 0) return false;
+  for (const probe of chain) {
+    const resolved = realOrNull(probe);
+    if (resolved !== null) return contains(real, resolved);
+  }
+  return true;
+}
+
+/** Реальный путь или `null` — пути на диске нет (или он не разрешается). */
+function realOrNull(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
 export function createHostRoot(options: HostRootOptions): HostRoot {
   const directory = resolve(options.directory);
   const id = options.id;
@@ -93,10 +166,32 @@ export function createHostRoot(options: HostRootOptions): HostRoot {
   const known = new Set<HostPath>();
   let observation: { active: boolean; close(): void } | null = null;
 
-  const at = (path: string): string => {
-    const normalized = normalizeHostPath(path);
-    const absolute = resolve(join(directory, normalized));
-    if (absolute !== directory && !absolute.startsWith(directory + sep)) {
+  /**
+   * Реальный путь каталога корня: считается лениво и запоминается. Лениво —
+   * потому что корня может ещё не быть на диске; запоминается — потому что
+   * дальше он сверяется на каждой операции. Сравнивать реальный путь цели с
+   * лексическим путём корня нельзя: `/var` → `/private/var` и прочие системные
+   * ссылки покраснели бы на пустом месте.
+   */
+  let realDirectory: string | null = null;
+  const rootReal = (): string => {
+    realDirectory ??= realOrNull(directory);
+    return realDirectory ?? directory;
+  };
+
+  const absoluteOf = (path: string): string => resolve(join(directory, normalizeHostPath(path)));
+
+  const at = async (path: string): Promise<string> => {
+    const absolute = absoluteOf(path);
+    if (!(await realInside(absolute, directory, rootReal()))) {
+      throw refuse(id, path, 'разрешается за пределы корня (DSK-5)');
+    }
+    return absolute;
+  };
+
+  const atSync = (path: string): string => {
+    const absolute = absoluteOf(path);
+    if (!realInsideSync(absolute, directory, rootReal())) {
       throw refuse(id, path, 'разрешается за пределы корня (DSK-5)');
     }
     return absolute;
@@ -147,10 +242,10 @@ export function createHostRoot(options: HostRootOptions): HostRoot {
       return observation?.active ?? false;
     },
 
-    resolve: at,
+    resolve: atSync,
 
     async read(path) {
-      const absolute = at(path);
+      const absolute = await at(path);
       let bytes;
       try {
         bytes = await readFile(absolute);
@@ -166,7 +261,9 @@ export function createHostRoot(options: HostRootOptions): HostRoot {
       if (!writable) throw refuse(id, path, 'корень объявлен только на чтение (DSK-5)');
       const normalized = normalizeHostPath(path);
       if (normalized === '') throw refuse(id, path, 'запись в сам корень бессмысленна');
-      const absolute = at(normalized);
+      // Проверка до `mkdir`: недостающие каталоги создаются ниже, и создать их
+      // сквозь ссылку наружу значило бы выйти за корень раньше первой записи.
+      const absolute = await at(normalized);
       const temporary = `${absolute}${TEMPORARY_MARK}${process.pid}-${writeCounter++}`;
       await mkdir(dirname(absolute), { recursive: true });
       const existed = await stat(absolute).then(
@@ -190,8 +287,12 @@ export function createHostRoot(options: HostRootOptions): HostRoot {
 
     async stat(path) {
       const normalized = normalizeHostPath(path);
+      // Отказ границы — отдельно от «такого файла нет»: первое отвергает
+      // промис, второе отвечает `undefined`. Проглоти́ть первое значило бы
+      // сказать «нет такого» о файле, который есть, но лежит вне корня.
+      const absolute = await at(normalized);
       try {
-        const found = await stat(at(normalized));
+        const found = await stat(absolute);
         return entryOf(normalized, found.isDirectory());
       } catch {
         return undefined;
@@ -200,9 +301,10 @@ export function createHostRoot(options: HostRootOptions): HostRoot {
 
     async list(path) {
       const normalized = normalizeHostPath(path);
+      const absolute = await at(normalized);
       let entries;
       try {
-        entries = await readdir(at(normalized), { withFileTypes: true });
+        entries = await readdir(absolute, { withFileTypes: true });
       } catch {
         // Каталога нет — пустой список: перечисление одинаково во всех
         // реализациях контейнера, и «нет каталога» — обычный ответ о дереве.
@@ -232,10 +334,18 @@ export function createHostRoot(options: HostRootOptions): HostRoot {
   };
 }
 
-/** Путь файла относительно корня или `null` — файл лежит вне его. */
+/**
+ * Путь файла относительно корня или `null` — файл лежит вне его.
+ *
+ * Сверяются РЕАЛЬНЫЕ пути обеих сторон: сюда приходит то, что выбрал автор в
+ * системном диалоге, и ссылка, ведущая наружу, обязана стать отказом, а не
+ * путём дерева (DSK-5). Не разрешается — сверяется лексически: это отказ в
+ * сторону строгости, а диалог отдаёт существующий путь.
+ */
 export function insideRoot(root: HostRoot, absolute: string): HostPath | null {
-  const full = resolve(absolute);
-  if (full === root.directory) return '';
-  if (!full.startsWith(root.directory + sep)) return null;
-  return relative(root.directory, full).split(sep).join('/');
+  const full = realOrNull(resolve(absolute)) ?? resolve(absolute);
+  const base = realOrNull(root.directory) ?? root.directory;
+  if (full === base) return '';
+  if (!contains(base, full)) return null;
+  return relative(base, full).split(sep).join('/');
 }

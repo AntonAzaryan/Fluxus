@@ -15,7 +15,15 @@ import { join } from 'node:path';
 import { normalizeAppProfile } from '../src/bridge/profile.js';
 import { openApp } from '../src/host/app.js';
 import { CONTENT, describeContainerContract, type ContractSession } from './contractSuite.js';
-import { dropTree, fakeObserver, makeTree, putFile, readText, text } from './support.js';
+import {
+  dropTree,
+  fakeObserver,
+  linkOutside,
+  makeTree,
+  putFile,
+  readText,
+  text,
+} from './support.js';
 
 /** Базовый адрес раздачи: страница получает его от контейнера (DSK-4). */
 const BASE = 'fluxus://app/';
@@ -71,6 +79,7 @@ describeContainerContract('node-хост', async (kase): Promise<ContractSession
       await rm(join(contentDirectory, path), { force: true });
       observer.emit(path);
     },
+    linkOutside: (path) => linkOutside(contentDirectory, path, join(workspace, 'outside')),
     peek: (path) => readText(contentDirectory, path),
     async fetch(pathname) {
       const result = await app.server.serve(pathname);

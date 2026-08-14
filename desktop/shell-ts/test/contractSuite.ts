@@ -47,6 +47,13 @@ export interface ContractSession {
   /** Правка дерева мимо моста — так дерево правит чужой инструмент. */
   touch(path: string, content: string): Promise<void>;
   remove(path: string): Promise<void>;
+  /**
+   * Кладёт по `path` внутри дерева ссылку на каталог ВНЕ корня, в котором лежит
+   * `secret.txt`. Так дерево приезжает из дистрибутива или от чужого
+   * инструмента; страница ссылок не делает. Реализация, которой ссылки
+   * недоступны, метода не даёт — и проверка обхода пропускается.
+   */
+  linkOutside?(path: string): Promise<void>;
   /** Что лежит на диске мимо моста: проверка, что запись доехала. */
   peek(path: string): Promise<string | undefined>;
   /** Запрос к раздаче контейнера (DSK-4). */
@@ -159,6 +166,22 @@ export function describeContainerContract(name: string, open: ContainerUnderTest
         // Абсолютный путь ОС — не путь дерева: корень задаёт профиль.
         await expect(session.bridge.write!(CONTENT, '../outside.json', encode('{}'))).rejects.toThrow();
         expect(await session.peek('../outside.json')).toBeUndefined();
+      });
+    });
+
+    it('ссылка из дерева наружу — тот же выход за корень (DSK-5)', async () => {
+      await authoring(async (session) => {
+        if (session.linkOutside === undefined) return;
+        await session.linkOutside('outside');
+        // В самом пути нет ни одной точки — наружу выводит дерево, а не
+        // вызывающий. Для границы это тот же обходной путь, и отказ тот же.
+        await expect(session.bridge.read!(CONTENT, 'outside/secret.txt')).rejects.toThrow();
+        await expect(session.bridge.list!(CONTENT, 'outside')).rejects.toThrow();
+        await expect(
+          session.bridge.write!(CONTENT, 'outside/written.json', encode('{}')),
+        ).rejects.toThrow();
+        // И раздача — тоже дверь наружу, причём у профиля игры единственная.
+        expect((await session.fetch('/outside/secret.txt')).ok).toBe(false);
       });
     });
 

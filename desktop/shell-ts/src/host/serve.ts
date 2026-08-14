@@ -20,7 +20,9 @@
  *
  * Раздача стоит на пути запроса страницы: сорвавшийся запрос обязан стать
  * ответом «нет такого» с причиной, а не исключением в главном процессе
- * контейнера.
+ * контейнера. Отказывает и слой: путь, разрешающийся за корень по ссылке
+ * внутри дерева, корень отвергает (DSK-5), и раздача превращает этот отказ в
+ * ответ 400 — не притворяясь, что файла просто нет, и не роняя обработчик.
  */
 import type { BridgeRootId } from '../bridge/types.js';
 import { hostPathExtension, normalizeHostPath, type HostPath } from './paths.js';
@@ -125,7 +127,21 @@ export function createStaticServer(options: StaticServerOptions): StaticServer {
         return { ok: false, status: 400, reason: `запрос "${pathname}" выходит за корни контейнера (DSK-5)` };
       }
       for (const layer of layers) {
-        const served = await fileIn(layer, path);
+        let served: ServedFile | null;
+        try {
+          served = await fileIn(layer, path);
+        } catch (error) {
+          // Отказ слоя — не «нет такого»: слой сказал, что путь за его корнем
+          // (ссылка наружу) или файл не читается. Перебор слоёв на этом
+          // прекращается: отказ разрешения — ответ, а не промах.
+          return {
+            ok: false,
+            status: 400,
+            reason: `запрос "${pathname}" отвергнут слоем "${layer.id}": ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          };
+        }
         if (served !== null) return served;
       }
       return {

@@ -5,7 +5,8 @@
  * Контрактный сьют проверяет то, что видит страница; здесь — то, что видит
  * файловая система, и чего страница видеть не должна вовсе.
  */
-import { readdir } from 'node:fs/promises';
+import { readdir, symlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BridgeChange } from '../src/bridge/types.js';
 import { createHostRoot, insideRoot } from '../src/host/root.js';
@@ -113,6 +114,17 @@ describe('чтение и границы', () => {
     root.close();
   });
 
+  it('запись поднимает корень, которого ещё нет на диске', async () => {
+    // Проверка границы идёт по РЕАЛЬНОМУ пути, а у ненаступившего корня его
+    // нет вовсе. Отказывать по этой причине нельзя: недостающие каталоги
+    // создаёт запись, и ссылке наружу в несуществующем дереве взяться неоткуда.
+    const directory = join(await tree(), 'ещё-нет');
+    const root = createHostRoot({ id: 'content', directory, writable: true });
+    await root.write('scenes/duel.scene.json', utf8('{}'));
+    expect(await readText(directory, 'scenes/duel.scene.json')).toBe('{}');
+    root.close();
+  });
+
   it('insideRoot переводит абсолютный путь в путь дерева и отсекает чужой', async () => {
     const directory = await tree();
     const root = createHostRoot({ id: 'content', directory });
@@ -120,6 +132,46 @@ describe('чтение и границы', () => {
     expect(insideRoot(root, `${directory}/scenes/duel.scene.json`)).toBe('scenes/duel.scene.json');
     expect(insideRoot(root, directory)).toBe('');
     expect(insideRoot(root, '/etc/passwd')).toBeNull();
+    root.close();
+  });
+});
+
+/**
+ * Ссылка внутри дерева — единственный обход, который лексической проверке пути
+ * не виден вовсе: в пути нет ни одной точки, а разрешается он наружу. Создать
+ * ссылку страница не может, но дерево приезжает и не от неё — из дистрибутива,
+ * из репозитория, от чужого инструмента (DSK-5).
+ */
+describe('ссылка не выводит за корень (DSK-5)', () => {
+  it('ни чтение, ни запись, ни stat, ни перечисление сквозь неё не проходят', async () => {
+    const outside = await tree({ 'secret.txt': 'СЕКРЕТ ВНЕ КОРНЯ' });
+    const directory = await tree({ 'scenes/duel.scene.json': '{"scene":"duel"}' });
+    await symlink(outside, join(directory, 'outside'), 'dir');
+    await symlink(join(outside, 'secret.txt'), join(directory, 'secret-link.txt'));
+    const root = createHostRoot({ id: 'content', directory, writable: true });
+
+    await expect(root.read('outside/secret.txt')).rejects.toThrow('DSK-5');
+    await expect(root.read('secret-link.txt')).rejects.toThrow('DSK-5');
+    await expect(root.stat('outside/secret.txt')).rejects.toThrow('DSK-5');
+    await expect(root.list('outside')).rejects.toThrow('DSK-5');
+    await expect(root.write('outside/written.json', utf8('{}'))).rejects.toThrow('DSK-5');
+    await expect(root.write('secret-link.txt', utf8('{}'))).rejects.toThrow('DSK-5');
+    expect(() => root.resolve('outside/secret.txt')).toThrow('DSK-5');
+
+    // И ни одного следа снаружи: запись отвергнута до создания каталогов.
+    expect(await readText(outside, 'written.json')).toBeUndefined();
+    expect(await readText(outside, 'secret.txt')).toBe('СЕКРЕТ ВНЕ КОРНЯ');
+    root.close();
+  });
+
+  it('а ссылка внутрь дерева остаётся путём дерева', async () => {
+    // Отказ по факту ссылки был бы проще и был бы неверен: наружу выводит не
+    // ссылка, а то, куда она указывает.
+    const directory = await tree({ 'scenes/duel.scene.json': '{"scene":"duel"}' });
+    await symlink(join(directory, 'scenes'), join(directory, 'сцены'), 'dir');
+    const root = createHostRoot({ id: 'content', directory });
+    expect(text(await root.read('сцены/duel.scene.json'))).toBe('{"scene":"duel"}');
+    expect((await root.list('сцены')).map((entry) => entry.name)).toEqual(['duel.scene.json']);
     root.close();
   });
 });

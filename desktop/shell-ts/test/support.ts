@@ -8,7 +8,7 @@
  * тестом (`watchLive.test.ts`), и там ожидание — по условию с крайним сроком, а
  * не по часам.
  */
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { DirectoryObserver, DirectoryObserverOptions } from '../src/host/observe.js';
@@ -32,6 +32,20 @@ export async function readText(root: string, path: string): Promise<string | und
   } catch {
     return undefined;
   }
+}
+
+/** Содержимое файла, которого странице видеть не положено. */
+export const OUTSIDE_SECRET = 'СЕКРЕТ ВНЕ КОРНЯ';
+
+/**
+ * Кладёт по `path` внутри дерева ссылку на каталог `outside` (вне дерева), где
+ * лежит `secret.txt`. Так дерево контента приезжает от чужого инструмента —
+ * страница ссылок не создаёт (DSK-5).
+ */
+export async function linkOutside(root: string, path: string, outside: string): Promise<void> {
+  await mkdir(outside, { recursive: true });
+  await writeFile(join(outside, 'secret.txt'), OUTSIDE_SECRET);
+  await symlink(outside, join(root, path), 'dir');
 }
 
 export async function dropTree(root: string): Promise<void> {
