@@ -28,6 +28,7 @@ import {
   type InputSource,
 } from '../src/index.js';
 import demoBindings from '../demo/bindings.json';
+import { ACTION_BITS } from '../demo/sim.js';
 
 const BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
 
@@ -469,6 +470,25 @@ describe('Биндинги — данные с валидацией (INP-4)', ()
     expect(bindings.keyboardMouse.move.up).toBe('KeyW');
     expect(bindings.touch).toBeDefined();
     expect(bindings.gamepad).toBeDefined();
+  });
+
+  /**
+   * Раскладка устройств (`bindings.json`) и смысл битов (`ACTION_BITS`) — два
+   * файла демо-сборки, и связывает их только совпадение имён: `InputSampler`
+   * узнаёт о расхождении на ПЕРВОМ живом нажатии (`bitOf` бросает), то есть на
+   * странице, у игрока. Здесь оно ловится загрузкой файла.
+   */
+  it('каждое действие раскладки объявлено в ACTION_BITS сборки (INP-4)', () => {
+    const b = validateBindings(demoBindings);
+    const actions = [
+      ...Object.values(b.keyboardMouse.keys),
+      ...Object.values(b.keyboardMouse.pointerButtons),
+      ...(b.touch?.buttons ?? []).map((button) => button.action),
+      ...(b.touch?.aimStick?.releaseAction === undefined ? [] : [b.touch.aimStick.releaseAction]),
+      ...Object.values(b.gamepad?.buttons ?? {}),
+    ];
+    expect(actions.length).toBeGreaterThan(0);
+    for (const action of actions) expect(Object.keys(ACTION_BITS)).toContain(action);
   });
 
   it('сломанные данные падают при загрузке с внятной ошибкой', () => {
