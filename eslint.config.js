@@ -178,9 +178,14 @@ export default defineConfig([
    * `engine/integration-ts/test/desktopBoundary.test.ts` (он же ловит
    * зависимость, объявленную манифестом без единого импорта). Линт называет
    * запрет там, где импорт пишут, — на секунды раньше, чем это сделает тест.
+   *
+   * `.cjs` в списке потому, что на CommonJS у контейнера вынужденно написаны
+   * preload и конфиг упаковщика, и они — такой же его код. Правило видит там
+   * `import` и `import()`, но не `require`: сигнал раньше теста ловит не всё,
+   * чем этот тест сильнее, — и именно поэтому проверка не он.
    */
   {
-    files: ['desktop/**/*.ts', 'desktop/**/*.mjs'],
+    files: ['desktop/**/*.ts', 'desktop/**/*.mjs', 'desktop/**/*.cjs', 'desktop/**/*.js'],
     languageOptions: { globals: globals.node },
     rules: {
       'no-restricted-imports': [

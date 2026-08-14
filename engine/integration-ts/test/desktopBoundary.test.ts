@@ -109,7 +109,8 @@ describe('guard: запрет для контейнера ловит то, чт�
 
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), 'container-guard-'));
-    mkdirSync(join(root, 'shell-ts/src'), { recursive: true });
+    mkdirSync(join(root, 'shell-ts/src/electron'), { recursive: true });
+    mkdirSync(join(root, 'shell-ts/build/game/assets'), { recursive: true });
     writeFileSync(join(root, 'shell-ts/src/named.ts'), "import { tick } from '@game-mvp/core';\n");
     writeFileSync(
       join(root, 'shell-ts/src/relative.ts'),
@@ -119,7 +120,33 @@ describe('guard: запрет для контейнера ловит то, чт�
       join(root, 'shell-ts/src/deep.ts'),
       "const core = await import('../../engine/core-ts/src/index.js');\n",
     );
+    // Клей контейнера не весь на `.ts`: preload исполняется в песочнице
+    // Electron, где `require` соседнего модуля недоступен, а конфиг упаковщика
+    // читает сам упаковщик — оба вынужденно на CommonJS. `require` оттуда —
+    // ровно та же зависимость, что импорт из `.ts`.
+    writeFileSync(
+      join(root, 'shell-ts/src/electron/preload.cjs'),
+      "const { tick } = require('@game-mvp/core');\n",
+    );
+    writeFileSync(
+      join(root, 'shell-ts/electron-builder.cjs'),
+      "const version = require('../../engine/core-ts/package.json').version;\n",
+    );
+    writeFileSync(
+      join(root, 'shell-ts/src/tool.js'),
+      "import { createEditor } from '../../editor/core-ts/src/index.js';\n",
+    );
+    // Артефакт сборки — не код пакета: собранный бандл это чужие модули,
+    // слитые в один файл, и запрет на импорт к нему неприменим.
+    writeFileSync(
+      join(root, 'shell-ts/build/game/assets/index.js'),
+      "import { tick } from '@game-mvp/core';\n",
+    );
     // Не нарушения: собственные модули контейнера и упоминание в комментарии.
+    writeFileSync(
+      join(root, 'shell-ts/src/electron/clean.cjs'),
+      "const { contextBridge } = require('electron');\nmodule.exports = { contextBridge };\n",
+    );
     writeFileSync(
       join(root, 'shell-ts/src/clean.ts'),
       [
@@ -142,15 +169,32 @@ describe('guard: запрет для контейнера ловит то, чт�
   it('имя пакета и путь в обход имени краснят одинаково', () => {
     const files = scanAuthoringBoundary({ rootDir: root, imports: CONTAINER_IMPORTS }).map((v) => v.file);
     expect(files).toEqual([
+      'shell-ts/electron-builder.cjs',
       'shell-ts/src/deep.ts',
+      'shell-ts/src/electron/preload.cjs',
       'shell-ts/src/named.ts',
       'shell-ts/src/relative.ts',
+      'shell-ts/src/tool.js',
     ]);
   });
 
-  it('собственные модули контейнера и Electron не краснят', () => {
+  it('запрет видит и CommonJS-клей, и `.js` (DSK-3)', () => {
+    // Проверка живёт отдельным утверждением, потому что дыра здесь и была:
+    // сканер открывал только `.ts`, `.mts` и `.mjs`, а `preload.cjs` и
+    // `electron-builder.cjs` не открывал вовсе. Запрет, слепой к части пакета,
+    // — это соглашение ревью, а не «закреплена автоматической проверкой в
+    // гейте», как того требует DSK-3.
+    const files = scanAuthoringBoundary({ rootDir: root, imports: CONTAINER_IMPORTS }).map((v) => v.file);
+    expect(files).toContain('shell-ts/src/electron/preload.cjs');
+    expect(files).toContain('shell-ts/electron-builder.cjs');
+    expect(files).toContain('shell-ts/src/tool.js');
+  });
+
+  it('собственные модули контейнера, Electron и артефакты сборки не краснят', () => {
     const files = scanAuthoringBoundary({ rootDir: root, imports: CONTAINER_IMPORTS }).map((v) => v.file);
     expect(files).not.toContain('shell-ts/src/clean.ts');
+    expect(files).not.toContain('shell-ts/src/electron/clean.cjs');
+    expect(files).not.toContain('shell-ts/build/game/assets/index.js');
   });
 
   it('нарушение называет файл, правило и требование', () => {
