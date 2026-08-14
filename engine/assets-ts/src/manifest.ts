@@ -31,32 +31,69 @@ export interface VisualManifest {
    * раздела с пересекающимися именами сделали бы ответ зависящим от порядка
    * просмотра. Поэтому пересечение имён — ошибка валидации манифеста.
    */
-  decorations?: Record<string, EntityVisual>;
+  decorations?: Record<string, DecorationVisual>;
   /** Дефолт наклона по поверхности для записей без своего surfaceAlign (REND-10). */
   surfaceAlign?: SurfaceAlign;
   /** Presentation-данные террейна арены. */
   terrain?: { curvatureMap?: string };
   /** Секция транзиентных эффектов сцены (REND-23); потребитель — подсистема эффектов. */
   effects?: VisualEffectsSection;
+  /** Секция эмиттеров частиц (ASSET-14, REND-24); потребитель — подсистема частиц. */
+  particles?: VisualParticlesSection;
   /** Секция эффектов камеры (ASSET-8); потребитель — `camera` CAM-6. */
   cameraEffects?: CameraEffectsSection;
   /** Секция конфига камеры (ASSET-10); потребитель — конвейер `camera` CAM-1. */
   cameraConfig?: CameraConfigSection;
 }
 
+/** Запись визуального ключа как она есть: модельная либо эмиттерная (ASSET-14). */
+function visualEntry(
+  manifest: Pick<VisualManifest, 'entities' | 'decorations'>,
+  key: string,
+): DecorationVisual | undefined {
+  return manifest.entities[key] ?? manifest.decorations?.[key];
+}
+
 /**
- * Запись визуального ключа — одно место разрешения на оба раздела (ASSET-9).
- * Потребители зовут его, а не читают раздел сами: пространство ключей одно, и
- * выбор раздела не должен становиться решением каждого вызывающего.
+ * Модельная запись визуального ключа — одно место разрешения на оба раздела
+ * (ASSET-9). Потребители зовут его, а не читают раздел сами: пространство ключей
+ * одно, и выбор раздела не должен становиться решением каждого вызывающего.
  *
  * Порядок просмотра здесь ни на что не влияет: пересечение имён отвергается
  * валидацией манифеста, поэтому ключ разрешается не более чем в одну запись.
+ *
+ * Эмиттерный вид (ASSET-14) сюда не приходит: его изображение — частицы, а не
+ * инстанс модели (`rendering` REND-24), и разрешает его `resolveVisualEmitter`.
+ * Два ответа на один ключ — не два пространства имён, а разделение по РОДУ
+ * записи: подсистема моделей не должна получать вид, который ей нечем рисовать,
+ * и не должна принимать его за отсутствие записи (ASSET-4 — заглушка означает
+ * «ассет не доехал», а не «рисует не я»).
  */
 export function resolveVisual(
   manifest: Pick<VisualManifest, 'entities' | 'decorations'>,
   key: string,
 ): EntityVisual | undefined {
-  return manifest.entities[key] ?? manifest.decorations?.[key];
+  const entry = visualEntry(manifest, key);
+  return entry === undefined || isEmitterVisual(entry) ? undefined : entry;
+}
+
+/**
+ * Эмиттерная запись визуального ключа (ASSET-14): вид, изображение которого —
+ * частицы (факел, костёр). Пространство ключей то же самое, что у модельных
+ * видов, и размещение (`presentation-scene` PRES-2) ссылается на неё тем же
+ * полем `visual`.
+ */
+export function resolveVisualEmitter(
+  manifest: Pick<VisualManifest, 'entities' | 'decorations'>,
+  key: string,
+): EmitterVisual | undefined {
+  const entry = visualEntry(manifest, key);
+  return entry !== undefined && isEmitterVisual(entry) ? entry : undefined;
+}
+
+/** Эмиттерный ли это вид: изображение — частицы, а не модель (ASSET-14). */
+export function isEmitterVisual(visual: DecorationVisual): visual is EmitterVisual {
+  return visual.effect !== undefined;
 }
 
 /**
@@ -89,6 +126,40 @@ export function resolveEffectByEvent(
   event: string,
 ): VisualEffect | undefined {
   return manifest.effects?.byEvent?.[event];
+}
+
+/**
+ * Эмиттер визуального типа (ASSET-14, `rendering` REND-24): эмиттер живёт, пока
+ * сущность этого типа есть в доставленном состоянии.
+ *
+ * Разрешение идёт по СВОЕЙ секции, без просмотра секции транзиентных эффектов:
+ * запись принадлежит ровно одной из двух (REND-23 в новой редакции), и
+ * потребитель одной секции не должен зависеть от содержимого другой.
+ */
+export function resolveParticlesByKind(
+  manifest: Pick<VisualManifest, 'particles'>,
+  kind: string,
+): VisualEmitter | undefined {
+  return manifest.particles?.byKind?.[kind];
+}
+
+/**
+ * Эмиттер доставленного состояния сущности (REND-24): частицы дебафа живут,
+ * пока состояние доставляется, и гаснут вместе с ним.
+ */
+export function resolveParticlesByState(
+  manifest: Pick<VisualManifest, 'particles'>,
+  state: string,
+): VisualEmitter | undefined {
+  return manifest.particles?.byState?.[state];
+}
+
+/** Эмиттер-one-shot типа события тика (REND-24, REND-4). */
+export function resolveParticlesByEvent(
+  manifest: Pick<VisualManifest, 'particles'>,
+  event: string,
+): VisualEmitter | undefined {
+  return manifest.particles?.byEvent?.[event];
 }
 
 /**
@@ -162,6 +233,54 @@ export interface VisualEffect {
    * снижение при провале), смысла не имеют, как и у записи decoration (ASSET-9).
    */
   verticalOffset?: VerticalOffset;
+}
+
+/**
+ * Секция эмиттеров частиц (ASSET-14, `rendering` REND-24): те же три таблицы
+ * источников, что у секции транзиентных эффектов, — по визуальному типу, по
+ * имени доставленного состояния и по типу события тика. Пространства ключей
+ * таблиц разные ровно по той же причине, что у `effects`.
+ *
+ * Секция отдельная, а не поле записи эффекта: у частиц свой ассет и свой
+ * конвейер отрисовки, а запись принадлежит ровно одной из двух секций (REND-23
+ * в новой редакции) — совмещённая запись заставила бы обе подсистемы читать
+ * чужую секцию, чтобы понять, чья она.
+ */
+export interface VisualParticlesSection {
+  /** Визуальный тип сущности → эмиттер. */
+  byKind?: Record<string, VisualEmitter>;
+  /**
+   * Имя компоненты-состояния сущности → эмиттер. Словарь битов состояний — тот
+   * же список `stateComponents` сборки, что кормит эффекты и камеру (REND-23,
+   * `camera` CAM-6): второго способа назвать состояние в манифесте не
+   * появляется (REND-24).
+   */
+  byState?: Record<string, VisualEmitter>;
+  /** Тип события тика → one-shot-эмиттер. */
+  byEvent?: Record<string, VisualEmitter>;
+}
+
+/**
+ * Запись эмиттера (ASSET-14): ссылка на эмиттерный ассет плюс привязка к
+ * инстансу. Состав закрыт — неизвестный ключ отвергается валидацией, а не
+ * игнорируется молча.
+ *
+ * Числа самого эффекта (скорость, время жизни, цвет, число частиц) здесь
+ * намеренно отсутствуют: они принадлежат документу эффекта, который пишет
+ * внешний редактор, и второе их место сделало бы вопрос «где настоящее
+ * значение» неразрешимым.
+ */
+export interface VisualEmitter {
+  /** Asset id эмиттерного ассета (ASSET-14). */
+  effect: string;
+  /**
+   * Имя узла-сокета модели инстанса (`rendering` REND-24): эмиттер следует позе
+   * этого узла в каждом кадре (факел в руке, хвост снаряда). Без него — позиция
+   * сущности, как у транзиентных эффектов (REND-23).
+   */
+  socket?: string;
+  /** Положительный множитель масштаба эффекта; без него — 1. */
+  scale?: number;
 }
 
 /**
@@ -446,6 +565,12 @@ export function resolveSurfaceAlign(
 export interface EntityVisual {
   /** Asset id модели. */
   model: string;
+  /**
+   * Различитель рода записи (ASSET-14): у модельного вида эмиттерного ассета
+   * нет. Поле объявлено ради того, чтобы `visual.effect` был законным вопросом
+   * к любой записи вида, а не ошибкой типов на одной из ветвей объединения.
+   */
+  effect?: undefined;
   /** Мировая высота юнита; по умолчанию 1. */
   scale?: number;
   /**
@@ -490,6 +615,30 @@ export interface EntityVisual {
    */
   lodThresholds?: number[];
 }
+
+/**
+ * Эмиттерный вид (ASSET-14): запись раздела decoration-видов, изображение
+ * которой — частицы, а не инстанс модели (`rendering` REND-24). Состав тот же,
+ * что у модельного вида, с одной подменой: вместо `model` — `effect`.
+ *
+ * Поля, применимые только к модели (скины, клипы, кости, наклон, ярус), на
+ * эмиттерном виде смысла не имеют, но ошибкой не считаются — по тому же
+ * основанию, по какому их не запрещает и модельный decoration-вид (ASSET-9):
+ * запись одного состава на оба рода дешевле, чем два состава.
+ */
+export interface EmitterVisual extends Omit<EntityVisual, 'model' | 'effect'> {
+  /** Asset id эмиттерного ассета — изображение вида (ASSET-14). */
+  effect: string;
+  /** Модели у эмиттерного вида нет: поле отсутствует — оно и различает род записи. */
+  model?: undefined;
+}
+
+/**
+ * Запись визуального ключа любого рода (ASSET-9, ASSET-14). Раздел `entities`
+ * ключуется sim-идентификатором и держит только модельные виды: эмиттер
+ * СУЩНОСТИ — запись секции `particles` (REND-24), а не подмена её модели.
+ */
+export type DecorationVisual = EntityVisual | EmitterVisual;
 
 function typeName(v: unknown): string {
   if (v === null) return 'null';
@@ -601,7 +750,56 @@ function validateLodThresholds(v: unknown, path: string, errors: string[]): void
   });
 }
 
-function validateEntity(entity: unknown, path: string, errors: string[]): void {
+/**
+ * Изображение вида: модель либо (у decoration-вида) эмиттерный ассет
+ * (ASSET-14). Ровно одно из двух — запись, называющая оба, оставила бы вопрос
+ * «кто её рисует» без ответа: эмиттерные виды рисует подсистема частиц, а не
+ * подсистема моделей (`rendering` REND-24), и молчаливое предпочтение одного
+ * поля другому спрятало бы ошибку автора.
+ */
+function validateVisualImage(
+  entity: Record<string, unknown>,
+  path: string,
+  errors: string[],
+  allowEmitter: boolean,
+): void {
+  const hasEffect = 'effect' in entity;
+  if (hasEffect && !allowEmitter) {
+    errors.push(
+      `${path}.effect: эмиттерным вправе быть только decoration-вид; эмиттер сущности — запись секции particles (ASSET-14)`,
+    );
+    return;
+  }
+  if (hasEffect) {
+    if (typeof entity.effect !== 'string' || entity.effect.length === 0) {
+      errors.push(
+        `${path}.effect: ожидался asset id эмиттерного ассета (непустая строка), получено ${typeName(entity.effect)}`,
+      );
+    }
+    if ('model' in entity) {
+      errors.push(
+        `${path}: вид рисуется либо моделью, либо частицами — model и effect в одной записи взаимоисключающи (ASSET-14)`,
+      );
+    }
+    return;
+  }
+  if (typeof entity.model !== 'string' || entity.model.length === 0) {
+    errors.push(`${path}.model: обязательное поле — непустая строка (asset id модели)`);
+  }
+}
+
+/**
+ * Запись вида. `allowEmitter` — раздел ли это decoration-видов: эмиттерным
+ * (ASSET-14) вправе быть только он, потому что `entities` ключуется
+ * sim-идентификатором, а эмиттер СУЩНОСТИ — запись секции `particles`
+ * (`rendering` REND-24), а не подмена её модели.
+ */
+function validateEntity(
+  entity: unknown,
+  path: string,
+  errors: string[],
+  allowEmitter = false,
+): void {
   if (!isRecord(entity)) {
     errors.push(`${path}: ожидался объект визуала, получено ${typeName(entity)}`);
     return;
@@ -610,6 +808,7 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
     entity,
     [
       'model',
+      'effect',
       'scale',
       'facingDeg',
       'defaultSkin',
@@ -647,9 +846,7 @@ function validateEntity(entity: unknown, path: string, errors: string[]): void {
     validateVerticalOffset(entity.verticalOffset, `${path}.verticalOffset`, errors);
   }
 
-  if (typeof entity.model !== 'string' || entity.model.length === 0) {
-    errors.push(`${path}.model: обязательное поле — непустая строка (asset id модели)`);
-  }
+  validateVisualImage(entity, path, errors, allowEmitter);
 
   if ('scale' in entity && (!isFiniteNumber(entity.scale) || entity.scale <= 0)) {
     errors.push(`${path}.scale: ожидалось положительное число, получено ${typeName(entity.scale)}`);
@@ -840,6 +1037,56 @@ function validateEffects(section: unknown, errors: string[]): void {
   }
 }
 
+/** Поля записи эмиттера (ASSET-14) — они же перечень допустимых ключей. */
+const EMITTER_FIELDS = ['effect', 'socket', 'scale'] as const;
+
+/**
+ * Запись эмиттера (ASSET-14). Состав закрыт: неизвестный ключ — ошибка, а не
+ * молчаливый игнор. Содержимое документа эффекта не проверяется и здесь: ссылка
+ * — это asset id, а форму документа знает его загрузчик (`particleEffect.ts`).
+ */
+function validateEmitter(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(`${path}: ожидался объект { effect, socket?, scale? }, получено ${typeName(v)}`);
+    return;
+  }
+  checkUnknownKeys(v, EMITTER_FIELDS, path, errors);
+  if (typeof v.effect !== 'string' || v.effect.length === 0) {
+    errors.push(
+      `${path}.effect: обязательное поле — asset id эмиттерного ассета (непустая строка), получено ${typeName(v.effect)}`,
+    );
+  }
+  if ('socket' in v && (typeof v.socket !== 'string' || v.socket.length === 0)) {
+    errors.push(
+      `${path}.socket: ожидалось имя узла-сокета модели (непустая строка), получено ${typeName(v.socket)}`,
+    );
+  }
+  if ('scale' in v && (!isFiniteNumber(v.scale) || v.scale <= 0)) {
+    errors.push(`${path}.scale: ожидалось положительное число, получено ${typeName(v.scale)}`);
+  }
+}
+
+/** Секция эмиттеров частиц (ASSET-14): три таблицы «имя → запись эмиттера». */
+function validateParticles(section: unknown, errors: string[]): void {
+  const path = 'particles';
+  if (!isRecord(section)) {
+    errors.push(`${path}: ожидался объект { byKind?, byState?, byEvent? }, получено ${typeName(section)}`);
+    return;
+  }
+  checkUnknownKeys(section, ['byKind', 'byState', 'byEvent'], path, errors);
+  for (const table of ['byKind', 'byState', 'byEvent'] as const) {
+    if (!(table in section)) continue;
+    const entries = section[table];
+    if (!isRecord(entries)) {
+      errors.push(`${path}.${table}: ожидался объект «имя → эмиттер», получено ${typeName(entries)}`);
+      continue;
+    }
+    for (const [name, def] of Object.entries(entries)) {
+      validateEmitter(def, `${path}.${table}.${name}`, errors);
+    }
+  }
+}
+
 /** Вид эффекта, законный в таблице секции: у `events` — импульсный, у `states` — длящийся. */
 const TABLE_KIND: Readonly<Record<'events' | 'states', CameraEffectKind>> = Object.freeze({
   events: 'impulse',
@@ -982,7 +1229,16 @@ export function validateManifest(doc: unknown, options: ValidateManifestOptions 
   }
   checkUnknownKeys(
     doc,
-    ['entities', 'decorations', 'surfaceAlign', 'terrain', 'effects', 'cameraEffects', 'cameraConfig'],
+    [
+      'entities',
+      'decorations',
+      'surfaceAlign',
+      'terrain',
+      'effects',
+      'particles',
+      'cameraEffects',
+      'cameraConfig',
+    ],
     'манифест',
     errors,
   );
@@ -1005,7 +1261,9 @@ export function validateManifest(doc: unknown, options: ValidateManifestOptions 
       );
     } else {
       for (const [name, entry] of Object.entries(doc.decorations)) {
-        validateEntity(entry, `decorations.${name}`, errors);
+        // Эмиттерный вид законен только здесь (ASSET-14): decoration-ключ ничем
+        // в симуляции не обеспечен, и «факел» — такой же вид, как «камень».
+        validateEntity(entry, `decorations.${name}`, errors, true);
       }
       // Пространство визуальных ключей одно (ASSET-9): имя, занятое в обоих
       // разделах, сделало бы разрешение ключа зависящим от порядка просмотра.
@@ -1023,6 +1281,9 @@ export function validateManifest(doc: unknown, options: ValidateManifestOptions 
   }
   if ('effects' in doc) {
     validateEffects(doc.effects, errors);
+  }
+  if ('particles' in doc) {
+    validateParticles(doc.particles, errors);
   }
   if ('cameraEffects' in doc) {
     validateCameraEffects(doc.cameraEffects, errors, warnings, options.cameraEffects);

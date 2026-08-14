@@ -68,10 +68,16 @@ export type {
   VerticalOffset,
   VisualManifest,
   EntityVisual,
+  // эмиттерный decoration-вид и объединение родов записи вида (ASSET-14)
+  EmitterVisual,
+  DecorationVisual,
   SurfaceAlign,
   // секция транзиентных эффектов (`rendering` REND-23)
   VisualEffect,
   VisualEffectsSection,
+  // секция эмиттеров частиц (ASSET-14, `rendering` REND-24)
+  VisualEmitter,
+  VisualParticlesSection,
   CameraEffectsSection,
   CameraEffectDef,
   // Форма машинного описания типов эффектов (`camera` CAM-9): контракт живёт
@@ -94,9 +100,14 @@ export {
   resolveSurfaceAlign,
   resolveVisual,
   resolveVisualTier,
+  resolveVisualEmitter,
+  isEmitterVisual,
   resolveEffectByKind,
   resolveEffectByState,
   resolveEffectByEvent,
+  resolveParticlesByKind,
+  resolveParticlesByState,
+  resolveParticlesByEvent,
   resolveLodThresholds,
   DEFAULT_LOD_THRESHOLDS,
   visualKeys,
@@ -108,6 +119,14 @@ export {
   POSITIVE_MIN,
   DEFAULT_SURFACE_ALIGN,
 } from './manifest.js';
+
+// эмиттерный ассет — документ эффекта частиц (ASSET-14)
+export type { ParticleEffectDocument, ParticleEffectNode } from './particleEffect.js';
+export {
+  PARTICLE_EFFECT_SUFFIX,
+  isParticleEffectPath,
+  validateParticleEffect,
+} from './particleEffect.js';
 
 // карта кривизны террейна (ASSET-7)
 export type { TerrainCurvatureMap } from './curvature.js';
@@ -133,4 +152,5 @@ export { pngTextureLoader, decodePng } from './loaders/png.js';
 export { manifestLoader, createManifestLoader } from './loaders/manifest.js';
 export type { ManifestLoaderOptions } from './loaders/manifest.js';
 export { curvatureLoader } from './loaders/curvature.js';
+export { particleEffectLoader } from './loaders/particleEffect.js';
 export { presentationLoader } from './loaders/presentation.js';
