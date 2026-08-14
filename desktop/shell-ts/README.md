@@ -50,7 +50,7 @@
 
 ```sh
 npm run build:desktop -w @game-mvp/editor-ui        # бандл редактора
-npm run demo:build:desktop -w @game-mvp/client      # бандл демо игры
+npm run demo:build:desktop -w @game-mvp/demo        # бандл демо игры
 
 npm run start:editor -w @game-mvp/desktop-shell     # окно редактора
 npm run start:game -w @game-mvp/desktop-shell       # окно игры

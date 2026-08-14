@@ -11,10 +11,10 @@ import { describe, expect, it } from 'vitest';
 import { tick as simTick, type SceneDef } from '@game-mvp/core';
 import { resolveComposition, type MinimapTerrainSource } from '@game-mvp/hud';
 import type { AssetService, VisualManifest } from '@game-mvp/assets';
-import { RemoteHost, WorkerShell } from '../src/index.js';
-import { createDemoHudRegistry, demoHudComposition } from '../demo/hud.js';
-import { createDemoExtractor } from '../demo/extractor.js';
-import { COOLDOWN_ABILITIES, PLAYER_ID, STATS, TICK_SECONDS, createDemoSimulation } from '../demo/sim.js';
+import { RemoteHost, WorkerShell } from '@game-mvp/client';
+import { createDemoHudRegistry, demoHudComposition } from '../app/hud.js';
+import { createDemoExtractor } from '../app/extractor.js';
+import { COOLDOWN_ABILITIES, PLAYER_ID, STATS, TICK_SECONDS, createDemoSimulation } from '../app/sim.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 

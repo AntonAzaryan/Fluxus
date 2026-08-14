@@ -39,18 +39,37 @@ module.exports = {
     {
       name: 'client-no-server-code',
       comment:
-        'Ни библиотека оболочки, ни её демо не лезут ВНУТРЬ серверной стороны ' +
-        'net: путь туда — опубликованная поверхность пакета (барьер @game-mvp/net), ' +
-        'а не файл под src/server или src/lobby.\n' +
-        'Исключение названо явно, а не проходит по недосмотру: сборка демо — ' +
-        'основатель сессии `local` (net-session SES-1, change demo-net-play D1), ' +
-        'и MatchServer во вкладке она поднимает законно. Законно ИМЕННО барьером: ' +
-        'сессия отличается от выделенной только сборкой (SES-2), и знать о ' +
-        'внутренностях сервера ей для этого не требуется. Библиотеке (src/) ' +
-        'сервер не нужен вовсе — там запрет абсолютный по обоим измерениям.',
+        'Библиотека оболочки не лезет ВНУТРЬ серверной стороны net: путь туда — ' +
+        'опубликованная поверхность пакета (барьер @game-mvp/net), а не файл под ' +
+        'src/server или src/lobby. Оболочке сервер не нужен вовсе, поэтому запрет ' +
+        'здесь абсолютный.',
       severity: 'error',
-      from: { path: '^engine/client-ts/(src|demo)' },
+      from: { path: '^engine/client-ts/src' },
       to: { path: '^engine/net-ts/src/(server|lobby)/' },
+    },
+    {
+      name: 'game-no-server-code',
+      comment:
+        'Тот же барьер для сборки игры, и исключение названо явно, а не проходит ' +
+        'по недосмотру: сборка демо — основатель сессии `local` (net-session SES-1, ' +
+        'change demo-net-play D1), и MatchServer во вкладке она поднимает законно. ' +
+        'Законно ИМЕННО барьером: сессия отличается от выделенной только сборкой ' +
+        '(SES-2), и знать о внутренностях сервера ей для этого не требуется.',
+      severity: 'error',
+      from: { path: '^game/demo-ts/app' },
+      to: { path: '^engine/net-ts/src/(server|lobby)/' },
+    },
+    {
+      name: 'engine-no-content',
+      comment:
+        'Пакеты движка не импортируют дерево контента (game-content CONT-4): ' +
+        '«Дерево контента отсутствует → тесты движка проходят полностью». Сцена, ' +
+        'матч, манифест и профиль бота — документы игры, и эталон движка обязан ' +
+        'краснеть от правки движка, а не от ретюна числа геймдизайнером. Читает ' +
+        'их сборка игры (game/demo-ts) — ей это законно, она и есть игра.',
+      severity: 'error',
+      from: { path: '^engine/' },
+      to: { path: '^content/' },
     },
     {
       name: 'server-no-client-code',
@@ -71,8 +90,8 @@ module.exports = {
     {
       name: 'no-three-outside-render-layer',
       comment:
-        'three — деталь слоя представления: рендерер, клиент, editor-ui и их ' +
-        'тесты. Ядру, net, assets и editor-core он запрещён.',
+        'three — деталь слоя представления: рендерер, клиент, editor-ui, сборка ' +
+        'игры и их тесты. Ядру, net, assets и editor-core он запрещён.',
       severity: 'error',
       from: { path: '^(engine/(core|net|assets|bot)-ts|editor/core-ts|tools/)' },
       to: { path: '^node_modules/three/' },

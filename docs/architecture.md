@@ -60,6 +60,9 @@
 │  Client shell (engine/client-ts)                 │
 │  ядро в воркере, рендер в главном потоке,        │
 │  transferable ping-pong + обратный канал ввода   │
+├──────────────────────────────────────────────────┤
+│  Игра (game/demo-ts) — потребитель оболочки:     │
+│  сборка демо-арены, читает дерево контента       │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -184,7 +187,7 @@
 | 23 | (Будущее) Pathfinding для крипов/NPC | 🟡 Шов готов: `NavigationApi` и `navigation?` в `SystemContext` (`pathfinding` NAV-1..6, DI-4). Алгоритм, навигационные данные и связность сетки — отдельным этапом |
 | 24 | (Будущее) Предсказание своей сущности и reconciliation | NET-2/4/5 слоем над клиентом MVP; включается по замеру «нажал→увидел», а не заранее |
 | 25 | Render + assets MVP | ✅ `engine/assets-ts` (`@game-mvp/assets`: handle'ы, реестр загрузчиков, MDX/PNG/манифест визуалов) и `engine/render-ts` (`@game-mvp/render`: `RenderHost`-наблюдатель с интерполяцией, подсистемы террейна и моделей, data-driven анимации, bone-контроль, скины) + демо (change `add-render-assets-mvp`, ASSET-1..6, REND-1..8). Fog-mask (FOW-7..9) и частицы — последующие этапы |
-| 26 | Клиентская оболочка веба: ядро в воркере | ✅ `engine/client-ts` (`@game-mvp/client`): воркер-хост с тикером, канал transferable ping-pong с ack-conflation (состояние conflatable, события reliable), handshake, обратный канал ввода и WSM, `MessagePort`-транспорт под локальный сервер во втором воркере. `RenderHost` разнесён на `Extractor`/`ViewBuffer` по границе `TickView` — подсистемы не тронуты; демо переехало в `client-ts/demo` на воркер-сборку (change `add-worker-client-shell`, SHELL-1..7) |
+| 26 | Клиентская оболочка веба: ядро в воркере | ✅ `engine/client-ts` (`@game-mvp/client`): воркер-хост с тикером, канал transferable ping-pong с ack-conflation (состояние conflatable, события reliable), handshake, обратный канал ввода и WSM, `MessagePort`-транспорт под локальный сервер во втором воркере. `RenderHost` разнесён на `Extractor`/`ViewBuffer` по границе `TickView` — подсистемы не тронуты; демо переехало на воркер-сборку (change `add-worker-client-shell`, SHELL-1..7) и живёт отдельным приложением `game/demo-ts` — оболочка остаётся чистой библиотекой, а контент читает игра (CONT-4) |
 | 27 | Игровой контент в дерево `content/` | ✅ Capability `game-content` (CONT-1..5): контент вне пакетов движка, одно-корневое дерево, механическая проверка границы, фикстуры движка контентом не являются (change `extract-game-content-tree`) |
 | 28 | Одна сцена дуэли: паритет оболочек | ✅ Одна `content/scenes/duel.scene.json` на матч и демо — выполнение CONT-3, невыполненного этапом 27; движение унифицировано на `Velocity` + физике, физика — зависимость сборки в конфиге матча (NTR-14), событие каста — одно имя `CastFireball`. Эталоны `match-*` переписаны (change `unify-duel-scene`) |
 | 29 | Fixed-тригонометрия таблицей | ✅ `sin`/`cos` в Math API и в таблице операторов DSL (FP-7, FP-8; EXPR-2). Единица угла — binary angle measure (оборот = 2^16, заворачивание маской); нормативная таблица первой четверти из 257 узлов с линейной интерполяцией — литерал в исходнике, побитовая парность с Rust-портом — свойство таблицы и правила, а не libm (change `add-fixed-trigonometry`) |

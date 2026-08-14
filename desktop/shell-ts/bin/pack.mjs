@@ -52,7 +52,7 @@ const bundle = resolve(dirname(manifestPath), profile.bundle);
 if (!existsSync(bundle)) {
   console.error(`бандл не собран: ${bundle}`);
   console.error('editor: npm run build:desktop -w @game-mvp/editor-ui');
-  console.error('game:   npm run demo:build:desktop -w @game-mvp/client');
+  console.error('game:   npm run demo:build:desktop -w @game-mvp/demo');
   process.exit(2);
 }
 

@@ -8,8 +8,7 @@
  * Соло-режим живёт в `worker.ts` и этого файла не касается вовсе.
  */
 import { connectWebSocket, type Transport } from '@game-mvp/net';
-import { portTransport } from '../src/portTransport.js';
-import { shellPort } from '../src/protocol.js';
+import { portTransport, shellPort } from '@game-mvp/client';
 import { DEMO_PLAYERS } from './match.js';
 import { slotCandidates } from './mode.js';
 import { joinDemoMatch } from './netClient.js';

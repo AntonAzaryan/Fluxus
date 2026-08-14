@@ -27,10 +27,45 @@ import {
   type GamepadLike,
   type InputSource,
 } from '../src/index.js';
-import demoBindings from '../demo/bindings.json';
-import { ACTION_BITS } from '../demo/sim.js';
 
 const BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
+
+/**
+ * Раскладка-фикстура: своя, а не взятая у сборки игры. Тест здесь про МЕХАНИЗМ
+ * `src/input` (INP-1..5), и раскладка ему нужна как вход, а не как утверждение
+ * о чьих-то данных: раскладка реальной игры — контент её сборки, и прогон
+ * движка от него не зависит (`game-content` CONT-4). Валидность самой игровой
+ * раскладки закреплена там же, где она лежит, — `game/demo-ts/test/bindings.test.ts`.
+ *
+ * Числа подобраны под вьюпорт тестов 1000×500: ход стика 0,12 × 500 = 60 px,
+ * зона кнопки `jump` — правый верхний угол, мёртвая зона прицела 0,25.
+ */
+const BINDINGS = {
+  keyboardMouse: {
+    move: { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD' },
+    keys: { ShiftLeft: 'dodge', ShiftRight: 'dodge', Space: 'jump', KeyK: 'kill' },
+    pointerButtons: { 0: 'cast' },
+  },
+  touch: {
+    moveStick: { zone: { left: 0, top: 0.4, width: 0.5, height: 0.6 }, radius: 0.12 },
+    aimStick: {
+      zone: { left: 0.5, top: 0.4, width: 0.5, height: 0.6 },
+      radius: 0.12,
+      releaseAction: 'cast',
+      deadzone: 0.25,
+    },
+    buttons: [
+      { zone: { left: 0.86, top: 0.05, width: 0.12, height: 0.1 }, action: 'jump' },
+      { zone: { left: 0.72, top: 0.05, width: 0.12, height: 0.1 }, action: 'dodge' },
+    ],
+  },
+  gamepad: {
+    moveAxes: [0, 1],
+    aimAxes: [2, 3],
+    deadzone: 0.25,
+    buttons: { 0: 'jump', 1: 'dodge', 5: 'cast', 8: 'kill' },
+  },
+};
 
 const makeSampler = (): InputSampler => new InputSampler({ actionBits: BITS });
 
@@ -216,7 +251,7 @@ describe('HeldActions: фронты опросных устройств (INP-2)'
 describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () => {
   const kb = (captured = false): KeyboardMouseSource =>
     new KeyboardMouseSource({
-      bindings: validateBindings(demoBindings).keyboardMouse,
+      bindings: validateBindings(BINDINGS).keyboardMouse,
       movementCaptured: () => captured,
       aimAt: () => 42,
     });
@@ -299,7 +334,7 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
   it('клик без направления не создаёт удержания', () => {
     const sampler = makeSampler();
     const source = new KeyboardMouseSource({
-      bindings: validateBindings(demoBindings).keyboardMouse,
+      bindings: validateBindings(BINDINGS).keyboardMouse,
       aimAt: () => null,
     });
     sampler.add(source);
@@ -309,7 +344,7 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
 
   it('клик даёт фронт с прицелом; клик без направления — не действие', () => {
     const withAim = new KeyboardMouseSource({
-      bindings: validateBindings(demoBindings).keyboardMouse,
+      bindings: validateBindings(BINDINGS).keyboardMouse,
       aimAt: (x, y) => (x === 0 && y === 0 ? null : aimAngle(1, 1)),
     });
     const pressed: string[] = [];
@@ -324,7 +359,7 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
 });
 
 describe('TouchSource (INP-1, INP-2, D6)', () => {
-  const bindings = validateBindings(demoBindings).touch!;
+  const bindings = validateBindings(BINDINGS).touch!;
   const viewport = { width: 1000, height: 500 };
   const make = (): TouchSource => new TouchSource(bindings, () => viewport);
   // Ход стика: 0.12 × min(1000, 500) = 60 px.
@@ -394,7 +429,7 @@ describe('TouchSource (INP-1, INP-2, D6)', () => {
 });
 
 describe('GamepadSource (INP-3, INP-5, D7)', () => {
-  const bindings = validateBindings(demoBindings).gamepad!;
+  const bindings = validateBindings(BINDINGS).gamepad!;
   const pad = (axes: number[], pressedIdx: number[] = []): GamepadLike => ({
     axes,
     buttons: Array.from({ length: 10 }, (_, i) => ({ pressed: pressedIdx.includes(i) })),
@@ -465,30 +500,11 @@ describe('GamepadSource (INP-3, INP-5, D7)', () => {
 });
 
 describe('Биндинги — данные с валидацией (INP-4)', () => {
-  it('дефолтная раскладка демо валидна', () => {
-    const bindings = validateBindings(demoBindings);
+  it('полная раскладка разбирается: секции устройств на месте', () => {
+    const bindings = validateBindings(BINDINGS);
     expect(bindings.keyboardMouse.move.up).toBe('KeyW');
     expect(bindings.touch).toBeDefined();
     expect(bindings.gamepad).toBeDefined();
-  });
-
-  /**
-   * Раскладка устройств (`bindings.json`) и смысл битов (`ACTION_BITS`) — два
-   * файла демо-сборки, и связывает их только совпадение имён: `InputSampler`
-   * узнаёт о расхождении на ПЕРВОМ живом нажатии (`bitOf` бросает), то есть на
-   * странице, у игрока. Здесь оно ловится загрузкой файла.
-   */
-  it('каждое действие раскладки объявлено в ACTION_BITS сборки (INP-4)', () => {
-    const b = validateBindings(demoBindings);
-    const actions = [
-      ...Object.values(b.keyboardMouse.keys),
-      ...Object.values(b.keyboardMouse.pointerButtons),
-      ...(b.touch?.buttons ?? []).map((button) => button.action),
-      ...(b.touch?.aimStick?.releaseAction === undefined ? [] : [b.touch.aimStick.releaseAction]),
-      ...Object.values(b.gamepad?.buttons ?? {}),
-    ];
-    expect(actions.length).toBeGreaterThan(0);
-    for (const action of actions) expect(Object.keys(ACTION_BITS)).toContain(action);
   });
 
   it('сломанные данные падают при загрузке с внятной ошибкой', () => {
@@ -500,7 +516,7 @@ describe('Биндинги — данные с валидацией (INP-4)', ()
     ).toThrow(/move\.right/);
     expect(() =>
       validateBindings({
-        ...(demoBindings as object),
+        ...(BINDINGS as object),
         gamepad: { moveAxes: [0], deadzone: 0.25, buttons: {} },
       }),
     ).toThrow(/moveAxes/);
@@ -583,7 +599,7 @@ describe('отпускание кнопки в симуляции (INP-2, TICK-4
     const state = initialState(world, 1);
     const sampler = makeSampler();
     const source = new KeyboardMouseSource({
-      bindings: validateBindings(demoBindings).keyboardMouse,
+      bindings: validateBindings(BINDINGS).keyboardMouse,
       aimAt: () => 0,
     });
     sampler.add(source);
