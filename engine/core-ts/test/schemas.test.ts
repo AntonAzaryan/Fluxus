@@ -12,6 +12,8 @@ import {
   TERRAIN_LEVEL_MAX,
 } from '../src/systems/terrain.js';
 import type { LocomotionOptions } from '../src/systems/locomotion.js';
+import type { PhysicsOptions } from '../src/systems/physics.js';
+import type { VisibilityOptions } from '../src/systems/visibility.js';
 
 const SCHEMA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'schemas');
 
@@ -87,6 +89,24 @@ describe('engine/schemas (SER-5)', () => {
     };
 
     expect(Object.keys(doc.properties.locomotion.properties).sort()).toEqual(Object.keys(options).sort());
+  });
+
+  /**
+   * SER-5: тот же класс дефекта у остальных закрытых блоков опций — `physics`
+   * и `visibility` тоже `additionalProperties: false` (PHYS-4, FOW-4).
+   */
+  it('схема сценария описывает ровно опции физики и видимости (PHYS-4, FOW-4)', () => {
+    const physics: Required<PhysicsOptions> = { collider: 'Collider', velocity: 'Velocity' };
+    const visibility: Required<VisibilityOptions> = {};
+    const doc = schemaFiles['scenario.schema.json'] as {
+      properties: {
+        physics: { properties: Record<string, unknown> };
+        visibility: { properties: Record<string, unknown> };
+      };
+    };
+
+    expect(Object.keys(doc.properties.physics.properties).sort()).toEqual(Object.keys(physics).sort());
+    expect(Object.keys(doc.properties.visibility.properties).sort()).toEqual(Object.keys(visibility).sort());
   });
 
   it('схема системы перечисляет все действия и операторы ядра', () => {
