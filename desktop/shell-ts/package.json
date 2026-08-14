@@ -15,8 +15,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "typecheck:electron": "tsc --noEmit -p tsconfig.electron.json",
-    "start:editor": "electron src/electron/entry.cjs --app apps/editor.app.json",
-    "start:game": "electron src/electron/entry.cjs --app apps/game.app.json",
+    "start:editor": "electron src/electron/entry.mjs --app apps/editor.app.json",
+    "start:game": "electron src/electron/entry.mjs --app apps/game.app.json",
     "smoke": "node bin/smoke.mjs",
     "pack": "electron-builder --config electron-builder.cjs"
   },

@@ -46,6 +46,7 @@ export default defineConfig([
   globalIgnores([
     '**/node_modules/**',
     '**/dist/**',
+    '**/dist-desktop/**',
     'engine/schemas/**',
     'engine/tests/golden/**',
     'content/**',

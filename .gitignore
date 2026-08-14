@@ -1,5 +1,8 @@
 node_modules/
 dist/
+# Бандл приложения для десктоп-контейнера: та же сборка без копии дерева
+# контента (`desktop-shell` DSK-4) — артефакт, как и dist/.
+dist-desktop/
 coverage/
 *.log
 *.tsbuildinfo
