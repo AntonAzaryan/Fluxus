@@ -90,9 +90,13 @@ describe('headless-прогон демо: статы и фаза полёта д
     expect(names).toContain(STATS.slot);
     expect(names).toContain(STATS.hp);
 
-    // Каст: снаряд рождается и летит, а сборка считает ему фазу полёта.
+    // Каст: нажатие копит заряд, отпускание стреляет — снаряд рождается и
+    // летит, а сборка считает ему фазу полёта.
     simTick(sim, state, [
       { tick: state.tick + 1, playerId: PLAYER_ID, seq: 1, move: { x: 0, y: 0 }, aimDir: 0, buttons: 1 },
+    ]);
+    simTick(sim, state, [
+      { tick: state.tick + 1, playerId: PLAYER_ID, seq: 2, move: { x: 0, y: 0 }, aimDir: 0, buttons: 0 },
     ]);
     for (let i = 0; i < 6; i++) shell.stepTick();
 

@@ -54,21 +54,34 @@ const AIM_WEST = 0x8000;
 
 /** Множитель купола и предел замедления — те же числа, что в `AbilityConfig`. */
 const SLOW = 16384;
-const DOME_TICKS = 120;
-const DOME_COOLDOWN = 600;
+const DOME_TICKS = 180;
+const DOME_COOLDOWN = 300;
 const CAPTURE_COOLDOWN = 120;
 /**
  * `AbilityConfig.holdTicks`. Тик захвата тратит первый из них, поэтому окно
- * броска — `HOLD_TICKS − 1` = 24 тика = ровно 400 мс при 60 Гц.
+ * броска — `HOLD_TICKS − 1` = 120 тиков = ровно 2 с при 60 Гц.
  */
-const HOLD_TICKS = 25;
+const HOLD_TICKS = 121;
 const THROW_WINDOW_TICKS = HOLD_TICKS - 1;
 const EXPLOSION_DAMAGE = 250;
 /** `Collider.radius` героя и множитель купола — те же поля, что читает `DomeCast`. */
 const HERO_RADIUS = 19661;
-const DOME_RADIUS_MUL = 229376;
+const DOME_RADIUS_MUL = 655360;
 /** Раствор сектора захвата в единицах угла ядра (FP-7): 5461/65536 ≈ 30°. */
 const CAPTURE_HALF_ANGLE = 5461;
+
+/** Заряд каста — те же поля `AbilityConfig`, по которым решает `ChargeRelease`. */
+const CAST_COOLDOWN = 90;
+const CHARGE_TICKS = 60;
+const CHARGE_GRACE_TICKS = 18;
+const CHARGE_MAX_SCALE = 2 * FIXED_ONE;
+/** Порог «тяжёлого» снаряда: с него `ChargeRelease` спавнит prefab `HeavyFireball`. */
+const CHARGE_HEAVY_SCALE = 1.5 * FIXED_ONE;
+const HIT_DAMAGE = 100;
+const OVERCHARGE_DAMAGE = 250;
+const OVERCHARGE_RADIUS = 3 * FIXED_ONE;
+/** Радиус коллайдера снаряда — ровно половина героического. */
+const FIREBALL_RADIUS = 9830;
 
 interface Arena {
   readonly sim: Simulation;
@@ -149,30 +162,35 @@ function arena(gap = 4): Arena {
 }
 
 interface Ffa {
+  readonly sim: Simulation;
   readonly state: SimulationState;
   /** Герои в порядке слотов — то есть в порядке переданных абсцисс. */
   readonly heroes: readonly EntityId[];
-  /** Тик с явными вводами всех слотов; недоданный кадр — нейтраль. */
-  step: (frames?: readonly Frame[]) => void;
+  /** Тик с явными вводами всех слотов; недоданный кадр — нейтраль. Отдаёт типы событий тика. */
+  step: (frames?: readonly Frame[]) => readonly string[];
 }
 
 /**
  * Свободная схватка на N героев: `arena()` — дуэль на списке игроков матча, а
  * очередь захвата (кто именно ловит и что достаётся проигравшему гонку) видна
- * только там, где участников больше двух. Позиции — абсциссы на ОДНОЙ ординате:
- * все стоят на линии, и «снаряд в секторе» сводится к «снаряд на запад».
+ * только там, где участников больше двух. Позиция — абсцисса на общей ординате
+ * либо пара `[x, y]`: снаряд теперь СБИВАЕТ героя, попав в его коллайдер, и
+ * тесту, которому нужен пролетающий мимо снаряд, ординату приходится разводить.
  */
-function ffa(xs: readonly number[]): Ffa {
-  const players = xs.map((_, index) => `p${index + 1}`);
+function ffa(cells: readonly (number | readonly [number, number])[]): Ffa {
+  const points: readonly (readonly [number, number])[] = cells.map((cell) =>
+    typeof cell === 'number' ? ([cell, 24.5] as const) : cell,
+  );
+  const players = points.map((_, index) => `p${index + 1}`);
   const built = buildMatchWorld({
     scene: SCENE,
     seed: MATCH.seed,
     players,
-    initial: xs.map((cell, index) => ({
+    initial: points.map(([cx, cy], index) => ({
       prefab: 'Hero',
       overrides: {
         Player: { slot: index },
-        Position: { x: cell * FIXED_ONE, y: 24.5 * FIXED_ONE },
+        Position: { x: Math.round(cx * FIXED_ONE), y: Math.round(cy * FIXED_ONE) },
       },
     })),
     physics: {},
@@ -185,11 +203,12 @@ function ffa(xs: readonly number[]): Ffa {
   }
   let tick = 0;
   return {
+    sim: built.sim,
     state: built.state,
     heroes,
     step(frames = []) {
       tick += 1;
-      simTick(
+      const result = simTick(
         built.sim,
         built.state,
         players.map((playerId, index) => ({
@@ -201,6 +220,7 @@ function ffa(xs: readonly number[]): Ffa {
           buttons: frames[index]?.buttons ?? 0,
         })),
       );
+      return [...result.events].map((event) => event.type);
     },
   };
 }
@@ -234,6 +254,23 @@ function pressB(a: Arena, buttons: number, aimDir = AIM_WEST): void {
   a.step(NEUTRAL, { buttons, aimDir });
   a.step(NEUTRAL, { aimDir });
 }
+
+/**
+ * Заряд каста: `held` тиков УДЕРЖАНИЯ сверх тика нажатия, затем отпускание.
+ * Тик нажатия окном заряда не считается (`ChargeRelease` вычитает его), поэтому
+ * `charge(a, 0)` — это самый быстрый тап, `charge(a, CHARGE_TICKS)` — полный.
+ */
+function chargeA(a: Arena, held: number, aimDir = AIM_EAST): void {
+  a.step({ buttons: CAST, aimDir });
+  for (let i = 0; i < held; i++) a.step({ buttons: CAST, aimDir });
+  a.step({ aimDir });
+}
+
+const projectile = (state: SimulationState, entity: EntityId, field: string): number =>
+  coreWorld.getField(state.world, entity, 'Projectile', field);
+
+const hp = (state: SimulationState, entity: EntityId): number =>
+  coreWorld.getField(state.world, entity, 'Health', 'hp');
 
 /**
  * Числа, продублированные ВНЕ `AbilityConfig`. Каждое из них — сознательное
@@ -297,7 +334,7 @@ describe('купол замедления: чужой снаряд идёт вч
     expect(slowedStep).toBe(fullStep >> 2);
   });
 
-  it('радиус купола — ровно 3.5 радиуса коллайдера кастера', () => {
+  it('радиус купола — ровно 10 радиусов коллайдера кастера', () => {
     const a = arena();
     pressB(a, DOME);
     const dome = domes(a.state)[0]!;
@@ -305,7 +342,7 @@ describe('купол замедления: чужой снаряд идёт вч
     // а здесь пиннится её РЕЗУЛЬТАТ: ретюн любого из двух чисел виден в диффе
     // теста, а не только в поведении на экране.
     const expected = Math.floor((HERO_RADIUS * DOME_RADIUS_MUL) / FIXED_ONE);
-    expect(expected).toBe(68813);
+    expect(expected).toBe(196610);
     expect(coreWorld.getField(a.state.world, dome, 'DomeState', 'radius')).toBe(expected);
     // То же число лежит умолчанием в prefab'е `SlowDome` — они обязаны совпадать.
     expect(SCENE.prefabs!.find((p) => p.name === 'SlowDome')!.components.DomeState!.radius).toBe(
@@ -314,23 +351,27 @@ describe('купол замедления: чужой снаряд идёт вч
   });
 
   it('выход из купола восстанавливает шаг ТОЧНО, пока купол ещё жив', () => {
-    // Герои рядом: снаряд успевает и войти в купол, и выйти из него до того,
-    // как кончится его собственный полёт.
-    const a = arena(2);
-    pressA(a, CAST);
+    // Кастер купола стоит В СТОРОНЕ от линии огня: снаряд теперь сбивает героя,
+    // попав в его коллайдер, и «пролететь купол насквозь» иначе нечему.
+    // Ордината разведена на 2.5 клетки — купол (радиус 3) линию огня накрывает,
+    // а сам герой от неё дальше суммы радиусов.
+    const a = ffa([18, [24, 27]]);
+    a.step([{ buttons: CAST }]);
+    a.step();
     const shot = fireballs(a.state)[0]!;
 
     const before = x(a.state, shot);
-    a.step(NEUTRAL);
+    a.step();
     const fullStep = x(a.state, shot) - before;
     expect(fullStep).toBeGreaterThan(0);
 
-    pressB(a, DOME);
+    a.step([NEUTRAL, { buttons: DOME }]);
+    a.step();
     let sawSlow = false;
     let exitStep: number | null = null;
     for (let i = 0; i < DOME_TICKS && fireballs(a.state).length > 0; i++) {
       const from = x(a.state, shot);
-      a.step(NEUTRAL);
+      a.step();
       if (fireballs(a.state).length === 0) break;
       if (timeScale(a.state, shot) === SLOW) {
         sawSlow = true;
@@ -452,7 +493,9 @@ describe('захват снаряда: удержание, переброс и �
   });
 
   it('переброс меняет владельца: купол бросившего его больше не замедляет, а купол соперника — да', () => {
-    const a = arena(8);
+    // Шире прежнего: переброшенный снаряд летит вдвое с половиной быстрее и
+    // долетал бы до стрелка раньше, чем тот успеет поставить свой купол.
+    const a = arena(16);
     pressA(a, CAST);
     const shot = fireballs(a.state)[0]!;
     shotInReach(a, shot);
@@ -473,7 +516,7 @@ describe('захват снаряда: удержание, переброс и �
 
     // Купол ставит сам бросивший: свой снаряд он не трогает.
     pressB(a, DOME);
-    for (let i = 0; i < 12 && fireballs(a.state).length > 0; i++) {
+    for (let i = 0; i < 5 && fireballs(a.state).length > 0; i++) {
       a.step(NEUTRAL);
       if (fireballs(a.state).length === 0) break;
       expect(timeScale(a.state, shot)).toBe(FIXED_ONE);
@@ -493,7 +536,7 @@ describe('захват снаряда: удержание, переброс и �
     expect(slowed).toBe(true);
   });
 
-  it('невыброшенный за 400 мс снаряд взрывается на держателе и снимает 250 hp', () => {
+  it('невыброшенный за 2 с снаряд взрывается на держателе и снимает 250 hp', () => {
     const a = arena(8);
     pressA(a, CAST);
     const shot = fireballs(a.state)[0]!;
@@ -506,7 +549,7 @@ describe('захват снаряда: удержание, переброс и �
     expect(hpBefore).toBe(1000);
 
     // Тик захвата уже потратил один тик окна: до взрыва остаётся ровно окно
-    // броска — 24 тика, те самые 400 мс при 60 Гц.
+    // броска — 120 тиков, те самые 2 с при 60 Гц.
     for (let i = 0; i < THROW_WINDOW_TICKS; i++) {
       expect(coreWorld.getField(a.state.world, p2, 'Health', 'hp')).toBe(hpBefore);
       a.step(NEUTRAL);
@@ -548,7 +591,7 @@ describe('захват снаряда: удержание, переброс и �
     expect(coreWorld.hasComponent(a.state.world, p2, 'Locomotion')).toBe(false);
   });
 
-  it('бросок проходит на ПОСЛЕДНЕМ тике окна: оно ровно 24 тика (400 мс)', () => {
+  it('бросок проходит на ПОСЛЕДНЕМ тике окна: оно ровно 120 тиков (2 с)', () => {
     const a = arena(8);
     pressA(a, CAST);
     const shot = fireballs(a.state)[0]!;
@@ -607,28 +650,41 @@ describe('захват снаряда: удержание, переброс и �
   });
 
   it('второй захват на неостывшем кулдауне не срабатывает', () => {
-    const a = arena(8);
-    pressA(a, CAST);
-    const first = fireballs(a.state)[0]!;
-    shotInReach(a, first);
-
+    // Второй снаряд шлёт ТРЕТИЙ герой: у каста теперь свой кулдаун в 90 тиков,
+    // и один стрелок за окно захвата (120 тиков) второй раз не выстрелит.
+    // Он же стоит в стороне от линии огня — его снаряд обязан долететь до
+    // ловца, а не сбить самого ловца по дороге.
+    const a = ffa([20, 28, [20, 25.2]]);
     const p2 = a.heroes[1]!;
-    a.step(NEUTRAL, { buttons: CAPTURE });
-    a.step(NEUTRAL, {});
+    const reach = (shot: EntityId): void => {
+      for (let i = 0; i < 200; i++) {
+        if (x(a.state, p2) - x(a.state, shot) <= 2 * FIXED_ONE) return;
+        a.step();
+      }
+      throw new Error('снаряд не долетел до зоны захвата');
+    };
+
+    a.step([{ buttons: CAST }]);
+    a.step();
+    const first = fireballs(a.state)[0]!;
+    reach(first);
+    a.step([NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }]);
+    a.step([NEUTRAL, { aimDir: AIM_WEST }]);
     expect(coreWorld.hasComponent(a.state.world, first, 'Held')).toBe(true);
     // Бросок освобождает руки, но кулдаун захвата продолжает тикать.
-    a.step(NEUTRAL, { buttons: CAST });
+    a.step([NEUTRAL, { buttons: CAST, aimDir: AIM_WEST }]);
     expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
 
     // Второй снаряд подлетает, пока захват не остыл.
-    pressA(a, CAST);
+    a.step([NEUTRAL, NEUTRAL, { buttons: CAST }]);
+    a.step();
     const second = fireballs(a.state).find((entity) => entity !== first)!;
     expect(second).toBeDefined();
-    shotInReach(a, second);
+    reach(second);
     expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'capture')).toBeGreaterThan(0);
 
-    a.step(NEUTRAL, { buttons: CAPTURE });
-    a.step(NEUTRAL, {});
+    a.step([NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }]);
+    a.step([NEUTRAL, { aimDir: AIM_WEST }]);
     expect(coreWorld.hasComponent(a.state.world, second, 'Held')).toBe(false);
     expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
   });
@@ -701,31 +757,42 @@ describe('захват снаряда: удержание, переброс и �
    * удалении, дальний стреляет первым.
    */
   it('из двух чужих снарядов в секторе ловится ближайший (ACT-5)', () => {
-    const a = ffa([18, 28, 23]);
+    // Оба стрелка стоят В СТОРОНЕ от ловца по ординате: снаряд теперь сбивает
+    // героя, попав в коллайдер, и снаряд на линии до выбора «ближайшего» просто
+    // не доживал бы. Ловец заранее ставит купол: в нём чужие снаряды ползут
+    // вчетверо медленнее, и окно, где ОБА внутри зоны захвата, из доли тика
+    // становится несколькими тиками — иначе выбор ближайшего не наблюдаем.
+    const a = ffa([[18, 25.25], 28, [23, 23.75]]);
+    const p2 = a.heroes[1]!;
+    a.step([NEUTRAL, { buttons: DOME }]);
+    a.step();
+
     // Дальний стрелок (слот 0) — первым: его снаряд получает МЕНЬШИЙ raw-индекс.
     a.step([{ buttons: CAST }]);
     a.step();
     const far = fireballs(a.state)[0]!;
-    // Пауза подобрана так, чтобы младший снаряд обогнал старшего: 12 тиков —
-    // это 3 клетки хода при разнице стартов в 5.
-    for (let i = 0; i < 12; i++) a.step();
+    // Пауза подобрана так, чтобы младший снаряд шёл впереди старшего, но
+    // недалеко: разница стартов — 5 клеток, три тика хода съедают почти две.
+    for (let i = 0; i < 3; i++) a.step();
     a.step([NEUTRAL, NEUTRAL, { buttons: CAST }]);
     a.step();
     const near = fireballs(a.state).find((entity) => entity !== far)!;
     expect(near).toBeDefined();
 
-    const p2 = a.heroes[1]!;
-    // Ждём кадра, где ОБА в радиусе захвата и ближний действительно ближе.
-    for (let i = 0; i < 200; i++) {
+    // Ждём кадра, где ОБА в радиусе захвата; ловец всё это время держит R и
+    // отпускает ровно на нужном тике — двухтиковый «нажал-отпустил» за это
+    // время увёл бы ближний снаряд за спину ловцу.
+    const hold: readonly Frame[] = [NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }];
+    let ready = false;
+    for (let i = 0; i < 200 && !ready; i++) {
+      a.step(hold);
       const dFar = x(a.state, p2) - x(a.state, far);
       const dNear = x(a.state, p2) - x(a.state, near);
-      if (dFar <= 2.9 * FIXED_ONE && dNear < dFar) break;
-      a.step();
+      ready = dFar <= 2.8 * FIXED_ONE && dNear > 0;
     }
+    expect(ready).toBe(true);
     expect(x(a.state, p2) - x(a.state, near)).toBeLessThan(x(a.state, p2) - x(a.state, far));
-    expect(fireballs(a.state).find((entity) => entity === far)).toBeDefined();
 
-    a.step([NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }]);
     a.step([NEUTRAL, { aimDir: AIM_WEST }]);
     expect(coreWorld.getField(a.state.world, p2, 'Holding', 'projectile')).toBe(near);
     expect(coreWorld.hasComponent(a.state.world, far, 'Held')).toBe(false);
@@ -744,5 +811,302 @@ describe('захват снаряда: удержание, переброс и �
     // ЛКМ — это переброс, а не новый фаербол: снарядов по-прежнему один.
     a.step(NEUTRAL, { buttons: CAST });
     expect(fireballs(a.state)).toHaveLength(1);
+  });
+});
+
+/**
+ * Ретюн раунда 2 и новые числа заряда — закреплены ЗДЕСЬ, а не только в
+ * поведении на экране. Каждое из них тюнится игровым дизайнером в JSON, и тест
+ * ловит не «неправильное» значение, а МОЛЧАЛИВОЕ его изменение: диффу теста
+ * приходится объяснять, почему купол стал жить втрое дольше.
+ */
+describe('числа способностей: ретюн виден в диффе', () => {
+  const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
+  const ability = hero.components.AbilityConfig!;
+  const cooldowns = hero.components.Cooldowns!;
+
+  it('перезарядки: каст 1.5 с, купол 5 с, захват 2 с', () => {
+    expect(cooldowns.castMax).toBe(CAST_COOLDOWN);
+    expect(cooldowns.slowDomeMax).toBe(DOME_COOLDOWN);
+    expect(cooldowns.captureMax).toBe(CAPTURE_COOLDOWN);
+  });
+
+  it('длительности: купол 3 с, окно броска 2 с', () => {
+    expect(ability.domeTicks).toBe(DOME_TICKS);
+    // Тик захвата тратит первый тик удержания — окно броска ровно на единицу
+    // короче (`HeldPin` идёт в том же тике, что и захват).
+    expect(ability.holdTicks).toBe(HOLD_TICKS);
+    expect(THROW_WINDOW_TICKS).toBe(120);
+  });
+
+  it('заряд: 1 с до двойного размера, 300 мс передержки, урон 100/250', () => {
+    expect(ability.chargeTicks).toBe(CHARGE_TICKS);
+    expect(ability.chargeGraceTicks).toBe(CHARGE_GRACE_TICKS);
+    expect(ability.chargeMaxScale).toBe(CHARGE_MAX_SCALE);
+    expect(ability.chargeHeavyScale).toBe(CHARGE_HEAVY_SCALE);
+    expect(ability.hitDamage).toBe(HIT_DAMAGE);
+    expect(ability.overchargeDamage).toBe(OVERCHARGE_DAMAGE);
+    expect(ability.overchargeRadius).toBe(OVERCHARGE_RADIUS);
+    // Урон на максимуме — КВАДРАТ множителя размера: вдвое больше шар бьёт
+    // вчетверо сильнее. Формула живёт в `ChargeRelease`, здесь — её результат.
+    expect(HIT_DAMAGE * (CHARGE_MAX_SCALE / FIXED_ONE) ** 2).toBe(400);
+  });
+
+  it('коллайдер снаряда — ровно половина героического, и манифест это зеркалит', () => {
+    const fireball = SCENE.prefabs!.find((prefab) => prefab.name === 'Fireball')!;
+    const collider = fireball.components.Collider!;
+    expect(collider.radius).toBe(FIREBALL_RADIUS);
+    expect(FIREBALL_RADIUS).toBe(Math.floor(HERO_RADIUS / 2)); // 19661 нечётен — вниз
+    expect(collider.halfX).toBe(FIREBALL_RADIUS);
+    expect(collider.halfY).toBe(FIREBALL_RADIUS);
+    // Оболочка эффекта числами симуляции не питается (REND-1) — совпадение
+    // размеров держится только этим зеркалом.
+    expect(MANIFEST.effects.byKind.Fireball!.radius).toBeCloseTo(FIREBALL_RADIUS / FIXED_ONE, 3);
+    // Тяжёлый снаряд — тот же коллайдер: крупнее он только на картинке.
+    const heavy = SCENE.prefabs!.find((prefab) => prefab.name === 'HeavyFireball')!;
+    expect(heavy.components.Collider).toEqual(collider);
+    expect(heavy.tags).toEqual(['HeavyFireball', 'Fireball']);
+  });
+});
+
+describe('фаербол: урон по герою, препятствия и пол', () => {
+  it('попадание по чужому герою снимает 100 hp и уносит снаряд', () => {
+    const a = arena(8);
+    const p2 = a.heroes[1]!;
+    pressA(a, CAST); // быстрый тап — обычный шар
+    const shot = fireballs(a.state)[0]!;
+    expect(projectile(a.state, shot, 'damage')).toBe(HIT_DAMAGE);
+    expect(projectile(a.state, shot, 'scale')).toBe(FIXED_ONE);
+
+    for (let i = 0; i < 60 && fireballs(a.state).length > 0; i++) a.step(NEUTRAL);
+    expect(hp(a.state, p2)).toBe(1000 - HIT_DAMAGE);
+    // Снаряд израсходован попаданием, а не долетел до конца жизни.
+    expect(fireballs(a.state)).toHaveLength(0);
+    // Стрелок цел: свой снаряд владельца не задевает (`Owner.slot`).
+    expect(hp(a.state, a.heroes[0]!)).toBe(1000);
+  });
+
+  it('снаряд взрывается об обрыв плато и дальше не летит', () => {
+    // Герой под южной кромкой северо-западного плато (уровень 2, ряды 11–18,
+    // колонки 11–18): снаряд на север упирается в обрыв на y = 19.
+    const a = ffa([[14, 22.5]]);
+    const AIM_NORTH = 0xc000; // −y: cos = 0, sin = −1
+    a.step([{ buttons: CAST, aimDir: AIM_NORTH }]);
+    a.step([{ aimDir: AIM_NORTH }]);
+    const shot = fireballs(a.state)[0]!;
+    const life = coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks');
+    expect(life).toBeGreaterThan(0);
+
+    let exploded = false;
+    let stopY = 0;
+    for (let i = 0; i < 12 && fireballs(a.state).length > 0; i++) {
+      stopY = coreWorld.getField(a.state.world, shot, 'Position', 'y');
+      exploded = a.step().includes('FireballExploded');
+      if (exploded) break;
+    }
+    expect(exploded).toBe(true);
+    expect(fireballs(a.state)).toHaveLength(0);
+    // Взрыв пришёлся на обрыв, а не на конец жизни: до него было ещё далеко.
+    expect(stopY).toBeGreaterThan(19 * FIXED_ONE);
+    expect(stopY).toBeLessThan(20 * FIXED_ONE);
+  });
+
+  it('долетевший снаряд больше НЕ выбивает пол под собой', () => {
+    // Пустая линия на восток: снаряд никого не задевает и умирает от старости.
+    const a = ffa([[6, 24.5]]);
+    const terrain = a.sim.terrain!;
+    a.step([{ buttons: CAST }]);
+    a.step();
+    const shot = fireballs(a.state)[0]!;
+    let at = { x: 0, y: 0 };
+    let exploded = false;
+    for (let i = 0; i < FIREBALL_LIFETIME_TICKS + 4 && !exploded; i++) {
+      at = {
+        x: coreWorld.getField(a.state.world, shot, 'Position', 'x'),
+        y: coreWorld.getField(a.state.world, shot, 'Position', 'y'),
+      };
+      expect(terrain.hasFloorAt(at)).toBe(true);
+      exploded = a.step().includes('FireballExploded');
+    }
+    expect(exploded).toBe(true);
+    expect(fireballs(a.state)).toHaveLength(0);
+    // Тот самый `carveFloor`, который раньше делал `FireballImpact`: пола под
+    // точкой взрыва он больше не снимает, и шаг туда не смертелен.
+    expect(terrain.hasFloorAt(at)).toBe(true);
+  });
+});
+
+describe('заряд каста: рост, выстрел и передержка', () => {
+  /** Урон и размер снаряда, выпущенного после `held` тиков удержания. */
+  function shotAfter(held: number): { damage: number; scale: number; heavy: boolean } {
+    const a = arena(8);
+    chargeA(a, held);
+    const shot = fireballs(a.state)[0]!;
+    expect(shot).toBeDefined();
+    return {
+      damage: projectile(a.state, shot, 'damage'),
+      scale: projectile(a.state, shot, 'scale'),
+      heavy: coreWorld.hasTag(a.state.world, shot, 'HeavyFireball'),
+    };
+  }
+
+  it('размер и урон растут по заряду: 0 → 100, половина → 225, максимум → 400', () => {
+    // Тик нажатия окном заряда не считается: самый быстрый тап (отпускание на
+    // следующем тике) обязан дать ОБЫЧНЫЙ шар, а не «чуть заряженный».
+    expect(shotAfter(0)).toEqual({ damage: HIT_DAMAGE, scale: FIXED_ONE, heavy: false });
+    // Половина заряда — полуторный размер и ровно его квадрат в уроне.
+    expect(shotAfter(CHARGE_TICKS / 2)).toEqual({
+      damage: 225,
+      scale: CHARGE_HEAVY_SCALE,
+      heavy: true,
+    });
+    expect(shotAfter(CHARGE_TICKS)).toEqual({
+      damage: 400,
+      scale: CHARGE_MAX_SCALE,
+      heavy: true,
+    });
+    // Дальше максимума размер не растёт — растёт только риск передержки.
+    expect(shotAfter(CHARGE_TICKS + CHARGE_GRACE_TICKS - 1).damage).toBe(400);
+  });
+
+  it('выстрел ставит кулдаун каста, и на нём заряд не начинается', () => {
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    chargeA(a, 0);
+    // Кулдаун ставится в тике выстрела, а убавляет его `CooldownTick` (order 10)
+    // со следующего — здесь он ещё полный.
+    expect(coreWorld.getField(a.state.world, p1, 'Cooldowns', 'cast')).toBe(CAST_COOLDOWN);
+    a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(false);
+    expect(fireballs(a.state)).toHaveLength(1);
+
+    for (let i = 0; i < CAST_COOLDOWN; i++) a.step(NEUTRAL);
+    expect(coreWorld.getField(a.state.world, p1, 'Cooldowns', 'cast')).toBe(0);
+    a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(true);
+  });
+
+  it('передержка на 300 мс сверх максимума рвёт заряд в самом кастере', () => {
+    // Сосед стоит внутри радиуса взрыва (3 клетки), но в стороне от прицела:
+    // взрыв площадной и целится не прицелом, а расстоянием.
+    const a = ffa([24, [26, 24.5]]);
+    const caster = a.heroes[0]!;
+    const neighbour = a.heroes[1]!;
+    let exploded: readonly string[] = [];
+    let ticks = 0;
+    while (ticks < 200 && !exploded.includes('ChargeExploded')) {
+      expect(hp(a.state, caster)).toBe(1000);
+      exploded = a.step([{ buttons: CAST }]);
+      ticks += 1;
+    }
+    expect(exploded).toContain('ChargeExploded');
+    // Заряд считается тиками ПОСЛЕ тика нажатия, и `ChargeTick` (order 29)
+    // прибавляет свой тик до проверки (order 35) — отсюда две служебные
+    // единицы. Сам порог — ровно 78 тиков заряда: максимум плюс 300 мс.
+    expect(ticks - 2).toBe(CHARGE_TICKS + CHARGE_GRACE_TICKS);
+    // Урон достаётся и кастеру: свои промахи стоят ровно столько же.
+    expect(hp(a.state, caster)).toBe(1000 - OVERCHARGE_DAMAGE);
+    expect(hp(a.state, neighbour)).toBe(1000 - OVERCHARGE_DAMAGE);
+    // Кровь на попадание — то же событие, что у прямого попадания снарядом.
+    expect(exploded).toContain('HeroHit');
+    // Заряд израсходован, снаряда не родилось, кулдаун списан.
+    expect(coreWorld.hasComponent(a.state.world, caster, 'Charging')).toBe(false);
+    expect(coreWorld.hasComponent(a.state.world, caster, 'ActionLock')).toBe(false);
+    expect(fireballs(a.state)).toHaveLength(0);
+    expect(coreWorld.getField(a.state.world, caster, 'Cooldowns', 'cast')).toBe(CAST_COOLDOWN);
+  });
+
+  it('вне радиуса передержка не задевает никого', () => {
+    const a = ffa([24, [28, 24.5]]);
+    const far = a.heroes[1]!;
+    for (let i = 0; i < CHARGE_TICKS + CHARGE_GRACE_TICKS + 2; i++) a.step([{ buttons: CAST }]);
+    expect(hp(a.state, a.heroes[0]!)).toBe(1000 - OVERCHARGE_DAMAGE);
+    expect(hp(a.state, far)).toBe(1000);
+  });
+
+  it('во время заряда манёвры заперты, а ходьба свободна (LOC-7)', () => {
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    a.step({ buttons: CAST });
+    expect(coreWorld.getField(a.state.world, p1, 'ActionLock', 'mask')).toBe(1);
+
+    // Фронт уклона С НАПРАВЛЕНИЕМ (без него манёвр игнорируется и без лока).
+    a.step({ buttons: CAST | DODGE, moveX: FIXED_ONE });
+    expect(coreWorld.getField(a.state.world, p1, 'LocomotionState', 'state')).toBe(0);
+    a.step({ buttons: CAST, moveX: FIXED_ONE });
+    a.step({ buttons: CAST | JUMP, moveX: FIXED_ONE });
+    expect(coreWorld.getField(a.state.world, p1, 'LocomotionState', 'state')).toBe(0);
+    // Ходьба при этом жива — лок селективный, а не «стой и заряжай».
+    expect(coreWorld.getField(a.state.world, p1, 'Velocity', 'x')).toBeGreaterThan(0);
+    // Отпустил — лок снят вместе с зарядом.
+    a.step({ moveX: FIXED_ONE });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'ActionLock')).toBe(false);
+  });
+
+  it('во время заряда захват не срабатывает, а с пойманным снарядом не начинается заряд', () => {
+    const a = arena(8);
+    pressA(a, CAST);
+    const shot = fireballs(a.state)[0]!;
+    const p2 = a.heroes[1]!;
+    for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
+      a.step(NEUTRAL);
+    }
+
+    // p2 держит ЛКМ (заряд) и одновременно пробует поймать: захват заперт.
+    a.step(NEUTRAL, { buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Charging')).toBe(true);
+    a.step(NEUTRAL, { buttons: CAST | CAPTURE, aimDir: AIM_WEST });
+    a.step(NEUTRAL, { buttons: CAST, aimDir: AIM_WEST });
+    expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(false);
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
+    // Кулдаун захвата не списан: `CaptureRelease` до своей ветки не дошёл.
+    expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'capture')).toBe(0);
+  });
+
+  it('с пойманным снарядом в руках заряд не начинается — ЛКМ это бросок', () => {
+    const a = arena(8);
+    pressA(a, CAST);
+    const shot = fireballs(a.state)[0]!;
+    const p2 = a.heroes[1]!;
+    for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
+      a.step(NEUTRAL);
+    }
+    a.step(NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST });
+    a.step(NEUTRAL, { aimDir: AIM_WEST });
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(true);
+
+    a.step(NEUTRAL, { buttons: CAST, aimDir: AIM_WEST });
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Charging')).toBe(false);
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
+    expect(fireballs(a.state)).toHaveLength(1);
+  });
+
+  it('накопленный урон переживает захват и переброс', () => {
+    const a = arena(16);
+    const p1 = a.heroes[0]!;
+    const p2 = a.heroes[1]!;
+    chargeA(a, CHARGE_TICKS);
+    const shot = fireballs(a.state)[0]!;
+    expect(projectile(a.state, shot, 'damage')).toBe(400);
+
+    for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
+      a.step(NEUTRAL);
+    }
+    a.step(NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST });
+    a.step(NEUTRAL, { aimDir: AIM_WEST });
+    expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
+    // Захват сохраняет заряд: держать в руках 400 — не то же самое, что 100.
+    expect(projectile(a.state, shot, 'damage')).toBe(400);
+
+    // Переброс на запад: владельцем становится бросивший.
+    a.step(NEUTRAL, { buttons: CAST, aimDir: AIM_WEST });
+    expect(coreWorld.getField(a.state.world, shot, 'Owner', 'slot')).toBe(1);
+    expect(projectile(a.state, shot, 'damage')).toBe(400);
+
+    for (let i = 0; i < 60 && fireballs(a.state).length > 0; i++) a.step(NEUTRAL);
+    // Прилетело обратно в стрелка — его же зарядом.
+    expect(hp(a.state, p1)).toBe(1000 - 400);
+    // А бросивший цел: снаряд после переброса принадлежит ЕМУ.
+    expect(hp(a.state, p2)).toBe(1000);
   });
 });
