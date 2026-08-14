@@ -8,7 +8,7 @@
     "**/dist/**",
     "**/test/**",
     "**/*.test.ts",
-    "**/demo/**",
+    "game/demo-ts/app/**",
     "content/**",
     "openspec/**",
     "engine/schemas/**",

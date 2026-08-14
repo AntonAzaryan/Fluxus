@@ -27,7 +27,7 @@ import {
   type Simulation,
 } from '@game-mvp/core';
 import { buildMatchWorld } from '@game-mvp/net';
-import { ACTION_BITS, FIREBALL_LIFETIME_TICKS } from '../demo/sim.js';
+import { ACTION_BITS, FIREBALL_LIFETIME_TICKS } from '../app/sim.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 import manifestJson from '../../../content/visuals/manifest.json';

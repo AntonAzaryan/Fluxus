@@ -39,7 +39,7 @@ describe('профили приложений репозитория', () => {
   it('игра: тот же контейнер, бандл демо, дерево только на чтение и пустой мост', async () => {
     const profile = await loadAppProfile(join(PACKAGE, 'apps/game.app.json'));
     expect(profile.id).toBe('game');
-    expect(profile.bundle).toBe(join(REPO, 'engine/client-ts/demo/dist-desktop'));
+    expect(profile.bundle).toBe(join(REPO, 'game/demo-ts/app/dist-desktop'));
     // DSK-5: «профиль игрового клиента SHALL ограничиваться чтением — записи в
     // дерево контента у игры MUST NOT быть». Здесь сильнее: моста нет вовсе,
     // ассеты приезжают раздачей (DSK-4).

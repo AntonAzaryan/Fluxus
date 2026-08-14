@@ -1,7 +1,7 @@
 {
   "id": "game",
   "title": "Fluxus",
-  "bundle": "../../../engine/client-ts/demo/dist-desktop",
+  "bundle": "../../../game/demo-ts/app/dist-desktop",
   "entry": "index.html",
   "roots": [
     {

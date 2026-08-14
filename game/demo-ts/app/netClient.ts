@@ -30,8 +30,7 @@ import {
   type ClientCloseReason,
   type Transport,
 } from '@game-mvp/net';
-import { NetworkShell } from '../src/networkShell.js';
-import type { ShellPort } from '../src/protocol.js';
+import { NetworkShell, type ShellPort } from '@game-mvp/client';
 import { createDemoExtractor } from './extractor.js';
 import {
   DEMO_MATCH,

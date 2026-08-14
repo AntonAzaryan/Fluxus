@@ -12,7 +12,7 @@
  * изображает провал контейнера:
  *
  *   npm run build -w @game-mvp/editor-ui      # бандл редактора
- *   npm run demo:build -w @game-mvp/client    # бандл демо игры
+ *   npm run demo:build -w @game-mvp/demo      # бандл демо игры
  *   npm install                               # с бинарём Electron
  *
  * Запуск: `npm run smoke -w @game-mvp/desktop-shell` (или `-- editor`, `-- game`).
