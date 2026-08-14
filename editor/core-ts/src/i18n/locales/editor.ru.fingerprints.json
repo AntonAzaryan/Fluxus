@@ -422,6 +422,14 @@
       "source": "9249a416",
       "translated": "c077d1ba"
     },
+    "schema.scenario.locomotion.lockComponent": {
+      "source": "1ab29f04",
+      "translated": "1f8b45f5"
+    },
+    "schema.scenario.locomotion.maneuverLockBit": {
+      "source": "502fd7b5",
+      "translated": "86a4f16d"
+    },
     "schema.scenario.locomotion.name": {
       "source": "aa4386a3",
       "translated": "5bc75427"

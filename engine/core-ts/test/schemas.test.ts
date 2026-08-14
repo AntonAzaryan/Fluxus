@@ -11,6 +11,7 @@ import {
   TERRAIN_CELL_KINDS,
   TERRAIN_LEVEL_MAX,
 } from '../src/systems/terrain.js';
+import type { LocomotionOptions } from '../src/systems/locomotion.js';
 
 const SCHEMA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'schemas');
 
@@ -59,6 +60,33 @@ describe('engine/schemas (SER-5)', () => {
       expect([char, levels.test(char)]).toEqual([char, levelChars.has(char)]);
       expect([char, flags.test(char)]).toEqual([char, flagChars.has(char)]);
     }
+  });
+
+  /**
+   * SER-5: схема MUST NOT быть строже загрузчика. Блок `locomotion` закрыт
+   * `additionalProperties: false`, поэтому опция системы, в нём не описанная,
+   * отвергалась бы схемой при живом ядре (LOC-1, LOC-7).
+   */
+  it('схема сценария описывает ровно опции локомоушена (LOC-1, LOC-7)', () => {
+    // `Required<>` держит список полным: новая опция системы не пройдёт
+    // typecheck, пока её не впишут сюда, а тест — пока её не опишет схема.
+    const options: Required<LocomotionOptions> = {
+      name: 'Locomotion',
+      inputComponent: 'Input',
+      velocityComponent: 'Velocity',
+      configComponent: 'Locomotion',
+      stateComponent: 'LocomotionState',
+      colliderComponent: 'Collider',
+      dodgeButton: 1,
+      jumpButton: 2,
+      lockComponent: 'ActionLock',
+      maneuverLockBit: 0,
+    };
+    const doc = schemaFiles['scenario.schema.json'] as {
+      properties: { locomotion: { properties: Record<string, unknown> } };
+    };
+
+    expect(Object.keys(doc.properties.locomotion.properties).sort()).toEqual(Object.keys(options).sort());
   });
 
   it('схема системы перечисляет все действия и операторы ядра', () => {
