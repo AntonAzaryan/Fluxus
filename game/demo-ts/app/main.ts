@@ -890,7 +890,15 @@ function frame(now: number): void {
     const dtSec = dt / 1000;
     const logical = rig.update(camInput, dtSec, target);
     resetCameraInput(camInput);
-    applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, dtSec));
+    // Эффекты камеры (тряска, покачивание) — часть картинки МИРА, а не главного
+    // потока: стоящий мир с трясущейся камерой показывает движение, которого в
+    // симуляции нет (REND-25, тот же довод, что у клипов). Собственный гейт
+    // заморозки у `EffectStack` есть, но сюда стек ведёт демо своим циклом и
+    // своим положительным dt — гейт остаётся недостижимым, если не обнулить
+    // время здесь. Сама же камера (`rig.update`) продолжает слушаться игрока:
+    // осмотреться в замороженном мире — ровно то, ради чего перемотку и смотрят.
+    const worldDt = (remote?.view?.mode ?? 'Running') === 'Running' ? dtSec : 0;
+    applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, worldDt));
   }
 
   remote?.frame(now);

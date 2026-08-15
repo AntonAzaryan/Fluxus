@@ -17,7 +17,7 @@ import {
   type SceneDef,
 } from '@game-mvp/core';
 import { ACTION_BITS, PLAYER_ID, TICK_SECONDS, createDemoSimulation } from './sim.js';
-import { DEMO_REWIND } from './match.js';
+import { DEMO_REWIND, DEMO_SCRUB_EVERY } from './match.js';
 import { createDemoExtractor } from './extractor.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 
@@ -65,8 +65,15 @@ const shell = new WorkerShell({
   history,
   // Орган ведения скраба — тот же бит действия, которым ульта кастуется
   // (`ACTION_BITS.rewind`), и тот же номер, что у матча (`rewind.holdButton`).
+  //
+  // Каденс шага выводится из документа матча, а не берётся умолчанием: сервер
+  // делает шаг раз в ЦИКЛ РАССЫЛКИ, то есть каждые `tickRate / snapshotRate`
+  // тиков (REW-13), и совпадение этой величины с умолчанием оболочки — совпадение
+  // чисел, а не правило. Разойдись они — ульта отматывала бы на разную глубину
+  // за одно и то же удержание в зависимости от того, кто произвёл тик (SHELL-8).
   scrub: {
     button: ACTION_BITS.rewind,
+    every: DEMO_SCRUB_EVERY,
     ...(DEMO_REWIND?.step !== undefined ? { step: DEMO_REWIND.step } : {}),
     ...(DEMO_REWIND?.holdTimeoutTicks !== undefined
       ? { timeoutTicks: DEMO_REWIND.holdTimeoutTicks }

@@ -30,6 +30,7 @@ import { buildMatchWorld, REWIND_REQUEST_EVENT } from '@game-mvp/net';
 import { ViewBuffer } from '@game-mvp/render';
 import { ACTION_BITS, FIREBALL_LIFETIME_TICKS, TICK_SECONDS, stateBit } from '../app/sim.js';
 import { createDemoExtractor } from '../app/extractor.js';
+import { DEMO_SCRUB_EVERY } from '../app/match.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 import manifestJson from '../../../content/visuals/manifest.json';
@@ -49,11 +50,14 @@ const MATCH = matchJson as unknown as {
   readonly seed: number;
   readonly players: readonly string[];
   readonly locomotion: Record<string, unknown>;
+  readonly tickRate?: number;
+  readonly snapshotRate?: number;
   readonly rewind?: {
     readonly interval: number;
     readonly capacity: number;
     readonly exempt?: readonly { readonly component: string }[];
     readonly holdButton?: number;
+    readonly step?: number;
   };
 };
 
@@ -2213,5 +2217,20 @@ describe('ульта отката: политика в сцене (RewindCast)',
     // Буфер истории обязан покрывать глубину автостопа: 30 × (15 − 1) = 420.
     const depth = (MATCH.rewind!.interval) * (MATCH.rewind!.capacity - 1);
     expect(depth).toBeGreaterThanOrEqual(REWIND_DEPTH);
+  });
+
+  it('темп скраба локальной сборки — темп цикла рассылки матча (SHELL-8)', () => {
+    // Сервер делает шаг ведения точки раз в ЦИКЛ РАССЫЛКИ (REW-13), локальная
+    // оболочка — раз в `scrub.every` тиков. Величина одна и та же, и выводиться
+    // она обязана из документа матча: совпади они умолчаниями — ульта отматывала
+    // бы на разную глубину за одно и то же удержание в зависимости от того, кто
+    // произвёл тик.
+    const cycleTicks = Math.max(
+      1,
+      Math.round((MATCH.tickRate ?? 60) / (MATCH.snapshotRate ?? 30)),
+    );
+    expect(DEMO_SCRUB_EVERY).toBe(cycleTicks);
+    // И шаг в тиках — тот же, что у сервера: он приезжает из того же документа.
+    expect(MATCH.rewind?.step).toBeGreaterThan(0);
   });
 });

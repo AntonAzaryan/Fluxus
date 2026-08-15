@@ -54,6 +54,20 @@ export const DEMO_SNAPSHOT_RATE = doc.snapshotRate ?? 30;
  */
 export const DEMO_REWIND: MatchRewindOptions | undefined = doc.rewind;
 
+/**
+ * Тиков между шагами ведения точки перемотки (REW-13). Сервер делает шаг раз в
+ * ЦИКЛ РАССЫЛКИ, то есть каждые `tickRate / snapshotRate` тиков; локальная
+ * оболочка своей рассылки не имеет и берёт ту же величину отсюда.
+ *
+ * Выводится, а не берётся умолчанием оболочки: совпадение чисел — совпадение, а
+ * не правило, и разойдись они, ульта отматывала бы на разную глубину за одно и
+ * то же удержание в зависимости от того, кто произвёл тик (SHELL-8).
+ */
+export const DEMO_SCRUB_EVERY: number = Math.max(
+  1,
+  Math.round(DEMO_TICK_RATE / DEMO_SNAPSHOT_RATE),
+);
+
 export function demoScene(): SceneDef {
   return sceneJson as unknown as SceneDef;
 }
