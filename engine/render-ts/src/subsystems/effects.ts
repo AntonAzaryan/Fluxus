@@ -204,7 +204,11 @@ export class EffectsSubsystem implements RenderSubsystem {
 
   updateFrame(dt: number, alpha: number): void {
     this.poseShells(alpha);
-    this.advanceFlashes(dt);
+    // Вспышка необратима: отматывать её назад нечем, а играть вперёд в
+    // стоящем мире REND-25 запрещает — вне `Running` она замирает. Терять при
+    // этом нечего: вход в перемотку гасит проигрываемое (`syncTick`), а новых
+    // событий вне живых тиков не бывает (REND-4).
+    this.advanceFlashes(dt > 0 ? dt : 0);
   }
 
   /**

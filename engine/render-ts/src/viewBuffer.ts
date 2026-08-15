@@ -10,7 +10,7 @@
  * Мира здесь нет и быть не может: всё, что нужно кадру, обязано приехать
  * в плоской форме (SHELL-1, SHELL-2).
  */
-import { LOCOMOTION_NORMAL, type EntityId } from '@game-mvp/core';
+import { LOCOMOTION_NORMAL, type EntityId, type WorldMode } from '@game-mvp/core';
 import {
   ENTITY_LEVEL_OVERRIDE,
   ENTITY_MOVING,
@@ -21,6 +21,23 @@ import type { EntityView, TickView } from './types.js';
 
 /** Скачок позиции за тик больше этого — телепорт: интерполяция «проехала бы» пол-арены. */
 const DEFAULT_SNAP_DISTANCE = 2;
+
+/**
+ * Ход часов презентации по режиму доставленного мира (REND-25): вперёд в
+ * `Running`, стоп в `Paused`, назад в `Rewinding`. Своего «времени перемотки»
+ * рендер не заводит — направление есть чистая функция режима, а движение назад
+ * приносят сами восстановленные состояния.
+ */
+function clockDirection(mode: WorldMode): number {
+  switch (mode) {
+    case 'Running':
+      return 1;
+    case 'Rewinding':
+      return -1;
+    default:
+      return 0;
+  }
+}
 
 const EMPTY_CELLS: readonly number[] = [];
 
@@ -72,7 +89,13 @@ export interface ViewBufferConfig {
 
 /** Кадровые величины для `updateFrame` подсистем (REND-2). */
 export interface FrameTiming {
-  /** Секунды с прошлого кадра, кламп [0, 0.25]. */
+  /**
+   * Часы презентации: секунды с прошлого кадра СО ЗНАКОМ хода мира (REND-25) —
+   * `+|dt|` в `Running`, ноль в `Paused`, `−|dt|` в `Rewinding`. Модуль
+   * клампится в [0, 0.25]. Знак — направление анимационного времени; величины,
+   * которые сходятся к цели кадр за кадром (доворот, наклон), направления не
+   * имеют и берут модуль.
+   */
   readonly dt: number;
   /** Доля тика [0..1] между двумя последними доставленными тиками. */
   readonly alpha: number;
@@ -117,6 +140,12 @@ export class ViewBuffer {
    * Применяет доставленный тик. При conflation (SHELL-4) между прошлым и
    * текущим применением могли пройти невиденные тики: prev/curr скользит по
    * доставленным, телепорт-порог сам переводит большой разрыв в snap.
+   *
+   * Направления у скольжения нет: восстановленные состояния скраба приезжают с
+   * УБЫВАЮЩИМИ номерами тиков, и та же пара prev→curr даёт обратный ход
+   * обычной интерполяцией (REND-2). Разрывом перемотка становится только на
+   * входе и выходе — их приносит `snapAll` продюсера (смена режима, эпоха,
+   * `isReplay`), а не номер тика.
    */
   apply(ext: ExtractedTick): void {
     const view = this.view;
@@ -144,13 +173,20 @@ export class ViewBuffer {
    * (REND-2). Альфа — по часам ЭТОГО потока от момента `apply` (SHELL-7);
    * null — ни одного тика ещё не доставлено. `now` — миллисекунды тех же
    * часов, что `config.clock`.
+   *
+   * Ход часов презентации задаёт режим ПОСЛЕДНЕГО доставленного состояния
+   * (REND-25): пока мир стоит или идёт назад, время подсистем вперёд не
+   * продвигается. Реальный интервал между кадрами при этом не теряется — он
+   * уезжает модулем, и обратный ход идёт с той же скоростью, что прямой.
    */
   frame(now: number = this.clock()): FrameTiming | null {
     if (!this.hasTick) return null;
     const dtMs = this.lastFrameAtMs === null ? 0 : now - this.lastFrameAtMs;
     this.lastFrameAtMs = now;
-    // Кламп dt: после паузы вкладки первый кадр не должен «доигрывать» минуты.
-    const dt = Math.min(Math.max(dtMs / 1000, 0), 0.25);
+    // Кламп МОДУЛЯ: после паузы вкладки первый кадр не должен «доигрывать»
+    // минуты; знак кламп не трогает — он от режима, а не от часов.
+    const magnitude = Math.min(Math.max(dtMs / 1000, 0), 0.25);
+    const dt = magnitude * clockDirection(this.view.mode);
     const alpha =
       this.tickSeconds <= 0
         ? 1

@@ -105,6 +105,19 @@ describe('EffectStack и эффекты (CAM-6)', () => {
     for (let i = 0; i < 10; i++) expect(isZero(offsetOf(stack))).toBe(true);
   });
 
+  it('обратный ход часов презентации эффекты замораживает, а не накачивает (REND-25)', () => {
+    const stack = new EffectStack();
+    const shake = new TraumaShake({ decay: 2 });
+    stack.add(shake);
+    shake.trigger(1);
+    const started = offsetOf(stack);
+    // Отрицательный шаг вычитал бы отрицательное затухание — тряска росла бы
+    // от перемотки. Кадр не-`Running` мира эффект не двигает вовсе.
+    for (let i = 0; i < 20; i++) offsetOf(stack, -1 / 60);
+    for (let i = 0; i < 20; i++) offsetOf(stack, 0);
+    expect(offsetOf(stack, 0)).toEqual(started);
+  });
+
   it('sway активен, пока активен; конверт гасит вклад в ноль после снятия', () => {
     const stack = new EffectStack();
     const sway = new SwayEffect({ fadeSeconds: 0.1 });

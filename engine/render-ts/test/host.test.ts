@@ -1,7 +1,8 @@
 /**
  * RenderHost: интерполяционный буфер двух тиков, альфа, snap при isReplay,
- * телепорте и спавне (REND-1, REND-2), порядок подсистем (REND-8), зеркало
- * карты пола (REND-7) и направление каста из событий (REND-5).
+ * телепорте и спавне (REND-1, REND-2), ход часов презентации по режиму мира
+ * (REND-25) и скраб перемотки без телепортов (REND-2), порядок подсистем
+ * (REND-8), зеркало карты пола (REND-7) и направление каста из событий (REND-5).
  *
  * Прогоняется на настоящей мини-симуляции ядра: хост тестируется ровно тем
  * контрактом, которым его зовёт внешний слой — `dispatch(tick(...), [host])`.
@@ -16,14 +17,18 @@ import {
   initialState,
   loadScene,
   mathApi,
+  restoreSnapshot,
+  takeSnapshot,
   tick,
   worldInitSpawn,
   type EntityId,
   type Scene,
   type Simulation,
   type SimulationState,
+  type Snapshot,
   type System,
   type TickResult,
+  type WorldMode,
 } from '@game-mvp/core';
 import {
   RenderHost,
@@ -127,6 +132,27 @@ function replayResult(state: SimulationState): TickResult {
     tick: state.tick,
     mode: state.mode,
     isReplay: true,
+    events: state.events,
+    changes: { isEmpty: true, changedEntities: () => new Set<EntityId>() },
+  };
+}
+
+/**
+ * Доставка вне расписания — то, что рендер видит при паузе и перемотке
+ * (WSM-6, NET-11): живого тика за ней нет, режим и номер тика приходят от
+ * доставившей стороны, мир — тот, что она восстановила.
+ */
+function deliveredResult(
+  state: SimulationState,
+  at: number,
+  mode: WorldMode,
+  isReplay = false,
+): TickResult {
+  return {
+    state,
+    tick: at,
+    mode,
+    isReplay,
     events: state.events,
     changes: { isEmpty: true, changedEntities: () => new Set<EntityId>() },
   };
@@ -280,6 +306,103 @@ describe('RenderHost: snap при разрывах непрерывности (R
     expect(host.view.entities.has(runner)).toBe(true);
     dispatch(tick(sim, state), [host]);
     expect(host.view.entities.has(runner)).toBe(false);
+  });
+});
+
+describe('RenderHost: часы презентации следуют режиму мира (REND-25)', () => {
+  it('Running — вперёд, Paused — стоп, Rewinding — назад; модуль тот же', () => {
+    const { scene, sim } = makeScene();
+    spawnRunner(scene, 0.5, 0.5, 0.1, 0);
+    const state = initialState(scene.world, 7);
+    const { host, setNow } = makeHost(scene);
+
+    const dts: number[] = [];
+    host.register({
+      name: 'probe',
+      init: () => {},
+      syncTick: () => {},
+      updateFrame: (dt) => dts.push(dt),
+    });
+
+    setNow(0);
+    dispatch(tick(sim, state), [host]);
+    host.frame(); // первый кадр сессии: интервала ещё нет
+
+    setNow(16);
+    host.frame(); // живой мир — время идёт вперёд
+
+    // Мир замер: кадры идут дальше, состояние доставляется тем же тиком.
+    dispatch(deliveredResult(state, state.tick, 'Paused'), [host]);
+    setNow(32);
+    host.frame();
+
+    // Скраб: сервер отдаёт восстановленные состояния с убывающими тиками.
+    dispatch(deliveredResult(state, state.tick - 1, 'Rewinding'), [host]);
+    setNow(48);
+    host.frame();
+
+    dispatch(deliveredResult(state, state.tick, 'Running'), [host]);
+    setNow(64);
+    host.frame();
+
+    expect(dts[0]).toBe(0);
+    expect(dts[1]).toBeCloseTo(0.016, 6);
+    // Стоящий мир с идущими клипами показывал бы движение, которого нет.
+    expect(dts[2]).toBe(0);
+    // Обратный ход идёт с той же скоростью, что прямой: знак, а не другой темп.
+    expect(dts[3]).toBeCloseTo(-0.016, 6);
+    expect(Math.abs(dts[3]!)).toBeCloseTo(dts[4]!, 6);
+    expect(dts[4]).toBeCloseTo(0.016, 6);
+  });
+});
+
+describe('RenderHost: скраб перемотки без телепортов (REND-2)', () => {
+  it('вход и выход — snap, соседние восстановленные состояния интерполируются', () => {
+    const { scene, sim } = makeScene();
+    const runner = spawnRunner(scene, 0.5, 0.5, 0.1, 0);
+    const state = initialState(scene.world, 7);
+    const { host } = makeHost(scene);
+
+    const history: Snapshot[] = [];
+    for (let i = 0; i < 5; i++) {
+      dispatch(tick(sim, state), [host]);
+      history.push(takeSnapshot(state));
+    }
+    const view = host.view.entities.get(runner)!;
+    expect(view.snap).toBe(false);
+
+    // Вход в перемотку — смена режима: разрыв, буфер схлопнут (REND-2).
+    restoreSnapshot(state, history[3]!);
+    dispatch(deliveredResult(state, 4, 'Rewinding'), [host]);
+    expect(host.view.snapAll).toBe(true);
+    expect(view.snap).toBe(true);
+    expect(view.prevX).toBeCloseTo(view.currX, 6);
+
+    // Соседнее восстановленное состояние: разрыва нет — та же пара prev→curr,
+    // только едет она назад.
+    restoreSnapshot(state, history[2]!);
+    dispatch(deliveredResult(state, 3, 'Rewinding'), [host]);
+    expect(host.view.snapAll).toBe(false);
+    expect(view.snap).toBe(false);
+    expect(view.prevX).toBeCloseTo(0.9, 3);
+    expect(view.currX).toBeCloseTo(0.8, 3);
+    // Кадр посреди пары — между историческими позициями, а не в одной из них.
+    expect(view.prevX + (view.currX - view.prevX) * 0.5).toBeCloseTo(0.85, 3);
+
+    restoreSnapshot(state, history[1]!);
+    dispatch(deliveredResult(state, 2, 'Rewinding'), [host]);
+    expect(view.snap).toBe(false);
+    expect(view.prevX).toBeCloseTo(0.8, 3);
+    expect(view.currX).toBeCloseTo(0.7, 3);
+
+    // Реплейный проход остаётся разрывом и внутри перемотки.
+    dispatch(deliveredResult(state, 2, 'Rewinding', true), [host]);
+    expect(host.view.snapAll).toBe(true);
+
+    // Выход из перемотки — снова смена режима, снова snap.
+    dispatch(deliveredResult(state, 2, 'Paused'), [host]);
+    expect(host.view.snapAll).toBe(true);
+    expect(view.snap).toBe(true);
   });
 });
 

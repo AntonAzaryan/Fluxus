@@ -1,7 +1,8 @@
 /**
  * Анимационный контроллер (REND-4): выбор клипа по манифесту (состояние →
  * клип, событие → one-shot), кроссфейд, возврат в локомоцию, смерть с
- * фиксацией последнего кадра. Всё headless: микшеру WebGL не нужен.
+ * фиксацией последнего кадра, ход клипа по знаку часов презентации (REND-25).
+ * Всё headless: микшеру WebGL не нужен.
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
@@ -24,6 +25,16 @@ const CLIPS = [
   makeClip('Death', 0.8),
 ];
 
+/** Скелет с одной костью, микшер над ним и бэкенд детального яруса. */
+function makeBackend(clips: readonly THREE.AnimationClip[] = CLIPS) {
+  const root = new THREE.Group();
+  const bone = new THREE.Object3D();
+  bone.name = 'b0';
+  root.add(bone);
+  const mixer = new THREE.AnimationMixer(root);
+  return { backend: new MixerAnimationBackend(mixer, clips), mixer, bone };
+}
+
 function makeController(
   mapping: import('../src/index.js').AnimationMapping = {
     states: { idle: 'Stand', move: 'Walk' },
@@ -31,16 +42,12 @@ function makeController(
   },
   clips: readonly THREE.AnimationClip[] = CLIPS,
 ) {
-  const root = new THREE.Group();
-  const bone = new THREE.Object3D();
-  bone.name = 'b0';
-  root.add(bone);
-  const mixer = new THREE.AnimationMixer(root);
+  const { backend, mixer, bone } = makeBackend(clips);
   const warnings: string[] = [];
-  const controller = new AnimationController(new MixerAnimationBackend(mixer, clips), mapping, {
+  const controller = new AnimationController(backend, mapping, {
     warn: (message: string) => warnings.push(message),
   });
-  return { controller, mixer, warnings };
+  return { controller, mixer, bone, warnings };
 }
 
 /** Имя разрешённого клипа либо null — разрешение больше не `clip | null`. */
@@ -179,6 +186,91 @@ describe('AnimationController: one-shot по событиям (REND-4)', () => {
     controller.setState('idle');
     expect(controller.handleEvent('Collision')).toBe(false);
     expect(controller.currentClipName).toBe('Stand - 1');
+  });
+});
+
+describe('MixerAnimationBackend: ход клипа по знаку часов (REND-25)', () => {
+  /**
+   * Поза кости — то, что видно в кадре: трек фикстуры ведёт `b0.position.z`
+   * от нуля к единице ровно за длительность клипа, и по нему читается фаза.
+   */
+  it('нулевые часы замораживают позу, отрицательные отматывают клип назад', () => {
+    const { backend, bone } = makeBackend();
+    backend.playLoop(0, 0.15); // 'Stand - 1', длительность 1 с
+    // Первый шаг длиннее кроссфейда: дальше вес действия — единица, и поза
+    // читается фазой клипа, а не долей входа в него.
+    backend.update(0.3);
+    expect(bone.position.z).toBeCloseTo(0.3, 5);
+
+    // Мир замер (REND-25): кадры идут, фаза стоит.
+    backend.update(0);
+    backend.update(0);
+    expect(bone.position.z).toBeCloseTo(0.3, 5);
+
+    backend.update(-0.1);
+    expect(bone.position.z).toBeCloseTo(0.2, 5);
+
+    // Через начало клипа: зацикленный клип заворачивается на хвост, а не
+    // упирается в нулевой кадр.
+    backend.update(-0.3);
+    expect(bone.position.z).toBeCloseTo(0.9, 5);
+
+    // Возобновление: вперёд с текущей фазы, рывка анимационного времени нет.
+    backend.update(0.05);
+    expect(bone.position.z).toBeCloseTo(0.95, 5);
+  });
+
+  it('кроссфейд дренируется по модулю: обратный ход его доигрывает, а не вешает', () => {
+    const { backend, bone } = makeBackend();
+    backend.playLoop(0, 0.15); // 'Stand - 1'
+    backend.update(0.5);
+    expect(bone.position.z).toBeCloseTo(0.5, 5);
+
+    // Смена клипа заводит переход, и тут же начинается перемотка.
+    backend.playLoop(1, 0.15); // 'Walk Fast' с фазы 0
+    for (let i = 0; i < 12; i++) backend.update(-1 / 60); // 0.2 с > 0.15 с перехода
+
+    // Переход отыгран: позу целиком ведёт входящий клип, отмотанный к своему
+    // хвосту (0 − 0.2 → 0.8). Отматывайся конверт вместе с фазами, вес входящего
+    // клипа вернулся бы к нулю и в кадре остался бы уходящий.
+    expect(bone.position.z).toBeCloseTo(0.8, 3);
+  });
+});
+
+describe('AnimationController: one-shot при обратном ходе (REND-25)', () => {
+  it('активный one-shot отступает к своему началу и уступает клипу состояния', () => {
+    const { controller } = makeController();
+    controller.setState('move');
+    controller.handleEvent('CastFireball'); // 'Attack - 1', 0.5 с
+    controller.update(0.2);
+    expect(controller.currentClipName).toBe('Attack - 1');
+
+    controller.update(-0.1); // ещё внутри клипа — one-shot держится
+    expect(controller.currentClipName).toBe('Attack - 1');
+
+    controller.update(-0.2); // дошёл до начала — возврат в локомоцию
+    expect(controller.currentClipName).toBe('Walk Fast');
+  });
+
+  it('пауза one-shot не снимает: нулевые часы — не «клип доигран»', () => {
+    const { controller } = makeController();
+    controller.setState('move');
+    controller.handleEvent('CastFireball');
+    for (let i = 0; i < 10; i++) controller.update(0);
+    expect(controller.currentClipName).toBe('Attack - 1');
+  });
+
+  it('one-shot, доигранный до перемотки, обратным ходом не воскресает', () => {
+    const { controller } = makeController();
+    controller.setState('move');
+    controller.handleEvent('CastFireball');
+    controller.update(0.7); // атака доиграна, вернулись в локомоцию
+    expect(controller.currentClipName).toBe('Walk Fast');
+
+    // Принятое упрощение (design D5): «раз-финишить» клип микшеру нечем, а
+    // позы сущностей всё равно ведёт доставленное состояние (REND-4).
+    for (let i = 0; i < 30; i++) controller.update(-1 / 60);
+    expect(controller.currentClipName).toBe('Walk Fast');
   });
 });
 

@@ -272,7 +272,10 @@ export class ParticlesSubsystem implements RenderSubsystem {
     // Мировые матрицы эмиттеров — ДО симуляции: библиотека берёт позу эмиттера
     // из `matrixWorld`, а обновляет её сама только на первом кадре системы.
     this.group.updateMatrixWorld();
-    this.batchRenderer.update(dt);
+    // Симуляция частиц необратима — обратный ход часов презентации (REND-25)
+    // её ЗАМОРАЖИВАЕТ: отмотать эмиссию назад библиотеке нечем, а идти вперёд
+    // в стоящем мире значило бы показывать движение, которого в нём нет.
+    this.batchRenderer.update(dt > 0 ? dt : 0);
     this.collectShots();
     this.shieldBatches();
   }
