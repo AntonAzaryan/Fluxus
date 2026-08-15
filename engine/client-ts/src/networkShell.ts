@@ -41,7 +41,6 @@ import {
   type Serializer,
   type SimulationState,
   type TerrainGrid,
-  type Vec2,
 } from '@game-mvp/core';
 import {
   ClientHost,
@@ -52,6 +51,7 @@ import {
 } from '@game-mvp/net';
 import type { Extractor, RenderEvent } from '@game-mvp/render';
 import { ShellSender, type SenderOptions } from './sender.js';
+import { InputLatch, routeMainMessage } from './inputLatch.js';
 import { helloMessage, type ControlMessage, type MainToWorker, type ShellPort } from './protocol.js';
 
 /** Темп локального шага до `Welcome`: настоящий приезжает в pacing матча (NTR-7). */
@@ -143,10 +143,8 @@ export class NetworkShell {
   private readonly host: ClientHost;
   private readonly clock: () => number;
 
-  // Латч ввода между отправками: move — последний, buttons — OR (SHELL-6).
-  private move: Vec2 = { x: 0, y: 0 };
-  private aimDir = 0;
-  private buttons = 0;
+  /** Латч ввода между отправками — общий обоим режимам (`inputLatch.ts`, SHELL-6). */
+  private readonly input = new InputLatch();
 
   /** Пара `(эпоха, тик)` последнего извлечённого состояния (NTR-16). */
   private lastEpoch = 0;
@@ -343,30 +341,17 @@ export class NetworkShell {
     this.sender.flushEvents();
   }
 
-  /** Латч ввода на отправку: `undefined` не возвращается — кадр уходит каждый шаг. */
+  /**
+   * Съём латча на отправку: `undefined` не возвращается — кадр уходит каждый
+   * шаг. Правило съёма то же, что у локального режима, и по той же причине
+   * (`inputLatch.ts`): нажатие между отправками не должно потеряться.
+   */
   private takeInput(): InputSample {
-    const sample: InputSample = { move: this.move, aimDir: this.aimDir, buttons: this.buttons };
-    // Кнопки — фронты: латч очищается, move — состояние: остаётся. Правило то
-    // же, что у локального режима, и по той же причине: нажатие между отправками
-    // не должно потеряться.
-    this.buttons = 0;
-    return sample;
+    return this.input.take();
   }
 
   private onMessage(message: MainToWorker): void {
-    switch (message.t) {
-      case 'ret':
-        this.sender.ack(message.buffer);
-        return;
-      case 'input':
-        this.move = message.move;
-        this.buttons |= message.buttons;
-        if (message.buttons !== 0) this.aimDir = message.aimDir;
-        return;
-      case 'control':
-        this.onControl(message);
-        return;
-    }
+    routeMainMessage(message, this.sender, this.input, (control) => { this.onControl(control); });
   }
 
   /**
@@ -386,7 +371,7 @@ export class NetworkShell {
       this.unmapped++;
       return;
     }
-    this.buttons |= mask;
+    this.input.press(mask);
   }
 
   /**

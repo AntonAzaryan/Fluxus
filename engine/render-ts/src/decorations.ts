@@ -30,10 +30,14 @@
  * второго набора подсистемы. Спутать их подсистеме не на чем — наборы у неё
  * разные, — а наружу (picking REND-15, наложения REND-16) они выходят вместе с
  * признаком `decoration`.
+ *
+ * Сам механизм набора — общий с документным источником (`keyedInstanceSet.ts`):
+ * жизненный цикл инстанса нормирован один раз (REND-3), и реализация у него
+ * тоже одна. Своё у набора — поля, которые он пишет, и вход сцены.
  */
 import type { EntityId } from '@game-mvp/core';
-import { LOCOMOTION_NORMAL } from '@game-mvp/core';
 import type { EntityView } from './types.js';
+import { KeyedInstanceSet } from './keyedInstanceSet.js';
 import type { PresentationStage } from './stage.js';
 
 /**
@@ -70,12 +74,12 @@ export interface DecorationInstance {
 
 export class DecorationSet {
   private readonly stage: PresentationStage;
-  /** Инстансы набора — тот же контейнер, что видят подсистемы. */
-  private readonly entities = new Map<EntityId, EntityView>();
-  private readonly idByKey = new Map<string, EntityId>();
-  private readonly keyById = new Map<EntityId, string>();
-  private readonly seen = new Set<string>();
-  private nextId: EntityId = 1;
+  /** Инстансы набора и их сведение — общий механизм (REND-3). */
+  private readonly set = new KeyedInstanceSet<DecorationInstance>({
+    owner: 'DecorationSet',
+    requirement: 'REND-18',
+    write: (view, instance) => { writeDecoration(view, instance); },
+  });
 
   constructor(stage: PresentationStage) {
     this.stage = stage;
@@ -83,12 +87,12 @@ export class DecorationSet {
 
   /** Сколько decoration-инстансов в текущем наборе. */
   get size(): number {
-    return this.entities.size;
+    return this.set.size;
   }
 
   /** ID инстанса набора по ключу документа; undefined — ключа в наборе нет. */
   entityOf(key: string): EntityId | undefined {
-    return this.idByKey.get(key);
+    return this.set.entityOf(key);
   }
 
   /**
@@ -96,7 +100,7 @@ export class DecorationSet {
    * (ED-17) переводит попадание по изображению в запись парного документа.
    */
   keyOf(entity: EntityId): string | undefined {
-    return this.keyById.get(entity);
+    return this.set.keyOf(entity);
   }
 
   /**
@@ -105,101 +109,31 @@ export class DecorationSet {
    * правку, и результат виден не позже следующего кадра (ED-15).
    */
   apply(instances: Iterable<DecorationInstance>): void {
-    const seen = this.seen;
-    seen.clear();
-
-    for (const instance of instances) {
-      if (seen.has(instance.key)) {
-        throw new Error(`DecorationSet: ключ "${instance.key}" встречается в наборе дважды (REND-18)`);
-      }
-      seen.add(instance.key);
-
-      const id = this.idByKey.get(instance.key);
-      let view = id === undefined ? undefined : this.entities.get(id);
-      // Смена вида — другая модель и другая запись манифеста: пересоздание тут
-      // не «мигание объектом», а единственно верное поведение. Ключ при этом
-      // остаётся ключом того же размещённого.
-      if (view !== undefined && view.kind !== instance.kind) {
-        this.drop(instance.key);
-        view = undefined;
-      }
-      if (view === undefined) {
-        this.write(this.create(instance), instance);
-      } else {
-        view.spawned = false;
-        this.write(view, instance);
-      }
-    }
-
-    for (const key of this.idByKey.keys()) {
-      if (!seen.has(key)) this.drop(key);
-    }
-
-    this.stage.publishDecorations(this.entities);
+    this.set.apply(instances);
+    this.stage.publishDecorations(this.set.entities);
   }
 
   /** Пустой набор: все decoration-инстансы убираются штатным правилом REND-3. */
   clear(): void {
     this.apply([]);
   }
+}
 
-  private create(instance: DecorationInstance): EntityView {
-    const id = this.nextId++;
-    const view: EntityView = {
-      id,
-      kind: instance.kind,
-      prevX: instance.x,
-      prevY: instance.y,
-      currX: instance.x,
-      currY: instance.y,
-      // Уровень производен от позиции: сажает инстанс визуальная поверхность
-      // (REND-9, REND-10), а ступени уровня декорации взять неоткуда.
-      prevLevel: 0,
-      currLevel: 0,
-      snap: true,
-      spawned: true,
-      // Скорости у декорации нет: состояние анимации — покой (REND-4), и клипом
-      // служит клип состояния покоя записи манифеста (REND-18).
-      moving: false,
-      // Манёвров у декорации не бывает — отсюда же отсутствие дуги прыжка.
-      motion: LOCOMOTION_NORMAL,
-      prevMotion: LOCOMOTION_NORMAL,
-      prevMotionPhase: Number.NaN,
-      currMotionPhase: Number.NaN,
-      // Полёта у декорации не бывает — фазы нет (REND-12).
-      flightPhase: Number.NaN,
-      levelOverride: false,
-      facingYaw: 0,
-      // Цели атаки/каста нет — доворот костей к ней не проигрывается (REND-5).
-      aimYaw: null,
-      states: 0,
-    };
-    this.entities.set(id, view);
-    this.idByKey.set(instance.key, id);
-    this.keyById.set(id, instance.key);
-    return view;
-  }
-
-  /** Поля инстанса из набора; prev = curr — интерполировать нечего (REND-18). */
-  private write(view: EntityView, instance: DecorationInstance): void {
-    view.prevX = view.currX = instance.x;
-    view.prevY = view.currY = instance.y;
-    view.prevLevel = view.currLevel = 0;
-    view.facingYaw = instance.yaw ?? 0;
-    view.snap = true;
-    view.skin = instance.skin;
-    view.scale = instance.scale;
-    // Walkable-вклад поля (REND-9) ведёт подсистема моделей по этому полю:
-    // у неё запись манифеста и готовность модели, а идентичность инстанса
-    // при правке флага сохраняется — сведение выше её не пересоздало.
-    view.walkable = instance.walkable;
-  }
-
-  private drop(key: string): void {
-    const id = this.idByKey.get(key);
-    if (id === undefined) return;
-    this.idByKey.delete(key);
-    this.keyById.delete(id);
-    this.entities.delete(id);
-  }
+/**
+ * Поля инстанса из записи набора; prev = curr — интерполировать нечего
+ * (REND-18). Уровень пришпилен к нулю: ступени уровня декорации взять неоткуда,
+ * а сажает инстанс визуальная поверхность (REND-9, REND-10).
+ */
+function writeDecoration(view: EntityView, instance: DecorationInstance): void {
+  view.prevX = view.currX = instance.x;
+  view.prevY = view.currY = instance.y;
+  view.prevLevel = view.currLevel = 0;
+  view.facingYaw = instance.yaw ?? 0;
+  view.snap = true;
+  view.skin = instance.skin;
+  view.scale = instance.scale;
+  // Walkable-вклад поля (REND-9) ведёт подсистема моделей по этому полю:
+  // у неё запись манифеста и готовность модели, а идентичность инстанса
+  // при правке флага сохраняется — сведение выше её не пересоздало.
+  view.walkable = instance.walkable;
 }

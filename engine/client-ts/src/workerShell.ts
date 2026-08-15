@@ -29,10 +29,10 @@ import {
   type Simulation,
   type SimulationState,
   type TickObserver,
-  type Vec2,
 } from '@game-mvp/core';
 import type { Extractor } from '@game-mvp/render';
 import { ShellSender, type SenderOptions } from './sender.js';
+import { InputLatch, routeMainMessage } from './inputLatch.js';
 import { helloMessage, type ControlMessage, type MainToWorker, type ShellPort } from './protocol.js';
 
 /** Потолок навёрстывания за один проход таймера; дальше — пересинхронизация. */
@@ -71,10 +71,8 @@ export class WorkerShell {
   private readonly clock: () => number;
   private readonly tickMs: number;
 
-  // Латч ввода между тиками: move — последний, buttons — OR (SHELL-6).
-  private move: Vec2 = { x: 0, y: 0 };
-  private aimDir = 0;
-  private buttons = 0;
+  /** Латч ввода между тиками — общий обоим режимам (`inputLatch.ts`, SHELL-6). */
+  private readonly input = new InputLatch();
   private seq = 0;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -122,35 +120,22 @@ export class WorkerShell {
     dispatch(result, [this.observer, ...(this.config.observers ?? [])]);
   }
 
+  /** Канонический кадр ввода из латча: `tick`/`seq` знает воркер-сторона (SHELL-6). */
   private takeInputFrame(tickNumber: number): InputFrame {
     this.seq += 1;
-    const frame: InputFrame = {
+    const sample = this.input.take();
+    return {
       tick: tickNumber,
       playerId: this.config.playerId!,
       seq: this.seq,
-      move: this.move,
-      aimDir: this.aimDir,
-      buttons: this.buttons,
+      move: sample.move,
+      aimDir: sample.aimDir,
+      buttons: sample.buttons,
     };
-    // Кнопки — фронты: латч очищается, move — состояние: остаётся.
-    this.buttons = 0;
-    return frame;
   }
 
   private onMessage(message: MainToWorker): void {
-    switch (message.t) {
-      case 'ret':
-        this.sender.ack(message.buffer);
-        return;
-      case 'input':
-        this.move = message.move;
-        this.buttons |= message.buttons;
-        if (message.buttons !== 0) this.aimDir = message.aimDir;
-        return;
-      case 'control':
-        this.onControl(message);
-        return;
-    }
+    routeMainMessage(message, this.sender, this.input, (control) => { this.onControl(control); });
   }
 
   /**

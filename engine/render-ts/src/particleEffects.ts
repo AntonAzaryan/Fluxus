@@ -45,7 +45,7 @@ import type { ParticleEffectDocument } from '@game-mvp/assets';
  * вернуться к значениям документа, а не к тем, которыми его оставило прошлое
  * употребление.
  */
-export interface EffectSystem {
+interface EffectSystem {
   readonly system: ParticleSystem;
   readonly looping: boolean;
 }

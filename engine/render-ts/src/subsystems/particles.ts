@@ -93,8 +93,10 @@ import {
   resolveSocketNode,
   type SocketSource,
 } from '../particleSockets.js';
+import { createWarnOnce } from '../warnOnce.js';
+import { createShellPose, createStateReader, poseShell } from './shellSupport.js';
 
-export type { SocketInstance, SocketSource } from '../particleSockets.js';
+export type { SocketSource } from '../particleSockets.js';
 
 /** Пустой список имён состояний — чтобы тик без таблицы `byState` не аллоцировал. */
 const NO_STATE_NAMES: readonly string[] = [];
@@ -178,7 +180,15 @@ export class ParticlesSubsystem implements RenderSubsystem {
   private readonly options: ParticlesOptions;
   /** Порядок состояний сборки — словарь битов `EntityView.states` (CAM-6). */
   private readonly stateComponents: readonly string[];
-  private readonly warn: (message: string) => void;
+  /**
+   * Несёт ли доставленное состояние сущности названное состояние (REND-24).
+   * Читатель общий с подсистемой эффектов (`shellSupport.ts`): словарь битов
+   * один на всех; своё здесь только предупреждение. Пустой список сюда не
+   * доходит вовсе — его отсекает `syncShells`.
+   */
+  private readonly hasState: (view: EntityView, name: string) => boolean;
+  /** О недоступном ассете и битом документе сказано один раз, а не на кадр. */
+  private readonly warnOnce: (key: string, message: string) => void;
 
   private ctx: RenderContext | null = null;
   private readonly group = new THREE.Group();
@@ -203,8 +213,8 @@ export class ParticlesSubsystem implements RenderSubsystem {
   private readonly assets = new Map<string, EffectAsset>();
   /** Разворачивание документов и пул экземпляров (`particleEffects.ts`). */
   private readonly pool: ParticleEffectPool;
-  /** О недоступном ассете и битом документе сказано один раз, а не на кадр. */
-  private readonly warned = new Set<string>();
+  /** Переиспользуемая поза оболочки: аллокаций на оболочку на кадр нет. */
+  private readonly pose = createShellPose();
 
   /** Последнее доставленное состояние: по нему считается поза кадра (REND-2). */
   private view: TickView | null = null;
@@ -215,7 +225,13 @@ export class ParticlesSubsystem implements RenderSubsystem {
     this.manifest = manifest;
     this.options = options;
     this.stateComponents = options.stateComponents ?? [];
-    this.warn = options.warn ?? ((message) => { console.warn(message); });
+    this.warnOnce = createWarnOnce(options.warn);
+    this.hasState = createStateReader(this.stateComponents, (name) => {
+      this.warnOnce(
+        `state-bit:${name}`,
+        `render: состояние "${name}" не зеркалируется Extractor'ом (stateComponents) — эмиттер не появится (REND-24)`,
+      );
+    });
     this.group.name = 'particles';
     this.batchRenderer.name = 'particle-batches';
     this.pool = new ParticleEffectPool(this.batchRenderer, (key, message) => {
@@ -432,25 +448,6 @@ export class ParticlesSubsystem implements RenderSubsystem {
   }
 
   /**
-   * Несёт ли доставленное состояние сущности названное состояние (REND-24).
-   * Бит ищется в списке `stateComponents` сборки — том же, которым Extractor
-   * их и зеркалировал (SHELL-2, CAM-6); имени вне НЕПУСТОГО списка
-   * соответствовать нечему, и об этом говорится один раз, а не молча. Пустой
-   * список сюда не доходит вовсе — его отсекает `syncShells`.
-   */
-  private hasState(view: EntityView, name: string): boolean {
-    const bit = this.stateComponents.indexOf(name);
-    if (bit < 0) {
-      this.warnOnce(
-        `state-bit:${name}`,
-        `render: состояние "${name}" не зеркалируется Extractor'ом (stateComponents) — эмиттер не появится (REND-24)`,
-      );
-      return false;
-    }
-    return ((view.states >>> bit) & 1) === 1;
-  }
-
-  /**
    * Поза эмиттеров в кадре. Привязанный к сокету следует МИРОВОЙ позе своего
    * узла (REND-24), прочие — интерполированной позиции сущности плюс опорная
    * высота поверхности, ровно как оболочки эффектов (REND-2, REND-9).
@@ -489,16 +486,11 @@ export class ParticlesSubsystem implements RenderSubsystem {
       return;
     }
     // Горизонталь — интерполяция двух доставленных тиков (REND-2), высота —
-    // опорная высота визуальной поверхности либо ступень уровня (REND-7).
-    const view = shell.view;
-    const t = view.snap ? 1 : alpha;
-    const x = view.prevX + (view.currX - view.prevX) * t;
-    const y = view.prevY + (view.currY - view.prevY) * t;
-    const base =
-      surface !== null && !view.levelOverride
-        ? surface.heightAt(x, y)
-        : (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
-    object.position.set(x, y, base);
+    // опорная высота визуальной поверхности либо ступень уровня (REND-7): то же
+    // общее правило оболочек, что у эффектов (`shellSupport.ts`).
+    const pose = this.pose;
+    poseShell(shell.view, alpha, heightStep, surface, pose);
+    object.position.set(pose.x, pose.y, pose.base);
   }
 
   /**
@@ -649,12 +641,6 @@ export class ParticlesSubsystem implements RenderSubsystem {
       batch.raycast = () => {};
     }
     this.shieldedBatches = batches.length;
-  }
-
-  private warnOnce(key: string, message: string): void {
-    if (this.warned.has(key)) return;
-    this.warned.add(key);
-    this.warn(message);
   }
 }
 

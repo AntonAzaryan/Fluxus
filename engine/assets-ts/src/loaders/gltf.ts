@@ -66,6 +66,7 @@ import type {
 } from '../model.js';
 import type { DecodedImage } from '../image.js';
 import { resolveDependencyPath } from '../service.js';
+import { freezeNormalizedModel, heightOfPositions } from './normalized.js';
 import { decodePng } from './png.js';
 
 // ================================================================ data-URI
@@ -533,7 +534,7 @@ async function decodeEmbeddedImages(
   return decoded;
 }
 
-export async function normalizeGltf(
+async function normalizeGltf(
   doc: GltfDocument,
   buffers: readonly Uint8Array[],
   assetId: string,
@@ -806,25 +807,9 @@ export async function normalizeGltf(
   });
 
   // ============================================================ F. Высота
-  let minZ = Infinity;
-  let maxZ = -Infinity;
-  for (const mesh of meshes) {
-    for (let k = 2; k < mesh.positions.length; k += 3) {
-      const z = mesh.positions[k]!;
-      if (z < minZ) minZ = z;
-      if (z > maxZ) maxZ = z;
-    }
-  }
-  const height = Math.max(maxZ - minZ, 1e-3);
+  const height = heightOfPositions(meshes.map((mesh) => mesh.positions));
 
-  return Object.freeze({
-    bones: Object.freeze(bones),
-    meshes: Object.freeze(meshes),
-    sequences: Object.freeze(sequences),
-    materials: Object.freeze(materials),
-    textureSlots: Object.freeze(textureSlots),
-    height,
-  });
+  return freezeNormalizedModel({ bones, meshes, sequences, materials, textureSlots, height });
 }
 
 // ============================================================ контейнер .glb

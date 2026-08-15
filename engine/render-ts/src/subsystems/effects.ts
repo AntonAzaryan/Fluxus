@@ -58,6 +58,8 @@ import {
 import type { EntityView, RenderContext, RenderSubsystem, TickView } from '../types.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import { jumpArc } from '../model/verticalOffset.js';
+import { createWarnOnce } from '../warnOnce.js';
+import { createShellPose, createStateReader, poseShell } from './shellSupport.js';
 
 /** Примитивы, которые умеет рисовать подсистема; перечень принадлежит рендеру. */
 const PRIMITIVE_SPHERE = 'sphere';
@@ -148,9 +150,14 @@ export class EffectsSubsystem implements RenderSubsystem {
 
   private manifest: VisualManifest;
   private readonly options: EffectsOptions;
-  /** Порядок состояний сборки — словарь битов `EntityView.states` (CAM-6). */
-  private readonly stateComponents: readonly string[];
-  private readonly warn: (message: string) => void;
+  /**
+   * Несёт ли доставленное состояние сущности названное состояние (REND-23).
+   * Читатель общий с подсистемой частиц (`shellSupport.ts`) — словарь битов
+   * `EntityView.states` один на всех (CAM-6); своё здесь только предупреждение.
+   */
+  private readonly hasState: (view: EntityView, name: string) => boolean;
+  /** Об неизвестном примитиве/кривой сказано один раз на имя, а не на кадр. */
+  private readonly warnOnce: (key: string, message: string) => void;
 
   private ctx: RenderContext | null = null;
   private readonly group = new THREE.Group();
@@ -163,8 +170,8 @@ export class EffectsSubsystem implements RenderSubsystem {
   private flashes: Flash[] = [];
   /** Свободные меши пула: аллокация — только когда эффектов стало больше, чем было. */
   private readonly pool: EffectNode[] = [];
-  /** Об неизвестном примитиве/кривой сказано один раз на имя, а не на кадр. */
-  private readonly warned = new Set<string>();
+  /** Переиспользуемая поза оболочки: аллокаций на оболочку на кадр нет. */
+  private readonly pose = createShellPose();
 
   /** Последнее доставленное состояние: по нему считается поза кадра (REND-2). */
   private view: TickView | null = null;
@@ -172,8 +179,13 @@ export class EffectsSubsystem implements RenderSubsystem {
   constructor(manifest: VisualManifest, options: EffectsOptions = {}) {
     this.manifest = manifest;
     this.options = options;
-    this.stateComponents = options.stateComponents ?? [];
-    this.warn = options.warn ?? ((message) => { console.warn(message); });
+    this.warnOnce = createWarnOnce(options.warn);
+    this.hasState = createStateReader(options.stateComponents ?? [], (name) => {
+      this.warnOnce(
+        `state-bit:${name}`,
+        `render: состояние "${name}" не зеркалируется Extractor'ом (stateComponents) — эффект-оболочка не появится (REND-23)`,
+      );
+    });
     this.group.name = 'effects';
   }
 
@@ -306,43 +318,19 @@ export class EffectsSubsystem implements RenderSubsystem {
   }
 
   /**
-   * Несёт ли доставленное состояние сущности названное состояние (REND-23).
-   * Бит ищется в списке `stateComponents` сборки — том же, которым Extractor
-   * их и зеркалировал (SHELL-2, CAM-6); имени вне списка соответствовать
-   * нечему, и об этом говорится один раз, а не молча.
-   */
-  private hasState(view: EntityView, name: string): boolean {
-    const bit = this.stateComponents.indexOf(name);
-    if (bit < 0) {
-      this.warnOnce(
-        `state-bit:${name}`,
-        `render: состояние "${name}" не зеркалируется Extractor'ом (stateComponents) — эффект-оболочка не появится (REND-23)`,
-      );
-      return false;
-    }
-    return ((view.states >>> bit) & 1) === 1;
-  }
-
-  /**
-   * Поза оболочки в кадре: горизонталь — интерполяция двух доставленных тиков
-   * (REND-2), высота — опорная плюс подъём записи плюс полётная дуга по фазе
-   * плоской формы (REND-12). Дугу считает та же функция, что у инстансов:
-   * второй параболы в репозитории нет.
+   * Поза оболочки в кадре: горизонталь и опорная высота — общим правилом
+   * оболочек (`shellSupport.ts`, REND-2, REND-9), сверх неё подъём записи и
+   * полётная дуга по фазе плоской формы (REND-12). Дугу считает та же функция,
+   * что у инстансов: второй параболы в репозитории нет.
    */
   private poseShells(alpha: number): void {
     const heightStep = this.ctx?.config.heightStep ?? 1;
     const surface = this.options.surface?.current ?? null;
+    const pose = this.pose;
     for (const shell of this.shells.values()) {
-      const view = shell.view;
-      const t = view.snap ? 1 : alpha;
-      const x = view.prevX + (view.currX - view.prevX) * t;
-      const y = view.prevY + (view.currY - view.prevY) * t;
-      const base =
-        surface !== null && !view.levelOverride
-          ? surface.heightAt(x, y)
-          : (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
-      const arc = jumpArc(view.flightPhase, shell.record.verticalOffset?.flightArc ?? 0);
-      shell.node.mesh.position.set(x, y, base + (shell.record.height ?? 0) + arc);
+      poseShell(shell.view, alpha, heightStep, surface, pose);
+      const arc = jumpArc(shell.view.flightPhase, shell.record.verticalOffset?.flightArc ?? 0);
+      shell.node.mesh.position.set(pose.x, pose.y, pose.base + (shell.record.height ?? 0) + arc);
     }
   }
 
@@ -478,11 +466,5 @@ export class EffectsSubsystem implements RenderSubsystem {
     const curved = curveOf(record.curve, phase);
     flash.node.mesh.scale.setScalar(lerpParam(record.radius, record.radiusTo, curved));
     flash.node.material.opacity = lerpParam(record.alpha ?? 1, record.alphaTo, curved);
-  }
-
-  private warnOnce(key: string, message: string): void {
-    if (this.warned.has(key)) return;
-    this.warned.add(key);
-    this.warn(message);
   }
 }

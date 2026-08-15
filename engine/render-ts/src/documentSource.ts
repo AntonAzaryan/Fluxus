@@ -41,9 +41,15 @@
  * тиков и документного источника нет вовсе. Отдай их сюда, и игровому клиенту
  * пришлось бы завести документный источник ради декораций, то есть нарушить
  * «в каждый момент presentation-состояние наполняет ровно один» (REND-11).
+ *
+ * Сам механизм набора при этом общий с набором декораций
+ * (`keyedInstanceSet.ts`): жизненный цикл инстанса нормирован один раз
+ * (REND-3), и реализация у него тоже одна. Своё у источника — поля, которые он
+ * пишет, presentation-состояние и кадр.
  */
-import { LOCOMOTION_NORMAL, type EntityId } from '@game-mvp/core';
+import type { EntityId } from '@game-mvp/core';
 import type { EntityView, TickView } from './types.js';
+import { KeyedInstanceSet } from './keyedInstanceSet.js';
 import type { PresentationProducer, PresentationStage } from './stage.js';
 
 /**
@@ -97,19 +103,21 @@ export class DocumentSource implements PresentationProducer {
 
   private readonly stage: PresentationStage;
   private readonly clock: () => number;
-  /** Сущности набора — тот же контейнер, что видят подсистемы в `view.entities`. */
-  private readonly entities = new Map<EntityId, EntityView>();
-  private readonly idByKey = new Map<string, EntityId>();
-  private readonly keyById = new Map<EntityId, string>();
-  private readonly seen = new Set<string>();
   /**
+   * Сущности набора и их сведение — общий механизм (REND-3); контейнер
+   * инстансов тот же, что видят подсистемы в `view.entities`.
+   *
    * Нумерация сущностей набора — собственная. Это НЕ ссылки на сущности мира:
    * мира в режиме правки нет, а продюсеры взаимоисключающи — набор
    * противоположного к моменту публикации погашен, и спутать одинаковые числа
    * подсистеме не на чем. Возврат ключа даёт новый номер: инстанс создаётся
    * заново, как и требует REND-11.
    */
-  private nextId: EntityId = 1;
+  private readonly set = new KeyedInstanceSet<DocumentInstance>({
+    owner: 'DocumentSource',
+    requirement: 'REND-11',
+    write: (view, instance) => { writeDocumentInstance(view, instance); },
+  });
   private lastFrameAtMs: number | null = null;
 
   constructor(stage: PresentationStage, options: DocumentSourceOptions = {}) {
@@ -123,7 +131,7 @@ export class DocumentSource implements PresentationProducer {
       snapAll: true,
       // Событий тика нет — one-shot клипы и доворот костей не проигрываются.
       freshEvents: false,
-      entities: this.entities,
+      entities: this.set.entities,
       // Геймплейных статов у документного набора нет (HUD-8): их источник —
       // компоненты мира, а мира в режиме правки не идёт.
       statNames: [],
@@ -147,12 +155,12 @@ export class DocumentSource implements PresentationProducer {
 
   /** Сколько инстансов в текущем наборе. */
   get size(): number {
-    return this.entities.size;
+    return this.set.size;
   }
 
   /** ID сущности presentation-состояния по ключу документа; undefined — ключа в наборе нет. */
   entityOf(key: string): EntityId | undefined {
-    return this.idByKey.get(key);
+    return this.set.entityOf(key);
   }
 
   /**
@@ -160,7 +168,7 @@ export class DocumentSource implements PresentationProducer {
    * (ED-17) переводит попадание по изображению в размещённый объект документа.
    */
   keyOf(entity: EntityId): string | undefined {
-    return this.keyById.get(entity);
+    return this.set.keyOf(entity);
   }
 
   /**
@@ -169,36 +177,7 @@ export class DocumentSource implements PresentationProducer {
    * объекта трогает его инстанс и не пересобирает сцену (ED-15).
    */
   apply(instances: Iterable<DocumentInstance>): void {
-    const seen = this.seen;
-    seen.clear();
-
-    for (const instance of instances) {
-      if (seen.has(instance.key)) {
-        throw new Error(`DocumentSource: ключ "${instance.key}" встречается в наборе дважды (REND-11)`);
-      }
-      seen.add(instance.key);
-
-      const id = this.idByKey.get(instance.key);
-      let view = id === undefined ? undefined : this.entities.get(id);
-      // Смена визуального типа — другая модель и другая запись манифеста: тут
-      // пересоздание не «мигание объектом», а единственно верное поведение.
-      // Ключ при этом остаётся ключом того же размещённого объекта.
-      if (view !== undefined && view.kind !== instance.kind) {
-        this.drop(instance.key);
-        view = undefined;
-      }
-      if (view === undefined) {
-        this.write(this.create(instance), instance);
-      } else {
-        view.spawned = false;
-        this.write(view, instance);
-      }
-    }
-
-    for (const key of this.idByKey.keys()) {
-      if (!seen.has(key)) this.drop(key);
-    }
-
+    this.set.apply(instances);
     this.stage.publish(this, this.state);
   }
 
@@ -225,60 +204,22 @@ export class DocumentSource implements PresentationProducer {
     this.stage.frame(dt, 1);
   }
 
-  private create(instance: DocumentInstance): EntityView {
-    const id = this.nextId++;
-    const view: EntityView = {
-      id,
-      kind: instance.kind,
-      prevX: instance.x,
-      prevY: instance.y,
-      currX: instance.x,
-      currY: instance.y,
-      prevLevel: 0,
-      currLevel: 0,
-      snap: true,
-      spawned: true,
-      // Скорости в документе нет: состояние анимации — покой (REND-4), поверх
-      // него набор может назвать клип явно (`clip`).
-      moving: false,
-      // Машина локомоушена — часть симуляции; манёвра в наборе быть не может.
-      motion: LOCOMOTION_NORMAL,
-      prevMotion: LOCOMOTION_NORMAL,
-      prevMotionPhase: Number.NaN,
-      currMotionPhase: Number.NaN,
-      // Полёт — состояние идущего мира: у документного инстанса его нет (REND-12).
-      flightPhase: Number.NaN,
-      // Уровень производен от позиции: посадку делает визуальная поверхность (REND-10).
-      levelOverride: false,
-      facingYaw: 0,
-      // Цели атаки/каста нет — доворот костей к ней не проигрывается (REND-5).
-      aimYaw: null,
-      states: 0,
-    };
-    this.entities.set(id, view);
-    this.idByKey.set(instance.key, id);
-    this.keyById.set(id, instance.key);
-    return view;
-  }
+}
 
-  /** Поля инстанса из набора; prev = curr — интерполировать нечего (REND-11). */
-  private write(view: EntityView, instance: DocumentInstance): void {
-    const level = instance.level ?? 0;
-    view.prevX = view.currX = instance.x;
-    view.prevY = view.currY = instance.y;
-    view.prevLevel = view.currLevel = level;
-    view.facingYaw = instance.yaw ?? 0;
-    view.snap = true;
-    view.skin = instance.skin;
-    view.clip = instance.clip;
-    view.scale = instance.scale;
-  }
-
-  private drop(key: string): void {
-    const id = this.idByKey.get(key);
-    if (id === undefined) return;
-    this.idByKey.delete(key);
-    this.keyById.delete(id);
-    this.entities.delete(id);
-  }
+/**
+ * Поля инстанса из записи набора; prev = curr — интерполировать нечего
+ * (REND-11). Уровень и клип — своё документного источника: уровень работает
+ * там, где визуальной поверхности нет (превью ED-20), а клип набор называет
+ * явно поверх состояния покоя (REND-4).
+ */
+function writeDocumentInstance(view: EntityView, instance: DocumentInstance): void {
+  const level = instance.level ?? 0;
+  view.prevX = view.currX = instance.x;
+  view.prevY = view.currY = instance.y;
+  view.prevLevel = view.currLevel = level;
+  view.facingYaw = instance.yaw ?? 0;
+  view.snap = true;
+  view.skin = instance.skin;
+  view.clip = instance.clip;
+  view.scale = instance.scale;
 }

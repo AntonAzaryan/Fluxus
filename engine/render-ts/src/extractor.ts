@@ -72,7 +72,7 @@ export const ENTITY_LEVEL_OVERRIDE = 2;
 /** Сдвиг битов состояний в колонке `flags`: бит i+STATE_BITS_SHIFT — i-я компонента `stateComponents`. */
 export const STATE_BITS_SHIFT = 2;
 /** Колонка `flags` — u8: биты 0..1 заняты, под состояния остаётся 6 бит. */
-export const MAX_STATE_COMPONENTS = 6;
+const MAX_STATE_COMPONENTS = 6;
 
 /**
  * Плоское presentation-состояние одного тика — то, что пересекает границу

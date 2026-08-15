@@ -38,7 +38,7 @@ function clamp01(value: number): number {
 }
 
 /** Ближайший известный враг: видимый предпочтительнее помнимого при равном расстоянии. */
-export function nearestEnemy(world: PerceivedWorld): RememberedEnemy | undefined {
+function nearestEnemy(world: PerceivedWorld): RememberedEnemy | undefined {
   let best: RememberedEnemy | undefined;
   let bestScore = Infinity;
   for (const enemy of world.enemies) {
@@ -54,7 +54,7 @@ export function nearestEnemy(world: PerceivedWorld): RememberedEnemy | undefined
 }
 
 /** Ближайшая сближающаяся угроза — единственная, от которой имеет смысл уклоняться. */
-export function nearestThreat(world: PerceivedWorld): ThreatView | undefined {
+function nearestThreat(world: PerceivedWorld): ThreatView | undefined {
   let best: ThreatView | undefined;
   for (const threat of world.threats) {
     if (!threat.closing) continue;

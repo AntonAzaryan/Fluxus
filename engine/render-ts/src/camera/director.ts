@@ -43,6 +43,7 @@ import {
   type LastingEffectType,
 } from './effects.js';
 import { CAMERA_EFFECTS_DESCRIPTION, type CameraEffectsCatalog } from './effectTypes.js';
+import { createWarnOnce } from '../warnOnce.js';
 
 export interface CameraEffectsDirectorOptions {
   /** Таблицы «событие/состояние → эффект» из манифеста (ASSET-8). */
@@ -111,23 +112,18 @@ export class CameraEffectsDirector {
   private readonly tables: CameraEffectsSection;
   private readonly description: CameraEffectsCatalog;
   private readonly stateComponents: readonly string[];
-  private readonly warn: (message: string) => void;
   /** Инстансы эффектов по ключу записи; создаются лениво и живут в стеке. */
   private readonly impulses = new Map<string, ImpulseEffect>();
   private readonly lastings = new Map<string, LastingEffect>();
-  /** Предупреждение на запись — один раз (ASSET-8). */
-  private readonly warned = new Set<string>();
+  /** Предупреждение на запись — один раз (ASSET-8); механизм общий с подсистемами. */
+  private readonly warnOnce: (key: string, message: string) => void;
 
   constructor(options: CameraEffectsDirectorOptions = {}) {
     this.tables = options.tables ?? {};
     this.description = options.description ?? CAMERA_EFFECTS_DESCRIPTION;
     this.stateComponents = options.stateComponents ?? [];
     this.stack = options.stack ?? new EffectStack();
-    this.warn =
-      options.warn ??
-      ((message: string): void => {
-        console.warn(message);
-      });
+    this.warnOnce = createWarnOnce(options.warn);
   }
 
   /**
@@ -258,11 +254,5 @@ export class CameraEffectsDirector {
       return null;
     }
     return type;
-  }
-
-  private warnOnce(key: string, message: string): void {
-    if (this.warned.has(key)) return;
-    this.warned.add(key);
-    this.warn(message);
   }
 }

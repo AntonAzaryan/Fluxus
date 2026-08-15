@@ -21,6 +21,7 @@ import type {
   PartVisibilityTrack,
   TextureSlotRef,
 } from '../model.js';
+import { freezeNormalizedModel, heightOfPositions } from './normalized.js';
 
 /** Порог альфы, выше которого геосет считается видимым. */
 const ALPHA_VISIBLE = 0.1;
@@ -204,7 +205,7 @@ function buildMaterials(mdl: MdlModel.Model): NormalizedMaterial[] {
 }
 
 /** Нормализация распарсенной MDX-модели в рендер-агностичное представление. */
-export function normalizeMdx(mdl: MdlModel.Model): NormalizedModel {
+function normalizeMdx(mdl: MdlModel.Model): NormalizedModel {
   // ==========================================================================
   // A. Скелет: все ноды (кости, хелперы, аттачи) — на них ссылаются и треки,
   // и группы скиннинга. ObjectId — идентификатор ноды в MDX; boneIndex
@@ -351,30 +352,9 @@ export function normalizeMdx(mdl: MdlModel.Model): NormalizedModel {
   // ==========================================================================
   // E. Высота bbox по Z — для нормализации масштаба инстанса рендером.
   // ==========================================================================
-  let minZ = Infinity;
-  let maxZ = -Infinity;
-  for (const g of mdl.Geosets) {
-    const arr = g.Vertices;
-    for (let k = 2; k < arr.length; k += 3) {
-      const z = arr[k]!;
-      if (z < minZ) minZ = z;
-      if (z > maxZ) maxZ = z;
-    }
-  }
-  const height = Math.max(maxZ - minZ, 1e-3);
+  const height = heightOfPositions(mdl.Geosets.map((g) => g.Vertices));
 
-  // Ассет разделяется всеми инстансами (ASSET-5): корень и все контейнеры
-  // замораживаем, чтобы случайная запись в поле модели падала, а не тихо
-  // портила данные соседям. Содержимое TypedArray заморозить невозможно —
-  // см. оговорку в model.ts.
-  return Object.freeze({
-    bones: Object.freeze(bones),
-    meshes: Object.freeze(meshes),
-    sequences: Object.freeze(sequences),
-    materials: Object.freeze(materials),
-    textureSlots: Object.freeze(textureSlots),
-    height,
-  });
+  return freezeNormalizedModel({ bones, meshes, sequences, materials, textureSlots, height });
 }
 
 /** Загрузчик MDX для реестра сервиса (ASSET-3). */

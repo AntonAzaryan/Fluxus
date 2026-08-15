@@ -57,7 +57,7 @@ export function restPose(model: NormalizedModel): RestPose {
  * обработался бы по устаревшей матрице, поэтому такие цепочки досчитываются
  * повторным проходом, пока все не станут разрешены.
  */
-export function hierarchyWorld(
+function hierarchyWorld(
   model: NormalizedModel,
   trs: Float64Array,
   scratch: PoseScratch,
