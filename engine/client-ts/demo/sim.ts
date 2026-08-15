@@ -92,9 +92,9 @@ export function stateBit(component: string): number {
 
 /**
  * Полный путь снаряда в тиках — ЗЕРКАЛО поля `AbilityConfig.throwLifetime`
- * prefab'а `Hero`, которым `Cast` и `ThrowHeld` заполняют `Lifetime.ticks`
- * (и умолчания `Lifetime` у prefab'а `Fireball`, которое ни один из них не
- * оставляет в силе). Знание СБОРКИ, а не ядра: из него Extractor выводит фазу
+ * prefab'а `Hero`, которым `ChargeRelease` и `ThrowHeld` заполняют
+ * `Lifetime.ticks` (и умолчания `Lifetime` у prefab'а `Fireball`, которое ни
+ * один из них не оставляет в силе). Знание СБОРКИ, а не ядра: из него Extractor выводит фазу
  * полёта (REND-12), а рендер по ней рисует полётную дугу. Расходится с
  * `AbilityConfig` — расходится только дуга: симуляция этого числа не читает.
  * Ретюнить оба вместе.
@@ -147,44 +147,52 @@ export function captureZoneOf(def: SceneDef): { radius: number; halfAngleTurns: 
  * заводится.
  *
  * `ticks`/`graceTicks` — сырые тики (их же считает `Charging.ticks`),
- * `maxScale` — множитель размера в конце заряда, `offset` — вынос шара перед
- * кастером в клетках мира.
+ * `maxScale` — множитель размера в конце заряда, `heavyScale` — порог, с
+ * которого `ChargeRelease` рождает `HeavyFireball` (шар с него и перекрашивается
+ * в цвет тяжёлого снаряда), `offset` — вынос шара перед кастером в клетках мира.
  */
 export function chargeVisualOf(def: SceneDef): {
   ticks: number;
   graceTicks: number;
   maxScale: number;
+  heavyScale: number;
   offset: number;
 } {
   const hero = def.prefabs?.find((prefab) => prefab.name === 'Hero');
   const config = hero?.components.AbilityConfig;
   if (config === undefined) throw new Error("демо: у prefab'а Hero нет AbilityConfig");
-  const { chargeTicks, chargeGraceTicks, chargeMaxScale, throwOffset } = config;
+  const { chargeTicks, chargeGraceTicks, chargeMaxScale, chargeHeavyScale, throwOffset } = config;
   // Отсутствующее поле — не ноль: нулевой заряд невидим, и шар молча перестал
   // бы существовать вместо того, чтобы сообщить о дыре в контенте.
   if (
     chargeTicks === undefined ||
     chargeGraceTicks === undefined ||
     chargeMaxScale === undefined ||
+    chargeHeavyScale === undefined ||
     throwOffset === undefined
   ) {
     throw new Error(
-      "демо: в AbilityConfig prefab'а Hero нет chargeTicks/chargeGraceTicks/chargeMaxScale/throwOffset — шар заряда рисовать нечем",
+      "демо: в AbilityConfig prefab'а Hero нет chargeTicks/chargeGraceTicks/chargeMaxScale/chargeHeavyScale/throwOffset — шар заряда рисовать нечем",
     );
   }
   return {
     ticks: chargeTicks,
     graceTicks: chargeGraceTicks,
     maxScale: chargeMaxScale / FIXED_ONE,
+    heavyScale: chargeHeavyScale / FIXED_ONE,
     offset: throwOffset / FIXED_ONE,
   };
 }
 
 /**
- * Накопленные тики заряда по доставленному `Charging.ticks` (стат `charge`).
+ * Накопленные тики заряда по доставленному `Charging.ticks` (стат `charge`),
+ * ограниченные окном роста `maxTicks` (`AbilityConfig.chargeTicks`).
+ *
  * Тик НАЖАТИЯ окном заряда не считается: самый быстрый тап отпускается на
  * следующем тике и обязан дать обычный шар, а не «чуть заряженный». Ровно эту
- * же поправку делает `ChargeRelease` в сцене — держать их врозь нельзя.
+ * же поправку и ровно тот же предел делает `ChargeRelease` в сцене — держать их
+ * врозь нельзя, поэтому `maxTicks` здесь и там одно и то же число, а тики
+ * передержки за него не выходят: они видны только в СЫРОМ `Charging.ticks`.
  */
 export function chargeHeld(ticks: number, maxTicks: number): number {
   return Math.max(0, Math.min(ticks - 1, maxTicks));

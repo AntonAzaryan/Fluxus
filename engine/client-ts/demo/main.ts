@@ -29,6 +29,7 @@ import {
   resolveEffectByKind,
   type AssetSource,
   type AssetState,
+  type VisualEffect,
   type VisualManifest,
 } from '@game-mvp/assets';
 import {
@@ -339,6 +340,15 @@ if (bindings.gamepad !== undefined) {
 let frameAim: number | null = null;
 
 /**
+ * Последний НЕПУСТОЙ прицел кадра. Луч мимо плоскости пола (курсор ушёл в небо
+ * над кромкой арены) даёт `frameAim === null`, и фигура, гаснущая по нему,
+ * исчезала бы на ровном месте — притом что заряд в это время продолжает идти к
+ * взрыву в кастере. Держать последнее направление — то же правило, по которому
+ * сэмплер держит последний `aimDir` молчащего источника (INP-5).
+ */
+let lastAim: number | null = null;
+
+/**
  * Прицел под курсором как НЕПРЕРЫВНЫЙ источник (INP-1): `KeyboardMouseSource`
  * владеет прицелом только в момент клика, а способностям с удержанием (захват
  * снаряда, заряд каста) направление нужно на каждом тике удержания — иначе
@@ -363,7 +373,12 @@ let polledPointerMoves = -1;
 const POINTER_HELD_ACTIONS: readonly string[] = ['capture', 'cast'];
 function pointerAiming(): boolean {
   const held = kbmSource.held();
-  return POINTER_HELD_ACTIONS.some((action) => held.has(action));
+  // Плоский цикл, а не `some`: функция зовётся каждым опросом сэмплера, то есть
+  // покадрово, и замыкание на кадр — политика этого файла (см. `groundPoint`).
+  for (const action of POINTER_HELD_ACTIONS) {
+    if (held.has(action)) return true;
+  }
+  return false;
 }
 const pointerAimSource: InputSource = {
   id: 'pointer-aim',
@@ -375,6 +390,12 @@ const pointerAimSource: InputSource = {
     return { moveX: 0, moveY: 0, aim: moved || pointerAiming() ? frameAim : null };
   },
 };
+// ПОСЛЕДНИМ, и это несущее: сэмплер выбирает прицел источника с самым свежим
+// изменением строгим сравнением (INP-5), а при РАВНОЙ свежести побеждает тот,
+// кто добавлен раньше. То есть в тик, где стик тача или геймпада двинулся
+// одновременно с курсором, выигрывает стик — устройство, которым игрок
+// действительно целится. Переставить этот `add` выше значило бы отдать мыши
+// молчаливый приоритет над обоими.
 sampler.add(pointerAimSource);
 
 // ------------------------------------------------- превью зоны захвата (R)
@@ -465,7 +486,13 @@ let visualSurface: VisualSurfaceSource | null = null;
 /**
  * Точка пола под интерполированной позой инстанса. Горизонталь — ровно та
  * позиция, по которой решает тик (REND-2), высота — поверхность под ней.
+ *
+ * Отдаётся ОДНА переиспользуемая запись: функция зовётся по разу на превью и на
+ * каждый шар заряда в кадре, а свежий объект на каждый вызов — мусор на кадре
+ * (та же политика, что у `ndcScratch`/`hitScratch`). Значение читается сразу и
+ * между кадрами не хранится.
  */
+const groundScratch = { x: 0, y: 0, z: 0 };
 function groundUnder(instance: { pose: { x: number; y: number; z: number } }): {
   x: number;
   y: number;
@@ -474,7 +501,10 @@ function groundUnder(instance: { pose: { x: number; y: number; z: number } }): {
   const surface = visualSurface?.current ?? null;
   const x = instance.pose.x;
   const y = instance.pose.y;
-  return { x, y, z: surface === null ? instance.pose.z : surface.heightAt(x, y) };
+  groundScratch.x = x;
+  groundScratch.y = y;
+  groundScratch.z = surface === null ? instance.pose.z : surface.heightAt(x, y);
+  return groundScratch;
 }
 
 /**
@@ -509,74 +539,161 @@ function updateCapturePreview(): void {
   capturePreview.rotation.set(0, 0, (frameAim / TURN_UNITS) * Math.PI * 2);
 }
 
-// ------------------------------------------------- шар заряда каста (ЛКМ)
+// ------------------------------------------------- шары заряда каста (ЛКМ)
 //
 // Заряд растёт МЕЖДУ тиками, а радиус оболочки `effects.byKind` задан записью
 // манифеста и один на весь визуальный тип (REND-23) — растить им шар нечем.
 // Поэтому шар живёт здесь, рядом с превью зоны захвата и по тем же правилам:
-// числа — из `AbilityConfig` (`chargeVisualOf`), поза — интерполированная поза
-// инстанса, направление — прицел ЭТОГО кадра.
+// числа — из `AbilityConfig` (`chargeVisualOf`) и из записей манифеста, поза —
+// интерполированная поза инстанса.
+//
+// Шар рисуется КАЖДОЙ доставленной сущности со статом `charge`, а не одному
+// своему герою: соперник копит те же 78 тиков до 400 урона, и заряд без
+// телеграфа означал бы удар, которого не видно, — а видеть его игрок обязан из
+// доставленного состояния (HUD-1), а не из догадки. Направление своего шара —
+// прицел ЭТОГО кадра (курсор идёт впереди тика), чужого — доставленный курс
+// `aimYaw`, который сцена шлёт событием `ChargeAim` каждый тик заряда.
 //
 // Величина заряда приезжает доставленным статом `charge` (`Charging.ticks`), то
 // есть из симуляции: главный поток её не считает и о нажатиях не помнит.
 
-/** Шар заряда; создаётся вместе с манифестом — из него берутся цвет и базовый радиус. */
-let chargeBall: THREE.Mesh | null = null;
-let chargeVisual: ReturnType<typeof chargeVisualOf> | null = null;
-
-function createChargeBall(manifest: VisualManifest): void {
-  const record = resolveEffectByKind(manifest, 'Fireball');
-  chargeVisual = chargeVisualOf(sceneJson as unknown as SceneDef);
-  // Базовый шар — тот же снаряд, что улетит: радиус и цвет берутся из записи
-  // манифеста, а не выписываются здесь второй раз.
-  const geometry = new THREE.SphereGeometry(record?.radius ?? 0.15, 20, 14);
-  chargeBall = new THREE.Mesh(
-    geometry,
-    new THREE.MeshBasicMaterial({
-      color: new THREE.Color(record?.color ?? '#ff8a3c'),
-      transparent: true,
-      opacity: record?.alpha ?? 0.8,
-      depthWrite: false,
-    }),
-  );
-  chargeBall.visible = false;
-  scene3.add(chargeBall);
+/**
+ * Числа картинки шара — из записей манифеста `effects.byKind`. Отсутствие
+ * записи или поля — громкая ошибка, как и дыра в `AbilityConfig`
+ * (`captureZoneOf`, `chargeVisualOf`): молчаливое умолчание здесь было бы
+ * ТРЕТЬЕЙ копией чисел манифеста, которая расходится с ним незаметно.
+ */
+interface ChargeBallLook {
+  /** Цвет обычного снаряда и цвет тяжёлого: с порога `heavyScale` шар красится вторым. */
+  readonly color: string;
+  readonly heavyColor: string;
+  /** Радиус и высота — снаряда, который улетит при нулевом заряде. */
+  readonly radius: number;
+  readonly height: number;
+  readonly alpha: number;
 }
 
-/** Высота центра шара над полом — та же, на которой полетит снаряд (`height` записи). */
-const CHARGE_BALL_HEIGHT = 0.35;
+let chargeLook: ChargeBallLook | null = null;
+let chargeVisual: ReturnType<typeof chargeVisualOf> | null = null;
+/** Геометрия одна на все шары — единичная сфера: размер даёт `scale` меша. */
+let chargeGeometry: THREE.SphereGeometry | null = null;
+/** Живые шары по сущности и пул снятых: заряжающих на арене единицы. */
+const chargeBalls = new Map<EntityId, THREE.Mesh>();
+const chargeBallPool: THREE.Mesh[] = [];
+/** Кто заряжает в ЭТОМ кадре — переиспользуется, чтобы кадр не аллоцировал. */
+const chargingSeen = new Set<EntityId>();
+
+function chargeEffectOf(manifest: VisualManifest, kind: string): VisualEffect {
+  const record = resolveEffectByKind(manifest, kind);
+  if (record === undefined) {
+    throw new Error(
+      `демо: в манифесте нет записи effects.byKind.${kind} — шар заряда рисовать нечем`,
+    );
+  }
+  return record;
+}
+
+function createChargeBalls(manifest: VisualManifest): void {
+  chargeVisual = chargeVisualOf(sceneJson as unknown as SceneDef);
+  const base = chargeEffectOf(manifest, 'Fireball');
+  const heavy = chargeEffectOf(manifest, 'HeavyFireball');
+  if (base.alpha === undefined || base.height === undefined) {
+    throw new Error(
+      'демо: в записи effects.byKind.Fireball нет alpha/height — шар заряда рисовать нечем',
+    );
+  }
+  chargeLook = {
+    color: base.color,
+    heavyColor: heavy.color,
+    radius: base.radius,
+    height: base.height,
+    alpha: base.alpha,
+  };
+  chargeGeometry = new THREE.SphereGeometry(1, 20, 14);
+}
+
+/** Меш из пула либо новый; материал свой у каждого — цвет и альфа пер-инстансны. */
+function acquireChargeBall(): THREE.Mesh {
+  const pooled = chargeBallPool.pop();
+  if (pooled !== undefined) {
+    pooled.visible = true;
+    return pooled;
+  }
+  const geometry = chargeGeometry;
+  if (geometry === null) throw new Error('демо: шар заряда до загрузки манифеста');
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }),
+  );
+  mesh.name = 'charge-ball';
+  scene3.add(mesh);
+  return mesh;
+}
+
+function releaseChargeBall(mesh: THREE.Mesh): void {
+  mesh.visible = false;
+  chargeBallPool.push(mesh);
+}
 
 /**
- * Кадр шара заряда: виден, пока доставленное состояние героя несёт `Charging`.
- * Размер — линейный рост до `chargeMaxScale` за `chargeTicks`; после максимума
- * шар не растёт, а мигает — предупреждение о перезаряде, который сейчас рванёт
- * в самом кастере (`ChargeOvercharge`).
+ * Кадр шаров заряда: по шару на каждую доставленную сущность со статом `charge`.
+ * Размер — линейный рост до `chargeMaxScale` за `chargeTicks`; с порога
+ * `chargeHeavyScale` шар перекрашивается в цвет `HeavyFireball` — того самого
+ * prefab'а, который родится на отпускании, — а после максимума не растёт, а
+ * мигает: предупреждение о перезаряде, который сейчас рванёт в самом кастере
+ * (`ChargeOvercharge`).
  */
-function updateChargeBall(): void {
-  if (chargeBall === null || chargeVisual === null) return;
-  const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
-  const hero = heroId === null ? undefined : remote?.view?.entities.get(heroId);
-  const ticks = hero?.stats?.get(STATS.charge);
-  if (instance === null || ticks === undefined || frameAim === null) {
-    chargeBall.visible = false;
-    return;
+function updateChargeBalls(): void {
+  const look = chargeLook;
+  const visual = chargeVisual;
+  if (look === null || visual === null) return;
+  const entities = remote?.view?.entities;
+  chargingSeen.clear();
+  if (entities !== undefined) {
+    const { ticks: maxTicks, maxScale, heavyScale, offset } = visual;
+    // Мигание — по часам кадра, одинаковое для всех шаров: заряд перезрел.
+    const blink = Math.floor(performance.now() / 90) % 2 === 0;
+    for (const [entity, view] of entities) {
+      const ticks = view.stats?.get(STATS.charge);
+      if (ticks === undefined) continue;
+      const instance = models?.instanceFor(entity) ?? null;
+      if (instance === null) continue;
+      // Свой шар целится прицелом кадра: курсор идёт впереди тика. Последним
+      // НЕПУСТЫМ, а не текущим, — луч, ушедший мимо плоскости пола, не повод
+      // гасить шар, пока заряд идёт к взрыву в кастере (то же правило, что у
+      // сэмплера, INP-5). Чужой — доставленным курсом `ChargeAim`.
+      const own = entity === heroId ? lastAim : null;
+      const angle =
+        own === null ? (view.aimYaw ?? view.facingYaw) : (own / TURN_UNITS) * Math.PI * 2;
+      const held = chargeHeld(ticks, maxTicks);
+      const scale = 1 + (maxScale - 1) * (held / maxTicks);
+      const ground = groundUnder(instance);
+      let ball = chargeBalls.get(entity);
+      if (ball === undefined) {
+        ball = acquireChargeBall();
+        chargeBalls.set(entity, ball);
+      }
+      chargingSeen.add(entity);
+      ball.scale.setScalar(look.radius * scale);
+      ball.position.set(
+        ground.x + Math.cos(angle) * offset,
+        ground.y + Math.sin(angle) * offset,
+        ground.z + look.height,
+      );
+      const material = ball.material as THREE.MeshBasicMaterial;
+      material.color.set(scale >= heavyScale ? look.heavyColor : look.color);
+      // Альфа записи МОДУЛИРУЕТСЯ, а не подменяется: число прозрачности живёт
+      // в манифесте, здесь — только «мигает или нет». Передержка видна в СЫРЫХ
+      // тиках: `chargeHeld` обрезает их окном роста ровно как `ChargeRelease`.
+      const overcharged = ticks - 1 >= maxTicks;
+      material.opacity = overcharged && blink ? look.alpha * 0.4 : look.alpha;
+    }
   }
-  const { ticks: maxTicks, graceTicks, maxScale, offset } = chargeVisual;
-  const held = chargeHeld(ticks, maxTicks + graceTicks);
-  const scale = 1 + (maxScale - 1) * Math.min(held / maxTicks, 1);
-  const angle = (frameAim / TURN_UNITS) * Math.PI * 2;
-  const ground = groundUnder(instance);
-  chargeBall.visible = true;
-  chargeBall.scale.setScalar(scale);
-  chargeBall.position.set(
-    ground.x + Math.cos(angle) * offset,
-    ground.y + Math.sin(angle) * offset,
-    ground.z + CHARGE_BALL_HEIGHT,
-  );
-  // Перезаряд: шар мигает по кадрам — presentation, симуляция об этом не знает.
-  const material = chargeBall.material as THREE.MeshBasicMaterial;
-  const overcharged = held >= maxTicks;
-  material.opacity = overcharged && Math.floor(performance.now() / 90) % 2 === 0 ? 0.3 : 0.85;
+  for (const [entity, ball] of chargeBalls) {
+    if (chargingSeen.has(entity)) continue;
+    releaseChargeBall(ball);
+    chargeBalls.delete(entity);
+  }
 }
 
 /**
@@ -727,6 +844,7 @@ function frame(now: number): void {
   // конвейера камеры — по той же позе, по которой игрок видел кадр, когда
   // ставил курсор, и одинаково для обоих потребителей.
   frameAim = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
+  if (frameAim !== null) lastAim = frameAim;
 
   // Тиков здесь нет (SHELL-1): симуляция идёт в воркере своим тикером,
   // кадр только шлёт ввод и интерполирует доставленное (REND-2).
@@ -771,7 +889,7 @@ function frame(now: number): void {
   // После кадра подсистем: сектор и шар заряда садятся на позу инстанса ЭТОГО
   // кадра — не прошлого.
   updateCapturePreview();
-  updateChargeBall();
+  updateChargeBalls();
   renderer3.render(scene3, camera);
 }
 
@@ -852,9 +970,10 @@ async function main(): Promise<void> {
   // приходят из сцены, и дыра в контенте не должна уносить страницу целиком.
   createCapturePreview();
   const manifest = await loadManifest();
-  // Шар заряда — после манифеста: цвет и базовый радиус он берёт из записи
-  // `effects.byKind.Fireball`, то есть у того же снаряда, который улетит.
-  createChargeBall(manifest);
+  // Шары заряда — после манифеста: цвет, базовый радиус и высоту они берут из
+  // записей `effects.byKind.Fireball`/`HeavyFireball`, то есть у тех самых
+  // снарядов, один из которых и улетит.
+  createChargeBalls(manifest);
   const worker = spawnShellWorker(mode);
 
   remote = new RemoteHost(context, {

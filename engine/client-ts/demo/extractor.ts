@@ -44,8 +44,12 @@ export function createDemoExtractor(grid: TerrainGrid | undefined): Extractor {
     kindOf: kindByTags(['Hero', 'HeavyFireball', 'Fireball', 'SlowDome']),
     ...(grid !== undefined ? { terrainGrid: grid } : {}),
     // Доворот торса (REND-5) — по направлению каста: одно каноническое событие
-    // сцены несёт и факт каста, и `dirX`/`dirY`.
-    aimEvents: ['CastFireball'],
+    // сцены несёт и факт каста, и `dirX`/`dirY`. `ChargeAim` — то же
+    // направление, но КАЖДЫЙ тик заряда: без него торс кастера стоял бы
+    // неподвижно всю секунду накопления и доворачивался только на выстреле.
+    // Оно же — единственный источник курса для шара заряда ЧУЖОГО героя
+    // (`main.ts`): своего прицела у главного потока на него нет.
+    aimEvents: ['CastFireball', 'ChargeAim'],
     // Компоненты-состояния, зеркалируемые в `EntityView.states` (CAM-6): список
     // общий с главным потоком (`sim.ts`) — порядок задаёт биты.
     stateComponents: STATE_COMPONENTS,
