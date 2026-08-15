@@ -11,7 +11,12 @@
  * `content/`, здесь только его чтение и раскладка в `MatchConfig`.
  */
 import type { PhysicsOptions, SceneDef, VisibilityOptions } from '@game-mvp/core';
-import { contentPack, type LoadedContentPack, type MatchConfig } from '@game-mvp/net';
+import {
+  contentPack,
+  type LoadedContentPack,
+  type MatchConfig,
+  type MatchRewindOptions,
+} from '@game-mvp/net';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 
@@ -30,6 +35,7 @@ interface DemoMatchDoc {
   readonly snapshotRate?: number;
   readonly inputDelay?: number;
   readonly silenceSeconds?: number;
+  readonly rewind?: MatchRewindOptions;
 }
 
 const doc = matchJson as unknown as DemoMatchDoc;
@@ -39,6 +45,14 @@ export const DEMO_PLAYERS: readonly string[] = doc.players;
 export const DEMO_SCENE_REF = doc.sceneRef;
 export const DEMO_TICK_RATE = doc.tickRate ?? 60;
 export const DEMO_SNAPSHOT_RATE = doc.snapshotRate ?? 30;
+/**
+ * Настройки перемотки матча (NET-11): глубина буфера, cooldown вне отката и
+ * орган ведения скраба. Читаются из документа матча обеими сборками демо —
+ * сетевой и локальной (`worker.ts`): профиль истории и номер бита обязаны
+ * совпасть, иначе ульта в одной сборке отматывает не туда, а в другой не
+ * отматывает вовсе.
+ */
+export const DEMO_REWIND: MatchRewindOptions | undefined = doc.rewind;
 
 export function demoScene(): SceneDef {
   return sceneJson as unknown as SceneDef;
@@ -75,5 +89,6 @@ export function demoMatchConfig(pack: LoadedContentPack = demoContentPack()): Ma
     ...(doc.physics !== undefined ? { physics: doc.physics } : {}),
     ...(doc.locomotion !== undefined ? { locomotion: doc.locomotion } : {}),
     ...(doc.visibility !== undefined ? { visibility: doc.visibility } : {}),
+    ...(doc.rewind !== undefined ? { rewind: doc.rewind } : {}),
   };
 }

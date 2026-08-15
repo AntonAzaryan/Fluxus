@@ -16,7 +16,8 @@ import {
   createRewindController,
   type SceneDef,
 } from '@game-mvp/core';
-import { PLAYER_ID, TICK_SECONDS, createDemoSimulation } from './sim.js';
+import { ACTION_BITS, PLAYER_ID, TICK_SECONDS, createDemoSimulation } from './sim.js';
+import { DEMO_REWIND } from './match.js';
 import { createDemoExtractor } from './extractor.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 
@@ -24,9 +25,26 @@ const { sim, state, playerId, grid } = createDemoSimulation(sceneJson as unknown
 
 // Машина состояний мира (WSM-1..6): без контроллера оболочка игнорирует
 // команды управления, и пауза из HUD (HUD-2, сценарий «Пауза из HUD») не
-// имела бы адресата. История и лог вводов — по образцу channel-тестов оболочки.
-const history = new RingHistory({ interval: 1, capacity: 16 });
-const rewind = createRewindController(sim, state, { history, inputs: createInputLog() });
+// имела бы адресата.
+//
+// Профиль истории и exempt-список — из документа матча (`match.ts`): числа у
+// локальной сборки и у матча одни, иначе ульта отката отматывала бы на разную
+// глубину в зависимости от того, кто произвёл тик (SHELL-8). Умолчание рядом
+// стоит на случай матча без перемотки — оболочке нужен хоть какой-то провайдер
+// под паузу из HUD.
+const history = new RingHistory({
+  interval: DEMO_REWIND?.interval ?? 30,
+  capacity: DEMO_REWIND?.capacity ?? 15,
+});
+// Глубина лога вводов привязана к глубине истории: реплей внутри `seekTo` идёт
+// по каноническим кадрам от ближайшего снапшота (REW-2), и умолчание, не
+// покрывающее буфер, молча оставило бы реплей без вводов.
+const inputs = createInputLog(history.depth + history.interval + 1);
+const rewind = createRewindController(sim, state, {
+  history,
+  inputs,
+  ...(DEMO_REWIND?.exempt !== undefined ? { exempt: DEMO_REWIND.exempt } : {}),
+});
 
 // Extractor — общий с сетевой сборкой (`extractor.ts`): presentation-состояние
 // обязано выглядеть одинаково, кто бы ни произвёл тик (SHELL-8, REND-8).
@@ -41,15 +59,19 @@ const shell = new WorkerShell({
   extractor,
   playerId: PLAYER_ID,
   rewind,
-  // Снапшоты — только честных тиков (SNAP-1): реплей и пауза историю не пишут.
-  observers: [
-    {
-      name: 'history',
-      onTick: (result) => {
-        if (result.mode === 'Running' && !result.isReplay) history.record(result.state);
-      },
-    },
-  ],
+  // Лог вводов и история — оболочке: канонический кадр собирает она, а
+  // снапшоты снимаются только с живых тиков (SNAP-1).
+  inputs,
+  history,
+  // Орган ведения скраба — тот же бит действия, которым ульта кастуется
+  // (`ACTION_BITS.rewind`), и тот же номер, что у матча (`rewind.holdButton`).
+  scrub: {
+    button: ACTION_BITS.rewind,
+    ...(DEMO_REWIND?.step !== undefined ? { step: DEMO_REWIND.step } : {}),
+    ...(DEMO_REWIND?.holdTimeoutTicks !== undefined
+      ? { timeoutTicks: DEMO_REWIND.holdTimeoutTicks }
+      : {}),
+  },
   // ID сущности героя нужен main-сборке (камера, прицел); оболочка extra не трактует.
   helloExtra: { hero: playerId },
 });

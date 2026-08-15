@@ -61,6 +61,7 @@ const ABILITY_ICONS: Readonly<Record<string, string>> = {
   slowDome: 'visuals/icons/slow-dome.svg',
   capture: 'visuals/icons/capture.svg',
   shield: 'visuals/icons/shield.svg',
+  rewind: 'visuals/icons/rewind.svg',
 };
 
 /**
@@ -130,6 +131,7 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
           slowDome: 'hero.slowDome',
           capture: 'hero.capture',
           shield: 'hero.shield',
+          rewind: 'hero.rewind',
         },
       },
       {
@@ -290,6 +292,11 @@ export function createDemoHudRegistry(
   registry.registerAction('hero.capture', { target: 'world', action: 'capture' });
   // Щит ловит фронт, как купол: каст-и-забыл, удержание ему ничего не даёт.
   registry.registerAction('hero.shield', { target: 'world', action: 'shield' });
+  // Ульта отката. Клик даёт РОВНО ОДИН тик с битом (INP-2), то есть кастует
+  // ульту и тут же отпускает орган управления: мир замрёт и продолжится с того
+  // же тика. Скраб — это удержание, и он живёт на клавише (`bindings.json`);
+  // кнопка панели существует ради кулдауна и доступности, а не вместо неё.
+  registry.registerAction('hero.rewind', { target: 'world', action: 'rewind' });
   // Команды машины состояний мира — обратным каналом (SHELL-6, WSM-1); паузу
   // на экране поставит только доставленный режим, не клик (HUD-2).
   registry.registerAction('match.pause', { target: 'control', action: 'pause' });
