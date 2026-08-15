@@ -250,8 +250,9 @@ window.addEventListener('keydown', (e) => {
     // выстрелил бы в устаревшую точку при следующем откреплении.
     pendingPan = null;
   }
-  // V, а не F: F ушла герою под купол замедления (`bindings.json`), и две
-  // роли на одной клавише — это молча несработавшая способность.
+  // V, а не F: F ушла герою под купол замедления, а E — под щит
+  // (`bindings.json`), и две роли на одной клавише — это молча несработавшая
+  // способность.
   if (e.code === 'KeyV') camInput.flyToggle = true;
   keys.add(e.code);
 });
@@ -769,7 +770,11 @@ function sampleCameraInput(): void {
   const fly = rig?.capturesMovement() ?? false;
   camInput.moveX = fly ? (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0) : 0;
   camInput.moveY = fly ? (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0) : 0;
-  camInput.moveZ = fly ? (keys.has('KeyE') ? 1 : 0) - (keys.has('KeyQ') ? 1 : 0) : 0;
+  // Вертикаль облёта — `Q`/`Z`, а не привычная пара `Q`/`E`: `E` ушла герою под
+  // щит (`bindings.json`), а `KeyboardMouseSource` гасит в режиме облёта только
+  // ОСИ движения (`movementCaptured`), не биты действий, — и облёт вверх молча
+  // ставил бы щит. Та же причина, по которой облёт включает `V`, а не `F`.
+  camInput.moveZ = fly ? (keys.has('KeyQ') ? 1 : 0) - (keys.has('KeyZ') ? 1 : 0) : 0;
 }
 
 /**

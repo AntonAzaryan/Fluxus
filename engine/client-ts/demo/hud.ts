@@ -60,6 +60,7 @@ const ABILITY_ICONS: Readonly<Record<string, string>> = {
   jump: 'visuals/icons/jump.svg',
   slowDome: 'visuals/icons/slow-dome.svg',
   capture: 'visuals/icons/capture.svg',
+  shield: 'visuals/icons/shield.svg',
 };
 
 /**
@@ -128,6 +129,7 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
           jump: 'hero.jump',
           slowDome: 'hero.slowDome',
           capture: 'hero.capture',
+          shield: 'hero.shield',
         },
       },
       {
@@ -286,6 +288,8 @@ export function createDemoHudRegistry(
   // битом, и следующий тик уже без него читается сценой как falling edge (INP-2).
   registry.registerAction('hero.slowDome', { target: 'world', action: 'slowDome' });
   registry.registerAction('hero.capture', { target: 'world', action: 'capture' });
+  // Щит ловит фронт, как купол: каст-и-забыл, удержание ему ничего не даёт.
+  registry.registerAction('hero.shield', { target: 'world', action: 'shield' });
   // Команды машины состояний мира — обратным каналом (SHELL-6, WSM-1); паузу
   // на экране поставит только доставленный режим, не клик (HUD-2).
   registry.registerAction('match.pause', { target: 'control', action: 'pause' });
