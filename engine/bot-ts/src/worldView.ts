@@ -14,7 +14,7 @@
  * Fixed → float происходит здесь, на границе (BOT-5): дальше внутри мозга живёт
  * обычная float-математика.
  */
-import { ARENA_COMPONENT, query, type EntityId } from '@game-mvp/core';
+import { ARENA_COMPONENT, query, type EntityId, type WorldMode } from '@game-mvp/core';
 import type { ClientStep, MatchSample } from '@game-mvp/net';
 import { readFixedField, readIntField } from './boundary.js';
 
@@ -56,6 +56,19 @@ export interface BotEntityView {
 export interface BotWorldView {
   /** Тик состояния, из которого собран вид (номер серверного тика снапшота). */
   readonly tick: number;
+  /**
+   * Режим мира доставленного состояния (WSM-1). Приезжает тем же снапшотом, что
+   * и всё остальное, — отдельного канала под него нет и заводить его нельзя
+   * (BOT-3): в `Paused` и `Rewinding` живых тиков нет вовсе, и мозгу тут не
+   * во что играть.
+   */
+  readonly mode: WorldMode;
+  /**
+   * Состояние принадлежит другой ветви истории — разрыв непрерывности (SHELL-7,
+   * NTR-10). Тот же признак, по которому рендер рисует snap: номера тиков после
+   * перемотки идут НАЗАД (NTR-16), и всё, что мозг помнил о будущем, стёрто.
+   */
+  readonly discontinuity: boolean;
   /** Своя сущность бота — опознаётся слотом (TICK-5). */
   readonly self: BotEntityView | undefined;
   /** Все прочие видимые сущности: чужие герои, снаряды, реквизит. */
@@ -120,7 +133,14 @@ export function readWorldView(
     if (view.slot === slot) self = view;
     else others.push(view);
   }
-  return { tick: sample.to.tick, self, others, arenaRadius: arenaRadius(sample) };
+  return {
+    tick: sample.to.tick,
+    mode: sample.to.mode,
+    discontinuity: sample.discontinuity,
+    self,
+    others,
+    arenaRadius: arenaRadius(sample),
+  };
 }
 
 function arenaRadius(sample: MatchSample): number | undefined {
