@@ -674,6 +674,96 @@ describe('направленный гейт обрыва (PHYS-11)', () => {
     h.step();
     expect(h.position(airborne).y).toBe(fixed.add(F(0.5), F(0.3)));
   });
+
+  // Отрицательный допуск — гейт с НУЛЕВЫМ допуском подъёма: гейт активен
+  // (выключает его ровно ноль), но `rise > cliffRise` не пропускает даже
+  // единицу. Арена `TERRAIN` — перепад ровно в один уровень на ребре x = 2.
+  it('отрицательный допуск блокирует подъём на единицу', () => {
+    const h = harness(true, TERRAIN);
+    const mover = h.place('Mover', {
+      Position: { x: F(1.5), y: F(0.5) },
+      Velocity: { x: F(1) },
+      Collider: { cliffRise: -1 },
+    });
+    const events = h.step();
+    expect(h.position(mover).x).toBe(F(1.5));
+    expect(events.map((e) => e.type)).toEqual(['Collision']);
+    expect(events[0]!.data.other).toBe(STATIC_COLLIDER);
+  });
+
+  it('отрицательный допуск пропускает спуск на единицу', () => {
+    const h = harness(true, TERRAIN);
+    const mover = h.place('Mover', {
+      Position: { x: F(2.5), y: F(0.5) },
+      Velocity: { x: F(-1) },
+      Collider: { cliffRise: -1 },
+    });
+    const events = h.step();
+    expect(h.position(mover).x).toBe(F(1.5));
+    expect(events).toHaveLength(0);
+  });
+
+  it('отрицательный допуск пропускает и спуск с любой высоты', () => {
+    const h = harness(true, { ...TERRAIN, levels: ['0033', '0033'] });
+    const mover = h.place('Mover', {
+      Position: { x: F(2.5), y: F(0.5) },
+      Velocity: { x: F(-1) },
+      Collider: { cliffRise: -1 },
+    });
+    const events = h.step();
+    expect(h.position(mover).x).toBe(F(1.5));
+    expect(events).toHaveLength(0);
+  });
+
+  it('при отрицательном допуске ход вдоль ребра не цепляется за него', () => {
+    // Гейт активен и по НЕнормальной оси не блокирует вовсе — иначе снаряд,
+    // идущий вдоль кромки плато, детонировал бы о ребро, которого не пересекал.
+    const h = harness(true, TERRAIN);
+    const alongEdge = h.place('Mover', {
+      Position: { x: F(2), y: F(0.5) },
+      Velocity: { y: F(0.3) },
+      Collider: { cliffRise: -1 },
+    });
+    h.step();
+    expect(h.position(alongEdge).y).toBe(fixed.add(F(0.5), F(0.3)));
+  });
+
+  it('значения меньше −1 эквивалентны −1: подъём блокирован, спуск на единицу свободен', () => {
+    const h = harness(true, TERRAIN);
+    const up = h.place('Mover', {
+      Position: { x: F(1.5), y: F(0.5) },
+      Velocity: { x: F(1) },
+      Collider: { cliffRise: -4 },
+    });
+    const down = h.place('Mover', {
+      Position: { x: F(2.5), y: F(1.5) },
+      Velocity: { x: F(-1) },
+      Collider: { cliffRise: -4 },
+    });
+    h.step();
+    expect(h.position(up).x).toBe(F(1.5));
+    expect(h.position(down).x).toBe(F(1.5));
+  });
+
+  it('регресс: положительный допуск на перепаде в единицу пропускает обе стороны', () => {
+    // Контроль к паре тестов выше: сам перепад в единицу при `cliffRise = 1`
+    // проходится и вверх, и вниз — блокировку подъёма дал ЗНАК, а не арена.
+    const h = harness(true, TERRAIN);
+    const up = h.place('Mover', {
+      Position: { x: F(1.5), y: F(0.5) },
+      Velocity: { x: F(1) },
+      Collider: { cliffRise: 1 },
+    });
+    const down = h.place('Mover', {
+      Position: { x: F(2.5), y: F(1.5) },
+      Velocity: { x: F(-1) },
+      Collider: { cliffRise: 1 },
+    });
+    const events = h.step();
+    expect(h.position(up).x).toBe(F(2.5));
+    expect(h.position(down).x).toBe(F(1.5));
+    expect(events).toHaveLength(0);
+  });
 });
 
 describe('sensor-пересечения (PHYS-12)', () => {

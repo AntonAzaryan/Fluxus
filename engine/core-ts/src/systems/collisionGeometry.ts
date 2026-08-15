@@ -146,7 +146,11 @@ function separation(box: Bounds, obstacle: Bounds, axis: 'x' | 'y'): number {
 /**
  * Направленный гейт обрыва (PHYS-11): пропускает ли ребро этот ход. Применим
  * только к статике с уровнями сторон; при нулевом `cliffRise` обрыв блокирует
- * в обе стороны — поведение без гейта.
+ * в обе стороны — поведение без гейта. Гейт выключает РОВНО ноль, а не всё
+ * неположительное: отрицательный `cliffRise` — это допуск подъёма меньше
+ * единицы, то есть активный гейт с нулевым допуском (любой подъём блокирован
+ * формулой ниже, любой спуск свободен). Значения меньше `−1` эквивалентны
+ * `−1`: подъём целый и меньше единицы уже не бывает.
  *
  * Ось нормали ребра — вырожденная ось его нулевой толщины. Ход по другой оси
  * при активном допуске не блокируется вовсе: сущность в воздухе, скользящая
@@ -158,11 +162,15 @@ function separation(box: Bounds, obstacle: Bounds, axis: 'x' | 'y'): number {
  */
 export function cliffGateOpen(move: Move, s: StaticCollider, cliffRise: number): boolean {
   if (s.levelNeg === undefined || s.levelPos === undefined) return false;
-  if (cliffRise <= 0) return false;
+  if (cliffRise === 0) return false;
   const normalAxis = s.minX === s.maxX ? 'x' : 'y';
   if (move.axis !== normalAxis) return true;
   const rise = move.step > 0 ? s.levelPos - s.levelNeg : s.levelNeg - s.levelPos;
-  return rise <= cliffRise;
+  // Всё, что ниже −1, — тот же нулевой допуск: сама формула этого не даёт
+  // (при `cliffRise = −4` спуск на единицу был бы блокирован), а PHYS-11
+  // требует свободного спуска с ЛЮБОЙ высоты при активном допуске.
+  const tolerance = cliffRise < -1 ? -1 : cliffRise;
+  return rise <= tolerance;
 }
 
 /**
