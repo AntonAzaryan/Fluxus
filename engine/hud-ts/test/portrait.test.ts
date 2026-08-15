@@ -126,7 +126,7 @@ const COMPOSITION: HudComposition = {
     {
       widget: PORTRAIT_WIDGET_NAME,
       zone: 'left',
-      params: { damageEvents: ['FireballExploded'] },
+      params: { damageEvents: ['FireballExploded'], reviveEvent: 'HeroRespawned' },
       bindings: { hero: 'portraitHero' },
     },
   ],
@@ -310,6 +310,74 @@ describe('реакции от доставленных событий (HUD-7, HU
     expect(classesOf(portraitElement(host))).toContain(PORTRAIT_DEAD_CLASS);
     runtime.subsystem.syncTick(viewWithHero(heroView(), { snapAll: true }));
     expect(classesOf(portraitElement(host))).not.toContain(PORTRAIT_DEAD_CLASS);
+  });
+
+  it('событие возрождения снимает dead с ТОЙ ЖЕ сущности — без пересоздания и разрыва', () => {
+    // Возрождение — политика контента, и сцена вправе воскресить героя, не
+    // трогая его `EntityId` (демо: система `Respawn` снимает `Dead` и ставит
+    // здоровье). Тогда `spawned` не взводится, разрыва в доставке нет, и без
+    // события портрет остался бы мёртвым на живом герое до конца матча.
+    const { runtime, host } = bench();
+    runtime.apply(COMPOSITION);
+    runtime.subsystem.syncTick(
+      viewWithHero(heroView(), {
+        events: [{ type: 'EntityDied', tick: 7, data: { entity: HERO_ID } }],
+      }),
+    );
+    expect(classesOf(portraitElement(host))).toContain(PORTRAIT_DEAD_CLASS);
+
+    runtime.subsystem.syncTick(
+      viewWithHero(heroView(), {
+        events: [{ type: 'HeroRespawned', tick: 607, data: { entity: HERO_ID } }],
+      }),
+    );
+    expect(classesOf(portraitElement(host))).not.toContain(PORTRAIT_DEAD_CLASS);
+    // Сущность та же и живая: ни пересоздания (`spawned`), ни снапа не было.
+    runtime.subsystem.syncTick(viewWithHero(heroView()));
+    expect(classesOf(portraitElement(host))).not.toContain(PORTRAIT_DEAD_CLASS);
+  });
+
+  it('возрождение чужой сущности портрет не воскрешает', () => {
+    const { runtime, host } = bench();
+    runtime.apply(COMPOSITION);
+    runtime.subsystem.syncTick(
+      viewWithHero(heroView(), {
+        events: [{ type: 'EntityDied', tick: 7, data: { entity: HERO_ID } }],
+      }),
+    );
+    runtime.subsystem.syncTick(
+      viewWithHero(heroView(), {
+        events: [{ type: 'HeroRespawned', tick: 607, data: { entity: 99 } }],
+      }),
+    );
+    expect(classesOf(portraitElement(host))).toContain(PORTRAIT_DEAD_CLASS);
+  });
+
+  it('без параметра `reviveEvent` то же событие ничего не значит', () => {
+    // Умолчания у имени нет: конвенции ядра на «воскрес» не существует, и
+    // угаданное имя молча не сработало бы.
+    const { runtime, host } = bench();
+    runtime.apply({
+      entries: [
+        {
+          widget: PORTRAIT_WIDGET_NAME,
+          zone: 'left',
+          params: { damageEvents: ['FireballExploded'] },
+          bindings: { hero: 'portraitHero' },
+        },
+      ],
+    });
+    runtime.subsystem.syncTick(
+      viewWithHero(heroView(), {
+        events: [{ type: 'EntityDied', tick: 7, data: { entity: HERO_ID } }],
+      }),
+    );
+    runtime.subsystem.syncTick(
+      viewWithHero(heroView(), {
+        events: [{ type: 'HeroRespawned', tick: 607, data: { entity: HERO_ID } }],
+      }),
+    );
+    expect(classesOf(portraitElement(host))).toContain(PORTRAIT_DEAD_CLASS);
   });
 });
 

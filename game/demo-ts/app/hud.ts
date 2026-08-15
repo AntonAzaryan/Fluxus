@@ -184,7 +184,12 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
         // константа виджета (design D5).
         widget: 'portrait',
         zone: 'bottom-left',
-        params: { size: 122 },
+        // `reviveEvent` — событие сцены (`Respawn`, order 140): смерть в этой
+        // сцене не терминальна, а возрождение НЕ пересоздаёт сущность — тот же
+        // `EntityId` снимает `Dead` и получает полное здоровье. Без имени
+        // события портрет остался бы мёртвым на живом герое: `spawned` не
+        // взводится, разрыва в доставке нет (HUD-5).
+        params: { size: 122, reviveEvent: 'HeroRespawned' },
         bindings: { hero: 'hero.entity' },
       },
       {

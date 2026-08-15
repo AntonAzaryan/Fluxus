@@ -45,7 +45,6 @@ import {
   applyCameraPose,
   cameraConfigFromManifest,
   createCameraInput,
-  edgePanAxes,
   resetCameraInput,
   terrainGroundApi,
   type CameraBounds,
@@ -74,6 +73,7 @@ import {
   chargeVisualOf,
   stateBit,
 } from './sim.js';
+import { demoEdgePan } from './cameraInput.js';
 import { createDemoHud, demoHudComposition } from './hud.js';
 import { DEMO_SERVER_URL, demoMode, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
@@ -762,8 +762,16 @@ function sampleCameraInput(): void {
   camInput.panX = (keys.has('ArrowRight') ? 1 : 0) - (keys.has('ArrowLeft') ? 1 : 0);
   camInput.panY = (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0);
   const rect = renderer3.domElement.getBoundingClientRect();
-  const margin = rig?.config.edgeMarginPx ?? 0;
-  const edge = pointerOverHud ? { x: 0, y: 0 } : edgePanAxes(pointerX, pointerY, rect, margin);
+  // Край экрана — политика сборки (`cameraInput.ts`): в follow он инертен, и
+  // прицел мышью у кромки арены больше не срывает слежение за героем (CAM-2).
+  const edge = demoEdgePan({
+    mode: rig?.mode ?? null,
+    pointerOverHud,
+    pointerX,
+    pointerY,
+    rect,
+    margin: rig?.config.edgeMarginPx ?? 0,
+  });
   camInput.edgeX = edge.x;
   camInput.edgeY = edge.y;
   camInput.centerHeld = keys.has('KeyC');
