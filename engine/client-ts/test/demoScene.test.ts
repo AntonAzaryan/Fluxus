@@ -196,10 +196,15 @@ describe('демо-сцена: кромка диска и смерть в пус
       }
       return count;
     };
+    /** Все снаряды, ЖИВШИЕ за прогон: долетевший исчезает, и живого счёта мало. */
+    const spawned = new Set<EntityId>();
     const step = (tick: number, buttons: number): void => {
       simTick(sim, state, [
         { tick, playerId: PLAYER_ID, seq: tick, move: { x: 0, y: 0 }, aimDir: 0, buttons },
       ]);
+      for (const entity of coreWorld.listAlive(state.world)) {
+        if (coreWorld.hasTag(state.world, entity, 'Fireball')) spawned.add(entity);
+      }
     };
 
     for (let tick = 1; tick <= 10; tick++) step(tick, CAST);
@@ -215,6 +220,20 @@ describe('демо-сцена: кромка диска и смерть в пус
     expect(coreWorld.getField(state.world, playerId, 'Cooldowns', 'cast')).toBeGreaterThan(0);
     step(12, CAST);
     expect(coreWorld.hasComponent(state.world, playerId, 'Charging')).toBe(false);
+    expect(fireballs()).toBe(1);
+
+    // Второй цикл «нажал-отпустил» после кулдауна даёт ВТОРОЙ снаряд: удержание
+    // не спамит, но и не запирает способность навсегда. Считаются РОДИВШИЕСЯ
+    // за прогон, а не живые: первый снаряд к этому времени долетел и исчез.
+    expect(spawned.size).toBe(1);
+    let tick = 13;
+    while (coreWorld.getField(state.world, playerId, 'Cooldowns', 'cast') > 0) {
+      step(tick, 0);
+      tick += 1;
+    }
+    step(tick, CAST);
+    step(tick + 1, 0);
+    expect(spawned.size).toBe(2);
     expect(fireballs()).toBe(1);
   });
 

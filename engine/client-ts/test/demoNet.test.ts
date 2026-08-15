@@ -288,6 +288,9 @@ describe('демо по умолчанию: матч против бота на 
     expect(hero.stats!.get(STATS.hp)).toBe(1000);
     expect(hero.stats!.has(STATS.deaths)).toBe(false);
     // Фаза полёта: у снаряда она посчитана воркером, у героя её нет (REND-12).
+    // Тип именно `Fireball`, а не `HeavyFireball`: заряд держался пару тиков —
+    // порога `chargeHeavyScale` он не достигает, — и снаряд ещё жив: полёт
+    // длится `throwLifetime` (50 тиков), а прогон здесь короче.
     const fireball = [...view.entities.values()].find((entity) => entity.kind === 'Fireball')!;
     expect(fireball).toBeDefined();
     expect(fireball.flightPhase).toBeGreaterThanOrEqual(0);

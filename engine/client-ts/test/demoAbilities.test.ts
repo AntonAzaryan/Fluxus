@@ -34,7 +34,10 @@ import manifestJson from '../../../content/visuals/manifest.json';
 
 const SCENE = sceneJson as unknown as SceneDef;
 const MANIFEST = manifestJson as unknown as {
-  readonly effects: { readonly byKind: Record<string, { readonly radius: number }> };
+  readonly effects: {
+    readonly byKind: Record<string, { readonly radius: number }>;
+    readonly byEvent: Record<string, { readonly radius: number; readonly radiusTo: number }>;
+  };
 };
 const MATCH = matchJson as unknown as {
   readonly seed: number;
@@ -82,6 +85,8 @@ const OVERCHARGE_DAMAGE = 250;
 const OVERCHARGE_RADIUS = 3 * FIXED_ONE;
 /** Радиус коллайдера снаряда — ровно половина героического. */
 const FIREBALL_RADIUS = 9830;
+/** Радиус коллайдера тяжёлого снаряда — вдвое больше обычного, то есть героический. */
+const HEAVY_FIREBALL_RADIUS = 19661;
 
 interface Arena {
   readonly sim: Simulation;
@@ -284,7 +289,7 @@ describe('зеркала балансных чисел сцены', () => {
 
   it('полное время полёта сборки — то же, что `AbilityConfig.throwLifetime`', () => {
     expect(FIREBALL_LIFETIME_TICKS).toBe(ability.throwLifetime);
-    // И умолчание prefab'а тоже: `Cast`/`ThrowHeld` его перекрывают, но снаряд,
+    // И умолчание prefab'а тоже: `ChargeRelease`/`ThrowHeld` его перекрывают, но снаряд,
     // рождённый мимо них, обязан жить столько же.
     expect(SCENE.prefabs!.find((p) => p.name === 'Fireball')!.components.Lifetime!.ticks).toBe(
       ability.throwLifetime,
@@ -791,6 +796,10 @@ describe('захват снаряда: удержание, переброс и �
       ready = dFar <= 2.8 * FIXED_ONE && dNear > 0;
     }
     expect(ready).toBe(true);
+    // Дальний снаряд ЖИВ: уничтоженный прошёл бы обе проверки ниже даром — и
+    // «ближайший выбран», и «дальний не пойман» держались бы на том, что его
+    // просто нет. Тест о выборе цели, а не о её исчезновении.
+    expect(fireballs(a.state)).toContain(far);
     expect(x(a.state, p2) - x(a.state, near)).toBeLessThan(x(a.state, p2) - x(a.state, far));
 
     a.step([NEUTRAL, { aimDir: AIM_WEST }]);
@@ -847,9 +856,6 @@ describe('числа способностей: ретюн виден в дифф
     expect(ability.hitDamage).toBe(HIT_DAMAGE);
     expect(ability.overchargeDamage).toBe(OVERCHARGE_DAMAGE);
     expect(ability.overchargeRadius).toBe(OVERCHARGE_RADIUS);
-    // Урон на максимуме — КВАДРАТ множителя размера: вдвое больше шар бьёт
-    // вчетверо сильнее. Формула живёт в `ChargeRelease`, здесь — её результат.
-    expect(HIT_DAMAGE * (CHARGE_MAX_SCALE / FIXED_ONE) ** 2).toBe(400);
   });
 
   it('коллайдер снаряда — ровно половина героического, и манифест это зеркалит', () => {
@@ -862,10 +868,34 @@ describe('числа способностей: ретюн виден в дифф
     // Оболочка эффекта числами симуляции не питается (REND-1) — совпадение
     // размеров держится только этим зеркалом.
     expect(MANIFEST.effects.byKind.Fireball!.radius).toBeCloseTo(FIREBALL_RADIUS / FIXED_ONE, 3);
-    // Тяжёлый снаряд — тот же коллайдер: крупнее он только на картинке.
+  });
+
+  it('тяжёлый снаряд бьёт по своей картинке: коллайдер вдвое больше обычного', () => {
+    // «Растёт вдвое» — это и хитбокс, а не только картинка: шар, который видно
+    // радиусом 0.3, обязан и попадать радиусом 0.3, иначе игрок мажет по тому,
+    // во что целился. Радиус тяжёлого равен ГЕРОИЧЕСКОМУ — он же вдвое больше
+    // обычного снаряда.
     const heavy = SCENE.prefabs!.find((prefab) => prefab.name === 'HeavyFireball')!;
-    expect(heavy.components.Collider).toEqual(collider);
+    const collider = heavy.components.Collider!;
+    expect(collider.radius).toBe(HEAVY_FIREBALL_RADIUS);
+    expect(HEAVY_FIREBALL_RADIUS).toBe(2 * FIREBALL_RADIUS + 1); // 9830·2, поправка округления
+    expect(collider.halfX).toBe(HEAVY_FIREBALL_RADIUS);
+    expect(collider.halfY).toBe(HEAVY_FIREBALL_RADIUS);
+    // И то же зеркало в манифесте: нарисованный радиус — тот, которым бьют.
+    expect(MANIFEST.effects.byKind.HeavyFireball!.radius).toBeCloseTo(
+      HEAVY_FIREBALL_RADIUS / FIXED_ONE,
+      2,
+    );
     expect(heavy.tags).toEqual(['HeavyFireball', 'Fireball']);
+  });
+
+  it('вспышка взрыва заряда в манифесте — радиус самого взрыва из `AbilityConfig`', () => {
+    // `ChargeExploded` бьёт площадью, и его вспышка обещает ровно ту площадь:
+    // ретюн `overchargeRadius` без манифеста нарисовал бы не тот круг.
+    expect(MANIFEST.effects.byEvent.ChargeExploded!.radiusTo).toBeCloseTo(
+      OVERCHARGE_RADIUS / FIXED_ONE,
+      3,
+    );
   });
 });
 
@@ -909,6 +939,75 @@ describe('фаербол: урон по герою, препятствия и п
     // Взрыв пришёлся на обрыв, а не на конец жизни: до него было ещё далеко.
     expect(stopY).toBeGreaterThan(19 * FIXED_ONE);
     expect(stopY).toBeLessThan(20 * FIXED_ONE);
+  });
+
+  /**
+   * Урон одного тика СКЛАДЫВАЕТСЯ. Команды буфера — последняя-побеждает на поле
+   * (CMD-3), и система, которая писала бы `Health.hp` на каждое событие `Damage`
+   * по прочитанному из ЖИВОГО мира значению, оставляла бы от N попаданий за тик
+   * ровно одно — последнее. Поэтому `DamageApply` обходит цели, а не события:
+   * на цель приходится одно чтение, одна сумма и одна запись.
+   */
+  it('два снаряда в одного героя за тик снимают ОБА урона, а не последний (CMD-3)', () => {
+    // Стрелки стоят симметрично центральному герою: снаряды выходят на равном
+    // удалении и доходят до его коллайдера одним и тем же тиком.
+    const a = ffa([20, 24, 28]);
+    const victim = a.heroes[1]!;
+    a.step([{ buttons: CAST }, NEUTRAL, { buttons: CAST, aimDir: AIM_WEST }]);
+    a.step([NEUTRAL, NEUTRAL, { aimDir: AIM_WEST }]);
+    expect(fireballs(a.state)).toHaveLength(2);
+
+    let events: readonly string[] = [];
+    for (let i = 0; i < 40 && fireballs(a.state).length > 0; i++) {
+      events = a.step([NEUTRAL, NEUTRAL, { aimDir: AIM_WEST }]);
+    }
+
+    expect(fireballs(a.state)).toHaveLength(0);
+    expect(hp(a.state, victim)).toBe(1000 - 2 * HIT_DAMAGE);
+    // И ровно две вспышки на два израсходованных снаряда: дедупликация взрыва
+    // считается ПО СНАРЯДУ (`FireballHit` обходит снаряды), а не одним общим
+    // счётчиком на весь обход событий.
+    expect(events.filter((type) => type === 'FireballExploded')).toHaveLength(2);
+    expect(events.filter((type) => type === 'HeroHit')).toHaveLength(2);
+  });
+
+  it('передержка и попадание в один тик снимают и 250, и 100', () => {
+    // Момент разрыва заряда детерминирован (см. тест передержки), а время
+    // полёта снаряда меряется отдельным прогоном той же геометрии: числа
+    // скорости и коллайдеров в тест не переписываются.
+    const GAP = 6;
+    const probe = ffa([[24, 24.5], [24 + GAP, 24.5]]);
+    const dummy = probe.heroes[0]!;
+    probe.step([NEUTRAL, { buttons: CAST, aimDir: AIM_WEST }]);
+    let flight = 0;
+    for (let t = 2; t <= 200 && flight === 0; t++) {
+      probe.step([NEUTRAL, { aimDir: AIM_WEST }]);
+      if (hp(probe.state, dummy) < 1000) flight = t - 1; // тиков от НАЖАТИЯ до попадания
+    }
+    expect(flight).toBeGreaterThan(0);
+
+    // Тик разрыва: заряд считается со следующего после нажатия тика, и
+    // `ChargeTick` (order 29) прибавляет свой до проверки (order 35).
+    const blastTick = CHARGE_TICKS + CHARGE_GRACE_TICKS + 2;
+    const fireTick = blastTick - flight;
+    expect(fireTick).toBeGreaterThan(0);
+
+    const a = ffa([[24, 24.5], [24 + GAP, 24.5]]);
+    const caster = a.heroes[0]!;
+    let events: readonly string[] = [];
+    for (let t = 1; t <= blastTick; t++) {
+      events = a.step([
+        { buttons: CAST },
+        t === fireTick ? { buttons: CAST, aimDir: AIM_WEST } : { aimDir: AIM_WEST },
+      ]);
+    }
+
+    // Оба урона пришли одним тиком — и оба легли на кастера.
+    expect(events).toContain('ChargeExploded');
+    expect(events).toContain('FireballExploded');
+    expect(hp(a.state, caster)).toBe(1000 - OVERCHARGE_DAMAGE - HIT_DAMAGE);
+    // Стрелок вне радиуса передержки (6 клеток при радиусе 3) и цел.
+    expect(hp(a.state, a.heroes[1]!)).toBe(1000);
   });
 
   it('долетевший снаряд больше НЕ выбивает пол под собой', () => {
