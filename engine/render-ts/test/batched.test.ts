@@ -49,6 +49,7 @@ interface Rig {
 function makeRig(
   manifest: VisualManifest = makeManifest(),
   camera?: THREE.Camera,
+  options: { readonly reviveEvent?: string } = {},
 ): Rig {
   const assets = makeAssets();
   const warnings: string[] = [];
@@ -58,6 +59,7 @@ function makeRig(
     config: { heightStep: 0.5 },
   };
   const subsystem = new ModelsSubsystem(manifest, {
+    ...options,
     warn: (message) => warnings.push(message),
     ...(camera === undefined ? {} : { camera }),
   });
@@ -359,6 +361,101 @@ describe('анимация батчевой записи (REND-4, REND-20)', () 
 
     expect(controller.isDead).toBe(false);
     expect(controller.currentClipName).toBe('Walk Fast');
+  });
+
+  it('возрождение снимает фиксацию и возвращает погашенные смертью части', () => {
+    // Модель с распадающимся трупом: клип смерти гасит единственную часть и
+    // держит её погашенной до конца — зафиксированный кадр не рисует НИЧЕГО
+    // (так устроена смерть `SkeletonBarbarian` в `content/visuals`). У этого
+    // яруса «не рисует» видно компактацией: запись не попадает в инстанс-буфер.
+    const base = makeModel();
+    const decaying: NormalizedModel = {
+      ...base,
+      sequences: [
+        {
+          ...base.sequences[0]!,
+          partVisibility: [
+            { partId: 0, times: new Float32Array([0, 1]), visible: new Uint8Array([1, 1]) },
+          ],
+        },
+        {
+          ...base.sequences[3]!,
+          partVisibility: [
+            {
+              partId: 0,
+              times: new Float32Array([0, 0.4, 0.8]),
+              visible: new Uint8Array([1, 0, 0]),
+            },
+          ],
+        },
+      ],
+    };
+    const manifest = makeManifest();
+    manifest.entities.Runner!.animations = {
+      states: { idle: 'Stand' },
+      events: { EntityDied: 'Death' },
+    };
+    const { subsystem, assets } = makeRig(manifest, undefined, { reviveEvent: 'HeroRespawned' });
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, decaying);
+    const drawn = (): number => subsystem.batchMeshes()[0]!.count;
+    subsystem.updateFrame(1 / 60, 1);
+    expect(drawn()).toBe(1);
+
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1)], {
+        freshEvents: true,
+        events: [{ type: 'EntityDied', data: { entity: 1 } }],
+      }),
+    );
+    for (let i = 0; i < 120; i++) subsystem.updateFrame(1 / 60, 1);
+    const controller = subsystem.instanceFor(1)!.controller!;
+    expect(controller.isDead).toBe(true);
+    expect(drawn()).toBe(0); // герой невидим — ровно то, что видел игрок
+
+    // Сцена вернула ту же сущность: `snapAll` не поднимался, и снимает
+    // фиксацию названное сборкой событие (REND-4).
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1)], {
+        freshEvents: true,
+        events: [{ type: 'HeroRespawned', data: { entity: 1 } }],
+      }),
+    );
+    for (let i = 0; i < 30; i++) subsystem.updateFrame(1 / 60, 1);
+
+    expect(controller.isDead).toBe(false);
+    expect(controller.currentClipName).toBe('Stand - 1');
+    expect(drawn()).toBe(1);
+  });
+
+  it('возрождение чужой сущности батчевого соседа не поднимает', () => {
+    const { subsystem, assets } = makeRig(makeManifest(), undefined, {
+      reviveEvent: 'HeroRespawned',
+    });
+    const pool = makeTickView([makeEntityView(1), makeEntityView(2)]);
+    subsystem.syncTick(pool);
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1), makeEntityView(2)], {
+        freshEvents: true,
+        events: [
+          { type: 'EntityDied', data: { entity: 1 } },
+          { type: 'EntityDied', data: { entity: 2 } },
+        ],
+      }),
+    );
+    for (let i = 0; i < 120; i++) subsystem.updateFrame(1 / 60, 1);
+
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1), makeEntityView(2)], {
+        freshEvents: true,
+        events: [{ type: 'HeroRespawned', data: { entity: 2 } }],
+      }),
+    );
+
+    expect(subsystem.instanceFor(2)!.controller!.isDead).toBe(false);
+    expect(subsystem.instanceFor(1)!.controller!.isDead).toBe(true);
+    expect(subsystem.instanceFor(1)!.controller!.currentClipName).toBe('Death');
   });
 
   it('фаза клипа уходит в строки VAT: пара соседних кадров и вес между ними', () => {
