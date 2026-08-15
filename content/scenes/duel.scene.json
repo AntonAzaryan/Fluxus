@@ -1609,7 +1609,7 @@
     {
       "name": "FallDeath",
       "order": 130,
-      "query": { "all": ["Falling", "FallConfig"], "not": ["Dead"] },
+      "query": { "all": ["Falling", "FallConfig", "Velocity"], "not": ["Dead"] },
       "as": "e",
       "do": [
         {
@@ -1650,6 +1650,13 @@
                       "removeComponent": {
                         "entity": { "var": "e" },
                         "component": "Shielded"
+                      }
+                    },
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Velocity",
+                        "values": { "x": 0, "y": 0 }
                       }
                     },
                     {
@@ -2207,7 +2214,18 @@
       "name": "Respawn",
       "order": 140,
       "query": {
-        "all": ["Dead", "Spawn", "Player", "Position", "Velocity", "Health", "Cooldowns", "AbilityConfig"]
+        "all": [
+          "Dead",
+          "Spawn",
+          "Player",
+          "Position",
+          "Velocity",
+          "LocomotionState",
+          "Collider",
+          "Health",
+          "Cooldowns",
+          "AbilityConfig"
+        ]
       },
       "as": "e",
       "do": [

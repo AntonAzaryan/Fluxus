@@ -145,11 +145,11 @@ const NEUTRAL: Frame = {};
  * Двое героев на одной линии в центре арены: `p1` слева, `p2` справа, между
  * ними четыре клетки — снаряд покрывает их за десяток тиков.
  */
-function arena(gap = 4): Arena {
+function arena(gap = 4, scene: SceneDef = SCENE): Arena {
   const left = (24 - gap / 2) * FIXED_ONE;
   const right = (24 + gap / 2) * FIXED_ONE;
   const built = buildMatchWorld({
-    scene: SCENE,
+    scene,
     seed: MATCH.seed,
     players: MATCH.players,
     initial: [
@@ -2313,6 +2313,49 @@ describe('возрождение героя: смерть больше не те
     expect(rewind).toBe(1200 - (tick - 1));
   });
 
+  it('перезарядка ДЛИННЕЕ окна смерти обнуляется возрождением, а не дотикивает', () => {
+    // Сброс перезарядок в `Respawn` при сегодняшних числах не наблюдаем:
+    // `CooldownTick` тикает и у трупа, а самый долгий максимум (300) втрое
+    // короче окна возрождения (600), — то есть к воскрешению всё и так по нулям.
+    // Это НЕ повод убирать сброс: он и есть та защита, которая держит инвариант
+    // «воскресший кастует сразу» при ретюне любого из двух чисел. Здесь ретюн
+    // и разыгрывается: сцена с перезарядкой щита длиннее окна смерти.
+    const LONG = 900;
+    expect(LONG).toBeGreaterThan(RESPAWN_TICKS);
+    const retuned: SceneDef = {
+      ...SCENE,
+      prefabs: SCENE.prefabs!.map((prefab) =>
+        prefab.name === 'Hero'
+          ? {
+              ...prefab,
+              components: {
+                ...prefab.components,
+                Cooldowns: { ...prefab.components.Cooldowns, shieldMax: LONG },
+              },
+            }
+          : prefab,
+      ),
+    };
+
+    const a = arena(8, retuned);
+    const p1 = a.heroes[0]!;
+    const shield = (): number => coreWorld.getField(a.state.world, p1, 'Cooldowns', 'shield');
+    a.step({ buttons: SHIELD });
+    expect(shield()).toBe(LONG);
+
+    const deathTick = a.step({ buttons: KILL });
+    let tick = deathTick;
+    while (tick - deathTick < RESPAWN_TICKS - 1) tick = a.step(NEUTRAL);
+    // Последний тик до возрождения: труп лежит, а перезарядка ещё идёт — именно
+    // с ней воскресший и остался бы без сброса.
+    expect(alive(a, p1)).toBe(false);
+    expect(shield()).toBeGreaterThan(0);
+
+    a.step(NEUTRAL);
+    expect(alive(a, p1)).toBe(true);
+    expect(shield()).toBe(0);
+  });
+
   it('воскресший кастует немедленно — сброшенная перезарядка не обещание', () => {
     const a = arena(8);
     const p1 = a.heroes[0]!;
@@ -2347,7 +2390,19 @@ describe('возрождение героя: смерть больше не те
     expect(coreWorld.hasComponent(a.state.world, p1, 'LevelOverride')).toBe(true);
     expect(coreWorld.getField(a.state.world, p1, 'Health', 'hp')).toBe(1000);
 
-    for (let i = 0; i < RESPAWN_TICKS; i++) a.step(NEUTRAL);
+    // Труп не едет. Управление провал отбирает, а скорость оставляет — герой
+    // падает по дуге, — но СМЕРТЬ её обнуляет, иначе тот же импульс десять
+    // секунд тащил бы тело прочь, и возрождение выглядело бы телепортом с
+    // другого конца карты. Пиннится всё окно, а не первый его тик.
+    const deadX = x(a.state, p1);
+    const deadY = y(a.state, p1);
+    for (let i = 0; i < RESPAWN_TICKS; i++) {
+      a.step(NEUTRAL);
+      if (!alive(a, p1)) {
+        expect(x(a.state, p1)).toBe(deadX);
+        expect(y(a.state, p1)).toBe(deadY);
+      }
+    }
     expect(alive(a, p1)).toBe(true);
     expect(coreWorld.hasComponent(a.state.world, p1, 'Falling')).toBe(false);
     expect(coreWorld.hasComponent(a.state.world, p1, 'LevelOverride')).toBe(false);
