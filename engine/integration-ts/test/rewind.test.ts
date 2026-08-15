@@ -19,9 +19,11 @@ import {
   runScenario,
   snapshotToPlain,
   world as coreWorld,
+  type SceneDef,
 } from '@game-mvp/core';
 import {
   replaySegments,
+  REWIND_REQUEST_EVENT,
   type InputSource,
   type MatchSegment,
   type PresentedState,
@@ -32,6 +34,7 @@ import {
   TICK_RATE,
   connectClient,
   duelConfig,
+  duelScene,
   harness,
   playMatch,
   settle,
@@ -242,5 +245,268 @@ describe('матч с перемоткой в вертикали (NET-11, NTR-16
     // парным (NTR-8): именно поэтому записанные матчи не двигаются.
     const scenario = runScenario(match.server.toScenario());
     expect(scenario.ticks[scenario.ticks.length - 1]).toEqual(canonical);
+  });
+});
+
+// --------------------------------------------------- ульта отката в вертикали
+
+/**
+ * Бит ульты в `buttons` — раскладка сборки игры. В вертикали он живёт трижды:
+ * его ловит фронтом JSON-система сцены, его же читает сервер во время
+ * `Rewinding` (конфиг матча), и он же приезжает обычным кадром ввода — второго
+ * канала под управление в протоколе нет (NTR-8).
+ */
+const ULT_BUTTON = 7;
+const ULT = 1 << ULT_BUTTON;
+/** Глубина автостопа из payload запроса и шаг ведения точки — числа этой сцены. */
+const ULT_DEPTH_TICKS = 40;
+const SCRUB_STEP = 4;
+/** Интервал снапшотов интерактивного скраба (SNAP-4): реплей — до 30 тиков на шаг. */
+const SCRUB_INTERVAL = 30;
+const ULT_COOLDOWN = 600;
+
+const ulted = { var: 'e' } as const;
+const ultField = (component: string, name: string): object => ({
+  getComponent: [ulted, component, name],
+});
+
+/**
+ * Сцена вертикали плюс ульта отката — та же форма, что в демо-сцене: cooldown в
+ * собственном компоненте, гейт по фронту кнопки и по нулю cooldown'а, эмиссия
+ * события-запроса с глубиной. Ни одного балансного числа за пределами сцены.
+ */
+function ultScene(): SceneDef {
+  const scene = duelScene();
+  const hero = scene.prefabs![0]!;
+  return {
+    ...scene,
+    components: [
+      ...scene.components,
+      { name: 'RewindCooldown', fields: { max: 'i32', ticks: 'i32' } },
+    ],
+    prefabs: [
+      {
+        ...hero,
+        components: { ...hero.components, RewindCooldown: { max: ULT_COOLDOWN, ticks: 0 } },
+      },
+    ],
+    systems: [
+      ...(scene.systems ?? []),
+      {
+        name: 'RewindCooldownTick',
+        order: 5,
+        query: { all: ['RewindCooldown'] },
+        as: 'e',
+        do: [
+          {
+            if: {
+              cond: { '>': [ultField('RewindCooldown', 'ticks'), 0] },
+              then: [
+                {
+                  modifyComponent: {
+                    entity: ulted,
+                    component: 'RewindCooldown',
+                    values: { ticks: { '-': [ultField('RewindCooldown', 'ticks'), 1] } },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        name: 'RewindCast',
+        order: 40,
+        query: { all: ['Input', 'Player', 'RewindCooldown'] },
+        as: 'e',
+        do: [
+          {
+            if: {
+              cond: {
+                and: [
+                  { bitTest: [ultField('Input', 'buttons'), ULT_BUTTON] },
+                  { '!': [{ bitTest: [ultField('Input', 'prevButtons'), ULT_BUTTON] }] },
+                  { '==': [ultField('RewindCooldown', 'ticks'), 0] },
+                ],
+              },
+              then: [
+                {
+                  modifyComponent: {
+                    entity: ulted,
+                    component: 'RewindCooldown',
+                    values: { ticks: ultField('RewindCooldown', 'max') },
+                  },
+                },
+                {
+                  emitEvent: {
+                    type: REWIND_REQUEST_EVENT,
+                    data: { depthTicks: ULT_DEPTH_TICKS, initiator: ulted },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function ultConfig(exempt: boolean) {
+  return duelConfig({
+    scene: ultScene(),
+    rewind: {
+      interval: SCRUB_INTERVAL,
+      capacity: 15,
+      holdButton: ULT_BUTTON,
+      step: SCRUB_STEP,
+      holdTimeoutTicks: 15,
+      ...(exempt ? { exempt: [{ component: 'RewindCooldown' }] } : {}),
+    },
+  });
+}
+
+/** Значение поля первой сущности, у которой оно есть, — герой матча здесь один такой. */
+function fieldOfSlot(snapshot: PresentedState, slot: number, component: string, field: string): number {
+  for (const entity of query(snapshot.world, { all: ['Player', component] })) {
+    if (coreWorld.getField(snapshot.world, entity, 'Player', 'slot') !== slot) continue;
+    return coreWorld.getField(snapshot.world, entity, component, field);
+  }
+  throw new Error(`слот ${slot} без компонента ${component}`);
+}
+
+/**
+ * Матч с настоящей ультой: кнопка едет обычным кадром ввода, JSON-система сцены
+ * ловит фронт и эмитит запрос, сервер дренирует его после тика и ведёт точку
+ * перемотки, пока кнопка удержана.
+ */
+async function playUltMatch(options: { exempt: boolean; holdSteps: number }) {
+  const config = ultConfig(options.exempt);
+  const fixture = harness(config);
+  const scene = config.scene;
+  let hold = false;
+  const a = connectClient(fixture.hub, 'p1', fixture.clock, scene, () => ({
+    move: { x: hold ? 0 : STEP, y: 0 },
+    aimDir: 0,
+    buttons: hold ? ULT : 0,
+  }));
+  const b = connectClient(fixture.hub, 'p2', fixture.clock, scene);
+  await settle();
+
+  const tick = async (): Promise<void> => {
+    fixture.clock.ms += 1000 / TICK_RATE;
+    a.host.step();
+    b.host.step();
+    await settle();
+    fixture.host.step();
+    await settle();
+  };
+
+  // Прогрев: живая ветвь длиннее глубины отката — иначе автостоп упёрся бы в
+  // историю, а не в число из запроса.
+  for (let i = 0; i < 80; i++) await tick();
+  const beforeCast = fixture.server.snapshot();
+
+  hold = true;
+  for (let i = 0; i < 20 && fixture.server.mode === 'Running'; i++) await tick();
+  const castTick = fixture.server.tick;
+  expect(fixture.server.mode).toBe('Rewinding');
+
+  /** Точки остановки по шагам скраба — по ним видно и шаг, и монотонность. */
+  const points: number[] = [];
+  for (let i = 0; i < options.holdSteps; i++) {
+    await tick();
+    points.push(fixture.server.tick);
+  }
+
+  hold = false;
+  for (let i = 0; i < 20 && fixture.server.mode !== 'Running'; i++) await tick();
+  const resumedAt = fixture.server.tick;
+  for (let i = 0; i < 10; i++) await tick();
+
+  return { ...fixture, a, b, config, castTick, points, resumedAt, beforeCast, hold: () => hold };
+}
+
+describe('ульта отката в вертикали: контент решает, хост исполняет (WSM-5, NET-11)', () => {
+  it('запрос из JSON-системы замораживает мир, удержание ведёт точку, отпускание возобновляет', async () => {
+    const match = await playUltMatch({ exempt: true, holdSteps: 3 });
+
+    // Шаг ведения — из конфига матча, монотонно назад.
+    expect(match.points).toEqual([
+      match.castTick - SCRUB_STEP,
+      match.castTick - 2 * SCRUB_STEP,
+      match.castTick - 3 * SCRUB_STEP,
+    ]);
+    // Отпускание вернуло мир в `Running` с ДОСТИГНУТОЙ точки, а не с ещё одной
+    // назад: исчезновение бита в свежем кадре инициатора кончает скраб, шага
+    // при этом не делая.
+    expect(match.resumedAt).toBe(match.points[match.points.length - 1]);
+    expect(match.server.mode).toBe('Running');
+    expect(match.server.tick).toBe(match.resumedAt + 10);
+    // Перемотка наблюдаема сменой эпохи (NTR-16), и клиент её увидел.
+    expect(match.server.epoch).toBeGreaterThan(0);
+    expect(match.b.client.epoch).toBe(match.server.epoch);
+  });
+
+  it('cooldown ульты переживает откат, а вторая ульта отсекается гейтом контента', async () => {
+    const match = await playUltMatch({ exempt: true, holdSteps: 2 });
+    const afterRewind = match.server.snapshot();
+
+    // Ульта прожата на тике `castTick`, мир откачен на два десятка тиков назад —
+    // и всё же cooldown стоит взведённым: exempt-компонент отката не пережил бы
+    // только вместе с сущностью.
+    expect(fieldOfSlot(afterRewind, 0, 'RewindCooldown', 'ticks')).toBeGreaterThan(0);
+    expect(fieldOfSlot(match.beforeCast, 0, 'RewindCooldown', 'ticks')).toBe(0);
+
+    // Кнопка нажата заново в возобновлённом мире: гейт системы вторую перемотку
+    // не пускает, и мир остаётся в `Running`.
+    const epochBefore = match.server.epoch;
+    const tickBefore = match.server.tick;
+    for (let i = 0; i < 12; i++) {
+      match.clock.ms += 1000 / TICK_RATE;
+      match.a.host.step();
+      match.host.step();
+    }
+    expect(match.server.mode).toBe('Running');
+    expect(match.server.epoch).toBe(epochBefore);
+    expect(match.server.tick).toBeGreaterThan(tickBefore);
+  });
+
+  it('сегментированный лог матча с ультой прогоняется побитово (NTR-8)', async () => {
+    // Без exempt-списка: канонический лог — это ВВОД, и значения, которые
+    // перемотка сохранила из стёртой ветви, из него не выводятся. Пара
+    // «запись — прогон» определена ровно для мира, целиком выведенного из
+    // ввода, поэтому механизм проверяется на матче без исключений отката.
+    const match = await playUltMatch({ exempt: false, holdSteps: 3 });
+    const segments = match.server.canonicalSegments;
+
+    expect(segments.length).toBeGreaterThan(1);
+    const replay = replayOf(match.config, segments);
+    expect(replay.tick).toBe(match.server.tick);
+    expect(snapshotToPlain(replay.snapshot)).toEqual(snapshotToPlain(match.server.snapshot()));
+  });
+
+  it('exempt-значение — единственное расхождение записи и прогона', async () => {
+    const match = await playUltMatch({ exempt: true, holdSteps: 3 });
+    const replayed = snapshotToPlain(replayOf(match.config, match.server.canonicalSegments).snapshot);
+    const canonical = snapshotToPlain(match.server.snapshot());
+
+    // Cooldown, сохранённый через откат, в прогоне лога не воспроизводится: он
+    // пришёл из стёртой ветви, а лог несёт только ввод. Это цена exempt-списка
+    // (REW-9), и она названа здесь, а не обнаруживается в отладке чужого матча.
+    expect(replayed.world.components.RewindCooldown).not.toEqual(
+      canonical.world.components.RewindCooldown,
+    );
+    // Всё остальное совпадает побитово — включая rng, шину и режим мира.
+    const strip = (plain: typeof canonical): unknown => ({
+      ...plain,
+      world: {
+        ...plain.world,
+        components: Object.fromEntries(
+          Object.entries(plain.world.components).filter(([name]) => name !== 'RewindCooldown'),
+        ),
+      },
+    });
+    expect(strip(replayed)).toEqual(strip(canonical));
   });
 });
