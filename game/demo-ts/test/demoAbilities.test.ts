@@ -28,8 +28,14 @@ import {
   type Simulation,
 } from '@game-mvp/core';
 import { buildMatchWorld, REWIND_REQUEST_EVENT } from '@game-mvp/net';
-import { ViewBuffer } from '@game-mvp/render';
-import { ACTION_BITS, FIREBALL_LIFETIME_TICKS, TICK_SECONDS, stateBit } from '../app/sim.js';
+import { ViewBuffer, type TickView } from '@game-mvp/render';
+import {
+  ACTION_BITS,
+  FIREBALL_LIFETIME_TICKS,
+  RESPAWN_EVENT,
+  TICK_SECONDS,
+  stateBit,
+} from '../app/sim.js';
 import { createDemoExtractor } from '../app/extractor.js';
 import { DEMO_SCRUB_EVERY } from '../app/match.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
@@ -215,6 +221,12 @@ interface Ffa {
    * тестов, а не каждому тику каждого.
    */
   stateBits: (entity: EntityId) => number;
+  /**
+   * Доставленный вид последнего шага (REND-2) — ровно то, что видит рендер:
+   * события тика, признак разрыва непрерывности и пер-сущностные записи. Как и
+   * `stateBits`, живёт только у харнесса с `{ extract: true }`.
+   */
+  view: () => TickView;
 }
 
 /**
@@ -267,7 +279,7 @@ function ffa(
           tick,
           playerId,
           seq: tick,
-          move: { x: 0, y: 0 },
+          move: { x: frames[index]?.moveX ?? 0, y: frames[index]?.moveY ?? 0 },
           aimDir: frames[index]?.aimDir ?? AIM_EAST,
           buttons: frames[index]?.buttons ?? 0,
         })),
@@ -276,6 +288,7 @@ function ffa(
       return [...result.events].map((event) => event.type);
     },
     stateBits: (entity) => buffer.view.entities.get(entity)?.states ?? 0,
+    view: () => buffer.view,
   };
 }
 
@@ -2434,6 +2447,46 @@ describe('возрождение героя: смерть больше не те
     expect(alive(a, p2)).toBe(true);
     // И каждый — в своей точке, а не в чужой.
     expect(x(a.state, p1)).toBeLessThan(x(a.state, p2));
+  });
+
+  it('возрождение доезжает до рендера СОБЫТИЕМ, а не разрывом доставки', () => {
+    // Сквозной путь до того шва, где рендер снимает фиксацию последнего кадра
+    // клипа смерти (`rendering` REND-4): доставленный вид. Проверяется ровно
+    // то, на чём держится картинка живого героя, — что снять фиксацию нечем,
+    // кроме события: сущность та же, разрыва непрерывности нет, а прыжок на
+    // точку спавна приезжает пер-сущностным телепортом, который значит «не
+    // интерполировать», а не «этот труп ожил».
+    const a = ffa([20, 28], { extract: true });
+    const p1 = a.heroes[0]!;
+    a.step(); // первый тик снимает точку спавна (`SpawnAnchor`)
+    const spawnY = coreWorld.getField(a.state.world, p1, 'Spawn', 'y');
+
+    // Уходим со спавна — иначе возрождение не двигало бы героя вовсе.
+    for (let i = 0; i < 60; i++) a.step([{ moveY: FIXED_ONE }]);
+    expect(y(a.state, p1)).toBeGreaterThan(spawnY);
+
+    a.step([{ buttons: KILL }]);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Dead')).toBe(true);
+    for (let i = 0; i < RESPAWN_TICKS - 1; i++) a.step();
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Dead')).toBe(true);
+
+    const types = a.step();
+    expect(types).toContain(RESPAWN_EVENT);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Dead')).toBe(false);
+
+    const view = a.view();
+    expect(view.freshEvents).toBe(true);
+    // Разрыва непрерывности НЕТ: мир идёт вперёд, и `onSnap` рендеру никто не
+    // адресует — раньше именно поэтому герой оставался невидимым.
+    expect(view.snapAll).toBe(false);
+    const respawn = view.events.find((event) => event.type === RESPAWN_EVENT)!;
+    expect(respawn.data.entity).toBe(p1);
+    const hero = view.entities.get(p1)!;
+    // Сущность НЕ пересоздана: инстанс и его контроллер у рендера те же.
+    expect(hero.spawned).toBe(false);
+    // Прыжок на спавн виден телепортом — и только им.
+    expect(hero.snap).toBe(true);
+    expect(hero.currY).toBeCloseTo(spawnY / FIXED_ONE, 6);
   });
 });
 

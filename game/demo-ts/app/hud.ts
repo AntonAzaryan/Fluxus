@@ -34,7 +34,7 @@ import {
   type HudIconSource,
   type MinimapTerrainSource,
 } from '@game-mvp/hud';
-import { COOLDOWN_ABILITIES, STATS } from './sim.js';
+import { COOLDOWN_ABILITIES, RESPAWN_EVENT, STATS } from './sim.js';
 
 /** Что даёт оболочка этой сборки: от этого зависит состав HUD (SHELL-8). */
 export interface DemoShellCapabilities {
@@ -188,8 +188,9 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
         // сцене не терминальна, а возрождение НЕ пересоздаёт сущность — тот же
         // `EntityId` снимает `Dead` и получает полное здоровье. Без имени
         // события портрет остался бы мёртвым на живом герое: `spawned` не
-        // взводится, разрыва в доставке нет (HUD-5).
-        params: { size: 122, reviveEvent: 'HeroRespawned' },
+        // взводится, разрыва в доставке нет (HUD-5). Имя — одно на сборку
+        // (`RESPAWN_EVENT`): им же рендер снимает фиксацию клипа смерти (REND-4).
+        params: { size: 122, reviveEvent: RESPAWN_EVENT },
         bindings: { hero: 'hero.entity' },
       },
       {
