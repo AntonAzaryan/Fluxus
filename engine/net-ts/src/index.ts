@@ -67,6 +67,8 @@ export { buildMatchWorld, orderedSchemas } from './match/world.js';
 export type { MatchWorld, MatchWorldDef } from './match/world.js';
 export { BranchHistory } from './match/history.js';
 export type { MatchHistory } from './match/history.js';
+export { firstRewindRequest, REWIND_REQUEST_EVENT } from './match/rewindRequest.js';
+export type { RewindRequest } from './match/rewindRequest.js';
 export { replaySegments } from './match/replay.js';
 export type {
   ReplaySegment,

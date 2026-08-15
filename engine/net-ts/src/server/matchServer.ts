@@ -16,9 +16,11 @@ import {
   dispatch,
   filterSnapshot,
   tick as advanceTick,
+  world as coreWorld,
   VIEWPOINT_ALL,
+  type EntityId,
   type EventVisibility,
-  type ExemptField,
+  type ExemptEntry,
   type InputFrame,
   type InputLog,
   type LocomotionOptions,
@@ -29,10 +31,12 @@ import {
   type SceneDef,
   type Snapshot,
   type TickObserver,
+  type TickResult,
   type VisibilityOptions,
   type WorldMode,
 } from '@game-mvp/core';
 import { BranchHistory, type MatchHistory } from '../match/history.js';
+import { firstRewindRequest } from '../match/rewindRequest.js';
 import { buildMatchWorld } from '../match/world.js';
 import { createServerMetrics, type ServerMetrics } from '../metrics.js';
 import type { ConnectionId } from '../transport/transport.js';
@@ -132,8 +136,50 @@ export interface MatchRewindOptions {
   readonly interval: number;
   /** Сколько снапшотов держится. */
   readonly capacity: number;
-  /** Поля, переживающие откат, например cooldown самой ульты (REW-9). */
-  readonly exempt?: readonly ExemptField[];
+  /** Поля и компоненты, переживающие откат, например cooldown самой ульты (REW-9). */
+  readonly exempt?: readonly ExemptEntry[];
+  /**
+   * Бит действия во входном сообщении `Input`, удержание которого ведёт скраб
+   * (NET-11): второго канала под управление в протоколе нет и заводить его
+   * нельзя (NTR-8). Раскладку битов знает сборка игры, а не сетевой слой, —
+   * поэтому номер приезжает конфигом матча.
+   *
+   * Поля нет — органа управления скрабом у матча нет: сервер, войдя в
+   * перемотку, возобновит мир по порогу молчания инициатора, а не зависнет в
+   * `Rewinding`.
+   */
+  readonly holdButton?: number;
+  /**
+   * Тиков, на которые точка перемотки уходит назад за ЦИКЛ РАССЫЛКИ. Величина
+   * конфига, а не баланса: это скорость интерактивного скраба — то же, чем
+   * является чувствительность органа управления, — и глубину ульты она не
+   * задаёт (та приезжает из контента в payload запроса).
+   */
+  readonly step?: number;
+  /**
+   * Порог молчания инициатора в тиках: кадры перестали приходить — считаем
+   * орган отпущенным. Без порога разрыв связи инициатора вешал бы мир в
+   * `Rewinding` навсегда, а этого режима у матча нет.
+   */
+  readonly holdTimeoutTicks?: number;
+}
+
+/**
+ * Ведение точки перемотки (REW-7): что именно сервер сейчас скрабит. Живёт
+ * только между входом в `Rewinding` и возобновлением — состоянием матча не
+ * является и в снапшот не попадает.
+ */
+interface ScrubSession {
+  /** Слот инициатора; `-1` — сущность запроса слоту не сопоставлена. */
+  readonly slot: number;
+  /** Тик, глубже которого точка не уходит: глубина запроса и глубина истории. */
+  readonly floor: number;
+  /** Держит ли инициатор орган управления — по самому свежему его кадру. */
+  held: boolean;
+  /** Тиков с последнего кадра инициатора: молчание дольше порога = отпускание. */
+  idleTicks: number;
+  /** Тиков с прошлого шага скраба: шаг делается раз в цикл рассылки. */
+  sinceStep: number;
 }
 
 /**
@@ -215,7 +261,20 @@ const DEFAULTS = {
   /** Две предыдущие рассылки (NTR-15): пачка едет трижды и переживает две потери подряд. */
   eventRepeat: 2,
   silenceSeconds: 10,
+  /** Тиков за цикл рассылки: при 60 Гц и рассылке 30 Гц — двенадцать тиков в секунду. */
+  scrubStep: 4,
+  /** Четверть секунды при 60 Гц — та же величина, что окно приёма ввода. */
+  holdTimeoutTicks: 15,
 } as const;
+
+/**
+ * Компонент и поле слота игрока в мире матча. Те же, что ставит `InputSystem`
+ * умолчанием (`buildMatchWorld` регистрирует её без переопределения): по ним
+ * сервер сопоставляет сущность-инициатора запроса перемотки со слотом, чей
+ * ввод он читает во время скраба.
+ */
+const SLOT_COMPONENT = 'Player';
+const SLOT_FIELD = 'slot';
 
 const EMPTY_FRAMES: readonly InputFrame[] = [];
 
@@ -239,6 +298,10 @@ export class MatchServer {
   private readonly history: MatchHistory | undefined;
   private readonly inputLog: InputLog | undefined;
   private readonly rewindController: RewindController | undefined;
+  private readonly scrubStep: number;
+  private readonly holdTimeoutTicks: number;
+  /** Ведущаяся перемотка; `undefined` — сервер скраб не ведёт. */
+  private scrub: ScrubSession | undefined;
 
   private readonly connections = new Map<ConnectionId, Connection>();
   /** Соединение, занимающее слот; `undefined` — слот свободен либо игрок отвалился. */
@@ -339,6 +402,20 @@ export class MatchServer {
       throw new Error(`MatchConfig: eventRepeat (${this.eventRepeat}) — целое, не меньше нуля (NTR-15)`);
     }
     this.silenceTicks = config.silenceTicks ?? this.tickRate * DEFAULTS.silenceSeconds;
+    this.scrubStep = config.rewind?.step ?? DEFAULTS.scrubStep;
+    this.holdTimeoutTicks = config.rewind?.holdTimeoutTicks ?? DEFAULTS.holdTimeoutTicks;
+    // Нулевой и дробный шаг не означают ничего: точка перемотки считается в
+    // тиках, а шаг «ноль» превратил бы удержание в вечное `Rewinding` без
+    // движения — то есть в тот самый зависший мир, от которого стоит порог
+    // молчания.
+    if (!Number.isInteger(this.scrubStep) || this.scrubStep < 1) {
+      throw new Error(`MatchConfig: rewind.step (${this.scrubStep}) — целое ≥ 1`);
+    }
+    if (!Number.isInteger(this.holdTimeoutTicks) || this.holdTimeoutTicks < 1) {
+      throw new Error(
+        `MatchConfig: rewind.holdTimeoutTicks (${this.holdTimeoutTicks}) — целое ≥ 1`,
+      );
+    }
 
     const built = buildMatchWorld({
       scene: config.scene,
@@ -591,6 +668,17 @@ export class MatchServer {
     const pending = this.pending[slot]!;
     const playerId = this.config.players[slot]!;
 
+    // Единственное, что сервер берёт из кадров замороженного мира, — контрольный
+    // бит инициатора перемотки: это «управление самой перемоткой», разрешённое
+    // REW-5, и на симуляцию после возобновления оно не влияет (NET-11). Живых
+    // тиков в `Rewinding` нет, поэтому через мир этот бит не доехал бы вовсе.
+    //
+    // Эпоха здесь намеренно не проверяется: клиент узнаёт о новой эпохе только
+    // из восстановленного состояния, а держать орган управления он начинает
+    // раньше — сверка эпохи погасила бы ровно те кадры, ради которых чтение и
+    // заведено. Ветвь истории они не задевают: в мир этот бит не попадает.
+    this.observeScrubHold(slot, frames);
+
     // Мир не идёт — ввод не принимается вовсе (NET-11, REW-5). Проверка стоит
     // перед проверкой эпохи, потому что клиент, пересинхронизировавшийся по
     // первому снапшоту новой эпохи, шлёт кадры с ВЕРНОЙ эпохой и верными
@@ -655,7 +743,14 @@ export class MatchServer {
     // `Rewinding` темп задаёт механизм перемотки. Тик ядра это и сам знает, но
     // до него дело доходить не должно — иначе канонический лог получил бы
     // кадры на тик, которого не было.
-    if (this.state.mode !== 'Running') return;
+    //
+    // Расписание при этом не останавливается: драйвер зовёт `advance()` тем же
+    // темпом, и шаг перемотки делается здесь — точка остановки идёт назад по
+    // тикам, пока инициатор держит орган управления (REW-7).
+    if (this.state.mode !== 'Running') {
+      this.driveScrub();
+      return;
+    }
 
     const tick = this.state.tick + 1;
     const frames: InputFrame[] = [];
@@ -695,6 +790,11 @@ export class MatchServer {
     // предыдущего авторитетного состояния по построению, и накопленное окно
     // между отбором и рассылкой сброшено быть не может.
     if (tick % this.snapshotEvery === 0) this.broadcastSnapshots(filtered);
+
+    // Запрос перемотки дренируется ПОСЛЕ тика и после рассылки его состояния:
+    // тик, на котором ульта прожата, — обычный живой тик, и мир внутри него
+    // событием не изменён (TICK-3). Переходы проводит хост, то есть сервер.
+    this.drainRewindRequest(result);
 
     for (let slot = 0; slot < this.config.players.length; slot++) {
       if (this.metrics.slots[slot]!.silentTicks > this.silenceTicks) {
@@ -1009,6 +1109,120 @@ export class MatchServer {
       throw new Error('MatchServer: матч поднят без истории — перематывать нечем (NET-11, SNAP-4)');
     }
     return this.rewindController;
+  }
+
+  /**
+   * Исполнение запроса, пришедшего из симуляции: `Running → Paused →
+   * Rewinding` (WSM-2, NET-11). Решение о входе в перемотку порождает
+   * геймплейная система ульты, а не сервер: здесь только проведение переходов и
+   * запоминание того, чем ограничен скраб.
+   *
+   * Запрос не в `Running` игнорируется: перемотка внутри перемотки запрещена
+   * (REW-8), а гейты политики (cooldown, стоимость) отработали в evaluator до
+   * эмиссии события. Матч, поднятый без истории, запрос тоже игнорирует —
+   * перематывать в нём нечем, и падать из-за контента, рассчитанного на другой
+   * профиль матча, серверу незачем.
+   */
+  private drainRewindRequest(result: TickResult): void {
+    if (this.rewindController === undefined) return;
+    if (this.state.mode !== 'Running') return;
+    const request = firstRewindRequest(result.events);
+    if (request === undefined) return;
+
+    this.pause();
+    this.beginRewind();
+    this.scrub = {
+      slot: this.slotOf(request.initiator),
+      floor: this.scrubFloor(request.depthTicks),
+      // Орган управления в момент каста удержан по построению: ульта прожата
+      // им же. Первый пришедший кадр инициатора это подтвердит или снимет.
+      held: true,
+      idleTicks: 0,
+      sinceStep: 0,
+    };
+  }
+
+  /**
+   * Глубина, ниже которой точка перемотки не уходит: глубина из запроса
+   * (политика контента) и фактическая глубина истории (SNAP-6) — что мельче.
+   * Ниже нуля не бывает: тик 0 — тоже точка восстановления (REW-1).
+   */
+  private scrubFloor(depthTicks: number): number {
+    const requested = this.state.tick - Math.max(0, depthTicks);
+    return Math.max(0, requested, this.history?.oldestTick ?? 0);
+  }
+
+  /** Слот сущности-инициатора; `-1` — сущность слоту матча не сопоставлена. */
+  private slotOf(entity: EntityId): number {
+    const world = this.state.world;
+    if (!coreWorld.isAlive(world, entity)) return -1;
+    if (!coreWorld.hasComponent(world, entity, SLOT_COMPONENT)) return -1;
+    const slot = coreWorld.getField(world, entity, SLOT_COMPONENT, SLOT_FIELD);
+    return slot >= 0 && slot < this.config.players.length ? slot : -1;
+  }
+
+  /**
+   * Контрольный бит инициатора из самого свежего его кадра (REW-7, NET-11).
+   * Кадры не-инициатора не читаются вовсе: скраб ведёт только тот, чья система
+   * ульту прожала, — остальной ввод замороженного мира отбрасывается, как и
+   * прежде.
+   */
+  private observeScrubHold(slot: number, frames: readonly WireInput[]): void {
+    const session = this.scrub;
+    if (session?.slot !== slot) return;
+    const button = this.config.rewind?.holdButton;
+    if (button === undefined) return;
+    let freshest: WireInput | undefined;
+    for (const wire of frames) {
+      if (freshest === undefined || wire.tick > freshest.tick) freshest = wire;
+    }
+    if (freshest === undefined) return;
+    session.held = (freshest.buttons & (1 << button)) !== 0;
+    session.idleTicks = 0;
+  }
+
+  /**
+   * Шаг ведения точки перемотки — раз в цикл рассылки (REW-7, NTR-16). Реже
+   * тика намеренно: каждое восстановление уезжает клиентам отдельным
+   * состоянием, и вести точку чаще, чем сервер её рассылает, значило бы
+   * считать восстановления, которых никто не увидит.
+   *
+   * Отпускание, молчание инициатора дольше порога и достижение глубины дают
+   * один и тот же исход — `Rewinding → Paused → Running` (WSM-2): мир
+   * продолжается с той точки, на которой скраб кончился.
+   */
+  private driveScrub(): void {
+    const session = this.scrub;
+    if (session === undefined) return;
+    // Мир вывели из `Rewinding` мимо драйвера (пауза от политики, ручной
+    // `resume`) — ведение точки прекращается: авторитет над машиной состояний
+    // один, и второго ведущего у неё нет.
+    if (this.state.mode !== 'Rewinding') {
+      this.scrub = undefined;
+      return;
+    }
+
+    session.idleTicks++;
+    session.sinceStep++;
+    if (session.sinceStep < this.snapshotEvery) return;
+    session.sinceStep = 0;
+
+    if (!session.held || session.idleTicks > this.holdTimeoutTicks) {
+      this.stopScrub();
+      return;
+    }
+
+    const target = Math.max(session.floor, this.state.tick - this.scrubStep);
+    if (target < this.state.tick) this.seekTo(target);
+    // Автостоп: дальше отматывать нечего, и резюм не ждёт отпускания клавиши.
+    if (target <= session.floor) this.stopScrub();
+  }
+
+  /** Конец ведения точки: мир возобновляется с текущей, откаченной, точки. */
+  private stopScrub(): void {
+    this.scrub = undefined;
+    this.pause();
+    this.resume();
   }
 
   /** `Running → Paused` либо `Rewinding → Paused` (WSM-2). */
