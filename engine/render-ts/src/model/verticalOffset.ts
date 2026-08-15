@@ -86,9 +86,14 @@ export function jumpBase(takeoffHeight: number, landingHeight: number, phase: nu
  * упирается в `−depth`, где и удерживается — что случится с провалившейся
  * сущностью дальше, решает геймплейная система (ARENA-5), и рендер её решения
  * не предвосхищает. Возвращает новое смещение (всегда <= 0).
+ *
+ * `dt` — часы презентации со знаком (REND-25): отрицательный шаг возвращает
+ * смещение вверх вместе с миром и упирается в поверхность, а не выносит
+ * инстанс над ней.
  */
 export function advanceFall(offset: number, speed: number, depth: number, dt: number): number {
   if (depth <= 0 || speed <= 0) return 0;
   const next = offset - speed * dt;
-  return next < -depth ? -depth : next;
+  if (next < -depth) return -depth;
+  return next > 0 ? 0 : next;
 }

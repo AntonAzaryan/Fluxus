@@ -77,9 +77,16 @@ export class VatAnimationBackend implements AnimationBackend {
     this.start(index, crossfade, true);
   }
 
+  /**
+   * Кадр: `dt` — часы презентации СО ЗНАКОМ (REND-25). Отрицательный шаг
+   * отматывает клип назад, нулевой замораживает его на текущей фазе.
+   */
   update(dt: number): void {
     if (this.fadeLeft > 0) {
-      this.fadeLeft = Math.max(0, this.fadeLeft - dt);
+      // Кроссфейд дренируется по МОДУЛЮ: переход между клипами — не часть
+      // прошлого мира, а собственный переход картинки, и отматывать его назад
+      // значило бы подвесить пару поз на всё время перемотки.
+      this.fadeLeft = Math.max(0, this.fadeLeft - Math.abs(dt));
       if (this.fadeLeft === 0) this.fromRow = -1;
     }
     const clip = this.current < 0 ? undefined : this.clips[this.current];
@@ -98,9 +105,28 @@ export class VatAnimationBackend implements AnimationBackend {
           this.clamped = true;
           // Машина может тут же переключить клип — строки считаются ПОСЛЕ.
           this.onOneShotFinished?.();
+        } else if (dt < 0 && this.phase <= 0) {
+          // Обратный ход: one-shot отступил к своему началу и уступает клипу
+          // состояния (REND-25) — та же развязка, что у конца вперёд. Условие
+          // на знак обязательно: сразу после `start()` фаза тоже ноль, и без
+          // него нулевой кадр паузы «доигрывал» бы клип, не начав его.
+          this.phase = 0;
+          this.once = false;
+          this.clamped = true;
+          this.onOneShotFinished?.();
         }
       } else if (clip.duration > 0) {
-        this.phase %= clip.duration;
+        // Заворот в обе стороны: `%` в JS сохраняет знак делимого, и голого
+        // остатка хватает только прямому ходу — назад он давал бы
+        // отрицательную фазу, то есть кадр до начала клипа.
+        //
+        // Фаза внутри клипа не трогается ВОВСЕ, и ветвь здесь не ради скорости:
+        // `((p % d) + d) % d` для уже лежащей в диапазоне фазы не тождественно —
+        // сложение с длительностью и обратное вычитание теряют младшие биты, и
+        // за десяток кадров накопленный сдвиг съезжает на кадр клипа.
+        if (this.phase < 0 || this.phase >= clip.duration) {
+          this.phase = ((this.phase % clip.duration) + clip.duration) % clip.duration;
+        }
       } else {
         this.phase = 0;
       }
@@ -139,7 +165,10 @@ export class VatAnimationBackend implements AnimationBackend {
     }
     const last = clip.length - 1;
     let position = this.phase * this.fps;
-    if (!(position > 0)) position = 0;
+    // Фаза завёрнута в `[0, duration)` ещё в `update`, и отрицательной позиции
+    // здесь не бывает — сравнение остаётся только страховкой от NaN, а не
+    // клампом хода: клампом он останавливал бы обратный ход на нулевом кадре.
+    if (!(position >= 0)) position = 0;
     let index = Math.floor(position);
     let fraction = position - index;
     if (index >= last) {

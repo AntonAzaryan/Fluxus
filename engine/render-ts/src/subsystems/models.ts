@@ -676,6 +676,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
   // ---------------------------------------------------------- updateFrame
 
+  /**
+   * Кадр подсистемы. `dt` — часы презентации СО ЗНАКОМ (REND-2, REND-25):
+   * гейта «вне `Running` время вперёд не идёт» здесь нет и быть не должно —
+   * его несёт сам знак, а режим мира подсистеме не виден вовсе (её одинаково
+   * зовут оба продюсера presentation-состояния, REND-11). Стоящий мир приходит
+   * нулевым dt, и клипы замирают ровно потому, что кадр их не двигает.
+   */
   updateFrame(dt: number, alpha: number): void {
     const heightStep = this.requireCtx().config.heightStep;
     const turnRate = this.options.turnRate ?? DEFAULT_TURN_RATE;
@@ -787,6 +794,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     tiltRate: number,
     surface: VisualSurface | null,
   ): void {
+    // Сходящиеся к цели величины кадра — доворот (REND-5), наклон (REND-10),
+    // контроль костей — берут МОДУЛЬ часов: направления у них нет, цель ведёт
+    // доставленное состояние, и на обратном ходе сглаживание обязано идти к
+    // ней, а не от неё (отрицательный шаг экспоненты уводил бы инстанс прочь).
+    const settle = Math.abs(dt);
     for (const record of pool.values()) {
       const view = record.view;
       // Интерполяция между двумя последними тиками; snap-тик рисуется без неё (REND-2).
@@ -850,7 +862,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // Курс: цель из данных тика, доворот сглажен по кадрам; при snap —
       // мгновенно. Поправка на перёд модели — своя у каждой записи (REND-13).
       const targetYaw = view.facingYaw + record.facingOffset;
-      record.yaw = record.snapPending ? targetYaw : smoothYaw(record.yaw, targetYaw, turnRate, dt);
+      record.yaw = record.snapPending
+        ? targetYaw
+        : smoothYaw(record.yaw, targetYaw, turnRate, settle);
 
       // Наклон по нормали поверхности (REND-10): только для сущностей на
       // поверхности; сглажен по кадрам, при snap — мгновенно (REND-2).
@@ -862,7 +876,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
           record.tilt.x = SCRATCH_TILT.x;
           record.tilt.y = SCRATCH_TILT.y;
         } else {
-          smoothTilt(record.tilt, SCRATCH_TILT, tiltRate, dt);
+          smoothTilt(record.tilt, SCRATCH_TILT, tiltRate, settle);
         }
       } else {
         record.tilt.x = 0;
@@ -875,8 +889,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // walkable-поверхности — тот же, каким инстанс нарисован.
       orientFromTiltYaw(record.tilt, record.yaw, record.quat);
 
+      // Анимационное время — единственное, что берёт ЗНАК: клип идёт вперёд,
+      // стоит либо отматывается вместе с миром (REND-25).
       record.controller?.update(dt);
-      this.applyPose(record, dt);
+      this.applyPose(record, settle);
     }
   }
 
@@ -885,7 +901,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * для обоих ярусов (REND-20): узел детального яруса и инстанс-матрица
    * батчевого получают ровно те же числа, а не два похожих расчёта.
    */
-  private applyPose(record: InstanceRecord, dt: number): void {
+  private applyPose(record: InstanceRecord, settle: number): void {
     const holder = record.holder;
     if (holder !== null) {
       holder.position.copy(record.pos);
@@ -898,7 +914,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
         record.model,
         record.view.aimYaw,
         record.yaw - record.facingOffset,
-        dt,
+        settle,
         this.warn,
       );
     }
