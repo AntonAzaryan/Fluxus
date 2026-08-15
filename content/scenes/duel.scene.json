@@ -328,6 +328,12 @@
                 }
               },
               {
+                "removeComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Shielded"
+                }
+              },
+              {
                 "modifyComponent": {
                   "entity": { "var": "e" },
                   "component": "Velocity",
@@ -1016,7 +1022,7 @@
     },
     {
       "name": "ShieldCast",
-      "order": 37,
+      "order": 39,
       "query": {
         "all": ["Input", "Player", "Position", "Cooldowns", "AbilityConfig"],
         "not": ["Dead", "Charging", "Holding"]
@@ -1400,8 +1406,24 @@
       "do": [
         {
           "let": {
-            "bindings": { "hit": 0 },
+            "bindings": { "bounced": 0, "hit": 0 },
             "do": [
+              {
+                "forEachEvent": {
+                  "type": "ShieldRicochet",
+                  "as": "ev",
+                  "do": [
+                    {
+                      "if": {
+                        "cond": {
+                          "==": [{ "eventField": [{ "var": "ev" }, "projectile"] }, { "var": "p" }]
+                        },
+                        "then": [{ "set": { "name": "bounced", "value": 1 } }]
+                      }
+                    }
+                  ]
+                }
+              },
               {
                 "forEachEvent": {
                   "type": "Collision",
@@ -1420,7 +1442,9 @@
               },
               {
                 "if": {
-                  "cond": { "==": [{ "var": "hit" }, 1] },
+                  "cond": {
+                    "and": [{ "==": [{ "var": "hit" }, 1] }, { "==": [{ "var": "bounced" }, 0] }]
+                  },
                   "then": [
                     {
                       "emitEvent": {
@@ -1526,6 +1550,12 @@
                         "entity": { "var": "e" },
                         "component": "Dead",
                         "values": { "atTick": { "tick": [] } }
+                      }
+                    },
+                    {
+                      "removeComponent": {
+                        "entity": { "var": "e" },
+                        "component": "Shielded"
                       }
                     },
                     {
@@ -1706,7 +1736,10 @@
               },
               "keeper": -1,
               "mine": { "getComponent": [{ "var": "p" }, "Owner", "slot"] },
-              "skin": { "getComponent": [{ "var": "p" }, "Collider", "radius"] }
+              "minusOne": -65536,
+              "normScale": 4194304,
+              "skinX": { "getComponent": [{ "var": "p" }, "Collider", "halfX"] },
+              "skinY": { "getComponent": [{ "var": "p" }, "Collider", "halfY"] }
             },
             "do": [
               {
@@ -1719,55 +1752,69 @@
                   "as": "h",
                   "do": [
                     {
-                      "if": {
-                        "cond": {
-                          "and": [
-                            { "==": [{ "var": "keeper" }, -1] },
-                            {
-                              "!=": [
-                                { "getComponent": [{ "var": "h" }, "Player", "slot"] },
-                                { "var": "mine" }
-                              ]
-                            },
-                            {
-                              "<=": [
-                                {
-                                  "vec.length": [
-                                    {
-                                      "vec.sub": [
-                                        { "var": "at" },
-                                        {
-                                          "vec": [
-                                            { "getComponent": [{ "var": "h" }, "Position", "x"] },
-                                            { "getComponent": [{ "var": "h" }, "Position", "y"] }
-                                          ]
-                                        }
-                                      ]
-                                    }
-                                  ]
-                                },
-                                {
-                                  "+": [
-                                    {
-                                      "*": [
-                                        { "getComponent": [{ "var": "h" }, "Collider", "radius"] },
-                                        {
-                                          "getComponent": [
-                                            { "var": "h" },
-                                            "AbilityConfig",
-                                            "shieldRadiusMul"
-                                          ]
-                                        }
-                                      ]
-                                    },
-                                    { "var": "skin" }
-                                  ]
-                                }
-                              ]
-                            }
-                          ]
+                      "let": {
+                        "bindings": {
+                          "shieldR": {
+                            "*": [
+                              { "getComponent": [{ "var": "h" }, "Collider", "radius"] },
+                              {
+                                "getComponent": [
+                                  { "var": "h" },
+                                  "AbilityConfig",
+                                  "shieldRadiusMul"
+                                ]
+                              }
+                            ]
+                          }
                         },
-                        "then": [{ "set": { "name": "keeper", "value": { "var": "h" } } }]
+                        "do": [
+                          {
+                            "if": {
+                              "cond": {
+                                "and": [
+                                  { "==": [{ "var": "keeper" }, -1] },
+                                  {
+                                    "!=": [
+                                      { "getComponent": [{ "var": "h" }, "Player", "slot"] },
+                                      { "var": "mine" }
+                                    ]
+                                  },
+                                  {
+                                    "<=": [
+                                      {
+                                        "abs": [
+                                          {
+                                            "-": [
+                                              { "vec.x": [{ "var": "at" }] },
+                                              { "getComponent": [{ "var": "h" }, "Position", "x"] }
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      { "+": [{ "var": "shieldR" }, { "var": "skinX" }] }
+                                    ]
+                                  },
+                                  {
+                                    "<=": [
+                                      {
+                                        "abs": [
+                                          {
+                                            "-": [
+                                              { "vec.y": [{ "var": "at" }] },
+                                              { "getComponent": [{ "var": "h" }, "Position", "y"] }
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      { "+": [{ "var": "shieldR" }, { "var": "skinY" }] }
+                                    ]
+                                  }
+                                ]
+                              },
+                              "then": [{ "set": { "name": "keeper", "value": { "var": "h" } } }]
+                            }
+                          }
+                        ]
                       }
                     }
                   ]
@@ -1793,7 +1840,7 @@
                                   }
                                 ]
                               },
-                              4194304
+                              { "var": "normScale" }
                             ]
                           },
                           "v": {
@@ -1814,7 +1861,7 @@
                                     {
                                       "vec.scale": [
                                         { "vec.normalize": [{ "var": "v" }] },
-                                        -65536
+                                        { "var": "minusOne" }
                                       ]
                                     }
                                   ]
@@ -2043,6 +2090,7 @@
                 }
               },
               { "removeComponent": { "entity": { "var": "e" }, "component": "Locomotion" } },
+              { "removeComponent": { "entity": { "var": "e" }, "component": "Shielded" } },
               {
                 "modifyComponent": {
                   "entity": { "var": "e" },
