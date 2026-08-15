@@ -66,6 +66,7 @@ import {
 } from '@game-mvp/client';
 import {
   ACTION_BITS,
+  RESPAWN_EVENT,
   STATE_COMPONENTS,
   STATS,
   captureZoneOf,
@@ -1024,7 +1025,11 @@ async function main(): Promise<void> {
       // самая, которой рисуется кадр. Её поза здесь на один кадр старше кадра
       // подсистем (цель слежения берётся из уже посаженной позы инстанса), и
       // запас консервативности границ покрывает это наравне с размахом клипов.
-      models = new ModelsSubsystem(manifest, { surface, camera });
+      // Возрождение сцены (`Respawn`) снимает фиксацию последнего кадра клипа
+      // смерти (REND-4): сущность та же, разрыва доставки нет, и без имени
+      // события герой остался бы лежать последним кадром `Death` — у этой
+      // модели он гасит ВСЕ геосеты, то есть герой был бы попросту невидим.
+      models = new ModelsSubsystem(manifest, { surface, camera, reviveEvent: RESPAWN_EVENT });
       remote!.register(models);
       // Транзиентные эффекты (REND-23) — после моделей: оболочки рисуются
       // поверх инстансов, а шарик снаряда и вовсе заменяет ему модель. Записи
