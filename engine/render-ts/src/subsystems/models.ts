@@ -182,6 +182,14 @@ export interface ModelInstanceView {
 export interface ModelsOptions {
   /** Тип события смерти — конвенция ядра. */
   readonly deathEvent?: string;
+  /**
+   * Тип события возрождения — то, чем снимается фиксация последнего кадра клипа
+   * смерти (REND-4). Умолчания нет: смерть — конвенция ядра, а возрождение
+   * описывает сцена, и назвать его вправе только сборка (в демо — `HeroRespawned`
+   * системы `Respawn`). Не названо — путь снятия остаётся один, разрыв
+   * непрерывности (REND-2).
+   */
+  readonly reviveEvent?: string;
   /** Тип события провала в клетку без пола (ARENA-5) — вход снижения (REND-12). */
   readonly fallEvent?: string;
   /** Длительность кроссфейда клипов, секунды (REND-4). */
@@ -592,6 +600,12 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // прошлом не разэмитится — без этого живой персонаж навсегда остался бы
     // лежать нулевым кадром клипа смерти (REND-4, REND-25). Раньше сведения
     // пула: клип состояния этого же кадра ставится уже живому контроллеру.
+    //
+    // Возрождение ИДУЩЕГО мира сюда не попадает и попасть не может: сущность
+    // та же, мир непрерывен, `snapAll` не поднимается — а прыжок на точку
+    // спавна виден лишь пер-сущностным телепортом, который значит «не
+    // интерполировать», а не «этот труп ожил». Снимает фиксацию названное
+    // сборкой событие возрождения — ниже, общим разбором событий тика.
     if (view.snapAll) {
       for (const record of this.instances.values()) record.controller?.onSnap();
     }
@@ -1569,11 +1583,15 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     backend: ConstructorParameters<typeof AnimationController>[0],
     record: InstanceRecord,
   ): AnimationController {
-    const options: { crossfade?: number; deathEvent?: string; warn: (message: string) => void } = {
-      warn: this.warn,
-    };
+    const options: {
+      crossfade?: number;
+      deathEvent?: string;
+      reviveEvent?: string;
+      warn: (message: string) => void;
+    } = { warn: this.warn };
     if (this.options.crossfade !== undefined) options.crossfade = this.options.crossfade;
     if (this.options.deathEvent !== undefined) options.deathEvent = this.options.deathEvent;
+    if (this.options.reviveEvent !== undefined) options.reviveEvent = this.options.reviveEvent;
     return new AnimationController(backend, record.visual?.animations ?? {}, options);
   }
 

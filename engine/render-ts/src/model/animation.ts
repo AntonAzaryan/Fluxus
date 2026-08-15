@@ -232,6 +232,14 @@ export interface AnimationControllerOptions {
   readonly crossfade?: number;
   /** Тип события смерти — конвенция ядра (`EntityDied`), клип же берётся из манифеста. */
   readonly deathEvent?: string;
+  /**
+   * Тип события возрождения — то, что снимает фиксацию последнего кадра клипа
+   * смерти (REND-4). Умолчания у него нет и быть не может: смерть — конвенция
+   * ядра, а возрождение описывает СЦЕНА (в демо это `HeroRespawned` системы
+   * `Respawn`), и назвать его вправе только сборка. Не названо — фиксация
+   * снимается по-прежнему только разрывом непрерывности (`onSnap`, REND-2).
+   */
+  readonly reviveEvent?: string;
   /** Куда писать предупреждения о неразрешённых записях; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
 }
@@ -245,6 +253,8 @@ export class AnimationController {
   private mapping: AnimationMapping;
   private readonly crossfade: number;
   private readonly deathEvent: string;
+  /** Имя события возрождения; null — сборка его не назвала (REND-4). */
+  private readonly reviveEvent: string | null;
   private readonly warn: (message: string) => void;
   /**
    * Записи манифеста, о которых уже предупредили. Дедуп идёт по самой записи,
@@ -271,6 +281,7 @@ export class AnimationController {
     this.mapping = mapping;
     this.crossfade = options.crossfade ?? DEFAULT_CROSSFADE;
     this.deathEvent = options.deathEvent ?? DEFAULT_DEATH_EVENT;
+    this.reviveEvent = options.reviveEvent ?? null;
     this.warn = options.warn ?? ((message) => { console.warn(message); });
     backend.onOneShotFinished = (): void => {
       this.oneShotPlaying = false;
@@ -290,14 +301,17 @@ export class AnimationController {
 
   /**
    * Состояние локомоции из данных тика (REND-4). Пока играет one-shot, смена
-   * запоминается и применяется по его завершении; после смерти игнорируется.
+   * запоминается и применяется по его завершении; так же и под фиксацией
+   * смерти — труп клипа не меняет, но состояние копится: возрождение обязано
+   * вернуть модель в клип ТЕКУЩЕГО состояния, а не того, в котором её застала
+   * смерть.
    */
   setState(state: string): void {
-    if (this.dead || this.state === state) return;
+    if (this.state === state) return;
     this.state = state;
     // Назначенный клип бьёт состояние: в документном режиме состояние всё равно
     // производить не из чего, а в игровом override не ставится (REND-11).
-    if (this.oneShotPlaying || this.override !== undefined) return;
+    if (this.dead || this.oneShotPlaying || this.override !== undefined) return;
     this.playState(state);
   }
 
@@ -340,13 +354,18 @@ export class AnimationController {
 
   /**
    * Событие тика → one-shot клип по таблице манифеста. Возвращает false, если
-   * событие не замаплено. Событие смерти — one-shot с фиксацией последнего
-   * кадра навсегда (REND-4).
+   * событие ничего не изменило. Событие смерти — one-shot с фиксацией
+   * последнего кадра, событие возрождения эту фиксацию снимает (REND-4).
    */
   handleEvent(type: string): boolean {
+    // Возрождение разбирается ДО гейта смерти: под фиксацией контроллер не
+    // слышит событий вовсе, и событие, которое обязано её снять, — единственное
+    // исключение. Оно же остаётся обычным событием: назвал манифест ему клип —
+    // клип и сыграет one-shot'ом поверх вернувшейся локомоции.
+    const revived = type === this.reviveEvent && this.releaseDeath();
     if (this.dead) return false;
     const entry = this.mapping.events?.[type];
-    if (entry === undefined) return false;
+    if (entry === undefined) return revived;
     const clip = this.clipFor(entry);
     // Запись есть, но не разрешилась — предупреждение уже выдано, one-shot не
     // играем: текущий клип остаётся, произвольный не подставляется (REND-4).
@@ -380,14 +399,27 @@ export class AnimationController {
    * Снап — ровно то указание, которого не хватало: «состояние теперь другое, а
    * непрерывности с прежним нет».
    *
-   * Гейт `handleEvent` при этом остаётся: событий вне `Running` не бывает
-   * (REW-4), и воскресить контроллер нечем, кроме этого вызова.
+   * Снап — не единственный путь: возрождение ИДУЩЕГО мира разрыва не даёт (мир
+   * тот же и непрерывен), и снимает фиксацию названное сборкой событие
+   * возрождения — `handleEvent` тем же `releaseDeath`.
    */
   onSnap(): void {
-    if (!this.dead) return;
+    this.releaseDeath();
+  }
+
+  /**
+   * Снять фиксацию смерти и вернуться в клип текущего состояния. Возвращает
+   * false, если снимать было нечего: контроллер живого инстанса — не «ещё не
+   * умерший труп», и переигрывать ему клип не за чем (в частности, живой
+   * one-shot ведёт своя шкала, и сбивать её фазу разрывом или возрождением
+   * соседа нельзя).
+   */
+  private releaseDeath(): boolean {
+    if (!this.dead) return false;
     this.dead = false;
     this.oneShotPlaying = false;
     this.resumeLoop();
+    return true;
   }
 
   /** Зацикленный клип, к которому возвращаются: назначенный набором либо клип состояния. */

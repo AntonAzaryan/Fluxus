@@ -41,7 +41,10 @@ function plainManifest(): VisualManifest {
   return manifest;
 }
 
-function makeRig(manifest: VisualManifest = makeManifest()): {
+function makeRig(
+  manifest: VisualManifest = makeManifest(),
+  options: { readonly reviveEvent?: string } = {},
+): {
   subsystem: ModelsSubsystem;
   ctx: RenderContext;
   assets: AssetsStub;
@@ -55,6 +58,7 @@ function makeRig(manifest: VisualManifest = makeManifest()): {
     config: { heightStep: 0.5 },
   };
   const subsystem = new ModelsSubsystem(manifest, {
+    ...options,
     warn: (message) => warnings.push(message),
   });
   subsystem.init(ctx);
@@ -191,6 +195,113 @@ describe('анимации по данным тика (REND-4)', () => {
     );
     expect(controller.isDead).toBe(true);
     expect(controller.currentClipName).toBe('Death');
+  });
+
+  /**
+   * Возрождение (REND-4) на детальном ярусе. Наблюдаемое здесь не только имя
+   * клипа: у модели с распадающимся трупом клип смерти к своему концу ГАСИТ
+   * геосеты тела (`assets` ASSET-12 → трек видимости частей), и зафиксированный
+   * последний кадр рисует пустое место. Именно это и видел игрок: живой,
+   * управляемый и невидимый герой.
+   */
+  describe('возрождение возвращает модель (REND-4)', () => {
+    /**
+     * Модель, чей клип смерти гасит часть 0 и держит её погашенной до конца —
+     * ровно так устроена смерть `SkeletonBarbarian` в `content/visuals`: у неё
+     * последний кадр `Death` не рисует НИ ОДНОГО геосета.
+     */
+    function decayingModel(): ReturnType<typeof makeModel> {
+      const base = makeModel();
+      const track = (partId: number, times: number[], visible: number[]) => ({
+        partId,
+        times: new Float32Array(times),
+        visible: new Uint8Array(visible),
+      });
+      const shown = (name: string, duration: number) => ({
+        ...base.sequences.find((sequence) => sequence.name === name)!,
+        partVisibility: [track(0, [0, duration], [1, 1])],
+      });
+      return {
+        ...base,
+        sequences: [
+          shown('Stand - 1', 1),
+          shown('Walk Fast', 1),
+          base.sequences[2]!,
+          {
+            ...base.sequences.find((sequence) => sequence.name === 'Death')!,
+            // Тело гаснет на середине клипа и остаётся погашенным: клип
+            // фиксируется последним кадром, а на нём рисовать уже нечего.
+            partVisibility: [track(0, [0, 0.4, 0.8], [1, 0, 0])],
+          },
+        ],
+      };
+    }
+
+    /** Видима ли часть 0 инстанса в кадре — то, что рисуется (или не рисуется). */
+    function partVisible(subsystem: ModelsSubsystem, entity: number): boolean {
+      const model = subsystem.instanceFor(entity)!.model!;
+      return model.meshes.find((mesh) => mesh.name === 'part0')!.visible;
+    }
+
+    /** Тик, где `entity` из набора `pool` получает событие `type`. */
+    function event(
+      subsystem: ModelsSubsystem,
+      pool: readonly number[],
+      type: string,
+      entity: number,
+    ): void {
+      subsystem.syncTick(
+        makeTickView(
+          pool.map((id) => makeEntityView(id, { moving: true })),
+          { freshEvents: true, events: [{ type, data: { entity } }] },
+        ),
+      );
+    }
+
+    it('зафиксированный кадр смерти не рисует ничего, возрождение возвращает клип и геосеты', () => {
+      const { subsystem, assets } = makeRig(makeManifest(), { reviveEvent: 'HeroRespawned' });
+      subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
+      assets.resolve('model', MODEL_ID, decayingModel());
+      const controller = subsystem.instanceFor(1)!.controller!;
+      for (let i = 0; i < 30; i++) subsystem.updateFrame(1 / 60, 1);
+      expect(controller.currentClipName).toBe('Walk Fast');
+      expect(partVisible(subsystem, 1)).toBe(true);
+
+      event(subsystem, [1], 'EntityDied', 1);
+      for (let i = 0; i < 120; i++) subsystem.updateFrame(1 / 60, 1);
+      // Клип смерти доигран и зафиксирован — и рисовать в этом кадре нечего.
+      expect(controller.isDead).toBe(true);
+      expect(controller.currentClipName).toBe('Death');
+      expect(partVisible(subsystem, 1)).toBe(false);
+
+      // Сцена вернула ТУ ЖЕ сущность: снапа нет, `snapAll` не поднимался.
+      event(subsystem, [1], 'HeroRespawned', 1);
+      for (let i = 0; i < 30; i++) subsystem.updateFrame(1 / 60, 1);
+
+      expect(controller.isDead).toBe(false);
+      expect(controller.currentClipName).toBe('Walk Fast');
+      expect(partVisible(subsystem, 1)).toBe(true);
+    });
+
+    it('возрождение чужой сущности соседа не поднимает', () => {
+      const { subsystem, assets } = makeRig(makeManifest(), { reviveEvent: 'HeroRespawned' });
+      subsystem.syncTick(
+        makeTickView([makeEntityView(1, { moving: true }), makeEntityView(2, { moving: true })]),
+      );
+      assets.resolve('model', MODEL_ID, decayingModel());
+      event(subsystem, [1, 2], 'EntityDied', 1);
+      event(subsystem, [1, 2], 'EntityDied', 2);
+      for (let i = 0; i < 120; i++) subsystem.updateFrame(1 / 60, 1);
+
+      event(subsystem, [1, 2], 'HeroRespawned', 2);
+      for (let i = 0; i < 30; i++) subsystem.updateFrame(1 / 60, 1);
+
+      expect(subsystem.instanceFor(2)!.controller!.isDead).toBe(false);
+      expect(partVisible(subsystem, 2)).toBe(true);
+      // Первый труп событию соседа не адресован — он лежит дальше.
+      expect(subsystem.instanceFor(1)!.controller!.isDead).toBe(true);
+      expect(partVisible(subsystem, 1)).toBe(false);
+    });
   });
 
   it('неразрешённая запись манифеста жалуется в сток подсистемы и оставляет клип (REND-4)', () => {

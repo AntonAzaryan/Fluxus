@@ -322,3 +322,103 @@ describe('AnimationController: смерть (REND-4)', () => {
     expect(controller.currentClipName).toBe('Attack - 1');
   });
 });
+
+/**
+ * Возрождение (REND-4): сцена вправе сделать смерть не терминальной, вернув
+ * сущность ТЕМ ЖЕ идентификатором. Мир при этом идёт вперёд и непрерывен —
+ * снапа нет, и снять фиксацию последнего кадра может только названное сборкой
+ * событие. Имя события — данные сборки, а не литерал кода.
+ */
+describe('AnimationController: возрождение снимает фиксацию смерти (REND-4)', () => {
+  /** Контроллер, которому сборка назвала событие возрождения. */
+  function makeReviving(
+    mapping: import('../src/index.js').AnimationMapping = {
+      states: { idle: 'Stand', move: 'Walk' },
+      events: { CastFireball: 'Attack', EntityDied: 'Death' },
+    },
+  ) {
+    const { backend } = makeBackend();
+    const warnings: string[] = [];
+    const controller = new AnimationController(backend, mapping, {
+      reviveEvent: 'HeroRespawned',
+      warn: (message: string) => warnings.push(message),
+    });
+    return { controller, warnings };
+  }
+
+  it('событие возрождения возвращает клип состояния и слух к событиям', () => {
+    const { controller } = makeReviving();
+    controller.setState('move');
+    controller.handleEvent('EntityDied');
+    controller.update(2); // клип смерти доигран и зафиксирован
+    expect(controller.isDead).toBe(true);
+    expect(controller.currentClipName).toBe('Death');
+
+    expect(controller.handleEvent('HeroRespawned')).toBe(true);
+
+    expect(controller.isDead).toBe(false);
+    expect(controller.currentClipName).toBe('Walk Fast');
+    expect(controller.handleEvent('CastFireball')).toBe(true);
+  });
+
+  it('возвращается клип ТЕКУЩЕГО состояния, а не того, в котором застала смерть', () => {
+    const { controller } = makeReviving();
+    controller.setState('move');
+    controller.handleEvent('EntityDied');
+    controller.update(2);
+    // Труп лежит на точке смерти, а доставка продолжает называть состояние:
+    // герой возрождается стоящим на спавне, и клип обязан быть его.
+    controller.setState('idle');
+    expect(controller.currentClipName).toBe('Death'); // фиксация держится
+
+    controller.handleEvent('HeroRespawned');
+
+    expect(controller.currentClipName).toBe('Stand - 1');
+  });
+
+  it('возрождение живого — no-op: фазу его one-shot оно не сбивает', () => {
+    const { controller } = makeReviving();
+    controller.setState('move');
+    controller.handleEvent('CastFireball');
+    controller.update(0.2);
+    expect(controller.currentClipName).toBe('Attack - 1');
+
+    // Событие возрождения приходит на КАЖДОГО возрождённого героя, а слышат
+    // его контроллеры всех — живому оно ничего не значит.
+    expect(controller.handleEvent('HeroRespawned')).toBe(false);
+
+    expect(controller.currentClipName).toBe('Attack - 1');
+  });
+
+  it('без названного сборкой имени то же событие ничего не значит', () => {
+    // Умолчания у возрождения нет: смерть — конвенция ядра, возрождение
+    // описывает сцена. Сборка, не назвавшая события, ведёт себя как раньше.
+    const { controller } = makeController();
+    controller.setState('move');
+    controller.handleEvent('EntityDied');
+    controller.update(2);
+
+    expect(controller.handleEvent('HeroRespawned')).toBe(false);
+
+    expect(controller.isDead).toBe(true);
+    expect(controller.currentClipName).toBe('Death');
+  });
+
+  it('манифест вправе назначить возрождению клип — он играет обычным one-shot', () => {
+    const { controller } = makeReviving({
+      states: { idle: 'Stand', move: 'Walk' },
+      events: { CastFireball: 'Attack', EntityDied: 'Death', HeroRespawned: 'Attack' },
+    });
+    controller.setState('move');
+    controller.handleEvent('EntityDied');
+    controller.update(2);
+
+    controller.handleEvent('HeroRespawned');
+    expect(controller.isDead).toBe(false);
+    expect(controller.currentClipName).toBe('Attack - 1');
+
+    // И по его завершении — возврат в локомоцию по общему правилу REND-4.
+    controller.update(0.6);
+    expect(controller.currentClipName).toBe('Walk Fast');
+  });
+});
