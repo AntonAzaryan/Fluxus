@@ -3,14 +3,22 @@
  * Стенд демо-арены: выделенный сервер матча (`net-session` SES-1, режим
  * `dedicated`) с бот-заполнителем слотов (BOT-7) и авто-рестартом (design D3).
  *
- *   node engine/net-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 5000]
- *                                         [--match content/matches/duel.match.json]
- *                                         [--bot content/bots/normal.json] [--brain classic]
- *                                         [--json] [--once]
+ *   node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 5000]
+ *                                       [--match content/matches/duel.match.json]
+ *                                       [--bot content/bots/normal.json] [--brain classic]
+ *                                       [--json] [--once]
  *
- * Тонкая обвязка поверх тех же деталей, что и `serve.mjs`: `MatchServer`,
- * `MatchHost`, WebSocket-транспорт — те же самые и не тронутые (SES-2). Своего
- * здесь ровно три вещи, и все три — сборочные:
+ * Стенд живёт в сборке игры, а не в `engine/net-ts`, и это не переезд ради
+ * порядка: он читает дерево контента (`content/matches/duel.match.json`,
+ * `content/bots/normal.json`) через `fs`, а движку дерево контента запрещено
+ * (`game-content` CONT-4). Игре оно разрешено — она и есть игра (CONT-1),
+ * поэтому здесь чтение не требует оправдания. Сетевые детали приходят
+ * опубликованной поверхностью пакета (`@game-mvp/net`), а не файлами под его
+ * `src/`.
+ *
+ * Тонкая обвязка поверх тех же деталей, что и `serve.mjs` пакета net:
+ * `MatchServer`, `MatchHost`, WebSocket-транспорт — те же самые и не тронутые
+ * (SES-2). Своего здесь ровно три вещи, и все три — сборочные:
  *
  * 1. Демо-арена из дерева контента: матч-конфиг и сцена берутся из `content/`,
  *    а не из примера рядом с пакетом (`game-content` CONT-1).
@@ -34,24 +42,32 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { MessageChannel, Worker } from 'node:worker_threads';
-import { flag, matchConfigOf, option, readMatchFile } from './matchFile.mjs';
+// Раскладка документа матча — та же, что у запускалок net (`matchConfigOf`), и
+// берётся она оттуда же: разойдись стенд с `serve.mjs` в сборке мира, и один
+// файл матча поднял бы два разных мира (NTR-5, NTR-14). Подпуть пакета, потому
+// что помощник запускалок в публичный `@game-mvp/net` не входит, а вторая копия
+// раскладки и есть тот самый способ разойтись.
+import { flag, matchConfigOf, option, readMatchFile } from '@game-mvp/net/bin/matchFile.mjs';
 
 const fromRepo = (relative) => fileURLToPath(new URL(`../../../${relative}`, import.meta.url));
 
 if (flag('help')) {
   process.stdout.write(
-    'usage: node engine/net-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 5000]\n' +
+    'usage: node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 5000]\n' +
       '       [--match <match.json>] [--bot <profile.json>] [--brain classic|scripted] [--json] [--once]\n',
   );
   process.exit(0);
 }
 
-const { contentPack } = await import('../src/content/pack.ts');
-const { MatchServer } = await import('../src/server/matchServer.ts');
-const { MatchHost } = await import('../src/server/host.ts');
-const { webSocketTransportServer } = await import('../src/transport/webSocketServer.ts');
-const { mergeTransportServers } = await import('../src/transport/merged.ts');
-const { jsonSerializer, msgpackSerializer } = await import('../src/protocol/codec.ts');
+const {
+  contentPack,
+  jsonSerializer,
+  mergeTransportServers,
+  msgpackSerializer,
+  MatchHost,
+  MatchServer,
+  webSocketTransportServer,
+} = await import('@game-mvp/net');
 const { BRAIN_KINDS, BotSlotFiller, PortConnections, attachBots, parseBotProfile } =
   await import('@game-mvp/bot');
 

@@ -24,7 +24,7 @@
     "coverage": "vitest run --config vitest.coverage.config.ts --coverage",
     "import": "node tools/blender-ts/bin/import.mjs",
     "demo": "npm run dev -w @game-mvp/demo",
-    "demo:serve": "node engine/net-ts/bin/demo-serve.mjs",
+    "demo:serve": "node game/demo-ts/bin/demo-serve.mjs",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "lint:dead": "knip",
@@ -36,7 +36,7 @@
     "spec-graph": "node scripts/spec-graph.mjs"
   },
   "engines": {
-    "node": ">=22.18"
+    "node": ">=22.18 <23 || ^24 || >=26"
   },
   "overrides": {
     "nanoid": "^3.3.18",

@@ -51,7 +51,7 @@
       "entry": ["app/**/*.ts", "test/**/*.test.ts"]
     },
     "game/demo-ts": {
-      "entry": ["app/**/*.ts", "test/**/*.test.ts"]
+      "entry": ["app/**/*.ts", "bin/*.mjs", "test/**/*.test.ts"]
     },
     "tools/blender-ts": {
       "entry": ["bin/*.mjs", "test/**/*.test.ts", "test/fixtures/build.mjs"]

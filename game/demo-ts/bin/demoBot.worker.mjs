@@ -6,9 +6,11 @@
  * приём одного init-сообщения и передача его общей воркер-стороне. Своим
  * файлом, а не `nodeEntry.ts` напрямую, ровно по одной причине — хук резолва
  * `./x.js` → `./x.ts` действует на поток, и воркеру он нужен свой (`tsHook.mjs`).
+ * Хук берётся подпутём пакета net, а не копией рядом: файл ровно для того и
+ * выделен отдельным модулем — «импортом этого файла, а не второй копией кода».
  */
 import { parentPort } from 'node:worker_threads';
-import './tsHook.mjs';
+import '@game-mvp/net/bin/tsHook.mjs';
 
 if (parentPort === null) {
   throw new Error('demoBot.worker: файл исполняется вне worker_threads — parentPort отсутствует');
