@@ -182,12 +182,12 @@ describe('демо-сцена: кромка диска и смерть в пус
     });
   }
 
-  it('зажатая кнопка каста не спамит фаерболы: каст ловит фронт (INP-2)', () => {
-    // Held-семантика ввода (INP-2) даёт бит во всех тиках удержания; детектор
-    // фронта в JSON-системе `Cast` (`buttons && !prevButtons`) обязан сработать
-    // ровно один раз на нажатие — иначе слой ввода сломал бы существующий
-    // контент.
-    const { sim, state } = createDemoSimulation(SCENE);
+  it('зажатая кнопка каста копит заряд и стреляет ровно раз — на отпускании (INP-2)', () => {
+    // Held-семантика ввода (INP-2) даёт бит во всех тиках удержания. Каст
+    // ловит фронт (`ChargeStart`), выстрел — ОТСУТСТВИЕ бита на фоне прошлого
+    // тика (`ChargeRelease`): удержание не спамит снарядами, а копит заряд, и
+    // на одно нажатие приходится ровно один снаряд.
+    const { sim, state, playerId } = createDemoSimulation(SCENE);
     const CAST = 1 << 0;
     const fireballs = (): number => {
       let count = 0;
@@ -196,22 +196,45 @@ describe('демо-сцена: кромка диска и смерть в пус
       }
       return count;
     };
-
-    for (let tick = 1; tick <= 10; tick++) {
+    /** Все снаряды, ЖИВШИЕ за прогон: долетевший исчезает, и живого счёта мало. */
+    const spawned = new Set<EntityId>();
+    const step = (tick: number, buttons: number): void => {
       simTick(sim, state, [
-        { tick, playerId: PLAYER_ID, seq: tick, move: { x: 0, y: 0 }, aimDir: 0, buttons: CAST },
+        { tick, playerId: PLAYER_ID, seq: tick, move: { x: 0, y: 0 }, aimDir: 0, buttons },
       ]);
-    }
+      for (const entity of coreWorld.listAlive(state.world)) {
+        if (coreWorld.hasTag(state.world, entity, 'Fireball')) spawned.add(entity);
+      }
+    };
+
+    for (let tick = 1; tick <= 10; tick++) step(tick, CAST);
+    // Кнопка всё ещё зажата — снаряда нет, есть заряд.
+    expect(fireballs()).toBe(0);
+    expect(coreWorld.hasComponent(state.world, playerId, 'Charging')).toBe(true);
+
+    step(11, 0);
+    expect(fireballs()).toBe(1);
+    expect(coreWorld.hasComponent(state.world, playerId, 'Charging')).toBe(false);
+
+    // Повторное нажатие на неостывшем кулдауне заряда не начинает.
+    expect(coreWorld.getField(state.world, playerId, 'Cooldowns', 'cast')).toBeGreaterThan(0);
+    step(12, CAST);
+    expect(coreWorld.hasComponent(state.world, playerId, 'Charging')).toBe(false);
     expect(fireballs()).toBe(1);
 
-    // Отпустил и нажал снова — второй фаербол, фронт не потерялся.
-    simTick(sim, state, [
-      { tick: 11, playerId: PLAYER_ID, seq: 11, move: { x: 0, y: 0 }, aimDir: 0, buttons: 0 },
-    ]);
-    simTick(sim, state, [
-      { tick: 12, playerId: PLAYER_ID, seq: 12, move: { x: 0, y: 0 }, aimDir: 0, buttons: CAST },
-    ]);
-    expect(fireballs()).toBe(2);
+    // Второй цикл «нажал-отпустил» после кулдауна даёт ВТОРОЙ снаряд: удержание
+    // не спамит, но и не запирает способность навсегда. Считаются РОДИВШИЕСЯ
+    // за прогон, а не живые: первый снаряд к этому времени долетел и исчез.
+    expect(spawned.size).toBe(1);
+    let tick = 13;
+    while (coreWorld.getField(state.world, playerId, 'Cooldowns', 'cast') > 0) {
+      step(tick, 0);
+      tick += 1;
+    }
+    step(tick, CAST);
+    step(tick + 1, 0);
+    expect(spawned.size).toBe(2);
+    expect(fireballs()).toBe(1);
   });
 
   it('на полу событий провала нет и герой жив', () => {

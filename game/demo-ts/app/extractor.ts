@@ -25,6 +25,9 @@ export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   { name: STATS.hp, component: 'Health', field: 'hp' },
   { name: STATS.hpMax, component: 'Health', field: 'hpMax' },
   { name: STATS.deaths, component: 'Score', field: 'deaths' },
+  // Заряд каста: величина, а не состояние, — по ней главный поток растит шар
+  // перед кастером (`sim.ts`, `chargeVisualOf`).
+  { name: STATS.charge, component: 'Charging', field: 'ticks' },
   ...COOLDOWN_ABILITIES.flatMap((ability) => [
     { name: STATS.cooldown(ability), component: 'Cooldowns', field: ability },
     { name: STATS.cooldownMax(ability), component: 'Cooldowns', field: `${ability}Max` },
@@ -35,11 +38,18 @@ export function createDemoExtractor(grid: TerrainGrid | undefined): Extractor {
   return new Extractor({
     // Ключи манифеста визуалов = теги prefab'ов сцены (ASSET-6). Снаряд и купол
     // замедления рисуются записью эффекта, а не моделью, — ключ им нужен тот же.
-    kindOf: kindByTags(['Hero', 'Fireball', 'SlowDome']),
+    // `HeavyFireball` — ПЕРЕД `Fireball`: заряженный снаряд несёт оба тега
+    // (системы сцены ищут его по `Fireball`), а тип берётся первым совпавшим —
+    // так у него своя, более крупная запись эффекта.
+    kindOf: kindByTags(['Hero', 'HeavyFireball', 'Fireball', 'SlowDome']),
     ...(grid !== undefined ? { terrainGrid: grid } : {}),
     // Доворот торса (REND-5) — по направлению каста: одно каноническое событие
-    // сцены несёт и факт каста, и `dirX`/`dirY`.
-    aimEvents: ['CastFireball'],
+    // сцены несёт и факт каста, и `dirX`/`dirY`. `ChargeAim` — то же
+    // направление, но КАЖДЫЙ тик заряда: без него торс кастера стоял бы
+    // неподвижно всю секунду накопления и доворачивался только на выстреле.
+    // Оно же — единственный источник курса для шара заряда ЧУЖОГО героя
+    // (`main.ts`): своего прицела у главного потока на него нет.
+    aimEvents: ['CastFireball', 'ChargeAim'],
     // Компоненты-состояния, зеркалируемые в `EntityView.states` (CAM-6): список
     // общий с главным потоком (`sim.ts`) — порядок задаёт биты.
     stateComponents: STATE_COMPONENTS,

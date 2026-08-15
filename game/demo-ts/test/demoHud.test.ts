@@ -14,11 +14,21 @@ import type { AssetService, VisualManifest } from '@game-mvp/assets';
 import { RemoteHost, WorkerShell } from '@game-mvp/client';
 import { createDemoHudRegistry, demoHudComposition } from '../app/hud.js';
 import { createDemoExtractor } from '../app/extractor.js';
-import { COOLDOWN_ABILITIES, PLAYER_ID, STATS, TICK_SECONDS, createDemoSimulation } from '../app/sim.js';
+import {
+  ACTION_BITS,
+  COOLDOWN_ABILITIES,
+  PLAYER_ID,
+  STATS,
+  TICK_SECONDS,
+  chargeHeld,
+  chargeVisualOf,
+  createDemoSimulation,
+} from '../app/sim.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 
 const SCENE = sceneJson as unknown as SceneDef;
+const CAST = 1 << ACTION_BITS.cast;
 
 /** Заглушки швов сборки: реестрам они нужны только чтобы виды создались. */
 const stubOptions = {
@@ -90,9 +100,13 @@ describe('headless-прогон демо: статы и фаза полёта д
     expect(names).toContain(STATS.slot);
     expect(names).toContain(STATS.hp);
 
-    // Каст: снаряд рождается и летит, а сборка считает ему фазу полёта.
+    // Каст: нажатие копит заряд, отпускание стреляет — снаряд рождается и
+    // летит, а сборка считает ему фазу полёта.
     simTick(sim, state, [
       { tick: state.tick + 1, playerId: PLAYER_ID, seq: 1, move: { x: 0, y: 0 }, aimDir: 0, buttons: 1 },
+    ]);
+    simTick(sim, state, [
+      { tick: state.tick + 1, playerId: PLAYER_ID, seq: 2, move: { x: 0, y: 0 }, aimDir: 0, buttons: 0 },
     ]);
     for (let i = 0; i < 6; i++) shell.stepTick();
 
@@ -116,5 +130,80 @@ describe('headless-прогон демо: статы и фаза полёта д
     expect(fireball!.flightPhase).toBeLessThan(1);
     // У героя фазы полёта нет — он не летит (REND-12).
     expect(Number.isNaN(hero.flightPhase)).toBe(true);
+  });
+
+  /**
+   * Путь стата `charge` целиком: `Charging.ticks` симуляции → экстрактор →
+   * канал → `EntityView.stats` главного потока, который и растит по нему шар
+   * заряда. Без этого теста дыра в любом звене выглядела бы как «шара нет» —
+   * и молчала бы ровно так же, как честное «не заряжаю» (HUD-8).
+   */
+  it('заряд каста доезжает статом и ПРОПАДАЕТ на отпускании', () => {
+    const { sim, state, playerId, grid } = createDemoSimulation(SCENE);
+    const [workerPort, mainPort] = syncPortPair();
+    const shell = new WorkerShell({
+      mode: 'local',
+      port: workerPort,
+      sim,
+      state,
+      tickSeconds: TICK_SECONDS,
+      extractor: createDemoExtractor(grid),
+      playerId: PLAYER_ID,
+      helloExtra: { hero: playerId },
+      clock: () => 0,
+    });
+    const remote = new RemoteHost(dummyContext(), { clock: () => 0, onReady: () => {} }).connect(
+      mainPort,
+    );
+    shell.start();
+
+    // Кнопка держится КАЖДЫЙ тик: латч оболочки чистится после тика (INP-2).
+    const HELD = 12;
+    for (let i = 0; i < HELD; i++) {
+      remote.sendInput({ x: 0, y: 0 }, 0, CAST);
+      shell.stepTick();
+    }
+    const charging = remote.view!.entities.get(playerId)!;
+    // Тик НАЖАТИЯ только заводит `Charging{ticks: 0}` — счёт идёт со следующего.
+    expect(charging.stats!.get(STATS.charge)).toBe(HELD - 1);
+    // И ровно столько же насчитает шар заряда главного потока.
+    expect(chargeHeld(charging.stats!.get(STATS.charge)!, chargeVisualOf(SCENE).ticks)).toBe(
+      HELD - 2,
+    );
+
+    // Отпускание: заряд израсходован, и стата НЕТ — «не заряжаю», а не ноль.
+    shell.stepTick();
+    expect(remote.view!.entities.get(playerId)!.stats!.has(STATS.charge)).toBe(false);
+  });
+});
+
+describe('числа шара заряда читаются из сцены (`sim.ts`)', () => {
+  it('`chargeHeld` вычитает тик нажатия и упирается в окно роста', () => {
+    const { ticks: max, graceTicks } = chargeVisualOf(SCENE);
+    // Ни одного тика удержания — обычный шар, а не «чуть заряженный».
+    expect(chargeHeld(0, max)).toBe(0);
+    expect(chargeHeld(1, max)).toBe(0);
+    expect(chargeHeld(2, max)).toBe(1);
+    // Полный заряд набирается на 61-м тике удержания: тик нажатия не в счёт.
+    expect(chargeHeld(max + 1, max)).toBe(max);
+    // Дальше окно роста НЕ растёт — тики передержки видны только в сыром
+    // `Charging.ticks`, и предел здесь тот же, что у `ChargeRelease` в сцене.
+    expect(chargeHeld(max + graceTicks + 1, max)).toBe(max);
+  });
+
+  it('`chargeVisualOf` падает громко, если поля `AbilityConfig` нет', () => {
+    const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
+    const { chargeMaxScale: _dropped, ...rest } = hero.components.AbilityConfig!;
+    const holed: SceneDef = {
+      ...SCENE,
+      prefabs: SCENE.prefabs!.map((prefab) =>
+        prefab.name === 'Hero'
+          ? { ...prefab, components: { ...prefab.components, AbilityConfig: rest } }
+          : prefab,
+      ),
+    };
+    // Дыра в контенте обязана СООБЩИТЬ о себе: молчаливый ноль дал бы шар
+    // нулевого размера, то есть «способности нет» вместо «поля нет».
+    expect(() => chargeVisualOf(holed)).toThrow(/chargeMaxScale/);
   });
 });

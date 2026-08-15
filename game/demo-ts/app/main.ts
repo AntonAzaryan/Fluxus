@@ -26,8 +26,10 @@ import {
   mdxLoader,
   particleEffectLoader,
   pngTextureLoader,
+  resolveEffectByKind,
   type AssetSource,
   type AssetState,
+  type VisualEffect,
   type VisualManifest,
 } from '@game-mvp/assets';
 import {
@@ -63,7 +65,15 @@ import {
   validateBindings,
   type InputSource,
 } from '@game-mvp/client';
-import { ACTION_BITS, STATE_COMPONENTS, STATS, captureZoneOf, stateBit } from './sim.js';
+import {
+  ACTION_BITS,
+  STATE_COMPONENTS,
+  STATS,
+  captureZoneOf,
+  chargeHeld,
+  chargeVisualOf,
+  stateBit,
+} from './sim.js';
 import { createDemoHud, demoHudComposition } from './hud.js';
 import { DEMO_SERVER_URL, demoMode, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
@@ -240,8 +250,9 @@ window.addEventListener('keydown', (e) => {
     // выстрелил бы в устаревшую точку при следующем откреплении.
     pendingPan = null;
   }
-  // V, а не F: F ушла герою под купол замедления (`bindings.json`), и две
-  // роли на одной клавише — это молча несработавшая способность.
+  // V, а не F: F ушла герою под купол замедления, а E — под щит
+  // (`bindings.json`), и две роли на одной клавише — это молча несработавшая
+  // способность.
   if (e.code === 'KeyV') camInput.flyToggle = true;
   keys.add(e.code);
 });
@@ -330,21 +341,46 @@ if (bindings.gamepad !== undefined) {
 let frameAim: number | null = null;
 
 /**
+ * Последний НЕПУСТОЙ прицел кадра. Луч мимо плоскости пола (курсор ушёл в небо
+ * над кромкой арены) даёт `frameAim === null`, и фигура, гаснущая по нему,
+ * исчезала бы на ровном месте — притом что заряд в это время продолжает идти к
+ * взрыву в кастере. Держать последнее направление — то же правило, по которому
+ * сэмплер держит последний `aimDir` молчащего источника (INP-5).
+ */
+let lastAim: number | null = null;
+
+/**
  * Прицел под курсором как НЕПРЕРЫВНЫЙ источник (INP-1): `KeyboardMouseSource`
  * владеет прицелом только в момент клика, а способностям с удержанием (захват
- * снаряда) направление нужно на каждом тике удержания — иначе отпускание
- * разрешалось бы по направлению последнего клика. Органов управления источник
- * не держит (`held` не реализует), поэтому на биты кнопок он не влияет вовсе;
- * сэмплер берёт прицел у того источника, который менял его последним (INP-5).
+ * снаряда, заряд каста) направление нужно на каждом тике удержания — иначе
+ * отпускание разрешалось бы по направлению последнего клика. Органов управления
+ * источник не держит (`held` не реализует), поэтому на биты кнопок он не влияет
+ * вовсе; сэмплер берёт прицел у того источника, который менял его последним
+ * (INP-5).
  *
- * Прицел отдаётся ТОЛЬКО в опрос после движения указателя. Иначе он менялся бы
- * на каждом опросе сам собой — герой идёт, курсор стоит, угол «герой → курсор»
- * плывёт, — и по правилу «последний менявший» этот источник навсегда
- * перебивал бы стик геймпада и тач, у которых прицел при неподвижном стике
- * замирает. Молчание источника прицел не гасит: сэмплер держит последнее
+ * Прицел отдаётся в опрос после движения указателя — ЛИБО пока зажата
+ * способность с удержанием. Без второго условия он менялся бы на каждом опросе
+ * сам собой — герой идёт, курсор стоит, угол «герой → курсор» плывёт, — и по
+ * правилу «последний менявший» этот источник навсегда перебивал бы стик
+ * геймпада и тач, у которых прицел при неподвижном стике замирает. Но пока
+ * человек ДЕРЖИТ мышью захват или заряд, он заведомо целится ею: без живого
+ * прицела нарисованный сектор захвата разъезжался бы с тем `aimDir`, по
+ * которому решит тик (герой сместился, курсор нет), — то есть превью обещало бы
+ * не ту зону. Молчание источника прицел не гасит: сэмплер держит последнее
  * направление (INP-5).
  */
 let polledPointerMoves = -1;
+/** Способности демо, которые целятся мышью всё время удержания (см. выше). */
+const POINTER_HELD_ACTIONS: readonly string[] = ['capture', 'cast'];
+function pointerAiming(): boolean {
+  const held = kbmSource.held();
+  // Плоский цикл, а не `some`: функция зовётся каждым опросом сэмплера, то есть
+  // покадрово, и замыкание на кадр — политика этого файла (см. `groundPoint`).
+  for (const action of POINTER_HELD_ACTIONS) {
+    if (held.has(action)) return true;
+  }
+  return false;
+}
 const pointerAimSource: InputSource = {
   id: 'pointer-aim',
   start: () => {},
@@ -352,9 +388,15 @@ const pointerAimSource: InputSource = {
   poll: () => {
     const moved = pointerMoves !== polledPointerMoves;
     polledPointerMoves = pointerMoves;
-    return { moveX: 0, moveY: 0, aim: moved ? frameAim : null };
+    return { moveX: 0, moveY: 0, aim: moved || pointerAiming() ? frameAim : null };
   },
 };
+// ПОСЛЕДНИМ, и это несущее: сэмплер выбирает прицел источника с самым свежим
+// изменением строгим сравнением (INP-5), а при РАВНОЙ свежести побеждает тот,
+// кто добавлен раньше. То есть в тик, где стик тача или геймпада двинулся
+// одновременно с курсором, выигрывает стик — устройство, которым игрок
+// действительно целится. Переставить этот `add` выше значило бы отдать мыши
+// молчаливый приоритет над обоими.
 sampler.add(pointerAimSource);
 
 // ------------------------------------------------- превью зоны захвата (R)
@@ -371,18 +413,31 @@ sampler.add(pointerAimSource);
 
 /** Подъём над полом: без него сектор тонет в ступени террейна (REND-7). */
 const CAPTURE_PREVIEW_LIFT = 0.05;
-const CAPTURE_PREVIEW_SEGMENTS = 24;
+/**
+ * Шаг дуги сектора, радианы. Дуга рисуется вписанным многоугольником, то есть
+ * НЕМНОГО у́же настоящего круга; при шаге в градус стрелка сегмента —
+ * `R · (1 − cos(шаг/2))`, на радиусе 3 клетки это 0.1 мм мира. Ошибку выбран
+ * знак «внутрь»: превью, обещающее меньше реальной зоны, не врёт игроку.
+ */
+const CAPTURE_PREVIEW_ARC_STEP = Math.PI / 180;
 
-/** Сектор в плоскости XY: вершина в начале координат, раствор вокруг оси +X. */
+/**
+ * Сектор в плоскости XY: вершина в начале координат, раствор вокруг оси +X.
+ * Ровно та фигура, которую проверяет `CaptureRelease`, — круг радиуса `radius`
+ * (`withinRadius`), пересечённый клином `dot(normalize(p − герой), aim) ≥
+ * cos(halfAngle)`. Треугольный веер от вершины и есть это пересечение: клин
+ * даёт две прямые кромки, круг — дугу между ними.
+ */
 function captureSectorGeometry(radius: number, halfAngleTurns: number): THREE.BufferGeometry {
   const half = halfAngleTurns * Math.PI * 2;
+  const segments = Math.max(8, Math.ceil((2 * half) / CAPTURE_PREVIEW_ARC_STEP));
   const positions: number[] = [0, 0, 0];
-  for (let i = 0; i <= CAPTURE_PREVIEW_SEGMENTS; i++) {
-    const angle = -half + (2 * half * i) / CAPTURE_PREVIEW_SEGMENTS;
+  for (let i = 0; i <= segments; i++) {
+    const angle = -half + (2 * half * i) / segments;
     positions.push(Math.cos(angle) * radius, Math.sin(angle) * radius, 0);
   }
   const index: number[] = [];
-  for (let i = 1; i <= CAPTURE_PREVIEW_SEGMENTS; i++) index.push(0, i, i + 1);
+  for (let i = 1; i <= segments; i++) index.push(0, i, i + 1);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.setIndex(index);
@@ -415,8 +470,43 @@ function createCapturePreview(): void {
 
 /** Бит состояния «снаряд в руках» доставленной маски (CAM-6, `sim.ts`). */
 const HOLDING_STATE = stateBit('Holding');
+/** Бит состояния «копит заряд каста»: во время заряда захват тоже не сработает. */
+const CHARGING_STATE = stateBit('Charging');
 /** Имя доставленного стата кулдауна захвата (HUD-8) — то же, что у панели HUD. */
 const CAPTURE_COOLDOWN_STAT = STATS.cooldown('capture');
+
+/**
+ * Визуальная поверхность кадра (REND-9) — общая с подсистемами террейна,
+ * моделей и эффектов; появляется вместе с сеткой в `onReady`. Превью зоны и шар
+ * заряда садятся на НЕЁ, а не на `pose.z` инстанса: в прыжке и уклоне поза
+ * поднята дугой манёвра (REND-12), а зона захвата — плоская фигура на полу, и
+ * повторять за дугой ей нечего.
+ */
+let visualSurface: VisualSurfaceSource | null = null;
+
+/**
+ * Точка пола под интерполированной позой инстанса. Горизонталь — ровно та
+ * позиция, по которой решает тик (REND-2), высота — поверхность под ней.
+ *
+ * Отдаётся ОДНА переиспользуемая запись: функция зовётся по разу на превью и на
+ * каждый шар заряда в кадре, а свежий объект на каждый вызов — мусор на кадре
+ * (та же политика, что у `ndcScratch`/`hitScratch`). Значение читается сразу и
+ * между кадрами не хранится.
+ */
+const groundScratch = { x: 0, y: 0, z: 0 };
+function groundUnder(instance: { pose: { x: number; y: number; z: number } }): {
+  x: number;
+  y: number;
+  z: number;
+} {
+  const surface = visualSurface?.current ?? null;
+  const x = instance.pose.x;
+  const y = instance.pose.y;
+  groundScratch.x = x;
+  groundScratch.y = y;
+  groundScratch.z = surface === null ? instance.pose.z : surface.heightAt(x, y);
+  return groundScratch;
+}
 
 /**
  * Кадр превью: видно, пока зажата клавиша захвата и захват ВОЗМОЖЕН. Удержание
@@ -433,24 +523,178 @@ function updateCapturePreview(): void {
   const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
   const hero = heroId === null ? undefined : remote?.view?.entities.get(heroId);
   const onCooldown = (hero?.stats?.get(CAPTURE_COOLDOWN_STAT) ?? 0) > 0;
-  const holding = ((hero?.states ?? 0) & HOLDING_STATE) !== 0;
+  const blocked = ((hero?.states ?? 0) & (HOLDING_STATE | CHARGING_STATE)) !== 0;
   if (
     !kbmSource.held().has('capture') ||
     onCooldown ||
-    holding ||
+    blocked ||
     instance === null ||
     frameAim === null
   ) {
     capturePreview.visible = false;
     return;
   }
+  const ground = groundUnder(instance);
   capturePreview.visible = true;
-  capturePreview.position.set(
-    instance.pose.x,
-    instance.pose.y,
-    instance.pose.z + CAPTURE_PREVIEW_LIFT,
-  );
+  capturePreview.position.set(ground.x, ground.y, ground.z + CAPTURE_PREVIEW_LIFT);
   capturePreview.rotation.set(0, 0, (frameAim / TURN_UNITS) * Math.PI * 2);
+}
+
+// ------------------------------------------------- шары заряда каста (ЛКМ)
+//
+// Заряд растёт МЕЖДУ тиками, а радиус оболочки `effects.byKind` задан записью
+// манифеста и один на весь визуальный тип (REND-23) — растить им шар нечем.
+// Поэтому шар живёт здесь, рядом с превью зоны захвата и по тем же правилам:
+// числа — из `AbilityConfig` (`chargeVisualOf`) и из записей манифеста, поза —
+// интерполированная поза инстанса.
+//
+// Шар рисуется КАЖДОЙ доставленной сущности со статом `charge`, а не одному
+// своему герою: соперник копит те же 78 тиков до 400 урона, и заряд без
+// телеграфа означал бы удар, которого не видно, — а видеть его игрок обязан из
+// доставленного состояния (HUD-1), а не из догадки. Направление своего шара —
+// прицел ЭТОГО кадра (курсор идёт впереди тика), чужого — доставленный курс
+// `aimYaw`, который сцена шлёт событием `ChargeAim` каждый тик заряда.
+//
+// Величина заряда приезжает доставленным статом `charge` (`Charging.ticks`), то
+// есть из симуляции: главный поток её не считает и о нажатиях не помнит.
+
+/**
+ * Числа картинки шара — из записей манифеста `effects.byKind`. Отсутствие
+ * записи или поля — громкая ошибка, как и дыра в `AbilityConfig`
+ * (`captureZoneOf`, `chargeVisualOf`): молчаливое умолчание здесь было бы
+ * ТРЕТЬЕЙ копией чисел манифеста, которая расходится с ним незаметно.
+ */
+interface ChargeBallLook {
+  /** Цвет обычного снаряда и цвет тяжёлого: с порога `heavyScale` шар красится вторым. */
+  readonly color: string;
+  readonly heavyColor: string;
+  /** Радиус и высота — снаряда, который улетит при нулевом заряде. */
+  readonly radius: number;
+  readonly height: number;
+  readonly alpha: number;
+}
+
+let chargeLook: ChargeBallLook | null = null;
+let chargeVisual: ReturnType<typeof chargeVisualOf> | null = null;
+/** Геометрия одна на все шары — единичная сфера: размер даёт `scale` меша. */
+let chargeGeometry: THREE.SphereGeometry | null = null;
+/** Живые шары по сущности и пул снятых: заряжающих на арене единицы. */
+const chargeBalls = new Map<EntityId, THREE.Mesh>();
+const chargeBallPool: THREE.Mesh[] = [];
+/** Кто заряжает в ЭТОМ кадре — переиспользуется, чтобы кадр не аллоцировал. */
+const chargingSeen = new Set<EntityId>();
+
+function chargeEffectOf(manifest: VisualManifest, kind: string): VisualEffect {
+  const record = resolveEffectByKind(manifest, kind);
+  if (record === undefined) {
+    throw new Error(
+      `демо: в манифесте нет записи effects.byKind.${kind} — шар заряда рисовать нечем`,
+    );
+  }
+  return record;
+}
+
+function createChargeBalls(manifest: VisualManifest): void {
+  chargeVisual = chargeVisualOf(sceneJson as unknown as SceneDef);
+  const base = chargeEffectOf(manifest, 'Fireball');
+  const heavy = chargeEffectOf(manifest, 'HeavyFireball');
+  if (base.alpha === undefined || base.height === undefined) {
+    throw new Error(
+      'демо: в записи effects.byKind.Fireball нет alpha/height — шар заряда рисовать нечем',
+    );
+  }
+  chargeLook = {
+    color: base.color,
+    heavyColor: heavy.color,
+    radius: base.radius,
+    height: base.height,
+    alpha: base.alpha,
+  };
+  chargeGeometry = new THREE.SphereGeometry(1, 20, 14);
+}
+
+/** Меш из пула либо новый; материал свой у каждого — цвет и альфа пер-инстансны. */
+function acquireChargeBall(): THREE.Mesh {
+  const pooled = chargeBallPool.pop();
+  if (pooled !== undefined) {
+    pooled.visible = true;
+    return pooled;
+  }
+  const geometry = chargeGeometry;
+  if (geometry === null) throw new Error('демо: шар заряда до загрузки манифеста');
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }),
+  );
+  mesh.name = 'charge-ball';
+  scene3.add(mesh);
+  return mesh;
+}
+
+function releaseChargeBall(mesh: THREE.Mesh): void {
+  mesh.visible = false;
+  chargeBallPool.push(mesh);
+}
+
+/**
+ * Кадр шаров заряда: по шару на каждую доставленную сущность со статом `charge`.
+ * Размер — линейный рост до `chargeMaxScale` за `chargeTicks`; с порога
+ * `chargeHeavyScale` шар перекрашивается в цвет `HeavyFireball` — того самого
+ * prefab'а, который родится на отпускании, — а после максимума не растёт, а
+ * мигает: предупреждение о перезаряде, который сейчас рванёт в самом кастере
+ * (`ChargeOvercharge`).
+ */
+function updateChargeBalls(): void {
+  const look = chargeLook;
+  const visual = chargeVisual;
+  if (look === null || visual === null) return;
+  const entities = remote?.view?.entities;
+  chargingSeen.clear();
+  if (entities !== undefined) {
+    const { ticks: maxTicks, maxScale, heavyScale, offset } = visual;
+    // Мигание — по часам кадра, одинаковое для всех шаров: заряд перезрел.
+    const blink = Math.floor(performance.now() / 90) % 2 === 0;
+    for (const [entity, view] of entities) {
+      const ticks = view.stats?.get(STATS.charge);
+      if (ticks === undefined) continue;
+      const instance = models?.instanceFor(entity) ?? null;
+      if (instance === null) continue;
+      // Свой шар целится прицелом кадра: курсор идёт впереди тика. Последним
+      // НЕПУСТЫМ, а не текущим, — луч, ушедший мимо плоскости пола, не повод
+      // гасить шар, пока заряд идёт к взрыву в кастере (то же правило, что у
+      // сэмплера, INP-5). Чужой — доставленным курсом `ChargeAim`.
+      const own = entity === heroId ? lastAim : null;
+      const angle =
+        own === null ? (view.aimYaw ?? view.facingYaw) : (own / TURN_UNITS) * Math.PI * 2;
+      const held = chargeHeld(ticks, maxTicks);
+      const scale = 1 + (maxScale - 1) * (held / maxTicks);
+      const ground = groundUnder(instance);
+      let ball = chargeBalls.get(entity);
+      if (ball === undefined) {
+        ball = acquireChargeBall();
+        chargeBalls.set(entity, ball);
+      }
+      chargingSeen.add(entity);
+      ball.scale.setScalar(look.radius * scale);
+      ball.position.set(
+        ground.x + Math.cos(angle) * offset,
+        ground.y + Math.sin(angle) * offset,
+        ground.z + look.height,
+      );
+      const material = ball.material as THREE.MeshBasicMaterial;
+      material.color.set(scale >= heavyScale ? look.heavyColor : look.color);
+      // Альфа записи МОДУЛИРУЕТСЯ, а не подменяется: число прозрачности живёт
+      // в манифесте, здесь — только «мигает или нет». Передержка видна в СЫРЫХ
+      // тиках: `chargeHeld` обрезает их окном роста ровно как `ChargeRelease`.
+      const overcharged = ticks - 1 >= maxTicks;
+      material.opacity = overcharged && blink ? look.alpha * 0.4 : look.alpha;
+    }
+  }
+  for (const [entity, ball] of chargeBalls) {
+    if (chargingSeen.has(entity)) continue;
+    releaseChargeBall(ball);
+    chargeBalls.delete(entity);
+  }
 }
 
 /**
@@ -526,7 +770,14 @@ function sampleCameraInput(): void {
   const fly = rig?.capturesMovement() ?? false;
   camInput.moveX = fly ? (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0) : 0;
   camInput.moveY = fly ? (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0) : 0;
-  camInput.moveZ = fly ? (keys.has('KeyE') ? 1 : 0) - (keys.has('KeyQ') ? 1 : 0) : 0;
+  // Вертикаль облёта — `Q`/`Z`, а не привычная пара `Q`/`E`: `E` ушла герою под
+  // щит (`bindings.json`), а `KeyboardMouseSource` гасит в режиме облёта только
+  // ОСИ движения (`movementCaptured`), не биты действий, — и облёт вверх молча
+  // ставил бы щит. Та же причина, по которой облёт включает `V`, а не `F`.
+  // Направление у `Q` при этом ОБРАТНОЕ редакторскому (`editor/ui-ts`: `E` —
+  // вверх, `Q` — вниз): там вертикаль облёта свободна, здесь её выбирает
+  // занятость `E`. Мышечная память между двумя сборками не переносится.
+  camInput.moveZ = fly ? (keys.has('KeyQ') ? 1 : 0) - (keys.has('KeyZ') ? 1 : 0) : 0;
 }
 
 /**
@@ -601,6 +852,7 @@ function frame(now: number): void {
   // конвейера камеры — по той же позе, по которой игрок видел кадр, когда
   // ставил курсор, и одинаково для обоих потребителей.
   frameAim = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
+  if (frameAim !== null) lastAim = frameAim;
 
   // Тиков здесь нет (SHELL-1): симуляция идёт в воркере своим тикером,
   // кадр только шлёт ввод и интерполирует доставленное (REND-2).
@@ -642,8 +894,10 @@ function frame(now: number): void {
   }
 
   remote?.frame(now);
-  // После кадра подсистем: сектор садится на позу инстанса ЭТОГО кадра.
+  // После кадра подсистем: сектор и шар заряда садятся на позу инстанса ЭТОГО
+  // кадра — не прошлого.
   updateCapturePreview();
+  updateChargeBalls();
   renderer3.render(scene3, camera);
 }
 
@@ -724,6 +978,10 @@ async function main(): Promise<void> {
   // приходят из сцены, и дыра в контенте не должна уносить страницу целиком.
   createCapturePreview();
   const manifest = await loadManifest();
+  // Шары заряда — после манифеста: цвет, базовый радиус и высоту они берут из
+  // записей `effects.byKind.Fireball`/`HeavyFireball`, то есть у тех самых
+  // снарядов, один из которых и улетит.
+  createChargeBalls(manifest);
   const worker = spawnShellWorker(mode);
 
   remote = new RemoteHost(context, {
@@ -738,6 +996,9 @@ async function main(): Promise<void> {
           ? { curvatureMapId: manifest.terrain.curvatureMap }
           : {}),
       });
+      // Та же поверхность — превью зоны захвата и шару заряда: обе фигуры
+      // плоские и садятся на пол, а не на дугу манёвра инстанса.
+      visualSurface = surface;
       // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
       remote!.register(new TerrainSubsystem(grid, { surface }));
       // Перёд модели больше не параметр сборки: он описан в записи манифеста

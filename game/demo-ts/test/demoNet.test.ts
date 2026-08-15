@@ -261,8 +261,11 @@ describe('демо по умолчанию: матч против бота на 
     expect(opened.server.phase).toBe('running');
 
     // Каст фаербола: бит 0 словаря биндингов демо (`ACTION_BITS.cast`).
+    // Нажатие копит заряд, выстрел даёт ОТПУСКАНИЕ — поэтому бит снимается
+    // после первых кадров, а не держится весь прогон.
     rig.remote.sendInput({ x: 0, y: 0 }, 0, 1 << ACTION_BITS.cast);
     for (let i = 0; i < 20; i++) {
+      if (i === 2) rig.remote.sendInput({ x: 0, y: 0 }, 0, 0);
       clock.ms += 1000 / 60;
       rig.joined.shell.step();
       bots!.step();
@@ -283,6 +286,9 @@ describe('демо по умолчанию: матч против бота на 
     expect(hero.stats!.get(STATS.hp)).toBe(1000);
     expect(hero.stats!.has(STATS.deaths)).toBe(false);
     // Фаза полёта: у снаряда она посчитана воркером, у героя её нет (REND-12).
+    // Тип именно `Fireball`, а не `HeavyFireball`: заряд держался пару тиков —
+    // порога `chargeHeavyScale` он не достигает, — и снаряд ещё жив: полёт
+    // длится `throwLifetime` (50 тиков), а прогон здесь короче.
     const fireball = [...view.entities.values()].find((entity) => entity.kind === 'Fireball')!;
     expect(fireball).toBeDefined();
     expect(fireball.flightPhase).toBeGreaterThanOrEqual(0);
