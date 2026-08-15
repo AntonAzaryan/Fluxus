@@ -587,6 +587,14 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
   syncTick(view: TickView): void {
     const ctx = this.requireCtx();
+    // Разрыв непрерывности (REND-2) снимает необратимость смерти: перемотка
+    // через момент смерти оживляет сущность в симуляции, а `EntityDied` в
+    // прошлом не разэмитится — без этого живой персонаж навсегда остался бы
+    // лежать нулевым кадром клипа смерти (REND-4, REND-25). Раньше сведения
+    // пула: клип состояния этого же кадра ставится уже живому контроллеру.
+    if (view.snapAll) {
+      for (const record of this.instances.values()) record.controller?.onSnap();
+    }
     this.syncPool(ctx, this.instances, view.entities, false);
 
     // События тика → one-shot клипы (REND-4); дедуп на потребителе (OBS-5):

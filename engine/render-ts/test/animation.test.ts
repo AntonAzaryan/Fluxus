@@ -289,4 +289,36 @@ describe('AnimationController: смерть (REND-4)', () => {
     expect(controller.currentClipName).toBe('Death');
     expect(controller.handleEvent('CastFireball')).toBe(false);
   });
+
+  it('снап доставки смерть снимает: перемотка через неё возвращает клип состояния', () => {
+    const { controller } = makeController();
+    controller.setState('move');
+    controller.handleEvent('EntityDied');
+    controller.update(2);
+    expect(controller.isDead).toBe(true);
+
+    // Разрыв непрерывности (REND-2): мир авторитетно другой — перемотка вернула
+    // сущность к жизни. Событие смерти в прошлом «не разэмитится», и снап
+    // остаётся единственным указанием, по которому контроллер узнаёт об этом.
+    controller.onSnap();
+
+    expect(controller.isDead).toBe(false);
+    expect(controller.currentClipName).toBe('Walk Fast');
+    // И события снова слышны: труп их игнорировал.
+    expect(controller.handleEvent('CastFireball')).toBe(true);
+  });
+
+  it('снап живого контроллера ничего не переигрывает', () => {
+    const { controller } = makeController();
+    controller.setState('move');
+    controller.handleEvent('CastFireball');
+    controller.update(0.2);
+    expect(controller.currentClipName).toBe('Attack - 1');
+
+    // Снап приходит и на обычном реплее, и на смене ветви истории — сбивать им
+    // фазу живого one-shot не за чем: его ведёт своя шкала.
+    controller.onSnap();
+
+    expect(controller.currentClipName).toBe('Attack - 1');
+  });
 });

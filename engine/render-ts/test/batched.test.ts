@@ -336,6 +336,31 @@ describe('анимация батчевой записи (REND-4, REND-20)', () 
     expect(controller.currentClipName).toBe('Death');
   });
 
+  it('доставка снапом снимает смерть: перемотка через неё не оставляет труп навсегда', () => {
+    const { subsystem, assets } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { moving: true })], {
+        freshEvents: true,
+        events: [{ type: 'EntityDied', data: { entity: 1 } }],
+      }),
+    );
+    const controller = subsystem.instanceFor(1)!.controller!;
+    for (let i = 0; i < 120; i++) subsystem.updateFrame(1 / 60, 1);
+    expect(controller.isDead).toBe(true);
+
+    // Перемотка вернула мир к моменту до смерти: состояние другое, а
+    // непрерывности с прежним нет (REND-2). `EntityDied` в прошлом не
+    // разэмитится — без этого сброса живой персонаж лежал бы вечно.
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { moving: true })], { snapAll: true, mode: 'Rewinding' }),
+    );
+
+    expect(controller.isDead).toBe(false);
+    expect(controller.currentClipName).toBe('Walk Fast');
+  });
+
   it('фаза клипа уходит в строки VAT: пара соседних кадров и вес между ними', () => {
     const { subsystem, assets } = makeRig();
     subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
@@ -387,11 +412,14 @@ describe('обратный ход клипа в батчевом ярусе (REN
     const wrapped = poseAttribute(subsystem)[0]!;
     expect(wrapped).toBeGreaterThan(forward);
 
-    // Возобновление: вперёд с текущей строки, а не с начала клипа.
+    // Возобновление: вперёд с текущей строки, а не с начала клипа. Счёт
+    // ТОЧНЫЙ, а не «не больше трёх»: пять кадров по 1/60 с — это 1/12 секунды,
+    // при 30 запечённых кадрах в секунду ровно две с половиной строки, и с
+    // фазы 5/6 они дают три пройденные строки. Верхняя граница пропустила бы и
+    // «строка не сдвинулась вовсе», и рывок вдвое.
     for (let i = 0; i < 5; i++) subsystem.updateFrame(1 / 60, 1);
     const resumed = poseAttribute(subsystem)[0]!;
-    expect(resumed).toBeGreaterThan(wrapped);
-    expect(resumed - wrapped).toBeLessThanOrEqual(3);
+    expect(resumed - wrapped).toBe(3);
   });
 
   it('кроссфейд дренируется по модулю: обратный ход его доигрывает, а не вешает', () => {
@@ -428,6 +456,29 @@ describe('обратный ход клипа в батчевом ярусе (REN
     expect(controller.currentClipName).toBe('Attack - 1');
 
     for (let i = 0; i < 20; i++) subsystem.updateFrame(-1 / 60, 1);
+    expect(controller.currentClipName).toBe('Walk Fast');
+  });
+
+  it('one-shot, доигранный до перемотки, обратным ходом не воскресает', () => {
+    // Паритет ярусов (REND-20): у детального яруса «раз-финишить» клип микшеру
+    // нечем (design D5), и батчевый обязан вести себя ТАК ЖЕ, хотя фаза у него
+    // своя и вернуть её в клип он бы мог. Одинаковое поведение здесь важнее
+    // того, что каждый ярус способен изобразить поодиночке.
+    const { subsystem, assets } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { moving: true })], {
+        freshEvents: true,
+        events: [{ type: 'CastFireball', data: { entity: 1 } }],
+      }),
+    );
+    const controller = subsystem.instanceFor(1)!.controller!;
+    // Атака (0.5 с) доиграна до конца — вернулись в клип состояния.
+    for (let i = 0; i < 42; i++) subsystem.updateFrame(1 / 60, 1);
+    expect(controller.currentClipName).toBe('Walk Fast');
+
+    for (let i = 0; i < 60; i++) subsystem.updateFrame(-1 / 60, 1);
     expect(controller.currentClipName).toBe('Walk Fast');
   });
 });

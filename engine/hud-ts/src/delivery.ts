@@ -113,5 +113,10 @@ export interface HudDeliverySubsystem {
   init(): void;
   /** Одна доставка — один вызов: состояние conflatable, каденс — доставки (HUD-5). */
   syncTick(view: HudDeliveredState): void;
-  updateFrame(dt: number, alpha: number): void;
+  /**
+   * Кадр главного потока. `dt` — часы презентации со знаком хода мира
+   * (REND-25), `realDt` — те же секунды по часам потока, без знака: HUD ведёт
+   * величины КАРТИНКИ (счётчик кадров), а не мира, и берёт второе.
+   */
+  updateFrame(dt: number, alpha: number, realDt: number): void;
 }

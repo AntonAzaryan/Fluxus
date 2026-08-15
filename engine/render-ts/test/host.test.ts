@@ -349,10 +349,47 @@ describe('RenderHost: часы презентации следуют режим�
     expect(dts[1]).toBeCloseTo(0.016, 6);
     // Стоящий мир с идущими клипами показывал бы движение, которого нет.
     expect(dts[2]).toBe(0);
-    // Обратный ход идёт с той же скоростью, что прямой: знак, а не другой темп.
+    // Каденс доставок здесь один и тот же — тик за доставку в обе стороны, —
+    // поэтому обратный ход идёт с той же скоростью, что прямой: разница только
+    // в знаке. Темп скраба, отличный от живого, проверяется отдельно ниже.
     expect(dts[3]).toBeCloseTo(-0.016, 6);
     expect(Math.abs(dts[3]!)).toBeCloseTo(dts[4]!, 6);
     expect(dts[4]).toBeCloseTo(0.016, 6);
+  });
+
+  it('темп обратного хода — темп скраба: клипы догоняют обратное движение', () => {
+    // Живой мир доставляется через тик (conflation SHELL-4 или рассылка вдвое
+    // реже тиков), а скраб ходит по четыре тика за доставку (REW-13). Клип,
+    // отматываемый по часам главного потока, отстал бы от сущности вдвое —
+    // сценарий REND-25 требует «догоняя обратное движение», а не «в своём
+    // темпе».
+    const { scene, sim } = makeScene();
+    spawnRunner(scene, 0.5, 0.5, 0.1, 0);
+    const state = initialState(scene.world, 7);
+    const { host, setNow } = makeHost(scene);
+    for (let i = 0; i < 14; i++) tick(sim, state);
+
+    const dts: number[] = [];
+    host.register({
+      name: 'probe',
+      init: () => {},
+      syncTick: () => {},
+      updateFrame: (dt) => dts.push(dt),
+    });
+
+    setNow(0);
+    for (const at of [10, 12, 14]) dispatch(deliveredResult(state, at, 'Running'), [host]);
+    host.frame(); // первый кадр сессии: интервала ещё нет
+    setNow(16);
+    host.frame();
+
+    dispatch(deliveredResult(state, 10, 'Rewinding'), [host]);
+    setNow(32);
+    host.frame();
+
+    expect(dts[1]).toBeCloseTo(0.016, 6);
+    // Вдвое быстрее и назад: 4 тика за доставку против 2 у живого мира.
+    expect(dts[2]).toBeCloseTo(-0.032, 6);
   });
 });
 
@@ -403,6 +440,50 @@ describe('RenderHost: скраб перемотки без телепортов 
     dispatch(deliveredResult(state, 2, 'Paused'), [host]);
     expect(host.view.snapAll).toBe(true);
     expect(view.snap).toBe(true);
+  });
+
+  it('порог телепорта считается на доставленный пролёт тиков, а не на один тик', () => {
+    // Скорость снаряда: 0.625 мировых единиц за тик. Шаг скраба — четыре тика
+    // (REW-13), то есть 2.5 единицы за доставку при пороге телепорта 2. Порог,
+    // применённый как «за один тик», объявил бы телепортом КАЖДУЮ доставку
+    // скраба — и обратный ход снаряда рассыпался бы на череду прыжков, ровно то,
+    // что REND-2 запрещает.
+    const { scene, sim } = makeScene();
+    const runner = spawnRunner(scene, 0.5, 0.5, 0.625, 0);
+    // Вторая сущность прыгает по 20 единиц за тик — на порог не натягивается
+    // никаким пролётом: разрыв остаётся разрывом и внутри скраба.
+    const jumper = spawnRunner(scene, 0.5, 0.5, 20, 0);
+    const state = initialState(scene.world, 7);
+    const { host } = makeHost(scene);
+
+    const history: Snapshot[] = [];
+    for (let i = 0; i < 12; i++) {
+      dispatch(tick(sim, state), [host]);
+      history.push(takeSnapshot(state));
+    }
+    const view = host.view.entities.get(runner)!;
+    const jumped = host.view.entities.get(jumper)!;
+
+    // Вход в перемотку: разрыв по смене режима, как и прежде.
+    restoreSnapshot(state, history[11]!);
+    dispatch(deliveredResult(state, 12, 'Rewinding'), [host]);
+    expect(view.snap).toBe(true);
+
+    // Шаг скраба назад на четыре тика: 2.5 единицы разом — это движение, а не
+    // телепорт.
+    restoreSnapshot(state, history[7]!);
+    dispatch(deliveredResult(state, 8, 'Rewinding'), [host]);
+    expect(view.snap).toBe(false);
+    expect(view.prevX).toBeCloseTo(8, 3);
+    expect(view.currX).toBeCloseTo(5.5, 3);
+    // Та же доставка, тот же пролёт — а прыгун снапнут: 80 единиц четырьмя
+    // тиками не объясняются.
+    expect(jumped.snap).toBe(true);
+
+    restoreSnapshot(state, history[3]!);
+    dispatch(deliveredResult(state, 4, 'Rewinding'), [host]);
+    expect(view.snap).toBe(false);
+    expect(view.currX).toBeCloseTo(3, 3);
   });
 });
 

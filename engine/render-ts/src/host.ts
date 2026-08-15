@@ -108,6 +108,6 @@ export class RenderHost implements TickObserver, PresentationProducer {
     if (!this.presentation.isActive(this)) return;
     const timing = now === undefined ? this.buffer.frame() : this.buffer.frame(now);
     if (timing === null) return;
-    this.presentation.frame(timing.dt, timing.alpha);
+    this.presentation.frame(timing.dt, timing.alpha, timing.realDt);
   }
 }
