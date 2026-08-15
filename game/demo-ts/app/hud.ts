@@ -61,6 +61,7 @@ const ABILITY_ICONS: Readonly<Record<string, string>> = {
   slowDome: 'visuals/icons/slow-dome.svg',
   capture: 'visuals/icons/capture.svg',
   shield: 'visuals/icons/shield.svg',
+  rewind: 'visuals/icons/rewind.svg',
 };
 
 /**
@@ -130,6 +131,7 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
           slowDome: 'hero.slowDome',
           capture: 'hero.capture',
           shield: 'hero.shield',
+          rewind: 'hero.rewind',
         },
       },
       {
@@ -290,6 +292,17 @@ export function createDemoHudRegistry(
   registry.registerAction('hero.capture', { target: 'world', action: 'capture' });
   // Щит ловит фронт, как купол: каст-и-забыл, удержание ему ничего не даёт.
   registry.registerAction('hero.shield', { target: 'world', action: 'shield' });
+  // Ульта отката — запись панели БЕЗ действия: она показывает кулдаун и только.
+  //
+  // Клик фасада даёт РОВНО ОДИН тик с битом (INP-2), то есть кастует ульту и в
+  // тот же миг отпускает орган ведения скраба: мир замер бы, отмотался на один
+  // шаг и продолжился — а ульта сгорела бы на весь свой cooldown. Кнопка,
+  // тратящая способность впустую, хуже кнопки, которая ничего не делает.
+  // Скраб — это УДЕРЖАНИЕ, и живёт оно на клавише (`bindings.json`).
+  //
+  // Слот действия при этом объявлен: виджет кулдаунов зовёт `trigger` по имени
+  // способности, и запись без слота валила бы клик исключением (HUD-2).
+  registry.registerAction('hero.rewind', { target: 'presentation', run: () => undefined });
   // Команды машины состояний мира — обратным каналом (SHELL-6, WSM-1); паузу
   // на экране поставит только доставленный режим, не клик (HUD-2).
   registry.registerAction('match.pause', { target: 'control', action: 'pause' });

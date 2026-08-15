@@ -8,7 +8,8 @@
       "KeyK": "kill",
       "KeyF": "slowDome",
       "KeyR": "capture",
-      "KeyE": "shield"
+      "KeyE": "shield",
+      "KeyX": "rewind"
     },
     "pointerButtons": { "0": "cast" }
   },
@@ -28,7 +29,8 @@
       { "zone": { "left": 0.72, "top": 0.05, "width": 0.12, "height": 0.1 }, "action": "dodge" },
       { "zone": { "left": 0.86, "top": 0.17, "width": 0.12, "height": 0.1 }, "action": "slowDome" },
       { "zone": { "left": 0.72, "top": 0.17, "width": 0.12, "height": 0.1 }, "action": "capture" },
-      { "zone": { "left": 0.86, "top": 0.29, "width": 0.12, "height": 0.1 }, "action": "shield" }
+      { "zone": { "left": 0.86, "top": 0.29, "width": 0.12, "height": 0.1 }, "action": "shield" },
+      { "zone": { "left": 0.72, "top": 0.29, "width": 0.12, "height": 0.1 }, "action": "rewind" }
     ]
   },
   "gamepad": {
@@ -42,6 +44,7 @@
       "3": "slowDome",
       "4": "shield",
       "5": "cast",
+      "6": "rewind",
       "8": "kill"
     }
   }

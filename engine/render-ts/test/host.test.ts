@@ -1,7 +1,8 @@
 /**
  * RenderHost: интерполяционный буфер двух тиков, альфа, snap при isReplay,
- * телепорте и спавне (REND-1, REND-2), порядок подсистем (REND-8), зеркало
- * карты пола (REND-7) и направление каста из событий (REND-5).
+ * телепорте и спавне (REND-1, REND-2), ход часов презентации по режиму мира
+ * (REND-25) и скраб перемотки без телепортов (REND-2), порядок подсистем
+ * (REND-8), зеркало карты пола (REND-7) и направление каста из событий (REND-5).
  *
  * Прогоняется на настоящей мини-симуляции ядра: хост тестируется ровно тем
  * контрактом, которым его зовёт внешний слой — `dispatch(tick(...), [host])`.
@@ -16,14 +17,18 @@ import {
   initialState,
   loadScene,
   mathApi,
+  restoreSnapshot,
+  takeSnapshot,
   tick,
   worldInitSpawn,
   type EntityId,
   type Scene,
   type Simulation,
   type SimulationState,
+  type Snapshot,
   type System,
   type TickResult,
+  type WorldMode,
 } from '@game-mvp/core';
 import {
   RenderHost,
@@ -127,6 +132,27 @@ function replayResult(state: SimulationState): TickResult {
     tick: state.tick,
     mode: state.mode,
     isReplay: true,
+    events: state.events,
+    changes: { isEmpty: true, changedEntities: () => new Set<EntityId>() },
+  };
+}
+
+/**
+ * Доставка вне расписания — то, что рендер видит при паузе и перемотке
+ * (WSM-6, NET-11): живого тика за ней нет, режим и номер тика приходят от
+ * доставившей стороны, мир — тот, что она восстановила.
+ */
+function deliveredResult(
+  state: SimulationState,
+  at: number,
+  mode: WorldMode,
+  isReplay = false,
+): TickResult {
+  return {
+    state,
+    tick: at,
+    mode,
+    isReplay,
     events: state.events,
     changes: { isEmpty: true, changedEntities: () => new Set<EntityId>() },
   };
@@ -280,6 +306,184 @@ describe('RenderHost: snap при разрывах непрерывности (R
     expect(host.view.entities.has(runner)).toBe(true);
     dispatch(tick(sim, state), [host]);
     expect(host.view.entities.has(runner)).toBe(false);
+  });
+});
+
+describe('RenderHost: часы презентации следуют режиму мира (REND-25)', () => {
+  it('Running — вперёд, Paused — стоп, Rewinding — назад; модуль тот же', () => {
+    const { scene, sim } = makeScene();
+    spawnRunner(scene, 0.5, 0.5, 0.1, 0);
+    const state = initialState(scene.world, 7);
+    const { host, setNow } = makeHost(scene);
+
+    const dts: number[] = [];
+    host.register({
+      name: 'probe',
+      init: () => {},
+      syncTick: () => {},
+      updateFrame: (dt) => dts.push(dt),
+    });
+
+    setNow(0);
+    dispatch(tick(sim, state), [host]);
+    host.frame(); // первый кадр сессии: интервала ещё нет
+
+    setNow(16);
+    host.frame(); // живой мир — время идёт вперёд
+
+    // Мир замер: кадры идут дальше, состояние доставляется тем же тиком.
+    dispatch(deliveredResult(state, state.tick, 'Paused'), [host]);
+    setNow(32);
+    host.frame();
+
+    // Скраб: сервер отдаёт восстановленные состояния с убывающими тиками.
+    dispatch(deliveredResult(state, state.tick - 1, 'Rewinding'), [host]);
+    setNow(48);
+    host.frame();
+
+    dispatch(deliveredResult(state, state.tick, 'Running'), [host]);
+    setNow(64);
+    host.frame();
+
+    expect(dts[0]).toBe(0);
+    expect(dts[1]).toBeCloseTo(0.016, 6);
+    // Стоящий мир с идущими клипами показывал бы движение, которого нет.
+    expect(dts[2]).toBe(0);
+    // Каденс доставок здесь один и тот же — тик за доставку в обе стороны, —
+    // поэтому обратный ход идёт с той же скоростью, что прямой: разница только
+    // в знаке. Темп скраба, отличный от живого, проверяется отдельно ниже.
+    expect(dts[3]).toBeCloseTo(-0.016, 6);
+    expect(Math.abs(dts[3]!)).toBeCloseTo(dts[4]!, 6);
+    expect(dts[4]).toBeCloseTo(0.016, 6);
+  });
+
+  it('темп обратного хода — темп скраба: клипы догоняют обратное движение', () => {
+    // Живой мир доставляется через тик (conflation SHELL-4 или рассылка вдвое
+    // реже тиков), а скраб ходит по четыре тика за доставку (REW-13). Клип,
+    // отматываемый по часам главного потока, отстал бы от сущности вдвое —
+    // сценарий REND-25 требует «догоняя обратное движение», а не «в своём
+    // темпе».
+    const { scene, sim } = makeScene();
+    spawnRunner(scene, 0.5, 0.5, 0.1, 0);
+    const state = initialState(scene.world, 7);
+    const { host, setNow } = makeHost(scene);
+    for (let i = 0; i < 14; i++) tick(sim, state);
+
+    const dts: number[] = [];
+    host.register({
+      name: 'probe',
+      init: () => {},
+      syncTick: () => {},
+      updateFrame: (dt) => dts.push(dt),
+    });
+
+    setNow(0);
+    for (const at of [10, 12, 14]) dispatch(deliveredResult(state, at, 'Running'), [host]);
+    host.frame(); // первый кадр сессии: интервала ещё нет
+    setNow(16);
+    host.frame();
+
+    dispatch(deliveredResult(state, 10, 'Rewinding'), [host]);
+    setNow(32);
+    host.frame();
+
+    expect(dts[1]).toBeCloseTo(0.016, 6);
+    // Вдвое быстрее и назад: 4 тика за доставку против 2 у живого мира.
+    expect(dts[2]).toBeCloseTo(-0.032, 6);
+  });
+});
+
+describe('RenderHost: скраб перемотки без телепортов (REND-2)', () => {
+  it('вход и выход — snap, соседние восстановленные состояния интерполируются', () => {
+    const { scene, sim } = makeScene();
+    const runner = spawnRunner(scene, 0.5, 0.5, 0.1, 0);
+    const state = initialState(scene.world, 7);
+    const { host } = makeHost(scene);
+
+    const history: Snapshot[] = [];
+    for (let i = 0; i < 5; i++) {
+      dispatch(tick(sim, state), [host]);
+      history.push(takeSnapshot(state));
+    }
+    const view = host.view.entities.get(runner)!;
+    expect(view.snap).toBe(false);
+
+    // Вход в перемотку — смена режима: разрыв, буфер схлопнут (REND-2).
+    restoreSnapshot(state, history[3]!);
+    dispatch(deliveredResult(state, 4, 'Rewinding'), [host]);
+    expect(host.view.snapAll).toBe(true);
+    expect(view.snap).toBe(true);
+    expect(view.prevX).toBeCloseTo(view.currX, 6);
+
+    // Соседнее восстановленное состояние: разрыва нет — та же пара prev→curr,
+    // только едет она назад.
+    restoreSnapshot(state, history[2]!);
+    dispatch(deliveredResult(state, 3, 'Rewinding'), [host]);
+    expect(host.view.snapAll).toBe(false);
+    expect(view.snap).toBe(false);
+    expect(view.prevX).toBeCloseTo(0.9, 3);
+    expect(view.currX).toBeCloseTo(0.8, 3);
+    // Кадр посреди пары — между историческими позициями, а не в одной из них.
+    expect(view.prevX + (view.currX - view.prevX) * 0.5).toBeCloseTo(0.85, 3);
+
+    restoreSnapshot(state, history[1]!);
+    dispatch(deliveredResult(state, 2, 'Rewinding'), [host]);
+    expect(view.snap).toBe(false);
+    expect(view.prevX).toBeCloseTo(0.8, 3);
+    expect(view.currX).toBeCloseTo(0.7, 3);
+
+    // Реплейный проход остаётся разрывом и внутри перемотки.
+    dispatch(deliveredResult(state, 2, 'Rewinding', true), [host]);
+    expect(host.view.snapAll).toBe(true);
+
+    // Выход из перемотки — снова смена режима, снова snap.
+    dispatch(deliveredResult(state, 2, 'Paused'), [host]);
+    expect(host.view.snapAll).toBe(true);
+    expect(view.snap).toBe(true);
+  });
+
+  it('порог телепорта считается на доставленный пролёт тиков, а не на один тик', () => {
+    // Скорость снаряда: 0.625 мировых единиц за тик. Шаг скраба — четыре тика
+    // (REW-13), то есть 2.5 единицы за доставку при пороге телепорта 2. Порог,
+    // применённый как «за один тик», объявил бы телепортом КАЖДУЮ доставку
+    // скраба — и обратный ход снаряда рассыпался бы на череду прыжков, ровно то,
+    // что REND-2 запрещает.
+    const { scene, sim } = makeScene();
+    const runner = spawnRunner(scene, 0.5, 0.5, 0.625, 0);
+    // Вторая сущность прыгает по 20 единиц за тик — на порог не натягивается
+    // никаким пролётом: разрыв остаётся разрывом и внутри скраба.
+    const jumper = spawnRunner(scene, 0.5, 0.5, 20, 0);
+    const state = initialState(scene.world, 7);
+    const { host } = makeHost(scene);
+
+    const history: Snapshot[] = [];
+    for (let i = 0; i < 12; i++) {
+      dispatch(tick(sim, state), [host]);
+      history.push(takeSnapshot(state));
+    }
+    const view = host.view.entities.get(runner)!;
+    const jumped = host.view.entities.get(jumper)!;
+
+    // Вход в перемотку: разрыв по смене режима, как и прежде.
+    restoreSnapshot(state, history[11]!);
+    dispatch(deliveredResult(state, 12, 'Rewinding'), [host]);
+    expect(view.snap).toBe(true);
+
+    // Шаг скраба назад на четыре тика: 2.5 единицы разом — это движение, а не
+    // телепорт.
+    restoreSnapshot(state, history[7]!);
+    dispatch(deliveredResult(state, 8, 'Rewinding'), [host]);
+    expect(view.snap).toBe(false);
+    expect(view.prevX).toBeCloseTo(8, 3);
+    expect(view.currX).toBeCloseTo(5.5, 3);
+    // Та же доставка, тот же пролёт — а прыгун снапнут: 80 единиц четырьмя
+    // тиками не объясняются.
+    expect(jumped.snap).toBe(true);
+
+    restoreSnapshot(state, history[3]!);
+    dispatch(deliveredResult(state, 4, 'Rewinding'), [host]);
+    expect(view.snap).toBe(false);
+    expect(view.currX).toBeCloseTo(3, 3);
   });
 });
 

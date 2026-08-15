@@ -117,7 +117,13 @@ export interface AnimationBackend {
   playLoop(index: number, crossfade: number): void;
   /** One-shot с фиксацией последнего кадра до возврата в локомоцию. */
   playOnce(index: number, crossfade: number): void;
-  /** Покадровое продвижение; здесь же срабатывает завершение one-shot. */
+  /**
+   * Покадровое продвижение; здесь же срабатывает завершение one-shot. `dt` —
+   * часы презентации СО ЗНАКОМ (REND-25): вперёд, стоп либо назад. При
+   * обратном ходе завершением считается возврат one-shot к НАЧАЛУ клипа —
+   * бэкенд зовёт тот же `onOneShotFinished`, и машина возвращает клип
+   * состояния тем же путём, что после конца вперёд.
+   */
   update(dt: number): void;
   /**
    * Кого звать по завершении one-shot; ставит контроллер при создании.
@@ -139,11 +145,21 @@ export class MixerAnimationBackend implements AnimationBackend {
   /** Проигрываемый one-shot; по завершении о нём сообщает микшер. */
   private oneShot: THREE.AnimationAction | null = null;
   private current = -1;
+  /**
+   * Действия, заведённые этим бэкендом: по ним разносится направление хода
+   * (REND-25). Набор ограничен числом клипов модели и растёт только на смене
+   * клипа, а не в кадре.
+   */
+  private readonly actions = new Set<THREE.AnimationAction>();
+  /** Знак хода клипов: +1 — вперёд, −1 — назад. Ноль часов — не направление, а стоп. */
+  private direction = 1;
 
   constructor(mixer: THREE.AnimationMixer, clips: readonly THREE.AnimationClip[]) {
     this.mixer = mixer;
     this.clips = clips;
-    // LoopOnce-действие сообщает о конце через микшер — здесь возврат в локомоцию.
+    // LoopOnce-действие сообщает о конце через микшер — здесь возврат в
+    // локомоцию. При обратном ходе микшер шлёт то же событие по достижении
+    // НАЧАЛА клипа (`direction: -1`), и развязка у машины одна на оба случая.
     this.mixer.addEventListener('finished', (event) => {
       if (event.action !== this.oneShot) return;
       this.oneShot = null;
@@ -156,7 +172,7 @@ export class MixerAnimationBackend implements AnimationBackend {
   }
 
   playLoop(index: number, crossfade: number): void {
-    const action = this.mixer.clipAction(this.clips[index]!);
+    const action = this.claim(index);
     action.setLoop(THREE.LoopRepeat, Infinity);
     action.clampWhenFinished = false;
     this.fadeTo(action, crossfade);
@@ -164,7 +180,7 @@ export class MixerAnimationBackend implements AnimationBackend {
   }
 
   playOnce(index: number, crossfade: number): void {
-    const action = this.mixer.clipAction(this.clips[index]!);
+    const action = this.claim(index);
     action.setLoop(THREE.LoopOnce, 1);
     action.clampWhenFinished = true; // держим последний кадр до возврата в локомоцию
     this.fadeTo(action, crossfade);
@@ -172,8 +188,27 @@ export class MixerAnimationBackend implements AnimationBackend {
     this.current = index;
   }
 
+  /**
+   * Кадр микшера. Направление берёт ДЕЙСТВИЕ (`timeScale`), а сам микшер идёт
+   * вперёд по модулю: его часы ведут не только фазы клипов, но и конверты
+   * кроссфейдов, и отмотай мы их назад — начатый переход завис бы на входном
+   * весе до конца перемотки. Пауза (`dt === 0`) останавливает и то и другое.
+   */
   update(dt: number): void {
-    this.mixer.update(dt);
+    const direction = dt < 0 ? -1 : 1;
+    if (direction !== this.direction) {
+      this.direction = direction;
+      for (const action of this.actions) action.timeScale = direction;
+    }
+    this.mixer.update(Math.abs(dt));
+  }
+
+  /** Действие клипа под учётом бэкенда: ход у него — общий текущий (REND-25). */
+  private claim(index: number): THREE.AnimationAction {
+    const action = this.mixer.clipAction(this.clips[index]!);
+    action.timeScale = this.direction;
+    this.actions.add(action);
+    return action;
   }
 
   private fadeTo(next: THREE.AnimationAction, crossfade: number): void {
@@ -323,9 +358,36 @@ export class AnimationController {
     return true;
   }
 
-  /** Покадровое продвижение бэкенда; здесь же срабатывает возврат из one-shot. */
+  /**
+   * Покадровое продвижение бэкенда; здесь же срабатывает возврат из one-shot.
+   * `dt` — часы презентации со знаком (REND-25); направления машина не знает,
+   * оно целиком у носителя воспроизведения.
+   */
   update(dt: number): void {
     this.backend.update(dt);
+  }
+
+  /**
+   * Доставка пришла разрывом (`snapAll`, REND-2): мир авторитетно ДРУГОЙ —
+   * перемотка, реплей, смена ветви истории. Единственное, что здесь снимается, —
+   * необратимость смерти.
+   *
+   * Смерть — one-shot с фиксацией последнего кадра навсегда (REND-4), и это
+   * верно, пока время идёт вперёд: труп не встаёт. Перемотка через момент
+   * смерти оживляет сущность в симуляции, а контроллер о её воскрешении узнать
+   * неоткуда — `EntityDied` в прошлом не «разэмитится», и без этого сброса
+   * живой персонаж навсегда остался бы лежать нулевым кадром клипа смерти.
+   * Снап — ровно то указание, которого не хватало: «состояние теперь другое, а
+   * непрерывности с прежним нет».
+   *
+   * Гейт `handleEvent` при этом остаётся: событий вне `Running` не бывает
+   * (REW-4), и воскресить контроллер нечем, кроме этого вызова.
+   */
+  onSnap(): void {
+    if (!this.dead) return;
+    this.dead = false;
+    this.oneShotPlaying = false;
+    this.resumeLoop();
   }
 
   /** Зацикленный клип, к которому возвращаются: назначенный набором либо клип состояния. */

@@ -6,7 +6,14 @@
  * политика, то есть JSON-система поверх этих четырёх вызовов (WSM-5). Ни
  * одного балансного числа в этом файле нет и быть не должно.
  */
-import { getField, hasComponent, isAlive, setField } from '../ecs/world.js';
+import {
+  componentSchema,
+  getField,
+  hasComponent,
+  isAlive,
+  setField,
+} from '../ecs/world.js';
+import { query } from '../ecs/query.js';
 import { advance, restoreSnapshot } from './tick.js';
 import type { Simulation } from './tick.js';
 import type {
@@ -55,11 +62,27 @@ export interface ExemptField {
   readonly field: string;
 }
 
+/**
+ * Компонент-маркер вне отката (REW-9, вторая форма): переживают ВСЕ его поля у
+ * КАЖДОЙ сущности, владеющей им на момент восстановления. Сущности заранее не
+ * перечисляются — состав игроков матча известен только после построения мира, а
+ * конфигурировать перемотку приходится до него.
+ *
+ * Сущность, которой в восстановленном мире нет, значение теряет — как и в
+ * пофилдовой форме: умерший не уносит cooldown в прошлое.
+ */
+export interface ExemptComponent {
+  readonly component: string;
+}
+
+/** Запись exempt-списка в любой из двух форм (REW-9). */
+export type ExemptEntry = ExemptField | ExemptComponent;
+
 export interface RewindOptions {
   readonly history: HistoryProvider;
   readonly inputs: InputLog;
-  /** Поля вне отката, например cooldown самой ульты (REW-9). */
-  readonly exempt?: readonly ExemptField[];
+  /** Поля и компоненты вне отката, например cooldown самой ульты (REW-9). */
+  readonly exempt?: readonly ExemptEntry[];
 }
 
 /** Core-API переходов (WSM-5). Политика зовёт эти четыре метода и ничего больше. */
@@ -75,6 +98,14 @@ export interface RewindController {
   seekTo(tick: number): void;
 }
 
+/** Снятые до восстановления значения компонента-маркера: сущность и её поля. */
+interface PreservedOwner {
+  readonly entity: EntityId;
+  readonly values: readonly number[];
+}
+
+const isFieldForm = (entry: ExemptEntry): entry is ExemptField => 'entity' in entry;
+
 export function createRewindController(
   sim: Simulation,
   state: SimulationState,
@@ -82,12 +113,77 @@ export function createRewindController(
 ): RewindController {
   const { history, inputs } = options;
   const exempt = options.exempt ?? [];
+  const exemptFields = exempt.filter(isFieldForm);
+  const exemptComponents = exempt.filter((entry): entry is ExemptComponent => !isFieldForm(entry));
 
   // Поле могло исчезнуть вместе с сущностью — тогда сохранять и возвращать нечего.
   const readable = (field: ExemptField): boolean =>
     isAlive(state.world, field.entity) && hasComponent(state.world, field.entity, field.component);
   const readExempt = (): (number | undefined)[] =>
-    exempt.map((field) => (readable(field) ? getField(state.world, field.entity, field.component, field.field) : undefined));
+    exemptFields.map((field) => (readable(field) ? getField(state.world, field.entity, field.component, field.field) : undefined));
+
+  /**
+   * Имена полей компонента-маркера в порядке схемы. Считаются один раз: схема
+   * компонентов мира неизменна за прогон (ECS-3), а `seekTo` зовётся по кадру
+   * рассылки — перечислять ключи схемы на каждом шаге скраба незачем.
+   */
+  const exemptComponentFields = exemptComponents.map((entry) => {
+    const schema = componentSchema(state.world, entry.component);
+    if (schema === undefined) {
+      throw new Error(`REW-9: exempt-компонент "${entry.component}" не объявлен в мире`);
+    }
+    return Object.keys(schema.fields);
+  });
+
+  const readExemptComponents = (): PreservedOwner[][] =>
+    exemptComponents.map((entry, i) => {
+      const fields = exemptComponentFields[i]!;
+      // Владельцы берутся из ТЕКУЩЕГО, ещё не откаченного мира: смысл формы в
+      // том, что перечня сущностей у конфигурации нет (REW-9).
+      const owners: PreservedOwner[] = [];
+      for (const entity of query(state.world, { all: [entry.component] })) {
+        owners.push({
+          entity,
+          values: fields.map((field) => getField(state.world, entity, entry.component, field)),
+        });
+      }
+      return owners;
+    });
+
+  /**
+   * Возврат снятых значений компонента-маркера после реплея (REW-9).
+   *
+   * Порядок полей здесь — порядок `Object.keys(schema.fields)`, и он СИММЕТРИЧЕН:
+   * снятие и запись идут по одному и тому же списку `exemptComponentFields`, а
+   * наружу — в снапшот, на провод, в канонический лог — этот массив не уходит
+   * вовсе. Поэтому порт на Rust вправе перечислять поля любым своим стабильным
+   * порядком: наблюдаемого расхождения из-за него не возникает, в отличие от
+   * порядка компонентов в снапшоте, который задаёт битовые id (SER-7).
+   */
+  const writeExemptComponents = (preserved: readonly PreservedOwner[][]): void => {
+    for (let i = 0; i < exemptComponents.length; i++) {
+      const component = exemptComponents[i]!.component;
+      const fields = exemptComponentFields[i]!;
+      for (const owner of preserved[i]!) {
+        // Сущности, которой в восстановленном мире нет (или которая потеряла
+        // компонент), значение не возвращается: писать некуда.
+        if (!isAlive(state.world, owner.entity)) continue;
+        if (!hasComponent(state.world, owner.entity, component)) continue;
+        for (let f = 0; f < fields.length; f++) {
+          setField(state.world, owner.entity, component, fields[f]!, owner.values[f]!);
+        }
+      }
+    }
+  };
+
+  /*
+   * Кэша последнего восстановленного состояния здесь нет — он был написан и
+   * снят (design, Decision 3). Обслужить он мог только скраб ВПЕРЁД внутри
+   * одной перемотки, а шаг ведения точки (REW-13) ходит назад: состояние тика T
+   * основанием для тика T − k не бывает. За эту недостижимую ветвь каждый
+   * `seekTo` платил полной копией мира плюс снимком RNG, шины и тегов, а сам
+   * кэш держал ещё один мир в памяти на всё время матча.
+   */
 
   return {
     get mode() {
@@ -128,9 +224,10 @@ export function createRewindController(
       const reachable = Math.max(target, snapshot.tick);
 
       const preserved = readExempt();
+      const preservedOwners = readExemptComponents();
 
       restoreSnapshot(state, snapshot);
-      // `restoreSnapshot` вернул и режим снапшота — но мы всё ещё перематываем.
+      // `restoreSnapshot` вернул и режим базы — но мы всё ещё перематываем.
       state.mode = 'Rewinding';
 
       // Доигрывание вперёд по каноническим вводам (REW-2). Реплеевые тики
@@ -139,13 +236,14 @@ export function createRewindController(
         advance(sim, state, inputs.at(state.tick + 1), true);
       }
 
-      for (let i = 0; i < exempt.length; i++) {
+      for (let i = 0; i < exemptFields.length; i++) {
         const value = preserved[i];
-        const field = exempt[i]!;
+        const field = exemptFields[i]!;
         if (value !== undefined && readable(field)) {
           setField(state.world, field.entity, field.component, field.field, value);
         }
       }
+      writeExemptComponents(preservedOwners);
     },
   };
 }

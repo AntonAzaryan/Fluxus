@@ -10,7 +10,7 @@
  * Мира здесь нет и быть не может: всё, что нужно кадру, обязано приехать
  * в плоской форме (SHELL-1, SHELL-2).
  */
-import { LOCOMOTION_NORMAL, type EntityId } from '@game-mvp/core';
+import { LOCOMOTION_NORMAL, type EntityId, type WorldMode } from '@game-mvp/core';
 import {
   ENTITY_LEVEL_OVERRIDE,
   ENTITY_MOVING,
@@ -22,7 +22,45 @@ import type { EntityView, TickView } from './types.js';
 /** Скачок позиции за тик больше этого — телепорт: интерполяция «проехала бы» пол-арены. */
 const DEFAULT_SNAP_DISTANCE = 2;
 
+/**
+ * Ход часов презентации по режиму доставленного мира (REND-25): вперёд в
+ * `Running`, стоп в `Paused`, назад в `Rewinding`. Своего «времени перемотки»
+ * рендер не заводит — направление есть чистая функция режима, а движение назад
+ * приносят сами восстановленные состояния.
+ */
+function clockDirection(mode: WorldMode): number {
+  switch (mode) {
+    case 'Running':
+      return 1;
+    case 'Rewinding':
+      return -1;
+    default:
+      return 0;
+  }
+}
+
 const EMPTY_CELLS: readonly number[] = [];
+
+/**
+ * Сглаживание оценки «тиков за доставку» (REND-25): доля новой пробы в
+ * экспоненциальном среднем. Сырое отношение дрожало бы от каждой сбитой
+ * доставки — conflation (SHELL-4) и потеря снапшота меняют пробу на один шаг, а
+ * темп клипов от этого дёргаться не должен.
+ */
+const SPAN_SMOOTHING = 0.25;
+
+/**
+ * Границы темпа обратного хода: скраб быстрее живого мира в 4 раза крутит клипы
+ * вчетверо быстрее, дальше — уже не «догоняя движение», а мельтешение. Нижняя
+ * граница симметрична и бережёт от деления на дрожащую оценку.
+ */
+const MIN_REWIND_PACE = 0.25;
+const MAX_REWIND_PACE = 4;
+
+/** Шаг экспоненциального среднего оценки каденса. */
+function blend(previous: number, sample: number): number {
+  return previous + (sample - previous) * SPAN_SMOOTHING;
+}
 
 /** Внутренняя запись сущности: EntityView плюс интерполяционный буфер. */
 interface EntityRecord extends EntityView {
@@ -72,10 +110,29 @@ export interface ViewBufferConfig {
 
 /** Кадровые величины для `updateFrame` подсистем (REND-2). */
 export interface FrameTiming {
-  /** Секунды с прошлого кадра, кламп [0, 0.25]. */
+  /**
+   * Часы презентации: секунды с прошлого кадра СО ЗНАКОМ хода мира (REND-25) —
+   * `+|dt|` в `Running`, ноль в `Paused`, `−|dt|` в `Rewinding`. Модуль
+   * клампится в [0, 0.25]. Знак — направление анимационного времени; величины,
+   * которые сходятся к цели кадр за кадром (доворот, наклон), направления не
+   * имеют и берут модуль.
+   */
   readonly dt: number;
   /** Доля тика [0..1] между двумя последними доставленными тиками. */
   readonly alpha: number;
+  /**
+   * Часы ГЛАВНОГО ПОТОКА: секунды с прошлого кадра, всегда ≥ 0 и от режима мира
+   * не зависящие (тот же кламп [0, 0.25]).
+   *
+   * Отдельная величина, потому что потребители тоже разные. Клипы, снижения и
+   * прочее, что доигрывает мир, ведёт `dt` со знаком — стоящий мир обязан стоять
+   * (REND-25). Величины самого потока — счётчик кадров HUD (HUD-5,
+   * `HudWidget.frame`) — ведут это: они меряют картинку, а не мир, и в паузе
+   * замирать им не с чего. Замороженный `dt` остановил бы счётчик, а
+   * отрицательный дал бы отрицательный интервал — то есть враньё о частоте
+   * кадров ровно тогда, когда на неё смотрят.
+   */
+  readonly realDt: number;
 }
 
 export class ViewBuffer {
@@ -92,6 +149,19 @@ export class ViewBuffer {
   private hasTick = false;
   private lastTickAtMs = 0;
   private lastFrameAtMs: number | null = null;
+  /**
+   * Тиков за доставку в идущем мире и в скрабе — сглаженные оценки (REND-25).
+   * Ноль означает «ещё не наблюдали»: пока одной из них нет, темп обратного хода
+   * равен прямому, а не выводится из половины данных.
+   *
+   * Отношение и есть темп: мир скрабится по `step` тиков за цикл рассылки
+   * (REW-13), живой идёт по `tickRate / snapshotRate` за ту же доставку, и клип
+   * бега, отматываемый по часам главного потока, отставал бы от сущности ровно
+   * во столько раз. «Догоняя обратное движение» из сценария REND-25 — это оно.
+   */
+  private runningSpan = 0;
+  private rewindSpan = 0;
+  private lastMode: WorldMode = 'Running';
 
   constructor(config: ViewBufferConfig) {
     this.tickSeconds = config.tickSeconds;
@@ -117,13 +187,26 @@ export class ViewBuffer {
    * Применяет доставленный тик. При conflation (SHELL-4) между прошлым и
    * текущим применением могли пройти невиденные тики: prev/curr скользит по
    * доставленным, телепорт-порог сам переводит большой разрыв в snap.
+   *
+   * Направления у скольжения нет: восстановленные состояния скраба приезжают с
+   * УБЫВАЮЩИМИ номерами тиков, и та же пара prev→curr даёт обратный ход
+   * обычной интерполяцией (REND-2). Разрывом перемотка становится только на
+   * входе и выходе — их приносит `snapAll` продюсера (смена режима, эпоха,
+   * `isReplay`), а не номер тика.
    */
   apply(ext: ExtractedTick): void {
     const view = this.view;
     const tickAdvanced = !this.hasTick || ext.tick !== view.tick;
     const snapAll = ext.snapAll;
+    // Тиков между доставками — по МОДУЛЮ: вперёд их пропускает conflation
+    // (SHELL-4), назад их проходит шаг скраба (REW-13, REND-2). Порог телепорта
+    // задан на ОДИН тик, и мерить им скачок за несколько тиков значило бы
+    // объявлять телепортом обычное движение тем вернее, чем крупнее шаг.
+    const span = !this.hasTick ? 1 : Math.max(1, Math.abs(ext.tick - view.tick));
+    // Первая доставка сессии пробой каденса не является: мерить её не с чем.
+    this.observeSpan(ext.mode, tickAdvanced && this.hasTick, span);
 
-    this.applyEntities(ext, tickAdvanced, snapAll);
+    this.applyEntities(ext, tickAdvanced, snapAll, span);
     const floorChanged = this.applyFloor(ext);
 
     view.tick = ext.tick;
@@ -144,21 +227,74 @@ export class ViewBuffer {
    * (REND-2). Альфа — по часам ЭТОГО потока от момента `apply` (SHELL-7);
    * null — ни одного тика ещё не доставлено. `now` — миллисекунды тех же
    * часов, что `config.clock`.
+   *
+   * Ход часов презентации задаёт режим ПОСЛЕДНЕГО доставленного состояния
+   * (REND-25): пока мир стоит или идёт назад, время подсистем вперёд не
+   * продвигается. Реальный интервал между кадрами при этом не теряется — он
+   * уезжает модулем, и обратный ход идёт с той же скоростью, что прямой.
    */
   frame(now: number = this.clock()): FrameTiming | null {
     if (!this.hasTick) return null;
     const dtMs = this.lastFrameAtMs === null ? 0 : now - this.lastFrameAtMs;
     this.lastFrameAtMs = now;
-    // Кламп dt: после паузы вкладки первый кадр не должен «доигрывать» минуты.
-    const dt = Math.min(Math.max(dtMs / 1000, 0), 0.25);
+    // Кламп МОДУЛЯ: после паузы вкладки первый кадр не должен «доигрывать»
+    // минуты; знак кламп не трогает — он от режима, а не от часов.
+    const magnitude = Math.min(Math.max(dtMs / 1000, 0), 0.25);
+    // Темп обратного хода — отношение наблюдаемых каденсов (REND-25): мир,
+    // скрабящийся вдвое быстрее живого, и клипы отматывает вдвое быстрее.
+    // Кламп по модулю остаётся тем же и после умножения.
+    const dt = Math.min(magnitude * this.pace(), 0.25) * clockDirection(this.view.mode);
     const alpha =
       this.tickSeconds <= 0
         ? 1
         : Math.min(Math.max((now - this.lastTickAtMs) / 1000 / this.tickSeconds, 0), 1);
-    return { dt, alpha };
+    return { dt, alpha, realDt: magnitude };
   }
 
-  private applyEntities(ext: ExtractedTick, tickAdvanced: boolean, snapAll: boolean): void {
+  /**
+   * Наблюдение каденса доставок по режимам (REND-25). Оценка скраба заводится
+   * заново на КАЖДОМ входе в перемотку: шаг ведения точки — конфиг матча, и
+   * прошлая перемотка о нынешней ничего не говорит. Оценка живого мира,
+   * наоборот, копится всю сессию: это темп рассылки, и он не меняется.
+   *
+   * Доставка, не сдвинувшая тик (замороженный мир, повтор), пробой не является:
+   * «ноль тиков за доставку» — не каденс, а его отсутствие.
+   */
+  private observeSpan(mode: WorldMode, tickAdvanced: boolean, span: number): void {
+    if (mode === 'Rewinding' && this.lastMode !== 'Rewinding') this.rewindSpan = 0;
+    this.lastMode = mode;
+    if (!tickAdvanced) return;
+    if (mode === 'Running') {
+      this.runningSpan = this.runningSpan === 0 ? span : blend(this.runningSpan, span);
+    } else if (mode === 'Rewinding') {
+      this.rewindSpan = this.rewindSpan === 0 ? span : blend(this.rewindSpan, span);
+    }
+  }
+
+  /**
+   * Множитель хода часов презентации. Единица везде, кроме перемотки: скраб
+   * идёт своим шагом по тикам (REW-13), и клипы обязаны идти назад в том же
+   * темпе, иначе бег «отстаёт» от собственных ног. Пока какой-то из каденсов не
+   * наблюдался, множитель — единица: выводить темп из половины данных хуже, чем
+   * не выводить вовсе.
+   */
+  private pace(): number {
+    if (this.view.mode !== 'Rewinding') return 1;
+    if (this.runningSpan <= 0 || this.rewindSpan <= 0) return 1;
+    const ratio = this.rewindSpan / this.runningSpan;
+    return Math.min(Math.max(ratio, MIN_REWIND_PACE), MAX_REWIND_PACE);
+  }
+
+  private applyEntities(
+    ext: ExtractedTick,
+    tickAdvanced: boolean,
+    snapAll: boolean,
+    span: number,
+  ): void {
+    // Порог телепорта на весь этот шаг: `snapDistance` — скачок ЗА ТИК, и на
+    // доставке через `span` тиков сущность вправе пройти во столько же раз
+    // больше. Сравнение идёт квадратами, поэтому и множитель квадратичный.
+    const teleportSq = this.snapDistanceSq * span * span;
     const seen = this.seen;
     seen.clear();
     // Курсор разреженной секции статов: пары идут подряд по сущностям в том же
@@ -219,7 +355,7 @@ export class ViewBuffer {
       } else {
         const dx = x - record.currX;
         const dy = y - record.currY;
-        const teleport = dx * dx + dy * dy > this.snapDistanceSq;
+        const teleport = dx * dx + dy * dy > teleportSq;
         record.prevX = teleport ? x : record.currX;
         record.prevY = teleport ? y : record.currY;
         record.prevLevel = teleport ? level : record.currLevel;

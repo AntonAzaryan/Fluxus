@@ -8,7 +8,13 @@
  */
 import type { TerrainGrid } from '@game-mvp/core';
 import { Extractor, kindByTags, type StatSource } from '@game-mvp/render';
-import { COOLDOWN_ABILITIES, FIREBALL_LIFETIME_TICKS, STATE_COMPONENTS, STATS } from './sim.js';
+import {
+  COOLDOWN_ABILITIES,
+  COOLDOWN_SOURCES,
+  FIREBALL_LIFETIME_TICKS,
+  STATE_COMPONENTS,
+  STATS,
+} from './sim.js';
 
 /**
  * Конфигурация доставляемых статов демо (HUD-8): «имя доставки → компонент и
@@ -28,10 +34,15 @@ export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   // Заряд каста: величина, а не состояние, — по ней главный поток растит шар
   // перед кастером (`sim.ts`, `chargeVisualOf`).
   { name: STATS.charge, component: 'Charging', field: 'ticks' },
-  ...COOLDOWN_ABILITIES.flatMap((ability) => [
-    { name: STATS.cooldown(ability), component: 'Cooldowns', field: ability },
-    { name: STATS.cooldownMax(ability), component: 'Cooldowns', field: `${ability}Max` },
-  ]),
+  // Компонент-источник берётся из таблицы сборки: у ульты отката он свой —
+  // exempt-компонент, переживающий перемотку (`sim.ts`).
+  ...COOLDOWN_ABILITIES.flatMap((ability) => {
+    const source = COOLDOWN_SOURCES[ability]!;
+    return [
+      { name: STATS.cooldown(ability), component: source.component, field: source.field },
+      { name: STATS.cooldownMax(ability), component: source.component, field: source.maxField },
+    ];
+  }),
 ]);
 
 export function createDemoExtractor(grid: TerrainGrid | undefined): Extractor {

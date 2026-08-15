@@ -26,10 +26,11 @@ import {
   type SimulationState,
   type Simulation,
 } from '@game-mvp/core';
-import { buildMatchWorld } from '@game-mvp/net';
+import { buildMatchWorld, REWIND_REQUEST_EVENT } from '@game-mvp/net';
 import { ViewBuffer } from '@game-mvp/render';
 import { ACTION_BITS, FIREBALL_LIFETIME_TICKS, TICK_SECONDS, stateBit } from '../app/sim.js';
 import { createDemoExtractor } from '../app/extractor.js';
+import { DEMO_SCRUB_EVERY } from '../app/match.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 import manifestJson from '../../../content/visuals/manifest.json';
@@ -49,6 +50,15 @@ const MATCH = matchJson as unknown as {
   readonly seed: number;
   readonly players: readonly string[];
   readonly locomotion: Record<string, unknown>;
+  readonly tickRate?: number;
+  readonly snapshotRate?: number;
+  readonly rewind?: {
+    readonly interval: number;
+    readonly capacity: number;
+    readonly exempt?: readonly { readonly component: string }[];
+    readonly holdButton?: number;
+    readonly step?: number;
+  };
 };
 
 const CAST = 1 << ACTION_BITS.cast;
@@ -2136,5 +2146,91 @@ describe('щит: рикошет снаряда, смена владельца �
     expect(shielded(a.state, keeper)).toBe(false);
     // Кулдаун щита не списан: `ShieldCast` отсеян запросом, а не веткой.
     expect(coreWorld.getField(a.state.world, keeper, 'Cooldowns', 'shield')).toBe(0);
+  });
+});
+
+/**
+ * Ульта отката как КОНТЕНТ (`RewindCast`, `RewindCooldownTick`): проверяется не
+ * механизм перемотки — он закрыт тестами ядра, сети и оболочки, — а политика,
+ * написанная в сцене: гейт по фронту кнопки и по cooldown'у, взвод cooldown'а и
+ * состав payload'а запроса. Мир здесь никто не перематывает: ядро событие не
+ * интерпретирует, а хоста в этом стенде нет (WSM-5).
+ */
+describe('ульта отката: политика в сцене (RewindCast)', () => {
+  /** Те же числа, что в `duel.scene.json`: 20 секунд перезарядки и 7 секунд глубины. */
+  const REWIND_COOLDOWN = 1200;
+  const REWIND_DEPTH = 420;
+  const REWIND = 1 << ACTION_BITS.rewind;
+
+  const requests = (state: SimulationState): readonly Record<string, number>[] =>
+    [...state.events].filter((event) => event.type === REWIND_REQUEST_EVENT).map((e) => e.data);
+
+  it('фронт кнопки эмитит запрос с инициатором и глубиной и взводит cooldown', () => {
+    const a = arena();
+    const hero = a.heroes[0]!;
+    a.step({ buttons: REWIND });
+
+    expect(requests(a.state)).toEqual([{ depthTicks: REWIND_DEPTH, initiator: hero }]);
+    expect(coreWorld.getField(a.state.world, hero, 'RewindCooldown', 'ticks')).toBe(REWIND_COOLDOWN);
+  });
+
+  it('удержание второго запроса не даёт: ульта ловит фронт (INP-2)', () => {
+    const a = arena();
+    a.step({ buttons: REWIND });
+    a.step({ buttons: REWIND });
+
+    expect(requests(a.state)).toEqual([]);
+  });
+
+  it('во время cooldown ульта не кастуется', () => {
+    const a = arena();
+    const hero = a.heroes[0]!;
+    a.step({ buttons: REWIND });
+    // Отпустили и нажали снова через сотню тиков: фронт есть, cooldown — нет.
+    for (let i = 0; i < 100; i++) a.step(NEUTRAL);
+    a.step({ buttons: REWIND });
+
+    expect(requests(a.state)).toEqual([]);
+    // Cooldown при этом убывает по тику, а не стоит.
+    expect(coreWorld.getField(a.state.world, hero, 'RewindCooldown', 'ticks')).toBe(
+      REWIND_COOLDOWN - 101,
+    );
+  });
+
+  it('заряженный каст ульту не пускает: гейт по Charging', () => {
+    const a = arena();
+    // ЛКМ зажата — герой копит заряд (`ChargeStart`), и `RewindCast` его не видит.
+    a.step({ buttons: CAST });
+    a.step({ buttons: CAST | REWIND });
+
+    expect(requests(a.state)).toEqual([]);
+  });
+
+  it('конфиг матча и раскладка сборки называют одно и то же', () => {
+    // Бит удержания сервер читает по номеру из документа матча, а сцена ловит
+    // фронт по своему литералу: разойдись они — ульта кастовалась бы одной
+    // кнопкой, а скраб вёлся бы другой.
+    expect(MATCH.rewind?.holdButton).toBe(ACTION_BITS.rewind);
+    // Cooldown ульты переживает откат (REW-9) — иначе удержанная кнопка
+    // кастовала бы её заново на первом же живом тике после возобновления.
+    expect(MATCH.rewind?.exempt).toEqual([{ component: 'RewindCooldown' }]);
+    // Буфер истории обязан покрывать глубину автостопа: 30 × (15 − 1) = 420.
+    const depth = (MATCH.rewind!.interval) * (MATCH.rewind!.capacity - 1);
+    expect(depth).toBeGreaterThanOrEqual(REWIND_DEPTH);
+  });
+
+  it('темп скраба локальной сборки — темп цикла рассылки матча (SHELL-8)', () => {
+    // Сервер делает шаг ведения точки раз в ЦИКЛ РАССЫЛКИ (REW-13), локальная
+    // оболочка — раз в `scrub.every` тиков. Величина одна и та же, и выводиться
+    // она обязана из документа матча: совпади они умолчаниями — ульта отматывала
+    // бы на разную глубину за одно и то же удержание в зависимости от того, кто
+    // произвёл тик.
+    const cycleTicks = Math.max(
+      1,
+      Math.round((MATCH.tickRate ?? 60) / (MATCH.snapshotRate ?? 30)),
+    );
+    expect(DEMO_SCRUB_EVERY).toBe(cycleTicks);
+    // И шаг в тиках — тот же, что у сервера: он приезжает из того же документа.
+    expect(MATCH.rewind?.step).toBeGreaterThan(0);
   });
 });

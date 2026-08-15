@@ -125,9 +125,17 @@ export class PresentationStage {
     for (const subsystem of this.subsystems) subsystem.syncDecorations?.(entities);
   }
 
-  /** Покадровое обновление подсистем в порядке регистрации (REND-2, REND-8). */
-  frame(dt: number, alpha: number): void {
-    for (const subsystem of this.subsystems) subsystem.updateFrame(dt, alpha);
+  /**
+   * Покадровое обновление подсистем в порядке регистрации (REND-2, REND-8).
+   *
+   * `realDt` — часы главного потока без знака: их берут величины самой картинки
+   * (счётчик кадров HUD), тогда как мир доигрывает `dt` со знаком хода (REND-25).
+   * Умолчание — модуль `dt`: продюсер, который различия не делает (документный
+   * источник — мир там не идёт вовсе), передаёт одно число, и подсистемы
+   * получают ту же величину, что и раньше.
+   */
+  frame(dt: number, alpha: number, realDt: number = Math.abs(dt)): void {
+    for (const subsystem of this.subsystems) subsystem.updateFrame(dt, alpha, realDt);
   }
 
   private flush(): void {

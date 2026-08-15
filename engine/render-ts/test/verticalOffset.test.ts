@@ -111,6 +111,16 @@ describe('advanceFall: снижение при провале (REND-12, ARENA-5)
     expect(advanceFall(offset, 6, 4, 10)).toBe(-4);
   });
 
+  it('обратный ход возвращает смещение к поверхности и не выносит над ней (REND-25)', () => {
+    let offset = advanceFall(0, 6, 4, 0.2);
+    expect(offset).toBeCloseTo(-1.2, 10);
+    offset = advanceFall(offset, 6, 4, -0.1);
+    expect(offset).toBeCloseTo(-0.6, 10);
+    // Отмотали больше, чем провалились: инстанс стоит на поверхности, а не
+    // висит над ней.
+    expect(advanceFall(offset, 6, 4, -10)).toBe(0);
+  });
+
   it('без глубины или без скорости снижения нет', () => {
     expect(advanceFall(0, 6, 0, 0.1)).toBe(0);
     expect(advanceFall(0, 0, 4, 0.1)).toBe(0);
