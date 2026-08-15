@@ -183,6 +183,18 @@ export { filterSnapshot, relevantEntityVisible, VIEWPOINT_ALL, EVENT_ENTITY_FIEL
 export type { EventVisibility } from './sim/filter.js';
 export { loadScene } from './sim/scene.js';
 export type { Scene, SceneDef } from './sim/scene.js';
+/**
+ * Сборка симуляции до первого `tick()` — тот же класс, что `worldInitSpawn`:
+ * исключение `worldInit` из TICK-3, и по той же причине опубликовано отдельно
+ * от read-only поверхности. Чужой мир функция не мутирует — поднимает свой,
+ * поэтому side-channel'ом мимо Command Buffer (DET-7) не является.
+ *
+ * Наружу она уходит, чтобы порядок регистрации систем, расстановка и момент
+ * хеша `worldInit` (DET-1) существовали в одном экземпляре: сетевой слой
+ * поднимает мир матча через неё (NTR-5), а не повторением пролога ядра.
+ */
+export { buildSimulation } from './sim/build.js';
+export type { BuiltSimulation, SimulationBuildDef, SimulationBuildOptions } from './sim/build.js';
 export { jsonSerializer, prettyJsonSerializer, snapshotToPlain, snapshotFromPlain } from './sim/serialization.js';
 export type { PlainSnapshot, Serializer } from './sim/serialization.js';
 export { createJsonlSink, traceLine } from './sim/trace.js';
@@ -191,8 +203,9 @@ export type { RunOutput, ScenarioDef, TickRecord } from './sim/scenario.js';
 /**
  * Запись расстановки — формат SER-8, общий конфигу сцены, сценарию CLI и
  * конфигу матча. Имя экспорта историческое: тип жил полем сценария.
- * `applyPlacement` наружу не уходит — расстановку применяют загрузчик и прогон
- * до первого тика, а публичный мутатор остаётся один (TICK-3).
+ * `applyPlacement` наружу не уходит — расстановку применяют загрузчик сцены и
+ * `buildSimulation` до первого тика, а мутатор чужого мира публичен ровно один
+ * (`worldInitSpawn`, TICK-3).
  */
 export type { ScenarioSpawn } from './sim/placement.js';
 export { worldInitHash, worldInitForm } from './sim/worldInit.js';

@@ -68,6 +68,7 @@
   "arenaPrefab",
   "assert",
   "assertInvariant",
+  "buildSimulation",
   "cellAt",
   "componentMask",
   "contentPackForm",

@@ -7,32 +7,23 @@
  * дали бы расхождение хешей на честных данных — то есть отказ входа там, где
  * входить можно.
  *
- * Пролог здесь намеренно повторяет пролог `runScenario` ядра, а не вызывает
- * его: сетевому слою доступна только опубликованная поверхность ядра (NTR-1), а
- * `runScenario` прогоняет сценарий до конца и на роль «собери и отдай» не
- * годится. Расхождение этого повтора с ядром ловится проверкой парности
- * (NTR-8): она гоняет записанный матч через сам `runScenario`, и любое различие
- * в сборке мира краснеет на первом же тике.
+ * Пролога здесь больше нет: сборку мира — порядок регистрации систем,
+ * расстановку (SER-8) и момент хеша `worldInit` — целиком делает
+ * `buildSimulation` ядра, опубликованный ровно для этого (NTR-1: сетевому слою
+ * доступна только опубликованная поверхность ядра). Прежде эти шаги были здесь
+ * повторены, и повтор успел разойтись с оригиналом — расстановка матча шла
+ * сырым циклом мимо валидации SER-8. Своего в этом модуле остаётся только
+ * матчевое: отказ сборки по NTR-14 и обязательные `players`.
+ *
+ * Парность с ядром (NTR-8) от этого не теряет смысла: она гоняет записанный
+ * матч через `runScenario` и краснеет на первом же тике, если различие в сборке
+ * всё-таки появится.
  */
 import {
-  createPhysicsApi,
-  initialState,
-  loadScene,
-  mathApi,
-  requireModifierList,
-  staticsFromTerrain,
+  buildSimulation,
   world as coreWorld,
-  worldInitHash,
-  worldInitSpawn,
-  InputSystem,
-  LocomotionSystem,
-  PhysicsSystem,
-  PhysicsWorld,
-  VisibilitySystem,
-  VISION_MODIFIER_COMPONENT,
   type ComponentSchema,
   type LocomotionOptions,
-  type PhysicsApi,
   type PhysicsOptions,
   type PlainWorld,
   type ScenarioSpawn,
@@ -89,51 +80,26 @@ export function buildMatchWorld(def: MatchWorldDef): MatchWorld {
         'добавьте поле "visibility" в конфиг матча (NTR-14, FOW-4)',
     );
   }
-  const { world, systems, terrain, arena, modifiers } = loadScene(def.scene);
-  systems.register(new InputSystem({ players: def.players }));
-  if (def.locomotion !== undefined) systems.register(new LocomotionSystem(def.locomotion));
-
-  let physics: PhysicsApi | undefined;
-  if (def.physics !== undefined) {
-    const statics = terrain === undefined ? [] : staticsFromTerrain(terrain.grid);
-    const physicsWorld = new PhysicsWorld(statics, terrain?.grid.tileSize);
-    systems.register(new PhysicsSystem(physicsWorld, def.physics));
-    physics = createPhysicsApi(world, physicsWorld, def.physics);
-  }
-
-  // После физики: видимость считается по финальным позициям тика (FOW-6).
-  // Регистрация — здесь, в общем пути сборки, а не в запускалке (NTR-14): состав
-  // систем матча определяют ровно два источника, сцена и конфиг матча.
-  if (def.visibility !== undefined) {
-    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
-  }
-
-  // Расстановка матча идёт ПОСЛЕ расстановки сцены (SER-8): ту уже применил
-  // `loadScene` вслед за сущностями-носителями, и повторять её здесь нельзя —
-  // расстановки складываются, а не замещают друг друга. Порядок «носители →
-  // сцена → матч» задаёт выданные ID, то есть хеш `worldInit`, по которому
-  // сверяются клиент и сервер (NTR-5).
-  for (const entry of def.initial ?? []) worldInitSpawn(world, entry.prefab, entry.overrides);
-
-  const state = initialState(world, def.seed);
-  const hash = worldInitHash({
-    world,
-    mode: state.mode,
-    ...(terrain !== undefined ? { terrain } : {}),
-    ...(arena !== undefined ? { arena } : {}),
-  });
-
-  const sim: Simulation = {
-    systems,
-    worldSeed: def.seed,
-    math: mathApi,
-    modifiers,
-    ...(terrain !== undefined ? { terrain } : {}),
-    ...(arena !== undefined ? { arena } : {}),
-    ...(physics !== undefined ? { physics } : {}),
-  };
-
-  return { sim, state, worldInitHash: hash };
+  // Дальше — общий путь ядра. Состав систем (InputSystem → LocomotionSystem →
+  // PhysicsSystem → VisibilitySystem после физики, FOW-6), порядок «носители →
+  // расстановка сцены → расстановка матча» (SER-8) и момент хеша `worldInit`
+  // (DET-1) заданы там: по этому хешу сверяются клиент и сервер (NTR-5), и
+  // второго определения у него быть не должно.
+  //
+  // `players` матча обязательны (TICK-5) — в отличие от сценария, где прогон без
+  // инпутов законен; поэтому поле передаётся всегда, а не по наличию.
+  return buildSimulation(
+    {
+      scene: def.scene,
+      seed: def.seed,
+      players: def.players,
+      ...(def.initial !== undefined ? { initial: def.initial } : {}),
+      ...(def.physics !== undefined ? { physics: def.physics } : {}),
+      ...(def.locomotion !== undefined ? { locomotion: def.locomotion } : {}),
+      ...(def.visibility !== undefined ? { visibility: def.visibility } : {}),
+    },
+    { where: 'конфиг матча' },
+  );
 }
 
 /**

@@ -9,24 +9,15 @@
  * Фильтрации по видимости здесь нет и не будет (CLI-5): golden фиксирует
  * полный мир, `viewpoint = ALL` — FoW живёт в транспорте, а не в ядре.
  */
-import { InputSystem } from '../systems/inputSystem.js';
-import { LocomotionSystem, type LocomotionOptions } from '../systems/locomotion.js';
-import { mathApi } from '../math/mathApi.js';
-import {
-  createPhysicsApi,
-  PhysicsSystem,
-  PhysicsWorld,
-  staticsFromTerrain,
-  type PhysicsOptions,
-} from '../systems/physics.js';
-import { requireModifierList } from '../systems/modifiers.js';
-import { VisibilitySystem, VISION_MODIFIER_COMPONENT, type VisibilityOptions } from '../systems/visibility.js';
-import { applyPlacement, type ScenarioSpawn } from './placement.js';
-import { loadScene, type SceneDef } from './scene.js';
+import { buildSimulation } from './build.js';
+import { type LocomotionOptions } from '../systems/locomotion.js';
+import { type PhysicsOptions } from '../systems/physics.js';
+import { type VisibilityOptions } from '../systems/visibility.js';
+import { type ScenarioSpawn } from './placement.js';
+import { type SceneDef } from './scene.js';
 import { prettyJsonSerializer, snapshotToPlain, type PlainSnapshot } from './serialization.js';
-import { initialState, tick, type Simulation } from './tick.js';
-import { worldInitHash } from './worldInit.js';
-import type { DiagnosticsSink, InputFrame, PhysicsApi, SimulationState } from '../types.js';
+import { tick } from './tick.js';
+import type { DiagnosticsSink, InputFrame, SimulationState } from '../types.js';
 
 export interface ScenarioDef {
   readonly name: string;
@@ -96,52 +87,25 @@ export function runScenario(def: ScenarioDef, diagnostics?: DiagnosticsSink): Ru
     throw new Error(`сценарий "${def.name}": есть "inputs", но нет "players" — слоты не определены (TICK-5)`);
   }
 
-  // Системы, включаемые составом сцены (в том числе `ArenaSystem`), регистрирует
-  // сам загрузчик (SER-7); здесь — только те, которым нужна зависимость сборки.
-  const { world, systems, terrain, arena, modifiers } = loadScene(def.scene);
-  if (def.players !== undefined) systems.register(new InputSystem({ players: def.players }));
-  if (def.locomotion !== undefined) systems.register(new LocomotionSystem(def.locomotion));
-
-  // Статика обрывов строится из террейна до расстановки: она иммутабельна и в
-  // снапшот не входит (TERR-5, TERR-6).
-  let physics: PhysicsApi | undefined;
-  if (def.physics !== undefined) {
-    const statics = terrain === undefined ? [] : staticsFromTerrain(terrain.grid);
-    const physicsWorld = new PhysicsWorld(statics, terrain?.grid.tileSize);
-    systems.register(new PhysicsSystem(physicsWorld, def.physics));
-    physics = createPhysicsApi(world, physicsWorld, def.physics);
-  }
-
-  // Видимость считается по финальным позициям тика, поэтому регистрируется
-  // после физики (FOW-6).
-  if (def.visibility !== undefined) {
-    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
-  }
-
-  // Расстановка сценария — после расстановки сцены, которую применил
-  // `loadScene` (SER-8): сцена описывает содержимое арены, сценарий —
-  // участников этого прогона, и ID выданы в этом порядке.
-  applyPlacement(world, def.initial, `сценарий "${def.name}"`);
-
-  const state = initialState(world, def.seed);
-  // Считается здесь и только здесь: после начальной расстановки и до первого
-  // тика — ровно тот момент, который DET-1 называет `worldInit`.
-  const hash = worldInitHash({
-    world,
-    mode: state.mode,
-    ...(terrain !== undefined ? { terrain } : {}),
-    ...(arena !== undefined ? { arena } : {}),
-  });
-  const sim: Simulation = {
-    systems,
-    worldSeed: def.seed,
-    math: mathApi,
-    modifiers,
-    ...(terrain !== undefined ? { terrain } : {}),
-    ...(arena !== undefined ? { arena } : {}),
-    ...(physics !== undefined ? { physics } : {}),
-    ...(diagnostics !== undefined ? { diagnostics } : {}),
-  };
+  // Сборка мира — общий путь `buildSimulation` (DET-1): порядок регистрации
+  // систем, расстановка и момент хеша `worldInit` там же, где их берёт матч
+  // (NTR-5). Специфика сценария остаётся здесь — валидация документа выше и
+  // прогон тиков ниже.
+  const { sim, state, worldInitHash: hash } = buildSimulation(
+    {
+      scene: def.scene,
+      seed: def.seed,
+      ...(def.players !== undefined ? { players: def.players } : {}),
+      ...(def.initial !== undefined ? { initial: def.initial } : {}),
+      ...(def.physics !== undefined ? { physics: def.physics } : {}),
+      ...(def.locomotion !== undefined ? { locomotion: def.locomotion } : {}),
+      ...(def.visibility !== undefined ? { visibility: def.visibility } : {}),
+    },
+    {
+      where: `сценарий "${def.name}"`,
+      ...(diagnostics !== undefined ? { diagnostics } : {}),
+    },
+  );
 
   const byTick = new Map<number, InputFrame[]>();
   for (const frame of def.inputs ?? []) {
