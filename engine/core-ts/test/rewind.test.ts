@@ -519,9 +519,11 @@ describe('компонентная форма exempt-списка (REW-9)', () =
 });
 
 /**
- * Кэш последнего восстановленного состояния: цена интерактивного скраба.
- * Стенд считает ПРОТИКАННЫЕ реплеем тики — по ним и видно, от какой базы шёл
- * реплей; состояние при этом обязано совпасть бит-в-бит с реплеем от снапшота.
+ * Цена `seekTo` и его база: стенд считает ПРОТИКАННЫЕ реплеем тики — по ним и
+ * видно, от какой базы шёл реплей. База одна всегда — ближайший снапшот
+ * (REW-2); кэша восстановленного состояния у контроллера нет (design,
+ * Decision 3), и путь к любой точке зависит только от истории, а не от того,
+ * какие точки скраб прошёл до неё.
  */
 function countingHarness(interval = 10, capacity = 10) {
   const counter = { ticks: 0 };
@@ -559,9 +561,9 @@ function countingHarness(interval = 10, capacity = 10) {
   };
 }
 
-describe('кэш последнего восстановленного состояния', () => {
-  it('реплей от кэша даёт бит-в-бит то же состояние, что реплей от снапшота (DET-1)', () => {
-    // Без кэша: перемотка сразу на целевой тик, реплей от снапшота тика 20.
+describe('база восстановления — ближайший снапшот (REW-2)', () => {
+  it('путь к точке на состояние не влияет: бит-в-бит одно и то же (DET-1)', () => {
+    // Прямо в целевой тик: реплей от снапшота тика 20.
     const plain = countingHarness();
     plain.runTo(28);
     const direct = createRewindController(plain.sim, plain.state, {
@@ -573,22 +575,24 @@ describe('кэш последнего восстановленного сост�
     direct.seekTo(26);
     const expected = snapshotToPlain(takeSnapshot(plain.state));
 
-    // С кэшом: сперва точка 23, затем ВПЕРЁД до 26 — реплей идёт от кэша.
-    const cached = countingHarness();
-    cached.runTo(28);
-    const wsm = createRewindController(cached.sim, cached.state, {
-      history: cached.history,
-      inputs: cached.inputs,
+    // Через промежуточную точку 23 и затем ВПЕРЁД до 26 — тот же снапшот тика
+    // 20 основанием, тот же реплей, то же состояние.
+    const stepped = countingHarness();
+    stepped.runTo(28);
+    const wsm = createRewindController(stepped.sim, stepped.state, {
+      history: stepped.history,
+      inputs: stepped.inputs,
     });
     wsm.pause();
     wsm.beginRewind();
     wsm.seekTo(23);
-    const beforeForward = cached.counter.ticks;
+    const beforeForward = stepped.counter.ticks;
     wsm.seekTo(26);
 
-    expect(snapshotToPlain(takeSnapshot(cached.state))).toEqual(expected);
-    // Три тика реплея вместо шести от снапшота тика 20 — база оказалась ближе.
-    expect(cached.counter.ticks - beforeForward).toBe(3);
+    expect(snapshotToPlain(takeSnapshot(stepped.state))).toEqual(expected);
+    // Шесть тиков реплея от снапшота тика 20: уже пройденная точка 23 базой не
+    // становится — кэша восстановленного состояния у контроллера нет.
+    expect(stepped.counter.ticks - beforeForward).toBe(6);
   });
 
   it('шаг назад доигрывается от снапшота: состояние будущего основанием не бывает', () => {
@@ -603,26 +607,6 @@ describe('кэш последнего восстановленного сост�
 
     expect(h.state.tick).toBe(23);
     expect(h.counter.ticks - before).toBe(3); // снапшот тика 20 + три тика реплея
-  });
-
-  it('возобновление кэш обнуляет: следующая перемотка идёт от снапшота', () => {
-    const h = countingHarness();
-    h.runTo(28);
-    const wsm = createRewindController(h.sim, h.state, { history: h.history, inputs: h.inputs });
-    wsm.pause();
-    wsm.beginRewind();
-    wsm.seekTo(23);
-    wsm.pause();
-    wsm.resume();
-    h.runTo(28);
-
-    wsm.pause();
-    wsm.beginRewind();
-    const before = h.counter.ticks;
-    wsm.seekTo(26);
-
-    // От снапшота тика 20, а не от кэша тика 23: шесть тиков реплея.
-    expect(h.counter.ticks - before).toBe(6);
   });
 });
 

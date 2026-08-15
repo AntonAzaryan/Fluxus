@@ -8,23 +8,20 @@
  */
 import {
   componentSchema,
-  copyWorldInto,
   getField,
   hasComponent,
   isAlive,
   setField,
 } from '../ecs/world.js';
 import { query } from '../ecs/query.js';
-import { advance, restoreSnapshot, takeSnapshot } from './tick.js';
+import { advance, restoreSnapshot } from './tick.js';
 import type { Simulation } from './tick.js';
 import type {
   EntityId,
   HistoryProvider,
   InputFrame,
   SimulationState,
-  Snapshot,
   WorldMode,
-  WorldState,
 } from '../types.js';
 
 /**
@@ -153,6 +150,16 @@ export function createRewindController(
       return owners;
     });
 
+  /**
+   * Возврат снятых значений компонента-маркера после реплея (REW-9).
+   *
+   * Порядок полей здесь — порядок `Object.keys(schema.fields)`, и он СИММЕТРИЧЕН:
+   * снятие и запись идут по одному и тому же списку `exemptComponentFields`, а
+   * наружу — в снапшот, на провод, в канонический лог — этот массив не уходит
+   * вовсе. Поэтому порт на Rust вправе перечислять поля любым своим стабильным
+   * порядком: наблюдаемого расхождения из-за него не возникает, в отличие от
+   * порядка компонентов в снапшоте, который задаёт битовые id (SER-7).
+   */
   const writeExemptComponents = (preserved: readonly PreservedOwner[][]): void => {
     for (let i = 0; i < exemptComponents.length; i++) {
       const component = exemptComponents[i]!.component;
@@ -169,45 +176,14 @@ export function createRewindController(
     }
   };
 
-  /**
-   * Кэш последнего восстановленного состояния (открытый вопрос спеки о
-   * стоимости `seekTo` при интерактивном скрабе). Точка скраба, уехавшая ВПЕРЁД
-   * внутри той же перемотки (REW-7 это разрешает) либо повторённая тем же
-   * тиком, доигрывается от кэша, а не от снапшота: реплей идёт от более близкой
-   * базы, а восстановление снапшота глубже по времени пропускается.
-   *
-   * Назад кэш не помогает и помочь не может: состояние тика T — не основание
-   * для тика T − k, а хранить по состоянию на каждый шаг скраба значило бы
-   * завести вторую историю рядом с той, что уже есть (SNAP-2). Цена шага назад
-   * остаётся «снапшот + реплей до `interval` тиков», и её задаёт профиль
-   * провайдера (SNAP-4).
-   *
-   * Детерминизма он не касается: кэш снимается ДО возврата exempt-значений, то
-   * есть хранит честное прошлое, и реплей от него обязан давать бит-в-бит то же
-   * состояние, что реплей от снапшота.
-   *
-   * Мир кэша выделяется один раз и переиспользуется копированием: шаг скраба не
-   * должен стоить нового мира каждый раз.
+  /*
+   * Кэша последнего восстановленного состояния здесь нет — он был написан и
+   * снят (design, Decision 3). Обслужить он мог только скраб ВПЕРЁД внутри
+   * одной перемотки, а шаг ведения точки (REW-13) ходит назад: состояние тика T
+   * основанием для тика T − k не бывает. За эту недостижимую ветвь каждый
+   * `seekTo` платил полной копией мира плюс снимком RNG, шины и тегов, а сам
+   * кэш держал ещё один мир в памяти на всё время матча.
    */
-  let cacheWorld: WorldState | undefined;
-  let cache: Snapshot | undefined;
-
-  const rememberRestored = (): void => {
-    if (cacheWorld === undefined) {
-      const taken = takeSnapshot(state);
-      cacheWorld = taken.world;
-      cache = taken;
-      return;
-    }
-    copyWorldInto(cacheWorld, state.world);
-    cache = {
-      tick: state.tick,
-      world: cacheWorld,
-      rng: state.rng.snapshot(),
-      events: [...state.events],
-      mode: state.mode,
-    };
-  };
 
   return {
     get mode() {
@@ -224,13 +200,6 @@ export function createRewindController(
         throw new Error(`WSM-2: выйти в Running можно только из Paused, а мир в ${state.mode}`);
       }
       state.mode = 'Running';
-      // Возобновление кончает перемотку, а с ней и смысл кэша: живые тики
-      // пойдут по тем же номерам заново, и состояние, восстановленное в прошлой
-      // перемотке, основанием для следующей быть не обязано. Обнуление здесь
-      // держит инвариант «кэш — состояние ТЕКУЩЕЙ ветви» без наблюдения за
-      // историей: провайдер со срезанием стёртой ветви живёт в сетевом слое, и
-      // знать о нём ядру нечего.
-      cache = undefined;
     },
 
     beginRewind() {
@@ -257,12 +226,7 @@ export function createRewindController(
       const preserved = readExempt();
       const preservedOwners = readExemptComponents();
 
-      // База реплея — та, что ближе к цели: кэш годится только вперёд от себя.
-      const base = cache !== undefined && cache.tick > snapshot.tick && cache.tick <= reachable
-        ? cache
-        : snapshot;
-
-      restoreSnapshot(state, base);
+      restoreSnapshot(state, snapshot);
       // `restoreSnapshot` вернул и режим базы — но мы всё ещё перематываем.
       state.mode = 'Rewinding';
 
@@ -271,10 +235,6 @@ export function createRewindController(
       while (state.tick < reachable) {
         advance(sim, state, inputs.at(state.tick + 1), true);
       }
-
-      // ДО возврата exempt-значений: кэш обязан хранить честное прошлое, иначе
-      // реплей от него разошёлся бы с реплеем от снапшота (DET-1).
-      rememberRestored();
 
       for (let i = 0; i < exemptFields.length; i++) {
         const value = preserved[i];
