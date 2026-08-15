@@ -97,7 +97,16 @@
           "prewarm": false,
           "duration": 0.4,
           "shape": {
-            "type": "point"
+            "type": "sphere",
+            "radius": 0.12,
+            "arc": 6.283185307179586,
+            "thickness": 1,
+            "mode": 0,
+            "spread": 0,
+            "speed": {
+              "type": "ConstantValue",
+              "value": 1
+            }
           },
           "startLife": {
             "type": "IntervalValue",
@@ -195,6 +204,18 @@
           "softFarFade": 0,
           "softNearFade": 0,
           "behaviors": [
+            {
+              "type": "ApplyForce",
+              "direction": [
+                0,
+                0,
+                -1
+              ],
+              "magnitude": {
+                "type": "ConstantValue",
+                "value": 9.8
+              }
+            },
             {
               "type": "SizeOverLife",
               "size": {

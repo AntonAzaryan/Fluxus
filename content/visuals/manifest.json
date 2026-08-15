@@ -128,7 +128,7 @@
         "primitive": "sphere",
         "color": "#ff5a2a",
         "radius": 0.3,
-        "radiusTo": 2.2,
+        "radiusTo": 0.7,
         "alpha": 0.55,
         "alphaTo": 0,
         "durationMs": 420,

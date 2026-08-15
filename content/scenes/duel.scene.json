@@ -197,11 +197,11 @@
         "Collider": {
           "blockMask": 1,
           "cliffRise": 0,
-          "halfX": 9830,
-          "halfY": 9830,
+          "halfX": 19661,
+          "halfY": 19661,
           "hitMask": 2,
           "layer": 4,
-          "radius": 9830,
+          "radius": 19661,
           "shape": 0
         },
         "Lifetime": { "ticks": 50 },
@@ -332,7 +332,7 @@
     {
       "name": "ChargeTick",
       "order": 29,
-      "query": { "all": ["Charging"] },
+      "query": { "all": ["Charging", "Input", "Player"] },
       "as": "e",
       "do": [
         {
@@ -351,6 +351,17 @@
                     "ticks": {
                       "+": [{ "getComponent": [{ "var": "e" }, "Charging", "ticks"] }, 1]
                     }
+                  }
+                }
+              },
+              {
+                "emitEvent": {
+                  "type": "ChargeAim",
+                  "data": {
+                    "dirX": { "cos": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] },
+                    "dirY": { "sin": [{ "getComponent": [{ "var": "e" }, "Input", "aimDir"] }] },
+                    "entity": { "var": "e" },
+                    "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] }
                   }
                 }
               }
@@ -390,16 +401,6 @@
                   "entity": { "var": "e" },
                   "component": "ActionLock",
                   "values": { "mask": 1 }
-                }
-              },
-              {
-                "emitEvent": {
-                  "type": "ChargeStarted",
-                  "data": {
-                    "entity": { "var": "e" },
-                    "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] },
-                    "tick": { "tick": [] }
-                  }
                 }
               }
             ]
@@ -813,7 +814,7 @@
                     {
                       "forEach": {
                         "query": {
-                          "all": ["Health", "Position"],
+                          "all": ["Health", "Player", "Position"],
                           "not": ["Dead"],
                           "withinRadius": { "center": { "var": "at" }, "radius": { "var": "reach" } }
                         },
@@ -1215,12 +1216,14 @@
       ]
     },
     {
-      "name": "FireballCollide",
+      "name": "FireballHit",
       "order": 112,
+      "query": { "all": ["Projectile", "Position", "Owner"], "not": ["Held"] },
+      "as": "p",
       "do": [
         {
           "let": {
-            "bindings": { "spent": -1 },
+            "bindings": { "victim": -1 },
             "do": [
               {
                 "forEachEvent": {
@@ -1230,16 +1233,17 @@
                     {
                       "let": {
                         "bindings": {
-                          "p": { "eventField": [{ "var": "ev" }, "entity"] },
-                          "victim": { "eventField": [{ "var": "ev" }, "other"] }
+                          "mover": { "eventField": [{ "var": "ev" }, "entity"] },
+                          "other": { "eventField": [{ "var": "ev" }, "other"] }
                         },
                         "do": [
                           {
                             "if": {
                               "cond": {
                                 "and": [
-                                  { "!=": [{ "var": "p" }, { "var": "spent" }] },
-                                  { ">=": [{ "var": "victim" }, 0] }
+                                  { "==": [{ "var": "mover" }, { "var": "p" }] },
+                                  { "==": [{ "var": "victim" }, -1] },
+                                  { ">=": [{ "var": "other" }, 0] }
                                 ]
                               },
                               "then": [
@@ -1247,10 +1251,8 @@
                                   "if": {
                                     "cond": {
                                       "and": [
-                                        { "hasComponent": [{ "var": "p" }, "Projectile"] },
-                                        { "!": [{ "hasComponent": [{ "var": "p" }, "Held"] }] },
-                                        { "hasComponent": [{ "var": "victim" }, "Health"] },
-                                        { "hasComponent": [{ "var": "victim" }, "Player"] }
+                                        { "hasComponent": [{ "var": "other" }, "Health"] },
+                                        { "hasComponent": [{ "var": "other" }, "Player"] }
                                       ]
                                     },
                                     "then": [
@@ -1259,42 +1261,11 @@
                                           "cond": {
                                             "!=": [
                                               { "getComponent": [{ "var": "p" }, "Owner", "slot"] },
-                                              { "getComponent": [{ "var": "victim" }, "Player", "slot"] }
+                                              { "getComponent": [{ "var": "other" }, "Player", "slot"] }
                                             ]
                                           },
                                           "then": [
-                                            { "set": { "name": "spent", "value": { "var": "p" } } },
-                                            {
-                                              "emitEvent": {
-                                                "type": "Damage",
-                                                "data": {
-                                                  "amount": {
-                                                    "getComponent": [{ "var": "p" }, "Projectile", "damage"]
-                                                  },
-                                                  "entity": { "var": "victim" }
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "emitEvent": {
-                                                "type": "HeroHit",
-                                                "data": {
-                                                  "entity": { "var": "victim" },
-                                                  "x": { "getComponent": [{ "var": "victim" }, "Position", "x"] },
-                                                  "y": { "getComponent": [{ "var": "victim" }, "Position", "y"] }
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "emitEvent": {
-                                                "type": "FireballExploded",
-                                                "data": {
-                                                  "x": { "getComponent": [{ "var": "p" }, "Position", "x"] },
-                                                  "y": { "getComponent": [{ "var": "p" }, "Position", "y"] }
-                                                }
-                                              }
-                                            },
-                                            { "destroyEntity": { "entity": { "var": "p" } } }
+                                            { "set": { "name": "victim", "value": { "var": "other" } } }
                                           ]
                                         }
                                       }
@@ -1311,40 +1282,86 @@
                 }
               },
               {
+                "if": {
+                  "cond": { "!=": [{ "var": "victim" }, -1] },
+                  "then": [
+                    {
+                      "emitEvent": {
+                        "type": "Damage",
+                        "data": {
+                          "amount": { "getComponent": [{ "var": "p" }, "Projectile", "damage"] },
+                          "entity": { "var": "victim" }
+                        }
+                      }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "HeroHit",
+                        "data": {
+                          "entity": { "var": "victim" },
+                          "x": { "getComponent": [{ "var": "victim" }, "Position", "x"] },
+                          "y": { "getComponent": [{ "var": "victim" }, "Position", "y"] }
+                        }
+                      }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "FireballExploded",
+                        "data": {
+                          "x": { "getComponent": [{ "var": "p" }, "Position", "x"] },
+                          "y": { "getComponent": [{ "var": "p" }, "Position", "y"] }
+                        }
+                      }
+                    },
+                    { "destroyEntity": { "entity": { "var": "p" } } }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "FireballWall",
+      "order": 113,
+      "query": { "all": ["Projectile", "Position"], "not": ["Held"] },
+      "as": "p",
+      "do": [
+        {
+          "let": {
+            "bindings": { "hit": 0 },
+            "do": [
+              {
                 "forEachEvent": {
                   "type": "Collision",
                   "as": "ev",
                   "do": [
                     {
-                      "let": {
-                        "bindings": { "p": { "eventField": [{ "var": "ev" }, "entity"] } },
-                        "do": [
-                          {
-                            "if": {
-                              "cond": {
-                                "and": [
-                                  { "!=": [{ "var": "p" }, { "var": "spent" }] },
-                                  { "hasComponent": [{ "var": "p" }, "Projectile"] }
-                                ]
-                              },
-                              "then": [
-                                { "set": { "name": "spent", "value": { "var": "p" } } },
-                                {
-                                  "emitEvent": {
-                                    "type": "FireballExploded",
-                                    "data": {
-                                      "x": { "getComponent": [{ "var": "p" }, "Position", "x"] },
-                                      "y": { "getComponent": [{ "var": "p" }, "Position", "y"] }
-                                    }
-                                  }
-                                },
-                                { "destroyEntity": { "entity": { "var": "p" } } }
-                              ]
-                            }
-                          }
-                        ]
+                      "if": {
+                        "cond": {
+                          "==": [{ "eventField": [{ "var": "ev" }, "entity"] }, { "var": "p" }]
+                        },
+                        "then": [{ "set": { "name": "hit", "value": 1 } }]
                       }
                     }
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "cond": { "==": [{ "var": "hit" }, 1] },
+                  "then": [
+                    {
+                      "emitEvent": {
+                        "type": "FireballExploded",
+                        "data": {
+                          "x": { "getComponent": [{ "var": "p" }, "Position", "x"] },
+                          "y": { "getComponent": [{ "var": "p" }, "Position", "y"] }
+                        }
+                      }
+                    },
+                    { "destroyEntity": { "entity": { "var": "p" } } }
                   ]
                 }
               }
@@ -1602,43 +1619,62 @@
     {
       "name": "DamageApply",
       "order": 128,
+      "query": { "all": ["Health"], "not": ["Dead"] },
+      "as": "target",
       "do": [
         {
-          "forEachEvent": {
-            "type": "Damage",
-            "as": "ev",
+          "let": {
+            "bindings": { "sum": 0 },
             "do": [
               {
-                "let": {
-                  "bindings": {
-                    "amount": { "eventField": [{ "var": "ev" }, "amount"] },
-                    "target": { "eventField": [{ "var": "ev" }, "entity"] }
-                  },
+                "forEachEvent": {
+                  "type": "Damage",
+                  "as": "ev",
                   "do": [
                     {
                       "if": {
-                        "cond": { "hasComponent": [{ "var": "target" }, "Health"] },
+                        "cond": {
+                          "==": [{ "eventField": [{ "var": "ev" }, "entity"] }, { "var": "target" }]
+                        },
                         "then": [
                           {
-                            "modifyComponent": {
-                              "entity": { "var": "target" },
-                              "component": "Health",
-                              "values": {
-                                "hp": {
-                                  "max": [
-                                    {
-                                      "-": [
-                                        { "getComponent": [{ "var": "target" }, "Health", "hp"] },
-                                        { "var": "amount" }
-                                      ]
-                                    },
-                                    0
-                                  ]
-                                }
+                            "set": {
+                              "name": "sum",
+                              "value": {
+                                "+": [
+                                  { "var": "sum" },
+                                  { "eventField": [{ "var": "ev" }, "amount"] }
+                                ]
                               }
                             }
                           }
                         ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "cond": { ">": [{ "var": "sum" }, 0] },
+                  "then": [
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "target" },
+                        "component": "Health",
+                        "values": {
+                          "hp": {
+                            "max": [
+                              {
+                                "-": [
+                                  { "getComponent": [{ "var": "target" }, "Health", "hp"] },
+                                  { "var": "sum" }
+                                ]
+                              },
+                              0
+                            ]
+                          }
+                        }
                       }
                     }
                   ]
