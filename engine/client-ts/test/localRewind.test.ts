@@ -18,6 +18,8 @@ import {
   initialState,
   loadScene,
   mathApi,
+  query,
+  world as coreWorld,
   worldInitSpawn,
   type SceneDef,
   type Simulation,
@@ -29,6 +31,8 @@ import { PLAYER_ID, TICK_SECONDS, makeExtractor, sceneDef, syncPortPair } from '
 
 const ULT_BUTTON = 7;
 const ULT = 1 << ULT_BUTTON;
+/** Обычное действие рядом с ультой: сцена его ни во что не превращает. */
+const OTHER = 1 << 2;
 const DEPTH_TICKS = 12;
 const STEP_TICKS = 3;
 const EVERY = 2;
@@ -187,6 +191,14 @@ function localRig(): Rig {
   return { shell, state, history, dropped, send, run, holdUntilResume };
 }
 
+/** Кнопки, доехавшие до мира: то, что `InputSystem` положила на сущность игрока. */
+function heroButtons(state: SimulationState): number {
+  for (const entity of query(state.world, { all: ['Input'] })) {
+    return coreWorld.getField(state.world, entity, 'Input', 'buttons');
+  }
+  throw new Error('в мире нет сущности с компонентом Input');
+}
+
 describe('локальный режим: дренаж запроса и ведение точки (SHELL-6, WSM-5)', () => {
   it('ульта из JSON-системы уводит мир в Rewinding через Paused', () => {
     const rig = localRig();
@@ -255,6 +267,23 @@ describe('локальный режим: дренаж запроса и веде
     for (let i = 0; i < 20; i++) rig.shell.stepTick();
 
     expect(rig.state.mode).toBe('Running');
+  });
+
+  it('кнопка, нажатая в замороженном мире, после возобновления не срабатывает (REW-5)', () => {
+    const rig = localRig();
+    rig.run(30);
+    rig.run(1, ULT);
+    expect(rig.state.mode).toBe('Rewinding');
+
+    // Игрок держит ульту и заодно жмёт обычное действие — руки не знают, что мир
+    // стоит. Латч фронтов оболочки гасится на КАЖДОМ замороженном тике, и до
+    // первого живого тика после возобновления это нажатие не доезжает: иначе
+    // ввод, накопленный в замороженном мире, лёг бы на возобновлённый залпом
+    // (NET-11, REW-5).
+    rig.holdUntilResume(ULT | OTHER);
+
+    expect(rig.state.mode).toBe('Running');
+    expect(heroButtons(rig.state) & OTHER).toBe(0);
   });
 
   it('вторая ульта во время cooldown гейтится контентом, а не оболочкой', () => {

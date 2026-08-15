@@ -258,6 +258,14 @@ describe('матч с перемоткой в вертикали (NET-11, NTR-16
  */
 const ULT_BUTTON = 7;
 const ULT = 1 << ULT_BUTTON;
+/**
+ * Обычное действие рядом с ультой: им проверяется, что ввод, порождённый в
+ * замороженном мире, на симуляцию после возобновления не влияет (NET-11,
+ * REW-5). Бит выбран свободный — сцена его ни во что не превращает, и видно
+ * его в компоненте `Input` героя.
+ */
+const CAST_BUTTON = 3;
+const CAST = 1 << CAST_BUTTON;
 /** Глубина автостопа из payload запроса и шаг ведения точки — числа этой сцены. */
 const ULT_DEPTH_TICKS = 40;
 const SCRUB_STEP = 4;
@@ -380,26 +388,68 @@ function fieldOfSlot(snapshot: PresentedState, slot: number, component: string, 
  * ловит фронт и эмитит запрос, сервер дренирует его после тика и ведёт точку
  * перемотки, пока кнопка удержана.
  */
-async function playUltMatch(options: { exempt: boolean; holdSteps: number }) {
+async function playUltMatch(options: { exempt: boolean; holdSteps: number; lag?: boolean }) {
   const config = ultConfig(options.exempt);
   const fixture = harness(config);
   const scene = config.scene;
   let hold = false;
-  const a = connectClient(fixture.hub, 'p1', fixture.clock, scene, () => ({
-    move: { x: hold ? 0 : STEP, y: 0 },
-    aimDir: 0,
-    buttons: hold ? ULT : 0,
-  }));
+  const a = connectClient(
+    fixture.hub,
+    'p1',
+    fixture.clock,
+    scene,
+    () => ({
+      move: { x: hold ? 0 : STEP, y: 0 },
+      aimDir: 0,
+      // Игрок жмёт ульту и ДЕРЖИТ её, продолжая двигаться и кастовать: ровно
+      // то, что делают руки, пока мир заморожен. Наружу из этого уедет только
+      // бит ведения скраба — маска замороженного мира (NET-11, REW-5).
+      buttons: hold ? ULT | CAST : 0,
+    }),
+    { holdButton: ULT_BUTTON },
+  );
   const b = connectClient(fixture.hub, 'p2', fixture.clock, scene);
+  const bridge = new RenderBridge(scene, config, fixture.clock);
   await settle();
 
-  const tick = async (): Promise<void> => {
+  /** Что доехало до рендера: по записи видно и режим, и snap каждой доставки. */
+  const rendered: { tick: number; mode: string; snapAll: boolean }[] = [];
+  const deliver = (): void => {
+    const discontinuity = b.client.takeDiscontinuity();
+    const latest = b.client.latest;
+    if (latest === undefined) return;
+    bridge.apply(latest, b.client.epoch, discontinuity);
+    rendered.push({
+      tick: bridge.host.view.tick,
+      mode: bridge.host.view.mode,
+      snapAll: bridge.host.view.snapAll,
+    });
+  };
+
+  /**
+   * Круг матча. `lag` переставляет шаг сервера ПЕРЕД шагом клиентов: кадр,
+   * отправленный на этом шаге, ингестится только на следующем — плечо канала
+   * длиной в шаг.
+   *
+   * Без плеча дыра NET-11 не воспроизводится вовсе: кадр, порождённый в
+   * замороженном мире, обязан доехать ПОСЛЕ возобновления, а на канале нулевой
+   * длины он всегда успевает до него.
+   */
+  const tick = async (lag = false): Promise<void> => {
     fixture.clock.ms += 1000 / TICK_RATE;
-    a.host.step();
-    b.host.step();
+    if (lag) {
+      fixture.host.step();
+      await settle();
+      a.host.step();
+      b.host.step();
+    } else {
+      a.host.step();
+      b.host.step();
+      await settle();
+      fixture.host.step();
+    }
     await settle();
-    fixture.host.step();
-    await settle();
+    deliver();
   };
 
   // Прогрев: живая ветвь длиннее глубины отката — иначе автостоп упёрся бы в
@@ -420,11 +470,33 @@ async function playUltMatch(options: { exempt: boolean; holdSteps: number }) {
   }
 
   hold = false;
-  for (let i = 0; i < 20 && fixture.server.mode !== 'Running'; i++) await tick();
+  // Плечо канала включается только там, где оно предмет проверки: с ним
+  // отпускание доезжает на шаг позже, и скраб успевает сделать лишний шаг —
+  // честное поведение канала с плечом, но шаг ведения оно измерять мешает.
+  const lag = options.lag ?? false;
+  for (let i = 0; i < 20 && fixture.server.mode !== 'Running'; i++) await tick(lag);
   const resumedAt = fixture.server.tick;
-  for (let i = 0; i < 10; i++) await tick();
+  /** Ввод, применённый первыми живыми тиками возобновлённого мира. */
+  const afterResume: number[] = [];
+  for (let i = 0; i < 10; i++) {
+    await tick(lag);
+    afterResume.push(fieldOfSlot(fixture.server.snapshot(), 0, 'Input', 'buttons'));
+  }
 
-  return { ...fixture, a, b, config, castTick, points, resumedAt, beforeCast, hold: () => hold };
+  return {
+    ...fixture,
+    a,
+    b,
+    bridge,
+    config,
+    castTick,
+    points,
+    resumedAt,
+    beforeCast,
+    rendered,
+    afterResume,
+    hold: () => hold,
+  };
 }
 
 describe('ульта отката в вертикали: контент решает, хост исполняет (WSM-5, NET-11)', () => {
@@ -446,6 +518,43 @@ describe('ульта отката в вертикали: контент реша
     // Перемотка наблюдаема сменой эпохи (NTR-16), и клиент её увидел.
     expect(match.server.epoch).toBeGreaterThan(0);
     expect(match.b.client.epoch).toBe(match.server.epoch);
+  });
+
+  it('скраб доезжает до рендера непрерывным ходом: snap только на входе и выходе', async () => {
+    const match = await playUltMatch({ exempt: true, holdSteps: 3 });
+    const scrub = match.rendered.filter((view) => view.mode === 'Rewinding');
+
+    // Скраб дошёл до рендера целиком: по доставке на каждый шаг ведения точки.
+    expect(scrub.length).toBeGreaterThanOrEqual(3);
+    // Вход в перемотку — разрыв: между живым тиком и историческим состоянием
+    // промежуточных положений не было (REND-2, SHELL-7).
+    expect(scrub[0]!.snapAll).toBe(true);
+    // А дальше — обычная интерполяция, хотя эпоха растёт на КАЖДОМ
+    // восстановлении (NTR-16). Иначе весь обратный ход рисовался бы чередой
+    // телепортов — ровно то, что дельта REND-2 запрещает.
+    expect(scrub.slice(1).map((view) => view.snapAll)).toEqual(scrub.slice(1).map(() => false));
+    // Номера тиков при этом идут назад — то есть интерполируется именно скраб.
+    expect(scrub[1]!.tick).toBeLessThan(scrub[0]!.tick);
+    // Выход из перемотки — снова разрыв: смену режима рисует snap.
+    const exit = match.rendered.findIndex(
+      (view, at) => at > 0 && view.mode !== 'Rewinding' && match.rendered[at - 1]!.mode === 'Rewinding',
+    );
+    expect(exit).toBeGreaterThan(0);
+    expect(match.rendered[exit]!.snapAll).toBe(true);
+  });
+
+  it('ввод замороженного мира на возобновлённую симуляцию не влияет (NET-11, REW-5)', async () => {
+    // Игрок всё время удержания жал и обычное действие рядом с ультой, а кадры
+    // последних шагов доехали уже ПОСЛЕ возобновления (плечо канала в шаг):
+    // эпоха у них верная, тик — будущий, и сервер их принимает. До мира они всё
+    // равно не доходят — клиент шлёт из замороженного мира только бит ведения
+    // скраба, а `move` обнуляет.
+    const match = await playUltMatch({ exempt: true, holdSteps: 3, lag: true });
+
+    expect(match.afterResume.length).toBeGreaterThan(0);
+    for (const buttons of match.afterResume) expect(buttons & CAST).toBe(0);
+    // Мир при этом идёт: возобновление состоялось.
+    expect(match.server.mode).toBe('Running');
   });
 
   it('cooldown ульты переживает откат, а вторая ульта отсекается гейтом контента', async () => {
