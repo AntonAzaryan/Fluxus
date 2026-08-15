@@ -215,6 +215,80 @@ describe('Serializer (SER-2)', () => {
   });
 });
 
+/**
+ * Стримы RNG в plain-форме (SER-1, SER-6, RNG-5, DET-1). Круг через байты —
+ * единственная проверка, которая ловит потерю СОСТОЯНИЯ стрима: мир, события и
+ * режим сходятся и при пустом `rng`, а разошедшийся генератор виден только на
+ * следующем броске. Сцены выше RNG не тратят вовсе, поэтому здесь своя.
+ */
+describe('rng в plain-форме снапшота (SER-1, RNG-5)', () => {
+  const DICE: ComponentSchema = { name: 'Dice', fields: { crit: 'fixed', main: 'fixed' } };
+  const DICE_PREFAB: PrefabDef = { name: 'Dicer', components: { Dice: { crit: 0, main: 0 } } };
+
+  const DICE_SCENE: SceneDef = { components: [DICE], prefabs: [DICE_PREFAB] };
+
+  function start(seed: number) {
+    const { world, systems } = loadScene(DICE_SCENE);
+    // Тратит два именованных стрима на тик (RNG-4): основной и суб-стрим системы.
+    systems.register({
+      name: 'Dice',
+      order: 0,
+      run: (ctx) => {
+        for (const entity of ctx.query({ all: ['Dice'] })) {
+          // Через Command Buffer, как любая мутация в тике (DET-7, CMD-4).
+          ctx.commands.setField(entity, 'Dice', 'main', ctx.rng.stream().nextFixed());
+          ctx.commands.setField(entity, 'Dice', 'crit', ctx.rng.stream('crit').nextFixed());
+        }
+      },
+    });
+    const dicer = spawn(world, 'Dicer');
+    const sim: Simulation = { systems, worldSeed: seed, math: mathApi };
+    return {
+      state: initialState(world, seed),
+      sim,
+      rolled: () => [getField(world, dicer, 'Dice', 'main'), getField(world, dicer, 'Dice', 'crit')],
+    };
+  }
+
+  it('состояние стримов переживает круг через байты: продолжение совпадает с непрерывным', () => {
+    const honest = start(11);
+    tick(honest.sim, honest.state);
+    tick(honest.sim, honest.state);
+    const snapshot = takeSnapshot(honest.state);
+    tick(honest.sim, honest.state);
+    const expected = honest.rolled();
+
+    const plain = snapshotToPlain(snapshot);
+    // Стримы созданы лениво по имени и отсортированы (SER-6); при пустом
+    // списке круг был бы вакуумным — генератор просто пересеялся бы заново.
+    expect(plain.rng.map((stream) => stream.name)).toEqual(['Dice', 'Dice/crit']);
+    expect(plain.rng[0]!.state).toHaveLength(4);
+
+    const decoded = snapshotFromPlain(
+      jsonSerializer.decode(jsonSerializer.encode(plain)) as typeof plain,
+      [DICE],
+      [DICE_PREFAB],
+    );
+    const restored = start(11);
+    restoreSnapshot(restored.state, decoded);
+    tick(restored.sim, restored.state);
+
+    expect(restored.rolled()).toEqual(expected);
+  });
+
+  it('без восстановления тот же тик даёт другие броски — состояние стримов и правда переносится', () => {
+    // Анти-вакуумность: третий тик отличим от первого, иначе предыдущий тест
+    // прошёл бы и на выброшенном `rng`.
+    const honest = start(11);
+    tick(honest.sim, honest.state);
+    const first = honest.rolled();
+    tick(honest.sim, honest.state);
+    tick(honest.sim, honest.state);
+
+    expect(honest.rolled()).not.toEqual(first);
+  });
+});
+
 describe('конфиг сцены (SER-7)', () => {
   it('поднимает мир и системы из одного документа', () => {
     const { world, systems } = loadScene(SCENE);

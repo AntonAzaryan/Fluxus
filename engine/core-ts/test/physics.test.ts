@@ -15,6 +15,7 @@ import {
   STATIC_COLLIDER,
   type StaticCollider,
 } from '../src/systems/physics.js';
+import { cliffGateOpen, type Bounds, type Move } from '../src/systems/collisionGeometry.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { createTerrainGrid } from '../src/systems/terrain.js';
 import { initialState, tick, type Simulation } from '../src/sim/tick.js';
@@ -118,10 +119,14 @@ const SCENE: SceneDef = {
   terrain: TERRAIN,
 };
 
-function harness(withTerrainStatics = true, terrainDef: typeof TERRAIN = TERRAIN) {
+function harness(
+  withTerrainStatics = true,
+  terrainDef: typeof TERRAIN = TERRAIN,
+  extraStatics: readonly StaticCollider[] = [],
+) {
   const { world, terrain, systems } = loadScene({ ...SCENE, terrain: terrainDef });
   const statics = withTerrainStatics ? staticsFromTerrain(terrain!.grid) : [];
-  const physicsWorld = new PhysicsWorld(statics, terrain!.grid.tileSize);
+  const physicsWorld = new PhysicsWorld([...statics, ...extraStatics], terrain!.grid.tileSize);
   systems.register(new PhysicsSystem(physicsWorld));
   const physics = createPhysicsApi(world, physicsWorld);
   const sim: Simulation = { systems, worldSeed: 1, math: mathApi, physics, terrain: terrain! };
@@ -764,6 +769,77 @@ describe('направленный гейт обрыва (PHYS-11)', () => {
     expect(h.position(down).x).toBe(F(1.5));
     expect(events).toHaveLength(0);
   });
+
+  it('статика без уровней сторон гейт не включает: снаряд с cliffRise −1 останавливает обычная стена', () => {
+    // Ровно демо-снаряд (`cliffRise = −1`) о статику, не выведенную из
+    // cliff-геометрии: уровней сторон у неё нет, подъём считать не из чего —
+    // гейт не применяется вовсе, и работает обычная блокировка по маске.
+    const wall: StaticCollider = {
+      minX: F(1.9),
+      maxX: F(2.1),
+      minY: F(-1),
+      maxY: F(2),
+      tags: [BLOCKS_MOVEMENT],
+      layer: LAYER_STATIC,
+    };
+    const h = harness(false, TERRAIN, [wall]);
+    const mover = h.place('Mover', {
+      Position: { x: F(1), y: F(0.5) },
+      Velocity: { x: F(1) },
+      Collider: { cliffRise: -1 },
+    });
+    const events = h.step();
+
+    expect(h.position(mover).x).toBe(F(1));
+    expect(events.map((e) => e.type)).toEqual(['Collision']);
+    expect(events[0]!.data.other).toBe(STATIC_COLLIDER);
+  });
+});
+
+/**
+ * Гейт как экспортированная функция: `PhysicsSystem` до него вырожденных
+ * входов не доводит, но поверхность у него шире одной системы.
+ */
+describe('гейт обрыва — вырожденный вход (PHYS-11)', () => {
+  const edge = (levelNeg: number, levelPos: number): StaticCollider => ({
+    minX: F(2),
+    maxX: F(2),
+    minY: 0,
+    maxY: F(1),
+    tags: [BLOCKS_MOVEMENT],
+    layer: LAYER_STATIC,
+    levelNeg,
+    levelPos,
+  });
+
+  /** Шаг по оси X сквозь ребро x = 2; огибающие гейту не нужны — он смотрит на ось и знак. */
+  const moveAlongX = (step: number): Move => {
+    const bounds: Bounds = { minX: F(1.75), minY: F(0.25), maxX: F(2.25), maxY: F(0.75) };
+    return {
+      current: bounds,
+      next: bounds,
+      swept: bounds,
+      axis: 'x',
+      step,
+      centerX: F(2),
+      centerY: F(0.5),
+    };
+  };
+
+  it('шаг нулевой длины ребра не пересекает: гейт открыт независимо от порядка уровней', () => {
+    // Сторону захода задаёт ЗНАК шага, а у нуля его нет: без явной защиты
+    // взялась бы ветка `levelNeg`, и зеркальные рёбра разошлись бы — edge(0, 5)
+    // прошло бы, edge(5, 0) блокировало. Пересечения нет — блокировать нечего.
+    expect(cliffGateOpen(moveAlongX(0), edge(0, 5), -1)).toBe(true);
+    expect(cliffGateOpen(moveAlongX(0), edge(5, 0), -1)).toBe(true);
+    // Анти-вакуумность: на ненулевом шаге те же рёбра стороны различают.
+    expect(cliffGateOpen(moveAlongX(F(1)), edge(0, 5), -1)).toBe(false);
+    expect(cliffGateOpen(moveAlongX(F(-1)), edge(0, 5), -1)).toBe(true);
+  });
+
+  it('нулевой cliffRise выключает гейт и на нулевом шаге — обрыв остаётся обычной статикой', () => {
+    expect(cliffGateOpen(moveAlongX(0), edge(0, 5), 0)).toBe(false);
+  });
 });
 
 describe('sensor-пересечения (PHYS-12)', () => {
@@ -809,6 +885,28 @@ describe('sensor-пересечения (PHYS-12)', () => {
     const events = h.step().filter((e) => e.type === 'Overlap');
     expect(events.map((e) => e.data.other)).toEqual([STATIC_COLLIDER, target]);
     expect(events.map((e) => e.data.entity)).toEqual([bullet, bullet]);
+  });
+
+  it('свип вдоль цепочки отрезков статики даёт одно событие, а не по одному на отрезок', () => {
+    // Прямая стена мира — цепочка односкелеточных отрезков (TERR-5, соседние
+    // не сливаются), а сущности у статики нет: `other` у всех отрезков один и
+    // тот же, и события были бы байт в байт одинаковыми. Наблюдаемая пара
+    // одна, значит по PHYS-12 и событие за тик ровно одно.
+    const h = harness();
+    const bullet = h.place('Bullet', {
+      // y = 1 — ровно стык двух отрезков обрыва x = 2: y ∈ [0, 1] и y ∈ [1, 2].
+      Position: { x: F(0.5), y: F(1) },
+      Velocity: { x: F(2) },
+      Collider: { hitMask: LAYER_STATIC },
+    });
+    // Анти-вакуумность: объём хода действительно задевает ОБА отрезка.
+    expect(
+      h.physicsWorld.queryByLayer({ minX: F(0.4), minY: F(0.9), maxX: F(2.6), maxY: F(1.1) }, LAYER_STATIC),
+    ).toHaveLength(2);
+
+    const events = h.step().filter((e) => e.type === 'Overlap');
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toEqual({ entity: bullet, other: STATIC_COLLIDER });
   });
 });
 

@@ -202,6 +202,29 @@ describe('сужение и снапшот (ARENA-4, SNAP-1)', () => {
     h.shrink(2);
     expect(types(h.step())).toEqual(['LeftArena']);
   });
+
+  it('переусердствовавшее сужение делает арену пустой, а не зеркальной', () => {
+    // Механизм увеличения радиуса не запрещает (ARENA-4), значит и ухода в
+    // минус тоже: политика вольна сузить арену «ниже нуля». Сравнение идёт по
+    // квадратам, и без явной проверки знак потерялся бы — арена радиуса −3
+    // считалась бы такой же, как радиуса 3.
+    const h = harness();
+    const center = h.place('Actor', 4, 4);
+    expect(types(h.step())).toEqual([]);
+
+    h.shrink(-3);
+    expect(h.arena.radius()).toBe(fixed.fromInt(-3));
+    // Пусто везде, включая собственный центр: снаружи оказываются все.
+    expect(h.arena.contains(at(4, 4))).toBe(false);
+    expect(h.arena.contains(at(4.5, 4))).toBe(false);
+    expect(types(h.step())).toEqual(['LeftArena']);
+    expect(getField(h.world, center, ARENA_STATE_COMPONENT, 'inside')).toBe(0);
+
+    // Возврат радиуса возвращает и сторону: переход отсчитывается заново.
+    h.shrink(3);
+    expect(types(h.step())).toEqual([]);
+    expect(getField(h.world, center, ARENA_STATE_COMPONENT, 'inside')).toBe(1);
+  });
 });
 
 describe('провал сквозь пол (ARENA-5)', () => {

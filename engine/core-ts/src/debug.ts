@@ -85,18 +85,13 @@ export function withDiagnostics<T>(
   }
 }
 
-/** Контекст, если sink подключён. Диагностика инвариантов идёт на любом уровне трейса (DIAG-3). */
-export function diagnostics(): DiagnosticsContext | undefined {
-  return current;
-}
-
 function atLeast(level: TraceLevel): DiagnosticsContext | undefined {
   if (current === undefined) return undefined;
   return TRACE_ORDER[current.trace] >= TRACE_ORDER[level] ? current : undefined;
 }
 
-/** Контекст, если включён хотя бы уровень границ систем (DIAG-3). */
-export function traceSystems(): DiagnosticsContext | undefined {
+/** Контекст, если включён хотя бы уровень границ систем (DIAG-3). Границы пишет сам этот модуль — наружу не выходит. */
+function traceSystems(): DiagnosticsContext | undefined {
   return atLeast('systems');
 }
 

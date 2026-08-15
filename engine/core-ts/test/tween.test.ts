@@ -167,6 +167,33 @@ describe('easing (TWEEN-2)', () => {
     expect(h.hasTween(target)).toBe(false);
   });
 
+  it('instant не интерполирует ни на одном тике: значение встаёт в to и остаётся', () => {
+    // Скачок — не «очень быстрая интерполяция»: ни промежуточной доли пути, ни
+    // сползания после. Длительность нарочно длинная (четыре тика глобального
+    // шага), чтобы linear на этих же данных дал 25, 50, 75 и разошёлся здесь.
+    const h = harness();
+    const target = h.place();
+    h.step((ctx) => {
+      execute([addTween({ entity: target, easing: EASING_INSTANT, duration: FIXED_ONE })], ctx);
+    });
+
+    expect(h.health(target)).toBe(F(100));
+    expect(h.hasTween(target)).toBe(false);
+    for (let i = 0; i < 3; i++) {
+      h.step();
+      expect(h.health(target)).toBe(F(100));
+    }
+  });
+
+  it('instant на замедленной сущности скачет так же: TimeScale доле пути не мешает', () => {
+    // Обычный твин на `Slowed` за тик доходит до 12.5 (TWEEN-7); instant
+    // проходит мимо оси времени вовсе — доля пути у него не считается.
+    const h = harness();
+    const slowed = h.place('Slowed');
+    h.step((ctx) => { execute([addTween({ entity: slowed, easing: EASING_INSTANT })], ctx); });
+    expect(h.health(slowed)).toBe(F(100));
+  });
+
   it('нулевая длительность завершает твин сразу', () => {
     const h = harness();
     const target = h.place();

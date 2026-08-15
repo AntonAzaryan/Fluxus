@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addTag,
   createWorld,
   cloneWorld,
   destroy,
   getField,
   hasComponent,
+  hasTag,
   indexOf,
   isAlive,
   listAlive,
   setField,
   spawn,
+  toPlain,
   type PrefabDef,
 } from '../src/ecs/world.js';
 import { query } from '../src/ecs/query.js';
@@ -361,6 +364,36 @@ describe('Command Buffer (CMD-1..5)', () => {
     commands2.removeComponent(e, 'Health');
     commands2.flush();
     expect(hasComponent(world, e, 'Health')).toBe(false);
+  });
+});
+
+describe('теги сущности', () => {
+  it('первый тег заводит хранилище под индекс, второй ложится в него же', () => {
+    // Prefab без тегов хранилища не создаёт вовсе — набор тегов разрежен, и
+    // пустое множество на каждую сущность было бы платой ни за что.
+    const world = createWorld(schemas, [prefab('Bare', { Health: {} })]);
+    const bare = spawn(world, 'Bare');
+    expect(hasTag(world, bare, 'lit')).toBe(false);
+    expect(toPlain(world).tags).toEqual([]);
+
+    addTag(world, bare, 'lit');
+    expect(hasTag(world, bare, 'lit')).toBe(true);
+
+    addTag(world, bare, 'burning');
+    expect(hasTag(world, bare, 'burning')).toBe(true);
+    // Первый тег не потерян при появлении второго; в форме они отсортированы (SER-6).
+    expect(toPlain(world).tags).toEqual([[indexOf(world, bare), ['burning', 'lit']]]);
+  });
+
+  it('повторный тег ничего не меняет, а запрос по мёртвой сущности — false', () => {
+    const world = createWorld(schemas, [prefab('Bare', { Health: {} })]);
+    const bare = spawn(world, 'Bare');
+    addTag(world, bare, 'lit');
+    addTag(world, bare, 'lit');
+    expect(toPlain(world).tags).toEqual([[indexOf(world, bare), ['lit']]]);
+
+    destroy(world, bare);
+    expect(hasTag(world, bare, 'lit')).toBe(false);
   });
 });
 

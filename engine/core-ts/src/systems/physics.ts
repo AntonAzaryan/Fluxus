@@ -174,6 +174,12 @@ export class PhysicsWorld {
   /**
    * Общий обход клеток обоих запросов: фильтр — тег (raycast; без тега фильтра
    * нет вовсе) либо маска слоёв (движение, сенсоры).
+   *
+   * ponytail: один запрос стоит двух массивов — индексов кандидатов и выданных
+   * коллайдеров, — а зовут его на каждом шаге оси каждого движущегося и ещё раз
+   * на его сенсоры. Снимается переиспользуемым буфером на `PhysicsWorld` либо
+   * обходом через колбэк; и то и другое — когда профиль на реальной сцене
+   * покажет эти аллокации, а не по вкусу.
    */
   private collect(bounds: Bounds, tag: string | undefined, mask: number | undefined): StaticCollider[] {
     this.queryId++;
@@ -198,6 +204,13 @@ export class PhysicsWorld {
 
 // ------------------------------------------------------------- коллайдеры ECS
 
+/**
+ * ponytail: коллайдер выдаётся новым объектом на каждый вызов. Горячий обход
+ * кандидатов блокировки от этого уже избавлен готовым буфером (`colliderInto`
+ * ниже); остались места, где буфера пока нет, — движущийся раз на тик и
+ * КАЖДОЕ препятствие на sensor-проверке. Второй буфер на `PhysicsSystem`
+ * закрывает и их — когда профиль на реальной сцене покажет эти аллокации.
+ */
 function colliderOf(read: FieldReader, entity: EntityId, component: string): Collider {
   const collider: MutableCollider = { halfX: 0, halfY: 0, shape: 0, radius: 0 };
   colliderInto(read, entity, component, collider);
@@ -301,6 +314,12 @@ export class PhysicsSystem implements System {
     const obstacles = ctx.query({ all: [POSITION_COMPONENT, this.colliderComponent] });
     // Позиции уже разрешённых на этом тике: Command Buffer вливается только в
     // конце системы, а сосед обязан видеть, куда его предшественник уже встал.
+    //
+    // ponytail: карта заводится заново каждый тик, а `positionOf` отдаёт свежую
+    // пару координат на каждого не разрешённого ещё соседа — аллокация,
+    // пропорциональная числу движущихся и препятствий. Долгоживущая карта с
+    // очисткой и чтение координат без объекта-обёртки (как уже сделано в
+    // `nearestBlocker`) снимают и то и другое — по профилю, а не по вкусу.
     const resolved = new Map<EntityId, Vec2>();
     const positionOf = (entity: EntityId): Vec2 =>
       resolved.get(entity) ?? {
@@ -328,6 +347,11 @@ export class PhysicsSystem implements System {
 
         // Пустая маска блокировки не порождает ни огибающих, ни поиска: сквозной
         // снаряд проходит ось, не заплатив за narrow-phase (PHYS-2).
+        //
+        // ponytail: шаг оси стоит четырёх объектов — две огибающие, их
+        // объединение и сам `Move`, — то есть восьми на движущегося за тик.
+        // Все четыре живут ровно до конца итерации и снимаются полями системы,
+        // как уже сделано для кандидата (`candidateBounds`); ждём профиля.
         if (blockMask !== 0) {
           const current = boundsAt(x, y, collider);
           const next = boundsAt(nextX, nextY, collider);
@@ -364,11 +388,19 @@ export class PhysicsSystem implements System {
       // после разрешения. Порядок событий: статика раньше динамики, динамика —
       // по порядку запроса (QUERY-2); одно событие на пару за тик — обход
       // каждого препятствия здесь единственный.
+      //
+      // ponytail: объём хода стоит трёх объектов на движущегося (две огибающие
+      // и объединение), а каждое препятствие в обходе ниже — своей позиции и
+      // своего коллайдера. Те же буферы, что и на шаге оси, снимают и это.
       if (hitMask !== 0) {
         const executed = union(boundsAt(from.x, from.y, collider), boundsAt(x, y, collider));
-        const hitStatics = this.physicsWorld.queryByLayer(executed, hitMask);
-        // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
-        for (let i = 0; i < hitStatics.length; i++) {
+        // Пара «движущийся — статика» наблюдаема как ОДНА: сущности у статики
+        // нет, и `other` у всех отрезков один и тот же (STATIC_COLLIDER). При
+        // этом прямая стена мира — цепочка односкелеточных отрезков (TERR-5,
+        // `ponytail` в `terrain.ts`: соседние не сливаются), и свип вдоль неё
+        // задевает их пачкой. Событие на пару за тик по PHYS-12 ровно одно,
+        // сколько бы звеньев ни попало в объём.
+        if (this.physicsWorld.queryByLayer(executed, hitMask).length > 0) {
           ctx.events.emit('Overlap', { entity: mover, other: STATIC_COLLIDER });
         }
         for (const other of obstacles) {
