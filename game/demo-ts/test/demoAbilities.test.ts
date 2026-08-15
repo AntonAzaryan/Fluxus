@@ -1034,8 +1034,9 @@ describe('фаербол: урон по герою, препятствия и п
   });
 
   it('снаряд взрывается об обрыв плато и дальше не летит', () => {
-    // Герой под южной кромкой северо-западного плато (уровень 2, ряды 11–18,
-    // колонки 11–18): снаряд на север упирается в обрыв на y = 19.
+    // Герой под южной кромкой северо-западного плато (уровень 1, ряды 11–18,
+    // колонки 11–18): снаряд на север упирается в ПОДЪЁМ на y = 19, и гейт
+    // (PHYS-11) при `cliffRise = −1` подъёма не пропускает.
     const a = ffa([[14, 22.5]]);
     const AIM_NORTH = 0xc000; // −y: cos = 0, sin = −1
     a.step([{ buttons: CAST, aimDir: AIM_NORTH }]);
@@ -1149,6 +1150,129 @@ describe('фаербол: урон по герою, препятствия и п
     // Тот самый `carveFloor`, который раньше делал `FireballImpact`: пола под
     // точкой взрыва он больше не снимает, и шаг туда не смертелен.
     expect(terrain.hasFloorAt(at)).toBe(true);
+  });
+});
+
+/**
+ * Снаряд над рельефом ведёт себя как летящий, а не как пешеход: `cliffRise: −1`
+ * в его коллайдере включает направленный гейт обрыва (PHYS-11) с НУЛЕВЫМ
+ * допуском подъёма. Политика тут вся в контенте — знак поля в prefab'е и
+ * одноуровневые плато карты, — а механизм лишь читает поле, поэтому проверяется
+ * это здесь, а не в unit-тестах ядра.
+ *
+ * Геометрия: северо-западное плато — уровень 1, ряды 11–18, колонки 11–18;
+ * западная его кромка — ребро x = 11, восточная — рампа в колонке 19 (ряды
+ * 13–16), проходимая по построению (TERR-5). Ряд 14 весь этот разрез и содержит.
+ */
+describe('фаербол над рельефом: направленный гейт обрыва (PHYS-11)', () => {
+  /** Ряд разреза: он же ряд рампы северо-западного плато. */
+  const ROW_Y = 14.5;
+  /** Западная кромка северо-западного плато. */
+  const RIM_X = 11;
+
+  /** Тик выстрела: фронт ЛКМ и отпускание — самый быстрый тап, обычный шар. */
+  function shoot(a: Ffa, aimDir: number): EntityId {
+    a.step([{ buttons: CAST, aimDir }]);
+    a.step([{ aimDir }]);
+    const shot = fireballs(a.state)[0]!;
+    expect(shot).toBeDefined();
+    return shot;
+  }
+
+  it('выстрел в подъём взрывается о кромку плато', () => {
+    // Стрелок на земле к западу от плато: снаряд идёт на восток, в подъём.
+    const a = ffa([[8.5, ROW_Y]]);
+    const shot = shoot(a, AIM_EAST);
+    expect(a.sim.terrain!.levelAt({ x: x(a.state, shot), y: y(a.state, shot) })).toBe(0);
+
+    let exploded = false;
+    let stopX = 0;
+    for (let i = 0; i < 12 && fireballs(a.state).length > 0; i++) {
+      stopX = x(a.state, shot);
+      exploded = a.step().includes('FireballExploded');
+      if (exploded) break;
+    }
+    expect(exploded).toBe(true);
+    expect(fireballs(a.state)).toHaveLength(0);
+    // Взрыв пришёлся на кромку, а не на конец жизни: до неё лететь семь тиков.
+    expect(stopX).toBeGreaterThan((RIM_X - 1) * FIXED_ONE);
+    expect(stopX).toBeLessThan(RIM_X * FIXED_ONE);
+  });
+
+  it('выстрел С плато вниз свою кромку пролетает', () => {
+    // Тот же самый обрыв, что и в тесте выше, — но заходом со стороны спуска:
+    // герой стоит НА плато, и его снаряд уходит с кромки на землю, не
+    // детонируя о неё. Ровно это и невыразимо при `cliffRise: 0`.
+    const a = ffa([[15.5, ROW_Y]]);
+    const terrain = a.sim.terrain!;
+    expect(terrain.levelOf(a.heroes[0]!)).toBe(1);
+
+    const shot = shoot(a, AIM_WEST);
+    expect(terrain.levelAt({ x: x(a.state, shot), y: y(a.state, shot) })).toBe(1);
+
+    let exploded = false;
+    let crossed = false;
+    for (let i = 0; i < 20 && !crossed; i++) {
+      exploded = a.step().includes('FireballExploded');
+      if (exploded || fireballs(a.state).length === 0) break;
+      crossed = x(a.state, shot) < (RIM_X - 0.5) * FIXED_ONE;
+    }
+    expect(exploded).toBe(false);
+    expect(crossed).toBe(true);
+    // Снаряд жив, летит дальше и уже на земле — спуск гейт пропустил целиком.
+    expect(fireballs(a.state)).toContain(shot);
+    expect(vel(a.state, shot, 'x')).toBeLessThan(0);
+    expect(terrain.levelAt({ x: x(a.state, shot), y: y(a.state, shot) })).toBe(0);
+  });
+
+  it('по рамповому коридору снаряд идёт насквозь — подниматься там не через что', () => {
+    // Рампа обрыва не порождает (TERR-5): переход в единицу через клетку-рампу
+    // проходим, статики на нём нет, и гейт снаряда там вообще не спрашивают.
+    // Снаряд с востока входит в коридор колонки 19 и оказывается НА плато.
+    const a = ffa([[22.5, ROW_Y]]);
+    const terrain = a.sim.terrain!;
+    const shot = shoot(a, AIM_WEST);
+
+    let exploded = false;
+    let onPlateau = false;
+    for (let i = 0; i < 20 && !onPlateau; i++) {
+      exploded = a.step().includes('FireballExploded');
+      if (exploded || fireballs(a.state).length === 0) break;
+      const at = { x: x(a.state, shot), y: y(a.state, shot) };
+      onPlateau = at.x < 18 * FIXED_ONE && terrain.levelAt(at) === 1;
+    }
+    expect(exploded).toBe(false);
+    expect(onPlateau).toBe(true);
+    expect(fireballs(a.state)).toContain(shot);
+  });
+
+  it('над клетками без пола снаряд летит дальше и не падает', () => {
+    // У снаряда нет `FallConfig`, а `FallStart` без него `Falling` не вешает —
+    // провал в пустоту это политика героев, а не всего, что пересекло кромку
+    // диска. Стрелок у западного края диска бьёт наружу, за границу пола.
+    expect(SCENE.prefabs!.find((p) => p.name === 'Fireball')!.components.FallConfig).toBeUndefined();
+    const a = ffa([[6, 24.5]]);
+    const terrain = a.sim.terrain!;
+    const shot = shoot(a, AIM_WEST);
+
+    let overVoid = false;
+    let exploded = false;
+    let lastX = x(a.state, shot);
+    for (let i = 0; i < 20 && !overVoid; i++) {
+      exploded = a.step().includes('FireballExploded');
+      if (exploded || fireballs(a.state).length === 0) break;
+      const at = { x: x(a.state, shot), y: y(a.state, shot) };
+      // Летит, а не оседает: шаг по оси выстрела на каждом тике полноценный.
+      expect(at.x).toBeLessThan(lastX);
+      lastX = at.x;
+      overVoid = !terrain.hasFloorAt(at);
+    }
+    expect(exploded).toBe(false);
+    expect(overVoid).toBe(true);
+    // Над пустотой снаряд жив и падать не начал.
+    expect(fireballs(a.state)).toContain(shot);
+    expect(coreWorld.hasComponent(a.state.world, shot, 'Falling')).toBe(false);
+    expect(coreWorld.hasComponent(a.state.world, shot, 'LevelOverride')).toBe(false);
   });
 });
 
