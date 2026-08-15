@@ -1,0 +1,12 @@
+{
+  "//": "Electron-клей: проверяется отдельно и вне гейта (DSK-6 — `npm run check` зелёный в окружении без установленного контейнера). Команда — `npm run typecheck:electron -w @game-mvp/desktop-shell`; без установленного electron она честно падает на ненайденных типах, и это ровно та причина, по которой клей не в гейтовом проекте.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src/**/*"
+  ]
+}

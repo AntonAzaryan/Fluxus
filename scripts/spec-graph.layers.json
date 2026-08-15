@@ -31,7 +31,9 @@
     "editor": "editor-content",
     "blender-pipeline": "editor-content",
     "game-content": "editor-content",
-    "presentation-scene": "editor-content"
+    "presentation-scene": "editor-content",
+    "desktop-shell": "editor-content",
+    "bot-player": "editor-content"
   },
   "exceptions": [
     {

@@ -10,6 +10,7 @@
  * factor): поворот от вертикали к нормали — один поворот вокруг фиксированной
  * оси, и slerp по нему — это доля угла.
  */
+import * as THREE from 'three';
 import type { SurfaceNormal } from '../visualSurface.js';
 
 export interface TiltVector {
@@ -39,6 +40,32 @@ export function tiltTarget(
   out.x = (-normal.y / sin) * angle;
   out.y = (normal.x / sin) * angle;
   return out;
+}
+
+// Переиспользуемые объекты композиции ориентации — аллокаций на кадр нет.
+const WORLD_UP = new THREE.Vector3(0, 0, 1);
+const SCRATCH_AXIS = new THREE.Vector3();
+const SCRATCH_Q_TILT = new THREE.Quaternion();
+const SCRATCH_Q_YAW = new THREE.Quaternion();
+
+/**
+ * Ориентация инстанса из наклона и курса: сперва курс вокруг вертикали, поверх
+ * — наклон в мировых осях. Общая для подсистемы моделей и walkable-реестра поля
+ * высот (REND-9): трансформ walkable-поверхности обязан быть ровно тем, каким
+ * инстанс нарисован, и композиция поворотов у них поэтому одна, а не две
+ * похожие. Пишет в out и возвращает его.
+ */
+export function orientFromTiltYaw(
+  tilt: TiltVector,
+  yaw: number,
+  out: THREE.Quaternion,
+): THREE.Quaternion {
+  SCRATCH_Q_YAW.setFromAxisAngle(WORLD_UP, yaw);
+  const angle = Math.hypot(tilt.x, tilt.y);
+  if (angle < 1e-6) return out.copy(SCRATCH_Q_YAW);
+  SCRATCH_AXIS.set(tilt.x / angle, tilt.y / angle, 0);
+  SCRATCH_Q_TILT.setFromAxisAngle(SCRATCH_AXIS, angle);
+  return out.multiplyQuaternions(SCRATCH_Q_TILT, SCRATCH_Q_YAW);
 }
 
 /** Экспоненциальное сглаживание к цели (по образцу smoothYaw REND-5). */

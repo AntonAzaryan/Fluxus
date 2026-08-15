@@ -62,6 +62,10 @@
       "source": "82ed864d",
       "translated": "a2e1019c"
     },
+    "action.set": {
+      "source": "c4d2f755",
+      "translated": "e5064b82"
+    },
     "action.spawnEntity": {
       "source": "15533f09",
       "translated": "8ac1df7f"
@@ -229,6 +233,18 @@
     "operator.or": {
       "source": "a4b4fa15",
       "translated": "a5f922fc"
+    },
+    "operator.raycastEntity": {
+      "source": "bb191cc6",
+      "translated": "d4485ccd"
+    },
+    "operator.raycastHit": {
+      "source": "7dd5eb18",
+      "translated": "08614bbe"
+    },
+    "operator.raycastPoint": {
+      "source": "53bbb572",
+      "translated": "1071256b"
     },
     "operator.sin": {
       "source": "9c8b9a67",
@@ -405,6 +421,14 @@
     "schema.scenario.locomotion.jumpButton": {
       "source": "9249a416",
       "translated": "c077d1ba"
+    },
+    "schema.scenario.locomotion.lockComponent": {
+      "source": "2669a2e1",
+      "translated": "0d839e2a"
+    },
+    "schema.scenario.locomotion.maneuverLockBit": {
+      "source": "e5f6a50f",
+      "translated": "a6e77644"
     },
     "schema.scenario.locomotion.name": {
       "source": "aa4386a3",

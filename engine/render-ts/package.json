@@ -6,7 +6,8 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./visualSurface": "./src/visualSurface.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -19,7 +20,8 @@
   "dependencies": {
     "@game-mvp/assets": "*",
     "@game-mvp/core": "*",
-    "three": "^0.185.1"
+    "three": "^0.185.1",
+    "three.quarks": "0.17.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

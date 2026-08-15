@@ -122,7 +122,9 @@ async function readSource(
 function slotsOf(objects: readonly SourceObject[]): ImportSlots {
   const has = (kind: string): boolean =>
     objects.some((object) => object.semantics.length === 1 && object.semantics[0] === kind);
-  return { terrain: has('terrain'), curvature: has('curvature') };
+  // Скалпт-поверхность переписывает ОБА клеточных слоя (BLND-13).
+  const sculpt = has('sculpt');
+  return { terrain: sculpt || has('terrain'), curvature: sculpt || has('curvature') };
 }
 
 export async function runImport(request: ImportRequest): Promise<ImportResult> {

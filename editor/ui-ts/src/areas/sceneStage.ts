@@ -5,9 +5,10 @@
  * Здесь редактор встречается с рендером движка, и вся встреча — регистрация
  * подсистем и подача документного набора. Собственного рендера у редактора нет
  * (ED-1): террейн рисует `TerrainSubsystem` (REND-7, REND-9), модели —
- * `ModelsSubsystem` (REND-3..6, REND-10), служебные наложения —
- * `OverlaySubsystem` (REND-16), а presentation-состояние наполняет
- * `DocumentSource` (REND-11) — тот же вход подсистем, что у потока тиков.
+ * `ModelsSubsystem` (REND-3..6, REND-10), эмиттерные виды — `ParticlesSubsystem`
+ * (REND-24), служебные наложения — `OverlaySubsystem` (REND-16), а
+ * presentation-состояние наполняет `DocumentSource` (REND-11) — тот же вход
+ * подсистем, что у потока тиков.
  *
  * Тика в режиме правки нет (ED-15): кадровый цикл не двигает мир, а только
  * сводит документный набор, считает позу камеры конвейером (ED-13) и рисует.
@@ -141,6 +142,7 @@ import {
   DocumentSource,
   ModelsSubsystem,
   OverlaySubsystem,
+  ParticlesSubsystem,
   PresentationStage,
   TerrainSubsystem,
   ViewportPicking,
@@ -392,6 +394,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   let surface: VisualSurfaceSource | null = null;
   let terrain: TerrainSubsystem | null = null;
   let models: ModelsSubsystem | null = null;
+  let particles: ParticlesSubsystem | null = null;
   let overlays: OverlaySubsystem | null = null;
   let picking: ViewportPicking | null = null;
   let camera: SceneCamera | null = null;
@@ -547,8 +550,27 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       terrain = new TerrainSubsystem(first, { surface });
       presentation.register(terrain);
     }
-    models = new ModelsSubsystem(visuals, surface === null ? {} : { surface });
+    // Камера подсистеме — вход отсечения невидимых инстансов (REND-21): та же
+    // самая (`camera3`), которой рисуется кадр и считается луч наведения. Позу
+    // на неё сажает `applyCameraPose` до кадра подсистем (см. `frame`), поэтому
+    // отсекается по пирамиде ЭТОГО кадра, а не прошлого.
+    models = new ModelsSubsystem(visuals, {
+      camera: camera3,
+      ...(surface === null ? {} : { surface }),
+    });
     presentation.register(models);
+    // Частицы (REND-24) — после моделей, как и в игровой сборке: эмиттер с
+    // сокетом снимает позу узла инстанса, посаженного в этом же кадре. Автору
+    // она нужна ради decoration-эмиттеров: факел на арене — такое же
+    // размещение, как статуя (ASSET-14, PRES-2), и не видеть его в кадре
+    // правки значило бы ставить его вслепую (ED-15). Словаря состояний у
+    // редактора нет: доставленных состояний в кадре правки не бывает вовсе
+    // (тика здесь нет), и записи `particles.byState` в нём не оживают.
+    particles = new ParticlesSubsystem(visuals, {
+      sockets: models,
+      ...(surface === null ? {} : { surface }),
+    });
+    presentation.register(particles);
     if (surface !== null) {
       // Подсистему наложений регистрирует только вьюпорт редактора (REND-16):
       // в игровом кадре её нет по конструкции. Подсветка встаёт по видимой позе
@@ -790,6 +812,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       // их правленым манифестом, а не тем, с которым собирался вьюпорт.
       visuals = next;
       models?.applyManifest(next);
+      particles?.applyManifest(next);
     },
     get flying(): boolean {
       return camera?.flying ?? false;

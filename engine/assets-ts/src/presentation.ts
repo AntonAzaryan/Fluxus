@@ -50,6 +50,13 @@ export interface DecorationRecord {
   readonly scale?: number;
   /** Имя скина записи вида (`rendering` REND-6); нет — скин записи. */
   readonly skin?: string;
+  /**
+   * Поверхность меша модели этого вида входит в единое поле высот визуальной
+   * поверхности рендера (`rendering` REND-9); нет — false, и отсутствие с
+   * явным false неразличимы (PRES-2). Поле presentation-слоя, а не геймплейное:
+   * запрет влияния на симуляцию действует на него по PRES-4.
+   */
+  readonly walkable?: boolean;
 }
 
 /**
@@ -141,7 +148,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 /** Состав закрыт (PRES-2): ключ, которого формат не знает, — ошибка, а не игнор. */
 const DOCUMENT_KEYS: readonly string[] = ['decorations'];
-const RECORD_KEYS: readonly string[] = ['visual', 'x', 'y', 'yaw', 'scale', 'skin'];
+const RECORD_KEYS: readonly string[] = ['visual', 'x', 'y', 'yaw', 'scale', 'skin', 'walkable'];
 
 function validateRecord(entry: unknown, path: string, errors: string[]): void {
   if (!isRecord(entry)) {
@@ -185,6 +192,14 @@ function validateRecord(entry: unknown, path: string, errors: string[]): void {
   }
   if ('skin' in entry && (typeof entry.skin !== 'string' || entry.skin.length === 0)) {
     errors.push(`${path}.skin: ожидалось имя скина (непустая строка), получено ${typeName(entry.skin)}`);
+  }
+  // Небулево значение — адресный отказ (PRES-2): «правдоподобные» 0/1 и "yes"
+  // не принимаются, потому что отсутствие и false неразличимы, и любое третье
+  // прочтение поля молча меняло бы форму визуальной поверхности (REND-9).
+  if ('walkable' in entry && typeof entry.walkable !== 'boolean') {
+    errors.push(
+      `${path}.walkable: ожидался булев флаг walkable-поверхности (true либо false), получено ${typeName(entry.walkable)}`,
+    );
   }
 }
 

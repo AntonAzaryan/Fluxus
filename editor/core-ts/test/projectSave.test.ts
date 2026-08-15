@@ -165,8 +165,13 @@ describe('ED-21, PRES-3: парный документ переживает «о
         value,
       });
     };
-    edit(7.125);
-    edit(5.5);
+    // Возвращаемое значение читается из документа, а не пишется числом: тест
+    // пиннится на настоящем контенте, а координаты декораций — дело дизайнера.
+    const original = (
+      decodeDocument(canonical) as { decorations: readonly { x: number }[] }
+    ).decorations[0]!.x;
+    edit(original + 1.625);
+    edit(original);
 
     const result = await saveDocuments({ session, host: host.content });
 
@@ -206,6 +211,48 @@ describe('ED-21, PRES-3: парный документ переживает «о
     // Дифф правки — одна строка: ради читаемости диффа квантование и заведено.
     const lines = changedLines(decoder.decode(handwritten), host.text(PRESENTATION_PATH));
     expect(lines).toHaveLength(1);
+  });
+
+  it('walkable записи переживает «открыл — сохранил» как есть: true, явный false, отсутствие (PRES-2)', async () => {
+    // Неразличимость false и отсутствия (PRES-2) — правило ЗАПИСЫВАЮЩЕЙ
+    // операции (false не пишется), а не сохранения: канонический вид значение
+    // сохраняет как есть (ED-21), и рукописный `walkable: false` не
+    // выбрасывается и не дописывается — как и у остальных необязательных полей.
+    const handwritten = encodeDocument({
+      decorations: [
+        { visual: 'Bridge', x: 1, y: 2, walkable: true },
+        { visual: 'Bridge', x: 3, y: 4, walkable: false },
+        { visual: 'Bridge', x: 5, y: 6 },
+      ],
+    });
+    const host = createMemoryHost({ files: { [PRESENTATION_PATH]: handwritten } });
+    const session = newSession();
+    await openDocumentFromHost(session, host.content, {
+      id: PRESENTATION_PATH,
+      kind: 'presentation',
+      lists: [['decorations']],
+    });
+
+    // «Открыл — сохранил без правок»: ни байта диффа.
+    const untouched = await saveDocuments({ session, host: host.content });
+    expect(untouched).toMatchObject({ refused: false, written: [] });
+    expect(host.bytes(PRESENTATION_PATH)).toEqual(handwritten);
+
+    // Правка другой записи не трогает walkable-поля соседей (ED-21).
+    session.applyOperation('document.list.setValue', {
+      document: PRESENTATION_PATH,
+      record: session.descriptors(PRESENTATION_PATH, ['decorations'])[2]!,
+      path: ['x'],
+      value: 7,
+    });
+    await saveDocuments({ session, host: host.content });
+
+    const saved = decodeDocument(host.bytes(PRESENTATION_PATH)) as {
+      decorations: readonly Record<string, JsonValue>[];
+    };
+    expect(saved.decorations[0]).toEqual({ visual: 'Bridge', x: 1, y: 2, walkable: true });
+    expect(saved.decorations[1]).toEqual({ visual: 'Bridge', x: 3, y: 4, walkable: false });
+    expect(saved.decorations[2]).toEqual({ visual: 'Bridge', x: 7, y: 6 });
   });
 
   it('парный документ — член группы записи тройки (ED-19)', () => {
@@ -285,6 +332,7 @@ describe('ED-21, SER-8: порядок записей расстановки п�
     // Правится ПЕРВАЯ запись — та, чья перестановка сдвинула бы ID всех
     // остальных, то есть изменила бы `worldInit` документа, который автор
     // в остальном не трогал.
+    const before = initialOf(decodeDocument(canonical));
     const first = session.descriptors(MATCH_PATH, ['initial'])[0]!;
     session.applyOperation('document.list.setValue', {
       document: MATCH_PATH,
@@ -294,10 +342,13 @@ describe('ED-21, SER-8: порядок записей расстановки п�
     });
     await saveDocuments({ session, host: host.content });
 
+    // Ожидание строится из прочитанного документа, а не из переписанного сюда
+    // контента: остальные поля записей — дело дизайнера, а тест про порядок.
+    const patched = before[0] as { overrides?: Record<string, JsonValue> };
     const after = initialOf(decodeDocument(host.bytes(MATCH_PATH)));
     expect(after).toEqual([
-      { prefab: 'Hero', overrides: { Player: { slot: 7 } } },
-      { prefab: 'Hero', overrides: { Player: { slot: 1 } } },
+      { ...patched, overrides: { ...patched.overrides, Player: { slot: 7 } } },
+      before[1],
     ]);
   });
 });

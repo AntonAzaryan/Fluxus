@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   HudRegistry,
+  entityStat,
   type HudComposition,
   type HudDeliveredEvent,
   type HudEntityView,
@@ -93,6 +94,41 @@ describe('перемотка (HUD-5)', () => {
 
     const seen = created[0]!.updates.map((update) => (update.values.hero as HudEntityView).snap);
     expect(seen).toEqual([false, true]);
+  });
+
+  it('статы сущности видны селектору, скрытых сущностей в доставке нет (HUD-8, HUD-1)', () => {
+    const created: CaptureWidget[] = [];
+    const registry = new HudRegistry();
+    registry.registerWidget(captureKind('heroPanel', created));
+    registry.registerSelector('hero', (state) => state.entities.get(1));
+    registry.registerSelector('enemy', (state) => state.entities.get(2));
+    const { runtime } = makeRuntime(registry);
+    runtime.apply({
+      entries: [{ widget: 'heroPanel', zone: 'left', bindings: { hero: 'hero', enemy: 'enemy' } }],
+    });
+
+    const hero: HudEntityView = {
+      id: 1,
+      kind: 'hero',
+      currX: 0,
+      currY: 0,
+      currLevel: 0,
+      snap: false,
+      spawned: false,
+      moving: false,
+      stats: new Map([['hp', 7]]),
+    };
+    runtime.subsystem.syncTick(
+      makeView({ tick: 1, statNames: ['hp', 'hpMax'], entities: new Map([[1, hero]]) }),
+    );
+
+    const update = created[0]!.updates[0]!;
+    expect(entityStat(update.values.hero as HudEntityView, 'hp')).toBe(7);
+    // Объявленный, но не доехавший стат — «нет данных», а не ноль (HUD-8).
+    expect(entityStat(update.values.hero as HudEntityView, 'hpMax')).toBeUndefined();
+    // Сущность противника не доставлена (туман войны): статов у неё нет по
+    // построению — утечь через них нечему (HUD-1).
+    expect(entityStat(update.values.enemy as HudEntityView | undefined, 'hp')).toBeUndefined();
   });
 
   it('нечестный проход (freshEvents=false) не проигрывает события повторно', () => {

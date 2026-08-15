@@ -5,7 +5,7 @@
  *
  * Здесь живут сокет и таймер — всё, чего нет внутри `MatchServer` (NTR-3).
  */
-import { flag, option, readMatchFile } from './matchFile.mjs';
+import { flag, matchConfigOf, option, readMatchFile } from './matchFile.mjs';
 
 const file = process.argv[2];
 if (file === undefined || file.startsWith('--')) {
@@ -24,29 +24,10 @@ const port = Number(option('port', '8080'));
 const pack = contentPack(match.scenes);
 const serializer = flag('json') ? jsonSerializer : msgpackSerializer;
 
-const tickRate = match.tickRate ?? 60;
-const server = new MatchServer({
-  version: { buildId: match.buildId, contentPackHash: pack.hash },
-  players: match.players,
-  seed: match.seed,
-  sceneRef: match.sceneRef,
-  scene: pack.scene(match.sceneRef),
-  initial: match.initial ?? [],
-  name: match.name,
-  tickRate,
-  snapshotRate: match.snapshotRate ?? 30,
-  inputDelay: match.inputDelay ?? 2,
-  ...(match.inputWindow !== undefined ? { inputWindow: match.inputWindow } : {}),
-  ...(match.eventRepeat !== undefined ? { eventRepeat: match.eventRepeat } : {}),
-  silenceTicks: (match.silenceSeconds ?? 10) * tickRate,
-  allowObserver: flag('observer'),
-  // Зависимость сборки мира из файла матча (NTR-14): без неё сцена,
-  // рассчитанная на интегрирующую физику, молча стояла бы на месте.
-  ...(match.physics !== undefined ? { physics: match.physics } : {}),
-  // Пересчёт видимости — такая же зависимость сборки (NTR-14): сцена с туманом
-  // войны без него не собирается вовсе, а не идёт с замороженными масками.
-  ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
-});
+// Раскладка документа матча в конфиг — общая с остальными запускалками
+// (`matchConfigOf`), включая зависимости сборки мира (NTR-14). Своё здесь одно:
+// наблюдатель — решение запуска, а не свойство матча.
+const server = new MatchServer({ ...matchConfigOf(match, pack), allowObserver: flag('observer') });
 
 const host = new MatchHost(server, webSocketTransportServer({ port }), { serializer });
 

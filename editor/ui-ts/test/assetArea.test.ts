@@ -286,6 +286,32 @@ describe('ASSET-4: починенный ассет загружается зан
   });
 });
 
+describe('ASSET-14: эмиттерный ассет входит в комплектацию редактора', () => {
+  const ID = 'visuals/effects/torch.effect.json';
+  /** Документ формы корня (ASSET-14); начинку его тут проверять нечем и незачем. */
+  const EFFECT = JSON.stringify({
+    metadata: { version: 4.7, type: 'Object', generator: 'Object3D.toJSON' },
+    object: { type: 'Group', name: 'Torch', children: [{ type: 'ParticleEmitter', name: 'Torch' }] },
+  });
+
+  it('модуль ассетов разбирает документ эффекта, а не отказывает «нет загрузчика»', async () => {
+    // Вьюпорт редактора рисует эмиттерные decoration-виды подсистемой частиц
+    // (`rendering` REND-24), а документ эффекта приезжает ей обычным ассетом
+    // (ASSET-3): не зарегистрируй модуль загрузчик — каждая эмиттерная запись
+    // молча пропускалась бы, и факел, поставленный автором, в кадре не появился
+    // бы никогда.
+    const tree = createMemoryHost({
+      name: 'effects',
+      root: { label: 'дерево' },
+      files: { [ID]: EFFECT },
+    });
+    const assets = createAssetModule(tree);
+    const handle = assets.request('particle-effect', ID);
+    await settle();
+    expect(assets.state(handle).status).toBe('ready');
+  });
+});
+
 describe('ED-20: отказ ассета показан не навсегда', () => {
   it('автор просит попробовать снова — и просмотрщик показывает загруженное', async () => {
     const reason = 'ассет "visuals/models/broken.mdx": не разбирается как MDX';

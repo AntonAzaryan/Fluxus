@@ -48,12 +48,20 @@ import {
  * объекта: имя — ключ порядка записей (BLND-4), и нагружать его вторым смыслом
  * значило бы связать порядок с семантикой.
  */
-export const SEMANTIC_KEYS = ['prefab', 'visual', 'terrain', 'curvature'] as const;
+export const SEMANTIC_KEYS = ['prefab', 'visual', 'terrain', 'curvature', 'sculpt'] as const;
 
 export type SemanticKind = (typeof SEMANTIC_KEYS)[number];
 
 /** Custom property скина decoration (PRES-2). Семантикой объекта не является. */
 export const SKIN_KEY = 'skin';
+
+/**
+ * Custom property walkable-флага decoration (BLND-3): поверхность меша вида
+ * входит в единое поле высот рендера (`rendering` REND-9, поле записи — PRES-2).
+ * Семантикой объекта не является — семантику задаёт `visual`, а флаг лишь
+ * дополняет запись, и на объекте другой семантики он — ошибка импорта.
+ */
+export const WALKABLE_KEY = 'walkable';
 
 /** Полный оборот в радианах: `yaw` конвейера — доля оборота, `atan2` — радианы. */
 const TURN_RADIANS = Math.PI * 2;

@@ -19,9 +19,9 @@
  * - поверхность — `VisualSurface` (REND-9), то самое поле высот, по которому
  *   построена геометрия террейна;
  * - объект — объём-прокси инстанса, преобразованный НЕ повторным расчётом позы,
- *   а МАТРИЦЕЙ ТОГО ЖЕ УЗЛА, который подсистема моделей поставила в кадре
+ *   а ТЕМ ЖЕ ПРЕОБРАЗОВАНИЕМ, которым подсистема моделей нарисовала его в кадре
  *   (посадка на поверхность REND-9, вертикальное смещение REND-12, наклон
- *   REND-10, курс с поправкой переда REND-13, масштаб REND-11 — всё уже в ней).
+ *   REND-10, курс с поправкой переда REND-13, масштаб REND-11 — всё уже в нём).
  *
  * Детерминированный raycast ядра (PHYS-6) здесь не используется намеренно: он
  * считает по коллайдерам симуляционного мира, которого в режиме правки нет
@@ -41,9 +41,15 @@ import type { VisualSurface } from './visualSurface.js';
 // ------------------------------------------------------------------- прокси
 
 /**
- * Объём-прокси участника picking'а: узел ВИДИМОГО преобразования и габариты в
- * его локальных осях. Запись переиспользуется источником, поэтому читать её
- * можно только внутри визита — по образцу `TickResult` ядра (OBS-3).
+ * Объём-прокси участника picking'а: ВИДИМОЕ ПРЕОБРАЗОВАНИЕ и габариты в его
+ * локальных осях. Запись переиспользуется источником, поэтому читать её можно
+ * только внутри визита — по образцу `TickResult` ядра (OBS-3).
+ *
+ * Преобразование приходит числами (позиция, кватернион, масштаб), а не узлом
+ * сцены: узел — представление инстанса детального яруса, и у батчевой записи
+ * (REND-20) его не существует вовсе. Публичный контракт рендера узлов конкретной
+ * библиотеки не отдаёт (REND-3); алгоритм пересечения от этого не меняется —
+ * матрица собирается из тех же величин, которыми объект нарисован.
  */
 export interface PickProxy {
   /** Сущность presentation-состояния; 0 — прокси не сущности, а ручки. */
@@ -56,8 +62,19 @@ export interface PickProxy {
   decoration: boolean;
   /** Идентичность ручки наложения (REND-16); null — прокси инстанса. */
   handle: string | null;
-  /** Узел, чьей мировой матрицей инстанс или ручка нарисованы. */
-  node: THREE.Object3D;
+  /** Позиция видимого преобразования, мировые оси. */
+  posX: number;
+  posY: number;
+  posZ: number;
+  /** Кватернион видимого преобразования `(x, y, z, w)`. */
+  quatX: number;
+  quatY: number;
+  quatZ: number;
+  quatW: number;
+  /** Масштаб видимого преобразования по осям. */
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
   minX: number;
   minY: number;
   minZ: number;
@@ -94,7 +111,16 @@ export function createPickProxy(): PickProxy {
     entity: 0,
     decoration: false,
     handle: null,
-    node: EMPTY_NODE,
+    posX: 0,
+    posY: 0,
+    posZ: 0,
+    quatX: 0,
+    quatY: 0,
+    quatZ: 0,
+    quatW: 1,
+    scaleX: 1,
+    scaleY: 1,
+    scaleZ: 1,
     minX: 0,
     minY: 0,
     minZ: 0,
@@ -103,9 +129,6 @@ export function createPickProxy(): PickProxy {
     maxZ: 0,
   };
 }
-
-/** Узел-пустышка новой записи; попадания не даёт — объём вырожден. */
-const EMPTY_NODE = new THREE.Object3D();
 
 // -------------------------------------------------------------- контракты
 
@@ -245,6 +268,10 @@ export class ViewportPicking {
   private readonly inverse = new THREE.Matrix4();
   private readonly localOrigin = new THREE.Vector3();
   private readonly localTip = new THREE.Vector3();
+  /** Скретчи сборки матрицы прокси из его преобразования; между вызовами живут. */
+  private readonly proxyPosition = new THREE.Vector3();
+  private readonly proxyQuaternion = new THREE.Quaternion();
+  private readonly proxyScale = new THREE.Vector3();
 
   /** Состояние поиска ближайшего прокси — поля, а не замыкание: визит зовётся на каждый инстанс. */
   private searchRay: PickRay = this.rayScratch;
@@ -319,16 +346,45 @@ export class ViewportPicking {
     const ray = this.ray(pose, point);
     if (this.pickProxies(ray, this.options.handles, 'handle')) return this.hit;
     if (this.pickProxies(ray, this.options.instances, 'entity')) return this.hit;
-    return this.marchSurface(ray) ? this.hit : null;
+    return this.pickSurfaceRay(ray) ? this.hit : null;
   }
 
   /**
    * Только поверхность: кистям террейна (ED-10, ED-11) клетка нужна и тогда,
    * когда над ней стоит объект. Порядок разрешения этим не отменяется — им
    * пользуется `pick`, а инструмент вправе спросить именно поверхность.
+   * Walkable-поверхность — часть поверхности (REND-15): кисть по настилу
+   * попадает в настил, а не в лощину под ним.
    */
   pickSurface(pose: CameraPose, point: ViewportPoint): PickHit | null {
-    return this.marchSurface(this.ray(pose, point)) ? this.hit : null;
+    return this.pickSurfaceRay(this.ray(pose, point)) ? this.hit : null;
+  }
+
+  /**
+   * Попадание в поверхность — min-t двух ветвей (REND-15): марш по террейн-
+   * форме и рейкаст по walkable-мешам тем же преобразованием, каким они
+   * нарисованы (ASSET-11 — второй реализации пересечения с мешом нет).
+   * Walkable-`t` ограничивает марш сверху: террейн-попадание дальше него
+   * не ищется — побеждает walkable.
+   */
+  private pickSurfaceRay(ray: PickRay): boolean {
+    const tWalk = this.options.surface.walkableRaycast(
+      ray.originX, ray.originY, ray.originZ,
+      ray.dirX, ray.dirY, ray.dirZ,
+    );
+    const limit = tWalk < 0 ? Number.POSITIVE_INFINITY : tWalk;
+    if (this.marchSurface(ray, limit)) return true;
+    if (tWalk < 0) return false;
+    // Walkable-победа: surface-hit с клеткой сетки ПОД мировой точкой попадания
+    // (REND-15) — noFloor из неё же, стенкой обрыва попадание не является.
+    const grid = this.options.surface.terrain;
+    const tile = grid.tileSize / FIXED_ONE;
+    const wx = ray.originX + ray.dirX * tWalk;
+    const wy = ray.originY + ray.dirY * tWalk;
+    const cx = clampIndex(Math.floor(wx / tile), grid.width);
+    const cy = clampIndex(Math.floor(wy / tile), grid.height);
+    this.writeSurfaceHit(ray, tWalk, cx, cy, false);
+    return true;
   }
 
   // ------------------------------------------------------------- прокси
@@ -366,18 +422,20 @@ export class ViewportPicking {
   }
 
   /**
-   * Пересечение луча с объёмом прокси. Луч переводится в локальные оси УЗЛА, то
-   * есть той матрицей, которой узел и нарисован: позы инстанса здесь не
-   * вычисляются заново — ни посадки на поверхность, ни наклона, ни курса.
-   * Параметр `t` при этом остаётся мировым: направление переводится как вектор
-   * без нормировки, поэтому шкала параметра сохраняется.
+   * Пересечение луча с объёмом прокси. Луч переводится в ЛОКАЛЬНЫЕ ОСИ ПРОКСИ —
+   * матрицей, собранной из того самого преобразования, которым объект нарисован:
+   * позы инстанса здесь не вычисляются заново — ни посадки на поверхность, ни
+   * наклона, ни курса. Параметр `t` при этом остаётся мировым: направление
+   * переводится как вектор без нормировки, поэтому шкала параметра сохраняется.
+   *
+   * Алгоритм — тот же слэбовый тест AABB, что и до перехода прокси с узла сцены
+   * на преобразование: сменился источник матрицы, а не пересечение (REND-15).
    */
   private intersectProxy(ray: PickRay, proxy: PickProxy): number {
-    const node = proxy.node;
-    // Мировые матрицы обновляет рендерер перед отрисовкой; наведение спрашивают
-    // и между кадрами, поэтому матрица узла подтягивается из его же позы.
-    node.updateWorldMatrix(true, false);
-    this.inverse.copy(node.matrixWorld).invert();
+    this.proxyPosition.set(proxy.posX, proxy.posY, proxy.posZ);
+    this.proxyQuaternion.set(proxy.quatX, proxy.quatY, proxy.quatZ, proxy.quatW);
+    this.proxyScale.set(proxy.scaleX, proxy.scaleY, proxy.scaleZ);
+    this.inverse.compose(this.proxyPosition, this.proxyQuaternion, this.proxyScale).invert();
     this.localOrigin.set(ray.originX, ray.originY, ray.originZ).applyMatrix4(this.inverse);
     this.localTip
       .set(ray.originX + ray.dirX, ray.originY + ray.dirY, ray.originZ + ray.dirZ)
@@ -444,15 +502,19 @@ export class ViewportPicking {
   // --------------------------------------------------------- поверхность
 
   /**
-   * Марш луча по полю высот визуальной поверхности (REND-9): по клеткам, с
-   * уточнением корня внутри клетки. Поверхность и сетка читаются ТЕКУЩИЕ —
-   * правка кистью меняет ответ, пересоздания сервиса для этого не требуется.
+   * Марш луча по ТЕРРЕЙН-ФОРМЕ поля (REND-9): по клеткам, с уточнением корня
+   * внутри клетки. Walkable-высота внутри клетки не гладкая функция углов, и
+   * аналитическому маршу не поддаётся — walkable-ветвь считается рейкастом по
+   * мешам в `pickSurfaceRay`, а `tLimit` (ближайший walkable-`t`) обрезает марш
+   * сверху: террейн-попадание дальше walkable уже не победит (REND-15).
+   * Поверхность и сетка читаются ТЕКУЩИЕ — правка кистью меняет ответ,
+   * пересоздания сервиса для этого не требуется.
    *
    * Вход в клетку, чья поверхность уже выше луча, — это пересечение вертикальной
    * стенки обрыва: попадание разрешается в ЭТУ клетку, то есть в верхнюю, чью
    * площадку стенка подпирает (REND-7, REND-15).
    */
-  private marchSurface(ray: PickRay): boolean {
+  private marchSurface(ray: PickRay, tLimit = Number.POSITIVE_INFINITY): boolean {
     const source = this.options.surface;
     const surface = source.current;
     if (surface === null) return false;
@@ -492,13 +554,15 @@ export class ViewportPicking {
       if (t2 < tExit) tExit = t2;
     }
     if (tEnter > tExit) return false;
+    // Walkable ближе входа в арену — терренной ветви уже не победить.
+    if (tEnter > tLimit) return false;
 
     let t = tEnter;
     let px = ray.originX + ray.dirX * t;
     let py = ray.originY + ray.dirY * t;
     let cx = clampIndex(Math.floor(px / tile), grid.width);
     let cy = clampIndex(Math.floor(py / tile), grid.height);
-    let f = ray.originZ + ray.dirZ * t - surface.heightInCell(cx, cy, px, py);
+    let f = ray.originZ + ray.dirZ * t - surface.terrainFormHeightInCell(cx, cy, px, py);
     if (f <= 0) {
       this.writeSurfaceHit(ray, t, cx, cy, f < -WALL_EPS);
       return true;
@@ -511,7 +575,8 @@ export class ViewportPicking {
       // находится прямо, без марша. Отдельная ветка нужна ещё и потому, что
       // прямоугольник арены такой луч не ограничивает — выхода из него нет.
       if (ray.dirZ >= 0) return false;
-      const t = (surface.heightInCell(cx, cy, px, py) - ray.originZ) / ray.dirZ;
+      const t = (surface.terrainFormHeightInCell(cx, cy, px, py) - ray.originZ) / ray.dirZ;
+      if (t > tLimit) return false;
       this.writeSurfaceHit(ray, t, cx, cy, false);
       return true;
     }
@@ -535,15 +600,21 @@ export class ViewportPicking {
       // Подшаги: вдоль отрезка внутри клетки высота — квадратичная, и выпуклость
       // может уйти под луч и вернуться между концами отрезка.
       for (let i = 1; i <= this.cellSteps; i++) {
-        const ts = t + ((tNext - t) * i) / this.cellSteps;
+        let ts = t + ((tNext - t) * i) / this.cellSteps;
+        // Подшаг обрезается walkable-`t`: корень за ним террейну не отдаётся,
+        // а корень ДО него марш обязан найти (REND-15) — поэтому кламп, а не
+        // немедленный выход.
+        const capped = ts >= tLimit;
+        if (capped) ts = tLimit;
         px = ray.originX + ray.dirX * ts;
         py = ray.originY + ray.dirY * ts;
-        const fs = ray.originZ + ray.dirZ * ts - surface.heightInCell(cx, cy, px, py);
+        const fs = ray.originZ + ray.dirZ * ts - surface.terrainFormHeightInCell(cx, cy, px, py);
         if (fs <= 0) {
           const tHit = this.refine(ray, surface, cx, cy, tPrev, ts);
           this.writeSurfaceHit(ray, tHit, cx, cy, false);
           return true;
         }
+        if (capped) return false;
         tPrev = ts;
       }
       if (tNext >= tExit) return false;
@@ -561,7 +632,7 @@ export class ViewportPicking {
 
       px = ray.originX + ray.dirX * t;
       py = ray.originY + ray.dirY * t;
-      f = ray.originZ + ray.dirZ * t - surface.heightInCell(cx, cy, px, py);
+      f = ray.originZ + ray.dirZ * t - surface.terrainFormHeightInCell(cx, cy, px, py);
       if (f <= 0) {
         this.writeSurfaceHit(ray, t, cx, cy, f < -WALL_EPS);
         return true;
@@ -585,7 +656,7 @@ export class ViewportPicking {
       const mid = (lo + hi) / 2;
       const mx = ray.originX + ray.dirX * mid;
       const my = ray.originY + ray.dirY * mid;
-      if (ray.originZ + ray.dirZ * mid - surface.heightInCell(cx, cy, mx, my) > 0) lo = mid;
+      if (ray.originZ + ray.dirZ * mid - surface.terrainFormHeightInCell(cx, cy, mx, my) > 0) lo = mid;
       else hi = mid;
     }
     return hi;

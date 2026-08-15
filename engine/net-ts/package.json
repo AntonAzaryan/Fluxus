@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "serve": "node bin/serve.mjs",
     "host": "node bin/host.mjs",
-    "play": "node bin/play.mjs"
+    "play": "node bin/play.mjs",
+    "demo:serve": "node bin/demo-serve.mjs"
   },
   "engines": {
     "node": ">=22.18"
@@ -25,6 +26,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@game-mvp/bot": "*",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
     "typescript": "^5.9.0",

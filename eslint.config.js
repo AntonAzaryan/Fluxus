@@ -46,6 +46,7 @@ export default defineConfig([
   globalIgnores([
     '**/node_modules/**',
     '**/dist/**',
+    '**/dist-desktop/**',
     'engine/schemas/**',
     'engine/tests/golden/**',
     'content/**',
@@ -109,7 +110,7 @@ export default defineConfig([
       '**/*.test.ts',
       '**/bin/*.mjs',
       'scripts/**',
-      'engine/client-ts/demo/**',
+      'game/demo-ts/app/**',
       'tools/blender-ts/test/**',
     ],
     rules: {
@@ -143,6 +144,7 @@ export default defineConfig([
       'engine/render-ts/**/*.ts',
       'engine/hud-ts/**/*.ts',
       'editor/ui-ts/**/*.ts',
+      'game/demo-ts/**/*.ts',
     ],
     languageOptions: { globals: { ...globals.browser, ...globals.worker } },
   },
@@ -158,6 +160,66 @@ export default defineConfig([
   {
     files: ['engine/integration-ts/**/*.ts', 'engine/tests/**/*.ts'],
     languageOptions: { globals: { ...globals.node, ...globals.browser } },
+  },
+  /**
+   * Бот живёт в обоих окружениях из одного кода (`bot-player` BOT-4): entry
+   * браузерного воркера видит `self`, entry node — `worker_threads`, а сам
+   * хостинг рантайм-агностичен.
+   */
+  {
+    files: ['engine/bot-ts/**/*.ts'],
+    languageOptions: { globals: { ...globals.node, ...globals.worker } },
+  },
+
+  /**
+   * Десктоп-контейнер (`desktop-shell`): Node-окружение и запрет на пакеты
+   * движка и редактора (DSK-3).
+   *
+   * Линт здесь — ранний сигнал, а не сама проверка: границу держит гейт-тест
+   * `engine/integration-ts/test/desktopBoundary.test.ts` (он же ловит
+   * зависимость, объявленную манифестом без единого импорта). Линт называет
+   * запрет там, где импорт пишут, — на секунды раньше, чем это сделает тест.
+   *
+   * `.cjs` в списке потому, что на CommonJS у контейнера вынужденно написаны
+   * preload и конфиг упаковщика, и они — такой же его код. Правило видит там
+   * `import` и `import()`, но не `require`: сигнал раньше теста ловит не всё,
+   * чем этот тест сильнее, — и именно поэтому проверка не он.
+   */
+  {
+    files: ['desktop/**/*.ts', 'desktop/**/*.mjs', 'desktop/**/*.cjs', 'desktop/**/*.js'],
+    languageOptions: { globals: globals.node },
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@game-mvp/*', '**/engine/*', '**/editor/*'],
+              message:
+                'контейнер не зависит от пакетов движка и редактора (DSK-3): через границу проходят пути, байты и события, а предметная семантика остаётся в приложениях',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  /**
+   * Electron-клей контейнера: единственный код репозитория, чьи типы приходят
+   * из пакета, которого в окружении гейта может не быть (DSK-6 — `npm run
+   * check` зелёный без установленного контейнера). Типизированный линт на нём
+   * поэтому выключен: с отсутствующими типами он краснел бы на каждой строке
+   * «unsafe call of an error typed value» — то есть требовал бы установленного
+   * Electron ровно там, где требование его не допускает. Проверяет клей
+   * `npm run typecheck:electron -w @game-mvp/desktop-shell`, вне гейта.
+   */
+  {
+    files: ['desktop/shell-ts/src/electron/**/*.ts'],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      globals: globals.node,
+      parserOptions: { projectService: false, project: false },
+    },
   },
 
   /**
@@ -177,6 +239,23 @@ export default defineConfig([
   },
 
   /**
+   * CommonJS-файлы. Их в репозитории ровно два вида, и оба вынужденные: preload
+   * десктоп-контейнера (в песочнице Electron `require` соседнего модуля
+   * недоступен, поэтому файл самодостаточный и на CJS) и конфиг упаковщика,
+   * который упаковщик читает сам. В tsconfig они не входят, как и `.mjs`-бины,
+   * поэтому здесь только базовые правила и глобали Node.
+   */
+  {
+    files: ['**/*.cjs'],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.commonjs },
+      sourceType: 'commonjs',
+      ecmaVersion: 2023,
+    },
+    rules: untypedRules,
+  },
+
+  /**
    * Печать в stdout как интерфейс, а не отладочный след: у CLI-бинов и hook'ов
    * это единственный способ ответить, у демо — способ показать состояние без
    * UI, у замеров канала — сам результат (тест помечен «информативно» и ничего
@@ -187,7 +266,7 @@ export default defineConfig([
       '**/bin/*.mjs',
       'scripts/*.mjs',
       '.claude/hooks/**',
-      'engine/client-ts/demo/**/*.ts',
+      'game/demo-ts/app/**/*.ts',
       '**/bench.test.ts',
     ],
     rules: { 'no-console': 'off' },

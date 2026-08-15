@@ -1,13 +1,42 @@
 /* eslint-disable max-lines -- baseline */
 /**
- * Подсистема моделей (REND-3..6): пул инстансов по сущностям presentation-
- * состояния.
+ * Подсистема моделей (REND-3..6, REND-20..22): пул инстансов по сущностям
+ * presentation-состояния.
  *
  * Появление сущности в presentation-состоянии создаёт инстанс, исчезновение —
- * убирает. Разделяемая часть ассета (геометрия, клипы) строится один раз и
- * кэшируется здесь; скелет, материалы и анимационное состояние — свои на
- * инстанс. Всё поведение — из манифеста визуалов (ASSET-6): модель, скины,
- * маппинг анимаций, параметры bone-контроля.
+ * убирает. Разделяемая часть ассета (геометрия, клипы, материалы, запечённые
+ * производные `assets` ASSET-12) строится один раз и кэшируется здесь; инстансу
+ * принадлежит только его состояние — трансформ, скин, анимационная фаза.
+ *
+ * Наружу инстанс виден ПРЕОБРАЗОВАНИЕМ И ГРАНИЦАМИ, а не узлом сцены (REND-3):
+ * объём-прокси picking'а (REND-15), подсветка (REND-16) и `instanceFor` отдают
+ * числа. Узел — представление детального яруса, и обещать его наружу нельзя:
+ * у батчевой записи (REND-20) его не существует.
+ *
+ * ## Два яруса (REND-20)
+ *
+ * Ярус выбирает ЗАПИСЬ МАНИФЕСТА (ASSET-13), а не код: `resolveVisualTier` даёт
+ * батчевый всем, кроме записей с процедурным контролем костей (REND-5), и явное
+ * поле записи это переопределяет.
+ *
+ * - **батчевый**: запись в разделяемом `InstancedMesh` (`model/batch.ts`),
+ *   скиннинг на GPU по VAT-текстуре модели (`model/vatMaterial.ts`), анимация —
+ *   пара скаляров (`model/vatAnimation.ts`), скин — индекс слоя (REND-6).
+ *   Пер-инстансного скелета, микшера и материалов нет;
+ * - **детальный**: сегодняшнее поддерево со скелетом (`model/build.ts`) —
+ *   для контроля костей и для записей, которым художник назначил его явно.
+ *
+ * Модель без запечённых производных рисуется ДЕТАЛЬНЫМ ярусом с предупреждением
+ * один раз на модель: отсутствие запекания — деградация стоимости, а не отказ
+ * отрисовки (REND-20). Всё наблюдаемое — состояния и one-shot клипы (REND-4),
+ * скины (REND-6), посадка и наклон (REND-9, REND-10), смещение (REND-12), перёд
+ * (REND-13), picking (REND-15) — у ярусов одинаково: машина состояний, поза и
+ * границы считаются ОДНИМ кодом, различается только носитель.
+ *
+ * Инстансы, целиком вне пирамиды видимости камеры, гасятся (REND-21). Это
+ * стоимость кадра и только она: набор, picking и сведение отсечения не видят.
+ * Границы отсечения — консервативные по всем клипам (ASSET-12), а не по
+ * bind-позе: выпад у края экрана не должен исчезать раньше юнита.
  *
  * Кто наполнил presentation-состояние — поток тиков или документный набор
  * инстансов редактора (REND-11), — подсистеме не видно и знать не положено:
@@ -25,11 +54,12 @@
  * одно действие с двумя разными результатами.
  *
  * Рисуются они ТЕМ ЖЕ путём и теми же ветками: запись манифеста (ASSET-6,
- * ASSET-9), скин (REND-6), перёд (REND-13), посадка на визуальную поверхность
- * (REND-9) и наклон по её нормали (REND-10). Второго пути отрисовки не
- * появляется — этого требуют и REND-18, и REND-11. Разница ровно в том, чего у
- * декорации нет: вертикального смещения (REND-12), контроля костей (REND-5) и
- * событийных клипов (REND-4) — производить их не от чего.
+ * ASSET-9), ярус записи (REND-20) с тем же `syncPool` и тем же батчем, скин
+ * (REND-6), перёд (REND-13), посадка на визуальную поверхность (REND-9) и
+ * наклон по её нормали (REND-10). Второго пути отрисовки не появляется — этого
+ * требуют и REND-18, и REND-11. Разница ровно в том, чего у декорации нет:
+ * вертикального смещения (REND-12), контроля костей (REND-5) и событийных
+ * клипов (REND-4) — производить их не от чего.
  *
  * Сам манифест — второй вход подсистемы и тоже переподаваемый (REND-17): в
  * матче он приезжает загруженным ассетом один раз (ASSET-6), а редактор правит
@@ -48,22 +78,31 @@ import {
   type EntityId,
 } from '@game-mvp/core';
 import {
+  modelDerivatives,
+  resolveEffectByKind,
+  resolveLodThresholds,
   resolveSurfaceAlign,
   resolveVisual,
+  resolveVisualEmitter,
+  resolveVisualTier,
   type AssetState,
+  type BakedDerivatives,
+  type BakedSkinSet,
   type EntityVisual,
   type NormalizedModel,
   type VisualManifest,
+  type VisualTier,
 } from '@game-mvp/assets';
 import type { EntityView, RenderContext, RenderSubsystem, TickView } from '../types.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import type { SurfaceNormal, VisualSurface } from '../visualSurface.js';
 import { createPickProxy, type InstanceProxySource, type PickProxy, type PickProxyVisitor } from '../picking.js';
-import type { ModelBounds } from '../model/build.js';
-import { smoothTilt, tiltTarget, type TiltVector } from '../model/surfaceAlign.js';
+import { orientFromTiltYaw, smoothTilt, tiltTarget, type TiltVector } from '../model/surfaceAlign.js';
 import {
   buildSharedModel,
   createModelInstance,
+  modelBounds,
+  type ModelBounds,
   type ModelInstance,
   type SharedModelData,
 } from '../model/build.js';
@@ -74,10 +113,71 @@ import {
   maneuverEnds,
   type ManeuverEnds,
 } from '../model/verticalOffset.js';
-import { AnimationController } from '../model/animation.js';
+import { AnimationController, MixerAnimationBackend } from '../model/animation.js';
+import { VatAnimationBackend } from '../model/vatAnimation.js';
 import { BoneControlState } from '../model/boneControl.js';
 import { smoothYaw } from '../model/boneControl.js';
 import { applySkin, skinTextureSources, type SkinApplication } from '../model/skins.js';
+import { ModelBatch, batchLevels } from '../model/batch.js';
+import { BatchSkinLoader, skinArrayTexture } from '../model/batchSkins.js';
+import {
+  VAT_MAP_KINDS,
+  createSkinPlaceholder,
+  createVatMaterial,
+  createVatTexture,
+  materialMapKinds,
+  type VatMapKind,
+  type VatMaterial,
+} from '../model/vatMaterial.js';
+
+/**
+ * Видимая поза инстанса (REND-3): преобразование, которым он нарисован в этом
+ * кадре. Числа, а не узел сцены: узел — представление ДЕТАЛЬНОГО яруса, и у
+ * батчевой записи (REND-20) его не существует.
+ */
+export interface InstancePose {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  /** Кватернион ориентации `(x, y, z, w)`: курс поверх наклона по поверхности. */
+  readonly qx: number;
+  readonly qy: number;
+  readonly qz: number;
+  readonly qw: number;
+  /** Курс с поправкой переда записи (REND-13), радианы — он же в кватернионе. */
+  readonly yaw: number;
+  /** Масштаб набора инстансов (REND-11); масштаб записи уже внутри `bounds`. */
+  readonly scale: number;
+}
+
+/**
+ * Публичный вид инстанса — вход отладки, демо и тестов. Объект СТАБИЛЕН на всё
+ * время жизни инстанса: им и наблюдается «инстанс тот же» при переподаче
+ * манифеста (REND-17). Узла сцены здесь нет по тем же основаниям, что у
+ * `PickProxy` (REND-3): наружу инстанс виден преобразованием и границами.
+ */
+export interface ModelInstanceView {
+  readonly entity: EntityId;
+  /** Инстанс — decoration (REND-18), а не сущность presentation-состояния. */
+  readonly decoration: boolean;
+  /**
+   * Ярус, которым инстанс нарисован (REND-20). Не то же самое, что ярус записи:
+   * модель без запечённых производных деградирует в детальный.
+   */
+  readonly tier: VisualTier;
+  /** Модель детального яруса; null — батчевый ярус, она грузится либо записи нет. */
+  readonly model: ModelInstance | null;
+  readonly controller: AnimationController | null;
+  /** В кадре стоит заглушка (ASSET-4), а не модель. */
+  readonly placeholder: boolean;
+  /** Инстанс попал в пирамиду видимости этого кадра (REND-21). */
+  readonly visible: boolean;
+  /** Выбранный уровень детализации (REND-22); 0 — модель как она есть. */
+  readonly lodLevel: number;
+  readonly pose: InstancePose;
+  /** Габариты в осях инстанса; null — нарисованного нет, попадать не во что. */
+  readonly bounds: ModelBounds | null;
+}
 
 export interface ModelsOptions {
   /** Тип события смерти — конвенция ядра. */
@@ -92,12 +192,47 @@ export interface ModelsOptions {
   readonly surface?: VisualSurfaceSource;
   /** Скорость сглаживания наклона по поверхности, 1/с (REND-10). */
   readonly tiltRate?: number;
+  /**
+   * Камера, которой рисуется кадр, — вход отсечения невидимых инстансов
+   * (REND-21) и выбора уровня детализации (REND-22). Не задана — отсечения нет,
+   * все инстансы остаются в кадре и рисуются нулевым уровнем: стоимость, а не
+   * поведение, и сборка без камеры (тесты, headless) обязана рисовать то же.
+   *
+   * Камера приходит опцией подсистемы, а не контекстом (REND-8): контракт
+   * подсистем от отсечения не меняется, а знать позу камеры нужно ровно ей.
+   * Собирающий обязан посадить позу на камеру ДО кадра подсистем — тем же
+   * `applyCameraPose`, которым рисуется кадр (CAM-1).
+   */
+  readonly camera?: THREE.Camera;
+  /**
+   * Запас консервативности границ отсечения — доля радиуса габаритов инстанса
+   * (REND-21). Берётся ВСЕГДА, а не только там, где запечённых границ по клипам
+   * нет (`assets` ASSET-12): границы bind-позы анимация выводит за себя, и без
+   * запаса выпад у края экрана срезался бы вместе с мечом, — но и запечённые
+   * границы описывают ровно позы клипов, а не оверлеи над инстансом (REND-16),
+   * доворот костей (REND-5) и погрешность объемлющей сферы.
+   */
+  readonly cullMargin?: number;
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
 }
 
 const DEFAULT_TURN_RATE = 12;
 const DEFAULT_TILT_RATE = 10;
+/**
+ * Половина радиуса габаритов сверх них самих: столько добавляет отсечению
+ * консервативности запас по умолчанию (REND-21). Порядок величины взят от
+ * размаха обычного клипа — выпад руки с оружием у нормализованной по высоте
+ * модели, — а не от вкуса: меньше половины радиуса срезало бы такой клип.
+ */
+const DEFAULT_CULL_MARGIN = 0.5;
+/**
+ * Ширина зоны нечувствительности выбора уровня (REND-22): порог срабатывает на
+ * `±10%` от своего значения, и колебание экранного размера у порога не
+ * переключает уровень кадр к кадру. Гистерезис — механизм, а сами пороги —
+ * данные записи (ASSET-13); поэтому число здесь одно и относительное.
+ */
+const LOD_HYSTERESIS = 0.1;
 /**
  * Перёд модели, когда запись манифеста его не называет (REND-13): соглашение
  * первого поддержанного формата — у MDX лицо вдоль `+X`, то есть 0. Так модели,
@@ -122,17 +257,50 @@ const PLACEHOLDER_BOUNDS: ModelBounds = {
   maxY: PLACEHOLDER_WIDTH / 2,
   maxZ: PLACEHOLDER_HEIGHT,
 };
+/**
+ * Объём-прокси эмиттерного вида (ASSET-14). Частиц подсистема моделей не рисует
+ * — их рисует подсистема частиц (REND-24), — но ПОПАДАТЬ автор обязан и в них:
+ * размещение факела — такая же запись `decorations`, как размещение статуи, и
+ * выделять, двигать и удалять её во вьюпорте нужно тем же способом (REND-18,
+ * ED-17). Источник объёмов-прокси при этом остаётся ОДИН (REND-15): подсистема
+ * частиц в picking'е не участвует и участвовать не начинает.
+ *
+ * Размер фиксированный: у эмиттера нет ни модели, ни границ — облако частиц
+ * меняет размер каждый кадр, и производить объём попадания от него значило бы
+ * заводить мерцающую цель. Габариты — по заглушке (ASSET-4) в ширину и метр в
+ * высоту: столько занимает на арене типовой факел, и в эту величину автор целит.
+ */
+const EMITTER_WIDTH = PLACEHOLDER_WIDTH;
+const EMITTER_HEIGHT = 1;
+const EMITTER_BOUNDS: ModelBounds = {
+  minX: -EMITTER_WIDTH / 2,
+  minY: -EMITTER_WIDTH / 2,
+  minZ: 0,
+  maxX: EMITTER_WIDTH / 2,
+  maxY: EMITTER_WIDTH / 2,
+  maxZ: EMITTER_HEIGHT,
+};
 /** Конвенция арены ядра (ARENA-5); имя переопределяется опцией. */
 const DEFAULT_FALL_EVENT = 'FellThroughFloor';
 
 // Переиспользуемые между кадрами объекты — аллокаций на инстанс на кадр нет.
-const WORLD_UP = new THREE.Vector3(0, 0, 1);
 const SCRATCH_NORMAL: SurfaceNormal = { x: 0, y: 0, z: 1 };
 const SCRATCH_TILT: TiltVector = { x: 0, y: 0 };
-const SCRATCH_AXIS = new THREE.Vector3();
-const SCRATCH_Q_TILT = new THREE.Quaternion();
-const SCRATCH_Q_YAW = new THREE.Quaternion();
 const SCRATCH_ENDS: ManeuverEnds = { takeoffX: 0, takeoffY: 0, landingX: 0, landingY: 0 };
+const SCRATCH_MATRIX = new THREE.Matrix4();
+const SCRATCH_SCALE = new THREE.Vector3();
+/**
+ * Геометрия и материал заглушки — общие на все заглушки процесса: заглушка у
+ * них одна и та же (ASSET-4), и пер-инстансного в ней нет ничего. Строятся
+ * лениво и не освобождаются вместе с инстансом — иначе следующая заглушка
+ * строила бы их заново.
+ */
+let placeholderGeometry: THREE.BufferGeometry | null = null;
+let placeholderMaterial: THREE.MeshStandardMaterial | null = null;
+/** Заглушка массива вариантов скина — одна на процесс по тем же основаниям. */
+let skinPlaceholder: THREE.DataArrayTexture | null = null;
+/** Наименьшая высота нормализации модели — как у `createModelInstance`. */
+const MIN_MODEL_HEIGHT = 1e-3;
 
 /**
  * Закрытый словарь состояний анимации (REND-4). Какие состояния бывают —
@@ -170,11 +338,86 @@ function isAirborne(view: EntityView): boolean {
   return view.motion === LOCOMOTION_AIRBORNE && Number.isFinite(view.currMotionPhase);
 }
 
+/**
+ * Высота дуги ЭТОГО манёвра (REND-12): прыжок и наземные манёвры называют свои
+ * высоты независимо, и дуга одного вида к другому не применяется. Манёвр, для
+ * чьего вида запись высоты не задала, дуги не получает — ноль здесь означает
+ * «параметра нет», а не «подставить чужой».
+ *
+ * Гейт по виду манёвра, а не по одной высоте на всё: фаза манёвра (`REND-12`)
+ * конечна и у `Dodge`/`Roll`, поэтому без него уклон ехал бы по прыжковой дуге.
+ */
+function arcHeightOf(record: InstanceRecord, motion: number): number {
+  if (motion === LOCOMOTION_AIRBORNE) return record.jumpArcHeight;
+  if (motion === LOCOMOTION_DODGE || motion === LOCOMOTION_ROLL) return record.maneuverArcHeight;
+  return 0;
+}
+
 interface SharedEntry {
   data: SharedModelData | null;
   failed: string | null;
+  /**
+   * Текстуры САМОЙ модели на её разделяемых материалах (REND-3): ставятся один
+   * раз на ассет, живут вместе с ним. Инстанс, чей скин ничего не подменяет,
+   * рисуется ими и своей копии материала не заводит (REND-6).
+   */
+  baseSkin: SkinApplication | null;
+  /**
+   * Запечённые производные модели (ASSET-12) — один раз на ассет: VAT-текстура,
+   * таблица клипов, консервативные границы, маска видимости частей. null — ещё
+   * не спрашивали; `ok: false` — их нет, и запись деградирует в детальный ярус.
+   */
+  derivatives: BakedDerivatives | null;
+  /** VAT-текстура модели: разделяется всеми её батчами (REND-3). */
+  vatTexture: THREE.DataTexture | null;
+  /** Об отсутствии производных уже предупредили — один раз на модель (REND-20). */
+  warnedDerivatives: boolean;
   /** Инстансы, ждущие готовности ассета. */
   readonly waiting: Set<InstanceRecord>;
+}
+
+/**
+ * Батч записей одной записи манифеста (REND-20): `InstancedMesh`-ы, материалы с
+ * VAT-патчем и набор вариантов скина. Ключ включает запись, а не только модель,
+ * потому что скины и скрытые части — свойства ЗАПИСИ: две записи на одну модель
+ * с разными скинами не могут делить массив вариантов, а число батчей всё равно
+ * растёт с числом записей, а не с числом инстансов.
+ */
+interface BatchEntry {
+  readonly key: string;
+  readonly batch: ModelBatch;
+  readonly materials: readonly VatMaterial[];
+  /**
+   * Живой набор вариантов скина записи (REND-6). НЕ readonly: варианты — это
+   * таблица `skins` записи, а её переподача манифеста меняет (REND-17), и
+   * пересобрать массив слоёв иначе как заново нечем.
+   */
+  skins: BatchSkinLoader;
+  /**
+   * Таблица скинов, по которой собран текущий набор вариантов. Сравнивается
+   * ПО ЗНАЧЕНИЮ: редактор отдаёт разобранный документ, и после любой правки
+   * все объекты в нём новые (REND-17).
+   */
+  skinTable: EntityVisual['skins'] | undefined;
+  /**
+   * Массивы текстур, поставленные в материалы батча последним набором слоёв.
+   * Принадлежат БАТЧУ, а не ассету (REND-3): пересборка набора освобождает их,
+   * иначе каждая переподача манифеста оставляла бы за собой прежние слои.
+   */
+  readonly skinTextures: THREE.DataArrayTexture[];
+  readonly model: NormalizedModel;
+  /** Границы модели в канонических осях — до нормализации по высоте. */
+  readonly canonical: ModelBounds;
+  /** Консервативные границы по всем клипам (ASSET-12), те же оси. */
+  readonly canonicalCull: ModelBounds;
+  /** Множитель нормализации: масштаб записи, делённый на высоту модели. */
+  normalized: number;
+  /** Габариты записи в осях инстанса — общие на все её записи. */
+  readonly bounds: ModelBounds;
+  /** Границы отсечения записи в тех же осях (REND-21). */
+  readonly cullBounds: ModelBounds;
+  /** Пороги переключения уровней (ASSET-13, REND-22). */
+  thresholds: readonly number[];
 }
 
 interface InstanceRecord {
@@ -189,10 +432,39 @@ interface InstanceRecord {
   /** Запись манифеста этого типа; переподача манифеста её меняет (REND-17). */
   visual: EntityVisual | undefined;
   view: EntityView;
-  /** Узел позиции/курса; под ним либо заглушка, либо модель. */
-  readonly holder: THREE.Group;
+  /**
+   * Узел детального яруса и носитель заглушки (ASSET-4); null — записи в сцене
+   * узла нет. У батчевой записи узла не существует (REND-20), и держать пустой
+   * `Group` на каждую значило бы платить обходом сцены за то, чего в ней нет.
+   */
+  holder: THREE.Group | null;
   placeholder: THREE.Mesh | null;
+  /**
+   * Ключ записи разрешился в ЭМИТТЕРНЫЙ вид (ASSET-14): рисуют его частицы
+   * (REND-24), а этот пул даёт ему только объём-прокси (`EMITTER_BOUNDS`) —
+   * чтобы попадать в размещённый факел было чем (REND-15, REND-18).
+   */
+  emitter: boolean;
+  /** Ярус, которым инстанс нарисован (REND-20) — с учётом деградации. */
+  tier: VisualTier;
   model: ModelInstance | null;
+  /** Батч записи и слот в нём; null — инстанс не батчевый (REND-20). */
+  batch: BatchEntry | null;
+  slot: number;
+  /** Скалярный бэкенд батчевой записи — источник строк VAT кадра. */
+  vat: VatAnimationBackend | null;
+  /** Индекс варианта скина в наборе батча (REND-6). */
+  skinIndex: number;
+  /** Уровень детализации записи (REND-22); у детального яруса всегда 0. */
+  lodLevel: number;
+  /**
+   * Консервативные границы по всем клипам модели (`assets` ASSET-12) в осях
+   * инстанса — вход отсечения (REND-21). У батчевой записи их держит батч
+   * (они общие на запись), у детальной — сам инстанс: масштаб записи у него
+   * свой и переставляется на живом инстансе. null — производных у модели нет,
+   * и отсечение идёт по габаритам bind-позы с запасом.
+   */
+  cullBounds: ModelBounds | null;
   controller: AnimationController | null;
   boneControl: BoneControlState | null;
   skinApp: SkinApplication | null;
@@ -211,11 +483,19 @@ interface InstanceRecord {
    */
   viewSkin: string | undefined;
   viewScale: number | undefined;
+  /**
+   * Видимое преобразование инстанса (REND-3): позиция, ориентация и масштаб
+   * набора. Числа, а не узел сцены, — у батчевой записи узла нет, а посадку,
+   * наклон и курс считает один и тот же `poseAll` для обоих ярусов.
+   */
+  readonly pos: THREE.Vector3;
+  readonly quat: THREE.Quaternion;
+  scale: number;
   yaw: number;
   snapPending: boolean;
   /**
    * Поправка разворота инстанса, радианы (REND-13): курс сущности плюс она даёт
-   * угол holder'а. Это ПРОТИВОПОЛОЖНОСТЬ переда модели из манифеста — чтобы
+   * угол инстанса. Это ПРОТИВОПОЛОЖНОСТЬ переда модели из манифеста — чтобы
    * лицо, смотрящее под углом `f`, оказалось направлено по курсу, инстанс надо
    * довернуть на `−f`. Конверсия градусов и смена знака сделаны один раз при
    * приёме записи, а не в кадре.
@@ -228,6 +508,10 @@ interface InstanceRecord {
   readonly tilt: TiltVector;
   /** Параметры вертикального смещения записи (ASSET-6); нули — смещения нет (REND-12). */
   jumpArcHeight: number;
+  /** Высота дуги наземного манёвра (`Dodge`/`Roll`) — своя, не доля прыжковой. */
+  maneuverArcHeight: number;
+  /** Высота полётной дуги; применяется только при доставленной фазе полёта. */
+  flightArcHeight: number;
   fallSpeed: number;
   fallDepth: number;
   /**
@@ -237,11 +521,19 @@ interface InstanceRecord {
   falling: boolean;
   fallOffset: number;
   /**
-   * Инстанс уже получил позу кадра. До первого `updateFrame` holder стоит в
-   * мировом нуле, а не там, где сущность: попадание в него было бы попаданием
-   * в ненарисованное (REND-15).
+   * Инстанс уже получил позу кадра. До первого `updateFrame` он стоит в мировом
+   * нуле, а не там, где сущность: попадание в него было бы попаданием в
+   * ненарисованное (REND-15).
    */
   posed: boolean;
+  /**
+   * Инстанс попал в пирамиду видимости последнего кадра (REND-21). Без камеры
+   * отсечения нет, и признак остаётся истинным: невидимых в таком кадре не
+   * бывает.
+   */
+  visible: boolean;
+  /** Публичный вид инстанса; строится лениво и живёт с инстансом (REND-17). */
+  publicView: ModelInstanceView | null;
 }
 
 export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
@@ -259,9 +551,25 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    */
   private readonly decorations = new Map<EntityId, InstanceRecord>();
   private readonly shared = new Map<string, SharedEntry>();
+  /**
+   * Батчи по ключу записи (REND-20). Живут в кэше наравне с разделяемыми
+   * данными ассета: опустевший батч не рисует ничего (`count` нулевой — draw
+   * call'а нет), а следующий инстанс той же записи не собирает его заново.
+   */
+  private readonly batches = new Map<string, BatchEntry>();
   private readonly warnedKinds = new Set<string>();
   /** Переиспользуемая запись прокси обхода (REND-15): валидна внутри визита. */
   private readonly proxy: PickProxy = createPickProxy();
+  /**
+   * Переиспользуемое хозяйство отсечения (REND-21): пирамида, матрица кадра и
+   * сфера инстанса. Аллокаций на кадр и на инстанс у отсечения нет — иначе оно
+   * платило бы за себя тем же, что экономит.
+   */
+  private readonly frustum = new THREE.Frustum();
+  private readonly frustumMatrix = new THREE.Matrix4();
+  private readonly cullSphere = new THREE.Sphere();
+  private readonly cullCenter = new THREE.Vector3();
+  private readonly cameraPosition = new THREE.Vector3();
 
   constructor(manifest: VisualManifest, options: ModelsOptions = {}) {
     this.manifest = manifest;
@@ -305,8 +613,8 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   /**
    * Полный набор decoration-инстансов (REND-18). Сведение — то же самое, что у
    * presentation-состояния: тот же `syncPool`, то же правило жизненного цикла
-   * (REND-3). Событий здесь не разбирается вовсе — их у decoration нет, а не
-   * «пока никто не прислал».
+   * (REND-3), тот же выбор яруса (REND-20). Событий здесь не разбирается вовсе
+   * — их у decoration нет, а не «пока никто не прислал».
    */
   syncDecorations(entities: ReadonlyMap<EntityId, EntityView>): void {
     this.syncPool(this.requireCtx(), this.decorations, entities, true);
@@ -348,15 +656,19 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       }
       if (entityView.scale !== record.viewScale) {
         record.viewScale = entityView.scale;
-        record.holder.scale.setScalar(entityView.scale ?? 1);
+        record.scale = entityView.scale ?? 1;
       }
       this.applyAnimation(record);
+      // Правка walkable-записи (позиция, курс, масштаб, сам флаг) доводит
+      // walkable-вклад поля до нового размещения (REND-9, REND-18); правка
+      // не-walkable полей (скин) реестр не трогает — вклад тот же.
+      if (decoration) this.syncWalkable(record);
     }
 
     // Исчезнувшие: инстанс убирается, разделяемый ассет остаётся в кэше (REND-3).
     for (const [entity, record] of pool) {
       if (!entities.has(entity)) {
-        this.remove(ctx, record);
+        this.remove(record);
         pool.delete(entity);
       }
     }
@@ -374,6 +686,96 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // декорация в кадре игрока обязаны быть одним изображением (REND-18).
     this.poseAll(this.instances, dt, alpha, heightStep, turnRate, tiltRate, surface);
     this.poseAll(this.decorations, dt, alpha, heightStep, turnRate, tiltRate, surface);
+
+    // Отсечение — после позы: видимость считается по тому преобразованию,
+    // которым инстанс нарисован в ЭТОМ кадре (REND-21). Уровень детализации
+    // считается там же — по экранному размеру того же объёма (REND-22).
+    this.cullAll();
+
+    // Компактация видимых записей в инстанс-буферы — последним: до неё batch
+    // не знает ни позы кадра, ни видимости.
+    for (const entry of this.batches.values()) entry.batch.flush();
+  }
+
+  /**
+   * Отсечение невидимых инстансов (REND-21): консервативная сфера инстанса
+   * против пирамиды видимости камеры. Невидимая запись не попадает в
+   * компактацию батча, невидимый holder гасится — а из набора запись не
+   * убирается: picking (REND-15) и сведение (REND-3, REND-18) идут по полному
+   * набору, и других наблюдаемых последствий у отсечения нет.
+   */
+  private cullAll(): void {
+    const camera = this.options.camera;
+    if (camera === undefined) return;
+    // Матрицы камеры — те, с которыми кадр и будет нарисован: позу на неё
+    // сажает сборка до кадра подсистем (CAM-1), второго расчёта здесь нет.
+    camera.updateMatrixWorld();
+    this.frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.frustumMatrix);
+    this.cameraPosition.setFromMatrixPosition(camera.matrixWorld);
+    const margin = this.options.cullMargin ?? DEFAULT_CULL_MARGIN;
+    const screen = screenScaleOf(camera);
+    this.cullPool(this.instances, margin, screen);
+    this.cullPool(this.decorations, margin, screen);
+  }
+
+  private cullPool(
+    pool: ReadonlyMap<EntityId, InstanceRecord>,
+    margin: number,
+    screen: ScreenScale | null,
+  ): void {
+    for (const record of pool.values()) {
+      const bounds = cullBoundsOf(record) ?? boundsOf(record);
+      // Рисовать нечего — и отсекать нечего: невизуальная сущность в кадре не
+      // участвует вовсе, а не «участвует невидимой».
+      if (bounds === null || !record.posed) continue;
+      const scale = record.scale;
+      // Центр габаритов в осях инстанса → мировые оси тем же преобразованием,
+      // которым инстанс нарисован; радиус — половина диагонали. Запас берётся
+      // ВСЕГДА, а не только к границам bind-позы: консервативность запечённых
+      // границ (ASSET-12) отвечает за позы клипов, но не за то, чего в границах
+      // модели нет вовсе, — оверлеи (REND-16), контроль костей (REND-5) и
+      // погрешность самой сферы у вытянутых моделей.
+      this.cullCenter
+        .set((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2, (bounds.minZ + bounds.maxZ) / 2)
+        .multiplyScalar(scale)
+        .applyQuaternion(record.quat)
+        .add(record.pos);
+      const radius =
+        (Math.hypot(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) / 2) *
+        Math.abs(scale) *
+        (1 + margin);
+      this.cullSphere.center.copy(this.cullCenter);
+      this.cullSphere.radius = radius;
+      record.visible = this.frustum.intersectsSphere(this.cullSphere);
+      if (record.holder !== null) record.holder.visible = record.visible;
+      if (record.batch !== null) {
+        record.batch.batch.setVisible(record.slot, record.visible);
+        if (record.visible && screen !== null) this.selectLod(record, radius, screen);
+      }
+    }
+  }
+
+  /**
+   * Уровень детализации записи по её экранному размеру (REND-22). Пороги —
+   * данные записи (ASSET-13), гистерезис — механизм: у порога уровень не
+   * дёргается кадр к кадру. Состояние записи переключение не трогает вовсе —
+   * меняется только то, в какой набор инстанс-мешей она компактируется.
+   */
+  private selectLod(record: InstanceRecord, radius: number, screen: ScreenScale): void {
+    const entry = record.batch;
+    if (entry === null) return;
+    const maxLevel = entry.batch.levelCount - 1;
+    if (maxLevel <= 0) return; // модель без цепочки — единственный уровень
+    const size = screenSize(radius, this.cameraPosition.distanceTo(record.pos), screen);
+    const thresholds = entry.thresholds;
+    let level = Math.min(record.lodLevel, maxLevel);
+    while (level < maxLevel && size < (thresholds[level] ?? 0) * (1 - LOD_HYSTERESIS)) level += 1;
+    while (level > 0 && size > (thresholds[level - 1] ?? Number.POSITIVE_INFINITY) * (1 + LOD_HYSTERESIS)) {
+      level -= 1;
+    }
+    record.lodLevel = level;
+    entry.batch.setLevel(record.slot, level);
   }
 
   private poseAll(
@@ -391,6 +793,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       const t = view.snap ? 1 : alpha;
       const x = view.prevX + (view.currX - view.prevX) * t;
       const y = view.prevY + (view.currY - view.prevY) * t;
+      // Walkable-инстанс сажается и наклоняется по террейн-форме — без
+      // walkable-вкладов, в том числе чужих: иначе два моста сажались бы друг
+      // на друга по кругу (REND-9). Все прочие читают поле целиком — юнит на
+      // настиле стоит на настиле (REND-10).
+      const walkableSeat = record.decoration && view.walkable === true;
       // Сущность на поверхности стоит на визуальной поверхности (рампы и
       // кривизна, REND-9); с override уровня (TERR-4) — на высоте уровня.
       // Летящая — на переходе между высотами отрыва и приземления (REND-12):
@@ -417,18 +824,28 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
           phase,
         );
       } else if (surface !== null && !view.levelOverride) {
-        base = surface.heightAt(x, y);
+        base = walkableSeat ? surface.terrainFormHeightAt(x, y) : surface.heightAt(x, y);
       } else {
         base = (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
       }
-      // Вертикальное смещение — чистое представление (REND-12): дуга прыжка
+      // Вертикальное смещение — чистое представление (REND-12): дуга манёвра
       // смешивается по тем же двум тикам, что позиция, снижение идёт по кадрам.
-      const arcPrev = jumpArc(view.prevMotionPhase, record.jumpArcHeight);
-      const arcCurr = jumpArc(view.currMotionPhase, record.jumpArcHeight);
+      // Высота КАЖДОГО вклада берётся по виду манёвра ЕГО тика: прыжковая
+      // высота к уклону не переносится, а тик приземления (манёвра уже нет)
+      // доигрывает спуск прошлого тика вместо мгновенного обнуления.
+      const arcPrev = jumpArc(view.prevMotionPhase, arcHeightOf(record, view.prevMotion));
+      const arcCurr = jumpArc(view.currMotionPhase, arcHeightOf(record, view.motion));
+      // Полётная дуга — по фазе полёта плоской формы (REND-12): её приносит
+      // сборка воркера (SHELL-2), и без неё дуги нет независимо от манифеста.
+      const flightArc = jumpArc(view.flightPhase, record.flightArcHeight);
       if (record.falling) {
         record.fallOffset = advanceFall(record.fallOffset, record.fallSpeed, record.fallDepth, dt);
       }
-      record.holder.position.set(x, y, base + arcPrev + (arcCurr - arcPrev) * t + record.fallOffset);
+      record.pos.set(
+        x,
+        y,
+        base + arcPrev + (arcCurr - arcPrev) * t + flightArc + record.fallOffset,
+      );
 
       // Курс: цель из данных тика, доворот сглажен по кадрам; при snap —
       // мгновенно. Поправка на перёд модели — своя у каждой записи (REND-13).
@@ -438,7 +855,8 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // Наклон по нормали поверхности (REND-10): только для сущностей на
       // поверхности; сглажен по кадрам, при snap — мгновенно (REND-2).
       if (surface !== null && record.tiltFactor > 0 && !view.levelOverride) {
-        surface.normalAt(x, y, SCRATCH_NORMAL);
+        if (walkableSeat) surface.terrainFormNormalAt(x, y, SCRATCH_NORMAL);
+        else surface.normalAt(x, y, SCRATCH_NORMAL);
         tiltTarget(SCRATCH_NORMAL, record.tiltFactor, record.tiltMaxRad, SCRATCH_TILT);
         if (record.snapPending) {
           record.tilt.x = SCRATCH_TILT.x;
@@ -452,40 +870,59 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       }
       record.snapPending = false;
       record.posed = true;
-      this.applyOrientation(record);
+      // Ориентация: сперва курс вокруг вертикали, поверх — наклон в мировых
+      // осях. Композиция общая с walkable-реестром поля (REND-9): трансформ
+      // walkable-поверхности — тот же, каким инстанс нарисован.
+      orientFromTiltYaw(record.tilt, record.yaw, record.quat);
 
       record.controller?.update(dt);
-      // Bone-контроль строго после mixer.update и до отрисовки (REND-5).
-      if (record.model !== null && record.boneControl !== null) {
-        record.boneControl.apply(
-          record.model,
-          view.aimYaw,
-          record.yaw - record.facingOffset,
-          dt,
-          this.warn,
-        );
-      }
+      this.applyPose(record, dt);
     }
   }
 
-  /** Ориентация holder'а: сперва курс вокруг вертикали, поверх — наклон в мировых осях. */
-  private applyOrientation(record: InstanceRecord): void {
-    const angle = Math.hypot(record.tilt.x, record.tilt.y);
-    if (angle < 1e-6) {
-      record.holder.rotation.set(0, 0, record.yaw);
-      return;
+  /**
+   * Видимое преобразование записи — в её носитель. Считается оно ОДНИМ кодом
+   * для обоих ярусов (REND-20): узел детального яруса и инстанс-матрица
+   * батчевого получают ровно те же числа, а не два похожих расчёта.
+   */
+  private applyPose(record: InstanceRecord, dt: number): void {
+    const holder = record.holder;
+    if (holder !== null) {
+      holder.position.copy(record.pos);
+      holder.quaternion.copy(record.quat);
+      holder.scale.setScalar(record.scale);
     }
-    SCRATCH_AXIS.set(record.tilt.x / angle, record.tilt.y / angle, 0);
-    SCRATCH_Q_TILT.setFromAxisAngle(SCRATCH_AXIS, angle);
-    SCRATCH_Q_YAW.setFromAxisAngle(WORLD_UP, record.yaw);
-    record.holder.quaternion.multiplyQuaternions(SCRATCH_Q_TILT, SCRATCH_Q_YAW);
+    // Bone-контроль строго после mixer.update и до отрисовки (REND-5).
+    if (record.model !== null && record.boneControl !== null) {
+      record.boneControl.apply(
+        record.model,
+        record.view.aimYaw,
+        record.yaw - record.facingOffset,
+        dt,
+        this.warn,
+      );
+    }
+    const entry = record.batch;
+    if (entry === null) return;
+    // Масштаб записи и нормализация по высоте у батча живут в ИНСТАНС-МАТРИЦЕ:
+    // у детального яруса их несёт обёртка `body` внутри поддерева, здесь
+    // поддерева нет — и множитель тот же самый.
+    SCRATCH_SCALE.setScalar(record.scale * entry.normalized);
+    SCRATCH_MATRIX.compose(record.pos, record.quat, SCRATCH_SCALE);
+    entry.batch.setMatrix(record.slot, SCRATCH_MATRIX);
+    const vat = record.vat;
+    if (vat !== null) {
+      entry.batch.setPose(record.slot, vat.rowA, vat.rowB, vat.blend, record.skinIndex);
+      entry.batch.setFrame(record.slot, vat.visibilityFrame);
+    }
   }
 
   // ------------------------------------------------------------ публичное
 
   /**
-   * Смена скина инстанса без перезагрузки модели (REND-6): подменяются только
-   * текстуры материалов этого инстанса. Возвращает false, если сущности нет.
+   * Смена скина инстанса без перезагрузки модели (REND-6): у детального яруса
+   * подменяются текстуры его материалов, у батчевого — индекс варианта записи.
+   * Возвращает false, если сущности нет.
    */
   setSkin(entity: EntityId, skin: string | undefined): boolean {
     const record = this.instances.get(entity);
@@ -502,10 +939,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * пересобирать сцену ради правки записи не нужно.
    *
    * Пересобирается инстанс ровно тогда, когда изменилось то, что строится из
-   * разделяемых данных ассета (REND-3), — модель и набор её рисуемых частей;
-   * остальное записи применяется на месте, потому что пересоздание потеряло бы
-   * материалы скина (REND-6), фазу анимации и сглаженный наклон (REND-10) —
-   * ровно то, что перечисляет REND-11, запрещая пересоздание.
+   * разделяемых данных ассета (REND-3), — модель, набор её рисуемых частей и
+   * ярус записи (REND-20); остальное записи применяется на месте, потому что
+   * пересоздание потеряло бы материалы скина (REND-6), фазу анимации и
+   * сглаженный наклон (REND-10) — ровно то, что перечисляет REND-11, запрещая
+   * пересоздание.
    *
    * Записи, не изменившиеся в поданном документе, наблюдаемых последствий не
    * получают: сравниваются ЗНАЧЕНИЯ, а не ссылки, — редактор отдаёт разобранный
@@ -535,19 +973,29 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       this.applyEntryParams(record);
       // Масштаб записи — нормализующая обёртка: переставляется на живом инстансе.
       record.model?.setScale(record.visual?.scale ?? 1);
+      this.rescaleDetailedCull(record, null);
+      this.syncBatchEntry(record);
       record.controller?.setMapping(record.visual?.animations ?? {});
       this.syncBoneControls(record);
       this.syncSkin(record, before);
+      // Правка записи (масштаб, наклон, перёд) двигает и walkable-поверхность
+      // вместе с картинкой (REND-17 → REND-9).
+      if (record.decoration) this.syncWalkable(record);
     }
   }
 
   /**
    * Объёмы-прокси нарисованных инстансов — вход picking'а вьюпорта (REND-15) и
-   * подсветки выделения (REND-16). Подсистема отдаёт УЗЕЛ, а не позу: то самое
-   * преобразование, которым инстанс нарисован в этом кадре, — посадка на
-   * визуальную поверхность (REND-9), вертикальное смещение (REND-12), наклон
-   * (REND-10), курс с поправкой переда (REND-13) и масштаб (REND-11) уже в нём.
-   * Пересчитывать их второй раз было бы вторым ответом на один вопрос.
+   * подсветки выделения (REND-16). Подсистема отдаёт ТО САМОЕ ПРЕОБРАЗОВАНИЕ,
+   * которым инстанс нарисован в этом кадре, — посадка на визуальную поверхность
+   * (REND-9), вертикальное смещение (REND-12), наклон (REND-10), курс с
+   * поправкой переда (REND-13) и масштаб (REND-11) уже в нём. Пересчитывать их
+   * второй раз было бы вторым ответом на один вопрос, а отдавать узлом — обещать
+   * наружу то, чего у батчевой записи (REND-20) нет.
+   *
+   * Ни отсечение (REND-21), ни выбранный уровень детализации (REND-22) обход не
+   * меняют: объём-прокси производен от границ МОДЕЛИ, а невидимый инстанс из
+   * набора не исчезает — picking по нему промахивается лучом, а не отсутствием.
    */
   eachProxy(visit: PickProxyVisitor): void {
     for (const record of this.instances.values()) {
@@ -577,6 +1025,27 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   }
 
   /**
+   * Диагностика батчевого яруса (REND-20): сколько батчей заведено, сколько
+   * инстанс-мешей рисуется в этом кадре и сколько записей в них живёт. По ней и
+   * видно главное свойство яруса — число draw calls растёт с числом ЗАПИСЕЙ
+   * манифеста, а не с числом инстансов.
+   */
+  batchStats(): { readonly batches: number; readonly drawnMeshes: number; readonly records: number } {
+    let drawnMeshes = 0;
+    let records = 0;
+    for (const entry of this.batches.values()) {
+      drawnMeshes += entry.batch.drawnMeshes;
+      records += entry.batch.count;
+    }
+    return { batches: this.batches.size, drawnMeshes, records };
+  }
+
+  /** Инстанс-меши всех батчей — вход теста компактации (`count` на меш). */
+  batchMeshes(): readonly THREE.InstancedMesh[] {
+    return [...this.batches.values()].flatMap((entry) => entry.batch.meshes);
+  }
+
+  /**
    * Попадание только в нарисованное (REND-15): у сущности, отнесённой резолвером
    * к невизуальным, нет ни модели, ни заглушки — и прокси у неё нет. Инстанс,
    * чья модель ещё грузится, участвует объёмом заглушки (ASSET-4): автор видит
@@ -585,12 +1054,21 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    */
   private fillProxy(record: InstanceRecord, out: PickProxy): boolean {
     if (!record.posed) return false;
-    const bounds = record.model?.bounds ?? (record.placeholder === null ? null : PLACEHOLDER_BOUNDS);
+    const bounds = boundsOf(record);
     if (bounds === null) return false;
     out.entity = record.entity;
     out.decoration = record.decoration;
     out.handle = null;
-    out.node = record.holder;
+    out.posX = record.pos.x;
+    out.posY = record.pos.y;
+    out.posZ = record.pos.z;
+    out.quatX = record.quat.x;
+    out.quatY = record.quat.y;
+    out.quatZ = record.quat.z;
+    out.quatW = record.quat.w;
+    out.scaleX = record.scale;
+    out.scaleY = record.scale;
+    out.scaleZ = record.scale;
     out.minX = bounds.minX;
     out.minY = bounds.minY;
     out.minZ = bounds.minZ;
@@ -600,18 +1078,17 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     return true;
   }
 
-  /** Инстанс сущности — для тестов и отладки. */
-  instanceFor(
-    entity: EntityId,
-    decoration = false,
-  ): {
-    readonly holder: THREE.Group;
-    readonly model: ModelInstance | null;
-    readonly controller: AnimationController | null;
-  } | null {
+  /**
+   * Инстанс сущности — для отладки и тестов. Объект стабилен на всё время жизни
+   * инстанса: им и наблюдается «инстанс тот же», когда переподача манифеста
+   * пересобирает построенное из ассета, а размещённый объект оставляет на месте
+   * (REND-17). Узла сцены он не отдаёт (REND-3).
+   */
+  instanceFor(entity: EntityId, decoration = false): ModelInstanceView | null {
     const record = (decoration ? this.decorations : this.instances).get(entity);
     if (record === undefined) return null;
-    return { holder: record.holder, model: record.model, controller: record.controller };
+    record.publicView ??= viewOf(record);
+    return record.publicView;
   }
 
   // ------------------------------------------------------------ внутреннее
@@ -621,10 +1098,17 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     return this.ctx;
   }
 
-  /** Скин инстанса: подменяются только текстуры его материалов (REND-6). */
+  /** Скин инстанса: у детального — текстуры материалов, у батчевого — индекс (REND-6). */
   private assignSkin(record: InstanceRecord, skin: string | undefined): void {
     record.skin = skin;
     if (record.model !== null) this.applyInstanceSkin(record, record.model);
+    const entry = record.batch;
+    if (entry !== null) {
+      // Смена скина батчевой записи — запись ОДНОГО ЧИСЛА: соседние записи
+      // батча и разделяемый набор вариантов не затронуты (REND-6).
+      record.skinIndex = entry.skins.indexOf(skin);
+      entry.batch.setSkin(record.slot, record.skinIndex);
+    }
   }
 
   /**
@@ -648,8 +1132,62 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // этой секцией остаётся валидной (ASSET-9), но смысла ей здесь не придаётся.
     const offset = record.decoration ? undefined : visual?.verticalOffset;
     record.jumpArcHeight = offset?.jumpArc ?? 0;
+    record.maneuverArcHeight = offset?.maneuverArc ?? 0;
+    record.flightArcHeight = offset?.flightArc ?? 0;
     record.fallSpeed = offset?.fallSpeed ?? 0;
     record.fallDepth = offset?.fallDepth ?? 0;
+  }
+
+  /**
+   * Параметры записи на живом батче (REND-17): масштаб и пороги LOD правятся
+   * на месте — они не строятся из разделяемых данных ассета, и пересобирать
+   * ради них записи батча незачем.
+   */
+  private syncBatchEntry(record: InstanceRecord): void {
+    const entry = record.batch;
+    if (entry === null) return;
+    entry.thresholds = resolveLodThresholds(record.visual);
+    this.syncBatchSkins(entry, record.visual);
+    const normalized =
+      (record.visual?.scale ?? 1) / Math.max(entry.model.height, MIN_MODEL_HEIGHT);
+    if (normalized === entry.normalized) return;
+    entry.normalized = normalized;
+    scaleBounds(entry.canonical, normalized, entry.bounds);
+    scaleBounds(entry.canonicalCull, normalized, entry.cullBounds);
+  }
+
+  /**
+   * Набор вариантов скина батча после переподачи (REND-17, REND-6). Варианты —
+   * свойство ЗАПИСИ, а не инстанса: новый вариант в таблице сдвигает сквозные
+   * индексы, а правленый путь существующего меняет пиксели слоя, — и то и
+   * другое пересобирает массив слоёв целиком, потому что собран он один раз на
+   * батч (ASSET-12).
+   *
+   * Пересобирается РОВНО набор: позы записей батча, фазы их клипов и сглаженные
+   * наклоны остаются на месте — пересборки инстансов здесь нет (REND-11).
+   * Запись, чья таблица скинов не изменилась, не получает и этого: таблицы
+   * сравниваются по значению, как и всё прочее в переподаче (REND-17).
+   */
+  private syncBatchSkins(entry: BatchEntry, visual: EntityVisual | undefined): void {
+    if (sameSkinTables(entry.skinTable, visual?.skins)) return;
+    entry.skinTable = visual?.skins;
+    entry.skins.dispose();
+    entry.skins = new BatchSkinLoader(
+      entry.model,
+      visual,
+      this.requireCtx().assets,
+      batchSkinListener(entry.model, entry.materials, entry.skinTextures),
+    );
+    // Сквозные индексы вариантов поехали — каждой записи батча заново (REND-6).
+    // Записям, чей скин переподача ещё будет менять, индекс перепишет их
+    // собственный `assignSkin`: он идёт после этого места и по тому же набору.
+    for (const pool of [this.instances, this.decorations]) {
+      for (const record of pool.values()) {
+        if (record.batch !== entry) continue;
+        record.skinIndex = entry.skins.indexOf(record.skin);
+        entry.batch.setSkin(record.slot, record.skinIndex);
+      }
+    }
   }
 
   /** Параметры контроля костей записи на живом инстансе (REND-5, REND-17). */
@@ -684,16 +1222,19 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   }
 
   /**
-   * Инстанс строится заново под новую запись (REND-3, REND-17). Holder, его поза
-   * и место в сцене остаются те же: пересобирается то, что построено из
-   * разделяемых данных ассета, а не размещённый объект — его идентичность в
-   * документе (REND-11) и попадание picking'а (REND-15) переподачу переживают.
+   * Инстанс строится заново под новую запись (REND-3, REND-17). Поза и место в
+   * наборе остаются те же: пересобирается то, что построено из разделяемых
+   * данных ассета, а не размещённый объект — его идентичность в документе
+   * (REND-11) и попадание picking'а (REND-15) переподачу переживают.
    */
   private rebuild(ctx: RenderContext, record: InstanceRecord): void {
     this.detachModel(record);
     this.applyEntryParams(record);
     if (!record.skinChosen) record.skin = record.visual?.defaultSkin;
     this.attachVisual(ctx, record);
+    // Другая модель записи: до её готовности walkable-вклада нет (ASSET-4,
+    // REND-9) — кэшированный ассет вернёт его сразу же через attachModel.
+    if (record.decoration) this.syncWalkable(record);
   }
 
   /**
@@ -709,13 +1250,6 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   }
 
   private create(ctx: RenderContext, view: EntityView, decoration: boolean): InstanceRecord {
-    const holder = new THREE.Group();
-    holder.name = `${decoration ? 'decoration' : 'entity'}:${view.id}`;
-    // Масштаб набора — множитель поверх масштаба записи манифеста (REND-11):
-    // запись масштабирует модель, набор — конкретное размещение.
-    if (view.scale !== undefined) holder.scale.setScalar(view.scale);
-    ctx.scene.add(holder);
-
     // Разрешение ключа — одно на оба раздела манифеста (ASSET-9): decoration
     // вправе сослаться и на запись сущности, если камень у неё и prop, и
     // декорация, — второй копии записи для этого не заводится.
@@ -726,9 +1260,17 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       decoration,
       visual,
       view,
-      holder,
+      holder: null,
       placeholder: null,
+      emitter: false,
+      tier: 'detailed',
       model: null,
+      batch: null,
+      slot: -1,
+      vat: null,
+      skinIndex: 0,
+      lodLevel: 0,
+      cullBounds: null,
       controller: null,
       boneControl: null,
       skinApp: null,
@@ -736,6 +1278,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       skinChosen: view.skin !== undefined,
       viewSkin: view.skin,
       viewScale: view.scale,
+      // Масштаб набора — множитель поверх масштаба записи манифеста (REND-11):
+      // запись масштабирует модель, набор — конкретное размещение.
+      pos: new THREE.Vector3(),
+      quat: new THREE.Quaternion(),
+      scale: view.scale ?? 1,
       facingOffset: DEFAULT_FACING_RAD,
       yaw: 0,
       snapPending: true,
@@ -743,11 +1290,15 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       tiltMaxRad: null,
       tilt: { x: 0, y: 0 },
       jumpArcHeight: 0,
+      maneuverArcHeight: 0,
+      flightArcHeight: 0,
       fallSpeed: 0,
       fallDepth: 0,
       falling: false,
       fallOffset: 0,
       posed: false,
+      visible: true,
+      publicView: null,
     };
     this.applyEntryParams(record);
     record.yaw = view.facingYaw + record.facingOffset;
@@ -761,23 +1312,41 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * общая часть создания инстанса и его пересборки под новой записью (REND-17).
    */
   private attachVisual(ctx: RenderContext, record: InstanceRecord): void {
+    record.emitter = false;
     const kind = record.kind;
     // Резолвер явно отнёс сущность к невизуальным — не рисуем и не шумим.
     if (kind === null) return;
 
     const visual = record.visual;
     if (visual === undefined) {
+      // Тип, который манифест описал записью ЭФФЕКТА (REND-23), рисуется не
+      // моделью — и заглушки ему не полагается: заглушка означает «ассет ещё не
+      // доехал» (ASSET-4), а тут доезжать нечему. Молчит подсистема по той же
+      // причине: запись в манифесте есть, просто не её.
+      if (resolveEffectByKind(this.manifest, kind) !== undefined) return;
+      // Ровно то же и по той же причине — эмиттерный вид (ASSET-14): его
+      // изображение частицы, и рисует его подсистема частиц (REND-24).
+      // `resolveVisual` отдаёт по такому ключу пусто НАМЕРЕННО — чтобы
+      // подсистема моделей не рисовала того, чего ей рисовать нечем; принять
+      // это за отсутствующую запись значило бы поставить на факел заглушку.
+      // Объём-прокси такой записи, однако, даёт всё-таки этот пул: источник
+      // прокси один (REND-15), а попадать в размещённый факел автор обязан
+      // тем же способом, что в статую (REND-18, ED-17).
+      if (resolveVisualEmitter(this.manifest, kind) !== undefined) {
+        record.emitter = true;
+        return;
+      }
       // Сущность без записи в манифесте: заглушка и предупреждение один раз (ASSET-6).
       if (!this.warnedKinds.has(kind)) {
         this.warnedKinds.add(kind);
         this.warn(`render: для типа "${kind}" нет записи в манифесте визуалов — заглушка (ASSET-6)`);
       }
-      record.placeholder = this.makePlaceholder(record.holder);
+      this.makePlaceholder(ctx, record);
       return;
     }
 
     // Модель грузится асинхронно; до готовности — заглушка (ASSET-4).
-    record.placeholder = this.makePlaceholder(record.holder);
+    this.makePlaceholder(ctx, record);
     const entry = this.ensureShared(ctx, visual.model);
     if (entry.data !== null) {
       this.attachModel(record, entry.data);
@@ -786,29 +1355,80 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
   }
 
-  private makePlaceholder(holder: THREE.Group): THREE.Mesh {
-    const geometry = new THREE.BoxGeometry(PLACEHOLDER_WIDTH, PLACEHOLDER_WIDTH, PLACEHOLDER_HEIGHT);
-    geometry.translate(0, 0, PLACEHOLDER_HEIGHT / 2); // стоит на земле, а не тонет в ней
-    const material = new THREE.MeshStandardMaterial({ color: PLACEHOLDER_COLOR });
-    const mesh = new THREE.Mesh(geometry, material);
-    holder.add(mesh);
-    return mesh;
+  /**
+   * Узел записи в сцене: носитель заглушки и корень детального яруса. Заводится
+   * ЛЕНИВО и снимается, как только оба исчезли: у батчевой записи узла в сцене
+   * нет (REND-20), и пустой `Group` на каждую значил бы обход сцены за то,
+   * чего в ней не рисуется.
+   */
+  private ensureHolder(ctx: RenderContext, record: InstanceRecord): THREE.Group {
+    if (record.holder !== null) return record.holder;
+    const holder = new THREE.Group();
+    holder.name = `${record.decoration ? 'decoration' : 'entity'}:${record.entity}`;
+    holder.position.copy(record.pos);
+    holder.quaternion.copy(record.quat);
+    holder.scale.setScalar(record.scale);
+    ctx.scene.add(holder);
+    record.holder = holder;
+    return holder;
+  }
+
+  private releaseHolder(record: InstanceRecord): void {
+    if (record.holder === null || record.model !== null || record.placeholder !== null) return;
+    record.holder.removeFromParent();
+    record.holder = null;
+  }
+
+  /**
+   * Заглушка инстанса (ASSET-4). Геометрия и материал у всех заглушек ОБЩИЕ:
+   * пер-инстансного в заглушке нет ничего, а своя пара на инстанс — это лишний
+   * буфер и лишний материал на каждую незагруженную модель.
+   */
+  private makePlaceholder(ctx: RenderContext, record: InstanceRecord): void {
+    if (placeholderGeometry === null) {
+      const geometry = new THREE.BoxGeometry(PLACEHOLDER_WIDTH, PLACEHOLDER_WIDTH, PLACEHOLDER_HEIGHT);
+      geometry.translate(0, 0, PLACEHOLDER_HEIGHT / 2); // стоит на земле, а не тонет в ней
+      placeholderGeometry = geometry;
+    }
+    placeholderMaterial ??= new THREE.MeshStandardMaterial({ color: PLACEHOLDER_COLOR });
+    const mesh = new THREE.Mesh(placeholderGeometry, placeholderMaterial);
+    this.ensureHolder(ctx, record).add(mesh);
+    record.placeholder = mesh;
   }
 
   private ensureShared(ctx: RenderContext, modelId: string): SharedEntry {
     const existing = this.shared.get(modelId);
     if (existing !== undefined) return existing;
-    const entry: SharedEntry = { data: null, failed: null, waiting: new Set() };
+    const entry: SharedEntry = {
+      data: null,
+      failed: null,
+      baseSkin: null,
+      derivatives: null,
+      vatTexture: null,
+      warnedDerivatives: false,
+      waiting: new Set(),
+    };
     this.shared.set(modelId, entry);
 
     const handle = ctx.assets.request<NormalizedModel>('model', modelId);
     const onState = (state: AssetState<NormalizedModel>): void => {
       if (entry.data !== null) return;
       if (state.status === 'ready') {
-        // Разделяемая часть строится один раз на ассет (REND-3).
+        // Разделяемая часть строится один раз на ассет (REND-3), запечённые
+        // производные — тоже (ASSET-12): десять инстансов не запекают ничего
+        // по десять раз, кэш живёт в модуле ассетов по идентичности модели.
         const data = buildSharedModel(state.data);
         entry.data = data;
         entry.failed = null;
+        const baked = modelDerivatives(state.data);
+        if (baked.ok) {
+          entry.derivatives = baked.derivatives;
+        } else if (!entry.warnedDerivatives) {
+          entry.warnedDerivatives = true;
+          this.warn(
+            `render: у модели "${modelId}" нет запечённых производных (${baked.reason}) — детальный ярус (REND-20)`,
+          );
+        }
         for (const record of entry.waiting) this.attachModel(record, data);
         entry.waiting.clear();
       } else if (state.status === 'failed' && entry.failed !== state.reason) {
@@ -821,33 +1441,53 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     return entry;
   }
 
+  /**
+   * Ярус записи (REND-20, ASSET-13) с учётом деградации: батчевый требует
+   * запечённых производных модели (ASSET-12), и без них запись рисуется
+   * детальным ярусом — предупреждение о них выдано один раз на модель там же,
+   * где производные и спрашивались.
+   */
+  private tierOf(record: InstanceRecord, shared: SharedEntry): VisualTier {
+    if (resolveVisualTier(record.visual) === 'detailed') return 'detailed';
+    return shared.derivatives === null ? 'detailed' : 'batched';
+  }
+
   private attachModel(record: InstanceRecord, shared: SharedModelData): void {
-    if (record.model !== null) return;
+    if (record.model !== null || record.batch !== null) return;
+    const entry = record.visual === undefined ? undefined : this.shared.get(record.visual.model);
+    if (entry === undefined) return;
+    record.tier = this.tierOf(record, entry);
+    if (record.tier === 'batched' && entry.derivatives !== null) {
+      this.attachBatched(record, shared, entry.derivatives);
+    } else {
+      this.attachDetailed(record, shared);
+    }
+
+    // Модель готова — walkable-вклад появляется в поле, и подписчики поверхности
+    // узнают о клетках под bbox не позже следующего кадра (ASSET-4 → REND-9).
+    if (record.decoration) this.syncWalkable(record);
+  }
+
+  /** Детальный ярус: пер-инстансное поддерево со скелетом и микшером (REND-20). */
+  private attachDetailed(record: InstanceRecord, shared: SharedModelData): void {
+    const ctx = this.requireCtx();
+    // Запечённые границы есть и у детальной записи, когда модель их даёт: они
+    // производны от МОДЕЛИ, а не от яруса, и отсечение по ним точнее запаса
+    // (REND-21). Батчевый ярус тут ни при чём — деградировавшая запись тоже их
+    // получает.
+    const baked = this.shared.get(record.visual?.model ?? '')?.derivatives ?? null;
+    record.cullBounds = baked === null ? null : boundsFromBaked(baked);
+    this.rescaleDetailedCull(record, shared);
     const instanceOptions: { scale?: number; hiddenParts?: readonly number[] } = {};
     if (record.visual?.scale !== undefined) instanceOptions.scale = record.visual.scale;
     if (record.visual?.hiddenParts !== undefined) {
       instanceOptions.hiddenParts = record.visual.hiddenParts;
     }
     const model = createModelInstance(shared, instanceOptions);
-    record.holder.add(model.root);
+    this.ensureHolder(ctx, record).add(model.root);
     this.disposePlaceholder(record);
     record.model = model;
-
-    // Неразрешённая запись анимации диагностируется в тот же сток, что и
-    // отсутствующая кость (REND-4, REND-5): у подсистемы один адресат жалоб.
-    const controllerOptions: {
-      crossfade?: number;
-      deathEvent?: string;
-      warn: (message: string) => void;
-    } = { warn: this.warn };
-    if (this.options.crossfade !== undefined) controllerOptions.crossfade = this.options.crossfade;
-    if (this.options.deathEvent !== undefined) controllerOptions.deathEvent = this.options.deathEvent;
-    record.controller = new AnimationController(
-      model.mixer,
-      shared.clips,
-      record.visual?.animations ?? {},
-      controllerOptions,
-    );
+    record.controller = this.makeController(new MixerAnimationBackend(model.mixer, shared.clips), record);
     this.applyAnimation(record);
 
     // Контроля костей у decoration нет (REND-5, REND-18): доворачивать нечего.
@@ -857,35 +1497,261 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     this.applyInstanceSkin(record, model);
   }
 
+  /**
+   * Границы отсечения детальной записи под масштабом записи манифеста: тот же
+   * множитель нормализации, каким отмасштабирован сам инстанс (REND-17).
+   */
+  private rescaleDetailedCull(record: InstanceRecord, shared: SharedModelData | null): void {
+    if (record.cullBounds === null) return;
+    const model = shared?.model ?? this.shared.get(record.visual?.model ?? '')?.data?.model;
+    const baked = this.shared.get(record.visual?.model ?? '')?.derivatives;
+    if (model === undefined || baked == null) return;
+    const normalized = (record.visual?.scale ?? 1) / Math.max(model.height, MIN_MODEL_HEIGHT);
+    scaleBounds(boundsFromBaked(baked), normalized, record.cullBounds);
+  }
+
+  /** Батчевый ярус: запись в разделяемом инстанс-меше (REND-20). */
+  private attachBatched(
+    record: InstanceRecord,
+    shared: SharedModelData,
+    derivatives: BakedDerivatives,
+  ): void {
+    const entry = this.ensureBatch(record, shared, derivatives);
+    record.batch = entry;
+    record.slot = entry.batch.acquire();
+    // Пустой батч из сцены снят: набор без записей не должен оставлять в кадре
+    // ничего (REND-11, REND-18) — даже узла, который ничего не рисует.
+    if (entry.batch.group.parent === null) this.requireCtx().scene.add(entry.batch.group);
+    record.lodLevel = 0;
+    record.skinIndex = entry.skins.indexOf(record.skin);
+    entry.batch.setSkin(record.slot, record.skinIndex);
+    entry.batch.setLevel(record.slot, 0);
+    const vat = new VatAnimationBackend(derivatives.clips, derivatives.fps, derivatives.restFrame);
+    record.vat = vat;
+    record.controller = this.makeController(vat, record);
+    // Контроля костей у батчевой записи нет по построению: запись с ним
+    // получает детальный ярус (REND-5 → REND-20).
+    record.boneControl = null;
+    this.disposePlaceholder(record);
+    this.releaseHolder(record);
+    this.applyAnimation(record);
+  }
+
+  /**
+   * Неразрешённая запись анимации диагностируется в тот же сток, что и
+   * отсутствующая кость (REND-4, REND-5): у подсистемы один адресат жалоб.
+   */
+  private makeController(
+    backend: ConstructorParameters<typeof AnimationController>[0],
+    record: InstanceRecord,
+  ): AnimationController {
+    const options: { crossfade?: number; deathEvent?: string; warn: (message: string) => void } = {
+      warn: this.warn,
+    };
+    if (this.options.crossfade !== undefined) options.crossfade = this.options.crossfade;
+    if (this.options.deathEvent !== undefined) options.deathEvent = this.options.deathEvent;
+    return new AnimationController(backend, record.visual?.animations ?? {}, options);
+  }
+
+  /**
+   * Батч записи: `InstancedMesh` на часть каждого уровня, материалы с
+   * VAT-патчем, набор вариантов скина. Ключ — модель, набор скрытых частей и
+   * сама запись: скины и `hiddenParts` — свойства ЗАПИСИ, и делить между
+   * записями их нельзя. Число батчей растёт с числом записей манифеста, а не с
+   * числом инстансов — этого REND-20 и требует.
+   */
+  private ensureBatch(
+    record: InstanceRecord,
+    shared: SharedModelData,
+    derivatives: BakedDerivatives,
+  ): BatchEntry {
+    const visual = record.visual;
+    const key = batchKeyOf(record);
+    const existing = this.batches.get(key);
+    if (existing !== undefined) {
+      // Батч из кэша мог опустеть ЕЩЁ ДО правки скинов записи — например,
+      // когда переподача сперва увела запись в другой набор частей, а затем
+      // вернула обратно. Набор вариантов сводится с записью здесь же, а не
+      // только в `syncBatchEntry`: пустой батч тот проход не видит (REND-17).
+      this.syncBatchSkins(existing, visual);
+      return existing;
+    }
+
+    skinPlaceholder ??= createSkinPlaceholder();
+    const placeholder = skinPlaceholder;
+    const vatTexture = this.ensureVatTexture(visual?.model ?? '', derivatives);
+    const materials = shared.model.materials.map((source, index) =>
+      createVatMaterial(
+        shared.materials[index] ?? new THREE.MeshStandardMaterial(),
+        vatTexture,
+        materialMapKinds(source),
+        placeholder,
+      ),
+    );
+
+    const batch = new ModelBatch({
+      materials,
+      partVisibility: derivatives.partVisibility,
+      levels: batchLevels(shared.meshes, derivatives.lod, visual?.hiddenParts),
+    });
+
+    const canonical = modelBounds(shared.model, visual?.hiddenParts);
+    const canonicalCull = boundsFromBaked(derivatives);
+    const normalized = (visual?.scale ?? 1) / Math.max(shared.model.height, MIN_MODEL_HEIGHT);
+    const skinTextures: THREE.DataArrayTexture[] = [];
+    const entry: BatchEntry = {
+      key,
+      batch,
+      materials,
+      skins: new BatchSkinLoader(
+        shared.model,
+        visual,
+        this.requireCtx().assets,
+        batchSkinListener(shared.model, materials, skinTextures),
+      ),
+      skinTable: visual?.skins,
+      skinTextures,
+      model: shared.model,
+      canonical,
+      canonicalCull,
+      normalized,
+      bounds: scaleBounds(canonical, normalized, emptyBounds()),
+      cullBounds: scaleBounds(canonicalCull, normalized, emptyBounds()),
+      thresholds: resolveLodThresholds(visual),
+    };
+    this.batches.set(key, entry);
+    return entry;
+  }
+
+  /** VAT-текстура модели — одна на ассет и общая для всех её батчей (REND-3). */
+  private ensureVatTexture(modelId: string, derivatives: BakedDerivatives): THREE.DataTexture {
+    const shared = this.shared.get(modelId);
+    if (shared?.vatTexture != null) return shared.vatTexture;
+    const texture = createVatTexture(derivatives.vat.width, derivatives.vat.height, derivatives.vat.data);
+    if (shared !== undefined) shared.vatTexture = texture;
+    return texture;
+  }
+
+  /**
+   * Скин на ДЕТАЛЬНОМ инстансе (REND-6). Пока выбранный скин ничего не
+   * подменяет, инстанс рисуется РАЗДЕЛЯЕМЫМИ материалами ассета с его же
+   * текстурами: своей копии ему незачем — от ассета он не отличается ничем.
+   * Первая же подмена переводит материалы в собственные (copy-on-write) и
+   * ставит в них полный набор «слот → источник»: соседние инстансы и
+   * разделяемые данные не затронуты.
+   *
+   * Обратного пути нет намеренно: инстанс, однажды получивший свои материалы,
+   * их и оставляет — снятие скина применяется к ним же полным набором, а
+   * возврат к разделяемым сэкономил бы один материал ценой ветки, которой не
+   * видно из кадра.
+   */
   private applyInstanceSkin(record: InstanceRecord, model: ModelInstance): void {
     const entry = record.visual === undefined ? undefined : this.shared.get(record.visual.model);
     if (entry?.data === undefined || entry.data === null) return;
+    const overrides = record.skin === undefined ? undefined : record.visual?.skins?.[record.skin];
+    if (!model.ownsMaterials && (overrides === undefined || Object.keys(overrides).length === 0)) {
+      record.skinApp?.dispose();
+      record.skinApp = null;
+      this.ensureBaseSkin(entry);
+      return;
+    }
     record.skinApp?.dispose();
     record.skinApp = applySkin(
-      model.textureTargets,
+      model.ownTextureTargets(),
       skinTextureSources(entry.data.model, record.visual, record.skin),
       this.requireCtx().assets,
     );
   }
 
-  private remove(ctx: RenderContext, record: InstanceRecord): void {
-    ctx.scene.remove(record.holder);
+  /**
+   * Текстуры САМОЙ модели на её разделяемых материалах — один раз на ассет
+   * (REND-3). Лениво, по первому инстансу, которому скин ничего не подменяет:
+   * модель, все записи которой перекрывают её слоты, своих текстур не грузит
+   * вовсе — они бы никогда не были видны.
+   */
+  private ensureBaseSkin(entry: SharedEntry): void {
+    if (entry.baseSkin !== null || entry.data === null) return;
+    entry.baseSkin = applySkin(
+      entry.data.textureTargets,
+      skinTextureSources(entry.data.model, undefined, undefined),
+      this.requireCtx().assets,
+    );
+  }
+
+  private remove(record: InstanceRecord): void {
+    // Исчезнувшая walkable-декорация забирает свой вклад из поля; подписчики
+    // получают клетки под прежним bbox (REND-9, REND-18).
+    if (record.decoration) this.options.surface?.setWalkable(record.entity, null);
     this.detachModel(record);
+    record.holder?.removeFromParent();
+    record.holder = null;
   }
 
   /**
-   * Снимает с инстанса всё построенное из данных ассета — заглушку, модель,
-   * анимационный контроллер, контроль костей и текстуры скина, — оставляя сам
-   * holder. Общая часть удаления инстанса и его пересборки под новой записью
-   * (REND-17); разделяемые данные ассета остаются в кэше (REND-3).
+   * Сведение walkable-вклада инстанса с реестром поля (REND-9): вклад есть
+   * ровно тогда, когда декорация несёт флаг записи (PRES-2 → REND-18) и её
+   * модель готова (ASSET-4). Размещение — те же величины, которыми `poseAll`
+   * ставит инстанс в кадре: позиция набора, курс с поправкой переда (REND-13),
+   * k/limit наклона записи, итоговый масштаб меша как у `createModelInstance`.
+   * Посадку по террейн-форме реестр считает сам — тем же расчётом (REND-9).
+   */
+  private syncWalkable(record: InstanceRecord): void {
+    const source = this.options.surface;
+    if (source === undefined) return;
+    const visual = record.visual;
+    const entry = visual === undefined ? undefined : this.shared.get(visual.model);
+    const model = entry?.data?.model;
+    const view = record.view;
+    if (view.walkable !== true || visual === undefined || model === undefined) {
+      source.setWalkable(record.entity, null);
+      return;
+    }
+    source.setWalkable(record.entity, {
+      x: view.currX,
+      y: view.currY,
+      yaw: view.facingYaw + record.facingOffset,
+      tiltFactor: record.tiltFactor,
+      tiltMaxRad: record.tiltMaxRad,
+      // Нормализация — та же, что у `createModelInstance`: высота модели → 1
+      // мировая единица × масштаб записи, поверх — масштаб набора (REND-11).
+      scale: (view.scale ?? 1) * ((visual.scale ?? 1) / Math.max(model.height, MIN_MODEL_HEIGHT)),
+      model,
+      // Скрытые части записи (ASSET-6) не рисуются — и в поле не попадают:
+      // индекс реестра обязан совпадать с нарисованным набором частей (REND-9).
+      hiddenParts: visual.hiddenParts,
+    });
+  }
+
+  /**
+   * Снимает с инстанса всё построенное из данных ассета — заглушку, модель или
+   * запись батча, анимационный контроллер, контроль костей и текстуры скина.
+   * Общая часть удаления инстанса и его пересборки под новой записью (REND-17);
+   * разделяемые данные ассета и сам батч остаются в кэше (REND-3).
    */
   private detachModel(record: InstanceRecord): void {
     for (const entry of this.shared.values()) entry.waiting.delete(record);
+    // Ярус — свойство НАРИСОВАННОГО (REND-20): пока построенного из ассета у
+    // записи нет, рисуется заглушка, и она детальная. Оставить прежний ярус
+    // значило бы отдавать наружу (`instanceFor`) ярус, которым в кадре ничего
+    // не нарисовано; `attachModel` проставит настоящий, как только сможет.
+    record.tier = 'detailed';
     this.disposePlaceholder(record);
     record.skinApp?.dispose();
     record.skinApp = null;
     record.controller = null;
     record.boneControl = null;
+    record.vat = null;
+    record.cullBounds = null;
+    if (record.batch !== null) {
+      const batch = record.batch.batch;
+      batch.release(record.slot);
+      // Опустевший батч уходит из сцены, но остаётся в кэше: разделяемое им
+      // строится один раз на запись (REND-3), а рисовать ему уже нечего.
+      if (batch.count === 0) batch.group.removeFromParent();
+      record.batch = null;
+      record.slot = -1;
+      record.lodLevel = 0;
+    }
     if (record.model !== null) {
       record.model.root.removeFromParent();
       record.model.dispose();
@@ -893,20 +1759,204 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
   }
 
+  /**
+   * Снимает заглушку с инстанса. Геометрию и материал НЕ освобождает: они общие
+   * на все заглушки (см. `makePlaceholder`), и освобождение здесь погасило бы
+   * заглушки всех остальных инстансов.
+   */
   private disposePlaceholder(record: InstanceRecord): void {
     if (record.placeholder === null) return;
     record.placeholder.removeFromParent();
-    record.placeholder.geometry.dispose();
-    (record.placeholder.material as THREE.Material).dispose();
     record.placeholder = null;
   }
 }
 
+// ------------------------------------------------------------ помощники
+
+/** Пустая запись габаритов — заполняется `scaleBounds`. */
+function emptyBounds(): ModelBounds {
+  return { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+}
+
+/** Габариты под множителем нормализации; пишет в `out` и его же возвращает. */
+function scaleBounds(source: ModelBounds, factor: number, out: ModelBounds): ModelBounds {
+  out.minX = source.minX * factor;
+  out.minY = source.minY * factor;
+  out.minZ = source.minZ * factor;
+  out.maxX = source.maxX * factor;
+  out.maxY = source.maxY * factor;
+  out.maxZ = source.maxZ * factor;
+  return out;
+}
+
+/** Консервативные границы по клипам (ASSET-12) в форме габаритов рендера. */
+function boundsFromBaked(derivatives: BakedDerivatives): ModelBounds {
+  const { min, max } = derivatives.bounds;
+  return { minX: min[0], minY: min[1], minZ: min[2], maxX: max[0], maxY: max[1], maxZ: max[2] };
+}
+
+/**
+ * Ключ батча (REND-20): модель, набор скрытых частей и сама запись манифеста.
+ * Запись входит в ключ потому, что скины батча — её свойство (REND-6): две
+ * записи на одну модель делят геометрию, но не массив вариантов.
+ */
+function batchKeyOf(record: InstanceRecord): string {
+  const hidden = [...(record.visual?.hiddenParts ?? [])].sort((a, b) => a - b).join(',');
+  return JSON.stringify([record.visual?.model ?? '', hidden, record.kind ?? '']);
+}
+
+/**
+ * Слушатель готовых слоёв батча: набор приезжает асинхронно (ASSET-4) и может
+ * приехать ПОВТОРНО — после переподачи манифеста, правившей таблицу скинов
+ * записи (REND-17). Прежние массивы текстур освобождаются здесь: они
+ * принадлежат батчу, а не ассету (REND-3).
+ */
+function batchSkinListener(
+  model: NormalizedModel,
+  materials: readonly VatMaterial[],
+  textures: THREE.DataArrayTexture[],
+): (set: BakedSkinSet) => void {
+  return (set) => {
+    for (const texture of textures) texture.dispose();
+    textures.length = 0;
+    applySkinArrays(model, materials, set, textures);
+  };
+}
+
+/**
+ * Готовые слои вариантов — в материалы батча (REND-6). Массив текстур один на
+ * пару «слот × вид карты»: цветовое пространство у карты нормалей своё, и
+ * делить с ней текстуру базового цвета нельзя. Созданные массивы собираются в
+ * `created`: освобождать их — дело того, кто их поставил.
+ */
+function applySkinArrays(
+  model: NormalizedModel,
+  materials: readonly VatMaterial[],
+  set: BakedSkinSet,
+  created: THREE.DataArrayTexture[],
+): void {
+  const cache = new Map<string, THREE.DataArrayTexture | null>();
+  const slotOf = (source: NormalizedModel['materials'][number], kind: VatMapKind): number | null => {
+    if (kind === 'base') return source.baseColorTexture;
+    if (kind === 'normal') return source.normalTexture;
+    return source.emissiveTexture;
+  };
+  model.materials.forEach((source, index) => {
+    const material = materials[index];
+    if (material === undefined) return;
+    for (const kind of VAT_MAP_KINDS) {
+      if (!material.maps.has(kind)) continue;
+      const slot = slotOf(source, kind);
+      if (slot === null) continue;
+      const cacheKey = `${slot}:${kind}`;
+      let texture = cache.get(cacheKey);
+      if (texture === undefined) {
+        texture = skinArrayTexture(set, slot, kind);
+        cache.set(cacheKey, texture);
+        if (texture !== null) created.push(texture);
+      }
+      if (texture === null) continue;
+      if (kind === 'base') material.uniforms.vatSkinBase.value = texture;
+      else if (kind === 'normal') material.uniforms.vatSkinNormal.value = texture;
+      else material.uniforms.vatSkinEmissive.value = texture;
+    }
+  });
+}
+
+/** Метрика экранного размера камеры — то, что от неё нужно выбору уровня. */
+interface ScreenScale {
+  /** Тангенс половины вертикального поля зрения; 0 — камера ортографическая. */
+  readonly tanHalfFov: number;
+  /** Видимая высота кадра в мировых единицах у ортографической камеры. */
+  readonly orthoHeight: number;
+}
+
+function screenScaleOf(camera: THREE.Camera): ScreenScale | null {
+  const perspective = camera as THREE.PerspectiveCamera;
+  if (perspective.isPerspectiveCamera) {
+    return { tanHalfFov: Math.tan(((perspective.fov / 2) * Math.PI) / 180), orthoHeight: 0 };
+  }
+  const ortho = camera as THREE.OrthographicCamera;
+  if (ortho.isOrthographicCamera) {
+    const height = (ortho.top - ortho.bottom) / (ortho.zoom || 1);
+    return height > 0 ? { tanHalfFov: 0, orthoHeight: height } : null;
+  }
+  return null;
+}
+
+/**
+ * Экранный размер инстанса — доля высоты кадра, которую занимает его
+ * консервативная сфера (REND-22). Именно доля, а не пиксели: пороги записи
+ * (ASSET-13) не должны зависеть от разрешения вьюпорта.
+ */
+function screenSize(radius: number, distance: number, screen: ScreenScale): number {
+  if (screen.tanHalfFov > 0) {
+    const visible = Math.max(distance, 1e-6) * screen.tanHalfFov;
+    return radius / visible;
+  }
+  return (2 * radius) / screen.orthoHeight;
+}
+
+/**
+ * Габариты нарисованного инстанса в его собственных осях: модель (детальный
+ * ярус) либо запись батча, а до готовности — заглушка (ASSET-4). null — рисовать
+ * нечего, и попадать не во что (REND-15). Один ответ на весь файл: прокси
+ * picking'а и границы отсечения (REND-21) обязаны говорить об одном объёме.
+ */
+function boundsOf(record: InstanceRecord): ModelBounds | null {
+  if (record.model !== null) return record.model.bounds;
+  if (record.batch !== null) return record.batch.bounds;
+  // Эмиттерный вид (ASSET-14) рисуется частицами, а попадать в него нужно тем
+  // же способом, что в модельный (REND-15, REND-18): фиксированный объём.
+  if (record.emitter) return EMITTER_BOUNDS;
+  return record.placeholder === null ? null : PLACEHOLDER_BOUNDS;
+}
+
+/**
+ * Консервативные границы по клипам (ASSET-12) — вход отсечения (REND-21); null
+ * — производных у модели нет, и отсечение идёт по габаритам с запасом.
+ */
+function cullBoundsOf(record: InstanceRecord): ModelBounds | null {
+  return record.batch?.cullBounds ?? record.cullBounds;
+}
+
+/**
+ * Публичный вид инстанса поверх его записи: геттеры, а не копия полей, —
+ * потребитель, взявший вид один раз, обязан видеть позу текущего кадра, а не ту,
+ * что была в момент вызова.
+ */
+function viewOf(record: InstanceRecord): ModelInstanceView {
+  const pose: InstancePose = {
+    get x(): number { return record.pos.x; },
+    get y(): number { return record.pos.y; },
+    get z(): number { return record.pos.z; },
+    get qx(): number { return record.quat.x; },
+    get qy(): number { return record.quat.y; },
+    get qz(): number { return record.quat.z; },
+    get qw(): number { return record.quat.w; },
+    get yaw(): number { return record.yaw; },
+    get scale(): number { return record.scale; },
+  };
+  return {
+    entity: record.entity,
+    decoration: record.decoration,
+    get tier(): VisualTier { return record.tier; },
+    get model(): ModelInstance | null { return record.model; },
+    get controller(): AnimationController | null { return record.controller; },
+    get placeholder(): boolean { return record.placeholder !== null; },
+    get visible(): boolean { return record.visible; },
+    get lodLevel(): number { return record.lodLevel; },
+    pose,
+    get bounds(): ModelBounds | null { return boundsOf(record); },
+  };
+}
+
 /**
  * Пересобирать ли инстанс под переподанной записью (REND-17). Граница проходит
- * по тому, что построено из разделяемых данных ассета (REND-3): другую модель и
- * другой набор её рисуемых частей правкой построенного не получить, а всё
- * прочее записи применяется на живом инстансе.
+ * по тому, что построено из разделяемых данных ассета (REND-3), и по ярусу
+ * записи (REND-20): другую модель, другой набор её рисуемых частей и другой
+ * ярус правкой построенного не получить, а всё прочее записи применяется на
+ * живом инстансе.
  */
 function rebuildsInstance(
   before: EntityVisual | undefined,
@@ -914,6 +1964,7 @@ function rebuildsInstance(
 ): boolean {
   if (before === after) return false;
   if (before?.model !== after?.model) return true;
+  if (resolveVisualTier(before) !== resolveVisualTier(after)) return true;
   return !samePartSets(before?.hiddenParts, after?.hiddenParts);
 }
 
@@ -937,8 +1988,32 @@ function sameSkinSlots(
 ): boolean {
   // Скина нет — подмен нет ни до, ни после: слоты модели идут как есть.
   if (skin === undefined) return true;
-  const a = before?.skins?.[skin];
-  const b = after?.skins?.[skin];
+  return sameSlotMaps(before?.skins?.[skin], after?.skins?.[skin]);
+}
+
+/**
+ * Совпадают ли таблицы скинов двух записей ЦЕЛИКОМ (REND-6). Этим и меряется
+ * набор вариантов батча: он производен от всей таблицы — от списка имён (он
+ * задаёт сквозные индексы) и от подмен каждого имени (они задают пиксели
+ * слоёв), — а не от одного выбранного скина.
+ */
+function sameSkinTables(
+  before: EntityVisual['skins'] | undefined,
+  after: EntityVisual['skins'] | undefined,
+): boolean {
+  if (before === after) return true;
+  const a = before ?? {};
+  const b = after ?? {};
+  const names = Object.keys(a);
+  if (names.length !== Object.keys(b).length) return false;
+  return names.every((name) => sameSlotMaps(a[name], b[name]));
+}
+
+/** Один и тот же набор подмен «слот → путь»; отсутствие обеих — совпадение. */
+function sameSlotMaps(
+  a: Readonly<Record<string, string>> | undefined,
+  b: Readonly<Record<string, string>> | undefined,
+): boolean {
   if (a === b) return true;
   if (a === undefined || b === undefined) return false;
   const slots = Object.keys(a);

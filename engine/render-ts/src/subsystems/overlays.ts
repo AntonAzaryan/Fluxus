@@ -223,6 +223,11 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
   private readonly boxPosition = new THREE.Vector3();
   private readonly boxScale = new THREE.Vector3();
   private readonly boxQuaternion = new THREE.Quaternion();
+  /** Скретчи разбора и сборки преобразования прокси: оно числа, а не узел. */
+  private readonly instanceMatrix = new THREE.Matrix4();
+  private readonly proxyPosition = new THREE.Vector3();
+  private readonly proxyQuaternion = new THREE.Quaternion();
+  private readonly proxyScale = new THREE.Vector3();
 
   constructor(options: OverlayOptions = {}) {
     this.options = options;
@@ -359,14 +364,32 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
   /**
    * Ручки как объёмы-прокси (REND-15): порядок разрешения ставит их перед
    * объектами, поэтому источник у них свой.
+   *
+   * Преобразование отдаётся числами, а не узлом (REND-3): мировая матрица меша
+   * ручки разбирается на позицию, кватернион и масштаб прямо здесь. Это ТА ЖЕ
+   * матрица, которой ручка нарисована, — второго расчёта её позы у наложений
+   * не заводится, как и у инстансов.
    */
   eachProxy(visit: PickProxyVisitor): void {
     for (const node of this.nodes.values()) {
       for (const handle of node.handles) {
+        // Мировые матрицы обновляет рендерер перед отрисовкой; наведение
+        // спрашивают и между кадрами, поэтому матрица подтягивается из позы.
+        handle.mesh.updateWorldMatrix(true, false);
+        handle.mesh.matrixWorld.decompose(this.proxyPosition, this.proxyQuaternion, this.proxyScale);
         this.handleProxy.entity = 0;
         this.handleProxy.decoration = false;
         this.handleProxy.handle = handle.id;
-        this.handleProxy.node = handle.mesh;
+        this.handleProxy.posX = this.proxyPosition.x;
+        this.handleProxy.posY = this.proxyPosition.y;
+        this.handleProxy.posZ = this.proxyPosition.z;
+        this.handleProxy.quatX = this.proxyQuaternion.x;
+        this.handleProxy.quatY = this.proxyQuaternion.y;
+        this.handleProxy.quatZ = this.proxyQuaternion.z;
+        this.handleProxy.quatW = this.proxyQuaternion.w;
+        this.handleProxy.scaleX = this.proxyScale.x;
+        this.handleProxy.scaleY = this.proxyScale.y;
+        this.handleProxy.scaleZ = this.proxyScale.z;
         this.handleProxy.minX = handle.minX;
         this.handleProxy.minY = handle.minY;
         this.handleProxy.minZ = handle.minZ;
@@ -444,9 +467,11 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
   }
 
   /**
-   * Рамка ставится мировой матрицей узла инстанса — того самого, который
-   * подсистема моделей нарисовала в этом кадре, — а размер берёт из его
-   * объёма-прокси. Материалы и скин инстанса (REND-6) при этом не трогаются.
+   * Рамка ставится ТЕМ ЖЕ преобразованием, которым подсистема моделей нарисовала
+   * инстанс в этом кадре, а размер берёт из его объёма-прокси. Матрица инстанса
+   * собирается из позы прокси — узла сцены в контракте нет (REND-3), и на
+   * батчевой записи (REND-20) рамка встанет теми же числами. Материалы и скин
+   * инстанса (REND-6) при этом не трогаются.
    */
   private updateHighlight(node: OverlayNode, item: OverlayHighlight): void {
     const outline = node.object.children[0];
@@ -458,7 +483,10 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
     }
     outline.visible = true;
     const proxy = this.proxy;
-    proxy.node.updateWorldMatrix(true, false);
+    this.proxyPosition.set(proxy.posX, proxy.posY, proxy.posZ);
+    this.proxyQuaternion.set(proxy.quatX, proxy.quatY, proxy.quatZ, proxy.quatW);
+    this.proxyScale.set(proxy.scaleX, proxy.scaleY, proxy.scaleZ);
+    this.instanceMatrix.compose(this.proxyPosition, this.proxyQuaternion, this.proxyScale);
     this.boxPosition.set(
       (proxy.minX + proxy.maxX) / 2,
       (proxy.minY + proxy.maxY) / 2,
@@ -471,7 +499,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
     );
     this.boxQuaternion.identity();
     this.boxMatrix.compose(this.boxPosition, this.boxQuaternion, this.boxScale);
-    outline.matrix.multiplyMatrices(proxy.node.matrixWorld, this.boxMatrix);
+    outline.matrix.multiplyMatrices(this.instanceMatrix, this.boxMatrix);
     outline.matrixWorldNeedsUpdate = true;
   }
 
@@ -532,7 +560,10 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
       if (cell < 0 || cell >= grid.width * grid.height) continue;
       const x = cell % grid.width;
       const y = Math.floor(cell / grid.width);
-      if (!surface.hasCellCurvature(x, y)) {
+      // Быстрый путь по углам клетки не годится ни при кривизне, ни под
+      // walkable-поверхностью (REND-9): в накрытой клетке высота поля не
+      // выводится из углов — ячейка ложится на настил той же выборкой поля.
+      if (!surface.hasCellCurvature(x, y) && !surface.hasCellWalkable(x, y)) {
         const [h00, h10, h11, h01] = surface.cornerHeights(x, y);
         const base = positions.length / 3;
         positions.push(
@@ -631,7 +662,8 @@ function pushCellOutline(
   const y0 = y * tile;
   const x1 = (x + 1) * tile;
   const y1 = (y + 1) * tile;
-  if (!surface.hasCellCurvature(x, y)) {
+  // Как у ячеек: под walkable-поверхностью контур идёт выборкой поля (REND-9).
+  if (!surface.hasCellCurvature(x, y) && !surface.hasCellWalkable(x, y)) {
     const [h00, h10, h11, h01] = surface.cornerHeights(x, y);
     const z00 = h00 + lift;
     const z10 = h10 + lift;

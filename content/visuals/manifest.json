@@ -43,6 +43,7 @@
       },
       "verticalOffset": {
         "jumpArc": 0.9,
+        "maneuverArc": 0.25,
         "fallSpeed": 15,
         "fallDepth": 75
       }
@@ -67,6 +68,98 @@
         "states": {
           "idle": "Stand"
         }
+      }
+    },
+    "Torch": {
+      "effect": "visuals/effects/torch.effect.json"
+    }
+  },
+  "effects": {
+    "byKind": {
+      "Fireball": {
+        "primitive": "sphere",
+        "color": "#ff8a3c",
+        "radius": 0.15,
+        "alpha": 0.8,
+        "height": 0.3,
+        "verticalOffset": {
+          "flightArc": 0.12
+        }
+      },
+      "HeavyFireball": {
+        "primitive": "sphere",
+        "color": "#ff7020",
+        "radius": 0.3,
+        "alpha": 0.8,
+        "height": 0.35,
+        "verticalOffset": {
+          "flightArc": 0.12
+        }
+      },
+      "SlowDome": {
+        "primitive": "sphere",
+        "color": "#6fd3ff",
+        "radius": 3,
+        "alpha": 0.2,
+        "height": 0
+      }
+    },
+    "byState": {
+      "Shielded": {
+        "primitive": "sphere",
+        "color": "#4aa3ff",
+        "radius": 0.39,
+        "alpha": 0.3,
+        "height": 0.5
+      },
+      "Held": {
+        "primitive": "sphere",
+        "color": "#8affc8",
+        "radius": 0.24,
+        "alpha": 0.45,
+        "height": 0.35,
+        "verticalOffset": {
+          "flightArc": 0.12
+        }
+      }
+    },
+    "byEvent": {
+      "FireballExploded": {
+        "primitive": "sphere",
+        "color": "#ff5a2a",
+        "radius": 0.3,
+        "radiusTo": 0.7,
+        "alpha": 0.55,
+        "alphaTo": 0,
+        "durationMs": 420,
+        "curve": "easeOut",
+        "height": 0.4
+      },
+      "ChargeExploded": {
+        "primitive": "sphere",
+        "color": "#ff2020",
+        "radius": 0.5,
+        "radiusTo": 3,
+        "alpha": 0.5,
+        "alphaTo": 0,
+        "durationMs": 520,
+        "curve": "easeOut",
+        "height": 0.6
+      }
+    }
+  },
+  "particles": {
+    "byState": {
+      "Falling": {
+        "effect": "visuals/effects/fall-dust.effect.json"
+      }
+    },
+    "byEvent": {
+      "CastFireball": {
+        "effect": "visuals/effects/cast-burst.effect.json"
+      },
+      "HeroHit": {
+        "effect": "visuals/effects/blood-burst.effect.json"
       }
     }
   },
@@ -111,6 +204,15 @@
         "maxOffset": 0.3,
         "maxRoll": 0.04,
         "decay": 1.6
+      },
+      "ChargeExploded": {
+        "effect": "shake",
+        "amplitude": 0.9,
+        "radius": 18,
+        "frequency": 11,
+        "maxOffset": 0.5,
+        "maxRoll": 0.07,
+        "decay": 1.4
       }
     },
     "states": {

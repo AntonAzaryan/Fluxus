@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "name": "easy",
+  "reaction": {
+    "delayTicks": 24,
+    "jitterTicks": 8,
+    "memoryTicks": 60
+  },
+  "aim": {
+    "noiseDegrees": 14,
+    "noisePeriodTicks": 20
+  },
+  "decision": {
+    "intervalTicks": 12,
+    "jitterTicks": 6
+  },
+  "movement": {
+    "maxSpeed": 0.6,
+    "arriveTolerance": 0.5,
+    "edgeMargin": 3
+  },
+  "ability": {
+    "button": 0,
+    "cooldownTicks": 90,
+    "range": 6
+  },
+  "utility": {
+    "pressure": 0.6,
+    "kite": 0.5,
+    "retreat": 1,
+    "dodge": 0.7,
+    "ability": 0.5
+  },
+  "aggression": 0.3,
+  "seed": 1
+}

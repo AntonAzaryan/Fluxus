@@ -32,7 +32,9 @@ export default defineConfig({
       'engine/assets-ts',
       'engine/client-ts',
       'engine/hud-ts',
+      'engine/bot-ts',
       'engine/integration-ts',
+      'game/demo-ts',
     ].map((pkg) => root + pkg),
     coverage: {
       provider: 'v8',

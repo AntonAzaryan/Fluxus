@@ -15,7 +15,7 @@ import {
   quantizedFixed,
   type Finding,
 } from '../src/layer.js';
-import { COMPONENTS, context, objectsOf } from './support.js';
+import { COMPONENTS, MANIFEST, context, objectsOf } from './support.js';
 
 const ROTATION = { component: 'Facing', field: 'turns' } as const;
 
@@ -83,6 +83,60 @@ describe('BLND-3: узел с visual даёт запись decoration', () => {
       expect(record.prefab).toBeUndefined();
       expect(record.overrides).toBeUndefined();
     }
+  });
+});
+
+describe('BLND-3: custom property walkable — флаг записи decoration (PRES-2)', () => {
+  const layer = generateSpatialLayer(objectsOf('walkable.gltf'), context());
+
+  it('true даёт walkable: true, и ключ стоит последним — порядком состава PRES-2', () => {
+    expect(layer.decorations[0]).toEqual({ visual: 'Bridge', x: 1, y: 2, walkable: true });
+    expect(Object.keys(layer.decorations[0] ?? {})).toEqual(['visual', 'x', 'y', 'walkable']);
+  });
+
+  it('целая единица экспорта принимается как булево (BLND-3)', () => {
+    expect(layer.decorations[1]).toEqual({ visual: 'Bridge', x: 2, y: 3, walkable: true });
+  });
+
+  it('false и целый ноль поля не дают: отсутствующее и ложное неразличимы', () => {
+    expect(layer.decorations[2]).toEqual({ visual: 'Statue', x: 3, y: 1 });
+    expect(layer.decorations[3]).toEqual({ visual: 'Statue', x: 0.5, y: 0.5 });
+  });
+
+  it('законные значения находок не порождают', () => {
+    expect(layer.findings).toEqual([]);
+  });
+});
+
+describe('BLND-3, BLND-6: walkable с неверным значением или не на visual-объекте', () => {
+  const layer = generateSpatialLayer(objectsOf('walkable-errors.gltf'), context());
+
+  it('строка — отказ с именем объекта, а не угадывание', () => {
+    expect(messagesFor(layer.findings, 'bad-string')[0]).toContain('walkable');
+    expect(hasErrors(layer.findings)).toBe(true);
+  });
+
+  it('число, не являющееся 0/1, — тот же отказ', () => {
+    expect(messagesFor(layer.findings, 'bad-number')[0]).toContain('walkable');
+  });
+
+  it('запись с ошибочным walkable не строится вовсе', () => {
+    expect(layer.decorations).toEqual([]);
+  });
+
+  it('walkable на объекте с prefab — отказ: сим-слой поля не несёт (PRES-2)', () => {
+    expect(messagesFor(layer.findings, 'walkable-prefab')[0]).toContain('decoration');
+  });
+
+  it('walkable на terrain-объекте — тот же отказ с именем', () => {
+    const objects = objectsOf('walkable-errors.gltf').map((object) =>
+      object.name === 'walkable-prefab'
+        ? { ...object, semantics: ['terrain' as const], semanticValue: '', extras: { terrain: 1, walkable: true } }
+        : object,
+    );
+    const findings = generateSpatialLayer(objects, context()).findings;
+    expect(messagesFor(findings, 'walkable-prefab')[0]).toContain('terrain');
+    expect(hasErrors(findings)).toBe(true);
   });
 });
 
@@ -246,6 +300,22 @@ describe('BLND-6: ключ visual без записи манифеста — п�
   it('манифеста нет вовсе — ссылки не проверяются: это не то же, что ключа в нём нет', () => {
     const findings = generateSpatialLayer(objectsOf('warnings.gltf'), context({ visuals: null })).findings;
     expect(messagesFor(findings, 'ghost-visual')).toEqual([]);
+  });
+
+  it('эмиттерный вид разрешается наравне с модельным (ASSET-14): факел из Blender не ругается', () => {
+    // Пространство визуальных ключей одно, а родов записи два (ASSET-9,
+    // ASSET-14): размещение ссылается на оба одним полем `visual`, и проверка
+    // только модельного рода ругалась бы на каждый импортированный факел.
+    const visuals = {
+      ...MANIFEST,
+      decorations: {
+        ...MANIFEST.decorations,
+        NoSuchVisual: { effect: 'visuals/effects/torch.effect.json' },
+      },
+    };
+    const findings = generateSpatialLayer(objectsOf('warnings.gltf'), context({ visuals })).findings;
+    expect(messagesFor(findings, 'ghost-visual')).toEqual([]);
+    expect(hasErrors(findings)).toBe(false);
   });
 
   it('неодинаковый по осям масштаб — предупреждение с названным выбором', () => {

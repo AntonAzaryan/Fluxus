@@ -28,30 +28,8 @@ const ALPHA_VISIBLE = 0.1;
 /** Частота кадров MDX: времена ключей — миллисекунды, в секвенциях тоже. */
 const MS_PER_SECOND = 1000;
 
-/**
- * Считать ли альфу геосета настоящей анимацией видимости.
- *
- * У типичных WC3-моделей одноключевые GeosetAnim — placeholder базового тела
- * (в SkeletonBarbarian все они = 0 на служебном кадре, но геосет обязан быть
- * виден всегда). Реальные тумблеры вариантов (Defend/Death) имеют >= 2 ключей
- * и действительно переключают видимость по секвенциям. Поэтому треки видимости
- * строим ТОЛЬКО из многоключевой альфы — иначе базовое тело исчезнет целиком.
- */
-function isAnimatedAlpha(a: MdlModel.AnimVector | number | undefined): a is MdlModel.AnimVector {
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
-  return a != null && typeof a !== 'number' && !!a.Keys && a.Keys.length >= 2;
-}
-
-/** Значение альфы на кадре: последний ключ с Frame <= frame, иначе первый. */
-function evalAlphaAt(alpha: MdlModel.AnimVector, frame: number): number {
-  const keys = alpha.Keys;
-  let val = keys[0]!.Vector[0] ?? 1;
-  for (const k of keys) {
-    if (k.Frame <= frame) val = k.Vector[0] ?? 1;
-    else break;
-  }
-  return val;
-}
+/** Альфа геосета, когда в окне секвенции ключей нет: статическое значение MDX. */
+const ALPHA_STATIC_DEFAULT = 1;
 
 /**
  * Ключи канала внутри окна секвенции `[s0, s1]`, времена в секундах от её
@@ -113,8 +91,29 @@ function interpolationOf(v: MdlModel.AnimVector): Interpolation {
   return v.LineType === LINE_TYPE_DONT_INTERP ? 'step' : 'linear';
 }
 
+/** Ключи и значения видимости одной части внутри секвенции. */
+interface VisibilityKeys {
+  readonly times: Float32Array;
+  readonly visible: Uint8Array;
+}
+
+/** Постоянная видимость на всю секвенцию — концевые ключи t=0 и t=dur. */
+function constantVisibility(dur: number, alpha: number): VisibilityKeys {
+  const value = alpha >= ALPHA_VISIBLE ? 1 : 0;
+  return { times: Float32Array.from([0, dur]), visible: Uint8Array.from([value, value]) };
+}
+
 /**
- * Трек видимости геосета из многоключевой альфы для окна `[s0, s1]`.
+ * Трек видимости геосета для окна секвенции `[s0, s1]`.
+ *
+ * КЛЮЧИ ОКНА, А НЕ ВСЕЙ ЛЕНТЫ. MDX хранит альфу геосета одним вектором на всю
+ * ленту кадров модели, а секвенция — окно в этой ленте; WC3 берёт в секвенции
+ * ТОЛЬКО ключи её окна, а если их там нет — статическое значение геосета
+ * (видим). Ровно так модель и переключает варианты тела: у SkeletonBarbarian
+ * геосеты живого тела несут единственный ключ `alpha=0` на первом кадре Death,
+ * а отдельная копия геосетов, наоборот, включается только в этом окне. Читать
+ * такой вектор глобально (последний ключ с `Frame <= s0`) значит подать живое
+ * тело видимым и в смерти — на экране это вторым слоем поверх анимации смерти.
  *
  * В WC3 альфа геосета практически всегда бинарная (ключи 0/1 со ступенчатой
  * интерполяцией) — поэтому нормализуем её в 0/1 по порогу, а не в opacity.
@@ -122,11 +121,17 @@ function interpolationOf(v: MdlModel.AnimVector): Interpolation {
  * задавала состояние геосета и не «наследовала» его от предыдущего клипа.
  */
 function buildVisibilityTrack(
-  alpha: MdlModel.AnimVector,
+  alpha: MdlModel.AnimVector | number,
   s0: number,
   s1: number,
   dur: number,
-): { times: Float32Array; visible: Uint8Array } {
+): VisibilityKeys {
+  // Статическая альфа анимации не несёт — одно значение на все секвенции.
+  if (typeof alpha === 'number') return constantVisibility(dur, alpha);
+
+  const window = alpha.Keys.filter((k) => k.Frame >= s0 && k.Frame <= s1);
+  if (window.length === 0) return constantVisibility(dur, ALPHA_STATIC_DEFAULT);
+
   const times: number[] = [];
   const visible: number[] = [];
   const push = (t: number, a: number): void => {
@@ -136,12 +141,12 @@ function buildVisibilityTrack(
     visible.push(a >= ALPHA_VISIBLE ? 1 : 0);
   };
 
-  push(0, evalAlphaAt(alpha, s0));
-  for (const k of alpha.Keys) {
-    if (k.Frame <= s0 || k.Frame >= s1) continue;
-    push((k.Frame - s0) / MS_PER_SECOND, k.Vector[0] ?? 1);
+  // До первого ключа окна держится он сам, после последнего — он же.
+  push(0, window[0]!.Vector[0] ?? ALPHA_STATIC_DEFAULT);
+  for (const k of window) {
+    push((k.Frame - s0) / MS_PER_SECOND, k.Vector[0] ?? ALPHA_STATIC_DEFAULT);
   }
-  push(dur, evalAlphaAt(alpha, s1));
+  push(dur, window[window.length - 1]!.Vector[0] ?? ALPHA_STATIC_DEFAULT);
 
   return { times: Float32Array.from(times), visible: Uint8Array.from(visible) };
 }
@@ -286,10 +291,34 @@ export function normalizeMdx(mdl: MdlModel.Model): NormalizedModel {
     alphaByGeoset.set(ga.GeosetId, ga.Alpha);
   }
 
-  const sequences: NormalizedSequence[] = mdl.Sequences.map((seq) => {
+  const windows = mdl.Sequences.map((seq) => {
     const s0 = seq.Interval[0] ?? 0;
     const s1 = seq.Interval[1] ?? 0;
-    const dur = Math.max((s1 - s0) / MS_PER_SECOND, 0.001);
+    return { s0, s1, dur: Math.max((s1 - s0) / MS_PER_SECOND, 0.001) };
+  });
+
+  /**
+   * Треки видимости по секвенциям: считаются на все окна сразу, потому что
+   * решение «нужен ли геосету трек вообще» глобально. Геосет, который ни в
+   * одной секвенции не гаснет, треков не получает (нет трека = виден). А вот
+   * гаснущий получает трек в КАЖДОЙ секвенции, даже там, где ключей окна нет:
+   * потребитель детального яруса переключает `.visible` треком клипа, и без
+   * явного «виден» геосет унаследовал бы погашенное состояние предыдущего
+   * клипа — тело, скрытое смертью, не вернулось бы после респауна.
+   */
+  const visibilityBySequence: PartVisibilityTrack[][] = windows.map(() => []);
+  mdl.Geosets.forEach((_g, gi) => {
+    const alpha = alphaByGeoset.get(gi);
+    if (alpha === undefined) return; // без GeosetAnim геосет виден всегда
+    const perSequence = windows.map((w) => buildVisibilityTrack(alpha, w.s0, w.s1, w.dur));
+    if (perSequence.every((keys) => keys.visible.every((v) => v === 1))) return;
+    perSequence.forEach((keys, si) => {
+      visibilityBySequence[si]!.push(Object.freeze({ partId: gi, ...keys }));
+    });
+  });
+
+  const sequences: NormalizedSequence[] = mdl.Sequences.map((seq, si) => {
+    const { s0, s1, dur } = windows[si]!;
 
     const boneTracks: BoneTrack[] = [];
     nodes.forEach((n, i) => {
@@ -309,19 +338,11 @@ export function normalizeMdx(mdl: MdlModel.Model): NormalizedModel {
       );
     });
 
-    const partVisibility: PartVisibilityTrack[] = [];
-    mdl.Geosets.forEach((_g, gi) => {
-      const alpha = alphaByGeoset.get(gi);
-      if (!isAnimatedAlpha(alpha)) return; // одноключевые placeholder'ы игнорируем
-      const { times, visible } = buildVisibilityTrack(alpha, s0, s1, dur);
-      partVisibility.push(Object.freeze({ partId: gi, times, visible }));
-    });
-
     return Object.freeze({
       name: seq.Name,
       duration: dur,
       boneTracks: Object.freeze(boneTracks),
-      partVisibility: Object.freeze(partVisibility),
+      partVisibility: Object.freeze(visibilityBySequence[si]!),
     });
   });
 

@@ -1,8 +1,10 @@
 {
   "decorations": [
-    { "visual": "Statue", "x": 5.5, "y": 5.5, "yaw": 0.125 },
-    { "visual": "Statue", "x": 5.5, "y": 18.5, "yaw": 0.875, "skin": "steel" },
-    { "visual": "Statue", "x": 18.5, "y": 5.5, "yaw": 0.375, "scale": 0.75 },
-    { "visual": "Statue", "x": 18.5, "y": 18.5, "yaw": 0.625, "scale": 0.75, "skin": "steel" }
+    { "visual": "Statue", "x": 13.5, "y": 13.5, "yaw": 0.125 },
+    { "visual": "Statue", "x": 13.5, "y": 34.5, "yaw": 0.875, "skin": "steel" },
+    { "visual": "Statue", "x": 34.5, "y": 13.5, "yaw": 0.375, "scale": 0.75 },
+    { "visual": "Statue", "x": 34.5, "y": 34.5, "yaw": 0.625, "scale": 0.75, "skin": "steel" },
+    { "visual": "Torch", "x": 24.5, "y": 18.5 },
+    { "visual": "Torch", "x": 24.5, "y": 30.5 }
   ]
 }

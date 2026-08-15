@@ -21,10 +21,11 @@
  * поверхность), чтобы подсистема террейна инвалидировала свои чанки точечно, а
  * не пересобирала арену на каждый мазок.
  */
-import type { TerrainGrid } from '@game-mvp/core';
+import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
 import type { AssetState, TerrainCurvatureMap } from '@game-mvp/assets';
 import type { RenderContext } from './types.js';
 import { createVisualSurface, type MutableVisualSurface } from './visualSurface.js';
+import { WalkableSurfaceRegistry, type WalkablePlacement } from './walkableSurface.js';
 
 export interface VisualSurfaceSourceOptions {
   /** Asset id карты кривизны (манифест `terrain.curvatureMap`); нет — плоские ступени. */
@@ -36,8 +37,15 @@ export interface VisualSurfaceSourceOptions {
 /**
  * Подписка на изменение поверхности: клетки, чьи данные изменились, либо `null`
  * — изменилась вся поверхность (догрузился ассет, сменились размеры арены).
+ * `walkableOnly === true` — изменился только walkable-вклад поля (REND-9):
+ * террейн-форма в этих клетках прежняя, и геометрию террейна пересборкой квадов
+ * это не трогает (walkable в неё не попадает — настил рисует меш декорации);
+ * подписчики, читающие поле целиком (наложения REND-16), обновляют своё.
  */
-export type SurfaceChangeListener = (cells: readonly number[] | null) => void;
+export type SurfaceChangeListener = (
+  cells: readonly number[] | null,
+  walkableOnly?: boolean,
+) => void;
 
 export class VisualSurfaceSource {
   private grid: TerrainGrid;
@@ -51,11 +59,19 @@ export class VisualSurfaceSource {
   private failedReason: string | null = null;
   /** Карта задана из памяти (ED-11): догруженный ассет её не перебивает. */
   private overridden = false;
+  /**
+   * Реестр walkable-инстансов (REND-9) — walkable-слагаемое поля. Живёт у
+   * источника, а не у поверхности: пересоздание поверхности (другая арена)
+   * реестр переживает, инстансы лишь пересаживаются на новую террейн-форму.
+   */
+  private readonly walkable = new WalkableSurfaceRegistry();
 
   constructor(grid: TerrainGrid, options: VisualSurfaceSourceOptions = {}) {
     this.grid = grid;
     this.curvatureMapId = options.curvatureMapId;
     this.warn = options.warn ?? ((message) => { console.warn(message); });
+    // Приём tileSize — точка входной границы (REND-1, TERR-2), как у поверхности.
+    this.walkable.configure(grid.width, grid.height, grid.tileSize / FIXED_ONE);
   }
 
   /** Поверхность; null — ни одна подсистема ещё не вызвала init. */
@@ -78,7 +94,7 @@ export class VisualSurfaceSource {
     this.heightStep = ctx.config.heightStep;
     // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- baseline
     if (this.surface === null) {
-      this.surface = createVisualSurface(this.grid, this.heightStep, this.curvature);
+      this.surface = createVisualSurface(this.grid, this.heightStep, this.curvature, this.walkable);
     }
     // Карта из памяти уже есть — ассет ей не нужен и запрашивать его нечего.
     if (this.requested || this.curvatureMapId === undefined || this.overridden) return;
@@ -133,8 +149,12 @@ export class VisualSurfaceSource {
         );
         this.curvature = null;
       }
+      this.walkable.configure(grid.width, grid.height, grid.tileSize / FIXED_ONE);
       if (this.surface !== null) {
-        this.surface = createVisualSurface(grid, this.heightStep, this.curvature);
+        this.surface = createVisualSurface(grid, this.heightStep, this.curvature, this.walkable);
+        // Walkable-инстансы пересаживаются на террейн-форму новой арены; общий
+        // notify(null) ниже покрывает и их клетки.
+        this.walkable.reseatAll(this.surface);
       }
       this.notify(null);
       return;
@@ -163,6 +183,29 @@ export class VisualSurfaceSource {
   }
 
   /**
+   * Walkable-инстанс декорации (REND-9, REND-18): `placement` — стоит и готов,
+   * `null` — вклада нет (флаг снят, запись ушла, модель не готова, ASSET-4).
+   * Кормит реестр подсистема моделей — у неё запись манифеста, разрешённая
+   * модель и точка приёма их правок (REND-17); данные размещения при этом ровно
+   * те, которыми она ставит узел инстанса в кадре, — расчёт один (REND-9).
+   * Изменение вклада уведомляет подписчиков клетками под старым ∪ новым bbox —
+   * не позже следующего кадра (REND-9, hot-reload BLND-12).
+   */
+  setWalkable(key: number, placement: WalkablePlacement | null): void {
+    const changed = this.walkable.set(key, placement, this.surface);
+    if (changed.length > 0) this.notify(changed, true);
+  }
+
+  /**
+   * Ближайшее пересечение мирового луча с walkable-мешами (REND-15) — walkable-
+   * ветвь попадания в поверхность; -1 — луч не задел ничего. Сами треугольники
+   * считает индекс ассета (ASSET-11).
+   */
+  walkableRaycast(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number): number {
+    return this.walkable.raycastNearest(ox, oy, oz, dx, dy, dz);
+  }
+
+  /**
    * Пересчитывает углы затронутых клеток и уведомляет подписчиков. До `init`
    * поверхности ещё нет — она соберётся уже с новыми данными.
    */
@@ -171,6 +214,7 @@ export class VisualSurfaceSource {
     if (surface === null) return;
     if (cells === null) {
       surface.update(this.grid, this.curvature, 0, 0, this.grid.width - 1, this.grid.height - 1);
+      this.walkable.reseatAll(surface);
       this.notify(null);
       return;
     }
@@ -196,11 +240,16 @@ export class VisualSurfaceSource {
     // разбросанный набор в пределе вырождается в пересчёт всей сетки — ровно то,
     // что делалось бы и без него.
     surface.update(this.grid, this.curvature, x0, y0, x1, y1);
+    // Правка двигает и посадку walkable-инстансов этих клеток: настил стоит на
+    // террейн-форме (REND-9), и его вклад пересчитывается вместе с ней. Углы
+    // пересчитаны прямоугольником ±1 — пересадка идёт тем же расширением.
+    const walkableCells = this.walkable.reseatRect(surface, x0 - 1, y0 - 1, x1 + 1, y1 + 1);
     this.notify(cells);
+    if (walkableCells.length > 0) this.notify(walkableCells, true);
   }
 
-  private notify(cells: readonly number[] | null): void {
-    for (const listener of this.listeners) listener(cells);
+  private notify(cells: readonly number[] | null, walkableOnly = false): void {
+    for (const listener of this.listeners) listener(cells, walkableOnly);
   }
 }
 

@@ -40,9 +40,21 @@ interface EntityRecord extends EntityView {
   aimYaw: number | null;
   states: number;
   motion: number;
+  prevMotion: number;
   prevMotionPhase: number;
   currMotionPhase: number;
+  /** Фаза полёта последнего доставленного тика; `NaN` — сущность не летит (REND-12). */
+  flightPhase: number;
+  /**
+   * Статы сущности (HUD-8). Словарь заводится ЛЕНИВО — у сущности без статов
+   * его нет вовсе — и переиспользуется между доставками: запись живёт всё время
+   * жизни сущности, и пересоздавать словарь на каждый тик значило бы
+   * аллоцировать пропорционально числу сущностей.
+   */
+  stats?: Map<string, number>;
 }
+
+const EMPTY_STAT_NAMES: readonly string[] = [];
 
 export interface ViewBufferConfig {
   /** Длительность тика в секундах — знаменатель альфы интерполяции (REND-2). */
@@ -94,6 +106,7 @@ export class ViewBuffer {
       snapAll: false,
       freshEvents: false,
       entities: this.records,
+      statNames: EMPTY_STAT_NAMES,
       events: [],
       floorBits: this.floorBits,
       floorChangedCells: [],
@@ -114,6 +127,7 @@ export class ViewBuffer {
     const floorChanged = this.applyFloor(ext);
 
     view.tick = ext.tick;
+    view.statNames = ext.statNames;
     view.mode = ext.mode;
     view.isReplay = ext.isReplay;
     view.snapAll = snapAll;
@@ -147,6 +161,9 @@ export class ViewBuffer {
   private applyEntities(ext: ExtractedTick, tickAdvanced: boolean, snapAll: boolean): void {
     const seen = this.seen;
     seen.clear();
+    // Курсор разреженной секции статов: пары идут подряд по сущностям в том же
+    // порядке, что и сами сущности, — своего индекса им не нужно (HUD-8).
+    let statAt = 0;
 
     for (let i = 0; i < ext.count; i++) {
       const id = ext.id[i]!;
@@ -155,8 +172,12 @@ export class ViewBuffer {
       const y = ext.y[i]!;
       const level = ext.level[i]!;
       // Фаза манёвра скользит по тем же двум тикам, что позиция (REND-12):
-      // дуга прыжка интерполируется вместе с ней, а не ступеньками по тикам.
+      // дуга манёвра интерполируется вместе с ней, а не ступеньками по тикам.
       const phase = ext.motionPhase[i]!;
+      // Вид манёвра скользит ВМЕСТЕ с фазой: высота дуги задана на вид, и
+      // вклад прошлого тика обязан считаться высотой того манёвра, который на
+      // нём и шёл (REND-12).
+      const motion = ext.motion[i]!;
 
       let record = this.records.get(id);
       if (record === undefined) {
@@ -178,8 +199,10 @@ export class ViewBuffer {
           aimYaw: null,
           states: 0,
           motion: LOCOMOTION_NORMAL,
+          prevMotion: LOCOMOTION_NORMAL,
           prevMotionPhase: phase,
           currMotionPhase: phase,
+          flightPhase: Number.NaN,
         };
         this.records.set(id, record);
       } else if (snapAll) {
@@ -187,6 +210,7 @@ export class ViewBuffer {
         record.prevY = record.currY = y;
         record.prevLevel = record.currLevel = level;
         record.prevMotionPhase = record.currMotionPhase = phase;
+        record.prevMotion = motion;
         record.snap = true;
         record.spawned = false;
       } else if (!tickAdvanced) {
@@ -200,6 +224,7 @@ export class ViewBuffer {
         record.prevY = teleport ? y : record.currY;
         record.prevLevel = teleport ? level : record.currLevel;
         record.prevMotionPhase = teleport ? phase : record.currMotionPhase;
+        record.prevMotion = teleport ? motion : record.motion;
         record.currX = x;
         record.currY = y;
         record.currLevel = level;
@@ -208,7 +233,12 @@ export class ViewBuffer {
         record.spawned = false;
       }
 
-      record.motion = ext.motion[i]!;
+      record.motion = motion;
+      // Фаза полёта — величина последнего доставленного тика, а не пара для
+      // интерполяции (REND-12): дуга производна от неё, и conflation (SHELL-4)
+      // ей не вредит — пропущенный тик просто не был показан.
+      record.flightPhase = ext.flightPhase[i]!;
+      statAt = this.applyStats(ext, record, i, statAt);
       record.moving = (ext.flags[i]! & ENTITY_MOVING) !== 0;
       record.levelOverride = (ext.flags[i]! & ENTITY_LEVEL_OVERRIDE) !== 0;
       record.states = ext.flags[i]! >>> STATE_BITS_SHIFT;
@@ -221,6 +251,29 @@ export class ViewBuffer {
     for (const id of this.records.keys()) {
       if (!seen.has(id)) this.records.delete(id);
     }
+  }
+
+  /**
+   * Статы сущности из разреженной секции (HUD-8): словарь записи очищается и
+   * наполняется заново — стат, переставший приезжать, ИСЧЕЗАЕТ, а не застывает
+   * прошлым значением. Возвращает сдвинутый курсор секции.
+   */
+  private applyStats(ext: ExtractedTick, record: EntityRecord, index: number, at: number): number {
+    const count = ext.statCount[index] ?? 0;
+    if (count === 0) {
+      record.stats?.clear();
+      return at;
+    }
+    const stats = (record.stats ??= new Map<string, number>());
+    stats.clear();
+    for (let k = 0; k < count; k++) {
+      const name = ext.statNames[ext.statIndex[at + k]!];
+      // Имя вне словаря доставки — рассинхрон канала, а не «стат без имени»:
+      // молча положить его под номером значило бы отдать виджету число, за
+      // которым неизвестно что.
+      if (name !== undefined) stats.set(name, ext.statValue[at + k]!);
+    }
+    return at + count;
   }
 
   /**

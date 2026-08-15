@@ -77,7 +77,23 @@ export interface AuthoringScanConfig {
 
 const CONFIG_HINT = 'конфиг: engine/tests/guard/authoringBoundary.ts';
 
-const SKIP_DIRS = new Set(['node_modules', 'dist', '.vite']);
+/**
+ * Каталоги артефактов: код пакета — это его исходники, а не то, что положила
+ * туда сборка. Собранный бандл — это чужие модули, слитые в один файл, и
+ * запрет на импорт к нему неприменим по построению.
+ */
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'dist-desktop', 'build', 'coverage', '.vite']);
+
+/**
+ * Что считается кодом пакета. `.cjs` и `.js` в списке не для полноты: preload
+ * десктоп-контейнера и конфиг его упаковщика — именно `.cjs` (в песочнице
+ * Electron `require` соседнего модуля недоступен, поэтому файл самодостаточный
+ * и на CommonJS). Список без них покрывал бы бо́льшую часть пакета вместо
+ * пакета, а `require('@game-mvp/core')` в непросматриваемом файле оставался бы
+ * зелёным — при том, что спецификаторы `require` сканер разбирает (DSK-3,
+ * BLND-7).
+ */
+const CODE_EXTENSIONS = ['.ts', '.mts', '.cts', '.tsx', '.mjs', '.cjs', '.js', '.jsx'];
 
 /**
  * Инструменты авторинга конвейера. Рантайм их не зовёт: импорт — авторинг,
@@ -186,7 +202,7 @@ function walk(
       walk(full, config, excluded, out);
       continue;
     }
-    if (!entry.endsWith('.ts') && !entry.endsWith('.mts') && !entry.endsWith('.mjs')) continue;
+    if (!CODE_EXTENSIONS.some((extension) => entry.endsWith(extension))) continue;
     inspect(full, relativePath, config, out);
   }
 }

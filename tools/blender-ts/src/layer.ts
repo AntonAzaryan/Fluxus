@@ -35,14 +35,20 @@
  * `initial`, то есть выданные ID и хеш `worldInit`.
  */
 import { fixed, FIXED_ONE, type ComponentSchema, type FieldType, type PrefabDef } from '@game-mvp/core';
-import { quantizeDecorationLength, quantizeDecorationYaw, resolveVisual, type VisualManifest } from '@game-mvp/assets';
+import {
+  quantizeDecorationLength,
+  quantizeDecorationYaw,
+  resolveVisual,
+  resolveVisualEmitter,
+  type VisualManifest,
+} from '@game-mvp/assets';
 import {
   DEFAULT_POSITION_BINDING,
   type JsonObject,
   type JsonValue,
   type PositionBinding,
 } from '@game-mvp/editor-core';
-import { SKIN_KEY, type SourceObject } from './normalize.js';
+import { SKIN_KEY, WALKABLE_KEY, type SourceObject } from './normalize.js';
 
 /**
  * Привязка позиции и поворота (ED-16) — общая с расстановкой редактора и потому
@@ -361,7 +367,15 @@ function decorationRecord(sink: Sink, source: SourceObject, context: SpatialLaye
     return null;
   }
   const visuals = context.visuals;
-  if (visuals != null && resolveVisual(visuals, key) === undefined) {
+  // Пространство визуальных ключей одно, а родов записи два (ASSET-9,
+  // ASSET-14): модельный вид рисует подсистема моделей, эмиттерный (факел,
+  // костёр) — подсистема частиц (`rendering` REND-24). Размещение ссылается на
+  // оба одним и тем же полем `visual`, поэтому «ключ разрешается» здесь значит
+  // «разрешается хоть одним из двух»: проверять только модельный род означало
+  // бы ругаться на каждый импортированный из Blender факел.
+  const resolved =
+    visuals == null ? undefined : (resolveVisual(visuals, key) ?? resolveVisualEmitter(visuals, key));
+  if (visuals != null && resolved === undefined) {
     // Предупреждение, а не отказ (BLND-6): в рантайме такая запись даёт
     // заглушку (PRES-2), и чинится она правкой манифеста — отказ запер бы автора.
     warning(sink, source.name, `ключ "${key}" не разрешается в запись манифеста визуалов (ASSET-9)`);
@@ -399,12 +413,29 @@ function decorationRecord(sink: Sink, source: SourceObject, context: SpatialLaye
     return null;
   }
 
+  // Флаг walkable-поверхности (BLND-3): значение — булево, но целые 0/1
+  // принимаются как булево — булев custom property разными версиями экспорта
+  // приезжает то bool'ом, то int'ом. Прочее не угадывается: «"yes"» могло бы
+  // значить что угодно, и отказ называет объект (BLND-6).
+  const walkable = source.extras[WALKABLE_KEY];
+  if (walkable !== undefined && walkable !== true && walkable !== false && walkable !== 0 && walkable !== 1) {
+    error(
+      sink,
+      source.name,
+      `"${WALKABLE_KEY}": значение — булево, целые 0/1 экспорта принимаются как булево, а не ${JSON.stringify(walkable)} (BLND-3)`,
+    );
+    return null;
+  }
+
   // Порядок ключей — порядок состава записи в PRES-2: сохранение канонично, но
   // ключи оно не переставляет (ED-21), и порядок задаёт тот, кто записи строит.
   const record: Record<string, JsonValue> = { visual: key, x, y };
   if (yaw !== 0) record.yaw = yaw;
   if (scale !== 1) record.scale = scale;
   if (skin !== undefined && skin !== '') record.skin = skin;
+  // `false`/`0` не пишутся вовсе: отсутствующее и ложное в документе
+  // неразличимы (PRES-2) — тот же довод, что у умолчаний `yaw` и `scale` выше.
+  if (walkable === true || walkable === 1) record.walkable = true;
   return record;
 }
 
@@ -448,6 +479,16 @@ export function generateSpatialLayer(
   for (const object of ordered) {
     if (object.semantics.length !== 1) continue;
     const kind = object.semantics[0];
+    if (kind !== 'visual' && object.extras[WALKABLE_KEY] !== undefined) {
+      // `walkable` — поле записи decoration (PRES-2): сим-слой и клеточные
+      // слои его не несут, а молча отброшенный флаг оставил бы автора гадать,
+      // почему юнит проваливается сквозь меш (BLND-3, BLND-6).
+      error(
+        sink,
+        object.name,
+        `"${WALKABLE_KEY}" — поле записи decoration (PRES-2): на объекте со свойством "${kind}" его не бывает (BLND-3)`,
+      );
+    }
     if (kind === 'prefab') {
       const record = placementRecord(sink, object, binding, schemas, prefabs);
       if (record !== null) initial.push(record);

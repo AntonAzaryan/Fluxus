@@ -36,12 +36,48 @@ export type {
 // декодированное изображение — вид текстурного ассета (ASSET-5)
 export type { DecodedImage } from './image.js';
 
+// выборка поверхности канонической модели (ASSET-11) — для walkable-вклада
+// поля высот и picking'а рендера (REND-9, REND-15)
+export type { ModelSurfaceHit, ModelSurfaceBounds, ModelSurfaceIndex } from './surface.js';
+export { modelSurfaceIndex } from './surface.js';
+
+// запечённые производные модели (ASSET-12) — bone-VAT, таблица клипов,
+// консервативные границы по клипам и маска видимости частей; и набор вариантов
+// скинов записи манифеста (ASSET-12 же, но производная ЗАПИСИ, а не модели)
+export type {
+  BakeParams,
+  BakedClip,
+  BakedDerivatives,
+  BakedLodLevel,
+  BakedPartVisibility,
+  BoneVat,
+  ModelDerivatives,
+} from './derivatives.js';
+export {
+  DEFAULT_BAKE_FPS,
+  DEFAULT_MAX_VAT_SIZE,
+  VAT_TEXELS_PER_BONE,
+  bakeDerivatives,
+  modelDerivatives,
+} from './derivatives.js';
+export type { BakeSkinParams, BakedSkinSet, BakedSkinSlot, SkinVariantSource } from './skinVariants.js';
+export { DEFAULT_SKIN_MAX_SIZE, bakeSkinVariants, skinVariantIndex } from './skinVariants.js';
+
 // манифест визуалов (ASSET-6)
 export type {
   VerticalOffset,
   VisualManifest,
   EntityVisual,
+  // эмиттерный decoration-вид и объединение родов записи вида (ASSET-14)
+  EmitterVisual,
+  DecorationVisual,
   SurfaceAlign,
+  // секция транзиентных эффектов (`rendering` REND-23)
+  VisualEffect,
+  VisualEffectsSection,
+  // секция эмиттеров частиц (ASSET-14, `rendering` REND-24)
+  VisualEmitter,
+  VisualParticlesSection,
   CameraEffectsSection,
   CameraEffectDef,
   // Форма машинного описания типов эффектов (`camera` CAM-9): контракт живёт
@@ -56,11 +92,24 @@ export type {
   CameraConfigDescription,
   ManifestValidation,
   ValidateManifestOptions,
+  // параметры яруса и LOD записи (ASSET-13)
+  VisualTier,
 } from './manifest.js';
 export {
   validateManifest,
   resolveSurfaceAlign,
   resolveVisual,
+  resolveVisualTier,
+  resolveVisualEmitter,
+  isEmitterVisual,
+  resolveEffectByKind,
+  resolveEffectByState,
+  resolveEffectByEvent,
+  resolveParticlesByKind,
+  resolveParticlesByState,
+  resolveParticlesByEvent,
+  resolveLodThresholds,
+  DEFAULT_LOD_THRESHOLDS,
   visualKeys,
   cameraEffectParams,
   cameraEffectParamInRange,
@@ -70,6 +119,10 @@ export {
   POSITIVE_MIN,
   DEFAULT_SURFACE_ALIGN,
 } from './manifest.js';
+
+// эмиттерный ассет — документ эффекта частиц (ASSET-14)
+export type { ParticleEffectDocument, ParticleEffectNode } from './particleEffect.js';
+export { validateParticleEffect } from './particleEffect.js';
 
 // карта кривизны террейна (ASSET-7)
 export type { TerrainCurvatureMap } from './curvature.js';
@@ -95,4 +148,5 @@ export { pngTextureLoader, decodePng } from './loaders/png.js';
 export { manifestLoader, createManifestLoader } from './loaders/manifest.js';
 export type { ManifestLoaderOptions } from './loaders/manifest.js';
 export { curvatureLoader } from './loaders/curvature.js';
+export { particleEffectLoader } from './loaders/particleEffect.js';
 export { presentationLoader } from './loaders/presentation.js';

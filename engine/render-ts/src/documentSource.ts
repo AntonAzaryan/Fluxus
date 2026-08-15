@@ -124,6 +124,9 @@ export class DocumentSource implements PresentationProducer {
       // Событий тика нет — one-shot клипы и доворот костей не проигрываются.
       freshEvents: false,
       entities: this.entities,
+      // Геймплейных статов у документного набора нет (HUD-8): их источник —
+      // компоненты мира, а мира в режиме правки не идёт.
+      statNames: [],
       events: [],
       // Террейн приезжает подсистеме сеткой (REND-8), а не набором инстансов:
       // документная правка уровней и пола идёт через `TerrainSubsystem.applyGrid`.
@@ -240,8 +243,11 @@ export class DocumentSource implements PresentationProducer {
       moving: false,
       // Машина локомоушена — часть симуляции; манёвра в наборе быть не может.
       motion: LOCOMOTION_NORMAL,
+      prevMotion: LOCOMOTION_NORMAL,
       prevMotionPhase: Number.NaN,
       currMotionPhase: Number.NaN,
+      // Полёт — состояние идущего мира: у документного инстанса его нет (REND-12).
+      flightPhase: Number.NaN,
       // Уровень производен от позиции: посадку делает визуальная поверхность (REND-10).
       levelOverride: false,
       facingYaw: 0,
