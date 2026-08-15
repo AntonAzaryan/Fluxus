@@ -4,8 +4,8 @@
 воркере, главный поток рисует доставленное состояние и шлёт ввод.
 
 ```sh
-npm run dev -w @game-mvp/client       # dev-сервер vite
-npm run demo:build -w @game-mvp/client
+npm run dev -w @game-mvp/demo       # dev-сервер vite
+npm run demo:build -w @game-mvp/demo
 ```
 
 Режим страницы выбирается один раз, при старте (SHELL-8):

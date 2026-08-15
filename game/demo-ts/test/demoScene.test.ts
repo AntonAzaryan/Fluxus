@@ -23,7 +23,7 @@ import {
   type SceneDef,
   type WorldState,
 } from '@game-mvp/core';
-import { PLAYER_ID, createDemoSimulation } from '../demo/sim.js';
+import { PLAYER_ID, createDemoSimulation } from '../app/sim.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 

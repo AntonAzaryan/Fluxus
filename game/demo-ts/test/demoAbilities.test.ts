@@ -28,8 +28,8 @@ import {
 } from '@game-mvp/core';
 import { buildMatchWorld } from '@game-mvp/net';
 import { ViewBuffer } from '@game-mvp/render';
-import { ACTION_BITS, FIREBALL_LIFETIME_TICKS, TICK_SECONDS, stateBit } from '../demo/sim.js';
-import { createDemoExtractor } from '../demo/extractor.js';
+import { ACTION_BITS, FIREBALL_LIFETIME_TICKS, TICK_SECONDS, stateBit } from '../app/sim.js';
+import { createDemoExtractor } from '../app/extractor.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 import manifestJson from '../../../content/visuals/manifest.json';

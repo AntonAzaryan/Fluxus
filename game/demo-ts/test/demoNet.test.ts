@@ -4,8 +4,8 @@
  * оставшемся слоте (BOT-7), `NetworkShell` у клиента и `RemoteHost` у главного
  * потока.
  *
- * Собирается ровно теми же модулями, что и вкладка (`demo/localSession.ts`,
- * `demo/netClient.ts`, `demo/match.ts`): отдельной тестовой реализации сервера
+ * Собирается ровно теми же модулями, что и вкладка (`app/localSession.ts`,
+ * `app/netClient.ts`, `app/match.ts`): отдельной тестовой реализации сервера
  * или клиента здесь нет и быть не должно (NTR-12), подменены только среда
  * исполнения бота (тот же `startBotWorker`, но в этом же процессе) и
  * расписание — матч двигает тест, а не таймеры.
@@ -26,15 +26,13 @@ import {
 } from '@game-mvp/bot';
 import type { RenderSubsystem, TickView } from '@game-mvp/render';
 import { jsonSerializer } from '@game-mvp/net';
-import { RemoteHost, type ShellPort } from '../src/index.js';
-import { portTransport } from '../src/portTransport.js';
-import { shellPort } from '../src/protocol.js';
-import { DEMO_PLAYERS, demoMatchConfig } from '../demo/match.js';
-import { openLocalSession, type DemoLocalSession } from '../demo/localSession.js';
-import { bufferedShellPort, joinDemoMatch, type DemoJoinResult } from '../demo/netClient.js';
-import { demoHudComposition } from '../demo/hud.js';
-import { demoMode, localModeUrl, serverModeUrl, slotCandidates } from '../demo/mode.js';
-import { ACTION_BITS, STATS } from '../demo/sim.js';
+import { RemoteHost, portTransport, shellPort, type ShellPort } from '@game-mvp/client';
+import { DEMO_PLAYERS, demoMatchConfig } from '../app/match.js';
+import { openLocalSession, type DemoLocalSession } from '../app/localSession.js';
+import { bufferedShellPort, joinDemoMatch, type DemoJoinResult } from '../app/netClient.js';
+import { demoHudComposition } from '../app/hud.js';
+import { demoMode, localModeUrl, serverModeUrl, slotCandidates } from '../app/mode.js';
+import { ACTION_BITS, STATS } from '../app/sim.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
 import botProfileJson from '../../../content/bots/normal.json';
 

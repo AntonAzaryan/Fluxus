@@ -32,7 +32,7 @@
       "entry": ["test/**/*.test.ts"]
     },
     "engine/client-ts": {
-      "entry": ["demo/**/*.ts", "test/**/*.test.ts"]
+      "entry": ["test/**/*.test.ts"]
     },
     "engine/hud-ts": {
       "entry": ["test/**/*.test.ts"]
@@ -48,6 +48,9 @@
       "entry": ["test/**/*.test.ts"]
     },
     "editor/ui-ts": {
+      "entry": ["app/**/*.ts", "test/**/*.test.ts"]
+    },
+    "game/demo-ts": {
       "entry": ["app/**/*.ts", "test/**/*.test.ts"]
     },
     "tools/blender-ts": {
