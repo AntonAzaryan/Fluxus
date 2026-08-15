@@ -19,6 +19,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   FIXED_ONE,
+  fixed,
   tick as simTick,
   world as coreWorld,
   type EntityId,
@@ -1095,6 +1096,225 @@ describe('числа способностей: ретюн виден в дифф
       OVERCHARGE_RADIUS / FIXED_ONE,
       3,
     );
+  });
+});
+
+/** Узел JSON сцены как объект — предикат обхода систем, а не приведение типа. */
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+interface DetonationSite {
+  /** Система, в теле которой стоит emit взрыва. */
+  readonly system: string;
+  /** Переменная итерации системы — снаряд, о котором она говорит. */
+  readonly as: string | undefined;
+  /** Аргумент первого `destroyEntity` ПОСЛЕ emit в той же ветке; `undefined` — его там нет. */
+  readonly destroyed: unknown;
+}
+
+/**
+ * Все места сцены, где эмитится `FireballExploded`, — обходом дерева систем, а
+ * не списком имён в тесте: путь детонации, добавленный мимо этого теста, всё
+ * равно окажется в выдаче и будет проверен наравне с четырьмя нынешними.
+ */
+function detonationSites(): DetonationSite[] {
+  const found: DetonationSite[] = [];
+  for (const system of SCENE.systems ?? []) {
+    const visit = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach((item: unknown, index) => {
+          if (isRecord(item) && isRecord(item.emitEvent) && item.emitEvent.type === 'FireballExploded') {
+            // Уничтожение ищется дальше по ТОЙ ЖЕ ветке, а не строго следующим
+            // действием: у `HeldPin` между ними стоит снятие захвата с держателя.
+            const destroy = node
+              .slice(index + 1)
+              .map((action: unknown) => (isRecord(action) ? action.destroyEntity : undefined))
+              .find((entry: unknown) => isRecord(entry));
+            found.push({ system: system.name, as: system.as, destroyed: destroy?.entity });
+          }
+          visit(item);
+        });
+        return;
+      }
+      if (isRecord(node)) for (const value of Object.values(node)) visit(value);
+    };
+    visit(system.do);
+  }
+  return found;
+}
+
+/**
+ * Детонация снаряда как КОНТРАКТ, повторённый в четырёх системах: `emitEvent
+ * FireballExploded` и `destroyEntity` того же снаряда — в одной ветке и в этом
+ * порядке.
+ *
+ * Копий четыре, и они остаются копиями намеренно. Свести их в одну систему,
+ * подписанную на внутреннее событие, мешает не DSL, а расписание: `destroyEntity`
+ * в теле триггера убирает снаряд из ВСЕХ последующих запросов того же тика, и
+ * порядок этого убирания у четырёх путей разный. `FireballImpact` стоит на
+ * order 60 — ДО физики (её anchor — 100), и снаряд, у которого кончилась жизнь,
+ * не летит, не рикошетит и не бьёт героя в свой последний тик. Перенос его
+ * взрыва в общую систему после order 113 отдал бы этот тик физике: истёкший
+ * снаряд, стоящий на сопернике, снял бы с него `hitDamage` — поведение, которого
+ * сегодня нет (проверено прогоном A/B на копии сцены). Дублируется же при этом
+ * ровно одно действие `destroyEntity`: сам emit с позицией взрыва обязан
+ * остаться на месте триггера — позиция у каждого пути своя, а у `HeldPin` она
+ * ещё и снята ДО того, как тот же тик подтянет снаряд к держателю.
+ *
+ * Поэтому копии живут, а в step их держит этот тест: комментария в сцене быть не
+ * может (`system.schema.json` — `additionalProperties: false`), и инвариант
+ * записан здесь.
+ */
+describe('детонация снаряда: четыре пути, один контракт', () => {
+  const sites = detonationSites();
+
+  it('взрыв эмитят ровно четыре системы сцены — по одному разу каждая', () => {
+    // Порядок — порядок систем в сцене, то есть по `order`: 60, 105, 112, 113.
+    expect(sites.map((site) => site.system)).toEqual([
+      'FireballImpact',
+      'HeldPin',
+      'FireballHit',
+      'FireballWall',
+    ]);
+  });
+
+  it('за каждым взрывом в той же ветке уничтожается ТОТ ЖЕ снаряд', () => {
+    // Оба пункта — про молчаливые поломки. Без `destroyEntity` снаряд
+    // взрывался бы каждый тик до конца жизни; с `destroyEntity` не той
+    // переменной — уносил бы чужую сущность.
+    expect(sites.map((site) => site.destroyed)).toEqual(
+      sites.map((site) => ({ var: site.as })),
+    );
+  });
+});
+
+/**
+ * Пределы Q16.16 в числах сцены: ретюн ЗА границу ловится здесь.
+ *
+ * Симуляция считает в Q16.16 (FP-1), и `wrap` в `math/fixed.ts` заворачивает
+ * результат по i32: в debug-сборке это assert, в релизной — молчаливое
+ * переполнение. У трёх чисел сцены запас до этой границы конечен, и ни у одного
+ * он не виден в самом числе — только в произведении, которое из него растёт.
+ *
+ * Клампа в контенте на них нет намеренно. Кламп у места вычисления снял бы
+ * симптом и спрятал причину: щит после клампа отражал бы не туда (кламп по
+ * одной оси поворачивает нормаль), а урон молча упирался бы в потолок вместо
+ * заказанного дизайнером числа. Красный тест называет ошибку вслух и ровно в
+ * тот момент, когда число меняют, — это и есть здесь единственный сторож.
+ */
+describe('пределы фиксированной точки: ретюн за границу ловится тестом', () => {
+  const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
+  const ability = hero.components.AbilityConfig!;
+  const cooldowns = hero.components.Cooldowns!;
+  /** Снаряды сцены — все prefab'ы, которые несут `Projectile` и коллайдер. */
+  const shots = SCENE.prefabs!.filter(
+    (prefab) => prefab.components.Projectile !== undefined && prefab.components.Collider !== undefined,
+  );
+
+  /** `normScale` — из самой системы `ShieldRicochet`, а не из копии числа в тесте. */
+  function ricochetNormScale(): number {
+    const system = SCENE.systems!.find((entry) => entry.name === 'ShieldRicochet')!;
+    const first: unknown = system.do[0];
+    const bindings =
+      isRecord(first) && isRecord(first.let) && isRecord(first.let.bindings)
+        ? first.let.bindings
+        : {};
+    const value = bindings.normScale;
+    if (typeof value !== 'number') throw new Error('ShieldRicochet: не найден биндинг normScale');
+    return value;
+  }
+
+  it('щит: предмасштабирование `normScale` не переполняет `vec.lengthSq` ни у одного снаряда', () => {
+    // `ShieldRicochet` берёт вектор от центра держателя к снаряду, множит его на
+    // `normScale` (ради точности `vec.normalize`: у короткого вектора деление на
+    // длину теряет значащие биты) и меряет `vec.lengthSq` — то есть
+    // `mul(x,x) + mul(y,y)`. В i32 первой упирается именно эта сумма, а не
+    // масштабирование: сам вектор ограничен гейтом рикошета — снаряд отражается,
+    // только пока |dx| ≤ shieldR + halfX и |dy| ≤ shieldR + halfY, — поэтому
+    // предел считается ИЗ ЭТОГО гейта, а не из размеров арены.
+    const normScale = ricochetNormScale();
+    expect(normScale).toBe(64 * FIXED_ONE);
+    // Обе величины — из самой сцены: предел обязан пересчитываться от ретюна,
+    // а не от зеркал теста (их совпадение со сценой пиннит тест радиуса щита).
+    const shieldR = Math.floor(
+      (hero.components.Collider!.radius! * ability.shieldRadiusMul!) / FIXED_ONE,
+    );
+    expect(shieldR).toBe(SHIELD_RADIUS);
+
+    const worst = shots.map((prefab) => {
+      const collider = prefab.components.Collider!;
+      const axis = (half: number): number => {
+        const band = shieldR + half; // предельное смещение, на котором рикошет ещё возможен
+        const scaled = Math.floor((band * normScale) / FIXED_ONE);
+        return Math.floor((scaled * scaled) / FIXED_ONE); // mul(x, x)
+      };
+      return [prefab.name, axis(collider.halfX!) + axis(collider.halfY!)] as const;
+    });
+
+    // Числа пиннятся: ретюн `Collider.radius` героя, `shieldRadiusMul` или
+    // размера снаряда виден в диффе теста, а не только на дне запаса.
+    expect(worst).toEqual([
+      ['Fireball', 156547664],
+      ['HeavyFireball', 255606050],
+    ]);
+    const overflowed = worst.filter(([, lengthSq]) => lengthSq > fixed.INT32_MAX).map(([name]) => name);
+    expect(overflowed).toEqual([]);
+    // Запас в ЛИНЕЙНОМ размере — корень из запаса в квадрате длины: полоса
+    // рикошета (`shieldR` + скин снаряда) может вырасти ещё в 2,89 раза, дальше
+    // сумма в i32 не помещается. Самый тесный случай — тяжёлый снаряд: скин у
+    // него вдвое толще обычного, и запаса остаётся меньше трёх, а не 3,7.
+    const tightest = Math.max(...worst.map(([, lengthSq]) => lengthSq));
+    expect(Math.floor(Math.sqrt(fixed.INT32_MAX / tightest) * 100) / 100).toBe(2.89);
+  });
+
+  it('заряд: `hitDamage` на максимальном заряде помещается в Q16.16', () => {
+    // `ChargeRelease` считает урон как `toInt(fromInt(hitDamage) × scale²)`.
+    // `scale` система сама зажимает сверху `chargeMaxScale` (min/max по `held`),
+    // поэтому предел даёт именно квадрат максимума: `fromInt(hitDamage)` — это
+    // hitDamage×65536, и произведение с scale² обязано остаться в i32.
+    const scaleSq = Math.floor((ability.chargeMaxScale! * ability.chargeMaxScale!) / FIXED_ONE);
+    expect(scaleSq).toBe(4 * FIXED_ONE);
+
+    const product = ability.hitDamage! * scaleSq; // = mul(fromInt(hitDamage), scaleSq)
+    expect(product).toBe(26214400);
+    expect(fixed.toInt(product)).toBe(4 * HIT_DAMAGE); // те же 400, что пиннит тест роста урона
+
+    // Предел ретюна: при нынешнем `chargeMaxScale` — 8191 урона, и ни единицей
+    // больше. 8192 завернулось бы в отрицательное число, то есть максимальный
+    // заряд ЛЕЧИЛ бы цель.
+    const limit = Math.floor(fixed.INT32_MAX / scaleSq);
+    expect(limit).toBe(8191);
+    expect(ability.hitDamage!).toBeLessThanOrEqual(limit);
+  });
+
+  it('купол: id модификатора `1000 + slot` требует, чтобы купол не пережил свой кулдаун', () => {
+    // `DomeSlow` и `DomeExpire` адресуют замедление по id `1000 + Owner.slot` —
+    // ключ на СЛОТ, а не на купол. Пока у слота может быть только один живой
+    // купол, это одно и то же; как только `domeTicks` перевалит за
+    // `slowDomeMax`, второй купол того же героя встанет на тот же id, а истечение
+    // первого сняло бы замедление, поставленное вторым.
+    expect(ability.domeTicks!).toBeLessThanOrEqual(cooldowns.slowDomeMax!);
+    expect(ability.domeTicks!).toBe(DOME_TICKS);
+    expect(cooldowns.slowDomeMax!).toBe(DOME_COOLDOWN);
+  });
+
+  it('купол: сколько ни жми, двух живых куполов одного героя не бывает', () => {
+    // Числовой инвариант выше — про причину, этот тест — про следствие, и он
+    // не зависит от того, верно ли посчитан на бумаге тик смерти купола.
+    const a = arena();
+    const seen = new Set<EntityId>();
+    let together = 0;
+    for (let i = 0; i < 2 * DOME_COOLDOWN + 4; i++) {
+      // Фронт кнопки каждый второй тик: касты идут при первой же возможности.
+      a.step(NEUTRAL, i % 2 === 0 ? { buttons: DOME } : NEUTRAL);
+      const alive = domes(a.state);
+      for (const dome of alive) seen.add(dome);
+      together = Math.max(together, alive.length);
+    }
+    // За два кулдауна купол встаёт дважды — иначе тест ничего не доказывает.
+    expect(seen.size).toBeGreaterThanOrEqual(2);
+    expect(together).toBe(1);
   });
 });
 
