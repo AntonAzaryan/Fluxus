@@ -31,7 +31,7 @@
     "lint:dup": "jscpd .",
     "lint:arch": "depcruise engine editor game tools desktop scripts",
     "lint:all": "npm run typecheck && npm run lint && npm run lint:dead && npm run lint:dup && npm run lint:arch",
-    "check": "npm run typecheck && npm run lint && npm run spec-graph -- check && npm test",
+    "check": "npm run lint:all && npm run spec-graph -- check && npm test",
     "golden": "npm run record -w @game-mvp/integration && npm run golden -w @game-mvp/core",
     "spec-graph": "node scripts/spec-graph.mjs"
   },
@@ -39,6 +39,7 @@
     "node": ">=22.18"
   },
   "overrides": {
+    "nanoid": "^3.3.18",
     "quarks.core": "0.17.1"
   },
   "devDependencies": {

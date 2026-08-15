@@ -16,15 +16,15 @@
   },
   "dependencies": {
     "@game-mvp/assets": "*",
+    "@game-mvp/bot": "*",
     "@game-mvp/client": "*",
     "@game-mvp/core": "*",
+    "@game-mvp/hud": "*",
     "@game-mvp/net": "*",
     "@game-mvp/render": "*",
     "three": "^0.185.1"
   },
   "devDependencies": {
-    "@game-mvp/bot": "*",
-    "@game-mvp/hud": "*",
     "@types/node": "^22.0.0",
     "@types/three": "^0.185.4",
     "typescript": "^5.9.0",

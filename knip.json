@@ -55,6 +55,23 @@
     },
     "tools/blender-ts": {
       "entry": ["bin/*.mjs", "test/**/*.test.ts", "test/fixtures/build.mjs"]
+    },
+    "desktop/shell-ts": {
+      // entry контейнера — electron-точки (`entry.mjs` зовёт Electron, тот
+      // грузит `preload.cjs` по пути-строке) и конфиг упаковщика, который
+      // `bin/pack.mjs` тоже передаёт строкой (`--config`).
+      "entry": [
+        "bin/*.mjs",
+        "src/electron/entry.mjs",
+        "src/electron/preload.cjs",
+        "electron-builder.cjs",
+        "test/**/*.test.ts",
+        "test/electron/**/*"
+      ],
+      "project": ["src/**", "bin/**", "test/**", "*.cjs"],
+      // упаковщик зовётся не импортом, а `createRequire(...).resolve(...)` в
+      // `bin/pack.mjs` — граф модулей такой связи не видит.
+      "ignoreDependencies": ["electron-builder"]
     }
   }
 }
