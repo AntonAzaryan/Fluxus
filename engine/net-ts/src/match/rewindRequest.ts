@@ -1,5 +1,5 @@
 /**
- * Событие-запрос перемотки: конвенция ХОСТА мира, а не ядра.
+ * Событие-запрос перемотки (REW-12): конвенция ХОСТА мира, а не ядра.
  *
  * Ульту отката инициирует геймплейная система в evaluator (WSM-5): она гейтит
  * cooldown и стоимость и эмитит обычное событие шины с политикой в payload.
@@ -29,25 +29,47 @@ export interface RewindRequest {
   readonly depthTicks: number;
 }
 
+/** Диагностика испорченного запроса; по умолчанию — предупреждение в консоль. */
+export type RewindRequestWarn = (message: string) => void;
+
+const defaultWarn: RewindRequestWarn = (message) => { console.warn(message); };
+
 /**
- * Первый запрос тика, если он есть. Первый, а не все: в `Rewinding` мир входит
- * один раз, и второй запрос того же тика исполнять некуда (REW-8).
+ * Первый ГОДНЫЙ запрос тика, если он есть. Первый, а не все: в `Rewinding` мир
+ * входит один раз, и второй запрос того же тика исполнять некуда (REW-8).
  *
- * Неполный payload — отказ, а не молчание: событие с таким именем эмитит
- * только система ульты, и запрос без инициатора или без глубины означает
- * дефект контента. Молча принятое умолчание («глубина 0») выглядело бы как
- * сработавшая ульта, не отматывающая мир, — то есть дефект, который автор
- * контента ищет глазами вместо того, чтобы прочитать.
+ * Испорченный payload — предупреждение и пропуск, а не исключение. Событие
+ * приезжает из КОНТЕНТА: имя ему даёт JSON-система ульты, а `depthTicks` —
+ * произвольное выражение DSL, из которого дробное число получается тривиально.
+ * Брошенное отсюда исключение вылетело бы из `advance()`/`stepTick()` — то есть
+ * матч умирал бы от опечатки в сцене, а по тому же доводу, по которому запрос в
+ * матче без истории игнорируется, умирать ему нельзя. Полей проверяется три
+ * вещи: обязательность, целочисленность (`seekTo` дробный тик не принимает) и
+ * неотрицательность глубины.
+ *
+ * Молчания при этом нет: тихо принятое умолчание («глубина 0») выглядело бы как
+ * сработавшая ульта, не отматывающая мир, — дефект, который автор контента ищет
+ * глазами вместо того, чтобы прочитать.
  */
-export function firstRewindRequest(events: Iterable<GameEvent>): RewindRequest | undefined {
+export function firstRewindRequest(
+  events: Iterable<GameEvent>,
+  warn: RewindRequestWarn = defaultWarn,
+): RewindRequest | undefined {
   for (const event of events) {
     if (event.type !== REWIND_REQUEST_EVENT) continue;
     const initiator = event.data.initiator;
     const depthTicks = event.data.depthTicks;
-    if (initiator === undefined || depthTicks === undefined) {
-      throw new Error(
-        `${REWIND_REQUEST_EVENT}: в payload обязаны быть "initiator" и "depthTicks" (WSM-5)`,
+    if (initiator === undefined || !Number.isInteger(initiator)) {
+      warn(
+        `${REWIND_REQUEST_EVENT}: "initiator" — целое EntityId, а в payload ${String(initiator)}; запрос игнорирован (REW-12)`,
       );
+      continue;
+    }
+    if (depthTicks === undefined || !Number.isInteger(depthTicks) || depthTicks < 0) {
+      warn(
+        `${REWIND_REQUEST_EVENT}: "depthTicks" — целое ≥ 0 (глубина в тиках), а в payload ${String(depthTicks)}; запрос игнорирован (REW-12)`,
+      );
+      continue;
     }
     return { initiator, depthTicks };
   }

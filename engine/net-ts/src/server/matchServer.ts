@@ -416,6 +416,13 @@ export class MatchServer {
         `MatchConfig: rewind.holdTimeoutTicks (${this.holdTimeoutTicks}) — целое ≥ 1`,
       );
     }
+    // Номер бита проверяется наравне с шагом и порогом: `1 << 32` в JS даёт
+    // единицу, `1 << -1` — старший бит, и оба молча читали бы из кадра НЕ ту
+    // кнопку. Отказ на сборке матча вместо скраба, который ведёт себя странно.
+    const holdButton = config.rewind?.holdButton;
+    if (holdButton !== undefined && (!Number.isInteger(holdButton) || holdButton < 0 || holdButton > 31)) {
+      throw new Error(`MatchConfig: rewind.holdButton (${holdButton}) — целое 0..31 (NET-11)`);
+    }
 
     const built = buildMatchWorld({
       scene: config.scene,
@@ -1112,7 +1119,7 @@ export class MatchServer {
   }
 
   /**
-   * Исполнение запроса, пришедшего из симуляции: `Running → Paused →
+   * Исполнение запроса, пришедшего из симуляции (REW-12): `Running → Paused →
    * Rewinding` (WSM-2, NET-11). Решение о входе в перемотку порождает
    * геймплейная система ульты, а не сервер: здесь только проведение переходов и
    * запоминание того, чем ограничен скраб.
@@ -1121,7 +1128,8 @@ export class MatchServer {
    * (REW-8), а гейты политики (cooldown, стоимость) отработали в evaluator до
    * эмиссии события. Матч, поднятый без истории, запрос тоже игнорирует —
    * перематывать в нём нечем, и падать из-за контента, рассчитанного на другой
-   * профиль матча, серверу незачем.
+   * профиль матча, серверу незачем. Испорченный payload — туда же: `parse`
+   * предупреждает и отдаёт `undefined`, а не бросает (см. `rewindRequest.ts`).
    */
   private drainRewindRequest(result: TickResult): void {
     if (this.rewindController === undefined) return;
@@ -1162,10 +1170,16 @@ export class MatchServer {
   }
 
   /**
-   * Контрольный бит инициатора из самого свежего его кадра (REW-7, NET-11).
+   * Контрольный бит инициатора из самого свежего его кадра (REW-13, NET-11).
    * Кадры не-инициатора не читаются вовсе: скраб ведёт только тот, чья система
    * ульту прожала, — остальной ввод замороженного мира отбрасывается, как и
    * прежде.
+   *
+   * «Самый свежий» меряется по `seq`, а не по номеру тика: `seq` монотонен у
+   * отправителя (NTR-7), а номер тика клиент пересинхронизирует по каждому
+   * восстановленному состоянию (NTR-10) и во время скраба УМЕНЬШАЕТ — по нему
+   * кадр, отправленный позже, выглядел бы более старым. Пока сообщение везёт
+   * ровно один кадр, разницы нет; правило же должно держаться и на пачке.
    */
   private observeScrubHold(slot: number, frames: readonly WireInput[]): void {
     const session = this.scrub;
@@ -1174,7 +1188,7 @@ export class MatchServer {
     if (button === undefined) return;
     let freshest: WireInput | undefined;
     for (const wire of frames) {
-      if (freshest === undefined || wire.tick > freshest.tick) freshest = wire;
+      if (freshest === undefined || wire.seq > freshest.seq) freshest = wire;
     }
     if (freshest === undefined) return;
     session.held = (freshest.buttons & (1 << button)) !== 0;
@@ -1182,7 +1196,7 @@ export class MatchServer {
   }
 
   /**
-   * Шаг ведения точки перемотки — раз в цикл рассылки (REW-7, NTR-16). Реже
+   * Шаг ведения точки перемотки — раз в цикл рассылки (REW-13, NTR-16). Реже
    * тика намеренно: каждое восстановление уезжает клиентам отдельным
    * состоянием, и вести точку чаще, чем сервер её рассылает, значило бы
    * считать восстановления, которых никто не увидит.
@@ -1199,6 +1213,15 @@ export class MatchServer {
     // один, и второго ведущего у неё нет.
     if (this.state.mode !== 'Rewinding') {
       this.scrub = undefined;
+      return;
+    }
+    // Сущность-инициатор слоту матча не сопоставлена (бот, сущность сцены,
+    // погибший игрок) — органа управления у этой перемотки нет вовсе, и
+    // `observeScrubHold` для неё не сработает ни разу. Ждать порог молчания
+    // незачем: он отвечает на «связь пропала», а здесь ответ известен сразу —
+    // мир замер бы на четверть секунды впустую.
+    if (session.slot < 0) {
+      this.stopScrub();
       return;
     }
 

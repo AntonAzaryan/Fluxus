@@ -10,8 +10,11 @@
  * сетевом слое при этом нет ни одного: глубина приезжает в payload события.
  */
 import { describe, expect, it } from 'vitest';
-import type { SceneDef } from '@game-mvp/core';
-import { REWIND_REQUEST_EVENT } from '../src/match/rewindRequest.js';
+import { fixed, type GameEvent, type SceneDef } from '@game-mvp/core';
+import { MatchClient, type InputSample } from '../src/client/matchClient.js';
+import { contentPack } from '../src/content/pack.js';
+import { REWIND_REQUEST_EVENT, firstRewindRequest } from '../src/match/rewindRequest.js';
+import type { ClientMessage } from '../src/protocol/messages.js';
 import type { MatchConfig, MatchRewindOptions } from '../src/server/matchServer.js';
 import { duelConfig, duelScene, harness, hello, inputMessageOf, wireInput } from './fixtures.js';
 
@@ -30,7 +33,11 @@ const field = (component: string, name: string): object => ({ getComponent: [e, 
  * exempt-компонент матча), гейт по фронту кнопки и по нулю cooldown'а, эмиссия
  * запроса с глубиной. Ровно та форма, которой пользуется демо.
  */
-function ultScene(gated = true): SceneDef {
+function ultScene(
+  gated = true,
+  depthTicks: number = DEPTH_TICKS,
+  initiator: object | number = e,
+): SceneDef {
   const scene = duelScene();
   const hero = scene.prefabs![0]!;
   const cast = {
@@ -61,7 +68,7 @@ function ultScene(gated = true): SceneDef {
             {
               emitEvent: {
                 type: REWIND_REQUEST_EVENT,
-                data: { initiator: e, depthTicks: DEPTH_TICKS },
+                data: { initiator, depthTicks },
               },
             },
           ],
@@ -108,9 +115,14 @@ function ultScene(gated = true): SceneDef {
   };
 }
 
-function ultConfig(rewind: Partial<MatchRewindOptions> = {}, gated = true): MatchConfig {
+function ultConfig(
+  rewind: Partial<MatchRewindOptions> = {},
+  gated = true,
+  depthTicks: number = DEPTH_TICKS,
+  initiator: object | number = e,
+): MatchConfig {
   return duelConfig({
-    scene: ultScene(gated),
+    scene: ultScene(gated, depthTicks, initiator),
     rewind: {
       interval: 5,
       capacity: 40,
@@ -323,6 +335,201 @@ describe('драйвер скраба: удержание, отпускание,
 
     expect(m.server.mode).toBe('Running');
     expect(m.server.tick).toBe(castTick);
+  });
+});
+
+/** Событие-запрос с произвольным payload — то, что вправе прислать контент. */
+function requestEvent(data: Readonly<Record<string, number>>): GameEvent[] {
+  return [{ type: REWIND_REQUEST_EVENT, data }];
+}
+
+describe('испорченный запрос перемотки матч не роняет (REW-12)', () => {
+  it('дробная глубина: запрос отброшен с диагностикой, тик идёт дальше', () => {
+    const warnings: string[] = [];
+    const request = firstRewindRequest(requestEvent({ initiator: 3, depthTicks: 4.8 }), (m) => {
+      warnings.push(m);
+    });
+
+    expect(request).toBeUndefined();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('depthTicks');
+  });
+
+  it('отрицательная глубина — тот же исход', () => {
+    const warnings: string[] = [];
+    expect(
+      firstRewindRequest(requestEvent({ initiator: 3, depthTicks: -1 }), (m) => { warnings.push(m); }),
+    ).toBeUndefined();
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('payload без обязательных полей — тот же исход', () => {
+    const warnings: string[] = [];
+    expect(firstRewindRequest(requestEvent({}), (m) => { warnings.push(m); })).toBeUndefined();
+    expect(
+      firstRewindRequest(requestEvent({ initiator: 3 }), (m) => { warnings.push(m); }),
+    ).toBeUndefined();
+    expect(warnings).toHaveLength(2);
+  });
+
+  it('годный запрос за испорченным всё-таки исполняется', () => {
+    const events: GameEvent[] = [
+      ...requestEvent({ initiator: 3, depthTicks: 4.8 }),
+      ...requestEvent({ initiator: 5, depthTicks: 12 }),
+    ];
+
+    expect(firstRewindRequest(events, () => undefined)).toEqual({ initiator: 5, depthTicks: 12 });
+  });
+
+  it('дробная глубина из JSON-системы не убивает цикл матча', () => {
+    // Ровно тот путь, которым дефект приезжает в жизни: выражение DSL, давшее
+    // дробное число. `advance()` обязан пройти, а мир — остаться в `Running`.
+    const m = ultMatch(ultConfig({}, true, 24.5));
+    m.run(10);
+    m.send(1, ULT);
+    expect(() => { m.run(4); }).not.toThrow();
+
+    expect(m.server.mode).toBe('Running');
+  });
+});
+
+describe('орган ведения скраба в конфиге матча (NET-11)', () => {
+  it('номер бита вне 0..31 отвергается на сборке матча', () => {
+    expect(() => harness(ultConfig({ holdButton: 32 }))).toThrow(/holdButton/);
+    expect(() => harness(ultConfig({ holdButton: -1 }))).toThrow(/holdButton/);
+    expect(() => harness(ultConfig({ holdButton: 1.5 }))).toThrow(/holdButton/);
+  });
+
+  it('удержание читается по самому свежему seq, а не по номеру тика', () => {
+    // Номер тика клиент пересинхронизирует по каждому восстановлению (NTR-10) и
+    // во время скраба УМЕНЬШАЕТ: пачка, в которой отпускание помечено меньшим
+    // тиком, но большим `seq`, обязана читаться как отпускание.
+    const m = ultMatch();
+    m.run(20);
+    m.send(1, ULT);
+    m.run(2);
+    const castTick = m.server.tick;
+    expect(m.server.mode).toBe('Rewinding');
+
+    for (let i = 0; i < SNAPSHOT_EVERY; i++) {
+      m.server.receive(
+        1,
+        inputMessageOf(
+          m.server.epoch,
+          // Старший `seq` — на кадре с МЕНЬШИМ номером тика: свежесть меряется
+          // счётчиком отправителя.
+          wireInput(m.server.tick + 2, 900 + i * 2, 0, 0, ULT),
+          wireInput(m.server.tick, 901 + i * 2, 0, 0, 0),
+        ),
+      );
+      m.server.advance();
+      m.server.drain();
+    }
+
+    expect(m.server.mode).toBe('Running');
+    expect(m.server.tick).toBe(castTick);
+  });
+
+  it('инициатор без слота матча не морозит мир на порог молчания', () => {
+    // Контент назвал инициатором сущность, которой в мире нет: `slotOf` вернул
+    // -1, и органа управления у этой перемотки не будет НИКОГДА. Ждать порог
+    // молчания (здесь — целую секунду) незачем: мир возобновляется первым же
+    // шагом драйвера.
+    const m = ultMatch(ultConfig({ holdTimeoutTicks: 60 }, true, DEPTH_TICKS, 9999));
+    m.run(20);
+    m.send(1, ULT);
+    m.run(2);
+    expect(m.server.mode).toBe('Rewinding');
+    const frozenAt = m.server.tick;
+
+    m.run(1, ULT);
+
+    expect(m.server.mode).toBe('Running');
+    expect(m.server.tick).toBe(frozenAt);
+  });
+});
+
+describe('ввод замороженного мира маскируется на клиенте (NET-11, REW-5)', () => {
+  const CAST_BUTTON = 1 << 0;
+
+  /** Клиент и сервер без транспорта: сообщения переносит тест (NTR-3, NTR-12). */
+  function clientRig(config: MatchConfig = ultConfig()) {
+    const { server } = harness(config);
+    const pack = contentPack({ [config.sceneRef]: config.scene });
+    const client = new MatchClient({
+      playerId: 'p1',
+      version: config.version,
+      content: pack,
+      // Тот же номер, которым настроен сервер: раскладку битов знает сборка.
+      holdButton: ULT_BUTTON,
+    });
+    client.start();
+    client.drain();
+
+    server.connect(1);
+    server.receive(1, hello('p1', config.version));
+    server.connect(2);
+    server.receive(2, hello('p2', config.version));
+
+    const deliver = (): void => {
+      for (const out of server.drain()) {
+        if (out.to === 1) client.receive(out.message, 0);
+      }
+    };
+    deliver();
+
+    const sent: ClientMessage[] = [];
+    const step = (sample: InputSample): void => {
+      client.advance();
+      client.pushInput(sample, 0);
+      for (const message of client.drain()) {
+        sent.push(message);
+        server.receive(1, message);
+      }
+      server.advance();
+      deliver();
+    };
+
+    return { server, client, step, sent };
+  }
+
+  const move: InputSample['move'] = { x: fixed.fromInt(1), y: 0 };
+
+  it('во время Rewinding уезжает только бит ведения скраба', () => {
+    const rig = clientRig();
+    for (let i = 0; i < 10; i++) rig.step({ move, aimDir: 0, buttons: 0 });
+    // Каст ульты — обычный кадр идущего мира.
+    rig.step({ move, aimDir: 0, buttons: 1 << ULT_BUTTON });
+    for (let i = 0; i < 4; i++) rig.step({ move, aimDir: 0, buttons: 1 << ULT_BUTTON });
+    expect(rig.client.mode).not.toBe('Running');
+
+    const before = rig.sent.length;
+    // Игрок смотрит на замороженный мир и жмёт всё подряд.
+    rig.step({ move, aimDir: 0, buttons: CAST_BUTTON | (1 << ULT_BUTTON) });
+    const frames = rig.sent.slice(before).flatMap((message) =>
+      message.type === 'Input' ? message.frames : [],
+    );
+
+    expect(frames.length).toBeGreaterThan(0);
+    for (const frame of frames) {
+      expect(frame.buttons).toBe(1 << ULT_BUTTON);
+      expect(frame.moveX).toBe(0);
+      expect(frame.moveY).toBe(0);
+    }
+  });
+
+  it('в Running кадр уезжает как есть: маска — правило замороженного мира', () => {
+    const rig = clientRig();
+    for (let i = 0; i < 6; i++) rig.step({ move, aimDir: 0, buttons: 0 });
+    const before = rig.sent.length;
+    rig.step({ move, aimDir: 0, buttons: CAST_BUTTON });
+    const frames = rig.sent.slice(before).flatMap((message) =>
+      message.type === 'Input' ? message.frames : [],
+    );
+
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames[0]!.buttons).toBe(CAST_BUTTON);
+    expect(frames[0]!.moveX).toBe(fixed.fromInt(1));
   });
 });
 

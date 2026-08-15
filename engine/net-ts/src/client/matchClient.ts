@@ -26,6 +26,7 @@ import {
   type Snapshot,
   type Vec2,
   type VisibilityOptions,
+  type WorldMode,
   type WorldState,
 } from '@game-mvp/core';
 import { buildMatchWorld, orderedSchemas } from '../match/world.js';
@@ -63,6 +64,16 @@ export interface MatchClientOptions {
   readonly visibility?: VisibilityOptions;
   readonly inputRingTicks?: number;
   readonly interpolationDelayMs?: number;
+  /**
+   * Бит действия, которым ведётся скраб перемотки (NET-11) — тот же номер, что
+   * у `rewind.holdButton` матча. Пока доставленный мир не в `Running`, кадры
+   * уезжают с ЭТИМ битом и ни с чем больше (см. `pushInput`).
+   *
+   * Поля нет — маска пуста: клиент сборки без ульты отката шлёт в замороженном
+   * мире пустые кадры. Держать здесь номер, а не «маску», намеренно: раскладку
+   * битов знает сборка игры, и она же настраивает ею сервер.
+   */
+  readonly holdButton?: number;
   /** Имена компонентов ввода и слота — параметры `InputSystem` (TICK-4), не конвенция ядра. */
   readonly playerComponent?: string;
   readonly slotField?: string;
@@ -114,6 +125,9 @@ const DEFAULTS = {
   inputComponent: 'Input',
 } as const;
 
+/** Движение в замороженном мире: его нет вовсе (NET-11). Общий литерал — кадр его не мутирует. */
+const FROZEN_MOVE: Vec2 = { x: 0, y: 0 };
+
 export class MatchClient {
   readonly metrics: ClientMetrics = createClientMetrics();
 
@@ -143,6 +157,14 @@ export class MatchClient {
    * помечен ею же.
    */
   private lastAppliedEpoch = 0;
+  /**
+   * Режим последнего применённого состояния (WSM-1). Наблюдательная величина:
+   * своей машины состояний у клиента нет и быть не может (NET-11, REW-6), а
+   * этот режим — то, что сервер о мире сообщил. Читает его маска ввода
+   * замороженного мира (`pushInput`). До первого снапшота — `Running`: матч
+   * начинается идущим миром.
+   */
+  private lastAppliedMode: WorldMode = 'Running';
   /** Разрыв непрерывности мира: взведён сменой эпохи, гасится чтением (SHELL-7). */
   private discontinuityPending = false;
 
@@ -230,6 +252,15 @@ export class MatchClient {
   /** Эпоха последнего применённого состояния (NTR-16) — вторая половина его номера. */
   get epoch(): number {
     return this.lastAppliedEpoch;
+  }
+
+  /**
+   * Режим последнего применённого состояния (WSM-1). Наблюдательный: клиент им
+   * ничего не решает о мире — только маскирует свой ввод, пока мир не идёт
+   * (NET-11).
+   */
+  get mode(): WorldMode {
+    return this.lastAppliedMode;
   }
 
   /**
@@ -347,22 +378,31 @@ export class MatchClient {
   /** Ввод игрока: помечается тиком с запасом задержки (NTR-7) и уходит на сервер. */
   pushInput(sample: InputSample, nowMs: number): void {
     if (this.clientPhase !== 'playing' || this.matchPacing === undefined) return;
-    // Ввод уезжает и в остановленном мире. Прежде клиент, увидев режим ≠
-    // `Running`, молчал — «гигиена канала»: на симуляцию такой ввод всё равно не
-    // повлияет (NET-11, REW-5), и отбрасывает его сервер. Но ровно в этих кадрах
-    // едет контрольный бит ведения перемотки: живых тиков в `Rewinding` нет, и
-    // другого пути у него не существует — второго канала под управление в
-    // протоколе нет и заводить его нельзя (`netcode-transport` NTR-8).
-    // Различить «мой бит ведёт скраб» и «мой бит — обычное действие» клиент не
-    // может: инициатора знает сервер, у которого лежит запрос. Поэтому шлём всё,
-    // а отбор остаётся там же, где и был, — авторитетным (`ingest`).
+    // Ввод уезжает и в остановленном мире — но ОДНИМ битом ведения скраба.
+    //
+    // Молчать нельзя: живых тиков в `Rewinding` нет, и контрольный бит едет
+    // ровно этими кадрами — второго канала под управление в протоколе нет и
+    // заводить его нельзя (`netcode-transport` NTR-8). Слать всё — тоже:
+    // возобновление эпохи не двигает (NTR-16), и кадр, отправленный пока игрок
+    // смотрел на замороженный мир, доезжает уже после `resume` с ВЕРНОЙ эпохой
+    // и верным будущим тиком — то есть проходит `ingest` и ложится на живой
+    // мир. Окно у этой дыры размером в круг до сервера, и глубина отката на неё
+    // не влияет: NET-11 запрещает такому вводу влиять на симуляцию после
+    // возобновления, кроме управления самой перемоткой (REW-5).
+    //
+    // Поэтому маска, а не подавление: `move` обнуляется, из кнопок остаётся
+    // только бит ведения скраба. Серверное подавление (`ingest` бросает кадры
+    // не-`Running` целиком) остаётся авторитетным — это второй рубеж, а не
+    // замена первому.
+    const frozen = this.lastAppliedMode !== 'Running';
+    const holdMask = this.options.holdButton === undefined ? 0 : 1 << this.options.holdButton;
     const frame: InputFrame = {
       tick: this.estimatedTick + this.matchPacing.inputDelay,
       playerId: this.options.playerId,
       seq: this.nextSeq,
-      move: sample.move,
+      move: frozen ? FROZEN_MOVE : sample.move,
       aimDir: sample.aimDir,
-      buttons: sample.buttons,
+      buttons: frozen ? sample.buttons & holdMask : sample.buttons,
     };
     this.nextSeq++;
     // Кольцо хранит кадр вместе с эпохой отправки (NTR-10): кадр стёртой
@@ -530,6 +570,9 @@ export class MatchClient {
     const rewound = epoch > this.lastAppliedEpoch;
     this.lastAppliedEpoch = epoch;
     this.lastAppliedTick = tick;
+    // Режим — часть применённого состояния, а не отдельное сообщение: маска
+    // ввода замороженного мира (`pushInput`) читает его отсюда.
+    this.lastAppliedMode = snapshot.mode;
     if (rewound) {
       this.buffer.reset();
       this.discontinuityPending = true;
