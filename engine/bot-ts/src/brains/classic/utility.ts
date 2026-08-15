@@ -217,6 +217,18 @@ export class UtilityLayer {
     return this.lastScores;
   }
 
+  /**
+   * Забыть решение и срок передумывания: мир, для которого они выбирались,
+   * стёрт перемоткой (NTR-16). Номера тиков после неё идут назад, и без сброса
+   * `nextDecisionTick` остался бы в будущем — слой держал бы поведение стёртой
+   * ветви ровно столько тиков, сколько унесла перемотка.
+   */
+  forget(): void {
+    this.chosen = 'retreat';
+    this.lastScores = undefined;
+    this.nextDecisionTick = -Infinity;
+  }
+
   choose(
     world: PerceivedWorld,
     tick: number,

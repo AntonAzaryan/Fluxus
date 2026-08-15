@@ -14,8 +14,16 @@
  * номером тика наблюдения — знать актуальное мозг не может, как не может и
  * клиент человека. Экстраполируются только снаряды: их полёт уже наблюдался, и
  * это то же предсказание, которое делает глазами игрок.
+ *
+ * Вся память здесь адресована ОДНОЙ ветви истории, и перемотка эту ветвь
+ * стирает (`rewind` REW-1, NTR-16). Поэтому у восприятия есть второй вход,
+ * кроме наблюдений: разрыв непрерывности доставки (SHELL-7) и вход в перемотку
+ * либо выход из неё (WSM-1) — сигнал «то, что помнил, больше не про этот мир».
+ * По нему память сбрасывается целиком; без сброса очередь наблюдений и правило
+ * «картинка назад не ходит» удерживали бы мозг на СТЁРТОМ будущем на всю
+ * глубину отката. Пауза и возобновление ветвь НЕ трогают и памяти не стоят.
  */
-import type { EntityId } from '@game-mvp/core';
+import type { EntityId, WorldMode } from '@game-mvp/core';
 import type { ClientStep } from '@game-mvp/net';
 import type { BotSelf } from '../../brain.js';
 import type { BotProfile } from '../../profile.js';
@@ -71,6 +79,10 @@ export class Perception {
   private readonly pending: Observation[] = [];
   private readonly memory = new Map<EntityId, RememberedEnemy>();
   private awareOf: BotWorldView | undefined;
+  /** Режим ПОСЛЕДНЕГО доставленного состояния (WSM-1), а не осознанного. */
+  private deliveredMode: WorldMode = 'Running';
+  /** Непрочитанный разрыв непрерывности; гасится чтением, как у `MatchSample`. */
+  private broken = false;
 
   constructor(profile: BotProfile, self: BotSelf, random: BrainRandom, names: WorldViewNames = {}) {
     this.profile = profile;
@@ -79,13 +91,72 @@ export class Perception {
     this.names = names;
   }
 
+  /**
+   * Режим мира по последнему ДОСТАВЛЕННОМУ состоянию (WSM-1) — без задержки
+   * реакции намеренно: это свойство канала, а не наблюдение за противником.
+   * Замерший мир человек видит замершим сразу, и «не успел заметить перемотку»
+   * человечностью не является.
+   */
+  get mode(): WorldMode {
+    return this.deliveredMode;
+  }
+
+  /**
+   * Был ли разрыв непрерывности с прошлого чтения (SHELL-7). Читается один раз
+   * и гасится — ровно как признак в `MatchSample`: второй потребитель этого
+   * знания в мозге завёл бы вторую, расходящуюся картину мира.
+   */
+  takeDiscontinuity(): boolean {
+    const broken = this.broken;
+    this.broken = false;
+    return broken;
+  }
+
   /** Наблюдение (BOT-3): всё, что мозг узнаёт о мире, приходит только отсюда. */
   observe(step: ClientStep): void {
     const view = readWorldView(step, this.self.slot, this.names);
     if (view === undefined) return;
+    // Разрыв ветви истории читается двумя независимыми признаками одного и того
+    // же события. Флаг доставки (SHELL-7) — основной; смена режима — страховка
+    // на случай, когда вход в перемотку и выход из неё приходят соседними
+    // состояниями, а разрыв погашен как скраб внутри одной перемотки (NTR-10).
+    //
+    // Страховка узкая: только переходы, одна сторона которых — `Rewinding`.
+    // Ветвь истории стирает ПЕРЕМОТКА, а не всякая смена режима: пауза и
+    // возобновление (WSM-1) оставляют мир там же, где он был, и сброс памяти на
+    // них означал бы, что игрок, поставивший паузу, дарит боту амнезию —
+    // противник, стоящий на виду, забывается и переоценивается заново.
+    if (view.discontinuity || this.rewindEdge(view.mode)) {
+      this.broken = true;
+      this.forgetBranch();
+    }
+    this.deliveredMode = view.mode;
     const { delayTicks, jitterTicks } = this.profile.reaction;
     const jitter = jitterTicks === 0 ? 0 : this.random.below(jitterTicks + 1);
     this.pending.push({ readyAtTick: view.tick + delayTicks + jitter, view });
+  }
+
+  /** Кромка перемотки: смена режима, одна сторона которой — `Rewinding` (WSM-1). */
+  private rewindEdge(mode: WorldMode): boolean {
+    if (mode === this.deliveredMode) return false;
+    return mode === 'Rewinding' || this.deliveredMode === 'Rewinding';
+  }
+
+  /**
+   * Стёртая ветвь истории: очередь наблюдений, осознанная картинка и память о
+   * врагах — всё это адресовано моменту, которого больше нет.
+   *
+   * Сбрасывается ЦЕЛИКОМ, а не подчищается по тикам, по двум причинам. Первая:
+   * правило `release` «картинка назад не ходит» иначе держало бы мозг на
+   * доперемоточном наблюдении всю глубину отката — номера тиков после перемотки
+   * идут назад (NTR-16), и ни одно новое наблюдение не оказалось бы свежее.
+   * Вторая: помнимое положение врага из стёртой ветви — это координаты, по
+   * которым бот пошёл бы в место, где противник не был и не будет.
+   */
+  private forgetBranch(): void {
+    this.pending.length = 0;
+    this.memory.clear();
+    this.awareOf = undefined;
   }
 
   /**

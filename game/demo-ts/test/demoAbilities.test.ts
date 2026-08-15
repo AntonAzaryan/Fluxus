@@ -27,10 +27,11 @@ import {
   type SimulationState,
   type Simulation,
 } from '@game-mvp/core';
-import { buildMatchWorld } from '@game-mvp/net';
+import { buildMatchWorld, REWIND_REQUEST_EVENT } from '@game-mvp/net';
 import { ViewBuffer } from '@game-mvp/render';
 import { ACTION_BITS, FIREBALL_LIFETIME_TICKS, TICK_SECONDS, stateBit } from '../app/sim.js';
 import { createDemoExtractor } from '../app/extractor.js';
+import { DEMO_SCRUB_EVERY } from '../app/match.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 import manifestJson from '../../../content/visuals/manifest.json';
@@ -50,6 +51,15 @@ const MATCH = matchJson as unknown as {
   readonly seed: number;
   readonly players: readonly string[];
   readonly locomotion: Record<string, unknown>;
+  readonly tickRate?: number;
+  readonly snapshotRate?: number;
+  readonly rewind?: {
+    readonly interval: number;
+    readonly capacity: number;
+    readonly exempt?: readonly { readonly component: string }[];
+    readonly holdButton?: number;
+    readonly step?: number;
+  };
 };
 
 const CAST = 1 << ACTION_BITS.cast;
@@ -64,8 +74,13 @@ const SHIELD = 1 << ACTION_BITS.shield;
 const AIM_EAST = 0;
 const AIM_WEST = 0x8000;
 
-/** Множитель купола и предел замедления — те же числа, что в `AbilityConfig`. */
-const SLOW = 16384;
+/**
+ * Множитель купола и предел замедления — те же числа, что в `AbilityConfig`.
+ * 13107/65536 — это НЕ ровно 1/5: точной пятой доли в двоичной дроби не
+ * существует, поэтому шаг замедленного снаряда пиннится настоящим произведением
+ * фиксированной точки (`fixed.mul`), а не делением на пять.
+ */
+const SLOW = 13107;
 const DOME_TICKS = 180;
 const DOME_COOLDOWN = 300;
 const CAPTURE_COOLDOWN = 120;
@@ -83,7 +98,7 @@ const DOME_RADIUS_MUL = 655360;
 const CAPTURE_HALF_ANGLE = 5461;
 
 /** Заряд каста — те же поля `AbilityConfig`, по которым решает `ChargeRelease`. */
-const CAST_COOLDOWN = 90;
+const CAST_COOLDOWN = 60;
 const CHARGE_TICKS = 60;
 const CHARGE_GRACE_TICKS = 18;
 const CHARGE_MAX_SCALE = 2 * FIXED_ONE;
@@ -94,14 +109,14 @@ const OVERCHARGE_DAMAGE = 250;
 const OVERCHARGE_RADIUS = 3 * FIXED_ONE;
 /**
  * Щит — те же поля `AbilityConfig`/`Cooldowns`, по которым решают `ShieldCast`
- * и `ShieldRicochet`. Радиус щита — множитель 1,3 от коллайдера героя; сам
- * множитель в Q16.16 неточен (1,3 в двоичной дроби не существует), поэтому
+ * и `ShieldRicochet`. Радиус щита — множитель 2,6 от коллайдера героя; сам
+ * множитель в Q16.16 неточен (2,6 в двоичной дроби не существует), поэтому
  * ПИННИТСЯ его произведение, а не он сам.
  */
-const SHIELD_COOLDOWN = 180;
+const SHIELD_COOLDOWN = 150;
 const SHIELD_TICKS = 60;
-const SHIELD_RADIUS_MUL = 85197;
-const SHIELD_RADIUS = 25559;
+const SHIELD_RADIUS_MUL = 170394;
+const SHIELD_RADIUS = 51118;
 /** Радиус коллайдера снаряда — ровно половина героического. */
 const FIREBALL_RADIUS = 9830;
 /** Радиус коллайдера тяжёлого снаряда — вдвое больше обычного, то есть героический. */
@@ -130,11 +145,11 @@ const NEUTRAL: Frame = {};
  * Двое героев на одной линии в центре арены: `p1` слева, `p2` справа, между
  * ними четыре клетки — снаряд покрывает их за десяток тиков.
  */
-function arena(gap = 4): Arena {
+function arena(gap = 4, scene: SceneDef = SCENE): Arena {
   const left = (24 - gap / 2) * FIXED_ONE;
   const right = (24 + gap / 2) * FIXED_ONE;
   const built = buildMatchWorld({
-    scene: SCENE,
+    scene,
     seed: MATCH.seed,
     players: MATCH.players,
     initial: [
@@ -394,11 +409,15 @@ describe('купол замедления: чужой снаряд идёт вч
     }
 
     expect(slowedStep).not.toBeNull();
-    // Ровно вчетверо: физика умножает шаг на итоговый множитель (TIME-3), сама
-    // скорость в компоненте не трогается — замедление не «прилипает».
-    // Сдвиг, а не деление: шаг — Q16.16, и `/ 4` завёл бы в тест дробь, которой
-    // в фиксированной точке не существует.
-    expect(slowedStep).toBe(fullStep >> 2);
+    // Ровно впятеро с точностью фиксированной точки: физика умножает шаг на
+    // итоговый множитель (TIME-3), сама скорость в компоненте не трогается —
+    // замедление не «прилипает». Пиннится НАСТОЯЩЕЕ произведение Q16.16, а не
+    // `fullStep / 5`: 13107/65536 меньше пятой доли на 0,00015, и шаг выходит на
+    // единицу Q16.16 короче честной пятой части. Эта единица — не погрешность
+    // теста, а поведение симуляции, и оно обязано быть видно.
+    expect(slowedStep).toBe(fixed.mul(fullStep, SLOW));
+    expect(slowedStep).toBe(8191);
+    expect(fullStep / 5).toBe(8192);
   });
 
   it('радиус купола — ровно 10 радиусов коллайдера кастера', () => {
@@ -541,21 +560,34 @@ describe('захват снаряда: удержание, переброс и �
     expect(Math.abs(x(a.state, shot) - x(a.state, p2))).toBeLessThan(FIXED_ONE);
   });
 
-  it('снаряд позади героя вне сектора не ловится, но кулдаун списывается', () => {
+  it('снаряд позади героя вне сектора не ловится, и кулдаун НЕ списывается', () => {
     const a = arena(8);
     pressA(a, CAST);
     const shot = fireballs(a.state)[0]!;
-    shotInReach(a, shot);
-
     const p2 = a.heroes[1]!;
+    // Ждём КРАЯ зоны (радиус захвата — 3 клетки), а не её середины: после
+    // промаха снаряду нужно ещё два тика подлёта на удавшуюся попытку.
+    for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 3 * FIXED_ONE; i++) {
+      a.step(NEUTRAL);
+    }
+
     // Прицел на восток — снаряд подходит с запада, то есть за спиной.
     a.step(NEUTRAL, { buttons: CAPTURE, aimDir: AIM_EAST });
     a.step(NEUTRAL, { aimDir: AIM_EAST });
 
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(false);
     expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
-    // Кулдаун ставится на тике отпускания и на нём же ещё не тикает: убавляет
-    // его `CooldownTick` (order 10), а `CaptureRelease` идёт позже (order 38).
+    // Кулдаун платится за ПОЙМАННЫЙ снаряд, а не за нажатие: промах ничего не
+    // стоит и разрешает немедленную повторную попытку. `CaptureRelease` ставит
+    // его внутри ветки «снаряд найден», поэтому здесь он остаётся нулём.
+    expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'capture')).toBe(0);
+
+    // И повторная попытка СЛЕДУЮЩИМ ЖЕ движением ловит: промах не отнял у
+    // игрока способность на две секунды.
+    a.step(NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST });
+    a.step(NEUTRAL, { aimDir: AIM_WEST });
+    expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
+    // А вот УДАВШИЙСЯ захват кулдаун списывает — тем же тиком и полностью.
     expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'capture')).toBe(CAPTURE_COOLDOWN);
   });
 
@@ -687,6 +719,32 @@ describe('захват снаряда: удержание, переброс и �
     // Поведенчески выше проверен `KillSwitch`; здесь — структурный пин на то,
     // что падение и обнуление здоровья не разошлись с ним молча. Новый путь
     // смерти, оставляющий снаряд в руках трупа, обязан быть виден в диффе.
+    //
+    // Пути ищутся ОБХОДОМ, а не списком имён: смерть в этой сцене перестала быть
+    // терминальной (`Respawn`), и путь, добавленный мимо этого теста, всё равно
+    // окажется в выдаче. `Respawn` в неё не попадает намеренно: он `Dead` снимает,
+    // а не ставит, — и его собственное снятие `Holding` при полном отпускании на
+    // смерти уже ничего не находит. Именно это и требуется: воскресший не может
+    // держать снаряд, который пережил его смерть.
+    const marksDead = (system: { readonly do: unknown }): boolean => {
+      let found = false;
+      const walk = (node: unknown): void => {
+        if (Array.isArray(node)) {
+          for (const item of node) walk(item);
+          return;
+        }
+        if (node === null || typeof node !== 'object') return;
+        const record = node as Record<string, unknown>;
+        const add = record.addComponent as { component?: string } | undefined;
+        if (add?.component === 'Dead') found = true;
+        for (const value of Object.values(record)) walk(value);
+      };
+      walk(system.do);
+      return found;
+    };
+    const paths = SCENE.systems!.filter(marksDead).map((system) => system.name);
+    expect(paths).toEqual(['KillSwitch', 'FallDeath', 'HealthDeath']);
+
     const releases = (name: string): boolean => {
       const system = SCENE.systems!.find((candidate) => candidate.name === name);
       expect(system, `в сцене нет системы ${name}`).toBeDefined();
@@ -706,7 +764,7 @@ describe('захват снаряда: удержание, переброс и �
       // Обе половины связки: руки держателя и метка на снаряде.
       return dropped.has('Holding') && dropped.has('Held');
     };
-    for (const path of ['KillSwitch', 'FallDeath', 'HealthDeath']) {
+    for (const path of paths) {
       expect(releases(path), `путь смерти ${path} не отпускает захват`).toBe(true);
     }
   });
@@ -1033,7 +1091,7 @@ describe('числа способностей: ретюн виден в дифф
     expect(heavy.tags).toEqual(['HeavyFireball', 'Fireball']);
   });
 
-  it('щит: перезарядка 3 с, длительность 1 с, радиус 1,3 коллайдера героя', () => {
+  it('щит: перезарядка 2,5 с, длительность 1 с, радиус 2,6 коллайдера героя', () => {
     expect(cooldowns.shieldMax).toBe(SHIELD_COOLDOWN);
     expect(ability.shieldTicks).toBe(SHIELD_TICKS);
     expect(ability.shieldRadiusMul).toBe(SHIELD_RADIUS_MUL);
@@ -1042,7 +1100,7 @@ describe('числа способностей: ретюн виден в дифф
     // виден в диффе теста, а не только в поведении на экране.
     const world = Math.floor((HERO_RADIUS * SHIELD_RADIUS_MUL) / FIXED_ONE);
     expect(world).toBe(SHIELD_RADIUS);
-    expect(SHIELD_RADIUS).toBe(Math.floor(HERO_RADIUS * 1.3));
+    expect(SHIELD_RADIUS).toBe(Math.floor(HERO_RADIUS * 2.6));
   });
 
   it('геометрия щита: бокс щита содержит бокс урона и не перепрыгивается свипом', () => {
@@ -1255,17 +1313,21 @@ describe('пределы фиксированной точки: ретюн за 
     // Числа пиннятся: ретюн `Collider.radius` героя, `shieldRadiusMul` или
     // размера снаряда виден в диффе теста, а не только на дне запаса.
     expect(worst).toEqual([
-      ['Fireball', 156547664],
-      ['HeavyFireball', 255606050],
+      ['Fireball', 464332338],
+      ['HeavyFireball', 626208354],
     ]);
     const overflowed = worst.filter(([, lengthSq]) => lengthSq > fixed.INT32_MAX).map(([name]) => name);
     expect(overflowed).toEqual([]);
     // Запас в ЛИНЕЙНОМ размере — корень из запаса в квадрате длины: полоса
-    // рикошета (`shieldR` + скин снаряда) может вырасти ещё в 2,89 раза, дальше
+    // рикошета (`shieldR` + скин снаряда) может вырасти ещё в 1,85 раза, дальше
     // сумма в i32 не помещается. Самый тесный случай — тяжёлый снаряд: скин у
-    // него вдвое толще обычного, и запаса остаётся меньше трёх, а не 3,7.
+    // него вдвое толще обычного, и запаса остаётся меньше двух, а не 2,15.
+    // Ретюн щита с 1,3 на 2,6 съел ровно половину этого запаса: полоса растёт
+    // линейно, а сумма — квадратично. Предел полосы ровно 2 клетки (131072:
+    // `band × 64` упирается в 2^23), то есть `shieldRadiusMul` больше ≈5,66 при
+    // сегодняшнем героическом коллайдере уже переполняет.
     const tightest = Math.max(...worst.map(([, lengthSq]) => lengthSq));
-    expect(Math.floor(Math.sqrt(fixed.INT32_MAX / tightest) * 100) / 100).toBe(2.89);
+    expect(Math.floor(Math.sqrt(fixed.INT32_MAX / tightest) * 100) / 100).toBe(1.85);
   });
 
   it('заряд: `hitDamage` на максимальном заряде помещается в Q16.16', () => {
@@ -2282,8 +2344,9 @@ describe('щит: рикошет снаряда, смена владельца �
     // СОБСТВЕННОГО курса снаряда со знаком минус. Отражение через такую нормаль
     // — точный разворот, без единицы Q16.16 расхождения.
     // Точка, в которую снаряд попадает ТОЧНО, меряется отдельным прогоном той
-    // же геометрии: числа выноса и скорости в тест не переписываются.
-    const probe = ffa([20, 28]);
+    // же геометрии: числа выноса и скорости в тест не переписываются. Второй
+    // герой прогона уведён с линии огня — снаряд обязан долететь свободно.
+    const probe = ffa([20, [24, 40]]);
     probe.step([{ buttons: CAST }]);
     probe.step();
     const flying = fireballs(probe.state)[0]!;
@@ -2296,11 +2359,14 @@ describe('щит: рикошет снаряда, смена владельца �
     }
     expect(center).toBeGreaterThan(0);
 
-    // Герой ровно в этой точке: прошлый тик снаряд был в 0,625 клетки от него —
-    // ДАЛЬШЕ бокса (0,54), — поэтому первый контакт приходится точно в центр.
+    // Герой ровно в этой точке. Шаг снаряда (0,625 клетки) КОРОЧЕ бокса щита
+    // (0,93), поэтому влетающий снаряд стоящий пузырь встречает на кромке — до
+    // центра ему при поднятом щите не добраться никогда. Вырожденная ветка
+    // достижима только вторым способом: щит поднимается ровно на том тике, на
+    // котором снаряд встаёт в центр героя (`ShieldCast` — order 39, шаг физики —
+    // 100, рикошет — 108, и всё это один тик).
     const a = ffa([20, center / FIXED_ONE]);
     const keeper = a.heroes[1]!;
-    a.step([NEUTRAL, { buttons: SHIELD }]);
     a.step([{ buttons: CAST }]);
     a.step();
     const shot = fireballs(a.state)[0]!;
@@ -2308,9 +2374,14 @@ describe('щит: рикошет снаряда, смена владельца �
     expect(speed).toBeGreaterThan(0);
 
     let bounced = false;
+    let raised = false;
     for (let i = 0; i < 30 && !bounced && fireballs(a.state).length > 0; i++) {
-      bounced = a.step().includes('ShieldRicochet');
+      // Ровно один шаг до центра — значит этот тик и есть тик контакта.
+      const last = x(a.state, keeper) - x(a.state, shot) === speed;
+      raised ||= last;
+      bounced = a.step(last ? [NEUTRAL, { buttons: SHIELD }] : []).includes('ShieldRicochet');
     }
+    expect(raised).toBe(true);
     expect(bounced).toBe(true);
     // Снаряд стоял ТОЧНО в центре: разность центров нулевая.
     expect(x(a.state, shot)).toBe(x(a.state, keeper));
@@ -2441,15 +2512,23 @@ describe('щит: рикошет снаряда, смена владельца �
   });
 
   it('щит не крадёт снаряд без отражения: перебор подклеточных выравниваний', () => {
-    // РЕГРЕССИЯ. Шаг снаряда за тик (`throwSpeed` = 0,625 клетки) БОЛЬШЕ
-    // полуребра бокса щита (`shieldR` + полуось снаряда ≈ 0,545), поэтому первая
-    // же точка тика внутри бокса нередко оказывается УЖЕ за центром хозяина:
-    // нормаль по линии центров смотрит там ВПЕРЁД, `v·n ≥ 0`, и отражения из
-    // формулы не выходит. Смена владельца и событие `ShieldRicochet` стояли ВНЕ
-    // этой ветки и срабатывали всё равно — снаряд у стрелка отбирали, курса ему
-    // не меняли, а ложный `bounced` тем же тиком глушил взрыв `FireballWall`.
-    // Ловится это только перебором подклеточных выравниваний: на «круглых»
-    // позициях контакт приходится ДО центра, и щит выглядит здоровым.
+    // РЕГРЕССИЯ. Смена владельца и событие `ShieldRicochet` стояли ВНЕ ветки
+    // отражения и срабатывали, даже когда формула разворота ничего не давала:
+    // снаряд у стрелка отбирали, курса ему не меняли, а ложный `bounced` тем же
+    // тиком глушил взрыв `FireballWall`. Видно это только перебором
+    // подклеточных выравниваний — на «круглых» позициях щит выглядит здоровым.
+    //
+    // На чём ветка расходилась: нормаль строится по линии центров, и стоит
+    // первой точке тика внутри бокса оказаться УЖЕ за центром хозяина, как она
+    // смотрит ВПЕРЁД — `v·n ≥ 0`, разворота из формулы не выходит. При щите 1,3
+    // это случалось прямо здесь: шаг снаряда за тик (`throwSpeed` = 0,625
+    // клетки) был БОЛЬШЕ полуребра бокса щита (0,545). Ретюн на 2,6 развёл эти
+    // числа — полуребро стало 0,93, — и стоящий пузырь влетающий снаряд теперь
+    // встречает строго на подлёте к центру: перебор проходит и без гейта.
+    // Тест остаётся: он пиннит сам контракт (ровно один рикошет, разворот,
+    // смена владельца, ни капли урона), и обратный ретюн любого из двух чисел
+    // вернёт сюда ту же регрессию. Ветку `reached` при сегодняшних числах
+    // держит соседний тест — «щит, поднятый над снарядом ЗА центром».
     const failures: string[] = [];
     for (let k = 0; k < 256; k++) {
       const a = ffa([20, 28 + k / 256]);
@@ -2485,13 +2564,56 @@ describe('щит: рикошет снаряда, смена владельца �
     expect(failures).toEqual([]);
   });
 
+  it('щит, поднятый над снарядом ЗА центром, но внутри тела, всё равно отражает', () => {
+    // Вторая половина гейта — дизъюнкт `reached`, и после ретюна щита на 2,6 он
+    // держится только этим тестом. Нормаль по линии центров у снаряда ЗА центром
+    // хозяина смотрит вперёд (`v·n > 0`), и одной проверки скалярного
+    // произведения хватило бы, чтобы такой снаряд пролетел мимо щита насквозь —
+    // а он уже внутри бокса ТЕЛА, и следующая же система тика (`FireballHit`,
+    // order 112) снимет с хозяина 100 hp сквозь поднятый пузырь. Поэтому гейт
+    // отражает и по факту достижения тела, а не только по встречному курсу.
+    //
+    // Достижимо это ровно одним способом: щит поднимается на том тике, на
+    // котором снаряд встаёт за центром, — стоящий пузырь при полуребре 0,93 и
+    // шаге 0,625 такую точку снаряду пройти не даёт. Выравнивание перебирается,
+    // а не пишется числом: оно растёт из скорости и радиусов, не из теста.
+    const BODY = HERO_RADIUS + FIREBALL_RADIUS;
+    const cases: string[] = [];
+    for (let k = 0; k < 256 && cases.length < 4; k++) {
+      const a = ffa([20, 28 + k / 256]);
+      const keeper = a.heroes[1]!;
+      a.step([{ buttons: CAST }]);
+      a.step();
+      const shot = fireballs(a.state)[0]!;
+      const speed = vel(a.state, shot, 'x');
+      for (let i = 0; i < 40 && fireballs(a.state).length > 0; i++) {
+        const ahead = x(a.state, shot) + vel(a.state, shot, 'x') - x(a.state, keeper);
+        const raise = ahead > 0 && ahead <= BODY;
+        const events = a.step(raise ? [NEUTRAL, { buttons: SHIELD }] : []);
+        if (!raise) continue;
+        // Снаряд стоит ЗА центром: нормаль смотрит вперёд, и ветка `v·n < 0`
+        // сюда не привела бы — сработать мог только `reached`.
+        expect(x(a.state, shot) - x(a.state, keeper)).toBe(ahead);
+        expect(events.filter((type) => type === 'ShieldRicochet')).toHaveLength(1);
+        // Развернули, забрали себе и не пропустили урон.
+        expect(vel(a.state, shot, 'x')).toBeLessThan(0);
+        expect(owner(a.state, shot)).toBe(1);
+        expect(hp(a.state, keeper)).toBe(1000);
+        cases.push(`сдвиг ${k}/256: ahead=${ahead}, шаг=${speed}`);
+        break;
+      }
+    }
+    // Перебор обязан найти такие выравнивания — иначе тест зелен ни от чего.
+    expect(cases).toHaveLength(4);
+  });
+
   it('снаряд, уже миновавший героя, щит пропускает — а встречный отражает', () => {
     // Вторая половина того же вопроса: отражать надо ВСТРЕЧНОЕ. Снаряд, который
     // на момент каста уже за спиной хозяина и уходит, щит трогать не должен —
     // ни курса, ни владельца, ни события. Геометрия та же, что у теста «щит,
     // поднятый над влетевшим снарядом», только со сдвигом по ординате В ЛУНКУ
-    // между боксом тела (0,45) и боксом щита (0,545): снаряд идёт мимо тела,
-    // урона не наносит и до `reached`-ветки не достаёт.
+    // между боксом тела (0,45) и боксом щита (0,93 после ретюна на 2,6):
+    // снаряд идёт мимо тела, урона не наносит и до `reached`-ветки не достаёт.
     const shooter = [20, 24.5] as const;
     const keeper = [28, 24.97] as const;
     const band = SHIELD_RADIUS + FIREBALL_RADIUS;
@@ -2562,5 +2684,347 @@ describe('щит: рикошет снаряда, смена владельца �
       expect(owner(gone.a.state, shot)).toBe(0);
     }
     expect(hp(gone.a.state, gone.a.heroes[1]!)).toBe(1000);
+  });
+});
+
+/**
+ * Возрождение героя как КОНТЕНТ (`SpawnAnchor`, `Respawn`): смерть в этой сцене
+ * перестала быть терминальной. Точку возрождения снимает первый тик — `Spawn`
+ * запоминает НАЧАЛЬНУЮ позицию героя, где бы его ни расставили (матч, соло,
+ * тест), — а `Respawn` через `AbilityConfig.respawnTicks` возвращает героя туда
+ * же целым и с чистыми состояниями.
+ *
+ * Проверяется политика сцены, а не механизм ядра: что счётчик отмеряет ровно
+ * заявленные тики, что убраны ВСЕ следы каждого из путей смерти (компонентов у
+ * них разный набор) и что возрождения двух героев не мешают друг другу.
+ */
+describe('возрождение героя: смерть больше не терминальна', () => {
+  const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
+  const ability = hero.components.AbilityConfig!;
+  /** `AbilityConfig.respawnTicks` — 10 секунд при 60 Гц. */
+  const RESPAWN_TICKS = 600;
+  const REWIND = 1 << ACTION_BITS.rewind;
+
+  const alive = (a: Arena, entity: EntityId): boolean =>
+    !coreWorld.hasComponent(a.state.world, entity, 'Dead');
+
+  /** Первый `addComponent` заданного компонента в теле системы — её значения. */
+  function addedValues(node: unknown, component: string): Record<string, number> | undefined {
+    if (Array.isArray(node)) {
+      for (const item of node as readonly unknown[]) {
+        const found = addedValues(item, component);
+        if (found !== undefined) return found;
+      }
+      return undefined;
+    }
+    if (typeof node !== 'object' || node === null) return undefined;
+    const record = node as Record<string, unknown>;
+    const add = record.addComponent as
+      | { component?: string; values?: Record<string, number> }
+      | undefined;
+    if (add?.component === component && add.values !== undefined) return add.values;
+    for (const value of Object.values(record)) {
+      const found = addedValues(value, component);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+
+  it('срок возрождения — 10 с, и он длиннее окна пойманного снаряда', () => {
+    expect(ability.respawnTicks).toBe(RESPAWN_TICKS);
+    expect(RESPAWN_TICKS).toBe(10 * 60);
+    // Снаряд, пойманный трупом, обязан разрешиться СВОИМ таймаутом раньше, чем
+    // держатель воскреснет: иначе `HeldPin` взорвал бы его в руках уже живого
+    // героя и снял бы 250 hp за смерть, случившуюся десять секунд назад.
+    expect(RESPAWN_TICKS).toBeGreaterThan(ability.holdTicks!);
+  });
+
+  it('локомоушен возрождения — те же числа, что у prefab’а (зеркало)', () => {
+    // Все три пути смерти снимают `Locomotion`, и вернуть его может только
+    // `addComponent`, а он заполняет ВСЕ поля схемы: недоданное поле стало бы
+    // нулём, и воскресший герой не сдвинулся бы с места. Второго набора чисел
+    // в сцене нет — есть эта копия, и держит её в согласии с prefab'ом тест.
+    const respawn = SCENE.systems!.find((system) => system.name === 'Respawn')!;
+    expect(addedValues(respawn.do, 'Locomotion')).toEqual(hero.components.Locomotion);
+  });
+
+  it('точка возрождения снимается первым тиком и не едет за героем', () => {
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    const spawnX = x(a.state, p1);
+    const spawnY = y(a.state, p1);
+    a.step(NEUTRAL);
+    expect(coreWorld.getField(a.state.world, p1, 'Spawn', 'x')).toBe(spawnX);
+    expect(coreWorld.getField(a.state.world, p1, 'Spawn', 'y')).toBe(spawnY);
+
+    for (let i = 0; i < 60; i++) a.step({ moveY: FIXED_ONE });
+    expect(y(a.state, p1)).toBeGreaterThan(spawnY);
+    // Точка спавна — свойство расстановки, а не текущего положения.
+    expect(coreWorld.getField(a.state.world, p1, 'Spawn', 'y')).toBe(spawnY);
+  });
+
+  it('смерть от урона: ровно через 600 тиков герой жив, целый и в точке спавна', () => {
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    const spawnX = x(a.state, p1);
+    const spawnY = y(a.state, p1);
+
+    // Ульта взводится ДО смерти: её cooldown — exempt-компонент со своей
+    // жизнью, и возрождение обязано оставить его тикать, а не обнулить.
+    a.step({ buttons: REWIND });
+    // Уходим со спавна и тратим щит с куполом: возвращение и сброс перезарядок
+    // должны быть видны в числах, а не подразумеваться.
+    a.step({ buttons: SHIELD });
+    a.step({ buttons: DOME });
+    for (let i = 0; i < 60; i++) a.step({ moveY: FIXED_ONE });
+    expect(y(a.state, p1)).toBeGreaterThan(spawnY);
+    expect(coreWorld.getField(a.state.world, p1, 'Cooldowns', 'shield')).toBeGreaterThan(0);
+
+    const deathTick = a.step({ buttons: KILL });
+    expect(alive(a, p1)).toBe(false);
+    expect(coreWorld.getField(a.state.world, p1, 'Dead', 'atTick')).toBe(deathTick);
+
+    let tick = deathTick;
+    while (tick - deathTick < RESPAWN_TICKS - 1) {
+      tick = a.step(NEUTRAL);
+      // Ни тиком раньше: труп лежит все 599 промежуточных тиков.
+      expect(alive(a, p1)).toBe(false);
+    }
+    tick = a.step(NEUTRAL);
+    expect(tick - deathTick).toBe(RESPAWN_TICKS);
+    expect(alive(a, p1)).toBe(true);
+
+    expect(coreWorld.getField(a.state.world, p1, 'Health', 'hp')).toBe(1000);
+    expect(x(a.state, p1)).toBe(spawnX);
+    expect(y(a.state, p1)).toBe(spawnY);
+    expect(vel(a.state, p1, 'x')).toBe(0);
+    expect(vel(a.state, p1, 'y')).toBe(0);
+    // Управление вернулось вместе с конфигурацией локомоушена, машина манёвров
+    // в исходном состоянии.
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Locomotion')).toBe(true);
+    expect(coreWorld.getField(a.state.world, p1, 'LocomotionState', 'state')).toBe(0);
+    expect(coreWorld.getField(a.state.world, p1, 'Collider', 'cliffRise')).toBe(0);
+    // Транзиентные состояния сняты.
+    for (const component of ['Falling', 'LevelOverride', 'Shielded', 'ActionLock', 'Charging', 'Holding']) {
+      expect(coreWorld.hasComponent(a.state.world, p1, component)).toBe(false);
+    }
+    // Перезарядки способностей обнулены — воскресший кастует сразу.
+    for (const field of ['capture', 'cast', 'dodge', 'jump', 'shield', 'slowDome']) {
+      expect(coreWorld.getField(a.state.world, p1, 'Cooldowns', field)).toBe(0);
+    }
+    // А cooldown ульты — нет: он exempt-компонент и живёт своей жизнью (сцена
+    // взвела его 1200 тиков назад минус прожитое).
+    const rewind = coreWorld.getField(a.state.world, p1, 'RewindCooldown', 'ticks');
+    expect(rewind).toBeGreaterThan(0);
+    expect(rewind).toBe(1200 - (tick - 1));
+  });
+
+  it('перезарядка ДЛИННЕЕ окна смерти обнуляется возрождением, а не дотикивает', () => {
+    // Сброс перезарядок в `Respawn` при сегодняшних числах не наблюдаем:
+    // `CooldownTick` тикает и у трупа, а самый долгий максимум (300) втрое
+    // короче окна возрождения (600), — то есть к воскрешению всё и так по нулям.
+    // Это НЕ повод убирать сброс: он и есть та защита, которая держит инвариант
+    // «воскресший кастует сразу» при ретюне любого из двух чисел. Здесь ретюн
+    // и разыгрывается: сцена с перезарядкой щита длиннее окна смерти.
+    const LONG = 900;
+    expect(LONG).toBeGreaterThan(RESPAWN_TICKS);
+    const retuned: SceneDef = {
+      ...SCENE,
+      prefabs: SCENE.prefabs!.map((prefab) =>
+        prefab.name === 'Hero'
+          ? {
+              ...prefab,
+              components: {
+                ...prefab.components,
+                Cooldowns: { ...prefab.components.Cooldowns, shieldMax: LONG },
+              },
+            }
+          : prefab,
+      ),
+    };
+
+    const a = arena(8, retuned);
+    const p1 = a.heroes[0]!;
+    const shield = (): number => coreWorld.getField(a.state.world, p1, 'Cooldowns', 'shield');
+    a.step({ buttons: SHIELD });
+    expect(shield()).toBe(LONG);
+
+    const deathTick = a.step({ buttons: KILL });
+    let tick = deathTick;
+    while (tick - deathTick < RESPAWN_TICKS - 1) tick = a.step(NEUTRAL);
+    // Последний тик до возрождения: труп лежит, а перезарядка ещё идёт — именно
+    // с ней воскресший и остался бы без сброса.
+    expect(alive(a, p1)).toBe(false);
+    expect(shield()).toBeGreaterThan(0);
+
+    a.step(NEUTRAL);
+    expect(alive(a, p1)).toBe(true);
+    expect(shield()).toBe(0);
+  });
+
+  it('воскресший кастует немедленно — сброшенная перезарядка не обещание', () => {
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    a.step({ buttons: CAST });
+    a.step(NEUTRAL);
+    expect(fireballs(a.state)).toHaveLength(1);
+
+    const deathTick = a.step({ buttons: KILL });
+    for (let i = 0; i < RESPAWN_TICKS; i++) a.step(NEUTRAL);
+    expect(alive(a, p1)).toBe(true);
+    expect(a.step(NEUTRAL) - deathTick).toBe(RESPAWN_TICKS + 1);
+
+    const before = fireballs(a.state).length;
+    pressA(a, CAST);
+    expect(fireballs(a.state).length).toBe(before + 1);
+  });
+
+  it('провал в пустоту возвращает героя на спавн со снятыми `Falling` и `LevelOverride`', () => {
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    const spawnX = x(a.state, p1);
+    const spawnY = y(a.state, p1);
+
+    let deathTick = -1;
+    for (let i = 0; i < 1200 && deathTick === -1; i++) {
+      const tick = a.step({ moveX: -FIXED_ONE });
+      if (!alive(a, p1)) deathTick = tick;
+    }
+    expect(deathTick).toBeGreaterThan(0);
+    // Смерть именно ПРОВАЛОМ: путь через `FallStart`/`FallDeath`, а не урон.
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Falling')).toBe(true);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'LevelOverride')).toBe(true);
+    expect(coreWorld.getField(a.state.world, p1, 'Health', 'hp')).toBe(1000);
+
+    // Труп не едет. Управление провал отбирает, а скорость оставляет — герой
+    // падает по дуге, — но СМЕРТЬ её обнуляет, иначе тот же импульс десять
+    // секунд тащил бы тело прочь, и возрождение выглядело бы телепортом с
+    // другого конца карты. Пиннится всё окно, а не первый его тик.
+    const deadX = x(a.state, p1);
+    const deadY = y(a.state, p1);
+    for (let i = 0; i < RESPAWN_TICKS; i++) {
+      a.step(NEUTRAL);
+      if (!alive(a, p1)) {
+        expect(x(a.state, p1)).toBe(deadX);
+        expect(y(a.state, p1)).toBe(deadY);
+      }
+    }
+    expect(alive(a, p1)).toBe(true);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Falling')).toBe(false);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'LevelOverride')).toBe(false);
+    expect(x(a.state, p1)).toBe(spawnX);
+    expect(y(a.state, p1)).toBe(spawnY);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Locomotion')).toBe(true);
+  });
+
+  it('смерть соседа посреди чужого окна возрождения ничего не сдвигает', () => {
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    const p2 = a.heroes[1]!;
+
+    const firstDeath = a.step({ buttons: KILL });
+    // Второй умирает на середине окна первого — счётчики независимы, потому что
+    // считаются от СВОЕГО `Dead.atTick`.
+    for (let i = 0; i < RESPAWN_TICKS / 2 - 1; i++) a.step(NEUTRAL);
+    const secondDeath = a.step(NEUTRAL, { buttons: KILL });
+    expect(secondDeath - firstDeath).toBe(RESPAWN_TICKS / 2);
+    expect(alive(a, p1)).toBe(false);
+    expect(alive(a, p2)).toBe(false);
+
+    for (let i = 0; i < RESPAWN_TICKS / 2; i++) a.step(NEUTRAL);
+    // Первый воскрес ровно на своём 600-м тике, второй ещё лежит.
+    expect(alive(a, p1)).toBe(true);
+    expect(alive(a, p2)).toBe(false);
+
+    for (let i = 0; i < RESPAWN_TICKS / 2; i++) a.step(NEUTRAL);
+    expect(alive(a, p2)).toBe(true);
+    // И каждый — в своей точке, а не в чужой.
+    expect(x(a.state, p1)).toBeLessThan(x(a.state, p2));
+  });
+});
+
+/**
+ * Ульта отката как КОНТЕНТ (`RewindCast`, `RewindCooldownTick`): проверяется не
+ * механизм перемотки — он закрыт тестами ядра, сети и оболочки, — а политика,
+ * написанная в сцене: гейт по фронту кнопки и по cooldown'у, взвод cooldown'а и
+ * состав payload'а запроса. Мир здесь никто не перематывает: ядро событие не
+ * интерпретирует, а хоста в этом стенде нет (WSM-5).
+ */
+describe('ульта отката: политика в сцене (RewindCast)', () => {
+  /** Те же числа, что в `duel.scene.json`: 20 секунд перезарядки и 7 секунд глубины. */
+  const REWIND_COOLDOWN = 1200;
+  const REWIND_DEPTH = 420;
+  const REWIND = 1 << ACTION_BITS.rewind;
+
+  const requests = (state: SimulationState): readonly Record<string, number>[] =>
+    [...state.events].filter((event) => event.type === REWIND_REQUEST_EVENT).map((e) => e.data);
+
+  it('фронт кнопки эмитит запрос с инициатором и глубиной и взводит cooldown', () => {
+    const a = arena();
+    const hero = a.heroes[0]!;
+    a.step({ buttons: REWIND });
+
+    expect(requests(a.state)).toEqual([{ depthTicks: REWIND_DEPTH, initiator: hero }]);
+    expect(coreWorld.getField(a.state.world, hero, 'RewindCooldown', 'ticks')).toBe(REWIND_COOLDOWN);
+  });
+
+  it('удержание второго запроса не даёт: ульта ловит фронт (INP-2)', () => {
+    const a = arena();
+    a.step({ buttons: REWIND });
+    a.step({ buttons: REWIND });
+
+    expect(requests(a.state)).toEqual([]);
+  });
+
+  it('во время cooldown ульта не кастуется', () => {
+    const a = arena();
+    const hero = a.heroes[0]!;
+    a.step({ buttons: REWIND });
+    // Отпустили и нажали снова через сотню тиков: фронт есть, cooldown — нет.
+    for (let i = 0; i < 100; i++) a.step(NEUTRAL);
+    a.step({ buttons: REWIND });
+
+    expect(requests(a.state)).toEqual([]);
+    // Cooldown при этом убывает по тику, а не стоит.
+    expect(coreWorld.getField(a.state.world, hero, 'RewindCooldown', 'ticks')).toBe(
+      REWIND_COOLDOWN - 101,
+    );
+  });
+
+  it('заряженный каст ульту не пускает: гейт по Charging', () => {
+    const a = arena();
+    // ЛКМ зажата — герой копит заряд (`ChargeStart`), и `RewindCast` его не видит.
+    a.step({ buttons: CAST });
+    a.step({ buttons: CAST | REWIND });
+
+    expect(requests(a.state)).toEqual([]);
+  });
+
+  it('конфиг матча и раскладка сборки называют одно и то же', () => {
+    // Бит удержания сервер читает по номеру из документа матча, а сцена ловит
+    // фронт по своему литералу: разойдись они — ульта кастовалась бы одной
+    // кнопкой, а скраб вёлся бы другой.
+    expect(MATCH.rewind?.holdButton).toBe(ACTION_BITS.rewind);
+    // Cooldown ульты переживает откат (REW-9) — иначе удержанная кнопка
+    // кастовала бы её заново на первом же живом тике после возобновления.
+    expect(MATCH.rewind?.exempt).toEqual([{ component: 'RewindCooldown' }]);
+    // Буфер истории обязан покрывать глубину автостопа: 30 × (15 − 1) = 420.
+    const depth = (MATCH.rewind!.interval) * (MATCH.rewind!.capacity - 1);
+    expect(depth).toBeGreaterThanOrEqual(REWIND_DEPTH);
+  });
+
+  it('темп скраба локальной сборки — темп цикла рассылки матча (SHELL-8)', () => {
+    // Сервер делает шаг ведения точки раз в ЦИКЛ РАССЫЛКИ (REW-13), локальная
+    // оболочка — раз в `scrub.every` тиков. Величина одна и та же, и выводиться
+    // она обязана из документа матча: совпади они умолчаниями — ульта отматывала
+    // бы на разную глубину за одно и то же удержание в зависимости от того, кто
+    // произвёл тик.
+    const cycleTicks = Math.max(
+      1,
+      Math.round((MATCH.tickRate ?? 60) / (MATCH.snapshotRate ?? 30)),
+    );
+    expect(DEMO_SCRUB_EVERY).toBe(cycleTicks);
+    // И шаг в тиках — тот же, что у сервера: он приезжает из того же документа.
+    expect(MATCH.rewind?.step).toBeGreaterThan(0);
   });
 });

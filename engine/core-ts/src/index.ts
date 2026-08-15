@@ -178,7 +178,14 @@ export type { Simulation } from './sim/tick.js';
 export { RingHistory } from './sim/history.js';
 export type { RingHistoryOptions } from './sim/history.js';
 export { createRewindController, createInputLog } from './sim/rewind.js';
-export type { ExemptField, InputLog, RewindController, RewindOptions } from './sim/rewind.js';
+export type {
+  ExemptComponent,
+  ExemptEntry,
+  ExemptField,
+  InputLog,
+  RewindController,
+  RewindOptions,
+} from './sim/rewind.js';
 export { filterSnapshot, relevantEntityVisible, VIEWPOINT_ALL, EVENT_ENTITY_FIELDS } from './sim/filter.js';
 export type { EventVisibility } from './sim/filter.js';
 export { loadScene } from './sim/scene.js';

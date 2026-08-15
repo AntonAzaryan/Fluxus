@@ -50,6 +50,16 @@ export const ACTION_BITS = {
   slowDome: 4,
   capture: 5,
   shield: 6,
+  /**
+   * Ульта отката. Бит УДЕРЖАНИЯ, а не фронта: фронт кастует ульту (JSON-система
+   * `RewindCast` сцены), а дальше тот же бит читает хост мира — сервер матча из
+   * входящих кадров, локальная оболочка из сообщений главного потока, — и ведёт
+   * точку перемотки, пока он не исчезнет. Второго канала под это в протоколе
+   * нет и заводить его нельзя (`netcode-transport` NTR-8), поэтому номер бита
+   * приезжает конфигом матча (`rewind.holdButton` в `duel.match.json`) — там он
+   * обязан совпасть с этим.
+   */
+  rewind: 7,
 } as const;
 
 /**
@@ -229,20 +239,44 @@ export const STATS = {
 } as const;
 
 /**
- * Способности демо, у которых виджет показывает кулдаун (те же имена, что
- * INP-4). Перезарядку в сцене имеют `cast`, `slowDome`, `capture` и `shield`;
- * `dodge` и `jump` держат в компоненте `Cooldowns` нулевой предел и потому
- * всегда готовы — виджет читает те же доставленные статы и рисует их кнопки
- * без затемнения.
+ * Компонент cooldown'а ульты отката. Отдельный от `Cooldowns` намеренно: он
+ * назван exempt-компонентом в конфиге матча (`duel.match.json`) и потому
+ * переживает перемотку целиком, а остальные перезарядки обязаны откатываться
+ * вместе с миром — ради этого ульта и существует. Общий компонент сделал бы
+ * «пережил откат» свойством всех способностей разом.
  */
-export const COOLDOWN_ABILITIES: readonly string[] = Object.freeze([
-  'cast',
-  'dodge',
-  'jump',
-  'slowDome',
-  'capture',
-  'shield',
-]);
+export const REWIND_COOLDOWN_COMPONENT = 'RewindCooldown';
+
+/**
+ * Способности демо, у которых виджет показывает кулдаун (те же имена, что
+ * INP-4), и источник его величины в мире. Перезарядку в сцене имеют `cast`,
+ * `slowDome`, `capture`, `shield` и `rewind`; `dodge` и `jump` держат в
+ * компоненте `Cooldowns` нулевой предел и потому всегда готовы — виджет читает
+ * те же доставленные статы и рисует их кнопки без затемнения.
+ *
+ * Источник назван таблицей, а не выведен из имени способности: у ульты отката
+ * он свой (`REWIND_COOLDOWN_COMPONENT`), и правило «поле того же имени в
+ * `Cooldowns`» на ней бы молча сломалось — стат не приехал бы, а виджет показал
+ * бы пустоту вместо перезарядки.
+ */
+export interface CooldownSource {
+  readonly component: string;
+  readonly field: string;
+  readonly maxField: string;
+}
+
+export const COOLDOWN_SOURCES: Readonly<Record<string, CooldownSource>> = Object.freeze({
+  cast: { component: 'Cooldowns', field: 'cast', maxField: 'castMax' },
+  dodge: { component: 'Cooldowns', field: 'dodge', maxField: 'dodgeMax' },
+  jump: { component: 'Cooldowns', field: 'jump', maxField: 'jumpMax' },
+  slowDome: { component: 'Cooldowns', field: 'slowDome', maxField: 'slowDomeMax' },
+  capture: { component: 'Cooldowns', field: 'capture', maxField: 'captureMax' },
+  shield: { component: 'Cooldowns', field: 'shield', maxField: 'shieldMax' },
+  rewind: { component: REWIND_COOLDOWN_COMPONENT, field: 'ticks', maxField: 'max' },
+});
+
+/** Порядок панели кулдаунов HUD — порядок объявления источников. */
+export const COOLDOWN_ABILITIES: readonly string[] = Object.freeze(Object.keys(COOLDOWN_SOURCES));
 
 // ------------------------------------------------------------------- сборка
 

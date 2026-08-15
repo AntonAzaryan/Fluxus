@@ -26,7 +26,7 @@ export { ShellSender } from './sender.js';
 export type { SenderOptions } from './sender.js';
 // Локальный режим: хост симуляции с тикером (SHELL-8).
 export { WorkerShell } from './workerShell.js';
-export type { WorkerShellConfig } from './workerShell.js';
+export type { ShellHistory, ShellScrubOptions, WorkerShellConfig } from './workerShell.js';
 // Сетевой режим: клиент матча и применение персональных снапшотов (SHELL-8, NTR-10).
 export { NetworkShell } from './networkShell.js';
 export type { ControlButtons, NetworkShellConfig } from './networkShell.js';

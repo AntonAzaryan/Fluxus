@@ -126,6 +126,8 @@ function walkOffTheEdge(direction: -1 | 1, limit: number) {
   let diedAt: number | null = null;
   let leftAt: number | null = null;
   let fellAtX = 0;
+  /** Скорость В ПОЛЁТЕ (тик провала): импульс за кромку падение не отбирает. */
+  let fallingVelX = 0;
   for (let tick = 1; tick <= limit; tick++) {
     const result = simTick(sim, state, [
       {
@@ -142,12 +144,22 @@ function walkOffTheEdge(direction: -1 | 1, limit: number) {
       if (event.type === 'FellThroughFloor' && fellAt === null) {
         fellAt = tick;
         fellAtX = positionOf(state.world, playerId, 'x');
+        fallingVelX = coreWorld.getField(state.world, playerId, 'Velocity', 'x');
       }
       if (event.type === 'EntityDied' && diedAt === null) diedAt = tick;
     }
     if (diedAt !== null) break;
   }
-  return { state, playerId, fellAt, diedAt, leftAt, fellAtX, atX: positionOf(state.world, playerId, 'x') };
+  return {
+    state,
+    playerId,
+    fellAt,
+    diedAt,
+    leftAt,
+    fellAtX,
+    fallingVelX,
+    atX: positionOf(state.world, playerId, 'x'),
+  };
 }
 
 describe('демо-сцена: кромка диска и смерть в пустоте (ARENA-5)', () => {
@@ -156,7 +168,8 @@ describe('демо-сцена: кромка диска и смерть в пус
     ['восточной', 1, (x: number): boolean => x > CENTER + ARENA_RADIUS],
   ] as const) {
     it(`герой доходит до ${side} кромки, проваливается и умирает достигнув глубины`, () => {
-      const { state, playerId, fellAt, diedAt, leftAt, fellAtX, atX } = walkOffTheEdge(direction, 1200);
+      const { state, playerId, fellAt, diedAt, leftAt, fellAtX, fallingVelX, atX } =
+        walkOffTheEdge(direction, 1200);
 
       expect(fellAt).not.toBeNull();
       expect(diedAt).not.toBeNull();
@@ -176,13 +189,16 @@ describe('демо-сцена: кромка диска и смерть в пус
       expect(coreWorld.hasComponent(state.world, playerId, 'Dead')).toBe(true);
       expect(coreWorld.hasComponent(state.world, playerId, 'Falling')).toBe(true);
       // Управление отобрано на входе в провал: конфигурации локомоушена нет.
-      // Скорость при этом не трогается — импульс, с которым герой ушёл за кромку,
-      // сохраняется, и он падает по дуге, а не оседает отвесно на месте.
+      // Скорость на ЭТОМ переходе не трогается — импульс, с которым герой ушёл
+      // за кромку, сохраняется, и он падает по дуге, а не оседает отвесно.
       expect(coreWorld.hasComponent(state.world, playerId, 'Locomotion')).toBe(false);
-      expect(
-        coreWorld.getField(state.world, playerId, 'Velocity', 'x') * direction,
-      ).toBeGreaterThan(0);
+      expect(fallingVelX * direction).toBeGreaterThan(0);
       expect((atX - fellAtX) * direction).toBeGreaterThan(0);
+      // А СМЕРТЬ скорость обнуляет — тем же тиком и так же, как два других пути
+      // (`KillSwitch`, `HealthDeath`). Иначе труп все 600 тиков окна возрождения
+      // продолжал бы ехать по инерции и уезжал бы прочь с карты.
+      expect(coreWorld.getField(state.world, playerId, 'Velocity', 'x')).toBe(0);
+      expect(coreWorld.getField(state.world, playerId, 'Velocity', 'y')).toBe(0);
       // Override уровня (ARENA-6): падающий больше не выводит уровень из позиции.
       expect(coreWorld.hasComponent(state.world, playerId, 'LevelOverride')).toBe(true);
     });

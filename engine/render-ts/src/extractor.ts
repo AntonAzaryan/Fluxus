@@ -297,7 +297,13 @@ export class Extractor {
 
     const tickAdvanced = !this.hasTick || result.tick !== this.prevTick;
     const modeChanged = this.hasTick && result.mode !== this.prevMode;
-    // Разрыв непрерывности мира: rewind/replay и смена режима (REND-2).
+    // Разрыв непрерывности мира: replay, смена ветви истории (`isReplay`
+    // оболочки — рост эпохи, SHELL-7) и смена режима — вход в перемотку и
+    // выход из неё (REND-2). Скраб ВНУТРИ `Rewinding` разрывом не является:
+    // режим тот же, состояния соседних исторических тиков идут подряд, и их
+    // ViewBuffer интерполирует как живые — обратный ход обязан выглядеть
+    // движением, а не чередой телепортов (REND-2, REND-25). Убывающий номер
+    // тика сам по себе snap'а не даёт и давать не должен.
     const snapAll = result.isReplay || modeChanged;
     const freshEvents = tickAdvanced && !result.isReplay && result.mode === 'Running';
 

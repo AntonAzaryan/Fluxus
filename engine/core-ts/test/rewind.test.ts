@@ -4,6 +4,8 @@ import { SystemRegistry } from '../src/systems/registry.js';
 import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
 import { RingHistory } from '../src/sim/history.js';
 import { createInputLog, createRewindController } from '../src/sim/rewind.js';
+import { EvaluatedSystem } from '../src/dsl/evaluatedSystem.js';
+import { snapshotToPlain } from '../src/sim/serialization.js';
 import { createWorld, getField, listAlive, setField, spawn, toPlain } from '../src/ecs/world.js';
 import { indexOf as rawIndexOf } from '../src/ecs/entityIndex.js';
 import { InputSystem } from '../src/systems/inputSystem.js';
@@ -358,6 +360,302 @@ describe('перемотка (REW-1, REW-2, REW-9, REW-10)', () => {
     wsm.seekTo(2);
 
     expect(h.state.tick).toBe(8);
+  });
+});
+
+/**
+ * Стенд компонентной формы exempt (REW-9): мир начинается ПУСТЫМ, носители
+ * cooldown рождаются системой уже после того, как перемотка сконфигурирована, —
+ * ровно тот случай, ради которого форма и заведена (перечислить `EntityId`
+ * заранее нечем). Cooldown убывает каждый тик: без этого «пережил откат» и «не
+ * тикал в замороженном мире» были бы неотличимы от «никто его не трогал».
+ */
+function componentExemptHarness(interval = 3, capacity = 10) {
+  const cooldownSystem: System = {
+    name: 'CooldownSystem',
+    order: 15,
+    run(ctx) {
+      for (const entity of ctx.query({ all: ['Cooldown'] })) {
+        const left = ctx.get(entity, 'Cooldown', 'rewind');
+        if (left > 0) ctx.commands.setField(entity, 'Cooldown', 'rewind', left - 1);
+      }
+    },
+  };
+  const lifecycle: System = {
+    name: 'Lifecycle',
+    order: 5,
+    run(ctx) {
+      if (ctx.tick === 2) ctx.commands.spawn('mover');
+      if (ctx.tick === 4) ctx.commands.spawn('mover');
+    },
+  };
+
+  const registry = new SystemRegistry();
+  registry.register(lifecycle);
+  registry.register(moveSystem);
+  registry.register(cooldownSystem);
+  const world = createWorld(SCHEMAS, PREFABS);
+  const sim: Simulation = { systems: registry, worldSeed: WORLD_SEED, math: mathApi };
+  const state = initialState(world, WORLD_SEED);
+  const history = new RingHistory({ interval, capacity });
+  const inputs = createInputLog();
+  history.record(state);
+
+  // Контроллер строится ДО первого спавна — сущностей в мире ещё нет.
+  const wsm = createRewindController(sim, state, {
+    history,
+    inputs,
+    exempt: [{ component: 'Cooldown' }],
+  });
+
+  return {
+    sim,
+    state,
+    history,
+    inputs,
+    wsm,
+    owners: (): number[] => [...listAlive(state.world)],
+    cooldowns: (): number[] =>
+      [...listAlive(state.world)].map((entity) => getField(state.world, entity, 'Cooldown', 'rewind')),
+    runTo(target: number) {
+      while (state.tick < target) {
+        inputs.record(state.tick + 1, []);
+        tick(sim, state);
+        history.record(state);
+      }
+    },
+  };
+}
+
+describe('компонентная форма exempt-списка (REW-9)', () => {
+  it('cooldown сущности, рождённой после конфигурирования, переживает откат', () => {
+    const h = componentExemptHarness();
+    h.runTo(6);
+    expect(h.owners()).toHaveLength(2);
+    // Ульта потрачена обоими: значения ставятся снаружи — кто и как взводит
+    // cooldown, решает политика (WSM-5), а не механизм.
+    const [first, second] = h.owners() as [number, number];
+    setField(h.state.world, first, 'Cooldown', 'rewind', 600);
+    setField(h.state.world, second, 'Cooldown', 'rewind', 300);
+
+    h.wsm.pause();
+    h.wsm.beginRewind();
+    h.wsm.seekTo(3);
+
+    expect(h.state.tick).toBe(3);
+    // Тик 3: вторая сущность ещё не родилась — её значение возвращать некуда.
+    expect(h.owners()).toEqual([first]);
+    expect(getField(h.state.world, first, 'Cooldown', 'rewind')).toBe(600);
+  });
+
+  it('владелец, отката не переживший, значение теряет, а выживший — нет', () => {
+    const h = componentExemptHarness();
+    h.runTo(6);
+    const [first, second] = h.owners() as [number, number];
+    setField(h.state.world, first, 'Cooldown', 'rewind', 600);
+    setField(h.state.world, second, 'Cooldown', 'rewind', 300);
+
+    h.wsm.pause();
+    h.wsm.beginRewind();
+    h.wsm.seekTo(5); // обе сущности уже живы
+
+    expect(h.cooldowns()).toEqual([600, 300]);
+  });
+
+  it('exempt-значение в замороженном мире не тикает (REW-9)', () => {
+    const h = componentExemptHarness();
+    h.runTo(6);
+    const [first] = h.owners() as [number];
+    setField(h.state.world, first, 'Cooldown', 'rewind', 600);
+
+    h.wsm.pause();
+    // Триста тиков реального времени в замороженном мире: обычные системы
+    // выключены (REW-4), и убывать cooldown нечем.
+    for (let i = 0; i < 300; i++) tick(h.sim, h.state);
+    expect(getField(h.state.world, first, 'Cooldown', 'rewind')).toBe(600);
+
+    h.wsm.beginRewind();
+    for (let i = 0; i < 300; i++) tick(h.sim, h.state);
+    h.wsm.seekTo(4);
+
+    expect(getField(h.state.world, first, 'Cooldown', 'rewind')).toBe(600);
+    // А после возобновления — снова убывает: заморожено было время мира.
+    h.wsm.pause();
+    h.wsm.resume();
+    h.runTo(5);
+    expect(getField(h.state.world, first, 'Cooldown', 'rewind')).toBe(599);
+  });
+
+  it('exempt-компонент, не объявленный в мире, — ошибка конфигурации', () => {
+    const h = harness();
+    expect(() =>
+      createRewindController(h.sim, h.state, {
+        history: h.history,
+        inputs: h.inputs,
+        exempt: [{ component: 'Fireproof' }],
+      }),
+    ).toThrow(/REW-9/);
+  });
+
+  it('обе формы exempt работают рядом', () => {
+    const h = componentExemptHarness();
+    h.runTo(6);
+    const [first] = h.owners() as [number];
+    const both = createRewindController(h.sim, h.state, {
+      history: h.history,
+      inputs: h.inputs,
+      exempt: [{ component: 'Cooldown' }, { entity: first, component: 'Velocity', field: 'x' }],
+    });
+    setField(h.state.world, first, 'Cooldown', 'rewind', 600);
+    setField(h.state.world, first, 'Velocity', 'x', 42);
+
+    both.pause();
+    both.beginRewind();
+    both.seekTo(4);
+
+    expect(getField(h.state.world, first, 'Cooldown', 'rewind')).toBe(600);
+    expect(getField(h.state.world, first, 'Velocity', 'x')).toBe(42);
+  });
+});
+
+/**
+ * Цена `seekTo` и его база: стенд считает ПРОТИКАННЫЕ реплеем тики — по ним и
+ * видно, от какой базы шёл реплей. База одна всегда — ближайший снапшот
+ * (REW-2); кэша восстановленного состояния у контроллера нет (design,
+ * Decision 3), и путь к любой точке зависит только от истории, а не от того,
+ * какие точки скраб прошёл до неё.
+ */
+function countingHarness(interval = 10, capacity = 10) {
+  const counter = { ticks: 0 };
+  const counting: System = {
+    name: 'Counting',
+    order: 1,
+    run: () => { counter.ticks++; },
+  };
+  const registry = new SystemRegistry();
+  registry.register(counting);
+  registry.register(rollSystem);
+  registry.register(moveSystem);
+  const world = createWorld(SCHEMAS, PREFABS);
+  const mover = spawn(world, 'mover');
+  const sim: Simulation = { systems: registry, worldSeed: WORLD_SEED, math: mathApi };
+  const state = initialState(world, WORLD_SEED);
+  const history = new RingHistory({ interval, capacity });
+  const inputs = createInputLog();
+  history.record(state);
+
+  return {
+    sim,
+    state,
+    history,
+    inputs,
+    mover,
+    counter,
+    runTo(target: number) {
+      while (state.tick < target) {
+        inputs.record(state.tick + 1, []);
+        tick(sim, state);
+        history.record(state);
+      }
+    },
+  };
+}
+
+describe('база восстановления — ближайший снапшот (REW-2)', () => {
+  it('путь к точке на состояние не влияет: бит-в-бит одно и то же (DET-1)', () => {
+    // Прямо в целевой тик: реплей от снапшота тика 20.
+    const plain = countingHarness();
+    plain.runTo(28);
+    const direct = createRewindController(plain.sim, plain.state, {
+      history: plain.history,
+      inputs: plain.inputs,
+    });
+    direct.pause();
+    direct.beginRewind();
+    direct.seekTo(26);
+    const expected = snapshotToPlain(takeSnapshot(plain.state));
+
+    // Через промежуточную точку 23 и затем ВПЕРЁД до 26 — тот же снапшот тика
+    // 20 основанием, тот же реплей, то же состояние.
+    const stepped = countingHarness();
+    stepped.runTo(28);
+    const wsm = createRewindController(stepped.sim, stepped.state, {
+      history: stepped.history,
+      inputs: stepped.inputs,
+    });
+    wsm.pause();
+    wsm.beginRewind();
+    wsm.seekTo(23);
+    const beforeForward = stepped.counter.ticks;
+    wsm.seekTo(26);
+
+    expect(snapshotToPlain(takeSnapshot(stepped.state))).toEqual(expected);
+    // Шесть тиков реплея от снапшота тика 20: уже пройденная точка 23 базой не
+    // становится — кэша восстановленного состояния у контроллера нет.
+    expect(stepped.counter.ticks - beforeForward).toBe(6);
+  });
+
+  it('шаг назад доигрывается от снапшота: состояние будущего основанием не бывает', () => {
+    const h = countingHarness();
+    h.runTo(28);
+    const wsm = createRewindController(h.sim, h.state, { history: h.history, inputs: h.inputs });
+    wsm.pause();
+    wsm.beginRewind();
+    wsm.seekTo(26);
+    const before = h.counter.ticks;
+    wsm.seekTo(23);
+
+    expect(h.state.tick).toBe(23);
+    expect(h.counter.ticks - before).toBe(3); // снапшот тика 20 + три тика реплея
+  });
+});
+
+/**
+ * Событие-запрос перемотки: конвенция ХОСТА, не ядра. Ядро событие не
+ * интерпретирует — оно наблюдаемо снаружи в составе `TickResult`, а переходы
+ * машины состояний проводит тот, кто владеет миром (WSM-5).
+ */
+describe('запрос перемотки как обычное событие шины (WSM-5, OBS-1)', () => {
+  const REQUEST = '$rewind/request';
+
+  const requestSystem = new EvaluatedSystem({
+    name: 'RewindCast',
+    order: 40,
+    query: { all: ['Cooldown'] },
+    as: 'e',
+    do: [
+      {
+        if: {
+          cond: { '==': [{ getComponent: [{ var: 'e' }, 'Cooldown', 'rewind'] }, 0] },
+          then: [
+            {
+              emitEvent: {
+                type: REQUEST,
+                data: { initiator: { var: 'e' }, depthTicks: 420 },
+              },
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  it('запрос читается из TickResult, а мир его не исполняет', () => {
+    const registry = new SystemRegistry();
+    registry.register(requestSystem);
+    const world = createWorld(SCHEMAS, PREFABS);
+    const caster = spawn(world, 'mover');
+    const sim: Simulation = { systems: registry, worldSeed: WORLD_SEED, math: mathApi };
+    const state = initialState(world, WORLD_SEED);
+
+    const result = tick(sim, state);
+
+    const requests = [...result.events].filter((event) => event.type === REQUEST);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.data).toEqual({ initiator: caster, depthTicks: 420 });
+    // Ядро запрос не трактует: мир идёт дальше, машина состояний не тронута.
+    expect(result.mode).toBe('Running');
+    expect(state.tick).toBe(1);
   });
 });
 

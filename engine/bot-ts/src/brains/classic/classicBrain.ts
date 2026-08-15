@@ -75,6 +75,25 @@ class ClassicBrain implements BotBrain {
   }
 
   sample(tick: number): BotIntent | undefined {
+    // Разрыв непрерывности (SHELL-7): ветвь истории, для которой выбирались
+    // поведение, срок передумывания, кулдаун способности и разгон steering,
+    // стёрта — вместе с ней уходят и они. Все четыре величины — сроки в тиках
+    // и инерция решения, а номера тиков после перемотки идут НАЗАД (NTR-16):
+    // оставленные, они держали бы бота на планах стёртого будущего ровно ту
+    // глубину, которую унесла перемотка.
+    if (this.perception.takeDiscontinuity()) {
+      this.utility.forget();
+      this.micro.forget();
+      this.abilityReadyAtTick = -Infinity;
+      this.intent = this.hold();
+    }
+    // Мир не идёт — бот не играет (WSM-1). Живых тиков в `Paused`/`Rewinding`
+    // нет, ввод замороженного мира клиент и так маскирует (NET-11), и
+    // «думать» в эти тики значило бы жечь сроки решений и шума на времени,
+    // которого в матче не было. Отдаётся ДЕРЖАНИЕ, а не `undefined`: молчание
+    // источника сервер замещает повторением последнего кадра (TICK-2), то есть
+    // зажатым направлением движения — бот уезжал бы, пока игрок смотрит откат.
+    if (this.perception.mode !== 'Running') return (this.intent = this.hold());
     const world = this.perception.perceive(tick);
     if (world === undefined) return this.intent;
     const abilityReady = tick >= this.abilityReadyAtTick;
@@ -98,6 +117,24 @@ class ClassicBrain implements BotBrain {
       buttons: fire ? 1 << this.profile.ability.button : 0,
     };
     return this.intent;
+  }
+
+  /**
+   * Держание: стоять, не жать ничего, прицел оставить РОВНО как был — тем
+   * самым числом, которое ушло наружу прошлым намерением, вместе с шумом.
+   * База микро-слоя (`micro.aim`) шума не содержит, и на профиле с ненулевым
+   * `aim.noiseDegrees` держание отдавало бы прицел, отличающийся от последнего
+   * отданного на всю амплитуду шума: замирание мира выглядело бы РЫВКОМ
+   * прицела, хотя бот именно что перестал думать. Умолчание нужно ровно один
+   * раз — на держании до первого намерения, когда отдавать ещё нечего.
+   */
+  private hold(): BotIntent {
+    return {
+      moveX: 0,
+      moveY: 0,
+      aimRadians: this.intent?.aimRadians ?? this.micro.aim,
+      buttons: 0,
+    };
   }
 }
 

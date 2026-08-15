@@ -24,12 +24,15 @@
 import {
   dispatch,
   tick as coreTick,
+  type HistoryProvider,
   type InputFrame,
+  type InputLog,
   type RewindController,
   type Simulation,
   type SimulationState,
   type TickObserver,
 } from '@game-mvp/core';
+import { firstRewindRequest } from '@game-mvp/net';
 import type { Extractor } from '@game-mvp/render';
 import { ShellSender, type SenderOptions } from './sender.js';
 import { InputLatch, routeMainMessage } from './inputLatch.js';
@@ -37,6 +40,48 @@ import { helloMessage, type ControlMessage, type MainToWorker, type ShellPort } 
 
 /** Потолок навёрстывания за один проход таймера; дальше — пересинхронизация. */
 const MAX_CATCH_UP_TICKS = 4;
+
+const SCRUB_DEFAULTS = {
+  /** Тиков назад за шаг скраба. */
+  step: 4,
+  /** Тиков между шагами: реже тика — по той же причине, что у сервера. */
+  every: 2,
+  /** Порог молчания главного потока в тиках: замолчал — считаем отпущенным. */
+  timeoutTicks: 15,
+} as const;
+
+/**
+ * История локального режима: провайдер ядра плюс необязательная обрезка стёртой
+ * перемоткой ветви. Контракт объявлен структурно, а не типом сетевого слоя:
+ * `RingHistory` ядра подходит как есть, `BranchHistory` матча — вместе с
+ * `dropAfter`, и оболочке не приходится знать, чей провайдер ей дали.
+ *
+ * Без обрезки после перемотки в буфере оказываются два снапшота на один номер
+ * тика — стёртой ветви и живой, — и следующая перемотка восстановила бы ту,
+ * в которой мир уже не находится.
+ */
+export interface ShellHistory extends HistoryProvider {
+  dropAfter?(tick: number): void;
+}
+
+/** Орган ведения скраба в локальном режиме (REW-5, REW-7). */
+export interface ShellScrubOptions {
+  /** Бит действия, удержание которого ведёт точку перемотки назад. */
+  readonly button: number;
+  /** Тиков назад за шаг; по умолчанию — {@link SCRUB_DEFAULTS}. */
+  readonly step?: number;
+  /** Тиков между шагами. */
+  readonly every?: number;
+  /** Порог молчания главного потока в тиках: пропал канал — мир возобновляется. */
+  readonly timeoutTicks?: number;
+}
+
+/** Ведущаяся перемотка: живёт от запроса до возобновления, состоянием мира не является. */
+interface ScrubSession {
+  readonly floor: number;
+  idleTicks: number;
+  sinceStep: number;
+}
 
 export interface WorkerShellConfig {
   /**
@@ -55,6 +100,22 @@ export interface WorkerShellConfig {
   readonly playerId?: string;
   /** Контроллер переходов WSM; undefined — команды управления игнорируются. */
   readonly rewind?: RewindController;
+  /**
+   * Канонический лог вводов (TICK-2): реплей внутри `seekTo` идёт по нему
+   * (REW-2). Пишет его оболочка, потому что канонический кадр собирает она —
+   * наблюдателю тика `InputFrame` не виден вовсе.
+   */
+  readonly inputs?: InputLog;
+  /**
+   * История снапшотов. Снимается только с живых тиков (SNAP-1): реплей и
+   * замороженный мир историю не пишут.
+   */
+  readonly history?: ShellHistory;
+  /**
+   * Орган ведения скраба. Нет поля — оболочка исполнит запрос перемотки, но
+   * вести точку ей нечем, и мир возобновится по порогу молчания.
+   */
+  readonly scrub?: ShellScrubOptions;
   /** Дополнительные наблюдатели тика (диагностика, метрики) — после extractor'а. */
   readonly observers?: readonly TickObserver[];
   /** Полезная нагрузка handshake для main-сборки (id игрока и прочее). */
@@ -74,6 +135,19 @@ export class WorkerShell {
   /** Латч ввода между тиками — общий обоим режимам (`inputLatch.ts`, SHELL-6). */
   private readonly input = new InputLatch();
   private seq = 0;
+
+  /**
+   * Кнопки САМОГО СВЕЖЕГО сообщения ввода, а не латч тика: во время перемотки
+   * живых тиков нет, и «держит ли игрок орган управления» читается прямо из
+   * входящего сообщения (REW-5) — ровно как сервер читает это из входящих
+   * кадров инициатора (`netcode` NET-11). Латч `buttons` для этого не годится:
+   * он собирает фронты и гасится на границе тика, то есть отвечает на другой
+   * вопрос — «нажимали ли», а не «держат ли сейчас».
+   */
+  private controlButtons = 0;
+  /** Тиков с последнего сообщения ввода: молчание главного потока = отпускание. */
+  private idleTicks = 0;
+  private scrub: ScrubSession | undefined;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
   private nextTickAt = 0;
@@ -114,10 +188,113 @@ export class WorkerShell {
   /** Один тик вручную — для тестов и headless-прогонов без таймеров. */
   stepTick(): void {
     const { sim, state } = this.config;
+    this.idleTicks++;
+    // Шаг ведения точки перемотки — ДО тика: замороженный тик отдаёт
+    // наблюдателям текущее состояние мира, и восстановленное должно успеть им
+    // стать. Иначе презентация отставала бы от скраба на тик.
+    if (state.mode !== 'Running') {
+      this.driveScrub();
+      // Ввод, накопленный в замороженном мире, симуляции не достаётся (REW-5):
+      // латч фронтов гасится тут же, а не доезжает залпом до первого живого
+      // тика после возобновления. Тот же смысл, что у сброса неприменённых
+      // кадров на сервере (`netcode` NET-11).
+      this.input.dropButtons();
+    }
+
+    const live = state.mode === 'Running';
+    // Вне `Running` канонический кадр не собирается: применить его некуда
+    // (REW-4), а ввод замороженного мира на симуляцию влиять не должен (REW-5).
     const frames: InputFrame[] =
-      this.config.playerId === undefined ? [] : [this.takeInputFrame(state.tick + 1)];
+      live && this.config.playerId !== undefined ? [this.takeInputFrame(state.tick + 1)] : [];
+    if (live) this.config.inputs?.record(state.tick + 1, frames);
+
     const result = coreTick(sim, state, frames);
     dispatch(result, [this.observer, ...(this.config.observers ?? [])]);
+    if (!live) return;
+
+    // Снапшоты — только с живых тиков (SNAP-1).
+    this.config.history?.record(state);
+    // Запрос перемотки дренируется ПОСЛЕ тика: ядро событие не исполняет, мир
+    // внутри тика им не изменён (TICK-3), переходы проводит хост (SHELL-6).
+    this.drainRewindRequest(result.events);
+  }
+
+  /**
+   * Локальный хост исполняет запрос ульты сам (REW-12) — тем же core-API, что и
+   * команды управления (WSM-5, SHELL-6). В сетевом режиме этого пути нет: там
+   * запрос дренирует сервер, а собственной перемотки у клиента MUST NOT быть
+   * вовсе (`netcode` NET-11).
+   *
+   * Испорченный payload запросом не считается: `firstRewindRequest`
+   * предупреждает и отдаёт `undefined`, а не бросает, — тик локального мира от
+   * опечатки в контенте умирать не должен так же, как и цикл матча.
+   */
+  private drainRewindRequest(events: Parameters<typeof firstRewindRequest>[0]): void {
+    const rewind = this.config.rewind;
+    if (rewind === undefined) return;
+    const request = firstRewindRequest(events);
+    if (request === undefined) return;
+    if (rewind.mode !== 'Running') return;
+
+    const { state } = this.config;
+    const floor = Math.max(
+      0,
+      state.tick - Math.max(0, request.depthTicks),
+      this.config.history?.oldestTick ?? 0,
+    );
+    rewind.pause();
+    rewind.beginRewind();
+    this.scrub = { floor, idleTicks: 0, sinceStep: 0 };
+    this.idleTicks = 0;
+  }
+
+  /**
+   * Ведение точки перемотки по удержанию (REW-13, REW-7): шаг реже тика,
+   * отпускание и достижение глубины дают один исход — `Rewinding → Paused →
+   * Running`.
+   */
+  private driveScrub(): void {
+    const session = this.scrub;
+    const rewind = this.config.rewind;
+    if (session === undefined || rewind === undefined) return;
+    // Мир вывели из `Rewinding` мимо драйвера — командой управления из HUD,
+    // например: ведение точки прекращается, второго ведущего у машины
+    // состояний нет.
+    if (rewind.mode !== 'Rewinding') {
+      this.scrub = undefined;
+      return;
+    }
+
+    const scrub = this.config.scrub;
+    const timeoutTicks = scrub?.timeoutTicks ?? SCRUB_DEFAULTS.timeoutTicks;
+    session.sinceStep++;
+    if (session.sinceStep < (scrub?.every ?? SCRUB_DEFAULTS.every)) return;
+    session.sinceStep = 0;
+
+    // Органа управления нет вовсе — держать нечем: мир возобновится по порогу
+    // молчания, а не зависнет в `Rewinding`.
+    const held = scrub !== undefined && (this.controlButtons & (1 << scrub.button)) !== 0;
+    if (!held || this.idleTicks > timeoutTicks) {
+      this.stopScrub();
+      return;
+    }
+
+    const { state } = this.config;
+    const target = Math.max(session.floor, state.tick - (scrub.step ?? SCRUB_DEFAULTS.step));
+    if (target < state.tick) {
+      rewind.seekTo(target);
+      // Стёртая ветвь уходит из истории здесь же: живые тики новой ветви пойдут
+      // по тем же номерам, и двух снапшотов на один тик в буфере быть не должно.
+      this.config.history?.dropAfter?.(state.tick);
+    }
+    if (target <= session.floor) this.stopScrub();
+  }
+
+  /** Конец ведения точки: мир продолжается с откаченного тика (WSM-2). */
+  private stopScrub(): void {
+    this.scrub = undefined;
+    this.config.rewind?.pause();
+    this.config.rewind?.resume();
   }
 
   /** Канонический кадр ввода из латча: `tick`/`seq` знает воркер-сторона (SHELL-6). */
@@ -135,7 +312,19 @@ export class WorkerShell {
   }
 
   private onMessage(message: MainToWorker): void {
-    routeMainMessage(message, this.sender, this.input, (control) => { this.onControl(control); });
+    routeMainMessage(
+      message,
+      this.sender,
+      this.input,
+      (control) => { this.onControl(control); },
+      // Сырое сообщение ввода мимо латча: ведение точки перемотки спрашивает
+      // «держат ли орган управления СЕЙЧАС», а латч отвечает на «нажимали ли
+      // между тиками» (REW-5).
+      (raw) => {
+        this.controlButtons = raw.buttons;
+        this.idleTicks = 0;
+      },
+    );
   }
 
   /**

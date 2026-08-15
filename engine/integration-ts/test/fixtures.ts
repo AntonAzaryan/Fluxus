@@ -265,13 +265,17 @@ export function connectClient(
   clock: Clock,
   scene: SceneDef,
   input?: InputSource,
-  build: Pick<MatchConfig, 'physics' | 'visibility'> = {},
+  build: Pick<MatchConfig, 'physics' | 'visibility'> & { holdButton?: number } = {},
 ): ConnectedClient {
   const pack = contentPack({ duel: scene });
   const client = new MatchClient({
     playerId,
     version: { buildId: BUILD_ID, contentPackHash: pack.hash },
     content: pack,
+    // Тот же номер бита, которым настроен сервер матча: в замороженном мире
+    // наружу уезжает только он (NET-11), и сборка, забывшая его назвать,
+    // ведения скраба лишается — что и проверяется в тесте ульты.
+    ...(build.holdButton !== undefined ? { holdButton: build.holdButton } : {}),
     ...(build.physics !== undefined ? { physics: build.physics } : {}),
     ...(build.visibility !== undefined ? { visibility: build.visibility } : {}),
   });

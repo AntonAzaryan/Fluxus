@@ -49,6 +49,15 @@ export class InputLatch {
     this.buttons |= mask;
   }
 
+  /**
+   * Сброс накопленных фронтов БЕЗ съёма кадра: так замороженный мир гасит ввод,
+   * которому применяться некуда (REW-5). Иначе нажатия, сделанные за время
+   * заморозки, доехали бы залпом до первого живого тика после возобновления.
+   */
+  dropButtons(): void {
+    this.buttons = 0;
+  }
+
   /** Съём латча: кнопки — фронты, латч очищается; move — состояние, остаётся. */
   take(): InputLatchSample {
     const sample: InputLatchSample = {
@@ -64,12 +73,19 @@ export class InputLatch {
 /**
  * Разбор сообщения main → worker (SHELL-3, SHELL-6): возврат буфера — ack
  * каналу, ввод — в латч, запрос перехода — обработчику режима.
+ *
+ * `onInput` — необязательный наблюдатель СЫРОГО сообщения ввода, уже положенного
+ * в латч: латч отвечает на «нажимали ли между тиками», и режиму, которому нужно
+ * «держат ли орган управления сейчас» (ведение точки перемотки в локальном
+ * режиме, REW-5), приходится читать входящее сообщение напрямую. Разбирать вид
+ * сообщения второй раз ради этого режимы не должны — вид сообщений знает роутер.
  */
 export function routeMainMessage(
   message: MainToWorker,
   sender: ShellSender,
   input: InputLatch,
   onControl: (message: ControlMessage) => void,
+  onInput?: (message: InputMessage) => void,
 ): void {
   switch (message.t) {
     case 'ret':
@@ -77,6 +93,7 @@ export function routeMainMessage(
       return;
     case 'input':
       input.apply(message);
+      onInput?.(message);
       return;
     case 'control':
       onControl(message);

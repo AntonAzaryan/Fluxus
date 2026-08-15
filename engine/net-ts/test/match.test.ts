@@ -197,7 +197,7 @@ describe('матч двух игроков', () => {
     expect(a.client.metrics.inputsSent).toBeGreaterThan(0);
   });
 
-  it('в замороженный мир клиент ввода не шлёт (NET-11, REW-5)', async () => {
+  it('в замороженный мир клиент ввод шлёт: в нём едет управление перемоткой (NET-11, REW-5)', async () => {
     const { a, server, clock } = await playMatch(16);
 
     const sent = a.client.metrics.inputsSent;
@@ -215,8 +215,15 @@ describe('матч двух игроков', () => {
       clock.ms,
     );
 
+    // Клиент продолжает слать: во время `Rewinding` живых тиков нет, и
+    // контрольный бит ведения перемотки едет ровно этими кадрами — второго
+    // канала под управление в протоколе нет (NTR-8). Различить «мой бит ведёт
+    // скраб» и «мой бит — обычное действие» клиент не может: инициатора знает
+    // сервер.
     a.client.pushInput({ move: { x: STEP, y: 0 }, aimDir: 0, buttons: 0 }, clock.ms);
-    expect(a.client.metrics.inputsSent).toBe(sent);
+    expect(a.client.metrics.inputsSent).toBe(sent + 1);
+    // На симуляцию такой кадр всё равно не влияет — отбор авторитетный и стоит
+    // на сервере: «ввод в замороженный мир до симуляции не доходит» ниже.
   });
 });
 

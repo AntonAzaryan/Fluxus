@@ -34,6 +34,14 @@
  * задаёт стиль сборки. Признак разрыва (snap, HUD-5) снимает накопленные
  * состояния реакций.
  *
+ * Из состояния `dead` портрет выводит СОБЫТИЕ возрождения (`params.reviveEvent`,
+ * умолчания нет), а не только пересоздание сущности. Возрождение — политика
+ * контента, и сцена вправе воскресить героя, НЕ трогая его `EntityId`: тогда
+ * `spawned` не взводится (сущность не рождалась), доставка идёт без разрыва, и
+ * без этого параметра портрет остался бы мёртвым на живом герое до конца матча.
+ * Имени по умолчанию нет намеренно: конвенции ядра на «воскрес» не существует,
+ * а угаданное имя молча не сработало бы (HUD-1: недостающее приходит данными).
+ *
  * Известный пробел: события УРОНА в контенте сегодня нет (есть `EntityDied`,
  * `FellThroughFloor`, `CastFireball`, `FireballExploded`), поэтому
  * `damageEvents` по умолчанию пуст — виджет готов к событию, которое контент
@@ -106,6 +114,16 @@ function deathEventOf(params: HudParams): string {
   return typeof value === 'string' && value !== '' ? value : DEFAULT_DEATH_EVENT;
 }
 
+/**
+ * Тип события возрождения из параметров композиции — данные, не код (HUD-4).
+ * `null` — сборка такого события не завела: портрет выходит из `dead` только
+ * пересозданием сущности или разрывом, как и раньше.
+ */
+function reviveEventOf(params: HudParams): string | null {
+  const value = params.reviveEvent;
+  return typeof value === 'string' && value !== '' ? value : null;
+}
+
 /** Типы событий урона из параметров композиции — данные, не код (HUD-4). */
 function damageEventsOf(params: HudParams): ReadonlySet<string> {
   const value = params.damageEvents;
@@ -132,6 +150,7 @@ class PortraitWidget implements HudWidget {
   private readonly stage: PortraitStage;
   private readonly size: number;
   private readonly deathEvent: string;
+  private readonly reviveEvent: string | null;
   private readonly damageEvents: ReadonlySet<string>;
 
   private container: Element | null = null;
@@ -150,6 +169,7 @@ class PortraitWidget implements HudWidget {
     this.setup = setup;
     this.size = sizeOf(params);
     this.deathEvent = deathEventOf(params);
+    this.reviveEvent = reviveEventOf(params);
     this.damageEvents = damageEventsOf(params);
     // Стенд создаётся с ОДНИМ аргументом — общим asset-сервисом: не получив
     // ни сцены, ни камеры арены, рендерить её повторно он не может (HUD-7).
@@ -207,7 +227,11 @@ class PortraitWidget implements HudWidget {
     let hitNow = false;
     for (const event of update.events) {
       if (!this.aboutHero(event)) continue;
+      // Порядок доставки соблюдается: смерть и возрождение в ОДНОЙ доставке
+      // (доставка идёт каденсом, а не потиково, HUD-5) читаются как есть —
+      // последнее из двух и решает, чем портрет остался.
       if (event.type === this.deathEvent) this.setDead(true);
+      else if (event.type === this.reviveEvent) this.setDead(false);
       else if (this.damageEvents.has(event.type)) hitNow = true;
     }
     this.setHit(hitNow);
@@ -284,8 +308,9 @@ class PortraitWidget implements HudWidget {
  * Вид виджета `portrait` для реестра (HUD-4). Ожидаемые слоты композиции:
  * биндинг `hero` — селектор сущности портрета; действий нет. Параметры:
  * `size` (px, сторона квадрата, по умолчанию 160), `deathEvent` (тип события
- * смерти, по умолчанию `EntityDied`), `damageEvents` (типы событий урона,
- * по умолчанию пусто — см. шапку о пробеле в контенте).
+ * смерти, по умолчанию `EntityDied`), `reviveEvent` (тип события возрождения,
+ * по умолчанию нет), `damageEvents` (типы событий урона, по умолчанию пусто —
+ * см. шапку о пробеле в контенте).
  */
 export function createPortraitKind(setup: PortraitSetup): HudWidgetKind {
   return {

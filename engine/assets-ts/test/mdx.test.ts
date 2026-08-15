@@ -158,28 +158,54 @@ describe('Загрузчик MDX: эталонная модель (ASSET-5: head
     }
   });
 
-  it('видимость частей: только многоключевая geoset-альфа, концевые ключи, значения 0/1', () => {
-    // у эталона одноключевые GeosetAnim — placeholder базового тела (геосет 0
-    // и др.); они НЕ должны порождать треки видимости
-    const animatedIds = new Set<number>();
+  it('видимость частей: концевые ключи, значения 0/1, номера частей из модели', () => {
     let total = 0;
     for (const seq of model.sequences) {
       for (const track of seq.partVisibility) {
         total += 1;
-        animatedIds.add(track.partId);
         const label = `"${seq.name}" часть ${track.partId}`;
         expectStrictlyIncreasing(track.times, label);
         expect(track.visible.length, label).toBe(track.times.length);
         expect(track.times[0], label).toBe(0);
         expect(track.times[track.times.length - 1]!, label).toBeCloseTo(seq.duration, 5);
         for (const v of track.visible) expect(v === 0 || v === 1, label).toBe(true);
+        expect(track.partId, label).toBeGreaterThanOrEqual(0);
+        expect(track.partId, label).toBeLessThan(model.meshes.length);
       }
     }
-    expect(total).toBeGreaterThan(0); // настоящие тумблеры (Defend-варианты) есть
-    expect(animatedIds.has(0)).toBe(false); // placeholder базового тела игнорирован
-    for (const id of animatedIds) {
-      expect(id).toBeGreaterThanOrEqual(0);
-      expect(id).toBeLessThan(model.meshes.length);
+    expect(total).toBeGreaterThan(0);
+  });
+
+  it('видимость частей: альфа читается по окну секвенции — в Death живое тело погашено', () => {
+    // Регрессия: альфа геосета в MDX — один вектор на всю ленту кадров, и
+    // ключи ВНЕ окна секвенции к ней не относятся. Геосеты живого тела эталона
+    // несут единственный ключ alpha=0 на первом кадре Death: прочитанные
+    // глобально, они оставались видимы и в смерти — вторым слоем поверх
+    // варианта смерти, у которого своё включение ровно в этом окне.
+    const visibleAtStart = (name: string): Set<number> => {
+      const seq = model.sequences.find((s) => s.name === name);
+      if (!seq) throw new Error(`в эталоне нет секвенции "${name}"`);
+      const hidden = new Set(
+        seq.partVisibility.filter((t) => t.visible[0] === 0).map((t) => t.partId),
+      );
+      return new Set(model.meshes.map((m) => m.partId).filter((id) => !hidden.has(id)));
+    };
+
+    const alive = visibleAtStart('Stand');
+    const dead = visibleAtStart('Death');
+    expect(alive.size).toBeGreaterThan(0);
+    expect(dead.size).toBeGreaterThan(0);
+    // Живое тело и вариант смерти — непересекающиеся наборы геосетов.
+    expect([...dead].filter((id) => alive.has(id))).toEqual([]);
+
+    // Секвенция задаёт состояние части целиком: гаснущая часть получает трек
+    // в КАЖДОЙ секвенции, иначе после смерти тело не вернулось бы к жизни.
+    const switching = new Set(model.sequences.flatMap((s) => s.partVisibility.map((t) => t.partId)));
+    for (const seq of model.sequences) {
+      const covered = new Set(seq.partVisibility.map((t) => t.partId));
+      for (const id of switching) {
+        expect(covered.has(id), `"${seq.name}": нет трека видимости части ${id}`).toBe(true);
+      }
     }
   });
 

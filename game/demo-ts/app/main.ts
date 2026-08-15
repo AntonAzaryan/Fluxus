@@ -43,7 +43,6 @@ import {
   applyCameraPose,
   cameraConfigFromManifest,
   createCameraInput,
-  edgePanAxes,
   resetCameraInput,
   terrainGroundApi,
   type CameraBounds,
@@ -65,6 +64,7 @@ import {
 import { ACTION_BITS, STATE_COMPONENTS } from './sim.js';
 import { createCapturePreview, type CapturePreview } from './capturePreview.js';
 import { createChargeBalls, type ChargeBalls } from './chargeBalls.js';
+import { demoEdgePan } from './cameraInput.js';
 import { createDemoHud, demoHudComposition } from './hud.js';
 import { DEMO_SERVER_URL, demoMode, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
@@ -506,8 +506,16 @@ function sampleCameraInput(): void {
   camInput.panX = (keys.has('ArrowRight') ? 1 : 0) - (keys.has('ArrowLeft') ? 1 : 0);
   camInput.panY = (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0);
   const rect = renderer3.domElement.getBoundingClientRect();
-  const margin = rig?.config.edgeMarginPx ?? 0;
-  const edge = pointerOverHud ? { x: 0, y: 0 } : edgePanAxes(pointerX, pointerY, rect, margin);
+  // Край экрана — политика сборки (`cameraInput.ts`): в follow он инертен, и
+  // прицел мышью у кромки арены больше не срывает слежение за героем (CAM-2).
+  const edge = demoEdgePan({
+    mode: rig?.mode ?? null,
+    pointerOverHud,
+    pointerX,
+    pointerY,
+    rect,
+    margin: rig?.config.edgeMarginPx ?? 0,
+  });
   camInput.edgeX = edge.x;
   camInput.edgeY = edge.y;
   camInput.centerHeld = keys.has('KeyC');
@@ -634,7 +642,15 @@ function frame(now: number): void {
     const dtSec = dt / 1000;
     const logical = rig.update(camInput, dtSec, target);
     resetCameraInput(camInput);
-    applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, dtSec));
+    // Эффекты камеры (тряска, покачивание) — часть картинки МИРА, а не главного
+    // потока: стоящий мир с трясущейся камерой показывает движение, которого в
+    // симуляции нет (REND-25, тот же довод, что у клипов). Собственный гейт
+    // заморозки у `EffectStack` есть, но сюда стек ведёт демо своим циклом и
+    // своим положительным dt — гейт остаётся недостижимым, если не обнулить
+    // время здесь. Сама же камера (`rig.update`) продолжает слушаться игрока:
+    // осмотреться в замороженном мире — ровно то, ради чего перемотку и смотрят.
+    const worldDt = (remote?.view?.mode ?? 'Running') === 'Running' ? dtSec : 0;
+    applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, worldDt));
   }
 
   remote?.frame(now);

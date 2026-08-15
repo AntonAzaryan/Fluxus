@@ -305,10 +305,20 @@ describe('рантайм-панель: доставленное и своё (HUD
   it('счётчик кадров меряет кадры главного потока, а не тики', () => {
     const { runtime, host } = bench(runtimeComposition, entityWith(1, {}));
     // Шесть кадров по 20 мс: окно в 100 мс закрывается, частота — 50 к/с.
-    for (let i = 0; i < 6; i++) runtime.subsystem.updateFrame(0.02, 0);
+    for (let i = 0; i < 6; i++) runtime.subsystem.updateFrame(0.02, 0, 0.02);
     expect(findByClass(host.zone('top-left'), 'hud-runtime__fps').textContent).toBe('50');
     // Доставка на счётчик кадров не влияет — это величина ЭТОГО потока.
     expect(findByClass(host.zone('top-left'), 'hud-runtime__tick').textContent).toBe('1');
+  });
+
+  it('замороженный и перематываемый мир счётчик кадров не останавливают (REND-25)', () => {
+    const { runtime, host } = bench(runtimeComposition, entityWith(1, {}));
+    // Часы презентации стоят (`Paused`) и идут назад (`Rewinding`) — а кадры
+    // главного потока идут своим чередом, и частота обязана считаться по ним.
+    for (let i = 0; i < 3; i++) runtime.subsystem.updateFrame(0, 0, 0.02);
+    for (let i = 0; i < 3; i++) runtime.subsystem.updateFrame(-0.02, 0, 0.02);
+
+    expect(findByClass(host.zone('top-left'), 'hud-runtime__fps').textContent).toBe('50');
   });
 
   it('окно счётчика: частота появляется по его заполнении и не дрожит', () => {
