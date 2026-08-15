@@ -10,7 +10,7 @@
     "record": "UPDATE_MATCHES=1 vitest run test/matchGolden.test.ts"
   },
   "engines": {
-    "node": ">=22.18"
+    "node": ">=22.18 <23 || ^24 || >=26"
   },
   "dependencies": {
     "@game-mvp/assets": "*",
