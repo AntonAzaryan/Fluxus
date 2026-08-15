@@ -33,6 +33,13 @@ function fogConfig(overrides = {}) {
   });
 }
 
+/**
+ * Сущностей-носителей у сцены с туманом ровно одна — носитель карты пола: `fog`
+ * без `terrain` загрузчик отвергает (SER-7). Носители спавнятся до расстановки
+ * (SER-7), поэтому герои занимают слоты, сдвинутые на это число.
+ */
+const CARRIERS = 1;
+
 function running(config = fogConfig(), observer = false) {
   const { server } = harness(config);
   server.connect(1);
@@ -74,10 +81,14 @@ describe('фильтрация по viewpoint', () => {
     for (const [connection, message] of snapshots) {
       const world = message.snapshot.world;
       // Своя сущность осталась, чужая вырезана штатным удалением (NET-12).
-      expect(world.aliveCount).toBe(1);
+      // Плюс носитель карты пола: сцена с туманом обязана нести террейн
+      // (SER-7), носитель спавнится первым и `Visibility` не несёт, поэтому
+      // остаётся в каждом персональном снапшоте (NET-12).
+      expect(world.aliveCount).toBe(2);
+      expect(world.alive[CARRIERS - 1]).toBe(1);
       const slot = connection - 1;
-      expect(world.alive[slot]).toBe(1);
-      expect(world.alive[1 - slot]).toBe(0);
+      expect(world.alive[CARRIERS + slot]).toBe(1);
+      expect(world.alive[CARRIERS + 1 - slot]).toBe(0);
     }
   });
 
@@ -96,7 +107,7 @@ describe('фильтрация по viewpoint', () => {
     expect(snapshots.size).toBe(3);
 
     const observer = snapshots.get(3)!;
-    expect(observer.snapshot.world.aliveCount).toBe(2);
+    expect(observer.snapshot.world.aliveCount).toBe(CARRIERS + 2);
   });
 
   it('сцена без тумана фильтром не режется', () => {
@@ -125,9 +136,9 @@ describe('фильтрация по viewpoint', () => {
       expect(message).toMatchObject({ epoch: 1, tick: 3 });
       const world = message.snapshot.world;
       const slot = connection - 1;
-      expect(world.aliveCount).toBe(1);
-      expect(world.alive[slot]).toBe(1);
-      expect(world.alive[1 - slot]).toBe(0);
+      expect(world.aliveCount).toBe(CARRIERS + 1);
+      expect(world.alive[CARRIERS + slot]).toBe(1);
+      expect(world.alive[CARRIERS + 1 - slot]).toBe(0);
     }
   });
 });
@@ -144,8 +155,8 @@ describe('авторизация полного потока', () => {
     // Оба игрока в команде 0 — видят друг друга.
     const snapshots = snapshotsAfterTick(fogConfig({ teams: [0, 0] }));
     const forSecond = snapshots.get(2)!;
-    expect(forSecond.snapshot.world.aliveCount).toBe(1);
+    expect(forSecond.snapshot.world.aliveCount).toBe(CARRIERS + 1);
     // Слот 1 в команде 0 видит героя команды 0, а не себя: маска задана расстановкой.
-    expect(forSecond.snapshot.world.alive[0]).toBe(1);
+    expect(forSecond.snapshot.world.alive[CARRIERS]).toBe(1);
   });
 });

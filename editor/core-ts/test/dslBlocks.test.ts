@@ -63,6 +63,16 @@ const SCENE_VALUE = {
   ],
   capacity: 16,
   fog: true,
+  // Туман войны без террейна загрузчик отвергает (SER-7): фильтру по уровню
+  // (FOW-5) не у кого спросить уровень сущности. Сетка ровная и минимальная —
+  // предмет теста в пикерах, а не в рельефе.
+  terrain: {
+    width: 2,
+    height: 2,
+    tileSize: 65536,
+    levels: ['00', '00'],
+    flags: ['..', '..'],
+  },
 };
 
 const world = (): ReturnType<typeof loadScene>['world'] =>

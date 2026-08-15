@@ -149,6 +149,16 @@ export function fogScene(): SceneDef {
       },
     ],
     fog: true,
+    // Туман войны без террейна отвергается загрузчиком (SER-7): фильтру по
+    // уровню (FOW-5) не у кого спросить уровень сущности. Сетка ровная и
+    // минимальная — предмет этих тестов сетевой, а не рельефный.
+    terrain: {
+      width: 4,
+      height: 4,
+      tileSize: fixed.fromInt(1),
+      levels: Array.from({ length: 4 }, () => '0000'),
+      flags: Array.from({ length: 4 }, () => '....'),
+    },
   };
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as fixed from '../src/math/fixed.js';
 import { mathApi } from '../src/math/mathApi.js';
-import { addComponent, getField, setField, spawn } from '../src/ecs/world.js';
+import { addComponent, componentNames, getField, setField, spawn } from '../src/ecs/world.js';
 import { BLOCKS_VISION, createPhysicsApi, PhysicsWorld, SHAPE_AABB, staticsFromTerrain } from '../src/systems/physics.js';
 import {
   isVisibleTo,
@@ -239,5 +239,36 @@ describe('эмит только при изменении (FOW-6)', () => {
     const result = h.step();
     expect([...result.changes.changedEntities(VISIBILITY_COMPONENT)]).toEqual([enemy]);
     expect(h.mask(enemy)).toBe(teamBit(1));
+  });
+});
+
+describe('туман войны без террейна отвергается загрузчиком (SER-7, FOW-5)', () => {
+  /** Та же сцена без ассета террейна: `fog` остаётся, запрос уровня исчезает. */
+  const withoutTerrain = (): SceneDef => {
+    const { terrain: _terrain, ...rest } = SCENE;
+    return rest;
+  };
+
+  it('сцена с fog и без terrain не поднимается, и сообщение называет зависимость', () => {
+    expect(() => loadScene(withoutTerrain())).toThrow(/SER-7/);
+    // Фолбэка «все уровни нулевые» нет намеренно: он выглядел бы исправной FoW
+    // и отличался бы от неё только на сценах с перепадом высот.
+    expect(() => loadScene(withoutTerrain())).toThrow(/terrain/);
+    expect(() => loadScene(withoutTerrain())).toThrow(/FOW-5/);
+  });
+
+  it('сцена с обоими полями поднимается, компоненты тумана дописаны', () => {
+    const { world } = loadScene(SCENE);
+    expect(componentNames(world)).toContain(VISIBILITY_COMPONENT);
+  });
+
+  it('террейн без тумана — штатная сцена, ограничение односторонне', () => {
+    // Prefabs сцены выше ссылаются на компоненты, которые дописывает сам флаг
+    // `fog`, поэтому обратное сочетание проверяется на минимальной сцене.
+    const { world } = loadScene({
+      components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }],
+      terrain: TERRAIN,
+    });
+    expect(componentNames(world)).not.toContain(VISIBILITY_COMPONENT);
   });
 });

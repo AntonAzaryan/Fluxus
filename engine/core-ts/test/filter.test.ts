@@ -21,6 +21,10 @@ const F = fixed.fromFloat;
 const SCENE: SceneDef = {
   components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }],
   fog: true,
+  // Ровная сетка: туман войны без террейна отвергается загрузчиком (SER-7),
+  // потому что фильтру по уровню (FOW-5) не у кого спросить уровень сущности.
+  // Предмет этих тестов — отбор снапшота, а не рельеф, поэтому перепада нет.
+  terrain: { width: 2, height: 2, tileSize: F(1), levels: ['00', '00'], flags: ['..', '..'] },
   prefabs: [
     {
       name: 'Watcher',
@@ -48,20 +52,20 @@ const SCENE: SceneDef = {
 };
 
 /**
- * Та же сцена с носителями карты пола (TERR-6) и арены (ARENA-1). Компонента
- * `Visibility` загрузчик им не выдаёт, и это и есть предмет проверки NET-12:
- * умолчание «публична» держит в снапшоте ровно их.
+ * Та же сцена с носителем арены (ARENA-1) вдобавок к носителю карты пола
+ * (TERR-6), который есть уже у сцены выше. Компонента `Visibility` загрузчик
+ * им не выдаёт, и это и есть предмет проверки NET-12: умолчание «публична»
+ * держит в снапшоте ровно их.
  */
 const SCENE_WITH_CARRIERS: SceneDef = {
   ...SCENE,
-  terrain: { width: 2, height: 2, tileSize: F(1), levels: ['00', '00'], flags: ['..', '..'] },
   arena: { center: { x: 0, y: 0 }, radius: F(10) },
 };
 
 function harness() {
-  const { world, systems, modifiers } = loadScene(SCENE);
+  const { world, systems, modifiers, terrain } = loadScene(SCENE);
   systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
-  const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers };
+  const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers, terrain: terrain! };
   const state = initialState(world, 1);
 
   return {
