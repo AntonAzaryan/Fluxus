@@ -27,7 +27,9 @@ import {
   type Simulation,
 } from '@game-mvp/core';
 import { buildMatchWorld } from '@game-mvp/net';
-import { ACTION_BITS, FIREBALL_LIFETIME_TICKS } from '../demo/sim.js';
+import { ViewBuffer } from '@game-mvp/render';
+import { ACTION_BITS, FIREBALL_LIFETIME_TICKS, TICK_SECONDS, stateBit } from '../demo/sim.js';
+import { createDemoExtractor } from '../demo/extractor.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 import manifestJson from '../../../content/visuals/manifest.json';
@@ -50,6 +52,7 @@ const MATCH = matchJson as unknown as {
 };
 
 const CAST = 1 << ACTION_BITS.cast;
+const KILL = 1 << ACTION_BITS.kill;
 const DODGE = 1 << ACTION_BITS.dodge;
 const JUMP = 1 << ACTION_BITS.jump;
 const DOME = 1 << ACTION_BITS.slowDome;
@@ -188,6 +191,14 @@ interface Ffa {
   readonly heroes: readonly EntityId[];
   /** Тик с явными вводами всех слотов; недоданный кадр — нейтраль. Отдаёт типы событий тика. */
   step: (frames?: readonly Frame[]) => readonly string[];
+  /**
+   * Биты состояний (CAM-6) сущности за ПОСЛЕДНИЙ шаг — то, что уезжает рендеру
+   * и включает оболочку `effects.byState`. Снимаются внутри `step`: view на
+   * `TickResult` живёт только внутри dispatch (OBS-3). Пусты, пока харнесс не
+   * создан с `{ extract: true }`, — лишний проход Extractor'а нужен единицам
+   * тестов, а не каждому тику каждого.
+   */
+  stateBits: (entity: EntityId) => number;
 }
 
 /**
@@ -197,7 +208,10 @@ interface Ffa {
  * либо пара `[x, y]`: снаряд теперь СБИВАЕТ героя, попав в его коллайдер, и
  * тесту, которому нужен пролетающий мимо снаряд, ординату приходится разводить.
  */
-function ffa(cells: readonly (number | readonly [number, number])[]): Ffa {
+function ffa(
+  cells: readonly (number | readonly [number, number])[],
+  options: { readonly extract?: boolean } = {},
+): Ffa {
   const points: readonly (readonly [number, number])[] = cells.map((cell) =>
     typeof cell === 'number' ? ([cell, 24.5] as const) : cell,
   );
@@ -221,6 +235,8 @@ function ffa(cells: readonly (number | readonly [number, number])[]): Ffa {
     if (!coreWorld.hasTag(built.state.world, entity, 'Hero')) continue;
     heroes[coreWorld.getField(built.state.world, entity, 'Player', 'slot')] = entity;
   }
+  const extractor = options.extract === true ? createDemoExtractor(undefined) : null;
+  const buffer = new ViewBuffer({ tickSeconds: TICK_SECONDS, clock: () => 0 });
   let tick = 0;
   return {
     sim: built.sim,
@@ -240,8 +256,10 @@ function ffa(cells: readonly (number | readonly [number, number])[]): Ffa {
           buttons: frames[index]?.buttons ?? 0,
         })),
       );
+      if (extractor !== null) buffer.apply(extractor.extract(result));
       return [...result.events].map((event) => event.type);
     },
+    stateBits: (entity) => buffer.view.entities.get(entity)?.states ?? 0,
   };
 }
 
@@ -263,6 +281,25 @@ function timeScale(state: SimulationState, entity: EntityId): number {
 
 const x = (state: SimulationState, entity: EntityId): number =>
   coreWorld.getField(state.world, entity, 'Position', 'x');
+
+const y = (state: SimulationState, entity: EntityId): number =>
+  coreWorld.getField(state.world, entity, 'Position', 'y');
+
+/**
+ * Членство снаряда в щите — ОСЕВОЙ бокс, а не круг. `ShieldRicochet` сравнивает
+ * |dx| и |dy| с `shieldR + halfX/halfY` снаряда именно потому, что урон
+ * `FireballHit` растёт из `Overlap` физики, а тот — пересечение ОГИБАЮЩИХ
+ * (PHYS-12): вписанный в бокс круг оставлял бы угловую лунку, где урон уже
+ * есть, а рикошета ещё нет.
+ */
+const inShieldBox = (
+  state: SimulationState,
+  shot: EntityId,
+  hero: EntityId,
+  band: number,
+): boolean =>
+  Math.abs(x(state, shot) - x(state, hero)) <= band &&
+  Math.abs(y(state, shot) - y(state, hero)) <= band;
 
 /** Фронт кнопки: тик с битом и тик без него (INP-2, TICK-4). */
 function pressA(a: Arena, buttons: number, aimDir = AIM_EAST): void {
@@ -925,6 +962,41 @@ describe('числа способностей: ретюн виден в дифф
     expect(SHIELD_RADIUS).toBe(Math.floor(HERO_RADIUS * 1.3));
   });
 
+  it('геометрия щита: бокс щита содержит бокс урона и не перепрыгивается свипом', () => {
+    // Три СТРУКТУРНЫХ неравенства щита — то, что делает его непротекающим при
+    // любой геометрии подлёта. Они держатся не на «примерно», а на числах
+    // prefab'а, и ретюн любого из них обязан быть виден в диффе теста.
+    const band = SHIELD_RADIUS + FIREBALL_RADIUS;
+
+    // (а) Бокс щита СТРОГО содержит бокс урона. Урон рождается из `Overlap`
+    // физики — пересечения ОГИБАЮЩИХ (PHYS-12) с полуосями героя и снаряда, а
+    // членство в щите меряется теми же полуосями снаряда плюс `shieldR`.
+    // Пока `shieldR` больше полуоси героя, лунки «урон есть, рикошета нет» не
+    // существует ни при какой диагонали: по каждой оси бокс щита шире.
+    expect(SHIELD_RADIUS).toBeGreaterThan(HERO_RADIUS);
+
+    // (б) Свип тика не перешагивает бокс НАСКВОЗЬ: полная ширина щита по оси
+    // больше самого длинного шага снаряда, поэтому обе точки хода не могут
+    // оказаться снаружи по разные стороны. `ShieldRicochet` мерит КОНЕЧНУЮ
+    // точку тика, а `Overlap` — заметаемый объём; без этого неравенства
+    // быстрый снаряд успевал бы задеть героя, не побывав внутри бокса.
+    const maxStep = ability.throwSpeed!;
+    expect(2 * band).toBeGreaterThan(maxStep);
+    // Тяжёлый шар только шире — своё неравенство он наследует с запасом.
+    expect(2 * (SHIELD_RADIUS + HEAVY_FIREBALL_RADIUS)).toBeGreaterThan(maxStep);
+
+    // (в) Потолок ×64-нормализации нормали. `vec.lengthSq` увеличенной разности
+    // считает dot в Q16.16, и (64·d)² обязана влезть в i32: расстояние контакта
+    // d < 2,828 клетки (2√2, сырое 185364). Членство БОКСОВОЕ, и самая дальняя
+    // точка бокса — его угол (band·√2), поэтому потолок на сам band вдвое
+    // строже: band < 2 клетки. `shieldRadiusMul` рекламируется тюнимым, а
+    // соседний `domeRadiusMul` уже 10× — на таком множителе нормализация
+    // переполнилась бы молча, и снаряд разгонялся бы с каждым отскоком.
+    expect(band).toBeLessThan(2 * FIXED_ONE);
+    expect(Math.ceil(band * Math.SQRT2)).toBeLessThan(185364);
+    expect(SHIELD_RADIUS + HEAVY_FIREBALL_RADIUS).toBeLessThan(2 * FIXED_ONE);
+  });
+
   it('сфера щита в манифесте — синяя, полупрозрачная и ровно радиуса щита', () => {
     // Оболочка `effects.byState` числами симуляции не питается (REND-1):
     // совпадение нарисованного пузыря с отражающим держится этим зеркалом.
@@ -1312,7 +1384,7 @@ describe('щит: рикошет снаряда, смена владельца �
     a.step([NEUTRAL, { buttons: SHIELD }]);
     expect(shielded(a.state, p2)).toBe(true);
     // Тик каста — первый из 60: `ShieldExpire` (order 111) идёт после
-    // `ShieldCast` (order 37) и убавляет счётчик уже на нём. Снимается компонент
+    // `ShieldCast` (order 39) и убавляет счётчик уже на нём. Снимается компонент
     // ПОСЛЕ рикошета (order 108) — та же очерёдность, что у купола (`DomeSlow`
     // 34 перед `DomeExpire` 36): последний тик счётчика ещё отражает, поэтому
     // защита длится все 60 тиков, а нарисован пузырь 59 — состояние снимается с
@@ -1658,9 +1730,11 @@ describe('щит: рикошет снаряда, смена владельца �
   it('два щита над одним снарядом дают РОВНО один рикошет — ближайшего (ACT-5)', () => {
     // Два хозяина щитов стоят по разные стороны от линии огня, каждый чуть
     // дальше суммы полувысот: снаряд не задевает коллайдер ни одного, но
-    // попадает в оба круга сразу. Северный ближе на две сотых клетки — он и
-    // ловит, а второй проход обязан не состояться: иначе скорость отразилась бы
-    // дважды (то есть не отразилась вовсе), а владелец достался бы последнему.
+    // попадает в ОБА щитовых бокса сразу. Северный ближе на две сотых клетки —
+    // он и ловит (`nearestTo` меряет РАССТОЯНИЕ, боксом решается только
+    // членство), а второй проход обязан не состояться: иначе скорость
+    // отразилась бы дважды (то есть не отразилась вовсе), а владелец достался
+    // бы последнему.
     const a = ffa([
       [20, 24.5],
       [28, 24.96],
@@ -1670,25 +1744,19 @@ describe('щит: рикошет снаряда, смена владельца �
     const south = a.heroes[2]!;
     const band = SHIELD_RADIUS + FIREBALL_RADIUS;
     // Купол северного замедляет чужой снаряд вчетверо: полным шагом он
-    // перепрыгнул бы коридор, где оба круга накрывают его разом.
+    // перепрыгнул бы коридор, где оба бокса накрывают его разом.
     a.step([NEUTRAL, { buttons: DOME }]);
     a.step([NEUTRAL, { buttons: SHIELD }, { buttons: SHIELD }]);
     a.step([{ buttons: CAST }]);
     a.step();
     const shot = fireballs(a.state)[0]!;
 
-    const distanceTo = (hero: EntityId): number =>
-      Math.hypot(
-        x(a.state, shot) - x(a.state, hero),
-        coreWorld.getField(a.state.world, shot, 'Position', 'y') -
-          coreWorld.getField(a.state.world, hero, 'Position', 'y'),
-      );
-
     let both = false;
     for (let i = 0; i < 200 && !both && fireballs(a.state).length > 0; i++) {
       a.step();
       if (fireballs(a.state).length === 0) break;
-      both = distanceTo(north) <= band && distanceTo(south) <= band;
+      both =
+        inShieldBox(a.state, shot, north, band) && inShieldBox(a.state, shot, south, band);
     }
     expect(both).toBe(true);
     expect(shielded(a.state, north)).toBe(true);
@@ -1732,5 +1800,217 @@ describe('щит: рикошет снаряда, смена владельца �
     // Ни один из двоих не получил урона своим же снарядом.
     expect(hp(a.state, a.heroes[0]!)).toBe(1000);
     expect(hp(a.state, a.heroes[1]!)).toBe(1000);
+  });
+
+  it('диагональный подлёт не течёт: угол урона накрыт боксом щита', () => {
+    // РЕГРЕССИЯ. Урон растёт из `Overlap` физики — пересечения ОГИБАЮЩИХ
+    // (PHYS-12), и по диагонали его угол достаёт до 0,45·√2 = 0,636 клетки.
+    // Круг радиуса 0,54, которым щит мерился раньше, этот угол не накрывал:
+    // снаряд, пришедший в лунку между 0,54 и 0,636, снимал хозяину щита 100 hp
+    // без единого рикошета. Членство теперь ОСЕВОЕ — тот же бокс, которым
+    // считает урон, только шире на `shieldR`.
+    const AIM_NE = 8192; // 1/8 оборота — ровно 45°
+    const a = ffa([
+      [20, 22],
+      [22.085, 24.085],
+    ]);
+    const keeper = a.heroes[1]!;
+    const band = SHIELD_RADIUS + FIREBALL_RADIUS;
+
+    a.step([NEUTRAL, { buttons: SHIELD }]);
+    expect(shielded(a.state, keeper)).toBe(true);
+    a.step([{ buttons: CAST, aimDir: AIM_NE }]);
+    a.step([{ aimDir: AIM_NE }]);
+    const shot = fireballs(a.state)[0]!;
+
+    let ricochets = 0;
+    let contact = 0;
+    let newOwner = -1;
+    for (let i = 0; i < 40 && fireballs(a.state).length > 0; i++) {
+      const bounced = a.step([{ aimDir: AIM_NE }]).filter(
+        (type) => type === 'ShieldRicochet',
+      ).length;
+      ricochets += bounced;
+      if (bounced === 0 || fireballs(a.state).length === 0) continue;
+      // Мерить надо в тике рикошета: дальше снаряд улетает, а потом и гибнет.
+      contact = Math.hypot(
+        x(a.state, shot) - x(a.state, keeper),
+        y(a.state, shot) - y(a.state, keeper),
+      );
+      newOwner = owner(a.state, shot);
+    }
+
+    // Ровно один рикошет — и он состоялся.
+    expect(ricochets).toBe(1);
+    // Контакт случился ВНЕ старого круга: это ровно та угловая лунка, в которой
+    // щит протекал. Пиннится именно неравенство — на нём держится регрессия.
+    expect(contact).toBeGreaterThan(band);
+    // Владелец сменился в том же тике — связка способностей цела.
+    expect(newOwner).toBe(1);
+    // И урона хозяину щита не прошло.
+    expect(hp(a.state, keeper)).toBe(1000);
+  });
+
+  it('снаряд ровно в центре героя разворачивается точно назад', () => {
+    // Вырожденная ветка: линии центров нет, и нормаль система берёт из
+    // СОБСТВЕННОГО курса снаряда со знаком минус. Отражение через такую нормаль
+    // — точный разворот, без единицы Q16.16 расхождения.
+    // Точка, в которую снаряд попадает ТОЧНО, меряется отдельным прогоном той
+    // же геометрии: числа выноса и скорости в тест не переписываются.
+    const probe = ffa([20, 28]);
+    probe.step([{ buttons: CAST }]);
+    probe.step();
+    const flying = fireballs(probe.state)[0]!;
+    let center = 0;
+    for (let t = 0; t < 20 && fireballs(probe.state).length > 0; t++) {
+      probe.step();
+      if (fireballs(probe.state).length === 0) break;
+      const at = x(probe.state, flying);
+      if (at >= 27 * FIXED_ONE && at <= 28 * FIXED_ONE) center = at;
+    }
+    expect(center).toBeGreaterThan(0);
+
+    // Герой ровно в этой точке: прошлый тик снаряд был в 0,625 клетки от него —
+    // ДАЛЬШЕ бокса (0,54), — поэтому первый контакт приходится точно в центр.
+    const a = ffa([20, center / FIXED_ONE]);
+    const keeper = a.heroes[1]!;
+    a.step([NEUTRAL, { buttons: SHIELD }]);
+    a.step([{ buttons: CAST }]);
+    a.step();
+    const shot = fireballs(a.state)[0]!;
+    const speed = vel(a.state, shot, 'x');
+    expect(speed).toBeGreaterThan(0);
+
+    let bounced = false;
+    for (let i = 0; i < 30 && !bounced && fireballs(a.state).length > 0; i++) {
+      bounced = a.step().includes('ShieldRicochet');
+    }
+    expect(bounced).toBe(true);
+    // Снаряд стоял ТОЧНО в центре: разность центров нулевая.
+    expect(x(a.state, shot)).toBe(x(a.state, keeper));
+    expect(y(a.state, shot)).toBe(y(a.state, keeper));
+    // Разворот точный — ровно минус исходная скорость.
+    expect(vel(a.state, shot, 'x')).toBe(-speed);
+    expect(vel(a.state, shot, 'y')).toBe(0);
+    expect(hp(a.state, keeper)).toBe(1000);
+  });
+
+  it('защита длится все 60 тиков: снаряд 60-го ещё отражается, 61-го — уже нет', () => {
+    // Нарисованный пузырь живёт 59 тиков (тест истечения выше), а ЗАЩИЩАЕТ щит
+    // все 60: `ShieldRicochet` (order 108) идёт перед `ShieldExpire` (order 111),
+    // и на последнем тике счётчика снаряд ещё отскакивает. Здесь пиннится
+    // вторая половина этой асимметрии — та, что не про картинку.
+    /**
+     * Прогон «щит на ПЕРВОМ тике, выстрел на тике `shotAt`»: тик каста — первый
+     * из 60, поэтому номер тика контакта и есть номер тика счётчика. Отдаёт тик
+     * рикошета (0 — рикошета не было) и здоровье хозяина щита.
+     */
+    function run(shotAt: number): { bounceAt: number; keeperHp: number } {
+      const a = ffa([20, 28]);
+      const keeper = a.heroes[1]!;
+      let bounceAt = 0;
+      for (let t = 1; t <= shotAt + 40; t++) {
+        const frames: Frame[] = [NEUTRAL, NEUTRAL];
+        if (t === 1) frames[1] = { buttons: SHIELD };
+        if (t === shotAt) frames[0] = { buttons: CAST };
+        if (a.step(frames).includes('ShieldRicochet') && bounceAt === 0) bounceAt = t;
+        if (t > shotAt + 1 && fireballs(a.state).length === 0) break;
+      }
+      return { bounceAt, keeperHp: hp(a.state, keeper) };
+    }
+
+    // Время полёта меряется отдельным прогоном той же геометрии — числа
+    // скорости и дистанции в тест не переписываются.
+    const probe = run(2);
+    expect(probe.bounceAt).toBeGreaterThan(0);
+    const flight = probe.bounceAt - 2;
+
+    // Выстрел так, чтобы контакт пришёлся на 60-й тик счётчика — последний.
+    // Компонент снимается ПОСЛЕ рикошета (`ShieldExpire` order 111 идёт за
+    // `ShieldRicochet` order 108), поэтому снаряд ещё отражается.
+    const last = run(SHIELD_TICKS - flight);
+    expect(last.bounceAt).toBe(SHIELD_TICKS);
+    expect(last.keeperHp).toBe(1000);
+
+    // Тиком позже щита уже нет вовсе — и тот же снаряд снимает свои 100.
+    const late = run(SHIELD_TICKS - flight + 1);
+    expect(late.bounceAt).toBe(0);
+    expect(late.keeperHp).toBe(1000 - HIT_DAMAGE);
+  });
+
+  it('смерть под щитом снимает пузырь ТЕМ ЖЕ тиком — на трупе он не висит', () => {
+    // `ShieldRicochet` труп исключает (`not: ["Dead"]`), поэтому оставшийся
+    // `Shielded` ничего не защищал бы, а рисовался бы ещё до 59 тиков: синяя
+    // сфера над телом, обещающая игроку защиту, которой нет.
+    const a = ffa([20, 28], { extract: true });
+    const keeper = a.heroes[1]!;
+    const bubble = stateBit('Shielded');
+
+    a.step([NEUTRAL, { buttons: SHIELD }]);
+    expect(shielded(a.state, keeper)).toBe(true);
+    expect(a.stateBits(keeper) & bubble).toBe(bubble);
+
+    // Мгновенная смерть на середине щита (`KillSwitch`, order 20).
+    a.step([NEUTRAL, { buttons: KILL }]);
+    expect(coreWorld.hasComponent(a.state.world, keeper, 'Dead')).toBe(true);
+    // ТЕМ ЖЕ тиком, а не через `ShieldExpire` следующего.
+    expect(shielded(a.state, keeper)).toBe(false);
+    expect(a.stateBits(keeper) & bubble).toBe(0);
+
+    // И дальше не воскресает.
+    a.step();
+    expect(shielded(a.state, keeper)).toBe(false);
+    expect(a.stateBits(keeper) & bubble).toBe(0);
+  });
+
+  it('щит снимают ВСЕ три пути смерти сцены, а не только один', () => {
+    // Поведенчески выше проверен `KillSwitch`; здесь — структурный пин на то,
+    // что падение и обнуление здоровья не разошлись с ним молча. Новый путь
+    // смерти без снятия щита обязан быть виден в диффе этого теста.
+    const drops = (name: string): boolean => {
+      const system = SCENE.systems!.find((candidate) => candidate.name === name);
+      expect(system, `в сцене нет системы ${name}`).toBeDefined();
+      let found = false;
+      const walk = (node: unknown): void => {
+        if (Array.isArray(node)) {
+          for (const item of node) walk(item);
+          return;
+        }
+        if (node === null || typeof node !== 'object') return;
+        const record = node as Record<string, unknown>;
+        const remove = record.removeComponent as Record<string, unknown> | undefined;
+        if (remove?.component === 'Shielded') found = true;
+        for (const value of Object.values(record)) walk(value);
+      };
+      walk(system);
+      return found;
+    };
+    for (const path of ['KillSwitch', 'FallDeath', 'HealthDeath']) {
+      expect(drops(path), `путь смерти ${path} не снимает Shielded`).toBe(true);
+    }
+  });
+
+  it('захват и щит одним тиком: захват решает, щит не встаёт и кулдаун цел', () => {
+    // `ShieldCast` (order 39) идёт ПОСЛЕ `CaptureRelease` (order 38): отпускание
+    // `R` и нажатие `E` одним тиком дают руки, занятые снарядом, — а не
+    // Shielded+Holding разом, что противоречило бы заявленной блокировке
+    // «щит нельзя с пойманным снарядом».
+    const a = ffa([20, 28]);
+    const keeper = a.heroes[1]!;
+    a.step([{ buttons: CAST }]);
+    a.step();
+    const shot = fireballs(a.state)[0]!;
+
+    // Держим `R` зажатым, пока снаряд не подойдёт в сектор захвата.
+    for (let i = 0; i < 200 && x(a.state, keeper) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
+      a.step([NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }]);
+    }
+    // Тот самый тик: `R` отпущено, `E` нажато.
+    a.step([NEUTRAL, { buttons: SHIELD, aimDir: AIM_WEST }]);
+
+    expect(coreWorld.hasComponent(a.state.world, keeper, 'Holding')).toBe(true);
+    expect(shielded(a.state, keeper)).toBe(false);
+    // Кулдаун щита не списан: `ShieldCast` отсеян запросом, а не веткой.
+    expect(coreWorld.getField(a.state.world, keeper, 'Cooldowns', 'shield')).toBe(0);
   });
 });
