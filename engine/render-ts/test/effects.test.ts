@@ -209,6 +209,22 @@ describe('EffectsSubsystem: вспышка по событию (REND-23, HUD-5)'
     expect(subsystem.activeCount).toBe(0);
   });
 
+  it('вне Running вспышка замирает: часы презентации её не двигают (REND-25)', () => {
+    const { subsystem, scene } = makeRig();
+    subsystem.syncTick(explosion({ x: 0, y: 0 }));
+    const group = scene.children.find((child) => child.name === 'effects')!;
+    const mesh = group.children[0] as THREE.Mesh;
+    subsystem.updateFrame(0.2, 1); // фаза 0.5
+    const frozen = mesh.scale.x;
+
+    // Пауза и обратный ход вспышку не доигрывают и не отматывают: отмотать
+    // её нечем, а играть вперёд в стоящем мире REND-25 запрещает.
+    subsystem.updateFrame(0, 1);
+    for (let i = 0; i < 20; i++) subsystem.updateFrame(-1 / 60, 1);
+    expect(subsystem.activeCount).toBe(1);
+    expect(mesh.scale.x).toBeCloseTo(frozen, 6);
+  });
+
   it('разрыв непрерывности гасит вспышку, а оболочку восстанавливает доставка (REND-2)', () => {
     const { subsystem } = makeRig();
     subsystem.syncTick(explosion({ x: 0, y: 0 }));

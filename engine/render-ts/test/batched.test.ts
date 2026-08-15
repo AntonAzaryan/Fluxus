@@ -349,6 +349,89 @@ describe('анимация батчевой записи (REND-4, REND-20)', () 
   });
 });
 
+// ------------------------------------------------- обратный ход презентации
+
+/**
+ * Батчевый ярус при не-`Running` мире (REND-25). Наблюдаемое — те же строки
+ * VAT, что и в кадре: своей «фазы» наружу запись не отдаёт, а строка и есть
+ * кадр клипа, которым инстанс нарисован.
+ */
+describe('обратный ход клипа в батчевом ярусе (REND-25, REND-20)', () => {
+  function running(): Rig {
+    const rig = makeRig();
+    rig.subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
+    rig.assets.resolve('model', MODEL_ID, makeModel());
+    // Кроссфейд входа отыгран, фаза ушла вглубь клипа.
+    for (let i = 0; i < 20; i++) rig.subsystem.updateFrame(1 / 60, 1);
+    return rig;
+  }
+
+  it('мир замер — клипы замерли: кадры идут, строки VAT стоят', () => {
+    const { subsystem } = running();
+    const frozen = Array.from(poseAttribute(subsystem).slice(0, 3));
+    for (let i = 0; i < 30; i++) subsystem.updateFrame(0, 1);
+    expect(Array.from(poseAttribute(subsystem).slice(0, 3))).toEqual(frozen);
+  });
+
+  it('отрицательные часы отматывают клип и заворачивают фазу через его начало', () => {
+    const { subsystem } = running();
+    const forward = poseAttribute(subsystem)[0]!;
+
+    for (let i = 0; i < 10; i++) subsystem.updateFrame(-1 / 60, 1);
+    const back = poseAttribute(subsystem)[0]!;
+    expect(back).toBeLessThan(forward);
+
+    // Ещё назад, за начало клипа: зацикленный клип уходит на свой хвост, а не
+    // стопорится на нулевом кадре.
+    for (let i = 0; i < 20; i++) subsystem.updateFrame(-1 / 60, 1);
+    const wrapped = poseAttribute(subsystem)[0]!;
+    expect(wrapped).toBeGreaterThan(forward);
+
+    // Возобновление: вперёд с текущей строки, а не с начала клипа.
+    for (let i = 0; i < 5; i++) subsystem.updateFrame(1 / 60, 1);
+    const resumed = poseAttribute(subsystem)[0]!;
+    expect(resumed).toBeGreaterThan(wrapped);
+    expect(resumed - wrapped).toBeLessThanOrEqual(3);
+  });
+
+  it('кроссфейд дренируется по модулю: обратный ход его доигрывает, а не вешает', () => {
+    const { subsystem, assets } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    for (let i = 0; i < 20; i++) subsystem.updateFrame(1 / 60, 1);
+
+    // Смена состояния заводит кроссфейд (0.15 с), и тут же начинается перемотка.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
+    for (let i = 0; i < 12; i++) subsystem.updateFrame(-1 / 60, 1);
+
+    // Переход отыгран: пара снова держит соседние кадры ОДНОГО клипа.
+    const pose = poseAttribute(subsystem);
+    expect(pose[1]! - pose[0]!).toBe(1);
+  });
+
+  it('активный one-shot отступает к началу и уступает клипу состояния', () => {
+    const { subsystem, assets } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { moving: true })], {
+        freshEvents: true,
+        events: [{ type: 'CastFireball', data: { entity: 1 } }],
+      }),
+    );
+    const controller = subsystem.instanceFor(1)!.controller!;
+    for (let i = 0; i < 12; i++) subsystem.updateFrame(1 / 60, 1); // 0.2 с из 0.5
+    expect(controller.currentClipName).toBe('Attack - 1');
+
+    // Пауза one-shot не снимает: нулевые часы — не «клип доигран».
+    for (let i = 0; i < 10; i++) subsystem.updateFrame(0, 1);
+    expect(controller.currentClipName).toBe('Attack - 1');
+
+    for (let i = 0; i < 20; i++) subsystem.updateFrame(-1 / 60, 1);
+    expect(controller.currentClipName).toBe('Walk Fast');
+  });
+});
+
 // -------------------------------------------------------------- деградация
 
 describe('модель без запечённых производных (REND-20)', () => {
