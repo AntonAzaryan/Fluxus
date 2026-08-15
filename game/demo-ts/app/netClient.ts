@@ -192,6 +192,10 @@ export async function joinDemoMatch(options: DemoClientOptions): Promise<DemoJoi
       playerId,
       version: config.version,
       content: pack,
+      // Тот же номер бита, которым настроен сервер (`rewind.holdButton` из
+      // документа матча): пока мир не в `Running`, наружу уезжает только он —
+      // ведение скраба, — а движение и остальные действия маскируются (NET-11).
+      ...(config.rewind?.holdButton !== undefined ? { holdButton: config.rewind.holdButton } : {}),
       ...(config.physics !== undefined ? { physics: config.physics } : {}),
       ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
     });

@@ -101,7 +101,8 @@
     { "name": "Holding", "fields": { "projectile": "entity" } },
     { "name": "Charging", "fields": { "ticks": "i32" } },
     { "name": "Projectile", "fields": { "damage": "i32", "scale": "fixed" } },
-    { "name": "Shielded", "fields": { "ticks": "i32" } }
+    { "name": "Shielded", "fields": { "ticks": "i32" } },
+    { "name": "RewindCooldown", "fields": { "max": "i32", "ticks": "i32" } }
   ],
   "prefabs": [
     {
@@ -138,6 +139,7 @@
         "ArenaState": { "support": 0 },
         "FallConfig": { "deathDepth": 4915200, "speed": 16384 },
         "Health": { "hp": 1000, "hpMax": 1000 },
+        "RewindCooldown": { "max": 1200, "ticks": 0 },
         "Cooldowns": {
           "capture": 0,
           "captureMax": 120,
@@ -290,6 +292,32 @@
                         { "-": [{ "getComponent": [{ "var": "e" }, "Cooldowns", "slowDome"] }, 1] },
                         0
                       ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "RewindCooldownTick",
+      "order": 11,
+      "query": { "all": ["RewindCooldown"] },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": { ">": [{ "getComponent": [{ "var": "e" }, "RewindCooldown", "ticks"] }, 0] },
+            "then": [
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "RewindCooldown",
+                  "values": {
+                    "ticks": {
+                      "-": [{ "getComponent": [{ "var": "e" }, "RewindCooldown", "ticks"] }, 1]
                     }
                   }
                 }
@@ -1067,6 +1095,49 @@
                     "x": { "getComponent": [{ "var": "e" }, "Position", "x"] },
                     "y": { "getComponent": [{ "var": "e" }, "Position", "y"] }
                   }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "RewindCast",
+      "order": 37,
+      "query": {
+        "all": ["Input", "Player", "RewindCooldown"],
+        "not": ["Dead", "Charging", "Holding"]
+      },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": {
+              "and": [
+                { "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "buttons"] }, 7] },
+                {
+                  "!": [
+                    { "bitTest": [{ "getComponent": [{ "var": "e" }, "Input", "prevButtons"] }, 7] }
+                  ]
+                },
+                { "==": [{ "getComponent": [{ "var": "e" }, "RewindCooldown", "ticks"] }, 0] }
+              ]
+            },
+            "then": [
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "RewindCooldown",
+                  "values": {
+                    "ticks": { "getComponent": [{ "var": "e" }, "RewindCooldown", "max"] }
+                  }
+                }
+              },
+              {
+                "emitEvent": {
+                  "type": "$rewind/request",
+                  "data": { "depthTicks": 420, "initiator": { "var": "e" } }
                 }
               }
             ]

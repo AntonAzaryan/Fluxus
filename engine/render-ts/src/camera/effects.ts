@@ -279,8 +279,12 @@ export class EffectStack {
   apply(logical: CameraPose, dt: number): CameraPose {
     const o = this.offset;
     o.dx = o.dy = o.dz = o.dyaw = o.dpitch = o.droll = o.dfovDeg = 0;
+    // Тряска и качание необратимы: отрицательный шаг накачивал бы trauma
+    // вместо её затухания. Придя часами презентации со знаком (REND-25),
+    // обратный ход и пауза эффекты ЗАМОРАЖИВАЮТ, а не отматывают.
+    const step = dt > 0 ? dt : 0;
     if (this.effects.length > 0) {
-      const alive = this.effects.filter((effect) => effect.update(dt, o));
+      const alive = this.effects.filter((effect) => effect.update(step, o));
       if (alive.length !== this.effects.length) this.effects = alive;
     }
     const m = this.multiplier;

@@ -17,5 +17,13 @@
   "tickRate": 60,
   "snapshotRate": 30,
   "inputDelay": 2,
-  "silenceSeconds": 30
+  "silenceSeconds": 30,
+  "rewind": {
+    "interval": 30,
+    "capacity": 15,
+    "exempt": [{ "component": "RewindCooldown" }],
+    "holdButton": 7,
+    "step": 4,
+    "holdTimeoutTicks": 15
+  }
 }
