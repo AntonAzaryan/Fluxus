@@ -108,7 +108,7 @@
       "Shielded": {
         "primitive": "sphere",
         "color": "#4aa3ff",
-        "radius": 0.39,
+        "radius": 0.78,
         "alpha": 0.3,
         "height": 0.5
       },

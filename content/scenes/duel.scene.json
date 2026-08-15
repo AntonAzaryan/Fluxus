@@ -88,6 +88,7 @@
         "holdTicks": "i32",
         "overchargeDamage": "i32",
         "overchargeRadius": "fixed",
+        "respawnTicks": "i32",
         "shieldRadiusMul": "fixed",
         "shieldTicks": "i32",
         "throwLifetime": "i32",
@@ -102,7 +103,8 @@
     { "name": "Charging", "fields": { "ticks": "i32" } },
     { "name": "Projectile", "fields": { "damage": "i32", "scale": "fixed" } },
     { "name": "Shielded", "fields": { "ticks": "i32" } },
-    { "name": "RewindCooldown", "fields": { "max": "i32", "ticks": "i32" } }
+    { "name": "RewindCooldown", "fields": { "max": "i32", "ticks": "i32" } },
+    { "name": "Spawn", "fields": { "x": "fixed", "y": "fixed" } }
   ],
   "prefabs": [
     {
@@ -144,13 +146,13 @@
           "capture": 0,
           "captureMax": 120,
           "cast": 0,
-          "castMax": 90,
+          "castMax": 60,
           "dodge": 0,
           "dodgeMax": 0,
           "jump": 0,
           "jumpMax": 0,
           "shield": 0,
-          "shieldMax": 180,
+          "shieldMax": 150,
           "slowDome": 0,
           "slowDomeMax": 300
         },
@@ -162,14 +164,15 @@
           "chargeMaxScale": 131072,
           "chargeTicks": 60,
           "domeRadiusMul": 655360,
-          "domeSlow": 16384,
+          "domeSlow": 13107,
           "domeTicks": 180,
           "explosionDamage": 250,
           "hitDamage": 100,
           "holdTicks": 121,
           "overchargeDamage": 250,
           "overchargeRadius": 196608,
-          "shieldRadiusMul": 85197,
+          "respawnTicks": 600,
+          "shieldRadiusMul": 170394,
           "shieldTicks": 60,
           "throwLifetime": 50,
           "throwOffset": 29491,
@@ -227,12 +230,30 @@
       "components": {
         "Position": { "x": 0, "y": 0 },
         "Owner": { "slot": -1 },
-        "DomeState": { "radius": 196610, "slow": 16384, "ticks": 180 }
+        "DomeState": { "radius": 196610, "slow": 13107, "ticks": 180 }
       },
       "tags": ["SlowDome"]
     }
   ],
   "systems": [
+    {
+      "name": "SpawnAnchor",
+      "order": 1,
+      "query": { "all": ["Position"], "not": ["Spawn"], "withTag": "Hero" },
+      "as": "e",
+      "do": [
+        {
+          "addComponent": {
+            "entity": { "var": "e" },
+            "component": "Spawn",
+            "values": {
+              "x": { "getComponent": [{ "var": "e" }, "Position", "x"] },
+              "y": { "getComponent": [{ "var": "e" }, "Position", "y"] }
+            }
+          }
+        }
+      ]
+    },
     {
       "name": "CooldownTick",
       "order": 10,
@@ -1165,15 +1186,6 @@
             },
             "then": [
               {
-                "modifyComponent": {
-                  "entity": { "var": "e" },
-                  "component": "Cooldowns",
-                  "values": {
-                    "capture": { "getComponent": [{ "var": "e" }, "Cooldowns", "captureMax"] }
-                  }
-                }
-              },
-              {
                 "let": {
                   "bindings": {
                     "at": {
@@ -1256,6 +1268,17 @@
                       "if": {
                         "cond": { "!=": [{ "var": "caught" }, -1] },
                         "then": [
+                          {
+                            "modifyComponent": {
+                              "entity": { "var": "e" },
+                              "component": "Cooldowns",
+                              "values": {
+                                "capture": {
+                                  "getComponent": [{ "var": "e" }, "Cooldowns", "captureMax"]
+                                }
+                              }
+                            }
+                          },
                           {
                             "addComponent": {
                               "entity": { "var": "caught" },
@@ -2173,6 +2196,118 @@
                 "emitEvent": {
                   "type": "EntityDied",
                   "data": { "entity": { "var": "e" } }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Respawn",
+      "order": 140,
+      "query": {
+        "all": ["Dead", "Spawn", "Player", "Position", "Velocity", "Health", "Cooldowns", "AbilityConfig"]
+      },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": {
+              ">=": [
+                { "-": [{ "tick": [] }, { "getComponent": [{ "var": "e" }, "Dead", "atTick"] }] },
+                { "getComponent": [{ "var": "e" }, "AbilityConfig", "respawnTicks"] }
+              ]
+            },
+            "then": [
+              { "removeComponent": { "entity": { "var": "e" }, "component": "Dead" } },
+              { "removeComponent": { "entity": { "var": "e" }, "component": "Falling" } },
+              { "removeComponent": { "entity": { "var": "e" }, "component": "LevelOverride" } },
+              { "removeComponent": { "entity": { "var": "e" }, "component": "Shielded" } },
+              { "removeComponent": { "entity": { "var": "e" }, "component": "Charging" } },
+              { "removeComponent": { "entity": { "var": "e" }, "component": "Holding" } },
+              { "removeComponent": { "entity": { "var": "e" }, "component": "ActionLock" } },
+              {
+                "addComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Locomotion",
+                  "values": {
+                    "accel": 655,
+                    "decel": 1311,
+                    "dodgeSpeed": 13107,
+                    "dodgeTicks": 8,
+                    "jumpHeight": 1,
+                    "jumpSpeed": 7864,
+                    "jumpTicks": 20,
+                    "maxSpeed": 5243,
+                    "rollSpeed": 9830,
+                    "rollTicks": 18,
+                    "windowTicks": 12
+                  }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "LocomotionState",
+                  "values": { "dirX": 0, "dirY": 0, "state": 0, "ticksLeft": 0 }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Collider",
+                  "values": { "cliffRise": 0 }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Position",
+                  "values": {
+                    "x": { "getComponent": [{ "var": "e" }, "Spawn", "x"] },
+                    "y": { "getComponent": [{ "var": "e" }, "Spawn", "y"] }
+                  }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Velocity",
+                  "values": { "x": 0, "y": 0 }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Health",
+                  "values": { "hp": { "getComponent": [{ "var": "e" }, "Health", "hpMax"] } }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Cooldowns",
+                  "values": {
+                    "capture": 0,
+                    "cast": 0,
+                    "dodge": 0,
+                    "jump": 0,
+                    "shield": 0,
+                    "slowDome": 0
+                  }
+                }
+              },
+              {
+                "emitEvent": {
+                  "type": "HeroRespawned",
+                  "data": {
+                    "entity": { "var": "e" },
+                    "slot": { "getComponent": [{ "var": "e" }, "Player", "slot"] },
+                    "tick": { "tick": [] },
+                    "x": { "getComponent": [{ "var": "e" }, "Spawn", "x"] },
+                    "y": { "getComponent": [{ "var": "e" }, "Spawn", "y"] }
+                  }
                 }
               }
             ]
