@@ -125,18 +125,68 @@ describe('восприятие: перемотка стирает ветвь, а
     expect(fresh.seenTick).toBe(earlyTick);
     expect(fresh.visible).toBe(true);
   });
+
+  it('пауза и возобновление памяти НЕ стоят: ветвь та же', async () => {
+    // Страховка по смене режима узкая: ветвь истории стирает перемотка, а не
+    // всякая смена режима (WSM-1). Пауза оставляет мир там же, где он был, и
+    // сброс памяти на ней означал бы, что игрок, поставивший паузу, дарит боту
+    // амнезию: противник, стоящий на виду, забывается и переоценивается заново.
+    // Задержка реакции ненулевая: она и делает проверку честной. Состояния,
+    // приехавшие ВМЕСТЕ со сменой режима, к моменту съёма ещё не осознаны, и
+    // сброс памяти нечем было бы прикрыть — бот остался бы слепым.
+    const { late, lateTick } = await recorded();
+    const DELAY = 6;
+    const at = lateTick + DELAY;
+    const perception = new Perception(
+      testProfile({ reaction: { delayTicks: DELAY, jitterTicks: 0, memoryTicks: 120 } }),
+      SELF,
+      random(),
+    );
+    for (const step of late) perception.observe(step);
+    const known = perception.perceive(at)!.enemies[0];
+    expect(known).toBeDefined();
+
+    const last = late[late.length - 1]!;
+    const paused = { tick: lateTick + 1, mode: 'Paused' as const, discontinuity: false };
+    perception.observe(branch(last, paused));
+    expect(perception.mode).toBe('Paused');
+    expect(perception.takeDiscontinuity()).toBe(false);
+    perception.observe(branch(last, { ...paused, mode: 'Running' }));
+    expect(perception.mode).toBe('Running');
+    expect(perception.takeDiscontinuity()).toBe(false);
+
+    // Возобновление — и бот сразу при деле: врага он помнит там же, где видел,
+    // а не переоценивает мир с нуля. Сброс памяти дал бы здесь `undefined` —
+    // осознанной картинки не осталось бы вовсе.
+    const after = perception.perceive(at)!.enemies[0]!;
+    expect(after).toEqual(known);
+  });
 });
 
 describe('мозг: замерший мир и разрыв непрерывности', () => {
-  it('в `Rewinding` бот держит: нулевое движение, никаких кнопок', async () => {
+  /**
+   * Идущий бот: дальность способности короче дистанции до человека, поэтому
+   * выигрывает «давить» — цель steering'а стоит на противнике, и мозг отдаёт
+   * ненулевое движение. Шум прицела ненулевой намеренно: держание обязано
+   * повторить последний ОТДАННЫЙ прицел вместе с шумом, и на чистой базе
+   * микро-слоя равенство прицелов было бы совпадением нулей.
+   */
+  const walkingProfile = (): ReturnType<typeof testProfile> =>
+    testProfile({
+      ability: { button: 0, cooldownTicks: 30, range: 2 },
+      aim: { noiseDegrees: 5, noisePeriodTicks: 10 },
+    });
+
+  it('в `Rewinding` идущий бот встаёт: движение — ноль, прицел — прежний', async () => {
     const { early, late, lateTick } = await recorded();
-    const brain = classicBrain()(testProfile(), SELF);
+    const brain = classicBrain()(walkingProfile(), SELF);
     for (const step of late) brain.observe(step);
     const playing = brain.sample(lateTick)!;
-    // Контроль: в живом мире бот жмёт способность — иначе держание не отличить
-    // от обычного бездействия. Стоит он при этом законно: враг в дальности, и
-    // выигравшее поведение — «бить», а не «идти».
-    expect(playing.buttons).not.toBe(0);
+    // Контроль: в живом мире бот ИДЁТ — иначе «нулевое движение в замершем
+    // мире» выполнялось бы само собой и лечение не пиннилось бы вовсе.
+    expect(Math.hypot(playing.moveX, playing.moveY)).toBeGreaterThan(0);
+    // И шум в отданном прицеле есть: равенство ниже — про повтор, а не про ноль.
+    expect(playing.aimRadians).not.toBe(0);
 
     brain.observe(branch(early, { tick: 12, mode: 'Rewinding', discontinuity: true }));
     for (let tick = 12; tick < 20; tick++) {
@@ -144,8 +194,29 @@ describe('мозг: замерший мир и разрыв непрерывно
       expect(held.moveX).toBe(0);
       expect(held.moveY).toBe(0);
       expect(held.buttons).toBe(0);
-      // Прицел не мечется: держание — это стоять, а не крутиться.
+      // Прицел не мечется: держание — это стоять, а не крутиться. И повторяется
+      // именно ОТДАННОЕ число: подставь базу без шума — прицел дёрнулся бы на
+      // всю амплитуду ровно в тот кадр, в который мир замер.
       expect(held.aimRadians).toBe(playing.aimRadians);
+    }
+  });
+
+  it('в `Rewinding` бьющий бот не жмёт: кнопок нет', async () => {
+    // Вторая половина держания — своей геометрией: враг в дальности, выигрывает
+    // «бить», и в живом мире бот жмёт способность. Без этого контроля «кнопок
+    // нет» выполнялось бы у любого бота, которому нечем стрелять.
+    const { early, late, lateTick } = await recorded();
+    const brain = classicBrain()(testProfile(), SELF);
+    for (const step of late) brain.observe(step);
+    const playing = brain.sample(lateTick)!;
+    expect(playing.buttons).not.toBe(0);
+
+    brain.observe(branch(early, { tick: 12, mode: 'Rewinding', discontinuity: true }));
+    for (let tick = 12; tick < 20; tick++) {
+      const held = brain.sample(tick)!;
+      expect(held.buttons).toBe(0);
+      expect(held.moveX).toBe(0);
+      expect(held.moveY).toBe(0);
     }
   });
 
