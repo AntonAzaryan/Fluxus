@@ -628,6 +628,88 @@ describe('захват снаряда: удержание, переброс и �
     expect(coreWorld.hasComponent(a.state.world, p2, 'Dead')).toBe(false);
   });
 
+  it('смерть держателя роняет снаряд: труп его не таскает и в руках не рвёт', () => {
+    // РЕГРЕССИЯ. Пути смерти снимали с умирающего `Locomotion` и `Shielded`, но
+    // не `Holding`, а `HoldingGuard` (order 104) сверяет лишь то, что `Held`
+    // снаряда всё ещё называет того же держателя. Труп поэтому продолжал
+    // таскать снаряд за собой весь остаток окна: `HeldPin` (order 105) читает
+    // `Input.aimDir` и `Position` мертвеца, — а на конце окна снаряд рвался «в
+    // руках трупа» уроном, который `DamageApply` (not: ["Dead"]) молча выбрасывал.
+    // Смерть теперь отпускает захват ТЕМ ЖЕ путём, что бросок (`ThrowHeld`): со
+    // снаряда снимается `Held`, с держателя — `Holding` и `ActionLock`.
+    const a = arena(8);
+    pressA(a, CAST);
+    const shot = fireballs(a.state)[0]!;
+    shotInReach(a, shot);
+
+    const p2 = a.heroes[1]!;
+    a.step(NEUTRAL, { buttons: CAPTURE });
+    a.step(NEUTRAL, {});
+    expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(true);
+
+    // Полёта пойманный снаряд не тратит — это и есть точка отсчёта.
+    const life = coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks');
+    for (let i = 0; i < 10; i++) a.step(NEUTRAL);
+    expect(coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks')).toBe(life);
+
+    // Мгновенная смерть на середине окна броска (`KillSwitch`, order 20 — то
+    // есть ДО `HoldingGuard` и `HeldPin` того же тика).
+    a.step(NEUTRAL, { buttons: KILL, aimDir: AIM_WEST });
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Dead')).toBe(true);
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
+    expect(coreWorld.hasComponent(a.state.world, p2, 'ActionLock')).toBe(false);
+    expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(false);
+    // Отпущенный снаряд снова тратит полёт: `FireballFlight` исключает `Held`.
+    expect(coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks')).toBe(life - 1);
+
+    // И труп его больше не таскает: разворот прицела мертвеца снаряд не двигает.
+    const droppedX = x(a.state, shot);
+    const droppedY = y(a.state, shot);
+    for (let i = 0; i < 5; i++) a.step(NEUTRAL, { aimDir: AIM_EAST });
+    expect(x(a.state, shot)).toBe(droppedX);
+    expect(y(a.state, shot)).toBe(droppedY);
+
+    // Кончается он как обычный отпущенный снаряд — своим `Lifetime`, а не
+    // взрывом в руках на конце окна удержания. Остатка полёта на окно не
+    // хватает, поэтому «когда именно исчез» — это и есть различающий признак.
+    const left = coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks');
+    expect(left).toBe(life - 6);
+    expect(left).toBeLessThan(THROW_WINDOW_TICKS);
+    for (let i = 0; i < left - 1; i++) a.step(NEUTRAL);
+    expect(fireballs(a.state)).toHaveLength(1);
+    a.step(NEUTRAL);
+    expect(fireballs(a.state)).toHaveLength(0);
+  });
+
+  it('захват отпускают ВСЕ три пути смерти сцены, а не только один', () => {
+    // Поведенчески выше проверен `KillSwitch`; здесь — структурный пин на то,
+    // что падение и обнуление здоровья не разошлись с ним молча. Новый путь
+    // смерти, оставляющий снаряд в руках трупа, обязан быть виден в диффе.
+    const releases = (name: string): boolean => {
+      const system = SCENE.systems!.find((candidate) => candidate.name === name);
+      expect(system, `в сцене нет системы ${name}`).toBeDefined();
+      const dropped = new Set<string>();
+      const walk = (node: unknown): void => {
+        if (Array.isArray(node)) {
+          for (const item of node) walk(item);
+          return;
+        }
+        if (node === null || typeof node !== 'object') return;
+        const record = node as Record<string, unknown>;
+        const remove = record.removeComponent as Record<string, unknown> | undefined;
+        if (typeof remove?.component === 'string') dropped.add(remove.component);
+        for (const value of Object.values(record)) walk(value);
+      };
+      walk(system);
+      // Обе половины связки: руки держателя и метка на снаряде.
+      return dropped.has('Holding') && dropped.has('Held');
+    };
+    for (const path of ['KillSwitch', 'FallDeath', 'HealthDeath']) {
+      expect(releases(path), `путь смерти ${path} не отпускает захват`).toBe(true);
+    }
+  });
+
   it('четыре взрыва в руках убивают героя через общий путь смерти сцены', () => {
     const a = arena(8);
     const p2 = a.heroes[1]!;
@@ -2136,5 +2218,129 @@ describe('щит: рикошет снаряда, смена владельца �
     expect(shielded(a.state, keeper)).toBe(false);
     // Кулдаун щита не списан: `ShieldCast` отсеян запросом, а не веткой.
     expect(coreWorld.getField(a.state.world, keeper, 'Cooldowns', 'shield')).toBe(0);
+  });
+
+  it('щит не крадёт снаряд без отражения: перебор подклеточных выравниваний', () => {
+    // РЕГРЕССИЯ. Шаг снаряда за тик (`throwSpeed` = 0,625 клетки) БОЛЬШЕ
+    // полуребра бокса щита (`shieldR` + полуось снаряда ≈ 0,545), поэтому первая
+    // же точка тика внутри бокса нередко оказывается УЖЕ за центром хозяина:
+    // нормаль по линии центров смотрит там ВПЕРЁД, `v·n ≥ 0`, и отражения из
+    // формулы не выходит. Смена владельца и событие `ShieldRicochet` стояли ВНЕ
+    // этой ветки и срабатывали всё равно — снаряд у стрелка отбирали, курса ему
+    // не меняли, а ложный `bounced` тем же тиком глушил взрыв `FireballWall`.
+    // Ловится это только перебором подклеточных выравниваний: на «круглых»
+    // позициях контакт приходится ДО центра, и щит выглядит здоровым.
+    const failures: string[] = [];
+    for (let k = 0; k < 256; k++) {
+      const a = ffa([20, 28 + k / 256]);
+      const keeper = a.heroes[1]!;
+      a.step([NEUTRAL, { buttons: SHIELD }]);
+      a.step([{ buttons: CAST }]);
+      a.step();
+      const shot = fireballs(a.state)[0]!;
+      const speed = vel(a.state, shot, 'x');
+      let ricochets = 0;
+      let slot = owner(a.state, shot);
+      let back = speed;
+      for (let i = 0; i < 30 && fireballs(a.state).length > 0; i++) {
+        ricochets += a.step().filter((type) => type === 'ShieldRicochet').length;
+        if (fireballs(a.state).length === 0) break;
+        slot = owner(a.state, shot);
+        back = vel(a.state, shot, 'x');
+        if (ricochets > 0) break;
+      }
+      const at = `сдвиг ${k}/256 клетки`;
+      if (ricochets !== 1) failures.push(`${at}: рикошетов ${ricochets}, а не один`);
+      if (slot !== 1) failures.push(`${at}: владелец ${slot}, а не хозяин щита`);
+      // Развёрнут, а не просто отобран, — вот на чём держится регрессия.
+      if (back >= 0) failures.push(`${at}: курс не развёрнут (vx = ${back})`);
+      // Модуль скорости сохранён. Точное равенство тут не выйдет: у контактов
+      // почти в центре нормаль диагональная, и её нормализация стоит сотен
+      // единиц Q16.16 — процента запаса на них хватает с избытком.
+      if (Math.abs(Math.abs(back) - speed) > speed / 100) {
+        failures.push(`${at}: модуль скорости уплыл (${back} против ${speed})`);
+      }
+      if (hp(a.state, keeper) !== 1000) failures.push(`${at}: щит протёк на урон`);
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it('снаряд, уже миновавший героя, щит пропускает — а встречный отражает', () => {
+    // Вторая половина того же вопроса: отражать надо ВСТРЕЧНОЕ. Снаряд, который
+    // на момент каста уже за спиной хозяина и уходит, щит трогать не должен —
+    // ни курса, ни владельца, ни события. Геометрия та же, что у теста «щит,
+    // поднятый над влетевшим снарядом», только со сдвигом по ординате В ЛУНКУ
+    // между боксом тела (0,45) и боксом щита (0,545): снаряд идёт мимо тела,
+    // урона не наносит и до `reached`-ветки не достаёт.
+    const shooter = [20, 24.5] as const;
+    const keeper = [28, 24.97] as const;
+    const band = SHIELD_RADIUS + FIREBALL_RADIUS;
+    const body = HERO_RADIUS + FIREBALL_RADIUS;
+    // Сдвиг по ординате — ровно в лунку: тела не касается, бокса щита касается.
+    const dy = Math.round((keeper[1] - shooter[1]) * FIXED_ONE);
+    expect(dy).toBeGreaterThan(body);
+    expect(dy).toBeLessThanOrEqual(band);
+
+    /** Прогон «купол хозяина щита, выстрел, щит на тике `castAt`». */
+    function run(castAt: number, ticks: number): { a: Ffa; shot: EntityId | null; bounces: number } {
+      const a = ffa([shooter, keeper]);
+      let shot: EntityId | null = null;
+      let bounces = 0;
+      for (let t = 1; t <= ticks; t++) {
+        const frames: Frame[] = [NEUTRAL, NEUTRAL];
+        if (t === 1) frames[1] = { buttons: DOME };
+        if (t === 2) frames[0] = { buttons: CAST };
+        if (t === castAt) frames[1] = { buttons: SHIELD };
+        bounces += a.step(frames).filter((type) => type === 'ShieldRicochet').length;
+        shot ??= fireballs(a.state)[0] ?? null;
+      }
+      return { a, shot, bounces };
+    }
+
+    const dx = (a: Ffa, shot: EntityId): number => x(a.state, shot) - x(a.state, a.heroes[1]!);
+
+    // Тики «ещё сближается» и «уже уходит» меряются отдельными прогонами той же
+    // геометрии — числа скорости и радиусов в тест не переписываются.
+    let toward = 0;
+    let past = 0;
+    for (let t = 4; t <= 200 && past === 0; t++) {
+      const probe = run(0, t);
+      if (probe.shot === null || fireballs(probe.a.state).length === 0) continue;
+      const gap = dx(probe.a, probe.shot);
+      if (Math.abs(gap) > band) continue;
+      if (gap < 0 && toward === 0) toward = t + 1;
+      if (gap > 0 && toward !== 0) past = t + 1;
+    }
+    expect(toward).toBeGreaterThan(0);
+    expect(past).toBeGreaterThan(toward);
+
+    // Встречный снаряд щит отражает и забирает себе. Нормаль тут диагональная
+    // (хозяин севернее линии огня), поэтому разворот виден по ординате: до
+    // рикошета снаряд шёл строго на восток, после — уходит на юг.
+    const met = run(toward, toward);
+    expect(met.bounces).toBe(1);
+    expect(owner(met.a.state, met.shot!)).toBe(1);
+    expect(vel(met.a.state, met.shot!, 'y')).toBeLessThan(0);
+
+    // А ушедший — пропускает: снаряд остаётся стрелка и летит своим курсом.
+    const gone = run(past, past);
+    const shot = gone.shot!;
+    expect(dx(gone.a, shot)).toBeGreaterThan(0);
+    expect(gone.bounces).toBe(0);
+    expect(owner(gone.a.state, shot)).toBe(0);
+    expect(vel(gone.a.state, shot, 'x')).toBeGreaterThan(0);
+    // Курс не тронут вовсе: восточный выстрел так и идёт без ординаты.
+    expect(vel(gone.a.state, shot, 'y')).toBe(0);
+    // И пузырь при этом действительно стоял — пропуск не от отсутствия щита.
+    expect(shielded(gone.a.state, gone.a.heroes[1]!)).toBe(true);
+
+    // Ещё десяток тиков под тем же пузырём: снаряд уходит, владелец прежний.
+    const before = x(gone.a.state, shot);
+    for (let i = 0; i < 10 && fireballs(gone.a.state).length > 0; i++) gone.a.step();
+    if (fireballs(gone.a.state).length > 0) {
+      expect(x(gone.a.state, shot)).toBeGreaterThan(before);
+      expect(owner(gone.a.state, shot)).toBe(0);
+    }
+    expect(hp(gone.a.state, gone.a.heroes[1]!)).toBe(1000);
   });
 });
