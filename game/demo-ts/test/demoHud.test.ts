@@ -60,6 +60,18 @@ describe('композиция HUD демо резолвится против р
     expect(JSON.stringify(composition)).not.toContain('Cooldowns');
   });
 
+  it('портрет воскресает по событию, которое сцена ДЕЙСТВИТЕЛЬНО эмитит', () => {
+    // Зеркало имени: возрождение демо не пересоздаёт сущность (тот же
+    // `EntityId` снимает `Dead`), поэтому «портрет ожил» держится ровно на
+    // совпадении этой строки с типом события системы `Respawn`. Опечатка здесь
+    // выглядела бы как мёртвый портрет на живом герое — и молчала бы.
+    const composition = demoHudComposition({ controls: true, tickMs: 16 });
+    const portrait = composition.entries.find((entry) => entry.widget === 'portrait')!;
+    const reviveEvent = portrait.params!.reviveEvent as string;
+    const respawn = SCENE.systems!.find((system) => system.name === 'Respawn')!;
+    expect(JSON.stringify(respawn.do)).toContain(`"type":"${reviveEvent}"`);
+  });
+
   it('виды виджетов создаются по своим params: ошибка параметра — до монтирования', () => {
     const registry = createDemoHudRegistry(stubOptions);
     const composition = demoHudComposition({ controls: true, tickMs: 16 });
