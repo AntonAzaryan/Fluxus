@@ -60,12 +60,37 @@ export interface DecorationRecord {
 }
 
 /**
- * Документ целиком (PRES-2). Единственное поле — упорядоченный список записей;
- * отсутствующий и пустой список неразличимы, и то и другое означает слой без
- * декораций.
+ * Секция `fog` — конфигурация рендера тумана войны (PRES-2, `fog-of-war`
+ * FOW-10). Все поля необязательны: отсутствие поля или секции целиком означает
+ * документированные значения по умолчанию, и они живут у подсистемы тумана
+ * (`render-ts`), а не здесь — валидация проверяет форму, а не политику картинки.
+ * На симуляцию секция не влияет ни байтом: presentation-данные под инвариантом
+ * PRES-4 наравне с записями decoration.
+ */
+export interface PresentationFog {
+  /** Сила затемнения зоны вне видимости, доля [0, 1] (FOW-7). */
+  readonly strength?: number;
+  /** Цвет/тон тумана — `#rrggbb`. */
+  readonly color?: string;
+  /** Ширина градиента края видимой области в мировых единицах (FOW-7). */
+  readonly edgeWidth?: number;
+  /** Коэффициент консервативности reveal-круга, доля (0, 1] (FOW-9). */
+  readonly conservatism?: number;
+  /** Разрешение маски видимости — текселей на мировую единицу (FOW-10). */
+  readonly resolution?: number;
+  /** Длительность fade «ушла в туман ≠ умерла», секунды (FOW-8). */
+  readonly fadeSeconds?: number;
+}
+
+/**
+ * Документ целиком (PRES-2): упорядоченный список записей `decorations` —
+ * отсутствующий и пустой неразличимы, и то и другое означает слой без
+ * декораций — плюс необязательная секция `fog` (FOW-10); её отсутствие —
+ * значения по умолчанию.
  */
 export interface PresentationScene {
   readonly decorations: readonly DecorationRecord[];
+  readonly fog?: PresentationFog;
 }
 
 /** Шаг квантования позиции и масштаба — 10⁻³ мировой единицы (PRES-3). */
@@ -147,8 +172,82 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /** Состав закрыт (PRES-2): ключ, которого формат не знает, — ошибка, а не игнор. */
-const DOCUMENT_KEYS: readonly string[] = ['decorations'];
+const DOCUMENT_KEYS: readonly string[] = ['decorations', 'fog'];
 const RECORD_KEYS: readonly string[] = ['visual', 'x', 'y', 'yaw', 'scale', 'skin', 'walkable'];
+const FOG_KEYS: readonly string[] = [
+  'strength',
+  'color',
+  'edgeWidth',
+  'conservatism',
+  'resolution',
+  'fadeSeconds',
+];
+
+/** Цвет тумана — `#rrggbb`: одна форма записи, чтобы дифф правки не гадал о синонимах. */
+const FOG_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * Валидация секции `fog` (PRES-2, `fog-of-war` FOW-10): состав закрыт,
+ * неизвестный ключ и значение не той формы отвергаются адресно, а не
+ * игнорируются молча — по общему правилу документа. Диапазоны здесь — форма
+ * данных, а не политика картинки: доля вне [0, 1] и неположительное разрешение
+ * не имеют прочтения ни при каких дефолтах подсистемы.
+ */
+function validateFog(section: unknown, errors: string[]): void {
+  if (!isRecord(section)) {
+    errors.push(`fog: ожидался объект секции конфигурации тумана (FOW-10), получено ${typeName(section)}`);
+    return;
+  }
+  for (const key of Object.keys(section)) {
+    if (FOG_KEYS.includes(key)) continue;
+    errors.push(`fog.${key}: неизвестное поле (допустимы: ${FOG_KEYS.join(', ')})`);
+  }
+  if ('strength' in section) {
+    const value = section.strength;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+      errors.push(`fog.strength: ожидалась доля затемнения из [0, 1], получено ${typeName(value)}`);
+    }
+  }
+  if ('conservatism' in section) {
+    const value = section.conservatism;
+    // Ноль стянул бы reveal в точку, больше единицы — визуал щедрее геймплея,
+    // то есть противоположность консервативности (FOW-9).
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 1) {
+      errors.push(`fog.conservatism: ожидалась доля из (0, 1] (FOW-9), получено ${typeName(value)}`);
+    }
+  }
+  if ('color' in section && (typeof section.color !== 'string' || !FOG_COLOR_RE.test(section.color))) {
+    errors.push(`fog.color: ожидался цвет формы "#rrggbb", получено ${typeName(section.color)}`);
+  }
+  if (
+    'edgeWidth' in section &&
+    (typeof section.edgeWidth !== 'number' || !Number.isFinite(section.edgeWidth) || section.edgeWidth < 0)
+  ) {
+    errors.push(
+      `fog.edgeWidth: ожидалась неотрицательная ширина градиента в мировых единицах, получено ${typeName(section.edgeWidth)}`,
+    );
+  }
+  if (
+    'resolution' in section &&
+    (typeof section.resolution !== 'number' ||
+      !Number.isFinite(section.resolution) ||
+      section.resolution <= 0)
+  ) {
+    errors.push(
+      `fog.resolution: ожидалось положительное число текселей на мировую единицу, получено ${typeName(section.resolution)}`,
+    );
+  }
+  if (
+    'fadeSeconds' in section &&
+    (typeof section.fadeSeconds !== 'number' ||
+      !Number.isFinite(section.fadeSeconds) ||
+      section.fadeSeconds < 0)
+  ) {
+    errors.push(
+      `fog.fadeSeconds: ожидалась неотрицательная длительность в секундах (FOW-8), получено ${typeName(section.fadeSeconds)}`,
+    );
+  }
+}
 
 function validateRecord(entry: unknown, path: string, errors: string[]): void {
   if (!isRecord(entry)) {
@@ -226,8 +325,17 @@ export function validatePresentationScene(
   } else if (Array.isArray(list)) {
     list.forEach((entry, index) => { validateRecord(entry, `decorations[${index}]`, errors); });
   }
+  // Отсутствующая секция `fog` — значения по умолчанию у подсистемы (FOW-10),
+  // и наружу она в этом случае не выходит вовсе: `undefined`, а не пустой объект.
+  if (doc.fog !== undefined) validateFog(doc.fog, errors);
   if (errors.length > 0) return { ok: false, errors };
   // Отсутствующий и пустой список неразличимы (PRES-2): наружу и то и другое
   // выходит пустым списком, и потребителю не приходится различать их самому.
-  return { ok: true, scene: { decorations: Array.isArray(list) ? (list as DecorationRecord[]) : [] } };
+  return {
+    ok: true,
+    scene: {
+      decorations: Array.isArray(list) ? (list as DecorationRecord[]) : [],
+      ...(doc.fog === undefined ? {} : { fog: doc.fog as PresentationFog }),
+    },
+  };
 }

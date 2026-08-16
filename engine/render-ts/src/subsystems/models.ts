@@ -223,6 +223,18 @@ export interface ModelsOptions {
   readonly cullMargin?: number;
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
+  /**
+   * Длительность fade-out «ушла в туман» в секундах (FOW-8, design D7) — из
+   * конфигурации тумана (FOW-10), а не константа кода. Ноль или отсутствие —
+   * fade выключен, исчезновение убирает инстанс сразу (прежнее поведение;
+   * сборка без тумана этой опции не передаёт).
+   *
+   * С ней исчезновение сущности из доставленного состояния БЕЗ события смерти
+   * читается как «ушла в туман»: инстанс доживает до конца анимации угасания,
+   * появление получает короткий fade-in, а `EntityDied` идёт существующим
+   * путём смерти — рендер отличает туман от гибели (FOW-8).
+   */
+  readonly fadeSeconds?: number;
 }
 
 const DEFAULT_TURN_RATE = 12;
@@ -290,6 +302,14 @@ const EMITTER_BOUNDS: ModelBounds = {
 };
 /** Конвенция арены ядра (ARENA-5); имя переопределяется опцией. */
 const DEFAULT_FALL_EVENT = 'FellThroughFloor';
+/** Конвенция смерти ядра — та же, что у `AnimationController` (REND-4, FOW-8). */
+const DEFAULT_DEATH_EVENT = 'EntityDied';
+/**
+ * Fade-in — доля длительности fade-out (FOW-8, design D7): появление «короткое»
+ * по спеке, и отдельного поля конфигурации под него не заводится — половина
+ * той же длительности, которой сущность угасает.
+ */
+const FADE_IN_RATIO = 0.5;
 
 // Переиспользуемые между кадрами объекты — аллокаций на инстанс на кадр нет.
 const SCRATCH_NORMAL: SurfaceNormal = { x: 0, y: 0, z: 1 };
@@ -540,6 +560,18 @@ interface InstanceRecord {
    * бывает.
    */
   visible: boolean;
+  /**
+   * Доля проявленности инстанса [0, 1] (FOW-8): множитель видимого масштаба
+   * кадра. Единица — инстанс как обычно; меньше — он в fade-in или fade-out.
+   * Семантического масштаба (`scale`, REND-11) не касается: наружу — `pose` и
+   * walkable-вклад — уходит не-затухший масштаб.
+   */
+  fade: number;
+  /**
+   * Сущности больше нет в доставленном состоянии, а события смерти не было:
+   * «ушла в туман», инстанс доживает fade-out и убирается по его концу (FOW-8).
+   */
+  fadingOut: boolean;
   /** Публичный вид инстанса; строится лениво и живёт с инстансом (REND-17). */
   publicView: ModelInstanceView | null;
 }
@@ -609,7 +641,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (view.snapAll) {
       for (const record of this.instances.values()) record.controller?.onSnap();
     }
-    this.syncPool(ctx, this.instances, view.entities, false);
+    this.syncPool(ctx, this.instances, view.entities, false, view);
 
     // События тика → one-shot клипы (REND-4); дедуп на потребителе (OBS-5):
     // при rewind/replay и на замороженных тиках события не переигрываются.
@@ -647,19 +679,31 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * инстанс, исчезнувшие убирают, сохранившиеся обновляются. Одна реализация на
    * оба пула — второй разошёлся бы с первым, а REND-18 требует ровно того же
    * пути отрисовки, что REND-11.
+   *
+   * `view` приходит только от потока тиков и только он включает ветки fade
+   * (FOW-8, design D7): у decoration-набора «ушла в туман» не бывает — его
+   * записи не фильтруются видимостью вовсе (REND-18).
    */
   private syncPool(
     ctx: RenderContext,
     pool: Map<EntityId, InstanceRecord>,
     entities: ReadonlyMap<EntityId, EntityView>,
     decoration: boolean,
+    view: TickView | null = null,
   ): void {
+    // Fade действует только на непрерывном ходе мира: разрыв (rewind, смена
+    // продюсера, гашение набора пустым состоянием) убирает инстансы сразу —
+    // плавное угасание нарисовало бы «уход в туман», которого не было (REND-2).
+    const fadeSeconds = view !== null && !view.snapAll ? (this.options.fadeSeconds ?? 0) : 0;
     for (const entityView of entities.values()) {
       let record = pool.get(entityView.id);
       if (record === undefined) {
-        record = this.create(ctx, entityView, decoration);
+        record = this.create(ctx, entityView, decoration, fadeSeconds > 0);
         pool.set(entityView.id, record);
       }
+      // Сущность снова в доставленном состоянии: начатый fade-out отменяется,
+      // проявление доигрывается от текущей доли — объект в кадре не мигает.
+      record.fadingOut = false;
       record.view = entityView;
       record.snapPending ||= entityView.snap;
       // Разрыв непрерывности возвращает инстанс на поверхность (REND-12):
@@ -688,11 +732,18 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
 
     // Исчезнувшие: инстанс убирается, разделяемый ассет остаётся в кэше (REND-3).
+    // С включённым fade исчезновение БЕЗ события смерти — «ушла в туман»
+    // (FOW-8, NET-14): инстанс остаётся дожить fade-out; `EntityDied` того же
+    // тика идёт существующим путём смерти — немедленное снятие, как и прежде.
+    const died = fadeSeconds > 0 && view !== null ? diedIn(view, this.options.deathEvent) : null;
     for (const [entity, record] of pool) {
-      if (!entities.has(entity)) {
-        this.remove(record);
-        pool.delete(entity);
+      if (entities.has(entity)) continue;
+      if (fadeSeconds > 0 && died?.has(entity) !== true) {
+        record.fadingOut = true;
+        continue;
       }
+      this.remove(record);
+      pool.delete(entity);
     }
   }
 
@@ -715,6 +766,16 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // декорация в кадре игрока обязаны быть одним изображением (REND-18).
     this.poseAll(this.instances, dt, alpha, heightStep, turnRate, tiltRate, surface);
     this.poseAll(this.decorations, dt, alpha, heightStep, turnRate, tiltRate, surface);
+
+    // Доигравшие fade-out (FOW-8): анимация угасания кончилась — инстанс
+    // убирается тем же `remove`, что и обычное исчезновение. После позы кадра:
+    // последний кадр угасания ещё нарисован, а не пропущен.
+    for (const [entity, record] of this.instances) {
+      if (record.fadingOut && record.fade <= 0) {
+        this.remove(record);
+        this.instances.delete(entity);
+      }
+    }
 
     // Отсечение — после позы: видимость считается по тому преобразованию,
     // которым инстанс нарисован в ЭТОМ кадре (REND-21). Уровень детализации
@@ -821,7 +882,21 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // доставленное состояние, и на обратном ходе сглаживание обязано идти к
     // ней, а не от неё (отрицательный шаг экспоненты уводил бы инстанс прочь).
     const settle = Math.abs(dt);
+    const fadeSeconds = this.options.fadeSeconds ?? 0;
     for (const record of pool.values()) {
+      // Fade идёт по кадрам, как снижение при провале (FOW-8, design D7):
+      // угасание — полной длительностью конфига, проявление — короткое
+      // (`FADE_IN_RATIO`). Модуль часов: направление задаёт состояние, а не
+      // знак хода мира — на обратном ходе угасание не «проявляет» обратно.
+      if (fadeSeconds > 0 && !record.decoration) {
+        if (record.fadingOut) {
+          record.fade = Math.max(0, record.fade - settle / fadeSeconds);
+        } else if (record.fade < 1) {
+          record.fade = Math.min(1, record.fade + settle / (fadeSeconds * FADE_IN_RATIO));
+        }
+      } else {
+        record.fade = 1;
+      }
       const view = record.view;
       // Интерполяция между двумя последними тиками; snap-тик рисуется без неё (REND-2).
       const t = view.snap ? 1 : alpha;
@@ -924,11 +999,17 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * батчевого получают ровно те же числа, а не два похожих расчёта.
    */
   private applyPose(record: InstanceRecord, settle: number): void {
+    // Fade (FOW-8) — множитель ВИДИМОГО масштаба кадра: инстанс растворяется
+    // стягиванием, одинаково у обоих ярусов (REND-20) — пер-инстансной
+    // прозрачности у батчевого материала нет, а два способа угасать дали бы
+    // два разных изображения одного состояния. Семантический `scale` (REND-11)
+    // не меняется: `pose` и walkable-вклад читают его, а не картинку кадра.
+    const drawScale = record.scale * record.fade;
     const holder = record.holder;
     if (holder !== null) {
       holder.position.copy(record.pos);
       holder.quaternion.copy(record.quat);
-      holder.scale.setScalar(record.scale);
+      holder.scale.setScalar(drawScale);
     }
     // Bone-контроль строго после mixer.update и до отрисовки (REND-5).
     if (record.model !== null && record.boneControl !== null) {
@@ -944,8 +1025,8 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (entry === null) return;
     // Масштаб записи и нормализация по высоте у батча живут в ИНСТАНС-МАТРИЦЕ:
     // у детального яруса их несёт обёртка `body` внутри поддерева, здесь
-    // поддерева нет — и множитель тот же самый.
-    SCRATCH_SCALE.setScalar(record.scale * entry.normalized);
+    // поддерева нет — и множитель тот же самый (включая fade, FOW-8).
+    SCRATCH_SCALE.setScalar(drawScale * entry.normalized);
     SCRATCH_MATRIX.compose(record.pos, record.quat, SCRATCH_SCALE);
     entry.batch.setMatrix(record.slot, SCRATCH_MATRIX);
     const vat = record.vat;
@@ -1287,7 +1368,12 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     controller.setClipOverride(record.view.clip);
   }
 
-  private create(ctx: RenderContext, view: EntityView, decoration: boolean): InstanceRecord {
+  private create(
+    ctx: RenderContext,
+    view: EntityView,
+    decoration: boolean,
+    fadeIn = false,
+  ): InstanceRecord {
     // Разрешение ключа — одно на оба раздела манифеста (ASSET-9): decoration
     // вправе сослаться и на запись сущности, если камень у неё и prop, и
     // декорация, — второй копии записи для этого не заводится.
@@ -1336,6 +1422,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       fallOffset: 0,
       posed: false,
       visible: true,
+      // Появление в наборе с включённым fade — короткий fade-in (FOW-8): вышла
+      // ли сущность из тумана или только что заспавнилась, доставленное не
+      // различает (NET-14), и мягкое проявление честно для обоих прочтений.
+      fade: fadeIn && !decoration ? 0 : 1,
+      fadingOut: false,
       publicView: null,
     };
     this.applyEntryParams(record);
@@ -1814,6 +1905,24 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 }
 
 // ------------------------------------------------------------ помощники
+
+/**
+ * Сущности, о чьей смерти сказали события ЭТОЙ доставки (FOW-8): для них
+ * исчезновение из состояния — гибель, а не уход в туман, и инстанс снимается
+ * существующим путём. null — событий смерти в доставке нет.
+ */
+function diedIn(view: TickView, deathEvent: string | undefined): ReadonlySet<EntityId> | null {
+  const type = deathEvent ?? DEFAULT_DEATH_EVENT;
+  let died: Set<EntityId> | null = null;
+  for (const event of view.events) {
+    if (event.type !== type) continue;
+    const entity = event.data.entity ?? event.data.source;
+    if (entity === undefined) continue;
+    died ??= new Set();
+    died.add(entity);
+  }
+  return died;
+}
 
 /** Пустая запись габаритов — заполняется `scaleBounds`. */
 function emptyBounds(): ModelBounds {

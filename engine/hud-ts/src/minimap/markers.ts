@@ -39,6 +39,13 @@ export interface MinimapContext2D {
   lineTo(x: number, y: number): void;
   closePath(): void;
   fill(): void;
+  /**
+   * Прозрачность последующих операций и блит изображения — их использует слой
+   * тумана (`fog-of-war` FOW-7 → HUD-6). Необязательны: сборка без тумана
+   * живёт узким контекстом, а виджет без них слоя не рисует.
+   */
+  globalAlpha?: number;
+  drawImage?(image: unknown, dx: number, dy: number, dw: number, dh: number): void;
 }
 
 // ------------------------------------------------------- сущность для маркера

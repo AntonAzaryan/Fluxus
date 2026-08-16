@@ -16,9 +16,12 @@ import {
   LocomotionSystem,
   PhysicsSystem,
   PhysicsWorld,
+  VISION_MODIFIER_COMPONENT,
+  VisibilitySystem,
   initialState,
   loadScene,
   mathApi,
+  requireModifierList,
   staticsFromTerrain,
   worldInitSpawn,
   type EntityId,
@@ -246,6 +249,15 @@ export const STATS = {
    * поток отличает «не заряжает» от «заряд нулевой» (HUD-8).
    */
   charge: 'charge',
+  /**
+   * Команда сущности (`Team.id`) и радиус обзора (`Vision.radius`) — входы
+   * маски видимости тумана войны (FOW-7, design D4): подсистема тумана берёт
+   * наблюдателей СВОЕЙ команды из доставленного состояния по этим именам, а
+   * команду игрока — из стата его героя. Новых каналов под это нет: обычные
+   * доставляемые статы (HUD-8), радиус приезжает уже во float мировых единиц.
+   */
+  team: 'team',
+  visionRadius: 'vision',
   /** Оставшиеся тики кулдауна способности и его полная длительность. */
   cooldown: (ability: string): string => `${ability}.cd`,
   cooldownMax: (ability: string): string => `${ability}.cdMax`,
@@ -329,6 +341,15 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   scene.systems.register(
     new PhysicsSystem(new PhysicsWorld(staticsFromTerrain(grid), grid.tileSize)),
   );
+  // Пересчёт видимости (FOW-4): сцена с `fog` объявляет компоненты, а систему
+  // регистрирует сборка — ей нужен raycast, то есть зависимость сборки (DI-3).
+  // Тот же состав, что у сетевого матча (`buildSimulation` через `visibility`
+  // конфига матча): одиночная симуляция обязана тикать те же системы (SHELL-8).
+  if (def.fog === true) {
+    scene.systems.register(
+      new VisibilitySystem(requireModifierList(scene.modifiers, VISION_MODIFIER_COMPONENT)),
+    );
+  }
 
   const playerId = worldInitSpawn(scene.world, 'Hero');
   const state = initialState(scene.world, WORLD_SEED);

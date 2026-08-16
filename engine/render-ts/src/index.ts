@@ -128,6 +128,21 @@ export type { CellRect, TerrainGeometryData, TerrainOptions } from './subsystems
 export { ModelsSubsystem } from './subsystems/models.js';
 export type { InstancePose, ModelInstanceView, ModelsOptions } from './subsystems/models.js';
 
+// Подсистема тумана войны (FOW-7, FOW-9, FOW-10): маска видимости команды
+// игрока, конфигурация картинки данными и полноэкранный пост-проход затемнения.
+export { DEFAULT_FOG_CONFIG, FogSubsystem, resolveFogConfig } from './subsystems/fog.js';
+export type {
+  FogLayerCanvas,
+  FogLayerContext,
+  FogMinimapLayer,
+  FogRenderConfig,
+  FogRendererLike,
+  FogStatNames,
+  FogSubsystemOptions,
+} from './subsystems/fog.js';
+export { VisibilityMask, edgeGradient, fogRectOf, fogSegmentsOf, segmentBlocks } from './fog/mask.js';
+export type { FogObserver, FogSegment, FogWorldRect } from './fog/mask.js';
+
 // Подсистема транзиентных эффектов (REND-23): процедурные примитивы по записям
 // манифеста — оболочки от доставленного состояния и вспышки от событий.
 export { EffectsSubsystem } from './subsystems/effects.js';
