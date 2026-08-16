@@ -23,7 +23,7 @@ export type { DocumentInstance, DocumentSourceOptions } from './documentSource.j
 
 // Набор decoration-инстансов (REND-18) — третий набор рядом с продюсерами:
 // сосуществует с любым из них и сменой режима не гасится.
-export { DecorationSet } from './decorations.js';
+export { DecorationSet, decorationInstanceOf } from './decorations.js';
 export type { DecorationInstance } from './decorations.js';
 
 // Половины хоста по границе потоков (client-shell SHELL-2): Extractor —

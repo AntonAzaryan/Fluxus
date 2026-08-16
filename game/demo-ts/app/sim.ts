@@ -18,6 +18,7 @@ import {
   PhysicsWorld,
   VISION_MODIFIER_COMPONENT,
   VisibilitySystem,
+  createPhysicsApi,
   initialState,
   loadScene,
   mathApi,
@@ -338,9 +339,8 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   );
   // Физика ядра: статика обрывов из террейна — игрок не сойдёт с плато мимо
   // рампы (PHYS-8, TERR-5). Снаряд без коллайдера — летит поверх обрывов.
-  scene.systems.register(
-    new PhysicsSystem(new PhysicsWorld(staticsFromTerrain(grid), grid.tileSize)),
-  );
+  const physicsWorld = new PhysicsWorld(staticsFromTerrain(grid), grid.tileSize);
+  scene.systems.register(new PhysicsSystem(physicsWorld));
   // Пересчёт видимости (FOW-4): сцена с `fog` объявляет компоненты, а систему
   // регистрирует сборка — ей нужен raycast, то есть зависимость сборки (DI-3).
   // Тот же состав, что у сетевого матча (`buildSimulation` через `visibility`
@@ -362,6 +362,11 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
     // Арена сцены — вход `ArenaSystem` (ARENA-1): без неё система молчит, и
     // провал в клетку без пола не порождает `FellThroughFloor` (ARENA-5).
     ...(scene.arena !== undefined ? { arena: scene.arena } : {}),
+    // Physics API обязателен рядом с `VisibilitySystem`: LoS-луч (FOW-5) идёт
+    // через `ctx.physics.raycast`, и без него перекрытие обзора обрывами молча
+    // выключено — локальный режим разошёлся бы с сетевым (SHELL-8), где
+    // `buildSimulation` API передаёт.
+    physics: createPhysicsApi(scene.world, physicsWorld),
   };
 
   return { sim, state, playerId, terrain, grid };

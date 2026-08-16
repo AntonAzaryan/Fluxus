@@ -39,6 +39,7 @@ import {
   CameraEffectsDirector,
   CameraRig,
   DecorationSet,
+  decorationInstanceOf,
   EffectsSubsystem,
   FogSubsystem,
   ModelsSubsystem,
@@ -735,21 +736,12 @@ function spawnShellWorker(mode: DemoMode): Worker {
 
 /**
  * Записи `decorations` парного документа → набор decoration-инстансов
- * (PRES-2 → REND-18). Курс документа — доля оборота, рендеру нужны радианы
- * (REND-1); ключ — индекс записи: набор в матче подаётся один раз, правок
- * соседей, которые ключ обязан переживать (ED-29), здесь не бывает.
+ * (PRES-2 → REND-18): конверсия — общий `decorationInstanceOf` рендера, а не
+ * своя копия правила. Ключ — индекс записи: набор в матче подаётся один раз,
+ * правок соседей, которые ключ обязан переживать (ED-29), здесь не бывает.
  */
 function demoDecorations(presentation: PresentationScene): DecorationInstance[] {
-  return presentation.decorations.map((record, index) => ({
-    key: `#${index}`,
-    kind: record.visual,
-    x: record.x,
-    y: record.y,
-    ...(record.yaw !== undefined ? { yaw: record.yaw * Math.PI * 2 } : {}),
-    ...(record.skin !== undefined ? { skin: record.skin } : {}),
-    ...(record.scale !== undefined ? { scale: record.scale } : {}),
-    ...(record.walkable !== undefined ? { walkable: record.walkable } : {}),
-  }));
+  return presentation.decorations.map((record, index) => decorationInstanceOf(record, `#${index}`));
 }
 
 /** Сообщение человеку поверх вьюпорта: матч занят, сервер не отвечает и т. п. */

@@ -186,7 +186,6 @@ export class VisibilityMask {
       if (distanceSqToSegment(observer.x, observer.y, segment) <= radiusSq) near.push(segment);
     }
 
-    const radiusSqStrict = radius * radius;
     for (let ty = y0; ty <= y1; ty++) {
       const wy = this.rect.y + (ty + 0.5) / scale;
       const dy = wy - observer.y;
@@ -195,7 +194,7 @@ export class VisibilityMask {
         const wx = this.rect.x + (tx + 0.5) / scale;
         const dx = wx - observer.x;
         const distSq = dx * dx + dy * dy;
-        if (distSq >= radiusSqStrict) continue;
+        if (distSq >= radiusSq) continue;
         const current = this.data[row + tx]!;
         if (current === 255) continue; // уже полностью открыт другим наблюдателем
         const value = Math.round(edgeGradient(Math.sqrt(distSq), radius, edgeWidth) * 255);
