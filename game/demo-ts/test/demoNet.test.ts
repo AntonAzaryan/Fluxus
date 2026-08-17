@@ -233,10 +233,13 @@ describe('демо по умолчанию: матч против бота на 
     expect(rig.probe.views.length).toBeGreaterThan(0);
     const view = rig.probe.views.at(-1)!;
     expect(view.tick).toBeGreaterThan(0);
-    // В кадре оба героя матча: свой и бота (NET-15 — своя сущность всегда).
-    // Прочие визуальные типы сцены (снаряд) кадру не мешают.
+    // В кадре ровно свой герой (NET-15 — своя сущность всегда): бот стоит на
+    // спавне за пределами радиуса обзора, и туман войны сцены вырезал его из
+    // персонального снапшота ещё на сервере (NET-12, FOW-7) — доставленное
+    // состояние отфильтровано, скрывать рендеру нечего и некого.
     const heroes = [...view.entities.values()].filter((entity) => entity.kind === 'Hero');
-    expect(heroes).toHaveLength(2);
+    expect(heroes).toHaveLength(1);
+    expect(heroes[0]!.id).toBe(rig.joined.hero);
   });
 
   it('словарь статов едет handshake\'ом, статы и фаза полёта — кадром (HUD-8, REND-12)', async () => {

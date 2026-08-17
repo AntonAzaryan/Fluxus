@@ -35,6 +35,7 @@
  * жизненный цикл инстанса нормирован один раз (REND-3), и реализация у него
  * тоже одна. Своё у набора — поля, которые он пишет, и вход сцены.
  */
+import type { DecorationRecord } from '@game-mvp/assets';
 import type { EntityId } from '@game-mvp/core';
 import type { EntityView } from './types.js';
 import { KeyedInstanceSet } from './keyedInstanceSet.js';
@@ -70,6 +71,28 @@ export interface DecorationInstance {
    * тот же, объект в кадре не мигает (REND-18).
    */
   readonly walkable?: boolean;
+}
+
+/** Полный оборот в радианах: курс документа — доля оборота, `yaw` — радианы (REND-1). */
+const TURN_RADIANS = Math.PI * 2;
+
+/**
+ * Запись `decorations` парного документа → decoration-инстанс (PRES-2 →
+ * REND-18). Правило конверсии — перевод курса в радианы и дефолты
+ * необязательных полей — живёт ровно здесь: его зовут и вьюпорт редактора, и
+ * демо, а второе описание того же перевода разъехалось бы молча (ED-30).
+ */
+export function decorationInstanceOf(record: DecorationRecord, key: string): DecorationInstance {
+  return {
+    key,
+    kind: record.visual,
+    x: record.x,
+    y: record.y,
+    yaw: (record.yaw ?? 0) * TURN_RADIANS,
+    ...(record.scale === undefined ? {} : { scale: record.scale }),
+    ...(record.skin === undefined ? {} : { skin: record.skin }),
+    ...(record.walkable === undefined ? {} : { walkable: record.walkable }),
+  };
 }
 
 export class DecorationSet {

@@ -32,6 +32,7 @@ import {
   type HudDeliveredState,
   type HudEntityView,
   type HudIconSource,
+  type MinimapFogSource,
   type MinimapTerrainSource,
 } from '@game-mvp/hud';
 import { COOLDOWN_ABILITIES, RESPAWN_EVENT, STATS } from './sim.js';
@@ -240,6 +241,12 @@ export interface DemoHudOptions {
   readonly camera: HudCameraContract;
   /** Обратный канал команд — сам `RemoteHost` (SHELL-6). */
   readonly control: HudControlChannel;
+  /**
+   * Источник слоя тумана миникарты (HUD-6) — подсистема тумана рендера
+   * (структурно): та же маска и та же сила затемнения, что у fog-mask основного
+   * вида (FOW-7, FOW-10). Сцена без тумана источника не передаёт.
+   */
+  readonly fog?: MinimapFogSource;
 }
 
 export interface DemoHud {
@@ -269,12 +276,17 @@ const INTERCEPTED_POINTER_EVENTS = ['mousedown', 'pointerdown', 'click', 'wheel'
  * без браузера — тем же резолвом, который выполнит `apply`.
  */
 export function createDemoHudRegistry(
-  options: Pick<DemoHudOptions, 'assets' | 'visuals' | 'terrain'>,
+  options: Pick<DemoHudOptions, 'assets' | 'visuals' | 'terrain' | 'fog'>,
 ): HudRegistry {
   const registry = new HudRegistry();
   registry.registerWidget(matchStatusKind);
   registry.registerWidget(cooldownsKind(iconSource));
-  registry.registerWidget(minimapWidgetKind({ terrain: options.terrain }));
+  registry.registerWidget(
+    minimapWidgetKind({
+      terrain: options.terrain,
+      ...(options.fog !== undefined ? { fog: options.fog } : {}),
+    }),
+  );
   registry.registerWidget(createPortraitKind({ assets: options.assets, visuals: options.visuals }));
   registry.registerWidget(hpBarKind);
   registry.registerWidget(deathsKind);

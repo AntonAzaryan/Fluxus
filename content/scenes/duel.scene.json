@@ -177,7 +177,10 @@
           "throwLifetime": 50,
           "throwOffset": 29491,
           "throwSpeed": 40960
-        }
+        },
+        "Vision": { "radius": 1572864 },
+        "Team": { "id": 0 },
+        "Visibility": { "visibleTo": 0 }
       },
       "tags": ["Hero"]
     },
@@ -2548,5 +2551,6 @@
     ]
   },
   "timeScale": true,
+  "fog": true,
   "capacity": 128
 }

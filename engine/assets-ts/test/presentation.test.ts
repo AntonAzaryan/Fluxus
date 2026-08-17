@@ -178,6 +178,68 @@ describe('PRES-2: состав документа и записи закрыт',
   });
 });
 
+describe('PRES-2, FOW-10: секция fog — закрытая конфигурация рендера тумана', () => {
+  it('валидная секция принимается и выходит наружу как есть', () => {
+    const fog = {
+      strength: 0.65,
+      color: '#101623',
+      edgeWidth: 2,
+      conservatism: 0.92,
+      resolution: 4,
+      fadeSeconds: 0.45,
+    };
+    const result = validatePresentationScene({ decorations: [], fog });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.fog).toEqual(fog);
+  });
+
+  it('отсутствие секции — значения по умолчанию у подсистемы: наружу секция не выходит', () => {
+    const result = validatePresentationScene({ decorations: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.fog).toBeUndefined();
+  });
+
+  it('каждое поле необязательно: частичная секция валидна', () => {
+    const result = validatePresentationScene({ fog: { strength: 0.5 } });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.fog).toEqual({ strength: 0.5 });
+  });
+
+  it('неизвестный ключ секции отвергается адресно, а не игнорируется молча (FOW-10)', () => {
+    expectErrors({ fog: { strengh: 0.5 } }, /fog\.strengh: неизвестное поле/);
+  });
+
+  it('значение не той формы — адресный отказ по каждому полю', () => {
+    const errors = expectErrors(
+      {
+        fog: {
+          strength: 2,
+          color: 'blue',
+          edgeWidth: -1,
+          conservatism: 0,
+          resolution: 0,
+          fadeSeconds: Number.NaN,
+        },
+      },
+      /fog\.strength: ожидалась доля затемнения из \[0, 1\]/,
+      /fog\.color: ожидался цвет формы "#rrggbb"/,
+      /fog\.edgeWidth: ожидалась неотрицательная ширина градиента/,
+      /fog\.conservatism: ожидалась доля из \(0, 1\]/,
+      /fog\.resolution: ожидалось положительное число текселей/,
+      /fog\.fadeSeconds: ожидалась неотрицательная длительность/,
+    );
+    expect(errors).toHaveLength(6);
+  });
+
+  it('секция не-объектом отвергается адресно', () => {
+    expectErrors({ fog: true }, /fog: ожидался объект секции конфигурации тумана/);
+    expectErrors({ fog: [] }, /fog: ожидался объект секции конфигурации тумана.*массив/);
+  });
+});
+
 describe('PRES-3: квантование записываемого', () => {
   it('позиция и масштаб — к шагу 10⁻³, курс — к 10⁻⁴ оборота', () => {
     expect(DECORATION_POSITION_STEP).toBe(1e-3);

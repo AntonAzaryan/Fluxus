@@ -19,6 +19,8 @@ import {
   minimapEntitiesSelector,
   minimapFloorSelector,
   minimapWidgetKind,
+  type MinimapFogLayer,
+  type MinimapFogSource,
   type MinimapTerrainGrid,
 } from '../src/minimap/widget.js';
 import { asElement, fakeDom, walkElements, type FakeElement } from './support/fakeDom.js';
@@ -30,19 +32,26 @@ interface RecordedCall {
   op: string;
   args: readonly number[];
   fillStyle: unknown;
+  /** globalAlpha на момент вызова — им слой тумана несёт силу затемнения (HUD-6). */
+  alpha: number;
 }
 
 /** Записывающая заглушка 2D-контекста — тест утверждает по вызовам отрисовки. */
 class RecordingContext implements MinimapContext2D {
   fillStyle: unknown = '';
+  globalAlpha = 1;
   readonly calls: RecordedCall[] = [];
+
+  drawImage(_image: unknown, dx: number, dy: number, dw: number, dh: number): void {
+    this.push('drawImage', [dx, dy, dw, dh]);
+  }
 
   ops(op: string): RecordedCall[] {
     return this.calls.filter((call) => call.op === op);
   }
 
   private push(op: string, args: readonly number[]): void {
-    this.calls.push({ op, args, fillStyle: this.fillStyle });
+    this.calls.push({ op, args, fillStyle: this.fillStyle, alpha: this.globalAlpha });
   }
 
   fillRect(x: number, y: number, width: number, height: number): void {
@@ -96,6 +105,7 @@ interface BenchOptions {
   readonly table?: MinimapMarkerTable;
   readonly renderers?: MinimapRendererRegistry;
   readonly terrain?: MinimapTerrainGrid | null;
+  readonly fog?: MinimapFogSource;
 }
 
 function bench(options: BenchOptions = {}) {
@@ -107,6 +117,7 @@ function bench(options: BenchOptions = {}) {
     minimapWidgetKind({
       terrain: terrainSource,
       ...(options.renderers !== undefined ? { renderers: options.renderers } : {}),
+      ...(options.fog !== undefined ? { fog: options.fog } : {}),
     }),
   );
   registry.registerSelector('minimap.entities', minimapEntitiesSelector);
@@ -378,5 +389,76 @@ describe('клик миникарты — presentation-действие каме
     const { camera, markerCanvas } = bench();
     markerCanvas.dispatch('click', { offsetX: 16, offsetY: 24 });
     expect(camera.panned).toEqual([]);
+  });
+});
+
+describe('туман на миникарте (HUD-6, FOW-7)', () => {
+  /** Стабильный слой продюсера маски: канвас + прямоугольник мира + сила (design D6). */
+  function fogSource(strength = 0.6): { source: MinimapFogSource; layer: MinimapFogLayer } {
+    const layer: MinimapFogLayer = {
+      canvas: { fake: 'mask-canvas' },
+      world: { x: 0, y: 0, width: 8, height: 8 },
+      strength,
+    };
+    return { source: { fog: layer }, layer };
+  }
+
+  it('зона вне обзора затемнена: блит канваса маски с силой из конфига тумана', () => {
+    const { source } = fogSource(0.6);
+    const { runtime, markerCtx } = bench({ fog: source });
+    runtime.subsystem.syncTick(viewWith([entity(1, 'hero', 2, 3, 0)]));
+
+    const blits = markerCtx.ops('drawImage');
+    expect(blits).toHaveLength(1);
+    // Прямоугольник мира 8×8 при масштабе 8 и нулевых полях — весь канвас 64×64;
+    // верх блита — дальняя по миру сторона (тот же переворот, что у клеток).
+    expect(blits[0]!.args).toEqual([0, 0, 64, 64]);
+    // Сила затемнения — из той же конфигурации, что у fog-mask (FOW-10):
+    // собственных параметров затемнения у миникарты нет.
+    expect(blits[0]!.alpha).toBe(0.6);
+    // После блита прозрачность возвращена: маркеры рисуются без неё.
+    expect(markerCtx.globalAlpha).toBe(1);
+  });
+
+  it('туман лежит под маркерами: доставленные сущности не гасятся слоем', () => {
+    const { source } = fogSource();
+    const { runtime, markerCtx } = bench({ fog: source });
+    runtime.subsystem.syncTick(viewWith([entity(1, 'hero', 2, 3, 0)]));
+
+    const order = markerCtx.calls.map((call) => call.op);
+    expect(order.indexOf('drawImage')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('drawImage')).toBeLessThan(order.indexOf('arc'));
+    // Маркер нарисован при полной прозрачности — туман его не затемнил (HUD-1:
+    // скрытых среди доставленных нет, гасить нечего).
+    expect(markerCtx.ops('arc')[0]!.alpha).toBe(1);
+  });
+
+  it('сила затемнения читается на каждой отрисовке: правка конфига видна без пересборки (FOW-10)', () => {
+    let strength = 0.4;
+    const layer = {
+      canvas: {},
+      world: { x: 0, y: 0, width: 8, height: 8 },
+      get strength(): number {
+        return strength;
+      },
+    };
+    const { runtime, markerCtx } = bench({ fog: { fog: layer } });
+    runtime.subsystem.syncTick(viewWith([entity(1, 'hero', 2, 3, 0)]));
+    strength = 0.9;
+    runtime.subsystem.syncTick(viewWith([entity(1, 'hero', 2, 3, 0)]));
+
+    const blits = markerCtx.ops('drawImage');
+    expect(blits.map((call) => call.alpha)).toEqual([0.4, 0.9]);
+  });
+
+  it('без тумана слой отсутствует: ни источника, ни блита', () => {
+    const plain = bench();
+    plain.runtime.subsystem.syncTick(viewWith([entity(1, 'hero', 2, 3, 0)]));
+    expect(plain.markerCtx.ops('drawImage')).toHaveLength(0);
+
+    // Источник есть, но слоя нет (маска ещё не построена) — блита тоже нет.
+    const dark = bench({ fog: { fog: null } });
+    dark.runtime.subsystem.syncTick(viewWith([entity(1, 'hero', 2, 3, 0)]));
+    expect(dark.markerCtx.ops('drawImage')).toHaveLength(0);
   });
 });
