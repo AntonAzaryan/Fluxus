@@ -19,6 +19,7 @@ import type { BridgeRootId } from '../bridge/types.js';
 import { createHostBridge, type HostBridgeHandle, type HostBridgeOptions } from './bridge.js';
 import type { DirectoryObserver } from './observe.js';
 import { createHostRoot, type HostRoot } from './root.js';
+import { createHostServices, type HostServices, type HostServicesOptions } from './service.js';
 import { createStaticServer, type StaticServer } from './serve.js';
 
 /** Имя внутреннего корня бандла: слой раздачи, который мост не показывает. */
@@ -55,6 +56,7 @@ export function resolveProfilePaths(profile: AppProfile, base: string): AppProfi
     ...profile,
     bundle: at(profile.bundle),
     roots: profile.roots.map((root) => ({ ...root, directory: at(root.directory) })),
+    services: profile.services.map((service) => ({ ...service, script: at(service.script) })),
   };
 }
 
@@ -66,6 +68,8 @@ export interface OpenAppOptions {
   readonly report?: (text: string) => void;
   readonly dialogs?: HostBridgeOptions['dialogs'];
   readonly window?: HostBridgeOptions['window'];
+  /** Как запускать объявленные сервисы (DSK-7); рантайм и среда — дело реализации. */
+  readonly services?: Omit<HostServicesOptions, 'profile'>;
 }
 
 export interface OpenedApp {
@@ -75,6 +79,8 @@ export interface OpenedApp {
   readonly roots: readonly HostRoot[];
   readonly server: StaticServer;
   readonly handle: HostBridgeHandle;
+  /** Сервисы сессии; у профиля без возможности `service` их нет (DSK-5). */
+  readonly services: HostServices | undefined;
   close(): void;
 }
 
@@ -113,12 +119,23 @@ export function openApp(options: OpenAppOptions): OpenedApp {
     entry: profile.entry,
   });
   const base = options.base ?? '';
+  // Сервисы поднимаются только объявившему их профилю: без возможности
+  // `service` их нет ни объектом, ни полем моста (DSK-5).
+  const services =
+    profile.services.length === 0
+      ? undefined
+      : createHostServices({
+          profile,
+          ...(options.report === undefined ? {} : { report: options.report }),
+          ...(options.services ?? {}),
+        });
   const handle = createHostBridge({
     profile,
     roots,
     baseFor: () => base,
     ...(options.dialogs === undefined ? {} : { dialogs: options.dialogs }),
     ...(options.window === undefined ? {} : { window: options.window }),
+    ...(services === undefined ? {} : { services }),
   });
 
   return {
@@ -127,10 +144,15 @@ export function openApp(options: OpenAppOptions): OpenedApp {
     roots,
     server,
     handle,
+    services,
     close(): void {
       handle.close();
       bundle.close();
       for (const root of roots) root.close();
+      // Сервис не переживает сессию, которая его подняла (DSK-7): осиротевший
+      // процесс держал бы адрес занятым, а приложения, ради которого он поднят,
+      // уже нет.
+      void services?.closeAll();
     },
   };
 }

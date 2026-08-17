@@ -35,10 +35,13 @@ const CHANNELS = {
   unsaved: 'fluxus:unsaved',
   closeRequest: 'fluxus:close-request',
   closeReply: 'fluxus:close-reply',
+  serviceStart: 'fluxus:service-start',
+  serviceStop: 'fluxus:service-stop',
+  serviceState: 'fluxus:service-state',
 };
 
 const BRIDGE_API = 'fluxus-desktop-bridge';
-const BRIDGE_VERSION = 1;
+const BRIDGE_VERSION = 2;
 const BRIDGE_GLOBAL = 'fluxusDesktop';
 
 /** Описание сессии: синхронно и до первого кадра страницы (DSK-4, DSK-5). */
@@ -113,6 +116,14 @@ if (granted('window')) {
     closeHandlers.add(handler);
     return () => closeHandlers.delete(handler);
   };
+}
+
+if (granted('service')) {
+  // Через границу едет ОДНО имя объявленного сервиса (DSK-7): ни файла, ни
+  // аргументов страница не передаёт, и передать их нечем — канал их не несёт.
+  surface.startService = (id) => ipcRenderer.invoke(CHANNELS.serviceStart, id);
+  surface.stopService = (id) => ipcRenderer.invoke(CHANNELS.serviceStop, id);
+  surface.serviceState = (id) => ipcRenderer.invoke(CHANNELS.serviceState, id);
 }
 
 contextBridge.exposeInMainWorld(BRIDGE_GLOBAL, surface);

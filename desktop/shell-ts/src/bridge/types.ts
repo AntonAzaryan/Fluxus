@@ -37,8 +37,10 @@ export const BRIDGE_API = 'fluxus-desktop-bridge';
 /**
  * Версия контракта. Растёт при несовместимой смене поверхности; приложение
  * вправе на неё смотреть, реализация контейнера обязана её сообщать.
+ *
+ * 2 — объявленные профилем сервисы (DSK-7).
  */
-export const BRIDGE_VERSION = 1;
+export const BRIDGE_VERSION = 2;
 
 /** Имя поля в `globalThis`, под которым контейнер публикует мост. */
 export const BRIDGE_GLOBAL = 'fluxusDesktop';
@@ -85,7 +87,7 @@ export type BridgeUnsubscribe = () => void;
  * узнаёт нового, перечислив каталог, а профиль без перечисления не описывает ни
  * одного реального применения.
  */
-export type BridgeCapability = 'read' | 'write' | 'watch' | 'dialog' | 'window';
+export type BridgeCapability = 'read' | 'write' | 'watch' | 'dialog' | 'window' | 'service';
 
 /** Все возможности контракта. Реализация профиля сверяется с этим списком. */
 export const BRIDGE_CAPABILITIES: readonly BridgeCapability[] = [
@@ -94,7 +96,27 @@ export const BRIDGE_CAPABILITIES: readonly BridgeCapability[] = [
   'watch',
   'dialog',
   'window',
+  'service',
 ];
+
+/**
+ * Имя сервиса, объявленного профилем (DSK-7). Единственное, что страница о
+ * запуске говорит: ни файла, ни аргументов, ни пути она не передаёт — иначе
+ * возможность была бы «выполнить произвольное», а не «поднять объявленное».
+ */
+export type BridgeServiceId = string;
+
+/**
+ * Состояние объявленного сервиса. Адрес — строка, которую контейнер НЕ строит и
+ * не разбирает: он берёт её у объявления и передаёт как есть, а смысл ей
+ * придаёт приложение (DSK-2). Пустая строка — сервис не работает; та же
+ * договорённость, что у `base` не раздаваемого корня.
+ */
+export interface BridgeServiceState {
+  readonly id: BridgeServiceId;
+  readonly running: boolean;
+  readonly address: string;
+}
 
 /** Что приложение знает о корне, объявленном профилем. */
 export interface BridgeRootView {
@@ -121,6 +143,12 @@ export interface BridgeSession {
   readonly profile: string;
   readonly capabilities: readonly BridgeCapability[];
   readonly roots: readonly BridgeRootView[];
+  /**
+   * Имена сервисов, объявленных профилем (DSK-7). Приложению они нужны, чтобы
+   * знать, есть ли у него кнопка: возможность моста и объявленный сервис — две
+   * разные вещи, и первая без второй ничего не поднимает.
+   */
+  readonly services: readonly BridgeServiceId[];
 }
 
 /** Запрос к диалогу выбора. Всё в нём — подсказка среде, а не проверка. */
@@ -178,6 +206,16 @@ export interface DesktopBridge {
   readonly setUnsaved?: (unsaved: boolean) => void;
   /** capability `window`: контейнер спрашивает, приложение отвечает. */
   readonly onCloseRequest?: (handler: BridgeCloseHandler) => BridgeUnsubscribe;
+  /**
+   * capability `service`: поднять объявленный сервис и получить его адрес
+   * (DSK-7). Уже работающему сервису возвращается его адрес — второго процесса
+   * не появляется. Незнакомое имя и неудавшийся запуск — отказ, а не молчание.
+   */
+  readonly startService?: (id: BridgeServiceId) => Promise<BridgeServiceState>;
+  /** capability `service`: остановить сервис, поднятый этой сессией. */
+  readonly stopService?: (id: BridgeServiceId) => Promise<BridgeServiceState>;
+  /** capability `service`: работает ли сервис и по какому адресу. */
+  readonly serviceState?: (id: BridgeServiceId) => Promise<BridgeServiceState>;
 }
 
 /**

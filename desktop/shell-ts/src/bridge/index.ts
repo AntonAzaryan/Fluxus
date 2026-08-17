@@ -25,10 +25,12 @@ export type {
   BridgePath,
   BridgeRootId,
   BridgeRootView,
+  BridgeServiceId,
+  BridgeServiceState,
   BridgeSession,
   BridgeUnsubscribe,
   DesktopBridge,
 } from './types.js';
 
-export { normalizeAppProfile, profileGrants, profileRoot } from './profile.js';
-export type { AppProfile, ProfileRoot } from './profile.js';
+export { normalizeAppProfile, profileGrants, profileRoot, profileService } from './profile.js';
+export type { AppProfile, ProfileRoot, ProfileService } from './profile.js';

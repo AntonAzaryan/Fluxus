@@ -39,6 +39,7 @@ import {
   slotCandidates,
 } from '../app/mode.js';
 import { standArgs, shareLink } from '../app/demoStand.js';
+import { DEMO_STAND_SERVICE, demoStandHost } from '../app/desktopStand.js';
 import { ACTION_BITS, STATS } from '../app/sim.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
 import botProfileJson from '../../../content/bots/normal.json';
@@ -448,6 +449,60 @@ describe('режим страницы выбирается при старте (
     expect(slotCandidates({ kind: 'server', url: 'ws://x' }, DEMO_PLAYERS)).toEqual([
       ...DEMO_PLAYERS,
     ]);
+  });
+});
+
+describe('публикация сессии на десктопе (SES-3, DSK-7)', () => {
+  /** Мост контейнера так, как его видит страница: имя, версия, сессия, операции. */
+  const bridgeScope = (
+    services: readonly string[],
+    startService: (id: string) => Promise<{ id: string; running: boolean; address: string }>,
+  ): unknown => ({
+    fluxusDesktop: {
+      api: 'fluxus-desktop-bridge',
+      version: 2,
+      session: { profile: 'game', capabilities: ['service'], roots: [], services },
+      startService,
+      stopService: (id: string) => Promise.resolve({ id, running: false, address: '' }),
+      serviceState: (id: string) => Promise.resolve({ id, running: false, address: '' }),
+    },
+  });
+
+  it('в вебе хозяина стенда нет: кнопка не появляется', () => {
+    expect(demoStandHost({})).toBeUndefined();
+    // Мост есть, а сервиса профиль не объявил — поднимать нечего (DSK-5).
+    expect(demoStandHost(bridgeScope([], () => Promise.reject(new Error('нет'))))).toBeUndefined();
+  });
+
+  it('публикация поднимает объявленный сервис и отдаёт его адрес', async () => {
+    const asked: string[] = [];
+    const host = demoStandHost(
+      bridgeScope([DEMO_STAND_SERVICE], (id) => {
+        asked.push(id);
+        return Promise.resolve({ id, running: true, address: 'ws://127.0.0.1:8080' });
+      }),
+    );
+    expect(host).toBeDefined();
+    expect(await host!.publish()).toBe('ws://127.0.0.1:8080');
+    // Страница назвала ИМЯ объявленного сервиса и ничего сверх него (DSK-7).
+    expect(asked).toEqual([DEMO_STAND_SERVICE]);
+  });
+
+  it('не поднявшийся стенд — отказ, а не пустой адрес', async () => {
+    const host = demoStandHost(
+      bridgeScope([DEMO_STAND_SERVICE], (id) =>
+        Promise.resolve({ id, running: true, address: '' }),
+      ),
+    );
+    await expect(host!.publish()).rejects.toThrow('стенд');
+  });
+
+  it('полученный адрес уводит страницу в сетевой режим тем же URL', () => {
+    // Публикация кончается адресом, дальше — обычный сетевой режим страницы:
+    // второго канала «как добраться до сервера» у демо нет (SES-2).
+    expect(serverModeUrl('http://localhost:5173/', 'ws://127.0.0.1:8080')).toBe(
+      'http://localhost:5173/?server=ws%3A%2F%2F127.0.0.1%3A8080',
+    );
   });
 });
 

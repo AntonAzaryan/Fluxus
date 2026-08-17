@@ -66,6 +66,7 @@ import { createCapturePreview, type CapturePreview } from './capturePreview.js';
 import { createChargeBalls, type ChargeBalls } from './chargeBalls.js';
 import { demoEdgePan } from './cameraInput.js';
 import { createDemoHud, demoHudComposition } from './hud.js';
+import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
 import bindingsJson from './bindings.json';
@@ -724,6 +725,28 @@ function wireConnectButton(mode: DemoMode): void {
   // Константой сборки остаётся порт (D4) — списка серверов у демо нет.
   button.title = `подключиться к стенду ${demoServerUrl(window.location)}`;
   button.href = serverModeUrl(window.location.href);
+
+  // На десктопе стенд поднимает сам контейнер (`desktop-shell` DSK-7): кнопка
+  // сначала публикует сессию (SES-3), а потом уводит страницу на полученный
+  // адрес. Смена режима остаётся переходом по URL — оболочка стартует заново
+  // (SHELL-8), — и ветка кончается этой строкой: дальше сетевой режим один.
+  const host = demoStandHost(globalThis);
+  if (host === undefined) return;
+  button.textContent = 'поднять стенд и играть по сети →';
+  button.title = `поднять стенд матча этой машины (${DEMO_STAND_SERVICE})`;
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    button.textContent = 'поднимаю стенд…';
+    void host.publish().then(
+      (address) => {
+        window.location.href = serverModeUrl(window.location.href, address);
+      },
+      (error: unknown) => {
+        button.textContent = 'играть по сети →';
+        showNotice(`стенд не поднялся: ${error instanceof Error ? error.message : String(error)}`);
+      },
+    );
+  });
 }
 
 async function main(): Promise<void> {

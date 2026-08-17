@@ -25,6 +25,13 @@ import type { BridgeCapability, BridgeChange, DesktopBridge } from '../src/bridg
 /** Имя корня дерева контента в сьюте: одно на все реализации. */
 export const CONTENT = 'content';
 
+/**
+ * Имя сервиса, объявляемого профилем прогона (DSK-7). Чем он запускается и по
+ * какому адресу слушает — дело реализации: сьют знает только имя, как и
+ * страница.
+ */
+export const SERVICE = 'stand';
+
 export interface ContractCase {
   /** Файлы бандла приложения на старте. */
   readonly bundle?: Readonly<Record<string, string>>;
@@ -65,6 +72,14 @@ export interface ContractSession {
   flush?(): Promise<void>;
   /** Что лежит на диске мимо моста: проверка, что запись доехала. */
   peek(path: string): Promise<string | undefined>;
+  /**
+   * Сколько процессов сервисов контейнер держит прямо сейчас. Не поверхность
+   * границы, а взгляд снаружи — как `peek` для дерева: «второго процесса не
+   * появилось» и «закрытие сессии его сняло» иначе не отличить от обещания.
+   * Отвечать обязан и ПОСЛЕ `close`. Реализация, которой считать нечем, метода
+   * не даёт — и обе проверки пропускаются.
+   */
+  serviceProcesses?(): Promise<number>;
   /** Запрос к раздаче контейнера (DSK-4). */
   fetch(pathname: string): Promise<ContractResponse>;
   /** Контейнер спрашивает страницу о закрытии. */
@@ -356,6 +371,87 @@ export function describeContainerContract(name: string, open: ContainerUnderTest
           expect(session.bridge.watch).toBeDefined();
           expect(session.bridge.choose).toBeUndefined();
           expect(session.bridge.onCloseRequest).toBeUndefined();
+        },
+      );
+    });
+  });
+
+  describe(`${name}: объявленные профилем сервисы (DSK-7)`, () => {
+    const hosting = (body: (session: ContractSession) => void | Promise<void>): Promise<void> =>
+      withSession(
+        open,
+        { bundle: BUNDLE, content: TREE, capabilities: ['service'], writable: false },
+        body,
+      );
+
+    it('сессия называет объявленные сервисы, и страница знает о них только имя', async () => {
+      await hosting((session) => {
+        expect(session.bridge.session.services).toEqual([SERVICE]);
+        expect(session.bridge.startService).toBeDefined();
+      });
+    });
+
+    it('запуск поднимает сервис и отдаёт его адрес', async () => {
+      await hosting(async (session) => {
+        const started = await session.bridge.startService!(SERVICE);
+        expect(started.id).toBe(SERVICE);
+        expect(started.running).toBe(true);
+        expect(started.address).not.toBe('');
+        expect(await session.bridge.serviceState!(SERVICE)).toEqual(started);
+      });
+    });
+
+    it('повторный запуск возвращает адрес и не плодит процесса', async () => {
+      await hosting(async (session) => {
+        const first = await session.bridge.startService!(SERVICE);
+        const second = await session.bridge.startService!(SERVICE);
+        expect(second.address).toBe(first.address);
+        if (session.serviceProcesses !== undefined) {
+          expect(await session.serviceProcesses()).toBe(1);
+        }
+      });
+    });
+
+    it('останов гасит сервис, и состояние это показывает', async () => {
+      await hosting(async (session) => {
+        await session.bridge.startService!(SERVICE);
+        const stopped = await session.bridge.stopService!(SERVICE);
+        expect(stopped.running).toBe(false);
+        expect(stopped.address).toBe('');
+        expect((await session.bridge.serviceState!(SERVICE)).running).toBe(false);
+      });
+    });
+
+    it('незнакомое имя — отказ, а не молчание', async () => {
+      await hosting(async (session) => {
+        await expect(session.bridge.startService!('нет такого')).rejects.toThrow();
+        await expect(session.bridge.serviceState!('нет такого')).rejects.toThrow();
+      });
+    });
+
+    it('сервис не переживает сессию, которая его подняла', async () => {
+      const session = await open({
+        bundle: BUNDLE,
+        content: TREE,
+        capabilities: ['service'],
+        writable: false,
+      });
+      await session.bridge.startService!(SERVICE);
+      await session.close();
+      if (session.serviceProcesses !== undefined) {
+        expect(await session.serviceProcesses()).toBe(0);
+      }
+    });
+
+    it('профиль без возможности сервисов не даёт ни операций, ни имён', async () => {
+      await withSession(
+        open,
+        { bundle: BUNDLE, content: TREE, capabilities: ['read'], writable: false },
+        (session) => {
+          expect(session.bridge.startService).toBeUndefined();
+          expect(session.bridge.stopService).toBeUndefined();
+          expect(session.bridge.serviceState).toBeUndefined();
+          expect(session.bridge.session.services).toEqual([]);
         },
       );
     });

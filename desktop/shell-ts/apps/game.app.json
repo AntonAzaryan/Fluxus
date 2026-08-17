@@ -12,6 +12,14 @@
       "serve": true
     }
   ],
-  "capabilities": [],
+  "capabilities": ["service"],
+  "services": [
+    {
+      "id": "match-stand",
+      "script": "../../../game/demo-ts/bin/demo-serve.mjs",
+      "args": ["--port", "{port}", "--bot-fill-ms", "60000"],
+      "address": "ws://127.0.0.1:8080"
+    }
+  ],
   "window": { "width": 1280, "height": 720 }
 }

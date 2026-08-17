@@ -28,7 +28,12 @@ import { app, BrowserWindow, dialog, ipcMain, protocol } from 'electron';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { BridgeChange, BridgeChoiceRequest, BridgeRootId } from '../bridge/types.js';
+import type {
+  BridgeChange,
+  BridgeChoiceRequest,
+  BridgeRootId,
+  BridgeServiceId,
+} from '../bridge/types.js';
 import { loadAppProfile, openApp, type HostRoot, type OpenedApp } from '../host/index.js';
 import { insideRoot } from '../host/root.js';
 import { CHANNELS } from './channels.js';
@@ -192,6 +197,10 @@ async function start(): Promise<void> {
         window?.setDocumentEdited(unsaved);
       },
     },
+    // Скрипт сервиса запускается ЭТИМ же исполняемым файлом (DSK-7): у
+    // упакованного приложения `node` в PATH пользовательской машины может не
+    // быть вовсе, а Electron умеет быть Node по просьбе переменной среды.
+    services: { env: { ELECTRON_RUN_AS_NODE: '1' } },
   });
   const bridge = opened.handle.bridge;
 
@@ -258,6 +267,11 @@ async function start(): Promise<void> {
       stops.delete(id);
     });
   }
+  if (bridge.startService !== undefined) {
+    ipcMain.handle(CHANNELS.serviceStart, (_e, id: BridgeServiceId) => bridge.startService!(id));
+    ipcMain.handle(CHANNELS.serviceStop, (_e, id: BridgeServiceId) => bridge.stopService!(id));
+    ipcMain.handle(CHANNELS.serviceState, (_e, id: BridgeServiceId) => bridge.serviceState!(id));
+  }
   if (bridge.choose !== undefined) {
     ipcMain.handle(CHANNELS.choose, (_e, request: BridgeChoiceRequest) => bridge.choose!(request));
   }
@@ -305,6 +319,9 @@ async function start(): Promise<void> {
 
   target.on('closed', () => {
     window = null;
+    // `close()` снимает и поднятые сессией сервисы (DSK-7): переживший окно
+    // процесс держал бы свой адрес занятым, а приложения, ради которого он
+    // поднят, уже нет.
     opened.close();
   });
 
