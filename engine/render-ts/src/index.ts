@@ -10,6 +10,18 @@ export type {
   TickView,
 } from './types.js';
 
+// Счётчики стоимости рендера (`performance-budget` PERF-3): инжектируемый сток
+// объёма работы, тегированный стадией конвейера (PERF-2). Без подключённого
+// стока учёт не исполняется — обычный матч за бенчмарк не платит.
+export {
+  COST_COUNTER_STAGES,
+  attachCostSink,
+  costSink,
+  createCostCounters,
+  withCostSink,
+} from './cost.js';
+export type { CostStage, RenderCostCounters } from './cost.js';
+
 // Хост — TickObserver ядра (REND-1, REND-2) и продюсер presentation-состояния.
 export { RenderHost, kindByTags } from './host.js';
 export { FloorMirror } from './floorMirror.js';

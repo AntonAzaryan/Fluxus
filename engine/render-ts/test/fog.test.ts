@@ -10,7 +10,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { createTerrainGrid, type TerrainGrid } from '@game-mvp/core';
-import type { AssetService } from '@game-mvp/assets';
 import {
   FogSubsystem,
   VisibilityMask,
@@ -20,10 +19,16 @@ import {
   resolveFogConfig,
   DEFAULT_FOG_CONFIG,
   type EntityView,
-  type FogLayerCanvas,
   type RenderContext,
 } from '../src/index.js';
-import { makeEntityView, makeTickView } from './fixtures.js';
+import {
+  RendererSpy,
+  flatGrid,
+  fogCanvasFactory,
+  makeEntityView,
+  makeRenderContext,
+  makeTickView,
+} from './fixtures.js';
 
 // ------------------------------------------------------------------- стенд
 
@@ -32,17 +37,6 @@ function gridWithPillar(): TerrainGrid {
   const levels = Array.from({ length: 8 }, (_, y) => (y === 4 ? '00001000' : '00000000'));
   const flags = Array.from({ length: 8 }, () => '........');
   return createTerrainGrid({ width: 8, height: 8, tileSize: 65536, levels, flags });
-}
-
-/** Ровная арена без укрытий — геометрии круга ничего не режет. */
-function flatGrid(): TerrainGrid {
-  return createTerrainGrid({
-    width: 8,
-    height: 8,
-    tileSize: 65536,
-    levels: Array.from({ length: 8 }, () => '00000000'),
-    flags: Array.from({ length: 8 }, () => '........'),
-  });
 }
 
 const STATS = { visionRadius: 'vision', team: 'team' } as const;
@@ -64,49 +58,6 @@ function observerView(
       [STATS.visionRadius, vision],
     ]),
   });
-}
-
-function makeContext(): RenderContext {
-  return {
-    scene: new THREE.Scene(),
-    assets: {} as AssetService,
-    config: { heightStep: 0.6 },
-  };
-}
-
-/** Записывающий стаб рендерера: подсистеме нужен структурный минимум. */
-class RendererSpy {
-  readonly rendered: THREE.Object3D[] = [];
-  readonly targets: (THREE.WebGLRenderTarget | null)[] = [];
-  render(scene: THREE.Object3D): void {
-    this.rendered.push(scene);
-  }
-  setRenderTarget(target: THREE.WebGLRenderTarget | null): void {
-    this.targets.push(target);
-  }
-  getDrawingBufferSize(target: THREE.Vector2): THREE.Vector2 {
-    return target.set(64, 48);
-  }
-}
-
-/** Канвас слоя миникарты без DOM: записывает блит, контекст минимальный. */
-function fakeCanvas(): FogLayerCanvas & { puts: number } {
-  const canvas = {
-    width: 0,
-    height: 0,
-    puts: 0,
-    getContext: () => ({
-      createImageData: (width: number, height: number) => ({
-        data: new Uint8ClampedArray(width * height * 4),
-        width,
-        height,
-      }),
-      putImageData: () => {
-        canvas.puts++;
-      },
-    }),
-  };
-  return canvas;
 }
 
 // ---------------------------------------------------- 2.1: круг и градиент
@@ -199,14 +150,9 @@ describe('FOW-7, FOW-9: отбор наблюдателей из доставл�
       grid: flatGrid(),
       stats: STATS,
       hero: () => 1,
-      createCanvas: (width, height) => {
-        const canvas = fakeCanvas();
-        canvas.width = width;
-        canvas.height = height;
-        return canvas;
-      },
+      createCanvas: fogCanvasFactory(),
     });
-    fog.init(makeContext());
+    fog.init(makeRenderContext());
     fog.syncTick(makeTickView(entities));
     return fog;
   }
@@ -244,7 +190,7 @@ describe('FOW-7, FOW-9: отбор наблюдателей из доставл�
 
   it('пока статы героя не доставлены, маска не строится и конвейер прежний', () => {
     const fog = new FogSubsystem({ grid: flatGrid(), stats: STATS, hero: () => null });
-    const ctx = makeContext();
+    const ctx = makeRenderContext();
     fog.init(ctx);
     fog.syncTick(makeTickView([observerView(2, 1, 1, 0, 3)]));
     const renderer = new RendererSpy();
@@ -257,17 +203,12 @@ describe('FOW-7, FOW-9: отбор наблюдателей из доставл�
 
 describe('FOW-7, FOW-10: пост-проход и обновление конфига в рантайме', () => {
   function activeSubsystem(): { fog: FogSubsystem; ctx: RenderContext } {
-    const ctx = makeContext();
+    const ctx = makeRenderContext();
     const fog = new FogSubsystem({
       grid: flatGrid(),
       stats: STATS,
       hero: () => 1,
-      createCanvas: (width, height) => {
-        const canvas = fakeCanvas();
-        canvas.width = width;
-        canvas.height = height;
-        return canvas;
-      },
+      createCanvas: fogCanvasFactory(),
     });
     fog.init(ctx);
     fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));

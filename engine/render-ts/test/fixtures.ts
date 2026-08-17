@@ -2,7 +2,8 @@
  * Общие фикстуры тестов: нормализованная модель, стаб AssetService с ручным
  * управлением состояниями и конструкторы presentation-состояния.
  */
-import { LOCOMOTION_NORMAL, type EntityId } from '@game-mvp/core';
+import * as THREE from 'three';
+import { LOCOMOTION_NORMAL, createTerrainGrid, type EntityId, type TerrainGrid } from '@game-mvp/core';
 import type {
   AssetKind,
   AssetService,
@@ -10,7 +11,7 @@ import type {
   NormalizedModel,
   NormalizedSequence,
 } from '@game-mvp/assets';
-import type { EntityView, TickView } from '../src/index.js';
+import type { EntityView, FogLayerCanvas, RenderContext, TickView } from '../src/index.js';
 
 // ------------------------------------------------------------------- модель
 
@@ -203,6 +204,98 @@ export function makeEntityView(id: EntityId, partial: Partial<EntityView> = {}):
     ...partial,
   };
   return partial.prevMotion === undefined ? { ...view, prevMotion: view.motion } : view;
+}
+
+// ------------------------------------------------ стенд тумана войны (FOW-7..10)
+
+/**
+ * Записывающий стаб рендерера: подсистеме нужен структурный минимум
+ * (`FogRendererLike`), а не живой WebGL. Он же — счётчик вызовов рендерера на
+ * стороне теста (`performance-budget` PERF-3, design D2): абстракции WebGL в
+ * пакете ради этого не заводится.
+ */
+export class RendererSpy {
+  readonly rendered: THREE.Object3D[] = [];
+  readonly targets: (THREE.WebGLRenderTarget | null)[] = [];
+  render(scene: THREE.Object3D): void {
+    this.rendered.push(scene);
+  }
+  setRenderTarget(target: THREE.WebGLRenderTarget | null): void {
+    this.targets.push(target);
+  }
+  getDrawingBufferSize(target: THREE.Vector2): THREE.Vector2 {
+    return target.set(64, 48);
+  }
+}
+
+/** Канвас слоя миникарты без DOM: записывает блит, контекст минимальный. */
+export function fakeCanvas(): FogLayerCanvas & { puts: number } {
+  const canvas = {
+    width: 0,
+    height: 0,
+    puts: 0,
+    getContext: () => ({
+      createImageData: (width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+        width,
+        height,
+      }),
+      putImageData: () => {
+        canvas.puts++;
+      },
+    }),
+  };
+  return canvas;
+}
+
+/** Фабрика канваса слоя миникарты для опций подсистемы (design D6). */
+export function fogCanvasFactory(): (width: number, height: number) => FogLayerCanvas {
+  return (width, height) => {
+    const canvas = fakeCanvas();
+    canvas.width = width;
+    canvas.height = height;
+    return canvas;
+  };
+}
+
+/** Контекст подсистемы (REND-8) со сценой и стабом ассетов: тумана он не касается. */
+export function makeRenderContext(): RenderContext {
+  return {
+    scene: new THREE.Scene(),
+    assets: {} as AssetService,
+    config: { heightStep: 0.6 },
+  };
+}
+
+/** Ровная арена `size`×`size` по клетке в мировую единицу — укрытий нет. */
+export function flatGrid(size = 8): TerrainGrid {
+  return createTerrainGrid({
+    width: size,
+    height: size,
+    tileSize: 65536,
+    levels: Array.from({ length: size }, () => '0'.repeat(size)),
+    flags: Array.from({ length: size }, () => '.'.repeat(size)),
+  });
+}
+
+/**
+ * Арена `size`×`size` с решёткой возвышенных клеток шагом `step`: каждая даёт
+ * cliff-отрезки по периметру (TERR-5) — ось «число сегментов укрытий» бенча
+ * (`performance-budget` PERF-6). Шаг 0 — ровная арена без укрытий.
+ */
+export function pillarGrid(size: number, step: number): TerrainGrid {
+  const levels = Array.from({ length: size }, (_, y) =>
+    Array.from({ length: size }, (_, x) =>
+      step > 0 && x % step === 0 && y % step === 0 ? '1' : '0',
+    ).join(''),
+  );
+  return createTerrainGrid({
+    width: size,
+    height: size,
+    tileSize: 65536,
+    levels,
+    flags: Array.from({ length: size }, () => '.'.repeat(size)),
+  });
 }
 
 export function makeTickView(entities: EntityView[], partial: Partial<TickView> = {}): TickView {

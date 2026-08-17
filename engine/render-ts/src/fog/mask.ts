@@ -18,6 +18,7 @@
  * точке приёма, глубже по маске fixed-point не существует (REND-1).
  */
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
+import { costSink, type RenderCostCounters } from '../cost.js';
 
 /** Прямоугольник мира, который покрывает маска, — прямоугольник террейна. */
 export interface FogWorldRect {
@@ -155,6 +156,8 @@ function litSubsamples(
   wy: number,
   scale: number,
   near: readonly FogSegment[],
+  /** Сток стоимости, уже прочитанный вызывающим (PERF-3): здесь только инкремент. */
+  cost: RenderCostCounters | undefined,
 ): number {
   let lit = 0;
   for (let s = 0; s < SHADOW_SUBSAMPLES.length; s += 2) {
@@ -162,6 +165,7 @@ function litSubsamples(
     const sy = wy + SHADOW_SUBSAMPLES[s + 1]! / scale;
     let blocked = false;
     for (const segment of near) {
+      if (cost !== undefined) cost.fogSubsampleTests++;
       if (segmentBlocks(observer.x, observer.y, sx, sy, segment)) {
         blocked = true;
         break;
@@ -193,6 +197,10 @@ export class VisibilityMask {
 
   /** Всё в туман — начало перестройки на каждой доставке (design D1). */
   clear(): void {
+    const cost = costSink();
+    // Обнуление стоит всей маски и растёт квадратом разрешения — счётчик
+    // видит это удорожание даже там, где наблюдателей нет вовсе (PERF-3).
+    if (cost !== undefined) cost.fogMaskClearTexels += this.data.length;
     this.data.fill(0);
   }
 
@@ -220,6 +228,16 @@ export class VisibilityMask {
       if (distanceSqToSegment(observer.x, observer.y, segment) <= radiusSq) near.push(segment);
     }
 
+    // Сток читается один раз на наблюдателя, не на тексель (PERF-3): объём
+    // просмотра — арифметика границ прямоугольника, а не счёт в цикле.
+    const cost = costSink();
+    if (cost !== undefined) {
+      cost.fogRevealCalls++;
+      cost.fogSegmentRangeTests += segments.length;
+      cost.fogNearSegments += near.length;
+      cost.fogMaskTexels += (x1 - x0 + 1) * (y1 - y0 + 1);
+    }
+
     for (let ty = y0; ty <= y1; ty++) {
       const wy = this.rect.y + (ty + 0.5) / scale;
       const dy = wy - observer.y;
@@ -235,12 +253,16 @@ export class VisibilityMask {
         if (value <= current) continue;
         if (near.length === 0) {
           this.data[row + tx] = value;
+          if (cost !== undefined) cost.fogMaskTexelsWritten++;
           continue;
         }
-        const lit = litSubsamples(observer, wx, wy, scale, near);
+        const lit = litSubsamples(observer, wx, wy, scale, near, cost);
         if (lit === 0) continue;
         const shaded = lit === 4 ? value : Math.round((value * lit) / 4);
-        if (shaded > current) this.data[row + tx] = shaded;
+        if (shaded > current) {
+          this.data[row + tx] = shaded;
+          if (cost !== undefined) cost.fogMaskTexelsWritten++;
+        }
       }
     }
   }

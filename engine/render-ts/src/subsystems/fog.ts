@@ -37,6 +37,7 @@ import * as THREE from 'three';
 import type { EntityId, TerrainGrid } from '@game-mvp/core';
 import type { PresentationFog } from '@game-mvp/assets';
 import type { RenderContext, RenderSubsystem, TickView } from '../types.js';
+import { costSink } from '../cost.js';
 import {
   VisibilityMask,
   fogRectOf,
@@ -307,6 +308,11 @@ export class FogSubsystem implements RenderSubsystem {
     const team = view.entities.get(hero)?.stats?.get(this.statNames.team);
     if (team === undefined) return;
 
+    // Отбор наблюдателей просматривает всё доставленное состояние — стоимость
+    // перестройки растёт и от числа сущностей, не только от маски (PERF-3).
+    const cost = costSink();
+    if (cost !== undefined) cost.fogEntitiesScanned += view.entities.size;
+
     this.mask.clear();
     for (const entity of view.entities.values()) {
       const stats = entity.stats;
@@ -326,6 +332,9 @@ export class FogSubsystem implements RenderSubsystem {
     }
     this.built = true;
     this.maskTexture.needsUpdate = true;
+    // Байт на тексель (RedFormat, UnsignedByteType): весь растр уезжает в
+    // текстуру на каждой доставке — цена разрешения маски, а не наблюдателей.
+    if (cost !== undefined) cost.fogMaskUploadBytes += this.mask.data.length;
     this.blitLayer();
   }
 
@@ -368,8 +377,12 @@ export class FogSubsystem implements RenderSubsystem {
   render(renderer: FogRendererLike, camera: THREE.Camera): void {
     const ctx = this.ctx;
     if (ctx === null) throw new Error('FogSubsystem: init() не вызван (REND-8)');
+    // Проходы рендерера — стадия кадра (PERF-2): их число подсистема знает
+    // сама, и структурный спай теста обязан видеть ровно столько же.
+    const cost = costSink();
     if (!this.built) {
       renderer.render(ctx.scene, camera);
+      if (cost !== undefined) cost.fogRenderPasses++;
       return;
     }
     const size = renderer.getDrawingBufferSize(this.sizeScratch);
@@ -386,6 +399,7 @@ export class FogSubsystem implements RenderSubsystem {
     (this.postMaterial.uniforms.tDepth as { value: THREE.Texture | null }).value =
       target.depthTexture;
     renderer.render(this.postScene, this.postCamera);
+    if (cost !== undefined) cost.fogRenderPasses += 2;
   }
 
   /** Render target кадра с текстурой глубины; пересоздаётся при смене размера окна. */
@@ -418,6 +432,10 @@ export class FogSubsystem implements RenderSubsystem {
     if (context === null) return;
     this.layerImage ??= context.createImageData(mask.width, mask.height);
     const image = this.layerImage;
+    // Блит идёт по всему растру: та же квадратичная зависимость от разрешения,
+    // что у обнуления и загрузки, но в главном потоке и попиксельно (PERF-3).
+    const cost = costSink();
+    if (cost !== undefined) cost.fogMinimapTexels += mask.width * mask.height;
     const color = new THREE.Color(this.current.color);
     const r = Math.round(color.r * 255);
     const g = Math.round(color.g * 255);
@@ -457,5 +475,9 @@ function createMaskTexture(mask: VisibilityMask): THREE.DataTexture {
   // читался бы со сдвигом (правило распаковки GL, дефолт — 4).
   texture.unpackAlignment = 1;
   texture.needsUpdate = true;
+  // Разовая загрузка при создании текстуры — такой же трафик, как обновление
+  // на доставке, и в счётчик входит наравне с ним (PERF-3).
+  const cost = costSink();
+  if (cost !== undefined) cost.fogMaskUploadBytes += mask.data.length;
   return texture;
 }
