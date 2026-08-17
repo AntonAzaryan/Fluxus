@@ -52,6 +52,16 @@ export interface DiagnosticsContext {
   system: string | undefined;
   seq: number;
   counters: SystemCounters;
+  /**
+   * Счётчики объёма работы тика (PERF-3). Плоские целые поля прямо в контексте,
+   * а не вложенный объект: контекст и так заводится один на тик, поэтому учёт
+   * не добавляет ни одной аллокации, а сквозь системы счётчики копятся (в
+   * отличие от `counters`, которые обнуляются на границе каждой системы).
+   */
+  costCommands: number;
+  costExpressions: number;
+  costBroadPhasePairs: number;
+  costRaycasts: number;
 }
 
 const TRACE_ORDER: Readonly<Record<TraceLevel, number>> = { off: 0, systems: 1, full: 2 };
@@ -77,9 +87,27 @@ export function withDiagnostics<T>(
 ): T {
   if (sink === undefined) return body();
   const previous = current;
-  current = { sink, trace: sink.trace, tick, system: undefined, seq: 0, counters: zeroCounters() };
+  const ctx: DiagnosticsContext = {
+    sink,
+    trace: sink.trace,
+    tick,
+    system: undefined,
+    seq: 0,
+    counters: zeroCounters(),
+    costCommands: 0,
+    costExpressions: 0,
+    costBroadPhasePairs: 0,
+    costRaycasts: 0,
+  };
+  current = ctx;
   try {
-    return body();
+    const value = body();
+    // Сводка стоимости — последней записью тика (PERF-3): раньше объём работы
+    // ещё неполон. Вложенный прогон (реплей внутри перемотки, REW-2) отчитается
+    // своей записью со своим `tick` — счётчики живут в контексте, а он у каждого
+    // прогона свой.
+    recordTickCost(ctx);
+    return value;
   } finally {
     current = previous;
   }
@@ -199,12 +227,75 @@ export function countCommands(issued: number, applied: number): void {
   if (ctx === undefined) return;
   ctx.counters.commands += issued;
   ctx.counters.applied += applied;
+  // Тот же исход, снятый в той же точке, идёт и в сводку стоимости тика
+  // (PERF-3): счётчик системы обнуляется на её границе, счётчик тика копится
+  // сквозь все системы. Одна калитка на оба — второй вызов из flush'а стоил бы
+  // ещё одного чтения контекста на каждую систему каждого тика.
+  ctx.costCommands += applied;
 }
 
 export function countEvent(): void {
   const ctx = current;
   if (ctx === undefined) return;
   ctx.counters.events++;
+}
+
+// -------------------------------------------- счётчики стоимости тика (PERF-3)
+//
+// Объём выполненной работы в машинно-независимых единицах: сравнивать их
+// эталоном можно без поправок на железо. Ни часов, ни случайности здесь нет —
+// значения остаются чистой функцией входа симуляции (DIAG-6).
+//
+// Калитка та же, что у счётчиков систем выше: без подключённого приёмника
+// `current` пуст, и учёт не исполняется вовсе — этого и требует PERF-3 от
+// инструментирования. В горячих циклах счёт идёт в локальную переменную, а сюда
+// приходит готовой суммой: на кандидата broad-phase приходится ровно одно
+// целочисленное сложение, а не вызов.
+
+/** Вычисленный узел выражения DSL — одно применение оператора (PERF-3). */
+export function countCostExpression(): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costExpressions++;
+}
+
+/** Кандидаты, осмотренные обходом клеток broad-phase (PERF-3). */
+export function countCostBroadPhase(pairs: number): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costBroadPhasePairs += pairs;
+}
+
+/** Вызов детерминированного raycast Physics API (PERF-3). */
+export function countCostRaycast(): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costRaycasts++;
+}
+
+/**
+ * Сводка объёма работы тика — одна запись на тик (PERF-3) обычной формы DIAG-2:
+ * без отметки реального времени и данных окружения, номер — из той же сквозной
+ * нумерации, что и трейс. Уровень — границы систем (DIAG-3): счётчики стоимости
+ * — та же штатная телеметрия, что и счётчики систем, и полного потока команд
+ * для них не нужно.
+ *
+ * Имени системы у записи нет: она пишется, когда `endSystem` уже снял его, и
+ * принадлежит тику целиком.
+ *
+ * Оборванный тик сводки не получает: его объём работы неполон, и запись соврала
+ * бы о нём. Записи, выданные до обрыва, при этом уже у приёмника (DIAG-1).
+ */
+function recordTickCost(ctx: DiagnosticsContext): void {
+  if (TRACE_ORDER[ctx.trace] < TRACE_ORDER.systems) return;
+  record(ctx, 'tickCost', 'info', 'TICK_COST', {
+    data: {
+      commands: ctx.costCommands,
+      expressions: ctx.costExpressions,
+      broadPhasePairs: ctx.costBroadPhasePairs,
+      raycasts: ctx.costRaycasts,
+    },
+  });
 }
 
 // ------------------------------------------------------ примитивы FP-4

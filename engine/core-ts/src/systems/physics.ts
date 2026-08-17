@@ -32,6 +32,7 @@ import {
   type MutableCollider,
   type StaticCollider,
 } from './collisionGeometry.js';
+import { countCostBroadPhase, countCostRaycast } from '../debug.js';
 import { getField, hasComponent } from '../ecs/world.js';
 import { query } from '../ecs/query.js';
 import {
@@ -184,11 +185,16 @@ export class PhysicsWorld {
   private collect(bounds: Bounds, tag: string | undefined, mask: number | undefined): StaticCollider[] {
     this.queryId++;
     const found: number[] = [];
+    // Объём работы broad-phase — осмотренные кандидаты (PERF-3). Считается в
+    // локальную переменную, а не вызовом на каждого: в горячем цикле это ровно
+    // одно целочисленное сложение, а сумма уходит наружу один раз за запрос.
+    let pairs = 0;
     for (let cy = this.cell(bounds.minY); cy <= this.cell(bounds.maxY); cy++) {
       for (let cx = this.cell(bounds.minX); cx <= this.cell(bounds.maxX); cx++) {
         for (const index of this.cells.get(cx * 131072 + cy) ?? []) {
           if (this.stamp[index] === this.queryId) continue;
           this.stamp[index] = this.queryId;
+          pairs++;
           const s = this.statics[index]!;
           const rejected = mask === undefined ? tag !== undefined && !s.tags.includes(tag) : (s.layer & mask) === 0;
           if (rejected) continue;
@@ -197,6 +203,7 @@ export class PhysicsWorld {
         }
       }
     }
+    countCostBroadPhase(pairs);
     found.sort((a, b) => a - b);
     return found.map((index) => this.statics[index]!);
   }
@@ -507,6 +514,9 @@ export function createPhysicsApi(
 
   return {
     raycast: (from, to, rayOptions) => {
+      // Единица объёма — сам вызов луча (PERF-3): осмотренные им кандидаты
+      // статики считает `collect` своим счётчиком.
+      countCostRaycast();
       // Маска ФИЛЬТРУЕТ коллайдеры (PHYS-6): её отсутствие — пересечение по
       // всем, а не по коллайдерам какого-то одного тега. LoS свой тег называет
       // сам (`VisibilitySystem`), и подставленное умолчание молча сужало бы
