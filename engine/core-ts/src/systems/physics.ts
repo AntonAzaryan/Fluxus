@@ -528,9 +528,9 @@ export function createPhysicsApi(
       };
 
       for (const s of physicsWorld.query(rayBounds, tag)) {
-        // PHYS-13: ребро обрыва перекрывает луч направленно — вход с верхней
-        // стороны свободен, и такое пересечение не засчитывается вовсе.
-        if (cliffRayOpen(dir, s)) continue;
+        // PHYS-13: ребро, чей верхний уровень не выше уровня луча, прозрачно —
+        // пересечение не засчитывается вовсе.
+        if (cliffRayOpen(rayOptions?.elevation, s)) continue;
         const distance = rayVsBox(from, dir, rayLength, s);
         if (distance !== undefined && (best === undefined || distance < best)) {
           best = distance;
@@ -578,28 +578,20 @@ function queryColliders(world: WorldState, component: string, tag: string | unde
 }
 
 /**
- * Направленное перекрытие луча обрывом (PHYS-13): ребро с уровнями сторон
- * пропускает луч, входящий с верхней стороны, — обзор и полёт сверху вниз
- * свободны, зеркально духу гейта движения (PHYS-11), где спуск при активном
- * допуске свободен с любой высоты. Обычная статика без уровней и вход со
- * стороны нижнего (или равного — вырожденное ребро не даёт одностороннего
- * окна) уровня перекрывают луч как прежде.
- *
- * Ребро — осевой вырожденный прямоугольник (TERR-5), ось нормали — та, где
- * `min == max`; сторона входа — по знаку компоненты направления на этой оси:
- * положительная входит со стороны меньшей координаты (`levelNeg`),
- * отрицательная — со стороны `levelPos`. Нулевая компонента — луч вдоль самого
- * ребра, стороны входа у него нет: перекрытие сохраняется (консервативно; до
- * narrow-phase такой луч всё равно не доводит вырожденный слэб `rayVsBox`).
+ * PHYS-13: прозрачно ли ребро обрыва для луча данной высоты. Ребро перекрывает
+ * луч, только если его верхний уровень строго больше уровня испускателя:
+ * взгляд и полёт по своему уровню и вниз свободны — и через собственное ребро,
+ * и через низину к плато того же уровня, — а подъём выше уровня луча
+ * перекрывает, как любая статика. Луч без уровня консервативен: обрыв
+ * перекрывает его с обеих сторон, как обычная статика без уровней.
  *
  * Детерминизм не затронут: сравнение целых уровней, порядок перебора прежний.
  * На гейт движения (PHYS-11, `cliffGateOpen`) правило не переносится.
  */
-function cliffRayOpen(dir: Vec2, s: StaticCollider): boolean {
+function cliffRayOpen(elevation: number | undefined, s: StaticCollider): boolean {
+  if (elevation === undefined) return false;
   if (s.levelNeg === undefined || s.levelPos === undefined) return false;
-  const direction = s.minX === s.maxX ? dir.x : dir.y;
-  if (direction === 0) return false;
-  return direction > 0 ? s.levelNeg > s.levelPos : s.levelPos > s.levelNeg;
+  return (s.levelNeg > s.levelPos ? s.levelNeg : s.levelPos) <= elevation;
 }
 
 /**

@@ -22,7 +22,6 @@ import {
   DEFAULT_FOG_CONFIG,
   type EntityView,
   type FogLayerCanvas,
-  type FogSegment,
   type RenderContext,
 } from '../src/index.js';
 import { makeEntityView, makeTickView } from './fixtures.js';
@@ -255,16 +254,33 @@ describe('FOW-9: 2D shadow-casting по cliff-отрезкам', () => {
     expect(mask.valueAt(4.5, 4.5)).toBe(0);
   });
 
-  it('segmentCasts: тень только с нижней стороны, на линии и при равных уровнях — тень (FOW-9)', () => {
-    const edge: FogSegment = { x1: 4, y1: 4, x2: 4, y2: 5, levelNeg: 0, levelPos: 1 };
-    expect(segmentCasts(2.5, 4.5, edge)).toBe(true); // нижняя сторона — тень
-    expect(segmentCasts(5.5, 4.5, edge)).toBe(false); // верхняя — ребро прозрачно
-    // Наблюдатель ровно на линии — нижняя сторона: расхождение в сторону тумана.
-    expect(segmentCasts(4, 4.5, edge)).toBe(true);
-    // Равные уровни — тень с обеих сторон, как блок вырожденного ребра (PHYS-13).
-    const flat: FogSegment = { ...edge, levelPos: 0 };
-    expect(segmentCasts(2.5, 4.5, flat)).toBe(true);
-    expect(segmentCasts(5.5, 4.5, flat)).toBe(true);
+  it('свой уровень через низину: плато того же уровня открыто, из низины — в тени (FOW-9)', () => {
+    // Плато слева (колонки 0–1) и справа (колонки 6–7), низина посередине.
+    const levels = Array.from({ length: 8 }, () => '11000011');
+    const flags = Array.from({ length: 8 }, () => '........');
+    const grid = createTerrainGrid({ width: 8, height: 8, tileSize: 65536, levels, flags });
+    const segments = fogSegmentsOf(grid);
+    const mask = new VisibilityMask(fogRectOf(grid), 4);
+    // Наблюдатель на левом плато (уровень 1): оба ребра не выше его уровня —
+    // открыты и низина, и плато того же уровня за ней (PHYS-13, FOW-5).
+    mask.reveal({ x: 1.5, y: 4.5, radius: 7, level: 1 }, 0.25, segments);
+    expect(mask.valueAt(4.5, 4.5)).toBeGreaterThan(0);
+    expect(mask.valueAt(6.5, 4.5)).toBeGreaterThan(0);
+    // Из низины (уровень 0) дальнее плато — за ребром выше уровня: тень.
+    const fromDip = new VisibilityMask(fogRectOf(grid), 4);
+    fromDip.reveal({ x: 3.5, y: 4.5, radius: 7, level: 0 }, 0.25, segments);
+    expect(fromDip.valueAt(6.5, 4.5)).toBe(0);
+  });
+
+  it('segmentCasts: тень только от рёбер выше уровня наблюдателя (FOW-9, PHYS-13)', () => {
+    const edge = { x1: 4, y1: 4, x2: 4, y2: 5, levelNeg: 0, levelPos: 1 };
+    expect(segmentCasts(0, edge)).toBe(true); // наблюдатель ниже верхней стороны — тень
+    expect(segmentCasts(1, edge)).toBe(false); // свой уровень — ребро прозрачно
+    expect(segmentCasts(2, edge)).toBe(false); // сверху — прозрачно тем более
+    // Ребро с равными уровнями сторон выше наблюдателя — тень; на его уровне — нет.
+    const wall = { x1: 4, y1: 4, x2: 4, y2: 5, levelNeg: 2, levelPos: 2 };
+    expect(segmentCasts(1, wall)).toBe(true);
+    expect(segmentCasts(2, wall)).toBe(false);
   });
 });
 
