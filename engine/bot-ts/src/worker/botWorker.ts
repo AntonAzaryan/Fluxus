@@ -20,6 +20,7 @@ import { brainFactoryByKind } from '../brains/registry.js';
 import type { ArenaCenter } from '../brains/classic/utility.js';
 import { BotHost } from '../host.js';
 import { parseBotProfile } from '../profile.js';
+import { botTerrain } from '../terrainView.js';
 
 export interface BotWorkerOptions {
   /**
@@ -70,8 +71,13 @@ function serializerOf(format: BotWireFormat | undefined): Serializer | undefined
  */
 export function startBotWorker(init: BotWorkerInit, options: BotWorkerOptions = {}): BotHost {
   const pack: ContentPack & { readonly hash: string } = contentPack({ [init.sceneRef]: init.scene });
+  // Рельеф разбирается ОДИН раз на воркер и делится всеми его ботами: сетка
+  // иммутабельна (TERR-6), а разбор карт — работа, которую незачем повторять на
+  // каждом месте.
+  const terrain = botTerrain(init.scene);
   const assembly = {
     center: arenaCenter(init.scene),
+    ...(terrain !== undefined ? { terrain } : {}),
     ...(init.names !== undefined ? { names: init.names } : {}),
   };
   const serializer = serializerOf(init.wireFormat);

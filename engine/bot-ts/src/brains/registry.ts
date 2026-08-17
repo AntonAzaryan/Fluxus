@@ -9,11 +9,13 @@
  *
  * Данные сцены реестр требует, а не досочиняет: центр арены живёт в ассете
  * сцены (`arena` ARENA-1), а не в компоненте, и умолчание «начало координат»
- * на арене со смещённым центром означало бы бота, бегущего за край. Темпа матча
+ * на арене со смещённым центром означало бы бота, бегущего за край. Тем же
+ * путём и по тем же основаниям приезжает рельеф (`terrainView.ts`). Темпа матча
  * здесь нет — он приезжает мозгу в `BotSelf.tickRate` из `Welcome` его
  * собственного клиента (NTR-7).
  */
 import type { BotBrainFactory } from '../brain.js';
+import type { BotTerrain } from '../terrainView.js';
 import type { WorldViewNames } from '../worldView.js';
 import { classicBrain } from './classic/classicBrain.js';
 import type { ArenaCenter } from './classic/utility.js';
@@ -27,6 +29,11 @@ export type BrainKind = (typeof BRAIN_KINDS)[number];
 export interface BrainAssembly {
   /** Центр арены сцены (ARENA-1): цель отступления и «иди в центр». */
   readonly center: ArenaCenter;
+  /**
+   * Рельеф сцены (TERR-1, TERR-3): по нему мозг решает, брать ли уступ прыжком.
+   * Необязателен — сцена без террейна законна (DI-3), и обрывов в ней нет.
+   */
+  readonly terrain?: BotTerrain;
   /** Имена компонентов сцены (TICK-4); умолчания — как у клиента. */
   readonly names?: WorldViewNames;
 }
@@ -35,6 +42,7 @@ const BUILDERS: Readonly<Record<BrainKind, (assembly: BrainAssembly) => BotBrain
   classic: (assembly) =>
     classicBrain({
       center: assembly.center,
+      ...(assembly.terrain !== undefined ? { terrain: assembly.terrain } : {}),
       ...(assembly.names !== undefined ? { names: assembly.names } : {}),
     }),
   scripted: (assembly) =>

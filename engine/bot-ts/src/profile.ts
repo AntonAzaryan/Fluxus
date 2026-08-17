@@ -1,12 +1,20 @@
 /**
  * Профиль поведения бота (BOT-6): всё, что тюнит геймдизайнер, — задержка
- * реакции, шум прицела, джиттер таймингов, агрессивность, веса utility — живёт
- * документом контента (`game-content` CONT-1), а не константами кода. Новый
- * уровень сложности заводится JSON-документом; код мозга при этом один.
+ * реакции, шум прицела, джиттер таймингов, агрессивность, веса utility и
+ * СОСТАВ СПОСОБНОСТЕЙ — живёт документом контента (`game-content` CONT-1), а не
+ * константами кода. Новый уровень сложности заводится JSON-документом; код
+ * мозга при этом один.
  *
  * Здесь — форма документа и его валидация. Читается профиль на конструировании
  * мозга (BOT-6) и только там: реализация, дочитывающая профиль по ходу матча,
  * означала бы, что часть поведения всё-таки живёт вне документа.
+ *
+ * Способности — СПИСОК, а не одна кнопка: у героя демо их шесть боевых, и
+ * «какими из них бот играет» — ровно тот выбор, который BOT-6 отдаёт документу.
+ * Ульта отката времени в списке отсутствует не запретом в коде — код о её
+ * существовании не знает вовсе, — а тем, что дизайнер её не назвал: бит ульты
+ * ведёт хост мира (`netcode` NET-11), и бот, дёргающий его, останавливал бы
+ * матч всем участникам.
  *
  * Профиль версионируется с первого дня (design, Open Questions): поле `schema`
  * обязательно и проверяется — состав ручек дорастёт с плейтестами, и документ
@@ -17,13 +25,81 @@
  * не влияет (BOT-5).
  */
 
-/** Версия формы документа профиля. Растёт при несовместимом изменении состава. */
-export const BOT_PROFILE_SCHEMA = 1;
+/**
+ * Версия формы документа профиля. Растёт при несовместимом изменении состава.
+ *
+ * 2 — одна способность (`ability`) заменена списком (`abilities`), из весов
+ * `utility` ушло поведение `ability` (способности решаются параллельно
+ * движению, а не соревнуются с ним), у `movement` появились дистанция боя и
+ * стрейф.
+ */
+export const BOT_PROFILE_SCHEMA = 2;
 
-/** Поведения utility-слоя (BOT-6): ключи весов профиля. */
-export const BOT_BEHAVIORS = ['pressure', 'kite', 'retreat', 'dodge', 'ability'] as const;
+/**
+ * Поведения utility-слоя (BOT-6): ключи весов профиля. Это выбор МАРШРУТА на
+ * ближайшие тики, и способностей среди них нет намеренно — жать кнопку и идти
+ * можно одновременно, а поведение «стоять и кастовать» было бы ботом, который
+ * замирает ради выстрела.
+ */
+export const BOT_BEHAVIORS = ['pressure', 'kite', 'retreat', 'dodge'] as const;
 
 export type BotBehavior = (typeof BOT_BEHAVIORS)[number];
+
+/**
+ * На что нацелена способность — единственное, что мозг знает о её смысле
+ * (BOT-6: механика способности живёт в сцене, а не в мозге):
+ *
+ * - `enemy` — применяется по видимому противнику в дальности (каст, купол);
+ * - `threat` — применяется по сближающемуся снаряду (щит, захват, уклон);
+ * - `cliff` — применяется, когда по курсу обрыв или дыра, которые берутся
+ *   манёвром (прыжок).
+ */
+export const BOT_ABILITY_TARGETS = ['enemy', 'threat', 'cliff'] as const;
+
+export type BotAbilityTarget = (typeof BOT_ABILITY_TARGETS)[number];
+
+/** Одна способность: бит `buttons` (TICK-2) и политика её применения. */
+export interface BotAbilityProfile {
+  /**
+   * Имя действия сцены (`cast`, `shield`, `jump`…). Мозгу оно не значит ничего
+   * — решает `target`, — и нужно диагностике и находкам валидации: «способность
+   * 3» в тексте ошибки дизайнеру не адресуется.
+   */
+  readonly name: string;
+  /** Индекс бита в маске `buttons`, 0..15 (`tick-loop` TICK-2). */
+  readonly button: number;
+  readonly target: BotAbilityTarget;
+  /**
+   * Дальность, на которой применение осмысленно, мировые единицы. Для `cliff` —
+   * заглядывание вперёд по курсу: насколько далеко бот замечает уступ.
+   */
+  readonly range: number;
+  /**
+   * Сколько тиков держать бит. 1 — тап (кнопка нажата тик и отпущена: сцена
+   * получает и фронт, и спад, поэтому одним числом выражаются обе конвенции —
+   * и «срабатывает по нажатию», и «по отпусканию»). Больше — заряд: бот держит
+   * кнопку и отпускает её, накопив силу.
+   */
+  readonly holdTicks: number;
+  /** Пауза между применениями, тики; отсчитывается от отпускания кнопки. */
+  readonly cooldownTicks: number;
+  /** Вес в соревновании способностей между собой; 0 — способность выключена. */
+  readonly weight: number;
+  /**
+   * Перепад в уровнях террейна (`terrain` TERR-1), который бот берёт манёвром.
+   * Обязателен и осмыслен только для `cliff`: это `jumpHeight` конфигурации
+   * локомоушена (LOC-5), выраженный в профиле, — компонентов чужой сущности
+   * мозг не читает, а прыгать на уступ вдвое выше своего прыжка он не должен.
+   */
+  readonly rise?: number;
+  /**
+   * Требует ли манёвр ненулевого вектора движения. Уклон без направления
+   * игнорируется симуляцией (LOC-4), прыжок на месте не переносит через обрыв
+   * (LOC-5) — обе кнопки, нажатые стоя, сгорели бы в кулдаун впустую.
+   * Умолчание — `false`: каст и щит направления не требуют.
+   */
+  readonly requiresMoving?: boolean;
+}
 
 /** Человечность реакции: наблюдение доезжает до решения не мгновенно. */
 export interface BotReactionProfile {
@@ -49,7 +125,7 @@ export interface BotDecisionProfile {
   readonly jitterTicks: number;
 }
 
-/** Микро-слой: чем ограничен steering и когда бот считает, что «у края». */
+/** Микро-слой: чем ограничен steering, где бот хочет драться и как он мельтешит. */
 export interface BotMovementProfile {
   /** Максимальная доля хода стика: 1 — до упора (INP-3). */
   readonly maxSpeed: number;
@@ -57,16 +133,22 @@ export interface BotMovementProfile {
   readonly arriveTolerance: number;
   /** Запас до границы арены, мировые единицы: ближе бот держаться не станет. */
   readonly edgeMargin: number;
-}
-
-/** Способность: одна кнопка `buttons` (TICK-2) и политика её применения. */
-export interface BotAbilityProfile {
-  /** Индекс бита в маске `buttons`, 0..15 (`tick-loop` TICK-2). */
-  readonly button: number;
-  /** Пауза между применениями, тики. */
-  readonly cooldownTicks: number;
-  /** Дальность, на которой применение осмысленно, мировые единицы. */
-  readonly range: number;
+  /**
+   * Дистанция боя, мировые единицы: масштаб, по которому решаются «давить»
+   * против «кайтить» и на котором сближающийся снаряд уже страшен. Своим
+   * числом, а не дальностью какой-нибудь из способностей: список способностей
+   * дизайнер меняет, а желаемая дистанция боя — свойство самого бота.
+   */
+  readonly engageRange: number;
+  /**
+   * Доля хода, уходящая в поперечное смещение при сближении и кайте: 0 — бот
+   * ходит по прямой и потому попадаем в упор. Стрейф — не украшение: снаряд
+   * летит по прямой, и цель, идущая ровно на стрелка, не промахивается мимо
+   * себя.
+   */
+  readonly strafe: number;
+  /** Период смены стороны стрейфа, тики: маятник, а не дрожь. */
+  readonly strafePeriodTicks: number;
 }
 
 export interface BotProfile {
@@ -76,7 +158,8 @@ export interface BotProfile {
   readonly aim: BotAimProfile;
   readonly decision: BotDecisionProfile;
   readonly movement: BotMovementProfile;
-  readonly ability: BotAbilityProfile;
+  /** Способности, которыми бот играет (BOT-6). Пустой список — бот-мишень. */
+  readonly abilities: readonly BotAbilityProfile[];
   /** Веса поведений utility-слоя; ключи — `BOT_BEHAVIORS`. */
   readonly utility: Readonly<Record<BotBehavior, number>>;
   /** Агрессивность: сдвиг предпочтения «давить» против «отступать», 0..1. */
@@ -124,8 +207,88 @@ function num(
   return value;
 }
 
+function flag(
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  findings: Findings,
+): boolean | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') {
+    findings.issues.push(`${path}.${key}: ожидалось true или false`);
+    return undefined;
+  }
+  return value;
+}
+
 /** Тики — целые и неотрицательные: буфер наблюдений и джиттер меряются тиками. */
 const TICKS = { min: 0, max: 600, int: true } as const;
+
+/** Одна запись списка способностей: своя валидация, свой путь в находках. */
+function parseAbility(input: unknown, path: string, findings: Findings): BotAbilityProfile {
+  const root = record(input, path, findings);
+  const name = typeof root.name === 'string' && root.name !== '' ? root.name : '';
+  if (name === '') findings.issues.push(`${path}.name: ожидалась непустая строка`);
+
+  const target = root.target;
+  const known = (BOT_ABILITY_TARGETS as readonly unknown[]).includes(target);
+  if (!known) {
+    findings.issues.push(
+      `${path}.target: ожидалось одно из ${BOT_ABILITY_TARGETS.join('|')}, получено ${JSON.stringify(target)}`,
+    );
+  }
+  const resolved: BotAbilityTarget = known ? (target as BotAbilityTarget) : 'enemy';
+
+  // Перепад уступа спрашивается ровно у той цели, для которой он что-то значит:
+  // `rise` у каста — не безобидное лишнее поле, а признак того, что документ
+  // писали, не понимая, что настраивают.
+  const rise =
+    resolved === 'cliff'
+      ? num(root, 'rise', path, { min: 0, max: 15, int: true }, findings)
+      : undefined;
+  if (resolved !== 'cliff' && root.rise !== undefined) {
+    findings.issues.push(`${path}.rise: перепад уступа осмыслен только у цели "cliff"`);
+  }
+  const requiresMoving = flag(root, 'requiresMoving', path, findings);
+
+  return {
+    name,
+    // Ширина маски `buttons` — u16 (TICK-2): биты выше 15 не переживают круг
+    // через транспорт, и профиль не вправе их назначать.
+    button: num(root, 'button', path, { min: 0, max: 15, int: true }, findings),
+    target: resolved,
+    range: num(root, 'range', path, { min: 0, max: 1000 }, findings),
+    holdTicks: num(root, 'holdTicks', path, { ...TICKS, min: 1 }, findings),
+    cooldownTicks: num(root, 'cooldownTicks', path, TICKS, findings),
+    weight: num(root, 'weight', path, { min: 0, max: 10 }, findings),
+    ...(rise === undefined ? {} : { rise }),
+    ...(requiresMoving === undefined ? {} : { requiresMoving }),
+  };
+}
+
+function parseAbilities(input: unknown, source: string, findings: Findings): BotAbilityProfile[] {
+  const path = `${source}.abilities`;
+  if (!Array.isArray(input)) {
+    findings.issues.push(`${path}: ожидался массив способностей`);
+    return [];
+  }
+  const abilities = input.map((entry, index) => parseAbility(entry, `${path}[${index}]`, findings));
+  // Две способности на одном бите — не опечатка в одном документе, а бот,
+  // который вместо купола кастует щит: маска одна, и различить их сцене нечем.
+  const seen = new Map<number, string>();
+  for (const ability of abilities) {
+    const first = seen.get(ability.button);
+    if (first !== undefined) {
+      findings.issues.push(
+        `${path}: бит ${ability.button} назначен дважды — "${first}" и "${ability.name}"`,
+      );
+      continue;
+    }
+    seen.set(ability.button, ability.name);
+  }
+  return abilities;
+}
 
 /**
  * Разбор и проверка документа профиля (BOT-6). Бросает с полным списком
@@ -152,7 +315,6 @@ export function parseBotProfile(input: unknown, source = 'профиль бот�
   const aim = record(root.aim, `${source}.aim`, findings);
   const decision = record(root.decision, `${source}.decision`, findings);
   const movement = record(root.movement, `${source}.movement`, findings);
-  const ability = record(root.ability, `${source}.ability`, findings);
   const utility = record(root.utility, `${source}.utility`, findings);
 
   const weights = {} as Record<BotBehavior, number>;
@@ -180,14 +342,11 @@ export function parseBotProfile(input: unknown, source = 'профиль бот�
       maxSpeed: num(movement, 'maxSpeed', `${source}.movement`, { min: 0, max: 1 }, findings),
       arriveTolerance: num(movement, 'arriveTolerance', `${source}.movement`, { min: 0, max: 100 }, findings),
       edgeMargin: num(movement, 'edgeMargin', `${source}.movement`, { min: 0, max: 100 }, findings),
+      engageRange: num(movement, 'engageRange', `${source}.movement`, { min: 0, max: 1000 }, findings),
+      strafe: num(movement, 'strafe', `${source}.movement`, { min: 0, max: 1 }, findings),
+      strafePeriodTicks: num(movement, 'strafePeriodTicks', `${source}.movement`, { ...TICKS, min: 1 }, findings),
     },
-    ability: {
-      // Ширина маски `buttons` — u16 (TICK-2): биты выше 15 не переживают круг
-      // через транспорт, и профиль не вправе их назначать.
-      button: num(ability, 'button', `${source}.ability`, { min: 0, max: 15, int: true }, findings),
-      cooldownTicks: num(ability, 'cooldownTicks', `${source}.ability`, TICKS, findings),
-      range: num(ability, 'range', `${source}.ability`, { min: 0, max: 1000 }, findings),
-    },
+    abilities: parseAbilities(root.abilities, source, findings),
     utility: weights,
     aggression: num(root, 'aggression', source, { min: 0, max: 1 }, findings),
     ...(root.seed === undefined

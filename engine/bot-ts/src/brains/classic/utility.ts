@@ -5,11 +5,15 @@
  * Скоринг, а не дерево поведений и не машина состояний: поведения соревнуются
  * числом, и «сделать бота осторожнее» — правка веса в JSON, а не перестройка
  * графа переходов. Своя реализация, а не библиотека: зрелых нет, а весь слой —
- * пять функций полезности (design D4).
+ * четыре функции полезности (design D4).
  *
  * Сырая полезность каждого поведения нормирована в [0, 1] и умножается на вес
  * профиля. Нормировка обязательна: без неё веса перестали бы быть сравнимыми
  * между собой, и дизайнер тюнил бы не приоритет, а масштаб чужой формулы.
+ *
+ * Соревнуются здесь МАРШРУТЫ и только они. Способности решаются параллельно и
+ * своим слоем (`abilities.ts`): человек жмёт кнопку на бегу, и поведение
+ * «остановиться, чтобы кастовать» было бы не осторожностью, а параличом.
  */
 import { BOT_BEHAVIORS, type BotBehavior, type BotProfile } from '../../profile.js';
 import type { PerceivedWorld, RememberedEnemy, ThreatView } from './perception.js';
@@ -17,14 +21,21 @@ import type { BrainRandom } from './random.js';
 
 export type BehaviorScores = Readonly<Record<BotBehavior, number>>;
 
-/** Куда двигаться, куда целиться и жать ли способность на этом тике. */
+/** Куда двигаться и куда целиться на этом тике. */
 export interface BehaviorPlan {
   readonly behavior: BotBehavior;
   readonly targetX: number;
   readonly targetY: number;
   /** Точка прицела; `undefined` — целиться по направлению движения. */
   readonly aim: { readonly x: number; readonly y: number } | undefined;
-  readonly fire: boolean;
+  /**
+   * Уместен ли на этом маршруте стрейф — поперечное подмешивание в ход
+   * (`micro.ts`). Уместен он там, где направление выбрано ГРУБО: сблизиться,
+   * оторваться. На уклоне и отступлении направление выбрано ТОЧНО — вбок от
+   * линии полёта, к центру, — и мельтешение вокруг него ровно эти два манёвра и
+   * ломает.
+   */
+  readonly strafe: boolean;
 }
 
 export interface ArenaCenter {
@@ -38,7 +49,7 @@ function clamp01(value: number): number {
 }
 
 /** Ближайший известный враг: видимый предпочтительнее помнимого при равном расстоянии. */
-function nearestEnemy(world: PerceivedWorld): RememberedEnemy | undefined {
+export function nearestEnemy(world: PerceivedWorld): RememberedEnemy | undefined {
   let best: RememberedEnemy | undefined;
   let bestScore = Infinity;
   for (const enemy of world.enemies) {
@@ -54,7 +65,7 @@ function nearestEnemy(world: PerceivedWorld): RememberedEnemy | undefined {
 }
 
 /** Ближайшая сближающаяся угроза — единственная, от которой имеет смысл уклоняться. */
-function nearestThreat(world: PerceivedWorld): ThreatView | undefined {
+export function nearestThreat(world: PerceivedWorld): ThreatView | undefined {
   let best: ThreatView | undefined;
   for (const threat of world.threats) {
     if (!threat.closing) continue;
@@ -69,16 +80,16 @@ function distanceFromCenter(world: PerceivedWorld, center: ArenaCenter): number 
 
 /**
  * Полезности поведений (BOT-6). Ручки все из профиля: агрессивность двигает
- * пару «давить/кайтить», дальность способности задаёт масштаб дистанций, запас
- * до края — момент, когда пора отступать к центру.
+ * пару «давить/кайтить», дистанция боя задаёт масштаб расстояний, запас до края
+ * — момент, когда пора отступать к центру.
  */
 export function scoreBehaviors(
   world: PerceivedWorld,
   profile: BotProfile,
-  options: { readonly abilityReady: boolean; readonly center: ArenaCenter },
+  options: { readonly center: ArenaCenter },
 ): BehaviorScores {
   const enemy = nearestEnemy(world);
-  const range = profile.ability.range;
+  const range = profile.movement.engageRange;
   const distance =
     enemy === undefined ? Infinity : Math.hypot(enemy.x - world.self.x, enemy.y - world.self.y);
   const threat = nearestThreat(world);
@@ -99,11 +110,6 @@ export function scoreBehaviors(
         : clamp01((distanceFromCenter(world, center) - (radius - margin)) / margin),
     // Уклоняться — только от сближающегося снаряда и тем сильнее, чем он ближе.
     dodge: threat === undefined || range <= 0 ? 0 : clamp01(1 - threat.distance / range),
-    // Способность: готова, враг виден и в дальности.
-    ability:
-      !options.abilityReady || enemy === undefined || !enemy.visible || distance > range
-        ? 0
-        : clamp01(1 - distance / (range * 2)),
   };
 
   const scores = {} as Record<BotBehavior, number>;
@@ -142,6 +148,25 @@ function away(
   return { x: world.self.x + (dx / length) * step, y: world.self.y + (dy / length) * step };
 }
 
+/**
+ * Точка на луче «бот → цель», отстоящая от цели на `keep`. Ближе `keep` бот уже
+ * стоит — тогда цель движения он и есть сам: отходить назад — работа кайта, а
+ * не сближения.
+ */
+function approach(
+  toX: number,
+  toY: number,
+  world: PerceivedWorld,
+  keep: number,
+): { readonly x: number; readonly y: number } {
+  const dx = toX - world.self.x;
+  const dy = toY - world.self.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance <= keep || distance === 0) return { x: world.self.x, y: world.self.y };
+  const step = distance - keep;
+  return { x: world.self.x + (dx / distance) * step, y: world.self.y + (dy / distance) * step };
+}
+
 /** Уклонение вбок от линии полёта снаряда: поперёк его скорости, прочь от неё. */
 function sidestep(
   threat: ThreatView,
@@ -160,7 +185,7 @@ function sidestep(
   return { x: world.self.x + px * step, y: world.self.y + py * step };
 }
 
-/** Геометрия выбранного поведения на этот тик: цель движения, прицел, выстрел. */
+/** Геометрия выбранного поведения на этот тик: цель движения, прицел, уместность стрейфа. */
 export function planFor(
   behavior: BotBehavior,
   world: PerceivedWorld,
@@ -173,13 +198,20 @@ export function planFor(
   const aim = enemy === undefined ? undefined : { x: enemy.x, y: enemy.y };
 
   let target = { x: world.self.x, y: world.self.y };
-  let fire = false;
+  let strafe = false;
   switch (behavior) {
     case 'pressure':
-      if (enemy !== undefined) target = { x: enemy.x, y: enemy.y };
+      // Сближение — до ДИСТАНЦИИ БОЯ, а не до ног противника. Бот, идущий в
+      // упор, во-первых, не даёт своим же снарядам разлететься, во-вторых,
+      // лишает себя уклонения: чужой шар с двух клеток не успевает быть
+      // замеченным никем — ни ботом, ни человеком. Ближе бот подходит только
+      // тогда, когда дистанции боя нет вовсе (профиль поставил её в ноль).
+      if (enemy !== undefined) target = approach(enemy.x, enemy.y, world, profile.movement.engageRange);
+      strafe = true;
       break;
     case 'kite':
-      if (enemy !== undefined) target = away(enemy.x, enemy.y, world, profile.ability.range);
+      if (enemy !== undefined) target = away(enemy.x, enemy.y, world, profile.movement.engageRange);
+      strafe = true;
       break;
     case 'retreat':
       target = { x: center.x, y: center.y };
@@ -187,12 +219,9 @@ export function planFor(
     case 'dodge':
       if (threat !== undefined) target = sidestep(threat, world, step);
       break;
-    case 'ability':
-      fire = enemy !== undefined;
-      break;
   }
   const bounded = insideArena(target.x, target.y, world, profile, center);
-  return { behavior, targetX: bounded.x, targetY: bounded.y, aim, fire };
+  return { behavior, targetX: bounded.x, targetY: bounded.y, aim, strafe };
 }
 
 /**
@@ -232,7 +261,7 @@ export class UtilityLayer {
   choose(
     world: PerceivedWorld,
     tick: number,
-    options: { readonly abilityReady: boolean; readonly center: ArenaCenter },
+    options: { readonly center: ArenaCenter },
   ): BotBehavior {
     if (tick < this.nextDecisionTick) return this.chosen;
     const scores = scoreBehaviors(world, this.profile, options);
