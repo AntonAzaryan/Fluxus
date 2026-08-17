@@ -172,14 +172,22 @@ describe('FOW-9: 2D shadow-casting по cliff-отрезкам', () => {
     expect(mask.valueAt(3.5, 4.5)).toBeGreaterThan(0);
   });
 
-  it('расхождение приближения — в сторону тумана: касание отрезка это тень', () => {
+  it('кромка тени — полутон частичного покрытия, а не ступень (FOW-7)', () => {
     const grid = gridWithPillar();
     const mask = new VisibilityMask(fogRectOf(grid), 4);
     mask.reveal({ x: 2.5, y: 4.5, radius: 6 }, 0.25, fogSegmentsOf(grid));
-    // Тексель, чей центр лежит на продолжении луча через угол клетки, — туман:
-    // луч касается отрезка, и касание читается перекрытием, а не светом.
-    const corner = mask.valueAt(2.5 + 2 * (4 - 2.5), 4.5 + 2 * (4 - 4.5));
-    expect(corner).toBe(0);
+    // Скан текселей поперёк кромки тени от угла клетки: сторона к наблюдателю
+    // светлая, за углом — тень, а между ними покрытие делят субсэмплы. Скачка
+    // на весь диапазон между соседями нет — кромка полутоновая, а не ступень;
+    // тень при этом остаётся тенью (расхождение приближения — в сторону
+    // тумана, FOW-9).
+    const values: number[] = [];
+    for (let wy = 3.0625; wy <= 4.0; wy += 0.25) values.push(mask.valueAt(5.625, wy));
+    expect(values[0]).toBeGreaterThan(0);
+    expect(values[values.length - 1]).toBe(0);
+    let maxJump = 0;
+    for (let i = 1; i < values.length; i++) maxJump = Math.max(maxJump, Math.abs(values[i]! - values[i - 1]!));
+    expect(maxJump).toBeLessThan(1);
   });
 });
 

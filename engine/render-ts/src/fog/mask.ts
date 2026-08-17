@@ -138,6 +138,40 @@ function distanceSqToSegment(px: number, py: number, segment: FogSegment): numbe
  * `y` мира (v = 0 текстуры); переворот для canvas-потребителей — дело блита,
  * а не растра.
  */
+/** Смещения 2×2 субсэмплов тени в долях текселя — плоский массив пар (x, y). */
+const SHADOW_SUBSAMPLES = [-0.25, -0.25, 0.25, -0.25, -0.25, 0.25, 0.25, 0.25] as const;
+
+/**
+ * Число открытых субсэмплов текселя [0, 4] — покрытие тени, а не бинарный тест
+ * по центру: жёсткий переход 0→255 шириной в тексель читается лесенкой на
+ * диагонали кромки даже под билинейным сэмплом текстуры, а полутон частичного
+ * покрытия и есть «край без ступеней» (FOW-7). Консервативность FOW-9
+ * сохранена: частично перекрытый тексель темнее полностью открытого, света
+ * тень не добавляет.
+ */
+function litSubsamples(
+  observer: FogObserver,
+  wx: number,
+  wy: number,
+  scale: number,
+  near: readonly FogSegment[],
+): number {
+  let lit = 0;
+  for (let s = 0; s < SHADOW_SUBSAMPLES.length; s += 2) {
+    const sx = wx + SHADOW_SUBSAMPLES[s]! / scale;
+    const sy = wy + SHADOW_SUBSAMPLES[s + 1]! / scale;
+    let blocked = false;
+    for (const segment of near) {
+      if (segmentBlocks(observer.x, observer.y, sx, sy, segment)) {
+        blocked = true;
+        break;
+      }
+    }
+    if (!blocked) lit += 1;
+  }
+  return lit;
+}
+
 export class VisibilityMask {
   readonly rect: FogWorldRect;
   /** Текселей на мировую единицу — разрешение маски (FOW-10). */
@@ -199,14 +233,14 @@ export class VisibilityMask {
         if (current === 255) continue; // уже полностью открыт другим наблюдателем
         const value = Math.round(edgeGradient(Math.sqrt(distSq), radius, edgeWidth) * 255);
         if (value <= current) continue;
-        let blocked = false;
-        for (const segment of near) {
-          if (segmentBlocks(observer.x, observer.y, wx, wy, segment)) {
-            blocked = true;
-            break;
-          }
+        if (near.length === 0) {
+          this.data[row + tx] = value;
+          continue;
         }
-        if (!blocked) this.data[row + tx] = value;
+        const lit = litSubsamples(observer, wx, wy, scale, near);
+        if (lit === 0) continue;
+        const shaded = lit === 4 ? value : Math.round((value * lit) / 4);
+        if (shaded > current) this.data[row + tx] = shaded;
       }
     }
   }

@@ -12,7 +12,7 @@
     "color": "#0c1220",
     "edgeWidth": 2.5,
     "conservatism": 0.92,
-    "resolution": 4,
+    "resolution": 8,
     "fadeSeconds": 0.45
   }
 }
