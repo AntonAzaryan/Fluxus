@@ -10,6 +10,20 @@ export type {
   TickView,
 } from './types.js';
 
+// Пресеты качества (`render-quality` QUAL-1..3): контракт объявления ручек
+// подсистемой (расширение REND-8), реестр, собираемый из деклараций, и
+// контроллер, раздающий значения документа пресета. Имён пресетов пакет не
+// знает — их приносит приложение игры.
+export { QualityController, validateQualityPreset } from './quality.js';
+export type {
+  QualityDeclaration,
+  QualityKnob,
+  QualityKnobSemantics,
+  QualityPreset,
+  QualityValue,
+  QualityValues,
+} from './types.js';
+
 // Счётчики стоимости рендера (`performance-budget` PERF-3): инжектируемый сток
 // объёма работы, тегированный стадией конвейера (PERF-2). Без подключённого
 // стока учёт не исполняется — обычный матч за бенчмарк не платит.

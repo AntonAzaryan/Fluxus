@@ -61,6 +61,13 @@ export class PresentationStage {
   private producer: PresentationProducer | null = null;
 
   /**
+   * Наблюдатель регистраций — вход контроллера качества (`render-quality`
+   * QUAL-1, design D2). Он один: контроллер качества у сцены один, а второй
+   * означал бы два источника значений одной ручки.
+   */
+  private watcher: ((subsystem: RenderSubsystem) => void) | null = null;
+
+  /**
    * Сущности последней доставки — знаменатель счётчика инстансов стадии кадра
    * (PERF-2): у `frame` своего состава нет, а тронуть подсистемы могут только
    * то, что им доставили. Стоимости не несёт: одно присваивание на доставку.
@@ -80,7 +87,22 @@ export class PresentationStage {
   register(subsystem: RenderSubsystem): this {
     this.subsystems.push(subsystem);
     subsystem.init(this.context);
+    this.watcher?.(subsystem);
     return this;
+  }
+
+  /**
+   * Подписка на регистрации подсистем (QUAL-1, design D2). Уже
+   * зарегистрированные отдаются наблюдателю НЕМЕДЛЕННО: контроллер качества,
+   * созданный после сборки сцены, обязан увидеть их ровно так же, как позднюю
+   * регистрацию, — иначе порядок «сперва подсистемы, потом контроллер» молча
+   * оставлял бы половину реестра без значений.
+   *
+   * Наблюдатель один (см. `watcher`); повторная подписка его заменяет.
+   */
+  watchRegistrations(watcher: (subsystem: RenderSubsystem) => void): void {
+    this.watcher = watcher;
+    for (const subsystem of this.subsystems) watcher(subsystem);
   }
 
   /**

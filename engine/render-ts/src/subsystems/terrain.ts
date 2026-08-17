@@ -43,12 +43,21 @@ import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
+  type QualityDeclaration,
+  type QualityValues,
   type RenderContext,
   type RenderSubsystem,
   type TickView,
 } from '../types.js';
 import { cornerLevels, type SurfaceNormal, type VisualSurface } from '../visualSurface.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
+
+/**
+ * Ручка качества подсистемы (`render-quality` QUAL-1): плотность разбиения
+ * клетки с кривизной — ПОТОЛОК над значением конфига рендера (REND-9), а не
+ * значение вместо него (design D3).
+ */
+const TERRAIN_TESSELLATION = 'terrain.curvatureTessellation';
 
 // --------------------------------------------------- чистая генерация (тесты)
 
@@ -441,6 +450,11 @@ export class TerrainSubsystem implements RenderSubsystem {
   private heightStep = 1;
   /** Плотность разбиения клеток с кривизной — параметр рендера (REND-9). */
   private tessellation = DEFAULT_CURVATURE_TESSELLATION;
+  /**
+   * Потолок плотности от пресета качества (QUAL-1, design D3); бесконечность —
+   * потолка нет, действует значение конфига рендера.
+   */
+  private ceiling = Number.POSITIVE_INFINITY;
   /** Собственная копия карты пола: presentation-состояние может жить без террейна. */
   private floor: Uint8Array;
   private chunksX: number;
@@ -465,7 +479,9 @@ export class TerrainSubsystem implements RenderSubsystem {
   init(ctx: RenderContext): void {
     this.ctx = ctx;
     this.heightStep = ctx.config.heightStep;
-    this.tessellation = ctx.config.curvatureTessellation ?? DEFAULT_CURVATURE_TESSELLATION;
+    // Плотность — конфиг рендера под потолком пресета (REND-9, QUAL-1): порядок
+    // «init, потом контроллер качества» и обратный дают одно и то же.
+    this.tessellation = this.effectiveTessellation();
     this.floorMaterial = new THREE.MeshStandardMaterial({
       color: this.floorColor,
       roughness: 0.95,
@@ -555,6 +571,54 @@ export class TerrainSubsystem implements RenderSubsystem {
   updateFrame(_dt: number, _alpha: number): void {
     // Пересборка затронутых чанков — не позже следующего кадра (REND-7, ED-15).
     this.flushDirty();
+  }
+
+  /**
+   * Ручки качества подсистемы (`render-quality` QUAL-1, QUAL-3): одна — потолок
+   * плотности разбиения клеток с кривизной. Геометрия террейна — вершины и
+   * треугольники, растущие площадью арены И квадратом плотности (REND-9);
+   * покадровой работы у подсистемы почти нет, но нарисованное ею стоит каждый
+   * кадр, и рычаг нужен именно здесь.
+   */
+  quality(): QualityDeclaration {
+    return {
+      subsystem: this.name,
+      knobs: [
+        {
+          name: TERRAIN_TESSELLATION,
+          cost: 'вершины и треугольники визуальной поверхности: клетка с кривизной даёт N×N подклеток (REND-9)',
+          semantics: 'ceiling',
+          // Потолка нет — действует значение конфига рендера (REND-9).
+          default: Number.POSITIVE_INFINITY,
+          min: 1,
+          max: 16,
+        },
+      ],
+    };
+  }
+
+  /**
+   * Потолок плотности разбиения от пресета (QUAL-1, design D3): действующая
+   * плотность = min(конфига рендера, потолка). Конфиг остаётся авторским — его
+   * подбирает тот, кто смотрит на арену (REND-9), — а пересборка геометрии всех
+   * чанков идёт событием смены пресета, а не кадром.
+   */
+  applyQuality(values: QualityValues): void {
+    const ceiling = values.get(TERRAIN_TESSELLATION);
+    this.ceiling = typeof ceiling === 'number' ? ceiling : Number.POSITIVE_INFINITY;
+    const next = this.effectiveTessellation();
+    if (next === this.tessellation) return;
+    this.tessellation = next;
+    // До init'а чанков ещё нет: плотность возьмётся при первой сборке.
+    if (this.ctx === null) return;
+    this.markAllChunks();
+    this.flushDirty();
+  }
+
+  /** Плотность разбиения под потолком пресета; целая — подклетки дробными не бывают. */
+  private effectiveTessellation(): number {
+    const authored = this.ctx?.config.curvatureTessellation ?? DEFAULT_CURVATURE_TESSELLATION;
+    return Math.max(1, Math.floor(Math.min(authored, this.ceiling)));
   }
 
   /** Число вершин пола — для тестов и профилировки. */

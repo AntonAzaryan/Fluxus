@@ -78,7 +78,7 @@ import {
   type ParticleEffectDocument,
   type VisualManifest,
 } from '@game-mvp/assets';
-import type { EntityView, RenderContext, RenderSubsystem, TickView } from '../types.js';
+import type { EntityView, QualityDeclaration, QualityValues, RenderContext, RenderSubsystem, TickView } from '../types.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import type { VisualSurface } from '../visualSurface.js';
 import {
@@ -86,6 +86,7 @@ import {
   instanceFinished,
   instanceParticles,
   restartInstance,
+  setInstanceDensity,
   type EffectInstance,
 } from '../particleEffects.js';
 import {
@@ -103,6 +104,14 @@ const NO_STATE_NAMES: readonly string[] = [];
 
 /** Вид эмиттерного ассета в реестре загрузчиков (ASSET-14). */
 const EFFECT_ASSET_KIND = 'particle-effect';
+
+/**
+ * Ручка качества подсистемы (`render-quality` QUAL-1): множитель плотности
+ * частиц. Авторского источника у неё нет — документ эффекта задаёт эмиссию, а
+ * множитель живёт поверх него, — поэтому семантика прямая, а не потолок
+ * (design D3).
+ */
+const PARTICLES_DENSITY = 'particles.density';
 
 // Переиспользуемые между кадрами объекты — аллокаций на эмиттер на кадр нет.
 const SCRATCH_POSITION = new THREE.Vector3();
@@ -220,6 +229,8 @@ export class ParticlesSubsystem implements RenderSubsystem {
   private view: TickView | null = null;
   /** Последний набор декораций: по нему пересводятся оболочки (REND-17). */
   private decorations: ReadonlyMap<EntityId, EntityView> | null = null;
+  /** Множитель плотности от пресета качества (QUAL-1); 1 — эмиссия документа. */
+  private density = 1;
 
   constructor(manifest: VisualManifest, options: ParticlesOptions = {}) {
     this.manifest = manifest;
@@ -312,6 +323,43 @@ export class ParticlesSubsystem implements RenderSubsystem {
     this.dropSocketCaches();
     if (this.view !== null) this.syncShells(this.view);
     if (this.decorations !== null) this.syncDecorations(this.decorations);
+  }
+
+  /**
+   * Ручки качества подсистемы (QUAL-1, QUAL-3): одна — множитель плотности.
+   * Число живых частиц — покадровая работа библиотеки и вершины батча, и растёт
+   * оно и с числом эмиттеров, и с эмиссией каждого (REND-24); множитель правит
+   * вторую половину, не трогая первую: какие эмиттеры существуют, решают
+   * доставленное состояние и манифест, а не пресет.
+   */
+  quality(): QualityDeclaration {
+    return {
+      subsystem: this.name,
+      knobs: [
+        {
+          name: PARTICLES_DENSITY,
+          cost: 'живые частицы: множитель эмиссии каждого эмиттера — вершины батчей и покадровая симуляция библиотеки (REND-24)',
+          semantics: 'value',
+          default: 1,
+          min: 0,
+          max: 4,
+        },
+      ],
+    };
+  }
+
+  /**
+   * Множитель плотности от контроллера качества (QUAL-1). Применяется ко всем
+   * играющим экземплярам сразу и к каждому взятому из пула дальше — событием
+   * смены пресета, а не кадром.
+   */
+  applyQuality(values: QualityValues): void {
+    const density = values.get(PARTICLES_DENSITY);
+    if (typeof density !== 'number' || density === this.density) return;
+    this.density = density;
+    for (const shell of this.shells.values()) setInstanceDensity(shell.instance, density);
+    for (const shell of this.decorationShells.values()) setInstanceDensity(shell.instance, density);
+    for (const shot of this.shots) setInstanceDensity(shot, density);
   }
 
   /** Сколько эмиттеров играет сейчас — вход отладки и тестов. */
@@ -586,7 +634,12 @@ export class ParticlesSubsystem implements RenderSubsystem {
    */
   private acquire(effect: string): EffectInstance | null {
     const doc = this.document(effect);
-    return doc === null ? null : this.pool.acquire(effect, doc, this.group);
+    if (doc === null) return null;
+    const instance = this.pool.acquire(effect, doc, this.group);
+    // Экземпляр из пула хранит эмиссию прошлого употребления, а свежий клон —
+    // документную: множитель плотности ставится здесь обоим (QUAL-1).
+    if (instance !== null) setInstanceDensity(instance, this.density);
+    return instance;
   }
 
   /**

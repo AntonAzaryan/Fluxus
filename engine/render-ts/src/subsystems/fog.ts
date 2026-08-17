@@ -36,7 +36,13 @@
 import * as THREE from 'three';
 import type { EntityId, TerrainGrid } from '@game-mvp/core';
 import type { PresentationFog } from '@game-mvp/assets';
-import type { RenderContext, RenderSubsystem, TickView } from '../types.js';
+import type {
+  QualityDeclaration,
+  QualityValues,
+  RenderContext,
+  RenderSubsystem,
+  TickView,
+} from '../types.js';
 import { costSink } from '../cost.js';
 import {
   VisibilityMask,
@@ -78,6 +84,18 @@ export const DEFAULT_FOG_CONFIG: FogRenderConfig = Object.freeze({
   resolution: 4,
   fadeSeconds: 0.4,
 });
+
+/**
+ * Ручка качества подсистемы (`render-quality` QUAL-1, FOW-10): разрешение маски
+ * — ПОТОЛОК над сценным значением, а не значение вместо него (design D3).
+ * Действующее разрешение = min(сценного, потолка): пресет вправе удешевить
+ * картинку, но не поднять её выше авторской и не тронуть документ сцены.
+ *
+ * Верхняя граница диапазона — та же, что у здравого смысла авторского значения:
+ * маска строится на CPU каждой доставкой, и её стоимость растёт КВАДРАТОМ
+ * разрешения (обнуление, reveal, загрузка в текстуру, блит миникарты).
+ */
+const FOG_MASK_RESOLUTION = 'fog.maskResolution';
 
 /** Секция документа поверх умолчаний: отсутствующее поле — умолчание (FOW-10). */
 export function resolveFogConfig(section?: PresentationFog): FogRenderConfig {
@@ -204,6 +222,17 @@ export class FogSubsystem implements RenderSubsystem {
   private readonly heroOf: () => EntityId | null;
   private readonly createCanvas: ((width: number, height: number) => FogLayerCanvas) | null;
 
+  /**
+   * Секция `fog` документа сцены как есть (PRES-2) — АВТОРСКИЙ источник. Она
+   * здесь только читается: пресет качества документ не правит ни байтом
+   * (FOW-10, QUAL-1), а `current` ниже — уже действующая конфигурация.
+   */
+  private section: PresentationFog | undefined;
+  /**
+   * Потолок разрешения маски от пресета качества (QUAL-1, design D3);
+   * бесконечность — потолка нет, действует сценное значение.
+   */
+  private ceiling = Number.POSITIVE_INFINITY;
   private current: FogRenderConfig;
   private ctx: RenderContext | null = null;
   private rect: FogWorldRect;
@@ -234,7 +263,8 @@ export class FogSubsystem implements RenderSubsystem {
     // пакет рендера DOM не трогает, и слой миникарты без фабрики просто не
     // существует — маска и пост-проход от этого не зависят.
     this.createCanvas = options.createCanvas ?? null;
-    this.current = resolveFogConfig(options.config);
+    this.section = options.config;
+    this.current = this.effective();
     // Приём сетки — точка входной границы (REND-1, TERR-2): дальше только float.
     this.rect = fogRectOf(this.grid);
     this.segments = fogSegmentsOf(this.grid);
@@ -344,12 +374,64 @@ export class FogSubsystem implements RenderSubsystem {
   }
 
   /**
+   * Ручки качества подсистемы (QUAL-1, QUAL-3): одна — потолок разрешения
+   * маски. Стоимость перестройки растёт квадратом разрешения и линейно числом
+   * доставленных сущностей, поэтому рычаг здесь обязателен: именно на нём
+   * споткнулась правка 4 → 8 (proposal «Why»).
+   */
+  quality(): QualityDeclaration {
+    return {
+      subsystem: this.name,
+      knobs: [
+        {
+          name: FOG_MASK_RESOLUTION,
+          cost: 'тексели маски видимости: обнуление, reveal, загрузка в текстуру и блит миникарты растут квадратом разрешения (FOW-7, FOW-10)',
+          semantics: 'ceiling',
+          // Потолка нет — действует сценное значение (FOW-10, design D3).
+          default: Number.POSITIVE_INFINITY,
+          min: 0.5,
+          max: 32,
+        },
+      ],
+    };
+  }
+
+  /**
+   * Потолок разрешения от пресета (QUAL-1, FOW-10). Документ сцены не меняется:
+   * потолок живёт в подсистеме, а действующее значение считается заново.
+   * Консервативность reveal (FOW-9) от разрешения не зависит — коэффициент
+   * применяется к радиусу наблюдателя, а грубая маска ошибается в ту же
+   * сторону: показать лишний туман можно, скрыть его — нет.
+   */
+  applyQuality(values: QualityValues): void {
+    const ceiling = values.get(FOG_MASK_RESOLUTION);
+    this.ceiling = typeof ceiling === 'number' ? ceiling : Number.POSITIVE_INFINITY;
+    this.applyResolved(this.effective());
+  }
+
+  /**
+   * Действующая конфигурация = авторская секция, ограниченная сверху потолком
+   * пресета (design D3): `min` — и только он. Потолок ВЫШЕ сценного значения
+   * картинку не улучшает: авторский потолок остаётся авторским (FOW-10).
+   */
+  private effective(): FogRenderConfig {
+    const authored = resolveFogConfig(this.section);
+    const resolution = Math.min(authored.resolution, this.ceiling);
+    return resolution === authored.resolution ? authored : { ...authored, resolution };
+  }
+
+  /**
    * Обновление конфигурации в рантайме (FOW-10): значения применяются на живой
    * подсистеме — униформы пост-прохода правятся на месте, смена разрешения
    * пересобирает только растр маски. Пересоздания подсистемы или рендера нет.
    */
   applyConfig(section?: PresentationFog): void {
-    const next = resolveFogConfig(section);
+    this.section = section;
+    this.applyResolved(this.effective());
+  }
+
+  /** Общий шов применения: и правка секции автором, и потолок пресета — сюда. */
+  private applyResolved(next: FogRenderConfig): void {
     const previous = this.current;
     this.current = next;
     (this.postMaterial.uniforms.uStrength as { value: number }).value = next.strength;

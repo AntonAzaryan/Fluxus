@@ -15,9 +15,11 @@
  *
  * ## Два яруса (REND-20)
  *
- * Ярус выбирает ЗАПИСЬ МАНИФЕСТА (ASSET-13), а не код: `resolveVisualTier` даёт
- * батчевый всем, кроме записей с процедурным контролем костей (REND-5), и явное
- * поле записи это переопределяет.
+ * Ярус выбирает ЗАПИСЬ МАНИФЕСТА (ASSET-13), а не код: батчевый достаётся всем,
+ * кроме записей с процедурным контролем костей (REND-5), и явное поле записи
+ * это переопределяет. Умолчание для записей, ЯРУС НЕ НАЗВАВШИХ, — ручка пресета
+ * качества (`render-quality` QUAL-1, `declaredTier` ниже); авторского выбора и
+ * требования механизма пресет не касается.
  *
  * - **батчевый**: запись в разделяемом `InstancedMesh` (`model/batch.ts`),
  *   скиннинг на GPU по VAT-текстуре модели (`model/vatMaterial.ts`), анимация —
@@ -84,7 +86,6 @@ import {
   resolveSurfaceAlign,
   resolveVisual,
   resolveVisualEmitter,
-  resolveVisualTier,
   type AssetState,
   type BakedDerivatives,
   type BakedSkinSet,
@@ -93,7 +94,14 @@ import {
   type VisualManifest,
   type VisualTier,
 } from '@game-mvp/assets';
-import type { EntityView, RenderContext, RenderSubsystem, TickView } from '../types.js';
+import type {
+  EntityView,
+  QualityDeclaration,
+  QualityValues,
+  RenderContext,
+  RenderSubsystem,
+  TickView,
+} from '../types.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import type { SurfaceNormal, VisualSurface } from '../visualSurface.js';
 import { createPickProxy, type InstanceProxySource, type PickProxy, type PickProxyVisitor } from '../picking.js';
@@ -253,6 +261,27 @@ const DEFAULT_CULL_MARGIN = 0.5;
  * данные записи (ASSET-13); поэтому число здесь одно и относительное.
  */
 const LOD_HYSTERESIS = 0.1;
+/**
+ * Ручки качества подсистемы (`render-quality` QUAL-1). Множитель порогов LOD —
+ * прямое значение поверх ПОРОГОВ ЗАПИСИ (ASSET-13, REND-22): больше единицы —
+ * уровень переключается раньше и треугольников в кадре меньше. Ярус по
+ * умолчанию (REND-20) — тоже прямое значение: авторского источника у него нет,
+ * умолчание живёт в коде, и пресет заменяет именно его.
+ */
+const MODELS_LOD_SCALE = 'models.lodThresholdScale';
+const MODELS_DEFAULT_TIER = 'models.defaultTier';
+/**
+ * Ярус, которым рисуется запись, НЕ назвавшая его (REND-20, ASSET-13): пресет
+ * правит ровно это умолчание. Явный ярус записи и вынужденный детальный у
+ * процедурного контроля костей (REND-5) ему не подчиняются: первый — решение
+ * автора, второй — требование механизма, и скелет батчевому ярусу взять
+ * неоткуда. Со значением `'batched'` функция тождественна `resolveVisualTier`
+ * ассетов, и умолчание пресета совпадает с ним же.
+ */
+function declaredTier(visual: EntityVisual | undefined, fallback: VisualTier): VisualTier {
+  if (visual?.tier !== undefined) return visual.tier;
+  return visual?.boneControls === undefined ? fallback : 'detailed';
+}
 /**
  * Перёд модели, когда запись манифеста его не называет (REND-13): соглашение
  * первого поддержанного формата — у MDX лицо вдоль `+X`, то есть 0. Так модели,
@@ -610,6 +639,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private readonly cullSphere = new THREE.Sphere();
   private readonly cullCenter = new THREE.Vector3();
   private readonly cameraPosition = new THREE.Vector3();
+  /** Множитель порогов LOD от пресета качества (QUAL-1, REND-22); 1 — пороги записи. */
+  private lodScale = 1;
+  /** Ярус записей, не назвавших его (QUAL-1, REND-20) — умолчание кода до пресета. */
+  private defaultTier: VisualTier = 'batched';
 
   constructor(manifest: VisualManifest, options: ModelsOptions = {}) {
     this.manifest = manifest;
@@ -859,9 +892,17 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (maxLevel <= 0) return; // модель без цепочки — единственный уровень
     const size = screenSize(radius, this.cameraPosition.distanceTo(record.pos), screen);
     const thresholds = entry.thresholds;
+    // Множитель пресета (QUAL-1) сдвигает ПОРОГИ, а не экранный размер: пороги
+    // остаются данными записи (ASSET-13), а пресет говорит, насколько раньше
+    // или позже их читать. Гистерезис при этом свой — он про дрожание у порога,
+    // а не про качество.
+    const scale = this.lodScale;
     let level = Math.min(record.lodLevel, maxLevel);
-    while (level < maxLevel && size < (thresholds[level] ?? 0) * (1 - LOD_HYSTERESIS)) level += 1;
-    while (level > 0 && size > (thresholds[level - 1] ?? Number.POSITIVE_INFINITY) * (1 + LOD_HYSTERESIS)) {
+    while (level < maxLevel && size < (thresholds[level] ?? 0) * scale * (1 - LOD_HYSTERESIS)) level += 1;
+    while (
+      level > 0 &&
+      size > (thresholds[level - 1] ?? Number.POSITIVE_INFINITY) * scale * (1 + LOD_HYSTERESIS)
+    ) {
       level -= 1;
     }
     record.lodLevel = level;
@@ -1039,6 +1080,69 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   // ------------------------------------------------------------ публичное
 
   /**
+   * Ручки качества подсистемы (QUAL-1, QUAL-3): стоимость кадра растёт числом
+   * инстансов, и обе ручки правят именно её — множитель порогов LOD (REND-22)
+   * решает, сколько треугольников несёт один инстанс, ярус по умолчанию
+   * (REND-20) — сколько стоит его носитель.
+   */
+  quality(): QualityDeclaration {
+    return {
+      subsystem: this.name,
+      knobs: [
+        {
+          name: MODELS_LOD_SCALE,
+          cost: 'треугольники инстансов: множитель порогов переключения уровней детализации записи (REND-22, ASSET-13)',
+          semantics: 'value',
+          default: 1,
+          min: 0.25,
+          max: 8,
+        },
+        {
+          name: MODELS_DEFAULT_TIER,
+          cost: 'носитель инстанса: батчевый — общий InstancedMesh со скиннингом на GPU, детальный — пер-инстансный скелет, микшер и материалы (REND-20)',
+          semantics: 'value',
+          default: 'batched',
+          values: ['batched', 'detailed'],
+        },
+      ],
+    };
+  }
+
+  /**
+   * Значения ручек от контроллера качества (QUAL-1). Множитель порогов доедет
+   * ближайшим кадром сам — уровень выбирается в кадре (REND-22); смена яруса по
+   * умолчанию пересобирает инстансы записей, ярус не назвавших, — это событие
+   * уровня меню, а не кадра (design Risks): аллокационная дисциплина
+   * кадрового пути ограничивает кадры, а не события.
+   */
+  applyQuality(values: QualityValues): void {
+    const scale = values.get(MODELS_LOD_SCALE);
+    if (typeof scale === 'number') this.lodScale = scale;
+    const tier = values.get(MODELS_DEFAULT_TIER);
+    if (tier === 'batched' || tier === 'detailed') this.applyDefaultTier(tier);
+  }
+
+  /**
+   * Ярус по умолчанию на живой сцене (REND-20, QUAL-1). Пересобираются ровно
+   * записи, ярус НЕ назвавшие: у явной записи и у контроля костей ярус свой, и
+   * трогать их пресет не вправе. До `init` пересобирать нечего — инстансов ещё
+   * нет, а ярус выберется при их создании.
+   */
+  private applyDefaultTier(next: VisualTier): void {
+    if (next === this.defaultTier) return;
+    this.defaultTier = next;
+    const ctx = this.ctx;
+    if (ctx === null) return;
+    for (const pool of [this.instances, this.decorations]) {
+      for (const record of pool.values()) {
+        if (record.kind === null) continue;
+        if (record.visual?.tier !== undefined || record.visual?.boneControls !== undefined) continue;
+        this.rebuild(ctx, record);
+      }
+    }
+  }
+
+  /**
    * Смена скина инстанса без перезагрузки модели (REND-6): у детального яруса
    * подменяются текстуры его материалов, у батчевого — индекс варианта записи.
    * Возвращает false, если сущности нет.
@@ -1085,7 +1189,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       if (record.kind === null) continue;
       const before = record.visual;
       record.visual = resolveVisual(this.manifest, record.kind);
-      if (rebuildsInstance(before, record.visual)) {
+      if (rebuildsInstance(before, record.visual, this.defaultTier)) {
         this.rebuild(ctx, record);
         continue;
       }
@@ -1577,7 +1681,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * где производные и спрашивались.
    */
   private tierOf(record: InstanceRecord, shared: SharedEntry): VisualTier {
-    if (resolveVisualTier(record.visual) === 'detailed') return 'detailed';
+    if (declaredTier(record.visual, this.defaultTier) === 'detailed') return 'detailed';
     return shared.derivatives === null ? 'detailed' : 'batched';
   }
 
@@ -2112,10 +2216,14 @@ function viewOf(record: InstanceRecord): ModelInstanceView {
 function rebuildsInstance(
   before: EntityVisual | undefined,
   after: EntityVisual | undefined,
+  fallbackTier: VisualTier,
 ): boolean {
   if (before === after) return false;
   if (before?.model !== after?.model) return true;
-  if (resolveVisualTier(before) !== resolveVisualTier(after)) return true;
+  // Ярус сравнивается ДЕЙСТВУЮЩИЙ (REND-20, QUAL-1): под пресетом с детальным
+  // ярусом по умолчанию правка «убрать явный batched из записи» меняет ярус, а
+  // `resolveVisualTier` этого бы не увидел — он знает только умолчание кода.
+  if (declaredTier(before, fallbackTier) !== declaredTier(after, fallbackTier)) return true;
   return !samePartSets(before?.hiddenParts, after?.hiddenParts);
 }
 
