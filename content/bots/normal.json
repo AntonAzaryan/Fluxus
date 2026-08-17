@@ -1,13 +1,13 @@
 {
-  "schema": 1,
+  "schema": 2,
   "name": "normal",
   "reaction": {
-    "delayTicks": 10,
+    "delayTicks": 8,
     "jitterTicks": 4,
     "memoryTicks": 180
   },
   "aim": {
-    "noiseDegrees": 5,
+    "noiseDegrees": 4,
     "noisePeriodTicks": 12
   },
   "decision": {
@@ -16,20 +16,76 @@
   },
   "movement": {
     "maxSpeed": 1,
-    "arriveTolerance": 0.25,
-    "edgeMargin": 2
+    "arriveTolerance": 0.4,
+    "edgeMargin": 2,
+    "engageRange": 8,
+    "strafe": 0.5,
+    "strafePeriodTicks": 34
   },
-  "ability": {
-    "button": 0,
-    "cooldownTicks": 45,
-    "range": 8
-  },
+  "abilities": [
+    {
+      "name": "cast",
+      "button": 0,
+      "target": "enemy",
+      "range": 12,
+      "holdTicks": 30,
+      "cooldownTicks": 62,
+      "weight": 1
+    },
+    {
+      "name": "slowDome",
+      "button": 4,
+      "target": "enemy",
+      "range": 3.2,
+      "holdTicks": 1,
+      "cooldownTicks": 305,
+      "weight": 1.4
+    },
+    {
+      "name": "capture",
+      "button": 5,
+      "target": "threat",
+      "range": 2.6,
+      "holdTicks": 1,
+      "cooldownTicks": 125,
+      "weight": 1.6
+    },
+    {
+      "name": "shield",
+      "button": 6,
+      "target": "threat",
+      "range": 9,
+      "holdTicks": 1,
+      "cooldownTicks": 155,
+      "weight": 1.8
+    },
+    {
+      "name": "dodge",
+      "button": 2,
+      "target": "threat",
+      "range": 6.5,
+      "holdTicks": 1,
+      "cooldownTicks": 30,
+      "weight": 1.5,
+      "requiresMoving": true
+    },
+    {
+      "name": "jump",
+      "button": 3,
+      "target": "cliff",
+      "range": 1.6,
+      "rise": 1,
+      "holdTicks": 1,
+      "cooldownTicks": 45,
+      "weight": 1.1,
+      "requiresMoving": true
+    }
+  ],
   "utility": {
     "pressure": 1,
     "kite": 0.8,
-    "retreat": 1,
-    "dodge": 1.2,
-    "ability": 1
+    "retreat": 1.2,
+    "dodge": 1.3
   },
   "aggression": 0.6,
   "seed": 2

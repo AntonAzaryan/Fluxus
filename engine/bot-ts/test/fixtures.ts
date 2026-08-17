@@ -23,6 +23,7 @@ import {
 import { BotHost, type BotSeat } from '../src/host.js';
 import type { BotBrainFactory } from '../src/brain.js';
 import type { BotProfile } from '../src/profile.js';
+import { botTerrain, type BotTerrain } from '../src/terrainView.js';
 
 export const BUILD_ID = 'bot-build-0001';
 export const TICK_RATE = 60;
@@ -357,19 +358,66 @@ export async function recordSteps(
   return { steps, slot, fixture };
 }
 
-/** Профиль для тестов: человечность выключена, чтобы поведение читалось глазами. */
+/**
+ * Профиль для тестов: человечность выключена (нулевая задержка, нулевой шум,
+ * нулевой стрейф), чтобы поведение читалось глазами. Способность одна и
+ * простейшая — тап по видимому врагу; тесты, которым нужен состав побогаче,
+ * передают свой список.
+ */
 export function testProfile(overrides: Partial<BotProfile> = {}): BotProfile {
   return {
-    schema: 1,
+    schema: 2,
     name: 'test',
     reaction: { delayTicks: 0, jitterTicks: 0, memoryTicks: 120 },
     aim: { noiseDegrees: 0, noisePeriodTicks: 10 },
     decision: { intervalTicks: 1, jitterTicks: 0 },
-    movement: { maxSpeed: 1, arriveTolerance: 0.25, edgeMargin: 2 },
-    ability: { button: 0, cooldownTicks: 30, range: 8 },
-    utility: { pressure: 1, kite: 0.5, retreat: 1, dodge: 1, ability: 1 },
+    movement: {
+      maxSpeed: 1,
+      arriveTolerance: 0.25,
+      edgeMargin: 2,
+      engageRange: 8,
+      strafe: 0,
+      strafePeriodTicks: 30,
+    },
+    abilities: [
+      { name: 'cast', button: 0, target: 'enemy', range: 8, holdTicks: 1, cooldownTicks: 30, weight: 1 },
+    ],
+    utility: { pressure: 1, kite: 0.5, retreat: 1, dodge: 1 },
     aggression: 0.6,
     seed: 7,
     ...overrides,
   };
+}
+
+/**
+ * Рельеф с уступом: слева уровень 0, справа от `edgeX` — уровень 1, и всё это с
+ * полом. То, на чём проверяется запрыгивание (LOC-5, PHYS-11).
+ */
+export function ledgeTerrain(edgeX = 4, size = 8): BotTerrain {
+  const row = Array.from({ length: size }, (_, x) => (x >= edgeX ? '1' : '0')).join('');
+  return botTerrain({
+    components: [],
+    terrain: {
+      width: size,
+      height: size,
+      tileSize: fixed.fromInt(1),
+      levels: Array.from({ length: size }, () => row),
+      flags: Array.from({ length: size }, () => '.'.repeat(size)),
+    },
+  })!;
+}
+
+/** Рельеф с дырой в столбце `holeX`: пола нет, за ней снова пол. */
+export function holeTerrain(holeX = 4, size = 8): BotTerrain {
+  const row = Array.from({ length: size }, (_, x) => (x === holeX ? '_' : '.')).join('');
+  return botTerrain({
+    components: [],
+    terrain: {
+      width: size,
+      height: size,
+      tileSize: fixed.fromInt(1),
+      levels: Array.from({ length: size }, () => '0'.repeat(size)),
+      flags: Array.from({ length: size }, () => row),
+    },
+  })!;
 }

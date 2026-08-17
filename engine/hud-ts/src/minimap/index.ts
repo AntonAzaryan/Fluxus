@@ -31,6 +31,8 @@ export {
 } from './widget.js';
 export type {
   MinimapFloorValue,
+  MinimapFogLayer,
+  MinimapFogSource,
   MinimapTerrainGrid,
   MinimapTerrainSource,
   MinimapWidgetOptions,

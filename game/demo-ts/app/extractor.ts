@@ -34,6 +34,12 @@ export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   // Заряд каста: величина, а не состояние, — по ней главный поток растит шар
   // перед кастером (`sim.ts`, `chargeVisualOf`).
   { name: STATS.charge, component: 'Charging', field: 'ticks' },
+  // Входы маски тумана войны (FOW-7, design D4): команда наблюдателя и радиус
+  // обзора. `Vision.radius` — fixed, на границе он уедет float'ом мировых
+  // единиц (REND-1, `statSources.ts`); свёртка `VisionModifier` здесь не
+  // повторяется — консервативный коэффициент визуала покрывает дрейф (FOW-9).
+  { name: STATS.team, component: 'Team', field: 'id' },
+  { name: STATS.visionRadius, component: 'Vision', field: 'radius' },
   // Компонент-источник берётся из таблицы сборки: у ульты отката он свой —
   // exempt-компонент, переживающий перемотку (`sim.ts`).
   ...COOLDOWN_ABILITIES.flatMap((ability) => {

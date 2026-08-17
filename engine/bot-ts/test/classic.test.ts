@@ -172,22 +172,16 @@ describe('восприятие: экстраполяция проджектай�
 
 describe('слой решений: utility-скоринг с весами профиля (BOT-6)', () => {
   const profile = testProfile();
-  const options = { abilityReady: true, center: { x: 0, y: 0 } };
+  const options = { center: { x: 0, y: 0 } };
 
   it('далёкий враг и высокая агрессивность — давить', () => {
-    const scores = scoreBehaviors(world({ enemies: [enemyAt(15, 0)] }), profile, {
-      ...options,
-      abilityReady: false,
-    });
+    const scores = scoreBehaviors(world({ enemies: [enemyAt(15, 0)] }), profile, options);
     expect(scores.pressure).toBeGreaterThan(scores.kite);
   });
 
   it('близкий враг при низкой агрессивности — кайтить', () => {
     const shy = testProfile({ aggression: 0.1 });
-    const scores = scoreBehaviors(world({ enemies: [enemyAt(2, 0)] }), shy, {
-      ...options,
-      abilityReady: false,
-    });
+    const scores = scoreBehaviors(world({ enemies: [enemyAt(2, 0)] }), shy, options);
     expect(scores.kite).toBeGreaterThan(scores.pressure);
   });
 
@@ -211,12 +205,6 @@ describe('слой решений: utility-скоринг с весами про
     expect(scoreBehaviors(leaving, profile, options).dodge).toBe(0);
   });
 
-  it('способность не набирает очков, пока не готова', () => {
-    const near = world({ enemies: [enemyAt(2, 0)] });
-    expect(scoreBehaviors(near, profile, options).ability).toBeGreaterThan(0);
-    expect(scoreBehaviors(near, profile, { ...options, abilityReady: false }).ability).toBe(0);
-  });
-
   it('вес из профиля решает исход: обнулённый вес выключает поведение', () => {
     const near = world({ enemies: [enemyAt(2, 0)] });
     const utility = new UtilityLayer(testProfile({ aggression: 0.1 }), random());
@@ -224,7 +212,7 @@ describe('слой решений: utility-скоринг с весами про
     const muted = new UtilityLayer(
       testProfile({
         aggression: 0.1,
-        utility: { pressure: 0, kite: 0, retreat: 0, dodge: 0, ability: 0 },
+        utility: { pressure: 0, kite: 0, retreat: 0, dodge: 0 },
       }),
       random(),
     );
@@ -261,10 +249,16 @@ describe('план поведения: геометрия цели', () => {
     expect(plan.targetY).toBe(0);
   });
 
-  it('давление ведёт к врагу, кайт — от него', () => {
-    const near = world({ enemies: [enemyAt(3, 0)] });
-    expect(planFor('pressure', near, profile, center).targetX).toBeCloseTo(3, 5);
-    expect(planFor('kite', near, profile, center).targetX).toBeLessThan(0);
+  it('давление ведёт к врагу — до дистанции боя, кайт — от него', () => {
+    // Дистанция боя профиля — 8: с пятнадцати бот подходит на восемь, а не в
+    // упор. Идти к ногам противника значит лишить себя и уклонения, и разлёта
+    // собственных снарядов.
+    const far = world({ enemies: [enemyAt(15, 0)] });
+    expect(planFor('pressure', far, profile, center).targetX).toBeCloseTo(7, 5);
+    // Уже на дистанции боя — стоять и кружить (стрейф микро-слоя), а не пятиться.
+    const at = world({ enemies: [enemyAt(3, 0)] });
+    expect(planFor('pressure', at, profile, center).targetX).toBeCloseTo(0, 5);
+    expect(planFor('kite', at, profile, center).targetX).toBeLessThan(0);
   });
 
   it('уклонение уходит вбок от линии полёта снаряда', () => {
@@ -294,7 +288,7 @@ describe('микро-слой на Yuka (задача 3.3)', () => {
 
   it('steering ведёт в сторону цели поведения', () => {
     const layer = micro(testProfile());
-    const scene = world({ enemies: [enemyAt(5, 0)] });
+    const scene = world({ enemies: [enemyAt(15, 0)] });
     const plan = planFor('pressure', scene, testProfile(), { x: 0, y: 0 });
     let intent = layer.step(plan, scene, 0);
     for (let tick = 1; tick < 5; tick++) intent = layer.step(plan, scene, tick);
@@ -303,7 +297,16 @@ describe('микро-слой на Yuka (задача 3.3)', () => {
   });
 
   it('длина намерения не выходит за долю хода из профиля (INP-3)', () => {
-    const profile = testProfile({ movement: { maxSpeed: 0.5, arriveTolerance: 0.25, edgeMargin: 2 } });
+    const profile = testProfile({
+      movement: {
+        maxSpeed: 0.5,
+        arriveTolerance: 0.25,
+        edgeMargin: 2,
+        engageRange: 8,
+        strafe: 0,
+        strafePeriodTicks: 30,
+      },
+    });
     const layer = micro(profile);
     const scene = world({ enemies: [enemyAt(9, 0)] });
     const plan = planFor('pressure', scene, profile, { x: 0, y: 0 });

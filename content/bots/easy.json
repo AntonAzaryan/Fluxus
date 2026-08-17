@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "name": "easy",
   "reaction": {
     "delayTicks": 24,
@@ -16,20 +16,67 @@
   },
   "movement": {
     "maxSpeed": 0.6,
-    "arriveTolerance": 0.5,
-    "edgeMargin": 3
+    "arriveTolerance": 0.6,
+    "edgeMargin": 3,
+    "engageRange": 6,
+    "strafe": 0.2,
+    "strafePeriodTicks": 60
   },
-  "ability": {
-    "button": 0,
-    "cooldownTicks": 90,
-    "range": 6
-  },
+  "abilities": [
+    {
+      "name": "cast",
+      "button": 0,
+      "target": "enemy",
+      "range": 8,
+      "holdTicks": 8,
+      "cooldownTicks": 120,
+      "weight": 1
+    },
+    {
+      "name": "slowDome",
+      "button": 4,
+      "target": "enemy",
+      "range": 2.5,
+      "holdTicks": 1,
+      "cooldownTicks": 400,
+      "weight": 0.6
+    },
+    {
+      "name": "shield",
+      "button": 6,
+      "target": "threat",
+      "range": 5,
+      "holdTicks": 1,
+      "cooldownTicks": 260,
+      "weight": 0.8
+    },
+    {
+      "name": "dodge",
+      "button": 2,
+      "target": "threat",
+      "range": 4,
+      "holdTicks": 1,
+      "cooldownTicks": 90,
+      "weight": 0.7,
+      "requiresMoving": true
+    },
+    {
+      "name": "jump",
+      "button": 3,
+      "target": "cliff",
+      "range": 1.2,
+      "rise": 1,
+      "holdTicks": 1,
+      "cooldownTicks": 90,
+      "weight": 0.8,
+      "requiresMoving": true
+    }
+  ],
   "utility": {
     "pressure": 0.6,
     "kite": 0.5,
     "retreat": 1,
-    "dodge": 0.7,
-    "ability": 0.5
+    "dodge": 0.7
   },
   "aggression": 0.3,
   "seed": 1

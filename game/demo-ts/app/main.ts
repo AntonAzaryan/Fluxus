@@ -26,8 +26,11 @@ import {
   mdxLoader,
   particleEffectLoader,
   pngTextureLoader,
+  presentationLoader,
+  presentationPathOf,
   type AssetSource,
   type AssetState,
+  type PresentationScene,
   type VisualManifest,
 } from '@game-mvp/assets';
 import {
@@ -35,7 +38,10 @@ import {
   CAMERA_EFFECTS_DESCRIPTION,
   CameraEffectsDirector,
   CameraRig,
+  DecorationSet,
+  decorationInstanceOf,
   EffectsSubsystem,
+  FogSubsystem,
   ModelsSubsystem,
   ParticlesSubsystem,
   TerrainSubsystem,
@@ -44,8 +50,10 @@ import {
   cameraConfigFromManifest,
   createCameraInput,
   resetCameraInput,
+  resolveFogConfig,
   terrainGroundApi,
   type CameraBounds,
+  type DecorationInstance,
   type RenderContext,
 } from '@game-mvp/render';
 import type { HudCameraContract } from '@game-mvp/hud';
@@ -61,7 +69,7 @@ import {
   validateBindings,
   type InputSource,
 } from '@game-mvp/client';
-import { ACTION_BITS, RESPAWN_EVENT, STATE_COMPONENTS } from './sim.js';
+import { ACTION_BITS, RESPAWN_EVENT, STATE_COMPONENTS, STATS } from './sim.js';
 import { createCapturePreview, type CapturePreview } from './capturePreview.js';
 import { createChargeBalls, type ChargeBalls } from './chargeBalls.js';
 import { demoEdgePan } from './cameraInput.js';
@@ -144,14 +152,17 @@ assets.registerLoader(
   }),
 );
 assets.registerLoader(curvatureLoader);
+// Парный presentation-документ сцены (PRES-1): декорации арены и секция `fog`
+// (FOW-10). Ассет наравне с манифестом — тем же реестром загрузчиков (ASSET-3).
+assets.registerLoader(presentationLoader);
 
-/** Манифест визуалов через тот же сервис (kind 'manifest', ASSET-6). */
-function loadManifest(): Promise<VisualManifest> {
+/** Разовая загрузка ассета сервисом: promise поверх подписки на состояние. */
+function loadAsset<T>(kind: string, id: string): Promise<T> {
   return new Promise((resolve, reject) => {
-    const handle = assets.request<VisualManifest>('manifest', 'visuals/manifest.json');
+    const handle = assets.request<T>(kind, id);
     let settled = false;
     let unsubscribe: (() => void) | null = null;
-    const onState = (s: AssetState<VisualManifest>): void => {
+    const onState = (s: AssetState<T>): void => {
       if (settled || s.status === 'loading') return;
       settled = true;
       if (s.status === 'ready') resolve(s.data);
@@ -162,6 +173,25 @@ function loadManifest(): Promise<VisualManifest> {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
     if (settled) unsubscribe();
   });
+}
+
+/** Манифест визуалов через тот же сервис (kind 'manifest', ASSET-6). */
+function loadManifest(): Promise<VisualManifest> {
+  return loadAsset<VisualManifest>('manifest', 'visuals/manifest.json');
+}
+
+/**
+ * Парный документ сцены демо (PRES-1): путь — правилом имени от пути сцены.
+ * Отказ (нет файла, битый JSON) — сцена без декораций и туман на умолчаниях
+ * (FOW-10), с предупреждением: дыра в контенте не уносит страницу целиком.
+ */
+async function loadPresentation(): Promise<PresentationScene | null> {
+  try {
+    return await loadAsset<PresentationScene>('presentation', presentationPathOf('scenes/duel.scene.json'));
+  } catch (error) {
+    console.warn('демо: парный presentation-документ не загрузился', error);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------- ввод
@@ -193,6 +223,11 @@ const hitScratch = new THREE.Vector3();
 
 /** Подсистема моделей: появляется после загрузки манифеста (см. main). */
 let models: ModelsSubsystem | null = null;
+/**
+ * Подсистема тумана войны (FOW-7, design D3): появляется в `onReady` сцены с
+ * `fog`. Пока её нет (или маска ещё не построена), кадр рисуется по-старому.
+ */
+let fogSubsystem: FogSubsystem | null = null;
 /** ID сущности героя из handshake воркера (helloExtra). */
 let heroId: EntityId | null = null;
 
@@ -659,7 +694,10 @@ function frame(now: number): void {
   // кадра — не прошлого.
   capturePreview?.update();
   chargeBalls?.update();
-  renderer3.render(scene3, camera);
+  // Кадр с туманом идёт пост-проходом подсистемы (FOW-7, design D2); без неё —
+  // прежний прямой рендер. Подсистема с непостроенной маской делает ровно его.
+  if (fogSubsystem !== null) fogSubsystem.render(renderer3, camera);
+  else renderer3.render(scene3, camera);
 }
 
 // -------------------------------------------------------------------- запуск
@@ -695,6 +733,16 @@ function spawnShellWorker(mode: DemoMode): Worker {
   const init: DemoServerInit = { t: 'demo-server-init' };
   server.postMessage(init);
   return client;
+}
+
+/**
+ * Записи `decorations` парного документа → набор decoration-инстансов
+ * (PRES-2 → REND-18): конверсия — общий `decorationInstanceOf` рендера, а не
+ * своя копия правила. Ключ — индекс записи: набор в матче подаётся один раз,
+ * правок соседей, которые ключ обязан переживать (ED-29), здесь не бывает.
+ */
+function demoDecorations(presentation: PresentationScene): DecorationInstance[] {
+  return presentation.decorations.map((record, index) => decorationInstanceOf(record, `#${index}`));
 }
 
 /** Сообщение человеку поверх вьюпорта: матч занят, сервер не отвечает и т. п. */
@@ -771,6 +819,12 @@ async function main(): Promise<void> {
     groundUnder,
   });
   const manifest = await loadManifest();
+  // Парный presentation-документ (PRES-1) — декорации и секция `fog` (FOW-10).
+  // Загружается в обеих воркер-сторонах оболочки одинаково (SHELL-8): документ
+  // читает главный поток, и режим симуляции ему не виден.
+  const presentation = await loadPresentation();
+  const fogEnabled = (sceneJson as unknown as SceneDef).fog === true;
+  const fogConfig = resolveFogConfig(presentation?.fog);
   // Шары заряда — после манифеста: цвет, базовый радиус и высоту они берут из
   // записей `effects.byKind.Fireball`/`HeavyFireball`, то есть у тех самых
   // снарядов, один из которых и улетит.
@@ -814,7 +868,15 @@ async function main(): Promise<void> {
       // смерти (REND-4): сущность та же, разрыва доставки нет, и без имени
       // события герой остался бы лежать последним кадром `Death` — у этой
       // модели он гасит ВСЕ геосеты, то есть герой был бы попросту невидим.
-      models = new ModelsSubsystem(manifest, { surface, camera, reviveEvent: RESPAWN_EVENT });
+      models = new ModelsSubsystem(manifest, {
+        surface,
+        camera,
+        reviveEvent: RESPAWN_EVENT,
+        // Fade «ушла в туман ≠ умерла» (FOW-8, design D7): длительность — из
+        // той же секции `fog`, что у подсистемы тумана (FOW-10). Сцена без
+        // тумана опции не получает, и исчезновение убирает инстанс сразу.
+        ...(fogEnabled ? { fadeSeconds: fogConfig.fadeSeconds } : {}),
+      });
       remote!.register(models);
       // Транзиентные эффекты (REND-23) — после моделей: оболочки рисуются
       // поверх инстансов, а шарик снаряда и вовсе заменяет ему модель. Записи
@@ -837,6 +899,33 @@ async function main(): Promise<void> {
           sockets: models,
         }),
       );
+      // Туман войны (FOW-7, FOW-9, FOW-10) — только в сборке игрового клиента
+      // (design D3): подсистема владеет маской видимости и пост-проходом, кадр
+      // рисует `frame` её вызовом. Наблюдатели приезжают статами доставки
+      // (`extractor.ts`, design D4), конфиг — секцией `fog` парного документа.
+      if (fogEnabled) {
+        fogSubsystem = new FogSubsystem({
+          grid,
+          stats: { visionRadius: STATS.visionRadius, team: STATS.team },
+          hero: () => heroId,
+          ...(presentation?.fog !== undefined ? { config: presentation.fog } : {}),
+          // Канвас слоя миникарты (HUD-6, design D6) — DOM даёт сборка:
+          // пакет рендера document не трогает.
+          createCanvas: (width, height) => {
+            const layer = document.createElement('canvas');
+            layer.width = width;
+            layer.height = height;
+            return layer;
+          },
+        });
+        remote!.register(fogSubsystem);
+      }
+      // Декорации арены из парного документа (PRES-2 → REND-18): в матче набор
+      // подаётся один раз из загруженного документа; рисуют его те же
+      // подсистемы и тем же путём, что у сущностей мира.
+      if (presentation !== null && presentation.decorations.length > 0) {
+        new DecorationSet(remote!.stage).apply(demoDecorations(presentation));
+      }
 
       // Камера: поверхность и границы — из той же сетки, что рендер террейна
       // (CAM-2, CAM-3); эффекты — по таблицам манифеста (ASSET-7, CAM-6).
@@ -884,6 +973,9 @@ async function main(): Promise<void> {
         terrain: remote!,
         camera: hudCamera,
         control: remote!,
+        // Слой тумана миникарты (HUD-6): тот же продюсер маски и та же сила
+        // затемнения, что у fog-mask основного вида, — сама подсистема тумана.
+        ...(fogSubsystem !== null ? { fog: fogSubsystem } : {}),
       });
       sampler.add(hud.facade);
       remote!.register(hud.runtime.subsystem);

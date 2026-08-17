@@ -57,6 +57,8 @@ const MATCH = matchJson as unknown as {
   readonly seed: number;
   readonly players: readonly string[];
   readonly locomotion: Record<string, unknown>;
+  /** Пересчёт видимости (NTR-14, FOW-4): сцена с `fog` без него не собирается. */
+  readonly visibility?: Record<string, never>;
   readonly tickRate?: number;
   readonly snapshotRate?: number;
   readonly rewind?: {
@@ -167,6 +169,9 @@ function arena(gap = 4, scene: SceneDef = SCENE): Arena {
     ],
     physics: {},
     locomotion: MATCH.locomotion,
+    // Сцена демо включает туман войны (fog): без объявления пересчёта видимости
+    // мир матча не собирается (NTR-14, FOW-4). Поле — из документа матча.
+    ...(MATCH.visibility !== undefined ? { visibility: MATCH.visibility } : {}),
   });
   // Слот игрока — из компонента, а не из порядка обхода мира: `listAlive` даёт
   // порядок raw-индексов (QUERY-2), и связь «нулевой в списке = p1» держалась бы
@@ -257,6 +262,8 @@ function ffa(
     })),
     physics: {},
     locomotion: MATCH.locomotion,
+    // То же основание, что у `arena`: сцена с fog требует пересчёта видимости.
+    ...(MATCH.visibility !== undefined ? { visibility: MATCH.visibility } : {}),
   });
   const heroes: EntityId[] = [];
   for (const entity of coreWorld.listAlive(built.state.world)) {

@@ -412,6 +412,64 @@ describe('BLND-3: мост — terrain-объект и walkable-декораци
   });
 });
 
+describe('BLND-2, PRES-2: импорт владеет только decorations — секция fog остаётся байт-в-байт', () => {
+  /** Секция fog цели (FOW-10): поле вне пространственного слоя импорта. */
+  const FOG = {
+    strength: 0.65,
+    color: '#101623',
+    edgeWidth: 2,
+    conservatism: 0.92,
+    resolution: 4,
+    fadeSeconds: 0.45,
+  };
+
+  /** Байтовый срез секции fog из канонической формы файла — им и меряется «байт-в-байт». */
+  function fogSlice(bytes: Buffer): string {
+    const match = /"fog": \{[^}]*\}/.exec(bytes.toString('utf8'));
+    if (match === null) throw new Error('в документе нет секции fog');
+    return match[0];
+  }
+
+  it('перепись decorations импортом оставляет fog байт-в-байт, а файл — канонической формой (ED-21)', async () => {
+    // Файл записан канонической формой (ED-21) заранее: тогда изменение любых
+    // байтов секции fog — дело импорта, а не переформатирования при сохранении.
+    const before = encodeDocument({ decorations: [], fog: FOG });
+    const root = await tree(
+      contentFiles('placements.gltf', sceneDocument(), presentationDocument(), {
+        [PRESENTATION_ID]: before,
+      }),
+    );
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(run.code).toBe(0);
+    const after = await contentOf(root, PRESENTATION_ID);
+    // Импорт переписал список decorations (источник даёт запись Statue)…
+    const parsed = JSON.parse(after.toString('utf8')) as { decorations: unknown[]; fog: unknown };
+    expect(parsed.decorations.length).toBeGreaterThan(0);
+    // …а секция fog в файле — тот же байтовый срез, что до импорта (BLND-2).
+    expect(fogSlice(after)).toBe(fogSlice(Buffer.from(before)));
+    // Round-trip канонического сохранения (ED-21): записанное — каноническая
+    // форма самого себя, то есть «открыл — сохранил» не изменит ни байта.
+    expect(new Uint8Array(after)).toEqual(encodeDocument(parsed as never));
+  });
+
+  it('повторный импорт того же источника не трогает документ с fog вовсе (BLND-4)', async () => {
+    const root = await tree(
+      contentFiles('placements.gltf', sceneDocument(), presentationDocument(), {
+        [PRESENTATION_ID]: encodeDocument({ decorations: [], fog: FOG }),
+      }),
+    );
+    await runCli(root, [`content/${SOURCE_ID}`]);
+    const first = await contentOf(root, PRESENTATION_ID);
+
+    const again = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(again.code).toBe(0);
+    expect(await contentOf(root, PRESENTATION_ID)).toEqual(first);
+  });
+});
+
 describe('ED-12: командная строка ходит в дерево только хостом среды', () => {
   it('путь вне дерева контента — отказ вызова, а не чтение мимо корня', async () => {
     const root = await tree();

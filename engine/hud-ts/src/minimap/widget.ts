@@ -97,6 +97,40 @@ export interface MinimapFloorValue {
   readonly changed: readonly number[];
 }
 
+/**
+ * Слой тумана войны (HUD-6, `fog-of-war` FOW-7): ТА ЖЕ маска видимости, что у
+ * fog-mask основного вида, — канвас продюсера маски поверх прямоугольника мира,
+ * который он покрывает, и сила затемнения из той же конфигурации (FOW-10).
+ * Собственного пересчёта видимости и собственных параметров у миникарты нет:
+ * два определения «что в тумане» на одном экране разошлись бы (HUD-6).
+ *
+ * Объект стабилен: продюсер перерисовывает канвас на месте, а сила читается
+ * геттером — виджет вправе держать ссылку между доставками. Верхняя строка
+ * канваса — максимальный `y` мира: тот же переворот вертикали, что у самой
+ * миникарты (HUD-6), и блит идёт без зеркалирования.
+ */
+export interface MinimapFogLayer {
+  /** Канвас маски; тип за пределами структурного минимума виджету не нужен. */
+  readonly canvas: unknown;
+  /** Прямоугольник мира, который канвас покрывает. */
+  readonly world: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  /** Сила затемнения из конфигурации тумана (FOW-10). */
+  readonly strength: number;
+}
+
+/**
+ * Источник слоя тумана — продюсер маски рендера (в игровой сборке — подсистема
+ * тумана, структурно). null — тумана нет, и слой не рисуется вовсе (HUD-6).
+ */
+export interface MinimapFogSource {
+  readonly fog: MinimapFogLayer | null;
+}
+
 /** Селектор слота `entities`: сущности доставленного состояния как есть (HUD-4). */
 export const minimapEntitiesSelector: HudSelector = (state: HudDeliveredState) => state.entities;
 
@@ -188,6 +222,7 @@ class MinimapWidget implements HudWidget {
   private readonly config: MinimapConfig;
   private readonly table: ResolvedMarkerTable;
   private readonly terrainSource: MinimapTerrainSource;
+  private readonly fogSource: MinimapFogSource | null;
 
   private port: HudActionsPort | null = null;
   private floorCanvas: MinimapCanvasLike | null = null;
@@ -204,12 +239,14 @@ class MinimapWidget implements HudWidget {
     params: HudParams,
     terrainSource: MinimapTerrainSource,
     renderers: MinimapRendererRegistry,
+    fogSource: MinimapFogSource | null,
   ) {
     this.config = configFrom(params);
     // Резолв таблицы — при создании, по образцу резолва композиции (HUD-4):
     // ошибка конфигурации падает до монтирования и называет запись.
     this.table = resolveMarkerTable(markerTableFromParams(params.markers), renderers);
     this.terrainSource = terrainSource;
+    this.fogSource = fogSource;
   }
 
   mount(actions: HudActionsPort): HudNode {
@@ -266,6 +303,29 @@ class MinimapWidget implements HudWidget {
       update.values.entities as ReadonlyMap<number, MinimapEntityView> | undefined,
       transform,
     );
+  }
+
+  /**
+   * Слой тумана над подложкой (HUD-6): блит канваса маски продюсера с силой
+   * затемнения из той же конфигурации (FOW-10). Рисуется на слое маркеров ПОД
+   * ними: маркеры — доставленные сущности, скрытых среди них нет по построению
+   * (HUD-1), и гасить их туманом нечего. Нет источника или слоя — не рисуется
+   * ничего: сцена без тумана выглядит как прежде.
+   */
+  private drawFog(ctx: MinimapContext2D, t: MinimapTransform): void {
+    const layer = this.fogSource?.fog ?? null;
+    if (layer === null || ctx.drawImage === undefined) return;
+    // Верх канваса маски — дальняя по миру сторона прямоугольника: тот же
+    // переворот вертикали, что у клеток пола и маркеров (HUD-6).
+    ctx.globalAlpha = layer.strength;
+    ctx.drawImage(
+      layer.canvas,
+      t.offsetX + layer.world.x * t.scale,
+      pixelY(layer.world.y + layer.world.height, t),
+      layer.world.width * t.scale,
+      layer.world.height * t.scale,
+    );
+    ctx.globalAlpha = 1;
   }
 
   dispose(): void {
@@ -347,6 +407,9 @@ class MinimapWidget implements HudWidget {
   ): void {
     const ctx = this.context('marker');
     ctx.clearRect(0, 0, this.config.width, this.config.height);
+    // Туман — под маркерами, поверх подложки (HUD-6): слой маркеров очищается
+    // целиком на каждой доставке, и туман перерисовывается вместе с ним.
+    this.drawFog(ctx, t);
     if (entities === undefined) return;
 
     // ponytail: массив и обёртки аллоцируются на каждую доставку; при сотнях
@@ -406,6 +469,11 @@ export interface MinimapWidgetOptions {
    * зарегистрированы рядом со встроенными — тем же `register` (HUD-6).
    */
   readonly renderers?: MinimapRendererRegistry;
+  /**
+   * Источник слоя тумана (HUD-6) — продюсер маски видимости рендера; не задан
+   * или отдаёт null — слоя нет, миникарта выглядит как без тумана.
+   */
+  readonly fog?: MinimapFogSource;
 }
 
 /**
@@ -423,6 +491,6 @@ export function minimapWidgetKind(options: MinimapWidgetOptions): HudWidgetKind 
   const renderers = options.renderers ?? builtinMarkerRenderers();
   return {
     name: MINIMAP_WIDGET_NAME,
-    create: (params) => new MinimapWidget(params, options.terrain, renderers),
+    create: (params) => new MinimapWidget(params, options.terrain, renderers, options.fog ?? null),
   };
 }

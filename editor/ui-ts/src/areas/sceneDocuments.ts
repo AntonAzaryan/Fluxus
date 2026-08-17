@@ -90,7 +90,7 @@ import {
   type TerrainCurvatureMap,
   type VisualManifest,
 } from '@game-mvp/assets';
-import { kindByTags, type DecorationInstance, type DocumentInstance } from '@game-mvp/render';
+import { decorationInstanceOf, kindByTags, type DecorationInstance, type DocumentInstance } from '@game-mvp/render';
 
 /**
  * Размещённое сцены глазами редактора: то же, что отдаётся рендеру набором
@@ -329,25 +329,15 @@ export function decorationsOf(input: SceneDraftInput): readonly SceneDecoration[
   const checked = validatePresentationScene(value);
   if (!checked.ok) throw new Error(`presentation-документ: ${checked.errors.join('; ')}`);
 
-  return checked.scene.decorations.map((record, index) => {
-    const turns = record.yaw ?? 0;
-    return {
-      key: input.decorationKeys?.[index] ?? fallbackKey(index),
-      visual: record.visual,
-      kind: record.visual,
-      x: record.x,
-      y: record.y,
-      turns,
-      // Радианы — только рендеру (REND-1): единица документа — доля оборота,
-      // и обратного перевода нет, поворот берётся из `turns`.
-      yaw: turns * TURN_RADIANS,
-      ...(record.scale === undefined ? {} : { scale: record.scale }),
-      ...(record.skin === undefined ? {} : { skin: record.skin }),
-      // Флаг walkable-поверхности (PRES-2) едет в набор как есть: его читает
-      // единое поле высот (REND-9), а не редактор.
-      ...(record.walkable === undefined ? {} : { walkable: record.walkable }),
-    };
-  });
+  return checked.scene.decorations.map((record, index) => ({
+    // Перевод в радианы и дефолты полей — общий `decorationInstanceOf` рендера
+    // (REND-1): правило конверсии одно на вьюпорт и демо, второй копии нет
+    // (ED-30). Флаг walkable (PRES-2) едет в набор как есть: его читает единое
+    // поле высот (REND-9), а не редактор.
+    ...decorationInstanceOf(record, input.decorationKeys?.[index] ?? fallbackKey(index)),
+    visual: record.visual,
+    turns: record.yaw ?? 0,
+  }));
 }
 
 /**
