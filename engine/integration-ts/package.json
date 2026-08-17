@@ -7,7 +7,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "record": "UPDATE_MATCHES=1 vitest run test/matchGolden.test.ts"
+    "record": "UPDATE_MATCHES=1 vitest run test/matchGolden.test.ts",
+    "golden:cost": "UPDATE_COST=1 vitest run test/cost.test.ts"
   },
   "engines": {
     "node": ">=22.18 <23 || ^24 || >=26"

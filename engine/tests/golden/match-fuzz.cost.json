@@ -1,0 +1,31 @@
+{
+  "frame": {
+    "fogRenderPasses": 120,
+    "frameCalls": 60,
+    "frameInstances": 240,
+    "frameSubsystems": 120
+  },
+  "syncTick": {
+    "fogEntitiesScanned": 120,
+    "fogMaskClearTexels": 61440,
+    "fogMaskTexels": 699,
+    "fogMaskTexelsWritten": 134,
+    "fogMaskUploadBytes": 61440,
+    "fogMinimapTexels": 61440,
+    "fogNearSegments": 0,
+    "fogRevealCalls": 60,
+    "fogSegmentRangeTests": 3360,
+    "fogSubsampleTests": 0,
+    "syncTickDecorationInstances": 0,
+    "syncTickDeliveries": 60,
+    "syncTickInstances": 240,
+    "syncTickSubsystems": 120
+  },
+  "tick": {
+    "broadPhasePairs": 0,
+    "commands": 1168,
+    "expressions": 840,
+    "raycasts": 0,
+    "ticks": 60
+  }
+}

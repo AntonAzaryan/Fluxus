@@ -34,6 +34,7 @@
     "lint:all": "npm run typecheck && npm run lint && npm run lint:dead && npm run lint:dup && npm run lint:arch",
     "check": "npm run lint:all && npm run spec-graph -- check && npm test",
     "golden": "npm run record -w @game-mvp/integration && npm run golden -w @game-mvp/core",
+    "golden:cost": "npm run golden:cost -w @game-mvp/integration",
     "spec-graph": "node scripts/spec-graph.mjs"
   },
   "engines": {
