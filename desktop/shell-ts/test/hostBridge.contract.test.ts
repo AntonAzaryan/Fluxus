@@ -14,14 +14,21 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { normalizeAppProfile } from '../src/bridge/profile.js';
 import { openApp } from '../src/host/app.js';
-import { CONTENT, describeContainerContract, type ContractSession } from './contractSuite.js';
+import {
+  CONTENT,
+  SERVICE,
+  describeContainerContract,
+  type ContractSession,
+} from './contractSuite.js';
 import {
   dropTree,
   fakeObserver,
+  freePort,
   linkOutside,
   makeTree,
   putFile,
   readText,
+  SERVICE_SCRIPT,
   text,
 } from './support.js';
 
@@ -40,6 +47,10 @@ describeContainerContract('node-хост', async (kase): Promise<ContractSession
   }
 
   const observer = fakeObserver();
+  // Адрес сервиса объявляет профиль (DSK-7), поэтому порт выбирается ДО
+  // запуска; в аргументы он приезжает подстановкой из адреса, а не второй
+  // записью числа.
+  const port = await freePort();
   const profile = normalizeAppProfile(
     {
       id: 'contract',
@@ -55,6 +66,16 @@ describeContainerContract('node-хост', async (kase): Promise<ContractSession
         },
       ],
       capabilities: kase.capabilities,
+      services: kase.capabilities.includes('service')
+        ? [
+            {
+              id: SERVICE,
+              script: SERVICE_SCRIPT,
+              args: ['--port', '{port}'],
+              address: `tcp://127.0.0.1:${String(port)}`,
+            },
+          ]
+        : [],
     },
     'contract.app.json',
   );
@@ -86,8 +107,12 @@ describeContainerContract('node-хост', async (kase): Promise<ContractSession
       return result.ok ? { ok: true, body: text(result.bytes), mime: result.mime } : { ok: false };
     },
     requestClose: () => app.handle.requestClose(),
+    // Взгляд снаружи границы: сколько процессов держит контейнер. Отвечает и
+    // после `close` — иначе «сервис не пережил сессию» осталось бы обещанием.
+    serviceProcesses: () => Promise.resolve(app.services?.owned() ?? 0),
     async close() {
       app.close();
+      await app.services?.closeAll();
       await dropTree(workspace);
     },
   };

@@ -7,7 +7,12 @@
  * объявлял, — то самое расширение профиля, которое DSK-5 запрещает.
  */
 import { describe, expect, it } from 'vitest';
-import { normalizeAppProfile, profileGrants, profileRoot } from '../src/bridge/profile.js';
+import {
+  normalizeAppProfile,
+  profileGrants,
+  profileRoot,
+  profileService,
+} from '../src/bridge/profile.js';
 
 const EDITOR = {
   id: 'editor',
@@ -103,5 +108,67 @@ describe('разбор манифеста профиля', () => {
       'x.json',
     );
     expect(profile.capabilities).toEqual(['read', 'write']);
+  });
+});
+
+/** Профиль игры с объявленным сервисом (DSK-7). */
+const GAME = {
+  id: 'game',
+  title: 'Fluxus',
+  bundle: 'dist',
+  roots: [{ id: 'content', directory: 'content', serve: true }],
+  capabilities: ['service'],
+  services: [
+    { id: 'match-stand', script: 'stand.mjs', args: ['--port', '{port}'], address: 'ws://127.0.0.1:8080' },
+  ],
+};
+
+describe('объявленные профилем сервисы (DSK-7)', () => {
+  it('сервис разбирается со скриптом, аргументами и адресом', () => {
+    const profile = normalizeAppProfile(GAME, 'game.app.json');
+    expect(profileService(profile, 'match-stand')).toEqual({
+      id: 'match-stand',
+      script: 'stand.mjs',
+      args: ['--port', '{port}'],
+      address: 'ws://127.0.0.1:8080',
+    });
+    expect(profileService(profile, 'нет')).toBeUndefined();
+  });
+
+  it('профиль без сервисов их не выдумывает', () => {
+    const profile = normalizeAppProfile(EDITOR, 'editor.app.json');
+    expect(profile.services).toEqual([]);
+    expect(profileGrants(profile, 'service')).toBe(false);
+  });
+
+  it('сервис без возможности "service" — расхождение, а не мелочь', () => {
+    expect(() => normalizeAppProfile({ ...GAME, capabilities: [] }, 'game.app.json')).toThrow(
+      'service',
+    );
+  });
+
+  it('возможность "service" без единого сервиса — тоже отказ', () => {
+    expect(() => normalizeAppProfile({ ...GAME, services: [] }, 'game.app.json')).toThrow(
+      'ни одного сервиса',
+    );
+  });
+
+  it('два сервиса с одним именем не разбираются', () => {
+    expect(() =>
+      normalizeAppProfile({ ...GAME, services: [GAME.services[0], GAME.services[0]] }, 'game.app.json'),
+    ).toThrow('дважды');
+  });
+
+  it('кривые поля сервиса отвергаются с именем поля', () => {
+    expect(() =>
+      normalizeAppProfile({ ...GAME, services: [{ ...GAME.services[0], script: 42 }] }, 'x.json'),
+    ).toThrow('script');
+    expect(() =>
+      normalizeAppProfile({ ...GAME, services: [{ ...GAME.services[0], address: '' }] }, 'x.json'),
+    ).toThrow('address');
+    expect(() =>
+      normalizeAppProfile({ ...GAME, services: [{ ...GAME.services[0], args: '--port' }] }, 'x.json'),
+    ).toThrow('args');
+    expect(() => normalizeAppProfile({ ...GAME, services: {} }, 'x.json')).toThrow('services');
   });
 });

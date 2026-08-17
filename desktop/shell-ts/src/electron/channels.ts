@@ -29,6 +29,9 @@ export const CHANNELS = {
   closeRequest: 'fluxus:close-request',
   /** Страница → главный процесс: ответ на запрос закрытия. */
   closeReply: 'fluxus:close-reply',
+  serviceStart: 'fluxus:service-start',
+  serviceStop: 'fluxus:service-stop',
+  serviceState: 'fluxus:service-state',
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

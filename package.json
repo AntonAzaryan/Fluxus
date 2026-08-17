@@ -24,6 +24,7 @@
     "coverage": "vitest run --config vitest.coverage.config.ts --coverage",
     "import": "node tools/blender-ts/bin/import.mjs",
     "demo": "npm run dev -w @game-mvp/demo",
+    "demo:lan": "npm run dev -w @game-mvp/demo -- --host",
     "demo:serve": "node game/demo-ts/bin/demo-serve.mjs",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
