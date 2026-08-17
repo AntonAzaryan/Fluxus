@@ -66,7 +66,7 @@ import { createCapturePreview, type CapturePreview } from './capturePreview.js';
 import { createChargeBalls, type ChargeBalls } from './chargeBalls.js';
 import { demoEdgePan } from './cameraInput.js';
 import { createDemoHud, demoHudComposition } from './hud.js';
-import { DEMO_SERVER_URL, demoMode, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
+import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
 import bindingsJson from './bindings.json';
 import sceneJson from '../../../content/scenes/duel.scene.json';
@@ -719,17 +719,17 @@ function wireConnectButton(mode: DemoMode): void {
     return;
   }
   button.textContent = 'играть по сети →';
-  // Адрес — константа сборки (D4). Страница едет по http с dev-сервера, поэтому
-  // ws:// из неё разрешён; со страницы по https браузер такое соединение
-  // заблокирует (mixed content) — стенд для LAN, а не для интернета.
-  button.title = `подключиться к стенду ${DEMO_SERVER_URL}`;
+  // Адрес выводится из САМОЙ СТРАНИЦЫ (`demoServerUrl`): второй игрок открывает
+  // её по адресу первого, и зашитый loopback увёл бы его на его же машину.
+  // Константой сборки остаётся порт (D4) — списка серверов у демо нет.
+  button.title = `подключиться к стенду ${demoServerUrl(window.location)}`;
   button.href = serverModeUrl(window.location.href);
 }
 
 async function main(): Promise<void> {
   // Режим выбирается ОДИН раз, до создания воркеров: переключение режима — это
   // перезагрузка страницы с другим параметром (SHELL-8).
-  const mode = demoMode(window.location.search);
+  const mode = demoMode(window.location.search, window.location);
   // Кнопка режима — ДО загрузки манифеста: она и есть дорога со сломанной
   // страницы. Упади манифест (нет ассета, нет сети) — переключиться было бы
   // нечем, а это единственный орган управления, которому матч не нужен вовсе.

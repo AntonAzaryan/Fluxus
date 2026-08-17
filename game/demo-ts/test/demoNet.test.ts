@@ -31,7 +31,14 @@ import { DEMO_PLAYERS, demoMatchConfig } from '../app/match.js';
 import { openLocalSession, type DemoLocalSession } from '../app/localSession.js';
 import { bufferedShellPort, joinDemoMatch, type DemoJoinResult } from '../app/netClient.js';
 import { demoHudComposition } from '../app/hud.js';
-import { demoMode, localModeUrl, serverModeUrl, slotCandidates } from '../app/mode.js';
+import {
+  demoMode,
+  demoServerUrl,
+  localModeUrl,
+  serverModeUrl,
+  slotCandidates,
+} from '../app/mode.js';
+import { standArgs, shareLink } from '../app/demoStand.js';
 import { ACTION_BITS, STATS } from '../app/sim.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
 import botProfileJson from '../../../content/bots/normal.json';
@@ -397,15 +404,21 @@ describe('порт попыток входа: один живой потреби
 });
 
 describe('режим страницы выбирается при старте (SHELL-8, D4)', () => {
+  /** Страница dev-сервера на машине хозяина матча. */
+  const page = { protocol: 'http:', hostname: '192.168.1.7' };
+
   it('строка запроса называет режим, а переключение — это другой URL', () => {
-    expect(demoMode('')).toEqual({ kind: 'local' });
-    expect(demoMode('?solo')).toEqual({ kind: 'solo' });
-    expect(demoMode('?server=ws://10.0.0.5:9000')).toEqual({
+    expect(demoMode('', page)).toEqual({ kind: 'local' });
+    expect(demoMode('?solo', page)).toEqual({ kind: 'solo' });
+    expect(demoMode('?server=ws://10.0.0.5:9000', page)).toEqual({
       kind: 'server',
       url: 'ws://10.0.0.5:9000',
     });
-    // Пустой параметр означает «адрес сборки», а не пустой адрес (D4).
-    expect(demoMode('?server=').kind).toBe('server');
+    // Пустой параметр означает «адрес выводится из страницы», а не пустой адрес (D4).
+    expect(demoMode('?server=', page)).toEqual({
+      kind: 'server',
+      url: 'ws://192.168.1.7:8080',
+    });
 
     const href = 'http://localhost:5173/?solo';
     expect(serverModeUrl(href, 'ws://127.0.0.1:8080')).toBe(
@@ -414,12 +427,56 @@ describe('режим страницы выбирается при старте (
     expect(localModeUrl(serverModeUrl(href))).toBe('http://localhost:5173/');
   });
 
+  it('адрес стенда выводится из страницы, а не из зашитого loopback', () => {
+    // Гость открыл страницу по адресу хозяина — туда же идёт и матч.
+    expect(demoServerUrl(page)).toBe('ws://192.168.1.7:8080');
+    // Со страницы по https `ws://` заблокирован браузером как mixed content.
+    expect(demoServerUrl({ protocol: 'https:', hostname: 'arena.example' })).toBe(
+      'wss://arena.example:8080',
+    );
+    // Выводить не из чего (`file:` десктоп-контейнера) — стенд на своей машине.
+    expect(demoServerUrl({ protocol: 'file:', hostname: '' })).toBe('ws://127.0.0.1:8080');
+    // Кнопка на странице хозяина даёт адрес хозяина, а не localhost гостя.
+    expect(serverModeUrl('http://192.168.1.7:5173/')).toBe(
+      'http://192.168.1.7:5173/?server=ws%3A%2F%2F192.168.1.7%3A8080',
+    );
+  });
+
   it('у матча своей вкладки кандидат один, у стенда — весь ростер', () => {
     expect(slotCandidates({ kind: 'local' }, DEMO_PLAYERS)).toEqual([DEMO_PLAYERS[0]]);
     expect(slotCandidates({ kind: 'solo' }, DEMO_PLAYERS)).toEqual([DEMO_PLAYERS[0]]);
     expect(slotCandidates({ kind: 'server', url: 'ws://x' }, DEMO_PLAYERS)).toEqual([
       ...DEMO_PLAYERS,
     ]);
+  });
+});
+
+describe('стенд поднимается вместе с dev-сервером страницы', () => {
+  it('запуск стенда идёт теми же флагами, что и руками', () => {
+    expect(standArgs({ port: 8080, script: '/repo/demo-serve.mjs' })).toEqual([
+      '/repo/demo-serve.mjs',
+      '--port',
+      '8080',
+    ]);
+    // Ожидание человека — величина запуска, а не сборки: дефолт остаётся у стенда.
+    expect(standArgs({ port: 9000, script: '/s.mjs', botFillMs: 60000 })).toEqual([
+      '/s.mjs',
+      '--port',
+      '9000',
+      '--bot-fill-ms',
+      '60000',
+    ]);
+  });
+
+  it('ссылка второму игроку ведёт на сетевой адрес и оставляет `?server=` пустым', () => {
+    // Пустой параметр — это «выведи адрес стенда из страницы» (`demoMode`):
+    // ссылка приводит гостя на стенд той машины, чью страницу он открыл.
+    expect(shareLink({ local: ['http://localhost:5173/'], network: ['http://192.168.1.7:5173/'] })).toBe(
+      'http://192.168.1.7:5173/?server=',
+    );
+    // Слушает только loopback — звать некого, и ссылки нет.
+    expect(shareLink({ local: ['http://localhost:5173/'], network: [] })).toBeNull();
+    expect(shareLink(null)).toBeNull();
   });
 });
 
