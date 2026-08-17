@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { createTerrainGrid, type TerrainGrid } from '@game-mvp/core';
-import type { AssetService } from '@game-mvp/assets';
+import type { AssetService, PresentationFog } from '@game-mvp/assets';
 import {
   FogSubsystem,
   VisibilityMask,
@@ -332,6 +332,74 @@ describe('FOW-7, FOW-9: отбор наблюдателей из доставл�
     // Ровно прямой рендер: ни render target, ни второго прохода (design D2).
     expect(renderer.rendered).toEqual([ctx.scene]);
     expect(renderer.targets).toEqual([]);
+  });
+});
+
+describe('FOW-7: рассеивание тумана не мгновенное', () => {
+  function dissolvingSubsystem(config?: PresentationFog): FogSubsystem {
+    const fog = new FogSubsystem({
+      grid: flatGrid(),
+      stats: STATS,
+      hero: () => 1,
+      ...(config === undefined ? {} : { config }),
+      createCanvas: (width, height) => {
+        const canvas = fakeCanvas();
+        canvas.width = width;
+        canvas.height = height;
+        return canvas;
+      },
+    });
+    fog.init(makeContext());
+    return fog;
+  }
+
+  it('открытие зоны — сходимость по времени рассеивания, а не скачок', () => {
+    const fog = dissolvingSubsystem({ dissolveSeconds: 1 });
+    fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    // Целевая маска уже открыта, показанная — ещё туман: рассеивание идёт кадрами.
+    expect(fog.visibility.valueAt(4, 4)).toBe(1);
+    expect(fog.shownAt(4, 4)).toBe(0);
+    fog.updateFrame(0.25, 0);
+    const partial = fog.shownAt(4, 4);
+    expect(partial).toBeGreaterThan(0);
+    expect(partial).toBeLessThan(1);
+    fog.updateFrame(2, 0);
+    expect(fog.shownAt(4, 4)).toBe(1);
+  });
+
+  it('закрытие зоны симметрично: свет гаснет постепенно', () => {
+    const fog = dissolvingSubsystem({ dissolveSeconds: 1 });
+    fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    fog.updateFrame(2, 0);
+    expect(fog.shownAt(4, 4)).toBe(1);
+    // Наблюдатель ушёл: целевая маска в точке погасла, показанная — гаснет.
+    fog.syncTick(makeTickView([observerView(1, 20, 20, 0, 3)]));
+    expect(fog.visibility.valueAt(4, 4)).toBe(0);
+    fog.updateFrame(0.25, 0);
+    const fading = fog.shownAt(4, 4);
+    expect(fading).toBeGreaterThan(0);
+    expect(fading).toBeLessThan(1);
+    fog.updateFrame(2, 0);
+    expect(fog.shownAt(4, 4)).toBe(0);
+  });
+
+  it('замороженный мир не рассеивает туман: dt со знаком хода мира (REND-25)', () => {
+    const fog = dissolvingSubsystem({ dissolveSeconds: 1 });
+    fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    fog.updateFrame(0, 0);
+    expect(fog.shownAt(4, 4)).toBe(0);
+  });
+
+  it('разрыв непрерывности мира — снап показанной маски (REND-2)', () => {
+    const fog = dissolvingSubsystem({ dissolveSeconds: 1 });
+    fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)], { snapAll: true }));
+    expect(fog.shownAt(4, 4)).toBe(1);
+  });
+
+  it('нулевое время рассеивания — мгновенно, как раньше (FOW-10)', () => {
+    const fog = dissolvingSubsystem({ dissolveSeconds: 0 });
+    fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    expect(fog.shownAt(4, 4)).toBe(1);
   });
 });
 

@@ -187,6 +187,7 @@ describe('PRES-2, FOW-10: секция fog — закрытая конфигур
       conservatism: 0.92,
       resolution: 4,
       fadeSeconds: 0.45,
+      dissolveSeconds: 0.4,
     };
     const result = validatePresentationScene({ decorations: [], fog });
     expect(result.ok).toBe(true);
@@ -222,6 +223,7 @@ describe('PRES-2, FOW-10: секция fog — закрытая конфигур
           conservatism: 0,
           resolution: 0,
           fadeSeconds: Number.NaN,
+          dissolveSeconds: -1,
         },
       },
       /fog\.strength: ожидалась доля затемнения из \[0, 1\]/,
@@ -230,8 +232,9 @@ describe('PRES-2, FOW-10: секция fog — закрытая конфигур
       /fog\.conservatism: ожидалась доля из \(0, 1\]/,
       /fog\.resolution: ожидалось положительное число текселей/,
       /fog\.fadeSeconds: ожидалась неотрицательная длительность/,
+      /fog\.dissolveSeconds: ожидалось неотрицательное время рассеивания/,
     );
-    expect(errors).toHaveLength(6);
+    expect(errors).toHaveLength(7);
   });
 
   it('секция не-объектом отвергается адресно', () => {

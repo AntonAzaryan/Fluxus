@@ -80,6 +80,8 @@ export interface PresentationFog {
   readonly resolution?: number;
   /** Длительность fade «ушла в туман ≠ умерла», секунды (FOW-8). */
   readonly fadeSeconds?: number;
+  /** Время рассеивания тумана — сходимость показанной маски, секунды; 0 — мгновенно (FOW-7). */
+  readonly dissolveSeconds?: number;
 }
 
 /**
@@ -181,6 +183,7 @@ const FOG_KEYS: readonly string[] = [
   'conservatism',
   'resolution',
   'fadeSeconds',
+  'dissolveSeconds',
 ];
 
 /** Цвет тумана — `#rrggbb`: одна форма записи, чтобы дифф правки не гадал о синонимах. */
@@ -245,6 +248,16 @@ function validateFog(section: unknown, errors: string[]): void {
   ) {
     errors.push(
       `fog.fadeSeconds: ожидалась неотрицательная длительность в секундах (FOW-8), получено ${typeName(section.fadeSeconds)}`,
+    );
+  }
+  if (
+    'dissolveSeconds' in section &&
+    (typeof section.dissolveSeconds !== 'number' ||
+      !Number.isFinite(section.dissolveSeconds) ||
+      section.dissolveSeconds < 0)
+  ) {
+    errors.push(
+      `fog.dissolveSeconds: ожидалось неотрицательное время рассеивания в секундах (FOW-7), получено ${typeName(section.dissolveSeconds)}`,
     );
   }
 }

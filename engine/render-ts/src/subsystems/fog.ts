@@ -55,6 +55,12 @@ import {
  * Значения по умолчанию (FOW-10) документированы у полей `DEFAULT_FOG_CONFIG`.
  */
 export interface FogRenderConfig {
+  /**
+   * Время рассеивания тумана, секунды: показанная маска сходится к целевой с
+   * этой постоянной, открытие и закрытие зоны — не мгновенный скачок. Ноль —
+   * мгновенно (FOW-7, FOW-10).
+   */
+  readonly dissolveSeconds: number;
   /** Сила затемнения зоны вне видимости, [0, 1] (FOW-7). */
   readonly strength: number;
   /** Тон тумана — во что затемняется кадр. */
@@ -75,6 +81,7 @@ export interface FogRenderConfig {
  * политика картинки, которую дизайнер правит данными, а не этим файлом.
  */
 export const DEFAULT_FOG_CONFIG: FogRenderConfig = Object.freeze({
+  dissolveSeconds: 0.35,
   strength: 0.6,
   color: '#0e1420',
   edgeWidth: 1.5,
@@ -92,6 +99,7 @@ export function resolveFogConfig(section?: PresentationFog): FogRenderConfig {
     conservatism: section?.conservatism ?? DEFAULT_FOG_CONFIG.conservatism,
     resolution: section?.resolution ?? DEFAULT_FOG_CONFIG.resolution,
     fadeSeconds: section?.fadeSeconds ?? DEFAULT_FOG_CONFIG.fadeSeconds,
+    dissolveSeconds: section?.dissolveSeconds ?? DEFAULT_FOG_CONFIG.dissolveSeconds,
   };
 }
 
@@ -211,6 +219,11 @@ void main() {
     lit = texture2D(tMask, uv).r;
   }
   gl_FragColor = vec4(mix(scene.rgb, uColor, uStrength * (1.0 - lit)), scene.a);
+  // Render target хранит рабочее (линейное) пространство: прямой вывод на
+  // канвас три конвертирует сам, а ShaderMaterial обязан явно — без этих
+  // строк весь кадр выводится линейным, то есть равномерно темнее (REND-1).
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
 }
 `;
 
@@ -227,6 +240,14 @@ export class FogSubsystem implements RenderSubsystem {
   private rect: FogWorldRect;
   private segments: readonly FogSegment[];
   private mask: VisibilityMask;
+  /**
+   * Показанная маска — то, что сэмплируют пост-проход и миникарта. Сходится к
+   * целевой `mask.data` со временем `dissolveSeconds`: рассеивание тумана не
+   * мгновенное (FOW-7). Именно этот буфер обёрнут текстурой.
+   */
+  private shown: Uint8Array;
+  /** Показанная маска ещё догоняет целевую: `updateFrame` ведёт сходимость. */
+  private settling = false;
   /** Маска построена хотя бы раз: до этого конвейер прежний (прямой рендер). */
   private built = false;
 
@@ -277,7 +298,8 @@ export class FogSubsystem implements RenderSubsystem {
     this.rect = fogRectOf(this.grid);
     this.segments = fogSegmentsOf(this.grid);
     this.mask = new VisibilityMask(this.rect, this.current.resolution);
-    this.maskTexture = createMaskTexture(this.mask);
+    this.shown = new Uint8Array(this.mask.data.length);
+    this.maskTexture = createMaskTexture(this.mask, this.shown);
     this.layerWorld = this.rect;
 
     this.postMaterial = new THREE.ShaderMaterial({
@@ -401,9 +423,34 @@ export class FogSubsystem implements RenderSubsystem {
     // Полутон кромки — один блюр после всех reveal (FOW-7): полярный срез
     // жёсткий и на фронте, и на сторонах конуса, полутон делает smooth().
     this.mask.smooth();
-    this.built = true;
+    // Рассеивание не мгновенное (FOW-7): показанная маска догоняет целевую в
+    // updateFrame. Разрыв непрерывности мира (REND-2) и нулевое время — снап:
+    // плавность — про ход мира, а не про телепорт или выключенное рассеивание.
+    if (view.snapAll || this.current.dissolveSeconds <= 0) {
+      this.shown.set(this.mask.data);
+      this.settling = false;
+    } else {
+      this.settling = true;
+    }
+    // Текстура и слой миникарты отражают ПОКАЗАННУЮ маску: при снапе она уже
+    // целевая, при рассеивании — прежняя, но слой обязан существовать с первой
+    // перестройки, а дальше его ведёт сходимость в updateFrame.
     this.maskTexture.needsUpdate = true;
     this.blitLayer();
+    this.built = true;
+  }
+
+  /**
+   * Доля света ПОКАЗАННОЙ маски в мировой точке [0, 1] — то, что сейчас на
+   * экране, в отличие от `visibility.valueAt` (целевая маска). Пробник
+   * рассеивания (FOW-7) для тестов.
+   */
+  shownAt(worldX: number, worldY: number): number {
+    const mask = this.mask;
+    const tx = Math.floor((worldX - mask.rect.x) * mask.texelsPerUnit);
+    const ty = Math.floor((worldY - mask.rect.y) * mask.texelsPerUnit);
+    if (tx < 0 || ty < 0 || tx >= mask.width || ty >= mask.height) return 0;
+    return this.shown[ty * mask.width + tx]! / 255;
   }
 
   /**
@@ -422,9 +469,38 @@ export class FogSubsystem implements RenderSubsystem {
     return grown;
   }
 
-  updateFrame(): void {
-    // Маска живёт каденсом доставки, пост-проход — вызовом render: кадру здесь
-    // делать нечего.
+  /**
+   * Сходимость показанной маски к целевой (FOW-7): линейный шаг по времени
+   * рассеивания, открытие и закрытие зоны симметричны. `dt` — со знаком хода
+   * мира (REND-25): в замороженном мире туман тоже стоит. Сошлось — кадры
+   * перестают платить и за копию, и за загрузку текстуры (design D4).
+   */
+  updateFrame(dt: number, _alpha: number): void {
+    if (!this.settling) return;
+    const elapsed = Math.abs(dt);
+    if (elapsed <= 0) return;
+    const target = this.mask.data;
+    const shown = this.shown;
+    const step = Math.max(1, Math.round((255 * elapsed) / this.current.dissolveSeconds));
+    let settled = true;
+    for (let i = 0; i < shown.length; i++) {
+      const want = target[i]!;
+      const have = shown[i]!;
+      if (have === want) continue;
+      const diff = want - have;
+      if (diff > step) {
+        shown[i] = have + step;
+        settled = false;
+      } else if (diff < -step) {
+        shown[i] = have - step;
+        settled = false;
+      } else {
+        shown[i] = want;
+      }
+    }
+    this.settling = !settled;
+    this.maskTexture.needsUpdate = true;
+    this.blitLayer();
   }
 
   /**
@@ -441,8 +517,10 @@ export class FogSubsystem implements RenderSubsystem {
     (this.postMaterial.uniforms.uColor as { value: THREE.Color }).value.set(next.color);
     if (next.resolution !== previous.resolution) {
       this.mask = new VisibilityMask(this.rect, next.resolution);
+      this.shown = new Uint8Array(this.mask.data.length);
+      this.settling = false;
       this.maskTexture.dispose();
-      this.maskTexture = createMaskTexture(this.mask);
+      this.maskTexture = createMaskTexture(this.mask, this.shown);
       (this.postMaterial.uniforms.tMask as { value: THREE.Texture }).value = this.maskTexture;
       // Прежний растр другого разрешения не переносится: маска перестроится
       // ближайшей доставкой, а до неё прежняя картинка честнее растянутой.
@@ -516,10 +594,12 @@ export class FogSubsystem implements RenderSubsystem {
     if (context === null) return;
     this.layerImage ??= context.createImageData(mask.width, mask.height);
     const image = this.layerImage;
-    const color = new THREE.Color(this.current.color);
-    const r = Math.round(color.r * 255);
-    const g = Math.round(color.g * 255);
-    const b = Math.round(color.b * 255);
+    // Канвасу нужны sRGB-байты: компоненты THREE.Color — рабочее (линейное)
+    // пространство, тон брался бы темнее авторского. getHex по умолчанию — sRGB.
+    const hex = new THREE.Color(this.current.color).getHex();
+    const r = (hex >> 16) & 0xff;
+    const g = (hex >> 8) & 0xff;
+    const b = hex & 0xff;
     for (let row = 0; row < mask.height; row++) {
       const source = (mask.height - 1 - row) * mask.width;
       const dest = row * mask.width * 4;
@@ -528,7 +608,7 @@ export class FogSubsystem implements RenderSubsystem {
         image.data[at] = r;
         image.data[at + 1] = g;
         image.data[at + 2] = b;
-        image.data[at + 3] = 255 - mask.data[source + column]!;
+        image.data[at + 3] = 255 - this.shown[source + column]!;
       }
     }
     context.putImageData(image, 0, 0);
@@ -541,9 +621,9 @@ export class FogSubsystem implements RenderSubsystem {
 }
 
 /** Одноканальная текстура поверх растра маски; фильтрация билинейная (design D2). */
-function createMaskTexture(mask: VisibilityMask): THREE.DataTexture {
+function createMaskTexture(mask: VisibilityMask, shown: Uint8Array): THREE.DataTexture {
   const texture = new THREE.DataTexture(
-    mask.data,
+    shown,
     mask.width,
     mask.height,
     THREE.RedFormat,
