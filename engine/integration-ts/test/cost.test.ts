@@ -9,6 +9,12 @@
  *   диагностики ядра (DIAG-1, уровень `systems`), стадии `syncTick` и `frame` —
  *   стоком счётчиков рендера; принадлежность счётчика стадии объявляет сам
  *   рендер (`COST_COUNTER_STAGES`), а не догадка этого файла.
+ *   Одна и та же запись прогоняется ДВАЖДЫ — на пресетах «производительность» и
+ *   «ультра» (`render-quality` QUAL-4, design D5): у каждого своя секция
+ *   документа, поэтому удорожание пути, работающего и на слабых устройствах,
+ *   краснеет отдельной строкой диффа, а не тонет в общем. Стадия `tick` в
+ *   документе ОДНА: симуляция от пресета не зависит (QUAL-2), и равенство её
+ *   счётчиков между двумя прогонами — часть проверки, а не допущение.
  * - На синтетических осях стоимости (PERF-6) — `engine/tests/golden/scaling.cost.json`:
  *   два размера на ось (число сущностей, наблюдателей, сегментов укрытий,
  *   разрешение маски), чтобы суперлинейный рост читался отношением L/S прямо в
@@ -38,14 +44,18 @@ import {
   type RenderCostCounters,
 } from '@game-mvp/render';
 import {
+  BENCH_PRESETS,
+  BENCH_PRESET_NAMES,
   GOLDEN_DIR,
-  MATCH_STAT_SOURCES,
+  MATCH_STAND,
   PresentationBench,
   RECORDED_MATCHES,
   benchGrid,
   loadRecording,
+  matchBench,
   playRecording,
   syntheticTick,
+  type BenchPresetName,
   type SyntheticLoad,
 } from './benchLoad.js';
 
@@ -53,9 +63,6 @@ const UPDATE = process.env.UPDATE_COST === '1';
 
 /** Плоский набор именованных счётчиков одной стадии — то, что лежит в эталоне. */
 type StageCost = Record<string, number>;
-
-/** Арена презентационного стенда матча: 8×8 клеток, укрытия решёткой шагом 2. */
-const MATCH_GRID = { extent: 8, pillarStep: 2, resolution: 4 } as const;
 
 // --------------------------------------------------------- счётчики стадии tick
 
@@ -115,10 +122,12 @@ function renderStages(counters: RenderCostCounters): Record<CostStage, StageCost
   return stages;
 }
 
-/** Документ эталона матча: три стадии конвейера, ключи по алфавиту. */
-function matchDocument(tickCost: TickCost, render: RenderCostCounters): unknown {
-  const stages = renderStages(render);
-  return { frame: stages.frame, syncTick: stages.syncTick, tick: sorted(tickCost) };
+/** Стоимость одного прогона записи: сводка тика и счётчики рендера. */
+interface MatchRun {
+  readonly tick: TickCost;
+  readonly render: RenderCostCounters;
+  /** Действующее разрешение маски прогона — сценное под потолком (design D3). */
+  readonly maskResolution: number;
 }
 
 /**
@@ -127,16 +136,12 @@ function matchDocument(tickCost: TickCost, render: RenderCostCounters): unknown 
  * на разных мирах.
  *
  * Стенд строится ДО подключения стока: разовая загрузка маски в текстуру при
- * создании подсистемы — стоимость сборки, а не доставки, и в эталон стадии
- * `syncTick` ей входить незачем.
+ * создании подсистемы (и её пересборка под потолком пресета) — стоимость
+ * сборки, а не доставки, и в эталон стадии `syncTick` ей входить незачем.
  */
-function measureMatch(name: string): unknown {
+function runMatch(name: string, preset: BenchPresetName): MatchRun {
   const def = loadRecording(name);
-  const bench = new PresentationBench({
-    grid: benchGrid(MATCH_GRID.extent, MATCH_GRID.pillarStep),
-    resolution: MATCH_GRID.resolution,
-    stats: MATCH_STAT_SOURCES,
-  });
+  const bench = matchBench(BENCH_PRESETS[preset]);
   const { sink, total } = tickCostCollector();
   const counters = createCostCounters();
   withCostSink(counters, () => {
@@ -145,7 +150,30 @@ function measureMatch(name: string): unknown {
   // Две бухгалтерии проходов рендерера обязаны сойтись: подсистема считает их
   // сама, спай видит вызовы (design D2). Расхождение — счётчик врёт.
   expect(counters.fogRenderPasses).toBe(bench.renderer.renders);
-  return matchDocument(total, counters);
+  return { tick: total, render: counters, maskResolution: bench.maskResolution };
+}
+
+/**
+ * Документ эталона матча (design D5): стадия тика ОДИН раз, стадии доставки и
+ * кадра — секцией на пресет. Разложение именно такое, потому что таково
+ * положение дел: симуляция пресета не знает (QUAL-2), а картинка знает.
+ */
+function measureMatch(name: string): unknown {
+  const presets: Record<string, unknown> = {};
+  let tick: StageCost | null = null;
+  for (const preset of BENCH_PRESET_NAMES) {
+    const run = runMatch(name, preset);
+    const cost = sorted(run.tick);
+    // Инвариантность симуляции — проверка, а не декларация (QUAL-2, design D6):
+    // счётчики тика двух прогонов обязаны совпасть до единицы, иначе пресет
+    // как-то дотянулся до мира. Побитовая сверка канонического лога — в
+    // `qualityInvariance.test.ts`; здесь то же утверждение стоит даром.
+    if (tick === null) tick = cost;
+    else expect(cost, `${name}/${preset}: стадия tick`).toEqual(tick);
+    const stages = renderStages(run.render);
+    presets[preset] = { frame: stages.frame, syncTick: stages.syncTick };
+  }
+  return { tick, ...presets };
 }
 
 // -------------------------------------------------- оси масштабирования (PERF-6)
@@ -218,7 +246,14 @@ const AXES: readonly ScalingAxis[] = [
   },
 ];
 
-/** Одна доставка и один кадр синтетической нагрузки под снятым замером. */
+/**
+ * Одна доставка и один кадр синтетической нагрузки под снятым замером.
+ *
+ * Пресета у осей нет намеренно (стенд без документа — ультра, то есть без
+ * потолков): ось «разрешение маски» ДВИГАЕТ ту самую величину, которую потолок
+ * ограничивает, и второй пресет мерил бы здесь не рост стоимости от разрешения,
+ * а работу min() — она проверена на матчах (QUAL-4) и в `render-ts`.
+ */
 function measureSize(config: ScalingSize): RenderCostCounters {
   const bench = new PresentationBench({
     grid: benchGrid(SCALING_EXTENT, config.pillarStep),
@@ -290,14 +325,53 @@ describe('PERF-4: голден-гейт стоимости на записанн
     });
   }
 
-  it('счётчики бенча не мёртвые: каждая стадия сделала работу', () => {
-    const document = measureMatch('match-fuzz') as Record<string, StageCost>;
-    for (const stage of ['tick', 'syncTick', 'frame']) {
-      const cost = document[stage]!;
-      const moved = Object.values(cost).filter((value) => value > 0);
-      expect(moved.length, stage).toBeGreaterThan(0);
+  it('счётчики бенча не мёртвые: каждая стадия сделала работу на каждом пресете', () => {
+    const document = measureMatch('match-fuzz') as Record<string, StageCost | Record<string, StageCost>>;
+    const stages: [string, StageCost][] = [['tick', document.tick as StageCost]];
+    for (const preset of BENCH_PRESET_NAMES) {
+      const section = document[preset] as Record<string, StageCost>;
+      stages.push([`${preset}/syncTick`, section.syncTick!], [`${preset}/frame`, section.frame!]);
     }
-    expect(document.tick!.ticks).toBe(loadRecording('match-fuzz').ticks);
+    for (const [where, cost] of stages) {
+      const moved = Object.values(cost).filter((value) => value > 0);
+      expect(moved.length, where).toBeGreaterThan(0);
+    }
+    expect((document.tick as StageCost).ticks).toBe(loadRecording('match-fuzz').ticks);
+  });
+
+  it('QUAL-4: потолок производительного пресета кусает — грубая маска дешевле авторской', () => {
+    const performance = runMatch('match-walk', 'performance');
+    const ultra = runMatch('match-walk', 'ultra');
+
+    // Сценное значение стенда остаётся авторским потолком (FOW-10, design D3):
+    // ультра показывает его как есть, производительный режим ограничивает.
+    expect(ultra.maskResolution).toBe(MATCH_STAND.resolution);
+    expect(performance.maskResolution).toBe(BENCH_PRESETS.performance['fog.maskResolution']);
+    // Полномасочная работа растёт квадратом разрешения — вдвое грубее маска
+    // вчетверо дешевле, и ровно эту строку диффа гейт и заводился стеречь.
+    expect(ultra.render.fogMaskClearTexels).toBe(4 * performance.render.fogMaskClearTexels);
+    expect(ultra.render.fogMaskUploadBytes).toBe(4 * performance.render.fogMaskUploadBytes);
+    expect(ultra.render.fogMinimapTexels).toBe(4 * performance.render.fogMinimapTexels);
+    // Доставка и кадр от пресета не зависят: сущностей столько же, подсистем
+    // столько же — качество меняет подачу картинки, а не состав состояния (QUAL-2).
+    expect(ultra.render.syncTickInstances).toBe(performance.render.syncTickInstances);
+    expect(ultra.render.frameInstances).toBe(performance.render.frameInstances);
+  });
+
+  it('QUAL-1: значения ручек приезжают стенду контроллером, а не мимо него', () => {
+    const bench = matchBench(BENCH_PRESETS.performance);
+
+    // Реестр стенда собран из деклараций ЕГО подсистем (design D1): туман ручку
+    // объявил, подсистема позиций ручек не имеет и в реестре не появляется.
+    expect(bench.quality.knobs.map((knob) => knob.name)).toEqual(['fog.maskResolution']);
+    expect(bench.quality.effective().get('fog.maskResolution')).toBe(
+      BENCH_PRESETS.performance['fog.maskResolution'],
+    );
+    // Прочие ручки документа стенду не адресованы — их подсистем здесь нет
+    // вовсе. Это не «неизвестные» ручки, а не объявленные на этой сцене: состав
+    // документа проверяется против СОБРАННОГО реестра, и регистрация вправе
+    // прийти позже применения пресета (QUAL-1).
+    expect(bench.maskResolution).toBe(BENCH_PRESETS.performance['fog.maskResolution']);
   });
 });
 

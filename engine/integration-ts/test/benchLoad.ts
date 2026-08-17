@@ -24,6 +24,14 @@
  *
  * `content/` бенч не читает (CONT-4): сцены приезжают записью матча, сетка
  * террейна строится здесь.
+ *
+ * ## Пресет качества — параметр стенда
+ *
+ * Тот же тракт собирается под документом пресета (`render-quality` QUAL-1):
+ * стенд заводит `QualityController` над своей сценой, и подсистемы получают
+ * значения ручек ровно тем же путём, что в игре. Отсюда две вещи разом —
+ * пресетные эталоны стоимости (QUAL-4, design D5) и проверка инвариантности
+ * симуляции к пресету (QUAL-2, design D6): нагрузка одна, документов два.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -45,10 +53,12 @@ import {
   Extractor,
   FogSubsystem,
   PresentationStage,
+  QualityController,
   ViewBuffer,
   type ExtractedTick,
   type FogLayerCanvas,
   type PresentationProducer,
+  type QualityPreset,
   type RenderContext,
   type StatSource,
   type TickView,
@@ -203,7 +213,7 @@ export const FOG_STATS = { visionRadius: 'vision', team: 'team' } as const;
  * контент. Радиус мал (0.3 мировых единицы) — таков коллайдер героя, и работа
  * маски на матче поэтому определяется полномасочными счётчиками, а не кругами.
  */
-export const MATCH_STAT_SOURCES: readonly StatSource[] = [
+const MATCH_STAT_SOURCES: readonly StatSource[] = [
   { name: FOG_STATS.team, component: 'Player', field: 'slot' },
   { name: FOG_STATS.visionRadius, component: 'Collider', field: 'radius' },
 ];
@@ -213,12 +223,70 @@ const PRODUCER: PresentationProducer = { name: 'bench' };
 /** Кадров на доставку: один — каденс кадра от каденса тика бенч не отвязывает. */
 const FRAMES_PER_TICK = 1;
 
+// ------------------------------------------------------- пресеты качества бенча
+
+/**
+ * Документы пресетов бенча (`render-quality` QUAL-1, QUAL-4) — ФИКСТУРЫ, а не
+ * политика игры. Уровни качества игры живут её JSON-документами (design D4:
+ * `game/demo-ts/app/presets/`) и правятся дизайнером без ревью движка; здесь
+ * закреплён МЕХАНИЗМ — что ручки объявлены, что потолок ограничивает авторское
+ * значение и что бюджет каждого из двух режимов виден отдельной строкой эталона
+ * (QUAL-4). Совпадать с числами демо они не обязаны и намеренно не совпадают:
+ * эталон стоимости, зависящий от политики игры, краснел бы от каждой правки
+ * баланса картинки.
+ *
+ * Имена ручек — собранного реестра (design D1). Стенд регистрирует туман и
+ * подсистему позиций, поэтому в счётчиках отзывается только `fog.maskResolution`;
+ * остальные ручки выписаны, чтобы документ пресета оставался документом ПОЛНОГО
+ * набора осей, а не подмножеством, случайно совпавшим с составом стенда.
+ */
+const PERFORMANCE_PRESET: QualityPreset = Object.freeze({
+  // Потолок ниже сценного разрешения стенда (`MATCH_STAND.resolution`): min()
+  // срабатывает, и грубая маска — то, чем производительный режим и отличается.
+  'fog.maskResolution': 4,
+  'models.defaultTier': 'batched',
+  // Больше единицы — пороги LOD читаются раньше, инстанс уходит на грубый
+  // уровень ближе к камере (REND-22).
+  'models.lodThresholdScale': 2,
+  'particles.density': 0.5,
+  'terrain.curvatureTessellation': 2,
+});
+
+/**
+ * Ультра: потолков нет вовсе. Их отсутствие и есть «действует авторское
+ * значение» (design D3) — умолчание ceiling-ручки бесконечно, а бесконечности в
+ * JSON не написать. Прямые значения выписаны своими документированными
+ * умолчаниями (QUAL-1), чтобы пара документов читалась диффом.
+ */
+const ULTRA_PRESET: QualityPreset = Object.freeze({
+  'models.defaultTier': 'batched',
+  'models.lodThresholdScale': 1,
+  'particles.density': 1,
+});
+
+export const BENCH_PRESETS = Object.freeze({
+  performance: PERFORMANCE_PRESET,
+  ultra: ULTRA_PRESET,
+});
+
+/** Имя пресета — ключ секции эталона стоимости (QUAL-4, design D5). */
+export type BenchPresetName = keyof typeof BENCH_PRESETS;
+
+/** Порядок секций эталона: сперва бюджет слабых устройств, следом авторский. */
+export const BENCH_PRESET_NAMES: readonly BenchPresetName[] = ['performance', 'ultra'];
+
 export interface PresentationBenchOptions {
   readonly grid: TerrainGrid;
-  /** Разрешение маски, текселей на мировую единицу (FOW-10) — ось PERF-6. */
+  /**
+   * АВТОРСКОЕ разрешение маски, текселей на мировую единицу (FOW-10) — секция
+   * `fog` сцены глазами стенда и ось PERF-6. Действующее — под потолком пресета
+   * (design D3), и его читает `fog.config.resolution`.
+   */
   readonly resolution: number;
   /** Источники статов доставки; пусто — синтетическая нагрузка кладёт статы сама. */
   readonly stats?: readonly StatSource[];
+  /** Документ пресета качества (QUAL-1); нет — ультра, то есть без потолков. */
+  readonly preset?: QualityPreset;
 }
 
 /**
@@ -232,6 +300,8 @@ export class PresentationBench {
   readonly buffer: ViewBuffer;
   readonly fog: FogSubsystem;
   readonly renderer = new RendererSpy();
+  /** Контроллер качества сцены стенда (QUAL-1): реестр ручек и их значения. */
+  readonly quality: QualityController;
 
   private readonly extractor: Extractor;
   private readonly camera = new THREE.PerspectiveCamera();
@@ -267,7 +337,16 @@ export class PresentationBench {
       createCanvas: benchCanvas,
     });
     this.stage = new PresentationStage(context);
+    // Контроллер заводится ДО регистрации: значения ручек уезжают подсистеме
+    // тем же путём, что в игре, — регистрацией (QUAL-1, design D2), а не
+    // отдельным вызовом «примени пресет» после сборки сцены.
+    this.quality = new QualityController(this.stage, options.preset ?? BENCH_PRESETS.ultra);
     this.stage.register(this.fog).register(new PositionsSubsystem());
+  }
+
+  /** Действующее разрешение маски — сценное под потолком пресета (FOW-10, design D3). */
+  get maskResolution(): number {
+    return this.fog.config.resolution;
   }
 
   /** Тик мира — доставка и кадры презентации. Часы идут ровно по каденсу тика. */
@@ -300,6 +379,25 @@ function observerOf(view: TickView): EntityId | null {
     if (entity.stats?.get(FOG_STATS.team) !== undefined) return id;
   }
   return null;
+}
+
+/**
+ * Стенд записанного матча: арена 8×8 клеток, укрытия решёткой шагом 2 и
+ * АВТОРСКОЕ разрешение маски 8 текселей на мировую единицу. Разрешение выбрано
+ * ВЫШЕ потолка производительного пресета намеренно (design D3): иначе min() не
+ * срабатывал бы, оба эталона стоимости совпадали бы до счётчика, и гейт QUAL-4
+ * стерёг бы один бюджет под двумя именами.
+ */
+export const MATCH_STAND = { extent: 8, pillarStep: 2, resolution: 8 } as const;
+
+/** Презентационный стенд матча под одним документом пресета (QUAL-4). */
+export function matchBench(preset: QualityPreset): PresentationBench {
+  return new PresentationBench({
+    grid: benchGrid(MATCH_STAND.extent, MATCH_STAND.pillarStep),
+    resolution: MATCH_STAND.resolution,
+    stats: MATCH_STAT_SOURCES,
+    preset,
+  });
 }
 
 // ------------------------------------------------- синтетическая нагрузка осей

@@ -1,31 +1,57 @@
 {
-  "frame": {
-    "fogRenderPasses": 48,
-    "frameCalls": 24,
-    "frameInstances": 96,
-    "frameSubsystems": 48
-  },
-  "syncTick": {
-    "fogEntitiesScanned": 48,
-    "fogMaskClearTexels": 24576,
-    "fogMaskTexels": 285,
-    "fogMaskTexelsWritten": 36,
-    "fogMaskUploadBytes": 24576,
-    "fogMinimapTexels": 24576,
-    "fogNearSegments": 7,
-    "fogRevealCalls": 24,
-    "fogSegmentRangeTests": 1344,
-    "fogSubsampleTests": 48,
-    "syncTickDecorationInstances": 0,
-    "syncTickDeliveries": 24,
-    "syncTickInstances": 96,
-    "syncTickSubsystems": 48
-  },
   "tick": {
     "broadPhasePairs": 0,
     "commands": 428,
     "expressions": 336,
     "raycasts": 0,
     "ticks": 24
+  },
+  "performance": {
+    "frame": {
+      "fogRenderPasses": 48,
+      "frameCalls": 24,
+      "frameInstances": 96,
+      "frameSubsystems": 48
+    },
+    "syncTick": {
+      "fogEntitiesScanned": 48,
+      "fogMaskClearTexels": 24576,
+      "fogMaskTexels": 285,
+      "fogMaskTexelsWritten": 36,
+      "fogMaskUploadBytes": 24576,
+      "fogMinimapTexels": 24576,
+      "fogNearSegments": 7,
+      "fogRevealCalls": 24,
+      "fogSegmentRangeTests": 1344,
+      "fogSubsampleTests": 48,
+      "syncTickDecorationInstances": 0,
+      "syncTickDeliveries": 24,
+      "syncTickInstances": 96,
+      "syncTickSubsystems": 48
+    }
+  },
+  "ultra": {
+    "frame": {
+      "fogRenderPasses": 48,
+      "frameCalls": 24,
+      "frameInstances": 96,
+      "frameSubsystems": 48
+    },
+    "syncTick": {
+      "fogEntitiesScanned": 48,
+      "fogMaskClearTexels": 98304,
+      "fogMaskTexels": 584,
+      "fogMaskTexelsWritten": 127,
+      "fogMaskUploadBytes": 98304,
+      "fogMinimapTexels": 98304,
+      "fogNearSegments": 7,
+      "fogRevealCalls": 24,
+      "fogSegmentRangeTests": 1344,
+      "fogSubsampleTests": 168,
+      "syncTickDecorationInstances": 0,
+      "syncTickDeliveries": 24,
+      "syncTickInstances": 96,
+      "syncTickSubsystems": 48
+    }
   }
 }
