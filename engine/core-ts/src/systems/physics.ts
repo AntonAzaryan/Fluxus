@@ -1,5 +1,5 @@
 /**
- * Физика (PHYS-1..12): примитивные коллайдеры, статика обрывов, разрешение
+ * Физика (PHYS-1..13): примитивные коллайдеры, статика обрывов, разрешение
  * движения по маскам слоёв, sensor-пересечения и детерминированный raycast.
  *
  * Всё считается в 2D-проекции и в Q16.16 (PHYS-1, PHYS-3). Уровень террейна на
@@ -528,6 +528,9 @@ export function createPhysicsApi(
       };
 
       for (const s of physicsWorld.query(rayBounds, tag)) {
+        // PHYS-13: ребро обрыва перекрывает луч направленно — вход с верхней
+        // стороны свободен, и такое пересечение не засчитывается вовсе.
+        if (cliffRayOpen(dir, s)) continue;
         const distance = rayVsBox(from, dir, rayLength, s);
         if (distance !== undefined && (best === undefined || distance < best)) {
           best = distance;
@@ -572,6 +575,31 @@ export function createPhysicsApi(
  */
 function queryColliders(world: WorldState, component: string, tag: string | undefined): Float64Array {
   return query(world, { all: [POSITION_COMPONENT, component], withTag: tag });
+}
+
+/**
+ * Направленное перекрытие луча обрывом (PHYS-13): ребро с уровнями сторон
+ * пропускает луч, входящий с верхней стороны, — обзор и полёт сверху вниз
+ * свободны, зеркально духу гейта движения (PHYS-11), где спуск при активном
+ * допуске свободен с любой высоты. Обычная статика без уровней и вход со
+ * стороны нижнего (или равного — вырожденное ребро не даёт одностороннего
+ * окна) уровня перекрывают луч как прежде.
+ *
+ * Ребро — осевой вырожденный прямоугольник (TERR-5), ось нормали — та, где
+ * `min == max`; сторона входа — по знаку компоненты направления на этой оси:
+ * положительная входит со стороны меньшей координаты (`levelNeg`),
+ * отрицательная — со стороны `levelPos`. Нулевая компонента — луч вдоль самого
+ * ребра, стороны входа у него нет: перекрытие сохраняется (консервативно; до
+ * narrow-phase такой луч всё равно не доводит вырожденный слэб `rayVsBox`).
+ *
+ * Детерминизм не затронут: сравнение целых уровней, порядок перебора прежний.
+ * На гейт движения (PHYS-11, `cliffGateOpen`) правило не переносится.
+ */
+function cliffRayOpen(dir: Vec2, s: StaticCollider): boolean {
+  if (s.levelNeg === undefined || s.levelPos === undefined) return false;
+  const direction = s.minX === s.maxX ? dir.x : dir.y;
+  if (direction === 0) return false;
+  return direction > 0 ? s.levelNeg > s.levelPos : s.levelPos > s.levelNeg;
 }
 
 /**

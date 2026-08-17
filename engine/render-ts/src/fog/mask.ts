@@ -6,12 +6,20 @@
  * Для каждого наблюдателя своей команды рисуется reveal-полигон: круг
  * эффективного радиуса с радиальным градиентом края настраиваемой ширины
  * (FOW-7), обрезанный 2D shadow-casting'ом по cliff-отрезкам в радиусе (FOW-9).
+ * Тени направленные, как перекрытие симуляции (PHYS-13): ребро отбрасывает
+ * тень только для наблюдателя нижней стороны — с плато нижний уровень открыт.
  * Наблюдатели складываются максимумом: пересечение кругов не темнее одного.
  *
+ * Тени считаются полярным depth-буфером на наблюдателя (design D3 change
+ * `fow-directional-cliff-vision`): по блокирующим отрезкам в радиусе строится
+ * 1D-буфер «угол → дистанция ближайшей тени», и каждый тексель платит O(1)
+ * вместо теста против каждого отрезка. Стоимость перестройки — O(тексели +
+ * бины × отрезки), и на плато с десятками отрезков в радиусе она не проседает.
+ *
  * Вся геометрия здесь — float и приближение (REND-1): побайтового совпадения с
- * `raycast` симуляции не требуется, а расхождение консервативно — тень
- * отбрасывает и касание отрезка, то есть там, где приближение сомневается,
- * туман, а не свет (FOW-9).
+ * `raycast` симуляции не требуется, а расхождение консервативно — минимум по
+ * соседним бинам расширяет тень, наблюдатель на линии ребра считается нижней
+ * стороной, то есть там, где приближение сомневается, туман, а не свет (FOW-9).
  *
  * Точка входной границы Q16.16 → float — `fogRectOf`/`fogSegmentsOf`: сетка и
  * cliff-отрезки приезжают из ядра fixed-point (TERR-2, TERR-5), конверсия — в
@@ -27,19 +35,32 @@ export interface FogWorldRect {
   readonly height: number;
 }
 
-/** Отрезок укрытия в мировых float-координатах — производная `TerrainGrid.cliffs` (TERR-5). */
+/**
+ * Отрезок укрытия в мировых float-координатах — производная `TerrainGrid.cliffs`
+ * (TERR-5). Уровни сторон переезжают из `CliffEdge` как есть: `levelNeg` —
+ * сторона меньшей координаты по оси нормали, `levelPos` — большей. По ним тень
+ * становится направленной (FOW-9, PHYS-13).
+ */
 export interface FogSegment {
   readonly x1: number;
   readonly y1: number;
   readonly x2: number;
   readonly y2: number;
+  readonly levelNeg: number;
+  readonly levelPos: number;
 }
 
-/** Наблюдатель своей команды: позиция и эффективный радиус в мировых единицах. */
+/**
+ * Наблюдатель своей команды: позиция и эффективный радиус в мировых единицах.
+ * Уровень — доставленный `EntityView.currLevel` (TERR-4 производное): в тесте
+ * тени он не участвует (сторона наблюдателя — геометрия, design D2), но входит
+ * в сигнатуру перестройки маски (design D4).
+ */
 export interface FogObserver {
   readonly x: number;
   readonly y: number;
   readonly radius: number;
+  readonly level: number;
 }
 
 /** Прямоугольник маски из сетки террейна — приём `tileSize` (REND-1, TERR-2). */
@@ -50,7 +71,8 @@ export function fogRectOf(grid: TerrainGrid): FogWorldRect {
 
 /**
  * Cliff-отрезки сетки во float (REND-1): те же отрезки, что несут `blocksVision`
- * в симуляции (TERR-5, FOW-9), — не выведенные заново, а переиспользованные.
+ * в симуляции (TERR-5, FOW-9), — не выведенные заново, а переиспользованные,
+ * вместе с уровнями сторон (PHYS-13).
  */
 export function fogSegmentsOf(grid: TerrainGrid): readonly FogSegment[] {
   return grid.cliffs.map((edge) => ({
@@ -58,6 +80,8 @@ export function fogSegmentsOf(grid: TerrainGrid): readonly FogSegment[] {
     y1: edge.from.y / FIXED_ONE,
     x2: edge.to.x / FIXED_ONE,
     y2: edge.to.y / FIXED_ONE,
+    levelNeg: edge.levelNeg,
+    levelPos: edge.levelPos,
   }));
 }
 
@@ -75,49 +99,18 @@ export function edgeGradient(distance: number, radius: number, edgeWidth: number
 }
 
 /**
- * Перекрывает ли отрезок укрытия луч «наблюдатель → точка» (FOW-9, 2D
- * shadow-casting). Касание концом или коллинеарное наложение считается
- * перекрытием: расхождение приближения — в сторону тумана.
+ * Отбрасывает ли ребро тень для этого наблюдателя (FOW-9): только если
+ * наблюдатель на нижней стороне — зеркало направленного перекрытия луча в
+ * симуляции (PHYS-13, FOW-5), где вход с верхней стороны свободен. Сторона
+ * наблюдателя — по знаку его координаты относительно линии отрезка на оси
+ * нормали (ребро осевое, TERR-5); равные уровни — тень с обеих сторон, как
+ * блок вырожденного ребра в PHYS-13. Наблюдатель ровно на линии — нижняя
+ * сторона: расхождение приближения — в сторону тумана (FOW-9).
  */
-export function segmentBlocks(
-  ox: number,
-  oy: number,
-  px: number,
-  py: number,
-  segment: FogSegment,
-): boolean {
-  return segmentsCross(ox, oy, px, py, segment.x1, segment.y1, segment.x2, segment.y2);
-}
-
-/** Пересечение отрезков [a, b] и [c, d], границы включительно (консервативно). */
-function segmentsCross(
-  ax: number, ay: number, bx: number, by: number,
-  cx: number, cy: number, dx: number, dy: number,
-): boolean {
-  const d1 = cross(cx, cy, dx, dy, ax, ay);
-  const d2 = cross(cx, cy, dx, dy, bx, by);
-  const d3 = cross(ax, ay, bx, by, cx, cy);
-  const d4 = cross(ax, ay, bx, by, dx, dy);
-  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
-    return true;
-  }
-  // Вырожденные случаи — точка на отрезке: тоже тень (консервативность FOW-9).
-  if (d1 === 0 && onSegment(cx, cy, dx, dy, ax, ay)) return true;
-  if (d2 === 0 && onSegment(cx, cy, dx, dy, bx, by)) return true;
-  if (d3 === 0 && onSegment(ax, ay, bx, by, cx, cy)) return true;
-  if (d4 === 0 && onSegment(ax, ay, bx, by, dx, dy)) return true;
-  return false;
-}
-
-function cross(ax: number, ay: number, bx: number, by: number, px: number, py: number): number {
-  return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-}
-
-function onSegment(ax: number, ay: number, bx: number, by: number, px: number, py: number): boolean {
-  return (
-    Math.min(ax, bx) <= px && px <= Math.max(ax, bx) &&
-    Math.min(ay, by) <= py && py <= Math.max(ay, by)
-  );
+export function segmentCasts(ox: number, oy: number, segment: FogSegment): boolean {
+  const side = segment.x1 === segment.x2 ? ox - segment.x1 : oy - segment.y1;
+  if (side === 0) return true;
+  return side > 0 ? segment.levelPos <= segment.levelNeg : segment.levelNeg <= segment.levelPos;
 }
 
 /** Квадрат расстояния от точки до отрезка — отбор укрытий в радиусе наблюдателя. */
@@ -134,44 +127,25 @@ function distanceSqToSegment(px: number, py: number, segment: FogSegment): numbe
 }
 
 /**
+ * Число бинов полярного depth-буфера (design D3). С запасом к дискретности
+ * растра: на радиусе 22 юнита (предел PHYS-6 с хвостом) дуга бина ≈ 0.13
+ * юнита ≈ тексель разрешения 8 — угловая дискретность не грубее прежней
+ * растеризации субсэмплами.
+ */
+const SHADOW_BINS = 1024;
+const TWO_PI = Math.PI * 2;
+
+/** Бин по углу `atan2` (−π, π]; края зажимаются в диапазон индексов. */
+function binOf(angle: number): number {
+  const bin = Math.floor(((angle + Math.PI) / TWO_PI) * SHADOW_BINS);
+  return bin < 0 ? 0 : bin >= SHADOW_BINS ? SHADOW_BINS - 1 : bin;
+}
+
+/**
  * Растр маски: байт на тексель, 0 — туман, 255 — видно. Ряд 0 — минимальный
  * `y` мира (v = 0 текстуры); переворот для canvas-потребителей — дело блита,
  * а не растра.
  */
-/** Смещения 2×2 субсэмплов тени в долях текселя — плоский массив пар (x, y). */
-const SHADOW_SUBSAMPLES = [-0.25, -0.25, 0.25, -0.25, -0.25, 0.25, 0.25, 0.25] as const;
-
-/**
- * Число открытых субсэмплов текселя [0, 4] — покрытие тени, а не бинарный тест
- * по центру: жёсткий переход 0→255 шириной в тексель читается лесенкой на
- * диагонали кромки даже под билинейным сэмплом текстуры, а полутон частичного
- * покрытия и есть «край без ступеней» (FOW-7). Консервативность FOW-9
- * сохранена: частично перекрытый тексель темнее полностью открытого, света
- * тень не добавляет.
- */
-function litSubsamples(
-  observer: FogObserver,
-  wx: number,
-  wy: number,
-  scale: number,
-  near: readonly FogSegment[],
-): number {
-  let lit = 0;
-  for (let s = 0; s < SHADOW_SUBSAMPLES.length; s += 2) {
-    const sx = wx + SHADOW_SUBSAMPLES[s]! / scale;
-    const sy = wy + SHADOW_SUBSAMPLES[s + 1]! / scale;
-    let blocked = false;
-    for (const segment of near) {
-      if (segmentBlocks(observer.x, observer.y, sx, sy, segment)) {
-        blocked = true;
-        break;
-      }
-    }
-    if (!blocked) lit += 1;
-  }
-  return lit;
-}
-
 export class VisibilityMask {
   readonly rect: FogWorldRect;
   /** Текселей на мировую единицу — разрешение маски (FOW-10). */
@@ -180,8 +154,14 @@ export class VisibilityMask {
   readonly height: number;
   readonly data: Uint8Array;
 
-  /** Переиспользуемый список укрытий в радиусе текущего наблюдателя. */
+  /** Переиспользуемый список укрытий, затеняющих текущего наблюдателя. */
   private readonly near: FogSegment[] = [];
+  /**
+   * Полярный depth-буфер текущего наблюдателя (design D3): дистанция ближайшей
+   * тени по углу. Переиспользуется между наблюдателями и доставками — горячий
+   * путь перестройки не аллоцирует.
+   */
+  private readonly depth = new Float32Array(SHADOW_BINS);
 
   constructor(rect: FogWorldRect, texelsPerUnit: number) {
     this.rect = rect;
@@ -212,12 +192,20 @@ export class VisibilityMask {
     if (x1 < x0 || y1 < y0) return;
 
     // Тени отбрасывают только укрытия в радиусе (FOW-9): дальние в круг не
-    // дотягиваются, и платить за их проверку на каждом текселе незачем.
+    // дотягиваются. Направленность — здесь же (PHYS-13): ребро, для которого
+    // наблюдатель на верхней стороне, прозрачно и в буфер не попадает.
     const near = this.near;
     near.length = 0;
     const radiusSq = radius * radius;
     for (const segment of segments) {
+      if (!segmentCasts(observer.x, observer.y, segment)) continue;
       if (distanceSqToSegment(observer.x, observer.y, segment) <= radiusSq) near.push(segment);
+    }
+
+    const depth = this.depth;
+    if (near.length > 0) {
+      depth.fill(Number.POSITIVE_INFINITY);
+      for (const segment of near) this.rasterizeSegment(observer.x, observer.y, segment);
     }
 
     for (let ty = y0; ty <= y1; ty++) {
@@ -231,17 +219,74 @@ export class VisibilityMask {
         if (distSq >= radiusSq) continue;
         const current = this.data[row + tx]!;
         if (current === 255) continue; // уже полностью открыт другим наблюдателем
-        const value = Math.round(edgeGradient(Math.sqrt(distSq), radius, edgeWidth) * 255);
+        const r = Math.sqrt(distSq);
+        const value = Math.round(edgeGradient(r, radius, edgeWidth) * 255);
         if (value <= current) continue;
         if (near.length === 0) {
           this.data[row + tx] = value;
           continue;
         }
-        const lit = litSubsamples(observer, wx, wy, scale, near);
-        if (lit === 0) continue;
-        const shaded = lit === 4 ? value : Math.round((value * lit) / 4);
+        // Дистанция тени — минимум своего и соседних бинов: консервативность
+        // на разрыве силуэта (интерполяция дала бы свет в тени), тень шире, а
+        // не уже (FOW-9).
+        const bin = binOf(Math.atan2(dy, dx));
+        const shadowDist = Math.min(
+          depth[bin]!,
+          depth[bin === 0 ? SHADOW_BINS - 1 : bin - 1]!,
+          depth[bin === SHADOW_BINS - 1 ? 0 : bin + 1]!,
+        );
+        if (r >= shadowDist) continue; // тексель за тенью
+        // Полоса полутона ~1 текселя перед дистанцией тени — кромка без
+        // ступени (FOW-7), замена 2×2 субсэмплов.
+        const coverage = (shadowDist - r) * scale;
+        const shaded = coverage >= 1 ? value : Math.round(value * coverage);
         if (shaded > current) this.data[row + tx] = shaded;
       }
+    }
+  }
+
+  /**
+   * Растеризация отрезка в полярный буфер (design D3): угловой интервал по
+   * концам отрезка, в каждый бин — минимум дистанции пересечения луча бина с
+   * линией отрезка. Интервал, накрывающий разрыв `atan2` (±π), пишется двумя
+   * дугами. Дистанция до бесконечной линии, а не до отрезка: бины внутри
+   * интервала пересекают сам отрезок, а краевой бин, чей центр вышел за конец,
+   * получает дистанцию края — расхождение на ширину бина в сторону тени.
+   */
+  private rasterizeSegment(ox: number, oy: number, segment: FogSegment): void {
+    const a0 = Math.atan2(segment.y1 - oy, segment.x1 - ox);
+    const a1 = Math.atan2(segment.y2 - oy, segment.x2 - ox);
+    const lo = Math.min(a0, a1);
+    const hi = Math.max(a0, a1);
+    if (hi - lo <= Math.PI) {
+      this.rasterizeArc(ox, oy, segment, binOf(lo), binOf(hi));
+    } else {
+      // Отрезок субтендирует меньше π, значит интервал [lo, hi] шире π — это
+      // дополнение: дуга идёт через разрыв ±π двумя половинами.
+      this.rasterizeArc(ox, oy, segment, 0, binOf(lo));
+      this.rasterizeArc(ox, oy, segment, binOf(hi), SHADOW_BINS - 1);
+    }
+  }
+
+  /** Одна дуга интервала: бины подряд, в бин — минимум дистанции (design D3). */
+  private rasterizeArc(
+    ox: number,
+    oy: number,
+    segment: FogSegment,
+    binLo: number,
+    binHi: number,
+  ): void {
+    const depth = this.depth;
+    const vertical = segment.x1 === segment.x2;
+    const offset = vertical ? segment.x1 - ox : segment.y1 - oy;
+    for (let bin = binLo; bin <= binHi; bin++) {
+      const angle = ((bin + 0.5) / SHADOW_BINS) * TWO_PI - Math.PI;
+      const along = vertical ? Math.cos(angle) : Math.sin(angle);
+      if (along === 0) continue;
+      const t = offset / along;
+      // Пересечение позади луча — краевой бин смотрит от линии; тени нет.
+      if (t <= 0) continue;
+      if (t < depth[bin]!) depth[bin] = t;
     }
   }
 

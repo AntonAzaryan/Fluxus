@@ -18,9 +18,11 @@ import {
   fogRectOf,
   fogSegmentsOf,
   resolveFogConfig,
+  segmentCasts,
   DEFAULT_FOG_CONFIG,
   type EntityView,
   type FogLayerCanvas,
+  type FogSegment,
   type RenderContext,
 } from '../src/index.js';
 import { makeEntityView, makeTickView } from './fixtures.js';
@@ -53,12 +55,15 @@ function observerView(
   y: number,
   team: number,
   vision: number,
+  level = 0,
 ): EntityView {
   return makeEntityView(id, {
     currX: x,
     currY: y,
     prevX: x,
     prevY: y,
+    currLevel: level,
+    prevLevel: level,
     stats: new Map([
       [STATS.team, team],
       [STATS.visionRadius, vision],
@@ -114,7 +119,7 @@ function fakeCanvas(): FogLayerCanvas & { puts: number } {
 describe('FOW-7: reveal-круг с градиентом края', () => {
   it('в круге светло, вне круга — туман', () => {
     const mask = new VisibilityMask(fogRectOf(flatGrid()), 4);
-    mask.reveal({ x: 4, y: 4, radius: 3 }, 0.5, []);
+    mask.reveal({ x: 4, y: 4, radius: 3, level: 0 }, 0.5, []);
     expect(mask.valueAt(4, 4)).toBe(1);
     expect(mask.valueAt(4 + 2, 4)).toBeGreaterThan(0);
     // Вне радиуса и вне прямоугольника маски — туман без исключений.
@@ -124,7 +129,7 @@ describe('FOW-7: reveal-круг с градиентом края', () => {
 
   it('градиент края монотонно спадает с расстоянием и не даёт ступени (FOW-7)', () => {
     const mask = new VisibilityMask(fogRectOf(flatGrid()), 8);
-    mask.reveal({ x: 4, y: 4, radius: 3 }, 1.5, []);
+    mask.reveal({ x: 4, y: 4, radius: 3, level: 0 }, 1.5, []);
     let previous = Number.POSITIVE_INFINITY;
     for (let distance = 0; distance <= 3.5; distance += 1 / 8) {
       const value = mask.valueAt(4 + distance, 4);
@@ -140,16 +145,16 @@ describe('FOW-7: reveal-круг с градиентом края', () => {
 
   it('нулевая ширина градиента — резкий край, а не отказ', () => {
     const mask = new VisibilityMask(fogRectOf(flatGrid()), 4);
-    mask.reveal({ x: 4, y: 4, radius: 2 }, 0, []);
+    mask.reveal({ x: 4, y: 4, radius: 2, level: 0 }, 0, []);
     expect(mask.valueAt(4 + 1.5, 4)).toBe(1);
     expect(mask.valueAt(4 + 2.5, 4)).toBe(0);
   });
 
   it('два наблюдателя складываются максимумом: пересечение не темнее', () => {
     const mask = new VisibilityMask(fogRectOf(flatGrid()), 4);
-    mask.reveal({ x: 3, y: 4, radius: 2 }, 0.5, []);
+    mask.reveal({ x: 3, y: 4, radius: 2, level: 0 }, 0.5, []);
     const single = mask.valueAt(4, 4);
-    mask.reveal({ x: 5, y: 4, radius: 2 }, 0.5, []);
+    mask.reveal({ x: 5, y: 4, radius: 2, level: 0 }, 0.5, []);
     expect(mask.valueAt(4, 4)).toBeGreaterThanOrEqual(single);
   });
 });
@@ -163,7 +168,7 @@ describe('FOW-9: 2D shadow-casting по cliff-отрезкам', () => {
     // Возвышенная клетка (4, 4) даёт cliff-отрезки по своему периметру (TERR-5).
     expect(segments.length).toBeGreaterThanOrEqual(4);
     const mask = new VisibilityMask(fogRectOf(grid), 4);
-    mask.reveal({ x: 2.5, y: 4.5, radius: 6 }, 0.25, segments);
+    mask.reveal({ x: 2.5, y: 4.5, radius: 6, level: 0 }, 0.25, segments);
     // Прямо за клеткой — тень, хотя точка в радиусе (FOW-9).
     expect(mask.valueAt(6.5, 4.5)).toBe(0);
     // Луч в обход клетки укрытия не пересекает — точка открыта.
@@ -175,19 +180,56 @@ describe('FOW-9: 2D shadow-casting по cliff-отрезкам', () => {
   it('кромка тени — полутон частичного покрытия, а не ступень (FOW-7)', () => {
     const grid = gridWithPillar();
     const mask = new VisibilityMask(fogRectOf(grid), 4);
-    mask.reveal({ x: 2.5, y: 4.5, radius: 6 }, 0.25, fogSegmentsOf(grid));
-    // Скан текселей поперёк кромки тени от угла клетки: сторона к наблюдателю
-    // светлая, за углом — тень, а между ними покрытие делят субсэмплы. Скачка
-    // на весь диапазон между соседями нет — кромка полутоновая, а не ступень;
+    mask.reveal({ x: 2.5, y: 4.5, radius: 6, level: 0 }, 0.25, fogSegmentsOf(grid));
+    // Скан текселей поперёк кромки тени — вдоль луча через отбрасывающее её
+    // левое ребро клетки (x = 4): перед ребром светло, за ним тень, между ними
+    // полоса полутона ~1 текселя полярного depth-буфера (design D3). Скачка на
+    // весь диапазон между соседями нет — кромка полутоновая, а не ступень;
     // тень при этом остаётся тенью (расхождение приближения — в сторону
     // тумана, FOW-9).
     const values: number[] = [];
-    for (let wy = 3.0625; wy <= 4.0; wy += 0.25) values.push(mask.valueAt(5.625, wy));
+    for (let wx = 3.0625; wx <= 5.0; wx += 0.25) values.push(mask.valueAt(wx, 4.5));
     expect(values[0]).toBeGreaterThan(0);
     expect(values[values.length - 1]).toBe(0);
     let maxJump = 0;
     for (let i = 1; i < values.length; i++) maxJump = Math.max(maxJump, Math.abs(values[i]! - values[i - 1]!));
     expect(maxJump).toBeLessThan(1);
+    // Полутон в полосе существует: между светом и тенью есть промежуточное значение.
+    expect(values.some((value) => value > 0 && value < 1)).toBe(true);
+  });
+
+  it('тени направленные: наблюдатель на плато, нижний уровень за ребром открыт (PHYS-13)', () => {
+    const grid = gridWithPillar();
+    const mask = new VisibilityMask(fogRectOf(grid), 4);
+    // Наблюдатель на возвышенной клетке (4, 4): для всех четырёх её рёбер он
+    // на верхней стороне — свои рёбра прозрачны, и пол внизу открыт во все
+    // стороны, как и симуляция, которая цель внизу доставляет (FOW-9, FOW-5).
+    mask.reveal({ x: 4.5, y: 4.5, radius: 4, level: 1 }, 0.25, fogSegmentsOf(grid));
+    expect(mask.valueAt(2.5, 4.5)).toBeGreaterThan(0);
+    expect(mask.valueAt(6.5, 4.5)).toBeGreaterThan(0);
+    expect(mask.valueAt(4.5, 2.5)).toBeGreaterThan(0);
+    expect(mask.valueAt(4.5, 6.5)).toBeGreaterThan(0);
+  });
+
+  it('тени направленные: наблюдатель на полу, возвышение за ребром в тени (PHYS-13)', () => {
+    const grid = gridWithPillar();
+    const mask = new VisibilityMask(fogRectOf(grid), 4);
+    mask.reveal({ x: 2.5, y: 4.5, radius: 6, level: 0 }, 0.25, fogSegmentsOf(grid));
+    // Верх клетки — за её левым ребром; наблюдатель на нижней стороне, тень
+    // остаётся (FOW-9): картинка согласована с фильтром высоты симуляции.
+    expect(mask.valueAt(4.5, 4.5)).toBe(0);
+  });
+
+  it('segmentCasts: тень только с нижней стороны, на линии и при равных уровнях — тень (FOW-9)', () => {
+    const edge: FogSegment = { x1: 4, y1: 4, x2: 4, y2: 5, levelNeg: 0, levelPos: 1 };
+    expect(segmentCasts(2.5, 4.5, edge)).toBe(true); // нижняя сторона — тень
+    expect(segmentCasts(5.5, 4.5, edge)).toBe(false); // верхняя — ребро прозрачно
+    // Наблюдатель ровно на линии — нижняя сторона: расхождение в сторону тумана.
+    expect(segmentCasts(4, 4.5, edge)).toBe(true);
+    // Равные уровни — тень с обеих сторон, как блок вырожденного ребра (PHYS-13).
+    const flat: FogSegment = { ...edge, levelPos: 0 };
+    expect(segmentCasts(2.5, 4.5, flat)).toBe(true);
+    expect(segmentCasts(5.5, 4.5, flat)).toBe(true);
   });
 });
 
@@ -331,5 +373,70 @@ describe('FOW-7, FOW-10: пост-проход и обновление конф�
     expect(resolveFogConfig(undefined)).toEqual(DEFAULT_FOG_CONFIG);
     expect(resolveFogConfig({ strength: 0.3 }).strength).toBe(0.3);
     expect(resolveFogConfig({ strength: 0.3 }).edgeWidth).toBe(DEFAULT_FOG_CONFIG.edgeWidth);
+  });
+});
+
+// ------------------------- 4.3: перестройка только при изменении входов (D4)
+
+describe('design D4: сигнатура входов — перестройка маски только при изменении', () => {
+  function cachedSubsystem(): { fog: FogSubsystem; canvases: (FogLayerCanvas & { puts: number })[] } {
+    const canvases: (FogLayerCanvas & { puts: number })[] = [];
+    const fog = new FogSubsystem({
+      grid: gridWithPillar(),
+      stats: STATS,
+      hero: () => 1,
+      createCanvas: (width, height) => {
+        const canvas = fakeCanvas();
+        canvas.width = width;
+        canvas.height = height;
+        canvases.push(canvas);
+        return canvas;
+      },
+    });
+    fog.init(makeContext());
+    return { fog, canvases };
+  }
+
+  it('неизменные входы — ни перестройки маски, ни блита слоя миникарты', () => {
+    const { fog, canvases } = cachedSubsystem();
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    expect(fog.rebuilds).toBe(1);
+    const puts = canvases[0]!.puts;
+
+    // Та же доставка: позиции, радиусы и уровни наблюдателей не изменились —
+    // стоя на месте, кадр не платит за туман ничего (design D4).
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    expect(fog.rebuilds).toBe(1);
+    expect(canvases[0]!.puts).toBe(puts);
+  });
+
+  it('смена позиции, уровня или конфига инвалидирует сигнатуру', () => {
+    const { fog } = cachedSubsystem();
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    expect(fog.rebuilds).toBe(1);
+
+    // Сдвиг наблюдателя.
+    fog.syncTick(makeTickView([observerView(1, 2.75, 4.5, 0, 3)]));
+    expect(fog.rebuilds).toBe(2);
+
+    // Только уровень (та же позиция): слот сигнатуры — доставленный currLevel.
+    fog.syncTick(makeTickView([observerView(1, 2.75, 4.5, 0, 3, 1)]));
+    expect(fog.rebuilds).toBe(3);
+
+    // Значение конфига, влияющее на растр (FOW-10): ширина градиента.
+    fog.applyConfig({ edgeWidth: 2.5 });
+    fog.syncTick(makeTickView([observerView(1, 2.75, 4.5, 0, 3, 1)]));
+    expect(fog.rebuilds).toBe(4);
+
+    // После перестройки кэш снова держит.
+    fog.syncTick(makeTickView([observerView(1, 2.75, 4.5, 0, 3, 1)]));
+    expect(fog.rebuilds).toBe(4);
+  });
+
+  it('второй наблюдатель в доставке — другие входы, перестройка', () => {
+    const { fog } = cachedSubsystem();
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3), observerView(3, 6, 6, 0, 2)]));
+    expect(fog.rebuilds).toBe(2);
   });
 });

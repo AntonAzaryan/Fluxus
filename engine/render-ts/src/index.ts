@@ -140,7 +140,7 @@ export type {
   FogStatNames,
   FogSubsystemOptions,
 } from './subsystems/fog.js';
-export { VisibilityMask, edgeGradient, fogRectOf, fogSegmentsOf, segmentBlocks } from './fog/mask.js';
+export { VisibilityMask, edgeGradient, fogRectOf, fogSegmentsOf, segmentCasts } from './fog/mask.js';
 export type { FogObserver, FogSegment, FogWorldRect } from './fog/mask.js';
 
 // Подсистема транзиентных эффектов (REND-23): процедурные примитивы по записям

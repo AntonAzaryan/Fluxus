@@ -4,11 +4,16 @@
  *
  * ## Что она делает
  *
- * - На каждой доставке (`syncTick`) перестраивает маску видимости (design D1):
+ * - На доставке (`syncTick`) перестраивает маску видимости (design D1):
  *   наблюдатели СВОЕЙ команды берутся из доставленного состояния по именам
  *   статов (design D4, HUD-8) — радиус обзора и команда; команду игрока задаёт
  *   стат его героя. Видимые враги несут те же статы, и их круги в маску не
- *   попадают: фильтр по команде обязателен.
+ *   попадают: фильтр по команде обязателен. Перестройка — только при изменении
+ *   сигнатуры входов (design D4 change `fow-directional-cliff-vision`):
+ *   наблюдатели (позиция, радиус, уровень) в порядке доставки плюс значения
+ *   конфига; совпала — ни растра, ни загрузки текстуры, ни блита миникарты.
+ *   Уровень наблюдателя — доставленный `EntityView.currLevel` (TERR-4):
+ *   тени маски направленные (FOW-9, PHYS-13).
  * - Кадр рисует пост-проходом (design D2): сцена уходит в render target, затем
  *   полноэкранный шейдер по глубине и обратной view-projection восстанавливает
  *   мировые XY фрагмента, сэмплирует маску и затемняет силой/цветом из
@@ -155,6 +160,20 @@ export interface FogSubsystemOptions {
   readonly createCanvas?: (width: number, height: number) => FogLayerCanvas;
 }
 
+/**
+ * Слоты конфига в голове сигнатуры входов (design D4): ширина градиента и тон
+ * тумана; дальше — по четыре числа на наблюдателя в порядке доставки.
+ */
+const SIGNATURE_PREFIX = 2;
+
+/** Совпадение занятых префиксов двух сигнатур — сравнение чисел, не JSON (D4). */
+function samePrefix(a: Float64Array, b: Float64Array, length: number): boolean {
+  for (let i = 0; i < length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 /** Полноэкранный треугольник не нужен: квад 2×2 в NDC, вершины насквозь. */
 const POST_VERTEX = `
 varying vec2 vUv;
@@ -211,6 +230,25 @@ export class FogSubsystem implements RenderSubsystem {
   /** Маска построена хотя бы раз: до этого конвейер прежний (прямой рендер). */
   private built = false;
 
+  // ------------------------------------------- сигнатура входов (design D4)
+  /**
+   * Сигнатура входов последней перестройки: значения конфига, влияющие на
+   * растр и блит, затем наблюдатели в порядке доставки — по четыре числа
+   * (x, y, эффективный радиус, уровень). Числа в переиспользуемом массиве,
+   * а не JSON: сравнение — дешёвый проход по префиксу длиной `signatureLength`.
+   */
+  private signature: Float64Array = new Float64Array(SIGNATURE_PREFIX + 4 * 8);
+  /** Кандидат текущей доставки; после перестройки меняется местами с сигнатурой. */
+  private candidate: Float64Array = new Float64Array(SIGNATURE_PREFIX + 4 * 8);
+  /** Длина занятого префикса; −1 — сигнатуры нет, ближайшая доставка строит. */
+  private signatureLength = -1;
+  /** Счётчик перестроек — дешёвый пробник для тестов кэша (design D4). */
+  private rebuildCount = 0;
+  /** Тон тумана числом — слот сигнатуры: блит миникарты вбивает его в канвас. */
+  private colorHex: number;
+  /** Буфер наблюдателя для `reveal`: перестройка не аллоцирует по объекту. */
+  private readonly observerScratch = { x: 0, y: 0, radius: 0, level: 0 };
+
   // ------------------------------------------------------------ пост-проход
   private maskTexture: THREE.DataTexture;
   private target: THREE.WebGLRenderTarget | null = null;
@@ -234,6 +272,7 @@ export class FogSubsystem implements RenderSubsystem {
     // существует — маска и пост-проход от этого не зависят.
     this.createCanvas = options.createCanvas ?? null;
     this.current = resolveFogConfig(options.config);
+    this.colorHex = new THREE.Color(this.current.color).getHex();
     // Приём сетки — точка входной границы (REND-1, TERR-2): дальше только float.
     this.rect = fogRectOf(this.grid);
     this.segments = fogSegmentsOf(this.grid);
@@ -300,6 +339,13 @@ export class FogSubsystem implements RenderSubsystem {
    * команды из доставленного состояния по именам статов. Пока команда игрока
    * не доставлена (нет героя или его статов), прежняя маска остаётся как есть —
    * консервативнее мигания «всё открыто/всё закрыто».
+   *
+   * Перестройка — только при изменении входов (design D4): сигнатура доставки
+   * собирается в числа кандидата и сравнивается с сигнатурой последней
+   * перестройки. Совпала — маска, текстура и слой миникарты не трогаются:
+   * стоя на месте, кадр не платит за туман ничего. Отрезки в сигнатуру не
+   * входят: их набор фиксируется конструктором и не меняется за жизнь
+   * подсистемы, а смена разрешения инвалидирует сигнатуру явно (`applyConfig`).
    */
   syncTick(view: TickView): void {
     const hero = this.heroOf();
@@ -307,7 +353,19 @@ export class FogSubsystem implements RenderSubsystem {
     const team = view.entities.get(hero)?.stats?.get(this.statNames.team);
     if (team === undefined) return;
 
-    this.mask.clear();
+    // Значения конфига, влияющие на растр и блит: ширина градиента, тон
+    // (вбит в канвас миникарты) и консервативность — последняя через
+    // эффективные радиусы наблюдателей ниже.
+    let candidate = this.candidate;
+    if (candidate.length < this.signature.length) {
+      // Кандидат отстал от выросшей сигнатуры: выравнивание здесь, а не в
+      // росте, — иначе ёмкости чередовались бы и рост повторялся каждую
+      // перестройку.
+      candidate = this.candidate = new Float64Array(this.signature.length);
+    }
+    candidate[0] = this.current.edgeWidth;
+    candidate[1] = this.colorHex;
+    let length = SIGNATURE_PREFIX;
     for (const entity of view.entities.values()) {
       const stats = entity.stats;
       if (stats === undefined) continue;
@@ -316,17 +374,52 @@ export class FogSubsystem implements RenderSubsystem {
       if (stats.get(this.statNames.team) !== team) continue;
       const radius = stats.get(this.statNames.visionRadius);
       if (radius === undefined || radius <= 0) continue;
+      if (length + 4 > candidate.length) candidate = this.growCandidate(length);
       // Радиус статов уже во float мировых единицах (REND-1, `statSources.ts`);
-      // визуал консервативнее геймплея на коэффициент конфига (FOW-9).
-      this.mask.reveal(
-        { x: entity.currX, y: entity.currY, radius: radius * this.current.conservatism },
-        this.current.edgeWidth,
-        this.segments,
-      );
+      // визуал консервативнее геймплея на коэффициент конфига (FOW-9). Уровень
+      // — доставленный `currLevel` (TERR-4): слот сигнатуры и поле наблюдателя.
+      candidate[length] = entity.currX;
+      candidate[length + 1] = entity.currY;
+      candidate[length + 2] = radius * this.current.conservatism;
+      candidate[length + 3] = entity.currLevel;
+      length += 4;
+    }
+    if (length === this.signatureLength && samePrefix(this.signature, candidate, length)) {
+      return; // входы прежние: ни растра, ни загрузки текстуры, ни блита (D4)
+    }
+    this.candidate = this.signature;
+    this.signature = candidate;
+    this.signatureLength = length;
+    this.rebuildCount++;
+
+    this.mask.clear();
+    const observer = this.observerScratch;
+    for (let at = SIGNATURE_PREFIX; at < length; at += 4) {
+      observer.x = candidate[at]!;
+      observer.y = candidate[at + 1]!;
+      observer.radius = candidate[at + 2]!;
+      observer.level = candidate[at + 3]!;
+      this.mask.reveal(observer, this.current.edgeWidth, this.segments);
     }
     this.built = true;
     this.maskTexture.needsUpdate = true;
     this.blitLayer();
+  }
+
+  /**
+   * Число перестроек маски с создания подсистемы — пробник кэша сигнатуры
+   * (design D4) для тестов; картинка от него не зависит.
+   */
+  get rebuilds(): number {
+    return this.rebuildCount;
+  }
+
+  /** Рост кандидата сигнатуры: редкость (наблюдателей прибыло), не горячий путь. */
+  private growCandidate(occupied: number): Float64Array {
+    const grown = new Float64Array(this.candidate.length * 2);
+    grown.set(this.candidate.subarray(0, occupied));
+    this.candidate = grown;
+    return grown;
   }
 
   updateFrame(): void {
@@ -343,6 +436,7 @@ export class FogSubsystem implements RenderSubsystem {
     const next = resolveFogConfig(section);
     const previous = this.current;
     this.current = next;
+    this.colorHex = new THREE.Color(next.color).getHex();
     (this.postMaterial.uniforms.uStrength as { value: number }).value = next.strength;
     (this.postMaterial.uniforms.uColor as { value: THREE.Color }).value.set(next.color);
     if (next.resolution !== previous.resolution) {
@@ -355,9 +449,13 @@ export class FogSubsystem implements RenderSubsystem {
       this.built = false;
       this.layerImage = null;
       this.layerCanvas = null;
+      // Разрешение в сигнатуру входов не входит — пустой растр честно требует
+      // перестройки ближайшей доставкой (design D4).
+      this.signatureLength = -1;
     }
-    // Смена ширины градиента/консервативности доедет ближайшей перестройкой
-    // маски; длительность fade читают потребители через `config` (design D7).
+    // Смена ширины градиента/консервативности/тона доедет ближайшей
+    // перестройкой: они — слоты сигнатуры входов (design D4); длительность
+    // fade читают потребители через `config` (design D7).
   }
 
   /**

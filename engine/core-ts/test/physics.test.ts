@@ -1038,3 +1038,55 @@ describe('raycast (PHYS-6)', () => {
     expect(physics.raycast(at(-25, 0), at(-10, 0), { mask: BLOCKS_VISION })).not.toBeNull();
   });
 });
+
+describe('направленное перекрытие луча обрывом (PHYS-13)', () => {
+  it('луч сверху вниз через ребро свободен, снизу вверх — перекрыт', () => {
+    const h = harness(); // арена `TERRAIN`: обрыв x = 2, слева уровень 0, справа 1
+    // Вход с верхней стороны (`levelPos = 1`): пересечение не засчитывается —
+    // обзор и полёт вниз свободны (PHYS-13).
+    expect(h.physics.raycast(at(3, 0.5), at(1.5, 0.5), { mask: BLOCKS_VISION })).toBeNull();
+    // Тот же луч снизу вверх перекрыт, как любая статика.
+    const hit = h.physics.raycast(at(1.5, 0.5), at(3, 0.5), { mask: BLOCKS_VISION });
+    expect(hit).not.toBeNull();
+    expect(hit!.point.x).toBe(fixed.fromInt(2));
+  });
+
+  it('направленность — семантика луча, а не тумана: действует и без маски', () => {
+    const h = harness();
+    // Луч без маски (EXPR-8) видит статику обрыва (PHYS-6), но сверху вниз она
+    // его больше не перекрывает — зеркально спуску снаряда с `cliffRise = −1`
+    // по PHYS-11 (Risks дизайна fow-directional-cliff-vision).
+    expect(h.physics.raycast(at(3, 0.5), at(1.5, 0.5))).toBeNull();
+    expect(h.physics.raycast(at(1.5, 0.5), at(3, 0.5))).not.toBeNull();
+  });
+
+  it('спуск и дальний подъём: второй обрыв перекрывает луч со своей нижней стороны', () => {
+    // Долина между двумя плато: обрывы x = 1 (спуск по ходу луча) и x = 3
+    // (подъём). Правило действует на каждое ребро независимо (PHYS-13).
+    const h = harness(true, { ...TERRAIN, levels: ['1001', '1001'] });
+    const hit = h.physics.raycast(at(0.5, 0.5), at(3.5, 0.5), { mask: BLOCKS_VISION });
+    expect(hit).not.toBeNull();
+    expect(hit!.point.x).toBe(fixed.fromInt(3));
+  });
+
+  it('равные уровни сторон — блок: вырожденное ребро не даёт одностороннего окна', () => {
+    const h = harness(false);
+    const statics: StaticCollider[] = [
+      { minX: F(2), maxX: F(2), minY: F(-1), maxY: F(1), tags: [BLOCKS_VISION], layer: 0, levelNeg: 1, levelPos: 1 },
+    ];
+    const physics = createPhysicsApi(h.world, new PhysicsWorld(statics, fixed.fromInt(1)));
+    expect(physics.raycast(at(0, 0), at(4, 0), { mask: BLOCKS_VISION })).not.toBeNull();
+    expect(physics.raycast(at(4, 0), at(0, 0), { mask: BLOCKS_VISION })).not.toBeNull();
+  });
+
+  it('на гейт движения направленность не переносится: спуск с cliffRise = 0 блокирован, а луч свободен', () => {
+    const h = harness();
+    // Луч с верхней стороны проходит (PHYS-13)…
+    expect(h.physics.raycast(at(2.5, 0.5), at(1.5, 0.5), { mask: BLOCKS_VISION })).toBeNull();
+    // …а движение той же стороной блокирует гейт PHYS-11 как прежде.
+    const mover = h.place('Mover', { Position: { x: F(2.5), y: F(0.5) }, Velocity: { x: F(-0.5) } });
+    const events = h.step();
+    expect(h.position(mover)).toEqual(at(2.5, 0.5));
+    expect(events.map((e) => e.type)).toEqual(['Collision']);
+  });
+});
