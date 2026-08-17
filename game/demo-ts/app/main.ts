@@ -70,6 +70,7 @@ import {
   type InputSource,
 } from '@game-mvp/client';
 import { ACTION_BITS, RESPAWN_EVENT, STATE_COMPONENTS, STATS } from './sim.js';
+import { attachBenchProbe, benchRequested, type BenchProbe, type BenchProbeHost } from './benchProbe.js';
 import { createCapturePreview, type CapturePreview } from './capturePreview.js';
 import { createChargeBalls, type ChargeBalls } from './chargeBalls.js';
 import { demoEdgePan } from './cameraInput.js';
@@ -640,20 +641,33 @@ const hudCamera: HudCameraContract = {
 
 let lastFrameAt: number | null = null;
 
-function frame(now: number): void {
-  requestAnimationFrame(frame);
-  const dt = lastFrameAt === null ? 0 : Math.min(now - lastFrameAt, 250);
-  lastFrameAt = now;
+/**
+ * Probe стадий кадра (`performance-budget` PERF-2, PERF-7) — только под
+ * `?bench=1`. Выключенный (обычный запуск демо) он и есть `null`, и кадру
+ * стоит ровно одной проверки на `null` в `frame`: ни обращения к часам, ни
+ * записи в буфер (PERF-3 «выключенный учёт бесплатен»). Ручка отчёта живёт на
+ * `window` — её читает браузерный бенч (`bin/bench-demo.mjs`).
+ */
+const benchProbe: BenchProbe | null = benchRequested(window.location.search)
+  ? attachBenchProbe(window as BenchProbeHost)
+  : null;
 
-  // Прицел кадра — ОДИН raycast на кадр (design Decision 6): его читают и
-  // сэмплер через `pointerAimSource`, и превью зоны захвата. Считается ДО
-  // конвейера камеры — по той же позе, по которой игрок видел кадр, когда
-  // ставил курсор, и одинаково для обоих потребителей.
+/**
+ * Стадия `input`: прицел кадра, отложенное кадрирование миникарты, сэмпл осей
+ * камеры, канонический ввод в воркер и накладка тач-стиков.
+ *
+ * Прицел кадра — ОДИН raycast на кадр (design Decision 6): его читают и
+ * сэмплер через `pointerAimSource`, и превью зоны захвата. Считается ДО
+ * конвейера камеры — по той же позе, по которой игрок видел кадр, когда ставил
+ * курсор, и одинаково для обоих потребителей.
+ *
+ * Тиков здесь нет (SHELL-1): симуляция идёт в воркере своим тикером, кадр
+ * только шлёт ввод и интерполирует доставленное (REND-2).
+ */
+function sampleFrameInput(): void {
   frameAim = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
   if (frameAim !== null) lastAim = frameAim;
 
-  // Тиков здесь нет (SHELL-1): симуляция идёт в воркере своим тикером,
-  // кадр только шлёт ввод и интерполирует доставленное (REND-2).
   // Отложенное кадрирование миникарты — когда камера уже не follow (см. panTo).
   if (pendingPan !== null && rig !== null && rig.mode !== 'follow') {
     rig.frameBounds({ rect: panFramingRect(rig.config, pendingPan.x, pendingPan.y), aspect: camera.aspect });
@@ -662,52 +676,95 @@ function frame(now: number): void {
   sampleCameraInput();
   pushInput();
   if (touchSource !== null) touchOverlay?.(touchSource.overlay());
+}
 
-  // Конвейер камеры (CAM-1): follow-цель — интерполированная горизонталь
-  // инстанса (x/y; высоту rig берёт с поверхности, CAM-2), поза → эффекты →
-  // применение к THREE-камере.
-  //
-  // ДО кадра подсистем, а не после: отсечение и выбор уровня детализации идут
-  // по матрицам камеры (REND-21, REND-22), и камера, посаженная после кадра,
-  // отсекала бы по пирамиде ПРОШЛОГО кадра — быстрым разворотом инстансы
-  // вырезались бы у края экрана. Цель слежения при этом на кадр старше, но
-  // конвейер камеры её и так сглаживает — тот же порядок у сцены редактора.
-  if (rig !== null) {
-    // Цель слежения — видимая поза инстанса (REND-3): узла сцены рендер наружу
-    // не отдаёт, и камера ведёт по тем же числам, которыми он нарисован.
-    const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
-    const heroView = heroId === null ? undefined : remote?.view?.entities.get(heroId);
-    const target =
-      instance === null
-        ? null
-        : {
-            x: instance.pose.x,
-            y: instance.pose.y,
-            snap: (heroView?.snap ?? false) || (remote?.view?.snapAll ?? false),
-          };
-    const dtSec = dt / 1000;
-    const logical = rig.update(camInput, dtSec, target);
-    resetCameraInput(camInput);
-    // Эффекты камеры (тряска, покачивание) — часть картинки МИРА, а не главного
-    // потока: стоящий мир с трясущейся камерой показывает движение, которого в
-    // симуляции нет (REND-25, тот же довод, что у клипов). Собственный гейт
-    // заморозки у `EffectStack` есть, но сюда стек ведёт демо своим циклом и
-    // своим положительным dt — гейт остаётся недостижимым, если не обнулить
-    // время здесь. Сама же камера (`rig.update`) продолжает слушаться игрока:
-    // осмотреться в замороженном мире — ровно то, ради чего перемотку и смотрят.
-    const worldDt = (remote?.view?.mode ?? 'Running') === 'Running' ? dtSec : 0;
-    applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, worldDt));
-  }
+/**
+ * Стадия `camera` — конвейер камеры (CAM-1): follow-цель — интерполированная
+ * горизонталь инстанса (x/y; высоту rig берёт с поверхности, CAM-2), поза →
+ * эффекты → применение к THREE-камере.
+ *
+ * ДО кадра подсистем, а не после: отсечение и выбор уровня детализации идут
+ * по матрицам камеры (REND-21, REND-22), и камера, посаженная после кадра,
+ * отсекала бы по пирамиде ПРОШЛОГО кадра — быстрым разворотом инстансы
+ * вырезались бы у края экрана. Цель слежения при этом на кадр старше, но
+ * конвейер камеры её и так сглаживает — тот же порядок у сцены редактора.
+ */
+function cameraFrame(dtSec: number): void {
+  if (rig === null) return;
+  // Цель слежения — видимая поза инстанса (REND-3): узла сцены рендер наружу
+  // не отдаёт, и камера ведёт по тем же числам, которыми он нарисован.
+  const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
+  const heroView = heroId === null ? undefined : remote?.view?.entities.get(heroId);
+  const target =
+    instance === null
+      ? null
+      : {
+          x: instance.pose.x,
+          y: instance.pose.y,
+          snap: (heroView?.snap ?? false) || (remote?.view?.snapAll ?? false),
+        };
+  const logical = rig.update(camInput, dtSec, target);
+  resetCameraInput(camInput);
+  // Эффекты камеры (тряска, покачивание) — часть картинки МИРА, а не главного
+  // потока: стоящий мир с трясущейся камерой показывает движение, которого в
+  // симуляции нет (REND-25, тот же довод, что у клипов). Собственный гейт
+  // заморозки у `EffectStack` есть, но сюда стек ведёт демо своим циклом и
+  // своим положительным dt — гейт остаётся недостижимым, если не обнулить
+  // время здесь. Сама же камера (`rig.update`) продолжает слушаться игрока:
+  // осмотреться в замороженном мире — ровно то, ради чего перемотку и смотрят.
+  const worldDt = (remote?.view?.mode ?? 'Running') === 'Running' ? dtSec : 0;
+  applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, worldDt));
+}
 
+/**
+ * Стадия `present`: приём доставки подсистемами (`syncTick` — там живёт
+ * пересборка маски FoW) и покадровое обновление (`frame`). Сектор захвата и шар
+ * заряда — следом и здесь же: они садятся на позу инстанса ЭТОГО кадра, не
+ * прошлого.
+ */
+function presentFrame(now: number): void {
   remote?.frame(now);
-  // После кадра подсистем: сектор и шар заряда садятся на позу инстанса ЭТОГО
-  // кадра — не прошлого.
   capturePreview?.update();
   chargeBalls?.update();
-  // Кадр с туманом идёт пост-проходом подсистемы (FOW-7, design D2); без неё —
-  // прежний прямой рендер. Подсистема с непостроенной маской делает ровно его.
+}
+
+/**
+ * Стадия `draw`: кадр с туманом идёт пост-проходом подсистемы (FOW-7,
+ * design D2); без неё — прежний прямой рендер. Подсистема с непостроенной
+ * маской делает ровно его.
+ */
+function drawScene(): void {
   if (fogSubsystem !== null) fogSubsystem.render(renderer3, camera);
   else renderer3.render(scene3, camera);
+}
+
+function frame(now: number): void {
+  requestAnimationFrame(frame);
+  const dt = lastFrameAt === null ? 0 : Math.min(now - lastFrameAt, 250);
+  lastFrameAt = now;
+  const dtSec = dt / 1000;
+
+  // Одна проверка на кадр — и это ВСЯ цена выключенного замера (PERF-3):
+  // включённый probe отбивает те же четыре стадии отметками часов, выключенного
+  // в кадре нет вовсе.
+  if (benchProbe === null) {
+    sampleFrameInput();
+    cameraFrame(dtSec);
+    presentFrame(now);
+    drawScene();
+    return;
+  }
+  benchProbe.begin(now);
+  sampleFrameInput();
+  benchProbe.mark();
+  cameraFrame(dtSec);
+  benchProbe.mark();
+  presentFrame(now);
+  benchProbe.mark();
+  drawScene();
+  benchProbe.mark();
+  // Каденс тика выводится пассивно — из номера последней доставки (SHELL-1).
+  benchProbe.end(remote?.view?.tick ?? -1);
 }
 
 // -------------------------------------------------------------------- запуск

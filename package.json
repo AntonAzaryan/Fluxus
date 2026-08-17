@@ -26,6 +26,7 @@
     "demo": "npm run dev -w @game-mvp/demo",
     "demo:lan": "npm run dev -w @game-mvp/demo -- --host",
     "demo:serve": "node game/demo-ts/bin/demo-serve.mjs",
+    "bench:demo": "npm run bench:demo -w @game-mvp/demo --",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "lint:dead": "knip",
