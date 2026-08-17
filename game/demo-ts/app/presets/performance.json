@@ -1,0 +1,7 @@
+{
+  "fog.maskResolution": 4,
+  "terrain.curvatureTessellation": 2,
+  "models.lodThresholdScale": 2,
+  "models.defaultTier": "batched",
+  "particles.density": 0.5
+}

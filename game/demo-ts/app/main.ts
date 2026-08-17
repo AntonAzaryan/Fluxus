@@ -76,6 +76,16 @@ import { demoEdgePan } from './cameraInput.js';
 import { createDemoHud, demoHudComposition } from './hud.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
+import {
+  QUALITY_PRESET_NAMES,
+  createDemoQuality,
+  qualityPresetName,
+  qualityStorageOf,
+  rememberQualityPreset,
+  storedQualityPreset,
+  type DemoQuality,
+  type QualityPresetName,
+} from './quality.js';
 import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
 import bindingsJson from './bindings.json';
 import sceneJson from '../../../content/scenes/duel.scene.json';
@@ -797,6 +807,64 @@ function wireConnectButton(mode: DemoMode): void {
   });
 }
 
+// ------------------------------------------------- качество картинки (QUAL-1)
+
+/**
+ * Подписи уровней качества — текст интерфейса, а не данные пресета: документы
+ * называют ручки и значения, а как уровень зовут человеку, решает приложение.
+ * Запись полная по набору игры, и четвёртый уровень (QUAL-1, сценарий
+ * «четвёртый пресет без правки движка») не соберётся без своей подписи.
+ */
+const QUALITY_LABELS: Readonly<Record<QualityPresetName, string>> = {
+  performance: 'производительность',
+  balanced: 'баланс',
+  ultra: 'ультра',
+};
+
+/** Хранилище выбора, если среда его даёт; в воркере и в Node — `undefined`. */
+const qualityStorage = qualityStorageOf(globalThis);
+/**
+ * Контроллер качества сцены: появляется вместе с подсистемами в `onReady`.
+ * Пока его нет, переключатель только запоминает выбор — применять значения
+ * ручек ещё не к чему.
+ */
+let quality: DemoQuality | null = null;
+/** Сам переключатель: его значением показывается ДЕЙСТВУЮЩИЙ пресет. */
+let qualitySelect: HTMLSelectElement | null = null;
+
+/**
+ * Переключатель качества картинки — DOM демо-приложения, как и кнопка режима
+ * (design D4): это настройка страницы, а не действие внутри матча, и в
+ * композиции HUD (HUD-4) ему места нет.
+ *
+ * Список строится из набора пресетов игры, а не из разметки: новый уровень
+ * качества — новый документ и подпись к нему, без правок страницы и движка
+ * (QUAL-1). Смена идёт контроллером в рантайме — пересборки рендера нет
+ * (design D2), и выбор запоминается тем, что применилось: отвергнутый документ
+ * уводит демо на запасной, и переключатель обязан показывать применённое, а не
+ * нажатое.
+ */
+function wireQualitySelect(initial: QualityPresetName): void {
+  const select = document.getElementById('quality');
+  if (!(select instanceof HTMLSelectElement)) return;
+  for (const name of QUALITY_PRESET_NAMES) {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = QUALITY_LABELS[name];
+    select.append(option);
+  }
+  select.value = initial;
+  select.addEventListener('change', () => {
+    const chosen = qualityPresetName(select.value);
+    // Матча может ещё не быть: до `onReady` применять значения не к чему, и
+    // выбор просто запоминается — сборка сцены возьмёт его из хранилища.
+    const applied = quality?.select(chosen) ?? chosen;
+    select.value = applied;
+    rememberQualityPreset(qualityStorage, applied);
+  });
+  qualitySelect = select;
+}
+
 async function main(): Promise<void> {
   // Режим выбирается ОДИН раз, до создания воркеров: переключение режима — это
   // перезагрузка страницы с другим параметром (SHELL-8).
@@ -805,6 +873,11 @@ async function main(): Promise<void> {
   // страницы. Упади манифест (нет ассета, нет сети) — переключиться было бы
   // нечем, а это единственный орган управления, которому матч не нужен вовсе.
   wireConnectButton(mode);
+  // Переключатель качества — рядом с кнопкой режима и по той же причине: это
+  // орган управления страницей, и матч ему не нужен. Запомненный выбор
+  // достаётся здесь же, а применяется, когда сцена собрана (`onReady`).
+  const startQuality = storedQualityPreset(qualityStorage);
+  wireQualitySelect(startQuality);
   // Превью зоны захвата — после кнопки режима по той же причине: числа зоны
   // приходят из сцены, и дыра в контенте не должна уносить страницу целиком.
   capturePreview = createCapturePreview({
@@ -957,6 +1030,18 @@ async function main(): Promise<void> {
         init: () => {},
         syncTick: (view) => director?.onTick(view, rig!.focusX, rig!.focusY, heroId),
         updateFrame: () => {},
+        // Стоимость объявлена КОНСТАНТНОЙ (QUAL-3): подсистема ничего не
+        // рисует — она переводит события и состояния тика в стек эффектов
+        // камеры, а его стоимость задана числом одновременных эффектов из
+        // таблиц манифеста (CAM-6), а не объёмом контента. Рычага здесь не
+        // будет ни при каком пресете, и «метода нет» этого не сказало бы.
+        quality: () => ({
+          subsystem: 'camera-effects',
+          knobs: [],
+          constantCost:
+            'перевод событий и состояний тика в стек эффектов камеры: работа на доставку, ' +
+            'а не на инстанс; число эффектов задают таблицы манифеста (CAM-6)',
+        }),
       });
 
       // HUD на пакете (задача 5.2, HUD-1..7): реестры и композиция — app/hud.ts.
@@ -991,6 +1076,18 @@ async function main(): Promise<void> {
         }),
       );
       hudRoot = hud.root;
+
+      // Пресет качества (QUAL-1, design D4) — ПОСЛЕ регистрации всех
+      // подсистем: реестр ручек собирается из их деклараций (design D1), и
+      // проверять состав документа раньше было бы не по чему. Путь сборки один
+      // на обе воркер-стороны оболочки (SHELL-8) — подсистемы регистрируются
+      // здесь независимо от того, кто наполняет тик, — поэтому и переключатель
+      // работает в любом режиме страницы, и второй проводки для него нет.
+      quality = createDemoQuality(remote!.stage, { preset: startQuality });
+      // Действующий пресет может отличаться от запомненного: отвергнутый
+      // документ уводит демо на запасной, и переключатель показывает то, что
+      // применено.
+      if (qualitySelect !== null) qualitySelect.value = quality.current;
 
       // Отладочная ручка ручного прогона (задача 5.3): read-only точка
       // наблюдения камеры — снаружи конвейера её иначе не видно, а проверке

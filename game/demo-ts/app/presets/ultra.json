@@ -1,0 +1,5 @@
+{
+  "models.lodThresholdScale": 1,
+  "models.defaultTier": "batched",
+  "particles.density": 1
+}
