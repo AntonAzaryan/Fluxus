@@ -244,7 +244,7 @@ export class EffectStack {
   /** Глобальный множитель силы (CAM-6): политика, доступность при укачивании. */
   multiplier: number;
 
-  private effects: CameraEffect[] = [];
+  private readonly effects: CameraEffect[] = [];
   private readonly offset: PoseOffset = {
     dx: 0,
     dy: 0,
@@ -283,10 +283,16 @@ export class EffectStack {
     // вместо её затухания. Придя часами презентации со знаком (REND-25),
     // обратный ход и пауза эффекты ЗАМОРАЖИВАЮТ, а не отматывают.
     const step = dt > 0 ? dt : 0;
-    if (this.effects.length > 0) {
-      const alive = this.effects.filter((effect) => effect.update(step, o));
-      if (alive.length !== this.effects.length) this.effects = alive;
+    // Компактация на месте, а не `filter`: в установившемся кадре путь не
+    // аллоцирует пропорционально числу жильцов стека, а `filter` заводил бы на
+    // КАЖДЫЙ кадр и новый массив, и новое замыкание. Тот же приём, что у
+    // отыгравших вспышек подсистемы эффектов: пишем в тот же массив, читая
+    // впереди курсора записи.
+    let alive = 0;
+    for (const effect of this.effects) {
+      if (effect.update(step, o)) this.effects[alive++] = effect;
     }
+    this.effects.length = alive;
     const m = this.multiplier;
     const pose = this.finalPose;
     pose.posX = logical.posX + o.dx * m;

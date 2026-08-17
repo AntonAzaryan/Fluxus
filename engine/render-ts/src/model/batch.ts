@@ -52,11 +52,29 @@ interface BatchPart {
   readonly bit: number;
 }
 
+/**
+ * Диапазон заливки атрибута — в той форме, в какой его держит `updateRanges`
+ * three. Своя запись, потому что она ПЕРЕИСПОЛЬЗУЕТСЯ (см. `BatchBuffers`).
+ */
+interface UpdateRange {
+  start: number;
+  count: number;
+}
+
 /** Инстанс-буферы: матрицы и позы видимых записей подряд. */
 interface BatchBuffers {
   matrix: THREE.InstancedBufferAttribute;
   pose: THREE.InstancedBufferAttribute;
   count: number;
+  /**
+   * Диапазоны заливки — по одной долгоживущей записи на атрибут.
+   * `addUpdateRange` three кладёт в `updateRanges` НОВЫЙ объект на каждый
+   * вызов, то есть по два объекта на набор буферов каждого уровня каждый кадр:
+   * мусор, растущий с числом батчей, а значит с объёмом контента. Диапазон же
+   * тут всегда один и по смыслу тот же — начало буфера и `count` записей.
+   */
+  readonly matrixRange: UpdateRange;
+  readonly poseRange: UpdateRange;
 }
 
 interface BatchLevel {
@@ -209,12 +227,8 @@ export class ModelBatch {
       // На GPU уезжает РОВНО скомпактованный кусок буфера, а не весь атрибут по
       // ёмкости батча: хвост за `count` — прошлый кадр, и заливать его нечем.
       for (const buffers of entry.buffers) {
-        buffers.matrix.clearUpdateRanges();
-        buffers.matrix.addUpdateRange(0, buffers.count * MATRIX_STRIDE);
-        buffers.matrix.needsUpdate = true;
-        buffers.pose.clearUpdateRanges();
-        buffers.pose.addUpdateRange(0, buffers.count * POSE_STRIDE);
-        buffers.pose.needsUpdate = true;
+        setUpdateRange(buffers.matrix, buffers.matrixRange, buffers.count * MATRIX_STRIDE);
+        setUpdateRange(buffers.pose, buffers.poseRange, buffers.count * POSE_STRIDE);
       }
     }
   }
@@ -398,7 +412,28 @@ function makeBuffers(capacity: number): BatchBuffers {
     matrix: dynamicAttribute(capacity, MATRIX_STRIDE),
     pose: dynamicAttribute(capacity, POSE_STRIDE),
     count: 0,
+    matrixRange: { start: 0, count: 0 },
+    poseRange: { start: 0, count: 0 },
   };
+}
+
+/**
+ * Единственный диапазон заливки атрибута — переиспользуемой записью. Ровно то
+ * же, что пара `clearUpdateRanges()` + `addUpdateRange(0, count)`, но без
+ * объекта на каждый кадр (см. `BatchBuffers.matrixRange`): `updateRanges` —
+ * обычный массив, и очистка с записью одной записи в него делаются здесь.
+ */
+function setUpdateRange(
+  attribute: THREE.InstancedBufferAttribute,
+  range: UpdateRange,
+  count: number,
+): void {
+  range.start = 0;
+  range.count = count;
+  const ranges = attribute.updateRanges;
+  ranges.length = 0;
+  ranges.push(range);
+  attribute.needsUpdate = true;
 }
 
 /** Инстанс-атрибут кадровой записи: содержимое меняется каждый кадр. */

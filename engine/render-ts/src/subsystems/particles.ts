@@ -523,9 +523,11 @@ export class ParticlesSubsystem implements RenderSubsystem {
     // (REND-11, REND-18), и от сокета он не зависит: нормализация модели по
     // высоте — свойство инстанса, а размер эффекта назначает автор эффекта.
     object.scale.setScalar(shell.scale * (shell.view.scale ?? 1));
-    const node = resolveSocketNode(shell, shell.view.id, this.options.sockets, (key, message) => {
-      this.warnOnce(key, message);
-    });
+    // `warnOnce` уходит полем, а не обёрткой: обёртка была бы замыканием на
+    // каждую оболочку каждого кадра — в установившемся кадре путь не аллоцирует
+    // пропорционально числу эмиттеров. Замыкание само по себе не `this`-зависимо
+    // (`createWarnOnce` отдаёт готовую функцию), и отрывать его от объекта можно.
+    const node = resolveSocketNode(shell, shell.view.id, this.options.sockets, this.warnOnce);
     if (node !== null) {
       // Мировая поза узла инстанса — каждый кадр: инстанс уже поставлен
       // подсистемой моделей, а мировая матрица узла обновляется по цепочке

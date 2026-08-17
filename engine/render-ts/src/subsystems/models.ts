@@ -639,6 +639,8 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private readonly cullSphere = new THREE.Sphere();
   private readonly cullCenter = new THREE.Vector3();
   private readonly cameraPosition = new THREE.Vector3();
+  /** Метрика экранного размера камеры (REND-22) — снимается в неё каждый кадр. */
+  private readonly screenScale: ScreenScale = { tanHalfFov: 0, orthoHeight: 0 };
   /** Множитель порогов LOD от пресета качества (QUAL-1, REND-22); 1 — пороги записи. */
   private lodScale = 1;
   /** Ярус записей, не назвавших его (QUAL-1, REND-20) — умолчание кода до пресета. */
@@ -803,10 +805,15 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // Доигравшие fade-out (FOW-8): анимация угасания кончилась — инстанс
     // убирается тем же `remove`, что и обычное исчезновение. После позы кадра:
     // последний кадр угасания ещё нарисован, а не пропущен.
-    for (const [entity, record] of this.instances) {
+    //
+    // Обход идёт по значениям, а не по парам: итерация Map с деструктуризацией
+    // заводит массив пары на КАЖДЫЙ инстанс каждого кадра, а ключ у записи и
+    // так свой (`entity` — им её в пул и клали) — в установившемся кадре путь
+    // не аллоцирует пропорционально инстансам.
+    for (const record of this.instances.values()) {
       if (record.fadingOut && record.fade <= 0) {
         this.remove(record);
-        this.instances.delete(entity);
+        this.instances.delete(record.entity);
       }
     }
 
@@ -837,7 +844,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     this.frustum.setFromProjectionMatrix(this.frustumMatrix);
     this.cameraPosition.setFromMatrixPosition(camera.matrixWorld);
     const margin = this.options.cullMargin ?? DEFAULT_CULL_MARGIN;
-    const screen = screenScaleOf(camera);
+    const screen = screenScaleOf(camera, this.screenScale);
     this.cullPool(this.instances, margin, screen);
     this.cullPool(this.decorations, margin, screen);
   }
@@ -2121,20 +2128,32 @@ function applySkinArrays(
 /** Метрика экранного размера камеры — то, что от неё нужно выбору уровня. */
 interface ScreenScale {
   /** Тангенс половины вертикального поля зрения; 0 — камера ортографическая. */
-  readonly tanHalfFov: number;
+  tanHalfFov: number;
   /** Видимая высота кадра в мировых единицах у ортографической камеры. */
-  readonly orthoHeight: number;
+  orthoHeight: number;
 }
 
-function screenScaleOf(camera: THREE.Camera): ScreenScale | null {
+/**
+ * Метрика камеры — в поданную запись; null — камера ни перспективная, ни
+ * ортографическая (уровень тогда не выбирается вовсе). Пишет в `out`, а не
+ * заводит запись: отсечение с выбором уровня идёт каждый кадр, и своей записи
+ * на кадр у него быть не должно — тем же соображением здесь живут пирамида,
+ * матрица и сфера.
+ */
+function screenScaleOf(camera: THREE.Camera, out: ScreenScale): ScreenScale | null {
   const perspective = camera as THREE.PerspectiveCamera;
   if (perspective.isPerspectiveCamera) {
-    return { tanHalfFov: Math.tan(((perspective.fov / 2) * Math.PI) / 180), orthoHeight: 0 };
+    out.tanHalfFov = Math.tan(((perspective.fov / 2) * Math.PI) / 180);
+    out.orthoHeight = 0;
+    return out;
   }
   const ortho = camera as THREE.OrthographicCamera;
   if (ortho.isOrthographicCamera) {
     const height = (ortho.top - ortho.bottom) / (ortho.zoom || 1);
-    return height > 0 ? { tanHalfFov: 0, orthoHeight: height } : null;
+    if (height <= 0) return null;
+    out.tanHalfFov = 0;
+    out.orthoHeight = height;
+    return out;
   }
   return null;
 }
