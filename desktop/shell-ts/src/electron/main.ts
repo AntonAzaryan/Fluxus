@@ -28,6 +28,7 @@ import { app, BrowserWindow, dialog, ipcMain, protocol } from 'electron';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import type { AppProfile } from '../bridge/profile.js';
 import type {
   BridgeChange,
   BridgeChoiceRequest,
@@ -174,8 +175,30 @@ async function chooseInside(
   return inside ?? undefined;
 }
 
-async function start(): Promise<void> {
-  const profile = await loadAppProfile(manifestFrom(process.argv));
+/**
+ * Открытая сессия окна: то, что нужно режимам прогонов сверх самого окна.
+ * Обычному запуску не нужно ничего — он открывает окно и молчит.
+ */
+interface Session {
+  readonly target: BrowserWindow;
+  readonly opened: OpenedApp;
+  /** Ошибки страницы, собранные с загрузки: их печатает smoke-прогон. */
+  readonly complaints: readonly string[];
+  /** Закрыть окно, не спрашивая страницу: прогоны завершают процесс сами. */
+  readonly force: () => void;
+}
+
+/**
+ * Открывает окно приложения по УЖЕ зафиксированному профилю: раздача, мост,
+ * ручки IPC и сама сессия живут ровно столько же, сколько окно.
+ *
+ * Функция вызывается повторно — на macOS процесс переживает закрытие
+ * последнего окна, и клик по иконке в доке открывает окно заново. Поэтому всё,
+ * что здесь регистрируется глобально (protocol handler и ручки IPC), на
+ * закрытии снимается: оставленная регистрация уронила бы второе открытие
+ * повторной, а не проявилась бы как чужая сессия.
+ */
+async function openSession(profile: AppProfile): Promise<Session> {
   let window: BrowserWindow | null = null;
   let closing = false;
 
@@ -319,6 +342,13 @@ async function start(): Promise<void> {
 
   target.on('closed', () => {
     window = null;
+    // Раздача и ручки IPC — регистрации процесса, а не окна, и снимаются здесь
+    // же: следующее открытие (macOS, клик по иконке) регистрирует их заново.
+    protocol.unhandle(SCHEME);
+    for (const channel of Object.values(CHANNELS)) {
+      ipcMain.removeHandler(channel);
+      ipcMain.removeAllListeners(channel);
+    }
     // `close()` снимает и поднятые сессией сервисы (DSK-7): переживший окно
     // процесс держал бы свой адрес занятым, а приложения, ради которого он
     // поднят, уже нет.
@@ -327,12 +357,36 @@ async function start(): Promise<void> {
 
   await target.loadURL(`${BASE}${profile.entry}`);
 
+  return {
+    target,
+    opened,
+    complaints,
+    force: () => {
+      closing = true;
+    },
+  };
+}
+
+/**
+ * Профиль, с которым открывать окно заново (macOS). Профиль фиксируется на
+ * старте и на живой сессии не меняется (DSK-5) — повторное открытие берёт
+ * ТОТ ЖЕ профиль, а не перечитывает манифест: иначе набор выданных
+ * возможностей зависел бы от файла на диске между закрытием окна и кликом по
+ * иконке в доке.
+ */
+let reopenWith: AppProfile | null = null;
+let reopening = false;
+
+async function start(): Promise<void> {
+  const profile = await loadAppProfile(manifestFrom(process.argv));
+  const session = await openSession(profile);
+
   // Контрактный прогон (DSK-6): общий сьют границы поверх ЭТОГО клея. Модуль
   // грузится только под флагом — обычному запуску он не нужен, а гейту не нужен
   // и сам контейнер.
   if (process.argv.includes('--contract')) {
     const { serveContract } = await import('./contract.js');
-    await serveContract(target, opened);
+    await serveContract(session.target, session.opened);
     return;
   }
 
@@ -340,15 +394,19 @@ async function start(): Promise<void> {
     const at = process.argv.indexOf('--probe');
     const trip = process.argv.indexOf('--roundtrip');
     await reportSmoke(
-      target,
+      session.target,
       profile,
       at < 0 ? '/' : (process.argv[at + 1] ?? '/'),
       trip < 0 ? null : (process.argv[trip + 1] ?? null),
-      complaints,
+      session.complaints,
     );
-    closing = true;
+    session.force();
     app.exit(0);
   }
+
+  // Повторное открытие вооружаем только у обычного запуска: прогоны выше
+  // завершают процесс сами, и окно им нужно ровно одно.
+  reopenWith = profile;
 }
 
 void app.whenReady().then(
@@ -363,6 +421,30 @@ void app.whenReady().then(
   },
 );
 
+/**
+ * macOS живёт иначе остальных: закрытое окно там не означает закрытое
+ * приложение — оно остаётся в доке, и клик по иконке открывает окно заново.
+ * Поведение платформенное и потому в спеке контейнера его нет: DSK-1 требует
+ * один контейнер на все приложения, а не одно поведение на все системы.
+ */
+const MAC = process.platform === 'darwin';
+
 app.on('window-all-closed', () => {
-  app.quit();
+  // Windows и Linux — как было: окон нет, приложения нет.
+  if (!MAC) app.quit();
+});
+
+app.on('activate', () => {
+  if (!MAC || reopening || BrowserWindow.getAllWindows().length > 0) return;
+  const profile = reopenWith;
+  // Профиля ещё нет — старт не дошёл до окна: первое окно открывает он сам.
+  if (profile === null) return;
+  reopening = true;
+  void openSession(profile)
+    .catch((error: unknown) => {
+      process.stderr.write(`[desktop-shell] ${error instanceof Error ? error.message : String(error)}\n`);
+    })
+    .finally(() => {
+      reopening = false;
+    });
 });
