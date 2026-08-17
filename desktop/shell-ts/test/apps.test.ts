@@ -36,16 +36,35 @@ describe('профили приложений репозитория', () => {
     expect([...profile.capabilities].sort()).toEqual(['dialog', 'read', 'watch', 'window', 'write']);
   });
 
-  it('игра: тот же контейнер, бандл демо, дерево только на чтение и пустой мост', async () => {
+  it('игра: тот же контейнер, бандл демо, дерево только на чтение', async () => {
     const profile = await loadAppProfile(join(PACKAGE, 'apps/game.app.json'));
     expect(profile.id).toBe('game');
     expect(profile.bundle).toBe(join(REPO, 'game/demo-ts/app/dist-desktop'));
     // DSK-5: «профиль игрового клиента SHALL ограничиваться чтением — записи в
-    // дерево контента у игры MUST NOT быть». Здесь сильнее: моста нет вовсе,
-    // ассеты приезжают раздачей (DSK-4).
-    expect(profile.capabilities).toEqual([]);
+    // дерево контента у игры MUST NOT быть». Из дерева ей достаётся раздача
+    // (DSK-4), а из моста — ровно одна возможность: поднять свой стенд матча.
+    expect(profile.capabilities).toEqual(['service']);
     expect(profile.roots[0]?.writable).toBe(false);
     expect(profile.roots[0]?.serve).toBe(true);
+  });
+
+  it('игра: стенд матча объявлен сервисом, а не приезжает из страницы (DSK-7)', async () => {
+    const profile = await loadAppProfile(join(PACKAGE, 'apps/game.app.json'));
+    expect(profile.services).toHaveLength(1);
+    expect(profile.services[0]).toMatchObject({
+      id: 'match-stand',
+      script: join(REPO, 'game/demo-ts/bin/demo-serve.mjs'),
+      address: 'ws://127.0.0.1:8080',
+    });
+    // Порт в аргументах — подстановка из адреса: второй записи числа, с которой
+    // адрес мог бы разойтись, в манифесте нет (design D1).
+    expect(profile.services[0]?.args).toContain('{port}');
+  });
+
+  it('редактор сервисов не объявляет: возможности нет — поднимать нечего', async () => {
+    const profile = await loadAppProfile(join(PACKAGE, 'apps/editor.app.json'));
+    expect(profile.services).toEqual([]);
+    expect(profile.capabilities).not.toContain('service');
   });
 
   it('оба профиля указывают на одно дерево контента', async () => {
@@ -80,7 +99,7 @@ describe('согласованность Electron-клея', () => {
 
   it('preload собирает поверхность по объявленным возможностям, а не целиком', async () => {
     const preload = await readGlue('preload.cjs');
-    for (const capability of ['read', 'write', 'watch', 'dialog', 'window']) {
+    for (const capability of ['read', 'write', 'watch', 'dialog', 'window', 'service']) {
       expect(preload).toContain(`granted('${capability}')`);
     }
     expect(preload).toContain('exposeInMainWorld');

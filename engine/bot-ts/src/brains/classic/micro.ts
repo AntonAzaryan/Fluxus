@@ -1,6 +1,7 @@
 /**
  * Микро-слой классического мозга (задача 3.3): steering к цели выбранного
- * поведения, шум прицела и джиттер таймингов — на Yuka (design D4).
+ * поведения, стрейф поперёк курса, шум прицела и джиттер таймингов — на Yuka
+ * (design D4).
  *
  * Yuka здесь — движок нижнего слоя и ничего больше: берётся узкий срез
  * (`Vehicle` + `ArriveBehavior`), у которого нет внешних зависимостей, версия
@@ -48,6 +49,9 @@ export class MicroLayer {
   private readonly arrive = new ArriveBehavior();
   private aimNoise = 0;
   private noiseUntilTick = -Infinity;
+  /** Сторона стрейфа: +1 — влево от курса, −1 — вправо. */
+  private strafeSide = 1;
+  private strafeUntilTick = -Infinity;
   /**
    * Направление прицела БЕЗ шума. Хранится чистым намеренно: сложи шум обратно
    * в базу — и ошибка начнёт накапливаться, а неподвижный бот без цели за пару
@@ -82,8 +86,14 @@ export class MicroLayer {
     this.vehicle.update(this.tickSeconds);
 
     const speed = this.profile.movement.maxSpeed;
-    const moveX = this.vehicle.velocity.x * speed;
-    const moveY = this.vehicle.velocity.z * speed;
+    const { moveX, moveY } = this.strafed(
+      this.vehicle.velocity.x * speed,
+      this.vehicle.velocity.z * speed,
+      plan,
+      world,
+      speed,
+      tick,
+    );
 
     const aimTarget = plan.aim;
     this.baseAim =
@@ -114,6 +124,68 @@ export class MicroLayer {
   forget(): void {
     this.vehicle.velocity.set(0, 0, 0);
     this.noiseUntilTick = -Infinity;
+    this.strafeUntilTick = -Infinity;
+  }
+
+  /**
+   * Стрейф (BOT-6): доля хода, уходящая ПОПЕРЁК курса, со стороной, меняющейся
+   * раз в период из профиля. Нужен он ровно затем, зачем стрейфит человек:
+   * снаряд летит по прямой в упреждение, и цель, идущая ровно на стрелка, сама
+   * приезжает под выстрел.
+   *
+   * Подмешивается к уже набранному ходу, а не заменяет его: бот продолжает
+   * сближаться или отрываться — просто не по прямой. Итог прижимается к доле
+   * хода из профиля, чтобы поперечная добавка не сделала бота быстрее, чем ему
+   * разрешено (INP-3 клампит по единичному кругу, а `maxSpeed` — уже политика
+   * профиля, и её граница должна держаться здесь).
+   *
+   * Ось поперечности берётся от ХОДА, а когда хода нет — от направления на
+   * цель прицела. Второй случай — не мелочь: дойдя до дистанции боя, бот целью
+   * маршрута выбирает место, где стоит, и ход обнуляется. Без оси от прицела
+   * бот замирал бы ровно там, где стрейф нужнее всего, — на линии огня.
+   */
+  private strafed(
+    moveX: number,
+    moveY: number,
+    plan: BehaviorPlan,
+    world: PerceivedWorld,
+    speed: number,
+    tick: number,
+  ): { readonly moveX: number; readonly moveY: number } {
+    const bias = this.profile.movement.strafe;
+    if (!plan.strafe || bias <= 0) return { moveX, moveY };
+    const axis = this.strafeAxis(moveX, moveY, plan, world);
+    if (axis === undefined) return { moveX, moveY };
+    if (tick >= this.strafeUntilTick) {
+      this.strafeSide = this.random.signed() < 0 ? -1 : 1;
+      this.strafeUntilTick = tick + this.profile.movement.strafePeriodTicks;
+    }
+    const amount = axis.length * bias * this.strafeSide;
+    const x = moveX + -axis.y * amount;
+    const y = moveY + axis.x * amount;
+    const mixed = Math.hypot(x, y);
+    if (mixed <= speed || mixed === 0) return { moveX: x, moveY: y };
+    return { moveX: (x / mixed) * speed, moveY: (y / mixed) * speed };
+  }
+
+  /** Единичная ось стрейфа и амплитуда, от которой он считается. */
+  private strafeAxis(
+    moveX: number,
+    moveY: number,
+    plan: BehaviorPlan,
+    world: PerceivedWorld,
+  ): { readonly x: number; readonly y: number; readonly length: number } | undefined {
+    const moving = Math.hypot(moveX, moveY);
+    if (moving >= 1e-6) return { x: moveX / moving, y: moveY / moving, length: moving };
+    const aim = plan.aim;
+    if (aim === undefined) return undefined;
+    const dx = aim.x - world.self.x;
+    const dy = aim.y - world.self.y;
+    const facing = Math.hypot(dx, dy);
+    if (facing < 1e-6) return undefined;
+    // Стоящий бот кружит вокруг цели полной долей хода: половинчатый обход —
+    // это тот же неподвижный силуэт, только медленнее.
+    return { x: dx / facing, y: dy / facing, length: this.profile.movement.maxSpeed };
   }
 
   /**

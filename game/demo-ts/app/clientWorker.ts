@@ -4,14 +4,14 @@
  * нечем (`NetworkShell` не получает `Simulation`).
  *
  * Один файл на оба сетевых режима страницы: матч своей вкладки и выделенный
- * стенд различаются здесь единственным аргументом — транспортом (SES-1, NTR-2).
- * Соло-режим живёт в `worker.ts` и этого файла не касается вовсе.
+ * стенд различаются здесь единственной величиной — рандеву (`rendezvous.ts`,
+ * SES-1, SES-3), — а клиент не видит и её. Соло-режим живёт в `worker.ts` и
+ * этого файла не касается вовсе.
  */
-import { connectWebSocket, type Transport } from '@game-mvp/net';
-import { portTransport, shellPort } from '@game-mvp/client';
+import { shellPort } from '@game-mvp/client';
 import { DEMO_PLAYERS } from './match.js';
-import { slotCandidates } from './mode.js';
 import { joinDemoMatch } from './netClient.js';
+import { directRendezvous, tabRendezvous, type DemoRendezvous } from './rendezvous.js';
 import { isDemoClientInit, type DemoClientInit, type DemoNotice } from './wiring.js';
 
 const scope = self as unknown as {
@@ -20,33 +20,17 @@ const scope = self as unknown as {
 
 const port = shellPort(self as unknown as Worker);
 
-/**
- * Как добраться до сервера матча. Пара портов — матч этой же вкладки, сокет —
- * стенд; `MatchClient` различия не видит (NTR-2).
- */
-function transportFactory(init: DemoClientInit): () => Promise<Transport> {
-  if (init.port !== undefined) {
-    const shared = init.port;
-    return () => Promise.resolve(portTransport(shellPort(shared)));
-  }
-  const url = init.url;
-  if (url === undefined) throw new Error('демо: воркеру клиента не дали ни порта, ни адреса');
-  return () => connectWebSocket(url);
+/** Рандеву из конверта сборки: порт матча этой же вкладки либо адрес стенда. */
+function rendezvousOf(init: DemoClientInit): DemoRendezvous {
+  if (init.port !== undefined) return tabRendezvous(init.port, DEMO_PLAYERS);
+  if (init.url === undefined) throw new Error('демо: воркеру клиента не дали ни порта, ни адреса');
+  return directRendezvous(init.url, DEMO_PLAYERS);
 }
 
 scope.addEventListener('message', (event) => {
   if (!isDemoClientInit(event.data)) return;
-  const init = event.data;
-  // Политика выбора слота — одна и та же величина, что у главного потока
-  // (`mode.ts`): порт матча своей вкладки одноразовый, и перебирать по нему
-  // нечего — второй слот держит бот (BOT-7); у стенда кандидатов столько же,
-  // сколько имён в ростере (design D4). Второй копии этого правила в сборке
-  // нет: разойдись они, и тестировался бы не тот код, который поехал.
-  const candidates = slotCandidates(
-    init.port !== undefined ? { kind: 'local' } : { kind: 'server', url: init.url ?? '' },
-    DEMO_PLAYERS,
-  );
-  void joinDemoMatch({ port, connect: transportFactory(init), candidates }).then((joined) => {
+  const { connect, candidates } = rendezvousOf(event.data);
+  void joinDemoMatch({ port, connect, candidates }).then((joined) => {
     if (joined.ok) return;
     const notice: DemoNotice = { t: 'demo-notice', message: joined.reason };
     port.post(notice);

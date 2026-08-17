@@ -24,5 +24,8 @@ export type { HostPath } from './paths.js';
 export { createHostRoot, insideRoot } from './root.js';
 export type { HostRoot, HostRootOptions } from './root.js';
 
+export { createHostServices, endpointOf, serviceArgs } from './service.js';
+export type { HostServices, HostServicesOptions } from './service.js';
+
 export { createStaticServer, mimeOf, requestPath } from './serve.js';
 export type { ServeRefusal, ServeResult, ServedFile, StaticServer, StaticServerOptions } from './serve.js';

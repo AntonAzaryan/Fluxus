@@ -26,11 +26,13 @@ import {
   type BridgeCloseHandler,
   type BridgeRootId,
   type BridgeRootView,
+  type BridgeServiceId,
   type BridgeSession,
   type DesktopBridge,
 } from '../bridge/types.js';
 import type { HostPath } from './paths.js';
 import type { HostRoot } from './root.js';
+import type { HostServices } from './service.js';
 
 /** Диалоги среды. Отсутствие диалога и отказ автора — одинаково `undefined`. */
 export interface HostDialogs {
@@ -51,6 +53,8 @@ export interface HostBridgeOptions {
   readonly baseFor?: (root: HostRoot) => string;
   readonly dialogs?: HostDialogs;
   readonly window?: HostWindowSink;
+  /** Объявленные сервисы (DSK-7); без них возможность `service` не собирается. */
+  readonly services?: HostServices;
 }
 
 export interface HostBridgeHandle {
@@ -109,6 +113,7 @@ export function createHostBridge(options: HostBridgeOptions): HostBridgeHandle {
     profile: profile.id,
     capabilities: profile.capabilities,
     roots: rootViews,
+    services: profile.services.map((declared) => declared.id),
   };
 
   const rootOf = (id: BridgeRootId): HostRoot => {
@@ -178,6 +183,19 @@ export function createHostBridge(options: HostBridgeOptions): HostBridgeHandle {
     },
   };
 
+  // Сервисы: возможность объявлена профилем, а реализацию даёт контейнер.
+  // Объявлена без реализации — дефект сборки, а не отказ странице: профиль
+  // обещал возможность, которой в этой сессии нет (DSK-5).
+  const services = options.services;
+  if (grants('service') && services === undefined) {
+    throw refuse(`профиль "${profile.id}" объявил возможность "service", а реализации сервисов нет`);
+  }
+  const serviceSurface = {
+    startService: async (id: BridgeServiceId) => services!.start(id),
+    stopService: async (id: BridgeServiceId) => services!.stop(id),
+    serviceState: async (id: BridgeServiceId) => services!.state(id),
+  };
+
   const bridge: DesktopBridge = {
     api: BRIDGE_API,
     version: BRIDGE_VERSION,
@@ -187,6 +205,7 @@ export function createHostBridge(options: HostBridgeOptions): HostBridgeHandle {
     ...(grants('watch') ? watch : {}),
     ...(grants('dialog') ? choose : {}),
     ...(grants('window') ? windowSurface : {}),
+    ...(grants('service') ? serviceSurface : {}),
   };
 
   return {

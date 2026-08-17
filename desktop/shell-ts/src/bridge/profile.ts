@@ -18,7 +18,12 @@
  * доступа, и «не понял, взял по умолчанию» означало бы выданную возможность,
  * которой никто не объявлял.
  */
-import { BRIDGE_CAPABILITIES, type BridgeCapability, type BridgeRootId } from './types.js';
+import {
+  BRIDGE_CAPABILITIES,
+  type BridgeCapability,
+  type BridgeRootId,
+  type BridgeServiceId,
+} from './types.js';
 
 /** Корень, объявленный профилем. */
 export interface ProfileRoot {
@@ -33,6 +38,30 @@ export interface ProfileRoot {
   readonly serve: boolean;
 }
 
+/**
+ * Сервис, объявленный профилем (DSK-7).
+ *
+ * Запускается он ТЕМ ЖЕ рантаймом, что и контейнер: объявляется скрипт, а не
+ * исполняемый файл. Иначе упакованному приложению понадобился бы `node` в
+ * `PATH` пользовательской машины — которого там может не быть вовсе, — и
+ * объявление превратилось бы в командную строку, то есть в ту самую
+ * произвольную команду, которой у границы быть не должно.
+ *
+ * Адрес — единственный источник правды о том, где сервис слушать: в аргументы
+ * он приезжает подстановкой `{port}`/`{host}`, а не второй записью числа.
+ * Две записи одного порта — это способ им разойтись, а разошедшись, они дают
+ * сервис по адресу, где его нет.
+ */
+export interface ProfileService {
+  readonly id: BridgeServiceId;
+  /** Скрипт сервиса — так, как его написал манифест (относительный или абсолютный). */
+  readonly script: string;
+  /** Аргументы запуска; `{port}` и `{host}` подставляются из адреса. */
+  readonly args: readonly string[];
+  /** Адрес, по которому сервис будет доступен: контейнер его не разбирает по смыслу. */
+  readonly address: string;
+}
+
 /** Профиль приложения целиком. */
 export interface AppProfile {
   readonly id: string;
@@ -44,6 +73,7 @@ export interface AppProfile {
   readonly entry: string;
   readonly roots: readonly ProfileRoot[];
   readonly capabilities: readonly BridgeCapability[];
+  readonly services: readonly ProfileService[];
   readonly window: { readonly width: number; readonly height: number };
 }
 
@@ -110,6 +140,23 @@ function asRoot(value: unknown, where: string, index: number): ProfileRoot {
   };
 }
 
+function asArgs(value: unknown, where: string, service: string): readonly string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) fail(where, `сервис "${service}": поле "args" — не массив`);
+  return value.map((entry, index) => asText(entry, where, `services[${service}].args[${index}]`));
+}
+
+function asService(value: unknown, where: string, index: number): ProfileService {
+  const raw = asRecord(value, where, `сервис #${index}`);
+  const id = asText(raw.id, where, `services[${index}].id`);
+  return {
+    id,
+    script: asText(raw.script, where, `services[${index}].script`),
+    args: asArgs(raw.args, where, id),
+    address: asText(raw.address, where, `services[${index}].address`),
+  };
+}
+
 /**
  * Разбирает манифест профиля. `where` — имя манифеста для текста отказа.
  *
@@ -136,6 +183,27 @@ export function normalizeAppProfile(raw: unknown, where: string): AppProfile {
     fail(where, 'возможность "write" объявлена, а ни один корень не открыт на запись');
   }
 
+  const servicesRaw = record.services;
+  if (servicesRaw !== undefined && !Array.isArray(servicesRaw)) {
+    fail(where, 'поле "services" — не массив');
+  }
+  const services = (servicesRaw ?? []).map((entry, index) => asService(entry, where, index));
+  // Согласованность в обе стороны — по тому же основанию, что и у корня с
+  // записью: набор сервисов и возможность их поднимать обязаны объявляться
+  // вместе, иначе профиль описывает доступ, которого не даёт, или даёт доступ,
+  // которым нечего открыть (DSK-5).
+  const named = new Set<string>();
+  for (const service of services) {
+    if (named.has(service.id)) fail(where, `сервис "${service.id}" объявлен дважды`);
+    named.add(service.id);
+    if (!capabilities.includes('service')) {
+      fail(where, `сервис "${service.id}" объявлен, а возможности "service" в профиле нет`);
+    }
+  }
+  if (capabilities.includes('service') && services.length === 0) {
+    fail(where, 'возможность "service" объявлена, а ни одного сервиса профиль не объявил');
+  }
+
   const windowRaw = record.window === undefined ? {} : asRecord(record.window, where, 'window');
   return {
     id: asText(record.id, where, 'id'),
@@ -144,6 +212,7 @@ export function normalizeAppProfile(raw: unknown, where: string): AppProfile {
     entry: optionalText(record.entry, where, 'entry', DEFAULT_ENTRY),
     roots,
     capabilities,
+    services,
     window: {
       width: asSize(windowRaw.width, where, 'window.width', DEFAULT_WINDOW.width),
       height: asSize(windowRaw.height, where, 'window.height', DEFAULT_WINDOW.height),
@@ -159,4 +228,12 @@ export function profileGrants(profile: AppProfile, capability: BridgeCapability)
 /** Корень профиля по имени; `undefined` — такого корня профиль не объявлял. */
 export function profileRoot(profile: AppProfile, root: BridgeRootId): ProfileRoot | undefined {
   return profile.roots.find((entry) => entry.id === root);
+}
+
+/** Сервис профиля по имени; `undefined` — такого сервиса профиль не объявлял. */
+export function profileService(
+  profile: AppProfile,
+  service: BridgeServiceId,
+): ProfileService | undefined {
+  return profile.services.find((entry) => entry.id === service);
 }

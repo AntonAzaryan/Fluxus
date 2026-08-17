@@ -9,8 +9,10 @@
  * не по часам.
  */
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { DirectoryObserver, DirectoryObserverOptions } from '../src/host/observe.js';
 
 /** Временный каталог с записанными файлами; ключ — путь от его корня. */
@@ -91,6 +93,49 @@ export async function waitFor(condition: () => boolean, deadlineMs = 4000): Prom
     await new Promise((done) => setTimeout(done, 10));
   }
   return condition();
+}
+
+/** Скрипт сервиса-пустышки: то, что объявляет профиль контрактного прогона (DSK-7). */
+export const SERVICE_SCRIPT = fileURLToPath(new URL('./fixtures/service.mjs', import.meta.url));
+
+/** Сервис, который выходит сразу: случай «не поднялся» без трассы в выводе гейта. */
+export const DEAD_SERVICE_SCRIPT = fileURLToPath(
+  new URL('./fixtures/deadService.mjs', import.meta.url),
+);
+
+/**
+ * Свободный порт: занимаем и сразу отпускаем. Гонка тут возможна в принципе, но
+ * адрес сервиса обязан быть известен ДО запуска (его объявляет профиль), а
+ * выбирать фиксированный номер в тесте — способ поссориться с соседом по машине.
+ */
+export function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      const port = typeof address === 'object' && address !== null ? address.port : 0;
+      probe.close(() => {
+        resolve(port);
+      });
+    });
+  });
+}
+
+/** Держит адрес занятым: так выглядит сервис, поднятый мимо контейнера. */
+export async function squat(port: number): Promise<() => Promise<void>> {
+  const server = createServer((socket) => {
+    socket.end();
+  });
+  await new Promise<void>((done) => {
+    server.listen(port, '127.0.0.1', done);
+  });
+  return () =>
+    new Promise<void>((done) => {
+      server.close(() => {
+        done();
+      });
+    });
 }
 
 export const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);

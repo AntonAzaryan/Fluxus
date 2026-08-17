@@ -48,7 +48,7 @@ const IMMEDIATE = new Set(['drain', 'closeAnswer']);
  */
 const HELPER = `(() => {
   const bridge = globalThis.fluxusDesktop;
-  const NAMES = ['read', 'stat', 'list', 'write', 'watch', 'choose', 'setTitle', 'setUnsaved', 'onCloseRequest'];
+  const NAMES = ['read', 'stat', 'list', 'write', 'watch', 'choose', 'setTitle', 'setUnsaved', 'onCloseRequest', 'startService', 'stopService', 'serviceState'];
   const events = [];
   const stops = new Map();
   const closes = new Map();

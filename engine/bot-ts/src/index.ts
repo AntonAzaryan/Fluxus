@@ -18,9 +18,15 @@
 export type { BotBrain, BotBrainFactory, BotSelf } from './brain.js';
 
 // профиль поведения — контент, а не код (BOT-6)
-export { BOT_BEHAVIORS, BOT_PROFILE_SCHEMA, parseBotProfile } from './profile.js';
+export {
+  BOT_ABILITY_TARGETS,
+  BOT_BEHAVIORS,
+  BOT_PROFILE_SCHEMA,
+  parseBotProfile,
+} from './profile.js';
 export type {
   BotAbilityProfile,
+  BotAbilityTarget,
   BotAimProfile,
   BotBehavior,
   BotDecisionProfile,
@@ -34,6 +40,10 @@ export { TURN_UNITS, aimToRadians, readFixedField, readIntField, toInputSample }
 export type { BotIntent } from './boundary.js';
 export { readWorldView } from './worldView.js';
 export type { BotEntityView, BotWorldView, WorldViewNames } from './worldView.js';
+
+// рельеф сцены: приезжает сборкой, как центр арены (TERR-6, NET-16)
+export { botTerrain } from './terrainView.js';
+export type { BotTerrain } from './terrainView.js';
 
 // хостинг (BOT-1, BOT-4)
 export { BotHost, BotSeat } from './host.js';

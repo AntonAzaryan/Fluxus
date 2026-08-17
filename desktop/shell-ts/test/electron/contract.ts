@@ -43,17 +43,27 @@ import type {
   BridgeCloseHandler,
   BridgeEntry,
   BridgeRootId,
+  BridgeServiceState,
   BridgeSession,
   DesktopBridge,
 } from '../../src/bridge/types.js';
 import {
   CONTENT,
+  SERVICE,
   describeContainerContract,
   type ContractCase,
   type ContractResponse,
   type ContractSession,
 } from '../contractSuite.js';
-import { dropTree, linkOutside, makeTree, putFile, readText } from '../support.js';
+import {
+  dropTree,
+  freePort,
+  linkOutside,
+  makeTree,
+  putFile,
+  readText,
+  SERVICE_SCRIPT,
+} from '../support.js';
 
 const PACKAGE = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const ENTRY = join(PACKAGE, 'src/electron/entry.mjs');
@@ -188,13 +198,30 @@ function connect(child: ChildProcess, ready: () => void, log: string[]): Channel
 }
 
 /** Манифест профиля под случай сьюта: контейнер запускается только с профилем (DSK-5). */
-function manifestOf(kase: ContractCase, bundle: string, content: string): string {
+function manifestOf(
+  kase: ContractCase,
+  bundle: string,
+  content: string,
+  servicePort: number,
+): string {
   return JSON.stringify({
     id: 'contract',
     title: 'Fluxus Contract',
     bundle,
     roots: [{ id: CONTENT, label: 'content', directory: content, writable: kase.writable, serve: true }],
     capabilities: kase.capabilities,
+    // Сервис-пустышка (DSK-7): его поднимает уже настоящий контейнер — тем же
+    // исполняемым файлом, что и себя, с `ELECTRON_RUN_AS_NODE`.
+    services: kase.capabilities.includes('service')
+      ? [
+          {
+            id: SERVICE,
+            script: SERVICE_SCRIPT,
+            args: ['--port', '{port}'],
+            address: `tcp://127.0.0.1:${String(servicePort)}`,
+          },
+        ]
+      : [],
     window: { width: 900, height: 700 },
   });
 }
@@ -212,7 +239,7 @@ async function open(kase: ContractCase): Promise<ContractSession> {
     await putFile(contentDirectory, path, content);
   }
   const manifest = join(workspace, 'contract.app.json');
-  await writeFile(manifest, manifestOf(kase, bundleDirectory, contentDirectory));
+  await writeFile(manifest, manifestOf(kase, bundleDirectory, contentDirectory, await freePort()));
 
   const log: string[] = [];
   const child = spawn(BINARY, [ENTRY, ...launchFlags(), '--app', manifest, '--contract'], {
@@ -327,6 +354,16 @@ async function open(kase: ContractCase): Promise<ContractSession> {
       ? {
           choose: async (request: BridgeChoiceRequest): Promise<BridgeChoice | undefined> =>
             (await channel.call('choose', [request])) as BridgeChoice | undefined,
+        }
+      : {}),
+    ...(has('startService')
+      ? {
+          startService: async (id: string) =>
+            (await channel.call('startService', [id])) as BridgeServiceState,
+          stopService: async (id: string) =>
+            (await channel.call('stopService', [id])) as BridgeServiceState,
+          serviceState: async (id: string) =>
+            (await channel.call('serviceState', [id])) as BridgeServiceState,
         }
       : {}),
     ...(has('setTitle')

@@ -220,7 +220,19 @@ export class Perception {
    * это предсказание полёта, а не знание о невидимом.
    */
   private threats(view: BotWorldView, own: BotEntityView, tick: number): ThreatView[] {
-    const elapsed = Math.max(0, tick - view.tick);
+    // Горизонт предсказания — СВОЯ задержка реакции, а не весь отрыв тика съёма
+    // от тика наблюдения. Отрыв включает буфер интерполяции и задержку ввода
+    // (NET-3, NTR-7) — плату, которую платит и человек: его экран показывает ту
+    // же отставшую картинку. Предсказывать дальше неё значит компенсировать
+    // задержку канала, то есть видеть мир свежее игрока с тем же клиентом
+    // (BOT-3).
+    //
+    // Число это не косметика. Снаряд демо летит 0.625 клетки за тик, а полный
+    // отрыв доходит до полутора десятков тиков: экстраполированный на него шар
+    // оказывается ЗА спиной бота, `closing` гаснет, и защищаться становится не
+    // от чего — бот стоит под обстрелом, честно считая, что всё уже пролетело.
+    const { delayTicks, jitterTicks } = this.profile.reaction;
+    const elapsed = Math.min(Math.max(0, tick - view.tick), delayTicks + jitterTicks);
     const out: ThreatView[] = [];
     for (const other of view.others) {
       if (other.slot !== undefined) continue;

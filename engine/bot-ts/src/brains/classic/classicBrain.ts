@@ -1,9 +1,13 @@
 /**
- * Классический мозг (design D4): три слоя за одним контрактом BOT-2 —
- * восприятие (`perception.ts`), решения (`utility.ts`), микро (`micro.ts`).
+ * Классический мозг (design D4): четыре слоя за одним контрактом BOT-2 —
+ * восприятие (`perception.ts`), маршруты (`utility.ts`), способности
+ * (`abilities.ts`), микро (`micro.ts`).
+ *
+ * Маршрут и кнопка решаются ПАРАЛЛЕЛЬНО, а не соревнуются: человек кастует на
+ * бегу, уклоняется, продолжая отступать, и прыгает, не переставая сближаться.
  *
  * Здесь — только склейка и то, что принадлежит мозгу целиком: чтение профиля на
- * конструировании (BOT-6), кулдаун способности с джиттером и последнее готовое
+ * конструировании (BOT-6) и последнее готовое
  * намерение, которое отдаётся на съёме (BOT-2). Мозг синхронный: думает он
  * дёшево, и асинхронное «думаю в фоне» здесь было бы сложностью без причины —
  * контракт её допускает, но не требует.
@@ -17,7 +21,9 @@ import type { ClientStep } from '@game-mvp/net';
 import type { BotBrain, BotBrainFactory, BotSelf } from '../../brain.js';
 import type { BotIntent } from '../../boundary.js';
 import type { BotProfile } from '../../profile.js';
+import type { BotTerrain } from '../../terrainView.js';
 import type { WorldViewNames } from '../../worldView.js';
+import { AbilityLayer } from './abilities.js';
 import { MicroLayer } from './micro.js';
 import { Perception } from './perception.js';
 import { brainRandom, type BrainRandom } from './random.js';
@@ -34,6 +40,13 @@ export interface ClassicBrainOptions {
    */
   readonly center?: ArenaCenter;
   /**
+   * Рельеф сцены (`terrainView.ts`) — тем же путём и по тем же основаниям, что
+   * центр арены: иммутабельная часть террейна живёт в ассете, а не в снапшоте
+   * (TERR-6), и приезжает сборкой. Без него бот не запрыгивает на уступы: цель
+   * `cliff` в профиле остаётся без очков.
+   */
+  readonly terrain?: BotTerrain;
+  /**
    * Длительность тика, секунды — ПЕРЕОПРЕДЕЛЕНИЕ. Обычно её знать не нужно:
    * темп матча приезжает клиенту в `Welcome` (NTR-7) и достаётся мозгу в
    * `BotSelf.tickRate`. Поле оставлено прогонам, которые двигают бота сами.
@@ -49,9 +62,9 @@ class ClassicBrain implements BotBrain {
   private readonly random: BrainRandom;
   private readonly perception: Perception;
   private readonly utility: UtilityLayer;
+  private readonly abilities: AbilityLayer;
   private readonly micro: MicroLayer;
   private intent: BotIntent | undefined;
-  private abilityReadyAtTick = -Infinity;
 
   constructor(profile: BotProfile, self: BotSelf, options: ClassicBrainOptions) {
     // Профиль читается ЗДЕСЬ и больше нигде (BOT-6): слои получают его целиком
@@ -62,6 +75,9 @@ class ClassicBrain implements BotBrain {
     this.random = brainRandom(seed, `bot-${self.playerId}`);
     this.perception = new Perception(profile, self, this.random, options.names ?? {});
     this.utility = new UtilityLayer(profile, this.random);
+    this.abilities = new AbilityLayer(profile, this.random, {
+      ...(options.terrain !== undefined ? { terrain: options.terrain } : {}),
+    });
     this.micro = new MicroLayer(profile, this.random, {
       // Настоящий темп матча, а не константа: на 30 Гц шаг интегрирования
       // steering вдвое длиннее, и зашитые 60 сделали бы микро-слой вдвое
@@ -83,8 +99,8 @@ class ClassicBrain implements BotBrain {
     // глубину, которую унесла перемотка.
     if (this.perception.takeDiscontinuity()) {
       this.utility.forget();
+      this.abilities.forget();
       this.micro.forget();
-      this.abilityReadyAtTick = -Infinity;
       this.intent = this.hold();
     }
     // Мир не идёт — бот не играет (WSM-1). Живых тиков в `Paused`/`Rewinding`
@@ -96,25 +112,24 @@ class ClassicBrain implements BotBrain {
     if (this.perception.mode !== 'Running') return (this.intent = this.hold());
     const world = this.perception.perceive(tick);
     if (world === undefined) return this.intent;
-    const abilityReady = tick >= this.abilityReadyAtTick;
-    const behavior = this.utility.choose(world, tick, { abilityReady, center: this.center });
+    const behavior = this.utility.choose(world, tick, { center: this.center });
     const plan = planFor(behavior, world, this.profile, this.center);
-    const micro = this.micro.step(plan, world, tick);
-    const fire = plan.fire && abilityReady;
-    if (fire) {
-      // Джиттер кулдауна (BOT-6): бот, жмущий способность ровно по таймеру,
-      // читается как автомат — им он и является, и профиль обязан уметь это
-      // скрыть.
-      const { cooldownTicks } = this.profile.ability;
-      const jitter = this.profile.decision.jitterTicks;
-      this.abilityReadyAtTick =
-        tick + cooldownTicks + (jitter === 0 ? 0 : this.random.below(jitter + 1));
-    }
+    // Способности решаются ПОСЛЕ маршрута и ДО микро-слоя. После — потому что
+    // прыжок через обрыв и уклон вбок гейтятся направлением, в которое бот
+    // собрался; до — потому что применение вправе перехватить прицел: захват
+    // ловит снаряд конусом от него, заряд летит туда, куда кастер смотрел на
+    // отпускании.
+    const ability = this.abilities.step(world, plan, tick);
+    const micro = this.micro.step(
+      ability.aim === undefined ? plan : { ...plan, aim: ability.aim },
+      world,
+      tick,
+    );
     this.intent = {
       moveX: micro.moveX,
       moveY: micro.moveY,
       aimRadians: micro.aimRadians,
-      buttons: fire ? 1 << this.profile.ability.button : 0,
+      buttons: ability.buttons,
     };
     return this.intent;
   }
