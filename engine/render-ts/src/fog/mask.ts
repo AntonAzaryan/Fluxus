@@ -40,6 +40,10 @@ export interface FogWorldRect {
  * (TERR-5). Уровни сторон переезжают из `CliffEdge` как есть: `levelNeg` —
  * сторона меньшей координаты по оси нормали, `levelPos` — большей. По ним тень
  * становится направленной (FOW-9, PHYS-13).
+ *
+ * Отрезок обязан быть осевым (`x1 === x2` либо `y1 === y2`): других TERR-5 не
+ * порождает, и полярная растеризация на это опирается. Диагональный отрезок —
+ * ошибка вызова, а не молча неверная тень: `reveal` его отвергает.
  */
 export interface FogSegment {
   readonly x1: number;
@@ -162,6 +166,8 @@ export class VisibilityMask {
    * путь перестройки не аллоцирует.
    */
   private readonly depth = new Float32Array(SHADOW_BINS);
+  /** Переиспользуемый буфер разделяемого блюра `smooth()`. */
+  private temp: Uint8Array | null = null;
 
   constructor(rect: FogWorldRect, texelsPerUnit: number) {
     this.rect = rect;
@@ -198,6 +204,12 @@ export class VisibilityMask {
     near.length = 0;
     const radiusSq = radius * radius;
     for (const segment of segments) {
+      if (segment.x1 !== segment.x2 && segment.y1 !== segment.y2) {
+        throw new Error(
+          'FOW-9: отрезок укрытия обязан быть осевым (TERR-5) — ' +
+            'диагональную тень полярная растеризация не считает',
+        );
+      }
       if (!segmentCasts(observer.x, observer.y, segment)) continue;
       if (distanceSqToSegment(observer.x, observer.y, segment) <= radiusSq) near.push(segment);
     }
@@ -235,12 +247,8 @@ export class VisibilityMask {
           depth[bin === 0 ? SHADOW_BINS - 1 : bin - 1]!,
           depth[bin === SHADOW_BINS - 1 ? 0 : bin + 1]!,
         );
-        if (r >= shadowDist) continue; // тексель за тенью
-        // Полоса полутона ~1 текселя перед дистанцией тени — кромка без
-        // ступени (FOW-7), замена 2×2 субсэмплов.
-        const coverage = (shadowDist - r) * scale;
-        const shaded = coverage >= 1 ? value : Math.round(value * coverage);
-        if (shaded > current) this.data[row + tx] = shaded;
+        if (r >= shadowDist) continue; // тексель за тенью — срез жёсткий, полутон делает smooth()
+        this.data[row + tx] = value;
       }
     }
   }
@@ -254,6 +262,15 @@ export class VisibilityMask {
    * получает дистанцию края — расхождение на ширину бина в сторону тени.
    */
   private rasterizeSegment(ox: number, oy: number, segment: FogSegment): void {
+    // Наблюдатель ровно на линии ребра: угловая растеризация вырождается
+    // (offset = 0, все t = 0), и без отдельной ветки тень исчезала бы вовсе —
+    // протечка света ровно там, где FOW-9 требует туман.
+    const onLineVertical = segment.x1 === segment.x2 && segment.x1 === ox;
+    const onLineHorizontal = segment.y1 === segment.y2 && segment.y1 === oy;
+    if (onLineVertical || onLineHorizontal) {
+      this.rasterizeOnLine(ox, oy, segment, onLineVertical);
+      return;
+    }
     const a0 = Math.atan2(segment.y1 - oy, segment.x1 - ox);
     const a1 = Math.atan2(segment.y2 - oy, segment.x2 - ox);
     const lo = Math.min(a0, a1);
@@ -287,6 +304,65 @@ export class VisibilityMask {
       // Пересечение позади луча — краевой бин смотрит от линии; тени нет.
       if (t <= 0) continue;
       if (t < depth[bin]!) depth[bin] = t;
+    }
+  }
+
+  /**
+   * Тень наблюдателя, стоящего на линии ребра (side === 0, FOW-9). Стоя на
+   * самом отрезке, наблюдатель перекрыт целиком — симуляция для такой позиции
+   * даёт hit на нулевой дистанции любому лучу поперёк ребра — и весь буфер
+   * получает ноль. Вне пролёта отрезка тень занимает только направления вдоль
+   * линии до ближайшего конца (бин направления и его соседи — консервативно).
+   */
+  private rasterizeOnLine(ox: number, oy: number, segment: FogSegment, vertical: boolean): void {
+    const depth = this.depth;
+    const lo = vertical ? Math.min(segment.y1, segment.y2) : Math.min(segment.x1, segment.x2);
+    const hi = vertical ? Math.max(segment.y1, segment.y2) : Math.max(segment.x1, segment.x2);
+    const at = vertical ? oy : ox;
+    if (at >= lo && at <= hi) {
+      depth.fill(0);
+      return;
+    }
+    const dist = at < lo ? lo - at : at - hi;
+    const toward = at < lo ? 1 : -1;
+    const angle = vertical ? Math.atan2(toward, 0) : Math.atan2(0, toward);
+    const bin = binOf(angle);
+    const prev = bin === 0 ? SHADOW_BINS - 1 : bin - 1;
+    const next = bin === SHADOW_BINS - 1 ? 0 : bin + 1;
+    if (dist < depth[bin]!) depth[bin] = dist;
+    if (dist < depth[prev]!) depth[prev] = dist;
+    if (dist < depth[next]!) depth[next] = dist;
+  }
+
+  /**
+   * Полутоновая кромка (FOW-7): разделяемый box-блюр радиуса 1 текселя по всей
+   * маске ПОСЛЕ всех reveal. Полярная растеризация даёт жёсткий срез и на
+   * радиальном фронте тени, и на угловых сторонах конуса — блюр превращает оба
+   * в полутон ~текселя одинаково для любого направления кромки (замена прежних
+   * 2×2 субсэмплов). Симметричный перенос света ≤ полтекселя за геометрию тени
+   * покрыт консервативным запасом радиуса (FOW-9, коэффициент FOW-10).
+   */
+  smooth(): void {
+    const { width, height, data } = this;
+    if (this.temp?.length !== data.length) {
+      this.temp = new Uint8Array(data.length);
+    }
+    const temp = this.temp;
+    for (let y = 0; y < height; y++) {
+      const row = y * width;
+      for (let x = 0; x < width; x++) {
+        const left = data[row + (x === 0 ? 0 : x - 1)]!;
+        const right = data[row + (x === width - 1 ? x : x + 1)]!;
+        temp[row + x] = (left + data[row + x]! + right + 1) / 3;
+      }
+    }
+    for (let y = 0; y < height; y++) {
+      const row = y * width;
+      const up = (y === 0 ? 0 : y - 1) * width;
+      const down = (y === height - 1 ? y : y + 1) * width;
+      for (let x = 0; x < width; x++) {
+        data[row + x] = (temp[up + x]! + temp[row + x]! + temp[down + x]! + 1) / 3;
+      }
     }
   }
 

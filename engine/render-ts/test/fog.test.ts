@@ -177,25 +177,60 @@ describe('FOW-9: 2D shadow-casting по cliff-отрезкам', () => {
     expect(mask.valueAt(3.5, 4.5)).toBeGreaterThan(0);
   });
 
-  it('кромка тени — полутон частичного покрытия, а не ступень (FOW-7)', () => {
+  it('наблюдатель ровно на линии блокирующего ребра — тень, а не протечка света (FOW-9)', () => {
+    // Вертикальное ребро x = 4, y ∈ [4, 5], нижняя сторона — запад. Наблюдатель
+    // стоит на самом отрезке: угловая растеризация вырождается (offset = 0), и
+    // без отдельной ветки буфер оставался бы пустым — весь круг светился бы.
+    // Симуляция для этой позиции даёт hit на нулевой дистанции — маска обязана
+    // отвечать туманом (расхождение приближения — в сторону тумана).
+    const segment = { x1: 4, y1: 4, x2: 4, y2: 5, levelNeg: 0, levelPos: 1 };
+    const mask = new VisibilityMask({ x: 0, y: 0, width: 8, height: 8 }, 4);
+    mask.reveal({ x: 4, y: 4.5, radius: 3, level: 0 }, 0.25, [segment]);
+    expect(mask.valueAt(2.5, 4.5)).toBe(0);
+    expect(mask.valueAt(5.5, 4.5)).toBe(0);
+    expect(mask.valueAt(4.1, 3.1)).toBe(0);
+  });
+
+  it('диагональный отрезок укрытия — ошибка вызова, а не молча неверная тень (FOW-9)', () => {
+    const mask = new VisibilityMask({ x: 0, y: 0, width: 8, height: 8 }, 4);
+    const diagonal = { x1: 0, y1: 0, x2: 5, y2: 5, levelNeg: 0, levelPos: 1 };
+    expect(() => {
+      mask.reveal({ x: 2, y: 2, radius: 3, level: 0 }, 0.25, [diagonal]);
+    }).toThrow(/осевым/);
+  });
+
+  it('кромка тени — полутон, а не ступень: радиальный фронт и сторона конуса (FOW-7)', () => {
     const grid = gridWithPillar();
     const mask = new VisibilityMask(fogRectOf(grid), 4);
     mask.reveal({ x: 2.5, y: 4.5, radius: 6, level: 0 }, 0.25, fogSegmentsOf(grid));
-    // Скан текселей поперёк кромки тени — вдоль луча через отбрасывающее её
-    // левое ребро клетки (x = 4): перед ребром светло, за ним тень, между ними
-    // полоса полутона ~1 текселя полярного depth-буфера (design D3). Скачка на
-    // весь диапазон между соседями нет — кромка полутоновая, а не ступень;
-    // тень при этом остаётся тенью (расхождение приближения — в сторону
-    // тумана, FOW-9).
-    const values: number[] = [];
-    for (let wx = 3.0625; wx <= 5.0; wx += 0.25) values.push(mask.valueAt(wx, 4.5));
-    expect(values[0]).toBeGreaterThan(0);
-    expect(values[values.length - 1]).toBe(0);
-    let maxJump = 0;
-    for (let i = 1; i < values.length; i++) maxJump = Math.max(maxJump, Math.abs(values[i]! - values[i - 1]!));
-    expect(maxJump).toBeLessThan(1);
-    // Полутон в полосе существует: между светом и тенью есть промежуточное значение.
-    expect(values.some((value) => value > 0 && value < 1)).toBe(true);
+    // Полутон делает smooth() — один блюр после всех reveal, как в подсистеме:
+    // полярный срез жёсткий и на фронте тени, и на её угловых сторонах.
+    mask.smooth();
+    const noFullJump = (values: readonly number[]): void => {
+      let maxJump = 0;
+      for (let i = 1; i < values.length; i++) {
+        maxJump = Math.max(maxJump, Math.abs(values[i]! - values[i - 1]!));
+      }
+      expect(maxJump).toBeLessThan(1);
+      // Полутон в полосе существует: между светом и тенью есть промежуточное значение.
+      expect(values.some((value) => value > 0 && value < 1)).toBe(true);
+    };
+    // Радиальный фронт: скан вдоль луча через отбрасывающее тень левое ребро
+    // клетки (x = 4) — перед ребром светло, за ним тень, скачка на весь
+    // диапазон нет (расхождение приближения — в сторону тумана, FOW-9).
+    const radial: number[] = [];
+    for (let wx = 3.0625; wx <= 5.0; wx += 0.25) radial.push(mask.valueAt(wx, 4.5));
+    expect(radial[0]).toBeGreaterThan(0);
+    expect(radial[radial.length - 1]).toBe(0);
+    noFullJump(radial);
+    // Сторона конуса (силуэт от угла клетки (4, 4)): скан поперёк границы
+    // свет/тень на x = 5.625 — ровно та диагональная кромка, где жёсткий
+    // полярный срез без блюра давал лесенку.
+    const across: number[] = [];
+    for (let wy = 3.0625; wy <= 4.0; wy += 0.25) across.push(mask.valueAt(5.625, wy));
+    expect(across[0]).toBeGreaterThan(0);
+    expect(across[across.length - 1]).toBeLessThan(0.5);
+    noFullJump(across);
   });
 
   it('тени направленные: наблюдатель на плато, нижний уровень за ребром открыт (PHYS-13)', () => {
@@ -269,7 +304,8 @@ describe('FOW-7, FOW-9: отбор наблюдателей из доставл�
       observerView(1, 2, 2, 0, 2),
       observerView(3, 6, 6, 0, 2),
     ]);
-    expect(fog.visibility.valueAt(6, 6)).toBe(1);
+    // Полутон smooth() стоит ≤ пары градаций у кромок — «открыт» с допуском.
+    expect(fog.visibility.valueAt(6, 6)).toBeGreaterThan(0.98);
   });
 
   it('радиус reveal консервативнее доставленного: коэффициент из конфига (FOW-9)', () => {
@@ -279,7 +315,9 @@ describe('FOW-7, FOW-9: отбор наблюдателей из доставл�
     // уже туман: визуал консервативнее геймплея (FOW-9).
     const between = 3 * (conservatism + 1) * 0.5;
     expect(between).toBeLessThan(3);
-    expect(fog.visibility.valueAt(4 + between, 4)).toBe(0);
+    // Блюр smooth() переносит ≤ полтекселя света за геометрию — «туман» с
+    // допуском пары градаций; запас консервативности его перекрывает (FOW-9).
+    expect(fog.visibility.valueAt(4 + between, 4)).toBeLessThan(0.05);
     // Внутри визуального радиуса свет есть.
     expect(fog.visibility.valueAt(4 + 3 * conservatism - 0.5, 4)).toBeGreaterThan(0);
   });

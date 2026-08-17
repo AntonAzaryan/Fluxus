@@ -238,7 +238,7 @@ export class FogSubsystem implements RenderSubsystem {
    * а не JSON: сравнение — дешёвый проход по префиксу длиной `signatureLength`.
    */
   private signature: Float64Array = new Float64Array(SIGNATURE_PREFIX + 4 * 8);
-  /** Кандидат текущей доставки; после перестройки меняется местами с сигнатурой. */
+  /** Буфер сборки сигнатуры текущей доставки; при перестройке копируется в `signature`. */
   private candidate: Float64Array = new Float64Array(SIGNATURE_PREFIX + 4 * 8);
   /** Длина занятого префикса; −1 — сигнатуры нет, ближайшая доставка строит. */
   private signatureLength = -1;
@@ -357,12 +357,6 @@ export class FogSubsystem implements RenderSubsystem {
     // (вбит в канвас миникарты) и консервативность — последняя через
     // эффективные радиусы наблюдателей ниже.
     let candidate = this.candidate;
-    if (candidate.length < this.signature.length) {
-      // Кандидат отстал от выросшей сигнатуры: выравнивание здесь, а не в
-      // росте, — иначе ёмкости чередовались бы и рост повторялся каждую
-      // перестройку.
-      candidate = this.candidate = new Float64Array(this.signature.length);
-    }
     candidate[0] = this.current.edgeWidth;
     candidate[1] = this.colorHex;
     let length = SIGNATURE_PREFIX;
@@ -387,8 +381,11 @@ export class FogSubsystem implements RenderSubsystem {
     if (length === this.signatureLength && samePrefix(this.signature, candidate, length)) {
       return; // входы прежние: ни растра, ни загрузки текстуры, ни блита (D4)
     }
-    this.candidate = this.signature;
-    this.signature = candidate;
+    // Копия, а не обмен буферами: одно хранимое состояние вместо двух массивов
+    // с расходящимися ёмкостями; копия десятков чисел не дороже только что
+    // выполненного сравнения тех же данных.
+    if (this.signature.length < length) this.signature = new Float64Array(candidate.length);
+    this.signature.set(candidate.subarray(0, length));
     this.signatureLength = length;
     this.rebuildCount++;
 
@@ -401,6 +398,9 @@ export class FogSubsystem implements RenderSubsystem {
       observer.level = candidate[at + 3]!;
       this.mask.reveal(observer, this.current.edgeWidth, this.segments);
     }
+    // Полутон кромки — один блюр после всех reveal (FOW-7): полярный срез
+    // жёсткий и на фронте, и на сторонах конуса, полутон делает smooth().
+    this.mask.smooth();
     this.built = true;
     this.maskTexture.needsUpdate = true;
     this.blitLayer();
