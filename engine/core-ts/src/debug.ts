@@ -52,6 +52,16 @@ export interface DiagnosticsContext {
   system: string | undefined;
   seq: number;
   counters: SystemCounters;
+  /**
+   * Счётчики объёма работы тика (PERF-3). Плоские целые поля прямо в контексте,
+   * а не вложенный объект: контекст и так заводится один на тик, поэтому учёт
+   * не добавляет ни одной аллокации, а сквозь системы счётчики копятся (в
+   * отличие от `counters`, которые обнуляются на границе каждой системы).
+   */
+  costCommandsApplied: number;
+  costExpressions: number;
+  costBroadPhasePairs: number;
+  costRaycasts: number;
 }
 
 const TRACE_ORDER: Readonly<Record<TraceLevel, number>> = { off: 0, systems: 1, full: 2 };
@@ -77,9 +87,27 @@ export function withDiagnostics<T>(
 ): T {
   if (sink === undefined) return body();
   const previous = current;
-  current = { sink, trace: sink.trace, tick, system: undefined, seq: 0, counters: zeroCounters() };
+  const ctx: DiagnosticsContext = {
+    sink,
+    trace: sink.trace,
+    tick,
+    system: undefined,
+    seq: 0,
+    counters: zeroCounters(),
+    costCommandsApplied: 0,
+    costExpressions: 0,
+    costBroadPhasePairs: 0,
+    costRaycasts: 0,
+  };
+  current = ctx;
   try {
-    return body();
+    const value = body();
+    // Сводка стоимости — последней записью тика (PERF-3): раньше объём работы
+    // ещё неполон. Вложенный прогон (реплей внутри перемотки, REW-2) отчитается
+    // своей записью со своим `tick` — счётчики живут в контексте, а он у каждого
+    // прогона свой.
+    recordTickCost(ctx);
+    return value;
   } finally {
     current = previous;
   }
@@ -199,12 +227,98 @@ export function countCommands(issued: number, applied: number): void {
   if (ctx === undefined) return;
   ctx.counters.commands += issued;
   ctx.counters.applied += applied;
+  // Тот же исход, снятый в той же точке, идёт и в сводку стоимости тика
+  // (PERF-3): счётчик системы обнуляется на её границе, счётчик тика копится
+  // сквозь все системы. Одна калитка на оба — второй вызов из flush'а стоил бы
+  // ещё одного чтения контекста на каждую систему каждого тика.
+  ctx.costCommandsApplied += applied;
 }
 
 export function countEvent(): void {
   const ctx = current;
   if (ctx === undefined) return;
   ctx.counters.events++;
+}
+
+// -------------------------------------------- счётчики стоимости тика (PERF-3)
+//
+// Объём выполненной работы в машинно-независимых единицах: сравнивать их
+// эталоном можно без поправок на железо. Ни часов, ни случайности здесь нет —
+// значения остаются чистой функцией входа симуляции (DIAG-6).
+//
+// Калитка та же, что у счётчиков систем выше: без подключённого приёмника
+// `current` пуст, и учёт не исполняется вовсе — этого и требует PERF-3 от
+// инструментирования. В горячих циклах счёт идёт в локальную переменную, а сюда
+// приходит готовой суммой: на кандидата broad-phase приходится ровно одно
+// целочисленное сложение, а не вызов.
+
+/** Вычисленный узел выражения DSL — одно применение оператора (PERF-3). */
+export function countCostExpression(): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costExpressions++;
+}
+
+/**
+ * Кандидаты broad-phase, осмотренные за один запрос (PERF-3). Покрывает ОБА
+ * источника кандидатов физики: кандидатов статики, выданных обходом клеток
+ * сетки на каждый запрос (`PhysicsWorld.collect`), и кандидатов динамики,
+ * осмотренных линейным обходом препятствий на каждого движущегося (динамика не
+ * индексируется — `physics.ts`). Кандидат, отсеянный маской слоёв или тегом,
+ * считается наравне с прошедшим: работа по его осмотру уже сделана.
+ */
+export function countCostBroadPhase(pairs: number): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costBroadPhasePairs += pairs;
+}
+
+/** Вызов детерминированного raycast Physics API (PERF-3). */
+export function countCostRaycast(): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costRaycasts++;
+}
+
+/**
+ * Сводка объёма работы тика — одна запись на тик (PERF-3) обычной формы DIAG-2:
+ * без отметки реального времени и данных окружения, номер — из той же сквозной
+ * нумерации, что и трейс. Уровень — границы систем (DIAG-3): счётчики стоимости
+ * — та же штатная телеметрия, что и счётчики систем, и полного потока команд
+ * для них не нужно.
+ *
+ * Имени системы у записи нет: она пишется, когда `endSystem` уже снял его, и
+ * принадлежит тику целиком.
+ *
+ * `commandsApplied` — ПРИМЕНЁННЫЕ команды, а не заказанные. Отброшенная команда
+ * (адресат уже мёртв, поле не то) в счёт не идёт намеренно: сводка описывает
+ * исполненную работу тика, и заказ, не дошедший до мира, работой мира не стал.
+ * Заказанные команды видны рядом — в `commands` записи SYSTEM_END (DIAG-3), где
+ * тот же исход снят с точностью до системы; имена намеренно разные, потому что
+ * величины разные.
+ *
+ * Контракт числа записей:
+ *
+ * - тик вне состояния Running (Paused, Rewinding) сводки не получает вовсе —
+ *   его и не было; число записей равно числу исполненных Running-тиков;
+ * - оборванный тик сводки не получает: его объём работы неполон, и запись
+ *   соврала бы о нём. Записи, выданные до обрыва, при этом уже у приёмника
+ *   (DIAG-1);
+ * - реплей внутри перемотки (REW-2) выдаёт записи ЗАНОВО для уже отчитанных
+ *   номеров тиков, поэтому сумма за сессию считает переигранные тики дважды.
+ *   Это намеренно: переигранный тик — настоящая исполненная работа, и в
+ *   стоимость прогона она входит наравне с первой.
+ */
+function recordTickCost(ctx: DiagnosticsContext): void {
+  if (TRACE_ORDER[ctx.trace] < TRACE_ORDER.systems) return;
+  record(ctx, 'tickCost', 'info', 'TICK_COST', {
+    data: {
+      commandsApplied: ctx.costCommandsApplied,
+      expressions: ctx.costExpressions,
+      broadPhasePairs: ctx.costBroadPhasePairs,
+      raycasts: ctx.costRaycasts,
+    },
+  });
 }
 
 // ------------------------------------------------------ примитивы FP-4

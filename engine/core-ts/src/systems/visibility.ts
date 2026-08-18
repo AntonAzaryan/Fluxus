@@ -167,7 +167,7 @@ export class VisibilitySystem implements System {
         if (isHidden(ctx, candidate)) continue;
         // FOW-5: строго выше — не видно; обратное направление не ограничено.
         if (level !== undefined && ctx.terrain!.levelOf(candidate) > level) continue;
-        if (!hasLineOfSight(ctx, observer, from, candidate)) continue;
+        if (!hasLineOfSight(ctx, observer, from, candidate, level)) continue;
         next.set(candidate, mask | bit);
       }
     }
@@ -206,11 +206,21 @@ function effectiveRadius(ctx: SystemContext, observer: EntityId, modifiers: Modi
 }
 
 /** FOW-5: перекрыт ли кандидат укрытием — коллайдером с тегом `blocksVision`. */
-function hasLineOfSight(ctx: SystemContext, observer: EntityId, from: Vec2, candidate: EntityId): boolean {
+function hasLineOfSight(
+  ctx: SystemContext,
+  observer: EntityId,
+  from: Vec2,
+  candidate: EntityId,
+  elevation: number | undefined,
+): boolean {
   if (ctx.physics === undefined) return true;
   const hit = ctx.physics.raycast(from, positionOf(ctx, candidate), {
     mask: BLOCKS_VISION,
     ignore: observer,
+    // Уровень наблюдателя — тот же, что в фильтре по высоте (TERR-4): рёбра
+    // своего уровня и ниже луч не перекрывают (PHYS-13) — видно и вниз, и на
+    // плато того же уровня через низину.
+    ...(elevation !== undefined ? { elevation } : {}),
   });
   // Луч упёрся в саму цель — она не перекрыта: собственный коллайдер цели
   // укрытием для неё не является (PHYS-6 исключает только источник).

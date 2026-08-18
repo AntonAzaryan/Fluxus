@@ -8,6 +8,7 @@
     "demo:build": "vite build --config app/vite.config.ts",
     "demo:build:desktop": "vite build --config app/vite.desktop.config.ts",
     "demo:serve": "node bin/demo-serve.mjs",
+    "bench:demo": "node bin/bench-demo.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

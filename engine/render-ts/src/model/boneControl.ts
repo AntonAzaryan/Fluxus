@@ -71,8 +71,14 @@ export interface BoneLookup {
 export class BoneControlState {
   private readonly roles = new Map<string, RoleState>();
   private readonly quat = new THREE.Quaternion();
-  /** Параметры ролей; переподаваемы вместе с манифестом (REND-17). */
-  private controls: Readonly<Record<string, BoneControlDef>>;
+  /**
+   * Параметры ролей парами «роль → описание»; переподаваемы вместе с манифестом
+   * (REND-17). Таблица раскладывается в пары ОДИН РАЗ на её приём, а не в
+   * кадре: `apply` зовётся каждый кадр и на каждый инстанс с контролем костей,
+   * и `Object.entries` в нём заводил бы массив пар пропорционально числу таких
+   * инстансов — в установившемся кадре путь не аллоцирует.
+   */
+  private controls: readonly (readonly [string, BoneControlDef])[];
   /**
    * Роли, оставившие свой override на кости, которой больше не управляют, —
    * снятая роль и роль, переехавшая на другую кость. Откат делается в `apply`,
@@ -81,7 +87,7 @@ export class BoneControlState {
   private readonly abandoned: RoleState[] = [];
 
   constructor(controls: Readonly<Record<string, BoneControlDef>>) {
-    this.controls = controls;
+    this.controls = Object.entries(controls);
   }
 
   /**
@@ -99,7 +105,7 @@ export class BoneControlState {
       this.roles.delete(role);
       this.abandoned.push(state);
     }
-    this.controls = controls;
+    this.controls = Object.entries(controls);
   }
 
   /**
@@ -116,7 +122,7 @@ export class BoneControlState {
   ): void {
     this.releaseAbandoned(instance);
 
-    for (const [role, def] of Object.entries(this.controls)) {
+    for (const [role, def] of this.controls) {
       let state = this.roles.get(role);
       if (state === undefined) {
         state = {

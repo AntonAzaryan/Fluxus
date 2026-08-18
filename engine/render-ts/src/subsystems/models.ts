@@ -15,9 +15,11 @@
  *
  * ## Два яруса (REND-20)
  *
- * Ярус выбирает ЗАПИСЬ МАНИФЕСТА (ASSET-13), а не код: `resolveVisualTier` даёт
- * батчевый всем, кроме записей с процедурным контролем костей (REND-5), и явное
- * поле записи это переопределяет.
+ * Ярус выбирает ЗАПИСЬ МАНИФЕСТА (ASSET-13), а не код: батчевый достаётся всем,
+ * кроме записей с процедурным контролем костей (REND-5), и явное поле записи
+ * это переопределяет. Умолчание для записей, ЯРУС НЕ НАЗВАВШИХ, — ручка пресета
+ * качества (`render-quality` QUAL-1, `declaredTier` ниже); авторского выбора и
+ * требования механизма пресет не касается.
  *
  * - **батчевый**: запись в разделяемом `InstancedMesh` (`model/batch.ts`),
  *   скиннинг на GPU по VAT-текстуре модели (`model/vatMaterial.ts`), анимация —
@@ -84,7 +86,6 @@ import {
   resolveSurfaceAlign,
   resolveVisual,
   resolveVisualEmitter,
-  resolveVisualTier,
   type AssetState,
   type BakedDerivatives,
   type BakedSkinSet,
@@ -93,7 +94,15 @@ import {
   type VisualManifest,
   type VisualTier,
 } from '@game-mvp/assets';
-import type { EntityView, RenderContext, RenderSubsystem, TickView } from '../types.js';
+import type {
+  EntityView,
+  QualityDeclaration,
+  QualityValues,
+  RenderContext,
+  RenderSubsystem,
+  TickView,
+} from '../types.js';
+import { costSink, type RenderCostCounters } from '../cost.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import type { SurfaceNormal, VisualSurface } from '../visualSurface.js';
 import { createPickProxy, type InstanceProxySource, type PickProxy, type PickProxyVisitor } from '../picking.js';
@@ -253,6 +262,27 @@ const DEFAULT_CULL_MARGIN = 0.5;
  * данные записи (ASSET-13); поэтому число здесь одно и относительное.
  */
 const LOD_HYSTERESIS = 0.1;
+/**
+ * Ручки качества подсистемы (`render-quality` QUAL-1). Множитель порогов LOD —
+ * прямое значение поверх ПОРОГОВ ЗАПИСИ (ASSET-13, REND-22): больше единицы —
+ * уровень переключается раньше и треугольников в кадре меньше. Ярус по
+ * умолчанию (REND-20) — тоже прямое значение: авторского источника у него нет,
+ * умолчание живёт в коде, и пресет заменяет именно его.
+ */
+const MODELS_LOD_SCALE = 'models.lodThresholdScale';
+const MODELS_DEFAULT_TIER = 'models.defaultTier';
+/**
+ * Ярус, которым рисуется запись, НЕ назвавшая его (REND-20, ASSET-13): пресет
+ * правит ровно это умолчание. Явный ярус записи и вынужденный детальный у
+ * процедурного контроля костей (REND-5) ему не подчиняются: первый — решение
+ * автора, второй — требование механизма, и скелет батчевому ярусу взять
+ * неоткуда. Со значением `'batched'` функция тождественна `resolveVisualTier`
+ * ассетов, и умолчание пресета совпадает с ним же.
+ */
+function declaredTier(visual: EntityVisual | undefined, fallback: VisualTier): VisualTier {
+  if (visual?.tier !== undefined) return visual.tier;
+  return visual?.boneControls === undefined ? fallback : 'detailed';
+}
 /**
  * Перёд модели, когда запись манифеста его не называет (REND-13): соглашение
  * первого поддержанного формата — у MDX лицо вдоль `+X`, то есть 0. Так модели,
@@ -561,10 +591,10 @@ interface InstanceRecord {
    */
   visible: boolean;
   /**
-   * Доля проявленности инстанса [0, 1] (FOW-8): множитель видимого масштаба
-   * кадра. Единица — инстанс как обычно; меньше — он в fade-in или fade-out.
-   * Семантического масштаба (`scale`, REND-11) не касается: наружу — `pose` и
-   * walkable-вклад — уходит не-затухший масштаб.
+   * Доля проявленности инстанса [0, 1] (FOW-8): множитель АЛЬФЫ кадра —
+   * инстанс растворяется прозрачностью, а не стягиванием (стягивание читалось
+   * как «враг уменьшается»). Единица — инстанс как обычно; меньше — fade-in
+   * или fade-out. Масштаба, семантического и видимого, доля не касается.
    */
   fade: number;
   /**
@@ -572,8 +602,25 @@ interface InstanceRecord {
    * «ушла в туман», инстанс доживает fade-out и убирается по его концу (FOW-8).
    */
   fadingOut: boolean;
+  /**
+   * Меши держателя, чьи материалы на время fade подменены СВОИМИ копиями с
+   * прозрачностью (FOW-8): разделяемые с ассетом материалы (REND-3, REND-6)
+   * трогать нельзя. null — fade не идёт, у мешей разделяемые материалы.
+   */
+  fadedTargets: FadeTarget[] | null;
   /** Публичный вид инстанса; строится лениво и живёт с инстансом (REND-17). */
   publicView: ModelInstanceView | null;
+}
+
+/** Меш держателя и его РАЗДЕЛЯЕМЫЕ материалы, отложенные на время fade (FOW-8). */
+interface FadeTarget {
+  readonly mesh: { material: THREE.Material | THREE.Material[] };
+  readonly original: THREE.Material | THREE.Material[];
+}
+
+/** Материалы меша списком — у three они бывают и одиночными, и массивом. */
+function materialsOf(material: THREE.Material | THREE.Material[]): readonly THREE.Material[] {
+  return Array.isArray(material) ? material : [material];
 }
 
 export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
@@ -610,6 +657,12 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private readonly cullSphere = new THREE.Sphere();
   private readonly cullCenter = new THREE.Vector3();
   private readonly cameraPosition = new THREE.Vector3();
+  /** Метрика экранного размера камеры (REND-22) — снимается в неё каждый кадр. */
+  private readonly screenScale: ScreenScale = { tanHalfFov: 0, orthoHeight: 0 };
+  /** Множитель порогов LOD от пресета качества (QUAL-1, REND-22); 1 — пороги записи. */
+  private lodScale = 1;
+  /** Ярус записей, не назвавших его (QUAL-1, REND-20) — умолчание кода до пресета. */
+  private defaultTier: VisualTier = 'batched';
 
   constructor(manifest: VisualManifest, options: ModelsOptions = {}) {
     this.manifest = manifest;
@@ -627,6 +680,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
   syncTick(view: TickView): void {
     const ctx = this.requireCtx();
+    // Сток читается ОДИН раз на доставку и уходит вниз параметром (PERF-3):
+    // проверять его на каждом инстансе значило бы платить за учёт ровно тем,
+    // что он мерит. Без стока это одно сравнение на весь обход.
+    const cost = costSink();
     // Разрыв непрерывности (REND-2) снимает необратимость смерти: перемотка
     // через момент смерти оживляет сущность в симуляции, а `EntityDied` в
     // прошлом не разэмитится — без этого живой персонаж навсегда остался бы
@@ -641,7 +698,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (view.snapAll) {
       for (const record of this.instances.values()) record.controller?.onSnap();
     }
-    this.syncPool(ctx, this.instances, view.entities, false, view);
+    this.syncPool(ctx, this.instances, view.entities, false, view, cost);
 
     // События тика → one-shot клипы (REND-4); дедуп на потребителе (OBS-5):
     // при rewind/replay и на замороженных тиках события не переигрываются.
@@ -671,7 +728,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * — их у decoration нет, а не «пока никто не прислал».
    */
   syncDecorations(entities: ReadonlyMap<EntityId, EntityView>): void {
-    this.syncPool(this.requireCtx(), this.decorations, entities, true);
+    this.syncPool(this.requireCtx(), this.decorations, entities, true, null, costSink());
   }
 
   /**
@@ -690,7 +747,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     entities: ReadonlyMap<EntityId, EntityView>,
     decoration: boolean,
     view: TickView | null = null,
+    cost?: RenderCostCounters,
   ): void {
+    // Просмотр поданного набора — работа подсистемы на доставке (PERF-3),
+    // растущая с числом сущностей и с числом декораций одинаково: путь у обоих
+    // пулов один (REND-18). Снятие исчезнувших идёт ниже по пулу и своего поля
+    // не имеет: в установившейся сцене пул равен поданному набору.
+    if (cost !== undefined) cost.modelsInstancesSynced += entities.size;
     // Fade действует только на непрерывном ходе мира: разрыв (rewind, смена
     // продюсера, гашение набора пустым состоянием) убирает инстансы сразу —
     // плавное угасание нарисовало бы «уход в туман», которого не было (REND-2).
@@ -700,6 +763,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       if (record === undefined) {
         record = this.create(ctx, entityView, decoration, fadeSeconds > 0);
         pool.set(entityView.id, record);
+        if (cost !== undefined) cost.modelsInstancesCreated++;
       }
       // Сущность снова в доставленном состоянии: начатый fade-out отменяется,
       // проявление доигрывается от текущей доли — объект в кадре не мигает.
@@ -761,30 +825,37 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const turnRate = this.options.turnRate ?? DEFAULT_TURN_RATE;
     const tiltRate = this.options.tiltRate ?? DEFAULT_TILT_RATE;
     const surface = this.options.surface?.current ?? null;
+    // Сток кадра — один раз на вход и вниз параметром (PERF-3), как на доставке.
+    const cost = costSink();
 
     // Оба пула одним проходом и одними правилами: декорация в кадре автора и
     // декорация в кадре игрока обязаны быть одним изображением (REND-18).
-    this.poseAll(this.instances, dt, alpha, heightStep, turnRate, tiltRate, surface);
-    this.poseAll(this.decorations, dt, alpha, heightStep, turnRate, tiltRate, surface);
+    this.poseAll(this.instances, dt, alpha, heightStep, turnRate, tiltRate, surface, cost);
+    this.poseAll(this.decorations, dt, alpha, heightStep, turnRate, tiltRate, surface, cost);
 
     // Доигравшие fade-out (FOW-8): анимация угасания кончилась — инстанс
     // убирается тем же `remove`, что и обычное исчезновение. После позы кадра:
     // последний кадр угасания ещё нарисован, а не пропущен.
-    for (const [entity, record] of this.instances) {
+    //
+    // Обход идёт по значениям, а не по парам: итерация Map с деструктуризацией
+    // заводит массив пары на КАЖДЫЙ инстанс каждого кадра, а ключ у записи и
+    // так свой (`entity` — им её в пул и клали) — в установившемся кадре путь
+    // не аллоцирует пропорционально инстансам.
+    for (const record of this.instances.values()) {
       if (record.fadingOut && record.fade <= 0) {
         this.remove(record);
-        this.instances.delete(entity);
+        this.instances.delete(record.entity);
       }
     }
 
     // Отсечение — после позы: видимость считается по тому преобразованию,
     // которым инстанс нарисован в ЭТОМ кадре (REND-21). Уровень детализации
     // считается там же — по экранному размеру того же объёма (REND-22).
-    this.cullAll();
+    this.cullAll(cost);
 
     // Компактация видимых записей в инстанс-буферы — последним: до неё batch
     // не знает ни позы кадра, ни видимости.
-    for (const entry of this.batches.values()) entry.batch.flush();
+    for (const entry of this.batches.values()) entry.batch.flush(cost);
   }
 
   /**
@@ -794,8 +865,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * убирается: picking (REND-15) и сведение (REND-3, REND-18) идут по полному
    * набору, и других наблюдаемых последствий у отсечения нет.
    */
-  private cullAll(): void {
+  private cullAll(cost: RenderCostCounters | undefined): void {
     const camera = this.options.camera;
+    // Камеры нет — отсечения не существует вовсе (сборка без неё рисует всё), и
+    // счётчики остаются нулевыми: приписывать кадру тесты, которых он не делал,
+    // нельзя (PERF-3).
     if (camera === undefined) return;
     // Матрицы камеры — те, с которыми кадр и будет нарисован: позу на неё
     // сажает сборка до кадра подсистем (CAM-1), второго расчёта здесь нет.
@@ -804,15 +878,16 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     this.frustum.setFromProjectionMatrix(this.frustumMatrix);
     this.cameraPosition.setFromMatrixPosition(camera.matrixWorld);
     const margin = this.options.cullMargin ?? DEFAULT_CULL_MARGIN;
-    const screen = screenScaleOf(camera);
-    this.cullPool(this.instances, margin, screen);
-    this.cullPool(this.decorations, margin, screen);
+    const screen = screenScaleOf(camera, this.screenScale);
+    this.cullPool(this.instances, margin, screen, cost);
+    this.cullPool(this.decorations, margin, screen, cost);
   }
 
   private cullPool(
     pool: ReadonlyMap<EntityId, InstanceRecord>,
     margin: number,
     screen: ScreenScale | null,
+    cost: RenderCostCounters | undefined,
   ): void {
     for (const record of pool.values()) {
       const bounds = cullBoundsOf(record) ?? boundsOf(record);
@@ -838,10 +913,16 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       this.cullSphere.center.copy(this.cullCenter);
       this.cullSphere.radius = radius;
       record.visible = this.frustum.intersectsSphere(this.cullSphere);
+      // Сток уже в локальной переменной: на инстансе остаётся сравнение и
+      // целочисленное сложение, а не чтение стока (PERF-3).
+      if (cost !== undefined) {
+        cost.modelsCullTests++;
+        if (!record.visible) cost.modelsCulled++;
+      }
       if (record.holder !== null) record.holder.visible = record.visible;
       if (record.batch !== null) {
         record.batch.batch.setVisible(record.slot, record.visible);
-        if (record.visible && screen !== null) this.selectLod(record, radius, screen);
+        if (record.visible && screen !== null) this.selectLod(record, radius, screen, cost);
       }
     }
   }
@@ -852,16 +933,32 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * дёргается кадр к кадру. Состояние записи переключение не трогает вовсе —
    * меняется только то, в какой набор инстанс-мешей она компактируется.
    */
-  private selectLod(record: InstanceRecord, radius: number, screen: ScreenScale): void {
+  private selectLod(
+    record: InstanceRecord,
+    radius: number,
+    screen: ScreenScale,
+    cost: RenderCostCounters | undefined,
+  ): void {
     const entry = record.batch;
     if (entry === null) return;
     const maxLevel = entry.batch.levelCount - 1;
     if (maxLevel <= 0) return; // модель без цепочки — единственный уровень
+    // Счёт стоит ПОСЛЕ отказов выше: у записи без цепочки уровней работы нет, и
+    // приписывать ей выбор значило бы считать несделанное (PERF-3).
+    if (cost !== undefined) cost.modelsLodSelections++;
     const size = screenSize(radius, this.cameraPosition.distanceTo(record.pos), screen);
     const thresholds = entry.thresholds;
+    // Множитель пресета (QUAL-1) сдвигает ПОРОГИ, а не экранный размер: пороги
+    // остаются данными записи (ASSET-13), а пресет говорит, насколько раньше
+    // или позже их читать. Гистерезис при этом свой — он про дрожание у порога,
+    // а не про качество.
+    const scale = this.lodScale;
     let level = Math.min(record.lodLevel, maxLevel);
-    while (level < maxLevel && size < (thresholds[level] ?? 0) * (1 - LOD_HYSTERESIS)) level += 1;
-    while (level > 0 && size > (thresholds[level - 1] ?? Number.POSITIVE_INFINITY) * (1 + LOD_HYSTERESIS)) {
+    while (level < maxLevel && size < (thresholds[level] ?? 0) * scale * (1 - LOD_HYSTERESIS)) level += 1;
+    while (
+      level > 0 &&
+      size > (thresholds[level - 1] ?? Number.POSITIVE_INFINITY) * scale * (1 + LOD_HYSTERESIS)
+    ) {
       level -= 1;
     }
     record.lodLevel = level;
@@ -876,7 +973,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     turnRate: number,
     tiltRate: number,
     surface: VisualSurface | null,
+    cost: RenderCostCounters | undefined,
   ): void {
+    // Поза кадра — по одной записи на инстанс пула (PERF-2, стадия кадра): счёт
+    // снимается разом с размера пула, а не инкрементом внутри цикла.
+    if (cost !== undefined) cost.modelsPoseWrites += pool.size;
     // Сходящиеся к цели величины кадра — доворот (REND-5), наклон (REND-10),
     // контроль костей — берут МОДУЛЬ часов: направления у них нет, цель ведёт
     // доставленное состояние, и на обратном ходе сглаживание обязано идти к
@@ -999,12 +1100,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * батчевого получают ровно те же числа, а не два похожих расчёта.
    */
   private applyPose(record: InstanceRecord, settle: number): void {
-    // Fade (FOW-8) — множитель ВИДИМОГО масштаба кадра: инстанс растворяется
-    // стягиванием, одинаково у обоих ярусов (REND-20) — пер-инстансной
-    // прозрачности у батчевого материала нет, а два способа угасать дали бы
-    // два разных изображения одного состояния. Семантический `scale` (REND-11)
-    // не меняется: `pose` и walkable-вклад читают его, а не картинку кадра.
-    const drawScale = record.scale * record.fade;
+    // Fade (FOW-8) — прозрачность, а не масштаб: стягивание читалось как
+    // «враг уменьшается». Доля одна на оба яруса (REND-20): батч несёт её
+    // пер-инстансным атрибутом в альфу (`vatMaterial`), держатель — своими
+    // копиями материалов на время fade (`applyHolderFade`). Масштаб кадра —
+    // семантический `scale` записи (REND-11), без множителей.
+    const drawScale = record.scale;
+    this.applyHolderFade(record);
     const holder = record.holder;
     if (holder !== null) {
       holder.position.copy(record.pos);
@@ -1025,10 +1127,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (entry === null) return;
     // Масштаб записи и нормализация по высоте у батча живут в ИНСТАНС-МАТРИЦЕ:
     // у детального яруса их несёт обёртка `body` внутри поддерева, здесь
-    // поддерева нет — и множитель тот же самый (включая fade, FOW-8).
+    // поддерева нет — и множитель тот же самый. Fade едет отдельно (FOW-8).
     SCRATCH_SCALE.setScalar(drawScale * entry.normalized);
     SCRATCH_MATRIX.compose(record.pos, record.quat, SCRATCH_SCALE);
     entry.batch.setMatrix(record.slot, SCRATCH_MATRIX);
+    entry.batch.setFade(record.slot, record.fade);
     const vat = record.vat;
     if (vat !== null) {
       entry.batch.setPose(record.slot, vat.rowA, vat.rowB, vat.blend, record.skinIndex);
@@ -1036,7 +1139,132 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
   }
 
+  /**
+   * Fade держателя (FOW-8) — прозрачностью: материалы мешей разделяются с
+   * ассетом (REND-3) и copy-on-write скинов (REND-6), поэтому на время fade
+   * инстанс получает СВОИ копии с `transparent`, а по концу возвращает
+   * разделяемые и копии освобождает. Программа шейдера та же — прозрачность
+   * не перекомпилирует; копии появляются ровно на эпизод угасания.
+   */
+  private applyHolderFade(record: InstanceRecord): void {
+    if (record.fade >= 1) {
+      this.clearHolderFade(record);
+      return;
+    }
+    const holder = record.holder;
+    if (holder === null) return;
+    if (record.fadedTargets === null) {
+      const targets: FadeTarget[] = [];
+      holder.traverse((node) => {
+        // Узкий типизированный проход: `instanceof THREE.Mesh` дал бы Mesh<any>.
+        const mesh = node as Partial<THREE.Mesh> & THREE.Object3D;
+        if (mesh.isMesh !== true || mesh.material === undefined) return;
+        const original = mesh.material;
+        const clones = materialsOf(original).map((material) => {
+          const clone = material.clone();
+          clone.transparent = true;
+          clone.userData.fadeBaseOpacity = clone.opacity;
+          return clone;
+        });
+        mesh.material = Array.isArray(original) ? clones : clones[0]!;
+        targets.push({ mesh: mesh as FadeTarget['mesh'], original });
+      });
+      record.fadedTargets = targets;
+    }
+    for (const target of record.fadedTargets) {
+      for (const clone of materialsOf(target.mesh.material)) {
+        clone.opacity = (clone.userData.fadeBaseOpacity as number) * record.fade;
+      }
+    }
+  }
+
+  /** Возврат разделяемых материалов мешам и освобождение fade-копий (FOW-8). */
+  private clearHolderFade(record: InstanceRecord): void {
+    const targets = record.fadedTargets;
+    if (targets === null) return;
+    record.fadedTargets = null;
+    for (const target of targets) {
+      for (const clone of materialsOf(target.mesh.material)) clone.dispose();
+      target.mesh.material = target.original;
+    }
+  }
+
   // ------------------------------------------------------------ публичное
+
+  /**
+   * Ручки качества подсистемы (QUAL-1, QUAL-3): стоимость кадра растёт числом
+   * инстансов, и обе ручки правят именно её — множитель порогов LOD (REND-22)
+   * решает, сколько треугольников несёт один инстанс, ярус по умолчанию
+   * (REND-20) — сколько стоит его носитель.
+   */
+  quality(): QualityDeclaration {
+    return {
+      subsystem: this.name,
+      knobs: [
+        {
+          name: MODELS_LOD_SCALE,
+          cost: 'треугольники инстансов: множитель порогов переключения уровней детализации записи (REND-22, ASSET-13)',
+          semantics: 'value',
+          default: 1,
+          // Только вверх от единицы: пресет вправе УДЕШЕВИТЬ картинку —
+          // переключить инстанс на грубый уровень раньше, — но не обогатить её
+          // сверх порогов автора (ASSET-13). Множитель меньше единицы держал бы
+          // детальный уровень дальше, чем задумал автор записи, то есть
+          // выправлял бы его данные пресетом. То же соображение, что у потолка
+          // разрешения маски тумана (FOW-10): политика ограничивает авторское
+          // значение в одну сторону, в другую — авторское значение и есть закон.
+          min: 1,
+          max: 8,
+        },
+        {
+          name: MODELS_DEFAULT_TIER,
+          cost: 'носитель инстанса: батчевый — общий InstancedMesh со скиннингом на GPU, детальный — пер-инстансный скелет, микшер и материалы (REND-20)',
+          semantics: 'value',
+          default: 'batched',
+          values: ['batched', 'detailed'],
+        },
+      ],
+    };
+  }
+
+  /**
+   * Значения ручек от контроллера качества (QUAL-1). Множитель порогов доедет
+   * ближайшим кадром сам — уровень выбирается в кадре (REND-22); смена яруса по
+   * умолчанию пересобирает инстансы записей, ярус не назвавших, — это событие
+   * уровня меню, а не кадра (design Risks): аллокационная дисциплина
+   * кадрового пути ограничивает кадры, а не события.
+   */
+  applyQuality(values: QualityValues): void {
+    const scale = values.get(MODELS_LOD_SCALE);
+    if (typeof scale === 'number') this.lodScale = scale;
+    const tier = values.get(MODELS_DEFAULT_TIER);
+    if (tier === 'batched' || tier === 'detailed') this.applyDefaultTier(tier);
+  }
+
+  /**
+   * Ярус по умолчанию на живой сцене (REND-20, QUAL-1). Пересобираются ровно
+   * записи, ярус НЕ назвавшие: у явной записи и у контроля костей ярус свой, и
+   * трогать их пресет не вправе. До `init` пересобирать нечего — инстансов ещё
+   * нет, а ярус выберется при их создании.
+   */
+  private applyDefaultTier(next: VisualTier): void {
+    if (next === this.defaultTier) return;
+    this.defaultTier = next;
+    const ctx = this.ctx;
+    if (ctx === null) return;
+    // Смена яруса — событие пресета, а не кадра (QUAL-1): сток читается один раз
+    // на событие, и счётчик показывает ЦЕНУ переключения — сколько инстансов
+    // пересобрано (PERF-3).
+    const cost = costSink();
+    for (const pool of [this.instances, this.decorations]) {
+      for (const record of pool.values()) {
+        if (record.kind === null) continue;
+        if (record.visual?.tier !== undefined || record.visual?.boneControls !== undefined) continue;
+        if (cost !== undefined) cost.modelsRebuilds++;
+        this.rebuild(ctx, record);
+      }
+    }
+  }
 
   /**
    * Смена скина инстанса без перезагрузки модели (REND-6): у детального яруса
@@ -1072,20 +1300,28 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (next === this.manifest) return;
     this.manifest = next;
     const ctx = this.requireCtx();
+    // Переподача — событие правки документа (REND-17, ED-15), и сток читается
+    // один раз на неё: цена переподачи — число пересобранных инстансов (PERF-3).
+    const cost = costSink();
     // Переподача действует на оба пула: раздел decoration-видов — такая же
     // часть манифеста (ASSET-9), и правка записи камня обязана доехать и до
     // размещённой декорации (REND-17, ED-15).
-    this.resupply(ctx, this.instances);
-    this.resupply(ctx, this.decorations);
+    this.resupply(ctx, this.instances, cost);
+    this.resupply(ctx, this.decorations, cost);
   }
 
-  private resupply(ctx: RenderContext, pool: ReadonlyMap<EntityId, InstanceRecord>): void {
+  private resupply(
+    ctx: RenderContext,
+    pool: ReadonlyMap<EntityId, InstanceRecord>,
+    cost: RenderCostCounters | undefined,
+  ): void {
     for (const record of pool.values()) {
       // Невизуальная сущность (резолвер отнёс её к нерисуемым) записи не имеет.
       if (record.kind === null) continue;
       const before = record.visual;
       record.visual = resolveVisual(this.manifest, record.kind);
-      if (rebuildsInstance(before, record.visual)) {
+      if (rebuildsInstance(before, record.visual, this.defaultTier)) {
+        if (cost !== undefined) cost.modelsRebuilds++;
         this.rebuild(ctx, record);
         continue;
       }
@@ -1426,6 +1662,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // ли сущность из тумана или только что заспавнилась, доставленное не
       // различает (NET-14), и мягкое проявление честно для обоих прочтений.
       fade: fadeIn && !decoration ? 0 : 1,
+      fadedTargets: null,
       fadingOut: false,
       publicView: null,
     };
@@ -1577,12 +1814,16 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * где производные и спрашивались.
    */
   private tierOf(record: InstanceRecord, shared: SharedEntry): VisualTier {
-    if (resolveVisualTier(record.visual) === 'detailed') return 'detailed';
+    if (declaredTier(record.visual, this.defaultTier) === 'detailed') return 'detailed';
     return shared.derivatives === null ? 'detailed' : 'batched';
   }
 
   private attachModel(record: InstanceRecord, shared: SharedModelData): void {
     if (record.model !== null || record.batch !== null) return;
+    // Смена содержимого держателя (заглушка → модель): fade-копии материалов
+    // привязаны к прежним мешам — вернуть разделяемые и освободить копии;
+    // идущий fade заново соберёт их по новому поддереву (FOW-8).
+    this.clearHolderFade(record);
     const entry = record.visual === undefined ? undefined : this.shared.get(record.visual.model);
     if (entry === undefined) return;
     record.tier = this.tierOf(record, entry);
@@ -1862,6 +2103,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * разделяемые данные ассета и сам батч остаются в кэше (REND-3).
    */
   private detachModel(record: InstanceRecord): void {
+    // Возврат разделяемых материалов ДО снятия поддерева: dispose модели
+    // освобождает материалы её мешей, и это должны быть fade-копии, а не
+    // разделяемые с ассетом (FOW-8, REND-3).
+    this.clearHolderFade(record);
     for (const entry of this.shared.values()) entry.waiting.delete(record);
     // Ярус — свойство НАРИСОВАННОГО (REND-20): пока построенного из ассета у
     // записи нет, рисуется заглушка, и она детальная. Оставить прежний ярус
@@ -2017,20 +2262,32 @@ function applySkinArrays(
 /** Метрика экранного размера камеры — то, что от неё нужно выбору уровня. */
 interface ScreenScale {
   /** Тангенс половины вертикального поля зрения; 0 — камера ортографическая. */
-  readonly tanHalfFov: number;
+  tanHalfFov: number;
   /** Видимая высота кадра в мировых единицах у ортографической камеры. */
-  readonly orthoHeight: number;
+  orthoHeight: number;
 }
 
-function screenScaleOf(camera: THREE.Camera): ScreenScale | null {
+/**
+ * Метрика камеры — в поданную запись; null — камера ни перспективная, ни
+ * ортографическая (уровень тогда не выбирается вовсе). Пишет в `out`, а не
+ * заводит запись: отсечение с выбором уровня идёт каждый кадр, и своей записи
+ * на кадр у него быть не должно — тем же соображением здесь живут пирамида,
+ * матрица и сфера.
+ */
+function screenScaleOf(camera: THREE.Camera, out: ScreenScale): ScreenScale | null {
   const perspective = camera as THREE.PerspectiveCamera;
   if (perspective.isPerspectiveCamera) {
-    return { tanHalfFov: Math.tan(((perspective.fov / 2) * Math.PI) / 180), orthoHeight: 0 };
+    out.tanHalfFov = Math.tan(((perspective.fov / 2) * Math.PI) / 180);
+    out.orthoHeight = 0;
+    return out;
   }
   const ortho = camera as THREE.OrthographicCamera;
   if (ortho.isOrthographicCamera) {
     const height = (ortho.top - ortho.bottom) / (ortho.zoom || 1);
-    return height > 0 ? { tanHalfFov: 0, orthoHeight: height } : null;
+    if (height <= 0) return null;
+    out.tanHalfFov = 0;
+    out.orthoHeight = height;
+    return out;
   }
   return null;
 }
@@ -2112,10 +2369,14 @@ function viewOf(record: InstanceRecord): ModelInstanceView {
 function rebuildsInstance(
   before: EntityVisual | undefined,
   after: EntityVisual | undefined,
+  fallbackTier: VisualTier,
 ): boolean {
   if (before === after) return false;
   if (before?.model !== after?.model) return true;
-  if (resolveVisualTier(before) !== resolveVisualTier(after)) return true;
+  // Ярус сравнивается ДЕЙСТВУЮЩИЙ (REND-20, QUAL-1): под пресетом с детальным
+  // ярусом по умолчанию правка «убрать явный batched из записи» меняет ярус, а
+  // `resolveVisualTier` этого бы не увидел — он знает только умолчание кода.
+  if (declaredTier(before, fallbackTier) !== declaredTier(after, fallbackTier)) return true;
   return !samePartSets(before?.hiddenParts, after?.hiddenParts);
 }
 

@@ -63,6 +63,13 @@ export interface RaycastOptions {
   readonly mask?: string;
   /** Сущность-источник: луч не должен упираться в собственный коллайдер (PHYS-6). */
   readonly ignore?: EntityId;
+  /**
+   * Уровень испускателя луча (TERR-4): ребро обрыва засчитывает пересечение,
+   * только если его верхний уровень строго больше (PHYS-13) — взгляд и полёт
+   * по своему уровню и вниз свободны. Без уровня обрыв перекрывает луч с
+   * обеих сторон — консервативное умолчание.
+   */
+  readonly elevation?: number;
 }
 
 export interface RaycastHit {
@@ -339,8 +346,19 @@ export const TRACE_LEVELS = ['off', 'systems', 'full'] as const;
 
 export type TraceLevel = (typeof TRACE_LEVELS)[number];
 
-/** Вид записи (DIAG-2). */
-export type DiagnosticKind = 'assert' | 'invariant' | 'systemBegin' | 'systemEnd' | 'command' | 'event';
+/**
+ * Вид записи (DIAG-2). `tickCost` — сводка объёма работы тика (`performance-budget`
+ * PERF-3): счётчики стоимости покидают симуляцию тем же стоком, что и трейс, и
+ * потому остаются обычной записью диагностики, а не вторым каналом.
+ */
+export type DiagnosticKind =
+  | 'assert'
+  | 'invariant'
+  | 'systemBegin'
+  | 'systemEnd'
+  | 'command'
+  | 'event'
+  | 'tickCost';
 
 /** Важность записи (DIAG-2). Не путать с `TraceLevel` — это про сигнал, а не про объём. */
 export type DiagnosticLevel = 'info' | 'warn' | 'error';
@@ -377,6 +395,8 @@ export const DIAGNOSTIC_CODES = [
   'SYSTEM_END',
   'COMMAND',
   'EVENT',
+  // счётчики стоимости (PERF-3)
+  'TICK_COST',
 ] as const;
 
 export type DiagnosticCode = (typeof DIAGNOSTIC_CODES)[number];

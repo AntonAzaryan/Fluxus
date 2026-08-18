@@ -212,6 +212,25 @@
       #connect:hover {
         border-color: #ffd479;
       }
+      /* Переключатель качества картинки (`render-quality` QUAL-1, design D4):
+         такой же DOM демо-приложения, как кнопка режима, — это настройка
+         страницы, а не действие внутри матча. Список наполняет main.ts из
+         набора пресетов игры: четвёртый уровень качества разметки не касается. */
+      #quality {
+        position: fixed;
+        right: 12px;
+        bottom: 48px;
+        padding: 6px 10px;
+        color: #e8e8f0;
+        font: 12px/1.4 ui-monospace, Menlo, monospace;
+        background: rgba(10, 10, 24, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 8px;
+        z-index: 20;
+      }
+      #quality:hover {
+        border-color: #ffd479;
+      }
       /* Сообщение сборки: матч занят, стенд не отвечает. Скрыто, пока нечего
          сказать; текст ставит main.ts. */
       #notice {
@@ -235,6 +254,7 @@
   <body>
     <div id="app"></div>
     <div id="notice"></div>
+    <select id="quality" title="качество картинки"></select>
     <a id="connect" href="#">играть по сети →</a>
     <script type="module" src="./main.ts"></script>
   </body>

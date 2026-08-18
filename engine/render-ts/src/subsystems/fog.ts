@@ -4,11 +4,16 @@
  *
  * ## Что она делает
  *
- * - На каждой доставке (`syncTick`) перестраивает маску видимости (design D1):
+ * - На доставке (`syncTick`) перестраивает маску видимости (design D1):
  *   наблюдатели СВОЕЙ команды берутся из доставленного состояния по именам
  *   статов (design D4, HUD-8) — радиус обзора и команда; команду игрока задаёт
  *   стат его героя. Видимые враги несут те же статы, и их круги в маску не
- *   попадают: фильтр по команде обязателен.
+ *   попадают: фильтр по команде обязателен. Перестройка — только при изменении
+ *   сигнатуры входов (design D4 change `fow-directional-cliff-vision`):
+ *   наблюдатели (позиция, радиус, уровень) в порядке доставки плюс значения
+ *   конфига; совпала — ни растра, ни загрузки текстуры, ни блита миникарты.
+ *   Уровень наблюдателя — доставленный `EntityView.currLevel` (TERR-4):
+ *   тени маски направленные (FOW-9, PHYS-13).
  * - Кадр рисует пост-проходом (design D2): сцена уходит в render target, затем
  *   полноэкранный шейдер по глубине и обратной view-projection восстанавливает
  *   мировые XY фрагмента, сэмплирует маску и затемняет силой/цветом из
@@ -26,9 +31,9 @@
  *
  * Значения приходят секцией `fog` парного presentation-документа (PRES-2);
  * отсутствие секции или поля — документированные значения по умолчанию
- * (`DEFAULT_FOG_CONFIG` ниже). Обновление в рантайме — `applyConfig`: значения
- * применяются без пересоздания подсистемы и рендера; смена разрешения
- * пересобирает только растр маски.
+ * (`fog/config.ts`: `DEFAULT_FOG_CONFIG`, `resolveFogConfig`). Обновление в
+ * рантайме — `applyConfig`: значения применяются без пересоздания подсистемы и
+ * рендера; смена разрешения пересобирает только растр маски.
  *
  * Регистрирует подсистему сборка игрового клиента; вьюпорт редактора — нет
  * (design D3): превью тумана в редакторе — отдельная будущая работа.
@@ -36,7 +41,16 @@
 import * as THREE from 'three';
 import type { EntityId, TerrainGrid } from '@game-mvp/core';
 import type { PresentationFog } from '@game-mvp/assets';
-import type { RenderContext, RenderSubsystem, TickView } from '../types.js';
+import type {
+  QualityDeclaration,
+  QualityValues,
+  RenderContext,
+  RenderSubsystem,
+  TickView,
+} from '../types.js';
+import { costSink, type RenderCostCounters } from '../cost.js';
+import { resolveFogConfig, type FogRenderConfig } from '../fog/config.js';
+import { POST_FRAGMENT, POST_VERTEX } from '../fog/postPass.js';
 import {
   VisibilityMask,
   fogRectOf,
@@ -46,49 +60,16 @@ import {
 } from '../fog/mask.js';
 
 /**
- * Действующая конфигурация рендера тумана — секция `fog` с закрытыми дырами.
- * Значения по умолчанию (FOW-10) документированы у полей `DEFAULT_FOG_CONFIG`.
+ * Ручка качества подсистемы (`render-quality` QUAL-1, FOW-10): разрешение маски
+ * — ПОТОЛОК над сценным значением, а не значение вместо него (design D3).
+ * Действующее разрешение = min(сценного, потолка): пресет вправе удешевить
+ * картинку, но не поднять её выше авторской и не тронуть документ сцены.
+ *
+ * Верхняя граница диапазона — та же, что у здравого смысла авторского значения:
+ * маска строится на CPU каждой доставкой, и её стоимость растёт КВАДРАТОМ
+ * разрешения (обнуление, reveal, загрузка в текстуру, блит миникарты).
  */
-export interface FogRenderConfig {
-  /** Сила затемнения зоны вне видимости, [0, 1] (FOW-7). */
-  readonly strength: number;
-  /** Тон тумана — во что затемняется кадр. */
-  readonly color: string;
-  /** Ширина градиента края видимой области, мировые единицы (FOW-7). */
-  readonly edgeWidth: number;
-  /** Коэффициент консервативности reveal-радиуса, (0, 1] (FOW-9). */
-  readonly conservatism: number;
-  /** Разрешение маски — текселей на мировую единицу (FOW-10). */
-  readonly resolution: number;
-  /** Длительность fade-out «ушла в туман» в секундах (FOW-8, design D7). */
-  readonly fadeSeconds: number;
-}
-
-/**
- * Документированные значения по умолчанию (FOW-10): туман работает и без
- * секции `fog`. Подобраны на глаз по демо-арене (design Open Questions) —
- * политика картинки, которую дизайнер правит данными, а не этим файлом.
- */
-export const DEFAULT_FOG_CONFIG: FogRenderConfig = Object.freeze({
-  strength: 0.6,
-  color: '#0e1420',
-  edgeWidth: 1.5,
-  conservatism: 0.92,
-  resolution: 4,
-  fadeSeconds: 0.4,
-});
-
-/** Секция документа поверх умолчаний: отсутствующее поле — умолчание (FOW-10). */
-export function resolveFogConfig(section?: PresentationFog): FogRenderConfig {
-  return {
-    strength: section?.strength ?? DEFAULT_FOG_CONFIG.strength,
-    color: section?.color ?? DEFAULT_FOG_CONFIG.color,
-    edgeWidth: section?.edgeWidth ?? DEFAULT_FOG_CONFIG.edgeWidth,
-    conservatism: section?.conservatism ?? DEFAULT_FOG_CONFIG.conservatism,
-    resolution: section?.resolution ?? DEFAULT_FOG_CONFIG.resolution,
-    fadeSeconds: section?.fadeSeconds ?? DEFAULT_FOG_CONFIG.fadeSeconds,
-  };
-}
+const FOG_MASK_RESOLUTION = 'fog.maskResolution';
 
 /** Имена статов доставки (HUD-8, design D4): радиус обзора и команда сущности. */
 export interface FogStatNames {
@@ -155,45 +136,19 @@ export interface FogSubsystemOptions {
   readonly createCanvas?: (width: number, height: number) => FogLayerCanvas;
 }
 
-/** Полноэкранный треугольник не нужен: квад 2×2 в NDC, вершины насквозь. */
-const POST_VERTEX = `
-varying vec2 vUv;
-void main() {
-  vUv = uv;
-  gl_Position = vec4(position.xy, 0.0, 1.0);
-}
-`;
-
 /**
- * Реконструкция мировых XY по глубине и обратной view-projection (design D2):
- * фрагмент вне прямоугольника маски — туман (консервативность FOW-9 действует
- * и на края арены). Билинейный сэмпл маски сглаживает артефакты реконструкции
- * на кромках геометрии (design Risks).
+ * Слоты конфига в голове сигнатуры входов (design D4): ширина градиента и тон
+ * тумана; дальше — по четыре числа на наблюдателя в порядке доставки.
  */
-const POST_FRAGMENT = `
-precision highp float;
-varying vec2 vUv;
-uniform sampler2D tScene;
-uniform sampler2D tDepth;
-uniform sampler2D tMask;
-uniform mat4 uInvViewProj;
-uniform vec4 uMaskRect;
-uniform float uStrength;
-uniform vec3 uColor;
-void main() {
-  vec4 scene = texture2D(tScene, vUv);
-  float depth = texture2D(tDepth, vUv).x;
-  vec4 ndc = vec4(vUv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-  vec4 world = uInvViewProj * ndc;
-  vec2 xy = world.xy / world.w;
-  vec2 uv = (xy - uMaskRect.xy) / uMaskRect.zw;
-  float lit = 0.0;
-  if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
-    lit = texture2D(tMask, uv).r;
+const SIGNATURE_PREFIX = 2;
+
+/** Совпадение занятых префиксов двух сигнатур — сравнение чисел, не JSON (D4). */
+function samePrefix(a: Float64Array, b: Float64Array, length: number): boolean {
+  for (let i = 0; i < length; i++) {
+    if (a[i] !== b[i]) return false;
   }
-  gl_FragColor = vec4(mix(scene.rgb, uColor, uStrength * (1.0 - lit)), scene.a);
+  return true;
 }
-`;
 
 export class FogSubsystem implements RenderSubsystem {
   readonly name = 'fog';
@@ -203,13 +158,51 @@ export class FogSubsystem implements RenderSubsystem {
   private readonly heroOf: () => EntityId | null;
   private readonly createCanvas: ((width: number, height: number) => FogLayerCanvas) | null;
 
+  /**
+   * Секция `fog` документа сцены как есть (PRES-2) — АВТОРСКИЙ источник. Она
+   * здесь только читается: пресет качества документ не правит ни байтом
+   * (FOW-10, QUAL-1), а `current` ниже — уже действующая конфигурация.
+   */
+  private section: PresentationFog | undefined;
+  /**
+   * Потолок разрешения маски от пресета качества (QUAL-1, design D3);
+   * бесконечность — потолка нет, действует сценное значение.
+   */
+  private ceiling = Number.POSITIVE_INFINITY;
   private current: FogRenderConfig;
   private ctx: RenderContext | null = null;
   private rect: FogWorldRect;
   private segments: readonly FogSegment[];
   private mask: VisibilityMask;
+  /**
+   * Показанная маска — то, что сэмплируют пост-проход и миникарта. Сходится к
+   * целевой `mask.data` со временем `dissolveSeconds`: рассеивание тумана не
+   * мгновенное (FOW-7). Именно этот буфер обёрнут текстурой.
+   */
+  private shown: Uint8Array;
+  /** Показанная маска ещё догоняет целевую: `updateFrame` ведёт сходимость. */
+  private settling = false;
   /** Маска построена хотя бы раз: до этого конвейер прежний (прямой рендер). */
   private built = false;
+
+  // ------------------------------------------- сигнатура входов (design D4)
+  /**
+   * Сигнатура входов последней перестройки: значения конфига, влияющие на
+   * растр и блит, затем наблюдатели в порядке доставки — по четыре числа
+   * (x, y, эффективный радиус, уровень). Числа в переиспользуемом массиве,
+   * а не JSON: сравнение — дешёвый проход по префиксу длиной `signatureLength`.
+   */
+  private signature: Float64Array = new Float64Array(SIGNATURE_PREFIX + 4 * 8);
+  /** Буфер сборки сигнатуры текущей доставки; при перестройке копируется в `signature`. */
+  private candidate: Float64Array = new Float64Array(SIGNATURE_PREFIX + 4 * 8);
+  /** Длина занятого префикса; −1 — сигнатуры нет, ближайшая доставка строит. */
+  private signatureLength = -1;
+  /** Счётчик перестроек — дешёвый пробник для тестов кэша (design D4). */
+  private rebuildCount = 0;
+  /** Тон тумана числом — слот сигнатуры: блит миникарты вбивает его в канвас. */
+  private colorHex: number;
+  /** Буфер наблюдателя для `reveal`: перестройка не аллоцирует по объекту. */
+  private readonly observerScratch = { x: 0, y: 0, radius: 0, level: 0 };
 
   // ------------------------------------------------------------ пост-проход
   private maskTexture: THREE.DataTexture;
@@ -233,12 +226,17 @@ export class FogSubsystem implements RenderSubsystem {
     // пакет рендера DOM не трогает, и слой миникарты без фабрики просто не
     // существует — маска и пост-проход от этого не зависят.
     this.createCanvas = options.createCanvas ?? null;
-    this.current = resolveFogConfig(options.config);
+    // Авторская секция хранится как есть (FOW-10, QUAL-1): действующая
+    // конфигурация — уже под потолком пресета, если он приехал.
+    this.section = options.config;
+    this.current = this.effective();
+    this.colorHex = new THREE.Color(this.current.color).getHex();
     // Приём сетки — точка входной границы (REND-1, TERR-2): дальше только float.
     this.rect = fogRectOf(this.grid);
     this.segments = fogSegmentsOf(this.grid);
     this.mask = new VisibilityMask(this.rect, this.current.resolution);
-    this.maskTexture = createMaskTexture(this.mask);
+    this.shown = new Uint8Array(this.mask.data.length);
+    this.maskTexture = createMaskTexture(this.mask, this.shown);
     this.layerWorld = this.rect;
 
     this.postMaterial = new THREE.ShaderMaterial({
@@ -252,6 +250,7 @@ export class FogSubsystem implements RenderSubsystem {
         uMaskRect: {
           value: new THREE.Vector4(this.rect.x, this.rect.y, this.rect.width, this.rect.height),
         },
+        uMaskTexel: { value: new THREE.Vector2(1 / this.mask.width, 1 / this.mask.height) },
         uStrength: { value: this.current.strength },
         uColor: { value: new THREE.Color(this.current.color) },
       },
@@ -300,6 +299,13 @@ export class FogSubsystem implements RenderSubsystem {
    * команды из доставленного состояния по именам статов. Пока команда игрока
    * не доставлена (нет героя или его статов), прежняя маска остаётся как есть —
    * консервативнее мигания «всё открыто/всё закрыто».
+   *
+   * Перестройка — только при изменении входов (design D4): сигнатура доставки
+   * собирается в числа кандидата и сравнивается с сигнатурой последней
+   * перестройки. Совпала — маска, текстура и слой миникарты не трогаются:
+   * стоя на месте, кадр не платит за туман ничего. Отрезки в сигнатуру не
+   * входят: их набор фиксируется конструктором и не меняется за жизнь
+   * подсистемы, а смена разрешения инвалидирует сигнатуру явно (`applyConfig`).
    */
   syncTick(view: TickView): void {
     const hero = this.heroOf();
@@ -307,7 +313,20 @@ export class FogSubsystem implements RenderSubsystem {
     const team = view.entities.get(hero)?.stats?.get(this.statNames.team);
     if (team === undefined) return;
 
-    this.mask.clear();
+    // Отбор наблюдателей просматривает всё доставленное состояние — стоимость
+    // перестройки растёт и от числа сущностей, не только от маски (PERF-3).
+    // Сток читается один раз на доставку, до сравнения сигнатуры: просмотр
+    // состояния идёт в любом случае, а вся работа растра — только за ним.
+    const cost = costSink();
+    if (cost !== undefined) cost.fogEntitiesScanned += view.entities.size;
+
+    // Значения конфига, влияющие на растр и блит: ширина градиента, тон
+    // (вбит в канвас миникарты) и консервативность — последняя через
+    // эффективные радиусы наблюдателей ниже.
+    let candidate = this.candidate;
+    candidate[0] = this.current.edgeWidth;
+    candidate[1] = this.colorHex;
+    let length = SIGNATURE_PREFIX;
     for (const entity of view.entities.values()) {
       const stats = entity.stats;
       if (stats === undefined) continue;
@@ -316,22 +335,183 @@ export class FogSubsystem implements RenderSubsystem {
       if (stats.get(this.statNames.team) !== team) continue;
       const radius = stats.get(this.statNames.visionRadius);
       if (radius === undefined || radius <= 0) continue;
+      if (length + 4 > candidate.length) candidate = this.growCandidate(length);
       // Радиус статов уже во float мировых единицах (REND-1, `statSources.ts`);
-      // визуал консервативнее геймплея на коэффициент конфига (FOW-9).
-      this.mask.reveal(
-        { x: entity.currX, y: entity.currY, radius: radius * this.current.conservatism },
-        this.current.edgeWidth,
-        this.segments,
-      );
+      // визуал консервативнее геймплея на коэффициент конфига (FOW-9). Уровень
+      // — доставленный `currLevel` (TERR-4): слот сигнатуры и поле наблюдателя.
+      candidate[length] = entity.currX;
+      candidate[length + 1] = entity.currY;
+      candidate[length + 2] = radius * this.current.conservatism;
+      candidate[length + 3] = entity.currLevel;
+      length += 4;
     }
-    this.built = true;
+    if (length === this.signatureLength && samePrefix(this.signature, candidate, length)) {
+      return; // входы прежние: ни растра, ни загрузки текстуры, ни блита (D4)
+    }
+    // Копия, а не обмен буферами: одно хранимое состояние вместо двух массивов
+    // с расходящимися ёмкостями; копия десятков чисел не дороже только что
+    // выполненного сравнения тех же данных.
+    if (this.signature.length < length) this.signature = new Float64Array(candidate.length);
+    this.signature.set(candidate.subarray(0, length));
+    this.signatureLength = length;
+    this.rebuildCount++;
+
+    this.mask.clear();
+    const observer = this.observerScratch;
+    for (let at = SIGNATURE_PREFIX; at < length; at += 4) {
+      observer.x = candidate[at]!;
+      observer.y = candidate[at + 1]!;
+      observer.radius = candidate[at + 2]!;
+      observer.level = candidate[at + 3]!;
+      this.mask.reveal(observer, this.current.edgeWidth, this.segments);
+    }
+    // Полутон кромки — один блюр после всех reveal (FOW-7): полярный срез
+    // жёсткий и на фронте, и на сторонах конуса, полутон делает smooth().
+    this.mask.smooth();
+    // Рассеивание не мгновенное (FOW-7): показанная маска догоняет целевую в
+    // updateFrame. Разрыв непрерывности мира (REND-2) и нулевое время — снап:
+    // плавность — про ход мира, а не про телепорт или выключенное рассеивание.
+    if (view.snapAll || this.current.dissolveSeconds <= 0) {
+      this.shown.set(this.mask.data);
+      this.settling = false;
+    } else {
+      this.settling = true;
+    }
+    // Текстура и слой миникарты отражают ПОКАЗАННУЮ маску: при снапе она уже
+    // целевая, при рассеивании — прежняя, но слой обязан существовать с первой
+    // перестройки, а дальше его ведёт сходимость в updateFrame.
     this.maskTexture.needsUpdate = true;
-    this.blitLayer();
+    // Байт на тексель (RedFormat, UnsignedByteType): весь растр уезжает в
+    // текстуру на каждой доставке — цена разрешения маски, а не наблюдателей.
+    // Точка счёта ОДНА на загрузку и живёт здесь, у поднятого флага версии:
+    // создание текстуры (`createMaskTexture`) своего трафика не имеет — три
+    // сливает его флаг с этим в одну загрузку.
+    if (cost !== undefined) cost.fogMaskUploadBytes += this.mask.data.length;
+    this.blitLayer(cost);
+    this.built = true;
   }
 
-  updateFrame(): void {
-    // Маска живёт каденсом доставки, пост-проход — вызовом render: кадру здесь
-    // делать нечего.
+  /**
+   * Доля света ПОКАЗАННОЙ маски в мировой точке [0, 1] — то, что сейчас на
+   * экране, в отличие от `visibility.valueAt` (целевая маска). Пробник
+   * рассеивания (FOW-7) для тестов.
+   */
+  shownAt(worldX: number, worldY: number): number {
+    const mask = this.mask;
+    const tx = Math.floor((worldX - mask.rect.x) * mask.texelsPerUnit);
+    const ty = Math.floor((worldY - mask.rect.y) * mask.texelsPerUnit);
+    if (tx < 0 || ty < 0 || tx >= mask.width || ty >= mask.height) return 0;
+    return this.shown[ty * mask.width + tx]! / 255;
+  }
+
+  /**
+   * Число перестроек маски с создания подсистемы — пробник кэша сигнатуры
+   * (design D4) для тестов; картинка от него не зависит.
+   */
+  get rebuilds(): number {
+    return this.rebuildCount;
+  }
+
+  /** Рост кандидата сигнатуры: редкость (наблюдателей прибыло), не горячий путь. */
+  private growCandidate(occupied: number): Float64Array {
+    const grown = new Float64Array(this.candidate.length * 2);
+    grown.set(this.candidate.subarray(0, occupied));
+    this.candidate = grown;
+    return grown;
+  }
+
+  /**
+   * Сходимость показанной маски к целевой (FOW-7): линейный шаг по времени
+   * рассеивания, открытие и закрытие зоны симметричны. `dt` — со знаком хода
+   * мира (REND-25): в замороженном мире туман тоже стоит. Сошлось — кадры
+   * перестают платить и за копию, и за загрузку текстуры (design D4).
+   */
+  updateFrame(dt: number, _alpha: number): void {
+    if (!this.settling) return;
+    const elapsed = Math.abs(dt);
+    if (elapsed <= 0) return;
+    const target = this.mask.data;
+    const shown = this.shown;
+    // Кадр сходимости — единственная работа тумана, растущая с площадью маски
+    // НЕ на доставке, а на кадре (PERF-2, стадия `frame`): проход по всему
+    // показанному растру, а следом — та же загрузка текстуры и тот же блит
+    // слоя миникарты тем же объёмом. Одним числом описан объём всех трёх:
+    // отдельные поля повторяли бы длину растра трижды, а разойтись они не
+    // могут. Сошлось — кадры перестают платить вовсе, и счётчик обнуляется
+    // сам собой (design D4). Ручки качества это не требует (QUAL-3): объём
+    // правит тот же потолок `fog.maskResolution` (FOW-10).
+    const cost = costSink();
+    if (cost !== undefined) cost.fogDissolveTexels += shown.length;
+    const step = Math.max(1, Math.round((255 * elapsed) / this.current.dissolveSeconds));
+    let settled = true;
+    for (let i = 0; i < shown.length; i++) {
+      const want = target[i]!;
+      const have = shown[i]!;
+      if (have === want) continue;
+      const diff = want - have;
+      if (diff > step) {
+        shown[i] = have + step;
+        settled = false;
+      } else if (diff < -step) {
+        shown[i] = have - step;
+        settled = false;
+      } else {
+        shown[i] = want;
+      }
+    }
+    this.settling = !settled;
+    this.maskTexture.needsUpdate = true;
+    // Сток блиту не отдаётся намеренно: объём этого блита уже посчитан
+    // `fogDissolveTexels` выше, а `fogMinimapTexels` — счётчик стадии доставки
+    // (PERF-2), и приписывать ему кадровую работу значило бы врать стадией.
+    this.blitLayer(undefined);
+  }
+
+  /**
+   * Ручки качества подсистемы (QUAL-1, QUAL-3): одна — потолок разрешения
+   * маски. Стоимость перестройки растёт квадратом разрешения и линейно числом
+   * доставленных сущностей, поэтому рычаг здесь обязателен: именно на нём
+   * споткнулась правка 4 → 8 (proposal «Why»).
+   */
+  quality(): QualityDeclaration {
+    return {
+      subsystem: this.name,
+      knobs: [
+        {
+          name: FOG_MASK_RESOLUTION,
+          cost: 'тексели маски видимости: обнуление, reveal, загрузка в текстуру и блит миникарты растут квадратом разрешения (FOW-7, FOW-10)',
+          semantics: 'ceiling',
+          // Потолка нет — действует сценное значение (FOW-10, design D3).
+          default: Number.POSITIVE_INFINITY,
+          min: 0.5,
+          max: 32,
+        },
+      ],
+    };
+  }
+
+  /**
+   * Потолок разрешения от пресета (QUAL-1, FOW-10). Документ сцены не меняется:
+   * потолок живёт в подсистеме, а действующее значение считается заново.
+   * Консервативность reveal (FOW-9) от разрешения не зависит — коэффициент
+   * применяется к радиусу наблюдателя, а грубая маска ошибается в ту же
+   * сторону: показать лишний туман можно, скрыть его — нет.
+   */
+  applyQuality(values: QualityValues): void {
+    const ceiling = values.get(FOG_MASK_RESOLUTION);
+    this.ceiling = typeof ceiling === 'number' ? ceiling : Number.POSITIVE_INFINITY;
+    this.applyResolved(this.effective());
+  }
+
+  /**
+   * Действующая конфигурация = авторская секция, ограниченная сверху потолком
+   * пресета (design D3): `min` — и только он. Потолок ВЫШЕ сценного значения
+   * картинку не улучшает: авторский потолок остаётся авторским (FOW-10).
+   */
+  private effective(): FogRenderConfig {
+    const authored = resolveFogConfig(this.section);
+    const resolution = Math.min(authored.resolution, this.ceiling);
+    return resolution === authored.resolution ? authored : { ...authored, resolution };
   }
 
   /**
@@ -340,24 +520,40 @@ export class FogSubsystem implements RenderSubsystem {
    * пересобирает только растр маски. Пересоздания подсистемы или рендера нет.
    */
   applyConfig(section?: PresentationFog): void {
-    const next = resolveFogConfig(section);
+    this.section = section;
+    this.applyResolved(this.effective());
+  }
+
+  /** Общий шов применения: и правка секции автором, и потолок пресета — сюда. */
+  private applyResolved(next: FogRenderConfig): void {
     const previous = this.current;
     this.current = next;
+    this.colorHex = new THREE.Color(next.color).getHex();
     (this.postMaterial.uniforms.uStrength as { value: number }).value = next.strength;
     (this.postMaterial.uniforms.uColor as { value: THREE.Color }).value.set(next.color);
     if (next.resolution !== previous.resolution) {
       this.mask = new VisibilityMask(this.rect, next.resolution);
+      this.shown = new Uint8Array(this.mask.data.length);
+      this.settling = false;
       this.maskTexture.dispose();
-      this.maskTexture = createMaskTexture(this.mask);
+      this.maskTexture = createMaskTexture(this.mask, this.shown);
       (this.postMaterial.uniforms.tMask as { value: THREE.Texture }).value = this.maskTexture;
+      (this.postMaterial.uniforms.uMaskTexel as { value: THREE.Vector2 }).value.set(
+        1 / this.mask.width,
+        1 / this.mask.height,
+      );
       // Прежний растр другого разрешения не переносится: маска перестроится
       // ближайшей доставкой, а до неё прежняя картинка честнее растянутой.
       this.built = false;
       this.layerImage = null;
       this.layerCanvas = null;
+      // Разрешение в сигнатуру входов не входит — пустой растр честно требует
+      // перестройки ближайшей доставкой (design D4).
+      this.signatureLength = -1;
     }
-    // Смена ширины градиента/консервативности доедет ближайшей перестройкой
-    // маски; длительность fade читают потребители через `config` (design D7).
+    // Смена ширины градиента/консервативности/тона доедет ближайшей
+    // перестройкой: они — слоты сигнатуры входов (design D4); длительность
+    // fade читают потребители через `config` (design D7).
   }
 
   /**
@@ -368,8 +564,12 @@ export class FogSubsystem implements RenderSubsystem {
   render(renderer: FogRendererLike, camera: THREE.Camera): void {
     const ctx = this.ctx;
     if (ctx === null) throw new Error('FogSubsystem: init() не вызван (REND-8)');
+    // Проходы рендерера — стадия кадра (PERF-2): их число подсистема знает
+    // сама, и структурный спай теста обязан видеть ровно столько же.
+    const cost = costSink();
     if (!this.built) {
       renderer.render(ctx.scene, camera);
+      if (cost !== undefined) cost.fogRenderPasses++;
       return;
     }
     const size = renderer.getDrawingBufferSize(this.sizeScratch);
@@ -386,6 +586,7 @@ export class FogSubsystem implements RenderSubsystem {
     (this.postMaterial.uniforms.tDepth as { value: THREE.Texture | null }).value =
       target.depthTexture;
     renderer.render(this.postScene, this.postCamera);
+    if (cost !== undefined) cost.fogRenderPasses += 2;
   }
 
   /** Render target кадра с текстурой глубины; пересоздаётся при смене размера окна. */
@@ -407,7 +608,7 @@ export class FogSubsystem implements RenderSubsystem {
    * (HUD-6). Ряды перевёрнуты: у растра ряд 0 — минимальный `y` мира, у канваса
    * — верхняя строка, а миникарта рисует мир `+Y` вверх.
    */
-  private blitLayer(): void {
+  private blitLayer(cost: RenderCostCounters | undefined): void {
     if (this.createCanvas === null) return;
     const mask = this.mask;
     if (this.layerCanvas === null) {
@@ -418,10 +619,17 @@ export class FogSubsystem implements RenderSubsystem {
     if (context === null) return;
     this.layerImage ??= context.createImageData(mask.width, mask.height);
     const image = this.layerImage;
-    const color = new THREE.Color(this.current.color);
-    const r = Math.round(color.r * 255);
-    const g = Math.round(color.g * 255);
-    const b = Math.round(color.b * 255);
+    // Блит идёт по всему растру: та же квадратичная зависимость от разрешения,
+    // что у обнуления и загрузки, но в главном потоке и попиксельно (PERF-3).
+    // Сток уже прочитан вызывающим — здесь только инкремент, и он стоит ПОСЛЕ
+    // отказов выше: без канваса блита не было, и приписывать его нечему.
+    if (cost !== undefined) cost.fogMinimapTexels += mask.width * mask.height;
+    // Канвасу нужны sRGB-байты: компоненты THREE.Color — рабочее (линейное)
+    // пространство, тон брался бы темнее авторского. getHex по умолчанию — sRGB.
+    const hex = new THREE.Color(this.current.color).getHex();
+    const r = (hex >> 16) & 0xff;
+    const g = (hex >> 8) & 0xff;
+    const b = hex & 0xff;
     for (let row = 0; row < mask.height; row++) {
       const source = (mask.height - 1 - row) * mask.width;
       const dest = row * mask.width * 4;
@@ -430,7 +638,7 @@ export class FogSubsystem implements RenderSubsystem {
         image.data[at] = r;
         image.data[at + 1] = g;
         image.data[at + 2] = b;
-        image.data[at + 3] = 255 - mask.data[source + column]!;
+        image.data[at + 3] = 255 - this.shown[source + column]!;
       }
     }
     context.putImageData(image, 0, 0);
@@ -443,9 +651,9 @@ export class FogSubsystem implements RenderSubsystem {
 }
 
 /** Одноканальная текстура поверх растра маски; фильтрация билинейная (design D2). */
-function createMaskTexture(mask: VisibilityMask): THREE.DataTexture {
+function createMaskTexture(mask: VisibilityMask, shown: Uint8Array): THREE.DataTexture {
   const texture = new THREE.DataTexture(
-    mask.data,
+    shown,
     mask.width,
     mask.height,
     THREE.RedFormat,
@@ -457,5 +665,11 @@ function createMaskTexture(mask: VisibilityMask): THREE.DataTexture {
   // читался бы со сдвигом (правило распаковки GL, дефолт — 4).
   texture.unpackAlignment = 1;
   texture.needsUpdate = true;
+  // Счётчика здесь нет намеренно (PERF-3). Создание текстуры трафика не
+  // порождает: three грузит растр на GPU по ВЕРСИИ, поднятой `needsUpdate`, и
+  // взведённый здесь флаг сливается с флагом ближайшей доставки в одну
+  // загрузку. Считать её дважды — приписать пустой байт: и на первой доставке,
+  // и на смене разрешения (там маска пересобирается и `built` сбрасывается)
+  // счёт снимает единственное место — `syncTick`, у самой загрузки.
   return texture;
 }

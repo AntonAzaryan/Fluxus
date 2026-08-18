@@ -34,6 +34,7 @@ import * as THREE from 'three';
 import { FIXED_ONE, type EntityId } from '@game-mvp/core';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
+  type QualityDeclaration,
   type RenderContext,
   type RenderSubsystem,
   type TickView,
@@ -298,6 +299,28 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
    */
   // eslint-disable-next-line @typescript-eslint/no-empty-function -- baseline
   syncTick(_view: TickView): void {}
+
+  /**
+   * Стоимость подсистемы объявлена КОНСТАНТНОЙ (`render-quality` QUAL-3), и
+   * ручек у неё нет: набор наложений — состояние ИНСТРУМЕНТА редактора (что
+   * выделено, какой gizmo активен), а не объём контента, и растёт он с числом
+   * наложений, которые кладёт редактор, а не с числом сущностей сцены.
+   *
+   * Игрового кадра подсистема не касается вовсе: её регистрирует только сборка
+   * вьюпорта, и наложений в игровом кадре не бывает по конструкции (REND-16), —
+   * а пресеты качества калибруются как раз по нему. Вьюпорт же работает на
+   * ультра (авторская картинка, а не бюджет, design D4), и рычаг здесь не
+   * понадобится ни при каком пресете.
+   */
+  quality(): QualityDeclaration {
+    return {
+      subsystem: this.name,
+      knobs: [],
+      constantCost:
+        'набор наложений — состояние инструмента редактора, а не объём контента; ' +
+        'в игровом кадре подсистемы нет вовсе (REND-16)',
+    };
+  }
 
   updateFrame(_dt: number, _alpha: number): void {
     if (this.surfaceDirty) {

@@ -5,6 +5,7 @@
  * `add_operation` — глобальная мутация синглтона (мимо DI-1). Форма AST при
  * этом сохранена — с ней работает редактор.
  */
+import { countCostExpression } from '../debug.js';
 import { NO_ENTITY } from '../types.js';
 import type {
   EntityId,
@@ -101,6 +102,10 @@ export function evaluate(expr: Expression, world: ExprWorld, vars: ExprVars = NO
   // против сорока одинаковых, и та же таблица служит валидации на регистрации.
   const wrong = arityError(op, def, args.length);
   if (wrong !== undefined) throw new Error(wrong);
+  // Единица объёма работы DSL — применение оператора (PERF-3); литералы,
+  // вернувшиеся выше, работой не считаются. Вне тика приёмника нет, и учёт не
+  // исполняется: вычисление выражения редактором счётчик не двигает.
+  countCostExpression();
   return def.fn(args, world, vars);
 }
 

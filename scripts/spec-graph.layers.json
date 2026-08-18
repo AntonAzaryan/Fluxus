@@ -1,6 +1,12 @@
 {
   "$comment": "Слои графа спек для spec-graph check. Источник порядка — docs/architecture.md §1 «Слои» и §2 «Карта спецификаций»; при изменении слоёв в docs правится и этот файл (расхождение всплывёт в том же ревью). Направление ссылок между слоями гейтом НЕ является: spec-graph.mjs держит инвариантом только границу механизма и политики (ссылка на game-content), а ребро «вверх» отдаёт диагностикой в `check --metrics`. Список ниже — принятые рёбра «вверх», каждое с обоснованием: в метриках они помечаются ✓, непомеченное ребро — кандидат на внимание, а не провал сборки.",
-  "order": ["foundation", "sim", "net", "client", "editor-content"],
+  "order": [
+    "foundation",
+    "sim",
+    "net",
+    "client",
+    "editor-content"
+  ],
   "layers": {
     "fixed-point-math": "foundation",
     "rng": "foundation",
@@ -33,7 +39,9 @@
     "game-content": "editor-content",
     "presentation-scene": "editor-content",
     "desktop-shell": "editor-content",
-    "bot-player": "editor-content"
+    "bot-player": "editor-content",
+    "performance-budget": "client",
+    "render-quality": "client"
   },
   "exceptions": [
     {
@@ -70,6 +78,11 @@
       "from": "assets",
       "to": "presentation-scene",
       "reason": "Принято: раздел decoration-видов манифеста (ASSET-9) существует ради размещений PRES-2 и вправе их называть — то же ребро stage 12."
+    },
+    {
+      "from": "fog-of-war",
+      "to": "render-quality",
+      "reason": "Принято: FOW-10 объявляет стоимостные параметры тумана подвластными потолку пресета (QUAL-1) — то же направление, что существующее ребро fog-of-war -> presentation-scene (дом конфигурации)."
     }
   ]
 }

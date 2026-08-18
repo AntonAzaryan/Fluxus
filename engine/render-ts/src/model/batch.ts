@@ -34,6 +34,7 @@
  */
 import * as THREE from 'three';
 import type { BakedPartVisibility, NormalizedMesh } from '@game-mvp/assets';
+import type { RenderCostCounters } from '../cost.js';
 import { geometryFromMesh, type SharedMeshData } from './build.js';
 import type { VatMaterial } from './vatMaterial.js';
 
@@ -50,13 +51,41 @@ interface BatchPart {
   readonly buffers: BatchBuffers;
   /** Бит части в маске кадра; -1 — часть треков видимости не имеет. */
   readonly bit: number;
+  /**
+   * Треугольников в геометрии части — снимается один раз при её сборке
+   * (`performance-budget` PERF-3): величина запечённой геометрии, а не кадра.
+   * Умноженная на число видимых записей, она и есть та геометрия, которую кадр
+   * отдаёт инстанс-мешу, — ось, на которую действует выбор уровня (REND-22).
+   */
+  readonly triangles: number;
 }
 
-/** Инстанс-буферы: матрицы и позы видимых записей подряд. */
+/**
+ * Диапазон заливки атрибута — в той форме, в какой его держит `updateRanges`
+ * three. Своя запись, потому что она ПЕРЕИСПОЛЬЗУЕТСЯ (см. `BatchBuffers`).
+ */
+interface UpdateRange {
+  start: number;
+  count: number;
+}
+
+/** Инстанс-буферы: матрицы, позы и доли проявленности видимых записей подряд. */
 interface BatchBuffers {
   matrix: THREE.InstancedBufferAttribute;
   pose: THREE.InstancedBufferAttribute;
+  /** Доля проявленности записи [0, 1] (FOW-8): множитель альфы в `vatMaterial`. */
+  fade: THREE.InstancedBufferAttribute;
   count: number;
+  /**
+   * Диапазоны заливки — по одной долгоживущей записи на атрибут.
+   * `addUpdateRange` three кладёт в `updateRanges` НОВЫЙ объект на каждый
+   * вызов, то есть по два объекта на набор буферов каждого уровня каждый кадр:
+   * мусор, растущий с числом батчей, а значит с объёмом контента. Диапазон же
+   * тут всегда один и по смыслу тот же — начало буфера и `count` записей.
+   */
+  readonly matrixRange: UpdateRange;
+  readonly poseRange: UpdateRange;
+  readonly fadeRange: UpdateRange;
 }
 
 interface BatchLevel {
@@ -107,6 +136,7 @@ export class ModelBatch {
   private slotLevels = new Uint8Array(0);
   private matrices = new Float32Array(0);
   private poses = new Float32Array(0);
+  private fades = new Float32Array(0);
 
   constructor(options: ModelBatchOptions) {
     this.materials = options.materials;
@@ -148,6 +178,7 @@ export class ModelBatch {
     this.visibleFlags[slot] = 1;
     this.frames[slot] = 0;
     this.slotLevels[slot] = 0;
+    this.fades[slot] = 1;
     this.live += 1;
     return slot;
   }
@@ -181,6 +212,11 @@ export class ModelBatch {
     this.visibleFlags[slot] = visible ? 1 : 0;
   }
 
+  /** Доля проявленности записи [0, 1] (FOW-8): едет пер-инстансным атрибутом в альфу. */
+  setFade(slot: number, fade: number): void {
+    this.fades[slot] = fade;
+  }
+
   /** Кадр записи — по нему читается маска видимости частей (ASSET-12). */
   setFrame(slot: number, frame: number): void {
     this.frames[slot] = frame;
@@ -199,8 +235,13 @@ export class ModelBatch {
    * Компактация видимых записей в начало инстанс-буферов и `count` мешей
    * (REND-21). Единственная покадровая работа батча — и она копирование, а не
    * аллокация.
+   *
+   * Сток счётчиков стоимости приходит параметром, а не читается здесь (PERF-3):
+   * `flush` зовётся на каждый батч сцены, и чтение стока на батч было бы той
+   * самой стоимостью учёта, которой быть не должно. Без стока — по одному
+   * сравнению на уровень.
    */
-  flush(): void {
+  flush(cost?: RenderCostCounters): void {
     for (let level = 0; level < this.levels.length; level++) {
       const entry = this.levels[level]!;
       for (const buffers of entry.buffers) buffers.count = 0;
@@ -209,12 +250,20 @@ export class ModelBatch {
       // На GPU уезжает РОВНО скомпактованный кусок буфера, а не весь атрибут по
       // ёмкости батча: хвост за `count` — прошлый кадр, и заливать его нечем.
       for (const buffers of entry.buffers) {
-        buffers.matrix.clearUpdateRanges();
-        buffers.matrix.addUpdateRange(0, buffers.count * MATRIX_STRIDE);
-        buffers.matrix.needsUpdate = true;
-        buffers.pose.clearUpdateRanges();
-        buffers.pose.addUpdateRange(0, buffers.count * POSE_STRIDE);
-        buffers.pose.needsUpdate = true;
+        setUpdateRange(buffers.matrix, buffers.matrixRange, buffers.count * MATRIX_STRIDE);
+        setUpdateRange(buffers.pose, buffers.poseRange, buffers.count * POSE_STRIDE);
+        setUpdateRange(buffers.fade, buffers.fadeRange, buffers.count);
+      }
+      if (cost === undefined) continue;
+      // Записей скопировано — по числу в КАЖДОМ наборе буферов: обычно набор на
+      // уровень один, а у модели с гасимыми частями (ASSET-12) их по одному на
+      // часть, и копирований там ровно столько же (PERF-3).
+      for (const buffers of entry.buffers) cost.modelsBatchRecords += buffers.count;
+      // Треугольники — по ЧАСТЯМ: у каждой свой меш и свой `count`, и рисуется
+      // она своей геометрией. Счёт снимается с уровня, а не с записи: на
+      // инстансе арифметики от учёта не прибавляется.
+      for (const part of entry.parts) {
+        cost.modelsBatchTriangles += part.triangles * part.buffers.count;
       }
     }
   }
@@ -253,7 +302,7 @@ export class ModelBatch {
       for (const part of level.parts) {
         const geometry = part.mesh.geometry;
         for (const name of Object.keys(geometry.attributes)) {
-          if (name !== 'instancePose') geometry.deleteAttribute(name);
+          if (name !== 'instancePose' && name !== 'instanceFade') geometry.deleteAttribute(name);
         }
         geometry.setIndex(null);
         geometry.dispose();
@@ -294,6 +343,7 @@ export class ModelBatch {
     const poseFrom = slot * POSE_STRIDE;
     const poseTo = index * POSE_STRIDE;
     for (let k = 0; k < POSE_STRIDE; k++) pose[poseTo + k] = this.poses[poseFrom + k]!;
+    (buffers.fade.array as Float32Array)[index] = this.fades[slot]!;
   }
 
   /**
@@ -308,6 +358,7 @@ export class ModelBatch {
     this.slotLevels = copyInto(new Uint8Array(next), this.slotLevels);
     this.matrices = copyInto(new Float32Array(next * MATRIX_STRIDE), this.matrices);
     this.poses = copyInto(new Float32Array(next * POSE_STRIDE), this.poses);
+    this.fades = copyInto(new Float32Array(next), this.fades);
     this.capacity = next;
 
     if (this.levels.length === 0) this.levels = this.buildLevels(next);
@@ -341,6 +392,7 @@ export class ModelBatch {
     const index = source.geometry.getIndex();
     if (index !== null) geometry.setIndex(index);
     geometry.setAttribute('instancePose', buffers.pose);
+    geometry.setAttribute('instanceFade', buffers.fade);
 
     const material = this.materials[source.materialIndex] ?? this.materials[0];
     const mesh = new THREE.InstancedMesh(
@@ -354,17 +406,24 @@ export class ModelBatch {
     mesh.frustumCulled = false;
     mesh.name = `batch:part${source.partId}`;
     this.group.add(mesh);
-    return { mesh, buffers, bit: this.partVisibility.parts.indexOf(source.partId) };
+    return {
+      mesh,
+      buffers,
+      bit: this.partVisibility.parts.indexOf(source.partId),
+      triangles: triangleCount(geometry),
+    };
   }
 
   private regrowLevel(level: BatchLevel, capacity: number): void {
     for (const buffers of level.buffers) {
       buffers.matrix = growAttribute(buffers.matrix, capacity, MATRIX_STRIDE);
       buffers.pose = growAttribute(buffers.pose, capacity, POSE_STRIDE);
+      buffers.fade = growAttribute(buffers.fade, capacity, 1);
     }
     for (const part of level.parts) {
       part.mesh.instanceMatrix = part.buffers.matrix;
       part.mesh.geometry.setAttribute('instancePose', part.buffers.pose);
+      part.mesh.geometry.setAttribute('instanceFade', part.buffers.fade);
     }
   }
 }
@@ -393,12 +452,46 @@ export function batchLevels(
   return levels;
 }
 
+/**
+ * Треугольников в геометрии части: индексированная — по индексам, иначе по
+ * вершинам. Целое число, снятое один раз при сборке части (PERF-3): кадр его
+ * только умножает на число видимых записей.
+ */
+function triangleCount(geometry: THREE.BufferGeometry): number {
+  const index = geometry.getIndex();
+  const count = index === null ? geometry.getAttribute('position').count : index.count;
+  return Math.floor(count / 3);
+}
+
 function makeBuffers(capacity: number): BatchBuffers {
   return {
     matrix: dynamicAttribute(capacity, MATRIX_STRIDE),
     pose: dynamicAttribute(capacity, POSE_STRIDE),
+    fade: dynamicAttribute(capacity, 1),
     count: 0,
+    matrixRange: { start: 0, count: 0 },
+    poseRange: { start: 0, count: 0 },
+    fadeRange: { start: 0, count: 0 },
   };
+}
+
+/**
+ * Единственный диапазон заливки атрибута — переиспользуемой записью. Ровно то
+ * же, что пара `clearUpdateRanges()` + `addUpdateRange(0, count)`, но без
+ * объекта на каждый кадр (см. `BatchBuffers.matrixRange`): `updateRanges` —
+ * обычный массив, и очистка с записью одной записи в него делаются здесь.
+ */
+function setUpdateRange(
+  attribute: THREE.InstancedBufferAttribute,
+  range: UpdateRange,
+  count: number,
+): void {
+  range.start = 0;
+  range.count = count;
+  const ranges = attribute.updateRanges;
+  ranges.length = 0;
+  ranges.push(range);
+  attribute.needsUpdate = true;
 }
 
 /** Инстанс-атрибут кадровой записи: содержимое меняется каждый кадр. */

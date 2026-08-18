@@ -55,7 +55,13 @@ import {
   type VisualEffect,
   type VisualManifest,
 } from '@game-mvp/assets';
-import type { EntityView, RenderContext, RenderSubsystem, TickView } from '../types.js';
+import type {
+  EntityView,
+  QualityDeclaration,
+  RenderContext,
+  RenderSubsystem,
+  TickView,
+} from '../types.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import { jumpArc } from '../model/verticalOffset.js';
 import { createWarnOnce } from '../warnOnce.js';
@@ -212,6 +218,29 @@ export class EffectsSubsystem implements RenderSubsystem {
       if (record === undefined) continue;
       this.spawnFlash(record, event.data, view);
     }
+  }
+
+  /**
+   * Стоимость подсистемы объявлена КОНСТАНТНОЙ (`render-quality` QUAL-3, второй
+   * сценарий: «дешёвая фича объявляет константность»), и ручек у неё нет.
+   *
+   * Стоимость одного эффекта фиксирована и не зависит ни от содержимого записи,
+   * ни от объёма контента: геометрия примитива одна на все эффекты (REND-3),
+   * меши берутся из пула и в него возвращаются, пер-инстансен только материал.
+   * Растёт же ЧИСЛО одновременных эффектов — но задают его доставленное
+   * состояние и манифест (REND-23), и снижать его пресетом нельзя: шарик
+   * снаряда и сфера щита — то, что игрок видит вместо сущности, а состав
+   * доступной ему информации от качества картинки не зависит (QUAL-2).
+   */
+  quality(): QualityDeclaration {
+    return {
+      subsystem: this.name,
+      knobs: [],
+      constantCost:
+        'разделяемая геометрия примитива и пул мешей: стоимость эффекта фиксирована, ' +
+        'а число одновременных эффектов задают доставленное состояние и манифест (REND-23), ' +
+        'и пресет его MUST NOT менять — это информация игрока (QUAL-2)',
+    };
   }
 
   updateFrame(dt: number, alpha: number): void {

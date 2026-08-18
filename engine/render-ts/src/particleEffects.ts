@@ -33,21 +33,35 @@ import {
   ParticleEmitter,
   QuarksLoader,
   type BatchedRenderer,
+  type FunctionJSON,
+  type FunctionValueGenerator,
+  type GeneratorMemory,
   type IEmitter,
   type ParticleSystem,
+  type ValueGenerator,
 } from 'three.quarks';
 import type { ParticleEffectDocument } from '@game-mvp/assets';
 
+/** Генератор числа частиц — эмиссия во времени и счёт единовременного выброса. */
+type EmissionGenerator = ValueGenerator | FunctionValueGenerator;
+
 /**
- * Система частиц экземпляра и её ДОКУМЕНТНАЯ зацикленность. Зацикленность
- * запоминается потому, что экземпляр переиспользуется и эмиттером-оболочкой, и
- * выстрелом (выстрел зацикливание с себя снимает): взятый из пула обязан
- * вернуться к значениям документа, а не к тем, которыми его оставило прошлое
- * употребление.
+ * Система частиц экземпляра и ДОКУМЕНТНЫЕ значения, которые с экземпляра
+ * снимаются. Зацикленность запоминается потому, что экземпляр переиспользуется
+ * и эмиттером-оболочкой, и выстрелом (выстрел зацикливание с себя снимает):
+ * взятый из пула обязан вернуться к значениям документа, а не к тем, которыми
+ * его оставило прошлое употребление. Ровно по той же причине запоминается
+ * эмиссия: множитель плотности пресета качества (`render-quality` QUAL-1) —
+ * значение ПОВЕРХ документа, и снимается он возвратом к документному, а не
+ * делением обратно.
  */
 interface EffectSystem {
   readonly system: ParticleSystem;
   readonly looping: boolean;
+  /** Эмиссия во времени, как её задал документ. */
+  readonly emission: EmissionGenerator;
+  /** Счёт частиц каждого единовременного выброса документа, в его порядке. */
+  readonly bursts: readonly EmissionGenerator[];
 }
 
 /** Развёрнутый эффект: образец графа объектов и пул его экземпляров. */
@@ -140,7 +154,12 @@ export class ParticleEffectPool {
       // Один батч-рендерер на сцену (REND-24): система регистрируется в нём один
       // раз на всю жизнь экземпляра — и пока экземпляр лежит в пуле тоже.
       this.batchRenderer.addSystem(system);
-      systems.push({ system, looping: system.looping });
+      systems.push({
+        system,
+        looping: system.looping,
+        emission: system.emissionOverTime,
+        bursts: system.emissionBursts.map((burst) => burst.count),
+      });
     });
     entry.created += 1;
     return { object, entry, systems };
@@ -227,6 +246,95 @@ export function restartInstance(instance: EffectInstance): void {
   for (const entry of instance.systems) {
     entry.system.looping = entry.looping;
     entry.system.restart();
+  }
+}
+
+/**
+ * Плотность частиц экземпляра (`render-quality` QUAL-1, REND-24): множитель
+ * поверх ДОКУМЕНТНОЙ эмиссии — и потоковой, и единовременных выбросов. Единица
+ * возвращает документные генераторы теми же объектами: пресет «баланс» стоит
+ * ровно столько же, сколько его отсутствие.
+ *
+ * Правится ЭКЗЕМПЛЯР, документ не трогается: он разделяется всеми экземплярами
+ * эффекта (design D6), и множитель, записанный в него, копился бы на каждом
+ * взятии из пула. Информации у игрока множитель не отнимает (QUAL-2): гуще или
+ * реже — вопрос картинки, а не того, что в кадре есть.
+ */
+export function setInstanceDensity(instance: EffectInstance, density: number): void {
+  for (const entry of instance.systems) {
+    entry.system.emissionOverTime = scaleEmission(entry.emission, density);
+    const bursts = entry.system.emissionBursts;
+    for (let i = 0; i < bursts.length; i++) {
+      const source = entry.bursts[i];
+      const burst = bursts[i];
+      if (source === undefined || burst === undefined) continue;
+      burst.count = scaleEmission(source, density);
+    }
+  }
+}
+
+/** Генератор документа под множителем; множитель 1 — он сам, без обёртки. */
+function scaleEmission(source: EmissionGenerator, density: number): EmissionGenerator {
+  if (density === 1) return source;
+  return source.type === 'function'
+    ? new ScaledFunction(source, density)
+    : new ScaledValue(source, density);
+}
+
+/** Множитель поверх постоянного генератора документа (`type: 'value'`). */
+class ScaledValue implements ValueGenerator {
+  readonly type = 'value';
+  private readonly source: ValueGenerator;
+  private readonly factor: number;
+
+  constructor(source: ValueGenerator, factor: number) {
+    this.source = source;
+    this.factor = factor;
+  }
+
+  startGen(memory: GeneratorMemory): void {
+    this.source.startGen(memory);
+  }
+
+  genValue(memory: GeneratorMemory): number {
+    return this.source.genValue(memory) * this.factor;
+  }
+
+  /** Сериализуется ДОКУМЕНТНОЕ значение: множитель — настройка, а не данные эффекта. */
+  toJSON(): FunctionJSON {
+    return this.source.toJSON();
+  }
+
+  clone(): ValueGenerator {
+    return new ScaledValue(this.source.clone(), this.factor);
+  }
+}
+
+/** То же для генератора, зависящего от фазы жизни системы (`type: 'function'`). */
+class ScaledFunction implements FunctionValueGenerator {
+  readonly type = 'function';
+  private readonly source: FunctionValueGenerator;
+  private readonly factor: number;
+
+  constructor(source: FunctionValueGenerator, factor: number) {
+    this.source = source;
+    this.factor = factor;
+  }
+
+  startGen(memory: GeneratorMemory): void {
+    this.source.startGen(memory);
+  }
+
+  genValue(memory: GeneratorMemory, t: number): number {
+    return this.source.genValue(memory, t) * this.factor;
+  }
+
+  toJSON(): FunctionJSON {
+    return this.source.toJSON();
+  }
+
+  clone(): FunctionValueGenerator {
+    return new ScaledFunction(this.source.clone(), this.factor);
   }
 }
 

@@ -144,6 +144,7 @@ import {
   OverlaySubsystem,
   ParticlesSubsystem,
   PresentationStage,
+  QualityController,
   TerrainSubsystem,
   ViewportPicking,
   VisualSurfaceSource,
@@ -154,6 +155,7 @@ import {
   type DocumentInstance,
   type OverlayItem,
   type PickHit,
+  type QualityPreset,
   type RenderContext,
 } from '@game-mvp/render';
 import type { TerrainGrid } from '@game-mvp/core';
@@ -171,6 +173,27 @@ const HEIGHT_STEP = 0.6;
 
 /** Кадр, у которого источника клавиатуры нет вовсе (ED-20): ничего не зажато. */
 const NO_KEYS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Пресет качества вьюпорта (`render-quality` QUAL-1, design D4): редактору
+ * важна АВТОРСКАЯ картинка, а не бюджет слабого устройства, — поэтому здесь
+ * зашита «ультра». Потолков в документе нет ни одного, и это его содержание:
+ * разрешение маски тумана (FOW-10) и плотность разбиения террейна (REND-9)
+ * действуют так, как написаны в контенте и конфиге, а не так, как разрешил бы
+ * пресет игры. Названные значения — документированные умолчания ручек: автор
+ * видит запись манифеста как есть (пороги LOD REND-22 без множителя, ярус
+ * REND-20 и плотность частиц REND-24 на своих умолчаниях).
+ *
+ * Документ ИНЛАЙНОВЫЙ, а не импорт из `game/demo-ts/app/presets/`: пресеты —
+ * политика игрового приложения (design D4), и своих файлов у редактора она не
+ * одалживает. Совпадение значений с `ultra.json` демо здесь ничего не связывает:
+ * игра вправе переписать свой документ, не спрашивая редактор.
+ */
+export const EDITOR_QUALITY_PRESET: QualityPreset = {
+  'models.lodThresholdScale': 1,
+  'models.defaultTier': 'batched',
+  'particles.density': 1,
+};
 
 /** Кнопка мыши: левая — инструмент, средняя — drag-панорама (CAM-3), правая — осмотр. */
 const LEFT_BUTTON = 0;
@@ -386,6 +409,12 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     config: { heightStep },
   };
   const presentation = new PresentationStage(context);
+  // Контроллер качества заводится ЗДЕСЬ, до подсистем (QUAL-1, design D2): он
+  // подписан на регистрации сцены, и подсистема, поднятая первой сеткой,
+  // получит текущие значения ручек ровно так же, как поднятая сразу. Своей
+  // ссылки ему не нужно — переключателя качества у редактора нет и не будет:
+  // авторская картинка не настройка (design D4).
+  new QualityController(presentation, EDITOR_QUALITY_PRESET);
   const source = new DocumentSource(presentation);
   // Третий набор рядом с продюсером, а не второй продюсер (REND-18): декорации
   // остаются в кадре и в превью — гасить их смена режима не должна.

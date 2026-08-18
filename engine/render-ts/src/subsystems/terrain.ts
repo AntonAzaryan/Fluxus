@@ -43,12 +43,22 @@ import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
+  type QualityDeclaration,
+  type QualityValues,
   type RenderContext,
   type RenderSubsystem,
   type TickView,
 } from '../types.js';
+import { costSink, type RenderCostCounters } from '../cost.js';
 import { cornerLevels, type SurfaceNormal, type VisualSurface } from '../visualSurface.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
+
+/**
+ * Ручка качества подсистемы (`render-quality` QUAL-1): плотность разбиения
+ * клетки с кривизной — ПОТОЛОК над значением конфига рендера (REND-9), а не
+ * значение вместо него (design D3).
+ */
+const TERRAIN_TESSELLATION = 'terrain.curvatureTessellation';
 
 // --------------------------------------------------- чистая генерация (тесты)
 
@@ -98,6 +108,10 @@ export function buildFloorGeometry(
   surface?: VisualSurface,
   tessellation: number = DEFAULT_CURVATURE_TESSELLATION,
 ): TerrainGeometryData {
+  // Сток читается один раз на ВЫЗОВ, как у растра маски тумана (PERF-3): счётчик
+  // живёт у генератора, а не у обвязки, — прямой вызов генератора (редактор,
+  // тесты) считается ровно так же, как пересборка чанка подсистемой.
+  const cost = costSink();
   // Приём `tileSize` — точка входной границы (REND-1, SHELL-5, TERR-2).
   const tile = grid.tileSize / FIXED_ONE;
   const positions: number[] = [];
@@ -168,6 +182,11 @@ export function buildFloorGeometry(
       }
     }
   }
+  // Квад — шесть индексов, и другой геометрии у пола нет: клетка без кривизны
+  // даёт один квад, клетка с кривизной — `divisions²` подклеток, клетка без пола
+  // — ни одного. Одно деление в конце вместо инкремента в двух ветках цикла
+  // (PERF-3): считать нечего, число уже собрано самим построением.
+  if (cost !== undefined) cost.terrainFloorQuads += indices.length / 6;
   return {
     positions: new Float32Array(positions),
     indices: new Uint32Array(indices),
@@ -257,6 +276,7 @@ export function buildWallGeometry(
   bounds?: CellRect,
   tessellation: number = DEFAULT_CURVATURE_TESSELLATION,
 ): TerrainGeometryData {
+  const cost = costSink(); // один раз на вызов — как у пола (PERF-3)
   const positions: number[] = [];
   const indices: number[] = [];
   // Приём `tileSize` — та же точка входной границы, что у пола (REND-1, TERR-2).
@@ -366,6 +386,9 @@ export function buildWallGeometry(
       prevHigh = high;
     }
   }
+  // Те же шесть индексов на квад, что у пола: отрезок без кривизны с обеих
+  // сторон даёт один квад, отрезок под разбитой кромкой — `divisions` (REND-9).
+  if (cost !== undefined) cost.terrainWallQuads += indices.length / 6;
   return { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
 }
 
@@ -441,6 +464,11 @@ export class TerrainSubsystem implements RenderSubsystem {
   private heightStep = 1;
   /** Плотность разбиения клеток с кривизной — параметр рендера (REND-9). */
   private tessellation = DEFAULT_CURVATURE_TESSELLATION;
+  /**
+   * Потолок плотности от пресета качества (QUAL-1, design D3); бесконечность —
+   * потолка нет, действует значение конфига рендера.
+   */
+  private ceiling = Number.POSITIVE_INFINITY;
   /** Собственная копия карты пола: presentation-состояние может жить без террейна. */
   private floor: Uint8Array;
   private chunksX: number;
@@ -465,7 +493,9 @@ export class TerrainSubsystem implements RenderSubsystem {
   init(ctx: RenderContext): void {
     this.ctx = ctx;
     this.heightStep = ctx.config.heightStep;
-    this.tessellation = ctx.config.curvatureTessellation ?? DEFAULT_CURVATURE_TESSELLATION;
+    // Плотность — конфиг рендера под потолком пресета (REND-9, QUAL-1): порядок
+    // «init, потом контроллер качества» и обратный дают одно и то же.
+    this.tessellation = this.effectiveTessellation();
     this.floorMaterial = new THREE.MeshStandardMaterial({
       color: this.floorColor,
       roughness: 0.95,
@@ -486,13 +516,17 @@ export class TerrainSubsystem implements RenderSubsystem {
       // Walkable-вклад геометрию террейна не меняет (REND-9): настил рисует меш
       // декорации, и пересборка квадов под его клетками дала бы те же квады.
       if (walkableOnly === true) return;
-      if (cells === null) this.markAllChunks();
-      else for (const cell of cells) this.markShapeCell(cell);
+      // Приход поверхности — свой вход, и сток читается один раз на него
+      // (PERF-3): дальше только сложения в захваченную переменную.
+      const cost = costSink();
+      if (cells === null) this.markAllChunks(cost);
+      else for (const cell of cells) this.markShapeCell(cell, cost);
     });
 
+    const cost = costSink();
     this.allocateChunks();
-    this.markAllChunks();
-    this.flushDirty();
+    this.markAllChunks(cost);
+    this.flushDirty(cost);
   }
 
   /**
@@ -522,6 +556,7 @@ export class TerrainSubsystem implements RenderSubsystem {
     }
 
     this.grid = next;
+    const cost = costSink(); // один раз на доставку сетки (PERF-3)
     const shape: number[] = [];
     const cells = next.width * next.height;
     for (let cell = 0; cell < cells; cell++) {
@@ -532,9 +567,10 @@ export class TerrainSubsystem implements RenderSubsystem {
         this.floor[cell] = next.floor[cell]!;
         // Пол виден только в своей клетке: высот и стенок он не меняет (TERR-6).
         this.dirtyChunks.add(this.chunkOfCell(cell));
+        if (cost !== undefined) cost.terrainChunksMarked++;
       }
     }
-    for (const cell of shape) this.markShapeCell(cell);
+    for (const cell of shape) this.markShapeCell(cell, cost);
     // Поверхность стоит на той же сетке — уровни и рампы ей тоже изменились.
     this.surfaceSource?.setGrid(next, shape);
   }
@@ -546,15 +582,72 @@ export class TerrainSubsystem implements RenderSubsystem {
 
   syncTick(view: TickView): void {
     if (view.floorBits === null || view.floorChangedCells.length === 0) return;
+    // Сток — один раз на доставку, дальше сложение в захваченную переменную
+    // (PERF-3): мутация пола (TERR-6) — единственная работа доставки у террейна.
+    const cost = costSink();
     for (const cell of view.floorChangedCells) {
       this.floor[cell] = view.floorBits[cell]!;
       this.dirtyChunks.add(this.chunkOfCell(cell));
+      if (cost !== undefined) cost.terrainChunksMarked++;
     }
   }
 
   updateFrame(_dt: number, _alpha: number): void {
     // Пересборка затронутых чанков — не позже следующего кадра (REND-7, ED-15).
-    this.flushDirty();
+    // Кадр стоящей сцены пометок не находит и не платит ничем: счётчики
+    // пересборки остаются нулевыми (PERF-2).
+    this.flushDirty(costSink());
+  }
+
+  /**
+   * Ручки качества подсистемы (`render-quality` QUAL-1, QUAL-3): одна — потолок
+   * плотности разбиения клеток с кривизной. Геометрия террейна — вершины и
+   * треугольники, растущие площадью арены И квадратом плотности (REND-9);
+   * покадровой работы у подсистемы почти нет, но нарисованное ею стоит каждый
+   * кадр, и рычаг нужен именно здесь.
+   */
+  quality(): QualityDeclaration {
+    return {
+      subsystem: this.name,
+      knobs: [
+        {
+          name: TERRAIN_TESSELLATION,
+          cost: 'вершины и треугольники визуальной поверхности: клетка с кривизной даёт N×N подклеток (REND-9)',
+          semantics: 'ceiling',
+          // Потолка нет — действует значение конфига рендера (REND-9).
+          default: Number.POSITIVE_INFINITY,
+          min: 1,
+          max: 16,
+        },
+      ],
+    };
+  }
+
+  /**
+   * Потолок плотности разбиения от пресета (QUAL-1, design D3): действующая
+   * плотность = min(конфига рендера, потолка). Конфиг остаётся авторским — его
+   * подбирает тот, кто смотрит на арену (REND-9), — а пересборка геометрии всех
+   * чанков идёт событием смены пресета, а не кадром.
+   */
+  applyQuality(values: QualityValues): void {
+    const ceiling = values.get(TERRAIN_TESSELLATION);
+    this.ceiling = typeof ceiling === 'number' ? ceiling : Number.POSITIVE_INFINITY;
+    const next = this.effectiveTessellation();
+    if (next === this.tessellation) return;
+    this.tessellation = next;
+    // До init'а чанков ещё нет: плотность возьмётся при первой сборке.
+    if (this.ctx === null) return;
+    // Смена пресета — событие, и цена его видна тем же счётчиком, что цена
+    // кадра: пересобирается вся геометрия арены (QUAL-1, PERF-3).
+    const cost = costSink();
+    this.markAllChunks(cost);
+    this.flushDirty(cost);
+  }
+
+  /** Плотность разбиения под потолком пресета; целая — подклетки дробными не бывают. */
+  private effectiveTessellation(): number {
+    const authored = this.ctx?.config.curvatureTessellation ?? DEFAULT_CURVATURE_TESSELLATION;
+    return Math.max(1, Math.floor(Math.min(authored, this.ceiling)));
   }
 
   /** Число вершин пола — для тестов и профилировки. */
@@ -567,8 +660,9 @@ export class TerrainSubsystem implements RenderSubsystem {
     return countVertices(this.wallMeshes);
   }
 
-  private flushDirty(): void {
+  private flushDirty(cost: RenderCostCounters | undefined): void {
     if (this.dirtyChunks.size === 0) return;
+    if (cost !== undefined) cost.terrainChunksRebuilt += this.dirtyChunks.size;
     for (const chunk of this.dirtyChunks) this.rebuildChunk(chunk);
     this.dirtyChunks.clear();
   }
@@ -579,13 +673,14 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.wallMeshes = new Array<THREE.Mesh | null>(count).fill(null);
   }
 
-  private markAllChunks(): void {
+  private markAllChunks(cost: RenderCostCounters | undefined): void {
     const count = this.chunksX * this.chunksY;
+    if (cost !== undefined) cost.terrainChunksMarked += count;
     for (let chunk = 0; chunk < count; chunk++) this.dirtyChunks.add(chunk);
   }
 
   /** Инвалидация окрестности правки уровня/рампы — все чанки в радиусе SHAPE_RADIUS. */
-  private markShapeCell(cell: number): void {
+  private markShapeCell(cell: number, cost: RenderCostCounters | undefined): void {
     const { width, height } = this.grid;
     const x = cell % width;
     const y = Math.floor(cell / width);
@@ -593,6 +688,10 @@ export class TerrainSubsystem implements RenderSubsystem {
     const cx1 = Math.floor(Math.min(x + SHAPE_RADIUS, width - 1) / this.chunkSize);
     const cy0 = Math.floor(Math.max(y - SHAPE_RADIUS, 0) / this.chunkSize);
     const cy1 = Math.floor(Math.min(y + SHAPE_RADIUS, height - 1) / this.chunkSize);
+    // Правка одной клетки метит окрестность (SHAPE_RADIUS), и повторные пометки
+    // соседних клеток считаются: каждая — свой поиск в множестве, а пересборок
+    // от них не прибавляется (их считает `terrainChunksRebuilt`).
+    if (cost !== undefined) cost.terrainChunksMarked += (cx1 - cx0 + 1) * (cy1 - cy0 + 1);
     for (let cy = cy0; cy <= cy1; cy++) {
       for (let cx = cx0; cx <= cx1; cx++) this.dirtyChunks.add(cy * this.chunksX + cx);
     }
@@ -616,7 +715,7 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.dirtyChunks.clear();
     // Поверхность собирается заново под новые размеры и зовёт подписчиков.
     this.surfaceSource?.setGrid(next);
-    this.markAllChunks();
+    this.markAllChunks(costSink());
   }
 
   private chunkOfCell(cell: number): number {

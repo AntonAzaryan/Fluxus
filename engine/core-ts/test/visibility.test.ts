@@ -68,8 +68,8 @@ const SCENE: SceneDef = {
   terrain: TERRAIN,
 };
 
-function harness() {
-  const { world, terrain, systems, modifiers } = loadScene(SCENE);
+function harness(terrainDef: typeof TERRAIN = TERRAIN) {
+  const { world, terrain, systems, modifiers } = loadScene({ ...SCENE, terrain: terrainDef });
   const physicsWorld = new PhysicsWorld(staticsFromTerrain(terrain!.grid), terrain!.grid.tileSize);
   const visionModifiers = requireModifierList(modifiers, VISION_MODIFIER_COMPONENT);
   systems.register(new VisibilitySystem(visionModifiers));
@@ -196,6 +196,52 @@ describe('пересчёт видимости (FOW-5)', () => {
     h.move(enemy, 3, 1); // за укрытие
     h.step();
     expect(h.mask(enemy)).toBe(teamBit(1));
+  });
+});
+
+describe('асимметрия высоты через ребро обрыва (FOW-5, PHYS-13)', () => {
+  /** Ступенька: колонки 0–3 — уровень 0, колонки 4–7 — уровень 1; обрыв на x = 4. */
+  const TERRAIN_STEP = { ...TERRAIN, levels: Array.from({ length: 8 }, () => '00001111') };
+  /** Долина: плато по краям (колонки 0–1 и 6–7), низ посередине; обрывы x = 2 и x = 6. */
+  const TERRAIN_VALLEY = { ...TERRAIN, levels: Array.from({ length: 8 }, () => '11000011') };
+
+  it('наблюдатель сверху видит цель внизу через само ребро обрыва', () => {
+    const h = harness(TERRAIN_STEP);
+    // Линия взгляда пересекает обрыв x = 4 с верхней стороны: ребро луч не
+    // перекрывает (PHYS-13), а фильтр по высоте обзор вниз не ограничивает —
+    // бит взводится (FOW-5, сценарий «Наблюдатель сверху, цель за обрывом внизу»).
+    h.place('Watcher', { Position: { x: F(5.5), y: F(1.5) } });
+    const enemy = h.place('Enemy', { Position: { x: F(2.5), y: F(1.5) } });
+    h.step();
+
+    expect(h.mask(enemy)).toBe(teamBit(0) | teamBit(1));
+  });
+
+  it('наблюдатель снизу не видит цель на плато: ребро перекрывает луч снизу вверх', () => {
+    const h = harness(TERRAIN_STEP);
+    // Снизу вверх асимметрия полная (FOW-5): луч через ребро перекрыт
+    // (PHYS-13), а обход по высоте отсёк бы фильтр уровня.
+    h.place('Watcher', { Position: { x: F(2.5), y: F(1.5) } });
+    const enemy = h.place('Enemy', { Position: { x: F(5.5), y: F(1.5) } });
+    h.step();
+
+    expect(h.mask(enemy)).toBe(teamBit(1));
+  });
+
+  it('свой уровень через низину: видно и цель внизу, и плато того же уровня за ней', () => {
+    const h = harness(TERRAIN_VALLEY);
+    // Наблюдатель на левом плато (уровень 1): рёбра x = 2 и x = 6 не выше его
+    // уровня и луч не перекрывают (PHYS-13) — видны и цель в низине, и цель на
+    // плато того же уровня за ней (FOW-5, сценарий «Цель на плато того же
+    // уровня через низину»). Обратно с низины плато закрыто: ребро выше уровня
+    // наблюдателя, и фильтр высоты отсёк бы цель и в обход.
+    h.place('Watcher', { Position: { x: F(1.5), y: F(1.5) } });
+    const below = h.place('Enemy', { Position: { x: F(4.5), y: F(1.5) } });
+    const farPlateau = h.place('Enemy', { Position: { x: F(6.5), y: F(1.5) } });
+    h.step();
+
+    expect(h.mask(below)).toBe(teamBit(0) | teamBit(1));
+    expect(h.mask(farPlateau)).toBe(teamBit(0) | teamBit(1));
   });
 });
 

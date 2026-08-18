@@ -106,6 +106,12 @@ export function createVatMaterial(
   placeholder: THREE.DataArrayTexture,
 ): VatMaterial {
   const material = source.clone();
+  // Fade «ушла в туман» (FOW-8): доля проявленности едет пер-инстансным
+  // атрибутом в альфу, и материал живёт в прозрачном проходе постоянно —
+  // запись с fade = 1 рисуется теми же пикселями, что рисовалась бы в
+  // непрозрачном (альфа 1 — тождественный блендинг), а переключение прохода
+  // на лету пересобирало бы программу посреди матча.
+  material.transparent = true;
   const uniforms: VatMaterialUniforms = {
     vatMap: { value: vatTexture },
     vatSkinBase: { value: placeholder },
@@ -147,8 +153,11 @@ attribute vec4 skinIndex;
 attribute vec4 skinWeight;
 /** Строка первой позы, строка второй, вес второй, слой скина (REND-6). */
 attribute vec4 instancePose;
+/** Доля проявленности записи [0, 1] (FOW-8) — множитель альфы фрагмента. */
+attribute float instanceFade;
 uniform highp sampler2D vatMap;
 varying float vSkinLayer;
+varying float vInstanceFade;
 
 mat4 vatBoneMatrix( float row, float bone ) {
 	int y = int( row );
@@ -182,6 +191,7 @@ mat4 vatSkinMatrix() {
 const VERTEX_BASE = /* glsl */ `
 	mat4 vatSkin = vatSkinMatrix();
 	vSkinLayer = instancePose.w;
+	vInstanceFade = instanceFade;
 `;
 
 const VERTEX_NORMAL = /* glsl */ `
@@ -214,11 +224,18 @@ function patchVertex(source: string): string {
 function patchFragment(source: string, maps: ReadonlySet<VatMapKind>): string {
   // Сэмплеры объявляются В ПРОЛОГЕ, а не на месте chunk'а: chunk'и раскрываются
   // внутри `main()`, а объявление uniform'а там — не GLSL.
-  const declarations = ['varying float vSkinLayer;'];
+  const declarations = ['varying float vSkinLayer;', 'varying float vInstanceFade;'];
   for (const kind of VAT_MAP_KINDS) {
     if (maps.has(kind)) declarations.push(`uniform highp sampler2DArray ${SKIN_UNIFORM[kind]};`);
   }
   let out = source.replace('#include <common>', `#include <common>\n${declarations.join('\n')}`);
+  // Fade (FOW-8): альфа фрагмента умножается на долю проявленности записи до
+  // альфа-теста — угасание прозрачностью, одинаковое с держателем детального
+  // яруса (REND-20).
+  out = out.replace(
+    '#include <alphamap_fragment>',
+    '\tdiffuseColor.a *= vInstanceFade;\n#include <alphamap_fragment>',
+  );
   if (maps.has('base')) {
     out = out.replace(
       '#include <map_fragment>',

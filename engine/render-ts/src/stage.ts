@@ -20,6 +20,7 @@
  * распространяется, и смена режима его гасить MUST NOT.
  */
 import type { EntityId } from '@game-mvp/core';
+import { costSink } from './cost.js';
 import type { EntityView, RenderContext, RenderSubsystem, TickView } from './types.js';
 
 /**
@@ -59,6 +60,20 @@ export class PresentationStage {
 
   private producer: PresentationProducer | null = null;
 
+  /**
+   * Наблюдатель регистраций — вход контроллера качества (`render-quality`
+   * QUAL-1, design D2). Он один: контроллер качества у сцены один, а второй
+   * означал бы два источника значений одной ручки.
+   */
+  private watcher: ((subsystem: RenderSubsystem) => void) | null = null;
+
+  /**
+   * Сущности последней доставки — знаменатель счётчика инстансов стадии кадра
+   * (PERF-2): у `frame` своего состава нет, а тронуть подсистемы могут только
+   * то, что им доставили. Стоимости не несёт: одно присваивание на доставку.
+   */
+  private live = 0;
+
   constructor(context: RenderContext) {
     this.context = context;
   }
@@ -72,7 +87,22 @@ export class PresentationStage {
   register(subsystem: RenderSubsystem): this {
     this.subsystems.push(subsystem);
     subsystem.init(this.context);
+    this.watcher?.(subsystem);
     return this;
+  }
+
+  /**
+   * Подписка на регистрации подсистем (QUAL-1, design D2). Уже
+   * зарегистрированные отдаются наблюдателю НЕМЕДЛЕННО: контроллер качества,
+   * созданный после сборки сцены, обязан увидеть их ровно так же, как позднюю
+   * регистрацию, — иначе порядок «сперва подсистемы, потом контроллер» молча
+   * оставлял бы половину реестра без значений.
+   *
+   * Наблюдатель один (см. `watcher`); повторная подписка его заменяет.
+   */
+  watchRegistrations(watcher: (subsystem: RenderSubsystem) => void): void {
+    this.watcher = watcher;
+    for (const subsystem of this.subsystems) watcher(subsystem);
   }
 
   /**
@@ -97,7 +127,7 @@ export class PresentationStage {
   publish(producer: PresentationProducer, view: TickView): void {
     if (this.producer !== null && this.producer !== producer) this.flush();
     this.producer = producer;
-    for (const subsystem of this.subsystems) subsystem.syncTick(view);
+    this.deliver(view);
   }
 
   /**
@@ -122,7 +152,12 @@ export class PresentationStage {
    * получает — терять ей нечего, а знать о декорациях незачем.
    */
   publishDecorations(entities: ReadonlyMap<EntityId, EntityView>): void {
-    for (const subsystem of this.subsystems) subsystem.syncDecorations?.(entities);
+    const cost = costSink();
+    for (const subsystem of this.subsystems) {
+      if (subsystem.syncDecorations === undefined) continue;
+      subsystem.syncDecorations(entities);
+      if (cost !== undefined) cost.syncTickDecorationInstances += entities.size;
+    }
   }
 
   /**
@@ -135,10 +170,33 @@ export class PresentationStage {
    * получают ту же величину, что и раньше.
    */
   frame(dt: number, alpha: number, realDt: number = Math.abs(dt)): void {
+    const cost = costSink();
+    if (cost !== undefined) {
+      cost.frameCalls++;
+      cost.frameSubsystems += this.subsystems.length;
+      cost.frameInstances += this.live * this.subsystems.length;
+    }
     for (const subsystem of this.subsystems) subsystem.updateFrame(dt, alpha, realDt);
   }
 
   private flush(): void {
-    for (const subsystem of this.subsystems) subsystem.syncTick(this.emptyView);
+    this.deliver(this.emptyView);
+  }
+
+  /**
+   * Общий шов доставки (PERF-2): и публикация продюсера, и гашение его набора —
+   * один и тот же обход подсистем, поэтому и считаются они одним счётчиком.
+   * Учёт — четыре целочисленных сложения на доставку и только при подключённом
+   * стоке; без стока это одно сравнение на весь обход (PERF-3).
+   */
+  private deliver(view: TickView): void {
+    const cost = costSink();
+    if (cost !== undefined) {
+      cost.syncTickDeliveries++;
+      cost.syncTickSubsystems += this.subsystems.length;
+      cost.syncTickInstances += view.entities.size * this.subsystems.length;
+    }
+    this.live = view.entities.size;
+    for (const subsystem of this.subsystems) subsystem.syncTick(view);
   }
 }

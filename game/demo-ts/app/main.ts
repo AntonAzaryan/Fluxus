@@ -70,12 +70,23 @@ import {
   type InputSource,
 } from '@game-mvp/client';
 import { ACTION_BITS, RESPAWN_EVENT, STATE_COMPONENTS, STATS } from './sim.js';
+import { attachBenchProbe, benchRequested, type BenchProbe, type BenchProbeHost } from './benchProbe.js';
 import { createCapturePreview, type CapturePreview } from './capturePreview.js';
 import { createChargeBalls, type ChargeBalls } from './chargeBalls.js';
 import { demoEdgePan } from './cameraInput.js';
 import { createDemoHud, demoHudComposition } from './hud.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
+import {
+  QUALITY_PRESET_NAMES,
+  createDemoQuality,
+  createQualitySelection,
+  qualityPresetName,
+  qualityStorageOf,
+  rememberQualityPreset,
+  storedQualityPreset,
+  type QualityPresetName,
+} from './quality.js';
 import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
 import bindingsJson from './bindings.json';
 import sceneJson from '../../../content/scenes/duel.scene.json';
@@ -630,20 +641,33 @@ const hudCamera: HudCameraContract = {
 
 let lastFrameAt: number | null = null;
 
-function frame(now: number): void {
-  requestAnimationFrame(frame);
-  const dt = lastFrameAt === null ? 0 : Math.min(now - lastFrameAt, 250);
-  lastFrameAt = now;
+/**
+ * Probe стадий кадра (`performance-budget` PERF-2, PERF-7) — только под
+ * `?bench=1`. Выключенный (обычный запуск демо) он и есть `null`, и кадру
+ * стоит ровно одной проверки на `null` в `frame`: ни обращения к часам, ни
+ * записи в буфер (PERF-3 «выключенный учёт бесплатен»). Ручка отчёта живёт на
+ * `window` — её читает браузерный бенч (`bin/bench-demo.mjs`).
+ */
+const benchProbe: BenchProbe | null = benchRequested(window.location.search)
+  ? attachBenchProbe(window as BenchProbeHost)
+  : null;
 
-  // Прицел кадра — ОДИН raycast на кадр (design Decision 6): его читают и
-  // сэмплер через `pointerAimSource`, и превью зоны захвата. Считается ДО
-  // конвейера камеры — по той же позе, по которой игрок видел кадр, когда
-  // ставил курсор, и одинаково для обоих потребителей.
+/**
+ * Стадия `input`: прицел кадра, отложенное кадрирование миникарты, сэмпл осей
+ * камеры, канонический ввод в воркер и накладка тач-стиков.
+ *
+ * Прицел кадра — ОДИН raycast на кадр (design Decision 6): его читают и
+ * сэмплер через `pointerAimSource`, и превью зоны захвата. Считается ДО
+ * конвейера камеры — по той же позе, по которой игрок видел кадр, когда ставил
+ * курсор, и одинаково для обоих потребителей.
+ *
+ * Тиков здесь нет (SHELL-1): симуляция идёт в воркере своим тикером, кадр
+ * только шлёт ввод и интерполирует доставленное (REND-2).
+ */
+function sampleFrameInput(): void {
   frameAim = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
   if (frameAim !== null) lastAim = frameAim;
 
-  // Тиков здесь нет (SHELL-1): симуляция идёт в воркере своим тикером,
-  // кадр только шлёт ввод и интерполирует доставленное (REND-2).
   // Отложенное кадрирование миникарты — когда камера уже не follow (см. panTo).
   if (pendingPan !== null && rig !== null && rig.mode !== 'follow') {
     rig.frameBounds({ rect: panFramingRect(rig.config, pendingPan.x, pendingPan.y), aspect: camera.aspect });
@@ -652,52 +676,99 @@ function frame(now: number): void {
   sampleCameraInput();
   pushInput();
   if (touchSource !== null) touchOverlay?.(touchSource.overlay());
+}
 
-  // Конвейер камеры (CAM-1): follow-цель — интерполированная горизонталь
-  // инстанса (x/y; высоту rig берёт с поверхности, CAM-2), поза → эффекты →
-  // применение к THREE-камере.
-  //
-  // ДО кадра подсистем, а не после: отсечение и выбор уровня детализации идут
-  // по матрицам камеры (REND-21, REND-22), и камера, посаженная после кадра,
-  // отсекала бы по пирамиде ПРОШЛОГО кадра — быстрым разворотом инстансы
-  // вырезались бы у края экрана. Цель слежения при этом на кадр старше, но
-  // конвейер камеры её и так сглаживает — тот же порядок у сцены редактора.
-  if (rig !== null) {
-    // Цель слежения — видимая поза инстанса (REND-3): узла сцены рендер наружу
-    // не отдаёт, и камера ведёт по тем же числам, которыми он нарисован.
-    const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
-    const heroView = heroId === null ? undefined : remote?.view?.entities.get(heroId);
-    const target =
-      instance === null
-        ? null
-        : {
-            x: instance.pose.x,
-            y: instance.pose.y,
-            snap: (heroView?.snap ?? false) || (remote?.view?.snapAll ?? false),
-          };
-    const dtSec = dt / 1000;
-    const logical = rig.update(camInput, dtSec, target);
-    resetCameraInput(camInput);
-    // Эффекты камеры (тряска, покачивание) — часть картинки МИРА, а не главного
-    // потока: стоящий мир с трясущейся камерой показывает движение, которого в
-    // симуляции нет (REND-25, тот же довод, что у клипов). Собственный гейт
-    // заморозки у `EffectStack` есть, но сюда стек ведёт демо своим циклом и
-    // своим положительным dt — гейт остаётся недостижимым, если не обнулить
-    // время здесь. Сама же камера (`rig.update`) продолжает слушаться игрока:
-    // осмотреться в замороженном мире — ровно то, ради чего перемотку и смотрят.
-    const worldDt = (remote?.view?.mode ?? 'Running') === 'Running' ? dtSec : 0;
-    applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, worldDt));
-  }
+/**
+ * Стадия `camera` — конвейер камеры (CAM-1): follow-цель — интерполированная
+ * горизонталь инстанса (x/y; высоту rig берёт с поверхности, CAM-2), поза →
+ * эффекты → применение к THREE-камере.
+ *
+ * ДО кадра подсистем, а не после: отсечение и выбор уровня детализации идут
+ * по матрицам камеры (REND-21, REND-22), и камера, посаженная после кадра,
+ * отсекала бы по пирамиде ПРОШЛОГО кадра — быстрым разворотом инстансы
+ * вырезались бы у края экрана. Цель слежения при этом на кадр старше, но
+ * конвейер камеры её и так сглаживает — тот же порядок у сцены редактора.
+ */
+function cameraFrame(dtSec: number): void {
+  if (rig === null) return;
+  // Цель слежения — видимая поза инстанса (REND-3): узла сцены рендер наружу
+  // не отдаёт, и камера ведёт по тем же числам, которыми он нарисован.
+  const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
+  const heroView = heroId === null ? undefined : remote?.view?.entities.get(heroId);
+  const target =
+    instance === null
+      ? null
+      : {
+          x: instance.pose.x,
+          y: instance.pose.y,
+          snap: (heroView?.snap ?? false) || (remote?.view?.snapAll ?? false),
+        };
+  const logical = rig.update(camInput, dtSec, target);
+  resetCameraInput(camInput);
+  // Эффекты камеры (тряска, покачивание) — часть картинки МИРА, а не главного
+  // потока: стоящий мир с трясущейся камерой показывает движение, которого в
+  // симуляции нет (REND-25, тот же довод, что у клипов). Собственный гейт
+  // заморозки у `EffectStack` есть, но сюда стек ведёт демо своим циклом и
+  // своим положительным dt — гейт остаётся недостижимым, если не обнулить
+  // время здесь. Сама же камера (`rig.update`) продолжает слушаться игрока:
+  // осмотреться в замороженном мире — ровно то, ради чего перемотку и смотрят.
+  const worldDt = (remote?.view?.mode ?? 'Running') === 'Running' ? dtSec : 0;
+  applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, worldDt));
+}
 
+/**
+ * Стадия `present`: покадровое обновление подсистем (`frame` — интерполяция
+ * поз, отсечение, выбор уровня детализации). Сектор захвата и шар заряда —
+ * следом и здесь же: они садятся на позу инстанса ЭТОГО кадра, не прошлого.
+ *
+ * Приёма доставки (`syncTick`) здесь НЕТ: подсистемам его раздаёт `RemoteHost`
+ * на приход сообщения из воркера (SHELL-3), то есть между кадрами. Стоимость
+ * приёма меряют счётчики (PERF-3, PERF-4), а не браузерный замер — см. шапку
+ * `benchProbe.ts`.
+ */
+function presentFrame(now: number): void {
   remote?.frame(now);
-  // После кадра подсистем: сектор и шар заряда садятся на позу инстанса ЭТОГО
-  // кадра — не прошлого.
   capturePreview?.update();
   chargeBalls?.update();
-  // Кадр с туманом идёт пост-проходом подсистемы (FOW-7, design D2); без неё —
-  // прежний прямой рендер. Подсистема с непостроенной маской делает ровно его.
+}
+
+/**
+ * Стадия `draw`: кадр с туманом идёт пост-проходом подсистемы (FOW-7,
+ * design D2); без неё — прежний прямой рендер. Подсистема с непостроенной
+ * маской делает ровно его.
+ */
+function drawScene(): void {
   if (fogSubsystem !== null) fogSubsystem.render(renderer3, camera);
   else renderer3.render(scene3, camera);
+}
+
+function frame(now: number): void {
+  requestAnimationFrame(frame);
+  const dt = lastFrameAt === null ? 0 : Math.min(now - lastFrameAt, 250);
+  lastFrameAt = now;
+  const dtSec = dt / 1000;
+
+  // Одна проверка на кадр — и это ВСЯ цена выключенного замера (PERF-3):
+  // включённый probe отбивает те же четыре стадии отметками часов, выключенного
+  // в кадре нет вовсе.
+  if (benchProbe === null) {
+    sampleFrameInput();
+    cameraFrame(dtSec);
+    presentFrame(now);
+    drawScene();
+    return;
+  }
+  benchProbe.begin(now);
+  sampleFrameInput();
+  benchProbe.mark();
+  cameraFrame(dtSec);
+  benchProbe.mark();
+  presentFrame(now);
+  benchProbe.mark();
+  drawScene();
+  benchProbe.mark();
+  // Каденс тика выводится пассивно — из номера последней доставки (SHELL-1).
+  benchProbe.end(remote?.view?.tick ?? -1);
 }
 
 // -------------------------------------------------------------------- запуск
@@ -797,6 +868,65 @@ function wireConnectButton(mode: DemoMode): void {
   });
 }
 
+// ------------------------------------------------- качество картинки (QUAL-1)
+
+/**
+ * Подписи уровней качества — текст интерфейса, а не данные пресета: документы
+ * называют ручки и значения, а как уровень зовут человеку, решает приложение.
+ * Запись полная по набору игры, и четвёртый уровень (QUAL-1, сценарий
+ * «четвёртый пресет без правки движка») не соберётся без своей подписи.
+ */
+const QUALITY_LABELS: Readonly<Record<QualityPresetName, string>> = {
+  performance: 'производительность',
+  balanced: 'баланс',
+  ultra: 'ультра',
+};
+
+/** Хранилище выбора, если среда его даёт; в воркере и в Node — `undefined`. */
+const qualityStorage = qualityStorageOf(globalThis);
+/**
+ * Живой выбор уровня: запомненный при запуске, обновляемый переключателем и
+ * применяемый сборкой сцены (`onReady`). Контроллера до неё нет — применять
+ * значения ручек ещё не к чему, — поэтому выбор, сделанный за время загрузки
+ * манифеста и ассетов, ЖДЁТ сборку, а не отменяется ею.
+ */
+const qualitySelection = createQualitySelection(storedQualityPreset(qualityStorage));
+/** Сам переключатель: его значением показывается ДЕЙСТВУЮЩИЙ пресет. */
+let qualitySelect: HTMLSelectElement | null = null;
+
+/**
+ * Переключатель качества картинки — DOM демо-приложения, как и кнопка режима
+ * (design D4): это настройка страницы, а не действие внутри матча, и в
+ * композиции HUD (HUD-4) ему места нет.
+ *
+ * Список строится из набора пресетов игры, а не из разметки: новый уровень
+ * качества — новый документ и подпись к нему, без правок страницы и движка
+ * (QUAL-1). Смена идёт контроллером в рантайме — пересборки рендера нет
+ * (design D2), и выбор запоминается тем, что применилось: отвергнутый документ
+ * уводит демо на запасной, и переключатель обязан показывать применённое, а не
+ * нажатое.
+ */
+function wireQualitySelect(initial: QualityPresetName): void {
+  const select = document.getElementById('quality');
+  if (!(select instanceof HTMLSelectElement)) return;
+  for (const name of QUALITY_PRESET_NAMES) {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = QUALITY_LABELS[name];
+    select.append(option);
+  }
+  select.value = initial;
+  select.addEventListener('change', () => {
+    // Матча может ещё не быть: до `onReady` применять значения не к чему, и
+    // выбор копится — сборка сцены возьмёт последний сделанный, а не тот, что
+    // лежал в хранилище на старте страницы.
+    const applied = qualitySelection.choose(qualityPresetName(select.value));
+    select.value = applied;
+    rememberQualityPreset(qualityStorage, applied);
+  });
+  qualitySelect = select;
+}
+
 async function main(): Promise<void> {
   // Режим выбирается ОДИН раз, до создания воркеров: переключение режима — это
   // перезагрузка страницы с другим параметром (SHELL-8).
@@ -805,6 +935,11 @@ async function main(): Promise<void> {
   // страницы. Упади манифест (нет ассета, нет сети) — переключиться было бы
   // нечем, а это единственный орган управления, которому матч не нужен вовсе.
   wireConnectButton(mode);
+  // Переключатель качества — рядом с кнопкой режима и по той же причине: это
+  // орган управления страницей, и матч ему не нужен. Строится он запомненным
+  // выбором, а применяется выбор, когда сцена собрана (`onReady`), — и к тому
+  // моменту он может быть уже другим.
+  wireQualitySelect(qualitySelection.pending);
   // Превью зоны захвата — после кнопки режима по той же причине: числа зоны
   // приходят из сцены, и дыра в контенте не должна уносить страницу целиком.
   capturePreview = createCapturePreview({
@@ -957,6 +1092,18 @@ async function main(): Promise<void> {
         init: () => {},
         syncTick: (view) => director?.onTick(view, rig!.focusX, rig!.focusY, heroId),
         updateFrame: () => {},
+        // Стоимость объявлена КОНСТАНТНОЙ (QUAL-3): подсистема ничего не
+        // рисует — она переводит события и состояния тика в стек эффектов
+        // камеры, а его стоимость задана числом одновременных эффектов из
+        // таблиц манифеста (CAM-6), а не объёмом контента. Рычага здесь не
+        // будет ни при каком пресете, и «метода нет» этого не сказало бы.
+        quality: () => ({
+          subsystem: 'camera-effects',
+          knobs: [],
+          constantCost:
+            'перевод событий и состояний тика в стек эффектов камеры: работа на доставку, ' +
+            'а не на инстанс; число эффектов задают таблицы манифеста (CAM-6)',
+        }),
       });
 
       // HUD на пакете (задача 5.2, HUD-1..7): реестры и композиция — app/hud.ts.
@@ -991,6 +1138,17 @@ async function main(): Promise<void> {
         }),
       );
       hudRoot = hud.root;
+
+      // Пресет качества (QUAL-1, design D4) — ПОСЛЕ регистрации всех
+      // подсистем: реестр ручек собирается из их деклараций (design D1), и
+      // проверять состав документа раньше было бы не по чему. Путь сборки один
+      // на обе воркер-стороны оболочки (SHELL-8) — подсистемы регистрируются
+      // здесь независимо от того, кто наполняет тик, — поэтому и переключатель
+      // работает в любом режиме страницы, и второй проводки для него нет.
+      qualitySelection.attach((preset) => createDemoQuality(remote!.stage, { preset }));
+      // Действующий пресет может отличаться от выбранного: отвергнутый документ
+      // уводит демо на запасной, и переключатель показывает то, что применено.
+      if (qualitySelect !== null) qualitySelect.value = qualitySelection.pending;
 
       // Отладочная ручка ручного прогона (задача 5.3): read-only точка
       // наблюдения камеры — снаружи конвейера её иначе не видно, а проверке

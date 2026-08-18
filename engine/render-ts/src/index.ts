@@ -10,6 +10,32 @@ export type {
   TickView,
 } from './types.js';
 
+// Пресеты качества (`render-quality` QUAL-1..3): контракт объявления ручек
+// подсистемой (расширение REND-8), реестр, собираемый из деклараций, и
+// контроллер, раздающий значения документа пресета. Имён пресетов пакет не
+// знает — их приносит приложение игры.
+export { QualityController, validateQualityPreset } from './quality.js';
+export type {
+  QualityDeclaration,
+  QualityKnob,
+  QualityKnobSemantics,
+  QualityPreset,
+  QualityValue,
+  QualityValues,
+} from './types.js';
+
+// Счётчики стоимости рендера (`performance-budget` PERF-3): инжектируемый сток
+// объёма работы, тегированный стадией конвейера (PERF-2). Без подключённого
+// стока учёт не исполняется — обычный матч за бенчмарк не платит.
+export {
+  COST_COUNTER_STAGES,
+  attachCostSink,
+  costSink,
+  createCostCounters,
+  withCostSink,
+} from './cost.js';
+export type { CostStage, RenderCostCounters } from './cost.js';
+
 // Хост — TickObserver ядра (REND-1, REND-2) и продюсер presentation-состояния.
 export { RenderHost, kindByTags } from './host.js';
 export { FloorMirror } from './floorMirror.js';
@@ -130,17 +156,18 @@ export type { InstancePose, ModelInstanceView, ModelsOptions } from './subsystem
 
 // Подсистема тумана войны (FOW-7, FOW-9, FOW-10): маска видимости команды
 // игрока, конфигурация картинки данными и полноэкранный пост-проход затемнения.
-export { DEFAULT_FOG_CONFIG, FogSubsystem, resolveFogConfig } from './subsystems/fog.js';
+export { FogSubsystem } from './subsystems/fog.js';
+export { DEFAULT_FOG_CONFIG, resolveFogConfig } from './fog/config.js';
+export type { FogRenderConfig } from './fog/config.js';
 export type {
   FogLayerCanvas,
   FogLayerContext,
   FogMinimapLayer,
-  FogRenderConfig,
   FogRendererLike,
   FogStatNames,
   FogSubsystemOptions,
 } from './subsystems/fog.js';
-export { VisibilityMask, edgeGradient, fogRectOf, fogSegmentsOf, segmentBlocks } from './fog/mask.js';
+export { VisibilityMask, edgeGradient, fogRectOf, fogSegmentsOf, segmentCasts } from './fog/mask.js';
 export type { FogObserver, FogSegment, FogWorldRect } from './fog/mask.js';
 
 // Подсистема транзиентных эффектов (REND-23): процедурные примитивы по записям
