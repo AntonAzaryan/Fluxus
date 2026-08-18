@@ -545,29 +545,46 @@ describe('отсечение невидимых инстансов (REND-21)', (
 describe('FOW-8: fade «ушла в туман» отличается от смерти (design D7)', () => {
   const FADE = 0.5;
 
-  /** Видимый масштаб инстанса — то, чем нарисован кадр (holder заглушки/модели). */
+  /** Видимый масштаб инстанса: fade его больше НЕ трогает (FOW-8 — прозрачность). */
   function drawnScale(ctx: RenderContext): number {
     const holder = ctx.scene.children[0];
     if (holder === undefined) throw new Error('в сцене нет инстанса');
     return holder.scale.x;
   }
 
+  /** Проявленность инстанса — прозрачность материала меша держателя (FOW-8). */
+  function drawnOpacity(ctx: RenderContext): number {
+    const holder = ctx.scene.children[0];
+    if (holder === undefined) throw new Error('в сцене нет инстанса');
+    let opacity = -1;
+    holder.traverse((node) => {
+      const mesh = node as Partial<THREE.Mesh> & THREE.Object3D;
+      if (mesh.isMesh !== true || mesh.material === undefined || opacity >= 0) return;
+      const material = Array.isArray(mesh.material) ? mesh.material[0]! : mesh.material;
+      opacity = material.opacity;
+    });
+    if (opacity < 0) throw new Error('у инстанса нет меша');
+    return opacity;
+  }
+
   it('исчезновение без события смерти — fade-out: инстанс доживает до конца анимации', () => {
     const { subsystem, ctx } = makeRig(makeManifest(), { fadeSeconds: FADE });
     subsystem.syncTick(makeTickView([makeEntityView(1)]));
-    // Доводим fade-in появления до конца: стартовое состояние — полный масштаб.
+    // Доводим fade-in появления до конца: стартовое состояние — полная непрозрачность.
     for (let i = 0; i < 60; i++) subsystem.updateFrame(1 / 60, 1);
-    expect(drawnScale(ctx)).toBe(1);
+    expect(drawnOpacity(ctx)).toBe(1);
 
     // Сущности больше нет в доставленном состоянии, события смерти не было.
     subsystem.syncTick(makeTickView([]));
     expect(subsystem.instanceFor(1)).not.toBeNull(); // инстанс жив — угасает
     subsystem.updateFrame(1 / 60, 1);
-    const early = drawnScale(ctx);
+    const early = drawnOpacity(ctx);
     expect(early).toBeLessThan(1);
     expect(early).toBeGreaterThan(0);
+    // Угасание — прозрачностью, а не стягиванием: масштаб кадра не меняется.
+    expect(drawnScale(ctx)).toBe(1);
     subsystem.updateFrame(1 / 60, 1);
-    expect(drawnScale(ctx)).toBeLessThan(early); // угасание монотонно
+    expect(drawnOpacity(ctx)).toBeLessThan(early); // угасание монотонно
 
     // Полная длительность конфига прошла — инстанс снят штатным путём.
     for (let i = 0; i < Math.ceil(FADE * 60) + 2; i++) subsystem.updateFrame(1 / 60, 1);
@@ -579,14 +596,15 @@ describe('FOW-8: fade «ушла в туман» отличается от см�
     const { subsystem, ctx } = makeRig(makeManifest(), { fadeSeconds: FADE });
     subsystem.syncTick(makeTickView([makeEntityView(1)]));
     subsystem.updateFrame(1 / 60, 1);
-    const first = drawnScale(ctx);
+    const first = drawnOpacity(ctx);
     expect(first).toBeGreaterThan(0);
     expect(first).toBeLessThan(1);
+    expect(drawnScale(ctx)).toBe(1); // проявление тоже прозрачностью, не ростом
     subsystem.updateFrame(1 / 60, 1);
-    expect(drawnScale(ctx)).toBeGreaterThan(first);
+    expect(drawnOpacity(ctx)).toBeGreaterThan(first);
     // Fade-in короче fade-out: за половину длительности проявление доиграло.
     for (let i = 0; i < Math.ceil((FADE / 2) * 60); i++) subsystem.updateFrame(1 / 60, 1);
-    expect(drawnScale(ctx)).toBe(1);
+    expect(drawnOpacity(ctx)).toBe(1);
   });
 
   it('EntityDied того же тика — существующий путь смерти, без fade', () => {
@@ -609,15 +627,15 @@ describe('FOW-8: fade «ушла в туман» отличается от см�
 
     subsystem.syncTick(makeTickView([]));
     for (let i = 0; i < 6; i++) subsystem.updateFrame(1 / 60, 1);
-    const faded = drawnScale(ctx);
+    const faded = drawnOpacity(ctx);
     expect(faded).toBeLessThan(1);
 
     // Снова в доставленном состоянии: тот же инстанс, проявление от текущей доли.
     subsystem.syncTick(makeTickView([makeEntityView(1)]));
     subsystem.updateFrame(1 / 60, 1);
-    expect(drawnScale(ctx)).toBeGreaterThan(faded);
+    expect(drawnOpacity(ctx)).toBeGreaterThan(faded);
     for (let i = 0; i < 60; i++) subsystem.updateFrame(1 / 60, 1);
-    expect(drawnScale(ctx)).toBe(1);
+    expect(drawnOpacity(ctx)).toBe(1);
     expect(subsystem.instanceFor(1)).not.toBeNull();
   });
 

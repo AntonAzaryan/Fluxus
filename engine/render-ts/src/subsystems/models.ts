@@ -591,10 +591,10 @@ interface InstanceRecord {
    */
   visible: boolean;
   /**
-   * Доля проявленности инстанса [0, 1] (FOW-8): множитель видимого масштаба
-   * кадра. Единица — инстанс как обычно; меньше — он в fade-in или fade-out.
-   * Семантического масштаба (`scale`, REND-11) не касается: наружу — `pose` и
-   * walkable-вклад — уходит не-затухший масштаб.
+   * Доля проявленности инстанса [0, 1] (FOW-8): множитель АЛЬФЫ кадра —
+   * инстанс растворяется прозрачностью, а не стягиванием (стягивание читалось
+   * как «враг уменьшается»). Единица — инстанс как обычно; меньше — fade-in
+   * или fade-out. Масштаба, семантического и видимого, доля не касается.
    */
   fade: number;
   /**
@@ -602,8 +602,25 @@ interface InstanceRecord {
    * «ушла в туман», инстанс доживает fade-out и убирается по его концу (FOW-8).
    */
   fadingOut: boolean;
+  /**
+   * Меши держателя, чьи материалы на время fade подменены СВОИМИ копиями с
+   * прозрачностью (FOW-8): разделяемые с ассетом материалы (REND-3, REND-6)
+   * трогать нельзя. null — fade не идёт, у мешей разделяемые материалы.
+   */
+  fadedTargets: FadeTarget[] | null;
   /** Публичный вид инстанса; строится лениво и живёт с инстансом (REND-17). */
   publicView: ModelInstanceView | null;
+}
+
+/** Меш держателя и его РАЗДЕЛЯЕМЫЕ материалы, отложенные на время fade (FOW-8). */
+interface FadeTarget {
+  readonly mesh: { material: THREE.Material | THREE.Material[] };
+  readonly original: THREE.Material | THREE.Material[];
+}
+
+/** Материалы меша списком — у three они бывают и одиночными, и массивом. */
+function materialsOf(material: THREE.Material | THREE.Material[]): readonly THREE.Material[] {
+  return Array.isArray(material) ? material : [material];
 }
 
 export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
@@ -1083,12 +1100,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * батчевого получают ровно те же числа, а не два похожих расчёта.
    */
   private applyPose(record: InstanceRecord, settle: number): void {
-    // Fade (FOW-8) — множитель ВИДИМОГО масштаба кадра: инстанс растворяется
-    // стягиванием, одинаково у обоих ярусов (REND-20) — пер-инстансной
-    // прозрачности у батчевого материала нет, а два способа угасать дали бы
-    // два разных изображения одного состояния. Семантический `scale` (REND-11)
-    // не меняется: `pose` и walkable-вклад читают его, а не картинку кадра.
-    const drawScale = record.scale * record.fade;
+    // Fade (FOW-8) — прозрачность, а не масштаб: стягивание читалось как
+    // «враг уменьшается». Доля одна на оба яруса (REND-20): батч несёт её
+    // пер-инстансным атрибутом в альфу (`vatMaterial`), держатель — своими
+    // копиями материалов на время fade (`applyHolderFade`). Масштаб кадра —
+    // семантический `scale` записи (REND-11), без множителей.
+    const drawScale = record.scale;
+    this.applyHolderFade(record);
     const holder = record.holder;
     if (holder !== null) {
       holder.position.copy(record.pos);
@@ -1109,14 +1127,65 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (entry === null) return;
     // Масштаб записи и нормализация по высоте у батча живут в ИНСТАНС-МАТРИЦЕ:
     // у детального яруса их несёт обёртка `body` внутри поддерева, здесь
-    // поддерева нет — и множитель тот же самый (включая fade, FOW-8).
+    // поддерева нет — и множитель тот же самый. Fade едет отдельно (FOW-8).
     SCRATCH_SCALE.setScalar(drawScale * entry.normalized);
     SCRATCH_MATRIX.compose(record.pos, record.quat, SCRATCH_SCALE);
     entry.batch.setMatrix(record.slot, SCRATCH_MATRIX);
+    entry.batch.setFade(record.slot, record.fade);
     const vat = record.vat;
     if (vat !== null) {
       entry.batch.setPose(record.slot, vat.rowA, vat.rowB, vat.blend, record.skinIndex);
       entry.batch.setFrame(record.slot, vat.visibilityFrame);
+    }
+  }
+
+  /**
+   * Fade держателя (FOW-8) — прозрачностью: материалы мешей разделяются с
+   * ассетом (REND-3) и copy-on-write скинов (REND-6), поэтому на время fade
+   * инстанс получает СВОИ копии с `transparent`, а по концу возвращает
+   * разделяемые и копии освобождает. Программа шейдера та же — прозрачность
+   * не перекомпилирует; копии появляются ровно на эпизод угасания.
+   */
+  private applyHolderFade(record: InstanceRecord): void {
+    if (record.fade >= 1) {
+      this.clearHolderFade(record);
+      return;
+    }
+    const holder = record.holder;
+    if (holder === null) return;
+    if (record.fadedTargets === null) {
+      const targets: FadeTarget[] = [];
+      holder.traverse((node) => {
+        // Узкий типизированный проход: `instanceof THREE.Mesh` дал бы Mesh<any>.
+        const mesh = node as Partial<THREE.Mesh> & THREE.Object3D;
+        if (mesh.isMesh !== true || mesh.material === undefined) return;
+        const original = mesh.material;
+        const clones = materialsOf(original).map((material) => {
+          const clone = material.clone();
+          clone.transparent = true;
+          clone.userData.fadeBaseOpacity = clone.opacity;
+          return clone;
+        });
+        mesh.material = Array.isArray(original) ? clones : clones[0]!;
+        targets.push({ mesh: mesh as FadeTarget['mesh'], original });
+      });
+      record.fadedTargets = targets;
+    }
+    for (const target of record.fadedTargets) {
+      for (const clone of materialsOf(target.mesh.material)) {
+        clone.opacity = (clone.userData.fadeBaseOpacity as number) * record.fade;
+      }
+    }
+  }
+
+  /** Возврат разделяемых материалов мешам и освобождение fade-копий (FOW-8). */
+  private clearHolderFade(record: InstanceRecord): void {
+    const targets = record.fadedTargets;
+    if (targets === null) return;
+    record.fadedTargets = null;
+    for (const target of targets) {
+      for (const clone of materialsOf(target.mesh.material)) clone.dispose();
+      target.mesh.material = target.original;
     }
   }
 
@@ -1593,6 +1662,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // ли сущность из тумана или только что заспавнилась, доставленное не
       // различает (NET-14), и мягкое проявление честно для обоих прочтений.
       fade: fadeIn && !decoration ? 0 : 1,
+      fadedTargets: null,
       fadingOut: false,
       publicView: null,
     };
@@ -1750,6 +1820,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
   private attachModel(record: InstanceRecord, shared: SharedModelData): void {
     if (record.model !== null || record.batch !== null) return;
+    // Смена содержимого держателя (заглушка → модель): fade-копии материалов
+    // привязаны к прежним мешам — вернуть разделяемые и освободить копии;
+    // идущий fade заново соберёт их по новому поддереву (FOW-8).
+    this.clearHolderFade(record);
     const entry = record.visual === undefined ? undefined : this.shared.get(record.visual.model);
     if (entry === undefined) return;
     record.tier = this.tierOf(record, entry);
@@ -2029,6 +2103,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * разделяемые данные ассета и сам батч остаются в кэше (REND-3).
    */
   private detachModel(record: InstanceRecord): void {
+    // Возврат разделяемых материалов ДО снятия поддерева: dispose модели
+    // освобождает материалы её мешей, и это должны быть fade-копии, а не
+    // разделяемые с ассетом (FOW-8, REND-3).
+    this.clearHolderFade(record);
     for (const entry of this.shared.values()) entry.waiting.delete(record);
     // Ярус — свойство НАРИСОВАННОГО (REND-20): пока построенного из ассета у
     // записи нет, рисуется заглушка, и она детальная. Оставить прежний ярус

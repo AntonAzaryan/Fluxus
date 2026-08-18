@@ -250,6 +250,7 @@ export class FogSubsystem implements RenderSubsystem {
         uMaskRect: {
           value: new THREE.Vector4(this.rect.x, this.rect.y, this.rect.width, this.rect.height),
         },
+        uMaskTexel: { value: new THREE.Vector2(1 / this.mask.width, 1 / this.mask.height) },
         uStrength: { value: this.current.strength },
         uColor: { value: new THREE.Color(this.current.color) },
       },
@@ -537,6 +538,10 @@ export class FogSubsystem implements RenderSubsystem {
       this.maskTexture.dispose();
       this.maskTexture = createMaskTexture(this.mask, this.shown);
       (this.postMaterial.uniforms.tMask as { value: THREE.Texture }).value = this.maskTexture;
+      (this.postMaterial.uniforms.uMaskTexel as { value: THREE.Vector2 }).value.set(
+        1 / this.mask.width,
+        1 / this.mask.height,
+      );
       // Прежний растр другого разрешения не переносится: маска перестроится
       // ближайшей доставкой, а до неё прежняя картинка честнее растянутой.
       this.built = false;
