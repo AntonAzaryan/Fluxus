@@ -80,11 +80,11 @@ import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } f
 import {
   QUALITY_PRESET_NAMES,
   createDemoQuality,
+  createQualitySelection,
   qualityPresetName,
   qualityStorageOf,
   rememberQualityPreset,
   storedQualityPreset,
-  type DemoQuality,
   type QualityPresetName,
 } from './quality.js';
 import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
@@ -717,10 +717,14 @@ function cameraFrame(dtSec: number): void {
 }
 
 /**
- * Стадия `present`: приём доставки подсистемами (`syncTick` — там живёт
- * пересборка маски FoW) и покадровое обновление (`frame`). Сектор захвата и шар
- * заряда — следом и здесь же: они садятся на позу инстанса ЭТОГО кадра, не
- * прошлого.
+ * Стадия `present`: покадровое обновление подсистем (`frame` — интерполяция
+ * поз, отсечение, выбор уровня детализации). Сектор захвата и шар заряда —
+ * следом и здесь же: они садятся на позу инстанса ЭТОГО кадра, не прошлого.
+ *
+ * Приёма доставки (`syncTick`) здесь НЕТ: подсистемам его раздаёт `RemoteHost`
+ * на приход сообщения из воркера (SHELL-3), то есть между кадрами. Стоимость
+ * приёма меряют счётчики (PERF-3, PERF-4), а не браузерный замер — см. шапку
+ * `benchProbe.ts`.
  */
 function presentFrame(now: number): void {
   remote?.frame(now);
@@ -881,11 +885,12 @@ const QUALITY_LABELS: Readonly<Record<QualityPresetName, string>> = {
 /** Хранилище выбора, если среда его даёт; в воркере и в Node — `undefined`. */
 const qualityStorage = qualityStorageOf(globalThis);
 /**
- * Контроллер качества сцены: появляется вместе с подсистемами в `onReady`.
- * Пока его нет, переключатель только запоминает выбор — применять значения
- * ручек ещё не к чему.
+ * Живой выбор уровня: запомненный при запуске, обновляемый переключателем и
+ * применяемый сборкой сцены (`onReady`). Контроллера до неё нет — применять
+ * значения ручек ещё не к чему, — поэтому выбор, сделанный за время загрузки
+ * манифеста и ассетов, ЖДЁТ сборку, а не отменяется ею.
  */
-let quality: DemoQuality | null = null;
+const qualitySelection = createQualitySelection(storedQualityPreset(qualityStorage));
 /** Сам переключатель: его значением показывается ДЕЙСТВУЮЩИЙ пресет. */
 let qualitySelect: HTMLSelectElement | null = null;
 
@@ -912,10 +917,10 @@ function wireQualitySelect(initial: QualityPresetName): void {
   }
   select.value = initial;
   select.addEventListener('change', () => {
-    const chosen = qualityPresetName(select.value);
     // Матча может ещё не быть: до `onReady` применять значения не к чему, и
-    // выбор просто запоминается — сборка сцены возьмёт его из хранилища.
-    const applied = quality?.select(chosen) ?? chosen;
+    // выбор копится — сборка сцены возьмёт последний сделанный, а не тот, что
+    // лежал в хранилище на старте страницы.
+    const applied = qualitySelection.choose(qualityPresetName(select.value));
     select.value = applied;
     rememberQualityPreset(qualityStorage, applied);
   });
@@ -931,10 +936,10 @@ async function main(): Promise<void> {
   // нечем, а это единственный орган управления, которому матч не нужен вовсе.
   wireConnectButton(mode);
   // Переключатель качества — рядом с кнопкой режима и по той же причине: это
-  // орган управления страницей, и матч ему не нужен. Запомненный выбор
-  // достаётся здесь же, а применяется, когда сцена собрана (`onReady`).
-  const startQuality = storedQualityPreset(qualityStorage);
-  wireQualitySelect(startQuality);
+  // орган управления страницей, и матч ему не нужен. Строится он запомненным
+  // выбором, а применяется выбор, когда сцена собрана (`onReady`), — и к тому
+  // моменту он может быть уже другим.
+  wireQualitySelect(qualitySelection.pending);
   // Превью зоны захвата — после кнопки режима по той же причине: числа зоны
   // приходят из сцены, и дыра в контенте не должна уносить страницу целиком.
   capturePreview = createCapturePreview({
@@ -1140,11 +1145,10 @@ async function main(): Promise<void> {
       // на обе воркер-стороны оболочки (SHELL-8) — подсистемы регистрируются
       // здесь независимо от того, кто наполняет тик, — поэтому и переключатель
       // работает в любом режиме страницы, и второй проводки для него нет.
-      quality = createDemoQuality(remote!.stage, { preset: startQuality });
-      // Действующий пресет может отличаться от запомненного: отвергнутый
-      // документ уводит демо на запасной, и переключатель показывает то, что
-      // применено.
-      if (qualitySelect !== null) qualitySelect.value = quality.current;
+      qualitySelection.attach((preset) => createDemoQuality(remote!.stage, { preset }));
+      // Действующий пресет может отличаться от выбранного: отвергнутый документ
+      // уводит демо на запасной, и переключатель показывает то, что применено.
+      if (qualitySelect !== null) qualitySelect.value = qualitySelection.pending;
 
       // Отладочная ручка ручного прогона (задача 5.3): read-only точка
       // наблюдения камеры — снаружи конвейера её иначе не видно, а проверке

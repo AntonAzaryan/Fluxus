@@ -147,10 +147,17 @@ export interface DemoQualityOptions {
 export interface DemoQuality {
   /** Контроллер качества сцены (QUAL-1): им и раздаются значения ручек. */
   readonly controller: QualityController;
-  /** Действующий пресет — выбранный либо запасной, если выбранный отвергнут. */
-  readonly current: QualityPresetName;
-  /** Смена пресета в рантайме (design D2); возвращает действующее имя. */
-  select(name: QualityPresetName): QualityPresetName;
+  /**
+   * Действующий пресет — последний УСПЕШНО применённый: выбранный либо
+   * запасной, если выбранный отвергнут. `null` — не применён ни один документ
+   * (реестр отверг и выбранный, и запасной), и ручки остались на умолчаниях
+   * движка (QUAL-1). Назвать это состояние «balanced» нельзя: документа
+   * контроллер не видел, и сегодняшнее совпадение умолчаний с ним — свойство
+   * документа, а не обещание переключателю.
+   */
+  readonly current: QualityPresetName | null;
+  /** Смена пресета в рантайме (design D2); возвращает действующее имя (см. `current`). */
+  select(name: QualityPresetName): QualityPresetName | null;
 }
 
 /**
@@ -185,12 +192,15 @@ export function createDemoQuality(
     );
   }
 
-  let current: QualityPresetName = DEFAULT_QUALITY_PRESET;
-  const apply = (name: QualityPresetName): QualityPresetName => {
+  // Действующего пресета до первого УСПЕШНОГО применения нет: `current`
+  // называет применённый документ, а не намерение его применить.
+  let current: QualityPresetName | null = null;
+  const apply = (name: QualityPresetName): QualityPresetName | null => {
     const chosen = refused.has(name) ? DEFAULT_QUALITY_PRESET : name;
     if (refused.has(chosen)) {
-      // Негоден и запасной: ручки остаются на умолчаниях движка (QUAL-1) —
-      // это ровно то, что описывает `balanced`, но сказать об этом надо вслух.
+      // Негоден и запасной: ручки остаются на умолчаниях движка (QUAL-1), и
+      // сказать об этом надо вслух. Действующим `balanced` при этом не
+      // становится — его документа контроллер не получал.
       warn(
         `демо: пресет качества "${name}" применить нечем — ручки остаются на умолчаниях движка (QUAL-1)`,
       );
@@ -207,9 +217,69 @@ export function createDemoQuality(
 
   return {
     controller,
-    get current(): QualityPresetName {
+    get current(): QualityPresetName | null {
       return current;
     },
     select: apply,
+  };
+}
+
+/**
+ * Живой выбор уровня качества между запуском страницы и сборкой сцены.
+ *
+ * Контроллер появляется только вместе с подсистемами, в `onReady` (design D1:
+ * реестр ручек складывается из их деклараций), а страница до этого грузит
+ * манифест, парный документ и ассеты — секунды, за которые человек успевает
+ * выбрать уровень. Выбор в этом окне обязан ДОЖДАТЬСЯ сборки: собрать сцену
+ * тем, что было прочитано из хранилища при запуске, и вернуть переключатель на
+ * это имя — значит отменить уже сделанный выбор молча.
+ *
+ * Поэтому имя копится здесь, а сцена собирается ДЕЙСТВУЮЩИМ выбором.
+ */
+export interface QualitySelection {
+  /** Имя, которым собирать сцену: последнее выбранное, а не стартовое. */
+  readonly pending: QualityPresetName;
+  /**
+   * Выбор человека. До сборки сцены он только копится (применять значения
+   * ручек не к чему), после — уходит контроллеру. Возвращает то, что показывать
+   * переключателем и помнить в хранилище.
+   */
+  choose(name: QualityPresetName): QualityPresetName;
+  /**
+   * Сцена собрана: контроллер строится фабрикой, и аргументом ей идёт
+   * действующий выбор. Фабрикой, а не готовым контроллером, — так «сцена
+   * собирается тем, что выбрано сейчас» перестаёт быть договорённостью двух
+   * мест и становится единственным доступным способом.
+   */
+  attach(create: (preset: QualityPresetName) => DemoQuality): DemoQuality;
+}
+
+/** Выбор, начинающийся с запомненного имени (`storedQualityPreset`). */
+export function createQualitySelection(initial: QualityPresetName): QualitySelection {
+  let pending = initial;
+  let quality: DemoQuality | null = null;
+  return {
+    get pending(): QualityPresetName {
+      return pending;
+    },
+    choose(name: QualityPresetName): QualityPresetName {
+      if (quality === null) {
+        pending = name;
+        return pending;
+      }
+      // Применить оказалось нечем (отвергнуты и выбранный документ, и
+      // запасной): переключатель показывает выбор человека — причина уже
+      // сказана громко, а имени применённого пресета не существует.
+      pending = quality.select(name) ?? name;
+      return pending;
+    },
+    attach(create: (preset: QualityPresetName) => DemoQuality): DemoQuality {
+      const built = create(pending);
+      quality = built;
+      // Применённое может отличаться от выбранного: отвергнутый документ уводит
+      // демо на запасной, и показывать переключателем надо применённое.
+      pending = built.current ?? pending;
+      return built;
+    },
   };
 }

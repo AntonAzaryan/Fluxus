@@ -31,7 +31,7 @@
  * добавил бы второй процесс, ничего не добавив к замеру.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,7 +49,8 @@ const VITE_CONFIG = join(PACKAGE, 'app', 'vite.config.ts');
 if (flag('help')) {
   process.stdout.write(
     'usage: node game/demo-ts/bin/bench-demo.mjs [--profile desktop-dev] [--seconds 20]\n' +
-      '       [--warmup 5] [--headless] [--solo] [--json] [--chrome <path>] [--port 5174]\n',
+      '       [--warmup 5] [--headless] [--solo] [--json] [--chrome <path>] [--port 5174]\n' +
+      '       [--ready-timeout 90] [--cdp-timeout 10]\n',
   );
   process.exit(0);
 }
@@ -58,11 +59,24 @@ const profileArg = option('profile', 'desktop-dev');
 const seconds = Number(option('seconds', '20'));
 const warmupSeconds = Number(option('warmup', '5'));
 const readyTimeoutMs = Number(option('ready-timeout', '90')) * 1000;
+/**
+ * Потолок ожидания ОДНОГО ответа CDP. Молчащий браузер — не редкость (упал
+ * рендерер, застряла вкладка), и без потолка прогон висел бы на нём вечно:
+ * ждать нечего, а `finally` с уборкой временного профиля так и не наступит.
+ * Десять секунд, а не пара: под софтверным GL главный поток страницы умеет
+ * встать на компиляции шейдеров, и обрывать по этому поводу замер было бы
+ * отказом бенча, а не среды.
+ */
+const cdpTimeoutMs = Number(option('cdp-timeout', '10')) * 1000;
 const headless = flag('headless');
 const port = Number(option('port', '5174'));
 
 if (!Number.isFinite(seconds) || seconds <= 0 || !Number.isFinite(warmupSeconds) || warmupSeconds < 0) {
   process.stderr.write('бенч: --seconds должен быть положительным, --warmup — неотрицательным\n');
+  process.exit(2);
+}
+if (!Number.isFinite(cdpTimeoutMs) || cdpTimeoutMs <= 0) {
+  process.stderr.write('бенч: --cdp-timeout должен быть положительным числом секунд\n');
   process.exit(2);
 }
 
@@ -108,6 +122,62 @@ const CHROME_CANDIDATES = [
 const CHROME_NAMES = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'];
 
 /**
+ * Где внутри `chromium-<ревизия>/` лежит сам исполняемый файл — стоковая
+ * раскладка загрузчика Playwright. Список короткий намеренно: бенч ищет то,
+ * что уже установлено, а не поддерживает все раскладки всех загрузчиков.
+ */
+const PLAYWRIGHT_BINARIES = [
+  join('chrome-linux', 'chrome'),
+  join('chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
+];
+
+/** Файл (а не каталог и не оборванная ссылка) — запускать можно только его. */
+function isFile(path) {
+  try {
+    // statSync идёт по символическим ссылкам: `<корень>/chromium` нередко и
+    // есть ссылка на настоящий файл внутри `chromium-<ревизия>/`.
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Chromium в корне браузеров Playwright. Проверок две, и обе нужны:
+ *
+ * - `<корень>/chromium` — раскладка, собранная ссылкой (так устроены образы
+ *   контейнеров). Именно ФАЙЛ: каталогом с таким же именем этот путь бывает
+ *   тоже, и запускать его нечем;
+ * - `<корень>/chromium-<ревизия>/chrome-linux/chrome` (на macOS —
+ *   `chrome-mac/Chromium.app/Contents/MacOS/Chromium`) — стоковая раскладка
+ *   загрузчика, то есть то, что лежит у человека после `npx playwright install`.
+ *
+ * Ревизии перебираются от свежей к старой: последняя установленная — та,
+ * которой человек и пользуется.
+ */
+function playwrightChromium(root) {
+  const direct = join(root, 'chromium');
+  if (isFile(direct)) return direct;
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const revisions = entries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith('chromium-'))
+    .map((entry) => ({ name: entry.name, revision: Number(entry.name.slice('chromium-'.length)) }))
+    .sort((a, b) => (b.revision || 0) - (a.revision || 0));
+  for (const { name } of revisions) {
+    for (const relative of PLAYWRIGHT_BINARIES) {
+      const path = join(root, name, relative);
+      if (isFile(path)) return path;
+    }
+  }
+  return null;
+}
+
+/**
  * Исполняемый файл браузера. Порядок намеренный: явное указание человека →
  * браузеры Playwright, если окружение их уже поставило → канал `chrome`
  * системы. Скачивать бенч не умеет и не должен: установка браузера — дело
@@ -121,8 +191,8 @@ function chromeExecutable() {
   }
   const browsers = process.env.PLAYWRIGHT_BROWSERS_PATH;
   if (browsers !== undefined && browsers !== '') {
-    const path = join(browsers, 'chromium');
-    if (existsSync(path)) return { path, source: 'PLAYWRIGHT_BROWSERS_PATH' };
+    const path = playwrightChromium(browsers);
+    if (path !== null) return { path, source: 'PLAYWRIGHT_BROWSERS_PATH' };
   }
   for (const path of CHROME_CANDIDATES) {
     if (existsSync(path)) return { path, source: 'канал chrome' };
@@ -180,17 +250,25 @@ function devtoolsEndpoint(child, timeoutMs) {
     const timer = setTimeout(() => {
       failed(new Error(`браузер не сообщил адрес CDP за ${timeoutMs} мс:\n${buffer}`));
     }, timeoutMs);
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk) => {
+    // Отказ ЗАПУСКА (файла нет, права не те) приходит событием `error`, а не
+    // кодом выхода, и без подписки на него он был бы необработанным событием
+    // процесса: прогон падал бы мимо `catch`, а с ним — мимо уборки временного
+    // профиля в `finally`.
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      failed(new Error(`браузер "${browser.path}" не запустился: ${error.message}`));
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      failed(new Error(`браузер завершился с кодом ${code}:\n${buffer}`));
+    });
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk) => {
       buffer += chunk;
       const match = /DevTools listening on (ws:\/\/\S+)/.exec(buffer);
       if (match === null) return;
       clearTimeout(timer);
       done(match[1]);
-    });
-    child.once('exit', (code) => {
-      clearTimeout(timer);
-      failed(new Error(`браузер завершился с кодом ${code}:\n${buffer}`));
     });
   });
 }
@@ -201,12 +279,18 @@ function devtoolsEndpoint(child, timeoutMs) {
  * Минимальный клиент CDP: запрос-ответ по id и сбор ошибок страницы.
  * Событий читается ровно два вида — исключение и `console.error`: если probe
  * так и не появился, причина почти всегда в них, и молчать о ней нельзя.
+ *
+ * Ни один запрос не ждёт ответа вечно: у каждого свой потолок времени, а
+ * закрытие сокета отвергает ВСЕ незакрытые разом. Иначе ушедший браузер
+ * оставлял бы бенч висеть на промисе, которому уже некому ответить, — а вместе
+ * с ним и уборку временного профиля.
  */
 async function cdpConnect(endpoint) {
   const socket = new WebSocket(endpoint);
   const pending = new Map();
   const pageErrors = [];
   let nextId = 0;
+  let closed = false;
 
   socket.addEventListener('message', (event) => {
     const message = JSON.parse(event.data);
@@ -228,19 +312,49 @@ async function cdpConnect(endpoint) {
     else entry.done(message.result);
   });
 
+  socket.addEventListener(
+    'close',
+    () => {
+      closed = true;
+      const gone = new Error('CDP: соединение с браузером закрылось — ответа не будет');
+      for (const entry of pending.values()) entry.failed(gone);
+      pending.clear();
+    },
+    { once: true },
+  );
+
   await new Promise((done, failed) => {
     socket.addEventListener('open', () => { done(); }, { once: true });
     socket.addEventListener('error', () => { failed(new Error('CDP: соединение с браузером не открылось')); }, { once: true });
   });
 
-  const send = (method, params = {}, sessionId) =>
+  const send = (method, params = {}, sessionId, timeoutMs = cdpTimeoutMs) =>
     new Promise((done, failed) => {
+      if (closed) {
+        failed(new Error(`CDP: соединение закрыто — "${method}" отправлять некуда`));
+        return;
+      }
       nextId += 1;
       const id = nextId;
-      pending.set(id, { done, failed });
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        failed(new Error(`CDP: ответа на "${method}" нет ${timeoutMs} мс`));
+      }, timeoutMs);
+      // Снятие таймера — на обоих исходах запроса разом: и на ответе, и на
+      // отказе по закрытию сокета.
+      pending.set(id, {
+        done: (result) => { clearTimeout(timer); done(result); },
+        failed: (error) => { clearTimeout(timer); failed(error); },
+      });
       const frame = { id, method, params };
       if (sessionId !== undefined) frame.sessionId = sessionId;
-      socket.send(JSON.stringify(frame));
+      try {
+        socket.send(JSON.stringify(frame));
+      } catch (error) {
+        clearTimeout(timer);
+        pending.delete(id);
+        failed(new Error(`CDP: запрос "${method}" не ушёл: ${error.message}`));
+      }
     });
 
   return { send, pageErrors, close: () => { socket.close(); } };
@@ -253,12 +367,17 @@ const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 /** Число в миллисекундах с фиксированной шириной — колонки обязаны читаться. */
 const ms = (value) => `${value.toFixed(2)} мс`;
 
-/** Подписи строк отчёта: ключ probe → то, как стадия зовётся человеку. */
+/**
+ * Подписи строк отчёта: ключ probe → то, как стадия зовётся человеку. Подпись
+ * `present` называет ровно то, что измерено, — покадровое обновление
+ * подсистем: приём доставки (`syncTick`) идёт между кадрами и в стадию не
+ * входит (см. сноску отчёта и шапку `app/benchProbe.ts`).
+ */
 const LINE_LABELS = {
   frame: 'кадр целиком',
   input: 'ввод и прицел',
   camera: 'камера',
-  present: 'доставка+кадр',
+  present: 'кадр подсистем',
   draw: 'рисование',
 };
 
@@ -316,6 +435,17 @@ function printReport(summary, pageUrl) {
   out.push(
     `  ${'разрыв тика'.padEnd(16)}${ms(summary.ticks.gapMs.p50).padEnd(12)}` +
       `${ms(summary.ticks.gapMs.p99).padEnd(12)}${'—'.padEnd(22)}каденс доставки`,
+  );
+  out.push('');
+  // Что именно измерено — частью отчёта, а не знанием читателя: стадии PERF-2
+  // покрыты браузерным замером не целиком, и молчать об этом значит выдавать
+  // «кадр в бюджете» за «бюджет сходится весь».
+  out.push(
+    '  измерено напрямую: стадии кадра главного потока — ввод, камера, кадр подсистем,\n' +
+      '  рисование; каденс доставки выведен пассивно (строка «разрыв тика»). Приём доставки\n' +
+      '  (syncTick) идёт МЕЖДУ кадрами и ни в одну стадию не входит, тик симуляции живёт в\n' +
+      '  воркере: их стоимость раскладывают детерминированные счётчики и голден-гейт\n' +
+      '  (PERF-3, PERF-4), а не этот замер.',
   );
   out.push('');
   out.push(
@@ -395,16 +525,27 @@ try {
     ' return p === undefined ? null : { version: p.version, frames: p.frames() }; })()';
   const deadline = Date.now() + readyTimeoutMs;
   let ready = null;
+  let lastPollError = null;
   while (Date.now() < deadline) {
-    ready = await evaluate(probeState);
+    try {
+      ready = await evaluate(probeState);
+    } catch (error) {
+      // Молчание страницы на ОДНОМ опросе — ещё не отказ: главный поток мог
+      // встать на загрузке ассетов или компиляции шейдеров. Бюджет ожидания
+      // здесь свой (`--ready-timeout`), и тратится он целиком, а причина
+      // последнего молчания попадает в отказ, если бюджет так и не хватит.
+      lastPollError = error;
+      ready = null;
+    }
     if (ready !== null && ready.frames > 0) break;
     ready = null;
     await sleep(250);
   }
   if (ready === null) {
     const said = cdp.pageErrors.length === 0 ? '' : `\n  страница сказала:\n  ${cdp.pageErrors.join('\n  ')}`;
+    const silent = lastPollError === null ? '' : `\n  последний опрос: ${lastPollError.message}`;
     throw new Error(
-      `probe страницы не отчитался за ${readyTimeoutMs / 1000} с — матч не пошёл или probe не включился${said}`,
+      `probe страницы не отчитался за ${readyTimeoutMs / 1000} с — матч не пошёл или probe не включился${silent}${said}`,
     );
   }
   if (ready.version !== BENCH_PROBE_VERSION) {
@@ -427,9 +568,13 @@ try {
   process.exitCode = 1;
 } finally {
   try {
-    await cdp?.send('Browser.close');
+    // Вежливое закрытие — попытка, а не обязательство: ответа на него может не
+    // прийти вовсе (браузер уходит, не договорив), и ждать его дольше пары
+    // секунд нельзя — следом идёт уборка временного профиля, а её пропускать не
+    // за чем. Не ответил — добьём сигналом ниже.
+    await cdp?.send('Browser.close', {}, undefined, 2000);
   } catch {
-    // Браузер мог уже уйти — закрывать нечего.
+    // Браузер мог уже уйти либо промолчать — закрывать нечего.
   }
   cdp?.close();
   child?.kill();

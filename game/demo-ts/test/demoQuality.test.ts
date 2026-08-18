@@ -37,6 +37,7 @@ import {
   QUALITY_PRESET_NAMES,
   QUALITY_STORAGE_KEY,
   createDemoQuality,
+  createQualitySelection,
   qualityPresetName,
   qualityStorageOf,
   rememberQualityPreset,
@@ -76,14 +77,17 @@ interface DemoRig {
  * `fog: false` — сцена без тумана (`SceneDef.fog !== true`): подсистемы тумана
  * в ней нет, и её ручки реестр не объявляет.
  */
-function demoRig(options: { readonly fog?: boolean } = {}): DemoRig {
-  const empty: VisualManifest = { entities: {} };
-  const context: RenderContext = {
+function demoContext(): RenderContext {
+  return {
     scene: new THREE.Scene(),
     assets: {} as unknown as AssetService,
     config: { heightStep: 0.6 },
   };
-  const stage = new PresentationStage(context);
+}
+
+function demoRig(options: { readonly fog?: boolean } = {}): DemoRig {
+  const empty: VisualManifest = { entities: {} };
+  const stage = new PresentationStage(demoContext());
   const grid = flatGrid();
   stage.register(new TerrainSubsystem(grid));
   stage.register(new ModelsSubsystem(empty, { warn: () => {} }));
@@ -98,6 +102,18 @@ function demoRig(options: { readonly fog?: boolean } = {}): DemoRig {
   });
   stage.register(fog);
   return { stage, fog };
+}
+
+/**
+ * Сцена, у которой нет ни моделей, ни частиц: их ручек реестр не объявляет, и
+ * неприменимы ЦЕЛИКОМ оба документа — и `performance`, и запасной `balanced`
+ * (QUAL-1). На сцене демо такого не бывает; форма заведена ради контракта —
+ * что контроллер называет действующим, когда применить нечего.
+ */
+function bareStage(): PresentationStage {
+  const stage = new PresentationStage(demoContext());
+  stage.register(new TerrainSubsystem(flatGrid()));
+  return stage;
 }
 
 /** Действующие значения ручек как обычный объект — так их удобно сравнивать. */
@@ -309,5 +325,71 @@ describe('контроллер качества демо (QUAL-1, design D2)', (
     // Остальные документы отказ соседа не задевает.
     expect(quality.select('ultra')).toBe('ultra');
     expect(quality.select('performance')).toBe('balanced');
+  });
+
+  it('отвергнуты и выбранный, и запасной — действующего пресета НЕТ, а не «balanced»', () => {
+    // Сцена без моделей и частиц: их ручек реестр не объявлял, и применить
+    // нечего — ни выбранный документ, ни запасной.
+    const said: string[] = [];
+
+    const quality = createDemoQuality(bareStage(), {
+      preset: 'performance',
+      warn: (message) => said.push(message),
+    });
+
+    // `null`, а не имя запасного: документа `balanced` контроллер не получал, и
+    // назвать его действующим значило бы соврать переключателю — тому самому,
+    // который обязан показывать применённое. Совпадение сегодняшних умолчаний
+    // движка с этим документом — свойство документа, а не обещание.
+    expect(quality.current).toBeNull();
+    expect(said.some((message) => message.includes('применить нечем'))).toBe(true);
+    // Прямой выбор запасного — тот же отказ, и действующего по-прежнему нет.
+    expect(quality.select('balanced')).toBeNull();
+    expect(quality.current).toBeNull();
+  });
+});
+
+describe('выбор, сделанный до сборки сцены, доживает до неё (design D2, D4)', () => {
+  it('переключение во время загрузки применяет сборка, а не откатывает стартовым', () => {
+    const rig = demoRig();
+    // Страница поднялась с запомненным `balanced` и грузит манифест, парный
+    // документ и ассеты — секунды, за которые человек успевает выбрать уровень.
+    const selection = createQualitySelection('balanced');
+
+    // Контроллера ещё нет: применять значения ручек не к чему, выбор ждёт.
+    expect(selection.choose('performance')).toBe('performance');
+    expect(selection.pending).toBe('performance');
+
+    const quality = selection.attach((preset) => createDemoQuality(rig.stage, { preset }));
+
+    // Сцена собрана ДЕЙСТВУЮЩИМ выбором: соберись она стартовым — переключатель
+    // снапнуло бы назад на `balanced`, отменив уже сделанный выбор молча.
+    expect(quality.current).toBe('performance');
+    expect(selection.pending).toBe('performance');
+    expect(rig.fog?.config.resolution).toBe(QUALITY_PRESETS.performance['fog.maskResolution']);
+  });
+
+  it('после сборки выбор идёт контроллером — живыми подсистемами', () => {
+    const rig = demoRig();
+    const selection = createQualitySelection('performance');
+    selection.attach((preset) => createDemoQuality(rig.stage, { preset }));
+
+    expect(selection.choose('balanced')).toBe('balanced');
+
+    expect(selection.pending).toBe('balanced');
+    expect(rig.fog?.config.resolution).toBe(SCENE_FOG.resolution);
+  });
+
+  it('показывается применённое: отвергнутый документ уводит сборку на запасной', () => {
+    // Сцена без тумана: `performance` неприменим целиком (QUAL-1).
+    const rig = demoRig({ fog: false });
+    const selection = createQualitySelection('performance');
+
+    const quality = selection.attach((preset) =>
+      createDemoQuality(rig.stage, { preset, warn: () => {} }),
+    );
+
+    expect(quality.current).toBe('balanced');
+    expect(selection.pending).toBe('balanced');
   });
 });
