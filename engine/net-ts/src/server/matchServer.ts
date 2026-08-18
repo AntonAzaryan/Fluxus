@@ -37,6 +37,7 @@ import {
 } from '@game-mvp/core';
 import { BranchHistory, type MatchHistory } from '../match/history.js';
 import { firstRewindRequest } from '../match/rewindRequest.js';
+import type { MatchTrace } from '../match/trace.js';
 import { buildMatchWorld } from '../match/world.js';
 import { createServerMetrics, type ServerMetrics } from '../metrics.js';
 import type { ConnectionId } from '../transport/transport.js';
@@ -128,6 +129,20 @@ export interface MatchConfig {
    */
   readonly eventVisibility?: EventVisibility;
   readonly observers?: readonly TickObserver[];
+  /**
+   * Трейс матча (DIAG-8): sink симуляции и приёмник отметок ветви истории
+   * (DIAG-9) одним объектом. Необязателен, и по умолчанию его нет — матч без
+   * него идёт ровно так же, как шёл до появления поля.
+   *
+   * Ввода-вывода сервер от этого не приобретает (NTR-3): строку пишет функция,
+   * инъектированная хостом при сборке трейса (`createMatchTrace`), а сервер
+   * лишь передаёт sink в сборку мира и зовёт отметки на границах, которые знает
+   * только он.
+   *
+   * В документ записи матча поле не попадает: состав `toScenario()` перечислен
+   * там поимённо, и отладочные поля конфига в запись не входят (CLI-11).
+   */
+  readonly trace?: MatchTrace;
 }
 
 /** Настройки истории матча (SNAP-3, SNAP-4) плюс поля вне отката (REW-9). */
@@ -432,6 +447,7 @@ export class MatchServer {
       ...(config.physics !== undefined ? { physics: config.physics } : {}),
       ...(config.locomotion !== undefined ? { locomotion: config.locomotion } : {}),
       ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+      ...(config.trace !== undefined ? { diagnostics: config.trace.sink } : {}),
     });
     this.sim = built.sim;
     this.state = built.state;
@@ -770,6 +786,11 @@ export class MatchServer {
     this.segmentOfEpoch().frames.push(...frames);
     this.inputLog?.record(tick, frames);
 
+    // Отметка ветви — ПЕРЕД исполнением (DIAG-9): записи тика поедут в тот же
+    // поток следом, и читатель отнесёт их к названной здесь эпохе, не забегая
+    // вперёд. Эпоха матча — понятие сетевого слоя, полем записи ядра ей стать
+    // нельзя (DI-6), поэтому она и приезжает отдельной строкой.
+    this.config.trace?.mark({ mark: 'live', epoch: this.currentEpoch, tick });
     const result = advanceTick(this.sim, this.state, frames);
     dispatch(result, this.config.observers ?? []);
     this.history?.record(this.state);
@@ -1304,7 +1325,17 @@ export class MatchServer {
         `MatchServer.seekTo: точка остановки ${tick} впереди исполненного тика ${this.liveFrontier} (REW-7)`,
       );
     }
+    // Реплей внутри `seekTo` переисполняет уже отчитанные тики (REW-4, WSM-6),
+    // и его записи идут по тем же номерам, что записи живой ветви. Отметки
+    // вокруг него ставит сервер, потому что границы вызова видны только ему:
+    // запускалка не заглядывает внутрь `advance()`, и отметка после него
+    // относила бы к ветви уже вытекшие строки (DIAG-9).
+    //
+    // Эпоха здесь — ещё ПРЕЖНЯЯ: переисполняются тики той ветви, которая
+    // сейчас идёт; новую заведёт рассылка восстановленного состояния ниже.
+    this.config.trace?.mark({ mark: 'replayBegin', epoch: this.currentEpoch, tick });
     controller.seekTo(tick);
+    this.config.trace?.mark({ mark: 'replayEnd', epoch: this.currentEpoch, tick });
     // Ветвь, которую перемотка стёрла, уходит из истории здесь же: живые тики
     // новой эпохи пойдут по тем же номерам, и без обрезки в буфере оказались бы
     // два снапшота одного тика — см. `BranchHistory`.

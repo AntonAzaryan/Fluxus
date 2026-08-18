@@ -69,6 +69,8 @@ export { BranchHistory } from './match/history.js';
 export type { MatchHistory } from './match/history.js';
 export { firstRewindRequest, REWIND_REQUEST_EVENT } from './match/rewindRequest.js';
 export type { RewindRequest } from './match/rewindRequest.js';
+export { createMatchTrace } from './match/trace.js';
+export type { MatchTrace, MatchTraceMark, MatchTraceMarkKind, TraceSelect } from './match/trace.js';
 export { replaySegments } from './match/replay.js';
 export type {
   ReplaySegment,
