@@ -1,7 +1,7 @@
 {
   "tick": {
     "broadPhasePairs": 0,
-    "commands": 284,
+    "commandsApplied": 284,
     "expressions": 224,
     "raycasts": 0,
     "ticks": 16

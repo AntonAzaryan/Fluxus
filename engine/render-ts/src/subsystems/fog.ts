@@ -364,6 +364,9 @@ export class FogSubsystem implements RenderSubsystem {
     this.maskTexture.needsUpdate = true;
     // Байт на тексель (RedFormat, UnsignedByteType): весь растр уезжает в
     // текстуру на каждой доставке — цена разрешения маски, а не наблюдателей.
+    // Точка счёта ОДНА на загрузку и живёт здесь, у поднятого флага версии:
+    // создание текстуры (`createMaskTexture`) своего трафика не имеет — три
+    // сливает его флаг с этим в одну загрузку.
     if (cost !== undefined) cost.fogMaskUploadBytes += this.mask.data.length;
     this.blitLayer();
   }
@@ -557,9 +560,11 @@ function createMaskTexture(mask: VisibilityMask): THREE.DataTexture {
   // читался бы со сдвигом (правило распаковки GL, дефолт — 4).
   texture.unpackAlignment = 1;
   texture.needsUpdate = true;
-  // Разовая загрузка при создании текстуры — такой же трафик, как обновление
-  // на доставке, и в счётчик входит наравне с ним (PERF-3).
-  const cost = costSink();
-  if (cost !== undefined) cost.fogMaskUploadBytes += mask.data.length;
+  // Счётчика здесь нет намеренно (PERF-3). Создание текстуры трафика не
+  // порождает: three грузит растр на GPU по ВЕРСИИ, поднятой `needsUpdate`, и
+  // взведённый здесь флаг сливается с флагом ближайшей доставки в одну
+  // загрузку. Считать её дважды — приписать пустой байт: и на первой доставке,
+  // и на смене разрешения (там маска пересобирается и `built` сбрасывается)
+  // счёт снимает единственное место — `syncTick`, у самой загрузки.
   return texture;
 }

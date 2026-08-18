@@ -240,18 +240,27 @@ export class QualityController {
           'константность стоимости объявляется явно (QUAL-3)',
       );
     }
+    // Декларация принимается ЦЕЛИКОМ или не принимается вовсе: до всех проверок
+    // ручки копятся в локальной карте и в реестр не попадают. Иначе отказ на
+    // второй ручке оставлял бы первую в реестре — ручку подсистемы, которой в
+    // сцене нет, потому что её регистрация оборвалась исключением. Такая ручка
+    // не досталась бы никому (в `attached` пары нет) и при этом закрывала бы
+    // своё имя от следующего владельца.
+    const declared = new Map<string, QualityKnob>();
     const errors: string[] = [];
     for (const knob of declaration.knobs) {
       if (!knob.name.startsWith(`${owner}.`)) {
         errors.push(`ручка "${knob.name}" не в неймспейсе подсистемы "${owner}" (ожидалось "${owner}.<имя>")`);
         continue;
       }
-      const clash = this.registry.get(knob.name);
-      if (clash !== undefined) {
+      // Столкновение — и с уже собранным реестром, и с соседней ручкой той же
+      // декларации: два владельца одного имени внутри одной подсистемы — тот же
+      // дефект, что и между подсистемами.
+      if (this.registry.has(knob.name) || declared.has(knob.name)) {
         errors.push(`ручка "${knob.name}" уже объявлена — двух владельцев у оси стоимости не бывает`);
         continue;
       }
-      this.registry.set(knob.name, knob);
+      declared.set(knob.name, knob);
     }
     if (errors.length > 0) throw new Error(refusal(errors));
     // Значения документа, относящиеся к только что объявленным ручкам, до этой
@@ -259,6 +268,8 @@ export class QualityController {
     const values: string[] = [];
     checkKnown(this.document, declaration.knobs, values);
     if (values.length > 0) throw new Error(refusal(values));
+    // Все проверки прошли — только теперь декларация въезжает в реестр.
+    for (const [name, knob] of declared) this.registry.set(name, knob);
   }
 
   /**

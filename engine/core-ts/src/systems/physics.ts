@@ -410,8 +410,15 @@ export class PhysicsSystem implements System {
         if (this.physicsWorld.queryByLayer(executed, hitMask).length > 0) {
           ctx.events.emit('Overlap', { entity: mover, other: STATIC_COLLIDER });
         }
+        // Динамика индекса не имеет, и её обход — тот же объём работы
+        // broad-phase, что и обход клеток у статики (PERF-3). Считается в
+        // локальную переменную, а сумма уходит наружу один раз на движущегося:
+        // в цикле — ровно одно целочисленное сложение. Кандидат, отсеянный
+        // маской, тоже кандидат: работа по его осмотру уже сделана.
+        let pairs = 0;
         for (const other of obstacles) {
           if (other === mover) continue;
+          pairs++;
           if ((ctx.get(other, this.colliderComponent, 'layer') & hitMask) === 0) continue;
           const position = positionOf(other);
           const otherCollider = colliderOf(ctx.get, other, this.colliderComponent);
@@ -419,6 +426,7 @@ export class PhysicsSystem implements System {
             ctx.events.emit('Overlap', { entity: mover, other });
           }
         }
+        countCostBroadPhase(pairs);
       }
 
       if (x !== from.x || y !== from.y) {
@@ -467,8 +475,14 @@ export class PhysicsSystem implements System {
       this.blocker.centerY = 0;
       copyBounds(this.blocker.bounds, s);
     }
+    // Кандидаты динамики — тот же объём работы broad-phase, что и кандидаты,
+    // осмотренные обходом клеток внутри `queryByLayer` выше (PERF-3): счёт идёт
+    // в локальную переменную, наружу уходит одной суммой на шаг оси. Кандидат,
+    // отсеянный маской, из счёта не выпадает — его осмотр уже состоялся.
+    let pairs = 0;
     for (const other of obstacles) {
       if (other === mover) continue;
+      pairs++;
       if ((ctx.get(other, this.colliderComponent, 'layer') & blockMask) === 0) continue;
       // Позиция читается без объекта-обёртки: уже разрешённый сосед отдаёт
       // свою (Command Buffer вливается только в конце системы), остальные —
@@ -490,6 +504,7 @@ export class PhysicsSystem implements System {
       // Копия, а не ссылка: буфер кандидата перезапишет следующий претендент.
       copyBounds(this.blocker.bounds, this.candidateBounds);
     }
+    countCostBroadPhase(pairs);
     return found;
   }
 }

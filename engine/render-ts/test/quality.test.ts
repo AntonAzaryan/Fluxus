@@ -40,6 +40,7 @@ import {
   VisualSurfaceSource,
   validateQualityPreset,
   type QualityDeclaration,
+  type QualityKnob,
   type QualityValues,
   type RenderContext,
   type RenderSubsystem,
@@ -100,6 +101,35 @@ function probe(name: string, knob: string, fallback: number): Probe {
 
 function makeStage(): PresentationStage {
   return new PresentationStage(makeRenderContext());
+}
+
+/**
+ * Реестр, собранный из деклараций РЕАЛЬНЫХ подсистем сцены игрового клиента
+ * (design D1). Диапазоны, умолчания и перечни тесты берут ЗДЕСЬ, а не из копии
+ * объявлений рядом: копия расходится с кодом молча, и первое же расхождение
+ * обесценивает проверку, ради которой её и заводили.
+ */
+function sceneKnobs(): readonly QualityKnob[] {
+  const assets = makeAssets();
+  const ctx: RenderContext = {
+    scene: new THREE.Scene(),
+    assets: assets.service,
+    config: { heightStep: 0.5 },
+  };
+  const grid = flatGrid();
+  const stage = new PresentationStage(ctx)
+    .register(new TerrainSubsystem(grid))
+    .register(new ModelsSubsystem({ entities: {} }, { warn: () => {} }))
+    .register(new EffectsSubsystem({ entities: {} }, { warn: () => {} }))
+    .register(new ParticlesSubsystem({ entities: {} }, { warn: () => {} }))
+    .register(
+      new FogSubsystem({
+        grid,
+        stats: { visionRadius: 'vision', team: 'team' },
+        hero: () => null,
+      }),
+    );
+  return new QualityController(stage).knobs;
 }
 
 // ------------------------------------------- 1.2: контроллер и раздача
@@ -227,28 +257,56 @@ describe('QualityController: дисциплина деклараций (QUAL-1, 
       stage.register(new Probe({ subsystem: 'twin', knobs: [knob] }));
     }).toThrow(/уже объявлена/);
   });
+
+  it('отвергнутая декларация не оставляет в реестре ни одной своей ручки', () => {
+    const stage = makeStage();
+    const controller = new QualityController(stage);
+
+    expect(() => {
+      stage.register(
+        new Probe({
+          subsystem: 'half',
+          knobs: [
+            { name: 'half.good', cost: 'ось', semantics: 'value', default: 1 },
+            { name: 'stranger.lever', cost: 'ось', semantics: 'value', default: 1 },
+          ],
+        }),
+      );
+    }).toThrow(/не в неймспейсе подсистемы "half"/);
+
+    // Декларация принимается целиком или не принимается вовсе: годная ручка
+    // отвергнутой подсистемы в реестре не остаётся. Иначе она закрывала бы своё
+    // имя от следующего владельца, не достаясь при этом никому — доставки
+    // значений у неё нет, подсистема в сцену не вошла.
+    expect(controller.knobs).toEqual([]);
+
+    stage.register(
+      new Probe({
+        subsystem: 'half',
+        knobs: [{ name: 'half.good', cost: 'ось', semantics: 'value', default: 2 }],
+      }),
+    );
+    expect(controller.knobs.map((knob) => knob.name)).toEqual(['half.good']);
+  });
+
+  it('две ручки одного имени внутри ОДНОЙ декларации — тот же отказ', () => {
+    const stage = makeStage();
+    const knob = { name: 'solo.lever', cost: 'ось', semantics: 'value', default: 1 } as const;
+    const controller = new QualityController(stage);
+
+    expect(() => {
+      stage.register(new Probe({ subsystem: 'solo', knobs: [knob, knob] }));
+    }).toThrow(/уже объявлена/);
+    expect(controller.knobs).toEqual([]);
+  });
 });
 
 // ------------------------------------------------- 1.3: валидация документа
 
 describe('валидация документа пресета против реестра (QUAL-1)', () => {
-  const knobs = [
-    {
-      name: 'fog.maskResolution',
-      cost: 'тексели маски',
-      semantics: 'ceiling' as const,
-      default: Number.POSITIVE_INFINITY,
-      min: 0.5,
-      max: 32,
-    },
-    {
-      name: 'models.defaultTier',
-      cost: 'носитель инстанса',
-      semantics: 'value' as const,
-      default: 'batched',
-      values: ['batched', 'detailed'],
-    },
-  ];
+  // Реестр настоящий: границы, на которые ссылаются отказы ниже, — те самые,
+  // что объявляют подсистемы, а не переписанные в тест от руки.
+  const knobs = sceneKnobs();
 
   it('неизвестная ручка отвергается адресно — с её именем, а не молчаливым пропуском', () => {
     const result = validateQualityPreset({ 'fog.maskResolutoin': 4 }, knobs);
@@ -738,30 +796,9 @@ describe('константная стоимость объявляется яв�
   });
 
   it('реестр сцены игрового клиента собирается из деклараций всех подсистем', () => {
-    const assets = makeAssets();
-    const ctx: RenderContext = {
-      scene: new THREE.Scene(),
-      assets: assets.service,
-      config: { heightStep: 0.5 },
-    };
-    const stage = new PresentationStage(ctx);
-    const grid = flatGrid();
-    stage
-      .register(new TerrainSubsystem(grid))
-      .register(new ModelsSubsystem({ entities: {} }, { warn: () => {} }))
-      .register(new EffectsSubsystem({ entities: {} }, { warn: () => {} }))
-      .register(new ParticlesSubsystem({ entities: {} }, { warn: () => {} }))
-      .register(
-        new FogSubsystem({
-          grid,
-          stats: { visionRadius: 'vision', team: 'team' },
-          hero: () => null,
-        }),
-      );
+    const knobs = sceneKnobs();
 
-    const controller = new QualityController(stage);
-
-    expect(controller.knobs.map((knob) => knob.name).sort()).toEqual([
+    expect(knobs.map((knob) => knob.name).sort()).toEqual([
       'fog.maskResolution',
       'models.defaultTier',
       'models.lodThresholdScale',
@@ -769,9 +806,74 @@ describe('константная стоимость объявляется яв�
       'terrain.curvatureTessellation',
     ]);
     // Каждая ручка называет свою стоимостную ось и семантику (QUAL-1).
-    for (const knob of controller.knobs) {
+    for (const knob of knobs) {
       expect(knob.cost.length).toBeGreaterThan(0);
       expect(['ceiling', 'value']).toContain(knob.semantics);
     }
+  });
+
+  it('границы и умолчания ручек сцены закреплены поимённо (QUAL-1)', () => {
+    // Не «диапазон непуст», а ТОЧНЫЕ значения: диапазон — публичный контракт
+    // документа пресета (его печатает отказ валидации), и молча съехать он не
+    // вправе. Таблица снимается с собранного реестра, поэтому расхождение с
+    // объявлением подсистемы невозможно — ронять её будет правка кода.
+    const declared = new Map(sceneKnobs().map((knob) => [knob.name, knob]));
+    const shape = (name: string): Record<string, unknown> => {
+      const knob = declared.get(name);
+      if (knob === undefined) throw new Error(`ручка ${name} реестром не объявлена`);
+      return {
+        semantics: knob.semantics,
+        default: knob.default,
+        min: knob.min,
+        max: knob.max,
+        values: knob.values,
+      };
+    };
+
+    // Потолки: умолчание — «потолка нет», действует авторское значение
+    // (FOW-10, REND-9), а диапазон описывает то, что вправе написать автор
+    // пресета.
+    expect(shape('fog.maskResolution')).toEqual({
+      semantics: 'ceiling',
+      default: Number.POSITIVE_INFINITY,
+      min: 0.5,
+      max: 32,
+      values: undefined,
+    });
+    expect(shape('terrain.curvatureTessellation')).toEqual({
+      semantics: 'ceiling',
+      default: Number.POSITIVE_INFINITY,
+      min: 1,
+      max: 16,
+      values: undefined,
+    });
+
+    // Множитель порогов LOD — только ВВЕРХ от единицы: пресет вправе удешевить
+    // картинку, но не обогатить её сверх порогов автора записи (ASSET-13,
+    // REND-22) — то же одностороннее ограничение, что у потолков выше.
+    expect(shape('models.lodThresholdScale')).toEqual({
+      semantics: 'value',
+      default: 1,
+      min: 1,
+      max: 8,
+      values: undefined,
+    });
+
+    expect(shape('particles.density')).toEqual({
+      semantics: 'value',
+      default: 1,
+      min: 0,
+      max: 4,
+      values: undefined,
+    });
+
+    // Закрытый перечень вместо диапазона: ярус — не число.
+    expect(shape('models.defaultTier')).toEqual({
+      semantics: 'value',
+      default: 'batched',
+      min: undefined,
+      max: undefined,
+      values: ['batched', 'detailed'],
+    });
   });
 });

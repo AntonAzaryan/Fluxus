@@ -73,14 +73,14 @@ type StageCost = Record<string, number>;
  */
 interface TickCost extends StageCost {
   broadPhasePairs: number;
-  commands: number;
+  commandsApplied: number;
   expressions: number;
   raycasts: number;
   ticks: number;
 }
 
 function tickCostCollector(): { readonly sink: DiagnosticsSink; readonly total: TickCost } {
-  const total: TickCost = { broadPhasePairs: 0, commands: 0, expressions: 0, raycasts: 0, ticks: 0 };
+  const total: TickCost = { broadPhasePairs: 0, commandsApplied: 0, expressions: 0, raycasts: 0, ticks: 0 };
   const sink: DiagnosticsSink = {
     // Границы систем достаточно: сводка стоимости — штатная телеметрия DIAG-3,
     // полного потока команд ей не нужно, а он стоил бы прогону на порядок.
@@ -91,7 +91,7 @@ function tickCostCollector(): { readonly sink: DiagnosticsSink; readonly total: 
       // Данные записи объявлены как «число или строка» (DIAG-2); счётчики
       // стоимости — всегда числа, и `Number` здесь только сужает тип.
       total.broadPhasePairs += Number(entry.data?.broadPhasePairs ?? 0);
-      total.commands += Number(entry.data?.commands ?? 0);
+      total.commandsApplied += Number(entry.data?.commandsApplied ?? 0);
       total.expressions += Number(entry.data?.expressions ?? 0);
       total.raycasts += Number(entry.data?.raycasts ?? 0);
     },
@@ -135,9 +135,10 @@ interface MatchRun {
  * тик кормит и сводку ядра, и презентационный тракт — иначе стадии считались бы
  * на разных мирах.
  *
- * Стенд строится ДО подключения стока: разовая загрузка маски в текстуру при
- * создании подсистемы (и её пересборка под потолком пресета) — стоимость
- * сборки, а не доставки, и в эталон стадии `syncTick` ей входить незачем.
+ * Стенд строится ДО подключения стока: работа сборки подсистем (и пересборка
+ * маски под потолком пресета) — стоимость сборки, а не доставки, и в эталон
+ * стадии `syncTick` ей входить незачем; сам аплоад маски считается один раз
+ * на фактическую загрузку — на первой доставке.
  */
 function runMatch(name: string, preset: BenchPresetName): MatchRun {
   const def = loadRecording(name);

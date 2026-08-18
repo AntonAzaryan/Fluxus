@@ -253,6 +253,27 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
     expect(four.fogMaskUploadBytes).toBe(one.fogMaskUploadBytes);
   });
 
+  it('загрузка в текстуру считается ровно один раз на доставку', () => {
+    const counters = createCostCounters();
+    const stand = withCostSink(counters, () => {
+      // Стенд строится ПОД замером: создание текстуры своего трафика не имеет.
+      // Три грузит растр по ВЕРСИИ, и флаг, поднятый при создании, сливается с
+      // флагом ближайшей доставки в одну-единственную загрузку — второй счёт
+      // приписал бы байты, которых по шине не было.
+      const created = fogStand({ resolution: 4 });
+      expect(counters.fogMaskUploadBytes).toBe(0);
+      created.fog.syncTick(created.view);
+      return created;
+    });
+    expect(counters.fogMaskUploadBytes).toBe(32 * 32);
+
+    // Вторая доставка — второй растр той же длины, ни больше ни меньше.
+    withCostSink(counters, () => {
+      stand.fog.syncTick(stand.view);
+    });
+    expect(counters.fogMaskUploadBytes).toBe(2 * 32 * 32);
+  });
+
   it('число сегментов укрытий: отбор и тесты субсэмплов растут вместе с ним', () => {
     const bare = deliverCost({ vision: 4, observers: [[4, 4]] });
     const few = deliverCost({ vision: 4, observers: [[4, 4]], pillarStep: 4 });

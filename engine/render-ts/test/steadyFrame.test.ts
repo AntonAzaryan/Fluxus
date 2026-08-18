@@ -247,7 +247,8 @@ describe('кадровые буферы переиспользуются меж�
     const poseArray = pose.array;
     // Диапазон заливки снимается ПОСЛЕ первого кадра стенда: компактация уже
     // прошла, и запись в `updateRanges` лежит.
-    const range = matrix.updateRanges[0]!;
+    const matrixRange = matrix.updateRanges[0]!;
+    const poseRange = pose.updateRanges[0]!;
 
     for (let i = 0; i < FRAMES; i++) stand.stage.frame(DT, ALPHA);
 
@@ -258,10 +259,54 @@ describe('кадровые буферы переиспользуются меж�
     expect(pose.array).toBe(poseArray);
     // Диапазон заливки — ОДНА долгоживущая запись на атрибут: `addUpdateRange`
     // three заводит новый `{ start, count }` на каждый вызов, то есть по два
-    // объекта на набор буферов каждого уровня КАЖДЫЙ кадр.
+    // объекта на набор буферов каждого уровня КАЖДЫЙ кадр. Проверяется
+    // ИДЕНТИЧНОСТЬ записи, а не её число: длина 1 сошлась бы и у кадра,
+    // который очищает список и кладёт в него свежий объект.
     expect(matrix.updateRanges).toHaveLength(1);
-    expect(matrix.updateRanges[0]).toBe(range);
+    expect(matrix.updateRanges[0]).toBe(matrixRange);
     expect(pose.updateRanges).toHaveLength(1);
+    expect(pose.updateRanges[0]).toBe(poseRange);
+  });
+
+  it('модели: доигравшие fade снимаются обходом значений, а не пар (FOW-8)', () => {
+    const stand = steadyStand();
+    stand.stage.frame(DT, ALPHA);
+
+    // Обход набора инстансов с деструктуризацией пары завёл бы массив на КАЖДЫЙ
+    // инстанс каждого кадра. Наружу этот обход не виден, и берётся тот же приём,
+    // что у спая раскладки таблицы ролей ниже: спай на самом источнике пар.
+    // `Map.prototype.entries` внутри окна взяться может только из кадрового кода
+    // рендера — сторонних библиотек на этом пути нет.
+    const entries = vi.spyOn(Map.prototype, 'entries');
+    let calls = -1;
+    try {
+      for (let i = 0; i < FRAMES; i++) stand.stage.frame(DT, ALPHA);
+      calls = entries.mock.calls.length;
+    } finally {
+      entries.mockRestore();
+    }
+    // Счёт снимается ДО снятия спая, а сверяется после: сам `expect` не должен
+    // попасть в окно наблюдения.
+    expect(calls).toBe(0);
+  });
+
+  it('метрика экранного размера камеры пишется в долгоживущую запись (REND-22)', () => {
+    // Запись `ScreenScale` наружу не видна вовсе: `screenScaleOf` пишет в
+    // приватное поле подсистемы и возвращает его же, а публичного шва у метрики
+    // нет. Наблюдаемого заменителя тоже нет — счётчика аллокаций у прогона не
+    // существует, а спай сюда не дотягивается (литерал объекта ничего из
+    // прототипов не зовёт). Контортить ради теста публичный API подсистемы
+    // дороже, чем стеречь это место ревью, поэтому здесь проверяется соседнее
+    // наблюдаемое: кадр не пересоздаёт то, что от метрики зависит, — уровень
+    // детализации инстансов установившейся сцены не дёргается.
+    const stand = steadyStand();
+    const levels = (): number[] =>
+      [1, 2, 3].map((id) => stand.models.instanceFor(id)?.lodLevel ?? -1);
+    const first = levels();
+
+    for (let i = 0; i < FRAMES; i++) stand.stage.frame(DT, ALPHA);
+
+    expect(levels()).toEqual(first);
   });
 
   it('модели: публичный вид инстанса и его поза — те же объекты (REND-3, REND-17)', () => {
