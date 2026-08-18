@@ -5,9 +5,10 @@
  * ## Что это
  *
  * Плоская структура именованных счётчиков объёма работы: сколько текселей маски
- * просмотрено, сколько тестов «субсэмпл × отрезок» выполнено, сколько байтов
- * ушло в текстуру, сколько инстансов тронуто на доставке и в кадре. Единицы —
- * машинно-независимые (PERF-3): на одной и той же нагрузке значения совпадают
+ * просмотрено, сколько тестов «луч бина × отрезок» выполнила полярная
+ * растеризация теней, сколько байтов ушло в текстуру, сколько инстансов тронуто
+ * на доставке и в кадре. Единицы — машинно-независимые
+ * (PERF-3): на одной и той же нагрузке значения совпадают
  * побитово на любой машине, потому что ни времени, ни случайности в них нет.
  * Времени здесь не место и по конструкции: часы (`Date`, `performance`) этот
  * модуль не читает — wall-time стерегут сторожа PERF-5, а не счётчики.
@@ -93,11 +94,29 @@ export interface RenderCostCounters {
    * (просмотр — от порядка независим) или разрешение маски.
    */
   fogMaskTexelsWritten: number;
-  /** Тесты «субсэмпл × отрезок» теневого покрытия (`litSubsamples`, FOW-9). */
-  fogSubsampleTests: number;
+  /**
+   * Тесты «луч бина × линия отрезка» полярной растеризации теней (`mask.ts`,
+   * FOW-9, design D3): бины, пройденные при заполнении depth-буфера
+   * наблюдателя, суммарно по отобранным в радиус укрытиям. Ось стоимости
+   * теневого пути после замены субсэмплов: она растёт числом укрытий и их
+   * угловым размером, а НЕ числом текселей — на текселе тень стоит O(1).
+   */
+  fogShadowRayTests: number;
+  /**
+   * Тексели, обработанные блюром кромки (`VisibilityMask.smooth`, FOW-7): два
+   * прохода разделяемого box-блюра по всему растру — 2 × длина маски на
+   * перестройку. Растёт квадратом разрешения, как обнуление и загрузка, и
+   * правится тем же потолком `fog.maskResolution` (FOW-10, QUAL-3).
+   */
+  fogMaskSmoothTexels: number;
   /** Байты растра маски, отданные в `DataTexture` (загрузка на GPU, design D2). */
   fogMaskUploadBytes: number;
-  /** Тексели блита маски в канвас слоя миникарты (HUD-6, design D6). */
+  /**
+   * Тексели блита маски в канвас слоя миникарты на ДОСТАВКЕ (HUD-6, design D6).
+   * Блит кадра сходимости сюда не входит — он стадии `frame` и посчитан
+   * `fogDissolveTexels`: у счётчика одна стадия, и смешивать их значило бы
+   * врать атрибуцией (PERF-2).
+   */
   fogMinimapTexels: number;
 
   // ---------------------------------------------------- стадия frame: кадр
@@ -110,6 +129,16 @@ export interface RenderCostCounters {
   frameInstances: number;
   /** Проходы рендерера, заказанные подсистемой тумана: прямой и пост (design D2). */
   fogRenderPasses: number;
+  /**
+   * Тексели показанной маски, пройденные сходимостью рассеивания за кадр
+   * (FOW-7, `subsystems/fog.ts`): единственная работа тумана, растущая с
+   * площадью маски на стадии кадра, а не доставки. Кадр сходимости, кроме
+   * самого прохода, повторно грузит текстуру и перерисовывает слой миникарты
+   * ТЕМ ЖЕ объёмом — все три величины равны длине растра, и одно поле описывает
+   * их разом. Сошлась показанная маска с целевой — счётчик снова ноль: кадры
+   * стоящей сцены за туман не платят (design D4).
+   */
+  fogDissolveTexels: number;
 }
 
 /**
@@ -130,13 +159,15 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     fogMaskClearTexels: 'syncTick',
     fogMaskTexels: 'syncTick',
     fogMaskTexelsWritten: 'syncTick',
-    fogSubsampleTests: 'syncTick',
+    fogShadowRayTests: 'syncTick',
+    fogMaskSmoothTexels: 'syncTick',
     fogMaskUploadBytes: 'syncTick',
     fogMinimapTexels: 'syncTick',
     frameCalls: 'frame',
     frameSubsystems: 'frame',
     frameInstances: 'frame',
     fogRenderPasses: 'frame',
+    fogDissolveTexels: 'frame',
   });
 
 /** Свежая структура счётчиков — все поля нулями. Создаётся раз на замер. */
@@ -153,13 +184,15 @@ export function createCostCounters(): RenderCostCounters {
     fogMaskClearTexels: 0,
     fogMaskTexels: 0,
     fogMaskTexelsWritten: 0,
-    fogSubsampleTests: 0,
+    fogShadowRayTests: 0,
+    fogMaskSmoothTexels: 0,
     fogMaskUploadBytes: 0,
     fogMinimapTexels: 0,
     frameCalls: 0,
     frameSubsystems: 0,
     frameInstances: 0,
     fogRenderPasses: 0,
+    fogDissolveTexels: 0,
   };
 }
 

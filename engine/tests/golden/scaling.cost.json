@@ -7,6 +7,7 @@
       "cost": {
         "small": {
           "frame": {
+            "fogDissolveTexels": 0,
             "fogRenderPasses": 2,
             "frameCalls": 1,
             "frameInstances": 64,
@@ -15,14 +16,15 @@
           "syncTick": {
             "fogEntitiesScanned": 32,
             "fogMaskClearTexels": 4096,
+            "fogMaskSmoothTexels": 8192,
             "fogMaskTexels": 432,
-            "fogMaskTexelsWritten": 144,
+            "fogMaskTexelsWritten": 140,
             "fogMaskUploadBytes": 4096,
             "fogMinimapTexels": 4096,
             "fogNearSegments": 6,
             "fogRevealCalls": 4,
             "fogSegmentRangeTests": 224,
-            "fogSubsampleTests": 1014,
+            "fogShadowRayTests": 1181,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
             "syncTickInstances": 64,
@@ -31,6 +33,7 @@
         },
         "large": {
           "frame": {
+            "fogDissolveTexels": 0,
             "fogRenderPasses": 2,
             "frameCalls": 1,
             "frameInstances": 512,
@@ -39,14 +42,15 @@
           "syncTick": {
             "fogEntitiesScanned": 256,
             "fogMaskClearTexels": 4096,
+            "fogMaskSmoothTexels": 8192,
             "fogMaskTexels": 432,
-            "fogMaskTexelsWritten": 144,
+            "fogMaskTexelsWritten": 140,
             "fogMaskUploadBytes": 4096,
             "fogMinimapTexels": 4096,
             "fogNearSegments": 6,
             "fogRevealCalls": 4,
             "fogSegmentRangeTests": 224,
-            "fogSubsampleTests": 1014,
+            "fogShadowRayTests": 1181,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
             "syncTickInstances": 512,
@@ -62,6 +66,7 @@
       "cost": {
         "small": {
           "frame": {
+            "fogDissolveTexels": 0,
             "fogRenderPasses": 2,
             "frameCalls": 1,
             "frameInstances": 128,
@@ -70,14 +75,15 @@
           "syncTick": {
             "fogEntitiesScanned": 64,
             "fogMaskClearTexels": 4096,
+            "fogMaskSmoothTexels": 8192,
             "fogMaskTexels": 432,
-            "fogMaskTexelsWritten": 144,
+            "fogMaskTexelsWritten": 140,
             "fogMaskUploadBytes": 4096,
             "fogMinimapTexels": 4096,
             "fogNearSegments": 6,
             "fogRevealCalls": 4,
             "fogSegmentRangeTests": 224,
-            "fogSubsampleTests": 1014,
+            "fogShadowRayTests": 1181,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
             "syncTickInstances": 128,
@@ -86,6 +92,7 @@
         },
         "large": {
           "frame": {
+            "fogDissolveTexels": 0,
             "fogRenderPasses": 2,
             "frameCalls": 1,
             "frameInstances": 128,
@@ -94,14 +101,15 @@
           "syncTick": {
             "fogEntitiesScanned": 64,
             "fogMaskClearTexels": 4096,
+            "fogMaskSmoothTexels": 8192,
             "fogMaskTexels": 4356,
-            "fogMaskTexelsWritten": 1218,
+            "fogMaskTexelsWritten": 1204,
             "fogMaskUploadBytes": 4096,
             "fogMinimapTexels": 4096,
             "fogNearSegments": 50,
             "fogRevealCalls": 32,
             "fogSegmentRangeTests": 1792,
-            "fogSubsampleTests": 8446,
+            "fogShadowRayTests": 7796,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
             "syncTickInstances": 128,
@@ -117,6 +125,7 @@
       "cost": {
         "small": {
           "frame": {
+            "fogDissolveTexels": 0,
             "fogRenderPasses": 2,
             "frameCalls": 1,
             "frameInstances": 128,
@@ -125,14 +134,15 @@
           "syncTick": {
             "fogEntitiesScanned": 64,
             "fogMaskClearTexels": 4096,
+            "fogMaskSmoothTexels": 8192,
             "fogMaskTexels": 432,
-            "fogMaskTexelsWritten": 158,
+            "fogMaskTexelsWritten": 156,
             "fogMaskUploadBytes": 4096,
             "fogMinimapTexels": 4096,
             "fogNearSegments": 4,
             "fogRevealCalls": 4,
             "fogSegmentRangeTests": 48,
-            "fogSubsampleTests": 708,
+            "fogShadowRayTests": 847,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
             "syncTickInstances": 128,
@@ -141,6 +151,7 @@
         },
         "large": {
           "frame": {
+            "fogDissolveTexels": 0,
             "fogRenderPasses": 2,
             "frameCalls": 1,
             "frameInstances": 128,
@@ -149,14 +160,15 @@
           "syncTick": {
             "fogEntitiesScanned": 64,
             "fogMaskClearTexels": 4096,
+            "fogMaskSmoothTexels": 8192,
             "fogMaskTexels": 432,
-            "fogMaskTexelsWritten": 104,
+            "fogMaskTexelsWritten": 96,
             "fogMaskUploadBytes": 4096,
             "fogMinimapTexels": 4096,
             "fogNearSegments": 13,
             "fogRevealCalls": 4,
             "fogSegmentRangeTests": 960,
-            "fogSubsampleTests": 2252,
+            "fogShadowRayTests": 2619,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
             "syncTickInstances": 128,
@@ -172,6 +184,7 @@
       "cost": {
         "small": {
           "frame": {
+            "fogDissolveTexels": 0,
             "fogRenderPasses": 2,
             "frameCalls": 1,
             "frameInstances": 128,
@@ -180,14 +193,15 @@
           "syncTick": {
             "fogEntitiesScanned": 64,
             "fogMaskClearTexels": 4096,
+            "fogMaskSmoothTexels": 8192,
             "fogMaskTexels": 432,
-            "fogMaskTexelsWritten": 144,
+            "fogMaskTexelsWritten": 140,
             "fogMaskUploadBytes": 4096,
             "fogMinimapTexels": 4096,
             "fogNearSegments": 6,
             "fogRevealCalls": 4,
             "fogSegmentRangeTests": 224,
-            "fogSubsampleTests": 1014,
+            "fogShadowRayTests": 1181,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
             "syncTickInstances": 128,
@@ -196,6 +210,7 @@
         },
         "large": {
           "frame": {
+            "fogDissolveTexels": 0,
             "fogRenderPasses": 2,
             "frameCalls": 1,
             "frameInstances": 128,
@@ -204,14 +219,15 @@
           "syncTick": {
             "fogEntitiesScanned": 64,
             "fogMaskClearTexels": 16384,
+            "fogMaskSmoothTexels": 32768,
             "fogMaskTexels": 1564,
-            "fogMaskTexelsWritten": 590,
+            "fogMaskTexelsWritten": 584,
             "fogMaskUploadBytes": 16384,
             "fogMinimapTexels": 16384,
             "fogNearSegments": 6,
             "fogRevealCalls": 4,
             "fogSegmentRangeTests": 224,
-            "fogSubsampleTests": 4228,
+            "fogShadowRayTests": 1181,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
             "syncTickInstances": 128,

@@ -351,6 +351,7 @@ describe('PERF-4: голден-гейт стоимости на записанн
     // Полномасочная работа растёт квадратом разрешения — вдвое грубее маска
     // вчетверо дешевле, и ровно эту строку диффа гейт и заводился стеречь.
     expect(ultra.render.fogMaskClearTexels).toBe(4 * performance.render.fogMaskClearTexels);
+    expect(ultra.render.fogMaskSmoothTexels).toBe(4 * performance.render.fogMaskSmoothTexels);
     expect(ultra.render.fogMaskUploadBytes).toBe(4 * performance.render.fogMaskUploadBytes);
     expect(ultra.render.fogMinimapTexels).toBe(4 * performance.render.fogMinimapTexels);
     // Доставка и кадр от пресета не зависят: сущностей столько же, подсистем
@@ -385,15 +386,21 @@ describe('PERF-6: оси масштабирования бенч-нагрузк�
     const axis = AXES.find((item) => item.axis === 'maskResolution')!;
     const low = measureSize(axis.small);
     const high = measureSize(axis.large);
-    // Обнуление, загрузка в текстуру и блит миникарты идут по всему растру:
-    // удвоение разрешения — четырёхкратное удорожание (FOW-10). Это ровно
-    // половина той регрессии, ради которой заведён гейт.
+    // Обнуление, блюр кромки, загрузка в текстуру и блит миникарты идут по
+    // всему растру: удвоение разрешения — четырёхкратное удорожание (FOW-10).
+    // Это ровно половина той регрессии, ради которой заведён гейт.
     expect(high.fogMaskClearTexels).toBe(4 * low.fogMaskClearTexels);
+    expect(high.fogMaskSmoothTexels).toBe(4 * low.fogMaskSmoothTexels);
     expect(high.fogMaskUploadBytes).toBe(4 * low.fogMaskUploadBytes);
     expect(high.fogMinimapTexels).toBe(4 * low.fogMinimapTexels);
-    // Тесты субсэмплов против укрытий — вторая её половина (FOW-9).
-    expect(low.fogSubsampleTests).toBeGreaterThan(0);
-    expect(high.fogSubsampleTests).toBeGreaterThan(low.fogSubsampleTests);
+    // А вот теневой путь от разрешения больше НЕ зависит: полярный depth-буфер
+    // строится по углу (бинов фиксированное число), и тексель платит за тень
+    // O(1) вместо теста против каждого отрезка (FOW-9, design D3). Равенство
+    // здесь — не слабая проверка, а утверждение: подняв разрешение, за тени
+    // доплачивать не приходится, и эталон покраснеет, если это перестанет быть
+    // правдой.
+    expect(low.fogShadowRayTests).toBeGreaterThan(0);
+    expect(high.fogShadowRayTests).toBe(low.fogShadowRayTests);
   });
 
   it('число наблюдателей: reveal-полигоны кратны ему, полномасочная работа — нет', () => {
@@ -413,6 +420,10 @@ describe('PERF-6: оси масштабирования бенч-нагрузк�
     // Отбор укрытий — проход по всем сегментам сетки на наблюдателя (FOW-9).
     expect(few.fogSegmentRangeTests).toBe(axis.small.magnitude * BASE_LOAD.observers);
     expect(many.fogSegmentRangeTests).toBe(axis.large.magnitude * BASE_LOAD.observers);
+    // Полярная растеризация теней растёт вместе с числом ОТОБРАННЫХ в радиус
+    // укрытий: каждое платит своей дугой бинов (FOW-9, design D3).
+    expect(few.fogShadowRayTests).toBeGreaterThan(0);
+    expect(many.fogShadowRayTests).toBeGreaterThan(few.fogShadowRayTests);
   });
 
   it('число сущностей: доставка растёт с ним, маска — нет', () => {

@@ -39,6 +39,8 @@ const ARENA = 48;
 const VISION = 8;
 const WARMUP = 5;
 const DELIVERIES = 20;
+/** Поворот кольца наблюдателей на доставку, радианы — свежие входы каждой (D4). */
+const ROTATION = 0.017;
 
 const STATS = { visionRadius: 'vision', team: 'team' } as const;
 
@@ -51,14 +53,25 @@ interface FogAxis {
   readonly pillarStep: number;
 }
 
-function observerView(index: number, count: number): EntityView {
-  // Наблюдатели раскладываются по кольцу внутри арены: круги пересекаются, как
-  // на живой сцене, но краем маски не срезаются.
-  const angle = (index / count) * Math.PI * 2;
-  const radius = ARENA / 4;
+/**
+ * Наблюдатель кольца на шаге `step` доставки. Кольцо поворачивается с каждым
+ * шагом: подсистема перестраивает маску только при СМЕНЕ сигнатуры входов
+ * (design D4), и повтор той же доставки мерил бы сравнение чисел, а не
+ * растеризацию, — сторож стерёг бы пустоту.
+ *
+ * Центр и радиус кольца сдвинуты с узлов решётки укрытий намеренно:
+ * наблюдатель, стоящий ровно на линии ребра, перекрыт целиком
+ * (`rasterizeOnLine`, FOW-9), и ось сегментов мерила бы вырожденную ветку
+ * вместо настоящей растеризации теней. Уровень наблюдателя — нулевой
+ * (умолчание фикстуры): рёбра поднятых клеток выше него и тень отбрасывают
+ * (PHYS-13).
+ */
+function observerView(index: number, count: number, step: number): EntityView {
+  const angle = (index / count) * Math.PI * 2 + step * ROTATION;
+  const radius = ARENA / 4 + 1;
   return makeEntityView(index + 1, {
-    currX: ARENA / 2 + Math.cos(angle) * radius,
-    currY: ARENA / 2 + Math.sin(angle) * radius,
+    currX: ARENA / 2 + 0.5 + Math.cos(angle) * radius,
+    currY: ARENA / 2 + 0.5 + Math.sin(angle) * radius,
     prevX: ARENA / 2,
     prevY: ARENA / 2,
     stats: new Map([
@@ -68,7 +81,7 @@ function observerView(index: number, count: number): EntityView {
   });
 }
 
-function stand(axis: FogAxis): { fog: FogSubsystem; view: TickView } {
+function stand(axis: FogAxis): { fog: FogSubsystem; views: readonly TickView[] } {
   const grid = axis.pillarStep === 0 ? flatGrid(ARENA) : pillarGrid(ARENA, axis.pillarStep);
   const fog = new FogSubsystem({
     grid,
@@ -78,10 +91,14 @@ function stand(axis: FogAxis): { fog: FogSubsystem; view: TickView } {
     createCanvas: fogCanvasFactory(),
   });
   fog.init(makeRenderContext());
-  const view = makeTickView(
-    Array.from({ length: axis.observers }, (_, i) => observerView(i, axis.observers)),
+  // Доставки готовятся заранее и в замер не входят: меряется перестройка маски,
+  // а не сборка Map доставки.
+  const views = Array.from({ length: WARMUP + DELIVERIES + 1 }, (_, step) =>
+    makeTickView(
+      Array.from({ length: axis.observers }, (_, i) => observerView(i, axis.observers, step)),
+    ),
   );
-  return { fog, view };
+  return { fog, views };
 }
 
 interface BenchResult {
@@ -95,23 +112,24 @@ interface BenchResult {
  * замера времени, чтобы учёт не попал в измеряемое (PERF-3).
  */
 function benchFog(label: string, axis: FogAxis): BenchResult {
-  const { fog, view } = stand(axis);
+  const { fog, views } = stand(axis);
 
   // Прогрев JIT перед замером.
-  for (let i = 0; i < WARMUP; i++) fog.syncTick(view);
+  for (let i = 0; i < WARMUP; i++) fog.syncTick(views[i]!);
   const t0 = performance.now();
-  for (let i = 0; i < DELIVERIES; i++) fog.syncTick(view);
+  for (let i = 0; i < DELIVERIES; i++) fog.syncTick(views[WARMUP + i]!);
   const perDeliveryMs = (performance.now() - t0) / DELIVERIES;
 
   const cost = createCostCounters();
   withCostSink(cost, () => {
-    fog.syncTick(view);
+    fog.syncTick(views[WARMUP + DELIVERIES]!);
   });
 
   console.log(
     `[bench] маска FoW, ${label}: ${perDeliveryMs.toFixed(3)} мс/доставка; ` +
-      `тексели ${cost.fogMaskTexels}, тесты субсэмплов ${cost.fogSubsampleTests}, ` +
-      `растр ${cost.fogMaskClearTexels}, загрузка ${cost.fogMaskUploadBytes} байт`,
+      `тексели ${cost.fogMaskTexels}, лучи теней ${cost.fogShadowRayTests}, ` +
+      `блюр ${cost.fogMaskSmoothTexels}, растр ${cost.fogMaskClearTexels}, ` +
+      `загрузка ${cost.fogMaskUploadBytes} байт`,
   );
   return { perDeliveryMs, cost };
 }
@@ -123,6 +141,8 @@ describe('замеры рендера (информативно)', () => {
 
     // Работа растёт квадратом разрешения — это видно счётчиком, а не часами.
     expect(high.cost.fogMaskClearTexels).toBe(4 * low.cost.fogMaskClearTexels);
+    // Блюр кромки идёт по всему растру двумя проходами — та же квадратичность.
+    expect(high.cost.fogMaskSmoothTexels).toBe(4 * low.cost.fogMaskSmoothTexels);
     // Сторожевые пороги: на порядок выше наблюдаемого (0.3 и 1.1 мс на машине
     // разработчика) — ловят деградацию, а не разницу машин (PERF-5).
     expect(low.perDeliveryMs).toBeLessThan(4);
@@ -144,8 +164,11 @@ describe('замеры рендера (информативно)', () => {
     const dense = benchFog('решётка обрывов', { resolution: 4, observers: 4, pillarStep: 6 });
 
     expect(fogSegmentsOf(pillarGrid(ARENA, 6)).length).toBeGreaterThan(0);
-    expect(bare.cost.fogSubsampleTests).toBe(0);
-    expect(dense.cost.fogSubsampleTests).toBeGreaterThan(0);
+    // Наблюдатели решётки — на нулевом уровне, клетки решётки подняты: рёбра
+    // тень отбрасывают, и теневой путь на этой оси действительно исполняется
+    // (`segmentCasts`, FOW-9, PHYS-13).
+    expect(bare.cost.fogShadowRayTests).toBe(0);
+    expect(dense.cost.fogShadowRayTests).toBeGreaterThan(0);
     // Наблюдаемое — 0.3 мс против 8.8 мс: сама решётка обрывов и есть тот
     // класс стоимости, ради которого сторож стоит; порог на порядок выше.
     expect(bare.perDeliveryMs).toBeLessThan(4);

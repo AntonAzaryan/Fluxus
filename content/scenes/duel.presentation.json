@@ -8,11 +8,12 @@
     { "visual": "Torch", "x": 24.5, "y": 30.5 }
   ],
   "fog": {
-    "strength": 0.65,
+    "strength": 0.45,
     "color": "#0c1220",
     "edgeWidth": 2.5,
     "conservatism": 0.92,
     "resolution": 8,
-    "fadeSeconds": 0.45
+    "fadeSeconds": 0.45,
+    "dissolveSeconds": 0.4
   }
 }

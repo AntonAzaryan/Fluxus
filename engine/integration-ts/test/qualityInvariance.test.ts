@@ -204,20 +204,29 @@ function observersOf(view: TickView): readonly { x: number; y: number }[] {
 }
 
 /**
- * Максимум тонкой маски по площадке ОДНОГО грубого текселя, накрывающего точку.
- * Тексель и есть квант грубой маски: сравнивать её с тонкой в точке — сравнивать
- * фазу растеризации, а не информацию. Утверждение FOW-9 «грубая ошибается в
- * сторону тумана» проверяется поэтому на площадке кванта: свет грубой маски не
- * появляется там, где тонкая держит весь тексель в тумане.
+ * Максимум тонкой маски по площадке ОДНОГО грубого текселя, накрывающего точку,
+ * расширенной на хвост блюра кромки. Тексель — квант грубой маски: сравнивать её
+ * с тонкой в точке значило бы сравнивать фазу растеризации, а не информацию.
+ *
+ * Расширение — не поблажка, а вторая половина того же кванта. Полутон кромки
+ * делает блюр радиусом в ОДИН тексель уже после reveal (FOW-7, `mask.ts`), и
+ * радиус этот измеряется в текселях СВОЕЙ маски: грубая размывает свет на
+ * четверть юнита, тонкая — на восьмую. Симметричный перенос — не больше
+ * полутекселя за геометрию, и ровно на него площадка сравнения и расширяется.
+ * Утверждение FOW-9 «грубая ошибается в сторону тумана» остаётся тем же: света
+ * там, где тонкая маска держит туман, у грубой не появляется — с точностью до
+ * кванта её собственной кромки.
  */
 function fineMaxOverTexel(fine: VisibilityMask, coarse: VisibilityMask, x: number, y: number): number {
   const size = 1 / coarse.texelsPerUnit;
-  const x0 = Math.floor(x * coarse.texelsPerUnit) * size;
-  const y0 = Math.floor(y * coarse.texelsPerUnit) * size;
+  const blur = size / 2;
+  const x0 = Math.floor(x * coarse.texelsPerUnit) * size - blur;
+  const y0 = Math.floor(y * coarse.texelsPerUnit) * size - blur;
+  const span = size + 2 * blur;
   const step = 1 / fine.texelsPerUnit;
   let best = 0;
-  for (let sx = x0 + step / 2; sx < x0 + size; sx += step) {
-    for (let sy = y0 + step / 2; sy < y0 + size; sy += step) best = Math.max(best, fine.valueAt(sx, sy));
+  for (let sx = x0 + step / 2; sx < x0 + span; sx += step) {
+    for (let sy = y0 + step / 2; sy < y0 + span; sy += step) best = Math.max(best, fine.valueAt(sx, sy));
   }
   return best;
 }
@@ -278,19 +287,33 @@ describe('FOW-9: грубая маска производительного пр
     expect(observers.length).toBe(MASK_LOAD.observers);
     // Визуал консервативнее геймплея на коэффициент конфига (FOW-9): круг
     // reveal — радиус обзора, умноженный на него. Огрубление разрешения
-    // добавляет к нему не больше половины диагонали грубого текселя — и этого
-    // запаса недостаточно, чтобы свет дотянулся до геймплейного радиуса.
+    // добавляет к нему не больше половины диагонали грубого текселя, а блюр
+    // кромки (FOW-7) — не больше полутекселя: и этого запаса вместе взятого
+    // недостаточно, чтобы свет дотянулся до геймплейного радиуса.
     const reveal = MASK_LOAD.vision * bench.fog.config.conservatism;
     const quantum = Math.SQRT2 / (2 * coarse.texelsPerUnit);
+    const blur = 1 / (2 * coarse.texelsPerUnit);
+    // За хвостом блюра у самой кромки градиент круга уже почти ноль, поэтому
+    // наружу выходит не картинка, а одна-две градации из 255. «Свет» здесь —
+    // то, что ярче этого хвоста; тот же допуск пары градаций, которым меряется
+    // туман в тестах маски (`render-ts`). Абсолютная величина хвоста проверена
+    // отдельно ниже — иначе порог был бы поблажкой, а не единицей измерения.
+    const HALFTONE = 2 / 255;
     let farthest = 0;
+    let beyondVision = 0;
     for (let x = SAMPLE_STEP / 2; x < MASK_LOAD.extent; x += SAMPLE_STEP) {
       for (let y = SAMPLE_STEP / 2; y < MASK_LOAD.extent; y += SAMPLE_STEP) {
-        if (coarse.valueAt(x, y) === 0) continue;
-        farthest = Math.max(farthest, nearestObserver(observers, x, y));
+        const value = coarse.valueAt(x, y);
+        if (value === 0) continue;
+        const distance = nearestObserver(observers, x, y);
+        if (value > HALFTONE) farthest = Math.max(farthest, distance);
+        if (distance >= MASK_LOAD.vision) beyondVision = Math.max(beyondVision, value);
       }
     }
-    expect(farthest).toBeLessThanOrEqual(reveal + quantum);
+    expect(farthest).toBeLessThanOrEqual(reveal + quantum + blur);
     expect(farthest).toBeLessThan(MASK_LOAD.vision);
+    // И за геймплейным радиусом маска не светит вовсе — там только хвост блюра.
+    expect(beyondVision).toBeLessThanOrEqual(HALFTONE);
   });
 
   it('тень за укрытием переживает огрубление: она есть на обоих пресетах', () => {

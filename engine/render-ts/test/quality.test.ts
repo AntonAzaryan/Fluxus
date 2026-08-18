@@ -488,8 +488,13 @@ describe('fog.maskResolution — потолок над сценным значе
     const { stage, fog } = fogRig({ resolution: 8, conservatism: 0.9, edgeWidth: 0 });
     const controller = new QualityController(stage, {});
     fog.syncTick(makeTickView([observer(4, 4, 3)]));
-    // Визуал уже консервативнее геймплея: 3 × 0.9 = 2.7.
-    expect(fog.visibility.valueAt(4 + 2.8, 4)).toBe(0);
+    // Визуал уже консервативнее геймплея: 3 × 0.9 = 2.7. Проверочная точка —
+    // на самом геймплейном радиусе, а не вплотную к визуальному: блюр кромки
+    // (FOW-7) переносит свет до текселя за геометрию круга (0.125 юнита на
+    // разрешении 8), и запас консервативности (0.3 юнита) его перекрывает.
+    expect(fog.visibility.valueAt(4 + 3, 4)).toBe(0);
+    // Внутри визуального радиуса свет есть — проверка не выродилась в «всюду туман».
+    expect(fog.visibility.valueAt(4 + 2, 4)).toBeGreaterThan(0);
 
     controller.apply({ 'fog.maskResolution': 2 });
     fog.syncTick(makeTickView([observer(4, 4, 3)]));

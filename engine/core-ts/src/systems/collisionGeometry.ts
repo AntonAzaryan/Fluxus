@@ -10,6 +10,7 @@
  */
 import * as fixed from '../math/fixed.js';
 import * as vec from '../math/vector.js';
+import { FIXED_ONE } from '../types.js';
 import type { Fixed, Vec2 } from '../types.js';
 
 /** Значения поля `shape` компонента коллайдера. */
@@ -281,4 +282,82 @@ export function surfaceNormal(move: Move, moverShape: number, blocker: Blocker):
 
 function orAxis(normal: Vec2, axisNormal: Vec2): Vec2 {
   return normal.x === 0 && normal.y === 0 ? axisNormal : normal;
+}
+
+/**
+ * Луч против прямоугольника — метод слэбов в расстояниях вдоль луча, а не в
+ * параметре `t`: параметр потребовал бы деления на длину и второго диапазона.
+ */
+export function rayVsBox(from: Vec2, dir: Vec2, rayLength: Fixed, box: Bounds): number | undefined {
+  let near = 0;
+  let far = rayLength;
+
+  for (const axis of ['x', 'y'] as const) {
+    const origin = from[axis];
+    const direction = dir[axis];
+    const lo = axis === 'x' ? box.minX : box.minY;
+    const hi = axis === 'x' ? box.maxX : box.maxY;
+    if (direction === 0) {
+      if (origin <= lo || origin >= hi) return undefined;
+      continue;
+    }
+    let t0 = ratio(fixed.sub(lo, origin), direction, rayLength);
+    let t1 = ratio(fixed.sub(hi, origin), direction, rayLength);
+    if (t0 > t1) [t0, t1] = [t1, t0];
+    if (t0 > near) near = t0;
+    if (t1 < far) far = t1;
+    if (near > far) return undefined;
+  }
+  return near;
+}
+
+/**
+ * Деление с насыщением: частное вне отрезка луча нас не интересует, а
+ * `fixed.div` на почти нулевом знаменателе вылетело бы за i32. Промежуточное
+ * произведение не превышает 2^47 и в double точно, как и в i64 у Rust-порта.
+ *
+ * DET-2, условия 3 и 5: делимое `numerator · 2^16` по модулю не больше 2^47 —
+ * строго меньше 2^53, поэтому приведённое частное совпадает с точным целым.
+ *
+ * Условие 4: **`floor` здесь — норма площадки, а не деталь реализации.** Это
+ * единственное деление ядра, где конвенция округления наблюдаема в геймплее:
+ * делимое и делитель бывают отрицательными по отдельности, и частное в
+ * интервале `(-1, 0)` сырых единиц Q16.16 даёт `-1` при округлении к минус
+ * бесконечности и `0` при усечении к нулю. Такое частное попадает в дальнюю
+ * границу слэба, а сравнение `near > far` превращает `0 > -1` в промах и
+ * `0 > 0` — в попадание: порт, выбравший усечение, отдал бы другой набор
+ * попаданий (PHYS-7). Вторая реализация ядра ОБЯЗАНА округлять к минус
+ * бесконечности (в Rust — `div_euclid` либо `(a / b).floor()`, но не `a / b`
+ * целочисленным). Различающий тест — в `physics.test.ts`.
+ */
+function ratio(numerator: Fixed, denominator: Fixed, limit: Fixed): number {
+  const quotient = Math.floor((numerator * FIXED_ONE) / denominator);
+  const bound = limit + FIXED_ONE;
+  return quotient < -bound ? -bound : quotient > bound ? bound : quotient;
+}
+
+/**
+ * Луч против круга — через проекцию на нормированное направление, без
+ * дискриминанта: у квадратичной формы промежуточные произведения выходят за
+ * Q16.16 уже на десятке единиц, здесь же все множители порядка расстояния.
+ */
+export function rayVsCircle(
+  from: Vec2,
+  dir: Vec2,
+  rayLength: Fixed,
+  center: Vec2,
+  radius: Fixed,
+): number | undefined {
+  const toCenter = vec.sub(center, from);
+  const projection = vec.dot(toCenter, dir);
+  const perpendicularSq = fixed.sub(vec.lengthSq(toCenter), fixed.mul(projection, projection));
+  const radiusSq = fixed.mul(radius, radius);
+  if (perpendicularSq > radiusSq) return undefined;
+
+  const halfChord = fixed.sqrt(fixed.sub(radiusSq, perpendicularSq));
+  const entry = fixed.sub(projection, halfChord);
+  // Источник внутри круга: попадание в нулевой дистанции — дефект вызова
+  // (PHYS-6 требует исключать источник), а не хит.
+  if (entry < 0) return undefined;
+  return entry > rayLength ? undefined : entry;
 }

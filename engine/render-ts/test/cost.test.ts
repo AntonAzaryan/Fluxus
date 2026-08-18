@@ -42,6 +42,12 @@ import {
 
 const STATS = { visionRadius: 'vision', team: 'team' } as const;
 
+/**
+ * Наблюдатель доставки на НУЛЕВОМ уровне (`makeEntityView` кладёт его сам): для
+ * возвышенных клеток стенда (уровень 1) он снизу, и их рёбра тень отбрасывают
+ * (`segmentCasts`, FOW-9, PHYS-13). С наблюдателем на плато теневой путь стоял
+ * бы мёртвым, и ось «сегменты укрытий» мерила бы пустоту.
+ */
 function observerView(id: number, x: number, y: number, vision: number): EntityView {
   return makeEntityView(id, {
     currX: x,
@@ -224,10 +230,13 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
     const low = deliverCost({ resolution: 4 });
     const high = deliverCost({ resolution: 8 });
 
-    // Обнуление, загрузка в текстуру и блит миникарты идут по всему растру:
-    // удвоение разрешения — ровно четырёхкратное удорожание (FOW-10).
+    // Обнуление, блюр кромки, загрузка в текстуру и блит миникарты идут по
+    // всему растру: удвоение разрешения — ровно четырёхкратное удорожание
+    // (FOW-10). Блюр — два прохода, поэтому вдвое длиннее самого растра.
     expect(low.fogMaskClearTexels).toBe(32 * 32);
+    expect(low.fogMaskSmoothTexels).toBe(2 * 32 * 32);
     expect(high.fogMaskClearTexels).toBe(4 * low.fogMaskClearTexels);
+    expect(high.fogMaskSmoothTexels).toBe(4 * low.fogMaskSmoothTexels);
     expect(high.fogMaskUploadBytes).toBe(4 * low.fogMaskUploadBytes);
     expect(high.fogMinimapTexels).toBe(4 * low.fogMinimapTexels);
 
@@ -267,17 +276,27 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
     });
     expect(counters.fogMaskUploadBytes).toBe(32 * 32);
 
-    // Вторая доставка — второй растр той же длины, ни больше ни меньше.
+    // Та же доставка растра не трогает вовсе — сигнатура входов совпала
+    // (design D4), и по шине не ушло ни байта: счётчик стоит на месте.
     withCostSink(counters, () => {
       stand.fog.syncTick(stand.view);
+    });
+    expect(counters.fogMaskUploadBytes).toBe(32 * 32);
+
+    // Доставка ДРУГИХ входов — второй растр той же длины, ни больше ни меньше.
+    withCostSink(counters, () => {
+      stand.fog.syncTick(makeTickView([observerView(1, 5, 5, 1.5)]));
     });
     expect(counters.fogMaskUploadBytes).toBe(2 * 32 * 32);
   });
 
-  it('число сегментов укрытий: отбор и тесты субсэмплов растут вместе с ним', () => {
-    const bare = deliverCost({ vision: 4, observers: [[4, 4]] });
-    const few = deliverCost({ vision: 4, observers: [[4, 4]], pillarStep: 4 });
-    const many = deliverCost({ vision: 4, observers: [[4, 4]], pillarStep: 2 });
+  it('число сегментов укрытий: отбор и тесты лучей полярного растра растут вместе с ним', () => {
+    // Наблюдатель стоит в свободной клетке, а не в узле решётки: стоя ровно на
+    // линии ребра, он перекрыт целиком (`rasterizeOnLine`, FOW-9), и ось мерила
+    // бы вырожденную ветку вместо обычной растеризации теней.
+    const bare = deliverCost({ vision: 4, observers: [[3.5, 3.5]] });
+    const few = deliverCost({ vision: 4, observers: [[3.5, 3.5]], pillarStep: 4 });
+    const many = deliverCost({ vision: 4, observers: [[3.5, 3.5]], pillarStep: 2 });
 
     const bareSegments = fogSegmentsOf(flatGrid(8)).length;
     const fewSegments = fogSegmentsOf(pillarGrid(8, 4)).length;
@@ -290,12 +309,42 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
     expect(few.fogSegmentRangeTests).toBe(fewSegments);
     expect(many.fogSegmentRangeTests).toBe(manySegments);
 
-    // Без укрытий теневой путь не исполняется вовсе; с ними тесты субсэмплов
-    // растут вместе с числом отобранных отрезков (FOW-9).
-    expect(bare.fogSubsampleTests).toBe(0);
-    expect(few.fogSubsampleTests).toBeGreaterThan(0);
+    // Без укрытий теневой путь не исполняется вовсе; с ними тесты лучей
+    // полярной растеризации растут вместе с числом отобранных отрезков (FOW-9,
+    // design D3): каждый отрезок платит своей дугой бинов, а тексель — O(1).
+    expect(bare.fogShadowRayTests).toBe(0);
+    expect(few.fogShadowRayTests).toBeGreaterThan(0);
     expect(many.fogNearSegments).toBeGreaterThan(few.fogNearSegments);
-    expect(many.fogSubsampleTests).toBeGreaterThan(few.fogSubsampleTests);
+    expect(many.fogShadowRayTests).toBeGreaterThan(few.fogShadowRayTests);
+  });
+
+  it('рассеивание тумана — работа стадии кадра, а не доставки (FOW-7, PERF-2)', () => {
+    const stand = fogStand({ resolution: 4 });
+    const delivery = createCostCounters();
+    withCostSink(delivery, () => {
+      stand.fog.syncTick(stand.view);
+    });
+    // Доставка построила ЦЕЛЕВУЮ маску; показанная ещё догоняет её кадрами —
+    // и за проход сходимости платит стадия кадра, а не доставки.
+    expect(delivery.fogDissolveTexels).toBe(0);
+
+    const frame = createCostCounters();
+    withCostSink(frame, () => {
+      stand.fog.updateFrame(1 / 60, 0.5);
+    });
+    expect(frame.fogDissolveTexels).toBe(32 * 32);
+    // Повторная загрузка текстуры и повторный блит слоя кадром посчитаны тем же
+    // числом: полей стадии доставки кадр не трогает вовсе (PERF-2).
+    expect(frame.fogMaskUploadBytes).toBe(0);
+    expect(frame.fogMinimapTexels).toBe(0);
+
+    // Сошлась показанная маска с целевой — кадры перестают платить (design D4).
+    stand.fog.updateFrame(10, 0.5);
+    const settled = createCostCounters();
+    withCostSink(settled, () => {
+      stand.fog.updateFrame(1 / 60, 0.5);
+    });
+    expect(settled.fogDissolveTexels).toBe(0);
   });
 
   it('маска вне подсистемы считается так же — счётчик у растра, а не у обвязки', () => {
@@ -304,11 +353,15 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
     withCostSink(counters, () => {
       const mask = new VisibilityMask(fogRectOf(grid), 4);
       mask.clear();
-      mask.reveal({ x: 4, y: 4, radius: 3 }, 0.5, fogSegmentsOf(grid));
+      // Уровень 0 — ниже возвышенных клеток решётки: их рёбра тень отбрасывают.
+      mask.reveal({ x: 3.5, y: 3.5, radius: 3, level: 0 }, 0.5, fogSegmentsOf(grid));
+      mask.smooth();
     });
     expect(counters.fogMaskClearTexels).toBe(32 * 32);
     expect(counters.fogRevealCalls).toBe(1);
-    expect(counters.fogSubsampleTests).toBeGreaterThan(0);
+    expect(counters.fogShadowRayTests).toBeGreaterThan(0);
+    // Блюр кромки — два прохода по всему растру (FOW-7).
+    expect(counters.fogMaskSmoothTexels).toBe(2 * 32 * 32);
     // Ни текстуры, ни миникарты у голого растра нет — стадия не выдумывается.
     expect(counters.fogMaskUploadBytes).toBe(0);
     expect(counters.fogMinimapTexels).toBe(0);
