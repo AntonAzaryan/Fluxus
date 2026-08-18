@@ -65,6 +65,15 @@ export function journalFromFile(tracePath, dictPath) {
   return buildJournal(readFileSync(tracePath, 'utf8'), dictionary);
 }
 
+/**
+ * Документ журнала в одной из двух форм. Машинная первична (DIAG-10), и
+ * собирается она каноническим сериализатором ядра: журнал, собранный стендом,
+ * обязан совпадать байт-в-байт с журналом, собранным этой командой.
+ */
+export function journalDocument(result, format = 'jsonl') {
+  return format === 'text' ? journalText(result.entries) : journalJsonl(result.entries);
+}
+
 /** Отчёт прогона (DIAG-10, CLI-12): что инструмент встретил и чего не понял. */
 export function journalReport(result) {
   let report = `журнал: ${result.entries.length} фактов\n`;
@@ -102,7 +111,7 @@ function main() {
   }
 
   const result = journalFromFile(file, dict);
-  const document = format === 'text' ? journalText(result.entries) : journalJsonl(result.entries);
+  const document = journalDocument(result, format);
   if (out === undefined) process.stdout.write(document);
   else writeFileSync(out, document);
 
