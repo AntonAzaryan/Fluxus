@@ -19,7 +19,11 @@
  *
  * Стенд и документы пресетов — общие с гейтом стоимости (`benchLoad.ts`): у
  * QUAL-2 и QUAL-4 обязана быть ОДНА нагрузка, иначе «бюджет» и «инвариант»
- * меряли бы разные миры.
+ * меряли бы разные миры. Подсистем на этом стенде пять — туман, позиции,
+ * террейн, модели и частицы, — и инвариант оттого сильнее: пресет действует на
+ * ярус носителя (REND-20), уровень детализации (REND-22), плотность эмиссии
+ * (REND-24) и разбиение поверхности (REND-9) разом, а лог симуляции обязан
+ * остаться тем же байт в байт.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -132,8 +136,13 @@ describe('QUAL-2: симуляция не зависит от пресета к�
 
       // Прежде инварианта — доказательство, что проверять было что: пресеты
       // обязаны РАЗОЙТИСЬ в картинке, иначе «лог совпал» не значит ничего.
+      // Расходятся они не в одном месте, а в трёх подсистемах сразу: маска
+      // грубее (FOW-10), инстансы несут геометрию грубого уровня цепочки
+      // (REND-22) и поверхность разбита реже (REND-9).
       expect(performance.maskResolution).toBeLessThan(ultra.maskResolution);
       expect(performance.render.fogMaskUploadBytes).toBeLessThan(ultra.render.fogMaskUploadBytes);
+      expect(performance.render.modelsBatchTriangles).toBeLessThan(ultra.render.modelsBatchTriangles);
+      expect(performance.render.terrainFloorQuads).toBeLessThan(ultra.render.terrainFloorQuads);
 
       // Отпечатки первыми: их дифф называет тик, а не вываливает лог целиком.
       expect(performance.digests, match).toEqual(ultra.digests);

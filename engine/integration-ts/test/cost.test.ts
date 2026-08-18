@@ -17,8 +17,8 @@
  *   счётчиков между двумя прогонами — часть проверки, а не допущение.
  * - На синтетических осях стоимости (PERF-6) — `engine/tests/golden/scaling.cost.json`:
  *   два размера на ось (число сущностей, наблюдателей, сегментов укрытий,
- *   разрешение маски), чтобы суперлинейный рост читался отношением L/S прямо в
- *   диффе эталона.
+ *   разрешение маски, число событий эффекта, потолок разбиения террейна), чтобы
+ *   суперлинейный рост читался отношением L/S прямо в диффе эталона.
  *
  * Значения машинно-независимы по конструкции: ни времени, ни случайности, ни
  * GPU в них нет (PERF-3). Реальное время стережёт `bench.test.ts` — и только на
@@ -41,6 +41,7 @@ import {
   createCostCounters,
   withCostSink,
   type CostStage,
+  type QualityPreset,
   type RenderCostCounters,
 } from '@game-mvp/render';
 import {
@@ -189,6 +190,7 @@ const BASE_LOAD: SyntheticLoad = {
   observers: 4,
   vision: 1.5,
   extent: SCALING_EXTENT,
+  shots: 4,
 };
 
 interface ScalingSize {
@@ -197,6 +199,13 @@ interface ScalingSize {
   readonly pillarStep: number;
   readonly resolution: number;
   readonly load: SyntheticLoad;
+  /**
+   * Документ пресета размера; нет — базовый ультра-документ стенда. Отличаться
+   * от него вправе ровно та ось, чья величина ЕСТЬ значение ручки: у террейна
+   * плотность разбиения приходит только потолком пресета (QUAL-1) — авторское
+   * значение живёт конфигом рендера и осью быть не может.
+   */
+  readonly preset?: QualityPreset;
 }
 
 interface ScalingAxis {
@@ -218,6 +227,15 @@ function size(magnitude: number, over: Partial<ScalingSize> = {}): ScalingSize {
 /** Сколько cliff-отрезков даёт решётка укрытий шагом `step` — величина своей оси. */
 function segmentsOf(step: number): number {
   return benchGrid(SCALING_EXTENT, step).cliffs.length;
+}
+
+/**
+ * Документ оси разбиения террейна: базовый ультра плюс потолок (QUAL-1). Ручка
+ * потолочная, поэтому действующая плотность — min(конфига рендера, потолка), и
+ * величиной оси служит именно потолок: он один и приходит извне подсистемы.
+ */
+function tessellationCeiling(ceiling: number): QualityPreset {
+  return Object.freeze({ ...BENCH_PRESETS.ultra, 'terrain.curvatureTessellation': ceiling });
 }
 
 /**
@@ -245,20 +263,42 @@ const AXES: readonly ScalingAxis[] = [
     small: size(4, { resolution: 4 }),
     large: size(8, { resolution: 8 }),
   },
+  {
+    // Число событий одноразового эффекта в доставке (REND-24): выстрелы —
+    // единственная работа частиц, которую двигает СВОЯ величина, а не состав
+    // сущностей; оболочки типов при этом стоят на месте, и отношение L/S
+    // приписывается частицам целиком.
+    axis: 'particleShots',
+    small: size(4, { load: { ...BASE_LOAD, shots: 4 } }),
+    large: size(32, { load: { ...BASE_LOAD, shots: 32 } }),
+  },
+  {
+    // Потолок плотности разбиения клеток с кривизной (REND-9, QUAL-1): пол
+    // растёт его КВАДРАТОМ, стенки — линейно, и обе зависимости читаются
+    // отношением L/S. Авторская плотность конфига рендера у обоих размеров одна.
+    axis: 'terrainTessellation',
+    small: size(2, { preset: tessellationCeiling(2) }),
+    large: size(4, { preset: tessellationCeiling(4) }),
+  },
 ];
 
 /**
  * Одна доставка и один кадр синтетической нагрузки под снятым замером.
  *
- * Пресета у осей нет намеренно (стенд без документа — ультра, то есть без
- * потолков): ось «разрешение маски» ДВИГАЕТ ту самую величину, которую потолок
+ * Базовый документ осей — ультра, то есть без потолков (стенд без пресета берёт
+ * его сам): ось «разрешение маски» ДВИГАЕТ ту самую величину, которую потолок
  * ограничивает, и второй пресет мерил бы здесь не рост стоимости от разрешения,
- * а работу min() — она проверена на матчах (QUAL-4) и в `render-ts`.
+ * а работу min() — она проверена на матчах (QUAL-4) и в `render-ts`. Ось
+ * разбиения террейна — исключение по механике, а не по вкусу: авторская
+ * плотность приходит конфигом рендера, и подвинуть её снаружи можно только
+ * потолком; документ этой оси называет ОДНУ ручку сверх базовой, поэтому
+ * рассуждение про маску остаётся в силе.
  */
 function measureSize(config: ScalingSize): RenderCostCounters {
   const bench = new PresentationBench({
     grid: benchGrid(SCALING_EXTENT, config.pillarStep),
     resolution: config.resolution,
+    ...(config.preset !== undefined ? { preset: config.preset } : {}),
   });
   const ext = syntheticTick(config.load);
   const counters = createCostCounters();
@@ -363,17 +403,137 @@ describe('PERF-4: голден-гейт стоимости на записанн
   it('QUAL-1: значения ручек приезжают стенду контроллером, а не мимо него', () => {
     const bench = matchBench(BENCH_PRESETS.performance);
 
-    // Реестр стенда собран из деклараций ЕГО подсистем (design D1): туман ручку
-    // объявил, подсистема позиций ручек не имеет и в реестре не появляется.
-    expect(bench.quality.knobs.map((knob) => knob.name)).toEqual(['fog.maskResolution']);
-    expect(bench.quality.effective().get('fog.maskResolution')).toBe(
-      BENCH_PRESETS.performance['fog.maskResolution'],
-    );
-    // Прочие ручки документа стенду не адресованы — их подсистем здесь нет
-    // вовсе. Это не «неизвестные» ручки, а не объявленные на этой сцене: состав
-    // документа проверяется против СОБРАННОГО реестра, и регистрация вправе
-    // прийти позже применения пресета (QUAL-1).
+    // Реестр стенда собран из деклараций ЕГО подсистем (design D1) в порядке
+    // регистрации: туман, террейн, модели (две ручки), частицы. Подсистема
+    // позиций ручек не имеет и в реестре не появляется — реестр собирается из
+    // того, что подсистемы объявили, а не из состава документа.
+    expect(bench.quality.knobs.map((knob) => knob.name)).toEqual([
+      'fog.maskResolution',
+      'terrain.curvatureTessellation',
+      'models.lodThresholdScale',
+      'models.defaultTier',
+      'particles.density',
+    ]);
+    const effective = bench.quality.effective();
+    for (const [name, value] of Object.entries(BENCH_PRESETS.performance)) {
+      expect(effective.get(name), name).toBe(value);
+    }
     expect(bench.maskResolution).toBe(BENCH_PRESETS.performance['fog.maskResolution']);
+  });
+
+  it('стенд собран без предупреждений: фикстуры доехали, заглушек в счётчиках нет', () => {
+    // Заглушка вместо модели (ASSET-4), неразвёрнутый эффект или карта кривизны
+    // не той сетки (ASSET-7) дали бы счётчики МЕНЬШЕЙ работы, и эталон принял бы
+    // деградацию фикстуры за норму. Тишина подсистем — часть гейта.
+    for (const preset of BENCH_PRESET_NAMES) {
+      const bench = matchBench(BENCH_PRESETS[preset]);
+      playRecording(loadRecording('match-walk'), { onTick: (result) => { bench.step(result); } });
+      expect(bench.warnings, preset).toEqual([]);
+    }
+  });
+});
+
+// ------------------- счётчики подсистем стенда (models/particles/terrain)
+
+/**
+ * Префиксы счётчиков подсистем стенда (change `bench-stand-subsystems`, D1):
+ * имя счётчика начинается с имени его подсистемы. Набор имён читается из
+ * ОБЪЯВЛЕНИЯ пакета (`COST_COUNTER_STAGES`), а не выписывается здесь: новый
+ * счётчик подсистемы обязан попасть под эти проверки сам, без правки теста.
+ */
+const SUBSYSTEM_PREFIXES = ['models', 'particles', 'terrain'] as const;
+
+function countersOf(prefix: string): (keyof RenderCostCounters)[] {
+  const names = Object.keys(COST_COUNTER_STAGES) as (keyof RenderCostCounters)[];
+  return names.filter((name) => name.startsWith(prefix));
+}
+
+describe('PERF-4: работа моделей, частиц и террейна видна эталону', () => {
+  for (const prefix of SUBSYSTEM_PREFIXES) {
+    it(`${prefix}: счётчики объявлены и на записанном матче не мёртвые`, () => {
+      const names = countersOf(prefix);
+      // Пустой набор — не «нечего проверять», а необъявленная подсистема: без
+      // счётчиков её удорожание проходит гейт зелёным (PERF-4).
+      expect(names.length, `${prefix}: счётчики не объявлены`).toBeGreaterThan(0);
+      const run = runMatch('match-walk', 'ultra');
+      const moved = names.filter((name) => run.render[name] > 0);
+      expect(moved.length, `${prefix}: ни один счётчик не сдвинулся`).toBeGreaterThan(0);
+    });
+  }
+
+  it('модели: инстансы обеих записей манифеста созданы и рисуются каждый кадр', () => {
+    const run = runMatch('match-walk', 'ultra');
+    const ticks = loadRecording('match-walk').ticks;
+    // Обе сущности записи получили инстанс (REND-3) — и запись с явным ярусом,
+    // и запись, ярус не назвавшая: `models.defaultTier` не остался без работы.
+    expect(run.render.modelsInstancesCreated).toBe(2);
+    expect(run.render.modelsInstancesSynced).toBe(2 * ticks);
+    // Кадр платит за оба инстанса и отсекает ноль: камера стенда держит арену
+    // целиком, иначе выбор уровня не исполнялся бы вовсе (REND-21, REND-22).
+    expect(run.render.modelsPoseWrites).toBe(2 * ticks);
+    expect(run.render.modelsCulled).toBe(0);
+    expect(run.render.modelsLodSelections).toBe(2 * ticks);
+  });
+
+  it('частицы: оболочка типа живёт всеми тиками, экземпляр берётся из пула один раз', () => {
+    const run = runMatch('match-walk', 'ultra');
+    const ticks = loadRecording('match-walk').ticks;
+    // Запись `particles.byKind` есть у одной из двух записей манифеста: сведение
+    // считает источники сущностей С ЗАПИСЬЮ, а не весь состав доставки.
+    expect(run.render.particlesShellsSynced).toBe(ticks);
+    // Оболочка живёт весь матч: экземпляр взят однажды и в пул не возвращался.
+    expect(run.render.particlesInstancesAcquired).toBe(1);
+    expect(run.render.particlesShellsPosed).toBe(ticks);
+    expect(run.render.particlesSystemsStepped).toBe(ticks);
+  });
+
+  it('террейн: импульс пола помечает чанк каждой доставкой, кадр его пересобирает', () => {
+    const run = runMatch('match-walk', 'ultra');
+    const ticks = loadRecording('match-walk').ticks;
+    // Арена матчевого стенда — один чанк, и обе перещёлкнутые клетки лежат в
+    // нём: пометок две на доставку, пересборка одна на кадр (REND-7, ED-15).
+    expect(run.render.terrainChunksMarked).toBe(2 * ticks);
+    expect(run.render.terrainChunksRebuilt).toBe(ticks);
+    expect(run.render.terrainFloorQuads).toBeGreaterThan(0);
+    // Укрытия арены дают cliff-отрезки, и стенки строятся вместе с полом (TERR-5).
+    expect(run.render.terrainWallQuads).toBeGreaterThan(0);
+  });
+
+  it('QUAL-4: пресеты расходятся на работе моделей и террейна, состав доставки — нет', () => {
+    const performance = runMatch('match-walk', 'performance').render;
+    const ultra = runMatch('match-walk', 'ultra').render;
+
+    // Множитель порогов LOD (REND-22): вдвое ранние пороги уводят обе записи на
+    // соседний уровень цепочки, и кадр отдаёт батчам вчетверо меньше
+    // треугольников — ровно ту величину, ради которой ручка и заведена.
+    expect(ultra.modelsBatchTriangles).toBe(4 * performance.modelsBatchTriangles);
+    // Выбор уровня при этом исполняется одинаково часто: дешевеет не решение, а
+    // геометрия, которую оно выбирает.
+    expect(ultra.modelsLodSelections).toBe(performance.modelsLodSelections);
+    // Потолок разбиения (REND-9): пол пересобранных чанков растёт КВАДРАТОМ
+    // плотности, стенки — линейно, поэтому вдвое больший потолок дорожает полу
+    // сильнее, чем стенкам.
+    expect(ultra.terrainFloorQuads).toBeGreaterThan(2 * performance.terrainFloorQuads);
+    expect(ultra.terrainWallQuads).toBeGreaterThan(performance.terrainWallQuads);
+    expect(ultra.terrainWallQuads).toBeLessThanOrEqual(2 * performance.terrainWallQuads);
+    // Пересборок при этом столько же: потолок меняет ЦЕНУ пересборки, а не её
+    // повод — поводом остаётся мутация пола (TERR-6).
+    expect(ultra.terrainChunksRebuilt).toBe(performance.terrainChunksRebuilt);
+
+    // Частицы от пресета не зависят НАМЕРЕННО (design D3): множитель плотности
+    // правит эмиссию ВНУТРИ систем, а объём нашей работы — оболочки, взятия из
+    // пула, шаги систем — от него не меняется. Читать число живых частиц
+    // эталону запрещено: эмиссия three.quarks стохастична, и счётчик по ней
+    // нарушил бы машинную независимость (PERF-3). Равенство здесь поэтому —
+    // утверждение, а не пропуск проверки.
+    for (const name of countersOf('particles')) {
+      expect(ultra[name], name).toBe(performance[name]);
+    }
+    // Состав доставленного состояния тоже общий: качество меняет подачу
+    // картинки, а не то, что в ней есть (QUAL-2).
+    expect(ultra.modelsInstancesCreated).toBe(performance.modelsInstancesCreated);
+    expect(ultra.modelsInstancesSynced).toBe(performance.modelsInstancesSynced);
+    expect(ultra.modelsPoseWrites).toBe(performance.modelsPoseWrites);
   });
 });
 
@@ -436,6 +596,67 @@ describe('PERF-6: оси масштабирования бенч-нагрузк�
     expect(many.frameInstances).toBe(ratio * few.frameInstances);
     // Наблюдателей столько же — маска от толпы зрителей не дорожает.
     expect(many.fogMaskTexels).toBe(few.fogMaskTexels);
+  });
+
+  it('число сущностей: работа моделей и оболочек частиц растёт вместе с ним', () => {
+    const axis = AXES.find((item) => item.axis === 'entities')!;
+    const few = measureSize(axis.small);
+    const many = measureSize(axis.large);
+    const ratio = axis.large.magnitude / axis.small.magnitude;
+    // Инстанс на сущность (REND-3): и сведение пула, и поза кадра, и тест
+    // отсечения растут ровно составом доставки.
+    expect(many.modelsInstancesSynced).toBe(ratio * few.modelsInstancesSynced);
+    expect(many.modelsInstancesCreated).toBe(ratio * few.modelsInstancesCreated);
+    expect(many.modelsPoseWrites).toBe(ratio * few.modelsPoseWrites);
+    expect(many.modelsCullTests).toBe(ratio * few.modelsCullTests);
+    // Треугольники батчей — тоже: камера стенда держит все инстансы на одном
+    // уровне цепочки, поэтому растёт их ЧИСЛО, а не геометрия каждого (REND-22).
+    expect(many.modelsBatchTriangles).toBe(ratio * few.modelsBatchTriangles);
+    // Оболочка эмиттера есть у половины сущностей — у записи с эмиттерным
+    // ключом манифеста (REND-24); растёт она тем же составом доставки.
+    expect(many.particlesShellsSynced).toBe(ratio * few.particlesShellsSynced);
+    expect(many.particlesShellsPosed).toBe(ratio * few.particlesShellsPosed);
+    // А террейну толпа безразлична: его работа приходит мутацией пола, а не
+    // составом сущностей (TERR-6 → REND-7).
+    expect(many.terrainChunksRebuilt).toBe(few.terrainChunksRebuilt);
+    expect(many.terrainFloorQuads).toBe(few.terrainFloorQuads);
+  });
+
+  it('число событий эффекта: выстрелы кратны ему, оболочки типов — нет', () => {
+    const axis = AXES.find((item) => item.axis === 'particleShots')!;
+    const few = measureSize(axis.small);
+    const many = measureSize(axis.large);
+    // Событие честного прохода заводит выстрел (REND-24): их ровно столько,
+    // сколько событий, и каждый берёт экземпляр из пула.
+    expect(few.particlesShotsStepped).toBe(axis.small.magnitude);
+    expect(many.particlesShotsStepped).toBe(axis.large.magnitude);
+    expect(many.particlesInstancesAcquired - few.particlesInstancesAcquired).toBe(
+      axis.large.magnitude - axis.small.magnitude,
+    );
+    // Оболочки типов событиями не заводятся — состав сущностей тот же.
+    expect(many.particlesShellsSynced).toBe(few.particlesShellsSynced);
+    expect(many.particlesShellsPosed).toBe(few.particlesShellsPosed);
+    // И моделям события манифест не адресует: работа кадра у них та же.
+    expect(many.modelsPoseWrites).toBe(few.modelsPoseWrites);
+  });
+
+  it('потолок разбиения террейна: пол дорожает квадратом, стенки — линейно', () => {
+    const axis = AXES.find((item) => item.axis === 'terrainTessellation')!;
+    const coarse = measureSize(axis.small);
+    const fine = measureSize(axis.large);
+    // Клетка с кривизной даёт `tessellation²` подклеток (REND-9): вдвое больший
+    // потолок дорожает полу БОЛЬШЕ чем вдвое — плоские клетки чанка платят
+    // по-прежнему один квад, и потому не ровно вчетверо.
+    expect(fine.terrainFloorQuads).toBeGreaterThan(2 * coarse.terrainFloorQuads);
+    // Кромка обрыва разбивается вдоль, а не по площади: рост не больше двойного.
+    expect(fine.terrainWallQuads).toBeGreaterThan(coarse.terrainWallQuads);
+    expect(fine.terrainWallQuads).toBeLessThanOrEqual(2 * coarse.terrainWallQuads);
+    // Пересобранных чанков столько же: потолок меняет цену пересборки, а не её
+    // повод — им остаётся импульс пола стенда (TERR-6).
+    expect(fine.terrainChunksRebuilt).toBe(coarse.terrainChunksRebuilt);
+    // Ни моделям, ни частицам потолок террейна не адресован вовсе.
+    expect(fine.modelsBatchTriangles).toBe(coarse.modelsBatchTriangles);
+    expect(fine.particlesSystemsStepped).toBe(coarse.particlesSystemsStepped);
   });
 });
 

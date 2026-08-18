@@ -23,7 +23,19 @@
  * фикстур `render-ts`.
  *
  * `content/` бенч не читает (CONT-4): сцены приезжают записью матча, сетка
- * террейна строится здесь.
+ * террейна строится здесь, а манифест визуалов, модель, документ эффекта и
+ * карта кривизны — синтетические фикстуры (`benchContent.ts`, change
+ * `bench-stand-subsystems`, решение D2).
+ *
+ * ## Состав стенда
+ *
+ * Подсистем на сцене пять: туман (FOW-7..10), подсистема позиций (минимальный
+ * потребитель доставки), террейн (REND-7, REND-9), модели (REND-3, REND-20,
+ * REND-22) и частицы (REND-24). Первые две стерегли стоимость с самого
+ * появления гейта; остальные три добавлены потому, что без них шестнадцатикратное
+ * удорожание выбора LOD, шага эмиттеров или пересборки чанков проходило бы гейт
+ * зелёным (PERF-4), а ручки `models.*`/`particles.*`/`terrain.*` не двигали бы
+ * ни одного эталонного числа (QUAL-4).
  *
  * ## Пресет качества — параметр стенда
  *
@@ -38,6 +50,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import {
+  FIXED_ONE,
   buildSimulation,
   createTerrainGrid,
   tick,
@@ -48,21 +61,32 @@ import {
   type TerrainGrid,
   type TickResult,
 } from '@game-mvp/core';
-import { AssetService } from '@game-mvp/assets';
 import {
   Extractor,
   FogSubsystem,
+  ModelsSubsystem,
+  ParticlesSubsystem,
   PresentationStage,
   QualityController,
+  TerrainSubsystem,
   ViewBuffer,
+  VisualSurfaceSource,
   type ExtractedTick,
   type FogLayerCanvas,
   type PresentationProducer,
   type QualityPreset,
   type RenderContext,
+  type RenderEvent,
   type StatSource,
   type TickView,
 } from '@game-mvp/render';
+import {
+  BENCH_BURST_EVENT,
+  BENCH_KINDS,
+  benchAssets,
+  benchCurvature,
+  benchManifest,
+} from './benchContent.js';
 import { PositionsSubsystem, TICK_RATE } from './fixtures.js';
 
 /** Эталоны стоимости лежат рядом с парами матчей — там же, где вся golden-культура. */
@@ -238,10 +262,15 @@ const FRAMES_PER_TICK = 1;
  * эталон стоимости, зависящий от политики игры, краснел бы от каждой правки
  * баланса картинки.
  *
- * Имена ручек — собранного реестра (design D1). Стенд регистрирует туман и
- * подсистему позиций, поэтому в счётчиках отзывается только `fog.maskResolution`;
- * остальные ручки выписаны, чтобы документ пресета оставался документом ПОЛНОГО
- * набора осей, а не подмножеством, случайно совпавшим с составом стенда.
+ * Имена ручек — собранного реестра (design D1). Стенд регистрирует все пять
+ * подсистем, поэтому отзываются ВСЕ ручки документа: разрешение маски —
+ * полномасочными счётчиками тумана, множитель порогов LOD — треугольниками
+ * скомпактованных записей батчей (REND-22), потолок разбиения — квадами пола
+ * пересобранных чанков (REND-9). Множитель плотности частиц счётчиков не
+ * двигает намеренно (change `bench-stand-subsystems`, design D3): он правит
+ * эмиссию ВНУТРИ систем, а объём нашей работы — оболочки, взятия из пула, шаги
+ * систем — от него не меняется, и читать состояние three.quarks эталону
+ * запрещено (PERF-3: машинная независимость).
  */
 const PERFORMANCE_PRESET: QualityPreset = Object.freeze({
   // Потолок ниже сценного разрешения стенда (`MATCH_STAND.resolution`): min()
@@ -258,7 +287,9 @@ const PERFORMANCE_PRESET: QualityPreset = Object.freeze({
 /**
  * Ультра: потолков нет вовсе. Их отсутствие и есть «действует авторское
  * значение» (design D3) — умолчание ceiling-ручки бесконечно, а бесконечности в
- * JSON не написать. Прямые значения выписаны своими документированными
+ * JSON не написать. Отсюда же отсутствие `terrain.curvatureTessellation`:
+ * действует плотность конфига рендера, и её же ограничивает вдвое
+ * производительный документ. Прямые значения выписаны своими документированными
  * умолчаниями (QUAL-1), чтобы пара документов читалась диффом.
  */
 const ULTRA_PRESET: QualityPreset = Object.freeze({
@@ -293,10 +324,48 @@ export interface PresentationBenchOptions {
 }
 
 /**
+ * Размер чанка террейна в клетках. Восьмёрка выбрана под арены стенда: матчевая
+ * (8×8) укладывается в один чанк, синтетическая (16×16) — в четыре. Локальность
+ * пересборки (REND-7) от этого перестаёт быть декларацией: правка в одном углу
+ * арены осей не трогает геометрию другого, и `terrainChunksRebuilt` считает
+ * ровно затронутые чанки, а не всю арену.
+ */
+const TERRAIN_CHUNK = 8;
+
+/**
+ * Высота камеры стенда над ареной, мировые единицы. Камера смотрит на центр
+ * арены сверху вниз — так все инстансы попадают в пирамиду видимости (REND-21;
+ * отсечённый инстанс уровня не выбирает вовсе), а экранный размер у них
+ * примерно один, и множитель порогов LOD пресета переводит на соседний уровень
+ * ВСЕ записи разом, а не случайную их долю. Значение согласовано с порогами
+ * записи манифеста (`benchContent.ts`): при множителе 1 инстансы держатся
+ * нулевого уровня, при 2 уходят на первый (REND-22, ASSET-13).
+ */
+const CAMERA_HEIGHT = 24;
+
+/**
+ * Клеток пола, которые стенд перещёлкивает каждой доставкой (TERR-6 → REND-7).
+ *
+ * Работа террейна вся событийная: чанк пересобирается по мутации пола, правке
+ * документа или смене поверхности, а «просто кадр» подсистеме террейна не стоит
+ * ничего. Записанные матчи же идут на сценах БЕЗ террейна вовсе, и без своей
+ * мутации счётчики `terrain*` лежали бы нулями на всех трёх записях — гейт
+ * стерёг бы пустоту. Поэтому стенд объявляет мутацию сам — тем же механизмом,
+ * которым он объявляет статы наблюдателей тумана (`MATCH_STAT_SOURCES`):
+ * нагрузка, которой сцена дуэли не несёт, но которую тракт обязан уметь.
+ *
+ * Две клетки берутся с шагом по всей арене (см. `floorPulse`) — чтобы на
+ * многочанковой арене они пришлись на разные чанки, — и щёлкают между «пол
+ * выбит» и «пол на месте» через доставку: значение, а не переключение,
+ * переживает conflation (SHELL-4), и дельта каждой доставки непуста.
+ */
+const FLOOR_PULSE_CELLS = 2;
+
+/**
  * Презентационный тракт бенча: Extractor (воркер-сторона) → ViewBuffer
- * (main-сторона, часы инжектированы) → PresentationStage с подсистемой тумана и
- * подсистемой позиций. Ровно тот шов, на котором сняты счётчики стадий
- * `syncTick` и `frame` (PERF-2).
+ * (main-сторона, часы инжектированы) → PresentationStage с подсистемами тумана,
+ * позиций, террейна, моделей и частиц. Ровно тот шов, на котором сняты счётчики
+ * стадий `syncTick` и `frame` (PERF-2).
  */
 export class PresentationBench {
   readonly stage: PresentationStage;
@@ -305,10 +374,23 @@ export class PresentationBench {
   readonly renderer = new RendererSpy();
   /** Контроллер качества сцены стенда (QUAL-1): реестр ручек и их значения. */
   readonly quality: QualityController;
+  /**
+   * Предупреждения подсистем стенда. Пустой список — часть проверки, а не
+   * отладка: заглушка вместо модели, неразвёрнутый эффект или карта кривизны не
+   * той сетки дали бы счётчики МЕНЬШЕЙ работы, и эталон стерёг бы деградацию
+   * фикстуры, приняв её за норму.
+   */
+  readonly warnings: string[] = [];
 
   private readonly extractor: Extractor;
   private readonly camera = new THREE.PerspectiveCamera();
   private readonly clock: { ms: number };
+  /** Клетки арены — знаменатель шага импульса пола. */
+  private readonly floorCells: number;
+  /** Номер доставки: им чередуется значение бита пола в импульсе. */
+  private deliveries = 0;
+  /** Переиспользуемая дельта пола: пар «клетка, бит» ровно `FLOOR_PULSE_CELLS`. */
+  private readonly floorDelta = new Int32Array(FLOOR_PULSE_CELLS * 2);
   /**
    * Герой игрока — источник команды, чьи наблюдатели открывают маску (FOW-7).
    * Берётся первой доставкой: ID приезжает из мира, а не из конфигурации.
@@ -318,33 +400,57 @@ export class PresentationBench {
   constructor(options: PresentationBenchOptions) {
     const clock = { ms: 0 };
     this.clock = clock;
+    const { grid } = options;
+    this.floorCells = grid.width * grid.height;
+    const kindOf = benchKinds();
     this.extractor = new Extractor({
-      kindOf: () => 'hero',
+      kindOf: (_state, entity) => kindOf(entity),
       ...(options.stats !== undefined ? { stats: options.stats } : {}),
     });
-    this.buffer = new ViewBuffer({ tickSeconds: 1 / TICK_RATE, clock: () => clock.ms });
-    // Ассеты бенчу не нужны: ни туман, ни подсистема позиций их не читают —
-    // источник падает при первом же обращении, чтобы это оставалось правдой.
+    this.buffer = new ViewBuffer({
+      tickSeconds: 1 / TICK_RATE,
+      clock: () => clock.ms,
+      // Зеркало карты пола арены (SHELL-2): без него дельта пола доставки
+      // отбрасывается буфером, и мутация до террейна не доезжает.
+      floorBits: new Uint8Array(grid.floor),
+    });
     const context: RenderContext = {
       scene: new THREE.Scene(),
-      assets: new AssetService({
-        read: () => Promise.reject(new Error('бенч стоимости не читает ассетов')),
-      }),
+      // Ассеты стенда — синтетические фикстуры, готовые немедленно (CONT-4,
+      // design D2): дерева контента бенч не читает, а асинхронная готовность
+      // не доехала бы до синхронного прогона записи вовсе.
+      assets: benchAssets(),
       config: { heightStep: 1 },
     };
     this.fog = new FogSubsystem({
-      grid: options.grid,
+      grid,
       stats: FOG_STATS,
       hero: () => this.hero,
       config: { resolution: options.resolution },
       createCanvas: benchCanvas,
     });
+    // Визуальная поверхность (REND-9) — общая на подсистемы; карта кривизны
+    // ставится ДО регистрации, поэтому первая же сборка чанков идёт с рельефом,
+    // а не пересобирает арену вторым проходом.
+    const surface = new VisualSurfaceSource(grid, { warn: (message) => this.warnings.push(message) });
+    surface.setCurvature(benchCurvature(grid));
+    this.camera.position.set(grid.width / 2, grid.height / 2, CAMERA_HEIGHT);
+    this.camera.lookAt(grid.width / 2, grid.height / 2, 0);
+    this.camera.updateMatrixWorld(true);
     this.stage = new PresentationStage(context);
     // Контроллер заводится ДО регистрации: значения ручек уезжают подсистеме
     // тем же путём, что в игре, — регистрацией (QUAL-1, design D2), а не
     // отдельным вызовом «примени пресет» после сборки сцены.
     this.quality = new QualityController(this.stage, options.preset ?? BENCH_PRESETS.ultra);
-    this.stage.register(this.fog).register(new PositionsSubsystem());
+    const warn = (message: string): void => {
+      this.warnings.push(message);
+    };
+    this.stage
+      .register(this.fog)
+      .register(new PositionsSubsystem())
+      .register(new TerrainSubsystem(grid, { chunkSize: TERRAIN_CHUNK, surface }))
+      .register(new ModelsSubsystem(benchManifest(), { camera: this.camera, warn }))
+      .register(new ParticlesSubsystem(benchManifest(), { warn }));
   }
 
   /** Действующее разрешение маски — сценное под потолком пресета (FOW-10, design D3). */
@@ -360,10 +466,28 @@ export class PresentationBench {
   /** Та же доставка от синтетической плоской формы — ось масштабирования (PERF-6). */
   deliver(ext: ExtractedTick): void {
     this.clock.ms += 1000 / TICK_RATE;
+    ext.floorDelta = this.floorPulse();
     this.buffer.apply(ext);
     this.hero ??= observerOf(this.buffer.view);
     this.stage.publish(PRODUCER, this.buffer.view);
     for (let i = 0; i < FRAMES_PER_TICK; i++) this.frame();
+  }
+
+  /**
+   * Дельта пола этой доставки — пары «клетка, бит» (TERR-6). Клетки берутся с
+   * шагом по всей арене, бит чередуется через доставку: каждая доставка
+   * действительно меняет карту, и террейн получает пометку чанка, а не пустой
+   * список.
+   */
+  private floorPulse(): Int32Array {
+    const stride = Math.max(1, Math.floor(this.floorCells / FLOOR_PULSE_CELLS));
+    const bit = this.deliveries % 2 === 0 ? 0 : 1;
+    for (let k = 0; k < FLOOR_PULSE_CELLS; k++) {
+      this.floorDelta[k * 2] = (k * stride) % this.floorCells;
+      this.floorDelta[k * 2 + 1] = bit;
+    }
+    this.deliveries++;
+    return this.floorDelta;
   }
 
   private frame(): void {
@@ -374,6 +498,30 @@ export class PresentationBench {
     if (timing !== null) this.stage.frame(timing.dt, timing.alpha, timing.realDt);
     this.fog.render(this.renderer, this.camera);
   }
+}
+
+/**
+ * Визуальный тип сущности стенда (ASSET-9) — чередованием в порядке ПЕРВОЙ
+ * встречи: первая сущность получает запись с явным батчевым ярусом, вторая —
+ * запись, ярус не назвавшую (`models.defaultTier`, REND-20), и так далее. Обе
+ * записи стенду нужны на любой нагрузке, а записанные матчи несут всего по паре
+ * сущностей — чередование по порядку появления даёт обе даже на них, тогда как
+ * чётность самого ID зависела бы от раскладки поколений в ядре.
+ *
+ * Свой словарь на каждый Extractor: порядок доставки детерминирован, поэтому
+ * назначение воспроизводится побитово, а два стенда одной записи не делят
+ * состояние.
+ */
+function benchKinds(): (entity: EntityId) => string {
+  const assigned = new Map<EntityId, string>();
+  return (entity) => {
+    let kind = assigned.get(entity);
+    if (kind === undefined) {
+      kind = assigned.size % 2 === 0 ? BENCH_KINDS.runner : BENCH_KINDS.prop;
+      assigned.set(entity, kind);
+    }
+    return kind;
+  };
 }
 
 /** Первая сущность доставки со статом команды — герой стенда (FOW-7). */
@@ -414,6 +562,13 @@ export interface SyntheticLoad {
   readonly vision: number;
   /** Сторона арены в клетках — по ней раскладываются сущности. */
   readonly extent: number;
+  /**
+   * Событий одноразового эффекта в доставке — ось «число эффектов» (PERF-6,
+   * REND-24). Не задано — ни одного: стенд проверки маски (`qualityInvariance`)
+   * меряет туман, и выстрелы частиц ему только шум. Событие несёт координату в
+   * Q16.16, как эмитируют её системы контента (REND-1).
+   */
+  readonly shots?: number;
 }
 
 /**
@@ -421,9 +576,23 @@ export interface SyntheticLoad {
  * масштабирования. Сущности раскладываются решёткой по арене, первые
  * `observers` из них несут статы «команда 0 + радиус обзора»: остальные — вес
  * доставки без вклада в маску, ровно как видимые враги настоящего матча.
+ *
+ * Визуальный тип чередуется теми же двумя записями манифеста, что и на матчах
+ * (`benchKinds`): чётные — явный батчевый ярус, нечётные — ярус по умолчанию
+ * пресета (REND-20). Работа моделей поэтому растёт вместе с числом сущностей,
+ * а не остаётся мёртвой на синтетике.
  */
 export function syntheticTick(load: SyntheticLoad): ExtractedTick {
   const count = load.entities;
+  const shots = load.shots ?? 0;
+  const events: RenderEvent[] = Array.from({ length: shots }, (_, i) => ({
+    type: BENCH_BURST_EVENT,
+    tick: 1,
+    data: {
+      x: Math.round(((i % load.extent) + 0.5) * FIXED_ONE),
+      y: Math.round((Math.floor(i / load.extent) + 0.5) * FIXED_ONE),
+    },
+  }));
   const ext: ExtractedTick = {
     tick: 1,
     mode: 'Running',
@@ -447,13 +616,15 @@ export function syntheticTick(load: SyntheticLoad): ExtractedTick {
     statIndex: new Int32Array(count * 2),
     statValue: new Float64Array(count * 2),
     statPairs: 0,
-    events: [],
+    events,
+    // Импульс пола кладёт сама доставка стенда (`PresentationBench.deliver`):
+    // мутация — свойство стенда, а не размера нагрузки.
     floorDelta: [],
-    kindTable: ['hero'],
+    kindTable: [BENCH_KINDS.runner, BENCH_KINDS.prop],
   };
   for (let i = 0; i < count; i++) {
     ext.id[i] = i + 1;
-    ext.kind[i] = 0;
+    ext.kind[i] = i % 2;
     ext.x[i] = (i % load.extent) + 0.5;
     ext.y[i] = (Math.floor(i / load.extent) % load.extent) + 0.5;
     ext.facingYaw[i] = Number.NaN;
