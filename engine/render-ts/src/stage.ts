@@ -61,11 +61,17 @@ export class PresentationStage {
   private producer: PresentationProducer | null = null;
 
   /**
-   * Наблюдатель регистраций — вход контроллера качества (`render-quality`
-   * QUAL-1, design D2). Он один: контроллер качества у сцены один, а второй
-   * означал бы два источника значений одной ручки.
+   * Наблюдатели регистраций — второе измерение рядом с кадровым путём. Их два
+   * вида, и оба не подсистемы: контроллер качества (`render-quality` QUAL-1,
+   * design D2) спрашивает у подсистемы декларацию ручек, отладочный слой
+   * (`render-debug` RDBG-1) — объявление отладочных источников (REND-27).
+   *
+   * Список, а не один: измерения независимы, и сцена, державшая одного
+   * наблюдателя, молча отключала бы первое при подписке второго. Двух
+   * контроллеров качества у сцены по-прежнему не бывает — это правило самого
+   * контроллера (два источника значений одной ручки), а не сцены.
    */
-  private watcher: ((subsystem: RenderSubsystem) => void) | null = null;
+  private readonly watchers: ((subsystem: RenderSubsystem) => void)[] = [];
 
   /**
    * Сущности последней доставки — знаменатель счётчика инстансов стадии кадра
@@ -87,21 +93,22 @@ export class PresentationStage {
   register(subsystem: RenderSubsystem): this {
     this.subsystems.push(subsystem);
     subsystem.init(this.context);
-    this.watcher?.(subsystem);
+    for (const watcher of this.watchers) watcher(subsystem);
     return this;
   }
 
   /**
-   * Подписка на регистрации подсистем (QUAL-1, design D2). Уже
+   * Подписка на регистрации подсистем (QUAL-1, REND-27). Уже
    * зарегистрированные отдаются наблюдателю НЕМЕДЛЕННО: контроллер качества,
    * созданный после сборки сцены, обязан увидеть их ровно так же, как позднюю
    * регистрацию, — иначе порядок «сперва подсистемы, потом контроллер» молча
-   * оставлял бы половину реестра без значений.
+   * оставлял бы половину реестра без значений. То же и у отладочного слоя: его
+   * заводят по нажатию человека, то есть заведомо после сборки сцены.
    *
-   * Наблюдатель один (см. `watcher`); повторная подписка его заменяет.
+   * Наблюдателей несколько (см. `watchers`), и подписка их не заменяет.
    */
   watchRegistrations(watcher: (subsystem: RenderSubsystem) => void): void {
-    this.watcher = watcher;
+    this.watchers.push(watcher);
     for (const subsystem of this.subsystems) watcher(subsystem);
   }
 
