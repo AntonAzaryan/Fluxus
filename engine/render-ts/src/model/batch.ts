@@ -69,10 +69,12 @@ interface UpdateRange {
   count: number;
 }
 
-/** Инстанс-буферы: матрицы и позы видимых записей подряд. */
+/** Инстанс-буферы: матрицы, позы и доли проявленности видимых записей подряд. */
 interface BatchBuffers {
   matrix: THREE.InstancedBufferAttribute;
   pose: THREE.InstancedBufferAttribute;
+  /** Доля проявленности записи [0, 1] (FOW-8): множитель альфы в `vatMaterial`. */
+  fade: THREE.InstancedBufferAttribute;
   count: number;
   /**
    * Диапазоны заливки — по одной долгоживущей записи на атрибут.
@@ -83,6 +85,7 @@ interface BatchBuffers {
    */
   readonly matrixRange: UpdateRange;
   readonly poseRange: UpdateRange;
+  readonly fadeRange: UpdateRange;
 }
 
 interface BatchLevel {
@@ -133,6 +136,7 @@ export class ModelBatch {
   private slotLevels = new Uint8Array(0);
   private matrices = new Float32Array(0);
   private poses = new Float32Array(0);
+  private fades = new Float32Array(0);
 
   constructor(options: ModelBatchOptions) {
     this.materials = options.materials;
@@ -174,6 +178,7 @@ export class ModelBatch {
     this.visibleFlags[slot] = 1;
     this.frames[slot] = 0;
     this.slotLevels[slot] = 0;
+    this.fades[slot] = 1;
     this.live += 1;
     return slot;
   }
@@ -205,6 +210,11 @@ export class ModelBatch {
 
   setVisible(slot: number, visible: boolean): void {
     this.visibleFlags[slot] = visible ? 1 : 0;
+  }
+
+  /** Доля проявленности записи [0, 1] (FOW-8): едет пер-инстансным атрибутом в альфу. */
+  setFade(slot: number, fade: number): void {
+    this.fades[slot] = fade;
   }
 
   /** Кадр записи — по нему читается маска видимости частей (ASSET-12). */
@@ -242,6 +252,7 @@ export class ModelBatch {
       for (const buffers of entry.buffers) {
         setUpdateRange(buffers.matrix, buffers.matrixRange, buffers.count * MATRIX_STRIDE);
         setUpdateRange(buffers.pose, buffers.poseRange, buffers.count * POSE_STRIDE);
+        setUpdateRange(buffers.fade, buffers.fadeRange, buffers.count);
       }
       if (cost === undefined) continue;
       // Записей скопировано — по числу в КАЖДОМ наборе буферов: обычно набор на
@@ -291,7 +302,7 @@ export class ModelBatch {
       for (const part of level.parts) {
         const geometry = part.mesh.geometry;
         for (const name of Object.keys(geometry.attributes)) {
-          if (name !== 'instancePose') geometry.deleteAttribute(name);
+          if (name !== 'instancePose' && name !== 'instanceFade') geometry.deleteAttribute(name);
         }
         geometry.setIndex(null);
         geometry.dispose();
@@ -332,6 +343,7 @@ export class ModelBatch {
     const poseFrom = slot * POSE_STRIDE;
     const poseTo = index * POSE_STRIDE;
     for (let k = 0; k < POSE_STRIDE; k++) pose[poseTo + k] = this.poses[poseFrom + k]!;
+    (buffers.fade.array as Float32Array)[index] = this.fades[slot]!;
   }
 
   /**
@@ -346,6 +358,7 @@ export class ModelBatch {
     this.slotLevels = copyInto(new Uint8Array(next), this.slotLevels);
     this.matrices = copyInto(new Float32Array(next * MATRIX_STRIDE), this.matrices);
     this.poses = copyInto(new Float32Array(next * POSE_STRIDE), this.poses);
+    this.fades = copyInto(new Float32Array(next), this.fades);
     this.capacity = next;
 
     if (this.levels.length === 0) this.levels = this.buildLevels(next);
@@ -379,6 +392,7 @@ export class ModelBatch {
     const index = source.geometry.getIndex();
     if (index !== null) geometry.setIndex(index);
     geometry.setAttribute('instancePose', buffers.pose);
+    geometry.setAttribute('instanceFade', buffers.fade);
 
     const material = this.materials[source.materialIndex] ?? this.materials[0];
     const mesh = new THREE.InstancedMesh(
@@ -404,10 +418,12 @@ export class ModelBatch {
     for (const buffers of level.buffers) {
       buffers.matrix = growAttribute(buffers.matrix, capacity, MATRIX_STRIDE);
       buffers.pose = growAttribute(buffers.pose, capacity, POSE_STRIDE);
+      buffers.fade = growAttribute(buffers.fade, capacity, 1);
     }
     for (const part of level.parts) {
       part.mesh.instanceMatrix = part.buffers.matrix;
       part.mesh.geometry.setAttribute('instancePose', part.buffers.pose);
+      part.mesh.geometry.setAttribute('instanceFade', part.buffers.fade);
     }
   }
 }
@@ -451,9 +467,11 @@ function makeBuffers(capacity: number): BatchBuffers {
   return {
     matrix: dynamicAttribute(capacity, MATRIX_STRIDE),
     pose: dynamicAttribute(capacity, POSE_STRIDE),
+    fade: dynamicAttribute(capacity, 1),
     count: 0,
     matrixRange: { start: 0, count: 0 },
     poseRange: { start: 0, count: 0 },
+    fadeRange: { start: 0, count: 0 },
   };
 }
 
