@@ -102,6 +102,7 @@ import type {
   RenderSubsystem,
   TickView,
 } from '../types.js';
+import { costSink, type RenderCostCounters } from '../cost.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import type { SurfaceNormal, VisualSurface } from '../visualSurface.js';
 import { createPickProxy, type InstanceProxySource, type PickProxy, type PickProxyVisitor } from '../picking.js';
@@ -662,6 +663,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
   syncTick(view: TickView): void {
     const ctx = this.requireCtx();
+    // Сток читается ОДИН раз на доставку и уходит вниз параметром (PERF-3):
+    // проверять его на каждом инстансе значило бы платить за учёт ровно тем,
+    // что он мерит. Без стока это одно сравнение на весь обход.
+    const cost = costSink();
     // Разрыв непрерывности (REND-2) снимает необратимость смерти: перемотка
     // через момент смерти оживляет сущность в симуляции, а `EntityDied` в
     // прошлом не разэмитится — без этого живой персонаж навсегда остался бы
@@ -676,7 +681,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (view.snapAll) {
       for (const record of this.instances.values()) record.controller?.onSnap();
     }
-    this.syncPool(ctx, this.instances, view.entities, false, view);
+    this.syncPool(ctx, this.instances, view.entities, false, view, cost);
 
     // События тика → one-shot клипы (REND-4); дедуп на потребителе (OBS-5):
     // при rewind/replay и на замороженных тиках события не переигрываются.
@@ -706,7 +711,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * — их у decoration нет, а не «пока никто не прислал».
    */
   syncDecorations(entities: ReadonlyMap<EntityId, EntityView>): void {
-    this.syncPool(this.requireCtx(), this.decorations, entities, true);
+    this.syncPool(this.requireCtx(), this.decorations, entities, true, null, costSink());
   }
 
   /**
@@ -725,7 +730,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     entities: ReadonlyMap<EntityId, EntityView>,
     decoration: boolean,
     view: TickView | null = null,
+    cost?: RenderCostCounters,
   ): void {
+    // Просмотр поданного набора — работа подсистемы на доставке (PERF-3),
+    // растущая с числом сущностей и с числом декораций одинаково: путь у обоих
+    // пулов один (REND-18). Снятие исчезнувших идёт ниже по пулу и своего поля
+    // не имеет: в установившейся сцене пул равен поданному набору.
+    if (cost !== undefined) cost.modelsInstancesSynced += entities.size;
     // Fade действует только на непрерывном ходе мира: разрыв (rewind, смена
     // продюсера, гашение набора пустым состоянием) убирает инстансы сразу —
     // плавное угасание нарисовало бы «уход в туман», которого не было (REND-2).
@@ -735,6 +746,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       if (record === undefined) {
         record = this.create(ctx, entityView, decoration, fadeSeconds > 0);
         pool.set(entityView.id, record);
+        if (cost !== undefined) cost.modelsInstancesCreated++;
       }
       // Сущность снова в доставленном состоянии: начатый fade-out отменяется,
       // проявление доигрывается от текущей доли — объект в кадре не мигает.
@@ -796,11 +808,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const turnRate = this.options.turnRate ?? DEFAULT_TURN_RATE;
     const tiltRate = this.options.tiltRate ?? DEFAULT_TILT_RATE;
     const surface = this.options.surface?.current ?? null;
+    // Сток кадра — один раз на вход и вниз параметром (PERF-3), как на доставке.
+    const cost = costSink();
 
     // Оба пула одним проходом и одними правилами: декорация в кадре автора и
     // декорация в кадре игрока обязаны быть одним изображением (REND-18).
-    this.poseAll(this.instances, dt, alpha, heightStep, turnRate, tiltRate, surface);
-    this.poseAll(this.decorations, dt, alpha, heightStep, turnRate, tiltRate, surface);
+    this.poseAll(this.instances, dt, alpha, heightStep, turnRate, tiltRate, surface, cost);
+    this.poseAll(this.decorations, dt, alpha, heightStep, turnRate, tiltRate, surface, cost);
 
     // Доигравшие fade-out (FOW-8): анимация угасания кончилась — инстанс
     // убирается тем же `remove`, что и обычное исчезновение. После позы кадра:
@@ -820,11 +834,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // Отсечение — после позы: видимость считается по тому преобразованию,
     // которым инстанс нарисован в ЭТОМ кадре (REND-21). Уровень детализации
     // считается там же — по экранному размеру того же объёма (REND-22).
-    this.cullAll();
+    this.cullAll(cost);
 
     // Компактация видимых записей в инстанс-буферы — последним: до неё batch
     // не знает ни позы кадра, ни видимости.
-    for (const entry of this.batches.values()) entry.batch.flush();
+    for (const entry of this.batches.values()) entry.batch.flush(cost);
   }
 
   /**
@@ -834,8 +848,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * убирается: picking (REND-15) и сведение (REND-3, REND-18) идут по полному
    * набору, и других наблюдаемых последствий у отсечения нет.
    */
-  private cullAll(): void {
+  private cullAll(cost: RenderCostCounters | undefined): void {
     const camera = this.options.camera;
+    // Камеры нет — отсечения не существует вовсе (сборка без неё рисует всё), и
+    // счётчики остаются нулевыми: приписывать кадру тесты, которых он не делал,
+    // нельзя (PERF-3).
     if (camera === undefined) return;
     // Матрицы камеры — те, с которыми кадр и будет нарисован: позу на неё
     // сажает сборка до кадра подсистем (CAM-1), второго расчёта здесь нет.
@@ -845,14 +862,15 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     this.cameraPosition.setFromMatrixPosition(camera.matrixWorld);
     const margin = this.options.cullMargin ?? DEFAULT_CULL_MARGIN;
     const screen = screenScaleOf(camera, this.screenScale);
-    this.cullPool(this.instances, margin, screen);
-    this.cullPool(this.decorations, margin, screen);
+    this.cullPool(this.instances, margin, screen, cost);
+    this.cullPool(this.decorations, margin, screen, cost);
   }
 
   private cullPool(
     pool: ReadonlyMap<EntityId, InstanceRecord>,
     margin: number,
     screen: ScreenScale | null,
+    cost: RenderCostCounters | undefined,
   ): void {
     for (const record of pool.values()) {
       const bounds = cullBoundsOf(record) ?? boundsOf(record);
@@ -878,10 +896,16 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       this.cullSphere.center.copy(this.cullCenter);
       this.cullSphere.radius = radius;
       record.visible = this.frustum.intersectsSphere(this.cullSphere);
+      // Сток уже в локальной переменной: на инстансе остаётся сравнение и
+      // целочисленное сложение, а не чтение стока (PERF-3).
+      if (cost !== undefined) {
+        cost.modelsCullTests++;
+        if (!record.visible) cost.modelsCulled++;
+      }
       if (record.holder !== null) record.holder.visible = record.visible;
       if (record.batch !== null) {
         record.batch.batch.setVisible(record.slot, record.visible);
-        if (record.visible && screen !== null) this.selectLod(record, radius, screen);
+        if (record.visible && screen !== null) this.selectLod(record, radius, screen, cost);
       }
     }
   }
@@ -892,11 +916,19 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * дёргается кадр к кадру. Состояние записи переключение не трогает вовсе —
    * меняется только то, в какой набор инстанс-мешей она компактируется.
    */
-  private selectLod(record: InstanceRecord, radius: number, screen: ScreenScale): void {
+  private selectLod(
+    record: InstanceRecord,
+    radius: number,
+    screen: ScreenScale,
+    cost: RenderCostCounters | undefined,
+  ): void {
     const entry = record.batch;
     if (entry === null) return;
     const maxLevel = entry.batch.levelCount - 1;
     if (maxLevel <= 0) return; // модель без цепочки — единственный уровень
+    // Счёт стоит ПОСЛЕ отказов выше: у записи без цепочки уровней работы нет, и
+    // приписывать ей выбор значило бы считать несделанное (PERF-3).
+    if (cost !== undefined) cost.modelsLodSelections++;
     const size = screenSize(radius, this.cameraPosition.distanceTo(record.pos), screen);
     const thresholds = entry.thresholds;
     // Множитель пресета (QUAL-1) сдвигает ПОРОГИ, а не экранный размер: пороги
@@ -924,7 +956,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     turnRate: number,
     tiltRate: number,
     surface: VisualSurface | null,
+    cost: RenderCostCounters | undefined,
   ): void {
+    // Поза кадра — по одной записи на инстанс пула (PERF-2, стадия кадра): счёт
+    // снимается разом с размера пула, а не инкрементом внутри цикла.
+    if (cost !== undefined) cost.modelsPoseWrites += pool.size;
     // Сходящиеся к цели величины кадра — доворот (REND-5), наклон (REND-10),
     // контроль костей — берут МОДУЛЬ часов: направления у них нет, цель ведёт
     // доставленное состояние, и на обратном ходе сглаживание обязано идти к
@@ -1147,10 +1183,15 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     this.defaultTier = next;
     const ctx = this.ctx;
     if (ctx === null) return;
+    // Смена яруса — событие пресета, а не кадра (QUAL-1): сток читается один раз
+    // на событие, и счётчик показывает ЦЕНУ переключения — сколько инстансов
+    // пересобрано (PERF-3).
+    const cost = costSink();
     for (const pool of [this.instances, this.decorations]) {
       for (const record of pool.values()) {
         if (record.kind === null) continue;
         if (record.visual?.tier !== undefined || record.visual?.boneControls !== undefined) continue;
+        if (cost !== undefined) cost.modelsRebuilds++;
         this.rebuild(ctx, record);
       }
     }
@@ -1190,20 +1231,28 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (next === this.manifest) return;
     this.manifest = next;
     const ctx = this.requireCtx();
+    // Переподача — событие правки документа (REND-17, ED-15), и сток читается
+    // один раз на неё: цена переподачи — число пересобранных инстансов (PERF-3).
+    const cost = costSink();
     // Переподача действует на оба пула: раздел decoration-видов — такая же
     // часть манифеста (ASSET-9), и правка записи камня обязана доехать и до
     // размещённой декорации (REND-17, ED-15).
-    this.resupply(ctx, this.instances);
-    this.resupply(ctx, this.decorations);
+    this.resupply(ctx, this.instances, cost);
+    this.resupply(ctx, this.decorations, cost);
   }
 
-  private resupply(ctx: RenderContext, pool: ReadonlyMap<EntityId, InstanceRecord>): void {
+  private resupply(
+    ctx: RenderContext,
+    pool: ReadonlyMap<EntityId, InstanceRecord>,
+    cost: RenderCostCounters | undefined,
+  ): void {
     for (const record of pool.values()) {
       // Невизуальная сущность (резолвер отнёс её к нерисуемым) записи не имеет.
       if (record.kind === null) continue;
       const before = record.visual;
       record.visual = resolveVisual(this.manifest, record.kind);
       if (rebuildsInstance(before, record.visual, this.defaultTier)) {
+        if (cost !== undefined) cost.modelsRebuilds++;
         this.rebuild(ctx, record);
         continue;
       }

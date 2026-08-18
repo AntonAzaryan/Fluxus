@@ -34,6 +34,7 @@
  */
 import * as THREE from 'three';
 import type { BakedPartVisibility, NormalizedMesh } from '@game-mvp/assets';
+import type { RenderCostCounters } from '../cost.js';
 import { geometryFromMesh, type SharedMeshData } from './build.js';
 import type { VatMaterial } from './vatMaterial.js';
 
@@ -50,6 +51,13 @@ interface BatchPart {
   readonly buffers: BatchBuffers;
   /** Бит части в маске кадра; -1 — часть треков видимости не имеет. */
   readonly bit: number;
+  /**
+   * Треугольников в геометрии части — снимается один раз при её сборке
+   * (`performance-budget` PERF-3): величина запечённой геометрии, а не кадра.
+   * Умноженная на число видимых записей, она и есть та геометрия, которую кадр
+   * отдаёт инстанс-мешу, — ось, на которую действует выбор уровня (REND-22).
+   */
+  readonly triangles: number;
 }
 
 /**
@@ -217,8 +225,13 @@ export class ModelBatch {
    * Компактация видимых записей в начало инстанс-буферов и `count` мешей
    * (REND-21). Единственная покадровая работа батча — и она копирование, а не
    * аллокация.
+   *
+   * Сток счётчиков стоимости приходит параметром, а не читается здесь (PERF-3):
+   * `flush` зовётся на каждый батч сцены, и чтение стока на батч было бы той
+   * самой стоимостью учёта, которой быть не должно. Без стока — по одному
+   * сравнению на уровень.
    */
-  flush(): void {
+  flush(cost?: RenderCostCounters): void {
     for (let level = 0; level < this.levels.length; level++) {
       const entry = this.levels[level]!;
       for (const buffers of entry.buffers) buffers.count = 0;
@@ -229,6 +242,17 @@ export class ModelBatch {
       for (const buffers of entry.buffers) {
         setUpdateRange(buffers.matrix, buffers.matrixRange, buffers.count * MATRIX_STRIDE);
         setUpdateRange(buffers.pose, buffers.poseRange, buffers.count * POSE_STRIDE);
+      }
+      if (cost === undefined) continue;
+      // Записей скопировано — по числу в КАЖДОМ наборе буферов: обычно набор на
+      // уровень один, а у модели с гасимыми частями (ASSET-12) их по одному на
+      // часть, и копирований там ровно столько же (PERF-3).
+      for (const buffers of entry.buffers) cost.modelsBatchRecords += buffers.count;
+      // Треугольники — по ЧАСТЯМ: у каждой свой меш и свой `count`, и рисуется
+      // она своей геометрией. Счёт снимается с уровня, а не с записи: на
+      // инстансе арифметики от учёта не прибавляется.
+      for (const part of entry.parts) {
+        cost.modelsBatchTriangles += part.triangles * part.buffers.count;
       }
     }
   }
@@ -368,7 +392,12 @@ export class ModelBatch {
     mesh.frustumCulled = false;
     mesh.name = `batch:part${source.partId}`;
     this.group.add(mesh);
-    return { mesh, buffers, bit: this.partVisibility.parts.indexOf(source.partId) };
+    return {
+      mesh,
+      buffers,
+      bit: this.partVisibility.parts.indexOf(source.partId),
+      triangles: triangleCount(geometry),
+    };
   }
 
   private regrowLevel(level: BatchLevel, capacity: number): void {
@@ -405,6 +434,17 @@ export function batchLevels(
     if (parts.length > 0) levels.push(parts);
   }
   return levels;
+}
+
+/**
+ * Треугольников в геометрии части: индексированная — по индексам, иначе по
+ * вершинам. Целое число, снятое один раз при сборке части (PERF-3): кадр его
+ * только умножает на число видимых записей.
+ */
+function triangleCount(geometry: THREE.BufferGeometry): number {
+  const index = geometry.getIndex();
+  const count = index === null ? geometry.getAttribute('position').count : index.count;
+  return Math.floor(count / 3);
 }
 
 function makeBuffers(capacity: number): BatchBuffers {

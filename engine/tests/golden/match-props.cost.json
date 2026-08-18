@@ -11,8 +11,20 @@
       "fogDissolveTexels": 15360,
       "fogRenderPasses": 32,
       "frameCalls": 16,
-      "frameInstances": 128,
-      "frameSubsystems": 32
+      "frameInstances": 320,
+      "frameSubsystems": 80,
+      "modelsBatchRecords": 64,
+      "modelsBatchTriangles": 1024,
+      "modelsCullTests": 64,
+      "modelsCulled": 0,
+      "modelsLodSelections": 64,
+      "modelsPoseWrites": 64,
+      "particlesShellsPosed": 32,
+      "particlesShotsStepped": 0,
+      "particlesSystemsStepped": 32,
+      "terrainChunksRebuilt": 16,
+      "terrainFloorQuads": 1728,
+      "terrainWallQuads": 1216
     },
     "syncTick": {
       "fogEntitiesScanned": 64,
@@ -26,10 +38,16 @@
       "fogRevealCalls": 15,
       "fogSegmentRangeTests": 840,
       "fogShadowRayTests": 1198,
+      "modelsInstancesCreated": 4,
+      "modelsInstancesSynced": 64,
+      "modelsRebuilds": 0,
+      "particlesInstancesAcquired": 2,
+      "particlesShellsSynced": 32,
       "syncTickDecorationInstances": 0,
       "syncTickDeliveries": 16,
-      "syncTickInstances": 128,
-      "syncTickSubsystems": 32
+      "syncTickInstances": 320,
+      "syncTickSubsystems": 80,
+      "terrainChunksMarked": 32
     }
   },
   "ultra": {
@@ -37,8 +55,20 @@
       "fogDissolveTexels": 61440,
       "fogRenderPasses": 32,
       "frameCalls": 16,
-      "frameInstances": 128,
-      "frameSubsystems": 32
+      "frameInstances": 320,
+      "frameSubsystems": 80,
+      "modelsBatchRecords": 64,
+      "modelsBatchTriangles": 4096,
+      "modelsCullTests": 64,
+      "modelsCulled": 0,
+      "modelsLodSelections": 64,
+      "modelsPoseWrites": 64,
+      "particlesShellsPosed": 32,
+      "particlesShotsStepped": 0,
+      "particlesSystemsStepped": 32,
+      "terrainChunksRebuilt": 16,
+      "terrainFloorQuads": 4608,
+      "terrainWallQuads": 1856
     },
     "syncTick": {
       "fogEntitiesScanned": 64,
@@ -52,10 +82,16 @@
       "fogRevealCalls": 15,
       "fogSegmentRangeTests": 840,
       "fogShadowRayTests": 1198,
+      "modelsInstancesCreated": 4,
+      "modelsInstancesSynced": 64,
+      "modelsRebuilds": 0,
+      "particlesInstancesAcquired": 2,
+      "particlesShellsSynced": 32,
       "syncTickDecorationInstances": 0,
       "syncTickDeliveries": 16,
-      "syncTickInstances": 128,
-      "syncTickSubsystems": 32
+      "syncTickInstances": 320,
+      "syncTickSubsystems": 80,
+      "terrainChunksMarked": 32
     }
   }
 }
