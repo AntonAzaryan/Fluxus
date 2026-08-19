@@ -45,7 +45,7 @@ export type {
   InputSource,
   MutableAimPoint,
 } from './input/types.js';
-export { HeldActions, InputSampler } from './input/sampler.js';
+export { HeldActions, InputSampler, toWorldFixed } from './input/sampler.js';
 export type { CanonicalInput, SamplerOptions } from './input/sampler.js';
 export { KeyboardMouseSource } from './input/keyboardMouse.js';
 export type { KeyboardMouseBindings, KeyboardMouseOptions } from './input/keyboardMouse.js';
