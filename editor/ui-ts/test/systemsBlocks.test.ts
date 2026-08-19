@@ -313,6 +313,7 @@ describe('ED-8: находка адресует запись системы, а 
     curvature: 'terrain-curvature',
     manifest: 'visuals',
     system: 'system',
+    presentation: 'presentation',
   } as const;
 
   function report(config: JsonValue) {

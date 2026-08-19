@@ -142,6 +142,11 @@ export function cliValidationRules(): ContributionReader<ValidationRule> {
       terrain: 'terrain',
       curvature: 'curvature',
       system: 'system',
+      // Парный presentation-документ импорт переписывает (BLND-2), и его формат
+      // — закрытый состав, записи decoration и секции тумана и освещения —
+      // проверяется тем же вкладом, что в редакторе: правило одно на оба
+      // инструмента (ED-1, BLND-6).
+      presentation: kinds.presentation,
     }),
     ...crossDocumentRules(
       { scene: kinds.scene, manifest: kinds.manifest, curvature: 'curvature', presentation: kinds.presentation },

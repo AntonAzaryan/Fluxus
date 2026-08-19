@@ -18,6 +18,7 @@ import {
 import type { CameraConfigDescription, CameraEffectsDescription } from '@game-mvp/assets';
 import { describe, expect, it } from 'vitest';
 import { createEditorSession, type EditorSession, type JsonValue } from '../src/document/index.js';
+import { EDITOR_BUNDLES, StringResources } from '../src/i18n/index.js';
 import { createOperationRegistry, registerBuiltinOperations } from '../src/operations/index.js';
 import { ContributionRegistry } from '../src/registry/index.js';
 import {
@@ -37,11 +38,14 @@ import {
   LOAD_SCENE,
   MANIFEST_RULE,
   PLACEMENT_PREFAB_RULE,
+  PRESENTATION_RULE,
   PREFAB_FOR_VISUAL_RULE,
   SCENE_RULE,
   SYSTEM_RULE,
   TERRAIN_RULE,
+  VALIDATE_PRESENTATION,
   VALIDATE_SYSTEM,
+  formatIssue,
   VISUAL_FOR_PREFAB_RULE,
   type SystemSite,
   type TerrainSite,
@@ -55,6 +59,7 @@ const MANIFEST = 'content/visuals/manifest.json';
 const TERRAIN = 'content/visuals/terrain.json';
 const CURVATURE = 'content/visuals/curvature.json';
 const SYSTEM = 'content/systems/move.json';
+const PRESENTATION = 'content/scenes/arena.presentation.json';
 
 const SCENE_VALUE = {
   components: [{ name: 'Pos', fields: { x: 'i32', y: 'i32' } }],
@@ -558,6 +563,74 @@ describe('ED-11: карта кривизны', () => {
       [CURVATURE]: { kind: 'curvature', value: { width: 3, height: 2, rows: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] } },
     });
     expect(report.issues).toHaveLength(0);
+  });
+});
+
+/**
+ * Парный presentation-документ (PRES-2): его формат — закрытый состав документа,
+ * записи decoration и секции тумана и освещения — проверяет валидатор ассетов,
+ * а редактор только зовёт его и вешает ответ на адрес внутри документа (ED-1).
+ *
+ * Секция `lighting` здесь и есть предмет: авторится она руками в JSON, и без
+ * правила автор узнавал бы об опечатке только по неосвещённой арене.
+ */
+describe('PRES-2: парный presentation-документ и секция lighting', () => {
+  const GOOD = {
+    decorations: [{ visual: 'rock', x: 1, y: 2 }],
+    lighting: { ambient: { intensity: 0.5 }, shadows: { mode: 'hybrid', mapSize: 1024 } },
+  };
+
+  function presentation(value: JsonValue): ValidationReport {
+    return check({ [PRESENTATION]: { kind: 'presentation', value } });
+  }
+
+  it('валидный документ с секцией lighting находок не даёт', () => {
+    expect(presentation(GOOD).ok).toBe(true);
+  });
+
+  it('неизвестный ключ секции отвергается адресно и адресует место в документе', () => {
+    const report = presentation({ lighting: { ambient: { intensivity: 1 } } });
+    const issue = report.forDocument(PRESENTATION).find((found) => found.ruleId === PRESENTATION_RULE)!;
+    expect(issue.expected).toMatchObject({ kind: 'accepted', by: VALIDATE_PRESENTATION });
+    // Адрес разобран из сообщения и проверен по документу: автор попадает в
+    // строку, а не в файл (ED-30).
+    expect(issue.path).toEqual(['lighting', 'ambient', 'intensivity']);
+    expect(detailOf(issue)).toContain('lighting.ambient.intensivity: неизвестное поле');
+    expect(issue.severity).toBe('error');
+  });
+
+  it('режим теней вне перечня — отдельная находка на своём поле', () => {
+    const report = presentation({ lighting: { shadows: { mode: 'soft' } } });
+    const issue = report.forDocument(PRESENTATION).find((found) => found.ruleId === PRESENTATION_RULE)!;
+    expect(issue.path).toEqual(['lighting', 'shadows', 'mode']);
+    expect(detailOf(issue)).toContain('none | hybrid | full');
+  });
+
+  it('нетиповое значение отвергается по каждому полю разом, а не по первому', () => {
+    const report = presentation({
+      lighting: {
+        ambient: { intensity: -1 },
+        shadows: { mapSize: 0, staticShare: 2 },
+      },
+    });
+    const found = report.forDocument(PRESENTATION).filter((issue) => issue.ruleId === PRESENTATION_RULE);
+    expect(found).toHaveLength(3);
+  });
+
+  it('причина находки читается на обеих локалях бандла (ED-27, ED-28)', () => {
+    const report = presentation({ lighting: { shadows: { mode: 'soft' } } });
+    const issue = report.forDocument(PRESENTATION).find((found) => found.ruleId === PRESENTATION_RULE)!;
+    const ru = formatIssue(issue, new StringResources({ locale: 'ru', editor: EDITOR_BUNDLES }));
+    const en = formatIssue(issue, new StringResources({ locale: 'en', editor: EDITOR_BUNDLES }));
+    // Ключ причины разрешился строкой, а не остался видимым ключом (ED-28).
+    expect(ru).not.toContain(issue.reasonKey);
+    expect(en).not.toContain(issue.reasonKey);
+    expect(ru).toContain('presentation-документ');
+    expect(en).toContain('presentation document');
+    // Дословное сообщение валидатора едет в обе строки: язык у прозы правила
+    // свой, а у ответа чужого валидатора — его собственный.
+    expect(ru).toContain('lighting.shadows.mode');
+    expect(en).toContain('lighting.shadows.mode');
   });
 });
 

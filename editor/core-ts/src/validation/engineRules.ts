@@ -50,6 +50,7 @@ import {
 import {
   validateCurvatureMap,
   validateManifest,
+  validatePresentationScene,
   type CameraConfigDescription,
   type CameraEffectsDescription,
 } from '@game-mvp/assets';
@@ -79,6 +80,8 @@ export interface EngineRuleKinds {
   readonly curvature: DocumentKind;
   readonly manifest: DocumentKind;
   readonly system: DocumentKind;
+  /** Парный presentation-документ сцены (`presentation-scene` PRES-1). */
+  readonly presentation: DocumentKind;
 }
 
 export const DEFAULT_ENGINE_KINDS: EngineRuleKinds = Object.freeze({
@@ -87,6 +90,7 @@ export const DEFAULT_ENGINE_KINDS: EngineRuleKinds = Object.freeze({
   curvature: 'curvature',
   manifest: 'manifest',
   system: 'system',
+  presentation: 'presentation',
 });
 
 const EMPTY_PATH: JsonPath = Object.freeze([]);
@@ -132,12 +136,14 @@ export const CREATE_TERRAIN_GRID = '@game-mvp/core:createTerrainGrid';
 export const VALIDATE_SYSTEM = '@game-mvp/core:validateSystem';
 export const VALIDATE_MANIFEST = '@game-mvp/assets:validateManifest';
 export const VALIDATE_CURVATURE_MAP = '@game-mvp/assets:validateCurvatureMap';
+export const VALIDATE_PRESENTATION = '@game-mvp/assets:validatePresentationScene';
 
 export const SCENE_RULE = 'core.scene';
 export const TERRAIN_RULE = 'core.terrain';
 export const SYSTEM_RULE = 'core.system';
 export const MANIFEST_RULE = 'assets.manifest';
 export const CURVATURE_RULE = 'assets.curvature';
+export const PRESENTATION_RULE = 'assets.presentation';
 
 /**
  * Поднятая сцена или отказ. Отказ хранится, а не выбрасывается заново: сцену за
@@ -353,6 +359,31 @@ export function curvatureRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): Va
 }
 
 /**
+ * Парный presentation-документ сцены (PRES-2): закрытый состав документа,
+ * записи decoration и необязательные секции — конфигурация тумана (FOW-10) и
+ * конфигурация освещения. Проверяет их `validatePresentationScene` — тот же
+ * вызов, которым документ поднимает загрузчик ассетов (ASSET-3), и второй его
+ * реализации в редакторе быть не может (ED-1, CORE-3).
+ *
+ * Правило нужно ровно затем, зачем правило манифеста: ED-14 требует тех же
+ * проверок в реальном времени, а адрес нарушения (`lighting.shadows.mode`,
+ * `decorations[3].scale`) едет в находку разбором сообщения (`adapters.ts`) и
+ * приводит автора к строке, а не к файлу.
+ */
+export function presentationRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): ValidationRule {
+  return {
+    id: PRESENTATION_RULE,
+    descriptionKey: ruleDescriptionKey(PRESENTATION_RULE),
+    reasonCodes: [REJECTED],
+    appliesTo: [kinds.presentation],
+    check(run) {
+      const value = run.valueOf(run.document.id);
+      reportErrorList(run, { by: VALIDATE_PRESENTATION }, validatePresentationScene(value));
+    },
+  };
+}
+
+/**
  * Все правила движка одним набором — обычная сборка редактора. Адреса систем —
  * последним параметром и по той же причине, по какой адреса расстановки идут
  * последними у междокументных: раскладку знает собирающий редактор (ED-25), а
@@ -370,5 +401,6 @@ export function engineValidationRules(
     systemRule(kinds, systemSites),
     manifestRule(kinds, options),
     curvatureRule(kinds),
+    presentationRule(kinds),
   ]);
 }

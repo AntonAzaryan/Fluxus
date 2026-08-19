@@ -602,6 +602,14 @@
       "source": "d6076f16",
       "translated": "d1d792d0"
     },
+    "validation.reason.assets.presentation.rejected": {
+      "source": "ebf1f610",
+      "translated": "6a1ede22"
+    },
+    "validation.reason.assets.presentation.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
     "validation.reason.core.scene.rejected": {
       "source": "97d8ba9a",
       "translated": "7ce47774"
@@ -689,6 +697,10 @@
     "validation.rule.assets.manifest": {
       "source": "0737c4e0",
       "translated": "55fbfe88"
+    },
+    "validation.rule.assets.presentation": {
+      "source": "a416e9bc",
+      "translated": "ce123c14"
     },
     "validation.rule.core.scene": {
       "source": "500ea57e",

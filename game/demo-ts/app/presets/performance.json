@@ -3,5 +3,6 @@
   "terrain.curvatureTessellation": 2,
   "models.lodThresholdScale": 2,
   "models.defaultTier": "batched",
-  "particles.density": 0.5
+  "particles.density": 0.5,
+  "lighting.shadowMode": "none"
 }

@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { createTerrainGrid, type TerrainGrid } from '@game-mvp/core';
 import type { AssetService, VisualManifest } from '@game-mvp/assets';
 import {
+  LightingSubsystem,
   ModelsSubsystem,
   OverlaySubsystem,
   ParticlesSubsystem,
@@ -51,8 +52,13 @@ function viewportStage(): PresentationStage {
     config: { heightStep: 0.6 },
   };
   const stage = new PresentationStage(context);
-  stage.register(new TerrainSubsystem(flatGrid()));
-  stage.register(new ModelsSubsystem(visuals, { warn: () => {} }));
+  const grid = flatGrid();
+  // Свет — первой подсистемой, как в `createSceneStage`: его ручки такая же
+  // часть реестра вьюпорта, как ручки моделей и частиц.
+  const lighting = new LightingSubsystem({ grid });
+  stage.register(lighting);
+  stage.register(new TerrainSubsystem(grid, { shadows: lighting }));
+  stage.register(new ModelsSubsystem(visuals, { shadows: lighting, warn: () => {} }));
   stage.register(new ParticlesSubsystem(visuals, { warn: () => {} }));
   stage.register(new OverlaySubsystem());
   return stage;
@@ -76,6 +82,8 @@ describe('вьюпорт редактора живёт на «ультре» (QU
     const controller = new QualityController(viewportStage());
 
     expect(controller.knobs.map((knob) => knob.name).sort()).toEqual([
+      'lighting.shadowMapSize',
+      'lighting.shadowMode',
       'models.defaultTier',
       'models.lodThresholdScale',
       'particles.density',
@@ -91,6 +99,10 @@ describe('вьюпорт редактора живёт на «ультре» (QU
     expect(effectiveOf(controller)['terrain.curvatureTessellation']).toBe(
       Number.POSITIVE_INFINITY,
     );
+    // Теней это касается наравне: авторский режим сцены во вьюпорте действует
+    // как написан, и потолок его не опускает.
+    expect(effectiveOf(controller)['lighting.shadowMode']).toBe('full');
+    expect(effectiveOf(controller)['lighting.shadowMapSize']).toBe(Number.POSITIVE_INFINITY);
   });
 
   it('картинка та же, что без контроллера вовсе: документ повторяет умолчания', () => {

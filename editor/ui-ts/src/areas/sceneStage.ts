@@ -134,12 +134,14 @@
 import * as THREE from 'three';
 import type {
   AssetService,
+  PresentationLighting,
   TerrainCurvatureMap,
   VisualManifest,
 } from '@game-mvp/assets';
 import {
   DecorationSet,
   DocumentSource,
+  LightingSubsystem,
   ModelsSubsystem,
   OverlaySubsystem,
   ParticlesSubsystem,
@@ -214,6 +216,11 @@ export interface StageDraft {
   readonly placements: readonly DocumentInstance[];
   /** Набор decoration-инстансов (REND-18); нет поля — слой пуст. */
   readonly decorations?: readonly DecorationInstance[];
+  /**
+   * Секция `lighting` парного документа (PRES-2); нет поля — умолчания
+   * подсистемы освещения, то есть тот же свет, что был у вьюпорта до неё.
+   */
+  readonly lighting?: PresentationLighting;
 }
 
 export interface SceneStageOptions {
@@ -379,6 +386,11 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
+  // Теневые карты включает владелец рендерера (design D8) — тем же вызовом и с
+  // тем же типом фильтрации, что игровой клиент: кадр вьюпорта обязан быть тем
+  // же кадром (ED-22), а не похожим.
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   const canvas = renderer.domElement;
   // Остановка Tab у кадра остаётся: он обязан быть достижим обходом (ED-31).
   // Клавиатуру она при этом не включает — клавиши работают, пока область
@@ -388,10 +400,10 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   const scene = new THREE.Scene();
   const camera3 = new THREE.PerspectiveCamera(45, 1, 0.1, 300);
   camera3.up.set(0, 0, 1);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.65));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.7);
-  sun.position.set(8, -12, 18);
-  scene.add(sun);
+  // Своего света у вьюпорта больше нет: источники арены создаёт подсистема
+  // освещения из той же секции `lighting` парного документа (PRES-2), что и у
+  // игрового клиента. Тождество кадров (ED-22) выполняется этим по построению,
+  // а не тем, что два файла держат одинаковые числа.
 
   // Модуль ассетов приходит снаружи и остаётся общим на все кадры редактора
   // (ASSET-2): контекст рендера у каждого кадра свой, а кэш ассетов — один.
@@ -421,6 +433,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   const decorations = new DecorationSet(presentation);
 
   let surface: VisualSurfaceSource | null = null;
+  let lighting: LightingSubsystem | null = null;
   let terrain: TerrainSubsystem | null = null;
   let models: ModelsSubsystem | null = null;
   let particles: ParticlesSubsystem | null = null;
@@ -574,9 +587,13 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
    */
   const build = (first: TerrainGrid | null): void => {
     built = true;
+    // Свет — первой подсистемой (REND-8): геометрия ниже отдаёт ей свои корни
+    // теневыми кастерами, а сам он не зависит ни от сетки, ни от манифеста.
+    lighting = new LightingSubsystem(first === null ? {} : { grid: first });
+    presentation.register(lighting);
     if (first !== null) {
       surface = new VisualSurfaceSource(first);
-      terrain = new TerrainSubsystem(first, { surface });
+      terrain = new TerrainSubsystem(first, { surface, shadows: lighting });
       presentation.register(terrain);
     }
     // Камера подсистеме — вход отсечения невидимых инстансов (REND-21): та же
@@ -585,6 +602,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     // отсекается по пирамиде ЭТОГО кадра, а не прошлого.
     models = new ModelsSubsystem(visuals, {
       camera: camera3,
+      shadows: lighting,
       ...(surface === null ? {} : { surface }),
     });
     presentation.register(models);
@@ -644,6 +662,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
         // (REND-14), и на этом держится выход из превью (ED-9).
         terrain?.applyGrid(next.grid);
         camera?.setGrid(next.grid);
+        // Границы арены сменились — фрустумы теневых камер обтянуты по ним, а
+        // кэшированная карта статики устарела вместе с геометрией (REND-14).
+        lighting?.applyGrid(next.grid);
       }
     }
     if (again || next.curvature !== curvature) {
@@ -654,6 +675,10 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     }
     // Полный набор инстансов; что создать, обновить и убрать, решает источник.
     source.apply(next.placements);
+    // Правка секции `lighting` — на живой подсистеме (ED-15): свет меняется не
+    // позже следующего кадра, пересборки рендера нет. Подаётся секция целиком
+    // и всегда, как манифест и сетка: решать, что применить, — дело подсистемы.
+    lighting?.applyConfig(next.lighting);
     // Декорации — отдельный набор и отдельная подача: продюсера они не
     // трогают, и в превью их гасить нечем (REND-18).
     decorations.apply(next.decorations ?? []);

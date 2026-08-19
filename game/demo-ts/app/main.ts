@@ -42,6 +42,7 @@ import {
   decorationInstanceOf,
   EffectsSubsystem,
   FogSubsystem,
+  LightingSubsystem,
   ModelsSubsystem,
   ParticlesSubsystem,
   TerrainSubsystem,
@@ -104,6 +105,11 @@ const app: HTMLElement = appElement;
 const renderer3 = new THREE.WebGLRenderer({ antialias: true });
 renderer3.setSize(window.innerWidth, window.innerHeight);
 renderer3.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Теневые карты включает ВЛАДЕЛЕЦ рендерера (design D8): рендерер принадлежит
+// сборке, а не подсистемам. Включённый shadowMap без кастеров бесплатен —
+// фактическую стоимость задаёт действующий режим теней секции `lighting`.
+renderer3.shadowMap.enabled = true;
+renderer3.shadowMap.type = THREE.PCFSoftShadowMap;
 app.appendChild(renderer3.domElement);
 
 const scene3 = new THREE.Scene();
@@ -121,10 +127,10 @@ let rig: CameraRig | null = null;
 /** Диспетчер эффектов появляется вместе с манифестом (ASSET-7, см. main). */
 let director: CameraEffectsDirector | null = null;
 const camInput = createCameraInput();
-scene3.add(new THREE.AmbientLight(0xffffff, 0.65));
-const sun = new THREE.DirectionalLight(0xffffff, 1.7);
-sun.position.set(8, -12, 18);
-scene3.add(sun);
+// Света здесь нет намеренно: источники арены создаёт подсистема освещения из
+// секции `lighting` парного документа (PRES-2), и потребитель рендера своих
+// добавлять не вправе — иначе свет удвоился бы, а кадры клиента и вьюпорта
+// редактора разошлись бы числами в двух местах (`editor` ED-22).
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -990,8 +996,18 @@ async function main(): Promise<void> {
       // Та же поверхность — превью зоны захвата и шару заряда: обе фигуры
       // плоские и садятся на пол, а не на дугу манёвра инстанса.
       visualSurface = surface;
+      // Свет арены — подсистемой, а не кодом сборки: источники и теневые карты
+      // строятся из секции `lighting` парного документа (PRES-2), а нет секции
+      // — из документированных умолчаний, равных прежнему захардкоженному
+      // свету. Регистрируется первой: геометрия сцены ниже отдаёт ей свои
+      // корни теневыми кастерами.
+      const lighting = new LightingSubsystem({
+        grid,
+        ...(presentation?.lighting !== undefined ? { config: presentation.lighting } : {}),
+      });
+      remote!.register(lighting);
       // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
-      remote!.register(new TerrainSubsystem(grid, { surface }));
+      remote!.register(new TerrainSubsystem(grid, { surface, shadows: lighting }));
       // Перёд модели больше не параметр сборки: он описан в записи манифеста
       // (ASSET-6 `facingDeg`, REND-13), поэтому модели разных форматов с разным
       // передом уживаются в одной сцене без общего для всех значения.
@@ -1006,6 +1022,7 @@ async function main(): Promise<void> {
       models = new ModelsSubsystem(manifest, {
         surface,
         camera,
+        shadows: lighting,
         reviveEvent: RESPAWN_EVENT,
         // Fade «ушла в туман ≠ умерла» (FOW-8, design D7): длительность — из
         // той же секции `fog`, что у подсистемы тумана (FOW-10). Сцена без
