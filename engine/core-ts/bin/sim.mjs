@@ -22,20 +22,8 @@
  * побайтно golden-тесты (CLI-4).
  */
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
-import { registerHooks } from 'node:module';
-
-registerHooks({
-  resolve(specifier, context, next) {
-    if (specifier.startsWith('.') && specifier.endsWith('.js')) {
-      try {
-        return next(`${specifier.slice(0, -3)}.ts`, context);
-      } catch {
-        // Настоящего .ts нет — резолвим как просили.
-      }
-    }
-    return next(specifier, context);
-  },
-});
+// Ради побочного действия: регистрация хука резолва (см. `tsHook.mjs`).
+import './tsHook.mjs';
 
 const TRACE_LEVELS = ['off', 'systems', 'full'];
 

@@ -22,23 +22,12 @@
  * основанию CLI-7.
  *
  * Шага сборки нет по той же причине, что у `bin/sim.mjs`: типы Node стрипает
- * сам (>=22.18), а хук резолва добавляет единственное, чего ему не хватает.
+ * сам (>=22.18), а хук резолва добавляет единственное, чего ему не хватает
+ * (`tsHook.mjs`, общий на обе команды).
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { registerHooks } from 'node:module';
-
-registerHooks({
-  resolve(specifier, context, next) {
-    if (specifier.startsWith('.') && specifier.endsWith('.js')) {
-      try {
-        return next(`${specifier.slice(0, -3)}.ts`, context);
-      } catch {
-        // Настоящего .ts нет — резолвим как просили.
-      }
-    }
-    return next(specifier, context);
-  },
-});
+// Ради побочного действия: регистрация хука резолва (см. `tsHook.mjs`).
+import './tsHook.mjs';
 
 const FORMATS = ['jsonl', 'text'];
 

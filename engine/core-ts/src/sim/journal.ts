@@ -115,8 +115,11 @@ export function parseJournalDictionary(value: unknown, where: string): JournalDi
     throw new Error(`${where}: у словаря журнала нет объекта "events"`);
   }
   const parsed: Record<string, JournalEventSemantics> = {};
-  for (const type of Object.keys(events as Record<string, unknown>).sort()) {
-    const raw = (events as Record<string, unknown>)[type];
+  const table = events as Record<string, unknown>;
+  // Ключи по алфавиту: словарь — вход чистой функции (DIAG-10), и порядок его
+  // разбора не должен зависеть от порядка полей в файле.
+  for (const type of Object.keys(table).sort()) {
+    const raw = table[type];
     if (typeof raw !== 'object' || raw === null) {
       throw new Error(`${where}: семантика события "${type}" — объект`);
     }

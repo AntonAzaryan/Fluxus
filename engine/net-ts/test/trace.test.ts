@@ -79,10 +79,10 @@ interface Played {
  */
 function playDirect(config: MatchConfig, ticks: number = TICKS): Played {
   const server = new MatchServer(config);
-  server.connect('c1');
-  server.connect('c2');
-  server.receive('c1', hello('p1', config.version));
-  server.receive('c2', hello('p2', config.version));
+  server.connect(1);
+  server.connect(2);
+  server.receive(1, hello('p1', config.version));
+  server.receive(2, hello('p2', config.version));
   server.drain();
 
   const snapshots: string[] = [];
@@ -92,8 +92,8 @@ function playDirect(config: MatchConfig, ticks: number = TICKS): Played {
     // Кнопка каста жмётся через тик — фронт по каждому нажатию, то есть поток
     // событий на всём протяжении матча.
     const buttons = i % 2 === 0 ? 1 << CAST_BUTTON : 0;
-    server.receive('c1', inputMessage(wireInput(tick, i, STEP, 0, buttons)));
-    server.receive('c2', inputMessage(wireInput(tick, i, 0, STEP, 0)));
+    server.receive(1, inputMessage(wireInput(tick, i, STEP, 0, buttons)));
+    server.receive(2, inputMessage(wireInput(tick, i, 0, STEP, 0)));
     server.advance();
     server.drain();
     snapshots.push(JSON.stringify(snapshotToPlain(server.snapshot(0))));
@@ -127,10 +127,10 @@ describe('DIAG-8: отладочный матч — тот же матч', () =>
     const sink = collect();
     const config = castConfig({ trace: createMatchTrace('full', undefined, sink.write) });
     const server = new MatchServer(config);
-    server.connect('c1');
-    server.connect('c2');
-    server.receive('c1', hello('p1', config.version));
-    server.receive('c2', hello('p2', config.version));
+    server.connect(1);
+    server.connect(2);
+    server.receive(1, hello('p1', config.version));
+    server.receive(2, hello('p2', config.version));
     const outgoing = server.drain();
     server.advance();
     outgoing.push(...server.drain());

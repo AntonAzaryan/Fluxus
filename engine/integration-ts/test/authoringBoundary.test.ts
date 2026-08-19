@@ -77,6 +77,8 @@ const EDITOR_MANIFEST = 'ui-ts/package.json';
  */
 const PROCESS_LAUNCH_EXCEPTIONS: Readonly<Record<string, string>> = {
   'core-ts/test/cli.test.ts': 'запуск `bin/sim.mjs` интерпретатором Node — проверка CLI ядра (CLI-9)',
+  'integration-ts/test/traceParity.test.ts':
+    'запуск `bin/journal.mjs` интерпретатором Node — журнал боя собирается настоящей командой (CLI-12)',
 };
 
 describe('guard: конвейер Blender — не зависимость движка (BLND-7)', () => {

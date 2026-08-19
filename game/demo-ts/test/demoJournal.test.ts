@@ -57,7 +57,7 @@ function emittedEvents(node: unknown, found = new Map<string, Set<string>>()): M
       if (typeof emit.type === 'string') {
         const fields = found.get(emit.type) ?? new Set<string>();
         if (typeof emit.data === 'object' && emit.data !== null) {
-          for (const field of Object.keys(emit.data as Record<string, unknown>)) fields.add(field);
+          for (const field of Object.keys(emit.data)) fields.add(field);
         }
         found.set(emit.type, fields);
       }
