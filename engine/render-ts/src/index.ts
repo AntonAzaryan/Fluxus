@@ -2,6 +2,8 @@
 export { DEFAULT_CURVATURE_TESSELLATION } from './types.js';
 export type {
   EntityView,
+  LocalAimPoint,
+  LocalInputSample,
   RenderConfig,
   RenderContext,
   RenderEvent,
@@ -208,6 +210,18 @@ export type { FogObserver, FogSegment, FogWorldRect } from './fog/mask.js';
 // манифеста — оболочки от доставленного состояния и вспышки от событий.
 export { EffectsSubsystem } from './subsystems/effects.js';
 export type { EffectsOptions } from './subsystems/effects.js';
+
+// Подсистема превью каста (REND-28): что заденет способность, если подтвердить
+// её сейчас. Два входа и только два — скомпилированный каталог определений при
+// инициализации и локальный сэмпл ввода своего игрока (REND-1); подтверждённые
+// шаги приходят обычным доставленным состоянием.
+export { AbilityPreviewSubsystem } from './subsystems/abilityPreview.js';
+export type {
+  AbilityPreviewColors,
+  AbilityPreviewOptions,
+  AbilitySlotStatNames,
+  AbilityStepStatNames,
+} from './subsystems/abilityPreview.js';
 
 // Подсистема частиц (REND-24): эмиттеры по записям манифеста поверх эмиттерных
 // ассетов (ASSET-14) — оболочки от доставленного состояния, one-shot'ы от
