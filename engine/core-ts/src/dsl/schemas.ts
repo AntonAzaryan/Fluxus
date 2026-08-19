@@ -268,6 +268,11 @@ const inputFrame: Json = {
     seq: { type: 'integer' },
     move: { $ref: '#/$defs/vec2' },
     aimDir: { type: 'integer' },
+    target: {
+      $comment:
+        'Точка прицела в мировых координатах (TICK-2). Необязательна: документ, записанный до её появления, обязан остаться валидным и воспроизводиться побитово тем же (CLI-10).',
+      $ref: '#/$defs/vec2',
+    },
     buttons: {
       $comment: 'u16-битмаска; ширину поля задаёт TICK-2, схема ей соответствует.',
       type: 'integer',

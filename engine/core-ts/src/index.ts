@@ -144,7 +144,7 @@ export {
   MAX_TEAMS,
 } from './systems/visibility.js';
 export type { VisibilityOptions } from './systems/visibility.js';
-export { InputSystem, INPUT_FIELDS } from './systems/inputSystem.js';
+export { InputSystem, INPUT_FIELDS, INPUT_TARGET_FIELDS, inputTargetDeclared } from './systems/inputSystem.js';
 export type { InputSystemOptions } from './systems/inputSystem.js';
 export {
   LocomotionSystem,

@@ -20,7 +20,7 @@
  * уже внутри `SimulationState` — до первого `tick()`, ровно в тот момент,
  * который DET-1 называет `worldInit`.
  */
-import { InputSystem } from '../systems/inputSystem.js';
+import { InputSystem, inputTargetDeclared } from '../systems/inputSystem.js';
 import { LocomotionSystem, type LocomotionOptions } from '../systems/locomotion.js';
 import { mathApi } from '../math/mathApi.js';
 import {
@@ -92,7 +92,13 @@ export function buildSimulation(
   // Системы, включаемые составом сцены (в том числе `ArenaSystem`), регистрирует
   // сам загрузчик (SER-7); здесь — только те, которым нужна зависимость сборки.
   const { world, systems, terrain, arena, modifiers, abilities } = loadScene(def.scene);
-  if (def.players !== undefined) systems.register(new InputSystem({ players: def.players }));
+  // Раскладка точки прицела (TICK-2) включается объявлением полей у компонента
+  // ввода сцены, а не флагом документа прогона: точка нужна ровно той сцене,
+  // чьи способности целятся ею (ABIL-5), и сцена говорит об этом составом
+  // компонента — тем же способом, каким она говорит обо всём остальном.
+  if (def.players !== undefined) {
+    systems.register(new InputSystem({ players: def.players, target: inputTargetDeclared(world) }));
+  }
   if (def.locomotion !== undefined) systems.register(new LocomotionSystem(def.locomotion));
 
   // Статика обрывов строится из террейна до расстановки: она иммутабельна и в
