@@ -59,7 +59,7 @@
  * стенд не отвечает.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MessageChannel, Worker } from 'node:worker_threads';
 // Раскладка документа матча — та же, что у запускалок net (`matchConfigOf`), и
@@ -130,9 +130,8 @@ if (debugRun) mkdirSync(outDir, { recursive: true });
 // Полный уровень — умолчание отладочного прогона: события едут только на нём
 // (DIAG-3), а без событий журнал боя пуст. Цена — объём (шапка `bin/trace.mjs`);
 // длинному прогону отвечает `--trace-select=event`.
-const tracing = openMatchTrace(
-  traceOptions(debugRun ? { level: 'full', out: join(outDir, 'trace.jsonl') } : {}),
-);
+const traceFlags = traceOptions(debugRun ? { level: 'full', out: join(outDir, 'trace.jsonl') } : {});
+const tracing = openMatchTrace(traceFlags);
 const serializer = flag('json') ? jsonSerializer : msgpackSerializer;
 // Формат кадра — свойство сборки, а не поле протокола, и он один на ВСЕХ
 // участников матча: сервер, люди и боты. Дебаг-формат, объявленный только
@@ -465,9 +464,13 @@ function saveArtifacts(server, failure) {
     ...(failure !== null ? { failure } : {}),
   };
 
-  if (tracing !== undefined) {
+  // Путь берётся у РАЗОБРАННЫХ флагов, а не собирается вторым выражением:
+  // `--trace-out` мог увести трейс из каталога прогона, и журнал собирался бы
+  // тогда по файлу, которого нет.
+  const tracePath = traceFlags.out;
+  if (tracing !== undefined && tracePath !== undefined) {
     summary.trace = {
-      path: 'trace.jsonl',
+      path: relative(outDir, tracePath),
       // Отказ записи гасит трейс, а не матч (DIAG-8), и называется он ЗДЕСЬ:
       // молча оборванный трейс выглядит поводом к расследованию, которого не
       // получится.
@@ -487,8 +490,8 @@ function saveArtifacts(server, failure) {
     process.stdout.write(`\nзаписи матча не будет: ${error.message}\n`);
   }
 
-  if (tracing !== undefined) {
-    const result = journalFromFile(join(outDir, 'trace.jsonl'), dictPath);
+  if (tracing !== undefined && tracePath !== undefined) {
+    const result = journalFromFile(tracePath, dictPath);
     writeFileSync(join(outDir, 'journal.jsonl'), journalDocument(result));
     summary.journal = {
       path: 'journal.jsonl',
