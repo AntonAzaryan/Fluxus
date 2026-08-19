@@ -14,6 +14,7 @@ import {
   attachCostSink,
   costSink,
   createCostCounters,
+  releaseCostSink,
   type CostStage,
   type RenderCostCounters,
 } from '../cost.js';
@@ -144,6 +145,12 @@ export function deliveryDebugSource(
   const frameColor = options.frameColor ?? DEFAULT_FRAME_COLOR;
   const snapColor = options.snapColor ?? DEFAULT_SNAP_COLOR;
   const clock = { spanTicks: 0, lastTick: Number.NaN };
+  /**
+   * Имена статов доставки — СВОЙ массив, а не массив доставки (RDBG-2): проба
+   * самодостаточна, ссылок на живые структуры рендера не несёт. Массив тот же
+   * между пробами, переписывается его содержимое (REND-26).
+   */
+  const statNames: string[] = [];
   // Переиспользуемая проба (RDBG-2): поля переписываются, объект живёт.
   const probe = {
     tick: -1,
@@ -155,7 +162,7 @@ export function deliveryDebugSource(
     snappedCount: 0,
     spawnedCount: 0,
     eventCount: 0,
-    statNames: [] as readonly string[],
+    statNames: statNames as readonly string[],
     entities: rows.list,
     clock: { deliverySpanTicks: 0 },
     noData: undefined as string | undefined,
@@ -186,7 +193,10 @@ export function deliveryDebugSource(
       probe.freshEvents = view.freshEvents;
       probe.entityCount = view.entities.size;
       probe.eventCount = view.events.length;
-      probe.statNames = view.statNames;
+      // Копия, а не ссылка: массив доставки живёт в буфере вида и переживает
+      // кадр, а проба обязана быть самодостаточной (RDBG-2).
+      statNames.length = view.statNames.length;
+      for (let i = 0; i < view.statNames.length; i += 1) statNames[i] = view.statNames[i]!;
       probe.clock.deliverySpanTicks = clock.spanTicks;
       let snapped = 0;
       let spawned = 0;
@@ -251,7 +261,6 @@ export interface DebugCostProbe extends DebugProbe {
  */
 export function costCountersDebugSource(): DebugSource<DebugCostProbe> {
   const own = createCostCounters();
-  let previous: RenderCostCounters | undefined;
   let holding = false;
   const stages: Record<CostStage, Record<string, number>> = { syncTick: {}, frame: {} };
   const probe = {
@@ -267,16 +276,21 @@ export function costCountersDebugSource(): DebugSource<DebugCostProbe> {
     toggle(enabled: boolean): void {
       if (enabled) {
         // Чужой сток уже подключён — значит идёт замер: встать рядом с ним
-        // нельзя, и источник остаётся его читателем (design D8).
+        // нельзя, и источник остаётся его читателем (design D8). Своё место
+        // источник занимает только пустым, поэтому и отпускает его в пустоту.
         if (costSink() !== undefined) return;
-        previous = attachCostSink(own);
+        attachCostSink(own);
         holding = true;
         return;
       }
       if (!holding) return;
-      attachCostSink(previous);
-      previous = undefined;
       holding = false;
+      // Отпустить, а не «вернуть предыдущий»: пока источник был включён, поверх
+      // него мог встать замер, и `attachCostSink` отобрал бы у него сток
+      // посреди измерения. `releaseCostSink` снимает свой сток, только если он
+      // ещё свой, а иначе помечает его отпущенным — и `finally` замера положит
+      // на его место пустоту (RDBG-4: выключенный источник не стоит ничего).
+      releaseCostSink(own);
     },
     probe(): DebugCostProbe {
       const sink = costSink();

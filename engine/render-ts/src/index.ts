@@ -28,7 +28,7 @@ export type {
 // со списком подсистем (REND-27), закрытый словарь примитивов рисования и
 // машинно-читаемый дамп кадра. Выключен по умолчанию и выключенным не стоит
 // ничего; в счётчики стоимости не входит вовсе (RDBG-8).
-export { RenderDebugLayer, ownerOf } from './debug/layer.js';
+export { RenderDebugLayer } from './debug/layer.js';
 export type { DebugSourceInfo, RenderDebugLayerOptions } from './debug/layer.js';
 export { DEBUG_DUMP_VERSION } from './debug/dump.js';
 export type { DebugDump } from './debug/dump.js';
@@ -65,6 +65,7 @@ export {
   attachCostSink,
   costSink,
   createCostCounters,
+  releaseCostSink,
   withCostSink,
 } from './cost.js';
 export type { CostStage, RenderCostCounters } from './cost.js';

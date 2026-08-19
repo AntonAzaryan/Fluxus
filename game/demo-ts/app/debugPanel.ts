@@ -19,6 +19,13 @@
  * localStorage — тем же способом, что выбор пресета качества, и незнакомый
  * сохранённый `id` игнорируется молча (реестр про него отвечает `false`).
  *
+ * ## Текст панели собирается не каждым кадром
+ *
+ * Дамп снимается ПО ЗАПРОСУ (RDBG-7), и запрос здесь — щелчок галочки плюс
+ * редкий таймер, а не кадр: покадровая сборка была бы аллокацией на кадр
+ * (REND-26) ради текста, который человек всё равно читает глазами. Без единого
+ * включённого источника панель не делает и этого — одно сравнение (RDBG-4).
+ *
  * ## Ручка дампа
  *
  * По образцу `__benchProbe` (PERF-7): версионированное поле на `globalThis`,
@@ -89,19 +96,36 @@ export function restoreDebugSources(layer: RenderDebugLayer, ids: readonly strin
   for (const id of ids) layer.setEnabled(id, true);
 }
 
+/**
+ * Как часто панель пересобирает свой текст, миллисекунды. Дамп снимается ПО
+ * ЗАПРОСУ и MUST NOT собираться каждый кадр (RDBG-7): покадровая сборка была бы
+ * аллокацией на кадр (REND-26) ради текста, который человек читает глазами.
+ * Четыре обновления в секунду — тот темп, на котором числа успевают читаться.
+ */
+const TEXT_INTERVAL_MS = 250;
+
 export interface DebugPanelOptions {
   readonly layer: RenderDebugLayer;
   /** Контейнер панели — элемент разметки страницы рядом с выбором качества. */
   readonly container: HTMLElement;
   /** Хранилище выбора; нет — выбор не переживает перезагрузку. */
   readonly storage?: QualityStorage | undefined;
+  /** Период пересборки текста; по умолчанию `TEXT_INTERVAL_MS`. */
+  readonly textIntervalMs?: number;
 }
 
 export interface DebugPanel {
-  /** Перестроить список: источники появляются вместе со сборкой сцены. */
+  /** Перестроить список и сверить галочки с реестром: источники приходят со сценой. */
   refresh(): void;
-  /** Обновить текстовую часть (инспектор и счётчики) из дампа кадра. */
-  update(): void;
+  /**
+   * Кадровый вызов панели. Текст пересобирается НЕ каждый кадр: по щелчку
+   * галочки — сразу, дальше не чаще периода (RDBG-7). Выключенная отладка не
+   * стоит и того: без единого включённого источника здесь одно сравнение
+   * (RDBG-4).
+   *
+   * @param nowMs — часы главного потока кадра (тот же `now`, что у rAF).
+   */
+  update(nowMs: number): void;
 }
 
 /** Строка панели — сама печатает своё состояние; DOM создаётся один раз. */
@@ -117,20 +141,38 @@ interface Row {
 export function createDebugPanel(options: DebugPanelOptions): DebugPanel {
   const { layer, container } = options;
   const storage = options.storage ?? qualityStorageOf(globalThis);
+  const interval = options.textIntervalMs ?? TEXT_INTERVAL_MS;
   const list = document.createElement('div');
   list.className = 'debug-panel__list';
   const text = document.createElement('pre');
   text.className = 'debug-panel__text';
   container.append(list, text);
   const rows: Row[] = [];
+  /** Текст просрочен: щёлкнули галочку — пересобрать ближайшим кадром. */
+  let stale = true;
+  /** Когда текст собран в последний раз; NaN — ещё ни разу. */
+  let textAt = Number.NaN;
+  /** В `pre` что-то напечатано: по флагу, а не чтением DOM каждым кадром. */
+  let printed = false;
 
   const remember = (): void => {
     rememberDebugSources(storage, layer.enabled);
   };
 
+  const sync = (): void => {
+    for (const row of rows) row.input.checked = layer.isEnabled(row.id);
+  };
+
   const refresh = (): void => {
     const sources = layer.sources;
-    if (sources.length === rows.length) return;
+    if (sources.length === rows.length) {
+      // Состав реестра прежний — но выбор мог измениться мимо панели (ручка
+      // `__renderDebug`, восстановление запомненного): галочки сверяются здесь,
+      // а не покадрово (RDBG-4).
+      sync();
+      stale = true;
+      return;
+    }
     list.replaceChildren();
     rows.length = 0;
     let owner = '';
@@ -151,6 +193,9 @@ export function createDebugPanel(options: DebugPanelOptions): DebugPanel {
       input.addEventListener('change', () => {
         layer.setEnabled(source.id, input.checked);
         remember();
+        // Текст пересобирается по СОБЫТИЮ, а не покадровым опросом: щелчок
+        // виден сразу, а между щелчками панель молчит (RDBG-7).
+        stale = true;
       });
       const caption = document.createElement('span');
       caption.textContent = source.title;
@@ -161,9 +206,23 @@ export function createDebugPanel(options: DebugPanelOptions): DebugPanel {
     }
   };
 
-  const update = (): void => {
-    for (const row of rows) row.input.checked = layer.isEnabled(row.id);
-    text.textContent = layer.enabled.length === 0 ? '' : describeDump(layer.dump());
+  const update = (nowMs: number): void => {
+    if (layer.enabledCount === 0) {
+      // Вся цена выключенной отладки на стороне приложения: одно сравнение
+      // (RDBG-4). Текст стирается один раз — на переходе, а не каждым кадром.
+      if (printed) {
+        text.textContent = '';
+        printed = false;
+      }
+      stale = true;
+      textAt = Number.NaN;
+      return;
+    }
+    if (!stale && nowMs - textAt < interval) return;
+    stale = false;
+    textAt = nowMs;
+    text.textContent = describeDump(layer.dump());
+    printed = true;
   };
 
   refresh();

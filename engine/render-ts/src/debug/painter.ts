@@ -124,6 +124,42 @@ export class DebugPainter implements DebugDraw {
   private readonly corner = new THREE.Vector3();
   private readonly corners: THREE.Vector3[] = Array.from({ length: 8 }, () => new THREE.Vector3());
 
+  /**
+   * То, что видит ИСТОЧНИК, — закрытый словарь примитивов и ничего сверх него
+   * (RDBG-3). Отдельный объект, а не сам painter: у painter'а есть ещё
+   * жизненный цикл набора (`begin`/`owner`/`commit`/`clear`) и счётчики сцены,
+   * и рисовальщику источника они не принадлежат — «прямого доступа к сцене, её
+   * объектам и материалам у источника MUST NOT быть» держится так на
+   * построении, а не на типе аргумента. Объект создаётся ОДИН раз вместе со
+   * слоем: аллокаций на кадр от него нет (REND-26).
+   */
+  readonly primitives: DebugDraw = {
+    point: (x, y, z, color) => {
+      this.point(x, y, z, color);
+    },
+    segment: (x1, y1, z1, x2, y2, z2, color) => {
+      this.segment(x1, y1, z1, x2, y2, z2, color);
+    },
+    polyline: (points, color, closed) => {
+      this.polyline(points, color, closed);
+    },
+    circle: (x, y, radius, color) => {
+      this.circle(x, y, radius, color);
+    },
+    disc: (x, y, radius, color) => {
+      this.disc(x, y, radius, color);
+    },
+    box: (pose, color) => {
+      this.box(pose, color);
+    },
+    polygon: (points, color) => {
+      this.polygon(points, color);
+    },
+    raster: (raster, color) => {
+      this.raster(raster, color);
+    },
+  };
+
   constructor(options: DebugPainterOptions = {}) {
     this.options = options;
     this.group.name = 'render-debug';

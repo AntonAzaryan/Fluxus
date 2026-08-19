@@ -28,7 +28,6 @@ import {
   type CameraBounds,
   type CameraPose,
   type CameraRig,
-  type DebugColor,
   type DebugDraw,
   type DebugFrameState,
   type DebugList,
@@ -476,16 +475,25 @@ function basisOf(value: DebugCameraProbe): CameraBasis {
   const rx = Math.sin(value.yawRadians);
   const ry = -Math.cos(value.yawRadians);
   // Экранный «вверх» — right × forward: тройка правая, как у THREE-камеры.
+  const ux = ry * fz;
+  const uy = -rx * fz;
+  const uz = rx * fy - ry * fx;
+  // Крен — поворот той же тройки вокруг оси взгляда, ровно как его делает
+  // посадка позы на камеру (`applyCameraPose`: `rotateZ(pose.roll)`, CAM-1).
+  // Без него наложение показывало бы не ту позу, которой нарисован кадр, — а
+  // ненулевой крен приезжает от эффектов камеры (тряска, отдача).
+  const cosRoll = Math.cos(value.rollRadians);
+  const sinRoll = Math.sin(value.rollRadians);
   return {
     fx,
     fy,
     fz,
-    rx,
-    ry,
-    rz: 0,
-    ux: ry * fz,
-    uy: -rx * fz,
-    uz: rx * fy - ry * fx,
+    rx: rx * cosRoll + ux * sinRoll,
+    ry: ry * cosRoll + uy * sinRoll,
+    rz: uz * sinRoll,
+    ux: ux * cosRoll - rx * sinRoll,
+    uy: uy * cosRoll - ry * sinRoll,
+    uz: uz * cosRoll,
     tanH: tanV * aspect,
     tanV,
   };
@@ -511,7 +519,9 @@ function groundAt(
  * Пирамида видимости камеры и зоны краевого панорамирования (CAM-1, CAM-3).
  *
  * Пирамида рисуется от позы камеры её же углами — той самой позой, которой
- * нарисован кадр (CAM-1): второго конвейера позы нет. Краевые зоны — полосы у
+ * нарисован кадр (CAM-1): второго конвейера позы нет, и крен позы (тряска и
+ * отдача эффектов камеры) входит в базис так же, как входит в кадр. Краевые
+ * зоны — полосы у
  * границ вьюпорта, спроецированные на плоскость земли: по ним видно, ГДЕ курсор
  * начинает двигать камеру, а это ровно тот вопрос, на который иначе отвечают
  * наощупь.
@@ -632,6 +642,3 @@ export function cameraDebugSource(access: CameraDebugAccess): DebugSource<DebugC
     },
   };
 }
-
-/** Цвета наружу — панель печатает легенду теми же (политика демо). */
-export const DEBUG_COLORS: Readonly<Record<string, DebugColor>> = COLORS;
