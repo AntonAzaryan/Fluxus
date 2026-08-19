@@ -21,10 +21,13 @@ const RAMP_COLOR: DebugColor = 0xffd479;
 const WALKABLE_COLOR: DebugColor = 0x90ff90;
 const HOLE_COLOR: DebugColor = 0xff6060;
 /**
- * Потолок перечня клеток (RDBG-7). В перечень идут только ЗНАЧИМЫЕ клетки —
- * рампа, дыра в полу, кривизна или накрытие walkable-настилом: ровная клетка на
- * своём уровне не несёт информации ни человеку, ни модели, а арена целиком
- * превратила бы наложение в кашу, а дамп — в растр под другим именем.
+ * Потолок перечня клеток (RDBG-7). В перечень идут только ЗНАЧИМЫЕ клетки:
+ * рампа, накрытие walkable-настилом и КРОМКА провала — клетка без пола, у
+ * которой есть floored-сосед. Ровная клетка на своём уровне не несёт информации
+ * ни человеку, ни модели; кривизна на арене с картой кривизны есть почти везде и
+ * описана агрегатом; а все клетки без пола разом — это заливка вне арены, от
+ * которой наложение превращается в кашу, а дамп — в растр под другим именем.
+ * Кромка же провала и есть то, с чего сущность падает (`arena` ARENA-5).
  */
 const CELL_CAP = 512;
 
@@ -110,6 +113,10 @@ export function terrainSurfaceDebugSource(
       probe.noData = undefined;
       const grid = access.grid();
       const floorBits = access.floorBits();
+      const floor = floorBits ?? grid.floor;
+      /** Пол в клетке; вне сетки — «пола нет», как и на её краю. */
+      const hasFloor = (x: number, y: number): boolean =>
+        x >= 0 && y >= 0 && x < grid.width && y < grid.height && floor[y * grid.width + x] === 1;
       const levels: number[] = probe.cellsByLevel;
       levels.length = 0;
       let ramps = 0;
@@ -123,23 +130,25 @@ export function terrainSurfaceDebugSource(
           const level = grid.levels[cell] ?? 0;
           levels[level] = (levels[level] ?? 0) + 1;
           const ramp = grid.ramps[cell] === 1;
-          const floor = (floorBits ?? grid.floor)[cell] === 1;
+          const floored = hasFloor(x, y);
           const onSurface = surface.hasCellWalkable(x, y);
           const bent = surface.hasCellCurvature(x, y);
           if (ramp) ramps += 1;
-          if (!floor) holes += 1;
+          if (!floored) holes += 1;
           if (bent) curved += 1;
           if (onSurface) walkable += 1;
-          // Ровная клетка на своём уровне в перечень не идёт: она полностью
-          // описана агрегатами, а наложением была бы шумом.
-          if (!ramp && floor && !onSurface && !bent) continue;
+          // Кромка провала: клетка без пола, у которой сосед с полом есть.
+          const edge =
+            !floored &&
+            (hasFloor(x - 1, y) || hasFloor(x + 1, y) || hasFloor(x, y - 1) || hasFloor(x, y + 1));
+          if (!ramp && !onSurface && !edge) continue;
           const row = rows.next();
           if (row === null) continue;
           row.cellX = x;
           row.cellY = y;
           row.level = level;
           row.ramp = ramp;
-          row.floor = floor;
+          row.floor = floored;
           row.walkable = onSurface;
           row.curved = bent;
         }
