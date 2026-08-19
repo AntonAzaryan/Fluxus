@@ -11,6 +11,7 @@
  * и политика разведены правильно.
  */
 import { describe, expect, it } from 'vitest';
+import { ARENA_EVENTS, PHYSICS_EVENTS } from '@game-mvp/core';
 import dictionaryJson from '../app/journal/duel.dictionary.json';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 
@@ -27,14 +28,15 @@ const DICTIONARY = dictionaryJson as Dictionary;
  * они есть, и словарь обязан их называть: провалиться сквозь пол на демо-арене
  * — такой же боевой факт, как получить в лоб.
  *
- * Список с полями данных, а не голыми именами: роли словаря проверяются по нему
- * наравне с событиями сцены — иначе `target` мог бы указывать в пустоту.
+ * Перечень приходит ИЗ ДВИЖКА, а не переписывается здесь: список рядом с игрой
+ * пережил бы переименование события молча — то есть ровно тем отказом, который
+ * этот тест и должен ловить (`Overlap` однажды именно так и выпал). Имена полей
+ * данных нужны наравне с типами: роли словаря проверяются по ним, иначе
+ * `target` мог бы указывать в пустоту.
  */
 const NATIVE_EVENTS: Readonly<Record<string, readonly string[]>> = {
-  Collision: ['entity', 'other', 'nx', 'ny'],
-  Overlap: ['entity', 'other'],
-  LeftArena: ['entity'],
-  FellThroughFloor: ['entity'],
+  ...PHYSICS_EVENTS,
+  ...ARENA_EVENTS,
 };
 
 /**
@@ -78,6 +80,10 @@ describe('словарь журнала демо-арены (DIAG-10)', () => {
   it('контроль: обход нашёл события сцены — иначе покрытие проверялось бы на пустом множестве', () => {
     expect(emittedEvents(sceneJson).size).toBeGreaterThan(5);
     expect([...EMITTED.keys()]).toContain('EntityDied');
+    // И нативные приехали от движка, а не отсюда: пустой перечень означал бы,
+    // что половина проверки покрытия молча выключилась.
+    expect(Object.keys(NATIVE_EVENTS).length).toBeGreaterThan(0);
+    expect([...EMITTED.keys()]).toContain('Overlap');
   });
 
   it('каждый тип события матча назван словарём', () => {

@@ -11,8 +11,15 @@
  * своё расписание.
  */
 import { describe, expect, it } from 'vitest';
-import { snapshotToPlain, type DiagnosticRecord, type GameEvent, type SceneDef } from '@game-mvp/core';
+import {
+  DIAGNOSTIC_CODES,
+  snapshotToPlain,
+  type DiagnosticRecord,
+  type GameEvent,
+  type SceneDef,
+} from '@game-mvp/core';
 import { createMatchTrace } from '../src/match/trace.js';
+import { parseServerMessage } from '../src/protocol/messages.js';
 import { MatchServer, type MatchConfig } from '../src/server/matchServer.js';
 import { duelConfig, duelScene, hello, inputMessage, versionOf, wireInput, STEP } from './fixtures.js';
 
@@ -136,12 +143,40 @@ describe('DIAG-8: отладочный матч — тот же матч', () =>
     outgoing.push(...server.drain());
 
     expect(sink.lines.length).toBeGreaterThan(0);
+    expect(outgoing.length).toBeGreaterThan(0);
     for (const out of outgoing) {
-      expect(JSON.stringify(out.message)).not.toContain('SYSTEM_BEGIN');
-      expect(JSON.stringify(out.message)).not.toContain('TICK_COST');
+      // Состав сообщений закрыт (NTR-4), и проверяется он тем самым разбором,
+      // которым сообщение принимает клиент: `parseServerMessage` собирает поля
+      // ПОИМЁННО, поэтому лишнее поле — хоть `trace` на `Welcome`, хоть блоб с
+      // данными — до него не доживает, и равенство расходится. Утверждение о
+      // двух подстроках такой утечки не заметило бы.
+      expect(parseServerMessage(out.message)).toEqual(out.message);
     }
+
+    // Второй заход, структурный: ни один вложенный объект сообщения не имеет
+    // формы записи диагностики (DIAG-2) и ни одна строка в нём не является её
+    // кодом. Переименованный код или чужое поле краснеют здесь, даже если
+    // разбор их случайно пропустил.
+    for (const out of outgoing) expect(diagnosticsInside(out.message)).toEqual([]);
   });
 });
+
+/**
+ * Следы диагностики в произвольном значении: форма записи (DIAG-2 — `seq` плюс
+ * `kind` плюс `code`) и любой стабильный код записи, встреченный строкой.
+ */
+function diagnosticsInside(value: unknown, path = '$'): string[] {
+  if (typeof value === 'string') {
+    return (DIAGNOSTIC_CODES as readonly string[]).includes(value) ? [`${path} = ${value}`] : [];
+  }
+  if (Array.isArray(value)) return value.flatMap((item, i) => diagnosticsInside(item, `${path}[${i}]`));
+  if (typeof value !== 'object' || value === null) return [];
+  const record = value as Record<string, unknown>;
+  const found: string[] = [];
+  if ('seq' in record && 'kind' in record && 'code' in record) found.push(`${path} — форма записи DIAG-2`);
+  for (const [key, item] of Object.entries(record)) found.push(...diagnosticsInside(item, `${path}.${key}`));
+  return found;
+}
 
 describe('CLI-11/CLI-10: отладочные поля в запись матча не попадают', () => {
   it('состав документа записи тот же, что без трейса', () => {
@@ -170,6 +205,21 @@ describe('DIAG-8: отказ записи гасит трейс, а не мат�
     // Первая ошибка запомнена и названа, дальше писать не пытались.
     expect(trace.failure).toBe('нет места на диске');
     expect(written).toBe(1);
+  });
+
+  it('упавший ОТБОР тоже не уходит в тик: под охраной всё тело съёма (DIAG-4)', () => {
+    // Предикат приходит от запускалки — из командной строки, — и исключение из
+    // него для ядра неотличимо от исключения писателя: DIAG-4 объявляет любое
+    // исключение из sink'а дефектом хоста, а debug-сборка ядра превращает его в
+    // жёсткую границу. То есть кривой отбор убивал бы матч.
+    const trace = createMatchTrace('full', () => {
+      throw new Error('отбор упал');
+    }, () => {});
+    const traced = playDirect(castConfig({ trace }));
+    const plain = playDirect(castConfig());
+
+    expect(traced.snapshots).toEqual(plain.snapshots);
+    expect(trace.failure).toBe('отбор упал');
   });
 });
 

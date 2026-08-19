@@ -64,11 +64,38 @@ export function matchDataOf(match, pack) {
   return config;
 }
 
+/**
+ * Признак-флаг: значения у него нет, поэтому опознаётся он ТОЛЬКО голой формой
+ * `--name`. Форму `--name=<...>` он не читает намеренно: `--debug=false`
+ * означал бы «отладочный прогон включён», а это ровно тот вид ошибки, ради
+ * которого разбор флагов вообще правится (CLI-11).
+ *
+ * Флаг, у которого значение бывает (`--trace`), разбирается не здесь, а
+ * `option`: голая форма приезжает туда умолчанием.
+ */
 export function flag(name) {
   return process.argv.includes(`--${name}`);
 }
 
+/**
+ * Значение флага в ОБЕИХ формах — `--name=value` и `--name value`.
+ *
+ * Обе, потому что обе напечатаны: `=` стоит в usage запускалок, в шапке
+ * `bin/trace.mjs`, в `CLAUDE.md` и в CLI прогона сценария (`bin/sim.mjs`
+ * принимает только её), раздельная — в примерах запуска стенда. CLI-11 требует
+ * принимать параметры трейса «тем же образом, каким их принимает CLI прогона
+ * сценария», и форма, которая молча не срабатывает, — это не отказ, а прогон,
+ * делающий не то, что написано в команде.
+ *
+ * Побеждает ПЕРВОЕ вхождение — как и раньше у раздельной формы; поиск идёт
+ * слева направо и обе формы для него равны.
+ */
 export function option(name, fallback) {
-  const at = process.argv.indexOf(`--${name}`);
-  return at >= 0 && at + 1 < process.argv.length ? process.argv[at + 1] : fallback;
+  const prefix = `--${name}=`;
+  for (let i = 0; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (arg.startsWith(prefix)) return arg.slice(prefix.length);
+    if (arg === `--${name}` && i + 1 < process.argv.length) return process.argv[i + 1];
+  }
+  return fallback;
 }

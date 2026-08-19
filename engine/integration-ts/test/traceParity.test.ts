@@ -24,7 +24,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createJsonlSink, runScenario, type DiagnosticRecord, type SceneDef } from '@game-mvp/core';
+import {
+  createJsonlSink,
+  parseTraceSelect,
+  runScenario,
+  selectingSink,
+  type SceneDef,
+} from '@game-mvp/core';
 import { createMatchTrace, type MatchConfig, type TraceSelect } from '@game-mvp/net';
 import { STEP, TICK_RATE, connectClient, duelConfig, duelScene, harness, settle } from './fixtures.js';
 
@@ -34,14 +40,9 @@ const TICKS_AFTER = 4;
 /** Бит, по удержанию которого сцена ниже публикует событие. */
 const DEATH_BUTTON = 0;
 
-const JOURNAL_CLI = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  'core-ts',
-  'bin',
-  'journal.mjs',
-);
+const CORE_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'core-ts', 'bin');
+const JOURNAL_CLI = join(CORE_BIN, 'journal.mjs');
+const SIM_CLI = join(CORE_BIN, 'sim.mjs');
 
 /**
  * Дуэль плюс событие на КАЖДОМ тике удержания кнопки — не по фронту.
@@ -155,21 +156,50 @@ describe('DIAG-9: живой матч и реплей его записи', () =
   });
 
   it('тот же отбор на записи даёт тот же файл', async () => {
-    const onlyEvents: TraceSelect = (entry: DiagnosticRecord) => entry.kind === 'event';
+    // «Тот же отбор» — буквально та же функция, а не второе похожее условие:
+    // строка флага разбирается общим для обеих команд `parseTraceSelect`
+    // (`--trace-select=event`), а применяет её обёртка ядра `selectingSink` —
+    // та самая, которой отбирают и хост матча, и прогон сценария (DIAG-9).
+    // Отбор, собранный в тесте руками, проверял бы соседнюю функцию: у него, в
+    // частности, не было бы пропуска записей о нарушенных инвариантах (FP-4).
+    const onlyEvents: TraceSelect = parseTraceSelect('event')!;
     const match = await playTraced('full', onlyEvents, TICKS);
 
     const replayed: string[] = [];
-    const sink = createJsonlSink('full', (line) => void replayed.push(line));
-    runScenario(match.server.toScenario(), {
-      trace: sink.trace,
-      record: (entry) => {
-        if (onlyEvents(entry)) sink.record(entry);
-      },
-    });
+    runScenario(
+      match.server.toScenario(),
+      selectingSink(createJsonlSink('full', (line) => void replayed.push(line)), onlyEvents),
+    );
 
     const live = match.lines.filter((line) => !isMark(line));
     expect(live.length).toBeGreaterThan(0);
     expect(live).toEqual(replayed);
+  });
+
+  it('тот же отбор переснимает трейс НАСТОЯЩЕЙ командой прогона сценария (CLI-11)', async () => {
+    // Утверждение CLI-11 «трейс переснимается записью» проверяется тем путём,
+    // которым его пройдёт человек: файл записи плюс `bin/sim.mjs` с теми же
+    // флагами. Без этого «тот же отбор» держалось бы на том, что тест и
+    // запускалка зовут одну функцию, — а у команды сценария флага отбора могло
+    // бы не быть вовсе.
+    const dir = mkdtempSync(join(tmpdir(), 'trace-reshoot-'));
+    try {
+      const match = await playTraced('full', parseTraceSelect('event'), TICKS);
+      const scenarioPath = join(dir, 'match.scenario.json');
+      writeFileSync(scenarioPath, JSON.stringify(match.server.toScenario()));
+      const run = spawnSync(
+        process.execPath,
+        [SIM_CLI, scenarioPath, '--trace=full', '--trace-select=event'],
+        { encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' } },
+      );
+      expect(run.status, run.stderr.slice(0, 400)).toBe(0);
+
+      const live = match.lines.filter((line) => !isMark(line));
+      expect(live.length).toBeGreaterThan(0);
+      expect(run.stderr).toBe(live.join(''));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

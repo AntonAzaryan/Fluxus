@@ -51,6 +51,13 @@ export default defineConfig([
     'engine/tests/golden/**',
     'content/**',
     'openspec/**',
+    // Рабочие копии git внутри репозитория (`.claude/worktrees/*`): это ВТОРОЙ
+    // checkout, чужой ветки, и git его уже исключает (`.git/info/exclude`).
+    // Линтеру там нечего проверять — файлы принадлежат другому дереву и в
+    // tsconfig этого не входят; без исключения гейт краснел бы от кода, которого
+    // в текущей ветке нет. Остальное в `.claude/` (hooks, skills) — обычные
+    // исходники репозитория и линтуются на общих основаниях.
+    '.claude/worktrees/**',
   ]),
 
   js.configs.recommended,

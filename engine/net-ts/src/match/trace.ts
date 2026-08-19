@@ -12,7 +12,15 @@
  * решает хост. Сервер матча от подключения трейса ввода-вывода не приобретает
  * (NTR-3): он лишь передаёт sink в сборку мира и зовёт `mark`.
  */
-import { traceLine, type DiagnosticRecord, type DiagnosticsSink, type TraceLevel } from '@game-mvp/core';
+import {
+  createJsonlSink,
+  selectingSink,
+  traceLine,
+  type DiagnosticRecord,
+  type DiagnosticsSink,
+  type TraceLevel,
+  type TraceSelect,
+} from '@game-mvp/core';
 
 /** Вид отметки ветви (DIAG-9): границы, которые знает только сервер матча. */
 export type MatchTraceMarkKind = 'live' | 'replayBegin' | 'replayEnd';
@@ -33,8 +41,13 @@ export interface MatchTraceMark {
  * Отбор записей (DIAG-9) — чистая функция от записи, а не четвёртый уровень
  * детализации: уровень входит в определение воспроизводимости (DIAG-6) и в
  * матрицу кросс-языковой сверки (CLI-6).
+ *
+ * Тип приезжает из ядра, а не заводится здесь: отбирают оба хоста — прогонщик
+ * сценария (CLI-7) и сервер матча, — и «тот же отбор» в CLI-11 обязан означать
+ * ту же функцию. Имя реэкспортируется, потому что для потребителей `@game-mvp/net`
+ * отбор — часть описания матча.
  */
-export type TraceSelect = (entry: DiagnosticRecord) => boolean;
+export type { TraceSelect };
 
 export interface MatchTrace {
   /** То, что уезжает в сборку мира матча (DI-5). */
@@ -48,16 +61,6 @@ export interface MatchTrace {
    * полный диск убивал бы матч.
    */
   readonly failure: string | undefined;
-}
-
-/**
- * Запись о нарушенном инварианте (FP-4). Отбор её не выбрасывает никогда
- * (DIAG-9): DIAG-3 уже вывела такие записи из-под регулятора объёма, и sink,
- * глушащий сигнал о дефекте ради размера файла, отменял бы это решение задним
- * числом.
- */
-function isInvariantRecord(entry: DiagnosticRecord): boolean {
-  return entry.kind === 'invariant' || entry.kind === 'assert';
 }
 
 /**
@@ -79,21 +82,30 @@ export function createMatchTrace(
 ): MatchTrace {
   let failure: string | undefined;
 
-  const emit = (line: string): void => {
-    if (failure !== undefined) return;
-    try {
-      write(line);
-    } catch (cause) {
-      failure = cause instanceof Error ? cause.message : String(cause);
-    }
+  /** Первая ошибка запоминается, дальше трейс молчит (DIAG-8). */
+  const remember = (cause: unknown): void => {
+    failure = cause instanceof Error ? cause.message : String(cause);
   };
+
+  // Отбор — обёртка ядра (DIAG-9): та же функция, которой отбирает прогон
+  // сценария, включая пропуск записей о нарушенных инвариантах (FP-4).
+  const inner = selectingSink(createJsonlSink(trace, write), select);
 
   return {
     sink: {
       trace,
+      // Граница между хостом и ядром (DIAG-4): исключение из sink'а объявлено
+      // дефектом хоста, и в debug-сборке ядро превращает его в жёсткую границу —
+      // то есть полный диск убивал бы матч. Под охраной ВСЁ тело съёма, а не
+      // одна запись строки: и отбор, и сериализация приходят снаружи, и упавший
+      // предикат ушёл бы в тик ровно так же, как упавший писатель.
       record(entry) {
-        if (select !== undefined && !select(entry) && !isInvariantRecord(entry)) return;
-        emit(`${traceLine(entry)}\n`);
+        if (failure !== undefined) return;
+        try {
+          inner.record(entry);
+        } catch (cause) {
+          remember(cause);
+        }
       },
     },
     mark(mark) {
@@ -101,7 +113,12 @@ export function createMatchTrace(
       // читатель отличает её от записи DIAG-2, не разбирая содержимого.
       // Отбросив отметки, получаем ровно тот файл, который даёт реплей записи, —
       // на этом стоит проверка парности (DIAG-9).
-      emit(`${markLine(mark)}\n`);
+      if (failure !== undefined) return;
+      try {
+        write(`${markLine(mark)}\n`);
+      } catch (cause) {
+        remember(cause);
+      }
     },
     get failure() {
       return failure;

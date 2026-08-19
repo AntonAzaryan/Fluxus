@@ -11,6 +11,9 @@
  *                                       [--trace=off|systems|full] [--trace-select=<вид|код>,...]
  *                                       [--dict <словарь журнала>]
  *
+ * Значение флага принимается обеими формами — `--trace=full` и `--trace full`
+ * (CLI-11, `@game-mvp/net/bin/matchFile.mjs`).
+ *
  * Отладочный прогон (`--debug`, CLI-11) — ОДНА команда и ни человека за
  * клавиатурой, ни второго процесса: боты занимают слоты немедленно, матч
  * ограничен по тикам и завершается сам, артефакты остаются на диске. Каталог
@@ -58,7 +61,7 @@
  * рестарт означал бы пересадку сокета, а пересаженный сокет — окно, в котором
  * стенд не отвечает.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MessageChannel, Worker } from 'node:worker_threads';
@@ -70,7 +73,12 @@ import { MessageChannel, Worker } from 'node:worker_threads';
 import { flag, matchConfigOf, option, readMatchFile } from '@game-mvp/net/bin/matchFile.mjs';
 // Флаги трейса — оттуда же и по той же причине (CLI-11): уровень, отбор и путь
 // вывода стенд принимает тем же образом, что и `serve.mjs`.
-import { openMatchTrace, traceOptions, TRACE_USAGE } from '@game-mvp/net/bin/trace.mjs';
+import {
+  openMatchTrace,
+  traceOptions,
+  TRACE_USAGE,
+  TRACE_WITHOUT_RECORD,
+} from '@game-mvp/net/bin/trace.mjs';
 // Журнал собирается ТЕМ ЖЕ кодом, что и команда `npm run journal` (CLI-12):
 // второй разбор трейса рядом означал бы вторую реализацию выборки фактов.
 import { journalDocument, journalFromFile, journalReport } from '@game-mvp/core/bin/journal.mjs';
@@ -112,16 +120,32 @@ if (!BRAIN_KINDS.includes(brain)) {
   process.stderr.write(`неизвестный мозг "${brain}"; известные: ${BRAIN_KINDS.join(', ')}\n`);
   process.exit(2);
 }
-const port = Number(option('port', '8080'));
+/**
+ * Числовой параметр запуска. Проверяется, а не берётся `Number`'ом молча:
+ * `--max-ticks abc` даёт `NaN`, а сравнение `tick >= NaN` ложно всегда — то есть
+ * отладочный прогон, обязанный завершаться САМ (CLI-11), не завершился бы
+ * никогда и висел бы до Ctrl+C, которого у него нет.
+ */
+function numberOption(name, fallback) {
+  const raw = option(name, fallback);
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    process.stderr.write(`--${name}: ожидалось неотрицательное число, получено "${raw}"\n`);
+    process.exit(2);
+  }
+  return value;
+}
+
+const port = numberOption('port', '8080');
 /**
  * Отладочный прогон (CLI-11): боты садятся немедленно, матч ограничен по тикам,
  * артефакты ложатся в каталог. `--once` он подразумевает — прогон для разбора
  * ровно один, и авто-рестарт переписал бы его артефакты следующим матчем.
  */
 const debugRun = flag('debug');
-const botFillMs = Number(option('bot-fill-ms', debugRun ? '0' : '5000'));
+const botFillMs = numberOption('bot-fill-ms', debugRun ? '0' : '5000');
 /** Ограничение длительности отладочного матча: десять секунд при 60 Гц. */
-const maxTicks = Number(option('max-ticks', '600'));
+const maxTicks = numberOption('max-ticks', '600');
 const outDir = option('out-dir', fromRepo('runs/latest'));
 const dictPath = option('dict', fromRepo('game/demo-ts/app/journal/duel.dictionary.json'));
 // Каталог заводится ДО матча: писателю трейса открывать файл в несуществующем
@@ -132,6 +156,14 @@ if (debugRun) mkdirSync(outDir, { recursive: true });
 // длинному прогону отвечает `--trace-select=event`.
 const traceFlags = traceOptions(debugRun ? { level: 'full', out: join(outDir, 'trace.jsonl') } : {});
 const tracing = openMatchTrace(traceFlags);
+// Запись матча кладёт рядом с трейсом только отладочный прогон: вне его стенд
+// играет матч за матчем, и записи ни одного из них не остаётся. Трейс без
+// записи невоспроизводим (DIAG-9), и прогон обязан назвать причину вслух
+// (CLI-11) — тем же текстом, каким называет её `serve.mjs`: одно и то же
+// положение дел не должно читаться в двух стендах как два разных.
+if (tracing !== undefined && !debugRun) {
+  process.stdout.write(`${TRACE_WITHOUT_RECORD}          добавьте --debug — он кладёт запись рядом\n`);
+}
 const serializer = flag('json') ? jsonSerializer : msgpackSerializer;
 // Формат кадра — свойство сборки, а не поле протокола, и он один на ВСЕХ
 // участников матча: сервер, люди и боты. Дебаг-формат, объявленный только
@@ -300,11 +332,17 @@ async function runMatch(number) {
   let failure = null;
   /** Сворачивание матча: остановка потока ботов — не его падение. */
   let stopping = false;
-  /** Отказ стенда: называется громко и один раз. */
+  /**
+   * Отказ стенда: называется громко и один раз — и в тот же поток, что и
+   * остальной отчёт запускалки. В stdout, а не в stderr, потому что stderr —
+   * умолчание вывода трейса (`bin/trace.mjs`), а трейс и собственный отчёт
+   * запускалки MUST NOT идти одним потоком (CLI-11): артефакт со строками
+   * постороннего происхождения разбирается человеком, а не программой.
+   */
   const fail = (message) => {
     if (failure !== null) return;
     failure = message;
-    process.stderr.write(`\nстенд: ${message}\n`);
+    process.stdout.write(`\nстенд: ${message}\n`);
   };
   const makeFiller = () => new BotSlotFiller({
     players: match.players,
@@ -438,10 +476,16 @@ async function runMatch(number) {
  * процесса и прочих данных окружения — по тому же основанию, по которому их не
  * содержит запись диагностики (DIAG-2): два прогона одной записи обязаны
  * сравниваться `diff`'ом.
+ *
+ * Каждый шаг огорожен своим `try`, а сводка пишется ПОСЛЕДНЕЙ и несёт причины
+ * не сложившегося: сорвавшийся шаг иначе унёс бы с собой весь набор — в том
+ * числе `run.json`, единственный артефакт, который называет, что пошло не так.
+ * Пустой каталог вместо разбора боя — самый дорогой исход отладочного прогона.
  */
 function saveArtifacts(server, failure) {
   // Трейс закрывается ДО чтения: журнал собирается по файлу, и недописанный
-  // хвост буфера стал бы усечённой строкой на ровном месте.
+  // хвост буфера стал бы усечённой строкой на ровном месте. Наружу закрытие не
+  // бросает (`bin/trace.mjs`) — отказ сброса хвоста приезжает полем `failure`.
   tracing?.close();
 
   const summary = {
@@ -473,10 +517,25 @@ function saveArtifacts(server, failure) {
       path: relative(outDir, tracePath),
       // Отказ записи гасит трейс, а не матч (DIAG-8), и называется он ЗДЕСЬ:
       // молча оборванный трейс выглядит поводом к расследованию, которого не
-      // получится.
-      ...(tracing.trace.failure !== undefined ? { failure: tracing.trace.failure } : {}),
+      // получится. Поле одно на обе половины отказа — съём и сброс хвоста.
+      ...(tracing.failure !== undefined ? { failure: tracing.failure } : {}),
     };
   }
+
+  /**
+   * Один шаг набора: сорвался — назван в сводке под своим именем и не унёс
+   * остальные. Причину пишем и в поток отчёта запускалки (stdout, отдельный от
+   * трейса, CLI-11), чтобы она была видна и без чтения `run.json`.
+   */
+  const step = (name, body) => {
+    try {
+      body();
+    } catch (error) {
+      summary.failed ??= {};
+      summary.failed[name] = error.message;
+      process.stdout.write(`\nартефакт "${name}" не сложился: ${error.message}\n`);
+    }
+  };
 
   // Трейс без записи невоспроизводим (DIAG-9): ввод порождают боты, а не seed.
   // Матч с перемоткой плоской формой документа сценария не выражается (NTR-16,
@@ -491,21 +550,37 @@ function saveArtifacts(server, failure) {
   }
 
   if (tracing !== undefined && tracePath !== undefined) {
-    const result = journalFromFile(tracePath, dictPath);
-    writeFileSync(join(outDir, 'journal.jsonl'), journalDocument(result));
-    summary.journal = {
-      path: 'journal.jsonl',
-      facts: result.entries.length,
-      // Незнакомый тип — не отказ прогона, а отставший словарь (DIAG-10), и
-      // назван он списком, а не молчанием.
-      unknownTypes: result.unknownTypes,
-      ...(result.malformedLines > 0 ? { malformedLines: result.malformedLines } : {}),
-    };
-    process.stderr.write(journalReport(result));
+    step('journal', () => {
+      // Журнал собирается по ФАЙЛУ (CLI-12). `--trace-out` мог увести трейс в
+      // устройство или в канал — читать оттуда «весь трейс» нечем, и назвать
+      // это отказом шага честнее, чем упереться в предел строки V8 на середине.
+      if (!statSync(tracePath).isFile()) {
+        throw new Error(`трейс "${tracePath}" — не обычный файл: журнал собирать не из чего`);
+      }
+      const result = journalFromFile(tracePath, dictPath);
+      writeFileSync(join(outDir, 'journal.jsonl'), journalDocument(result));
+      summary.journal = {
+        path: 'journal.jsonl',
+        facts: result.entries.length,
+        // Незнакомый тип — не отказ прогона, а отставший словарь (DIAG-10), и
+        // назван он списком, а не молчанием.
+        unknownTypes: result.unknownTypes,
+        ...(result.malformedLines > 0 ? { malformedLines: result.malformedLines } : {}),
+      };
+      // Отчёт о журнале — часть отчёта запускалки, и идёт он тем же потоком:
+      // сам журнал лежит файлом, а stderr занят умолчанием вывода трейса.
+      process.stdout.write(journalReport(result));
+    });
   }
 
-  writeFileSync(join(outDir, 'run.json'), `${JSON.stringify(summary, null, 2)}\n`);
-  process.stdout.write(`\nартефакты прогона: ${outDir}\n`);
+  // Сводка — последней и вне `step`: она и есть то место, где названы отказы
+  // остальных шагов, и падать ей больше не на чем.
+  try {
+    writeFileSync(join(outDir, 'run.json'), `${JSON.stringify(summary, null, 2)}\n`);
+    process.stdout.write(`\nартефакты прогона: ${outDir}\n`);
+  } catch (error) {
+    process.stdout.write(`\nсводки прогона не будет: ${error.message}\n`);
+  }
 }
 
 async function shutdown(code) {

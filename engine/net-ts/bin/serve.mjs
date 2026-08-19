@@ -3,7 +3,11 @@
  * Сервер матча за WebSocket (NTR-12):
  *   node bin/serve.mjs examples/duel.match.json [--port 8080] [--json] [--observer]
  *     [--trace=off|systems|full] [--trace-select=<вид|код>,...]
- *     [--trace-out <path>] [--record-out <path>]
+ *     [--trace-out=<path>] [--record-out=<path>]
+ *
+ * Значение флага принимается обеими формами — `--trace=full` и `--trace full`:
+ * CLI прогона сценария принимает первую (CLI-7), примеры запуска стенда —
+ * вторую, а CLI-11 требует одного образа на обе запускалки.
  *
  * Здесь живут сокет и таймер — всё, чего нет внутри `MatchServer` (NTR-3).
  * Здесь же — ввод-вывод трейса: строку в файл пишет функция, инъектированная
@@ -18,12 +22,12 @@
  */
 import { writeFileSync } from 'node:fs';
 import { flag, matchConfigOf, option, readMatchFile } from './matchFile.mjs';
-import { openMatchTrace, traceOptions, TRACE_USAGE } from './trace.mjs';
+import { openMatchTrace, traceOptions, TRACE_USAGE, TRACE_WITHOUT_RECORD } from './trace.mjs';
 
 const file = process.argv[2];
 if (file === undefined || file.startsWith('--')) {
   process.stderr.write(
-    `usage: node bin/serve.mjs <match.json> [--port 8080] [--json] [--observer]\n       ${TRACE_USAGE} [--record-out <path>]\n`,
+    `usage: node bin/serve.mjs <match.json> [--port 8080] [--json] [--observer]\n       ${TRACE_USAGE} [--record-out=<path>]\n`,
   );
   process.exit(2);
 }
@@ -42,10 +46,7 @@ const recordOut = option('record-out');
 const tracing = openMatchTrace(traceOptions());
 
 if (tracing !== undefined && recordOut === undefined) {
-  process.stdout.write(
-    'внимание: трейс снимается без записи матча — переснять его будет нечем (DIAG-9);\n' +
-      '          добавьте --record-out <path>\n',
-  );
+  process.stdout.write(`${TRACE_WITHOUT_RECORD}          добавьте --record-out=<path>\n`);
 }
 
 // Раскладка документа матча в конфиг — общая с остальными запускалками
@@ -105,9 +106,11 @@ function saveArtifacts() {
     }
   }
   if (tracing !== undefined) {
+    // Закрытие писателя наружу не бросает (`bin/trace.mjs`): отказ сброса
+    // хвоста называется тем же полем `failure`, а не уносит с собой прогон.
     tracing.close();
-    if (tracing.trace.failure !== undefined) {
-      process.stdout.write(`трейс оборван: ${tracing.trace.failure}\n`);
+    if (tracing.failure !== undefined) {
+      process.stdout.write(`трейс оборван: ${tracing.failure}\n`);
     }
   }
 }
