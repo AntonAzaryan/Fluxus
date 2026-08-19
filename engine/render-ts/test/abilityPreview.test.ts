@@ -27,6 +27,9 @@ import {
 import {
   AbilityPreviewSubsystem,
   PresentationStage,
+  RenderDebugLayer,
+  createCostCounters,
+  withCostSink,
   type AbilitySlotStatNames,
   type AbilityStepStatNames,
   type EntityView,
@@ -378,5 +381,210 @@ describe('Превью каста: только свой игрок (NET-15)', (
     rig.stage.frame(0.016, 1);
     expect(rig.preview.shapeCount).toBe(1);
     expect(shapes(rig.scene)[0]!.position.x).toBeCloseTo(3, 6);
+  });
+});
+
+// ------------------ RDBG-1: отладочный источник цепочки (REND-27, RDBG-2..8)
+
+/** Секция дампа этого источника: читается ровно то, что кладёт проба. */
+interface PreviewSection {
+  readonly casting: boolean;
+  readonly abilityId: string;
+  readonly slotIndex: number;
+  readonly slotCount: number;
+  readonly ownerEntity: number;
+  readonly ownerDelivered: boolean;
+  readonly stepCount: number;
+  readonly stagedSteps: number;
+  readonly currentStepIndex: number;
+  readonly currentStepKind: string;
+  readonly currentStepDrawable: boolean;
+  readonly aiming: boolean;
+  readonly aimWorldX: number | null;
+  readonly aimWorldY: number | null;
+  readonly shapeCount: number;
+  readonly objectCount: number;
+  readonly noData?: string;
+}
+
+const PREVIEW_SOURCE = 'abilityPreview.chain';
+
+function section(layer: RenderDebugLayer): PreviewSection {
+  return layer.dump().sections[PREVIEW_SOURCE] as PreviewSection;
+}
+
+describe('Отладочный источник превью каста (render-debug RDBG-1, REND-27)', () => {
+  it('источник объявлен подсистемой в точке её регистрации', () => {
+    const rig = makeRig();
+    const layer = new RenderDebugLayer(rig.stage);
+    expect(layer.sources.map((source) => source.id)).toEqual([PREVIEW_SOURCE]);
+    expect(layer.sources[0]?.owner).toBe('abilityPreview');
+    // Рисовальщик есть: отметка прицела — то, чего в кадре не видно иначе.
+    expect(layer.sources[0]?.drawable).toBe(true);
+  });
+
+  it('выключенный источник секции в дампе не имеет, и слой не работает вовсе', () => {
+    const rig = makeRig();
+    const layer = new RenderDebugLayer(rig.stage);
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: ZONE, phase: 0 })]));
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(2), y: F(2) } });
+    rig.stage.frame(0.016, 1);
+    // «Выключено» — это ОТСУТСТВИЕ секции, а не секция «данных нет» (RDBG-7).
+    expect(layer.dump().sections).toEqual({});
+    expect(layer.frameCount).toBe(0);
+  });
+
+  it('включённый источник называет идущий каст, текущий шаг и точку прицела', () => {
+    const rig = makeRig();
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(PREVIEW_SOURCE, true);
+    const hero = withSlot(
+      HERO,
+      { ability: GRAB, phase: 1, staged: 1, steps: [{ x: 9, y: 9, entity: VICTIM }] },
+      { prevX: 1, currX: 1, prevY: 0, currY: 0 },
+    );
+    const victim = makeEntityView(VICTIM, { prevX: 4, currX: 4, prevY: 0, currY: 0 });
+    rig.stage.publish({ name: 'test' }, makeTickView([hero, victim]));
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(1), y: F(8) } });
+    rig.stage.frame(0.016, 1);
+
+    const dumped = section(layer);
+    expect(dumped.noData).toBeUndefined();
+    expect(dumped.casting).toBe(true);
+    expect(dumped.abilityId).toBe('grab');
+    expect(dumped.slotIndex).toBe(0);
+    expect(dumped.ownerEntity).toBe(HERO);
+    expect(dumped.ownerDelivered).toBe(true);
+    expect(dumped.stepCount).toBe(2);
+    expect(dumped.stagedSteps).toBe(1);
+    // Шаг, который игрок двигает сейчас, — второй, и он вектор (ABIL-5).
+    expect(dumped.currentStepIndex).toBe(1);
+    expect(dumped.currentStepKind).toBe('vector');
+    expect(dumped.currentStepDrawable).toBe(true);
+    expect(dumped.aiming).toBe(true);
+    expect(dumped.aimWorldX).toBeCloseTo(1, 6);
+    expect(dumped.aimWorldY).toBeCloseTo(8, 6);
+    // Дамп описывает ТОТ ЖЕ кадр: контуров в нём столько же, сколько в сцене.
+    expect(dumped.shapeCount).toBe(rig.preview.shapeCount);
+    expect(dumped.objectCount).toBe(rig.preview.objectCount);
+  });
+
+  it('каста нет — данные есть и говорят это, а не молчат', () => {
+    const rig = makeRig();
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(PREVIEW_SOURCE, true);
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: ZONE, phase: -1 })]));
+    rig.preview.applyLocalInput({ entity: HERO, target: null });
+    rig.stage.frame(0.016, 1);
+
+    const dumped = section(layer);
+    expect(dumped.noData).toBeUndefined();
+    expect(dumped.casting).toBe(false);
+    expect(dumped.abilityId).toBe('');
+    expect(dumped.currentStepIndex).toBe(-1);
+    expect(dumped.currentStepKind).toBe('none');
+    // Точки нет — это null, а не ноль: ноль был бы координатой (RDBG-7).
+    expect(dumped.aimWorldX).toBeNull();
+    expect(dumped.aimWorldY).toBeNull();
+    expect(dumped.shapeCount).toBe(0);
+  });
+
+  it('прошлый каст за идущий не принимается: запись активного слота переживает кадр', () => {
+    const rig = makeRig();
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(PREVIEW_SOURCE, true);
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: ZONE, phase: 0 })]));
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(2), y: F(2) } });
+    rig.stage.frame(0.016, 1);
+    expect(section(layer).abilityId).toBe('zone');
+
+    // Фаза кончилась (ABIL-1): следующий кадр обязан сказать «каста нет».
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: ZONE, phase: -1 })]));
+    rig.stage.frame(0.016, 1);
+    expect(section(layer).casting).toBe(false);
+    expect(section(layer).abilityId).toBe('');
+  });
+
+  it('вычисляемый размер фигуры виден в дампе как «нерисуемо», а не молчанием', () => {
+    const rig = makeRig();
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(PREVIEW_SOURCE, true);
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: SCALED, phase: 0 })]));
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(3), y: F(3) } });
+    rig.stage.frame(0.016, 1);
+
+    const dumped = section(layer);
+    // Каст идёт, шаг есть, а фигуры в кадре нет — и дамп называет причину
+    // (REND-28): размер шага не литерал, вычислить его рендеру нечем.
+    expect(dumped.casting).toBe(true);
+    expect(dumped.currentStepIndex).toBe(0);
+    expect(dumped.currentStepDrawable).toBe(false);
+    expect(dumped.shapeCount).toBe(0);
+  });
+
+  it('сборка не объявила состояния слотов — источник говорит «нет данных» (RDBG-6)', () => {
+    const rig = makeRig([]);
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(PREVIEW_SOURCE, true);
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: ZONE, phase: 0 })]));
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(2), y: F(2) } });
+    rig.stage.frame(0.016, 1);
+    expect(section(layer).noData).toMatch(/состояние слотов/);
+  });
+
+  it('снятая секция дампа не меняется от следующего кадра', () => {
+    const rig = makeRig();
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(PREVIEW_SOURCE, true);
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: ZONE, phase: 0 })]));
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(2), y: F(2) } });
+    rig.stage.frame(0.016, 1);
+    const before = section(layer);
+    const snapshot = JSON.stringify(before);
+
+    // Проба ПЕРЕИСПОЛЬЗУЕТСЯ между кадрами (RDBG-2), и дамп, державший её
+    // ссылкой, менялся бы задним числом от следующего сэмпла.
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(-5), y: F(7) } });
+    rig.stage.frame(0.016, 1);
+    expect(JSON.stringify(before)).toBe(snapshot);
+    expect(section(layer).aimWorldX).toBeCloseTo(-5, 6);
+  });
+
+  it('два дампа на одном доставленном состоянии совпадают: часовых величин у источника нет', () => {
+    const rig = makeRig();
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(PREVIEW_SOURCE, true);
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: ZONE, phase: 0 })]));
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(2), y: F(2) } });
+    rig.stage.frame(0.016, 1);
+    const first = layer.dump();
+    const second = layer.dump();
+    expect(second.sections).toEqual(first.sections);
+    expect(Object.keys(first.clock).some((key) => key.startsWith(`${PREVIEW_SOURCE}.`))).toBe(false);
+  });
+
+  it('счётчики кадра с включённым источником и без него совпадают побитово (RDBG-8)', () => {
+    const run = (debug: boolean): Record<string, number> => {
+      const counters = createCostCounters();
+      withCostSink(counters, () => {
+        const rig = makeRig();
+        const layer = new RenderDebugLayer(rig.stage);
+        if (debug) layer.setEnabled(PREVIEW_SOURCE, true);
+        rig.preview.applyLocalInput({ entity: HERO, target: { x: F(2), y: F(3) } });
+        for (let tick = 1; tick <= 8; tick += 1) {
+          rig.stage.publish(
+            { name: 'test' },
+            makeTickView([withSlot(HERO, { ability: ZONE, phase: 0 })], { tick }),
+          );
+          rig.stage.frame(1 / 60, 0.5, 1 / 60);
+        }
+      });
+      return { ...counters };
+    };
+    const withDebug = run(true);
+    const without = run(false);
+    expect(withDebug).toEqual(without);
+    // И проверялось не отсутствие работы: счётчики непустые.
+    expect(without.syncTickSubsystems).toBeGreaterThan(0);
   });
 });

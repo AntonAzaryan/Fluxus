@@ -58,6 +58,7 @@ export type {
 export type { DebugFogProbe } from './debug/fogSource.js';
 export type { DebugCellRow, DebugTerrainProbe } from './debug/terrainSource.js';
 export type { DebugInstanceRow, DebugModelsProbe } from './debug/modelsSource.js';
+export type { DebugAbilityPreviewProbe, DebugPreviewState } from './debug/abilityPreviewSource.js';
 
 // Счётчики стоимости рендера (`performance-budget` PERF-3): инжектируемый сток
 // объёма работы, тегированный стадией конвейера (PERF-2). Без подключённого

@@ -64,6 +64,7 @@ import {
   NO_ENTITY,
   SHAPE_AABB,
   SHAPE_CIRCLE,
+  STEP_NONE,
   STEP_VECTOR,
   type AbilityCatalog,
   type EntityId,
@@ -77,6 +78,11 @@ import type {
   RenderSubsystem,
   TickView,
 } from '../types.js';
+import type { DebugSource } from '../debug/contract.js';
+import {
+  abilityPreviewChainDebugSource,
+  type DebugPreviewState,
+} from '../debug/abilityPreviewSource.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import { createShellPose, poseShell } from './shellSupport.js';
 
@@ -163,6 +169,20 @@ interface PreviewShape {
   readonly sector: boolean;
   /** У фигуры есть направление: сектор либо прямоугольник шага-вектора. */
   readonly directed: boolean;
+}
+
+/**
+ * Фигура шага рисуема: форма из словаря объявлена, а её размеры — литералы
+ * определения (REND-28). Предикат ОДИН на кадр и на пробу отладки: разойдись
+ * они, дамп отвечал бы «рисуется» о том, чего в кадре нет (RDBG-2).
+ */
+function drawableShape(shape: PreviewShape | undefined): shape is PreviewShape {
+  if (shape === undefined || shape.kind === NO_SHAPE) return false;
+  if (shape.kind === SHAPE_CIRCLE) {
+    return Number.isFinite(shape.a) && (!shape.sector || Number.isFinite(shape.halfAngle));
+  }
+  if (shape.kind !== SHAPE_AABB) return false;
+  return Number.isFinite(shape.a) && Number.isFinite(shape.b);
 }
 
 /** Литерал длины определения (Q16.16) во float; не литерал — `NaN`. */
@@ -259,6 +279,12 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
   private readonly local = { entity: NO_ENTITY as EntityId, x: 0, y: 0, aiming: false };
   /** Активный слот текущего кадра; та же причина держать запись — аллокации. */
   private readonly active = { ability: -1, staged: 0, names: null as AbilitySlotStatNames | null };
+  /**
+   * Решение ЭТОГО кадра: идущий каст найден. Записью `active` его не заменить —
+   * она переживает кадр, на котором каста не нашлось, и отладка приняла бы
+   * прошлый каст за идущий.
+   */
+  private casting = false;
 
   /** Переиспользуемые позы: начала шага (владелец) и сущности шага. */
   private readonly originPose = createShellPose();
@@ -348,10 +374,32 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
    */
   updateFrame(_dt: number, alpha: number): void {
     this.used = 0;
+    this.casting = false;
     const owner = this.owner();
-    if (owner !== null && this.findActive(owner)) this.drawChain(owner, alpha);
+    if (owner !== null && this.findActive(owner)) {
+      this.casting = true;
+      this.drawChain(owner, alpha);
+    }
     for (let i = this.used; i < this.lines.length; i++) this.lines[i]!.visible = false;
     this.syncAttachment();
+  }
+
+  /**
+   * Отладочный источник цепочки (`render-debug` RDBG-1, REND-27): подсистема
+   * объявляет его в точке своей регистрации — решение кадра принадлежит ей, и
+   * никто, кроме неё, не знает, почему в кадре нарисовано именно это.
+   *
+   * Доступ узкий и только на чтение: своей работы источник не заказывает и
+   * счётчиков стоимости не двигает (RDBG-8) — он читает уже посчитанное кадром.
+   */
+  debugSources(): readonly DebugSource[] {
+    return [
+      abilityPreviewChainDebugSource({
+        state: (out) => {
+          this.fillDebugState(out);
+        },
+      }),
+    ];
   }
 
   // ------------------------------------------------------ вход сэмпла ввода
@@ -476,21 +524,17 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
     current: boolean,
   ): void {
     const shape = this.shapes[index];
-    if (shape === undefined || shape.kind === NO_SHAPE) return;
+    if (!drawableShape(shape)) return;
     const material = (current ? this.currentMaterial : this.confirmedMaterial)!;
     const yaw = Math.atan2(pointY - originY, pointX - originX);
     if (shape.kind === SHAPE_CIRCLE) {
-      if (!Number.isFinite(shape.a)) return;
       if (!shape.sector) {
         this.place(this.circle!, material, pointX, pointY, 0, shape.a, shape.a);
         return;
       }
-      if (!Number.isFinite(shape.halfAngle)) return;
       this.place(this.sector(index, shape.halfAngle), material, originX, originY, yaw, shape.a, shape.a);
       return;
     }
-    if (shape.kind !== SHAPE_AABB) return;
-    if (!Number.isFinite(shape.a) || !Number.isFinite(shape.b)) return;
     if (!shape.directed) {
       this.place(this.square!, material, pointX, pointY, 0, shape.a, shape.b);
       return;
@@ -557,6 +601,48 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
     }
     this.used++;
     return line;
+  }
+
+  /**
+   * Решение кадра в переиспользуемую запись отладки (RDBG-2). Читается ровно то,
+   * чем нарисован кадр, — активный слот, локальный сэмпл и пул контуров; ни
+   * одного повторного вывода здесь нет, и «нет данных» источник различает по
+   * числу объявленных сборкой слотов (RDBG-6).
+   */
+  private fillDebugState(out: DebugPreviewState): void {
+    out.slotCount = this.slots.length;
+    out.ownerEntity = this.local.entity;
+    out.ownerDelivered = this.owner() !== null;
+    out.casting = this.casting;
+    out.aiming = this.local.aiming;
+    out.aimWorldX = this.local.aiming ? this.local.x : Number.NaN;
+    out.aimWorldY = this.local.aiming ? this.local.y : Number.NaN;
+    out.shapeCount = this.used;
+    out.objectCount = this.objectCount;
+    const names = this.active.names;
+    const ability = this.catalog.abilities[this.active.ability];
+    if (!this.casting || names === null || ability === undefined) {
+      out.abilityId = '';
+      out.slotIndex = -1;
+      out.stepCount = 0;
+      out.stagedSteps = 0;
+      out.currentStepIndex = -1;
+      out.currentStepKind = STEP_NONE;
+      out.currentStepDrawable = false;
+      return;
+    }
+    // Те же два усечения, которыми цепочку строит кадр: сборка вправе объявить
+    // меньше шагов, чем их у определения, и показывать надо объявленное.
+    const count = Math.min(ability.stepCount, names.steps.length);
+    const staged = Math.min(this.active.staged, count);
+    const current = staged < count ? ability.stepStart + staged : -1;
+    out.abilityId = ability.id;
+    out.slotIndex = this.slots.indexOf(names);
+    out.stepCount = count;
+    out.stagedSteps = staged;
+    out.currentStepIndex = staged < count ? staged : -1;
+    out.currentStepKind = current < 0 ? STEP_NONE : (this.catalog.steps[current]?.kind ?? STEP_NONE);
+    out.currentStepDrawable = current >= 0 && drawableShape(this.shapes[current]);
   }
 
   /** Группа висит в сцене, только пока в ней есть что рисовать (REND-28). */
