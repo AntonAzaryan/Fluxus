@@ -201,7 +201,7 @@
       "name": "SlotRewind",
       "components": {
         "AbilitySlot": { "abilityId": 6, "slotIndex": 4 },
-        "AbilityCooldown": { "remaining": 0, "total": 1200 }
+        "AbilityCooldown": { "remaining": 1200, "total": 1200 }
       }
     },
     {

@@ -19,10 +19,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   FIXED_ONE,
+  RingHistory,
+  createInputLog,
+  createRewindController,
   fixed,
   tick as simTick,
   world as coreWorld,
   type EntityId,
+  type InputFrame,
   type SceneDef,
   type SimulationState,
   type Simulation,
@@ -140,6 +144,12 @@ interface Arena {
   readonly heroes: readonly EntityId[];
   /** Тик с явными вводами обоих слотов; возвращает номер тика. */
   step: (a: Frame, b?: Frame) => number;
+  /**
+   * Кадры ввода ПОСЛЕДНЕГО шага — ровно те, что ушли в тик. Нужны единственному
+   * тесту, который ведёт журнал вводов и перематывает мир: реплей внутри
+   * `seekTo` обязан исполнять те же входы, что и прямой ход (REW-4).
+   */
+  frames: () => readonly InputFrame[];
 }
 
 interface Frame {
@@ -213,13 +223,14 @@ function arena(gap = 4, scene: SceneDef = SCENE): Arena {
     heroes[coreWorld.getField(built.state.world, entity, 'Player', 'slot')] = entity;
   }
   let tick = 0;
+  let last: readonly InputFrame[] = [];
   return {
     sim: built.sim,
     state: built.state,
     heroes,
     step(a, b = NEUTRAL) {
       tick += 1;
-      simTick(built.sim, built.state, [
+      last = [
         {
           tick,
           playerId: MATCH.players[0]!,
@@ -238,9 +249,11 @@ function arena(gap = 4, scene: SceneDef = SCENE): Arena {
           buttons: b.buttons ?? 0,
           target: b.target ?? aimPoint(built.state, heroes[1], b.aimDir ?? AIM_WEST),
         },
-      ]);
+      ];
+      simTick(built.sim, built.state, last);
       return tick;
     },
+    frames: () => last,
   };
 }
 
@@ -3089,8 +3102,9 @@ describe('возрождение героя: смерть больше не те
     const spawnX = x(a.state, p1);
     const spawnY = y(a.state, p1);
 
-    // Ульта взводится ДО смерти: её cooldown — exempt-компонент со своей
-    // жизнью, и возрождение обязано оставить его тикать, а не обнулить.
+    // Ульта стартует взведённой (`SlotRewind`), и её cooldown — exempt-компонент
+    // со своей жизнью: возрождение обязано оставить его тикать, а не обнулить.
+    // Нажатие тут ничего не меняет — ровно это и проверяется числом ниже.
     a.step({ buttons: REWIND });
     // Уходим со спавна и тратим щит с куполом: возвращение и сброс перезарядок
     // должны быть видны в числах, а не подразумеваться.
@@ -3295,24 +3309,40 @@ describe('возрождение героя: смерть больше не те
 });
 
 /**
- * Ульта отката как КОНТЕНТ (`RewindCast`, `RewindCooldownTick`): проверяется не
+ * Ульта отката как КОНТЕНТ (определение `rewind` сцены): проверяется не
  * механизм перемотки — он закрыт тестами ядра, сети и оболочки, — а политика,
  * написанная в сцене: гейт по фронту кнопки и по cooldown'у, взвод cooldown'а и
- * состав payload'а запроса. Мир здесь никто не перематывает: ядро событие не
- * интерпретирует, а хоста в этом стенде нет (WSM-5).
+ * состав payload'а запроса. Кроме одного теста ниже, мир здесь никто не
+ * перематывает: ядро событие не интерпретирует, а хоста в этом стенде нет
+ * (WSM-5).
  */
-describe('ульта отката: политика в сцене (RewindCast)', () => {
+describe('ульта отката: политика в сцене (определение `rewind`)', () => {
   /** Те же числа, что в `duel.scene.json`: 20 секунд перезарядки и 7 секунд глубины. */
   const REWIND_COOLDOWN = 1200;
   const REWIND_DEPTH = 420;
   const REWIND = 1 << ACTION_BITS.rewind;
+  /** Тик, на котором JSON-система `GrantSlots` выдаёт слоты: первый тик мира. */
+  const GRANT_TICK = 1;
 
   const requests = (state: SimulationState): readonly Record<string, number>[] =>
     [...state.events].filter((event) => event.type === REWIND_REQUEST_EVENT).map((e) => e.data);
 
+  /**
+   * Ульта стартует ВЗВЕДЁННОЙ (`SlotRewind.remaining` = полный кулдаун), так что
+   * каст в любом стенде начинается с ожидания. Основание — в тесте «цель отката
+   * не может лежать раньше выдачи слотов» ниже.
+   */
+  function untilRewindReady(a: Arena): number {
+    let tick = 0;
+    for (let i = 0; i < REWIND_COOLDOWN; i++) tick = a.step(NEUTRAL);
+    expect(cooldown(a.state, a.heroes[0]!, ABILITY_SLOTS.rewind)).toBe(0);
+    return tick;
+  }
+
   it('фронт кнопки эмитит запрос с инициатором и глубиной и взводит cooldown', () => {
     const a = arena();
     const hero = a.heroes[0]!;
+    untilRewindReady(a);
     a.step({ buttons: REWIND });
 
     expect(requests(a.state)).toEqual([{ depthTicks: REWIND_DEPTH, initiator: hero }]);
@@ -3321,6 +3351,7 @@ describe('ульта отката: политика в сцене (RewindCast)',
 
   it('удержание второго запроса не даёт: ульта ловит фронт (INP-2)', () => {
     const a = arena();
+    untilRewindReady(a);
     a.step({ buttons: REWIND });
     a.step({ buttons: REWIND });
 
@@ -3330,6 +3361,7 @@ describe('ульта отката: политика в сцене (RewindCast)',
   it('во время cooldown ульта не кастуется', () => {
     const a = arena();
     const hero = a.heroes[0]!;
+    untilRewindReady(a);
     a.step({ buttons: REWIND });
     // Отпустили и нажали снова через сотню тиков: фронт есть, cooldown — нет.
     for (let i = 0; i < 100; i++) a.step(NEUTRAL);
@@ -3344,11 +3376,94 @@ describe('ульта отката: политика в сцене (RewindCast)',
 
   it('заряженный каст ульту не пускает: гейт по Charging', () => {
     const a = arena();
-    // ЛКМ зажата — герой копит заряд (`ChargeStart`), и `RewindCast` его не видит.
+    untilRewindReady(a);
+    // ЛКМ зажата — герой копит заряд, и триггер ульты его не пускает.
     a.step({ buttons: CAST });
     a.step({ buttons: CAST | REWIND });
 
     expect(requests(a.state)).toEqual([]);
+  });
+
+  it('ульта стартует взведённой: цель отката не может лежать раньше выдачи слотов', () => {
+    // Пружина всей связки: слоты способностей выдаются JSON-системой на ПЕРВОМ
+    // тике матча, значит в снапшоте тика 0 их нет. Откат в тик 0 удалил бы
+    // сущность слота вместе с её exempt-кулдауном (REW-9 защищает поле, а не
+    // существование владельца), `GrantSlots` выдала бы слот заново — с нулём, —
+    // и ульта вернула бы саму себя: ровно тот rewind-луп, который exempt
+    // закрывает. Отсюда инвариант сцены: кулдаун ульты СТАРТУЕТ полным и
+    // ДЛИННЕЕ глубины отката, поэтому цель самого раннего каста лежит заведомо
+    // позже тика выдачи.
+    const start = SCENE.prefabs!.find((p) => p.name === 'SlotRewind')!.components.AbilityCooldown!;
+    expect(start.remaining).toBe(REWIND_COOLDOWN);
+    expect(start.total).toBe(REWIND_COOLDOWN);
+    expect(REWIND_COOLDOWN).toBeGreaterThan(REWIND_DEPTH);
+    // И то же число в определении: взвод после каста обязан держать инвариант
+    // не хуже стартового значения.
+    expect(numbersIn(abilityDef('rewind'))).toContain(REWIND_COOLDOWN);
+
+    // Самый ранний каст — на тике, следующем за обнулением стартового кулдауна.
+    const a = arena();
+    const earliest = untilRewindReady(a) + 1;
+    expect(earliest - REWIND_DEPTH).toBeGreaterThan(GRANT_TICK);
+  });
+
+  it('кулдаун ульты переживает откат на всю глубину (REW-9)', () => {
+    // Единственный тест демо, который ДЕЙСТВИТЕЛЬНО перематывает мир: exempt в
+    // документе матча назван компонентом (`AbilityCooldown`), а живёт он теперь
+    // на сущности слота, созданной уже после сборки мира, — сценарий REW-9
+    // «игрок появился после конфигурирования перемотки» здесь настоящий, а не
+    // умозрительный.
+    const a = arena();
+    const hero = a.heroes[0]!;
+    const history = new RingHistory({
+      interval: MATCH.rewind!.interval,
+      capacity: MATCH.rewind!.capacity,
+    });
+    const inputs = createInputLog(REWIND_COOLDOWN + REWIND_DEPTH);
+    history.record(a.state);
+    const controller = createRewindController(a.sim, a.state, {
+      history,
+      inputs,
+      exempt: MATCH.rewind!.exempt,
+    });
+    const record = (): void => {
+      inputs.record(a.state.tick, a.frames());
+      history.record(a.state);
+    };
+
+    // Ждём готовности ровно столько, сколько просит сцена, и кастуем на САМОМ
+    // РАННЕМ возможном тике: именно он — худший случай для цели отката.
+    a.step(NEUTRAL);
+    record();
+    for (let guard = REWIND_COOLDOWN + 2; cooldown(a.state, hero, ABILITY_SLOTS.rewind) > 0; ) {
+      expect(guard--).toBeGreaterThan(0);
+      a.step(NEUTRAL);
+      record();
+    }
+    a.step({ buttons: REWIND });
+    record();
+    expect(requests(a.state)).toHaveLength(1);
+    for (let i = 0; i < 40; i++) {
+      a.step(NEUTRAL);
+      record();
+    }
+    const before = cooldown(a.state, hero, ABILITY_SLOTS.rewind);
+    const slot = slotOf(a.state, hero, ABILITY_SLOTS.rewind);
+    // Хост целится на глубину определения и не ниже пола истории — здесь пол
+    // тика 0, и цель ниже него была бы миром без слотов вовсе.
+    const target = Math.max(0, a.state.tick - REWIND_DEPTH);
+    expect(target).toBeGreaterThan(GRANT_TICK);
+
+    controller.pause();
+    controller.beginRewind();
+    controller.seekTo(target);
+
+    // Мир уехал назад, а кулдаун — нет: он тот же, каким был в момент вызова.
+    expect(a.state.tick).toBe(target);
+    expect(cooldown(a.state, hero, ABILITY_SLOTS.rewind)).toBe(before);
+    // И записан он в ТУ ЖЕ сущность слота, а не в выданную заново: цель отката
+    // лежит позже тика выдачи, поэтому слот пережил восстановление.
+    expect(slotOf(a.state, hero, ABILITY_SLOTS.rewind)).toBe(slot);
   });
 
   it('конфиг матча и раскладка сборки называют одно и то же', () => {
