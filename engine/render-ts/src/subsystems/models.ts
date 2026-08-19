@@ -1335,7 +1335,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       if (record.kind === null) continue;
       const before = record.visual;
       record.visual = resolveVisual(this.manifest, record.kind);
-      if (rebuildsInstance(before, record.visual, this.defaultTier)) {
+      if (rebuildsInstance(before, record.visual, this.defaultTier, record.decoration)) {
         if (cost !== undefined) cost.modelsRebuilds++;
         this.rebuild(ctx, record);
         continue;
@@ -2433,15 +2433,16 @@ function viewOf(record: InstanceRecord): ModelInstanceView {
 
 /**
  * Пересобирать ли инстанс под переподанной записью (REND-17). Граница проходит
- * по тому, что построено из разделяемых данных ассета (REND-3), и по ярусу
- * записи (REND-20): другую модель, другой набор её рисуемых частей и другой
- * ярус правкой построенного не получить, а всё прочее записи применяется на
- * живом инстансе.
+ * по тому, что построено из разделяемых данных ассета (REND-3), по ярусу записи
+ * (REND-20) и по ярусу теневого кастера (REND-8): другую модель, другой набор
+ * её рисуемых частей и другой ярус правкой построенного не получить, а всё
+ * прочее записи применяется на живом инстансе.
  */
 function rebuildsInstance(
   before: EntityVisual | undefined,
   after: EntityVisual | undefined,
   fallbackTier: VisualTier,
+  decoration: boolean,
 ): boolean {
   if (before === after) return false;
   if (before?.model !== after?.model) return true;
@@ -2449,6 +2450,12 @@ function rebuildsInstance(
   // ярусом по умолчанию правка «убрать явный batched из записи» меняет ярус, а
   // `resolveVisualTier` этого бы не увидел — он знает только умолчание кода.
   if (declaredTier(before, fallbackTier) !== declaredTier(after, fallbackTier)) return true;
+  // Ярус теневого кастера decoration производен от наличия анимаций у записи
+  // (REND-4, design D3) и входит в ключ батча — однородность батча по ярусу
+  // иначе держалась бы на том, что запись не правили: дописанная автором
+  // таблица анимаций оставила бы декорацию в статическом батче, и её тень
+  // запеклась бы в кэшированную карту в позе покоя (REND-8).
+  if (decoration && animatedVisual(before) !== animatedVisual(after)) return true;
   return !samePartSets(before?.hiddenParts, after?.hiddenParts);
 }
 

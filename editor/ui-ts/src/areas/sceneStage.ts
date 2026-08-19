@@ -388,9 +388,10 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
   // Теневые карты включает владелец рендерера (design D8) — тем же вызовом и с
   // тем же типом фильтрации, что игровой клиент: кадр вьюпорта обязан быть тем
-  // же кадром (ED-22), а не похожим.
+  // же кадром (ED-22), а не похожим. Тип — `PCFShadowMap`: `PCFSoftShadowMap` в
+  // three `^0.185` устарел, и рендерер молча подменяет его этим же значением.
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   const canvas = renderer.domElement;
   // Остановка Tab у кадра остаётся: он обязан быть достижим обходом (ED-31).
   // Клавиатуру она при этом не включает — клавиши работают, пока область

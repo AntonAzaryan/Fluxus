@@ -108,8 +108,13 @@ renderer3.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 // Теневые карты включает ВЛАДЕЛЕЦ рендерера (design D8): рендерер принадлежит
 // сборке, а не подсистемам. Включённый shadowMap без кастеров бесплатен —
 // фактическую стоимость задаёт действующий режим теней секции `lighting`.
+//
+// Тип — `PCFShadowMap`, а не `PCFSoftShadowMap`: последний в three `^0.185`
+// объявлен устаревшим, и рендерер сам молча подменяет его первым, оставляя в
+// консоли предупреждение. Писать в коде тип, которого рендерер не исполняет,
+// значило бы обещать кадру мягкость, которой в нём нет.
 renderer3.shadowMap.enabled = true;
-renderer3.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer3.shadowMap.type = THREE.PCFShadowMap;
 app.appendChild(renderer3.domElement);
 
 const scene3 = new THREE.Scene();

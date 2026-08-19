@@ -344,6 +344,13 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     this.aimLight(this.sunDynamic, next, next.directionalIntensity * (1 - share));
     this.sun.castShadow = next.shadowMode !== 'none';
     this.sunDynamic.castShadow = hybrid;
+    // Источник, переставший нести тени, отдаёт и свою карту: three держит её у
+    // `shadow.map` до пересоздания и сам не освобождает, а пресет теней `none`
+    // (QUAL-1) иначе оставлял бы в памяти текстуру глубины, которую больше
+    // никто не рисует и не читает. Смена режима — событие, и пересоздать карту
+    // на возврате дешевле, чем возить её выключенной.
+    if (!this.sun.castShadow) releaseShadowMap(this.sun);
+    if (!this.sunDynamic.castShadow) releaseShadowMap(this.sunDynamic);
 
     const scene = this.ctx?.scene;
     if (scene !== undefined) {
@@ -440,6 +447,15 @@ function resizeShadowMap(light: THREE.DirectionalLight, size: number): void {
   const side = Math.max(1, Math.round(size));
   if (light.shadow.mapSize.x === side && light.shadow.mapSize.y === side) return;
   light.shadow.mapSize.set(side, side);
+  releaseShadowMap(light);
+}
+
+/**
+ * Освобождает построенную карту теней источника вместе с её текстурой глубины.
+ * Пустая карта (`null`) — обычное состояние источника, который ещё не рисовали:
+ * three строит её на первом теневом проходе и сам никогда не освобождает.
+ */
+function releaseShadowMap(light: THREE.DirectionalLight): void {
   const map = light.shadow.map;
   if (map === null) return;
   map.depthTexture?.dispose();

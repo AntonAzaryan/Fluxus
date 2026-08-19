@@ -713,6 +713,10 @@ export class TerrainSubsystem implements RenderSubsystem {
     if (ctx !== null) {
       for (const mesh of [...this.floorMeshes, ...this.wallMeshes]) {
         if (mesh === null) continue;
+        // Меш прежней арены уходит и из реестра теневых кастеров (REND-8): в
+        // сцене его больше нет, а оставшаяся ссылка держала бы снятую геометрию
+        // и считала бы её кадру — тем же порядком, что у пересборки чанка.
+        this.shadows?.dropCaster(mesh);
         ctx.scene.remove(mesh);
         mesh.geometry.dispose();
       }

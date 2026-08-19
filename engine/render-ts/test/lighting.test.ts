@@ -54,6 +54,7 @@ interface Rig {
   readonly stage: PresentationStage;
   readonly lighting: LightingSubsystem;
   readonly models: ModelsSubsystem;
+  readonly terrain: TerrainSubsystem;
   readonly scene: THREE.Scene;
 }
 
@@ -70,12 +71,13 @@ function makeRig(config?: PresentationLighting, preset?: QualityPreset): Rig {
   const grid = flatGrid();
   const lighting = new LightingSubsystem({ grid, ...(config === undefined ? {} : { config }) });
   stage.register(lighting);
-  stage.register(new TerrainSubsystem(grid, { shadows: lighting }));
+  const terrain = new TerrainSubsystem(grid, { shadows: lighting });
+  stage.register(terrain);
   const models = new ModelsSubsystem(makeManifest(), { shadows: lighting, warn: () => {} });
   stage.register(models);
   if (preset !== undefined) new QualityController(stage, preset);
   assets.resolve('model', MODEL_ID, makeModel());
-  return { stage, lighting, models, scene };
+  return { stage, lighting, models, terrain, scene };
 }
 
 /** Набор decoration-инстансов в форме входа REND-18. */
@@ -215,6 +217,24 @@ describe('подсистема освещения — источники сце�
     expect(directionalLights(rig.scene).length).toBe(1);
     expect(directionalLights(rig.scene)[0]!.castShadow).toBe(false);
   });
+
+  it('источник, переставший нести тени, отдаёт построенную карту', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    const { sun, sunDynamic } = rig.lighting.lights;
+    // Карту строит теневой проход three, которого в headless-прогоне нет:
+    // подставляется готовая — предмет теста не её содержимое, а владение ею.
+    for (const light of [sun, sunDynamic]) {
+      const map = new THREE.WebGLRenderTarget(4, 4);
+      map.depthTexture = new THREE.DepthTexture(4, 4);
+      light.shadow.map = map;
+    }
+
+    rig.lighting.applyConfig({ shadows: { mode: 'none' } });
+
+    // `none` — теневого прохода нет вовсе, и держать текстуру глубины незачем.
+    expect(sun.shadow.map).toBeNull();
+    expect(sunDynamic.shadow.map).toBeNull();
+  });
 });
 
 // ------------------------------------------------------ ярусы кастеров
@@ -251,6 +271,43 @@ describe('ярус теневого кастера — производная д
     // `InstancedMesh` несёт один набор флагов теней на все записи: смешать
     // статику с динамикой в одном батче значило бы отдать их в одну карту.
     expect(rig.models.batchStats().batches).toBe(2);
+  });
+
+  it('другая арена: чанки прежней сетки уходят из реестра кастеров (REND-14)', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    expect(rig.lighting.casterCount('static')).toBe(1);
+
+    // Смена размеров арены пересобирает раскладку чанков целиком: прежние меши
+    // сняты со сцены, и в реестре кастеров им делать нечего — иначе свет
+    // считал бы тени по геометрии, которой в кадре давно нет.
+    rig.terrain.applyGrid(flatGrid(16));
+    rig.stage.frame(0.016, 0);
+
+    expect(rig.lighting.casterCount('static')).toBe(1);
+  });
+
+  it('у вида появилась анимация — декорация переезжает в динамический ярус (REND-17)', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+    // Чанк террейна и батч неанимированного камня — оба статика.
+    expect(rig.lighting.casterCount('static')).toBe(2);
+    expect(rig.lighting.casterCount('dynamic')).toBe(0);
+
+    // Правка манифеста в режиме правки (ED-15): автор дописал виду таблицу
+    // анимаций (REND-4). Ярус — производная ЭТИХ данных, и переподача обязана
+    // его пересчитать: иначе запись осталась бы в батче чужого яруса и её тень
+    // запеклась бы в кэш статики в позе покоя.
+    rig.models.applyManifest({
+      entities: {
+        Rock: { model: MODEL_ID, scale: 1, animations: { states: { idle: 'Stand' } } },
+      },
+    });
+
+    expect(rig.lighting.casterCount('dynamic')).toBe(1);
+    expect(rig.lighting.casterCount('static')).toBe(1);
+    // Запись переехала в батч своего яруса целиком: прежний батч остался в
+    // кэше пустым (REND-3), а записи в нём нет ни одной.
+    expect(rig.models.batchStats().records).toBe(1);
   });
 });
 

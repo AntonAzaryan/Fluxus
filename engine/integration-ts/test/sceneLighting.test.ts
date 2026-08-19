@@ -85,7 +85,10 @@ describe('ED-22: свет арены — из подсистемы, а не из
       // Теневые карты включает владелец рендерера, и оба владельца включают их
       // одинаково: кадр вьюпорта обязан быть тем же кадром, а не похожим.
       expect(code).toContain('shadowMap.enabled = true');
-      expect(code).toContain('PCFSoftShadowMap');
+      // Тип фильтрации — тот, который рендерер three действительно исполняет:
+      // `PCFSoftShadowMap` в `^0.185` устарел и молча подменяется этим же.
+      expect(code).toContain('THREE.PCFShadowMap');
+      expect(code).not.toContain('THREE.PCFSoftShadowMap');
     });
   }
 
