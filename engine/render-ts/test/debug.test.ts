@@ -255,6 +255,9 @@ describe('RDBG-2: одна проба — две грани', () => {
     const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
     layer.register(stubSource('x.leak', { entities: new Map([[1, { hp: 3 }]]) }));
     layer.setEnabled('x.leak', true);
+    // Кадры идут — и молча: дамп собирается ПО ЗАПРОСУ, а не каждый кадр
+    // (RDBG-7). Собирайся он покадрово, отказ пришёл бы уже здесь.
+    for (let i = 0; i < 5; i += 1) layer.frame(frameState(null));
     expect(() => layer.dump()).toThrow(/x\.leak\.entities.*Map/s);
   });
 });
