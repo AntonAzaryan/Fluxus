@@ -41,7 +41,8 @@
     "desktop-shell": "editor-content",
     "bot-player": "editor-content",
     "performance-budget": "client",
-    "render-quality": "client"
+    "render-quality": "client",
+    "render-debug": "client"
   },
   "exceptions": [
     {

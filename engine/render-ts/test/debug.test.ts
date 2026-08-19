@@ -167,7 +167,7 @@ describe('REND-27: слой крепится рядом со списком по
         stage.frame(1 / 60, 0.5, 1 / 60);
         layer?.frame(frameState(view));
       });
-      return { ...counters } as unknown as Record<string, number>;
+      return { ...counters };
     };
     expect(run(true)).toEqual(run(false));
   });
@@ -538,7 +538,7 @@ describe('RDBG-8: отладка невидима счётчикам стоим�
         stage.register(new TerrainSubsystem(grid, { surface }));
         stage.register(
           new ModelsSubsystem(
-            { entities: {}, effects: {}, terrain: {} } as never,
+            { entities: {}, effects: {}, terrain: {} },
             { surface, warn: () => {} },
           ),
         );
@@ -550,12 +550,12 @@ describe('RDBG-8: отладка невидима счётчикам стоим�
           layer.frame(frameState(view));
         }
       });
-      return { ...counters } as unknown as Record<string, number>;
+      return { ...counters };
     };
     const withDebug = run(true);
     const without = run(false);
     expect(withDebug).toEqual(without);
     // И проверялось не отсутствие работы: счётчики непустые.
-    expect(without['syncTickSubsystems']).toBeGreaterThan(0);
+    expect(without.syncTickSubsystems).toBeGreaterThan(0);
   });
 });

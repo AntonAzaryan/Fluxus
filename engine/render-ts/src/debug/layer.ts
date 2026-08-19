@@ -36,7 +36,7 @@
  * состояние, на котором нарисован последний кадр.
  */
 import type { PresentationStage } from '../stage.js';
-import type { RenderSubsystem } from '../types.js';
+import type { RenderSubsystem, TickView } from '../types.js';
 import type { DebugFrameState, DebugProbe, DebugSource } from './contract.js';
 import { DEBUG_DUMP_VERSION, dumpClock, dumpSection, type DebugDump } from './dump.js';
 import { DebugPainter, type DebugPainterOptions } from './painter.js';
@@ -74,6 +74,8 @@ export class RenderDebugLayer {
   private readonly byId = new Map<string, Entry>();
   private readonly painter: DebugPainter;
   private state: DebugFrameState = IDLE_STATE;
+  /** Последнее доставленное состояние сцены; null — доставок не было. */
+  private delivered: TickView | null = null;
   private enabledCount = 0;
   private fps = 0;
   /** Кадров слоя с включённой отладкой — по нему видно, что слой живой. */
@@ -85,6 +87,23 @@ export class RenderDebugLayer {
     // на каждую новую: ранняя и поздняя регистрация неразличимы (REND-27).
     stage.watchRegistrations((subsystem) => {
       this.attach(subsystem);
+    });
+    // Вторая точка того же подключения: доставленное состояние и кадровые
+    // величины (REND-27). Встраивающей сборке не приходится вести слой самой —
+    // и не приходится второй раз выводить альфу интерполяции (SHELL-7), которую
+    // сцена уже раздала подсистемам.
+    stage.watchFrames({
+      deliver: (view) => {
+        this.delivered = view;
+      },
+      frame: (dt, alpha, realDt) => {
+        this.frame({
+          view: this.delivered,
+          alpha,
+          dtSeconds: dt,
+          realDtSeconds: realDt,
+        });
+      },
     });
   }
 

@@ -31,6 +31,25 @@ export interface PresentationProducer {
   readonly name: string;
 }
 
+/**
+ * Отладочный слой глазами сцены (`render-debug` RDBG-1, REND-27) — ровно две
+ * точки, обе ПОСЛЕ обхода подсистем и после счётных величин стоимости:
+ *
+ * - `deliver` — доставленное presentation-состояние (то же, что уехало
+ *   подсистемам);
+ * - `frame` — кадровые величины (REND-2, `client-shell` SHELL-7).
+ *
+ * «После» здесь несущее (REND-27): наложение рисуется по позам, которые
+ * подсистема моделей поставила в СВОЁМ покадровом обновлении, и слой вне списка
+ * оказывается последним по построению, без отдельного правила о своём месте.
+ * Счётчики стоимости (PERF-3) к этому моменту уже посчитаны, и вызов хука их не
+ * трогает: без подключённого слоя это одно сравнение с null (RDBG-8).
+ */
+export interface DebugHook {
+  deliver(view: TickView): void;
+  frame(dt: number, alpha: number, realDt: number): void;
+}
+
 const NO_ENTITIES: ReadonlyMap<EntityId, EntityView> = new Map();
 
 export class PresentationStage {
@@ -74,6 +93,14 @@ export class PresentationStage {
   private readonly watchers: ((subsystem: RenderSubsystem) => void)[] = [];
 
   /**
+   * Отладочный слой сцены (`render-debug` RDBG-1) — точка подключения РЯДОМ со
+   * списком подсистем (REND-27), а не место в нём. Слой один: две независимые
+   * отладочные картинки поверх одной сцены — это два набора сценовых объектов на
+   * один кадр, а гарантия «выключено — кадр тот же» держится на одном владельце.
+   */
+  private debug: DebugHook | null = null;
+
+  /**
    * Сущности последней доставки — знаменатель счётчика инстансов стадии кадра
    * (PERF-2): у `frame` своего состава нет, а тронуть подсистемы могут только
    * то, что им доставили. Стоимости не несёт: одно присваивание на доставку.
@@ -110,6 +137,15 @@ export class PresentationStage {
   watchRegistrations(watcher: (subsystem: RenderSubsystem) => void): void {
     this.watchers.push(watcher);
     for (const subsystem of this.subsystems) watcher(subsystem);
+  }
+
+  /**
+   * Подключение отладочного слоя (REND-27): слой получает доставленное состояние
+   * и кадровые величины СВОЕЙ точкой, а не местом в списке подсистем. Слой
+   * один; повторное подключение его заменяет.
+   */
+  watchFrames(hook: DebugHook): void {
+    this.debug = hook;
   }
 
   /**
@@ -184,6 +220,9 @@ export class PresentationStage {
       cost.frameInstances += this.live * this.subsystems.length;
     }
     for (const subsystem of this.subsystems) subsystem.updateFrame(dt, alpha, realDt);
+    // Отладочный слой — ПОСЛЕ подсистем и после счётных величин (REND-27):
+    // позы кадра уже поставлены, а счётчики стоимости он не двигает (RDBG-8).
+    this.debug?.frame(dt, alpha, realDt);
   }
 
   private flush(): void {
@@ -205,5 +244,6 @@ export class PresentationStage {
     }
     this.live = view.entities.size;
     for (const subsystem of this.subsystems) subsystem.syncTick(view);
+    this.debug?.deliver(view);
   }
 }
