@@ -40,6 +40,11 @@ export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   // повторяется — консервативный коэффициент визуала покрывает дрейф (FOW-9).
   { name: STATS.team, component: 'Team', field: 'id' },
   { name: STATS.visionRadius, component: 'Vision', field: 'radius' },
+  // Радиус коллайдера — вход отладочного источника кругов коллизий
+  // (`render-debug` RDBG-6): величина сущности едет к отладке ТОЛЬКО объявленным
+  // статом, как радиус обзора едет к туману. Убрать эту строку — и источник
+  // скажет «нет данных», а не нарисует выдуманный радиус.
+  { name: STATS.colliderRadius, component: 'Collider', field: 'radius' },
   // Компонент-источник берётся из таблицы сборки: у ульты отката он свой —
   // exempt-компонент, переживающий перемотку (`sim.ts`).
   ...COOLDOWN_ABILITIES.flatMap((ability) => {

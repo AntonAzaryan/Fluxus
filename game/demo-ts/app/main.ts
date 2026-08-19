@@ -44,15 +44,20 @@ import {
   FogSubsystem,
   ModelsSubsystem,
   ParticlesSubsystem,
+  RenderDebugLayer,
   TerrainSubsystem,
+  ViewportPicking,
   VisualSurfaceSource,
   applyCameraPose,
   cameraConfigFromManifest,
+  costCountersDebugSource,
   createCameraInput,
+  deliveryDebugSource,
   resetCameraInput,
   resolveFogConfig,
   terrainGroundApi,
   type CameraBounds,
+  type CameraPose,
   type DecorationInstance,
   type RenderContext,
 } from '@game-mvp/render';
@@ -71,6 +76,20 @@ import {
 } from '@game-mvp/client';
 import { ACTION_BITS, RESPAWN_EVENT, STATE_COMPONENTS, STATS } from './sim.js';
 import { attachBenchProbe, benchRequested, type BenchProbe, type BenchProbeHost } from './benchProbe.js';
+import {
+  attachDebugGlobal,
+  createDebugPanel,
+  restoreDebugSources,
+  storedDebugSources,
+  type DebugGlobalHost,
+  type DebugPanel,
+} from './debugPanel.js';
+import {
+  cameraDebugSource,
+  dynamicCollidersDebugSource,
+  inspectorDebugSource,
+  staticCollidersDebugSource,
+} from './debugSources.js';
 import { createCapturePreview, type CapturePreview } from './capturePreview.js';
 import { createChargeBalls, type ChargeBalls } from './chargeBalls.js';
 import { demoEdgePan } from './cameraInput.js';
@@ -679,6 +698,13 @@ function sampleFrameInput(): void {
 }
 
 /**
+ * Поза, которой нарисован ПОСЛЕДНИЙ кадр (CAM-1) — уже с эффектами. Её же
+ * читают отладочный инспектор (picking по видимому, REND-15) и источник камеры:
+ * второго конвейера позы не заводится, и луч под курсором совпадает с картинкой.
+ */
+let lastPose: CameraPose | null = null;
+
+/**
  * Стадия `camera` — конвейер камеры (CAM-1): follow-цель — интерполированная
  * горизонталь инстанса (x/y; высоту rig берёт с поверхности, CAM-2), поза →
  * эффекты → применение к THREE-камере.
@@ -713,7 +739,9 @@ function cameraFrame(dtSec: number): void {
   // время здесь. Сама же камера (`rig.update`) продолжает слушаться игрока:
   // осмотреться в замороженном мире — ровно то, ради чего перемотку и смотрят.
   const worldDt = (remote?.view?.mode ?? 'Running') === 'Running' ? dtSec : 0;
-  applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, worldDt));
+  const applied = director === null ? logical : director.stack.apply(logical, worldDt);
+  lastPose = applied;
+  applyCameraPose(camera, applied);
 }
 
 /**
@@ -730,6 +758,10 @@ function presentFrame(now: number): void {
   remote?.frame(now);
   capturePreview?.update();
   chargeBalls?.update();
+  // Отладочный слой ведёт себя сам: доставленное состояние и кадровые величины
+  // он получает своей точкой у сцены (REND-27) — сразу после подсистем, то есть
+  // по позам ЭТОГО кадра. Приложению остаётся текстовая часть панели (RDBG-3).
+  debugPanel?.update();
 }
 
 /**
@@ -894,6 +926,20 @@ const qualitySelection = createQualitySelection(storedQualityPreset(qualityStora
 /** Сам переключатель: его значением показывается ДЕЙСТВУЮЩИЙ пресет. */
 let qualitySelect: HTMLSelectElement | null = null;
 
+// ---------------------------------------- отладочный режим рендера (RDBG-1)
+
+/**
+ * Панель отладочных источников (`render-debug` RDBG-1). Появляется вместе со
+ * сценой (`onReady`): реестр источников складывается из объявлений подсистем при
+ * регистрации (REND-27), и до неё в панели было бы пусто.
+ *
+ * Сам слой в переменной не держится намеренно: доставленное состояние и кадровые
+ * величины он получает своей точкой у сцены (REND-27), а снаружи его адресуют
+ * версионированной ручкой `__renderDebug`. Отладка выключена по умолчанию
+ * (RDBG-4) — источники включает человек галочкой либо запомненным выбором.
+ */
+let debugPanel: DebugPanel | null = null;
+
 /**
  * Переключатель качества картинки — DOM демо-приложения, как и кнопка режима
  * (design D4): это настройка страницы, а не действие внутри матча, и в
@@ -925,6 +971,80 @@ function wireQualitySelect(initial: QualityPresetName): void {
     rememberQualityPreset(qualityStorage, applied);
   });
   qualitySelect = select;
+}
+
+/**
+ * Сборка отладочного слоя и его панели (`render-debug` RDBG-1, design D10).
+ *
+ * Источники здесь — ПОЛИТИКА демо: какие оси наблюдения существуют и из чего они
+ * считаются (`debugSources.ts`). Движковые источники приезжают сами — их
+ * объявили подсистемы при регистрации (REND-27); сборка добавляет свои: шов
+ * доставки, читателя счётчиков стоимости, реконструкцию статики, круги
+ * коллайдеров по объявленному стату, инспектор поверх picking'а и камеру.
+ *
+ * Ни один из них не заводит нового канала к данным (RDBG-6): всё считается из
+ * доставленного состояния, сетки handshake (SHELL-5) и позы камеры (CAM-1).
+ */
+function wireDebugPanel(surface: VisualSurfaceSource, bounds: CameraBounds): void {
+  const layer = new RenderDebugLayer(remote!.stage, { scene: scene3, surface });
+  // Picking по видимому изображению (REND-15) — ТОТ ЖЕ сервис, что у вьюпорта
+  // редактора: второй реализации пересечения не заводится. Прокси инстансов даёт
+  // подсистема моделей — она уже `InstanceProxySource`.
+  //
+  // Камера сервису НЕ передаётся, и это несущее: луч он строит, посадив позу на
+  // свою камеру (`ray`), а проба снимается ПОСЛЕ кадра подсистем и ДО рисования
+  // (REND-27). Отдай ему камеру кадра — и наведение переписывало бы её
+  // соотношение сторон и матрицы между отсечением и рисованием, то есть отладка
+  // меняла бы кадр под собой (RDBG-5). Совпадение с картинкой держится не общим
+  // объектом, а общей позой (`lastPose`) и общим `applyCameraPose` (CAM-1).
+  const picking = new ViewportPicking({
+    surface,
+    ...(models !== null ? { instances: models } : {}),
+  });
+  layer
+    .register(deliveryDebugSource())
+    .register(costCountersDebugSource())
+    .register(staticCollidersDebugSource(() => remote?.terrain ?? null))
+    .register(dynamicCollidersDebugSource(STATS.colliderRadius))
+    .register(
+      inspectorDebugSource({
+        picking: () => picking,
+        pose: () => lastPose,
+        point: () => {
+          if (pointerX < 0) return null;
+          const rect = renderer3.domElement.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) return null;
+          return {
+            x: pointerX - rect.left,
+            y: pointerY - rect.top,
+            width: rect.width,
+            height: rect.height,
+          };
+        },
+      }),
+    )
+    .register(
+      cameraDebugSource({
+        rig: () => rig,
+        pose: () => lastPose,
+        bounds: () => bounds,
+        viewport: () => {
+          const rect = renderer3.domElement.getBoundingClientRect();
+          return rect.width === 0 ? null : { width: rect.width, height: rect.height };
+        },
+      }),
+    );
+  // Запомненный выбор — после регистрации всех источников: до неё реестр не
+  // знал бы половины имён, и восстановление молча потеряло бы их (RDBG-1).
+  restoreDebugSources(layer, storedDebugSources(qualityStorage));
+  const container = document.getElementById('debug');
+  if (container !== null) {
+    debugPanel = createDebugPanel({ layer, container, storage: qualityStorage });
+    debugPanel.refresh();
+  }
+  // Ручка дампа на `window` по образцу `__benchProbe` (PERF-7): кладёт её
+  // сборка приложения, а собирает дамп рендер.
+  attachDebugGlobal(window as DebugGlobalHost, layer);
 }
 
 async function main(): Promise<void> {
@@ -1157,6 +1277,13 @@ async function main(): Promise<void> {
         x: rig?.focusX ?? 0,
         y: rig?.focusY ?? 0,
       });
+
+      // Отладочный режим рендера (`render-debug` RDBG-1) — ПОСЛЕ регистрации
+      // всех подсистем: реестр источников складывается из их объявлений при
+      // регистрации (REND-27), ровно как реестр ручек качества. Слой — не
+      // подсистема, в списке кадрового пути его нет, и счётчики стоимости
+      // (PERF-3) от его подключения не двигаются ни на единицу (RDBG-8).
+      wireDebugPanel(surface, ground.bounds);
 
       requestAnimationFrame(frame);
     },

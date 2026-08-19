@@ -49,6 +49,8 @@ import type {
   TickView,
 } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
+import type { DebugSource } from '../debug/contract.js';
+import { fogMaskDebugSource } from '../debug/fogSource.js';
 import { resolveFogConfig, type FogRenderConfig } from '../fog/config.js';
 import { POST_FRAGMENT, POST_VERTEX } from '../fog/postPass.js';
 import {
@@ -488,6 +490,31 @@ export class FogSubsystem implements RenderSubsystem {
         },
       ],
     };
+  }
+
+  /**
+   * Отладочный источник маски (`render-debug` RDBG-1, REND-27): подсистема
+   * объявляет его в точке своей регистрации — данные маски принадлежат ей, и
+   * никто, кроме неё, не знает, что у неё внутри. Доступ узкий и только на
+   * чтение: счётчиков стоимости отладка не двигает (RDBG-8), а действующее
+   * разрешение показывается вместе с авторским и потолком пресета (FOW-10).
+   */
+  debugSources(): readonly DebugSource[] {
+    return [
+      fogMaskDebugSource({
+        mask: () => this.mask,
+        shown: () => this.shown,
+        // Наблюдатели последней перестройки лежат в сигнатуре по четыре числа.
+        observers: () => (this.signatureLength < 0 ? 0 : (this.signatureLength - SIGNATURE_PREFIX) / 4),
+        authoredResolution: () => resolveFogConfig(this.section).resolution,
+        ceilingResolution: () => this.ceiling,
+        rebuilds: () => this.rebuildCount,
+        dissolving: () => this.settling,
+        levels: () => this.grid.levels,
+        heightStep: () => this.ctx?.config.heightStep ?? 1,
+        built: () => this.built,
+      }),
+    ];
   }
 
   /**
