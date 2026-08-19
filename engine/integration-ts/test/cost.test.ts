@@ -404,10 +404,13 @@ describe('PERF-4: голден-гейт стоимости на записанн
     const bench = matchBench(BENCH_PRESETS.performance);
 
     // Реестр стенда собран из деклараций ЕГО подсистем (design D1) в порядке
-    // регистрации: туман, террейн, модели (две ручки), частицы. Подсистема
-    // позиций ручек не имеет и в реестре не появляется — реестр собирается из
-    // того, что подсистемы объявили, а не из состава документа.
+    // регистрации: освещение (две ручки), туман, террейн, модели (две ручки),
+    // частицы. Подсистема позиций ручек не имеет и в реестре не появляется —
+    // реестр собирается из того, что подсистемы объявили, а не из состава
+    // документа.
     expect(bench.quality.knobs.map((knob) => knob.name)).toEqual([
+      'lighting.shadowMode',
+      'lighting.shadowMapSize',
       'fog.maskResolution',
       'terrain.curvatureTessellation',
       'models.lodThresholdScale',
@@ -433,7 +436,7 @@ describe('PERF-4: голден-гейт стоимости на записанн
   });
 });
 
-// ------------------- счётчики подсистем стенда (models/particles/terrain)
+// ------- счётчики подсистем стенда (lighting/models/particles/terrain)
 
 /**
  * Префиксы счётчиков подсистем стенда (change `bench-stand-subsystems`, D1):
@@ -441,14 +444,14 @@ describe('PERF-4: голден-гейт стоимости на записанн
  * ОБЪЯВЛЕНИЯ пакета (`COST_COUNTER_STAGES`), а не выписывается здесь: новый
  * счётчик подсистемы обязан попасть под эти проверки сам, без правки теста.
  */
-const SUBSYSTEM_PREFIXES = ['models', 'particles', 'terrain'] as const;
+const SUBSYSTEM_PREFIXES = ['lighting', 'models', 'particles', 'terrain'] as const;
 
 function countersOf(prefix: string): (keyof RenderCostCounters)[] {
   const names = Object.keys(COST_COUNTER_STAGES) as (keyof RenderCostCounters)[];
   return names.filter((name) => name.startsWith(prefix));
 }
 
-describe('PERF-4: работа моделей, частиц и террейна видна эталону', () => {
+describe('PERF-4: работа освещения, моделей, частиц и террейна видна эталону', () => {
   for (const prefix of SUBSYSTEM_PREFIXES) {
     it(`${prefix}: счётчики объявлены и на записанном матче не мёртвые`, () => {
       const names = countersOf(prefix);
@@ -485,6 +488,29 @@ describe('PERF-4: работа моделей, частиц и террейна 
     expect(run.render.particlesInstancesAcquired).toBe(1);
     expect(run.render.particlesShellsPosed).toBe(ticks);
     expect(run.render.particlesSystemsStepped).toBe(ticks);
+  });
+
+  it('освещение: full платит обоими ярусами кастеров покадрово, hybrid — перерисовками кэша', () => {
+    const performance = runMatch('match-walk', 'performance').render; // потолок hybrid
+    const ultra = runMatch('match-walk', 'ultra').render; // авторский full
+    const ticks = loadRecording('match-walk').ticks;
+
+    // В `full` карта одна и покадровая: оба яруса — чанк террейна и батчи
+    // моделей — попадают в неё каждым кадром, а перерисовок кэша нет вовсе:
+    // кэш — механика `hybrid`, и его счётчик в `full` не двигается (REND-30).
+    expect(ultra.lightingStaticCasters).toBeGreaterThan(0);
+    expect(ultra.lightingDynamicCasters).toBeGreaterThan(0);
+    expect(ultra.lightingStaticRebuilds).toBe(0);
+    // В `hybrid` кэш статики устаревает КАЖДЫМ кадром: импульс пола стенда
+    // пересобирает чанк, пересборка перерегистрирует его кастером — и кадр
+    // перерисовки кэша пропускает динамическую карту. Это не дефект стенда, а
+    // ровно тот случай, который счётчик перерисовок заведён показывать:
+    // инвалидируемый каждым кадром кэш — `full` по цене (PERF-2, design D7).
+    expect(performance.lightingStaticRebuilds).toBe(ticks);
+    expect(performance.lightingDynamicCasters).toBe(0);
+    // Статика при этом рисуется в обоих режимах каждым кадром — одними и теми
+    // же корнями, поэтому её строка эталона у двух пресетов совпадает.
+    expect(performance.lightingStaticCasters).toBe(ultra.lightingStaticCasters);
   });
 
   it('террейн: импульс пола помечает чанк каждой доставкой, кадр его пересобирает', () => {
