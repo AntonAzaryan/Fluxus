@@ -24,6 +24,39 @@ export type {
   QualityValues,
 } from './types.js';
 
+// Отладочный режим рендера (`render-debug` RDBG-1..8): реестр источников рядом
+// со списком подсистем (REND-27), закрытый словарь примитивов рисования и
+// машинно-читаемый дамп кадра. Выключен по умолчанию и выключенным не стоит
+// ничего; в счётчики стоимости не входит вовсе (RDBG-8).
+export { RenderDebugLayer } from './debug/layer.js';
+export type { DebugSourceInfo, RenderDebugLayerOptions } from './debug/layer.js';
+export { DEBUG_DUMP_VERSION } from './debug/dump.js';
+export type { DebugDump } from './debug/dump.js';
+export { DebugRows } from './debug/contract.js';
+export type {
+  DebugColor,
+  DebugDraw,
+  DebugFrameState,
+  DebugList,
+  DebugPose,
+  DebugProbe,
+  DebugRaster,
+  DebugSource,
+  DebugWorldMode,
+} from './debug/contract.js';
+// Источники движка, которыми не владеет подсистема: их регистрирует сборка.
+export { costCountersDebugSource, deliveryDebugSource } from './debug/sources.js';
+export type {
+  DebugCostProbe,
+  DebugDeliveryProbe,
+  DebugDeliveryRow,
+  DebugSnapReason,
+  DeliverySourceOptions,
+} from './debug/sources.js';
+export type { DebugFogProbe } from './debug/fogSource.js';
+export type { DebugCellRow, DebugTerrainProbe } from './debug/terrainSource.js';
+export type { DebugInstanceRow, DebugModelsProbe } from './debug/modelsSource.js';
+
 // Счётчики стоимости рендера (`performance-budget` PERF-3): инжектируемый сток
 // объёма работы, тегированный стадией конвейера (PERF-2). Без подключённого
 // стока учёт не исполняется — обычный матч за бенчмарк не платит.
@@ -32,6 +65,7 @@ export {
   attachCostSink,
   costSink,
   createCostCounters,
+  releaseCostSink,
   withCostSink,
 } from './cost.js';
 export type { CostStage, RenderCostCounters } from './cost.js';

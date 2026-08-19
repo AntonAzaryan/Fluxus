@@ -259,6 +259,13 @@ export const STATS = {
    */
   team: 'team',
   visionRadius: 'vision',
+  /**
+   * Радиус коллайдера сущности (`Collider.radius`) — вход отладочного источника
+   * кругов коллизий (`render-debug` RDBG-6). Стат, а не выдуманное число: у
+   * главного потока нет другого пути узнать величину компонента, и источник,
+   * не нашедший стата, говорит «нет данных».
+   */
+  colliderRadius: 'collider',
   /** Оставшиеся тики кулдауна способности и его полная длительность. */
   cooldown: (ability: string): string => `${ability}.cd`,
   cooldownMax: (ability: string): string => `${ability}.cdMax`,

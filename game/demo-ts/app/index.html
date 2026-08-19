@@ -231,6 +231,50 @@
       #quality:hover {
         border-color: #ffd479;
       }
+      /* Панель отладочных источников (`render-debug` RDBG-1, design D10):
+         такая же настройка страницы, как выбор качества рядом, а не виджет HUD.
+         Список строится main.ts из реестра слоя — разметка о составе источников
+         не знает, и новый источник появляется в панели сам. */
+      #debug {
+        position: fixed;
+        right: 12px;
+        bottom: 88px;
+        max-width: 46ch;
+        max-height: 60vh;
+        overflow: auto;
+        padding: 8px 10px;
+        color: #e8e8f0;
+        font: 12px/1.5 ui-monospace, Menlo, monospace;
+        background: rgba(10, 10, 24, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 8px;
+        z-index: 20;
+      }
+      .debug-panel__owner {
+        margin: 6px 0 2px;
+        opacity: 0.6;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      #debug label {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        cursor: pointer;
+      }
+      /* Текстовая часть инспектора и счётчиков — из дампа кадра (RDBG-3, RDBG-7):
+         в пакете рендера DOM не появляется, текст живёт здесь. */
+      .debug-panel__text {
+        margin: 8px 0 0;
+        max-height: 24vh;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        opacity: 0.85;
+      }
+      .debug-panel__text:empty {
+        display: none;
+      }
       /* Сообщение сборки: матч занят, стенд не отвечает. Скрыто, пока нечего
          сказать; текст ставит main.ts. */
       #notice {
@@ -254,6 +298,7 @@
   <body>
     <div id="app"></div>
     <div id="notice"></div>
+    <div id="debug" title="отладочные источники рендера (render-debug)"></div>
     <select id="quality" title="качество картинки"></select>
     <a id="connect" href="#">играть по сети →</a>
     <script type="module" src="./main.ts"></script>

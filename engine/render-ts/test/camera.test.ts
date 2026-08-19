@@ -5,10 +5,12 @@
  * инжектированных источника поверхности и границ.
  */
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import {
   CameraRig,
   EffectStack,
   TraumaShake,
+  applyCameraPose,
   createCameraInput,
   edgePanAxes,
   resetCameraInput,
@@ -363,6 +365,74 @@ describe('вспомогательные функции камеры', () => {
     expect(ground.groundHeightAt(1.5, 0.5)).toBeCloseTo(1.2, 6);
     expect(ground.groundHeightAt(99, 99)).toBeCloseTo(1.2, 6); // кламп к крайней клетке
     expect(ground.bounds).toEqual({ minX: 0, minY: 0, maxX: 2, maxY: 1 });
+  });
+});
+
+/**
+ * Посадка позы на THREE-камеру (CAM-1). Проверяется наблюдаемое — оси кадра,
+ * которые получились, — а не то, какими вызовами они получены.
+ */
+describe('applyCameraPose: оси кадра из позы', () => {
+  /** Орты кадра из матрицы камеры: вправо, вверх и взгляд. */
+  function axesOf(pose: CameraPose, up: [number, number, number]): Record<string, number[]> {
+    const camera = new THREE.PerspectiveCamera(pose.fovDeg, 4 / 3, 0.1, 300);
+    camera.up.set(...up);
+    applyCameraPose(camera, pose);
+    camera.updateMatrixWorld(true);
+    const basis = new THREE.Matrix4().extractRotation(camera.matrixWorld).elements;
+    return {
+      right: [basis[0], basis[1], basis[2]],
+      up: [basis[4], basis[5], basis[6]],
+      // Камера смотрит по своему −Z (соглашение THREE).
+      forward: [-basis[8], -basis[9], -basis[10]],
+    };
+  }
+
+  it('невырожденная поза: взгляд, вбок и вверх — те самые орты, которыми считает конвейер', () => {
+    const pose: CameraPose = {
+      posX: 1,
+      posY: 2,
+      posZ: 8,
+      yaw: 0.6,
+      pitch: 0.5,
+      roll: 0,
+      fovDeg: 45,
+    };
+    const cosP = Math.cos(pose.pitch);
+    const sinP = Math.sin(pose.pitch);
+    const axes = axesOf(pose, [0, 0, 1]);
+    const expected = {
+      forward: [Math.cos(pose.yaw) * cosP, Math.sin(pose.yaw) * cosP, -sinP],
+      right: [Math.sin(pose.yaw), -Math.cos(pose.yaw), 0],
+      up: [sinP * Math.cos(pose.yaw), sinP * Math.sin(pose.yaw), cosP],
+    };
+    for (const name of ['forward', 'right', 'up']) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        expect(axes[name]![axis]).toBeCloseTo(expected[name as keyof typeof expected][axis]!, 6);
+      }
+    }
+  });
+
+  it('взгляд ровно в надир не сбивает ось взгляда и следует yaw, а не вырождению lookAt', () => {
+    const pose: CameraPose = {
+      posX: 1,
+      posY: 2,
+      posZ: 8,
+      yaw: 0.6,
+      pitch: Math.PI / 2,
+      roll: 0,
+      fovDeg: 45,
+    };
+    const axes = axesOf(pose, [0, 0, 1]);
+    // Взгляд — строго вниз: сдвига оси, которым `lookAt` разрешает вырождение,
+    // в кадре нет.
+    expect(axes.forward![0]).toBeCloseTo(0, 9);
+    expect(axes.forward![1]).toBeCloseTo(0, 9);
+    expect(axes.forward![2]).toBeCloseTo(-1, 9);
+    // Верх экрана — предел соседних поз: горизонтальное направление yaw.
+    expect(axes.up![0]).toBeCloseTo(Math.cos(pose.yaw), 6);
+    expect(axes.up![1]).toBeCloseTo(Math.sin(pose.yaw), 6);
+    expect(axes.up![2]).toBeCloseTo(0, 6);
   });
 });
 

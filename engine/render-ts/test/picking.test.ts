@@ -21,6 +21,7 @@ import {
   PresentationStage,
   ViewportPicking,
   VisualSurfaceSource,
+  applyCameraPose,
   createPickProxy,
   type CameraPose,
   type RenderContext,
@@ -183,6 +184,49 @@ describe('луч из позы камеры (CAM-1, REND-15)', () => {
     expect(ray.dirX).toBeCloseTo(0, 6);
     expect(ray.dirY).toBeCloseTo(0, 6);
     expect(ray.dirZ).toBeCloseTo(-1, 6);
+  });
+
+  /**
+   * Луч под курсором обязан совпадать с картинкой НЕ ТОЛЬКО в центре вьюпорта.
+   * Своя камера сервиса и камера кадра — разные объекты (передавать её не
+   * обязательно), но позу на обе сажает `applyCameraPose` через `lookAt`, а
+   * `lookAt` берёт крен из `camera.up`. Камера сервиса с верхом THREE по
+   * умолчанию (0,1,0) дала бы луч, повёрнутый вокруг оси взгляда: в центре
+   * вьюпорта он совпал бы с нарисованным, а в углу разошёлся бы на десятки
+   * градусов — и инспектор показывал бы не то, что под курсором, оставаясь при
+   * этом самосогласованным.
+   */
+  it('под курсором вне центра вьюпорта совпадает с камерой кадра, а не только в центре', () => {
+    const { picking } = makeRig(flatGrid());
+    const pose: CameraPose = {
+      posX: 2,
+      posY: 1,
+      posZ: 9,
+      yaw: 0.7,
+      pitch: 0.9,
+      roll: 0,
+      fovDeg: 45,
+    };
+    // Камера кадра — ровно та, какую заводит сборка движка: мир Z-up.
+    const frame = new THREE.PerspectiveCamera(pose.fovDeg, 4 / 3, 0.1, 300);
+    frame.up.set(0, 0, 1);
+    applyCameraPose(frame, pose);
+    frame.updateMatrixWorld(true);
+
+    const viewport = { width: 400, height: 300 };
+    const corner = new THREE.Vector3();
+    for (const [ndcX, ndcY] of [[0, 0], [0.6, 0.4], [-1, 1], [1, -1]] as const) {
+      const point: ViewportPoint = {
+        x: ((ndcX + 1) / 2) * viewport.width,
+        y: ((1 - ndcY) / 2) * viewport.height,
+        ...viewport,
+      };
+      const ray = picking.ray(pose, point);
+      corner.set(ndcX, ndcY, 0.5).unproject(frame).sub(frame.position).normalize();
+      expect(ray.dirX).toBeCloseTo(corner.x, 6);
+      expect(ray.dirY).toBeCloseTo(corner.y, 6);
+      expect(ray.dirZ).toBeCloseTo(corner.z, 6);
+    }
   });
 });
 
