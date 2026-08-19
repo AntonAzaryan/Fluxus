@@ -20,12 +20,15 @@ import {
   ModelsSubsystem,
   PresentationStage,
   QualityController,
+  RenderDebugLayer,
   TerrainSubsystem,
   createCostCounters,
   minShadowMode,
   resolveLightingConfig,
   shadowModeRank,
   withCostSink,
+  type DebugDraw,
+  type DebugFrameState,
   type EntityView,
   type PresentationProducer,
   type QualityPreset,
@@ -557,5 +560,363 @@ describe('счётчики стоимости теней (PERF-2, PERF-3)', () =
     expect(cost.lightingDynamicCasters).toBe(2);
     // Кэша статики в этом режиме нет вовсе, и перерисовывать нечего.
     expect(cost.lightingStaticRebuilds).toBe(0);
+  });
+});
+
+// ------------------ RDBG-1: отладочный источник освещения (REND-27, RDBG-2..8)
+
+/** Секция дампа этого источника: читается ровно то, что кладёт проба. */
+interface LightingSection {
+  readonly units: string;
+  readonly authoredSection: boolean;
+  readonly lightCount: number;
+  readonly ambientLights: number;
+  readonly directionalLights: number;
+  readonly ambientColor: string;
+  readonly ambientIntensity: number;
+  readonly directionalColor: string;
+  readonly directionalIntensity: number;
+  readonly sunIntensity: number;
+  readonly sunDynamicIntensity: number;
+  readonly lightWorldX: number;
+  readonly lightWorldY: number;
+  readonly lightWorldZ: number;
+  readonly targetWorldX: number;
+  readonly targetWorldY: number;
+  readonly targetWorldZ: number;
+  readonly arenaRadiusWorldUnits: number;
+  readonly shadowFrustumHalfWorldUnits: number;
+  readonly shadowMode: string;
+  readonly authoredShadowMode: string;
+  readonly ceilingShadowMode: string;
+  readonly shadowMapTexels: number;
+  readonly authoredShadowMapTexels: number;
+  readonly ceilingShadowMapTexels: number | null;
+  readonly staticShare: number;
+  readonly shadowPhase: string;
+  readonly staticCasterRoots: number;
+  readonly dynamicCasterRoots: number;
+  readonly staticRebuilds: number;
+  readonly staticStale: boolean;
+  readonly builtShadowMaps: number;
+  readonly noData?: string;
+}
+
+const LIGHTING_SOURCE = 'lighting.scene';
+
+const IDLE_FRAME: DebugFrameState = { view: null, alpha: 0, dtSeconds: 0, realDtSeconds: 0 };
+
+function section(layer: RenderDebugLayer): LightingSection {
+  return layer.dump().sections[LIGHTING_SOURCE] as LightingSection;
+}
+
+/**
+ * Записывающий словарь примитивов (RDBG-3): что источник нарисовал и чем.
+ * Сцены он не видит и узлов не создаёт — вот весь его словарь и весь протокол.
+ */
+function capture(): {
+  readonly points: number[][];
+  readonly segments: number[][];
+  readonly others: string[];
+  readonly out: DebugDraw;
+} {
+  const points: number[][] = [];
+  const segments: number[][] = [];
+  const others: string[] = [];
+  return {
+    points,
+    segments,
+    others,
+    out: {
+      point: (x, y, z) => {
+        points.push([x, y, z]);
+      },
+      segment: (x1, y1, z1, x2, y2, z2) => {
+        segments.push([x1, y1, z1, x2, y2, z2]);
+      },
+      polyline: () => others.push('polyline'),
+      circle: () => others.push('circle'),
+      disc: () => others.push('disc'),
+      box: () => others.push('box'),
+      polygon: () => others.push('polygon'),
+      raster: () => others.push('raster'),
+    },
+  };
+}
+
+describe('Отладочный источник освещения (render-debug RDBG-1, REND-27)', () => {
+  it('источник объявлен подсистемой в точке её регистрации', () => {
+    const rig = makeRig();
+    const layer = new RenderDebugLayer(rig.stage);
+    const declared = layer.sources.find((source) => source.id === LIGHTING_SOURCE);
+    expect(declared).toBeDefined();
+    expect(declared?.owner).toBe('lighting');
+    // Рисовальщик есть: позиция источника света в кадре не видна ничем.
+    expect(declared?.drawable).toBe(true);
+  });
+
+  it('выключенный источник секции в дампе не имеет, и слой не работает вовсе', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    const layer = new RenderDebugLayer(rig.stage);
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+    // «Выключено» — это ОТСУТСТВИЕ секции, а не секция «данных нет» (RDBG-7).
+    expect(layer.dump().sections).toEqual({});
+    expect(layer.frameCount).toBe(0);
+  });
+
+  it('включённый источник называет свет кадра, режим теней и ярусы кастеров', () => {
+    const rig = makeRig({
+      directional: { intensity: 2 },
+      shadows: { mode: 'hybrid', mapSize: 512, staticShare: 0.25 },
+    });
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+
+    const dumped = section(layer);
+    expect(dumped.noData).toBeUndefined();
+    // Секция документа была: «умолчания» и «автор написал ровно умолчания» —
+    // разные ответы на вопрос, где эти числа искать (PRES-2).
+    expect(dumped.authoredSection).toBe(true);
+    // Пара направленных источников режима `hybrid` плюс рассеянный (REND-30).
+    expect(dumped.ambientLights).toBe(1);
+    expect(dumped.directionalLights).toBe(2);
+    expect(dumped.lightCount).toBe(3);
+    expect(dumped.ambientIntensity).toBe(DEFAULT_LIGHTING_CONFIG.ambientIntensity);
+    expect(dumped.ambientColor).toBe('#ffffff');
+    // Сумма — та, что написал автор; доля делит её между картами ярусов.
+    expect(dumped.directionalIntensity).toBeCloseTo(2, 6);
+    expect(dumped.sunIntensity).toBeCloseTo(0.5, 6);
+    expect(dumped.sunDynamicIntensity).toBeCloseTo(1.5, 6);
+    expect(dumped.staticShare).toBe(0.25);
+    expect(dumped.shadowMode).toBe('hybrid');
+    expect(dumped.shadowMapTexels).toBe(512);
+    // Ярусы: статика — чанк террейна и батч декорации, динамика — батч сущности.
+    expect(dumped.staticCasterRoots).toBe(rig.lighting.casterCount('static'));
+    expect(dumped.dynamicCasterRoots).toBe(rig.lighting.casterCount('dynamic'));
+    expect(dumped.staticCasterRoots).toBe(2);
+    expect(dumped.dynamicCasterRoots).toBe(1);
+    expect(dumped.staticRebuilds).toBe(rig.lighting.staticRebuilds);
+    expect(dumped.staticStale).toBe(false);
+    // Дамп описывает ТОТ ЖЕ кадр: позиция источника — та, что стоит в сцене.
+    const sun = directionalLights(rig.scene)[0]!;
+    expect(dumped.lightWorldX).toBeCloseTo(sun.position.x, 6);
+    expect(dumped.lightWorldY).toBeCloseTo(sun.position.y, 6);
+    expect(dumped.lightWorldZ).toBeCloseTo(sun.position.z, 6);
+    // Цель — центр ровной арены 8×8 по клетке в мировую единицу.
+    expect(dumped.targetWorldX).toBeCloseTo(4, 6);
+    expect(dumped.targetWorldY).toBeCloseTo(4, 6);
+    expect(dumped.arenaRadiusWorldUnits).toBeCloseTo(Math.hypot(8, 8) / 2, 6);
+    expect(dumped.shadowFrustumHalfWorldUnits).toBeCloseTo(sun.shadow.camera.right, 6);
+    // Теневого прохода в headless-прогоне не было: карту строит three, а не мы.
+    expect(dumped.builtShadowMaps).toBe(0);
+    // Единицы величин названы прозой — читатель дампа исходника не открывает.
+    expect(dumped.units).toMatch(/мировые единицы/);
+    expect(dumped.units).toMatch(/текселях/);
+  });
+
+  it('сцена без секции `lighting` — умолчания, и дамп называет это отдельным полем', () => {
+    const rig = makeRig();
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    rig.stage.frame(0.016, 0);
+
+    const dumped = section(layer);
+    expect(dumped.authoredSection).toBe(false);
+    expect(dumped.directionalLights).toBe(1);
+    expect(dumped.sunDynamicIntensity).toBe(0);
+    expect(dumped.directionalIntensity).toBeCloseTo(
+      DEFAULT_LIGHTING_CONFIG.directionalIntensity,
+      6,
+    );
+    expect(dumped.shadowMode).toBe('none');
+    expect(dumped.shadowPhase).toBe('none');
+  });
+
+  it('действующий режим стоит рядом с авторским и потолком пресета (QUAL-1)', () => {
+    const authored: PresentationLighting = { shadows: { mode: 'full', mapSize: 2048 } };
+    const rig = makeRig(authored, { 'lighting.shadowMode': 'none', 'lighting.shadowMapSize': 1024 });
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    rig.stage.frame(0.016, 0);
+
+    const dumped = section(layer);
+    // Ровно то, ради чего авторское значение и потолок стоят рядом: сцена просит
+    // `full`, а теней нет — и виноват пресет, а не потерянное поле документа.
+    expect(dumped.shadowMode).toBe('none');
+    expect(dumped.authoredShadowMode).toBe('full');
+    expect(dumped.ceilingShadowMode).toBe('none');
+    expect(dumped.shadowMapTexels).toBe(1024);
+    expect(dumped.authoredShadowMapTexels).toBe(2048);
+    expect(dumped.ceilingShadowMapTexels).toBe(1024);
+  });
+
+  it('пресета нет — потолок стороны карты выражен null, а не бесконечностью', () => {
+    const rig = makeRig({ shadows: { mode: 'full' } });
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    rig.stage.frame(0.016, 0);
+
+    const dumped = section(layer);
+    // Бесконечность числом дампа не бывает, и читатель принял бы её за
+    // разрешение; потолок режима при этом честно равен `full` — потолка нет.
+    expect(dumped.ceilingShadowMapTexels).toBeNull();
+    expect(dumped.ceilingShadowMode).toBe('full');
+  });
+
+  it('фаза теневого прохода: кадр запекания кэша, а следом — установившийся', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+
+    rig.stage.frame(0.016, 0);
+    // Ответ на «почему тень декорации кадром старше»: этим кадром рисуется
+    // карта статики, и динамическая его пропускает (REND-30).
+    expect(section(layer).shadowPhase).toBe('static');
+    expect(section(layer).staticRebuilds).toBe(1);
+
+    rig.stage.frame(0.016, 0);
+    expect(section(layer).shadowPhase).toBe('dynamic');
+    expect(section(layer).staticRebuilds).toBe(1);
+  });
+
+  it('устаревший кэш и построенные карты теней видны в дампе, а не только в коде', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+    expect(section(layer).staticStale).toBe(false);
+
+    // Правка света — событие перерисовки кэша (REND-30): до ближайшего кадра он
+    // устарел, и дамп обязан сказать это, а не показать вчерашнюю картину.
+    rig.lighting.applyConfig({ directional: { intensity: 3 }, shadows: { mode: 'hybrid' } });
+    expect(section(layer).staticStale).toBe(true);
+
+    // Карту строит теневой проход three, которого в headless-прогоне нет:
+    // подставляется готовая — предмет проверки не её содержимое, а то, что
+    // «тени настроены, но прохода ещё не было» отличимо от «карты построены».
+    const { sun, sunDynamic } = rig.lighting.lights;
+    for (const light of [sun, sunDynamic]) {
+      const map = new THREE.WebGLRenderTarget(4, 4);
+      map.depthTexture = new THREE.DepthTexture(4, 4);
+      light.shadow.map = map;
+    }
+    expect(section(layer).builtShadowMaps).toBe(2);
+  });
+
+  it('отметка стоит в позиции направленного источника, луч указывает на центр арены', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    const source = rig.lighting.debugSources()[0]!;
+    const drawn = capture();
+    source.draw?.(source.probe(IDLE_FRAME), drawn.out);
+
+    const sun = directionalLights(rig.scene)[0]!;
+    // Отметка ОДНА и в `hybrid`: пара источников стоит в одной точке.
+    expect(drawn.points).toHaveLength(1);
+    expect(drawn.points[0]![0]).toBeCloseTo(sun.position.x, 6);
+    expect(drawn.points[0]![1]).toBeCloseTo(sun.position.y, 6);
+    expect(drawn.points[0]![2]).toBeCloseTo(sun.position.z, 6);
+    // Луч на цель: направление света в кадре иначе не читается ничем.
+    expect(drawn.segments).toHaveLength(1);
+    expect(drawn.segments[0]!.slice(3)).toEqual([4, 4, 0]);
+    // Рассеянный источник позиции не имеет и живёт только в дампе, а прочих
+    // примитивов словаря источник не просит вовсе.
+    expect(drawn.others).toEqual([]);
+  });
+
+  it('наложение рисует отладочный слой, и выключение убирает его из кадра целиком', () => {
+    const overlay = new THREE.Scene();
+    const rig = makeRig();
+    const layer = new RenderDebugLayer(rig.stage, { scene: overlay });
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    rig.stage.frame(0.016, 0);
+    // Отметка и луч: одна вершина точки плюс две концов отрезка (RDBG-3).
+    expect(layer.vertexCount).toBe(3);
+    expect(overlay.children.length).toBeGreaterThan(0);
+
+    layer.setEnabled(LIGHTING_SOURCE, false);
+    expect(layer.vertexCount).toBe(0);
+    expect(overlay.children).toHaveLength(0);
+  });
+
+  it('снятая секция дампа не меняется от следующего кадра', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    rig.stage.frame(0.016, 0);
+    const before = section(layer);
+    const snapshot = JSON.stringify(before);
+
+    // Проба ПЕРЕИСПОЛЬЗУЕТСЯ между кадрами (RDBG-2), и дамп, державший её
+    // ссылкой, менялся бы задним числом от следующей правки света.
+    rig.lighting.applyConfig({ directional: { intensity: 3 }, shadows: { mode: 'full' } });
+    rig.stage.frame(0.016, 0);
+    expect(JSON.stringify(before)).toBe(snapshot);
+    expect(section(layer).shadowMode).toBe('full');
+    expect(section(layer).directionalIntensity).toBeCloseTo(3, 6);
+  });
+
+  it('два дампа на одном доставленном состоянии совпадают: часовых величин у источника нет', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+    const first = layer.dump();
+    const second = layer.dump();
+    expect(second.sections).toEqual(first.sections);
+    // Свет не зависит ни от тика, ни от часов главного потока (RDBG-7).
+    expect(Object.keys(first.clock).some((key) => key.startsWith(`${LIGHTING_SOURCE}.`))).toBe(
+      false,
+    );
+  });
+
+  it('счётчики кадра с включённым источником и без него совпадают побитово (RDBG-8)', () => {
+    const run = (debug: boolean): Record<string, number> => {
+      const counters = createCostCounters();
+      withCostSink(counters, () => {
+        const rig = makeRig({ shadows: { mode: 'hybrid' } });
+        const layer = new RenderDebugLayer(rig.stage);
+        if (debug) layer.setEnabled(LIGHTING_SOURCE, true);
+        rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+        for (let tick = 1; tick <= 8; tick += 1) {
+          rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })], { tick }));
+          rig.stage.frame(1 / 60, 0.5, 1 / 60);
+        }
+      });
+      return { ...counters };
+    };
+    const withDebug = run(true);
+    const without = run(false);
+    expect(withDebug).toEqual(without);
+    // И проверялось не отсутствие работы: счётчики теней непустые.
+    expect(without.lightingStaticCasters).toBeGreaterThan(0);
+    expect(without.lightingDynamicCasters).toBeGreaterThan(0);
+  });
+
+  it('подсистему в сцену не отдали — источник говорит «нет данных» (RDBG-6)', () => {
+    // Сцена без освещения вовсе: подсистема создана, но `init` ей не звали, и
+    // источников света в кадре нет. Показывать тогда нечего, и молчать об этом
+    // источник не вправе — выдуманный свет был бы хуже пустоты.
+    const assets = makeAssets();
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 0.5 },
+    };
+    const stage = new PresentationStage(ctx);
+    const layer = new RenderDebugLayer(stage);
+    layer.register(new LightingSubsystem().debugSources()[0]!);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    stage.frame(0.016, 0);
+
+    expect(section(layer).noData).toMatch(/не отдана сцене/);
+    // Наложения у источника без данных нет: рисовальщика слой не зовёт вовсе.
+    expect(layer.vertexCount).toBe(0);
   });
 });

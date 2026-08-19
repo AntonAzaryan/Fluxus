@@ -49,8 +49,11 @@ import type {
   RenderSubsystem,
   ShadowCasterSink,
   ShadowCasterTier,
+  ShadowPhase,
 } from '../types.js';
 import { costSink } from '../cost.js';
+import type { DebugSource } from '../debug/contract.js';
+import { lightingSceneDebugSource, type DebugLightingState } from '../debug/lightingSource.js';
 import {
   minShadowMode,
   resolveLightingConfig,
@@ -66,12 +69,6 @@ import {
  */
 const LIGHTING_SHADOW_MODE = 'lighting.shadowMode';
 const LIGHTING_SHADOW_MAP_SIZE = 'lighting.shadowMapSize';
-
-/**
- * Фаза теневого прохода: чью карту подсистема рисует в этом кадре и, значит,
- * чьи кастеры сейчас подняты флагом. `none` — теней нет вовсе.
- */
-type ShadowPhase = 'none' | 'static' | 'dynamic' | 'full';
 
 /**
  * Радиус арены, когда сетки террейна подсистеме не дали (превью ассета ED-20,
@@ -316,6 +313,78 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     const size = values.get(LIGHTING_SHADOW_MAP_SIZE);
     this.sizeCeiling = typeof size === 'number' ? size : Number.POSITIVE_INFINITY;
     this.applyResolved(this.effective());
+  }
+
+  // ------------------------------------------------------------- отладка
+
+  /**
+   * Отладочный источник освещения (`render-debug` RDBG-1, REND-27): подсистема
+   * объявляет его в точке своей регистрации — свет сцены и решение теневого
+   * прохода принадлежат ей, и никто, кроме неё, не знает, чья карта рисуется в
+   * этом кадре.
+   *
+   * Доступ узкий и только на чтение: своей работы источник не заказывает и
+   * счётчиков стоимости не двигает (RDBG-8) — он читает уже посчитанное кадром.
+   */
+  debugSources(): readonly DebugSource[] {
+    return [
+      lightingSceneDebugSource({
+        state: (out) => {
+          this.fillDebugState(out);
+        },
+      }),
+    ];
+  }
+
+  /**
+   * Состояние освещения в переиспользуемую запись отладки (RDBG-2). Позиции и
+   * интенсивности берутся с ЖИВЫХ источников сцены — тех самых, которыми
+   * нарисован кадр, а не вторым расчётом по конфигурации; тон берётся из
+   * действующей конфигурации, которой источники и покрашены: `getHexString()`
+   * аллоцировал бы строку каждым кадром (REND-26).
+   */
+  private fillDebugState(out: DebugLightingState): void {
+    // Без `init` источники в сцену не отданы, и кадр они не освещают: показывать
+    // тогда нечего, и источник скажет это вслух (RDBG-6).
+    out.inScene = this.ctx !== null;
+    out.authoredSection = this.section !== undefined;
+    if (this.ctx === null) return;
+    const authored = resolveLightingConfig(this.section);
+    const paired = this.sunDynamic.parent !== null;
+    out.ambientLights = 1;
+    out.directionalLights = paired ? 2 : 1;
+    out.ambientColor = this.current.ambientColor;
+    out.ambientIntensity = this.ambient.intensity;
+    out.directionalColor = this.current.directionalColor;
+    out.sunIntensity = this.sun.intensity;
+    out.sunDynamicIntensity = paired ? this.sunDynamic.intensity : 0;
+    out.lightWorldX = this.sun.position.x;
+    out.lightWorldY = this.sun.position.y;
+    out.lightWorldZ = this.sun.position.z;
+    out.targetWorldX = this.sun.target.position.x;
+    out.targetWorldY = this.sun.target.position.y;
+    out.targetWorldZ = this.sun.target.position.z;
+    out.arenaRadiusWorldUnits = this.extent.radius;
+    out.shadowFrustumHalfWorldUnits = this.sun.shadow.camera.right;
+    out.shadowMode = this.current.shadowMode;
+    out.authoredShadowMode = authored.shadowMode;
+    out.ceilingShadowMode = this.modeCeiling;
+    // Действующая сторона карты — та, что стоит у камеры источника: конфиг
+    // округляется при применении, и показывать надо применённое.
+    out.shadowMapTexels = this.sun.shadow.mapSize.x;
+    out.authoredShadowMapTexels = authored.shadowMapSize;
+    out.ceilingShadowMapTexels = this.sizeCeiling;
+    out.staticShare = this.current.staticShare;
+    out.shadowPhase = this.phase;
+    out.staticCasterRoots = this.staticRoots.size;
+    out.dynamicCasterRoots = this.dynamicRoots.size;
+    out.staticRebuilds = this.rebuilds;
+    out.staticStale = this.staticStale;
+    // Карту строит теневой проход three: ноль — прохода ещё не было (headless-
+    // прогон, режим `none`), и это ответ на «тени настроены, а их нет».
+    out.builtShadowMaps =
+      (this.sun.shadow.map === null ? 0 : 1) +
+      (paired && this.sunDynamic.shadow.map !== null ? 1 : 0);
   }
 
   /**
