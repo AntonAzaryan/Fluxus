@@ -11,7 +11,6 @@
     "ProjectileCaught": { "kind": "projectile-caught", "actor": "entity", "target": "projectile" },
     "SlowDomeCast": { "kind": "cast-slow-dome", "actor": "entity" },
     "SlowDomeExpired": { "kind": "slow-dome-expired" },
-    "ChargeAim": { "kind": "charge-aim", "actor": "entity" },
     "ChargeExploded": { "kind": "charge-explosion", "actor": "entity" },
     "$rewind/request": { "kind": "rewind-request", "actor": "initiator" },
 

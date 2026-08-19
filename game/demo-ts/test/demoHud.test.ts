@@ -20,9 +20,8 @@ import {
   PLAYER_ID,
   STATS,
   TICK_SECONDS,
-  chargeHeld,
-  chargeVisualOf,
   createDemoSimulation,
+  stateBit,
 } from '../app/sim.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
@@ -112,14 +111,24 @@ describe('headless-прогон демо: статы и фаза полёта д
     expect(names).toContain(STATS.slot);
     expect(names).toContain(STATS.hp);
 
-    // Каст: нажатие копит заряд, отпускание стреляет — снаряд рождается и
-    // летит, а сборка считает ему фазу полёта.
-    simTick(sim, state, [
-      { tick: state.tick + 1, playerId: PLAYER_ID, seq: 1, move: { x: 0, y: 0 }, aimDir: 0, buttons: 1 },
-    ]);
-    simTick(sim, state, [
-      { tick: state.tick + 1, playerId: PLAYER_ID, seq: 2, move: { x: 0, y: 0 }, aimDir: 0, buttons: 0 },
-    ]);
+    // Каст: нажатие копит заряд, отпускание открывает прицеливание, а
+    // подтверждение выпускает снаряд (ABIL-4, ABIL-5) — он рождается и летит, а
+    // сборка считает ему фазу полёта.
+    const press = (seq: number, buttons: number): void => {
+      simTick(sim, state, [
+        {
+          tick: state.tick + 1,
+          playerId: PLAYER_ID,
+          seq,
+          move: { x: 0, y: 0 },
+          aimDir: 0,
+          buttons,
+        },
+      ]);
+    };
+    press(1, 1 << ACTION_BITS.cast);
+    press(2, 0);
+    press(3, 1 << ACTION_BITS.confirm);
     for (let i = 0; i < 6; i++) shell.stepTick();
 
     const view = remote.view!;
@@ -137,7 +146,7 @@ describe('headless-прогон демо: статы и фаза полёта д
 
     const fireball = [...view.entities.values()].find((entity) => entity.kind === 'Fireball');
     expect(fireball).toBeDefined();
-    // Фаза полёта считается воркером из `Lifetime` и растёт по ходу полёта.
+    // Фаза полёта считается воркером из остатка доставки и растёт по ходу полёта.
     expect(fireball!.flightPhase).toBeGreaterThan(0);
     expect(fireball!.flightPhase).toBeLessThan(1);
     // У героя фазы полёта нет — он не летит (REND-12).
@@ -145,12 +154,13 @@ describe('headless-прогон демо: статы и фаза полёта д
   });
 
   /**
-   * Путь стата `charge` целиком: `Charging.ticks` симуляции → экстрактор →
-   * канал → `EntityView.stats` главного потока, который и растит по нему шар
-   * заряда. Без этого теста дыра в любом звене выглядела бы как «шара нет» —
-   * и молчала бы ровно так же, как честное «не заряжаю» (HUD-8).
+   * Путь состояния слота каста целиком: поля `AbilitySlot` симуляции →
+   * экстрактор (слотовая форма источника, ABIL-1) → канал → `EntityView.stats`
+   * главного потока, откуда их читает превью каста (REND-28). Без этого теста
+   * дыра в любом звене выглядела бы как «превью нет» — и молчала бы ровно так
+   * же, как честное «каста нет» (HUD-8).
    */
-  it('заряд каста доезжает статом и ПРОПАДАЕТ на отпускании', () => {
+  it('фаза каста доезжает статом слота и ПРОПАДАЕТ на выстреле', () => {
     const { sim, state, playerId, grid } = createDemoSimulation(SCENE);
     const [workerPort, mainPort] = syncPortPair();
     const shell = new WorkerShell({
@@ -176,46 +186,25 @@ describe('headless-прогон демо: статы и фаза полёта д
       shell.stepTick();
     }
     const charging = remote.view!.entities.get(playerId)!;
-    // Тик НАЖАТИЯ только заводит `Charging{ticks: 0}` — счёт идёт со следующего.
-    expect(charging.stats!.get(STATS.charge)).toBe(HELD - 1);
-    // И ровно столько же насчитает шар заряда главного потока.
-    expect(chargeHeld(charging.stats!.get(STATS.charge)!, chargeVisualOf(SCENE).ticks)).toBe(
-      HELD - 2,
-    );
+    // Фаза заряда — нулевая в списке фаз определения, а её счётчик считает
+    // тики удержания: тик нажатия только входит в фазу.
+    expect(charging.stats!.get(STATS.slotPhase('cast'))).toBe(0);
+    expect(charging.stats!.get(STATS.slotStaged('cast'))).toBe(0);
+    expect(charging.stats!.get(STATS.slotAbility('cast'))).toBe(0);
+    // И маркер сцены доехал битом состояния — по нему рисуется шар заряда.
+    expect(charging.states & stateBit('Charging')).toBe(stateBit('Charging'));
 
-    // Отпускание: заряд израсходован, и стата НЕТ — «не заряжаю», а не ноль.
+    // Отпускание открывает фазу прицеливания, подтверждение — выстрел, и
+    // фаза становится «каста нет» (−1), а не пропадает: слот жив всегда.
+    remote.sendInput({ x: 0, y: 0 }, 0, 0);
     shell.stepTick();
-    expect(remote.view!.entities.get(playerId)!.stats!.has(STATS.charge)).toBe(false);
-  });
-});
-
-describe('числа шара заряда читаются из сцены (`sim.ts`)', () => {
-  it('`chargeHeld` вычитает тик нажатия и упирается в окно роста', () => {
-    const { ticks: max, graceTicks } = chargeVisualOf(SCENE);
-    // Ни одного тика удержания — обычный шар, а не «чуть заряженный».
-    expect(chargeHeld(0, max)).toBe(0);
-    expect(chargeHeld(1, max)).toBe(0);
-    expect(chargeHeld(2, max)).toBe(1);
-    // Полный заряд набирается на 61-м тике удержания: тик нажатия не в счёт.
-    expect(chargeHeld(max + 1, max)).toBe(max);
-    // Дальше окно роста НЕ растёт — тики передержки видны только в сыром
-    // `Charging.ticks`, и предел здесь тот же, что у `ChargeRelease` в сцене.
-    expect(chargeHeld(max + graceTicks + 1, max)).toBe(max);
-  });
-
-  it('`chargeVisualOf` падает громко, если поля `AbilityConfig` нет', () => {
-    const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
-    const { chargeMaxScale: _dropped, ...rest } = hero.components.AbilityConfig!;
-    const holed: SceneDef = {
-      ...SCENE,
-      prefabs: SCENE.prefabs!.map((prefab) =>
-        prefab.name === 'Hero'
-          ? { ...prefab, components: { ...prefab.components, AbilityConfig: rest } }
-          : prefab,
-      ),
-    };
-    // Дыра в контенте обязана СООБЩИТЬ о себе: молчаливый ноль дал бы шар
-    // нулевого размера, то есть «способности нет» вместо «поля нет».
-    expect(() => chargeVisualOf(holed)).toThrow(/chargeMaxScale/);
+    expect(remote.view!.entities.get(playerId)!.stats!.get(STATS.slotPhase('cast'))).toBe(1);
+    remote.sendInput({ x: 0, y: 0 }, 0, 1 << ACTION_BITS.confirm);
+    shell.stepTick();
+    const done = remote.view!.entities.get(playerId)!;
+    expect(done.stats!.get(STATS.slotPhase('cast'))).toBe(-1);
+    // Кулдаун при этом поехал тем же слотовым источником.
+    expect(done.stats!.get(STATS.cooldown('cast'))).toBeGreaterThan(0);
+    expect(done.stats!.get(STATS.cooldownMax('cast'))).toBe(60);
   });
 });

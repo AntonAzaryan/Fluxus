@@ -373,7 +373,7 @@ describe('ED-21: сохранение затрагивает только док
     session.applyOperation('document.setValue', {
       document: SCENE_PATH,
       path: ['capacity'],
-      value: 512,
+      value: 640,
     });
     const result = await saveDocuments({ session, host: host.content });
 
@@ -388,7 +388,7 @@ describe('ED-21: сохранение затрагивает только док
     await openDocumentFromHost(session, host.content, { id: SCENE_PATH, kind: 'scene' });
     await openDocumentFromHost(session, host.content, { id: MANIFEST_PATH, kind: 'manifest' });
 
-    session.applyOperation('document.setValue', { document: SCENE_PATH, path: ['capacity'], value: 512 });
+    session.applyOperation('document.setValue', { document: SCENE_PATH, path: ['capacity'], value: 640 });
     const result = await saveDocuments({
       session,
       host: host.content,
