@@ -8,7 +8,7 @@
  * приезжает в дампе и что остаётся в счётчиках. Внутреннего устройства слоя
  * тесты не знают — как не знает его и источник.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import {
   FogSubsystem,
@@ -17,6 +17,7 @@ import {
   RenderDebugLayer,
   TerrainSubsystem,
   VisualSurfaceSource,
+  costSink,
   createCostCounters,
   deliveryDebugSource,
   costCountersDebugSource,
@@ -251,6 +252,21 @@ describe('RDBG-2: одна проба — две грани', () => {
     expect(second.entities.items[0]).toBe(items[0]);
   });
 
+  it('имена статов приезжают в пробу копией, а не ссылкой на массив доставки', () => {
+    const source = deliveryDebugSource();
+    const first = makeTickView([], { tick: 1, statNames: ['hp', 'vision'] });
+    const probe = source.probe(frameState(first));
+    // Массив доставки живёт в буфере вида и переживает кадр: удержанная ссылка
+    // открыла бы чтение состояния за пределами окна его валидности (RDBG-2).
+    expect(probe.statNames).not.toBe(first.statNames);
+    expect(probe.statNames).toEqual(['hp', 'vision']);
+    // И это не свежий массив на кадр: структура пробы переиспользуется (REND-26).
+    const names = probe.statNames;
+    const again = source.probe(frameState(makeTickView([], { tick: 2, statNames: ['hp'] })));
+    expect(again.statNames).toBe(names);
+    expect(again.statNames).toEqual(['hp']);
+  });
+
   it('дамп отвергает пробу со ссылкой на живую структуру — адресно, с путём поля', () => {
     const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
     layer.register(stubSource('x.leak', { entities: new Map([[1, { hp: 3 }]]) }));
@@ -284,6 +300,44 @@ describe('RDBG-4: выключенный режим бесплатен и нео
     expect(layer.frameCount).toBe(0);
     expect(scene.children).toHaveLength(0);
     expect(layer.dump().sections).toEqual({});
+  });
+
+  it('выключенная отладка не строит даже состояния кадра: до слоя дело не доходит', () => {
+    const stage = new PresentationStage(makeRenderContext());
+    const layer = new RenderDebugLayer(stage);
+    layer.register(stubSource('x.any'));
+    const frames = vi.spyOn(layer, 'frame');
+    const view = makeTickView([makeEntityView(1)]);
+    stage.publish({ name: 'test' }, view);
+    for (let i = 0; i < 5; i += 1) stage.frame(1 / 60, 0.5, 1 / 60);
+    // Своя точка у сцены (REND-27) зовётся каждый кадр, и объектный литерал
+    // состояния был бы аллокацией на кадр (RDBG-4, REND-26) — при выключенной
+    // отладке слой до него не доходит вовсе.
+    expect(frames).not.toHaveBeenCalled();
+    layer.setEnabled('x.any', true);
+    stage.frame(1 / 60, 0.5, 1 / 60);
+    expect(frames).toHaveBeenCalledTimes(1);
+  });
+
+  it('состояние кадра — переиспользуемая структура, а не свежий объект на кадр', () => {
+    const stage = new PresentationStage(makeRenderContext());
+    const layer = new RenderDebugLayer(stage);
+    const seen: DebugFrameState[] = [];
+    layer.register({
+      id: 'x.state',
+      probe: (state) => {
+        seen.push(state);
+        return {};
+      },
+    });
+    layer.setEnabled('x.state', true);
+    stage.publish({ name: 'test' }, makeTickView([]));
+    stage.frame(1 / 60, 0.25, 1 / 60);
+    stage.frame(1 / 60, 0.75, 1 / 60);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+    // Объект тот же, значения — этого кадра: переписываются поля, а не ссылка.
+    expect(seen[1]?.alpha).toBe(0.75);
   });
 
   it('включение действует со следующего кадра, выключение убирает наложение целиком', () => {
@@ -412,18 +466,66 @@ describe('RDBG-7: дамп кадра', () => {
 
 // ------------------------------------------- RDBG-3/RDBG-5: рисует рендер
 
+/** Все имена, до которых источник дотягивается от полученного рисовальщика. */
+function reachableNames(value: object): string[] {
+  const names = new Set<string>();
+  for (
+    let level: object | null = value;
+    level !== null && level !== Object.prototype;
+    level = Object.getPrototypeOf(level) as object | null
+  ) {
+    for (const name of Object.getOwnPropertyNames(level)) names.add(name);
+  }
+  return [...names].sort();
+}
+
+/** Закрытый словарь примитивов рисования (RDBG-3) — ровно он, и ничего сверх. */
+const PRIMITIVES = ['box', 'circle', 'disc', 'point', 'polygon', 'polyline', 'raster', 'segment'];
+
 describe('RDBG-3: рисует рендер, источник приносит примитивы', () => {
+  it('источнику достаётся закрытый словарь примитивов — ни сцены, ни жизненного цикла набора', () => {
+    const scene = new THREE.Scene();
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()), { scene });
+    let surface: string[] = [];
+    layer.register<DebugProbe>({
+      id: 'x.surface',
+      probe: () => ({}),
+      draw: (_probe, out) => {
+        // Всё, до чего источник дотягивается: сам объект и его прототипы. Ни
+        // сцены, ни материалов, ни `clear()` слоя здесь быть не должно —
+        // «прямого доступа к сцене, её объектам и материалам у источника MUST
+        // NOT быть» (RDBG-3).
+        surface = reachableNames(out);
+      },
+    });
+    layer.setEnabled('x.surface', true);
+    layer.frame(frameState(null));
+    expect(surface).toEqual(PRIMITIVES);
+  });
+
+  it('единственный вход пробы — состояние кадра: сцены в нём нет', () => {
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()), {
+      scene: new THREE.Scene(),
+    });
+    let fields: string[] = [];
+    layer.register<DebugProbe>({
+      id: 'x.state',
+      probe: (state) => {
+        fields = reachableNames(state);
+        return {};
+      },
+    });
+    layer.setEnabled('x.state', true);
+    layer.frame(frameState(null));
+    expect(fields).toEqual(['alpha', 'dtSeconds', 'realDtSeconds', 'view']);
+  });
+
   it('источник сцены не видит: наложение появляется объектами слоя', () => {
     const scene = new THREE.Scene();
     const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()), { scene });
-    let sceneSeen = false;
     layer.register<DebugProbe>({
       id: 'x.primitives',
-      probe: (state) => {
-        // Единственный вход источника — состояние кадра; сцены в нём нет.
-        sceneSeen = 'scene' in (state as unknown as Record<string, unknown>);
-        return {};
-      },
+      probe: () => ({}),
       draw: (_probe, out) => {
         out.box(
           {
@@ -443,7 +545,6 @@ describe('RDBG-3: рисует рендер, источник приносит �
     });
     layer.setEnabled('x.primitives', true);
     layer.frame(frameState(null));
-    expect(sceneSeen).toBe(false);
     // Коробка — 12 рёбер по два конца.
     expect(layer.vertexCount).toBeGreaterThan(24);
     expect(scene.children).toHaveLength(1);
@@ -456,9 +557,27 @@ describe('RDBG-3: рисует рендер, источник приносит �
     const grid = flatGrid(4);
     const surface = new VisualSurfaceSource(grid);
     stage.register(new TerrainSubsystem(grid, { surface }));
+    // Не только ТОТ ЖЕ материал, но и с теми же настройками: подмена ловится
+    // тождеством, а правка на месте — снимком свойств, которыми материал красит
+    // кадр (RDBG-5).
+    const describeMaterial = (child: THREE.Object3D): string => {
+      const material = (child as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+      if (material === undefined) return 'нет материала';
+      return JSON.stringify({
+        color: material.color.getHex(),
+        opacity: material.opacity,
+        transparent: material.transparent,
+        visible: material.visible,
+        depthTest: material.depthTest,
+        depthWrite: material.depthWrite,
+        wireframe: material.wireframe,
+      });
+    };
     const before = scene.children.map((child) => ({
       uuid: child.uuid,
       material: (child as THREE.Mesh).material,
+      look: describeMaterial(child),
+      visible: child.visible,
     }));
     const layer = new RenderDebugLayer(stage, { scene, surface });
     layer.setEnabled('terrain.surface', true);
@@ -470,6 +589,8 @@ describe('RDBG-3: рисует рендер, источник приносит �
       const still = scene.getObjectByProperty('uuid', child.uuid);
       expect(still).toBeDefined();
       expect((still as THREE.Mesh).material).toBe(child.material);
+      expect(describeMaterial(still!)).toBe(child.look);
+      expect(still!.visible).toBe(child.visible);
     }
     expect(scene.children.length).toBe(before.length + 1);
   });
@@ -573,6 +694,36 @@ describe('RDBG-8: отладка невидима счётчикам стоим�
     expect(section.noData).toBeUndefined();
     expect(section.sink).toBe('own');
     layer.setEnabled('cost.counters', false);
+  });
+
+  it('выключение посреди чужого замера не отбирает у него сток и не оставляет своего', () => {
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    layer.register(costCountersDebugSource());
+    // Источник включён ВНЕ замера: сток его собственный.
+    layer.setEnabled('cost.counters', true);
+    const own = costSink();
+    expect(own).toBeDefined();
+
+    const measured = createCostCounters();
+    withCostSink(measured, () => {
+      expect(costSink()).toBe(measured);
+      // Галочку сняли посреди измерения: сток замера обязан остаться на месте —
+      // отобранный, он оставил бы замер без счётчиков на полпути.
+      layer.setEnabled('cost.counters', false);
+      expect(costSink()).toBe(measured);
+      measured.frameCalls += 3;
+    });
+    // Замер кончился — и ничего отладочного не осталось подключённым: сток, от
+    // которого владелец отказался, обратно не встаёт (RDBG-4, RDBG-8).
+    expect(costSink()).toBeUndefined();
+    expect(measured.frameCalls).toBe(3);
+
+    // Реестр после этого в рабочем состоянии: включение снова берёт пустое
+    // место, выключение снова его отпускает.
+    layer.setEnabled('cost.counters', true);
+    expect(costSink()).toBeDefined();
+    layer.setEnabled('cost.counters', false);
+    expect(costSink()).toBeUndefined();
   });
 
   it('счётчики матча с включёнными источниками и без них совпадают побитово', () => {

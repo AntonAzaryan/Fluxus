@@ -62,6 +62,18 @@ const IDLE_STATE: DebugFrameState = {
   realDtSeconds: 0,
 };
 
+/**
+ * Мутабельный близнец состояния кадра. Своя точка у сцены (REND-27) зовётся
+ * каждый кадр, и объектный литерал в аргументе был бы аллокацией на кадр
+ * (RDBG-4, REND-26) — поля переписываются, объект живёт.
+ */
+interface MutableFrameState {
+  view: TickView | null;
+  alpha: number;
+  dtSeconds: number;
+  realDtSeconds: number;
+}
+
 interface Entry {
   readonly source: DebugSource;
   enabled: boolean;
@@ -74,9 +86,16 @@ export class RenderDebugLayer {
   private readonly byId = new Map<string, Entry>();
   private readonly painter: DebugPainter;
   private state: DebugFrameState = IDLE_STATE;
+  /** Состояние кадра своей точки у сцены: переиспользуется между кадрами. */
+  private readonly hookState: MutableFrameState = {
+    view: null,
+    alpha: 0,
+    dtSeconds: 0,
+    realDtSeconds: 0,
+  };
   /** Последнее доставленное состояние сцены; null — доставок не было. */
   private delivered: TickView | null = null;
-  private enabledCount = 0;
+  private activeCount = 0;
   private fps = 0;
   /** Кадров слоя с включённой отладкой — по нему видно, что слой живой. */
   private frames = 0;
@@ -97,12 +116,16 @@ export class RenderDebugLayer {
         this.delivered = view;
       },
       frame: (dt, alpha, realDt) => {
-        this.frame({
-          view: this.delivered,
-          alpha,
-          dtSeconds: dt,
-          realDtSeconds: realDt,
-        });
+        // Выключенная отладка стоит РОВНО ОДНОГО СРАВНЕНИЯ (RDBG-4): до сборки
+        // состояния кадра дело не доходит — ни объекта, ни записи полей. Тот же
+        // смысл, в каком инертен неподключённый сток счётчиков (PERF-3).
+        if (this.activeCount === 0) return;
+        const state = this.hookState;
+        state.view = this.delivered;
+        state.alpha = alpha;
+        state.dtSeconds = dt;
+        state.realDtSeconds = realDt;
+        this.frame(state);
       },
     });
   }
@@ -118,9 +141,22 @@ export class RenderDebugLayer {
     }));
   }
 
-  /** Включённые источники в порядке регистрации — состав секций дампа (RDBG-7). */
+  /**
+   * Включённые источники в порядке регистрации — состав секций дампа (RDBG-7).
+   * Массив здесь строится, поэтому спрашивать его покадрово нельзя: «включена
+   * ли отладка вообще» отвечает `enabledCount` (RDBG-4).
+   */
   get enabled(): readonly string[] {
     return this.entries.filter((entry) => entry.enabled).map((entry) => entry.source.id);
+  }
+
+  /**
+   * Сколько источников включено. Дешёвый ответ на вопрос «работает ли отладка»:
+   * встраивающей сборке он нужен каждый кадр, и материализовать ради него
+   * перечень `enabled` значило бы платить за выключенную отладку (RDBG-4).
+   */
+  get enabledCount(): number {
+    return this.activeCount;
   }
 
   /** Сценовых объектов слоя; 0 — кадр тот же, что без слоя вовсе (RDBG-4). */
@@ -187,9 +223,9 @@ export class RenderDebugLayer {
     if (entry === undefined) return false;
     if (entry.enabled === enabled) return true;
     entry.enabled = enabled;
-    this.enabledCount += enabled ? 1 : -1;
+    this.activeCount += enabled ? 1 : -1;
     entry.source.toggle?.(enabled);
-    if (this.enabledCount === 0) this.painter.clear();
+    if (this.activeCount === 0) this.painter.clear();
     return true;
   }
 
@@ -199,7 +235,7 @@ export class RenderDebugLayer {
    * не трогает вовсе (RDBG-8).
    */
   frame(state: DebugFrameState): void {
-    if (this.enabledCount === 0) return;
+    if (this.activeCount === 0) return;
     this.state = state;
     this.frames += 1;
     const seconds = state.realDtSeconds;
@@ -213,7 +249,9 @@ export class RenderDebugLayer {
       const probe = entry.source.probe(state);
       if (probe.noData !== undefined) continue;
       this.painter.owner(entry.source.id);
-      entry.source.draw?.(probe, this.painter);
+      // Источнику отдаётся СЛОВАРЬ примитивов, а не painter: жизненный цикл
+      // набора и сцена — дело слоя, и в руки источника они не попадают (RDBG-3).
+      entry.source.draw?.(probe, this.painter.primitives);
     }
     this.painter.commit();
   }
@@ -275,8 +313,12 @@ export class RenderDebugLayer {
   }
 }
 
-/** Владелец `id` — часть до первой точки (`fog.mask` → `fog`). */
-export function ownerOf(id: string): string {
+/**
+ * Владелец `id` — часть до первой точки (`fog.mask` → `fog`). Наружу пакета не
+ * выдаётся: панели встраивающего приложения владелец приезжает готовым полем
+ * `DebugSourceInfo.owner`, и второго способа его посчитать не заводится.
+ */
+function ownerOf(id: string): string {
   const at = id.indexOf('.');
   return at <= 0 ? '' : id.slice(0, at);
 }

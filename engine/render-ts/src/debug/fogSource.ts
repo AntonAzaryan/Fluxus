@@ -31,7 +31,7 @@ import {
 /** Тон плашки маски: свет виден яркостью текселя, тон — принадлежностью слою. */
 const MASK_COLOR: DebugColor = 0xffe0a0;
 /** Подъём плашки над самой высокой площадкой арены, мировые единицы. */
-export const MASK_PLANE_LIFT = 0.5;
+const MASK_PLANE_LIFT = 0.5;
 
 export interface DebugFogProbe extends DebugProbe {
   /** Действующее разрешение маски, текселей на мировую единицу (FOW-10). */

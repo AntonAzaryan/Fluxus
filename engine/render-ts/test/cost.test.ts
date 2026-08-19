@@ -37,6 +37,7 @@ import {
   createCostCounters,
   fogRectOf,
   fogSegmentsOf,
+  releaseCostSink,
   withCostSink,
   type EntityView,
   type PresentationProducer,
@@ -233,6 +234,36 @@ describe('PERF-3: сток счётчиков стоимости — инерт�
     expect(costSink()).toBe(counters);
     expect(attachCostSink(previous)).toBe(counters);
     expect(costSink()).toBeUndefined();
+  });
+
+  it('отпущенный долгоживущий сток не воскресает восстановлением чужого замера', () => {
+    const longLived = createCostCounters();
+    attachCostSink(longLived);
+    const measured = createCostCounters();
+    withCostSink(measured, () => {
+      // Владелец отказался от своего стока посреди чужого замера: отбирать сток
+      // у замера нельзя — он считает.
+      releaseCostSink(longLived);
+      expect(costSink()).toBe(measured);
+    });
+    // А по концу замера на его место встаёт пустота, а не отпущенный сток.
+    expect(costSink()).toBeUndefined();
+  });
+
+  it('отпуск своего стока, пока он подключён, снимает его сразу', () => {
+    const longLived = createCostCounters();
+    attachCostSink(longLived);
+    expect(costSink()).toBe(longLived);
+    releaseCostSink(longLived);
+    expect(costSink()).toBeUndefined();
+    // Пометки на нём после этого не осталось: следующий замер живёт как обычно.
+    const measured = createCostCounters();
+    attachCostSink(longLived);
+    withCostSink(measured, () => {
+      expect(costSink()).toBe(measured);
+    });
+    expect(costSink()).toBe(longLived);
+    releaseCostSink(longLived);
   });
 
   it('одна и та же нагрузка даёт побитово те же счётчики (PERF-3)', () => {
