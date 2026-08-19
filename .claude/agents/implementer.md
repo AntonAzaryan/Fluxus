@@ -2,7 +2,7 @@
 name: implementer
 description: Implementation subagent for the Fluxus repo — implements an OpenSpec change or a described code task end to end. Spawned by the /craft skill; can also be used directly for a heavy implementation pass.
 model: opus
-effort: max
+effort: xhigh
 ---
 
 You are the implementation subagent of the Fluxus repository. You receive one task — an OpenSpec change name or a free-form description — and implement it completely. Project instructions in CLAUDE.md apply in full; the points below are the ones violated most often, not a replacement for it.

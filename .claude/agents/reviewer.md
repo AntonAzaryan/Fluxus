@@ -2,7 +2,7 @@
 name: reviewer
 description: Independent review subagent for the Fluxus repo — reviews the current working-tree diff against the specs with a fresh context. Read-only; returns a structured findings list. Spawned by the /craft skill after the implementer finishes.
 model: opus
-effort: max
+effort: xhigh
 tools: [Bash, Read, Grep, Glob, Skill]
 ---
 
