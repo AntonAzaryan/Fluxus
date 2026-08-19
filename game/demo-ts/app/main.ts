@@ -80,7 +80,6 @@ import {
   type InputSource,
 } from '@game-mvp/client';
 import {
-  ABILITY_SLOTS,
   ACTION_BITS,
   PREVIEW_SLOTS,
   RESPAWN_EVENT,
@@ -425,15 +424,6 @@ let frameAim: number | null = null;
 let frameTarget: AimPoint | null = null;
 
 /**
- * Последний НЕПУСТОЙ прицел кадра. Луч мимо плоскости пола (курсор ушёл в небо
- * над кромкой арены) даёт `frameAim === null`, и фигура, гаснущая по нему,
- * исчезала бы на ровном месте — притом что заряд в это время продолжает идти к
- * взрыву в кастере. Держать последнее направление — то же правило, по которому
- * сэмплер держит последний `aimDir` молчащего источника (INP-5).
- */
-let lastAim: number | null = null;
-
-/**
  * Прицел под курсором как НЕПРЕРЫВНЫЙ источник (INP-1): `KeyboardMouseSource`
  * владеет прицелом только в момент клика, а способностям с удержанием (захват
  * снаряда, заряд каста) направление нужно на каждом тике удержания — иначе
@@ -497,15 +487,6 @@ sampler.add(pointerAimSource);
 // способностей. Сборке остаётся ровно три шва: каталог определений в
 // конструктор, имена статов слотов (`extractor.ts`) и покадровый локальный
 // сэмпл ввода — тот же, что уезжает в тик.
-
-/**
- * Визуальная поверхность кадра (REND-9) — общая с подсистемами террейна,
- * моделей и эффектов; появляется вместе с сеткой в `onReady`. Контур превью
- * садится на НЕЁ, а не на `pose.z` инстанса: в прыжке и уклоне поза поднята
- * дугой манёвра (REND-12), а фигура шага — плоская фигура на полу, и повторять
- * за дугой ей нечего.
- */
-let visualSurface: VisualSurfaceSource | null = null;
 
 /**
  * Подсистема превью каста: регистрируется в `onReady` вместе с остальными —
@@ -710,7 +691,6 @@ function sampleFrameInput(): void {
   const resolved = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
   frameAim = resolved === null ? null : resolved.angle;
   frameTarget = resolved;
-  if (frameAim !== null) lastAim = frameAim;
 
   // Отложенное кадрирование миникарты — когда камера уже не follow (см. panTo).
   if (pendingPan !== null && rig !== null && rig.mode !== 'follow') {
@@ -1132,9 +1112,6 @@ async function main(): Promise<void> {
           ? { curvatureMapId: manifest.terrain.curvatureMap }
           : {}),
       });
-      // Та же поверхность — превью каста: фигура шага плоская и садится на
-      // пол, а не на дугу манёвра инстанса.
-      visualSurface = surface;
       // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
       remote!.register(new TerrainSubsystem(grid, { surface }));
       // Перёд модели больше не параметр сборки: он описан в записи манифеста

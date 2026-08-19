@@ -409,21 +409,6 @@ function chargeB(a: Arena, held: number, aimDir = AIM_WEST): void {
 }
 
 /**
- * Захват: нажатие открывает фазу подтверждения, подтверждение выбирает цель
- * шага и исполняет эффекты (ABIL-5). Прежний «спад R» ушёл вместе с рукописной
- * системой; конус остался фигурой шага, а сектор — предикатом `filter`.
- */
-function captureA(a: Arena, aimDir = AIM_EAST): void {
-  a.step({ buttons: CAPTURE, aimDir });
-  a.step({ buttons: CONFIRM, aimDir });
-}
-
-function captureB(a: Arena, aimDir = AIM_WEST): void {
-  a.step(NEUTRAL, { buttons: CAPTURE, aimDir });
-  a.step(NEUTRAL, { buttons: CONFIRM, aimDir });
-}
-
-/**
  * Сущность-слот способности героя по её номеру (ABIL-1). Остаток кулдауна живёт
  * на слоте отдельным компонентом, а не полем героя, поэтому «сколько осталось»
  * спрашивается у него.
@@ -1212,8 +1197,6 @@ describe('захват снаряда: удержание, переброс и �
  * приходится объяснять, почему купол стал жить втрое дольше.
  */
 describe('числа способностей: ретюн виден в диффе', () => {
-  const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
-
   it('перезарядки: каст 1.5 с, купол 5 с, захват 2 с', () => {
     // Кулдаун — поле определения (ABIL-7), а не поле god-компонента героя.
     expect(abilityDef('fireball').cooldownTicks).toBe(CAST_COOLDOWN);
@@ -1895,6 +1878,111 @@ describe('заряд каста: рост, выстрел и передержк�
     expect(cooldown(a.state, p1, ABILITY_SLOTS.cast)).toBe(0);
     a.step({ buttons: CAST });
     expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(true);
+  });
+
+  it('отмена рвёт каст и возвращает кулдаун (ABIL-6)', () => {
+    // Бит отмены — обычный бит маски, назначенный сценой (INP-4): определение
+    // называет его `cancelBit`, и умолчание источника `cancelInput` возвращает
+    // кулдаун (ABIL-6), поэтому передумавший игрок не платит ничего.
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    a.step({ buttons: CAST });
+    for (let i = 0; i < 10; i++) a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(true);
+
+    a.step({ buttons: CAST | CANCEL });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(false);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'ActionLock')).toBe(false);
+    expect(fireballs(a.state)).toHaveLength(0);
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.cast)).toBe(0);
+    // Источник прерывания различим полем слота — по нему `onCancel` и решает,
+    // взрывать заряд или просто убрать его (ABIL-1, ABIL-6).
+    const slot = slotOf(a.state, p1, ABILITY_SLOTS.cast);
+    expect(coreWorld.getField(a.state.world, slot, 'AbilitySlot', 'lastInterrupt')).toBe(2);
+
+    // И способность СРАЗУ доступна снова: возврат — это ноль, а не «почти ноль».
+    // Тик без битов нужен только затем, чтобы у каста был ФРОНТ (ABIL-3).
+    a.step(NEUTRAL);
+    a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(true);
+  });
+
+  it('смерть посреди заряда рвёт каст источником `death` и возвращает кулдаун', () => {
+    // Смерть распознаётся по маркеру, названному биндингом сцены (ABIL-8), и
+    // прерывает каст на общих основаниях: умолчание источника `death` —
+    // возврат кулдауна (ABIL-6), а `onCancel` фазы убирает то, что фаза успела
+    // поставить, — маркер заряда и лок манёвров.
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    a.step({ buttons: CAST });
+    for (let i = 0; i < 20; i++) a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(true);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'ActionLock')).toBe(true);
+
+    // `KillSwitch` (order 20) вешает маркер, а прерывание читает его в начале
+    // СЛЕДУЮЩЕГО тика: автомат каста стоит на −790.
+    a.step({ buttons: CAST | KILL });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Dead')).toBe(true);
+    a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(false);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'ActionLock')).toBe(false);
+    expect(fireballs(a.state)).toHaveLength(0);
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.cast)).toBe(0);
+
+    const slot = slotOf(a.state, p1, ABILITY_SLOTS.cast);
+    // Код источника нормативен и следует порядку словаря ABIL-6: `death` пятый.
+    expect(coreWorld.getField(a.state.world, slot, 'AbilitySlot', 'lastInterrupt')).toBe(5);
+    // Слот при этом ЖИВ: смерть владельца сиротством не является, и способности
+    // герой не теряет (design Decision 14).
+    expect(coreWorld.isAlive(a.state.world, slot)).toBe(true);
+  });
+
+  it('лок с маской определения рвёт каст источником `disable`', () => {
+    // Стана в демо сегодня нет: единственный лок сцены — бит 0, которым каст
+    // запирает манёвры сам себе, и пересечения с маской `disable` (бит 1) у
+    // него нет. Источник от этого не перестаёт быть объявленным, и проверить
+    // его можно ровно так, как его увидит первая же сцена со станом: сценой,
+    // где лок этот бит поднимает.
+    const stunner = {
+      name: 'Stun',
+      order: 25,
+      query: { all: ['Charging', 'Player'] },
+      as: 'e',
+      do: [
+        {
+          if: {
+            cond: { '>=': [{ getComponent: [{ var: 'e' }, 'Charging', 'ticks'] }, 0] },
+            then: [
+              {
+                addComponent: {
+                  entity: { var: 'e' },
+                  component: 'ActionLock',
+                  values: { mask: 3 },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const retuned = {
+      ...SCENE,
+      systems: [...SCENE.systems!, stunner],
+    } as unknown as SceneDef;
+
+    const a = arena(8, retuned);
+    const p1 = a.heroes[0]!;
+    a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(true);
+    // Лок встал на order 25 этого же тика; прерывание читает его на −790
+    // следующего.
+    a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(false);
+    expect(fireballs(a.state)).toHaveLength(0);
+    // Умолчание `disable` — кулдаун ЦЕЛИКОМ: способность потрачена (ABIL-6).
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.cast)).toBe(CAST_COOLDOWN - 1);
+    const slot = slotOf(a.state, p1, ABILITY_SLOTS.cast);
+    expect(coreWorld.getField(a.state.world, slot, 'AbilitySlot', 'lastInterrupt')).toBe(4);
   });
 
   it('передержка на 300 мс сверх максимума рвёт заряд в самом кастере', () => {

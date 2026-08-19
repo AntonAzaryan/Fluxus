@@ -11,7 +11,6 @@
  * движка, которому в JSON не место (TICK-4, DI-3).
  */
 import {
-  FIXED_ONE,
   InputSystem,
   LocomotionSystem,
   PhysicsSystem,
