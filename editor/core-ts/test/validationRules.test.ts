@@ -144,6 +144,48 @@ describe('ED-1: правило ядра применяется вызовом я
   it('валидная сцена находок не даёт', () => {
     expect(check({ [SCENE]: { kind: 'scene', value: SCENE_VALUE } }).ok).toBe(true);
   });
+
+  /**
+   * Платформа способностей (ABIL-10) проверяется тем же вызовом и тем же
+   * правилом: редактор понимает новый блок конфига ровно тогда, когда его
+   * понимает ядро, и второй реализации проверок у него не появляется (ED-1,
+   * ED-29, CORE-3).
+   */
+  it('битое определение способности подсвечено тем же вызовом loadScene (ABIL-10)', () => {
+    const broken = {
+      ...SCENE_VALUE,
+      abilities: [
+        {
+          id: 'bolt',
+          trigger: { input: { bit: 0 } },
+          effects: [{ emitEvnet: { type: 'Cast' } }],
+        },
+      ],
+    };
+    const report = check({ [SCENE]: { kind: 'scene', value: broken } });
+    const issue = report.forDocument(SCENE).find((found) => found.ruleId === SCENE_RULE)!;
+    expect(issue.expected).toEqual({
+      kind: 'accepted',
+      by: LOAD_SCENE,
+      detail: thrownBy(() => loadScene(broken as unknown as SceneDef)),
+    });
+    expect(detailOf(issue)).toContain('emitEvnet');
+  });
+
+  it('исправное определение способности сцену не гасит', () => {
+    const withAbility = {
+      ...SCENE_VALUE,
+      abilities: [
+        {
+          id: 'bolt',
+          trigger: { input: { bit: 0 } },
+          cooldownTicks: 60,
+          effects: [{ emitEvent: { type: 'Cast', data: { slot: { var: 'self' } } } }],
+        },
+      ],
+    };
+    expect(check({ [SCENE]: { kind: 'scene', value: withAbility } }).ok).toBe(true);
+  });
 });
 
 describe('ED-10: ассет террейна проверяет createTerrainGrid', () => {

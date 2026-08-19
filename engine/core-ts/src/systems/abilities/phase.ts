@@ -388,6 +388,7 @@ export class CastPhaseSystem implements System {
     if (phase !== undefined) this.execList(ctx, phase.onExit, slot, owner, ability, ticks, event);
     this.execList(ctx, ability.effects, slot, owner, ability, ticks, event);
     this.scope.bind(ctx, slot, owner);
+    this.scope.vars.phaseTicks = ticks;
     const total = cooldownTicksOf(ctx, ability, this.scope.vars);
     setCooldown(ctx, slot, total, total);
     const set = (field: string, value: number): void => {
