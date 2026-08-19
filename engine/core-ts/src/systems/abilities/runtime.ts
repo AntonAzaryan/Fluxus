@@ -11,12 +11,14 @@
  * пишется командами.
  */
 import { distSqCompare, distSqLe } from '../../math/fixed.js';
+import { indexOf as rawIndexOf } from '../../ecs/entityIndex.js';
 import { evaluate, typeError, type Expression, type ExprValue } from '../../dsl/expr.js';
 import { isVisibleTo, VISIBILITY_COMPONENT } from '../visibility.js';
 import {
   ABILITY_COOLDOWN_COMPONENT,
   ABILITY_SLOT_COMPONENT,
   ABILITY_STEPS,
+  BUFF_INSTANCE_COMPONENT,
   stepFieldEntity,
   stepFieldX,
   stepFieldY,
@@ -30,6 +32,7 @@ import {
   STEP_UNIT,
   type AbilityCatalog,
   type CompiledAbility,
+  type CompiledBuff,
 } from './model.js';
 import {
   NO_ENTITY,
@@ -54,9 +57,18 @@ interface MutableVec2 {
  * забывшую `toInt`.
  */
 export function ticksOf(value: ExprValue, where: string): number {
+  return intOf(value, where, 'число тиков');
+}
+
+/**
+ * Счётное значение определения: сырое целое, а не Q16.16, и не дробь. Тем же
+ * правилом и по той же причине, что число тиков: молчаливое усечение спрятало
+ * бы формулу, забывшую `toInt`.
+ */
+export function intOf(value: ExprValue, where: string, what = 'счётное значение'): number {
   if (typeof value !== 'number') throw typeError(where, 'number', value);
   if (!Number.isInteger(value)) {
-    throw new Error(`${where}: число тиков — сырое целое, получено ${value}`);
+    throw new Error(`${where}: ${what} — сырое целое, получено ${value}`);
   }
   return value;
 }
@@ -236,6 +248,80 @@ export class SlotScope {
       this.vars[`unit${i}`] = get(stepFieldEntity(i));
     }
   }
+}
+
+// ------------------------------------------------------------------- баффы
+
+/**
+ * Имена, предсвязанные во всех списках действий баффа (design Decision 2):
+ * инстанс, его цель, его источник и число стаков. Больше платформа не обещает
+ * ничего: полезные величины баффа — обычные поля его инстанса, и читаются они
+ * обычным `getComponent`, включая признак снятия, по которому `onExpire`
+ * различает «истёк сам» и «рассеян» (BUFF-6).
+ */
+export const BUFF_BOUND_NAMES: readonly string[] = ['self', 'target', 'source', 'stacks'];
+
+/**
+ * Переиспользуемая область видимости списка действий инстанса — один экземпляр
+ * на систему, значения перезаписываются перед каждым исполнением (ABIL-10).
+ */
+export class BuffScope {
+  readonly vars: ExprVarsRecord = {};
+
+  constructor() {
+    for (const name of BUFF_BOUND_NAMES) this.vars[name] = 0;
+  }
+
+  bind(instance: EntityId, target: EntityId, source: EntityId, stacks: number): void {
+    this.vars.self = instance;
+    this.vars.target = target;
+    this.vars.source = source;
+    this.vars.stacks = stacks;
+  }
+}
+
+/**
+ * Определение инстанса по индексу в таблице сцены (BUFF-1). Ссылка мимо
+ * таблицы — жёсткая ошибка того же класса, что у слота способности.
+ */
+export function buffOf(
+  catalog: AbilityCatalog,
+  ctx: SystemContext,
+  instance: EntityId,
+): CompiledBuff {
+  const index = ctx.get(instance, BUFF_INSTANCE_COMPONENT, 'buffId');
+  const buff = catalog.buffs[index];
+  if (buff === undefined) {
+    throw new Error(
+      `инстанс ${instance} ссылается на определение баффа ${index}, в таблице их ${catalog.buffs.length}`,
+    );
+  }
+  return buff;
+}
+
+/**
+ * Поле инстанса с учётом уже поставленных команд буфера (CMD-5). Мир до flush
+ * команд не видит, а сведение стакинга и убывание остатка случаются в одном
+ * тике и в одной системе: без чтения буфера продление, записанное сведением,
+ * затёрлось бы убыванием, посчитанным от досведённого значения.
+ */
+export function buffField(ctx: SystemContext, instance: EntityId, field: string): number {
+  return (
+    ctx.commands.peekField(instance, BUFF_INSTANCE_COMPONENT, field) ??
+    ctx.get(instance, BUFF_INSTANCE_COMPONENT, field)
+  );
+}
+
+/**
+ * Идентификатор источника-модификатора инстанса (BUFF-4, design Decision 7):
+ * индекс сущности плюс единица. Индекс уникален среди живых сущностей,
+ * помещается в `i32` (полный `EntityId` 48-битный и в слот `id{N}` не влез бы,
+ * ID-1) и после сдвига не равен нулю, который TIME-7 запрещает. Формул вида
+ * «id определения × страйд + слот игрока» платформа не заводит: страйд — второй
+ * предел, о который однажды ударятся.
+ */
+export function modifierIdOf(instance: EntityId): number {
+  return rawIndexOf(instance) + 1;
 }
 
 // --------------------------------------------------- шаги прицеливания (ABIL-5)

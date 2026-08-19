@@ -55,6 +55,24 @@ export const COOLDOWN_FULL = 2;
 export const STAGED_RESET = 0;
 export const STAGED_KEEP = 1;
 
+/**
+ * Класс баффа (BUFF-2). Значения НОРМАТИВНЫ и следуют порядку закрытого набора,
+ * начиная с единицы: по этому полю отбирает контент на рассеивании (BUFF-6), и
+ * значение, выбранное реализацией, развело бы два ядра при одном и том же
+ * документе сцены (CLI-6). Ноль — «класса ещё нет» (`NO_BUFF_CLASS`).
+ */
+export const BUFF_POSITIVE = 1;
+export const BUFF_NEGATIVE = 2;
+
+/**
+ * Политика стакинга (BUFF-3). Коды внутренние: наружу политика адресуется
+ * именем из закрытого набора, а в мире её не лежит вовсе — она свойство
+ * определения, а не инстанса.
+ */
+export const STACKING_REFRESH = 0;
+export const STACKING_STACK = 1;
+export const STACKING_INDEPENDENT = 2;
+
 // -------------------------------------------- формат конфига сцены (SER-7)
 
 /**
@@ -154,6 +172,50 @@ export interface AbilityDef {
   readonly duration?: AbilityDurationDef;
 }
 
+// ------------------------------------------- определение баффа (BUFF-2)
+
+/**
+ * Статовая правка (BUFF-4): «список источников — значение-выражение».
+ * Постановку и снятие выполняет существующий механизм слотов-модификаторов
+ * (TIME-7, TIME-8), а не собственное хранилище платформы.
+ */
+export interface BuffStatModDef {
+  /** Имя компонента-списка источников: `TimeScaleModifiers`, `VisionModifiers`. */
+  readonly component: string;
+  /** Множитель слота, Q16.16; нейтральное значение свободного слота — `FIXED_ONE`. */
+  readonly value: Expression;
+}
+
+/** Периодика (BUFF-5): период в тиках и список действий. */
+export interface BuffPeriodicDef {
+  /** Число тиков — сырое целое (EXPR-2), а не Q16.16. */
+  readonly everyTicks: Expression;
+  readonly do: readonly Action[];
+}
+
+/** Реакция на событие шины текущего тика (BUFF-5, EVT-2). */
+export interface BuffTriggerDef {
+  readonly type: string;
+  /** Имя, которым событие связано в списке действий; по умолчанию `event`. */
+  readonly as?: string;
+  readonly do: readonly Action[];
+}
+
+export interface BuffDef {
+  /** Человеко-читаемое имя для авторинга; в мире определение адресует индекс (BUFF-1). */
+  readonly id: string;
+  readonly class: 'positive' | 'negative';
+  /** Отсутствие поля либо неположительное значение — постоянный бафф (BUFF-2, BUFF-6). */
+  readonly durationTicks?: Expression;
+  readonly stacking?: 'refresh' | 'stack' | 'independent';
+  /** Потолок стаков; обязателен при политике `stack` (BUFF-3). */
+  readonly maxStacks?: Expression;
+  readonly statMods?: readonly BuffStatModDef[];
+  readonly periodic?: BuffPeriodicDef;
+  readonly triggers?: readonly BuffTriggerDef[];
+  readonly onExpire?: readonly Action[];
+}
+
 /**
  * Биндинги сцены (ABIL-8): то, что понятия игрока, здоровья, урона, команды и
  * смерти значат в конкретной сцене. Каждый необязателен, и его отсутствие
@@ -187,6 +249,8 @@ export interface AbilityRuntimeDef {
  */
 export interface AbilityCatalogDef {
   readonly abilities?: readonly AbilityDef[];
+  /** Таблица определений баффов (BUFF-2); от `abilities` независима (SER-7). */
+  readonly buffs?: readonly BuffDef[];
   readonly abilityRuntime?: AbilityRuntimeDef;
   readonly systems?: readonly SystemDef[];
 }
@@ -261,6 +325,42 @@ export interface CompiledAbility {
   readonly onExpire: readonly Action[];
 }
 
+/** Статовая правка в скомпилированном виде (BUFF-4). */
+export interface CompiledStatMod {
+  readonly component: string;
+  readonly value: Expression;
+}
+
+/** Реакция на событие в скомпилированном виде (BUFF-5). */
+export interface CompiledBuffTrigger {
+  readonly type: string;
+  readonly as: string;
+  readonly actions: readonly Action[];
+}
+
+/**
+ * Определение баффа во внутреннем представлении (BUFF-2). Раскладка та же, что
+ * у способности, и по той же причине: коды видов числами, списки — срезами
+ * общих массивов, списки действий уже провалидированными деревьями (ABIL-10).
+ */
+export interface CompiledBuff {
+  readonly id: string;
+  /** Код класса (BUFF-2); имя поля не `class` — оно занято ключевым словом. */
+  readonly klass: number;
+  readonly durationTicks: Expression | undefined;
+  readonly stacking: number;
+  /** Потолок стаков; есть ровно при политике `stack`. */
+  readonly maxStacks: Expression | undefined;
+  readonly statStart: number;
+  readonly statCount: number;
+  /** Период; есть ровно тогда, когда объявлен блок периодики. */
+  readonly everyTicks: Expression | undefined;
+  readonly periodic: readonly Action[];
+  readonly triggerStart: number;
+  readonly triggerCount: number;
+  readonly onExpire: readonly Action[];
+}
+
 /**
  * Биндинги сцены, разрешённые по миру: имена уже сверены с составом
  * компонентов, а флаги отвечают на вопросы, которые иначе задавались бы на
@@ -294,6 +394,11 @@ export interface AbilityCatalog {
   readonly outcomes: readonly CompiledOutcome[];
   /** `id` определения → его индекс: авторинг и диагностика, не горячий путь. */
   readonly index: ReadonlyMap<string, number>;
+  /** Таблица определений баффов — та же таблица сцены, тот же разбор (BUFF-2). */
+  readonly buffs: readonly CompiledBuff[];
+  readonly statMods: readonly CompiledStatMod[];
+  readonly buffTriggers: readonly CompiledBuffTrigger[];
+  readonly buffIndex: ReadonlyMap<string, number>;
   readonly bindings: CompiledBindings;
 }
 

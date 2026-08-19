@@ -22,6 +22,7 @@ export const ABILITY_SLOT_COMPONENT = 'AbilitySlot';
 export const ABILITY_COOLDOWN_COMPONENT = 'AbilityCooldown';
 export const ABILITY_PROJECTILE_COMPONENT = 'AbilityProjectile';
 export const ABILITY_DURATION_COMPONENT = 'AbilityDuration';
+export const BUFF_INSTANCE_COMPONENT = 'BuffInstance';
 
 /**
  * Число шагов прицеливания (ABIL-1). Именованная константа платформы и часть
@@ -37,6 +38,19 @@ export const NO_PHASE = -1;
 
 /** Значение поля `lastInterrupt` — «прерывания не было» (ABIL-6). */
 export const NO_INTERRUPT = 0;
+
+/**
+ * Значение поля `class` инстанса баффа, означающее «платформа этот инстанс ещё
+ * не накладывала» (BUFF-1, BUFF-2). Нормативные коды класса начинаются с
+ * единицы, поэтому ноль свободен под то же, подо что он свободен у
+ * `lastInterrupt`, — «величины ещё нет».
+ *
+ * Признак нужен потому, что спавн инстанса — обычное действие контента (BUFF-1),
+ * а длительность, класс и статовые правки берутся из ОПРЕДЕЛЕНИЯ (BUFF-2):
+ * заполняет их платформа на тике наложения, и отличить свежий инстанс от
+ * действующего она обязана по полю мира, а не по структуре вне его (ABIL-1).
+ */
+export const NO_BUFF_CLASS = 0;
 
 /**
  * Имена полей шага по правилу имён нумерованных полей (SER-6): при трёх шагах
@@ -126,6 +140,34 @@ export const ABILITY_DURATION_SCHEMA: ComponentSchema = {
 };
 
 /**
+ * Инстанс баффа (BUFF-1): бафф, действующий на сущность, — отдельная сущность
+ * мира, а её выдача — обычный спавн (ABIL-11, новых имён действий платформа не
+ * вводит). Поля только числовые (ECS-3), и класс лежит копией определения
+ * намеренно: определения из выражений не читаются, а рассеивание по классу,
+ * подсветка в HUD и предикаты контента обязаны отбирать инстансы обычным
+ * запросом по полю (BUFF-1, BUFF-6).
+ *
+ * `remaining` ≤ 0 означает постоянный бафф (BUFF-6): он не истекает сам и
+ * снимается только признаком снятия — тем же значением «предела нет», что у
+ * дальности снаряда, и по той же причине («без предела» и «предел исчерпан» не
+ * путаются).
+ */
+export const BUFF_INSTANCE_SCHEMA: ComponentSchema = {
+  name: BUFF_INSTANCE_COMPONENT,
+  fields: {
+    buffId: 'i32',
+    class: 'i32',
+    dispelled: 'i32',
+    periodicTicks: 'i32',
+    remaining: 'i32',
+    source: 'entity',
+    stacks: 'i32',
+    target: 'entity',
+  },
+  defaults: { class: NO_BUFF_CLASS, source: NO_ENTITY, target: NO_ENTITY },
+};
+
+/**
  * Компоненты платформы разом — загрузчику подключать их одним спредом.
  * Порядок внутри группы нормативен наравне с порядком групп (SER-7): он задаёт
  * битовые id, то есть представление масок в снапшоте.
@@ -136,3 +178,11 @@ export const ABILITY_COMPONENTS: readonly ComponentSchema[] = [
   ABILITY_PROJECTILE_SCHEMA,
   ABILITY_DURATION_SCHEMA,
 ];
+
+/**
+ * Компоненты платформы баффов — отдельной группой, потому что подключает их
+ * отдельное поле конфига: сцена вправе объявить `buffs` без `abilities`
+ * (SER-7), и бафф накладывается обычным списком действий, способностей не
+ * требуя (BUFF-1). В нормированном порядке групп эта идёт последней.
+ */
+export const BUFF_COMPONENTS: readonly ComponentSchema[] = [BUFF_INSTANCE_SCHEMA];

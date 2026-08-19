@@ -15,6 +15,7 @@
  */
 import { SHAPE_AABB, SHAPE_CIRCLE } from '../physics.js';
 import { compileBindings } from './bindings.js';
+import { compileBuffs, emptyBuffBuffers } from './buffCatalog.js';
 import { ABILITY_STEPS } from './components.js';
 import {
   defaultOutcome,
@@ -134,12 +135,22 @@ export function compileAbilityCatalog(def: AbilityCatalogDef, world: WorldState)
     abilities.push(compileAbility(node, id, world, bindings, buffers));
   });
 
+  // Таблицы независимы (SER-7): сцена вправе объявить только `buffs`, только
+  // `abilities` либо обе. Разбор у них общий, а порядок здесь — порядок полей
+  // конфига, и на результат он не влияет: определения ничем не связаны.
+  const buffTable = emptyBuffBuffers();
+  compileBuffs(def.buffs, world, buffTable);
+
   return {
     abilities,
     phases: buffers.phases,
     steps: buffers.steps,
     outcomes: buffers.outcomes,
     index,
+    buffs: buffTable.buffs,
+    statMods: buffTable.statMods,
+    buffTriggers: buffTable.triggers,
+    buffIndex: buffTable.index,
     bindings,
   };
 }

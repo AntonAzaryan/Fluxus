@@ -18,6 +18,9 @@ import {
   abilityShape,
   abilityStep,
   abilityTrigger,
+  buffDef,
+  buffStatMod,
+  buffTrigger,
 } from './abilitySchemas.js';
 import { operators } from './expr.js';
 import { FIELD_TYPES } from '../types.js';
@@ -238,6 +241,11 @@ const scene: Json = {
       type: 'array',
       items: { $ref: '#/$defs/abilityDef' },
     },
+    buffs: {
+      $comment: 'Таблица определений баффов (BUFF-2): наличие дописывает компонент инстанса и регистрирует BuffSystem.',
+      type: 'array',
+      items: { $ref: '#/$defs/buffDef' },
+    },
     abilityRuntime: {
       $comment: 'Биндинги сцены для платформы способностей (ABIL-8).',
       $ref: '#/$defs/abilityRuntime',
@@ -365,6 +373,9 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
     abilityTrigger,
     action,
     arena,
+    buffDef,
+    buffStatMod,
+    buffTrigger,
     component,
     expression,
     prefab,
@@ -386,6 +397,9 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
     abilityTrigger,
     action,
     arena,
+    buffDef,
+    buffStatMod,
+    buffTrigger,
     component,
     expression,
     inputFrame,

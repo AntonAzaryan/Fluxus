@@ -33,7 +33,7 @@ import {
   INTERRUPT_TARGET_LOST,
   INTERRUPT_TIMEOUT,
 } from '../src/systems/abilities/interrupt.js';
-import type { AbilityDef } from '../src/systems/abilities/model.js';
+import type { AbilityDef, BuffDef } from '../src/systems/abilities/model.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, tick, type Simulation } from '../src/sim/tick.js';
 import { FIXED_ONE, type EntityId, type GameEvent, type InputFrame, type System, type SystemContext } from '../src/types.js';
@@ -731,6 +731,38 @@ describe('CastInterruptSystem: урон посреди каста (ABIL-6, DET-9
     const slot = giveSlot(h, hero);
     h.step(CAST);
     expect(h.slotField(slot, 'phase')).toBe(0);
+  });
+
+  it('событие баффа тоже видно: периодика на 820 успевает к прерыванию на 830', () => {
+    // Урон публикует не система сцены, а периодика баффа — то есть система
+    // платформы, стоящая на 820. Прерывание стоит позже неё намеренно (DET-9),
+    // и без этого порядка весь урон от баффов проходил бы мимо источника
+    // `damaged`.
+    const dot: BuffDef = {
+      id: 'dot',
+      class: 'negative',
+      periodic: {
+        everyTicks: 1,
+        do: [{ emitEvent: { type: 'Damage', data: { target: { var: 'target' }, amount: F(5) } } }],
+      },
+    };
+    const h = harness(
+      scene([fragile], {
+        prefabs: [...PREFABS, { name: 'Dot', components: { BuffInstance: {} } }],
+        buffs: [dot],
+      }),
+    );
+    const hero = h.place('Hero');
+    const slot = giveSlot(h, hero);
+    // Инстанс накладывается на первом тике, а периодика идёт со следующего.
+    h.place('Dot', { BuffInstance: { target: hero, buffId: 0 } });
+    h.step();
+    expect(h.slotField(slot, 'phase')).toBe(NO_PHASE);
+
+    const events = h.step(CAST);
+    expect(eventsOfType(events, 'Damage')).toHaveLength(1);
+    expect(eventsOfType(events, 'Cancelled')[0]?.data.src).toBe(INTERRUPT_DAMAGED);
+    expect(h.slotField(slot, 'phase')).toBe(NO_PHASE);
   });
 });
 

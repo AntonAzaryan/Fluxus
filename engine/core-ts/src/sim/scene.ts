@@ -30,15 +30,21 @@ import { fowComponents, VISION_MODIFIER_COMPONENT } from '../systems/visibility.
 import { TimeScaleSystem, timeComponents, TIME_SCALE_MODIFIERS_COMPONENT } from '../systems/time.js';
 import { TweenSystem, TWEEN_SCHEMA, type TweenDef } from '../systems/tween.js';
 import { modifierList, DEFAULT_MODIFIER_SLOTS } from '../systems/modifiers.js';
-import { ABILITY_COMPONENTS } from '../systems/abilities/components.js';
+import { ABILITY_COMPONENTS, BUFF_COMPONENTS } from '../systems/abilities/components.js';
 import { compileAbilityCatalog } from '../systems/abilities/catalog.js';
+import { BuffSystem } from '../systems/abilities/buffs.js';
 import { CastPhaseSystem } from '../systems/abilities/phase.js';
 import { TargetingCommitSystem } from '../systems/abilities/targeting.js';
 import { CastInterruptSystem } from '../systems/abilities/interrupt.js';
 import { CooldownSystem } from '../systems/abilities/cooldown.js';
 import { EffectDurationSystem } from '../systems/abilities/duration.js';
 import { ProjectileSystem } from '../systems/abilities/projectile.js';
-import type { AbilityCatalog, AbilityDef, AbilityRuntimeDef } from '../systems/abilities/model.js';
+import type {
+  AbilityCatalog,
+  AbilityDef,
+  AbilityRuntimeDef,
+  BuffDef,
+} from '../systems/abilities/model.js';
 import { applyPlacement, type ScenarioSpawn } from './placement.js';
 import type { ArenaApi, ComponentSchema, ModifierRegistry, TerrainApi, WorldState } from '../types.js';
 
@@ -78,6 +84,12 @@ export interface SceneDef {
    */
   readonly abilities?: readonly AbilityDef[];
   /**
+   * Таблица определений баффов (BUFF-2): наличие подключает компонент инстанса
+   * и `BuffSystem`. От `abilities` независима — бафф накладывается обычным
+   * списком действий и способностей не требует (BUFF-1, SER-7).
+   */
+  readonly buffs?: readonly BuffDef[];
+  /**
    * Биндинги сцены для платформы способностей (ABIL-8): что в этой сцене
    * значат смерть, лок действий, сторона и урон. Понятий игрока, здоровья и
    * урона ядро при этом не приобретает.
@@ -109,9 +121,10 @@ export interface Scene {
    */
   readonly modifiers: ModifierRegistry;
   /**
-   * Скомпилированная таблица определений способностей (ABIL-10). Есть, если
-   * сцена содержит `abilities`. Иммутабельна и в снапшот не входит — как
-   * террейн и арена, она порождена данными сцены (design Decision 2).
+   * Скомпилированная таблица определений способностей и баффов (ABIL-10,
+   * BUFF-2). Есть, если сцена содержит `abilities` либо `buffs`. Иммутабельна и
+   * в снапшот не входит — как террейн и арена, она порождена данными сцены
+   * (design Decision 2).
    */
   readonly abilities?: AbilityCatalog;
 }
@@ -151,8 +164,8 @@ export function loadScene(def: SceneDef): Scene {
     [visionModifiers.component, visionModifiers],
   ]);
   // Порядок нормативен (SER-7): floor → arena → timeScale → tween → fow →
-  // компоненты платформы способностей. Он задаёт битовые id компонентов, то
-  // есть представление масок в снапшоте.
+  // компоненты платформы способностей → компонент инстанса баффа. Он задаёт
+  // битовые id компонентов, то есть представление масок в снапшоте.
   const components = [
     ...def.components,
     ...(grid === undefined ? [] : [floorComponentSchema(grid)]),
@@ -161,6 +174,7 @@ export function loadScene(def: SceneDef): Scene {
     ...(def.tweens === undefined ? [] : [TWEEN_SCHEMA]),
     ...(def.fog === true ? fowComponents(visionModifiers) : []),
     ...(def.abilities === undefined ? [] : ABILITY_COMPONENTS),
+    ...(def.buffs === undefined ? [] : BUFF_COMPONENTS),
   ];
   const prefabs = [
     ...(def.prefabs ?? []),
@@ -203,15 +217,26 @@ export function loadScene(def: SceneDef): Scene {
   // зависимостей сборки у её систем нет, а без них объявленные компоненты —
   // мёртвые данные. Определения проверяются ДО регистрации: сцена с опечаткой
   // в списке действий не должна доживать до первого тика (ABIL-10).
+  // Таблица одна на обе группы определений, и компилируется она, если сцена
+  // объявила хотя бы одну из них: `buffs` от `abilities` независимо (SER-7).
   const abilities =
-    def.abilities === undefined ? undefined : compileAbilityCatalog(def, world);
-  if (abilities !== undefined) {
+    def.abilities === undefined && def.buffs === undefined
+      ? undefined
+      : compileAbilityCatalog(def, world);
+  if (abilities !== undefined && def.abilities !== undefined) {
     systems.register(new TargetingCommitSystem(abilities));
     systems.register(new CastPhaseSystem(abilities));
     systems.register(new ProjectileSystem(abilities));
     systems.register(new CooldownSystem());
     systems.register(new EffectDurationSystem(abilities));
     systems.register(new CastInterruptSystem(abilities));
+  }
+  // `BuffSystem` включает своё поле конфига, а не поле способностей: сцена с
+  // одними баффами законна (SER-7, BUFF-1). Списки источников она разрешает в
+  // конструкторе, поэтому статовая правка, адресующая неподключённый список, —
+  // ошибка загрузки (BUFF-4).
+  if (abilities !== undefined && def.buffs !== undefined) {
+    systems.register(new BuffSystem(abilities, modifiers));
   }
   // Валидация каждой системы — внутри registerFromJson (SYS-3): конфиг с
   // опечаткой не должен доживать до первого тика.

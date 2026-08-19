@@ -151,6 +151,59 @@ export const abilityDef: Json = {
   },
 };
 
+export const buffStatMod: Json = {
+  $comment: 'Статовая правка: список источников-модификаторов и значение-выражение (BUFF-4, TIME-7).',
+  type: 'object',
+  additionalProperties: false,
+  required: ['component', 'value'],
+  properties: {
+    component: { type: 'string', minLength: 1 },
+    value: { $ref: '#/$defs/expression' },
+  },
+};
+
+export const buffTrigger: Json = {
+  title: 'Реакция баффа на событие (BUFF-5)',
+  type: 'object',
+  additionalProperties: false,
+  required: ['type', 'do'],
+  properties: {
+    type: { type: 'string', minLength: 1 },
+    as: { $comment: 'Имя, которым событие связано в списке действий (EXPR-2).', type: 'string', minLength: 1 },
+    do: { type: 'array', items: { $ref: '#/$defs/action' } },
+  },
+};
+
+export const buffDef: Json = {
+  title: 'Определение баффа (BUFF-2)',
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'class'],
+  properties: {
+    id: { $comment: 'Человеко-читаемое имя; в мире определение адресует индекс (BUFF-1).', type: 'string', minLength: 1 },
+    class: { enum: ['negative', 'positive'] },
+    durationTicks: {
+      $comment: 'Отсутствие поля либо неположительное значение — постоянный бафф (BUFF-2, BUFF-6).',
+      $ref: '#/$defs/expression',
+    },
+    stacking: { enum: ['independent', 'refresh', 'stack'] },
+    maxStacks: { $comment: 'Потолок стаков; обязателен при политике stack (BUFF-3).', $ref: '#/$defs/expression' },
+    statMods: { type: 'array', items: { $ref: '#/$defs/buffStatMod' } },
+    periodic: {
+      $comment: 'Периодика: период в тиках и список действий, считая от тика наложения (BUFF-5).',
+      type: 'object',
+      additionalProperties: false,
+      required: ['everyTicks', 'do'],
+      properties: {
+        everyTicks: { $ref: '#/$defs/expression' },
+        do: { type: 'array', items: { $ref: '#/$defs/action' } },
+      },
+    },
+    triggers: { type: 'array', items: { $ref: '#/$defs/buffTrigger' } },
+    onExpire: { type: 'array', items: { $ref: '#/$defs/action' } },
+  },
+};
+
 export const abilityRuntime: Json = {
   title: 'Биндинги сцены для платформы способностей (ABIL-8)',
   type: 'object',
