@@ -256,7 +256,10 @@ export class CastInterruptSystem implements System {
         if (!Object.hasOwn(event.data, damageEntityField)) continue;
         if (event.data[damageEntityField] !== owner) continue;
         hit = true;
-        damage += Object.hasOwn(event.data, damageAmountField) ? event.data[damageAmountField]! : 0;
+        // Сложение через Math API, а не голым `+`: величина урона — данные
+        // контента, и масштаб у неё Q16.16 (DET-2, FP-4).
+        const amount = Object.hasOwn(event.data, damageAmountField) ? event.data[damageAmountField]! : 0;
+        damage = ctx.math.add(damage, amount);
       }
       if (!hit) continue;
 

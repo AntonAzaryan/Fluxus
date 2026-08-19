@@ -242,7 +242,7 @@ describe('Нормативный словарь и умолчания преры
 
 describe('Проверки загрузки определений (ABIL-10)', () => {
   const failing = (ability: Partial<AbilityDef>, extra: Partial<SceneDef> = {}): (() => void) => {
-    const def = { ...SIMPLE, ...ability } as AbilityDef;
+    const def: AbilityDef = { ...SIMPLE, ...ability };
     return () => loadScene({ components: BASE, abilities: [def], ...extra });
   };
 

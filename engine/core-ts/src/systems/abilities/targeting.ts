@@ -71,8 +71,7 @@ export class TargetingCommitSystem implements System {
       if (staged >= ability.stepCount) continue;
       // Шага ждёт только фаза подтверждения: `hold` и `auto` завершаются
       // временем и удержанием, и записывать в них нечего.
-      const phase = this.catalog.phases[ability.phaseStart + phaseIndex];
-      if (phase === undefined || phase.trigger !== PHASE_COMMIT) continue;
+      if (this.catalog.phases[ability.phaseStart + phaseIndex]?.trigger !== PHASE_COMMIT) continue;
       const owner = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'owner');
       if (owner === NO_ENTITY || !ctx.isAlive(owner)) continue;
       const buttons = buttonsOf(ctx, this.catalog, owner);

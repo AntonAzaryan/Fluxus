@@ -217,7 +217,7 @@ export class SlotScope {
     for (let i = 0; i < ABILITY_STEPS; i++) {
       const point: MutableVec2 = { x: 0, y: 0 };
       this.points.push(point);
-      this.vars[`step${i}`] = point as Vec2;
+      this.vars[`step${i}`] = point;
     }
   }
 
