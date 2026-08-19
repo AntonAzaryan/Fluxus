@@ -1,19 +1,9 @@
 {
   "schema": 2,
   "name": "normal",
-  "reaction": {
-    "delayTicks": 8,
-    "jitterTicks": 4,
-    "memoryTicks": 180
-  },
-  "aim": {
-    "noiseDegrees": 4,
-    "noisePeriodTicks": 12
-  },
-  "decision": {
-    "intervalTicks": 6,
-    "jitterTicks": 3
-  },
+  "reaction": { "delayTicks": 8, "jitterTicks": 4, "memoryTicks": 180 },
+  "aim": { "noiseDegrees": 4, "noisePeriodTicks": 12 },
+  "decision": { "intervalTicks": 6, "jitterTicks": 3 },
   "movement": {
     "maxSpeed": 1,
     "arriveTolerance": 0.4,
@@ -35,13 +25,7 @@
         "slotIndex": 0,
         "confirmButton": 8,
         "cancelButton": 9,
-        "steps": [
-          {
-            "aim": "enemy",
-            "confirmDelayTicks": 34,
-            "pointNoise": 0.4
-          }
-        ],
+        "steps": [{ "aim": "enemy", "confirmDelayTicks": 34, "pointNoise": 0.4 }],
         "holdTicks": 30,
         "cancelChance": 0.05,
         "giveUpTicks": 150
@@ -68,13 +52,7 @@
         "slotIndex": 2,
         "confirmButton": 8,
         "cancelButton": 9,
-        "steps": [
-          {
-            "aim": "threat",
-            "confirmDelayTicks": 2,
-            "pointNoise": 0.1
-          }
-        ],
+        "steps": [{ "aim": "threat", "confirmDelayTicks": 2, "pointNoise": 0.1 }],
         "holdTicks": 1,
         "cancelChance": 0,
         "giveUpTicks": 60
@@ -111,12 +89,7 @@
       "requiresMoving": true
     }
   ],
-  "utility": {
-    "pressure": 1,
-    "kite": 0.8,
-    "retreat": 1.2,
-    "dodge": 1.3
-  },
+  "utility": { "pressure": 1, "kite": 0.8, "retreat": 1.2, "dodge": 1.3 },
   "aggression": 0.6,
   "seed": 2
 }
