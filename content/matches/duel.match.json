@@ -26,7 +26,7 @@
   "rewind": {
     "interval": 30,
     "capacity": 15,
-    "exempt": [{ "component": "RewindCooldown" }],
+    "exempt": [{ "component": "AbilityCooldown" }],
     "holdButton": 7,
     "step": 4,
     "holdTimeoutTicks": 15
