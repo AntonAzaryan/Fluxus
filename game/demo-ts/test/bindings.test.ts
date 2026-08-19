@@ -38,4 +38,17 @@ describe('раскладка демо — данные с валидацией (
     expect(actions.length).toBeGreaterThan(0);
     for (const action of actions) expect(Object.keys(ACTION_BITS)).toContain(action);
   });
+
+  /**
+   * Биты подтверждения и отмены шага прицеливания (ABIL-5) — обычные биты
+   * маски: смысл им даёт определение способности сцены, а не код клиента
+   * (INP-4, ABIL-3). До миграции сцены они объявлены и никем не назначены.
+   */
+  it('подтверждение и отмена — свободные биты в пределах u16 (TICK-2)', () => {
+    const bits = Object.values(ACTION_BITS);
+    expect(new Set(bits).size).toBe(bits.length);
+    for (const bit of bits) expect(bit).toBeLessThanOrEqual(15);
+    expect(ACTION_BITS.confirm).toBe(8);
+    expect(ACTION_BITS.cancel).toBe(9);
+  });
 });

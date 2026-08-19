@@ -72,6 +72,8 @@ import {
   navigatorGamepad,
   shellPort,
   validateBindings,
+  type AimPoint,
+  type AimResolution,
   type InputSource,
 } from '@game-mvp/client';
 import { ACTION_BITS, RESPAWN_EVENT, STATE_COMPONENTS, STATS } from './sim.js';
@@ -351,19 +353,28 @@ const bindings = validateBindings(bindingsJson);
 const sampler = new InputSampler({ actionBits: ACTION_BITS });
 
 /**
- * Прицел клика: точка на полу через raycast (design Decision 6) минус позиция
- * героя — угол в единице ядра (FP-7); JSON-система сцены разворачивает его
- * обратно в вектор оператором `cos`/`sin`. Null — направления нет, каст
- * не возникает.
+ * Прицел указателя: точка на полу через raycast (design Decision 6) И угол на
+ * неё от героя в единице ядра (FP-7). Null — прицела нет: луч мимо пола, герой
+ * ещё не приехал или клик в себя.
+ *
+ * Отдаётся ОБА, одним разрешением (INP-1, design Decision 12). Угол остаётся —
+ * на нём стоит вся сегодняшняя сцена: JSON-системы разворачивают его обратно в
+ * вектор оператором `cos`/`sin`, и направление точкой не выражается. Точка
+ * нужна цепочке прицеливания способностей (ABIL-5): «сюда» и «в эту сторону» —
+ * разные высказывания, и одно из другого не выводится. Считать их двумя
+ * лучами нельзя — они разъезжались бы между собой.
  */
-function aimAtPointer(clientX: number, clientY: number): number | null {
+function aimAtPointer(clientX: number, clientY: number): AimResolution | null {
   const point = groundPoint(clientX, clientY);
   if (point === null || heroId === null) return null;
   const view = remote?.view?.entities.get(heroId);
   if (view === undefined) return null;
   const dx = point.x - view.currX;
   const dy = point.y - view.currY;
-  return Math.hypot(dx, dy) < 1e-3 ? null : aimAngle(dx, dy); // клик в себя — направления нет
+  // Клик в себя — направления нет; точка при этом есть, но без направления она
+  // не действие: сцена демо решает по углу.
+  if (Math.hypot(dx, dy) < 1e-3) return null;
+  return { angle: aimAngle(dx, dy), x: point.x, y: point.y };
 }
 
 const kbmSource = new KeyboardMouseSource({
@@ -396,6 +407,14 @@ if (bindings.gamepad !== undefined) {
  * прошёл мимо пола.
  */
 let frameAim: number | null = null;
+
+/**
+ * Точка прицела этого кадра — второй половина того же разрешения (INP-1): её
+ * везёт `InputFrame` (TICK-2), и цепочка прицеливания способностей читает
+ * именно её, а не угол. Считается тем же единственным лучом, что `frameAim`, и
+ * гаснет вместе с ним.
+ */
+let frameTarget: AimPoint | null = null;
 
 /**
  * Последний НЕПУСТОЙ прицел кадра. Луч мимо плоскости пола (курсор ушёл в небо
@@ -445,7 +464,13 @@ const pointerAimSource: InputSource = {
   poll: () => {
     const moved = pointerMoves !== polledPointerMoves;
     polledPointerMoves = pointerMoves;
-    return { moveX: 0, moveY: 0, aim: moved || pointerAiming() ? frameAim : null };
+    const aiming = moved || pointerAiming();
+    return {
+      moveX: 0,
+      moveY: 0,
+      aim: aiming ? frameAim : null,
+      target: aiming ? frameTarget : null,
+    };
   },
 };
 // ПОСЛЕДНИМ, и это несущее: сэмплер выбирает прицел источника с самым свежим
@@ -607,7 +632,7 @@ function sampleCameraInput(): void {
 function pushInput(): void {
   if (remote === null) return;
   const input = sampler.sample();
-  remote.sendInput(input.move, input.aimDir, input.buttons);
+  remote.sendInput(input.move, input.aimDir, input.buttons, input.target);
 }
 
 // ------------------------------------------------------------- HUD и цикл
@@ -684,7 +709,9 @@ const benchProbe: BenchProbe | null = benchRequested(window.location.search)
  * только шлёт ввод и интерполирует доставленное (REND-2).
  */
 function sampleFrameInput(): void {
-  frameAim = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
+  const resolved = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
+  frameAim = resolved === null ? null : resolved.angle;
+  frameTarget = resolved;
   if (frameAim !== null) lastAim = frameAim;
 
   // Отложенное кадрирование миникарты — когда камера уже не follow (см. panTo).
