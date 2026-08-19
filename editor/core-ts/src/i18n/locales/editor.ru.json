@@ -155,6 +155,7 @@
   "schema.inputFrame.move": "Вектор движения кадра в Q16.16.",
   "schema.inputFrame.playerId": "Игрок, которому принадлежит кадр.",
   "schema.inputFrame.seq": "Порядковый номер кадра у клиента.",
+  "schema.inputFrame.target": "Точка прицела в мировых координатах, Q16.16; необязательна.",
   "schema.inputFrame.tick": "Тик, к которому относится кадр.",
   "schema.prefab.components": "Компоненты prefab и начальные значения их полей.",
   "schema.prefab.name": "Имя prefab: по нему на него ссылается расстановка.",

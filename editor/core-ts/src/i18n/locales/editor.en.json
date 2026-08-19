@@ -155,6 +155,7 @@
   "schema.inputFrame.move": "Movement vector of the frame in Q16.16.",
   "schema.inputFrame.playerId": "Player the frame belongs to.",
   "schema.inputFrame.seq": "Sequence number of the frame on the client.",
+  "schema.inputFrame.target": "Aim point in world coordinates, Q16.16; optional.",
   "schema.inputFrame.tick": "Tick the frame applies to.",
   "schema.prefab.components": "Components of the prefab and the initial values of their fields.",
   "schema.prefab.name": "Prefab name: placement refers to it.",

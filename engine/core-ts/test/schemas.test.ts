@@ -109,6 +109,20 @@ describe('engine/schemas (SER-5)', () => {
     expect(Object.keys(doc.properties.visibility.properties).sort()).toEqual(Object.keys(visibility).sort());
   });
 
+  /**
+   * SER-5 и CLI-10: точка прицела кадра НЕОБЯЗАТЕЛЬНА в схеме. Документ,
+   * записанный до её появления, обязан остаться валидным — иначе все эталоны
+   * матчей пришлось бы перезаписать, а перезаписанный эталон ничего не
+   * доказывает.
+   */
+  it('точка прицела кадра — необязательное поле схемы (TICK-2)', () => {
+    const doc = schemaFiles['scenario.schema.json'] as {
+      $defs: { inputFrame: { properties: Record<string, unknown>; required: string[] } };
+    };
+    expect(Object.keys(doc.$defs.inputFrame.properties)).toContain('target');
+    expect(doc.$defs.inputFrame.required).not.toContain('target');
+  });
+
   it('схема системы перечисляет все действия и операторы ядра', () => {
     const doc = schemaFiles['system.schema.json'] as {
       $defs: { action: { propertyNames: { enum: string[] } }; expression: { oneOf: { propertyNames?: { enum: string[] } }[] } };
