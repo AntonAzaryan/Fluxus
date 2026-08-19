@@ -39,6 +39,7 @@ import { CastInterruptSystem } from '../systems/abilities/interrupt.js';
 import { CooldownSystem } from '../systems/abilities/cooldown.js';
 import { EffectDurationSystem } from '../systems/abilities/duration.js';
 import { ProjectileSystem } from '../systems/abilities/projectile.js';
+import { AbilityVisibilitySystem } from '../systems/abilities/visibility.js';
 import type {
   AbilityCatalog,
   AbilityDef,
@@ -237,6 +238,15 @@ export function loadScene(def: SceneDef): Scene {
   // ошибка загрузки (BUFF-4).
   if (abilities !== undefined && def.buffs !== undefined) {
     systems.register(new BuffSystem(abilities, modifiers));
+  }
+  // Маску сущностям-спутникам платформы пишет отдельная система (NET-12), и
+  // включает её пара «есть определения + сцена с туманом». Туман здесь условие,
+  // а не вкус: без `fog` компонента `Visibility` в мире нет вовсе, вешать его
+  // спутнику некуда, а фильтр снапшота на такой сцене не режет никого.
+  // Обе группы определений, а не одни `abilities`: инстанс баффа — такой же
+  // спутник, как слот, и сцена вправе объявить `buffs` без способностей (SER-7).
+  if (abilities !== undefined && def.fog === true) {
+    systems.register(new AbilityVisibilitySystem(abilities));
   }
   // Валидация каждой системы — внутри registerFromJson (SYS-3): конфиг с
   // опечаткой не должен доживать до первого тика.
