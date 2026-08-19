@@ -1,7 +1,7 @@
 {
   "events": {
     "HeroHit": { "kind": "hit", "target": "entity" },
-    "Damage": { "kind": "damage", "target": "entity" },
+    "Damage": { "kind": "damage", "actor": "source", "target": "entity" },
     "EntityDied": { "kind": "death", "target": "entity" },
     "HeroRespawned": { "kind": "respawn", "target": "entity" },
     "CastFireball": { "kind": "cast-fireball", "actor": "entity" },

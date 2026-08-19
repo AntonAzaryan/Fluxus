@@ -489,7 +489,13 @@
                     {
                       "emitEvent": {
                         "type": "Damage",
-                        "data": { "amount": 250, "entity": { "var": "holder" } }
+                        "data": {
+                          "amount": 250,
+                          "entity": { "var": "holder" },
+                          "source": {
+                            "getComponent": [{ "var": "p" }, "AbilityProjectile", "owner"]
+                          }
+                        }
                       }
                     },
                     {
@@ -1304,7 +1310,11 @@
                               {
                                 "emitEvent": {
                                   "type": "Damage",
-                                  "data": { "amount": 250, "entity": { "var": "v" } }
+                                  "data": {
+                                    "amount": 250,
+                                    "entity": { "var": "v" },
+                                    "source": { "var": "owner" }
+                                  }
                                 }
                               },
                               {
@@ -1558,7 +1568,8 @@
                                                   "damage"
                                                 ]
                                               },
-                                              "entity": { "var": "other" }
+                                              "entity": { "var": "other" },
+                                              "source": { "var": "owner" }
                                             }
                                           }
                                         },
