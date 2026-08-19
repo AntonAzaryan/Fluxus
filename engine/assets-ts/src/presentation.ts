@@ -85,14 +85,85 @@ export interface PresentationFog {
 }
 
 /**
+ * Рассеянный свет сцены — половина секции `lighting` (PRES-2). Поля
+ * необязательны: отсутствие — документированное умолчание подсистемы освещения
+ * (`render-ts`, `lighting/config.ts`), а не ноль.
+ */
+export interface PresentationAmbientLight {
+  /** Тон рассеянного света — `#rrggbb`. */
+  readonly color?: string;
+  /** Интенсивность, неотрицательная. */
+  readonly intensity?: number;
+}
+
+/**
+ * Направление направленного источника — откуда он светит: смещение позиции
+ * источника от цели в мировых единицах. Не единичный вектор: нормирует его
+ * рендер, а автор пишет удобные ему числа.
+ */
+export interface PresentationLightDirection {
+  readonly x?: number;
+  readonly y?: number;
+  readonly z?: number;
+}
+
+/** Направленный источник сцены — вторая половина секции `lighting` (PRES-2). */
+export interface PresentationDirectionalLight {
+  readonly color?: string;
+  readonly intensity?: number;
+  readonly direction?: PresentationLightDirection;
+}
+
+/**
+ * Режим теней сцены, по возрастанию стоимости: теней нет; статика в кэшированной
+ * карте, динамика в покадровой; все кастеры покадрово. Порядок значений
+ * нормативен — по нему считается потолок пресета качества (QUAL-1).
+ */
+export type PresentationShadowMode = 'none' | 'hybrid' | 'full';
+
+/** Значения режима в порядке возрастания стоимости — единственный их перечень. */
+export const PRESENTATION_SHADOW_MODES: readonly PresentationShadowMode[] = Object.freeze([
+  'none',
+  'hybrid',
+  'full',
+]);
+
+/** Параметры теней секции `lighting` (PRES-2). */
+export interface PresentationShadows {
+  /** Режим теней; нет — `none` (тени выключены). */
+  readonly mode?: PresentationShadowMode;
+  /** Сторона карты теней в текселях, целая и положительная. */
+  readonly mapSize?: number;
+  /**
+   * Доля интенсивности направленного источника, отданная кэшированной карте
+   * статики в режиме `hybrid`, [0, 1]; остальное достаётся покадровой карте.
+   * В режимах `none` и `full` источник один, и доля смысла не имеет.
+   */
+  readonly staticShare?: number;
+}
+
+/**
+ * Секция `lighting` — конфигурация освещения сцены (PRES-2). Как и секция `fog`,
+ * все поля необязательны, состав закрыт, а политику картинки — сами умолчания —
+ * держит подсистема рендера, не этот модуль: здесь проверяется форма данных.
+ * На симуляцию секция не влияет ни байтом (PRES-4).
+ */
+export interface PresentationLighting {
+  readonly ambient?: PresentationAmbientLight;
+  readonly directional?: PresentationDirectionalLight;
+  readonly shadows?: PresentationShadows;
+}
+
+/**
  * Документ целиком (PRES-2): упорядоченный список записей `decorations` —
  * отсутствующий и пустой неразличимы, и то и другое означает слой без
- * декораций — плюс необязательная секция `fog` (FOW-10); её отсутствие —
- * значения по умолчанию.
+ * декораций — плюс необязательные секции `fog` (FOW-10) и `lighting`; их
+ * отсутствие — значения по умолчанию.
  */
 export interface PresentationScene {
   readonly decorations: readonly DecorationRecord[];
   readonly fog?: PresentationFog;
+  readonly lighting?: PresentationLighting;
 }
 
 /** Шаг квантования позиции и масштаба — 10⁻³ мировой единицы (PRES-3). */
@@ -174,7 +245,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /** Состав закрыт (PRES-2): ключ, которого формат не знает, — ошибка, а не игнор. */
-const DOCUMENT_KEYS: readonly string[] = ['decorations', 'fog'];
+const DOCUMENT_KEYS: readonly string[] = ['decorations', 'fog', 'lighting'];
 const RECORD_KEYS: readonly string[] = ['visual', 'x', 'y', 'yaw', 'scale', 'skin', 'walkable'];
 const FOG_KEYS: readonly string[] = [
   'strength',
@@ -186,8 +257,11 @@ const FOG_KEYS: readonly string[] = [
   'dissolveSeconds',
 ];
 
-/** Цвет тумана — `#rrggbb`: одна форма записи, чтобы дифф правки не гадал о синонимах. */
-const FOG_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+/**
+ * Цвет в документе — `#rrggbb`: одна форма записи на все секции, чтобы дифф
+ * правки не гадал о синонимах и чтобы тон тумана и тон света читались одинаково.
+ */
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
 /**
  * Валидация секции `fog` (PRES-2, `fog-of-war` FOW-10): состав закрыт,
@@ -219,7 +293,7 @@ function validateFog(section: unknown, errors: string[]): void {
       errors.push(`fog.conservatism: ожидалась доля из (0, 1] (FOW-9), получено ${typeName(value)}`);
     }
   }
-  if ('color' in section && (typeof section.color !== 'string' || !FOG_COLOR_RE.test(section.color))) {
+  if ('color' in section && (typeof section.color !== 'string' || !HEX_COLOR_RE.test(section.color))) {
     errors.push(`fog.color: ожидался цвет формы "#rrggbb", получено ${typeName(section.color)}`);
   }
   if (
@@ -259,6 +333,156 @@ function validateFog(section: unknown, errors: string[]): void {
     errors.push(
       `fog.dissolveSeconds: ожидалось неотрицательное время рассеивания в секундах (FOW-7), получено ${typeName(section.dissolveSeconds)}`,
     );
+  }
+}
+
+// ------------------------------------------------------- секция `lighting`
+
+/**
+ * Состав секции освещения и её подсекций — закрыт (PRES-2). Перечни лежат
+ * рядом, потому что читаются они вместе: неизвестный ключ отвергается адресно и
+ * называет допустимые соседи того же уровня, а не всего документа.
+ */
+const LIGHTING_KEYS: readonly string[] = ['ambient', 'directional', 'shadows'];
+const AMBIENT_KEYS: readonly string[] = ['color', 'intensity'];
+const DIRECTIONAL_KEYS: readonly string[] = ['color', 'intensity', 'direction'];
+const DIRECTION_KEYS: readonly string[] = ['x', 'y', 'z'];
+const SHADOW_KEYS: readonly string[] = ['mode', 'mapSize', 'staticShare'];
+
+/**
+ * Подсекция по адресу: не объект — адресный отказ и `null`, дальше разбирать
+ * нечего. Отсутствие подсекции — умолчания подсистемы, а не ошибка, поэтому
+ * `undefined` сюда не доходит: его отсеивает вызывающий.
+ */
+function subsection(value: unknown, path: string, errors: string[]): Record<string, unknown> | null {
+  if (isRecord(value)) return value;
+  errors.push(`${path}: ожидался объект секции, получено ${typeName(value)}`);
+  return null;
+}
+
+/** Ключ, которого формат не знает, — ошибка с перечнем допустимых соседей (PRES-2). */
+function closedKeys(
+  node: Record<string, unknown>,
+  path: string,
+  keys: readonly string[],
+  errors: string[],
+): void {
+  for (const key of Object.keys(node)) {
+    if (keys.includes(key)) continue;
+    errors.push(`${path}.${key}: неизвестное поле (допустимы: ${keys.join(', ')})`);
+  }
+}
+
+/** Границы числового поля: что за величина и в каком диапазоне она осмысленна. */
+interface NumberRange {
+  readonly what: string;
+  readonly min?: number;
+  readonly max?: number;
+  readonly integer?: boolean;
+}
+
+/**
+ * Числовое поле подсекции. Отсутствие — умолчание подсистемы (PRES-2), а
+ * диапазон здесь — форма данных, а не политика картинки: отрицательная
+ * интенсивность и нулевая карта теней не имеют прочтения ни при каких
+ * умолчаниях.
+ */
+function numberField(
+  node: Record<string, unknown>,
+  path: string,
+  key: string,
+  range: NumberRange,
+  errors: string[],
+): void {
+  if (!(key in node)) return;
+  const value = node[key];
+  const bad =
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    (range.integer === true && !Number.isInteger(value)) ||
+    (range.min !== undefined && value < range.min) ||
+    (range.max !== undefined && value > range.max);
+  if (bad) errors.push(`${path}.${key}: ожидалось ${range.what}, получено ${typeName(value)}`);
+}
+
+/** Тон источника — та же форма `#rrggbb`, что у тона тумана. */
+function colorField(node: Record<string, unknown>, path: string, errors: string[]): void {
+  if (!('color' in node)) return;
+  const value = node.color;
+  if (typeof value !== 'string' || !HEX_COLOR_RE.test(value)) {
+    errors.push(`${path}.color: ожидался цвет формы "#rrggbb", получено ${typeName(value)}`);
+  }
+}
+
+/** Рассеянный свет: тон и интенсивность (PRES-2). */
+function validateAmbientLight(node: Record<string, unknown>, errors: string[]): void {
+  const path = 'lighting.ambient';
+  closedKeys(node, path, AMBIENT_KEYS, errors);
+  colorField(node, path, errors);
+  numberField(node, path, 'intensity', { what: 'неотрицательное число интенсивности', min: 0 }, errors);
+}
+
+/** Направленный источник: тон, интенсивность и направление (PRES-2). */
+function validateDirectionalLight(node: Record<string, unknown>, errors: string[]): void {
+  const path = 'lighting.directional';
+  closedKeys(node, path, DIRECTIONAL_KEYS, errors);
+  colorField(node, path, errors);
+  numberField(node, path, 'intensity', { what: 'неотрицательное число интенсивности', min: 0 }, errors);
+  if (!('direction' in node)) return;
+  const axes = `${path}.direction`;
+  const direction = subsection(node.direction, axes, errors);
+  if (direction === null) return;
+  closedKeys(direction, axes, DIRECTION_KEYS, errors);
+  const range: NumberRange = { what: 'конечное число мировых единиц' };
+  for (const axis of DIRECTION_KEYS) numberField(direction, axes, axis, range, errors);
+}
+
+/** Параметры теней: режим, сторона карты и доля интенсивности статики (PRES-2). */
+function validateShadows(node: Record<string, unknown>, errors: string[]): void {
+  const path = 'lighting.shadows';
+  closedKeys(node, path, SHADOW_KEYS, errors);
+  if ('mode' in node && !PRESENTATION_SHADOW_MODES.includes(node.mode as PresentationShadowMode)) {
+    errors.push(
+      `${path}.mode: ожидался режим теней из ${PRESENTATION_SHADOW_MODES.join(' | ')}, получено ${typeName(node.mode)}`,
+    );
+  }
+  numberField(
+    node,
+    path,
+    'mapSize',
+    { what: 'целое положительное число текселей — сторона карты теней', min: 1, integer: true },
+    errors,
+  );
+  numberField(
+    node,
+    path,
+    'staticShare',
+    { what: 'число из [0, 1] — доля интенсивности', min: 0, max: 1 },
+    errors,
+  );
+}
+
+/**
+ * Валидация секции `lighting` (PRES-2): состав закрыт на каждом уровне,
+ * неизвестный ключ и значение не той формы отвергаются адресно — по общему
+ * правилу документа. Семантику значений нормирует `rendering`, здесь только
+ * форма: сами умолчания живут у подсистемы освещения рендера.
+ */
+function validateLighting(section: unknown, errors: string[]): void {
+  const root = subsection(section, 'lighting', errors);
+  if (root === null) return;
+  closedKeys(root, 'lighting', LIGHTING_KEYS, errors);
+  if ('ambient' in root) {
+    const ambient = subsection(root.ambient, 'lighting.ambient', errors);
+    if (ambient !== null) validateAmbientLight(ambient, errors);
+  }
+  if ('directional' in root) {
+    const directional = subsection(root.directional, 'lighting.directional', errors);
+    if (directional !== null) validateDirectionalLight(directional, errors);
+  }
+  if ('shadows' in root) {
+    const shadows = subsection(root.shadows, 'lighting.shadows', errors);
+    if (shadows !== null) validateShadows(shadows, errors);
   }
 }
 
@@ -341,6 +565,9 @@ export function validatePresentationScene(
   // Отсутствующая секция `fog` — значения по умолчанию у подсистемы (FOW-10),
   // и наружу она в этом случае не выходит вовсе: `undefined`, а не пустой объект.
   if (doc.fog !== undefined) validateFog(doc.fog, errors);
+  // Секция `lighting` — тем же порядком и по тому же основанию: её умолчания
+  // держит подсистема освещения рендера.
+  if (doc.lighting !== undefined) validateLighting(doc.lighting, errors);
   if (errors.length > 0) return { ok: false, errors };
   // Отсутствующий и пустой список неразличимы (PRES-2): наружу и то и другое
   // выходит пустым списком, и потребителю не приходится различать их самому.
@@ -349,6 +576,7 @@ export function validatePresentationScene(
     scene: {
       decorations: Array.isArray(list) ? (list as DecorationRecord[]) : [],
       ...(doc.fog === undefined ? {} : { fog: doc.fog as PresentationFog }),
+      ...(doc.lighting === undefined ? {} : { lighting: doc.lighting as PresentationLighting }),
     },
   };
 }

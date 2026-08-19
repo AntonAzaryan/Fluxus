@@ -294,6 +294,35 @@ export interface RenderCostCounters {
    */
   particlesSystemsStepped: number;
 
+  // ------------------------------------------- освещение: работа кадра (REND-8)
+
+  /**
+   * Статические теневые кастеры, отданные кэшированной карте теней. В режиме
+   * `hybrid` счётчик двигается только на перерисовках кэша — в этом и смысл
+   * яруса: между событиями статика не стоит кадру ничего. В режиме `full`
+   * карта одна и покадровая, поэтому статика попадает в неё каждый кадр, и
+   * разница двух режимов читается прямо этим числом.
+   *
+   * Считаются КОРНИ нарисованного (группа батча, узел детального инстанса, меш
+   * чанка террейна), а не меши поддерева: корень — то, что подсистема-владелец
+   * объявила кастером, и величина остаётся машинно-независимой (PERF-3).
+   */
+  lightingStaticCasters: number;
+  /**
+   * Динамические теневые кастеры покадровой карты — юниты и анимированные
+   * декорации. Растёт составом доставки, и ровно его ограничивает потолок
+   * режима теней (QUAL-1): на `none` счётчик нулевой, потому что теневого
+   * прохода нет вовсе.
+   */
+  lightingDynamicCasters: number;
+  /**
+   * Перерисовки кэшированной карты статики: загрузка сцены, переподача набора
+   * декораций, правка сетки террейна, смена значений света или пресета. Ось
+   * стоимости режима `hybrid`: кэш, который инвалидируют каждым кадром, — это
+   * `full` по цене и `hybrid` по названию, и видно это здесь.
+   */
+  lightingStaticRebuilds: number;
+
   // ---------------------------------------------- террейн: работа кадра (REND-7)
 
   /**
@@ -364,6 +393,9 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     particlesShellsPosed: 'frame',
     particlesShotsStepped: 'frame',
     particlesSystemsStepped: 'frame',
+    lightingStaticCasters: 'frame',
+    lightingDynamicCasters: 'frame',
+    lightingStaticRebuilds: 'frame',
     terrainChunksRebuilt: 'frame',
     terrainFloorQuads: 'frame',
     terrainWallQuads: 'frame',
@@ -407,6 +439,9 @@ export function createCostCounters(): RenderCostCounters {
     particlesShellsPosed: 0,
     particlesShotsStepped: 0,
     particlesSystemsStepped: 0,
+    lightingStaticCasters: 0,
+    lightingDynamicCasters: 0,
+    lightingStaticRebuilds: 0,
     terrainChunksRebuilt: 0,
     terrainFloorQuads: 0,
     terrainWallQuads: 0,

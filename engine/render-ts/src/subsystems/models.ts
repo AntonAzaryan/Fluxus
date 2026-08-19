@@ -100,6 +100,8 @@ import type {
   QualityValues,
   RenderContext,
   RenderSubsystem,
+  ShadowCasterSink,
+  ShadowCasterTier,
   TickView,
 } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
@@ -132,6 +134,7 @@ import { BatchSkinLoader, skinArrayTexture } from '../model/batchSkins.js';
 import {
   VAT_MAP_KINDS,
   createSkinPlaceholder,
+  createVatDepthMaterial,
   createVatMaterial,
   createVatTexture,
   materialMapKinds,
@@ -232,6 +235,14 @@ export interface ModelsOptions {
   readonly cullMargin?: number;
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
+  /**
+   * Приёмник теневых кастеров подсистемы освещения (REND-8). Подсистема моделей
+   * — единственная, кто знает и происхождение инстанса (доставка против набора
+   * декораций), и запись его вида, поэтому ярус кастера считает она, а что с
+   * ним делать, решает свет. Нет приёмника — сцена без света: флагов теней
+   * инстансы не получают вовсе.
+   */
+  readonly shadows?: ShadowCasterSink;
   /**
    * Длительность fade-out «ушла в туман» в секундах (FOW-8, design D7) — из
    * конфигурации тумана (FOW-10), а не константа кода. Ноль или отсутствие —
@@ -729,6 +740,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    */
   syncDecorations(entities: ReadonlyMap<EntityId, EntityView>): void {
     this.syncPool(this.requireCtx(), this.decorations, entities, true, null, costSink());
+    // Набор декораций переподан — статика могла переехать, и кэшированная карта
+    // теней устарела вместе с ней. Вход событийный (REND-18), а не кадровый:
+    // в матче он приходит однажды, в режиме правки — на правку (ED-15).
+    this.options.shadows?.invalidateStatic();
   }
 
   /**
@@ -1736,13 +1751,27 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     holder.scale.setScalar(record.scale);
     ctx.scene.add(holder);
     record.holder = holder;
+    this.markCaster(record);
     return holder;
   }
 
   private releaseHolder(record: InstanceRecord): void {
     if (record.holder === null || record.model !== null || record.placeholder !== null) return;
+    this.options.shadows?.dropCaster(record.holder);
     record.holder.removeFromParent();
     record.holder = null;
+  }
+
+  /**
+   * Корень нарисованного инстанса — приёмнику теней вместе с ярусом (REND-8).
+   * Корень, а не каждый меш: флаги расставляет обходом сам приёмник, а сменить
+   * их у поддерева, которое ещё только строится, здесь было бы нечем.
+   */
+  private markCaster(record: InstanceRecord): void {
+    const sink = this.options.shadows;
+    if (sink === undefined) return;
+    const root = record.batch?.batch.group ?? record.holder;
+    if (root !== null) sink.setCaster(root, casterTierOf(record));
   }
 
   /**
@@ -1832,6 +1861,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     } else {
       this.attachDetailed(record, shared);
     }
+
+    // Ярус нарисованного сменился (заглушка → модель либо → запись батча): его
+    // корень объявляется приёмнику теней заново.
+    this.markCaster(record);
 
     // Модель готова — walkable-вклад появляется в поле, и подписчики поверхности
     // узнают о клетках под bbox не позже следующего кадра (ASSET-4 → REND-9).
@@ -1967,6 +2000,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       materials,
       partVisibility: derivatives.partVisibility,
       levels: batchLevels(shared.meshes, derivatives.lod, visual?.hiddenParts),
+      // Глубина теневого прохода — тем же вершинным преобразованием VAT, что
+      // кадр: иначе тень записи застыла бы в позе покоя (design D4).
+      depthMaterial: createVatDepthMaterial(vatTexture),
     });
 
     const canonical = modelBounds(shared.model, visual?.hiddenParts);
@@ -2057,6 +2093,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // получают клетки под прежним bbox (REND-9, REND-18).
     if (record.decoration) this.options.surface?.setWalkable(record.entity, null);
     this.detachModel(record);
+    if (record.holder !== null) this.options.shadows?.dropCaster(record.holder);
     record.holder?.removeFromParent();
     record.holder = null;
   }
@@ -2125,7 +2162,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       batch.release(record.slot);
       // Опустевший батч уходит из сцены, но остаётся в кэше: разделяемое им
       // строится один раз на запись (REND-3), а рисовать ему уже нечего.
-      if (batch.count === 0) batch.group.removeFromParent();
+      if (batch.count === 0) {
+        this.options.shadows?.dropCaster(batch.group);
+        batch.group.removeFromParent();
+      }
       record.batch = null;
       record.slot = -1;
       record.lodLevel = 0;
@@ -2192,13 +2232,45 @@ function boundsFromBaked(derivatives: BakedDerivatives): ModelBounds {
 }
 
 /**
- * Ключ батча (REND-20): модель, набор скрытых частей и сама запись манифеста.
- * Запись входит в ключ потому, что скины батча — её свойство (REND-6): две
- * записи на одну модель делят геометрию, но не массив вариантов.
+ * Ключ батча (REND-20): модель, набор скрытых частей, сама запись манифеста и
+ * ярус теневого кастера. Запись входит в ключ потому, что скины батча — её
+ * свойство (REND-6): две записи на одну модель делят геометрию, но не массив
+ * вариантов. Ярус — потому, что `InstancedMesh` несёт ОДИН набор флагов теней
+ * на все свои записи: батч обязан быть однороден по ярусу, иначе статика и
+ * динамика попадали бы в одну карту (design D3). Расщепляются на практике
+ * только статичные модели с двойным происхождением инстансов — ящик, который и
+ * decoration, и prop; цена — +1 draw call на такую модель.
  */
 function batchKeyOf(record: InstanceRecord): string {
   const hidden = [...(record.visual?.hiddenParts ?? [])].sort((a, b) => a - b).join(',');
-  return JSON.stringify([record.visual?.model ?? '', hidden, record.kind ?? '']);
+  return JSON.stringify([
+    record.visual?.model ?? '',
+    hidden,
+    record.kind ?? '',
+    casterTierOf(record),
+  ]);
+}
+
+/**
+ * Ярус теневого кастера инстанса — ПРОИЗВОДНАЯ ДАННЫХ, а не поле записи
+ * (design D3): инстанс presentation-состояния (REND-11) двигается тиками и
+ * динамичен всегда; decoration (REND-18) статичен, пока запись его вида не
+ * объявила анимации (REND-4), — тогда он в кадре меняет позу и обязан
+ * попадать в покадровую карту.
+ */
+function casterTierOf(record: InstanceRecord): ShadowCasterTier {
+  if (!record.decoration) return 'dynamic';
+  return animatedVisual(record.visual) ? 'dynamic' : 'static';
+}
+
+/** Есть ли у записи вида анимации (REND-4): пустая таблица — их отсутствие. */
+function animatedVisual(visual: EntityVisual | undefined): boolean {
+  const animations = visual?.animations;
+  if (animations === undefined) return false;
+  return (
+    Object.keys(animations.states ?? {}).length > 0 ||
+    Object.keys(animations.events ?? {}).length > 0
+  );
 }
 
 /**
