@@ -450,48 +450,8 @@
   ],
   "systems": [
     {
-      "name": "SpawnAnchor",
-      "order": 1,
-      "query": {
-        "all": ["Position"],
-        "not": ["Spawn"],
-        "withTag": "Hero"
-      },
-      "as": "e",
-      "do": [
-        {
-          "addComponent": {
-            "entity": {
-              "var": "e"
-            },
-            "component": "Spawn",
-            "values": {
-              "x": {
-                "getComponent": [
-                  {
-                    "var": "e"
-                  },
-                  "Position",
-                  "x"
-                ]
-              },
-              "y": {
-                "getComponent": [
-                  {
-                    "var": "e"
-                  },
-                  "Position",
-                  "y"
-                ]
-              }
-            }
-          }
-        }
-      ]
-    },
-    {
       "name": "GrantSlots",
-      "order": 2,
+      "order": -950,
       "query": {
         "all": ["Player", "Input"],
         "not": ["Granted"]
@@ -587,7 +547,7 @@
     },
     {
       "name": "GrantDomeAura",
-      "order": 3,
+      "order": -940,
       "query": {
         "all": ["DomeState"],
         "not": ["Granted"]
@@ -615,6 +575,46 @@
             "values": {
               "atTick": {
                 "tick": []
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "SpawnAnchor",
+      "order": 1,
+      "query": {
+        "all": ["Position"],
+        "not": ["Spawn"],
+        "withTag": "Hero"
+      },
+      "as": "e",
+      "do": [
+        {
+          "addComponent": {
+            "entity": {
+              "var": "e"
+            },
+            "component": "Spawn",
+            "values": {
+              "x": {
+                "getComponent": [
+                  {
+                    "var": "e"
+                  },
+                  "Position",
+                  "x"
+                ]
+              },
+              "y": {
+                "getComponent": [
+                  {
+                    "var": "e"
+                  },
+                  "Position",
+                  "y"
+                ]
               }
             }
           }
@@ -721,6 +721,23 @@
                           ]
                         },
                         "component": "Held"
+                      }
+                    },
+                    {
+                      "modifyComponent": {
+                        "entity": {
+                          "getComponent": [
+                            {
+                              "var": "e"
+                            },
+                            "Holding",
+                            "projectile"
+                          ]
+                        },
+                        "component": "AbilityProjectile",
+                        "values": {
+                          "ticksLeft": 50
+                        }
                       }
                     },
                     {
@@ -1898,6 +1915,23 @@
                             }
                           },
                           {
+                            "modifyComponent": {
+                              "entity": {
+                                "getComponent": [
+                                  {
+                                    "var": "e"
+                                  },
+                                  "Holding",
+                                  "projectile"
+                                ]
+                              },
+                              "component": "AbilityProjectile",
+                              "values": {
+                                "ticksLeft": 50
+                              }
+                            }
+                          },
+                          {
                             "removeComponent": {
                               "entity": {
                                 "var": "e"
@@ -2138,6 +2172,23 @@
                           ]
                         },
                         "component": "Held"
+                      }
+                    },
+                    {
+                      "modifyComponent": {
+                        "entity": {
+                          "getComponent": [
+                            {
+                              "var": "e"
+                            },
+                            "Holding",
+                            "projectile"
+                          ]
+                        },
+                        "component": "AbilityProjectile",
+                        "values": {
+                          "ticksLeft": 50
+                        }
                       }
                     },
                     {
