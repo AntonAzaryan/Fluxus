@@ -346,6 +346,98 @@ export function fogScene(): SceneDef {
   };
 }
 
+/**
+ * Та же сцена с туманом плюс платформа способностей и баффов — стенд изоляции
+ * спутников в персональном снапшоте (NET-12).
+ *
+ * Устроена так, чтобы на одном тике наблюдались все три величины требования:
+ * сущность-спутник, которую противник не вправе видеть НИКОГДА (слот
+ * способности), сущность-спутник, видимость которой наследуется у цели (инстанс
+ * баффа), и обычная сущность мира, заспавненная кастом, — её противник видит на
+ * общих основаниях, потому что она часть мира, а не состояние чужого слота.
+ *
+ * Способность бесконечна намеренно: фаза длится дольше матча, поэтому каст идёт
+ * всё время наблюдения, а спавнов после первого тика не случается — `capacity`
+ * от длины прогона не зависит. Слоты выдаёт обычная система сцены (design
+ * Decision 14), а не расстановка: `owner` заранее неизвестен.
+ */
+export function abilityFogScene(): SceneDef {
+  const scene = fogScene();
+  const ownerField = (component: string, field: string): Record<string, unknown> => ({
+    getComponent: [{ var: 'owner' }, component, field],
+  });
+  return {
+    ...scene,
+    components: [
+      ...scene.components,
+      // Маркер «слот уже выдан»: без него система выдачи спавнила бы слот каждый тик.
+      { name: 'Granted', fields: { at: 'i32' } },
+      // Полезная нагрузка сущности каста: чей это след.
+      { name: 'Trace', fields: { by: 'i32' } },
+    ],
+    prefabs: [
+      ...(scene.prefabs ?? []),
+      { name: 'Slot', components: { AbilitySlot: {} } },
+      { name: 'Buff', components: { BuffInstance: {} } },
+      { name: 'Flare', components: { Position: { x: 0, y: 0 }, Visibility: { visibleTo: 0 }, Trace: { by: 0 } } },
+    ],
+    systems: [
+      ...(scene.systems ?? []),
+      {
+        name: 'GrantSlots',
+        order: 5,
+        query: { all: ['Player'], not: ['Granted'] },
+        as: 'e',
+        do: [
+          {
+            spawnEntity: {
+              prefab: 'Slot',
+              overrides: { AbilitySlot: { owner: { var: 'e' }, abilityId: 0, slotIndex: 0 } },
+            },
+          },
+          { addComponent: { entity: { var: 'e' }, component: 'Granted' } },
+        ],
+      },
+    ],
+    abilities: [
+      {
+        id: 'flare',
+        trigger: { always: true },
+        phases: [
+          {
+            id: 'cast',
+            trigger: 'auto',
+            durationTicks: 10000,
+            onEnter: [
+              {
+                spawnEntity: {
+                  prefab: 'Flare',
+                  overrides: {
+                    Position: { x: ownerField('Position', 'x'), y: ownerField('Position', 'y') },
+                    Trace: { by: ownerField('Player', 'slot') },
+                  },
+                },
+              },
+              {
+                spawnEntity: {
+                  prefab: 'Buff',
+                  overrides: {
+                    BuffInstance: { target: { var: 'owner' }, source: { var: 'self' }, buffId: 0 },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+        effects: [],
+      },
+    ],
+    abilityRuntime: { teamField: ['Player', 'slot'] },
+    buffs: [{ id: 'aura', class: 'positive', durationTicks: 10000 }],
+    capacity: 64,
+  };
+}
+
 /** Конфиг матча на сцене с туманом: пересчёт видимости объявлен, как требует NTR-14. */
 export function fogConfig(overrides: Partial<MatchConfig> = {}): MatchConfig {
   return duelConfig({
@@ -356,6 +448,11 @@ export function fogConfig(overrides: Partial<MatchConfig> = {}): MatchConfig {
     ],
     ...overrides,
   });
+}
+
+/** Конфиг матча на сцене с туманом и платформой способностей (NET-12). */
+export function abilityFogConfig(overrides: Partial<MatchConfig> = {}): MatchConfig {
+  return fogConfig({ scene: abilityFogScene(), ...overrides });
 }
 
 export function duelConfig(overrides: Partial<MatchConfig> = {}): MatchConfig {
