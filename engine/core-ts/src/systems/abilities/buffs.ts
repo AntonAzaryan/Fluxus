@@ -103,21 +103,23 @@ export class BuffSystem implements System {
     const buff = buffOf(this.catalog, ctx, instance);
     const source = ctx.get(instance, BUFF_INSTANCE_COMPONENT, 'source');
 
+    // Длительность нового наложения считается в области видимости НОВОГО
+    // инстанса (BUFF-3) — и когда он живёт сам, и когда сводится с действующим.
+    this.scope.bind(instance, target, source, FIRST_STACK);
+    const remaining = this.duration(ctx, buff);
+
     const host =
       buff.stacking === STACKING_INDEPENDENT ? NO_ENTITY : this.host(ctx, instances, instance, target);
     if (host !== NO_ENTITY) {
-      this.coalesce(ctx, buff, host, instance, target);
+      this.coalesce(ctx, buff, host, instance, target, remaining);
       return;
     }
 
-    this.scope.bind(instance, target, source, FIRST_STACK);
-    const set = (field: string, value: number): void => {
-      ctx.commands.setField(instance, BUFF_INSTANCE_COMPONENT, field, value);
-    };
-    set('class', buff.klass);
-    set('stacks', FIRST_STACK);
-    set('remaining', this.duration(ctx, buff));
-    set('periodicTicks', 0);
+    const write = ctx.commands;
+    write.setField(instance, BUFF_INSTANCE_COMPONENT, 'class', buff.klass);
+    write.setField(instance, BUFF_INSTANCE_COMPONENT, 'stacks', FIRST_STACK);
+    write.setField(instance, BUFF_INSTANCE_COMPONENT, 'remaining', remaining);
+    write.setField(instance, BUFF_INSTANCE_COMPONENT, 'periodicTicks', 0);
     this.placeStatMods(ctx, buff, instance, target);
   }
 
@@ -164,14 +166,14 @@ export class BuffSystem implements System {
     host: EntityId,
     instance: EntityId,
     target: EntityId,
+    remaining: number,
   ): void {
-    // Область видимости продления — область ДЕЙСТВУЮЩЕГО инстанса: длительность
-    // берётся новая (BUFF-3), а `self` и `source` остаются его собственными,
-    // потому что жить дальше будет он.
+    ctx.commands.setField(host, BUFF_INSTANCE_COMPONENT, 'remaining', remaining);
+    // Дальше область видимости — область ДЕЙСТВУЮЩЕГО инстанса: жить будет он,
+    // и его же поля читает выражение величины статовой правки.
     const source = buffField(ctx, host, 'source');
     const stacks = buffField(ctx, host, 'stacks');
     this.scope.bind(host, target, source, stacks);
-    ctx.commands.setField(host, BUFF_INSTANCE_COMPONENT, 'remaining', this.duration(ctx, buff));
     if (buff.stacking === STACKING_STACK) {
       const ceiling = this.maxStacks(ctx, buff);
       const raised = stacks + 1 > ceiling ? ceiling : stacks + 1;
