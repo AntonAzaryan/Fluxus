@@ -151,6 +151,160 @@ export function propScene(): SceneDef {
 }
 
 /**
+ * Сцена дуэли, на которой проверяется выразимость BUFF-7: пассивка, аура, DoT и
+ * зона с эффектом — четырьмя записями таблиц определений и одной системой сцены,
+ * без единого нового механизма платформы.
+ *
+ * Живёт здесь, а не в `core-ts/test`, потому что предмет проверки — не
+ * поведение одной системы, а то, что четыре разных игровых понятия собираются
+ * из уже существующих частей: способность с триггером `always`, эффект с
+ * длительностью, периодика и статовая правка в списке источников таймскейла.
+ *
+ * `capacity` поднята под сущности платформы: слоты, инстансы и зоны — обычные
+ * сущности мира, и место им нужно наравне с героями (BUFF-1, ABIL-1).
+ */
+export function buffScene(): SceneDef {
+  const scene = duelScene();
+  const hero = scene.prefabs![0]!;
+  const buffed = { ...hero.components, TimeScale: {}, TimeScaleModifiers: {} };
+  return {
+    ...scene,
+    components: [...scene.components, { name: 'Drift', fields: { step: 'fixed' } }],
+    prefabs: [
+      { ...hero, components: buffed },
+      // Тот же герой, но уходящий сам: движение в этом стенде задаёт система
+      // сцены, а не физика — зависимость сборки сюда не приезжает (DI-3).
+      { ...hero, name: 'Walker', components: { ...buffed, Drift: { step: 0 } } },
+      // Слот, инстанс и зона выдаются спавном (ABIL-1, BUFF-1): ни новых схем,
+      // ни правки существующих для этого не требуется.
+      { name: 'Slot', components: { AbilitySlot: {}, AbilityCooldown: { remaining: 0, total: 0 } } },
+      { name: 'Buff', components: { BuffInstance: {} } },
+      { name: 'Dome', components: { Position: { x: 0, y: 0 }, AbilityDuration: {} } },
+    ],
+    timeScale: true,
+    systems: [
+      ...(scene.systems ?? []),
+      {
+        name: 'Drift',
+        order: 20,
+        query: { all: ['Drift', 'Position'] },
+        as: 'e',
+        do: [
+          {
+            modifyComponent: {
+              entity: { var: 'e' },
+              component: 'Position',
+              values: {
+                x: {
+                  '+': [
+                    { getComponent: [{ var: 'e' }, 'Position', 'x'] },
+                    { getComponent: [{ var: 'e' }, 'Drift', 'step'] },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+      // Зона накладывает бафф на вошедших — обычная система сцены над обычным
+      // запросом (BUFF-7): о «зонах» платформе знать нечего.
+      {
+        name: 'DomeSlow',
+        order: 130,
+        query: { all: ['AbilityDuration'] },
+        as: 'z',
+        do: [
+          {
+            forEach: {
+              query: {
+                all: ['Player'],
+                withinRadius: { center: positionOf('z'), radius: fixed.fromInt(2) },
+              },
+              as: 'e',
+              do: [spawnBuff('e', 'z', CHILLED)],
+            },
+          },
+        ],
+      },
+    ],
+    // Аура: триггер `always`, короткий `refresh`-бафф на сущности в круге.
+    // Вышедшая из круга сущность перестаёт получать продление, и бафф гаснет
+    // сам — системы «следить за выходом» не появляется (BUFF-7).
+    abilities: [
+      {
+        id: 'aura',
+        trigger: { always: true },
+        effects: [
+          {
+            forEach: {
+              query: {
+                all: ['Player'],
+                withinRadius: { center: positionOf('owner'), radius: fixed.fromInt(1) },
+              },
+              as: 'e',
+              do: [spawnBuff('e', 'self', AURAD)],
+            },
+          },
+        ],
+      },
+    ],
+    abilityRuntime: { teamField: ['Player', 'slot'] },
+    buffs: [
+      // Пассивка: постоянный бафф со статовой правкой. Длительности нет вовсе.
+      {
+        id: 'passive',
+        class: 'positive',
+        statMods: [{ component: 'TimeScaleModifiers', value: fixed.fromFloat(1.5) }],
+      },
+      // Аурный бафф: `refresh` с длительностью в пару тиков.
+      { id: 'aurad', class: 'positive', durationTicks: 2, stacking: 'refresh' },
+      // DoT: отрицательный бафф с периодикой. «Урон» целиком принадлежит
+      // контенту — платформа исполняет список действий, и только.
+      {
+        id: 'burn',
+        class: 'negative',
+        durationTicks: 9,
+        stacking: 'refresh',
+        periodic: {
+          everyTicks: 3,
+          do: [{ emitEvent: { type: 'Burn', data: { target: { var: 'target' } } } }],
+        },
+      },
+      // Дебафф купола: замедление статовой правкой в списке таймскейла — ровно
+      // то, ради чего писался TIME-7.
+      {
+        id: 'chilled',
+        class: 'negative',
+        durationTicks: 2,
+        stacking: 'refresh',
+        statMods: [{ component: 'TimeScaleModifiers', value: fixed.fromFloat(0.5) }],
+      },
+    ],
+    capacity: 64,
+  };
+}
+
+/** Индексы определений баффов сцены: из мира определение адресуется индексом (BUFF-1). */
+export const PASSIVE = 0;
+export const AURAD = 1;
+export const BURN = 2;
+export const CHILLED = 3;
+
+const positionOf = (name: string): Record<string, unknown> => ({
+  vec: [
+    { getComponent: [{ var: name }, 'Position', 'x'] },
+    { getComponent: [{ var: name }, 'Position', 'y'] },
+  ],
+});
+
+const spawnBuff = (target: string, source: string, buffId: number): Record<string, unknown> => ({
+  spawnEntity: {
+    prefab: 'Buff',
+    overrides: { BuffInstance: { target: { var: target }, source: { var: source }, buffId } },
+  },
+});
+
+/**
  * Сцена дуэли с туманом войны, носителем карты пола (TERR-6) и носителем арены
  * (ARENA-1). Компоненты FoW дописывает загрузчик по флагу `fog` (SER-7), а
  * `Vision` герою выдаёт prefab: маску считает нативная `VisibilitySystem`, которую
