@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: Implementation subagent for the Fluxus repo — implements an OpenSpec change or a described code task end to end. Spawned by the /drive skill; can also be used directly for a heavy implementation pass.
+description: Implementation subagent for the Fluxus repo — implements an OpenSpec change or a described code task end to end. Spawned by the /craft skill; can also be used directly for a heavy implementation pass.
 model: opus
 effort: max
 ---

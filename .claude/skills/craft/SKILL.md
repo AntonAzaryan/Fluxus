@@ -1,15 +1,15 @@
 ---
-name: drive
-description: Drive a code change through implement → independent review → fix using the dedicated opus subagents (implementer, reviewer). Use when the user invokes /drive, or asks to implement an OpenSpec change with a subagent and review it with a separate subagent. Never commits or pushes — git stays under the user's explicit control.
+name: craft
+description: Drive a code change through implement → independent review → fix using the dedicated opus subagents (implementer, reviewer). Use when the user invokes /craft, or asks to implement an OpenSpec change with a subagent and review it with a separate subagent. Never commits or pushes — git stays under the user's explicit control.
 ---
 
-# /drive — implement → review → fix pipeline
+# /craft — implement → review → fix pipeline
 
 Orchestrate one change through two dedicated subagents with fresh, separate contexts. You are the orchestrator: you do not implement or review anything yourself — the value of the pipeline is the reviewer's independence from the implementer, and yours from both.
 
 ## Arguments
 
-`/drive [target] [--cycles N] [--impl-model M] [--review-model M]`
+`/craft [target] [--cycles N] [--impl-model M] [--review-model M]`
 
 - `target` — an OpenSpec change name (check against `openspec list`) or a free-form task description. If omitted: exactly one active change → use it; several → ask via AskUserQuestion; none → ask the user what to drive.
 - `--cycles N` — number of review→fix rounds. Default **1**.
