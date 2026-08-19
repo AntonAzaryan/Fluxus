@@ -8,10 +8,17 @@
  * боту хода, а любой ход отменял бы каст.
  *
  * О механике самих способностей слой не знает НИЧЕГО (BOT-6): что кнопка 0 —
- * заряжаемый снаряд, а кнопка 6 — щит, живёт в JSON-системах сцены. Мозгу
- * профиль сообщает только бит, цель (`enemy` / `threat` / `cliff`), дальность,
- * длительность удержания и кулдаун — и этого хватает, чтобы шесть разных
- * способностей демо игрались одним кодом.
+ * заряжаемый снаряд, а кнопка 6 — щит, живёт в сцене. Мозгу профиль сообщает
+ * только бит, цель (`enemy` / `threat` / `cliff`), дальность, длительность
+ * удержания и кулдаун — и этого хватает, чтобы шесть разных способностей демо
+ * игрались одним кодом.
+ *
+ * Способность ПЛАТФОРМЫ (ABIL-1..ABIL-5) описывается тем же профилем шире:
+ * блоком `cast` — индексом слота, битами подтверждения и отмены, длительностью
+ * фазы удержания и цепочкой шагов прицеливания. Имён и индексов определений
+ * сцены здесь по-прежнему нет ни одного: их называет документ. Ведёт такой каст
+ * `continueCast`, и своё состояние он сверяет со СВОИМ `AbilitySlot` из
+ * собственного снапшота — угадывать шаг мозгу не нужно и нечем.
  *
  * Одна способность за раз, и это не упрощение. Сцена демо гейтит касты друг об
  * друга (`ShieldCast` и `CaptureRelease` не срабатывают во время заряда), а
@@ -22,7 +29,8 @@
  * несеяный шум законны — наружу уходит только маска `buttons`, а она проходит
  * те же ограничения, что маска человека (`boundary.ts`, INP-3).
  */
-import type { BotAbilityProfile, BotProfile } from '../../profile.js';
+import { NO_PHASE } from '@game-mvp/core';
+import type { BotAbilityCastProfile, BotAbilityProfile, BotProfile, BotStepAim } from '../../profile.js';
 import type { BotTerrain } from '../../terrainView.js';
 import type { PerceivedWorld } from './perception.js';
 import type { BrainRandom } from './random.js';
@@ -45,9 +53,26 @@ export interface AbilityIntent {
    * прицел в это время живёт своей жизнью.
    */
   readonly aim: AbilityAim | undefined;
+  /**
+   * Точка прицела, уезжающая во `InputFrame` (TICK-2). Есть только у
+   * способности, описанной в профиле фазами и шагами: способность старого вида
+   * точкой не целится, и кадр её не возит — иначе запись матча отличалась бы от
+   * записи того же матча до появления поля (CLI-10).
+   */
+  readonly target: AbilityAim | undefined;
+  /** Бит подтверждения шага цепочки на этом тике (ABIL-5); индекс — из профиля. */
+  readonly confirmBit: number | undefined;
+  /** Бит отмены начатого каста; индекс — из профиля. */
+  readonly cancelBit: number | undefined;
 }
 
-const IDLE: AbilityIntent = { buttons: 0, aim: undefined };
+const IDLE: AbilityIntent = {
+  buttons: 0,
+  aim: undefined,
+  target: undefined,
+  confirmBit: undefined,
+  cancelBit: undefined,
+};
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -77,6 +102,17 @@ interface ActivePress {
    * потери цели.
    */
   aim: AbilityAim | undefined;
+  /** Тик начала применения — от него отсчитывается предел `giveUpTicks`. */
+  readonly startedTick: number;
+  /**
+   * Сколько подтверждений цепочки бот уже ОТПРАВИЛ. Это его собственный счёт, а
+   * не то, что видно в снапшоте: между отправкой и её появлением в `staged`
+   * лежит круг до сервера плюс задержка реакции, и без своего счёта бот
+   * подтверждал бы один и тот же шаг всё это время.
+   */
+  sent: number;
+  /** Тик последнего подтверждения (или начала каста): часы `confirmDelayTicks`. */
+  stepSince: number;
 }
 
 /** Что слой решил про одну способность на этом тике. */
@@ -154,13 +190,123 @@ export class AbilityLayer {
     tick: number,
   ): AbilityIntent {
     held.aim = this.score(held.index, held.ability, world, plan).aim ?? held.aim;
+    const cast = held.ability.cast;
+    if (cast !== undefined) return this.continueCast(held, cast, world, plan, tick);
     const expired = tick >= held.untilTick;
     const rival = expired ? undefined : this.best(world, plan, tick, held.index)?.ability.target;
     const interrupted = rival === 'threat' || rival === 'cliff';
-    if (!expired && !interrupted) return { buttons: 1 << held.ability.button, aim: held.aim };
+    if (!expired && !interrupted) return this.press(1 << held.ability.button, held.aim);
     // Спад кнопки — тик БЕЗ бита: он и есть отпускание, которое сцена читает
     // (`ChargeRelease`, `CaptureRelease`). Кулдаун отсчитывается отсюда, а не от
     // нажатия: удержание — часть применения, а не пауза перед ним.
+    this.release(held, tick);
+    // Прицел держится и на спаде: именно он решает, куда улетит заряд.
+    return this.press(0, held.aim);
+  }
+
+  /**
+   * Ведение каста, описанного фазами и цепочкой шагов (BOT-6, ABIL-4, ABIL-5).
+   *
+   * Бот не угадывает, в каком он шаге: свой `AbilitySlot` лежит в его
+   * собственном отфильтрованном снапшоте, и `phase`/`staged` читаются оттуда.
+   * Но между отправкой подтверждения и его появлением в `staged` лежит круг до
+   * сервера плюс задержка реакции, поэтому «сколько уже подтверждено» бот
+   * считает САМ, а снапшот служит воротами: следующий шаг подтверждается лишь
+   * когда симуляция догнала всё отправленное. Без ворот бот выпалил бы всю
+   * цепочку за три тика — сверхчеловеческий ввод, ровно тот, который BOT-5
+   * запрещает.
+   *
+   * Второго пути у бота нет: подтверждение — обычный бит маски, накопление
+   * происходит в симуляции, одинаково с человеком.
+   */
+  private continueCast(
+    held: ActivePress,
+    cast: BotAbilityCastProfile,
+    world: PerceivedWorld,
+    plan: BehaviorPlan,
+    tick: number,
+  ): AbilityIntent {
+    const slot = world.slots.find((s) => s.slotIndex === cast.slotIndex);
+    const trigger = tick < held.untilTick ? 1 << held.ability.button : 0;
+
+    // Отмена — та же кнопка, что у человека (INP-4), и решение того же класса,
+    // что перехват удержания: реактивная способность или воля профиля.
+    if (this.cancels(held, cast, world, plan, tick)) {
+      this.release(held, tick);
+      return { buttons: 0, aim: held.aim, target: held.aim, confirmBit: undefined, cancelBit: cast.cancelButton };
+    }
+
+    // Каст кончился — слот сообщает «каста нет» после того, как бот успел его
+    // увидеть начавшимся, — либо истёк предел ведения.
+    const settled = slot?.phase === NO_PHASE && held.sent >= cast.steps.length;
+    if (settled || tick - held.startedTick >= cast.giveUpTicks) {
+      this.release(held, tick);
+      return this.press(0, held.aim);
+    }
+
+    const step = cast.steps[held.sent];
+    if (step === undefined) return { ...this.press(trigger, held.aim), target: held.aim };
+
+    const point = this.stepPoint(step.aim, world) ?? held.aim;
+    const target = point === undefined ? undefined : this.noisy(point, step.pointNoise);
+    // Ворота: симуляция догнала отправленное И вылежался срок прицеливания.
+    const caughtUp = slot === undefined || slot.staged >= held.sent;
+    const aimed = tick - held.stepSince >= step.confirmDelayTicks;
+    if (!caughtUp || !aimed) {
+      return { buttons: trigger, aim: held.aim, target, confirmBit: undefined, cancelBit: undefined };
+    }
+    held.sent += 1;
+    held.stepSince = tick;
+    return { buttons: trigger, aim: held.aim, target, confirmBit: cast.confirmButton, cancelBit: undefined };
+  }
+
+  /** Бросает ли бот начатый каст: реактивная способность или воля профиля. */
+  private cancels(
+    held: ActivePress,
+    cast: BotAbilityCastProfile,
+    world: PerceivedWorld,
+    plan: BehaviorPlan,
+    tick: number,
+  ): boolean {
+    if (cast.cancelButton === undefined) return false;
+    const rival = this.best(world, plan, tick, held.index)?.ability.target;
+    if (rival === 'threat' || rival === 'cliff') return true;
+    // Вероятность отмены — ручка сложности (BOT-6): бот, ни разу не
+    // передумавший посреди каста, читается как автомат.
+    return cast.cancelChance > 0 && this.random.signed() > 1 - 2 * cast.cancelChance;
+  }
+
+  /** Точка шага цепочки: то же наблюдение, которым мозг выбирает способность. */
+  private stepPoint(aim: BotStepAim, world: PerceivedWorld): AbilityAim | undefined {
+    switch (aim) {
+      case 'enemy': {
+        const enemy = nearestEnemy(world);
+        // Помнимое под туманом положение шагом не целится: подтверждение по
+        // нему провалится проверкой видимости (ABIL-5, FOW-2).
+        return enemy?.visible === true ? { x: enemy.x, y: enemy.y } : undefined;
+      }
+      case 'threat': {
+        const threat = nearestThreat(world);
+        return threat === undefined ? undefined : { x: threat.x, y: threat.y };
+      }
+      case 'self':
+        return { x: world.self.x, y: world.self.y };
+    }
+  }
+
+  /** Шум точки шага (BOT-6): дизайнер решает, как криво бот целится. */
+  private noisy(point: AbilityAim, noise: number): AbilityAim {
+    if (noise <= 0) return point;
+    return { x: point.x + this.random.signed() * noise, y: point.y + this.random.signed() * noise };
+  }
+
+  /** Общая форма ответа слоя: маска и прицел без шагов цепочки. */
+  private press(buttons: number, aim: AbilityAim | undefined): AbilityIntent {
+    return { buttons, aim, target: undefined, confirmBit: undefined, cancelBit: undefined };
+  }
+
+  /** Конец применения: кнопка отпущена, кулдаун взведён с джиттером (BOT-6). */
+  private release(held: ActivePress, tick: number): void {
     this.active = undefined;
     // Джиттер кулдауна (BOT-6): бот, жмущий способность ровно по таймеру,
     // читается как автомат — им он и является, и профиль обязан уметь это
@@ -168,22 +314,29 @@ export class AbilityLayer {
     const { jitterTicks } = this.profile.decision;
     const jitter = jitterTicks === 0 ? 0 : this.random.below(jitterTicks + 1);
     this.readyAtTick[held.index] = tick + held.ability.cooldownTicks + jitter;
-    // Прицел держится и на спаде: именно он решает, куда улетит заряд.
-    return { buttons: 0, aim: held.aim };
   }
 
   private beginPress(world: PerceivedWorld, plan: BehaviorPlan, tick: number): AbilityIntent {
     const chosen = this.best(world, plan, tick, undefined);
     if (chosen === undefined) return IDLE;
+    const cast = chosen.ability.cast;
     // `holdTicks` — сколько тиков кнопка ЗАЖАТА, поэтому срок отсчитывается от
-    // текущего тика включительно: единица даёт тап (нажали — отпустили).
+    // текущего тика включительно: единица даёт тап (нажали — отпустили). У
+    // способности платформы длительность удержания называет её собственное
+    // описание: это фаза каста (ABIL-4), а не общая ручка списка.
     this.active = {
       index: chosen.index,
       ability: chosen.ability,
-      untilTick: tick + chosen.ability.holdTicks,
+      untilTick: tick + (cast === undefined ? chosen.ability.holdTicks : cast.holdTicks),
       aim: chosen.aim,
+      startedTick: tick,
+      sent: 0,
+      stepSince: tick,
     };
-    return { buttons: 1 << chosen.ability.button, aim: chosen.aim };
+    const buttons = 1 << chosen.ability.button;
+    if (cast === undefined) return this.press(buttons, chosen.aim);
+    // Первый тик — только триггер: подтверждать нечего, пока каст не начался.
+    return { buttons, aim: chosen.aim, target: chosen.aim, confirmBit: undefined, cancelBit: undefined };
   }
 
   /** Лучшая из готовых способностей; `except` исключается из соревнования. */

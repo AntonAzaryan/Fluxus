@@ -24,6 +24,7 @@
  * профиль — не документ симуляции, в `worldInit` он не входит и на детерминизм
  * не влияет (BOT-5).
  */
+import { ABILITY_STEPS } from '@game-mvp/core';
 
 /**
  * Версия формы документа профиля. Растёт при несовместимом изменении состава.
@@ -57,6 +58,63 @@ export type BotBehavior = (typeof BOT_BEHAVIORS)[number];
 export const BOT_ABILITY_TARGETS = ['enemy', 'threat', 'cliff'] as const;
 
 export type BotAbilityTarget = (typeof BOT_ABILITY_TARGETS)[number];
+
+/**
+ * Чем целится ОДИН шаг цепочки прицеливания (ABIL-5). Уже, чем цели выбора
+ * способности: шаг называет ТОЧКУ, а `cliff` точки не даёт — это признак
+ * «по курсу уступ», и шагом он не выражается.
+ */
+export const BOT_STEP_AIMS = ['enemy', 'threat', 'self'] as const;
+
+export type BotStepAim = (typeof BOT_STEP_AIMS)[number];
+
+/** Один шаг цепочки прицеливания: чем целится и когда подтверждается (BOT-6). */
+export interface BotAbilityStepProfile {
+  readonly aim: BotStepAim;
+  /**
+   * Сколько тиков бот целится, прежде чем подтвердить шаг. Человечность, а не
+   * механика: мгновенное подтверждение цепочки — тот же сверхчеловеческий ввод,
+   * что прицел без шума (BOT-6).
+   */
+  readonly confirmDelayTicks: number;
+  /** Шум точки прицела шага, мировые единицы: дизайнер решает, как криво бот целится. */
+  readonly pointNoise: number;
+}
+
+/**
+ * Способность платформы (ABIL-1..ABIL-5) в терминах профиля: фазы каста и
+ * цепочка шагов вместо одного бита с дальностью (BOT-6). Соответствие
+ * способности СЦЕНЫ и этой записи — данные: индекс слота владельца и биты
+ * подтверждения с отменой называет документ, а не код мозга.
+ *
+ * Блок необязателен, и это несущее: способность, описанная одним битом, — не
+ * ошибка документа, а способность СТАРОГО вида (сцена гейтит её сама, без
+ * подтверждения шага). Способность, требующую подтверждения, такой профиль
+ * просто не применяет — чинится это профилем, а не ветвлением в коде мозга.
+ */
+export interface BotAbilityCastProfile {
+  /** Индекс слота владельца (`AbilitySlot.slotIndex`, ABIL-1). */
+  readonly slotIndex: number;
+  /** Бит подтверждения шага в маске `buttons` (INP-4, ABIL-3). */
+  readonly confirmButton: number;
+  /** Бит отмены; без него бот начатый каст не отменяет. */
+  readonly cancelButton?: number;
+  /** Цепочка шагов в порядке ABIL-5; пустая — способность без прицеливания. */
+  readonly steps: readonly BotAbilityStepProfile[];
+  /**
+   * Сколько тиков держать бит триггера — длительность фазы удержания (ABIL-4).
+   * Ноль — тап: бит живёт один тик нажатия и на следующем спадает.
+   */
+  readonly holdTicks: number;
+  /** Вероятность отменить начатый каст на тике решения, 0..1. */
+  readonly cancelChance: number;
+  /**
+   * Сколько тиков бот ведёт начатый каст, прежде чем бросить его. Страховка от
+   * повисшего каста: определение сцены могло прерваться так, что до мозга это
+   * не доехало, и без предела он держал бы способность занятой навсегда.
+   */
+  readonly giveUpTicks: number;
+}
 
 /** Одна способность: бит `buttons` (TICK-2) и политика её применения. */
 export interface BotAbilityProfile {
@@ -99,6 +157,11 @@ export interface BotAbilityProfile {
    * Умолчание — `false`: каст и щит направления не требуют.
    */
   readonly requiresMoving?: boolean;
+  /**
+   * Описание способности платформы (BOT-6). Отсутствует — способность старого
+   * вида: бот жмёт бит и держит его `holdTicks`, ничего не подтверждая.
+   */
+  readonly cast?: BotAbilityCastProfile;
 }
 
 /** Человечность реакции: наблюдение доезжает до решения не мгновенно. */
@@ -225,6 +288,59 @@ function flag(
 /** Тики — целые и неотрицательные: буфер наблюдений и джиттер меряются тиками. */
 const TICKS = { min: 0, max: 600, int: true } as const;
 
+/** Индекс бита маски `buttons` — ширина u16 (TICK-2). */
+const BUTTON = { min: 0, max: 15, int: true } as const;
+
+/** Один шаг цепочки: своя валидация, свой путь в находках. */
+function parseStep(input: unknown, path: string, findings: Findings): BotAbilityStepProfile {
+  const root = record(input, path, findings);
+  const aim = root.aim;
+  const known = (BOT_STEP_AIMS as readonly unknown[]).includes(aim);
+  if (!known) {
+    findings.issues.push(
+      `${path}.aim: ожидалось одно из ${BOT_STEP_AIMS.join('|')}, получено ${JSON.stringify(aim)}`,
+    );
+  }
+  return {
+    aim: known ? (aim as BotStepAim) : 'enemy',
+    confirmDelayTicks: num(root, 'confirmDelayTicks', path, TICKS, findings),
+    pointNoise: num(root, 'pointNoise', path, { min: 0, max: 100 }, findings),
+  };
+}
+
+/**
+ * Описание способности платформы (BOT-6). Число шагов ограничено константой
+ * платформы (`ABILITY_STEPS`, ABIL-1): цепочка длиннее слоту не влезет, и
+ * профиль, её объявивший, описывает не ту способность, что в сцене.
+ */
+function parseCast(input: unknown, path: string, findings: Findings): BotAbilityCastProfile {
+  const root = record(input, path, findings);
+  const steps: BotAbilityStepProfile[] = [];
+  if (!Array.isArray(root.steps)) {
+    findings.issues.push(`${path}.steps: ожидался массив шагов прицеливания`);
+  } else {
+    if (root.steps.length > ABILITY_STEPS) {
+      findings.issues.push(
+        `${path}.steps: ${root.steps.length} шагов при пределе платформы ${ABILITY_STEPS} (ABIL-1)`,
+      );
+    }
+    for (const [index, entry] of root.steps.entries()) {
+      steps.push(parseStep(entry, `${path}.steps[${index}]`, findings));
+    }
+  }
+  const cancelButton =
+    root.cancelButton === undefined ? undefined : num(root, 'cancelButton', path, BUTTON, findings);
+  return {
+    slotIndex: num(root, 'slotIndex', path, { min: 0, max: 63, int: true }, findings),
+    confirmButton: num(root, 'confirmButton', path, BUTTON, findings),
+    ...(cancelButton === undefined ? {} : { cancelButton }),
+    steps,
+    holdTicks: num(root, 'holdTicks', path, TICKS, findings),
+    cancelChance: num(root, 'cancelChance', path, { min: 0, max: 1 }, findings),
+    giveUpTicks: num(root, 'giveUpTicks', path, { ...TICKS, min: 1 }, findings),
+  };
+}
+
 /** Одна запись списка способностей: своя валидация, свой путь в находках. */
 function parseAbility(input: unknown, path: string, findings: Findings): BotAbilityProfile {
   const root = record(input, path, findings);
@@ -251,12 +367,13 @@ function parseAbility(input: unknown, path: string, findings: Findings): BotAbil
     findings.issues.push(`${path}.rise: перепад уступа осмыслен только у цели "cliff"`);
   }
   const requiresMoving = flag(root, 'requiresMoving', path, findings);
+  const cast = root.cast === undefined ? undefined : parseCast(root.cast, `${path}.cast`, findings);
 
   return {
     name,
     // Ширина маски `buttons` — u16 (TICK-2): биты выше 15 не переживают круг
     // через транспорт, и профиль не вправе их назначать.
-    button: num(root, 'button', path, { min: 0, max: 15, int: true }, findings),
+    button: num(root, 'button', path, BUTTON, findings),
     target: resolved,
     range: num(root, 'range', path, { min: 0, max: 1000 }, findings),
     holdTicks: num(root, 'holdTicks', path, { ...TICKS, min: 1 }, findings),
@@ -264,6 +381,7 @@ function parseAbility(input: unknown, path: string, findings: Findings): BotAbil
     weight: num(root, 'weight', path, { min: 0, max: 10 }, findings),
     ...(rise === undefined ? {} : { rise }),
     ...(requiresMoving === undefined ? {} : { requiresMoving }),
+    ...(cast === undefined ? {} : { cast }),
   };
 }
 

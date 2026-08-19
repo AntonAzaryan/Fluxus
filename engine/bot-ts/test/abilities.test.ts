@@ -35,6 +35,7 @@ function scene(overrides: Partial<PerceivedWorld> = {}): PerceivedWorld {
     tick: 100,
     observedTick: 100,
     self: { id: 1, x: 0, y: 0, vx: 0, vy: 0, slot: 1, team: 1 },
+    slots: [],
     enemies: [],
     threats: [],
     arenaRadius: 20,
