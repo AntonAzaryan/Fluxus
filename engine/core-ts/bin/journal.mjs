@@ -25,14 +25,15 @@
  * сам (>=22.18), а хук резолва добавляет единственное, чего ему не хватает
  * (`tsHook.mjs`, общий на обе команды).
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 // Ради побочного действия: регистрация хука резолва (см. `tsHook.mjs`).
 import './tsHook.mjs';
 
 const FORMATS = ['jsonl', 'text'];
 
 const USAGE =
-  'usage: node bin/journal.mjs <trace.jsonl> [--dict <path>] [--format=jsonl|text] [--out <path>]\n';
+  'usage: node bin/journal.mjs <trace.jsonl> [--dict=<path>] [--format=jsonl|text] [--out=<path>]\n';
 
 const {
   buildJournal,
@@ -77,27 +78,64 @@ export function journalReport(result) {
   return report;
 }
 
-function main() {
-  const args = process.argv.slice(2);
+/**
+ * Разбор аргументов. Опечатка — отказ с кодом 2 и usage, как у `bin/sim.mjs`, а
+ * не тихое умолчание: `--dict` без значения дал бы ПОЛНЫЙ журнал, в котором все
+ * факты идут с неизвестной семантикой, — то есть результат, неотличимый от
+ * законного прогона без словаря (CLI-12). Такую разницу читатель журнала не
+ * заметит вовсе.
+ *
+ * Возвращает разобранное либо строку причины отказа.
+ */
+export function parseJournalArgs(args) {
   let file;
   let dict;
   let out;
   let format = 'jsonl';
 
+  /** Значение флага, взятого раздельной формой: соседний аргумент — не флаг. */
+  const valueAt = (index) => {
+    const value = args[index];
+    if (value === undefined || value.startsWith('--')) return undefined;
+    return value;
+  };
+
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg.startsWith('--format=')) format = arg.slice('--format='.length);
-    else if (arg === '--dict') dict = args[++i];
-    else if (arg.startsWith('--dict=')) dict = arg.slice('--dict='.length);
-    else if (arg === '--out') out = args[++i];
+    else if (arg === '--format') {
+      format = valueAt(i + 1);
+      if (format === undefined) return { error: 'флаг --format назван без значения' };
+      i++;
+    } else if (arg === '--dict' || arg === '--out') {
+      const value = valueAt(i + 1);
+      if (value === undefined) return { error: `флаг ${arg} назван без значения` };
+      if (arg === '--dict') dict = value;
+      else out = value;
+      i++;
+    } else if (arg.startsWith('--dict=')) dict = arg.slice('--dict='.length);
     else if (arg.startsWith('--out=')) out = arg.slice('--out='.length);
+    // Незнакомый флаг не становится путём трейса и не пропадает молча: опечатка
+    // в имени иначе читалась бы как «прогон без словаря» либо как ENOENT.
+    else if (arg.startsWith('--')) return { error: `неизвестный флаг ${arg}` };
+    else if (file !== undefined) return { error: `лишний аргумент "${arg}": файл трейса один` };
     else file = arg;
   }
 
-  if (file === undefined || file.startsWith('--') || !FORMATS.includes(format)) {
-    process.stderr.write(USAGE);
+  if (file === undefined) return { error: 'не назван файл трейса' };
+  if (!FORMATS.includes(format)) {
+    return { error: `неизвестная форма "${format}"; известные: ${FORMATS.join(', ')}` };
+  }
+  return { file, dict, out, format };
+}
+
+function main() {
+  const parsed = parseJournalArgs(process.argv.slice(2));
+  if (parsed.error !== undefined) {
+    process.stderr.write(`${parsed.error}\n${USAGE}`);
     process.exit(2);
   }
+  const { file, dict, out, format } = parsed;
 
   const result = journalFromFile(file, dict);
   const document = journalDocument(result, format);
@@ -109,6 +147,26 @@ function main() {
   process.stderr.write(journalReport(result));
 }
 
-// Импорт этого файла как модуля (стенд демо) разбора аргументов не запускает:
-// у чужого процесса свой `process.argv`, и его флаги здесь не при чём.
-if (process.argv[1] !== undefined && import.meta.filename === process.argv[1]) main();
+/**
+ * Запущен ли файл КАК КОМАНДА. Импорт этого файла как модуля (стенд демо)
+ * разбора аргументов не запускает: у чужого процесса свой `process.argv`, и его
+ * флаги здесь не при чём.
+ *
+ * Сравниваются URL после разрешения симлинков, а не строки путей: `import.meta`
+ * несёт уже разрешённый путь, а `process.argv[1]` — тот, что набрали в
+ * командной строке. Через симлинк на каталог репозитория они не совпадают, и
+ * команда молча ничего не делала бы, возвращая при этом ноль, — самый дорогой
+ * вид отказа для того, кто зовёт её из скрипта.
+ */
+function launchedAsCommand() {
+  const argv = process.argv[1];
+  if (argv === undefined) return false;
+  try {
+    return pathToFileURL(realpathSync(argv)).href === import.meta.url;
+  } catch {
+    // Пути нет на диске (`node --eval` и подобное) — командой это не является.
+    return false;
+  }
+}
+
+if (launchedAsCommand()) main();

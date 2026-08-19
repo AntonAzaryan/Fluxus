@@ -108,6 +108,7 @@ export {
   PhysicsWorld,
   BLOCKS_MOVEMENT,
   BLOCKS_VISION,
+  PHYSICS_EVENTS,
   SHAPE_AABB,
   SHAPE_CIRCLE,
   STATIC_COLLIDER,
@@ -119,6 +120,7 @@ export {
   ArenaSystem,
   ARENA_COMPONENT,
   ARENA_COMPONENTS,
+  ARENA_EVENTS,
   ARENA_PREFAB,
   ARENA_STATE_COMPONENT,
 } from './systems/arena.js';
@@ -204,7 +206,7 @@ export { buildSimulation } from './sim/build.js';
 export type { BuiltSimulation, SimulationBuildDef, SimulationBuildOptions } from './sim/build.js';
 export { jsonSerializer, prettyJsonSerializer, snapshotToPlain, snapshotFromPlain } from './sim/serialization.js';
 export type { PlainSnapshot, Serializer } from './sim/serialization.js';
-export { createJsonlSink, traceLine } from './sim/trace.js';
+export { createJsonlSink, parseTraceSelect, selectingSink, traceLine } from './sim/trace.js';
 export { runScenario, runScenarioBytes } from './sim/scenario.js';
 export type { RunOutput, ScenarioDef, TickRecord } from './sim/scenario.js';
 /**

@@ -33,6 +33,20 @@ export const ARENA_PREFAB = 'Arena';
 /** Компонент стороны границы на прошлом тике — им же контент и подписывает сущность на систему. */
 export const ARENA_STATE_COMPONENT = 'ArenaState';
 
+/**
+ * События арены (ARENA-5): тип → имена полей его данных. Перечень здесь по той
+ * же причине, что и у физики (`PHYSICS_EVENTS`): эти два факта эмитит МЕХАНИЗМ,
+ * а не сцена действием `emitEvent`, — обходом документа игры их не найти.
+ */
+export const ARENA_EVENTS = {
+  LeftArena: ['entity'],
+  FellThroughFloor: ['entity'],
+} as const;
+
+/** Имена типов берутся у перечня: переименование мимо него не компилируется. */
+const LEFT_ARENA_EVENT: keyof typeof ARENA_EVENTS = 'LeftArena';
+const FELL_THROUGH_FLOOR_EVENT: keyof typeof ARENA_EVENTS = 'FellThroughFloor';
+
 /** Якорь шкалы `order` (DET-9); параметром сборки не является. */
 const ANCHOR_ORDER = 110;
 
@@ -157,7 +171,7 @@ export class ArenaSystem implements System {
       const inside = arena.contains(position) ? 1 : 0;
       if (inside !== ctx.get(entity, ARENA_STATE_COMPONENT, 'inside')) {
         ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'inside', inside);
-        if (inside === 0) ctx.events.emit('LeftArena', { entity });
+        if (inside === 0) ctx.events.emit(LEFT_ARENA_EVENT, { entity });
       }
 
       // ARENA-5: пол проверяется только у стоящих на земле. Override уровня
@@ -167,7 +181,7 @@ export class ArenaSystem implements System {
       const onFloor = standsOnFloor(ctx, entity, position) ? 1 : 0;
       if (onFloor !== ctx.get(entity, ARENA_STATE_COMPONENT, 'onFloor')) {
         ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'onFloor', onFloor);
-        if (onFloor === 0) ctx.events.emit('FellThroughFloor', { entity });
+        if (onFloor === 0) ctx.events.emit(FELL_THROUGH_FLOOR_EVENT, { entity });
       }
     }
   }

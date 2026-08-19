@@ -13,7 +13,7 @@
  * Node, а не то, как его грузит vitest.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -77,6 +77,40 @@ describe('bin/sim.mjs (CLI-1)', () => {
     expect(status).toBe(2);
     expect(stderr).toContain('usage:');
   });
+
+  /**
+   * Отбор записей на прогоне сценария (DIAG-9, CLI-11). Без него трейс матча,
+   * снятый с отбором, переснять было бы нечем: запись рядом есть, а команды,
+   * принимающей тот же отбор, — нет.
+   */
+  it('--trace-select сужает трейс тем же словарём, что и запускалки матча', () => {
+    const scenario = join(GOLDEN_DIR, 'collision-bounce.scenario.json');
+    const full = runSim([scenario, '--trace=full']);
+    const selected = runSim([scenario, '--trace=full', '--trace-select=event']);
+    expect(selected.status, selected.stderr).toBe(0);
+
+    const kinds = (text: string): string[] =>
+      text
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => (JSON.parse(line) as { kind: string }).kind);
+    expect(new Set(kinds(selected.stderr))).toEqual(new Set(['event']));
+    expect(kinds(selected.stderr).length).toBeGreaterThan(0);
+    expect(kinds(full.stderr).length).toBeGreaterThan(kinds(selected.stderr).length);
+    // Документ CLI-3 отбор не трогает — он про трейс, а не про вывод (CLI-7).
+    expect(selected.stdout).toBe(full.stdout);
+  });
+
+  it('незнакомое имя отбора — код 2 и подсказка, а не пустой трейс', () => {
+    const { status, stderr } = runSim([
+      join(GOLDEN_DIR, `${SCENARIO}.scenario.json`),
+      '--trace=full',
+      '--trace-select=events',
+    ]);
+    expect(status).toBe(2);
+    expect(stderr).toContain('неизвестное имя "events"');
+    expect(stderr).toContain('usage:');
+  });
 });
 
 /**
@@ -121,5 +155,70 @@ describe('bin/journal.mjs (CLI-12)', () => {
     const { status, stderr } = runJournal([]);
     expect(status).toBe(2);
     expect(stderr).toContain('usage:');
+  });
+
+  /**
+   * Опечатка в аргументах — отказ, а не тихое умолчание. Самый дорогой из
+   * случаев — `--dict` без значения: он давал бы ПОЛНЫЙ журнал, где у всех
+   * фактов неизвестная семантика, то есть результат, неотличимый от законного
+   * прогона без словаря (CLI-12).
+   */
+  const BAD_ARGS: Readonly<Record<string, readonly string[]>> = {
+    '--dict без значения': ['t.jsonl', '--dict'],
+    '--dict, за которым флаг': ['t.jsonl', '--dict', '--format=text'],
+    '--out без значения': ['t.jsonl', '--out'],
+    'незнакомый флаг': ['t.jsonl', '--dictt', 'x.json'],
+    'незнакомая форма': ['t.jsonl', '--format=csv'],
+    'второй файл трейса': ['a.jsonl', 'b.jsonl'],
+  };
+
+  for (const [name, args] of Object.entries(BAD_ARGS)) {
+    it(`${name} — код 2 и подсказка`, () => {
+      const { status, stderr, stdout } = runJournal(args);
+      expect(status).toBe(2);
+      expect(stderr).toContain('usage:');
+      // Ни строчки журнала: отказ разбора не должен выглядеть пустым журналом.
+      expect(stdout).toBe('');
+    });
+  }
+
+  it('работает и через симлинк на каталог репозитория', () => {
+    // Признак «запущен как команда» сравнивает URL после разрешения симлинков:
+    // сравнение строк путей давало бы через симлинк ПУСТОЙ вывод и код 0 —
+    // самый дорогой вид отказа для того, кто зовёт команду из скрипта.
+    const dir = mkdtempSync(join(tmpdir(), 'journal-link-'));
+    const link = join(dir, 'core-link');
+    symlinkSync(ROOT, link, 'dir');
+    const tracePath = join(dir, 'trace.jsonl');
+    const sim = runSim([join(GOLDEN_DIR, 'input-drive.scenario.json'), '--trace=full', `--trace-out=${tracePath}`]);
+    expect(sim.status, sim.stderr).toBe(0);
+
+    const direct = runJournal([tracePath]);
+    const viaLink = spawnSync(process.execPath, [join(link, 'bin', 'journal.mjs'), tracePath], {
+      encoding: 'utf8',
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+    expect(viaLink.status, viaLink.stderr).toBe(0);
+    expect(viaLink.stdout).toBe(direct.stdout);
+    expect(viaLink.stdout).not.toBe('');
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('раздельная форма флага работает наравне с `=`', () => {
+    // `--format text` — форма, которой пользуется вторая семья команд
+    // (запускалки матча); молча превращаться в путь трейса она не должна.
+    const dir = mkdtempSync(join(tmpdir(), 'journal-args-'));
+    const tracePath = join(dir, 'trace.jsonl');
+    const sim = runSim([join(GOLDEN_DIR, 'input-drive.scenario.json'), '--trace=full', `--trace-out=${tracePath}`]);
+    expect(sim.status, sim.stderr).toBe(0);
+
+    const spaced = runJournal([tracePath, '--format', 'text']);
+    const equals = runJournal([tracePath, '--format=text']);
+    expect(spaced.status, spaced.stderr).toBe(0);
+    expect(spaced.stdout).toBe(equals.stdout);
+    expect(spaced.stdout).toContain('tick');
+
+    rmSync(dir, { recursive: true, force: true });
   });
 });

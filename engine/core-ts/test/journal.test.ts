@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   JOURNAL_ASSERT,
   JOURNAL_INVARIANT,
+  JOURNAL_MESSAGE,
   JOURNAL_UNKNOWN,
   buildJournal,
   journalJsonl,
@@ -153,10 +154,28 @@ describe('DIAG-10: дефект прогона виден в журнале бо
       system: 'Combat',
       kind: JOURNAL_INVARIANT,
       type: 'FIXED_OVERFLOW',
-      params: { message: 'переполнение Q16.16' },
+      params: { [JOURNAL_MESSAGE]: 'переполнение Q16.16' },
     });
     // Код записи о дефекте словаря не требует: инструмент о нём и не спрашивал.
     expect(result.unknownTypes).toEqual([]);
+  });
+
+  it('текст записи не затирает одноимённое поле данных прогона', () => {
+    const result = buildJournal(
+      trace({
+        tick: 4,
+        seq: 0,
+        kind: 'invariant',
+        level: 'error',
+        code: 'INVARIANT',
+        // `message` в данных — законный скаляр прогона (DIAG-2), и потерять его
+        // ради текста инструмента журнал не вправе.
+        data: { message: 42 },
+        message: 'текст инструмента',
+      }),
+      DICTIONARY,
+    );
+    expect(result.entries[0]?.params).toEqual({ message: 42, [JOURNAL_MESSAGE]: 'текст инструмента' });
   });
 
   it('границы систем, команды и сводка стоимости боевыми фактами не являются', () => {
