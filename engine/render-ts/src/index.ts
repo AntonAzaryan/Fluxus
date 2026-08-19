@@ -9,6 +9,8 @@ export type {
   RenderEvent,
   RenderHostConfig,
   RenderSubsystem,
+  ShadowCasterSink,
+  ShadowCasterTier,
   TickView,
 } from './types.js';
 
@@ -206,6 +208,19 @@ export type {
 } from './subsystems/fog.js';
 export { VisibilityMask, edgeGradient, fogRectOf, fogSegmentsOf, segmentCasts } from './fog/mask.js';
 export type { FogObserver, FogSegment, FogWorldRect } from './fog/mask.js';
+
+// Подсистема освещения сцены (REND-8): источники света арены и теневые карты
+// из секции `lighting` парного документа (PRES-2). Свет всех потребителей
+// рендера — отсюда: своего они больше не заводят (`editor` ED-22).
+export { LightingSubsystem } from './subsystems/lighting.js';
+export type { LightingOptions } from './subsystems/lighting.js';
+export {
+  DEFAULT_LIGHTING_CONFIG,
+  minShadowMode,
+  resolveLightingConfig,
+  shadowModeRank,
+} from './lighting/config.js';
+export type { LightingRenderConfig, ShadowMode } from './lighting/config.js';
 
 // Подсистема транзиентных эффектов (REND-23): процедурные примитивы по записям
 // манифеста — оболочки от доставленного состояния и вспышки от событий.

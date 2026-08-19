@@ -108,6 +108,14 @@ export interface ModelBatchOptions {
   readonly partVisibility: BakedPartVisibility;
   /** Уровень 0 — части самой модели; дальше — уровни цепочки (REND-22). */
   readonly levels: readonly (readonly BatchPartSource[])[];
+  /**
+   * Материал глубины теневого прохода (`vatMaterial.ts`): у батча своё
+   * вершинное преобразование, и без него тень записи застыла бы в позе покоя.
+   * Один на батч — глубина от материала части не зависит. Нет материала — тень
+   * батча рисуется стоковым материалом three, то есть позой покоя: сцена без
+   * теней (`lighting`) этого не замечает.
+   */
+  readonly depthMaterial?: THREE.Material;
 }
 
 export class ModelBatch {
@@ -117,6 +125,8 @@ export class ModelBatch {
   private readonly materials: readonly VatMaterial[];
   private readonly partVisibility: BakedPartVisibility;
   private readonly levelSources: readonly (readonly BatchPartSource[])[];
+  /** Материал глубины теневого прохода, общий на все части батча. */
+  private readonly depthMaterial: THREE.Material | null;
   /**
    * Маска не гасит ничего: компактация одна на уровень. Считается один раз по
    * запечённым данным — про кадр знать для этого не нужно.
@@ -142,6 +152,7 @@ export class ModelBatch {
     this.materials = options.materials;
     this.partVisibility = options.partVisibility;
     this.levelSources = options.levels;
+    this.depthMaterial = options.depthMaterial ?? null;
     this.uniformVisibility = maskHidesNothing(options.partVisibility);
     this.grow(INITIAL_CAPACITY);
   }
@@ -309,6 +320,7 @@ export class ModelBatch {
       }
     }
     for (const material of this.materials) material.material.dispose();
+    this.depthMaterial?.dispose();
     this.levels = [];
   }
 
@@ -404,6 +416,9 @@ export class ModelBatch {
     mesh.count = 0;
     // Отсечение — наше (REND-21): three отсекал бы батч целиком или никак.
     mesh.frustumCulled = false;
+    // Глубина теневого прохода — тем же вершинным преобразованием, что кадр:
+    // three спрашивает её у самого объекта (`customDepthMaterial`).
+    if (this.depthMaterial !== null) mesh.customDepthMaterial = this.depthMaterial;
     mesh.name = `batch:part${source.partId}`;
     this.group.add(mesh);
     return {

@@ -87,6 +87,7 @@ import {
   validateCurvatureMap,
   validateManifest,
   validatePresentationScene,
+  type PresentationLighting,
   type TerrainCurvatureMap,
   type VisualManifest,
 } from '@game-mvp/assets';
@@ -149,6 +150,13 @@ export interface SceneDraft {
    * режима не гасятся.
    */
   readonly decorations: readonly SceneDecoration[];
+  /**
+   * Секция `lighting` парного документа (PRES-2) — вход подсистемы освещения
+   * вьюпорта. `undefined` — секции нет либо документ не разбирается: и то и
+   * другое означает документированные умолчания света, а причину сломанного
+   * документа кадр уже назвал разбором декораций.
+   */
+  readonly lighting?: PresentationLighting;
   /**
    * Манифест визуалов кадра (ASSET-6). Он здесь по той же причине, по которой
    * здесь сетка и кривизна: манифест — такой же редактируемый документ (ED-14),
@@ -341,6 +349,22 @@ export function decorationsOf(input: SceneDraftInput): readonly SceneDecoration[
 }
 
 /**
+ * Секция `lighting` парного документа (PRES-2) — конфигурация освещения сцены.
+ * Второго разбора документа она не стоит по существу: свет и декорации живут в
+ * одном файле, и оба нужны кадру целиком.
+ *
+ * Сломанный документ здесь МОЛЧИТ намеренно: причину уже назвал `decorationsOf`
+ * (ED-8 требует её один раз, а не дважды), а сцена без разобранной секции
+ * освещена умолчаниями — законный кадр, а не отказ вьюпорта.
+ */
+export function lightingOf(input: SceneDraftInput): PresentationLighting | undefined {
+  const value = input.presentation;
+  if (value === undefined || value === null) return undefined;
+  const checked = validatePresentationScene(value);
+  return checked.ok ? checked.scene.lighting : undefined;
+}
+
+/**
  * Карта кривизны из значения документа (ED-11, REND-14): несохранённый
  * документ кисти ассетом ещё не является, и ждать его записи значило бы
  * показывать автору не то, что он рисует.
@@ -399,11 +423,13 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
   // между двумя документами, и правило для него одно — `editor.curvatureGrid`
   // слоя валидации (ED-11). Кадр его не повторяет: вторая реализация правила,
   // у которого есть источник, расходится с ним по определению (ED-1, CORE-3).
+  const lighting = lightingOf(input);
   return {
     grid,
     curvature,
     placements,
     decorations,
+    ...(lighting === undefined ? {} : { lighting }),
     visuals: input.visuals ?? null,
     failure: reasons.length === 0 ? null : reasons.join('; '),
   };

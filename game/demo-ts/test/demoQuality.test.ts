@@ -18,10 +18,16 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { FIXED_ONE, createTerrainGrid, type TerrainGrid } from '@game-mvp/core';
-import type { AssetService, PresentationFog, VisualManifest } from '@game-mvp/assets';
+import type {
+  AssetService,
+  PresentationFog,
+  PresentationLighting,
+  VisualManifest,
+} from '@game-mvp/assets';
 import {
   EffectsSubsystem,
   FogSubsystem,
+  LightingSubsystem,
   ModelsSubsystem,
   ParticlesSubsystem,
   PresentationStage,
@@ -67,6 +73,7 @@ function flatGrid(size = 8): TerrainGrid {
 interface DemoRig {
   readonly stage: PresentationStage;
   readonly fog: FogSubsystem | null;
+  readonly lighting: LightingSubsystem;
 }
 
 /**
@@ -89,11 +96,16 @@ function demoRig(options: { readonly fog?: boolean } = {}): DemoRig {
   const empty: VisualManifest = { entities: {} };
   const stage = new PresentationStage(demoContext());
   const grid = flatGrid();
-  stage.register(new TerrainSubsystem(grid));
-  stage.register(new ModelsSubsystem(empty, { warn: () => {} }));
+  // Свет — первой подсистемой, как в `onReady` сборки: сцена демо без него не
+  // освещена вовсе, а его ручки — часть реестра, против которого проверяются
+  // документы пресетов.
+  const lighting = new LightingSubsystem({ grid });
+  stage.register(lighting);
+  stage.register(new TerrainSubsystem(grid, { shadows: lighting }));
+  stage.register(new ModelsSubsystem(empty, { shadows: lighting, warn: () => {} }));
   stage.register(new EffectsSubsystem(empty, { warn: () => {} }));
   stage.register(new ParticlesSubsystem(empty, { warn: () => {} }));
-  if (options.fog === false) return { stage, fog: null };
+  if (options.fog === false) return { stage, fog: null, lighting };
   const fog = new FogSubsystem({
     grid,
     stats: { visionRadius: STATS.visionRadius, team: STATS.team },
@@ -101,7 +113,7 @@ function demoRig(options: { readonly fog?: boolean } = {}): DemoRig {
     config: SCENE_FOG,
   });
   stage.register(fog);
-  return { stage, fog };
+  return { stage, fog, lighting };
 }
 
 /**
@@ -139,6 +151,8 @@ describe('документы пресетов применимы к сцене �
     const controller = new QualityController(demoRig().stage);
     expect(controller.knobs.map((knob) => knob.name).sort()).toEqual([
       'fog.maskResolution',
+      'lighting.shadowMapSize',
+      'lighting.shadowMode',
       'models.defaultTier',
       'models.lodThresholdScale',
       'particles.density',
@@ -147,15 +161,33 @@ describe('документы пресетов применимы к сцене �
   });
 });
 
-describe('balanced — сегодняшнее поведение слово в слово (design Migration Plan)', () => {
-  it('действующие значения те же, что без пресета вовсе: ни одного потолка', () => {
+describe('balanced — сегодняшний кадр слово в слово (design Migration Plan)', () => {
+  it('от «без пресета вовсе» отличается ровно потолками теней, и больше ничем', () => {
     const withoutPreset = effectiveOf(null);
-    expect(effectiveOf('balanced')).toEqual(withoutPreset);
+    const balanced = effectiveOf('balanced');
+    const moved = Object.keys(balanced).filter((name) => balanced[name] !== withoutPreset[name]);
+    expect(moved.sort()).toEqual(['lighting.shadowMapSize', 'lighting.shadowMode']);
     // Потолок «нет потолка» — бесконечность (QUAL-1): документ его не называет,
     // и назвать не может — диапазон ручки описывает то, что вправе написать
     // автор пресета, а не отсутствие ограничения.
     expect(withoutPreset['fog.maskResolution']).toBe(Number.POSITIVE_INFINITY);
     expect(withoutPreset['terrain.curvatureTessellation']).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('на сцене без секции lighting потолок теней не меняет кадра: режим остаётся none', () => {
+    const rig = demoRig();
+    // Авторского режима у сцены нет — действует умолчание `none`, и потолок
+    // `hybrid` его не поднимает: `min` работает в одну сторону (QUAL-1).
+    expect(rig.lighting.config.shadowMode).toBe('none');
+
+    new QualityController(rig.stage, QUALITY_PRESETS.balanced);
+
+    expect(rig.lighting.config.shadowMode).toBe('none');
+    // Сторона карты теней при этом ограничена — она пригодится сцене, которая
+    // тени объявит, а сегодня платить за неё нечем: кастеров в карте нет.
+    expect(rig.lighting.config.shadowMapSize).toBe(
+      QUALITY_PRESETS.balanced['lighting.shadowMapSize'],
+    );
   });
 
   it('сценное разрешение маски действует как написано автором (FOW-10)', () => {
@@ -169,14 +201,24 @@ describe('balanced — сегодняшнее поведение слово в �
 });
 
 describe('ultra — авторский потолок как есть (design D4)', () => {
-  it('визуально равен balanced: поднимать сегодня нечего', () => {
-    expect(effectiveOf('ultra')).toEqual(effectiveOf('balanced'));
+  it('кадр сцены без секции lighting тот же, что на balanced: поднимать сегодня нечего', () => {
+    const ultra = demoRig();
+    new QualityController(ultra.stage, QUALITY_PRESETS.ultra);
+    const balanced = demoRig();
+    new QualityController(balanced.stage, QUALITY_PRESETS.balanced);
+    // Различие документов — только в потолках теней, а сцена теней не
+    // объявляет: действующий режим у обоих `none`, то есть кадр один и тот же.
+    expect(ultra.lighting.config.shadowMode).toBe(balanced.lighting.config.shadowMode);
   });
 
   it('потолков нет ни одного: сцена и конфиг рендера действуют как написаны', () => {
     const values = effectiveOf('ultra');
     expect(values['fog.maskResolution']).toBe(Number.POSITIVE_INFINITY);
     expect(values['terrain.curvatureTessellation']).toBe(Number.POSITIVE_INFINITY);
+    // Потолок режима теней «нет потолка» — самый дорогой режим: авторский `full`
+    // на ультра-пресете действует как написан.
+    expect(values['lighting.shadowMode']).toBe('full');
+    expect(values['lighting.shadowMapSize']).toBe(Number.POSITIVE_INFINITY);
   });
 
   it('ярус по умолчанию наследует ровно одна запись манифеста — на ней и держится выбор', () => {
@@ -213,6 +255,23 @@ describe('performance — первые реальные ограничения (
     expect(cheap['particles.density']).toBeLessThan(baseline['particles.density'] as number);
     // Дешёвый носитель закреплён явно, а не унаследован (REND-20).
     expect(cheap['models.defaultTier']).toBe('batched');
+    // Тени выключены потолком: на слабом устройстве теневого прохода нет вовсе,
+    // что бы сцена ни объявила.
+    expect(cheap['lighting.shadowMode']).toBe('none');
+  });
+
+  it('потолок режима теней кусает поверх авторского full, документ сцены не трогается', () => {
+    const authored: PresentationLighting = { shadows: { mode: 'full', mapSize: 2048 } };
+    const before = JSON.stringify(authored);
+    const stage = new PresentationStage(demoContext());
+    const lighting = new LightingSubsystem({ grid: flatGrid(), config: authored });
+    stage.register(lighting);
+    expect(lighting.config.shadowMode).toBe('full');
+
+    new QualityController(stage, QUALITY_PRESETS.performance);
+
+    expect(lighting.config.shadowMode).toBe('none');
+    expect(JSON.stringify(authored)).toBe(before);
   });
 
   it('сценное разрешение маски ограничивается сверху, документ сцены не трогается', () => {

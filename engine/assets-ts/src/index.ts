@@ -129,10 +129,21 @@ export type { TerrainCurvatureMap } from './curvature.js';
 export { validateCurvatureMap, CURVATURE_SCALE } from './curvature.js';
 
 // парный presentation-документ сцены (`presentation-scene` PRES-1..3)
-export type { DecorationRecord, PresentationFog, PresentationScene } from './presentation.js';
+export type {
+  DecorationRecord,
+  PresentationAmbientLight,
+  PresentationDirectionalLight,
+  PresentationFog,
+  PresentationLightDirection,
+  PresentationLighting,
+  PresentationScene,
+  PresentationShadowMode,
+  PresentationShadows,
+} from './presentation.js';
 export {
   DECORATION_POSITION_STEP,
   DECORATION_YAW_STEP,
+  PRESENTATION_SHADOW_MODES,
   PRESENTATION_SUFFIX,
   isPresentationPath,
   presentationPathOf,
