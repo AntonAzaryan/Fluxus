@@ -130,9 +130,14 @@ export class RemoteHost implements PresentationProducer {
     this.presentation.frame(timing.dt, timing.alpha, timing.realDt);
   }
 
-  /** Сырой ввод в воркер (SHELL-6); `move` — уже fixed-вектор. */
-  sendInput(move: Vec2, aimDir = 0, buttons = 0): void {
-    const message: InputMessage = { t: 'input', move, aimDir, buttons };
+  /**
+   * Сырой ввод в воркер (SHELL-6); `move` и `target` — уже fixed-величины.
+   * `target` необязателен: источник, точкой прицела не владеющий, о ней молчит,
+   * а не сообщает начало координат (TICK-2).
+   */
+  sendInput(move: Vec2, aimDir = 0, buttons = 0, target: Vec2 | null = null): void {
+    const message: InputMessage =
+      target === null ? { t: 'input', move, aimDir, buttons } : { t: 'input', move, aimDir, target, buttons };
     this.requirePort().post(message);
   }
 

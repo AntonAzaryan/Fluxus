@@ -14,7 +14,15 @@
  * Fixed → float происходит здесь, на границе (BOT-5): дальше внутри мозга живёт
  * обычная float-математика.
  */
-import { ARENA_COMPONENT, query, type EntityId, type WorldMode } from '@game-mvp/core';
+import {
+  ABILITY_SLOT_COMPONENT,
+  ARENA_COMPONENT,
+  NO_PHASE,
+  query,
+  world as coreWorld,
+  type EntityId,
+  type WorldMode,
+} from '@game-mvp/core';
 import type { ClientStep, MatchSample } from '@game-mvp/net';
 import { readFixedField, readIntField } from './boundary.js';
 
@@ -53,6 +61,23 @@ export interface BotEntityView {
   readonly team: number | undefined;
 }
 
+/**
+ * Слот способности бота, каким он приехал в его СОБСТВЕННЫЙ снапшот (NET-12):
+ * состояние автомата каста живёт полями сущности-слота (ABIL-1), и мозг не
+ * угадывает, в каком он шаге, — он это читает.
+ *
+ * Чужих слотов здесь не бывает: маска видимости спутника содержит ровно
+ * сторону владельца, и в снапшот бота они не входят. Фильтр по `owner` стоит
+ * всё равно — на сцене, где своя сторона играет вдвоём, слоты союзника видны.
+ */
+export interface BotSlotView {
+  readonly slotIndex: number;
+  /** Фаза каста; `-1` — каста нет (ABIL-1). */
+  readonly phase: number;
+  /** Сколько шагов цепочки уже накоплено (ABIL-5). */
+  readonly staged: number;
+}
+
 export interface BotWorldView {
   /** Тик состояния, из которого собран вид (номер серверного тика снапшота). */
   readonly tick: number;
@@ -73,6 +98,8 @@ export interface BotWorldView {
   readonly self: BotEntityView | undefined;
   /** Все прочие видимые сущности: чужие герои, снаряды, реквизит. */
   readonly others: readonly BotEntityView[];
+  /** Слоты способностей СВОЕЙ сущности (ABIL-1); пусто — сцена без платформы. */
+  readonly slots: readonly BotSlotView[];
   /**
    * Радиус арены (`arena` ARENA-1), если её носитель есть в снапшоте: радиус
    * мутабелен сужением, поэтому читается из состояния, а не из сборки. Центр
@@ -139,8 +166,34 @@ export function readWorldView(
     discontinuity: sample.discontinuity,
     self,
     others,
+    slots: self === undefined ? [] : abilitySlots(sample, self.id),
     arenaRadius: arenaRadius(sample),
   };
+}
+
+/**
+ * Слоты способностей владельца (ABIL-1). Сущности-спутники не несут `Position`
+ * (design Decision 6), поэтому в общий обход они не попадают и читаются
+ * отдельным запросом; сцена без платформы компонента не объявляет вовсе — тогда
+ * список пуст, и мозг ведёт себя ровно как до её появления.
+ */
+function abilitySlots(sample: MatchSample, owner: EntityId): BotSlotView[] {
+  const world = sample.to.world;
+  if (coreWorld.componentId(world, ABILITY_SLOT_COMPONENT) === undefined) return [];
+  const slots: BotSlotView[] = [];
+  // Целочисленные поля читаются той же границей, что слот игрока и маски
+  // (`readIntField`): Q16.16-конверсии тут нет, это индексы и коды.
+  const field = (entity: EntityId, name: string): number | undefined =>
+    readIntField(world, entity, ABILITY_SLOT_COMPONENT, name);
+  for (const entity of query(world, { all: [ABILITY_SLOT_COMPONENT] })) {
+    if (field(entity, 'owner') !== owner) continue;
+    slots.push({
+      slotIndex: field(entity, 'slotIndex') ?? 0,
+      phase: field(entity, 'phase') ?? NO_PHASE,
+      staged: field(entity, 'staged') ?? 0,
+    });
+  }
+  return slots;
 }
 
 function arenaRadius(sample: MatchSample): number | undefined {

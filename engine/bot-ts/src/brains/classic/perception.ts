@@ -27,7 +27,13 @@ import type { EntityId, WorldMode } from '@game-mvp/core';
 import type { ClientStep } from '@game-mvp/net';
 import type { BotSelf } from '../../brain.js';
 import type { BotProfile } from '../../profile.js';
-import { readWorldView, type BotEntityView, type BotWorldView, type WorldViewNames } from '../../worldView.js';
+import {
+  readWorldView,
+  type BotEntityView,
+  type BotSlotView,
+  type BotWorldView,
+  type WorldViewNames,
+} from '../../worldView.js';
 import type { BrainRandom } from './random.js';
 
 /** Враг, каким мозг его помнит: с меткой наблюдения и признаком «виден сейчас». */
@@ -57,6 +63,12 @@ export interface PerceivedWorld {
    */
   readonly observedTick: number;
   readonly self: BotEntityView;
+  /**
+   * Слоты способностей бота из его собственного снапшота (ABIL-1). Отстают на
+   * ту же задержку реакции, что остальная картинка, и это верно: мозг узнаёт о
+   * состоянии своего каста тем же каналом, каким игрок видит его на экране.
+   */
+  readonly slots: readonly BotSlotView[];
   readonly enemies: readonly RememberedEnemy[];
   readonly threats: readonly ThreatView[];
   readonly arenaRadius: number | undefined;
@@ -173,6 +185,7 @@ export class Perception {
       tick,
       observedTick: view.tick,
       self: own,
+      slots: view.slots,
       enemies: [...this.memory.values()],
       threats: this.threats(view, own, tick),
       arenaRadius: view.arenaRadius,

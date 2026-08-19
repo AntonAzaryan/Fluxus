@@ -12,7 +12,14 @@
  * здесь законен ровно так же, как в `Extractor`, и точка конверсии Q16.16 →
  * float у статов тоже здесь (REND-1): дальше границы fixed-point не идёт.
  */
-import { FIXED_ONE, world, type EntityId, type WorldState } from '@game-mvp/core';
+import {
+  ABILITY_SLOT_COMPONENT,
+  FIXED_ONE,
+  query,
+  world,
+  type EntityId,
+  type WorldState,
+} from '@game-mvp/core';
 
 /** Откуда сборка берёт фазу полёта (REND-12): компонент, поле и полный путь. */
 export interface FlightPhaseSource {
@@ -29,6 +36,18 @@ export interface StatSource {
   readonly name: string;
   readonly component: string;
   readonly field: string;
+  /**
+   * Номер слота способности владельца (`ability-system` ABIL-1). Задан — стат
+   * читается не у самой сущности, а у её сущности-слота с этим `slotIndex`:
+   * состояние способности живёт на спутнике, а доставляется НА ВЛАДЕЛЬЦЕ,
+   * потому что `Extractor` копирует сущности с `Position`, а спутники её не
+   * несут по построению (`netcode` NET-12).
+   *
+   * Слот адресуется номером, а не именем способности: имя — авторская подпись
+   * определения (ABIL-2), а в мире способность различает индекс, и второго
+   * словаря «имя → слот» сборке заводить незачем.
+   */
+  readonly slotIndex?: number;
 }
 
 /** Сколько статов вмещает колонка `statCount` (u8) на одну сущность. */
@@ -70,6 +89,15 @@ export class StatReader {
 
   private readonly sources: readonly StatSource[];
   /**
+   * Слоты способностей кадра: «владелец → номер слота → сущность-слот».
+   * Строится ОДИН раз за кадр (`beginFrame`), а не на каждый стат каждой
+   * сущности: слот адресуется парой полей своего компонента, и поиск по ним
+   * стоил бы обхода всех слотов на каждую запись конфигурации.
+   */
+  private readonly slots = new Map<number, Map<number, EntityId>>();
+  /** Объявлен ли хоть один стат слотовой формы — иначе индекс не нужен вовсе. */
+  private readonly usesSlots: boolean;
+  /**
    * Множитель поля: `fixed` приезжает в Q16.16 и делится на границе (REND-1),
    * `i32`/`entity` — целое и едет как есть. Тип берётся из СХЕМЫ компонента
    * (ECS-3), а не из конфигурации: спрашивать автора сборки о том, что уже
@@ -86,6 +114,27 @@ export class StatReader {
     }
     this.sources = sources;
     this.names = sources.map((source) => source.name);
+    this.usesSlots = sources.some((source) => source.slotIndex !== undefined);
+  }
+
+  /**
+   * Индекс слотов способностей на кадр (ABIL-1). Зовётся перед обходом
+   * сущностей; сцена без слотов не платит за это ничем — обход не начинается.
+   */
+  beginFrame(state: WorldState): void {
+    if (!this.usesSlots) return;
+    this.slots.clear();
+    if (world.componentSchema(state, ABILITY_SLOT_COMPONENT) === undefined) return;
+    for (const slot of query(state, { all: [ABILITY_SLOT_COMPONENT] })) {
+      const owner = world.getField(state, slot, ABILITY_SLOT_COMPONENT, 'owner');
+      const index = world.getField(state, slot, ABILITY_SLOT_COMPONENT, 'slotIndex');
+      let byIndex = this.slots.get(owner);
+      if (byIndex === undefined) {
+        byIndex = new Map();
+        this.slots.set(owner, byIndex);
+      }
+      byIndex.set(index, slot);
+    }
   }
 
   /** Сколько записей объявлено — по ним считается ёмкость секций пар. */
@@ -98,10 +147,17 @@ export class StatReader {
     let count = 0;
     for (let i = 0; i < this.sources.length; i++) {
       const source = this.sources[i]!;
-      if (!world.hasComponent(state, entity, source.component)) continue;
+      // Слотовая форма: величина лежит на спутнике владельца, а едет на нём
+      // самом. Слота нет — стата нет, ровно как и у отсутствующего компонента.
+      const host =
+        source.slotIndex === undefined
+          ? entity
+          : this.slots.get(entity)?.get(source.slotIndex);
+      if (host === undefined) continue;
+      if (!world.hasComponent(state, host, source.component)) continue;
       out.statIndex[out.statPairs] = i;
       out.statValue[out.statPairs] =
-        world.getField(state, entity, source.component, source.field) * this.scaleOf(state, source);
+        world.getField(state, host, source.component, source.field) * this.scaleOf(state, source);
       out.statPairs++;
       count++;
     }

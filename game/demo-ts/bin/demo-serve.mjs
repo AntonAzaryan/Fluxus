@@ -7,6 +7,28 @@
  *                                       [--match content/matches/duel.match.json]
  *                                       [--bot content/bots/normal.json] [--brain classic]
  *                                       [--json] [--once]
+ *                                       [--debug] [--max-ticks 600] [--out-dir runs/latest]
+ *                                       [--trace=off|systems|full] [--trace-select=<вид|код>,...]
+ *                                       [--dict <словарь журнала>]
+ *
+ * Значение флага принимается обеими формами — `--trace=full` и `--trace full`
+ * (CLI-11, `@game-mvp/net/bin/matchFile.mjs`).
+ *
+ * Отладочный прогон (`--debug`, CLI-11) — ОДНА команда и ни человека за
+ * клавиатурой, ни второго процесса: боты занимают слоты немедленно, матч
+ * ограничен по тикам и завершается сам, артефакты остаются на диске. Каталог
+ * вывода — стабильный путь (`runs/latest`), а не каталог со временем в имени:
+ * разбирающему бой не должно приходиться искать свежий прогон по дате.
+ *
+ * Состав артефактов: трейс (`trace.jsonl`), запись матча в форме документа
+ * сценария (`match.scenario.json`, CLI-2, NTR-8), журнал боя (`journal.jsonl`,
+ * DIAG-10) и сводка прогона (`run.json`). Отметок реального времени,
+ * идентификаторов процесса и прочих данных окружения нет ни в одном (CLI-11):
+ * два прогона одной записи обязаны сравниваться `diff`'ом.
+ *
+ * Ввод при этом недетерминирован (BOT-5) — и это не дефект, а ровно тот случай,
+ * ради которого DIAG-9 требует класть запись рядом: воспроизводится не «стенд»,
+ * а отыгранный матч.
  *
  * Стенд живёт в сборке игры, а не в `engine/net-ts`, и это не переезд ради
  * порядка: он читает дерево контента (`content/matches/duel.match.json`,
@@ -39,7 +61,8 @@
  * рестарт означал бы пересадку сокета, а пересаженный сокет — окно, в котором
  * стенд не отвечает.
  */
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MessageChannel, Worker } from 'node:worker_threads';
 // Раскладка документа матча — та же, что у запускалок net (`matchConfigOf`), и
@@ -48,13 +71,25 @@ import { MessageChannel, Worker } from 'node:worker_threads';
 // что помощник запускалок в публичный `@game-mvp/net` не входит, а вторая копия
 // раскладки и есть тот самый способ разойтись.
 import { flag, matchConfigOf, option, readMatchFile } from '@game-mvp/net/bin/matchFile.mjs';
+// Флаги трейса — оттуда же и по той же причине (CLI-11): уровень, отбор и путь
+// вывода стенд принимает тем же образом, что и `serve.mjs`.
+import {
+  openMatchTrace,
+  traceOptions,
+  TRACE_USAGE,
+  TRACE_WITHOUT_RECORD,
+} from '@game-mvp/net/bin/trace.mjs';
+// Журнал собирается ТЕМ ЖЕ кодом, что и команда `npm run journal` (CLI-12):
+// второй разбор трейса рядом означал бы вторую реализацию выборки фактов.
+import { journalDocument, journalFromFile, journalReport } from '@game-mvp/core/bin/journal.mjs';
 
 const fromRepo = (relative) => fileURLToPath(new URL(`../../../${relative}`, import.meta.url));
 
 if (flag('help')) {
   process.stdout.write(
     'usage: node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 5000]\n' +
-      '       [--match <match.json>] [--bot <profile.json>] [--brain classic|scripted] [--json] [--once]\n',
+      '       [--match <match.json>] [--bot <profile.json>] [--brain classic|scripted] [--json] [--once]\n' +
+      `       [--debug] [--max-ticks 600] [--out-dir runs/latest] [--dict <словарь>]\n       ${TRACE_USAGE}\n`,
   );
   process.exit(0);
 }
@@ -85,8 +120,50 @@ if (!BRAIN_KINDS.includes(brain)) {
   process.stderr.write(`неизвестный мозг "${brain}"; известные: ${BRAIN_KINDS.join(', ')}\n`);
   process.exit(2);
 }
-const port = Number(option('port', '8080'));
-const botFillMs = Number(option('bot-fill-ms', '5000'));
+/**
+ * Числовой параметр запуска. Проверяется, а не берётся `Number`'ом молча:
+ * `--max-ticks abc` даёт `NaN`, а сравнение `tick >= NaN` ложно всегда — то есть
+ * отладочный прогон, обязанный завершаться САМ (CLI-11), не завершился бы
+ * никогда и висел бы до Ctrl+C, которого у него нет.
+ */
+function numberOption(name, fallback) {
+  const raw = option(name, fallback);
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    process.stderr.write(`--${name}: ожидалось неотрицательное число, получено "${raw}"\n`);
+    process.exit(2);
+  }
+  return value;
+}
+
+const port = numberOption('port', '8080');
+/**
+ * Отладочный прогон (CLI-11): боты садятся немедленно, матч ограничен по тикам,
+ * артефакты ложатся в каталог. `--once` он подразумевает — прогон для разбора
+ * ровно один, и авто-рестарт переписал бы его артефакты следующим матчем.
+ */
+const debugRun = flag('debug');
+const botFillMs = numberOption('bot-fill-ms', debugRun ? '0' : '5000');
+/** Ограничение длительности отладочного матча: десять секунд при 60 Гц. */
+const maxTicks = numberOption('max-ticks', '600');
+const outDir = option('out-dir', fromRepo('runs/latest'));
+const dictPath = option('dict', fromRepo('game/demo-ts/app/journal/duel.dictionary.json'));
+// Каталог заводится ДО матча: писателю трейса открывать файл в несуществующем
+// каталоге нечем, а узнать об этом в конце прогона — значит потерять прогон.
+if (debugRun) mkdirSync(outDir, { recursive: true });
+// Полный уровень — умолчание отладочного прогона: события едут только на нём
+// (DIAG-3), а без событий журнал боя пуст. Цена — объём (шапка `bin/trace.mjs`);
+// длинному прогону отвечает `--trace-select=event`.
+const traceFlags = traceOptions(debugRun ? { level: 'full', out: join(outDir, 'trace.jsonl') } : {});
+const tracing = openMatchTrace(traceFlags);
+// Запись матча кладёт рядом с трейсом только отладочный прогон: вне его стенд
+// играет матч за матчем, и записи ни одного из них не остаётся. Трейс без
+// записи невоспроизводим (DIAG-9), и прогон обязан назвать причину вслух
+// (CLI-11) — тем же текстом, каким называет её `serve.mjs`: одно и то же
+// положение дел не должно читаться в двух стендах как два разных.
+if (tracing !== undefined && !debugRun) {
+  process.stdout.write(`${TRACE_WITHOUT_RECORD}          добавьте --debug — он кладёт запись рядом\n`);
+}
 const serializer = flag('json') ? jsonSerializer : msgpackSerializer;
 // Формат кадра — свойство сборки, а не поле протокола, и он один на ВСЕХ
 // участников матча: сервер, люди и боты. Дебаг-формат, объявленный только
@@ -105,7 +182,12 @@ const scene = pack.scene(match.sceneRef);
  * разойдётся ещё на входе (NTR-5).
  */
 function matchConfig() {
-  return matchConfigOf(match, pack);
+  return {
+    ...matchConfigOf(match, pack),
+    // Подключение sink'а ход матча не меняет (DIAG-8): отладочный матч — тот же
+    // матч, и в запись (`toScenario`) это поле не входит (CLI-11).
+    ...(tracing !== undefined ? { trace: tracing.trace } : {}),
+  };
 }
 
 // ------------------------------------------------- слушающая сторона стенда
@@ -207,7 +289,11 @@ process.stdout.write(
     `  бот-заполнитель: мозг "${brain}", профиль "${profile.name}", ` +
     `дедлайн ${botFillMs} мс после первого претендента на слот\n` +
     `  клиент: npm run play -- --url ws://127.0.0.1:${port} --player ${match.players[0]}\n` +
-    `  вкладка: демо с ?server=ws://127.0.0.1:${port}\n\n`,
+    `  вкладка: демо с ?server=ws://127.0.0.1:${port}\n` +
+    (debugRun
+      ? `  отладочный прогон: боты садятся сразу, матч до тика ${maxTicks}, артефакты в ${outDir}\n`
+      : '') +
+    '\n',
 );
 
 let round = 0;
@@ -215,7 +301,9 @@ let failed = false;
 for (;;) {
   round++;
   failed = await runMatch(round);
-  if (flag('once')) break;
+  // Отладочный прогон — ровно один матч: авто-рестарт переписал бы его
+  // артефакты следующим матчем, и разбирать было бы уже не тот бой.
+  if (flag('once') || debugRun) break;
   process.stdout.write('\nматч завершён — поднимаю следующий тем же конфигом\n');
 }
 // Одиночный прогон — это проверка, и её исход обязан быть в коде возврата:
@@ -244,11 +332,17 @@ async function runMatch(number) {
   let failure = null;
   /** Сворачивание матча: остановка потока ботов — не его падение. */
   let stopping = false;
-  /** Отказ стенда: называется громко и один раз. */
+  /**
+   * Отказ стенда: называется громко и один раз — и в тот же поток, что и
+   * остальной отчёт запускалки. В stdout, а не в stderr, потому что stderr —
+   * умолчание вывода трейса (`bin/trace.mjs`), а трейс и собственный отчёт
+   * запускалки MUST NOT идти одним потоком (CLI-11): артефакт со строками
+   * постороннего происхождения разбирается человеком, а не программой.
+   */
   const fail = (message) => {
     if (failure !== null) return;
     failure = message;
-    process.stderr.write(`\nстенд: ${message}\n`);
+    process.stdout.write(`\nстенд: ${message}\n`);
   };
   const makeFiller = () => new BotSlotFiller({
     players: match.players,
@@ -259,7 +353,12 @@ async function runMatch(number) {
     // взведший отсчёт, ушёл раньше дедлайна, и посадить бота значило бы отдать
     // ему пустой матч (а при двух слотах — начать бой ботов между собой и
     // занять стенд). Стенд остаётся в лобби и ждёт людей.
-    frozen: () => server.phase !== 'lobby' || claimants.size === 0,
+    // Отладочный прогон снимает ВТОРОЕ условие, и только его: играть здесь не с
+    // кем по построению — человека за клавиатурой нет и не предполагается
+    // (CLI-11, «Самодостаточность»), а бой ботов между собой и есть предмет
+    // разбора. Первое условие остаётся: занятый людьми ростер не переигрывается
+    // ботами ни в каком режиме.
+    frozen: () => server.phase !== 'lobby' || (!debugRun && claimants.size === 0),
     // Слоты предлагаются ВСЕ: какой из них занят человеком, обвязка не знает —
     // сервер владельца слота не называет, и спрашивать его об этом значило бы
     // завести рядом с ним ветвление по типу участника (BOT-1). Занятый слот
@@ -324,8 +423,9 @@ async function runMatch(number) {
     filler = makeFiller();
   };
   // Претенденты, доставшиеся этому матчу из очереди рестарта, дедлайн уже
-  // «нажали» — взводим его за них.
-  if (claimants.size > 0) filler.arm();
+  // «нажали» — взводим его за них. Отладочный прогон взводит его сам: ждать
+  // претендента-человека там некого, и пустой стенд ждал бы вечно.
+  if (claimants.size > 0 || debugRun) filler.arm();
 
   process.stdout.write(`матч #${number}: жду участников на ws://127.0.0.1:${port}\n`);
   host.start();
@@ -346,6 +446,10 @@ async function runMatch(number) {
   // причину и выйти ненулевым кодом.
   await new Promise((resolve) => {
     const poll = setInterval(() => {
+      // Отладочный матч ограничен по длительности и завершается САМ (CLI-11):
+      // человека, который нажмёт Ctrl+C, у прогона нет. Остановка идёт штатным
+      // путём сервера — тем же `End`, что и всякий другой конец матча.
+      if (debugRun && server.phase === 'running' && server.tick >= maxTicks) server.stop();
       if (server.phase !== 'ended' && failure === null) return;
       clearInterval(poll);
       resolve();
@@ -362,10 +466,127 @@ async function runMatch(number) {
   await host.stop();
   stopping = true;
   await botWorker?.terminate();
+  if (debugRun) saveArtifacts(server, failure);
   return failure !== null;
 }
 
+/**
+ * Артефакты отладочного прогона (CLI-11): трейс, запись матча, журнал боя и
+ * сводка. Ни в одном из них нет отметок реального времени, идентификаторов
+ * процесса и прочих данных окружения — по тому же основанию, по которому их не
+ * содержит запись диагностики (DIAG-2): два прогона одной записи обязаны
+ * сравниваться `diff`'ом.
+ *
+ * Каждый шаг огорожен своим `try`, а сводка пишется ПОСЛЕДНЕЙ и несёт причины
+ * не сложившегося: сорвавшийся шаг иначе унёс бы с собой весь набор — в том
+ * числе `run.json`, единственный артефакт, который называет, что пошло не так.
+ * Пустой каталог вместо разбора боя — самый дорогой исход отладочного прогона.
+ */
+function saveArtifacts(server, failure) {
+  // Трейс закрывается ДО чтения: журнал собирается по файлу, и недописанный
+  // хвост буфера стал бы усечённой строкой на ровном месте. Наружу закрытие не
+  // бросает (`bin/trace.mjs`) — отказ сброса хвоста приезжает полем `failure`.
+  tracing?.close();
+
+  const summary = {
+    match: match.name,
+    buildId: match.buildId,
+    contentPackHash: pack.hash,
+    worldInitHash: server.worldInitHash,
+    players: match.players,
+    tickRate,
+    ticks: server.tick,
+    phase: server.phase,
+    epochs: server.epoch + 1,
+    slots: server.metrics.slots.map((slot, i) => ({
+      playerId: match.players[i],
+      applied: slot.applied,
+      predicted: slot.predicted,
+      late: slot.late,
+    })),
+    snapshotsSent: server.metrics.snapshotsSent,
+    ...(failure !== null ? { failure } : {}),
+  };
+
+  // Путь берётся у РАЗОБРАННЫХ флагов, а не собирается вторым выражением:
+  // `--trace-out` мог увести трейс из каталога прогона, и журнал собирался бы
+  // тогда по файлу, которого нет.
+  const tracePath = traceFlags.out;
+  if (tracing !== undefined && tracePath !== undefined) {
+    summary.trace = {
+      path: relative(outDir, tracePath),
+      // Отказ записи гасит трейс, а не матч (DIAG-8), и называется он ЗДЕСЬ:
+      // молча оборванный трейс выглядит поводом к расследованию, которого не
+      // получится. Поле одно на обе половины отказа — съём и сброс хвоста.
+      ...(tracing.failure !== undefined ? { failure: tracing.failure } : {}),
+    };
+  }
+
+  /**
+   * Один шаг набора: сорвался — назван в сводке под своим именем и не унёс
+   * остальные. Причину пишем и в поток отчёта запускалки (stdout, отдельный от
+   * трейса, CLI-11), чтобы она была видна и без чтения `run.json`.
+   */
+  const step = (name, body) => {
+    try {
+      body();
+    } catch (error) {
+      summary.failed ??= {};
+      summary.failed[name] = error.message;
+      process.stdout.write(`\nартефакт "${name}" не сложился: ${error.message}\n`);
+    }
+  };
+
+  // Трейс без записи невоспроизводим (DIAG-9): ввод порождают боты, а не seed.
+  // Матч с перемоткой плоской формой документа сценария не выражается (NTR-16,
+  // CLI-2) — прогон говорит это прямо вместо усечённой записи, которая
+  // выглядела бы воспроизводимой и разошлась бы при первом же реплее.
+  try {
+    writeFileSync(join(outDir, 'match.scenario.json'), `${JSON.stringify(server.toScenario(), null, 2)}\n`);
+    summary.record = 'match.scenario.json';
+  } catch (error) {
+    summary.recordSkipped = error.message;
+    process.stdout.write(`\nзаписи матча не будет: ${error.message}\n`);
+  }
+
+  if (tracing !== undefined && tracePath !== undefined) {
+    step('journal', () => {
+      // Журнал собирается по ФАЙЛУ (CLI-12). `--trace-out` мог увести трейс в
+      // устройство или в канал — читать оттуда «весь трейс» нечем, и назвать
+      // это отказом шага честнее, чем упереться в предел строки V8 на середине.
+      if (!statSync(tracePath).isFile()) {
+        throw new Error(`трейс "${tracePath}" — не обычный файл: журнал собирать не из чего`);
+      }
+      const result = journalFromFile(tracePath, dictPath);
+      writeFileSync(join(outDir, 'journal.jsonl'), journalDocument(result));
+      summary.journal = {
+        path: 'journal.jsonl',
+        facts: result.entries.length,
+        // Незнакомый тип — не отказ прогона, а отставший словарь (DIAG-10), и
+        // назван он списком, а не молчанием.
+        unknownTypes: result.unknownTypes,
+        ...(result.malformedLines > 0 ? { malformedLines: result.malformedLines } : {}),
+      };
+      // Отчёт о журнале — часть отчёта запускалки, и идёт он тем же потоком:
+      // сам журнал лежит файлом, а stderr занят умолчанием вывода трейса.
+      process.stdout.write(journalReport(result));
+    });
+  }
+
+  // Сводка — последней и вне `step`: она и есть то место, где названы отказы
+  // остальных шагов, и падать ей больше не на чем.
+  try {
+    writeFileSync(join(outDir, 'run.json'), `${JSON.stringify(summary, null, 2)}\n`);
+    process.stdout.write(`\nартефакты прогона: ${outDir}\n`);
+  } catch (error) {
+    process.stdout.write(`\nсводки прогона не будет: ${error.message}\n`);
+  }
+}
+
 async function shutdown(code) {
+  // Трейс закрывается и на сигнале остановки: буфер писателя иначе остался бы
+  // недописанным, и последняя строка файла выглядела бы усечённой.
+  tracing?.close();
   await sockets.close();
   process.stdout.write('\nстенд остановлен\n');
   process.exit(code);

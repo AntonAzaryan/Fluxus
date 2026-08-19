@@ -22,11 +22,15 @@ export {
   BOT_ABILITY_TARGETS,
   BOT_BEHAVIORS,
   BOT_PROFILE_SCHEMA,
+  BOT_STEP_AIMS,
   parseBotProfile,
 } from './profile.js';
 export type {
+  BotAbilityCastProfile,
   BotAbilityProfile,
+  BotAbilityStepProfile,
   BotAbilityTarget,
+  BotStepAim,
   BotAimProfile,
   BotBehavior,
   BotDecisionProfile,
@@ -37,9 +41,9 @@ export type {
 
 // граница «мозг ↔ симуляция» (BOT-5, `input-devices` INP-3)
 export { TURN_UNITS, aimToRadians, readFixedField, readIntField, toInputSample } from './boundary.js';
-export type { BotIntent } from './boundary.js';
+export type { BotAimPoint, BotIntent } from './boundary.js';
 export { readWorldView } from './worldView.js';
-export type { BotEntityView, BotWorldView, WorldViewNames } from './worldView.js';
+export type { BotEntityView, BotSlotView, BotWorldView, WorldViewNames } from './worldView.js';
 
 // рельеф сцены: приезжает сборкой, как центр арены (TERR-6, NET-16)
 export { botTerrain } from './terrainView.js';

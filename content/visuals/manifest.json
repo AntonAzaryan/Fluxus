@@ -112,6 +112,13 @@
         "alpha": 0.3,
         "height": 0.5
       },
+      "Charging": {
+        "primitive": "sphere",
+        "color": "#ff8a3c",
+        "radius": 0.3,
+        "alpha": 0.65,
+        "height": 0.55
+      },
       "Held": {
         "primitive": "sphere",
         "color": "#8affc8",

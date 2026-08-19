@@ -46,6 +46,31 @@ const BASE: SceneDef = {
 
 const withScene = (patch: Partial<SceneDef>): SceneDef => ({ ...BASE, ...patch });
 
+/**
+ * Та же сцена с платформой способностей: таблицы определений и блок биндингов
+ * (NET-17). Определения минимальны, но каждое несёт величину, которую правит
+ * дизайнер, — кулдаун у способности и длительность у баффа.
+ */
+const ABILITY: SceneDef = withScene({
+  components: [
+    ...BASE.components,
+    { name: 'Player', fields: { slot: 'i32' } },
+    { name: 'Dead', fields: { atTick: 'i32' } },
+  ],
+  abilities: [
+    {
+      id: 'bolt',
+      trigger: { input: { bit: 0 } },
+      cooldownTicks: 30,
+      effects: [{ emitEvent: { type: 'Bolt', data: { slot: { var: 'self' } } } }],
+    },
+  ],
+  buffs: [{ id: 'burn', class: 'negative', durationTicks: 60 }],
+  abilityRuntime: { deadMarker: 'Dead', teamField: ['Player', 'slot'] },
+});
+
+const withAbilityScene = (patch: Partial<SceneDef>): SceneDef => ({ ...ABILITY, ...patch });
+
 /** Хеш `worldInit` той же сцены — нужен там, где проверяется граница двух зон. */
 const worldInitHashOf = (scene: SceneDef): string =>
   runScenario({
@@ -177,5 +202,78 @@ describe('хеш контент-пака (NET-17)', () => {
       expect(contentPackHash(scene)).toBe(contentPackHash(BASE));
       expect(worldInitHashOf(scene)).not.toBe(worldInitHashOf(BASE));
     }
+  });
+});
+
+describe('хеш контент-пака: определения способностей и баффов (NET-17)', () => {
+  it('дизайнер поправил кулдаун — хеши не совпадают, и матч не собирается', () => {
+    // Базовый сценарий, ради которого определения в представление и вошли:
+    // участники с разной длительностью кулдауна играют в разные игры, и
+    // расхождение обязано обнаружиться до старта, а не по исходу боя.
+    const tweaked = withAbilityScene({
+      abilities: [{ ...ABILITY.abilities![0]!, cooldownTicks: 45 }],
+    });
+    expect(contentPackHash(tweaked)).not.toBe(contentPackHash(ABILITY));
+
+    // То же и у баффа: длительность — правило, а не оформление.
+    const shorter = withAbilityScene({ buffs: [{ ...ABILITY.buffs![0]!, durationTicks: 30 }] });
+    expect(contentPackHash(shorter)).not.toBe(contentPackHash(ABILITY));
+  });
+
+  it('изменён биндинг смерти — хеш меняется', () => {
+    // Определения те же, а касты прерываются в разные моменты: блок биндингов
+    // называет, что в этой сцене значит смерть (ABIL-8).
+    const rebound = withAbilityScene({
+      abilityRuntime: { ...ABILITY.abilityRuntime!, deadMarker: 'Downed' },
+    });
+    expect(contentPackHash(rebound)).not.toBe(contentPackHash(ABILITY));
+  });
+
+  it('заменён ассет арены — хеш не меняется и при объявленных определениях', () => {
+    // Контроль границы двух зон (NET-17 против DET-1): появление таблиц
+    // определений её не двигает.
+    const otherArena = withAbilityScene({ arena: { center: { x: 0, y: 0 }, radius: 131072 } });
+    expect(contentPackHash(otherArena)).toBe(contentPackHash(ABILITY));
+  });
+
+  it('отсутствующая и пустая таблицы дают разные хеши, а блок биндингов — один', () => {
+    // Отсутствие таблицы убирает из состава компоненты платформы и её системы
+    // (SER-7) — это другой формат снапшота, а пустая таблица его не меняет.
+    const { abilities: _a, ...withoutAbilities } = ABILITY;
+    expect(contentPackHash({ ...withoutAbilities, abilities: [] })).not.toBe(
+      contentPackHash(withoutAbilities as SceneDef),
+    );
+    const { buffs: _b, ...withoutBuffs } = ABILITY;
+    expect(contentPackHash({ ...withoutBuffs, buffs: [] })).not.toBe(contentPackHash(withoutBuffs as SceneDef));
+
+    // А биндинг, которого нет, и биндинг, который ничего не называет, загрузчик
+    // не различает — не различает и хеш.
+    const { abilityRuntime: _r, ...withoutRuntime } = ABILITY;
+    expect(contentPackHash({ ...withoutRuntime, abilityRuntime: {} })).toBe(
+      contentPackHash(withoutRuntime as SceneDef),
+    );
+  });
+
+  it('порядок определений — часть формата, порядок ключей внутри них — нет', () => {
+    // Индекс в таблице есть адрес определения в мире (ABIL-1), поэтому
+    // перестановка определений — смена правил.
+    const second = { ...ABILITY.abilities![0]!, id: 'dart', cooldownTicks: 10 };
+    const forward = withAbilityScene({ abilities: [ABILITY.abilities![0]!, second] });
+    const backward = withAbilityScene({ abilities: [second, ABILITY.abilities![0]!] });
+    expect(contentPackHash(backward)).not.toBe(contentPackHash(forward));
+
+    // А запись того же определения другим порядком ключей — то же правило.
+    const reordered = withAbilityScene({
+      abilities: [
+        {
+          effects: [{ emitEvent: { data: { slot: { var: 'self' } }, type: 'Bolt' } }],
+          cooldownTicks: 30,
+          trigger: { input: { bit: 0 } },
+          id: 'bolt',
+        },
+      ],
+      abilityRuntime: { teamField: ['Player', 'slot'], deadMarker: 'Dead' },
+    });
+    expect(contentPackHash(reordered)).toBe(contentPackHash(ABILITY));
   });
 });

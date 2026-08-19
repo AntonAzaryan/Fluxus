@@ -42,6 +42,11 @@
  * Главный поток однопоточный, замер синхронный — переплетения двух стоков,
  * от которого защищается `withDiagnostics` ядра, здесь взяться неоткуда;
  * предыдущее значение всё равно сохраняется и возвращается в `finally`.
+ *
+ * Владелец, живущий ДОЛЬШЕ одного вызова (читатель счётчиков отладки,
+ * `render-debug` RDBG-8), в стековый обмен не укладывается: замер, начавшийся
+ * поверх него, вернёт его сток назад своим `finally`. Для таких владельцев
+ * заведён `releaseCostSink` — см. его описание ниже.
  */
 
 /**
@@ -451,6 +456,20 @@ export function createCostCounters(): RenderCostCounters {
 let current: RenderCostCounters | undefined;
 
 /**
+ * Стоки, ОТПУЩЕННЫЕ владельцем под чужим замером (`releaseCostSink`). Обмен
+ * «поставил — вернул предыдущий» строго стековый, а долгоживущий владелец в
+ * этот стек не укладывается: замер, начавшийся поверх него, вернёт его назад
+ * своим `finally` — и отпущенный сток воскрес бы уже без хозяина. Пометка это
+ * закрывает: восстановление отпущенного стока кладёт пустоту.
+ */
+const abandoned = new WeakSet<RenderCostCounters>();
+
+/** Восстановление стока с учётом пометки: отпущенный назад не встаёт. */
+function restore(sink: RenderCostCounters | undefined): void {
+  current = sink !== undefined && abandoned.delete(sink) ? undefined : sink;
+}
+
+/**
  * Подключённый сток или `undefined`. Инструментированное место читает его ОДИН
  * раз на вызов и держит в локальной переменной: проверка стока на каждом
  * текселе была бы той самой стоимостью учёта, которой PERF-3 не допускает.
@@ -468,8 +487,27 @@ export function attachCostSink(
   sink: RenderCostCounters | undefined,
 ): RenderCostCounters | undefined {
   const previous = current;
-  current = sink;
+  restore(sink);
   return previous;
+}
+
+/**
+ * Отпускает ДОЛГОЖИВУЩИЙ сток — подключённый не на время синхронного вызова, а
+ * на время, пока его владельцу нужен учёт (читатель счётчиков отладки,
+ * `render-debug` RDBG-8). Такой владелец подключается только к ПУСТОМУ месту,
+ * поэтому и отпускает он в пустоту.
+ *
+ * Если поверх него успел встать замер, снимать сток нельзя: замер считает, и
+ * отобранный сток оставил бы его без счётчиков посреди измерения. Поэтому
+ * отпущенный сток лишь помечается — и `finally` замера положит на его место
+ * пустоту, а не сток, от которого владелец уже отказался.
+ */
+export function releaseCostSink(sink: RenderCostCounters): void {
+  if (current === sink) {
+    current = undefined;
+    return;
+  }
+  abandoned.add(sink);
 }
 
 /**
@@ -482,10 +520,10 @@ export function attachCostSink(
  */
 export function withCostSink<T>(sink: RenderCostCounters, body: () => T): T {
   const previous = current;
-  current = sink;
+  restore(sink);
   try {
     return body();
   } finally {
-    current = previous;
+    restore(previous);
   }
 }

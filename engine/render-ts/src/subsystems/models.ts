@@ -105,6 +105,8 @@ import type {
   TickView,
 } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
+import type { DebugSource } from '../debug/contract.js';
+import { modelsInstancesDebugSource, type DebugInstanceRow } from '../debug/modelsSource.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import type { SurfaceNormal, VisualSurface } from '../visualSurface.js';
 import { createPickProxy, type InstanceProxySource, type PickProxy, type PickProxyVisitor } from '../picking.js';
@@ -1352,6 +1354,46 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // вместе с картинкой (REND-17 → REND-9).
       if (record.decoration) this.syncWalkable(record);
     }
+  }
+
+  /**
+   * Отладочный источник инстансов (`render-debug` RDBG-1, REND-27): объём-прокси
+   * в видимой позе, признак отсечения по пирамиде (REND-21), уровень детализации
+   * (REND-22) и ярус представления (REND-20).
+   *
+   * Обход тот же, что у прокси picking'а, — и это несущее: показывается ТА ЖЕ
+   * поза, которой инстанс нарисован, а не второй её расчёт. Инкрементов
+   * счётчиков стоимости здесь нет ни одного (RDBG-8): отладка читает уже
+   * посчитанное кадром.
+   */
+  debugSources(): readonly DebugSource[] {
+    return [
+      modelsInstancesDebugSource({
+        each: (out, visit) => {
+          for (const record of this.instances.values()) {
+            if (this.fillDebugRow(record, out)) visit();
+          }
+          // Декорации — после сущностей, тем же порядком, что у прокси (REND-18).
+          for (const record of this.decorations.values()) {
+            if (this.fillDebugRow(record, out)) visit();
+          }
+        },
+      }),
+    ];
+  }
+
+  /**
+   * Инстанс в переиспользуемую запись отладки; false — рендер его не рисует.
+   * Поза кладётся ТЕМ ЖЕ `fillProxy`, что и у picking'а (REND-15): запись
+   * отладки и есть объём-прокси плюс решения кадра, второго заполнения нет.
+   */
+  private fillDebugRow(record: InstanceRecord, out: DebugInstanceRow): boolean {
+    if (!this.fillProxy(record, out)) return false;
+    out.tier = record.tier;
+    out.lodLevel = record.lodLevel;
+    out.visible = record.visible;
+    out.placeholder = record.placeholder !== null;
+    return true;
   }
 
   /**

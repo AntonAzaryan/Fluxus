@@ -1,7 +1,11 @@
 /**
- * Guard-сканер инвариантов детерминизма (CLI-8): AST-обход исходников через
+ * Guard-сканер инвариантов, проверяемых по AST (CLI-8): обход исходников через
  * TypeScript Compiler API. Комментарии и строки не сканируются — это AST,
  * а не grep, поэтому «Q16.16» в тексте ошибки не даёт ложного срабатывания.
+ *
+ * Инвариантов здесь два, и оба — про то, чего в коде быть не должно:
+ * детерминизм ядра (часы, чужая случайность, float-литералы, async) и свобода
+ * пакета рендера от DOM (`rendering` REND-19, `render-debug` RDBG-3).
  *
  * Списки запрещённого и разрешённого — данные этого файла: их правка обязана
  * попадать в дифф на ревью (CLI-8). Сканер общий для всех реализаций-пакетов,
@@ -133,6 +137,65 @@ export function scanSourceText(fileName: string, text: string, mode: GuardMode):
   return out;
 }
 
+/**
+ * Глобальные значения DOM. Пакет рендера обязан быть от DOM свободен (REND-19):
+ * текста в кадре нет и быть не может — текст в сцене это канвас-текстура, то
+ * есть DOM, — а канвас слоя миникарты приносит СБОРКА фабрикой (`fog.ts`), и
+ * структурного минимума ей довольно.
+ *
+ * Ловится ЗНАЧЕНИЕ, а не имя: `private document: QualityPreset` и `this.document`
+ * — поля своих классов, к DOM отношения не имеющие, и краснить на них сканер не
+ * вправе. Типовое употребление (`HTMLCanvasElement` в сигнатуре) тоже мимо:
+ * тип живёт в объявлении, а не в кадре.
+ */
+const DOM_GLOBALS = new Map<string, string>([
+  ['document', 'DOM внутри пакета рендера (REND-19): текст и узлы страницы — дело встраивающего приложения'],
+  ['window', 'глобал страницы внутри пакета рендера (REND-19)'],
+  ['navigator', 'глобал страницы внутри пакета рендера (REND-19)'],
+  ['HTMLElement', 'тип DOM как значение внутри пакета рендера (REND-19)'],
+  ['HTMLCanvasElement', 'канвас страницы: слою миникарты его приносит сборка фабрикой (REND-19)'],
+  ['Image', 'декодирование изображения средствами страницы внутри рендера (REND-19)'],
+]);
+
+/**
+ * Обращения к DOM мимо имени глобала: `(globalThis as { document?: X }).document`
+ * читается как обычное свойство, и списком глобалов не ловится. Имена узкие —
+ * фабрики и поиск узлов страницы; `getContext` сюда НЕ входит: его зовут на
+ * канвасе, который приносит сборка (`FogLayerCanvas`), и это законный вход.
+ */
+const DOM_MEMBERS = new Map<string, string>([
+  ['createElement', 'создание узла страницы внутри пакета рендера (REND-19)'],
+  ['createTextNode', 'текстовый узел страницы внутри пакета рендера (REND-19, RDBG-3)'],
+  ['getElementById', 'поиск узла страницы внутри пакета рендера (REND-19)'],
+  ['querySelector', 'поиск узла страницы внутри пакета рендера (REND-19)'],
+  ['appendChild', 'вставка узла страницы внутри пакета рендера (REND-19)'],
+]);
+
+/**
+ * Сканирует один исходник на обращения к DOM. Отдельная функция, а не режим
+ * `scanSourceText`: запрет не про детерминизм, и смешивать их в одном перечне
+ * значило бы, что правка одного молча трогает другой.
+ */
+export function scanDomInSource(fileName: string, text: string): GuardViolation[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
+  const out: GuardViolation[] = [];
+  const push = (node: ts.Node, message: string): void => {
+    const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    out.push({ file: fileName, line: line + 1, rule: 'dom-in-render', message: `${message} — ${CONFIG_HINT}` });
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && DOM_GLOBALS.has(node.text) && isValueUsage(node)) {
+      push(node, `${node.text}: ${DOM_GLOBALS.get(node.text)!}`);
+    }
+    if (ts.isPropertyAccessExpression(node) && DOM_MEMBERS.has(node.name.text)) {
+      push(node, `.${node.name.text}: ${DOM_MEMBERS.get(node.name.text)!}`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
 /** Все спецификаторы import/export/`import()` одного исходника. */
 export function scanImportsInSource(fileName: string, text: string): GuardViolation[] {
   const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
@@ -199,6 +262,11 @@ export function scanDir(config: ScanConfig): GuardViolation[] {
 /** Скан границ импортов по директории: только относительные спецификаторы. */
 export function scanImports(config: Omit<ScanConfig, 'mode'>): GuardViolation[] {
   return applyConfig({ ...config, mode: 'strict' }, scanImportsInSource);
+}
+
+/** Скан свободы от DOM по директории (REND-19) с учётом исключений конфига. */
+export function scanDom(config: Omit<ScanConfig, 'mode'>): GuardViolation[] {
+  return applyConfig({ ...config, mode: 'strict' }, scanDomInSource);
 }
 
 /** Пустая строка ⇔ нарушений нет; иначе по строке на нарушение — для expect(...).toBe(''). */

@@ -24,6 +24,7 @@ import {
   isAlive,
 } from '../ecs/world.js';
 import { beginSystem, countQuery, endSystem, withDiagnostics } from '../debug.js';
+import type { AbilityCatalog } from '../systems/abilities/model.js';
 import {
   TIME_SCALE_COMPONENT,
   type ArenaApi,
@@ -71,6 +72,14 @@ export interface Simulation {
    * содержимое — обычные компоненты, которые снапшотятся сами.
    */
   readonly modifiers?: ModifierRegistry;
+  /**
+   * Скомпилированная таблица определений способностей (ABIL-10). Живёт здесь по
+   * той же причине, что террейн: порождена данными сцены, иммутабельна и в
+   * снапшот не входит — состояние способностей целиком лежит в полях
+   * компонентов (ABIL-1). Отсюда её читают превью рендера, бот и валидация
+   * редактора; системы платформы получают её при регистрации.
+   */
+  readonly abilities?: AbilityCatalog;
   /**
    * Приёмник диагностики (DIAG-1). Опционален и инертен (DI-5): его наличие
    * MUST NOT менять результат тика. Живёт здесь, а не в `SimulationState`,

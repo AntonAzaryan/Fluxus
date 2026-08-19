@@ -7,6 +7,7 @@ import {
   FIXED_ONE,
   FLOOR_COMPONENT,
   InputSystem,
+  inputTargetDeclared,
   fixed,
   initialState,
   loadScene,
@@ -40,6 +41,11 @@ export function sceneDef(): SceneDef {
           moveY: 'fixed',
           prevButtons: 'i32',
           seq: 'i32',
+          // Пара точки прицела (TICK-2, TICK-4): сцена фикстуры её объявляет,
+          // и потому раскладку включает `inputTargetDeclared` — так же, как
+          // включает её сборка (`buildSimulation`).
+          targetX: 'fixed',
+          targetY: 'fixed',
         },
       },
       { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
@@ -50,7 +56,16 @@ export function sceneDef(): SceneDef {
         name: 'Hero',
         components: {
           Player: { slot: 0 },
-          Input: { aimDir: 0, buttons: 0, moveX: 0, moveY: 0, prevButtons: 0, seq: 0 },
+          Input: {
+            aimDir: 0,
+            buttons: 0,
+            moveX: 0,
+            moveY: 0,
+            prevButtons: 0,
+            seq: 0,
+            targetX: 0,
+            targetY: 0,
+          },
           Position: { x: fixed.fromFloat(0.5), y: fixed.fromFloat(0.5) },
           Velocity: { x: 0, y: 0 },
         },
@@ -120,7 +135,9 @@ export interface Rig {
  */
 export function makeRig(options: { castOnTicks?: readonly number[]; breakFloorOnTick?: number } = {}): Rig {
   const scene = loadScene(sceneDef());
-  scene.systems.register(new InputSystem({ players: [PLAYER_ID] }));
+  scene.systems.register(
+    new InputSystem({ players: [PLAYER_ID], target: inputTargetDeclared(scene.world) }),
+  );
   if (options.castOnTicks !== undefined) {
     const casts = new Set(options.castOnTicks);
     const caster: System = {

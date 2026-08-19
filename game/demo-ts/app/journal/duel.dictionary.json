@@ -1,0 +1,22 @@
+{
+  "events": {
+    "HeroHit": { "kind": "hit", "target": "entity" },
+    "Damage": { "kind": "damage", "target": "entity" },
+    "EntityDied": { "kind": "death", "target": "entity" },
+    "HeroRespawned": { "kind": "respawn", "target": "entity" },
+    "CastFireball": { "kind": "cast-fireball", "actor": "entity" },
+    "FireballExploded": { "kind": "fireball-explosion" },
+    "ShieldCast": { "kind": "cast-shield", "actor": "entity" },
+    "ShieldRicochet": { "kind": "shield-ricochet", "actor": "entity", "target": "projectile" },
+    "ProjectileCaught": { "kind": "projectile-caught", "actor": "entity", "target": "projectile" },
+    "SlowDomeCast": { "kind": "cast-slow-dome", "actor": "entity" },
+    "SlowDomeExpired": { "kind": "slow-dome-expired" },
+    "ChargeExploded": { "kind": "charge-explosion", "actor": "entity" },
+    "$rewind/request": { "kind": "rewind-request", "actor": "initiator" },
+
+    "Collision": { "kind": "collision", "actor": "entity", "target": "other" },
+    "Overlap": { "kind": "overlap", "actor": "entity", "target": "other" },
+    "LeftArena": { "kind": "left-arena", "target": "entity" },
+    "FellThroughFloor": { "kind": "fell-through-floor", "target": "entity" }
+  }
+}

@@ -15,6 +15,8 @@
     "tick-loop": "sim",
     "data-driven-systems": "sim",
     "time-system": "sim",
+    "ability-system": "sim",
+    "buff-system": "sim",
     "snapshot-rewind": "sim",
     "serialization": "sim",
     "terrain": "sim",
@@ -41,7 +43,8 @@
     "desktop-shell": "editor-content",
     "bot-player": "editor-content",
     "performance-budget": "client",
-    "render-quality": "client"
+    "render-quality": "client",
+    "render-debug": "client"
   },
   "exceptions": [
     {

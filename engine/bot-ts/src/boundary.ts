@@ -21,6 +21,7 @@ import {
   type EntityId,
   type WorldState,
 } from '@game-mvp/core';
+import { toWorldFixed } from '@game-mvp/client';
 import type { InputSample } from '@game-mvp/net';
 
 /**
@@ -50,8 +51,35 @@ export interface BotIntent {
    * последнее направление помнит мозг, а не граница.
    */
   readonly aimRadians: number;
+  /**
+   * Точка прицела в мировых единицах, float (BOT-5). Необязательна: мозг,
+   * ничем не целящийся, о ней молчит — и кадр её не возит вовсе, как не возит
+   * её кадр человека без источника точки (TICK-2).
+   *
+   * Ограничений здесь ещё нет: приведение к домену INP-3 делает
+   * `toInputSample`, и делает тем же кодом, что приводит точку с устройства.
+   */
+  readonly target?: BotAimPoint;
+  /**
+   * Бит подтверждения шага прицеливания на этом тике (ABIL-5); `undefined` —
+   * мозг ничего не подтверждает. Индекс бита — данные профиля: смысл битов
+   * назначает контент (INP-4), и константы этого смысла в мозге не живут.
+   *
+   * Собственного канала «подтвердить шаг» у бота нет и быть не должно: бит
+   * подмешивается в ту же маску `buttons`, цепочка накапливается в симуляции
+   * одинаково для всех участников (BOT-5).
+   */
+  readonly confirmBit?: number;
+  /** Бит отмены начатого каста — тем же путём и по тем же основаниям. */
+  readonly cancelBit?: number;
   /** Маска действий; биты выше 15 отсекаются шириной поля (TICK-2). */
   readonly buttons?: number;
+}
+
+/** Точка прицела намерения: мировые единицы, float, оси мира (Y вверх). */
+export interface BotAimPoint {
+  readonly x: number;
+  readonly y: number;
 }
 
 /** Нечисло от мозга — не повод уронить матч: намерения нет, значит нейтраль. */
@@ -67,7 +95,14 @@ function finite(value: number): number {
  * сохраняется, потому что медленный подход — такое же выразимое человеком
  * намерение, как рывок. Угол сворачивается маской оборота, а не обрезается:
  * заворачивание — свойство binary angle measure (FP-7). Маска действий
- * усекается до u16 (TICK-2).
+ * усекается до u16 (TICK-2), и биты подтверждения с отменой подмешиваются в неё
+ * ЗДЕСЬ же — своего канала под них у бота нет.
+ *
+ * Точка прицела проходит `toWorldFixed` слоя ввода — ту самую единственную
+ * точку приведения, через которую идёт точка с устройства (INP-3): не копию
+ * формулы, а тот же код. Геймплейных границ — дальности способности, границы
+ * арены — здесь нет: это политика симуляции (ABIL-5), и бот подчиняется ей на
+ * тех же основаниях, что человек, — на подтверждении шага, а не на съёме.
  */
 export function toInputSample(intent: BotIntent): InputSample {
   let moveX = finite(intent.moveX);
@@ -78,11 +113,28 @@ export function toInputSample(intent: BotIntent): InputSample {
     moveY /= length;
   }
   const turns = finite(intent.aimRadians) / TAU;
+  const buttons =
+    (Math.trunc(finite(intent.buttons ?? 0)) | bitMask(intent.confirmBit) | bitMask(intent.cancelBit)) &
+    BUTTON_MASK;
+  const target = intent.target;
   return {
     move: { x: fixed.fromFloat(moveX), y: fixed.fromFloat(moveY) },
     aimDir: Math.round(turns * TURN_UNITS) & TURN_MASK,
-    buttons: Math.trunc(finite(intent.buttons ?? 0)) & BUTTON_MASK,
+    ...(target === undefined
+      ? {}
+      : { target: { x: toWorldFixed(target.x), y: toWorldFixed(target.y) } }),
+    buttons,
   };
+}
+
+/**
+ * Индекс бита → маска. Бит вне ширины `buttons` даёт ноль, а не заворачивается
+ * в чужой бит: маска у человека и у бота одна, и «подтверждение, приехавшее
+ * прыжком» было бы хуже несработавшего подтверждения.
+ */
+function bitMask(bit: number | undefined): number {
+  if (bit === undefined || !Number.isInteger(bit) || bit < 0 || bit > 15) return 0;
+  return 1 << bit;
 }
 
 /** Угол ввода (единицы ядра) → радианы: чтение той же границы в обратную сторону. */

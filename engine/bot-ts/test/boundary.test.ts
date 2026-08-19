@@ -82,3 +82,49 @@ describe('маска действий — ширина u16 (`tick-loop` TICK-2)'
     expect(sample.buttons).toBe(3);
   });
 });
+
+describe('точка прицела и биты шага (BOT-5, ABIL-5)', () => {
+  it('намерения без точки — кадр без точки: отсутствие не подменяется нулями', () => {
+    expect(toInputSample({ moveX: 0, moveY: 0, aimRadians: 0 }).target).toBeUndefined();
+  });
+
+  it('точка квантуется в Q16.16 и представима без дальнейшего квантования', () => {
+    const sample = toInputSample({ moveX: 0, moveY: 0, aimRadians: 0, target: { x: 3.5, y: -2.25 } });
+    expect(sample.target).toEqual({ x: fixed.fromFloat(3.5), y: fixed.fromFloat(-2.25) });
+    expect(Number.isInteger(sample.target!.x)).toBe(true);
+  });
+
+  it('намерение вне доменов INP-3 проходит ТО ЖЕ ограничение, что ввод с устройства', () => {
+    // Непредставимая в Q16.16 точка прижимается ровно к представимости — тем же
+    // кодом, что точка с указателя: обойти приведение мозг не может.
+    const sample = toInputSample({
+      moveX: 0,
+      moveY: 0,
+      aimRadians: 0,
+      target: { x: 1e9, y: Number.NaN },
+    });
+    expect(sample.target).toEqual({ x: 2147483647, y: 0 });
+  });
+
+  it('дальность способности точку НЕ обрезает: это политика симуляции (ABIL-5)', () => {
+    const sample = toInputSample({ moveX: 0, moveY: 0, aimRadians: 0, target: { x: 900, y: -900 } });
+    expect(sample.target).toEqual({ x: fixed.fromFloat(900), y: fixed.fromFloat(-900) });
+  });
+
+  it('подтверждение и отмена подмешиваются в ту же маску, что прочие действия', () => {
+    const sample = toInputSample({
+      moveX: 0,
+      moveY: 0,
+      aimRadians: 0,
+      buttons: 1,
+      confirmBit: 8,
+      cancelBit: 9,
+    });
+    expect(sample.buttons).toBe(1 | (1 << 8) | (1 << 9));
+  });
+
+  it('бит шага вне ширины `buttons` не срабатывает и не заворачивается в чужой', () => {
+    const sample = toInputSample({ moveX: 0, moveY: 0, aimRadians: 0, confirmBit: 20 });
+    expect(sample.buttons).toBe(0);
+  });
+});

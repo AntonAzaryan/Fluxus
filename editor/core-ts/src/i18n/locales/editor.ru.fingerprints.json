@@ -306,6 +306,222 @@
       "source": "89f66f94",
       "translated": "7f4cb932"
     },
+    "schema.abilityDef.cancelBit": {
+      "source": "ccfabd8a",
+      "translated": "31c955ae"
+    },
+    "schema.abilityDef.condition": {
+      "source": "c52ef93b",
+      "translated": "0e77e5a5"
+    },
+    "schema.abilityDef.confirmBit": {
+      "source": "dca4a09c",
+      "translated": "59cfbce0"
+    },
+    "schema.abilityDef.cooldownTicks": {
+      "source": "2ef2ddd4",
+      "translated": "2cc24958"
+    },
+    "schema.abilityDef.duration": {
+      "source": "da4c987c",
+      "translated": "68ff4035"
+    },
+    "schema.abilityDef.duration.onExpire": {
+      "source": "8fa48298",
+      "translated": "deb222f1"
+    },
+    "schema.abilityDef.effects": {
+      "source": "4bc851cf",
+      "translated": "c0e9fed4"
+    },
+    "schema.abilityDef.id": {
+      "source": "061e3cd8",
+      "translated": "8f74dad6"
+    },
+    "schema.abilityDef.interrupts": {
+      "source": "68f7cde5",
+      "translated": "e96f5ce9"
+    },
+    "schema.abilityDef.phases": {
+      "source": "0e6cba00",
+      "translated": "585f050b"
+    },
+    "schema.abilityDef.projectile": {
+      "source": "8ee16a3c",
+      "translated": "be9eb3c8"
+    },
+    "schema.abilityDef.projectile.onFade": {
+      "source": "b90fc8f1",
+      "translated": "cd5950cf"
+    },
+    "schema.abilityDef.projectile.onHit": {
+      "source": "6e682278",
+      "translated": "14efecc4"
+    },
+    "schema.abilityDef.targeting": {
+      "source": "362d0d26",
+      "translated": "68032539"
+    },
+    "schema.abilityDef.targeting.steps": {
+      "source": "db2b5766",
+      "translated": "7db75f4f"
+    },
+    "schema.abilityDef.trigger": {
+      "source": "7dee018e",
+      "translated": "d6cd6e18"
+    },
+    "schema.abilityInterrupt.cooldown": {
+      "source": "180c4360",
+      "translated": "933a322c"
+    },
+    "schema.abilityInterrupt.mask": {
+      "source": "af9a2ffe",
+      "translated": "1f713c5e"
+    },
+    "schema.abilityInterrupt.refund": {
+      "source": "29d872bf",
+      "translated": "cca14473"
+    },
+    "schema.abilityInterrupt.staged": {
+      "source": "4ec2a7c7",
+      "translated": "0bb70be4"
+    },
+    "schema.abilityInterrupt.threshold": {
+      "source": "bddb48b2",
+      "translated": "2a13ccfa"
+    },
+    "schema.abilityInterrupt.when": {
+      "source": "66c3aa81",
+      "translated": "38c5f84b"
+    },
+    "schema.abilityPhase.durationTicks": {
+      "source": "b25f8dd5",
+      "translated": "5d8653c6"
+    },
+    "schema.abilityPhase.id": {
+      "source": "a7532ad8",
+      "translated": "e135f248"
+    },
+    "schema.abilityPhase.interrupts": {
+      "source": "8cdf413a",
+      "translated": "487bf56b"
+    },
+    "schema.abilityPhase.onCancel": {
+      "source": "68cfc70a",
+      "translated": "31b218dc"
+    },
+    "schema.abilityPhase.onEnter": {
+      "source": "97a501c6",
+      "translated": "8fcab02d"
+    },
+    "schema.abilityPhase.onExit": {
+      "source": "af236261",
+      "translated": "f0679ed4"
+    },
+    "schema.abilityPhase.timeout": {
+      "source": "286e623f",
+      "translated": "5dcbaebe"
+    },
+    "schema.abilityPhase.timeout.then": {
+      "source": "29eac988",
+      "translated": "7d92dd74"
+    },
+    "schema.abilityPhase.trigger": {
+      "source": "4aa9f83d",
+      "translated": "f4b53636"
+    },
+    "schema.abilityRuntime.actionLock": {
+      "source": "bbca4f1b",
+      "translated": "3d37f3dd"
+    },
+    "schema.abilityRuntime.damageEvent": {
+      "source": "bcf170a4",
+      "translated": "215f855c"
+    },
+    "schema.abilityRuntime.damageEvent.amountField": {
+      "source": "6b74054a",
+      "translated": "a9846e64"
+    },
+    "schema.abilityRuntime.damageEvent.entityField": {
+      "source": "bd74820f",
+      "translated": "4a1d8a53"
+    },
+    "schema.abilityRuntime.damageEvent.type": {
+      "source": "c20a4f8f",
+      "translated": "47c7eab3"
+    },
+    "schema.abilityRuntime.deadMarker": {
+      "source": "c75dba1a",
+      "translated": "b4974ad4"
+    },
+    "schema.abilityRuntime.inputComponent": {
+      "source": "079eaf86",
+      "translated": "8bd7b431"
+    },
+    "schema.abilityRuntime.teamField": {
+      "source": "984f0673",
+      "translated": "6c10bd57"
+    },
+    "schema.abilityShape.halfAngle": {
+      "source": "839f53d6",
+      "translated": "5a0e33b9"
+    },
+    "schema.abilityShape.halfX": {
+      "source": "d888afc7",
+      "translated": "1281bab1"
+    },
+    "schema.abilityShape.halfY": {
+      "source": "b6863baa",
+      "translated": "b07ee1d4"
+    },
+    "schema.abilityShape.kind": {
+      "source": "c64cc7b4",
+      "translated": "def9ca5a"
+    },
+    "schema.abilityShape.radius": {
+      "source": "dc5dd0e5",
+      "translated": "bf18398f"
+    },
+    "schema.abilityStep.filter": {
+      "source": "f992d2f7",
+      "translated": "2ad90e06"
+    },
+    "schema.abilityStep.kind": {
+      "source": "197574bb",
+      "translated": "a32a4ab8"
+    },
+    "schema.abilityStep.range": {
+      "source": "465ee706",
+      "translated": "94402528"
+    },
+    "schema.abilityStep.shape": {
+      "source": "a22e0130",
+      "translated": "4d57fee7"
+    },
+    "schema.abilityTrigger.always": {
+      "source": "3dfab15a",
+      "translated": "97ebbcd6"
+    },
+    "schema.abilityTrigger.event": {
+      "source": "695a5b57",
+      "translated": "d0e7c7fc"
+    },
+    "schema.abilityTrigger.event.as": {
+      "source": "897f92f8",
+      "translated": "7bb6b749"
+    },
+    "schema.abilityTrigger.event.type": {
+      "source": "ba62d658",
+      "translated": "8e9e0db0"
+    },
+    "schema.abilityTrigger.input": {
+      "source": "6bc1f2a0",
+      "translated": "31726c66"
+    },
+    "schema.abilityTrigger.input.bit": {
+      "source": "cab3a600",
+      "translated": "8413dfb5"
+    },
     "schema.arena.center": {
       "source": "6b883cd9",
       "translated": "4c0d7e61"
@@ -313,6 +529,70 @@
     "schema.arena.radius": {
       "source": "08aa7df5",
       "translated": "feab208a"
+    },
+    "schema.buffDef.class": {
+      "source": "20ffe668",
+      "translated": "c15c3f9e"
+    },
+    "schema.buffDef.durationTicks": {
+      "source": "0c5c60be",
+      "translated": "b1423f09"
+    },
+    "schema.buffDef.id": {
+      "source": "156b3f54",
+      "translated": "8f74dad6"
+    },
+    "schema.buffDef.maxStacks": {
+      "source": "5c68e555",
+      "translated": "3471edad"
+    },
+    "schema.buffDef.onExpire": {
+      "source": "ed19d0cf",
+      "translated": "c30aed34"
+    },
+    "schema.buffDef.periodic": {
+      "source": "208bd4ee",
+      "translated": "0190eba1"
+    },
+    "schema.buffDef.periodic.do": {
+      "source": "76505c29",
+      "translated": "532b110f"
+    },
+    "schema.buffDef.periodic.everyTicks": {
+      "source": "431be39b",
+      "translated": "6298d6cd"
+    },
+    "schema.buffDef.stacking": {
+      "source": "efa1189c",
+      "translated": "5c18f9f5"
+    },
+    "schema.buffDef.statMods": {
+      "source": "408f9a4d",
+      "translated": "84844c01"
+    },
+    "schema.buffDef.triggers": {
+      "source": "966b2949",
+      "translated": "40d2e1b1"
+    },
+    "schema.buffStatMod.component": {
+      "source": "53678459",
+      "translated": "6e1f0bb7"
+    },
+    "schema.buffStatMod.value": {
+      "source": "fda5b213",
+      "translated": "bef77a79"
+    },
+    "schema.buffTrigger.as": {
+      "source": "ebb53764",
+      "translated": "0e0b9181"
+    },
+    "schema.buffTrigger.do": {
+      "source": "8f723b39",
+      "translated": "d73674e9"
+    },
+    "schema.buffTrigger.type": {
+      "source": "b95c7a40",
+      "translated": "fc1a9e4d"
     },
     "schema.component.defaults": {
       "source": "1edf66ec",
@@ -345,6 +625,10 @@
     "schema.inputFrame.seq": {
       "source": "11cf7985",
       "translated": "f71cdce6"
+    },
+    "schema.inputFrame.target": {
+      "source": "00cce65c",
+      "translated": "f981daeb"
     },
     "schema.inputFrame.tick": {
       "source": "ef68019f",
@@ -478,9 +762,21 @@
       "source": "171d4680",
       "translated": "7259a055"
     },
+    "schema.scene.abilities": {
+      "source": "48fbe789",
+      "translated": "d45a0b3f"
+    },
+    "schema.scene.abilityRuntime": {
+      "source": "f55fc1f2",
+      "translated": "25fdce32"
+    },
     "schema.scene.arena": {
       "source": "28c33ca9",
       "translated": "fc991c24"
+    },
+    "schema.scene.buffs": {
+      "source": "20257163",
+      "translated": "88944507"
     },
     "schema.scene.capacity": {
       "source": "2f0b915a",

@@ -272,11 +272,14 @@ describe('демо по умолчанию: матч против бота на 
     expect(opened.server.phase).toBe('running');
 
     // Каст фаербола: бит 0 словаря биндингов демо (`ACTION_BITS.cast`).
-    // Нажатие копит заряд, выстрел даёт ОТПУСКАНИЕ — поэтому бит снимается
-    // после первых кадров, а не держится весь прогон.
+    // Нажатие копит заряд, отпускание открывает фазу прицеливания, а выстрел
+    // даёт ПОДТВЕРЖДЕНИЕ шага (`ACTION_BITS.confirm`, ABIL-5) — поэтому бит
+    // каста снимается после первых кадров, а следом уходит бит подтверждения.
     rig.remote.sendInput({ x: 0, y: 0 }, 0, 1 << ACTION_BITS.cast);
     for (let i = 0; i < 20; i++) {
       if (i === 2) rig.remote.sendInput({ x: 0, y: 0 }, 0, 0);
+      if (i === 4) rig.remote.sendInput({ x: 0, y: 0 }, 0, 1 << ACTION_BITS.confirm);
+      if (i === 6) rig.remote.sendInput({ x: 0, y: 0 }, 0, 0);
       clock.ms += 1000 / 60;
       rig.joined.shell.step();
       bots!.step();

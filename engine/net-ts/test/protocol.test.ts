@@ -82,6 +82,65 @@ describe('разбор входящего', () => {
     expect(() => parseClientMessage(inputMessage(wireInput(1, 1, 0, 0, 65535)))).not.toThrow();
   });
 
+  it('точка прицела едет плоской парой и переживает круг через оба формата (TICK-2)', () => {
+    for (const serializer of serializers) {
+      const codec = serverCodec(serializer);
+      const message: ClientMessage = inputMessage({
+        ...wireInput(7, 3, 65536, -65536, 5),
+        targetX: 131072,
+        targetY: -262144,
+      });
+      expect(codec.decode(codec.encode(message as never) as never)).toEqual(message);
+    }
+  });
+
+  it('кадр без точки её и не приобретает: отсутствие — не ноль', () => {
+    const parsed = parseClientMessage(inputMessage(wireInput(1, 1))) as unknown as {
+      frames: readonly Record<string, unknown>[];
+    };
+    const frame = parsed.frames[0]!;
+    expect(frame.targetX).toBeUndefined();
+    expect(frame.targetY).toBeUndefined();
+    // И до ядра доезжает КАДР БЕЗ ПОЛЯ, а не кадр с нулями: канонический
+    // `inputs[]` пишется отсюда, и подставленные нули отличали бы запись матча
+    // от записи того же матча до появления поля (CLI-10).
+    expect(toInputFrame(wireInput(1, 1), 'p1', 1).target).toBeUndefined();
+  });
+
+  it('точка вне i32 отвергается на транспортной границе (NTR-7, FP-1)', () => {
+    const over = { ...wireInput(1, 1), targetX: 2147483648, targetY: 0 };
+    expect(() => parseClientMessage(inputMessage(over))).toThrow(ProtocolError);
+    const under = { ...wireInput(1, 1), targetX: 0, targetY: -2147483649 };
+    expect(() => parseClientMessage(inputMessage(under))).toThrow(ProtocolError);
+    // Границы включающие: за ними Q16.16 не представима, до них — законна.
+    const edge = { ...wireInput(1, 1), targetX: 2147483647, targetY: -2147483648 };
+    expect(() => parseClientMessage(inputMessage(edge))).not.toThrow();
+  });
+
+  it('половина точки — отказ разбора, а не выброшенная координата', () => {
+    const half = { ...wireInput(1, 1), targetX: 65536 };
+    expect(() => parseClientMessage(inputMessage(half))).toThrow(/парой/);
+  });
+
+  it('провод не несёт ни номера шага, ни длины цепочки (TICK-2)', () => {
+    // Форма кадра — плоские поля рядом с движением и ничего сверх них: шаги
+    // накапливаются в симуляции (ABIL-5), и цепочка любой длины остаётся
+    // данными сцены, а не свойством протокола.
+    const parsed = parseClientMessage(
+      inputMessage({ ...wireInput(1, 1), targetX: 1, targetY: 2 }),
+    ) as unknown as { frames: readonly Record<string, unknown>[] };
+    expect(Object.keys(parsed.frames[0]!).sort()).toEqual([
+      'aimDir',
+      'buttons',
+      'moveX',
+      'moveY',
+      'seq',
+      'targetX',
+      'targetY',
+      'tick',
+    ]);
+  });
+
   it('нецелые и отсутствующие поля кадра отвергаются', () => {
     expect(() => parseClientMessage({ type: 'Input', epoch: 0, frames: [{ tick: 1.5, seq: 1 }] })).toThrow(
       ProtocolError,
@@ -121,6 +180,11 @@ describe('разбор входящего', () => {
         pacing: { tickRate: 60, snapshotRate: 30, inputDelay: 2, inputWindow: 15 },
       }),
     ).toThrow(ProtocolError);
+  });
+
+  it('точка с провода становится полем `target` кадра ядра (TICK-2)', () => {
+    const frame = toInputFrame({ ...wireInput(4, 2), targetX: 65536, targetY: -131072 }, 'p2', 4);
+    expect(frame.target).toEqual({ x: 65536, y: -131072 });
   });
 
   it('личность даёт соединение, а не содержимое кадра', () => {

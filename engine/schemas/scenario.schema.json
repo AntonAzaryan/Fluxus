@@ -124,6 +124,366 @@
     }
   },
   "$defs": {
+    "abilityDef": {
+      "title": "Определение способности (ABIL-2)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "trigger",
+        "effects"
+      ],
+      "properties": {
+        "id": {
+          "$comment": "Человеко-читаемое имя; в мире способность адресует индекс (ABIL-2).",
+          "type": "string",
+          "minLength": 1
+        },
+        "trigger": {
+          "$ref": "#/$defs/abilityTrigger"
+        },
+        "condition": {
+          "$comment": "Условие сверх триггера (ABIL-3).",
+          "$ref": "#/$defs/expression"
+        },
+        "confirmBit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 31
+        },
+        "cancelBit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 31
+        },
+        "phases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/abilityPhase"
+          }
+        },
+        "targeting": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "steps"
+          ],
+          "properties": {
+            "steps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/abilityStep"
+              }
+            }
+          }
+        },
+        "interrupts": {
+          "$ref": "#/$defs/abilityInterrupts"
+        },
+        "cooldownTicks": {
+          "$ref": "#/$defs/expression"
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        },
+        "projectile": {
+          "$comment": "Блок доставки «снаряд» (ABIL-9): полёт интегрирует физика, платформа разбирает исходы.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "onHit": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/action"
+              }
+            },
+            "onFade": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/action"
+              }
+            }
+          }
+        },
+        "duration": {
+          "$comment": "Блок доставки «эффект с длительностью» (ABIL-9).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "onExpire": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/action"
+              }
+            }
+          }
+        }
+      }
+    },
+    "abilityInterrupt": {
+      "title": "Исход прерывания и данные распознавания источника (ABIL-6)",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cooldown": {
+          "enum": [
+            "full",
+            "partial",
+            "refund"
+          ]
+        },
+        "refund": {
+          "$comment": "Доля кулдауна для исхода partial, Q16.16.",
+          "$ref": "#/$defs/expression"
+        },
+        "staged": {
+          "enum": [
+            "keep",
+            "reset"
+          ]
+        },
+        "mask": {
+          "$comment": "Маска лока для источника disable (LOC-7).",
+          "type": "integer"
+        },
+        "when": {
+          "$comment": "Предикат владельца для источника displacement.",
+          "$ref": "#/$defs/expression"
+        },
+        "threshold": {
+          "$comment": "Порог урона за тик для источника damaged.",
+          "$ref": "#/$defs/expression"
+        }
+      }
+    },
+    "abilityInterrupts": {
+      "$comment": "Карта «источник → исход»; словарь источников закрыт (ABIL-6).",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/abilityInterrupt"
+      }
+    },
+    "abilityPhase": {
+      "title": "Фаза каста (ABIL-4)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "trigger"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trigger": {
+          "enum": [
+            "auto",
+            "commit",
+            "hold"
+          ]
+        },
+        "durationTicks": {
+          "$comment": "Число тиков — сырое целое (EXPR-2).",
+          "$ref": "#/$defs/expression"
+        },
+        "onEnter": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        },
+        "onExit": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        },
+        "onCancel": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        },
+        "timeout": {
+          "$comment": "Исход истечения durationTicks: идентификатор фазы, commit либо cancel (ABIL-4).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "then"
+          ],
+          "properties": {
+            "then": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "interrupts": {
+          "$ref": "#/$defs/abilityInterrupts"
+        }
+      }
+    },
+    "abilityRuntime": {
+      "title": "Биндинги сцены для платформы способностей (ABIL-8)",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deadMarker": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actionLock": {
+          "$comment": "Компонент-маска лока действий, поле `mask` (LOC-7).",
+          "type": "string",
+          "minLength": 1
+        },
+        "teamField": {
+          "$comment": "Пара «компонент, поле», значение которого есть сторона сущности (FOW-2).",
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "damageEvent": {
+          "$comment": "Тип события урона и имена его полей: конвенции имён у ядра нет (ABIL-8).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "entityField",
+            "amountField"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "entityField": {
+              "type": "string",
+              "minLength": 1
+            },
+            "amountField": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "inputComponent": {
+          "$comment": "Имя компонента ввода; по умолчанию Input. Биндингом ABIL-8 не является (TICK-4).",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "abilityShape": {
+      "$comment": "Словарь фигур общий со словарём форм коллайдера (PHYS-2); круг с полууглом — конус (ABIL-5).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "aabb",
+            "circle"
+          ]
+        },
+        "radius": {
+          "$ref": "#/$defs/expression"
+        },
+        "halfX": {
+          "$ref": "#/$defs/expression"
+        },
+        "halfY": {
+          "$ref": "#/$defs/expression"
+        },
+        "halfAngle": {
+          "$ref": "#/$defs/expression"
+        }
+      }
+    },
+    "abilityStep": {
+      "title": "Шаг прицеливания (ABIL-5)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "none",
+            "point",
+            "unit",
+            "vector"
+          ]
+        },
+        "filter": {
+          "$comment": "Предикат над сущностью-кандидатом (EXPR-3).",
+          "$ref": "#/$defs/expression"
+        },
+        "range": {
+          "$comment": "Предел расстояния от начала шага.",
+          "$ref": "#/$defs/expression"
+        },
+        "shape": {
+          "$ref": "#/$defs/abilityShape"
+        }
+      }
+    },
+    "abilityTrigger": {
+      "$comment": "Ровно один из трёх видов: ввод, событие, каждый тик (ABIL-3).",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bit"
+          ],
+          "properties": {
+            "bit": {
+              "$comment": "Индекс бита маски кнопок; смысл битов — данные сцены (INP-4).",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 31
+            }
+          }
+        },
+        "event": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "as": {
+              "$comment": "Имя, которым событие связано в списках действий (EXPR-2).",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "always": {
+          "$comment": "Каждый тик, пока слот жив (ABIL-3)."
+        }
+      }
+    },
     "action": {
       "$comment": "Узел действия: объект с одним ключом-именем (ACT-1). Состав аргументов проверяет загрузчик.",
       "type": "object",
@@ -167,6 +527,125 @@
         "radius": {
           "$comment": "Стартовый радиус в Q16.16; дальше живёт в компоненте (ARENA-4).",
           "type": "integer"
+        }
+      }
+    },
+    "buffDef": {
+      "title": "Определение баффа (BUFF-2)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "class"
+      ],
+      "properties": {
+        "id": {
+          "$comment": "Человеко-читаемое имя; в мире определение адресует индекс (BUFF-1).",
+          "type": "string",
+          "minLength": 1
+        },
+        "class": {
+          "enum": [
+            "negative",
+            "positive"
+          ]
+        },
+        "durationTicks": {
+          "$comment": "Отсутствие поля либо неположительное значение — постоянный бафф (BUFF-2, BUFF-6).",
+          "$ref": "#/$defs/expression"
+        },
+        "stacking": {
+          "enum": [
+            "independent",
+            "refresh",
+            "stack"
+          ]
+        },
+        "maxStacks": {
+          "$comment": "Потолок стаков; обязателен при политике stack (BUFF-3).",
+          "$ref": "#/$defs/expression"
+        },
+        "statMods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/buffStatMod"
+          }
+        },
+        "periodic": {
+          "$comment": "Периодика: период в тиках и список действий, считая от тика наложения (BUFF-5).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "everyTicks",
+            "do"
+          ],
+          "properties": {
+            "everyTicks": {
+              "$ref": "#/$defs/expression"
+            },
+            "do": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/action"
+              }
+            }
+          }
+        },
+        "triggers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/buffTrigger"
+          }
+        },
+        "onExpire": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        }
+      }
+    },
+    "buffStatMod": {
+      "$comment": "Статовая правка: список источников-модификаторов и значение-выражение (BUFF-4, TIME-7).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "value"
+      ],
+      "properties": {
+        "component": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "$ref": "#/$defs/expression"
+        }
+      }
+    },
+    "buffTrigger": {
+      "title": "Реакция баффа на событие (BUFF-5)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "do"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "as": {
+          "$comment": "Имя, которым событие связано в списке действий (EXPR-2).",
+          "type": "string",
+          "minLength": 1
+        },
+        "do": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
         }
       }
     },
@@ -296,6 +775,10 @@
         },
         "aimDir": {
           "type": "integer"
+        },
+        "target": {
+          "$comment": "Точка прицела в мировых координатах (TICK-2). Необязательна: документ, записанный до её появления, обязан остаться валидным и воспроизводиться побитово тем же (CLI-10).",
+          "$ref": "#/$defs/vec2"
         },
         "buttons": {
           "$comment": "u16-битмаска; ширину поля задаёт TICK-2, схема ей соответствует.",
@@ -441,6 +924,24 @@
           "$comment": "Число слотов в списках источников-модификаторов; по умолчанию 4 (TIME-7, SER-7).",
           "type": "integer",
           "minimum": 1
+        },
+        "abilities": {
+          "$comment": "Таблица определений способностей (ABIL-2): наличие подключает компоненты платформы и её системы.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/abilityDef"
+          }
+        },
+        "buffs": {
+          "$comment": "Таблица определений баффов (BUFF-2): наличие дописывает компонент инстанса и регистрирует BuffSystem.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/buffDef"
+          }
+        },
+        "abilityRuntime": {
+          "$comment": "Биндинги сцены для платформы способностей (ABIL-8).",
+          "$ref": "#/$defs/abilityRuntime"
         },
         "initial": {
           "type": "array",

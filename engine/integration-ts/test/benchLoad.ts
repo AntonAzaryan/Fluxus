@@ -68,9 +68,12 @@ import {
   ParticlesSubsystem,
   PresentationStage,
   QualityController,
+  RenderDebugLayer,
   TerrainSubsystem,
   ViewBuffer,
   VisualSurfaceSource,
+  costCountersDebugSource,
+  deliveryDebugSource,
   type ExtractedTick,
   type FogLayerCanvas,
   type PresentationProducer,
@@ -324,6 +327,13 @@ export interface PresentationBenchOptions {
   readonly stats?: readonly StatSource[];
   /** Документ пресета качества (QUAL-1); нет — ультра, то есть без потолков. */
   readonly preset?: QualityPreset;
+  /**
+   * Подключить отладочный слой рендера со ВСЕМИ источниками включёнными
+   * (`render-debug` RDBG-8). Стенд с ним и стенд без него обязаны давать
+   * побитово одинаковые счётчики стоимости — это и есть проверяемая форма
+   * требования «отладка невидима счётчикам».
+   */
+  readonly debug?: boolean;
 }
 
 /**
@@ -377,6 +387,8 @@ export class PresentationBench {
   readonly renderer = new RendererSpy();
   /** Контроллер качества сцены стенда (QUAL-1): реестр ручек и их значения. */
   readonly quality: QualityController;
+  /** Отладочный слой стенда (RDBG-1); null — стенд собран без отладки вовсе. */
+  readonly debug: RenderDebugLayer | null;
   /**
    * Предупреждения подсистем стенда. Пустой список — часть проверки, а не
    * отладка: заглушка вместо модели, неразвёрнутый эффект или карта кривизны не
@@ -437,6 +449,7 @@ export class PresentationBench {
     // а не пересобирает арену вторым проходом.
     const surface = new VisualSurfaceSource(grid, { warn: (message) => this.warnings.push(message) });
     surface.setCurvature(benchCurvature(grid));
+    this.surface = surface;
     this.camera.position.set(grid.width / 2, grid.height / 2, CAMERA_HEIGHT);
     this.camera.lookAt(grid.width / 2, grid.height / 2, 0);
     this.camera.updateMatrixWorld(true);
@@ -448,13 +461,27 @@ export class PresentationBench {
     const warn = (message: string): void => {
       this.warnings.push(message);
     };
+    // Отладочный слой заводится ДО регистрации подсистем — тем же порядком, что
+    // контроллер качества: объявления источников он спрашивает при регистрации
+    // (REND-27). В список подсистем он при этом не входит, и счётные величины
+    // доставки и кадра (PERF-3) от его присутствия не меняются (RDBG-8).
+    this.debug = options.debug === true ? new RenderDebugLayer(this.stage, { scene: context.scene, surface }) : null;
     this.stage
       .register(this.fog)
       .register(new PositionsSubsystem())
       .register(new TerrainSubsystem(grid, { chunkSize: TERRAIN_CHUNK, surface }))
       .register(new ModelsSubsystem(benchManifest(), { camera: this.camera, warn }))
       .register(new ParticlesSubsystem(benchManifest(), { warn }));
+    if (this.debug !== null) {
+      // Источники сборки — рядом с объявленными подсистемами (RDBG-1): стенду
+      // нужны ВСЕ, иначе «включено = выключено» проверялось бы на половине.
+      this.debug.register(deliveryDebugSource()).register(costCountersDebugSource());
+      for (const source of this.debug.sources) this.debug.setEnabled(source.id, true);
+    }
   }
+
+  /** Визуальная поверхность стенда (REND-9) — общая с подсистемами и отладкой. */
+  readonly surface: VisualSurfaceSource;
 
   /** Действующее разрешение маски — сценное под потолком пресета (FOW-10, design D3). */
   get maskResolution(): number {
@@ -545,12 +572,13 @@ function observerOf(view: TickView): EntityId | null {
 export const MATCH_STAND = { extent: 8, pillarStep: 2, resolution: 8 } as const;
 
 /** Презентационный стенд матча под одним документом пресета (QUAL-4). */
-export function matchBench(preset: QualityPreset): PresentationBench {
+export function matchBench(preset: QualityPreset, debug = false): PresentationBench {
   return new PresentationBench({
     grid: benchGrid(MATCH_STAND.extent, MATCH_STAND.pillarStep),
     resolution: MATCH_STAND.resolution,
     stats: MATCH_STAT_SOURCES,
     preset,
+    debug,
   });
 }
 

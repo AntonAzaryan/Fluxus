@@ -36,9 +36,16 @@ export { RemoteHost } from './remoteHost.js';
 export type { RemoteHostConfig } from './remoteHost.js';
 
 // Слой источников ввода (input-devices INP-1..5): устройства → канонический ввод.
-export { TURN_UNITS, aimAngle } from './input/types.js';
-export type { ActionSink, ContinuousSample, InputSource } from './input/types.js';
-export { HeldActions, InputSampler } from './input/sampler.js';
+export { TURN_UNITS, aimAngle, aimTarget } from './input/types.js';
+export type {
+  ActionSink,
+  AimPoint,
+  AimResolution,
+  ContinuousSample,
+  InputSource,
+  MutableAimPoint,
+} from './input/types.js';
+export { HeldActions, InputSampler, toWorldFixed } from './input/sampler.js';
 export type { CanonicalInput, SamplerOptions } from './input/sampler.js';
 export { KeyboardMouseSource } from './input/keyboardMouse.js';
 export type { KeyboardMouseBindings, KeyboardMouseOptions } from './input/keyboardMouse.js';

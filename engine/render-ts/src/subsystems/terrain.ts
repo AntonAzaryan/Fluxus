@@ -51,6 +51,8 @@ import {
   type TickView,
 } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
+import type { DebugSource } from '../debug/contract.js';
+import { terrainSurfaceDebugSource } from '../debug/terrainSource.js';
 import { cornerLevels, type SurfaceNormal, type VisualSurface } from '../visualSurface.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 
@@ -631,6 +633,28 @@ export class TerrainSubsystem implements RenderSubsystem {
         },
       ],
     };
+  }
+
+  /**
+   * Отладочный источник поверхности (`render-debug` RDBG-1, REND-27): сетка,
+   * рампы, дыры пола и walkable-вклад — то самое поле высот, по которому
+   * построена геометрия и посажены инстансы (REND-9). Данные принадлежат
+   * подсистеме, поэтому и объявляет их она, а не отладочный слой.
+   */
+  debugSources(): readonly DebugSource[] {
+    return [
+      terrainSurfaceDebugSource({
+        grid: () => this.grid,
+        surface: () => this.surfaceSource?.current ?? null,
+        // Живая карта пола подсистемы (TERR-6), а не начальная из ассета:
+        // выбитая доставкой клетка обязана быть видна дырой сразу.
+        floorBits: () => this.floor,
+        // Приём сетки — точка входной границы рендера (REND-1, TERR-2).
+        tileWorldUnits: () => this.grid.tileSize / FIXED_ONE,
+        heightStepWorldUnits: () => this.heightStep,
+        curvatureTessellation: () => this.tessellation,
+      }),
+    ];
   }
 
   /**

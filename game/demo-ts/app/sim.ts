@@ -11,7 +11,6 @@
  * движка, которому в JSON не место (TICK-4, DI-3).
  */
 import {
-  FIXED_ONE,
   InputSystem,
   LocomotionSystem,
   PhysicsSystem,
@@ -55,8 +54,8 @@ export const ACTION_BITS = {
   capture: 5,
   shield: 6,
   /**
-   * Ульта отката. Бит УДЕРЖАНИЯ, а не фронта: фронт кастует ульту (JSON-система
-   * `RewindCast` сцены), а дальше тот же бит читает хост мира — сервер матча из
+   * Ульта отката. Бит УДЕРЖАНИЯ, а не фронта: фронт кастует ульту (определение
+   * `rewind` сцены), а дальше тот же бит читает хост мира — сервер матча из
    * входящих кадров, локальная оболочка из сообщений главного потока, — и ведёт
    * точку перемотки, пока он не исчезнет. Второго канала под это в протоколе
    * нет и заводить его нельзя (`netcode-transport` NTR-8), поэтому номер бита
@@ -64,6 +63,18 @@ export const ACTION_BITS = {
    * обязан совпасть с этим.
    */
   rewind: 7,
+  /**
+   * Подтверждение и отмена шага прицеливания (ABIL-5). Обычные биты маски, как
+   * и всё остальное: собственных полей `InputFrame` они не получают, а что
+   * именно они означают, решает определение способности сцены (INP-4, ABIL-3).
+   *
+   * В сцене их называют `confirmBit`/`cancelBit` определений фаербола и
+   * захвата, в раскладке устройств (`bindings.json`) — правая кнопка мыши и
+   * `Q`. Совпадение держится только именами действий: разошлись — бот и человек
+   * подтверждают разными битами, и сцена этого не заметит.
+   */
+  confirm: 8,
+  cancel: 9,
 } as const;
 
 /**
@@ -75,18 +86,14 @@ export const ACTION_BITS = {
  * `effects.byState` (REND-23). Два списка разошлись бы молча: эффект просто не
  * включался бы, а автор увидел бы только его отсутствие.
  *
- * `Shielded` — компонент щита (JSON-системы `ShieldCast`/`ShieldRicochet`/
- * `ShieldExpire` сцены): пока он висит на герое, оболочка `effects.byState`
- * рисует вокруг него синюю сферу — ту самую запись, под которую имя было
- * объявлено заранее, до контента. `Held` — снаряд, пойманный
- * захватом: пока он висит на держателе, его рисует оболочка `effects.byState`.
- * `Holding` — обратная сторона той же пары, уже на ГЕРОЕ: записи эффекта у неё
- * нет, и доставляется она затем, чтобы превью зоны захвата гасло, пока снаряд
- * в руках (`main.ts`), — состояние симуляции, а не догадка главного потока.
- * `Charging` — герой копит заряд каста: записи эффекта у него тоже нет (шар
- * заряда рисует главный поток, см. `chargeVisualOf`), а доставляется оно затем,
- * чтобы гасить превью зоны захвата — во время заряда `CaptureRelease` не
- * сработает.
+ * `Shielded` — маркер щита: его вешает определение способности, а снимает
+ * `onExpire` баффа длительности (`buff-system` BUFF-6, design Decision 7). Пока
+ * он висит на герое, оболочка `effects.byState` рисует вокруг него синюю
+ * сферу — ту самую запись, под которую имя было объявлено заранее, до контента.
+ * `Held` — снаряд, пойманный захватом: пока он висит на держателе, его рисует
+ * та же оболочка. `Holding` — обратная сторона той же пары, уже на ГЕРОЕ.
+ * `Charging` — герой копит заряд каста: маркер ставит фаза заряда определения,
+ * и по нему `effects.byState` рисует шар перед кастером.
  *
  * Порядок ДОБАВЛЕНИЯ важнее алфавита: бит существующего имени не должен
  * поехать — новое состояние дописывается в конец.
@@ -107,13 +114,12 @@ export function stateBit(component: string): number {
 }
 
 /**
- * Полный путь снаряда в тиках — ЗЕРКАЛО поля `AbilityConfig.throwLifetime`
- * prefab'а `Hero`, которым `ChargeRelease` и `ThrowHeld` заполняют
- * `Lifetime.ticks` (и умолчания `Lifetime` у prefab'а `Fireball`, которое ни
- * один из них не оставляет в силе). Знание СБОРКИ, а не ядра: из него Extractor выводит фазу
- * полёта (REND-12), а рендер по ней рисует полётную дугу. Расходится с
- * `AbilityConfig` — расходится только дуга: симуляция этого числа не читает.
- * Ретюнить оба вместе.
+ * Полный путь снаряда в тиках — ЗЕРКАЛО поля `AbilityProjectile.ticksLeft`
+ * prefab'а `Fireball`, которым доставка определения считает жизнь снаряда
+ * (`ability-system` ABIL-9). Знание СБОРКИ, а не ядра: из него Extractor
+ * выводит фазу полёта (REND-12), а рендер по ней рисует полётную дугу.
+ * Расходится со сценой — расходится только дуга: симуляция этого числа не
+ * читает. Ретюнить оба вместе.
  */
 export const FIREBALL_LIFETIME_TICKS = 50;
 
@@ -139,95 +145,6 @@ export const ACTION_LOCK_COMPONENT = 'ActionLock';
 export const RESPAWN_EVENT = 'HeroRespawned';
 
 /**
- * Геометрия зоны захвата в МИРОВЫХ единицах — то, из чего главный поток рисует
- * превью конуса под курсором (превью покадровое, симуляции о нём знать нечего).
- * Числа берутся из той же записи `AbilityConfig` prefab'а `Hero`, по которой
- * решает JSON-система `CaptureRelease`: второго набора балансных чисел не
- * заводится, а расхождение превью с проверкой стало бы обманом игрока.
- *
- * `halfAngleTurns` — доля оборота (FP-7, единица угла ядра), радиус — клетки
- * мира: Q16.16 за границу симуляции не выходит (REND-1).
- */
-export function captureZoneOf(def: SceneDef): { radius: number; halfAngleTurns: number } {
-  const hero = def.prefabs?.find((prefab) => prefab.name === 'Hero');
-  const config = hero?.components.AbilityConfig;
-  if (config === undefined) throw new Error("демо: у prefab'а Hero нет AbilityConfig");
-  const radius = config.captureRadius;
-  const halfAngle = config.captureHalfAngle;
-  // Отсутствующее поле — не ноль: нулевой сектор невидим, и превью молча
-  // перестало бы существовать вместо того, чтобы сообщить о дыре в контенте.
-  if (radius === undefined || halfAngle === undefined) {
-    throw new Error(
-      "демо: в AbilityConfig prefab'а Hero нет captureRadius/captureHalfAngle — превью зоны рисовать нечем",
-    );
-  }
-  return { radius: radius / FIXED_ONE, halfAngleTurns: halfAngle / FIXED_ONE };
-}
-
-/**
- * Геометрия и тайминг ШАРА ЗАРЯДА в мировых единицах — то, из чего главный
- * поток рисует растущий шар перед кастером, пока зажата ЛКМ.
- *
- * Причина та же, что у превью зоны захвата: заряд растёт МЕЖДУ тиками, а
- * оболочка эффекта `effects.byKind` радиуса на сущность не знает — её радиус
- * задан записью манифеста и один на весь тип (REND-23). Поэтому шар живёт в
- * главном потоке, а числа берутся из той же записи `AbilityConfig`, по которой
- * решает JSON-система `ChargeRelease`: второго набора балансных чисел не
- * заводится.
- *
- * `ticks`/`graceTicks` — сырые тики (их же считает `Charging.ticks`),
- * `maxScale` — множитель размера в конце заряда, `heavyScale` — порог, с
- * которого `ChargeRelease` рождает `HeavyFireball` (шар с него и перекрашивается
- * в цвет тяжёлого снаряда), `offset` — вынос шара перед кастером в клетках мира.
- */
-export function chargeVisualOf(def: SceneDef): {
-  ticks: number;
-  graceTicks: number;
-  maxScale: number;
-  heavyScale: number;
-  offset: number;
-} {
-  const hero = def.prefabs?.find((prefab) => prefab.name === 'Hero');
-  const config = hero?.components.AbilityConfig;
-  if (config === undefined) throw new Error("демо: у prefab'а Hero нет AbilityConfig");
-  const { chargeTicks, chargeGraceTicks, chargeMaxScale, chargeHeavyScale, throwOffset } = config;
-  // Отсутствующее поле — не ноль: нулевой заряд невидим, и шар молча перестал
-  // бы существовать вместо того, чтобы сообщить о дыре в контенте.
-  if (
-    chargeTicks === undefined ||
-    chargeGraceTicks === undefined ||
-    chargeMaxScale === undefined ||
-    chargeHeavyScale === undefined ||
-    throwOffset === undefined
-  ) {
-    throw new Error(
-      "демо: в AbilityConfig prefab'а Hero нет chargeTicks/chargeGraceTicks/chargeMaxScale/chargeHeavyScale/throwOffset — шар заряда рисовать нечем",
-    );
-  }
-  return {
-    ticks: chargeTicks,
-    graceTicks: chargeGraceTicks,
-    maxScale: chargeMaxScale / FIXED_ONE,
-    heavyScale: chargeHeavyScale / FIXED_ONE,
-    offset: throwOffset / FIXED_ONE,
-  };
-}
-
-/**
- * Накопленные тики заряда по доставленному `Charging.ticks` (стат `charge`),
- * ограниченные окном роста `maxTicks` (`AbilityConfig.chargeTicks`).
- *
- * Тик НАЖАТИЯ окном заряда не считается: самый быстрый тап отпускается на
- * следующем тике и обязан дать обычный шар, а не «чуть заряженный». Ровно эту
- * же поправку и ровно тот же предел делает `ChargeRelease` в сцене — держать их
- * врозь нельзя, поэтому `maxTicks` здесь и там одно и то же число, а тики
- * передержки за него не выходят: они видны только в СЫРОМ `Charging.ticks`.
- */
-export function chargeHeld(ticks: number, maxTicks: number): number {
-  return Math.max(0, Math.min(ticks - 1, maxTicks));
-}
-
-/**
  * Имена доставляемых статов демо (`match-hud` HUD-8) — общий словарь двух
  * половин сборки: воркер объявляет по ним источники (`extractor.ts`), виджеты
  * биндятся на те же имена в композиции HUD (`hud.ts`). Имена принадлежат
@@ -244,13 +161,6 @@ export const STATS = {
   hpMax: 'hpMax',
   deaths: 'deaths',
   /**
-   * Накопленные тики заряда каста (`Charging.ticks`). Стат, а не состояние:
-   * биту `EntityView.states` величины не передать, а шар заряда рисуется по
-   * ней покадрово (`chargeVisualOf`). Компонента нет — стата НЕТ, и главный
-   * поток отличает «не заряжает» от «заряд нулевой» (HUD-8).
-   */
-  charge: 'charge',
-  /**
    * Команда сущности (`Team.id`) и радиус обзора (`Vision.radius`) — входы
    * маски видимости тумана войны (FOW-7, design D4): подсистема тумана берёт
    * наблюдателей СВОЕЙ команды из доставленного состояния по этим именам, а
@@ -259,50 +169,82 @@ export const STATS = {
    */
   team: 'team',
   visionRadius: 'vision',
+  /**
+   * Радиус коллайдера сущности (`Collider.radius`) — вход отладочного источника
+   * кругов коллизий (`render-debug` RDBG-6). Стат, а не выдуманное число: у
+   * главного потока нет другого пути узнать величину компонента, и источник,
+   * не нашедший стата, говорит «нет данных».
+   */
+  colliderRadius: 'collider',
   /** Оставшиеся тики кулдауна способности и его полная длительность. */
   cooldown: (ability: string): string => `${ability}.cd`,
   cooldownMax: (ability: string): string => `${ability}.cdMax`,
+  /**
+   * Состояние сущности-слота способности (`ability-system` ABIL-1), доставленное
+   * НА ВЛАДЕЛЬЦЕ: индекс определения, фаза каста, число подтверждённых шагов и
+   * сами шаги. Их читает подсистема превью каста (REND-28) — единственный
+   * потребитель, которому мало битов состояния: ей нужны числа.
+   */
+  slotAbility: (ability: string): string => `${ability}.ability`,
+  slotPhase: (ability: string): string => `${ability}.phase`,
+  slotStaged: (ability: string): string => `${ability}.staged`,
+  slotStepX: (ability: string, step: number): string => `${ability}.s${step}x`,
+  slotStepY: (ability: string, step: number): string => `${ability}.s${step}y`,
+  slotStepEntity: (ability: string, step: number): string => `${ability}.s${step}e`,
 } as const;
 
 /**
- * Компонент cooldown'а ульты отката. Отдельный от `Cooldowns` намеренно: он
- * назван exempt-компонентом в конфиге матча (`duel.match.json`) и потому
- * переживает перемотку целиком, а остальные перезарядки обязаны откатываться
- * вместе с миром — ради этого ульта и существует. Общий компонент сделал бы
- * «пережил откат» свойством всех способностей разом.
+ * Номер слота способности у героя (`AbilitySlot.slotIndex`, ABIL-1) — общий
+ * словарь сцены, сборки и профиля бота. Сцена выдаёт слоты системой `GrantSlots`
+ * и этими же номерами их адресует, сборка по ним собирает статы кулдауна и
+ * превью, профиль бота — блоком `cast.slotIndex` (BOT-6). Разошлись — стат
+ * приедет от чужой способности, и заметить это можно только глазами.
  */
-export const REWIND_COOLDOWN_COMPONENT = 'RewindCooldown';
+export const ABILITY_SLOTS = Object.freeze({
+  cast: 0,
+  slowDome: 1,
+  capture: 2,
+  shield: 3,
+  rewind: 4,
+  throwHeld: 5,
+});
 
 /**
  * Способности демо, у которых виджет показывает кулдаун (те же имена, что
- * INP-4), и источник его величины в мире. Перезарядку в сцене имеют `cast`,
- * `slowDome`, `capture`, `shield` и `rewind`; `dodge` и `jump` держат в
- * компоненте `Cooldowns` нулевой предел и потому всегда готовы — виджет читает
- * те же доставленные статы и рисует их кнопки без затемнения.
+ * INP-4), и номер слота, на котором лежит его величина. Остаток кулдауна живёт
+ * отдельным компонентом сущности-слота (ABIL-1, ABIL-7), поэтому источник — это
+ * пара «номер слота, поле `AbilityCooldown`», а не поле на герое.
  *
- * Источник назван таблицей, а не выведен из имени способности: у ульты отката
- * он свой (`REWIND_COOLDOWN_COMPONENT`), и правило «поле того же имени в
- * `Cooldowns`» на ней бы молча сломалось — стат не приехал бы, а виджет показал
- * бы пустоту вместо перезарядки.
+ * `dodge` и `jump` слотов не имеют вовсе: это манёвры локомоушена (LOC-4,
+ * LOC-5), а не способности платформы. Виджет их кнопки рисует, а стата не
+ * находит и показывает «нет данных» — то есть кнопку без затемнения (HUD-8).
  */
-export interface CooldownSource {
-  readonly component: string;
-  readonly field: string;
-  readonly maxField: string;
-}
-
-export const COOLDOWN_SOURCES: Readonly<Record<string, CooldownSource>> = Object.freeze({
-  cast: { component: 'Cooldowns', field: 'cast', maxField: 'castMax' },
-  dodge: { component: 'Cooldowns', field: 'dodge', maxField: 'dodgeMax' },
-  jump: { component: 'Cooldowns', field: 'jump', maxField: 'jumpMax' },
-  slowDome: { component: 'Cooldowns', field: 'slowDome', maxField: 'slowDomeMax' },
-  capture: { component: 'Cooldowns', field: 'capture', maxField: 'captureMax' },
-  shield: { component: 'Cooldowns', field: 'shield', maxField: 'shieldMax' },
-  rewind: { component: REWIND_COOLDOWN_COMPONENT, field: 'ticks', maxField: 'max' },
+export const COOLDOWN_SOURCES: Readonly<Record<string, number>> = Object.freeze({
+  cast: ABILITY_SLOTS.cast,
+  slowDome: ABILITY_SLOTS.slowDome,
+  capture: ABILITY_SLOTS.capture,
+  shield: ABILITY_SLOTS.shield,
+  rewind: ABILITY_SLOTS.rewind,
 });
 
-/** Порядок панели кулдаунов HUD — порядок объявления источников. */
-export const COOLDOWN_ABILITIES: readonly string[] = Object.freeze(Object.keys(COOLDOWN_SOURCES));
+/** Порядок панели кулдаунов HUD — порядок кнопок, а не источников. */
+export const COOLDOWN_ABILITIES: readonly string[] = Object.freeze([
+  'cast',
+  'dodge',
+  'jump',
+  'slowDome',
+  'capture',
+  'shield',
+  'rewind',
+]);
+
+/**
+ * Слоты, чьё состояние доставляется превью каста (REND-28). Их ровно два —
+ * фаербол и захват: только у них есть цепочка прицеливания, а превью рисует
+ * фигуру шага. Остальные слоты состояния в кадр не возят: стат без потребителя
+ * — это байты в каждом кадре каждой сущности.
+ */
+export const PREVIEW_SLOTS: readonly string[] = Object.freeze(['cast', 'capture']);
 
 // ------------------------------------------------------------------- сборка
 

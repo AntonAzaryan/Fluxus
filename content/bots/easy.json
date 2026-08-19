@@ -1,19 +1,9 @@
 {
   "schema": 2,
   "name": "easy",
-  "reaction": {
-    "delayTicks": 24,
-    "jitterTicks": 8,
-    "memoryTicks": 60
-  },
-  "aim": {
-    "noiseDegrees": 14,
-    "noisePeriodTicks": 20
-  },
-  "decision": {
-    "intervalTicks": 12,
-    "jitterTicks": 6
-  },
+  "reaction": { "delayTicks": 24, "jitterTicks": 8, "memoryTicks": 60 },
+  "aim": { "noiseDegrees": 14, "noisePeriodTicks": 20 },
+  "decision": { "intervalTicks": 12, "jitterTicks": 6 },
   "movement": {
     "maxSpeed": 0.6,
     "arriveTolerance": 0.6,
@@ -30,7 +20,16 @@
       "range": 8,
       "holdTicks": 8,
       "cooldownTicks": 120,
-      "weight": 1
+      "weight": 1,
+      "cast": {
+        "slotIndex": 0,
+        "confirmButton": 8,
+        "cancelButton": 9,
+        "steps": [{ "aim": "enemy", "confirmDelayTicks": 12, "pointNoise": 1.2 }],
+        "holdTicks": 8,
+        "cancelChance": 0.15,
+        "giveUpTicks": 90
+      }
     },
     {
       "name": "slowDome",
@@ -72,12 +71,7 @@
       "requiresMoving": true
     }
   ],
-  "utility": {
-    "pressure": 0.6,
-    "kite": 0.5,
-    "retreat": 1,
-    "dodge": 0.7
-  },
+  "utility": { "pressure": 0.6, "kite": 0.5, "retreat": 1, "dodge": 0.7 },
   "aggression": 0.3,
   "seed": 1
 }

@@ -24,6 +24,7 @@ import {
   TouchSource,
   aimAngle,
   validateBindings,
+  type ContinuousSample,
   type GamepadLike,
   type InputSource,
 } from '../src/index.js';
@@ -72,10 +73,11 @@ const makeSampler = (): InputSampler => new InputSampler({ actionBits: BITS });
 /** Источник-стенд: непрерывное состояние и удержания задаются тестом напрямую. */
 class StubSource implements InputSource {
   press: ((action: string) => void) | null = null;
-  state: { moveX: number; moveY: number; aim: number | null } | null = {
+  state: ContinuousSample | null = {
     moveX: 0,
     moveY: 0,
     aim: null,
+    target: null,
   };
   readonly heldActions = new Set<string>();
   constructor(readonly id: string) {}
@@ -85,7 +87,7 @@ class StubSource implements InputSource {
   stop(): void {
     this.press = null;
   }
-  poll(): { moveX: number; moveY: number; aim: number | null } | null {
+  poll(): ContinuousSample | null {
     return this.state;
   }
   held(): ReadonlySet<string> {
@@ -190,10 +192,10 @@ describe('InputSampler: свёртка непрерывных (INP-5) и ква�
     const pad = new StubSource('pad');
     sampler.add(kb);
     sampler.add(pad);
-    kb.state = { moveX: 1, moveY: 0, aim: null };
+    kb.state = { moveX: 1, moveY: 0, aim: null, target: null };
     expect(fixed.toFloat(sampler.sample().move.x)).toBeCloseTo(1, 4);
     // Геймпад наклонили позже — движение переключается на него.
-    pad.state = { moveX: 0, moveY: 0.5, aim: null };
+    pad.state = { moveX: 0, moveY: 0.5, aim: null, target: null };
     const s = sampler.sample();
     expect(fixed.toFloat(s.move.x)).toBe(0);
     expect(fixed.toFloat(s.move.y)).toBeCloseTo(0.5, 4);
@@ -203,7 +205,7 @@ describe('InputSampler: свёртка непрерывных (INP-5) и ква�
     const sampler = makeSampler();
     const pad = new StubSource('pad');
     sampler.add(pad);
-    pad.state = { moveX: 0.7, moveY: 0, aim: null };
+    pad.state = { moveX: 0.7, moveY: 0, aim: null, target: null };
     sampler.sample();
     pad.state = null; // отключение устройства
     const s = sampler.sample();
@@ -215,7 +217,7 @@ describe('InputSampler: свёртка непрерывных (INP-5) и ква�
     const sampler = makeSampler();
     const source = new StubSource('stub');
     sampler.add(source);
-    source.state = { moveX: 3, moveY: 4, aim: null };
+    source.state = { moveX: 3, moveY: 4, aim: null, target: null };
     const s = sampler.sample();
     const length = Math.hypot(fixed.toFloat(s.move.x), fixed.toFloat(s.move.y));
     expect(length).toBeLessThanOrEqual(1);
@@ -226,10 +228,74 @@ describe('InputSampler: свёртка непрерывных (INP-5) и ква�
     const sampler = makeSampler();
     const source = new StubSource('stub');
     sampler.add(source);
-    source.state = { moveX: 0, moveY: 0, aim: 0x12345 };
+    source.state = { moveX: 0, moveY: 0, aim: 0x12345, target: null };
     expect(sampler.sample().aimDir).toBe(0x2345); // маска оборота (FP-7)
-    source.state = { moveX: 0, moveY: 0, aim: null };
+    source.state = { moveX: 0, moveY: 0, aim: null, target: null };
     expect(sampler.sample().aimDir).toBe(0x2345);
+  });
+});
+
+describe('точка прицела в семантическом сэмпле (INP-1, INP-3)', () => {
+  it('источник, точкой не владеющий, оставляет её пустой — а не в начале координат', () => {
+    const sampler = makeSampler();
+    const source = new StubSource('stub');
+    sampler.add(source);
+    expect(sampler.sample().target).toBeNull();
+  });
+
+  it('точка доезжает до канонического ввода в Q16.16 и переживает молчание источника (INP-5)', () => {
+    const sampler = makeSampler();
+    const source = new StubSource('stub');
+    sampler.add(source);
+    source.state = { moveX: 0, moveY: 0, aim: null, target: { x: 3.5, y: -2.25 } };
+    const s = sampler.sample();
+    expect(s.target).toEqual({ x: fixed.fromFloat(3.5), y: fixed.fromFloat(-2.25) });
+
+    source.state = { moveX: 0, moveY: 0, aim: null, target: null };
+    expect(sampler.sample().target).toEqual({ x: fixed.fromFloat(3.5), y: fixed.fromFloat(-2.25) });
+  });
+
+  it('точку берёт тот источник, который менял её последним (INP-5)', () => {
+    const sampler = makeSampler();
+    const mouse = new StubSource('mouse');
+    const pad = new StubSource('pad');
+    sampler.add(mouse);
+    sampler.add(pad);
+    mouse.state = { moveX: 0, moveY: 0, aim: null, target: { x: 1, y: 1 } };
+    expect(sampler.sample().target).toEqual({ x: fixed.fromFloat(1), y: fixed.fromFloat(1) });
+    pad.state = { moveX: 0, moveY: 0, aim: null, target: { x: -4, y: 8 } };
+    expect(sampler.sample().target).toEqual({ x: fixed.fromFloat(-4), y: fixed.fromFloat(8) });
+  });
+
+  it('точка вне дальности способности уезжает КАК ЕСТЬ (INP-3)', () => {
+    // Дальность способности — политика симуляции (ABIL-5), и слой ввода ею не
+    // распоряжается: обрезанная здесь, она стала бы свойством клиента, то есть
+    // досталась бы тому, кто клиентом управляет.
+    const sampler = makeSampler();
+    const source = new StubSource('stub');
+    sampler.add(source);
+    source.state = { moveX: 0, moveY: 0, aim: null, target: { x: 900, y: -900 } };
+    expect(sampler.sample().target).toEqual({ x: fixed.fromFloat(900), y: fixed.fromFloat(-900) });
+  });
+
+  it('непредставимая в Q16.16 точка прижимается в ЕДИНСТВЕННОЙ точке приведения (INP-3)', () => {
+    const sampler = makeSampler();
+    const source = new StubSource('stub');
+    sampler.add(source);
+    source.state = { moveX: 0, moveY: 0, aim: null, target: { x: 1e9, y: -1e9 } };
+    const s = sampler.sample();
+    // Ограничена ровно представимость: за границей i32 значение завернулось бы
+    // молча, и второго квантования ниже по потоку не существует.
+    expect(s.target!.x).toBe(2147483647);
+    expect(s.target!.y).toBe(-2147483648);
+  });
+
+  it('нечисло от источника не уносит кадр', () => {
+    const sampler = makeSampler();
+    const source = new StubSource('stub');
+    sampler.add(source);
+    source.state = { moveX: 0, moveY: 0, aim: null, target: { x: Number.NaN, y: 5 } };
+    expect(sampler.sample().target).toEqual({ x: 0, y: fixed.fromFloat(5) });
   });
 });
 
@@ -253,7 +319,7 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
     new KeyboardMouseSource({
       bindings: validateBindings(BINDINGS).keyboardMouse,
       movementCaptured: () => captured,
-      aimAt: () => 42,
+      aimAt: () => ({ angle: 42, x: 0, y: 0 }),
     });
 
   it('WASD нормализуется; стрелки принадлежат камере и в движение не входят', () => {
@@ -345,7 +411,7 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
   it('клик даёт фронт с прицелом; клик без направления — не действие', () => {
     const withAim = new KeyboardMouseSource({
       bindings: validateBindings(BINDINGS).keyboardMouse,
-      aimAt: (x, y) => (x === 0 && y === 0 ? null : aimAngle(1, 1)),
+      aimAt: (x, y) => (x === 0 && y === 0 ? null : { angle: aimAngle(1, 1), x, y }),
     });
     const pressed: string[] = [];
     withAim.start((a) => pressed.push(a));
@@ -355,6 +421,19 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
     withAim.handlePointerDown(0, 10, 20);
     expect(pressed).toEqual(['cast']);
     expect(withAim.poll().aim).toBe(aimAngle(1, 1));
+  });
+
+  it('указатель отдаёт И направление, И точку — одним разрешением (INP-1)', () => {
+    const source = new KeyboardMouseSource({
+      bindings: validateBindings(BINDINGS).keyboardMouse,
+      // Разрешение экранной позиции в мир — знание приложения (REND-15).
+      aimAt: (x, y) => ({ angle: aimAngle(0, 1), x: x / 10, y: y / 10 }),
+    });
+    expect(source.poll().target).toBeNull();
+    source.start(() => {});
+    source.handlePointerDown(0, 70, -30);
+    expect(source.poll().aim).toBe(aimAngle(0, 1));
+    expect(source.poll().target).toEqual({ x: 7, y: -3 });
   });
 });
 
@@ -395,6 +474,16 @@ describe('TouchSource (INP-1, INP-2, D6)', () => {
     source.handlePointerUp(2);
     expect(pressed).toEqual(['cast']);
     expect(source.poll()?.moveX).toBe(1); // движение пережило чужой pointerup
+  });
+
+  it('тач-стик прицела строит точку тем же способом, что стик геймпада (INP-1)', () => {
+    const reach = { ...bindings, aimStick: { ...bindings.aimStick!, aimReach: 4 } };
+    const source = new TouchSource(reach, () => viewport, () => ({ x: 1, y: 1 }));
+    source.handlePointerDown(2, 800, 400);
+    source.handlePointerMove(2, 800, 400 - STICK_PX); // прицел вверх до упора
+    const s = source.poll();
+    expect(s?.target?.x).toBeCloseTo(1, 6);
+    expect(s?.target?.y).toBeCloseTo(5, 6);
   });
 
   it('тап ниже мёртвой зоны прицела — не каст', () => {
@@ -486,6 +575,28 @@ describe('GamepadSource (INP-3, INP-5, D7)', () => {
     expect(sampler.sample().buttons).toBe(1 << BITS.cast);
     current = null;
     expect(sampler.sample().buttons).toBe(0);
+  });
+
+  it('источник без указателя строит точку прицела сам (INP-1)', () => {
+    // Экранного указателя у стика нет: точка — начало прицеливания плюс
+    // отклонение, взятое в мировых единицах биндинга. Ни сэмплер, ни
+    // `InputFrame`, ни симуляция об отличии от мыши не знают.
+    const reachBindings = { ...bindings, aimReach: 10 };
+    let current: GamepadLike | null = pad([0, 0, 0, 0]);
+    const source = new GamepadSource(reachBindings, () => current, () => ({ x: 2, y: 3 }));
+    expect(source.poll()?.target).toBeNull();
+    current = pad([0, 0, 1, 0]); // прицел вправо до упора
+    const s = source.poll();
+    expect(s?.target?.x).toBeCloseTo(12, 6);
+    expect(s?.target?.y).toBeCloseTo(3, 6);
+  });
+
+  it('без дальности стика или без начала прицеливания источник точкой не владеет', () => {
+    const current = pad([0, 0, 1, 0]);
+    // Дальность есть, начала нет.
+    expect(new GamepadSource({ ...bindings, aimReach: 10 }, () => current).poll()?.target).toBeNull();
+    // Начало есть, дальности нет.
+    expect(new GamepadSource(bindings, () => current, () => ({ x: 0, y: 0 })).poll()?.target).toBeNull();
   });
 
   it('отключение при наклонённом стике — нейтраль через сэмплер (INP-5)', () => {
@@ -600,7 +711,7 @@ describe('отпускание кнопки в симуляции (INP-2, TICK-4
     const sampler = makeSampler();
     const source = new KeyboardMouseSource({
       bindings: validateBindings(BINDINGS).keyboardMouse,
-      aimAt: () => 0,
+      aimAt: () => ({ angle: 0, x: 0, y: 0 }),
     });
     sampler.add(source);
 
@@ -611,7 +722,9 @@ describe('отпускание кнопки в симуляции (INP-2, TICK-4
       step: (): void => {
         at += 1;
         const input = sampler.sample();
-        simTick(sim, state, [{ tick: at, playerId: 'p1', seq: at, ...input }]);
+        simTick(sim, state, [
+          { tick: at, playerId: 'p1', seq: at, move: input.move, aimDir: input.aimDir, buttons: input.buttons },
+        ]);
       },
       released: (): number => coreWorld.getField(state.world, hero, 'Released', 'count'),
     };

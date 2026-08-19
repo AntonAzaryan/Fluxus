@@ -6,13 +6,30 @@
  * нейтраль вместо залипания (INP-5).
  */
 import { HeldActions } from './sampler.js';
-import { aimAngle, type ActionSink, type ContinuousSample, type InputSource } from './types.js';
+import {
+  aimAngle,
+  aimTarget,
+  type ActionSink,
+  type AimPoint,
+  type ContinuousSample,
+  type InputSource,
+} from './types.js';
 
 export interface GamepadBindings {
   /** Индексы осей движения [x, y]; экранный Y (вниз) — инверсия внутри. */
   readonly moveAxes: readonly [number, number];
   /** Индексы осей прицела; без них прицелом источник не владеет. */
   readonly aimAxes?: readonly [number, number];
+  /**
+   * Мировые единицы на полный ход стика прицела (INP-1): экранного указателя у
+   * геймпада нет, и точку прицела источник строит из своего органа управления
+   * сам — отклонением стика от начала прицеливания. Число — данные биндинга, а
+   * не код: как далеко «дотягивается» стик, решает раскладка устройства.
+   *
+   * Без него (и без начала прицеливания) источник точкой не владеет и молчит о
+   * ней — ровно как без `aimAxes` он молчит о направлении.
+   */
+  readonly aimReach?: number;
   /** Радиальная мёртвая зона стиков в долях хода [0..1). */
   readonly deadzone: number;
   /** Индекс кнопки геймпада (ключ — строка) → имя действия (INP-4). */
@@ -30,6 +47,7 @@ export class GamepadSource implements InputSource {
 
   private readonly bindings: GamepadBindings;
   private readonly getGamepad: () => GamepadLike | null;
+  private readonly aimOrigin: (() => AimPoint | null) | undefined;
   private press: ActionSink | null = null;
   /** Детектор фронтов опросного устройства (INP-2). */
   private readonly edges = new HeldActions();
@@ -37,10 +55,25 @@ export class GamepadSource implements InputSource {
   /** Было ли устройство на последнем опросе: неактивный источник — `null` (INP-5). */
   private connected = false;
   private lastAim: number | null = null;
+  /** Ответ `poll().target`; переписывается на месте — опрос не аллоцирует. */
+  private readonly targetScratch = { x: 0, y: 0 };
+  private hasTarget = false;
 
-  constructor(bindings: GamepadBindings, getGamepad: () => GamepadLike | null) {
+  /**
+   * `aimOrigin` — начало прицеливания в мировых координатах: та точка, от
+   * которой отклонение стика отсчитывается (обычно — тот, кем играют). Знание
+   * мира принадлежит приложению и приезжает сюда тем же способом, что raycast
+   * указателя в клавиатурно-мышиный источник, — колбэком, а не запросом
+   * источника к симуляции.
+   */
+  constructor(
+    bindings: GamepadBindings,
+    getGamepad: () => GamepadLike | null,
+    aimOrigin?: () => AimPoint | null,
+  ) {
     this.bindings = bindings;
     this.getGamepad = getGamepad;
+    this.aimOrigin = aimOrigin;
   }
 
   start(press: ActionSink): void {
@@ -86,11 +119,33 @@ export class GamepadSource implements InputSource {
       const [axAxis, ayAxis] = this.bindings.aimAxes;
       const ax = pad.axes[axAxis] ?? 0;
       const ay = pad.axes[ayAxis] ?? 0;
-      if (Math.hypot(ax, ay) >= this.bindings.deadzone) this.lastAim = aimAngle(ax, -ay);
+      const deflection = Math.hypot(ax, ay);
+      if (deflection >= this.bindings.deadzone) {
+        this.lastAim = aimAngle(ax, -ay);
+        this.aimPoint(this.lastAim, Math.min(deflection, 1));
+      }
     }
 
     // `|| 0` гасит -0 от инверсии экранного Y.
-    return { moveX: move.x, moveY: -move.y || 0, aim: this.lastAim };
+    return {
+      moveX: move.x,
+      moveY: -move.y || 0,
+      aim: this.lastAim,
+      target: this.hasTarget ? this.targetScratch : null,
+    };
+  }
+
+  /**
+   * Точка прицела стика (INP-1): начало прицеливания плюс отклонение, взятое в
+   * мировых единицах биндинга. Дальностью способности и границей арены точка
+   * НЕ обрезается — это политика симуляции (ABIL-5), и клиенту её не отдают.
+   */
+  private aimPoint(angle: number, deflection: number): void {
+    const reach = this.bindings.aimReach;
+    const origin = reach === undefined ? null : (this.aimOrigin?.() ?? null);
+    if (origin === null || reach === undefined) return;
+    aimTarget(origin, angle, reach * deflection, this.targetScratch);
+    this.hasTarget = true;
   }
 }
 

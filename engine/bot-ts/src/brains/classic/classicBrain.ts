@@ -129,6 +129,11 @@ class ClassicBrain implements BotBrain {
       moveX: micro.moveX,
       moveY: micro.moveY,
       aimRadians: micro.aimRadians,
+      // Точка и биты шага доезжают до границы как есть: квантование и
+      // подмешивание в маску живут в `boundary.ts` и только там (BOT-5).
+      ...(ability.target === undefined ? {} : { target: ability.target }),
+      ...(ability.confirmBit === undefined ? {} : { confirmBit: ability.confirmBit }),
+      ...(ability.cancelBit === undefined ? {} : { cancelBit: ability.cancelBit }),
       buttons: ability.buttons,
     };
     return this.intent;
