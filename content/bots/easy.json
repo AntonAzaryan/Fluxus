@@ -30,7 +30,22 @@
       "range": 8,
       "holdTicks": 8,
       "cooldownTicks": 120,
-      "weight": 1
+      "weight": 1,
+      "cast": {
+        "slotIndex": 0,
+        "confirmButton": 8,
+        "cancelButton": 9,
+        "steps": [
+          {
+            "aim": "enemy",
+            "confirmDelayTicks": 12,
+            "pointNoise": 1.2
+          }
+        ],
+        "holdTicks": 8,
+        "cancelChance": 0.15,
+        "giveUpTicks": 90
+      }
     },
     {
       "name": "slowDome",

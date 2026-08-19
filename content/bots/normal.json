@@ -30,7 +30,22 @@
       "range": 12,
       "holdTicks": 30,
       "cooldownTicks": 62,
-      "weight": 1
+      "weight": 1,
+      "cast": {
+        "slotIndex": 0,
+        "confirmButton": 8,
+        "cancelButton": 9,
+        "steps": [
+          {
+            "aim": "enemy",
+            "confirmDelayTicks": 34,
+            "pointNoise": 0.4
+          }
+        ],
+        "holdTicks": 30,
+        "cancelChance": 0.05,
+        "giveUpTicks": 150
+      }
     },
     {
       "name": "slowDome",
@@ -48,7 +63,22 @@
       "range": 2.6,
       "holdTicks": 1,
       "cooldownTicks": 125,
-      "weight": 1.6
+      "weight": 1.6,
+      "cast": {
+        "slotIndex": 2,
+        "confirmButton": 8,
+        "cancelButton": 9,
+        "steps": [
+          {
+            "aim": "threat",
+            "confirmDelayTicks": 2,
+            "pointNoise": 0.1
+          }
+        ],
+        "holdTicks": 1,
+        "cancelChance": 0,
+        "giveUpTicks": 60
+      }
     },
     {
       "name": "shield",
