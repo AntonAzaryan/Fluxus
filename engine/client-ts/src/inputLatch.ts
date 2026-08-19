@@ -5,8 +5,9 @@
  * Сырые сообщения main латчатся: `move` — состояние, и остаётся до следующего
  * сообщения; `buttons` — фронты, и копятся OR-ом, чтобы нажатие между двумя
  * съёмами не потерялось; `aimDir` запоминается только вместе с непустыми
- * кнопками — курс прицела без нажатия ничего не значит. Съём (`take`) очищает
- * кнопки и не трогает `move`.
+ * кнопками — курс прицела без нажатия ничего не значит; `target` — состояние
+ * наравне с `move`. Съём (`take`) очищает кнопки и не трогает ни `move`, ни
+ * точку.
  *
  * Латч один на оба режима не по экономии строк, а потому что правило одно:
  * локальная сторона собирает из него `InputFrame` на границе тика, сетевая —
@@ -26,12 +27,15 @@ import type { ControlMessage, InputMessage, MainToWorker } from './protocol.js';
 export interface InputLatchSample {
   readonly move: Vec2;
   readonly aimDir: number;
+  /** Точка прицела (TICK-2); `undefined` — её не давали ни разу. */
+  readonly target?: Vec2;
   readonly buttons: number;
 }
 
 export class InputLatch {
   private move: Vec2 = { x: 0, y: 0 };
   private aimDir = 0;
+  private target: Vec2 | undefined;
   private buttons = 0;
 
   /** Сырое сообщение ввода главного потока (SHELL-6). */
@@ -39,6 +43,12 @@ export class InputLatch {
     this.move = message.move;
     this.buttons |= message.buttons;
     if (message.buttons !== 0) this.aimDir = message.aimDir;
+    // Точка латчится как СОСТОЯНИЕ и без гейта по кнопкам — в отличие от
+    // `aimDir`. Гейт там стоит потому, что курс прицела без нажатия ничего не
+    // значит; у точки это не так: цепочка прицеливания (ABIL-5) читает её
+    // каждый тик каста, а подтверждает шаг отдельным битом, и точка, доехавшая
+    // только в тик нажатия, означала бы прицеливание вслепую между шагами.
+    if (message.target !== undefined) this.target = message.target;
   }
 
   /**
@@ -63,6 +73,8 @@ export class InputLatch {
     const sample: InputLatchSample = {
       move: this.move,
       aimDir: this.aimDir,
+      // Точка — состояние, и съём её не гасит: тот же класс, что `move`.
+      ...(this.target === undefined ? {} : { target: this.target }),
       buttons: this.buttons,
     };
     this.buttons = 0;

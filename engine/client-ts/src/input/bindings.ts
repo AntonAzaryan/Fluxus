@@ -59,6 +59,9 @@ function validateTouch(value: unknown): TouchBindings {
       ...(aim.deadzone !== undefined
         ? { deadzone: fraction(aim.deadzone, 'touch.aimStick.deadzone') }
         : {}),
+      ...(aim.aimReach !== undefined
+        ? { aimReach: reach(aim.aimReach, 'touch.aimStick.aimReach') }
+        : {}),
     };
   }
   if (touch.buttons !== undefined) {
@@ -79,6 +82,7 @@ function validateGamepad(value: unknown): GamepadBindings {
   const result: {
     moveAxes: readonly [number, number];
     aimAxes?: readonly [number, number];
+    aimReach?: number;
     deadzone: number;
     buttons: Readonly<Record<string, string>>;
   } = {
@@ -92,6 +96,7 @@ function validateGamepad(value: unknown): GamepadBindings {
     }
   }
   if (pad.aimAxes !== undefined) result.aimAxes = axes(pad.aimAxes, 'gamepad.aimAxes');
+  if (pad.aimReach !== undefined) result.aimReach = reach(pad.aimReach, 'gamepad.aimReach');
   return result;
 }
 
@@ -122,6 +127,18 @@ function actionMap(value: unknown, path: string): Readonly<Record<string, string
 function fraction(value: unknown, path: string): number {
   if (typeof value !== 'number' || !(value >= 0) || value >= 1) {
     throw fail(path, 'ожидается число в [0..1)');
+  }
+  return value;
+}
+
+/**
+ * Мировые единицы на полный ход стика прицела (INP-1). Число положительное и
+ * конечное; верхней границы у него нет — это дальность органа управления, а не
+ * дальность способности, которой слой ввода не распоряжается (ABIL-5).
+ */
+function reach(value: unknown, path: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw fail(path, 'ожидается положительное число мировых единиц');
   }
   return value;
 }

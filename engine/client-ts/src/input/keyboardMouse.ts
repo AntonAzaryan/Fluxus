@@ -8,7 +8,7 @@
  * Обработчики принимают данные события, а не DOM-типы: headless-тесты без
  * браузера (design D8); `bind(window)` — тонкая обвязка для рантайма.
  */
-import type { ActionSink, ContinuousSample, InputSource } from './types.js';
+import type { AimPoint, AimResolution, ActionSink, ContinuousSample, InputSource } from './types.js';
 
 export interface KeyboardMouseBindings {
   /** Оси движения: `KeyboardEvent.code` четырёх направлений (мир, Y вверх). */
@@ -29,10 +29,14 @@ export interface KeyboardMouseOptions {
   /** Захват движения камерой (fly): герой стоит, клавиши — камере (CAM-1). */
   readonly movementCaptured?: () => boolean;
   /**
-   * Прицел по точке экрана в единицах угла ядра; null — направления нет
-   * (клик мимо мира или в себя), фронт действия не возникает.
+   * Разрешение экранной позиции в прицел (INP-1): направление в единицах угла
+   * ядра И точка на полу, одним лучом. `null` — прицела нет (клик мимо мира
+   * или в себя), фронт действия не возникает.
+   *
+   * Обе величины даёт приложение и даёт вместе: raycast — знание приложения, а
+   * два независимых ответа на один клик разъезжались бы между собой.
    */
-  readonly aimAt?: (clientX: number, clientY: number) => number | null;
+  readonly aimAt?: (clientX: number, clientY: number) => AimResolution | null;
 }
 
 export class KeyboardMouseSource implements InputSource {
@@ -40,7 +44,9 @@ export class KeyboardMouseSource implements InputSource {
 
   private readonly bindings: KeyboardMouseBindings;
   private readonly movementCaptured: (() => boolean) | undefined;
-  private readonly aimAt: ((clientX: number, clientY: number) => number | null) | undefined;
+  private readonly aimAt:
+    | ((clientX: number, clientY: number) => AimResolution | null)
+    | undefined;
   private press: ActionSink | null = null;
   /** Зажатые `KeyboardEvent.code` — источник движения и удержаний (INP-2). */
   private readonly heldKeys = new Set<string>();
@@ -49,6 +55,13 @@ export class KeyboardMouseSource implements InputSource {
   /** Ответ `held()`; пересобирается на месте — выборка не аллоцирует. */
   private readonly heldActions = new Set<string>();
   private lastAim: number | null = null;
+  /**
+   * Последняя разрешённая точка клика (INP-1). Запись одна и переписывается на
+   * месте — опрос идёт покадрово, и свежий объект на каждый был бы мусором;
+   * читается она до следующей выборки, как и множество `held()`.
+   */
+  private readonly lastTarget: { x: number; y: number } = { x: 0, y: 0 };
+  private hasTarget = false;
 
   constructor(options: KeyboardMouseOptions) {
     this.bindings = options.bindings;
@@ -82,7 +95,10 @@ export class KeyboardMouseSource implements InputSource {
     const aim = this.aimAt?.(clientX, clientY) ?? null;
     // Клик без направления — не действие: ни фронта, ни удержания.
     if (aim === null) return;
-    this.lastAim = aim;
+    this.lastAim = aim.angle;
+    this.lastTarget.x = aim.x;
+    this.lastTarget.y = aim.y;
+    this.hasTarget = true;
     this.heldPointerButtons.set(button, action);
     this.press(action);
   }
@@ -129,7 +145,12 @@ export class KeyboardMouseSource implements InputSource {
         moveY /= length;
       }
     }
-    return { moveX, moveY, aim: this.lastAim };
+    return { moveX, moveY, aim: this.lastAim, target: this.target() };
+  }
+
+  /** Точка последнего клика; `null` — кликов, попавших в мир, ещё не было. */
+  private target(): AimPoint | null {
+    return this.hasTarget ? this.lastTarget : null;
   }
 
   /** Подключение к DOM-событиям; возвращает отписку. */

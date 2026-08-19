@@ -307,6 +307,9 @@ export class WorkerShell {
       seq: this.seq,
       move: sample.move,
       aimDir: sample.aimDir,
+      // Точка появляется в кадре, только если её давали: кадр без неё и кадр с
+      // нулями — разные документы для записи прогона (CLI-10).
+      ...(sample.target === undefined ? {} : { target: sample.target }),
       buttons: sample.buttons,
     };
   }
