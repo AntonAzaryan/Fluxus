@@ -56,6 +56,22 @@ export interface WireInput {
   readonly moveX: Fixed;
   readonly moveY: Fixed;
   readonly aimDir: Fixed;
+  /**
+   * Точка прицела (TICK-2) — ПЛОСКОЙ парой полей рядом с `moveX`/`moveY`, по
+   * тому же основанию: форма кадра не зависит от того, как ядро упаковывает
+   * вектор.
+   *
+   * Пара необязательна и едет целиком или не едет вовсе: половина точки — не
+   * точка. Отсутствие означает «источник точкой не владел» и до ядра доезжает
+   * отсутствием поля `target`, а не нулями — иначе клиент, у которого прицела
+   * нет вовсе, сообщал бы прицеливание в начало координат.
+   *
+   * Номера шага, длины цепочки и накопленных ранее шагов провод не несёт
+   * (TICK-2): накопление живёт в полях сущности-слота (`ability-system`
+   * ABIL-5), и цепочка любой длины остаётся данными сцены.
+   */
+  readonly targetX?: Fixed;
+  readonly targetY?: Fixed;
   readonly buttons: number;
 }
 
@@ -308,16 +324,44 @@ function version(value: unknown): GameVersion {
  * ядро: `buttons` в пределах u16 (TICK-2), поля Q16.16 в пределах i32 (FP-1),
  * номер тика и `seq` — неотрицательные целые. Окно допустимых тиков зависит от
  * текущего тика матча и потому проверяется сервером, а не здесь.
+ *
+ * Точка прицела проверяется тем же диапазоном i32 (NTR-7, FP-1) — это и есть
+ * «область мировых координат, представимая в Q16.16» из `input-devices` INP-3,
+ * увиденная с транспортной границы. Геймплейных границ — дальности
+ * способности, границы арены — здесь нет и быть не может: это политика
+ * симуляции (ABIL-5), и обрезать по ней на входе значило бы решать её за
+ * сервер матча.
  */
 function wireInput(value: unknown): WireInput {
   const source = object(value, 'Input.frames[]');
+  const target = wireTarget(source);
   return {
     tick: int(source, 'tick', 'Input.frames[]', 0, Number.MAX_SAFE_INTEGER),
     seq: int(source, 'seq', 'Input.frames[]', 0, Number.MAX_SAFE_INTEGER),
     moveX: int(source, 'moveX', 'Input.frames[]', I32_MIN, I32_MAX),
     moveY: int(source, 'moveY', 'Input.frames[]', I32_MIN, I32_MAX),
     aimDir: int(source, 'aimDir', 'Input.frames[]', I32_MIN, I32_MAX),
+    ...target,
     buttons: int(source, 'buttons', 'Input.frames[]', 0, BUTTONS_MAX),
+  };
+}
+
+/**
+ * Необязательная пара точки прицела: обе половины или ни одной. Половина —
+ * отказ разбора, а не молча выброшенная координата: кадр с одним `targetX`
+ * означает дефект отправителя, и принять его значило бы отдать способности
+ * координату, второй у которой не будет.
+ */
+function wireTarget(source: Record<string, unknown>): { targetX?: Fixed; targetY?: Fixed } {
+  const hasX = source.targetX !== undefined;
+  const hasY = source.targetY !== undefined;
+  if (!hasX && !hasY) return {};
+  if (hasX !== hasY) {
+    throw new ProtocolError('Input.frames[]: точка прицела едет парой "targetX"/"targetY"');
+  }
+  return {
+    targetX: int(source, 'targetX', 'Input.frames[]', I32_MIN, I32_MAX),
+    targetY: int(source, 'targetY', 'Input.frames[]', I32_MIN, I32_MAX),
   };
 }
 
@@ -519,6 +563,12 @@ export function toInputFrame(wire: WireInput, playerId: string, tick: number): I
     seq: wire.seq,
     move: { x: wire.moveX, y: wire.moveY },
     aimDir: wire.aimDir,
+    // Точка появляется в кадре ядра, только если приехала: канонический
+    // `inputs[]` пишется отсюда (NTR-8), и подставленные нули отличали бы
+    // запись матча от записи того же матча до появления поля (CLI-10).
+    ...(wire.targetX === undefined || wire.targetY === undefined
+      ? {}
+      : { target: { x: wire.targetX, y: wire.targetY } }),
     buttons: wire.buttons,
   };
 }
