@@ -41,6 +41,12 @@ export interface DebugInstanceRow extends PickProxy {
 }
 
 export interface DebugModelsProbe extends DebugProbe {
+  /**
+   * Единицы полей перечня — прозой РЯДОМ с ними (RDBG-7): имена позы и габаритов
+   * принадлежат контракту объёма-прокси picking'а (REND-15) и переименованию ради
+   * дампа не подлежат — расхождение имён стоило бы дороже, чем эта строка.
+   */
+  readonly units: string;
   /** Инстансов presentation-состояния и декораций (REND-3, REND-18). */
   readonly instanceCount: number;
   readonly decorationCount: number;
@@ -70,6 +76,9 @@ export function modelsInstancesDebugSource(
   const byTier: Record<string, number> = {};
   const byLodLevel: number[] = [];
   const probe = {
+    units:
+      'pos* и min*/max* — мировые единицы (габариты в осях инстанса), ' +
+      'quat* и scale* безразмерны, lodLevel — номер уровня цепочки (REND-22)',
     instanceCount: 0,
     decorationCount: 0,
     culledCount: 0,

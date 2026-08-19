@@ -67,10 +67,10 @@ const DYNAMIC_CAP = 64;
 
 /** Прямоугольник нулевой толщины — так же представляет обрыв физика (PHYS-10). */
 interface StaticRow {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
+  minWorldX: number;
+  minWorldY: number;
+  maxWorldX: number;
+  maxWorldY: number;
   /** Уровни клеток по обе стороны ребра (TERR-5): по ним читается направление. */
   levelNeg: number;
   levelPos: number;
@@ -102,10 +102,10 @@ export function staticCollidersDebugSource(
   gridOf: () => TerrainGrid | null,
 ): DebugSource<DebugStaticsProbe> {
   const rows = new DebugRows<StaticRow>(STATIC_CAP, () => ({
-    minX: 0,
-    minY: 0,
-    maxX: 0,
-    maxY: 0,
+    minWorldX: 0,
+    minWorldY: 0,
+    maxWorldX: 0,
+    maxWorldY: 0,
     levelNeg: 0,
     levelPos: 0,
   }));
@@ -135,10 +135,10 @@ export function staticCollidersDebugSource(
         if (row === null) continue;
         // Приём сетки — точка входной границы рендера (REND-1): Q16.16 остаётся
         // за ней, дальше только мировые единицы.
-        row.minX = Math.min(edge.from.x, edge.to.x) / FIXED_ONE;
-        row.minY = Math.min(edge.from.y, edge.to.y) / FIXED_ONE;
-        row.maxX = Math.max(edge.from.x, edge.to.x) / FIXED_ONE;
-        row.maxY = Math.max(edge.from.y, edge.to.y) / FIXED_ONE;
+        row.minWorldX = Math.min(edge.from.x, edge.to.x) / FIXED_ONE;
+        row.minWorldY = Math.min(edge.from.y, edge.to.y) / FIXED_ONE;
+        row.maxWorldX = Math.max(edge.from.x, edge.to.x) / FIXED_ONE;
+        row.maxWorldY = Math.max(edge.from.y, edge.to.y) / FIXED_ONE;
         row.levelNeg = edge.levelNeg;
         row.levelPos = edge.levelPos;
       }
@@ -152,7 +152,7 @@ export function staticCollidersDebugSource(
       for (const row of value.colliders.items) {
         // Отрезок обрыва по поверхности: ломаной, чтобы было видно и вырожденную
         // по одной оси границу.
-        out.polyline([row.minX, row.minY, 0, row.maxX, row.maxY, 0], COLORS.staticCollider);
+        out.polyline([row.minWorldX, row.minWorldY, 0, row.maxWorldX, row.maxWorldY, 0], COLORS.staticCollider);
       }
       const cell = value.broadPhaseCellWorldUnits;
       for (let i = 0; i <= value.broadPhaseCellsX; i += 1) {
@@ -171,8 +171,9 @@ export function staticCollidersDebugSource(
 
 interface DynamicRow {
   entity: EntityId;
-  x: number;
-  y: number;
+  /** Позиция кадра — интерполяция двух доставленных тиков (REND-2). */
+  frameWorldX: number;
+  frameWorldY: number;
   radiusWorldUnits: number;
 }
 
@@ -195,8 +196,8 @@ export interface DebugDynamicProbe extends DebugProbe {
 export function dynamicCollidersDebugSource(statName: string): DebugSource<DebugDynamicProbe> {
   const rows = new DebugRows<DynamicRow>(DYNAMIC_CAP, () => ({
     entity: 0,
-    x: 0,
-    y: 0,
+    frameWorldX: 0,
+    frameWorldY: 0,
     radiusWorldUnits: 0,
   }));
   const probe = {
@@ -235,8 +236,8 @@ export function dynamicCollidersDebugSource(statName: string): DebugSource<Debug
         if (row === null) continue;
         row.entity = entity.id;
         // Позиция кадра — та же интерполяция, по которой нарисован инстанс.
-        row.x = entity.prevX + (entity.currX - entity.prevX) * state.alpha;
-        row.y = entity.prevY + (entity.currY - entity.prevY) * state.alpha;
+        row.frameWorldX = entity.prevX + (entity.currX - entity.prevX) * state.alpha;
+        row.frameWorldY = entity.prevY + (entity.currY - entity.prevY) * state.alpha;
         row.radiusWorldUnits = radius;
       }
       rows.end();
@@ -246,7 +247,7 @@ export function dynamicCollidersDebugSource(statName: string): DebugSource<Debug
     },
     draw(value: DebugDynamicProbe, out: DebugDraw): void {
       for (const row of value.colliders.items) {
-        out.circle(row.x, row.y, row.radiusWorldUnits, COLORS.dynamicCollider);
+        out.circle(row.frameWorldX, row.frameWorldY, row.radiusWorldUnits, COLORS.dynamicCollider);
       }
     },
   };
@@ -259,20 +260,20 @@ export interface DebugInspectorProbe extends DebugProbe {
   readonly entity: number;
   readonly decoration: boolean;
   readonly kind: string | null;
-  readonly worldX: number;
-  readonly worldY: number;
-  readonly worldZ: number;
+  readonly hitWorldX: number;
+  readonly hitWorldY: number;
+  readonly hitWorldZ: number;
   readonly cell: number;
   readonly cellX: number;
   readonly cellY: number;
   readonly noFloor: boolean;
   /** Позиции двух доставленных тиков и интерполированная (REND-2). */
-  readonly prevTickX: number;
-  readonly prevTickY: number;
-  readonly currTickX: number;
-  readonly currTickY: number;
-  readonly frameX: number;
-  readonly frameY: number;
+  readonly prevTickWorldX: number;
+  readonly prevTickWorldY: number;
+  readonly currTickWorldX: number;
+  readonly currTickWorldY: number;
+  readonly frameWorldX: number;
+  readonly frameWorldY: number;
   readonly level: number;
   /** Битовая маска состояний сущности (CAM-6): состав задаёт сборка. */
   readonly stateBits: number;
@@ -307,19 +308,19 @@ export function inspectorDebugSource(access: InspectorAccess): DebugSource<Debug
     entity: 0,
     decoration: false,
     kind: null as string | null,
-    worldX: 0,
-    worldY: 0,
-    worldZ: 0,
+    hitWorldX: 0,
+    hitWorldY: 0,
+    hitWorldZ: 0,
     cell: -1,
     cellX: -1,
     cellY: -1,
     noFloor: false,
-    prevTickX: 0,
-    prevTickY: 0,
-    currTickX: 0,
-    currTickY: 0,
-    frameX: 0,
-    frameY: 0,
+    prevTickWorldX: 0,
+    prevTickWorldY: 0,
+    currTickWorldX: 0,
+    currTickWorldY: 0,
+    frameWorldX: 0,
+    frameWorldY: 0,
     level: 0,
     stateBits: 0,
     motionPhase: null as number | null,
@@ -331,8 +332,8 @@ export function inspectorDebugSource(access: InspectorAccess): DebugSource<Debug
     probe.entity = 0;
     probe.decoration = false;
     probe.kind = null;
-    probe.prevTickX = probe.prevTickY = probe.currTickX = probe.currTickY = 0;
-    probe.frameX = probe.frameY = 0;
+    probe.prevTickWorldX = probe.prevTickWorldY = probe.currTickWorldX = probe.currTickWorldY = 0;
+    probe.frameWorldX = probe.frameWorldY = 0;
     probe.level = 0;
     probe.stateBits = 0;
     probe.motionPhase = null;
@@ -356,15 +357,15 @@ export function inspectorDebugSource(access: InspectorAccess): DebugSource<Debug
       reset();
       if (hit === null) {
         probe.hit = 'none';
-        probe.worldX = probe.worldY = probe.worldZ = 0;
+        probe.hitWorldX = probe.hitWorldY = probe.hitWorldZ = 0;
         probe.cell = probe.cellX = probe.cellY = -1;
         probe.noFloor = false;
         return probe;
       }
       probe.hit = hit.kind;
-      probe.worldX = hit.x;
-      probe.worldY = hit.y;
-      probe.worldZ = hit.z;
+      probe.hitWorldX = hit.x;
+      probe.hitWorldY = hit.y;
+      probe.hitWorldZ = hit.z;
       probe.cell = hit.cell;
       probe.cellX = hit.cellX;
       probe.cellY = hit.cellY;
@@ -374,12 +375,12 @@ export function inspectorDebugSource(access: InspectorAccess): DebugSource<Debug
       const entity = hit.entity === 0 ? undefined : state.view?.entities.get(hit.entity);
       if (entity === undefined) return probe;
       probe.kind = entity.kind;
-      probe.prevTickX = entity.prevX;
-      probe.prevTickY = entity.prevY;
-      probe.currTickX = entity.currX;
-      probe.currTickY = entity.currY;
-      probe.frameX = entity.prevX + (entity.currX - entity.prevX) * state.alpha;
-      probe.frameY = entity.prevY + (entity.currY - entity.prevY) * state.alpha;
+      probe.prevTickWorldX = entity.prevX;
+      probe.prevTickWorldY = entity.prevY;
+      probe.currTickWorldX = entity.currX;
+      probe.currTickWorldY = entity.currY;
+      probe.frameWorldX = entity.prevX + (entity.currX - entity.prevX) * state.alpha;
+      probe.frameWorldY = entity.prevY + (entity.currY - entity.prevY) * state.alpha;
       probe.level = entity.currLevel;
       probe.stateBits = entity.states;
       probe.motionPhase = Number.isNaN(entity.currMotionPhase) ? null : entity.currMotionPhase;
@@ -390,19 +391,19 @@ export function inspectorDebugSource(access: InspectorAccess): DebugSource<Debug
     draw(value: DebugInspectorProbe, out: DebugDraw): void {
       if (value.hit === 'none') return;
       // Точка попадания и небольшая рамка вокруг неё: текста в кадре нет.
-      out.point(value.worldX, value.worldY, value.worldZ, COLORS.inspector);
+      out.point(value.hitWorldX, value.hitWorldY, value.hitWorldZ, COLORS.inspector);
       if (value.entity === 0) {
-        out.circle(value.worldX, value.worldY, 0.4, COLORS.inspector);
+        out.circle(value.hitWorldX, value.hitWorldY, 0.4, COLORS.inspector);
         return;
       }
-      out.circle(value.frameX, value.frameY, 0.6, COLORS.inspector);
+      out.circle(value.frameWorldX, value.frameWorldY, 0.6, COLORS.inspector);
       out.segment(
-        value.frameX,
-        value.frameY,
-        value.worldZ,
-        value.worldX,
-        value.worldY,
-        value.worldZ + 1.5,
+        value.frameWorldX,
+        value.frameWorldY,
+        value.hitWorldZ,
+        value.hitWorldX,
+        value.hitWorldY,
+        value.hitWorldZ + 1.5,
         COLORS.inspector,
       );
     },
@@ -413,21 +414,21 @@ export function inspectorDebugSource(access: InspectorAccess): DebugSource<Debug
 
 export interface DebugCameraProbe extends DebugProbe {
   readonly mode: string;
-  readonly posX: number;
-  readonly posY: number;
-  readonly posZ: number;
+  readonly posWorldX: number;
+  readonly posWorldY: number;
+  readonly posWorldZ: number;
   readonly yawRadians: number;
   readonly pitchRadians: number;
   readonly rollRadians: number;
   readonly fovDegrees: number;
-  readonly focusX: number;
-  readonly focusY: number;
-  readonly groundZ: number;
+  readonly focusWorldX: number;
+  readonly focusWorldY: number;
+  readonly groundWorldZ: number;
   /** Границы кадрирования камеры (CAM-8), мировые единицы. */
-  readonly boundsMinX: number;
-  readonly boundsMinY: number;
-  readonly boundsMaxX: number;
-  readonly boundsMaxY: number;
+  readonly boundsMinWorldX: number;
+  readonly boundsMinWorldY: number;
+  readonly boundsMaxWorldX: number;
+  readonly boundsMaxWorldY: number;
   /** Ширина краевой полосы панорамирования (CAM-3), пиксели. */
   readonly edgeMarginPixels: number;
   /** Размер вьюпорта, пиксели — по нему считается доля краевой полосы. */
@@ -501,9 +502,9 @@ function groundAt(
   const dy = basis.fy + basis.ry * basis.tanH * ndcX + basis.uy * basis.tanV * ndcY;
   const dz = basis.fz + basis.rz * basis.tanH * ndcX + basis.uz * basis.tanV * ndcY;
   if (dz >= -1e-6) return null; // луч уходит в небо: пересечения с землёй нет
-  const t = (value.groundZ - value.posZ) / dz;
+  const t = (value.groundWorldZ - value.posWorldZ) / dz;
   if (t <= 0) return null;
-  return [value.posX + dx * t, value.posY + dy * t];
+  return [value.posWorldX + dx * t, value.posWorldY + dy * t];
 }
 
 /**
@@ -518,20 +519,20 @@ function groundAt(
 export function cameraDebugSource(access: CameraDebugAccess): DebugSource<DebugCameraProbe> {
   const probe = {
     mode: 'none',
-    posX: 0,
-    posY: 0,
-    posZ: 0,
+    posWorldX: 0,
+    posWorldY: 0,
+    posWorldZ: 0,
     yawRadians: 0,
     pitchRadians: 0,
     rollRadians: 0,
     fovDegrees: 0,
-    focusX: 0,
-    focusY: 0,
-    groundZ: 0,
-    boundsMinX: 0,
-    boundsMinY: 0,
-    boundsMaxX: 0,
-    boundsMaxY: 0,
+    focusWorldX: 0,
+    focusWorldY: 0,
+    groundWorldZ: 0,
+    boundsMinWorldX: 0,
+    boundsMinWorldY: 0,
+    boundsMaxWorldX: 0,
+    boundsMaxWorldY: 0,
     edgeMarginPixels: 0,
     viewportWidthPixels: 0,
     viewportHeightPixels: 0,
@@ -551,20 +552,20 @@ export function cameraDebugSource(access: CameraDebugAccess): DebugSource<DebugC
       probe.noData = undefined;
       const bounds = access.bounds();
       probe.mode = rig.mode;
-      probe.posX = pose.posX;
-      probe.posY = pose.posY;
-      probe.posZ = pose.posZ;
+      probe.posWorldX = pose.posX;
+      probe.posWorldY = pose.posY;
+      probe.posWorldZ = pose.posZ;
       probe.yawRadians = pose.yaw;
       probe.pitchRadians = pose.pitch;
       probe.rollRadians = pose.roll;
       probe.fovDegrees = pose.fovDeg;
-      probe.focusX = rig.focusX;
-      probe.focusY = rig.focusY;
-      probe.groundZ = rig.groundZ;
-      probe.boundsMinX = bounds?.minX ?? 0;
-      probe.boundsMinY = bounds?.minY ?? 0;
-      probe.boundsMaxX = bounds?.maxX ?? 0;
-      probe.boundsMaxY = bounds?.maxY ?? 0;
+      probe.focusWorldX = rig.focusX;
+      probe.focusWorldY = rig.focusY;
+      probe.groundWorldZ = rig.groundZ;
+      probe.boundsMinWorldX = bounds?.minX ?? 0;
+      probe.boundsMinWorldY = bounds?.minY ?? 0;
+      probe.boundsMaxWorldX = bounds?.maxX ?? 0;
+      probe.boundsMaxWorldY = bounds?.maxY ?? 0;
       probe.edgeMarginPixels = rig.config.edgeMarginPx;
       probe.viewportWidthPixels = viewport.width;
       probe.viewportHeightPixels = viewport.height;
@@ -579,12 +580,12 @@ export function cameraDebugSource(access: CameraDebugAccess): DebugSource<DebugC
           const dy = basis.fy + basis.ry * basis.tanH * sx + basis.uy * basis.tanV * sy;
           const dz = basis.fz + basis.rz * basis.tanH * sx + basis.uz * basis.tanV * sy;
           out.segment(
-            value.posX,
-            value.posY,
-            value.posZ,
-            value.posX + dx * FRUSTUM_REACH,
-            value.posY + dy * FRUSTUM_REACH,
-            value.posZ + dz * FRUSTUM_REACH,
+            value.posWorldX,
+            value.posWorldY,
+            value.posWorldZ,
+            value.posWorldX + dx * FRUSTUM_REACH,
+            value.posWorldY + dy * FRUSTUM_REACH,
+            value.posWorldZ + dz * FRUSTUM_REACH,
             COLORS.frustum,
           );
         }
@@ -592,10 +593,10 @@ export function cameraDebugSource(access: CameraDebugAccess): DebugSource<DebugC
       // Границы кадрирования (CAM-8) — прямоугольник по земле.
       out.polyline(
         [
-          value.boundsMinX, value.boundsMinY, value.groundZ,
-          value.boundsMaxX, value.boundsMinY, value.groundZ,
-          value.boundsMaxX, value.boundsMaxY, value.groundZ,
-          value.boundsMinX, value.boundsMaxY, value.groundZ,
+          value.boundsMinWorldX, value.boundsMinWorldY, value.groundWorldZ,
+          value.boundsMaxWorldX, value.boundsMinWorldY, value.groundWorldZ,
+          value.boundsMaxWorldX, value.boundsMaxWorldY, value.groundWorldZ,
+          value.boundsMinWorldX, value.boundsMaxWorldY, value.groundWorldZ,
         ],
         COLORS.frustum,
         true,
@@ -624,7 +625,7 @@ export function cameraDebugSource(access: CameraDebugAccess): DebugSource<DebugC
         for (const [ndcX, ndcY] of ndc) {
           const point = groundAt(value, basis, ndcX, ndcY);
           if (point === null) return; // луч ушёл выше горизонта — рамки нет
-          corners.push(point[0], point[1], value.groundZ);
+          corners.push(point[0], point[1], value.groundWorldZ);
         }
         out.polyline(corners, COLORS.edgePan, true);
       }

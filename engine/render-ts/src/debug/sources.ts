@@ -38,14 +38,14 @@ export interface DebugDeliveryRow {
   entity: EntityId;
   kind: string | null;
   /** Позиция ПРЕДЫДУЩЕГО доставленного тика, мировые единицы. */
-  prevTickX: number;
-  prevTickY: number;
+  prevTickWorldX: number;
+  prevTickWorldY: number;
   /** Позиция ПОСЛЕДНЕГО доставленного тика, мировые единицы. */
-  currTickX: number;
-  currTickY: number;
+  currTickWorldX: number;
+  currTickWorldY: number;
   /** Интерполированная позиция кадра — то, что видит игрок (REND-2). */
-  frameX: number;
-  frameY: number;
+  frameWorldX: number;
+  frameWorldY: number;
   /** Уровень террейна на тех же двух тиках (TERR-4 производное). */
   prevLevel: number;
   currLevel: number;
@@ -128,12 +128,12 @@ export function deliveryDebugSource(
   const rows = new DebugRows<DebugDeliveryRow>(options.cap ?? DELIVERY_CAP, () => ({
     entity: 0,
     kind: null,
-    prevTickX: 0,
-    prevTickY: 0,
-    currTickX: 0,
-    currTickY: 0,
-    frameX: 0,
-    frameY: 0,
+    prevTickWorldX: 0,
+    prevTickWorldY: 0,
+    currTickWorldX: 0,
+    currTickWorldY: 0,
+    frameWorldX: 0,
+    frameWorldY: 0,
     prevLevel: 0,
     currLevel: 0,
     snapReason: 'none',
@@ -198,12 +198,12 @@ export function deliveryDebugSource(
         if (row === null) continue;
         row.entity = entity.id;
         row.kind = entity.kind;
-        row.prevTickX = entity.prevX;
-        row.prevTickY = entity.prevY;
-        row.currTickX = entity.currX;
-        row.currTickY = entity.currY;
-        row.frameX = entity.prevX + (entity.currX - entity.prevX) * state.alpha;
-        row.frameY = entity.prevY + (entity.currY - entity.prevY) * state.alpha;
+        row.prevTickWorldX = entity.prevX;
+        row.prevTickWorldY = entity.prevY;
+        row.currTickWorldX = entity.currX;
+        row.currTickWorldY = entity.currY;
+        row.frameWorldX = entity.prevX + (entity.currX - entity.prevX) * state.alpha;
+        row.frameWorldY = entity.prevY + (entity.currY - entity.prevY) * state.alpha;
         row.prevLevel = entity.prevLevel;
         row.currLevel = entity.currLevel;
         row.snapReason = snapReasonOf(view.snapAll, view.isReplay, entity.spawned, entity.snap);
@@ -218,9 +218,9 @@ export function deliveryDebugSource(
     draw(value: DebugDeliveryProbe, out: DebugDraw): void {
       for (const row of value.entities.items) {
         const color = row.snapReason === 'none' ? delivered : snapColor;
-        out.circle(row.prevTickX, row.prevTickY, DELIVERY_MARK_RADIUS, color);
-        out.circle(row.currTickX, row.currTickY, DELIVERY_MARK_RADIUS, color);
-        out.disc(row.frameX, row.frameY, DELIVERY_MARK_RADIUS / 2, frameColor);
+        out.circle(row.prevTickWorldX, row.prevTickWorldY, DELIVERY_MARK_RADIUS, color);
+        out.circle(row.currTickWorldX, row.currTickWorldY, DELIVERY_MARK_RADIUS, color);
+        out.disc(row.frameWorldX, row.frameWorldY, DELIVERY_MARK_RADIUS / 2, frameColor);
       }
     },
   };

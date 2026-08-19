@@ -235,6 +235,22 @@ describe('RDBG-2: одна проба — две грани', () => {
     expect(JSON.stringify(before)).toBe(snapshot);
   });
 
+  it('структура пробы переиспользуется между кадрами, а не создаётся заново', () => {
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    const source = deliveryDebugSource();
+    layer.register(source);
+    layer.setEnabled('net.delivery', true);
+    const entities = Array.from({ length: 16 }, (_, i) => makeEntityView(i + 1));
+    const first = source.probe(frameState(makeTickView(entities, { tick: 1 })));
+    const items = first.entities.items;
+    const second = source.probe(frameState(makeTickView(entities, { tick: 2 })));
+    // Тот же объект пробы, тот же массив перечня и те же записи в нём: свежие
+    // на кадр были бы аллокацией пропорционально числу сущностей (RDBG-2).
+    expect(second).toBe(first);
+    expect(second.entities.items).toBe(items);
+    expect(second.entities.items[0]).toBe(items[0]);
+  });
+
   it('дамп отвергает пробу со ссылкой на живую структуру — адресно, с путём поля', () => {
     const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
     layer.register(stubSource('x.leak', { entities: new Map([[1, { hp: 3 }]]) }));
@@ -473,6 +489,37 @@ describe('RDBG-6: информационная граница отладки', (
     };
     expect(section.entityCount).toBe(1);
     expect(section.entities.items.map((row) => row.entity)).toEqual([1]);
+  });
+
+  it('включённый источник не правит документ, из которого читает (RDBG-5)', () => {
+    const stage = new PresentationStage(makeRenderContext());
+    const layer = new RenderDebugLayer(stage);
+    // Замороженная секция `fog` парного presentation-документа (PRES-2): любая
+    // попытка её переписать была бы исключением, а не молчаливой правкой.
+    const section = Object.freeze({ resolution: 4, strength: 0.8 });
+    const grid = pillarGrid(8, 4);
+    stage.register(
+      new FogSubsystem({
+        grid,
+        stats: { visionRadius: 'vision', team: 'team' },
+        hero: () => 1,
+        config: section,
+      }),
+    );
+    layer.setEnabled('fog.mask', true);
+    const hero = makeEntityView(1, {
+      currX: 2.5,
+      currY: 2.5,
+      stats: new Map([
+        ['team', 0],
+        ['vision', 3],
+      ]),
+    });
+    const view = makeTickView([hero], { statNames: ['team', 'vision'], snapAll: true });
+    stage.publish({ name: 'test' }, view);
+    layer.frame(frameState(view));
+    layer.dump();
+    expect(section).toEqual({ resolution: 4, strength: 0.8 });
   });
 
   it('источник без данных говорит это вслух, а не показывает выдуманное', () => {

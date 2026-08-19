@@ -184,8 +184,8 @@ describe('RDBG-6/PHYS-10: статика выводится из сетки hand
     expect(probe.colliders.items.length).toBe(probe.cliffSegments);
     // Мировые единицы, а не Q16.16: конверсия осталась на входной границе (REND-1).
     for (const collider of probe.colliders.items) {
-      expect(collider.maxX).toBeLessThanOrEqual(4);
-      expect(collider.maxY).toBeLessThanOrEqual(4);
+      expect(collider.maxWorldX).toBeLessThanOrEqual(4);
+      expect(collider.maxWorldY).toBeLessThanOrEqual(4);
     }
     expect(probe.broadPhaseCellWorldUnits).toBe(4);
     expect(probe.broadPhaseCellsX).toBe(1);
@@ -208,7 +208,7 @@ describe('RDBG-6: круги коллайдеров — только по объ
     expect(probe.withRadius).toBe(1);
     expect(probe.colliders.items[0]?.radiusWorldUnits).toBe(0.35);
     // Позиция кадра — интерполяция двух доставленных тиков (REND-2).
-    expect(probe.colliders.items[0]?.x).toBe(2);
+    expect(probe.colliders.items[0]?.frameWorldX).toBe(2);
   });
 
   it('стат не объявлен — «нет данных», и выдуманного радиуса нигде нет', () => {
