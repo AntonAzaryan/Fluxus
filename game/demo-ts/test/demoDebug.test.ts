@@ -17,6 +17,10 @@ import { createTerrainGrid, type EntityId, type TerrainGrid } from '@game-mvp/co
 import {
   PresentationStage,
   RenderDebugLayer,
+  applyCameraPose,
+  type CameraPose,
+  type CameraRig,
+  type DebugDraw,
   type DebugFrameState,
   type EntityView,
   type RenderContext,
@@ -172,6 +176,18 @@ function state(view: TickView | null): DebugFrameState {
   return { view, alpha: 0.5, dtSeconds: 1 / 60, realDtSeconds: 1 / 60 };
 }
 
+/** Словарь примитивов-пустышек: тест подменяет ровно тот, который смотрит. */
+const NO_DRAW: DebugDraw = {
+  point: () => {},
+  segment: () => {},
+  polyline: () => {},
+  circle: () => {},
+  disc: () => {},
+  box: () => {},
+  polygon: () => {},
+  raster: () => {},
+};
+
 // ------------------------------------------------ 4.1 статика из handshake
 
 describe('RDBG-6/PHYS-10: статика выводится из сетки handshake и названа реконструкцией', () => {
@@ -248,6 +264,75 @@ describe('RDBG-1: инспектор и камера — источники сб
     });
     expect(source.probe(state(null)).noData).toMatch(/камера/);
   });
+
+  /**
+   * Пирамида рисуется ПОЗОЙ КАДРА, включая её крен: ненулевой крен приезжает от
+   * эффектов камеры (тряска, отдача), и наложение без него показывало бы не тот
+   * кадр, который нарисован, — оставаясь при этом внутренне непротиворечивым.
+   * Проверяется против самой камеры кадра: лучи по углам считаются её матрицей.
+   */
+  it('пирамида по углам кадра совпадает с камерой кадра и при ненулевом крене (CAM-1)', () => {
+    const viewport = { width: 800, height: 600 };
+    const pose: CameraPose = {
+      posX: 3,
+      posY: -2,
+      posZ: 12,
+      yaw: 0.9,
+      pitch: 0.75,
+      roll: 0.21,
+      fovDeg: 45,
+    };
+    const rig = {
+      mode: 'free',
+      focusX: 3,
+      focusY: -2,
+      groundZ: 0,
+      config: { edgeMarginPx: 24 },
+    } as unknown as CameraRig;
+    const source = cameraDebugSource({
+      rig: () => rig,
+      pose: () => pose,
+      bounds: () => ({ minX: 0, minY: 0, maxX: 8, maxY: 8 }),
+      viewport: () => viewport,
+    });
+    const probe = source.probe(state(null));
+    expect(probe.noData).toBeUndefined();
+    expect(probe.rollRadians).toBe(pose.roll);
+
+    const rays: number[][] = [];
+    source.draw!(probe, {
+      ...NO_DRAW,
+      segment: (x1, y1, z1, x2, y2, z2) => {
+        rays.push([x2 - x1, y2 - y1, z2 - z1]);
+      },
+    });
+    expect(rays).toHaveLength(4);
+
+    const camera = new THREE.PerspectiveCamera(
+      pose.fovDeg,
+      viewport.width / viewport.height,
+      0.1,
+      300,
+    );
+    camera.up.set(0, 0, 1);
+    applyCameraPose(camera, pose);
+    camera.updateMatrixWorld(true);
+    const corner = new THREE.Vector3();
+    // Порядок обхода источника: sx во внешнем цикле, sy во внутреннем.
+    const ndc: readonly (readonly [number, number])[] = [
+      [-1, -1],
+      [-1, 1],
+      [1, -1],
+      [1, 1],
+    ];
+    ndc.forEach(([ndcX, ndcY], index) => {
+      corner.set(ndcX, ndcY, 0.5).unproject(camera).sub(camera.position).normalize();
+      const drawn = new THREE.Vector3(...(rays[index] as [number, number, number])).normalize();
+      expect(drawn.x).toBeCloseTo(corner.x, 6);
+      expect(drawn.y).toBeCloseTo(corner.y, 6);
+      expect(drawn.z).toBeCloseTo(corner.z, 6);
+    });
+  });
 });
 
 // ------------------------------------------------------- 5.1/5.2 панель и выбор
@@ -315,6 +400,91 @@ describe('RDBG-1: панель строится из реестра (задач�
     expect(() => {
       rememberDebugSources(undefined, ['a.b']);
     }).not.toThrow();
+  });
+});
+
+// ------------------------------- 5.1 панель не работает покадрово (RDBG-7)
+
+describe('RDBG-7/RDBG-4: панель не собирает дамп каждым кадром', () => {
+  /** Слой с одним источником и панель над ним — стенд обеих проверок ниже. */
+  function panelRig(): {
+    layer: RenderDebugLayer;
+    panel: ReturnType<typeof createDebugPanel>;
+    container: FakeElement;
+    dumps: () => number;
+  } {
+    const layer = new RenderDebugLayer(new PresentationStage(renderContext()));
+    layer.register({ id: 'physics.statics', title: 'статика', probe: () => ({ segments: 4 }) });
+    const container = new FakeElement('div');
+    let dumps = 0;
+    const real = layer.dump.bind(layer);
+    layer.dump = (): ReturnType<typeof real> => {
+      dumps += 1;
+      return real();
+    };
+    const panel = createDebugPanel({
+      layer,
+      container: container as unknown as HTMLElement,
+      storage: memoryStorage(),
+      textIntervalMs: 250,
+    });
+    return { layer, panel, container, dumps: () => dumps };
+  }
+
+  it('с включённым источником дамп снимается по таймеру, а не каждым кадром', () => {
+    withFakeDom(() => {
+      const { layer, panel, dumps } = panelRig();
+      layer.setEnabled('physics.statics', true);
+      // Секунда кадров при 60 fps: покадровая сборка дала бы 60 дампов —
+      // «дамп MUST NOT собираться каждый кадр» (RDBG-7).
+      for (let frame = 0; frame <= 60; frame += 1) panel.update(frame * (1000 / 60));
+      expect(dumps()).toBeLessThanOrEqual(5);
+      expect(dumps()).toBeGreaterThan(0);
+    });
+  });
+
+  it('щелчок галочки виден сразу, не дожидаясь таймера', () => {
+    withFakeDom(() => {
+      const { panel, container, dumps } = panelRig();
+      panel.update(0);
+      const before = dumps();
+      const box = [...container.walk()].find((element) => element.type === 'checkbox')!;
+      box.checked = true;
+      box.fire('change');
+      panel.update(1);
+      expect(dumps()).toBe(before + 1);
+      const text = [...container.walk()].find((element) => element.tag === 'pre')!;
+      expect(text.textContent).toContain('physics.statics: segments=4');
+    });
+  });
+
+  it('без единого включённого источника кадр панели не делает ничего', () => {
+    withFakeDom(() => {
+      const { panel, container, dumps } = panelRig();
+      const box = [...container.walk()].find((element) => element.type === 'checkbox')!;
+      for (let frame = 0; frame < 120; frame += 1) panel.update(frame * (1000 / 60));
+      expect(dumps()).toBe(0);
+      const text = [...container.walk()].find((element) => element.tag === 'pre')!;
+      expect(text.textContent).toBe('');
+      // Галочки покадрово не переписываются: их состояние — дело обработчика
+      // события и `refresh()` (RDBG-4).
+      box.checked = true;
+      panel.update(5000);
+      expect(box.checked).toBe(true);
+    });
+  });
+
+  it('выбор, сделанный мимо панели, приезжает в галочки на refresh', () => {
+    withFakeDom(() => {
+      const { layer, panel, container } = panelRig();
+      const box = [...container.walk()].find((element) => element.type === 'checkbox')!;
+      // Ручка `__renderDebug` и восстановление запомненного включают источник
+      // мимо DOM: панель узнаёт об этом перестроением, а не опросом каждый кадр.
+      layer.setEnabled('physics.statics', true);
+      expect(box.checked).toBe(false);
+      panel.refresh();
+      expect(box.checked).toBe(true);
+    });
   });
 });
 
