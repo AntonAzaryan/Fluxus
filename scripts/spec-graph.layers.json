@@ -15,6 +15,7 @@
     "tick-loop": "sim",
     "data-driven-systems": "sim",
     "time-system": "sim",
+    "ability-system": "sim",
     "snapshot-rewind": "sim",
     "serialization": "sim",
     "terrain": "sim",
