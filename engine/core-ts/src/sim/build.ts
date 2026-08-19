@@ -91,7 +91,7 @@ export function buildSimulation(
 ): BuiltSimulation {
   // Системы, включаемые составом сцены (в том числе `ArenaSystem`), регистрирует
   // сам загрузчик (SER-7); здесь — только те, которым нужна зависимость сборки.
-  const { world, systems, terrain, arena, modifiers } = loadScene(def.scene);
+  const { world, systems, terrain, arena, modifiers, abilities } = loadScene(def.scene);
   if (def.players !== undefined) systems.register(new InputSystem({ players: def.players }));
   if (def.locomotion !== undefined) systems.register(new LocomotionSystem(def.locomotion));
 
@@ -132,6 +132,7 @@ export function buildSimulation(
     modifiers,
     ...(terrain !== undefined ? { terrain } : {}),
     ...(arena !== undefined ? { arena } : {}),
+    ...(abilities !== undefined ? { abilities } : {}),
     ...(physics !== undefined ? { physics } : {}),
     ...(options.diagnostics !== undefined ? { diagnostics: options.diagnostics } : {}),
   };

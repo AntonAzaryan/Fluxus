@@ -30,6 +30,15 @@ import { fowComponents, VISION_MODIFIER_COMPONENT } from '../systems/visibility.
 import { TimeScaleSystem, timeComponents, TIME_SCALE_MODIFIERS_COMPONENT } from '../systems/time.js';
 import { TweenSystem, TWEEN_SCHEMA, type TweenDef } from '../systems/tween.js';
 import { modifierList, DEFAULT_MODIFIER_SLOTS } from '../systems/modifiers.js';
+import { ABILITY_COMPONENTS } from '../systems/abilities/components.js';
+import { compileAbilityCatalog } from '../systems/abilities/catalog.js';
+import { CastPhaseSystem } from '../systems/abilities/phase.js';
+import { TargetingCommitSystem } from '../systems/abilities/targeting.js';
+import { CastInterruptSystem } from '../systems/abilities/interrupt.js';
+import { CooldownSystem } from '../systems/abilities/cooldown.js';
+import { EffectDurationSystem } from '../systems/abilities/duration.js';
+import { ProjectileSystem } from '../systems/abilities/projectile.js';
+import type { AbilityCatalog, AbilityDef, AbilityRuntimeDef } from '../systems/abilities/model.js';
 import { applyPlacement, type ScenarioSpawn } from './placement.js';
 import type { ArenaApi, ComponentSchema, ModifierRegistry, TerrainApi, WorldState } from '../types.js';
 
@@ -62,6 +71,19 @@ export interface SceneDef {
    */
   readonly modifierSlots?: number;
   /**
+   * Таблица определений способностей (ABIL-2): наличие подключает компоненты
+   * платформы и её системы. Определения живут полем конфига сцены, а не
+   * отдельными документами, по той же причине, что таблица определений твинов:
+   * из мира определение адресуется индексом в таблице (ABIL-1).
+   */
+  readonly abilities?: readonly AbilityDef[];
+  /**
+   * Биндинги сцены для платформы способностей (ABIL-8): что в этой сцене
+   * значат смерть, лок действий, сторона и урон. Понятий игрока, здоровья и
+   * урона ядро при этом не приобретает.
+   */
+  readonly abilityRuntime?: AbilityRuntimeDef;
+  /**
    * Начальная расстановка сцены (SER-7, SER-8) — то, что стоит на арене в
    * каждом её прогоне. Порядок записей нормативен: он задаёт выданные
    * `index`/`generation` (ID-2, DET-6), а через плоскую форму мира — хеш
@@ -86,6 +108,12 @@ export interface Scene {
    * `timeScale`/`fog` зависит только то, дописана ли схема в мир.
    */
   readonly modifiers: ModifierRegistry;
+  /**
+   * Скомпилированная таблица определений способностей (ABIL-10). Есть, если
+   * сцена содержит `abilities`. Иммутабельна и в снапшот не входит — как
+   * террейн и арена, она порождена данными сцены (design Decision 2).
+   */
+  readonly abilities?: AbilityCatalog;
 }
 
 export function loadScene(def: SceneDef): Scene {
@@ -101,6 +129,17 @@ export function loadScene(def: SceneDef): Scene {
         'пересчёту видимости не у кого спросить уровень сущности (FOW-5, TERR-4)',
     );
   }
+  // Туман вместе со способностями требует объявленной стороны (ABIL-8):
+  // основание то же, что у пары «туман без террейна» — без стороны маску
+  // видимости сущности-слота вычислить нечем, и реализация оказалась бы перед
+  // выбором, какую норму нарушить, сделав слот публичным вопреки NET-12 или
+  // невидимым никому.
+  if (def.fog === true && def.abilities !== undefined && def.abilityRuntime?.teamField === undefined) {
+    throw new Error(
+      'ABIL-8: сцена включает туман войны (fog) и определения способностей (abilities), ' +
+        'но не объявляет биндинг стороны (abilityRuntime.teamField)',
+    );
+  }
   // Схемы карты пола и арены зависят от ассетов, поэтому дописываются к
   // объявленным компонентам, а не пишутся в сцене руками (TERR-6, ARENA-1).
   const grid = def.terrain === undefined ? undefined : createTerrainGrid(def.terrain);
@@ -111,8 +150,9 @@ export function loadScene(def: SceneDef): Scene {
     [timeScaleModifiers.component, timeScaleModifiers],
     [visionModifiers.component, visionModifiers],
   ]);
-  // Порядок нормативен (SER-7): floor → arena → timeScale → tween → fow. Он
-  // задаёт битовые id компонентов, то есть представление масок в снапшоте.
+  // Порядок нормативен (SER-7): floor → arena → timeScale → tween → fow →
+  // компоненты платформы способностей. Он задаёт битовые id компонентов, то
+  // есть представление масок в снапшоте.
   const components = [
     ...def.components,
     ...(grid === undefined ? [] : [floorComponentSchema(grid)]),
@@ -120,6 +160,7 @@ export function loadScene(def: SceneDef): Scene {
     ...(def.timeScale === true ? timeComponents(timeScaleModifiers) : []),
     ...(def.tweens === undefined ? [] : [TWEEN_SCHEMA]),
     ...(def.fog === true ? fowComponents(visionModifiers) : []),
+    ...(def.abilities === undefined ? [] : ABILITY_COMPONENTS),
   ];
   const prefabs = [
     ...(def.prefabs ?? []),
@@ -158,6 +199,20 @@ export function loadScene(def: SceneDef): Scene {
   if (def.arena !== undefined) systems.register(new ArenaSystem());
   if (def.timeScale === true) systems.register(new TimeScaleSystem(timeScaleModifiers));
   if (def.tweens !== undefined) systems.register(new TweenSystem(def.tweens));
+  // Платформа способностей включается составом сцены целиком (SER-7):
+  // зависимостей сборки у её систем нет, а без них объявленные компоненты —
+  // мёртвые данные. Определения проверяются ДО регистрации: сцена с опечаткой
+  // в списке действий не должна доживать до первого тика (ABIL-10).
+  const abilities =
+    def.abilities === undefined ? undefined : compileAbilityCatalog(def, world);
+  if (abilities !== undefined) {
+    systems.register(new TargetingCommitSystem(abilities));
+    systems.register(new CastPhaseSystem(abilities));
+    systems.register(new ProjectileSystem(abilities));
+    systems.register(new CooldownSystem());
+    systems.register(new EffectDurationSystem(abilities));
+    systems.register(new CastInterruptSystem(abilities));
+  }
   // Валидация каждой системы — внутри registerFromJson (SYS-3): конфиг с
   // опечаткой не должен доживать до первого тика.
   for (const system of def.systems ?? []) systems.registerFromJson(system, world);
@@ -167,5 +222,6 @@ export function loadScene(def: SceneDef): Scene {
     modifiers,
     ...(terrain !== undefined ? { terrain } : {}),
     ...(arena !== undefined ? { arena } : {}),
+    ...(abilities !== undefined ? { abilities } : {}),
   };
 }

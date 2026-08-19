@@ -74,7 +74,7 @@ export type {
   ExprVars,
   ExprWorld,
 } from './dsl/expr.js';
-export { EvaluatedSystem, validateSystem } from './dsl/evaluatedSystem.js';
+export { EvaluatedSystem, validateActions, validateExpression, validateSystem } from './dsl/evaluatedSystem.js';
 export type { SystemDef } from './dsl/evaluatedSystem.js';
 export { schemaFiles, schemaFileContent } from './dsl/schemas.js';
 
@@ -171,6 +171,71 @@ export {
   TWEEN_SCHEMA,
 } from './systems/tween.js';
 export type { TweenDef, TweenSystemOptions } from './systems/tween.js';
+/**
+ * Платформа способностей (ABIL-1..11). Наружу уходит чистая функция разбора и
+ * читаемые константы: мутирующей поверхности это не расширяет (TICK-3), а
+ * скомпилированная таблица служит превью рендера (REND-27), профилю бота
+ * (BOT-6) и валидации редактора (ED-29) — одно определение, один разбор.
+ * Системы платформы регистрирует загрузчик сцены (SER-7), поэтому их классы
+ * здесь и не нужны.
+ */
+export { compileAbilityCatalog } from './systems/abilities/catalog.js';
+export {
+  ABILITY_COMPONENTS,
+  ABILITY_COOLDOWN_COMPONENT,
+  ABILITY_COOLDOWN_SCHEMA,
+  ABILITY_DURATION_COMPONENT,
+  ABILITY_DURATION_SCHEMA,
+  ABILITY_PROJECTILE_COMPONENT,
+  ABILITY_PROJECTILE_SCHEMA,
+  ABILITY_SLOT_COMPONENT,
+  ABILITY_SLOT_SCHEMA,
+  ABILITY_STEPS,
+  NO_INTERRUPT,
+  NO_PHASE,
+} from './systems/abilities/components.js';
+export {
+  defaultOutcome,
+  interruptCode,
+  INTERRUPT_SOURCES,
+} from './systems/abilities/interrupt.js';
+export {
+  COOLDOWN_FULL,
+  COOLDOWN_PARTIAL,
+  COOLDOWN_REFUND,
+  PHASE_AUTO,
+  PHASE_COMMIT,
+  PHASE_HOLD,
+  STAGED_KEEP,
+  STAGED_RESET,
+  STEP_NONE,
+  STEP_POINT,
+  STEP_UNIT,
+  STEP_VECTOR,
+  TIMEOUT_CANCEL,
+  TIMEOUT_COMMIT,
+  TIMEOUT_NONE,
+  TRIGGER_ALWAYS,
+  TRIGGER_EVENT,
+  TRIGGER_INPUT,
+} from './systems/abilities/model.js';
+export type {
+  AbilityCatalog,
+  AbilityCatalogDef,
+  AbilityDef,
+  AbilityInterruptDef,
+  AbilityInterruptsDef,
+  AbilityPhaseDef,
+  AbilityRuntimeDef,
+  AbilityShapeDef,
+  AbilityStepDef,
+  AbilityTargetingDef,
+  CompiledAbility,
+  CompiledBindings,
+  CompiledOutcome,
+  CompiledPhase,
+  CompiledStep,
+} from './systems/abilities/model.js';
 
 // sim — сборка сцены и прогон тиков
 export { tick, dispatch, initialState, takeSnapshot, restoreSnapshot } from './sim/tick.js';

@@ -88,8 +88,43 @@ type Scope = ReadonlyMap<string, BindingKind>;
  * (этап 9). Внешнее имя неизменяемо — параметр системы не привязка `let`.
  */
 export function validateSystem(def: SystemDef, world: WorldState, bound: readonly string[] = []): void {
-  const scope = new Map<string, BindingKind>(bound.map((name) => [name, 'as']));
-  checkActions(bodyOf(def), world, scope, `система "${def.name}"`);
+  validateActions(bodyOf(def), world, bound, `система "${def.name}"`);
+}
+
+/** Область видимости из имён, связанных снаружи: внешнее имя неизменяемо (не `let`). */
+function outerScope(bound: readonly string[]): Scope {
+  return new Map<string, BindingKind>(bound.map((name) => [name, 'as']));
+}
+
+/**
+ * Проверка списка действий с предсвязанными именами — тот же обход, что
+ * валидирует JSON-систему (SYS-3). Наружу вынесена ради платформы способностей
+ * (ABIL-10, ABIL-11): её эффекты и списки фаз проверяются ЭТИМ кодом, а не
+ * вторым набором правил, иначе опечатка в имени действия дожила бы до первого
+ * срабатывания ветки.
+ */
+export function validateActions(
+  list: unknown,
+  world: WorldState,
+  bound: readonly string[],
+  path: string,
+): void {
+  checkActions(list, world, outerScope(bound), path);
+}
+
+/**
+ * Проверка одиночного выражения с предсвязанными именами. Списком действий она
+ * не выражается: числа определения способности (`cooldownTicks`, `range`,
+ * `durationTicks`) стоят вне всякого действия, а проверять их обязан тот же
+ * обход, что и выражения внутри действий (SYS-3).
+ */
+export function validateExpression(
+  node: unknown,
+  world: WorldState,
+  bound: readonly string[],
+  path: string,
+): void {
+  checkExpression(node, world, outerScope(bound), path);
 }
 
 function fail(path: string, message: string): never {
