@@ -10,6 +10,36 @@
  */
 import type { AimPoint, AimResolution, ActionSink, ContinuousSample, InputSource } from './types.js';
 
+/**
+ * Клавиши-модификаторы, состояние которых различает раскладка (INP-4). Набор
+ * ЗАКРЫТ и повторяет флаги события указателя: имя вне набора — опечатка, и
+ * падать она обязана на загрузке документа, а не молчать в рантайме.
+ */
+export const POINTER_MODIFIERS = ['Alt', 'Ctrl', 'Shift', 'Meta'] as const;
+export type PointerModifier = (typeof POINTER_MODIFIERS)[number];
+
+/** Состояние модификаторов на момент нажатия; отсутствие флага = не зажат. */
+export type PointerModifierState = Partial<Record<PointerModifier, boolean>>;
+
+/**
+ * Привязка кнопки указателя: имя действия либо оно же с оговорками (INP-4).
+ *
+ * `suppressedBy` называет модификаторы, при которых кнопка действия НЕ даёт.
+ * Это данные раскладки, а не ветка в коде источника: сочетание вроде «Alt+ПКМ»
+ * приложение вправе занять своей, не мировой, работой — осмотром камеры,
+ * инспектором, чем угодно, — и единственный способ не отдать миру этот же
+ * клик вторым смыслом состоит в том, чтобы раскладка сказала об этом сама.
+ * Гасится только НАЖАТИЕ: подавленная кнопка не попадает в удержания, а
+ * модификатор, зажатый после неё, действия уже не отменяет — иначе одно и то
+ * же нажатие меняло бы смысл посреди удержания.
+ */
+export type PointerButtonBinding =
+  | string
+  | {
+      readonly action: string;
+      readonly suppressedBy?: readonly PointerModifier[];
+    };
+
 export interface KeyboardMouseBindings {
   /** Оси движения: `KeyboardEvent.code` четырёх направлений (мир, Y вверх). */
   readonly move: {
@@ -20,8 +50,25 @@ export interface KeyboardMouseBindings {
   };
   /** `KeyboardEvent.code` → имя действия (INP-4). */
   readonly keys: Readonly<Record<string, string>>;
-  /** `MouseEvent.button` (ключ — строка индекса) → имя действия. */
-  readonly pointerButtons: Readonly<Record<string, string>>;
+  /** `MouseEvent.button` (ключ — строка индекса) → привязка кнопки. */
+  readonly pointerButtons: Readonly<Record<string, PointerButtonBinding>>;
+}
+
+/** Имя действия привязки — короткая форма и полная различаются только записью. */
+export function pointerAction(binding: PointerButtonBinding): string {
+  return typeof binding === 'string' ? binding : binding.action;
+}
+
+/** Подавлено ли нажатие состоянием модификаторов (см. `PointerButtonBinding`). */
+export function pointerSuppressed(
+  binding: PointerButtonBinding,
+  modifiers: PointerModifierState,
+): boolean {
+  if (typeof binding === 'string' || binding.suppressedBy === undefined) return false;
+  for (const modifier of binding.suppressedBy) {
+    if (modifiers[modifier] === true) return true;
+  }
+  return false;
 }
 
 export interface KeyboardMouseOptions {
@@ -89,9 +136,22 @@ export class KeyboardMouseSource implements InputSource {
     this.heldKeys.delete(code);
   }
 
-  handlePointerDown(button: number, clientX: number, clientY: number): void {
-    const action = this.bindings.pointerButtons[String(button)];
-    if (action === undefined || this.press === null) return;
+  /**
+   * Нажатие кнопки указателя. `modifiers` — состояние клавиш-модификаторов на
+   * момент нажатия: по нему раскладка вправе не отдать миру сочетание, которое
+   * приложение заняло собой (`PointerButtonBinding.suppressedBy`). Пустое
+   * состояние — ни одного модификатора, то есть поведение прежних раскладок.
+   */
+  handlePointerDown(
+    button: number,
+    clientX: number,
+    clientY: number,
+    modifiers: PointerModifierState = {},
+  ): void {
+    const binding = this.bindings.pointerButtons[String(button)];
+    if (binding === undefined || this.press === null) return;
+    if (pointerSuppressed(binding, modifiers)) return;
+    const action = pointerAction(binding);
     const aim = this.aimAt?.(clientX, clientY) ?? null;
     // Клик без направления — не действие: ни фронта, ни удержания.
     if (aim === null) return;
@@ -157,8 +217,17 @@ export class KeyboardMouseSource implements InputSource {
   bind(target: Window): () => void {
     const onKeyDown = (e: KeyboardEvent): void => { this.handleKeyDown(e.code, e.repeat); };
     const onKeyUp = (e: KeyboardEvent): void => { this.handleKeyUp(e.code); };
-    const onMouseDown = (e: MouseEvent): void =>
-      { this.handlePointerDown(e.button, e.clientX, e.clientY); };
+    const onMouseDown = (e: MouseEvent): void => {
+      // Флаги события, а не собственный учёт нажатых клавиш: модификатор мог
+      // быть зажат до того, как страница получила фокус, и своё состояние
+      // разошлось бы с системным.
+      this.handlePointerDown(e.button, e.clientX, e.clientY, {
+        Alt: e.altKey,
+        Ctrl: e.ctrlKey,
+        Shift: e.shiftKey,
+        Meta: e.metaKey,
+      });
+    };
     const onMouseUp = (e: MouseEvent): void => { this.handlePointerUp(e.button); };
     const onBlur = (): void => { this.handleBlur(); };
     target.addEventListener('keydown', onKeyDown);

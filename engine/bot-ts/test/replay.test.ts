@@ -121,6 +121,7 @@ describe('реплей матча с ботом (BOT-5)', () => {
             weight: 1,
             cast: {
               slotIndex: 0,
+              commit: 'confirm' as const,
               confirmButton: 8,
               cancelButton: 9,
               holdTicks: 3,

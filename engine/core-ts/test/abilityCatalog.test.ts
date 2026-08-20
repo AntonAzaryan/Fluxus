@@ -34,6 +34,7 @@ import {
   COOLDOWN_REFUND,
   PHASE_COMMIT,
   PHASE_HOLD,
+  PHASE_RELEASE,
   STAGED_RESET,
   STEP_UNIT,
   TIMEOUT_CANCEL,
@@ -168,6 +169,18 @@ describe('Предкомпиляция определений (ABIL-2, ABIL-10)'
     expect(catalog.abilities[1]!.phaseCount).toBe(0);
   });
 
+  it('четвёртый вид перехода `release` компилируется в свой код (ABIL-4)', () => {
+    const grab: AbilityDef = {
+      id: 'grab',
+      trigger: { input: { bit: 5 } },
+      phases: [{ id: 'aim', trigger: 'release' }],
+      targeting: { steps: [{ kind: 'unit' }] },
+      effects: [],
+    };
+    const compiled = compile({ abilities: [grab] });
+    expect(compiled.phases[compiled.abilities[0]!.phaseStart]!.trigger).toBe(PHASE_RELEASE);
+  });
+
   it('вид способности не хранится: поле вида отвергается схемой определения', () => {
     const compiled = compile({ abilities: [SIMPLE] }).abilities[0]!;
     expect(Object.keys(compiled)).not.toContain('kind');
@@ -280,6 +293,12 @@ describe('Проверки загрузки определений (ABIL-10)', (
         },
       }),
     ).toThrow(/шагов 4, а слот несёт 3/);
+  });
+
+  it('неизвестный вид перехода фазы — словарь закрыт и перечислен в отказе (ABIL-4)', () => {
+    expect(failing({ phases: [{ id: 'a', trigger: 'tap' as 'auto' }] })).toThrow(
+      /неизвестное значение "tap"; допустимы: auto, commit, hold, release/,
+    );
   });
 
   it('неизвестный источник прерывания — словарь закрыт', () => {

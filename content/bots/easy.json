@@ -16,17 +16,18 @@
     {
       "name": "cast",
       "button": 0,
+      "hands": "free",
       "target": "enemy",
       "range": 8,
-      "holdTicks": 8,
+      "holdTicks": 12,
       "cooldownTicks": 120,
       "weight": 1,
       "cast": {
         "slotIndex": 0,
-        "confirmButton": 8,
+        "commit": "release",
         "cancelButton": 9,
         "steps": [{ "aim": "enemy", "confirmDelayTicks": 12, "pointNoise": 1.2 }],
-        "holdTicks": 8,
+        "holdTicks": 12,
         "cancelChance": 0.15,
         "giveUpTicks": 90
       }

@@ -3,20 +3,27 @@
  *
  * Имя системы называет её работу точно: она обрабатывает ПОДТВЕРЖДЕНИЕ шага, а
  * не ведёт непрерывное прицеливание, которого ABIL-5 не допускает. Проверка
- * накопленного выполняется позже и в другом месте — на завершении фазы
- * подтверждения (`CastPhaseSystem`).
+ * накопленного выполняется позже и в другом месте — на завершении фазы,
+ * накапливающей шаги (`CastPhaseSystem`).
+ *
+ * Сигналов подтверждения два, а правило накопления одно — один сигнал, один шаг
+ * (ABIL-5): фронт бита подтверждения в фазах видов `commit` и `release` и
+ * прекращение удержания бита триггера в фазе вида `release`. Второй сигнал и
+ * есть «держать, целясь, отпустить»: одна кнопка открывает прицеливание и
+ * подтверждает его.
  *
  * Стоит позже раскладки ввода и раньше фаз: шаг, подтверждённый на тике T,
  * уезжает в проверку и эффекты на тике T, а не на T+1. Одна кнопка при этом
- * порождает два разных действия двух систем, и обе читают ОДИН и тот же фронт
+ * порождает два разных действия двух систем, и обе читают ОДНУ и ту же маску
  * из компонента ввода (TICK-4) — собственного состояния фронта у платформы нет
- * (ABIL-3).
+ * (ABIL-3), а «удержание прекращено» обе считают одной функцией.
  */
 import * as vector from '../../math/vector.js';
 import { evaluate, typeError } from '../../dsl/expr.js';
 import { ABILITY_SLOT_COMPONENT, stepFieldEntity, stepFieldX, stepFieldY } from './components.js';
 import {
   PHASE_COMMIT,
+  PHASE_RELEASE,
   STEP_POINT,
   STEP_UNIT,
   STEP_VECTOR,
@@ -36,6 +43,7 @@ import {
   SlotScope,
   stepOriginX,
   stepOriginY,
+  triggerHoldEnded,
 } from './runtime.js';
 import {
   NO_ENTITY,
@@ -69,14 +77,21 @@ export class TargetingCommitSystem implements System {
       if (ability.stepCount === 0) continue;
       const staged = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'staged');
       if (staged >= ability.stepCount) continue;
-      // Шага ждёт только фаза подтверждения: `hold` и `auto` завершаются
-      // временем и удержанием, и записывать в них нечего.
-      if (this.catalog.phases[ability.phaseStart + phaseIndex]?.trigger !== PHASE_COMMIT) continue;
+      // Шаг накапливают только фазы, которые его накапливают: `hold` и `auto`
+      // завершаются временем и удержанием, и записывать в них нечего (ABIL-5).
+      const trigger = this.catalog.phases[ability.phaseStart + phaseIndex]?.trigger;
+      if (trigger !== PHASE_COMMIT && trigger !== PHASE_RELEASE) continue;
       const owner = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'owner');
       if (owner === NO_ENTITY || !ctx.isAlive(owner)) continue;
       const buttons = buttonsOf(ctx, this.catalog, owner);
       const prevButtons = prevButtonsOf(ctx, this.catalog, owner);
-      if (!buttonEdge(buttons, prevButtons, ability.confirmBit)) continue;
+      // Фронт бита подтверждения — в обеих фазах; прекращение удержания бита
+      // триггера — только в фазе `release`, и тем же тиком оно завершит фазу
+      // (ABIL-4): условие у обеих систем считает одна функция.
+      const confirmed =
+        buttonEdge(buttons, prevButtons, ability.confirmBit) ||
+        (trigger === PHASE_RELEASE && triggerHoldEnded(ability, buttons));
+      if (!confirmed) continue;
       this.commit(ctx, slot, owner, ability, staged);
     }
   }

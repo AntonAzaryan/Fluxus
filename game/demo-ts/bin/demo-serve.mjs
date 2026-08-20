@@ -184,6 +184,10 @@ const scene = pack.scene(match.sceneRef);
 function matchConfig() {
   return {
     ...matchConfigOf(match, pack),
+    // Диагностика запроса перемотки — в отчёт стенда, то есть в stdout: её
+    // умолчание пишет в stderr, а туда же по умолчанию идёт трейс, и мешать их
+    // в одном потоке нельзя (CLI-11).
+    rewindWarn: (message) => process.stdout.write(`\n${message}\n`),
     // Подключение sink'а ход матча не меняет (DIAG-8): отладочный матч — тот же
     // матч, и в запись (`toScenario`) это поле не входит (CLI-11).
     ...(tracing !== undefined ? { trace: tracing.trace } : {}),

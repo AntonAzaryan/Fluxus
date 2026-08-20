@@ -29,10 +29,16 @@ export interface RewindRequest {
   readonly depthTicks: number;
 }
 
-/** Диагностика испорченного запроса; по умолчанию — предупреждение в консоль. */
+/** Диагностика запроса, который хост не исполнил; по умолчанию — в консоль. */
 export type RewindRequestWarn = (message: string) => void;
 
-const defaultWarn: RewindRequestWarn = (message) => { console.warn(message); };
+/**
+ * Умолчание канала: строка в консоль. Экспортируется, потому что тот же канал
+ * нужен хосту для СВОЕЙ диагностики — запроса, который матч не может исполнить
+ * структурно (`MatchServer.drainRewindRequest`), — а второе умолчание рядом с
+ * первым и есть способ им разойтись.
+ */
+export const warnToConsole: RewindRequestWarn = (message) => { console.warn(message); };
 
 /**
  * Первый ГОДНЫЙ запрос тика, если он есть. Первый, а не все: в `Rewinding` мир
@@ -53,7 +59,7 @@ const defaultWarn: RewindRequestWarn = (message) => { console.warn(message); };
  */
 export function firstRewindRequest(
   events: Iterable<GameEvent>,
-  warn: RewindRequestWarn = defaultWarn,
+  warn: RewindRequestWarn = warnToConsole,
 ): RewindRequest | undefined {
   for (const event of events) {
     if (event.type !== REWIND_REQUEST_EVENT) continue;

@@ -22,6 +22,7 @@ import {
   world as coreWorld,
   type EntityId,
   type WorldMode,
+  type WorldState,
 } from '@game-mvp/core';
 import type { ClientStep, MatchSample } from '@game-mvp/net';
 import { readFixedField, readIntField } from './boundary.js';
@@ -38,6 +39,14 @@ export interface WorldViewNames {
   readonly velocityComponent?: string;
   readonly teamComponent?: string;
   readonly teamField?: string;
+  /**
+   * Компонент «в руках пойманный снаряд». Сцена вправе развести ДВА своих
+   * определения на одном бите условием на владельце — пустой рукой бит кастует
+   * заряд, с пойманным снарядом бросает его, — и признак этого условия мозгу
+   * нужен, чтобы жать бит осмысленно (BOT-6). Имя, как и прочие, — параметр
+   * сборки (TICK-4), а не конвенция ядра.
+   */
+  readonly carriedComponent?: string;
 }
 
 const DEFAULTS = {
@@ -47,6 +56,7 @@ const DEFAULTS = {
   velocityComponent: 'Velocity',
   teamComponent: 'Team',
   teamField: 'id',
+  carriedComponent: 'Holding',
 } as const;
 
 /** Сущность глазами мозга: положение и скорость — float в мировых осях. */
@@ -106,6 +116,15 @@ export interface BotWorldView {
    * здесь не появляется намеренно — он живёт в ассете сцены, а не в компоненте.
    */
   readonly arenaRadius: number | undefined;
+  /**
+   * Держит ли бот пойманный снаряд. Читается со СВОЕЙ сущности и только с неё:
+   * это состояние собственных рук, а не наблюдение за противником, и в
+   * персональном снапшоте бота оно есть всегда (NET-12).
+   *
+   * Сцена без такого компонента даёт `false` — и профиль, ничего о руках не
+   * говорящий, ведёт себя ровно как до появления признака.
+   */
+  readonly carrying: boolean;
 }
 
 function lerp(from: number, to: number, alpha: number): number {
@@ -168,7 +187,14 @@ export function readWorldView(
     others,
     slots: self === undefined ? [] : abilitySlots(sample, self.id),
     arenaRadius: arenaRadius(sample),
+    carrying: self !== undefined && hasComponent(sample.to.world, self.id, resolved.carriedComponent),
   };
+}
+
+/** Есть ли компонент на сущности; сцена, его не объявившая, даёт `false`. */
+function hasComponent(world: WorldState, entity: EntityId, component: string): boolean {
+  if (coreWorld.componentId(world, component) === undefined) return false;
+  return coreWorld.hasComponent(world, entity, component);
 }
 
 /**

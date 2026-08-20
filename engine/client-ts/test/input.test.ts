@@ -23,6 +23,8 @@ import {
   KeyboardMouseSource,
   TouchSource,
   aimAngle,
+  pointerAction,
+  pointerSuppressed,
   validateBindings,
   type ContinuousSample,
   type GamepadLike,
@@ -397,6 +399,40 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
     expect(sampler.sample().buttons).toBe(0);
   });
 
+  it('модификатор раскладки гасит нажатие: сочетание занято приложением (INP-4)', () => {
+    // Раскладка вправе сказать, что кнопка НЕ действие, пока зажат названный
+    // модификатор: сочетание вроде «Alt+ПКМ» приложение занимает своей работой
+    // (осмотр камеры), и мир этот же клик получать не должен. Данные, а не
+    // ветка в источнике: имя действия и оговорка лежат в одном документе.
+    const bindings = validateBindings({
+      ...(BINDINGS as object),
+      keyboardMouse: {
+        ...BINDINGS.keyboardMouse,
+        pointerButtons: { 0: { action: 'cast', suppressedBy: ['Alt'] } },
+      },
+    });
+    const sampler = makeSampler();
+    const source = new KeyboardMouseSource({
+      bindings: bindings.keyboardMouse,
+      aimAt: () => ({ angle: 42, x: 0, y: 0 }),
+    });
+    sampler.add(source);
+
+    source.handlePointerDown(0, 10, 20, { Alt: true });
+    // Ни фронта, ни удержания: подавленная кнопка в удержания не попадает.
+    expect(sampler.sample().buttons).toBe(0);
+    expect(source.held().has('cast')).toBe(false);
+
+    // Другой модификатор оговорку не трогает — набор назван поимённо.
+    source.handlePointerDown(0, 10, 20, { Shift: true });
+    expect(sampler.sample().buttons).toBe(1 << BITS.cast);
+    source.handlePointerUp(0);
+
+    // И без модификаторов кнопка работает ровно как прежде.
+    source.handlePointerDown(0, 10, 20);
+    expect(sampler.sample().buttons).toBe(1 << BITS.cast);
+  });
+
   it('клик без направления не создаёт удержания', () => {
     const sampler = makeSampler();
     const source = new KeyboardMouseSource({
@@ -618,6 +654,24 @@ describe('Биндинги — данные с валидацией (INP-4)', ()
     expect(bindings.gamepad).toBeDefined();
   });
 
+  it('привязка кнопки указателя читается в обеих формах (INP-4)', () => {
+    // Короткая форма — имя действия, длинная — оно же с оговорками. Ни один
+    // документ, написанный до появления длинной, от неё не читается иначе.
+    const bindings = validateBindings({
+      ...(BINDINGS as object),
+      keyboardMouse: {
+        ...BINDINGS.keyboardMouse,
+        pointerButtons: { 0: 'cast', 2: { action: 'kill', suppressedBy: ['Alt', 'Meta'] } },
+      },
+    });
+    const buttons = bindings.keyboardMouse.pointerButtons;
+    expect(pointerAction(buttons['0']!)).toBe('cast');
+    expect(pointerAction(buttons['2']!)).toBe('kill');
+    expect(pointerSuppressed(buttons['0']!, { Alt: true })).toBe(false);
+    expect(pointerSuppressed(buttons['2']!, { Meta: true })).toBe(true);
+    expect(pointerSuppressed(buttons['2']!, { Ctrl: true })).toBe(false);
+  });
+
   it('сломанные данные падают при загрузке с внятной ошибкой', () => {
     expect(() => validateBindings({})).toThrow(/keyboardMouse/);
     expect(() =>
@@ -631,6 +685,23 @@ describe('Биндинги — данные с валидацией (INP-4)', ()
         gamepad: { moveAxes: [0], deadzone: 0.25, buttons: {} },
       }),
     ).toThrow(/moveAxes/);
+    // Набор модификаторов закрыт: опечатка в имени — ошибка загрузки, а не
+    // молча недействующая оговорка.
+    expect(() =>
+      validateBindings({
+        ...(BINDINGS as object),
+        keyboardMouse: {
+          ...BINDINGS.keyboardMouse,
+          pointerButtons: { 0: { action: 'cast', suppressedBy: ['Option'] } },
+        },
+      }),
+    ).toThrow(/suppressedBy\[0\]/);
+    expect(() =>
+      validateBindings({
+        ...(BINDINGS as object),
+        keyboardMouse: { ...BINDINGS.keyboardMouse, pointerButtons: { 0: { suppressedBy: [] } } },
+      }),
+    ).toThrow(/pointerButtons\.0\.action/);
   });
 });
 

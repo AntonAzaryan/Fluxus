@@ -235,6 +235,7 @@ export class UtilityLayer {
   private chosen: BotBehavior = 'retreat';
   private lastScores: BehaviorScores | undefined;
   private nextDecisionTick = -Infinity;
+  private decidedAtTick = -Infinity;
 
   constructor(profile: BotProfile, random: BrainRandom) {
     this.profile = profile;
@@ -247,6 +248,17 @@ export class UtilityLayer {
   }
 
   /**
+   * Тик последнего пересчёта — ТОТ САМЫЙ «тик решения», которым профиль меряет
+   * свои вероятности (BOT-6). Часы решения одни на мозг: слой способностей
+   * спрашивает их здесь (`classicBrain.ts`), а не заводит свои. Заведи он свои —
+   * они шли бы со своим джиттером, и «на тике решения» значило бы в одном мозге
+   * два разных момента.
+   */
+  get decisionTick(): number {
+    return this.decidedAtTick;
+  }
+
+  /**
    * Забыть решение и срок передумывания: мир, для которого они выбирались,
    * стёрт перемоткой (NTR-16). Номера тиков после неё идут назад, и без сброса
    * `nextDecisionTick` остался бы в будущем — слой держал бы поведение стёртой
@@ -256,6 +268,7 @@ export class UtilityLayer {
     this.chosen = 'retreat';
     this.lastScores = undefined;
     this.nextDecisionTick = -Infinity;
+    this.decidedAtTick = -Infinity;
   }
 
   choose(
@@ -280,6 +293,7 @@ export class UtilityLayer {
       }
     }
     this.chosen = best;
+    this.decidedAtTick = tick;
     const { intervalTicks, jitterTicks } = this.profile.decision;
     const jitter = jitterTicks === 0 ? 0 : this.random.below(jitterTicks + 1);
     this.nextDecisionTick = tick + intervalTicks + jitter;
