@@ -119,13 +119,16 @@ interface Ability {
   };
 }
 
-/** Временное дерево с фикстурой; `patch` правит профиль перед записью. */
-function tree(patch: (profile: typeof PROFILE) => unknown = (profile) => profile): string {
+/** Временное дерево с фикстурой; `patch` правит профиль, `hints` — аннотацию. */
+function tree(
+  patch: (profile: typeof PROFILE) => unknown = (profile) => profile,
+  hints: unknown = HINTS,
+): string {
   const root = mkdtempSync(join(tmpdir(), 'bots-sync-'));
   mkdirSync(join(root, 'scenes'), { recursive: true });
   mkdirSync(join(root, 'bots'), { recursive: true });
   writeFileSync(join(root, 'scenes', 'probe.scene.json'), JSON.stringify(SCENE, null, 2));
-  writeFileSync(join(root, 'scenes', 'probe.bots.json'), JSON.stringify(HINTS, null, 2));
+  writeFileSync(join(root, 'scenes', 'probe.bots.json'), JSON.stringify(hints, null, 2));
   const profile = patch(JSON.parse(JSON.stringify(PROFILE)) as typeof PROFILE);
   writeFileSync(join(root, 'bots', 'probe.json'), JSON.stringify(profile, null, 2));
   return root;
@@ -232,6 +235,86 @@ describe('BOT-13: --add заводит скелет записи из двух �
       rmSync(root, { recursive: true, force: true });
     }
   }, 120_000);
+
+  /**
+   * Скелет способности С ФАЗАМИ: описание каста рождается из определения
+   * целиком — слот от prefab'а, вид подтверждения от фазы, биты от определения,
+   * прицел шага от аннотации. Проверяется на ЗАВОДИМОЙ записи (её в профиле нет
+   * вовсе), потому что мгновенный `guard` этой ветки не касается.
+   */
+  it('скелет каста собирается из фаз определения и прицела аннотации', () => {
+    const root = tree((profile) => ({
+      ...profile,
+      abilities: profile.abilities.filter((ability) => ability.name !== 'cast'),
+    }));
+    try {
+      const result = run(root, '--add');
+      expect(result.status, result.stderr).toBe(0);
+      const entry = byName(root, 'cast');
+      expect(entry.button).toBe(0);
+      expect(entry.hands).toBe('free');
+      const cast = entry.cast!;
+      expect(cast.commit).toBe('release');
+      // У каста с отпусканием бита подтверждения нет вовсе (ABIL-4), бит отмены
+      // назначен определением, слот взят из prefab'а сцены (ABIL-1).
+      expect(cast.confirmButton).toBeUndefined();
+      expect(cast.cancelButton).toBe(9);
+      expect((cast as unknown as { slotIndex: number }).slotIndex).toBe(0);
+      expect(cast.steps).toHaveLength(1);
+      expect(cast.steps[0]!.aim).toBe('enemy');
+      // Спад бита И ЕСТЬ подтверждение шага: «сколько держать» и «сколько
+      // целиться» — одно число, и разойтись им нельзя.
+      expect(cast.steps[0]!.confirmDelayTicks).toBe(cast.holdTicks);
+      // Держать — в окне фазы (40 тиков), вести каст — дольше подтверждения
+      // вместе с отставанием картинки: скелет обязан быть ИГРАБЕЛЬНЫМ.
+      expect(cast.holdTicks).toBeGreaterThanOrEqual(1);
+      expect(cast.holdTicks).toBeLessThanOrEqual(40);
+      expect(cast.giveUpTicks).toBeGreaterThan(cast.steps[0]!.confirmDelayTicks);
+      // Второй прогон подряд ничего не меняет — скелет сошёлся со сценой сразу.
+      const before = readFileSync(join(root, 'bots', 'probe.json'), 'utf8');
+      const again = run(root, '--add');
+      expect(again.status, again.stderr).toBe(0);
+      expect(again.stdout).toContain('без изменений');
+      expect(readFileSync(join(root, 'bots', 'probe.json'), 'utf8')).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  /**
+   * Та же сборка каста, но на СУЩЕСТВУЮЩЕЙ записи старого вида (BOT-6: «профиль
+   * знает только нажать бит»): описание каста заводится по фазам определения,
+   * а числа записи остаются её собственными. Флаг `--add` тут ни при чём —
+   * запись уже есть, к сцене приводится её механика.
+   */
+  it('записи старого вида описание каста заводится по фазам определения', () => {
+    const root = tree((profile) => ({
+      ...profile,
+      abilities: profile.abilities.map((ability) => {
+        if (ability.name !== 'cast') return ability;
+        const { cast: _cast, ...rest } = ability as Record<string, unknown>;
+        return rest;
+      }),
+    }));
+    try {
+      const result = run(root);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('описание каста заведено по фазам определения');
+      const entry = byName(root, 'cast');
+      const cast = entry.cast!;
+      expect(cast.commit).toBe('release');
+      expect(cast.confirmButton).toBeUndefined();
+      expect(cast.cancelButton).toBe(9);
+      expect(cast.steps[0]!.aim).toBe('enemy');
+      expect(cast.steps[0]!.confirmDelayTicks).toBe(cast.holdTicks);
+      // Числа самой записи — её собственные, и заведение каста их не тронуло.
+      expect(entry.range).toBe(7.5);
+      expect(entry.weight).toBe(2.5);
+      expect(entry.cooldownTicks).toBe(62);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
 
 /**
@@ -313,6 +396,26 @@ describe('bots:sync: флаги отбора и сухой прогон', () => 
       const result = run(root, '--profile', 'bots/typo.json');
       expect(result.status).toBe(2);
       expect(result.stderr).toContain('не назван ни одним документом');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  /**
+   * Пара, отвалившаяся на находке вывода, — не опечатка в `--profile`: «этот
+   * профиль назван аннотацией» решают ДАННЫЕ документа, а не то, дошёл ли
+   * прогон до него. Иначе дизайнера отправляли бы искать ошибку, которой нет.
+   */
+  it('находка вывода не выдаётся за незнакомый --profile', () => {
+    const root = tree(undefined, {
+      ...HINTS,
+      abilities: { ...HINTS.abilities, ghost: { target: 'enemy', range: 5 } },
+    });
+    try {
+      const result = run(root, '--profile', 'bots/probe.json');
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('в сцене нет определения с таким id');
+      expect(result.stderr).not.toContain('не назван ни одним документом');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

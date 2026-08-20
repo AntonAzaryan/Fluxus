@@ -35,10 +35,10 @@
  * это законно — она и есть игра (CONT-1).
  *
  * Идемпотентность несущая: второй запуск подряд не меняет ни байта. Файл, у
- * которого правок нет, не переписывается вовсе; ПЕРЕПИСАННЫЙ приходит в
- * каноническую форму документа целиком (`prettyJsonSerializer`, ED-21) — то
- * есть первая же правка переформатирует рукописную вёрстку профиля, и дифф
- * будет на весь файл.
+ * которого правок нет, не переписывается вовсе; ПЕРЕПИСАННЫЙ печатается
+ * читаемым сериализатором ядра (`prettyJsonSerializer`, `serialization` SER-2)
+ * целиком — то есть первая же правка переформатирует рукописную вёрстку
+ * профиля, и дифф будет на весь файл, а не на правку.
  *
  * Шага сборки нет по той же причине, что у запускалок: типы Node стрипает сам
  * (>=22.18), а хук резолва `./x.js` → `./x.ts` приезжает вместе с разбором
@@ -133,16 +133,18 @@ function syncPair(name) {
   // Парность — по имени файла, как у документа презентации (PRES-1).
   const scene = readJson(join(root, 'scenes', `${base}.scene.json`));
   const derived = expectedAbilities(scene, hints);
+  // «Аннотация назвала этот профиль» — факт ДОКУМЕНТА, и считается он раньше
+  // любых находок: иначе пара, отвалившаяся на находке вывода, выглядела бы как
+  // опечатка в `--profile`, и дизайнера отправляли бы искать ошибку, которой он
+  // не делал.
+  const targets = hints.profiles.filter((path) => only === undefined || only === path);
+  visited += targets.length;
   if (derived.findings.length > 0) {
     for (const finding of derived.findings) process.stderr.write(`${finding}\n`);
     failed = true;
     return;
   }
-  for (const contentPath of hints.profiles) {
-    if (only !== undefined && only !== contentPath) continue;
-    visited += 1;
-    syncProfile(derived.abilities, contentPath);
-  }
+  for (const contentPath of targets) syncProfile(derived.abilities, contentPath);
 }
 
 try {
