@@ -12,7 +12,7 @@ Orchestrate one change through two dedicated subagents with fresh, separate cont
 `/craft [target] [--cycles N] [--impl-model M] [--review-model M]`
 
 - `target` — an OpenSpec change name (check against `openspec list`) or a free-form task description. If omitted: exactly one active change → use it; several → ask via AskUserQuestion; none → ask the user what to drive.
-- `--cycles N` — number of review→fix rounds. Default **1**.
+- `--cycles N` — number of review→fix rounds. Default **2**.
 - `--impl-model` / `--review-model` — override the Agent tool's `model` for that role. Default: whatever the agent definitions carry (opus). Reasoning effort is fixed in the definitions (`xhigh`) and is not a flag.
 
 ## Pipeline
