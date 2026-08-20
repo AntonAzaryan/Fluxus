@@ -668,18 +668,19 @@ describe('переподача манифеста для батчевого яр
     const next = makeManifest();
     next.entities.Runner!.hiddenParts = [0];
     subsystem.applyManifest(next);
-    // Другой набор рисуемых частей — другой батч; прежний остался в кэше пустым.
-    expect(subsystem.batchStats()).toMatchObject({ batches: 2, records: 1 });
+    // Другой набор рисуемых частей — другой батч. Прежний остался пустым, и та
+    // же переподача его освободила: ключ производен от авторских данных, и
+    // новый манифест его больше не порождает (REND-31).
+    expect(subsystem.batchStats()).toMatchObject({ batches: 1, records: 1 });
 
-    // Возврат к прежним частям возвращает и прежний батч — а он всё это время
-    // стоял пустым и правки скинов не видел. Набор вариантов сводится с записью
-    // и на этом пути (REND-17): иначе новый скин клампился бы в базовый.
+    // Возврат к прежним частям собирает батч заново. Набор вариантов сводится с
+    // записью и на этом пути (REND-17): иначе новый скин клампился бы в базовый.
     const back = makeManifest();
     back.entities.Runner!.defaultSkin = 'azure';
     back.entities.Runner!.skins!.azure = { '0': 'tex/azure.png' };
     subsystem.applyManifest(back);
     subsystem.updateFrame(1 / 60, 1);
-    expect(subsystem.batchStats()).toMatchObject({ batches: 2, records: 1 });
+    expect(subsystem.batchStats()).toMatchObject({ batches: 1, records: 1 });
     // Варианты: базовый, `azure`, `blue`, `red` — умолчательный лежит слоем 1.
     expect(requestCount(assets, 'tex/azure.png')).toBe(1);
     expect(layerOf(subsystem, RUNNER_BATCH, 0)).toBe(1);

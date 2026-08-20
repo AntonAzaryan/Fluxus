@@ -225,6 +225,27 @@ export class PresentationStage {
     this.debug?.frame(dt, alpha, realDt);
   }
 
+  /**
+   * Снос сцены (REND-31): подсистемы отдают свои ресурсы GPU и уходят из
+   * реестра. Зовёт его потребитель, у которого шов сноса есть, — вьюпорт
+   * редактора при открытии другой сцены (ED-15); страница игрового клиента
+   * живёт столько же, сколько подсистемы, и звать его ей незачем.
+   *
+   * Порядок ОБРАТЕН порядку регистрации: порт объявляет владелец, а получает
+   * его подсистема, зарегистрированная позже (`shadows`, `sockets`,
+   * `instances`), — снос в прямом порядке оставлял бы получателя жить после
+   * владельца. Реестр после сноса пуст: сцена без подсистем не рисует и не
+   * доставляет, а `register` на снесённой сцене — заведение новой.
+   */
+  dispose(): void {
+    for (let i = this.subsystems.length - 1; i >= 0; i--) this.subsystems[i]?.dispose?.();
+    this.subsystems.length = 0;
+    this.watchers.length = 0;
+    this.debug = null;
+    this.producer = null;
+    this.live = 0;
+  }
+
   private flush(): void {
     this.deliver(this.emptyView);
   }

@@ -109,6 +109,12 @@ export interface ModelBatchOptions {
   /** Уровень 0 — части самой модели; дальше — уровни цепочки (REND-22). */
   readonly levels: readonly (readonly BatchPartSource[])[];
   /**
+   * Геометрии уровней, построенные ДЛЯ ЭТОГО батча (`batchLevels().owned`,
+   * REND-31): их он и отдаёт на сносе. Всё остальное в `levels` принадлежит
+   * ассету (REND-3) и переживает батч.
+   */
+  readonly ownedGeometries?: readonly THREE.BufferGeometry[];
+  /**
    * Материал глубины теневого прохода (`vatMaterial.ts`): у батча своё
    * вершинное преобразование, и без него тень записи застыла бы в позе покоя.
    * Один на батч — глубина от материала части не зависит. Нет материала — тень
@@ -125,6 +131,8 @@ export class ModelBatch {
   private readonly materials: readonly VatMaterial[];
   private readonly partVisibility: BakedPartVisibility;
   private readonly levelSources: readonly (readonly BatchPartSource[])[];
+  /** Геометрии уровней цепочки, построенные для этого батча (REND-31). */
+  private readonly ownedGeometries: readonly THREE.BufferGeometry[];
   /** Материал глубины теневого прохода, общий на все части батча. */
   private readonly depthMaterial: THREE.Material | null;
   /**
@@ -152,6 +160,7 @@ export class ModelBatch {
     this.materials = options.materials;
     this.partVisibility = options.partVisibility;
     this.levelSources = options.levels;
+    this.ownedGeometries = options.ownedGeometries ?? [];
     this.depthMaterial = options.depthMaterial ?? null;
     this.uniformVisibility = maskHidesNothing(options.partVisibility);
     this.grow(INITIAL_CAPACITY);
@@ -302,10 +311,15 @@ export class ModelBatch {
   }
 
   /**
-   * Снимает батч со сцены. Разделяемые буферы геометрии модели при этом НЕ
-   * освобождаются: они принадлежат ассету (REND-3), и `dispose` геометрии
-   * погасил бы их у детального яруса — поэтому чужие атрибуты снимаются с
-   * геометрии до её освобождения.
+   * Снимает батч со сцены и отдаёт то, чем он владеет (REND-31). Разделяемые
+   * буферы геометрии МОДЕЛИ при этом не освобождаются: они принадлежат ассету
+   * (REND-3), и `dispose` геометрии-обёртки погасил бы их у детального яруса —
+   * поэтому чужие атрибуты снимаются с обёртки до её освобождения.
+   *
+   * Геометрии уровней цепочки (`ownedGeometries`, REND-22) — наши, и они
+   * отдаются ПОСЛЕ обёрток: та же снятая ссылка, из-за которой обёртка не
+   * гасит чужие буферы, означает, что свои буферы уровня освободить может
+   * только сама его геометрия, и только когда обёртка их уже отпустила.
    */
   dispose(): void {
     this.group.removeFromParent();
@@ -319,6 +333,7 @@ export class ModelBatch {
         geometry.dispose();
       }
     }
+    for (const geometry of this.ownedGeometries) geometry.dispose();
     for (const material of this.materials) material.material.dispose();
     this.depthMaterial?.dispose();
     this.levels = [];
@@ -443,28 +458,38 @@ export class ModelBatch {
   }
 }
 
-/** Уровни батча из разделяемых данных ассета и цепочки LOD (REND-22). */
+/**
+ * Уровни батча из разделяемых данных ассета и цепочки LOD (REND-22) вместе с
+ * ЯВНЫМ владением: `owned` — геометрии, которые построила эта функция.
+ *
+ * Владение разное и его нельзя вывести из уровня по месту (REND-31): уровень 0
+ * — части самой модели, их буферы принадлежат ассету (REND-3) и переживают
+ * батч; уровни цепочки собраны здесь из запечённых данных (ASSET-12) и
+ * принадлежат батчу. Не различай их — и снос батча либо гасил бы детальный
+ * ярус чужими буферами, либо оставлял бы свои жить до конца процесса.
+ */
 export function batchLevels(
   meshes: readonly SharedMeshData[],
   lod: readonly { readonly meshes: readonly NormalizedMesh[] }[],
   hiddenParts: readonly number[] | undefined,
-): BatchPartSource[][] {
+): { readonly levels: BatchPartSource[][]; readonly owned: THREE.BufferGeometry[] } {
   const hidden = new Set(hiddenParts ?? []);
   const base = meshes.filter((mesh) => !hidden.has(mesh.partId));
   const levels: BatchPartSource[][] = [base.map((mesh) => ({ ...mesh }))];
+  const owned: THREE.BufferGeometry[] = [];
   for (const level of lod) {
     const parts = level.meshes
       .filter((mesh) => !hidden.has(mesh.partId))
-      .map((mesh) => ({
-        geometry: geometryFromMesh(mesh),
-        partId: mesh.partId,
-        materialIndex: mesh.materialIndex,
-      }));
+      .map((mesh) => {
+        const geometry = geometryFromMesh(mesh);
+        owned.push(geometry);
+        return { geometry, partId: mesh.partId, materialIndex: mesh.materialIndex };
+      });
     // Пустой уровень цепочки в батч не берётся: рисовать им нечего, а слот
     // уровня сдвинул бы пороги записи (ASSET-13).
     if (parts.length > 0) levels.push(parts);
   }
-  return levels;
+  return { levels, owned };
 }
 
 /**

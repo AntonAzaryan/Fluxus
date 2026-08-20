@@ -53,6 +53,7 @@ import type { DebugSource } from '../debug/contract.js';
 import { fogMaskDebugSource } from '../debug/fogSource.js';
 import { resolveFogConfig, type FogRenderConfig } from '../fog/config.js';
 import { POST_FRAGMENT, POST_VERTEX } from '../fog/postPass.js';
+import { FogMinimapSurface, type FogLayerCanvas, type FogMinimapLayer } from '../fog/layer.js';
 import {
   VisibilityMask,
   fogRectOf,
@@ -77,34 +78,6 @@ const FOG_MASK_RESOLUTION = 'fog.maskResolution';
 export interface FogStatNames {
   readonly visionRadius: string;
   readonly team: string;
-}
-
-/**
- * Слой тумана для миникарты (HUD-6, design D6): стабильный объект «канвас +
- * прямоугольник мира + сила затемнения». Канвас перерисовывается на месте,
- * объект не пересоздаётся — виджет вправе держать ссылку.
- */
-export interface FogMinimapLayer {
-  readonly canvas: unknown;
-  readonly world: FogWorldRect;
-  readonly strength: number;
-}
-
-/** 2D-поверхность слоя миникарты — структурный минимум `HTMLCanvasElement`. */
-export interface FogLayerCanvas {
-  width: number;
-  height: number;
-  getContext(contextId: '2d'): FogLayerContext | null;
-}
-
-/** Структурный минимум контекста: блит ImageData, ничего больше. */
-export interface FogLayerContext {
-  createImageData(width: number, height: number): {
-    readonly data: Uint8ClampedArray;
-    readonly width: number;
-    readonly height: number;
-  };
-  putImageData(image: unknown, dx: number, dy: number): void;
 }
 
 /**
@@ -158,7 +131,6 @@ export class FogSubsystem implements RenderSubsystem {
   private readonly grid: TerrainGrid;
   private readonly statNames: FogStatNames;
   private readonly heroOf: () => EntityId | null;
-  private readonly createCanvas: ((width: number, height: number) => FogLayerCanvas) | null;
 
   /**
    * Секция `fog` документа сцены как есть (PRES-2) — АВТОРСКИЙ источник. Она
@@ -212,22 +184,17 @@ export class FogSubsystem implements RenderSubsystem {
   private readonly postScene = new THREE.Scene();
   private readonly postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private readonly postMaterial: THREE.ShaderMaterial;
+  /** Полноэкранный квад пост-прохода: своя геометрия, отдаётся на сносе (REND-31). */
+  private postQuad: THREE.Mesh | null = null;
   private readonly sizeScratch = new THREE.Vector2();
 
-  // --------------------------------------------------------- слой миникарты
-  private layerCanvas: FogLayerCanvas | null = null;
-  private layerImage: ReturnType<FogLayerContext['createImageData']> | null = null;
-  private readonly layerWorld: FogWorldRect;
-  private readonly layer: FogMinimapLayer;
+  /** Слой миникарты (HUD-6, design D6): канвас, буфер пикселей и блит растра. */
+  private readonly minimap: FogMinimapSurface;
 
   constructor(options: FogSubsystemOptions) {
     this.grid = options.grid;
     this.statNames = options.stats;
     this.heroOf = options.hero;
-    // Фабрику канваса приносит сборка (в браузере — `document.createElement`):
-    // пакет рендера DOM не трогает, и слой миникарты без фабрики просто не
-    // существует — маска и пост-проход от этого не зависят.
-    this.createCanvas = options.createCanvas ?? null;
     // Авторская секция хранится как есть (FOW-10, QUAL-1): действующая
     // конфигурация — уже под потолком пресета, если он приехал.
     this.section = options.config;
@@ -239,7 +206,10 @@ export class FogSubsystem implements RenderSubsystem {
     this.mask = new VisibilityMask(this.rect, this.current.resolution);
     this.shown = new Uint8Array(this.mask.data.length);
     this.maskTexture = createMaskTexture(this.mask, this.shown);
-    this.layerWorld = this.rect;
+    // Фабрику канваса приносит сборка (в браузере — `document.createElement`):
+    // пакет рендера DOM не трогает, и слой миникарты без фабрики просто не
+    // существует — маска и пост-проход от этого не зависят.
+    this.minimap = new FogMinimapSurface(this.rect, () => this.current.strength, options.createCanvas);
 
     this.postMaterial = new THREE.ShaderMaterial({
       vertexShader: POST_VERTEX,
@@ -259,24 +229,9 @@ export class FogSubsystem implements RenderSubsystem {
       depthTest: false,
       depthWrite: false,
     });
-    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.postMaterial);
-    quad.frustumCulled = false;
-    this.postScene.add(quad);
-
-    // Стабильный объект слоя миникарты (design D6): канвас и сила читаются
-    // геттерами — правка конфига (FOW-10) видна виджету без пересоздания
-    // объекта. Стрелки захватывают this подсистемы лексически.
-    const canvasOf = (): unknown => this.layerCanvas;
-    const strengthOf = (): number => this.current.strength;
-    this.layer = {
-      get canvas(): unknown {
-        return canvasOf();
-      },
-      world: this.layerWorld,
-      get strength(): number {
-        return strengthOf();
-      },
-    };
+    this.postQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.postMaterial);
+    this.postQuad.frustumCulled = false;
+    this.postScene.add(this.postQuad);
   }
 
   /** Действующая конфигурация — её же читают потребители fade (FOW-8) и миникарты. */
@@ -289,11 +244,45 @@ export class FogSubsystem implements RenderSubsystem {
    * либо канвасу неоткуда взяться (нет DOM и фабрики). Объект стабилен.
    */
   get fog(): FogMinimapLayer | null {
-    return this.built && this.layerCanvas !== null ? this.layer : null;
+    return this.built && this.minimap.ready ? this.minimap.layer : null;
+  }
+
+  /**
+   * Объекты финального прохода (FOW-7) — вход тестов и диагностики: сцена с
+   * единственным полноэкранным квадом, растровая текстура маски и промежуточная
+   * цель кадра (null — кадра ещё не было). После сноса (REND-31) не остаётся
+   * ни одного из них живым.
+   */
+  get postPass(): {
+    readonly scene: THREE.Scene;
+    readonly mask: THREE.DataTexture;
+    readonly target: THREE.WebGLRenderTarget | null;
+  } {
+    return { scene: this.postScene, mask: this.maskTexture, target: this.target };
   }
 
   init(ctx: RenderContext): void {
     this.ctx = ctx;
+  }
+
+  /**
+   * Снос подсистемы (REND-31): всё, что она положила в GPU, — растр маски,
+   * промежуточная цель кадра с её текстурой глубины, материал пост-прохода и
+   * геометрия его полноэкранного квада (FOW-7). Сцена подсистеме не
+   * принадлежит: рисует она в чужую, а своя у неё одна — `postScene`.
+   */
+  dispose(): void {
+    this.maskTexture.dispose();
+    this.target?.dispose();
+    this.target = null;
+    this.postMaterial.dispose();
+    this.postQuad?.geometry.dispose();
+    this.postQuad?.removeFromParent();
+    this.postQuad = null;
+    // Растр маски больше не показывается ничем: канвас слоя миникарты (HUD-6)
+    // принесла сборка и отпускает его она же.
+    this.minimap.reset();
+    this.built = false;
   }
 
   /**
@@ -572,8 +561,7 @@ export class FogSubsystem implements RenderSubsystem {
       // Прежний растр другого разрешения не переносится: маска перестроится
       // ближайшей доставкой, а до неё прежняя картинка честнее растянутой.
       this.built = false;
-      this.layerImage = null;
-      this.layerCanvas = null;
+      this.minimap.reset();
       // Разрешение в сигнатуру входов не входит — пустой растр честно требует
       // перестройки ближайшей доставкой (design D4).
       this.signatureLength = -1;
@@ -629,46 +617,9 @@ export class FogSubsystem implements RenderSubsystem {
     return this.target;
   }
 
-  /**
-   * Блит маски в канвас слоя миникарты (design D6): пиксель — тон тумана с
-   * альфой `1 − свет`; силу затемнения виджет применяет сам из того же конфига
-   * (HUD-6). Ряды перевёрнуты: у растра ряд 0 — минимальный `y` мира, у канваса
-   * — верхняя строка, а миникарта рисует мир `+Y` вверх.
-   */
+  /** Блит растра в канвас слоя миникарты (HUD-6, design D6) — его дело. */
   private blitLayer(cost: RenderCostCounters | undefined): void {
-    if (this.createCanvas === null) return;
-    const mask = this.mask;
-    if (this.layerCanvas === null) {
-      this.layerCanvas = this.createCanvas(mask.width, mask.height);
-      this.layerImage = null;
-    }
-    const context = this.layerCanvas.getContext('2d');
-    if (context === null) return;
-    this.layerImage ??= context.createImageData(mask.width, mask.height);
-    const image = this.layerImage;
-    // Блит идёт по всему растру: та же квадратичная зависимость от разрешения,
-    // что у обнуления и загрузки, но в главном потоке и попиксельно (PERF-3).
-    // Сток уже прочитан вызывающим — здесь только инкремент, и он стоит ПОСЛЕ
-    // отказов выше: без канваса блита не было, и приписывать его нечему.
-    if (cost !== undefined) cost.fogMinimapTexels += mask.width * mask.height;
-    // Канвасу нужны sRGB-байты: компоненты THREE.Color — рабочее (линейное)
-    // пространство, тон брался бы темнее авторского. getHex по умолчанию — sRGB.
-    const hex = new THREE.Color(this.current.color).getHex();
-    const r = (hex >> 16) & 0xff;
-    const g = (hex >> 8) & 0xff;
-    const b = hex & 0xff;
-    for (let row = 0; row < mask.height; row++) {
-      const source = (mask.height - 1 - row) * mask.width;
-      const dest = row * mask.width * 4;
-      for (let column = 0; column < mask.width; column++) {
-        const at = dest + column * 4;
-        image.data[at] = r;
-        image.data[at + 1] = g;
-        image.data[at + 2] = b;
-        image.data[at + 3] = 255 - this.shown[source + column]!;
-      }
-    }
-    context.putImageData(image, 0, 0);
+    this.minimap.blit(this.mask, this.shown, this.current.color, cost);
   }
 
   /** Растр маски — для тестов геометрии; потребители картинки ходят не сюда. */

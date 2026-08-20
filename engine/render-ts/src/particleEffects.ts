@@ -122,6 +122,41 @@ export class ParticleEffectPool {
     instance.entry.pool.push(instance);
   }
 
+  /**
+   * Снос пула (REND-31). Три шага, и порядок у них несущий:
+   *
+   * - экземпляры отдаются средствами библиотеки: `ParticleSystem.dispose`
+   *   вынимает систему из батч-рендерера и освобождает её эмиттер. Отданы будут
+   *   ровно те, что лежат в пуле, поэтому звать снос следует ПОСЛЕ возврата
+   *   живых (`release`);
+   * - затем образец: разобранный граф построил ПУЛ (`QuarksLoader.parse`), и
+   *   владеет им он — кэш ассетов держит ДОКУМЕНТ (ASSET-14), то есть JSON, а
+   *   геометрии, материалы и текстуры из него инстанцировал загрузчик. Клоны
+   *   делят их с образцом (`ParticleSystem.clone` передаёт материал и геометрию
+   *   ссылкой), поэтому образец отдаётся после экземпляров, а не до;
+   * - и батчи, которые завёл рендерер: своего `dispose` у него нет, а у батча
+   *   (`VFXBatch`) есть, и держит он геометрию.
+   */
+  dispose(): void {
+    for (const [doc, entry] of this.effects) {
+      for (const instance of entry.pool) {
+        for (const played of instance.systems) played.system.dispose();
+        instance.object.removeFromParent();
+      }
+      entry.pool.length = 0;
+      if (entry.template !== null) releaseTemplate(entry.template, documentResources(doc));
+      entry.template = null;
+      entry.created = 0;
+    }
+    this.effects.clear();
+    for (const batch of [...this.batchRenderer.batches]) {
+      batch.removeFromParent();
+      batch.dispose();
+    }
+    this.batchRenderer.batches.length = 0;
+    this.batchRenderer.systemToBatchIndex.clear();
+  }
+
   private expand(id: string, doc: ParticleEffectDocument): EffectEntry {
     const known = this.effects.get(doc);
     if (known !== undefined) return known;
@@ -236,6 +271,61 @@ function parallelTwins(
     if (original !== undefined) twins.set(original, node);
   });
   return twins;
+}
+
+/**
+ * UUID ресурсов, объявленных САМИМ документом (ASSET-14): геометрии, материалы
+ * и текстуры, которые загрузчик графа объектов из него и построил. По ним, а не
+ * по факту «попалось в графе», определяется владение (REND-31): библиотека
+ * подставляет неназванной системе СВОИ умолчания — общую на весь процесс
+ * геометрию квада, — и освободить их значило бы погасить все прочие эффекты.
+ */
+function documentResources(doc: ParticleEffectDocument): Set<string> {
+  const uuids = new Set<string>();
+  for (const field of ['geometries', 'materials', 'textures']) {
+    const list: unknown = doc[field];
+    if (!Array.isArray(list)) continue;
+    for (const entry of list as { uuid?: unknown }[]) {
+      if (typeof entry.uuid === 'string') uuids.add(entry.uuid);
+    }
+  }
+  return uuids;
+}
+
+/** Ресурс THREE глазами сноса: одно имя и одна операция. */
+interface DisposableResource {
+  readonly uuid: string;
+  dispose(): void;
+}
+
+/**
+ * Отдаёт ресурсы разобранного графа эффекта (REND-31), которые объявил документ.
+ * Каждый uuid отдаётся один раз — материал системы и материал меша в графе
+ * законно совпадают, а повторный `dispose` был бы вторым событием на один
+ * объект. Клоны делят эти ресурсы с образцом, поэтому звать это можно только
+ * после того, как экземпляры отданы.
+ */
+function releaseTemplate(template: THREE.Object3D, owned: Set<string>): void {
+  const release = (resource: DisposableResource | null | undefined): void => {
+    if (resource == null || !owned.delete(resource.uuid)) return;
+    resource.dispose();
+  };
+  template.traverse((node) => {
+    if (node instanceof ParticleEmitter) {
+      const system = node.system as ParticleSystem;
+      release(system.material);
+      release(system.texture);
+      release(system.instancingGeometry);
+      return;
+    }
+    if (!(node instanceof THREE.Mesh)) return;
+    // Сужение `instanceof` даёт параметры типа `any` — берём меш как он объявлен.
+    const mesh = node as THREE.Mesh;
+    release(mesh.geometry);
+    for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      release(material);
+    }
+  });
 }
 
 /**
