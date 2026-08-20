@@ -58,6 +58,8 @@ npm run lint      # from the root: eslint . --max-warnings 0
 npm run lint:all  # from the root: typecheck + eslint + knip + jscpd + depcruise
 npm run golden:cost # regenerate cost baselines (*.cost.json) — an explicit acceptance of a cost change
 npm run bench:demo  # manual browser bench of the demo arena vs a device profile — diagnostic, not a gate
+npm run bots:sync   # sync bot-profile ability entries from the scene + its <base>.bots.json annotations (BOT-13);
+                    # verification itself is a demo test inside npm run check — the CLI is the designer's pen, not the gate
 ```
 
 `npm run coverage` (root, `vitest.coverage.config.ts`) is a diagnostic, not a gate: no thresholds, and the percentage is not a goal. Read it as the list of what no test executes — a DSL operator exposed to content but never evaluated, a transport branch no match reaches. Run it package-by-package and it lies: `integration-ts` exercises core/net/render, so only the aggregate run counts. The aggregate covers everything the gate holds with tests — the engine packages, `editor/*`, `tools/blender-ts` and the demo app (measured at `app/`, it has no `src/`); outside it is `desktop/shell-ts` alone, because the Electron container stays outside the gate (DSK-6).
