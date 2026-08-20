@@ -43,6 +43,7 @@ describe('guard: сканер границы контента ловит каж�
     writeFileSync(join(root, 'pkg-ts/src/bots/easy.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/duel.scene.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/duel.presentation.json'), '{}');
+    writeFileSync(join(root, 'pkg-ts/src/duel.bots.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/duel.match.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/manifest.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/hero.mdx'), '');
@@ -60,10 +61,11 @@ describe('guard: сканер границы контента ловит каж�
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('сцена, парный слой, матч, манифест, модель, текстура и профиль бота краснят', () => {
+  it('сцена, парные слои, матч, манифест, модель, текстура и профиль бота краснят', () => {
     const files = scanContentLocation({ rootDir: root }).map((v) => v.file);
     expect(files).toEqual([
       'pkg-ts/src/bots/easy.json',
+      'pkg-ts/src/duel.bots.json',
       'pkg-ts/src/duel.match.json',
       'pkg-ts/src/duel.presentation.json',
       'pkg-ts/src/duel.scene.json',

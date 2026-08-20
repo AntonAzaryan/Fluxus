@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "name": "duel",
+  "profiles": ["bots/easy.json", "bots/normal.json"],
+  "abilities": {
+    "fireball": {
+      "name": "cast",
+      "target": "enemy",
+      "hands": "free",
+      "range": 12,
+      "steps": [{ "aim": "enemy" }]
+    },
+    "throwHeld": {
+      "target": "enemy",
+      "hands": "full",
+      "range": 12
+    },
+    "slowDome": {
+      "target": "enemy",
+      "range": 3.2
+    },
+    "shield": {
+      "target": "threat",
+      "range": 9
+    },
+    "capture": {
+      "target": "threat",
+      "hands": "free",
+      "range": 5.2,
+      "steps": [{ "aim": "threat" }]
+    },
+    "dodge": {
+      "target": "threat",
+      "range": 6.5,
+      "requiresMoving": true
+    }
+  }
+}
