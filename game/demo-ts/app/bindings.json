@@ -8,11 +8,13 @@
       "KeyK": "kill",
       "KeyF": "slowDome",
       "KeyR": "capture",
-      "KeyE": "shield",
       "KeyX": "rewind",
       "KeyQ": "cancel"
     },
-    "pointerButtons": { "0": "cast", "2": "confirm" }
+    "pointerButtons": {
+      "0": "cast",
+      "2": { "action": "shield", "suppressedBy": ["Alt"] }
+    }
   },
   "touch": {
     "moveStick": { "zone": { "left": 0, "top": 0.4, "width": 0.5, "height": 0.6 }, "radius": 0.12 },

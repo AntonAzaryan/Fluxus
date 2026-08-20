@@ -42,6 +42,7 @@ function world(overrides: Partial<PerceivedWorld> = {}): PerceivedWorld {
     enemies: [],
     threats: [],
     arenaRadius: 20,
+    carrying: false,
     ...overrides,
   };
 }

@@ -53,8 +53,23 @@ export interface LocomotionOptions {
   readonly stateComponent?: string;
   /** Компонент коллайдера — сюда пишется `cliffRise` на время прыжка (PHYS-11, D3). */
   readonly colliderComponent?: string;
-  /** Индексы битов в маске кнопок; раскладку ввода ядро не знает (LOC-1). */
-  readonly dodgeButton?: number;
+  /**
+   * Индексы битов в маске кнопок; раскладку ввода ядро не знает (LOC-1).
+   *
+   * `dodgeButton: null` — «уклон система не стартует»: триггер манёвра держит
+   * сцена (например, определение способности, `ability-system` ABIL-3), и
+   * второй, системный, триггер на том же бите дал бы двойной старт с одного
+   * нажатия. LOC-4 этим не отменяется: он говорит, что делает ФРОНТ КНОПКИ
+   * уклона, а кнопки уклона у такой сборки нет вовсе — как нет её у сборки без
+   * `InputSystem`. Пустой (`undefined`) опция при этом остаётся умолчанием
+   * сборки: молчаливая смена умолчания выключила бы уклон у всех сборок, его не
+   * называющих, и обнаружилось бы это отсутствием манёвра, а не ошибкой.
+   *
+   * Окно даблтапа и перекат (LOC-4) при выключенном триггере недостижимы по
+   * построению: в `Window` сущность попадает только по завершении уклона, а
+   * начать из него перекат нечем.
+   */
+  readonly dodgeButton?: number | null;
   readonly jumpButton?: number;
   /**
    * Компонент селективного лока действий (LOC-7): поле `mask` — битовая маска
@@ -114,7 +129,8 @@ export class LocomotionSystem implements System {
   private readonly config: string;
   private readonly state: string;
   private readonly collider: string;
-  private readonly dodgeButton: number;
+  /** `null` — система уклон не стартует (см. `LocomotionOptions.dodgeButton`). */
+  private readonly dodgeButton: number | null;
   private readonly jumpButton: number;
   /** `undefined` — лока в сборке нет: ни одного нового чтения мира (LOC-7). */
   private readonly lock: string | undefined;
@@ -128,7 +144,10 @@ export class LocomotionSystem implements System {
     this.config = options.configComponent ?? DEFAULTS.configComponent;
     this.state = options.stateComponent ?? DEFAULTS.stateComponent;
     this.collider = options.colliderComponent ?? DEFAULTS.colliderComponent;
-    this.dodgeButton = options.dodgeButton ?? DEFAULTS.dodgeButton;
+    // Явное сравнение с `undefined`, а не `??`: `null` — назначенное значение
+    // «триггера уклона нет», и нулевое слияние вернуло бы на нём умолчание.
+    this.dodgeButton =
+      options.dodgeButton === undefined ? DEFAULTS.dodgeButton : options.dodgeButton;
     this.jumpButton = options.jumpButton ?? DEFAULTS.jumpButton;
     const lockBit = options.maneuverLockBit ?? DEFAULTS.maneuverLockBit;
     if (!Number.isInteger(lockBit) || lockBit < 0 || lockBit > 30) {
@@ -173,7 +192,7 @@ export class LocomotionSystem implements System {
     // манёвр стартует только новым нажатием.
     const locked = this.maneuversLocked(ctx, entity);
 
-    if (!locked && buttonEdge(buttons, prevButtons, this.dodgeButton)) {
+    if (!locked && this.dodgeButton !== null && buttonEdge(buttons, prevButtons, this.dodgeButton)) {
       if (state === LOCOMOTION_WINDOW) {
         this.startRoll(ctx, entity, moveX, moveY);
         return;

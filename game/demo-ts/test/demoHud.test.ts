@@ -12,7 +12,13 @@ import { tick as simTick, type SceneDef } from '@game-mvp/core';
 import { resolveComposition, type MinimapTerrainSource } from '@game-mvp/hud';
 import type { AssetService, VisualManifest } from '@game-mvp/assets';
 import { RemoteHost, WorkerShell } from '@game-mvp/client';
-import { createDemoHudRegistry, demoHudComposition } from '../app/hud.js';
+import {
+  HOLD_ONLY_ABILITIES,
+  createDemoHudRegistry,
+  demoHudComposition,
+  markHoldOnlyAbilities,
+} from '../app/hud.js';
+import demoBindings from '../app/bindings.json';
 import { createDemoExtractor } from '../app/extractor.js';
 import {
   ACTION_BITS,
@@ -194,17 +200,76 @@ describe('headless-прогон демо: статы и фаза полёта д
     // И маркер сцены доехал битом состояния — по нему рисуется шар заряда.
     expect(charging.states & stateBit('Charging')).toBe(stateBit('Charging'));
 
-    // Отпускание открывает фазу прицеливания, подтверждение — выстрел, и
-    // фаза становится «каста нет» (−1), а не пропадает: слот жив всегда.
+    // Отпускание — выстрел (фаза `release`), и фаза становится «каста нет»
+    // (−1), а не пропадает: слот жив всегда. Превью гаснет по той же величине,
+    // и статы обязаны доехать до него одним кадром с выстрелом.
     remote.sendInput({ x: 0, y: 0 }, 0, 0);
-    shell.stepTick();
-    expect(remote.view!.entities.get(playerId)!.stats!.get(STATS.slotPhase('cast'))).toBe(1);
-    remote.sendInput({ x: 0, y: 0 }, 0, 1 << ACTION_BITS.confirm);
     shell.stepTick();
     const done = remote.view!.entities.get(playerId)!;
     expect(done.stats!.get(STATS.slotPhase('cast'))).toBe(-1);
     // Кулдаун при этом поехал тем же слотовым источником.
     expect(done.stats!.get(STATS.cooldown('cast'))).toBeGreaterThan(0);
     expect(done.stats!.get(STATS.cooldownMax('cast'))).toBe(60);
+  });
+});
+
+/**
+ * Кнопка ульты в панели способностей: она ПОКАЗЫВАЕТ кулдаун, но не кастует —
+ * скраб перемотки живёт на удержании клавиши, а контракт действий HUD формы
+ * «держу/отпустил» не имеет (HUD-2). Значит она обязана и ВЫГЛЯДЕТЬ нерабочей:
+ * живая на вид кнопка, ведущая в `() => undefined`, обещает игроку действие,
+ * которого не произойдёт.
+ */
+describe('панель способностей не обещает нажатий, которых не выполнит (HUD-2)', () => {
+  /** Фейковая кнопка: пометке нужен только `setAttribute`. */
+  function fakeButton(ability: string): {
+    ability: string;
+    attrs: Record<string, string>;
+    setAttribute(name: string, value: string): void;
+  } {
+    const attrs: Record<string, string> = {};
+    return {
+      ability,
+      attrs,
+      setAttribute(name, value) {
+        attrs[name] = value;
+      },
+    };
+  }
+
+  it('кнопка ульты помечена нерабочей и называет клавишу удержания', () => {
+    const buttons = ['cast', 'rewind'].map(fakeButton);
+    const root = {
+      querySelectorAll: (selector: string) =>
+        buttons.filter((button) => selector.includes(`"${button.ability}"`)),
+    };
+    const marked = markHoldOnlyAbilities(root, demoBindings.keyboardMouse.keys);
+    expect(marked).toEqual([...HOLD_ONLY_ABILITIES]);
+
+    const rewind = buttons.find((button) => button.ability === 'rewind')!;
+    expect(rewind.attrs.disabled).toBe('');
+    expect(rewind.attrs['aria-disabled']).toBe('true');
+    // Клавиша — из той же раскладки, что и весь ввод: второго словаря нет.
+    expect(rewind.attrs.title).toContain('X');
+    expect(rewind.attrs.style).toContain('opacity');
+
+    // Работающие кнопки пометка не трогает: гасится ровно то, что не работает.
+    const cast = buttons.find((button) => button.ability === 'cast')!;
+    expect(cast.attrs).toEqual({});
+  });
+
+  it('помеченная способность всё равно показывает свой кулдаун', () => {
+    // Пометка снимает нажатие, а не запись панели: игрок обязан видеть, сколько
+    // ждать, — иначе ульта исчезла бы из HUD совсем.
+    const composition = demoHudComposition({ controls: true, tickMs: 16 });
+    const cooldowns = composition.entries.find((entry) => entry.widget === 'cooldowns')!;
+    const abilities = cooldowns.params!.abilities as readonly Record<string, string>[];
+    for (const action of HOLD_ONLY_ABILITIES) {
+      const record = abilities.find((ability) => ability.action === action)!;
+      expect(record.stat).toBe(STATS.cooldown(action));
+      expect(record.maxStat).toBe(STATS.cooldownMax(action));
+      // И слот действия у неё объявлен: без него клик валился бы исключением.
+      expect(cooldowns.actions![action]).toBeDefined();
+    }
   });
 });

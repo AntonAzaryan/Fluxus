@@ -318,8 +318,10 @@ const scenario: Json = {
         stateComponent: { type: 'string', minLength: 1 },
         colliderComponent: { type: 'string', minLength: 1 },
         dodgeButton: {
-          $comment: 'Индекс бита в маске кнопок; раскладку ввода ядро не знает (LOC-1).',
-          type: 'integer',
+          $comment:
+            'Индекс бита в маске кнопок; раскладку ввода ядро не знает (LOC-1). ' +
+            'null — уклон система не стартует, триггером манёвра владеет сцена (ABIL-3).',
+          type: ['integer', 'null'],
           minimum: 0,
           maximum: 15,
         },

@@ -119,7 +119,10 @@ class ClassicBrain implements BotBrain {
     // собрался; до — потому что применение вправе перехватить прицел: захват
     // ловит снаряд конусом от него, заряд летит туда, куда кастер смотрел на
     // отпускании.
-    const ability = this.abilities.step(world, plan, tick);
+    // Тик решения у мозга ОДИН, и ведёт его слой маршрутов: ручки профиля,
+    // названные «на тике решения» (вероятность отменить каст), меряются им же —
+    // иначе в одном мозге было бы двое часов с разным джиттером (BOT-6).
+    const ability = this.abilities.step(world, plan, tick, this.utility.decisionTick === tick);
     const micro = this.micro.step(
       ability.aim === undefined ? plan : { ...plan, aim: ability.aim },
       world,

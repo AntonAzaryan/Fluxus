@@ -48,7 +48,14 @@ export type {
 export { HeldActions, InputSampler, toWorldFixed } from './input/sampler.js';
 export type { CanonicalInput, SamplerOptions } from './input/sampler.js';
 export { KeyboardMouseSource } from './input/keyboardMouse.js';
-export type { KeyboardMouseBindings, KeyboardMouseOptions } from './input/keyboardMouse.js';
+export { POINTER_MODIFIERS, pointerAction, pointerSuppressed } from './input/keyboardMouse.js';
+export type {
+  KeyboardMouseBindings,
+  KeyboardMouseOptions,
+  PointerButtonBinding,
+  PointerModifier,
+  PointerModifierState,
+} from './input/keyboardMouse.js';
 export { TouchSource } from './input/touch.js';
 export type {
   TouchBindings,

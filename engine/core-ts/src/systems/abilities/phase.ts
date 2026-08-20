@@ -2,9 +2,10 @@
  * Автомат каста (ABIL-3, ABIL-4, ABIL-7), `order` −790 (DET-9).
  *
  * Система отвечает на вопрос «что происходит с автоматом»: старт по триггеру с
- * гейтом кулдауна, инкремент счётчика фазы, переходы `hold`/`auto`/`commit` и
- * `timeout.then`, проверка накопленных шагов на подтверждении (ABIL-5),
- * прерывания, распознаваемые по состоянию мира, и удаление слотов-сирот.
+ * гейтом кулдауна, инкремент счётчика фазы, переходы `hold`/`auto`/`commit`/
+ * `release` и `timeout.then`, проверка накопленных шагов на подтверждении
+ * (ABIL-5), прерывания, распознаваемые по состоянию мира, и удаление
+ * слотов-сирот.
  *
  * Не более одного перехода фазы на слот за тик (ABIL-4). Ограничение
  * нормативно, а не оптимизационно: цепочка фаз нулевой длительности с переходом
@@ -34,6 +35,7 @@ import {
   ACTION_LOCK_MASK_FIELD,
   PHASE_COMMIT,
   PHASE_HOLD,
+  PHASE_RELEASE,
   TIMEOUT_CANCEL,
   TIMEOUT_COMMIT,
   TIMEOUT_NONE,
@@ -48,7 +50,6 @@ import {
   abilityOf,
   buttonEdge,
   buttonFell,
-  buttonHeld,
   buttonsOf,
   cooldownRemaining,
   cooldownTicksOf,
@@ -58,6 +59,7 @@ import {
   SlotScope,
   stagedStepsValid,
   ticksOf,
+  triggerHoldEnded,
 } from './runtime.js';
 import { NO_ENTITY, type EntityId, type QuerySpec, type System, type SystemContext } from '../../types.js';
 
@@ -213,14 +215,16 @@ export class CastPhaseSystem implements System {
     const prevButtons = prevButtonsOf(ctx, this.catalog, owner);
     const { deadMarker, actionLock } = this.catalog.bindings;
 
-    // `release` — спад бита триггера в фазе, которая его НЕ потребляет: у фазы
-    // `hold` отпускание есть штатное завершение (ABIL-4), а не срыв. Источник
-    // распознаётся только там, где определение назвало его в `interrupts`:
-    // иначе всякая многофазная способность срывалась бы на первом же отпускании
-    // кнопки, которым игрок открывает прицеливание.
+    // `release` — спад бита триггера в фазе, которая его НЕ потребляет: у фаз
+    // `hold` и `release` отпускание есть штатное завершение (ABIL-4), а не срыв,
+    // и в них источник не распознаётся вовсе (ABIL-6). Распознаётся он только
+    // там, где определение назвало его в `interrupts`: иначе всякая многофазная
+    // способность срывалась бы на первом же отпускании кнопки, которым игрок
+    // открывает прицеливание.
     if (
       declares(ability, INTERRUPT_RELEASE) &&
       phase.trigger !== PHASE_HOLD &&
+      phase.trigger !== PHASE_RELEASE &&
       ability.triggerKind === TRIGGER_INPUT &&
       buttonFell(buttons, prevButtons, ability.triggerBit)
     ) {
@@ -276,10 +280,12 @@ export class CastPhaseSystem implements System {
     this.scope.vars.phaseTicks = ticks;
 
     let completed = false;
-    if (phase.trigger === PHASE_HOLD) {
-      // Фаза длится, пока держится бит триггера; отпускание завершает её.
+    if (phase.trigger === PHASE_HOLD || phase.trigger === PHASE_RELEASE) {
+      // Фаза длится, пока держится бит триггера; прекращение удержания завершает
+      // её (ABIL-4). У вида `release` тот же самый момент уже записал шаг
+      // прицеливания системой на −800, и завершение видит его (ABIL-5, DET-9).
       const buttons = buttonsOf(ctx, this.catalog, owner);
-      completed = ability.triggerKind === TRIGGER_INPUT && !buttonHeld(buttons, ability.triggerBit);
+      completed = triggerHoldEnded(ability, buttons);
     } else if (phase.trigger === PHASE_COMMIT) {
       // Фаза подтверждения завершается накоплением всех объявленных шагов, а
       // при их отсутствии — фронтом бита подтверждения (ABIL-4).
@@ -327,8 +333,11 @@ export class CastPhaseSystem implements System {
   }
 
   /**
-   * Завершение фазы: если это фаза подтверждения — проверка накопленных шагов
-   * (ABIL-5), затем переход в следующую фазу либо завершение каста.
+   * Завершение фазы: если это фаза, накапливающая шаги (`commit` либо
+   * `release`), — проверка накопленных шагов (ABIL-5), затем переход в
+   * следующую фазу либо завершение каста. Вид `release` из проверки не выпадает:
+   * отпускание есть его подтверждение, и одна и та же потерянная цель обязана
+   * срывать каст в обеих фазах одинаково.
    */
   private complete(
     ctx: SystemContext,
@@ -341,7 +350,7 @@ export class CastPhaseSystem implements System {
     ticks: number,
   ): void {
     if (
-      phase.trigger === PHASE_COMMIT &&
+      (phase.trigger === PHASE_COMMIT || phase.trigger === PHASE_RELEASE) &&
       !stagedStepsValid(ctx, this.catalog, ability, slot, owner, this.scope.vars)
     ) {
       this.interrupt(ctx, slot, owner, ability, phase, INTERRUPT_TARGET_LOST);

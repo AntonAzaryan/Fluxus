@@ -34,6 +34,7 @@ import {
   PHASE_AUTO,
   PHASE_COMMIT,
   PHASE_HOLD,
+  PHASE_RELEASE,
   STAGED_KEEP,
   STAGED_RESET,
   STEP_NONE,
@@ -79,6 +80,7 @@ const PHASE_TRIGGERS: Readonly<Record<string, number>> = Object.freeze({
   hold: PHASE_HOLD,
   auto: PHASE_AUTO,
   commit: PHASE_COMMIT,
+  release: PHASE_RELEASE,
 });
 
 const STEP_KINDS: Readonly<Record<string, number>> = Object.freeze({

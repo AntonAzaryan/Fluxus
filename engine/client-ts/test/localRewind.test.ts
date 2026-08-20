@@ -34,6 +34,8 @@ const ULT = 1 << ULT_BUTTON;
 /** Обычное действие рядом с ультой: сцена его ни во что не превращает. */
 const OTHER = 1 << 2;
 const DEPTH_TICKS = 12;
+/** Cooldown ульты в сцене оснастки: второй каст возможен только после него. */
+const ULT_COOLDOWN = 600;
 const STEP_TICKS = 3;
 const EVERY = 2;
 
@@ -48,7 +50,7 @@ function ultScene(): SceneDef {
     ...def,
     components: [...def.components, { name: 'RewindCooldown', fields: { max: 'i32', ticks: 'i32' } }],
     prefabs: [
-      { ...hero, components: { ...hero.components, RewindCooldown: { max: 600, ticks: 0 } } },
+      { ...hero, components: { ...hero.components, RewindCooldown: { max: ULT_COOLDOWN, ticks: 0 } } },
     ],
     systems: [
       ...def.systems!,
@@ -112,6 +114,14 @@ function ultScene(): SceneDef {
   };
 }
 
+/** Что у собранной оболочки отнимают ради проверки её отказа. */
+interface RigOptions {
+  /** Собрать оболочку БЕЗ контроллера перемотки — механизма в сборке нет. */
+  readonly withoutRewind?: boolean;
+  /** Приёмник диагностики запроса перемотки вместо умолчания-консоли. */
+  readonly rewindWarn?: (message: string) => void;
+}
+
 interface Rig {
   readonly shell: WorkerShell;
   readonly state: SimulationState;
@@ -122,7 +132,7 @@ interface Rig {
   holdUntilResume(buttons: number, maxTicks?: number): void;
 }
 
-function localRig(): Rig {
+function localRig(options: RigOptions = {}): Rig {
   const scene = loadScene(ultScene());
   scene.systems.register(new InputSystem({ players: [PLAYER_ID] }));
   worldInitSpawn(scene.world, 'Hero');
@@ -165,7 +175,8 @@ function localRig(): Rig {
     tickSeconds: TICK_SECONDS,
     extractor: makeExtractor({ scene, sim, state }),
     playerId: PLAYER_ID,
-    rewind,
+    ...(options.withoutRewind === true ? {} : { rewind }),
+    ...(options.rewindWarn !== undefined ? { rewindWarn: options.rewindWarn } : {}),
     inputs,
     history,
     scrub: { button: ULT_BUTTON, step: STEP_TICKS, every: EVERY, timeoutTicks: 6 },
@@ -233,13 +244,69 @@ describe('локальный режим: дренаж запроса и веде
     rig.run(2 * EVERY, ULT);
     const stopped = rig.state.tick;
 
-    rig.run(EVERY, 0);
+    // ОДНОГО тика без бита довольно: отпускание читается каждым тиком, а не на
+    // границе цикла шага (REW-13). Досиженный цикл означал бы мир, замерший уже
+    // после того, как игрок отпустил клавишу.
+    rig.run(1, 0);
 
     expect(rig.state.mode).toBe('Running');
     // Тик, на котором скраб кончился, мир уже проходит живым: оболочка должна
     // тик за вызов, и после возобновления он принадлежит продолженному миру.
     expect(rig.state.tick).toBe(stopped + 1);
     expect(stopped).toBe(castTick - 2 * STEP_TICKS);
+  });
+
+  it('короткое нажатие двигает точку, а не сгорает впустую (РЕГРЕССИЯ, REW-13)', () => {
+    // РЕГРЕССИЯ, зеркальная серверной (`net-ts/test/rewind.test.ts`). Первого
+    // шага ждали целый цикл, а проверка отпускания стояла ЗА тем же гейтом:
+    // игрок, отпустивший клавишу внутри цикла, получал мир, замерший и
+    // возобновившийся на ТОМ ЖЕ тике, — ульта сгорала на полный cooldown, не
+    // отмотав ни одного тика.
+    const rig = localRig();
+    rig.run(20);
+    rig.run(1, ULT);
+    const castTick = rig.state.tick;
+    expect(rig.state.mode).toBe('Rewinding');
+
+    // Короче нажатия не бывает: бита нет уже в первом сообщении после каста —
+    // то есть отпускание попадает ВНУТРЬ первого цикла шага (`EVERY`).
+    //
+    // Первое ведение: шаг входа сделан, мир ещё заморожен.
+    rig.run(1, 0);
+    expect(rig.state.mode).toBe('Rewinding');
+    expect(rig.state.tick).toBe(castTick - STEP_TICKS);
+
+    // Второе: отпускание прочитано тем же тиком, мир возобновлён с достигнутой
+    // точки и пошёл дальше живыми тиками — раньше того, где ульту прожали.
+    rig.run(1, 0);
+    expect(rig.state.mode).toBe('Running');
+    expect(rig.state.tick).toBeLessThan(castTick);
+  });
+
+  it('оболочка без контроллера запрос не исполняет, но называет это вслух — один раз', () => {
+    // Зеркало серверной проверки (`net-ts/test/rewind.test.ts`): сборка БЕЗ
+    // механизма перемотки — дефект сборки, а не норма REW-12. Молчание о нём
+    // выглядит снаружи как ульта, которая жжёт cooldown и ничего не делает.
+    const warned: string[] = [];
+    const rig = localRig({
+      withoutRewind: true,
+      rewindWarn: (message) => {
+        warned.push(message);
+      },
+    });
+
+    // Ульта прожимается дважды: гейт cooldown'а сцены пропустит только первый
+    // каст, поэтому запрос второй раз придёт после его истечения — а отчёт
+    // всё равно останется один.
+    rig.run(20);
+    rig.run(1, ULT);
+    expect(rig.state.mode).toBe('Running');
+    rig.run(ULT_COOLDOWN + 2);
+    rig.run(1, ULT);
+
+    expect(rig.state.mode).toBe('Running');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(REWIND_REQUEST_EVENT);
   });
 
   it('на глубине из запроса мир возобновляется сам', () => {

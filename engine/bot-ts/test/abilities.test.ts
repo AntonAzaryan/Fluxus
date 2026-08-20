@@ -39,6 +39,7 @@ function scene(overrides: Partial<PerceivedWorld> = {}): PerceivedWorld {
     enemies: [],
     threats: [],
     arenaRadius: 20,
+    carrying: false,
     ...overrides,
   };
 }
@@ -50,6 +51,12 @@ function enemyAt(x: number, y: number, visible = true): PerceivedWorld['enemies'
 function threatAt(x: number, vx: number, closing = true): PerceivedWorld['threats'][number] {
   return { id: 3, x, y: 0, vx, vy: 0, distance: Math.abs(x), closing };
 }
+
+/**
+ * Тик решения (BOT-6). Здесь он всегда наступил: вероятностей профиля в этих
+ * проверках нет, а всё остальное слой решает каждый тик независимо от него.
+ */
+const DECIDING = true;
 
 /** План маршрута: цель движения задаётся явно — от неё зависят манёвры. */
 function plan(targetX = 0, targetY = 0): BehaviorPlan {
@@ -99,15 +106,15 @@ describe('способности: удержание и отпускание (BO
   it('тап — тик с битом и тик без него: сцена получает и фронт, и спад', () => {
     const layer = new AbilityLayer(withAbilities([{ ...CAST, holdTicks: 1 }]), random());
     const near = scene({ enemies: [enemyAt(2, 0)] });
-    expect(layer.step(near, plan(), 0).buttons).toBe(1);
-    expect(layer.step(near, plan(), 1).buttons).toBe(0);
+    expect(layer.step(near, plan(), 0, DECIDING).buttons).toBe(1);
+    expect(layer.step(near, plan(), 1, DECIDING).buttons).toBe(0);
   });
 
   it('заряд держится ровно `holdTicks` и отпускается спадом', () => {
     const layer = new AbilityLayer(withAbilities([CAST]), random());
     const near = scene({ enemies: [enemyAt(2, 0)] });
     const held: number[] = [];
-    for (let tick = 0; tick < 6; tick++) held.push(layer.step(near, plan(), tick).buttons);
+    for (let tick = 0; tick < 6; tick++) held.push(layer.step(near, plan(), tick, DECIDING).buttons);
     // Четыре тика с битом, затем спад — и дальше кулдаун, а не второй заряд.
     expect(held).toEqual([1, 1, 1, 1, 0, 0]);
   });
@@ -119,15 +126,15 @@ describe('способности: удержание и отпускание (BO
       random(),
     );
     const near = scene({ enemies: [enemyAt(2, 0)] });
-    expect(layer.step(near, plan(), 0).buttons).toBe(1);
-    expect(layer.step(near, plan(), 1).buttons).toBe(0);
-    for (let tick = 2; tick < 6; tick++) expect(layer.step(near, plan(), tick).buttons).toBe(0);
-    expect(layer.step(near, plan(), 6).buttons).toBe(1);
+    expect(layer.step(near, plan(), 0, DECIDING).buttons).toBe(1);
+    expect(layer.step(near, plan(), 1, DECIDING).buttons).toBe(0);
+    for (let tick = 2; tick < 6; tick++) expect(layer.step(near, plan(), tick, DECIDING).buttons).toBe(0);
+    expect(layer.step(near, plan(), 6, DECIDING).buttons).toBe(1);
   });
 
   it('нулевой вес выключает способность целиком', () => {
     const layer = new AbilityLayer(withAbilities([{ ...CAST, weight: 0 }]), random());
-    expect(layer.step(scene({ enemies: [enemyAt(2, 0)] }), plan(), 0).buttons).toBe(0);
+    expect(layer.step(scene({ enemies: [enemyAt(2, 0)] }), plan(), 0, DECIDING).buttons).toBe(0);
   });
 });
 
@@ -135,44 +142,217 @@ describe('способности: выбор цели (BOT-3, BOT-6)', () => {
   it('по врагу — только по видимому: помнимое положение кулдауна не стоит', () => {
     const layer = new AbilityLayer(withAbilities([CAST]), random());
     const remembered = scene({ enemies: [enemyAt(2, 0, false)] });
-    expect(layer.step(remembered, plan(), 0).buttons).toBe(0);
+    expect(layer.step(remembered, plan(), 0, DECIDING).buttons).toBe(0);
   });
 
   it('враг за дальностью — не жмётся', () => {
     const layer = new AbilityLayer(withAbilities([CAST]), random());
-    expect(layer.step(scene({ enemies: [enemyAt(20, 0)] }), plan(), 0).buttons).toBe(0);
+    expect(layer.step(scene({ enemies: [enemyAt(20, 0)] }), plan(), 0, DECIDING).buttons).toBe(0);
   });
 
   it('по угрозе — только по сближающейся: улетающий снаряд не страшен', () => {
     const layer = new AbilityLayer(withAbilities([SHIELD]), random());
     const leaving = scene({ threats: [threatAt(2, 1, false)] });
-    expect(layer.step(leaving, plan(), 0).buttons).toBe(0);
+    expect(layer.step(leaving, plan(), 0, DECIDING).buttons).toBe(0);
     const incoming = scene({ threats: [threatAt(-2, 1)] });
-    expect(layer.step(incoming, plan(), 1).buttons).toBe(1 << 6);
+    expect(layer.step(incoming, plan(), 1, DECIDING).buttons).toBe(1 << 6);
   });
 
   it('перехват прицела: применение по угрозе смотрит на снаряд', () => {
     const layer = new AbilityLayer(withAbilities([SHIELD]), random());
     const incoming = scene({ threats: [threatAt(-2, 1)] });
-    expect(layer.step(incoming, plan(), 0).aim).toEqual({ x: -2, y: 0 });
+    expect(layer.step(incoming, plan(), 0, DECIDING).aim).toEqual({ x: -2, y: 0 });
   });
 
   it('соревнуются весом и близостью: защита от снаряда в упор перебивает каст', () => {
     const layer = new AbilityLayer(withAbilities([CAST, SHIELD]), random());
     const both = scene({ enemies: [enemyAt(2, 0)], threats: [threatAt(-1, 1)] });
-    expect(layer.step(both, plan(), 0).buttons).toBe(1 << 6);
+    expect(layer.step(both, plan(), 0, DECIDING).buttons).toBe(1 << 6);
   });
 
   it('заряд бросается досрочно, когда прилетает то, от чего есть чем закрыться', () => {
     const layer = new AbilityLayer(withAbilities([CAST, SHIELD]), random());
     const near = scene({ enemies: [enemyAt(2, 0)] });
-    expect(layer.step(near, plan(), 0).buttons).toBe(1);
+    expect(layer.step(near, plan(), 0, DECIDING).buttons).toBe(1);
     expect(layer.holding).toBe('cast');
     const attacked = scene({ enemies: [enemyAt(2, 0)], threats: [threatAt(-1, 1)] });
     // Спад заряда — тик раньше срока: докачивать под летящий снаряд некогда.
-    expect(layer.step(attacked, plan(), 1).buttons).toBe(0);
+    expect(layer.step(attacked, plan(), 1, DECIDING).buttons).toBe(0);
     expect(layer.holding).toBeUndefined();
-    expect(layer.step(attacked, plan(), 2).buttons).toBe(1 << 6);
+    expect(layer.step(attacked, plan(), 2, DECIDING).buttons).toBe(1 << 6);
+  });
+});
+
+/**
+ * Ручки профиля, названные «на тике решения» (BOT-6). Тик решения у мозга один,
+ * и ведёт его слой маршрутов: слой способностей его СПРАШИВАЕТ. Здесь он
+ * задаётся явно — стенд проверяет именно то, что от него зависит.
+ */
+describe('способности: тик решения (BOT-6)', () => {
+  const PHASED: BotAbilityProfile = {
+    ...CAST,
+    holdTicks: 1,
+    cooldownTicks: 0,
+    cast: {
+      slotIndex: 0,
+      commit: 'confirm',
+      confirmButton: 8,
+      cancelButton: 9,
+      steps: [{ aim: 'enemy', confirmDelayTicks: 30, pointNoise: 0 }],
+      holdTicks: 4,
+      cancelChance: 1,
+      giveUpTicks: 120,
+    },
+  };
+
+  /** Мир-стенд каста: видимый враг и слот, который сообщает «каст идёт». */
+  function casting(tick: number): PerceivedWorld {
+    return scene({
+      tick,
+      observedTick: tick,
+      enemies: [enemyAt(2, 0)],
+      slots: [{ slotIndex: 0, phase: 0, staged: 0 }],
+    });
+  }
+
+  it('вероятность отмены разыгрывается на тике решения, а не каждый тик', () => {
+    const layer = new AbilityLayer(withAbilities([PHASED]), random());
+    // Тик 0 — начало каста: отменять ещё нечего.
+    expect(layer.step(casting(0), plan(), 0, DECIDING).buttons).toBe(1);
+    // Тики без решения — заряд ведётся дальше, хотя `cancelChance` единица.
+    for (let tick = 1; tick <= 4; tick++) {
+      expect(layer.step(casting(tick), plan(), tick, false).cancelBit).toBeUndefined();
+      expect(layer.holding).toBe('cast');
+    }
+    // Первый же тик решения — отмена: единичная вероятность выпадает всегда.
+    expect(layer.step(casting(5), plan(), 5, DECIDING).cancelBit).toBe(9);
+    expect(layer.holding).toBeUndefined();
+  });
+
+  it('реакция на мир от тика решения не зависит: под снаряд заряд бросается сразу', () => {
+    const layer = new AbilityLayer(
+      withAbilities([{ ...PHASED, cast: { ...PHASED.cast!, cancelChance: 0 } }, SHIELD]),
+      random(),
+    );
+    expect(layer.step(casting(0), plan(), 0, DECIDING).buttons).toBe(1);
+    const attacked = scene({
+      tick: 1,
+      observedTick: 1,
+      enemies: [enemyAt(2, 0)],
+      threats: [threatAt(-1, 1)],
+      slots: [{ slotIndex: 0, phase: 0, staged: 0 }],
+    });
+    // Тик решения не наступил, а закрыться надо сейчас: отмена всё равно уходит.
+    expect(layer.step(attacked, plan(), 1, false).cancelBit).toBe(9);
+  });
+});
+
+/**
+ * Руки бота (BOT-6): сцена разводит два своих определения на одном бите
+ * условием на владельце, и профиль повторяет это условие. Мозг про определения
+ * не знает — он сверяет требование документа со своим наблюдением.
+ */
+/**
+ * Каст, который подтверждается ОТПУСКАНИЕМ (ABIL-4, ABIL-5): фаза длится, пока
+ * бит триггера держится, и прекращение удержания И записывает прицеливание того
+ * тика в шаг, И завершает фазу. Бит подтверждения в этом не участвует вовсе.
+ *
+ * Проверяется ровно то, что уедет во `InputFrame` (BOT-5): маска и точка. Бот
+ * обязан отдать точку НА ТОМ ЖЕ тике, на котором бит спал, — иначе симуляции
+ * нечего записывать в шаг.
+ */
+describe('способности: каст с подтверждением отпусканием (BOT-6, ABIL-4)', () => {
+  const HOLD = 4;
+  const GRAB: BotAbilityProfile = {
+    name: 'capture',
+    button: 5,
+    target: 'threat',
+    range: 6,
+    holdTicks: 1,
+    cooldownTicks: 40,
+    weight: 2,
+    cast: {
+      slotIndex: 2,
+      commit: 'release',
+      cancelButton: 9,
+      steps: [{ aim: 'threat', confirmDelayTicks: HOLD, pointNoise: 0 }],
+      holdTicks: HOLD,
+      cancelChance: 0,
+      giveUpTicks: 120,
+    },
+  };
+
+  /** Мир-стенд: сближающийся снаряд и слот перехвата в объявленной фазе. */
+  function grabbing(tick: number, phase: number): PerceivedWorld {
+    return scene({
+      tick,
+      observedTick: tick,
+      threats: [threatAt(-3, 1)],
+      slots: [{ slotIndex: 2, phase, staged: 0 }],
+    });
+  }
+
+  it('бит держится `holdTicks`, спадает шагом — и точка едет тем же тиком', () => {
+    const layer = new AbilityLayer(withAbilities([GRAB]), random());
+    const bit = 1 << GRAB.button;
+
+    // Нажатие и удержание: точка есть, подтверждать нечем и незачем.
+    for (let tick = 0; tick < HOLD; tick++) {
+      const intent = layer.step(grabbing(tick, tick === 0 ? -1 : 0), plan(), tick, DECIDING);
+      expect(intent.buttons, `тик ${tick}`).toBe(bit);
+      expect(intent.confirmBit, `тик ${tick}`).toBeUndefined();
+    }
+
+    // Спад бита — он и есть подтверждение шага (ABIL-4): маска пуста, точка на
+    // месте, фронта подтверждения нет.
+    const release = layer.step(grabbing(HOLD, 0), plan(), HOLD, DECIDING);
+    expect(release.buttons).toBe(0);
+    expect(release.confirmBit).toBeUndefined();
+    expect(release.target).toEqual({ x: -3, y: 0 });
+  });
+
+  it('фронт подтверждения не шлётся никогда — ни на одном тике каста', () => {
+    const layer = new AbilityLayer(withAbilities([GRAB]), random());
+    for (let tick = 0; tick <= 12; tick++) {
+      const intent = layer.step(grabbing(tick, tick === 0 ? -1 : 0), plan(), tick, DECIDING);
+      expect(intent.confirmBit, `тик ${tick}`).toBeUndefined();
+    }
+  });
+});
+
+describe('способности: требование к рукам (BOT-6)', () => {
+  const CHARGE: BotAbilityProfile = { ...CAST, hands: 'free' };
+  const THROW: BotAbilityProfile = {
+    name: 'throwHeld',
+    button: 0,
+    hands: 'full',
+    target: 'enemy',
+    range: 8,
+    holdTicks: 1,
+    cooldownTicks: 20,
+    weight: 2,
+  };
+
+  it('со свободными руками жмётся заряд, с пойманным снарядом — бросок', () => {
+    const free = new AbilityLayer(withAbilities([CHARGE, THROW]), random());
+    expect(free.step(scene({ enemies: [enemyAt(2, 0)] }), plan(), 0, DECIDING).buttons).toBe(1);
+    expect(free.holding).toBe('cast');
+
+    const full = new AbilityLayer(withAbilities([CHARGE, THROW]), random());
+    const carrying = scene({ enemies: [enemyAt(2, 0)], carrying: true });
+    expect(full.step(carrying, plan(), 0, DECIDING).buttons).toBe(1);
+    // Бит тот же, а решение — другое: заряд руками с шаром не кастуется, и
+    // сцена этот же бит прочтёт как бросок.
+    expect(full.holding).toBe('throwHeld');
+  });
+
+  it('без требования к рукам способность применяется в обоих состояниях', () => {
+    const layer = new AbilityLayer(withAbilities([SHIELD]), random());
+    const incoming = scene({ threats: [threatAt(-2, 1)] });
+    expect(layer.step(incoming, plan(), 0, DECIDING).buttons).toBe(1 << 6);
+    const carrying = scene({ threats: [threatAt(-2, 1)], carrying: true });
+    const other = new AbilityLayer(withAbilities([SHIELD]), random());
+    expect(other.step(carrying, plan(), 0, DECIDING).buttons).toBe(1 << 6);
   });
 });
 
@@ -183,14 +363,14 @@ describe('способности: манёвры и рельеф (LOC-4, LOC-5)'
     const layer = new AbilityLayer(withAbilities([dodge]), random());
     const incoming = scene({ threats: [threatAt(-2, 1)] });
     // Цель маршрута там же, где бот: вектор движения нулевой.
-    expect(layer.step(incoming, plan(0, 0), 0).buttons).toBe(0);
-    expect(layer.step(incoming, plan(0, 5), 1).buttons).toBe(1 << 2);
+    expect(layer.step(incoming, plan(0, 0), 0, DECIDING).buttons).toBe(0);
+    expect(layer.step(incoming, plan(0, 5), 1, DECIDING).buttons).toBe(1 << 2);
   });
 
   it('уступ по курсу в пределах прыжка — прыжок', () => {
     const layer = new AbilityLayer(withAbilities([JUMP]), random(), { terrain: ledgeTerrain(4) });
     const at = scene({ self: { id: 1, x: 3.2, y: 2, vx: 0, vy: 0, slot: 1, team: 1 } });
-    expect(layer.step(at, plan(7, 2), 0).buttons).toBe(1 << 3);
+    expect(layer.step(at, plan(7, 2), 0, DECIDING).buttons).toBe(1 << 3);
   });
 
   it('уступ выше прыжка не жмётся: обрыв блокирует и в полёте (PHYS-11)', () => {
@@ -198,7 +378,7 @@ describe('способности: манёвры и рельеф (LOC-4, LOC-5)'
       terrain: ledgeTerrain(4),
     });
     const at = scene({ self: { id: 1, x: 3.2, y: 2, vx: 0, vy: 0, slot: 1, team: 1 } });
-    expect(layer.step(at, plan(7, 2), 0).buttons).toBe(0);
+    expect(layer.step(at, plan(7, 2), 0, DECIDING).buttons).toBe(0);
   });
 
   it('спуск с уступа — тоже прыжок: наземного вниз обрыв не пускает (PHYS-11)', () => {
@@ -206,21 +386,21 @@ describe('способности: манёвры и рельеф (LOC-4, LOC-5)'
     // Бот СВЕРХУ (уровень 1) и идёт вниз. Без прыжка он остался бы на плато
     // навсегда: при нулевом допуске обрыв блокирует в обе стороны.
     const at = scene({ self: { id: 1, x: 4.6, y: 2, vx: 0, vy: 0, slot: 1, team: 1 } });
-    expect(layer.step(at, plan(0, 2), 0).buttons).toBe(1 << 3);
+    expect(layer.step(at, plan(0, 2), 0, DECIDING).buttons).toBe(1 << 3);
   });
 
   it('ровное место — не прыжок: кнопка не жмётся просто так', () => {
     const layer = new AbilityLayer(withAbilities([JUMP]), random(), { terrain: ledgeTerrain(4) });
     const at = scene({ self: { id: 1, x: 1, y: 2, vx: 0, vy: 0, slot: 1, team: 1 } });
-    expect(layer.step(at, plan(3, 2), 0).buttons).toBe(0);
+    expect(layer.step(at, plan(3, 2), 0, DECIDING).buttons).toBe(0);
   });
 
   it('дыра по курсу, за которой есть пол, — прыжок; без террейна — никогда', () => {
     const at = scene({ self: { id: 1, x: 3.2, y: 2, vx: 0, vy: 0, slot: 1, team: 1 } });
     const jumper = new AbilityLayer(withAbilities([JUMP]), random(), { terrain: holeTerrain(4) });
-    expect(jumper.step(at, plan(7, 2), 0).buttons).toBe(1 << 3);
+    expect(jumper.step(at, plan(7, 2), 0, DECIDING).buttons).toBe(1 << 3);
     const blind = new AbilityLayer(withAbilities([JUMP]), random());
-    expect(blind.step(at, plan(7, 2), 0).buttons).toBe(0);
+    expect(blind.step(at, plan(7, 2), 0, DECIDING).buttons).toBe(0);
   });
 });
 
@@ -228,13 +408,13 @@ describe('способности: разрыв непрерывности (SHELL
   it('перемотка снимает удержание и кулдауны — они про стёртую ветвь', () => {
     const layer = new AbilityLayer(withAbilities([CAST]), random());
     const near = scene({ enemies: [enemyAt(2, 0)] });
-    expect(layer.step(near, plan(), 100).buttons).toBe(1);
+    expect(layer.step(near, plan(), 100, DECIDING).buttons).toBe(1);
     expect(layer.holding).toBe('cast');
     layer.forget();
     expect(layer.holding).toBeUndefined();
     // Номера тиков после перемотки идут НАЗАД: несброшенный кулдаун держал бы
     // способность незаряженной ровно ту глубину, которую унесла перемотка.
-    expect(layer.step(near, plan(), 10).buttons).toBe(1);
+    expect(layer.step(near, plan(), 10, DECIDING).buttons).toBe(1);
   });
 });
 

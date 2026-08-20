@@ -9,9 +9,12 @@
  *
  * О механике самих способностей слой не знает НИЧЕГО (BOT-6): что кнопка 0 —
  * заряжаемый снаряд, а кнопка 6 — щит, живёт в сцене. Мозгу профиль сообщает
- * только бит, цель (`enemy` / `threat` / `cliff`), дальность, длительность
- * удержания и кулдаун — и этого хватает, чтобы шесть разных способностей демо
- * игрались одним кодом.
+ * только бит, цель (`enemy` / `threat` / `cliff`), требование к рукам, дальность,
+ * длительность удержания и кулдаун — и этого хватает, чтобы шесть разных
+ * способностей демо игрались одним кодом. Руки в этом списке — единственное, чем
+ * различаются ДВА определения сцены на одном бите (заряд пустой рукой, бросок
+ * пойманного снаряда — с занятой): условие называет документ, а слой лишь
+ * сверяет его со своим наблюдением.
  *
  * Способность ПЛАТФОРМЫ (ABIL-1..ABIL-5) описывается тем же профилем шире:
  * блоком `cast` — индексом слота, битами подтверждения и отмены, длительностью
@@ -164,9 +167,16 @@ export class AbilityLayer {
     return this.active?.ability.name;
   }
 
-  step(world: PerceivedWorld, plan: BehaviorPlan, tick: number): AbilityIntent {
+  /**
+   * Решение слоя на тик. `decision` — наступил ли ТИК РЕШЕНИЯ профиля (BOT-6):
+   * часы у мозга одни, ведёт их слой маршрутов (`utility.ts`), и слой
+   * способностей их спрашивает, а не заводит вторые. Реакция на мир от этого
+   * флага не зависит — кнопка жмётся и бросается каждый тик; от него зависят
+   * только ручки профиля, названные «на тике решения».
+   */
+  step(world: PerceivedWorld, plan: BehaviorPlan, tick: number, decision: boolean): AbilityIntent {
     const held = this.active;
-    if (held !== undefined) return this.continuePress(held, world, plan, tick);
+    if (held !== undefined) return this.continuePress(held, world, plan, tick, decision);
     return this.beginPress(world, plan, tick);
   }
 
@@ -188,10 +198,11 @@ export class AbilityLayer {
     world: PerceivedWorld,
     plan: BehaviorPlan,
     tick: number,
+    decision: boolean,
   ): AbilityIntent {
     held.aim = this.score(held.index, held.ability, world, plan).aim ?? held.aim;
     const cast = held.ability.cast;
-    if (cast !== undefined) return this.continueCast(held, cast, world, plan, tick);
+    if (cast !== undefined) return this.continueCast(held, cast, world, plan, tick, decision);
     const expired = tick >= held.untilTick;
     const rival = expired ? undefined : this.best(world, plan, tick, held.index)?.ability.target;
     const interrupted = rival === 'threat' || rival === 'cliff';
@@ -225,20 +236,30 @@ export class AbilityLayer {
     world: PerceivedWorld,
     plan: BehaviorPlan,
     tick: number,
+    decision: boolean,
   ): AbilityIntent {
     const slot = world.slots.find((s) => s.slotIndex === cast.slotIndex);
     const trigger = tick < held.untilTick ? 1 << held.ability.button : 0;
 
     // Отмена — та же кнопка, что у человека (INP-4), и решение того же класса,
     // что перехват удержания: реактивная способность или воля профиля.
-    if (this.cancels(held, cast, world, plan, tick)) {
+    if (this.cancels(held, cast, world, plan, tick, decision)) {
       this.release(held, tick);
       return { buttons: 0, aim: held.aim, target: held.aim, confirmBit: undefined, cancelBit: cast.cancelButton };
     }
 
     // Каст кончился — слот сообщает «каста нет» после того, как бот успел его
     // увидеть начавшимся, — либо истёк предел ведения.
-    const settled = slot?.phase === NO_PHASE && held.sent >= cast.steps.length;
+    //
+    // «Успел увидеть» — не оборот речи, а условие: картинка мира отстаёт на
+    // задержку реакции с джиттером (`perception.ts`), и слот в ней запросто
+    // относится к тику РАНЬШЕ собственного нажатия бота. Прочитанное там «каста
+    // нет» — это «каста ещё нет», и закрывать по нему своё ведение значит
+    // закрывать его по миру, в котором бот ничего не начинал. Поэтому
+    // наблюдение обязано быть не старше последнего собственного действия:
+    // тика подтверждения, а для цепочки без шагов — тика нажатия.
+    const seen = world.observedTick >= held.stepSince;
+    const settled = seen && slot?.phase === NO_PHASE && held.sent >= cast.steps.length;
     if (settled || tick - held.startedTick >= cast.giveUpTicks) {
       this.release(held, tick);
       return this.press(0, held.aim);
@@ -257,7 +278,14 @@ export class AbilityLayer {
     }
     held.sent += 1;
     held.stepSince = tick;
-    return { buttons: trigger, aim: held.aim, target, confirmBit: cast.confirmButton, cancelBit: undefined };
+    // Бит подтверждения шлёт только тот каст, который им и подтверждает. У
+    // каста с отпусканием шаг записывает ПРЕКРАЩЕНИЕ УДЕРЖАНИЯ бита триггера
+    // (ABIL-4), и профиль связал срок прицеливания шага с длительностью
+    // удержания — поэтому этим же тиком бит триггера и спадает. Лишний фронт
+    // подтверждения тут был бы второй попыткой записать шаг там, где симуляция
+    // уже записала его сама.
+    const confirmBit = cast.commit === 'confirm' ? cast.confirmButton : undefined;
+    return { buttons: trigger, aim: held.aim, target, confirmBit, cancelBit: undefined };
   }
 
   /** Бросает ли бот начатый каст: реактивная способность или воля профиля. */
@@ -267,12 +295,28 @@ export class AbilityLayer {
     world: PerceivedWorld,
     plan: BehaviorPlan,
     tick: number,
+    decision: boolean,
   ): boolean {
     if (cast.cancelButton === undefined) return false;
+    // Реакция на мир — каждый тик и без всякого расписания: под летящий снаряд
+    // заряд бросается тогда, когда снаряд летит, а не когда подошёл срок
+    // передумывать.
     const rival = this.best(world, plan, tick, held.index)?.ability.target;
     if (rival === 'threat' || rival === 'cliff') return true;
     // Вероятность отмены — ручка сложности (BOT-6): бот, ни разу не
-    // передумавший посреди каста, читается как автомат.
+    // передумавший посреди каста, читается как автомат. Меряется она ТИКОМ
+    // РЕШЕНИЯ — так её и называет профиль, — а не тиком: слой работает каждый
+    // тик, и розыгрыш на каждом превратил бы «5% передумать» в «5% за тик», то
+    // есть в каст, который до подтверждения не доживает.
+    //
+    // Не наступил тик решения — из потока НЕ БЕРЁТСЯ ничего. Розыгрыш каждый
+    // тик с отбрасыванием результата держал бы число обращений постоянным, но
+    // сдвигал бы шум прицела и джиттер кулдаунов тем сильнее, чем дольше идёт
+    // каст: ручка отмены незаметно правила бы всё остальное. Воспроизводимость
+    // от пропуска не страдает — поток сеян, а число обращений остаётся
+    // детерминированной функцией состояния мозга (BOT-5), как и у `pointNoise`,
+    // который берётся только когда есть точка.
+    if (!decision) return false;
     return cast.cancelChance > 0 && this.random.signed() > 1 - 2 * cast.cancelChance;
   }
 
@@ -369,6 +413,12 @@ export class AbilityLayer {
     // Манёвр без направления симуляция игнорирует (LOC-4) либо выполняет на
     // месте (LOC-5) — и в обоих случаях кулдаун сгорает впустую.
     if (ability.requiresMoving === true && !this.moving(world, plan)) return none;
+    // Руки: сцена вправе развести два своих определения на одном бите условием
+    // на владельце, и профиль повторяет это условие (BOT-6). Мозг про
+    // определения по-прежнему не знает ничего — он сверяет требование документа
+    // со своим наблюдением, и жать бит «не в ту сторону» перестаёт.
+    if (ability.hands === 'full' && !world.carrying) return none;
+    if (ability.hands === 'free' && world.carrying) return none;
 
     switch (ability.target) {
       case 'enemy': {

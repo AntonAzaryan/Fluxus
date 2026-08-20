@@ -30,6 +30,7 @@ import {
   INPUT_TARGET_Y_FIELD,
   STEP_POINT,
   STEP_UNIT,
+  TRIGGER_INPUT,
   type AbilityCatalog,
   type CompiledAbility,
   type CompiledBuff,
@@ -119,9 +120,25 @@ export function buttonFell(buttons: number, prevButtons: number, bit: number): b
   return (buttons & mask) === 0 && (prevButtons & mask) !== 0;
 }
 
-export function buttonHeld(buttons: number, bit: number): boolean {
+/** Бит взведён в маске текущего тика; наружу модуля не отдаётся (см. `triggerHoldEnded`). */
+function buttonHeld(buttons: number, bit: number): boolean {
   if (bit < 0) return false;
   return (buttons & (1 << bit)) !== 0;
+}
+
+/**
+ * Удержание бита триггера прекращено (ABIL-4). Это условие завершения фазы
+ * `hold` и оно же — сигнал накопления шага фазы `release` (ABIL-5), поэтому
+ * функция одна на обе системы платформы: разъехавшиеся предикаты записали бы
+ * шаг там, где фаза не завершилась, и наоборот.
+ *
+ * Взят не спад бита, а его невзведённость: фаза, в которую слот вошёл уже с
+ * отпущенной кнопкой, обязана завершиться сразу, а не ждать нового нажатия.
+ * У способности с триггером не `input` бита триггера нет вовсе (ABIL-3), и
+ * такая фаза по удержанию не завершается — завершить её может только `timeout`.
+ */
+export function triggerHoldEnded(ability: CompiledAbility, buttons: number): boolean {
+  return ability.triggerKind === TRIGGER_INPUT && !buttonHeld(buttons, ability.triggerBit);
 }
 
 /**

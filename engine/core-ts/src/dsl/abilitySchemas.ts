@@ -96,7 +96,7 @@ export const abilityPhase: Json = {
   required: ['id', 'trigger'],
   properties: {
     id: { type: 'string', minLength: 1 },
-    trigger: { enum: ['auto', 'commit', 'hold'] },
+    trigger: { enum: ['auto', 'commit', 'hold', 'release'] },
     durationTicks: { $comment: 'Число тиков — сырое целое (EXPR-2).', $ref: '#/$defs/expression' },
     onEnter: { type: 'array', items: { $ref: '#/$defs/action' } },
     onExit: { type: 'array', items: { $ref: '#/$defs/action' } },
