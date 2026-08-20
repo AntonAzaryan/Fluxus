@@ -6,11 +6,11 @@
  * клиентский воркер соединяется с матчем. Ни состояния, ни тиков, ни presentation:
  * рисует их клиент, как и в матче на выделенном стенде (SES-2).
  */
-import { parseBotProfile, isBotWorkerInit, startBotWorker, type WorkerLike } from '@game-mvp/bot';
+import { isBotWorkerInit, startBotWorker, type WorkerLike } from '@game-mvp/bot';
 import { DEMO_PLAYERS, demoMatchConfig } from './match.js';
+import { demoBotBehavior, demoBotProfile } from './bots.js';
 import { openLocalSession } from './localSession.js';
 import { isDemoServerInit, type DemoServerReady } from './wiring.js';
-import botProfileJson from '../../../content/bots/normal.json';
 
 const scope = self as unknown as {
   addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
@@ -50,6 +50,9 @@ function botThread(): WorkerLike {
 scope.addEventListener('message', (event) => {
   if (!isDemoServerInit(event.data)) return;
 
+  // Профиль — человечность (BOT-6), документ поведения — политика выбора
+  // (BOT-8); связку называет профиль, а читает дерево контента игра (CONT-4).
+  const profile = demoBotProfile();
   const session = openLocalSession({
     config: demoMatchConfig(),
     // Первый слот держит оболочка этой же вкладки: предлагать его боту незачем,
@@ -60,9 +63,9 @@ scope.addEventListener('message', (event) => {
     bots: {
       worker: botThread(),
       channel: () => new MessageChannel(),
-      brain: 'classic',
-      // Профиль — контент (BOT-6), и проверяется он на входе, а не на веру.
-      profile: parseBotProfile(botProfileJson, 'профиль бота демо'),
+      brain: 'evaluated',
+      profile,
+      behavior: demoBotBehavior(profile),
     },
   });
 

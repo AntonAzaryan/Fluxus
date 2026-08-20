@@ -21,7 +21,7 @@ import { PortConnections, botWorkerInit, isBotWorkerInit } from '../src/assembly
 import { attachBots } from '../src/worker/spawn.js';
 import { startBotWorker } from '../src/worker/botWorker.js';
 import type { BotHost } from '../src/host.js';
-import { BUILD_ID, duelConfig, duelScene, testProfile } from './fixtures.js';
+import { BUILD_ID, duelConfig, duelScene, testBehavior, testProfile } from './fixtures.js';
 
 const channels: MessageChannel[] = [];
 
@@ -58,8 +58,9 @@ describe('матч, заполненный ботами через порты (B
     const init = botWorkerInit({
       seats: players.map((playerId) => ({
         playerId,
-        brain: 'classic' as const,
+        brain: 'evaluated' as const,
         profile: testProfile(),
+        behavior: testBehavior(),
       })),
       ports,
       buildId: BUILD_ID,
@@ -231,11 +232,14 @@ describe('данные сцены доезжают до мозга сборко�
     const config = duelConfig({ players: ['bot-1'] });
     const connections = new PortConnections();
     const port = openChannel(connections);
-    const broken = { ...testProfile(), aggression: 12 };
+    // Профиль без документа поведения — тот же класс находки, что был у
+    // выкрученной агрессивности формы schema 2: документ, который дизайнер
+    // сломал, отвергается на конструировании, а не толкуется наугад.
+    const broken = { ...testProfile(), behavior: '' };
     expect(() =>
       startBotWorker(
         botWorkerInit({
-          seats: [{ playerId: 'bot-1', brain: 'classic', profile: broken }],
+          seats: [{ playerId: 'bot-1', brain: 'evaluated', profile: broken, behavior: testBehavior() }],
           ports: [port],
           buildId: BUILD_ID,
           sceneRef: 'duel',
@@ -243,7 +247,7 @@ describe('данные сцены доезжают до мозга сборко�
         }),
         { autoRun: false },
       ),
-    ).toThrow(/bot-1[\s\S]*aggression/);
+    ).toThrow(/bot-1[\s\S]*behavior/);
   });
 });
 
@@ -313,7 +317,7 @@ describe('сборка канала бота (design D3)', () => {
       },
       seats: [
         { playerId: 'bot-1', brain: 'scripted', profile: testProfile() },
-        { playerId: 'bot-2', brain: 'classic', profile: testProfile() },
+        { playerId: 'bot-2', brain: 'evaluated', profile: testProfile(), behavior: testBehavior() },
       ],
       buildId: BUILD_ID,
       sceneRef: 'duel',

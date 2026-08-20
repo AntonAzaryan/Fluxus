@@ -17,6 +17,7 @@ import type { PhysicsOptions, SceneDef, VisibilityOptions } from '@game-mvp/core
 import type { Transport, TransportServer } from '@game-mvp/net';
 import { shellPort } from '@game-mvp/client/protocol';
 import { portTransport } from '@game-mvp/client/portTransport';
+import type { BotBehaviorDocument } from './behavior.js';
 import type { BotProfile } from './profile.js';
 import type { BrainKind } from './brains/registry.js';
 import type { WorldViewNames } from './worldView.js';
@@ -67,11 +68,18 @@ export class PortConnections implements TransportServer {
   }
 }
 
-/** Один бот в init-сообщении воркера: кто он, каким мозгом и по какому профилю. */
+/** Один бот в init-сообщении воркера: кто он, каким мозгом и по каким документам. */
 export interface BotWorkerSeat {
   readonly playerId: string;
   readonly brain: BrainKind;
   readonly profile: BotProfile;
+  /**
+   * Документ поведения (BOT-8) — данными, как профиль: путь документа называет
+   * профиль, читает дерево контента сборка игры (CONT-4), а сюда приезжает уже
+   * прочитанный документ. Необязателен: `scripted` ничего не выбирает, и
+   * требовать документ у него значило бы требовать политику там, где её нет.
+   */
+  readonly behavior?: BotBehaviorDocument;
 }
 
 /**

@@ -1,5 +1,5 @@
 /**
- * Слой способностей классического мозга: тап и заряд, кулдаун с джиттером,
+ * Слой способностей мозга: тап и заряд, кулдаун с джиттером,
  * выбор между способностями по цели, перехват прицела и запрыгивание на уступ.
  *
  * Мир здесь литеральный: слой живёт за границей BOT-3 — он работает с float и
@@ -8,12 +8,12 @@
  * что-то значит, — в конце файла, где мозг целиком играет в матче.
  */
 import { describe, expect, it } from 'vitest';
-import { AbilityLayer } from '../src/brains/classic/abilities.js';
-import { MicroLayer } from '../src/brains/classic/micro.js';
-import { brainRandom } from '../src/brains/classic/random.js';
-import { classicBrain } from '../src/brains/classic/classicBrain.js';
-import type { PerceivedWorld } from '../src/brains/classic/perception.js';
-import type { BehaviorPlan } from '../src/brains/classic/utility.js';
+import { AbilityLayer } from '../src/brains/layers/abilities.js';
+import { MicroLayer } from '../src/brains/layers/micro.js';
+import { brainRandom } from '../src/brains/layers/random.js';
+import { evaluatedBrain } from '../src/brains/evaluated/evaluatedBrain.js';
+import type { PerceivedWorld } from '../src/brains/layers/perception.js';
+import type { BehaviorPlan } from '../src/brains/layers/plan.js';
 import { BotHost } from '../src/host.js';
 import type { BotAbilityProfile, BotProfile } from '../src/profile.js';
 import {
@@ -25,6 +25,7 @@ import {
   ledgeTerrain,
   settle,
   stepMatch,
+  testBehavior,
   testProfile,
 } from './fixtures.js';
 
@@ -60,7 +61,7 @@ const DECIDING = true;
 
 /** План маршрута: цель движения задаётся явно — от неё зависят манёвры. */
 function plan(targetX = 0, targetY = 0): BehaviorPlan {
-  return { behavior: 'pressure', targetX, targetY, aim: undefined, strafe: false };
+  return { executor: 'pressure', targetX, targetY, aim: undefined, strafe: false };
 }
 
 const CAST: BotAbilityProfile = {
@@ -211,7 +212,7 @@ describe('способности: тик решения (BOT-6)', () => {
       tick,
       observedTick: tick,
       enemies: [enemyAt(2, 0)],
-      slots: [{ slotIndex: 0, phase: 0, staged: 0 }],
+      slots: [{ slotIndex: 0, phase: 0, staged: 0, cooldown: 0 }],
     });
   }
 
@@ -240,7 +241,7 @@ describe('способности: тик решения (BOT-6)', () => {
       observedTick: 1,
       enemies: [enemyAt(2, 0)],
       threats: [threatAt(-1, 1)],
-      slots: [{ slotIndex: 0, phase: 0, staged: 0 }],
+      slots: [{ slotIndex: 0, phase: 0, staged: 0, cooldown: 0 }],
     });
     // Тик решения не наступил, а закрыться надо сейчас: отмена всё равно уходит.
     expect(layer.step(attacked, plan(), 1, false).cancelBit).toBe(9);
@@ -288,7 +289,7 @@ describe('способности: каст с подтверждением от�
       tick,
       observedTick: tick,
       threats: [threatAt(-3, 1)],
-      slots: [{ slotIndex: 2, phase, staged: 0 }],
+      slots: [{ slotIndex: 2, phase, staged: 0, cooldown: 0 }],
     });
   }
 
@@ -522,7 +523,7 @@ describe('мозг в матче: несколько способностей о
     const bots = new BotHost();
     const seat = connectBot(fixture, bots, {
       playerId: 'bot-1',
-      brain: classicBrain({ tickSeconds: 1 / 60 }),
+      brain: evaluatedBrain({ behavior: testBehavior(), tickSeconds: 1 / 60 }),
       profile: withAbilities([{ ...CAST, holdTicks: 2 }, SHIELD]),
     });
     await settle();

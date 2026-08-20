@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "name": "easy",
   "reaction": { "delayTicks": 24, "jitterTicks": 8, "memoryTicks": 60 },
   "aim": { "noiseDegrees": 14, "noisePeriodTicks": 20 },
@@ -12,6 +12,7 @@
     "strafe": 0.2,
     "strafePeriodTicks": 60
   },
+  "behavior": "bots/behaviors/cautious.json",
   "abilities": [
     {
       "name": "cast",
@@ -72,7 +73,5 @@
       "requiresMoving": true
     }
   ],
-  "utility": { "pressure": 0.6, "kite": 0.5, "retreat": 1, "dodge": 0.7 },
-  "aggression": 0.3,
   "seed": 1
 }

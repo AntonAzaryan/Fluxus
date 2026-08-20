@@ -1,9 +1,14 @@
 /**
- * Профиль поведения бота (BOT-6): всё, что тюнит геймдизайнер, — задержка
- * реакции, шум прицела, джиттер таймингов, агрессивность, веса utility и
- * СОСТАВ СПОСОБНОСТЕЙ — живёт документом контента (`game-content` CONT-1), а не
- * константами кода. Новый уровень сложности заводится JSON-документом; код
- * мозга при этом один.
+ * Профиль бота (BOT-6): всё, что тюнит геймдизайнер в ЧЕЛОВЕЧНОСТИ бота, —
+ * задержка реакции, шум прицела, джиттер таймингов и СОСТАВ СПОСОБНОСТЕЙ —
+ * живёт документом контента (`game-content` CONT-1), а не константами кода.
+ * Новый уровень сложности заводится JSON-документом; код мозга при этом один.
+ *
+ * Профиль отвечает «НАСКОЛЬКО ХОРОШО», а «что делать» — документ поведения
+ * (BOT-8): состав действий, considerations, кривые и веса, включая
+ * агрессивность как вес пары «давить/кайтить», живут там. Разрез нормативен
+ * (BOT-6, BOT-8), и здесь он держится полем `behavior` — путём документа: связку
+ * «этот бот играет эту политику» называют данные, а не код.
  *
  * Здесь — форма документа и его валидация. Читается профиль на конструировании
  * мозга (BOT-6) и только там: реализация, дочитывающая профиль по ходу матча,
@@ -25,6 +30,15 @@
  * не влияет (BOT-5).
  */
 import { ABILITY_STEPS } from '@game-mvp/core';
+import {
+  name as documentName,
+  num,
+  oneOf,
+  record,
+  schema as schemaField,
+  throwFindings,
+  type Findings,
+} from './findings.js';
 
 /**
  * Версия формы документа профиля. Растёт при несовместимом изменении состава.
@@ -33,18 +47,14 @@ import { ABILITY_STEPS } from '@game-mvp/core';
  * `utility` ушло поведение `ability` (способности решаются параллельно
  * движению, а не соревнуются с ним), у `movement` появились дистанция боя и
  * стрейф.
+ *
+ * 3 — политика выбора маршрута уехала документом поведения (BOT-8): весов
+ * `utility` и агрессивности в профиле больше нет, вместо них — путь документа
+ * (`behavior`). Разрез нормативен (BOT-6): профиль отвечает «насколько хорошо»
+ * — реакция, шум, джиттер, тайминги, состав способностей, — а «что делать»
+ * решает документ поведения.
  */
-export const BOT_PROFILE_SCHEMA = 2;
-
-/**
- * Поведения utility-слоя (BOT-6): ключи весов профиля. Это выбор МАРШРУТА на
- * ближайшие тики, и способностей среди них нет намеренно — жать кнопку и идти
- * можно одновременно, а поведение «стоять и кастовать» было бы ботом, который
- * замирает ради выстрела.
- */
-export const BOT_BEHAVIORS = ['pressure', 'kite', 'retreat', 'dodge'] as const;
-
-export type BotBehavior = (typeof BOT_BEHAVIORS)[number];
+export const BOT_PROFILE_SCHEMA = 3;
 
 /**
  * На что нацелена способность — единственное, что мозг знает о её смысле
@@ -265,6 +275,9 @@ export interface BotMovementProfile {
    * против «кайтить» и на котором сближающийся снаряд уже страшен. Своим
    * числом, а не дальностью какой-нибудь из способностей: список способностей
    * дизайнер меняет, а желаемая дистанция боя — свойство самого бота.
+   *
+   * СТРОГО положительна (валидация): этим же числом словарь входов нормирует
+   * расстояния (BOT-9), и ноль отменил бы шкалу, а не приблизил бы бота.
    */
   readonly engageRange: number;
   /**
@@ -287,51 +300,22 @@ export interface BotProfile {
   readonly movement: BotMovementProfile;
   /** Способности, которыми бот играет (BOT-6). Пустой список — бот-мишень. */
   readonly abilities: readonly BotAbilityProfile[];
-  /** Веса поведений utility-слоя; ключи — `BOT_BEHAVIORS`. */
-  readonly utility: Readonly<Record<BotBehavior, number>>;
-  /** Агрессивность: сдвиг предпочтения «давить» против «отступать», 0..1. */
-  readonly aggression: number;
+  /**
+   * Путь документа поведения (BOT-8) в дереве контента — от его корня, как
+   * адресуется ассет (`assets` ASSET-2): `bots/behaviors/classic.json`.
+   *
+   * ДАННЫЕ, а не константа кода: «какую политику играет этот бот» — тот же
+   * выбор дизайнера, что уровень сложности, и соответствие бота документу
+   * называет профиль. Резолвит путь та сторона, которой дерево контента читать
+   * законно, — сборка игры (CONT-4); мозг получает уже прочитанный документ.
+   */
+  readonly behavior: string;
   /**
    * Seed внутренней случайности мозга. Необязателен: детерминизм на мозг не
    * распространяется (BOT-5), и несеяная случайность допустима. Поле нужно
    * тестам и воспроизводимым прогонам, а не симуляции.
    */
   readonly seed?: number;
-}
-
-interface Findings {
-  readonly issues: string[];
-}
-
-function record(input: unknown, path: string, findings: Findings): Record<string, unknown> {
-  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
-    findings.issues.push(`${path}: ожидался объект`);
-    return {};
-  }
-  return input as Record<string, unknown>;
-}
-
-function num(
-  input: Record<string, unknown>,
-  key: string,
-  path: string,
-  range: { min: number; max: number; int?: boolean },
-  findings: Findings,
-): number {
-  const value = input[key];
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    findings.issues.push(`${path}.${key}: ожидалось конечное число`);
-    return range.min;
-  }
-  if (range.int === true && !Number.isInteger(value)) {
-    findings.issues.push(`${path}.${key}: ожидалось целое, получено ${value}`);
-    return range.min;
-  }
-  if (value < range.min || value > range.max) {
-    findings.issues.push(`${path}.${key}: ${value} вне [${range.min}, ${range.max}]`);
-    return range.min;
-  }
-  return value;
 }
 
 function flag(
@@ -358,15 +342,8 @@ const BUTTON = { min: 0, max: 15, int: true } as const;
 /** Один шаг цепочки: своя валидация, свой путь в находках. */
 function parseStep(input: unknown, path: string, findings: Findings): BotAbilityStepProfile {
   const root = record(input, path, findings);
-  const aim = root.aim;
-  const known = (BOT_STEP_AIMS as readonly unknown[]).includes(aim);
-  if (!known) {
-    findings.issues.push(
-      `${path}.aim: ожидалось одно из ${BOT_STEP_AIMS.join('|')}, получено ${JSON.stringify(aim)}`,
-    );
-  }
   return {
-    aim: known ? (aim as BotStepAim) : 'enemy',
+    aim: oneOf(root, 'aim', path, BOT_STEP_AIMS, findings) ?? 'enemy',
     confirmDelayTicks: num(root, 'confirmDelayTicks', path, TICKS, findings),
     pointNoise: num(root, 'pointNoise', path, { min: 0, max: 100 }, findings),
   };
@@ -419,15 +396,8 @@ function parseCommit(
   path: string,
   findings: Findings,
 ): BotCastCommit {
-  const value = root.commit;
-  if (value === undefined) return 'confirm';
-  if (!(BOT_CAST_COMMITS as readonly unknown[]).includes(value)) {
-    findings.issues.push(
-      `${path}.commit: ожидалось одно из ${BOT_CAST_COMMITS.join('|')}, получено ${JSON.stringify(value)}`,
-    );
-    return 'confirm';
-  }
-  return value as BotCastCommit;
+  if (root.commit === undefined) return 'confirm';
+  return oneOf(root, 'commit', path, BOT_CAST_COMMITS, findings) ?? 'confirm';
 }
 
 /**
@@ -477,31 +447,15 @@ function parseHands(
   path: string,
   findings: Findings,
 ): BotAbilityHands | undefined {
-  const value = root.hands;
-  if (value === undefined) return undefined;
-  if (!(BOT_ABILITY_HANDS as readonly unknown[]).includes(value)) {
-    findings.issues.push(
-      `${path}.hands: ожидалось одно из ${BOT_ABILITY_HANDS.join('|')}, получено ${JSON.stringify(value)}`,
-    );
-    return undefined;
-  }
-  return value as BotAbilityHands;
+  if (root.hands === undefined) return undefined;
+  return oneOf(root, 'hands', path, BOT_ABILITY_HANDS, findings);
 }
 
 /** Одна запись списка способностей: своя валидация, свой путь в находках. */
 function parseAbility(input: unknown, path: string, findings: Findings): BotAbilityProfile {
   const root = record(input, path, findings);
-  const name = typeof root.name === 'string' && root.name !== '' ? root.name : '';
-  if (name === '') findings.issues.push(`${path}.name: ожидалась непустая строка`);
-
-  const target = root.target;
-  const known = (BOT_ABILITY_TARGETS as readonly unknown[]).includes(target);
-  if (!known) {
-    findings.issues.push(
-      `${path}.target: ожидалось одно из ${BOT_ABILITY_TARGETS.join('|')}, получено ${JSON.stringify(target)}`,
-    );
-  }
-  const resolved: BotAbilityTarget = known ? (target as BotAbilityTarget) : 'enemy';
+  const name = documentName(root, path, findings);
+  const resolved: BotAbilityTarget = oneOf(root, 'target', path, BOT_ABILITY_TARGETS, findings) ?? 'enemy';
 
   // Перепад уступа спрашивается ровно у той цели, для которой он что-то значит:
   // `rise` у каста — не безобидное лишнее поле, а признак того, что документ
@@ -621,6 +575,35 @@ function checkCastTimings(profile: BotProfile, source: string, findings: Finding
 }
 
 /**
+ * Путь документа поведения (BOT-8): от корня дерева контента, как адресуется
+ * ассет (ASSET-2). Проверяется здесь ровно форма пути — существование файла
+ * профилю неизвестно и известно быть не может: дерево читает сборка игры, а не
+ * движок (CONT-4).
+ */
+function parseBehaviorPath(
+  root: Record<string, unknown>,
+  source: string,
+  findings: Findings,
+): string {
+  const value = root.behavior;
+  if (typeof value !== 'string' || value === '') {
+    findings.issues.push(
+      `${source}.behavior: ожидался путь документа поведения от корня дерева контента (BOT-8)`,
+    );
+    return '';
+  }
+  // Абсолютный путь и выход вверх — не «другой способ записать то же»: ассет
+  // адресуется путём ОТ КОРНЯ дерева (ASSET-2), и всё остальное — адрес файла
+  // машины, на которой документ писали.
+  if (value.startsWith('/') || value.includes('..')) {
+    findings.issues.push(
+      `${source}.behavior: "${value}" — путь адресуется от корня дерева контента (ASSET-2), без "/" в начале и без ".."`,
+    );
+  }
+  return value;
+}
+
+/**
  * Разбор и проверка документа профиля (BOT-6). Бросает с полным списком
  * находок, а не с первой: документ правит геймдизайнер, и «почини одно, узнай
  * про следующее» — худший из возможных циклов правки.
@@ -629,28 +612,13 @@ export function parseBotProfile(input: unknown, source = 'профиль бот�
   const findings: Findings = { issues: [] };
   const root = record(input, source, findings);
 
-  const schema = num(root, 'schema', source, { min: 1, max: 1_000_000, int: true }, findings);
-  // Расхождение формы называется ВСЕГДА, а не только когда прочих находок нет:
-  // документ будущей формы шумит несовпадением полей, и именно версия
-  // объясняет этот шум — промолчать о ней значит спрятать причину за следствием.
-  if (schema !== BOT_PROFILE_SCHEMA) {
-    findings.issues.push(
-      `${source}.schema: ${schema} — реализация читает форму ${BOT_PROFILE_SCHEMA}`,
-    );
-  }
-  const name = typeof root.name === 'string' && root.name !== '' ? root.name : '';
-  if (name === '') findings.issues.push(`${source}.name: ожидалась непустая строка`);
+  const schema = schemaField(root, source, BOT_PROFILE_SCHEMA, findings);
+  const name = documentName(root, source, findings);
 
   const reaction = record(root.reaction, `${source}.reaction`, findings);
   const aim = record(root.aim, `${source}.aim`, findings);
   const decision = record(root.decision, `${source}.decision`, findings);
   const movement = record(root.movement, `${source}.movement`, findings);
-  const utility = record(root.utility, `${source}.utility`, findings);
-
-  const weights = {} as Record<BotBehavior, number>;
-  for (const behavior of BOT_BEHAVIORS) {
-    weights[behavior] = num(utility, behavior, `${source}.utility`, { min: 0, max: 10 }, findings);
-  }
 
   const profile: BotProfile = {
     schema,
@@ -677,17 +645,34 @@ export function parseBotProfile(input: unknown, source = 'профиль бот�
       strafePeriodTicks: num(movement, 'strafePeriodTicks', `${source}.movement`, { ...TICKS, min: 1 }, findings),
     },
     abilities: parseAbilities(root.abilities, source, findings),
-    utility: weights,
-    aggression: num(root, 'aggression', source, { min: 0, max: 1 }, findings),
+    behavior: parseBehaviorPath(root, source, findings),
     ...(root.seed === undefined
       ? {}
       : { seed: num(root, 'seed', source, { min: 0, max: 2 ** 31 - 1, int: true }, findings) }),
   };
 
   checkCastTimings(profile, source, findings);
-
-  if (findings.issues.length > 0) {
-    throw new Error(`parseBotProfile (BOT-6): ${findings.issues.join('; ')}`);
-  }
+  checkEngageRange(profile, source, findings);
+  throwFindings('parseBotProfile (BOT-6)', findings);
   return profile;
+}
+
+/**
+ * Дистанция боя — не только «где бот хочет драться», но и МАСШТАБ, которым
+ * словарь входов нормирует расстояния (BOT-9, `brains/evaluated/scoring.ts`:
+ * `enemyDistance`, `threatDistance`). Ноль отменяет шкалу: обе величины
+ * перестают значить что-либо, и любая кривая документа поверх них — не политика,
+ * а деление на ноль, аккуратно завёрнутое в кламп.
+ *
+ * Поэтому это находка, а не молчаливое умолчание кода: профиль с нулевой
+ * дистанцией боя описывает бота, чей документ поведения нечем вычислить, и
+ * узнать об этом дизайнер обязан на конструировании, а не по странному выбору
+ * маршрута в матче.
+ */
+function checkEngageRange(profile: BotProfile, source: string, findings: Findings): void {
+  if (profile.movement.engageRange > 0) return;
+  findings.issues.push(
+    `${source}.movement.engageRange: ${profile.movement.engageRange} — дистанция боя есть МАСШТАБ ` +
+      `входов considerations (BOT-9): ноль отменяет шкалу, и «далеко ли враг» перестаёт значить что-либо`,
+  );
 }

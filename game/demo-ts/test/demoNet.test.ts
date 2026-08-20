@@ -19,7 +19,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { fixed, type Serializer } from '@game-mvp/core';
 import {
   isBotWorkerInit,
-  parseBotProfile,
   startBotWorker,
   type BotHost,
   type WorkerLike,
@@ -28,6 +27,7 @@ import type { RenderSubsystem, TickView } from '@game-mvp/render';
 import { jsonSerializer } from '@game-mvp/net';
 import { RemoteHost, portTransport, shellPort, type ShellPort } from '@game-mvp/client';
 import { DEMO_PLAYERS, demoMatchConfig } from '../app/match.js';
+import { demoBotBehavior, demoBotProfile } from '../app/bots.js';
 import { openLocalSession, type DemoLocalSession } from '../app/localSession.js';
 import { bufferedShellPort, joinDemoMatch, type DemoJoinResult } from '../app/netClient.js';
 import { demoHudComposition } from '../app/hud.js';
@@ -42,7 +42,6 @@ import { standArgs, shareLink } from '../app/demoStand.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from '../app/desktopStand.js';
 import { ACTION_BITS, STATS } from '../app/sim.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
-import botProfileJson from '../../../content/bots/normal.json';
 
 /** Заметное движение в Q16.16: его видно и в каноническом логе, и в снапшоте. */
 const STEP = fixed.fromFloat(0.5);
@@ -92,6 +91,9 @@ function session(
   reserved: readonly string[],
   serializer?: Serializer,
 ): DemoLocalSession {
+  // Те же два документа, что у вкладки: профиль (BOT-6) и названный им документ
+  // поведения (BOT-8) — тест игры читает дерево контента законно (CONT-1).
+  const profile = demoBotProfile('профиль бота теста');
   const opened = openLocalSession({
     config: demoMatchConfig(),
     reserved,
@@ -99,8 +101,9 @@ function session(
     bots: {
       worker: botThread(),
       channel: () => makeChannel(),
-      brain: 'classic',
-      profile: parseBotProfile(botProfileJson, 'профиль бота теста'),
+      brain: 'evaluated',
+      profile,
+      behavior: demoBotBehavior(profile),
     },
   });
   sessions.push(opened);

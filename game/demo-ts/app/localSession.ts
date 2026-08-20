@@ -29,6 +29,7 @@ import {
   BotSlotFiller,
   PortConnections,
   attachBots,
+  type BotBehaviorDocument,
   type BotProfile,
   type BotWireFormat,
   type BrainKind,
@@ -64,6 +65,11 @@ export interface DemoBotAssembly {
   readonly channel: () => MessageChannelLike;
   readonly brain: BrainKind;
   readonly profile: BotProfile;
+  /**
+   * Документ поведения (BOT-8), который назвал профиль. Необязателен: мозг
+   * `scripted` ничего не выбирает, и политики у него нет вовсе.
+   */
+  readonly behavior?: BotBehaviorDocument;
 }
 
 export interface LocalSessionOptions {
@@ -116,6 +122,7 @@ export class DemoLocalSession {
             playerId,
             brain: bots.brain,
             profile: bots.profile,
+            ...(bots.behavior === undefined ? {} : { behavior: bots.behavior }),
           })),
           buildId: config.version.buildId,
           sceneRef: config.sceneRef,

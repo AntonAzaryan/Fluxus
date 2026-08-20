@@ -5,7 +5,7 @@
  *
  *   node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 5000]
  *                                       [--match content/matches/duel.match.json]
- *                                       [--bot content/bots/normal.json] [--brain classic]
+ *                                       [--bot content/bots/normal.json] [--brain evaluated]
  *                                       [--json] [--once]
  *                                       [--debug] [--max-ticks 600] [--out-dir runs/latest]
  *                                       [--trace=off|systems|full] [--trace-select=<вид|код>,...]
@@ -32,7 +32,8 @@
  *
  * Стенд живёт в сборке игры, а не в `engine/net-ts`, и это не переезд ради
  * порядка: он читает дерево контента (`content/matches/duel.match.json`,
- * `content/bots/normal.json`) через `fs`, а движку дерево контента запрещено
+ * `content/bots/normal.json` и названный профилем документ поведения
+ * `content/bots/behaviors/*.json`) через `fs`, а движку дерево контента запрещено
  * (`game-content` CONT-4). Игре оно разрешено — она и есть игра (CONT-1),
  * поэтому здесь чтение не требует оправдания. Сетевые детали приходят
  * опубликованной поверхностью пакета (`@game-mvp/net`), а не файлами под его
@@ -88,7 +89,7 @@ const fromRepo = (relative) => fileURLToPath(new URL(`../../../${relative}`, imp
 if (flag('help')) {
   process.stdout.write(
     'usage: node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 5000]\n' +
-      '       [--match <match.json>] [--bot <profile.json>] [--brain classic|scripted] [--json] [--once]\n' +
+      '       [--match <match.json>] [--bot <profile.json>] [--brain evaluated|scripted] [--json] [--once]\n' +
       `       [--debug] [--max-ticks 600] [--out-dir runs/latest] [--dict <словарь>]\n       ${TRACE_USAGE}\n`,
   );
   process.exit(0);
@@ -103,7 +104,7 @@ const {
   MatchServer,
   webSocketTransportServer,
 } = await import('@game-mvp/net');
-const { BRAIN_KINDS, BotSlotFiller, PortConnections, attachBots, parseBotProfile } =
+const { BRAIN_KINDS, BotSlotFiller, PortConnections, attachBots, parseBotBehavior, parseBotProfile } =
   await import('@game-mvp/bot');
 
 const match = readMatchFile(option('match', fromRepo('content/matches/duel.match.json')));
@@ -112,7 +113,15 @@ const profile = parseBotProfile(
   JSON.parse(readFileSync(option('bot', fromRepo('content/bots/normal.json')), 'utf8')),
   'профиль бота стенда',
 );
-const brain = option('brain', 'classic');
+// Документ поведения (BOT-8) стенд берёт по пути, который назвал ПРОФИЛЬ:
+// «какую политику играет этот бот» — данные, а не флаг запускалки и не
+// константа обвязки. Путь адресуется от корня дерева контента (ASSET-2), читать
+// которое стенду законно — он игра (CONT-1).
+const behavior = parseBotBehavior(
+  JSON.parse(readFileSync(fromRepo(`content/${profile.behavior}`), 'utf8')),
+  profile.behavior,
+);
+const brain = option('brain', 'evaluated');
 // Имя мозга проверяется ЗДЕСЬ, до первого подключения: неизвестное имя иначе
 // обнаружилось бы падением потока ботов на дедлайне — то есть матчем, который
 // молча не стартовал (BOT-2).
@@ -399,7 +408,7 @@ async function runMatch(number) {
         worker: botWorker,
         connections,
         channel: () => new MessageChannel(),
-        seats: playerIds.map((playerId) => ({ playerId, brain, profile })),
+        seats: playerIds.map((playerId) => ({ playerId, brain, profile, behavior })),
         buildId: match.buildId,
         sceneRef: match.sceneRef,
         scene,

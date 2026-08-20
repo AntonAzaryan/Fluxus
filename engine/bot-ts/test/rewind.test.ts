@@ -23,10 +23,10 @@
 import { describe, expect, it } from 'vitest';
 import type { WorldMode } from '@game-mvp/core';
 import type { ClientStep } from '@game-mvp/net';
-import { Perception } from '../src/brains/classic/perception.js';
-import { classicBrain } from '../src/brains/classic/classicBrain.js';
-import { brainRandom } from '../src/brains/classic/random.js';
-import { duelConfig, recordSteps, testProfile, STEP } from './fixtures.js';
+import { Perception } from '../src/brains/layers/perception.js';
+import { evaluatedBrain } from '../src/brains/evaluated/evaluatedBrain.js';
+import { brainRandom } from '../src/brains/layers/random.js';
+import { duelConfig, recordSteps, testBehavior, testProfile, STEP } from './fixtures.js';
 
 const SELF = { playerId: 'bot-1', slot: 1, tickRate: 60 };
 const random = (): ReturnType<typeof brainRandom> => brainRandom(7, 'test');
@@ -186,7 +186,7 @@ describe('мозг: замерший мир и разрыв непрерывно
 
   it('в `Rewinding` идущий бот встаёт: движение — ноль, прицел — прежний', async () => {
     const { early, late, lateTick } = await recorded();
-    const brain = classicBrain()(walkingProfile(), SELF);
+    const brain = evaluatedBrain({ behavior: testBehavior() })(walkingProfile(), SELF);
     for (const step of late) brain.observe(step);
     const playing = brain.sample(lateTick)!;
     // Контроль: в живом мире бот ИДЁТ — иначе «нулевое движение в замершем
@@ -213,7 +213,7 @@ describe('мозг: замерший мир и разрыв непрерывно
     // «бить», и в живом мире бот жмёт способность. Без этого контроля «кнопок
     // нет» выполнялось бы у любого бота, которому нечем стрелять.
     const { early, late, lateTick } = await recorded();
-    const brain = classicBrain()(testProfile(), SELF);
+    const brain = evaluatedBrain({ behavior: testBehavior() })(testProfile(), SELF);
     for (const step of late) brain.observe(step);
     const playing = brain.sample(lateTick)!;
     expect(playing.buttons).not.toBe(0);
@@ -233,7 +233,7 @@ describe('мозг: замерший мир и разрыв непрерывно
     // решений держал бы поведение стёртой ветви, а `nextDecisionTick` остался
     // бы в будущем, недостижимом для откатившихся номеров тиков.
     const profile = testProfile({ decision: { intervalTicks: 500, jitterTicks: 0 } });
-    const brain = classicBrain()(profile, SELF);
+    const brain = evaluatedBrain({ behavior: testBehavior() })(profile, SELF);
     for (const step of late) brain.observe(step);
     const stale = brain.sample(lateTick)!;
 

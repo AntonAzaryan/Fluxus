@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "name": "classic",
+  "actions": [
+    {
+      "executor": "pressure",
+      "considerations": [
+        { "input": "enemyKnown", "curve": { "type": "linear", "slope": 1, "intercept": 0 }, "weight": 1 },
+        { "input": "enemyDistance", "curve": { "type": "linear", "slope": 1, "intercept": 0 }, "weight": 0.3 }
+      ]
+    },
+    {
+      "executor": "kite",
+      "considerations": [
+        { "input": "enemyKnown", "curve": { "type": "linear", "slope": 1, "intercept": 0 }, "weight": 1 },
+        { "input": "enemyDistance", "curve": { "type": "linear", "slope": -2, "intercept": 1 }, "weight": 0.16 }
+      ]
+    },
+    {
+      "executor": "retreat",
+      "considerations": [
+        { "input": "edgeProximity", "curve": { "type": "linear", "slope": 1, "intercept": 0 }, "weight": 0.6 }
+      ]
+    },
+    {
+      "executor": "dodge",
+      "considerations": [
+        { "input": "threatClosing", "curve": { "type": "linear", "slope": 1, "intercept": 0 }, "weight": 1 },
+        { "input": "threatDistance", "curve": { "type": "linear", "slope": -1, "intercept": 1 }, "weight": 0.65 }
+      ]
+    }
+  ]
+}
