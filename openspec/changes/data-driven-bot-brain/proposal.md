@@ -29,7 +29,7 @@
 
 ## Notes
 
-Заглушка по конвенции репозитория: proposal есть, specs/design/tasks пусты — продолжать через `/opsx:update data-driven-bot-brain`.
+Артефакты изменения полны: specs (делта `bot-player`), design и tasks написаны; имплементация — `/opsx:apply data-driven-bot-brain`.
 
 Ориентиры индустрии, на которых стоит proposal (для design): IAUS Дэйва Марка (considerations/response curves как данные; компенсация произведения оценок и per-consideration лог — стандартные лекарства от непрозрачности), utility-selector в BT (Game AI Pro гл. 10), слоистость Guerrilla (стратегия → отряд → особь; у нас пока одна особь — слоистость заложить формой документа, не реализовывать), F.E.A.R./GOAP как антипример для реактивного арена-микро, Dota 2 bot API как подтверждение нашей границы честности, «Client Bots» The Division как подтверждение бота-обычного-клиента для QA.
 
