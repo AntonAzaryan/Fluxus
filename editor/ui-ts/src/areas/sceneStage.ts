@@ -939,6 +939,11 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       doc.removeEventListener('mouseup', onPointerUp);
       window_?.removeEventListener('blur', onWindowBlur);
       canvas.remove();
+      // Подсистемы отдают то, что положили в GPU (REND-31), — до контекста
+      // рендерера: снятый контекст освободить их объекты уже не даст, а вьюпорт
+      // здесь живёт короче процесса (ED-15) — открытие другой сцены заводит
+      // новый и оставленное прежним было бы утечкой на каждый проект.
+      presentation.dispose();
       renderer.dispose();
     },
   };

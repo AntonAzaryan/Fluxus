@@ -542,6 +542,23 @@ export class TerrainSubsystem implements RenderSubsystem {
   }
 
   /**
+   * Снос подсистемы (REND-31): геометрии чанков пола и стен и два разделяемых
+   * материала — всё, что подсистема положила в GPU. Источник визуальной
+   * поверхности сюда не входит: он приходит опцией сборки и принадлежит ей, а
+   * не подсистеме (REND-8).
+   */
+  dispose(): void {
+    this.clearMeshes(false);
+    this.floorMeshes = [];
+    this.wallMeshes = [];
+    this.dirtyChunks.clear();
+    this.floorMaterial?.dispose();
+    this.floorMaterial = null;
+    this.wallMaterial?.dispose();
+    this.wallMaterial = null;
+  }
+
+  /**
    * Сетка редактируемого документа целиком (REND-14, ED-10, ED-15): уровни,
    * флаги, пол и производная cliff-геометрия. Считает её ЯДРО
    * (`createTerrainGrid`, TERR-5) — подсистема сводит пришедшее с нарисованным
@@ -731,20 +748,30 @@ export class TerrainSubsystem implements RenderSubsystem {
     }
   }
 
-  /** Другая арена: сцена очищается и раскладка чанков считается заново. */
-  private resetGrid(next: TerrainGrid): void {
+  /**
+   * Снимает нарисованные чанки со сцены и освобождает их геометрии. Общее у
+   * смены арены (REND-14) и сноса подсистемы (REND-31); разделяемые материалы
+   * переживают первое и отдаются на втором.
+   */
+  private clearMeshes(dropCasters: boolean): void {
     const ctx = this.ctx;
-    if (ctx !== null) {
-      for (const mesh of [...this.floorMeshes, ...this.wallMeshes]) {
+    for (const list of [this.floorMeshes, this.wallMeshes]) {
+      for (const mesh of list) {
         if (mesh === null) continue;
         // Меш прежней арены уходит и из реестра теневых кастеров (REND-8): в
         // сцене его больше нет, а оставшаяся ссылка держала бы снятую геометрию
-        // и считала бы её кадру — тем же порядком, что у пересборки чанка.
-        this.shadows?.dropCaster(mesh);
-        ctx.scene.remove(mesh);
+        // и считала бы её кадру — тем же порядком, что у пересборки чанка. На
+        // сносе реестр не трогается вовсе: своё освещение снимает само (REND-31).
+        if (dropCasters) this.shadows?.dropCaster(mesh);
+        ctx?.scene.remove(mesh);
         mesh.geometry.dispose();
       }
     }
+  }
+
+  /** Другая арена: сцена очищается и раскладка чанков считается заново. */
+  private resetGrid(next: TerrainGrid): void {
+    this.clearMeshes(true);
     this.grid = next;
     this.floor = new Uint8Array(next.floor);
     this.chunksX = Math.ceil(next.width / this.chunkSize);

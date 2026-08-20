@@ -190,6 +190,24 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     this.applyResolved(this.current);
   }
 
+  /**
+   * Снос подсистемы (REND-31): построенные карты теней обоих источников с их
+   * текстурами глубины — их three строит на первом теневом проходе и сам
+   * никогда не освобождает (см. `releaseShadowMap`), — и сами источники со
+   * сцены. Реестры кастеров чистятся здесь же: корни в них принадлежат
+   * подсистемам-владельцам, а ссылки на них — этой (REND-30).
+   */
+  dispose(): void {
+    for (const light of [this.sun, this.sunDynamic]) {
+      releaseShadowMap(light);
+      light.target.removeFromParent();
+      light.removeFromParent();
+    }
+    this.ambient.removeFromParent();
+    this.staticRoots.clear();
+    this.dynamicRoots.clear();
+  }
+
   /** Свет от тика не зависит: доставка presentation-состояния ему не адресована. */
   syncTick(): void {
     // намеренно пусто (REND-8): источники сцены живут конфигурацией, а не тиком

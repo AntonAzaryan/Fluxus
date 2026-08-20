@@ -689,6 +689,46 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     this.options.surface?.init(ctx);
   }
 
+  /**
+   * Снос подсистемы (REND-31). Порядок несущий: сперва инстансы обоих пулов
+   * обычным удалением (REND-3) — с ними уходят fade-копии материалов, скины и
+   * записи батчей, — затем сами батчи, и только потом разделяемые данные
+   * ассетов. Обратный порядок сломал бы правило `ModelBatch.dispose`: батч
+   * снимает чужие атрибуты с геометрии ассета ДО её освобождения (REND-3), и
+   * освободи ассет раньше — снимать было бы уже не с чего.
+   *
+   * Источник поверхности и приёмник теневых кастеров приходят опцией сборки и
+   * принадлежат ей: подсистема лишь сообщает им об ушедших объектах тем же
+   * путём, каким сообщает в матче.
+   */
+  dispose(): void {
+    for (const pool of [this.instances, this.decorations]) {
+      for (const record of pool.values()) this.remove(record);
+      pool.clear();
+    }
+    for (const entry of this.batches.values()) this.releaseBatch(entry);
+    this.batches.clear();
+    for (const entry of this.shared.values()) this.releaseShared(entry);
+    this.shared.clear();
+  }
+
+  /**
+   * Освобождает разделяемые данные ассета модели (REND-3): буферы геометрии её
+   * частей, материалы ассета и VAT-текстуру, общую всем его батчам. Разобранный
+   * ассет при этом остаётся в кэше модуля ассетов (ASSET-2) — он не наш, и
+   * следующая сцена читает его оттуда, а не грузит заново.
+   */
+  private releaseShared(entry: SharedEntry): void {
+    entry.baseSkin?.dispose();
+    entry.baseSkin = null;
+    entry.vatTexture?.dispose();
+    entry.vatTexture = null;
+    for (const mesh of entry.data?.meshes ?? []) mesh.geometry.dispose();
+    for (const material of entry.data?.materials ?? []) material.dispose();
+    entry.waiting.clear();
+    entry.data = null;
+  }
+
   // ------------------------------------------------------------- syncTick
 
   syncTick(view: TickView): void {
@@ -1325,6 +1365,62 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // размещённой декорации (REND-17, ED-15).
     this.resupply(ctx, this.instances, cost);
     this.resupply(ctx, this.decorations, cost);
+    // Переподача — единственная точка, где ключи батчей устаревают, и она же
+    // их пересматривает (REND-31): в матче её не зовут ни разу, и кэш батчей
+    // ведёт себя ровно как прежде.
+    this.retireBatches();
+  }
+
+  /**
+   * Пересмотр кэша батчей на переподаче манифеста (REND-31): освобождается
+   * батч, ключ которого ТЕКУЩИЙ манифест больше не порождает и в котором не
+   * нарисовано ни одной записи. Ключ производен от авторских данных (модель ×
+   * скрытые части × вид × ярус кастера), и без этого прохода каждая правка
+   * модели или набора рисуемых частей записи оставляла бы за собой буферы
+   * `InstancedMesh` навсегда.
+   *
+   * Достижимое множество считается ПО МАНИФЕСТУ, а не по живым записям: батч
+   * вида, все инстансы которого сейчас сняты, остаётся в кэше — иначе правило
+   * «опустевший батч переживает последнего пользователя» (REND-20) отменялось
+   * бы с другой стороны. Оба яруса кастера берутся без разбора: ярус декорации
+   * производен от наличия анимаций (REND-4), и второго места, где живёт то же
+   * правило, заводить незачем — надмножество ошибается в безопасную сторону,
+   * оставляя лишнее, а не освобождая нужное.
+   */
+  private retireBatches(): void {
+    if (this.batches.size === 0) return;
+    const reachable = new Set<string>();
+    for (const kind of visualKinds(this.manifest)) {
+      const visual = resolveVisual(this.manifest, kind);
+      reachable.add(batchKey(visual, kind, 'static'));
+      reachable.add(batchKey(visual, kind, 'dynamic'));
+    }
+    for (const [key, entry] of this.batches) {
+      // Проверка на непустой батч — страховка вглубь, а не ветка со своим
+      // случаем: сочетание «ключ недостижим, а записи в батче есть» не
+      // построить — всё, из чего сложен ключ, переводит запись в другой батч
+      // через `rebuildsInstance`, а запись, чей вид исчез из манифеста, из
+      // батча уходит вовсе. Проверка стоит потому, что цена ошибки в множестве
+      // достижимых ключей — погашенное нарисованное, а цена страховки — одно
+      // сравнение на запись кэша.
+      if (reachable.has(key) || entry.batch.count > 0) continue;
+      this.releaseBatch(entry);
+      this.batches.delete(key);
+    }
+  }
+
+  /**
+   * Освобождает запись кэша батчей (REND-31): живой набор вариантов скина,
+   * массивы текстур слоёв, которые он поставил в материалы, и сам батч с его
+   * геометриями и материалами. Массивы принадлежат БАТЧУ, а не ассету (REND-3),
+   * поэтому уходят вместе с ним; разделяемые буферы модели не трогаются —
+   * их снимает `ModelBatch.dispose` со своей геометрии и отдаёт кэшу ассетов.
+   */
+  private releaseBatch(entry: BatchEntry): void {
+    entry.skins.dispose();
+    for (const texture of entry.skinTextures) texture.dispose();
+    entry.skinTextures.length = 0;
+    entry.batch.dispose();
   }
 
   private resupply(
@@ -2019,9 +2115,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const existing = this.batches.get(key);
     if (existing !== undefined) {
       // Батч из кэша мог опустеть ЕЩЁ ДО правки скинов записи — например,
-      // когда переподача сперва увела запись в другой набор частей, а затем
-      // вернула обратно. Набор вариантов сводится с записью здесь же, а не
-      // только в `syncBatchEntry`: пустой батч тот проход не видит (REND-17).
+      // когда все инстансы вида ушли из доставки, а следом приехала переподача,
+      // правившая таблицу скинов этой записи: ключ она не меняет, батч из кэша
+      // не уходит (REND-31), а `syncBatchEntry` идёт по ЖИВЫМ записям и пустого
+      // батча не видит вовсе. Поэтому набор вариантов сводится с записью здесь
+      // же — иначе первый же респавн рисовался бы прежними слоями (REND-17).
       this.syncBatchSkins(existing, visual);
       return existing;
     }
@@ -2038,10 +2136,14 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       ),
     );
 
+    // Уровни приходят вместе с владением (REND-31): геометрии цепочки LOD
+    // построены для этого батча и отдаются его сносом, части модели — нет.
+    const { levels, owned } = batchLevels(shared.meshes, derivatives.lod, visual?.hiddenParts);
     const batch = new ModelBatch({
       materials,
       partVisibility: derivatives.partVisibility,
-      levels: batchLevels(shared.meshes, derivatives.lod, visual?.hiddenParts),
+      levels,
+      ownedGeometries: owned,
       // Глубина теневого прохода — тем же вершинным преобразованием VAT, что
       // кадр: иначе тень записи застыла бы в позе покоя (design D4).
       depthMaterial: createVatDepthMaterial(vatTexture),
@@ -2284,13 +2386,29 @@ function boundsFromBaked(derivatives: BakedDerivatives): ModelBounds {
  * decoration, и prop; цена — +1 draw call на такую модель.
  */
 function batchKeyOf(record: InstanceRecord): string {
-  const hidden = [...(record.visual?.hiddenParts ?? [])].sort((a, b) => a - b).join(',');
-  return JSON.stringify([
-    record.visual?.model ?? '',
-    hidden,
-    record.kind ?? '',
-    casterTierOf(record),
-  ]);
+  return batchKey(record.visual, record.kind ?? '', casterTierOf(record));
+}
+
+/**
+ * Ключ батча из его слагаемых. Отдельной функцией потому, что то же множество
+ * ключей считается и НЕ ПО ЗАПИСЯМ: пересмотр кэша на переподаче (REND-31)
+ * спрашивает у манифеста, порождает ли он такой ключ, — и вторая сборка ключа
+ * для этого разошлась бы с первой при первой же правке состава ключа.
+ */
+function batchKey(
+  visual: EntityVisual | undefined,
+  kind: string,
+  tier: ShadowCasterTier,
+): string {
+  const hidden = [...(visual?.hiddenParts ?? [])].sort((a, b) => a - b).join(',');
+  return JSON.stringify([visual?.model ?? '', hidden, kind, tier]);
+}
+
+/** Ключи обоих разделов манифеста (ASSET-9): пространство имён у них одно. */
+function visualKinds(manifest: VisualManifest): readonly string[] {
+  const entities = Object.keys(manifest.entities);
+  const decorations = manifest.decorations;
+  return decorations === undefined ? entities : [...entities, ...Object.keys(decorations)];
 }
 
 /**

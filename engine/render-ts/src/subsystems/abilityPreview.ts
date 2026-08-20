@@ -270,6 +270,40 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
   }
 
   /**
+   * Снос подсистемы (REND-31): разделяемые геометрии фигур — круг, квадрат и
+   * секторы шагов, построенные по одному разу на шаг, — и четыре общих
+   * материала контуров и заливок. Пулы фигур своих ресурсов не держат: у меша
+   * пула и геометрия, и материал разделяемые (REND-28).
+   */
+  dispose(): void {
+    for (const shape of [this.circle, this.square, ...this.sectors.values()]) {
+      shape?.fill.dispose();
+      shape?.outline.dispose();
+    }
+    this.circle = null;
+    this.square = null;
+    this.sectors.clear();
+    for (const material of [
+      this.confirmedMaterial,
+      this.currentMaterial,
+      this.confirmedFill,
+      this.currentFill,
+    ]) {
+      material?.dispose();
+    }
+    this.confirmedMaterial = null;
+    this.currentMaterial = null;
+    this.confirmedFill = null;
+    this.currentFill = null;
+    this.group.clear();
+    this.lines.length = 0;
+    this.fills.length = 0;
+    this.used = 0;
+    this.group.removeFromParent();
+    this.attached = false;
+  }
+
+  /**
    * Материал заливки: та же палитра, что у контура (`this.colors`), — меняется
    * только плотность. Стороны обе: фигура лежит на рельефе, и с любой стороны
    * камеры это одна и та же зона; глубину заливка не пишет, чтобы не резать

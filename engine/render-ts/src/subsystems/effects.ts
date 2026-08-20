@@ -204,6 +204,24 @@ export class EffectsSubsystem implements RenderSubsystem {
   }
 
   /**
+   * Снос подсистемы (REND-31): материалы всех заведённых мешей — они
+   * пер-инстансны (цвет и альфа записи), — и одна разделяемая геометрия
+   * примитива. Живые оболочки и вспышки сперва возвращаются в пул, чтобы
+   * освобождение шло одним проходом по нему, а не тремя по разным спискам.
+   */
+  dispose(): void {
+    for (const shell of this.shells.values()) this.release(shell.node);
+    this.shells.clear();
+    for (const flash of this.flashes) this.release(flash.node);
+    this.flashes = [];
+    for (const node of this.pool) node.material.dispose();
+    this.pool.length = 0;
+    this.geometry?.dispose();
+    this.geometry = null;
+    this.group.removeFromParent();
+  }
+
+  /**
    * Сведение с доставленным тиком (REND-23): оболочки — с набором сущностей,
    * вспышки — с событиями честного прохода. Разрыв непрерывности гасит
    * проигрываемое: доигрывать вспышку через перемотку нечего (REND-2).

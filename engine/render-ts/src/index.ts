@@ -200,14 +200,8 @@ export type { InstancePose, ModelInstanceView, ModelsOptions } from './subsystem
 export { FogSubsystem } from './subsystems/fog.js';
 export { DEFAULT_FOG_CONFIG, resolveFogConfig } from './fog/config.js';
 export type { FogRenderConfig } from './fog/config.js';
-export type {
-  FogLayerCanvas,
-  FogLayerContext,
-  FogMinimapLayer,
-  FogRendererLike,
-  FogStatNames,
-  FogSubsystemOptions,
-} from './subsystems/fog.js';
+export type { FogRendererLike, FogStatNames, FogSubsystemOptions } from './subsystems/fog.js';
+export type { FogLayerCanvas, FogLayerContext, FogMinimapLayer } from './fog/layer.js';
 export { VisibilityMask, edgeGradient, fogRectOf, fogSegmentsOf, segmentCasts } from './fog/mask.js';
 export type { FogObserver, FogSegment, FogWorldRect } from './fog/mask.js';
 
