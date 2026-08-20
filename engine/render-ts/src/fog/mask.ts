@@ -164,6 +164,13 @@ export class VisibilityMask {
    * путь перестройки не аллоцирует.
    */
   private readonly depth = new Float32Array(SHADOW_BINS);
+  /**
+   * Тот же буфер, уже свёрнутый минимумом по тройке соседних бинов, — то, что
+   * и читает цикл по текселям (консервативность FOW-9). Свёртка живёт здесь, а
+   * не в цикле, потому что бинов тысяча, а текселей — сотня тысяч: одна и та же
+   * тройка иначе пересчитывалась бы сотнями раз.
+   */
+  private readonly depthMin = new Float32Array(SHADOW_BINS);
   /** Переиспользуемый буфер разделяемого блюра `smooth()`. */
   private temp: Uint8Array | null = null;
 
@@ -218,13 +225,29 @@ export class VisibilityMask {
 
     // Полярный depth-буфер наблюдателя (design D3): бины, пройденные
     // растеризацией, возвращаются наверх числом — счёт идёт не в цикле по
-    // бинам, а сложением на отрезок (PERF-3).
+    // бинам, а сложением на отрезок (PERF-3). Дистанции лежат в КВАДРАТАХ —
+    // см. `rasterizeArc`: сравнение с текселем тогда идёт по `distSq`, и
+    // корень из него не берётся вовсе.
     const depth = this.depth;
+    const depthMin = this.depthMin;
     let shadowRays = 0;
+    // Ближайшая тень ЛЮБОГО направления: тексель ближе неё не затенён ничем, и
+    // спрашивать у него угол незачем — а угол здесь единственный `atan2` на
+    // тексель, самая дорогая операция цикла.
+    let nearestShadowSq = Number.POSITIVE_INFINITY;
     if (near.length > 0) {
       depth.fill(Number.POSITIVE_INFINITY);
       for (const segment of near) {
         shadowRays += this.rasterizeSegment(observer.x, observer.y, segment);
+      }
+      for (let bin = 0; bin < SHADOW_BINS; bin++) {
+        const value = Math.min(
+          depth[bin]!,
+          depth[bin === 0 ? SHADOW_BINS - 1 : bin - 1]!,
+          depth[bin === SHADOW_BINS - 1 ? 0 : bin + 1]!,
+        );
+        depthMin[bin] = value;
+        if (value < nearestShadowSq) nearestShadowSq = value;
       }
     }
 
@@ -246,39 +269,55 @@ export class VisibilityMask {
     // доставку — перестановка сущностей сдвигает счётчик, не меняя ни картинки,
     // ни настоящей стоимости. Диффом эталона по одному этому полю удорожание не
     // доказывается (`cost.ts`).
+    // Порог ПОЛНОГО света в квадрате расстояния: до него `edgeGradient` равен
+    // единице тождественно, то есть значение текселя — 255, и ни корень, ни
+    // сглаживание кромки его не уточняют. На арене демо (радиус обзора 24,
+    // кромка 2,5) внутрь порога попадает ~80 % круга — ровно столько текселей
+    // проходят цикл без `Math.sqrt`. Вырожденные случаи разведены: нулевая
+    // кромка делает полным светом весь круг, кромка шире радиуса — ни один
+    // тексель (порог −1 недостижим для квадрата расстояния).
+    const inner = radius - edgeWidth;
+    const innerSq = edgeWidth <= 0 ? radiusSq : inner > 0 ? inner * inner : -1;
+    const data = this.data;
+    const width = this.width;
+    // Центр наблюдателя и начало растра — в локальных, а не полями объекта:
+    // цикл читает их сотню тысяч раз за перестройку.
+    const ox = observer.x;
+    const oy = observer.y;
+    const rectX = this.rect.x;
+    const rectY = this.rect.y;
+    const shadowed = near.length > 0;
+    let written = 0;
     for (let ty = y0; ty <= y1; ty++) {
-      const wy = this.rect.y + (ty + 0.5) / scale;
-      const dy = wy - observer.y;
-      const row = ty * this.width;
+      const wy = rectY + (ty + 0.5) / scale;
+      const dy = wy - oy;
+      const dySq = dy * dy;
+      const row = ty * width;
       for (let tx = x0; tx <= x1; tx++) {
-        const wx = this.rect.x + (tx + 0.5) / scale;
-        const dx = wx - observer.x;
-        const distSq = dx * dx + dy * dy;
+        const dx = rectX + (tx + 0.5) / scale - ox;
+        const distSq = dx * dx + dySq;
         if (distSq >= radiusSq) continue;
-        const current = this.data[row + tx]!;
+        const current = data[row + tx]!;
         if (current === 255) continue; // уже полностью открыт другим наблюдателем
-        const r = Math.sqrt(distSq);
-        const value = Math.round(edgeGradient(r, radius, edgeWidth) * 255);
+        const value =
+          distSq <= innerSq
+            ? 255
+            : Math.round(edgeGradient(Math.sqrt(distSq), radius, edgeWidth) * 255);
         if (value <= current) continue;
-        if (near.length === 0) {
-          this.data[row + tx] = value;
-          if (cost !== undefined) cost.fogMaskTexelsWritten++;
-          continue;
+        if (shadowed && distSq >= nearestShadowSq) {
+          // Дистанция тени — минимум своего и соседних бинов: консервативность
+          // на разрыве силуэта (интерполяция дала бы свет в тени), тень шире, а
+          // не уже (FOW-9). Тройка свёрнута до цикла (`depthMin`), сравнение
+          // идёт в КВАДРАТАХ — буфер хранит их же: возведение монотонно на
+          // неотрицательных, и срез тот же самый.
+          const bin = binOf(Math.atan2(dy, dx));
+          if (distSq >= depthMin[bin]!) continue; // за тенью — срез жёсткий, полутон делает smooth()
         }
-        // Дистанция тени — минимум своего и соседних бинов: консервативность
-        // на разрыве силуэта (интерполяция дала бы свет в тени), тень шире, а
-        // не уже (FOW-9).
-        const bin = binOf(Math.atan2(dy, dx));
-        const shadowDist = Math.min(
-          depth[bin]!,
-          depth[bin === 0 ? SHADOW_BINS - 1 : bin - 1]!,
-          depth[bin === SHADOW_BINS - 1 ? 0 : bin + 1]!,
-        );
-        if (r >= shadowDist) continue; // тексель за тенью — срез жёсткий, полутон делает smooth()
-        this.data[row + tx] = value;
-        if (cost !== undefined) cost.fogMaskTexelsWritten++;
+        data[row + tx] = value;
+        written++;
       }
     }
+    if (cost !== undefined) cost.fogMaskTexelsWritten += written;
   }
 
   /**
@@ -320,6 +359,12 @@ export class VisibilityMask {
   /**
    * Одна дуга интервала: бины подряд, в бин — минимум дистанции (design D3).
    * Возвращает число пройденных бинов — объём работы дуги (PERF-3).
+   *
+   * Хранится КВАДРАТ дистанции, а не она сама: единственный читатель буфера —
+   * цикл по текселям `reveal`, а у него на руках квадрат расстояния до
+   * наблюдателя. Возведение монотонно на неотрицательных, поэтому срез тени
+   * тот же самый, зато корень не берётся ни разу на тексель. Бины сравниваются
+   * между собой тем же минимумом — порядок квадраты не меняют.
    */
   private rasterizeArc(
     ox: number,
@@ -338,7 +383,8 @@ export class VisibilityMask {
       const t = offset / along;
       // Пересечение позади луча — краевой бин смотрит от линии; тени нет.
       if (t <= 0) continue;
-      if (t < depth[bin]!) depth[bin] = t;
+      const tSq = t * t;
+      if (tSq < depth[bin]!) depth[bin] = tSq;
     }
     return binHi - binLo + 1;
   }
@@ -368,14 +414,17 @@ export class VisibilityMask {
       return SHADOW_BINS;
     }
     const dist = at < lo ? lo - at : at - hi;
+    // В буфере — квадраты (см. `rasterizeArc`); ноль полного перекрытия выше
+    // квадратом и остаётся нулём.
+    const distSq = dist * dist;
     const toward = at < lo ? 1 : -1;
     const angle = vertical ? Math.atan2(toward, 0) : Math.atan2(0, toward);
     const bin = binOf(angle);
     const prev = bin === 0 ? SHADOW_BINS - 1 : bin - 1;
     const next = bin === SHADOW_BINS - 1 ? 0 : bin + 1;
-    if (dist < depth[bin]!) depth[bin] = dist;
-    if (dist < depth[prev]!) depth[prev] = dist;
-    if (dist < depth[next]!) depth[next] = dist;
+    if (distSq < depth[bin]!) depth[bin] = distSq;
+    if (distSq < depth[prev]!) depth[prev] = distSq;
+    if (distSq < depth[next]!) depth[next] = distSq;
     return 3;
   }
 
@@ -400,12 +449,19 @@ export class VisibilityMask {
       this.temp = new Uint8Array(data.length);
     }
     const temp = this.temp;
+    const last = width - 1;
     for (let y = 0; y < height; y++) {
       const row = y * width;
+      // Скользящее окно вместо трёх чтений на тексель: горизонтальный проход
+      // читает подряд, и сосед слева — это середина прошлого шага. Края
+      // повторяют себя ровно как прежние зажимы индекса.
+      let left = data[row]!;
+      let mid = left;
       for (let x = 0; x < width; x++) {
-        const left = data[row + (x === 0 ? 0 : x - 1)]!;
-        const right = data[row + (x === width - 1 ? x : x + 1)]!;
-        temp[row + x] = (left + data[row + x]! + right + 1) / 3;
+        const right = x === last ? mid : data[row + x + 1]!;
+        temp[row + x] = (left + mid + right + 1) / 3;
+        left = mid;
+        mid = right;
       }
     }
     for (let y = 0; y < height; y++) {
