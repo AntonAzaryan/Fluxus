@@ -255,6 +255,27 @@ describe('входы considerations (BOT-9)', () => {
     expect(value('edgeProximity', world({ arenaRadius: undefined }))).toBe(0);
   });
 
+  /**
+   * Без шкалы боя обе дистанционные величины не значат ничего, и говорят они
+   * это по-разному: `enemyDistance` нулём («сравнивать не с чем» — растущая
+   * кривая даёт ноль), `threatDistance` единицей («уклоняться не от чего» —
+   * убывающая кривая даёт ноль). Профиль такую дистанцию боя объявить не вправе
+   * (валидация BOT-6/BOT-9), и ветки эти — защита от собранного руками профиля,
+   * а не настройка.
+   */
+  it('без шкалы боя дистанционные входы не выдают выводов', () => {
+    const base = testProfile();
+    const scaleless: ScoringContext = {
+      profile: { ...base, movement: { ...base.movement, engageRange: 0 } },
+      center: { x: 0, y: 0 },
+    };
+    const scene = world({ enemies: [enemyAt(4)], threats: [{ id: 3, x: 1, y: 0, vx: -1, vy: 0, distance: 1, closing: true }] });
+    const at = (input: BotConsideration['input']): number =>
+      inputValue({ input, curve: RISING, weight: 1 }, scene, scaleless);
+    expect(at('enemyDistance')).toBe(0);
+    expect(at('threatDistance')).toBe(1);
+  });
+
   it('abilityCooldownFraction читает СВОЙ слот из своего снапшота (ABIL-7)', () => {
     const scene = world({ slots: [{ slotIndex: 2, phase: -1, staged: 0, cooldown: 0.75 }] });
     expect(value('abilityCooldownFraction', scene, 2)).toBeCloseTo(0.75, 12);

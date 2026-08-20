@@ -16,6 +16,8 @@ import { Perception, type PerceivedWorld } from '../src/brains/layers/perception
 import { MicroLayer } from '../src/brains/layers/micro.js';
 import { planFor } from '../src/brains/layers/plan.js';
 import { brainRandom } from '../src/brains/layers/random.js';
+import { inputValue } from '../src/brains/evaluated/scoring.js';
+import { readWorldView } from '../src/worldView.js';
 import type { BotProfile } from '../src/profile.js';
 import {
   STEP,
@@ -23,7 +25,10 @@ import {
   duelConfig,
   fogConfig,
   recordSteps,
+  slotConfig,
   testProfile,
+  SLOT_COOLDOWNS,
+  SLOT_OWNERS,
 } from './fixtures.js';
 
 const SELF = { playerId: 'bot-1', slot: 1, tickRate: 60 };
@@ -275,5 +280,63 @@ describe('микро-слой на Yuka (задача 3.3)', () => {
       maxDrift = Math.max(maxDrift, Math.abs(layer.step(plan, scene, tick).aimRadians));
     }
     expect(maxDrift).toBeLessThanOrEqual(limit);
+  });
+});
+
+/**
+ * Слоты способностей в модели мира (ABIL-1, ABIL-7): мозг читает СВОЙ слот из
+ * СВОЕГО отфильтрованного снапшота (BOT-3) — фазу, накопленные шаги и долю
+ * оставшегося кулдауна, которой словарь входов кормит `abilityCooldownFraction`
+ * (BOT-9).
+ *
+ * Проверяется это на настоящем шаге клиента, а не на литеральном
+ * `PerceivedWorld`: доля считается ЗДЕСЬ, из полей мира, и опечатка в имени поля
+ * или в отношении оставила бы вход навсегда нулевым — молча и незаметно для
+ * остальных тестов.
+ */
+describe('слоты способностей в модели мира (ABIL-1, ABIL-7)', () => {
+  it('доля оставшегося кулдауна читается со своих слотов, чужие отфильтрованы', async () => {
+    const recorded = await recordSteps(slotConfig(), 3);
+    const step = recorded.steps[recorded.steps.length - 1]!;
+    const view = readWorldView(step, recorded.slot)!;
+    expect(view.self).toBeDefined();
+    // Владельцами слотов фикстура назвала сущности героев. Утверждение
+    // отдельное: иначе смена нумерации сущностей оставила бы `view.slots`
+    // пустым, и тест «проходил» бы, ничего не проверяя.
+    expect(SLOT_OWNERS).toContain(view.self!.id);
+
+    const own = [...view.slots].sort((a, b) => a.slotIndex - b.slotIndex);
+    // Слотов ровно три — свои. Столько же лежит в снапшоте у второго героя, и
+    // не попали они сюда фильтром по владельцу, а не отсутствием в мире.
+    expect(own.map((slot) => slot.slotIndex)).toEqual(SLOT_COOLDOWNS.map((entry) => entry.slotIndex));
+    for (const [index, entry] of SLOT_COOLDOWNS.entries()) {
+      expect(own[index]!.cooldown, `слот ${entry.slotIndex}`).toBeCloseTo(entry.cooldown, 12);
+    }
+  });
+
+  it('вход словаря берёт долю того слота, который назвал документ (BOT-9)', async () => {
+    const recorded = await recordSteps(slotConfig(), 3);
+    const step = recorded.steps[recorded.steps.length - 1]!;
+    const view = readWorldView(step, recorded.slot)!;
+    const scene: PerceivedWorld = {
+      tick: 0,
+      observedTick: 0,
+      self: view.self!,
+      slots: view.slots,
+      enemies: [],
+      threats: [],
+      arenaRadius: view.arenaRadius,
+      carrying: view.carrying,
+    };
+    const context = { profile: testProfile(), center: { x: 0, y: 0 } };
+    const value = (slot: number): number =>
+      inputValue(
+        { input: 'abilityCooldownFraction', slot, curve: { type: 'linear', slope: 1, intercept: 0 }, weight: 1 },
+        scene,
+        context,
+      );
+    for (const entry of SLOT_COOLDOWNS) expect(value(entry.slotIndex), `слот ${entry.slotIndex}`).toBeCloseTo(entry.cooldown, 12);
+    // Слота, которого в снапшоте нет, вход читает как «ничто не мешает».
+    expect(value(9)).toBe(0);
   });
 });

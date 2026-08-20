@@ -81,9 +81,17 @@ export function inputValue(
     case 'enemyDistance': {
       const enemy = nearestEnemy(world);
       const range = profile.movement.engageRange;
+      // ШКАЛЫ НЕТ — сравнивать не с чем, и вход не значит ничего: ноль здесь
+      // говорит «ни один вывод о дистанции не обоснован», а не «враг вплотную».
+      // Профиль такую дистанцию боя объявить не вправе (BOT-9, `profile.ts`:
+      // масштаб входов проверяется валидацией), и ветка держится защитой от
+      // руками собранного профиля, а не поведением, которое кто-то настраивает.
+      if (range <= 0) return 0;
+      // Врага не видно и не помнится — «дальше некуда»: давить и кайтить не на
+      // кого, и говорят это ворота `enemyKnown`, а не подмена расстояния.
+      if (enemy === undefined) return 1;
       // Масштаб — ДВЕ дистанции боя: на ней вход достигает единицы, и вся
       // «шкала боя» — от вплотную до вдвое дальше желаемого — ложится в [0, 1].
-      if (enemy === undefined || range <= 0) return 1;
       return clamp01(Math.hypot(enemy.x - world.self.x, enemy.y - world.self.y) / (2 * range));
     }
     case 'threatClosing':
@@ -91,8 +99,10 @@ export function inputValue(
     case 'threatDistance': {
       const threat = nearestThreat(world);
       const range = profile.movement.engageRange;
-      // Ни одного сближающегося снаряда — «бесконечно далеко», то есть единица:
-      // убывающая кривая даёт на ней ноль, и уклоняться не от чего.
+      // Та же защита, что у `enemyDistance`, и тот же смысл: без шкалы вывода о
+      // дистанции нет. Ноль убывающая кривая читает как «снаряд вплотную»,
+      // поэтому «нечего сказать» здесь выражается ЕДИНИЦЕЙ — уклоняться не от
+      // чего, ровно как при отсутствии сближающегося снаряда.
       if (threat === undefined || range <= 0) return 1;
       return clamp01(threat.distance / range);
     }

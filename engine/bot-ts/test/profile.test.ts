@@ -198,6 +198,19 @@ describe('валидация профиля на конструировании 
     expect(() => parseBotProfile('easy')).toThrow(/ожидался объект/);
   });
 
+  /**
+   * Дистанция боя — не только «где бот хочет драться»: этим же числом словарь
+   * входов нормирует расстояния (BOT-9). Ноль отменяет шкалу, и документ
+   * поведения поверх такого профиля вычислить нечем — это находка, а не
+   * молчаливое умолчание кода.
+   */
+  it('нулевая дистанция боя — находка: она масштаб входов документа', () => {
+    const profile = valid();
+    const movement = { ...(profile.movement as Record<string, unknown>), engageRange: 0 };
+    expect(() => parseBotProfile({ ...profile, movement })).toThrow(/engageRange/);
+    expect(() => parseBotProfile({ ...profile, movement })).toThrow(/МАСШТАБ/);
+  });
+
   it('дробные тики отвергаются: буфер наблюдений меряется тиками', () => {
     const profile = valid();
     const reaction = { ...(profile.reaction as Record<string, unknown>), delayTicks: 1.5 };

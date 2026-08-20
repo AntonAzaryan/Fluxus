@@ -7,7 +7,14 @@
  * бота, а не на сомнительную сцену. Контентом эти фикстуры не являются (CONT-4)
  * и в `content/` не переезжают.
  */
-import { contentPackHash, fixed, type SceneDef } from '@game-mvp/core';
+import {
+  ABILITY_COOLDOWN_COMPONENT,
+  ABILITY_SLOT_COMPONENT,
+  NO_PHASE,
+  contentPackHash,
+  fixed,
+  type SceneDef,
+} from '@game-mvp/core';
 import {
   ClientHost,
   LoopbackHub,
@@ -216,6 +223,92 @@ export function fogConfig(overrides: Partial<MatchConfig> = {}, visionRadius = 1
     ],
     ...overrides,
   });
+}
+
+/**
+ * Сцена со СЛОТАМИ СПОСОБНОСТЕЙ (ABIL-1): компоненты платформы объявлены
+ * сценой, а сущности-слоты спавнит `initial` — фикстуре не нужны ни определения
+ * способностей, ни их автомат, ей нужен слот с кулдауном в снапшоте.
+ *
+ * Имена компонентов берутся константами ядра, а не строками: переименование в
+ * платформе обязано ронять эту фикстуру, а не тихо оставлять `view.slots`
+ * пустым.
+ */
+export function slotScene(): SceneDef {
+  const scene = duelScene();
+  return {
+    ...scene,
+    components: [
+      ...scene.components,
+      {
+        name: ABILITY_SLOT_COMPONENT,
+        fields: { owner: 'entity', slotIndex: 'i32', phase: 'i32', staged: 'i32' },
+      },
+      { name: ABILITY_COOLDOWN_COMPONENT, fields: { remaining: 'i32', total: 'i32' } },
+    ],
+    prefabs: [
+      ...(scene.prefabs ?? []),
+      {
+        name: 'Slot',
+        components: {
+          [ABILITY_SLOT_COMPONENT]: { owner: 0, slotIndex: 0, phase: NO_PHASE, staged: 0 },
+          [ABILITY_COOLDOWN_COMPONENT]: { remaining: 0, total: 0 },
+        },
+      },
+      {
+        // Слот БЕЗ компонента кулдауна: «кулдауна нет» — законное состояние, и
+        // читаться оно обязано нулём, а не отсутствием слота.
+        name: 'BareSlot',
+        components: {
+          [ABILITY_SLOT_COMPONENT]: { owner: 0, slotIndex: 0, phase: NO_PHASE, staged: 0 },
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * Кулдауны слотов фикстуры по индексу: половина, взведённый до упора и слот без
+ * компонента вовсе. Те же числа даются ОБОИМ героям — так проверка не зависит
+ * от того, какая сущность досталась боту, а лишний набор чужих слотов заодно
+ * пиннит фильтр по владельцу (BOT-3).
+ */
+export const SLOT_COOLDOWNS = [
+  { slotIndex: 0, remaining: 30, total: 60, cooldown: 0.5 },
+  { slotIndex: 1, remaining: 90, total: 60, cooldown: 1 },
+  { slotIndex: 2, remaining: 0, total: 0, cooldown: 0 },
+] as const;
+
+/**
+ * Сущности героев фикстуры: `worldInit` детерминирован, и в этой сцене перед
+ * `initial` спавнится носитель арены — поэтому герои получают id 1 и 2, а не 0
+ * и 1. Числа тут неизбежны: владельца слота называет документ сцены, а
+ * `initial` ссылаться на «сущность, которую заспавнит соседняя запись» не умеет.
+ * Тест утверждает принадлежность своей сущности этому набору — смена порядка
+ * спавна обязана ронять его, а не оставлять слоты пустыми.
+ */
+export const SLOT_OWNERS = [1, 2] as const;
+
+/** Матч на сцене со слотами: по три слота каждому герою (ABIL-1, ABIL-7). */
+export function slotConfig(): MatchConfig {
+  const scene = slotScene();
+  const players = ['p1', 'bot-1'];
+  const heroes = players.map((_, slot) => ({
+    prefab: 'Hero',
+    overrides: { Player: { slot } },
+  }));
+  const slots = SLOT_OWNERS.flatMap((owner) =>
+    SLOT_COOLDOWNS.map((entry) => ({
+      prefab: entry.total === 0 ? 'BareSlot' : 'Slot',
+      overrides: {
+        [ABILITY_SLOT_COMPONENT]: { owner, slotIndex: entry.slotIndex },
+        ...(entry.total === 0
+          ? {}
+          : { [ABILITY_COOLDOWN_COMPONENT]: { remaining: entry.remaining, total: entry.total } }),
+      },
+    })),
+  );
+  return duelConfig({ scene, players, initial: [...heroes, ...slots] });
 }
 
 /**

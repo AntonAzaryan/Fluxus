@@ -1,7 +1,7 @@
 ## 1. Документ поведения: форма и валидация
 
 - [x] 1.1 Типы и константы документа поведения в `engine/bot-ts` (`behavior.ts`): `schema` v1, закрытые словари исполнителей (`pressure|kite|retreat|dodge`), входов (`enemyDistance`, `enemyKnown`, `threatDistance`, `threatClosing`, `edgeProximity`, `abilityCooldownFraction`) и кривых (`linear`, `quadratic`, `logistic`, `constant`) — цитаты BOT-8/BOT-9 в комментариях
-- [x] 1.2 Валидация документа по образцу `profile.ts` (структура находок, локали ru/en): обязательная `schema`, неизвестные исполнитель/вход/кривая — находка с именем, пустые considerations — находка
+- [x] 1.2 Валидация документа по образцу `profile.ts` (та же структура находок и тот же язык — русский, как у профиля): обязательная `schema`, неизвестные исполнитель/вход/кривая — находка с именем, пустые considerations — находка
 - [x] 1.3 Тесты валидации: валидный документ, каждая категория находок, неизвестная `schema` (BOT-8 «Документ прошлой версии»)
 
 ## 2. Evaluator-мозг
@@ -31,7 +31,7 @@
 
 ## 6. Гейт
 
-- [ ] 6.1 `npm run check` из корня зелёный (typecheck, eslint, knip, jscpd, depcruise, spec-graph, тесты); голдены не тронуты — мозг в эталоны не входит (BOT-5)
+- [x] 6.1 `npm run check` из корня зелёный (typecheck, eslint, knip, jscpd, depcruise, spec-graph, тесты); голдены не тронуты — мозг в эталоны не входит (BOT-5)
 
 ## Notes
 

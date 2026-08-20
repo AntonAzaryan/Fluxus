@@ -275,6 +275,9 @@ export interface BotMovementProfile {
    * против «кайтить» и на котором сближающийся снаряд уже страшен. Своим
    * числом, а не дальностью какой-нибудь из способностей: список способностей
    * дизайнер меняет, а желаемая дистанция боя — свойство самого бота.
+   *
+   * СТРОГО положительна (валидация): этим же числом словарь входов нормирует
+   * расстояния (BOT-9), и ноль отменил бы шкалу, а не приблизил бы бота.
    */
   readonly engageRange: number;
   /**
@@ -649,6 +652,27 @@ export function parseBotProfile(input: unknown, source = 'профиль бот�
   };
 
   checkCastTimings(profile, source, findings);
+  checkEngageRange(profile, source, findings);
   throwFindings('parseBotProfile (BOT-6)', findings);
   return profile;
+}
+
+/**
+ * Дистанция боя — не только «где бот хочет драться», но и МАСШТАБ, которым
+ * словарь входов нормирует расстояния (BOT-9, `brains/evaluated/scoring.ts`:
+ * `enemyDistance`, `threatDistance`). Ноль отменяет шкалу: обе величины
+ * перестают значить что-либо, и любая кривая документа поверх них — не политика,
+ * а деление на ноль, аккуратно завёрнутое в кламп.
+ *
+ * Поэтому это находка, а не молчаливое умолчание кода: профиль с нулевой
+ * дистанцией боя описывает бота, чей документ поведения нечем вычислить, и
+ * узнать об этом дизайнер обязан на конструировании, а не по странному выбору
+ * маршрута в матче.
+ */
+function checkEngageRange(profile: BotProfile, source: string, findings: Findings): void {
+  if (profile.movement.engageRange > 0) return;
+  findings.issues.push(
+    `${source}.movement.engageRange: ${profile.movement.engageRange} — дистанция боя есть МАСШТАБ ` +
+      `входов considerations (BOT-9): ноль отменяет шкалу, и «далеко ли враг» перестаёт значить что-либо`,
+  );
 }
