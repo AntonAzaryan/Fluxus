@@ -21,8 +21,14 @@ import {
   type Transport,
 } from '@game-mvp/net';
 import { BotHost, type BotSeat } from '../src/host.js';
+import {
+  BOT_BEHAVIOR_SCHEMA,
+  type BotBehaviorDocument,
+  type BotConsideration,
+  type BotCurve,
+} from '../src/behavior.js';
 import type { BotBrainFactory } from '../src/brain.js';
-import type { BotProfile } from '../src/profile.js';
+import { BOT_PROFILE_SCHEMA, type BotProfile } from '../src/profile.js';
 import { botTerrain, type BotTerrain } from '../src/terrainView.js';
 
 export const BUILD_ID = 'bot-build-0001';
@@ -363,10 +369,14 @@ export async function recordSteps(
  * нулевой стрейф), чтобы поведение читалось глазами. Способность одна и
  * простейшая — тап по видимому врагу; тесты, которым нужен состав побогаче,
  * передают свой список.
+ *
+ * Путь документа поведения (BOT-8) здесь чистая формальность формы: документ
+ * тестов приезжает мозгу опцией (`testBehavior`), а резолвить путь в дереве
+ * контента движку нечем и незачем (CONT-4).
  */
 export function testProfile(overrides: Partial<BotProfile> = {}): BotProfile {
   return {
-    schema: 2,
+    schema: BOT_PROFILE_SCHEMA,
     name: 'test',
     reaction: { delayTicks: 0, jitterTicks: 0, memoryTicks: 120 },
     aim: { noiseDegrees: 0, noisePeriodTicks: 10 },
@@ -382,12 +392,63 @@ export function testProfile(overrides: Partial<BotProfile> = {}): BotProfile {
     abilities: [
       { name: 'cast', button: 0, target: 'enemy', range: 8, holdTicks: 1, cooldownTicks: 30, weight: 1 },
     ],
-    utility: { pressure: 1, kite: 0.5, retreat: 1, dodge: 1 },
-    aggression: 0.6,
+    behavior: 'bots/behaviors/test.json',
     seed: 7,
     ...overrides,
   };
 }
+
+/**
+ * Документ поведения для тестов (BOT-8): те же четыре формулы, что у профиля
+ * тестов, — «давить тем сильнее, чем дальше враг», «кайтить тем сильнее, чем он
+ * ближе», «отступать у края», «уклоняться от сближающегося снаряда».
+ *
+ * Фикстура ДВИЖКА, а не контент (CONT-4): эталон движка обязан краснеть от
+ * правки движка, а не от ретюна числа геймдизайнером, поэтому документ живёт
+ * здесь, а не в `content/bots/`.
+ */
+export function testBehavior(overrides: Partial<BotBehaviorDocument> = {}): BotBehaviorDocument {
+  return {
+    schema: BOT_BEHAVIOR_SCHEMA,
+    name: 'test',
+    actions: [
+      {
+        executor: 'pressure',
+        considerations: [
+          KNOWN_ENEMY,
+          { input: 'enemyDistance', curve: RISING, weight: 0.6 },
+        ],
+      },
+      {
+        executor: 'kite',
+        considerations: [
+          KNOWN_ENEMY,
+          // Наклон −2: вход нормирован ДВУМЯ дистанциями боя, поэтому единицу
+          // кривая отдаёт вплотную, а ноль — ровно на дистанции боя.
+          { input: 'enemyDistance', curve: { type: 'linear', slope: -2, intercept: 1 }, weight: 0.2 },
+        ],
+      },
+      { executor: 'retreat', considerations: [{ input: 'edgeProximity', curve: RISING, weight: 1 }] },
+      {
+        executor: 'dodge',
+        considerations: [
+          { input: 'threatClosing', curve: RISING, weight: 1 },
+          { input: 'threatDistance', curve: FALLING, weight: 1 },
+        ],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+/** Тождественная кривая: оценка равна входу. */
+const RISING: BotCurve = { type: 'linear', slope: 1, intercept: 0 };
+
+/** Убывающая: единица при нуле входа, ноль при единице. */
+const FALLING: BotCurve = { type: 'linear', slope: -1, intercept: 1 };
+
+/** Ворота «врага видно вообще»: без них давить и кайтить не на кого. */
+const KNOWN_ENEMY: BotConsideration = { input: 'enemyKnown', curve: RISING, weight: 1 };
 
 /**
  * Рельеф с уступом: слева уровень 0, справа от `edgeX` — уровень 1, и всё это с

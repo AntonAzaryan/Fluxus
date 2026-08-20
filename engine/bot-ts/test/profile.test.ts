@@ -1,6 +1,7 @@
 /**
  * Профиль бота — контент, а не код (BOT-6): состав документа, его валидация на
- * конструировании и референсные профили дерева контента.
+ * конструировании и референсные профили дерева контента вместе с документами
+ * поведения, которые они называют (BOT-8).
  *
  * Референсные документы читаются с диска намеренно: «два уровня сложности
  * различаются только JSON-документами» проверяется на тех самых файлах, которые
@@ -11,17 +12,24 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { NO_PHASE } from '@game-mvp/core';
-import { BOT_BEHAVIORS, BOT_PROFILE_SCHEMA, parseBotProfile } from '../src/profile.js';
-import { AbilityLayer } from '../src/brains/classic/abilities.js';
-import { brainRandom } from '../src/brains/classic/random.js';
-import type { PerceivedWorld } from '../src/brains/classic/perception.js';
-import type { BehaviorPlan } from '../src/brains/classic/utility.js';
+import { BOT_PROFILE_SCHEMA, parseBotProfile } from '../src/profile.js';
+import { BOT_BEHAVIOR_SCHEMA, BOT_EXECUTORS, parseBotBehavior } from '../src/behavior.js';
+import { AbilityLayer } from '../src/brains/layers/abilities.js';
+import { brainRandom } from '../src/brains/layers/random.js';
+import type { PerceivedWorld } from '../src/brains/layers/perception.js';
+import type { BehaviorPlan } from '../src/brains/layers/plan.js';
 import type { BotAbilityProfile, BotProfile } from '../src/profile.js';
 
-const CONTENT_BOTS = join(dirname(fileURLToPath(import.meta.url)), '../../../content/bots');
+const CONTENT = join(dirname(fileURLToPath(import.meta.url)), '../../../content');
+const CONTENT_BOTS = join(CONTENT, 'bots');
 
 function read(name: string): unknown {
   return JSON.parse(readFileSync(join(CONTENT_BOTS, `${name}.json`), 'utf8'));
+}
+
+/** Документ поведения по пути, который назвал профиль (BOT-8): путь — данные. */
+function readBehavior(path: string): unknown {
+  return JSON.parse(readFileSync(join(CONTENT, path), 'utf8'));
 }
 
 function valid(): Record<string, unknown> {
@@ -33,14 +41,40 @@ describe('референсные профили контента (BOT-6)', () =>
     const profile = parseBotProfile(read(name), name);
     expect(profile.name).toBe(name);
     expect(profile.schema).toBe(BOT_PROFILE_SCHEMA);
-    for (const behavior of BOT_BEHAVIORS) {
-      expect(typeof profile.utility[behavior], behavior).toBe('number');
-    }
     // Ульта отката времени в списке отсутствовать ОБЯЗАНА: её бит ведёт хост
     // мира (`netcode` NET-11), и бот, дёргающий его, останавливал бы матч всем
     // участникам. Проверяется по имени, а не по номеру бита: номер — раскладка
     // сцены, а имя — то, что дизайнер видит в документе.
     expect(profile.abilities.map((ability) => ability.name)).not.toContain('rewind');
+  });
+
+  /**
+   * Разрез двух документов (BOT-6, BOT-8): профиль отвечает «насколько хорошо»,
+   * а «что делать» — документ поведения, и связку называют ДАННЫЕ. Проверяется
+   * это единственным способом, каким её вообще можно проверить, — тем, что
+   * названный путь резолвится в документ, который реализация понимает.
+   */
+  it.each(['easy', 'normal'])('%s называет свой документ поведения, и тот разбирается', (name) => {
+    const profile = parseBotProfile(read(name), name);
+    expect(profile.behavior).toMatch(/^bots\/behaviors\/.+\.json$/);
+    const behavior = parseBotBehavior(readBehavior(profile.behavior), profile.behavior);
+    expect(behavior.schema).toBe(BOT_BEHAVIOR_SCHEMA);
+    // Политика — это выбор МАРШРУТА, и все четыре исполнителя в отгруженных
+    // документах названы: бот, которому нечем отступать, стоял бы у края.
+    expect(behavior.actions.map((action) => action.executor).sort()).toEqual(
+      [...BOT_EXECUTORS].sort(),
+    );
+  });
+
+  /**
+   * Веса и агрессивность в профиле БОЛЬШЕ НЕ ЖИВУТ (schema 3, BOT-6): политика
+   * уехала документом, и документ прошлой формы отличается от нового явно.
+   */
+  it.each(['easy', 'normal'])('%s не несёт политики выбора: она в документе', (name) => {
+    const document = read(name) as Record<string, unknown>;
+    expect(document.utility).toBeUndefined();
+    expect(document.aggression).toBeUndefined();
+    expect(typeof document.behavior).toBe('string');
   });
 
   /**
@@ -83,9 +117,9 @@ describe('референсные профили контента (BOT-6)', () =>
 
 describe('валидация профиля на конструировании (BOT-6)', () => {
   it('называет все находки разом, а не первую', () => {
-    const broken = { ...valid(), name: '', aggression: 5 };
+    const broken = { ...valid(), name: '', behavior: '' };
     expect(() => parseBotProfile(broken)).toThrow(/name/);
-    expect(() => parseBotProfile(broken)).toThrow(/aggression/);
+    expect(() => parseBotProfile(broken)).toThrow(/behavior/);
   });
 
   it('чужая версия формы документа отвергается', () => {
@@ -139,11 +173,24 @@ describe('валидация профиля на конструировании 
     expect(() => parseBotProfile({ ...valid(), abilities: {} })).toThrow(/abilities/);
   });
 
-  it('пропущенный вес поведения — находка, а не молчаливый ноль', () => {
+  /**
+   * Документ поведения профиль называет ПУТЁМ от корня дерева контента
+   * (BOT-8, ASSET-2): без него бот не знает, что делать, а абсолютный путь —
+   * это адрес файла машины, на которой документ писали.
+   */
+  it('профиль без документа поведения — находка, а не бот без политики', () => {
     const profile = valid();
-    const utility = { ...(profile.utility as Record<string, unknown>) };
-    delete utility.dodge;
-    expect(() => parseBotProfile({ ...profile, utility })).toThrow(/utility\.dodge/);
+    delete profile.behavior;
+    expect(() => parseBotProfile(profile)).toThrow(/behavior/);
+  });
+
+  it('абсолютный путь документа и выход вверх отвергаются', () => {
+    expect(() => parseBotProfile({ ...valid(), behavior: '/bots/behaviors/classic.json' })).toThrow(
+      /от корня дерева контента/,
+    );
+    expect(() => parseBotProfile({ ...valid(), behavior: '../secrets.json' })).toThrow(
+      /от корня дерева контента/,
+    );
   });
 
   it('не-объект отвергается сразу', () => {
@@ -412,7 +459,7 @@ describe('мозг ведёт каст по описанию профиля (BOT
   const DECIDING = true;
 
   const PLAN: BehaviorPlan = {
-    behavior: 'pressure',
+    executor: 'pressure',
     targetX: 0,
     targetY: 0,
     aim: undefined,
@@ -446,8 +493,7 @@ describe('мозг ведёт каст по описанию профиля (BOT
           ...ability,
         },
       ],
-      utility: { pressure: 1, kite: 0.5, retreat: 1, dodge: 1 },
-      aggression: 0.6,
+      behavior: 'bots/behaviors/classic.json',
       seed: 7,
     };
   }
@@ -463,7 +509,7 @@ describe('мозг ведёт каст по описанию профиля (BOT
       tick,
       observedTick: tick,
       self: { id: 1, x: 0, y: 0, vx: 0, vy: 0, slot: 1, team: 1 },
-      slots: [{ slotIndex: 0, phase, staged }],
+      slots: [{ slotIndex: 0, phase, staged, cooldown: 0 }],
       enemies: [{ id: 2, x: 4, y: 0, vx: 0, vy: 0, slot: 0, team: 2, seenTick: 0, visible: true }],
       threats: [],
       arenaRadius: 20,
@@ -561,7 +607,7 @@ describe('мозг ведёт каст по описанию профиля (BOT
  */
 describe('заряд отгруженного профиля доходит до выпуска (BOT-6)', () => {
   const PLAN: BehaviorPlan = {
-    behavior: 'pressure',
+    executor: 'pressure',
     targetX: 0,
     targetY: 0,
     aim: undefined,
@@ -614,7 +660,7 @@ describe('заряд отгруженного профиля доходит до
         tick,
         observedTick,
         self: { id: 1, x: 0, y: 0, vx: 0, vy: 0, slot: 1, team: 1 },
-        slots: [{ slotIndex: cast.slotIndex, phase: seen.phase, staged: seen.staged }],
+        slots: [{ slotIndex: cast.slotIndex, phase: seen.phase, staged: seen.staged, cooldown: 0 }],
         enemies: [
           { id: 2, x: 6, y: 0, vx: 0, vy: 0, slot: 0, team: 2, seenTick: observedTick, visible: true },
         ],

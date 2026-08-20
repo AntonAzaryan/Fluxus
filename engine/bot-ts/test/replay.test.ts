@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { runScenario, runScenarioBytes, snapshotToPlain } from '@game-mvp/core';
 import type { BotBrainFactory } from '../src/brain.js';
 import { BotHost } from '../src/host.js';
-import { classicBrain } from '../src/brains/classic/classicBrain.js';
+import { evaluatedBrain } from '../src/brains/evaluated/evaluatedBrain.js';
 import {
   connectBot,
   connectHuman,
@@ -19,6 +19,7 @@ import {
   harness,
   settle,
   stepMatch,
+  testBehavior,
   testProfile,
   STEP,
 } from './fixtures.js';
@@ -50,7 +51,7 @@ describe('реплей матча с ботом (BOT-5)', () => {
     const bots = new BotHost();
     const seat = connectBot(fixture, bots, {
       playerId: 'bot-1',
-      brain: counting(classicBrain(), counters),
+      brain: counting(evaluatedBrain({ behavior: testBehavior() }), counters),
       profile: testProfile(),
     });
     await settle();
@@ -79,7 +80,7 @@ describe('реплей матча с ботом (BOT-5)', () => {
     const bots = new BotHost();
     const seat = connectBot(fixture, bots, {
       playerId: 'bot-1',
-      brain: classicBrain(),
+      brain: evaluatedBrain({ behavior: testBehavior() }),
       profile: testProfile(),
     });
     await settle();
@@ -108,7 +109,7 @@ describe('реплей матча с ботом (BOT-5)', () => {
     const bots = new BotHost();
     const seat = connectBot(fixture, bots, {
       playerId: 'bot-1',
-      brain: classicBrain(),
+      brain: evaluatedBrain({ behavior: testBehavior() }),
       profile: testProfile({
         abilities: [
           {

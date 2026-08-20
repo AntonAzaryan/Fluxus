@@ -15,6 +15,7 @@
  * обычная float-математика.
  */
 import {
+  ABILITY_COOLDOWN_COMPONENT,
   ABILITY_SLOT_COMPONENT,
   ARENA_COMPONENT,
   NO_PHASE,
@@ -86,6 +87,19 @@ export interface BotSlotView {
   readonly phase: number;
   /** Сколько шагов цепочки уже накоплено (ABIL-5). */
   readonly staged: number;
+  /**
+   * Доля ОСТАВШЕГОСЯ кулдауна слота, 0..1: единица — только что взведён, ноль —
+   * способность готова (ABIL-7). Тот самый гейт платформы, а не собственный
+   * счётчик бота из профиля: читается он со своего слота своего же снапшота, то
+   * есть тем каналом, каким игрок видит кулдаун на своей панели (BOT-3).
+   *
+   * Доля, а не остаток в тиках, потому что это ВХОД словаря considerations
+   * (BOT-9): входы нормированы в [0, 1], иначе кривая документа зависела бы от
+   * длительности кулдауна конкретного определения сцены.
+   *
+   * Сцена без компонента кулдауна даёт ноль — «ничто не мешает».
+   */
+  readonly cooldown: number;
 }
 
 export interface BotWorldView {
@@ -217,9 +231,25 @@ function abilitySlots(sample: MatchSample, owner: EntityId): BotSlotView[] {
       slotIndex: field(entity, 'slotIndex') ?? 0,
       phase: field(entity, 'phase') ?? NO_PHASE,
       staged: field(entity, 'staged') ?? 0,
+      cooldown: slotCooldown(world, entity),
     });
   }
   return slots;
+}
+
+/**
+ * Доля оставшегося кулдауна слота (ABIL-7). Остаток и полная длительность живут
+ * ОТДЕЛЬНЫМ компонентом той же сущности (`AbilityCooldown`), и её отсутствие —
+ * законное «кулдауна нет»: сцена без платформы или слот, который ещё ни разу не
+ * взводили.
+ */
+function slotCooldown(world: WorldState, slot: EntityId): number {
+  if (coreWorld.componentId(world, ABILITY_COOLDOWN_COMPONENT) === undefined) return 0;
+  if (!coreWorld.hasComponent(world, slot, ABILITY_COOLDOWN_COMPONENT)) return 0;
+  const remaining = readIntField(world, slot, ABILITY_COOLDOWN_COMPONENT, 'remaining') ?? 0;
+  const total = readIntField(world, slot, ABILITY_COOLDOWN_COMPONENT, 'total') ?? 0;
+  if (remaining <= 0 || total <= 0) return 0;
+  return remaining >= total ? 1 : remaining / total;
 }
 
 function arenaRadius(sample: MatchSample): number | undefined {

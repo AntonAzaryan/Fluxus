@@ -16,8 +16,9 @@ import { contentPack, jsonSerializer, msgpackSerializer, type ContentPack } from
 import { shellPort } from '@game-mvp/client/protocol';
 import { portTransport } from '@game-mvp/client/portTransport';
 import type { BotWireFormat, BotWorkerInit } from '../assembly.js';
+import { parseBotBehavior } from '../behavior.js';
 import { brainFactoryByKind } from '../brains/registry.js';
-import type { ArenaCenter } from '../brains/classic/utility.js';
+import type { ArenaCenter } from '../brains/layers/plan.js';
 import { BotHost } from '../host.js';
 import { parseBotProfile } from '../profile.js';
 import { botTerrain } from '../terrainView.js';
@@ -88,7 +89,21 @@ export function startBotWorker(init: BotWorkerInit, options: BotWorkerOptions = 
     host.add({
       playerId: seat.playerId,
       transport: portTransport(shellPort(port)),
-      brain: brainFactoryByKind(seat.brain, assembly),
+      // Документ поведения — СВОЙ у каждого места (BOT-8): профиль называет его
+      // путь, и два бота одного матча вправе играть разную политику. Разбор,
+      // как и у профиля, происходит на этой стороне границы: документ приехал
+      // structured clone'ом, то есть типом не гарантирован ничем.
+      brain: brainFactoryByKind(seat.brain, {
+        ...assembly,
+        ...(seat.behavior === undefined
+          ? {}
+          : {
+              behavior: parseBotBehavior(
+                seat.behavior,
+                `документ поведения бота "${seat.playerId}"`,
+              ),
+            }),
+      }),
       // Валидация профиля на конструировании бота (BOT-6): документ приехал
       // сообщением, и «его уже проверила сборка» — предположение, а не факт.
       profile: parseBotProfile(seat.profile, `профиль бота "${seat.playerId}"`),

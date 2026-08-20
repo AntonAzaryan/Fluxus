@@ -1,32 +1,28 @@
 /**
- * Классический мозг по слоям (задачи 3.1–3.3): восприятие с памятью и
- * задержкой реакции, utility-скоринг с весами профиля, микро-слой на Yuka.
+ * Общие слои мозга (BOT-2): восприятие с памятью и задержкой реакции, геометрия
+ * исполнителей и микро-слой на Yuka.
+ *
+ * Слои общие для любой реализации контракта — политику выбора действий они не
+ * содержат вовсе (она в документе, BOT-8), и потому проверяются отдельно от
+ * мозга, который их склеивает.
  *
  * Восприятие проверяется на НАСТОЯЩЕМ потоке наблюдений — шагах клиента,
  * записанных в loopback-матче: синтетический снапшот проверял бы разбор
- * фикстуры, а не границу BOT-3. Слои решений и микро — на литеральных мирах:
- * они уже за границей, работают с float и никакого снапшота не касаются.
+ * фикстуры, а не границу BOT-3. Геометрия и микро — на литеральных мирах: они
+ * уже за границей, работают с float и никакого снапшота не касаются.
  */
 import { describe, expect, it } from 'vitest';
-import { Perception, type PerceivedWorld } from '../src/brains/classic/perception.js';
-import { MicroLayer } from '../src/brains/classic/micro.js';
-import { UtilityLayer, planFor, scoreBehaviors } from '../src/brains/classic/utility.js';
-import { brainRandom } from '../src/brains/classic/random.js';
-import { classicBrain } from '../src/brains/classic/classicBrain.js';
-import { aimToRadians } from '../src/boundary.js';
-import { BotHost } from '../src/host.js';
+import { Perception, type PerceivedWorld } from '../src/brains/layers/perception.js';
+import { MicroLayer } from '../src/brains/layers/micro.js';
+import { planFor } from '../src/brains/layers/plan.js';
+import { brainRandom } from '../src/brains/layers/random.js';
 import type { BotProfile } from '../src/profile.js';
 import {
   STEP,
   boltConfig,
-  connectBot,
-  connectHuman,
   duelConfig,
   fogConfig,
-  harness,
   recordSteps,
-  settle,
-  stepMatch,
   testProfile,
 } from './fixtures.js';
 
@@ -172,75 +168,6 @@ describe('восприятие: экстраполяция проджектай�
   });
 });
 
-describe('слой решений: utility-скоринг с весами профиля (BOT-6)', () => {
-  const profile = testProfile();
-  const options = { center: { x: 0, y: 0 } };
-
-  it('далёкий враг и высокая агрессивность — давить', () => {
-    const scores = scoreBehaviors(world({ enemies: [enemyAt(15, 0)] }), profile, options);
-    expect(scores.pressure).toBeGreaterThan(scores.kite);
-  });
-
-  it('близкий враг при низкой агрессивности — кайтить', () => {
-    const shy = testProfile({ aggression: 0.1 });
-    const scores = scoreBehaviors(world({ enemies: [enemyAt(2, 0)] }), shy, options);
-    expect(scores.kite).toBeGreaterThan(scores.pressure);
-  });
-
-  it('у края арены — отступать к центру', () => {
-    const scores = scoreBehaviors(
-      world({ self: { id: 1, x: 19.9, y: 0, vx: 0, vy: 0, slot: 1, team: 1 } }),
-      profile,
-      options,
-    );
-    expect(scores.retreat).toBeGreaterThan(0.9);
-  });
-
-  it('сближающийся снаряд рядом — уклоняться; улетающий не считается', () => {
-    const incoming = world({
-      threats: [{ id: 3, x: 1, y: 0, vx: -1, vy: 0, distance: 1, closing: true }],
-    });
-    const leaving = world({
-      threats: [{ id: 3, x: 1, y: 0, vx: 1, vy: 0, distance: 1, closing: false }],
-    });
-    expect(scoreBehaviors(incoming, profile, options).dodge).toBeGreaterThan(0);
-    expect(scoreBehaviors(leaving, profile, options).dodge).toBe(0);
-  });
-
-  it('вес из профиля решает исход: обнулённый вес выключает поведение', () => {
-    const near = world({ enemies: [enemyAt(2, 0)] });
-    const utility = new UtilityLayer(testProfile({ aggression: 0.1 }), random());
-    expect(utility.choose(near, 0, options)).not.toBe('retreat');
-    const muted = new UtilityLayer(
-      testProfile({
-        aggression: 0.1,
-        utility: { pressure: 0, kite: 0, retreat: 0, dodge: 0 },
-      }),
-      random(),
-    );
-    // Все веса нулевые — выбирать не из чего, слой держится умолчания.
-    expect(muted.choose(near, 0, options)).toBe('retreat');
-  });
-
-  it('частота передумывания из профиля: между пересчётами поведение держится', () => {
-    const slow = testProfile({ decision: { intervalTicks: 20, jitterTicks: 0 } });
-    const utility = new UtilityLayer(slow, random());
-    const first = utility.choose(world({ enemies: [enemyAt(15, 0)] }), 0, options);
-    const held = utility.choose(
-      world({ self: { id: 1, x: 19.9, y: 0, vx: 0, vy: 0, slot: 1, team: 1 } }),
-      5,
-      options,
-    );
-    expect(held).toBe(first);
-    const rethought = utility.choose(
-      world({ self: { id: 1, x: 19.9, y: 0, vx: 0, vy: 0, slot: 1, team: 1 } }),
-      25,
-      options,
-    );
-    expect(rethought).toBe('retreat');
-  });
-});
-
 describe('план поведения: геометрия цели', () => {
   const profile = testProfile();
   const center = { x: 0, y: 0 };
@@ -348,32 +275,5 @@ describe('микро-слой на Yuka (задача 3.3)', () => {
       maxDrift = Math.max(maxDrift, Math.abs(layer.step(plan, scene, tick).aimRadians));
     }
     expect(maxDrift).toBeLessThanOrEqual(limit);
-  });
-});
-
-describe('классический мозг в матче', () => {
-  it('играет за свой слот: шлёт ввод и жмёт способность по врагу в дальности', async () => {
-    const fixture = harness(duelConfig());
-    const human = connectHuman(fixture, 'p1');
-    const bots = new BotHost();
-    const seat = connectBot(fixture, bots, {
-      playerId: 'bot-1',
-      brain: classicBrain({ tickSeconds: 1 / 60 }),
-      profile: testProfile(),
-    });
-    await settle();
-    for (let i = 0; i < 60; i++) await stepMatch(fixture, [human.host, seat]);
-
-    const frames = fixture.server.toScenario().inputs ?? [];
-    const botFrames = frames.filter((frame) => frame.playerId === 'bot-1');
-    expect(botFrames.length).toBeGreaterThan(0);
-    // Способность нажата: враг стоит в начале координат, бот стартует рядом.
-    expect(botFrames.some((frame) => frame.buttons !== 0)).toBe(true);
-    // Прицел лежит в домене угла ядра, как у человека (INP-3, FP-7).
-    for (const frame of botFrames) {
-      expect(aimToRadians(frame.aimDir)).toBeGreaterThanOrEqual(0);
-      expect(frame.buttons).toBeLessThanOrEqual(0xffff);
-    }
-    bots.dispose();
   });
 });

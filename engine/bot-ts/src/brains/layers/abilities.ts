@@ -1,8 +1,12 @@
 /**
- * Слой способностей классического мозга: какую кнопку жать, сколько её держать
- * и куда при этом смотреть.
+ * Слой способностей мозга: какую кнопку жать, сколько её держать и куда при
+ * этом смотреть.
  *
- * Отдельно от слоя маршрутов (`utility.ts`) намеренно. Кнопка и ход — разные
+ * Политика способностей живёт ПРОФИЛЕМ (cast-блоки BOT-6), а не документом
+ * поведения: документ отвечает за выбор маршрута (BOT-8), и переезд способностей
+ * в него — отдельная работа, названная в design Non-Goals.
+ *
+ * Отдельно от слоя маршрутов (`plan.ts`, скоринг документа) намеренно. Кнопка и ход — разные
  * руки: человек кастует на бегу, уклоняется, продолжая отступать, и прыгает,
  * не переставая сближаться. Слей их в одно соревнование — и любой каст стоил бы
  * боту хода, а любой ход отменял бы каст.
@@ -36,8 +40,8 @@ import { NO_PHASE } from '@game-mvp/core';
 import type { BotAbilityCastProfile, BotAbilityProfile, BotProfile, BotStepAim } from '../../profile.js';
 import type { BotTerrain } from '../../terrainView.js';
 import type { PerceivedWorld } from './perception.js';
+import { clamp01, nearestEnemy, nearestThreat, type BehaviorPlan } from './plan.js';
 import type { BrainRandom } from './random.js';
-import { nearestEnemy, nearestThreat, type BehaviorPlan } from './utility.js';
 
 /** Точка, на которую способность требует смотреть. */
 export interface AbilityAim {
@@ -76,11 +80,6 @@ const IDLE: AbilityIntent = {
   confirmBit: undefined,
   cancelBit: undefined,
 };
-
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return value < 0 ? 0 : value > 1 ? 1 : value;
-}
 
 /**
  * Полезность применения по дистанции: единица в упор, половина на самой границе

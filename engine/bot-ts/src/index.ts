@@ -9,7 +9,7 @@
  * мозга (BOT-2), граница «мозг ↔ ввод» (BOT-5) и хостинг, соединяющий их с
  * клиентом (BOT-4).
  *
- * Зависимость на Yuka живёт ТОЛЬКО внутри классического мозга: запрет нулевых
+ * Зависимость на Yuka живёт ТОЛЬКО внутри микро-слоя мозга: запрет нулевых
  * зависимостей — правило ядра (`determinism-core`), и на слой вне симуляции оно
  * не распространяется, но и растекаться библиотеке по пакету незачем.
  */
@@ -17,12 +17,11 @@
 // контракт мозга (BOT-2)
 export type { BotBrain, BotBrainFactory, BotSelf } from './brain.js';
 
-// профиль поведения — контент, а не код (BOT-6)
+// профиль: человечность и состав способностей — контент, а не код (BOT-6)
 export {
   BOT_ABILITY_HANDS,
   BOT_CAST_COMMITS,
   BOT_ABILITY_TARGETS,
-  BOT_BEHAVIORS,
   BOT_PROFILE_SCHEMA,
   BOT_STEP_AIMS,
   parseBotProfile,
@@ -36,12 +35,29 @@ export type {
   BotCastCommit,
   BotStepAim,
   BotAimProfile,
-  BotBehavior,
   BotDecisionProfile,
   BotMovementProfile,
   BotProfile,
   BotReactionProfile,
 } from './profile.js';
+
+// документ поведения: политика выбора действий — контент (BOT-8, BOT-9)
+export {
+  BOT_BEHAVIOR_SCHEMA,
+  BOT_CURVES,
+  BOT_EXECUTORS,
+  BOT_INPUTS,
+  parseBotBehavior,
+} from './behavior.js';
+export type {
+  BotAction,
+  BotBehaviorDocument,
+  BotConsideration,
+  BotCurve,
+  BotCurveType,
+  BotExecutor,
+  BotInput,
+} from './behavior.js';
 
 // граница «мозг ↔ симуляция» (BOT-5, `input-devices` INP-3)
 export { TURN_UNITS, aimToRadians, readFixedField, readIntField, toInputSample } from './boundary.js';
@@ -65,11 +81,17 @@ export type { BotFillSeat, BotSlotFillerOptions, FillSchedule } from './fill.js'
 export { PortConnections, botWorkerInit, isBotWorkerInit } from './assembly.js';
 export type { BotWireFormat, BotWorkerInit, BotWorkerSeat, MessageChannelLike, RawPort } from './assembly.js';
 
-// мозги за контрактом
+// мозги за контрактом: evaluator документа поведения (BOT-8) и скриптовый
 export { scriptedBrain, walkToCenter } from './brains/scripted.js';
 export type { ScriptedBrainOptions, ScriptedTarget } from './brains/scripted.js';
-export { classicBrain } from './brains/classic/classicBrain.js';
-export type { ClassicBrainOptions } from './brains/classic/classicBrain.js';
+export { evaluatedBrain } from './brains/evaluated/evaluatedBrain.js';
+export type { EvaluatedBrainOptions } from './brains/evaluated/evaluatedBrain.js';
+export type {
+  ActionTrace,
+  BotDecisionRecord,
+  BotDecisionSink,
+  ConsiderationTrace,
+} from './brains/evaluated/scoring.js';
 export { brainFactoryByKind, BRAIN_KINDS } from './brains/registry.js';
 export type { BrainAssembly, BrainKind } from './brains/registry.js';
 
