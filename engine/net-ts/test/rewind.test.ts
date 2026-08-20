@@ -24,6 +24,8 @@ const ULT_BUTTON = 7;
 const DEPTH_TICKS = 24;
 const COOLDOWN_TICKS = 600;
 const SNAPSHOT_EVERY = 2;
+/** Тиков назад за шаг скраба — величина конфига матча (`ultConfig` ниже). */
+const SCRUB_STEP = 3;
 
 const e = { var: 'e' } as const;
 const field = (component: string, name: string): object => ({ getComponent: [e, component, name] });
@@ -128,7 +130,7 @@ function ultConfig(
       capacity: 40,
       exempt: [{ component: 'RewindCooldown' }],
       holdButton: ULT_BUTTON,
-      step: 3,
+      step: SCRUB_STEP,
       holdTimeoutTicks: 8,
       ...rewind,
     },
@@ -200,13 +202,29 @@ describe('дренаж запроса перемотки сервером (NET-1
     expect(m.server.tick).toBe(12);
   });
 
-  it('матч без истории запрос игнорирует: перематывать нечем', () => {
-    const config = duelConfig({ scene: ultScene() });
+  it('матч без истории запрос не исполняет, но называет это вслух — один раз', () => {
+    // Матч, поднятый без секции `rewind`, — дефект СБОРКИ, а не норма REW-12:
+    // сцена просит механизм, которого хост не собрал. Молчание об этом
+    // выглядит снаружи как ульта, которая жжёт cooldown и ничего не делает, —
+    // ровно так дефект и жил на стенде демо, теряя секцию в раскладке
+    // документа матча (`bin/matchFile.mjs`).
+    const warned: string[] = [];
+    // Гейта у системы нет: запрос эмитится КАЖДЫМ тиком. Отчёт всё равно один —
+    // строка на каждый каст утопила бы вывод запускалки в собственном шуме.
+    const config = duelConfig({
+      scene: ultScene(false),
+      rewindWarn: (message) => {
+        warned.push(message);
+      },
+    });
     const m = ultMatch(config);
     m.send(1, ULT);
     m.run(4);
 
     expect(m.server.mode).toBe('Running');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(REWIND_REQUEST_EVENT);
+    expect(warned[0]).toContain('rewind');
   });
 
   it('запрос вне Running не исполняется: перемотки в перемотке нет (REW-8)', () => {
@@ -251,6 +269,26 @@ describe('драйвер скраба: удержание, отпускание,
     expect(m.server.mode).toBe('Rewinding');
   });
 
+  it('короткое нажатие двигает точку, а не сгорает впустую (РЕГРЕССИЯ, REW-13)', () => {
+    // РЕГРЕССИЯ. Первого шага ждали целый цикл рассылки, а проверка отпускания
+    // стояла ЗА тем же гейтом: игрок, отпустивший клавишу внутри цикла, получал
+    // мир, замерший и возобновившийся на ТОМ ЖЕ тике, — ульта сгорала на полный
+    // cooldown, не отмотав ни одного тика. Ровно это и уехало в демо.
+    const m = ultMatch();
+    m.run(20);
+    m.send(1, ULT);
+    m.run(2);
+    const castTick = m.server.tick;
+    expect(m.server.mode).toBe('Rewinding');
+
+    // Короче нажатия не бывает: бита нет уже в первом кадре после каста.
+    m.run(SNAPSHOT_EVERY, 0);
+
+    expect(m.server.mode).toBe('Running');
+    expect(m.server.tick).toBe(castTick - SCRUB_STEP);
+    expect(m.server.tick).toBeLessThan(castTick);
+  });
+
   it('отпускание возобновляет мир с достигнутой точки (WSM-2)', () => {
     const m = ultMatch();
     m.run(20);
@@ -260,8 +298,11 @@ describe('драйвер скраба: удержание, отпускание,
     m.run(2 * SNAPSHOT_EVERY, ULT);
     const stopped = m.server.tick;
 
-    // Бит исчез в свежем кадре инициатора — это и есть отпускание.
-    m.run(SNAPSHOT_EVERY, 0);
+    // Бит исчез в свежем кадре инициатора — это и есть отпускание. ОДНОГО
+    // кадра довольно: отпускание читается каждым тиком, а не на границе цикла
+    // шага (REW-13). Досиженный цикл означал бы мир, замерший уже после того,
+    // как игрок отпустил клавишу.
+    m.run(1, 0);
 
     expect(m.server.mode).toBe('Running');
     expect(m.server.tick).toBe(stopped);
@@ -334,7 +375,10 @@ describe('драйвер скраба: удержание, отпускание,
     }
 
     expect(m.server.mode).toBe('Running');
-    expect(m.server.tick).toBe(castTick);
+    // Ровно ОДИН шаг — тот, который вход в перемотку должен любому нажатию
+    // (REW-13): дальше ведёт только инициатор, а он отпустил. Читай сервер бит
+    // второго игрока — точка ушла бы дальше.
+    expect(m.server.tick).toBe(castTick - SCRUB_STEP);
   });
 });
 
@@ -427,7 +471,9 @@ describe('орган ведения скраба в конфиге матча (N
     }
 
     expect(m.server.mode).toBe('Running');
-    expect(m.server.tick).toBe(castTick);
+    // Один шаг входа — и остановка по отпусканию: пачка прочитана как
+    // отпускание, а не как удержание кадра с бо́льшим номером тика.
+    expect(m.server.tick).toBe(castTick - SCRUB_STEP);
   });
 
   it('инициатор без слота матча не морозит мир на порог молчания', () => {

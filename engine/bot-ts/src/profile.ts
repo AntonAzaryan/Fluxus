@@ -60,6 +60,23 @@ export const BOT_ABILITY_TARGETS = ['enemy', 'threat', 'cliff'] as const;
 export type BotAbilityTarget = (typeof BOT_ABILITY_TARGETS)[number];
 
 /**
+ * Чем заняты руки бота — второе и последнее, что мозг знает о смысле
+ * способности (BOT-6). Нужно оно потому, что сцена вправе развести ДВА своих
+ * определения на одном бите условием на владельце: пустой рукой бит кастует
+ * заряд, с пойманным снарядом — бросает его. Определений мозг не знает и знать
+ * не должен; знает он ровно то, что сказал документ:
+ *
+ * - `free` — только со свободными руками;
+ * - `full` — только с пойманным снарядом в руках.
+ *
+ * Поле необязательно: щиту, уклону и прыжку руки безразличны, и молчание
+ * документа — это «безразличны», а не «свободны».
+ */
+export const BOT_ABILITY_HANDS = ['free', 'full'] as const;
+
+export type BotAbilityHands = (typeof BOT_ABILITY_HANDS)[number];
+
+/**
  * Чем целится ОДИН шаг цепочки прицеливания (ABIL-5). Уже, чем цели выбора
  * способности: шаг называет ТОЧКУ, а `cliff` точки не даёт — это признак
  * «по курсу уступ», и шагом он не выражается.
@@ -67,6 +84,22 @@ export type BotAbilityTarget = (typeof BOT_ABILITY_TARGETS)[number];
 export const BOT_STEP_AIMS = ['enemy', 'threat', 'self'] as const;
 
 export type BotStepAim = (typeof BOT_STEP_AIMS)[number];
+
+/**
+ * Чем подтверждается шаг цепочки — то же различие, что у вида фазы в сцене
+ * (ABIL-4, ABIL-5):
+ *
+ * - `confirm` — ФРОНТОМ бита подтверждения: бот целится и жмёт `confirmButton`;
+ * - `release` — ПРЕКРАЩЕНИЕМ УДЕРЖАНИЯ бита триггера: бот держит кнопку, целясь,
+ *   и перестаёт её держать; прицеливание того же тика и есть шаг, и отдельного
+ *   бита подтверждения тут нет вовсе.
+ *
+ * Молчание документа — `confirm`: способность, описанная до появления фазы
+ * `release`, подтверждается так, как подтверждалась.
+ */
+export const BOT_CAST_COMMITS = ['confirm', 'release'] as const;
+
+export type BotCastCommit = (typeof BOT_CAST_COMMITS)[number];
 
 /** Один шаг цепочки прицеливания: чем целится и когда подтверждается (BOT-6). */
 export interface BotAbilityStepProfile {
@@ -95,8 +128,14 @@ export interface BotAbilityStepProfile {
 export interface BotAbilityCastProfile {
   /** Индекс слота владельца (`AbilitySlot.slotIndex`, ABIL-1). */
   readonly slotIndex: number;
-  /** Бит подтверждения шага в маске `buttons` (INP-4, ABIL-3). */
-  readonly confirmButton: number;
+  /** Чем подтверждается шаг (`BOT_CAST_COMMITS`); умолчание — `confirm`. */
+  readonly commit: BotCastCommit;
+  /**
+   * Бит подтверждения шага в маске `buttons` (INP-4, ABIL-3). Есть только у
+   * каста с `commit: "confirm"`: отпусканию бит подтверждения не нужен, и
+   * названный там он описывал бы фронт, которого бот не шлёт.
+   */
+  readonly confirmButton?: number;
   /** Бит отмены; без него бот начатый каст не отменяет. */
   readonly cancelButton?: number;
   /** Цепочка шагов в порядке ABIL-5; пустая — способность без прицеливания. */
@@ -104,6 +143,10 @@ export interface BotAbilityCastProfile {
   /**
    * Сколько тиков держать бит триггера — длительность фазы удержания (ABIL-4).
    * Ноль — тап: бит живёт один тик нажатия и на следующем спадает.
+   *
+   * У каста с `commit: "release"` это же число — срок прицеливания шага: спад
+   * бита И ЕСТЬ подтверждение, поэтому «сколько держать» и «сколько целиться»
+   * там одно, и валидация требует, чтобы документ назвал их одинаково.
    */
   readonly holdTicks: number;
   /** Вероятность отменить начатый каст на тике решения, 0..1. */
@@ -139,7 +182,22 @@ export interface BotAbilityProfile {
    * кнопку и отпускает её, накопив силу.
    */
   readonly holdTicks: number;
-  /** Пауза между применениями, тики; отсчитывается от отпускания кнопки. */
+  /**
+   * Пауза между применениями, тики; отсчитывается от отпускания кнопки.
+   *
+   * Это СОБСТВЕННЫЙ счётчик бота, а не кулдаун способности: настоящий гейт
+   * держит платформа (ABIL-7), и профиль о нём не знает — знать чужой документ
+   * он и не вправе (CONT-4). Отсюда конвенция отгруженных профилей: число здесь
+   * ставится ЧУТЬ ВЫШЕ кулдауна определения сцены (60→62, 120→125, 150→155,
+   * 300→305). Ниже — и бот жмёт бит в незаряженную способность: нажатие сцена
+   * отбрасывает, а слой способностей всё равно занят им тик, и в этот тик не
+   * выбирается ничего другого. Выше — законно и означает просто «этот бот
+   * применяет её реже», чем позволяет сцена.
+   *
+   * Проверить эту связь валидацией нельзя: сцена профилю недоступна. Ловится
+   * она сверкой двух документов — и место для такой сверки там, где оба дерева
+   * читаются законно, то есть в игровом приложении, а не в движке.
+   */
   readonly cooldownTicks: number;
   /** Вес в соревновании способностей между собой; 0 — способность выключена. */
   readonly weight: number;
@@ -157,6 +215,12 @@ export interface BotAbilityProfile {
    * Умолчание — `false`: каст и щит направления не требуют.
    */
   readonly requiresMoving?: boolean;
+  /**
+   * Требование к рукам (`BOT_ABILITY_HANDS`) — то самое условие, которым сцена
+   * разводит два своих определения на одном бите. Отсутствует — рукам всё
+   * равно.
+   */
+  readonly hands?: BotAbilityHands;
   /**
    * Описание способности платформы (BOT-6). Отсутствует — способность старого
    * вида: бот жмёт бит и держит его `holdTicks`, ничего не подтверждая.
@@ -315,6 +379,7 @@ function parseStep(input: unknown, path: string, findings: Findings): BotAbility
  */
 function parseCast(input: unknown, path: string, findings: Findings): BotAbilityCastProfile {
   const root = record(input, path, findings);
+  const commit = parseCommit(root, path, findings);
   const steps: BotAbilityStepProfile[] = [];
   if (!Array.isArray(root.steps)) {
     findings.issues.push(`${path}.steps: ожидался массив шагов прицеливания`);
@@ -330,15 +395,97 @@ function parseCast(input: unknown, path: string, findings: Findings): BotAbility
   }
   const cancelButton =
     root.cancelButton === undefined ? undefined : num(root, 'cancelButton', path, BUTTON, findings);
+  const confirmButton =
+    root.confirmButton === undefined
+      ? undefined
+      : num(root, 'confirmButton', path, BUTTON, findings);
+  const holdTicks = num(root, 'holdTicks', path, TICKS, findings);
+  checkCommitShape(commit, { confirmButton: root.confirmButton, holdTicks, steps }, path, findings);
   return {
     slotIndex: num(root, 'slotIndex', path, { min: 0, max: 63, int: true }, findings),
-    confirmButton: num(root, 'confirmButton', path, BUTTON, findings),
+    commit,
+    ...(confirmButton === undefined ? {} : { confirmButton }),
     ...(cancelButton === undefined ? {} : { cancelButton }),
     steps,
-    holdTicks: num(root, 'holdTicks', path, TICKS, findings),
+    holdTicks,
     cancelChance: num(root, 'cancelChance', path, { min: 0, max: 1 }, findings),
     giveUpTicks: num(root, 'giveUpTicks', path, { ...TICKS, min: 1 }, findings),
   };
+}
+
+/** Чем подтверждается шаг (BOT-6); молчание документа — фронтом бита. */
+function parseCommit(
+  root: Record<string, unknown>,
+  path: string,
+  findings: Findings,
+): BotCastCommit {
+  const value = root.commit;
+  if (value === undefined) return 'confirm';
+  if (!(BOT_CAST_COMMITS as readonly unknown[]).includes(value)) {
+    findings.issues.push(
+      `${path}.commit: ожидалось одно из ${BOT_CAST_COMMITS.join('|')}, получено ${JSON.stringify(value)}`,
+    );
+    return 'confirm';
+  }
+  return value as BotCastCommit;
+}
+
+/**
+ * Форма описания под выбранный способ подтверждения (ABIL-4, ABIL-5). Проверка
+ * тут не про диапазоны чисел, а про то, что документ описывает СУЩЕСТВУЮЩУЮ
+ * механику: бит подтверждения у отпускания не нажимается никогда, а прекращение
+ * удержания записывает ровно один шаг и ровно тем тиком, которым спадает бит.
+ */
+function checkCommitShape(
+  commit: BotCastCommit,
+  cast: {
+    readonly confirmButton: unknown;
+    readonly holdTicks: number;
+    readonly steps: readonly BotAbilityStepProfile[];
+  },
+  path: string,
+  findings: Findings,
+): void {
+  if (commit === 'confirm') {
+    if (cast.confirmButton === undefined) {
+      findings.issues.push(`${path}.confirmButton: каст с подтверждением обязан назвать бит (ABIL-5)`);
+    }
+    return;
+  }
+  if (cast.confirmButton !== undefined) {
+    findings.issues.push(
+      `${path}.confirmButton: у каста с отпусканием фронта подтверждения нет — шаг записывает прекращение удержания бита триггера (ABIL-4)`,
+    );
+  }
+  if (cast.steps.length > 1) {
+    findings.issues.push(
+      `${path}.steps: ${cast.steps.length} шагов, а прекращение удержания записывает ровно один (ABIL-5)`,
+    );
+  }
+  const first = cast.steps[0];
+  if (first !== undefined && first.confirmDelayTicks !== cast.holdTicks) {
+    findings.issues.push(
+      `${path}: holdTicks ${cast.holdTicks} и steps[0].confirmDelayTicks ${first.confirmDelayTicks} — ` +
+        `у каста с отпусканием это ОДНО число: спад бита и есть подтверждение шага`,
+    );
+  }
+}
+
+/** Требование к рукам (BOT-6); молчание документа — «рукам всё равно». */
+function parseHands(
+  root: Record<string, unknown>,
+  path: string,
+  findings: Findings,
+): BotAbilityHands | undefined {
+  const value = root.hands;
+  if (value === undefined) return undefined;
+  if (!(BOT_ABILITY_HANDS as readonly unknown[]).includes(value)) {
+    findings.issues.push(
+      `${path}.hands: ожидалось одно из ${BOT_ABILITY_HANDS.join('|')}, получено ${JSON.stringify(value)}`,
+    );
+    return undefined;
+  }
+  return value as BotAbilityHands;
 }
 
 /** Одна запись списка способностей: своя валидация, свой путь в находках. */
@@ -367,6 +514,7 @@ function parseAbility(input: unknown, path: string, findings: Findings): BotAbil
     findings.issues.push(`${path}.rise: перепад уступа осмыслен только у цели "cliff"`);
   }
   const requiresMoving = flag(root, 'requiresMoving', path, findings);
+  const hands = parseHands(root, path, findings);
   const cast = root.cast === undefined ? undefined : parseCast(root.cast, `${path}.cast`, findings);
 
   return {
@@ -381,6 +529,7 @@ function parseAbility(input: unknown, path: string, findings: Findings): BotAbil
     weight: num(root, 'weight', path, { min: 0, max: 10 }, findings),
     ...(rise === undefined ? {} : { rise }),
     ...(requiresMoving === undefined ? {} : { requiresMoving }),
+    ...(hands === undefined ? {} : { hands }),
     ...(cast === undefined ? {} : { cast }),
   };
 }
@@ -394,18 +543,81 @@ function parseAbilities(input: unknown, source: string, findings: Findings): Bot
   const abilities = input.map((entry, index) => parseAbility(entry, `${path}[${index}]`, findings));
   // Две способности на одном бите — не опечатка в одном документе, а бот,
   // который вместо купола кастует щит: маска одна, и различить их сцене нечем.
-  const seen = new Map<number, string>();
+  //
+  // Исключение ровно одно, и оно тоже данные. Сцена вправе развести два своих
+  // определения на одном бите условием на владельце, и профиль повторяет это
+  // условие требованием к рукам: взаимоисключающие требования — не коллизия,
+  // потому что в каждый момент бит значит ровно одно. Сверяется КАЖДАЯ пара, а
+  // не запись с первой на этом бите: три записи, из которых две требуют одного
+  // и того же, коллизия так же, как две.
+  const seen = new Map<number, BotAbilityProfile[]>();
   for (const ability of abilities) {
-    const first = seen.get(ability.button);
-    if (first !== undefined) {
-      findings.issues.push(
-        `${path}: бит ${ability.button} назначен дважды — "${first}" и "${ability.name}"`,
-      );
+    const same = seen.get(ability.button);
+    if (same === undefined) {
+      seen.set(ability.button, [ability]);
       continue;
     }
-    seen.set(ability.button, ability.name);
+    for (const other of same) {
+      if (exclusiveHands(other, ability)) continue;
+      findings.issues.push(
+        `${path}: бит ${ability.button} назначен дважды — "${other.name}" и "${ability.name}"`,
+      );
+    }
+    same.push(ability);
   }
   return abilities;
+}
+
+/** Разводит ли документ две записи одного бита требованием к рукам (BOT-6). */
+function exclusiveHands(left: BotAbilityProfile, right: BotAbilityProfile): boolean {
+  return left.hands !== undefined && right.hands !== undefined && left.hands !== right.hands;
+}
+
+/**
+ * Перекрёстные проверки каста и задержки реакции — двух блоков ОДНОГО документа
+ * (BOT-6). Свой каст мозг закрывает по своему слоту из своего снапшота
+ * (`abilities.ts`), а снапшот отстаёт ровно на задержку реакции с джиттером,
+ * которую назвал этот же документ.
+ *
+ * Отсюда два правила. Первое: раньше, чем `Σ confirmDelayTicks` плюс это
+ * отставание, увидеть каст законченным бот физически не может, и профиль с
+ * более коротким пределом ведения описывает каст, который ВСЕГДА бросается по
+ * пределу и ни разу не доводится. Второе: фронт подтверждения не вправе уезжать
+ * раньше, чем доезжает картинка.
+ *
+ * Числа обе стороны берут из документа, поэтому находки называют оба и профиль,
+ * в котором они разошлись.
+ */
+function checkCastTimings(profile: BotProfile, source: string, findings: Findings): void {
+  const lag = profile.reaction.delayTicks + profile.reaction.jitterTicks;
+  for (const [index, ability] of profile.abilities.entries()) {
+    const cast = ability.cast;
+    if (cast === undefined) continue;
+    const path = `${source}.abilities[${index}].cast`;
+    const confirmAt = cast.steps.reduce((sum, step) => sum + step.confirmDelayTicks, 0);
+    const needed = confirmAt + lag;
+    if (cast.giveUpTicks < needed) {
+      findings.issues.push(
+        `${path}: giveUpTicks ${cast.giveUpTicks} меньше ${needed} — ` +
+          `${confirmAt} тик(ов) подтверждений плюс отставание картинки ${lag} ` +
+          `(reaction.delayTicks + reaction.jitterTicks); каст "${ability.name}" бросался бы по пределу всегда`,
+      );
+    }
+    // Второе правило — про ФРОНТ подтверждения, и только про него. Фронт бот
+    // шлёт по СВОИМ часам, ничего в мире не дождавшись, и профиль, у которого
+    // он уезжает раньше, чем доезжает картинка, описывает бота, судящего о
+    // собственном касте по миру, в котором тот ещё не начался. У каста с
+    // отпусканием фронта нет вовсе: момент записи шага там привязан к
+    // длительности удержания, то есть к кнопке, которую бот уже держит, — и
+    // требовать от рефлекторного перехвата ждать дольше собственной реакции
+    // значило бы запретить его вовсе, а не починить.
+    if (cast.commit !== 'confirm' || cast.steps.length === 0 || confirmAt >= lag) continue;
+    findings.issues.push(
+      `${path}: последнее подтверждение уезжает на тике ${confirmAt}, а картинка мира отстаёт на ${lag} ` +
+        `(reaction.delayTicks + reaction.jitterTicks) — бот судил бы о касте "${ability.name}" по миру, ` +
+        `в котором тот ещё не начался`,
+    );
+  }
 }
 
 /**
@@ -471,6 +683,8 @@ export function parseBotProfile(input: unknown, source = 'профиль бот�
       ? {}
       : { seed: num(root, 'seed', source, { min: 0, max: 2 ** 31 - 1, int: true }, findings) }),
   };
+
+  checkCastTimings(profile, source, findings);
 
   if (findings.issues.length > 0) {
     throw new Error(`parseBotProfile (BOT-6): ${findings.issues.join('; ')}`);

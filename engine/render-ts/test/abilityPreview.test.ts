@@ -9,6 +9,11 @@
  * каст этой подсистемой не рисуется (NET-15): у клиента нет чужого
  * неподтверждённого прицеливания.
  *
+ * Фигура шага — две половины в одной позе: полупрозрачная заливка и контур
+ * поверх неё. Проверяется и это: пары растут пулами и переиспользуются
+ * (REND-26), палитра у половин одна, а в picking не участвует ни та ни другая
+ * (REND-15).
+ *
  * Каталог берётся у ядра тем же путём, каким его получит клиент, — загрузкой
  * сцены (`loadScene(...).abilities`): второго разбора определений в рендере
  * не появляется (ABIL-5).
@@ -30,6 +35,7 @@ import {
   RenderDebugLayer,
   createCostCounters,
   withCostSink,
+  type AbilityPreviewOptions,
   type AbilitySlotStatNames,
   type AbilityStepStatNames,
   type EntityView,
@@ -143,20 +149,48 @@ const HERO = 1 as EntityId;
 const VICTIM = 2 as EntityId;
 const ENEMY = 3 as EntityId;
 
-function makeRig(slots = [slotStats(0), slotStats(1)]) {
+function makeRig(
+  slots = [slotStats(0), slotStats(1)],
+  extra: Partial<AbilityPreviewOptions> = {},
+) {
   const assets = makeAssets();
   const scene = new THREE.Scene();
   const ctx: RenderContext = { scene, assets: assets.service, config: { heightStep: 0.5 } };
   const stage = new PresentationStage(ctx);
-  const preview = new AbilityPreviewSubsystem(catalog(), { slots });
+  const preview = new AbilityPreviewSubsystem(catalog(), { slots, ...extra });
   stage.register(preview);
   return { scene, stage, preview };
 }
 
-/** Контуры кадра в порядке отрисовки: видимые узлы группы превью. */
-function shapes(scene: THREE.Scene): THREE.Object3D[] {
+/** Узлы группы превью в порядке отрисовки — обе половины каждой фигуры. */
+function nodes(scene: THREE.Scene): THREE.Object3D[] {
   const group = scene.children.find((child) => child.name === 'abilityPreview');
-  return group === undefined ? [] : group.children.filter((child) => child.visible);
+  return group === undefined ? [] : group.children;
+}
+
+/** Контуры кадра в порядке отрисовки: видимые ломаные группы превью. */
+function outlines(scene: THREE.Scene): THREE.LineLoop[] {
+  return nodes(scene).filter(
+    (child): child is THREE.LineLoop => child instanceof THREE.LineLoop && child.visible,
+  );
+}
+
+/** Заливки кадра в том же порядке: видимые меши группы превью. */
+function fills(scene: THREE.Scene): THREE.Mesh[] {
+  return nodes(scene).filter(
+    (child): child is THREE.Mesh => child instanceof THREE.Mesh && child.visible,
+  );
+}
+
+/** Цвет материала половины фигуры: палитра у заливки и контура одна. */
+function colorOf(object: THREE.Mesh | THREE.LineLoop): number {
+  const material = object.material as THREE.MeshBasicMaterial | THREE.LineBasicMaterial;
+  return material.color.getHex();
+}
+
+/** Материал заливки: у превью он всегда один, а не список. */
+function fillMaterialOf(mesh: THREE.Mesh): THREE.MeshBasicMaterial {
+  return mesh.material as THREE.MeshBasicMaterial;
 }
 
 describe('Превью каста: два входа и только два (REND-28)', () => {
@@ -168,6 +202,7 @@ describe('Превью каста: два входа и только два (REN
     rig.stage.frame(0.016, 0.5);
     expect(rig.preview.shapeCount).toBe(0);
     expect(rig.preview.objectCount).toBe(0);
+    expect(fills(rig.scene)).toEqual([]);
     expect(rig.scene.children.length).toBe(bare.children.length);
 
     // Сэмпл есть, каста нет: кадр по-прежнему тот же.
@@ -187,7 +222,7 @@ describe('Превью каста: два входа и только два (REN
     rig.preview.applyLocalInput({ entity: HERO, target: { x: F(5), y: F(-7) } });
     rig.stage.frame(0.016, 1);
 
-    const drawn = shapes(rig.scene);
+    const drawn = outlines(rig.scene);
     expect(drawn.length).toBe(1);
     expect(drawn[0]!.position.x).toBeCloseTo(5, 6);
     expect(drawn[0]!.position.y).toBeCloseTo(-7, 6);
@@ -208,7 +243,7 @@ describe('Превью каста: два входа и только два (REN
     // Ни одной доставки между кадрами — только новый сэмпл.
     rig.preview.applyLocalInput({ entity: HERO, target: { x: F(6), y: F(2) } });
     rig.stage.frame(0.016, 1);
-    const drawn = shapes(rig.scene);
+    const drawn = outlines(rig.scene);
     expect(drawn.length).toBe(1);
     expect(drawn[0]!.position.x).toBeCloseTo(6, 6);
     // Контур переиспользован: установившийся кадр объектов не плодит (REND-26).
@@ -226,7 +261,7 @@ describe('Превью каста: два входа и только два (REN
     rig.preview.applyLocalInput({ entity: HERO, target: { x: F(2), y: F(9) } });
     rig.stage.frame(0.016, 1);
 
-    const drawn = shapes(rig.scene);
+    const drawn = outlines(rig.scene);
     expect(drawn.length).toBe(1);
     // Вершина сектора — кастер, а не точка прицела.
     expect(drawn[0]!.position.x).toBeCloseTo(2, 6);
@@ -241,6 +276,93 @@ describe('Превью каста: два входа и только два (REN
     rig.preview.applyLocalInput({ entity: HERO, target: { x: F(3), y: F(3) } });
     rig.stage.frame(0.016, 1);
     expect(rig.preview.shapeCount).toBe(0);
+    // Заливка подчиняется тому же предикату, что и контур: нет фигуры — нет
+    // ни одной её половины, иначе превью показало бы выдуманный радиус.
+    expect(fills(rig.scene)).toEqual([]);
+    expect(outlines(rig.scene)).toEqual([]);
+  });
+
+  it('фигура кадра — заливка и контур в одной позе', () => {
+    const rig = makeRig();
+    rig.stage.publish(
+      { name: 'test' },
+      makeTickView([
+        withSlot(HERO, { ability: CONE, phase: 0 }, { prevX: 2, currX: 2, prevY: 2, currY: 2 }),
+      ]),
+    );
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(2), y: F(9) } });
+    rig.stage.frame(0.016, 1);
+
+    const filled = fills(rig.scene);
+    const drawn = outlines(rig.scene);
+    expect(filled.length).toBe(1);
+    expect(drawn.length).toBe(1);
+    // Одна поза на обе половины: разойдись они, граница фигуры двоилась бы.
+    expect(filled[0]!.position.toArray()).toEqual(drawn[0]!.position.toArray());
+    expect(filled[0]!.scale.toArray()).toEqual(drawn[0]!.scale.toArray());
+    expect(filled[0]!.rotation.z).toBe(drawn[0]!.rotation.z);
+    // Заливка — треугольники, а не вторая ломаная: индекс у неё есть.
+    expect(filled[0]!.geometry.getIndex()).not.toBeNull();
+    expect(drawn[0]!.geometry.getIndex()).toBeNull();
+    // Порядок отрисовки и есть всё, чем половины разведены: глубину ни та ни
+    // другая не пишет, и z-борьбы между ними нет.
+    expect(filled[0]!.renderOrder).toBeLessThan(drawn[0]!.renderOrder);
+  });
+
+  it('заливка полупрозрачна, двусторонняя и той же палитры, что контур', () => {
+    const rig = makeRig();
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: ZONE, phase: 0 })]));
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(5), y: F(-7) } });
+    rig.stage.frame(0.016, 1);
+
+    const material = fillMaterialOf(fills(rig.scene)[0]!);
+    expect(material.transparent).toBe(true);
+    expect(material.opacity).toBeCloseTo(0.22, 6);
+    expect(material.side).toBe(THREE.DoubleSide);
+    expect(material.depthWrite).toBe(false);
+    // Цвет объявлен один раз (`AbilityPreviewColors`), и вторым его у заливки нет.
+    expect(colorOf(fills(rig.scene)[0]!)).toBe(colorOf(outlines(rig.scene)[0]!));
+  });
+
+  it('непрозрачность заливки — настройка сборки с умолчанием, а не норма', () => {
+    const rig = makeRig([slotStats(0)], { fillOpacity: 0.5 });
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: ZONE, phase: 0 })]));
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(1), y: F(1) } });
+    rig.stage.frame(0.016, 1);
+    expect(fillMaterialOf(fills(rig.scene)[0]!).opacity).toBeCloseTo(0.5, 6);
+  });
+
+  it('повторные кадры не плодят объектов: пулы фигур переиспользуются (REND-26)', () => {
+    const rig = makeRig();
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: ZONE, phase: 0 })]));
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(1), y: F(1) } });
+    rig.stage.frame(0.016, 1);
+    // На фигуру — ровно пара объектов и ни одним больше.
+    expect(rig.preview.objectCount).toBe(2);
+    const fill = fills(rig.scene)[0];
+    const outline = outlines(rig.scene)[0];
+
+    for (let i = 0; i < 5; i++) {
+      rig.preview.applyLocalInput({ entity: HERO, target: { x: F(i), y: F(2) } });
+      rig.stage.frame(0.016, 1);
+    }
+    expect(rig.preview.objectCount).toBe(2);
+    expect(fills(rig.scene)[0]).toBe(fill);
+    expect(outlines(rig.scene)[0]).toBe(outline);
+  });
+
+  it('в picking не участвует ни заливка, ни контур (REND-15)', () => {
+    const rig = makeRig();
+    rig.stage.publish({ name: 'test' }, makeTickView([withSlot(HERO, { ability: ZONE, phase: 0 })]));
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(0), y: F(0) } });
+    rig.stage.frame(0.016, 1);
+
+    const raycaster = new THREE.Raycaster();
+    raycaster.set(new THREE.Vector3(0, 0, 10), new THREE.Vector3(0, 0, -1));
+    const hits: THREE.Intersection[] = [];
+    for (const object of nodes(rig.scene)) object.raycast(raycaster, hits);
+    // Превью — изображение, а не сущность: луч сцены его не видит.
+    expect(hits).toEqual([]);
   });
 
   it('стоимость объявлена константной, ручек нет (QUAL-3)', () => {
@@ -284,7 +406,7 @@ describe('Превью каста: цепочка шагов (REND-28)', () => {
     rig.preview.applyLocalInput({ entity: HERO, target: { x: F(1), y: F(8) } });
     rig.stage.frame(0.016, 1);
 
-    const drawn = shapes(rig.scene);
+    const drawn = outlines(rig.scene);
     expect(drawn.length).toBe(2);
     // Подтверждённый шаг стоит на СУЩНОСТИ шага, а не на записанной точке:
     // цель могла сдвинуться с тика подтверждения.
@@ -295,6 +417,25 @@ describe('Превью каста: цепочка шагов (REND-28)', () => {
     expect(drawn[1]!.rotation.z).toBeCloseTo(Math.PI / 2, 6);
     expect(drawn[1]!.scale.x).toBeCloseTo(3, 6);
     expect(drawn[1]!.scale.y).toBeCloseTo(0.5, 6);
+  });
+
+  it('подтверждённый шаг и текущий залиты своими цветами цепочки', () => {
+    const rig = chainRig();
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(1), y: F(8) } });
+    rig.stage.frame(0.016, 1);
+
+    const filled = fills(rig.scene);
+    const drawn = outlines(rig.scene);
+    expect(filled.length).toBe(2);
+    expect(rig.preview.objectCount).toBe(4);
+    for (let i = 0; i < 2; i++) {
+      // Половины одного шага стоят в одной позе и одного цвета.
+      expect(filled[i]!.position.toArray()).toEqual(drawn[i]!.position.toArray());
+      expect(colorOf(filled[i]!)).toBe(colorOf(drawn[i]!));
+    }
+    // А шаги цепочки различимы: подтверждённый — состояние мира, и цвет у него
+    // не тот, что у шага, который игрок двигает прямо сейчас.
+    expect(colorOf(filled[0]!)).not.toBe(colorOf(filled[1]!));
   });
 
   it('сущность шага исчезла — подтверждённый шаг рисуется по записанной точке', () => {
@@ -310,7 +451,7 @@ describe('Превью каста: цепочка шагов (REND-28)', () => {
     rig.preview.applyLocalInput({ entity: HERO, target: null });
     rig.stage.frame(0.016, 1);
 
-    const drawn = shapes(rig.scene);
+    const drawn = outlines(rig.scene);
     expect(drawn.length).toBe(1);
     expect(drawn[0]!.position.x).toBeCloseTo(9, 6);
     expect(drawn[0]!.position.y).toBeCloseTo(-2, 6);
@@ -380,7 +521,7 @@ describe('Превью каста: только свой игрок (NET-15)', (
     rig.preview.applyLocalInput({ entity: HERO, target: { x: F(3), y: F(4) } });
     rig.stage.frame(0.016, 1);
     expect(rig.preview.shapeCount).toBe(1);
-    expect(shapes(rig.scene)[0]!.position.x).toBeCloseTo(3, 6);
+    expect(outlines(rig.scene)[0]!.position.x).toBeCloseTo(3, 6);
   });
 });
 

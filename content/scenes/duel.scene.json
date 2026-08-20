@@ -95,15 +95,15 @@
         "Locomotion": {
           "accel": 655,
           "decel": 1311,
-          "dodgeSpeed": 13107,
-          "dodgeTicks": 8,
+          "dodgeSpeed": 26214,
+          "dodgeTicks": 9,
           "jumpHeight": 1,
           "jumpSpeed": 7864,
           "jumpTicks": 20,
           "maxSpeed": 5243,
           "rollSpeed": 9830,
           "rollTicks": 18,
-          "windowTicks": 12
+          "windowTicks": 0
         },
         "LocomotionState": { "dirX": 0, "dirY": 0, "state": 0, "ticksLeft": 0 },
         "ArenaState": { "support": 0 },
@@ -201,7 +201,7 @@
       "name": "SlotRewind",
       "components": {
         "AbilitySlot": { "abilityId": 6, "slotIndex": 4 },
-        "AbilityCooldown": { "remaining": 1200, "total": 1200 }
+        "AbilityCooldown": { "remaining": 450, "total": 450 }
       }
     },
     {
@@ -209,6 +209,13 @@
       "components": {
         "AbilitySlot": { "abilityId": 1, "slotIndex": 5 },
         "AbilityCooldown": { "remaining": 0, "total": 0 }
+      }
+    },
+    {
+      "name": "SlotDodge",
+      "components": {
+        "AbilitySlot": { "abilityId": 7, "slotIndex": 6 },
+        "AbilityCooldown": { "remaining": 0, "total": 60 }
       }
     },
     {
@@ -261,6 +268,12 @@
         {
           "spawnEntity": {
             "prefab": "SlotThrow",
+            "overrides": { "AbilitySlot": { "owner": { "var": "e" } } }
+          }
+        },
+        {
+          "spawnEntity": {
+            "prefab": "SlotDodge",
             "overrides": { "AbilitySlot": { "owner": { "var": "e" } } }
           }
         },
@@ -370,6 +383,53 @@
                 }
               },
               { "emitEvent": { "type": "EntityDied", "data": { "entity": { "var": "e" } } } }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "ChargeTick",
+      "order": 29,
+      "query": { "all": ["AbilitySlot"] },
+      "as": "s",
+      "do": [
+        {
+          "if": {
+            "cond": {
+              "and": [
+                { "==": [{ "getComponent": [{ "var": "s" }, "AbilitySlot", "slotIndex"] }, 0] },
+                { "==": [{ "getComponent": [{ "var": "s" }, "AbilitySlot", "phase"] }, 0] }
+              ]
+            },
+            "then": [
+              {
+                "let": {
+                  "bindings": {
+                    "caster": { "getComponent": [{ "var": "s" }, "AbilitySlot", "owner"] }
+                  },
+                  "do": [
+                    {
+                      "if": {
+                        "cond": { "hasComponent": [{ "var": "caster" }, "Charging"] },
+                        "then": [
+                          {
+                            "modifyComponent": {
+                              "entity": { "var": "caster" },
+                              "component": "Charging",
+                              "values": {
+                                "ticks": {
+                                  "getComponent": [{ "var": "s" }, "AbilitySlot", "phaseTicks"]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
             ]
           }
         }
@@ -1126,15 +1186,15 @@
                   "values": {
                     "accel": 655,
                     "decel": 1311,
-                    "dodgeSpeed": 13107,
-                    "dodgeTicks": 8,
+                    "dodgeSpeed": 26214,
+                    "dodgeTicks": 9,
                     "jumpHeight": 1,
                     "jumpSpeed": 7864,
                     "jumpTicks": 20,
                     "maxSpeed": 5243,
                     "rollSpeed": 9830,
                     "rollTicks": 18,
-                    "windowTicks": 12
+                    "windowTicks": 0
                   }
                 }
               },
@@ -1241,7 +1301,6 @@
           { "!": [{ "hasComponent": [{ "var": "owner" }, "Holding"] }] }
         ]
       },
-      "confirmBit": 8,
       "cancelBit": 9,
       "cooldownTicks": 60,
       "targeting": {
@@ -1253,7 +1312,7 @@
       "phases": [
         {
           "id": "charge",
-          "trigger": "hold",
+          "trigger": "release",
           "durationTicks": 79,
           "timeout": { "then": "cancel" },
           "onEnter": [
@@ -1273,13 +1332,6 @@
             }
           ],
           "onExit": [
-            {
-              "modifyComponent": {
-                "entity": { "var": "owner" },
-                "component": "Charging",
-                "values": { "ticks": { "var": "phaseTicks" } }
-              }
-            },
             { "removeComponent": { "entity": { "var": "owner" }, "component": "ActionLock" } }
           ],
           "onCancel": [
@@ -1351,16 +1403,6 @@
             { "removeComponent": { "entity": { "var": "owner" }, "component": "Charging" } },
             { "removeComponent": { "entity": { "var": "owner" }, "component": "ActionLock" } }
           ]
-        },
-        {
-          "id": "aim",
-          "trigger": "commit",
-          "durationTicks": 30,
-          "timeout": { "then": "commit" },
-          "onCancel": [
-            { "removeComponent": { "entity": { "var": "owner" }, "component": "Charging" } },
-            { "removeComponent": { "entity": { "var": "owner" }, "component": "ActionLock" } }
-          ]
         }
       ],
       "effects": [
@@ -1368,15 +1410,7 @@
           "let": {
             "bindings": {
               "held": {
-                "max": [
-                  {
-                    "min": [
-                      { "-": [{ "getComponent": [{ "var": "owner" }, "Charging", "ticks"] }, 1] },
-                      60
-                    ]
-                  },
-                  0
-                ]
+                "max": [{ "min": [{ "-": [{ "var": "phaseTicks" }, 1] }, 60] }, 0]
               }
             },
             "do": [
@@ -2035,7 +2069,7 @@
       },
       "interrupts": { "timeout": { "cooldown": "refund" } },
       "phases": [
-        { "id": "aim", "trigger": "commit", "durationTicks": 60, "timeout": { "then": "cancel" } }
+        { "id": "aim", "trigger": "release", "durationTicks": 60, "timeout": { "then": "cancel" } }
       ],
       "effects": [
         {
@@ -2102,6 +2136,59 @@
           "emitEvent": {
             "type": "$rewind/request",
             "data": { "depthTicks": 420, "initiator": { "var": "owner" } }
+          }
+        }
+      ]
+    },
+    {
+      "id": "dodge",
+      "trigger": { "input": { "bit": 2 } },
+      "condition": {
+        "and": [
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Dead"] }] },
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Holding"] }] },
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Charging"] }] },
+          { "==": [{ "getComponent": [{ "var": "owner" }, "LocomotionState", "state"] }, 0] },
+          {
+            "or": [
+              { "!=": [{ "getComponent": [{ "var": "owner" }, "Input", "moveX"] }, 0] },
+              { "!=": [{ "getComponent": [{ "var": "owner" }, "Input", "moveY"] }, 0] }
+            ]
+          }
+        ]
+      },
+      "cooldownTicks": 60,
+      "effects": [
+        {
+          "let": {
+            "bindings": {
+              "dir": {
+                "vec.normalize": [
+                  {
+                    "vec": [
+                      { "getComponent": [{ "var": "owner" }, "Input", "moveX"] },
+                      { "getComponent": [{ "var": "owner" }, "Input", "moveY"] }
+                    ]
+                  }
+                ]
+              }
+            },
+            "do": [
+              {
+                "modifyComponent": {
+                  "entity": { "var": "owner" },
+                  "component": "LocomotionState",
+                  "values": {
+                    "state": 1,
+                    "dirX": { "vec.x": [{ "var": "dir" }] },
+                    "dirY": { "vec.y": [{ "var": "dir" }] },
+                    "ticksLeft": {
+                      "getComponent": [{ "var": "owner" }, "Locomotion", "dodgeTicks"]
+                    }
+                  }
+                }
+              }
+            ]
           }
         }
       ]

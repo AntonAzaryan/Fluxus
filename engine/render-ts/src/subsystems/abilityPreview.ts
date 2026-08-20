@@ -47,6 +47,17 @@
  * — часть игрового кадра. Кадр игрока, не начавшего каст, — тот же, что без
  * этой подсистемы: рисовать нечего, и группа в сцене не висит.
  *
+ * ## Заливка и контур
+ *
+ * Фигура шага рисуется ДВУМЯ объектами в одной позе: полупрозрачной заливкой и
+ * контуром поверх неё. Заливка отвечает на вопрос «что накроет», контур — на
+ * «где ровно граница»: дуга рисуется вписанной ломаной, то есть немного у́же
+ * настоящего круга, и знак этой ошибки выбран «внутрь» — превью, обещающее
+ * меньше настоящей зоны, игроку не врёт. Обе половины строятся по одним и тем
+ * же точкам и встают в одну позу: разойдись они, граница фигуры двоилась бы.
+ * Сами фигуры — разбор из определения и геометрия обеих половин — живут в
+ * соседнем модуле (`abilityPreviewShape.ts`); подсистеме принадлежит кадр.
+ *
  * ## Что подсистема НЕ считает
  *
  * Размеры фигур — выражения определения (ABIL-2), а мира у рендера нет и
@@ -62,13 +73,10 @@ import {
   ABILITY_STEPS,
   FIXED_ONE,
   NO_ENTITY,
-  SHAPE_AABB,
   SHAPE_CIRCLE,
   STEP_NONE,
-  STEP_VECTOR,
   type AbilityCatalog,
   type EntityId,
-  type Expression,
 } from '@game-mvp/core';
 import type {
   EntityView,
@@ -85,19 +93,23 @@ import {
 } from '../debug/abilityPreviewSource.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import { createShellPose, poseShell } from './shellSupport.js';
+import {
+  circleGeometry,
+  drawableShape,
+  previewShapes,
+  sectorGeometry,
+  squareGeometry,
+  type PreviewShape,
+  type ShapeGeometry,
+} from './abilityPreviewShape.js';
 
-/** Разбиение единичной окружности: круглая на глаз и дешёвая — фигур в кадре единицы. */
-const CIRCLE_SEGMENTS = 64;
-/**
- * Шаг дуги сектора, радианы. Дуга — вписанная ломаная, то есть НЕМНОГО у́же
- * настоящего круга; знак ошибки выбран «внутрь»: превью, обещающее меньше
- * настоящей зоны, игроку не врёт.
- */
-const SECTOR_ARC_STEP = Math.PI / 90;
-/** Подъём контура над полем: без него он тонет в ступени террейна (REND-7). */
+/** Подъём фигуры над полем: без него она тонет в ступени террейна (REND-7). */
 const DEFAULT_LIFT = 0.05;
-/** Фигуры у шага нет — рисовать нечем (`CompiledStep.shapeKind`). */
-const NO_SHAPE = -1;
+/**
+ * Непрозрачность заливки по умолчанию: сквозь неё видно и поле, и то, что на
+ * нём стоит, — превью накрывает зону, а не закрашивает её.
+ */
+const DEFAULT_FILL_OPACITY = 0.22;
 
 /** Цвета превью — настройка сборки, а не норма: нормирован смысл, не палитра. */
 export interface AbilityPreviewColors {
@@ -142,103 +154,20 @@ export interface AbilityPreviewOptions {
    */
   readonly slots: readonly AbilitySlotStatNames[];
   /**
-   * Источник визуальной поверхности (REND-9): по нему контур ложится на рельеф.
-   * Не задан — контур лежит на нулевой высоте.
+   * Источник визуальной поверхности (REND-9): по нему фигура ложится на рельеф.
+   * Не задан — фигура лежит на нулевой высоте.
    */
   readonly surface?: VisualSurfaceSource;
   readonly colors?: Partial<AbilityPreviewColors>;
   /** Подъём над поверхностью; не задан — `DEFAULT_LIFT`. */
   readonly lift?: number;
-}
-
-/**
- * Фигура шага во float — разобранная ОДИН раз, в точке приёма каталога
- * (REND-1). `NaN` в размере означает «вычислить нечем»: выражение определения
- * не литерал, а мира у рендера нет.
- */
-interface PreviewShape {
-  /** Код формы из словаря коллайдеров (PHYS-2) либо `NO_SHAPE`. */
-  readonly kind: number;
-  /** Радиус круга либо полуось X прямоугольника, мировые единицы. */
-  readonly a: number;
-  /** Полуось Y прямоугольника. */
-  readonly b: number;
-  /** Полуугол сектора в радианах; `NaN` — не литерал. */
-  readonly halfAngle: number;
-  /** Полуугол объявлен: круг с ним — это конус (design Decision 10). */
-  readonly sector: boolean;
-  /** У фигуры есть направление: сектор либо прямоугольник шага-вектора. */
-  readonly directed: boolean;
-}
-
-/**
- * Фигура шага рисуема: форма из словаря объявлена, а её размеры — литералы
- * определения (REND-28). Предикат ОДИН на кадр и на пробу отладки: разойдись
- * они, дамп отвечал бы «рисуется» о том, чего в кадре нет (RDBG-2).
- */
-function drawableShape(shape: PreviewShape | undefined): shape is PreviewShape {
-  if (shape === undefined || shape.kind === NO_SHAPE) return false;
-  if (shape.kind === SHAPE_CIRCLE) {
-    return Number.isFinite(shape.a) && (!shape.sector || Number.isFinite(shape.halfAngle));
-  }
-  if (shape.kind !== SHAPE_AABB) return false;
-  return Number.isFinite(shape.a) && Number.isFinite(shape.b);
-}
-
-/** Литерал длины определения (Q16.16) во float; не литерал — `NaN`. */
-function literalWorld(expr: Expression | undefined): number {
-  return typeof expr === 'number' ? expr / FIXED_ONE : Number.NaN;
-}
-
-/**
- * Литерал угла определения во float-радианы. Угол ядра — доля оборота в Q16.16
- * (FP-7), поэтому оборот здесь один и тот же множитель, а не второе соглашение.
- */
-function literalRadians(expr: Expression | undefined): number {
-  return typeof expr === 'number' ? (expr / FIXED_ONE) * Math.PI * 2 : Number.NaN;
+  /** Непрозрачность заливки фигур; не задана — `DEFAULT_FILL_OPACITY`. */
+  readonly fillOpacity?: number;
 }
 
 /** Стат сущности по имени; нет стата — `NaN`, то есть «нет данных», а не ноль. */
 function statOf(view: EntityView, name: string): number {
   return view.stats?.get(name) ?? Number.NaN;
-}
-
-/** Единичная окружность ломаной: замкнутый контур радиуса 1 в плоскости XY. */
-function circleGeometry(): THREE.BufferGeometry {
-  const positions = new Float32Array(CIRCLE_SEGMENTS * 3);
-  for (let i = 0; i < CIRCLE_SEGMENTS; i++) {
-    const angle = (i / CIRCLE_SEGMENTS) * Math.PI * 2;
-    positions[i * 3] = Math.cos(angle);
-    positions[i * 3 + 1] = Math.sin(angle);
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  return geometry;
-}
-
-/** Единичный прямоугольник: контур с полуосями 1 вокруг начала координат. */
-function squareGeometry(): THREE.BufferGeometry {
-  const positions = new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]);
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  return geometry;
-}
-
-/**
- * Сектор единичного радиуса: вершина в начале координат, раствор `2 · halfAngle`
- * вокруг оси +X. Это и есть «круг с полууглом» словаря определения — конус
- * (ABIL-5, design Decision 10), а не отдельная форма коллайдера.
- */
-function sectorGeometry(halfAngle: number): THREE.BufferGeometry {
-  const segments = Math.max(4, Math.ceil((2 * halfAngle) / SECTOR_ARC_STEP));
-  const positions: number[] = [0, 0, 0];
-  for (let i = 0; i <= segments; i++) {
-    const angle = -halfAngle + (2 * halfAngle * i) / segments;
-    positions.push(Math.cos(angle), Math.sin(angle), 0);
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  return geometry;
 }
 
 export class AbilityPreviewSubsystem implements RenderSubsystem {
@@ -251,24 +180,29 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
   private readonly options: AbilityPreviewOptions;
   private readonly colors: AbilityPreviewColors;
   private readonly lift: number;
+  private readonly fillOpacity: number;
 
   private ctx: RenderContext | null = null;
   private readonly group = new THREE.Group();
   private attached = false;
 
   /** Разделяемые геометрии и материалы: пер-фигурны только поза и масштаб (REND-3). */
-  private circle: THREE.BufferGeometry | null = null;
-  private square: THREE.BufferGeometry | null = null;
+  private circle: ShapeGeometry | null = null;
+  private square: ShapeGeometry | null = null;
   /** Геометрии секторов по индексу шага: строятся один раз на шаг, не на кадр. */
-  private readonly sectors = new Map<number, THREE.BufferGeometry>();
+  private readonly sectors = new Map<number, ShapeGeometry>();
   private confirmedMaterial: THREE.LineBasicMaterial | null = null;
   private currentMaterial: THREE.LineBasicMaterial | null = null;
+  private confirmedFill: THREE.MeshBasicMaterial | null = null;
+  private currentFill: THREE.MeshBasicMaterial | null = null;
 
   /**
-   * Пул контуров: их не больше, чем шагов у слота плюс текущий, и растёт он
-   * только до этого потолка — установившийся кадр не аллоцирует (REND-26).
+   * Пулы фигур: заливок и контуров поровну — на индекс приходится пара, — и их
+   * не больше, чем шагов у слота плюс текущий. Растут пулы только до этого
+   * потолка: установившийся кадр не аллоцирует (REND-26).
    */
   private readonly lines: THREE.LineLoop[] = [];
+  private readonly fills: THREE.Mesh[] = [];
   private used = 0;
 
   private view: TickView | null = null;
@@ -303,16 +237,10 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
     this.slots = options.slots;
     this.colors = { ...DEFAULT_COLORS, ...options.colors };
     this.lift = options.lift ?? DEFAULT_LIFT;
+    this.fillOpacity = options.fillOpacity ?? DEFAULT_FILL_OPACITY;
     // Точка приёма каталога (REND-1): литералы определения становятся float
     // здесь и только здесь, глубже fixed-point в подсистеме нет.
-    this.shapes = catalog.steps.map((step) => ({
-      kind: step.shapeKind,
-      a: literalWorld(step.shapeA),
-      b: literalWorld(step.shapeB),
-      halfAngle: literalRadians(step.halfAngle),
-      sector: step.halfAngle !== undefined,
-      directed: step.halfAngle !== undefined || step.kind === STEP_VECTOR,
-    }));
+    this.shapes = previewShapes(catalog);
     this.group.name = 'abilityPreview';
   }
 
@@ -336,7 +264,25 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
       opacity: 0.9,
       depthWrite: false,
     });
+    this.confirmedFill ??= this.fillMaterial(this.colors.confirmed);
+    this.currentFill ??= this.fillMaterial(this.colors.current);
     // Группа в сцену не добавляется: пустое превью не меняет кадр ничем (REND-28).
+  }
+
+  /**
+   * Материал заливки: та же палитра, что у контура (`this.colors`), — меняется
+   * только плотность. Стороны обе: фигура лежит на рельефе, и с любой стороны
+   * камеры это одна и та же зона; глубину заливка не пишет, чтобы не резать
+   * ни контур над собой, ни то, что стоит в зоне.
+   */
+  private fillMaterial(color: number): THREE.MeshBasicMaterial {
+    return new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: this.fillOpacity,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
   }
 
   /** Доставленное состояние: из него берутся подтверждённые шаги (REND-28). */
@@ -348,11 +294,12 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
    * Стоимость подсистемы объявлена КОНСТАНТНОЙ (`render-quality` QUAL-3, второй
    * сценарий), и ручек у неё нет.
    *
-   * Превью рисуется одному игроку и одному его идущему касту: контуров в кадре
-   * не больше, чем шагов у слота плюс текущий (`ABILITY_STEPS` + 1), сколько бы
-   * сущностей, способностей и игроков ни было в сцене. Геометрии разделяются
-   * всеми фигурами, материалов два на подсистему, а пул контуров растёт до того
-   * же потолка и переиспользуется. Снижать превью пресетом нельзя и по второму
+   * Превью рисуется одному игроку и одному его идущему касту: фигур в кадре не
+   * больше, чем шагов у слота плюс текущий (`ABILITY_STEPS` + 1), сколько бы
+   * сущностей, способностей и игроков ни было в сцене, и у каждой ровно две
+   * половины — заливка и контур. Геометрии разделяются всеми фигурами,
+   * материалов четыре на подсистему, а пулы растут до того же потолка и
+   * переиспользуются. Снижать превью пресетом нельзя и по второму
    * основанию: это состав информации игрока — то, что заденет его способность,
    * — а он от качества картинки не зависит (QUAL-2).
    */
@@ -361,8 +308,9 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
       subsystem: this.name,
       knobs: [],
       constantCost:
-        'превью рисуется одному игроку и одному его касту: контуров не больше ' +
-        `${ABILITY_STEPS + 1} независимо от объёма контента, геометрии и материалы разделяемые; ` +
+        'превью рисуется одному игроку и одному его касту: фигур не больше ' +
+        `${ABILITY_STEPS + 1} (заливка и контур у каждой) независимо от объёма контента, ` +
+        'геометрии и материалы разделяемые; ' +
         'снижать превью пресетом нельзя — это информация игрока (QUAL-2)',
     };
   }
@@ -380,7 +328,11 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
       this.casting = true;
       this.drawChain(owner, alpha);
     }
-    for (let i = this.used; i < this.lines.length; i++) this.lines[i]!.visible = false;
+    // Пулы растут парами, поэтому индекс один и тот же на заливку и контур.
+    for (let i = this.used; i < this.lines.length; i++) {
+      this.fills[i]!.visible = false;
+      this.lines[i]!.visible = false;
+    }
     this.syncAttachment();
   }
 
@@ -525,25 +477,24 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
   ): void {
     const shape = this.shapes[index];
     if (!drawableShape(shape)) return;
-    const material = (current ? this.currentMaterial : this.confirmedMaterial)!;
     const yaw = Math.atan2(pointY - originY, pointX - originX);
     if (shape.kind === SHAPE_CIRCLE) {
       if (!shape.sector) {
-        this.place(this.circle!, material, pointX, pointY, 0, shape.a, shape.a);
+        this.place(this.circle!, current, pointX, pointY, 0, shape.a, shape.a);
         return;
       }
-      this.place(this.sector(index, shape.halfAngle), material, originX, originY, yaw, shape.a, shape.a);
+      this.place(this.sector(index, shape.halfAngle), current, originX, originY, yaw, shape.a, shape.a);
       return;
     }
     if (!shape.directed) {
-      this.place(this.square!, material, pointX, pointY, 0, shape.a, shape.b);
+      this.place(this.square!, current, pointX, pointY, 0, shape.a, shape.b);
       return;
     }
     // Прямоугольник шага-вектора вытянут ВДОЛЬ направления, ближней гранью у
     // начала шага: так он читается отрезком от кастера, а не рамкой вокруг него.
     this.place(
       this.square!,
-      material,
+      current,
       originX + Math.cos(yaw) * shape.a,
       originY + Math.sin(yaw) * shape.a,
       yaw,
@@ -552,8 +503,8 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
     );
   }
 
-  /** Геометрия сектора шага: строится один раз на шаг, а не на кадр (REND-26). */
-  private sector(index: number, halfAngle: number): THREE.BufferGeometry {
+  /** Геометрии сектора шага: строятся один раз на шаг, а не на кадр (REND-26). */
+  private sector(index: number, halfAngle: number): ShapeGeometry {
     let geometry = this.sectors.get(index);
     if (geometry === undefined) {
       geometry = sectorGeometry(halfAngle);
@@ -562,20 +513,34 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
     return geometry;
   }
 
-  /** Контур из пула в заданную позу: аллокаций на кадр нет (REND-26). */
+  /**
+   * Фигура из пулов в заданную позу: аллокаций на кадр нет (REND-26). Заливка и
+   * контур встают в ОДНУ позу и берут один масштаб — расхождение читалось бы
+   * двойной границей и обещало бы игроку не ту зону.
+   */
   private place(
-    geometry: THREE.BufferGeometry,
-    material: THREE.LineBasicMaterial,
+    geometry: ShapeGeometry,
+    current: boolean,
     x: number,
     y: number,
     yaw: number,
     scaleX: number,
     scaleY: number,
   ): void {
-    const line = this.next();
-    line.geometry = geometry;
-    line.material = material;
-    line.position.set(x, y, this.groundAt(x, y) + this.lift);
+    const slot = this.used++;
+    if (this.lines[slot] === undefined) this.grow();
+    const z = this.groundAt(x, y) + this.lift;
+    const fill = this.fills[slot]!;
+    fill.geometry = geometry.fill;
+    fill.material = (current ? this.currentFill : this.confirmedFill)!;
+    fill.position.set(x, y, z);
+    fill.rotation.set(0, 0, yaw);
+    fill.scale.set(scaleX, scaleY, 1);
+    fill.visible = true;
+    const line = this.lines[slot]!;
+    line.geometry = geometry.outline;
+    line.material = (current ? this.currentMaterial : this.confirmedMaterial)!;
+    line.position.set(x, y, z);
     line.rotation.set(0, 0, yaw);
     line.scale.set(scaleX, scaleY, 1);
     line.visible = true;
@@ -587,25 +552,37 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
     return surface === null ? 0 : surface.heightAt(x, y);
   }
 
-  private next(): THREE.LineLoop {
-    let line = this.lines[this.used];
-    if (line === undefined) {
-      line = new THREE.LineLoop(this.circle!, this.currentMaterial!);
-      line.name = 'preview';
-      // Превью — изображение, а не сущность: в picking оно не участвует
-      // (REND-15), и луч сцены его не видит.
-      // eslint-disable-next-line @typescript-eslint/no-empty-function -- пустой raycast и есть «луч меня не видит»
-      line.raycast = () => {};
-      this.lines.push(line);
-      this.group.add(line);
-    }
-    this.used++;
-    return line;
+  /**
+   * Ещё одна пара «заливка + контур» в пулы. Пулы растут только до потолка
+   * цепочки — шагов слота плюс текущий, — и дальше кадр их переиспользует
+   * (REND-26).
+   */
+  private grow(): void {
+    const fill = new THREE.Mesh(this.circle!.fill, this.currentFill!);
+    fill.name = 'previewFill';
+    const line = new THREE.LineLoop(this.circle!.outline, this.currentMaterial!);
+    line.name = 'preview';
+    // Заливка рисуется ПЕРЕД контуром, и порядком всё и решается: глубину ни
+    // та ни другой не пишут (`depthWrite: false`), так что z-борьбы между
+    // половинами одной фигуры нет вовсе. Опускать заливку ниже контура
+    // подъёмом было бы хуже — подъём выбран так, чтобы фигура не тонула в
+    // ступени террейна (REND-7), и заниженная заливка ушла бы в поле.
+    fill.renderOrder = 0;
+    line.renderOrder = 1;
+    // Превью — изображение, а не сущность: в picking оно не участвует
+    // (REND-15), и луч сцены не видит ни заливки, ни контура.
+    /* eslint-disable @typescript-eslint/no-empty-function -- пустой raycast и есть «луч меня не видит» */
+    fill.raycast = () => {};
+    line.raycast = () => {};
+    /* eslint-enable @typescript-eslint/no-empty-function */
+    this.fills.push(fill);
+    this.lines.push(line);
+    this.group.add(fill, line);
   }
 
   /**
    * Решение кадра в переиспользуемую запись отладки (RDBG-2). Читается ровно то,
-   * чем нарисован кадр, — активный слот, локальный сэмпл и пул контуров; ни
+   * чем нарисован кадр, — активный слот, локальный сэмпл и пулы фигур; ни
    * одного повторного вывода здесь нет, и «нет данных» источник различает по
    * числу объявленных сборкой слотов (RDBG-6).
    */

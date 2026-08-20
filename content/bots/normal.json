@@ -16,20 +16,31 @@
     {
       "name": "cast",
       "button": 0,
+      "hands": "free",
       "target": "enemy",
       "range": 12,
-      "holdTicks": 30,
+      "holdTicks": 34,
       "cooldownTicks": 62,
       "weight": 1,
       "cast": {
         "slotIndex": 0,
-        "confirmButton": 8,
+        "commit": "release",
         "cancelButton": 9,
         "steps": [{ "aim": "enemy", "confirmDelayTicks": 34, "pointNoise": 0.4 }],
-        "holdTicks": 30,
+        "holdTicks": 34,
         "cancelChance": 0.05,
         "giveUpTicks": 150
       }
+    },
+    {
+      "name": "throwHeld",
+      "button": 0,
+      "hands": "full",
+      "target": "enemy",
+      "range": 12,
+      "holdTicks": 1,
+      "cooldownTicks": 24,
+      "weight": 2.2
     },
     {
       "name": "slowDome",
@@ -43,17 +54,18 @@
     {
       "name": "capture",
       "button": 5,
+      "hands": "free",
       "target": "threat",
-      "range": 2.6,
+      "range": 5.2,
       "holdTicks": 1,
       "cooldownTicks": 125,
       "weight": 1.6,
       "cast": {
         "slotIndex": 2,
-        "confirmButton": 8,
+        "commit": "release",
         "cancelButton": 9,
-        "steps": [{ "aim": "threat", "confirmDelayTicks": 2, "pointNoise": 0.1 }],
-        "holdTicks": 1,
+        "steps": [{ "aim": "threat", "confirmDelayTicks": 4, "pointNoise": 0.1 }],
+        "holdTicks": 4,
         "cancelChance": 0,
         "giveUpTicks": 60
       }
@@ -73,7 +85,7 @@
       "target": "threat",
       "range": 6.5,
       "holdTicks": 1,
-      "cooldownTicks": 30,
+      "cooldownTicks": 62,
       "weight": 1.5,
       "requiresMoving": true
     },

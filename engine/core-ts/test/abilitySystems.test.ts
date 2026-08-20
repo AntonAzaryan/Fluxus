@@ -520,6 +520,252 @@ describe('Видимость цели стороне владельца на п�
   });
 });
 
+// ------------------------------- «держать, целясь, отпустить» (фаза `release`)
+
+describe('Фаза `release`: отпускание записывает шаг и завершает фазу (ABIL-4, ABIL-5)', () => {
+  /**
+   * Одна кнопка на всё: она же открывает прицеливание, она же подтверждает его.
+   * Бит подтверждения объявлен, но игрок его не нажимает — именно этого и не
+   * умела платформа до четвёртого вида перехода.
+   */
+  const grab: AbilityDef = {
+    id: 'grab',
+    trigger: { input: { bit: 0 } },
+    confirmBit: 1,
+    cancelBit: 2,
+    cooldownTicks: 10,
+    phases: [
+      {
+        id: 'aim',
+        trigger: 'release',
+        onCancel: [{ emitEvent: { type: 'Lost', data: { src: { var: 'lastInterrupt' } } } }],
+      },
+    ],
+    targeting: {
+      steps: [{ kind: 'unit', range: F(10), filter: { hasComponent: [{ var: 'candidate' }, 'Enemy'] } }],
+    },
+    effects: [{ emitEvent: { type: 'Done', data: { unit: { var: 'unit0' } } } }],
+  };
+
+  /** Цепочка длиннее одного шага: подтверждения набирают, отпускание закрывает. */
+  const chain: AbilityDef = {
+    ...grab,
+    id: 'chain',
+    targeting: {
+      steps: [
+        { kind: 'unit', range: F(10), filter: { hasComponent: [{ var: 'candidate' }, 'Enemy'] } },
+        { kind: 'point' },
+      ],
+    },
+    effects: [
+      {
+        emitEvent: {
+          type: 'Done',
+          data: { unit: { var: 'unit0' }, x: { 'vec.x': [{ var: 'step1' }] } },
+        },
+      },
+    ],
+  };
+
+  it('удержание держит фазу, отпускание записывает шаг и исполняет эффекты тем же тиком', () => {
+    const h = harness(scene([grab]));
+    const hero = h.place('Hero');
+    const foe = h.place('Foe');
+    const slot = giveSlot(h, hero);
+
+    expect(eventsOfType(h.step(CAST), 'Done')).toHaveLength(0);
+    expect(h.slotField(slot, 'phase')).toBe(0);
+
+    h.aim(F(3), 0);
+    h.step(CAST);
+    // До отпускания в мире не происходит ничего: проверка выполняется только на
+    // подтверждении, а подтверждения ещё не было (ABIL-5).
+    expect(h.slotField(slot, 'staged')).toBe(0);
+    expect(h.slotField(slot, 'step0e')).toBe(-1);
+    expect(h.slotField(slot, 'phase')).toBe(0);
+
+    // Отпускание: шаг накоплен системой на −800, а завершение фазы на −790 его
+    // уже видит — тем же тиком, а не следующим (DET-9).
+    const done = eventsOfType(h.step(0), 'Done');
+    expect(done).toHaveLength(1);
+    expect(done[0]!.data.unit).toBe(foe);
+    expect(h.slotField(slot, 'step0e')).toBe(foe);
+    expect(h.slotField(slot, 'phase')).toBe(NO_PHASE);
+    expect(h.cooldown(slot)).toBe(9);
+  });
+
+  it('цепочка набирается подтверждениями, а закрывается отпусканием (ABIL-5)', () => {
+    const h = harness(scene([chain]));
+    const hero = h.place('Hero');
+    const foe = h.place('Foe');
+    const slot = giveSlot(h, hero);
+
+    h.step(CAST);
+    h.aim(F(3), 0);
+    h.step(CAST | CONFIRM);
+    expect(h.slotField(slot, 'staged')).toBe(1);
+    expect(h.slotField(slot, 'step0e')).toBe(foe);
+    // Фаза держится: бит триггера всё ещё удерживается.
+    expect(h.slotField(slot, 'phase')).toBe(0);
+
+    h.aim(F(7), 0);
+    const done = eventsOfType(h.step(0), 'Done');
+    expect(done).toHaveLength(1);
+    expect(done[0]!.data.unit).toBe(foe);
+    expect(done[0]!.data.x).toBe(F(7));
+  });
+
+  it('цель, потерянная к отпусканию, даёт targetLost с возвратом кулдауна (ABIL-5, ABIL-6)', () => {
+    const h = harness(scene([chain]));
+    const hero = h.place('Hero');
+    const foe = h.place('Foe');
+    const slot = giveSlot(h, hero);
+
+    h.step(CAST);
+    h.aim(F(3), 0);
+    h.step(CAST | CONFIRM);
+    expect(h.slotField(slot, 'step0e')).toBe(foe);
+    destroy(h.world, foe);
+
+    const events = h.step(0);
+    expect(eventsOfType(events, 'Done')).toHaveLength(0);
+    const lost = eventsOfType(events, 'Lost');
+    expect(lost).toHaveLength(1);
+    expect(lost[0]!.data.src).toBe(INTERRUPT_TARGET_LOST);
+    expect(h.cooldown(slot)).toBe(0);
+    expect(h.slotField(slot, 'phase')).toBe(NO_PHASE);
+  });
+
+  it('отпускание без цели проверку не проходит — тот же источник', () => {
+    const h = harness(scene([grab]));
+    const hero = h.place('Hero');
+    const slot = giveSlot(h, hero);
+    h.step(CAST);
+    h.aim(F(3), 0);
+    const events = h.step(0);
+    expect(eventsOfType(events, 'Done')).toHaveLength(0);
+    expect(eventsOfType(events, 'Lost')[0]?.data.src).toBe(INTERRUPT_TARGET_LOST);
+    expect(h.slotField(slot, 'lastInterrupt')).toBe(INTERRUPT_TARGET_LOST);
+  });
+
+  it('передержанная фаза: timeout.then = cancel срывает каст, шаг не записывается (ABIL-4)', () => {
+    const overheld: AbilityDef = {
+      ...grab,
+      id: 'overheld',
+      phases: [
+        {
+          id: 'aim',
+          trigger: 'release',
+          durationTicks: 2,
+          timeout: { then: 'cancel' },
+          onCancel: [{ emitEvent: { type: 'Lost', data: { src: { var: 'lastInterrupt' } } } }],
+        },
+      ],
+    };
+    const h = harness(scene([overheld]));
+    const hero = h.place('Hero');
+    h.place('Foe');
+    const slot = giveSlot(h, hero);
+
+    h.aim(F(3), 0);
+    h.step(CAST);
+    h.step(CAST);
+    const events = h.step(CAST);
+    expect(eventsOfType(events, 'Lost')[0]?.data.src).toBe(INTERRUPT_TIMEOUT);
+    expect(h.slotField(slot, 'phase')).toBe(NO_PHASE);
+    // Сигнал накопления — прекращение удержания, а его не было.
+    expect(h.slotField(slot, 'step0e')).toBe(-1);
+    // Умолчание источника `timeout` — взвести кулдаун целиком (ABIL-6).
+    expect(h.cooldown(slot)).toBe(9);
+  });
+
+  it('передержанная фаза: timeout.then называет фазу — переход, а не срыв (ABIL-4)', () => {
+    const overheld: AbilityDef = {
+      ...grab,
+      id: 'over',
+      phases: [
+        { id: 'aim', trigger: 'release', durationTicks: 2, timeout: { then: 'boom' } },
+        { id: 'boom', trigger: 'auto', durationTicks: 1, onEnter: [{ emitEvent: { type: 'Boom' } }] },
+      ],
+      targeting: { steps: [{ kind: 'point' }] },
+      effects: [{ emitEvent: { type: 'Done' } }],
+    };
+    const h = harness(scene([overheld]));
+    const hero = h.place('Hero');
+    const slot = giveSlot(h, hero);
+
+    h.step(CAST);
+    h.step(CAST);
+    expect(eventsOfType(h.step(CAST), 'Boom')).toHaveLength(1);
+    expect(h.slotField(slot, 'phase')).toBe(1);
+  });
+
+  it('объявленный источник release в фазе `release` не срабатывает (ABIL-6)', () => {
+    const declared: AbilityDef = {
+      ...grab,
+      id: 'declared',
+      interrupts: { release: {} },
+      targeting: { steps: [{ kind: 'point' }] },
+      effects: [{ emitEvent: { type: 'Done' } }],
+    };
+    const h = harness(scene([declared]));
+    const hero = h.place('Hero');
+    const slot = giveSlot(h, hero);
+
+    h.step(CAST);
+    h.aim(F(2), 0);
+    const events = h.step(0);
+    // Отпускание — штатное завершение фазы, а не срыв: `onCancel` не исполнен.
+    expect(eventsOfType(events, 'Lost')).toHaveLength(0);
+    expect(eventsOfType(events, 'Done')).toHaveLength(1);
+    expect(h.slotField(slot, 'lastInterrupt')).toBe(0);
+  });
+
+  it('способность с триггером не `input`: фаза `release` завершается только таймаутом', () => {
+    const passive: AbilityDef = {
+      id: 'passive',
+      trigger: { always: true },
+      cooldownTicks: 0,
+      phases: [{ id: 'aim', trigger: 'release', durationTicks: 3, timeout: { then: 'commit' } }],
+      targeting: { steps: [{ kind: 'point' }] },
+      effects: [{ emitEvent: { type: 'Done' } }],
+    };
+    const h = harness(scene([passive]));
+    const hero = h.place('Hero');
+    const slot = giveSlot(h, hero);
+
+    h.step();
+    // Бита триггера у такой способности нет, и «удержание прекращено» для неё
+    // не наступает никогда (ABIL-3, ABIL-4).
+    expect(eventsOfType(h.step(), 'Done')).toHaveLength(0);
+    expect(h.slotField(slot, 'phase')).toBe(0);
+    expect(eventsOfType(h.step(), 'Done')).toHaveLength(0);
+    expect(eventsOfType(h.step(), 'Done')).toHaveLength(1);
+  });
+
+  it('фазы `hold` и `auto` шага по-прежнему не накапливают (ABIL-5)', () => {
+    const winding: AbilityDef = {
+      ...grab,
+      id: 'winding',
+      phases: [
+        { id: 'wind', trigger: 'hold' },
+        { id: 'aim', trigger: 'commit' },
+      ],
+    };
+    const h = harness(scene([winding]));
+    const hero = h.place('Hero');
+    h.place('Foe');
+    const slot = giveSlot(h, hero);
+
+    h.aim(F(3), 0);
+    h.step(CAST);
+    // Подтверждение внутри фазы `hold` не пишет ничего.
+    h.step(CAST | CONFIRM);
+    expect(h.slotField(slot, 'staged')).toBe(0);
+    expect(h.slotField(slot, 'step0e')).toBe(-1);
+  });
+});
+
 // ------------------------------------------------------------- прерывания
 
 describe('Прерывания: словарь, умолчания и исходы (ABIL-6)', () => {

@@ -32,7 +32,12 @@ import {
   type SimulationState,
   type TickObserver,
 } from '@game-mvp/core';
-import { firstRewindRequest } from '@game-mvp/net';
+import {
+  firstRewindRequest,
+  warnToConsole,
+  REWIND_REQUEST_EVENT,
+  type RewindRequestWarn,
+} from '@game-mvp/net';
 import type { Extractor } from '@game-mvp/render';
 import { ShellSender, type SenderOptions } from './sender.js';
 import { InputLatch, routeMainMessage } from './inputLatch.js';
@@ -81,6 +86,12 @@ interface ScrubSession {
   readonly floor: number;
   idleTicks: number;
   sinceStep: number;
+  /**
+   * Хотя бы один шаг уже сделан. Нужен ровно затем, чтобы ПЕРВЫЙ шаг не ждал
+   * цикла и не перепроверял орган: вход в перемотку уже означает, что орган был
+   * удержан — ульту прожали им же (REW-13).
+   */
+  stepped: boolean;
 }
 
 export interface WorkerShellConfig {
@@ -100,6 +111,16 @@ export interface WorkerShellConfig {
   readonly playerId?: string;
   /** Контроллер переходов WSM; undefined — команды управления игнорируются. */
   readonly rewind?: RewindController;
+  /**
+   * Приёмник диагностики запроса перемотки (REW-12): испорченный payload и
+   * запрос, который оболочка НЕ МОЖЕТ исполнить структурно — контроллера в
+   * сборке нет. Шов сборки, а не свойство мира; умолчание — `console.warn`.
+   *
+   * Тот же шов, что у сервера матча (`MatchServer.rewindWarn`), и по тому же
+   * основанию: сцена, просящая механизм, которого хост не собрал, снаружи
+   * неотличима от ульты, которая ничего не делает.
+   */
+  readonly rewindWarn?: RewindRequestWarn;
   /**
    * Канонический лог вводов (TICK-2): реплей внутри `seekTo` идёт по нему
    * (REW-2). Пишет его оболочка, потому что канонический кадр собирает она —
@@ -148,6 +169,11 @@ export class WorkerShell {
   /** Тиков с последнего сообщения ввода: молчание главного потока = отпускание. */
   private idleTicks = 0;
   private scrub: ScrubSession | undefined;
+  /**
+   * Несобираемость перемотки уже названа вслух. Один раз на сессию: строка на
+   * каждый каст утопила бы консоль в собственном шуме.
+   */
+  private rewindUnavailableReported = false;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
   private nextTickAt = 0;
@@ -228,12 +254,31 @@ export class WorkerShell {
    * Испорченный payload запросом не считается: `firstRewindRequest`
    * предупреждает и отдаёт `undefined`, а не бросает, — тик локального мира от
    * опечатки в контенте умирать не должен так же, как и цикл матча.
+   *
+   * Оболочка, собранная БЕЗ контроллера, запрос не исполняет — но и не молчит.
+   * Это не тот же случай, что «запрос не в `Running`»: там сработала норма
+   * REW-12, а здесь дефект СБОРКИ — сцена просит механизм, которого оболочке не
+   * дали, и снаружи это выглядит как ульта, которая жжёт cooldown и ничего не
+   * делает. Ровно так дефект и жил на сервере матча, пока раскладка документа
+   * теряла секцию `rewind`. Отчёт — диагностика, а не исключение: тик
+   * локального мира убивать нечем.
    */
   private drainRewindRequest(events: Parameters<typeof firstRewindRequest>[0]): void {
     const rewind = this.config.rewind;
-    if (rewind === undefined) return;
-    const request = firstRewindRequest(events);
+    // Несобираемость уже названа — разбирать шину незачем: второй раз она
+    // ничего нового не сообщит.
+    if (rewind === undefined && this.rewindUnavailableReported) return;
+    const request = firstRewindRequest(events, this.config.rewindWarn);
     if (request === undefined) return;
+    if (rewind === undefined) {
+      this.rewindUnavailableReported = true;
+      (this.config.rewindWarn ?? warnToConsole)(
+        `${REWIND_REQUEST_EVENT}: оболочка собрана без контроллера перемотки — ` +
+          'перематывать нечем (SHELL-6, NET-11, SNAP-4). Запрос отброшен, ' +
+          'следующие запросы этой сессии отбрасываются молча',
+      );
+      return;
+    }
     if (rewind.mode !== 'Running') return;
 
     const { state } = this.config;
@@ -244,14 +289,32 @@ export class WorkerShell {
     );
     rewind.pause();
     rewind.beginRewind();
-    this.scrub = { floor, idleTicks: 0, sinceStep: 0 };
+    // Шага здесь нет намеренно: тик, на котором ульта прожата, обязан остаться
+    // тем, каким его оставил живой тик (TICK-3), — точку ведёт драйвер, и
+    // первый её шаг он делает на первом же своём вызове (см. `driveScrub`).
+    this.scrub = { floor, idleTicks: 0, sinceStep: 0, stepped: false };
     this.idleTicks = 0;
   }
 
   /**
-   * Ведение точки перемотки по удержанию (REW-13, REW-7): шаг реже тика,
-   * отпускание и достижение глубины дают один исход — `Rewinding → Paused →
-   * Running`.
+   * Ведение точки перемотки по удержанию (REW-13, REW-7): первый шаг — на
+   * первом же ведении, дальше реже тика; отпускание, молчание главного потока
+   * и достижение глубины дают один исход — `Rewinding → Paused → Running`.
+   *
+   * Тот же драйвер на втором хосте — `MatchServer.driveScrub`
+   * (`engine/net-ts`, NTR-3): сервер ведёт точку по тем же правилам, читая
+   * орган из кадров слота-инициатора, а не из сообщений главного потока.
+   *
+   * Общего кода у них нет НАМЕРЕННО, и это не случайность, а невыбранный
+   * вариант: разделяемый драйвер технически возможен (прецедент рядом —
+   * `firstRewindRequest` живёт в `@game-mvp/net`, и оболочка его импортирует,
+   * депкруиз этого не запрещает), но различий у двух хостов больше, чем общей
+   * политики — источник органа, владелец счётчика молчания, правило «инициатор
+   * без слота», рассылка восстановленного состояния, — и обёртка над ними
+   * вышла бы длиннее самой политики. Цена решения: правка ЗДЕСЬ обязана быть
+   * повторена ТАМ, и наоборот. Держит их в шаге поведенческий тест,
+   * поставленный обоим хостам: короткое нажатие двигает точку и возобновляет
+   * мир на более раннем тике.
    */
   private driveScrub(): void {
     const session = this.scrub;
@@ -266,21 +329,57 @@ export class WorkerShell {
     }
 
     const scrub = this.config.scrub;
-    const timeoutTicks = scrub?.timeoutTicks ?? SCRUB_DEFAULTS.timeoutTicks;
-    session.sinceStep++;
-    if (session.sinceStep < (scrub?.every ?? SCRUB_DEFAULTS.every)) return;
-    session.sinceStep = 0;
-
-    // Органа управления нет вовсе — держать нечем: мир возобновится по порогу
-    // молчания, а не зависнет в `Rewinding`.
-    const held = scrub !== undefined && (this.controlButtons & (1 << scrub.button)) !== 0;
-    if (!held || this.idleTicks > timeoutTicks) {
+    // Органа управления нет вовсе — держать нечем: мир возобновится первым же
+    // ведением, а не зависнет в `Rewinding`.
+    if (scrub === undefined) {
       this.stopScrub();
       return;
     }
 
+    // ПЕРВЫЙ шаг — на первом же ведении, без ожидания цикла и без перепроверки
+    // органа. Прежде первого шага ждали `every` тиков, а проверка отпускания
+    // стояла ЗА тем же гейтом: игрок, отпустивший клавишу внутри цикла, получал
+    // мир, замерший и возобновившийся на ТОМ ЖЕ тике, — ульта сгорала на полный
+    // cooldown, не отмотав ни тика. Удержание в момент каста при этом известно
+    // по построению: ульту прожали тем же битом (REW-13).
+    if (!session.stepped) {
+      this.stepScrub();
+      return;
+    }
+
+    // Дальше отпускание и молчание главного потока читаются КАЖДЫЙ тик, а не на
+    // границе шага: досиженный цикл — это мир, замерший уже после того, как
+    // игрок отпустил клавишу.
+    const held = (this.controlButtons & (1 << scrub.button)) !== 0;
+    if (!held || this.idleTicks > (scrub.timeoutTicks ?? SCRUB_DEFAULTS.timeoutTicks)) {
+      this.stopScrub();
+      return;
+    }
+
+    session.sinceStep++;
+    if (session.sinceStep < (scrub.every ?? SCRUB_DEFAULTS.every)) return;
+    this.stepScrub();
+  }
+
+  /**
+   * Один шаг точки перемотки назад (REW-13): на `scrub.step` тиков, но не
+   * глубже заявленной глубины автостопа и не глубже фактической глубины
+   * истории — обе границы сведены в `floor` при входе (SNAP-6). Достигнув дна,
+   * скраб останавливается сам: дальше отматывать нечего.
+   *
+   * Зовут его двое — первое ведение и последующие, — и оба через эту функцию:
+   * второй экземпляр той же арифметики рядом и есть способ им разойтись.
+   */
+  private stepScrub(): void {
+    const session = this.scrub;
+    const rewind = this.config.rewind;
+    if (session === undefined || rewind === undefined) return;
+    session.sinceStep = 0;
+    session.stepped = true;
+
     const { state } = this.config;
-    const target = Math.max(session.floor, state.tick - (scrub.step ?? SCRUB_DEFAULTS.step));
+    const step = this.config.scrub?.step ?? SCRUB_DEFAULTS.step;
+    const target = Math.max(session.floor, state.tick - step);
     if (target < state.tick) {
       rewind.seekTo(target);
       // Стёртая ветвь уходит из истории здесь же: живые тики новой ветви пойдут

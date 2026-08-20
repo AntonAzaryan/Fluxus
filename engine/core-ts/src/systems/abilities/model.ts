@@ -31,6 +31,13 @@ export const TRIGGER_ALWAYS = 2;
 export const PHASE_HOLD = 0;
 export const PHASE_AUTO = 1;
 export const PHASE_COMMIT = 2;
+/**
+ * `release` — фаза `hold` плюс запись шага: прекращение удержания И записывает
+ * прицеливание тика в очередной незаполненный шаг (ABIL-5), И завершает фазу.
+ * Этим видом описывается «держать, целясь, отпустить» — одной кнопкой, без
+ * отдельного бита подтверждения.
+ */
+export const PHASE_RELEASE = 3;
 
 /** Вид шага прицеливания (ABIL-5). */
 export const STEP_NONE = 0;
@@ -125,7 +132,7 @@ export type AbilityInterruptsDef = Readonly<Record<string, AbilityInterruptDef>>
 
 export interface AbilityPhaseDef {
   readonly id: string;
-  readonly trigger: 'hold' | 'auto' | 'commit';
+  readonly trigger: 'hold' | 'auto' | 'commit' | 'release';
   /** Число тиков — сырое целое, как номер тика (EXPR-2), а не Q16.16. */
   readonly durationTicks?: Expression;
   readonly onEnter?: readonly Action[];

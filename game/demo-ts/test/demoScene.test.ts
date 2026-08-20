@@ -204,15 +204,14 @@ describe('демо-сцена: кромка диска и смерть в пус
     });
   }
 
-  it('зажатая кнопка каста копит заряд и стреляет ровно раз — на подтверждении (INP-2)', () => {
+  it('зажатая кнопка каста копит заряд и стреляет ровно раз — на отпускании (INP-2)', () => {
     // Held-семантика ввода (INP-2) даёт бит во всех тиках удержания. Каст
-    // ловит фронт (триггер определения), отпускание закрывает фазу заряда и
-    // открывает прицеливание, а выстрел даёт ПОДТВЕРЖДЕНИЕ шага (ABIL-5):
-    // удержание не спамит снарядами, а копит заряд, и на одно нажатие
+    // ловит фронт (триггер определения), а ОТПУСКАНИЕ завершает фазу `release`
+    // (ABIL-4): тем же тиком записывается шаг прицеливания (ABIL-5) и летит
+    // снаряд. Удержание не спамит снарядами, а копит заряд, и на одно нажатие
     // приходится ровно один снаряд.
     const { sim, state, playerId } = createDemoSimulation(SCENE);
     const CAST = 1 << ACTION_BITS.cast;
-    const CONFIRM = 1 << ACTION_BITS.confirm;
     const fireballs = (): number => {
       let count = 0;
       for (const entity of coreWorld.listAlive(state.world)) {
@@ -248,16 +247,14 @@ describe('демо-сцена: кромка диска и смерть в пус
     expect(fireballs()).toBe(0);
     expect(coreWorld.hasComponent(state.world, playerId, 'Charging')).toBe(true);
 
-    // Отпускание открывает прицеливание: снаряда всё ещё нет.
+    // Отпускание — и есть выстрел: ждать второй кнопки не нужно и нечего.
     step(11, 0);
-    expect(fireballs()).toBe(0);
-    step(12, CONFIRM);
     expect(fireballs()).toBe(1);
     expect(coreWorld.hasComponent(state.world, playerId, 'Charging')).toBe(false);
 
     // Повторное нажатие на неостывшем кулдауне заряда не начинает.
     expect(castCooldown()).toBeGreaterThan(0);
-    step(13, CAST);
+    step(12, CAST);
     expect(coreWorld.hasComponent(state.world, playerId, 'Charging')).toBe(false);
     expect(fireballs()).toBe(1);
 
@@ -265,14 +262,13 @@ describe('демо-сцена: кромка диска и смерть в пус
     // не спамит, но и не запирает способность навсегда. Считаются РОДИВШИЕСЯ
     // за прогон, а не живые: первый снаряд к этому времени долетел и исчез.
     expect(spawned.size).toBe(1);
-    let tick = 14;
+    let tick = 13;
     while (castCooldown() > 0) {
       step(tick, 0);
       tick += 1;
     }
     step(tick, CAST);
     step(tick + 1, 0);
-    step(tick + 2, CONFIRM);
     expect(spawned.size).toBe(2);
     expect(fireballs()).toBe(1);
   });

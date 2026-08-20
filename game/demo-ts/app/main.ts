@@ -82,11 +82,13 @@ import {
 } from '@game-mvp/client';
 import {
   ACTION_BITS,
+  CHARGE_PREVIEW_MIN_TICKS,
   PREVIEW_SLOTS,
   RESPAWN_EVENT,
   STATE_COMPONENTS,
   STATS,
 } from './sim.js';
+import { createChargeBalls, type ChargeBalls } from './chargeBalls.js';
 import { attachBenchProbe, benchRequested, type BenchProbe, type BenchProbeHost } from './benchProbe.js';
 import {
   attachDebugGlobal,
@@ -103,7 +105,7 @@ import {
   staticCollidersDebugSource,
 } from './debugSources.js';
 import { demoEdgePan } from './cameraInput.js';
-import { createDemoHud, demoHudComposition } from './hud.js';
+import { createDemoHud, demoHudComposition, markHoldOnlyAbilities } from './hud.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import {
@@ -259,7 +261,7 @@ let pointerY = -1;
  * что «указатель где-то стоит» (см. `pointerAimSource`).
  */
 let pointerMoves = 0;
-/** Зажатые кнопки мыши: 1 — drag-панорама (MMB), 2 — осмотр в fly (RMB). */
+/** Зажатые кнопки мыши: 1 — drag-панорама (MMB), 2 — осмотр в fly (Alt+RMB). */
 let midDrag = false;
 let rightDrag = false;
 
@@ -399,6 +401,12 @@ const kbmSource = new KeyboardMouseSource({
   bindings: bindings.keyboardMouse,
   // Fly владеет клавиатурой — герой стоит (CAM-1, CAM-2).
   movementCaptured: () => rig?.capturesMovement() ?? false,
+  // ВАЖНО для действий на кнопках мыши (`cast` на ЛКМ, `shield` на ПКМ):
+  // нажатие без разрешённого прицела действием не считается (INP-1) — луч мимо
+  // плоскости пола или клик точно в себя не дают ни фронта, ни удержания.
+  // Каст этим и жив (стрелять в никуда нечем), а вот щит платит за это ценой:
+  // ПКМ с курсором выше горизонта его не поставит. Лечится это не здесь, а
+  // источником прицела — сегодня он у демо один и он же луч по полу.
   aimAt: aimAtPointer,
 });
 sampler.add(kbmSource);
@@ -433,6 +441,13 @@ let frameAim: number | null = null;
  * гаснет вместе с ним.
  */
 let frameTarget: AimPoint | null = null;
+
+/**
+ * Последний НЕПУСТОЙ прицел кадра: им целится шар заряда своего героя. Луч,
+ * ушедший мимо плоскости пола, шар не гасит — заряд идёт, а направление у него
+ * есть то же самое правило «последнего значения», что у сэмплера (INP-5).
+ */
+let lastAim: number | null = null;
 
 /**
  * Прицел под курсором как НЕПРЕРЫВНЫЙ источник (INP-1): `KeyboardMouseSource`
@@ -507,6 +522,44 @@ sampler.add(pointerAimSource);
 let abilityPreview: AbilityPreviewSubsystem | null = null;
 
 /**
+ * Визуальная поверхность кадра (REND-9) — общая с подсистемами террейна,
+ * моделей и эффектов; появляется вместе с сеткой в `onReady`. Шар заряда
+ * садится на НЕЁ, а не на `pose.z` инстанса: в прыжке и рывке поза поднята
+ * дугой манёвра (REND-12), а шар висит перед кастером на своей высоте.
+ */
+let visualSurface: VisualSurfaceSource | null = null;
+
+/**
+ * Точка пола под интерполированной позой инстанса. Горизонталь — ровно та
+ * позиция, по которой решает тик (REND-2), высота — поверхность под ней.
+ *
+ * Отдаётся ОДНА переиспользуемая запись: функция зовётся по разу на каждый шар
+ * заряда в кадре, а свежий объект на каждый вызов — мусор на кадре (та же
+ * политика, что у `ndcScratch`/`hitScratch`). Значение читается сразу и между
+ * кадрами не хранится.
+ */
+const groundScratch = { x: 0, y: 0, z: 0 };
+function groundUnder(instance: { pose: { x: number; y: number; z: number } }): {
+  x: number;
+  y: number;
+  z: number;
+} {
+  const surface = visualSurface?.current ?? null;
+  const x = instance.pose.x;
+  const y = instance.pose.y;
+  groundScratch.x = x;
+  groundScratch.y = y;
+  groundScratch.z = surface === null ? instance.pose.z : surface.heightAt(x, y);
+  return groundScratch;
+}
+
+/**
+ * Шары заряда каста: собираются в `main` ПОСЛЕ манифеста — цвет, базовый радиус
+ * и высоту они берут из его записей `effects.byKind` (`chargeBalls.ts`).
+ */
+let chargeBalls: ChargeBalls | null = null;
+
+/**
  * Имена статов слотов, доставляемых превью (HUD-8). Список тот же, по которому
  * `extractor.ts` объявляет источники: разойдись они — превью читало бы имена,
  * которых в кадре нет, и молча не рисовало бы ничего.
@@ -568,8 +621,13 @@ window.addEventListener('mousedown', (e) => {
     midDrag = true;
     return;
   }
-  if (e.button === 2) rightDrag = true;
-  // ЛКМ (каст) обрабатывает KeyboardMouseSource.bind выше.
+  // ПКМ с Alt — осмотр в режиме облёта (CAM-1); без Alt правая кнопка
+  // принадлежит герою: её действие (`shield`) обрабатывает
+  // `KeyboardMouseSource.bind` выше — тем же путём, что ЛКМ (каст). Что именно
+  // Alt отдаёт камере, а не миру, сказано ОДИН раз и в данных — оговоркой
+  // `suppressedBy` той же записи раскладки (INP-4): здесь только вторая
+  // половина того же решения.
+  if (e.button === 2 && e.altKey) rightDrag = true;
 });
 window.addEventListener('mouseup', (e) => {
   if (e.button === 1) midDrag = false;
@@ -603,13 +661,16 @@ function sampleCameraInput(): void {
   const fly = rig?.capturesMovement() ?? false;
   camInput.moveX = fly ? (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0) : 0;
   camInput.moveY = fly ? (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0) : 0;
-  // Вертикаль облёта — `Q`/`Z`, а не привычная пара `Q`/`E`: `E` ушла герою под
-  // щит (`bindings.json`), а `KeyboardMouseSource` гасит в режиме облёта только
-  // ОСИ движения (`movementCaptured`), не биты действий, — и облёт вверх молча
-  // ставил бы щит. Та же причина, по которой облёт включает `V`, а не `F`.
-  // Направление у `Q` при этом ОБРАТНОЕ редакторскому (`editor/ui-ts`: `E` —
-  // вверх, `Q` — вниз): там вертикаль облёта свободна, здесь её выбирает
-  // занятость `E`. Мышечная память между двумя сборками не переносится.
+  // Вертикаль облёта — `Q`/`Z`, а не привычная пара `Q`/`E`: `Q` в раскладке
+  // демо занята отменой шага прицеливания (`bindings.json`), а `KeyboardMouseSource`
+  // гасит в режиме облёта только ОСИ движения (`movementCaptured`), не биты
+  // действий, — то есть облёт вверх заодно шлёт в мир отмену. Пара выбрана
+  // так, чтобы вторая клавиша (`Z`) не значила в мире ничего. Направление у
+  // `Q` при этом ОБРАТНОЕ редакторскому (`editor/ui-ts`: `E` — вверх, `Q` —
+  // вниз): мышечная память между двумя сборками не переносится.
+  // У правой кнопки та же коллизия решена в ДАННЫХ: осмотр требует Alt, а
+  // раскладка объявляет `shield` подавленным этим же модификатором, — одно
+  // сочетание, один смысл (INP-4).
   camInput.moveZ = fly ? (keys.has('KeyQ') ? 1 : 0) - (keys.has('KeyZ') ? 1 : 0) : 0;
 }
 
@@ -702,6 +763,7 @@ function sampleFrameInput(): void {
   const resolved = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
   frameAim = resolved === null ? null : resolved.angle;
   frameTarget = resolved;
+  if (frameAim !== null) lastAim = frameAim;
 
   // Отложенное кадрирование миникарты — когда камера уже не follow (см. panTo).
   if (pendingPan !== null && rig !== null && rig.mode !== 'follow') {
@@ -714,8 +776,13 @@ function sampleFrameInput(): void {
   // точка и то же квантование, что уедут в мир `InputFrame`'ом (INP-3), а не
   // второе округление той же точки. Обратного канала нет: подсистема её только
   // читает.
+  //
+  // Гейт короткого заряда — здесь, а не в подсистеме: «одиночный клик превью не
+  // показывает» — правило ИГРЫ, а рендер рисует фигуру шага, пока идёт фаза
+  // (REND-28), и решать за игру, какая фаза достойна картинки, ему нечем.
+  // Сэмпл без точки гасит превью ровно так же, как его отсутствие.
   abilityPreview?.applyLocalInput(
-    heroId === null
+    heroId === null || chargeTooYoung()
       ? null
       : {
           entity: heroId,
@@ -726,6 +793,18 @@ function sampleFrameInput(): void {
         },
   );
   if (touchSource !== null) touchOverlay?.(touchSource.overlay());
+}
+
+/**
+ * Идёт ли заряд каста своего героя короче порога (`CHARGE_PREVIEW_MIN_TICKS`).
+ * Величина — ДОСТАВЛЕННАЯ (стат `charge`, HUD-1), а не счётчик главного потока:
+ * о нажатиях кадр не помнит, и помнить не должен — заряд считает симуляция.
+ * Стата нет — заряда нет, и гасить нечего.
+ */
+function chargeTooYoung(): boolean {
+  if (heroId === null) return false;
+  const ticks = remote?.view?.entities.get(heroId)?.stats?.get(STATS.charge);
+  return ticks !== undefined && ticks < CHARGE_PREVIEW_MIN_TICKS;
 }
 
 /**
@@ -777,8 +856,8 @@ function cameraFrame(dtSec: number): void {
 
 /**
  * Стадия `present`: покадровое обновление подсистем (`frame` — интерполяция
- * поз, отсечение, выбор уровня детализации). Сектор захвата и шар заряда —
- * следом и здесь же: они садятся на позу инстанса ЭТОГО кадра, не прошлого.
+ * поз, отсечение, выбор уровня детализации). Шар заряда — следом и здесь же: он
+ * садится на позу инстанса ЭТОГО кадра, не прошлого.
  *
  * Приёма доставки (`syncTick`) здесь НЕТ: подсистемам его раздаёт `RemoteHost`
  * на приход сообщения из воркера (SHELL-3), то есть между кадрами. Стоимость
@@ -787,6 +866,7 @@ function cameraFrame(dtSec: number): void {
  */
 function presentFrame(now: number): void {
   remote?.frame(now);
+  chargeBalls?.update();
   // Отладочный слой ведёт себя сам: доставленное состояние и кадровые величины
   // он получает своей точкой у сцены (REND-27) — сразу после подсистем, то есть
   // по позам ЭТОГО кадра. Приложению остаётся текстовая часть панели (RDBG-3), и
@@ -1104,6 +1184,18 @@ async function main(): Promise<void> {
   const presentation = await loadPresentation();
   const fogEnabled = (sceneJson as unknown as SceneDef).fog === true;
   const fogConfig = resolveFogConfig(presentation?.fog);
+  // Шары заряда — после манифеста: цвет, базовый радиус и высоту они берут из
+  // записей `effects.byKind.Fireball`/`HeavyFireball`, то есть у тех самых
+  // снарядов, один из которых и улетит (`chargeBalls.ts`).
+  chargeBalls = createChargeBalls({
+    scene: scene3,
+    manifest,
+    entities: () => remote?.view?.entities,
+    instanceFor: (entity) => models?.instanceFor(entity) ?? null,
+    heroId: () => heroId,
+    lastAim: () => lastAim,
+    groundUnder,
+  });
   // Каталог определений сцены — первый шов превью (REND-28, design Decision 11):
   // клиент резолвит сцену локально, и таблица строится ТОЙ ЖЕ
   // `compileAbilityCatalog`, что у симуляции, — над тем же документом. Второго
@@ -1123,6 +1215,9 @@ async function main(): Promise<void> {
           ? { curvatureMapId: manifest.terrain.curvatureMap }
           : {}),
       });
+      // Та же поверхность — шару заряда: он садится на пол, а не на дугу
+      // манёвра инстанса.
+      visualSurface = surface;
       // Свет арены — подсистемой, а не кодом сборки: источники и теневые карты
       // строятся из секции `lighting` парного документа (PRES-2), а нет секции
       // — из документированных умолчаний, равных прежнему захардкоженному
@@ -1294,6 +1389,11 @@ async function main(): Promise<void> {
         }),
       );
       hudRoot = hud.root;
+      // Ульта кастуется удержанием клавиши, а не кликом (см. `hero.rewind` в
+      // `hud.ts`): её кнопка в панели показывает кулдаун и помечена нерабочей —
+      // живая на вид кнопка, ведущая в никуда, обещает игроку действие, которое
+      // не произойдёт. Раскладка — та же, что у всего ввода (INP-4).
+      markHoldOnlyAbilities(hud.root, bindings.keyboardMouse.keys);
 
       // Пресет качества (QUAL-1, design D4) — ПОСЛЕ регистрации всех
       // подсистем: реестр ручек собирается из их деклараций (design D1), и

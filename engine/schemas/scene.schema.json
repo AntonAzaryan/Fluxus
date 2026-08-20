@@ -245,7 +245,8 @@
           "enum": [
             "auto",
             "commit",
-            "hold"
+            "hold",
+            "release"
           ]
         },
         "durationTicks": {

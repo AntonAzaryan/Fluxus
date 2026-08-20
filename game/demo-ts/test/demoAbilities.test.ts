@@ -19,6 +19,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   FIXED_ONE,
+  LOCOMOTION_DODGE,
+  LOCOMOTION_NORMAL,
   RingHistory,
   createInputLog,
   createRewindController,
@@ -36,9 +38,13 @@ import { ViewBuffer, type TickView } from '@game-mvp/render';
 import {
   ABILITY_SLOTS,
   ACTION_BITS,
+  CHARGE_PREVIEW_MIN_TICKS,
+  CHARGE_VISUAL,
   FIREBALL_LIFETIME_TICKS,
   RESPAWN_EVENT,
+  STATS,
   TICK_SECONDS,
+  chargeHeld,
   stateBit,
 } from '../app/sim.js';
 import { createDemoExtractor } from '../app/extractor.js';
@@ -99,6 +105,8 @@ const SLOW = 13107;
 const DOME_TICKS = 180;
 const DOME_COOLDOWN = 300;
 const CAPTURE_COOLDOWN = 120;
+/** Длительность фазы прицеливания захвата — `durationTicks` его определения. */
+const CAPTURE_AIM_TICKS = 60;
 /**
  * `AbilityConfig.holdTicks`. Тик захвата тратит первый из них, поэтому окно
  * броска — `HOLD_TICKS − 1` = 120 тиков = ровно 2 с при 60 Гц.
@@ -398,27 +406,27 @@ function pressB(a: Arena, buttons: number, aimDir = AIM_WEST): void {
 }
 
 /**
- * Заряд каста: `held` тиков УДЕРЖАНИЯ сверх тика нажатия, отпускание и
- * ПОДТВЕРЖДЕНИЕ шага прицеливания (ABIL-5). Тик нажатия окном заряда не
- * считается (определение вычитает его), поэтому `chargeA(a, 0)` — самый быстрый
- * тап, `chargeA(a, CHARGE_TICKS)` — полный заряд.
+ * Заряд каста: `held` тиков УДЕРЖАНИЯ сверх тика нажатия и ОТПУСКАНИЕ, которым
+ * фаза `release` и завершается (ABIL-4). Тик нажатия окном заряда не считается
+ * (определение вычитает его), поэтому `chargeA(a, 0)` — самый быстрый тап,
+ * `chargeA(a, CHARGE_TICKS)` — полный заряд.
  *
- * Отпускание больше не выстрел: оно открывает фазу прицеливания, а выстрел даёт
- * подтверждение. Точку берёт харнесс из того же `aimDir` (`aimPoint`), поэтому
- * направление выстрела остаётся тем, каким его писали тесты.
+ * Выстрел происходит НА ТИКЕ ОТПУСКАНИЯ: тем же тиком система прицеливания
+ * записывает шаг `vector` (−800), а автомат каста завершает фазу и исполняет
+ * эффекты (−790). Направление берётся из прицела ЭТОГО тика — того самого,
+ * которым игрок целился, отпуская кнопку; точку харнесс считает из `aimDir`
+ * (`aimPoint`), поэтому тесты называют направление там же, где и раньше.
  */
 function chargeA(a: Arena, held: number, aimDir = AIM_EAST): void {
   a.step({ buttons: CAST, aimDir });
   for (let i = 0; i < held; i++) a.step({ buttons: CAST, aimDir });
   a.step({ aimDir });
-  a.step({ buttons: CONFIRM, aimDir });
 }
 
 function chargeB(a: Arena, held: number, aimDir = AIM_WEST): void {
   a.step(NEUTRAL, { buttons: CAST, aimDir });
   for (let i = 0; i < held; i++) a.step(NEUTRAL, { buttons: CAST, aimDir });
   a.step(NEUTRAL, { aimDir });
-  a.step(NEUTRAL, { buttons: CONFIRM, aimDir });
 }
 
 /**
@@ -509,6 +517,26 @@ const THROW_SPEED = 40960;
 const THROW_OFFSET = 29491;
 
 /**
+ * Рывок: скорость и длительность — поля `Locomotion` героя, кулдаун — поле
+ * определения `dodge`. Прежние числа (13107 за 9 тиков = 1.8 клетки) остались
+ * в истории: скорость удвоена, длительность та же, дистанция ровно вдвое.
+ */
+const DODGE_SPEED = 26214;
+const DODGE_TICKS = 9;
+const DODGE_COOLDOWN = 60;
+/** Дистанция прежнего рывка в Q16.16 — числитель отношения «вдвое дальше». */
+const DODGE_DISTANCE_BEFORE = 9 * 13107;
+
+/**
+ * Стартовый остаток кулдауна ульты — число prefab'а `SlotRewind`, а не литерал
+ * теста: он противопетлевой (см. «ульта стартует взведённой» ниже), и ретюн
+ * обязан ехать сюда сам, оставляя красным только тот тест, который проверяет
+ * САМ инвариант.
+ */
+const REWIND_START = SCENE.prefabs!.find((prefab) => prefab.name === 'SlotRewind')!.components
+  .AbilityCooldown!.remaining!;
+
+/**
  * Числа, продублированные ВНЕ определений способностей. Каждое из них — сознательное
  * зеркало: манифест визуалов и константы сборки не читают компоненты мира и
  * читать их не будут (REND-1). Расхождение такого зеркала ничего не ломает —
@@ -528,6 +556,29 @@ describe('зеркала балансных чисел сцены', () => {
   it('радиус оболочки купола в манифесте — радиус, который считает определение купола', () => {
     const world = Math.floor((HERO_RADIUS * DOME_RADIUS_MUL) / FIXED_ONE) / FIXED_ONE;
     expect(MANIFEST.effects.byKind.SlowDome!.radius).toBeCloseTo(world, 3);
+  });
+
+  it('числа шара заряда — те же, по которым определение считает выстрел', () => {
+    // Шар заряда рисует главный поток (`chargeBalls.ts`): растёт он с зарядом и
+    // висит там, откуда стартует снаряд. Все четыре числа — зеркало определения
+    // `fireball`, и разойтись им нельзя молча: шар обещал бы не тот выстрел.
+    const numbers = numbersIn(abilityDef('fireball'));
+    expect(numbers).toContain(CHARGE_VISUAL.ticks);
+    expect(numbers).toContain(CHARGE_VISUAL.maxScale);
+    expect(numbers).toContain(CHARGE_VISUAL.heavyScale);
+    // Вынос шара — ровно тот, с которого стартует выстрел (и на котором висит
+    // пойманный снаряд): второго числа «перед героем» в сцене нет.
+    expect(CHARGE_VISUAL.offset).toBe(THROW_OFFSET);
+    expect(numbers).toContain(CHARGE_VISUAL.offset);
+    // Та же арифметика накопленного заряда, что у определения: тик нажатия не
+    // считается, сверх окна заряд не растёт.
+    expect(chargeHeld(0)).toBe(0);
+    expect(chargeHeld(1)).toBe(0);
+    expect(chargeHeld(CHARGE_VISUAL.ticks + 1)).toBe(CHARGE_VISUAL.ticks);
+    expect(chargeHeld(CHARGE_VISUAL.ticks + 30)).toBe(CHARGE_VISUAL.ticks);
+    // Оболочки состояния у заряда больше нет: она рисовала бы ВТОРОЙ, статичный
+    // шар в позиции героя поверх растущего.
+    expect(MANIFEST.effects.byState.Charging).toBeUndefined();
   });
 });
 
@@ -714,6 +765,65 @@ describe('захват снаряда: удержание, переброс и �
     a.step(NEUTRAL);
     expect(flightLeft(a.state, shot)).toBe(life);
     expect(Math.abs(x(a.state, shot) - x(a.state, p2))).toBeLessThan(FIXED_ONE);
+  });
+
+  it('удержание держит зону прицела, а отпускание ловит снаряд (ABIL-4 `release`)', () => {
+    // Фаза захвата завершается ПРЕКРАЩЕНИЕМ УДЕРЖАНИЯ его же кнопки, а не
+    // фронтом второй: та же кнопка открывает зону, держит её и закрывает
+    // захватом. Пока держат — шаг прицеливания не записан, и снаряд свободен:
+    // проверка накопленного идёт на завершении фазы (ABIL-5), и до отпускания
+    // её не было.
+    const a = arena(8);
+    chargeA(a, 0);
+    const shot = fireballs(a.state)[0]!;
+    const p2 = a.heroes[1]!;
+    // Ждём КРАЯ зоны (радиус захвата — 3 клетки): за тики удержания снаряд
+    // успевает подойти, и отпускание обязано застать его ещё в зоне.
+    for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 3 * FIXED_ONE; i++) {
+      a.step(NEUTRAL);
+    }
+
+    a.step(NEUTRAL, { buttons: CAPTURE });
+    for (let i = 0; i < 2; i++) {
+      a.step(NEUTRAL, { buttons: CAPTURE });
+      // Каст идёт: фаза открыта, а снаряд всё ещё летит сам по себе.
+      expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(false);
+      expect(coreWorld.getField(a.state.world, shot, 'Velocity', 'x')).toBeGreaterThan(0);
+    }
+
+    // Отпустили — тем же тиком записан шаг и завершён каст.
+    a.step(NEUTRAL);
+    expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
+    expect(coreWorld.getField(a.state.world, shot, 'Held', 'holder')).toBe(p2);
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(true);
+    expect(coreWorld.getField(a.state.world, p2, 'ActionLock', 'mask')).toBe(1);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.capture)).toBeGreaterThan(0);
+  });
+
+  it('передержанный захват срывается таймаутом и возвращает кулдаун (ABIL-6)', () => {
+    // `timeout: { then: "cancel" }` + `interrupts.timeout.cooldown: "refund"`:
+    // держать кнопку дольше окна — это не «поймать позже», а «не поймать
+    // вовсе», и способность за это не платится.
+    const a = arena(8);
+    const p2 = a.heroes[1]!;
+    const slot = (): EntityId => slotOf(a.state, p2, ABILITY_SLOTS.capture);
+    const phase = (): number =>
+      coreWorld.getField(a.state.world, slot(), 'AbilitySlot', 'phase');
+
+    a.step(NEUTRAL, { buttons: CAPTURE });
+    expect(phase()).toBe(0);
+    // Держим ровно длительность фазы: она не завершается сама, пока держат.
+    for (let i = 0; i < CAPTURE_AIM_TICKS - 1; i++) {
+      a.step(NEUTRAL, { buttons: CAPTURE });
+      expect(phase()).toBe(0);
+    }
+    a.step(NEUTRAL, { buttons: CAPTURE });
+
+    // Каста нет, ловить было нечего, и кулдаун возвращён — умолчание источника
+    // переопределено определением ровно на этот случай.
+    expect(phase()).toBe(-1);
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.capture)).toBe(0);
   });
 
   it('снаряд позади героя вне сектора не ловится, и кулдаун НЕ списывается', () => {
@@ -1240,9 +1350,17 @@ describe('числа способностей: ретюн виден в дифф
     // Окно заряда и передержка — длительность фазы `charge` (ABIL-4): тик
     // перехода в передержку идёт СВЕРХ окна, отсюда единица.
     const phases = abilityDef('fireball').phases as readonly Record<string, unknown>[];
+    // Фаза ОДНА, и завершает её отпускание (ABIL-4): выстрел происходит на нём,
+    // а не на фронте второй кнопки. Второй фазы здесь больше нет — она стоила
+    // игроку полусекунды между отпусканием и выстрелом.
+    expect(phases).toHaveLength(1);
     expect(phases[0]!.id).toBe('charge');
+    expect(phases[0]!.trigger).toBe('release');
     expect(phases[0]!.durationTicks).toBe(CHARGE_TICKS + CHARGE_GRACE_TICKS + 1);
     expect(phases[0]!.timeout).toEqual({ then: 'cancel' });
+    // Бита подтверждения у фаербола нет вовсе: у фазы `release` его фронт тоже
+    // записывает шаг (ABIL-5), то есть заморозил бы прицел посреди заряда.
+    expect(abilityDef('fireball').confirmBit).toBeUndefined();
     // Прочие числа заряда лежат внутри списков действий определения, и ретюн
     // пиннится их присутствием — куда бы внутри определения они ни переехали.
     const numbers = numbersIn(abilityDef('fireball'));
@@ -1876,6 +1994,30 @@ describe('заряд каста: рост, выстрел и передержк�
     expect(shotAfter(CHARGE_TICKS + CHARGE_GRACE_TICKS - 1).damage).toBe(400);
   });
 
+  it('одиночный клик стреляет ТЕМ ЖЕ тиком и минимальным шаром', () => {
+    // Требование игрока дословно: «при одинарном нажатии ЛКМ превью не
+    // появляется, выстрел происходит сразу». Между отпусканием и снарядом не
+    // должно быть НИ ОДНОГО тика — раньше их было тридцать (фаза подтверждения
+    // истекала по таймауту), и полсекунды задержки читались как лаг.
+    const a = ffa([20, 28], { extract: true });
+    const caster = a.heroes[0]!;
+    a.step([{ buttons: CAST }]);
+    expect(fireballs(a.state)).toHaveLength(0);
+    // Заряд такого клика заведомо младше порога превью — предикт не рисуется.
+    const charge = a.view().entities.get(caster)!.stats?.get(STATS.charge) ?? 0;
+    expect(charge).toBeLessThan(CHARGE_PREVIEW_MIN_TICKS);
+
+    a.step();
+    const shots = fireballs(a.state);
+    expect(shots).toHaveLength(1);
+    // Шар минимальный: тик нажатия окном заряда не считается.
+    expect(projectile(a.state, shots[0]!, 'scale')).toBe(FIXED_ONE);
+    expect(projectile(a.state, shots[0]!, 'damage')).toBe(HIT_DAMAGE);
+    expect(coreWorld.hasTag(a.state.world, shots[0]!, 'HeavyFireball')).toBe(false);
+    // И маркер заряда снят тем же тиком: шар заряда гаснет вместе с выстрелом.
+    expect(coreWorld.hasComponent(a.state.world, caster, 'Charging')).toBe(false);
+  });
+
   it('выстрел ставит кулдаун каста, и на нём заряд не начинается', () => {
     const a = arena(8);
     const p1 = a.heroes[0]!;
@@ -2012,9 +2154,9 @@ describe('заряд каста: рост, выстрел и передержк�
       ticks += 1;
     }
     expect(exploded).toContain('ChargeExploded');
-    // Заряд считается тиками ПОСЛЕ тика нажатия, и `ChargeTick` (order 29)
-    // прибавляет свой тик до проверки (order 35) — отсюда две служебные
-    // единицы. Сам порог — ровно 78 тиков заряда: максимум плюс 300 мс.
+    // Две служебные единицы: тик нажатия только ВХОДИТ в фазу (её счётчик на
+    // нём равен нулю), а таймаут срабатывает на тике, где счётчик достиг
+    // `durationTicks`. Сам порог — ровно 78 тиков заряда: максимум плюс 300 мс.
     expect(ticks - 2).toBe(CHARGE_TICKS + CHARGE_GRACE_TICKS);
     // Урон достаётся и кастеру: свои промахи стоят ровно столько же.
     expect(hp(a.state, caster)).toBe(1000 - OVERCHARGE_DAMAGE);
@@ -2627,8 +2769,9 @@ describe('щит: рикошет снаряда, смена владельца �
     a.step([NEUTRAL, { buttons: SHIELD }]);
     expect(shielded(a.state, keeper)).toBe(true);
     a.step([{ buttons: CAST, aimDir: AIM_NE }]);
+    // Отпускание — и есть выстрел (фаза `release`): направление берётся из
+    // прицела ЭТОГО тика.
     a.step([{ aimDir: AIM_NE }]);
-    a.step([{ buttons: CONFIRM, aimDir: AIM_NE }]);
     const shot = fireballs(a.state)[0]!;
 
     let ricochets = 0;
@@ -3032,6 +3175,231 @@ describe('щит: рикошет снаряда, смена владельца �
  * заявленные тики, что убраны ВСЕ следы каждого из путей смерти (компонентов у
  * них разный набор) и что возрождения двух героев не мешают друг другу.
  */
+/**
+ * Рывок демо — СПОСОБНОСТЬ (определение `dodge`), а не манёвр по кнопке.
+ * Механика манёвра осталась за `LocomotionSystem` (LOC-3, LOC-4): определение
+ * лишь пишет состояние машины манёвров, а дальше её ведёт система — те же
+ * поля, тот же счётчик, та же скорость из конфигурации. Ради чего перенос:
+ * кулдаун и гейт триггера достаются от платформы (ABIL-7), а вместе с ними —
+ * доставленный стат кулдауна для виджета, который HUD объявил заранее.
+ *
+ * Проверяется здесь политика сцены, а не ядро: условие определения (кого и
+ * когда рывок не берёт) и то, что системный триггер уклона в сборке ВЫКЛЮЧЕН —
+ * иначе одно нажатие стартовало бы манёвр дважды, и кулдаун ничего бы не
+ * значил.
+ */
+describe('рывок — способность с кулдауном (ABIL-3, ABIL-7, LOC-4)', () => {
+  const motion = (state: SimulationState, entity: EntityId): number =>
+    coreWorld.getField(state.world, entity, 'LocomotionState', 'state');
+
+  it('триггер один: бит рывка читает определение, а не система локомоушена', () => {
+    // Два места, которые обязаны разойтись: бит определения — тот же, что бит
+    // действия сборки, а `dodgeButton` конфига матча — null. Оставь его числом,
+    // и нажатие стартовало бы манёвр и способностью, и системой: кулдаун
+    // взводился бы, а рывок шёл бы всё равно.
+    expect(abilityDef('dodge').trigger).toEqual({ input: { bit: ACTION_BITS.dodge } });
+    expect(MATCH.locomotion.dodgeButton).toBeNull();
+    // Прыжок остался манёвром по кнопке: способности у него нет.
+    expect(MATCH.locomotion.jumpButton).toBe(ACTION_BITS.jump);
+  });
+
+  it('рывок длится те же девять тиков и уносит ровно вдвое дальше прежнего', () => {
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    // Тик разгона: вектор движения ненулевой, и рывок пойдёт по нему на восток.
+    a.step({ moveX: FIXED_ONE });
+    const before = x(a.state, p1);
+    a.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(a.state, p1)).toBe(LOCOMOTION_DODGE);
+    let ticks = 1;
+    while (motion(a.state, p1) === LOCOMOTION_DODGE) {
+      a.step({ moveX: FIXED_ONE });
+      ticks += 1;
+    }
+    // Длительность прежняя: тик старта манёвром уже считается — способность
+    // пишет состояние на шкале раньше (ABIL-4, DET-9), и система ведёт его в
+    // том же тике.
+    expect(ticks).toBe(DODGE_TICKS);
+    // Скоростью манёвра владеет манёвр (LOC-3), поэтому дистанция — ровно
+    // произведение, а не «примерно»: ввод в эти тики на скорость не влияет.
+    expect(x(a.state, p1) - before).toBe(DODGE_TICKS * DODGE_SPEED);
+    expect(x(a.state, p1) - before).toBe(2 * DODGE_DISTANCE_BEFORE);
+  });
+
+  it('второй рывок раньше секунды не идёт, ровно через секунду — идёт (ABIL-7)', () => {
+    // «Способность с кулдауном 60 тиков кастуется на тике T → следующий каст
+    // возможен на тике T+60 и невозможен раньше». Оба прогона подают фронт
+    // ровно на своём тике: гейт — часть платформы, и своей проверки остатка в
+    // определении нет.
+    const early = arena(8);
+    const runner = early.heroes[0]!;
+    early.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(early.state, runner)).toBe(LOCOMOTION_DODGE);
+    // Кулдаун взведён определением и в том же тике убыл на единицу (ABIL-7).
+    expect(cooldown(early.state, runner, ABILITY_SLOTS.dodge)).toBe(DODGE_COOLDOWN - 1);
+    for (let i = 0; i < DODGE_COOLDOWN - 2; i++) early.step({ moveX: FIXED_ONE });
+    early.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(early.state, runner)).toBe(LOCOMOTION_NORMAL);
+
+    const onTime = arena(8);
+    const second = onTime.heroes[0]!;
+    onTime.step({ buttons: DODGE, moveX: FIXED_ONE });
+    for (let i = 0; i < DODGE_COOLDOWN - 1; i++) onTime.step({ moveX: FIXED_ONE });
+    expect(cooldown(onTime.state, second, ABILITY_SLOTS.dodge)).toBe(0);
+    onTime.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(onTime.state, second)).toBe(LOCOMOTION_DODGE);
+  });
+
+  it('рывок с нулевым вектором движения не начинается и кулдауна не тратит (LOC-4)', () => {
+    // «Нажатие при нулевом векторе движения SHALL игнорироваться» — правило
+    // LOC-4, и переезд триггера в определение его не отменяет: условие
+    // определения проверяет тот же вектор, что читала система.
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    a.step({ buttons: DODGE });
+    expect(motion(a.state, p1)).toBe(LOCOMOTION_NORMAL);
+    // Каста не было — кулдаун не взведён: несработавший триггер способность не
+    // тратит (ABIL-3).
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.dodge)).toBe(0);
+    // И то же нажатие с направлением рывок даёт — дело было в векторе.
+    a.step({ moveX: FIXED_ONE });
+    a.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(a.state, p1)).toBe(LOCOMOTION_DODGE);
+  });
+
+  it('с пойманным снарядом рывка нет: условие определения, а не лок (LOC-7)', () => {
+    // Лок манёвров (LOC-7) гейтит ТРИГГЕР СИСТЕМЫ, а он выключен, — значит
+    // способность обязана проверить удержание сама. Иначе «стрейфиться с
+    // захваченным фаерболом нельзя» перестало бы действовать молча: прыжок
+    // остался бы запертым, а рывок нет.
+    const a = arena(8);
+    chargeA(a, 0);
+    const shot = fireballs(a.state)[0]!;
+    const p2 = a.heroes[1]!;
+    for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
+      a.step(NEUTRAL);
+    }
+    a.step(NEUTRAL, { buttons: CAPTURE });
+    a.step(NEUTRAL, { buttons: CONFIRM });
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(true);
+
+    a.step(NEUTRAL, { buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(a.state, p2)).toBe(LOCOMOTION_NORMAL);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.dodge)).toBe(0);
+    // Ходьба при этом жива — запрет селективен ровно как лок.
+    expect(vel(a.state, p2, 'x')).toBeGreaterThan(0);
+  });
+
+  it('двойное нажатие переката не даёт: окно даблтапа закрыто (LOC-4)', () => {
+    // `windowTicks: 0` — заявление документа: перекат сцене не нужен. При
+    // выключенном системном триггере он и так недостижим (начать его нечем),
+    // но число в конфигурации говорит то же самое вслух.
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    expect(
+      SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!.components.Locomotion!.windowTicks,
+    ).toBe(0);
+    a.step({ moveX: FIXED_ONE });
+    a.step({ buttons: DODGE, moveX: FIXED_ONE });
+    for (let i = 0; i < DODGE_TICKS + 2; i++) {
+      a.step({ moveX: FIXED_ONE });
+      // Ни одного тика переката за весь манёвр и хвост после него.
+      expect(motion(a.state, p1)).not.toBe(2);
+    }
+    // Повторное нажатие в хвосте манёвра тоже даёт не перекат, а ничего:
+    // кулдаун ещё идёт.
+    a.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(a.state, p1)).toBe(LOCOMOTION_NORMAL);
+  });
+});
+
+/**
+ * Шар заряда — картинка главного потока (`chargeBalls.ts`), но растёт он по
+ * ДОСТАВЛЕННОМУ состоянию, а не по счётчику кадра: заряжающий соперник обязан
+ * быть виден противнику (HUD-1), и знать о его нажатиях главному потоку нечем.
+ * Отсюда пара, которую здесь и проверяем: система сцены `ChargeTick` проецирует
+ * счётчик фазы заряда со СПУТНИКА на самого героя, а `extractor.ts` доставляет
+ * его статом. Спутник для этого не годится: слот виден только своей стороне
+ * (`netcode` NET-12, ABIL-8).
+ */
+describe('заряд, видимый противнику: проекция счётчика фазы (HUD-1, NET-12)', () => {
+  it('`Charging.ticks` идёт вровень со счётчиком фазы заряда и едет статом', () => {
+    const a = ffa([20, 28], { extract: true });
+    const caster = a.heroes[0]!;
+    const phaseTicks = (): number =>
+      coreWorld.getField(
+        a.state.world,
+        slotOf(a.state, caster, ABILITY_SLOTS.cast),
+        'AbilitySlot',
+        'phaseTicks',
+      );
+    const charging = (): number =>
+      coreWorld.getField(a.state.world, caster, 'Charging', 'ticks');
+
+    // Слоты выдаёт система сцены на первом же тике (ABIL-1), поэтому спрашивать
+    // их до него нечего.
+    a.step([{ buttons: CAST }]);
+    expect(coreWorld.hasComponent(a.state.world, caster, 'Charging')).toBe(true);
+    expect(charging()).toBe(phaseTicks());
+    for (let i = 0; i < 20; i++) {
+      a.step([{ buttons: CAST }]);
+      expect(charging()).toBe(phaseTicks());
+    }
+    // Величина едет ИМЕННО на герое: слот `Position` не несёт и в поток тиков
+    // не попадает вовсе.
+    const view = a.view().entities.get(caster)!;
+    expect(view.stats?.get(STATS.charge)).toBe(charging());
+    // И прицел — вторым статом: направление шара чужого кастера иначе
+    // приходилось бы угадывать по курсу движения.
+    expect(view.stats?.get(STATS.aim)).toBeCloseTo(AIM_EAST / 65536, 6);
+  });
+
+  it('выстрел уносит счётчик с собой: маркер снимается тем же тиком', () => {
+    // Проекция живёт ровно столько, сколько идёт заряд: отпускание завершает
+    // фазу, эффекты снимают маркер, и шар заряда гаснет вместе с ним — рисовать
+    // заряд, который уже улетел, было бы враньём той же природы, что и заряд,
+    // которого не видно.
+    const a = arena(8);
+    const caster = a.heroes[0]!;
+    const held = 12;
+    a.step({ buttons: CAST });
+    for (let i = 0; i < held; i++) a.step({ buttons: CAST });
+    expect(coreWorld.getField(a.state.world, caster, 'Charging', 'ticks')).toBe(held);
+
+    a.step(NEUTRAL);
+    expect(coreWorld.hasComponent(a.state.world, caster, 'Charging')).toBe(false);
+    expect(fireballs(a.state)).toHaveLength(1);
+  });
+
+  it('сила выстрела считается счётчиком фазы, а не доставляемой проекцией', () => {
+    // Проекцию пишет система сцены ПОЗЖЕ автомата каста по шкале `order`, то
+    // есть на тике выстрела мир несёт её вчерашнее значение. Считай определение
+    // по ней — заряд стоил бы на тик меньше, чем игрок держал. Величина берётся
+    // из области видимости списка действий (`phaseTicks`), и проверяется это
+    // ровно тем, что тик держания стоит ровно одну шестидесятую роста.
+    const scaleAfter = (held: number): number => {
+      const a = arena(8);
+      chargeA(a, held);
+      return projectile(a.state, fireballs(a.state)[0]!, 'scale');
+    };
+    // Границы окна точны в обе стороны: тап — ровно минимум, полное окно —
+    // ровно максимум. Отставание проекции на тик сдвинуло бы обе.
+    expect(scaleAfter(0)).toBe(FIXED_ONE);
+    expect(scaleAfter(CHARGE_TICKS)).toBe(CHARGE_MAX_SCALE);
+    // И первый же тик удержания уже стоит роста — а не пропадает даром.
+    expect(scaleAfter(1)).toBeGreaterThan(FIXED_ONE);
+    expect(scaleAfter(CHARGE_TICKS - 1)).toBeLessThan(CHARGE_MAX_SCALE);
+  });
+
+  it('порог превью короче окна заряда: одиночный клик предикта не показывает', () => {
+    // Гейт живёт в сборке (`main.ts`), а не в подсистеме: «клик — это выстрел, а
+    // не прицеливание» — правило игры. Здесь пиннится только его осмысленность:
+    // порог обязан быть внутри окна роста, иначе он гасил бы предикт всегда.
+    expect(CHARGE_PREVIEW_MIN_TICKS).toBeGreaterThan(0);
+    expect(CHARGE_PREVIEW_MIN_TICKS).toBeLessThan(CHARGE_VISUAL.ticks);
+  });
+});
+
 describe('возрождение героя: смерть больше не терминальна', () => {
   const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
   /** Срок возрождения системы `Respawn` — 10 секунд при 60 Гц. */
@@ -3096,8 +3464,32 @@ describe('возрождение героя: смерть больше не те
     expect(coreWorld.getField(a.state.world, p1, 'Spawn', 'y')).toBe(spawnY);
   });
 
+  /**
+   * Сцена с УДЛИНЁННЫМ стартовым остатком ульты. Правится ровно одно число:
+   * стартовый остаток сцены (450) короче окна смерти (600), и к воскрешению он
+   * ноль сам по себе — «сброшен возрождением» от «дотикал» на нуле неотличимо.
+   * Тот же приём, что у соседнего теста про перезарядку длиннее окна смерти.
+   */
+  function withUltStart(remaining: number): SceneDef {
+    return {
+      ...SCENE,
+      prefabs: SCENE.prefabs!.map((prefab) =>
+        prefab.name === 'SlotRewind'
+          ? {
+              ...prefab,
+              components: {
+                ...prefab.components,
+                AbilityCooldown: { remaining, total: remaining },
+              },
+            }
+          : prefab,
+      ),
+    };
+  }
+
   it('смерть от урона: ровно через 600 тиков герой жив, целый и в точке спавна', () => {
-    const a = arena(8);
+    const ULT_START = RESPAWN_TICKS + 300;
+    const a = arena(8, withUltStart(ULT_START));
     const p1 = a.heroes[0]!;
     const spawnX = x(a.state, p1);
     const spawnY = y(a.state, p1);
@@ -3147,10 +3539,10 @@ describe('возрождение героя: смерть больше не те
       expect(cooldown(a.state, p1, ABILITY_SLOTS[ability])).toBe(0);
     }
     // А cooldown ульты — нет: он exempt-компонент и живёт своей жизнью (сцена
-    // взвела его 1200 тиков назад минус прожитое).
+    // взвела его стартовым значением, и с тех пор он просто убывал).
     const rewind = cooldown(a.state, p1, ABILITY_SLOTS.rewind);
     expect(rewind).toBeGreaterThan(0);
-    expect(rewind).toBe(1200 - tick);
+    expect(rewind).toBe(ULT_START - tick);
   });
 
   it('перезарядка ДЛИННЕЕ окна смерти обнуляется возрождением, а не дотикивает', () => {
@@ -3328,13 +3720,13 @@ describe('ульта отката: политика в сцене (опреде�
     [...state.events].filter((event) => event.type === REWIND_REQUEST_EVENT).map((e) => e.data);
 
   /**
-   * Ульта стартует ВЗВЕДЁННОЙ (`SlotRewind.remaining` = полный кулдаун), так что
-   * каст в любом стенде начинается с ожидания. Основание — в тесте «цель отката
-   * не может лежать раньше выдачи слотов» ниже.
+   * Ульта стартует ВЗВЕДЁННОЙ (`SlotRewind.remaining` > 0), так что каст в любом
+   * стенде начинается с ожидания. Основание — в тесте «цель отката не может
+   * лежать раньше выдачи слотов» ниже.
    */
   function untilRewindReady(a: Arena): number {
     let tick = 0;
-    for (let i = 0; i < REWIND_COOLDOWN; i++) tick = a.step(NEUTRAL);
+    for (let i = 0; i < REWIND_START; i++) tick = a.step(NEUTRAL);
     expect(cooldown(a.state, a.heroes[0]!, ABILITY_SLOTS.rewind)).toBe(0);
     return tick;
   }
@@ -3393,15 +3785,27 @@ describe('ульта отката: политика в сцене (опреде�
     // закрывает. Отсюда инвариант сцены: кулдаун ульты СТАРТУЕТ полным и
     // ДЛИННЕЕ глубины отката, поэтому цель самого раннего каста лежит заведомо
     // позже тика выдачи.
+    // Пиннится НЕРАВЕНСТВО, а не число: стартовый остаток балансный (сколько
+    // секунд матча ульты нет), а инвариант — нет. Литерал здесь пришлось бы
+    // править при каждом ретюне, и он не поймал бы ровно того, ради чего стоит.
     const start = SCENE.prefabs!.find((p) => p.name === 'SlotRewind')!.components.AbilityCooldown!;
-    expect(start.remaining).toBe(REWIND_COOLDOWN);
-    expect(start.total).toBe(REWIND_COOLDOWN);
-    expect(REWIND_COOLDOWN).toBeGreaterThan(REWIND_DEPTH);
-    // И то же число в определении: взвод после каста обязан держать инвариант
-    // не хуже стартового значения.
-    expect(numbersIn(abilityDef('rewind'))).toContain(REWIND_COOLDOWN);
+    expect(start.remaining).toBe(REWIND_START);
+    // Показывать виджету полную длительность ОЖИДАНИЯ, а не будущего кулдауна:
+    // доля заполнения считается от `total` (HUD-8), и разойдись они — панель на
+    // старте матча показывала бы почти готовую ульту.
+    expect(start.total).toBe(REWIND_START);
+    // Самый ранний каст — тик, следующий за обнулением стартового остатка, и
+    // цель его отката обязана лежать ПОЗЖЕ тика выдачи слотов.
+    expect(REWIND_START + 1 - REWIND_DEPTH).toBeGreaterThan(GRANT_TICK);
+    // Взвод ПОСЛЕ каста держит тот же инвариант — и с запасом: он длиннее
+    // стартового ожидания.
+    expect(abilityDef('rewind').cooldownTicks).toBe(REWIND_COOLDOWN);
+    expect(REWIND_COOLDOWN + 1 - REWIND_DEPTH).toBeGreaterThan(GRANT_TICK);
+    // Глубина отката — из того же определения, а не из литерала теста.
+    expect(numbersIn(abilityDef('rewind'))).toContain(REWIND_DEPTH);
 
-    // Самый ранний каст — на тике, следующем за обнулением стартового кулдауна.
+    // И то же неравенство на живом прогоне: считать самому и промахнуться в
+    // арифметике легче, чем кажется.
     const a = arena();
     const earliest = untilRewindReady(a) + 1;
     expect(earliest - REWIND_DEPTH).toBeGreaterThan(GRANT_TICK);

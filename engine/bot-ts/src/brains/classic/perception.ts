@@ -72,6 +72,12 @@ export interface PerceivedWorld {
   readonly enemies: readonly RememberedEnemy[];
   readonly threats: readonly ThreatView[];
   readonly arenaRadius: number | undefined;
+  /**
+   * Держит ли бот пойманный снаряд (`worldView.ts`). Отстаёт на ту же задержку
+   * реакции, что остальная картинка, и это верно: о том, что захват удался,
+   * мозг узнаёт тем же каналом, каким игрок видит шар в своих руках.
+   */
+  readonly carrying: boolean;
 }
 
 interface Observation {
@@ -189,6 +195,7 @@ export class Perception {
       enemies: [...this.memory.values()],
       threats: this.threats(view, own, tick),
       arenaRadius: view.arenaRadius,
+      carrying: view.carrying,
     };
   }
 
