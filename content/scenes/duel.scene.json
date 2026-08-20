@@ -378,6 +378,13 @@
               {
                 "modifyComponent": {
                   "entity": { "var": "e" },
+                  "component": "Collider",
+                  "values": { "layer": 0 }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
                   "component": "Velocity",
                   "values": { "x": 0, "y": 0 }
                 }
@@ -1010,6 +1017,13 @@
                     {
                       "modifyComponent": {
                         "entity": { "var": "e" },
+                        "component": "Collider",
+                        "values": { "layer": 0 }
+                      }
+                    },
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "e" },
                         "component": "Velocity",
                         "values": { "x": 0, "y": 0 }
                       }
@@ -1136,6 +1150,13 @@
               {
                 "modifyComponent": {
                   "entity": { "var": "e" },
+                  "component": "Collider",
+                  "values": { "layer": 0 }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
                   "component": "Velocity",
                   "values": { "x": 0, "y": 0 }
                 }
@@ -1209,7 +1230,7 @@
                 "modifyComponent": {
                   "entity": { "var": "e" },
                   "component": "Collider",
-                  "values": { "cliffRise": 0 }
+                  "values": { "cliffRise": 0, "layer": 2 }
                 }
               },
               {
@@ -2067,10 +2088,7 @@
           }
         ]
       },
-      "interrupts": { "timeout": { "cooldown": "refund" } },
-      "phases": [
-        { "id": "aim", "trigger": "release", "durationTicks": 60, "timeout": { "then": "cancel" } }
-      ],
+      "phases": [{ "id": "aim", "trigger": "release" }],
       "effects": [
         {
           "addComponent": {

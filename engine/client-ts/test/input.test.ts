@@ -235,6 +235,34 @@ describe('InputSampler: свёртка непрерывных (INP-5) и ква�
     source.state = { moveX: 0, moveY: 0, aim: null, target: null };
     expect(sampler.sample().aimDir).toBe(0x2345);
   });
+
+  it('замолчавший сосед не воскрешает ЗАСТОЯВШЕЕСЯ значение второго источника', () => {
+    // Правило «последний менявший» (INP-5) сравнивает свежесть источников с
+    // свежестью ПЕРЕЖИВШЕГО значения, а не с нулём. Иначе источник, чей прицел
+    // не менялся с позапрошлой эры, перебивал бы живой прицел одним тем, что
+    // ему есть что сказать, — а именно так устроен указатель: `KeyboardMouseSource`
+    // владеет прицелом момента клика (INP-1) и отдаёт его дальше неизменным,
+    // тогда как непрерывный источник указателя замолкает вместе с удержанием.
+    const sampler = makeSampler();
+    const click = new StubSource('click');
+    const live = new StubSource('live');
+    sampler.add(click);
+    sampler.add(live);
+
+    click.state = { moveX: 0, moveY: 0, aim: 0x1000, target: { x: 1, y: 0 } };
+    live.state = { moveX: 0, moveY: 0, aim: 0x1000, target: { x: 1, y: 0 } };
+    expect(sampler.sample().aimDir).toBe(0x1000);
+
+    // Живой источник ведёт прицел, застоявшийся молчит о своём прежнем.
+    live.state = { moveX: 0, moveY: 0, aim: 0x4000, target: { x: 0, y: 1 } };
+    expect(sampler.sample().aimDir).toBe(0x4000);
+
+    // Живой замолчал — прицел остаётся ЖИВЫМ, а не откатывается к моменту клика.
+    live.state = { moveX: 0, moveY: 0, aim: null, target: null };
+    const s = sampler.sample();
+    expect(s.aimDir).toBe(0x4000);
+    expect(s.target).toEqual({ x: 0, y: fixed.fromFloat(1) });
+  });
 });
 
 describe('точка прицела в семантическом сэмпле (INP-1, INP-3)', () => {
@@ -470,6 +498,70 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
     source.handlePointerDown(0, 70, -30);
     expect(source.poll().aim).toBe(aimAngle(0, 1));
     expect(source.poll().target).toEqual({ x: 7, y: -3 });
+  });
+
+  it('прицел удержания ведётся ЖИВЫМ источником и на отпускании не откатывается к клику', () => {
+    // Связка сборки-игры целиком (`game/demo-ts/app/main.ts`): клавиатура+мышь
+    // владеет прицелом МОМЕНТА клика (INP-1), а направление всего удержания
+    // ведёт непрерывный источник указателя — он отдаёт прицел, пока указатель
+    // двигался ЛИБО пока зажата способность с удержанием.
+    //
+    // Кадр отпускания и есть тот тик, на котором цепочка прицеливания пишет шаг
+    // (ABIL-5, фаза `release`): непрерывный источник на нём уже молчит, и до
+    // починки свёртки в этот шаг уезжала точка НАЖАТИЯ — фаербол улетал туда,
+    // где кнопку зажали, а не туда, куда игрок целился, отпуская её.
+    const sampler = makeSampler();
+    let cursor = { x: 10, y: 0 };
+    const resolve = (): { angle: number; x: number; y: number } => ({
+      angle: aimAngle(cursor.x, cursor.y),
+      x: cursor.x,
+      y: cursor.y,
+    });
+    const kbm = new KeyboardMouseSource({
+      bindings: validateBindings(BINDINGS).keyboardMouse,
+      aimAt: () => resolve(),
+    });
+    sampler.add(kbm);
+
+    let moves = 0;
+    let polled = -1;
+    let frame = resolve();
+    sampler.add({
+      id: 'pointer-aim',
+      start: () => {},
+      stop: () => {},
+      poll: (): ContinuousSample => {
+        const aiming = moves !== polled || kbm.held().has('cast');
+        polled = moves;
+        return {
+          moveX: 0,
+          moveY: 0,
+          aim: aiming ? frame.angle : null,
+          target: aiming ? { x: frame.x, y: frame.y } : null,
+        };
+      },
+    });
+    const step = (): ReturnType<InputSampler['sample']> => {
+      frame = resolve();
+      return sampler.sample();
+    };
+
+    moves += 1;
+    expect(step().aimDir).toBe(aimAngle(1, 0)); // курсор восточнее героя
+    kbm.handlePointerDown(0, 0, 0); // зажали каст, указатель в этот кадр не двигался
+    step();
+
+    // Ведём мышь на север, не отпуская кнопки.
+    cursor = { x: 0, y: 10 };
+    moves += 1;
+    expect(step().aimDir).toBe(aimAngle(0, 1));
+    expect(step().aimDir).toBe(aimAngle(0, 1)); // указатель замер — прицел держится
+
+    // Отпускание: непрерывный источник замолкает, клик остаётся при своём.
+    kbm.handlePointerUp(0);
+    const release = step();
+    expect(release.aimDir).toBe(aimAngle(0, 1));
+    expect(release.target).toEqual({ x: 0, y: fixed.fromFloat(10) });
   });
 });
 

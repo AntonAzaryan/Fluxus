@@ -105,7 +105,11 @@ const SLOW = 13107;
 const DOME_TICKS = 180;
 const DOME_COOLDOWN = 300;
 const CAPTURE_COOLDOWN = 120;
-/** Длительность фазы прицеливания захвата — `durationTicks` его определения. */
+/**
+ * Прежнее окно прицеливания захвата — секунда при 60 Гц. Своего `durationTicks`
+ * у фазы `aim` больше нет: она живёт, пока держат кнопку (ABIL-4). Число
+ * осталось мерой «заведомо дольше того, что раньше срывалось само».
+ */
 const CAPTURE_AIM_TICKS = 60;
 /**
  * `AbilityConfig.holdTicks`. Тик захвата тратит первый из них, поэтому окно
@@ -800,10 +804,13 @@ describe('захват снаряда: удержание, переброс и �
     expect(cooldown(a.state, p2, ABILITY_SLOTS.capture)).toBeGreaterThan(0);
   });
 
-  it('передержанный захват срывается таймаутом и возвращает кулдаун (ABIL-6)', () => {
-    // `timeout: { then: "cancel" }` + `interrupts.timeout.cooldown: "refund"`:
-    // держать кнопку дольше окна — это не «поймать позже», а «не поймать
-    // вовсе», и способность за это не платится.
+  it('прицеливание захвата живёт, ПОКА держат: своего таймаута у фазы нет', () => {
+    // У фазы `aim` нет ни `durationTicks`, ни `timeout`, и по ABIL-4 это значит
+    // ровно «фаза длится, пока держится бит триггера». Прежде она объявляла
+    // окно в 60 тиков со срывом — то есть при 60 Гц ровно секунду, — и
+    // прицеливание гасло само собой посреди удержания: игрок, поднявший R
+    // заранее (а захват реактивен — ждут ЧУЖОГО снаряда), терял и превью, и
+    // каст, ничего для этого не сделав.
     const a = arena(8);
     const p2 = a.heroes[1]!;
     const slot = (): EntityId => slotOf(a.state, p2, ABILITY_SLOTS.capture);
@@ -812,18 +819,37 @@ describe('захват снаряда: удержание, переброс и �
 
     a.step(NEUTRAL, { buttons: CAPTURE });
     expect(phase()).toBe(0);
-    // Держим ровно длительность фазы: она не завершается сама, пока держат.
-    for (let i = 0; i < CAPTURE_AIM_TICKS - 1; i++) {
+    // Втрое дольше прежнего окна — фаза идёт, а её счётчик исправно растёт.
+    for (let i = 0; i < CAPTURE_AIM_TICKS * 3; i++) {
       a.step(NEUTRAL, { buttons: CAPTURE });
       expect(phase()).toBe(0);
     }
-    a.step(NEUTRAL, { buttons: CAPTURE });
+    expect(coreWorld.getField(a.state.world, slot(), 'AbilitySlot', 'phaseTicks')).toBe(
+      CAPTURE_AIM_TICKS * 3,
+    );
 
-    // Каста нет, ловить было нечего, и кулдаун возвращён — умолчание источника
-    // переопределено определением ровно на этот случай.
+    // Завершает её отпускание, и ловить к тому моменту было нечего: каста нет,
+    // кулдаун не списан (умолчание источника `targetLost`).
+    a.step(NEUTRAL);
     expect(phase()).toBe(-1);
     expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
     expect(cooldown(a.state, p2, ABILITY_SLOTS.capture)).toBe(0);
+  });
+
+  it('отмена по Q гасит прицеливание захвата — выход из фазы у игрока остаётся', () => {
+    // Таймаута у фазы больше нет, и единственная кнопка, которой прицеливание
+    // сворачивается без отпускания, — `cancelBit` определения (ABIL-6).
+    const a = arena(8);
+    const p2 = a.heroes[1]!;
+    const slot = (): EntityId => slotOf(a.state, p2, ABILITY_SLOTS.capture);
+    const phase = (): number =>
+      coreWorld.getField(a.state.world, slot(), 'AbilitySlot', 'phase');
+
+    a.step(NEUTRAL, { buttons: CAPTURE });
+    expect(phase()).toBe(0);
+    a.step(NEUTRAL, { buttons: CAPTURE | CANCEL });
+    expect(phase()).toBe(-1);
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
   });
 
   it('снаряд позади героя вне сектора не ловится, и кулдаун НЕ списывается', () => {
@@ -1712,6 +1738,63 @@ describe('фаербол: урон по герою, препятствия и п
     expect(fireballs(a.state)).toHaveLength(0);
     // Стрелок цел: свой снаряд владельца не задевает (`Owner.slot`).
     expect(hp(a.state, a.heroes[0]!)).toBe(1000);
+  });
+
+  it('труп снаряд не задерживает: коллайд снимается смертью, снаряд летит СКВОЗЬ', () => {
+    // Труп остаётся в мире все 600 тиков до возрождения, и с ним оставался его
+    // коллайдер: слой 2 продолжал ловиться сенсорной маской снаряда
+    // (`hitMask: 2`, PHYS-12), а `projectile.onHit` героя от мертвеца не
+    // отличал — фаербол рвался о лежачего и до живого за ним не долетал.
+    // Смерть теперь гасит СЛОЙ (`layer: 0`): труп перестаёт быть препятствием
+    // и сенсорной целью для всех сразу, а не для каждого потребителя отдельно.
+    const a = ffa([20, 24, 28]);
+    const corpse = a.heroes[1]!;
+    const behind = a.heroes[2]!;
+
+    a.step([NEUTRAL, { buttons: KILL }]);
+    expect(coreWorld.hasComponent(a.state.world, corpse, 'Dead')).toBe(true);
+    expect(coreWorld.getField(a.state.world, corpse, 'Collider', 'layer')).toBe(0);
+
+    // Стрелок кастует на восток — линия проходит ровно через лежачего.
+    a.step([{ buttons: CAST }]);
+    a.step();
+    a.step([{ buttons: CONFIRM }]);
+    expect(fireballs(a.state)).toHaveLength(1);
+
+    for (let i = 0; i < 40 && fireballs(a.state).length > 0; i++) a.step();
+    // Снаряд израсходован на ЖИВОМ за трупом, а не на самом трупе.
+    expect(hp(a.state, behind)).toBe(1000 - HIT_DAMAGE);
+    expect(fireballs(a.state)).toHaveLength(0);
+  });
+
+  it('коллайд гасят ВСЕ три пути смерти сцены, а не только один', () => {
+    // Поведенчески выше проверен `KillSwitch`; здесь — структурный пин на то,
+    // что падение и обнуление здоровья не разошлись с ним молча. Тот же приём,
+    // что у пинов щита и захвата: путь смерти, оставляющий трупу его слой,
+    // обязан быть виден в диффе этого теста.
+    const clearsLayer = (name: string): boolean => {
+      const system = SCENE.systems!.find((candidate) => candidate.name === name);
+      expect(system, `в сцене нет системы ${name}`).toBeDefined();
+      let found = false;
+      const walk = (node: unknown): void => {
+        if (Array.isArray(node)) {
+          for (const item of node) walk(item);
+          return;
+        }
+        if (node === null || typeof node !== 'object') return;
+        const record = node as Record<string, unknown>;
+        const modify = record.modifyComponent as
+          | { component?: string; values?: Record<string, unknown> }
+          | undefined;
+        if (modify?.component === 'Collider' && modify.values?.layer === 0) found = true;
+        for (const value of Object.values(record)) walk(value);
+      };
+      walk(system);
+      return found;
+    };
+    for (const path of ['KillSwitch', 'FallDeath', 'HealthDeath']) {
+      expect(clearsLayer(path), `путь смерти ${path} не гасит слой коллайдера`).toBe(true);
+    }
   });
 
   it('снаряд взрывается об обрыв плато и дальше не летит', () => {
@@ -3530,6 +3613,8 @@ describe('возрождение героя: смерть больше не те
     expect(coreWorld.hasComponent(a.state.world, p1, 'Locomotion')).toBe(true);
     expect(coreWorld.getField(a.state.world, p1, 'LocomotionState', 'state')).toBe(0);
     expect(coreWorld.getField(a.state.world, p1, 'Collider', 'cliffRise')).toBe(0);
+    // И коллайд, снятый смертью, вернулся вместе с управлением: слой прежний.
+    expect(coreWorld.getField(a.state.world, p1, 'Collider', 'layer')).toBe(2);
     // Транзиентные состояния сняты.
     for (const component of ['Falling', 'LevelOverride', 'Shielded', 'ActionLock', 'Charging', 'Holding']) {
       expect(coreWorld.hasComponent(a.state.world, p1, component)).toBe(false);

@@ -88,6 +88,22 @@ export class InputSampler {
   private lastTargetX = 0;
   private lastTargetY = 0;
   private hasTarget = false;
+  /**
+   * Свежесть ПЕРЕЖИВШЕГО значения — номер выборки, на которой оно принято.
+   *
+   * Без неё правило «последний менявший» (INP-5) работало бы только внутри
+   * одной выборки: пережившее значение входило бы в свёртку с нулевой
+   * свежестью, и его перебивал бы ЛЮБОЙ источник, отдающий непустую величину, —
+   * даже тот, чьё значение не менялось с прошлой эры. Ровно так и ломался
+   * прицел мыши: `KeyboardMouseSource` владеет прицелом момента клика (INP-1) и
+   * отдаёт его дальше неизменным, а непрерывный источник указателя на кадре
+   * отпускания замолкает, — и вместо живого прицела кадра в тик уезжала точка
+   * НАЖАТИЯ, то есть снаряд улетал туда, где кнопку зажали, а не туда, куда
+   * игрок целился, отпуская её (`ability-system` ABIL-5: шаг цепочки пишется
+   * прицеливанием тика подтверждения).
+   */
+  private lastAimAt = 0;
+  private lastTargetAt = 0;
 
   constructor(options: SamplerOptions) {
     for (const [action, bit] of Object.entries(options.actionBits)) {
@@ -184,11 +200,14 @@ export class InputSampler {
     let moveY = 0;
     let moveAt = -1;
     let aim = this.lastAim;
-    let aimAt = -1;
+    // Свежесть пережившего значения — та, с которой его приняли: источник
+    // перебивает его, только если менял своё ПОЗЖЕ (INP-5), а не самим фактом,
+    // что ему есть что сказать.
+    let aimAt = this.lastAimAt;
     let targetX = this.lastTargetX;
     let targetY = this.lastTargetY;
     let hasTarget = this.hasTarget;
-    let targetAt = -1;
+    let targetAt = this.lastTargetAt;
     for (const t of this.tracked) {
       if (t.current === null) continue;
       const { moveX: mx, moveY: my, aim: a, target: p } = t.current;
@@ -214,9 +233,11 @@ export class InputSampler {
       }
     }
     this.lastAim = aim;
+    this.lastAimAt = aimAt;
     this.lastTargetX = targetX;
     this.lastTargetY = targetY;
     this.hasTarget = hasTarget;
+    this.lastTargetAt = targetAt;
 
     // Кламп единичным кругом: диагональ клавиатуры не быстрее стика (INP-3).
     const length = Math.hypot(moveX, moveY);
