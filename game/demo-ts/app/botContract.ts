@@ -105,19 +105,22 @@ function commitPhase(phases: readonly AbilityPhaseDef[]): AbilityPhaseDef | unde
 }
 
 /**
- * Предел удержания, тики. Длительность-выражение пределом не считается:
- * вычислить её здесь нечем, и «предела нет» честнее выдуманного числа.
+ * Предел удержания, тики — сама длительность фазы, БЕЗ запаса в тик.
+ * Длительность-выражение пределом не считается: вычислить её здесь нечем, и
+ * «предела нет» честнее выдуманного числа.
  *
- * Отпустить РАНЬШЕ конца фазы обязателен в двух случаях. Первый — `timeout.then
- * === "cancel"`: додержавшего срывает таймаут (ABIL-4). Второй — фаза вида
- * `release` с любым исходом истечения: шаг прицеливания записывает прекращение
- * удержания, а истечение `durationTicks` его не записывает никогда (ABIL-4,
- * ABIL-5), и додержавший приходит к проверке с незаполненной цепочкой.
+ * Ровно `durationTicks` — законное удержание, и это не рассуждение, а порядок
+ * проверок тика: прекращение удержания завершает фазу ДО ветки истечения
+ * (`CastPhaseSystem.advance`), а шаг прицеливания того же тика записан ещё
+ * раньше — системой накопления на −800 (ABIL-4, ABIL-5, DET-9). Границу пинает
+ * тест демо «передержка на 300 мс сверх максимума рвёт заряд в самом кастере»
+ * (`demoAbilities.test.ts`): счётчик фазы на тике нажатия равен нулю, таймаут
+ * срабатывает на тике, где счётчик ДОСТИГ `durationTicks`, — то есть держать
+ * столько же тиков, сколько длится фаза, ещё можно, а на тик дольше уже нет.
  */
 function holdLimit(phase: AbilityPhaseDef): number {
   if (typeof phase.durationTicks !== 'number') return Number.POSITIVE_INFINITY;
-  const early = phase.trigger === 'release' || phase.timeout?.then === 'cancel';
-  return early ? phase.durationTicks - 1 : phase.durationTicks;
+  return phase.durationTicks;
 }
 
 /** Номер слота владельца (ABIL-1) — из prefab'а слота, а не из константы сборки. */
@@ -342,6 +345,35 @@ export function verifyProfileAbilities(
       findings.push(`способность "${entry.name}" (определение сцены "${entry.ability}"): ${finding}`);
     }
   }
+  findings.push(...unclaimed(expected, profile));
+  return findings;
+}
+
+/**
+ * Записи профиля, которых аннотация не назвала, — с одной оговоркой, и она
+ * несущая. Связка «запись профиля ↔ определение сцены» держится ИМЕНЕМ, и
+ * опечатка в имени выключала бы сверку этой записи молча — тот самый «рассинхрон
+ * молча», ради которого BOT-13 и существует, только уехавший на уровень выше.
+ *
+ * Признак опечатки — БИТ: неописанная запись, жмущая бит, который сцена назначила
+ * описанному определению, почти наверняка и есть оно, названное иначе. Запись на
+ * бите, которого нет ни у одного описанного определения, — законное «боту её не
+ * описывали» (BOT-12): так живёт прыжок демо, манёвр локомоушена (LOC-5), у
+ * которого определения способности нет вовсе.
+ */
+function unclaimed(expected: readonly ExpectedAbility[], profile: BotProfile): readonly string[] {
+  const described = new Set(expected.map((entry) => entry.name));
+  const findings: string[] = [];
+  for (const ability of profile.abilities) {
+    if (described.has(ability.name)) continue;
+    const clash = expected.find((entry) => entry.button === ability.button);
+    if (clash === undefined) continue;
+    findings.push(
+      `запись профиля "${ability.name}": аннотация её не описывает, а её бит ${ability.button} назначен ` +
+        `определению "${clash.ability}" (аннотация зовёт эту запись "${clash.name}") — опечатка в имени ` +
+        `выключила бы сверку записи молча (BOT-13)`,
+    );
+  }
   return findings;
 }
 
@@ -496,13 +528,12 @@ function syncCast(
   put(cast, 'commit', wanted.commit, `${path}.cast`, changes);
   put(cast, 'confirmButton', wanted.confirmButton, `${path}.cast`, changes);
   put(cast, 'cancelButton', wanted.cancelButton, `${path}.cast`, changes);
-  // Длительность удержания — число сложности, но окно фазы её ограничивает
-  // (ABIL-4): выпавшее из окна приводится к окну, а не остаётся «настройкой».
-  const limit = expected.holdMaxTicks ?? 1;
+  // Длительность удержания — СОБСТВЕННОЕ число профиля (BOT-6), и генерация его
+  // не переписывает даже выпавшим из окна фазы: об этом говорит находка сверки,
+  // а правит его дизайнер. Цепочке шагов оно отдаётся таким, каким лежит в
+  // документе, — навязывать своё значение здесь означало бы тюнинг за него.
   const held = typeof cast.holdTicks === 'number' ? cast.holdTicks : defaultHold(expected);
-  const hold = Math.min(Math.max(held, 1), Number.isFinite(limit) ? limit : held);
-  put(cast, 'holdTicks', hold, `${path}.cast`, changes);
-  syncSteps(cast, wanted, hold, `${path}.cast`, changes);
+  syncSteps(cast, wanted, held, `${path}.cast`, changes);
 }
 
 /**
@@ -510,19 +541,28 @@ function syncCast(
  * МЕСТЕ — разобранный JSON, а не разобранный профиль: сохранить порядок ключей
  * и нетронутые поля можно только так, а дифф правки обязан быть о правке.
  *
- * Числа сложности исполнения (`range`, `weight`, `pointNoise`,
- * `confirmDelayTicks`, `cancelChance`, `giveUpTicks`, темп применения) не
- * трогаются никогда. Исключений два, и оба — механика, а не тюнинг: кулдаун
- * ниже кулдауна сцены поднимается до него (инвариант BOT-13), а длительность
- * удержания вне окна фазы приводится к окну.
+ * Числа сложности исполнения — `range`, `weight`, `pointNoise`, `cancelChance`,
+ * `giveUpTicks`, длительность удержания и собственный темп применения
+ * (`cooldownTicks`) — не трогаются НИКОГДА, без исключений: BOT-13 запрещает их
+ * перетирать без оговорок, а «привести к сцене» и «перетереть» для числа,
+ * которое дизайнер выставил руками, — одно и то же действие. Разошедшееся число
+ * остаётся как есть, а называет его та же сверка, что и в гейте
+ * (`verifyProfileAbilities` по документу ПОСЛЕ правки) — второй реализации
+ * правил вывода не появляется (BOT-13), и чинит число человек.
  *
- * Возвращает список правок русским текстом; пустой — документ уже сходится.
+ * Исключение ровно одно и исключением не является: у нового, ЗАВОДИМОГО скелета
+ * числа берутся умолчаниями — это создание записи, а не правка чужой.
+ *
+ * `options.add` по умолчанию ВЫКЛЮЧЕН: состав способностей бота — решение
+ * дизайнера (BOT-6), и «в профиле этой способности нет» читается двояко — либо
+ * сцена только что её получила, либо этот уровень сложности ею не играет.
+ * Различить их генерации нечем, поэтому заведение записи включается явно.
  */
 export function syncProfileAbilities(
   expected: readonly ExpectedAbility[],
   document: Record<string, unknown>,
   profile: BotProfile,
-  options: { readonly add: boolean } = { add: true },
+  options: { readonly add: boolean } = { add: false },
 ): readonly string[] {
   const changes: string[] = [];
   const list = Array.isArray(document.abilities) ? (document.abilities as Record<string, unknown>[]) : [];
@@ -547,11 +587,6 @@ export function syncProfileAbilities(
       put(entry, 'requiresMoving', wanted.requiresMoving ? true : undefined, path, changes);
     }
     put(entry, 'rise', wanted.rise, path, changes);
-    if (wanted.holdMaxTicks === undefined) put(entry, 'holdTicks', 1, path, changes);
-    const cooldown = typeof entry.cooldownTicks === 'number' ? entry.cooldownTicks : 0;
-    if (cooldown < wanted.cooldownFloor) {
-      put(entry, 'cooldownTicks', wanted.cooldownFloor + SKELETON.cooldownMarginTicks, path, changes);
-    }
     syncCast(entry, wanted, lag, path, changes);
   }
   document.abilities = list;

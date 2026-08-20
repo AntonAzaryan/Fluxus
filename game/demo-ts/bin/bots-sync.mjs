@@ -4,7 +4,7 @@
  * (BOT-13):
  *
  *   npm run bots:sync -- [--root content] [--profile bots/normal.json]
- *                        [--no-add] [--dry-run]
+ *                        [--add] [--dry-run]
  *
  * Значение флага принимается обеими формами — `--root=content` и `--root
  * content` (CLI-11, `@game-mvp/net/bin/matchFile.mjs`).
@@ -18,18 +18,27 @@
  * Что команда пишет и чего не трогает, решает ОДИН модуль правил
  * (`app/botContract.ts`) — тот же, которым сверяет тест: второй реализации
  * правил вывода быть не должно (BOT-13). Числа сложности исполнения — шум
- * прицела, задержки подтверждений, вероятность отмены, вес, дальность и
- * собственный темп применения — остаются профилем (BOT-6) и повторной
- * генерацией не перетираются.
+ * прицела, задержки подтверждений, вероятность отмены, вес, дальность,
+ * длительность удержания и собственный темп применения — остаются профилем
+ * (BOT-6) и правятся ТОЛЬКО человеком: разошедшееся со сценой число команда
+ * называет находкой и выходит ненулевым кодом, а не переписывает его.
+ *
+ * Заведение записи, которой в профиле нет, включается явно (`--add`), и это не
+ * осторожность, а разрез BOT-6: «в профиле этой способности нет» означает либо
+ * «сцена только что её получила», либо «этот уровень сложности ею не играет», и
+ * различить их команде нечем. По умолчанию она приводит к сцене то, что дизайнер
+ * уже завёл, — прогон по отгруженному дереву обязан быть неподвижной точкой
+ * (тест `botsSync.test.ts`).
  *
  * Живёт команда в сборке игры, а не в пакете движка, по той же причине, что и
  * стенд демо-арены: она читает дерево контента (`game-content` CONT-4), а игре
  * это законно — она и есть игра (CONT-1).
  *
- * Идемпотентность несущая: второй запуск подряд не меняет ни байта, и файл, у
- * которого правок нет, не переписывается вовсе — рукописное форматирование
- * профиля переживает прогон. Переписанный файл приходит в каноническую форму
- * документа (`prettyJsonSerializer`, ED-21).
+ * Идемпотентность несущая: второй запуск подряд не меняет ни байта. Файл, у
+ * которого правок нет, не переписывается вовсе; ПЕРЕПИСАННЫЙ приходит в
+ * каноническую форму документа целиком (`prettyJsonSerializer`, ED-21) — то
+ * есть первая же правка переформатирует рукописную вёрстку профиля, и дифф
+ * будет на весь файл.
  *
  * Шага сборки нет по той же причине, что у запускалок: типы Node стрипает сам
  * (>=22.18), а хук резолва `./x.js` → `./x.ts` приезжает вместе с разбором
@@ -37,15 +46,16 @@
  */
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 // Ради побочного действия (хук резолва) и ради разбора флагов обеих форм.
 import { flag, option } from '@game-mvp/net/bin/matchFile.mjs';
 
 const USAGE =
-  'usage: npm run bots:sync -- [--root content] [--profile bots/normal.json] [--no-add] [--dry-run]\n' +
-  '  --root     корень дерева контента (по умолчанию content/ рядом с рабочим каталогом)\n' +
+  'usage: npm run bots:sync -- [--root content] [--profile bots/normal.json] [--add] [--dry-run]\n' +
+  '  --root     корень дерева контента (по умолчанию content/ репозитория)\n' +
   '  --profile  ограничить одним профилем; путь ОТ КОРНЯ дерева, как в документе аннотаций\n' +
-  '  --no-add   не заводить записи для способностей, которых в профиле нет:\n' +
-  '             состав способностей бота — выбор дизайнера (BOT-6)\n' +
+  '  --add      заводить записи для способностей, которых в профиле нет:\n' +
+  '             состав способностей бота — выбор дизайнера (BOT-6), поэтому только явным флагом\n' +
   '  --dry-run  ничего не писать, только назвать правки\n';
 
 if (flag('help')) {
@@ -56,11 +66,20 @@ if (flag('help')) {
 const { parseBotProfile } = await import('@game-mvp/bot');
 const { prettyJsonSerializer } = await import('@game-mvp/core');
 const { BOT_HINTS_SUFFIX, parseBotHints } = await import('../app/botHints.ts');
-const { expectedAbilities, syncProfileAbilities } = await import('../app/botContract.ts');
+const { expectedAbilities, syncProfileAbilities, verifyProfileAbilities } = await import(
+  '../app/botContract.ts'
+);
 
-const root = resolve(process.cwd(), option('root', 'content'));
+// Умолчание корня — дерево контента РЕПОЗИТОРИЯ, а не `content/` рядом с
+// рабочим каталогом: команда запускается и из корня (`npm run bots:sync`), и из
+// пакета (`npm run bots:sync -w @game-mvp/demo`), и второй запуск не обязан
+// падать ENOENT'ом. Тот же приём, что у стенда демо-арены (`demo-serve.mjs`).
+// Явный `--root` резолвится от рабочего каталога — его называет человек.
+const REPO_CONTENT = fileURLToPath(new URL('../../../content', import.meta.url));
+const named = option('root');
+const root = named === undefined ? REPO_CONTENT : resolve(process.cwd(), named);
 const only = option('profile');
-const add = !flag('no-add');
+const add = flag('add');
 const dryRun = flag('dry-run');
 
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
@@ -80,21 +99,31 @@ function syncProfile(expected, contentPath) {
   const before = JSON.stringify(document);
   const changes = syncProfileAbilities(expected, document, profile, { add });
   // И ПОСЛЕ: сгенерированное обязано быть валидным профилем, иначе команда
-  // оставила бы на диске документ, который бот не примет.
-  parseBotProfile(document, contentPath);
+  // оставила бы на диске документ, который бот не примет. Он же и сверяется —
+  // тем же кодом, что гейт: остаток находок это ровно то, что генерация трогать
+  // не вправе (числа сложности, BOT-6), и чинит их дизайнер.
+  const findings = verifyProfileAbilities(expected, parseBotProfile(document, contentPath));
 
   if (before === JSON.stringify(document)) {
     say(`${contentPath}: без изменений`);
-    return;
+  } else {
+    for (const change of changes) say(`  ${change}`);
+    if (dryRun) {
+      say(`${contentPath}: ${changes.length} правк(и) — не записаны (--dry-run)`);
+    } else {
+      writeFileSync(file, prettyJsonSerializer.encode(document));
+      written += 1;
+      say(`${contentPath}: ${changes.length} правк(и) записаны`);
+    }
   }
-  for (const change of changes) say(`  ${change}`);
-  if (dryRun) {
-    say(`${contentPath}: ${changes.length} правк(и) — не записаны (--dry-run)`);
-    return;
-  }
-  writeFileSync(file, prettyJsonSerializer.encode(document));
-  written += 1;
-  say(`${contentPath}: ${changes.length} правк(и) записаны`);
+
+  if (findings.length === 0) return;
+  // Находка — не отказ команды, а работа, оставшаяся человеку: правки записаны,
+  // а число, которое генерации не принадлежит, названо. Ненулевой код нужен,
+  // чтобы «почти сошлось» не выглядело как «сошлось».
+  for (const finding of findings) say(`  находка: ${contentPath}: ${finding}`);
+  say(`${contentPath}: ${findings.length} находк(и) — это числа профиля, правит их дизайнер (BOT-6)`);
+  failed = true;
 }
 
 /** Одна пара «документ бот-аннотаций → парная сцена» дерева контента. */

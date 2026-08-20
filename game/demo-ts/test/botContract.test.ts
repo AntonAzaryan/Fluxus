@@ -92,6 +92,23 @@ describe('BOT-13: отгруженные профили сходятся со с
   );
 
   /**
+   * Профиль, не названный ни одной аннотацией, в гейт не входит вовсе — и
+   * узнать об этом надо здесь, а не по боту, играющему мимо сцены. Обратная
+   * сторона того же правила, что и опечатка в имени записи (BOT-13).
+   */
+  it('каждый профиль дерева назван ровно одной аннотацией', () => {
+    const profiles = readdirSync(join(CONTENT, 'bots'), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+      .map((entry) => `bots/${entry.name}`)
+      .sort();
+    expect(profiles.length).toBeGreaterThan(0);
+    for (const path of profiles) {
+      const claimed = PAIRS.filter((pair) => pair.hints.profiles.includes(path));
+      expect(claimed.map((pair) => pair.base), path).toHaveLength(1);
+    }
+  });
+
+  /**
    * Состав способностей бота — выбор дизайнера (BOT-6): лёгкий профиль не
    * играет захватом, и отсутствие записи находкой быть не должно. Проверяется
    * именно на нём, а не на выдуманном документе: пропади это правило, тест
@@ -177,22 +194,52 @@ describe('BOT-13: рассинхрон становится находкой, а
   });
 
   it('удержание вне окна фазы удержания: находка называет окно', () => {
-    const findings = verifyProfileAbilities(
-      derived,
-      tampered('cast', {
-        cast: {
-          slotIndex: 0,
-          commit: 'release',
-          cancelButton: 9,
-          steps: [{ aim: 'enemy', confirmDelayTicks: 90, pointNoise: 0.4 }],
-          holdTicks: 90,
-          cancelChance: 0.05,
-          giveUpTicks: 150,
-        },
-      }),
-    );
+    const cast = (holdTicks: number): Record<string, unknown> => ({
+      cast: {
+        slotIndex: 0,
+        commit: 'release',
+        cancelButton: 9,
+        steps: [{ aim: 'enemy', confirmDelayTicks: holdTicks, pointNoise: 0.4 }],
+        holdTicks,
+        cancelChance: 0.05,
+        giveUpTicks: 150,
+      },
+    });
+    const findings = verifyProfileAbilities(derived, tampered('cast', cast(90)));
     expect(findings).toHaveLength(1);
     expect(findings[0]).toContain('holdTicks');
-    expect(findings[0]).toContain('78');
+    expect(findings[0]).toContain('79');
+    // Ровно длительность фазы — законное удержание: отпускание завершает фазу
+    // раньше ветки истечения, и находки тут быть не должно (ABIL-4).
+    expect(verifyProfileAbilities(derived, tampered('cast', cast(79)))).toEqual([]);
+  });
+
+  /**
+   * Связка «запись профиля ↔ определение сцены» держится ИМЕНЕМ, и опечатка в
+   * нём выключала бы сверку записи молча. Признак — бит: неописанная запись на
+   * бите описанного определения почти наверняка оно и есть.
+   */
+  it('запись профиля на бите описанного определения, которую аннотация не назвала, — находка', () => {
+    const document = read('bots/normal.json') as { abilities: Record<string, unknown>[] };
+    document.abilities = document.abilities.map((entry) =>
+      entry.name === 'shield' ? { ...entry, name: 'shieId' } : entry,
+    );
+    const findings = verifyProfileAbilities(derived, parseBotProfile(document, 'опечатка в имени'));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toContain('"shieId"');
+    expect(findings[0]).toContain('shield');
+    expect(findings[0]).toContain('6');
+  });
+
+  /**
+   * Прыжок демо — манёвр локомоушена (LOC-5), определения способности у него
+   * нет вовсе, и его бит не назначен ни одному описанному определению: запись
+   * молча не сверяется, и это законное «боту её не описывали» (BOT-12).
+   */
+  it('запись на бите, которого нет ни у одного определения, находкой не является', () => {
+    const profile = parseBotProfile(read('bots/normal.json'), 'bots/normal.json');
+    expect(profile.abilities.map((ability) => ability.name)).toContain('jump');
+    expect(derived.map((entry) => entry.button)).not.toContain(3);
+    expect(verifyProfileAbilities(derived, profile)).toEqual([]);
   });
 });

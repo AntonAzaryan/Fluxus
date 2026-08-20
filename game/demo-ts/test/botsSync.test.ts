@@ -4,18 +4,25 @@
  *
  * Прогон подпроцессом, как её запускает дизайнер: проверяется не модуль правил
  * (он проверен рядом, `botHints.test.ts`), а то, что КОМАНДА действительно
- * приводит документ к сцене, не трогает числа сложности и второй раз подряд не
+ * приводит документ к сцене, не трогает числа профиля и второй раз подряд не
  * меняет ни байта. Утверждение это про файл на диске, и заметить его срыв без
  * чтения файла нельзя.
+ *
+ * Отдельно и главное — неподвижная точка на ОТГРУЖЕННОМ дереве: прогон команды
+ * без флагов по `content/` обязан не менять в нём ничего. Состав способностей
+ * бота — решение дизайнера (BOT-6), и команда, дописывающая лёгкому боту
+ * способности, которыми он не играет, ломала бы это решение молча.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'bots-sync.mjs');
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CLI = join(HERE, '..', 'bin', 'bots-sync.mjs');
+const CONTENT = join(HERE, '../../../content');
 
 /** Сцена-фикстура: заряд с отпусканием, мгновенный щит и мгновенный рывок. */
 const SCENE = {
@@ -48,9 +55,9 @@ const HINTS = {
 };
 
 /**
- * Профиль-фикстура: механика записей разошлась со сценой (бит, цель, руки, вид
- * подтверждения, удержание мгновенной способности, заниженный кулдаун), а числа
- * сложности выкручены — по ним и проверяется, что генерация их не тронула.
+ * Профиль-фикстура: МЕХАНИКА записей разошлась со сценой (бит, цель, руки, вид
+ * подтверждения, биты каста, требование движения), а числа профиля выкручены и
+ * законны — по ним и проверяется, что генерация их не тронула.
  */
 const PROFILE = {
   schema: 3,
@@ -86,7 +93,7 @@ const PROFILE = {
         giveUpTicks: 111,
       },
     },
-    { name: 'dash', button: 2, target: 'threat', range: 6, holdTicks: 4, cooldownTicks: 30, weight: 0.9 },
+    { name: 'dash', button: 2, target: 'threat', range: 6, holdTicks: 1, cooldownTicks: 62, weight: 0.9 },
   ],
   seed: 3,
 };
@@ -112,13 +119,15 @@ interface Ability {
   };
 }
 
-function tree(): string {
+/** Временное дерево с фикстурой; `patch` правит профиль перед записью. */
+function tree(patch: (profile: typeof PROFILE) => unknown = (profile) => profile): string {
   const root = mkdtempSync(join(tmpdir(), 'bots-sync-'));
   mkdirSync(join(root, 'scenes'), { recursive: true });
   mkdirSync(join(root, 'bots'), { recursive: true });
   writeFileSync(join(root, 'scenes', 'probe.scene.json'), JSON.stringify(SCENE, null, 2));
   writeFileSync(join(root, 'scenes', 'probe.bots.json'), JSON.stringify(HINTS, null, 2));
-  writeFileSync(join(root, 'bots', 'probe.json'), JSON.stringify(PROFILE, null, 2));
+  const profile = patch(JSON.parse(JSON.stringify(PROFILE)) as typeof PROFILE);
+  writeFileSync(join(root, 'bots', 'probe.json'), JSON.stringify(profile, null, 2));
   return root;
 }
 
@@ -131,8 +140,8 @@ function run(root: string, ...args: string[]): { readonly status: number | null;
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
-const abilitiesOf = (root: string): readonly Ability[] =>
-  (JSON.parse(readFileSync(join(root, 'bots', 'probe.json'), 'utf8')) as { abilities: Ability[] }).abilities;
+const abilitiesOf = (root: string, name = 'probe'): readonly Ability[] =>
+  (JSON.parse(readFileSync(join(root, 'bots', `${name}.json`), 'utf8')) as { abilities: Ability[] }).abilities;
 
 const byName = (root: string, name: string): Ability =>
   abilitiesOf(root).find((ability) => ability.name === name)!;
@@ -167,40 +176,32 @@ describe('BOT-13: генерация приводит записи к сцене
     expect(cast.target).toBe('enemy');
     expect(cast.hands).toBe('free');
     expect(cast.cast!.steps[0]!.aim).toBe('enemy');
+    expect(byName(root, 'dash').requiresMoving).toBe(true);
   });
 
   /** Сценарий BOT-13 «Повторная генерация не трогает сложность». */
-  it('числа сложности исполнения остались как были', () => {
+  it('числа профиля остались как были', () => {
     const cast = byName(root, 'cast');
     expect(cast.range).toBe(7.5);
     expect(cast.weight).toBe(2.5);
     expect(cast.cooldownTicks).toBe(62);
+    expect(cast.holdTicks).toBe(20);
     expect(cast.cast!.holdTicks).toBe(20);
     expect(cast.cast!.cancelChance).toBe(0.17);
     expect(cast.cast!.giveUpTicks).toBe(111);
     expect(cast.cast!.steps[0]!.pointNoise).toBe(1.25);
+    expect(byName(root, 'dash').weight).toBe(0.9);
   });
 
-  it('кулдаун ниже сценного поднят до сценного, удержание мгновенной стало тапом', () => {
-    const dash = byName(root, 'dash');
-    expect(dash.cooldownTicks).toBeGreaterThanOrEqual(60);
-    expect(dash.holdTicks).toBe(1);
-    // Требование движения — семантика аннотации, и оно доехало.
-    expect(dash.requiresMoving).toBe(true);
-    // Вес — число сложности, и он не тронут.
-    expect(dash.weight).toBe(0.9);
-  });
-
-  /** Сценарий BOT-13 «В сцену добавили способность». */
-  it('способность, которой в профиле не было, заведена скелетом', () => {
-    const guard = byName(root, 'guard');
-    expect(guard.button).toBe(6);
-    expect(guard.target).toBe('threat');
-    expect(guard.range).toBe(9);
-    expect(guard.holdTicks).toBe(1);
-    expect(guard.cooldownTicks).toBeGreaterThanOrEqual(150);
-    expect(guard.cast).toBeUndefined();
-    expect(first).toContain('заведён скелет записи');
+  /**
+   * Состав способностей бота — решение дизайнера (BOT-6), и «в профиле её нет»
+   * читается двояко: сцена только что её получила либо этот уровень сложности
+   * ею не играет. Различить их команде нечем, поэтому по умолчанию она не
+   * заводит ничего.
+   */
+  it('способность, которой в профиле нет, без --add не заводится', () => {
+    expect(abilitiesOf(root).map((ability) => ability.name)).toEqual(['cast', 'dash']);
+    expect(first).not.toContain('скелет');
   });
 
   it('второй запуск подряд не меняет ни байта', () => {
@@ -212,19 +213,99 @@ describe('BOT-13: генерация приводит записи к сцене
   }, 120_000);
 });
 
-describe('BOT-6: состав способностей бота остаётся выбором дизайнера', () => {
-  it('--no-add правит существующие записи и не заводит новых', () => {
+/** Сценарий BOT-13 «В сцену добавили способность» — заведение записи явное. */
+describe('BOT-13: --add заводит скелет записи из двух документов', () => {
+  it('скелет несёт механику и семантику документов, а числа — умолчаниями', () => {
     const root = tree();
     try {
-      const result = run(root, '--no-add');
+      const result = run(root, '--add');
       expect(result.status, result.stderr).toBe(0);
-      expect(abilitiesOf(root).map((ability) => ability.name)).toEqual(['cast', 'dash']);
-      expect(byName(root, 'cast').button).toBe(0);
+      expect(result.stdout).toContain('заведён скелет записи');
+      const guard = byName(root, 'guard');
+      expect(guard.button).toBe(6);
+      expect(guard.target).toBe('threat');
+      expect(guard.range).toBe(9);
+      expect(guard.holdTicks).toBe(1);
+      expect(guard.cooldownTicks).toBeGreaterThanOrEqual(150);
+      expect(guard.cast).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   }, 120_000);
+});
 
+/**
+ * Числа профиля генерация НЕ правит — ни выпавшее из окна удержание, ни кулдаун
+ * ниже сценного (BOT-13: «MUST NOT их перетирать»). Она их НАЗЫВАЕТ и выходит
+ * ненулевым кодом; правит человек, а гейт сверки краснеет тем же текстом.
+ */
+describe('BOT-13: разошедшееся число профиля — находка, а не правка', () => {
+  let root: string;
+  let result: { readonly status: number | null; readonly stdout: string; readonly stderr: string };
+
+  beforeAll(() => {
+    root = tree((profile) => {
+      const abilities = profile.abilities as Record<string, unknown>[];
+      // Кулдаун ниже сценного, удержание мгновенной способности не тап и
+      // удержание каста за пределом окна фазы — три числа, три находки.
+      abilities[1] = { ...abilities[1], cooldownTicks: 30, holdTicks: 4 };
+      const cast = abilities[0]!.cast as Record<string, unknown>;
+      abilities[0] = {
+        ...abilities[0],
+        cast: { ...cast, holdTicks: 90, steps: [{ aim: 'enemy', confirmDelayTicks: 90, pointNoise: 1.25 }], giveUpTicks: 150 },
+      };
+      return profile;
+    });
+    result = run(root);
+  }, 120_000);
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('команда выходит ненулевым кодом и называет находки', () => {
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain('находка');
+    expect(result.stdout).toContain('cooldownTicks');
+    expect(result.stdout).toContain('holdTicks');
+  });
+
+  it('сами числа остались на месте, а механика записана', () => {
+    expect(byName(root, 'cast').cast!.holdTicks).toBe(90);
+    expect(byName(root, 'dash').cooldownTicks).toBe(30);
+    expect(byName(root, 'dash').holdTicks).toBe(4);
+    expect(byName(root, 'cast').button).toBe(0);
+  });
+});
+
+describe('bots:sync по отгруженному дереву — неподвижная точка', () => {
+  /**
+   * Прогон без флагов по КОПИИ настоящего `content/`: ни одного изменения ни в
+   * одном профиле. Копия, а не само дерево, потому что тест обязан оставаться
+   * читателем контента, а не его редактором.
+   */
+  it('ни один отгруженный профиль не меняется', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bots-sync-content-'));
+    try {
+      cpSync(join(CONTENT, 'scenes'), join(root, 'scenes'), { recursive: true });
+      cpSync(join(CONTENT, 'bots'), join(root, 'bots'), { recursive: true });
+      const before = ['easy', 'normal'].map((name) =>
+        readFileSync(join(root, 'bots', `${name}.json`), 'utf8'),
+      );
+      const result = run(root);
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain('bots/easy.json: без изменений');
+      expect(result.stdout).toContain('bots/normal.json: без изменений');
+      for (const [index, name] of ['easy', 'normal'].entries()) {
+        expect(readFileSync(join(root, 'bots', `${name}.json`), 'utf8')).toBe(before[index]);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
+});
+
+describe('bots:sync: флаги отбора и сухой прогон', () => {
   /** Опечатка в `--profile` иначе выглядела бы как «всё уже сходится». */
   it('--profile с незнакомым путём — отказ, а не молчание', () => {
     const root = tree();

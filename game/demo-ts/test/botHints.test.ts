@@ -158,16 +158,18 @@ describe('BOT-13: механика выводится из определени�
     expect(cast.cancelButton).toBe(9);
     expect(cast.slotIndex).toBe(3);
     expect(cast.steps).toEqual(['threat']);
-    // Додержавшего до конца срывает таймаут — отпустить обязан раньше.
-    expect(abilities[0]!.holdMaxTicks).toBe(59);
+    // Предел удержания — сама длительность фазы: отпускание завершает её ДО
+    // ветки истечения, и ровно `durationTicks` — законное удержание (ABIL-4).
+    expect(abilities[0]!.holdMaxTicks).toBe(60);
   });
 
   /**
-   * Истечение `durationTicks` шаг не записывает никогда (ABIL-4), поэтому у
-   * фазы отпускания отпустить раньше конца обязан любой исход таймаута, а не
-   * только срыв. Фаза без длительности предела не даёт вовсе.
+   * Предел удержания — сама длительность, без запаса в тик: прекращение
+   * удержания завершает фазу РАНЬШЕ ветки истечения, а шаг того же тика записан
+   * ещё раньше — системой накопления (ABIL-4, ABIL-5, DET-9). Фаза без
+   * длительности предела не даёт вовсе.
    */
-  it('у фазы отпускания предел на тик меньше длительности при любом исходе таймаута', () => {
+  it('предел удержания равен длительности фазы, а фаза без длительности предела не даёт', () => {
     const commit = derive(
       {
         phases: [{ id: 'aim', trigger: 'release', durationTicks: 20, timeout: { then: 'commit' } }],
@@ -175,7 +177,16 @@ describe('BOT-13: механика выводится из определени�
       },
       { target: 'threat', range: 5, steps: [{ aim: 'threat' }] },
     );
-    expect(commit.abilities[0]!.holdMaxTicks).toBe(19);
+    expect(commit.abilities[0]!.holdMaxTicks).toBe(20);
+
+    const cancel = derive(
+      {
+        phases: [{ id: 'aim', trigger: 'release', durationTicks: 20, timeout: { then: 'cancel' } }],
+        targeting: { steps: [{ kind: 'unit' }] },
+      },
+      { target: 'threat', range: 5, steps: [{ aim: 'threat' }] },
+    );
+    expect(cancel.abilities[0]!.holdMaxTicks).toBe(20);
 
     const endless = derive(
       { phases: [{ id: 'charge', trigger: 'hold' }] },
