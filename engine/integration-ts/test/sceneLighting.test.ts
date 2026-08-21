@@ -240,6 +240,36 @@ describe('гибридный режим на украшенной арене', (
     expect(rig.lighting.staticRebuilds).toBe(1);
   });
 
+  it('непрерывная мутация пола не выключает тени юнитов (REND-30)', () => {
+    const rig = stand({ shadows: { mode: 'hybrid' } });
+    rig.stage.publishDecorations(decorationSet([view(1000, 'Statue', 1)]));
+    rig.stage.publish(PRODUCER, tickView([view(1, 'Prop', 0), view(2, 'Prop', 1)]));
+    const { sun, sunDynamic } = rig.lighting.lights;
+
+    // Пол мутирует каждый тик (TERR-6): пересборка чанка перерегистрирует его
+    // статическим кастером, и кэш устаревает КАЖДЫМ кадром. Здесь это
+    // выражается прямым событием инвалидации — тем же, которое до чередования
+    // фаз держало динамическую карту невидимой весь матч.
+    const phases: ('static' | 'dynamic')[] = [];
+    for (let frame = 0; frame < 10; frame++) {
+      rig.lighting.invalidateStatic();
+      rig.stage.frame(0.016, 0);
+      phases.push(sun.shadow.needsUpdate ? 'static' : 'dynamic');
+      // Динамическая карта рисуется ровно в свои кадры — те, что не отданы кэшу.
+      expect(sunDynamic.shadow.needsUpdate).toBe(!sun.shadow.needsUpdate);
+    }
+
+    // Ни одной пары статических кадров подряд: динамическая карта обновляется
+    // не реже чем через кадр, и тени юнитов не застывают на время мутаций.
+    for (let i = 1; i < phases.length; i++) {
+      expect([phases[i - 1], phases[i]]).not.toEqual(['static', 'static']);
+    }
+    expect(phases.filter((phase) => phase === 'dynamic').length).toBe(5);
+    expect(rig.lighting.staticRebuilds).toBe(5);
+    // Проверка не выродилась: динамические кастеры на стенде есть.
+    expect(rig.lighting.casterCount('dynamic')).toBe(2);
+  });
+
   it('автор двигает декорацию — кэш перерисован не позже следующего кадра (ED-15)', () => {
     const rig = stand({ shadows: { mode: 'hybrid' } });
     rig.stage.publishDecorations(decorationSet([view(1000, 'Statue', 1)]));

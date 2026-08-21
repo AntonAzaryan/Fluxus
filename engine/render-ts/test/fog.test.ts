@@ -24,13 +24,13 @@ import {
   withCostSink,
   DEFAULT_FOG_CONFIG,
   type EntityView,
-  type FogLayerCanvas,
   type RenderContext,
 } from '../src/index.js';
 import {
   RendererSpy,
   buildFogMask,
   fakeCanvas,
+  type FakeCanvas,
   flatGrid,
   fogCanvasFactory,
   makeEntityView,
@@ -605,9 +605,9 @@ describe('FOW-7, FOW-10: пост-проход и обновление конф�
  */
 function cachedSubsystem(budget?: number): {
   fog: FogSubsystem;
-  canvases: (FogLayerCanvas & { puts: number })[];
+  canvases: FakeCanvas[];
 } {
-  const canvases: (FogLayerCanvas & { puts: number })[] = [];
+  const canvases: FakeCanvas[] = [];
   const fog = new FogSubsystem({
     grid: gridWithPillar(),
     stats: STATS,
@@ -840,6 +840,95 @@ describe('бюджетная перестройка маски и коалеси
     expect(idle.fogMaskUploadBytes).toBe(0);
     expect(idle.fogMinimapTexels).toBe(0);
     expect(canvases[0]!.puts).toBe(puts);
+  });
+
+  it('блит идёт грязным прямоугольником, и ряды в нём перевёрнуты (design D5)', () => {
+    // Арена 16×16 при разрешении 4 — маска 64×64 текселя, то есть 4×4 блока по
+    // 16: прямоугольник окна тогда читается блоками, а не «примерно там».
+    const corner = (x: number, y: number): FakeCanvas => {
+      const canvases: FakeCanvas[] = [];
+      const fog = new FogSubsystem({
+        grid: flatGrid(16),
+        stats: STATS,
+        hero: () => 1,
+        createCanvas: (width, height) => {
+          const canvas = fakeCanvas();
+          canvas.width = width;
+          canvas.height = height;
+          canvases.push(canvas);
+          return canvas;
+        },
+      });
+      fog.init(makeRenderContext());
+      fog.syncTick(makeTickView([observerView(1, x, y, 0, 1.5)]));
+      buildFogMask(fog);
+      fog.updateFrame(1 / 60, 0);
+      return canvases[0]!;
+    };
+
+    // Наблюдатель у начала мира: его свет лежит в НИЖНИХ рядах растра (ряд 0 —
+    // минимальный `y` мира), а миникарта рисует мир `+Y` вверх — значит в
+    // канвасе это НИЖНЯЯ полоса.
+    const low = corner(2, 2);
+    // Первый блит — полный (два аргумента), дальше идут кадры рассеивания с
+    // грязным прямоугольником (шесть).
+    expect(low.putRects[0]).toEqual([0, 0]);
+    const lowRect = low.putRects[low.putRects.length - 1]!;
+    expect(lowRect).toHaveLength(6);
+    expect(lowRect.slice(0, 2)).toEqual([0, 0]);
+    const [, , lowX, lowY, lowWidth, lowHeight] = lowRect as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
+    // Границы блочные, и полоса прижата к НИЗУ канваса.
+    expect(lowX % 16).toBe(0);
+    expect(lowWidth % 16).toBe(0);
+    expect(lowY + lowHeight).toBe(64);
+    expect(lowX).toBe(0);
+
+    // Зеркальный наблюдатель у дальнего угла: та же полоса, но у ВЕРХА канваса.
+    const high = corner(14, 14);
+    const highRect = high.putRects[high.putRects.length - 1]!;
+    expect(highRect).toHaveLength(6);
+    const [, , highX, highY, , highHeight] = highRect as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
+    expect(highY).toBe(0);
+    expect(highHeight).toBe(lowHeight);
+    expect(highX).toBe(64 - lowWidth);
+  });
+
+  it('смена тона перекрашивает слой миникарты событием правки (FOW-10, HUD-6)', () => {
+    const { fog, canvases } = cachedSubsystem();
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    buildFogMask(fog);
+    fog.updateFrame(10, 0); // рассеивание доиграно, окно пусто
+    const canvas = canvases[0]!;
+    const puts = canvas.puts;
+    const red = (): number => canvas.image!.data[0]!;
+    expect(red()).toBe(0x0e); // умолчание `#0e1420`
+
+    fog.applyConfig({ color: '#ff0000' });
+
+    // Тон в растр не входит, и перестройка вернула бы байт в байт тот же растр
+    // с пустым окном рассеивания: слой обязан перекраситься СОБЫТИЕМ правки,
+    // иначе миникарта осталась бы прежнего тона навсегда.
+    expect(canvas.puts).toBe(puts + 1);
+    expect(red()).toBe(0xff);
+    expect(fog.config.color).toBe('#ff0000');
+    // Перестройки при этом не заводится: сигнатура входов растра не изменилась.
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    fog.updateFrame(1 / 60, 0);
+    expect(fog.rebuilds).toBe(1);
   });
 
   it('прерванное рассеивание доигрывается: неустоявшийся блок остаётся в окне', () => {

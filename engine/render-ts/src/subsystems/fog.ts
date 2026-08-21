@@ -348,14 +348,13 @@ export class FogSubsystem implements RenderSubsystem {
 
   /**
    * Сигнатура входов текущей доставки в буфер кандидата; возвращает её длину.
-   * Значения конфига, влияющие на растр и блит: ширина градиента, тон (вбит в
-   * канвас миникарты) и консервативность — последняя через эффективные радиусы
-   * наблюдателей.
+   * Значения конфига, влияющие на РАСТР: ширина градиента и консервативность —
+   * последняя через эффективные радиусы наблюдателей. Тон в сигнатуру не входит
+   * (см. `SIGNATURE_PREFIX`): он живёт в канвасе миникарты, а не в растре.
    */
   private collect(view: TickView, team: number): number {
     let candidate = this.candidate;
     candidate[0] = this.current.edgeWidth;
-    candidate[1] = this.colorHex;
     let length = SIGNATURE_PREFIX;
     for (const entity of view.entities.values()) {
       const stats = entity.stats;
@@ -621,7 +620,9 @@ export class FogSubsystem implements RenderSubsystem {
   private applyResolved(next: FogRenderConfig): void {
     const previous = this.current;
     this.current = next;
-    this.colorHex = new THREE.Color(next.color).getHex();
+    const tone = new THREE.Color(next.color).getHex();
+    const repaint = tone !== this.colorHex;
+    this.colorHex = tone;
     (this.postMaterial.uniforms.uStrength as { value: number }).value = next.strength;
     (this.postMaterial.uniforms.uColor as { value: THREE.Color }).value.set(next.color);
     if (next.resolution !== previous.resolution) {
@@ -647,10 +648,20 @@ export class FogSubsystem implements RenderSubsystem {
       // Разрешение в сигнатуру входов не входит — пустой растр честно требует
       // перестройки ближайшей доставкой (design D4).
       this.rebuild.forget();
+      return; // растр и слой заведутся заново ближайшей перестройкой
     }
-    // Смена ширины градиента/консервативности/тона доедет ближайшей
-    // перестройкой: они — слоты сигнатуры входов (design D4); длительность
-    // fade читают потребители через `config` (design D7).
+    // Смена тона — СОБЫТИЕ правки конфигурации, а не перестройка (FOW-10,
+    // HUD-6): тон вбит в пиксели канваса миникарты и в растр не входит вовсе,
+    // поэтому перестройка вернула бы байт в байт тот же растр, пустое грязное
+    // окно — и слой остался бы старого тона навсегда. Перекрашивается он здесь
+    // же и целиком; текстуру маски это событие не трогает — там тона нет, его
+    // держит униформа пост-прохода выше.
+    if (repaint && this.built) {
+      this.minimap.blit(this.mask, this.shown, this.colorHex, costSink(), null);
+    }
+    // Смена ширины градиента и консервативности доедет ближайшей перестройкой:
+    // они — слоты сигнатуры входов (design D4); длительность fade читают
+    // потребители через `config` (design D7).
   }
 
   /**

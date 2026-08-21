@@ -215,7 +215,10 @@ export {
   segmentCasts,
 } from './fog/mask.js';
 export type { FogObserver, FogSegment, FogSmoothPass, FogWorldRect } from './fog/mask.js';
-export { FOG_DIRTY_BLOCK, FogDirtyBlocks, dissolveWindow } from './fog/dirty.js';
+// Грязное окно рассеивания (design D5): наружу отдан только сам набор блоков —
+// он входит в контракт `VisibilityMask.commit`. Сторона блока и проход
+// схождения остаются внутренностями пакета.
+export { FogDirtyBlocks } from './fog/dirty.js';
 
 // Подсистема освещения сцены (REND-8): источники света арены и теневые карты
 // из секции `lighting` парного документа (PRES-2). Свет всех потребителей

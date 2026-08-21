@@ -234,20 +234,44 @@ export class RendererSpy {
   }
 }
 
-/** Канвас слоя миникарты без DOM: записывает блит, контекст минимальный. */
-export function fakeCanvas(): FogLayerCanvas & { puts: number } {
-  const canvas = {
+/** Буфер пикселей слоя миникарты — то, что канвас держит между блитами. */
+export interface FakeImageData {
+  readonly data: Uint8ClampedArray;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Канвас слоя миникарты без DOM: записывает блиты и их ГЕОМЕТРИЮ, контекст
+ * минимальный. Прямоугольник грязного окна (design D5 change
+ * `fog-mask-budgeted-rebuild`) наблюдаем только здесь: у настоящего канваса его
+ * не спросишь, а перевёрнутый Y-флип иначе уехал бы молча.
+ */
+export interface FakeCanvas extends FogLayerCanvas {
+  /** Сколько раз буфер уехал в канвас. */
+  puts: number;
+  /** Аргументы блитов: `[dx, dy]` либо `[dx, dy, dirtyX, dirtyY, dirtyW, dirtyH]`. */
+  readonly putRects: number[][];
+  /** Буфер пикселей: тот же объект, что держит поверхность; null — блитов не было. */
+  image: FakeImageData | null;
+}
+
+export function fakeCanvas(): FakeCanvas {
+  const canvas: FakeCanvas = {
     width: 0,
     height: 0,
     puts: 0,
+    putRects: [],
+    image: null,
     getContext: () => ({
-      createImageData: (width: number, height: number) => ({
-        data: new Uint8ClampedArray(width * height * 4),
-        width,
-        height,
-      }),
-      putImageData: () => {
+      createImageData: (width: number, height: number): FakeImageData => {
+        const created = { data: new Uint8ClampedArray(width * height * 4), width, height };
+        canvas.image = created;
+        return created;
+      },
+      putImageData: (_image: unknown, ...rect: number[]): void => {
         canvas.puts++;
+        canvas.putRects.push(rect);
       },
     }),
   };
