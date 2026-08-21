@@ -4,6 +4,7 @@
  *
  *   npm run bench:demo -- [--profile desktop-dev] [--seconds 20] [--warmup 5]
  *                         [--headless] [--solo] [--json] [--chrome <path>]
+ *                         [--drive cliff-jump]
  *
  * Отвечает на один вопрос — «бюджет профиля ещё сходится?» — и отвечает на него
  * НАСТОЯЩИМ рендерером на настоящей сцене: поднимает dev-страницу демо, катает
@@ -16,7 +17,30 @@
  * расползания стоимости между такими сверками страхуют детерминированные
  * счётчики и их голден-гейт (PERF-3, PERF-4). Поэтому и код возврата 0 при
  * ЛЮБОМ вердикте: ненулевым он бывает только когда замера не случилось вовсе —
- * не нашёлся браузер, не поднялась страница, матч не пошёл.
+ * не нашёлся браузер, не поднялась страница, матч не пошёл, вождение не дошло
+ * до героя.
+ *
+ * ## Вождение героя (`--drive`)
+ *
+ * По умолчанию бенч меряет СТОЯЩЕГО героя: ввод не подаёт никто, и целые куски
+ * работы кадра в такой замер не попадают вовсе. Маска тумана — первый из них:
+ * подсистема сверяет сигнатуру наблюдателей и, пока герой стоит, не платит за
+ * туман ничего (`render-ts/src/subsystems/fog.ts`, design D4 тумана). Замер
+ * стоящего героя поэтому честен ровно наполовину: он не воспроизводит ни
+ * пересборку маски, ни заикание на смене уровня под прыжком с уступа.
+ *
+ * `--drive <сценарий>` подаёт странице ввод по расписанию — теми же событиями
+ * клавиатуры, какие приходят от человека: `Input.dispatchKeyEvent` поверх УЖЕ
+ * поднятой сессии CDP, а страница слушает `e.code` на `window`
+ * (`KeyboardMouseSource.bind`, INP-1). Второго канала управления, обходящего
+ * слой ввода, здесь не заводится намеренно: замер обязан гонять тот же путь,
+ * которым идёт игрок.
+ *
+ * Вождение страхует себя от ложной зелени: после окна бенч читает пробу тумана
+ * отладочной ручкой страницы (`__renderDebug`, `render-debug` RDBG-7) и требует,
+ * чтобы перестройки маски за окно ПРОДВИНУЛИСЬ. Не продвинулись — ввод до героя
+ * не дошёл, мерились те же стоящие кадры, и это отказ ЗАМЕРА (код возврата 1), а
+ * не вердикт бюджета.
  *
  * Браузером правит CDP поверх встроенного в Node `WebSocket` — своей
  * зависимости бенч не заводит. Playwright дал бы ту же пару «запустить и
@@ -46,11 +70,72 @@ const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
 const PROFILES = join(PACKAGE, 'bench', 'profiles');
 const VITE_CONFIG = join(PACKAGE, 'app', 'vite.config.ts');
 
+// ------------------------------------------------------------------ вождение
+
+/**
+ * `KeyboardEvent.code` → то, чем ту же клавишу называет CDP. Страница читает
+ * только `e.code` (`KeyboardMouseSource.bind`), но событие без виртуального кода
+ * — это событие, которого браузер сам никогда не порождает, и полагаться на его
+ * обработку теми же путями нельзя. Набор ЗАКРЫТ: незнакомый код в макросе —
+ * опечатка, и падать она обязана до запуска браузера, а не молча не нажиматься.
+ */
+const DRIVE_KEYS = {
+  KeyW: { key: 'w', virtualKey: 87 },
+  KeyA: { key: 'a', virtualKey: 65 },
+  KeyS: { key: 's', virtualKey: 83 },
+  KeyD: { key: 'd', virtualKey: 68 },
+  Space: { key: ' ', virtualKey: 32 },
+};
+
+/** Длительность короткого нажатия действия, мс: фронт страница берёт с `keydown` (INP-2). */
+const DRIVE_TAP_MS = 80;
+
+/**
+ * Макросы вождения — ДАННЫЕ, а не ветки кода: расписание правится замером так
+ * же, как правятся числа профиля устройства (PERF-1), и новый сюжет нагрузки
+ * добавляется строкой, а не функцией.
+ *
+ * Формат один: `hold` называет удерживаемые клавиши движения ЦЕЛИКОМ (что не
+ * названо — отпускается), `tap` — короткое нажатие действия. Расписание крутится
+ * по кругу с периодом `loopMs` до конца окна замера, поэтому длина окна
+ * (`--seconds`) макрос не переписывает.
+ */
+const DRIVE_SCRIPTS = {
+  'cliff-jump': {
+    title: 'подъём на площадку rise-1 и сход с неё',
+    /**
+     * Герой дуэли стартует в (8.5, 24.5), ближайшая площадка rise-1 занимает
+     * клетки x 11–19 × y 29–36 (`content/scenes/duel.scene.json`). Пара
+     * «KeyW+KeyD» ведёт по диагонали к её уступу; `cliffRise` героя равен нулю,
+     * то есть подъём на уровень берётся только прыжком — отсюда нажатия Space
+     * раз в секунду. Обратная пара уводит с площадки вниз. Каждый переход уровня
+     * разом открывает и закрывает обзор, то есть перестраивает маску тумана.
+     */
+    loopMs: 5000,
+    events: [
+      { atMs: 0, hold: ['KeyW', 'KeyD'] },
+      { atMs: 1000, tap: 'Space' },
+      { atMs: 2000, tap: 'Space' },
+      { atMs: 2500, hold: ['KeyS', 'KeyA'] },
+      { atMs: 3000, tap: 'Space' },
+      { atMs: 4000, tap: 'Space' },
+    ],
+  },
+};
+
+const DRIVE_NAMES = Object.keys(DRIVE_SCRIPTS);
+
 if (flag('help')) {
   process.stdout.write(
     'usage: node game/demo-ts/bin/bench-demo.mjs [--profile desktop-dev] [--seconds 20]\n' +
       '       [--warmup 5] [--headless] [--solo] [--json] [--chrome <path>] [--port 5174]\n' +
-      '       [--ready-timeout 90] [--cdp-timeout 10]\n',
+      '       [--ready-timeout 90] [--cdp-timeout 10] [--drive <сценарий>]\n' +
+      '\n' +
+      '  --drive <сценарий>  вести героя по расписанию во время замера; без флага\n' +
+      '                      герой СТОИТ, и маска тумана не перестраивается ни разу.\n' +
+      '                      После окна бенч требует, чтобы перестройки маски\n' +
+      '                      продвинулись, — иначе замер считается не состоявшимся.\n' +
+      `                      сценарии: ${DRIVE_NAMES.map((name) => `${name} — ${DRIVE_SCRIPTS[name].title}`).join('; ')}\n`,
   );
   process.exit(0);
 }
@@ -78,6 +163,35 @@ if (!Number.isFinite(seconds) || seconds <= 0 || !Number.isFinite(warmupSeconds)
 if (!Number.isFinite(cdpTimeoutMs) || cdpTimeoutMs <= 0) {
   process.stderr.write('бенч: --cdp-timeout должен быть положительным числом секунд\n');
   process.exit(2);
+}
+
+// Имя сценария вождения обязательно: голый `--drive` — это команда, которая
+// молча сделала бы не то, что в ней написано (замер стоящего героя).
+const driveName = option('drive', undefined);
+if (driveName === undefined && flag('drive')) {
+  process.stderr.write(`бенч: у --drive обязательно имя сценария: ${DRIVE_NAMES.join(', ')}\n`);
+  process.exit(2);
+}
+if (driveName !== undefined && DRIVE_SCRIPTS[driveName] === undefined) {
+  process.stderr.write(
+    `бенч: сценарий вождения "${driveName}" не знаком; известны: ${DRIVE_NAMES.join(', ')}\n`,
+  );
+  process.exit(2);
+}
+const driveScript = driveName === undefined ? null : DRIVE_SCRIPTS[driveName];
+if (driveScript !== null) {
+  for (const event of driveScript.events) {
+    for (const code of event.hold ?? []) {
+      if (DRIVE_KEYS[code] === undefined) {
+        process.stderr.write(`бенч: сценарий "${driveName}" удерживает незнакомую клавишу "${code}"\n`);
+        process.exit(2);
+      }
+    }
+    if (event.tap !== undefined && DRIVE_KEYS[event.tap] === undefined) {
+      process.stderr.write(`бенч: сценарий "${driveName}" нажимает незнакомую клавишу "${event.tap}"\n`);
+      process.exit(2);
+    }
+  }
 }
 
 // ------------------------------------------------------------------ профиль
@@ -362,6 +476,102 @@ async function cdpConnect(endpoint) {
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
+// ------------------------------------ вождение: расписание и проба страницы
+
+/**
+ * Ручка отладки страницы (`render-debug` RDBG-7). Имя повторено здесь, а не
+ * импортировано из `app/debugPanel.ts`: тот тянет за собой `quality.ts` с
+ * вайтовским импортом JSON-пресетов, которого Node не разбирает. Разъехаться
+ * этим двум местам молча не даёт сама проверка: разошедшийся формат дампа —
+ * это отказ замера с названной причиной (см. `driveFailure`), а не ноль
+ * перестроек.
+ */
+const DEBUG_GLOBAL_KEY = '__renderDebug';
+
+/** Отладочный источник маски видимости: из него читается счётчик перестроек. */
+const FOG_SOURCE_ID = 'fog.mask';
+
+/** Источник позы камеры: в режиме follow её фокус едет за героем. */
+const CAMERA_SOURCE_ID = 'camera.pose';
+
+/**
+ * Плоское расписание макроса на всё окно замера: события в миллисекундах ОТ
+ * НАЧАЛА окна. Собирается заранее и целиком — так число нажатий в отчёте взято
+ * из того же расписания, по которому шло вождение, а не выведено из времени.
+ */
+function driveSchedule(script, windowMs) {
+  const schedule = [];
+  for (let base = 0; base < windowMs; base += script.loopMs) {
+    for (const event of script.events) {
+      const at = base + event.atMs;
+      if (at < windowMs) schedule.push({ at, hold: event.hold, tap: event.tap });
+    }
+  }
+  return schedule.sort((a, b) => a.at - b.at);
+}
+
+/** Секция дампа по `id`; null — источника нет либо ручка промолчала. */
+function sectionOf(sections, id) {
+  const section = sections === null || sections === undefined ? undefined : sections[id];
+  return section === undefined || section === null ? null : section;
+}
+
+/** Фокус камеры точкой мира; null — камера ещё не собрана (`noData`). */
+function focusOf(sections) {
+  const camera = sectionOf(sections, CAMERA_SOURCE_ID);
+  if (camera === null || typeof camera.focusWorldX !== 'number') return null;
+  if (typeof camera.noData === 'string') return null;
+  return { x: camera.focusWorldX, y: camera.focusWorldY };
+}
+
+/**
+ * Перестроек маски ЗА ОКНО: счётчик источника накопительный (с создания
+ * подсистемы), и окну принадлежит его приращение между двумя пробами.
+ */
+function rebuildsBetween(before, after) {
+  const from = sectionOf(before, FOG_SOURCE_ID);
+  const to = sectionOf(after, FOG_SOURCE_ID);
+  if (from === null || to === null) return 0;
+  if (typeof from.rebuildCount !== 'number' || typeof to.rebuildCount !== 'number') return 0;
+  return Math.max(0, to.rebuildCount - from.rebuildCount);
+}
+
+/**
+ * Чем плох замер с вождением, если он плох, — строкой отказа либо null.
+ *
+ * Проверка одна и та же на все причины: перестройки маски за окно обязаны
+ * ПРОДВИНУТЬСЯ. Маска перестраивается только на смену сигнатуры наблюдателей
+ * своей команды (`fog.ts`, design D4 тумана), то есть ровно тогда, когда герой
+ * сдвинулся, — а значит нулевой счётчик и есть «ввод до героя не дошёл». Это
+ * отказ ЗАМЕРА, а не вердикт бюджета: мерились бы те же стоящие кадры, что и
+ * без `--drive`, и зелёный вердикт на них был бы ложным.
+ */
+function driveFailure(before, after, rebuilds) {
+  if (before === null || after === null) {
+    return (
+      `ручка отладки страницы ${DEBUG_GLOBAL_KEY} не отвечает: проверить, что вождение ` +
+      'дошло до героя, нечем — а непроверенный замер с --drive не замер'
+    );
+  }
+  const fog = sectionOf(after, FOG_SOURCE_ID);
+  if (fog === null) {
+    return `отладочный источник "${FOG_SOURCE_ID}" на странице не зарегистрирован: пересборок маски не видно`;
+  }
+  if (typeof fog.noData === 'string') {
+    return `маска видимости так и не построена (${fog.noData})`;
+  }
+  if (typeof fog.rebuildCount !== 'number') {
+    return `проба "${FOG_SOURCE_ID}" не назвала числа перестроек: формат дампа разошёлся с бенчем`;
+  }
+  if (rebuilds <= 0) {
+    return (
+      'вождение не сдвинуло героя: маска тумана не перестроилась за окно НИ РАЗУ — ' +
+      'страница не приняла события клавиатуры либо матч не отдал герою управление'
+    );
+  }
+  return null;
+}
+
 // ------------------------------------------------------------------- отчёт
 
 /** Число в миллисекундах с фиксированной шириной — колонки обязаны читаться. */
@@ -391,7 +601,12 @@ function verdictOf(line) {
   return `не сходится (${over.join(', ')})`;
 }
 
-function printReport(summary, pageUrl) {
+/** Точка в мировых единицах для отчёта; null — источник ничего не сказал. */
+function pointOf(place) {
+  return place === null ? '—' : `(${place.x.toFixed(1)}, ${place.y.toFixed(1)})`;
+}
+
+function printReport(summary, pageUrl, drive) {
   const lines = benchVerdict(profile, summary);
   const fits = lines.every((line) => benchLineFits(line));
   const out = [];
@@ -437,6 +652,33 @@ function printReport(summary, pageUrl) {
       `${ms(summary.ticks.gapMs.p99).padEnd(12)}${'—'.padEnd(22)}каденс доставки`,
   );
   out.push('');
+  if (drive !== null) {
+    // Что вождение действительно доехало до героя — числами, а не доверием:
+    // маска перестраивается ТОЛЬКО когда сдвинулся наблюдатель своей команды
+    // (`fog.ts`, кэш сигнатуры), и ненулевой счётчик за окно и есть тот факт.
+    out.push(`  вождение: сценарий "${drive.script}" — ${drive.title}`);
+    out.push(
+      `  нажатий действия за окно: ${drive.taps}; фокус камеры (следование за героем): ` +
+        `${pointOf(drive.focusBefore)} → ${pointOf(drive.focusAfter)}`,
+    );
+    out.push(
+      `  перестроек маски тумана (FoW) за окно: ${drive.rebuilds}` +
+        `${drive.rebuilds > 0 ? ` (${(drive.rebuilds / Math.max(summary.seconds, 1e-6)).toFixed(1)}/с)` : ''}` +
+        `${drive.dissolving ? ', рассеивание не сошлось к концу окна' : ''}`,
+    );
+    if (drive.rebuilds <= 0) {
+      out.push(
+        '  ВНИМАНИЕ: маска тумана НЕ перестроилась ни разу — ввод до героя не дошёл,\n' +
+          '  мерились те же стоящие кадры, что и без --drive: ЗАМЕР НЕ СОСТОЯЛСЯ',
+      );
+    }
+    out.push(
+      '  пересборка маски живёт в ПОКАДРОВОМ обновлении подсистем и нарезана на порции\n' +
+        '  под тексельный бюджет (FoW, change `fog-mask-budgeted-rebuild`): её цену видно\n' +
+        '  в строке «кадр подсистем», а размазана она по кадрам публикации маски',
+    );
+    out.push('');
+  }
   // Что именно измерено — частью отчёта, а не знанием читателя: стадии PERF-2
   // покрыты браузерным замером не целиком, и молчать об этом значит выдавать
   // «кадр в бюджете» за «бюджет сходится весь».
@@ -464,7 +706,9 @@ function printReport(summary, pageUrl) {
     '  (бенч — диагностика, а не гейт: код возврата не зависит от вердикта, PERF-7)\n',
   );
   process.stdout.write(out.join('\n'));
-  if (flag('json')) process.stdout.write(`${JSON.stringify({ profile, summary }, null, 2)}\n`);
+  if (flag('json')) {
+    process.stdout.write(`${JSON.stringify({ profile, summary, drive }, null, 2)}\n`);
+  }
 }
 
 // -------------------------------------------------------------------- прогон
@@ -492,7 +736,10 @@ try {
   process.stdout.write(
     `бенч: страница ${pageUrl}\n` +
       `бенч: браузер ${browser.path} (${browser.source})${headless ? ', headless' : ''}\n` +
-      `бенч: прогрев ${warmupSeconds} с, замер ${seconds} с\n`,
+      `бенч: прогрев ${warmupSeconds} с, замер ${seconds} с\n` +
+      (driveScript === null
+        ? 'бенч: вождения нет — герой стоит, маска тумана не перестраивается (--drive)\n'
+        : `бенч: вождение "${driveName}" — ${driveScript.title}\n`),
   );
 
   child = spawn(browser.path, browserArgs(userDataDir), { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -517,6 +764,95 @@ try {
       );
     }
     return result.result.value;
+  };
+
+  /**
+   * Событие клавиши странице — тем же путём, каким его получает человек: поверх
+   * УЖЕ поднятой сессии CDP, без второго канала управления в обход слоя ввода
+   * (INP-1). `rawKeyDown`, а не `keyDown`: символьного события у игровой клавиши
+   * нет, и порождать его значило бы слать странице то, чего клавиатура не шлёт.
+   */
+  const dispatchKey = async (type, code) => {
+    const key = DRIVE_KEYS[code];
+    await cdp.send(
+      'Input.dispatchKeyEvent',
+      {
+        type,
+        code,
+        key: key.key,
+        windowsVirtualKeyCode: key.virtualKey,
+        nativeVirtualKeyCode: key.virtualKey,
+      },
+      sessionId,
+    );
+  };
+
+  /**
+   * Проба отладочных источников страницы (RDBG-7), не оставляющая их
+   * включёнными: источник включается, снимается дамп и источник выключается
+   * ОДНИМ синхронным выражением страницы. Ни один кадр с включённым источником
+   * при этом не рисуется — чтение не удорожает замер (RDBG-4), — а источник,
+   * включённый человеком, остаётся включённым.
+   */
+  const readDebugSections = () =>
+    evaluate(`(() => {
+      const debug = globalThis[${JSON.stringify(DEBUG_GLOBAL_KEY)}];
+      if (debug === undefined) return null;
+      const ids = ${JSON.stringify([FOG_SOURCE_ID, CAMERA_SOURCE_ID])};
+      const restore = [];
+      for (const id of ids) {
+        const known = debug.sources().find((source) => source.id === id);
+        if (known !== undefined && !known.enabled && debug.setEnabled(id, true)) restore.push(id);
+      }
+      try {
+        const sections = debug.dump().sections;
+        const out = {};
+        for (const id of ids) out[id] = sections[id] ?? null;
+        return out;
+      } finally {
+        for (const id of restore) debug.setEnabled(id, false);
+      }
+    })()`);
+
+  /**
+   * Вождение героя на всё окно замера: расписание макроса И ЕСТЬ окно —
+   * отдельного `sleep` на замер при `--drive` нет, остаток окна после последнего
+   * события досыпается здесь же.
+   */
+  const driveWindow = async (script, windowMs) => {
+    const schedule = driveSchedule(script, windowMs);
+    const held = new Set();
+    let taps = 0;
+    const startedAt = Date.now();
+    for (const event of schedule) {
+      const wait = event.at - (Date.now() - startedAt);
+      if (wait > 0) await sleep(wait);
+      if (event.hold !== undefined) {
+        // `hold` называет удерживаемое ЦЕЛИКОМ: что в нём не названо — отпустить.
+        for (const code of Array.from(held)) {
+          if (event.hold.includes(code)) continue;
+          await dispatchKey('keyUp', code);
+          held.delete(code);
+        }
+        for (const code of event.hold) {
+          if (held.has(code)) continue;
+          await dispatchKey('rawKeyDown', code);
+          held.add(code);
+        }
+      }
+      if (event.tap !== undefined) {
+        await dispatchKey('rawKeyDown', event.tap);
+        await sleep(DRIVE_TAP_MS);
+        await dispatchKey('keyUp', event.tap);
+        taps += 1;
+      }
+    }
+    // Отпустить всё: удержание страница снимает только по `keyup` (INP-5), и
+    // герой с зажатой клавишей бежал бы дальше — уже за пределами окна.
+    for (const code of Array.from(held)) await dispatchKey('keyUp', code);
+    const rest = windowMs - (Date.now() - startedAt);
+    if (rest > 0) await sleep(rest);
+    return { taps };
   };
 
   // Готовность = probe повесил ручку И кадры пошли. Кадры начинаются только
@@ -554,15 +890,52 @@ try {
     );
   }
 
+  if (driveScript !== null) {
+    // Страница обязана считать себя в фокусе: на расфокусе слой ввода снимает
+    // удержания (`handleBlur`, INP-5), а вкладка замера создаётся второй в окне
+    // браузера. Не всякая сборка это умеет — отказывать замеру не за чем.
+    try {
+      await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true }, sessionId);
+    } catch {
+      // Пусто намеренно: фокус эмулируется не везде, и вождение работает и так.
+    }
+  }
+
   // Прогрев не меряется: первые секунды матча — это загрузка ассетов, компиляция
   // шейдеров и прогрев JIT, и их перцентили сказали бы не о бюджете кадра.
   await sleep(warmupSeconds * 1000);
+  // Пробы отладки снимаются ВНЕ окна замера — до обнуления probe и после отчёта:
+  // дамп стоит главному потоку страницы работы, и внутри окна она попала бы в
+  // перцентили кадра, ради которых замер и затевался.
+  const before = driveScript === null ? null : await readDebugSections();
   await evaluate(`globalThis[${JSON.stringify(BENCH_GLOBAL_KEY)}].reset()`);
-  await sleep(seconds * 1000);
+  const driven = driveScript === null ? null : await driveWindow(driveScript, seconds * 1000);
+  if (driveScript === null) await sleep(seconds * 1000);
   const summary = await evaluate(`globalThis[${JSON.stringify(BENCH_GLOBAL_KEY)}].report()`);
   if (summary.frames < 2) throw new Error('probe собрал меньше двух кадров — мерить нечего');
+  const after = driveScript === null ? null : await readDebugSections();
 
-  printReport(summary, pageUrl);
+  let drive = null;
+  if (driveScript !== null) {
+    const fogAfter = sectionOf(after, FOG_SOURCE_ID);
+    const rebuilds = rebuildsBetween(before, after);
+    drive = {
+      script: driveName,
+      title: driveScript.title,
+      taps: driven.taps,
+      rebuilds,
+      dissolving: fogAfter !== null && fogAfter.dissolving === true,
+      focusBefore: focusOf(before),
+      focusAfter: focusOf(after),
+    };
+    // Отчёт печатается ДО отказа: причина «замер не состоялся» читается вместе с
+    // числами, на которых её увидели, а не вместо них.
+    printReport(summary, pageUrl, drive);
+    const failure = driveFailure(before, after, rebuilds);
+    if (failure !== null) throw new Error(failure);
+  } else {
+    printReport(summary, pageUrl, null);
+  }
 } catch (error) {
   process.stderr.write(`\nбенч не состоялся: ${error.message}\n`);
   process.exitCode = 1;

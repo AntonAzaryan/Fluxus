@@ -7,7 +7,14 @@
  * Геометрия зон — данные (доли вьюпорта), не код. Оси экрана — Y вниз;
  * в семантический сэмпл уходит мировой Y (вверх) — инверсия умирает здесь.
  */
-import { aimAngle, type ActionSink, type ContinuousSample, type InputSource } from './types.js';
+import {
+  aimAngle,
+  aimTarget,
+  type ActionSink,
+  type AimPoint,
+  type ContinuousSample,
+  type InputSource,
+} from './types.js';
 
 /** Зона в долях вьюпорта [0..1] от левого верхнего угла. */
 export interface TouchZone {
@@ -28,6 +35,13 @@ export interface TouchAimStickConfig extends TouchStickConfig {
   readonly releaseAction?: string;
   /** Доля хода, ниже которой отпускание — тап без направления, не действие. */
   readonly deadzone?: number;
+  /**
+   * Мировые единицы на полный ход стика прицела (INP-1): указателя у тач-стика
+   * нет, и точку прицела источник строит из отклонения сам — те же основания и
+   * та же арифметика, что у геймпада. Без него (и без начала прицеливания)
+   * источник точкой не владеет.
+   */
+  readonly aimReach?: number;
 }
 
 export interface TouchButtonConfig {
@@ -68,10 +82,14 @@ export class TouchSource implements InputSource {
 
   private readonly bindings: TouchBindings;
   private readonly viewport: () => TouchViewport;
+  private readonly aimOrigin: (() => AimPoint | null) | undefined;
   private press: ActionSink | null = null;
   private moveStick: StickState | null = null;
   private aimStick: StickState | null = null;
   private lastAim: number | null = null;
+  /** Ответ `poll().target`; переписывается на месте — выборка не аллоцирует. */
+  private readonly targetScratch = { x: 0, y: 0 };
+  private hasTarget = false;
   /** Активен после первого касания (INP-5): до него источник «не появился». */
   private touched = false;
   /** Зажатые кнопки действий: `pointerId` → имя действия (состояние жеста). */
@@ -79,9 +97,19 @@ export class TouchSource implements InputSource {
   /** Ответ `held()`; пересобирается на месте — выборка не аллоцирует. */
   private readonly heldActions = new Set<string>();
 
-  constructor(bindings: TouchBindings, viewport: () => TouchViewport) {
+  /**
+   * `aimOrigin` — начало прицеливания в мировых координатах, знание приложения
+   * (см. `GamepadSource`): источник строит точку от него отклонением стика, а
+   * сам мира не спрашивает.
+   */
+  constructor(
+    bindings: TouchBindings,
+    viewport: () => TouchViewport,
+    aimOrigin?: () => AimPoint | null,
+  ) {
     this.bindings = bindings;
     this.viewport = viewport;
+    this.aimOrigin = aimOrigin;
   }
 
   start(press: ActionSink): void {
@@ -134,10 +162,25 @@ export class TouchSource implements InputSource {
     const aim = this.bindings.aimStick;
     if (aim !== undefined && this.aimStick?.pointerId === pointerId) {
       dragStick(this.aimStick, clientX, clientY, aim.radius, vp);
-      if (Math.hypot(this.aimStick.dx, this.aimStick.dy) >= (aim.deadzone ?? DEFAULT_AIM_DEADZONE)) {
+      const deflection = Math.hypot(this.aimStick.dx, this.aimStick.dy);
+      if (deflection >= (aim.deadzone ?? DEFAULT_AIM_DEADZONE)) {
         this.lastAim = aimAngle(this.aimStick.dx, -this.aimStick.dy);
+        this.aimPoint(aim, this.lastAim, Math.min(deflection, 1));
       }
     }
+  }
+
+  /**
+   * Точка прицела стика (INP-1): начало прицеливания плюс отклонение в мировых
+   * единицах биндинга. Дальностью способности точка не обрезается — это
+   * политика симуляции (ABIL-5).
+   */
+  private aimPoint(config: TouchAimStickConfig, angle: number, deflection: number): void {
+    const reach = config.aimReach;
+    const origin = reach === undefined ? null : (this.aimOrigin?.() ?? null);
+    if (origin === null || reach === undefined) return;
+    aimTarget(origin, angle, reach * deflection, this.targetScratch);
+    this.hasTarget = true;
   }
 
   handlePointerUp(pointerId: number): void {
@@ -152,6 +195,7 @@ export class TouchSource implements InputSource {
         Math.hypot(dx, dy) >= (aim.deadzone ?? DEFAULT_AIM_DEADZONE)
       ) {
         this.lastAim = aimAngle(dx, -dy);
+        this.aimPoint(aim, this.lastAim, Math.min(Math.hypot(dx, dy), 1));
         this.press?.(aim.releaseAction);
       }
     }
@@ -165,6 +209,7 @@ export class TouchSource implements InputSource {
       // `|| 0` гасит -0 от инверсии экранного Y.
       moveY: stick === null ? 0 : -stick.dy || 0,
       aim: this.lastAim,
+      target: this.hasTarget ? this.targetScratch : null,
     };
   }
 

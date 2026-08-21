@@ -8,16 +8,16 @@
       "KeyK": "kill",
       "KeyF": "slowDome",
       "KeyR": "capture",
-      "KeyE": "shield",
-      "KeyX": "rewind"
+      "KeyX": "rewind",
+      "KeyQ": "cancel"
     },
-    "pointerButtons": { "0": "cast" }
+    "pointerButtons": {
+      "0": "cast",
+      "2": { "action": "shield", "suppressedBy": ["Alt"] }
+    }
   },
   "touch": {
-    "moveStick": {
-      "zone": { "left": 0, "top": 0.4, "width": 0.5, "height": 0.6 },
-      "radius": 0.12
-    },
+    "moveStick": { "zone": { "left": 0, "top": 0.4, "width": 0.5, "height": 0.6 }, "radius": 0.12 },
     "aimStick": {
       "zone": { "left": 0.5, "top": 0.4, "width": 0.5, "height": 0.6 },
       "radius": 0.12,
@@ -30,7 +30,9 @@
       { "zone": { "left": 0.86, "top": 0.17, "width": 0.12, "height": 0.1 }, "action": "slowDome" },
       { "zone": { "left": 0.72, "top": 0.17, "width": 0.12, "height": 0.1 }, "action": "capture" },
       { "zone": { "left": 0.86, "top": 0.29, "width": 0.12, "height": 0.1 }, "action": "shield" },
-      { "zone": { "left": 0.72, "top": 0.29, "width": 0.12, "height": 0.1 }, "action": "rewind" }
+      { "zone": { "left": 0.72, "top": 0.29, "width": 0.12, "height": 0.1 }, "action": "rewind" },
+      { "zone": { "left": 0.86, "top": 0.41, "width": 0.12, "height": 0.1 }, "action": "confirm" },
+      { "zone": { "left": 0.72, "top": 0.41, "width": 0.12, "height": 0.1 }, "action": "cancel" }
     ]
   },
   "gamepad": {
@@ -45,7 +47,9 @@
       "4": "shield",
       "5": "cast",
       "6": "rewind",
-      "8": "kill"
+      "7": "confirm",
+      "8": "kill",
+      "9": "cancel"
     }
   }
 }

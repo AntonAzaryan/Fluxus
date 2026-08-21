@@ -65,11 +65,13 @@
         border-color: #ffd479;
       }
       /* Панель способностей: сетка в два ряда — число колонок ставит виджет
-         инлайн-стилем по параметру композиции (HUD-4). */
+         инлайн-стилем по параметру композиции (HUD-4). Нижний отступ меньше
+         бокового: полоса прижата к краю экрана, центрирует её сетка зон
+         оверлея (host.ts), а не эти поля. */
       .hud-cooldowns {
         display: grid;
         gap: 8px;
-        margin: 12px;
+        margin: 12px 12px 4px;
       }
       .hud-cooldowns__button {
         position: relative;
@@ -231,6 +233,97 @@
       #quality:hover {
         border-color: #ffd479;
       }
+      /* Панель отладочных источников (`render-debug` RDBG-1, design D10):
+         такая же настройка страницы, как выбор качества рядом, а не виджет HUD.
+         Список строится main.ts из реестра слоя — разметка о составе источников
+         не знает, и новый источник появляется в панели сам.
+
+         Свёрнута по умолчанию: отладка — редкий режим, а не постоянный элемент
+         экрана. Спойлер живёт ЦЕЛИКОМ в разметке: `createDebugPanel` дополняет
+         существующий контейнер (`container.append(list, text)` — после
+         `<summary>`) и о `details` ничего не знает, поэтому раскрытие ничего не
+         стоит коду панели.
+
+         Обшивка (фон, рамка, поля, ограничение размера) снята с самого блока и
+         роздана двум состояниям: закрытый спойлер — ОДНА коробка, которую
+         рисует `summary` по рецепту соседнего выбора качества, открытый —
+         коробка панели, внутри которой `summary` становится строкой-заголовком.
+         Коробки в коробке нет ни в одном из состояний. */
+      #debug {
+        position: fixed;
+        right: 12px;
+        bottom: 88px;
+        color: #e8e8f0;
+        font: 12px/1.5 ui-monospace, Menlo, monospace;
+        z-index: 20;
+      }
+      /* Закрытое состояние — ровно тот же рецепт, что у `#quality` рядом:
+         одинаковый шрифт, поля, фон, рамка и радиус, то есть один и тот же
+         класс виджета в стопке у правого края. */
+      #debug > summary {
+        padding: 6px 10px;
+        font: 12px/1.4 ui-monospace, Menlo, monospace;
+        list-style: none;
+        cursor: pointer;
+        background: rgba(10, 10, 24, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 8px;
+      }
+      /* Штатный треугольник раскрытия сломал бы это равенство размеров. */
+      #debug > summary::-webkit-details-marker {
+        display: none;
+      }
+      /* Открытое состояние: панель растёт ВВЕРХ от `bottom: 88px` — привязан
+         только нижний край, поэтому выбор качества и кнопка режима под ней не
+         перекрываются. */
+      #debug[open] {
+        max-width: 46ch;
+        max-height: 60vh;
+        overflow: auto;
+        padding: 8px 10px;
+        background: rgba(10, 10, 24, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 8px;
+      }
+      #debug[open] > summary {
+        margin: 0 0 8px;
+        padding: 0 0 6px;
+        background: none;
+        border: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 0;
+      }
+      /* После правил состояний: специфичность у них равная, и порядок отдаёт
+         подсветку наведению — закрытая коробка светится рамкой, открытая
+         подчёркиванием заголовка. */
+      #debug > summary:hover {
+        border-color: #ffd479;
+      }
+      .debug-panel__owner {
+        margin: 6px 0 2px;
+        opacity: 0.6;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      #debug label {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        cursor: pointer;
+      }
+      /* Текстовая часть инспектора и счётчиков — из дампа кадра (RDBG-3, RDBG-7):
+         в пакете рендера DOM не появляется, текст живёт здесь. */
+      .debug-panel__text {
+        margin: 8px 0 0;
+        max-height: 24vh;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        opacity: 0.85;
+      }
+      .debug-panel__text:empty {
+        display: none;
+      }
       /* Сообщение сборки: матч занят, стенд не отвечает. Скрыто, пока нечего
          сказать; текст ставит main.ts. */
       #notice {
@@ -254,6 +347,9 @@
   <body>
     <div id="app"></div>
     <div id="notice"></div>
+    <details id="debug" title="отладочные источники рендера (render-debug)">
+      <summary>отладка</summary>
+    </details>
     <select id="quality" title="качество картинки"></select>
     <a id="connect" href="#">играть по сети →</a>
     <script type="module" src="./main.ts"></script>

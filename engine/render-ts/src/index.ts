@@ -2,11 +2,16 @@
 export { DEFAULT_CURVATURE_TESSELLATION } from './types.js';
 export type {
   EntityView,
+  LocalAimPoint,
+  LocalInputSample,
   RenderConfig,
   RenderContext,
   RenderEvent,
   RenderHostConfig,
   RenderSubsystem,
+  ShadowCasterSink,
+  ShadowCasterTier,
+  ShadowPhase,
   TickView,
 } from './types.js';
 
@@ -24,6 +29,41 @@ export type {
   QualityValues,
 } from './types.js';
 
+// Отладочный режим рендера (`render-debug` RDBG-1..8): реестр источников рядом
+// со списком подсистем (REND-27), закрытый словарь примитивов рисования и
+// машинно-читаемый дамп кадра. Выключен по умолчанию и выключенным не стоит
+// ничего; в счётчики стоимости не входит вовсе (RDBG-8).
+export { RenderDebugLayer } from './debug/layer.js';
+export type { DebugSourceInfo, RenderDebugLayerOptions } from './debug/layer.js';
+export { DEBUG_DUMP_VERSION } from './debug/dump.js';
+export type { DebugDump } from './debug/dump.js';
+export { DebugRows } from './debug/contract.js';
+export type {
+  DebugColor,
+  DebugDraw,
+  DebugFrameState,
+  DebugList,
+  DebugPose,
+  DebugProbe,
+  DebugRaster,
+  DebugSource,
+  DebugWorldMode,
+} from './debug/contract.js';
+// Источники движка, которыми не владеет подсистема: их регистрирует сборка.
+export { costCountersDebugSource, deliveryDebugSource } from './debug/sources.js';
+export type {
+  DebugCostProbe,
+  DebugDeliveryProbe,
+  DebugDeliveryRow,
+  DebugSnapReason,
+  DeliverySourceOptions,
+} from './debug/sources.js';
+export type { DebugFogProbe } from './debug/fogSource.js';
+export type { DebugCellRow, DebugTerrainProbe } from './debug/terrainSource.js';
+export type { DebugInstanceRow, DebugModelsProbe } from './debug/modelsSource.js';
+export type { DebugAbilityPreviewProbe, DebugPreviewState } from './debug/abilityPreviewSource.js';
+export type { DebugLightingProbe, DebugLightingState } from './debug/lightingSource.js';
+
 // Счётчики стоимости рендера (`performance-budget` PERF-3): инжектируемый сток
 // объёма работы, тегированный стадией конвейера (PERF-2). Без подключённого
 // стока учёт не исполняется — обычный матч за бенчмарк не платит.
@@ -32,6 +72,7 @@ export {
   attachCostSink,
   costSink,
   createCostCounters,
+  releaseCostSink,
   withCostSink,
 } from './cost.js';
 export type { CostStage, RenderCostCounters } from './cost.js';
@@ -152,28 +193,62 @@ export type { CellRect, TerrainGeometryData, TerrainOptions } from './subsystems
 // Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).
 // Наружу инстанс виден преобразованием и границами, а не узлом сцены (REND-3).
 export { ModelsSubsystem } from './subsystems/models.js';
-export type { InstancePose, ModelInstanceView, ModelsOptions } from './subsystems/models.js';
+export type {
+  InstancePose,
+  ModelInstanceView,
+  ModelsOptions,
+  ModelsPrewarm,
+} from './subsystems/models.js';
 
 // Подсистема тумана войны (FOW-7, FOW-9, FOW-10): маска видимости команды
 // игрока, конфигурация картинки данными и полноэкранный пост-проход затемнения.
 export { FogSubsystem } from './subsystems/fog.js';
 export { DEFAULT_FOG_CONFIG, resolveFogConfig } from './fog/config.js';
 export type { FogRenderConfig } from './fog/config.js';
-export type {
-  FogLayerCanvas,
-  FogLayerContext,
-  FogMinimapLayer,
-  FogRendererLike,
-  FogStatNames,
-  FogSubsystemOptions,
-} from './subsystems/fog.js';
-export { VisibilityMask, edgeGradient, fogRectOf, fogSegmentsOf, segmentCasts } from './fog/mask.js';
-export type { FogObserver, FogSegment, FogWorldRect } from './fog/mask.js';
+export type { FogRendererLike, FogStatNames, FogSubsystemOptions } from './subsystems/fog.js';
+export type { FogLayerCanvas, FogLayerContext, FogMinimapLayer } from './fog/layer.js';
+export {
+  VisibilityMask,
+  edgeGradient,
+  fogRectOf,
+  fogSegmentsOf,
+  segmentCasts,
+} from './fog/mask.js';
+export type { FogObserver, FogSegment, FogSmoothPass, FogWorldRect } from './fog/mask.js';
+// Грязное окно рассеивания (design D5): наружу отдан только сам набор блоков —
+// он входит в контракт `VisibilityMask.commit`. Сторона блока и проход
+// схождения остаются внутренностями пакета.
+export { FogDirtyBlocks } from './fog/dirty.js';
+
+// Подсистема освещения сцены (REND-8): источники света арены и теневые карты
+// из секции `lighting` парного документа (PRES-2). Свет всех потребителей
+// рендера — отсюда: своего они больше не заводят (`editor` ED-22).
+export { LightingSubsystem } from './subsystems/lighting.js';
+export type { LightingOptions } from './subsystems/lighting.js';
+export {
+  DEFAULT_LIGHTING_CONFIG,
+  minShadowMode,
+  resolveLightingConfig,
+  shadowModeRank,
+} from './lighting/config.js';
+export type { LightingRenderConfig, ShadowMode } from './lighting/config.js';
 
 // Подсистема транзиентных эффектов (REND-23): процедурные примитивы по записям
 // манифеста — оболочки от доставленного состояния и вспышки от событий.
 export { EffectsSubsystem } from './subsystems/effects.js';
 export type { EffectsOptions } from './subsystems/effects.js';
+
+// Подсистема превью каста (REND-28): что заденет способность, если подтвердить
+// её сейчас. Два входа и только два — скомпилированный каталог определений при
+// инициализации и локальный сэмпл ввода своего игрока (REND-1); подтверждённые
+// шаги приходят обычным доставленным состоянием.
+export { AbilityPreviewSubsystem } from './subsystems/abilityPreview.js';
+export type {
+  AbilityPreviewColors,
+  AbilityPreviewOptions,
+  AbilitySlotStatNames,
+  AbilityStepStatNames,
+} from './subsystems/abilityPreview.js';
 
 // Подсистема частиц (REND-24): эмиттеры по записям манифеста поверх эмиттерных
 // ассетов (ASSET-14) — оболочки от доставленного состояния, one-shot'ы от

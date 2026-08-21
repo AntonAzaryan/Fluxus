@@ -12,6 +12,7 @@ import {
   VisualSurfaceSource,
   buildFloorGeometry,
   buildWallGeometry,
+  cornerLevels,
   createVisualSurface,
   type RenderContext,
   type SurfaceNormal,
@@ -77,6 +78,50 @@ function cliffGrid() {
     levels: ['01', '01'],
     flags: ['..', '..'],
   });
+}
+
+/** Сетка из карт уровней и флагов — общая форма фикстур правила углов. */
+function gridOf(levels: readonly string[], flags: readonly string[]) {
+  return createTerrainGrid({
+    width: levels[0]!.length,
+    height: levels.length,
+    tileSize: FIXED_ONE,
+    levels: [...levels],
+    flags: [...flags],
+  });
+}
+
+/**
+ * 4×2: уровни 0,1,2,3 по x, три нижние клетки пар помечены рампами — длинный
+ * склон в несколько уровней. Рампы идут парой по y: одиночная запрещена (TERR-7).
+ */
+const chainGrid = () => gridOf(['0123', '0123'], ['^^^.', '^^^.']);
+
+/** Та же цепочка, но последний переход без рампы — склон упирается в обрыв. */
+const chainToCliffGrid = () => gridOf(['0123', '0123'], ['^^..', '^^..']);
+
+/** 2×2: рампа уровня 0 против плато уровня 1 — одиночная пара «рампа + плато». */
+const rampToPlateauGrid = () => gridOf(['01', '01'], ['^.', '^.']);
+
+/** 2×2: рампа уровня 1 против низины уровня 0 без рампы — пара «рампа + низина». */
+const rampToLowlandGrid = () => gridOf(['10', '10'], ['^.', '^.']);
+
+/**
+ * 3×3: клетку-рампу (1,1) уровня 1 тянут два ребра в разные стороны — запад на
+ * уровень выше и север на уровень ниже (без рампы).
+ */
+const conflictGrid = () => gridOf(['201', '211', '211'], ['...', '.^^', '...']);
+
+/** То же, но север — НИЖНЯЯ РАМПА: её притяжение вниз подавлено (REND-9). */
+const suppressedConflictGrid = () => gridOf(['200', '211', '211'], ['.^^', '.^^', '...']);
+
+/**
+ * 3×2, уровни 0,1,2 по x: клетка уровня 1 — рампа всегда, столбец x = 0
+ * помечается рампой флагом (пара по y — TERR-7). Правка одного лишь флага.
+ */
+function rampFlagGrid(westRamp: boolean) {
+  const row = `${westRamp ? '^' : '.'}^.`;
+  return gridOf(['012', '012'], [row, row]);
 }
 
 const normal = (): SurfaceNormal => ({ x: 0, y: 0, z: 0 });
@@ -219,6 +264,100 @@ describe('createVisualSurface (REND-9)', () => {
     expect(surface.heightAt(-5, -5)).toBeCloseTo(0, 6);
     expect(surface.heightAt(50, 50)).toBeCloseTo(STEP, 6);
     expect(surface.normalAt(-5, 0.5, normal()).z).toBeCloseTo(1, 6);
+  });
+});
+
+describe('углы рампы и цепочки рамп (REND-9)', () => {
+  it('общее ребро пары смежных рамп лежит на уровне верхней клетки', () => {
+    const grid = chainGrid();
+    // Нижняя клетка пары дотягивается вверх, верхняя вниз не спускается.
+    expect(cornerLevels(grid, 0, 0)).toEqual([0, 1, 1, 0]);
+    expect(cornerLevels(grid, 1, 0)).toEqual([1, 2, 2, 1]);
+    expect(cornerLevels(grid, 2, 0)).toEqual([2, 3, 3, 2]);
+    // Верх склона рампой не помечен — плоская площадка своего уровня (REND-7).
+    expect(cornerLevels(grid, 3, 0)).toEqual([3, 3, 3, 3]);
+    // В общих узлах пар база едина: посреди склона разрыва нет.
+    for (let x = 0; x + 1 < 4; x++) {
+      const left = cornerLevels(grid, x, 0);
+      const right = cornerLevels(grid, x + 1, 0);
+      expect([left[1], left[2]]).toEqual([right[0], right[3]]);
+    }
+  });
+
+  it('одиночная рампа не изменилась: «рампа + плато» и «рампа + низина» смыкаются как прежде', () => {
+    // Притяжение вверх к плато — правило до обобщения, байт-в-байт.
+    expect(cornerLevels(rampToPlateauGrid(), 0, 0)).toEqual([0, 1, 1, 0]);
+    // И вниз к низине: подавляется только притяжение к соседу-РАМПЕ.
+    expect(cornerLevels(rampToLowlandGrid(), 0, 0)).toEqual([1, 0, 0, 1]);
+    // Клетка без рампы плоская на своём уровне при любых соседях.
+    expect(cornerLevels(rampToPlateauGrid(), 1, 0)).toEqual([1, 1, 1, 1]);
+    expect(cornerLevels(rampToLowlandGrid(), 1, 0)).toEqual([0, 0, 0, 0]);
+  });
+
+  it('cliff-узел остаётся двузначным: смыкание пар не переносит значение через стенку', () => {
+    const grid = chainToCliffGrid();
+    expect(grid.cliffs.length).toBeGreaterThan(0);
+    // Пара рамп сомкнута по верхней клетке...
+    expect(cornerLevels(grid, 0, 0)).toEqual([0, 1, 1, 0]);
+    expect(cornerLevels(grid, 1, 0)).toEqual([1, 2, 2, 1]);
+    // ...а через стенку узел двузначен: кромка низины 2, кромка плато 3.
+    expect(cornerLevels(grid, 2, 0)).toEqual([2, 2, 2, 2]);
+    expect(cornerLevels(grid, 3, 0)).toEqual([3, 3, 3, 3]);
+  });
+
+  it('конфликт двух рёбер в одном углу решает фиксированный порядок W, E, N, S', () => {
+    // Клетку-рампу (1,1) тянут запад на уровень выше и север на уровень ниже:
+    // угол c00 достаётся последнему по порядку ребру (N), а не знаку перепада.
+    expect(cornerLevels(conflictGrid(), 1, 1)).toEqual([0, 0, 1, 2]);
+  });
+
+  it('подавленная заявка — свой уровень клетки, а не отсутствие заявки', () => {
+    const grid = suppressedConflictGrid();
+    // Север — нижняя рампа: ребро остаётся на своём уровне 1 и по тому же
+    // порядку рёбер перебивает западное притяжение вверх.
+    expect(cornerLevels(grid, 1, 1)).toEqual([1, 1, 1, 2]);
+    // Пара по вертикали сомкнута: нижняя рампа дотянулась до того же уровня.
+    expect(cornerLevels(grid, 1, 0)).toEqual([0, 0, 1, 1]);
+  });
+
+  it('пол цепочки рамп не рвётся на общем ребре пары: щели без cliff-стенки нет', () => {
+    const grid = chainGrid();
+    expect(grid.cliffs.length).toBe(0); // все переходы проходимы — стенок нет
+    const floor = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 4, 2);
+    // На границах клеток x = 1, 2, 3 у вершин обеих клеток одна высота:
+    // разрыв посреди склона был бы вертикальной щелью без cliff-геометрии.
+    for (const border of [1, 2, 3]) {
+      const heights = new Set<number>();
+      for (let v = 0; v < floor.positions.length; v += 3) {
+        if (Math.abs(floor.positions[v]! - border) < 1e-6) heights.add(floor.positions[v + 2]!);
+      }
+      expect([...heights]).toEqual([border * STEP]);
+    }
+    expect(buildWallGeometry(grid, STEP).indices.length).toBe(0);
+    // Тот же пол выборкой поля без кривизны: база у геометрии и поля одна.
+    const field = buildFloorGeometry(
+      grid,
+      grid.floor,
+      STEP,
+      0,
+      0,
+      4,
+      2,
+      createVisualSurface(grid, STEP, null),
+    );
+    expect([...field.positions]).toEqual([...floor.positions]);
+  });
+
+  it('кисть рампы пересчитывает углы соседа: прямоугольник расширяется на клетку', () => {
+    const surface = createVisualSurface(rampFlagGrid(false), STEP, null);
+    // Западный сосед без рампы — ребро тянется вниз к его уровню.
+    expect(surface.cornerHeights(1, 0)).toEqual([0, 2 * STEP, 2 * STEP, 0]);
+    // Мазок пометил рампами столбец x = 0 и отдан прямоугольником ИЗМЕНИВШИХСЯ
+    // клеток: новая зависимость угла от ФЛАГА рампы соседа покрыта прежним
+    // расширением на клетку — соседей поверхность пересчитывает сама.
+    surface.update(rampFlagGrid(true), null, 0, 0, 0, 1);
+    expect(surface.cornerHeights(1, 0)).toEqual([STEP, 2 * STEP, 2 * STEP, STEP]);
+    expect(surface.cornerHeights(0, 0)).toEqual([0, STEP, STEP, 0]);
   });
 });
 
@@ -440,6 +579,20 @@ describe('VisualSurfaceSource: документные входы (ED-10, ED-11, 
     // Сетка, отличающаяся только полом, поверхности не видна — подписчики молчат.
     source.setGrid(raisedGrid(1));
     expect(changes.length).toBe(1);
+  });
+
+  it('правка одного флага рампы уведомляет её клетками, а углы соседа идут за флагом', () => {
+    const { ctx } = makeCtx();
+    const source = new VisualSurfaceSource(rampFlagGrid(false));
+    const changes: (readonly number[] | null)[] = [];
+    source.onChange((cells) => changes.push(cells));
+    source.init(ctx);
+
+    // Уровни прежние, изменился только флаг столбца x = 0 (кисть рампы ED-10).
+    source.setGrid(rampFlagGrid(true));
+    expect(changes).toEqual([[0, 3]]);
+    // Пара рамп сомкнулась: угол СОСЕДНЕЙ клетки поехал за чужим флагом (REND-9).
+    expect(source.current!.cornerHeights(1, 0)).toEqual([STEP, 2 * STEP, 2 * STEP, STEP]);
   });
 
   it('кривизна безразлична к уровням: подъём клетки сдвигает базу, узлы остаются', () => {

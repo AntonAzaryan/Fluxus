@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./bin/matchFile.mjs": "./bin/matchFile.mjs",
+    "./bin/trace.mjs": "./bin/trace.mjs",
     "./bin/tsHook.mjs": "./bin/tsHook.mjs"
   },
   "scripts": {

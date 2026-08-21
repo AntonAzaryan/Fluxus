@@ -29,13 +29,18 @@
  *
  * ## Состав стенда
  *
- * Подсистем на сцене пять: туман (FOW-7..10), подсистема позиций (минимальный
- * потребитель доставки), террейн (REND-7, REND-9), модели (REND-3, REND-20,
- * REND-22) и частицы (REND-24). Первые две стерегли стоимость с самого
- * появления гейта; остальные три добавлены потому, что без них шестнадцатикратное
- * удорожание выбора LOD, шага эмиттеров или пересборки чанков проходило бы гейт
- * зелёным (PERF-4), а ручки `models.*`/`particles.*`/`terrain.*` не двигали бы
- * ни одного эталонного числа (QUAL-4).
+ * Подсистем на сцене шесть: освещение (REND-8, REND-29..30), туман (FOW-7..10),
+ * подсистема позиций (минимальный потребитель доставки), террейн (REND-7,
+ * REND-9), модели (REND-3, REND-20, REND-22) и частицы (REND-24). Туман и
+ * позиции стерегли стоимость с самого появления гейта; террейн, модели и
+ * частицы добавлены потому, что без них шестнадцатикратное удорожание выбора
+ * LOD, шага эмиттеров или пересборки чанков проходило бы гейт зелёным (PERF-4),
+ * а ручки `models.*`/`particles.*`/`terrain.*` не двигали бы ни одного
+ * эталонного числа (QUAL-4). Освещение — по той же причине: его счётчики
+ * (`lighting*`) без подсистемы на стенде лежали нулями во всех эталонах, и ни
+ * удорожание теневого прохода, ни потолок `lighting.shadowMode` гейту видны не
+ * были. Регистрируется оно первым — тем же порядком, что в сборках (REND-8):
+ * террейн и модели ниже отдают ему свои корни теневыми кастерами.
  *
  * ## Пресет качества — параметр стенда
  *
@@ -61,16 +66,21 @@ import {
   type TerrainGrid,
   type TickResult,
 } from '@game-mvp/core';
+import type { PresentationLighting } from '@game-mvp/assets';
 import {
   Extractor,
   FogSubsystem,
+  LightingSubsystem,
   ModelsSubsystem,
   ParticlesSubsystem,
   PresentationStage,
   QualityController,
+  RenderDebugLayer,
   TerrainSubsystem,
   ViewBuffer,
   VisualSurfaceSource,
+  costCountersDebugSource,
+  deliveryDebugSource,
   type ExtractedTick,
   type FogLayerCanvas,
   type PresentationProducer,
@@ -245,6 +255,19 @@ const MATCH_STAT_SOURCES: readonly StatSource[] = [
   { name: FOG_STATS.visionRadius, component: 'Collider', field: 'radius' },
 ];
 
+/**
+ * Секция `lighting` стенда (PRES-2) — авторский режим теней `full`. Выше
+ * потолка производительного пресета намеренно, как разрешение маски
+ * (design D3): min() по рангу режима срабатывает, и две секции эталона несут
+ * РАЗНЫЕ теневые бюджеты — покадровый обоих ярусов против кэша статики (QUAL-4,
+ * REND-30). Сторона карты авторская и тоже выше потолка производительного
+ * пресета; счётчиков она не двигает — работу min() по ней стерегут юнит-тесты
+ * `render-ts`, а не эталон.
+ */
+const BENCH_LIGHTING: PresentationLighting = Object.freeze({
+  shadows: { mode: 'full', mapSize: 1024 },
+} as const);
+
 const PRODUCER: PresentationProducer = { name: 'bench' };
 
 /** Кадров на доставку: один — каденс кадра от каденса тика бенч не отвязывает. */
@@ -279,6 +302,11 @@ const PERFORMANCE_PRESET: QualityPreset = Object.freeze({
   // Потолок ниже сценного разрешения стенда (`MATCH_STAND.resolution`): min()
   // срабатывает, и грубая маска — то, чем производительный режим и отличается.
   'fog.maskResolution': 4,
+  // Потолок ниже авторского `full` секции стенда (`BENCH_LIGHTING`): действует
+  // `hybrid`, и разница режимов — какой ярус кастеров платит кадром — читается
+  // диффом двух секций эталона (REND-30, QUAL-4).
+  'lighting.shadowMode': 'hybrid',
+  'lighting.shadowMapSize': 512,
   'models.defaultTier': 'batched',
   // Больше единицы — пороги LOD читаются раньше, инстанс уходит на грубый
   // уровень ближе к камере (REND-22).
@@ -290,7 +318,8 @@ const PERFORMANCE_PRESET: QualityPreset = Object.freeze({
 /**
  * Ультра: потолков нет вовсе. Их отсутствие и есть «действует авторское
  * значение» (design D3) — умолчание ceiling-ручки бесконечно, а бесконечности в
- * JSON не написать. Отсюда же отсутствие `terrain.curvatureTessellation`:
+ * JSON не написать. Отсюда же отсутствие обеих ручек `lighting.*` — действует
+ * авторский `full` секции стенда — и `terrain.curvatureTessellation`:
  * действует плотность конфига рендера, и её же ограничивает вдвое
  * производительный документ. Прямые значения выписаны своими документированными
  * умолчаниями (QUAL-1), чтобы пара документов читалась диффом.
@@ -324,6 +353,13 @@ export interface PresentationBenchOptions {
   readonly stats?: readonly StatSource[];
   /** Документ пресета качества (QUAL-1); нет — ультра, то есть без потолков. */
   readonly preset?: QualityPreset;
+  /**
+   * Подключить отладочный слой рендера со ВСЕМИ источниками включёнными
+   * (`render-debug` RDBG-8). Стенд с ним и стенд без него обязаны давать
+   * побитово одинаковые счётчики стоимости — это и есть проверяемая форма
+   * требования «отладка невидима счётчикам».
+   */
+  readonly debug?: boolean;
 }
 
 /**
@@ -374,9 +410,13 @@ export class PresentationBench {
   readonly stage: PresentationStage;
   readonly buffer: ViewBuffer;
   readonly fog: FogSubsystem;
+  /** Освещение стенда (REND-8) — сток теневых кастеров террейна и моделей. */
+  readonly lighting: LightingSubsystem;
   readonly renderer = new RendererSpy();
   /** Контроллер качества сцены стенда (QUAL-1): реестр ручек и их значения. */
   readonly quality: QualityController;
+  /** Отладочный слой стенда (RDBG-1); null — стенд собран без отладки вовсе. */
+  readonly debug: RenderDebugLayer | null;
   /**
    * Предупреждения подсистем стенда. Пустой список — часть проверки, а не
    * отладка: заглушка вместо модели, неразвёрнутый эффект или карта кривизны не
@@ -430,13 +470,26 @@ export class PresentationBench {
       stats: FOG_STATS,
       hero: () => this.hero,
       config: { resolution: options.resolution },
+      // Бюджет порционной перестройки снят (change `fog-mask-budgeted-rebuild`,
+      // design D1): стенд крутит РОВНО ОДИН кадр на доставку, а игра — три-четыре,
+      // и под бюджетом эталон мерил бы каденс стенда (сколько доставок съела
+      // конфляция), а не работу растеризации. Гейт стоимости стережёт объём
+      // ПОЛНОЙ перестройки — величину, от нарезки не зависящую (PERF-3, PERF-4);
+      // саму нарезку и коалесинг стерегут юнит-тесты `render-ts`.
+      rebuildBudget: Number.POSITIVE_INFINITY,
       createCanvas: benchCanvas,
     });
+    // Свет — подсистемой с авторским режимом теней стенда: без неё счётчики
+    // `lighting*` лежали бы нулями во всех эталонах, и теневой проход гейт бы
+    // не стерёг (PERF-4). Сетка та же, что у террейна, — по ней обтянуты
+    // фрустумы теневых камер (design D6).
+    this.lighting = new LightingSubsystem({ grid, config: BENCH_LIGHTING });
     // Визуальная поверхность (REND-9) — общая на подсистемы; карта кривизны
     // ставится ДО регистрации, поэтому первая же сборка чанков идёт с рельефом,
     // а не пересобирает арену вторым проходом.
     const surface = new VisualSurfaceSource(grid, { warn: (message) => this.warnings.push(message) });
     surface.setCurvature(benchCurvature(grid));
+    this.surface = surface;
     this.camera.position.set(grid.width / 2, grid.height / 2, CAMERA_HEIGHT);
     this.camera.lookAt(grid.width / 2, grid.height / 2, 0);
     this.camera.updateMatrixWorld(true);
@@ -448,13 +501,30 @@ export class PresentationBench {
     const warn = (message: string): void => {
       this.warnings.push(message);
     };
+    // Отладочный слой заводится ДО регистрации подсистем — тем же порядком, что
+    // контроллер качества: объявления источников он спрашивает при регистрации
+    // (REND-27). В список подсистем он при этом не входит, и счётные величины
+    // доставки и кадра (PERF-3) от его присутствия не меняются (RDBG-8).
+    this.debug = options.debug === true ? new RenderDebugLayer(this.stage, { scene: context.scene, surface }) : null;
+    // Освещение первым — порядок сборок (REND-8): подсистемы ниже отдают ему
+    // корни нарисованного теневыми кастерами через опцию `shadows`.
     this.stage
+      .register(this.lighting)
       .register(this.fog)
       .register(new PositionsSubsystem())
-      .register(new TerrainSubsystem(grid, { chunkSize: TERRAIN_CHUNK, surface }))
-      .register(new ModelsSubsystem(benchManifest(), { camera: this.camera, warn }))
+      .register(new TerrainSubsystem(grid, { chunkSize: TERRAIN_CHUNK, surface, shadows: this.lighting }))
+      .register(new ModelsSubsystem(benchManifest(), { camera: this.camera, warn, shadows: this.lighting }))
       .register(new ParticlesSubsystem(benchManifest(), { warn }));
+    if (this.debug !== null) {
+      // Источники сборки — рядом с объявленными подсистемами (RDBG-1): стенду
+      // нужны ВСЕ, иначе «включено = выключено» проверялось бы на половине.
+      this.debug.register(deliveryDebugSource()).register(costCountersDebugSource());
+      for (const source of this.debug.sources) this.debug.setEnabled(source.id, true);
+    }
   }
+
+  /** Визуальная поверхность стенда (REND-9) — общая с подсистемами и отладкой. */
+  readonly surface: VisualSurfaceSource;
 
   /** Действующее разрешение маски — сценное под потолком пресета (FOW-10, design D3). */
   get maskResolution(): number {
@@ -545,12 +615,13 @@ function observerOf(view: TickView): EntityId | null {
 export const MATCH_STAND = { extent: 8, pillarStep: 2, resolution: 8 } as const;
 
 /** Презентационный стенд матча под одним документом пресета (QUAL-4). */
-export function matchBench(preset: QualityPreset): PresentationBench {
+export function matchBench(preset: QualityPreset, debug = false): PresentationBench {
   return new PresentationBench({
     grid: benchGrid(MATCH_STAND.extent, MATCH_STAND.pillarStep),
     resolution: MATCH_STAND.resolution,
     stats: MATCH_STAT_SOURCES,
     preset,
+    debug,
   });
 }
 

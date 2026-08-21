@@ -255,6 +255,55 @@ describe('ED-21, PRES-3: парный документ переживает «о
     expect(saved.decorations[2]).toEqual({ visual: 'Bridge', x: 7, y: 6 });
   });
 
+  it('секция lighting переживает «открыл — сохранил» и правку соседей (PRES-2)', async () => {
+    // Секция авторится руками в JSON, и сохранение обязано оставить её ровно
+    // такой, какой она написана: ни порядка ключей, ни состава подсекций
+    // канонический вид не трогает (ED-21). Правило то же, что у секции `fog`, —
+    // здесь оно закрепляется на секции, ради которой заведён свет.
+    const handwritten = encodeDocument({
+      decorations: [{ visual: 'Statue', x: 1, y: 2 }],
+      lighting: {
+        ambient: { color: '#ffffff', intensity: 0.65 },
+        directional: { intensity: 1.7, direction: { x: 8, y: -12, z: 18 } },
+        shadows: { mode: 'hybrid', mapSize: 1024, staticShare: 0.5 },
+      },
+    });
+    const host = createMemoryHost({ files: { [PRESENTATION_PATH]: handwritten } });
+    const session = newSession();
+    await openDocumentFromHost(session, host.content, {
+      id: PRESENTATION_PATH,
+      kind: 'presentation',
+      lists: [['decorations']],
+    });
+
+    const untouched = await saveDocuments({ session, host: host.content });
+    expect(untouched).toMatchObject({ refused: false, written: [] });
+    expect(host.bytes(PRESENTATION_PATH)).toEqual(handwritten);
+
+    // Правка декорации секции не касается: дифф — одна строка, а секция
+    // остаётся байт-в-байт, включая порядок ключей внутри подсекций.
+    session.applyOperation('document.list.setValue', {
+      document: PRESENTATION_PATH,
+      record: session.descriptors(PRESENTATION_PATH, ['decorations'])[0]!,
+      path: ['x'],
+      value: 9,
+    });
+    await saveDocuments({ session, host: host.content });
+
+    const before = decoder.decode(handwritten);
+    const after = host.text(PRESENTATION_PATH);
+    expect(changedLines(before, after)).toHaveLength(1);
+    const saved = decodeDocument(host.bytes(PRESENTATION_PATH)) as { lighting: JsonValue };
+    expect(saved.lighting).toEqual({
+      ambient: { color: '#ffffff', intensity: 0.65 },
+      directional: { intensity: 1.7, direction: { x: 8, y: -12, z: 18 } },
+      shadows: { mode: 'hybrid', mapSize: 1024, staticShare: 0.5 },
+    });
+    // Порядок ключей секции — авторский: сортировка дала бы дифф на весь файл.
+    expect(after.indexOf('"ambient"')).toBeLessThan(after.indexOf('"directional"'));
+    expect(after.indexOf('"directional"')).toBeLessThan(after.indexOf('"shadows"'));
+  });
+
   it('парный документ — член группы записи тройки (ED-19)', () => {
     const [group] = pairingGroups([
       { scene: SCENE_PATH, manifest: MANIFEST_PATH, presentation: PRESENTATION_PATH },
@@ -373,7 +422,7 @@ describe('ED-21: сохранение затрагивает только док
     session.applyOperation('document.setValue', {
       document: SCENE_PATH,
       path: ['capacity'],
-      value: 512,
+      value: 640,
     });
     const result = await saveDocuments({ session, host: host.content });
 
@@ -388,7 +437,7 @@ describe('ED-21: сохранение затрагивает только док
     await openDocumentFromHost(session, host.content, { id: SCENE_PATH, kind: 'scene' });
     await openDocumentFromHost(session, host.content, { id: MANIFEST_PATH, kind: 'manifest' });
 
-    session.applyOperation('document.setValue', { document: SCENE_PATH, path: ['capacity'], value: 512 });
+    session.applyOperation('document.setValue', { document: SCENE_PATH, path: ['capacity'], value: 640 });
     const result = await saveDocuments({
       session,
       host: host.content,

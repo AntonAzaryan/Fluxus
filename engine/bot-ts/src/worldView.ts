@@ -14,7 +14,17 @@
  * Fixed → float происходит здесь, на границе (BOT-5): дальше внутри мозга живёт
  * обычная float-математика.
  */
-import { ARENA_COMPONENT, query, type EntityId, type WorldMode } from '@game-mvp/core';
+import {
+  ABILITY_COOLDOWN_COMPONENT,
+  ABILITY_SLOT_COMPONENT,
+  ARENA_COMPONENT,
+  NO_PHASE,
+  query,
+  world as coreWorld,
+  type EntityId,
+  type WorldMode,
+  type WorldState,
+} from '@game-mvp/core';
 import type { ClientStep, MatchSample } from '@game-mvp/net';
 import { readFixedField, readIntField } from './boundary.js';
 
@@ -30,6 +40,14 @@ export interface WorldViewNames {
   readonly velocityComponent?: string;
   readonly teamComponent?: string;
   readonly teamField?: string;
+  /**
+   * Компонент «в руках пойманный снаряд». Сцена вправе развести ДВА своих
+   * определения на одном бите условием на владельце — пустой рукой бит кастует
+   * заряд, с пойманным снарядом бросает его, — и признак этого условия мозгу
+   * нужен, чтобы жать бит осмысленно (BOT-6). Имя, как и прочие, — параметр
+   * сборки (TICK-4), а не конвенция ядра.
+   */
+  readonly carriedComponent?: string;
 }
 
 const DEFAULTS = {
@@ -39,6 +57,7 @@ const DEFAULTS = {
   velocityComponent: 'Velocity',
   teamComponent: 'Team',
   teamField: 'id',
+  carriedComponent: 'Holding',
 } as const;
 
 /** Сущность глазами мозга: положение и скорость — float в мировых осях. */
@@ -51,6 +70,36 @@ export interface BotEntityView {
   /** Слот игрока, если сущность им управляется; `undefined` — не игрок. */
   readonly slot: number | undefined;
   readonly team: number | undefined;
+}
+
+/**
+ * Слот способности бота, каким он приехал в его СОБСТВЕННЫЙ снапшот (NET-12):
+ * состояние автомата каста живёт полями сущности-слота (ABIL-1), и мозг не
+ * угадывает, в каком он шаге, — он это читает.
+ *
+ * Чужих слотов здесь не бывает: маска видимости спутника содержит ровно
+ * сторону владельца, и в снапшот бота они не входят. Фильтр по `owner` стоит
+ * всё равно — на сцене, где своя сторона играет вдвоём, слоты союзника видны.
+ */
+export interface BotSlotView {
+  readonly slotIndex: number;
+  /** Фаза каста; `-1` — каста нет (ABIL-1). */
+  readonly phase: number;
+  /** Сколько шагов цепочки уже накоплено (ABIL-5). */
+  readonly staged: number;
+  /**
+   * Доля ОСТАВШЕГОСЯ кулдауна слота, 0..1: единица — только что взведён, ноль —
+   * способность готова (ABIL-7). Тот самый гейт платформы, а не собственный
+   * счётчик бота из профиля: читается он со своего слота своего же снапшота, то
+   * есть тем каналом, каким игрок видит кулдаун на своей панели (BOT-3).
+   *
+   * Доля, а не остаток в тиках, потому что это ВХОД словаря considerations
+   * (BOT-9): входы нормированы в [0, 1], иначе кривая документа зависела бы от
+   * длительности кулдауна конкретного определения сцены.
+   *
+   * Сцена без компонента кулдауна даёт ноль — «ничто не мешает».
+   */
+  readonly cooldown: number;
 }
 
 export interface BotWorldView {
@@ -73,12 +122,23 @@ export interface BotWorldView {
   readonly self: BotEntityView | undefined;
   /** Все прочие видимые сущности: чужие герои, снаряды, реквизит. */
   readonly others: readonly BotEntityView[];
+  /** Слоты способностей СВОЕЙ сущности (ABIL-1); пусто — сцена без платформы. */
+  readonly slots: readonly BotSlotView[];
   /**
    * Радиус арены (`arena` ARENA-1), если её носитель есть в снапшоте: радиус
    * мутабелен сужением, поэтому читается из состояния, а не из сборки. Центр
    * здесь не появляется намеренно — он живёт в ассете сцены, а не в компоненте.
    */
   readonly arenaRadius: number | undefined;
+  /**
+   * Держит ли бот пойманный снаряд. Читается со СВОЕЙ сущности и только с неё:
+   * это состояние собственных рук, а не наблюдение за противником, и в
+   * персональном снапшоте бота оно есть всегда (NET-12).
+   *
+   * Сцена без такого компонента даёт `false` — и профиль, ничего о руках не
+   * говорящий, ведёт себя ровно как до появления признака.
+   */
+  readonly carrying: boolean;
 }
 
 function lerp(from: number, to: number, alpha: number): number {
@@ -139,8 +199,57 @@ export function readWorldView(
     discontinuity: sample.discontinuity,
     self,
     others,
+    slots: self === undefined ? [] : abilitySlots(sample, self.id),
     arenaRadius: arenaRadius(sample),
+    carrying: self !== undefined && hasComponent(sample.to.world, self.id, resolved.carriedComponent),
   };
+}
+
+/** Есть ли компонент на сущности; сцена, его не объявившая, даёт `false`. */
+function hasComponent(world: WorldState, entity: EntityId, component: string): boolean {
+  if (coreWorld.componentId(world, component) === undefined) return false;
+  return coreWorld.hasComponent(world, entity, component);
+}
+
+/**
+ * Слоты способностей владельца (ABIL-1). Сущности-спутники не несут `Position`
+ * (design Decision 6), поэтому в общий обход они не попадают и читаются
+ * отдельным запросом; сцена без платформы компонента не объявляет вовсе — тогда
+ * список пуст, и мозг ведёт себя ровно как до её появления.
+ */
+function abilitySlots(sample: MatchSample, owner: EntityId): BotSlotView[] {
+  const world = sample.to.world;
+  if (coreWorld.componentId(world, ABILITY_SLOT_COMPONENT) === undefined) return [];
+  const slots: BotSlotView[] = [];
+  // Целочисленные поля читаются той же границей, что слот игрока и маски
+  // (`readIntField`): Q16.16-конверсии тут нет, это индексы и коды.
+  const field = (entity: EntityId, name: string): number | undefined =>
+    readIntField(world, entity, ABILITY_SLOT_COMPONENT, name);
+  for (const entity of query(world, { all: [ABILITY_SLOT_COMPONENT] })) {
+    if (field(entity, 'owner') !== owner) continue;
+    slots.push({
+      slotIndex: field(entity, 'slotIndex') ?? 0,
+      phase: field(entity, 'phase') ?? NO_PHASE,
+      staged: field(entity, 'staged') ?? 0,
+      cooldown: slotCooldown(world, entity),
+    });
+  }
+  return slots;
+}
+
+/**
+ * Доля оставшегося кулдауна слота (ABIL-7). Остаток и полная длительность живут
+ * ОТДЕЛЬНЫМ компонентом той же сущности (`AbilityCooldown`), и её отсутствие —
+ * законное «кулдауна нет»: сцена без платформы или слот, который ещё ни разу не
+ * взводили.
+ */
+function slotCooldown(world: WorldState, slot: EntityId): number {
+  if (coreWorld.componentId(world, ABILITY_COOLDOWN_COMPONENT) === undefined) return 0;
+  if (!coreWorld.hasComponent(world, slot, ABILITY_COOLDOWN_COMPONENT)) return 0;
+  const remaining = readIntField(world, slot, ABILITY_COOLDOWN_COMPONENT, 'remaining') ?? 0;
+  const total = readIntField(world, slot, ABILITY_COOLDOWN_COMPONENT, 'total') ?? 0;
+  if (remaining <= 0 || total <= 0) return 0;
+  return remaining >= total ? 1 : remaining / total;
 }
 
 function arenaRadius(sample: MatchSample): number | undefined {

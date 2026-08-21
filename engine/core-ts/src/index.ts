@@ -74,7 +74,7 @@ export type {
   ExprVars,
   ExprWorld,
 } from './dsl/expr.js';
-export { EvaluatedSystem, validateSystem } from './dsl/evaluatedSystem.js';
+export { EvaluatedSystem, validateActions, validateExpression, validateSystem } from './dsl/evaluatedSystem.js';
 export type { SystemDef } from './dsl/evaluatedSystem.js';
 export { schemaFiles, schemaFileContent } from './dsl/schemas.js';
 
@@ -108,6 +108,7 @@ export {
   PhysicsWorld,
   BLOCKS_MOVEMENT,
   BLOCKS_VISION,
+  PHYSICS_EVENTS,
   SHAPE_AABB,
   SHAPE_CIRCLE,
   STATIC_COLLIDER,
@@ -119,6 +120,7 @@ export {
   ArenaSystem,
   ARENA_COMPONENT,
   ARENA_COMPONENTS,
+  ARENA_EVENTS,
   ARENA_PREFAB,
   ARENA_STATE_COMPONENT,
 } from './systems/arena.js';
@@ -142,7 +144,7 @@ export {
   MAX_TEAMS,
 } from './systems/visibility.js';
 export type { VisibilityOptions } from './systems/visibility.js';
-export { InputSystem, INPUT_FIELDS } from './systems/inputSystem.js';
+export { InputSystem, INPUT_FIELDS, INPUT_TARGET_FIELDS, inputTargetDeclared } from './systems/inputSystem.js';
 export type { InputSystemOptions } from './systems/inputSystem.js';
 export {
   LocomotionSystem,
@@ -171,6 +173,88 @@ export {
   TWEEN_SCHEMA,
 } from './systems/tween.js';
 export type { TweenDef, TweenSystemOptions } from './systems/tween.js';
+/**
+ * Платформа способностей (ABIL-1..11). Наружу уходит чистая функция разбора и
+ * читаемые константы: мутирующей поверхности это не расширяет (TICK-3), а
+ * скомпилированная таблица служит превью рендера (REND-28), профилю бота
+ * (BOT-6) и валидации редактора (ED-29) — одно определение, один разбор.
+ * Системы платформы регистрирует загрузчик сцены (SER-7), поэтому их классы
+ * здесь и не нужны.
+ */
+export { compileAbilityCatalog } from './systems/abilities/catalog.js';
+export {
+  ABILITY_COMPONENTS,
+  ABILITY_COOLDOWN_COMPONENT,
+  ABILITY_COOLDOWN_SCHEMA,
+  ABILITY_DURATION_COMPONENT,
+  ABILITY_DURATION_SCHEMA,
+  ABILITY_PROJECTILE_COMPONENT,
+  ABILITY_PROJECTILE_SCHEMA,
+  ABILITY_SLOT_COMPONENT,
+  ABILITY_SLOT_SCHEMA,
+  ABILITY_STEPS,
+  BUFF_COMPONENTS,
+  BUFF_INSTANCE_COMPONENT,
+  BUFF_INSTANCE_SCHEMA,
+  NO_BUFF_CLASS,
+  NO_INTERRUPT,
+  NO_PHASE,
+} from './systems/abilities/components.js';
+export {
+  defaultOutcome,
+  interruptCode,
+  INTERRUPT_SOURCES,
+} from './systems/abilities/interrupt.js';
+export {
+  BUFF_NEGATIVE,
+  BUFF_POSITIVE,
+  COOLDOWN_FULL,
+  COOLDOWN_PARTIAL,
+  COOLDOWN_REFUND,
+  PHASE_AUTO,
+  PHASE_COMMIT,
+  PHASE_HOLD,
+  PHASE_RELEASE,
+  STACKING_INDEPENDENT,
+  STACKING_REFRESH,
+  STACKING_STACK,
+  STAGED_KEEP,
+  STAGED_RESET,
+  STEP_NONE,
+  STEP_POINT,
+  STEP_UNIT,
+  STEP_VECTOR,
+  TIMEOUT_CANCEL,
+  TIMEOUT_COMMIT,
+  TIMEOUT_NONE,
+  TRIGGER_ALWAYS,
+  TRIGGER_EVENT,
+  TRIGGER_INPUT,
+} from './systems/abilities/model.js';
+export type {
+  AbilityCatalog,
+  AbilityCatalogDef,
+  AbilityDef,
+  AbilityInterruptDef,
+  AbilityInterruptsDef,
+  AbilityPhaseDef,
+  AbilityRuntimeDef,
+  AbilityShapeDef,
+  AbilityStepDef,
+  AbilityTargetingDef,
+  BuffDef,
+  BuffPeriodicDef,
+  BuffStatModDef,
+  BuffTriggerDef,
+  CompiledAbility,
+  CompiledBindings,
+  CompiledBuff,
+  CompiledBuffTrigger,
+  CompiledOutcome,
+  CompiledPhase,
+  CompiledStatMod,
+  CompiledStep,
+} from './systems/abilities/model.js';
 
 // sim — сборка сцены и прогон тиков
 export { tick, dispatch, initialState, takeSnapshot, restoreSnapshot } from './sim/tick.js';
@@ -204,7 +288,7 @@ export { buildSimulation } from './sim/build.js';
 export type { BuiltSimulation, SimulationBuildDef, SimulationBuildOptions } from './sim/build.js';
 export { jsonSerializer, prettyJsonSerializer, snapshotToPlain, snapshotFromPlain } from './sim/serialization.js';
 export type { PlainSnapshot, Serializer } from './sim/serialization.js';
-export { createJsonlSink, traceLine } from './sim/trace.js';
+export { createJsonlSink, parseTraceSelect, selectingSink, traceLine } from './sim/trace.js';
 export { runScenario, runScenarioBytes } from './sim/scenario.js';
 export type { RunOutput, ScenarioDef, TickRecord } from './sim/scenario.js';
 /**

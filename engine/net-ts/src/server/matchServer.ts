@@ -36,7 +36,13 @@ import {
   type WorldMode,
 } from '@game-mvp/core';
 import { BranchHistory, type MatchHistory } from '../match/history.js';
-import { firstRewindRequest } from '../match/rewindRequest.js';
+import {
+  firstRewindRequest,
+  warnToConsole,
+  REWIND_REQUEST_EVENT,
+  type RewindRequestWarn,
+} from '../match/rewindRequest.js';
+import type { MatchTrace } from '../match/trace.js';
 import { buildMatchWorld } from '../match/world.js';
 import { createServerMetrics, type ServerMetrics } from '../metrics.js';
 import type { ConnectionId } from '../transport/transport.js';
@@ -98,6 +104,19 @@ export interface MatchConfig {
    * интервал и глубина суть параметры провайдера, а не константы ядра (SNAP-4).
    */
   readonly rewind?: MatchRewindOptions;
+  /**
+   * Приёмник диагностики запроса перемотки (REW-12): испорченный payload и
+   * запрос, который матч НЕ МОЖЕТ исполнить структурно — история не собрана.
+   * Шов сборки, а не свойство матча: куда пишет диагностика — в консоль
+   * запускалки, в буфер теста или в лог стенда, — решает хост.
+   *
+   * Умолчание — `console.warn` (`rewindRequest.ts`). Умолчания «молчать» здесь
+   * быть не может: матч, поднятый без секции `rewind`, отбрасывает каждый каст
+   * ульты, и снаружи это неотличимо от ульты, которая просто ничего не делает.
+   * Ровно так дефект и жил — стенд играл без перемотки, ничего об этом не
+   * говоря.
+   */
+  readonly rewindWarn?: RewindRequestWarn;
   /** Порог молчания слота в тиках; по умолчанию 10 секунд при текущем `tickRate`. */
   readonly silenceTicks?: number;
   readonly allowObserver?: boolean;
@@ -128,6 +147,20 @@ export interface MatchConfig {
    */
   readonly eventVisibility?: EventVisibility;
   readonly observers?: readonly TickObserver[];
+  /**
+   * Трейс матча (DIAG-8): sink симуляции и приёмник отметок ветви истории
+   * (DIAG-9) одним объектом. Необязателен, и по умолчанию его нет — матч без
+   * него идёт ровно так же, как шёл до появления поля.
+   *
+   * Ввода-вывода сервер от этого не приобретает (NTR-3): строку пишет функция,
+   * инъектированная хостом при сборке трейса (`createMatchTrace`), а сервер
+   * лишь передаёт sink в сборку мира и зовёт отметки на границах, которые знает
+   * только он.
+   *
+   * В документ записи матча поле не попадает: состав `toScenario()` перечислен
+   * там поимённо, и отладочные поля конфига в запись не входят (CLI-11).
+   */
+  readonly trace?: MatchTrace;
 }
 
 /** Настройки истории матча (SNAP-3, SNAP-4) плюс поля вне отката (REW-9). */
@@ -180,6 +213,13 @@ interface ScrubSession {
   idleTicks: number;
   /** Тиков с прошлого шага скраба: шаг делается раз в цикл рассылки. */
   sinceStep: number;
+  /**
+   * Хотя бы один шаг уже сделан. Нужен ровно затем, чтобы ПЕРВЫЙ шаг не ждал
+   * цикла рассылки и не перепроверял орган: вход в перемотку уже означает, что
+   * орган был удержан (ульта прожата им же), и короткое нажатие обязано
+   * двигать точку (REW-13).
+   */
+  stepped: boolean;
 }
 
 /**
@@ -302,6 +342,12 @@ export class MatchServer {
   private readonly holdTimeoutTicks: number;
   /** Ведущаяся перемотка; `undefined` — сервер скраб не ведёт. */
   private scrub: ScrubSession | undefined;
+  /**
+   * Несобираемость перемотки уже названа вслух. Один раз на матч: ульта с
+   * прожатым cooldown'ом просится раз в несколько секунд, и строка на каждый
+   * каст утопила бы отчёт запускалки в собственном шуме.
+   */
+  private rewindUnavailableReported = false;
 
   private readonly connections = new Map<ConnectionId, Connection>();
   /** Соединение, занимающее слот; `undefined` — слот свободен либо игрок отвалился. */
@@ -432,6 +478,7 @@ export class MatchServer {
       ...(config.physics !== undefined ? { physics: config.physics } : {}),
       ...(config.locomotion !== undefined ? { locomotion: config.locomotion } : {}),
       ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+      ...(config.trace !== undefined ? { diagnostics: config.trace.sink } : {}),
     });
     this.sim = built.sim;
     this.state = built.state;
@@ -770,6 +817,11 @@ export class MatchServer {
     this.segmentOfEpoch().frames.push(...frames);
     this.inputLog?.record(tick, frames);
 
+    // Отметка ветви — ПЕРЕД исполнением (DIAG-9): записи тика поедут в тот же
+    // поток следом, и читатель отнесёт их к названной здесь эпохе, не забегая
+    // вперёд. Эпоха матча — понятие сетевого слоя, полем записи ядра ей стать
+    // нельзя (DI-6), поэтому она и приезжает отдельной строкой.
+    this.config.trace?.mark({ mark: 'live', epoch: this.currentEpoch, tick });
     const result = advanceTick(this.sim, this.state, frames);
     dispatch(result, this.config.observers ?? []);
     this.history?.record(this.state);
@@ -1126,20 +1178,47 @@ export class MatchServer {
    *
    * Запрос не в `Running` игнорируется: перемотка внутри перемотки запрещена
    * (REW-8), а гейты политики (cooldown, стоимость) отработали в evaluator до
-   * эмиссии события. Матч, поднятый без истории, запрос тоже игнорирует —
-   * перематывать в нём нечем, и падать из-за контента, рассчитанного на другой
-   * профиль матча, серверу незачем. Испорченный payload — туда же: `parse`
-   * предупреждает и отдаёт `undefined`, а не бросает (см. `rewindRequest.ts`).
+   * эмиссии события. Испорченный payload — туда же: `parse` предупреждает и
+   * отдаёт `undefined`, а не бросает (см. `rewindRequest.ts`).
+   *
+   * Матч, поднятый БЕЗ истории, запрос тоже не исполняет — перематывать в нём
+   * нечем, и падать из-за контента, рассчитанного на другой профиль матча,
+   * серверу незачем. Но это не тот же случай, что «запрос не в `Running`», и
+   * сводить их к одному `return` нельзя. REW-12 велит игнорировать запрос,
+   * поданный не в `Running`: там сработала норма — мир уже перематывается, и
+   * второго входа у машины состояний нет. Здесь же дефект СБОРКИ: сцена просит
+   * механизм, которого хост не собрал, — и молчание об этом выглядит снаружи
+   * как ульта, которая ничего не делает. Ровно так и жил дефект: стенд поднимал
+   * матч без секции `rewind`, потому что раскладка документа её теряла
+   * (`bin/matchFile.mjs`), а сервер не сказал ни слова.
+   *
+   * Отчёт — диагностика, а не исключение: живой матч убивать нечем (то же
+   * основание, что у испорченного payload'а), и не молчаливый счётчик: искать
+   * его пошли бы уже после того, как дефект признали дефектом.
    */
   private drainRewindRequest(result: TickResult): void {
-    if (this.rewindController === undefined) return;
+    // Несобираемость уже названа — сканировать шину незачем: второй раз она
+    // ничего нового не сообщит, а матч без истории возвращается к прежней
+    // нулевой стоимости дренажа.
+    if (this.rewindController === undefined && this.rewindUnavailableReported) return;
     if (this.state.mode !== 'Running') return;
-    const request = firstRewindRequest(result.events);
+    const request = firstRewindRequest(result.events, this.config.rewindWarn);
     if (request === undefined) return;
+    if (this.rewindController === undefined) {
+      this.rewindUnavailableReported = true;
+      const warn = this.config.rewindWarn ?? warnToConsole;
+      warn(
+        `${REWIND_REQUEST_EVENT}: матч ${this.config.name === undefined ? '' : `"${this.config.name}" `}` +
+          'поднят без секции `rewind` — истории нет, перематывать нечем (NET-11, SNAP-4). ' +
+          'Запрос отброшен, следующие запросы этого матча отбрасываются молча; ' +
+          'секция `rewind` живёт в документе матча (NTR-6, NTR-14)',
+      );
+      return;
+    }
 
     this.pause();
     this.beginRewind();
-    this.scrub = {
+    const session: ScrubSession = {
       slot: this.slotOf(request.initiator),
       floor: this.scrubFloor(request.depthTicks),
       // Орган управления в момент каста удержан по построению: ульта прожата
@@ -1147,7 +1226,12 @@ export class MatchServer {
       held: true,
       idleTicks: 0,
       sinceStep: 0,
+      stepped: false,
     };
+    // Шага здесь нет намеренно: тик, на котором ульта прожата, обязан остаться
+    // тем, каким его оставил живой тик (TICK-3), — точку ведёт драйвер, и
+    // первый её шаг он делает на первом же своём вызове (см. `driveScrub`).
+    this.scrub = session;
   }
 
   /**
@@ -1196,14 +1280,24 @@ export class MatchServer {
   }
 
   /**
-   * Шаг ведения точки перемотки — раз в цикл рассылки (REW-13, NTR-16). Реже
-   * тика намеренно: каждое восстановление уезжает клиентам отдельным
-   * состоянием, и вести точку чаще, чем сервер её рассылает, значило бы
-   * считать восстановления, которых никто не увидит.
+   * Ведение точки перемотки (REW-13, NTR-16). Первый шаг делается на первом же
+   * ведении, дальше — раз в цикл рассылки, пока орган удержан. Реже тика
+   * намеренно (начиная со второго шага): каждое
+   * восстановление уезжает клиентам отдельным состоянием, и вести точку чаще,
+   * чем сервер её рассылает, значило бы считать восстановления, которых никто
+   * не увидит.
    *
    * Отпускание, молчание инициатора дольше порога и достижение глубины дают
    * один и тот же исход — `Rewinding → Paused → Running` (WSM-2): мир
    * продолжается с той точки, на которой скраб кончился.
+   *
+   * Тот же драйвер на втором хосте — `WorkerShell.driveScrub`
+   * (`engine/client-ts`, SHELL-6): локальный режим ведёт точку по тем же
+   * правилам, читая орган из сообщений главного потока, а не из кадров слота.
+   * Общего кода у них нет намеренно — см. комментарий там, — поэтому правка
+   * ЗДЕСЬ обязана быть повторена ТАМ, и наоборот. Держит их в шаге
+   * поведенческий тест, поставленный обоим хостам: короткое нажатие двигает
+   * точку и возобновляет мир на более раннем тике.
    */
   private driveScrub(): void {
     const session = this.scrub;
@@ -1226,15 +1320,50 @@ export class MatchServer {
     }
 
     session.idleTicks++;
-    session.sinceStep++;
-    if (session.sinceStep < this.snapshotEvery) return;
-    session.sinceStep = 0;
 
+    // ПЕРВЫЙ шаг — на первом же ведении, без ожидания цикла рассылки и без
+    // перепроверки органа. Прежде первого шага ждали `snapshotEvery` тиков, а
+    // проверка отпускания стояла ЗА тем же гейтом, — и короткое нажатие не
+    // двигало точку ВООБЩЕ: игрок отпускал орган внутри первого цикла, драйвер
+    // досиживал цикл, видел уже отпущенный орган и возобновлял мир на том же
+    // тике. Ульта сгорала на полный cooldown, не отмотав ни тика.
+    //
+    // Перепроверки органа на этом шаге нет по построению: вход в перемотку
+    // означает, что орган был удержан — ульту прожали им же (REW-13, NET-11).
+    if (!session.stepped) {
+      this.stepScrub();
+      return;
+    }
+
+    // Дальше отпускание и молчание инициатора читаются КАЖДЫЙ тик, а не на
+    // границе шага: досиженный цикл — это мир, замерший уже после того, как
+    // игрок отпустил клавишу.
     if (!session.held || session.idleTicks > this.holdTimeoutTicks) {
       this.stopScrub();
       return;
     }
 
+    session.sinceStep++;
+    if (session.sinceStep < this.snapshotEvery) return;
+    this.stepScrub();
+  }
+
+  /**
+   * Один шаг точки перемотки назад (REW-13): на `rewind.step` тиков, но не
+   * глубже заявленной глубины автостопа и не глубже фактической глубины
+   * истории — обе границы уже сведены в `floor` (SNAP-6).
+   *
+   * Достигнув дна, скраб останавливается сам: дальше отматывать нечего, и
+   * возобновление не ждёт отпускания клавиши.
+   *
+   * Зовут его двое — вход в перемотку и драйвер, — и оба через эту функцию:
+   * второй экземпляр той же арифметики рядом и есть способ им разойтись.
+   */
+  private stepScrub(): void {
+    const session = this.scrub;
+    if (session === undefined) return;
+    session.sinceStep = 0;
+    session.stepped = true;
     const target = Math.max(session.floor, this.state.tick - this.scrubStep);
     if (target < this.state.tick) this.seekTo(target);
     // Автостоп: дальше отматывать нечего, и резюм не ждёт отпускания клавиши.
@@ -1304,7 +1433,17 @@ export class MatchServer {
         `MatchServer.seekTo: точка остановки ${tick} впереди исполненного тика ${this.liveFrontier} (REW-7)`,
       );
     }
+    // Реплей внутри `seekTo` переисполняет уже отчитанные тики (REW-4, WSM-6),
+    // и его записи идут по тем же номерам, что записи живой ветви. Отметки
+    // вокруг него ставит сервер, потому что границы вызова видны только ему:
+    // запускалка не заглядывает внутрь `advance()`, и отметка после него
+    // относила бы к ветви уже вытекшие строки (DIAG-9).
+    //
+    // Эпоха здесь — ещё ПРЕЖНЯЯ: переисполняются тики той ветви, которая
+    // сейчас идёт; новую заведёт рассылка восстановленного состояния ниже.
+    this.config.trace?.mark({ mark: 'replayBegin', epoch: this.currentEpoch, tick });
     controller.seekTo(tick);
+    this.config.trace?.mark({ mark: 'replayEnd', epoch: this.currentEpoch, tick });
     // Ветвь, которую перемотка стёрла, уходит из истории здесь же: живые тики
     // новой эпохи пойдут по тем же номерам, и без обрезки в буфере оказались бы
     // два снапшота одного тика — см. `BranchHistory`.

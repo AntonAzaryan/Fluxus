@@ -243,6 +243,101 @@ describe('PRES-2, FOW-10: секция fog — закрытая конфигур
   });
 });
 
+describe('PRES-2: секция lighting — закрытая конфигурация освещения сцены', () => {
+  it('валидная секция принимается и выходит наружу как есть', () => {
+    const lighting = {
+      ambient: { color: '#ffffff', intensity: 0.65 },
+      directional: { color: '#fff0d0', intensity: 1.7, direction: { x: 8, y: -12, z: 18 } },
+      shadows: { mode: 'hybrid', mapSize: 1024, staticShare: 0.5 },
+    };
+    const result = validatePresentationScene({ decorations: [], lighting });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.lighting).toEqual(lighting);
+  });
+
+  it('отсутствие секции — значения по умолчанию у подсистемы: наружу секция не выходит', () => {
+    const result = validatePresentationScene({ decorations: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.lighting).toBeUndefined();
+  });
+
+  it('каждое поле необязательно: частичная секция валидна', () => {
+    const result = validatePresentationScene({ lighting: { shadows: { mode: 'full' } } });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.lighting).toEqual({ shadows: { mode: 'full' } });
+  });
+
+  it('неизвестный ключ отвергается адресно на КАЖДОМ уровне, а не игнорируется молча', () => {
+    expectErrors({ lighting: { ambien: {} } }, /lighting\.ambien: неизвестное поле/);
+    expectErrors(
+      { lighting: { ambient: { intensivity: 1 } } },
+      /lighting\.ambient\.intensivity: неизвестное поле/,
+    );
+    expectErrors(
+      { lighting: { directional: { direction: { w: 1 } } } },
+      /lighting\.directional\.direction\.w: неизвестное поле/,
+    );
+    expectErrors({ lighting: { shadows: { size: 1024 } } }, /lighting\.shadows\.size: неизвестное поле/);
+  });
+
+  it('режим теней — только объявленные три значения', () => {
+    expectErrors(
+      { lighting: { shadows: { mode: 'soft' } } },
+      /lighting\.shadows\.mode: ожидался режим теней из none \| hybrid \| full/,
+    );
+    for (const mode of ['none', 'hybrid', 'full']) {
+      expect(validatePresentationScene({ lighting: { shadows: { mode } } }).ok).toBe(true);
+    }
+  });
+
+  it('значение не той формы — адресный отказ по каждому полю', () => {
+    const errors = expectErrors(
+      {
+        lighting: {
+          ambient: { color: 'white', intensity: -1 },
+          directional: { intensity: Number.NaN, direction: { x: 'далеко' } },
+          shadows: { mapSize: 0, staticShare: 2 },
+        },
+      },
+      /lighting\.ambient\.color: ожидался цвет формы "#rrggbb"/,
+      /lighting\.ambient\.intensity: ожидалось неотрицательное число интенсивности/,
+      /lighting\.directional\.intensity: ожидалось неотрицательное число интенсивности/,
+      /lighting\.directional\.direction\.x: ожидалось конечное число мировых единиц/,
+      /lighting\.shadows\.mapSize: ожидалось целое положительное число текселей/,
+      /lighting\.shadows\.staticShare: ожидалось число из \[0, 1\] — доля интенсивности/,
+    );
+    expect(errors).toHaveLength(6);
+  });
+
+  it('дробная сторона карты теней — не сторона карты', () => {
+    expectErrors(
+      { lighting: { shadows: { mapSize: 1024.5 } } },
+      /lighting\.shadows\.mapSize: ожидалось целое положительное число текселей/,
+    );
+  });
+
+  it('секция и подсекции не-объектом отвергаются адресно', () => {
+    expectErrors({ lighting: true }, /lighting: ожидался объект секции/);
+    expectErrors({ lighting: { ambient: 0.5 } }, /lighting\.ambient: ожидался объект секции/);
+    expectErrors({ lighting: [] }, /lighting: ожидался объект секции.*массив/);
+  });
+
+  it('секции fog и lighting сосуществуют, и обе — вне симуляции (PRES-4)', () => {
+    const result = validatePresentationScene({
+      decorations: [{ visual: 'rock', x: 1, y: 2 }],
+      fog: { strength: 0.5 },
+      lighting: { shadows: { mode: 'hybrid' } },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.fog).toEqual({ strength: 0.5 });
+    expect(result.scene.lighting).toEqual({ shadows: { mode: 'hybrid' } });
+  });
+});
+
 describe('PRES-3: квантование записываемого', () => {
   it('позиция и масштаб — к шагу 10⁻³, курс — к 10⁻⁴ оборота', () => {
     expect(DECORATION_POSITION_STEP).toBe(1e-3);

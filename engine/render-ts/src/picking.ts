@@ -218,9 +218,16 @@ export interface ViewportPickingOptions {
   /** Прокси ручек служебных наложений — подсистема наложений (REND-16). */
   readonly handles?: PickProxySource;
   /**
-   * Камера вьюпорта. По умолчанию сервис заводит свою: позу на неё сажает та же
-   * общая реализация (CAM-1), поэтому луч совпадает с нарисованным кадром и
-   * так; передать свою полезно, чтобы объект был буквально один.
+   * Камера вьюпорта. По умолчанию сервис заводит свою — с МИРОВЫМ верхом сцены
+   * (0, 0, 1), тем же, который ставит своей камере всякая сборка движка: позу
+   * сажает `applyCameraPose` через `lookAt` (CAM-1), а `lookAt` строит крен из
+   * `camera.up`, и камера с верхом THREE по умолчанию (0, 1, 0) дала бы луч,
+   * повёрнутый вокруг оси взгляда, — в центре вьюпорта он совпал бы с
+   * нарисованным, а под курсором в углу разошёлся бы на десятки градусов.
+   *
+   * Передать свою полезно, чтобы объект был буквально один; тогда её верх —
+   * дело вызывающего: луч обязан совпадать с ТОЙ камерой, которой нарисован
+   * кадр (REND-15).
    */
   readonly camera?: THREE.PerspectiveCamera;
   /** Подшагов на клетку при марше по полю высот; меньше — грубее на выпуклостях. */
@@ -295,7 +302,15 @@ export class ViewportPicking {
 
   constructor(options: ViewportPickingOptions) {
     this.options = options;
-    this.camera = options.camera ?? new THREE.PerspectiveCamera();
+    if (options.camera === undefined) {
+      // Своя камера — сразу в осях сцены: мир движка Z-up, и верх камеры кадра
+      // всякая сборка ставит так же. Чужую камеру сервис не трогает: её оси —
+      // дело вызывающего (REND-15).
+      this.camera = new THREE.PerspectiveCamera();
+      this.camera.up.set(0, 0, 1);
+    } else {
+      this.camera = options.camera;
+    }
     this.cellSteps = Math.max(1, Math.floor(options.cellSteps ?? DEFAULT_CELL_STEPS));
   }
 

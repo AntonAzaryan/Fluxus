@@ -293,6 +293,29 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
   }
 
   /**
+   * Снос подсистемы (REND-31): содержимое наложений, затем разделяемые
+   * геометрии ручек и рамки и общие материалы — то, что заведено в `init` один
+   * раз на подсистему и потому не освобождается сведением набора (REND-16).
+   */
+  dispose(): void {
+    this.clear();
+    for (const geometry of [this.boxEdges, this.armGeometry, this.ringGeometry]) {
+      geometry?.dispose();
+    }
+    this.boxEdges = null;
+    this.armGeometry = null;
+    this.ringGeometry = null;
+    for (const material of [this.highlightMaterial, this.cellsMaterial, this.gridMaterial]) {
+      material?.dispose();
+    }
+    this.highlightMaterial = null;
+    this.cellsMaterial = null;
+    this.gridMaterial = null;
+    for (const material of this.handleMaterials?.values() ?? []) material.dispose();
+    this.handleMaterials = null;
+  }
+
+  /**
    * Наложения — состояние инструмента, а не тика: presentation-состояние они не
    * читают. Исчезновение подсвеченной сущности видно через её прокси (REND-15),
    * а не через `view` — источник прокси и есть то, что рисуется.

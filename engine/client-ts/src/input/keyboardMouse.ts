@@ -8,7 +8,37 @@
  * Обработчики принимают данные события, а не DOM-типы: headless-тесты без
  * браузера (design D8); `bind(window)` — тонкая обвязка для рантайма.
  */
-import type { ActionSink, ContinuousSample, InputSource } from './types.js';
+import type { AimPoint, AimResolution, ActionSink, ContinuousSample, InputSource } from './types.js';
+
+/**
+ * Клавиши-модификаторы, состояние которых различает раскладка (INP-4). Набор
+ * ЗАКРЫТ и повторяет флаги события указателя: имя вне набора — опечатка, и
+ * падать она обязана на загрузке документа, а не молчать в рантайме.
+ */
+export const POINTER_MODIFIERS = ['Alt', 'Ctrl', 'Shift', 'Meta'] as const;
+export type PointerModifier = (typeof POINTER_MODIFIERS)[number];
+
+/** Состояние модификаторов на момент нажатия; отсутствие флага = не зажат. */
+export type PointerModifierState = Partial<Record<PointerModifier, boolean>>;
+
+/**
+ * Привязка кнопки указателя: имя действия либо оно же с оговорками (INP-4).
+ *
+ * `suppressedBy` называет модификаторы, при которых кнопка действия НЕ даёт.
+ * Это данные раскладки, а не ветка в коде источника: сочетание вроде «Alt+ПКМ»
+ * приложение вправе занять своей, не мировой, работой — осмотром камеры,
+ * инспектором, чем угодно, — и единственный способ не отдать миру этот же
+ * клик вторым смыслом состоит в том, чтобы раскладка сказала об этом сама.
+ * Гасится только НАЖАТИЕ: подавленная кнопка не попадает в удержания, а
+ * модификатор, зажатый после неё, действия уже не отменяет — иначе одно и то
+ * же нажатие меняло бы смысл посреди удержания.
+ */
+export type PointerButtonBinding =
+  | string
+  | {
+      readonly action: string;
+      readonly suppressedBy?: readonly PointerModifier[];
+    };
 
 export interface KeyboardMouseBindings {
   /** Оси движения: `KeyboardEvent.code` четырёх направлений (мир, Y вверх). */
@@ -20,8 +50,25 @@ export interface KeyboardMouseBindings {
   };
   /** `KeyboardEvent.code` → имя действия (INP-4). */
   readonly keys: Readonly<Record<string, string>>;
-  /** `MouseEvent.button` (ключ — строка индекса) → имя действия. */
-  readonly pointerButtons: Readonly<Record<string, string>>;
+  /** `MouseEvent.button` (ключ — строка индекса) → привязка кнопки. */
+  readonly pointerButtons: Readonly<Record<string, PointerButtonBinding>>;
+}
+
+/** Имя действия привязки — короткая форма и полная различаются только записью. */
+export function pointerAction(binding: PointerButtonBinding): string {
+  return typeof binding === 'string' ? binding : binding.action;
+}
+
+/** Подавлено ли нажатие состоянием модификаторов (см. `PointerButtonBinding`). */
+export function pointerSuppressed(
+  binding: PointerButtonBinding,
+  modifiers: PointerModifierState,
+): boolean {
+  if (typeof binding === 'string' || binding.suppressedBy === undefined) return false;
+  for (const modifier of binding.suppressedBy) {
+    if (modifiers[modifier] === true) return true;
+  }
+  return false;
 }
 
 export interface KeyboardMouseOptions {
@@ -29,10 +76,14 @@ export interface KeyboardMouseOptions {
   /** Захват движения камерой (fly): герой стоит, клавиши — камере (CAM-1). */
   readonly movementCaptured?: () => boolean;
   /**
-   * Прицел по точке экрана в единицах угла ядра; null — направления нет
-   * (клик мимо мира или в себя), фронт действия не возникает.
+   * Разрешение экранной позиции в прицел (INP-1): направление в единицах угла
+   * ядра И точка на полу, одним лучом. `null` — прицела нет (клик мимо мира
+   * или в себя), фронт действия не возникает.
+   *
+   * Обе величины даёт приложение и даёт вместе: raycast — знание приложения, а
+   * два независимых ответа на один клик разъезжались бы между собой.
    */
-  readonly aimAt?: (clientX: number, clientY: number) => number | null;
+  readonly aimAt?: (clientX: number, clientY: number) => AimResolution | null;
 }
 
 export class KeyboardMouseSource implements InputSource {
@@ -40,7 +91,9 @@ export class KeyboardMouseSource implements InputSource {
 
   private readonly bindings: KeyboardMouseBindings;
   private readonly movementCaptured: (() => boolean) | undefined;
-  private readonly aimAt: ((clientX: number, clientY: number) => number | null) | undefined;
+  private readonly aimAt:
+    | ((clientX: number, clientY: number) => AimResolution | null)
+    | undefined;
   private press: ActionSink | null = null;
   /** Зажатые `KeyboardEvent.code` — источник движения и удержаний (INP-2). */
   private readonly heldKeys = new Set<string>();
@@ -49,6 +102,13 @@ export class KeyboardMouseSource implements InputSource {
   /** Ответ `held()`; пересобирается на месте — выборка не аллоцирует. */
   private readonly heldActions = new Set<string>();
   private lastAim: number | null = null;
+  /**
+   * Последняя разрешённая точка клика (INP-1). Запись одна и переписывается на
+   * месте — опрос идёт покадрово, и свежий объект на каждый был бы мусором;
+   * читается она до следующей выборки, как и множество `held()`.
+   */
+  private readonly lastTarget: { x: number; y: number } = { x: 0, y: 0 };
+  private hasTarget = false;
 
   constructor(options: KeyboardMouseOptions) {
     this.bindings = options.bindings;
@@ -76,13 +136,29 @@ export class KeyboardMouseSource implements InputSource {
     this.heldKeys.delete(code);
   }
 
-  handlePointerDown(button: number, clientX: number, clientY: number): void {
-    const action = this.bindings.pointerButtons[String(button)];
-    if (action === undefined || this.press === null) return;
+  /**
+   * Нажатие кнопки указателя. `modifiers` — состояние клавиш-модификаторов на
+   * момент нажатия: по нему раскладка вправе не отдать миру сочетание, которое
+   * приложение заняло собой (`PointerButtonBinding.suppressedBy`). Пустое
+   * состояние — ни одного модификатора, то есть поведение прежних раскладок.
+   */
+  handlePointerDown(
+    button: number,
+    clientX: number,
+    clientY: number,
+    modifiers: PointerModifierState = {},
+  ): void {
+    const binding = this.bindings.pointerButtons[String(button)];
+    if (binding === undefined || this.press === null) return;
+    if (pointerSuppressed(binding, modifiers)) return;
+    const action = pointerAction(binding);
     const aim = this.aimAt?.(clientX, clientY) ?? null;
     // Клик без направления — не действие: ни фронта, ни удержания.
     if (aim === null) return;
-    this.lastAim = aim;
+    this.lastAim = aim.angle;
+    this.lastTarget.x = aim.x;
+    this.lastTarget.y = aim.y;
+    this.hasTarget = true;
     this.heldPointerButtons.set(button, action);
     this.press(action);
   }
@@ -129,15 +205,29 @@ export class KeyboardMouseSource implements InputSource {
         moveY /= length;
       }
     }
-    return { moveX, moveY, aim: this.lastAim };
+    return { moveX, moveY, aim: this.lastAim, target: this.target() };
+  }
+
+  /** Точка последнего клика; `null` — кликов, попавших в мир, ещё не было. */
+  private target(): AimPoint | null {
+    return this.hasTarget ? this.lastTarget : null;
   }
 
   /** Подключение к DOM-событиям; возвращает отписку. */
   bind(target: Window): () => void {
     const onKeyDown = (e: KeyboardEvent): void => { this.handleKeyDown(e.code, e.repeat); };
     const onKeyUp = (e: KeyboardEvent): void => { this.handleKeyUp(e.code); };
-    const onMouseDown = (e: MouseEvent): void =>
-      { this.handlePointerDown(e.button, e.clientX, e.clientY); };
+    const onMouseDown = (e: MouseEvent): void => {
+      // Флаги события, а не собственный учёт нажатых клавиш: модификатор мог
+      // быть зажат до того, как страница получила фокус, и своё состояние
+      // разошлось бы с системным.
+      this.handlePointerDown(e.button, e.clientX, e.clientY, {
+        Alt: e.altKey,
+        Ctrl: e.ctrlKey,
+        Shift: e.shiftKey,
+        Meta: e.metaKey,
+      });
+    };
     const onMouseUp = (e: MouseEvent): void => { this.handlePointerUp(e.button); };
     const onBlur = (): void => { this.handleBlur(); };
     target.addEventListener('keydown', onKeyDown);

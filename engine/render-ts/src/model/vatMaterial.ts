@@ -106,6 +106,12 @@ export function createVatMaterial(
   placeholder: THREE.DataArrayTexture,
 ): VatMaterial {
   const material = source.clone();
+  // Fade «ушла в туман» (FOW-8): доля проявленности едет пер-инстансным
+  // атрибутом в альфу, и материал живёт в прозрачном проходе постоянно —
+  // запись с fade = 1 рисуется теми же пикселями, что рисовалась бы в
+  // непрозрачном (альфа 1 — тождественный блендинг), а переключение прохода
+  // на лету пересобирало бы программу посреди матча.
+  material.transparent = true;
   const uniforms: VatMaterialUniforms = {
     vatMap: { value: vatTexture },
     vatSkinBase: { value: placeholder },
@@ -128,27 +134,55 @@ export function createVatMaterial(
       if (!maps.has(kind)) continue;
       shader.uniforms[SKIN_UNIFORM[kind]] = uniforms[SKIN_UNIFORM[kind]];
     }
-    shader.vertexShader = patchVertex(shader.vertexShader);
+    shader.vertexShader = patchVertex(shader.vertexShader, MATERIAL_PRELUDE, VERTEX_BASE);
     shader.fragmentShader = patchFragment(shader.fragmentShader, maps);
   };
 
   return { material, uniforms, maps };
 }
 
+/**
+ * Материал глубины батчевого яруса: тот же `MeshDepthMaterial`, каким теневой
+ * проход three рисует всё остальное, но с ТЕМ ЖЕ вершинным преобразованием VAT,
+ * что у боевого материала. Без него тень батчевого инстанса застыла бы в позе
+ * покоя записи манифеста — теневой проход считает глубину своим материалом и о
+ * патче боевого не знает (`WebGLShadowMap.getDepthMaterial` берёт
+ * `object.customDepthMaterial`).
+ *
+ * Один на батч и общий на все его части: от материала части он не зависит вовсе
+ * — глубина не читает ни карт, ни скинов, только позу.
+ */
+export function createVatDepthMaterial(vatTexture: THREE.Texture): THREE.MeshDepthMaterial {
+  const material = new THREE.MeshDepthMaterial();
+  // Держатель uniform'а — по той же причине, что у боевого материала:
+  // `shader.uniforms` существует только внутри `onBeforeCompile`.
+  const vatMap = { value: vatTexture };
+  material.customProgramCacheKey = (): string => 'vat:depth';
+  material.onBeforeCompile = (shader): void => {
+    shader.uniforms.vatMap = vatMap;
+    shader.vertexShader = patchVertex(shader.vertexShader, VAT_SKIN_PRELUDE, VERTEX_BASE_SKIN);
+  };
+  return material;
+}
+
 // ------------------------------------------------------------------- GLSL
 
 /**
- * Пролог вершинного шейдера. Атрибуты скининга объявляются руками: батч —
- * не `SkinnedMesh`, и `USE_SKINNING` three не поднимает, а буферы `skinIndex`
- * и `skinWeight` у геометрии модели те же самые (design D2).
+ * Вершинное преобразование VAT — ПЕРЕИСПОЛЬЗУЕМАЯ часть пролога: атрибуты
+ * скиннинга, таблица матриц и сборка матрицы позы. Атрибуты объявляются руками:
+ * батч — не `SkinnedMesh`, и `USE_SKINNING` three не поднимает, а буферы
+ * `skinIndex` и `skinWeight` у геометрии модели те же самые (design D2).
+ *
+ * Отдельно от пролога боевого материала потому, что ровно это преобразование
+ * обязан повторить теневой проход: карта глубины считается СВОИМ материалом, и
+ * без общего chunk'а тень батчевого инстанса застыла бы в позе покоя.
  */
-const VERTEX_PRELUDE = /* glsl */ `
+const VAT_SKIN_PRELUDE = /* glsl */ `
 attribute vec4 skinIndex;
 attribute vec4 skinWeight;
 /** Строка первой позы, строка второй, вес второй, слой скина (REND-6). */
 attribute vec4 instancePose;
 uniform highp sampler2D vatMap;
-varying float vSkinLayer;
 
 mat4 vatBoneMatrix( float row, float bone ) {
 	int y = int( row );
@@ -175,13 +209,29 @@ mat4 vatSkinMatrix() {
 `;
 
 /**
+ * Пролог боевого материала: общее преобразование плюс то, что нужно ТОЛЬКО
+ * кадру, — доля проявленности записи (FOW-8) и слой скина (REND-6). Теневому
+ * проходу ни то, ни другое не нужно: он пишет глубину, а не цвет.
+ */
+const MATERIAL_PRELUDE = /* glsl */ `${VAT_SKIN_PRELUDE}
+/** Доля проявленности записи [0, 1] (FOW-8) — множитель альфы фрагмента. */
+attribute float instanceFade;
+varying float vSkinLayer;
+varying float vInstanceFade;
+`;
+
+/**
  * Место, где поза считается один раз на вершину: `skinbase_vertex` идёт до
  * `skinnormal_vertex` и до `skinning_vertex`, и обе замены пользуются готовой
  * матрицей — иначе выборок из VAT было бы вдвое больше.
  */
-const VERTEX_BASE = /* glsl */ `
+const VERTEX_BASE_SKIN = /* glsl */ `
 	mat4 vatSkin = vatSkinMatrix();
+`;
+
+const VERTEX_BASE = /* glsl */ `${VERTEX_BASE_SKIN}
 	vSkinLayer = instancePose.w;
+	vInstanceFade = instanceFade;
 `;
 
 const VERTEX_NORMAL = /* glsl */ `
@@ -197,10 +247,15 @@ const VERTEX_SKINNING = /* glsl */ `
 	transformed = ( vatSkin * vec4( transformed, 1.0 ) ).xyz;
 `;
 
-function patchVertex(source: string): string {
+/**
+ * Подмена вершинного преобразования в шейдере three. Одна на боевой материал и
+ * на материал глубины: различаются они прологом и телом базы, а места подмены —
+ * те же самые chunk'и, и они есть и у `meshphysical_vert`, и у `depth_vert`.
+ */
+function patchVertex(source: string, prelude: string, base: string): string {
   return source
-    .replace('#include <common>', `#include <common>\n${VERTEX_PRELUDE}`)
-    .replace('#include <skinbase_vertex>', VERTEX_BASE)
+    .replace('#include <common>', `#include <common>\n${prelude}`)
+    .replace('#include <skinbase_vertex>', base)
     .replace('#include <skinnormal_vertex>', VERTEX_NORMAL)
     .replace('#include <skinning_vertex>', VERTEX_SKINNING);
 }
@@ -214,11 +269,18 @@ function patchVertex(source: string): string {
 function patchFragment(source: string, maps: ReadonlySet<VatMapKind>): string {
   // Сэмплеры объявляются В ПРОЛОГЕ, а не на месте chunk'а: chunk'и раскрываются
   // внутри `main()`, а объявление uniform'а там — не GLSL.
-  const declarations = ['varying float vSkinLayer;'];
+  const declarations = ['varying float vSkinLayer;', 'varying float vInstanceFade;'];
   for (const kind of VAT_MAP_KINDS) {
     if (maps.has(kind)) declarations.push(`uniform highp sampler2DArray ${SKIN_UNIFORM[kind]};`);
   }
   let out = source.replace('#include <common>', `#include <common>\n${declarations.join('\n')}`);
+  // Fade (FOW-8): альфа фрагмента умножается на долю проявленности записи до
+  // альфа-теста — угасание прозрачностью, одинаковое с держателем детального
+  // яруса (REND-20).
+  out = out.replace(
+    '#include <alphamap_fragment>',
+    '\tdiffuseColor.a *= vInstanceFade;\n#include <alphamap_fragment>',
+  );
   if (maps.has('base')) {
     out = out.replace(
       '#include <map_fragment>',

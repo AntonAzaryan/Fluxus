@@ -4,14 +4,45 @@
  * квантование float → Q16.16 живут только здесь — источники о битах, fixed
  * и `InputFrame` не знают.
  */
-import { fixed, type Vec2 } from '@game-mvp/core';
+import { FIXED_ONE, fixed, type Vec2 } from '@game-mvp/core';
 import { TURN_UNITS, type ActionSink, type ContinuousSample, type InputSource } from './types.js';
 
 /** Готовый канонический ввод тика — аргументы `RemoteHost.sendInput` (SHELL-6). */
 export interface CanonicalInput {
   readonly move: Vec2;
   readonly aimDir: number;
+  /**
+   * Точка прицела в Q16.16 (`tick-loop` TICK-2); `null` — ни один источник
+   * точкой не владел. Именно `null`, а не начало координат: «прицела нет» и
+   * «целюсь в центр арены» — разные высказывания, и кадр без точки не обязан
+   * возить её вовсе.
+   */
+  readonly target: Vec2 | null;
   readonly buttons: number;
+}
+
+/**
+ * Область мировых координат, представимая в Q16.16 (INP-3). Границы взяты у
+ * ядра, а не выписаны числами: это i32-контейнер `Fixed` (FP-1), и второго
+ * определения этой области в репозитории быть не должно.
+ */
+const WORLD_MIN = fixed.INT32_MIN / FIXED_ONE;
+const WORLD_MAX = fixed.INT32_MAX / FIXED_ONE;
+
+/**
+ * Единственная точка приведения мировой координаты к Q16.16 (INP-3).
+ * Ограничивается ровно представимость — геймплейными границами (дальностью
+ * способности, границей арены, видимостью цели) слой ввода точку ограничивать
+ * не вправе: обрезанная здесь, дальность способности стала бы свойством
+ * клиента, то есть досталась бы тому, кто клиентом управляет (ABIL-5).
+ *
+ * Экспортируется затем, чтобы точка бота проходила ЭТО ЖЕ приведение, а не
+ * его копию (`bot-player` BOT-5): ввод бота не выражает того, чего не выражает
+ * ввод человека, и держится это общим кодом, а не совпадением двух формул.
+ */
+export function toWorldFixed(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return fixed.fromFloat(value < WORLD_MIN ? WORLD_MIN : value > WORLD_MAX ? WORLD_MAX : value);
 }
 
 export interface SamplerOptions {
@@ -28,9 +59,13 @@ interface TrackedSource {
   prevMoveX: number;
   prevMoveY: number;
   prevAim: number | null;
+  prevTargetX: number;
+  prevTargetY: number;
+  prevHadTarget: boolean;
   /** Номера выборок последних изменений: «последний активный» — максимум. */
   moveChangedAt: number;
   aimChangedAt: number;
+  targetChangedAt: number;
   /** Текущий опрос этой выборки; null — источник неактивен. */
   current: ContinuousSample | null;
 }
@@ -44,6 +79,31 @@ export class InputSampler {
   private counter = 0;
   /** Прицел переживает молчание источников: направление — не «нажатие». */
   private lastAim = 0;
+  /**
+   * Точка прицела переживает молчание источников по тому же правилу (INP-5) и
+   * по тому же, по которому её не гасит пропущенный кадр в ядре (TICK-2): это
+   * последнее известное состояние ввода. `hasTarget === false` — точки не давал
+   * никто и никогда, и кадру возить нечего.
+   */
+  private lastTargetX = 0;
+  private lastTargetY = 0;
+  private hasTarget = false;
+  /**
+   * Свежесть ПЕРЕЖИВШЕГО значения — номер выборки, на которой оно принято.
+   *
+   * Без неё правило «последний менявший» (INP-5) работало бы только внутри
+   * одной выборки: пережившее значение входило бы в свёртку с нулевой
+   * свежестью, и его перебивал бы ЛЮБОЙ источник, отдающий непустую величину, —
+   * даже тот, чьё значение не менялось с прошлой эры. Ровно так и ломался
+   * прицел мыши: `KeyboardMouseSource` владеет прицелом момента клика (INP-1) и
+   * отдаёт его дальше неизменным, а непрерывный источник указателя на кадре
+   * отпускания замолкает, — и вместо живого прицела кадра в тик уезжала точка
+   * НАЖАТИЯ, то есть снаряд улетал туда, где кнопку зажали, а не туда, куда
+   * игрок целился, отпуская её (`ability-system` ABIL-5: шаг цепочки пишется
+   * прицеливанием тика подтверждения).
+   */
+  private lastAimAt = 0;
+  private lastTargetAt = 0;
 
   constructor(options: SamplerOptions) {
     for (const [action, bit] of Object.entries(options.actionBits)) {
@@ -77,8 +137,12 @@ export class InputSampler {
       prevMoveX: 0,
       prevMoveY: 0,
       prevAim: null,
+      prevTargetX: 0,
+      prevTargetY: 0,
+      prevHadTarget: false,
       moveChangedAt: 0,
       aimChangedAt: 0,
+      targetChangedAt: 0,
       current: null,
     });
     source.start(this.press);
@@ -111,9 +175,23 @@ export class InputSampler {
       if (s === null) continue;
       if (s.moveX !== t.prevMoveX || s.moveY !== t.prevMoveY) t.moveChangedAt = this.counter;
       if (s.aim !== t.prevAim) t.aimChangedAt = this.counter;
+      // Точка сравнивается по значению, а не по ссылке: запись источника
+      // переиспользуется, и одна и та же ссылка означает разные точки.
+      const hasTarget = s.target !== null;
+      if (
+        hasTarget !== t.prevHadTarget ||
+        (s.target !== null && (s.target.x !== t.prevTargetX || s.target.y !== t.prevTargetY))
+      ) {
+        t.targetChangedAt = this.counter;
+      }
       t.prevMoveX = s.moveX;
       t.prevMoveY = s.moveY;
       t.prevAim = s.aim;
+      t.prevHadTarget = hasTarget;
+      if (s.target !== null) {
+        t.prevTargetX = s.target.x;
+        t.prevTargetY = s.target.y;
+      }
     }
 
     // Движение: ненулевое с самым свежим изменением; пропавший источник
@@ -122,10 +200,17 @@ export class InputSampler {
     let moveY = 0;
     let moveAt = -1;
     let aim = this.lastAim;
-    let aimAt = -1;
+    // Свежесть пережившего значения — та, с которой его приняли: источник
+    // перебивает его, только если менял своё ПОЗЖЕ (INP-5), а не самим фактом,
+    // что ему есть что сказать.
+    let aimAt = this.lastAimAt;
+    let targetX = this.lastTargetX;
+    let targetY = this.lastTargetY;
+    let hasTarget = this.hasTarget;
+    let targetAt = this.lastTargetAt;
     for (const t of this.tracked) {
       if (t.current === null) continue;
-      const { moveX: mx, moveY: my, aim: a } = t.current;
+      const { moveX: mx, moveY: my, aim: a, target: p } = t.current;
       if ((mx !== 0 || my !== 0) && t.moveChangedAt > moveAt) {
         moveAt = t.moveChangedAt;
         moveX = mx;
@@ -135,8 +220,24 @@ export class InputSampler {
         aimAt = t.aimChangedAt;
         aim = a;
       }
+      // Точка выбирается тем же правилом «последний менявший» (INP-5), что и
+      // направление, и по тому же основанию: игрок целится тем устройством,
+      // которым он только что шевелил.
+      if (p !== null && t.targetChangedAt > targetAt) {
+        targetAt = t.targetChangedAt;
+        // Значениями, а не ссылкой: запись принадлежит источнику и будет
+        // переписана следующим опросом, а держим мы её до следующей выборки.
+        targetX = p.x;
+        targetY = p.y;
+        hasTarget = true;
+      }
     }
     this.lastAim = aim;
+    this.lastAimAt = aimAt;
+    this.lastTargetX = targetX;
+    this.lastTargetY = targetY;
+    this.hasTarget = hasTarget;
+    this.lastTargetAt = targetAt;
 
     // Кламп единичным кругом: диагональ клавиатуры не быстрее стика (INP-3).
     const length = Math.hypot(moveX, moveY);
@@ -152,6 +253,7 @@ export class InputSampler {
     return {
       move: { x: fixed.fromFloat(moveX), y: fixed.fromFloat(moveY) },
       aimDir: Math.round(aim) & (TURN_UNITS - 1),
+      target: hasTarget ? { x: toWorldFixed(targetX), y: toWorldFixed(targetY) } : null,
       buttons,
     };
   }

@@ -11,7 +11,13 @@ import type {
   NormalizedModel,
   NormalizedSequence,
 } from '@game-mvp/assets';
-import type { EntityView, FogLayerCanvas, RenderContext, TickView } from '../src/index.js';
+import type {
+  EntityView,
+  FogLayerCanvas,
+  FogSubsystem,
+  RenderContext,
+  TickView,
+} from '../src/index.js';
 
 // ------------------------------------------------------------------- модель
 
@@ -228,24 +234,69 @@ export class RendererSpy {
   }
 }
 
-/** Канвас слоя миникарты без DOM: записывает блит, контекст минимальный. */
-export function fakeCanvas(): FogLayerCanvas & { puts: number } {
-  const canvas = {
+/** Буфер пикселей слоя миникарты — то, что канвас держит между блитами. */
+export interface FakeImageData {
+  readonly data: Uint8ClampedArray;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Канвас слоя миникарты без DOM: записывает блиты и их ГЕОМЕТРИЮ, контекст
+ * минимальный. Прямоугольник грязного окна (design D5 change
+ * `fog-mask-budgeted-rebuild`) наблюдаем только здесь: у настоящего канваса его
+ * не спросишь, а перевёрнутый Y-флип иначе уехал бы молча.
+ */
+export interface FakeCanvas extends FogLayerCanvas {
+  /** Сколько раз буфер уехал в канвас. */
+  puts: number;
+  /** Аргументы блитов: `[dx, dy]` либо `[dx, dy, dirtyX, dirtyY, dirtyW, dirtyH]`. */
+  readonly putRects: number[][];
+  /** Буфер пикселей: тот же объект, что держит поверхность; null — блитов не было. */
+  image: FakeImageData | null;
+}
+
+export function fakeCanvas(): FakeCanvas {
+  const canvas: FakeCanvas = {
     width: 0,
     height: 0,
     puts: 0,
+    putRects: [],
+    image: null,
     getContext: () => ({
-      createImageData: (width: number, height: number) => ({
-        data: new Uint8ClampedArray(width * height * 4),
-        width,
-        height,
-      }),
-      putImageData: () => {
+      createImageData: (width: number, height: number): FakeImageData => {
+        const created = { data: new Uint8ClampedArray(width * height * 4), width, height };
+        canvas.image = created;
+        return created;
+      },
+      putImageData: (_image: unknown, ...rect: number[]): void => {
         canvas.puts++;
+        canvas.putRects.push(rect);
       },
     }),
   };
   return canvas;
+}
+
+/**
+ * Кадров, за которые перестройка маски обязана опубликоваться. Бюджет по
+ * умолчанию укладывает её в три (design D1 change `fog-mask-budgeted-rebuild`);
+ * запас взят на вырост, а не на «сколько-нибудь».
+ */
+const FOG_BUILD_FRAMES = 64;
+
+/**
+ * Кадры до публикации маски: доставка растра не строит, его строят порции в
+ * `updateFrame` (design D1). `dt` по умолчанию нулевой — рассеивание тогда
+ * стоит, и тест видит ровно перестройку. Возвращает число потраченных кадров.
+ */
+export function buildFogMask(fog: FogSubsystem, dt = 0): number {
+  const before = fog.rebuilds;
+  for (let frame = 1; frame <= FOG_BUILD_FRAMES; frame++) {
+    fog.updateFrame(dt, 0);
+    if (fog.rebuilds > before) return frame;
+  }
+  throw new Error(`маска не опубликована за ${FOG_BUILD_FRAMES} кадров`);
 }
 
 /** Фабрика канваса слоя миникарты для опций подсистемы (design D6). */

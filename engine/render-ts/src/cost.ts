@@ -42,6 +42,11 @@
  * Главный поток однопоточный, замер синхронный — переплетения двух стоков,
  * от которого защищается `withDiagnostics` ядра, здесь взяться неоткуда;
  * предыдущее значение всё равно сохраняется и возвращается в `finally`.
+ *
+ * Владелец, живущий ДОЛЬШЕ одного вызова (читатель счётчиков отладки,
+ * `render-debug` RDBG-8), в стековый обмен не укладывается: замер, начавшийся
+ * поверх него, вернёт его сток назад своим `finally`. Для таких владельцев
+ * заведён `releaseCostSink` — см. его описание ниже.
  */
 
 /**
@@ -74,9 +79,14 @@ export interface RenderCostCounters {
   /**
    * Сущности доставки, просмотренные отбором наблюдателей своей команды
    * (FOW-7, design D4): отбор идёт по всему состоянию, а не по наблюдателям, —
-   * стоимость перестройки растёт и от числа сущностей.
+   * стоимость перестройки растёт и от числа сущностей. ЕДИНСТВЕННЫЙ счётчик
+   * тумана стадии доставки: скан состояния идёт за доставку, а весь растр
+   * уехал в кадр (change `fog-mask-budgeted-rebuild`, design D4).
    */
   fogEntitiesScanned: number;
+
+  // -------------------------------- стадия frame: растр маски тумана (FOW-7)
+
   /** Наблюдатели, для которых строился reveal-полигон (FOW-7). */
   fogRevealCalls: number;
   /** Тесты «отрезок укрытия в радиусе наблюдателя» при отборе теней (FOW-9). */
@@ -115,13 +125,27 @@ export interface RenderCostCounters {
    * правится тем же потолком `fog.maskResolution` (FOW-10, QUAL-3).
    */
   fogMaskSmoothTexels: number;
-  /** Байты растра маски, отданные в `DataTexture` (загрузка на GPU, design D2). */
+  /**
+   * Байты растра маски, отданные в `DataTexture` (загрузка на GPU, design D2).
+   * Растр уезжает ЦЕЛИКОМ на каждой публикации — и на коммите перестройки, и на
+   * каждом кадре рассеивания: частичной загрузки в этой итерации нет (Non-Goals
+   * change `fog-mask-budgeted-rebuild`), и полная загрузка кадра рассеивания
+   * видна здесь, а не спрятана в `fogDissolveTexels`.
+   */
   fogMaskUploadBytes: number;
   /**
-   * Тексели блита маски в канвас слоя миникарты на ДОСТАВКЕ (HUD-6, design D6).
-   * Блит кадра сходимости сюда не входит — он стадии `frame` и посчитан
-   * `fogDissolveTexels`: у счётчика одна стадия, и смешивать их значило бы
-   * врать атрибуцией (PERF-2).
+   * Тексели, уехавшие в канвас слоя миникарты (HUD-6, design D6), — площадь
+   * ПРЯМОУГОЛЬНИКА `putImageData`. Первая публикация, снап (REND-2) и смена
+   * тона (FOW-10) блитят весь растр; кадр рассеивания — общий прямоугольник
+   * грязных блоков окна (design D5), поэтому число растёт разбросом
+   * неустоявшейся области, а не длиной растра.
+   *
+   * Считается прямоугольник, а НЕ сумма блоков: копию делает канвас, и платит
+   * он за прямоугольник целиком. Кольцо рассеивания занимает лишь часть своего
+   * bbox, и сумма блоков занижала бы работу главного потока — тем сильнее, чем
+   * выше разрешение маски, то есть ровно на той оси, которую счётчики PERF-3
+   * и заведены показывать. Перезапись альфы в буфере при этом дешевле: она
+   * идёт по блокам внутри прямоугольника.
    */
   fogMinimapTexels: number;
 
@@ -200,13 +224,18 @@ export interface RenderCostCounters {
   /** Проходы рендерера, заказанные подсистемой тумана: прямой и пост (design D2). */
   fogRenderPasses: number;
   /**
-   * Тексели показанной маски, пройденные сходимостью рассеивания за кадр
-   * (FOW-7, `subsystems/fog.ts`): единственная работа тумана, растущая с
-   * площадью маски на стадии кадра, а не доставки. Кадр сходимости, кроме
-   * самого прохода, повторно грузит текстуру и перерисовывает слой миникарты
-   * ТЕМ ЖЕ объёмом — все три величины равны длине растра, и одно поле описывает
-   * их разом. Сошлась показанная маска с целевой — счётчик снова ноль: кадры
-   * стоящей сцены за туман не платят (design D4).
+   * Тексели, пройденные ОКНОМ РАССЕИВАНИЯ за кадр (FOW-7, `subsystems/fog.ts`,
+   * design D5): проход схождения по грязным блокам плюс поблочная разметка окна
+   * на коммите перестройки — сравнение старого и нового опубликованных растров.
+   * И то и другое — работа одного механизма: «где показанная маска ещё не
+   * сошлась с целевой».
+   *
+   * Длине растра число больше НЕ равно: окно сжимается по мере схождения, и
+   * работа кадра пропорциональна неустоявшейся области. Загрузка текстуры и
+   * блит миникарты считаются своими счётчиками — их объёмы разошлись
+   * (`fogMaskUploadBytes` — весь растр, `fogMinimapTexels` — окно). Сошлась
+   * показанная маска с целевой — счётчик снова ноль: кадры стоящей сцены за
+   * туман не платят.
    */
   fogDissolveTexels: number;
 
@@ -294,6 +323,35 @@ export interface RenderCostCounters {
    */
   particlesSystemsStepped: number;
 
+  // ------------------------------------------- освещение: работа кадра (REND-8)
+
+  /**
+   * Статические теневые кастеры, отданные кэшированной карте теней. В режиме
+   * `hybrid` счётчик двигается только на перерисовках кэша — в этом и смысл
+   * яруса: между событиями статика не стоит кадру ничего. В режиме `full`
+   * карта одна и покадровая, поэтому статика попадает в неё каждый кадр, и
+   * разница двух режимов читается прямо этим числом.
+   *
+   * Считаются КОРНИ нарисованного (группа батча, узел детального инстанса, меш
+   * чанка террейна), а не меши поддерева: корень — то, что подсистема-владелец
+   * объявила кастером, и величина остаётся машинно-независимой (PERF-3).
+   */
+  lightingStaticCasters: number;
+  /**
+   * Динамические теневые кастеры покадровой карты — юниты и анимированные
+   * декорации. Растёт составом доставки, и ровно его ограничивает потолок
+   * режима теней (QUAL-1): на `none` счётчик нулевой, потому что теневого
+   * прохода нет вовсе.
+   */
+  lightingDynamicCasters: number;
+  /**
+   * Перерисовки кэшированной карты статики: загрузка сцены, переподача набора
+   * декораций, правка сетки террейна, смена значений света или пресета. Ось
+   * стоимости режима `hybrid`: кэш, который инвалидируют каждым кадром, — это
+   * `full` по цене и `hybrid` по названию, и видно это здесь.
+   */
+  lightingStaticRebuilds: number;
+
   // ---------------------------------------------- террейн: работа кадра (REND-7)
 
   /**
@@ -334,16 +392,6 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     syncTickInstances: 'syncTick',
     syncTickDecorationInstances: 'syncTick',
     fogEntitiesScanned: 'syncTick',
-    fogRevealCalls: 'syncTick',
-    fogSegmentRangeTests: 'syncTick',
-    fogNearSegments: 'syncTick',
-    fogMaskClearTexels: 'syncTick',
-    fogMaskTexels: 'syncTick',
-    fogMaskTexelsWritten: 'syncTick',
-    fogShadowRayTests: 'syncTick',
-    fogMaskSmoothTexels: 'syncTick',
-    fogMaskUploadBytes: 'syncTick',
-    fogMinimapTexels: 'syncTick',
     modelsInstancesSynced: 'syncTick',
     modelsInstancesCreated: 'syncTick',
     modelsRebuilds: 'syncTick',
@@ -354,6 +402,20 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     frameSubsystems: 'frame',
     frameInstances: 'frame',
     fogRenderPasses: 'frame',
+    // Весь растр маски — стадия кадра (change `fog-mask-budgeted-rebuild`,
+    // design D4): порции перестройки и рассеивание идут в `updateFrame`, а
+    // синхронный снап (REND-2) — редкое исключение, ради которого у счётчика не
+    // заводится вторая стадия: двойной атрибуции не бывает (PERF-2).
+    fogRevealCalls: 'frame',
+    fogSegmentRangeTests: 'frame',
+    fogNearSegments: 'frame',
+    fogMaskClearTexels: 'frame',
+    fogMaskTexels: 'frame',
+    fogMaskTexelsWritten: 'frame',
+    fogShadowRayTests: 'frame',
+    fogMaskSmoothTexels: 'frame',
+    fogMaskUploadBytes: 'frame',
+    fogMinimapTexels: 'frame',
     fogDissolveTexels: 'frame',
     modelsPoseWrites: 'frame',
     modelsCullTests: 'frame',
@@ -364,6 +426,9 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     particlesShellsPosed: 'frame',
     particlesShotsStepped: 'frame',
     particlesSystemsStepped: 'frame',
+    lightingStaticCasters: 'frame',
+    lightingDynamicCasters: 'frame',
+    lightingStaticRebuilds: 'frame',
     terrainChunksRebuilt: 'frame',
     terrainFloorQuads: 'frame',
     terrainWallQuads: 'frame',
@@ -407,6 +472,9 @@ export function createCostCounters(): RenderCostCounters {
     particlesShellsPosed: 0,
     particlesShotsStepped: 0,
     particlesSystemsStepped: 0,
+    lightingStaticCasters: 0,
+    lightingDynamicCasters: 0,
+    lightingStaticRebuilds: 0,
     terrainChunksRebuilt: 0,
     terrainFloorQuads: 0,
     terrainWallQuads: 0,
@@ -414,6 +482,20 @@ export function createCostCounters(): RenderCostCounters {
 }
 
 let current: RenderCostCounters | undefined;
+
+/**
+ * Стоки, ОТПУЩЕННЫЕ владельцем под чужим замером (`releaseCostSink`). Обмен
+ * «поставил — вернул предыдущий» строго стековый, а долгоживущий владелец в
+ * этот стек не укладывается: замер, начавшийся поверх него, вернёт его назад
+ * своим `finally` — и отпущенный сток воскрес бы уже без хозяина. Пометка это
+ * закрывает: восстановление отпущенного стока кладёт пустоту.
+ */
+const abandoned = new WeakSet<RenderCostCounters>();
+
+/** Восстановление стока с учётом пометки: отпущенный назад не встаёт. */
+function restore(sink: RenderCostCounters | undefined): void {
+  current = sink !== undefined && abandoned.delete(sink) ? undefined : sink;
+}
 
 /**
  * Подключённый сток или `undefined`. Инструментированное место читает его ОДИН
@@ -433,8 +515,27 @@ export function attachCostSink(
   sink: RenderCostCounters | undefined,
 ): RenderCostCounters | undefined {
   const previous = current;
-  current = sink;
+  restore(sink);
   return previous;
+}
+
+/**
+ * Отпускает ДОЛГОЖИВУЩИЙ сток — подключённый не на время синхронного вызова, а
+ * на время, пока его владельцу нужен учёт (читатель счётчиков отладки,
+ * `render-debug` RDBG-8). Такой владелец подключается только к ПУСТОМУ месту,
+ * поэтому и отпускает он в пустоту.
+ *
+ * Если поверх него успел встать замер, снимать сток нельзя: замер считает, и
+ * отобранный сток оставил бы его без счётчиков посреди измерения. Поэтому
+ * отпущенный сток лишь помечается — и `finally` замера положит на его место
+ * пустоту, а не сток, от которого владелец уже отказался.
+ */
+export function releaseCostSink(sink: RenderCostCounters): void {
+  if (current === sink) {
+    current = undefined;
+    return;
+  }
+  abandoned.add(sink);
 }
 
 /**
@@ -447,10 +548,10 @@ export function attachCostSink(
  */
 export function withCostSink<T>(sink: RenderCostCounters, body: () => T): T {
   const previous = current;
-  current = sink;
+  restore(sink);
   try {
     return body();
   } finally {
-    current = previous;
+    restore(previous);
   }
 }

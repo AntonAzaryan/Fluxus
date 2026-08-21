@@ -8,7 +8,15 @@
  * синхронных портах, где доставкой управляет тест.
  */
 import { describe, expect, it } from 'vitest';
-import { RingHistory, createInputLog, createRewindController, tick } from '@game-mvp/core';
+import {
+  RingHistory,
+  createInputLog,
+  createRewindController,
+  fixed,
+  query,
+  tick,
+  world as coreWorld,
+} from '@game-mvp/core';
 import { ViewBuffer, type RenderSubsystem, type TickView } from '@game-mvp/render';
 import { RemoteHost, WorkerShell, shellPort, type TickEnvelope } from '../src/index.js';
 import {
@@ -377,6 +385,40 @@ describe('обратный канал: ввод и управление (SHELL-6
     const moved = remote.view!.entities.values().next().value!;
     expect(moved.currX).toBeGreaterThan(x0);
     expect(moved.moving).toBe(true);
+  });
+
+  it('точка прицела и новые биты доезжают до InputFrame тем же каналом (SHELL-6, TICK-2)', () => {
+    const rig = makeRig();
+    const [workerPort, mainPort] = syncPortPair();
+    const shell = new WorkerShell({
+      mode: 'local',
+      port: workerPort,
+      sim: rig.sim,
+      state: rig.state,
+      tickSeconds: TICK_SECONDS,
+      extractor: makeExtractor(rig),
+      playerId: PLAYER_ID,
+      clock: () => 0,
+    });
+    const remote = new RemoteHost(dummyContext(), { clock: () => 0 }).connect(mainPort);
+    shell.start();
+    shell.stop();
+
+    const hero = query(rig.state.world, { all: ['Player'] })[0]!;
+    // Бит подтверждения — обычный бит маски (INP-4): собственного поля канал
+    // под него не получает, и формат сообщения от него не меняется.
+    const confirm = 1 << 8;
+    remote.sendInput({ x: 0, y: 0 }, 0, confirm, { x: fixed.fromFloat(3), y: fixed.fromFloat(-4) });
+    shell.stepTick();
+
+    expect(coreWorld.getField(rig.state.world, hero, 'Input', 'buttons')).toBe(confirm);
+    expect(coreWorld.getField(rig.state.world, hero, 'Input', 'targetX')).toBe(fixed.fromFloat(3));
+    expect(coreWorld.getField(rig.state.world, hero, 'Input', 'targetY')).toBe(fixed.fromFloat(-4));
+
+    // Точка — состояние: следующий тик без неё её не гасит (TICK-2).
+    remote.sendInput({ x: 0, y: 0 }, 0, 0, null);
+    shell.stepTick();
+    expect(coreWorld.getField(rig.state.world, hero, 'Input', 'targetX')).toBe(fixed.fromFloat(3));
   });
 
   it('pause/resume доезжают до машины состояний мира', () => {

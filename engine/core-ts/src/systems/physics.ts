@@ -68,6 +68,23 @@ export type { Bounds, StaticCollider } from './collisionGeometry.js';
 export const BLOCKS_MOVEMENT = 'blocksMovement';
 export const BLOCKS_VISION = 'blocksVision';
 
+/**
+ * События физики (PHYS-9, PHYS-12): тип → имена полей его данных.
+ *
+ * Перечень здесь, а не у потребителя, потому что эти события эмитит МЕХАНИЗМ, а
+ * не сцена действием `emitEvent`: обходом документа игры их не найти, и список,
+ * переписанный рядом с игрой, пережил бы переименование молча — ровно тот отказ,
+ * который читатель журнала боя (DIAG-10) увидит как пропавший факт.
+ */
+export const PHYSICS_EVENTS = {
+  Collision: ['entity', 'other', 'nx', 'ny'],
+  Overlap: ['entity', 'other'],
+} as const;
+
+/** Имена типов берутся у перечня: переименование мимо него не компилируется. */
+const COLLISION_EVENT: keyof typeof PHYSICS_EVENTS = 'Collision';
+const OVERLAP_EVENT: keyof typeof PHYSICS_EVENTS = 'Overlap';
+
 /** Обрыв блокирует и движение, и обзор (TERR-5); массив общий на все отрезки. */
 const CLIFF_TAGS: readonly string[] = [BLOCKS_MOVEMENT, BLOCKS_VISION];
 
@@ -379,7 +396,7 @@ export class PhysicsSystem implements System {
             // Политике (отскок, кнокбэк, урон о стену) нужна сторона удара, а
             // не факт остановки.
             const normal = surfaceNormal(move, collider.shape, this.blocker);
-            ctx.events.emit('Collision', {
+            ctx.events.emit(COLLISION_EVENT, {
               entity: mover,
               other: this.blocker.other,
               nx: normal.x,
@@ -410,7 +427,7 @@ export class PhysicsSystem implements System {
         // задевает их пачкой. Событие на пару за тик по PHYS-12 ровно одно,
         // сколько бы звеньев ни попало в объём.
         if (this.physicsWorld.queryByLayer(executed, hitMask).length > 0) {
-          ctx.events.emit('Overlap', { entity: mover, other: STATIC_COLLIDER });
+          ctx.events.emit(OVERLAP_EVENT, { entity: mover, other: STATIC_COLLIDER });
         }
         // Динамика индекса не имеет, и её обход — тот же объём работы
         // broad-phase, что и обход клеток у статики (PERF-3). Считается в
@@ -425,7 +442,7 @@ export class PhysicsSystem implements System {
           const position = positionOf(other);
           const otherCollider = colliderOf(ctx.get, other, this.colliderComponent);
           if (overlaps(executed, boundsAt(position.x, position.y, otherCollider))) {
-            ctx.events.emit('Overlap', { entity: mover, other });
+            ctx.events.emit(OVERLAP_EVENT, { entity: mover, other });
           }
         }
         countCostBroadPhase(pairs);

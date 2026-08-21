@@ -7,7 +7,8 @@
  * Имена компонентов — параметры, а не конвенция ядра: о вводе ядро не знает.
  * Имена полей компонента ввода фиксированы, их пишет эта система.
  */
-import type { EntityId, InputFrame, System, SystemContext } from '../types.js';
+import { componentSchema } from '../ecs/world.js';
+import type { EntityId, InputFrame, System, SystemContext, WorldState } from '../types.js';
 
 export interface InputSystemOptions {
   /** Порядок задаёт слоты: индекс игрока в списке и есть его слот (TICK-5). */
@@ -18,10 +19,29 @@ export interface InputSystemOptions {
   /** Компонент со слотом игрока и имя его поля. */
   readonly slotComponent?: string;
   readonly slotField?: string;
+  /**
+   * Раскладывать ли точку прицела кадра (TICK-2) в `INPUT_TARGET_FIELDS`.
+   * Решает СЦЕНА — объявлением полей у своего компонента ввода, — а вычисляет
+   * ответ сборка (`inputTargetDeclared`): системе мир на конструировании не
+   * передают, а спрашивать состав полей на каждом тике незачем — он неизменен.
+   *
+   * Умолчание `false`, и это не осторожность: сцена, точкой не пользующаяся,
+   * не получает ни полей, ни записей в них, и её эталоны от появления точки в
+   * протоколе не меняются вовсе.
+   */
+  readonly target?: boolean;
 }
 
 /** Что система пишет в компонент ввода. `prevButtons` — маска прошлого тика (TICK-4). */
 export const INPUT_FIELDS = ['aimDir', 'buttons', 'moveX', 'moveY', 'prevButtons', 'seq'] as const;
+
+/**
+ * Пара полей точки прицела (TICK-2, TICK-4) — НЕОБЯЗАТЕЛЬНАЯ часть компонента
+ * ввода: пишется, только если сцена объявила обе. Имена совпадают с теми, что
+ * читает платформа способностей (`systems/abilities/model.ts`), и это одно и то
+ * же соглашение, а не два совпавших.
+ */
+export const INPUT_TARGET_FIELDS = ['targetX', 'targetY'] as const;
 
 /** Якорь шкалы `order` (DET-9); параметром сборки не является. */
 const ANCHOR_ORDER = -1000;
@@ -33,12 +53,28 @@ const DEFAULTS = {
   slotField: 'slot',
 } as const;
 
+/**
+ * Объявила ли сцена у своего компонента ввода пару полей точки прицела (TICK-4).
+ * Спрашивается один раз, на сборке: состав полей компонента неизменен, а
+ * ответ — параметр `InputSystem`.
+ *
+ * Обе половины или ни одной: точка с одной координатой — не точка, и молча
+ * раскладывать её половину значило бы отдать способности координату, второй у
+ * которой не будет никогда.
+ */
+export function inputTargetDeclared(world: WorldState, component: string = DEFAULTS.component): boolean {
+  const schema = componentSchema(world, component);
+  if (schema === undefined) return false;
+  return INPUT_TARGET_FIELDS.every((field) => schema.fields[field] !== undefined);
+}
+
 export class InputSystem implements System {
   readonly name: string;
   readonly order = ANCHOR_ORDER;
   private readonly component: string;
   private readonly slotComponent: string;
   private readonly slotField: string;
+  private readonly target: boolean;
   private readonly slots: ReadonlyMap<string, number>;
 
   constructor(options: InputSystemOptions) {
@@ -46,6 +82,7 @@ export class InputSystem implements System {
     this.component = options.component ?? DEFAULTS.component;
     this.slotComponent = options.slotComponent ?? DEFAULTS.slotComponent;
     this.slotField = options.slotField ?? DEFAULTS.slotField;
+    this.target = options.target ?? false;
 
     const slots = new Map<string, number>();
     options.players.forEach((playerId, slot) => {
@@ -92,6 +129,12 @@ export class InputSystem implements System {
 
     if (frame === undefined) {
       // Значения прошлого тика дали бы залипшее движение, неотличимое от намеренного.
+      //
+      // Точки прицела это обнуление НЕ касается, как не касается оно `aimDir`
+      // и `seq`: она — величина класса «последнее известное состояние ввода», а
+      // не намерения (TICK-2). Обнулённая, она означала бы «игрок целится в
+      // начало координат» — намерение, которого он не выражал, и цепочка
+      // прицеливания рвалась бы от одного пропущенного кадра.
       set('buttons', 0);
       set('moveX', 0);
       set('moveY', 0);
@@ -102,5 +145,11 @@ export class InputSystem implements System {
     set('moveX', frame.move.x);
     set('moveY', frame.move.y);
     set('seq', frame.seq);
+    // Кадр без точки её тоже не гасит: источник, точкой не владеющий, молчит о
+    // ней, а не сообщает начало координат (TICK-2, `input-devices` INP-5).
+    if (this.target && frame.target !== undefined) {
+      set(INPUT_TARGET_FIELDS[0], frame.target.x);
+      set(INPUT_TARGET_FIELDS[1], frame.target.y);
+    }
   }
 }

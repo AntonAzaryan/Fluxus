@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { runScenario, runScenarioBytes, snapshotToPlain } from '@game-mvp/core';
 import type { BotBrainFactory } from '../src/brain.js';
 import { BotHost } from '../src/host.js';
-import { classicBrain } from '../src/brains/classic/classicBrain.js';
+import { evaluatedBrain } from '../src/brains/evaluated/evaluatedBrain.js';
 import {
   connectBot,
   connectHuman,
@@ -19,6 +19,7 @@ import {
   harness,
   settle,
   stepMatch,
+  testBehavior,
   testProfile,
   STEP,
 } from './fixtures.js';
@@ -50,7 +51,7 @@ describe('реплей матча с ботом (BOT-5)', () => {
     const bots = new BotHost();
     const seat = connectBot(fixture, bots, {
       playerId: 'bot-1',
-      brain: counting(classicBrain(), counters),
+      brain: counting(evaluatedBrain({ behavior: testBehavior() }), counters),
       profile: testProfile(),
     });
     await settle();
@@ -79,7 +80,7 @@ describe('реплей матча с ботом (BOT-5)', () => {
     const bots = new BotHost();
     const seat = connectBot(fixture, bots, {
       playerId: 'bot-1',
-      brain: classicBrain(),
+      brain: evaluatedBrain({ behavior: testBehavior() }),
       profile: testProfile(),
     });
     await settle();
@@ -93,6 +94,65 @@ describe('реплей матча с ботом (BOT-5)', () => {
     const text = JSON.stringify(scenario.inputs);
     expect(text).not.toContain('profile');
     expect(text).not.toContain('brain');
+    bots.dispose();
+  });
+
+  /**
+   * То же, но профилем НОВОГО вида (BOT-6): бот отдаёт точку прицела и биты
+   * подтверждения, они уезжают проводом (`netcode-transport` NTR-7) и ложатся в
+   * канонический `inputs[]`. Реплей от записанных вводов обязан быть побитовым
+   * и здесь — иначе точка на проводе стала бы каналом недетерминизма (CLI-10).
+   */
+  it('матч с фазовым кастом бота воспроизводится побитово от записанных вводов', async () => {
+    const fixture = harness(duelConfig());
+    const human = connectHuman(fixture, 'p1');
+    const bots = new BotHost();
+    const seat = connectBot(fixture, bots, {
+      playerId: 'bot-1',
+      brain: evaluatedBrain({ behavior: testBehavior() }),
+      profile: testProfile({
+        abilities: [
+          {
+            name: 'fireball',
+            button: 0,
+            target: 'enemy',
+            range: 20,
+            holdTicks: 1,
+            cooldownTicks: 10,
+            weight: 1,
+            cast: {
+              slotIndex: 0,
+              commit: 'confirm' as const,
+              confirmButton: 8,
+              cancelButton: 9,
+              holdTicks: 3,
+              cancelChance: 0,
+              giveUpTicks: 12,
+              steps: [
+                { aim: 'enemy', confirmDelayTicks: 1, pointNoise: 0 },
+                { aim: 'self', confirmDelayTicks: 1, pointNoise: 0 },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    await settle();
+    for (let i = 0; i < 40; i++) await stepMatch(fixture, [human.host, seat]);
+
+    const scenario = fixture.server.toScenario();
+    // Точка и бит подтверждения ДЕЙСТВИТЕЛЬНО доехали до канонического лога:
+    // без этого тест проверял бы реплей пустого потока.
+    const botFrames = (scenario.inputs ?? []).filter((frame) => frame.playerId === 'bot-1');
+    expect(botFrames.some((frame) => frame.target !== undefined)).toBe(true);
+    expect(botFrames.some((frame) => (frame.buttons & (1 << 8)) !== 0)).toBe(true);
+
+    const replay = runScenario(scenario);
+    expect(replay.ticks[replay.ticks.length - 1]).toEqual(
+      snapshotToPlain(fixture.server.snapshot()),
+    );
+    const first = Buffer.from(runScenarioBytes(scenario));
+    expect(Buffer.from(runScenarioBytes(scenario)).equals(first)).toBe(true);
     bots.dispose();
   });
 });

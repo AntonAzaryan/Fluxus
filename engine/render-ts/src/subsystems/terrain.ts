@@ -47,9 +47,12 @@ import {
   type QualityValues,
   type RenderContext,
   type RenderSubsystem,
+  type ShadowCasterSink,
   type TickView,
 } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
+import type { DebugSource } from '../debug/contract.js';
+import { terrainSurfaceDebugSource } from '../debug/terrainSource.js';
 import { cornerLevels, type SurfaceNormal, type VisualSurface } from '../visualSurface.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 
@@ -436,6 +439,13 @@ export interface TerrainOptions {
   readonly wallColor?: number;
   /** Источник визуальной поверхности (REND-9); нет — плоские ступени REND-7. */
   readonly surface?: VisualSurfaceSource;
+  /**
+   * Приёмник теневых кастеров подсистемы освещения (REND-8). Геометрия террейна
+   * — статический ярус: она меняется правкой документа (REND-14), а не кадром,
+   * и её тень живёт в кэшированной карте. Нет приёмника — сцена без света, и
+   * флагов теней меши чанков не получают вовсе.
+   */
+  readonly shadows?: ShadowCasterSink;
 }
 
 const DEFAULT_CHUNK_SIZE = 16;
@@ -459,6 +469,7 @@ export class TerrainSubsystem implements RenderSubsystem {
   private readonly floorColor: number;
   private readonly wallColor: number;
   private readonly surfaceSource: VisualSurfaceSource | undefined;
+  private readonly shadows: ShadowCasterSink | undefined;
 
   private ctx: RenderContext | null = null;
   private heightStep = 1;
@@ -485,6 +496,7 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.floorColor = options.floorColor ?? DEFAULT_FLOOR_COLOR;
     this.wallColor = options.wallColor ?? DEFAULT_WALL_COLOR;
     this.surfaceSource = options.surface;
+    this.shadows = options.shadows;
     this.floor = new Uint8Array(grid.floor);
     this.chunksX = Math.ceil(grid.width / this.chunkSize);
     this.chunksY = Math.ceil(grid.height / this.chunkSize);
@@ -527,6 +539,23 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.allocateChunks();
     this.markAllChunks(cost);
     this.flushDirty(cost);
+  }
+
+  /**
+   * Снос подсистемы (REND-31): геометрии чанков пола и стен и два разделяемых
+   * материала — всё, что подсистема положила в GPU. Источник визуальной
+   * поверхности сюда не входит: он приходит опцией сборки и принадлежит ей, а
+   * не подсистеме (REND-8).
+   */
+  dispose(): void {
+    this.clearMeshes(false);
+    this.floorMeshes = [];
+    this.wallMeshes = [];
+    this.dirtyChunks.clear();
+    this.floorMaterial?.dispose();
+    this.floorMaterial = null;
+    this.wallMaterial?.dispose();
+    this.wallMaterial = null;
   }
 
   /**
@@ -624,6 +653,28 @@ export class TerrainSubsystem implements RenderSubsystem {
   }
 
   /**
+   * Отладочный источник поверхности (`render-debug` RDBG-1, REND-27): сетка,
+   * рампы, дыры пола и walkable-вклад — то самое поле высот, по которому
+   * построена геометрия и посажены инстансы (REND-9). Данные принадлежат
+   * подсистеме, поэтому и объявляет их она, а не отладочный слой.
+   */
+  debugSources(): readonly DebugSource[] {
+    return [
+      terrainSurfaceDebugSource({
+        grid: () => this.grid,
+        surface: () => this.surfaceSource?.current ?? null,
+        // Живая карта пола подсистемы (TERR-6), а не начальная из ассета:
+        // выбитая доставкой клетка обязана быть видна дырой сразу.
+        floorBits: () => this.floor,
+        // Приём сетки — точка входной границы рендера (REND-1, TERR-2).
+        tileWorldUnits: () => this.grid.tileSize / FIXED_ONE,
+        heightStepWorldUnits: () => this.heightStep,
+        curvatureTessellation: () => this.tessellation,
+      }),
+    ];
+  }
+
+  /**
    * Потолок плотности разбиения от пресета (QUAL-1, design D3): действующая
    * плотность = min(конфига рендера, потолка). Конфиг остаётся авторским — его
    * подбирает тот, кто смотрит на арену (REND-9), — а пересборка геометрии всех
@@ -697,16 +748,30 @@ export class TerrainSubsystem implements RenderSubsystem {
     }
   }
 
-  /** Другая арена: сцена очищается и раскладка чанков считается заново. */
-  private resetGrid(next: TerrainGrid): void {
+  /**
+   * Снимает нарисованные чанки со сцены и освобождает их геометрии. Общее у
+   * смены арены (REND-14) и сноса подсистемы (REND-31); разделяемые материалы
+   * переживают первое и отдаются на втором.
+   */
+  private clearMeshes(dropCasters: boolean): void {
     const ctx = this.ctx;
-    if (ctx !== null) {
-      for (const mesh of [...this.floorMeshes, ...this.wallMeshes]) {
+    for (const list of [this.floorMeshes, this.wallMeshes]) {
+      for (const mesh of list) {
         if (mesh === null) continue;
-        ctx.scene.remove(mesh);
+        // Меш прежней арены уходит и из реестра теневых кастеров (REND-8): в
+        // сцене его больше нет, а оставшаяся ссылка держала бы снятую геометрию
+        // и считала бы её кадру — тем же порядком, что у пересборки чанка. На
+        // сносе реестр не трогается вовсе: своё освещение снимает само (REND-31).
+        if (dropCasters) this.shadows?.dropCaster(mesh);
+        ctx?.scene.remove(mesh);
         mesh.geometry.dispose();
       }
     }
+  }
+
+  /** Другая арена: сцена очищается и раскладка чанков считается заново. */
+  private resetGrid(next: TerrainGrid): void {
+    this.clearMeshes(true);
     this.grid = next;
     this.floor = new Uint8Array(next.floor);
     this.chunksX = Math.ceil(next.width / this.chunkSize);
@@ -771,6 +836,9 @@ export class TerrainSubsystem implements RenderSubsystem {
     const ctx = this.ctx;
     if (ctx === null) return previous;
     if (previous !== null) {
+      // Пересобранный чанк — другой меш: прежний уходит из реестра кастеров
+      // вместе со сценой, а вместе с ним устаревает и кэшированная карта теней.
+      this.shadows?.dropCaster(previous);
       ctx.scene.remove(previous);
       previous.geometry.dispose();
     }
@@ -778,6 +846,9 @@ export class TerrainSubsystem implements RenderSubsystem {
     const mesh = new THREE.Mesh(toBufferGeometry(data), material);
     mesh.name = name;
     ctx.scene.add(mesh);
+    // Террейн — статический кастер и приёмник теней при любом режиме, кроме
+    // `none`: флаги расставляет сам приёмник, он один знает режим и фазу.
+    this.shadows?.setCaster(mesh, 'static');
     return mesh;
   }
 }

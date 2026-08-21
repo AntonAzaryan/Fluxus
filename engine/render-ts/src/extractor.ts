@@ -350,6 +350,10 @@ export class Extractor {
     this.ensureCapacity(alive.length);
     let count = 0;
     out.statPairs = 0;
+    // Индекс слотов способностей на кадр (ABIL-1): статы слотовой формы
+    // адресуют спутника владельца, и искать его на каждую запись каждой
+    // сущности значило бы обходить слоты по разу на стат.
+    this.stats.beginFrame(state);
     // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
     for (let i = 0; i < alive.length; i++) {
       const entity = alive[i]!;

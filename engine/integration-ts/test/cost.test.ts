@@ -388,12 +388,24 @@ describe('PERF-4: голден-гейт стоимости на записанн
     // ультра показывает его как есть, производительный режим ограничивает.
     expect(ultra.maskResolution).toBe(MATCH_STAND.resolution);
     expect(performance.maskResolution).toBe(BENCH_PRESETS.performance['fog.maskResolution']);
-    // Полномасочная работа растёт квадратом разрешения — вдвое грубее маска
-    // вчетверо дешевле, и ровно эту строку диффа гейт и заводился стеречь.
+    // Полномасочная работа ПЕРЕСТРОЙКИ растёт квадратом разрешения — вдвое
+    // грубее маска вчетверо дешевле, и ровно эту строку диффа гейт и заводился
+    // стеречь. Перестроек у двух пресетов поровну: их каденс задаёт доставка.
     expect(ultra.render.fogMaskClearTexels).toBe(4 * performance.render.fogMaskClearTexels);
     expect(ultra.render.fogMaskSmoothTexels).toBe(4 * performance.render.fogMaskSmoothTexels);
-    expect(ultra.render.fogMaskUploadBytes).toBe(4 * performance.render.fogMaskUploadBytes);
-    expect(ultra.render.fogMinimapTexels).toBe(4 * performance.render.fogMinimapTexels);
+    // ОДНА загрузка текстуры — тоже ровно вчетверо (растр уезжает целиком), а
+    // вот самих загрузок у грубой маски меньше: кадр рассеивания заводится
+    // только там, где растр ДЕЙСТВИТЕЛЬНО изменился, и грубый от мелкого шага
+    // наблюдателя нередко не меняется вовсе (design D5). Отсюда неравенство.
+    expect(ultra.render.fogMaskUploadBytes).toBeGreaterThanOrEqual(
+      4 * performance.render.fogMaskUploadBytes,
+    );
+    // Блит миникарты дорожает вместе с разрешением, но РОВНО вчетверо больше не
+    // выходит: он идёт по грязным блокам окна рассеивания (change
+    // `fog-mask-budgeted-rebuild`, design D5), а блок — фиксированные 16×16
+    // текселей. Грубая маска целиком укладывается в четыре блока, тонкая — в
+    // шестнадцать, и отношение задаёт зернистость окна, а не площадь растра.
+    expect(ultra.render.fogMinimapTexels).toBeGreaterThan(performance.render.fogMinimapTexels);
     // Доставка и кадр от пресета не зависят: сущностей столько же, подсистем
     // столько же — качество меняет подачу картинки, а не состав состояния (QUAL-2).
     expect(ultra.render.syncTickInstances).toBe(performance.render.syncTickInstances);
@@ -404,10 +416,13 @@ describe('PERF-4: голден-гейт стоимости на записанн
     const bench = matchBench(BENCH_PRESETS.performance);
 
     // Реестр стенда собран из деклараций ЕГО подсистем (design D1) в порядке
-    // регистрации: туман, террейн, модели (две ручки), частицы. Подсистема
-    // позиций ручек не имеет и в реестре не появляется — реестр собирается из
-    // того, что подсистемы объявили, а не из состава документа.
+    // регистрации: освещение (две ручки), туман, террейн, модели (две ручки),
+    // частицы. Подсистема позиций ручек не имеет и в реестре не появляется —
+    // реестр собирается из того, что подсистемы объявили, а не из состава
+    // документа.
     expect(bench.quality.knobs.map((knob) => knob.name)).toEqual([
+      'lighting.shadowMode',
+      'lighting.shadowMapSize',
       'fog.maskResolution',
       'terrain.curvatureTessellation',
       'models.lodThresholdScale',
@@ -433,7 +448,7 @@ describe('PERF-4: голден-гейт стоимости на записанн
   });
 });
 
-// ------------------- счётчики подсистем стенда (models/particles/terrain)
+// ------- счётчики подсистем стенда (lighting/models/particles/terrain)
 
 /**
  * Префиксы счётчиков подсистем стенда (change `bench-stand-subsystems`, D1):
@@ -441,14 +456,14 @@ describe('PERF-4: голден-гейт стоимости на записанн
  * ОБЪЯВЛЕНИЯ пакета (`COST_COUNTER_STAGES`), а не выписывается здесь: новый
  * счётчик подсистемы обязан попасть под эти проверки сам, без правки теста.
  */
-const SUBSYSTEM_PREFIXES = ['models', 'particles', 'terrain'] as const;
+const SUBSYSTEM_PREFIXES = ['lighting', 'models', 'particles', 'terrain'] as const;
 
 function countersOf(prefix: string): (keyof RenderCostCounters)[] {
   const names = Object.keys(COST_COUNTER_STAGES) as (keyof RenderCostCounters)[];
   return names.filter((name) => name.startsWith(prefix));
 }
 
-describe('PERF-4: работа моделей, частиц и террейна видна эталону', () => {
+describe('PERF-4: работа освещения, моделей, частиц и террейна видна эталону', () => {
   for (const prefix of SUBSYSTEM_PREFIXES) {
     it(`${prefix}: счётчики объявлены и на записанном матче не мёртвые`, () => {
       const names = countersOf(prefix);
@@ -485,6 +500,30 @@ describe('PERF-4: работа моделей, частиц и террейна 
     expect(run.render.particlesInstancesAcquired).toBe(1);
     expect(run.render.particlesShellsPosed).toBe(ticks);
     expect(run.render.particlesSystemsStepped).toBe(ticks);
+  });
+
+  it('освещение: full платит обоими ярусами кастеров покадрово, hybrid — перерисовками кэша', () => {
+    const performance = runMatch('match-walk', 'performance').render; // потолок hybrid
+    const ultra = runMatch('match-walk', 'ultra').render; // авторский full
+    const ticks = loadRecording('match-walk').ticks;
+
+    // В `full` карта одна и покадровая: оба яруса — чанк террейна и батчи
+    // моделей — попадают в неё каждым кадром, а перерисовок кэша нет вовсе:
+    // кэш — механика `hybrid`, и его счётчик в `full` не двигается (REND-30).
+    expect(ultra.lightingStaticCasters).toBeGreaterThan(0);
+    expect(ultra.lightingDynamicCasters).toBeGreaterThan(0);
+    expect(ultra.lightingStaticRebuilds).toBe(0);
+    // В `hybrid` кэш статики устаревает КАЖДЫМ кадром: импульс пола стенда
+    // пересобирает чанк, пересборка перерегистрирует его кастером. Перерисовка
+    // кэша при этом НЕ голодит динамическую карту (REND-30): фазы чередуются,
+    // и на непрерывном потоке событий инвалидации каждая карта получает свой
+    // кадр через один. Отсюда половина перерисовок от числа кадров и ненулевая
+    // динамика — именно это число раньше лежало нулём (PERF-2, proposal «Why»).
+    expect(performance.lightingStaticRebuilds).toBe(Math.ceil(ticks / 2));
+    expect(performance.lightingDynamicCasters).toBeGreaterThan(0);
+    // Статика рисуется в `full` каждым кадром, а в `hybrid` — через кадр: те же
+    // корни, вдвое реже.
+    expect(performance.lightingStaticCasters * 2).toBe(ultra.lightingStaticCasters);
   });
 
   it('террейн: импульс пола помечает чанк каждой доставкой, кадр его пересобирает', () => {

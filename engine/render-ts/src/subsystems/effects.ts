@@ -181,6 +181,8 @@ export class EffectsSubsystem implements RenderSubsystem {
 
   /** Последнее доставленное состояние: по нему считается поза кадра (REND-2). */
   private view: TickView | null = null;
+  /** Кэш имён таблицы состояний манифеста; null — пересобрать (REND-17). */
+  private stateNames: readonly string[] | null = null;
 
   constructor(manifest: VisualManifest, options: EffectsOptions = {}) {
     this.manifest = manifest;
@@ -201,6 +203,24 @@ export class EffectsSubsystem implements RenderSubsystem {
     this.options.surface?.init(ctx);
     this.geometry ??= new THREE.SphereGeometry(1, SPHERE_SEGMENTS, SPHERE_RINGS);
     ctx.scene.add(this.group);
+  }
+
+  /**
+   * Снос подсистемы (REND-31): материалы всех заведённых мешей — они
+   * пер-инстансны (цвет и альфа записи), — и одна разделяемая геометрия
+   * примитива. Живые оболочки и вспышки сперва возвращаются в пул, чтобы
+   * освобождение шло одним проходом по нему, а не тремя по разным спискам.
+   */
+  dispose(): void {
+    for (const shell of this.shells.values()) this.release(shell.node);
+    this.shells.clear();
+    for (const flash of this.flashes) this.release(flash.node);
+    this.flashes = [];
+    for (const node of this.pool) node.material.dispose();
+    this.pool.length = 0;
+    this.geometry?.dispose();
+    this.geometry = null;
+    this.group.removeFromParent();
   }
 
   /**
@@ -260,6 +280,7 @@ export class EffectsSubsystem implements RenderSubsystem {
   applyManifest(next: VisualManifest): void {
     if (next === this.manifest) return;
     this.manifest = next;
+    this.stateNames = null;
     // Сведение оболочек с новым документом — обычным проходом по последнему
     // доставленному состоянию: правило «какие оболочки существуют» одно, и
     // второй его копии для переподачи не заводится (REND-17).
@@ -303,8 +324,11 @@ export class EffectsSubsystem implements RenderSubsystem {
     const live = this.liveShells;
     live.clear();
     const states = this.manifest.effects?.byState;
-    // Имена таблицы состояний снимаются один раз на тик, а не на сущность.
-    const stateNames = states === undefined ? NO_STATE_NAMES : Object.keys(states);
+    // Имена таблицы состояний снимаются один раз на МАНИФЕСТ, а не на доставку:
+    // список меняется только переподачей (REND-17), и массив имён на каждую
+    // доставку был бы мусором на ровном месте.
+    const stateNames = (this.stateNames ??=
+      states === undefined ? NO_STATE_NAMES : Object.keys(states));
     for (const entityView of view.entities.values()) {
       // Оболочка визуального типа: живёт, пока жива сущность такого типа.
       if (entityView.kind !== null) {

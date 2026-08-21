@@ -23,6 +23,7 @@ import {
   buildSimulation,
   world as coreWorld,
   type ComponentSchema,
+  type DiagnosticsSink,
   type LocomotionOptions,
   type PhysicsOptions,
   type PlainWorld,
@@ -53,6 +54,14 @@ export interface MatchWorldDef {
    * этого поля — отказ сборки (см. `buildMatchWorld`).
    */
   readonly visibility?: VisibilityOptions;
+  /**
+   * Приёмник трейса (DIAG-8, DIAG-1) — та же опциональная зависимость сборки
+   * (DI-5), какой его передаёт прогонщик сценария. Дорога уже существует: ядро
+   * нового API не получает, и «матчевость» прогона ему по-прежнему неизвестна
+   * (DI-6). Поле здесь, а не в `SceneDef`, по тому же основанию, что физика:
+   * это зависимость сборки, а не данные сцены (DI-3).
+   */
+  readonly diagnostics?: DiagnosticsSink;
 }
 
 export interface MatchWorld {
@@ -98,7 +107,13 @@ export function buildMatchWorld(def: MatchWorldDef): MatchWorld {
       ...(def.locomotion !== undefined ? { locomotion: def.locomotion } : {}),
       ...(def.visibility !== undefined ? { visibility: def.visibility } : {}),
     },
-    { where: 'конфиг матча' },
+    {
+      where: 'конфиг матча',
+      // Трейс матча снимается ровно тем же способом, что трейс прогона
+      // сценария (DIAG-8): подключением sink'а к сборке мира. Своего пути у
+      // матча здесь нет и появиться не должно.
+      ...(def.diagnostics !== undefined ? { diagnostics: def.diagnostics } : {}),
+    },
   );
 }
 

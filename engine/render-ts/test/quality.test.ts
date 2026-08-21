@@ -46,6 +46,7 @@ import {
   type RenderSubsystem,
 } from '../src/index.js';
 import {
+  buildFogMask,
   flatGrid,
   makeAssets,
   makeEntityView,
@@ -474,13 +475,17 @@ describe('fog.maskResolution — потолок над сценным значе
   it('смена потолка в рантайме идёт живой подсистемой — пересборки рендера нет', () => {
     const { stage, fog } = fogRig({ resolution: 8 });
     const controller = new QualityController(stage, {});
+    // Растр строит кадр порциями, а не доставка (change
+    // `fog-mask-budgeted-rebuild`, design D1).
     fog.syncTick(makeTickView([observer(4, 4, 3)]));
+    buildFogMask(fog);
     expect(fog.visibility.valueAt(4, 4)).toBe(1);
 
     controller.apply({ 'fog.maskResolution': 2 });
 
     expect(fog.visibility.texelsPerUnit).toBe(2);
     fog.syncTick(makeTickView([observer(4, 4, 3)]));
+    buildFogMask(fog);
     expect(fog.visibility.valueAt(4, 4)).toBe(1);
   });
 
@@ -488,6 +493,7 @@ describe('fog.maskResolution — потолок над сценным значе
     const { stage, fog } = fogRig({ resolution: 8, conservatism: 0.9, edgeWidth: 0 });
     const controller = new QualityController(stage, {});
     fog.syncTick(makeTickView([observer(4, 4, 3)]));
+    buildFogMask(fog);
     // Визуал уже консервативнее геймплея: 3 × 0.9 = 2.7. Проверочная точка —
     // на самом геймплейном радиусе, а не вплотную к визуальному: блюр кромки
     // (FOW-7) переносит свет до текселя за геометрию круга (0.125 юнита на
@@ -498,6 +504,7 @@ describe('fog.maskResolution — потолок над сценным значе
 
     controller.apply({ 'fog.maskResolution': 2 });
     fog.syncTick(makeTickView([observer(4, 4, 3)]));
+    buildFogMask(fog);
 
     // Грубая маска ошибается в ту же сторону: показать лишний туман можно,
     // открыть скрытое — нет. Радиус геймплея наружу не выходит.

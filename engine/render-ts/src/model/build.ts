@@ -254,6 +254,35 @@ export interface ModelBounds {
  * Модель без вершин даёт вырожденный объём (все нули) — и это верно: рисовать
  * там нечего, значит и попадать не во что.
  */
+/**
+ * Кэш канонических границ по идентичности модели и подписи скрытых частей:
+ * полный проход по вершинам — работа на АССЕТ, а не на инстанс (REND-3).
+ * Всплеск открытия обзора (FOW-8) монтирует пачку инстансов одной модели за
+ * одну доставку, и повторный скан вершин на каждый — плата ни за что.
+ * Возвращённый объект разделяемый: читается всеми, не правится никем —
+ * потребители копируют его в свои структуры (`setScale`, `boundsFromBaked`).
+ */
+const boundsCache = new WeakMap<NormalizedModel, Map<string, ModelBounds>>();
+
+export function cachedModelBounds(
+  model: NormalizedModel,
+  hiddenParts?: readonly number[],
+): ModelBounds {
+  // Пустой набор скрытых частей и его отсутствие дают одни границы — ключ общий.
+  const key = hiddenParts === undefined || hiddenParts.length === 0 ? '' : hiddenParts.join(',');
+  let byParts = boundsCache.get(model);
+  if (byParts === undefined) {
+    byParts = new Map();
+    boundsCache.set(model, byParts);
+  }
+  let bounds = byParts.get(key);
+  if (bounds === undefined) {
+    bounds = modelBounds(model, hiddenParts);
+    byParts.set(key, bounds);
+  }
+  return bounds;
+}
+
 export function modelBounds(
   model: NormalizedModel,
   hiddenParts?: readonly number[],
@@ -451,8 +480,9 @@ export function createModelInstance(
   // смещения по z нет (нормализованная высота считается от него).
   const height = Math.max(shared.model.height, 1e-3);
   // Габариты инстанса — те же канонические границы под тем же множителем:
-  // одно число, а не два похожих (REND-15).
-  const canonical = modelBounds(shared.model, options.hiddenParts);
+  // одно число, а не два похожих (REND-15). Из кэша: скан вершин — на ассет,
+  // не на инстанс.
+  const canonical = cachedModelBounds(shared.model, options.hiddenParts);
   const bounds: ModelBounds = { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
   // Постановка масштаба и пересчёт габаритов — одна операция, потому что второй
   // ответ на вопрос «какого размера нарисованный инстанс» разошёлся бы с первым.

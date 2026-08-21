@@ -1,19 +1,9 @@
 {
-  "schema": 2,
+  "schema": 3,
   "name": "normal",
-  "reaction": {
-    "delayTicks": 8,
-    "jitterTicks": 4,
-    "memoryTicks": 180
-  },
-  "aim": {
-    "noiseDegrees": 4,
-    "noisePeriodTicks": 12
-  },
-  "decision": {
-    "intervalTicks": 6,
-    "jitterTicks": 3
-  },
+  "reaction": { "delayTicks": 8, "jitterTicks": 4, "memoryTicks": 180 },
+  "aim": { "noiseDegrees": 4, "noisePeriodTicks": 12 },
+  "decision": { "intervalTicks": 6, "jitterTicks": 3 },
   "movement": {
     "maxSpeed": 1,
     "arriveTolerance": 0.4,
@@ -22,15 +12,36 @@
     "strafe": 0.5,
     "strafePeriodTicks": 34
   },
+  "behavior": "bots/behaviors/classic.json",
   "abilities": [
     {
       "name": "cast",
       "button": 0,
+      "hands": "free",
       "target": "enemy",
       "range": 12,
-      "holdTicks": 30,
+      "holdTicks": 34,
       "cooldownTicks": 62,
-      "weight": 1
+      "weight": 1,
+      "cast": {
+        "slotIndex": 0,
+        "commit": "release",
+        "cancelButton": 9,
+        "steps": [{ "aim": "enemy", "confirmDelayTicks": 34, "pointNoise": 0.4 }],
+        "holdTicks": 34,
+        "cancelChance": 0.05,
+        "giveUpTicks": 150
+      }
+    },
+    {
+      "name": "throwHeld",
+      "button": 0,
+      "hands": "full",
+      "target": "enemy",
+      "range": 12,
+      "holdTicks": 1,
+      "cooldownTicks": 24,
+      "weight": 2.2
     },
     {
       "name": "slowDome",
@@ -44,11 +55,21 @@
     {
       "name": "capture",
       "button": 5,
+      "hands": "free",
       "target": "threat",
-      "range": 2.6,
+      "range": 5.2,
       "holdTicks": 1,
       "cooldownTicks": 125,
-      "weight": 1.6
+      "weight": 1.6,
+      "cast": {
+        "slotIndex": 2,
+        "commit": "release",
+        "cancelButton": 9,
+        "steps": [{ "aim": "threat", "confirmDelayTicks": 4, "pointNoise": 0.1 }],
+        "holdTicks": 4,
+        "cancelChance": 0,
+        "giveUpTicks": 60
+      }
     },
     {
       "name": "shield",
@@ -65,7 +86,7 @@
       "target": "threat",
       "range": 6.5,
       "holdTicks": 1,
-      "cooldownTicks": 30,
+      "cooldownTicks": 62,
       "weight": 1.5,
       "requiresMoving": true
     },
@@ -81,12 +102,5 @@
       "requiresMoving": true
     }
   ],
-  "utility": {
-    "pressure": 1,
-    "kite": 0.8,
-    "retreat": 1.2,
-    "dodge": 1.3
-  },
-  "aggression": 0.6,
   "seed": 2
 }

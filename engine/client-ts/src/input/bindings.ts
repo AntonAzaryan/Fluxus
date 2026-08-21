@@ -5,7 +5,12 @@
  * бит» — отдельный уровень данных, его проверяет `InputSampler`.
  */
 import type { GamepadBindings } from './gamepad.js';
-import type { KeyboardMouseBindings } from './keyboardMouse.js';
+import {
+  POINTER_MODIFIERS,
+  type KeyboardMouseBindings,
+  type PointerButtonBinding,
+  type PointerModifier,
+} from './keyboardMouse.js';
 import type { TouchBindings, TouchZone } from './touch.js';
 
 /** Раскладки всех устройств клиента; отсутствие секции — устройства нет. */
@@ -36,7 +41,7 @@ function validateKeyboardMouse(value: unknown): KeyboardMouseBindings {
   return {
     move: move as unknown as KeyboardMouseBindings['move'],
     keys: actionMap(kb.keys, 'keyboardMouse.keys'),
-    pointerButtons: actionMap(kb.pointerButtons, 'keyboardMouse.pointerButtons'),
+    pointerButtons: pointerMap(kb.pointerButtons, 'keyboardMouse.pointerButtons'),
   };
 }
 
@@ -59,6 +64,9 @@ function validateTouch(value: unknown): TouchBindings {
       ...(aim.deadzone !== undefined
         ? { deadzone: fraction(aim.deadzone, 'touch.aimStick.deadzone') }
         : {}),
+      ...(aim.aimReach !== undefined
+        ? { aimReach: reach(aim.aimReach, 'touch.aimStick.aimReach') }
+        : {}),
     };
   }
   if (touch.buttons !== undefined) {
@@ -79,6 +87,7 @@ function validateGamepad(value: unknown): GamepadBindings {
   const result: {
     moveAxes: readonly [number, number];
     aimAxes?: readonly [number, number];
+    aimReach?: number;
     deadzone: number;
     buttons: Readonly<Record<string, string>>;
   } = {
@@ -92,6 +101,7 @@ function validateGamepad(value: unknown): GamepadBindings {
     }
   }
   if (pad.aimAxes !== undefined) result.aimAxes = axes(pad.aimAxes, 'gamepad.aimAxes');
+  if (pad.aimReach !== undefined) result.aimReach = reach(pad.aimReach, 'gamepad.aimReach');
   return result;
 }
 
@@ -119,9 +129,60 @@ function actionMap(value: unknown, path: string): Readonly<Record<string, string
   return map as Record<string, string>;
 }
 
+/**
+ * Привязки кнопок указателя (INP-4): значение — имя действия либо объект с
+ * оговорками. Короткая форма остаётся законной, и ни один существующий документ
+ * от появления длинной не читается иначе.
+ */
+function pointerMap(value: unknown, path: string): Readonly<Record<string, PointerButtonBinding>> {
+  const map = record(value ?? {}, path);
+  const result: Record<string, PointerButtonBinding> = {};
+  for (const [key, binding] of Object.entries(map)) {
+    const at = `${path}.${key}`;
+    if (typeof binding === 'string') {
+      result[key] = nonEmptyString(binding, at);
+      continue;
+    }
+    const full = record(binding, at);
+    const action = nonEmptyString(full.action, `${at}.action`);
+    if (full.suppressedBy === undefined) {
+      result[key] = { action };
+      continue;
+    }
+    result[key] = { action, suppressedBy: modifiers(full.suppressedBy, `${at}.suppressedBy`) };
+  }
+  return result;
+}
+
+/** Набор модификаторов ЗАКРЫТ (`POINTER_MODIFIERS`): имя вне него — опечатка. */
+function modifiers(value: unknown, path: string): readonly PointerModifier[] {
+  if (!Array.isArray(value)) throw fail(path, 'ожидается массив имён модификаторов');
+  return value.map((name: unknown, i: number) => {
+    if (typeof name !== 'string' || !POINTER_MODIFIERS.includes(name as PointerModifier)) {
+      throw fail(
+        `${path}[${i}]`,
+        `ожидается одно из ${POINTER_MODIFIERS.join('|')}, получено ${JSON.stringify(name)}`,
+      );
+    }
+    return name as PointerModifier;
+  });
+}
+
 function fraction(value: unknown, path: string): number {
   if (typeof value !== 'number' || !(value >= 0) || value >= 1) {
     throw fail(path, 'ожидается число в [0..1)');
+  }
+  return value;
+}
+
+/**
+ * Мировые единицы на полный ход стика прицела (INP-1). Число положительное и
+ * конечное; верхней границы у него нет — это дальность органа управления, а не
+ * дальность способности, которой слой ввода не распоряжается (ABIL-5).
+ */
+function reach(value: unknown, path: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw fail(path, 'ожидается положительное число мировых единиц');
   }
   return value;
 }

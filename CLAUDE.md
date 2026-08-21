@@ -31,7 +31,7 @@ Game content lives in `content/` and never inside an engine package (`game-conte
 
 ## The spec is the source of truth
 
-`openspec/specs/` (34 capabilities, 405 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
+`openspec/specs/` (37 capabilities, 441 requirements) normatively defines what the engine must be. When implementation and spec diverge, the defect is in the implementation (CORE-3). Normative statements live **only** in the specs — do not duplicate them in docs or code.
 
 - Requirements carry historical IDs (`DET-1`, `NET-15`, `FOW-4`…) in `### Requirement:` headers — preserve them; a new requirement takes the next free number of its prefix.
 - Changes go through the OpenSpec workflow: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`, etc. (the `openspec-*` skills in `.claude/skills/`). Do not edit specs outside this process.
@@ -58,6 +58,8 @@ npm run lint      # from the root: eslint . --max-warnings 0
 npm run lint:all  # from the root: typecheck + eslint + knip + jscpd + depcruise
 npm run golden:cost # regenerate cost baselines (*.cost.json) — an explicit acceptance of a cost change
 npm run bench:demo  # manual browser bench of the demo arena vs a device profile — diagnostic, not a gate
+npm run bots:sync   # sync bot-profile ability entries from the scene + its <base>.bots.json annotations (BOT-13);
+                    # verification itself is a demo test inside npm run check — the CLI is the designer's pen, not the gate
 ```
 
 `npm run coverage` (root, `vitest.coverage.config.ts`) is a diagnostic, not a gate: no thresholds, and the percentage is not a goal. Read it as the list of what no test executes — a DSL operator exposed to content but never evaluated, a transport branch no match reaches. Run it package-by-package and it lies: `integration-ts` exercises core/net/render, so only the aggregate run counts. The aggregate covers everything the gate holds with tests — the engine packages, `editor/*`, `tools/blender-ts` and the demo app (measured at `app/`, it has no `src/`); outside it is `desktop/shell-ts` alone, because the Electron container stays outside the gate (DSK-6).
@@ -87,6 +89,23 @@ npm run import -- <src.glb> --watch                 # re-import on every save of
 `engine/tests/golden/` holds `*.scenario.json` / `*.golden.json` pairs — bitwise baselines of a scenario run. `match-*` pairs are recorded loopback matches (CLI-10): the scenario is written by `integration-ts` (`npm run record`), the golden by the core adapter. `golden.test.ts` compares them exactly; if behavior changed **deliberately and per spec**, regenerate with `npm run golden` from the repository root (re-records matches, then rewrites core baselines) and include the baseline diff in the commit. JSON schemas in `engine/schemas/` are generated from the core — never edit by hand, only via `npm run schemas`.
 
 `*.cost.json` beside them are the **cost baselines** (capability `performance-budget`, PERF-3/PERF-4): deterministic work counters — tick work from the core's `TICK_COST` diagnostics records, `syncTick`/`frame` counters of the render's cost sink — summed over the same recorded matches, sectioned per quality preset (`performance`/`ultra`, `tick` once — the sim is preset-independent, QUAL-2). They are part of the `npm run check` gate and machine-independent; a red diff is a real cost change, never noise. Regenerate **only** via `npm run golden:cost` from the root (deliberately not part of `npm run golden` — accepting a cost increase is its own decision) and include the diff in the commit. Wall-time numbers printed as `[bench] …` by `bench.test.ts` files are sentinels: they assert only order-of-magnitude degradation and must never gate harder (PERF-5). `npm run bench:demo` is the manual browser bench of the demo arena (PERF-7, diagnostic, not a gate): real Chromium over CDP, p50/p99 frame/stage timings against a reference device profile from `game/demo-ts/bench/profiles/` (data, tunable without code).
+
+Debugging a fight starts by reading a file, not by asking questions (capabilities `diagnostics` DIAG-8..10, `cli-testing` CLI-11..12). Two commands, run from the root:
+
+```sh
+npm run demo:debug                                  # a whole match, no human: bots take the slots, it ends by itself,
+                                                    # artifacts land in runs/latest/ (trace.jsonl, match.scenario.json,
+                                                    # journal.jsonl, run.json). --max-ticks, --out-dir, --port override it
+npm run sim -- <scenario.json> --trace=full --trace-out=trace.jsonl   # the same trace off a scenario run
+npm run sim -- runs/latest/match.scenario.json \
+  --trace=full --trace-select=event                                  # re-shoot a selected match trace from its recording
+npm run journal -- runs/latest/trace.jsonl \
+  --dict=game/demo-ts/app/journal/duel.dictionary.json               # trace → battle journal (jsonl; --format=text for columns)
+```
+
+Every flag of these commands takes both forms — `--trace=full` and `--trace full` — and the same `--trace-select` vocabulary (record kinds and codes) is parsed by one function for the scenario CLI and the match launchers alike (CLI-11).
+
+The trace is a JSONL stream of core diagnostics records plus host lines marking the branch of history (`{"mark":"live"|"replayBegin"|"replayEnd","epoch":…,"tick":…}`); drop the marks and you get exactly the trace a replay of the recording produces — that pairing is a test (DIAG-9). Hence the rule the debug run obeys: the recording (`match.scenario.json`) always lies next to the trace, because bots and humans generate the input, not a seed, and a trace with nothing to re-shoot it with is a dead end. A rewound match has no flat recording at all (NTR-16) — the run says so instead of writing a truncated one. Volume, measured on the demo arena: a full-level trace is ~53 MiB per minute of combat, `--trace-select=event` cuts it to ~460 KiB (`--trace=systems` is only ~1.7× cheaper than full and carries no events at all); selection is a sink-side predicate, never a fourth trace level (DIAG-9), and it never drops broken-invariant records (FP-4). The journal's `event type → semantics` dictionary is **game data** (`game/demo-ts/app/journal/`), not tool constants: a new effect is a line in that document, and an unknown type reaches the journal with unknown semantics and is named in the run report rather than vanishing. Traces and journals never enter golden baselines (CLI-7, CLI-12).
 
 Render quality presets (capability `render-quality`): subsystems declare cost knobs at registration (`QualityController` in `engine/render-ts`), preset documents are game policy in `game/demo-ts/app/presets/{performance,balanced,ultra}.json` — the demo defaults to `balanced` (persisted in localStorage), the editor viewport hardwires ultra inline. Ceiling-semantics knobs (e.g. `fog.maskResolution`) clamp the scene-authored value via `min(scene, ceiling)` and never mutate the scene document (FOW-10); presets must not change the simulation or player-visible information (QUAL-2). A new render feature whose per-frame cost grows with content must declare a knob or explicitly declare constant cost (QUAL-3).
 
@@ -123,4 +142,5 @@ A working discipline for `engine/core-ts`, not a defect-level rule like the list
 - `sim/` — `tick.ts`, worldInit, serialization (canonical JSON, plain world form), scene config, `HistoryProvider` (snapshot ring buffer), rewind/replay, per-client snapshot filter (`filter.ts`), `contentPackHash`.
 - `types.ts` — the contracts the layers meet on: `System`/`SystemContext`, the DI APIs (`MathApi`, `PhysicsApi`, `NavigationApi`, `TerrainApi`), `TickResult`, `InputFrame`.
 - `debug.ts` — the diagnostics sink and trace levels (capability `diagnostics`, DIAG-1..7; injected like the other APIs, DI-5). Push during a tick, unlike `TickResult`, which is read after it.
-- `bin/sim.mjs` — CLI scenario runner (the basis of golden tests and the future cross-language check against the Rust port).
+- `sim/journal.ts` — the battle journal (DIAG-10): a pure projection of a saved trace file into facts, with the `event type → semantics` mapping arriving as a document. Deliberately **not** exported from `src/index.ts` (CLI-8) — `bin/journal.mjs` imports it directly, the way `bin/sim.mjs` imports `sim/scenario.ts`.
+- `bin/sim.mjs` — CLI scenario runner (the basis of golden tests and the future cross-language check against the Rust port); `bin/journal.mjs` — the journal CLI (CLI-12); `bin/tsHook.mjs` — the resolve hook both of them register.

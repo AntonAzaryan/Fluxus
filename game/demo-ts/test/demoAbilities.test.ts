@@ -19,10 +19,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   FIXED_ONE,
+  LOCOMOTION_DODGE,
+  LOCOMOTION_NORMAL,
+  RingHistory,
+  createInputLog,
+  createRewindController,
   fixed,
   tick as simTick,
   world as coreWorld,
   type EntityId,
+  type InputFrame,
   type SceneDef,
   type SimulationState,
   type Simulation,
@@ -30,10 +36,15 @@ import {
 import { buildMatchWorld, REWIND_REQUEST_EVENT } from '@game-mvp/net';
 import { ViewBuffer, type TickView } from '@game-mvp/render';
 import {
+  ABILITY_SLOTS,
   ACTION_BITS,
+  CHARGE_PREVIEW_MIN_TICKS,
+  CHARGE_VISUAL,
   FIREBALL_LIFETIME_TICKS,
   RESPAWN_EVENT,
+  STATS,
   TICK_SECONDS,
+  chargeHeld,
   stateBit,
 } from '../app/sim.js';
 import { createDemoExtractor } from '../app/extractor.js';
@@ -77,6 +88,8 @@ const JUMP = 1 << ACTION_BITS.jump;
 const DOME = 1 << ACTION_BITS.slowDome;
 const CAPTURE = 1 << ACTION_BITS.capture;
 const SHIELD = 1 << ACTION_BITS.shield;
+const CONFIRM = 1 << ACTION_BITS.confirm;
+const CANCEL = 1 << ACTION_BITS.cancel;
 
 /** Прицел в единицах угла ядра (FP-7): полный оборот — 65536. */
 const AIM_EAST = 0;
@@ -92,6 +105,12 @@ const SLOW = 13107;
 const DOME_TICKS = 180;
 const DOME_COOLDOWN = 300;
 const CAPTURE_COOLDOWN = 120;
+/**
+ * Прежнее окно прицеливания захвата — секунда при 60 Гц. Своего `durationTicks`
+ * у фазы `aim` больше нет: она живёт, пока держат кнопку (ABIL-4). Число
+ * осталось мерой «заведомо дольше того, что раньше срывалось само».
+ */
+const CAPTURE_AIM_TICKS = 60;
 /**
  * `AbilityConfig.holdTicks`. Тик захвата тратит первый из них, поэтому окно
  * броска — `HOLD_TICKS − 1` = 120 тиков = ровно 2 с при 60 Гц.
@@ -137,6 +156,12 @@ interface Arena {
   readonly heroes: readonly EntityId[];
   /** Тик с явными вводами обоих слотов; возвращает номер тика. */
   step: (a: Frame, b?: Frame) => number;
+  /**
+   * Кадры ввода ПОСЛЕДНЕГО шага — ровно те, что ушли в тик. Нужны единственному
+   * тесту, который ведёт журнал вводов и перематывает мир: реплей внутри
+   * `seekTo` обязан исполнять те же входы, что и прямой ход (REW-4).
+   */
+  frames: () => readonly InputFrame[];
 }
 
 interface Frame {
@@ -145,6 +170,34 @@ interface Frame {
   /** Ось движения в Q16.16; манёвру уклона направление обязательно (LOC-4). */
   readonly moveX?: number;
   readonly moveY?: number;
+  /**
+   * Точка прицела кадра в Q16.16 (TICK-2). Не задана — считается из `aimDir`
+   * и позиции героя: цепочка прицеливания способностей читает ТОЧКУ (ABIL-5), а
+   * тесты этой сцены писались углом, и разъехаться этим двум нельзя.
+   */
+  readonly target?: { readonly x: number; readonly y: number };
+}
+
+/** Как далеко от героя ставится точка, выведенная из угла: за любой дальностью. */
+const AIM_REACH = 10 * FIXED_ONE;
+
+/**
+ * Точка прицела, эквивалентная углу: шаг `vector` определения нормирует
+ * `точка − владелец`, поэтому направление выстрела совпадает с `aimDir` до
+ * округления Q16.16.
+ */
+function aimPoint(
+  state: SimulationState,
+  hero: EntityId | undefined,
+  aimDir: number,
+): { x: number; y: number } {
+  const turns = (aimDir / FIXED_ONE) * Math.PI * 2;
+  const ox = hero === undefined ? 0 : coreWorld.getField(state.world, hero, 'Position', 'x');
+  const oy = hero === undefined ? 0 : coreWorld.getField(state.world, hero, 'Position', 'y');
+  return {
+    x: Math.round(ox + Math.cos(turns) * AIM_REACH),
+    y: Math.round(oy + Math.sin(turns) * AIM_REACH),
+  };
 }
 
 const NEUTRAL: Frame = {};
@@ -182,13 +235,14 @@ function arena(gap = 4, scene: SceneDef = SCENE): Arena {
     heroes[coreWorld.getField(built.state.world, entity, 'Player', 'slot')] = entity;
   }
   let tick = 0;
+  let last: readonly InputFrame[] = [];
   return {
     sim: built.sim,
     state: built.state,
     heroes,
     step(a, b = NEUTRAL) {
       tick += 1;
-      simTick(built.sim, built.state, [
+      last = [
         {
           tick,
           playerId: MATCH.players[0]!,
@@ -196,6 +250,7 @@ function arena(gap = 4, scene: SceneDef = SCENE): Arena {
           move: { x: a.moveX ?? 0, y: a.moveY ?? 0 },
           aimDir: a.aimDir ?? AIM_EAST,
           buttons: a.buttons ?? 0,
+          target: a.target ?? aimPoint(built.state, heroes[0], a.aimDir ?? AIM_EAST),
         },
         {
           tick,
@@ -204,10 +259,13 @@ function arena(gap = 4, scene: SceneDef = SCENE): Arena {
           move: { x: b.moveX ?? 0, y: b.moveY ?? 0 },
           aimDir: b.aimDir ?? AIM_WEST,
           buttons: b.buttons ?? 0,
+          target: b.target ?? aimPoint(built.state, heroes[1], b.aimDir ?? AIM_WEST),
         },
-      ]);
+      ];
+      simTick(built.sim, built.state, last);
       return tick;
     },
+    frames: () => last,
   };
 }
 
@@ -289,6 +347,9 @@ function ffa(
           move: { x: frames[index]?.moveX ?? 0, y: frames[index]?.moveY ?? 0 },
           aimDir: frames[index]?.aimDir ?? AIM_EAST,
           buttons: frames[index]?.buttons ?? 0,
+          target:
+            frames[index]?.target ??
+            aimPoint(built.state, heroes[index], frames[index]?.aimDir ?? AIM_EAST),
         })),
       );
       if (extractor !== null) buffer.apply(extractor.extract(result));
@@ -349,14 +410,53 @@ function pressB(a: Arena, buttons: number, aimDir = AIM_WEST): void {
 }
 
 /**
- * Заряд каста: `held` тиков УДЕРЖАНИЯ сверх тика нажатия, затем отпускание.
- * Тик нажатия окном заряда не считается (`ChargeRelease` вычитает его), поэтому
- * `charge(a, 0)` — это самый быстрый тап, `charge(a, CHARGE_TICKS)` — полный.
+ * Заряд каста: `held` тиков УДЕРЖАНИЯ сверх тика нажатия и ОТПУСКАНИЕ, которым
+ * фаза `release` и завершается (ABIL-4). Тик нажатия окном заряда не считается
+ * (определение вычитает его), поэтому `chargeA(a, 0)` — самый быстрый тап,
+ * `chargeA(a, CHARGE_TICKS)` — полный заряд.
+ *
+ * Выстрел происходит НА ТИКЕ ОТПУСКАНИЯ: тем же тиком система прицеливания
+ * записывает шаг `vector` (−800), а автомат каста завершает фазу и исполняет
+ * эффекты (−790). Направление берётся из прицела ЭТОГО тика — того самого,
+ * которым игрок целился, отпуская кнопку; точку харнесс считает из `aimDir`
+ * (`aimPoint`), поэтому тесты называют направление там же, где и раньше.
  */
 function chargeA(a: Arena, held: number, aimDir = AIM_EAST): void {
   a.step({ buttons: CAST, aimDir });
   for (let i = 0; i < held; i++) a.step({ buttons: CAST, aimDir });
   a.step({ aimDir });
+}
+
+function chargeB(a: Arena, held: number, aimDir = AIM_WEST): void {
+  a.step(NEUTRAL, { buttons: CAST, aimDir });
+  for (let i = 0; i < held; i++) a.step(NEUTRAL, { buttons: CAST, aimDir });
+  a.step(NEUTRAL, { aimDir });
+}
+
+/**
+ * Сущность-слот способности героя по её номеру (ABIL-1). Остаток кулдауна живёт
+ * на слоте отдельным компонентом, а не полем героя, поэтому «сколько осталось»
+ * спрашивается у него.
+ */
+function slotOf(state: SimulationState, hero: EntityId, slotIndex: number): EntityId {
+  for (const entity of coreWorld.listAlive(state.world)) {
+    if (!coreWorld.hasComponent(state.world, entity, 'AbilitySlot')) continue;
+    if (coreWorld.getField(state.world, entity, 'AbilitySlot', 'owner') !== hero) continue;
+    if (coreWorld.getField(state.world, entity, 'AbilitySlot', 'slotIndex') === slotIndex) {
+      return entity;
+    }
+  }
+  throw new Error(`слот ${slotIndex} героя ${hero} не выдан`);
+}
+
+/** Остаток кулдауна способности героя (ABIL-7). */
+function cooldown(state: SimulationState, hero: EntityId, slotIndex: number): number {
+  return coreWorld.getField(state.world, slotOf(state, hero, slotIndex), 'AbilityCooldown', 'remaining');
+}
+
+/** Оставшиеся тики полёта снаряда — то, чем доставка считает его жизнь (ABIL-9). */
+function flightLeft(state: SimulationState, shot: EntityId): number {
+  return coreWorld.getField(state.world, shot, 'AbilityProjectile', 'ticksLeft');
 }
 
 const projectile = (state: SimulationState, entity: EntityId, field: string): number =>
@@ -374,28 +474,115 @@ const owner = (state: SimulationState, entity: EntityId): number =>
 const vel = (state: SimulationState, entity: EntityId, axis: 'x' | 'y'): number =>
   coreWorld.getField(state.world, entity, 'Velocity', axis);
 
+
 /**
- * Числа, продублированные ВНЕ `AbilityConfig`. Каждое из них — сознательное
+ * Определение способности сцены по её человеко-читаемому имени (ABIL-2).
+ * Балансные числа переехали из плоского `AbilityConfig` внутрь определений, и
+ * адресуются они отсюда.
+ */
+interface SceneDefinitions {
+  readonly abilities?: readonly Readonly<Record<string, unknown>>[];
+  readonly buffs?: readonly Readonly<Record<string, unknown>>[];
+}
+
+const DEFS = SCENE as unknown as SceneDefinitions;
+
+function abilityDef(id: string): Readonly<Record<string, unknown>> {
+  const found = DEFS.abilities?.find((entry) => entry.id === id);
+  if (found === undefined) throw new Error(`в сцене нет определения способности "${id}"`);
+  return found;
+}
+
+function buffDef(id: string): Readonly<Record<string, unknown>> {
+  const found = DEFS.buffs?.find((entry) => entry.id === id);
+  if (found === undefined) throw new Error(`в сцене нет определения баффа "${id}"`);
+  return found;
+}
+
+/**
+ * Все числа поддерева документа. Балансное число, переехавшее внутрь списка
+ * действий, адресуется путём длиннее собственной жизни, поэтому ретюн пиннится
+ * присутствием ЧИСЛА в определении: поменяли — тест красный, а куда именно
+ * число переехало внутри определения, теста не касается.
+ */
+function numbersIn(node: unknown, out: number[] = []): number[] {
+  if (typeof node === 'number') out.push(node);
+  else if (Array.isArray(node)) for (const child of node as readonly unknown[]) numbersIn(child, out);
+  else if (typeof node === 'object' && node !== null) {
+    for (const child of Object.values(node as Record<string, unknown>)) numbersIn(child, out);
+  }
+  return out;
+}
+
+/** Скорость броска — число определений фаербола и переброса. */
+const THROW_SPEED = 40960;
+
+/** Вынос выстрела перед кастером — число определений фаербола и переброса. */
+const THROW_OFFSET = 29491;
+
+/**
+ * Рывок: скорость и длительность — поля `Locomotion` героя, кулдаун — поле
+ * определения `dodge`. Прежние числа (13107 за 9 тиков = 1.8 клетки) остались
+ * в истории: скорость удвоена, длительность та же, дистанция ровно вдвое.
+ */
+const DODGE_SPEED = 26214;
+const DODGE_TICKS = 9;
+const DODGE_COOLDOWN = 60;
+/** Дистанция прежнего рывка в Q16.16 — числитель отношения «вдвое дальше». */
+const DODGE_DISTANCE_BEFORE = 9 * 13107;
+
+/**
+ * Стартовый остаток кулдауна ульты — число prefab'а `SlotRewind`, а не литерал
+ * теста: он противопетлевой (см. «ульта стартует взведённой» ниже), и ретюн
+ * обязан ехать сюда сам, оставляя красным только тот тест, который проверяет
+ * САМ инвариант.
+ */
+const REWIND_START = SCENE.prefabs!.find((prefab) => prefab.name === 'SlotRewind')!.components
+  .AbilityCooldown!.remaining!;
+
+/**
+ * Числа, продублированные ВНЕ определений способностей. Каждое из них — сознательное
  * зеркало: манифест визуалов и константы сборки не читают компоненты мира и
  * читать их не будут (REND-1). Расхождение такого зеркала ничего не ломает —
  * оно молча врёт игроку (нарисованный купол не совпадает с замедляющим,
  * полётная дуга не совпадает с полётом), поэтому ловится здесь.
  */
 describe('зеркала балансных чисел сцены', () => {
-  const ability = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!.components.AbilityConfig!;
-
-  it('полное время полёта сборки — то же, что `AbilityConfig.throwLifetime`', () => {
-    expect(FIREBALL_LIFETIME_TICKS).toBe(ability.throwLifetime);
-    // И умолчание prefab'а тоже: `ChargeRelease`/`ThrowHeld` его перекрывают, но снаряд,
-    // рождённый мимо них, обязан жить столько же.
-    expect(SCENE.prefabs!.find((p) => p.name === 'Fireball')!.components.Lifetime!.ticks).toBe(
-      ability.throwLifetime,
-    );
+  it('полное время полёта сборки — то же, что `AbilityProjectile.ticksLeft`', () => {
+    const shot = SCENE.prefabs!.find((p) => p.name === 'Fireball')!.components.AbilityProjectile!;
+    expect(FIREBALL_LIFETIME_TICKS).toBe(shot.ticksLeft);
+    // И тот же остаток, которым определение перевзводит жизнь снаряда на
+    // выпуске и перебросе: снаряд, рождённый мимо них, обязан жить столько же.
+    expect(numbersIn(abilityDef('fireball'))).toContain(FIREBALL_LIFETIME_TICKS);
+    expect(numbersIn(abilityDef('throwHeld'))).toContain(FIREBALL_LIFETIME_TICKS);
   });
 
-  it('радиус оболочки купола в манифесте — радиус, который считает `DomeCast`', () => {
+  it('радиус оболочки купола в манифесте — радиус, который считает определение купола', () => {
     const world = Math.floor((HERO_RADIUS * DOME_RADIUS_MUL) / FIXED_ONE) / FIXED_ONE;
     expect(MANIFEST.effects.byKind.SlowDome!.radius).toBeCloseTo(world, 3);
+  });
+
+  it('числа шара заряда — те же, по которым определение считает выстрел', () => {
+    // Шар заряда рисует главный поток (`chargeBalls.ts`): растёт он с зарядом и
+    // висит там, откуда стартует снаряд. Все четыре числа — зеркало определения
+    // `fireball`, и разойтись им нельзя молча: шар обещал бы не тот выстрел.
+    const numbers = numbersIn(abilityDef('fireball'));
+    expect(numbers).toContain(CHARGE_VISUAL.ticks);
+    expect(numbers).toContain(CHARGE_VISUAL.maxScale);
+    expect(numbers).toContain(CHARGE_VISUAL.heavyScale);
+    // Вынос шара — ровно тот, с которого стартует выстрел (и на котором висит
+    // пойманный снаряд): второго числа «перед героем» в сцене нет.
+    expect(CHARGE_VISUAL.offset).toBe(THROW_OFFSET);
+    expect(numbers).toContain(CHARGE_VISUAL.offset);
+    // Та же арифметика накопленного заряда, что у определения: тик нажатия не
+    // считается, сверх окна заряд не растёт.
+    expect(chargeHeld(0)).toBe(0);
+    expect(chargeHeld(1)).toBe(0);
+    expect(chargeHeld(CHARGE_VISUAL.ticks + 1)).toBe(CHARGE_VISUAL.ticks);
+    expect(chargeHeld(CHARGE_VISUAL.ticks + 30)).toBe(CHARGE_VISUAL.ticks);
+    // Оболочки состояния у заряда больше нет: она рисовала бы ВТОРОЙ, статичный
+    // шар в позиции героя поверх растущего.
+    expect(MANIFEST.effects.byState.Charging).toBeUndefined();
   });
 });
 
@@ -403,7 +590,7 @@ describe('купол замедления: чужой снаряд идёт вч
   it('снаряд p1 внутри купола p2 получает ровно 0.25× и восстанавливается на выходе', () => {
     const a = arena(8);
     // p1 стреляет на восток, в сторону p2.
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     expect(coreWorld.getField(a.state.world, shot, 'Owner', 'slot')).toBe(0);
 
@@ -464,6 +651,7 @@ describe('купол замедления: чужой снаряд идёт вч
     const a = ffa([18, [24, 27]]);
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
 
     const before = x(a.state, shot);
@@ -499,7 +687,7 @@ describe('купол замедления: чужой снаряд идёт вч
     const a = arena(8);
     // Купол ставит p2, и он же стреляет — сквозь собственный купол.
     pressB(a, DOME);
-    pressB(a, CAST);
+    chargeB(a, 0);
     const shot = fireballs(a.state)[0]!;
     expect(coreWorld.getField(a.state.world, shot, 'Owner', 'slot')).toBe(1);
 
@@ -512,7 +700,7 @@ describe('купол замедления: чужой снаряд идёт вч
 
   it('истёкший купол исчезает и снимает своё замедление', () => {
     const a = arena(8);
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     pressB(a, DOME);
 
@@ -530,13 +718,15 @@ describe('купол замедления: чужой снаряд идёт вч
     const a = arena();
     pressB(a, DOME);
     const p2 = a.heroes[1]!;
-    expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'slowDome')).toBe(DOME_COOLDOWN - 1);
+    // Взведение идёт в начале тика (`CastPhaseSystem`), убывание — в конце
+    // (`CooldownSystem`, 800), поэтому за два тика фронта уходит две единицы.
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.slowDome)).toBe(DOME_COOLDOWN - 2);
     // Второй фронт на неостывшей способности второго купола не даёт.
     pressB(a, DOME);
     expect(domes(a.state)).toHaveLength(1);
 
     for (let i = 0; i < DOME_COOLDOWN; i++) a.step(NEUTRAL);
-    expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'slowDome')).toBe(0);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.slowDome)).toBe(0);
   });
 });
 
@@ -552,17 +742,18 @@ describe('захват снаряда: удержание, переброс и �
     throw new Error('снаряд не долетел до зоны захвата');
   }
 
-  it('отпускание R ловит чужой снаряд: он замирает у держателя и лочит манёвры (LOC-7)', () => {
+  it('подтверждение ловит чужой снаряд: он замирает у держателя и лочит манёвры (LOC-7)', () => {
     const a = arena(8);
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     shotInReach(a, shot);
 
     const p2 = a.heroes[1]!;
-    // Удержание — бит во всех тиках; захват разрешается на ОТПУСКАНИИ (INP-2).
+    // Нажатие открывает фазу подтверждения, шаг прицеливания выбирает цель на
+    // ПОДТВЕРЖДЕНИИ (ABIL-5): между ними снаряд ещё свободен.
     a.step(NEUTRAL, { buttons: CAPTURE });
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(false);
-    a.step(NEUTRAL, {});
+    a.step(NEUTRAL, { buttons: CONFIRM });
 
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
     expect(coreWorld.getField(a.state.world, shot, 'Held', 'holder')).toBe(p2);
@@ -571,18 +762,99 @@ describe('захват снаряда: удержание, переброс и �
     // Манёвры запрещены битом 0 маски лока; ходьба им не задета (LOC-7).
     expect(coreWorld.getField(a.state.world, p2, 'ActionLock', 'mask')).toBe(1);
     expect(coreWorld.getField(a.state.world, shot, 'Velocity', 'x')).toBe(0);
-    expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'capture')).toBeGreaterThan(0);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.capture)).toBeGreaterThan(0);
 
     // Пойманный снаряд висит на держателе и не тратит свой полёт.
-    const life = coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks');
+    const life = flightLeft(a.state, shot);
     a.step(NEUTRAL);
-    expect(coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks')).toBe(life);
+    expect(flightLeft(a.state, shot)).toBe(life);
     expect(Math.abs(x(a.state, shot) - x(a.state, p2))).toBeLessThan(FIXED_ONE);
+  });
+
+  it('удержание держит зону прицела, а отпускание ловит снаряд (ABIL-4 `release`)', () => {
+    // Фаза захвата завершается ПРЕКРАЩЕНИЕМ УДЕРЖАНИЯ его же кнопки, а не
+    // фронтом второй: та же кнопка открывает зону, держит её и закрывает
+    // захватом. Пока держат — шаг прицеливания не записан, и снаряд свободен:
+    // проверка накопленного идёт на завершении фазы (ABIL-5), и до отпускания
+    // её не было.
+    const a = arena(8);
+    chargeA(a, 0);
+    const shot = fireballs(a.state)[0]!;
+    const p2 = a.heroes[1]!;
+    // Ждём КРАЯ зоны (радиус захвата — 3 клетки): за тики удержания снаряд
+    // успевает подойти, и отпускание обязано застать его ещё в зоне.
+    for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 3 * FIXED_ONE; i++) {
+      a.step(NEUTRAL);
+    }
+
+    a.step(NEUTRAL, { buttons: CAPTURE });
+    for (let i = 0; i < 2; i++) {
+      a.step(NEUTRAL, { buttons: CAPTURE });
+      // Каст идёт: фаза открыта, а снаряд всё ещё летит сам по себе.
+      expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(false);
+      expect(coreWorld.getField(a.state.world, shot, 'Velocity', 'x')).toBeGreaterThan(0);
+    }
+
+    // Отпустили — тем же тиком записан шаг и завершён каст.
+    a.step(NEUTRAL);
+    expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
+    expect(coreWorld.getField(a.state.world, shot, 'Held', 'holder')).toBe(p2);
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(true);
+    expect(coreWorld.getField(a.state.world, p2, 'ActionLock', 'mask')).toBe(1);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.capture)).toBeGreaterThan(0);
+  });
+
+  it('прицеливание захвата живёт, ПОКА держат: своего таймаута у фазы нет', () => {
+    // У фазы `aim` нет ни `durationTicks`, ни `timeout`, и по ABIL-4 это значит
+    // ровно «фаза длится, пока держится бит триггера». Прежде она объявляла
+    // окно в 60 тиков со срывом — то есть при 60 Гц ровно секунду, — и
+    // прицеливание гасло само собой посреди удержания: игрок, поднявший R
+    // заранее (а захват реактивен — ждут ЧУЖОГО снаряда), терял и превью, и
+    // каст, ничего для этого не сделав.
+    const a = arena(8);
+    const p2 = a.heroes[1]!;
+    const slot = (): EntityId => slotOf(a.state, p2, ABILITY_SLOTS.capture);
+    const phase = (): number =>
+      coreWorld.getField(a.state.world, slot(), 'AbilitySlot', 'phase');
+
+    a.step(NEUTRAL, { buttons: CAPTURE });
+    expect(phase()).toBe(0);
+    // Втрое дольше прежнего окна — фаза идёт, а её счётчик исправно растёт.
+    for (let i = 0; i < CAPTURE_AIM_TICKS * 3; i++) {
+      a.step(NEUTRAL, { buttons: CAPTURE });
+      expect(phase()).toBe(0);
+    }
+    expect(coreWorld.getField(a.state.world, slot(), 'AbilitySlot', 'phaseTicks')).toBe(
+      CAPTURE_AIM_TICKS * 3,
+    );
+
+    // Завершает её отпускание, и ловить к тому моменту было нечего: каста нет,
+    // кулдаун не списан (умолчание источника `targetLost`).
+    a.step(NEUTRAL);
+    expect(phase()).toBe(-1);
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.capture)).toBe(0);
+  });
+
+  it('отмена по Q гасит прицеливание захвата — выход из фазы у игрока остаётся', () => {
+    // Таймаута у фазы больше нет, и единственная кнопка, которой прицеливание
+    // сворачивается без отпускания, — `cancelBit` определения (ABIL-6).
+    const a = arena(8);
+    const p2 = a.heroes[1]!;
+    const slot = (): EntityId => slotOf(a.state, p2, ABILITY_SLOTS.capture);
+    const phase = (): number =>
+      coreWorld.getField(a.state.world, slot(), 'AbilitySlot', 'phase');
+
+    a.step(NEUTRAL, { buttons: CAPTURE });
+    expect(phase()).toBe(0);
+    a.step(NEUTRAL, { buttons: CAPTURE | CANCEL });
+    expect(phase()).toBe(-1);
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
   });
 
   it('снаряд позади героя вне сектора не ловится, и кулдаун НЕ списывается', () => {
     const a = arena(8);
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     const p2 = a.heroes[1]!;
     // Ждём КРАЯ зоны (радиус захвата — 3 клетки), а не её середины: после
@@ -593,35 +865,37 @@ describe('захват снаряда: удержание, переброс и �
 
     // Прицел на восток — снаряд подходит с запада, то есть за спиной.
     a.step(NEUTRAL, { buttons: CAPTURE, aimDir: AIM_EAST });
-    a.step(NEUTRAL, { aimDir: AIM_EAST });
+    a.step(NEUTRAL, { buttons: CONFIRM, aimDir: AIM_EAST });
 
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(false);
     expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
     // Кулдаун платится за ПОЙМАННЫЙ снаряд, а не за нажатие: промах ничего не
-    // стоит и разрешает немедленную повторную попытку. `CaptureRelease` ставит
-    // его внутри ветки «снаряд найден», поэтому здесь он остаётся нулём.
-    expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'capture')).toBe(0);
+    // стоит и разрешает немедленную повторную попытку. Пустой шаг проваливает
+    // проверку на подтверждении, и умолчание источника `targetLost` возвращает
+    // кулдаун (ABIL-6) — сцене писать для этого нечего.
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.capture)).toBe(0);
 
     // И повторная попытка СЛЕДУЮЩИМ ЖЕ движением ловит: промах не отнял у
     // игрока способность на две секунды.
     a.step(NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST });
-    a.step(NEUTRAL, { aimDir: AIM_WEST });
+    a.step(NEUTRAL, { buttons: CONFIRM, aimDir: AIM_WEST });
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
-    // А вот УДАВШИЙСЯ захват кулдаун списывает — тем же тиком и полностью.
-    expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'capture')).toBe(CAPTURE_COOLDOWN);
+    // А вот УДАВШИЙСЯ захват кулдаун списывает — тем же тиком и полностью
+    // (единица уже ушла: убывание стоит в конце того же тика, ABIL-7).
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.capture)).toBe(CAPTURE_COOLDOWN - 1);
   });
 
   it('переброс меняет владельца: купол бросившего его больше не замедляет, а купол соперника — да', () => {
     // Шире прежнего: переброшенный снаряд летит вдвое с половиной быстрее и
     // долетал бы до стрелка раньше, чем тот успеет поставить свой купол.
     const a = arena(16);
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     shotInReach(a, shot);
 
     const p2 = a.heroes[1]!;
     a.step(NEUTRAL, { buttons: CAPTURE });
-    a.step(NEUTRAL, {});
+    a.step(NEUTRAL, { buttons: CONFIRM });
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
 
     // Переброс ЛКМ тем же прицелом: снаряд уходит обратно на запад.
@@ -657,13 +931,13 @@ describe('захват снаряда: удержание, переброс и �
 
   it('невыброшенный за 2 с снаряд взрывается на держателе и снимает 250 hp', () => {
     const a = arena(8);
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     shotInReach(a, shot);
 
     const p2 = a.heroes[1]!;
     a.step(NEUTRAL, { buttons: CAPTURE });
-    a.step(NEUTRAL, {});
+    a.step(NEUTRAL, { buttons: CONFIRM });
     const hpBefore = coreWorld.getField(a.state.world, p2, 'Health', 'hp');
     expect(hpBefore).toBe(1000);
 
@@ -691,20 +965,20 @@ describe('захват снаряда: удержание, переброс и �
     // Смерть теперь отпускает захват ТЕМ ЖЕ путём, что бросок (`ThrowHeld`): со
     // снаряда снимается `Held`, с держателя — `Holding` и `ActionLock`.
     const a = arena(8);
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     shotInReach(a, shot);
 
     const p2 = a.heroes[1]!;
     a.step(NEUTRAL, { buttons: CAPTURE });
-    a.step(NEUTRAL, {});
+    a.step(NEUTRAL, { buttons: CONFIRM });
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
     expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(true);
 
     // Полёта пойманный снаряд не тратит — это и есть точка отсчёта.
-    const life = coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks');
+    const life = flightLeft(a.state, shot);
     for (let i = 0; i < 10; i++) a.step(NEUTRAL);
-    expect(coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks')).toBe(life);
+    expect(flightLeft(a.state, shot)).toBe(life);
 
     // Мгновенная смерть на середине окна броска (`KillSwitch`, order 20 — то
     // есть ДО `HoldingGuard` и `HeldPin` того же тика).
@@ -713,8 +987,11 @@ describe('захват снаряда: удержание, переброс и �
     expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
     expect(coreWorld.hasComponent(a.state.world, p2, 'ActionLock')).toBe(false);
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(false);
-    // Отпущенный снаряд снова тратит полёт: `FireballFlight` исключает `Held`.
-    expect(coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks')).toBe(life - 1);
+    // Отпущенный снаряд снова тратит полёт. Пойманный не стареет за счёт
+    // нулевого остатка («предела нет», ABIL-9), поэтому путь смерти сцены
+    // перевзводит ему полную жизнь заново — а не продолжает замороженную.
+    expect(life).toBe(0);
+    expect(flightLeft(a.state, shot)).toBe(FIREBALL_LIFETIME_TICKS - 1);
 
     // И труп его больше не таскает: разворот прицела мертвеца снаряд не двигает.
     const droppedX = x(a.state, shot);
@@ -723,11 +1000,11 @@ describe('захват снаряда: удержание, переброс и �
     expect(x(a.state, shot)).toBe(droppedX);
     expect(y(a.state, shot)).toBe(droppedY);
 
-    // Кончается он как обычный отпущенный снаряд — своим `Lifetime`, а не
+    // Кончается он как обычный отпущенный снаряд — исчерпанием доставки, а не
     // взрывом в руках на конце окна удержания. Остатка полёта на окно не
     // хватает, поэтому «когда именно исчез» — это и есть различающий признак.
-    const left = coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks');
-    expect(left).toBe(life - 6);
+    const left = flightLeft(a.state, shot);
+    expect(left).toBe(FIREBALL_LIFETIME_TICKS - 6);
     expect(left).toBeLessThan(THROW_WINDOW_TICKS);
     for (let i = 0; i < left - 1; i++) a.step(NEUTRAL);
     expect(fireballs(a.state)).toHaveLength(1);
@@ -795,13 +1072,13 @@ describe('захват снаряда: удержание, переброс и �
     let died = false;
 
     for (let round = 0; round < 4 && !died; round++) {
-      pressA(a, CAST);
+      chargeA(a, 0);
       const shot = fireballs(a.state)[0]!;
       for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
         a.step(NEUTRAL);
       }
       a.step(NEUTRAL, { buttons: CAPTURE });
-      a.step(NEUTRAL, {});
+      a.step(NEUTRAL, { buttons: CONFIRM });
       expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
       for (let i = 0; i < THROW_WINDOW_TICKS; i++) a.step(NEUTRAL);
       // Кулдаун захвата — 2 с; следующий раунд ждёт его.
@@ -820,13 +1097,13 @@ describe('захват снаряда: удержание, переброс и �
 
   it('бросок проходит на ПОСЛЕДНЕМ тике окна: оно ровно 120 тиков (2 с)', () => {
     const a = arena(8);
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     shotInReach(a, shot);
 
     const p2 = a.heroes[1]!;
     a.step(NEUTRAL, { buttons: CAPTURE });
-    a.step(NEUTRAL, {});
+    a.step(NEUTRAL, { buttons: CONFIRM });
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
 
     // На последнем тике окна взрыв ещё не случился: `ThrowHeld` (order 31) идёт
@@ -843,13 +1120,13 @@ describe('захват снаряда: удержание, переброс и �
 
   it('пойманный снаряд запрещает манёвры, но не ходьбу (LOC-7)', () => {
     const a = arena(8);
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     shotInReach(a, shot);
 
     const p2 = a.heroes[1]!;
     a.step(NEUTRAL, { buttons: CAPTURE });
-    a.step(NEUTRAL, {});
+    a.step(NEUTRAL, { buttons: CONFIRM });
     expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(true);
 
     // Фронт уклона С НАПРАВЛЕНИЕМ (без него манёвр игнорируется и без лока,
@@ -893,10 +1170,11 @@ describe('захват снаряда: удержание, переброс и �
 
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const first = fireballs(a.state)[0]!;
     reach(first);
     a.step([NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }]);
-    a.step([NEUTRAL, { aimDir: AIM_WEST }]);
+    a.step([NEUTRAL, { buttons: CONFIRM, aimDir: AIM_WEST }]);
     expect(coreWorld.hasComponent(a.state.world, first, 'Held')).toBe(true);
     // Бросок освобождает руки, но кулдаун захвата продолжает тикать.
     a.step([NEUTRAL, { buttons: CAST, aimDir: AIM_WEST }]);
@@ -905,13 +1183,14 @@ describe('захват снаряда: удержание, переброс и �
     // Второй снаряд подлетает, пока захват не остыл.
     a.step([NEUTRAL, NEUTRAL, { buttons: CAST }]);
     a.step();
+    a.step([NEUTRAL, NEUTRAL, { buttons: CONFIRM }]);
     const second = fireballs(a.state).find((entity) => entity !== first)!;
     expect(second).toBeDefined();
     reach(second);
-    expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'capture')).toBeGreaterThan(0);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.capture)).toBeGreaterThan(0);
 
     a.step([NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }]);
-    a.step([NEUTRAL, { aimDir: AIM_WEST }]);
+    a.step([NEUTRAL, { buttons: CONFIRM, aimDir: AIM_WEST }]);
     expect(coreWorld.hasComponent(a.state.world, second, 'Held')).toBe(false);
     expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
   });
@@ -922,7 +1201,7 @@ describe('захват снаряда: удержание, переброс и �
     // запада: раствор проверяется одним числом, без геометрии в тесте.
     const attempt = (offset: number): boolean => {
       const a = arena(8);
-      pressA(a, CAST);
+      chargeA(a, 0);
       const shot = fireballs(a.state)[0]!;
       const p2 = a.heroes[1]!;
       for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
@@ -930,7 +1209,7 @@ describe('захват снаряда: удержание, переброс и �
       }
       const aimDir = (AIM_WEST + offset) & 0xffff;
       a.step(NEUTRAL, { buttons: CAPTURE, aimDir });
-      a.step(NEUTRAL, { aimDir });
+      a.step(NEUTRAL, { buttons: CONFIRM, aimDir });
       return coreWorld.hasComponent(a.state.world, shot, 'Held');
     };
 
@@ -958,13 +1237,14 @@ describe('захват снаряда: удержание, переброс и �
 
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
     expect(shot).toBeDefined();
     for (let i = 0; i < 200 && x(a.state, shot) < 24.2 * FIXED_ONE; i++) a.step();
 
     // Оба отпускают R на одном тике.
     a.step([NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }, { buttons: CAPTURE, aimDir: AIM_WEST }]);
-    a.step([NEUTRAL, { aimDir: AIM_WEST }, { aimDir: AIM_WEST }]);
+    a.step([NEUTRAL, { buttons: CONFIRM, aimDir: AIM_WEST }, { buttons: CONFIRM, aimDir: AIM_WEST }]);
 
     const holding = catchers.filter((hero) => coreWorld.hasComponent(a.state.world, hero, 'Holding'));
     // Снаряд один — и держатель у него ровно один.
@@ -983,7 +1263,7 @@ describe('захват снаряда: удержание, переброс и �
    * видна только там, где старший снаряд дальше младшего: два стрелка на разном
    * удалении, дальний стреляет первым.
    */
-  it('из двух чужих снарядов в секторе ловится ближайший (ACT-5)', () => {
+  it('из двух чужих снарядов в секторе ловится ближайший к точке прицела (ABIL-5)', () => {
     // Оба стрелка стоят В СТОРОНЕ от ловца по ординате: снаряд теперь сбивает
     // героя, попав в коллайдер, и снаряд на линии до выбора «ближайшего» просто
     // не доживал бы. Ловец заранее ставит купол: в нём чужие снаряды ползут
@@ -997,12 +1277,14 @@ describe('захват снаряда: удержание, переброс и �
     // Дальний стрелок (слот 0) — первым: его снаряд получает МЕНЬШИЙ raw-индекс.
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const far = fireballs(a.state)[0]!;
     // Пауза подобрана так, чтобы младший снаряд шёл впереди старшего, но
     // недалеко: разница стартов — 5 клеток, три тика хода съедают почти две.
     for (let i = 0; i < 3; i++) a.step();
     a.step([NEUTRAL, NEUTRAL, { buttons: CAST }]);
     a.step();
+    a.step([NEUTRAL, NEUTRAL, { buttons: CONFIRM }]);
     const near = fireballs(a.state).find((entity) => entity !== far)!;
     expect(near).toBeDefined();
 
@@ -1010,6 +1292,8 @@ describe('захват снаряда: удержание, переброс и �
     // отпускает ровно на нужном тике — двухтиковый «нажал-отпустил» за это
     // время увёл бы ближний снаряд за спину ловцу.
     const hold: readonly Frame[] = [NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }];
+    // Фаза подтверждения открывается ПЕРВЫМ нажатием и держится своим окном:
+    // дальше бит можно держать, а решает подтверждение (ABIL-4, ABIL-5).
     let ready = false;
     for (let i = 0; i < 200 && !ready; i++) {
       a.step(hold);
@@ -1024,19 +1308,29 @@ describe('захват снаряда: удержание, переброс и �
     expect(fireballs(a.state)).toContain(far);
     expect(x(a.state, p2) - x(a.state, near)).toBeLessThan(x(a.state, p2) - x(a.state, far));
 
-    a.step([NEUTRAL, { aimDir: AIM_WEST }]);
+    // Шаг `unit` выбирает ближайшего к ТОЧКЕ прицела (ABIL-5), а не к
+    // владельцу: игрок целится в тот снаряд, который хочет поймать. Прицел под
+    // ноги ловцу — и «ближайший к точке» совпадает с «ближайшим к нему».
+    a.step([
+      NEUTRAL,
+      {
+        buttons: CONFIRM,
+        aimDir: AIM_WEST,
+        target: { x: x(a.state, p2), y: y(a.state, p2) },
+      },
+    ]);
     expect(coreWorld.getField(a.state.world, p2, 'Holding', 'projectile')).toBe(near);
     expect(coreWorld.hasComponent(a.state.world, far, 'Held')).toBe(false);
   });
 
   it('пока снаряд в руках, обычный каст не проходит', () => {
     const a = arena(8);
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     shotInReach(a, shot);
 
     a.step(NEUTRAL, { buttons: CAPTURE });
-    a.step(NEUTRAL, {});
+    a.step(NEUTRAL, { buttons: CONFIRM });
     expect(fireballs(a.state)).toHaveLength(1);
 
     // ЛКМ — это переброс, а не новый фаербол: снарядов по-прежнему один.
@@ -1052,32 +1346,56 @@ describe('захват снаряда: удержание, переброс и �
  * приходится объяснять, почему купол стал жить втрое дольше.
  */
 describe('числа способностей: ретюн виден в диффе', () => {
-  const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
-  const ability = hero.components.AbilityConfig!;
-  const cooldowns = hero.components.Cooldowns!;
-
   it('перезарядки: каст 1.5 с, купол 5 с, захват 2 с', () => {
-    expect(cooldowns.castMax).toBe(CAST_COOLDOWN);
-    expect(cooldowns.slowDomeMax).toBe(DOME_COOLDOWN);
-    expect(cooldowns.captureMax).toBe(CAPTURE_COOLDOWN);
+    // Кулдаун — поле определения (ABIL-7), а не поле god-компонента героя.
+    expect(abilityDef('fireball').cooldownTicks).toBe(CAST_COOLDOWN);
+    expect(abilityDef('slowDome').cooldownTicks).toBe(DOME_COOLDOWN);
+    expect(abilityDef('capture').cooldownTicks).toBe(CAPTURE_COOLDOWN);
+    // И то же число — умолчанием `total` в prefab'е слота: полную длительность
+    // обязан доставлять стат HUD (HUD-8) ещё до первого каста.
+    const slot = (name: string): number =>
+      SCENE.prefabs!.find((prefab) => prefab.name === name)!.components.AbilityCooldown!.total!;
+    expect(slot('SlotFireball')).toBe(CAST_COOLDOWN);
+    expect(slot('SlotSlowDome')).toBe(DOME_COOLDOWN);
+    expect(slot('SlotCapture')).toBe(CAPTURE_COOLDOWN);
   });
 
   it('длительности: купол 3 с, окно броска 2 с', () => {
-    expect(ability.domeTicks).toBe(DOME_TICKS);
+    // Длительность купола — остаток компонента доставки (ABIL-9), а не поле
+    // конфига: зона живёт собственной сущностью.
+    expect(
+      SCENE.prefabs!.find((p) => p.name === 'SlowDome')!.components.AbilityDuration!.remaining,
+    ).toBe(DOME_TICKS);
     // Тик захвата тратит первый тик удержания — окно броска ровно на единицу
     // короче (`HeldPin` идёт в том же тике, что и захват).
-    expect(ability.holdTicks).toBe(HOLD_TICKS);
+    expect(numbersIn(abilityDef('capture'))).toContain(HOLD_TICKS);
     expect(THROW_WINDOW_TICKS).toBe(120);
   });
 
   it('заряд: 1 с до двойного размера, 300 мс передержки, урон 100/250', () => {
-    expect(ability.chargeTicks).toBe(CHARGE_TICKS);
-    expect(ability.chargeGraceTicks).toBe(CHARGE_GRACE_TICKS);
-    expect(ability.chargeMaxScale).toBe(CHARGE_MAX_SCALE);
-    expect(ability.chargeHeavyScale).toBe(CHARGE_HEAVY_SCALE);
-    expect(ability.hitDamage).toBe(HIT_DAMAGE);
-    expect(ability.overchargeDamage).toBe(OVERCHARGE_DAMAGE);
-    expect(ability.overchargeRadius).toBe(OVERCHARGE_RADIUS);
+    // Окно заряда и передержка — длительность фазы `charge` (ABIL-4): тик
+    // перехода в передержку идёт СВЕРХ окна, отсюда единица.
+    const phases = abilityDef('fireball').phases as readonly Record<string, unknown>[];
+    // Фаза ОДНА, и завершает её отпускание (ABIL-4): выстрел происходит на нём,
+    // а не на фронте второй кнопки. Второй фазы здесь больше нет — она стоила
+    // игроку полусекунды между отпусканием и выстрелом.
+    expect(phases).toHaveLength(1);
+    expect(phases[0]!.id).toBe('charge');
+    expect(phases[0]!.trigger).toBe('release');
+    expect(phases[0]!.durationTicks).toBe(CHARGE_TICKS + CHARGE_GRACE_TICKS + 1);
+    expect(phases[0]!.timeout).toEqual({ then: 'cancel' });
+    // Бита подтверждения у фаербола нет вовсе: у фазы `release` его фронт тоже
+    // записывает шаг (ABIL-5), то есть заморозил бы прицел посреди заряда.
+    expect(abilityDef('fireball').confirmBit).toBeUndefined();
+    // Прочие числа заряда лежат внутри списков действий определения, и ретюн
+    // пиннится их присутствием — куда бы внутри определения они ни переехали.
+    const numbers = numbersIn(abilityDef('fireball'));
+    expect(numbers).toContain(CHARGE_TICKS);
+    expect(numbers).toContain(CHARGE_MAX_SCALE);
+    expect(numbers).toContain(CHARGE_HEAVY_SCALE);
+    expect(numbers).toContain(HIT_DAMAGE);
+    expect(numbers).toContain(OVERCHARGE_DAMAGE);
+    expect(numbers).toContain(OVERCHARGE_RADIUS);
   });
 
   it('коллайдер снаряда — ровно половина героического, и манифест это зеркалит', () => {
@@ -1112,9 +1430,14 @@ describe('числа способностей: ретюн виден в дифф
   });
 
   it('щит: перезарядка 2,5 с, длительность 1 с, радиус 2,6 коллайдера героя', () => {
-    expect(cooldowns.shieldMax).toBe(SHIELD_COOLDOWN);
-    expect(ability.shieldTicks).toBe(SHIELD_TICKS);
-    expect(ability.shieldRadiusMul).toBe(SHIELD_RADIUS_MUL);
+    expect(abilityDef('shield').cooldownTicks).toBe(SHIELD_COOLDOWN);
+    // Длительность щита — остаток инстанса баффа (BUFF-6). Инстанс не убывает
+    // на тике наложения, поэтому шестьдесят тиков присутствия маркера — это
+    // пятьдесят девять тиков остатка.
+    expect(buffDef('shielded').durationTicks).toBe(SHIELD_TICKS - 1);
+    expect(numbersIn(SCENE.systems!.find((e) => e.name === 'ShieldRicochet')!)).toContain(
+      SHIELD_RADIUS_MUL,
+    );
     // Формула живёт в `ShieldRicochet` (`Collider.radius × shieldRadiusMul`), а
     // здесь пиннится её РЕЗУЛЬТАТ — как и у купола: ретюн любого из двух чисел
     // виден в диффе теста, а не только в поведении на экране.
@@ -1141,7 +1464,8 @@ describe('числа способностей: ретюн виден в дифф
     // оказаться снаружи по разные стороны. `ShieldRicochet` мерит КОНЕЧНУЮ
     // точку тика, а `Overlap` — заметаемый объём; без этого неравенства
     // быстрый снаряд успевал бы задеть героя, не побывав внутри бокса.
-    const maxStep = ability.throwSpeed!;
+    expect(numbersIn(abilityDef('fireball'))).toContain(THROW_SPEED);
+    const maxStep = THROW_SPEED;
     expect(2 * band).toBeGreaterThan(maxStep);
     // Тяжёлый шар только шире — своё неравенство он наследует с запасом.
     expect(2 * (SHIELD_RADIUS + HEAVY_FIREBALL_RADIUS)).toBeGreaterThan(maxStep);
@@ -1183,22 +1507,24 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 interface DetonationSite {
-  /** Система, в теле которой стоит emit взрыва. */
-  readonly system: string;
-  /** Переменная итерации системы — снаряд, о котором она говорит. */
+  /** Место, в теле которого стоит emit взрыва: система сцены либо блок определения. */
+  readonly site: string;
+  /** Имя, которым в этом месте связан снаряд. */
   readonly as: string | undefined;
   /** Аргумент первого `destroyEntity` ПОСЛЕ emit в той же ветке; `undefined` — его там нет. */
   readonly destroyed: unknown;
 }
 
 /**
- * Все места сцены, где эмитится `FireballExploded`, — обходом дерева систем, а
- * не списком имён в тесте: путь детонации, добавленный мимо этого теста, всё
- * равно окажется в выдаче и будет проверен наравне с четырьмя нынешними.
+ * Все места сцены, где эмитится `FireballExploded`, — обходом дерева, а не
+ * списком имён в тесте: путь детонации, добавленный мимо этого теста, всё равно
+ * окажется в выдаче и будет проверен наравне с нынешними. Обходятся и системы,
+ * и списки действий определений: после миграции три из четырёх путей живут в
+ * блоке доставки способности (ABIL-9), а не в JSON-системе.
  */
 function detonationSites(): DetonationSite[] {
   const found: DetonationSite[] = [];
-  for (const system of SCENE.systems ?? []) {
+  const scan = (site: string, as: string | undefined, body: unknown): void => {
     const visit = (node: unknown): void => {
       if (Array.isArray(node)) {
         node.forEach((item: unknown, index) => {
@@ -1209,7 +1535,7 @@ function detonationSites(): DetonationSite[] {
               .slice(index + 1)
               .map((action: unknown) => (isRecord(action) ? action.destroyEntity : undefined))
               .find((entry: unknown) => isRecord(entry));
-            found.push({ system: system.name, as: system.as, destroyed: destroy?.entity });
+            found.push({ site, as, destroyed: destroy?.entity });
           }
           visit(item);
         });
@@ -1217,52 +1543,53 @@ function detonationSites(): DetonationSite[] {
       }
       if (isRecord(node)) for (const value of Object.values(node)) visit(value);
     };
-    visit(system.do);
+    visit(body);
+  };
+  for (const system of SCENE.systems ?? []) scan(system.name, system.as, system.do);
+  for (const ability of DEFS.abilities ?? []) {
+    const delivery = ability.projectile;
+    if (!isRecord(delivery)) continue;
+    // Предсвязанное имя снаряда в списках доставки — `self` (ABIL-9).
+    scan(`${String(ability.id)}.projectile.onHit`, 'self', delivery.onHit);
+    scan(`${String(ability.id)}.projectile.onFade`, 'self', delivery.onFade);
   }
   return found;
 }
 
 /**
- * Детонация снаряда как КОНТРАКТ, повторённый в четырёх системах: `emitEvent
- * FireballExploded` и `destroyEntity` того же снаряда — в одной ветке и в этом
- * порядке.
+ * Детонация снаряда как КОНТРАКТ, повторённый в четырёх ветках: `emitEvent
+ * FireballExploded` и снятие снаряда с арены — в одной ветке и в этом порядке.
  *
- * Копий четыре, и они остаются копиями намеренно. Свести их в одну систему,
- * подписанную на внутреннее событие, мешает не DSL, а расписание: `destroyEntity`
- * в теле триггера убирает снаряд из ВСЕХ последующих запросов того же тика, и
- * порядок этого убирания у четырёх путей разный. `FireballImpact` стоит на
- * order 60 — ДО физики (её anchor — 100), и снаряд, у которого кончилась жизнь,
- * не летит, не рикошетит и не бьёт героя в свой последний тик. Перенос его
- * взрыва в общую систему после order 113 отдал бы этот тик физике: истёкший
- * снаряд, стоящий на сопернике, снял бы с него `hitDamage` — поведение, которого
- * сегодня нет (проверено прогоном A/B на копии сцены). Дублируется же при этом
- * ровно одно действие `destroyEntity`: сам emit с позицией взрыва обязан
- * остаться на месте триггера — позиция у каждого пути своя, а у `HeldPin` она
- * ещё и снята ДО того, как тот же тик подтянет снаряд к держателю.
+ * Веток по-прежнему четыре, но живут они теперь в двух разных местах, и это
+ * само по себе содержательно: три из них — исходы ОДНОЙ доставки (попал в
+ * героя, разбился о статику, выдохся), и платформа зовёт их списками действий
+ * определения (ABIL-9); четвёртая — взрыв в руках держателя, у которого
+ * повторяющегося узора нет и который потому остался JSON-системой сцены.
  *
- * Поэтому копии живут, а в step их держит этот тест: комментария в сцене быть не
- * может (`system.schema.json` — `additionalProperties: false`), и инвариант
- * записан здесь.
+ * Затухание отличается от прочих одним: сущность снаряда после `onFade`
+ * убирает САМА платформа, поэтому `destroyEntity` в этой ветке нет и быть не
+ * должно — второе удаление той же сущности отбрасывается (CMD-7), но написанное
+ * рядом обещало бы контенту ответственность, которой у него нет.
  */
-describe('детонация снаряда: четыре пути, один контракт', () => {
+describe('детонация снаряда: четыре ветки, один контракт', () => {
   const sites = detonationSites();
 
-  it('взрыв эмитят ровно четыре системы сцены — по одному разу каждая', () => {
-    // Порядок — порядок систем в сцене, то есть по `order`: 60, 105, 112, 113.
-    expect(sites.map((site) => site.system)).toEqual([
-      'FireballImpact',
+  it('взрыв эмитят ровно четыре ветки — по одному разу каждая', () => {
+    expect(sites.map((entry) => entry.site)).toEqual([
       'HeldPin',
-      'FireballHit',
-      'FireballWall',
+      'fireball.projectile.onHit',
+      'fireball.projectile.onHit',
+      'fireball.projectile.onFade',
     ]);
   });
 
   it('за каждым взрывом в той же ветке уничтожается ТОТ ЖЕ снаряд', () => {
     // Оба пункта — про молчаливые поломки. Без `destroyEntity` снаряд
     // взрывался бы каждый тик до конца жизни; с `destroyEntity` не той
-    // переменной — уносил бы чужую сущность.
-    expect(sites.map((site) => site.destroyed)).toEqual(
-      sites.map((site) => ({ var: site.as })),
+    // переменной — уносил бы чужую сущность. Исключение одно и названо в шапке:
+    // затухание снимает платформа.
+    expect(sites.map((entry) => (entry.site.endsWith('onFade') ? undefined : entry.destroyed))).toEqual(
+      sites.map((entry) => (entry.site.endsWith('onFade') ? undefined : { var: entry.as })),
     );
   });
 });
@@ -1283,8 +1610,6 @@ describe('детонация снаряда: четыре пути, один к�
  */
 describe('пределы фиксированной точки: ретюн за границу ловится тестом', () => {
   const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
-  const ability = hero.components.AbilityConfig!;
-  const cooldowns = hero.components.Cooldowns!;
   /** Снаряды сцены — все prefab'ы, которые несут `Projectile` и коллайдер. */
   const shots = SCENE.prefabs!.filter(
     (prefab) => prefab.components.Projectile !== undefined && prefab.components.Collider !== undefined,
@@ -1315,9 +1640,7 @@ describe('пределы фиксированной точки: ретюн за 
     expect(normScale).toBe(64 * FIXED_ONE);
     // Обе величины — из самой сцены: предел обязан пересчитываться от ретюна,
     // а не от зеркал теста (их совпадение со сценой пиннит тест радиуса щита).
-    const shieldR = Math.floor(
-      (hero.components.Collider!.radius! * ability.shieldRadiusMul!) / FIXED_ONE,
-    );
+    const shieldR = Math.floor((hero.components.Collider!.radius! * SHIELD_RADIUS_MUL) / FIXED_ONE);
     expect(shieldR).toBe(SHIELD_RADIUS);
 
     const worst = shots.map((prefab) => {
@@ -1355,10 +1678,10 @@ describe('пределы фиксированной точки: ретюн за 
     // `scale` система сама зажимает сверху `chargeMaxScale` (min/max по `held`),
     // поэтому предел даёт именно квадрат максимума: `fromInt(hitDamage)` — это
     // hitDamage×65536, и произведение с scale² обязано остаться в i32.
-    const scaleSq = Math.floor((ability.chargeMaxScale! * ability.chargeMaxScale!) / FIXED_ONE);
+    const scaleSq = Math.floor((CHARGE_MAX_SCALE * CHARGE_MAX_SCALE) / FIXED_ONE);
     expect(scaleSq).toBe(4 * FIXED_ONE);
 
-    const product = ability.hitDamage! * scaleSq; // = mul(fromInt(hitDamage), scaleSq)
+    const product = HIT_DAMAGE * scaleSq; // = mul(fromInt(hitDamage), scaleSq)
     expect(product).toBe(26214400);
     expect(fixed.toInt(product)).toBe(4 * HIT_DAMAGE); // те же 400, что пиннит тест роста урона
 
@@ -1367,18 +1690,18 @@ describe('пределы фиксированной точки: ретюн за 
     // заряд ЛЕЧИЛ бы цель.
     const limit = Math.floor(fixed.INT32_MAX / scaleSq);
     expect(limit).toBe(8191);
-    expect(ability.hitDamage!).toBeLessThanOrEqual(limit);
+    expect(HIT_DAMAGE).toBeLessThanOrEqual(limit);
   });
 
-  it('купол: id модификатора `1000 + slot` требует, чтобы купол не пережил свой кулдаун', () => {
-    // `DomeSlow` и `DomeExpire` адресуют замедление по id `1000 + Owner.slot` —
-    // ключ на СЛОТ, а не на купол. Пока у слота может быть только один живой
-    // купол, это одно и то же; как только `domeTicks` перевалит за
-    // `slowDomeMax`, второй купол того же героя встанет на тот же id, а истечение
-    // первого сняло бы замедление, поставленное вторым.
-    expect(ability.domeTicks!).toBeLessThanOrEqual(cooldowns.slowDomeMax!);
-    expect(ability.domeTicks!).toBe(DOME_TICKS);
-    expect(cooldowns.slowDomeMax!).toBe(DOME_COOLDOWN);
+  it('купол: живёт короче своего кулдауна, и два купола героя не сходятся', () => {
+    // Идентификатор источника-модификатора платформа выводит из САМОГО инстанса
+    // баффа (BUFF-4, design Decision 7), поэтому прежней зависимости «id на слот
+    // игрока» больше нет. Инвариант остался балансным: купол, переживший свой
+    // кулдаун, дал бы герою два одновременных купола, а такого в демо нет.
+    const dome = SCENE.prefabs!.find((p) => p.name === 'SlowDome')!;
+    expect(dome.components.AbilityDuration!.remaining!).toBeLessThanOrEqual(DOME_COOLDOWN);
+    expect(dome.components.AbilityDuration!.remaining!).toBe(DOME_TICKS);
+    expect(abilityDef('slowDome').cooldownTicks).toBe(DOME_COOLDOWN);
   });
 
   it('купол: сколько ни жми, двух живых куполов одного героя не бывает', () => {
@@ -1404,7 +1727,7 @@ describe('фаербол: урон по герою, препятствия и п
   it('попадание по чужому герою снимает 100 hp и уносит снаряд', () => {
     const a = arena(8);
     const p2 = a.heroes[1]!;
-    pressA(a, CAST); // быстрый тап — обычный шар
+    chargeA(a, 0); // быстрый тап — обычный шар
     const shot = fireballs(a.state)[0]!;
     expect(projectile(a.state, shot, 'damage')).toBe(HIT_DAMAGE);
     expect(projectile(a.state, shot, 'scale')).toBe(FIXED_ONE);
@@ -1417,6 +1740,63 @@ describe('фаербол: урон по герою, препятствия и п
     expect(hp(a.state, a.heroes[0]!)).toBe(1000);
   });
 
+  it('труп снаряд не задерживает: коллайд снимается смертью, снаряд летит СКВОЗЬ', () => {
+    // Труп остаётся в мире все 600 тиков до возрождения, и с ним оставался его
+    // коллайдер: слой 2 продолжал ловиться сенсорной маской снаряда
+    // (`hitMask: 2`, PHYS-12), а `projectile.onHit` героя от мертвеца не
+    // отличал — фаербол рвался о лежачего и до живого за ним не долетал.
+    // Смерть теперь гасит СЛОЙ (`layer: 0`): труп перестаёт быть препятствием
+    // и сенсорной целью для всех сразу, а не для каждого потребителя отдельно.
+    const a = ffa([20, 24, 28]);
+    const corpse = a.heroes[1]!;
+    const behind = a.heroes[2]!;
+
+    a.step([NEUTRAL, { buttons: KILL }]);
+    expect(coreWorld.hasComponent(a.state.world, corpse, 'Dead')).toBe(true);
+    expect(coreWorld.getField(a.state.world, corpse, 'Collider', 'layer')).toBe(0);
+
+    // Стрелок кастует на восток — линия проходит ровно через лежачего.
+    a.step([{ buttons: CAST }]);
+    a.step();
+    a.step([{ buttons: CONFIRM }]);
+    expect(fireballs(a.state)).toHaveLength(1);
+
+    for (let i = 0; i < 40 && fireballs(a.state).length > 0; i++) a.step();
+    // Снаряд израсходован на ЖИВОМ за трупом, а не на самом трупе.
+    expect(hp(a.state, behind)).toBe(1000 - HIT_DAMAGE);
+    expect(fireballs(a.state)).toHaveLength(0);
+  });
+
+  it('коллайд гасят ВСЕ три пути смерти сцены, а не только один', () => {
+    // Поведенчески выше проверен `KillSwitch`; здесь — структурный пин на то,
+    // что падение и обнуление здоровья не разошлись с ним молча. Тот же приём,
+    // что у пинов щита и захвата: путь смерти, оставляющий трупу его слой,
+    // обязан быть виден в диффе этого теста.
+    const clearsLayer = (name: string): boolean => {
+      const system = SCENE.systems!.find((candidate) => candidate.name === name);
+      expect(system, `в сцене нет системы ${name}`).toBeDefined();
+      let found = false;
+      const walk = (node: unknown): void => {
+        if (Array.isArray(node)) {
+          for (const item of node) walk(item);
+          return;
+        }
+        if (node === null || typeof node !== 'object') return;
+        const record = node as Record<string, unknown>;
+        const modify = record.modifyComponent as
+          | { component?: string; values?: Record<string, unknown> }
+          | undefined;
+        if (modify?.component === 'Collider' && modify.values?.layer === 0) found = true;
+        for (const value of Object.values(record)) walk(value);
+      };
+      walk(system);
+      return found;
+    };
+    for (const path of ['KillSwitch', 'FallDeath', 'HealthDeath']) {
+      expect(clearsLayer(path), `путь смерти ${path} не гасит слой коллайдера`).toBe(true);
+    }
+  });
+
   it('снаряд взрывается об обрыв плато и дальше не летит', () => {
     // Герой под южной кромкой северо-западного плато (уровень 1, ряды 11–18,
     // колонки 11–18): снаряд на север упирается в ПОДЪЁМ на y = 19, и гейт
@@ -1425,8 +1805,9 @@ describe('фаербол: урон по герою, препятствия и п
     const AIM_NORTH = 0xc000; // −y: cos = 0, sin = −1
     a.step([{ buttons: CAST, aimDir: AIM_NORTH }]);
     a.step([{ aimDir: AIM_NORTH }]);
+    a.step([{ buttons: CONFIRM, aimDir: AIM_NORTH }]);
     const shot = fireballs(a.state)[0]!;
-    const life = coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks');
+    const life = flightLeft(a.state, shot);
     expect(life).toBeGreaterThan(0);
 
     let exploded = false;
@@ -1457,6 +1838,7 @@ describe('фаербол: урон по герою, препятствия и п
     const victim = a.heroes[1]!;
     a.step([{ buttons: CAST }, NEUTRAL, { buttons: CAST, aimDir: AIM_WEST }]);
     a.step([NEUTRAL, NEUTRAL, { aimDir: AIM_WEST }]);
+    a.step([{ buttons: CONFIRM }, NEUTRAL, { buttons: CONFIRM, aimDir: AIM_WEST }]);
     expect(fireballs(a.state)).toHaveLength(2);
 
     let events: readonly string[] = [];
@@ -1518,6 +1900,7 @@ describe('фаербол: урон по герою, препятствия и п
     const terrain = a.sim.terrain!;
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
     let at = { x: 0, y: 0 };
     let exploded = false;
@@ -1558,6 +1941,7 @@ describe('фаербол над рельефом: направленный ге�
   function shoot(a: Ffa, aimDir: number): EntityId {
     a.step([{ buttons: CAST, aimDir }]);
     a.step([{ aimDir }]);
+    a.step([{ buttons: CONFIRM, aimDir }]);
     const shot = fireballs(a.state)[0]!;
     expect(shot).toBeDefined();
     return shot;
@@ -1693,21 +2077,150 @@ describe('заряд каста: рост, выстрел и передержк�
     expect(shotAfter(CHARGE_TICKS + CHARGE_GRACE_TICKS - 1).damage).toBe(400);
   });
 
+  it('одиночный клик стреляет ТЕМ ЖЕ тиком и минимальным шаром', () => {
+    // Требование игрока дословно: «при одинарном нажатии ЛКМ превью не
+    // появляется, выстрел происходит сразу». Между отпусканием и снарядом не
+    // должно быть НИ ОДНОГО тика — раньше их было тридцать (фаза подтверждения
+    // истекала по таймауту), и полсекунды задержки читались как лаг.
+    const a = ffa([20, 28], { extract: true });
+    const caster = a.heroes[0]!;
+    a.step([{ buttons: CAST }]);
+    expect(fireballs(a.state)).toHaveLength(0);
+    // Заряд такого клика заведомо младше порога превью — предикт не рисуется.
+    const charge = a.view().entities.get(caster)!.stats?.get(STATS.charge) ?? 0;
+    expect(charge).toBeLessThan(CHARGE_PREVIEW_MIN_TICKS);
+
+    a.step();
+    const shots = fireballs(a.state);
+    expect(shots).toHaveLength(1);
+    // Шар минимальный: тик нажатия окном заряда не считается.
+    expect(projectile(a.state, shots[0]!, 'scale')).toBe(FIXED_ONE);
+    expect(projectile(a.state, shots[0]!, 'damage')).toBe(HIT_DAMAGE);
+    expect(coreWorld.hasTag(a.state.world, shots[0]!, 'HeavyFireball')).toBe(false);
+    // И маркер заряда снят тем же тиком: шар заряда гаснет вместе с выстрелом.
+    expect(coreWorld.hasComponent(a.state.world, caster, 'Charging')).toBe(false);
+  });
+
   it('выстрел ставит кулдаун каста, и на нём заряд не начинается', () => {
     const a = arena(8);
     const p1 = a.heroes[0]!;
     chargeA(a, 0);
-    // Кулдаун ставится в тике выстрела, а убавляет его `CooldownTick` (order 10)
-    // со следующего — здесь он ещё полный.
-    expect(coreWorld.getField(a.state.world, p1, 'Cooldowns', 'cast')).toBe(CAST_COOLDOWN);
+    // Кулдаун ставится в начале тика выстрела (`CastPhaseSystem`), а убавляет
+    // его `CooldownSystem` в конце того же тика (800) — отсюда единица.
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.cast)).toBe(CAST_COOLDOWN - 1);
     a.step({ buttons: CAST });
     expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(false);
     expect(fireballs(a.state)).toHaveLength(1);
 
     for (let i = 0; i < CAST_COOLDOWN; i++) a.step(NEUTRAL);
-    expect(coreWorld.getField(a.state.world, p1, 'Cooldowns', 'cast')).toBe(0);
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.cast)).toBe(0);
     a.step({ buttons: CAST });
     expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(true);
+  });
+
+  it('отмена рвёт каст и возвращает кулдаун (ABIL-6)', () => {
+    // Бит отмены — обычный бит маски, назначенный сценой (INP-4): определение
+    // называет его `cancelBit`, и умолчание источника `cancelInput` возвращает
+    // кулдаун (ABIL-6), поэтому передумавший игрок не платит ничего.
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    a.step({ buttons: CAST });
+    for (let i = 0; i < 10; i++) a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(true);
+
+    a.step({ buttons: CAST | CANCEL });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(false);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'ActionLock')).toBe(false);
+    expect(fireballs(a.state)).toHaveLength(0);
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.cast)).toBe(0);
+    // Источник прерывания различим полем слота — по нему `onCancel` и решает,
+    // взрывать заряд или просто убрать его (ABIL-1, ABIL-6).
+    const slot = slotOf(a.state, p1, ABILITY_SLOTS.cast);
+    expect(coreWorld.getField(a.state.world, slot, 'AbilitySlot', 'lastInterrupt')).toBe(2);
+
+    // И способность СРАЗУ доступна снова: возврат — это ноль, а не «почти ноль».
+    // Тик без битов нужен только затем, чтобы у каста был ФРОНТ (ABIL-3).
+    a.step(NEUTRAL);
+    a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(true);
+  });
+
+  it('смерть посреди заряда рвёт каст источником `death` и возвращает кулдаун', () => {
+    // Смерть распознаётся по маркеру, названному биндингом сцены (ABIL-8), и
+    // прерывает каст на общих основаниях: умолчание источника `death` —
+    // возврат кулдауна (ABIL-6), а `onCancel` фазы убирает то, что фаза успела
+    // поставить, — маркер заряда и лок манёвров.
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    a.step({ buttons: CAST });
+    for (let i = 0; i < 20; i++) a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(true);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'ActionLock')).toBe(true);
+
+    // `KillSwitch` (order 20) вешает маркер, а прерывание читает его в начале
+    // СЛЕДУЮЩЕГО тика: автомат каста стоит на −790.
+    a.step({ buttons: CAST | KILL });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Dead')).toBe(true);
+    a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(false);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'ActionLock')).toBe(false);
+    expect(fireballs(a.state)).toHaveLength(0);
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.cast)).toBe(0);
+
+    const slot = slotOf(a.state, p1, ABILITY_SLOTS.cast);
+    // Код источника нормативен и следует порядку словаря ABIL-6: `death` пятый.
+    expect(coreWorld.getField(a.state.world, slot, 'AbilitySlot', 'lastInterrupt')).toBe(5);
+    // Слот при этом ЖИВ: смерть владельца сиротством не является, и способности
+    // герой не теряет (design Decision 14).
+    expect(coreWorld.isAlive(a.state.world, slot)).toBe(true);
+  });
+
+  it('лок с маской определения рвёт каст источником `disable`', () => {
+    // Стана в демо сегодня нет: единственный лок сцены — бит 0, которым каст
+    // запирает манёвры сам себе, и пересечения с маской `disable` (бит 1) у
+    // него нет. Источник от этого не перестаёт быть объявленным, и проверить
+    // его можно ровно так, как его увидит первая же сцена со станом: сценой,
+    // где лок этот бит поднимает.
+    const stunner = {
+      name: 'Stun',
+      order: 25,
+      query: { all: ['Charging', 'Player'] },
+      as: 'e',
+      do: [
+        {
+          if: {
+            cond: { '>=': [{ getComponent: [{ var: 'e' }, 'Charging', 'ticks'] }, 0] },
+            then: [
+              {
+                addComponent: {
+                  entity: { var: 'e' },
+                  component: 'ActionLock',
+                  values: { mask: 3 },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const retuned = {
+      ...SCENE,
+      systems: [...SCENE.systems!, stunner],
+    } as unknown as SceneDef;
+
+    const a = arena(8, retuned);
+    const p1 = a.heroes[0]!;
+    a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(true);
+    // Лок встал на order 25 этого же тика; прерывание читает его на −790
+    // следующего.
+    a.step({ buttons: CAST });
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Charging')).toBe(false);
+    expect(fireballs(a.state)).toHaveLength(0);
+    // Умолчание `disable` — кулдаун ЦЕЛИКОМ: способность потрачена (ABIL-6).
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.cast)).toBe(CAST_COOLDOWN - 1);
+    const slot = slotOf(a.state, p1, ABILITY_SLOTS.cast);
+    expect(coreWorld.getField(a.state.world, slot, 'AbilitySlot', 'lastInterrupt')).toBe(4);
   });
 
   it('передержка на 300 мс сверх максимума рвёт заряд в самом кастере', () => {
@@ -1724,9 +2237,9 @@ describe('заряд каста: рост, выстрел и передержк�
       ticks += 1;
     }
     expect(exploded).toContain('ChargeExploded');
-    // Заряд считается тиками ПОСЛЕ тика нажатия, и `ChargeTick` (order 29)
-    // прибавляет свой тик до проверки (order 35) — отсюда две служебные
-    // единицы. Сам порог — ровно 78 тиков заряда: максимум плюс 300 мс.
+    // Две служебные единицы: тик нажатия только ВХОДИТ в фазу (её счётчик на
+    // нём равен нулю), а таймаут срабатывает на тике, где счётчик достиг
+    // `durationTicks`. Сам порог — ровно 78 тиков заряда: максимум плюс 300 мс.
     expect(ticks - 2).toBe(CHARGE_TICKS + CHARGE_GRACE_TICKS);
     // Урон достаётся и кастеру: свои промахи стоят ровно столько же.
     expect(hp(a.state, caster)).toBe(1000 - OVERCHARGE_DAMAGE);
@@ -1737,7 +2250,7 @@ describe('заряд каста: рост, выстрел и передержк�
     expect(coreWorld.hasComponent(a.state.world, caster, 'Charging')).toBe(false);
     expect(coreWorld.hasComponent(a.state.world, caster, 'ActionLock')).toBe(false);
     expect(fireballs(a.state)).toHaveLength(0);
-    expect(coreWorld.getField(a.state.world, caster, 'Cooldowns', 'cast')).toBe(CAST_COOLDOWN);
+    expect(cooldown(a.state, caster, ABILITY_SLOTS.cast)).toBe(CAST_COOLDOWN - 1);
   });
 
   it('вне радиуса передержка не задевает никого', () => {
@@ -1769,7 +2282,7 @@ describe('заряд каста: рост, выстрел и передержк�
 
   it('во время заряда захват не срабатывает, а с пойманным снарядом не начинается заряд', () => {
     const a = arena(8);
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     const p2 = a.heroes[1]!;
     for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
@@ -1784,19 +2297,19 @@ describe('заряд каста: рост, выстрел и передержк�
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(false);
     expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(false);
     // Кулдаун захвата не списан: `CaptureRelease` до своей ветки не дошёл.
-    expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'capture')).toBe(0);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.capture)).toBe(0);
   });
 
   it('с пойманным снарядом в руках заряд не начинается — ЛКМ это бросок', () => {
     const a = arena(8);
-    pressA(a, CAST);
+    chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
     const p2 = a.heroes[1]!;
     for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
       a.step(NEUTRAL);
     }
     a.step(NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST });
-    a.step(NEUTRAL, { aimDir: AIM_WEST });
+    a.step(NEUTRAL, { buttons: CONFIRM, aimDir: AIM_WEST });
     expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(true);
 
     a.step(NEUTRAL, { buttons: CAST, aimDir: AIM_WEST });
@@ -1817,7 +2330,7 @@ describe('заряд каста: рост, выстрел и передержк�
       a.step(NEUTRAL);
     }
     a.step(NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST });
-    a.step(NEUTRAL, { aimDir: AIM_WEST });
+    a.step(NEUTRAL, { buttons: CONFIRM, aimDir: AIM_WEST });
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
     // Захват сохраняет заряд: держать в руках 400 — не то же самое, что 100.
     expect(projectile(a.state, shot, 'damage')).toBe(400);
@@ -1855,6 +2368,7 @@ describe('щит: рикошет снаряда, смена владельца �
     const p2 = a.heroes[1]!;
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
     const speed = vel(a.state, shot, 'x');
     expect(speed).toBeGreaterThan(0);
@@ -1906,6 +2420,7 @@ describe('щит: рикошет снаряда, смена владельца �
     // Без щита тот же снаряд снимает свои 100.
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     for (let i = 0; i < 40 && fireballs(a.state).length > 0; i++) a.step();
     expect(hp(a.state, p2)).toBe(1000 - HIT_DAMAGE);
   });
@@ -1916,7 +2431,7 @@ describe('щит: рикошет снаряда, смена владельца �
     a.step([NEUTRAL, { buttons: SHIELD }]);
     // Кулдаун ставится в тике каста; убавляет его `CooldownTick` (order 10) со
     // следующего — здесь он ещё полный.
-    expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'shield')).toBe(SHIELD_COOLDOWN);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.shield)).toBe(SHIELD_COOLDOWN - 1);
 
     // Щит истёк, кулдаун ещё идёт — повторный фронт пустой.
     for (let i = 0; i < SHIELD_TICKS + 4; i++) a.step();
@@ -1925,7 +2440,7 @@ describe('щит: рикошет снаряда, смена владельца �
     expect(shielded(a.state, p2)).toBe(false);
 
     for (let i = 0; i < SHIELD_COOLDOWN; i++) a.step();
-    expect(coreWorld.getField(a.state.world, p2, 'Cooldowns', 'shield')).toBe(0);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.shield)).toBe(0);
     a.step([NEUTRAL, { buttons: SHIELD }]);
     expect(shielded(a.state, p2)).toBe(true);
   });
@@ -1935,9 +2450,8 @@ describe('щит: рикошет снаряда, смена владельца �
     // сравнения `Owner.slot` с `Player.slot` хозяин щита сбивал бы им себя же.
     // Неравенство пиннится здесь: перетюн выноса или радиуса щита сделал бы
     // проверку владельца лишней молча, а не в диффе.
-    const ability = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!.components
-      .AbilityConfig!;
-    expect(ability.throwOffset).toBeLessThan(SHIELD_RADIUS + FIREBALL_RADIUS);
+    expect(numbersIn(abilityDef('fireball'))).toContain(THROW_OFFSET);
+    expect(THROW_OFFSET).toBeLessThan(SHIELD_RADIUS + FIREBALL_RADIUS);
 
     const a = ffa([20, 28]);
     const p1 = a.heroes[0]!;
@@ -1946,6 +2460,7 @@ describe('щит: рикошет снаряда, смена владельца �
     expect(shielded(a.state, p1)).toBe(true);
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
     const speed = vel(a.state, shot, 'x');
     expect(speed).toBeGreaterThan(0);
@@ -1973,6 +2488,7 @@ describe('щит: рикошет снаряда, смена владельца �
     expect(shielded(a.state, p2)).toBe(true);
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
 
     // Ловим ДО того, как снаряд войдёт в пузырь: щит и захват целятся в одно и
@@ -1981,7 +2497,7 @@ describe('щит: рикошет снаряда, смена владельца �
     for (let i = 0; i < 40 && !caught && fireballs(a.state).length > 0; i++) {
       a.step([NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }]);
       if (x(a.state, p2) - x(a.state, shot) <= 2 * FIXED_ONE) {
-        a.step([NEUTRAL, { aimDir: AIM_WEST }]);
+        a.step([NEUTRAL, { buttons: CONFIRM, aimDir: AIM_WEST }]);
         caught = coreWorld.hasComponent(a.state.world, shot, 'Held');
       }
     }
@@ -2072,6 +2588,7 @@ describe('щит: рикошет снаряда, смена владельца �
     a.step([NEUTRAL, { buttons: SHIELD }]);
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
 
     for (let i = 0; i < 60 && fireballs(a.state).length > 0; i++) {
@@ -2108,6 +2625,7 @@ describe('щит: рикошет снаряда, смена владельца �
     a.step([NEUTRAL, { buttons: SHIELD }]);
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
     for (let i = 0; i < 60 && fireballs(a.state).length > 0; i++) {
       a.step();
@@ -2122,7 +2640,7 @@ describe('щит: рикошет снаряда, смена владельца �
       // смотреть на него — раствор считается от `aimDir` (`CaptureRelease`).
       a.step([{ buttons: CAPTURE, aimDir: AIM_EAST }]);
       if (x(a.state, shot) - x(a.state, p1) <= 2 * FIXED_ONE) {
-        a.step([{ aimDir: AIM_EAST }]);
+        a.step([{ buttons: CONFIRM, aimDir: AIM_EAST }]);
         caught = coreWorld.hasComponent(a.state.world, shot, 'Held');
       }
     }
@@ -2137,9 +2655,11 @@ describe('щит: рикошет снаряда, смена владельца �
     const p2 = a.heroes[1]!;
     // Полный заряд: 60 тиков удержания сверх тика нажатия.
     for (let i = 0; i <= CHARGE_TICKS; i++) a.step([{ buttons: CAST }]);
-    // Отпускание — тем же тиком щит соперника: пузырь живёт секунду, и ставить
-    // его заранее бессмысленно.
+    // Отпускание открывает прицеливание, выстрел даёт подтверждение — тем же
+    // тиком щит соперника: пузырь живёт секунду, и ставить его заранее
+    // бессмысленно.
     a.step([NEUTRAL, { buttons: SHIELD }]);
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
     expect(projectile(a.state, shot, 'damage')).toBe(400);
     expect(coreWorld.hasTag(a.state.world, shot, 'HeavyFireball')).toBe(true);
@@ -2167,22 +2687,23 @@ describe('щит: рикошет снаряда, смена владельца �
     a.step([{ buttons: CAST | SHIELD }]);
     expect(shielded(a.state, p1)).toBe(false);
     // Кулдаун не списан: `ShieldCast` до своей ветки не дошёл.
-    expect(coreWorld.getField(a.state.world, p1, 'Cooldowns', 'shield')).toBe(0);
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.shield)).toBe(0);
 
     const b = ffa([20, 28]);
     const keeper = b.heroes[1]!;
     b.step([{ buttons: CAST }]);
     b.step();
+    b.step([{ buttons: CONFIRM }]);
     const shot = fireballs(b.state)[0]!;
     for (let i = 0; i < 200 && x(b.state, keeper) - x(b.state, shot) > 2 * FIXED_ONE; i++) {
       b.step();
     }
     b.step([NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }]);
-    b.step([NEUTRAL, { aimDir: AIM_WEST }]);
+    b.step([NEUTRAL, { buttons: CONFIRM, aimDir: AIM_WEST }]);
     expect(coreWorld.hasComponent(b.state.world, keeper, 'Holding')).toBe(true);
     b.step([NEUTRAL, { buttons: SHIELD, aimDir: AIM_WEST }]);
     expect(shielded(b.state, keeper)).toBe(false);
-    expect(coreWorld.getField(b.state.world, keeper, 'Cooldowns', 'shield')).toBe(0);
+    expect(cooldown(b.state, keeper, ABILITY_SLOTS.shield)).toBe(0);
   });
 
   it('щит не запирает ни манёвры, ни касты — он только пузырь', () => {
@@ -2209,6 +2730,7 @@ describe('щит: рикошет снаряда, смена владельца �
     a.step([NEUTRAL, { buttons: SHIELD }]);
     a.step([{ buttons: CAST }, NEUTRAL, { buttons: CAST, aimDir: AIM_WEST }]);
     a.step([NEUTRAL, NEUTRAL, { aimDir: AIM_WEST }]);
+    a.step([{ buttons: CONFIRM }, NEUTRAL, { buttons: CONFIRM, aimDir: AIM_WEST }]);
     const shots = fireballs(a.state);
     expect(shots).toHaveLength(2);
     const speeds = shots.map((shot) => vel(a.state, shot, 'x'));
@@ -2257,6 +2779,7 @@ describe('щит: рикошет снаряда, смена владельца �
     a.step([NEUTRAL, { buttons: SHIELD }, { buttons: SHIELD }]);
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
 
     let both = false;
@@ -2286,8 +2809,9 @@ describe('щит: рикошет снаряда, смена владельца �
     a.step([{ buttons: SHIELD }, { buttons: SHIELD }]);
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
-    const life = coreWorld.getField(a.state.world, shot, 'Lifetime', 'ticks');
+    const life = flightLeft(a.state, shot);
     expect(life).toBeGreaterThan(0);
 
     let flips = 0;
@@ -2328,6 +2852,8 @@ describe('щит: рикошет снаряда, смена владельца �
     a.step([NEUTRAL, { buttons: SHIELD }]);
     expect(shielded(a.state, keeper)).toBe(true);
     a.step([{ buttons: CAST, aimDir: AIM_NE }]);
+    // Отпускание — и есть выстрел (фаза `release`): направление берётся из
+    // прицела ЭТОГО тика.
     a.step([{ aimDir: AIM_NE }]);
     const shot = fireballs(a.state)[0]!;
 
@@ -2369,6 +2895,7 @@ describe('щит: рикошет снаряда, смена владельца �
     const probe = ffa([20, [24, 40]]);
     probe.step([{ buttons: CAST }]);
     probe.step();
+    probe.step([{ buttons: CONFIRM }]);
     const flying = fireballs(probe.state)[0]!;
     let center = 0;
     for (let t = 0; t < 20 && fireballs(probe.state).length > 0; t++) {
@@ -2389,6 +2916,7 @@ describe('щит: рикошет снаряда, смена владельца �
     const keeper = a.heroes[1]!;
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
     const speed = vel(a.state, shot, 'x');
     expect(speed).toBeGreaterThan(0);
@@ -2418,29 +2946,32 @@ describe('щит: рикошет снаряда, смена владельца �
     // и на последнем тике счётчика снаряд ещё отскакивает. Здесь пиннится
     // вторая половина этой асимметрии — та, что не про картинку.
     /**
-     * Прогон «щит на ПЕРВОМ тике, выстрел на тике `shotAt`»: тик каста — первый
-     * из 60, поэтому номер тика контакта и есть номер тика счётчика. Отдаёт тик
-     * рикошета (0 — рикошета не было) и здоровье хозяина щита.
+     * Прогон «щит на ПЕРВОМ тике, снаряд рождается на тике `bornAt`»: тик щита —
+     * первый из 60, поэтому номер тика контакта и есть номер тика счётчика.
+     * Каст занимает три тика (нажатие, отпускание, подтверждение), поэтому
+     * кнопка жмётся за два тика до рождения снаряда. Отдаёт тик рикошета (0 —
+     * рикошета не было) и здоровье хозяина щита.
      */
-    function run(shotAt: number): { bounceAt: number; keeperHp: number } {
+    function run(bornAt: number): { bounceAt: number; keeperHp: number } {
       const a = ffa([20, 28]);
       const keeper = a.heroes[1]!;
       let bounceAt = 0;
-      for (let t = 1; t <= shotAt + 40; t++) {
+      for (let t = 1; t <= bornAt + 40; t++) {
         const frames: Frame[] = [NEUTRAL, NEUTRAL];
         if (t === 1) frames[1] = { buttons: SHIELD };
-        if (t === shotAt) frames[0] = { buttons: CAST };
+        if (t === bornAt - 2) frames[0] = { buttons: CAST };
+        if (t === bornAt) frames[0] = { buttons: CONFIRM };
         if (a.step(frames).includes('ShieldRicochet') && bounceAt === 0) bounceAt = t;
-        if (t > shotAt + 1 && fireballs(a.state).length === 0) break;
+        if (t > bornAt + 1 && fireballs(a.state).length === 0) break;
       }
       return { bounceAt, keeperHp: hp(a.state, keeper) };
     }
 
     // Время полёта меряется отдельным прогоном той же геометрии — числа
     // скорости и дистанции в тест не переписываются.
-    const probe = run(2);
+    const probe = run(4);
     expect(probe.bounceAt).toBeGreaterThan(0);
-    const flight = probe.bounceAt - 2;
+    const flight = probe.bounceAt - 4;
 
     // Выстрел так, чтобы контакт пришёлся на 60-й тик счётчика — последний.
     // Компонент снимается ПОСЛЕ рикошета (`ShieldExpire` order 111 идёт за
@@ -2507,28 +3038,35 @@ describe('щит: рикошет снаряда, смена владельца �
     }
   });
 
-  it('захват и щит одним тиком: захват решает, щит не встаёт и кулдаун цел', () => {
-    // `ShieldCast` (order 39) идёт ПОСЛЕ `CaptureRelease` (order 38): отпускание
-    // `R` и нажатие `E` одним тиком дают руки, занятые снарядом, — а не
-    // Shielded+Holding разом, что противоречило бы заявленной блокировке
-    // «щит нельзя с пойманным снарядом».
+  it('захват и щит одним тиком проходят оба, а следующим — уже нет', () => {
+    // Прежде очередь решала шкала `order`: `ShieldCast` (39) видел `Holding`,
+    // поставленный `CaptureRelease` (38) того же тика. Теперь обе способности —
+    // слоты ОДНОЙ системы (`CastPhaseSystem`), а её команды мир видит только
+    // после flush (CMD-2), поэтому предикат щита читает мир БЕЗ ещё не
+    // применённого `Holding`, и на общем тике проходят оба. Блокировка «щит
+    // нельзя с пойманным снарядом» при этом жива — она держит все следующие
+    // тики, а совпадение с точностью до тика перестало быть решающим.
     const a = ffa([20, 28]);
     const keeper = a.heroes[1]!;
     a.step([{ buttons: CAST }]);
     a.step();
+    a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
 
     // Держим `R` зажатым, пока снаряд не подойдёт в сектор захвата.
     for (let i = 0; i < 200 && x(a.state, keeper) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
       a.step([NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST }]);
     }
-    // Тот самый тик: `R` отпущено, `E` нажато.
-    a.step([NEUTRAL, { buttons: SHIELD, aimDir: AIM_WEST }]);
+    // Тот самый тик: шаг захвата подтверждён, `E` нажато.
+    a.step([NEUTRAL, { buttons: CONFIRM | SHIELD, aimDir: AIM_WEST }]);
 
     expect(coreWorld.hasComponent(a.state.world, keeper, 'Holding')).toBe(true);
-    expect(shielded(a.state, keeper)).toBe(false);
-    // Кулдаун щита не списан: `ShieldCast` отсеян запросом, а не веткой.
-    expect(coreWorld.getField(a.state.world, keeper, 'Cooldowns', 'shield')).toBe(0);
+    expect(shielded(a.state, keeper)).toBe(true);
+    // Кулдаун щита при этом списан — способность действительно сработала.
+    expect(cooldown(a.state, keeper, ABILITY_SLOTS.shield)).toBe(SHIELD_COOLDOWN - 1);
+    // Что блокировка «щит нельзя с пойманным снарядом» жива на всех
+    // ПОСЛЕДУЮЩИХ тиках, проверяет тест «во время заряда и с пойманным снарядом
+    // щит не ставится» — здесь пиннится ровно совпадение с точностью до тика.
   });
 
   it('щит не крадёт снаряд без отражения: перебор подклеточных выравниваний', () => {
@@ -2556,6 +3094,7 @@ describe('щит: рикошет снаряда, смена владельца �
       a.step([NEUTRAL, { buttons: SHIELD }]);
       a.step([{ buttons: CAST }]);
       a.step();
+      a.step([{ buttons: CONFIRM }]);
       const shot = fireballs(a.state)[0]!;
       const speed = vel(a.state, shot, 'x');
       let ricochets = 0;
@@ -2582,7 +3121,13 @@ describe('щит: рикошет снаряда, смена владельца �
       if (hp(a.state, keeper) !== 1000) failures.push(`${at}: щит протёк на урон`);
     }
     expect(failures).toEqual([]);
-  });
+    // Собственное окно: перебор поднимает 256 миров матча и на свободной машине
+    // укладывается в ~3 с — то есть больше половины умолчания vitest (5 с). Под
+    // общим прогоном `npm run check`, где тикают все пакеты сразу, он это
+    // умолчание перешагивает, и гейт краснеет не от поведения, а от загрузки
+    // машины. Число тут — запас над стоимостью перебора, а не бюджет: реальное
+    // удорожание симуляции ловят счётчики стоимости и их голден (PERF-3/PERF-4).
+  }, 30_000);
 
   it('щит, поднятый над снарядом ЗА центром, но внутри тела, всё равно отражает', () => {
     // Вторая половина гейта — дизъюнкт `reached`, и после ретюна щита на 2,6 он
@@ -2604,6 +3149,7 @@ describe('щит: рикошет снаряда, смена владельца �
       const keeper = a.heroes[1]!;
       a.step([{ buttons: CAST }]);
       a.step();
+      a.step([{ buttons: CONFIRM }]);
       const shot = fireballs(a.state)[0]!;
       const speed = vel(a.state, shot, 'x');
       for (let i = 0; i < 40 && fireballs(a.state).length > 0; i++) {
@@ -2718,10 +3264,234 @@ describe('щит: рикошет снаряда, смена владельца �
  * заявленные тики, что убраны ВСЕ следы каждого из путей смерти (компонентов у
  * них разный набор) и что возрождения двух героев не мешают друг другу.
  */
+/**
+ * Рывок демо — СПОСОБНОСТЬ (определение `dodge`), а не манёвр по кнопке.
+ * Механика манёвра осталась за `LocomotionSystem` (LOC-3, LOC-4): определение
+ * лишь пишет состояние машины манёвров, а дальше её ведёт система — те же
+ * поля, тот же счётчик, та же скорость из конфигурации. Ради чего перенос:
+ * кулдаун и гейт триггера достаются от платформы (ABIL-7), а вместе с ними —
+ * доставленный стат кулдауна для виджета, который HUD объявил заранее.
+ *
+ * Проверяется здесь политика сцены, а не ядро: условие определения (кого и
+ * когда рывок не берёт) и то, что системный триггер уклона в сборке ВЫКЛЮЧЕН —
+ * иначе одно нажатие стартовало бы манёвр дважды, и кулдаун ничего бы не
+ * значил.
+ */
+describe('рывок — способность с кулдауном (ABIL-3, ABIL-7, LOC-4)', () => {
+  const motion = (state: SimulationState, entity: EntityId): number =>
+    coreWorld.getField(state.world, entity, 'LocomotionState', 'state');
+
+  it('триггер один: бит рывка читает определение, а не система локомоушена', () => {
+    // Два места, которые обязаны разойтись: бит определения — тот же, что бит
+    // действия сборки, а `dodgeButton` конфига матча — null. Оставь его числом,
+    // и нажатие стартовало бы манёвр и способностью, и системой: кулдаун
+    // взводился бы, а рывок шёл бы всё равно.
+    expect(abilityDef('dodge').trigger).toEqual({ input: { bit: ACTION_BITS.dodge } });
+    expect(MATCH.locomotion.dodgeButton).toBeNull();
+    // Прыжок остался манёвром по кнопке: способности у него нет.
+    expect(MATCH.locomotion.jumpButton).toBe(ACTION_BITS.jump);
+  });
+
+  it('рывок длится те же девять тиков и уносит ровно вдвое дальше прежнего', () => {
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    // Тик разгона: вектор движения ненулевой, и рывок пойдёт по нему на восток.
+    a.step({ moveX: FIXED_ONE });
+    const before = x(a.state, p1);
+    a.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(a.state, p1)).toBe(LOCOMOTION_DODGE);
+    let ticks = 1;
+    while (motion(a.state, p1) === LOCOMOTION_DODGE) {
+      a.step({ moveX: FIXED_ONE });
+      ticks += 1;
+    }
+    // Длительность прежняя: тик старта манёвром уже считается — способность
+    // пишет состояние на шкале раньше (ABIL-4, DET-9), и система ведёт его в
+    // том же тике.
+    expect(ticks).toBe(DODGE_TICKS);
+    // Скоростью манёвра владеет манёвр (LOC-3), поэтому дистанция — ровно
+    // произведение, а не «примерно»: ввод в эти тики на скорость не влияет.
+    expect(x(a.state, p1) - before).toBe(DODGE_TICKS * DODGE_SPEED);
+    expect(x(a.state, p1) - before).toBe(2 * DODGE_DISTANCE_BEFORE);
+  });
+
+  it('второй рывок раньше секунды не идёт, ровно через секунду — идёт (ABIL-7)', () => {
+    // «Способность с кулдауном 60 тиков кастуется на тике T → следующий каст
+    // возможен на тике T+60 и невозможен раньше». Оба прогона подают фронт
+    // ровно на своём тике: гейт — часть платформы, и своей проверки остатка в
+    // определении нет.
+    const early = arena(8);
+    const runner = early.heroes[0]!;
+    early.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(early.state, runner)).toBe(LOCOMOTION_DODGE);
+    // Кулдаун взведён определением и в том же тике убыл на единицу (ABIL-7).
+    expect(cooldown(early.state, runner, ABILITY_SLOTS.dodge)).toBe(DODGE_COOLDOWN - 1);
+    for (let i = 0; i < DODGE_COOLDOWN - 2; i++) early.step({ moveX: FIXED_ONE });
+    early.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(early.state, runner)).toBe(LOCOMOTION_NORMAL);
+
+    const onTime = arena(8);
+    const second = onTime.heroes[0]!;
+    onTime.step({ buttons: DODGE, moveX: FIXED_ONE });
+    for (let i = 0; i < DODGE_COOLDOWN - 1; i++) onTime.step({ moveX: FIXED_ONE });
+    expect(cooldown(onTime.state, second, ABILITY_SLOTS.dodge)).toBe(0);
+    onTime.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(onTime.state, second)).toBe(LOCOMOTION_DODGE);
+  });
+
+  it('рывок с нулевым вектором движения не начинается и кулдауна не тратит (LOC-4)', () => {
+    // «Нажатие при нулевом векторе движения SHALL игнорироваться» — правило
+    // LOC-4, и переезд триггера в определение его не отменяет: условие
+    // определения проверяет тот же вектор, что читала система.
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    a.step({ buttons: DODGE });
+    expect(motion(a.state, p1)).toBe(LOCOMOTION_NORMAL);
+    // Каста не было — кулдаун не взведён: несработавший триггер способность не
+    // тратит (ABIL-3).
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.dodge)).toBe(0);
+    // И то же нажатие с направлением рывок даёт — дело было в векторе.
+    a.step({ moveX: FIXED_ONE });
+    a.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(a.state, p1)).toBe(LOCOMOTION_DODGE);
+  });
+
+  it('с пойманным снарядом рывка нет: условие определения, а не лок (LOC-7)', () => {
+    // Лок манёвров (LOC-7) гейтит ТРИГГЕР СИСТЕМЫ, а он выключен, — значит
+    // способность обязана проверить удержание сама. Иначе «стрейфиться с
+    // захваченным фаерболом нельзя» перестало бы действовать молча: прыжок
+    // остался бы запертым, а рывок нет.
+    const a = arena(8);
+    chargeA(a, 0);
+    const shot = fireballs(a.state)[0]!;
+    const p2 = a.heroes[1]!;
+    for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
+      a.step(NEUTRAL);
+    }
+    a.step(NEUTRAL, { buttons: CAPTURE });
+    a.step(NEUTRAL, { buttons: CONFIRM });
+    expect(coreWorld.hasComponent(a.state.world, p2, 'Holding')).toBe(true);
+
+    a.step(NEUTRAL, { buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(a.state, p2)).toBe(LOCOMOTION_NORMAL);
+    expect(cooldown(a.state, p2, ABILITY_SLOTS.dodge)).toBe(0);
+    // Ходьба при этом жива — запрет селективен ровно как лок.
+    expect(vel(a.state, p2, 'x')).toBeGreaterThan(0);
+  });
+
+  it('двойное нажатие переката не даёт: окно даблтапа закрыто (LOC-4)', () => {
+    // `windowTicks: 0` — заявление документа: перекат сцене не нужен. При
+    // выключенном системном триггере он и так недостижим (начать его нечем),
+    // но число в конфигурации говорит то же самое вслух.
+    const a = arena(8);
+    const p1 = a.heroes[0]!;
+    expect(
+      SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!.components.Locomotion!.windowTicks,
+    ).toBe(0);
+    a.step({ moveX: FIXED_ONE });
+    a.step({ buttons: DODGE, moveX: FIXED_ONE });
+    for (let i = 0; i < DODGE_TICKS + 2; i++) {
+      a.step({ moveX: FIXED_ONE });
+      // Ни одного тика переката за весь манёвр и хвост после него.
+      expect(motion(a.state, p1)).not.toBe(2);
+    }
+    // Повторное нажатие в хвосте манёвра тоже даёт не перекат, а ничего:
+    // кулдаун ещё идёт.
+    a.step({ buttons: DODGE, moveX: FIXED_ONE });
+    expect(motion(a.state, p1)).toBe(LOCOMOTION_NORMAL);
+  });
+});
+
+/**
+ * Шар заряда — картинка главного потока (`chargeBalls.ts`), но растёт он по
+ * ДОСТАВЛЕННОМУ состоянию, а не по счётчику кадра: заряжающий соперник обязан
+ * быть виден противнику (HUD-1), и знать о его нажатиях главному потоку нечем.
+ * Отсюда пара, которую здесь и проверяем: система сцены `ChargeTick` проецирует
+ * счётчик фазы заряда со СПУТНИКА на самого героя, а `extractor.ts` доставляет
+ * его статом. Спутник для этого не годится: слот виден только своей стороне
+ * (`netcode` NET-12, ABIL-8).
+ */
+describe('заряд, видимый противнику: проекция счётчика фазы (HUD-1, NET-12)', () => {
+  it('`Charging.ticks` идёт вровень со счётчиком фазы заряда и едет статом', () => {
+    const a = ffa([20, 28], { extract: true });
+    const caster = a.heroes[0]!;
+    const phaseTicks = (): number =>
+      coreWorld.getField(
+        a.state.world,
+        slotOf(a.state, caster, ABILITY_SLOTS.cast),
+        'AbilitySlot',
+        'phaseTicks',
+      );
+    const charging = (): number =>
+      coreWorld.getField(a.state.world, caster, 'Charging', 'ticks');
+
+    // Слоты выдаёт система сцены на первом же тике (ABIL-1), поэтому спрашивать
+    // их до него нечего.
+    a.step([{ buttons: CAST }]);
+    expect(coreWorld.hasComponent(a.state.world, caster, 'Charging')).toBe(true);
+    expect(charging()).toBe(phaseTicks());
+    for (let i = 0; i < 20; i++) {
+      a.step([{ buttons: CAST }]);
+      expect(charging()).toBe(phaseTicks());
+    }
+    // Величина едет ИМЕННО на герое: слот `Position` не несёт и в поток тиков
+    // не попадает вовсе.
+    const view = a.view().entities.get(caster)!;
+    expect(view.stats?.get(STATS.charge)).toBe(charging());
+    // И прицел — вторым статом: направление шара чужого кастера иначе
+    // приходилось бы угадывать по курсу движения.
+    expect(view.stats?.get(STATS.aim)).toBeCloseTo(AIM_EAST / 65536, 6);
+  });
+
+  it('выстрел уносит счётчик с собой: маркер снимается тем же тиком', () => {
+    // Проекция живёт ровно столько, сколько идёт заряд: отпускание завершает
+    // фазу, эффекты снимают маркер, и шар заряда гаснет вместе с ним — рисовать
+    // заряд, который уже улетел, было бы враньём той же природы, что и заряд,
+    // которого не видно.
+    const a = arena(8);
+    const caster = a.heroes[0]!;
+    const held = 12;
+    a.step({ buttons: CAST });
+    for (let i = 0; i < held; i++) a.step({ buttons: CAST });
+    expect(coreWorld.getField(a.state.world, caster, 'Charging', 'ticks')).toBe(held);
+
+    a.step(NEUTRAL);
+    expect(coreWorld.hasComponent(a.state.world, caster, 'Charging')).toBe(false);
+    expect(fireballs(a.state)).toHaveLength(1);
+  });
+
+  it('сила выстрела считается счётчиком фазы, а не доставляемой проекцией', () => {
+    // Проекцию пишет система сцены ПОЗЖЕ автомата каста по шкале `order`, то
+    // есть на тике выстрела мир несёт её вчерашнее значение. Считай определение
+    // по ней — заряд стоил бы на тик меньше, чем игрок держал. Величина берётся
+    // из области видимости списка действий (`phaseTicks`), и проверяется это
+    // ровно тем, что тик держания стоит ровно одну шестидесятую роста.
+    const scaleAfter = (held: number): number => {
+      const a = arena(8);
+      chargeA(a, held);
+      return projectile(a.state, fireballs(a.state)[0]!, 'scale');
+    };
+    // Границы окна точны в обе стороны: тап — ровно минимум, полное окно —
+    // ровно максимум. Отставание проекции на тик сдвинуло бы обе.
+    expect(scaleAfter(0)).toBe(FIXED_ONE);
+    expect(scaleAfter(CHARGE_TICKS)).toBe(CHARGE_MAX_SCALE);
+    // И первый же тик удержания уже стоит роста — а не пропадает даром.
+    expect(scaleAfter(1)).toBeGreaterThan(FIXED_ONE);
+    expect(scaleAfter(CHARGE_TICKS - 1)).toBeLessThan(CHARGE_MAX_SCALE);
+  });
+
+  it('порог превью короче окна заряда: одиночный клик предикта не показывает', () => {
+    // Гейт живёт в сборке (`main.ts`), а не в подсистеме: «клик — это выстрел, а
+    // не прицеливание» — правило игры. Здесь пиннится только его осмысленность:
+    // порог обязан быть внутри окна роста, иначе он гасил бы предикт всегда.
+    expect(CHARGE_PREVIEW_MIN_TICKS).toBeGreaterThan(0);
+    expect(CHARGE_PREVIEW_MIN_TICKS).toBeLessThan(CHARGE_VISUAL.ticks);
+  });
+});
+
 describe('возрождение героя: смерть больше не терминальна', () => {
   const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
-  const ability = hero.components.AbilityConfig!;
-  /** `AbilityConfig.respawnTicks` — 10 секунд при 60 Гц. */
+  /** Срок возрождения системы `Respawn` — 10 секунд при 60 Гц. */
   const RESPAWN_TICKS = 600;
   const REWIND = 1 << ACTION_BITS.rewind;
 
@@ -2751,12 +3521,12 @@ describe('возрождение героя: смерть больше не те
   }
 
   it('срок возрождения — 10 с, и он длиннее окна пойманного снаряда', () => {
-    expect(ability.respawnTicks).toBe(RESPAWN_TICKS);
+    expect(numbersIn(SCENE.systems!.find((e) => e.name === 'Respawn')!)).toContain(RESPAWN_TICKS);
     expect(RESPAWN_TICKS).toBe(10 * 60);
     // Снаряд, пойманный трупом, обязан разрешиться СВОИМ таймаутом раньше, чем
     // держатель воскреснет: иначе `HeldPin` взорвал бы его в руках уже живого
     // героя и снял бы 250 hp за смерть, случившуюся десять секунд назад.
-    expect(RESPAWN_TICKS).toBeGreaterThan(ability.holdTicks!);
+    expect(RESPAWN_TICKS).toBeGreaterThan(HOLD_TICKS);
   });
 
   it('локомоушен возрождения — те же числа, что у prefab’а (зеркало)', () => {
@@ -2783,14 +3553,39 @@ describe('возрождение героя: смерть больше не те
     expect(coreWorld.getField(a.state.world, p1, 'Spawn', 'y')).toBe(spawnY);
   });
 
+  /**
+   * Сцена с УДЛИНЁННЫМ стартовым остатком ульты. Правится ровно одно число:
+   * стартовый остаток сцены (450) короче окна смерти (600), и к воскрешению он
+   * ноль сам по себе — «сброшен возрождением» от «дотикал» на нуле неотличимо.
+   * Тот же приём, что у соседнего теста про перезарядку длиннее окна смерти.
+   */
+  function withUltStart(remaining: number): SceneDef {
+    return {
+      ...SCENE,
+      prefabs: SCENE.prefabs!.map((prefab) =>
+        prefab.name === 'SlotRewind'
+          ? {
+              ...prefab,
+              components: {
+                ...prefab.components,
+                AbilityCooldown: { remaining, total: remaining },
+              },
+            }
+          : prefab,
+      ),
+    };
+  }
+
   it('смерть от урона: ровно через 600 тиков герой жив, целый и в точке спавна', () => {
-    const a = arena(8);
+    const ULT_START = RESPAWN_TICKS + 300;
+    const a = arena(8, withUltStart(ULT_START));
     const p1 = a.heroes[0]!;
     const spawnX = x(a.state, p1);
     const spawnY = y(a.state, p1);
 
-    // Ульта взводится ДО смерти: её cooldown — exempt-компонент со своей
-    // жизнью, и возрождение обязано оставить его тикать, а не обнулить.
+    // Ульта стартует взведённой (`SlotRewind`), и её cooldown — exempt-компонент
+    // со своей жизнью: возрождение обязано оставить его тикать, а не обнулить.
+    // Нажатие тут ничего не меняет — ровно это и проверяется числом ниже.
     a.step({ buttons: REWIND });
     // Уходим со спавна и тратим щит с куполом: возвращение и сброс перезарядок
     // должны быть видны в числах, а не подразумеваться.
@@ -2798,7 +3593,7 @@ describe('возрождение героя: смерть больше не те
     a.step({ buttons: DOME });
     for (let i = 0; i < 60; i++) a.step({ moveY: FIXED_ONE });
     expect(y(a.state, p1)).toBeGreaterThan(spawnY);
-    expect(coreWorld.getField(a.state.world, p1, 'Cooldowns', 'shield')).toBeGreaterThan(0);
+    expect(cooldown(a.state, p1, ABILITY_SLOTS.shield)).toBeGreaterThan(0);
 
     const deathTick = a.step({ buttons: KILL });
     expect(alive(a, p1)).toBe(false);
@@ -2824,50 +3619,44 @@ describe('возрождение героя: смерть больше не те
     expect(coreWorld.hasComponent(a.state.world, p1, 'Locomotion')).toBe(true);
     expect(coreWorld.getField(a.state.world, p1, 'LocomotionState', 'state')).toBe(0);
     expect(coreWorld.getField(a.state.world, p1, 'Collider', 'cliffRise')).toBe(0);
+    // И коллайд, снятый смертью, вернулся вместе с управлением: слой прежний.
+    expect(coreWorld.getField(a.state.world, p1, 'Collider', 'layer')).toBe(2);
     // Транзиентные состояния сняты.
     for (const component of ['Falling', 'LevelOverride', 'Shielded', 'ActionLock', 'Charging', 'Holding']) {
       expect(coreWorld.hasComponent(a.state.world, p1, component)).toBe(false);
     }
     // Перезарядки способностей обнулены — воскресший кастует сразу.
-    for (const field of ['capture', 'cast', 'dodge', 'jump', 'shield', 'slowDome']) {
-      expect(coreWorld.getField(a.state.world, p1, 'Cooldowns', field)).toBe(0);
+    for (const ability of ['cast', 'slowDome', 'capture', 'shield'] as const) {
+      expect(cooldown(a.state, p1, ABILITY_SLOTS[ability])).toBe(0);
     }
     // А cooldown ульты — нет: он exempt-компонент и живёт своей жизнью (сцена
-    // взвела его 1200 тиков назад минус прожитое).
-    const rewind = coreWorld.getField(a.state.world, p1, 'RewindCooldown', 'ticks');
+    // взвела его стартовым значением, и с тех пор он просто убывал).
+    const rewind = cooldown(a.state, p1, ABILITY_SLOTS.rewind);
     expect(rewind).toBeGreaterThan(0);
-    expect(rewind).toBe(1200 - (tick - 1));
+    expect(rewind).toBe(ULT_START - tick);
   });
 
   it('перезарядка ДЛИННЕЕ окна смерти обнуляется возрождением, а не дотикивает', () => {
     // Сброс перезарядок в `Respawn` при сегодняшних числах не наблюдаем:
-    // `CooldownTick` тикает и у трупа, а самый долгий максимум (300) втрое
+    // `CooldownSystem` тикает и у трупа, а самый долгий максимум (300) втрое
     // короче окна возрождения (600), — то есть к воскрешению всё и так по нулям.
     // Это НЕ повод убирать сброс: он и есть та защита, которая держит инвариант
     // «воскресший кастует сразу» при ретюне любого из двух чисел. Здесь ретюн
     // и разыгрывается: сцена с перезарядкой щита длиннее окна смерти.
     const LONG = 900;
     expect(LONG).toBeGreaterThan(RESPAWN_TICKS);
-    const retuned: SceneDef = {
+    const retuned = {
       ...SCENE,
-      prefabs: SCENE.prefabs!.map((prefab) =>
-        prefab.name === 'Hero'
-          ? {
-              ...prefab,
-              components: {
-                ...prefab.components,
-                Cooldowns: { ...prefab.components.Cooldowns, shieldMax: LONG },
-              },
-            }
-          : prefab,
+      abilities: (SCENE as unknown as SceneDefinitions).abilities!.map((entry) =>
+        entry.id === 'shield' ? { ...entry, cooldownTicks: LONG } : entry,
       ),
-    };
+    } as unknown as SceneDef;
 
     const a = arena(8, retuned);
     const p1 = a.heroes[0]!;
-    const shield = (): number => coreWorld.getField(a.state.world, p1, 'Cooldowns', 'shield');
+    const shield = (): number => cooldown(a.state, p1, ABILITY_SLOTS.shield);
     a.step({ buttons: SHIELD });
-    expect(shield()).toBe(LONG);
+    expect(shield()).toBe(LONG - 1);
 
     const deathTick = a.step({ buttons: KILL });
     let tick = deathTick;
@@ -2885,8 +3674,7 @@ describe('возрождение героя: смерть больше не те
   it('воскресший кастует немедленно — сброшенная перезарядка не обещание', () => {
     const a = arena(8);
     const p1 = a.heroes[0]!;
-    a.step({ buttons: CAST });
-    a.step(NEUTRAL);
+    chargeA(a, 0);
     expect(fireballs(a.state)).toHaveLength(1);
 
     const deathTick = a.step({ buttons: KILL });
@@ -2895,7 +3683,7 @@ describe('возрождение героя: смерть больше не те
     expect(a.step(NEUTRAL) - deathTick).toBe(RESPAWN_TICKS + 1);
 
     const before = fireballs(a.state).length;
-    pressA(a, CAST);
+    chargeA(a, 0);
     expect(fireballs(a.state).length).toBe(before + 1);
   });
 
@@ -3004,32 +3792,49 @@ describe('возрождение героя: смерть больше не те
 });
 
 /**
- * Ульта отката как КОНТЕНТ (`RewindCast`, `RewindCooldownTick`): проверяется не
+ * Ульта отката как КОНТЕНТ (определение `rewind` сцены): проверяется не
  * механизм перемотки — он закрыт тестами ядра, сети и оболочки, — а политика,
  * написанная в сцене: гейт по фронту кнопки и по cooldown'у, взвод cooldown'а и
- * состав payload'а запроса. Мир здесь никто не перематывает: ядро событие не
- * интерпретирует, а хоста в этом стенде нет (WSM-5).
+ * состав payload'а запроса. Кроме одного теста ниже, мир здесь никто не
+ * перематывает: ядро событие не интерпретирует, а хоста в этом стенде нет
+ * (WSM-5).
  */
-describe('ульта отката: политика в сцене (RewindCast)', () => {
+describe('ульта отката: политика в сцене (определение `rewind`)', () => {
   /** Те же числа, что в `duel.scene.json`: 20 секунд перезарядки и 7 секунд глубины. */
   const REWIND_COOLDOWN = 1200;
   const REWIND_DEPTH = 420;
   const REWIND = 1 << ACTION_BITS.rewind;
+  /** Тик, на котором JSON-система `GrantSlots` выдаёт слоты: первый тик мира. */
+  const GRANT_TICK = 1;
 
   const requests = (state: SimulationState): readonly Record<string, number>[] =>
     [...state.events].filter((event) => event.type === REWIND_REQUEST_EVENT).map((e) => e.data);
 
+  /**
+   * Ульта стартует ВЗВЕДЁННОЙ (`SlotRewind.remaining` > 0), так что каст в любом
+   * стенде начинается с ожидания. Основание — в тесте «цель отката не может
+   * лежать раньше выдачи слотов» ниже.
+   */
+  function untilRewindReady(a: Arena): number {
+    let tick = 0;
+    for (let i = 0; i < REWIND_START; i++) tick = a.step(NEUTRAL);
+    expect(cooldown(a.state, a.heroes[0]!, ABILITY_SLOTS.rewind)).toBe(0);
+    return tick;
+  }
+
   it('фронт кнопки эмитит запрос с инициатором и глубиной и взводит cooldown', () => {
     const a = arena();
     const hero = a.heroes[0]!;
+    untilRewindReady(a);
     a.step({ buttons: REWIND });
 
     expect(requests(a.state)).toEqual([{ depthTicks: REWIND_DEPTH, initiator: hero }]);
-    expect(coreWorld.getField(a.state.world, hero, 'RewindCooldown', 'ticks')).toBe(REWIND_COOLDOWN);
+    expect(cooldown(a.state, hero, ABILITY_SLOTS.rewind)).toBe(REWIND_COOLDOWN - 1);
   });
 
   it('удержание второго запроса не даёт: ульта ловит фронт (INP-2)', () => {
     const a = arena();
+    untilRewindReady(a);
     a.step({ buttons: REWIND });
     a.step({ buttons: REWIND });
 
@@ -3039,6 +3844,7 @@ describe('ульта отката: политика в сцене (RewindCast)',
   it('во время cooldown ульта не кастуется', () => {
     const a = arena();
     const hero = a.heroes[0]!;
+    untilRewindReady(a);
     a.step({ buttons: REWIND });
     // Отпустили и нажали снова через сотню тиков: фронт есть, cooldown — нет.
     for (let i = 0; i < 100; i++) a.step(NEUTRAL);
@@ -3046,18 +3852,113 @@ describe('ульта отката: политика в сцене (RewindCast)',
 
     expect(requests(a.state)).toEqual([]);
     // Cooldown при этом убывает по тику, а не стоит.
-    expect(coreWorld.getField(a.state.world, hero, 'RewindCooldown', 'ticks')).toBe(
-      REWIND_COOLDOWN - 101,
+    expect(cooldown(a.state, hero, ABILITY_SLOTS.rewind)).toBe(
+      REWIND_COOLDOWN - 102,
     );
   });
 
   it('заряженный каст ульту не пускает: гейт по Charging', () => {
     const a = arena();
-    // ЛКМ зажата — герой копит заряд (`ChargeStart`), и `RewindCast` его не видит.
+    untilRewindReady(a);
+    // ЛКМ зажата — герой копит заряд, и триггер ульты его не пускает.
     a.step({ buttons: CAST });
     a.step({ buttons: CAST | REWIND });
 
     expect(requests(a.state)).toEqual([]);
+  });
+
+  it('ульта стартует взведённой: цель отката не может лежать раньше выдачи слотов', () => {
+    // Пружина всей связки: слоты способностей выдаются JSON-системой на ПЕРВОМ
+    // тике матча, значит в снапшоте тика 0 их нет. Откат в тик 0 удалил бы
+    // сущность слота вместе с её exempt-кулдауном (REW-9 защищает поле, а не
+    // существование владельца), `GrantSlots` выдала бы слот заново — с нулём, —
+    // и ульта вернула бы саму себя: ровно тот rewind-луп, который exempt
+    // закрывает. Отсюда инвариант сцены: кулдаун ульты СТАРТУЕТ полным и
+    // ДЛИННЕЕ глубины отката, поэтому цель самого раннего каста лежит заведомо
+    // позже тика выдачи.
+    // Пиннится НЕРАВЕНСТВО, а не число: стартовый остаток балансный (сколько
+    // секунд матча ульты нет), а инвариант — нет. Литерал здесь пришлось бы
+    // править при каждом ретюне, и он не поймал бы ровно того, ради чего стоит.
+    const start = SCENE.prefabs!.find((p) => p.name === 'SlotRewind')!.components.AbilityCooldown!;
+    expect(start.remaining).toBe(REWIND_START);
+    // Показывать виджету полную длительность ОЖИДАНИЯ, а не будущего кулдауна:
+    // доля заполнения считается от `total` (HUD-8), и разойдись они — панель на
+    // старте матча показывала бы почти готовую ульту.
+    expect(start.total).toBe(REWIND_START);
+    // Самый ранний каст — тик, следующий за обнулением стартового остатка, и
+    // цель его отката обязана лежать ПОЗЖЕ тика выдачи слотов.
+    expect(REWIND_START + 1 - REWIND_DEPTH).toBeGreaterThan(GRANT_TICK);
+    // Взвод ПОСЛЕ каста держит тот же инвариант — и с запасом: он длиннее
+    // стартового ожидания.
+    expect(abilityDef('rewind').cooldownTicks).toBe(REWIND_COOLDOWN);
+    expect(REWIND_COOLDOWN + 1 - REWIND_DEPTH).toBeGreaterThan(GRANT_TICK);
+    // Глубина отката — из того же определения, а не из литерала теста.
+    expect(numbersIn(abilityDef('rewind'))).toContain(REWIND_DEPTH);
+
+    // И то же неравенство на живом прогоне: считать самому и промахнуться в
+    // арифметике легче, чем кажется.
+    const a = arena();
+    const earliest = untilRewindReady(a) + 1;
+    expect(earliest - REWIND_DEPTH).toBeGreaterThan(GRANT_TICK);
+  });
+
+  it('кулдаун ульты переживает откат на всю глубину (REW-9)', () => {
+    // Единственный тест демо, который ДЕЙСТВИТЕЛЬНО перематывает мир: exempt в
+    // документе матча назван компонентом (`AbilityCooldown`), а живёт он теперь
+    // на сущности слота, созданной уже после сборки мира, — сценарий REW-9
+    // «игрок появился после конфигурирования перемотки» здесь настоящий, а не
+    // умозрительный.
+    const a = arena();
+    const hero = a.heroes[0]!;
+    const history = new RingHistory({
+      interval: MATCH.rewind!.interval,
+      capacity: MATCH.rewind!.capacity,
+    });
+    const inputs = createInputLog(REWIND_COOLDOWN + REWIND_DEPTH);
+    history.record(a.state);
+    const controller = createRewindController(a.sim, a.state, {
+      history,
+      inputs,
+      exempt: MATCH.rewind!.exempt,
+    });
+    const record = (): void => {
+      inputs.record(a.state.tick, a.frames());
+      history.record(a.state);
+    };
+
+    // Ждём готовности ровно столько, сколько просит сцена, и кастуем на САМОМ
+    // РАННЕМ возможном тике: именно он — худший случай для цели отката.
+    a.step(NEUTRAL);
+    record();
+    for (let guard = REWIND_COOLDOWN + 2; cooldown(a.state, hero, ABILITY_SLOTS.rewind) > 0; ) {
+      expect(guard--).toBeGreaterThan(0);
+      a.step(NEUTRAL);
+      record();
+    }
+    a.step({ buttons: REWIND });
+    record();
+    expect(requests(a.state)).toHaveLength(1);
+    for (let i = 0; i < 40; i++) {
+      a.step(NEUTRAL);
+      record();
+    }
+    const before = cooldown(a.state, hero, ABILITY_SLOTS.rewind);
+    const slot = slotOf(a.state, hero, ABILITY_SLOTS.rewind);
+    // Хост целится на глубину определения и не ниже пола истории — здесь пол
+    // тика 0, и цель ниже него была бы миром без слотов вовсе.
+    const target = Math.max(0, a.state.tick - REWIND_DEPTH);
+    expect(target).toBeGreaterThan(GRANT_TICK);
+
+    controller.pause();
+    controller.beginRewind();
+    controller.seekTo(target);
+
+    // Мир уехал назад, а кулдаун — нет: он тот же, каким был в момент вызова.
+    expect(a.state.tick).toBe(target);
+    expect(cooldown(a.state, hero, ABILITY_SLOTS.rewind)).toBe(before);
+    // И записан он в ТУ ЖЕ сущность слота, а не в выданную заново: цель отката
+    // лежит позже тика выдачи, поэтому слот пережил восстановление.
+    expect(slotOf(a.state, hero, ABILITY_SLOTS.rewind)).toBe(slot);
   });
 
   it('конфиг матча и раскладка сборки называют одно и то же', () => {
@@ -3067,7 +3968,7 @@ describe('ульта отката: политика в сцене (RewindCast)',
     expect(MATCH.rewind?.holdButton).toBe(ACTION_BITS.rewind);
     // Cooldown ульты переживает откат (REW-9) — иначе удержанная кнопка
     // кастовала бы её заново на первом же живом тике после возобновления.
-    expect(MATCH.rewind?.exempt).toEqual([{ component: 'RewindCooldown' }]);
+    expect(MATCH.rewind?.exempt).toEqual([{ component: 'AbilityCooldown' }]);
     // Буфер истории обязан покрывать глубину автостопа: 30 × (15 − 1) = 420.
     const depth = (MATCH.rewind!.interval) * (MATCH.rewind!.capacity - 1);
     expect(depth).toBeGreaterThanOrEqual(REWIND_DEPTH);

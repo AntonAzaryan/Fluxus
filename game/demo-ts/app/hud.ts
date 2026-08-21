@@ -120,8 +120,11 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
             stat: STATS.cooldown(ability),
             maxStat: STATS.cooldownMax(ability),
           })),
-          // Два ряда снизу по центру (design D5).
-          perRow: 2,
+          // Сколько КНОПОК В РЯДУ (виджет пишет их числом колонок сетки):
+          // семь способностей при четырёх в ряду ложатся в два ряда снизу по
+          // центру (design D5). Прежняя двойка означала два столбца, то есть
+          // четыре ряда, — вертикальную колонку вместо полосы.
+          perRow: 4,
           tickMs: capabilities.tickMs,
         },
         bindings: { entity: 'hero.entity' },
@@ -310,13 +313,20 @@ export function createDemoHudRegistry(
   registry.registerAction('hero.capture', { target: 'world', action: 'capture' });
   // Щит ловит фронт, как купол: каст-и-забыл, удержание ему ничего не даёт.
   registry.registerAction('hero.shield', { target: 'world', action: 'shield' });
-  // Ульта отката — запись панели БЕЗ действия: она показывает кулдаун и только.
+  // Ульта отката — запись панели БЕЗ действия: она показывает кулдаун и только,
+  // а сама КНОПКА помечена нерабочей (`markHoldOnlyAbilities` ниже).
   //
   // Клик фасада даёт РОВНО ОДИН тик с битом (INP-2), то есть кастует ульту и в
   // тот же миг отпускает орган ведения скраба: мир замер бы, отмотался на один
   // шаг и продолжился — а ульта сгорела бы на весь свой cooldown. Кнопка,
   // тратящая способность впустую, хуже кнопки, которая ничего не делает.
   // Скраб — это УДЕРЖАНИЕ, и живёт оно на клавише (`bindings.json`).
+  //
+  // Сделать кнопку удерживаемой сборке нечем, и это не лень: виджет кулдаунов
+  // шлёт действие по `click`, а `HudActionDecl` мирового вида умеет ровно один
+  // вызов латча фронтов (`press`) — формы «держу/отпустил» в контракте действий
+  // HUD нет вовсе (HUD-2). Появится она — эта запись станет обычным мировым
+  // действием, и пометка снимется.
   //
   // Слот действия при этом объявлен: виджет кулдаунов зовёт `trigger` по имени
   // способности, и запись без слота валила бы клик исключением (HUD-2).
@@ -336,6 +346,67 @@ export function createDemoHudRegistry(
     },
   });
   return registry;
+}
+
+/**
+ * Способности, которые кнопкой панели НЕ кастуются, потому что кастуются
+ * удержанием клавиши. Сегодня такая одна — ульта отката: клик даёт один тик с
+ * битом, а ведение точки перемотки — это удержание (см. `hero.rewind` выше).
+ */
+export const HOLD_ONLY_ABILITIES: readonly string[] = Object.freeze(['rewind']);
+
+/** Минимум DOM, который нужен пометке: ни на чём другом она не стоит. */
+export interface HudMarkableButton {
+  setAttribute(name: string, value: string): void;
+}
+export interface HudMarkableRoot {
+  /**
+   * `ArrayLike`, а не `Iterable`: `NodeListOf` в конфигурации сборки без
+   * `dom.iterable` итератора не объявляет, и обход идёт по индексам.
+   */
+  querySelectorAll(selectors: string): ArrayLike<HudMarkableButton>;
+}
+
+/**
+ * Помечает кнопки `HOLD_ONLY_ABILITIES` неинтерактивными: панель обязана
+ * показывать их кулдаун, но не обязана обещать нажатие, которого не выполнит.
+ * Живая на вид кнопка, ведущая в `() => undefined`, — ровно то враньё игроку,
+ * которого HUD-2 не допускает: «кнопка неотличима от клавиши» либо есть, либо
+ * кнопки нет.
+ *
+ * Стиль — атрибутом, а не классом: таблица стилей демо лежит в `index.html`, и
+ * заводить там правило под ОДНУ кнопку значило бы держать её вид в двух файлах.
+ * Виджет кулдаунов собственного `style` кнопке не ставит, перезаписывать
+ * нечего; оверлей затемнения он рисует своим узлом и пометкой не задет.
+ *
+ * Подсказка называет клавишу из той же раскладки, что и весь ввод (INP-4):
+ * второго словаря «действие → клавиша» сборка не заводит.
+ */
+export function markHoldOnlyAbilities(
+  root: HudMarkableRoot,
+  keys: Readonly<Record<string, string>>,
+): readonly string[] {
+  const marked: string[] = [];
+  for (const action of HOLD_ONLY_ABILITIES) {
+    const code = Object.keys(keys).find((key) => keys[key] === action);
+    const label = code === undefined ? null : code.startsWith('Key') ? code.slice(3) : code;
+    // `Array.from`, а не обход по индексам: `NodeListOf` в конфигурации сборки
+    // без `dom.iterable` не итерируется, а голый цикл по индексам запрещён
+    // линтом. Кнопок здесь единицы — копия списка ничего не стоит.
+    for (const button of Array.from(root.querySelectorAll(`[data-ability="${action}"]`))) {
+      button.setAttribute('disabled', '');
+      button.setAttribute('aria-disabled', 'true');
+      button.setAttribute(
+        'title',
+        label === null
+          ? `${action}: только удержанием клавиши`
+          : `${action}: удержание клавиши ${label}, кнопкой не кастуется`,
+      );
+      button.setAttribute('style', 'opacity:0.55;cursor:default');
+      marked.push(action);
+    }
+  }
+  return marked;
 }
 
 /** Сборка HUD демо: реестры, оверлей-хост, фасад действий и исполнитель (HUD-4). */

@@ -9,6 +9,19 @@
  * остаются за загрузчиком, который строго строже (SER-5).
  */
 import { actionNames } from './actions.js';
+import {
+  abilityDef,
+  abilityInterrupt,
+  abilityInterrupts,
+  abilityPhase,
+  abilityRuntime,
+  abilityShape,
+  abilityStep,
+  abilityTrigger,
+  buffDef,
+  buffStatMod,
+  buffTrigger,
+} from './abilitySchemas.js';
 import { operators } from './expr.js';
 import { FIELD_TYPES } from '../types.js';
 
@@ -223,6 +236,20 @@ const scene: Json = {
       type: 'integer',
       minimum: 1,
     },
+    abilities: {
+      $comment: 'Таблица определений способностей (ABIL-2): наличие подключает компоненты платформы и её системы.',
+      type: 'array',
+      items: { $ref: '#/$defs/abilityDef' },
+    },
+    buffs: {
+      $comment: 'Таблица определений баффов (BUFF-2): наличие дописывает компонент инстанса и регистрирует BuffSystem.',
+      type: 'array',
+      items: { $ref: '#/$defs/buffDef' },
+    },
+    abilityRuntime: {
+      $comment: 'Биндинги сцены для платформы способностей (ABIL-8).',
+      $ref: '#/$defs/abilityRuntime',
+    },
     initial: {
       ...placement,
       $comment: 'Расстановка сцены: после сущностей-носителей и до расстановки прогона (SER-7, SER-8).',
@@ -241,6 +268,11 @@ const inputFrame: Json = {
     seq: { type: 'integer' },
     move: { $ref: '#/$defs/vec2' },
     aimDir: { type: 'integer' },
+    target: {
+      $comment:
+        'Точка прицела в мировых координатах (TICK-2). Необязательна: документ, записанный до её появления, обязан остаться валидным и воспроизводиться побитово тем же (CLI-10).',
+      $ref: '#/$defs/vec2',
+    },
     buttons: {
       $comment: 'u16-битмаска; ширину поля задаёт TICK-2, схема ей соответствует.',
       type: 'integer',
@@ -286,8 +318,10 @@ const scenario: Json = {
         stateComponent: { type: 'string', minLength: 1 },
         colliderComponent: { type: 'string', minLength: 1 },
         dodgeButton: {
-          $comment: 'Индекс бита в маске кнопок; раскладку ввода ядро не знает (LOC-1).',
-          type: 'integer',
+          $comment:
+            'Индекс бита в маске кнопок; раскладку ввода ядро не знает (LOC-1). ' +
+            'null — уклон система не стартует, триггером манёвра владеет сцена (ABIL-3).',
+          type: ['integer', 'null'],
           minimum: 0,
           maximum: 15,
         },
@@ -336,8 +370,19 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
   'system.schema.json': document('system.schema.json', system, { action, expression, query }),
   'terrain.schema.json': document('terrain.schema.json', terrain, {}),
   'scene.schema.json': document('scene.schema.json', scene, {
+    abilityDef,
+    abilityInterrupt,
+    abilityInterrupts,
+    abilityPhase,
+    abilityRuntime,
+    abilityShape,
+    abilityStep,
+    abilityTrigger,
     action,
     arena,
+    buffDef,
+    buffStatMod,
+    buffTrigger,
     component,
     expression,
     prefab,
@@ -349,8 +394,19 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
     vec2,
   }),
   'scenario.schema.json': document('scenario.schema.json', scenario, {
+    abilityDef,
+    abilityInterrupt,
+    abilityInterrupts,
+    abilityPhase,
+    abilityRuntime,
+    abilityShape,
+    abilityStep,
+    abilityTrigger,
     action,
     arena,
+    buffDef,
+    buffStatMod,
+    buffTrigger,
     component,
     expression,
     inputFrame,

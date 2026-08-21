@@ -12,7 +12,13 @@ import { tick as simTick, type SceneDef } from '@game-mvp/core';
 import { resolveComposition, type MinimapTerrainSource } from '@game-mvp/hud';
 import type { AssetService, VisualManifest } from '@game-mvp/assets';
 import { RemoteHost, WorkerShell } from '@game-mvp/client';
-import { createDemoHudRegistry, demoHudComposition } from '../app/hud.js';
+import {
+  HOLD_ONLY_ABILITIES,
+  createDemoHudRegistry,
+  demoHudComposition,
+  markHoldOnlyAbilities,
+} from '../app/hud.js';
+import demoBindings from '../app/bindings.json';
 import { createDemoExtractor } from '../app/extractor.js';
 import {
   ACTION_BITS,
@@ -20,9 +26,8 @@ import {
   PLAYER_ID,
   STATS,
   TICK_SECONDS,
-  chargeHeld,
-  chargeVisualOf,
   createDemoSimulation,
+  stateBit,
 } from '../app/sim.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
@@ -112,14 +117,24 @@ describe('headless-прогон демо: статы и фаза полёта д
     expect(names).toContain(STATS.slot);
     expect(names).toContain(STATS.hp);
 
-    // Каст: нажатие копит заряд, отпускание стреляет — снаряд рождается и
-    // летит, а сборка считает ему фазу полёта.
-    simTick(sim, state, [
-      { tick: state.tick + 1, playerId: PLAYER_ID, seq: 1, move: { x: 0, y: 0 }, aimDir: 0, buttons: 1 },
-    ]);
-    simTick(sim, state, [
-      { tick: state.tick + 1, playerId: PLAYER_ID, seq: 2, move: { x: 0, y: 0 }, aimDir: 0, buttons: 0 },
-    ]);
+    // Каст: нажатие копит заряд, отпускание открывает прицеливание, а
+    // подтверждение выпускает снаряд (ABIL-4, ABIL-5) — он рождается и летит, а
+    // сборка считает ему фазу полёта.
+    const press = (seq: number, buttons: number): void => {
+      simTick(sim, state, [
+        {
+          tick: state.tick + 1,
+          playerId: PLAYER_ID,
+          seq,
+          move: { x: 0, y: 0 },
+          aimDir: 0,
+          buttons,
+        },
+      ]);
+    };
+    press(1, 1 << ACTION_BITS.cast);
+    press(2, 0);
+    press(3, 1 << ACTION_BITS.confirm);
     for (let i = 0; i < 6; i++) shell.stepTick();
 
     const view = remote.view!;
@@ -137,7 +152,7 @@ describe('headless-прогон демо: статы и фаза полёта д
 
     const fireball = [...view.entities.values()].find((entity) => entity.kind === 'Fireball');
     expect(fireball).toBeDefined();
-    // Фаза полёта считается воркером из `Lifetime` и растёт по ходу полёта.
+    // Фаза полёта считается воркером из остатка доставки и растёт по ходу полёта.
     expect(fireball!.flightPhase).toBeGreaterThan(0);
     expect(fireball!.flightPhase).toBeLessThan(1);
     // У героя фазы полёта нет — он не летит (REND-12).
@@ -145,12 +160,13 @@ describe('headless-прогон демо: статы и фаза полёта д
   });
 
   /**
-   * Путь стата `charge` целиком: `Charging.ticks` симуляции → экстрактор →
-   * канал → `EntityView.stats` главного потока, который и растит по нему шар
-   * заряда. Без этого теста дыра в любом звене выглядела бы как «шара нет» —
-   * и молчала бы ровно так же, как честное «не заряжаю» (HUD-8).
+   * Путь состояния слота каста целиком: поля `AbilitySlot` симуляции →
+   * экстрактор (слотовая форма источника, ABIL-1) → канал → `EntityView.stats`
+   * главного потока, откуда их читает превью каста (REND-28). Без этого теста
+   * дыра в любом звене выглядела бы как «превью нет» — и молчала бы ровно так
+   * же, как честное «каста нет» (HUD-8).
    */
-  it('заряд каста доезжает статом и ПРОПАДАЕТ на отпускании', () => {
+  it('фаза каста доезжает статом слота и ПРОПАДАЕТ на выстреле', () => {
     const { sim, state, playerId, grid } = createDemoSimulation(SCENE);
     const [workerPort, mainPort] = syncPortPair();
     const shell = new WorkerShell({
@@ -176,46 +192,84 @@ describe('headless-прогон демо: статы и фаза полёта д
       shell.stepTick();
     }
     const charging = remote.view!.entities.get(playerId)!;
-    // Тик НАЖАТИЯ только заводит `Charging{ticks: 0}` — счёт идёт со следующего.
-    expect(charging.stats!.get(STATS.charge)).toBe(HELD - 1);
-    // И ровно столько же насчитает шар заряда главного потока.
-    expect(chargeHeld(charging.stats!.get(STATS.charge)!, chargeVisualOf(SCENE).ticks)).toBe(
-      HELD - 2,
-    );
+    // Фаза заряда — нулевая в списке фаз определения, а её счётчик считает
+    // тики удержания: тик нажатия только входит в фазу.
+    expect(charging.stats!.get(STATS.slotPhase('cast'))).toBe(0);
+    expect(charging.stats!.get(STATS.slotStaged('cast'))).toBe(0);
+    expect(charging.stats!.get(STATS.slotAbility('cast'))).toBe(0);
+    // И маркер сцены доехал битом состояния — по нему рисуется шар заряда.
+    expect(charging.states & stateBit('Charging')).toBe(stateBit('Charging'));
 
-    // Отпускание: заряд израсходован, и стата НЕТ — «не заряжаю», а не ноль.
+    // Отпускание — выстрел (фаза `release`), и фаза становится «каста нет»
+    // (−1), а не пропадает: слот жив всегда. Превью гаснет по той же величине,
+    // и статы обязаны доехать до него одним кадром с выстрелом.
+    remote.sendInput({ x: 0, y: 0 }, 0, 0);
     shell.stepTick();
-    expect(remote.view!.entities.get(playerId)!.stats!.has(STATS.charge)).toBe(false);
+    const done = remote.view!.entities.get(playerId)!;
+    expect(done.stats!.get(STATS.slotPhase('cast'))).toBe(-1);
+    // Кулдаун при этом поехал тем же слотовым источником.
+    expect(done.stats!.get(STATS.cooldown('cast'))).toBeGreaterThan(0);
+    expect(done.stats!.get(STATS.cooldownMax('cast'))).toBe(60);
   });
 });
 
-describe('числа шара заряда читаются из сцены (`sim.ts`)', () => {
-  it('`chargeHeld` вычитает тик нажатия и упирается в окно роста', () => {
-    const { ticks: max, graceTicks } = chargeVisualOf(SCENE);
-    // Ни одного тика удержания — обычный шар, а не «чуть заряженный».
-    expect(chargeHeld(0, max)).toBe(0);
-    expect(chargeHeld(1, max)).toBe(0);
-    expect(chargeHeld(2, max)).toBe(1);
-    // Полный заряд набирается на 61-м тике удержания: тик нажатия не в счёт.
-    expect(chargeHeld(max + 1, max)).toBe(max);
-    // Дальше окно роста НЕ растёт — тики передержки видны только в сыром
-    // `Charging.ticks`, и предел здесь тот же, что у `ChargeRelease` в сцене.
-    expect(chargeHeld(max + graceTicks + 1, max)).toBe(max);
+/**
+ * Кнопка ульты в панели способностей: она ПОКАЗЫВАЕТ кулдаун, но не кастует —
+ * скраб перемотки живёт на удержании клавиши, а контракт действий HUD формы
+ * «держу/отпустил» не имеет (HUD-2). Значит она обязана и ВЫГЛЯДЕТЬ нерабочей:
+ * живая на вид кнопка, ведущая в `() => undefined`, обещает игроку действие,
+ * которого не произойдёт.
+ */
+describe('панель способностей не обещает нажатий, которых не выполнит (HUD-2)', () => {
+  /** Фейковая кнопка: пометке нужен только `setAttribute`. */
+  function fakeButton(ability: string): {
+    ability: string;
+    attrs: Record<string, string>;
+    setAttribute(name: string, value: string): void;
+  } {
+    const attrs: Record<string, string> = {};
+    return {
+      ability,
+      attrs,
+      setAttribute(name, value) {
+        attrs[name] = value;
+      },
+    };
+  }
+
+  it('кнопка ульты помечена нерабочей и называет клавишу удержания', () => {
+    const buttons = ['cast', 'rewind'].map(fakeButton);
+    const root = {
+      querySelectorAll: (selector: string) =>
+        buttons.filter((button) => selector.includes(`"${button.ability}"`)),
+    };
+    const marked = markHoldOnlyAbilities(root, demoBindings.keyboardMouse.keys);
+    expect(marked).toEqual([...HOLD_ONLY_ABILITIES]);
+
+    const rewind = buttons.find((button) => button.ability === 'rewind')!;
+    expect(rewind.attrs.disabled).toBe('');
+    expect(rewind.attrs['aria-disabled']).toBe('true');
+    // Клавиша — из той же раскладки, что и весь ввод: второго словаря нет.
+    expect(rewind.attrs.title).toContain('X');
+    expect(rewind.attrs.style).toContain('opacity');
+
+    // Работающие кнопки пометка не трогает: гасится ровно то, что не работает.
+    const cast = buttons.find((button) => button.ability === 'cast')!;
+    expect(cast.attrs).toEqual({});
   });
 
-  it('`chargeVisualOf` падает громко, если поля `AbilityConfig` нет', () => {
-    const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
-    const { chargeMaxScale: _dropped, ...rest } = hero.components.AbilityConfig!;
-    const holed: SceneDef = {
-      ...SCENE,
-      prefabs: SCENE.prefabs!.map((prefab) =>
-        prefab.name === 'Hero'
-          ? { ...prefab, components: { ...prefab.components, AbilityConfig: rest } }
-          : prefab,
-      ),
-    };
-    // Дыра в контенте обязана СООБЩИТЬ о себе: молчаливый ноль дал бы шар
-    // нулевого размера, то есть «способности нет» вместо «поля нет».
-    expect(() => chargeVisualOf(holed)).toThrow(/chargeMaxScale/);
+  it('помеченная способность всё равно показывает свой кулдаун', () => {
+    // Пометка снимает нажатие, а не запись панели: игрок обязан видеть, сколько
+    // ждать, — иначе ульта исчезла бы из HUD совсем.
+    const composition = demoHudComposition({ controls: true, tickMs: 16 });
+    const cooldowns = composition.entries.find((entry) => entry.widget === 'cooldowns')!;
+    const abilities = cooldowns.params!.abilities as readonly Record<string, string>[];
+    for (const action of HOLD_ONLY_ABILITIES) {
+      const record = abilities.find((ability) => ability.action === action)!;
+      expect(record.stat).toBe(STATS.cooldown(action));
+      expect(record.maxStat).toBe(STATS.cooldownMax(action));
+      // И слот действия у неё объявлен: без него клик валился бы исключением.
+      expect(cooldowns.actions![action]).toBeDefined();
+    }
   });
 });

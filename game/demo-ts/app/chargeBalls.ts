@@ -1,38 +1,44 @@
 /**
- * Шары заряда каста (ЛКМ).
+ * Шар заряда каста (ЛКМ) — presentation главного потока.
  *
- * Заряд растёт МЕЖДУ тиками, а радиус оболочки `effects.byKind` задан записью
- * манифеста и один на весь визуальный тип (REND-23) — растить им шар нечем.
- * Поэтому шар живёт здесь, рядом с превью зоны захвата и по тем же правилам:
- * числа — из `AbilityConfig` (`chargeVisualOf`) и из записей манифеста, поза —
- * интерполированная поза инстанса.
+ * Записью манифеста шар не выражается, и это не вкусовое решение. Оболочка
+ * `effects.byState` (REND-23) живёт, пока доставлено состояние, и рисуется
+ * РАДИУСОМ ЗАПИСИ в позиции сущности: она не растёт с зарядом и не выносится
+ * перед кастером. А заряд обязан делать и то, и другое — «фаербол появляется
+ * перед героем и начинает расти» есть весь смысл фазы заряда (ABIL-4), и без
+ * роста игрок не видит, чем именно он сейчас выстрелит. Отсюда модуль: числа —
+ * из записей манифеста (цвет, базовый радиус, высота, альфа) и из зеркала чисел
+ * определения (`CHARGE_VISUAL` в `sim.ts`), поза — интерполированная поза
+ * инстанса ЭТОГО кадра.
  *
  * Шар рисуется КАЖДОЙ доставленной сущности со статом `charge`, а не одному
- * своему герою: соперник копит те же 78 тиков до 400 урона, и заряд без
+ * своему герою: соперник копит тот же заряд до того же удара, и заряд без
  * телеграфа означал бы удар, которого не видно, — а видеть его игрок обязан из
- * доставленного состояния (HUD-1), а не из догадки. Направление своего шара —
- * прицел ЭТОГО кадра (курсор идёт впереди тика), чужого — доставленный курс
- * `aimYaw`, который сцена шлёт событием `ChargeAim` каждый тик заряда.
+ * ДОСТАВЛЕННОГО состояния (HUD-1), а не из догадки главного потока. Величина
+ * заряда приезжает статом `charge` (`Charging.ticks`, проекция `phaseTicks`
+ * фазы заряда — систему `ChargeTick` сцены см. там же), направление — статом
+ * `aim` (`Input.aimDir`): оба лежат на герое, потому что сущность-слот видна
+ * только своей стороне (`netcode` NET-12, ABIL-8).
  *
- * Величина заряда приезжает доставленным статом `charge` (`Charging.ticks`), то
- * есть из симуляции: главный поток её не считает и о нажатиях не помнит.
+ * Направление СВОЕГО шара — прицел ЭТОГО кадра (курсор идёт впереди тика),
+ * чужого — доставленный `aim`. Ни того, ни другого нет — курс сущности:
+ * промолчать шар не вправе, он уже нарисован.
  *
  * Всё, что модуль знает о кадре, подаёт вход фабрики (собирает его `main.ts`):
- * сцена THREE, документ сцены, манифест и покадровые доступы к доставке, к
- * инстансам моделей и к прицелу. Своей копии этих величин он не держит.
+ * сцена THREE, манифест и покадровые доступы к доставке, к инстансам моделей и
+ * к прицелу. Своей копии этих величин он не держит.
  */
 import * as THREE from 'three';
-import type { EntityId, SceneDef } from '@game-mvp/core';
+import { FIXED_ONE, type EntityId } from '@game-mvp/core';
 import { resolveEffectByKind, type VisualEffect, type VisualManifest } from '@game-mvp/assets';
 import { TURN_UNITS } from '@game-mvp/client';
 import type { EntityView, ModelInstanceView } from '@game-mvp/render';
-import { STATS, chargeHeld, chargeVisualOf } from './sim.js';
+import { CHARGE_VISUAL, STATS, chargeHeld } from './sim.js';
 
 /**
  * Числа картинки шара — из записей манифеста `effects.byKind`. Отсутствие
- * записи или поля — громкая ошибка, как и дыра в `AbilityConfig`
- * (`captureZoneOf`, `chargeVisualOf`): молчаливое умолчание здесь было бы
- * ТРЕТЬЕЙ копией чисел манифеста, которая расходится с ним незаметно.
+ * записи или поля — громкая ошибка, а не молчаливое умолчание: умолчание здесь
+ * было бы ВТОРОЙ копией чисел манифеста, расходящейся с ним незаметно.
  */
 interface ChargeBallLook {
   /** Цвет обычного снаряда и цвет тяжёлого: с порога `heavyScale` шар красится вторым. */
@@ -54,12 +60,10 @@ function chargeEffectOf(manifest: VisualManifest, kind: string): VisualEffect {
   return record;
 }
 
-/** Вход шаров: сцена, числа заряда и покадровые доступы к состоянию сборки. */
+/** Вход шаров: сцена, манифест и покадровые доступы к состоянию сборки. */
 export interface ChargeBallsOptions {
   /** Сцена THREE, в которую садятся меши шаров. */
   readonly scene: THREE.Scene;
-  /** Документ сцены: тайминг и размеры читает из него `chargeVisualOf`. */
-  readonly sceneDef: SceneDef;
   /** Манифест визуалов: цвет, базовый радиус и высоту дают записи `effects.byKind`. */
   readonly manifest: VisualManifest;
   /** Доставленные сущности кадра (HUD-1); undefined — доставки ещё нет. */
@@ -85,7 +89,6 @@ export interface ChargeBalls {
  * самых снарядов, один из которых и улетит.
  */
 export function createChargeBalls(options: ChargeBallsOptions): ChargeBalls {
-  const visual = chargeVisualOf(options.sceneDef);
   const base = chargeEffectOf(options.manifest, 'Fireball');
   const heavy = chargeEffectOf(options.manifest, 'HeavyFireball');
   if (base.alpha === undefined || base.height === undefined) {
@@ -100,6 +103,12 @@ export function createChargeBalls(options: ChargeBallsOptions): ChargeBalls {
     height: base.height,
     alpha: base.alpha,
   };
+  // Числа заряда — из зеркала чисел определения (`sim.ts`), на границе рендера
+  // переведённые из Q16.16 в мировые единицы и доли (REND-1).
+  const maxScale = CHARGE_VISUAL.maxScale / FIXED_ONE;
+  const heavyScale = CHARGE_VISUAL.heavyScale / FIXED_ONE;
+  const offset = CHARGE_VISUAL.offset / FIXED_ONE;
+  const growTicks = CHARGE_VISUAL.ticks;
   /** Геометрия одна на все шары — единичная сфера: размер даёт `scale` меша. */
   const geometry = new THREE.SphereGeometry(1, 20, 14);
   /** Живые шары по сущности и пул снятых: заряжающих на арене единицы. */
@@ -129,20 +138,26 @@ export function createChargeBalls(options: ChargeBallsOptions): ChargeBalls {
     pool.push(mesh);
   };
 
+  /** Направление шара в радианах: свой прицел кадра, чужой доставленный, курс. */
+  const angleOf = (view: EntityView, own: number | null): number => {
+    if (own !== null) return (own / TURN_UNITS) * Math.PI * 2;
+    const delivered = view.stats?.get(STATS.aim);
+    if (delivered !== undefined) return delivered * Math.PI * 2;
+    return view.aimYaw ?? view.facingYaw;
+  };
+
   return {
     /**
      * Кадр шаров заряда: по шару на каждую доставленную сущность со статом
-     * `charge`. Размер — линейный рост до `chargeMaxScale` за `chargeTicks`; с
-     * порога `chargeHeavyScale` шар перекрашивается в цвет `HeavyFireball` —
-     * того самого prefab'а, который родится на отпускании, — а после максимума
-     * не растёт, а мигает: предупреждение о перезаряде, который сейчас рванёт в
-     * самом кастере (`ChargeOvercharge`).
+     * `charge`. Размер — линейный рост до `maxScale` за окно роста; с порога
+     * `heavyScale` шар перекрашивается в цвет `HeavyFireball` — того самого
+     * prefab'а, который родится на выстреле, — а после максимума не растёт, а
+     * мигает: предупреждение о передержке, которая рванёт в самом кастере.
      */
     update(): void {
       const entities = options.entities();
       chargingSeen.clear();
       if (entities !== undefined) {
-        const { ticks: maxTicks, maxScale, heavyScale, offset } = visual;
         const hero = options.heroId();
         const ownAim = options.lastAim();
         // Мигание — по часам кадра, одинаковое для всех шаров: заряд перезрел.
@@ -155,12 +170,9 @@ export function createChargeBalls(options: ChargeBallsOptions): ChargeBalls {
           // Свой шар целится прицелом кадра: курсор идёт впереди тика. Последним
           // НЕПУСТЫМ, а не текущим, — луч, ушедший мимо плоскости пола, не повод
           // гасить шар, пока заряд идёт к взрыву в кастере (то же правило, что у
-          // сэмплера, INP-5). Чужой — доставленным курсом `ChargeAim`.
-          const own = entity === hero ? ownAim : null;
-          const angle =
-            own === null ? (view.aimYaw ?? view.facingYaw) : (own / TURN_UNITS) * Math.PI * 2;
-          const held = chargeHeld(ticks, maxTicks);
-          const scale = 1 + (maxScale - 1) * (held / maxTicks);
+          // сэмплера, INP-5). Чужой — доставленным прицелом.
+          const angle = angleOf(view, entity === hero ? ownAim : null);
+          const scale = 1 + (maxScale - 1) * (chargeHeld(ticks) / growTicks);
           const ground = options.groundUnder(instance);
           let ball = balls.get(entity);
           if (ball === undefined) {
@@ -178,8 +190,8 @@ export function createChargeBalls(options: ChargeBallsOptions): ChargeBalls {
           material.color.set(scale >= heavyScale ? look.heavyColor : look.color);
           // Альфа записи МОДУЛИРУЕТСЯ, а не подменяется: число прозрачности живёт
           // в манифесте, здесь — только «мигает или нет». Передержка видна в СЫРЫХ
-          // тиках: `chargeHeld` обрезает их окном роста ровно как `ChargeRelease`.
-          const overcharged = ticks - 1 >= maxTicks;
+          // тиках: `chargeHeld` обрезает их окном роста ровно как определение.
+          const overcharged = ticks - 1 >= growTicks;
           material.opacity = overcharged && blink ? look.alpha * 0.4 : look.alpha;
         }
       }

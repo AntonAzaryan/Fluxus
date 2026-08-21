@@ -1,9 +1,14 @@
 /**
- * Профиль поведения бота (BOT-6): всё, что тюнит геймдизайнер, — задержка
- * реакции, шум прицела, джиттер таймингов, агрессивность, веса utility и
- * СОСТАВ СПОСОБНОСТЕЙ — живёт документом контента (`game-content` CONT-1), а не
- * константами кода. Новый уровень сложности заводится JSON-документом; код
- * мозга при этом один.
+ * Профиль бота (BOT-6): всё, что тюнит геймдизайнер в ЧЕЛОВЕЧНОСТИ бота, —
+ * задержка реакции, шум прицела, джиттер таймингов и СОСТАВ СПОСОБНОСТЕЙ —
+ * живёт документом контента (`game-content` CONT-1), а не константами кода.
+ * Новый уровень сложности заводится JSON-документом; код мозга при этом один.
+ *
+ * Профиль отвечает «НАСКОЛЬКО ХОРОШО», а «что делать» — документ поведения
+ * (BOT-8): состав действий, considerations, кривые и веса, включая
+ * агрессивность как вес пары «давить/кайтить», живут там. Разрез нормативен
+ * (BOT-6, BOT-8), и здесь он держится полем `behavior` — путём документа: связку
+ * «этот бот играет эту политику» называют данные, а не код.
  *
  * Здесь — форма документа и его валидация. Читается профиль на конструировании
  * мозга (BOT-6) и только там: реализация, дочитывающая профиль по ходу матча,
@@ -24,6 +29,16 @@
  * профиль — не документ симуляции, в `worldInit` он не входит и на детерминизм
  * не влияет (BOT-5).
  */
+import { ABILITY_STEPS } from '@game-mvp/core';
+import {
+  name as documentName,
+  num,
+  oneOf,
+  record,
+  schema as schemaField,
+  throwFindings,
+  type Findings,
+} from './findings.js';
 
 /**
  * Версия формы документа профиля. Растёт при несовместимом изменении состава.
@@ -32,18 +47,14 @@
  * `utility` ушло поведение `ability` (способности решаются параллельно
  * движению, а не соревнуются с ним), у `movement` появились дистанция боя и
  * стрейф.
+ *
+ * 3 — политика выбора маршрута уехала документом поведения (BOT-8): весов
+ * `utility` и агрессивности в профиле больше нет, вместо них — путь документа
+ * (`behavior`). Разрез нормативен (BOT-6): профиль отвечает «насколько хорошо»
+ * — реакция, шум, джиттер, тайминги, состав способностей, — а «что делать»
+ * решает документ поведения.
  */
-export const BOT_PROFILE_SCHEMA = 2;
-
-/**
- * Поведения utility-слоя (BOT-6): ключи весов профиля. Это выбор МАРШРУТА на
- * ближайшие тики, и способностей среди них нет намеренно — жать кнопку и идти
- * можно одновременно, а поведение «стоять и кастовать» было бы ботом, который
- * замирает ради выстрела.
- */
-export const BOT_BEHAVIORS = ['pressure', 'kite', 'retreat', 'dodge'] as const;
-
-export type BotBehavior = (typeof BOT_BEHAVIORS)[number];
+export const BOT_PROFILE_SCHEMA = 3;
 
 /**
  * На что нацелена способность — единственное, что мозг знает о её смысле
@@ -57,6 +68,106 @@ export type BotBehavior = (typeof BOT_BEHAVIORS)[number];
 export const BOT_ABILITY_TARGETS = ['enemy', 'threat', 'cliff'] as const;
 
 export type BotAbilityTarget = (typeof BOT_ABILITY_TARGETS)[number];
+
+/**
+ * Чем заняты руки бота — второе и последнее, что мозг знает о смысле
+ * способности (BOT-6). Нужно оно потому, что сцена вправе развести ДВА своих
+ * определения на одном бите условием на владельце: пустой рукой бит кастует
+ * заряд, с пойманным снарядом — бросает его. Определений мозг не знает и знать
+ * не должен; знает он ровно то, что сказал документ:
+ *
+ * - `free` — только со свободными руками;
+ * - `full` — только с пойманным снарядом в руках.
+ *
+ * Поле необязательно: щиту, уклону и прыжку руки безразличны, и молчание
+ * документа — это «безразличны», а не «свободны».
+ */
+export const BOT_ABILITY_HANDS = ['free', 'full'] as const;
+
+export type BotAbilityHands = (typeof BOT_ABILITY_HANDS)[number];
+
+/**
+ * Чем целится ОДИН шаг цепочки прицеливания (ABIL-5). Уже, чем цели выбора
+ * способности: шаг называет ТОЧКУ, а `cliff` точки не даёт — это признак
+ * «по курсу уступ», и шагом он не выражается.
+ */
+export const BOT_STEP_AIMS = ['enemy', 'threat', 'self'] as const;
+
+export type BotStepAim = (typeof BOT_STEP_AIMS)[number];
+
+/**
+ * Чем подтверждается шаг цепочки — то же различие, что у вида фазы в сцене
+ * (ABIL-4, ABIL-5):
+ *
+ * - `confirm` — ФРОНТОМ бита подтверждения: бот целится и жмёт `confirmButton`;
+ * - `release` — ПРЕКРАЩЕНИЕМ УДЕРЖАНИЯ бита триггера: бот держит кнопку, целясь,
+ *   и перестаёт её держать; прицеливание того же тика и есть шаг, и отдельного
+ *   бита подтверждения тут нет вовсе.
+ *
+ * Молчание документа — `confirm`: способность, описанная до появления фазы
+ * `release`, подтверждается так, как подтверждалась.
+ */
+export const BOT_CAST_COMMITS = ['confirm', 'release'] as const;
+
+export type BotCastCommit = (typeof BOT_CAST_COMMITS)[number];
+
+/** Один шаг цепочки прицеливания: чем целится и когда подтверждается (BOT-6). */
+export interface BotAbilityStepProfile {
+  readonly aim: BotStepAim;
+  /**
+   * Сколько тиков бот целится, прежде чем подтвердить шаг. Человечность, а не
+   * механика: мгновенное подтверждение цепочки — тот же сверхчеловеческий ввод,
+   * что прицел без шума (BOT-6).
+   */
+  readonly confirmDelayTicks: number;
+  /** Шум точки прицела шага, мировые единицы: дизайнер решает, как криво бот целится. */
+  readonly pointNoise: number;
+}
+
+/**
+ * Способность платформы (ABIL-1..ABIL-5) в терминах профиля: фазы каста и
+ * цепочка шагов вместо одного бита с дальностью (BOT-6). Соответствие
+ * способности СЦЕНЫ и этой записи — данные: индекс слота владельца и биты
+ * подтверждения с отменой называет документ, а не код мозга.
+ *
+ * Блок необязателен, и это несущее: способность, описанная одним битом, — не
+ * ошибка документа, а способность СТАРОГО вида (сцена гейтит её сама, без
+ * подтверждения шага). Способность, требующую подтверждения, такой профиль
+ * просто не применяет — чинится это профилем, а не ветвлением в коде мозга.
+ */
+export interface BotAbilityCastProfile {
+  /** Индекс слота владельца (`AbilitySlot.slotIndex`, ABIL-1). */
+  readonly slotIndex: number;
+  /** Чем подтверждается шаг (`BOT_CAST_COMMITS`); умолчание — `confirm`. */
+  readonly commit: BotCastCommit;
+  /**
+   * Бит подтверждения шага в маске `buttons` (INP-4, ABIL-3). Есть только у
+   * каста с `commit: "confirm"`: отпусканию бит подтверждения не нужен, и
+   * названный там он описывал бы фронт, которого бот не шлёт.
+   */
+  readonly confirmButton?: number;
+  /** Бит отмены; без него бот начатый каст не отменяет. */
+  readonly cancelButton?: number;
+  /** Цепочка шагов в порядке ABIL-5; пустая — способность без прицеливания. */
+  readonly steps: readonly BotAbilityStepProfile[];
+  /**
+   * Сколько тиков держать бит триггера — длительность фазы удержания (ABIL-4).
+   * Ноль — тап: бит живёт один тик нажатия и на следующем спадает.
+   *
+   * У каста с `commit: "release"` это же число — срок прицеливания шага: спад
+   * бита И ЕСТЬ подтверждение, поэтому «сколько держать» и «сколько целиться»
+   * там одно, и валидация требует, чтобы документ назвал их одинаково.
+   */
+  readonly holdTicks: number;
+  /** Вероятность отменить начатый каст на тике решения, 0..1. */
+  readonly cancelChance: number;
+  /**
+   * Сколько тиков бот ведёт начатый каст, прежде чем бросить его. Страховка от
+   * повисшего каста: определение сцены могло прерваться так, что до мозга это
+   * не доехало, и без предела он держал бы способность занятой навсегда.
+   */
+  readonly giveUpTicks: number;
+}
 
 /** Одна способность: бит `buttons` (TICK-2) и политика её применения. */
 export interface BotAbilityProfile {
@@ -81,7 +192,26 @@ export interface BotAbilityProfile {
    * кнопку и отпускает её, накопив силу.
    */
   readonly holdTicks: number;
-  /** Пауза между применениями, тики; отсчитывается от отпускания кнопки. */
+  /**
+   * Пауза между применениями, тики; отсчитывается от отпускания кнопки.
+   *
+   * Это СОБСТВЕННЫЙ счётчик бота, а не кулдаун способности: настоящий гейт
+   * держит платформа (ABIL-7), и профиль о нём не знает — знать чужой документ
+   * он и не вправе (CONT-4). Отсюда конвенция отгруженных профилей: число здесь
+   * ставится ЧУТЬ ВЫШЕ кулдауна определения сцены (60→62, 120→125, 150→155,
+   * 300→305). Ниже — и бот жмёт бит в незаряженную способность: нажатие сцена
+   * отбрасывает, а слой способностей всё равно занят им тик, и в этот тик не
+   * выбирается ничего другого. Выше — законно и означает просто «этот бот
+   * применяет её реже», чем позволяет сцена.
+   *
+   * Проверить эту связь валидацией нельзя: сцена профилю недоступна. Ловит её
+   * сверка двух документов на стороне игрового приложения — там, где оба дерева
+   * читаются законно (BOT-13): вывод ожидаемой записи из определения сцены и её
+   * бот-аннотации (BOT-12) живёт в `game/demo-ts/app/botContract.ts`, а красный
+   * тест сверки — в `npm run check`. Конвенция «чуть выше» перестала быть
+   * знанием из этого комментария и стала там проверяемым инвариантом
+   * `cooldownTicks >= кулдаун определения сцены`.
+   */
   readonly cooldownTicks: number;
   /** Вес в соревновании способностей между собой; 0 — способность выключена. */
   readonly weight: number;
@@ -99,6 +229,17 @@ export interface BotAbilityProfile {
    * Умолчание — `false`: каст и щит направления не требуют.
    */
   readonly requiresMoving?: boolean;
+  /**
+   * Требование к рукам (`BOT_ABILITY_HANDS`) — то самое условие, которым сцена
+   * разводит два своих определения на одном бите. Отсутствует — рукам всё
+   * равно.
+   */
+  readonly hands?: BotAbilityHands;
+  /**
+   * Описание способности платформы (BOT-6). Отсутствует — способность старого
+   * вида: бот жмёт бит и держит его `holdTicks`, ничего не подтверждая.
+   */
+  readonly cast?: BotAbilityCastProfile;
 }
 
 /** Человечность реакции: наблюдение доезжает до решения не мгновенно. */
@@ -138,6 +279,9 @@ export interface BotMovementProfile {
    * против «кайтить» и на котором сближающийся снаряд уже страшен. Своим
    * числом, а не дальностью какой-нибудь из способностей: список способностей
    * дизайнер меняет, а желаемая дистанция боя — свойство самого бота.
+   *
+   * СТРОГО положительна (валидация): этим же числом словарь входов нормирует
+   * расстояния (BOT-9), и ноль отменил бы шкалу, а не приблизил бы бота.
    */
   readonly engageRange: number;
   /**
@@ -160,51 +304,22 @@ export interface BotProfile {
   readonly movement: BotMovementProfile;
   /** Способности, которыми бот играет (BOT-6). Пустой список — бот-мишень. */
   readonly abilities: readonly BotAbilityProfile[];
-  /** Веса поведений utility-слоя; ключи — `BOT_BEHAVIORS`. */
-  readonly utility: Readonly<Record<BotBehavior, number>>;
-  /** Агрессивность: сдвиг предпочтения «давить» против «отступать», 0..1. */
-  readonly aggression: number;
+  /**
+   * Путь документа поведения (BOT-8) в дереве контента — от его корня, как
+   * адресуется ассет (`assets` ASSET-2): `bots/behaviors/classic.json`.
+   *
+   * ДАННЫЕ, а не константа кода: «какую политику играет этот бот» — тот же
+   * выбор дизайнера, что уровень сложности, и соответствие бота документу
+   * называет профиль. Резолвит путь та сторона, которой дерево контента читать
+   * законно, — сборка игры (CONT-4); мозг получает уже прочитанный документ.
+   */
+  readonly behavior: string;
   /**
    * Seed внутренней случайности мозга. Необязателен: детерминизм на мозг не
    * распространяется (BOT-5), и несеяная случайность допустима. Поле нужно
    * тестам и воспроизводимым прогонам, а не симуляции.
    */
   readonly seed?: number;
-}
-
-interface Findings {
-  readonly issues: string[];
-}
-
-function record(input: unknown, path: string, findings: Findings): Record<string, unknown> {
-  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
-    findings.issues.push(`${path}: ожидался объект`);
-    return {};
-  }
-  return input as Record<string, unknown>;
-}
-
-function num(
-  input: Record<string, unknown>,
-  key: string,
-  path: string,
-  range: { min: number; max: number; int?: boolean },
-  findings: Findings,
-): number {
-  const value = input[key];
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    findings.issues.push(`${path}.${key}: ожидалось конечное число`);
-    return range.min;
-  }
-  if (range.int === true && !Number.isInteger(value)) {
-    findings.issues.push(`${path}.${key}: ожидалось целое, получено ${value}`);
-    return range.min;
-  }
-  if (value < range.min || value > range.max) {
-    findings.issues.push(`${path}.${key}: ${value} вне [${range.min}, ${range.max}]`);
-    return range.min;
-  }
-  return value;
 }
 
 function flag(
@@ -225,20 +340,126 @@ function flag(
 /** Тики — целые и неотрицательные: буфер наблюдений и джиттер меряются тиками. */
 const TICKS = { min: 0, max: 600, int: true } as const;
 
+/** Индекс бита маски `buttons` — ширина u16 (TICK-2). */
+const BUTTON = { min: 0, max: 15, int: true } as const;
+
+/** Один шаг цепочки: своя валидация, свой путь в находках. */
+function parseStep(input: unknown, path: string, findings: Findings): BotAbilityStepProfile {
+  const root = record(input, path, findings);
+  return {
+    aim: oneOf(root, 'aim', path, BOT_STEP_AIMS, findings) ?? 'enemy',
+    confirmDelayTicks: num(root, 'confirmDelayTicks', path, TICKS, findings),
+    pointNoise: num(root, 'pointNoise', path, { min: 0, max: 100 }, findings),
+  };
+}
+
+/**
+ * Описание способности платформы (BOT-6). Число шагов ограничено константой
+ * платформы (`ABILITY_STEPS`, ABIL-1): цепочка длиннее слоту не влезет, и
+ * профиль, её объявивший, описывает не ту способность, что в сцене.
+ */
+function parseCast(input: unknown, path: string, findings: Findings): BotAbilityCastProfile {
+  const root = record(input, path, findings);
+  const commit = parseCommit(root, path, findings);
+  const steps: BotAbilityStepProfile[] = [];
+  if (!Array.isArray(root.steps)) {
+    findings.issues.push(`${path}.steps: ожидался массив шагов прицеливания`);
+  } else {
+    if (root.steps.length > ABILITY_STEPS) {
+      findings.issues.push(
+        `${path}.steps: ${root.steps.length} шагов при пределе платформы ${ABILITY_STEPS} (ABIL-1)`,
+      );
+    }
+    for (const [index, entry] of root.steps.entries()) {
+      steps.push(parseStep(entry, `${path}.steps[${index}]`, findings));
+    }
+  }
+  const cancelButton =
+    root.cancelButton === undefined ? undefined : num(root, 'cancelButton', path, BUTTON, findings);
+  const confirmButton =
+    root.confirmButton === undefined
+      ? undefined
+      : num(root, 'confirmButton', path, BUTTON, findings);
+  const holdTicks = num(root, 'holdTicks', path, TICKS, findings);
+  checkCommitShape(commit, { confirmButton: root.confirmButton, holdTicks, steps }, path, findings);
+  return {
+    slotIndex: num(root, 'slotIndex', path, { min: 0, max: 63, int: true }, findings),
+    commit,
+    ...(confirmButton === undefined ? {} : { confirmButton }),
+    ...(cancelButton === undefined ? {} : { cancelButton }),
+    steps,
+    holdTicks,
+    cancelChance: num(root, 'cancelChance', path, { min: 0, max: 1 }, findings),
+    giveUpTicks: num(root, 'giveUpTicks', path, { ...TICKS, min: 1 }, findings),
+  };
+}
+
+/** Чем подтверждается шаг (BOT-6); молчание документа — фронтом бита. */
+function parseCommit(
+  root: Record<string, unknown>,
+  path: string,
+  findings: Findings,
+): BotCastCommit {
+  if (root.commit === undefined) return 'confirm';
+  return oneOf(root, 'commit', path, BOT_CAST_COMMITS, findings) ?? 'confirm';
+}
+
+/**
+ * Форма описания под выбранный способ подтверждения (ABIL-4, ABIL-5). Проверка
+ * тут не про диапазоны чисел, а про то, что документ описывает СУЩЕСТВУЮЩУЮ
+ * механику: бит подтверждения у отпускания не нажимается никогда, а прекращение
+ * удержания записывает ровно один шаг и ровно тем тиком, которым спадает бит.
+ */
+function checkCommitShape(
+  commit: BotCastCommit,
+  cast: {
+    readonly confirmButton: unknown;
+    readonly holdTicks: number;
+    readonly steps: readonly BotAbilityStepProfile[];
+  },
+  path: string,
+  findings: Findings,
+): void {
+  if (commit === 'confirm') {
+    if (cast.confirmButton === undefined) {
+      findings.issues.push(`${path}.confirmButton: каст с подтверждением обязан назвать бит (ABIL-5)`);
+    }
+    return;
+  }
+  if (cast.confirmButton !== undefined) {
+    findings.issues.push(
+      `${path}.confirmButton: у каста с отпусканием фронта подтверждения нет — шаг записывает прекращение удержания бита триггера (ABIL-4)`,
+    );
+  }
+  if (cast.steps.length > 1) {
+    findings.issues.push(
+      `${path}.steps: ${cast.steps.length} шагов, а прекращение удержания записывает ровно один (ABIL-5)`,
+    );
+  }
+  const first = cast.steps[0];
+  if (first !== undefined && first.confirmDelayTicks !== cast.holdTicks) {
+    findings.issues.push(
+      `${path}: holdTicks ${cast.holdTicks} и steps[0].confirmDelayTicks ${first.confirmDelayTicks} — ` +
+        `у каста с отпусканием это ОДНО число: спад бита и есть подтверждение шага`,
+    );
+  }
+}
+
+/** Требование к рукам (BOT-6); молчание документа — «рукам всё равно». */
+function parseHands(
+  root: Record<string, unknown>,
+  path: string,
+  findings: Findings,
+): BotAbilityHands | undefined {
+  if (root.hands === undefined) return undefined;
+  return oneOf(root, 'hands', path, BOT_ABILITY_HANDS, findings);
+}
+
 /** Одна запись списка способностей: своя валидация, свой путь в находках. */
 function parseAbility(input: unknown, path: string, findings: Findings): BotAbilityProfile {
   const root = record(input, path, findings);
-  const name = typeof root.name === 'string' && root.name !== '' ? root.name : '';
-  if (name === '') findings.issues.push(`${path}.name: ожидалась непустая строка`);
-
-  const target = root.target;
-  const known = (BOT_ABILITY_TARGETS as readonly unknown[]).includes(target);
-  if (!known) {
-    findings.issues.push(
-      `${path}.target: ожидалось одно из ${BOT_ABILITY_TARGETS.join('|')}, получено ${JSON.stringify(target)}`,
-    );
-  }
-  const resolved: BotAbilityTarget = known ? (target as BotAbilityTarget) : 'enemy';
+  const name = documentName(root, path, findings);
+  const resolved: BotAbilityTarget = oneOf(root, 'target', path, BOT_ABILITY_TARGETS, findings) ?? 'enemy';
 
   // Перепад уступа спрашивается ровно у той цели, для которой он что-то значит:
   // `rise` у каста — не безобидное лишнее поле, а признак того, что документ
@@ -251,12 +472,14 @@ function parseAbility(input: unknown, path: string, findings: Findings): BotAbil
     findings.issues.push(`${path}.rise: перепад уступа осмыслен только у цели "cliff"`);
   }
   const requiresMoving = flag(root, 'requiresMoving', path, findings);
+  const hands = parseHands(root, path, findings);
+  const cast = root.cast === undefined ? undefined : parseCast(root.cast, `${path}.cast`, findings);
 
   return {
     name,
     // Ширина маски `buttons` — u16 (TICK-2): биты выше 15 не переживают круг
     // через транспорт, и профиль не вправе их назначать.
-    button: num(root, 'button', path, { min: 0, max: 15, int: true }, findings),
+    button: num(root, 'button', path, BUTTON, findings),
     target: resolved,
     range: num(root, 'range', path, { min: 0, max: 1000 }, findings),
     holdTicks: num(root, 'holdTicks', path, { ...TICKS, min: 1 }, findings),
@@ -264,6 +487,8 @@ function parseAbility(input: unknown, path: string, findings: Findings): BotAbil
     weight: num(root, 'weight', path, { min: 0, max: 10 }, findings),
     ...(rise === undefined ? {} : { rise }),
     ...(requiresMoving === undefined ? {} : { requiresMoving }),
+    ...(hands === undefined ? {} : { hands }),
+    ...(cast === undefined ? {} : { cast }),
   };
 }
 
@@ -276,18 +501,110 @@ function parseAbilities(input: unknown, source: string, findings: Findings): Bot
   const abilities = input.map((entry, index) => parseAbility(entry, `${path}[${index}]`, findings));
   // Две способности на одном бите — не опечатка в одном документе, а бот,
   // который вместо купола кастует щит: маска одна, и различить их сцене нечем.
-  const seen = new Map<number, string>();
+  //
+  // Исключение ровно одно, и оно тоже данные. Сцена вправе развести два своих
+  // определения на одном бите условием на владельце, и профиль повторяет это
+  // условие требованием к рукам: взаимоисключающие требования — не коллизия,
+  // потому что в каждый момент бит значит ровно одно. Сверяется КАЖДАЯ пара, а
+  // не запись с первой на этом бите: три записи, из которых две требуют одного
+  // и того же, коллизия так же, как две.
+  const seen = new Map<number, BotAbilityProfile[]>();
   for (const ability of abilities) {
-    const first = seen.get(ability.button);
-    if (first !== undefined) {
-      findings.issues.push(
-        `${path}: бит ${ability.button} назначен дважды — "${first}" и "${ability.name}"`,
-      );
+    const same = seen.get(ability.button);
+    if (same === undefined) {
+      seen.set(ability.button, [ability]);
       continue;
     }
-    seen.set(ability.button, ability.name);
+    for (const other of same) {
+      if (exclusiveHands(other, ability)) continue;
+      findings.issues.push(
+        `${path}: бит ${ability.button} назначен дважды — "${other.name}" и "${ability.name}"`,
+      );
+    }
+    same.push(ability);
   }
   return abilities;
+}
+
+/** Разводит ли документ две записи одного бита требованием к рукам (BOT-6). */
+function exclusiveHands(left: BotAbilityProfile, right: BotAbilityProfile): boolean {
+  return left.hands !== undefined && right.hands !== undefined && left.hands !== right.hands;
+}
+
+/**
+ * Перекрёстные проверки каста и задержки реакции — двух блоков ОДНОГО документа
+ * (BOT-6). Свой каст мозг закрывает по своему слоту из своего снапшота
+ * (`abilities.ts`), а снапшот отстаёт ровно на задержку реакции с джиттером,
+ * которую назвал этот же документ.
+ *
+ * Отсюда два правила. Первое: раньше, чем `Σ confirmDelayTicks` плюс это
+ * отставание, увидеть каст законченным бот физически не может, и профиль с
+ * более коротким пределом ведения описывает каст, который ВСЕГДА бросается по
+ * пределу и ни разу не доводится. Второе: фронт подтверждения не вправе уезжать
+ * раньше, чем доезжает картинка.
+ *
+ * Числа обе стороны берут из документа, поэтому находки называют оба и профиль,
+ * в котором они разошлись.
+ */
+function checkCastTimings(profile: BotProfile, source: string, findings: Findings): void {
+  const lag = profile.reaction.delayTicks + profile.reaction.jitterTicks;
+  for (const [index, ability] of profile.abilities.entries()) {
+    const cast = ability.cast;
+    if (cast === undefined) continue;
+    const path = `${source}.abilities[${index}].cast`;
+    const confirmAt = cast.steps.reduce((sum, step) => sum + step.confirmDelayTicks, 0);
+    const needed = confirmAt + lag;
+    if (cast.giveUpTicks < needed) {
+      findings.issues.push(
+        `${path}: giveUpTicks ${cast.giveUpTicks} меньше ${needed} — ` +
+          `${confirmAt} тик(ов) подтверждений плюс отставание картинки ${lag} ` +
+          `(reaction.delayTicks + reaction.jitterTicks); каст "${ability.name}" бросался бы по пределу всегда`,
+      );
+    }
+    // Второе правило — про ФРОНТ подтверждения, и только про него. Фронт бот
+    // шлёт по СВОИМ часам, ничего в мире не дождавшись, и профиль, у которого
+    // он уезжает раньше, чем доезжает картинка, описывает бота, судящего о
+    // собственном касте по миру, в котором тот ещё не начался. У каста с
+    // отпусканием фронта нет вовсе: момент записи шага там привязан к
+    // длительности удержания, то есть к кнопке, которую бот уже держит, — и
+    // требовать от рефлекторного перехвата ждать дольше собственной реакции
+    // значило бы запретить его вовсе, а не починить.
+    if (cast.commit !== 'confirm' || cast.steps.length === 0 || confirmAt >= lag) continue;
+    findings.issues.push(
+      `${path}: последнее подтверждение уезжает на тике ${confirmAt}, а картинка мира отстаёт на ${lag} ` +
+        `(reaction.delayTicks + reaction.jitterTicks) — бот судил бы о касте "${ability.name}" по миру, ` +
+        `в котором тот ещё не начался`,
+    );
+  }
+}
+
+/**
+ * Путь документа поведения (BOT-8): от корня дерева контента, как адресуется
+ * ассет (ASSET-2). Проверяется здесь ровно форма пути — существование файла
+ * профилю неизвестно и известно быть не может: дерево читает сборка игры, а не
+ * движок (CONT-4).
+ */
+function parseBehaviorPath(
+  root: Record<string, unknown>,
+  source: string,
+  findings: Findings,
+): string {
+  const value = root.behavior;
+  if (typeof value !== 'string' || value === '') {
+    findings.issues.push(
+      `${source}.behavior: ожидался путь документа поведения от корня дерева контента (BOT-8)`,
+    );
+    return '';
+  }
+  // Абсолютный путь и выход вверх — не «другой способ записать то же»: ассет
+  // адресуется путём ОТ КОРНЯ дерева (ASSET-2), и всё остальное — адрес файла
+  // машины, на которой документ писали.
+  if (value.startsWith('/') || value.includes('..')) {
+    findings.issues.push(
+      `${source}.behavior: "${value}" — путь адресуется от корня дерева контента (ASSET-2), без "/" в начале и без ".."`,
+    );
+  }
+  return value;
 }
 
 /**
@@ -299,28 +616,13 @@ export function parseBotProfile(input: unknown, source = 'профиль бот�
   const findings: Findings = { issues: [] };
   const root = record(input, source, findings);
 
-  const schema = num(root, 'schema', source, { min: 1, max: 1_000_000, int: true }, findings);
-  // Расхождение формы называется ВСЕГДА, а не только когда прочих находок нет:
-  // документ будущей формы шумит несовпадением полей, и именно версия
-  // объясняет этот шум — промолчать о ней значит спрятать причину за следствием.
-  if (schema !== BOT_PROFILE_SCHEMA) {
-    findings.issues.push(
-      `${source}.schema: ${schema} — реализация читает форму ${BOT_PROFILE_SCHEMA}`,
-    );
-  }
-  const name = typeof root.name === 'string' && root.name !== '' ? root.name : '';
-  if (name === '') findings.issues.push(`${source}.name: ожидалась непустая строка`);
+  const schema = schemaField(root, source, BOT_PROFILE_SCHEMA, findings);
+  const name = documentName(root, source, findings);
 
   const reaction = record(root.reaction, `${source}.reaction`, findings);
   const aim = record(root.aim, `${source}.aim`, findings);
   const decision = record(root.decision, `${source}.decision`, findings);
   const movement = record(root.movement, `${source}.movement`, findings);
-  const utility = record(root.utility, `${source}.utility`, findings);
-
-  const weights = {} as Record<BotBehavior, number>;
-  for (const behavior of BOT_BEHAVIORS) {
-    weights[behavior] = num(utility, behavior, `${source}.utility`, { min: 0, max: 10 }, findings);
-  }
 
   const profile: BotProfile = {
     schema,
@@ -347,15 +649,34 @@ export function parseBotProfile(input: unknown, source = 'профиль бот�
       strafePeriodTicks: num(movement, 'strafePeriodTicks', `${source}.movement`, { ...TICKS, min: 1 }, findings),
     },
     abilities: parseAbilities(root.abilities, source, findings),
-    utility: weights,
-    aggression: num(root, 'aggression', source, { min: 0, max: 1 }, findings),
+    behavior: parseBehaviorPath(root, source, findings),
     ...(root.seed === undefined
       ? {}
       : { seed: num(root, 'seed', source, { min: 0, max: 2 ** 31 - 1, int: true }, findings) }),
   };
 
-  if (findings.issues.length > 0) {
-    throw new Error(`parseBotProfile (BOT-6): ${findings.issues.join('; ')}`);
-  }
+  checkCastTimings(profile, source, findings);
+  checkEngageRange(profile, source, findings);
+  throwFindings('parseBotProfile (BOT-6)', findings);
   return profile;
+}
+
+/**
+ * Дистанция боя — не только «где бот хочет драться», но и МАСШТАБ, которым
+ * словарь входов нормирует расстояния (BOT-9, `brains/evaluated/scoring.ts`:
+ * `enemyDistance`, `threatDistance`). Ноль отменяет шкалу: обе величины
+ * перестают значить что-либо, и любая кривая документа поверх них — не политика,
+ * а деление на ноль, аккуратно завёрнутое в кламп.
+ *
+ * Поэтому это находка, а не молчаливое умолчание кода: профиль с нулевой
+ * дистанцией боя описывает бота, чей документ поведения нечем вычислить, и
+ * узнать об этом дизайнер обязан на конструировании, а не по странному выбору
+ * маршрута в матче.
+ */
+function checkEngageRange(profile: BotProfile, source: string, findings: Findings): void {
+  if (profile.movement.engageRange > 0) return;
+  findings.issues.push(
+    `${source}.movement.engageRange: ${profile.movement.engageRange} — дистанция боя есть МАСШТАБ ` +
+      `входов considerations (BOT-9): ноль отменяет шкалу, и «далеко ли враг» перестаёт значить что-либо`,
+  );
 }

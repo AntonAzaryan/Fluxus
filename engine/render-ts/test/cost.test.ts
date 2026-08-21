@@ -37,6 +37,7 @@ import {
   createCostCounters,
   fogRectOf,
   fogSegmentsOf,
+  releaseCostSink,
   withCostSink,
   type EntityView,
   type PresentationProducer,
@@ -47,6 +48,7 @@ import {
 } from '../src/index.js';
 import {
   RendererSpy,
+  buildFogMask,
   flatGrid,
   fogCanvasFactory,
   makeAssets,
@@ -108,12 +110,20 @@ function fogStand(options: {
   return { fog, view };
 }
 
-/** Одна доставка стенда под снятым замером — счётчики одной перестройки маски. */
-function deliverCost(options: Parameters<typeof fogStand>[0]): RenderCostCounters {
+/**
+ * Одна доставка стенда и кадры её перестройки под снятым замером — счётчики
+ * ОДНОЙ перестройки маски. Кадры считаются вместе с доставкой намеренно: растр
+ * строят порции кадра (change `fog-mask-budgeted-rebuild`, design D1), и объём
+ * работы перестройки — это доставка плюс её кадры, а не одна доставка. Кадры
+ * идут с нулевым `dt`: рассеивание тогда стоит, и в замер попадает ровно
+ * перестройка.
+ */
+function rebuildCost(options: Parameters<typeof fogStand>[0]): RenderCostCounters {
   const counters = createCostCounters();
   withCostSink(counters, () => {
     const stand = fogStand(options);
     stand.fog.syncTick(stand.view);
+    buildFogMask(stand.fog);
   });
   return counters;
 }
@@ -154,16 +164,18 @@ describe('PERF-3: сток счётчиков стоимости — инерт�
     const idle = createCostCounters();
     const plain = fogStand({});
     plain.fog.syncTick(plain.view);
+    buildFogMask(plain.fog);
     expect(idle).toEqual(createCostCounters());
     expect(costSink()).toBeUndefined();
 
     // Тот же прогон со стоком: работа посчитана, а растр маски побитово тот же —
     // учёт на измеряемое не влияет.
-    const measured = deliverCost({});
+    const measured = rebuildCost({});
     expect(measured.fogMaskTexels).toBeGreaterThan(0);
     const stand = fogStand({});
     withCostSink(createCostCounters(), () => {
       stand.fog.syncTick(stand.view);
+      buildFogMask(stand.fog);
     });
     expect(stand.fog.visibility.data).toEqual(plain.fog.visibility.data);
   });
@@ -235,9 +247,39 @@ describe('PERF-3: сток счётчиков стоимости — инерт�
     expect(costSink()).toBeUndefined();
   });
 
+  it('отпущенный долгоживущий сток не воскресает восстановлением чужого замера', () => {
+    const longLived = createCostCounters();
+    attachCostSink(longLived);
+    const measured = createCostCounters();
+    withCostSink(measured, () => {
+      // Владелец отказался от своего стока посреди чужого замера: отбирать сток
+      // у замера нельзя — он считает.
+      releaseCostSink(longLived);
+      expect(costSink()).toBe(measured);
+    });
+    // А по концу замера на его место встаёт пустота, а не отпущенный сток.
+    expect(costSink()).toBeUndefined();
+  });
+
+  it('отпуск своего стока, пока он подключён, снимает его сразу', () => {
+    const longLived = createCostCounters();
+    attachCostSink(longLived);
+    expect(costSink()).toBe(longLived);
+    releaseCostSink(longLived);
+    expect(costSink()).toBeUndefined();
+    // Пометки на нём после этого не осталось: следующий замер живёт как обычно.
+    const measured = createCostCounters();
+    attachCostSink(longLived);
+    withCostSink(measured, () => {
+      expect(costSink()).toBe(measured);
+    });
+    expect(costSink()).toBe(longLived);
+    releaseCostSink(longLived);
+  });
+
   it('одна и та же нагрузка даёт побитово те же счётчики (PERF-3)', () => {
-    const first = deliverCost({ resolution: 8, pillarStep: 3, observers: [[2, 2], [6, 6]] });
-    const second = deliverCost({ resolution: 8, pillarStep: 3, observers: [[2, 2], [6, 6]] });
+    const first = rebuildCost({ resolution: 8, pillarStep: 3, observers: [[2, 2], [6, 6]] });
+    const second = rebuildCost({ resolution: 8, pillarStep: 3, observers: [[2, 2], [6, 6]] });
     expect(second).toEqual(first);
   });
 });
@@ -246,8 +288,8 @@ describe('PERF-3: сток счётчиков стоимости — инерт�
 
 describe('PERF-3, PERF-6: счётчики тумана растут по осям стоимости', () => {
   it('разрешение 4 → 8: полномасочные счётчики ровно вчетверо, просмотр — около того', () => {
-    const low = deliverCost({ resolution: 4 });
-    const high = deliverCost({ resolution: 8 });
+    const low = rebuildCost({ resolution: 4 });
+    const high = rebuildCost({ resolution: 8 });
 
     // Обнуление, блюр кромки, загрузка в текстуру и блит миникарты идут по
     // всему растру: удвоение разрешения — ровно четырёхкратное удорожание
@@ -268,8 +310,8 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
   });
 
   it('число наблюдателей: reveal-полигоны и просмотренные тексели кратны ему', () => {
-    const one = deliverCost({ observers: [[2, 2]] });
-    const four = deliverCost({ observers: [[2, 2], [2, 6], [6, 2], [6, 6]] });
+    const one = rebuildCost({ observers: [[2, 2]] });
+    const four = rebuildCost({ observers: [[2, 2], [2, 6], [6, 2], [6, 6]] });
 
     expect(one.fogRevealCalls).toBe(1);
     expect(four.fogRevealCalls).toBe(4);
@@ -281,41 +323,67 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
     expect(four.fogMaskUploadBytes).toBe(one.fogMaskUploadBytes);
   });
 
-  it('загрузка в текстуру считается ровно один раз на доставку', () => {
+  it('загрузка в текстуру — только когда меняется показанная маска', () => {
     const counters = createCostCounters();
     const stand = withCostSink(counters, () => {
       // Стенд строится ПОД замером: создание текстуры своего трафика не имеет.
       // Три грузит растр по ВЕРСИИ, и флаг, поднятый при создании, сливается с
-      // флагом ближайшей доставки в одну-единственную загрузку — второй счёт
+      // флагом ближайшей публикации в одну-единственную загрузку — второй счёт
       // приписал бы байты, которых по шине не было.
       const created = fogStand({ resolution: 4 });
       expect(counters.fogMaskUploadBytes).toBe(0);
       created.fog.syncTick(created.view);
+      // Доставка растра не трогает вовсе (design D1): ни байта в текстуру, ни
+      // блита — их сделает публикация построенного кадром растра.
+      expect(counters.fogMaskUploadBytes).toBe(0);
+      expect(counters.fogMinimapTexels).toBe(0);
+      buildFogMask(created.fog);
       return created;
     });
+    // Первая публикация: текстура и слой миникарты обязаны существовать с неё
+    // (design D6) — единственная загрузка стартового растра считается тут, и
+    // блит идёт по всему растру.
     expect(counters.fogMaskUploadBytes).toBe(32 * 32);
+    expect(counters.fogMinimapTexels).toBe(32 * 32);
 
-    // Та же доставка растра не трогает вовсе — сигнатура входов совпала
-    // (design D4), и по шине не ушло ни байта: счётчик стоит на месте.
-    withCostSink(counters, () => {
+    // Кадр рассеивания: растр уезжает в текстуру ЦЕЛИКОМ (частичной загрузки в
+    // этой итерации нет), а блит идёт по грязным блокам окна (design D5).
+    const dissolving = createCostCounters();
+    withCostSink(dissolving, () => {
+      stand.fog.updateFrame(10, 0.5);
+    });
+    expect(dissolving.fogMaskUploadBytes).toBe(32 * 32);
+    expect(dissolving.fogMinimapTexels).toBeGreaterThan(0);
+    expect(dissolving.fogMinimapTexels).toBeLessThanOrEqual(32 * 32);
+
+    // Та же доставка на устоявшейся сцене: сигнатура входов совпала (design
+    // D4), окно рассеивания пусто (design D5) — по шине не ушло ни байта.
+    const settled = createCostCounters();
+    withCostSink(settled, () => {
       stand.fog.syncTick(stand.view);
+      stand.fog.updateFrame(1 / 60, 0.5);
     });
-    expect(counters.fogMaskUploadBytes).toBe(32 * 32);
+    expect(settled.fogMaskUploadBytes).toBe(0);
+    expect(settled.fogMinimapTexels).toBe(0);
+    expect(settled.fogDissolveTexels).toBe(0);
 
-    // Доставка ДРУГИХ входов — второй растр той же длины, ни больше ни меньше.
-    withCostSink(counters, () => {
-      stand.fog.syncTick(makeTickView([observerView(1, 5, 5, 1.5)]));
+    // Снап (REND-2): показанная маска стала целевой прямо на доставке — растр
+    // уезжает в текстуру здесь, и блит идёт по всему растру.
+    const snap = createCostCounters();
+    withCostSink(snap, () => {
+      stand.fog.syncTick(makeTickView([observerView(1, 3, 5, 1.5)], { snapAll: true }));
     });
-    expect(counters.fogMaskUploadBytes).toBe(2 * 32 * 32);
+    expect(snap.fogMaskUploadBytes).toBe(32 * 32);
+    expect(snap.fogMinimapTexels).toBe(32 * 32);
   });
 
   it('число сегментов укрытий: отбор и тесты лучей полярного растра растут вместе с ним', () => {
     // Наблюдатель стоит в свободной клетке, а не в узле решётки: стоя ровно на
     // линии ребра, он перекрыт целиком (`rasterizeOnLine`, FOW-9), и ось мерила
     // бы вырожденную ветку вместо обычной растеризации теней.
-    const bare = deliverCost({ vision: 4, observers: [[3.5, 3.5]] });
-    const few = deliverCost({ vision: 4, observers: [[3.5, 3.5]], pillarStep: 4 });
-    const many = deliverCost({ vision: 4, observers: [[3.5, 3.5]], pillarStep: 2 });
+    const bare = rebuildCost({ vision: 4, observers: [[3.5, 3.5]] });
+    const few = rebuildCost({ vision: 4, observers: [[3.5, 3.5]], pillarStep: 4 });
+    const many = rebuildCost({ vision: 4, observers: [[3.5, 3.5]], pillarStep: 2 });
 
     const bareSegments = fogSegmentsOf(flatGrid(8)).length;
     const fewSegments = fogSegmentsOf(pillarGrid(8, 4)).length;
@@ -337,33 +405,49 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
     expect(many.fogShadowRayTests).toBeGreaterThan(few.fogShadowRayTests);
   });
 
-  it('рассеивание тумана — работа стадии кадра, а не доставки (FOW-7, PERF-2)', () => {
+  it('весь растр маски — работа стадии кадра, а не доставки (FOW-7, PERF-2)', () => {
     const stand = fogStand({ resolution: 4 });
     const delivery = createCostCounters();
     withCostSink(delivery, () => {
       stand.fog.syncTick(stand.view);
     });
-    // Доставка построила ЦЕЛЕВУЮ маску; показанная ещё догоняет её кадрами —
-    // и за проход сходимости платит стадия кадра, а не доставки.
+    // Доставка только просмотрела состояние и положила отложенный вход: ни
+    // обнуления, ни reveal, ни блюра, ни рассеивания (design D1, D4).
+    expect(delivery.fogEntitiesScanned).toBe(1);
+    expect(delivery.fogMaskClearTexels).toBe(0);
+    expect(delivery.fogMaskSmoothTexels).toBe(0);
+    expect(delivery.fogRevealCalls).toBe(0);
     expect(delivery.fogDissolveTexels).toBe(0);
 
+    // Кадры перестройки: весь растр — здесь, а рассеивание пока стоит (dt = 0).
+    const build = createCostCounters();
+    withCostSink(build, () => {
+      buildFogMask(stand.fog);
+    });
+    expect(build.fogMaskClearTexels).toBe(32 * 32);
+    expect(build.fogMaskSmoothTexels).toBe(2 * 32 * 32);
+    expect(build.fogRevealCalls).toBe(1);
+    expect(build.fogEntitiesScanned).toBe(0);
+
+    // Кадр рассеивания: окно обходится по грязным блокам, и это НЕ длина растра
+    // (design D5) — работа пропорциональна неустоявшейся области.
     const frame = createCostCounters();
     withCostSink(frame, () => {
       stand.fog.updateFrame(1 / 60, 0.5);
     });
-    expect(frame.fogDissolveTexels).toBe(32 * 32);
-    // Повторная загрузка текстуры и повторный блит слоя кадром посчитаны тем же
-    // числом: полей стадии доставки кадр не трогает вовсе (PERF-2).
-    expect(frame.fogMaskUploadBytes).toBe(0);
-    expect(frame.fogMinimapTexels).toBe(0);
+    expect(frame.fogDissolveTexels).toBeGreaterThan(0);
+    expect(frame.fogDissolveTexels).toBeLessThanOrEqual(32 * 32);
+    expect(frame.fogMaskClearTexels).toBe(0);
 
-    // Сошлась показанная маска с целевой — кадры перестают платить (design D4).
+    // Сошлась показанная маска с целевой — кадры перестают платить (design D5).
     stand.fog.updateFrame(10, 0.5);
     const settled = createCostCounters();
     withCostSink(settled, () => {
       stand.fog.updateFrame(1 / 60, 0.5);
     });
     expect(settled.fogDissolveTexels).toBe(0);
+    expect(settled.fogMaskUploadBytes).toBe(0);
+    expect(settled.fogMinimapTexels).toBe(0);
   });
 
   it('маска вне подсистемы считается так же — счётчик у растра, а не у обвязки', () => {
@@ -471,6 +555,7 @@ describe('PERF-2: инстансы стадий syncTick и frame на шве Pr
     const counters = createCostCounters();
     withCostSink(counters, () => {
       stand.fog.syncTick(stand.view);
+      buildFogMask(stand.fog);
       stand.fog.render(active, camera);
       stand.fog.render(active, camera);
       // Маска не построена — ровно прямой рендер, один проход (design D2).

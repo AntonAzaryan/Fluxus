@@ -88,6 +88,30 @@ function harness(interval = 3, capacity = 4): Harness {
   };
 }
 
+/** Счётчик списаний exempt-поля: по нему видно, сколько раз его тронул реплей. */
+interface CooldownStats {
+  writes: number;
+}
+
+/**
+ * Обычная система кулдауна: каждый тик списывает единицу. Обычная — потому что
+ * exempt-поле продвигает именно она, в том числе на тиках реплея внутри
+ * `seekTo` (REW-4), и весь смысл carve-out'а REW-9 в том, чем это кончается.
+ */
+const cooldownSystem = (stats: CooldownStats = { writes: 0 }): System => ({
+  name: 'CooldownSystem',
+  order: 15,
+  run(ctx) {
+    for (const entity of ctx.query({ all: ['Cooldown'] })) {
+      const left = ctx.get(entity, 'Cooldown', 'rewind');
+      if (left > 0) {
+        stats.writes++;
+        ctx.commands.setField(entity, 'Cooldown', 'rewind', left - 1);
+      }
+    }
+  },
+});
+
 /** Кадр ввода одного игрока: важен только `moveX`, остальное — обязательные поля. */
 function frameOf(tick: number, moveX: number): InputFrame {
   return { tick, playerId: 'p1', seq: tick, move: { x: moveX, y: 0 }, aimDir: 0, buttons: 0 };
@@ -371,16 +395,6 @@ describe('перемотка (REW-1, REW-2, REW-9, REW-10)', () => {
  * тикал в замороженном мире» были бы неотличимы от «никто его не трогал».
  */
 function componentExemptHarness(interval = 3, capacity = 10) {
-  const cooldownSystem: System = {
-    name: 'CooldownSystem',
-    order: 15,
-    run(ctx) {
-      for (const entity of ctx.query({ all: ['Cooldown'] })) {
-        const left = ctx.get(entity, 'Cooldown', 'rewind');
-        if (left > 0) ctx.commands.setField(entity, 'Cooldown', 'rewind', left - 1);
-      }
-    },
-  };
   const lifecycle: System = {
     name: 'Lifecycle',
     order: 5,
@@ -393,7 +407,7 @@ function componentExemptHarness(interval = 3, capacity = 10) {
   const registry = new SystemRegistry();
   registry.register(lifecycle);
   registry.register(moveSystem);
-  registry.register(cooldownSystem);
+  registry.register(cooldownSystem());
   const world = createWorld(SCHEMAS, PREFABS);
   const sim: Simulation = { systems: registry, worldSeed: WORLD_SEED, math: mathApi };
   const state = initialState(world, WORLD_SEED);
@@ -515,6 +529,126 @@ describe('компонентная форма exempt-списка (REW-9)', () =
 
     expect(getField(h.state.world, first, 'Cooldown', 'rewind')).toBe(600);
     expect(getField(h.state.world, first, 'Velocity', 'x')).toBe(42);
+  });
+});
+
+/**
+ * Стенд carve-out'а REW-9 для реплея внутри `seekTo` (REW-4): cooldown взведён
+ * ДО первого тика, поэтому в истории лежат его убывающие значения, и реплей
+ * вперёд действительно списывает exempt-поле, а не проходит мимо нуля.
+ * `interval` — параметр стенда: от него зависит длина реплея (SNAP-4), а
+ * наблюдаемое значение зависеть от неё не должно.
+ */
+function replayExemptHarness(interval: number, start: number) {
+  const stats: CooldownStats = { writes: 0 };
+  const registry = new SystemRegistry();
+  registry.register(cooldownSystem(stats));
+  const world = createWorld(SCHEMAS, PREFABS);
+  const mover = spawn(world, 'mover');
+  setField(world, mover, 'Cooldown', 'rewind', start);
+  const sim: Simulation = { systems: registry, worldSeed: WORLD_SEED, math: mathApi };
+  const state = initialState(world, WORLD_SEED);
+  const history = new RingHistory({ interval, capacity: 32 });
+  const inputs = createInputLog();
+  history.record(state);
+
+  return {
+    sim,
+    state,
+    stats,
+    cooldown: (): number => getField(state.world, mover, 'Cooldown', 'rewind'),
+    /** Контроллер с exempt-компонентом или без него — вторым видно результат реплея. */
+    controller: (exempt: boolean) =>
+      createRewindController(sim, state, {
+        history,
+        inputs,
+        ...(exempt ? { exempt: [{ component: 'Cooldown' }] } : {}),
+      }),
+    runTo(target: number) {
+      while (state.tick < target) {
+        inputs.record(state.tick + 1, []);
+        tick(sim, state);
+        history.record(state);
+      }
+    },
+  };
+}
+
+/**
+ * Запрет «вне `Running` exempt-значения не продвигаются» — о НАБЛЮДАЕМОМ
+ * результате `seekTo`, а не о промежуточных тиках его реплея: реплей обязан
+ * исполнять обычные системы с теми же входами (REW-4, DET-1), и exempt-поле он
+ * трогает наравне с прочими. Снимает противоречие сама схема lift/write-back —
+ * запись снятого значения после реплея накрывает то, что реплей насчитал.
+ */
+describe('carve-out REW-9 для реплея внутри seekTo (REW-4)', () => {
+  const START = 1200;
+  /** Цель не кратна ни одному из интервалов стенда — реплею есть что доигрывать. */
+  const TARGET = 17;
+  const CAST_TICK = 20;
+
+  /** Ульта прожата: политика взводит cooldown заново (WSM-5), механизм его лишь несёт. */
+  const cast = (h: ReturnType<typeof replayExemptHarness>): void => {
+    h.runTo(CAST_TICK);
+    setField(h.state.world, listAlive(h.state.world)[0]!, 'Cooldown', 'rewind', START);
+  };
+
+  it('реплей внутри seekTo тронул exempt-поле, а запись после реплея его накрыла', () => {
+    const h = replayExemptHarness(10, START);
+    cast(h);
+    expect(h.cooldown()).toBe(START);
+
+    const wsm = h.controller(true);
+    const before = h.stats.writes;
+    wsm.pause();
+    wsm.beginRewind();
+    wsm.seekTo(TARGET);
+
+    // Реплей от снапшота тика 10 доиграл семь тиков, и на каждом система
+    // кулдаунов списывала exempt-поле: запрет о результате, а не о реплее.
+    expect(h.stats.writes - before).toBe(TARGET - 10);
+    expect(h.state.tick).toBe(TARGET);
+    // И всё же наблюдаемое значение — то, каким оно было в момент вызова.
+    expect(h.cooldown()).toBe(START);
+  });
+
+  it('без exempt-списка на том же месте остаётся результат реплея', () => {
+    const h = replayExemptHarness(10, START);
+    cast(h);
+
+    const wsm = h.controller(false);
+    wsm.pause();
+    wsm.beginRewind();
+    wsm.seekTo(TARGET);
+
+    // Контроль: реплей насчитал значение целевого тика — именно его и накрывает
+    // запись в предыдущем тесте, а не «поле, которого никто не трогал».
+    expect(h.cooldown()).toBe(START - TARGET);
+  });
+
+  it('наблюдаемое значение exempt-поля от interval провайдера истории не зависит (SNAP-4)', () => {
+    const observed: number[] = [];
+    const replayed: number[] = [];
+
+    for (const interval of [1, 3, 10]) {
+      const h = replayExemptHarness(interval, START);
+      cast(h);
+      const wsm = h.controller(true);
+      const before = h.stats.writes;
+      wsm.pause();
+      wsm.beginRewind();
+      wsm.seekTo(TARGET);
+
+      observed.push(h.cooldown());
+      replayed.push(h.stats.writes - before);
+    }
+
+    // Длина реплея — настройка производительности, и от неё зависит: 17 — сам
+    // снапшот, 15 и 10 — база плюс два и семь тиков доигрывания.
+    expect(replayed).toEqual([0, 2, 7]);
+    // Наблюдаемое значение — нет: иначе глубже поводивший ползунком получал бы
+    // ульту дешевле, и цена зависела бы от настройки провайдера.
+    expect(observed).toEqual([START, START, START]);
   });
 });
 

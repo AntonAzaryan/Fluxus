@@ -17,7 +17,7 @@
  * двумя последними доставленными тиками по часам этого потока (SHELL-7).
  */
 import * as THREE from 'three';
-import type { EntityId, SceneDef } from '@game-mvp/core';
+import { ABILITY_STEPS, loadScene, type EntityId, type SceneDef } from '@game-mvp/core';
 import {
   AssetService,
   createManifestLoader,
@@ -34,6 +34,7 @@ import {
   type VisualManifest,
 } from '@game-mvp/assets';
 import {
+  AbilityPreviewSubsystem,
   CAMERA_CONFIG_DESCRIPTION,
   CAMERA_EFFECTS_DESCRIPTION,
   CameraEffectsDirector,
@@ -42,17 +43,24 @@ import {
   decorationInstanceOf,
   EffectsSubsystem,
   FogSubsystem,
+  LightingSubsystem,
   ModelsSubsystem,
   ParticlesSubsystem,
+  RenderDebugLayer,
   TerrainSubsystem,
+  ViewportPicking,
   VisualSurfaceSource,
   applyCameraPose,
   cameraConfigFromManifest,
+  costCountersDebugSource,
   createCameraInput,
+  deliveryDebugSource,
   resetCameraInput,
   resolveFogConfig,
   terrainGroundApi,
   type CameraBounds,
+  type CameraPose,
+  type AbilitySlotStatNames,
   type DecorationInstance,
   type RenderContext,
 } from '@game-mvp/render';
@@ -66,15 +74,39 @@ import {
   aimAngle,
   navigatorGamepad,
   shellPort,
+  toWorldFixed,
   validateBindings,
+  type AimPoint,
+  type AimResolution,
   type InputSource,
 } from '@game-mvp/client';
-import { ACTION_BITS, RESPAWN_EVENT, STATE_COMPONENTS, STATS } from './sim.js';
-import { attachBenchProbe, benchRequested, type BenchProbe, type BenchProbeHost } from './benchProbe.js';
-import { createCapturePreview, type CapturePreview } from './capturePreview.js';
+import {
+  ACTION_BITS,
+  CHARGE_PREVIEW_MIN_TICKS,
+  PREVIEW_SLOTS,
+  RESPAWN_EVENT,
+  STATE_COMPONENTS,
+  STATS,
+} from './sim.js';
 import { createChargeBalls, type ChargeBalls } from './chargeBalls.js';
+import { attachBenchProbe, benchRequested, type BenchProbe, type BenchProbeHost } from './benchProbe.js';
+import {
+  attachDebugGlobal,
+  createDebugPanel,
+  restoreDebugSources,
+  storedDebugSources,
+  type DebugGlobalHost,
+  type DebugPanel,
+} from './debugPanel.js';
+import {
+  cameraDebugSource,
+  dynamicCollidersDebugSource,
+  inspectorDebugSource,
+  staticCollidersDebugSource,
+} from './debugSources.js';
 import { demoEdgePan } from './cameraInput.js';
-import { createDemoHud, demoHudComposition } from './hud.js';
+import { createDemoHud, demoHudComposition, markHoldOnlyAbilities } from './hud.js';
+import { prewarmPresentation } from './prewarm.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import {
@@ -104,6 +136,16 @@ const app: HTMLElement = appElement;
 const renderer3 = new THREE.WebGLRenderer({ antialias: true });
 renderer3.setSize(window.innerWidth, window.innerHeight);
 renderer3.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Теневые карты включает ВЛАДЕЛЕЦ рендерера (design D8): рендерер принадлежит
+// сборке, а не подсистемам. Включённый shadowMap без кастеров бесплатен —
+// фактическую стоимость задаёт действующий режим теней секции `lighting`.
+//
+// Тип — `PCFShadowMap`, а не `PCFSoftShadowMap`: последний в three `^0.185`
+// объявлен устаревшим, и рендерер сам молча подменяет его первым, оставляя в
+// консоли предупреждение. Писать в коде тип, которого рендерер не исполняет,
+// значило бы обещать кадру мягкость, которой в нём нет.
+renderer3.shadowMap.enabled = true;
+renderer3.shadowMap.type = THREE.PCFShadowMap;
 app.appendChild(renderer3.domElement);
 
 const scene3 = new THREE.Scene();
@@ -121,10 +163,10 @@ let rig: CameraRig | null = null;
 /** Диспетчер эффектов появляется вместе с манифестом (ASSET-7, см. main). */
 let director: CameraEffectsDirector | null = null;
 const camInput = createCameraInput();
-scene3.add(new THREE.AmbientLight(0xffffff, 0.65));
-const sun = new THREE.DirectionalLight(0xffffff, 1.7);
-sun.position.set(8, -12, 18);
-scene3.add(sun);
+// Света здесь нет намеренно: источники арены создаёт подсистема освещения из
+// секции `lighting` парного документа (PRES-2), и потребитель рендера своих
+// добавлять не вправе — иначе свет удвоился бы, а кадры клиента и вьюпорта
+// редактора разошлись бы числами в двух местах (`editor` ED-22).
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -220,7 +262,7 @@ let pointerY = -1;
  * что «указатель где-то стоит» (см. `pointerAimSource`).
  */
 let pointerMoves = 0;
-/** Зажатые кнопки мыши: 1 — drag-панорама (MMB), 2 — осмотр в fly (RMB). */
+/** Зажатые кнопки мыши: 1 — drag-панорама (MMB), 2 — осмотр в fly (Alt+RMB). */
 let midDrag = false;
 let rightDrag = false;
 
@@ -332,25 +374,40 @@ const bindings = validateBindings(bindingsJson);
 const sampler = new InputSampler({ actionBits: ACTION_BITS });
 
 /**
- * Прицел клика: точка на полу через raycast (design Decision 6) минус позиция
- * героя — угол в единице ядра (FP-7); JSON-система сцены разворачивает его
- * обратно в вектор оператором `cos`/`sin`. Null — направления нет, каст
- * не возникает.
+ * Прицел указателя: точка на полу через raycast (design Decision 6) И угол на
+ * неё от героя в единице ядра (FP-7). Null — прицела нет: луч мимо пола, герой
+ * ещё не приехал или клик в себя.
+ *
+ * Отдаётся ОБА, одним разрешением (INP-1, design Decision 12). Угол остаётся —
+ * на нём стоит вся сегодняшняя сцена: JSON-системы разворачивают его обратно в
+ * вектор оператором `cos`/`sin`, и направление точкой не выражается. Точка
+ * нужна цепочке прицеливания способностей (ABIL-5): «сюда» и «в эту сторону» —
+ * разные высказывания, и одно из другого не выводится. Считать их двумя
+ * лучами нельзя — они разъезжались бы между собой.
  */
-function aimAtPointer(clientX: number, clientY: number): number | null {
+function aimAtPointer(clientX: number, clientY: number): AimResolution | null {
   const point = groundPoint(clientX, clientY);
   if (point === null || heroId === null) return null;
   const view = remote?.view?.entities.get(heroId);
   if (view === undefined) return null;
   const dx = point.x - view.currX;
   const dy = point.y - view.currY;
-  return Math.hypot(dx, dy) < 1e-3 ? null : aimAngle(dx, dy); // клик в себя — направления нет
+  // Клик в себя — направления нет; точка при этом есть, но без направления она
+  // не действие: сцена демо решает по углу.
+  if (Math.hypot(dx, dy) < 1e-3) return null;
+  return { angle: aimAngle(dx, dy), x: point.x, y: point.y };
 }
 
 const kbmSource = new KeyboardMouseSource({
   bindings: bindings.keyboardMouse,
   // Fly владеет клавиатурой — герой стоит (CAM-1, CAM-2).
   movementCaptured: () => rig?.capturesMovement() ?? false,
+  // ВАЖНО для действий на кнопках мыши (`cast` на ЛКМ, `shield` на ПКМ):
+  // нажатие без разрешённого прицела действием не считается (INP-1) — луч мимо
+  // плоскости пола или клик точно в себя не дают ни фронта, ни удержания.
+  // Каст этим и жив (стрелять в никуда нечем), а вот щит платит за это ценой:
+  // ПКМ с курсором выше горизонта его не поставит. Лечится это не здесь, а
+  // источником прицела — сегодня он у демо один и он же луч по полу.
   aimAt: aimAtPointer,
 });
 sampler.add(kbmSource);
@@ -379,11 +436,17 @@ if (bindings.gamepad !== undefined) {
 let frameAim: number | null = null;
 
 /**
- * Последний НЕПУСТОЙ прицел кадра. Луч мимо плоскости пола (курсор ушёл в небо
- * над кромкой арены) даёт `frameAim === null`, и фигура, гаснущая по нему,
- * исчезала бы на ровном месте — притом что заряд в это время продолжает идти к
- * взрыву в кастере. Держать последнее направление — то же правило, по которому
- * сэмплер держит последний `aimDir` молчащего источника (INP-5).
+ * Точка прицела этого кадра — второй половина того же разрешения (INP-1): её
+ * везёт `InputFrame` (TICK-2), и цепочка прицеливания способностей читает
+ * именно её, а не угол. Считается тем же единственным лучом, что `frameAim`, и
+ * гаснет вместе с ним.
+ */
+let frameTarget: AimPoint | null = null;
+
+/**
+ * Последний НЕПУСТОЙ прицел кадра: им целится шар заряда своего героя. Луч,
+ * ушедший мимо плоскости пола, шар не гасит — заряд идёт, а направление у него
+ * есть то же самое правило «последнего значения», что у сэмплера (INP-5).
  */
 let lastAim: number | null = null;
 
@@ -426,7 +489,13 @@ const pointerAimSource: InputSource = {
   poll: () => {
     const moved = pointerMoves !== polledPointerMoves;
     polledPointerMoves = pointerMoves;
-    return { moveX: 0, moveY: 0, aim: moved || pointerAiming() ? frameAim : null };
+    const aiming = moved || pointerAiming();
+    return {
+      moveX: 0,
+      moveY: 0,
+      aim: aiming ? frameAim : null,
+      target: aiming ? frameTarget : null,
+    };
   },
 };
 // ПОСЛЕДНИМ, и это несущее: сэмплер выбирает прицел источника с самым свежим
@@ -437,19 +506,27 @@ const pointerAimSource: InputSource = {
 // молчаливый приоритет над обоими.
 sampler.add(pointerAimSource);
 
-// ------------------------- превью зоны захвата (R) и шары заряда каста (ЛКМ)
+// ------------------------------------------------- превью каста (REND-28)
 //
-// Обе фигуры — presentation главного потока, и каждая живёт своим модулем
-// (`capturePreview.ts`, `chargeBalls.ts`): почему они рисуются здесь, а не
-// записями `effects` манифеста, и откуда берут числа — в заголовках модулей.
-// Здесь — общая для них поверхность пола и ручки кадра, которые зовёт `frame`.
+// Фигура шага рисуется ПОДСИСТЕМОЙ рендера, а не главным потоком: она читает то
+// же определение сцены, что и симуляция (ABIL-5), а рукописные `capturePreview`
+// и `chargeBalls` этой сборки на нём и держались — на втором описании тех же
+// способностей. Сборке остаётся ровно три шва: каталог определений в
+// конструктор, имена статов слотов (`extractor.ts`) и покадровый локальный
+// сэмпл ввода — тот же, что уезжает в тик.
+
+/**
+ * Подсистема превью каста: регистрируется в `onReady` вместе с остальными —
+ * поверхность и каталог к тому моменту есть, а до первого доставленного тика
+ * рисовать всё равно нечего (REND-28).
+ */
+let abilityPreview: AbilityPreviewSubsystem | null = null;
 
 /**
  * Визуальная поверхность кадра (REND-9) — общая с подсистемами террейна,
- * моделей и эффектов; появляется вместе с сеткой в `onReady`. Превью зоны и шар
- * заряда садятся на НЕЁ, а не на `pose.z` инстанса: в прыжке и уклоне поза
- * поднята дугой манёвра (REND-12), а зона захвата — плоская фигура на полу, и
- * повторять за дугой ей нечего.
+ * моделей и эффектов; появляется вместе с сеткой в `onReady`. Шар заряда
+ * садится на НЕЁ, а не на `pose.z` инстанса: в прыжке и рывке поза поднята
+ * дугой манёвра (REND-12), а шар висит перед кастером на своей высоте.
  */
 let visualSurface: VisualSurfaceSource | null = null;
 
@@ -457,10 +534,10 @@ let visualSurface: VisualSurfaceSource | null = null;
  * Точка пола под интерполированной позой инстанса. Горизонталь — ровно та
  * позиция, по которой решает тик (REND-2), высота — поверхность под ней.
  *
- * Отдаётся ОДНА переиспользуемая запись: функция зовётся по разу на превью и на
- * каждый шар заряда в кадре, а свежий объект на каждый вызов — мусор на кадре
- * (та же политика, что у `ndcScratch`/`hitScratch`). Значение читается сразу и
- * между кадрами не хранится.
+ * Отдаётся ОДНА переиспользуемая запись: функция зовётся по разу на каждый шар
+ * заряда в кадре, а свежий объект на каждый вызов — мусор на кадре (та же
+ * политика, что у `ndcScratch`/`hitScratch`). Значение читается сразу и между
+ * кадрами не хранится.
  */
 const groundScratch = { x: 0, y: 0, z: 0 };
 function groundUnder(instance: { pose: { x: number; y: number; z: number } }): {
@@ -478,15 +555,26 @@ function groundUnder(instance: { pose: { x: number; y: number; z: number } }): {
 }
 
 /**
- * Превью зоны захвата: собирается в `main` ДО манифеста — числа зоны приезжают
- * из сцены (`capturePreview.ts`), а не из записей манифеста.
- */
-let capturePreview: CapturePreview | null = null;
-/**
- * Шары заряда: собираются в `main` ПОСЛЕ манифеста — цвет, базовый радиус и
- * высоту они берут из его записей `effects.byKind` (`chargeBalls.ts`).
+ * Шары заряда каста: собираются в `main` ПОСЛЕ манифеста — цвет, базовый радиус
+ * и высоту они берут из его записей `effects.byKind` (`chargeBalls.ts`).
  */
 let chargeBalls: ChargeBalls | null = null;
+
+/**
+ * Имена статов слотов, доставляемых превью (HUD-8). Список тот же, по которому
+ * `extractor.ts` объявляет источники: разойдись они — превью читало бы имена,
+ * которых в кадре нет, и молча не рисовало бы ничего.
+ */
+const PREVIEW_SLOT_STATS: readonly AbilitySlotStatNames[] = PREVIEW_SLOTS.map((ability) => ({
+  ability: STATS.slotAbility(ability),
+  phase: STATS.slotPhase(ability),
+  staged: STATS.slotStaged(ability),
+  steps: Array.from({ length: ABILITY_STEPS }, (_unused, step) => ({
+    x: STATS.slotStepX(ability, step),
+    y: STATS.slotStepY(ability, step),
+    entity: STATS.slotStepEntity(ability, step),
+  })),
+}));
 
 /**
  * Накладка тач-стиков: отрисовка — уровень приложения, источник отдаёт только
@@ -534,8 +622,13 @@ window.addEventListener('mousedown', (e) => {
     midDrag = true;
     return;
   }
-  if (e.button === 2) rightDrag = true;
-  // ЛКМ (каст) обрабатывает KeyboardMouseSource.bind выше.
+  // ПКМ с Alt — осмотр в режиме облёта (CAM-1); без Alt правая кнопка
+  // принадлежит герою: её действие (`shield`) обрабатывает
+  // `KeyboardMouseSource.bind` выше — тем же путём, что ЛКМ (каст). Что именно
+  // Alt отдаёт камере, а не миру, сказано ОДИН раз и в данных — оговоркой
+  // `suppressedBy` той же записи раскладки (INP-4): здесь только вторая
+  // половина того же решения.
+  if (e.button === 2 && e.altKey) rightDrag = true;
 });
 window.addEventListener('mouseup', (e) => {
   if (e.button === 1) midDrag = false;
@@ -569,13 +662,16 @@ function sampleCameraInput(): void {
   const fly = rig?.capturesMovement() ?? false;
   camInput.moveX = fly ? (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0) : 0;
   camInput.moveY = fly ? (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0) : 0;
-  // Вертикаль облёта — `Q`/`Z`, а не привычная пара `Q`/`E`: `E` ушла герою под
-  // щит (`bindings.json`), а `KeyboardMouseSource` гасит в режиме облёта только
-  // ОСИ движения (`movementCaptured`), не биты действий, — и облёт вверх молча
-  // ставил бы щит. Та же причина, по которой облёт включает `V`, а не `F`.
-  // Направление у `Q` при этом ОБРАТНОЕ редакторскому (`editor/ui-ts`: `E` —
-  // вверх, `Q` — вниз): там вертикаль облёта свободна, здесь её выбирает
-  // занятость `E`. Мышечная память между двумя сборками не переносится.
+  // Вертикаль облёта — `Q`/`Z`, а не привычная пара `Q`/`E`: `Q` в раскладке
+  // демо занята отменой шага прицеливания (`bindings.json`), а `KeyboardMouseSource`
+  // гасит в режиме облёта только ОСИ движения (`movementCaptured`), не биты
+  // действий, — то есть облёт вверх заодно шлёт в мир отмену. Пара выбрана
+  // так, чтобы вторая клавиша (`Z`) не значила в мире ничего. Направление у
+  // `Q` при этом ОБРАТНОЕ редакторскому (`editor/ui-ts`: `E` — вверх, `Q` —
+  // вниз): мышечная память между двумя сборками не переносится.
+  // У правой кнопки та же коллизия решена в ДАННЫХ: осмотр требует Alt, а
+  // раскладка объявляет `shield` подавленным этим же модификатором, — одно
+  // сочетание, один смысл (INP-4).
   camInput.moveZ = fly ? (keys.has('KeyQ') ? 1 : 0) - (keys.has('KeyZ') ? 1 : 0) : 0;
 }
 
@@ -588,7 +684,7 @@ function sampleCameraInput(): void {
 function pushInput(): void {
   if (remote === null) return;
   const input = sampler.sample();
-  remote.sendInput(input.move, input.aimDir, input.buttons);
+  remote.sendInput(input.move, input.aimDir, input.buttons, input.target);
 }
 
 // ------------------------------------------------------------- HUD и цикл
@@ -657,7 +753,7 @@ const benchProbe: BenchProbe | null = benchRequested(window.location.search)
  * камеры, канонический ввод в воркер и накладка тач-стиков.
  *
  * Прицел кадра — ОДИН raycast на кадр (design Decision 6): его читают и
- * сэмплер через `pointerAimSource`, и превью зоны захвата. Считается ДО
+ * сэмплер через `pointerAimSource`, и превью каста. Считается ДО
  * конвейера камеры — по той же позе, по которой игрок видел кадр, когда ставил
  * курсор, и одинаково для обоих потребителей.
  *
@@ -665,7 +761,9 @@ const benchProbe: BenchProbe | null = benchRequested(window.location.search)
  * только шлёт ввод и интерполирует доставленное (REND-2).
  */
 function sampleFrameInput(): void {
-  frameAim = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
+  const resolved = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
+  frameAim = resolved === null ? null : resolved.angle;
+  frameTarget = resolved;
   if (frameAim !== null) lastAim = frameAim;
 
   // Отложенное кадрирование миникарты — когда камера уже не follow (см. panTo).
@@ -675,8 +773,47 @@ function sampleFrameInput(): void {
   }
   sampleCameraInput();
   pushInput();
+  // Третий шов превью (REND-28): локальный, ещё не подтверждённый сэмпл — та же
+  // точка и то же квантование, что уедут в мир `InputFrame`'ом (INP-3), а не
+  // второе округление той же точки. Обратного канала нет: подсистема её только
+  // читает.
+  //
+  // Гейт короткого заряда — здесь, а не в подсистеме: «одиночный клик превью не
+  // показывает» — правило ИГРЫ, а рендер рисует фигуру шага, пока идёт фаза
+  // (REND-28), и решать за игру, какая фаза достойна картинки, ему нечем.
+  // Сэмпл без точки гасит превью ровно так же, как его отсутствие.
+  abilityPreview?.applyLocalInput(
+    heroId === null || chargeTooYoung()
+      ? null
+      : {
+          entity: heroId,
+          target:
+            frameTarget === null
+              ? null
+              : { x: toWorldFixed(frameTarget.x), y: toWorldFixed(frameTarget.y) },
+        },
+  );
   if (touchSource !== null) touchOverlay?.(touchSource.overlay());
 }
+
+/**
+ * Идёт ли заряд каста своего героя короче порога (`CHARGE_PREVIEW_MIN_TICKS`).
+ * Величина — ДОСТАВЛЕННАЯ (стат `charge`, HUD-1), а не счётчик главного потока:
+ * о нажатиях кадр не помнит, и помнить не должен — заряд считает симуляция.
+ * Стата нет — заряда нет, и гасить нечего.
+ */
+function chargeTooYoung(): boolean {
+  if (heroId === null) return false;
+  const ticks = remote?.view?.entities.get(heroId)?.stats?.get(STATS.charge);
+  return ticks !== undefined && ticks < CHARGE_PREVIEW_MIN_TICKS;
+}
+
+/**
+ * Поза, которой нарисован ПОСЛЕДНИЙ кадр (CAM-1) — уже с эффектами. Её же
+ * читают отладочный инспектор (picking по видимому, REND-15) и источник камеры:
+ * второго конвейера позы не заводится, и луч под курсором совпадает с картинкой.
+ */
+let lastPose: CameraPose | null = null;
 
 /**
  * Стадия `camera` — конвейер камеры (CAM-1): follow-цель — интерполированная
@@ -713,13 +850,15 @@ function cameraFrame(dtSec: number): void {
   // время здесь. Сама же камера (`rig.update`) продолжает слушаться игрока:
   // осмотреться в замороженном мире — ровно то, ради чего перемотку и смотрят.
   const worldDt = (remote?.view?.mode ?? 'Running') === 'Running' ? dtSec : 0;
-  applyCameraPose(camera, director === null ? logical : director.stack.apply(logical, worldDt));
+  const applied = director === null ? logical : director.stack.apply(logical, worldDt);
+  lastPose = applied;
+  applyCameraPose(camera, applied);
 }
 
 /**
  * Стадия `present`: покадровое обновление подсистем (`frame` — интерполяция
- * поз, отсечение, выбор уровня детализации). Сектор захвата и шар заряда —
- * следом и здесь же: они садятся на позу инстанса ЭТОГО кадра, не прошлого.
+ * поз, отсечение, выбор уровня детализации). Шар заряда — следом и здесь же: он
+ * садится на позу инстанса ЭТОГО кадра, не прошлого.
  *
  * Приёма доставки (`syncTick`) здесь НЕТ: подсистемам его раздаёт `RemoteHost`
  * на приход сообщения из воркера (SHELL-3), то есть между кадрами. Стоимость
@@ -728,8 +867,13 @@ function cameraFrame(dtSec: number): void {
  */
 function presentFrame(now: number): void {
   remote?.frame(now);
-  capturePreview?.update();
   chargeBalls?.update();
+  // Отладочный слой ведёт себя сам: доставленное состояние и кадровые величины
+  // он получает своей точкой у сцены (REND-27) — сразу после подсистем, то есть
+  // по позам ЭТОГО кадра. Приложению остаётся текстовая часть панели (RDBG-3), и
+  // собирается она по часам кадра, а не каждым кадром: дамп снимается по
+  // запросу (RDBG-7).
+  debugPanel?.update(now);
 }
 
 /**
@@ -894,6 +1038,20 @@ const qualitySelection = createQualitySelection(storedQualityPreset(qualityStora
 /** Сам переключатель: его значением показывается ДЕЙСТВУЮЩИЙ пресет. */
 let qualitySelect: HTMLSelectElement | null = null;
 
+// ---------------------------------------- отладочный режим рендера (RDBG-1)
+
+/**
+ * Панель отладочных источников (`render-debug` RDBG-1). Появляется вместе со
+ * сценой (`onReady`): реестр источников складывается из объявлений подсистем при
+ * регистрации (REND-27), и до неё в панели было бы пусто.
+ *
+ * Сам слой в переменной не держится намеренно: доставленное состояние и кадровые
+ * величины он получает своей точкой у сцены (REND-27), а снаружи его адресуют
+ * версионированной ручкой `__renderDebug`. Отладка выключена по умолчанию
+ * (RDBG-4) — источники включает человек галочкой либо запомненным выбором.
+ */
+let debugPanel: DebugPanel | null = null;
+
 /**
  * Переключатель качества картинки — DOM демо-приложения, как и кнопка режима
  * (design D4): это настройка страницы, а не действие внутри матча, и в
@@ -927,6 +1085,86 @@ function wireQualitySelect(initial: QualityPresetName): void {
   qualitySelect = select;
 }
 
+/**
+ * Сборка отладочного слоя и его панели (`render-debug` RDBG-1, design D10).
+ *
+ * Источники здесь — ПОЛИТИКА демо: какие оси наблюдения существуют и из чего они
+ * считаются (`debugSources.ts`). Движковые источники приезжают сами — их
+ * объявили подсистемы при регистрации (REND-27); сборка добавляет свои: шов
+ * доставки, читателя счётчиков стоимости, реконструкцию статики, круги
+ * коллайдеров по объявленному стату, инспектор поверх picking'а и камеру.
+ *
+ * Ни один из них не заводит нового канала к данным (RDBG-6): всё считается из
+ * доставленного состояния, сетки handshake (SHELL-5) и позы камеры (CAM-1).
+ */
+function wireDebugPanel(surface: VisualSurfaceSource, bounds: CameraBounds): void {
+  const layer = new RenderDebugLayer(remote!.stage, { scene: scene3, surface });
+  // Picking по видимому изображению (REND-15) — ТОТ ЖЕ сервис, что у вьюпорта
+  // редактора: второй реализации пересечения не заводится. Прокси инстансов даёт
+  // подсистема моделей — она уже `InstanceProxySource`.
+  //
+  // Камера сервису НЕ передаётся, и это несущее: луч он строит, посадив позу на
+  // свою камеру (`ray`), а проба снимается ПОСЛЕ кадра подсистем и ДО рисования
+  // (REND-27). Отдай ему камеру кадра — и наведение переписывало бы её
+  // соотношение сторон и матрицы между отсечением и рисованием, то есть отладка
+  // меняла бы кадр под собой (RDBG-5).
+  //
+  // Совпадение с картинкой держится тогда не общим объектом, а тем, что у двух
+  // камер ОДНИ И ТЕ ЖЕ оси: общая поза (`lastPose`), общий `applyCameraPose`
+  // (CAM-1) и общий мировой верх — сервис ставит своей камере тот же (0,0,1),
+  // что и эта страница строкой `camera.up.set` выше. Разойдись верх — луч
+  // повернулся бы вокруг оси взгляда, и под курсором в углу кадра инспектор
+  // показывал бы не то, что там нарисовано (REND-15).
+  const picking = new ViewportPicking({
+    surface,
+    ...(models !== null ? { instances: models } : {}),
+  });
+  layer
+    .register(deliveryDebugSource())
+    .register(costCountersDebugSource())
+    .register(staticCollidersDebugSource(() => remote?.terrain ?? null))
+    .register(dynamicCollidersDebugSource(STATS.colliderRadius))
+    .register(
+      inspectorDebugSource({
+        picking: () => picking,
+        pose: () => lastPose,
+        point: () => {
+          if (pointerX < 0) return null;
+          const rect = renderer3.domElement.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) return null;
+          return {
+            x: pointerX - rect.left,
+            y: pointerY - rect.top,
+            width: rect.width,
+            height: rect.height,
+          };
+        },
+      }),
+    )
+    .register(
+      cameraDebugSource({
+        rig: () => rig,
+        pose: () => lastPose,
+        bounds: () => bounds,
+        viewport: () => {
+          const rect = renderer3.domElement.getBoundingClientRect();
+          return rect.width === 0 ? null : { width: rect.width, height: rect.height };
+        },
+      }),
+    );
+  // Запомненный выбор — после регистрации всех источников: до неё реестр не
+  // знал бы половины имён, и восстановление молча потеряло бы их (RDBG-1).
+  restoreDebugSources(layer, storedDebugSources(qualityStorage));
+  const container = document.getElementById('debug');
+  if (container !== null) {
+    debugPanel = createDebugPanel({ layer, container, storage: qualityStorage });
+    debugPanel.refresh();
+  }
+  // Ручка дампа на `window` по образцу `__benchProbe` (PERF-7): кладёт её
+  // сборка приложения, а собирает дамп рендер.
+  attachDebugGlobal(window as DebugGlobalHost, layer);
+}
+
 async function main(): Promise<void> {
   // Режим выбирается ОДИН раз, до создания воркеров: переключение режима — это
   // перезагрузка страницы с другим параметром (SHELL-8).
@@ -940,19 +1178,6 @@ async function main(): Promise<void> {
   // выбором, а применяется выбор, когда сцена собрана (`onReady`), — и к тому
   // моменту он может быть уже другим.
   wireQualitySelect(qualitySelection.pending);
-  // Превью зоны захвата — после кнопки режима по той же причине: числа зоны
-  // приходят из сцены, и дыра в контенте не должна уносить страницу целиком.
-  capturePreview = createCapturePreview({
-    scene: scene3,
-    sceneDef: sceneJson as unknown as SceneDef,
-    // Удержание — у источника ввода, а не у своего набора клавиш (INP-2), и
-    // прицел — тот же, что уехал в сэмплер этим кадром.
-    captureHeld: () => kbmSource.held().has('capture'),
-    frameAim: () => frameAim,
-    heroInstance: () => (heroId === null ? null : (models?.instanceFor(heroId) ?? null)),
-    heroView: () => (heroId === null ? undefined : remote?.view?.entities.get(heroId)),
-    groundUnder,
-  });
   const manifest = await loadManifest();
   // Парный presentation-документ (PRES-1) — декорации и секция `fog` (FOW-10).
   // Загружается в обеих воркер-сторонах оболочки одинаково (SHELL-8): документ
@@ -962,10 +1187,9 @@ async function main(): Promise<void> {
   const fogConfig = resolveFogConfig(presentation?.fog);
   // Шары заряда — после манифеста: цвет, базовый радиус и высоту они берут из
   // записей `effects.byKind.Fireball`/`HeavyFireball`, то есть у тех самых
-  // снарядов, один из которых и улетит.
+  // снарядов, один из которых и улетит (`chargeBalls.ts`).
   chargeBalls = createChargeBalls({
     scene: scene3,
-    sceneDef: sceneJson as unknown as SceneDef,
     manifest,
     entities: () => remote?.view?.entities,
     instanceFor: (entity) => models?.instanceFor(entity) ?? null,
@@ -973,6 +1197,11 @@ async function main(): Promise<void> {
     lastAim: () => lastAim,
     groundUnder,
   });
+  // Каталог определений сцены — первый шов превью (REND-28, design Decision 11):
+  // клиент резолвит сцену локально, и таблица строится ТОЙ ЖЕ
+  // `compileAbilityCatalog`, что у симуляции, — над тем же документом. Второго
+  // описания способности на клиенте не появляется.
+  const abilityCatalog = loadScene(sceneJson as unknown as SceneDef).abilities ?? null;
   const worker = spawnShellWorker(mode);
 
   remote = new RemoteHost(context, {
@@ -987,11 +1216,21 @@ async function main(): Promise<void> {
           ? { curvatureMapId: manifest.terrain.curvatureMap }
           : {}),
       });
-      // Та же поверхность — превью зоны захвата и шару заряда: обе фигуры
-      // плоские и садятся на пол, а не на дугу манёвра инстанса.
+      // Та же поверхность — шару заряда: он садится на пол, а не на дугу
+      // манёвра инстанса.
       visualSurface = surface;
+      // Свет арены — подсистемой, а не кодом сборки: источники и теневые карты
+      // строятся из секции `lighting` парного документа (PRES-2), а нет секции
+      // — из документированных умолчаний, равных прежнему захардкоженному
+      // свету. Регистрируется первой: геометрия сцены ниже отдаёт ей свои
+      // корни теневыми кастерами.
+      const lighting = new LightingSubsystem({
+        grid,
+        ...(presentation?.lighting !== undefined ? { config: presentation.lighting } : {}),
+      });
+      remote!.register(lighting);
       // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
-      remote!.register(new TerrainSubsystem(grid, { surface }));
+      remote!.register(new TerrainSubsystem(grid, { surface, shadows: lighting }));
       // Перёд модели больше не параметр сборки: он описан в записи манифеста
       // (ASSET-6 `facingDeg`, REND-13), поэтому модели разных форматов с разным
       // передом уживаются в одной сцене без общего для всех значения.
@@ -1006,6 +1245,7 @@ async function main(): Promise<void> {
       models = new ModelsSubsystem(manifest, {
         surface,
         camera,
+        shadows: lighting,
         reviveEvent: RESPAWN_EVENT,
         // Fade «ушла в туман ≠ умерла» (FOW-8, design D7): длительность — из
         // той же секции `fog`, что у подсистемы тумана (FOW-10). Сцена без
@@ -1027,13 +1267,24 @@ async function main(): Promise<void> {
       // сборки, что у эффектов и камеры: второго словаря не заводится.
       // Decoration-эмиттеры (факелы арены) приезжают сюда общим входом набора
       // декораций, который хост рассылает всем подсистемам (REND-18).
-      remote!.register(
-        new ParticlesSubsystem(manifest, {
+      const particles = new ParticlesSubsystem(manifest, {
+        surface,
+        stateComponents: STATE_COMPONENTS,
+        sockets: models,
+      });
+      remote!.register(particles);
+      // Превью каста (REND-28) — после частиц и до тумана: контур шага лежит
+      // на полу и обязан гаснуть вместе с остальным кадром под маской. Каталог
+      // и имена статов — два шва сборки, третий (`applyLocalInput`) зовётся
+      // покадрово в стадии `input`. Сцена без определений превью не получает
+      // вовсе: рисовать нечего.
+      if (abilityCatalog !== null) {
+        abilityPreview = new AbilityPreviewSubsystem(abilityCatalog, {
+          slots: PREVIEW_SLOT_STATS,
           surface,
-          stateComponents: STATE_COMPONENTS,
-          sockets: models,
-        }),
-      );
+        });
+        remote!.register(abilityPreview);
+      }
       // Туман войны (FOW-7, FOW-9, FOW-10) — только в сборке игрового клиента
       // (design D3): подсистема владеет маской видимости и пост-проходом, кадр
       // рисует `frame` её вызовом. Наблюдатели приезжают статами доставки
@@ -1138,6 +1389,11 @@ async function main(): Promise<void> {
         }),
       );
       hudRoot = hud.root;
+      // Ульта кастуется удержанием клавиши, а не кликом (см. `hero.rewind` в
+      // `hud.ts`): её кнопка в панели показывает кулдаун и помечена нерабочей —
+      // живая на вид кнопка, ведущая в никуда, обещает игроку действие, которое
+      // не произойдёт. Раскладка — та же, что у всего ввода (INP-4).
+      markHoldOnlyAbilities(hud.root, bindings.keyboardMouse.keys);
 
       // Пресет качества (QUAL-1, design D4) — ПОСЛЕ регистрации всех
       // подсистем: реестр ручек собирается из их деклараций (design D1), и
@@ -1156,6 +1412,29 @@ async function main(): Promise<void> {
       (window as { demoCameraFocus?: () => { x: number; y: number } }).demoCameraFocus = () => ({
         x: rig?.focusX ?? 0,
         y: rig?.focusY ?? 0,
+      });
+
+      // Отладочный режим рендера (`render-debug` RDBG-1) — ПОСЛЕ регистрации
+      // всех подсистем: реестр источников складывается из их объявлений при
+      // регистрации (REND-27), ровно как реестр ручек качества. Слой — не
+      // подсистема, в списке кадрового пути его нет, и счётчики стоимости
+      // (PERF-3) от его подключения не двигаются ни на единицу (RDBG-8).
+      wireDebugPanel(surface, ground.bounds);
+
+      // Прогрев презентации (см. `prewarm.ts`): модели, батчи и эффекты частиц
+      // строятся и компилируются во время загрузки, а не в кадре первого
+      // появления вида — всплеск открытия обзора (FOW-8) монтирует прогретое.
+      // Кадровый цикл прогрева не ждёт: не доехавшее монтируется прежним
+      // ленивым путём (ASSET-4), а сорвавшийся прогрев — не отказ кадра.
+      void prewarmPresentation({
+        renderer: renderer3,
+        scene: scene3,
+        camera,
+        models,
+        particles,
+        fog: fogSubsystem,
+      }).catch((e: unknown) => {
+        console.warn('демо: прогрев рендера не удался — монтаж останется ленивым', e);
       });
 
       requestAnimationFrame(frame);

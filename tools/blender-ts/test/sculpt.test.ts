@@ -8,10 +8,16 @@
  * контейнером, что у grid-фикстур.
  */
 import { describe, expect, it } from 'vitest';
+import { createTerrainGrid } from '@game-mvp/core';
+import { CURVATURE_SCALE, validateCurvatureMap } from '@game-mvp/assets';
 import { createMemoryHost } from '@game-mvp/editor-core';
+// Правило углов рендера — то же, что читает `sculpt.ts`: второй реализации
+// узловой базы BLND-13 не допускает (REND-9).
+import { cornerLevels, createVisualSurface } from '@game-mvp/render/visualSurface';
 import { parseGltf } from '../src/gltf.js';
 import { runImport } from '../src/importer.js';
-import { generateCellLayer, type CellLayer } from '../src/maps.js';
+import { LEVEL_UNIT, generateCellLayer, type CellLayer } from '../src/maps.js';
+import { nodeBaseLevels } from '../src/sculpt.js';
 import { generateSpatialLayer } from '../src/layer.js';
 import { normalizeDocument } from '../src/normalize.js';
 import {
@@ -192,9 +198,9 @@ describe('BLND-13: уровни, пол и рампы из скалпта', () =
     expect(layer.terrain?.levels).toEqual(['1234', '1234', '1234', '1234']);
     expect(layer.terrain?.flags).toEqual(['^^^.', '^^^.', '^^^.', '^^^.']);
     // Остаток пиннится числом: узловая база цепочки рамп — верхняя сторона
-    // узла (max по cornerLevels), и совпадение со скалптом гарантировано только
-    // по ней — известный предел правила углов REND-9 (BLND-13, change
-    // ramp-chain-surface). Крайний узел x=4 сэмплируется точно на краю → 0.
+    // узла (max по cornerLevels), и в узлах между смежными рампами ступенчатая
+    // форма едина (REND-9), поэтому остаток восстанавливает длинный склон точно
+    // — см. тесты цепочки ниже. Крайний узел x=4 сэмплируется точно на краю → 0.
     expect(layer.curvature?.rows).toEqual(new Array(5).fill([-32, -32, -32, -32, 0]));
   });
 
@@ -340,6 +346,64 @@ describe('BLND-13: остаток кривизны', () => {
 
     expect(errorsOf(layer)).toEqual([]);
     expect(layer.curvature?.rows.flat()).toEqual(new Array(25).fill(0));
+  });
+});
+
+describe('BLND-13 + REND-9: цепочка рамп восстанавливается точно', () => {
+  /** Тот же источник, что у теста «непрерывный склон»: h(x) = x, склон в 4 уровня. */
+  const chainLayer = (): CellLayer =>
+    cellsOf(sculptGlb([{ name: 'hill', triangles: slope(0, 0, ARENA, ARENA, 0, 1, 0) }]));
+
+  /** Сетка ядра из карт импортированного слоя — вход правила углов рендера. */
+  const gridOfLayer = (layer: CellLayer) =>
+    createTerrainGrid({
+      ...TARGET_TERRAIN,
+      levels: [...layer.terrain!.levels],
+      flags: [...layer.terrain!.flags],
+    });
+
+  it('узловая база остатка — верхняя сторона узла: смыкание пар её не сдвинуло', () => {
+    const grid = gridOfLayer(chainLayer());
+
+    // База узла — максимум заявок примыкающих клеток; на цепочке это старший
+    // уровень примыкающих клеток (уровни 1..4, у правого края арены — 4).
+    // Обобщение правила углов (REND-9) её не двигает НИ В ОДНОМ узле:
+    // подавленная заявка верхней клетки пары равна притяжению нижней вверх,
+    // поэтому максимум прежний — числа теста «цепочка рамп» байт-в-байт те же.
+    const columns = [1, 2, 3, 4, 4];
+    expect([...nodeBaseLevels(grid)]).toEqual(new Array(ARENA + 1).fill(columns).flat());
+
+    // Связка держится обоими концами, а не совпадением чисел: верхняя клетка
+    // пары остаётся на своём уровне, нижняя дотягивается вверх до него же.
+    expect(cornerLevels(grid, 0, 0)[1]).toBe(2);
+    expect(cornerLevels(grid, 1, 0)[0]).toBe(2);
+  });
+
+  it('поверхность движка из записанных слоёв совпадает со скалптом в узлах цепочки', () => {
+    const layer = chainLayer();
+    const checked = validateCurvatureMap({
+      width: layer.curvature!.width,
+      height: layer.curvature!.height,
+      rows: layer.curvature!.rows.map((row) => [...row]),
+    });
+    if (!checked.ok) throw new Error(checked.errors.join('; '));
+    // Поверхность строится из ЗАПИСАННЫХ слоёв: уровни, рампы и остаток; шаг
+    // высоты движка — единица уровня конвейера (LEVEL_UNIT).
+    const surface = createVisualSurface(gridOfLayer(layer), LEVEL_UNIT, checked.map);
+
+    // Скалпт — плоскость h(x) = x при клетке размера 1: высота узла равна его
+    // координате. Совпадение проверяется у КАЖДОЙ клетки, включая обе клетки
+    // пары рамп: общее ребро одно, разрыва посреди склона нет (REND-9).
+    const quantum = LEVEL_UNIT / CURVATURE_SCALE;
+    const cornerDx = [0, 1, 1, 0]; // порядок cornerLevels: c00, c10, c11, c01
+    for (let y = 0; y < ARENA; y++) {
+      for (let x = 0; x < ARENA; x++) {
+        const heights = surface.cornerHeights(x, y);
+        for (let corner = 0; corner < cornerDx.length; corner++) {
+          expect(Math.abs(heights[corner]! - (x + cornerDx[corner]!))).toBeLessThanOrEqual(quantum);
+        }
+      }
+    }
   });
 });
 

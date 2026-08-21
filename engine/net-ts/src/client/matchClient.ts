@@ -83,6 +83,12 @@ export interface MatchClientOptions {
 export interface InputSample {
   readonly move: Vec2;
   readonly aimDir: Fixed;
+  /**
+   * Точка прицела (TICK-2); `undefined` — источник точкой не владел. Поле
+   * необязательно ровно затем, чтобы «прицела нет» и «прицел в начале
+   * координат» оставались разными высказываниями.
+   */
+  readonly target?: Vec2;
   readonly buttons: number;
 }
 
@@ -407,6 +413,11 @@ export class MatchClient {
       seq: this.nextSeq,
       move: frozen ? FROZEN_MOVE : sample.move,
       aimDir: sample.aimDir,
+      // Точка прицела маской заморозки не гасится — по тому же основанию, что
+      // и `aimDir`: это последнее известное состояние ввода, а не действие
+      // (TICK-2), и живых тиков, на которых оно могло бы сработать, в
+      // замороженном мире всё равно нет (NET-11).
+      ...(sample.target === undefined ? {} : { target: sample.target }),
       buttons: frozen ? sample.buttons & holdMask : sample.buttons,
     };
     this.nextSeq++;
@@ -426,6 +437,11 @@ export class MatchClient {
           moveX: frame.move.x,
           moveY: frame.move.y,
           aimDir: frame.aimDir,
+          // Плоская пара рядом с движением — форма кадра не зависит от того,
+          // как ядро упаковывает вектор (design Decision 12).
+          ...(frame.target === undefined
+            ? {}
+            : { targetX: frame.target.x, targetY: frame.target.y }),
           buttons: frame.buttons,
         },
       ],

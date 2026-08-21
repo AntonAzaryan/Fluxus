@@ -6,7 +6,7 @@
   "sceneRef": "duel",
   "contentPack": { "duel": "../scenes/duel.scene.json" },
   "physics": {},
-  "locomotion": { "dodgeButton": 2, "jumpButton": 3, "lockComponent": "ActionLock" },
+  "locomotion": { "dodgeButton": null, "jumpButton": 3, "lockComponent": "ActionLock" },
   "visibility": {},
   "initial": [
     { "prefab": "Hero", "overrides": { "Position": { "x": 557056, "y": 1605632 } } },
@@ -26,7 +26,7 @@
   "rewind": {
     "interval": 30,
     "capacity": 15,
-    "exempt": [{ "component": "RewindCooldown" }],
+    "exempt": [{ "component": "AbilityCooldown" }],
     "holdButton": 7,
     "step": 4,
     "holdTimeoutTicks": 15

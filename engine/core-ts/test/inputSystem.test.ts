@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InputSystem } from '../src/systems/inputSystem.js';
+import { InputSystem, inputTargetDeclared } from '../src/systems/inputSystem.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { runScenario, type ScenarioDef } from '../src/sim/scenario.js';
 import { initialState, tick, type Simulation } from '../src/sim/tick.js';
@@ -40,10 +40,35 @@ function frame(playerId: string, at: number, over: Partial<InputFrame> = {}): In
   return { tick: at, playerId, seq: 1, move: { x: 0, y: 0 }, aimDir: 0, buttons: 0, ...over };
 }
 
+/**
+ * Та же сцена, но с объявленной парой точки прицела (TICK-2, TICK-4): раскладку
+ * включает СОСТАВ компонента ввода, а не флаг документа прогона.
+ */
+const SCENE_WITH_TARGET: SceneDef = {
+  components: [
+    SCENE.components[0]!,
+    {
+      name: 'Input',
+      fields: { ...SCENE.components[1]!.fields, targetX: 'fixed', targetY: 'fixed' },
+    },
+  ],
+  prefabs: [
+    {
+      name: 'Hero',
+      components: {
+        Player: { slot: 0 },
+        Input: { aimDir: 0, buttons: 0, moveX: 0, moveY: 0, prevButtons: 0, seq: 0, targetX: 0, targetY: 0 },
+      },
+    },
+  ],
+};
+
 /** Мир с героями по числу слотов и симуляция с одной `InputSystem`. */
-function harness(players: readonly string[], heroes = players.length) {
-  const { world, systems } = loadScene(SCENE);
-  systems.register(new InputSystem({ players }));
+function harness(players: readonly string[], heroes = players.length, scene: SceneDef = SCENE) {
+  const { world, systems } = loadScene(scene);
+  // Ровно то же решение, что принимает `buildSimulation`: спросить состав
+  // компонента ввода сцены и передать ответ параметром.
+  systems.register(new InputSystem({ players, target: inputTargetDeclared(world) }));
   const entities = Array.from({ length: heroes }, (_, slot) =>
     spawn(world, 'Hero', { Player: { slot } }),
   );
@@ -110,6 +135,60 @@ describe('InputSystem (TICK-4, TICK-5)', () => {
   });
 });
 
+describe('точка прицела в компоненте ввода (TICK-2, TICK-4)', () => {
+  it('раскладывается, когда сцена объявила пару полей', () => {
+    const h = harness(['p1'], 1, SCENE_WITH_TARGET);
+    h.step([frame('p1', 1, { target: { x: F(3.5), y: F(-2.25) } })]);
+
+    expect(h.read(0, 'targetX')).toBe(F(3.5));
+    expect(h.read(0, 'targetY')).toBe(F(-2.25));
+  });
+
+  it('сцена без пары полей точку не видит и не ломается о неё', () => {
+    const h = harness(['p1']);
+    // Кадр несёт точку, компонент её не объявляет — раскладки нет, ошибки тоже:
+    // точка нужна ровно той сцене, чьи способности ею целятся (ABIL-5).
+    expect(() => { h.step([frame('p1', 1, { target: { x: F(3.5), y: F(-2.25) } })]); }).not.toThrow();
+    expect(h.read(0, 'moveX')).toBe(0);
+  });
+
+  it('пропущенный фрейм точку НЕ обнуляет: это последнее известное состояние ввода', () => {
+    const h = harness(['p1'], 1, SCENE_WITH_TARGET);
+    h.step([frame('p1', 1, { move: { x: F(1), y: 0 }, target: { x: F(4), y: F(5) } })]);
+    h.step([]);
+
+    // Намерение обнулено...
+    expect(h.read(0, 'moveX')).toBe(0);
+    expect(h.read(0, 'buttons')).toBe(0);
+    // ...а точка держится: обнулённая, она означала бы «целюсь в начало
+    // координат» — намерение, которого игрок не выражал.
+    expect(h.read(0, 'targetX')).toBe(F(4));
+    expect(h.read(0, 'targetY')).toBe(F(5));
+  });
+
+  it('фрейм без точки её тоже не гасит', () => {
+    const h = harness(['p1'], 1, SCENE_WITH_TARGET);
+    h.step([frame('p1', 1, { target: { x: F(4), y: F(5) } })]);
+    h.step([frame('p1', 2, { buttons: 1 })]);
+
+    expect(h.read(0, 'targetX')).toBe(F(4));
+    expect(h.read(0, 'targetY')).toBe(F(5));
+  });
+
+  it('объявление точки — обе половины или ни одной', () => {
+    const half: SceneDef = {
+      components: [
+        SCENE.components[0]!,
+        { name: 'Input', fields: { ...SCENE.components[1]!.fields, targetX: 'fixed' } },
+      ],
+    };
+    const { world } = loadScene(half);
+    expect(inputTargetDeclared(world)).toBe(false);
+    expect(inputTargetDeclared(loadScene(SCENE_WITH_TARGET).world)).toBe(true);
+    expect(inputTargetDeclared(loadScene(SCENE).world)).toBe(false);
+  });
+});
+
 describe('сценарий с вводом (CLI-2)', () => {
   const base: ScenarioDef = {
     name: 'inputs',
@@ -138,5 +217,18 @@ describe('сценарий с вводом (CLI-2)', () => {
 
     const out = runScenario(def);
     expect(out.ticks[1]!.world.components.Input!.moveX![0]).toBe(F(3));
+  });
+
+  it('сборка сама включает раскладку точки по составу компонента сцены', () => {
+    const def: ScenarioDef = {
+      ...base,
+      scene: SCENE_WITH_TARGET,
+      players: ['p1'],
+      inputs: [frame('p1', 1, { target: { x: F(6), y: F(7) } })],
+    };
+
+    const out = runScenario(def);
+    expect(out.ticks[1]!.world.components.Input!.targetX![0]).toBe(F(6));
+    expect(out.ticks[1]!.world.components.Input!.targetY![0]).toBe(F(7));
   });
 });
