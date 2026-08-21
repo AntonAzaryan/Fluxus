@@ -659,6 +659,35 @@ describe('PRES-2: парный presentation-документ и секция lig
     expect(found).toHaveLength(3);
   });
 
+  it('подсекция цикла приходит правилу тем же вызовом — своего кода у редактора нет', () => {
+    // Цикл времени суток (REND-32) — часть того же формата, и правило видит его
+    // без единой правки: проверка приезжает из assets-ts (ED-1, CORE-3).
+    const cycled = {
+      lighting: {
+        cycle: {
+          transitionSeconds: 15,
+          phases: [
+            { name: 'утро', seconds: 120, ambient: { intensity: 0.55 } },
+            { name: 'ночь', seconds: 120, ambient: { intensity: 0.3 } },
+          ],
+        },
+      },
+    };
+    expect(presentation(cycled).ok).toBe(true);
+
+    const report = presentation({
+      lighting: { cycle: { phases: [{ seconds: 0 }, { seconds: 120, shadows: {} }] } },
+    });
+    const found = report.forDocument(PRESENTATION).filter((issue) => issue.ruleId === PRESENTATION_RULE);
+    // Адрес ведёт в ФАЗУ, а не в подсекцию целиком: автор попадает в строку
+    // документа, а не в файл (ED-30).
+    expect(found.map((issue) => issue.path)).toEqual([
+      ['lighting', 'cycle', 'phases', 0, 'seconds'],
+      ['lighting', 'cycle', 'phases', 1, 'shadows'],
+    ]);
+    expect(detailOf(found[1]!)).toContain('параметров теней в фазе цикла нет');
+  });
+
   it('причина находки читается на обеих локалях бандла (ED-27, ED-28)', () => {
     const report = presentation({ lighting: { shadows: { mode: 'soft' } } });
     const issue = report.forDocument(PRESENTATION).find((found) => found.ruleId === PRESENTATION_RULE)!;

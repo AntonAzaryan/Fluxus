@@ -216,12 +216,19 @@ export type { FogObserver, FogSegment, FogWorldRect } from './fog/mask.js';
 export { LightingSubsystem } from './subsystems/lighting.js';
 export type { LightingOptions } from './subsystems/lighting.js';
 export {
+  DEFAULT_CYCLE_TRANSITION_SECONDS,
   DEFAULT_LIGHTING_CONFIG,
   minShadowMode,
   resolveLightingConfig,
+  resolveLightingCycle,
   shadowModeRank,
 } from './lighting/config.js';
-export type { LightingRenderConfig, ShadowMode } from './lighting/config.js';
+export type {
+  LightingCycleConfig,
+  LightingPhaseConfig,
+  LightingRenderConfig,
+  ShadowMode,
+} from './lighting/config.js';
 
 // Подсистема транзиентных эффектов (REND-23): процедурные примитивы по записям
 // манифеста — оболочки от доставленного состояния и вспышки от событий.

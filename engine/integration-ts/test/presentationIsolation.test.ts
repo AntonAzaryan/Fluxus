@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import {
   contentPackHash,
   loadScene,
@@ -33,6 +34,7 @@ import {
   CAMERA_CONFIG_PARAMS,
   CameraRig,
   DecorationSet,
+  LightingSubsystem,
   ModelsSubsystem,
   PresentationStage,
   cameraConfigFromManifest,
@@ -47,6 +49,7 @@ import {
   validateManifest,
   validateParticleEffect,
   validatePresentationScene,
+  type PresentationLighting,
   type PresentationScene,
 } from '@game-mvp/assets';
 import { BUILD_ID, duelConfig, duelScene, playMatch, walkRight } from './fixtures.js';
@@ -139,6 +142,105 @@ describe('PRES-4: прогон с декорациями и без совпад�
     const broken = validatePresentationScene({ decorations: [{ x: 1 }] });
     expect(broken.ok).toBe(false);
     expect(Buffer.from(runScenarioBytes(scenario(scene))).equals(Buffer.from(bare))).toBe(true);
+  });
+});
+
+/**
+ * Цикл времени суток (`rendering` REND-32) — presentation-механизм целиком: круг
+ * идёт по кадровым часам рендера, а тик, снапшоты и доставленная клиенту
+ * информация от его хода не зависят (PRES-4). Утверждение межпакетное — цикл
+ * крутит подсистема рендера, документ разбирает модуль ассетов, а «ни байтом»
+ * касается ядра, — и поэтому живёт здесь, а не в тестах рендера.
+ */
+describe('PRES-4/REND-32: цикл времени суток симуляции не виден', () => {
+  /** Статическая секция и та же секция с циклом — разница ровно в подсекции. */
+  const STILL: PresentationLighting = {
+    ambient: { color: '#ffffff', intensity: 0.65 },
+    directional: { color: '#ffffff', intensity: 1.7, direction: { x: 8, y: -12, z: 18 } },
+    shadows: { mode: 'hybrid' },
+  };
+  const CYCLED: PresentationLighting = {
+    ...STILL,
+    cycle: {
+      transitionSeconds: 2,
+      phases: [
+        {
+          name: 'утро',
+          seconds: 10,
+          ambient: { color: '#ffe8d0', intensity: 0.55 },
+          directional: { color: '#ffd9b3', intensity: 1.5, direction: { x: -18, y: -8, z: 7 } },
+        },
+        {
+          name: 'ночь',
+          seconds: 10,
+          ambient: { color: '#2a3a5c', intensity: 0.3 },
+          directional: { color: '#5a7bb5', intensity: 0.5, direction: { x: 4, y: 10, z: 16 } },
+        },
+      ],
+    },
+  };
+
+  /**
+   * Прогон матча, пока рядом живёт подсистема освещения: полный круг суток
+   * прокручивается кадровыми часами, а прогон сценария снимается байтами.
+   * Возвращаются и байты, и след света — иначе тест утверждал бы про изоляцию
+   * цикла, которого не подняли.
+   */
+  function runBeside(section: PresentationLighting): { bytes: Uint8Array; light: string[] } {
+    const lighting = new LightingSubsystem({ config: section });
+    lighting.init({
+      scene: new THREE.Scene(),
+      assets: {} as unknown as RenderContext['assets'],
+      config: { heightStep: 0.5 },
+    });
+    const light: string[] = [];
+    // Двадцать секунд presentation-времени — полный круг обеих фаз с обоими
+    // переходами, по полсекунды на кадр.
+    for (let frame = 0; frame < 40; frame++) {
+      lighting.updateFrame(1 / 60, 0, 0.5);
+      const { ambient, sun } = lighting.lights;
+      light.push(`${ambient.color.getHexString()}:${sun.intensity.toFixed(4)}`);
+    }
+    return { bytes: runScenarioBytes(scenario(duelScene())), light };
+  }
+
+  it('worldInit и снапшоты сцены с циклом и без не отличаются ни байтом', () => {
+    const scene = duelScene();
+    const before = { init: runScenario(scenario(scene)).worldInitHash, pack: contentPackHash(scene) };
+
+    const still = runBeside(STILL);
+    const cycled = runBeside(CYCLED);
+
+    // Цикл действительно шёл: свет за круг менял и тон, и интенсивность.
+    expect(new Set(cycled.light).size).toBeGreaterThan(1);
+    // Сцена без подсекции стоит на месте — «никакой новой покадровой работы».
+    expect(new Set(still.light).size).toBe(1);
+    // А симуляция обоих прогонов побитово одна: сравниваются БАЙТЫ документа
+    // прогона, а не разобранные снапшоты (SER-6).
+    expect(Buffer.from(cycled.bytes).equals(Buffer.from(still.bytes))).toBe(true);
+    expect(runScenario(scenario(scene)).worldInitHash).toBe(before.init);
+    expect(contentPackHash(scene)).toBe(before.pack);
+  });
+
+  it('любая точка круга даёт тот же прогон: входа в симуляцию у цикла нет', () => {
+    const scene = duelScene();
+    const bare = runScenarioBytes(scenario(scene));
+    const parsed = validatePresentationScene({ decorations: [], lighting: CYCLED });
+    expect(parsed.ok ? '' : parsed.errors.join('; ')).toBe('');
+    if (!parsed.ok) return;
+
+    const lighting = new LightingSubsystem({ config: parsed.scene.lighting });
+    lighting.init({
+      scene: new THREE.Scene(),
+      assets: {} as unknown as RenderContext['assets'],
+      config: { heightStep: 0.5 },
+    });
+    // Установившаяся фаза, кадр перехода, следующая фаза — прогон снимается в
+    // каждой из этих точек круга.
+    for (const seconds of [4, 5, 6]) {
+      lighting.updateFrame(1 / 60, 0, seconds);
+      expect(Buffer.from(runScenarioBytes(scenario(scene))).equals(Buffer.from(bare))).toBe(true);
+    }
   });
 });
 

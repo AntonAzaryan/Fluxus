@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import type { EntityId } from '@game-mvp/core';
 import type { PresentationLighting, VisualManifest } from '@game-mvp/assets';
 import {
+  DEFAULT_CYCLE_TRANSITION_SECONDS,
   DEFAULT_LIGHTING_CONFIG,
   LightingSubsystem,
   ModelsSubsystem,
@@ -25,6 +26,7 @@ import {
   createCostCounters,
   minShadowMode,
   resolveLightingConfig,
+  resolveLightingCycle,
   shadowModeRank,
   withCostSink,
   type DebugDraw,
@@ -95,6 +97,19 @@ function floorMesh(scene: THREE.Scene): THREE.Mesh {
   return found as THREE.Mesh;
 }
 
+/**
+ * Свет кадра числами: тона, интенсивности и позиция направленного источника —
+ * ровно то, что двигает цикл времени суток, и то, чего он двигать не должен.
+ */
+function lightSnapshot(rig: Rig): unknown {
+  const { ambient, sun, sunDynamic } = rig.lighting.lights;
+  return {
+    ambient: [ambient.color.getHexString(), ambient.intensity],
+    sun: [sun.color.getHexString(), sun.intensity, ...sun.position.toArray()],
+    sunDynamic: [sunDynamic.color.getHexString(), sunDynamic.intensity],
+  };
+}
+
 /** Направленные источники сцены — их число и есть наблюдаемая разница режимов. */
 function directionalLights(scene: THREE.Scene): THREE.DirectionalLight[] {
   return scene.children.filter(
@@ -148,6 +163,63 @@ describe('конфигурация освещения — данные секц�
       shadowMapSize: 512,
       staticShare: 0.25,
     });
+  });
+
+  it('нет подсекции цикла — нет и цикла: действует статическая часть (REND-32)', () => {
+    expect(resolveLightingCycle()).toBeUndefined();
+    expect(resolveLightingCycle({ ambient: { intensity: 0.2 } })).toBeUndefined();
+  });
+
+  it('дыры фазы закрывает статическая часть секции, а её дыры — умолчания', () => {
+    const cycle = resolveLightingCycle({
+      ambient: { color: '#101010', intensity: 0.1 },
+      directional: { color: '#fff0d0', intensity: 2.5, direction: { x: 1, y: 2, z: 3 } },
+      shadows: { mode: 'full' },
+      cycle: {
+        phases: [
+          { name: 'ночь', seconds: 30, ambient: { intensity: 0 } },
+          { seconds: 60, directional: { intensity: 4, direction: { z: 9 } } },
+        ],
+      },
+    });
+    expect(cycle?.phases[0]).toEqual({
+      name: 'ночь',
+      seconds: 30,
+      // Названное фазой — от неё, остальное — из статической части секции.
+      ambientIntensity: 0,
+      ambientColor: '#101010',
+      directionalColor: '#fff0d0',
+      directionalIntensity: 2.5,
+      directionX: 1,
+      directionY: 2,
+      directionZ: 3,
+    });
+    // Имени автор не дал — пусто: словаря имён у механизма нет.
+    expect(cycle?.phases[1]?.name).toBe('');
+    expect(cycle?.phases[1]?.directionalIntensity).toBe(4);
+    // Дыра направления закрывается покомпонентно, а не тройкой целиком.
+    expect(cycle?.phases[1]).toMatchObject({ directionX: 1, directionY: 2, directionZ: 9 });
+  });
+
+  it('длительность перехода — документированное умолчание (REND-32)', () => {
+    const section: PresentationLighting = {
+      cycle: { phases: [{ seconds: 10 }, { seconds: 10 }] },
+    };
+    expect(DEFAULT_CYCLE_TRANSITION_SECONDS).toBe(15);
+    expect(resolveLightingCycle(section)?.transitionSeconds).toBe(
+      DEFAULT_CYCLE_TRANSITION_SECONDS,
+    );
+    const authored = { cycle: { transitionSeconds: 2, phases: [{ seconds: 10 }, { seconds: 10 }] } };
+    expect(resolveLightingCycle(authored)?.transitionSeconds).toBe(2);
+  });
+
+  it('вырожденный цикл подсистеме не отдаётся: его дело — валидация формата', () => {
+    // Такой документ отвергается валидацией адресно (PRES-2), и второго,
+    // необъявленного прочтения этих данных здесь не заводится.
+    expect(resolveLightingCycle({ cycle: { phases: [{ seconds: 10 }] } })).toBeUndefined();
+    expect(
+      resolveLightingCycle({ cycle: { phases: [{ seconds: 0 }, { seconds: 10 }] } }),
+    ).toBeUndefined();
   });
 
   it('порядок режимов — по стоимости, и `min` над ним считается рангом', () => {
@@ -418,6 +490,288 @@ describe('режимы теней и кэш статики (design D2)', () => {
   });
 });
 
+// -------------------------------------------------- цикл времени суток
+
+/**
+ * Секция с циклом: две фазы по 10 секунд, кроссфейд — 2 секунды в ХВОСТЕ слота.
+ * Отсюда раскладка круга: держание облика [0, 8), переход [8, 10), и круг длится
+ * ровно 20 секунд — сумму длительностей фаз (REND-32).
+ *
+ * Значения выбраны так, чтобы доля перехода читалась глазом: интенсивности
+ * 1 → 0, тон белый → чёрный. Направление у обеих фаз общее, если не сказано
+ * иное: движется оно только там, где предмет теста — тени (design D3).
+ */
+function cycleSection(overrides: Partial<PresentationLighting> = {}): PresentationLighting {
+  return {
+    ambient: { color: '#808080', intensity: 0.5 },
+    directional: { color: '#808080', intensity: 0.5, direction: { x: 0, y: 0, z: 10 } },
+    cycle: {
+      transitionSeconds: 2,
+      phases: [
+        {
+          name: 'день',
+          seconds: 10,
+          ambient: { color: '#ffffff', intensity: 1 },
+          directional: { color: '#ffffff', intensity: 2, direction: { x: 0, y: 0, z: 10 } },
+        },
+        {
+          name: 'ночь',
+          seconds: 10,
+          ambient: { color: '#000000', intensity: 0 },
+          directional: { color: '#000000', intensity: 0, direction: { x: 0, y: 0, z: 10 } },
+        },
+      ],
+    },
+    ...overrides,
+  };
+}
+
+/** Подставные часы кадра: presentation-время идёт ровно на столько (design D2). */
+function advance(rig: Rig, seconds: number): void {
+  rig.stage.frame(1 / 60, 0, seconds);
+}
+
+describe('цикл времени суток — исполнение подсистемой (REND-32)', () => {
+  it('сцена без цикла: кадры свет не двигают и кэш статики не трогают', () => {
+    const rig = makeRig({ ambient: { intensity: 0.4 }, shadows: { mode: 'hybrid' } });
+    rig.stage.frame(0.016, 0);
+    const before = lightSnapshot(rig);
+    expect(rig.lighting.staticRebuilds).toBe(1);
+
+    // Час presentation-времени: покадровой работы у цикла нет вовсе, потому что
+    // самого цикла нет — кадр байт-в-байт тот же, что до появления REND-32.
+    for (let frame = 0; frame < 60; frame++) advance(rig, 60);
+
+    expect(lightSnapshot(rig)).toEqual(before);
+    expect(rig.lighting.staticRebuilds).toBe(1);
+  });
+
+  it('применение секции ставит первую фазу сразу, а не первым кадром (ED-15)', () => {
+    const rig = makeRig(cycleSection());
+    // Ни одного кадра ещё не было, а арена уже освещена первой фазой: иначе
+    // сцена с циклом показала бы кадр статической частью секции.
+    expect(rig.lighting.lights.ambient.intensity).toBe(1);
+    expect(rig.lighting.lights.sun.intensity).toBe(2);
+    expect(rig.lighting.lights.ambient.color.getHexString()).toBe('ffffff');
+  });
+
+  it('установившаяся фаза держит свой облик, кроссфейд идёт в хвосте слота', () => {
+    const rig = makeRig(cycleSection());
+    advance(rig, 7);
+    // Семь секунд из десяти — облик первой фазы неподвижен.
+    expect(rig.lighting.lights.ambient.intensity).toBe(1);
+
+    // Половина перехода: значения ровно посередине между фазами.
+    advance(rig, 2);
+    expect(rig.lighting.lights.ambient.intensity).toBeCloseTo(0.5, 6);
+    expect(rig.lighting.lights.sun.intensity).toBeCloseTo(1, 6);
+    expect(rig.lighting.lights.ambient.color.getHexString()).not.toBe('ffffff');
+
+    // Граница слота: вторая фаза встала точно, без остатка кроссфейда.
+    advance(rig, 1);
+    expect(rig.lighting.lights.ambient.intensity).toBe(0);
+    expect(rig.lighting.lights.sun.intensity).toBe(0);
+    expect(rig.lighting.lights.ambient.color.getHexString()).toBe('000000');
+  });
+
+  it('круг замыкается на сумме длительностей фаз и возвращается к первой без скачка', () => {
+    const rig = makeRig(cycleSection());
+    const first = lightSnapshot(rig);
+
+    // Двадцать секунд — полный круг: две фазы по десять.
+    advance(rig, 20);
+    expect(lightSnapshot(rig)).toEqual(first);
+
+    // И круг именно круг, а не единичный проход: следующая его точка — та же,
+    // что в первом обороте.
+    advance(rig, 9);
+    const mid = lightSnapshot(rig);
+    advance(rig, 20);
+    expect(lightSnapshot(rig)).toEqual(mid);
+  });
+
+  it('долгая пауза кадровых часов не обходит фазы по одной и садится в ту же точку', () => {
+    const rig = makeRig(cycleSection());
+    advance(rig, 9);
+    const mid = lightSnapshot(rig);
+    // Скрытая вкладка на полсуток: круг периодичен, и остаток даёт ту же точку.
+    advance(rig, 20 * 1000);
+    expect(lightSnapshot(rig)).toEqual(mid);
+  });
+
+  it('кадр без хода времени цикл не двигает и назад не отматывает', () => {
+    const rig = makeRig(cycleSection());
+    advance(rig, 9);
+    const mid = lightSnapshot(rig);
+    advance(rig, 0);
+    advance(rig, -5);
+    advance(rig, Number.NaN);
+    expect(lightSnapshot(rig)).toEqual(mid);
+  });
+
+  it('правка секции перезапускает круг с начала первой фазы (ED-15, REND-32)', () => {
+    const rig = makeRig(cycleSection());
+    advance(rig, 12);
+    expect(rig.lighting.lights.ambient.intensity).toBe(0);
+
+    // Автор правит фазу — облик воспроизводим: круг идёт с начала.
+    rig.lighting.applyConfig(cycleSection());
+    expect(rig.lighting.lights.ambient.intensity).toBe(1);
+
+    // Тем же швом идут потолок пресета и смена сетки арены (design D2).
+    advance(rig, 12);
+    rig.lighting.applyQuality(new Map([['lighting.shadowMode', 'none']]));
+    expect(rig.lighting.lights.ambient.intensity).toBe(1);
+    advance(rig, 12);
+    rig.lighting.applyGrid(flatGrid(16));
+    expect(rig.lighting.lights.ambient.intensity).toBe(1);
+  });
+
+  it('снятая подсекция возвращает статический свет секции', () => {
+    const rig = makeRig(cycleSection());
+    expect(rig.lighting.lights.ambient.intensity).toBe(1);
+
+    rig.lighting.applyConfig({ ambient: { intensity: 0.4 } });
+    advance(rig, 30);
+    expect(rig.lighting.lights.ambient.intensity).toBe(0.4);
+  });
+
+  it('пара ярусов `hybrid` светит как один источник на любом кадре перехода', () => {
+    const rig = makeRig(
+      cycleSection({ shadows: { mode: 'hybrid', staticShare: 0.25 } }),
+    );
+    advance(rig, 9);
+    const { sun, sunDynamic } = rig.lighting.lights;
+    // Доля применяется к УЖЕ слерпленной сумме: половина пути от 2 к 0 — это 1.
+    expect(sun.intensity + sunDynamic.intensity).toBeCloseTo(1, 6);
+    expect(sun.intensity).toBeCloseTo(0.25, 6);
+  });
+
+  it('потолок пресета фаз не касается — ограничивать ему в них нечего (QUAL-1)', () => {
+    const rig = makeRig(cycleSection({ shadows: { mode: 'full' } }), {
+      'lighting.shadowMode': 'none',
+    });
+    // Тени сняты пресетом, а значения фазы — авторские: теневых полей в фазе нет.
+    expect(rig.lighting.config.shadowMode).toBe('none');
+    expect(rig.lighting.lights.ambient.intensity).toBe(1);
+    advance(rig, 10);
+    expect(rig.lighting.lights.ambient.intensity).toBe(0);
+  });
+});
+
+describe('тени на переходе фаз (design D3, REND-32)', () => {
+  /** Тот же цикл, но солнце едет: у фаз разные направления. */
+  function movingSun(): PresentationLighting {
+    const section = cycleSection({ shadows: { mode: 'hybrid' } });
+    const phases = section.cycle?.phases ?? [];
+    return {
+      ...section,
+      cycle: {
+        transitionSeconds: 2,
+        phases: [
+          { ...phases[0]!, directional: { ...phases[0]!.directional, direction: { x: 0, y: 0, z: 10 } } },
+          { ...phases[1]!, directional: { ...phases[1]!.directional, direction: { x: 10, y: 0, z: 4 } } },
+        ],
+      },
+    };
+  }
+
+  it('равные направления соседних фаз: кэш статики не трогается вовсе', () => {
+    const rig = makeRig(cycleSection({ shadows: { mode: 'hybrid' } }));
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+    advance(rig, 0);
+    expect(rig.lighting.staticRebuilds).toBe(1);
+
+    // Полтора круга по секунде на кадр: свет уехал, а карта глубины от тона не
+    // зависит — переход бесплатен для теней при любой длине.
+    for (let frame = 0; frame < 30; frame++) advance(rig, 1);
+    expect(rig.lighting.staticRebuilds).toBe(1);
+    expect(rig.lighting.lights.sun.intensity).not.toBe(2);
+  });
+
+  it('движется направление — кэш статики перерисовывается кадрами перехода', () => {
+    const rig = makeRig(movingSun());
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+    advance(rig, 0);
+    expect(rig.lighting.staticRebuilds).toBe(1);
+
+    // Семь секунд установившейся фазы: кэш событиен, как без цикла (REND-30).
+    for (let frame = 0; frame < 7; frame++) advance(rig, 1);
+    expect(rig.lighting.staticRebuilds).toBe(1);
+
+    // Кадры перехода (8-я и 9-я секунды) делят карту через один, а кадр
+    // установившейся фазы добивает кэш точным направлением фазы.
+    const before = rig.lighting.lights.sun.position.x;
+    for (let frame = 0; frame < 3; frame++) advance(rig, 1);
+    expect(rig.lighting.staticRebuilds).toBe(3);
+    expect(rig.lighting.lights.sun.position.x).not.toBe(before);
+
+    // Вторая фаза установилась — кэш снова событиен.
+    for (let frame = 0; frame < 5; frame++) advance(rig, 1);
+    expect(rig.lighting.staticRebuilds).toBe(3);
+  });
+
+  it('покадровая карта динамики на переходе не застывает', () => {
+    const rig = makeRig(movingSun());
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+    advance(rig, 0);
+    const { sun, sunDynamic } = rig.lighting.lights;
+
+    // Переход из тридцати кадров: карта у источника одна на кадр, и делят они её
+    // через один — иначе тени бойцов застыли бы на всю длину перехода (REND-32).
+    let staticFrames = 0;
+    let dynamicFrames = 0;
+    advance(rig, 8);
+    for (let frame = 0; frame < 30; frame++) {
+      advance(rig, 2 / 30);
+      if (sun.shadow.needsUpdate) staticFrames++;
+      if (sunDynamic.shadow.needsUpdate) dynamicFrames++;
+    }
+    expect(staticFrames).toBeGreaterThan(10);
+    expect(dynamicFrames).toBeGreaterThan(10);
+    // И ровно один источник за кадр — правило кадра не сломано.
+    expect(staticFrames + dynamicFrames).toBe(30);
+  });
+
+  it('стоимость перехода видна счётчиками, а не спрятана от них (PERF-3)', () => {
+    const rig = makeRig(movingSun());
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+    const cost = createCostCounters();
+    withCostSink(cost, () => {
+      advance(rig, 0);
+      for (let frame = 0; frame < 10; frame++) advance(rig, 1);
+    });
+    // Кадр запекания, кадр перехода и добивающий кадр установившейся фазы.
+    expect(cost.lightingStaticRebuilds).toBe(3);
+    // Статика — чанк террейна и батч декорации — пересчитана каждым из них.
+    expect(cost.lightingStaticCasters).toBe(6);
+  });
+
+  it('переход не трогает фрустум теневой камеры, сторону карты и смещения выборки', () => {
+    const rig = makeRig(movingSun());
+    advance(rig, 0);
+    const { sun } = rig.lighting.lights;
+    const before = {
+      right: sun.shadow.camera.right,
+      far: sun.shadow.camera.far,
+      map: sun.shadow.mapSize.x,
+      normalBias: sun.shadow.normalBias,
+      bias: sun.shadow.bias,
+    };
+
+    for (let frame = 0; frame < 10; frame++) advance(rig, 1);
+
+    // Фрустум обтянут по арене и от направления света не зависит (design D6):
+    // пересчитывать его кадром значило бы платить событием за картинку.
+    expect(sun.shadow.camera.right).toBe(before.right);
+    expect(sun.shadow.camera.far).toBe(before.far);
+    expect(sun.shadow.mapSize.x).toBe(before.map);
+    expect(sun.shadow.normalBias).toBe(before.normalBias);
+    expect(sun.shadow.bias).toBe(before.bias);
+  });
+});
+
 // ------------------------------------------------------ глубина батча
 
 describe('тень батчевого инстанса следует позе (design D4)', () => {
@@ -473,6 +827,17 @@ describe('ручки качества освещения (QUAL-1, QUAL-3)', () =
     // Умолчание потолка — «не ограничивать»: самый дорогой режим и бесконечность.
     expect(knobs[0]!.default).toBe('full');
     expect(knobs[1]!.default).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('цикл ручки не заводит: его покадровая работа константна (QUAL-3, REND-32)', () => {
+    // Интерполяция — работа фиксированного размера, и кастеров с инстансами
+    // цикл не обходит; перерисовки кэша статики на переходе управляются уже
+    // объявленными ручками теней.
+    const cycled = new LightingSubsystem({ config: cycleSection() }).quality().knobs;
+    expect(cycled.map((knob) => knob.name)).toEqual([
+      'lighting.shadowMode',
+      'lighting.shadowMapSize',
+    ]);
   });
 
   it('производительный пресет поверх авторского `full`: действует `none`, документ цел', () => {
@@ -599,6 +964,12 @@ interface LightingSection {
   readonly staticRebuilds: number;
   readonly staticStale: boolean;
   readonly builtShadowMaps: number;
+  readonly cyclePhases: number;
+  readonly cyclePhaseIndex: number;
+  readonly cyclePhaseName: string;
+  readonly cyclePhaseSeconds: number;
+  readonly cycleTransition: boolean;
+  readonly cycleTransitionSeconds: number;
   readonly noData?: string;
 }
 
@@ -859,6 +1230,67 @@ describe('Отладочный источник освещения (render-debug
     expect(JSON.stringify(before)).toBe(snapshot);
     expect(section(layer).shadowMode).toBe('full');
     expect(section(layer).directionalIntensity).toBeCloseTo(3, 6);
+  });
+
+  it('цикл в дампе: номер и имя фазы, длительности, флаг перехода (RDBG-2)', () => {
+    const rig = makeRig(cycleSection({ shadows: { mode: 'hybrid' } }));
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    advance(rig, 0);
+
+    const first = section(layer);
+    expect(first.cyclePhases).toBe(2);
+    expect(first.cyclePhaseIndex).toBe(0);
+    // Имя — авторская строка документа, а не словарь механизма (REND-32).
+    expect(first.cyclePhaseName).toBe('день');
+    expect(first.cyclePhaseSeconds).toBe(10);
+    expect(first.cycleTransitionSeconds).toBe(2);
+    expect(first.cycleTransition).toBe(false);
+    // Тон назван по фазе: точный тон кадра стоит на живых источниках, а
+    // `getHexString()` с них аллоцировал бы строку каждым кадром (REND-26).
+    expect(first.ambientColor).toBe('#ffffff');
+
+    advance(rig, 9);
+    const fading = section(layer);
+    expect(fading.cycleTransition).toBe(true);
+    expect(fading.cyclePhaseIndex).toBe(0);
+
+    advance(rig, 1);
+    const night = section(layer);
+    expect(night.cyclePhaseIndex).toBe(1);
+    expect(night.cyclePhaseName).toBe('ночь');
+    expect(night.cycleTransition).toBe(false);
+  });
+
+  it('доли прожитого фазой и переходом — часовые величины, и они в секции clock (RDBG-7)', () => {
+    const rig = makeRig(cycleSection());
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    advance(rig, 9);
+
+    const dumped = layer.dump();
+    // Выведенное из кадровых часов названо отдельно: смешанное с остальным, оно
+    // превратило бы всякий дифф дампа в шум.
+    expect(dumped.clock[`${LIGHTING_SOURCE}.cyclePhaseProgress`]).toBeCloseTo(0.9, 6);
+    expect(dumped.clock[`${LIGHTING_SOURCE}.cycleTransitionProgress`]).toBeCloseTo(0.5, 6);
+    // В секцию источника они не попадают вовсе.
+    expect(section(layer)).not.toHaveProperty('cyclePhaseProgress');
+  });
+
+  it('сцена без цикла: фазы нет, и часовых величин у источника нет ни одной', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    const layer = new RenderDebugLayer(rig.stage);
+    layer.setEnabled(LIGHTING_SOURCE, true);
+    advance(rig, 1);
+
+    const dumped = section(layer);
+    expect(dumped.cyclePhases).toBe(0);
+    // «Цикла нет» и «идёт первая фаза» — разные ответы (HUD-8, RDBG-7).
+    expect(dumped.cyclePhaseIndex).toBe(-1);
+    expect(dumped.cyclePhaseName).toBe('');
+    expect(
+      Object.keys(layer.dump().clock).some((key) => key.startsWith(`${LIGHTING_SOURCE}.`)),
+    ).toBe(false);
   });
 
   it('два дампа на одном доставленном состоянии совпадают: часовых величин у источника нет', () => {

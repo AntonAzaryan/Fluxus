@@ -325,6 +325,162 @@ describe('PRES-2: секция lighting — закрытая конфигура�
     expectErrors({ lighting: [] }, /lighting: ожидался объект секции.*массив/);
   });
 
+  it('сцена без подсекции цикла разбирается как прежде: наружу цикл не выходит', () => {
+    const lighting = {
+      ambient: { intensity: 0.65 },
+      directional: { intensity: 1.7, direction: { x: 8, y: -12, z: 18 } },
+      shadows: { mode: 'full' },
+    };
+    const result = validatePresentationScene({ decorations: [], lighting });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.lighting).toEqual(lighting);
+    expect(result.scene.lighting?.cycle).toBeUndefined();
+  });
+
+});
+
+describe('REND-32: подсекция цикла времени суток — фазы в данных', () => {
+  /** Секция с циклом: две фазы, дыры второй закрывает статическая часть. */
+  const cycled = {
+    ambient: { color: '#ffffff', intensity: 0.65 },
+    directional: { color: '#ffffff', intensity: 1.7, direction: { x: 8, y: -12, z: 18 } },
+    shadows: { mode: 'full' },
+    cycle: {
+      transitionSeconds: 15,
+      phases: [
+        {
+          name: 'утро',
+          seconds: 120,
+          ambient: { color: '#ffe8d0', intensity: 0.55 },
+          directional: { color: '#ffd9b3', intensity: 1.5, direction: { x: -18, y: -8, z: 7 } },
+        },
+        { name: 'день', seconds: 120 },
+      ],
+    },
+  };
+
+  it('валидная подсекция принимается и выходит наружу как есть', () => {
+    const result = validatePresentationScene({ decorations: [], lighting: cycled });
+    expect(result.ok ? '' : result.errors.join('; ')).toBe('');
+    if (!result.ok) return;
+    expect(result.scene.lighting).toEqual(cycled);
+    // Имя фазы — авторская строка, и словаря имён у формата нет: «утро» проходит
+    // ровно так же, как «фаза 1» или «morning» (REND-32).
+    expect(result.scene.lighting?.cycle?.phases[0]?.name).toBe('утро');
+  });
+
+  it('длительность перехода необязательна — умолчание держит подсистема', () => {
+    const result = validatePresentationScene({
+      lighting: { cycle: { phases: [{ seconds: 10 }, { seconds: 10 }] } },
+    });
+    expect(result.ok ? '' : result.errors.join('; ')).toBe('');
+    if (!result.ok) return;
+    expect(result.scene.lighting?.cycle?.transitionSeconds).toBeUndefined();
+  });
+
+  it('неизвестный ключ подсекции и фазы отвергается адресно', () => {
+    expectErrors(
+      { lighting: { cycle: { phases: [{ seconds: 1 }, { seconds: 1 }], loop: true } } },
+      /lighting\.cycle\.loop: неизвестное поле \(допустимы: transitionSeconds, phases\)/,
+    );
+    expectErrors(
+      { lighting: { cycle: { phases: [{ seconds: 1, fog: {} }, { seconds: 1 }] } } },
+      /lighting\.cycle\.phases\[0\]\.fog: неизвестное поле/,
+    );
+    // Адрес называет ФАЗУ индексом, а не подсекцию целиком.
+    expectErrors(
+      { lighting: { cycle: { phases: [{ seconds: 1 }, { seconds: 1, ambient: { tint: 1 } }] } } },
+      /lighting\.cycle\.phases\[1\]\.ambient\.tint: неизвестное поле/,
+    );
+    expectErrors(
+      {
+        lighting: {
+          cycle: { phases: [{ seconds: 1, directional: { direction: { w: 1 } } }, { seconds: 1 }] },
+        },
+      },
+      /lighting\.cycle\.phases\[0\]\.directional\.direction\.w: неизвестное поле/,
+    );
+  });
+
+  it('теневые поля в фазе названы поимённо: по кругу они не ходят', () => {
+    expectErrors(
+      { lighting: { cycle: { phases: [{ seconds: 1, shadows: { mode: 'none' } }, { seconds: 1 }] } } },
+      /lighting\.cycle\.phases\[0\]\.shadows: параметров теней в фазе цикла нет и быть не может/,
+    );
+    for (const key of ['mode', 'mapSize', 'staticShare']) {
+      expectErrors(
+        { lighting: { cycle: { phases: [{ seconds: 1, [key]: 1 }, { seconds: 1 }] } } },
+        new RegExp(`phases\\[0\\]\\.${key}: параметров теней в фазе цикла нет`),
+      );
+    }
+  });
+
+  it('вырожденная подсекция отвергается: пустой список, одна фаза, нулевая длительность', () => {
+    expectErrors(
+      { lighting: { cycle: { phases: [] } } },
+      /lighting\.cycle\.phases: фаз 0 — циклу нужно не менее 2/,
+    );
+    expectErrors(
+      { lighting: { cycle: { phases: [{ seconds: 120 }] } } },
+      /lighting\.cycle\.phases: фаз 1 — циклу нужно не менее 2/,
+    );
+    expectErrors(
+      { lighting: { cycle: { phases: [{ seconds: 0 }, { seconds: 120 }] } } },
+      /lighting\.cycle\.phases\[0\]\.seconds: обязательное поле — положительная длительность/,
+    );
+    expectErrors(
+      { lighting: { cycle: { phases: [{ seconds: 120 }, { seconds: -1 }] } } },
+      /lighting\.cycle\.phases\[1\]\.seconds: обязательное поле — положительная длительность/,
+    );
+    // Длительность обязательна: фаза без неё — не фаза.
+    expectErrors(
+      { lighting: { cycle: { phases: [{ name: 'утро' }, { seconds: 120 }] } } },
+      /lighting\.cycle\.phases\[0\]\.seconds: обязательное поле/,
+    );
+    expectErrors(
+      { lighting: { cycle: { transitionSeconds: -1, phases: [{ seconds: 1 }, { seconds: 1 }] } } },
+      /lighting\.cycle\.transitionSeconds: ожидалось неотрицательное число секунд/,
+    );
+  });
+
+  it('подсекция, список фаз и фаза не той формы — адресный отказ', () => {
+    expectErrors({ lighting: { cycle: 15 } }, /lighting\.cycle: ожидался объект секции/);
+    expectErrors(
+      { lighting: { cycle: { phases: { first: {} } } } },
+      /lighting\.cycle\.phases: обязательное поле — список фаз цикла/,
+    );
+    expectErrors(
+      { lighting: { cycle: { phases: [{ seconds: 1 }, 'ночь'] } } },
+      /lighting\.cycle\.phases\[1\]: ожидался объект фазы цикла, получено string/,
+    );
+    expectErrors(
+      { lighting: { cycle: { phases: [{ seconds: 1, name: '' }, { seconds: 1 }] } } },
+      /lighting\.cycle\.phases\[0\]\.name: ожидалось имя фазы \(непустая строка\)/,
+    );
+  });
+
+  it('значения света фазы проверяются тем же порядком, что статическая часть', () => {
+    const errors = expectErrors(
+      {
+        lighting: {
+          cycle: {
+            phases: [
+              { seconds: 1, ambient: { color: 'ночной', intensity: -1 } },
+              { seconds: 1, directional: { direction: { x: 'далеко' } } },
+            ],
+          },
+        },
+      },
+      /lighting\.cycle\.phases\[0\]\.ambient\.color: ожидался цвет формы "#rrggbb"/,
+      /lighting\.cycle\.phases\[0\]\.ambient\.intensity: ожидалось неотрицательное число интенсивности/,
+      /lighting\.cycle\.phases\[1\]\.directional\.direction\.x: ожидалось конечное число мировых единиц/,
+    );
+    expect(errors).toHaveLength(3);
+  });
+});
+
+describe('PRES-2: секции документа сосуществуют', () => {
   it('секции fog и lighting сосуществуют, и обе — вне симуляции (PRES-4)', () => {
     const result = validatePresentationScene({
       decorations: [{ visual: 'rock', x: 1, y: 2 }],

@@ -131,19 +131,12 @@ export { validateCurvatureMap, CURVATURE_SCALE } from './curvature.js';
 // парный presentation-документ сцены (`presentation-scene` PRES-1..3)
 export type {
   DecorationRecord,
-  PresentationAmbientLight,
-  PresentationDirectionalLight,
   PresentationFog,
-  PresentationLightDirection,
-  PresentationLighting,
   PresentationScene,
-  PresentationShadowMode,
-  PresentationShadows,
 } from './presentation.js';
 export {
   DECORATION_POSITION_STEP,
   DECORATION_YAW_STEP,
-  PRESENTATION_SHADOW_MODES,
   PRESENTATION_SUFFIX,
   isPresentationPath,
   presentationPathOf,
@@ -151,6 +144,18 @@ export {
   quantizeDecorationYaw,
   validatePresentationScene,
 } from './presentation.js';
+// секция `lighting` документа (`rendering` REND-29, REND-32)
+export type {
+  PresentationAmbientLight,
+  PresentationDirectionalLight,
+  PresentationLightDirection,
+  PresentationLighting,
+  PresentationLightingCycle,
+  PresentationLightingPhase,
+  PresentationShadowMode,
+  PresentationShadows,
+} from './presentationLighting.js';
+export { PRESENTATION_SHADOW_MODES } from './presentationLighting.js';
 
 // загрузчики реестра (ASSET-3); регистрируются потребителем через registerLoader
 export { mdxLoader } from './loaders/mdx.js';

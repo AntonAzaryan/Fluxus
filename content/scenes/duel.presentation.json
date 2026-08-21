@@ -23,6 +23,51 @@
       "intensity": 1.7,
       "direction": { "x": 8, "y": -12, "z": 18 }
     },
-    "shadows": { "mode": "full", "mapSize": 2048 }
+    "shadows": { "mode": "full", "mapSize": 2048 },
+    "cycle": {
+      "transitionSeconds": 15,
+      "phases": [
+        {
+          "name": "утро",
+          "seconds": 120,
+          "ambient": { "color": "#ffe9d5", "intensity": 0.55 },
+          "directional": {
+            "color": "#ffd2a1",
+            "intensity": 1.45,
+            "direction": { "x": -16, "y": -6, "z": 8 }
+          }
+        },
+        {
+          "name": "день",
+          "seconds": 120,
+          "ambient": { "color": "#ffffff", "intensity": 0.65 },
+          "directional": {
+            "color": "#ffffff",
+            "intensity": 1.7,
+            "direction": { "x": 8, "y": -12, "z": 18 }
+          }
+        },
+        {
+          "name": "закат",
+          "seconds": 120,
+          "ambient": { "color": "#ffd9c0", "intensity": 0.5 },
+          "directional": {
+            "color": "#ff8a45",
+            "intensity": 1.35,
+            "direction": { "x": 16, "y": 6, "z": 7 }
+          }
+        },
+        {
+          "name": "ночь",
+          "seconds": 120,
+          "ambient": { "color": "#2f3f66", "intensity": 0.28 },
+          "directional": {
+            "color": "#6f8dc4",
+            "intensity": 0.45,
+            "direction": { "x": 2, "y": 12, "z": 15 }
+          }
+        }
+      ]
+    }
   }
 }

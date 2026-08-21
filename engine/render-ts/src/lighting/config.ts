@@ -16,6 +16,7 @@
  */
 import type {
   PresentationLighting,
+  PresentationLightingPhase,
   PresentationShadowMode,
 } from '@game-mvp/assets';
 import { PRESENTATION_SHADOW_MODES } from '@game-mvp/assets';
@@ -90,6 +91,89 @@ export function shadowModeRank(mode: ShadowMode): number {
 /** Дешевейший из двух режимов — семантика `ceiling` над перечислением (QUAL-1). */
 export function minShadowMode(a: ShadowMode, b: ShadowMode): ShadowMode {
   return shadowModeRank(a) <= shadowModeRank(b) ? a : b;
+}
+
+/**
+ * Документированное умолчание длительности кроссфейда на границе фаз, секунды
+ * (REND-32). Пятнадцать секунд — восьмая часть двухминутной фазы демо-арены: на
+ * такой длине смена читается ходом времени, а не переключателем, и при этом
+ * занимает малую долю круга. Число — умолчание, а не политика: свою длину
+ * перехода сцена пишет полем `transitionSeconds`.
+ */
+export const DEFAULT_CYCLE_TRANSITION_SECONDS = 15;
+
+/**
+ * Значения света одной фазы цикла — плоские и с закрытыми дырами: поле, которого
+ * фаза не назвала, приходит из статической части секции, а если и там его нет —
+ * из умолчаний (REND-32, те же правила дыр, что PRES-2). Теневых полей здесь нет
+ * намеренно: они принадлежат секции целиком и по кругу не ходят.
+ */
+export interface LightingPhaseConfig {
+  /** Авторское имя фазы; пусто — имени автор не дал. Механизм имён не знает. */
+  readonly name: string;
+  /** Длительность фазы, секунды (положительная). */
+  readonly seconds: number;
+  readonly ambientColor: string;
+  readonly ambientIntensity: number;
+  readonly directionalColor: string;
+  readonly directionalIntensity: number;
+  readonly directionX: number;
+  readonly directionY: number;
+  readonly directionZ: number;
+}
+
+/** Действующий цикл времени суток: фазы по кругу и длина перехода (REND-32). */
+export interface LightingCycleConfig {
+  /** Длительность кроссфейда на границе фаз, секунды. */
+  readonly transitionSeconds: number;
+  /** Фазы в авторском порядке; не менее двух. */
+  readonly phases: readonly LightingPhaseConfig[];
+}
+
+/** Значения одной фазы поверх статической части секции (REND-32). */
+function resolvePhase(
+  phase: PresentationLightingPhase,
+  base: LightingRenderConfig,
+): LightingPhaseConfig {
+  const ambient = phase.ambient;
+  const directional = phase.directional;
+  const axes = directional?.direction;
+  return {
+    name: phase.name ?? '',
+    seconds: phase.seconds,
+    ambientColor: ambient?.color ?? base.ambientColor,
+    ambientIntensity: ambient?.intensity ?? base.ambientIntensity,
+    directionalColor: directional?.color ?? base.directionalColor,
+    directionalIntensity: directional?.intensity ?? base.directionalIntensity,
+    directionX: axes?.x ?? base.directionX,
+    directionY: axes?.y ?? base.directionY,
+    directionZ: axes?.z ?? base.directionZ,
+  };
+}
+
+/**
+ * Подсекция цикла в действующие фазы (REND-32). Нет подсекции — нет и цикла:
+ * сцена ведёт себя байт-в-байт как до его появления.
+ *
+ * Вырожденный цикл (меньше двух фаз, неположительная длительность) подсистеме не
+ * отдаётся вовсе: валидация формата такой документ отвергает адресно (PRES-2), и
+ * приспосабливаться к нему — значило бы заводить второе, необъявленное
+ * прочтение данных. Действует тогда статическая часть секции.
+ */
+export function resolveLightingCycle(
+  section?: PresentationLighting,
+): LightingCycleConfig | undefined {
+  const cycle = section?.cycle;
+  if (cycle === undefined || cycle.phases.length < 2) return undefined;
+  if (cycle.phases.some((phase) => !(phase.seconds > 0) || !Number.isFinite(phase.seconds))) {
+    return undefined;
+  }
+  const base = resolveLightingConfig(section);
+  const transition = cycle.transitionSeconds ?? DEFAULT_CYCLE_TRANSITION_SECONDS;
+  return {
+    transitionSeconds: transition >= 0 && Number.isFinite(transition) ? transition : 0,
+    phases: cycle.phases.map((phase) => resolvePhase(phase, base)),
+  };
 }
 
 /** Секция документа поверх умолчаний: отсутствующее поле — умолчание (PRES-2). */

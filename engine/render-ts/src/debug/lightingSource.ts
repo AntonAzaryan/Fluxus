@@ -30,10 +30,13 @@
  * свет — presentation-данные парного документа (PRES-4), одни и те же у всех, а
  * ярусы кастеров считают КОРНИ нарисованного, то есть ровно то, что уже в кадре.
  *
- * Часовых величин нет ни одной (RDBG-7): свет от тика не зависит и от часов
- * главного потока тоже, поэтому два дампа на одном доставленном состоянии
- * совпадают. Перечней тоже нет: источников света на арене единицы, а ярусы
- * кастеров описаны числами — ограничивать потолком (RDBG-7) здесь нечего.
+ * Часовые величины есть ровно у цикла времени суток (REND-32) и ровно тогда,
+ * когда цикл в секции есть: доли прожитого фазой и переходом выведены из
+ * кадровых часов и уезжают в секцию `clock` (RDBG-7). Всё остальное от часов не
+ * зависит вовсе — свет сцены без цикла не зависит ни от тика, ни от часов
+ * главного потока, — поэтому два дампа на одном доставленном состоянии
+ * совпадают. Перечней нет: источников света на арене единицы, а ярусы кастеров
+ * описаны числами — ограничивать потолком (RDBG-7) здесь нечего.
  */
 import type { ShadowMode } from '../lighting/config.js';
 import type { ShadowPhase } from '../types.js';
@@ -104,6 +107,22 @@ export interface DebugLightingState {
   staticStale: boolean;
   /** Карт теней, ПОСТРОЕННЫХ теневым проходом; 0 — прохода ещё не было. */
   builtShadowMaps: number;
+  /** Фаз в цикле времени суток (REND-32); 0 — подсекции цикла в секции нет. */
+  cyclePhases: number;
+  /** Номер текущей фазы с нуля; -1 — цикла нет. */
+  cyclePhaseIndex: number;
+  /** Авторское имя текущей фазы; пусто — имени автор не дал. */
+  cyclePhaseName: string;
+  /** Слот текущей фазы, секунды: держание облика плюс хвостовой кроссфейд. */
+  cyclePhaseSeconds: number;
+  /** Доля прожитого слотом текущей фазы, [0, 1) — часовая величина (RDBG-7). */
+  cyclePhaseProgress: number;
+  /** Идёт кроссфейд к следующей фазе. */
+  cycleTransition: boolean;
+  /** Длительность кроссфейда текущей фазы, секунды. */
+  cycleTransitionSeconds: number;
+  /** Прогресс кроссфейда, [0, 1); вне перехода — 0 — часовая величина (RDBG-7). */
+  cycleTransitionProgress: number;
 }
 
 export interface DebugLightingProbe extends DebugProbe {
@@ -145,6 +164,13 @@ export interface DebugLightingProbe extends DebugProbe {
   readonly staticRebuilds: number;
   readonly staticStale: boolean;
   readonly builtShadowMaps: number;
+  /** Цикл времени суток (REND-32): фаз в нём, номер и имя текущей, длительности. */
+  readonly cyclePhases: number;
+  readonly cyclePhaseIndex: number;
+  readonly cyclePhaseName: string;
+  readonly cyclePhaseSeconds: number;
+  readonly cycleTransition: boolean;
+  readonly cycleTransitionSeconds: number;
 }
 
 /** Что источнику нужно от подсистемы освещения — снимок её кадрового решения. */
@@ -191,14 +217,32 @@ export function lightingSceneDebugSource(
     staticRebuilds: 0,
     staticStale: false,
     builtShadowMaps: 0,
+    cyclePhases: 0,
+    cyclePhaseIndex: -1,
+    cyclePhaseName: '',
+    cyclePhaseSeconds: 0,
+    cyclePhaseProgress: 0,
+    cycleTransition: false,
+    cycleTransitionSeconds: 0,
+    cycleTransitionProgress: 0,
   };
+  /**
+   * Часовые величины цикла (RDBG-7): доли, выведенные из кадровых часов, уезжают
+   * в отдельную секцию дампа — воспроизводимыми они не бывают, и смешанные с
+   * остальными они превратили бы всякий дифф в шум. Запись переиспользуется, как
+   * и сама проба, и приезжает в пробу ТОЛЬКО когда цикл в секции есть: сцене без
+   * цикла часовых величин взять неоткуда.
+   */
+  const cycleClock = { cyclePhaseProgress: 0, cycleTransitionProgress: 0 };
   // Переиспользуемая проба (RDBG-2): поля переписываются, объект живёт.
   const probe = {
     units:
       'lightWorld*, targetWorld*, arenaRadiusWorldUnits и shadowFrustumHalfWorldUnits — ' +
       'мировые единицы; shadowMapTexels — сторона карты теней в текселях; ' +
       'интенсивности безразмерны; staticShare — доля [0..1]; casterRoots — КОРНИ ' +
-      'поддеревьев реестра, а не меши; staticRebuilds — перерисовки кэша, не тики',
+      'поддеревьев реестра, а не меши; staticRebuilds — перерисовки кэша, не тики; ' +
+      'cyclePhaseSeconds и cycleTransitionSeconds — секунды кадровых часов, ' +
+      'cyclePhaseProgress и cycleTransitionProgress — доли [0..1) в секции clock',
     authoredSection: false,
     lightCount: 0,
     ambientLights: 0,
@@ -230,6 +274,13 @@ export function lightingSceneDebugSource(
     staticRebuilds: 0,
     staticStale: false,
     builtShadowMaps: 0,
+    cyclePhases: 0,
+    cyclePhaseIndex: -1,
+    cyclePhaseName: '',
+    cyclePhaseSeconds: 0,
+    cycleTransition: false,
+    cycleTransitionSeconds: 0,
+    clock: undefined as Readonly<Record<string, number>> | undefined,
     noData: undefined as string | undefined,
   };
 
@@ -241,6 +292,7 @@ export function lightingSceneDebugSource(
       if (!state.inScene) {
         probe.noData =
           'подсистема освещения ещё не отдана сцене: источников света в кадре нет (REND-29)';
+        probe.clock = undefined;
         return probe;
       }
       probe.noData = undefined;
@@ -281,6 +333,21 @@ export function lightingSceneDebugSource(
       probe.staticRebuilds = state.staticRebuilds;
       probe.staticStale = state.staticStale;
       probe.builtShadowMaps = state.builtShadowMaps;
+      probe.cyclePhases = state.cyclePhases;
+      probe.cyclePhaseIndex = state.cyclePhaseIndex;
+      probe.cyclePhaseName = state.cyclePhaseName;
+      probe.cyclePhaseSeconds = state.cyclePhaseSeconds;
+      probe.cycleTransition = state.cycleTransition;
+      probe.cycleTransitionSeconds = state.cycleTransitionSeconds;
+      if (state.cyclePhases === 0) {
+        // Цикла в секции нет — часовых величин у источника нет ни одной, и
+        // пустая секция `clock` их не заменяет (RDBG-7).
+        probe.clock = undefined;
+      } else {
+        cycleClock.cyclePhaseProgress = state.cyclePhaseProgress;
+        cycleClock.cycleTransitionProgress = state.cycleTransitionProgress;
+        probe.clock = cycleClock;
+      }
       return probe;
     },
     draw(value: DebugLightingProbe, out: DebugDraw): void {

@@ -38,6 +38,16 @@
  * (`ShadowCasterSink`) — подсистема моделей по происхождению инстанса и
  * анимации записи вида, подсистема террейна статикой своих чанков. Здесь только
  * реестр корней, флаги и решение, чью карту рисовать в этом кадре.
+ *
+ * ## Цикл времени суток
+ *
+ * Необязательная подсекция `cycle` (REND-32) исполняется здесь же: часы и фазы —
+ * в `lighting/cycle.ts`, а этот файл ставит значения кадра на ЖИВЫЕ источники,
+ * мимо `applyResolved` (design D2). Покадровый вызов применения объявлял бы
+ * событие перерисовки кэша статики и пересчитывал бы фрустумы теневых камер, а
+ * фрустум от направления не зависит вовсе — он обтянут по арене (design D6).
+ * Кэш статики на переходе трогается ровно тогда, когда поехало НАПРАВЛЕНИЕ:
+ * карта глубины не зависит ни от тона, ни от интенсивности (design D3).
  */
 import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
@@ -57,9 +67,11 @@ import { lightingSceneDebugSource, type DebugLightingState } from '../debug/ligh
 import {
   minShadowMode,
   resolveLightingConfig,
+  resolveLightingCycle,
   type LightingRenderConfig,
   type ShadowMode,
 } from '../lighting/config.js';
+import { LightingCycle, type LightingCycleSample } from '../lighting/cycle.js';
 
 /**
  * Ручки качества подсистемы (QUAL-1, QUAL-3). Обе — ПОТОЛКИ над авторскими
@@ -120,6 +132,16 @@ export interface LightingOptions {
   readonly config?: PresentationLighting;
 }
 
+/**
+ * Откуда светит направленный источник — общее у статической части секции и у
+ * кадра цикла (REND-32): наводится источник одним путём, чьи бы числа ни были.
+ */
+interface LightDirection {
+  readonly directionX: number;
+  readonly directionY: number;
+  readonly directionZ: number;
+}
+
 /** Границы арены, по которым обтянуты теневые камеры. */
 interface ArenaExtent {
   readonly centerX: number;
@@ -174,6 +196,17 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
   private dynamicIdle = false;
   /** Перерисовки кэша статики — пробник для тестов; картинка от него не зависит. */
   private rebuilds = 0;
+  /**
+   * Цикл времени суток (REND-32): один экземпляр на всю жизнь подсистемы, фазы
+   * в нём переставляет применение секции. Пустой цикл — сцена без подсекции:
+   * кадр тогда байт-в-байт тот же, что до появления REND-32.
+   */
+  private readonly cycle = new LightingCycle();
+  /**
+   * Чей ход на кадре перехода: кэш статики или карта динамики. Карта у источника
+   * одна на кадр, и переход делит кадры между ними через один (`applyCycleSample`).
+   */
+  private cycleStaleFrame = false;
 
   constructor(options: LightingOptions = {}) {
     this.section = options.config;
@@ -246,13 +279,20 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
   }
 
   /**
-   * Кадр подсистемы: решает, чья теневая карта рисуется, и расставляет флаги
-   * кастеров под неё. Работа тут — событийная по природе: в установившемся
-   * кадре это два присваивания `needsUpdate` и инкремент счётчика, обход
-   * реестра идёт только при смене фазы или правке реестра.
+   * Кадр подсистемы: продвигает цикл времени суток, решает, чья теневая карта
+   * рисуется, и расставляет флаги кастеров под неё. Работа тут — событийная по
+   * природе: в установившемся кадре это два присваивания `needsUpdate` и
+   * инкремент счётчика, обход реестра идёт только при смене фазы или правке
+   * реестра, а цикл на установившейся фазе не отдаёт даже значений.
+   *
+   * Цикл идёт ПЕРЕД решением теневого прохода: кадр перехода, сдвинувший
+   * направление, обязан застать свой же `staticStale` этим кадром, а не
+   * следующим (REND-32, design D3).
    */
-  updateFrame(): void {
+  updateFrame(_dt: number, _alpha: number, realDt: number): void {
     if (this.ctx === null) return;
+    const sample = this.cycle.step(realDt);
+    if (sample !== null) this.applyCycleSample(sample);
     const cost = costSink();
     const mode = this.current.shadowMode;
     if (mode === 'none') {
@@ -350,6 +390,14 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     this.applyResolved(this.current);
   }
 
+  /**
+   * Ручки подсистемы (QUAL-1). Собственная покадровая работа цикла времени суток
+   * (REND-32) ручки не заводит и объявляется КОНСТАНТНОЙ (QUAL-3): установившаяся
+   * фаза не делает ничего, кадр перехода интерполирует фиксированный набор
+   * значений, и ни кастеров, ни инстансов цикл не обходит. Перерисовки кэша
+   * статики, которые переход с движущимся направлением порождает в `hybrid`,
+   * управляются уже объявленными ручками теней (design D5).
+   */
   quality(): QualityDeclaration {
     return {
       subsystem: this.name,
@@ -424,6 +472,9 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     out.ambientColor = this.current.ambientColor;
     out.ambientIntensity = this.ambient.intensity;
     out.directionalColor = this.current.directionalColor;
+    // Фаза цикла (REND-32, design D5) — своими полями и своим тоном поверх
+    // статического: числа круга знает он, а не подсистема.
+    this.cycle.fillDebug(out);
     out.sunIntensity = this.sun.intensity;
     out.sunDynamicIntensity = paired ? this.sunDynamic.intensity : 0;
     out.lightWorldX = this.sun.position.x;
@@ -507,6 +558,74 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     this.staticStale = true;
     this.flagsStale = true;
     this.dynamicIdle = false;
+
+    // Применение секции — единственный событийный шов цикла (REND-32): круг
+    // начинается с начала первой фазы, и её значения встают на источники сразу,
+    // а не первым кадром — иначе сцена с циклом показала бы один кадр
+    // статической частью секции.
+    this.cycleStaleFrame = false;
+    const first = this.cycle.reset(resolveLightingCycle(this.section));
+    if (first !== null) this.applyCycleSample(first);
+  }
+
+  /**
+   * Значения кадра цикла — на живые источники (REND-32, design D2). Фрустум
+   * теневой камеры, сторона карты и смещения выборки здесь не трогаются: от
+   * направления света они не зависят, а пересчитывать их кадром значило бы
+   * платить событием за картинку.
+   */
+  private applyCycleSample(sample: LightingCycleSample): void {
+    this.ambient.color.copy(sample.ambientColor);
+    this.ambient.intensity = sample.ambientIntensity;
+    this.sun.color.copy(sample.directionalColor);
+    this.sunDynamic.color.copy(sample.directionalColor);
+    // Доля статики применяется к УЖЕ слерпленной суммарной интенсивности: пара
+    // ярусов светит как один источник на любом кадре перехода (REND-30).
+    const share = this.current.shadowMode === 'hybrid' ? this.current.staticShare : 1;
+    this.sun.intensity = sample.directionalIntensity * share;
+    this.sunDynamic.intensity = sample.directionalIntensity * (1 - share);
+    this.aimDirection(this.sun, sample);
+    this.aimDirection(this.sunDynamic, sample);
+    // Карта глубины зависит от направления, а не от тона: кэш статики устаревает
+    // ровно тогда, когда источник поехал, и стоимость этого видна счётчиками
+    // (PERF-3), а не спрятана от них.
+    if (!sample.directionMoved) return;
+    if (!this.cycle.inTransition) {
+      // Установившаяся фаза добивает кэш ТОЧНЫМ направлением фазы — один кадр на
+      // границу слота, и дальше кэш снова событиен, как без цикла (REND-30).
+      this.cycleStaleFrame = false;
+      this.staticStale = true;
+      return;
+    }
+    // Кадр перехода поднимает устаревание ЧЕРЕЗ ОДИН, а не каждым: карта у
+    // источника одна на кадр (см. заголовок), и кадр перерисовки кэша пропускает
+    // обновление динамической. Подними мы устаревание каждым кадром перехода,
+    // покадровая карта динамики не рисовалась бы весь переход — тени бойцов
+    // застыли бы на всю его длину, а это и есть та самая оторвавшаяся от кадра
+    // тень, которой REND-32 быть не велит. Через один обе карты отстают не
+    // больше чем на кадр: за кадр направление проходит сотые доли дуги перехода.
+    this.cycleStaleFrame = !this.cycleStaleFrame;
+    if (this.cycleStaleFrame) this.staticStale = true;
+  }
+
+  /**
+   * Позиция и цель источника по направлению — то единственное, что переставляет
+   * кадр перехода (design D2): работа фиксированного размера, без аллокаций.
+   */
+  private aimDirection(light: THREE.DirectionalLight, direction: LightDirection): void {
+    const { directionX, directionY, directionZ } = direction;
+    const length = Math.hypot(directionX, directionY, directionZ);
+    // Нулевое направление — вырожденная секция: источник тогда светит сверху,
+    // а не исчезает; отвергать её — дело валидации формата (PRES-2).
+    const unit = length > 0 ? 1 / length : 0;
+    const distance = this.extent.radius * 2;
+    light.position.set(
+      this.extent.centerX + directionX * unit * distance,
+      this.extent.centerY + directionY * unit * distance,
+      length > 0 ? directionZ * unit * distance : distance,
+    );
+    light.target.position.set(this.extent.centerX, this.extent.centerY, 0);
+    light.target.updateMatrixWorld();
   }
 
   /** Позиция, цель, тон и фрустум теневой камеры одного источника (design D6). */
@@ -517,19 +636,9 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
   ): void {
     light.color.set(config.directionalColor);
     light.intensity = intensity;
-    const length = Math.hypot(config.directionX, config.directionY, config.directionZ);
-    // Нулевое направление — вырожденная секция: источник тогда светит сверху,
-    // а не исчезает; отвергать её — дело валидации формата (PRES-2).
-    const unit = length > 0 ? 1 / length : 0;
-    const distance = this.extent.radius * 2;
-    light.position.set(
-      this.extent.centerX + config.directionX * unit * distance,
-      this.extent.centerY + config.directionY * unit * distance,
-      length > 0 ? config.directionZ * unit * distance : distance,
-    );
-    light.target.position.set(this.extent.centerX, this.extent.centerY, 0);
-    light.target.updateMatrixWorld();
+    this.aimDirection(light, config);
 
+    const distance = this.extent.radius * 2;
     const radius = this.extent.radius * (1 + FRUSTUM_MARGIN);
     const camera = light.shadow.camera;
     camera.left = -radius;
