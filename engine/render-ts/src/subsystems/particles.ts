@@ -81,7 +81,6 @@ import {
 import type { EntityView, QualityDeclaration, QualityValues, RenderContext, RenderSubsystem, TickView } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
-import type { VisualSurface } from '../visualSurface.js';
 import {
   ParticleEffectPool,
   instanceFinished,
@@ -90,14 +89,17 @@ import {
   setInstanceDensity,
   type EffectInstance,
 } from '../particleEffects.js';
-import {
-  dropSocketCache,
-  resolveSocketNode,
-  type SocketSource,
-} from '../particleSockets.js';
+import { dropSocketCache, type SocketSource } from '../particleSockets.js';
 import { createWarnOnce } from '../warnOnce.js';
-import { publicShell, shellKey, type EmitterRecord, type Shell } from './particleShell.js';
-import { createShellPose, createStateReader, poseShell } from './shellSupport.js';
+import { effectIdsOf, settleEffects } from './particlePrewarm.js';
+import {
+  poseEmitterShell,
+  publicShell,
+  shellKey,
+  type EmitterRecord,
+  type Shell,
+} from './particleShell.js';
+import { createShellPose, createStateReader } from './shellSupport.js';
 
 export type { SocketSource } from '../particleSockets.js';
 
@@ -114,11 +116,6 @@ const EFFECT_ASSET_KIND = 'particle-effect';
  * (design D3).
  */
 const PARTICLES_DENSITY = 'particles.density';
-
-// Переиспользуемые между кадрами объекты — аллокаций на эмиттер на кадр нет.
-const SCRATCH_POSITION = new THREE.Vector3();
-const SCRATCH_QUATERNION = new THREE.Quaternion();
-const SCRATCH_SCALE = new THREE.Vector3();
 
 export interface ParticlesOptions {
   /**
@@ -317,6 +314,45 @@ export class ParticlesSubsystem implements RenderSubsystem {
   }
 
   /**
+   * Прогрев по манифесту до первого кадра: каждый эффект, на который ссылаются
+   * секции частиц (byKind/byState/byEvent) и эмиттерные виды (ASSET-14),
+   * запрашивается, разворачивается в образец и получает один пул-экземпляр.
+   * Синхронный разбор документа (`QuarksLoader.parse` — геометрии, материалы,
+   * текстуры), клон образца и батч конвейера с его шейдером создаются здесь,
+   * а не в кадре первого появления эффекта — в матче с туманом это кадр
+   * всплеска открытия обзора (FOW-8). Прогретый экземпляр гасится в пул тем же
+   * вызовом — не сыграв ни кадра эмиссии; счётчики стоимости не двигаются
+   * (PERF-3 меряет доставку и кадр, прогрев живёт во времени загрузки).
+   * Не доехавший документ прогрев не держит (ASSET-4): его запись сыграет
+   * прежним ленивым путём.
+   */
+  prewarm(): Promise<void> {
+    const ctx = this.ctx;
+    if (ctx === null) throw new Error('ParticlesSubsystem: init() не вызван (REND-8)');
+    // Сбор ссылок и ожидание исхода загрузки — `particlePrewarm.ts`; здесь
+    // только собственность подсистемы: `document` запускает запрос и подписку.
+    return settleEffects(
+      ctx.assets,
+      EFFECT_ASSET_KIND,
+      effectIdsOf(this.manifest),
+      (id) => this.document(id) !== null,
+      (id) => {
+        this.warmEffect(id);
+      },
+    );
+  }
+
+  /** Развёртка, клон и батч эффекта — и сразу в пул, не сыграв ни кадра. */
+  private warmEffect(id: string): void {
+    const doc = this.assets.get(id)?.doc ?? null;
+    if (doc === null) return;
+    const instance = this.pool.acquire(id, doc, this.group);
+    if (instance !== null) this.pool.release(instance);
+    // Свежему батчу конвейера луч отключается той же точкой, что в кадре.
+    this.shieldBatches();
+  }
+
+  /**
    * Ручки качества подсистемы (QUAL-1, QUAL-3): одна — множитель плотности.
    * Число живых частиц — покадровая работа библиотеки и вершины батча, и растёт
    * оно и с числом эмиттеров, и с эмиссией каждого (REND-24); множитель правит
@@ -508,48 +544,16 @@ export class ParticlesSubsystem implements RenderSubsystem {
     if (cost !== undefined) {
       cost.particlesShellsPosed += this.shells.size + this.decorationShells.size;
     }
+    // Сама поза — общей механикой оболочки (`poseEmitterShell`): `warnOnce`
+    // уходит готовой функцией, а не обёрткой — без замыкания на оболочку на кадр.
     for (const shell of this.shells.values()) {
       if (cost !== undefined) cost.particlesSystemsStepped += shell.instance.systems.length;
-      this.poseShell(shell, alpha, heightStep, surface);
+      poseEmitterShell(shell, alpha, heightStep, surface, this.options.sockets, this.warnOnce, this.pose);
     }
     for (const shell of this.decorationShells.values()) {
       if (cost !== undefined) cost.particlesSystemsStepped += shell.instance.systems.length;
-      this.poseShell(shell, alpha, heightStep, surface);
+      poseEmitterShell(shell, alpha, heightStep, surface, this.options.sockets, this.warnOnce, this.pose);
     }
-  }
-
-  private poseShell(
-    shell: Shell,
-    alpha: number,
-    heightStep: number,
-    surface: VisualSurface | null,
-  ): void {
-    const object = shell.instance.object;
-    // Масштаб — множитель ЗАПИСИ (ASSET-14) поверх множителя размещения
-    // (REND-11, REND-18), и от сокета он не зависит: нормализация модели по
-    // высоте — свойство инстанса, а размер эффекта назначает автор эффекта.
-    object.scale.setScalar(shell.scale * (shell.view.scale ?? 1));
-    // `warnOnce` уходит полем, а не обёрткой: обёртка была бы замыканием на
-    // каждую оболочку каждого кадра — в установившемся кадре путь не аллоцирует
-    // пропорционально числу эмиттеров. Замыкание само по себе не `this`-зависимо
-    // (`createWarnOnce` отдаёт готовую функцию), и отрывать его от объекта можно.
-    const node = resolveSocketNode(shell, shell.view.id, this.options.sockets, this.warnOnce);
-    if (node !== null) {
-      // Мировая поза узла инстанса — каждый кадр: инстанс уже поставлен
-      // подсистемой моделей, а мировая матрица узла обновляется по цепочке
-      // родителей, не обходом сцены.
-      node.updateWorldMatrix(true, false);
-      node.matrixWorld.decompose(SCRATCH_POSITION, SCRATCH_QUATERNION, SCRATCH_SCALE);
-      object.position.copy(SCRATCH_POSITION);
-      object.quaternion.copy(SCRATCH_QUATERNION);
-      return;
-    }
-    // Горизонталь — интерполяция двух доставленных тиков (REND-2), высота —
-    // опорная высота визуальной поверхности либо ступень уровня (REND-7): то же
-    // общее правило оболочек, что у эффектов (`shellSupport.ts`).
-    const pose = this.pose;
-    poseShell(shell.view, alpha, heightStep, surface, pose);
-    object.position.set(pose.x, pose.y, pose.base);
   }
 
   /**

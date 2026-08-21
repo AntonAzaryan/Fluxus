@@ -312,7 +312,7 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
     expect(four.fogMaskUploadBytes).toBe(one.fogMaskUploadBytes);
   });
 
-  it('загрузка в текстуру считается ровно один раз на доставку', () => {
+  it('загрузка в текстуру — только когда меняется показанная маска', () => {
     const counters = createCostCounters();
     const stand = withCostSink(counters, () => {
       // Стенд строится ПОД замером: создание текстуры своего трафика не имеет.
@@ -324,6 +324,8 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
       created.fog.syncTick(created.view);
       return created;
     });
+    // Первая перестройка: текстура и слой миникарты обязаны существовать с неё
+    // (design D6) — единственная загрузка стартового растра считается тут.
     expect(counters.fogMaskUploadBytes).toBe(32 * 32);
 
     // Та же доставка растра не трогает вовсе — сигнатура входов совпала
@@ -333,11 +335,23 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
     });
     expect(counters.fogMaskUploadBytes).toBe(32 * 32);
 
-    // Доставка ДРУГИХ входов — второй растр той же длины, ни больше ни меньше.
+    // Доставка ДРУГИХ входов перестраивает ЦЕЛЕВУЮ маску, но показанную ведёт
+    // рассеивание кадром (FOW-7): грузить и блитить неизменные байты доставке
+    // нечего — за загрузку и блит сходимости платит стадия кадра, одним числом
+    // `fogDissolveTexels` (PERF-2).
     withCostSink(counters, () => {
       stand.fog.syncTick(makeTickView([observerView(1, 5, 5, 1.5)]));
     });
+    expect(counters.fogMaskUploadBytes).toBe(32 * 32);
+    expect(counters.fogMinimapTexels).toBe(32 * 32);
+
+    // Снап (REND-2): показанная маска стала целевой прямо на доставке — растр
+    // уезжает в текстуру здесь, второй раз той же длины.
+    withCostSink(counters, () => {
+      stand.fog.syncTick(makeTickView([observerView(1, 3, 5, 1.5)], { snapAll: true }));
+    });
     expect(counters.fogMaskUploadBytes).toBe(2 * 32 * 32);
+    expect(counters.fogMinimapTexels).toBe(2 * 32 * 32);
   });
 
   it('число сегментов укрытий: отбор и тесты лучей полярного растра растут вместе с ним', () => {

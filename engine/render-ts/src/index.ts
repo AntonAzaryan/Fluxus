@@ -193,7 +193,12 @@ export type { CellRect, TerrainGeometryData, TerrainOptions } from './subsystems
 // Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).
 // Наружу инстанс виден преобразованием и границами, а не узлом сцены (REND-3).
 export { ModelsSubsystem } from './subsystems/models.js';
-export type { InstancePose, ModelInstanceView, ModelsOptions } from './subsystems/models.js';
+export type {
+  InstancePose,
+  ModelInstanceView,
+  ModelsOptions,
+  ModelsPrewarm,
+} from './subsystems/models.js';
 
 // Подсистема тумана войны (FOW-7, FOW-9, FOW-10): маска видимости команды
 // игрока, конфигурация картинки данными и полноэкранный пост-проход затемнения.

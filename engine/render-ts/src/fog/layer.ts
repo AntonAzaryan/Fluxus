@@ -7,7 +7,6 @@
  * DOM пакет рендера не трогает (REND-19): канвас приходит фабрикой, а его тип
  * здесь — структурный минимум, а не `HTMLCanvasElement`.
  */
-import * as THREE from 'three';
 import type { RenderCostCounters } from '../cost.js';
 import type { FogWorldRect, VisibilityMask } from './mask.js';
 
@@ -51,6 +50,8 @@ export class FogMinimapSurface {
   private readonly create: ((width: number, height: number) => FogLayerCanvas) | null;
   private canvas: FogLayerCanvas | null = null;
   private image: ReturnType<FogLayerContext['createImageData']> | null = null;
+  /** Тон, вбитый в R/G/B буфера; NaN — буфера ещё нет либо тон сменился. */
+  private imageHex = Number.NaN;
 
   /**
    * Объект, который отдают виджету: канвас и сила читаются геттерами — правка
@@ -85,6 +86,7 @@ export class FogMinimapSurface {
   reset(): void {
     this.canvas = null;
     this.image = null;
+    this.imageHex = Number.NaN;
   }
 
   /**
@@ -92,17 +94,24 @@ export class FogMinimapSurface {
    * силу затемнения виджет применяет сам из того же конфига (HUD-6). Ряды
    * перевёрнуты: у растра ряд 0 — минимальный `y` мира, у канваса — верхняя
    * строка, а миникарта рисует мир `+Y` вверх.
+   *
+   * Тон приходит sRGB-числом (`THREE.Color#getHex`, кэш подсистемы): канвасу
+   * нужны sRGB-байты, а компоненты THREE.Color — рабочее (линейное)
+   * пространство, тон брался бы темнее авторского. Числом, а не строкой,
+   * намеренно: блит зовётся каждым кадром рассеивания (FOW-7), и парсить цвет
+   * заново на каждый вызов — аллокация ни за что.
    */
   blit(
     mask: VisibilityMask,
     shown: Uint8Array,
-    color: string | number,
+    hex: number,
     cost: RenderCostCounters | undefined,
   ): void {
     if (this.create === null) return;
     if (this.canvas === null) {
       this.canvas = this.create(mask.width, mask.height);
       this.image = null;
+      this.imageHex = Number.NaN;
     }
     const context = this.canvas.getContext('2d');
     if (context === null) return;
@@ -113,21 +122,26 @@ export class FogMinimapSurface {
     // Сток уже прочитан вызывающим — здесь только инкремент, и он стоит ПОСЛЕ
     // отказов выше: без канваса блита не было, и приписывать его нечему.
     if (cost !== undefined) cost.fogMinimapTexels += mask.width * mask.height;
-    // Канвасу нужны sRGB-байты: компоненты THREE.Color — рабочее (линейное)
-    // пространство, тон брался бы темнее авторского. getHex по умолчанию — sRGB.
-    const hex = new THREE.Color(color).getHex();
-    const r = (hex >> 16) & 0xff;
-    const g = (hex >> 8) & 0xff;
-    const b = hex & 0xff;
+    // Тон постоянен по растру: R/G/B вбиваются один раз на буфер (и заново на
+    // смену тона, FOW-10), горячий цикл пишет только альфу — одна запись на
+    // тексель вместо четырёх при той же картинке.
+    if (this.imageHex !== hex) {
+      const r = (hex >> 16) & 0xff;
+      const g = (hex >> 8) & 0xff;
+      const b = hex & 0xff;
+      const data = image.data;
+      for (let at = 0; at < data.length; at += 4) {
+        data[at] = r;
+        data[at + 1] = g;
+        data[at + 2] = b;
+      }
+      this.imageHex = hex;
+    }
     for (let row = 0; row < mask.height; row++) {
       const source = (mask.height - 1 - row) * mask.width;
       const dest = row * mask.width * 4;
       for (let column = 0; column < mask.width; column++) {
-        const at = dest + column * 4;
-        image.data[at] = r;
-        image.data[at + 1] = g;
-        image.data[at + 2] = b;
-        image.data[at + 3] = OPAQUE - shown[source + column]!;
+        image.data[dest + column * 4 + 3] = OPAQUE - shown[source + column]!;
       }
     }
     context.putImageData(image, 0, 0);

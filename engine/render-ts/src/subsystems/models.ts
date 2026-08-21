@@ -114,7 +114,7 @@ import { orientFromTiltYaw, smoothTilt, tiltTarget, type TiltVector } from '../m
 import {
   buildSharedModel,
   createModelInstance,
-  modelBounds,
+  cachedModelBounds,
   type ModelBounds,
   type ModelInstance,
   type SharedModelData,
@@ -191,6 +191,21 @@ export interface ModelInstanceView {
   readonly pose: InstancePose;
   /** Габариты в осях инстанса; null — нарисованного нет, попадать не во что. */
   readonly bounds: ModelBounds | null;
+}
+
+/**
+ * Результат прогрева подсистемы моделей (`prewarm`): паркуемые корни для
+ * компиляции программ тёплой сценой и текстуры для заливки на GPU до первого
+ * кадра. `finish()` возвращает прогретое: детальные образцы сносятся,
+ * батч-группы отпускаются из тёплой сцены (и, если за время прогрева к батчу
+ * успела привязаться живая запись, встают в настоящую).
+ */
+export interface ModelsPrewarm {
+  /** Корни вне сцены: батч-группы и образцы детальных видов. Рисовать их нельзя. */
+  readonly roots: readonly THREE.Object3D[];
+  /** Текстуры прогретых батчей (VAT) — вход `WebGLRenderer.initTexture`. */
+  readonly textures: readonly THREE.Texture[];
+  finish(): void;
 }
 
 export interface ModelsOptions {
@@ -857,7 +872,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // (FOW-8, NET-14): инстанс остаётся дожить fade-out; `EntityDied` того же
     // тика идёт существующим путём смерти — немедленное снятие, как и прежде.
     const died = fadeSeconds > 0 && view !== null ? diedIn(view, this.options.deathEvent) : null;
-    for (const [entity, record] of pool) {
+    // `values()` вместо деструктуризации пар: ключ лежит в самой записи, а
+    // кортеж на каждую запись пула 30 раз в секунду — мусор на ровном месте
+    // (та же дисциплина, что у кадрового пути ниже).
+    for (const record of pool.values()) {
+      const entity = record.entity;
       if (entities.has(entity)) continue;
       if (fadeSeconds > 0 && died?.has(entity) !== true) {
         record.fadingOut = true;
@@ -1335,6 +1354,102 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     record.skinChosen = true;
     this.assignSkin(record, skin);
     return true;
+  }
+
+  /**
+   * Прогрев по манифесту до первого кадра. Запрашивает модели ВСЕХ модельных
+   * видов и, когда они доезжают, строит то, что иначе строил бы кадр первого
+   * появления вида — а первое появление в матче с туманом это всплеск
+   * открытия обзора (FOW-8): разделяемую часть и запечённые производные
+   * (ASSET-12, у демо-модели — десятки миллисекунд запекания VAT), батчи
+   * батчевых видов с их материалами и по одному образцу-инстансу детальных
+   * видов. Возвращённые корни стоят ВНЕ сцены — сборка компилирует их
+   * программы тёплой сценой (`WebGLRenderer.compile(warm, camera, scene)`)
+   * и возвращает прогретое `finish()`; в кадр они не попадают ни на тик
+   * (REND-11, REND-18: пустой батч не оставляет в сцене даже узла).
+   *
+   * Наблюдаемого состояния прогрев не меняет и счётчиков стоимости не двигает
+   * (PERF-3 меряет доставку и кадр — прогрев живёт во времени загрузки);
+   * не доехавшая модель прогрев не держит: её вид смонтируется прежним
+   * ленивым путём с заглушкой (ASSET-4).
+   */
+  prewarm(): Promise<ModelsPrewarm> {
+    const ctx = this.requireCtx();
+    const waits: Promise<void>[] = [];
+    for (const kind of visualKinds(this.manifest)) {
+      const visual = resolveVisual(this.manifest, kind);
+      if (visual === undefined) continue;
+      const entry = this.ensureShared(ctx, visual.model);
+      if (entry.data !== null || entry.failed !== null) continue;
+      // Ожидание исхода загрузки: подписка приносит текущее состояние
+      // немедленно (ASSET-4), поэтому уже решённый ассет промиса не задержит.
+      const handle = ctx.assets.request<NormalizedModel>('model', visual.model);
+      waits.push(
+        new Promise<void>((resolve) => {
+          ctx.assets.subscribe(handle, (state) => {
+            if (state.status !== 'loading') resolve();
+          });
+        }),
+      );
+    }
+    return Promise.all(waits).then(() => this.collectWarm());
+  }
+
+  /** Тёплые корни по доехавшим моделям — низ `prewarm`, после всех ожиданий. */
+  private collectWarm(): ModelsPrewarm {
+    const roots: THREE.Object3D[] = [];
+    const textures: THREE.Texture[] = [];
+    const warmBatches: BatchEntry[] = [];
+    const warmDetailed: ModelInstance[] = [];
+    for (const kind of visualKinds(this.manifest)) {
+      const visual = resolveVisual(this.manifest, kind);
+      if (visual === undefined) continue;
+      const entry = this.shared.get(visual.model);
+      const data = entry?.data ?? null;
+      if (entry === undefined || data === null) continue;
+      if (declaredTier(visual, this.defaultTier) === 'batched' && entry.derivatives !== null) {
+        // Ярус кастера — та же производная данных, что у живой записи
+        // (`casterTierOf`): вид сущности динамичен всегда, decoration статичен,
+        // пока запись не объявила анимаций.
+        const decoration = this.manifest.entities[kind] === undefined;
+        const tier: ShadowCasterTier =
+          decoration && !animatedVisual(visual) ? 'static' : 'dynamic';
+        const key = batchKey(visual, kind, tier);
+        const batchEntry = this.batches.get(key) ?? this.buildBatch(visual, key, data, entry.derivatives);
+        if (entry.vatTexture !== null) textures.push(entry.vatTexture);
+        if (batchEntry.batch.group.parent === null) {
+          roots.push(batchEntry.batch.group);
+          warmBatches.push(batchEntry);
+        }
+      } else {
+        // Детальный ярус строится на инстанс — прогревается образец: скелет,
+        // SkinnedMesh-биндинги и программы его материалов, плюс кэш границ.
+        const options: { scale?: number; hiddenParts?: readonly number[] } = {};
+        if (visual.scale !== undefined) options.scale = visual.scale;
+        if (visual.hiddenParts !== undefined) options.hiddenParts = visual.hiddenParts;
+        const instance = createModelInstance(data, options);
+        roots.push(instance.root);
+        warmDetailed.push(instance);
+      }
+    }
+    return {
+      roots,
+      textures,
+      finish: () => {
+        for (const instance of warmDetailed) {
+          instance.root.removeFromParent();
+          instance.dispose();
+        }
+        for (const batchEntry of warmBatches) {
+          const group = batchEntry.batch.group;
+          group.removeFromParent();
+          // Запись, привязавшаяся ЗА ВРЕМЯ прогрева, свою точку входа в сцену
+          // уже пропустила (`attachBatched` видел родителем тёплую сцену):
+          // батч с живыми записями возвращается в сцену здесь.
+          if (batchEntry.batch.count > 0) this.requireCtx().scene.add(group);
+        }
+      },
+    };
   }
 
   /**
@@ -1864,14 +1979,19 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       return;
     }
 
-    // Модель грузится асинхронно; до готовности — заглушка (ASSET-4).
-    this.makePlaceholder(ctx, record);
+    // Модель грузится асинхронно; до готовности — заглушка (ASSET-4). Когда
+    // разделяемая часть уже в кэше — обычный путь всплеска открытия обзора
+    // (FOW-8): пачка инстансов уже виденной модели за одну доставку — заглушка
+    // не строится вовсе: `attachModel` снял бы её тем же вызовом, и пара
+    // «создать Group с Mesh, объявить кастера — тут же снести» на каждый
+    // инстанс всплеска была бы платой ни за что.
     const entry = this.ensureShared(ctx, visual.model);
     if (entry.data !== null) {
       this.attachModel(record, entry.data);
-    } else if (entry.failed === null) {
-      entry.waiting.add(record);
+      return;
     }
+    this.makePlaceholder(ctx, record);
+    if (entry.failed === null) entry.waiting.add(record);
   }
 
   /**
@@ -2123,7 +2243,21 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       this.syncBatchSkins(existing, visual);
       return existing;
     }
+    return this.buildBatch(visual, key, shared, derivatives);
+  }
 
+  /**
+   * Сборка нового батча по слагаемым ключа — общий низ `ensureBatch` и
+   * прогрева (`prewarm`): у прогрева записи-инстанса ещё нет, а батч, VAT и
+   * материалы уже нужны — иначе их создание и компиляцию программ оплатил бы
+   * кадр первого появления вида (FOW-8).
+   */
+  private buildBatch(
+    visual: EntityVisual | undefined,
+    key: string,
+    shared: SharedModelData,
+    derivatives: BakedDerivatives,
+  ): BatchEntry {
     skinPlaceholder ??= createSkinPlaceholder();
     const placeholder = skinPlaceholder;
     const vatTexture = this.ensureVatTexture(visual?.model ?? '', derivatives);
@@ -2149,7 +2283,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       depthMaterial: createVatDepthMaterial(vatTexture),
     });
 
-    const canonical = modelBounds(shared.model, visual?.hiddenParts);
+    const canonical = cachedModelBounds(shared.model, visual?.hiddenParts);
     const canonicalCull = boundsFromBaked(derivatives);
     const normalized = (visual?.scale ?? 1) / Math.max(shared.model.height, MIN_MODEL_HEIGHT);
     const skinTextures: THREE.DataArrayTexture[] = [];

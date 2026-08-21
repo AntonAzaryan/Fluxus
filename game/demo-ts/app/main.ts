@@ -106,6 +106,7 @@ import {
 } from './debugSources.js';
 import { demoEdgePan } from './cameraInput.js';
 import { createDemoHud, demoHudComposition, markHoldOnlyAbilities } from './hud.js';
+import { prewarmPresentation } from './prewarm.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import {
@@ -1266,13 +1267,12 @@ async function main(): Promise<void> {
       // сборки, что у эффектов и камеры: второго словаря не заводится.
       // Decoration-эмиттеры (факелы арены) приезжают сюда общим входом набора
       // декораций, который хост рассылает всем подсистемам (REND-18).
-      remote!.register(
-        new ParticlesSubsystem(manifest, {
-          surface,
-          stateComponents: STATE_COMPONENTS,
-          sockets: models,
-        }),
-      );
+      const particles = new ParticlesSubsystem(manifest, {
+        surface,
+        stateComponents: STATE_COMPONENTS,
+        sockets: models,
+      });
+      remote!.register(particles);
       // Превью каста (REND-28) — после частиц и до тумана: контур шага лежит
       // на полу и обязан гаснуть вместе с остальным кадром под маской. Каталог
       // и имена статов — два шва сборки, третий (`applyLocalInput`) зовётся
@@ -1420,6 +1420,22 @@ async function main(): Promise<void> {
       // подсистема, в списке кадрового пути его нет, и счётчики стоимости
       // (PERF-3) от его подключения не двигаются ни на единицу (RDBG-8).
       wireDebugPanel(surface, ground.bounds);
+
+      // Прогрев презентации (см. `prewarm.ts`): модели, батчи и эффекты частиц
+      // строятся и компилируются во время загрузки, а не в кадре первого
+      // появления вида — всплеск открытия обзора (FOW-8) монтирует прогретое.
+      // Кадровый цикл прогрева не ждёт: не доехавшее монтируется прежним
+      // ленивым путём (ASSET-4), а сорвавшийся прогрев — не отказ кадра.
+      void prewarmPresentation({
+        renderer: renderer3,
+        scene: scene3,
+        camera,
+        models,
+        particles,
+        fog: fogSubsystem,
+      }).catch((e: unknown) => {
+        console.warn('демо: прогрев рендера не удался — монтаж останется ленивым', e);
+      });
 
       requestAnimationFrame(frame);
     },

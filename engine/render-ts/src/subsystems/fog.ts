@@ -362,23 +362,28 @@ export class FogSubsystem implements RenderSubsystem {
     // Рассеивание не мгновенное (FOW-7): показанная маска догоняет целевую в
     // updateFrame. Разрыв непрерывности мира (REND-2) и нулевое время — снап:
     // плавность — про ход мира, а не про телепорт или выключенное рассеивание.
-    if (view.snapAll || this.current.dissolveSeconds <= 0) {
+    const snap = view.snapAll || this.current.dissolveSeconds <= 0;
+    if (snap) {
       this.shown.set(this.mask.data);
       this.settling = false;
     } else {
       this.settling = true;
     }
-    // Текстура и слой миникарты отражают ПОКАЗАННУЮ маску: при снапе она уже
-    // целевая, при рассеивании — прежняя, но слой обязан существовать с первой
-    // перестройки, а дальше его ведёт сходимость в updateFrame.
-    this.maskTexture.needsUpdate = true;
-    // Байт на тексель (RedFormat, UnsignedByteType): весь растр уезжает в
-    // текстуру на каждой доставке — цена разрешения маски, а не наблюдателей.
-    // Точка счёта ОДНА на загрузку и живёт здесь, у поднятого флага версии:
-    // создание текстуры (`createMaskTexture`) своего трафика не имеет — три
-    // сливает его флаг с этим в одну загрузку.
-    if (cost !== undefined) cost.fogMaskUploadBytes += this.mask.data.length;
-    this.blitLayer(cost);
+    // Текстура и слой миникарты отражают ПОКАЗАННУЮ маску — а её эта доставка
+    // изменила только при снапе: при рассеивании показанную ведёт updateFrame,
+    // он же поднимает флаг версии и повторяет блит, и загрузка или блит
+    // неизменных байтов здесь были бы платой ни за что (PERF-3). Исключение —
+    // первая перестройка: слой миникарты обязан существовать с неё (design D6).
+    if (snap || !this.built) {
+      this.maskTexture.needsUpdate = true;
+      // Байт на тексель (RedFormat, UnsignedByteType): весь растр уезжает в
+      // текстуру — цена разрешения маски, а не наблюдателей. Точка счёта ОДНА
+      // на загрузку и живёт здесь, у поднятого флага версии: создание текстуры
+      // (`createMaskTexture`) своего трафика не имеет — три сливает его флаг с
+      // этим в одну загрузку.
+      if (cost !== undefined) cost.fogMaskUploadBytes += this.mask.data.length;
+      this.blitLayer(cost);
+    }
     this.built = true;
   }
 
@@ -617,9 +622,13 @@ export class FogSubsystem implements RenderSubsystem {
     return this.target;
   }
 
-  /** Блит растра в канвас слоя миникарты (HUD-6, design D6) — его дело. */
+  /**
+   * Блит растра в канвас слоя миникарты (HUD-6, design D6) — его дело. Тон —
+   * кэшированным sRGB-числом (`colorHex`, слот сигнатуры): блит не парсит
+   * строку цвета на каждый вызов.
+   */
   private blitLayer(cost: RenderCostCounters | undefined): void {
-    this.minimap.blit(this.mask, this.shown, this.current.color, cost);
+    this.minimap.blit(this.mask, this.shown, this.colorHex, cost);
   }
 
   /** Растр маски — для тестов геометрии; потребители картинки ходят не сюда. */

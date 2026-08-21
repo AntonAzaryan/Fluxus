@@ -166,6 +166,12 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
   private staticStale = true;
   /** Реестр кастеров изменился: флаги фазы надо расставить заново. */
   private flagsStale = true;
+  /**
+   * Карта динамики пуста и уже очищена завершающим проходом: перерисовку можно
+   * пропускать, пока в реестре динамики никого. Сбрасывается событием
+   * конфигурации — та освобождает карты, и очистку надо провести заново.
+   */
+  private dynamicIdle = false;
   /** Перерисовки кэша статики — пробник для тестов; картинка от него не зависит. */
   private rebuilds = 0;
 
@@ -281,7 +287,13 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     }
     this.applyPhase('dynamic');
     this.sun.shadow.needsUpdate = false;
-    this.sunDynamic.shadow.needsUpdate = true;
+    // Пустой реестр динамики — проход не рисуется вовсе: перерисовывать пустую
+    // карту каждый кадр значило бы платить бинд и очистку цели ни за что. Один
+    // завершающий проход после ухода последнего кастера карту очищает — иначе
+    // в ней остался бы след ушедшего.
+    const hasDynamic = this.dynamicRoots.size > 0;
+    this.sunDynamic.shadow.needsUpdate = hasDynamic || !this.dynamicIdle;
+    this.dynamicIdle = !hasDynamic;
     if (cost !== undefined) cost.lightingDynamicCasters += this.dynamicRoots.size;
   }
 
@@ -290,7 +302,19 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
   setCaster(root: THREE.Object3D, tier: ShadowCasterTier): void {
     const mine = tier === 'static' ? this.staticRoots : this.dynamicRoots;
     const other = tier === 'static' ? this.dynamicRoots : this.staticRoots;
-    if (other.delete(root)) this.staticStale = true;
+    const moved = other.delete(root);
+    if (!moved && tier === 'dynamic' && mine.has(root)) {
+      // Повторное объявление динамического корня в том же ярусе — обычный ход
+      // всплеска открытия обзора (FOW-8): у записи сменилось поддерево
+      // (заглушка → модель), а не ярус. Флаги ставятся точечно этому корню по
+      // текущей фазе — глобальный обход реестра (`applyPhase`) на каждый такой
+      // вызов был бы работой по числу ВСЕХ кастеров, а не пришедшего одного.
+      // Динамическую карту следующий кадр и так перерисует.
+      this.applyFlagsTo(root, tier);
+      return;
+    }
+    // Статический корень повторной регистрации идёт общим путём намеренно:
+    // его сменившееся поддерево обязано попасть в перерисовку кэша статики.
     mine.add(root);
     if (tier === 'static') this.staticStale = true;
     this.flagsStale = true;
@@ -482,6 +506,7 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     this.phase = 'none';
     this.staticStale = true;
     this.flagsStale = true;
+    this.dynamicIdle = false;
   }
 
   /** Позиция, цель, тон и фрустум теневой камеры одного источника (design D6). */
@@ -542,6 +567,17 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     const dynamicCasts = next === 'dynamic' || next === 'full';
     for (const root of this.staticRoots) applyShadowFlags(root, staticCasts, receive);
     for (const root of this.dynamicRoots) applyShadowFlags(root, dynamicCasts, receive);
+  }
+
+  /** Флаги одного корня по ТЕКУЩЕЙ фазе — точечный путь `setCaster` без обхода реестра. */
+  private applyFlagsTo(root: THREE.Object3D, tier: ShadowCasterTier): void {
+    const phase = this.phase;
+    const receive = phase !== 'none';
+    const casts =
+      tier === 'static'
+        ? phase === 'static' || phase === 'full'
+        : phase === 'dynamic' || phase === 'full';
+    applyShadowFlags(root, casts, receive);
   }
 }
 
