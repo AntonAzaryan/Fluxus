@@ -312,6 +312,41 @@ function validateCyclePhase(node: Record<string, unknown>, path: string, errors:
 }
 
 /**
+ * Переход не короче слота фазы — вырожденное значение, а не крайний случай
+ * (REND-32). Кроссфейд занимает ХВОСТ слота фазы, поэтому слот, съеденный им
+ * целиком, оставляет фазу без собственного облика: цикл превращается в
+ * непрерывный дрейф — ту самую модель «фазы как ключевые кадры», которую формат
+ * не описывает. Молча укорачивать переход было бы переписыванием авторского
+ * числа, а состав документа держится на адресном отказе (PRES-2).
+ *
+ * Находка одна на цикл и адресована ДЛИТЕЛЬНОСТИ ПЕРЕХОДА: она одна на все фазы,
+ * а самая короткая из них названа в тексте — по ней граница и проходит.
+ * Ненаписанная длительность здесь не проверяется вовсе: её умолчание —
+ * политика подсистемы рендера, и этот модуль его не знает (см. заголовок).
+ */
+function checkTransitionFitsPhases(
+  node: Record<string, unknown>,
+  phases: readonly unknown[],
+  errors: string[],
+): void {
+  const transition = node.transitionSeconds;
+  if (typeof transition !== 'number' || !Number.isFinite(transition) || transition < 0) return;
+  let shortest = Number.POSITIVE_INFINITY;
+  let at = -1;
+  phases.forEach((phase, index) => {
+    const seconds = isRecord(phase) ? phase.seconds : undefined;
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return;
+    if (seconds >= shortest) return;
+    shortest = seconds;
+    at = index;
+  });
+  if (at < 0 || transition < shortest) return;
+  errors.push(
+    `lighting.cycle.transitionSeconds: переход ${transition} с не короче слота фазы phases[${at}] (${shortest} с) — держать облик фазе тогда нечем (REND-32)`,
+  );
+}
+
+/**
  * Подсекция цикла времени суток (REND-32): состав закрыт, список фаз — не
  * короче двух, каждая находка адресует ФАЗУ индексом, а не подсекцию целиком —
  * по тому же основанию, по какому его адресуют записи decoration.
@@ -346,6 +381,7 @@ function validateLightingCycle(node: Record<string, unknown>, errors: string[]):
     }
     validateCyclePhase(phase, at, errors);
   });
+  checkTransitionFitsPhases(node, phases, errors);
 }
 
 /**

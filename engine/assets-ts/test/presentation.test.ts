@@ -444,6 +444,40 @@ describe('REND-32: подсекция цикла времени суток — �
     );
   });
 
+  it('переход не короче слота фазы отвергается: держать облик фазе тогда нечем', () => {
+    // Кроссфейд занимает хвост слота, и слот, съеденный им целиком, оставляет
+    // фазу без собственного облика — это уже не цикл фаз, а непрерывный дрейф.
+    expectErrors(
+      { lighting: { cycle: { transitionSeconds: 10, phases: [{ seconds: 10 }, { seconds: 30 }] } } },
+      /lighting\.cycle\.transitionSeconds: переход 10 с не короче слота фазы phases\[0\] \(10 с\)/,
+    );
+    // Находка одна на цикл и называет САМУЮ КОРОТКУЮ фазу: граница проходит по ней.
+    const errors = expectErrors(
+      {
+        lighting: {
+          cycle: {
+            transitionSeconds: 15,
+            phases: [{ seconds: 120 }, { seconds: 12 }, { seconds: 40 }],
+          },
+        },
+      },
+      /переход 15 с не короче слота фазы phases\[1\] \(12 с\)/,
+    );
+    expect(errors).toHaveLength(1);
+    // Переход короче самого короткого слота — законная сцена (демо: 15 из 120).
+    expect(
+      validatePresentationScene({
+        lighting: { cycle: { transitionSeconds: 15, phases: [{ seconds: 120 }, { seconds: 16 }] } },
+      }).ok,
+    ).toBe(true);
+    // Нулевой переход — смена фаз скачком: вырождением это не является.
+    expect(
+      validatePresentationScene({
+        lighting: { cycle: { transitionSeconds: 0, phases: [{ seconds: 5 }, { seconds: 5 }] } },
+      }).ok,
+    ).toBe(true);
+  });
+
   it('подсекция, список фаз и фаза не той формы — адресный отказ', () => {
     expectErrors({ lighting: { cycle: 15 } }, /lighting\.cycle: ожидался объект секции/);
     expectErrors(

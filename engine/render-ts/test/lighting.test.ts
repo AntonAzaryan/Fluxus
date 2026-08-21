@@ -13,7 +13,11 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { EntityId } from '@game-mvp/core';
-import type { PresentationLighting, VisualManifest } from '@game-mvp/assets';
+import type {
+  PresentationLighting,
+  PresentationLightingPhase,
+  VisualManifest,
+} from '@game-mvp/assets';
 import {
   DEFAULT_CYCLE_TRANSITION_SECONDS,
   DEFAULT_LIGHTING_CONFIG,
@@ -203,7 +207,7 @@ describe('конфигурация освещения — данные секц�
 
   it('длительность перехода — документированное умолчание (REND-32)', () => {
     const section: PresentationLighting = {
-      cycle: { phases: [{ seconds: 10 }, { seconds: 10 }] },
+      cycle: { phases: [{ seconds: 120 }, { seconds: 120 }] },
     };
     expect(DEFAULT_CYCLE_TRANSITION_SECONDS).toBe(15);
     expect(resolveLightingCycle(section)?.transitionSeconds).toBe(
@@ -211,6 +215,31 @@ describe('конфигурация освещения — данные секц�
     );
     const authored = { cycle: { transitionSeconds: 2, phases: [{ seconds: 10 }, { seconds: 10 }] } };
     expect(resolveLightingCycle(authored)?.transitionSeconds).toBe(2);
+  });
+
+  it('умолчание перехода не съедает слот короткой фазы — оно ограничено его половиной', () => {
+    // Авторское число на этой границе отвергает валидация формата (PRES-2), но
+    // ненаписанное отвергать нечего: умолчание обязано быть безопасным для сцены
+    // с любыми длительностями, иначе фаза короче пятнадцати секунд не держала бы
+    // своего облика ни секунды — то есть цикл вырождался бы в дрейф (design D1).
+    expect(resolveLightingCycle({ cycle: { phases: [{ seconds: 10 }, { seconds: 30 }] } })).toEqual(
+      expect.objectContaining({ transitionSeconds: 5 }),
+    );
+    // Ограничение — по САМОЙ КОРОТКОЙ фазе: длина перехода одна на цикл.
+    expect(
+      resolveLightingCycle({ cycle: { phases: [{ seconds: 120 }, { seconds: 4 }] } })
+        ?.transitionSeconds,
+    ).toBe(2);
+    // Там, где умолчание и так короче половины слота, оно действует как есть.
+    expect(
+      resolveLightingCycle({ cycle: { phases: [{ seconds: 120 }, { seconds: 40 }] } })
+        ?.transitionSeconds,
+    ).toBe(DEFAULT_CYCLE_TRANSITION_SECONDS);
+    // Написанное автором число не правится: слишком длинное отвергнуто выше.
+    expect(
+      resolveLightingCycle({ cycle: { transitionSeconds: 9, phases: [{ seconds: 10 }, { seconds: 10 }] } })
+        ?.transitionSeconds,
+    ).toBe(9);
   });
 
   it('вырожденный цикл подсистеме не отдаётся: его дело — валидация формата', () => {
@@ -501,27 +530,26 @@ describe('режимы теней и кэш статики (design D2)', () => {
  * 1 → 0, тон белый → чёрный. Направление у обеих фаз общее, если не сказано
  * иное: движется оно только там, где предмет теста — тени (design D3).
  */
+const PHASES: readonly PresentationLightingPhase[] = [
+  {
+    name: 'день',
+    seconds: 10,
+    ambient: { color: '#ffffff', intensity: 1 },
+    directional: { color: '#ffffff', intensity: 2, direction: { x: 0, y: 0, z: 10 } },
+  },
+  {
+    name: 'ночь',
+    seconds: 10,
+    ambient: { color: '#000000', intensity: 0 },
+    directional: { color: '#000000', intensity: 0, direction: { x: 0, y: 0, z: 10 } },
+  },
+];
+
 function cycleSection(overrides: Partial<PresentationLighting> = {}): PresentationLighting {
   return {
     ambient: { color: '#808080', intensity: 0.5 },
     directional: { color: '#808080', intensity: 0.5, direction: { x: 0, y: 0, z: 10 } },
-    cycle: {
-      transitionSeconds: 2,
-      phases: [
-        {
-          name: 'день',
-          seconds: 10,
-          ambient: { color: '#ffffff', intensity: 1 },
-          directional: { color: '#ffffff', intensity: 2, direction: { x: 0, y: 0, z: 10 } },
-        },
-        {
-          name: 'ночь',
-          seconds: 10,
-          ambient: { color: '#000000', intensity: 0 },
-          directional: { color: '#000000', intensity: 0, direction: { x: 0, y: 0, z: 10 } },
-        },
-      ],
-    },
+    cycle: { transitionSeconds: 2, phases: PHASES },
     ...overrides,
   };
 }
@@ -607,6 +635,24 @@ describe('цикл времени суток — исполнение подси
     advance(rig, -5);
     advance(rig, Number.NaN);
     expect(lightSnapshot(rig)).toEqual(mid);
+  });
+
+  it('переход длиной в слот укорачивается до него: круг идёт, скачка нет', () => {
+    // Документ с таким переходом валидация отвергает адресно (PRES-2), а
+    // умолчание до такой длины не дорастает — сюда он попадает только руками.
+    // Подсистеме тогда положено вести себя предсказуемо: фаза целиком под
+    // кроссфейдом, фазы сменяются по кругу, на границе слота — точные значения.
+    const rig = makeRig(cycleSection({ cycle: { transitionSeconds: 30, phases: PHASES } }));
+    expect(rig.lighting.lights.ambient.intensity).toBe(1);
+
+    // Слот 10 с целиком под кроссфейдом: половина пути пройдена к пятой секунде.
+    advance(rig, 5);
+    expect(rig.lighting.lights.ambient.intensity).toBeCloseTo(0.5, 6);
+    // Граница слота — вторая фаза точно, без остатка кроссфейда и без зависания.
+    advance(rig, 5);
+    expect(rig.lighting.lights.ambient.intensity).toBe(0);
+    advance(rig, 10);
+    expect(rig.lighting.lights.ambient.intensity).toBe(1);
   });
 
   it('правка секции перезапускает круг с начала первой фазы (ED-15, REND-32)', () => {
@@ -736,6 +782,7 @@ describe('тени на переходе фаз (design D3, REND-32)', () => {
 
   it('стоимость перехода видна счётчиками, а не спрятана от них (PERF-3)', () => {
     const rig = makeRig(movingSun());
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
     rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
     const cost = createCostCounters();
     withCostSink(cost, () => {
@@ -744,8 +791,15 @@ describe('тени на переходе фаз (design D3, REND-32)', () => {
     });
     // Кадр запекания, кадр перехода и добивающий кадр установившейся фазы.
     expect(cost.lightingStaticRebuilds).toBe(3);
-    // Статика — чанк террейна и батч декорации — пересчитана каждым из них.
-    expect(cost.lightingStaticCasters).toBe(6);
+    // Статика — чанк террейна и батч декорации — по паре корней на кадр:
+    // запекание, кадр перехода, рисующий её карту, добивающий кадр фазы —
+    // и ЧЕТВЁРТЫМ кадр перехода, который её карту не рисовал, но переставил ей
+    // флаги, меняя ярусы местами (`applyPhase`). Эта четвёртая пара и есть
+    // покадровая работа цикла, которую declaration объявляет вслух (QUAL-3).
+    expect(cost.lightingStaticCasters).toBe(8);
+    // Динамика — батч сущности: семь установившихся кадров первой фазы, кадр
+    // перехода со своей картой и кадр перехода, на котором ей переставили флаги.
+    expect(cost.lightingDynamicCasters).toBe(9);
   });
 
   it('переход не трогает фрустум теневой камеры, сторону карты и смещения выборки', () => {
@@ -967,6 +1021,8 @@ interface LightingSection {
   readonly cyclePhases: number;
   readonly cyclePhaseIndex: number;
   readonly cyclePhaseName: string;
+  readonly cyclePhaseAmbientColor: string;
+  readonly cyclePhaseDirectionalColor: string;
   readonly cyclePhaseSeconds: number;
   readonly cycleTransition: boolean;
   readonly cycleTransitionSeconds: number;
@@ -1246,19 +1302,27 @@ describe('Отладочный источник освещения (render-debug
     expect(first.cyclePhaseSeconds).toBe(10);
     expect(first.cycleTransitionSeconds).toBe(2);
     expect(first.cycleTransition).toBe(false);
-    // Тон назван по фазе: точный тон кадра стоит на живых источниках, а
-    // `getHexString()` с них аллоцировал бы строку каждым кадром (REND-26).
-    expect(first.ambientColor).toBe('#ffffff');
+    // Тон фазы едет СВОИМ полем и не подменяет собой тон действующей
+    // конфигурации: на переходе источники покрашены смесью двух фаз, и выдай
+    // дамп авторский тон одной из них за тон кадра — он говорил бы неправду.
+    expect(first.cyclePhaseAmbientColor).toBe('#ffffff');
+    expect(first.cyclePhaseDirectionalColor).toBe('#ffffff');
+    expect(first.ambientColor).toBe('#808080');
+    expect(first.directionalColor).toBe('#808080');
 
     advance(rig, 9);
     const fading = section(layer);
     expect(fading.cycleTransition).toBe(true);
     expect(fading.cyclePhaseIndex).toBe(0);
+    // Идёт кроссфейд от «дня» — тон фазы всё ещё его, а доля смеси названа
+    // часовой величиной в секции clock.
+    expect(fading.cyclePhaseAmbientColor).toBe('#ffffff');
 
     advance(rig, 1);
     const night = section(layer);
     expect(night.cyclePhaseIndex).toBe(1);
     expect(night.cyclePhaseName).toBe('ночь');
+    expect(night.cyclePhaseAmbientColor).toBe('#000000');
     expect(night.cycleTransition).toBe(false);
   });
 
@@ -1288,6 +1352,7 @@ describe('Отладочный источник освещения (render-debug
     // «Цикла нет» и «идёт первая фаза» — разные ответы (HUD-8, RDBG-7).
     expect(dumped.cyclePhaseIndex).toBe(-1);
     expect(dumped.cyclePhaseName).toBe('');
+    expect(dumped.cyclePhaseAmbientColor).toBe('');
     expect(
       Object.keys(layer.dump().clock).some((key) => key.startsWith(`${LIGHTING_SOURCE}.`)),
     ).toBe(false);

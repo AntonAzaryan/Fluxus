@@ -103,6 +103,20 @@ export function minShadowMode(a: ShadowMode, b: ShadowMode): ShadowMode {
 export const DEFAULT_CYCLE_TRANSITION_SECONDS = 15;
 
 /**
+ * Доля слота самой короткой фазы, которой умолчание перехода ограничено сверху.
+ *
+ * Кроссфейд занимает хвост слота, поэтому переход длиной в слот не оставляет
+ * фазе ни секунды собственного облика — цикл вырождается в непрерывный дрейф.
+ * Авторское число на этой границе валидация отвергает адресно (PRES-2), но
+ * НЕНАПИСАННОЕ отвергать нечего: умолчание обязано быть безопасным для сцены с
+ * любыми длительностями, включая фазы короче пятнадцати секунд. Половина —
+ * точка, где держание облика и переход равны: за ней фаза больше переходит, чем
+ * держит, и перестаёт быть фазой. Автору, которому нужен переход длиннее,
+ * достаточно написать его — там граница строже и проходит по слоту целиком.
+ */
+const DEFAULT_TRANSITION_SLOT_SHARE = 0.5;
+
+/**
  * Значения света одной фазы цикла — плоские и с закрытыми дырами: поле, которого
  * фаза не назвала, приходит из статической части секции, а если и там его нет —
  * из умолчаний (REND-32, те же правила дыр, что PRES-2). Теневых полей здесь нет
@@ -159,6 +173,11 @@ function resolvePhase(
  * отдаётся вовсе: валидация формата такой документ отвергает адресно (PRES-2), и
  * приспосабливаться к нему — значило бы заводить второе, необъявленное
  * прочтение данных. Действует тогда статическая часть секции.
+ *
+ * Написанную автором длительность перехода эта функция НЕ правит: слишком
+ * длинную отвергает валидация, и подгонять принятое число значило бы рисовать не
+ * то, что написано. Ограничивается только УМОЛЧАНИЕ — его валидация не видит
+ * (`DEFAULT_TRANSITION_SLOT_SHARE`).
  */
 export function resolveLightingCycle(
   section?: PresentationLighting,
@@ -169,7 +188,10 @@ export function resolveLightingCycle(
     return undefined;
   }
   const base = resolveLightingConfig(section);
-  const transition = cycle.transitionSeconds ?? DEFAULT_CYCLE_TRANSITION_SECONDS;
+  const shortest = Math.min(...cycle.phases.map((phase) => phase.seconds));
+  const transition =
+    cycle.transitionSeconds ??
+    Math.min(DEFAULT_CYCLE_TRANSITION_SECONDS, shortest * DEFAULT_TRANSITION_SLOT_SHARE);
   return {
     transitionSeconds: transition >= 0 && Number.isFinite(transition) ? transition : 0,
     phases: cycle.phases.map((phase) => resolvePhase(phase, base)),

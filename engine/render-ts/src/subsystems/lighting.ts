@@ -132,16 +132,6 @@ export interface LightingOptions {
   readonly config?: PresentationLighting;
 }
 
-/**
- * Откуда светит направленный источник — общее у статической части секции и у
- * кадра цикла (REND-32): наводится источник одним путём, чьи бы числа ни были.
- */
-interface LightDirection {
-  readonly directionX: number;
-  readonly directionY: number;
-  readonly directionZ: number;
-}
-
 /** Границы арены, по которым обтянуты теневые камеры. */
 interface ArenaExtent {
   readonly centerX: number;
@@ -314,7 +304,7 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     if (this.staticStale) {
       // Кадр перерисовки кэша: динамическая карта его пропускает и остаётся
       // кадром старше — «двигая декорацию, автор видит её тень» (ED-15).
-      this.applyPhase('static');
+      const reflagged = this.applyPhase('static');
       this.sun.shadow.needsUpdate = true;
       this.sunDynamic.shadow.needsUpdate = false;
       this.staticStale = false;
@@ -322,10 +312,15 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
       if (cost !== undefined) {
         cost.lightingStaticCasters += this.staticRoots.size;
         cost.lightingStaticRebuilds++;
+        // Кадр перехода переставил флаги и ярусу, чью карту не рисовал: работа
+        // по числу его корней реальная, и эталон её видит (PERF-3, см. `quality`).
+        if (reflagged && this.cycle.inTransition) {
+          cost.lightingDynamicCasters += this.dynamicRoots.size;
+        }
       }
       return;
     }
-    this.applyPhase('dynamic');
+    const reflagged = this.applyPhase('dynamic');
     this.sun.shadow.needsUpdate = false;
     // Пустой реестр динамики — проход не рисуется вовсе: перерисовывать пустую
     // карту каждый кадр значило бы платить бинд и очистку цели ни за что. Один
@@ -334,7 +329,12 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     const hasDynamic = this.dynamicRoots.size > 0;
     this.sunDynamic.shadow.needsUpdate = hasDynamic || !this.dynamicIdle;
     this.dynamicIdle = !hasDynamic;
-    if (cost !== undefined) cost.lightingDynamicCasters += this.dynamicRoots.size;
+    if (cost === undefined) return;
+    cost.lightingDynamicCasters += this.dynamicRoots.size;
+    // Та же добавка с другой стороны: кадр перехода обошёл и реестр статики.
+    // Событийная перестановка флагов (правка реестра, смена режима) сюда не
+    // попадает — она бывает раз на событие, а не каждым кадром.
+    if (reflagged && this.cycle.inTransition) cost.lightingStaticCasters += this.staticRoots.size;
   }
 
   // ------------------------------------------------------- реестр кастеров
@@ -391,12 +391,22 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
   }
 
   /**
-   * Ручки подсистемы (QUAL-1). Собственная покадровая работа цикла времени суток
-   * (REND-32) ручки не заводит и объявляется КОНСТАНТНОЙ (QUAL-3): установившаяся
-   * фаза не делает ничего, кадр перехода интерполирует фиксированный набор
-   * значений, и ни кастеров, ни инстансов цикл не обходит. Перерисовки кэша
-   * статики, которые переход с движущимся направлением порождает в `hybrid`,
-   * управляются уже объявленными ручками теней (design D5).
+   * Ручки подсистемы (QUAL-1). Новой ручки цикл времени суток (REND-32) не
+   * заводит, но и константной вся его покадровая работа не объявляется — это
+   * было бы неправдой (QUAL-3):
+   *
+   * - установившаяся фаза не делает ничего, а кадр перехода интерполирует
+   *   фиксированный набор значений — это работа постоянного размера;
+   * - НО в `hybrid` переход с движущимся направлением делит кадры между картами
+   *   ярусов (`applyCycleSample`), а смена яруса переставляет флаги ОБОИМ
+   *   реестрам кастеров (`applyPhase`) — и это уже работа по числу корней сцены,
+   *   на каждом кадре перехода. Она видна счётчиками обоих ярусов (PERF-3,
+   *   `countFlippedTier`), а не спрятана от эталона.
+   *
+   * Своей ручки эта работа не требует, потому что уже управляется объявленными:
+   * `lighting.shadowMode` снимает её вовсе (`none` — теней нет, `full` — карта
+   * одна и делить кадры не с чем), то есть потолок режима — тот самый рычаг, а
+   * длина перехода и направления фаз — данные сцены (design D3, D5).
    */
   quality(): QualityDeclaration {
     return {
@@ -456,8 +466,13 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
    * Состояние освещения в переиспользуемую запись отладки (RDBG-2). Позиции и
    * интенсивности берутся с ЖИВЫХ источников сцены — тех самых, которыми
    * нарисован кадр, а не вторым расчётом по конфигурации; тон берётся из
-   * действующей конфигурации, которой источники и покрашены: `getHexString()`
-   * аллоцировал бы строку каждым кадром (REND-26).
+   * действующей конфигурации: `getHexString()` аллоцировал бы строку каждым
+   * кадром (REND-26).
+   *
+   * На сцене без цикла (REND-32) это одно и то же — тоном конфигурации источники
+   * и покрашены. С циклом покраска идёт фазами, и тон кадра расходится с тоном
+   * конфигурации; дамп поэтому не выдаёт второй за первый, а называет рядом
+   * авторские тона идущей фазы и долю перехода (`LightingCycle.fillDebug`).
    */
   private fillDebugState(out: DebugLightingState): void {
     // Без `init` источники в сцену не отданы, и кадр они не освещают: показывать
@@ -584,8 +599,9 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     const share = this.current.shadowMode === 'hybrid' ? this.current.staticShare : 1;
     this.sun.intensity = sample.directionalIntensity * share;
     this.sunDynamic.intensity = sample.directionalIntensity * (1 - share);
-    this.aimDirection(this.sun, sample);
-    this.aimDirection(this.sunDynamic, sample);
+    const { directionX: dx, directionY: dy, directionZ: dz } = sample;
+    this.aimDirection(this.sun, dx, dy, dz);
+    this.aimDirection(this.sunDynamic, dx, dy, dz);
     // Карта глубины зависит от направления, а не от тона: кэш статики устаревает
     // ровно тогда, когда источник поехал, и стоимость этого видна счётчиками
     // (PERF-3), а не спрятана от них.
@@ -611,18 +627,20 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
   /**
    * Позиция и цель источника по направлению — то единственное, что переставляет
    * кадр перехода (design D2): работа фиксированного размера, без аллокаций.
+   * Числа приходят врозь, а не записью: наводится источник одним путём и от
+   * статической части секции, и от кадра цикла (REND-32), а общего им — ровно
+   * эта тройка.
    */
-  private aimDirection(light: THREE.DirectionalLight, direction: LightDirection): void {
-    const { directionX, directionY, directionZ } = direction;
-    const length = Math.hypot(directionX, directionY, directionZ);
+  private aimDirection(light: THREE.DirectionalLight, dx: number, dy: number, dz: number): void {
+    const length = Math.hypot(dx, dy, dz);
     // Нулевое направление — вырожденная секция: источник тогда светит сверху,
     // а не исчезает; отвергать её — дело валидации формата (PRES-2).
     const unit = length > 0 ? 1 / length : 0;
     const distance = this.extent.radius * 2;
     light.position.set(
-      this.extent.centerX + directionX * unit * distance,
-      this.extent.centerY + directionY * unit * distance,
-      length > 0 ? directionZ * unit * distance : distance,
+      this.extent.centerX + dx * unit * distance,
+      this.extent.centerY + dy * unit * distance,
+      length > 0 ? dz * unit * distance : distance,
     );
     light.target.position.set(this.extent.centerX, this.extent.centerY, 0);
     light.target.updateMatrixWorld();
@@ -636,7 +654,7 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
   ): void {
     light.color.set(config.directionalColor);
     light.intensity = intensity;
-    this.aimDirection(light, config);
+    this.aimDirection(light, config.directionX, config.directionY, config.directionZ);
 
     const distance = this.extent.radius * 2;
     const radius = this.extent.radius * (1 + FRUSTUM_MARGIN);
@@ -663,12 +681,15 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
   }
 
   /**
-   * Флаги кастеров под фазу кадра. Обход реестра идёт ТОЛЬКО при смене фазы или
-   * правке реестра: в `hybrid` фаза меняется на перерисовке кэша и обратно, то
-   * есть на событии, а не на кадре.
+   * Флаги кастеров под фазу кадра; `true` — реестры обойдены этим вызовом.
+   * Обход идёт ТОЛЬКО при смене фазы или правке реестра: в `hybrid` вне перехода
+   * фаза меняется на перерисовке кэша и обратно, то есть на событии, а не на
+   * кадре. На кадрах перехода цикла (REND-32) ярусы меняются местами каждым
+   * кадром — этот обход и есть та покадровая работа, которую объявляет `quality`
+   * и показывают счётчики (`countFlippedTier`).
    */
-  private applyPhase(next: ShadowPhase): void {
-    if (next === this.phase && !this.flagsStale) return;
+  private applyPhase(next: ShadowPhase): boolean {
+    if (next === this.phase && !this.flagsStale) return false;
     this.phase = next;
     this.flagsStale = false;
     const receive = next !== 'none';
@@ -676,6 +697,7 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     const dynamicCasts = next === 'dynamic' || next === 'full';
     for (const root of this.staticRoots) applyShadowFlags(root, staticCasts, receive);
     for (const root of this.dynamicRoots) applyShadowFlags(root, dynamicCasts, receive);
+    return true;
   }
 
   /** Флаги одного корня по ТЕКУЩЕЙ фазе — точечный путь `setCaster` без обхода реестра. */

@@ -63,10 +63,18 @@ export interface DebugLightingState {
   ambientLights: number;
   /** Направленных источников: 1 либо 2 — пара ярусов режима `hybrid` (REND-30). */
   directionalLights: number;
-  /** Тон и интенсивность рассеянного источника. */
+  /**
+   * Тон рассеянного источника из ДЕЙСТВУЮЩЕЙ конфигурации — статической части
+   * секции под потолками пресета. На кадре перехода цикла (REND-32) живые
+   * источники покрашены смесью двух фаз, и тон этого кадра тут не назван:
+   * авторские тона идущей фазы стоят рядом (`cyclePhase*Color`), а точный тон
+   * кадра пришлось бы снимать `getHexString()` с источника — то есть
+   * аллоцировать строку каждым кадром (REND-26).
+   */
   ambientColor: string;
+  /** Интенсивность рассеянного источника — с ЖИВОГО источника, то есть кадра. */
   ambientIntensity: number;
-  /** Тон направленного источника — общий у пары. */
+  /** Тон направленного источника из действующей конфигурации — общий у пары. */
   directionalColor: string;
   /** Интенсивность источника кэшированной карты статики (в `hybrid` — доля). */
   sunIntensity: number;
@@ -113,6 +121,13 @@ export interface DebugLightingState {
   cyclePhaseIndex: number;
   /** Авторское имя текущей фазы; пусто — имени автор не дал. */
   cyclePhaseName: string;
+  /**
+   * АВТОРСКИЕ тона текущей фазы, `#rrggbb`; пусто — цикла нет. Именно фазы, а не
+   * кадра: на переходе источники покрашены смесью этой фазы со следующей, и доля
+   * смеси названа отдельно (`cycleTransitionProgress`).
+   */
+  cyclePhaseAmbientColor: string;
+  cyclePhaseDirectionalColor: string;
   /** Слот текущей фазы, секунды: держание облика плюс хвостовой кроссфейд. */
   cyclePhaseSeconds: number;
   /** Доля прожитого слотом текущей фазы, [0, 1) — часовая величина (RDBG-7). */
@@ -168,6 +183,9 @@ export interface DebugLightingProbe extends DebugProbe {
   readonly cyclePhases: number;
   readonly cyclePhaseIndex: number;
   readonly cyclePhaseName: string;
+  /** Авторские тона идущей фазы; на переходе кадр покрашен смесью со следующей. */
+  readonly cyclePhaseAmbientColor: string;
+  readonly cyclePhaseDirectionalColor: string;
   readonly cyclePhaseSeconds: number;
   readonly cycleTransition: boolean;
   readonly cycleTransitionSeconds: number;
@@ -220,6 +238,8 @@ export function lightingSceneDebugSource(
     cyclePhases: 0,
     cyclePhaseIndex: -1,
     cyclePhaseName: '',
+    cyclePhaseAmbientColor: '',
+    cyclePhaseDirectionalColor: '',
     cyclePhaseSeconds: 0,
     cyclePhaseProgress: 0,
     cycleTransition: false,
@@ -242,7 +262,10 @@ export function lightingSceneDebugSource(
       'интенсивности безразмерны; staticShare — доля [0..1]; casterRoots — КОРНИ ' +
       'поддеревьев реестра, а не меши; staticRebuilds — перерисовки кэша, не тики; ' +
       'cyclePhaseSeconds и cycleTransitionSeconds — секунды кадровых часов, ' +
-      'cyclePhaseProgress и cycleTransitionProgress — доли [0..1) в секции clock',
+      'cyclePhaseProgress и cycleTransitionProgress — доли [0..1) в секции clock; ' +
+      'ambientColor и directionalColor — тон действующей КОНФИГУРАЦИИ, а ' +
+      'cyclePhaseAmbientColor и cyclePhaseDirectionalColor — авторский тон идущей ' +
+      'ФАЗЫ: на переходе источники покрашены смесью её и следующей фазы',
     authoredSection: false,
     lightCount: 0,
     ambientLights: 0,
@@ -277,6 +300,8 @@ export function lightingSceneDebugSource(
     cyclePhases: 0,
     cyclePhaseIndex: -1,
     cyclePhaseName: '',
+    cyclePhaseAmbientColor: '',
+    cyclePhaseDirectionalColor: '',
     cyclePhaseSeconds: 0,
     cycleTransition: false,
     cycleTransitionSeconds: 0,
@@ -336,6 +361,8 @@ export function lightingSceneDebugSource(
       probe.cyclePhases = state.cyclePhases;
       probe.cyclePhaseIndex = state.cyclePhaseIndex;
       probe.cyclePhaseName = state.cyclePhaseName;
+      probe.cyclePhaseAmbientColor = state.cyclePhaseAmbientColor;
+      probe.cyclePhaseDirectionalColor = state.cyclePhaseDirectionalColor;
       probe.cyclePhaseSeconds = state.cyclePhaseSeconds;
       probe.cycleTransition = state.cycleTransition;
       probe.cycleTransitionSeconds = state.cycleTransitionSeconds;

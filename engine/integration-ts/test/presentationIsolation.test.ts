@@ -208,11 +208,25 @@ describe('PRES-4/REND-32: цикл времени суток симуляции 
     const scene = duelScene();
     const before = { init: runScenario(scenario(scene)).worldInitHash, pack: contentPackHash(scene) };
 
+    // Документ с циклом — тот же документ формата: он проходит валидацию и
+    // доезжает до подсистемы разбором, а не подставлен ей мимо загрузчика.
+    const parsed = validatePresentationScene({ decorations: [], lighting: CYCLED });
+    expect(parsed.ok ? '' : parsed.errors.join('; ')).toBe('');
+    const authored = parsed.ok ? parsed.scene.lighting : undefined;
+    expect(authored?.cycle?.phases).toHaveLength(2);
+    if (authored === undefined) return;
     const still = runBeside(STILL);
-    const cycled = runBeside(CYCLED);
+    const cycled = runBeside(authored);
 
-    // Цикл действительно шёл: свет за круг менял и тон, и интенсивность.
-    expect(new Set(cycled.light).size).toBeGreaterThan(1);
+    // Цикл действительно шёл, и прошёл ВЕСЬ круг: установившееся утро, кадр
+    // кроссфейда и установившаяся ночь — три РАЗНЫХ облика арены, а последний
+    // кадр круга снова равен первому: возврат к первой фазе без скачка.
+    expect(cycled.light).toHaveLength(40);
+    const morning = cycled.light[0];
+    const fading = cycled.light[18];
+    const night = cycled.light[24];
+    expect(new Set([morning, fading, night]).size).toBe(3);
+    expect(cycled.light[39]).toBe(morning);
     // Сцена без подсекции стоит на месте — «никакой новой покадровой работы».
     expect(new Set(still.light).size).toBe(1);
     // А симуляция обоих прогонов побитово одна: сравниваются БАЙТЫ документа
@@ -220,27 +234,6 @@ describe('PRES-4/REND-32: цикл времени суток симуляции 
     expect(Buffer.from(cycled.bytes).equals(Buffer.from(still.bytes))).toBe(true);
     expect(runScenario(scenario(scene)).worldInitHash).toBe(before.init);
     expect(contentPackHash(scene)).toBe(before.pack);
-  });
-
-  it('любая точка круга даёт тот же прогон: входа в симуляцию у цикла нет', () => {
-    const scene = duelScene();
-    const bare = runScenarioBytes(scenario(scene));
-    const parsed = validatePresentationScene({ decorations: [], lighting: CYCLED });
-    expect(parsed.ok ? '' : parsed.errors.join('; ')).toBe('');
-    if (!parsed.ok) return;
-
-    const lighting = new LightingSubsystem({ config: parsed.scene.lighting });
-    lighting.init({
-      scene: new THREE.Scene(),
-      assets: {} as unknown as RenderContext['assets'],
-      config: { heightStep: 0.5 },
-    });
-    // Установившаяся фаза, кадр перехода, следующая фаза — прогон снимается в
-    // каждой из этих точек круга.
-    for (const seconds of [4, 5, 6]) {
-      lighting.updateFrame(1 / 60, 0, seconds);
-      expect(Buffer.from(runScenarioBytes(scenario(scene))).equals(Buffer.from(bare))).toBe(true);
-    }
   });
 });
 
