@@ -165,9 +165,8 @@ export class FogMinimapSurface {
       return;
     }
     // Окно рассеивания (design D5): альфа переписывается только в грязных
-    // блоках, а в канвас уезжает их общий прямоугольник. Ряды перевёрнуты (см.
+    // блоках, а в канвас уезжает их ОБЩИЙ прямоугольник. Ряды перевёрнуты (см.
     // ниже), поэтому нижняя граница блоков даёт ВЕРХНЮЮ границу прямоугольника.
-    let texels = 0;
     let xMin = mask.width;
     let xMax = -1;
     let yMin = mask.height;
@@ -180,15 +179,22 @@ export class FogMinimapSurface {
         const x0 = column * FOG_DIRTY_BLOCK;
         const x1 = Math.min(x0 + FOG_DIRTY_BLOCK, mask.width) - 1;
         this.alphaRows(image.data, mask, shown, y0, y1, x0, x1);
-        texels += (y1 - y0 + 1) * (x1 - x0 + 1);
         if (x0 < xMin) xMin = x0;
         if (x1 > xMax) xMax = x1;
         if (y0 < yMin) yMin = y0;
         if (y1 > yMax) yMax = y1;
       }
     }
-    if (cost !== undefined) cost.fogMinimapTexels += texels;
     if (yMax < 0) return;
+    // Считается ПРЯМОУГОЛЬНИК, а не сумма блоков: копию в канвас делает
+    // `putImageData`, и платит она за весь прямоугольник целиком — кольцо
+    // рассеивания вокруг наблюдателя занимает лишь часть своего bbox, и сумма
+    // блоков занижала бы работу главного потока тем сильнее, чем тоньше маска
+    // (PERF-3). Перезапись альфы идёт по блокам внутри него, то есть дешевле, —
+    // но счётчик обязан называть большее из двух, а не меньшее.
+    if (cost !== undefined) {
+      cost.fogMinimapTexels += (xMax - xMin + 1) * (yMax - yMin + 1);
+    }
     context.putImageData(
       image,
       0,

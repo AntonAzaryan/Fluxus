@@ -907,6 +907,42 @@ describe('бюджетная перестройка маски и коалеси
     expect(highX).toBe(64 - lowWidth);
   });
 
+  it('блит считается прямоугольником, а не суммой блоков окна (PERF-3)', () => {
+    // Арена 16×16 при разрешении 4 — маска 64×64 текселя, 4×4 блока по 16.
+    const fog = new FogSubsystem({
+      grid: flatGrid(16),
+      stats: STATS,
+      hero: () => 1,
+      createCanvas: fogCanvasFactory(),
+    });
+    fog.init(makeRenderContext());
+    // Двое наблюдателей: герой в углу (2, 2) и союзник в дальнем углу (14, 14).
+    fog.syncTick(
+      makeTickView([observerView(1, 2, 2, 0, 1.5), observerView(3, 14, 14, 0, 1.5)]),
+    );
+    buildFogMask(fog);
+    fog.updateFrame(10, 0); // рассеивание доиграно, окно пусто
+
+    // Союзник переезжает в (14, 2): гаснет верхний блок столбца и зажигается
+    // нижний, а между ними — устоявшаяся полоса, которая в окно не входит.
+    fog.syncTick(
+      makeTickView([observerView(1, 2, 2, 0, 1.5), observerView(3, 14, 2, 0, 1.5)]),
+    );
+    buildFogMask(fog);
+
+    const frame = createCostCounters();
+    withCostSink(frame, () => {
+      fog.updateFrame(1 / 60, 0);
+    });
+    // Проход схождения идёт по грязным блокам — их два, по 16×16 текселей…
+    expect(frame.fogDissolveTexels).toBe(2 * 16 * 16);
+    // …а в канвас уезжает их ОБЩИЙ прямоугольник: столбец блоков во всю высоту
+    // маски. Считать сумму блоков значило бы занижать работу главного потока
+    // ровно там, где окно разрежено (кольцо рассеивания вокруг наблюдателя).
+    expect(frame.fogMinimapTexels).toBe(16 * 64);
+    expect(frame.fogMinimapTexels).toBeGreaterThan(frame.fogDissolveTexels);
+  });
+
   it('смена тона перекрашивает слой миникарты событием правки (FOW-10, HUD-6)', () => {
     const { fog, canvases } = cachedSubsystem();
     fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
