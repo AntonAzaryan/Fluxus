@@ -400,8 +400,10 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
    * - НО в `hybrid` переход с движущимся направлением делит кадры между картами
    *   ярусов (`applyCycleSample`), а смена яруса переставляет флаги ОБОИМ
    *   реестрам кастеров (`applyPhase`) — и это уже работа по числу корней сцены,
-   *   на каждом кадре перехода. Она видна счётчиками обоих ярусов (PERF-3,
-   *   `countFlippedTier`), а не спрятана от эталона.
+   *   на каждом кадре перехода. Она видна счётчиками обоих ярусов —
+   *   `lightingStaticCasters` и `lightingDynamicCasters` растут в `updateFrame`
+   *   под условием `reflagged && this.cycle.inTransition`, — а не спрятана от
+   *   эталона (PERF-3).
    *
    * Своей ручки эта работа не требует, потому что уже управляется объявленными:
    * `lighting.shadowMode` снимает её вовсе (`none` — теней нет, `full` — карта
@@ -686,7 +688,8 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
    * фаза меняется на перерисовке кэша и обратно, то есть на событии, а не на
    * кадре. На кадрах перехода цикла (REND-32) ярусы меняются местами каждым
    * кадром — этот обход и есть та покадровая работа, которую объявляет `quality`
-   * и показывают счётчики (`countFlippedTier`).
+   * и показывают счётчики `lightingStaticCasters`/`lightingDynamicCasters`
+   * (`updateFrame`, ветви `hybrid`).
    */
   private applyPhase(next: ShadowPhase): boolean {
     if (next === this.phase && !this.flagsStale) return false;
