@@ -28,9 +28,14 @@ export function createStateReader(
   stateComponents: readonly string[],
   onUnmirrored: (name: string) => void,
 ): (view: EntityView, name: string) => boolean {
+  // Словарь «имя → бит» строится один раз на сборку: читатель зовётся на
+  // каждый источник каждой сущности каждой доставки (30 Гц), и линейный поиск
+  // по списку был бы работой по числу состояний сборки на каждый такой вызов.
+  const bits = new Map<string, number>();
+  stateComponents.forEach((name, bit) => bits.set(name, bit));
   return (view: EntityView, name: string): boolean => {
-    const bit = stateComponents.indexOf(name);
-    if (bit < 0) {
+    const bit = bits.get(name);
+    if (bit === undefined) {
       onUnmirrored(name);
       return false;
     }

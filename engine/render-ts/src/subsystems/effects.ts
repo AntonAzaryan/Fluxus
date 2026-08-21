@@ -181,6 +181,8 @@ export class EffectsSubsystem implements RenderSubsystem {
 
   /** Последнее доставленное состояние: по нему считается поза кадра (REND-2). */
   private view: TickView | null = null;
+  /** Кэш имён таблицы состояний манифеста; null — пересобрать (REND-17). */
+  private stateNames: readonly string[] | null = null;
 
   constructor(manifest: VisualManifest, options: EffectsOptions = {}) {
     this.manifest = manifest;
@@ -278,6 +280,7 @@ export class EffectsSubsystem implements RenderSubsystem {
   applyManifest(next: VisualManifest): void {
     if (next === this.manifest) return;
     this.manifest = next;
+    this.stateNames = null;
     // Сведение оболочек с новым документом — обычным проходом по последнему
     // доставленному состоянию: правило «какие оболочки существуют» одно, и
     // второй его копии для переподачи не заводится (REND-17).
@@ -321,8 +324,11 @@ export class EffectsSubsystem implements RenderSubsystem {
     const live = this.liveShells;
     live.clear();
     const states = this.manifest.effects?.byState;
-    // Имена таблицы состояний снимаются один раз на тик, а не на сущность.
-    const stateNames = states === undefined ? NO_STATE_NAMES : Object.keys(states);
+    // Имена таблицы состояний снимаются один раз на МАНИФЕСТ, а не на доставку:
+    // список меняется только переподачей (REND-17), и массив имён на каждую
+    // доставку был бы мусором на ровном месте.
+    const stateNames = (this.stateNames ??=
+      states === undefined ? NO_STATE_NAMES : Object.keys(states));
     for (const entityView of view.entities.values()) {
       // Оболочка визуального типа: живёт, пока жива сущность такого типа.
       if (entityView.kind !== null) {

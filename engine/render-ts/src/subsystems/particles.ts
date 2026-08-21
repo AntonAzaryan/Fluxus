@@ -190,6 +190,8 @@ export class ParticlesSubsystem implements RenderSubsystem {
 
   /** Последнее доставленное состояние: по нему считается поза кадра (REND-2). */
   private view: TickView | null = null;
+  /** Кэш имён таблицы состояний манифеста; null — пересобрать (REND-17). */
+  private stateNames: readonly string[] | null = null;
   /** Последний набор декораций: по нему пересводятся оболочки (REND-17). */
   private decorations: ReadonlyMap<EntityId, EntityView> | null = null;
   /** Множитель плотности от пресета качества (QUAL-1); 1 — эмиссия документа. */
@@ -305,6 +307,7 @@ export class ParticlesSubsystem implements RenderSubsystem {
   applyManifest(next: VisualManifest): void {
     if (next === this.manifest) return;
     this.manifest = next;
+    this.stateNames = null;
     // Кэш сокетов сбрасывается ЗАРАНЕЕ: правленая запись меняет ярус и модель
     // инстанса (REND-20, REND-3), а с ними и дерево узлов, — держаться за узел,
     // найденный в прежнем дереве, после переподачи нельзя (REND-17).
@@ -336,9 +339,7 @@ export class ParticlesSubsystem implements RenderSubsystem {
       EFFECT_ASSET_KIND,
       effectIdsOf(this.manifest),
       (id) => this.document(id) !== null,
-      (id) => {
-        this.warmEffect(id);
-      },
+      (id) => { this.warmEffect(id); },
     );
   }
 
@@ -446,16 +447,17 @@ export class ParticlesSubsystem implements RenderSubsystem {
     const live = this.liveShells;
     live.clear();
     const states = this.manifest.particles?.byState;
-    // Имена таблицы состояний снимаются один раз на тик, а не на сущность.
-    // Пустой словарь сборки — ЛЕГАЛЬНАЯ сборка без доставленных состояний
-    // (вьюпорт редактора: тика в кадре правки нет, ED-15), а не забытая
-    // прокидка: оболочек состояния в ней не бывает по построению, и таблица
-    // пропускается целиком — молча. Предупреждает `hasState` о другом: о списке,
-    // который есть, но названного состояния не несёт.
-    const stateNames =
+    // Имена таблицы состояний снимаются один раз на МАНИФЕСТ (кэш до
+    // переподачи, REND-17), а не на доставку. Пустой словарь сборки —
+    // ЛЕГАЛЬНАЯ сборка без доставленных состояний (вьюпорт редактора: тика в
+    // кадре правки нет, ED-15), а не забытая прокидка: оболочек состояния в
+    // ней не бывает по построению, и таблица пропускается целиком — молча.
+    // Предупреждает `hasState` о другом: о списке, который есть, но
+    // названного состояния не несёт.
+    const stateNames = (this.stateNames ??=
       states === undefined || this.stateComponents.length === 0
         ? NO_STATE_NAMES
-        : Object.keys(states);
+        : Object.keys(states));
     for (const entityView of view.entities.values()) {
       if (entityView.kind !== null) {
         const record = resolveParticlesByKind(this.manifest, entityView.kind);
