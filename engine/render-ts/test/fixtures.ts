@@ -11,7 +11,13 @@ import type {
   NormalizedModel,
   NormalizedSequence,
 } from '@game-mvp/assets';
-import type { EntityView, FogLayerCanvas, RenderContext, TickView } from '../src/index.js';
+import type {
+  EntityView,
+  FogLayerCanvas,
+  FogSubsystem,
+  RenderContext,
+  TickView,
+} from '../src/index.js';
 
 // ------------------------------------------------------------------- модель
 
@@ -246,6 +252,27 @@ export function fakeCanvas(): FogLayerCanvas & { puts: number } {
     }),
   };
   return canvas;
+}
+
+/**
+ * Кадров, за которые перестройка маски обязана опубликоваться. Бюджет по
+ * умолчанию укладывает её в три (design D1 change `fog-mask-budgeted-rebuild`);
+ * запас взят на вырост, а не на «сколько-нибудь».
+ */
+const FOG_BUILD_FRAMES = 64;
+
+/**
+ * Кадры до публикации маски: доставка растра не строит, его строят порции в
+ * `updateFrame` (design D1). `dt` по умолчанию нулевой — рассеивание тогда
+ * стоит, и тест видит ровно перестройку. Возвращает число потраченных кадров.
+ */
+export function buildFogMask(fog: FogSubsystem, dt = 0): number {
+  const before = fog.rebuilds;
+  for (let frame = 1; frame <= FOG_BUILD_FRAMES; frame++) {
+    fog.updateFrame(dt, 0);
+    if (fog.rebuilds > before) return frame;
+  }
+  throw new Error(`маска не опубликована за ${FOG_BUILD_FRAMES} кадров`);
 }
 
 /** Фабрика канваса слоя миникарты для опций подсистемы (design D6). */

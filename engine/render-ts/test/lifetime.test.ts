@@ -34,6 +34,7 @@ import {
   type TickView,
 } from '../src/index.js';
 import {
+  buildFogMask,
   fogCanvasFactory,
   flatGrid,
   makeAssets,
@@ -147,6 +148,9 @@ describe('подсистемы отдают свои ресурсы GPU (REND-31
       setRenderTarget: () => {},
       getDrawingBufferSize: (target: THREE.Vector2) => target.set(32, 24),
     };
+    // Растр строит кадр порциями (change `fog-mask-budgeted-rebuild`, design
+    // D1): до публикации подсистема рисует прямым проходом и цели не заводит.
+    buildFogMask(subsystem);
     subsystem.render(renderer, new THREE.PerspectiveCamera());
 
     const pass = subsystem.postPass;

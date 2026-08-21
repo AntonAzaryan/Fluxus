@@ -4,16 +4,22 @@
  *
  * ## Что она делает
  *
- * - На доставке (`syncTick`) перестраивает маску видимости (design D1):
+ * - На доставке (`syncTick`) собирает СИГНАТУРУ входов маски (design D4):
  *   наблюдатели СВОЕЙ команды берутся из доставленного состояния по именам
  *   статов (design D4, HUD-8) — радиус обзора и команда; команду игрока задаёт
  *   стат его героя. Видимые враги несут те же статы, и их круги в маску не
- *   попадают: фильтр по команде обязателен. Перестройка — только при изменении
- *   сигнатуры входов (design D4 change `fow-directional-cliff-vision`):
- *   наблюдатели (позиция, радиус, уровень) в порядке доставки плюс значения
- *   конфига; совпала — ни растра, ни загрузки текстуры, ни блита миникарты.
- *   Уровень наблюдателя — доставленный `EntityView.currLevel` (TERR-4):
- *   тени маски направленные (FOW-9, PHYS-13).
+ *   попадают: фильтр по команде обязателен. Растра доставка не трогает вовсе
+ *   (change `fog-mask-budgeted-rebuild`, design D3): новый вход кладётся
+ *   отложенным, а перестройка идёт порциями в кадре. Совпала сигнатура — не
+ *   происходит вообще ничего. Уровень наблюдателя — доставленный
+ *   `EntityView.currLevel` (TERR-4): тени маски направленные (FOW-9, PHYS-13).
+ * - Кадр (`updateFrame`) достраивает маску под ТЕКСЕЛЬНЫЙ БЮДЖЕТ и ведёт
+ *   рассеивание по грязным блокам (design D1, D5). Перестройка в полёте никогда
+ *   не перезапускается доставкой: она достраивается, публикуется атомарным
+ *   свопом растров и только потом берёт последний отложенный вход — конфляция
+ *   «важен только последний», как в канале (SHELL-4). Разрыв истории
+ *   (`snapAll`, REND-2) — исключение: маска строится синхронно прямо в
+ *   доставке, без порций и без рассеивания.
  * - Кадр рисует пост-проходом (design D2): сцена уходит в render target, затем
  *   полноэкранный шейдер по глубине и обратной view-projection восстанавливает
  *   мировые XY фрагмента, сэмплирует маску и затемняет силой/цветом из
@@ -54,6 +60,12 @@ import { fogMaskDebugSource } from '../debug/fogSource.js';
 import { resolveFogConfig, type FogRenderConfig } from '../fog/config.js';
 import { POST_FRAGMENT, POST_VERTEX } from '../fog/postPass.js';
 import { FogMinimapSurface, type FogLayerCanvas, type FogMinimapLayer } from '../fog/layer.js';
+import { FogDirtyBlocks, dissolveWindow } from '../fog/dirty.js';
+import {
+  MaskRebuild,
+  REBUILD_BUDGET_MASK_AREAS,
+  SIGNATURE_PREFIX,
+} from '../fog/rebuild.js';
 import {
   VisibilityMask,
   fogRectOf,
@@ -109,20 +121,18 @@ export interface FogSubsystemOptions {
    * трогает. Без фабрики слоя миникарты нет; маска и пост-проход работают.
    */
   readonly createCanvas?: (width: number, height: number) => FogLayerCanvas;
-}
-
-/**
- * Слоты конфига в голове сигнатуры входов (design D4): ширина градиента и тон
- * тумана; дальше — по четыре числа на наблюдателя в порядке доставки.
- */
-const SIGNATURE_PREFIX = 2;
-
-/** Совпадение занятых префиксов двух сигнатур — сравнение чисел, не JSON (D4). */
-function samePrefix(a: Float64Array, b: Float64Array, length: number): boolean {
-  for (let i = 0; i < length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
+  /**
+   * Бюджет порционной перестройки маски — тексель-операций на кадр (design D1,
+   * PERF-3). Не задан — от площади маски (`REBUILD_BUDGET_MASK_AREAS`): полная
+   * перестройка укладывается в ≤3 кадра. `Infinity` — перестройка целиком в
+   * первом же кадре после доставки: так меряют РАБОТУ перестройки стенды, чей
+   * каденс кадров не равен игровому (`integration-ts`), и так же она идёт при
+   * снапе.
+   *
+   * Единицы машинно-независимые (тексели, а не миллисекунды): счётчики
+   * стоимости остаются воспроизводимыми побитово (PERF-3).
+   */
+  readonly rebuildBudget?: number;
 }
 
 export class FogSubsystem implements RenderSubsystem {
@@ -158,24 +168,26 @@ export class FogSubsystem implements RenderSubsystem {
   private settling = false;
   /** Маска построена хотя бы раз: до этого конвейер прежний (прямой рендер). */
   private built = false;
-
-  // ------------------------------------------- сигнатура входов (design D4)
   /**
-   * Сигнатура входов последней перестройки: значения конфига, влияющие на
-   * растр и блит, затем наблюдатели в порядке доставки — по четыре числа
-   * (x, y, эффективный радиус, уровень). Числа в переиспользуемом массиве,
-   * а не JSON: сравнение — дешёвый проход по префиксу длиной `signatureLength`.
+   * Грязное окно рассеивания (design D5): блоки растра, в которых показанная
+   * маска ещё не сошлась с целевой. Устоявшаяся сцена держит его пустым и не
+   * платит за туман в кадре ничего.
    */
-  private signature: Float64Array = new Float64Array(SIGNATURE_PREFIX + 4 * 8);
-  /** Буфер сборки сигнатуры текущей доставки; при перестройке копируется в `signature`. */
+  private dirty: FogDirtyBlocks;
+
+  /**
+   * Перестройка маски (change `fog-mask-budgeted-rebuild`, design D1–D3): три
+   * сигнатуры входов, фазовая машина порций и бюджет. Подсистема отдаёт ей
+   * доставленные входы и кадры, а публикацию узнаёт возвратом `advance`.
+   */
+  private readonly rebuild: MaskRebuild;
+  /** Буфер сборки сигнатуры текущей доставки — вход конфляции (design D3). */
   private candidate: Float64Array = new Float64Array(SIGNATURE_PREFIX + 4 * 8);
-  /** Длина занятого префикса; −1 — сигнатуры нет, ближайшая доставка строит. */
-  private signatureLength = -1;
-  /** Счётчик перестроек — дешёвый пробник для тестов кэша (design D4). */
-  private rebuildCount = 0;
+  /** Бюджет из опций сборки; не задан — считается от площади маски. */
+  private readonly authoredBudget: number | undefined;
   /** Тон тумана числом — слот сигнатуры: блит миникарты вбивает его в канвас. */
   private colorHex: number;
-  /** Буфер наблюдателя для `reveal`: перестройка не аллоцирует по объекту. */
+  /** Буфер наблюдателя синхронного снапа: он тоже не аллоцирует по объекту. */
   private readonly observerScratch = { x: 0, y: 0, radius: 0, level: 0 };
 
   // ------------------------------------------------------------ пост-проход
@@ -205,6 +217,9 @@ export class FogSubsystem implements RenderSubsystem {
     this.segments = fogSegmentsOf(this.grid);
     this.mask = new VisibilityMask(this.rect, this.current.resolution);
     this.shown = new Uint8Array(this.mask.data.length);
+    this.dirty = new FogDirtyBlocks(this.mask.width, this.mask.height);
+    this.authoredBudget = options.rebuildBudget;
+    this.rebuild = new MaskRebuild(this.budgetFor(this.mask));
     this.maskTexture = createMaskTexture(this.mask, this.shown);
     // Фабрику канваса приносит сборка (в браузере — `document.createElement`):
     // пакет рендера DOM не трогает, и слой миникарты без фабрики просто не
@@ -283,20 +298,29 @@ export class FogSubsystem implements RenderSubsystem {
     // принесла сборка и отпускает его она же.
     this.minimap.reset();
     this.built = false;
+    // Перестройка в полёте и её отложенный вход уходят вместе с подсистемой:
+    // кадров у неё больше не будет, а достраивать нечего и некуда.
+    this.rebuild.abort();
+    this.dirty.clear();
+    this.settling = false;
   }
 
   /**
-   * Перестройка маски на каденсе доставки (design D1): наблюдатели своей
-   * команды из доставленного состояния по именам статов. Пока команда игрока
-   * не доставлена (нет героя или его статов), прежняя маска остаётся как есть —
-   * консервативнее мигания «всё открыто/всё закрыто».
+   * Приём доставки (design D3, D4): наблюдатели своей команды из доставленного
+   * состояния по именам статов складываются в сигнатуру входов. Пока команда
+   * игрока не доставлена (нет героя или его статов), прежняя маска остаётся как
+   * есть — консервативнее мигания «всё открыто/всё закрыто».
    *
-   * Перестройка — только при изменении входов (design D4): сигнатура доставки
-   * собирается в числа кандидата и сравнивается с сигнатурой последней
-   * перестройки. Совпала — маска, текстура и слой миникарты не трогаются:
-   * стоя на месте, кадр не платит за туман ничего. Отрезки в сигнатуру не
-   * входят: их набор фиксируется конструктором и не меняется за жизнь
-   * подсистемы, а смена разрешения инвалидирует сигнатуру явно (`applyConfig`).
+   * Растра доставка не трогает: новый вход становится ОТЛОЖЕННЫМ, а строит его
+   * кадр порциями. Сигнатура сравнивается с последним ИЗВЕСТНЫМ желаемым входом
+   * — отложенным, затем полётным, затем опубликованным: совпала — не происходит
+   * ничего вовсе, стоя на месте кадр за туман не платит (design D4). Отрезки в
+   * сигнатуру не входят: их набор фиксируется конструктором и не меняется за
+   * жизнь подсистемы, а смена разрешения инвалидирует сигнатуру явно
+   * (`applyConfig`).
+   *
+   * Разрыв истории (`snapAll`, REND-2) — синхронный снап прямо здесь: перемотку
+   * и смену режима размазывать по кадрам нечем.
    */
   syncTick(view: TickView): void {
     const hero = this.heroOf();
@@ -311,9 +335,24 @@ export class FogSubsystem implements RenderSubsystem {
     const cost = costSink();
     if (cost !== undefined) cost.fogEntitiesScanned += view.entities.size;
 
-    // Значения конфига, влияющие на растр и блит: ширина градиента, тон
-    // (вбит в канвас миникарты) и консервативность — последняя через
-    // эффективные радиусы наблюдателей ниже.
+    const length = this.collect(view, team);
+    if (view.snapAll) {
+      this.snap(length, cost);
+      return;
+    }
+    // Совпал с последним известным желаемым входом — доставке делать нечего;
+    // иначе она становится последним отложенным (конфляция, design D3).
+    if (this.rebuild.matches(this.candidate, length)) return;
+    this.rebuild.defer(this.candidate, length);
+  }
+
+  /**
+   * Сигнатура входов текущей доставки в буфер кандидата; возвращает её длину.
+   * Значения конфига, влияющие на растр и блит: ширина градиента, тон (вбит в
+   * канвас миникарты) и консервативность — последняя через эффективные радиусы
+   * наблюдателей.
+   */
+  private collect(view: TickView, team: number): number {
     let candidate = this.candidate;
     candidate[0] = this.current.edgeWidth;
     candidate[1] = this.colorHex;
@@ -336,55 +375,53 @@ export class FogSubsystem implements RenderSubsystem {
       candidate[length + 3] = entity.currLevel;
       length += 4;
     }
-    if (length === this.signatureLength && samePrefix(this.signature, candidate, length)) {
-      return; // входы прежние: ни растра, ни загрузки текстуры, ни блита (D4)
-    }
-    // Копия, а не обмен буферами: одно хранимое состояние вместо двух массивов
-    // с расходящимися ёмкостями; копия десятков чисел не дороже только что
-    // выполненного сравнения тех же данных.
-    if (this.signature.length < length) this.signature = new Float64Array(candidate.length);
-    this.signature.set(candidate.subarray(0, length));
-    this.signatureLength = length;
-    this.rebuildCount++;
+    return length;
+  }
 
+  /**
+   * Синхронный снап маски (REND-2, design D3): перестройка целиком на ПЕРЕДНЕМ
+   * растре и публикация в той же доставке. Начатая порционная перестройка
+   * бросается — её вход устарел вместе с историей, и достраивать её значило бы
+   * показать после телепорта маску прежнего мира.
+   */
+  private snap(length: number, cost: RenderCostCounters | undefined): void {
     this.mask.clear();
     const observer = this.observerScratch;
     for (let at = SIGNATURE_PREFIX; at < length; at += 4) {
-      observer.x = candidate[at]!;
-      observer.y = candidate[at + 1]!;
-      observer.radius = candidate[at + 2]!;
-      observer.level = candidate[at + 3]!;
-      this.mask.reveal(observer, this.current.edgeWidth, this.segments);
+      observer.x = this.candidate[at]!;
+      observer.y = this.candidate[at + 1]!;
+      observer.radius = this.candidate[at + 2]!;
+      observer.level = this.candidate[at + 3]!;
+      this.mask.reveal(observer, this.candidate[0]!, this.segments);
     }
     // Полутон кромки — один блюр после всех reveal (FOW-7): полярный срез
     // жёсткий и на фронте, и на сторонах конуса, полутон делает smooth().
     this.mask.smooth();
-    // Рассеивание не мгновенное (FOW-7): показанная маска догоняет целевую в
-    // updateFrame. Разрыв непрерывности мира (REND-2) и нулевое время — снап:
-    // плавность — про ход мира, а не про телепорт или выключенное рассеивание.
-    const snap = view.snapAll || this.current.dissolveSeconds <= 0;
-    if (snap) {
-      this.shown.set(this.mask.data);
-      this.settling = false;
-    } else {
-      this.settling = true;
-    }
-    // Текстура и слой миникарты отражают ПОКАЗАННУЮ маску — а её эта доставка
-    // изменила только при снапе: при рассеивании показанную ведёт updateFrame,
-    // он же поднимает флаг версии и повторяет блит, и загрузка или блит
-    // неизменных байтов здесь были бы платой ни за что (PERF-3). Исключение —
-    // первая перестройка: слой миникарты обязан существовать с неё (design D6).
-    if (snap || !this.built) {
-      this.maskTexture.needsUpdate = true;
-      // Байт на тексель (RedFormat, UnsignedByteType): весь растр уезжает в
-      // текстуру — цена разрешения маски, а не наблюдателей. Точка счёта ОДНА
-      // на загрузку и живёт здесь, у поднятого флага версии: создание текстуры
-      // (`createMaskTexture`) своего трафика не имеет — три сливает его флаг с
-      // этим в одну загрузку.
-      if (cost !== undefined) cost.fogMaskUploadBytes += this.mask.data.length;
-      this.blitLayer(cost);
-    }
+    this.rebuild.publishSync(this.candidate, length);
+    // Снап — без рассеивания: показанная маска становится целевой сразу.
+    this.shown.set(this.mask.data);
+    this.settling = false;
+    this.dirty.clear();
+    this.publishTexture(cost, null);
     this.built = true;
+  }
+
+  /**
+   * Загрузка растра в текстуру и блит слоя миникарты. Байт на тексель
+   * (RedFormat, UnsignedByteType): весь растр уезжает в текстуру — цена
+   * разрешения маски, а не наблюдателей. Точка счёта ОДНА на загрузку и живёт
+   * здесь, у поднятого флага версии: создание текстуры (`createMaskTexture`)
+   * своего трафика не имеет — три сливает его флаг с этим в одну загрузку.
+   *
+   * Частичной загрузки нет намеренно (Non-Goals change
+   * `fog-mask-budgeted-rebuild`): грязное окно правит блит миникарты и проход
+   * рассеивания, а растр уезжает целиком — `copyTextureToTexture` потребовал бы
+   * расширения `FogRendererLike` и всех тестовых дублей.
+   */
+  private publishTexture(cost: RenderCostCounters | undefined, region: FogDirtyBlocks | null): void {
+    this.maskTexture.needsUpdate = true;
+    if (cost !== undefined) cost.fogMaskUploadBytes += this.mask.data.length;
+    this.minimap.blit(this.mask, this.shown, this.colorHex, cost, region);
   }
 
   /**
@@ -401,11 +438,21 @@ export class FogSubsystem implements RenderSubsystem {
   }
 
   /**
-   * Число перестроек маски с создания подсистемы — пробник кэша сигнатуры
-   * (design D4) для тестов; картинка от него не зависит.
+   * Число ОПУБЛИКОВАННЫХ перестроек маски с создания подсистемы — пробник кэша
+   * сигнатуры (design D4) и коалесинга (design D3) для тестов; картинка от него
+   * не зависит. Начатая, но не закоммиченная перестройка сюда не входит: её
+   * растра ещё никто не видел.
    */
   get rebuilds(): number {
-    return this.rebuildCount;
+    return this.rebuild.rebuilds;
+  }
+
+  /**
+   * Идёт ли перестройка маски прямо сейчас — пробник фазовой машины (design
+   * D1) для тестов и диагностики.
+   */
+  get rebuilding(): boolean {
+    return this.rebuild.running;
   }
 
   /** Рост кандидата сигнатуры: редкость (наблюдателей прибыло), не горячий путь. */
@@ -417,50 +464,75 @@ export class FogSubsystem implements RenderSubsystem {
   }
 
   /**
-   * Сходимость показанной маски к целевой (FOW-7): линейный шаг по времени
-   * рассеивания, открытие и закрытие зоны симметричны. `dt` — со знаком хода
-   * мира (REND-25): в замороженном мире туман тоже стоит. Сошлось — кадры
-   * перестают платить и за копию, и за загрузку текстуры (design D4).
+   * Кадр тумана: сперва порции перестройки под бюджет (design D1), затем
+   * сходимость показанной маски к целевой по грязным блокам (design D5).
+   * Порядок именно такой: свежая публикация размечает окно, и рассеивание в том
+   * же кадре уже ведёт показанную маску к только что опубликованной.
+   *
+   * `dt` — со знаком хода мира (REND-25): в замороженном мире туман тоже стоит.
+   * Перестройка от него не зависит вовсе — она про доставку, а не про ход мира.
    */
   updateFrame(dt: number, _alpha: number): void {
+    const cost = costSink();
+    // Рассеивание не мгновенное (FOW-7); нулевое время — снап показанной маски:
+    // плавность — про ход мира, а не про выключенное автором рассеивание. Окно
+    // при таком снапе не размечается вовсе — сравнивать растры незачем.
+    const instant = this.current.dissolveSeconds <= 0;
+    if (this.rebuild.advance(this.mask, this.segments, instant ? null : this.dirty)) {
+      this.onPublished(instant, cost);
+    }
+    this.dissolve(dt, cost);
+  }
+
+  /**
+   * Публикация построенного растра свершилась (design D2): показанная маска
+   * начинает догонять целевую, а на первой перестройке и при выключенном
+   * рассеивании — становится ею сразу.
+   */
+  private onPublished(instant: boolean, cost: RenderCostCounters | undefined): void {
+    const first = !this.built;
+    this.built = true;
+    if (instant) {
+      this.shown.set(this.mask.data);
+      this.dirty.clear();
+      this.settling = false;
+    } else {
+      this.settling = !this.dirty.empty;
+    }
+    // Текстура и слой миникарты отражают ПОКАЗАННУЮ маску — а её эта публикация
+    // изменила только при выключенном рассеивании: иначе показанную ведёт
+    // рассеивание кадрами, и загрузка неизменных байтов здесь была бы платой ни
+    // за что (PERF-3). Исключение — первая перестройка: слой миникарты обязан
+    // существовать с неё (design D6).
+    if (instant || first) this.publishTexture(cost, null);
+  }
+
+  /**
+   * Сходимость показанной маски к целевой (FOW-7) по ГРЯЗНЫМ БЛОКАМ (design
+   * D5): линейный шаг по времени рассеивания, открытие и закрытие зоны
+   * симметричны. Работа кадра пропорциональна ещё не устоявшейся области, а не
+   * всему растру, и по мере схождения окно сжимается; сошлось — кадры перестают
+   * платить и за проход, и за загрузку текстуры, и за блит миникарты.
+   */
+  private dissolve(dt: number, cost: RenderCostCounters | undefined): void {
     if (!this.settling) return;
     const elapsed = Math.abs(dt);
     if (elapsed <= 0) return;
-    const target = this.mask.data;
-    const shown = this.shown;
-    // Кадр сходимости — единственная работа тумана, растущая с площадью маски
-    // НЕ на доставке, а на кадре (PERF-2, стадия `frame`): проход по всему
-    // показанному растру, а следом — та же загрузка текстуры и тот же блит
-    // слоя миникарты тем же объёмом. Одним числом описан объём всех трёх:
-    // отдельные поля повторяли бы длину растра трижды, а разойтись они не
-    // могут. Сошлось — кадры перестают платить вовсе, и счётчик обнуляется
-    // сам собой (design D4). Ручки качества это не требует (QUAL-3): объём
-    // правит тот же потолок `fog.maskResolution` (FOW-10).
-    const cost = costSink();
-    if (cost !== undefined) cost.fogDissolveTexels += shown.length;
     const step = Math.max(1, Math.round((255 * elapsed) / this.current.dissolveSeconds));
-    let settled = true;
-    for (let i = 0; i < shown.length; i++) {
-      const want = target[i]!;
-      const have = shown[i]!;
-      if (have === want) continue;
-      const diff = want - have;
-      if (diff > step) {
-        shown[i] = have + step;
-        settled = false;
-      } else if (diff < -step) {
-        shown[i] = have - step;
-        settled = false;
-      } else {
-        shown[i] = want;
-      }
-    }
-    this.settling = !settled;
-    this.maskTexture.needsUpdate = true;
-    // Сток блиту не отдаётся намеренно: объём этого блита уже посчитан
-    // `fogDissolveTexels` выше, а `fogMinimapTexels` — счётчик стадии доставки
-    // (PERF-2), и приписывать ему кадровую работу значило бы врать стадией.
-    this.blitLayer(undefined);
+    const dirty = this.dirty;
+    dissolveWindow(this.mask.data, this.shown, this.mask.width, this.mask.height, dirty, step);
+    this.publishTexture(cost, dirty);
+    // Блоки снимаются с окна ПОСЛЕ блита: иначе последнее их значение не
+    // доехало бы в канвас миникарты.
+    dirty.flushSettled();
+    this.settling = !dirty.empty;
+  }
+
+  /** Бюджет порции: авторский из опций либо от площади маски (design D1). */
+  private budgetFor(mask: VisibilityMask): number {
+    const authored = this.authoredBudget;
+    if (authored !== undefined) return authored;
+    return Math.max(1, Math.ceil(mask.width * mask.height * REBUILD_BUDGET_MASK_AREAS));
   }
 
   /**
@@ -499,10 +571,10 @@ export class FogSubsystem implements RenderSubsystem {
         mask: () => this.mask,
         shown: () => this.shown,
         // Наблюдатели последней перестройки лежат в сигнатуре по четыре числа.
-        observers: () => (this.signatureLength < 0 ? 0 : (this.signatureLength - SIGNATURE_PREFIX) / 4),
+        observers: () => this.rebuild.observers,
         authoredResolution: () => resolveFogConfig(this.section).resolution,
         ceilingResolution: () => this.ceiling,
-        rebuilds: () => this.rebuildCount,
+        rebuilds: () => this.rebuild.rebuilds,
         dissolving: () => this.settling,
         levels: () => this.grid.levels,
         heightStep: () => this.ctx?.config.heightStep ?? 1,
@@ -555,6 +627,11 @@ export class FogSubsystem implements RenderSubsystem {
     if (next.resolution !== previous.resolution) {
       this.mask = new VisibilityMask(this.rect, next.resolution);
       this.shown = new Uint8Array(this.mask.data.length);
+      // Растр другого разрешения — другая блочная сетка и другой бюджет; порции
+      // в полёте писали в прежний растр, и достраивать их некуда (design D3).
+      this.dirty = new FogDirtyBlocks(this.mask.width, this.mask.height);
+      this.rebuild.budget = this.budgetFor(this.mask);
+      this.rebuild.abort();
       this.settling = false;
       this.maskTexture.dispose();
       this.maskTexture = createMaskTexture(this.mask, this.shown);
@@ -569,7 +646,7 @@ export class FogSubsystem implements RenderSubsystem {
       this.minimap.reset();
       // Разрешение в сигнатуру входов не входит — пустой растр честно требует
       // перестройки ближайшей доставкой (design D4).
-      this.signatureLength = -1;
+      this.rebuild.forget();
     }
     // Смена ширины градиента/консервативности/тона доедет ближайшей
     // перестройкой: они — слоты сигнатуры входов (design D4); длительность
@@ -623,15 +700,10 @@ export class FogSubsystem implements RenderSubsystem {
   }
 
   /**
-   * Блит растра в канвас слоя миникарты (HUD-6, design D6) — его дело. Тон —
-   * кэшированным sRGB-числом (`colorHex`, слот сигнатуры): блит не парсит
-   * строку цвета на каждый вызов.
+   * ОПУБЛИКОВАННЫЙ растр маски — для тестов геометрии; потребители картинки
+   * ходят не сюда. Полупостроенного растра он не показывает никогда (design
+   * D2): порции пишут задний буфер, а `commit` меняет ссылки местами.
    */
-  private blitLayer(cost: RenderCostCounters | undefined): void {
-    this.minimap.blit(this.mask, this.shown, this.colorHex, cost);
-  }
-
-  /** Растр маски — для тестов геометрии; потребители картинки ходят не сюда. */
   get visibility(): VisibilityMask {
     return this.mask;
   }
@@ -654,9 +726,9 @@ function createMaskTexture(mask: VisibilityMask, shown: Uint8Array): THREE.DataT
   texture.needsUpdate = true;
   // Счётчика здесь нет намеренно (PERF-3). Создание текстуры трафика не
   // порождает: three грузит растр на GPU по ВЕРСИИ, поднятой `needsUpdate`, и
-  // взведённый здесь флаг сливается с флагом ближайшей доставки в одну
-  // загрузку. Считать её дважды — приписать пустой байт: и на первой доставке,
-  // и на смене разрешения (там маска пересобирается и `built` сбрасывается)
-  // счёт снимает единственное место — `syncTick`, у самой загрузки.
+  // взведённый здесь флаг сливается с флагом ближайшей публикации в одну
+  // загрузку. Считать её дважды — приписать пустой байт: и на первой
+  // перестройке, и на смене разрешения (там маска пересобирается и `built`
+  // сбрасывается) счёт снимает единственное место — `publishTexture`.
   return texture;
 }

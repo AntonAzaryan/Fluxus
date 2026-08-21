@@ -12,13 +12,16 @@ import { describe, expect, it } from 'vitest';
 import { createTerrainGrid, type TerrainGrid } from '@game-mvp/core';
 import type { PresentationFog } from '@game-mvp/assets';
 import {
+  FogDirtyBlocks,
   FogSubsystem,
   VisibilityMask,
   edgeGradient,
   fogRectOf,
   fogSegmentsOf,
+  createCostCounters,
   resolveFogConfig,
   segmentCasts,
+  withCostSink,
   DEFAULT_FOG_CONFIG,
   type EntityView,
   type FogLayerCanvas,
@@ -26,6 +29,7 @@ import {
 } from '../src/index.js';
 import {
   RendererSpy,
+  buildFogMask,
   fakeCanvas,
   flatGrid,
   fogCanvasFactory,
@@ -238,6 +242,142 @@ describe('FOW-9: 2D shadow-casting по cliff-отрезкам', () => {
   });
 });
 
+// ------------------- задача 1.3: двойной буфер и порционные проходы растра
+
+describe('порционная перестройка растра маски (design D1, D2)', () => {
+  const OBSERVERS = [
+    { x: 2.5, y: 4.5, radius: 6, level: 0 },
+    { x: 6.5, y: 6.5, radius: 3, level: 0 },
+  ];
+  const EDGE = 0.25;
+
+  /** Синхронная перестройка — эталон, с которым сверяется порционная. */
+  function synchronous(grid: TerrainGrid): VisibilityMask {
+    const mask = new VisibilityMask(fogRectOf(grid), 4);
+    const segments = fogSegmentsOf(grid);
+    mask.clear();
+    for (const observer of OBSERVERS) mask.reveal(observer, EDGE, segments);
+    mask.smooth();
+    return mask;
+  }
+
+  /** Та же перестройка порциями по `rows` строк — фазы в порядке design D1. */
+  function chunked(grid: TerrainGrid, rows: number): VisibilityMask {
+    const mask = new VisibilityMask(fogRectOf(grid), 4);
+    const segments = fogSegmentsOf(grid);
+    mask.beginBuild();
+    for (let y = 0; y < mask.height; y += rows) {
+      mask.clearRows(y, Math.min(y + rows, mask.height) - 1);
+    }
+    for (const observer of OBSERVERS) {
+      mask.prepareReveal(observer, EDGE, segments);
+      for (let y = mask.revealFirstRow; y <= mask.revealLastRow; y += rows) {
+        mask.revealRows(y, Math.min(y + rows - 1, mask.revealLastRow));
+      }
+    }
+    for (const pass of ['horizontal', 'vertical'] as const) {
+      for (let y = 0; y < mask.height; y += rows) {
+        mask.smoothRows(pass, y, Math.min(y + rows, mask.height) - 1);
+      }
+    }
+    return mask;
+  }
+
+  it('порционная сборка побитово равна синхронной при любой нарезке', () => {
+    const grid = gridWithPillar();
+    const reference = synchronous(grid);
+    expect(reference.data.some((value) => value > 0)).toBe(true);
+    for (const rows of [1, 3, 7, 32]) {
+      const built = chunked(grid, rows);
+      // До публикации передний растр пуст — сборка шла в задний.
+      expect(built.data.every((value) => value === 0)).toBe(true);
+      built.commit(null);
+      expect(built.data, `нарезка по ${rows} строк`).toEqual(reference.data);
+    }
+  });
+
+  it('commit атомарен: до него потребители видят прежний растр целиком', () => {
+    const grid = gridWithPillar();
+    const mask = new VisibilityMask(fogRectOf(grid), 4);
+    const segments = fogSegmentsOf(grid);
+    // Первая публикация: единственный наблюдатель у левого края.
+    mask.beginBuild();
+    mask.clearRows(0, mask.height - 1);
+    mask.prepareReveal(OBSERVERS[0]!, EDGE, segments);
+    mask.revealRows(mask.revealFirstRow, mask.revealLastRow);
+    mask.smoothRows('horizontal', 0, mask.height - 1);
+    mask.smoothRows('vertical', 0, mask.height - 1);
+    mask.commit(null);
+    const published = Uint8Array.from(mask.data);
+    expect(mask.valueAt(2.5, 4.5)).toBe(1);
+
+    // Вторая перестройка, растянутая на порции: каждый шаг сверяется с
+    // опубликованным растром — полупостроенного состояния не наблюдает никто.
+    mask.beginBuild();
+    for (let y = 0; y < mask.height; y++) {
+      mask.clearRows(y, y);
+      expect(mask.data).toEqual(published);
+    }
+    mask.prepareReveal(OBSERVERS[1]!, EDGE, segments);
+    for (let y = mask.revealFirstRow; y <= mask.revealLastRow; y++) {
+      mask.revealRows(y, y);
+      expect(mask.data).toEqual(published);
+    }
+    mask.smoothRows('horizontal', 0, mask.height - 1);
+    mask.smoothRows('vertical', 0, mask.height - 1);
+    expect(mask.data).toEqual(published);
+
+    mask.commit(null);
+    // И только своп ссылок сменил картинку — разом и целиком.
+    expect(mask.data).not.toEqual(published);
+    expect(mask.valueAt(6.5, 6.5)).toBe(1);
+    expect(mask.valueAt(2.5, 4.5)).toBe(0);
+  });
+
+  it('грязное окно на commit — блоки, где растр действительно изменился (design D5)', () => {
+    const grid = flatGrid(16);
+    const mask = new VisibilityMask(fogRectOf(grid), 4); // 64×64 текселя, 4×4 блока
+    const dirty = new FogDirtyBlocks(mask.width, mask.height);
+    expect(dirty.cols).toBe(4);
+    expect(dirty.rows).toBe(4);
+
+    // Первая публикация: свет в левом нижнем углу арены.
+    mask.beginBuild();
+    mask.clearRows(0, mask.height - 1);
+    mask.prepareReveal({ x: 2, y: 2, radius: 2, level: 0 }, 0.25, []);
+    mask.revealRows(mask.revealFirstRow, mask.revealLastRow);
+    const compared = mask.commit(dirty);
+    // Сравнение прошло по всему растру, а в набор попал только тронутый угол.
+    expect(compared).toBeGreaterThan(0);
+    expect(dirty.count).toBeGreaterThan(0);
+    expect(dirty.count).toBeLessThan(dirty.cols * dirty.rows);
+    expect(dirty.isDirty(0, 0)).toBe(true);
+    expect(dirty.isDirty(3, 3)).toBe(false);
+
+    // Устоявшиеся блоки снимаются с набора, а блок ПРЕРВАННОГО рассеивания
+    // остаётся в нём и после следующей публикации (объединение, design D5).
+    for (let row = 0; row < dirty.rows; row++) {
+      for (let column = 0; column < dirty.cols; column++) {
+        if (column !== 0 || row !== 0) continue;
+        dirty.settle(column, row);
+      }
+    }
+    const stillDirty = dirty.count - 1;
+    dirty.flushSettled();
+    expect(dirty.count).toBe(stillDirty);
+    expect(dirty.isDirty(0, 0)).toBe(false);
+
+    mask.beginBuild();
+    mask.clearRows(0, mask.height - 1);
+    mask.prepareReveal({ x: 14, y: 14, radius: 2, level: 0 }, 0.25, []);
+    mask.revealRows(mask.revealFirstRow, mask.revealLastRow);
+    mask.commit(dirty);
+    // Угол, который погас, и угол, который зажёгся, — оба в окне.
+    expect(dirty.isDirty(0, 0)).toBe(true);
+    expect(dirty.isDirty(3, 3)).toBe(true);
+  });
+});
+
 // ------------------------------ 2.3 и 3: подсистема, наблюдатели и конфиг
 
 describe('FOW-7, FOW-9: отбор наблюдателей из доставленного состояния (design D4)', () => {
@@ -250,6 +390,10 @@ describe('FOW-7, FOW-9: отбор наблюдателей из доставл�
     });
     fog.init(makeRenderContext());
     fog.syncTick(makeTickView(entities));
+    // Растр строит КАДР порциями, а не доставка (change
+    // `fog-mask-budgeted-rebuild`, design D1): геометрию смотрим на
+    // опубликованной маске.
+    buildFogMask(fog);
     return fog;
   }
 
@@ -316,6 +460,7 @@ describe('FOW-7: рассеивание тумана не мгновенное',
   it('открытие зоны — сходимость по времени рассеивания, а не скачок', () => {
     const fog = dissolvingSubsystem({ dissolveSeconds: 1 });
     fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    buildFogMask(fog);
     // Целевая маска уже открыта, показанная — ещё туман: рассеивание идёт кадрами.
     expect(fog.visibility.valueAt(4, 4)).toBe(1);
     expect(fog.shownAt(4, 4)).toBe(0);
@@ -330,10 +475,12 @@ describe('FOW-7: рассеивание тумана не мгновенное',
   it('закрытие зоны симметрично: свет гаснет постепенно', () => {
     const fog = dissolvingSubsystem({ dissolveSeconds: 1 });
     fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    buildFogMask(fog);
     fog.updateFrame(2, 0);
     expect(fog.shownAt(4, 4)).toBe(1);
     // Наблюдатель ушёл: целевая маска в точке погасла, показанная — гаснет.
     fog.syncTick(makeTickView([observerView(1, 20, 20, 0, 3)]));
+    buildFogMask(fog);
     expect(fog.visibility.valueAt(4, 4)).toBe(0);
     fog.updateFrame(0.25, 0);
     const fading = fog.shownAt(4, 4);
@@ -346,19 +493,28 @@ describe('FOW-7: рассеивание тумана не мгновенное',
   it('замороженный мир не рассеивает туман: dt со знаком хода мира (REND-25)', () => {
     const fog = dissolvingSubsystem({ dissolveSeconds: 1 });
     fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    // Кадры с нулевым `dt` перестройку доводят до публикации — она про
+    // доставку, а не про ход мира, — а рассеивание не двигают ни на градацию.
+    buildFogMask(fog);
     fog.updateFrame(0, 0);
     expect(fog.shownAt(4, 4)).toBe(0);
   });
 
-  it('разрыв непрерывности мира — снап показанной маски (REND-2)', () => {
+  it('разрыв непрерывности мира — снап показанной маски в самой доставке (REND-2)', () => {
     const fog = dissolvingSubsystem({ dissolveSeconds: 1 });
     fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)], { snapAll: true }));
+    // Ни порций, ни рассеивания: перемотка публикует маску синхронно.
+    expect(fog.rebuilds).toBe(1);
+    expect(fog.rebuilding).toBe(false);
     expect(fog.shownAt(4, 4)).toBe(1);
   });
 
   it('нулевое время рассеивания — мгновенно, как раньше (FOW-10)', () => {
     const fog = dissolvingSubsystem({ dissolveSeconds: 0 });
     fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    // «Мгновенно» — про рассеивание, а не про доставку: показанная маска
+    // становится целевой прямо на публикации, без единого кадра сходимости.
+    buildFogMask(fog);
     expect(fog.shownAt(4, 4)).toBe(1);
   });
 });
@@ -374,6 +530,7 @@ describe('FOW-7, FOW-10: пост-проход и обновление конф�
     });
     fog.init(ctx);
     fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    buildFogMask(fog);
     return { fog, ctx };
   }
 
@@ -415,9 +572,10 @@ describe('FOW-7, FOW-10: пост-проход и обновление конф�
 
     expect(fog.visibility).not.toBe(maskBefore);
     expect(fog.visibility.texelsPerUnit).toBe(8);
-    // До ближайшей доставки маска нового разрешения не построена — конвейер
-    // прежний, а после доставки туман возвращается.
+    // До ближайшей перестройки маска нового разрешения не построена — конвейер
+    // прежний, а после доставки и её кадров туман возвращается.
     fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    buildFogMask(fog);
     expect(fog.visibility.valueAt(4, 4)).toBe(1);
   });
 
@@ -427,6 +585,7 @@ describe('FOW-7, FOW-10: пост-проход и обновление конф�
     expect(layer).not.toBeNull();
     expect(layer?.world).toEqual({ x: 0, y: 0, width: 8, height: 8 });
     fog.syncTick(makeTickView([observerView(1, 2, 2, 0, 3)]));
+    buildFogMask(fog);
     expect(fog.fog).toBe(layer);
   });
 
@@ -439,65 +598,284 @@ describe('FOW-7, FOW-10: пост-проход и обновление конф�
 
 // ------------------------- 4.3: перестройка только при изменении входов (D4)
 
-describe('design D4: сигнатура входов — перестройка маски только при изменении', () => {
-  function cachedSubsystem(): { fog: FogSubsystem; canvases: (FogLayerCanvas & { puts: number })[] } {
-    const canvases: (FogLayerCanvas & { puts: number })[] = [];
-    const fog = new FogSubsystem({
-      grid: gridWithPillar(),
-      stats: STATS,
-      hero: () => 1,
-      createCanvas: (width, height) => {
-        const canvas = fakeCanvas();
-        canvas.width = width;
-        canvas.height = height;
-        canvases.push(canvas);
-        return canvas;
-      },
-    });
-    fog.init(makeRenderContext());
-    return { fog, canvases };
-  }
+/**
+ * Стенд кэша сигнатуры и коалесинга: подсистема с записывающими канвасами и
+ * управляемым бюджетом порции. `rebuilds` здесь — число ОПУБЛИКОВАННЫХ
+ * перестроек: доставка сама по себе растра не строит (design D1, D3).
+ */
+function cachedSubsystem(budget?: number): {
+  fog: FogSubsystem;
+  canvases: (FogLayerCanvas & { puts: number })[];
+} {
+  const canvases: (FogLayerCanvas & { puts: number })[] = [];
+  const fog = new FogSubsystem({
+    grid: gridWithPillar(),
+    stats: STATS,
+    hero: () => 1,
+    ...(budget === undefined ? {} : { rebuildBudget: budget }),
+    createCanvas: (width, height) => {
+      const canvas = fakeCanvas();
+      canvas.width = width;
+      canvas.height = height;
+      canvases.push(canvas);
+      return canvas;
+    },
+  });
+  fog.init(makeRenderContext());
+  return { fog, canvases };
+}
 
+describe('design D4: сигнатура входов — перестройка маски только при изменении', () => {
   it('неизменные входы — ни перестройки маски, ни блита слоя миникарты', () => {
     const { fog, canvases } = cachedSubsystem();
     fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    buildFogMask(fog);
     expect(fog.rebuilds).toBe(1);
+    // Рассеивание доигрывается одним большим шагом: дальше сцена устоялась.
+    fog.updateFrame(10, 0);
     const puts = canvases[0]!.puts;
 
     // Та же доставка: позиции, радиусы и уровни наблюдателей не изменились —
-    // стоя на месте, кадр не платит за туман ничего (design D4).
+    // стоя на месте, ни доставка, ни кадр за туман не платят (design D4).
     fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    fog.updateFrame(1 / 60, 0);
     expect(fog.rebuilds).toBe(1);
+    expect(fog.rebuilding).toBe(false);
     expect(canvases[0]!.puts).toBe(puts);
   });
 
   it('смена позиции, уровня или конфига инвалидирует сигнатуру', () => {
     const { fog } = cachedSubsystem();
     fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    buildFogMask(fog);
     expect(fog.rebuilds).toBe(1);
 
     // Сдвиг наблюдателя.
     fog.syncTick(makeTickView([observerView(1, 2.75, 4.5, 0, 3)]));
+    buildFogMask(fog);
     expect(fog.rebuilds).toBe(2);
 
     // Только уровень (та же позиция): слот сигнатуры — доставленный currLevel.
     fog.syncTick(makeTickView([observerView(1, 2.75, 4.5, 0, 3, 1)]));
+    buildFogMask(fog);
     expect(fog.rebuilds).toBe(3);
 
     // Значение конфига, влияющее на растр (FOW-10): ширина градиента.
     fog.applyConfig({ edgeWidth: 2.5 });
     fog.syncTick(makeTickView([observerView(1, 2.75, 4.5, 0, 3, 1)]));
+    buildFogMask(fog);
     expect(fog.rebuilds).toBe(4);
 
     // После перестройки кэш снова держит.
     fog.syncTick(makeTickView([observerView(1, 2.75, 4.5, 0, 3, 1)]));
+    fog.updateFrame(1 / 60, 0);
     expect(fog.rebuilds).toBe(4);
   });
 
   it('второй наблюдатель в доставке — другие входы, перестройка', () => {
     const { fog } = cachedSubsystem();
     fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    buildFogMask(fog);
     fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3), observerView(3, 6, 6, 0, 2)]));
+    buildFogMask(fog);
     expect(fog.rebuilds).toBe(2);
+  });
+});
+
+// ------------- задача 2.4: бюджетная перестройка, коалесинг и атомарность
+
+describe('бюджетная перестройка маски и коалесинг доставок (design D1–D3)', () => {
+  /**
+   * Бюджет в половину площади маски стенда (32×32): полная перестройка стоит
+   * около пяти площадей и гарантированно не влезает в один кадр — порции
+   * растягиваются на десяток.
+   */
+  const SLOW = 512;
+
+  it('доставка растра не трогает: его строят порции кадра', () => {
+    const { fog, canvases } = cachedSubsystem(SLOW);
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+
+    // Ни перестройки, ни слоя миникарты: доставка только положила вход.
+    expect(fog.rebuilds).toBe(0);
+    expect(fog.rebuilding).toBe(false);
+    expect(canvases).toHaveLength(0);
+    // Маска не построена — конвейер кадра прежний, прямой рендер (FOW-7).
+    const renderer = new RendererSpy();
+    fog.render(renderer, new THREE.PerspectiveCamera());
+    expect(renderer.targets).toEqual([]);
+
+    fog.updateFrame(1 / 60, 0);
+    expect(fog.rebuilding).toBe(true);
+    expect(fog.rebuilds).toBe(0);
+  });
+
+  it('две доставки в полёте — одна перестройка от последней, промежуточная не строится', () => {
+    const { fog } = cachedSubsystem(SLOW);
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    fog.updateFrame(1 / 60, 0); // перестройка началась и в кадр не влезла
+
+    // Две доставки поверх полётной: конфляция «важен только последний вход».
+    fog.syncTick(makeTickView([observerView(1, 3.5, 4.5, 0, 3)]));
+    fog.syncTick(makeTickView([observerView(1, 6.5, 6.5, 0, 3)]));
+
+    // Первая перестройка ДОСТРАИВАЕТСЯ — рестарта нет, иначе при доставках
+    // чаще перестройки маска не продвигалась бы никогда (design D3).
+    buildFogMask(fog);
+    expect(fog.rebuilds).toBe(1);
+    expect(fog.visibility.valueAt(2.5, 4.5)).toBe(1);
+    expect(fog.visibility.valueAt(6.5, 6.5)).toBe(0);
+
+    // Следом идёт ОДНА перестройка — от последней доставки; промежуточная
+    // (3.5, 4.5) не строится вовсе.
+    buildFogMask(fog);
+    expect(fog.rebuilds).toBe(2);
+    expect(fog.visibility.valueAt(6.5, 6.5)).toBe(1);
+    expect(fog.visibility.valueAt(2.5, 4.5)).toBe(0);
+    // И третьей перестройки нет: отложенных входов не осталось.
+    fog.updateFrame(1 / 60, 0);
+    expect(fog.rebuilds).toBe(2);
+    expect(fog.rebuilding).toBe(false);
+  });
+
+  it('маска продвигается, даже когда доставка приходит каждый кадр', () => {
+    const { fog } = cachedSubsystem(SLOW);
+    for (let frame = 0; frame < 200; frame++) {
+      // Наблюдатель ползёт: каждая доставка несёт новые входы.
+      fog.syncTick(makeTickView([observerView(1, 2.5 + frame * 0.01, 4.5, 0, 3)]));
+      fog.updateFrame(1 / 60, 0);
+    }
+    // Перестройки публикуются, а не начинаются заново вечно (design D3).
+    expect(fog.rebuilds).toBeGreaterThan(0);
+  });
+
+  it('полурастра не видит никто: каждый кадр маска целиком построена', () => {
+    const { fog } = cachedSubsystem(SLOW);
+    // Первая перестройка — публикуется целиком, до неё маска пуста.
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    const frames = buildFogMask(fog);
+    expect(frames).toBeGreaterThan(1);
+    const published = Uint8Array.from(fog.visibility.data);
+    expect(published.some((value) => value > 0)).toBe(true);
+
+    // Вторая перестройка с ДРУГИМИ входами: пока она идёт, потребители читают
+    // прежний растр — ни наполовину очищенного, ни наполовину открытого
+    // состояния не бывает.
+    fog.syncTick(makeTickView([observerView(1, 6.5, 6.5, 0, 3)]));
+    for (let frame = 0; frame < 200; frame++) {
+      fog.updateFrame(1 / 60, 0);
+      if (fog.rebuilds === 2) break;
+      expect(fog.visibility.data).toEqual(published);
+    }
+    expect(fog.rebuilds).toBe(2);
+    expect(fog.visibility.data).not.toEqual(published);
+  });
+
+  it('перемотка бросает перестройку в полёте и публикует маску синхронно (REND-2)', () => {
+    const { fog } = cachedSubsystem(SLOW);
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    fog.updateFrame(1 / 60, 0);
+    expect(fog.rebuilding).toBe(true);
+
+    fog.syncTick(makeTickView([observerView(1, 6.5, 6.5, 0, 3)], { snapAll: true }));
+
+    // Снап опубликовал маску телепорта прямо в доставке, а брошенная
+    // перестройка прежнего мира не достраивается и не публикуется следом.
+    expect(fog.rebuilds).toBe(1);
+    expect(fog.rebuilding).toBe(false);
+    expect(fog.shownAt(6.5, 6.5)).toBe(1);
+    fog.updateFrame(1 / 60, 0);
+    expect(fog.rebuilds).toBe(1);
+  });
+
+  it('смена разрешения в полёте бросает порции: достраивать некуда', () => {
+    const { fog } = cachedSubsystem(SLOW);
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    fog.updateFrame(1 / 60, 0);
+    expect(fog.rebuilding).toBe(true);
+
+    fog.applyConfig({ resolution: 8 });
+    expect(fog.rebuilding).toBe(false);
+    fog.updateFrame(1 / 60, 0);
+    expect(fog.rebuilds).toBe(0);
+
+    // Растр нового разрешения строится ближайшей доставкой и её кадрами.
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    buildFogMask(fog);
+    expect(fog.visibility.texelsPerUnit).toBe(8);
+    expect(fog.visibility.valueAt(2.5, 4.5)).toBe(1);
+  });
+
+  it('окно рассеивания сжимается по мере схождения, а устоявшаяся сцена платит ноль', () => {
+    const { fog, canvases } = cachedSubsystem();
+    fog.syncTick(makeTickView([observerView(1, 4.5, 4.5, 0, 3)]));
+    buildFogMask(fog);
+
+    // Кадры рассеивания идут по грязным блокам (design D5): работа убывает по
+    // мере схождения и обнуляется, когда показанная маска догнала целевую.
+    const visited: number[] = [];
+    for (let frame = 0; frame < 64; frame++) {
+      const counters = createCostCounters();
+      withCostSink(counters, () => {
+        fog.updateFrame(1 / 60, 0);
+      });
+      visited.push(counters.fogDissolveTexels);
+      if (counters.fogDissolveTexels === 0) break;
+    }
+    expect(visited.length).toBeGreaterThan(2);
+    expect(visited[0]).toBeGreaterThan(0);
+    expect(visited[visited.length - 1]).toBe(0);
+    // Ни один кадр не дороже предыдущего: окно только сжимается.
+    for (let i = 1; i < visited.length; i++) {
+      expect(visited[i]).toBeLessThanOrEqual(visited[i - 1]!);
+    }
+
+    // Устоявшаяся сцена: ни прохода, ни загрузки текстуры, ни блита миникарты.
+    const puts = canvases[0]!.puts;
+    const idle = createCostCounters();
+    withCostSink(idle, () => {
+      fog.updateFrame(1 / 60, 0);
+    });
+    expect(idle.fogDissolveTexels).toBe(0);
+    expect(idle.fogMaskUploadBytes).toBe(0);
+    expect(idle.fogMinimapTexels).toBe(0);
+    expect(canvases[0]!.puts).toBe(puts);
+  });
+
+  it('прерванное рассеивание доигрывается: неустоявшийся блок остаётся в окне', () => {
+    const { fog } = cachedSubsystem();
+    fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));
+    buildFogMask(fog);
+    fog.updateFrame(1 / 60, 0); // рассеивание началось и не сошлось
+    const midway = fog.shownAt(2.5, 4.5);
+    expect(midway).toBeGreaterThan(0);
+    expect(midway).toBeLessThan(1);
+
+    // Новая доставка публикует другую маску ПОСРЕДИ рассеивания: блоки, не
+    // достигшие прежней цели, остаются в окне (объединение, design D5), и
+    // сходимость доигрывается — до конца и без застрявших текселей.
+    fog.syncTick(makeTickView([observerView(1, 6.5, 6.5, 0, 3)]));
+    buildFogMask(fog);
+    for (let frame = 0; frame < 64; frame++) fog.updateFrame(1 / 60, 0);
+    expect(fog.shownAt(6.5, 6.5)).toBe(1);
+    expect(fog.shownAt(2.5, 4.5)).toBe(0);
+  });
+
+  it('порционная сборка побитово равна синхронной на тех же входах', () => {
+    // Один и тот же вход двумя путями: бюджетным (порции по строкам) и
+    // синхронным (снап). Растры обязаны совпасть байт в байт — иначе картинка
+    // зависела бы от того, как её нарезали (design D1).
+    const budgeted = cachedSubsystem(SLOW).fog;
+    budgeted.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3), observerView(3, 6, 6, 0, 2)]));
+    expect(buildFogMask(budgeted)).toBeGreaterThan(1);
+
+    const snapped = cachedSubsystem().fog;
+    snapped.syncTick(
+      makeTickView([observerView(1, 2.5, 4.5, 0, 3), observerView(3, 6, 6, 0, 2)], {
+        snapAll: true,
+      }),
+    );
+
+    expect(budgeted.visibility.data).toEqual(snapped.visibility.data);
   });
 });

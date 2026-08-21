@@ -88,6 +88,11 @@ function stand(axis: FogAxis): { fog: FogSubsystem; views: readonly TickView[] }
     stats: STATS,
     hero: () => 1,
     config: { resolution: axis.resolution },
+    // Бюджет снят: сторож меряет ВРЕМЯ ОДНОЙ перестройки, а не латентность её
+    // нарезки (change `fog-mask-budgeted-rebuild`, design D1). С бюджетом здесь
+    // мерилось бы, за сколько кадров стенд догоняет доставку, — величина
+    // каденса стенда, а не стоимости растра.
+    rebuildBudget: Number.POSITIVE_INFINITY,
     createCanvas: fogCanvasFactory(),
   });
   fog.init(makeRenderContext());
@@ -113,16 +118,23 @@ interface BenchResult {
  */
 function benchFog(label: string, axis: FogAxis): BenchResult {
   const { fog, views } = stand(axis);
+  // Доставка плюс её кадр: растр строит кадр (design D1), и мерить одну
+  // доставку значило бы мерить сборку `Map` вместо растеризации. Рассеивание в
+  // замер не входит — `dt` нулевой.
+  const rebuild = (view: TickView): void => {
+    fog.syncTick(view);
+    fog.updateFrame(0, 0);
+  };
 
   // Прогрев JIT перед замером.
-  for (let i = 0; i < WARMUP; i++) fog.syncTick(views[i]!);
+  for (let i = 0; i < WARMUP; i++) rebuild(views[i]!);
   const t0 = performance.now();
-  for (let i = 0; i < DELIVERIES; i++) fog.syncTick(views[WARMUP + i]!);
+  for (let i = 0; i < DELIVERIES; i++) rebuild(views[WARMUP + i]!);
   const perDeliveryMs = (performance.now() - t0) / DELIVERIES;
 
   const cost = createCostCounters();
   withCostSink(cost, () => {
-    fog.syncTick(views[WARMUP + DELIVERIES]!);
+    rebuild(views[WARMUP + DELIVERIES]!);
   });
 
   console.log(
