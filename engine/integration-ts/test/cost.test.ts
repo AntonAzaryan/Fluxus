@@ -388,12 +388,24 @@ describe('PERF-4: голден-гейт стоимости на записанн
     // ультра показывает его как есть, производительный режим ограничивает.
     expect(ultra.maskResolution).toBe(MATCH_STAND.resolution);
     expect(performance.maskResolution).toBe(BENCH_PRESETS.performance['fog.maskResolution']);
-    // Полномасочная работа растёт квадратом разрешения — вдвое грубее маска
-    // вчетверо дешевле, и ровно эту строку диффа гейт и заводился стеречь.
+    // Полномасочная работа ПЕРЕСТРОЙКИ растёт квадратом разрешения — вдвое
+    // грубее маска вчетверо дешевле, и ровно эту строку диффа гейт и заводился
+    // стеречь. Перестроек у двух пресетов поровну: их каденс задаёт доставка.
     expect(ultra.render.fogMaskClearTexels).toBe(4 * performance.render.fogMaskClearTexels);
     expect(ultra.render.fogMaskSmoothTexels).toBe(4 * performance.render.fogMaskSmoothTexels);
-    expect(ultra.render.fogMaskUploadBytes).toBe(4 * performance.render.fogMaskUploadBytes);
-    expect(ultra.render.fogMinimapTexels).toBe(4 * performance.render.fogMinimapTexels);
+    // ОДНА загрузка текстуры — тоже ровно вчетверо (растр уезжает целиком), а
+    // вот самих загрузок у грубой маски меньше: кадр рассеивания заводится
+    // только там, где растр ДЕЙСТВИТЕЛЬНО изменился, и грубый от мелкого шага
+    // наблюдателя нередко не меняется вовсе (design D5). Отсюда неравенство.
+    expect(ultra.render.fogMaskUploadBytes).toBeGreaterThanOrEqual(
+      4 * performance.render.fogMaskUploadBytes,
+    );
+    // Блит миникарты дорожает вместе с разрешением, но РОВНО вчетверо больше не
+    // выходит: он идёт по грязным блокам окна рассеивания (change
+    // `fog-mask-budgeted-rebuild`, design D5), а блок — фиксированные 16×16
+    // текселей. Грубая маска целиком укладывается в четыре блока, тонкая — в
+    // шестнадцать, и отношение задаёт зернистость окна, а не площадь растра.
+    expect(ultra.render.fogMinimapTexels).toBeGreaterThan(performance.render.fogMinimapTexels);
     // Доставка и кадр от пресета не зависят: сущностей столько же, подсистем
     // столько же — качество меняет подачу картинки, а не состав состояния (QUAL-2).
     expect(ultra.render.syncTickInstances).toBe(performance.render.syncTickInstances);
@@ -502,15 +514,16 @@ describe('PERF-4: работа освещения, моделей, частиц 
     expect(ultra.lightingDynamicCasters).toBeGreaterThan(0);
     expect(ultra.lightingStaticRebuilds).toBe(0);
     // В `hybrid` кэш статики устаревает КАЖДЫМ кадром: импульс пола стенда
-    // пересобирает чанк, пересборка перерегистрирует его кастером — и кадр
-    // перерисовки кэша пропускает динамическую карту. Это не дефект стенда, а
-    // ровно тот случай, который счётчик перерисовок заведён показывать:
-    // инвалидируемый каждым кадром кэш — `full` по цене (PERF-2, design D7).
-    expect(performance.lightingStaticRebuilds).toBe(ticks);
-    expect(performance.lightingDynamicCasters).toBe(0);
-    // Статика при этом рисуется в обоих режимах каждым кадром — одними и теми
-    // же корнями, поэтому её строка эталона у двух пресетов совпадает.
-    expect(performance.lightingStaticCasters).toBe(ultra.lightingStaticCasters);
+    // пересобирает чанк, пересборка перерегистрирует его кастером. Перерисовка
+    // кэша при этом НЕ голодит динамическую карту (REND-30): фазы чередуются,
+    // и на непрерывном потоке событий инвалидации каждая карта получает свой
+    // кадр через один. Отсюда половина перерисовок от числа кадров и ненулевая
+    // динамика — именно это число раньше лежало нулём (PERF-2, proposal «Why»).
+    expect(performance.lightingStaticRebuilds).toBe(Math.ceil(ticks / 2));
+    expect(performance.lightingDynamicCasters).toBeGreaterThan(0);
+    // Статика рисуется в `full` каждым кадром, а в `hybrid` — через кадр: те же
+    // корни, вдвое реже.
+    expect(performance.lightingStaticCasters * 2).toBe(ultra.lightingStaticCasters);
   });
 
   it('террейн: импульс пола помечает чанк каждой доставкой, кадр его пересобирает', () => {

@@ -10,7 +10,7 @@
  * теневой проход three в прогоне не исполняется — это то же известное
  * ограничение, что у GLSL VAT-материала (`model/vatMaterial.ts`).
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import type { EntityId } from '@game-mvp/core';
 import type {
@@ -497,6 +497,92 @@ describe('режимы теней и кэш статики (design D2)', () => {
     rig.stage.frame(0.016, 0);
 
     expect(rig.lighting.staticRebuilds).toBe(2);
+  });
+
+  it('непрерывная инвалидация кэша: фазы чередуются, динамика не голодает (REND-30)', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    const [sun, sunDynamic] = directionalLights(rig.scene);
+
+    // Поток событий инвалидации без затишья — та же нагрузка, что мутация пола
+    // каждый тик (TERR-6) или перетаскивание декорации в редакторе (ED-15).
+    const phases: ('static' | 'dynamic')[] = [];
+    for (let frame = 0; frame < 8; frame++) {
+      rig.lighting.invalidateStatic();
+      rig.stage.frame(0.016, 0);
+      phases.push(sun!.shadow.needsUpdate ? 'static' : 'dynamic');
+    }
+
+    // Ни одной пары статических кадров подряд: перерисовка кэша MUST NOT
+    // голодить динамическую карту, и каждая отстаёт не более чем на кадр.
+    expect(phases).toEqual([
+      'static',
+      'dynamic',
+      'static',
+      'dynamic',
+      'static',
+      'dynamic',
+      'static',
+      'dynamic',
+    ]);
+    // Динамическая карта в её кадры действительно рисуется — тени юнитов
+    // следуют за ними, а не застывают на всё время мутаций.
+    expect(sunDynamic!.shadow.needsUpdate).toBe(true);
+    expect(rig.lighting.staticRebuilds).toBe(4);
+  });
+
+  it('без динамических кастеров чередование не нужно: статика перерисовывается подряд', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    // Реестр динамики пуст — голодать нечему, и ворота чередования не мешают
+    // кэшу догонять поток событий каждым кадром.
+    for (let frame = 0; frame < 4; frame++) {
+      rig.lighting.invalidateStatic();
+      rig.stage.frame(0.016, 0);
+    }
+    expect(rig.lighting.casterCount('dynamic')).toBe(0);
+    expect(rig.lighting.staticRebuilds).toBe(4);
+  });
+
+  it('счётчики стоимости под непрерывной инвалидацией: динамика ненулевая (PERF-2)', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    const cost = createCostCounters();
+    withCostSink(cost, () => {
+      for (let frame = 0; frame < 8; frame++) {
+        rig.lighting.invalidateStatic();
+        rig.stage.frame(0.016, 0);
+      }
+    });
+    // Ровно то, чем регрессия ловится в эталонах стоимости: число динамических
+    // кастеров за окно ненулевое (REND-30).
+    expect(cost.lightingDynamicCasters).toBe(4);
+    expect(cost.lightingStaticRebuilds).toBe(4);
+  });
+
+  it('новый динамический кастер не заставляет обходить весь реестр (design D7)', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0); // кадр запекания статики
+    rig.stage.frame(0.016, 0); // установившийся кадр: фаза — динамика
+
+    // Спай на обходе поддерева: `applyPhase` прошёлся бы по ВСЕМ корням
+    // реестра, точечный путь — только по пришедшему (design D7).
+    const roots = [...rig.scene.children];
+    const traverse = vi.spyOn(THREE.Object3D.prototype, 'traverse');
+    let calls = -1;
+    try {
+      const fresh = new THREE.Group();
+      rig.lighting.setCaster(fresh, 'dynamic');
+      calls = traverse.mock.calls.length;
+    } finally {
+      traverse.mockRestore();
+    }
+    // Ровно один обход — поддерева нового корня.
+    expect(calls).toBe(1);
+    expect(rig.lighting.casterCount('dynamic')).toBe(2);
+    // Реестр при этом не потерялся: сцена та же, а флаги нового корня уже
+    // стоят по текущей фазе — динамическую карту следующий кадр рисует с ним.
+    expect([...rig.scene.children]).toEqual(roots);
   });
 
   it('снятый инстанс статики устаревает кэш, снятый динамический — нет', () => {

@@ -79,9 +79,14 @@ export interface RenderCostCounters {
   /**
    * Сущности доставки, просмотренные отбором наблюдателей своей команды
    * (FOW-7, design D4): отбор идёт по всему состоянию, а не по наблюдателям, —
-   * стоимость перестройки растёт и от числа сущностей.
+   * стоимость перестройки растёт и от числа сущностей. ЕДИНСТВЕННЫЙ счётчик
+   * тумана стадии доставки: скан состояния идёт за доставку, а весь растр
+   * уехал в кадр (change `fog-mask-budgeted-rebuild`, design D4).
    */
   fogEntitiesScanned: number;
+
+  // -------------------------------- стадия frame: растр маски тумана (FOW-7)
+
   /** Наблюдатели, для которых строился reveal-полигон (FOW-7). */
   fogRevealCalls: number;
   /** Тесты «отрезок укрытия в радиусе наблюдателя» при отборе теней (FOW-9). */
@@ -120,13 +125,27 @@ export interface RenderCostCounters {
    * правится тем же потолком `fog.maskResolution` (FOW-10, QUAL-3).
    */
   fogMaskSmoothTexels: number;
-  /** Байты растра маски, отданные в `DataTexture` (загрузка на GPU, design D2). */
+  /**
+   * Байты растра маски, отданные в `DataTexture` (загрузка на GPU, design D2).
+   * Растр уезжает ЦЕЛИКОМ на каждой публикации — и на коммите перестройки, и на
+   * каждом кадре рассеивания: частичной загрузки в этой итерации нет (Non-Goals
+   * change `fog-mask-budgeted-rebuild`), и полная загрузка кадра рассеивания
+   * видна здесь, а не спрятана в `fogDissolveTexels`.
+   */
   fogMaskUploadBytes: number;
   /**
-   * Тексели блита маски в канвас слоя миникарты на ДОСТАВКЕ (HUD-6, design D6).
-   * Блит кадра сходимости сюда не входит — он стадии `frame` и посчитан
-   * `fogDissolveTexels`: у счётчика одна стадия, и смешивать их значило бы
-   * врать атрибуцией (PERF-2).
+   * Тексели, уехавшие в канвас слоя миникарты (HUD-6, design D6), — площадь
+   * ПРЯМОУГОЛЬНИКА `putImageData`. Первая публикация, снап (REND-2) и смена
+   * тона (FOW-10) блитят весь растр; кадр рассеивания — общий прямоугольник
+   * грязных блоков окна (design D5), поэтому число растёт разбросом
+   * неустоявшейся области, а не длиной растра.
+   *
+   * Считается прямоугольник, а НЕ сумма блоков: копию делает канвас, и платит
+   * он за прямоугольник целиком. Кольцо рассеивания занимает лишь часть своего
+   * bbox, и сумма блоков занижала бы работу главного потока — тем сильнее, чем
+   * выше разрешение маски, то есть ровно на той оси, которую счётчики PERF-3
+   * и заведены показывать. Перезапись альфы в буфере при этом дешевле: она
+   * идёт по блокам внутри прямоугольника.
    */
   fogMinimapTexels: number;
 
@@ -205,13 +224,18 @@ export interface RenderCostCounters {
   /** Проходы рендерера, заказанные подсистемой тумана: прямой и пост (design D2). */
   fogRenderPasses: number;
   /**
-   * Тексели показанной маски, пройденные сходимостью рассеивания за кадр
-   * (FOW-7, `subsystems/fog.ts`): единственная работа тумана, растущая с
-   * площадью маски на стадии кадра, а не доставки. Кадр сходимости, кроме
-   * самого прохода, повторно грузит текстуру и перерисовывает слой миникарты
-   * ТЕМ ЖЕ объёмом — все три величины равны длине растра, и одно поле описывает
-   * их разом. Сошлась показанная маска с целевой — счётчик снова ноль: кадры
-   * стоящей сцены за туман не платят (design D4).
+   * Тексели, пройденные ОКНОМ РАССЕИВАНИЯ за кадр (FOW-7, `subsystems/fog.ts`,
+   * design D5): проход схождения по грязным блокам плюс поблочная разметка окна
+   * на коммите перестройки — сравнение старого и нового опубликованных растров.
+   * И то и другое — работа одного механизма: «где показанная маска ещё не
+   * сошлась с целевой».
+   *
+   * Длине растра число больше НЕ равно: окно сжимается по мере схождения, и
+   * работа кадра пропорциональна неустоявшейся области. Загрузка текстуры и
+   * блит миникарты считаются своими счётчиками — их объёмы разошлись
+   * (`fogMaskUploadBytes` — весь растр, `fogMinimapTexels` — окно). Сошлась
+   * показанная маска с целевой — счётчик снова ноль: кадры стоящей сцены за
+   * туман не платят.
    */
   fogDissolveTexels: number;
 
@@ -375,16 +399,6 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     syncTickInstances: 'syncTick',
     syncTickDecorationInstances: 'syncTick',
     fogEntitiesScanned: 'syncTick',
-    fogRevealCalls: 'syncTick',
-    fogSegmentRangeTests: 'syncTick',
-    fogNearSegments: 'syncTick',
-    fogMaskClearTexels: 'syncTick',
-    fogMaskTexels: 'syncTick',
-    fogMaskTexelsWritten: 'syncTick',
-    fogShadowRayTests: 'syncTick',
-    fogMaskSmoothTexels: 'syncTick',
-    fogMaskUploadBytes: 'syncTick',
-    fogMinimapTexels: 'syncTick',
     modelsInstancesSynced: 'syncTick',
     modelsInstancesCreated: 'syncTick',
     modelsRebuilds: 'syncTick',
@@ -395,6 +409,20 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     frameSubsystems: 'frame',
     frameInstances: 'frame',
     fogRenderPasses: 'frame',
+    // Весь растр маски — стадия кадра (change `fog-mask-budgeted-rebuild`,
+    // design D4): порции перестройки и рассеивание идут в `updateFrame`, а
+    // синхронный снап (REND-2) — редкое исключение, ради которого у счётчика не
+    // заводится вторая стадия: двойной атрибуции не бывает (PERF-2).
+    fogRevealCalls: 'frame',
+    fogSegmentRangeTests: 'frame',
+    fogNearSegments: 'frame',
+    fogMaskClearTexels: 'frame',
+    fogMaskTexels: 'frame',
+    fogMaskTexelsWritten: 'frame',
+    fogShadowRayTests: 'frame',
+    fogMaskSmoothTexels: 'frame',
+    fogMaskUploadBytes: 'frame',
+    fogMinimapTexels: 'frame',
     fogDissolveTexels: 'frame',
     modelsPoseWrites: 'frame',
     modelsCullTests: 'frame',

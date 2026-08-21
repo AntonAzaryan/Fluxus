@@ -470,6 +470,13 @@ export class PresentationBench {
       stats: FOG_STATS,
       hero: () => this.hero,
       config: { resolution: options.resolution },
+      // Бюджет порционной перестройки снят (change `fog-mask-budgeted-rebuild`,
+      // design D1): стенд крутит РОВНО ОДИН кадр на доставку, а игра — три-четыре,
+      // и под бюджетом эталон мерил бы каденс стенда (сколько доставок съела
+      // конфляция), а не работу растеризации. Гейт стоимости стережёт объём
+      // ПОЛНОЙ перестройки — величину, от нарезки не зависящую (PERF-3, PERF-4);
+      // саму нарезку и коалесинг стерегут юнит-тесты `render-ts`.
+      rebuildBudget: Number.POSITIVE_INFINITY,
       createCanvas: benchCanvas,
     });
     // Свет — подсистемой с авторским режимом теней стенда: без неё счётчики

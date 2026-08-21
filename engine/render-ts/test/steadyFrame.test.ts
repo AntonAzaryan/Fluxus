@@ -68,6 +68,13 @@ const ENTITIES = 3;
 const FRAMES = 8;
 const DT = 1 / 60;
 const ALPHA = 0.5;
+/**
+ * Кадры сложения сцены: перестройка маски тумана под бюджетом (design D1) и
+ * рассеивание (design D5). Шаг заведомо длиннее `dissolveSeconds`, поэтому
+ * сходимость доигрывается первым же таким кадром, а запас взят на перестройку.
+ */
+const SETTLE_FRAMES = 8;
+const SETTLE_DT = 1;
 
 function torchDocument(): ParticleEffectDocument {
   const path = fileURLToPath(new URL('./fixtures/torch.effect.json', import.meta.url));
@@ -159,6 +166,12 @@ function steadyStand(): Stand {
   // место записям батча, и только с ними состав сцены окончателен.
   assets.resolve('model', MODEL_ID, makeModel());
   stage.frame(DT, ALPHA);
+  // Маска тумана строится порциями кадра и рассеивается кадрами (change
+  // `fog-mask-budgeted-rebuild`, design D1, D5) — это тоже сложение сцены, а не
+  // установившийся кадр: большой шаг доигрывает рассеивание разом, и дальше
+  // окно пусто. Установившаяся сцена за туман не платит ничего — это и
+  // проверяется ниже нулями его счётчиков.
+  for (let i = 0; i < SETTLE_FRAMES; i++) stage.frame(SETTLE_DT, ALPHA);
 
   return { stage, models, particles, scene };
 }
@@ -197,11 +210,15 @@ describe('установившаяся сцена: работа кадра по�
     expect(counters.syncTickSubsystems).toBe(0);
     expect(counters.syncTickInstances).toBe(0);
     expect(counters.syncTickDecorationInstances).toBe(0);
-    // Маска тумана живёт каденсом доставки: кадр её не перестраивает и в
-    // текстуру не заливает (design D1) — иначе стоимость кадра росла бы
-    // квадратом разрешения.
+    // Туман устоявшейся сцены не стоит кадру НИЧЕГО: доставок не было, значит
+    // перестраивать нечего, а окно рассеивания пусто — ни прохода схождения, ни
+    // загрузки текстуры, ни блита миникарты (design D5). Иначе стоимость кадра
+    // росла бы квадратом разрешения на пустом месте.
     expect(counters.fogMaskClearTexels).toBe(0);
+    expect(counters.fogMaskSmoothTexels).toBe(0);
     expect(counters.fogMaskUploadBytes).toBe(0);
+    expect(counters.fogMinimapTexels).toBe(0);
+    expect(counters.fogDissolveTexels).toBe(0);
     expect(counters.fogEntitiesScanned).toBe(0);
   });
 

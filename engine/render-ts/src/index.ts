@@ -207,8 +207,18 @@ export { DEFAULT_FOG_CONFIG, resolveFogConfig } from './fog/config.js';
 export type { FogRenderConfig } from './fog/config.js';
 export type { FogRendererLike, FogStatNames, FogSubsystemOptions } from './subsystems/fog.js';
 export type { FogLayerCanvas, FogLayerContext, FogMinimapLayer } from './fog/layer.js';
-export { VisibilityMask, edgeGradient, fogRectOf, fogSegmentsOf, segmentCasts } from './fog/mask.js';
-export type { FogObserver, FogSegment, FogWorldRect } from './fog/mask.js';
+export {
+  VisibilityMask,
+  edgeGradient,
+  fogRectOf,
+  fogSegmentsOf,
+  segmentCasts,
+} from './fog/mask.js';
+export type { FogObserver, FogSegment, FogSmoothPass, FogWorldRect } from './fog/mask.js';
+// Грязное окно рассеивания (design D5): наружу отдан только сам набор блоков —
+// он входит в контракт `VisibilityMask.commit`. Сторона блока и проход
+// схождения остаются внутренностями пакета.
+export { FogDirtyBlocks } from './fog/dirty.js';
 
 // Подсистема освещения сцены (REND-8): источники света арены и теневые карты
 // из секции `lighting` парного документа (PRES-2). Свет всех потребителей

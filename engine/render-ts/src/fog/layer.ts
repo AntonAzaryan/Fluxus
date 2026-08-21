@@ -8,6 +8,7 @@
  * здесь — структурный минимум, а не `HTMLCanvasElement`.
  */
 import type { RenderCostCounters } from '../cost.js';
+import { FOG_DIRTY_BLOCK, type FogDirtyBlocks } from './dirty.js';
 import type { FogWorldRect, VisibilityMask } from './mask.js';
 
 /**
@@ -28,7 +29,12 @@ export interface FogLayerCanvas {
   getContext(contextId: '2d'): FogLayerContext | null;
 }
 
-/** Структурный минимум контекста: блит ImageData, ничего больше. */
+/**
+ * Структурный минимум контекста: блит ImageData, ничего больше. Форм блита две,
+ * как у самого канваса: целиком и ГРЯЗНЫМ ПРЯМОУГОЛЬНИКОМ — вторая нужна окну
+ * рассеивания (design D5 change `fog-mask-budgeted-rebuild`), которое трогает
+ * только неустоявшиеся блоки растра.
+ */
 export interface FogLayerContext {
   createImageData(width: number, height: number): {
     readonly data: Uint8ClampedArray;
@@ -36,6 +42,15 @@ export interface FogLayerContext {
     readonly height: number;
   };
   putImageData(image: unknown, dx: number, dy: number): void;
+  putImageData(
+    image: unknown,
+    dx: number,
+    dy: number,
+    dirtyX: number,
+    dirtyY: number,
+    dirtyWidth: number,
+    dirtyHeight: number,
+  ): void;
 }
 
 /** Непрозрачный байт альфы: туман вне видимости кроет тон целиком. */
@@ -91,9 +106,11 @@ export class FogMinimapSurface {
 
   /**
    * Блит маски в канвас (design D6): пиксель — тон тумана с альфой `1 − свет`;
-   * силу затемнения виджет применяет сам из того же конфига (HUD-6). Ряды
-   * перевёрнуты: у растра ряд 0 — минимальный `y` мира, у канваса — верхняя
-   * строка, а миникарта рисует мир `+Y` вверх.
+   * силу затемнения виджет применяет сам из того же конфига (HUD-6).
+   *
+   * `dirty` — окно рассеивания (design D5): переписываются только его блоки, и
+   * в канвас уезжает их общий прямоугольник. Без окна (`null`) блит идёт по
+   * всему растру — так публикуется первая перестройка и снап (REND-2).
    *
    * Тон приходит sRGB-числом (`THREE.Color#getHex`, кэш подсистемы): канвасу
    * нужны sRGB-байты, а компоненты THREE.Color — рабочее (линейное)
@@ -106,6 +123,7 @@ export class FogMinimapSurface {
     shown: Uint8Array,
     hex: number,
     cost: RenderCostCounters | undefined,
+    dirty: FogDirtyBlocks | null = null,
   ): void {
     if (this.create === null) return;
     if (this.canvas === null) {
@@ -115,17 +133,14 @@ export class FogMinimapSurface {
     }
     const context = this.canvas.getContext('2d');
     if (context === null) return;
+    const fresh = this.image === null;
     this.image ??= context.createImageData(mask.width, mask.height);
     const image = this.image;
-    // Блит идёт по всему растру: та же квадратичная зависимость от разрешения,
-    // что у обнуления и загрузки, но в главном потоке и попиксельно (PERF-3).
-    // Сток уже прочитан вызывающим — здесь только инкремент, и он стоит ПОСЛЕ
-    // отказов выше: без канваса блита не было, и приписывать его нечему.
-    if (cost !== undefined) cost.fogMinimapTexels += mask.width * mask.height;
     // Тон постоянен по растру: R/G/B вбиваются один раз на буфер (и заново на
     // смену тона, FOW-10), горячий цикл пишет только альфу — одна запись на
     // тексель вместо четырёх при той же картинке.
-    if (this.imageHex !== hex) {
+    const repainted = this.imageHex !== hex;
+    if (repainted) {
       const r = (hex >> 16) & 0xff;
       const g = (hex >> 8) & 0xff;
       const b = hex & 0xff;
@@ -137,13 +152,80 @@ export class FogMinimapSurface {
       }
       this.imageHex = hex;
     }
-    for (let row = 0; row < mask.height; row++) {
-      const source = (mask.height - 1 - row) * mask.width;
-      const dest = row * mask.width * 4;
-      for (let column = 0; column < mask.width; column++) {
-        image.data[dest + column * 4 + 3] = OPAQUE - shown[source + column]!;
+    // Свежий буфер и смена тона — блит целиком: грязное окно накрыло бы лишь
+    // часть перекрашенных пикселей, и в канвасе остались бы два тона разом.
+    if (dirty === null || fresh || repainted) {
+      // Блит идёт по всему растру: та же квадратичная зависимость от разрешения,
+      // что у обнуления и загрузки, но в главном потоке и попиксельно (PERF-3).
+      // Сток уже прочитан вызывающим — здесь только инкремент, и он стоит ПОСЛЕ
+      // отказов выше: без канваса блита не было, и приписывать его нечему.
+      if (cost !== undefined) cost.fogMinimapTexels += mask.width * mask.height;
+      this.alphaRows(image.data, mask, shown, 0, mask.height - 1, 0, mask.width - 1);
+      context.putImageData(image, 0, 0);
+      return;
+    }
+    // Окно рассеивания (design D5): альфа переписывается только в грязных
+    // блоках, а в канвас уезжает их ОБЩИЙ прямоугольник. Ряды перевёрнуты (см.
+    // ниже), поэтому нижняя граница блоков даёт ВЕРХНЮЮ границу прямоугольника.
+    let xMin = mask.width;
+    let xMax = -1;
+    let yMin = mask.height;
+    let yMax = -1;
+    for (let row = 0; row < dirty.rows; row++) {
+      const y0 = row * FOG_DIRTY_BLOCK;
+      const y1 = Math.min(y0 + FOG_DIRTY_BLOCK, mask.height) - 1;
+      for (let column = 0; column < dirty.cols; column++) {
+        if (!dirty.isDirty(column, row)) continue;
+        const x0 = column * FOG_DIRTY_BLOCK;
+        const x1 = Math.min(x0 + FOG_DIRTY_BLOCK, mask.width) - 1;
+        this.alphaRows(image.data, mask, shown, y0, y1, x0, x1);
+        if (x0 < xMin) xMin = x0;
+        if (x1 > xMax) xMax = x1;
+        if (y0 < yMin) yMin = y0;
+        if (y1 > yMax) yMax = y1;
       }
     }
-    context.putImageData(image, 0, 0);
+    if (yMax < 0) return;
+    // Считается ПРЯМОУГОЛЬНИК, а не сумма блоков: копию в канвас делает
+    // `putImageData`, и платит она за весь прямоугольник целиком — кольцо
+    // рассеивания вокруг наблюдателя занимает лишь часть своего bbox, и сумма
+    // блоков занижала бы работу главного потока тем сильнее, чем тоньше маска
+    // (PERF-3). Перезапись альфы идёт по блокам внутри него, то есть дешевле, —
+    // но счётчик обязан называть большее из двух, а не меньшее.
+    if (cost !== undefined) {
+      cost.fogMinimapTexels += (xMax - xMin + 1) * (yMax - yMin + 1);
+    }
+    context.putImageData(
+      image,
+      0,
+      0,
+      xMin,
+      mask.height - 1 - yMax,
+      xMax - xMin + 1,
+      yMax - yMin + 1,
+    );
+  }
+
+  /**
+   * Альфа прямоугольника растра в буфер пикселей. Ряды перевёрнуты: у растра
+   * ряд 0 — минимальный `y` мира, у канваса — верхняя строка, а миникарта
+   * рисует мир `+Y` вверх.
+   */
+  private alphaRows(
+    data: Uint8ClampedArray,
+    mask: VisibilityMask,
+    shown: Uint8Array,
+    y0: number,
+    y1: number,
+    x0: number,
+    x1: number,
+  ): void {
+    for (let y = y0; y <= y1; y++) {
+      const source = y * mask.width;
+      const dest = (mask.height - 1 - y) * mask.width * 4;
+      for (let x = x0; x <= x1; x++) {
+        data[dest + x * 4 + 3] = OPAQUE - shown[source + x]!;
+      }
+    }
   }
 }
