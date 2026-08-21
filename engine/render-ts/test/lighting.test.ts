@@ -831,16 +831,18 @@ describe('тени на переходе фаз (design D3, REND-32)', () => {
     for (let frame = 0; frame < 7; frame++) advance(rig, 1);
     expect(rig.lighting.staticRebuilds).toBe(1);
 
-    // Кадры перехода (8-я и 9-я секунды) делят карту через один, а кадр
-    // установившейся фазы добивает кэш точным направлением фазы.
+    // Оба кадра перехода (8-я и 9-я секунды) устаревают кэш, и оба его
+    // перерисовывают: динамики в этой сцене нет вовсе, поэтому ворота
+    // чередования REND-30 статику не придерживают. Третий — кадр установившейся
+    // фазы, добивающий кэш её точным направлением.
     const before = rig.lighting.lights.sun.position.x;
     for (let frame = 0; frame < 3; frame++) advance(rig, 1);
-    expect(rig.lighting.staticRebuilds).toBe(3);
+    expect(rig.lighting.staticRebuilds).toBe(4);
     expect(rig.lighting.lights.sun.position.x).not.toBe(before);
 
     // Вторая фаза установилась — кэш снова событиен.
     for (let frame = 0; frame < 5; frame++) advance(rig, 1);
-    expect(rig.lighting.staticRebuilds).toBe(3);
+    expect(rig.lighting.staticRebuilds).toBe(4);
   });
 
   it('покадровая карта динамики на переходе не застывает', () => {
@@ -850,8 +852,10 @@ describe('тени на переходе фаз (design D3, REND-32)', () => {
     advance(rig, 0);
     const { sun, sunDynamic } = rig.lighting.lights;
 
-    // Переход из тридцати кадров: карта у источника одна на кадр, и делят они её
-    // через один — иначе тени бойцов застыли бы на всю длину перехода (REND-32).
+    // Переход из тридцати кадров: цикл устаревает кэш КАЖДЫМ кадром, карта у
+    // источника одна на кадр, и делят они кадры воротами чередования REND-30 —
+    // теми же, что под потоком инвалидаций пола. Без чередования тени бойцов
+    // застыли бы на всю длину перехода (REND-32).
     let staticFrames = 0;
     let dynamicFrames = 0;
     advance(rig, 8);
@@ -864,6 +868,45 @@ describe('тени на переходе фаз (design D3, REND-32)', () => {
     expect(dynamicFrames).toBeGreaterThan(10);
     // И ровно один источник за кадр — правило кадра не сломано.
     expect(staticFrames + dynamicFrames).toBe(30);
+  });
+
+  it('кроссфейд без движения источника не удорожает кадр под потоком событий (PERF-3)', () => {
+    /**
+     * Два прогона одной и той же работы: установившаяся фаза и кроссфейд с
+     * РАВНЫМИ направлениями соседних фаз, оба под непрерывным потоком событий
+     * инвалидации — мутацией пола каждым тиком (TERR-6, сценарий REND-30
+     * «Непрерывная мутация пола»). Чередование ярусов в обоих случаях создаёт
+     * поток событий, а не цикл: направление стоит, и для теней такой переход
+     * бесплатен при любой длине (design D3).
+     */
+    const run = (fading: boolean): Record<string, number> => {
+      const rig = makeRig(cycleSection({ shadows: { mode: 'hybrid' } }));
+      rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+      rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+      // Кадр запекания кэша — до замера; у второго прогона он же вводит цикл в
+      // окно кроссфейда [8, 10), чтобы измеряемые кадры отличались только им.
+      advance(rig, fading ? 8 : 0);
+      const cost = createCostCounters();
+      withCostSink(cost, () => {
+        for (let frame = 0; frame < 24; frame++) {
+          rig.lighting.invalidateStatic();
+          advance(rig, 1 / 60);
+        }
+      });
+      return { ...cost };
+    };
+    const settled = run(false);
+    const crossfade = run(true);
+
+    // Работа кадров одна и та же — и счётчики обязаны совпасть: записывать на
+    // цикл работу потока событий значило бы удваивать эталон ни на чём.
+    expect(crossfade.lightingStaticCasters).toBe(settled.lightingStaticCasters);
+    expect(crossfade.lightingDynamicCasters).toBe(settled.lightingDynamicCasters);
+    expect(crossfade.lightingStaticRebuilds).toBe(settled.lightingStaticRebuilds);
+    // И проверялось не отсутствие работы: под потоком событий ярусы чередуются,
+    // и обе карты рисуются (REND-30).
+    expect(settled.lightingStaticRebuilds).toBeGreaterThan(0);
+    expect(settled.lightingDynamicCasters).toBeGreaterThan(0);
   });
 
   it('стоимость перехода видна счётчиками, а не спрятана от них (PERF-3)', () => {
@@ -884,8 +927,9 @@ describe('тени на переходе фаз (design D3, REND-32)', () => {
     // покадровая работа цикла, которую declaration объявляет вслух (QUAL-3).
     expect(cost.lightingStaticCasters).toBe(8);
     // Динамика — батч сущности: семь установившихся кадров первой фазы, кадр
-    // перехода со своей картой и кадр перехода, на котором ей переставили флаги.
-    expect(cost.lightingDynamicCasters).toBe(9);
+    // перехода со своей картой и ДВА кадра, на которых ей переставили флаги под
+    // сдвинувшимся источником (кадр перерисовки кэша и добивающий кадр фазы).
+    expect(cost.lightingDynamicCasters).toBe(10);
   });
 
   it('переход не трогает фрустум теневой камеры, сторону карты и смещения выборки', () => {

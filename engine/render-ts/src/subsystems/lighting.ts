@@ -48,6 +48,9 @@
  * фрустум от направления не зависит вовсе — он обтянут по арене (design D6).
  * Кэш статики на переходе трогается ровно тогда, когда поехало НАПРАВЛЕНИЕ:
  * карта глубины не зависит ни от тона, ни от интенсивности (design D3).
+ * Собственного чередования карт цикл при этом не ведёт — кадры делят между
+ * ярусами ворота REND-30 в `updateFrame`, те же, что под потоком инвалидаций
+ * пола.
  */
 import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
@@ -192,11 +195,6 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
    * кадр тогда байт-в-байт тот же, что до появления REND-32.
    */
   private readonly cycle = new LightingCycle();
-  /**
-   * Чей ход на кадре перехода: кэш статики или карта динамики. Карта у источника
-   * одна на кадр, и переход делит кадры между ними через один (`applyCycleSample`).
-   */
-  private cycleStaleFrame = false;
 
   constructor(options: LightingOptions = {}) {
     this.section = options.config;
@@ -282,6 +280,12 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
   updateFrame(_dt: number, _alpha: number, realDt: number): void {
     if (this.ctx === null) return;
     const sample = this.cycle.step(realDt);
+    // Сдвинул ли цикл источник ЭТИМ кадром. От этого — и устаревание кэша, и то,
+    // платит ли кадр за ярус, чью карту он не рисовал: перестановка флагов от
+    // ПОТОКА СОБЫТИЙ (мутация пола TERR-6, перетаскивание декорации) бывает
+    // покадровой и без всякого цикла, и записывать её на цикл значило бы
+    // удваивать счётчики там, где он ничего не сделал (PERF-3).
+    const cycleMoved = sample?.directionMoved === true;
     if (sample !== null) this.applyCycleSample(sample);
     const cost = costSink();
     const mode = this.current.shadowMode;
@@ -320,11 +324,10 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
       if (cost !== undefined) {
         cost.lightingStaticCasters += this.staticRoots.size;
         cost.lightingStaticRebuilds++;
-        // Кадр перехода переставил флаги и ярусу, чью карту не рисовал: работа
-        // по числу его корней реальная, и эталон её видит (PERF-3, см. `quality`).
-        if (reflagged && this.cycle.inTransition) {
-          cost.lightingDynamicCasters += this.dynamicRoots.size;
-        }
+        // Кадр, на котором цикл сдвинул источник, переставил флаги и ярусу, чью
+        // карту не рисовал: работа по числу его корней реальная, и эталон её
+        // видит (PERF-3, см. `quality`).
+        if (reflagged && cycleMoved) cost.lightingDynamicCasters += this.dynamicRoots.size;
       }
       return;
     }
@@ -339,10 +342,11 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     this.dynamicIdle = !hasDynamic;
     if (cost === undefined) return;
     cost.lightingDynamicCasters += this.dynamicRoots.size;
-    // Та же добавка с другой стороны: кадр перехода обошёл и реестр статики.
-    // Событийная перестановка флагов (правка реестра, смена режима) сюда не
-    // попадает — она бывает раз на событие, а не каждым кадром.
-    if (reflagged && this.cycle.inTransition) cost.lightingStaticCasters += this.staticRoots.size;
+    // Та же добавка с другой стороны: кадр, сдвинувший источник, обошёл и реестр
+    // статики. Перестановка флагов, вызванная не циклом (правка реестра, смена
+    // режима, поток инвалидаций пола), сюда не попадает — за неё платят те же
+    // счётчики яруса, чья карта в этом кадре и рисуется.
+    if (reflagged && cycleMoved) cost.lightingStaticCasters += this.staticRoots.size;
   }
 
   // ------------------------------------------------------- реестр кастеров
@@ -415,13 +419,14 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
    *
    * - установившаяся фаза не делает ничего, а кадр перехода интерполирует
    *   фиксированный набор значений — это работа постоянного размера;
-   * - НО в `hybrid` переход с движущимся направлением делит кадры между картами
-   *   ярусов (`applyCycleSample`), а смена яруса переставляет флаги ОБОИМ
-   *   реестрам кастеров (`applyPhase`) — и это уже работа по числу корней сцены,
-   *   на каждом кадре перехода. Она видна счётчиками обоих ярусов —
+   * - НО в `hybrid` переход с движущимся направлением устаревает кэш статики
+   *   КАЖДЫМ кадром, и ворота чередования REND-30 (см. `updateFrame`) делят
+   *   кадры между картами ярусов. Смена яруса переставляет флаги ОБОИМ реестрам
+   *   кастеров (`applyPhase`) — и это уже работа по числу корней сцены, на
+   *   каждом кадре перехода. Она видна счётчиками обоих ярусов —
    *   `lightingStaticCasters` и `lightingDynamicCasters` растут в `updateFrame`
-   *   под условием `reflagged && this.cycle.inTransition`, — а не спрятана от
-   *   эталона (PERF-3).
+   *   под условием `reflagged && cycleMoved`, — а не спрятана от эталона
+   *   (PERF-3).
    *
    * Своей ручки эта работа не требует, потому что уже управляется объявленными:
    * `lighting.shadowMode` снимает её вовсе (`none` — теней нет, `full` — карта
@@ -598,7 +603,6 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     // начинается с начала первой фазы, и её значения встают на источники сразу,
     // а не первым кадром — иначе сцена с циклом показала бы один кадр
     // статической частью секции.
-    this.cycleStaleFrame = false;
     const first = this.cycle.reset(resolveLightingCycle(this.section));
     if (first !== null) this.applyCycleSample(first);
   }
@@ -623,25 +627,16 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     this.aimDirection(this.sun, dx, dy, dz);
     this.aimDirection(this.sunDynamic, dx, dy, dz);
     // Карта глубины зависит от направления, а не от тона: кэш статики устаревает
-    // ровно тогда, когда источник поехал, и стоимость этого видна счётчиками
-    // (PERF-3), а не спрятана от них.
-    if (!sample.directionMoved) return;
-    if (!this.cycle.inTransition) {
-      // Установившаяся фаза добивает кэш ТОЧНЫМ направлением фазы — один кадр на
-      // границу слота, и дальше кэш снова событиен, как без цикла (REND-30).
-      this.cycleStaleFrame = false;
-      this.staticStale = true;
-      return;
-    }
-    // Кадр перехода поднимает устаревание ЧЕРЕЗ ОДИН, а не каждым: карта у
-    // источника одна на кадр (см. заголовок), и кадр перерисовки кэша пропускает
-    // обновление динамической. Подними мы устаревание каждым кадром перехода,
-    // покадровая карта динамики не рисовалась бы весь переход — тени бойцов
-    // застыли бы на всю его длину, а это и есть та самая оторвавшаяся от кадра
-    // тень, которой REND-32 быть не велит. Через один обе карты отстают не
-    // больше чем на кадр: за кадр направление проходит сотые доли дуги перехода.
-    this.cycleStaleFrame = !this.cycleStaleFrame;
-    if (this.cycleStaleFrame) this.staticStale = true;
+    // ровно тогда, когда источник ПОЕХАЛ, — и на каждом таком кадре, включая
+    // последний, добивающий кэш точным направлением установившейся фазы.
+    //
+    // Своего чередования цикл при этом не ведёт: делят кадры между картами
+    // ворота REND-30 в `updateFrame` — кадр статики допустим, только если
+    // предыдущий ею не был либо динамики нет вовсе. Устаревание липкое, поэтому
+    // отклонённый воротами запрос не теряется, а ждёт своего кадра; собственное
+    // чередование поверх ворот лишь вдвое разредило бы обновление кэша там, где
+    // динамики нет, и жгло бы кадры на перестановку флагов ни за чем.
+    if (sample.directionMoved) this.staticStale = true;
   }
 
   /**
@@ -702,12 +697,14 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
 
   /**
    * Флаги кастеров под фазу кадра; `true` — реестры обойдены этим вызовом.
-   * Обход идёт ТОЛЬКО при смене фазы или правке реестра: в `hybrid` вне перехода
-   * фаза меняется на перерисовке кэша и обратно, то есть на событии, а не на
-   * кадре. На кадрах перехода цикла (REND-32) ярусы меняются местами каждым
-   * кадром — этот обход и есть та покадровая работа, которую объявляет `quality`
-   * и показывают счётчики `lightingStaticCasters`/`lightingDynamicCasters`
-   * (`updateFrame`, ветви `hybrid`).
+   * Обход идёт ТОЛЬКО при смене фазы или правке реестра: в `hybrid` без потока
+   * событий фаза меняется на перерисовке кэша и обратно, то есть на событии, а
+   * не на кадре. Там же, где устаревание приходит каждым кадром — переход цикла
+   * (REND-32) или непрерывная мутация пола (TERR-6), — ворота чередования
+   * REND-30 меняют ярусы местами покадрово, и этот обход становится покадровой
+   * работой. Долю, вызванную циклом, объявляет `quality` и показывают счётчики
+   * `lightingStaticCasters`/`lightingDynamicCasters` (`updateFrame`, ветви
+   * `hybrid`, под `reflagged && cycleMoved`).
    */
   private applyPhase(next: ShadowPhase): boolean {
     if (next === this.phase && !this.flagsStale) return false;
