@@ -35,17 +35,11 @@
 
 ## 6. Спека и гейт
 
-- [ ] 6.1 `openspec validate --specs --strict` и `npm run spec-graph -- check` зелёные; ссылки REND-29 ↔ REND-32 ↔ PRES-2 целы
-      <!-- `openspec validate --specs --strict` зелёный (37/37), сам change
-      валиден. `spec-graph check` красный ОДНИМ классом находок: 53 × «код
-      цитирует REND-32, который не определён ни в одной спеке» — инструмент
-      видит только главные спеки, а дельта живёт в `changes/`. Проверено
-      временной подстановкой дельты в `openspec/specs/rendering/spec.md`: граф
-      зелёный, ссылки целы. Снимается синхронизацией дельты (`/opsx:sync` либо
-      `/opsx:archive`), которая в объём этой правки не входила. -->
-- [ ] 6.2 `npm run check` целиком; дифф `*.cost.json`, если всплыл, принимать отдельно через `npm run golden:cost` с объяснением в коммите (design Risks)
-      <!-- Прогнан целиком. Зелено: typecheck, eslint, knip, jscpd, depcruise,
-      все пакетные сюиты (golden и cost-эталоны в том числе — диффа `*.cost.json`
-      нет: стенд стоимости берёт свою секцию света, цикла в ней нет). Красный —
-      только `spec-graph check` и повторяющий его `integration-ts/test/specGraph.test.ts`
-      по причине из 6.1. -->
+- [x] 6.1 `openspec validate --specs --strict` и `npm run spec-graph -- check` зелёные; ссылки REND-29 ↔ REND-32 ↔ PRES-2 целы
+      <!-- Дельта синхронизирована в `openspec/specs/rendering/spec.md`
+      (`/opsx:sync`): валидация 37/37, «Граф спек зелёный», находок класса
+      «REND-32 не определён» больше нет. -->
+- [x] 6.2 `npm run check` целиком; дифф `*.cost.json`, если всплыл, принимать отдельно через `npm run golden:cost` с объяснением в коммите (design Risks)
+      <!-- Зелёный целиком после синка: lint:all, spec-graph check и все
+      пакетные сюиты, включая `integration-ts/test/specGraph.test.ts`; диффа
+      `*.cost.json` нет — стенд стоимости берёт свою секцию света без цикла. -->
