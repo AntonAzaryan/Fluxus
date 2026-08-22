@@ -71,7 +71,14 @@
       }
     },
     "Torch": {
-      "effect": "visuals/effects/torch.effect.json"
+      "effect": "visuals/effects/torch.effect.json",
+      "light": {
+        "type": "point",
+        "color": "#ffb066",
+        "intensity": 9,
+        "distance": 8,
+        "offset": { "z": 0.9 }
+      }
     }
   },
   "effects": {

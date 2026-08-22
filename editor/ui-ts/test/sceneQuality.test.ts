@@ -82,6 +82,11 @@ describe('вьюпорт редактора живёт на «ультре» (QU
     const controller = new QualityController(viewportStage());
 
     expect(controller.knobs.map((knob) => knob.name).sort()).toEqual([
+      // Потолок локальных источников (`rendering` REND-33) приходит вьюпорту
+      // сам собой — вместе с подсистемой освещения: зашитый документ его не
+      // называет, и действует кодовое умолчание ручки (QUAL-1). Правок кода
+      // редактора локальный свет не потребовал ни одной (ED-22).
+      'lighting.maxLocalLights',
       'lighting.shadowMapSize',
       'lighting.shadowMode',
       'models.defaultTier',

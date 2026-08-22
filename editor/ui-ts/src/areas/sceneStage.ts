@@ -589,8 +589,17 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   const build = (first: TerrainGrid | null): void => {
     built = true;
     // Свет — первой подсистемой (REND-8): геометрия ниже отдаёт ей свои корни
-    // теневыми кастерами, а сам он не зависит ни от сетки, ни от манифеста.
-    lighting = new LightingSubsystem(first === null ? {} : { grid: first });
+    // теневыми кастерами и носителями локального света (REND-33), а сам он не
+    // зависит ни от сетки, ни от манифеста.
+    //
+    // Камера — та же (`camera3`), что у отсечения инстансов ниже, и по той же
+    // причине она нужна свету: активные локальные источники отбираются по
+    // расстоянию до ТОЧКИ ВЗГЛЯДА камеры (REND-33). Без неё точкой была бы
+    // середина арены, и на сцене, где носителей больше потолка, автор видел бы
+    // горящими не те источники, что игрок, — то есть кадры разошлись бы там,
+    // где ED-22 требует тождества. Позу на камеру сажает `applyCameraPose` до
+    // кадра подсистем (см. `frame`), поэтому отбор идёт по взгляду ЭТОГО кадра.
+    lighting = new LightingSubsystem({ camera: camera3, ...(first === null ? {} : { grid: first }) });
     presentation.register(lighting);
     if (first !== null) {
       surface = new VisualSurfaceSource(first);

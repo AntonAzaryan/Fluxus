@@ -21,6 +21,7 @@ import type {
 import {
   DEFAULT_CYCLE_TRANSITION_SECONDS,
   DEFAULT_LIGHTING_CONFIG,
+  DEFAULT_MAX_LOCAL_LIGHTS,
   LightingSubsystem,
   ModelsSubsystem,
   PresentationStage,
@@ -1001,16 +1002,22 @@ describe('тень батчевого инстанса следует позе (
 // -------------------------------------------------------- ручки качества
 
 describe('ручки качества освещения (QUAL-1, QUAL-3)', () => {
-  it('подсистема объявляет обе ручки потолками', () => {
+  it('подсистема объявляет теневые ручки потолками, ручку локального света — значением', () => {
     const knobs = new LightingSubsystem().quality().knobs;
     expect(knobs.map((knob) => knob.name)).toEqual([
       'lighting.shadowMode',
       'lighting.shadowMapSize',
+      'lighting.maxLocalLights',
     ]);
-    for (const knob of knobs) expect(knob.semantics).toBe('ceiling');
+    for (const knob of knobs.slice(0, 2)) expect(knob.semantics).toBe('ceiling');
     // Умолчание потолка — «не ограничивать»: самый дорогой режим и бесконечность.
     expect(knobs[0]!.default).toBe('full');
     expect(knobs[1]!.default).toBe(Number.POSITIVE_INFINITY);
+    // Потолок числа активных локальных источников (REND-33) — прямое значение:
+    // авторского числа активных источников не существует, спорить пресету не с
+    // чем, и умолчание у ручки своё, кодовое (QUAL-1).
+    expect(knobs[2]!.semantics).toBe('value');
+    expect(knobs[2]!.default).toBe(DEFAULT_MAX_LOCAL_LIGHTS);
   });
 
   it('цикл ручки не заводит: рычаг у его работы — потолок режима теней (QUAL-3, REND-32)', () => {
@@ -1024,6 +1031,7 @@ describe('ручки качества освещения (QUAL-1, QUAL-3)', () =
     expect(cycled.map((knob) => knob.name)).toEqual([
       'lighting.shadowMode',
       'lighting.shadowMapSize',
+      'lighting.maxLocalLights',
     ]);
   });
 

@@ -77,6 +77,11 @@ describe('ED-22: свет арены — из подсистемы, а не из
       // держалось раньше; теперь его держит подсистема (REND-8).
       expect(code).not.toContain('AmbientLight');
       expect(code).not.toContain('DirectionalLight');
+      // То же и для локальных источников арены (REND-33): свет факела — блок
+      // записи манифеста (ASSET-16), а не точечный источник, заведённый рядом
+      // с подсистемой. Сценарий «Потребитель заводит свой источник».
+      expect(code).not.toContain('PointLight');
+      expect(code).not.toContain('SpotLight');
     });
 
     it(`${consumer.what}: регистрирует подсистему освещения и включает теневые карты`, () => {
@@ -91,6 +96,36 @@ describe('ED-22: свет арены — из подсистемы, а не из
       expect(code).not.toContain('THREE.PCFSoftShadowMap');
     });
   }
+
+  it('локальный свет достаётся обоим потребителям одним портом (REND-33)', () => {
+    for (const consumer of CONSUMERS) {
+      const code = codeOf(sourceOf(consumer.path));
+      // Оба потребителя отдают подсистеме моделей ОДНУ ссылку на подсистему
+      // освещения (опция `shadows`), и порт носителей света приезжает вместе с
+      // портом теневых кастеров: второй проводки под свет не заводится (ED-22).
+      expect(code, consumer.what).toContain('shadows: lighting');
+      // И оба отдают самой подсистеме освещения камеру кадра: активные
+      // источники отбираются по расстоянию до ТОЧКИ ВЗГЛЯДА (REND-33), и
+      // потребитель без камеры отбирал бы их от середины арены — то есть видел
+      // бы горящими не те источники, что второй.
+      expect(code, consumer.what).toMatch(/new LightingSubsystem\(\{[\s\S]{0,240}?camera/);
+    }
+
+    // Сцена автора и сцена игрока с ОДИНАКОВО наведённой камерой: носителей на
+    // обеих больше, чем разрешает потолок, — только на такой сцене отбор и
+    // может разойтись, и только на ней тождество кадров проверяемо.
+    const viewport = litStand(lookingAt(8));
+    const client = litStand(lookingAt(8));
+    expect(viewport.lighting.localLights.carrierCount).toBe(TORCH_ROW.length);
+    expect(viewport.lighting.localLights.activeCount).toBe(LOCAL_LIGHT_CEILING);
+    expect(localLightNumbers(viewport.lighting)).toEqual(localLightNumbers(client.lighting));
+
+    // И отбор действительно ведёт камера: та же сцена, взгляд на другой конец
+    // ряда — горят другие источники. Без этого равенство выше было бы
+    // тождеством двух одинаково слепых стендов.
+    const elsewhere = litStand(lookingAt(0));
+    expect(localLightNumbers(elsewhere.lighting)).not.toEqual(localLightNumbers(client.lighting));
+  });
 
   it('сцена без секции lighting освещена у обоих потребителей одинаково', () => {
     // Подсистема одна и та же, и это ровно то, что требуется: числа больше не
@@ -129,7 +164,15 @@ const NO_ASSETS = {
 
 const MANIFEST: VisualManifest = {
   entities: { Prop: { model: MODEL_ID } },
-  decorations: { Statue: { model: MODEL_ID } },
+  decorations: {
+    Statue: { model: MODEL_ID },
+    // Носитель локального света (ASSET-16): вид эмиттерный — его изображение
+    // рисуют частицы (ASSET-14), а свет он несёт наравне с моделью (REND-33).
+    Torch: {
+      effect: 'visuals/effects/torch.effect.json',
+      light: { type: 'point', color: '#ffb066', intensity: 12, distance: 6, offset: { z: 1.5 } },
+    },
+  },
 };
 
 function flatGrid(size = 8): TerrainGrid {
@@ -214,6 +257,49 @@ function tickView(entities: EntityView[]): Parameters<PresentationStage['publish
 
 function decorationSet(entities: EntityView[]): ReadonlyMap<EntityId, EntityView> {
   return new Map(entities.map((entity) => [entity.id, entity]));
+}
+
+/** Потолок стенда: носителей на арене больше — на том отбор и проверяется. */
+const LOCAL_LIGHT_CEILING = 2;
+
+/** Ряд факелов вдоль оси X: между ними отбор и выбирает по точке взгляда. */
+const TORCH_ROW: readonly number[] = [0, 2, 4, 6, 8];
+
+/** Камера над точкой ряда, смотрящая вниз, — то же, что даёт кадру потребитель. */
+function lookingAt(x: number): THREE.Camera {
+  const camera = new THREE.PerspectiveCamera();
+  camera.position.set(x, 0, 10);
+  camera.lookAt(x, 0, 0);
+  return camera;
+}
+
+/**
+ * Стенд с рядом носителей локального света (REND-33) под потолком пресета: их
+ * больше, чем разрешено, и потому отбор наблюдаем. Два кадра — потому что
+ * подсистема освещения владеет портом и зарегистрирована раньше владельца
+ * инстансов (REND-31): позу носителя она берёт ту, что посчитал предыдущий
+ * кадр, и первый кадр после появления инстанса её ещё не знает.
+ */
+function litStand(camera: THREE.Camera): Stand {
+  const stage = new PresentationStage(contextOf(new THREE.Scene()));
+  const grid = flatGrid();
+  const lighting = new LightingSubsystem({ grid, camera });
+  stage.register(lighting);
+  stage.register(new ModelsSubsystem(MANIFEST, { shadows: lighting, warn: () => {} }));
+  new QualityController(stage, { 'lighting.maxLocalLights': LOCAL_LIGHT_CEILING });
+  stage.publishDecorations(
+    decorationSet(TORCH_ROW.map((x, index) => view(100 + index, 'Torch', x))),
+  );
+  stage.frame(0.016, 0);
+  stage.frame(0.016, 0);
+  return { stage, lighting };
+}
+
+/** Числа горящих локальных источников — вход сверки двух потребителей. */
+function localLightNumbers(lighting: LightingSubsystem): unknown {
+  return lighting.localLights.lights
+    .filter((light) => light.intensity > 0)
+    .map((light) => [light.color.getHexString(), light.intensity, light.position.toArray()]);
 }
 
 // --------------------------------------------------------------- сценарии

@@ -151,6 +151,7 @@ describe('документы пресетов применимы к сцене �
     const controller = new QualityController(demoRig().stage);
     expect(controller.knobs.map((knob) => knob.name).sort()).toEqual([
       'fog.maskResolution',
+      'lighting.maxLocalLights',
       'lighting.shadowMapSize',
       'lighting.shadowMode',
       'models.defaultTier',
@@ -166,6 +167,9 @@ describe('balanced — сегодняшний кадр слово в слово 
     const withoutPreset = effectiveOf(null);
     const balanced = effectiveOf('balanced');
     const moved = Object.keys(balanced).filter((name) => balanced[name] !== withoutPreset[name]);
+    // Потолок локальных источников (REND-33) в этот список не входит: документ
+    // `balanced` называет ровно то число, которое у ручки и по умолчанию, —
+    // сегодняшний кадр от него не двигается.
     expect(moved.sort()).toEqual(['lighting.shadowMapSize', 'lighting.shadowMode']);
     // Потолок «нет потолка» — бесконечность (QUAL-1): документ его не называет,
     // и назвать не может — диапазон ручки описывает то, что вправе написать

@@ -53,9 +53,11 @@
  * пола.
  */
 import * as THREE from 'three';
-import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
+import type { TerrainGrid } from '@game-mvp/core';
 import { PRESENTATION_SHADOW_MODES, type PresentationLighting } from '@game-mvp/assets';
 import type {
+  LightCarrier,
+  LightCarrierSink,
   QualityDeclaration,
   QualityValues,
   RenderContext,
@@ -65,6 +67,7 @@ import type {
   ShadowPhase,
 } from '../types.js';
 import { costSink } from '../cost.js';
+import { LIGHTING_MAX_LOCAL_LIGHTS, LocalLightPool, localLightsKnob } from '../lighting/localLights.js';
 import type { DebugSource } from '../debug/contract.js';
 import { lightingSceneDebugSource, type DebugLightingState } from '../debug/lightingSource.js';
 import {
@@ -75,6 +78,7 @@ import {
   type ShadowMode,
 } from '../lighting/config.js';
 import { LightingCycle, type LightingCycleSample } from '../lighting/cycle.js';
+import { arenaExtent, type ArenaExtent } from '../lighting/arena.js';
 
 /**
  * Ручки качества подсистемы (QUAL-1, QUAL-3). Обе — ПОТОЛКИ над авторскими
@@ -84,13 +88,6 @@ import { LightingCycle, type LightingCycleSample } from '../lighting/cycle.js';
  */
 const LIGHTING_SHADOW_MODE = 'lighting.shadowMode';
 const LIGHTING_SHADOW_MAP_SIZE = 'lighting.shadowMapSize';
-
-/**
- * Радиус арены, когда сетки террейна подсистеме не дали (превью ассета ED-20,
- * тесты): фрустумы теневых камер обтягивать нечего, и берётся величина порядка
- * демо-арены — тени тогда есть, но качество их подсистеме не обещано.
- */
-const DEFAULT_ARENA_RADIUS = 32;
 
 /**
  * Запас фрустума теневой камеры над ареной, доля её радиуса: модели стоят выше
@@ -133,16 +130,21 @@ export interface LightingOptions {
   readonly grid?: TerrainGrid;
   /** Секция `lighting` парного документа (PRES-2); нет — умолчания. */
   readonly config?: PresentationLighting;
+  /**
+   * Камера кадра — вход отбора активных локальных источников (REND-33, design
+   * D3): важность источника меряется расстоянием до ТОЧКИ ВЗГЛЯДА камеры. Не
+   * задана — точкой берётся центр арены: отбор остаётся определённым и
+   * воспроизводимым, просто не следит за игроком (сборка без камеры — тесты,
+   * вьюпорт авторинга, headless).
+   *
+   * Приходит опцией, а не контекстом (REND-8), по тому же основанию, что у
+   * подсистемы моделей: контракт подсистем от отбора не меняется, а знать позу
+   * камеры нужно ровно ей.
+   */
+  readonly camera?: THREE.Camera;
 }
 
-/** Границы арены, по которым обтянуты теневые камеры. */
-interface ArenaExtent {
-  readonly centerX: number;
-  readonly centerY: number;
-  readonly radius: number;
-}
-
-export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
+export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, LightCarrierSink {
   readonly name = 'lighting';
 
   /**
@@ -195,11 +197,20 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
    * кадр тогда байт-в-байт тот же, что до появления REND-32.
    */
   private readonly cycle = new LightingCycle();
+  /**
+   * Локальные источники инстансов (REND-33): реестр носителей, пул источников
+   * и отбор активных живут в `lighting/localLights.ts` — здесь только их
+   * жизненный цикл вместе с подсистемой и порт, которым носители приходят.
+   */
+  private readonly local = new LocalLightPool();
+  /** Камера кадра — точка взгляда для отбора активных источников (design D3). */
+  private readonly camera: THREE.Camera | undefined;
 
   constructor(options: LightingOptions = {}) {
     this.section = options.config;
     this.current = this.effective();
     this.extent = arenaExtent(options.grid);
+    this.camera = options.camera;
     this.ambient.name = 'lighting:ambient';
     this.sun.name = 'lighting:sun';
     this.sunDynamic.name = 'lighting:sun-dynamic';
@@ -224,6 +235,11 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     return tier === 'static' ? this.staticRoots.size : this.dynamicRoots.size;
   }
 
+  /** Пул локальных источников (REND-33) — вход тестов и диагностики. */
+  get localLights(): LocalLightPool {
+    return this.local;
+  }
+
   /** Источники сцены — вход тестов и диагностики; сцене они принадлежат отсюда. */
   get lights(): {
     readonly ambient: THREE.AmbientLight;
@@ -235,6 +251,7 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
 
   init(ctx: RenderContext): void {
     this.ctx = ctx;
+    this.local.init(ctx.scene);
     ctx.scene.add(this.ambient);
     ctx.scene.add(this.sun);
     // Цель направленного источника — объект сцены: без неё матрица цели не
@@ -249,8 +266,14 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
    * никогда не освобождает (см. `releaseShadowMap`), — и сами источники со
    * сцены. Реестры кастеров чистятся здесь же: корни в них принадлежат
    * подсистемам-владельцам, а ссылки на них — этой (REND-30).
+   *
+   * Тем же порядком уходит пул локальных источников с реестром носителей
+   * (REND-33, design D6): носители принадлежат подсистемам-владельцам
+   * инстансов, снесённым позже, — снимутся они сами, а здесь отдаётся то, чем
+   * владеет эта подсистема.
    */
   dispose(): void {
+    this.local.dispose();
     for (const light of [this.sun, this.sunDynamic]) {
       releaseShadowMap(light);
       light.target.removeFromParent();
@@ -287,6 +310,10 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     // удваивать счётчики там, где он ничего не сделал (PERF-3).
     const cycleMoved = sample?.directionMoved === true;
     if (sample !== null) this.applyCycleSample(sample);
+    // Локальные источники (REND-33) — до ветвей режима теней: теней они не
+    // отбрасывают, от режима не зависят вовсе, а ветка `none` до конца кадра не
+    // доходит. Точка взгляда — камера кадра, нет её — центр арены (design D3).
+    this.local.updateFrame(this.camera, this.extent.centerX, this.extent.centerY);
     const cost = costSink();
     const mode = this.current.shadowMode;
     if (mode === 'none') {
@@ -391,6 +418,21 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     this.staticStale = true;
   }
 
+  // ------------------------------------------- носители локального света
+
+  /**
+   * Носитель локального света (REND-33): инстанс записи с блоком `light`
+   * (ASSET-16). В реестр теневых кастеров он НЕ попадает ни при каком роде
+   * источника — тени принадлежат направленному источнику (REND-30).
+   */
+  setLightCarrier(carrier: LightCarrier): void {
+    this.local.add(carrier);
+  }
+
+  dropLightCarrier(carrier: LightCarrier): void {
+    this.local.remove(carrier);
+  }
+
   // ------------------------------------------------------- конфигурация
 
   /**
@@ -454,6 +496,10 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
           min: 256,
           max: 8192,
         },
+        // Потолок числа активных локальных источников (REND-33, QUAL-3): своя
+        // ось стоимости — форвард-рендер считает каждый источник на каждом
+        // фрагменте, — и объявляет её тот, кто пулом владеет.
+        localLightsKnob(),
       ],
     };
   }
@@ -463,6 +509,8 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink {
     this.modeCeiling = isShadowMode(mode) ? mode : 'full';
     const size = values.get(LIGHTING_SHADOW_MAP_SIZE);
     this.sizeCeiling = typeof size === 'number' ? size : Number.POSITIVE_INFINITY;
+    const locals = values.get(LIGHTING_MAX_LOCAL_LIGHTS);
+    if (typeof locals === 'number') this.local.setCeiling(locals);
     this.applyResolved(this.effective());
   }
 
@@ -770,21 +818,4 @@ function releaseShadowMap(light: THREE.DirectionalLight): void {
   map.depthTexture?.dispose();
   map.dispose();
   light.shadow.map = null;
-}
-
-/**
- * Границы арены из сетки террейна — точка входной границы (REND-1, TERR-2):
- * `tileSize` приходит в Q16.16, дальше только float.
- */
-function arenaExtent(grid: TerrainGrid | undefined): ArenaExtent {
-  if (grid === undefined) {
-    return { centerX: 0, centerY: 0, radius: DEFAULT_ARENA_RADIUS };
-  }
-  const tile = grid.tileSize / FIXED_ONE;
-  const width = grid.width * tile;
-  const height = grid.height * tile;
-  // Вырожденная сетка (нулевые размеры) не должна схлопывать фрустум в точку:
-  // источник тогда стоял бы в центре арены и не светил бы вовсе.
-  const radius = Math.max(Math.hypot(width, height) / 2, 1);
-  return { centerX: width / 2, centerY: height / 2, radius };
 }

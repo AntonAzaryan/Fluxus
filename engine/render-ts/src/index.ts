@@ -2,6 +2,12 @@
 export { DEFAULT_CURVATURE_TESSELLATION } from './types.js';
 export type {
   EntityView,
+  // носители локального света инстансов (REND-33): порт подсистемы освещения и
+  // пара портов, которой владелец инстансов её видит
+  LightCarrier,
+  LightCarrierPose,
+  LightCarrierSink,
+  LightingSink,
   LocalAimPoint,
   LocalInputSample,
   RenderConfig,
@@ -225,6 +231,14 @@ export { FogDirtyBlocks } from './fog/dirty.js';
 // рендера — отсюда: своего они больше не заводят (`editor` ED-22).
 export { LightingSubsystem } from './subsystems/lighting.js';
 export type { LightingOptions } from './subsystems/lighting.js';
+// Локальные источники инстансов (REND-33): пул подсистемы освещения, его ручка
+// качества и её умолчание — вход тестов и документов пресетов (QUAL-1).
+export {
+  DEFAULT_MAX_LOCAL_LIGHTS,
+  LIGHTING_MAX_LOCAL_LIGHTS,
+  MAX_LOCAL_LIGHTS_LIMIT,
+  LocalLightPool,
+} from './lighting/localLights.js';
 export {
   DEFAULT_CYCLE_TRANSITION_SECONDS,
   DEFAULT_LIGHTING_CONFIG,

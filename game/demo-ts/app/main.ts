@@ -1226,6 +1226,11 @@ async function main(): Promise<void> {
       // корни теневыми кастерами.
       const lighting = new LightingSubsystem({
         grid,
+        // Камера кадра — вход отбора активных локальных источников (REND-33):
+        // важность источника меряется расстоянием до точки взгляда игрока. Та
+        // же самая, что у отсечения инстансов ниже, и позу на неё сажает
+        // `applyCameraPose` до кадра подсистем (CAM-1).
+        camera,
         ...(presentation?.lighting !== undefined ? { config: presentation.lighting } : {}),
       });
       remote!.register(lighting);

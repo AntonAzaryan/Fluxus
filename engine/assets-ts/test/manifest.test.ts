@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   AssetService,
+  DEFAULT_LIGHT_DECAY,
   DEFAULT_LOD_THRESHOLDS,
+  MAX_LIGHT_ANGLE_TURNS,
   POSITIVE_MIN,
   cameraEffectRangeText,
   clampCameraEffectParam,
@@ -16,6 +18,7 @@ import {
   resolveParticlesByState,
   resolveVisual,
   resolveVisualEmitter,
+  resolveVisualLight,
   resolveVisualTier,
   validateManifest,
   visualKeys,
@@ -888,5 +891,189 @@ describe('validateManifest: эмиттерный decoration-вид (ASSET-14)', 
       },
     });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('validateManifest: блок света записи (ASSET-16)', () => {
+  const entities = { rock: { model: 'models/Rock.mdx' } };
+  const point = { type: 'point', color: '#ffb066', intensity: 12, distance: 6 };
+
+  it('point-блок разбирается в величины рендера: умолчания раскрыты, углы в радианах', () => {
+    const result = validateManifest({
+      entities: { crystal: { model: 'models/Crystal.mdx', light: { ...point, offset: { z: 1.2 } } } },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const light = resolveVisualLight(result.manifest, 'crystal');
+    expect(light).not.toBeNull();
+    expect(light).toMatchObject({
+      type: 'point',
+      color: '#ffb066',
+      intensity: 12,
+      distance: 6,
+      // Затухание не написано — физическое умолчание блока, а не ноль.
+      decay: DEFAULT_LIGHT_DECAY,
+      offsetX: 0,
+      offsetY: 0,
+      offsetZ: 1.2,
+      penumbra: 0,
+    });
+    // Направление по умолчанию — вниз (ASSET-16): point его не читает, но
+    // разобранный блок не оставляет полю неопределённого значения.
+    expect(light!.directionZ).toBe(-1);
+  });
+
+  it('spot-блок: угол долями оборота переводится в радианы, направление нормируется', () => {
+    const result = validateManifest({
+      entities: {
+        lamp: {
+          model: 'models/Lamp.mdx',
+          light: {
+            type: 'spot',
+            color: '#ffffff',
+            intensity: 20,
+            distance: 9,
+            decay: 1,
+            angle: 0.125,
+            penumbra: 0.4,
+            direction: { x: 0, y: 3, z: -4 },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const light = resolveVisualLight(result.manifest, 'lamp')!;
+    // Восьмушка оборота — 45°: конверсия живёт на границе разбора (design D4).
+    expect(light.angleRad).toBeCloseTo(Math.PI / 4, 12);
+    expect(light.penumbra).toBe(0.4);
+    expect(light.decay).toBe(1);
+    expect(Math.hypot(light.directionX, light.directionY, light.directionZ)).toBeCloseTo(1, 12);
+    expect(light.directionY).toBeCloseTo(0.6, 12);
+    expect(light.directionZ).toBeCloseTo(-0.8, 12);
+  });
+
+  it('свет несёт и эмиттерный decoration-вид: блок — свойство записи, а не изображения', () => {
+    // Факел рисуется частицами (ASSET-14, REND-24), а свет несёт наравне со
+    // статуей: разрешение блока одно на оба рода записи и оба раздела.
+    const result = validateManifest({
+      entities,
+      decorations: { torch: { effect: 'visuals/effects/torch.effect.json', light: point } },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(resolveVisualLight(result.manifest, 'torch')?.intensity).toBe(12);
+    // Запись без блока разбирается как прежде — света у неё нет.
+    expect(resolveVisualLight(result.manifest, 'rock')).toBeNull();
+    expect(resolveVisualLight(result.manifest, 'nobody')).toBeNull();
+  });
+
+  it('запись без блока валидна и ничем не отличается от прежней', () => {
+    const result = validateManifest(validDoc);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(resolveVisualLight(result.manifest, 'skeleton')).toBeNull();
+  });
+
+  it('обязательные поля: тип, цвет, положительные интенсивность и граница действия', () => {
+    expectErrors(
+      { entities: { a: { model: 'm.mdx', light: {} } } },
+      /entities\.a\.light\.type: обязательное поле — род источника \(point \| spot\)/,
+      /entities\.a\.light\.color: обязательное поле — цвет формы "#rrggbb"/,
+      /entities\.a\.light\.intensity: обязательное поле — положительная интенсивность/,
+      /entities\.a\.light\.distance: обязательное поле — положительная граница действия/,
+    );
+    // Вырожденные значения: неположительная интенсивность и нулевая граница.
+    expectErrors(
+      { entities: { a: { model: 'm.mdx', light: { ...point, intensity: 0, distance: 0 } } } },
+      /entities\.a\.light\.intensity: обязательное поле/,
+      /entities\.a\.light\.distance: обязательное поле/,
+    );
+    // Источника без границы действия не существует (ASSET-16).
+    expectErrors(
+      { entities: { a: { model: 'm.mdx', light: { type: 'point', color: '#fff000', intensity: 3 } } } },
+      /entities\.a\.light\.distance: обязательное поле/,
+    );
+    expectErrors(
+      { entities: { a: { model: 'm.mdx', light: { ...point, color: 'тёплый' } } } },
+      /entities\.a\.light\.color: обязательное поле — цвет формы "#rrggbb"/,
+    );
+    expectErrors(
+      { entities: { a: { model: 'm.mdx', light: { ...point, decay: -1 } } } },
+      /entities\.a\.light\.decay: ожидалось неотрицательное затухание/,
+    );
+    expectErrors({ entities: { a: { model: 'm.mdx', light: 7 } } }, /entities\.a\.light: ожидался объект/);
+  });
+
+  it('неизвестный ключ блока отвергается адресно, а не игнорируется молча', () => {
+    expectErrors(
+      { entities: { a: { model: 'm.mdx', light: { ...point, radius: 3 } } } },
+      /entities\.a\.light\.radius: неизвестное поле/,
+    );
+    expectErrors(
+      { entities: { a: { model: 'm.mdx', light: { ...point, offset: { x: 1, up: 2 } } } } },
+      /entities\.a\.light\.offset\.up: неизвестное поле/,
+    );
+  });
+
+  it('spot-поле в блоке типа point отвергается: состав закрыт по действующему типу', () => {
+    expectErrors(
+      { entities: { a: { model: 'm.mdx', light: { ...point, angle: 0.1 } } } },
+      /entities\.a\.light\.angle: поле есть только у источника типа spot/,
+    );
+    expectErrors(
+      { entities: { a: { model: 'm.mdx', light: { ...point, penumbra: 0.5, direction: { z: -1 } } } } },
+      /entities\.a\.light\.penumbra: поле есть только у источника типа spot/,
+      /entities\.a\.light\.direction: поле есть только у источника типа spot/,
+    );
+  });
+
+  it('поле теней отвергается поимённо: локальные источники теней не отбрасывают', () => {
+    const errors = expectErrors(
+      { entities: { a: { model: 'm.mdx', light: { ...point, castShadow: true } } } },
+      /entities\.a\.light\.castShadow: полей теней в блоке света нет и быть не может/,
+    );
+    expect(errors.join('\n')).toContain('REND-33');
+    expectErrors(
+      { entities: { a: { model: 'm.mdx', light: { ...point, shadowMapSize: 512 } } } },
+      /entities\.a\.light\.shadowMapSize: полей теней в блоке света нет/,
+    );
+  });
+
+  it('конус: угол обязателен и лежит в (0..0.25] оборота, полутень — в [0..1]', () => {
+    const spot = { type: 'spot', color: '#ffffff', intensity: 5, distance: 4 };
+    expectErrors(
+      { entities, decorations: { lamp: { model: 'm.mdx', light: spot } } },
+      /decorations\.lamp\.light\.angle: обязательное поле spot-источника/,
+    );
+    for (const angle of [0, -0.1, 0.26]) {
+      expectErrors(
+        { entities, decorations: { lamp: { model: 'm.mdx', light: { ...spot, angle } } } },
+        /decorations\.lamp\.light\.angle: обязательное поле spot-источника/,
+      );
+    }
+    expect(MAX_LIGHT_ANGLE_TURNS).toBe(0.25);
+    expectErrors(
+      { entities, decorations: { lamp: { model: 'm.mdx', light: { ...spot, angle: 0.2, penumbra: 2 } } } },
+      /decorations\.lamp\.light\.penumbra: ожидалась полутень конуса в \[0\.\.1\]/,
+    );
+    // Направление нулевой длины — конусу некуда светить.
+    expectErrors(
+      {
+        entities,
+        decorations: {
+          lamp: { model: 'm.mdx', light: { ...spot, angle: 0.2, direction: { x: 0, y: 0, z: 0 } } },
+        },
+      },
+      /decorations\.lamp\.light\.direction: направление нулевой длины/,
+    );
+  });
+
+  it('опечатка в типе не рассыпается находками на каждом поле блока', () => {
+    const errors = expectErrors(
+      { entities: { a: { model: 'm.mdx', light: { ...point, type: 'pointt', angle: 0.1 } } } },
+      /entities\.a\.light\.type: обязательное поле — род источника/,
+    );
+    expect(errors.some((e) => e.includes('light.angle'))).toBe(false);
   });
 });

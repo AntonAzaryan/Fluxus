@@ -352,6 +352,26 @@ export interface RenderCostCounters {
    */
   lightingDynamicCasters: number;
   /**
+   * Носители локального света в сцене (REND-33) — инстансы, чья запись несёт
+   * блок `light` (ASSET-16), суммарно по кадрам. Растёт содержимым сцены, а не
+   * потолком: носителей может быть больше, чем источников, и разница этого
+   * счётчика с `lightingLocalActive` и есть та работа, которую снимает потолок.
+   *
+   * Имя — как у прочих счётчиков подсистемы, с её префиксом; в design D5
+   * change'а `local-light-sources` те же два числа названы `localLightCarriers`
+   * и `localLightsActive` — переименованы по правилу этого файла (владелец оси
+   * стоимости виден по префиксу), содержание то же.
+   */
+  lightingLocalCarriers: number;
+  /**
+   * Локальные источники, ЗАЖЖЁННЫЕ кадром (REND-33): минимум из числа носителей
+   * в кадре и потолка ручки `lighting.maxLocalLights` (QUAL-1). Ось стоимости
+   * форвард-рендера: каждый активный источник считается на каждом фрагменте
+   * освещаемых материалов. Величина машинно-независима — отбор идёт по данным
+   * кадра, а число активных от него не зависит вовсе (PERF-3).
+   */
+  lightingLocalActive: number;
+  /**
    * Перерисовки кэшированной карты статики: загрузка сцены, переподача набора
    * декораций, правка сетки террейна, смена значений света или пресета. Ось
    * стоимости режима `hybrid`: кэш, который инвалидируют каждым кадром, — это
@@ -435,6 +455,8 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     particlesSystemsStepped: 'frame',
     lightingStaticCasters: 'frame',
     lightingDynamicCasters: 'frame',
+    lightingLocalCarriers: 'frame',
+    lightingLocalActive: 'frame',
     lightingStaticRebuilds: 'frame',
     terrainChunksRebuilt: 'frame',
     terrainFloorQuads: 'frame',
@@ -481,6 +503,8 @@ export function createCostCounters(): RenderCostCounters {
     particlesSystemsStepped: 0,
     lightingStaticCasters: 0,
     lightingDynamicCasters: 0,
+    lightingLocalCarriers: 0,
+    lightingLocalActive: 0,
     lightingStaticRebuilds: 0,
     terrainChunksRebuilt: 0,
     terrainFloorQuads: 0,

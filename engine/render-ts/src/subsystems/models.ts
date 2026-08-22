@@ -86,6 +86,7 @@ import {
   resolveSurfaceAlign,
   resolveVisual,
   resolveVisualEmitter,
+  resolveVisualLight,
   type AssetState,
   type BakedDerivatives,
   type BakedSkinSet,
@@ -96,11 +97,13 @@ import {
 } from '@game-mvp/assets';
 import type {
   EntityView,
+  LightCarrier,
+  LightCarrierPose,
+  LightingSink,
   QualityDeclaration,
   QualityValues,
   RenderContext,
   RenderSubsystem,
-  ShadowCasterSink,
   ShadowCasterTier,
   TickView,
 } from '../types.js';
@@ -253,13 +256,21 @@ export interface ModelsOptions {
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
   /**
-   * Приёмник теневых кастеров подсистемы освещения (REND-8). Подсистема моделей
-   * — единственная, кто знает и происхождение инстанса (доставка против набора
-   * декораций), и запись его вида, поэтому ярус кастера считает она, а что с
-   * ним делать, решает свет. Нет приёмника — сцена без света: флагов теней
-   * инстансы не получают вовсе.
+   * Порты подсистемы освещения (REND-8) — ОДНОЙ ссылкой, потому что владелец у
+   * них один: приёмник теневых кастеров (REND-30) и приёмник носителей
+   * локального света (REND-33). Подсистема моделей — единственная, кто знает и
+   * происхождение инстанса (доставка против набора декораций), и запись его
+   * вида, поэтому ярус кастера и носителя света считает она, а что с ними
+   * делать, решает свет. Нет порта — сцена без света: ни флагов теней, ни
+   * локальных источников инстансы не получают вовсе.
+   *
+   * Имя опции историческое — теней порт был раньше света; второй опции под свет
+   * не заводится намеренно (см. `LightingSink`): она заставила бы каждого
+   * собирающего писать ту же ссылку дважды, а вьюпорт редактора получил бы
+   * локальный свет только правкой своего кода — ровно то, чего ED-22 не
+   * допускает.
    */
-  readonly shadows?: ShadowCasterSink;
+  readonly shadows?: LightingSink;
   /**
    * Длительность fade-out «ушла в туман» в секундах (FOW-8, design D7) — из
    * конфигурации тумана (FOW-10), а не константа кода. Ноль или отсутствие —
@@ -636,6 +647,13 @@ interface InstanceRecord {
    * трогать нельзя. null — fade не идёт, у мешей разделяемые материалы.
    */
   fadedTargets: FadeTarget[] | null;
+  /**
+   * Носитель локального света инстанса (REND-33); null — запись вида блока
+   * `light` не несёт (ASSET-16) либо порта света у сборки нет. Объект живёт
+   * вместе с инстансом: числа блока правятся на нём переподачей манифеста
+   * (REND-17), а снимается он вместе с инстансом.
+   */
+  lightCarrier: LightCarrier | null;
   /** Публичный вид инстанса; строится лениво и живёт с инстансом (REND-17). */
   publicView: ModelInstanceView | null;
 }
@@ -1548,6 +1566,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       if (record.kind === null) continue;
       const before = record.visual;
       record.visual = resolveVisual(this.manifest, record.kind);
+      // Блок света пересматривается раньше решения о пересборке (REND-17,
+      // ED-15): свет не строится из разделяемых данных ассета, и появившийся
+      // блок зажигает источник живого инстанса, а снятый — гасит.
+      this.syncLightCarrier(record);
       if (rebuildsInstance(before, record.visual, this.defaultTier, record.decoration)) {
         if (cost !== undefined) cost.modelsRebuilds++;
         this.rebuild(ctx, record);
@@ -1932,12 +1954,17 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       fade: fadeIn && !decoration ? 0 : 1,
       fadedTargets: null,
       fadingOut: false,
+      lightCarrier: null,
       publicView: null,
     };
     this.applyEntryParams(record);
     record.yaw = view.facingYaw + record.facingOffset;
 
     this.attachVisual(ctx, record);
+    // Свет — свойство ЗАПИСИ, а не построенного из ассета (REND-33): носитель
+    // объявляется здесь же, до готовности модели и независимо от того, рисуют
+    // инстанс модель, заглушка (ASSET-4) или частицы (ASSET-14).
+    this.syncLightCarrier(record);
     return record;
   }
 
@@ -2030,6 +2057,50 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (sink === undefined) return;
     const root = record.batch?.batch.group ?? record.holder;
     if (root !== null) sink.setCaster(root, casterTierOf(record));
+  }
+
+  /**
+   * Носитель локального света инстанса (REND-33, ASSET-16) — приёмнику света
+   * подсистемы освещения. Свет — свойство ЗАПИСИ вида, поэтому носитель
+   * заводится по её блоку и снимается вместе с ним: и на создании инстанса, и
+   * на переподаче манифеста (REND-17, ED-15).
+   *
+   * Блок разрешается по КЛЮЧУ ВИДА, а не по `record.visual`: свет несёт и
+   * эмиттерная запись (ASSET-14), которую рисует подсистема частиц (REND-24), —
+   * факел арены как раз такой, — а `resolveVisual` эмиттерный вид намеренно не
+   * отдаёт.
+   */
+  private syncLightCarrier(record: InstanceRecord): void {
+    const sink = this.options.shadows;
+    if (sink?.setLightCarrier === undefined) return;
+    const kind = record.kind;
+    const light = kind === null ? null : resolveVisualLight(this.manifest, kind);
+    if (light === null) {
+      this.dropLightCarrier(record);
+      return;
+    }
+    const carrier = record.lightCarrier;
+    if (carrier !== null) {
+      // Правленые числа блока — на ЖИВОМ носителе (REND-17): снятия и повторной
+      // регистрации это не требует, и свет виден не позже следующего кадра.
+      carrier.light = light;
+      return;
+    }
+    const next: LightCarrier = {
+      key: lightCarrierKey(record),
+      light,
+      pose: (out) => poseOfCarrier(record, out),
+    };
+    record.lightCarrier = next;
+    sink.setLightCarrier(next);
+  }
+
+  /** Носитель снят: исчезнувший инстанс либо снятый переподачей блок (REND-33). */
+  private dropLightCarrier(record: InstanceRecord): void {
+    const carrier = record.lightCarrier;
+    if (carrier === null) return;
+    record.lightCarrier = null;
+    this.options.shadows?.dropLightCarrier?.(carrier);
   }
 
   /**
@@ -2370,6 +2441,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // Исчезнувшая walkable-декорация забирает свой вклад из поля; подписчики
     // получают клетки под прежним bbox (REND-9, REND-18).
     if (record.decoration) this.options.surface?.setWalkable(record.entity, null);
+    // Источник снят вместе с инстансом (REND-33): источники прочих инстансов
+    // той же записи горят как горели.
+    this.dropLightCarrier(record);
     this.detachModel(record);
     if (record.holder !== null) this.options.shadows?.dropCaster(record.holder);
     record.holder?.removeFromParent();
@@ -2543,6 +2617,45 @@ function visualKinds(manifest: VisualManifest): readonly string[] {
   const entities = Object.keys(manifest.entities);
   const decorations = manifest.decorations;
   return decorations === undefined ? entities : [...entities, ...Object.keys(decorations)];
+}
+
+/**
+ * Ключ носителя локального света (REND-33, design D3) — тай-брейк отбора
+ * активных источников: ключ записи манифеста плюс порядковый номер инстанса в
+ * его наборе. Наборы разделены буквой: нумерация у них своя, и одно число
+ * значит в них разные инстансы.
+ *
+ * Что этот ключ обещает, а что нет. Он не зависит ни от кадра, ни от порядка
+ * обхода реестра носителей, поэтому повтор ТОГО ЖЕ кадра отбирает те же
+ * источники (ED-22), и перестановка носителей в реестре отбора не двигает. Но
+ * «порядковый номер» у двух наборов разного происхождения: у сущности мира это
+ * её sim-идентификатор, производный от данных, а у размещения (REND-11,
+ * REND-18) — номер, выданный набором инстансов по порядку сведения
+ * (`keyedInstanceSet.ts`). Смена вида размещения инстанс ПЕРЕСОЗДАЁТ, то есть
+ * за сессию правки номер того же размещения может смениться, и тай-брейк между
+ * двумя носителями с в точности равными оценками — перевернуться. Ключа
+ * документа у подсистемы для этого нет: сведённый набор приносит ей позы и вид,
+ * а не адреса записей (REND-18).
+ */
+function lightCarrierKey(record: InstanceRecord): string {
+  return `${record.kind ?? ''}#${record.decoration ? 'd' : 'e'}${record.entity}`;
+}
+
+/**
+ * Поза носителя в переиспользуемую запись (REND-33): ТА САМАЯ, которой инстанс
+ * нарисован в этом кадре (REND-3), а не второй её расчёт. `false` — позы кадра
+ * инстанс ещё не получил: в кадре его нет, и светить неоткуда.
+ */
+function poseOfCarrier(record: InstanceRecord, out: LightCarrierPose): boolean {
+  if (!record.posed) return false;
+  out.x = record.pos.x;
+  out.y = record.pos.y;
+  out.z = record.pos.z;
+  out.qx = record.quat.x;
+  out.qy = record.quat.y;
+  out.qz = record.quat.z;
+  out.qw = record.quat.w;
+  return true;
 }
 
 /**

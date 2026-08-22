@@ -14,6 +14,12 @@
  * у них общий, пространство ключей — тоже одно, и разрешает ключ в запись одна
  * функция (`resolveVisual`), а не каждый потребитель по-своему.
  */
+import {
+  resolveLightBlock,
+  validateVisualLight,
+  type ResolvedVisualLight,
+  type VisualLight,
+} from './visualLight.js';
 
 /** Ключ — sim-идентификатор (имя prefab'а/архетипа). */
 export interface VisualManifest {
@@ -75,6 +81,24 @@ export function resolveVisual(
 ): EntityVisual | undefined {
   const entry = visualEntry(manifest, key);
   return entry === undefined || isEmitterVisual(entry) ? undefined : entry;
+}
+
+/**
+ * Локальный источник записи визуального ключа (ASSET-16) — разобранный блок
+ * `light` в величинах рендера; `null` — записи с таким ключом нет либо света
+ * она не несёт.
+ *
+ * Одно место разрешения на ОБА рода записи (ASSET-14) и оба раздела (ASSET-9):
+ * свет — свойство ЗАПИСИ, а не её изображения, и факел, который рисуется
+ * частицами (REND-24), несёт его наравне со статуей. Потребитель у ответа один
+ * — подсистема, владеющая инстансами записи (`rendering` REND-33), — и
+ * спрашивать род записи ей для этого не нужно.
+ */
+export function resolveVisualLight(
+  manifest: Pick<VisualManifest, 'entities' | 'decorations'>,
+  key: string,
+): ResolvedVisualLight | null {
+  return resolveLightBlock(visualEntry(manifest, key)?.light);
 }
 
 /**
@@ -614,6 +638,13 @@ export interface EntityVisual {
    * `DEFAULT_LOD_THRESHOLDS`; модель без цепочки уровней порогов не замечает.
    */
   lodThresholds?: number[];
+  /**
+   * Локальный источник света, который несёт каждый инстанс записи (ASSET-16,
+   * `rendering` REND-33): факел светит с чаши, кристалл — из середины. Без поля
+   * инстансы записи света не несут, и наличие поля не меняет ни `worldInit`, ни
+   * снапшот (ASSET-1). Состав блока и его единицы — `visualLight.ts`.
+   */
+  light?: VisualLight;
 }
 
 /**
@@ -820,6 +851,7 @@ function validateEntity(
       'verticalOffset',
       'tier',
       'lodThresholds',
+      'light',
     ],
     path,
     errors,
@@ -827,6 +859,13 @@ function validateEntity(
 
   if ('surfaceAlign' in entity) {
     validateSurfaceAlign(entity.surfaceAlign, `${path}.surfaceAlign`, errors);
+  }
+
+  // Блок локального источника (ASSET-16) — на обоих разделах и обоих родах
+  // записи: свет несёт ИНСТАНС записи (REND-33), а чем он нарисован — моделью
+  // или частицами (ASSET-14), — блока не касается.
+  if ('light' in entity) {
+    validateVisualLight(entity.light, `${path}.light`, errors);
   }
 
   // Параметры батчевой отрисовки (ASSET-13): действуют одинаково на оба

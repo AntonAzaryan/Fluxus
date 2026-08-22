@@ -1,5 +1,6 @@
 {
   "models.lodThresholdScale": 1,
   "models.defaultTier": "batched",
-  "particles.density": 1
+  "particles.density": 1,
+  "lighting.maxLocalLights": 8
 }

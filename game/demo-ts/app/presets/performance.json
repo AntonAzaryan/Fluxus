@@ -4,5 +4,6 @@
   "models.lodThresholdScale": 2,
   "models.defaultTier": "batched",
   "particles.density": 0.5,
-  "lighting.shadowMode": "none"
+  "lighting.shadowMode": "none",
+  "lighting.maxLocalLights": 2
 }

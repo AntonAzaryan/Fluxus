@@ -51,6 +51,8 @@ import {
   validatePresentationScene,
   type PresentationLighting,
   type PresentationScene,
+  type VisualLight,
+  type VisualManifest,
 } from '@game-mvp/assets';
 import { BUILD_ID, duelConfig, duelScene, playMatch, walkRight } from './fixtures.js';
 
@@ -232,6 +234,95 @@ describe('PRES-4/REND-32: цикл времени суток симуляции 
     // А симуляция обоих прогонов побитово одна: сравниваются БАЙТЫ документа
     // прогона, а не разобранные снапшоты (SER-6).
     expect(Buffer.from(cycled.bytes).equals(Buffer.from(still.bytes))).toBe(true);
+    expect(runScenario(scenario(scene)).worldInitHash).toBe(before.init);
+    expect(contentPackHash(scene)).toBe(before.pack);
+  });
+});
+
+/**
+ * Локальные источники света инстансов (`rendering` REND-33) — presentation-
+ * механизм целиком: блок `light` живёт в записи манифеста визуалов (`assets`
+ * ASSET-16), источники создаёт подсистема освещения, а симуляция о них не знает
+ * ни байта (ASSET-1, PRES-4). Утверждение межпакетное — документ разбирает
+ * модуль ассетов, свет зажигает рендер, а «ни байтом» касается ядра, — и
+ * поэтому живёт здесь, а не в тестах рендера.
+ */
+describe('PRES-4/ASSET-16: локальный свет инстансов симуляции не виден', () => {
+  const TORCH: VisualLight = {
+    type: 'point',
+    color: '#ffb066',
+    intensity: 12,
+    distance: 6,
+    offset: { z: 1.5 },
+  };
+
+  /** Один и тот же вид арены — с блоком света и без него; прочее совпадает. */
+  function manifestOf(light: boolean): VisualManifest {
+    return {
+      entities: {},
+      decorations: {
+        Torch: {
+          effect: 'visuals/effects/torch.effect.json',
+          ...(light ? { light: TORCH } : {}),
+        },
+      },
+    };
+  }
+
+  /**
+   * Сцена подсистем с настоящим светом и настоящим набором декораций (REND-18):
+   * два факела на арене. Возвращает число ГОРЯЩИХ локальных источников — иначе
+   * тест утверждал бы про изоляцию света, которого не подняли.
+   *
+   * Кадров два: подсистема освещения владеет портом носителей и потому
+   * зарегистрирована раньше владельца инстансов (REND-31), а позу носителя
+   * берёт ту, что посчитал предыдущий кадр.
+   */
+  function litStand(manifest: VisualManifest): number {
+    const context = {
+      scene: new THREE.Scene(),
+      assets: {
+        request: (kind: string, id: string) => ({ kind, id }),
+        state: () => ({ status: 'loading' }),
+        subscribe: () => () => undefined,
+      },
+      config: { heightStep: 0.5 },
+    } as unknown as RenderContext;
+    const stage = new PresentationStage(context);
+    const lighting = new LightingSubsystem();
+    stage.register(lighting);
+    stage.register(new ModelsSubsystem(manifest, { shadows: lighting, warn: () => undefined }));
+    new DecorationSet(stage).apply([
+      { key: 'torch-a', kind: 'Torch', x: 2, y: 3 },
+      { key: 'torch-b', kind: 'Torch', x: -4, y: 1 },
+    ]);
+    stage.frame(1 / 60, 0, 1 / 60);
+    stage.frame(1 / 60, 0, 1 / 60);
+    return lighting.localLights.lights.filter((light) => light.intensity > 0).length;
+  }
+
+  it('манифест с блоками света и без: прогон совпадает побитово', () => {
+    const scene = duelScene();
+    const before = {
+      init: runScenario(scenario(scene)).worldInitHash,
+      pack: contentPackHash(scene),
+    };
+
+    // Оба манифеста — документы формата: блок проходит валидацию и доезжает до
+    // рендера разбором, а не подставлен подсистеме мимо загрузчика.
+    for (const light of [false, true]) {
+      const parsed = validateManifest(manifestOf(light));
+      expect(parsed.ok ? '' : parsed.errors.join('; ')).toBe('');
+    }
+    const dark = { lights: litStand(manifestOf(false)), bytes: runScenarioBytes(scenario(scene)) };
+    const lit = { lights: litStand(manifestOf(true)), bytes: runScenarioBytes(scenario(scene)) };
+
+    // Свет действительно зажёгся — и ровно у той сцены, чья запись несёт блок.
+    expect(dark.lights).toBe(0);
+    expect(lit.lights).toBe(2);
+    // А симуляция обоих прогонов побитово одна: сравниваются БАЙТЫ документа
+    // прогона, а не разобранные снапшоты (SER-6).
+    expect(Buffer.from(lit.bytes).equals(Buffer.from(dark.bytes))).toBe(true);
     expect(runScenario(scenario(scene)).worldInitHash).toBe(before.init);
     expect(contentPackHash(scene)).toBe(before.pack);
   });

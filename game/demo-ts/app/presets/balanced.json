@@ -3,5 +3,6 @@
   "models.defaultTier": "batched",
   "particles.density": 1,
   "lighting.shadowMode": "hybrid",
-  "lighting.shadowMapSize": 1024
+  "lighting.shadowMapSize": 1024,
+  "lighting.maxLocalLights": 4
 }

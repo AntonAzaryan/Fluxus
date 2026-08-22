@@ -95,10 +95,26 @@ export type {
   // параметры яруса и LOD записи (ASSET-13)
   VisualTier,
 } from './manifest.js';
+// блок света записи (ASSET-16) — локальный источник инстансов записи
+// (`rendering` REND-33): состав, единицы и разбор в величины рендера
+export type {
+  ResolvedVisualLight,
+  VisualLight,
+  VisualLightAxes,
+  VisualLightType,
+} from './visualLight.js';
+export {
+  DEFAULT_LIGHT_DECAY,
+  MAX_LIGHT_ANGLE_TURNS,
+  VISUAL_LIGHT_TYPES,
+  resolveLightBlock,
+  validateVisualLight,
+} from './visualLight.js';
 export {
   validateManifest,
   resolveSurfaceAlign,
   resolveVisual,
+  resolveVisualLight,
   resolveVisualTier,
   resolveVisualEmitter,
   isEmitterVisual,
