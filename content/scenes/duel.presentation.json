@@ -60,10 +60,10 @@
         {
           "name": "ночь",
           "seconds": 120,
-          "ambient": { "color": "#2f3f66", "intensity": 0.28 },
+          "ambient": { "color": "#1e2a47", "intensity": 0.14 },
           "directional": {
-            "color": "#6f8dc4",
-            "intensity": 0.45,
+            "color": "#5a76ad",
+            "intensity": 0.25,
             "direction": { "x": 2, "y": 12, "z": 15 }
           }
         }
