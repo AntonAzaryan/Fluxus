@@ -135,6 +135,7 @@ import * as THREE from 'three';
 import type {
   AssetService,
   PresentationLighting,
+  PresentationPostprocess,
   TerrainCurvatureMap,
   VisualManifest,
 } from '@game-mvp/assets';
@@ -145,6 +146,7 @@ import {
   ModelsSubsystem,
   OverlaySubsystem,
   ParticlesSubsystem,
+  PostprocessSubsystem,
   PresentationStage,
   QualityController,
   TerrainSubsystem,
@@ -221,6 +223,12 @@ export interface StageDraft {
    * подсистемы освещения, то есть тот же свет, что был у вьюпорта до неё.
    */
   readonly lighting?: PresentationLighting;
+  /**
+   * Секция `postprocess` парного документа (PRES-2, REND-34); нет поля —
+   * умолчания подсистемы пост-обработки, то есть кадр без единого её прохода.
+   * Автор видит ту же яркость и то же свечение, что игрок (ED-22).
+   */
+  readonly postprocess?: PresentationPostprocess;
 }
 
 export interface SceneStageOptions {
@@ -434,6 +442,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   const decorations = new DecorationSet(presentation);
 
   let surface: VisualSurfaceSource | null = null;
+  let postprocess: PostprocessSubsystem | null = null;
   let lighting: LightingSubsystem | null = null;
   let terrain: TerrainSubsystem | null = null;
   let models: ModelsSubsystem | null = null;
@@ -588,7 +597,14 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
    */
   const build = (first: TerrainGrid | null): void => {
     built = true;
-    // Свет — первой подсистемой (REND-8): геометрия ниже отдаёт ей свои корни
+    // Пост-обработка кадра (REND-34) — ПЕРВОЙ подсистемой: она владеет
+    // проходами кадра, и вьюпорт рисует его её вызовом, а собственной
+    // пост-обработки поверх не ведёт (REND-34, ED-22). Секции у сцены может не
+    // быть — тогда цепочка неактивна, и кадр вьюпорта прежний: ни цели, ни
+    // прохода. Ни от сетки, ни от манифеста она не зависит.
+    postprocess = new PostprocessSubsystem();
+    presentation.register(postprocess);
+    // Свет — следом (REND-8): геометрия ниже отдаёт ей свои корни
     // теневыми кастерами и носителями локального света (REND-33), а сам он не
     // зависит ни от сетки, ни от манифеста.
     //
@@ -689,6 +705,10 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     // позже следующего кадра, пересборки рендера нет. Подаётся секция целиком
     // и всегда, как манифест и сетка: решать, что применить, — дело подсистемы.
     lighting?.applyConfig(next.lighting);
+    // Секция `postprocess` — тем же порядком и на живой подсистеме (ED-15,
+    // REND-34): смена оператора или силы свечения видна не позже следующего
+    // кадра, пересборки рендера нет.
+    postprocess?.applyConfig(next.postprocess);
     // Декорации — отдельный набор и отдельная подача: продюсера они не
     // трогают, и в превью их гасить нечем (REND-18).
     decorations.apply(next.decorations ?? []);
@@ -854,7 +874,12 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       // presentation-состояние ровно один из подключённых, и кто именно —
       // знает сцена, а не этот цикл.
       for (const guest of guests) guest(now);
-      renderer.render(scene, camera3);
+      // Кадр — вызовом подсистемы пост-обработки (REND-34): при выключенной
+      // цепочке это ровно прямая отрисовка, при включённой — её проходы. Своей
+      // пост-обработки поверх вьюпорт не ведёт, поэтому его кадр и кадр игрока
+      // совпадают по построению (ED-22).
+      if (postprocess !== null) postprocess.render(renderer, camera3);
+      else renderer.render(scene, camera3);
       drawFailure = null;
     } catch (error) {
       drawFailure = reasonOf(error);

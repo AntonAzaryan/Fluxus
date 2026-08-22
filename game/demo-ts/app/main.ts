@@ -46,6 +46,7 @@ import {
   LightingSubsystem,
   ModelsSubsystem,
   ParticlesSubsystem,
+  PostprocessSubsystem,
   RenderDebugLayer,
   TerrainSubsystem,
   ViewportPicking,
@@ -281,6 +282,13 @@ let models: ModelsSubsystem | null = null;
  * `fog`. Пока её нет (или маска ещё не построена), кадр рисуется по-старому.
  */
 let fogSubsystem: FogSubsystem | null = null;
+/**
+ * Подсистема пост-обработки кадра (REND-34): появляется в `onReady` всегда, а
+ * работает — когда секция `postprocess` парного документа её включила. Без
+ * секции она не добавляет в кадр ни цели, ни прохода, и `render` делает ровно
+ * прямую отрисовку сцены.
+ */
+let postprocess: PostprocessSubsystem | null = null;
 /** ID сущности героя из handshake воркера (helloExtra). */
 let heroId: EntityId | null = null;
 
@@ -878,11 +886,13 @@ function presentFrame(now: number): void {
 
 /**
  * Стадия `draw`: кадр с туманом идёт пост-проходом подсистемы (FOW-7,
- * design D2); без неё — прежний прямой рендер. Подсистема с непостроенной
- * маской делает ровно его.
+ * design D2); без неё — кадром подсистемы пост-обработки (REND-34), которая
+ * при выключенной цепочке делает ровно прежний прямой рендер. Своей
+ * пост-обработки поверх подсистем сборка не ведёт (REND-34, ED-22).
  */
 function drawScene(): void {
   if (fogSubsystem !== null) fogSubsystem.render(renderer3, camera);
+  else if (postprocess !== null) postprocess.render(renderer3, camera);
   else renderer3.render(scene3, camera);
 }
 
@@ -1219,11 +1229,19 @@ async function main(): Promise<void> {
       // Та же поверхность — шару заряда: он садится на пол, а не на дугу
       // манёвра инстанса.
       visualSurface = surface;
+      // Пост-обработка кадра (REND-34) — ПЕРВОЙ подсистемой: её порт берёт
+      // подсистема тумана (FOW-7, design D2), а порт объявляет тот, кто
+      // зарегистрирован раньше и снесён будет позже (REND-31). Bloom и tone
+      // mapping приходят секцией `postprocess` парного документа (PRES-2); нет
+      // секции — цепочка неактивна и кадр байт-в-байт прежний.
+      postprocess = new PostprocessSubsystem(
+        presentation?.postprocess === undefined ? {} : { config: presentation.postprocess },
+      );
+      remote!.register(postprocess);
       // Свет арены — подсистемой, а не кодом сборки: источники и теневые карты
       // строятся из секции `lighting` парного документа (PRES-2), а нет секции
       // — из документированных умолчаний, равных прежнему захардкоженному
-      // свету. Регистрируется первой: геометрия сцены ниже отдаёт ей свои
-      // корни теневыми кастерами.
+      // свету. Геометрия сцены ниже отдаёт ей свои корни теневыми кастерами.
       const lighting = new LightingSubsystem({
         grid,
         // Камера кадра — вход отбора активных локальных источников (REND-33):
@@ -1299,6 +1317,10 @@ async function main(): Promise<void> {
           grid,
           stats: { visionRadius: STATS.visionRadius, team: STATS.team },
           hero: () => heroId,
+          // Порт пост-обработки (REND-34, design D2): при активной цепочке
+          // маскирующий проход читает её выход, а сцену туман не рисует —
+          // маска остаётся финальным проходом кадра (FOW-7).
+          post: postprocess,
           ...(presentation?.fog !== undefined ? { config: presentation.fog } : {}),
           // Канвас слоя миникарты (HUD-6, design D6) — DOM даёт сборка:
           // пакет рендера document не трогает.

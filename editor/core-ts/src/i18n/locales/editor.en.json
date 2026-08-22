@@ -247,7 +247,7 @@
   "validation.reason.save.group.writeTogether.ruleFailed": "Validation rule \"{rule}\" failed on this document: nothing was checked, and that is a defect of the rule, not of the document.",
   "validation.rule.assets.curvature": "Checks a terrain curvature map with the assets validator: integer node offsets and node grid shape.",
   "validation.rule.assets.manifest": "Checks a visual manifest with the assets validator: entity records, models, textures, skins and animation names.",
-  "validation.rule.assets.presentation": "Checks the paired presentation document of a scene with the assets validator: the closed document composition, decoration placement records and the optional sections — the fog-of-war render config and the scene lighting config.",
+  "validation.rule.assets.presentation": "Checks the paired presentation document of a scene with the assets validator: the closed document composition, decoration placement records and the optional sections — the fog-of-war render config, the scene lighting config and the frame post-processing config.",
   "validation.rule.core.scene": "Checks a scene config with the engine scene loader: component set, prefabs, systems, initial placement and arena assets — the same call the game client makes on load.",
   "validation.rule.core.system": "Checks a JSON system against every open scene: the engine resolves the component and prefab names the system refers to, then builds its body.",
   "validation.rule.core.terrain": "Checks a terrain asset with the engine grid builder: level and flag ranges, map alphabets and ramp width.",

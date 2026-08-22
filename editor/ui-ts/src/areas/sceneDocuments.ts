@@ -88,6 +88,7 @@ import {
   validateManifest,
   validatePresentationScene,
   type PresentationLighting,
+  type PresentationPostprocess,
   type TerrainCurvatureMap,
   type VisualManifest,
 } from '@game-mvp/assets';
@@ -157,6 +158,12 @@ export interface SceneDraft {
    * документа кадр уже назвал разбором декораций.
    */
   readonly lighting?: PresentationLighting;
+  /**
+   * Секция `postprocess` парного документа (PRES-2, `rendering` REND-34) — вход
+   * подсистемы пост-обработки кадра; нет секции — её умолчания, то есть кадр
+   * без единого её прохода.
+   */
+  readonly postprocess?: PresentationPostprocess;
   /**
    * Манифест визуалов кадра (ASSET-6). Он здесь по той же причине, по которой
    * здесь сетка и кривизна: манифест — такой же редактируемый документ (ED-14),
@@ -349,19 +356,27 @@ export function decorationsOf(input: SceneDraftInput): readonly SceneDecoration[
 }
 
 /**
- * Секция `lighting` парного документа (PRES-2) — конфигурация освещения сцены.
- * Второго разбора документа она не стоит по существу: свет и декорации живут в
- * одном файле, и оба нужны кадру целиком.
+ * Секции парного документа одним разбором: конфигурация освещения (PRES-2,
+ * REND-29) и конфигурация пост-обработки кадра (REND-34). Вместе, а не по
+ * функции на секцию: второго разбора документа они не стоят по существу — свет,
+ * пост-обработка и декорации живут в одном файле, и все нужны кадру целиком.
  *
  * Сломанный документ здесь МОЛЧИТ намеренно: причину уже назвал `decorationsOf`
- * (ED-8 требует её один раз, а не дважды), а сцена без разобранной секции
- * освещена умолчаниями — законный кадр, а не отказ вьюпорта.
+ * (ED-8 требует её один раз, а не трижды), а сцена без разобранных секций
+ * рисуется умолчаниями подсистем — законный кадр, а не отказ вьюпорта.
  */
-export function lightingOf(input: SceneDraftInput): PresentationLighting | undefined {
+function sectionsOf(input: SceneDraftInput): {
+  readonly lighting?: PresentationLighting;
+  readonly postprocess?: PresentationPostprocess;
+} {
   const value = input.presentation;
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined || value === null) return {};
   const checked = validatePresentationScene(value);
-  return checked.ok ? checked.scene.lighting : undefined;
+  if (!checked.ok) return {};
+  return {
+    ...(checked.scene.lighting === undefined ? {} : { lighting: checked.scene.lighting }),
+    ...(checked.scene.postprocess === undefined ? {} : { postprocess: checked.scene.postprocess }),
+  };
 }
 
 /**
@@ -423,13 +438,14 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
   // между двумя документами, и правило для него одно — `editor.curvatureGrid`
   // слоя валидации (ED-11). Кадр его не повторяет: вторая реализация правила,
   // у которого есть источник, расходится с ним по определению (ED-1, CORE-3).
-  const lighting = lightingOf(input);
+  const sections = sectionsOf(input);
   return {
     grid,
     curvature,
     placements,
     decorations,
-    ...(lighting === undefined ? {} : { lighting }),
+    ...(sections.lighting === undefined ? {} : { lighting: sections.lighting }),
+    ...(sections.postprocess === undefined ? {} : { postprocess: sections.postprocess }),
     visuals: input.visuals ?? null,
     failure: reasons.length === 0 ? null : reasons.join('; '),
   };

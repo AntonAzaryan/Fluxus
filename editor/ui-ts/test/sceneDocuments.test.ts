@@ -269,6 +269,40 @@ describe('ED-15: настоящая сцена дерева контента, а
   });
 });
 
+describe('ED-22, REND-34: секции парного документа доезжают до вьюпорта', () => {
+  const config = contentFile('scenes/duel.scene.json');
+  const presentation = contentFile('scenes/duel.presentation.json');
+
+  it('секции lighting и postprocess настоящей сцены — в кадре вьюпорта как есть', () => {
+    const draft = sceneDraft({ config, visuals, presentation });
+
+    // Своей копии чисел у редактора нет: он отдаёт подсистемам ту же секцию,
+    // которую читает игровой клиент, — отсюда тождество кадров (ED-22).
+    expect(draft.postprocess).toEqual(
+      (presentation as { postprocess: unknown }).postprocess,
+    );
+    expect(draft.lighting).toEqual((presentation as { lighting: unknown }).lighting);
+  });
+
+  it('сцена без парного документа — кадр умолчаний, а не отказ', () => {
+    const draft = sceneDraft({ config, visuals });
+
+    expect(draft.failure).toBeNull();
+    expect(draft.postprocess).toBeUndefined();
+  });
+
+  it('сломанная секция гасит только себя: причину назвал разбор декораций (ED-8)', () => {
+    const draft = sceneDraft({
+      config,
+      visuals,
+      presentation: { decorations: [], postprocess: { toneMapping: { operator: 'filmic' } } },
+    });
+
+    expect(draft.postprocess).toBeUndefined();
+    expect(draft.failure).toContain('postprocess.toneMapping.operator');
+  });
+});
+
 describe('ED-29: производная считается без интерфейса', () => {
   it('ключи набора — дескрипторы сессии, а не индексы списка', () => {
     const session = createEditorSession({

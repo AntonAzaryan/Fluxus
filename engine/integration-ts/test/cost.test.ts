@@ -149,9 +149,12 @@ function runMatch(name: string, preset: BenchPresetName): MatchRun {
   withCostSink(counters, () => {
     playRecording(def, { diagnostics: sink, onTick: (result) => { bench.step(result); } });
   });
-  // Две бухгалтерии проходов рендерера обязаны сойтись: подсистема считает их
-  // сама, спай видит вызовы (design D2). Расхождение — счётчик врёт.
-  expect(counters.fogRenderPasses).toBe(bench.renderer.renders);
+  // Две бухгалтерии проходов рендерера обязаны сойтись: подсистемы считают их
+  // сами, спай видит вызовы (design D2). Владельцев проходов у кадра двое —
+  // цепочка пост-обработки рисует сцену, туман кладёт маску поверх (REND-34,
+  // FOW-7), — и сойтись обязана СУММА: расхождение означает, что счётчик врёт
+  // либо что проход потерял владельца.
+  expect(counters.fogRenderPasses + counters.postprocessPasses).toBe(bench.renderer.renders);
   return { tick: total, render: counters, maskResolution: bench.maskResolution };
 }
 
@@ -305,7 +308,7 @@ function measureSize(config: ScalingSize): RenderCostCounters {
   withCostSink(counters, () => {
     bench.deliver(ext);
   });
-  expect(counters.fogRenderPasses).toBe(bench.renderer.renders);
+  expect(counters.fogRenderPasses + counters.postprocessPasses).toBe(bench.renderer.renders);
   return counters;
 }
 
@@ -416,11 +419,15 @@ describe('PERF-4: голден-гейт стоимости на записанн
     const bench = matchBench(BENCH_PRESETS.performance);
 
     // Реестр стенда собран из деклараций ЕГО подсистем (design D1) в порядке
-    // регистрации: освещение (три ручки — две теневые и потолок локальных
-    // источников, REND-33), туман, террейн, модели (две ручки), частицы.
-    // Подсистема позиций ручек не имеет и в реестре не появляется — реестр
-    // собирается из того, что подсистемы объявили, а не из состава документа.
+    // регистрации: пост-обработка (две ручки — выключатель bloom и потолок
+    // разрешения его пирамиды, REND-34), освещение (три ручки — две теневые и
+    // потолок локальных источников, REND-33), туман, террейн, модели (две
+    // ручки), частицы. Подсистема позиций ручек не имеет и в реестре не
+    // появляется — реестр собирается из того, что подсистемы объявили, а не из
+    // состава документа.
     expect(bench.quality.knobs.map((knob) => knob.name)).toEqual([
+      'postprocess.bloom',
+      'postprocess.bloomResolution',
       'lighting.shadowMode',
       'lighting.shadowMapSize',
       'lighting.maxLocalLights',

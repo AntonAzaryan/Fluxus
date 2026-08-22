@@ -1,9 +1,13 @@
 /**
- * Исходники шейдеров полноэкранного пост-прохода тумана (design D2) — только
- * текст программы: материал, униформы и render target держит подсистема
- * (`subsystems/fog.ts`). Врозь потому, что это разные вещи: здесь — GLSL,
- * который читают глазами, там — состояние кадра, которое читают тестами.
+ * Полноэкранный пост-проход тумана (design D2): текст его программы и
+ * одноканальная текстура маски, которую он сэмплирует. Материал, униформы и
+ * render target держит подсистема (`subsystems/fog.ts`). Врозь потому, что это
+ * разные вещи: здесь — GLSL, который читают глазами, и обёртка растра, которая
+ * от него неотделима, там — состояние кадра, которое читают тестами.
  */
+import * as THREE from 'three';
+import type { VisibilityMask } from './mask.js';
+
 
 /** Полноэкранный треугольник не нужен: квад 2×2 в NDC, вершины насквозь. */
 export const POST_VERTEX = `
@@ -80,3 +84,27 @@ void main() {
   #include <colorspace_fragment>
 }
 `;
+
+/** Одноканальная текстура поверх растра маски; фильтрация билинейная (design D2). */
+export function createMaskTexture(mask: VisibilityMask, shown: Uint8Array): THREE.DataTexture {
+  const texture = new THREE.DataTexture(
+    shown,
+    mask.width,
+    mask.height,
+    THREE.RedFormat,
+    THREE.UnsignedByteType,
+  );
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  // Однобайтовые ряды: без выравнивания в 1 байт ряд шириной не кратной 4
+  // читался бы со сдвигом (правило распаковки GL, дефолт — 4).
+  texture.unpackAlignment = 1;
+  texture.needsUpdate = true;
+  // Счётчика здесь нет намеренно (PERF-3). Создание текстуры трафика не
+  // порождает: three грузит растр на GPU по ВЕРСИИ, поднятой `needsUpdate`, и
+  // взведённый здесь флаг сливается с флагом ближайшей публикации в одну
+  // загрузку. Считать её дважды — приписать пустой байт: и на первой
+  // перестройке, и на смене разрешения (там маска пересобирается и `built`
+  // сбрасывается) счёт снимает единственное место — `publishTexture`.
+  return texture;
+}

@@ -36,10 +36,12 @@ import {
   DecorationSet,
   LightingSubsystem,
   ModelsSubsystem,
+  PostprocessSubsystem,
   PresentationStage,
   cameraConfigFromManifest,
   createCameraInput,
   type DecorationInstance,
+  type PostRendererLike,
   type RenderContext,
 } from '@game-mvp/render';
 import {
@@ -50,6 +52,7 @@ import {
   validateParticleEffect,
   validatePresentationScene,
   type PresentationLighting,
+  type PresentationPostprocess,
   type PresentationScene,
   type VisualLight,
   type VisualManifest,
@@ -323,6 +326,86 @@ describe('PRES-4/ASSET-16: локальный свет инстансов сим
     // А симуляция обоих прогонов побитово одна: сравниваются БАЙТЫ документа
     // прогона, а не разобранные снапшоты (SER-6).
     expect(Buffer.from(lit.bytes).equals(Buffer.from(dark.bytes))).toBe(true);
+    expect(runScenario(scenario(scene)).worldInitHash).toBe(before.init);
+    expect(contentPackHash(scene)).toBe(before.pack);
+  });
+});
+
+/**
+ * Пост-обработка кадра (`rendering` REND-34) — presentation-механизм целиком:
+ * секция `postprocess` парного документа (PRES-2) заводит цели и полноэкранные
+ * проходы рендера, а тик, снапшоты и доставленная клиенту информация от неё не
+ * зависят ни байтом (PRES-4). Утверждение межпакетное — секцию разбирает модуль
+ * ассетов, проходы ведёт рендер, а «ни байтом» касается ядра, — и поэтому живёт
+ * здесь, а не в тестах рендера.
+ */
+describe('PRES-4/REND-34: пост-обработка кадра симуляции не видна', () => {
+  /** Секция с оператором и свечением — та же форма, что у сцены демо. */
+  const POSTPROCESS: PresentationPostprocess = {
+    toneMapping: { operator: 'aces', exposure: 1 },
+    bloom: { enabled: true, strength: 0.35, threshold: 1, radius: 0.5 },
+  };
+
+  /**
+   * Рендерер полноэкранных проходов без WebGL: цепочке нужен структурный
+   * минимум, а тесту — число заказанных проходов.
+   */
+  function passRecorder(): { renderer: PostRendererLike; passes: number } {
+    const record = {
+      passes: 0,
+      renderer: {
+        render: (): void => {
+          record.passes++;
+        },
+        setRenderTarget: (): void => undefined,
+        getDrawingBufferSize: (target: THREE.Vector2): THREE.Vector2 => target.set(64, 48),
+      },
+    };
+    return record;
+  }
+
+  /**
+   * Прогон матча, пока рядом живёт подсистема пост-обработки. Возвращает и
+   * байты прогона, и число проходов кадра — иначе тест утверждал бы про
+   * изоляцию цепочки, которую не подняли.
+   */
+  function runBeside(section?: PresentationPostprocess): { bytes: Uint8Array; passes: number } {
+    const post = new PostprocessSubsystem(section === undefined ? {} : { config: section });
+    post.init({
+      scene: new THREE.Scene(),
+      assets: {} as unknown as RenderContext['assets'],
+      config: { heightStep: 0.5 },
+    });
+    const stand = passRecorder();
+    post.render(stand.renderer, new THREE.PerspectiveCamera());
+    return { bytes: runScenarioBytes(scenario(duelScene())), passes: stand.passes };
+  }
+
+  it('worldInit и снапшоты сцены с секцией и без не отличаются ни байтом', () => {
+    const scene = duelScene();
+    const before = { init: runScenario(scenario(scene)).worldInitHash, pack: contentPackHash(scene) };
+
+    // Секция — документ формата: она проходит валидацию и доезжает до
+    // подсистемы разбором, а не подставлена ей мимо загрузчика.
+    const parsed = validatePresentationScene({ decorations: [], postprocess: POSTPROCESS });
+    expect(parsed.ok ? '' : parsed.errors.join('; ')).toBe('');
+    const authored = parsed.ok ? parsed.scene.postprocess : undefined;
+    // Разобранная секция утверждается ДО раннего возврата: иначе перестань
+    // валидация выпускать `postprocess` наружу — и тест прошёл бы молча, ничего
+    // не проверив (тот же порядок, что у теста цикла времени суток выше).
+    expect(authored?.toneMapping?.operator).toBe('aces');
+    expect(authored?.bloom?.enabled).toBe(true);
+    if (authored === undefined) return;
+    const bare = runBeside(undefined);
+    const post = runBeside(authored);
+
+    // Цепочка действительно шла: кадр сцены с секцией — отрисовка сцены и
+    // полноэкранные проходы, кадр без неё — ровно прямая отрисовка (REND-34).
+    expect(bare.passes).toBe(1);
+    expect(post.passes).toBeGreaterThan(1);
+    // А симуляция обоих прогонов побитово одна: сравниваются БАЙТЫ документа
+    // прогона, а не разобранные снапшоты (SER-6).
+    expect(Buffer.from(post.bytes).equals(Buffer.from(bare.bytes))).toBe(true);
     expect(runScenario(scenario(scene)).worldInitHash).toBe(before.init);
     expect(contentPackHash(scene)).toBe(before.pack);
   });

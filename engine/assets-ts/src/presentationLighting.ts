@@ -12,24 +12,20 @@
  * политика картинки — сами умолчания, смысл интерполяции, длина перехода по
  * умолчанию — живёт у подсистемы освещения рендера (`render-ts`,
  * `lighting/config.ts`). На симуляцию секция не влияет ни байтом (PRES-4).
+ *
+ * Примитивы валидации (подсекция, закрытый состав, числовое поле, цвет) — общие
+ * на все секции документа и живут в `presentationFields.ts`: секций больше
+ * одной, а правила у них одни.
  */
-
-/** Ответ «получено что-то не то» — тем же словарём, что у остального формата. */
-function typeName(v: unknown): string {
-  if (v === null) return 'null';
-  if (Array.isArray(v)) return 'массив';
-  return typeof v;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-/**
- * Цвет в документе — `#rrggbb`: одна форма записи на все секции, чтобы дифф
- * правки не гадал о синонимах и чтобы тон тумана и тон света читались одинаково.
- */
-const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+import {
+  closedKeys,
+  colorField,
+  isRecord,
+  numberField,
+  subsection,
+  typeName,
+  type NumberRange,
+} from './presentationFields.js';
 
 /**
  * Рассеянный свет сцены — половина секции `lighting` (PRES-2). Поля
@@ -151,71 +147,6 @@ const PHASE_KEYS: readonly string[] = ['name', 'seconds', 'ambient', 'directiona
 
 /** Минимум фаз в цикле (REND-32): одной фазе чередоваться не с чем. */
 const MIN_CYCLE_PHASES = 2;
-
-/**
- * Подсекция по адресу: не объект — адресный отказ и `null`, дальше разбирать
- * нечего. Отсутствие подсекции — умолчания подсистемы, а не ошибка, поэтому
- * `undefined` сюда не доходит: его отсеивает вызывающий.
- */
-function subsection(value: unknown, path: string, errors: string[]): Record<string, unknown> | null {
-  if (isRecord(value)) return value;
-  errors.push(`${path}: ожидался объект секции, получено ${typeName(value)}`);
-  return null;
-}
-
-/** Ключ, которого формат не знает, — ошибка с перечнем допустимых соседей (PRES-2). */
-function closedKeys(
-  node: Record<string, unknown>,
-  path: string,
-  keys: readonly string[],
-  errors: string[],
-): void {
-  for (const key of Object.keys(node)) {
-    if (keys.includes(key)) continue;
-    errors.push(`${path}.${key}: неизвестное поле (допустимы: ${keys.join(', ')})`);
-  }
-}
-
-/** Границы числового поля: что за величина и в каком диапазоне она осмысленна. */
-interface NumberRange {
-  readonly what: string;
-  readonly min?: number;
-  readonly max?: number;
-  readonly integer?: boolean;
-}
-
-/**
- * Числовое поле подсекции. Отсутствие — умолчание подсистемы (PRES-2), а
- * диапазон здесь — форма данных, а не политика картинки: отрицательная
- * интенсивность и нулевая карта теней не имеют прочтения ни при каких
- * умолчаниях.
- */
-function numberField(
-  node: Record<string, unknown>,
-  path: string,
-  key: string,
-  range: NumberRange,
-  errors: string[],
-): void {
-  if (!(key in node)) return;
-  const value = node[key];
-  const bad =
-    typeof value !== 'number' ||
-    !Number.isFinite(value) ||
-    (range.integer === true && !Number.isInteger(value)) ||
-    (range.min !== undefined && value < range.min) ||
-    (range.max !== undefined && value > range.max);
-  if (bad) errors.push(`${path}.${key}: ожидалось ${range.what}, получено ${typeName(value)}`);
-}
-
-/** Тон источника — та же форма `#rrggbb`, что у тона тумана. */
-function colorField(node: Record<string, unknown>, path: string, errors: string[]): void {
-  if (!('color' in node)) return;
-  const value = node.color;
-  if (typeof value !== 'string' || !HEX_COLOR_RE.test(value)) {
-    errors.push(`${path}.color: ожидался цвет формы "#rrggbb", получено ${typeName(value)}`);
-  }
-}
 
 /**
  * Рассеянный свет: тон и интенсивность (PRES-2). Адрес приходит параметром —

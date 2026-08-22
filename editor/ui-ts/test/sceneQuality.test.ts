@@ -18,6 +18,7 @@ import {
   ModelsSubsystem,
   OverlaySubsystem,
   ParticlesSubsystem,
+  PostprocessSubsystem,
   PresentationStage,
   QualityController,
   TerrainSubsystem,
@@ -53,7 +54,10 @@ function viewportStage(): PresentationStage {
   };
   const stage = new PresentationStage(context);
   const grid = flatGrid();
-  // Свет — первой подсистемой, как в `createSceneStage`: его ручки такая же
+  // Пост-обработка — первой подсистемой, как в `createSceneStage` (REND-34):
+  // её ручки такая же часть реестра вьюпорта, как ручки света и моделей.
+  stage.register(new PostprocessSubsystem());
+  // Свет — следом, как в `createSceneStage`: его ручки такая же
   // часть реестра вьюпорта, как ручки моделей и частиц.
   const lighting = new LightingSubsystem({ grid });
   stage.register(lighting);
@@ -92,6 +96,11 @@ describe('вьюпорт редактора живёт на «ультре» (QU
       'models.defaultTier',
       'models.lodThresholdScale',
       'particles.density',
+      // Ручки пост-обработки (REND-34) приходят вьюпорту тем же порядком:
+      // зашитый документ их не называет, и действуют кодовые умолчания —
+      // «потолка нет», то есть авторская секция сцены как написана (QUAL-1).
+      'postprocess.bloom',
+      'postprocess.bloomResolution',
       'terrain.curvatureTessellation',
     ]);
   });
@@ -108,6 +117,10 @@ describe('вьюпорт редактора живёт на «ультре» (QU
     // как написан, и потолок его не опускает.
     expect(effectiveOf(controller)['lighting.shadowMode']).toBe('full');
     expect(effectiveOf(controller)['lighting.shadowMapSize']).toBe(Number.POSITIVE_INFINITY);
+    // Свечение сцены во вьюпорте горит как написано автором, и разрешение его
+    // пирамиды производно от кадра, а не от потолка (REND-34).
+    expect(effectiveOf(controller)['postprocess.bloom']).toBe(true);
+    expect(effectiveOf(controller)['postprocess.bloomResolution']).toBe(Number.POSITIVE_INFINITY);
   });
 
   it('картинка та же, что без контроллера вовсе: документ повторяет умолчания', () => {

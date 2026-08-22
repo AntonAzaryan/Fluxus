@@ -36,14 +36,19 @@
  * ED-21), поэтому валидация проверяет конечность числа и положительность
  * масштаба, а не кратность шагу.
  *
- * ## Секция `lighting` — рядом, отдельным модулем
+ * ## Секции `lighting` и `postprocess` — рядом, отдельными модулями
  *
  * Состав и валидация секции освещения (REND-29, REND-32) живут в
- * `presentationLighting.ts`: это самостоятельный формат со своими уровнями
- * вложенности и своими адресами находок, и читается он отдельно от документа,
- * который его несёт. Сюда он входит одним полем и одним вызовом.
+ * `presentationLighting.ts`, секции пост-обработки кадра (REND-34) — в
+ * `presentationPostprocess.ts`: это самостоятельные форматы со своими уровнями
+ * вложенности и своими адресами находок, и читаются они отдельно от документа,
+ * который их несёт. Сюда каждый входит одним полем и одним вызовом.
  */
 import { validateLighting, type PresentationLighting } from './presentationLighting.js';
+import {
+  validatePostprocess,
+  type PresentationPostprocess,
+} from './presentationPostprocess.js';
 
 /** Запись размещения decoration (PRES-2). Состав закрыт. */
 export interface DecorationRecord {
@@ -95,13 +100,14 @@ export interface PresentationFog {
 /**
  * Документ целиком (PRES-2): упорядоченный список записей `decorations` —
  * отсутствующий и пустой неразличимы, и то и другое означает слой без
- * декораций — плюс необязательные секции `fog` (FOW-10) и `lighting`; их
- * отсутствие — значения по умолчанию.
+ * декораций — плюс необязательные секции `fog` (FOW-10), `lighting` (REND-29)
+ * и `postprocess` (REND-34); их отсутствие — значения по умолчанию.
  */
 export interface PresentationScene {
   readonly decorations: readonly DecorationRecord[];
   readonly fog?: PresentationFog;
   readonly lighting?: PresentationLighting;
+  readonly postprocess?: PresentationPostprocess;
 }
 
 /** Шаг квантования позиции и масштаба — 10⁻³ мировой единицы (PRES-3). */
@@ -183,7 +189,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /** Состав закрыт (PRES-2): ключ, которого формат не знает, — ошибка, а не игнор. */
-const DOCUMENT_KEYS: readonly string[] = ['decorations', 'fog', 'lighting'];
+const DOCUMENT_KEYS: readonly string[] = ['decorations', 'fog', 'lighting', 'postprocess'];
 const RECORD_KEYS: readonly string[] = ['visual', 'x', 'y', 'yaw', 'scale', 'skin', 'walkable'];
 const FOG_KEYS: readonly string[] = [
   'strength',
@@ -356,6 +362,9 @@ export function validatePresentationScene(
   // Секция `lighting` — тем же порядком и по тому же основанию: её умолчания
   // держит подсистема освещения рендера.
   if (doc.lighting !== undefined) validateLighting(doc.lighting, errors);
+  // Секция `postprocess` (REND-34) — тем же порядком: её умолчания держит
+  // подсистема пост-обработки, и они воспроизводят сегодняшний кадр.
+  if (doc.postprocess !== undefined) validatePostprocess(doc.postprocess, errors);
   if (errors.length > 0) return { ok: false, errors };
   // Отсутствующий и пустой список неразличимы (PRES-2): наружу и то и другое
   // выходит пустым списком, и потребителю не приходится различать их самому.
@@ -365,6 +374,9 @@ export function validatePresentationScene(
       decorations: Array.isArray(list) ? (list as DecorationRecord[]) : [],
       ...(doc.fog === undefined ? {} : { fog: doc.fog as PresentationFog }),
       ...(doc.lighting === undefined ? {} : { lighting: doc.lighting as PresentationLighting }),
+      ...(doc.postprocess === undefined
+        ? {}
+        : { postprocess: doc.postprocess as PresentationPostprocess }),
     },
   };
 }

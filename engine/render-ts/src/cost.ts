@@ -239,6 +239,32 @@ export interface RenderCostCounters {
    */
   fogDissolveTexels: number;
 
+  // ------------------------------ пост-обработка кадра: работа кадра (REND-34)
+
+  /**
+   * Проходы рендерера, заказанные подсистемой пост-обработки (REND-34, design
+   * D5): отрисовка сцены в HDR-цель плюс полноэкранные проходы цепочки — порог,
+   * даунсемплы пирамиды и сведение. Отрисовка сцены считается здесь потому, что
+   * при активной цепочке ею распоряжается эта подсистема, а не туман: иначе
+   * проход, который кадр делает, исчезал бы из бюджета при переносе владения.
+   *
+   * Неактивная цепочка счётчика не двигает вовсе, даже когда потребитель зовёт
+   * подсистему вместо прямой отрисовки: тот проход — его собственный, и без
+   * подсистемы он был бы ровно тем же (PERF-2).
+   */
+  postprocessPasses: number;
+  /**
+   * Тексели НАЗНАЧЕНИЯ полноэкранных проходов за кадр (REND-34): сумма площадей
+   * целей, в которые писали проход порога, даунсемплы и сведение. Ось стоимости
+   * ручки `postprocess.bloomResolution` (QUAL-1): пирамида — это проход на
+   * ярус, и работа каждого растёт квадратом стороны его яруса.
+   *
+   * Отрисовка сцены сюда не входит: её стоимость — геометрия и материалы, а не
+   * площадь цели, и складывать её с полноэкранными проходами значило бы мерить
+   * разное одним числом.
+   */
+  postprocessTexels: number;
+
   // ----------------------------------------------- модели: работа кадра (REND-3)
 
   /**
@@ -444,6 +470,8 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     fogMaskUploadBytes: 'frame',
     fogMinimapTexels: 'frame',
     fogDissolveTexels: 'frame',
+    postprocessPasses: 'frame',
+    postprocessTexels: 'frame',
     modelsPoseWrites: 'frame',
     modelsCullTests: 'frame',
     modelsCulled: 'frame',
@@ -492,6 +520,8 @@ export function createCostCounters(): RenderCostCounters {
     frameInstances: 0,
     fogRenderPasses: 0,
     fogDissolveTexels: 0,
+    postprocessPasses: 0,
+    postprocessTexels: 0,
     modelsPoseWrites: 0,
     modelsCullTests: 0,
     modelsCulled: 0,

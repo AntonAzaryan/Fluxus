@@ -22,6 +22,7 @@ import type {
   AssetService,
   PresentationFog,
   PresentationLighting,
+  PresentationPostprocess,
   VisualManifest,
 } from '@game-mvp/assets';
 import {
@@ -30,6 +31,7 @@ import {
   LightingSubsystem,
   ModelsSubsystem,
   ParticlesSubsystem,
+  PostprocessSubsystem,
   PresentationStage,
   QualityController,
   TerrainSubsystem,
@@ -58,6 +60,8 @@ import presentationJson from '../../../content/scenes/duel.presentation.json';
 /** Манифест визуалов и парный документ сцены — контент демо, читаемый им законно (CONT-4). */
 const MANIFEST = manifestJson as unknown as VisualManifest;
 const SCENE_FOG = (presentationJson as { fog: PresentationFog }).fog;
+/** Секция `postprocess` сцены демо (PRES-2, REND-34) — тот же контент, что у сборки. */
+const SCENE_POSTPROCESS = (presentationJson as { postprocess: PresentationPostprocess }).postprocess;
 
 /** Ровная арена: реестру ручек размер безразличен, а маска на ней дешевле. */
 function flatGrid(size = 8): TerrainGrid {
@@ -74,6 +78,7 @@ interface DemoRig {
   readonly stage: PresentationStage;
   readonly fog: FogSubsystem | null;
   readonly lighting: LightingSubsystem;
+  readonly postprocess: PostprocessSubsystem;
 }
 
 /**
@@ -96,24 +101,31 @@ function demoRig(options: { readonly fog?: boolean } = {}): DemoRig {
   const empty: VisualManifest = { entities: {} };
   const stage = new PresentationStage(demoContext());
   const grid = flatGrid();
-  // Свет — первой подсистемой, как в `onReady` сборки: сцена демо без него не
-  // освещена вовсе, а его ручки — часть реестра, против которого проверяются
-  // документы пресетов.
+  // Пост-обработка — первой подсистемой, как в `onReady` сборки: её порт берёт
+  // туман (REND-34, FOW-7), а ручки — часть реестра, против которого
+  // проверяются документы пресетов. Секция сцены здесь настоящая: `performance`
+  // гасит именно авторски включённый bloom (QUAL-1).
+  const postprocess = new PostprocessSubsystem({ config: SCENE_POSTPROCESS });
+  stage.register(postprocess);
+  // Свет — следом, как в `onReady` сборки: сцена демо без него не освещена
+  // вовсе, а его ручки — тоже часть реестра.
   const lighting = new LightingSubsystem({ grid });
   stage.register(lighting);
   stage.register(new TerrainSubsystem(grid, { shadows: lighting }));
   stage.register(new ModelsSubsystem(empty, { shadows: lighting, warn: () => {} }));
   stage.register(new EffectsSubsystem(empty, { warn: () => {} }));
   stage.register(new ParticlesSubsystem(empty, { warn: () => {} }));
-  if (options.fog === false) return { stage, fog: null, lighting };
+  if (options.fog === false) return { stage, fog: null, lighting, postprocess };
   const fog = new FogSubsystem({
     grid,
     stats: { visionRadius: STATS.visionRadius, team: STATS.team },
     hero: () => null,
     config: SCENE_FOG,
+    // Порт пост-обработки — той же ссылкой, что в сборке (REND-34, design D2).
+    post: postprocess,
   });
   stage.register(fog);
-  return { stage, fog, lighting };
+  return { stage, fog, lighting, postprocess };
 }
 
 /**
@@ -157,6 +169,8 @@ describe('документы пресетов применимы к сцене �
       'models.defaultTier',
       'models.lodThresholdScale',
       'particles.density',
+      'postprocess.bloom',
+      'postprocess.bloomResolution',
       'terrain.curvatureTessellation',
     ]);
   });
@@ -262,6 +276,23 @@ describe('performance — первые реальные ограничения (
     // Тени выключены потолком: на слабом устройстве теневого прохода нет вовсе,
     // что бы сцена ни объявила.
     expect(cheap['lighting.shadowMode']).toBe('none');
+    // Свечение выключено потолком (REND-34): порога и пирамиды на слабом
+    // устройстве нет вовсе, а сведение яркости остаётся — это один проход.
+    expect(cheap['postprocess.bloom']).toBe(false);
+    expect(baseline['postprocess.bloom']).toBe(true);
+  });
+
+  it('потолок свечения гасит авторски включённый bloom, документ сцены не трогается', () => {
+    const rig = demoRig();
+    const before = JSON.stringify(SCENE_POSTPROCESS);
+    expect(rig.postprocess.config.bloomEnabled).toBe(true);
+
+    new QualityController(rig.stage, QUALITY_PRESETS.performance);
+
+    expect(rig.postprocess.config.bloomEnabled).toBe(false);
+    // Оператор сцены при этом действует: пресет гасит стоимость, а не облик.
+    expect(rig.postprocess.config.operator).toBe(SCENE_POSTPROCESS.toneMapping?.operator);
+    expect(JSON.stringify(SCENE_POSTPROCESS)).toBe(before);
   });
 
   it('потолок режима теней кусает поверх авторского full, документ сцены не трогается', () => {

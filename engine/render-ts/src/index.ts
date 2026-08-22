@@ -10,11 +10,16 @@ export type {
   LightingSink,
   LocalAimPoint,
   LocalInputSample,
+  // пост-обработка кадра (REND-34): рендерер глазами полноэкранного прохода и
+  // порт, которым её выход видит маскирующий проход тумана (FOW-7)
+  PostRendererLike,
   RenderConfig,
   RenderContext,
   RenderEvent,
   RenderHostConfig,
   RenderSubsystem,
+  ScenePostFrame,
+  ScenePostSource,
   ShadowCasterSink,
   ShadowCasterTier,
   ShadowPhase,
@@ -225,6 +230,17 @@ export type { FogObserver, FogSegment, FogSmoothPass, FogWorldRect } from './fog
 // он входит в контракт `VisibilityMask.commit`. Сторона блока и проход
 // схождения остаются внутренностями пакета.
 export { FogDirtyBlocks } from './fog/dirty.js';
+
+// Подсистема пост-обработки кадра (REND-34): bloom и tone mapping собственными
+// полноэкранными проходами, конфигурация — секцией `postprocess` парного
+// документа (PRES-2). При умолчаниях кадр байт-в-байт прежний: ни целей, ни
+// проходов. Порт `ScenePostSource` отдаёт её выход маскирующему проходу тумана
+// (FOW-7) — сборка передаёт его подсистеме тумана опцией `post`.
+export { PostprocessSubsystem, POSTPROCESS_BLOOM, POSTPROCESS_BLOOM_RESOLUTION } from './subsystems/postprocess.js';
+export type { PostprocessOptions } from './subsystems/postprocess.js';
+export { DEFAULT_POSTPROCESS_CONFIG, resolvePostprocessConfig } from './postprocess/config.js';
+export type { PostprocessRenderConfig, ToneMappingOperator } from './postprocess/config.js';
+export { BLOOM_LEVELS } from './postprocess/passes.js';
 
 // Подсистема освещения сцены (REND-8): источники света арены и теневые карты
 // из секции `lighting` парного документа (PRES-2). Свет всех потребителей

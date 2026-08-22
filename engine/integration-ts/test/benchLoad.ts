@@ -66,11 +66,12 @@ import {
   type TerrainGrid,
   type TickResult,
 } from '@game-mvp/core';
-import type { PresentationLighting } from '@game-mvp/assets';
+import type { PresentationLighting, PresentationPostprocess } from '@game-mvp/assets';
 import {
   Extractor,
   FogSubsystem,
   LightingSubsystem,
+  PostprocessSubsystem,
   ModelsSubsystem,
   ParticlesSubsystem,
   PresentationStage,
@@ -268,6 +269,24 @@ const BENCH_LIGHTING: PresentationLighting = Object.freeze({
   shadows: { mode: 'full', mapSize: 1024 },
 } as const);
 
+/**
+ * Секция `postprocess` стенда (PRES-2, REND-34) — АКТИВНАЯ цепочка: оператор
+ * сведения и включённый bloom. Выключенной ей быть нельзя по тому же
+ * основанию, по какому у стенда есть свет: без активной цепочки счётчики
+ * `postprocess*` лежали бы нулями во всех эталонах, и семь полноэкранных
+ * проходов кадра гейт бы не стерёг (PERF-4) — а это самая дорогая работа,
+ * которую REND-34 добавляет.
+ *
+ * Числа bloom авторски не названы: счётчиков они не двигают вовсе (работа
+ * прохода — его цель, а не сила свечения), и написать их значило бы притворить
+ * фикстуру настройкой. Двигают счётчики ровно два рычага, и оба под гейтом:
+ * флаг `enabled` (потолок пресета гасит пирамиду) и разрешение её вершины.
+ */
+const BENCH_POSTPROCESS: PresentationPostprocess = Object.freeze({
+  toneMapping: { operator: 'aces' },
+  bloom: { enabled: true },
+} as const);
+
 const PRODUCER: PresentationProducer = { name: 'bench' };
 
 /** Кадров на доставку: один — каденс кадра от каденса тика бенч не отвязывает. */
@@ -285,10 +304,11 @@ const FRAMES_PER_TICK = 1;
  * эталон стоимости, зависящий от политики игры, краснел бы от каждой правки
  * баланса картинки.
  *
- * Имена ручек — собранного реестра (design D1). Эталон двигают три ручки:
+ * Имена ручек — собранного реестра (design D1). Эталон двигают четыре ручки:
  * разрешение маски — полномасочными счётчиками тумана, множитель порогов LOD —
  * треугольниками скомпактованных записей батчей (REND-22), потолок разбиения —
- * квадами пола пересобранных чанков (REND-9). Ярус по умолчанию оба документа
+ * квадами пола пересобранных чанков (REND-9), выключатель bloom — проходами и
+ * текселями пирамиды (REND-34). Ярус по умолчанию оба документа
  * держат `batched` (дефолт) осознанно: пресет применяется при регистрации, до
  * первого инстанса, `modelsRebuilds` в эталоне — ноль, а `detailed` в одной из
  * секций обнулил бы батч-счётчики безъярусной записи и сломал закон x4 по
@@ -312,6 +332,13 @@ const PERFORMANCE_PRESET: QualityPreset = Object.freeze({
   // уровень ближе к камере (REND-22).
   'models.lodThresholdScale': 2,
   'particles.density': 0.5,
+  // Потолок-выключатель поверх авторски включённого bloom секции стенда
+  // (`BENCH_POSTPROCESS`): min() срабатывает, пирамиды в кадре нет, и разница
+  // двух секций эталона — пять полноэкранных проходов и их тексели (REND-34,
+  // QUAL-4). Оператор сведения при этом действует на обоих пресетах: это один
+  // проход постоянной стоимости, и гасить его значило бы менять облик кадра, а
+  // не его цену (QUAL-2).
+  'postprocess.bloom': false,
   'terrain.curvatureTessellation': 2,
 });
 
@@ -412,6 +439,8 @@ export class PresentationBench {
   readonly fog: FogSubsystem;
   /** Освещение стенда (REND-8) — сток теневых кастеров террейна и моделей. */
   readonly lighting: LightingSubsystem;
+  /** Пост-обработка кадра стенда (REND-34) — владелец проходов кадра и порт тумана. */
+  readonly postprocess: PostprocessSubsystem;
   readonly renderer = new RendererSpy();
   /** Контроллер качества сцены стенда (QUAL-1): реестр ручек и их значения. */
   readonly quality: QualityController;
@@ -465,11 +494,18 @@ export class PresentationBench {
       assets: benchAssets(),
       config: { heightStep: 1 },
     };
+    // Пост-обработка — ДО тумана: её порт туман берёт опцией `post`, а объявляет
+    // порт тот, кто зарегистрирован раньше и снесён будет позже (REND-31).
+    this.postprocess = new PostprocessSubsystem({ config: BENCH_POSTPROCESS });
     this.fog = new FogSubsystem({
       grid,
       stats: FOG_STATS,
       hero: () => this.hero,
       config: { resolution: options.resolution },
+      // Порт цепочки (REND-34, FOW-7): при активной цепочке сцену рисует она, а
+      // туман кладёт маску поверх её выхода — то самое пересечение владений,
+      // которое эталон и обязан стеречь.
+      post: this.postprocess,
       // Бюджет порционной перестройки снят (change `fog-mask-budgeted-rebuild`,
       // design D1): стенд крутит РОВНО ОДИН кадр на доставку, а игра — три-четыре,
       // и под бюджетом эталон мерил бы каденс стенда (сколько доставок съела
@@ -506,9 +542,11 @@ export class PresentationBench {
     // (REND-27). В список подсистем он при этом не входит, и счётные величины
     // доставки и кадра (PERF-3) от его присутствия не меняются (RDBG-8).
     this.debug = options.debug === true ? new RenderDebugLayer(this.stage, { scene: context.scene, surface }) : null;
-    // Освещение первым — порядок сборок (REND-8): подсистемы ниже отдают ему
-    // корни нарисованного теневыми кастерами через опцию `shadows`.
+    // Пост-обработка первой, освещение следом — порядок сборок (REND-8):
+    // проходами кадра владеет цепочка, а корни нарисованного подсистемы ниже
+    // отдают свету теневыми кастерами через опцию `shadows`.
     this.stage
+      .register(this.postprocess)
       .register(this.lighting)
       .register(this.fog)
       .register(new PositionsSubsystem())

@@ -412,7 +412,7 @@ describe('BLND-3: мост — terrain-объект и walkable-декораци
   });
 });
 
-describe('BLND-2, PRES-2: импорт владеет только decorations — секции fog и lighting байт-в-байт', () => {
+describe('BLND-2, PRES-2: импорт владеет только decorations — секции fog, lighting и postprocess байт-в-байт', () => {
   /** Секция fog цели (FOW-10): поле вне пространственного слоя импорта. */
   const FOG = {
     strength: 0.65,
@@ -430,6 +430,12 @@ describe('BLND-2, PRES-2: импорт владеет только decorations �
     shadows: { mode: 'hybrid', mapSize: 1024 },
   };
 
+  /** Секция postprocess цели (PRES-2, REND-34): и она — вне слоя импорта. */
+  const POSTPROCESS = {
+    toneMapping: { operator: 'aces', exposure: 1 },
+    bloom: { enabled: true, strength: 0.35, threshold: 1, radius: 0.5 },
+  };
+
   /** Байтовый срез секции fog из канонической формы файла — им и меряется «байт-в-байт». */
   function fogSlice(bytes: Buffer): string {
     const match = /"fog": \{[^}]*\}/.exec(bytes.toString('utf8'));
@@ -438,21 +444,26 @@ describe('BLND-2, PRES-2: импорт владеет только decorations �
   }
 
   /**
-   * Байтовый хвост документа от ключа секции: у `lighting` подсекции вложены, и
-   * срез по хвосту меряет их вместе со всеми отступами — секция в документе
-   * последняя, и хвост за ней ровно она и есть.
+   * Байтовый хвост документа от ключа секции: у `lighting` и `postprocess`
+   * подсекции вложены, и срез по хвосту меряет их вместе со всеми отступами —
+   * дальше по документу лежат только они же.
    */
-  function lightingSlice(bytes: Buffer): string {
+  function tailSlice(bytes: Buffer, key: string): string {
     const text = bytes.toString('utf8');
-    const at = text.indexOf('"lighting"');
-    if (at < 0) throw new Error('в документе нет секции lighting');
+    const at = text.indexOf(`"${key}"`);
+    if (at < 0) throw new Error(`в документе нет секции ${key}`);
     return text.slice(at);
   }
 
-  it('перепись decorations импортом оставляет fog и lighting байт-в-байт, а файл — канонической формой (ED-21)', async () => {
+  it('перепись decorations импортом оставляет fog, lighting и postprocess байт-в-байт, а файл — канонической формой (ED-21)', async () => {
     // Файл записан канонической формой (ED-21) заранее: тогда изменение любых
     // байтов секций — дело импорта, а не переформатирования при сохранении.
-    const before = encodeDocument({ decorations: [], fog: FOG, lighting: LIGHTING });
+    const before = encodeDocument({
+      decorations: [],
+      fog: FOG,
+      lighting: LIGHTING,
+      postprocess: POSTPROCESS,
+    });
     const root = await tree(
       contentFiles('placements.gltf', sceneDocument(), presentationDocument(), {
         [PRESENTATION_ID]: before,
@@ -466,10 +477,11 @@ describe('BLND-2, PRES-2: импорт владеет только decorations �
     // Импорт переписал список decorations (источник даёт запись Statue)…
     const parsed = JSON.parse(after.toString('utf8')) as { decorations: unknown[]; fog: unknown };
     expect(parsed.decorations.length).toBeGreaterThan(0);
-    // …а секции fog и lighting в файле — те же байтовые срезы, что до импорта:
-    // пространственный слой импорта — только `decorations` (BLND-2).
+    // …а секции fog, lighting и postprocess в файле — те же байтовые срезы, что
+    // до импорта: пространственный слой импорта — только `decorations` (BLND-2).
     expect(fogSlice(after)).toBe(fogSlice(Buffer.from(before)));
-    expect(lightingSlice(after)).toBe(lightingSlice(Buffer.from(before)));
+    expect(tailSlice(after, 'lighting')).toBe(tailSlice(Buffer.from(before), 'lighting'));
+    expect(tailSlice(after, 'postprocess')).toBe(tailSlice(Buffer.from(before), 'postprocess'));
     // Round-trip канонического сохранения (ED-21): записанное — каноническая
     // форма самого себя, то есть «открыл — сохранил» не изменит ни байта.
     expect(new Uint8Array(after)).toEqual(encodeDocument(parsed as never));

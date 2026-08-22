@@ -25,6 +25,13 @@
  *   мировые XY фрагмента, сэмплирует маску и затемняет силой/цветом из
  *   конфигурации (FOW-7, FOW-10). Юнитов в туманной зоне нет по построению —
  *   их вырезал фильтр снапшота (NET-12), и прятать рендеру некого.
+ * - При АКТИВНОЙ пост-обработке кадра (REND-34) сцену подсистема не рисует
+ *   вовсе: вход маскирующего прохода — цвет (выход сведения яркости) и глубина
+ *   сцены — приезжает портом `ScenePostSource` (change `bloom-tone-mapping`,
+ *   design D2). Маска остаётся ФИНАЛЬНЫМ проходом кадра, а bloom и tone mapping
+ *   ложатся под неё и затемняются наравне с остальным кадром (FOW-7). Порта
+ *   нет либо цепочка неактивна — всё ровно как было: своя LDR-цель и свой
+ *   прямой рендер.
  * - Пока маска не построена (нет доставки со статами) — конвейер прежний:
  *   `render` делает ровно прямой рендер, ни одного лишнего прохода. Сцена без
  *   тумана эту подсистему просто не регистрирует (design D3).
@@ -52,13 +59,15 @@ import type {
   QualityValues,
   RenderContext,
   RenderSubsystem,
+  ScenePostFrame,
+  ScenePostSource,
   TickView,
 } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
 import type { DebugSource } from '../debug/contract.js';
 import { fogMaskDebugSource } from '../debug/fogSource.js';
 import { resolveFogConfig, type FogRenderConfig } from '../fog/config.js';
-import { POST_FRAGMENT, POST_VERTEX } from '../fog/postPass.js';
+import { POST_FRAGMENT, POST_VERTEX, createMaskTexture } from '../fog/postPass.js';
 import { FogMinimapSurface, type FogLayerCanvas, type FogMinimapLayer } from '../fog/layer.js';
 import { FogDirtyBlocks, dissolveWindow } from '../fog/dirty.js';
 import {
@@ -136,6 +145,17 @@ export interface FogSubsystemOptions {
    * стоимости остаются воспроизводимыми побитово (PERF-3).
    */
   readonly rebuildBudget?: number;
+  /**
+   * Пост-обработка кадра портом (`rendering` REND-34, FOW-7, change
+   * `bloom-tone-mapping` design D2): при активной цепочке маскирующий проход
+   * читает ЕЁ выход, а сцену подсистема тумана не рисует. Порта нет — кадр
+   * ровно такой, каким был до REND-34.
+   *
+   * Порт, а не ссылка на подсистему: подсистемы не знают друг о друге, а общий
+   * объект им приносит сборка — тот же приём, что у приёмника теневых кастеров.
+   * Владелец порта регистрируется РАНЬШЕ тумана и переживает его снос (REND-31).
+   */
+  readonly post?: ScenePostSource;
 }
 
 export class FogSubsystem implements RenderSubsystem {
@@ -144,6 +164,8 @@ export class FogSubsystem implements RenderSubsystem {
   private readonly grid: TerrainGrid;
   private readonly statNames: FogStatNames;
   private readonly heroOf: () => EntityId | null;
+  /** Порт пост-обработки кадра (REND-34, design D2); null — её в сборке нет. */
+  private readonly post: ScenePostSource | null;
 
   /**
    * Секция `fog` документа сцены как есть (PRES-2) — АВТОРСКИЙ источник. Она
@@ -215,6 +237,7 @@ export class FogSubsystem implements RenderSubsystem {
     this.grid = options.grid;
     this.statNames = options.stats;
     this.heroOf = options.hero;
+    this.post = options.post ?? null;
     // Авторская секция хранится как есть (FOW-10, QUAL-1): действующая
     // конфигурация — уже под потолком пресета, если он приехал.
     this.section = options.config;
@@ -674,35 +697,74 @@ export class FogSubsystem implements RenderSubsystem {
 
   /**
    * Кадр с туманом (design D2): сцена в render target, затем полноэкранный
-   * проход затемнения. Пока маска не построена — ровно прямой рендер, без
-   * единого лишнего прохода: сцена без активного тумана рисуется по-старому.
+   * проход затемнения. Пока маска не построена — вклада тумана в кадре нет
+   * вовсе: при неактивной пост-обработке это ровно прямой рендер, при активной
+   * — ровно её проходы без маскирующего (FOW-7).
+   *
+   * При активной цепочке пост-обработки (REND-34) сцену рисует ОНА, а маска
+   * ложится поверх её выхода: свечение и сведённая яркость затемняются наравне
+   * с остальным кадром, и скрытого маской bloom не открывает (FOW-7, QUAL-2).
    */
   render(renderer: FogRendererLike, camera: THREE.Camera): void {
     const ctx = this.ctx;
     if (ctx === null) throw new Error('FogSubsystem: init() не вызван (REND-8)');
     // Проходы рендерера — стадия кадра (PERF-2): их число подсистема знает
-    // сама, и структурный спай теста обязан видеть ровно столько же.
+    // сама, и структурный спай теста обязан видеть ровно столько же. Проходы
+    // цепочки в это число не входят — их считает её собственный счётчик.
     const cost = costSink();
+    // Порт берётся только при АКТИВНОЙ цепочке: неактивная — это «делай как до
+    // REND-34», и сцену подсистема тумана рисует сама, в свою LDR-цель.
+    const chain = this.post?.active === true ? this.post : null;
+    // Цепочка взяла отрисовку сцены на себя — своя цель тумана больше не нужна
+    // ни одному проходу и отдаётся сразу, а не доживает до сноса (REND-31).
+    if (chain !== null && this.target !== null) {
+      this.target.dispose();
+      this.target = null;
+    }
     if (!this.built) {
+      if (chain !== null) {
+        chain.renderToScreen(renderer, camera);
+        return;
+      }
       renderer.render(ctx.scene, camera);
       if (cost !== undefined) cost.fogRenderPasses++;
       return;
     }
-    const size = renderer.getDrawingBufferSize(this.sizeScratch);
-    const target = this.ensureTarget(size.x, size.y);
-    renderer.setRenderTarget(target);
-    renderer.render(ctx.scene, camera);
-    renderer.setRenderTarget(null);
+    const frame =
+      chain !== null ? chain.renderToTexture(renderer, camera) : this.renderScene(renderer, ctx, camera);
 
     camera.updateMatrixWorld();
     (this.postMaterial.uniforms.uInvViewProj as { value: THREE.Matrix4 }).value
       .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
       .invert();
-    (this.postMaterial.uniforms.tScene as { value: THREE.Texture | null }).value = target.texture;
-    (this.postMaterial.uniforms.tDepth as { value: THREE.Texture | null }).value =
-      target.depthTexture;
+    (this.postMaterial.uniforms.tScene as { value: THREE.Texture | null }).value = frame.color;
+    (this.postMaterial.uniforms.tDepth as { value: THREE.Texture | null }).value = frame.depth;
     renderer.render(this.postScene, this.postCamera);
-    if (cost !== undefined) cost.fogRenderPasses += 2;
+    // Маскирующий проход — один; отрисовка сцены сюда добавляется только тогда,
+    // когда её сделала САМА подсистема (неактивная цепочка).
+    if (cost !== undefined) cost.fogRenderPasses += chain !== null ? 1 : 2;
+  }
+
+  /**
+   * Своя отрисовка сцены в промежуточную LDR-цель — путь без пост-обработки,
+   * ровно тот же, что был до REND-34. Возвращает вход маскирующего прохода в
+   * той же форме, в какой его отдаёт порт цепочки (design D2).
+   */
+  private renderScene(
+    renderer: FogRendererLike,
+    ctx: RenderContext,
+    camera: THREE.Camera,
+  ): ScenePostFrame {
+    const size = renderer.getDrawingBufferSize(this.sizeScratch);
+    const target = this.ensureTarget(size.x, size.y);
+    renderer.setRenderTarget(target);
+    renderer.render(ctx.scene, camera);
+    renderer.setRenderTarget(null);
+    // ponytail (REND-26): та же запись на кадр, что отдаёт порт цепочки, и по
+    // тому же основанию — одна на кадр с построенной маской, а не на инстанс.
+    // Форма ответа общая намеренно: два пути входа маски различаются тем, КТО
+    // нарисовал сцену, а не тем, что получает маскирующий проход.
+    return { color: target.texture, depth: target.depthTexture };
   }
 
   /** Render target кадра с текстурой глубины; пересоздаётся при смене размера окна. */
@@ -726,28 +788,4 @@ export class FogSubsystem implements RenderSubsystem {
   get visibility(): VisibilityMask {
     return this.mask;
   }
-}
-
-/** Одноканальная текстура поверх растра маски; фильтрация билинейная (design D2). */
-function createMaskTexture(mask: VisibilityMask, shown: Uint8Array): THREE.DataTexture {
-  const texture = new THREE.DataTexture(
-    shown,
-    mask.width,
-    mask.height,
-    THREE.RedFormat,
-    THREE.UnsignedByteType,
-  );
-  texture.minFilter = THREE.LinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-  // Однобайтовые ряды: без выравнивания в 1 байт ряд шириной не кратной 4
-  // читался бы со сдвигом (правило распаковки GL, дефолт — 4).
-  texture.unpackAlignment = 1;
-  texture.needsUpdate = true;
-  // Счётчика здесь нет намеренно (PERF-3). Создание текстуры трафика не
-  // порождает: three грузит растр на GPU по ВЕРСИИ, поднятой `needsUpdate`, и
-  // взведённый здесь флаг сливается с флагом ближайшей публикации в одну
-  // загрузку. Считать её дважды — приписать пустой байт: и на первой
-  // перестройке, и на смене разрешения (там маска пересобирается и `built`
-  // сбрасывается) счёт снимает единственное место — `publishTexture`.
-  return texture;
 }

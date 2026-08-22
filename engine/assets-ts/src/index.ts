@@ -145,11 +145,7 @@ export type { TerrainCurvatureMap } from './curvature.js';
 export { validateCurvatureMap, CURVATURE_SCALE } from './curvature.js';
 
 // парный presentation-документ сцены (`presentation-scene` PRES-1..3)
-export type {
-  DecorationRecord,
-  PresentationFog,
-  PresentationScene,
-} from './presentation.js';
+export type { DecorationRecord, PresentationFog, PresentationScene } from './presentation.js';
 export {
   DECORATION_POSITION_STEP,
   DECORATION_YAW_STEP,
@@ -172,6 +168,14 @@ export type {
   PresentationShadows,
 } from './presentationLighting.js';
 export { PRESENTATION_SHADOW_MODES } from './presentationLighting.js';
+// секция `postprocess` документа (`rendering` REND-34)
+export type {
+  PresentationBloom,
+  PresentationPostprocess,
+  PresentationToneMapping,
+  PresentationToneMappingOperator,
+} from './presentationPostprocess.js';
+export { PRESENTATION_TONE_MAPPING_OPERATORS } from './presentationPostprocess.js';
 
 // загрузчики реестра (ASSET-3); регистрируются потребителем через registerLoader
 export { mdxLoader } from './loaders/mdx.js';

@@ -8,6 +8,7 @@ import {
   AssetService,
   DECORATION_POSITION_STEP,
   DECORATION_YAW_STEP,
+  PRESENTATION_TONE_MAPPING_OPERATORS,
   isPresentationPath,
   presentationLoader,
   presentationPathOf,
@@ -514,17 +515,114 @@ describe('REND-32: подсекция цикла времени суток — �
   });
 });
 
+describe('PRES-2, REND-34: секция postprocess — закрытая конфигурация пост-обработки', () => {
+  it('валидная секция принимается и выходит наружу как есть', () => {
+    const postprocess = {
+      toneMapping: { operator: 'aces', exposure: 1.1 },
+      bloom: { enabled: true, strength: 0.35, threshold: 1, radius: 0.5 },
+    };
+    const result = validatePresentationScene({ decorations: [], postprocess });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.postprocess).toEqual(postprocess);
+  });
+
+  it('документ без секции разбирается как прежде: наружу секция не выходит', () => {
+    const result = validatePresentationScene({ decorations: [{ visual: 'rock', x: 1, y: 2 }] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.postprocess).toBeUndefined();
+    expect(result.scene.decorations).toHaveLength(1);
+  });
+
+  it('каждое поле необязательно: пустая и частичная секции валидны', () => {
+    for (const postprocess of [{}, { bloom: { enabled: true } }, { toneMapping: {} }]) {
+      const result = validatePresentationScene({ postprocess });
+      expect(result.ok, JSON.stringify(postprocess)).toBe(true);
+      if (!result.ok) continue;
+      expect(result.scene.postprocess).toEqual(postprocess);
+    }
+  });
+
+  it('каждый оператор закрытого словаря принимается, чужой отвергается адресно', () => {
+    for (const operator of PRESENTATION_TONE_MAPPING_OPERATORS) {
+      const result = validatePresentationScene({ postprocess: { toneMapping: { operator } } });
+      expect(result.ok, operator).toBe(true);
+    }
+    // Имя оператора three.js, которого в словаре нет: словарь закрыт (REND-34).
+    expectErrors(
+      { postprocess: { toneMapping: { operator: 'cineon' } } },
+      /postprocess\.toneMapping\.operator: ожидался оператор сведения яркости из none \| linear \| reinhard \| aces \| agx \| neutral/,
+    );
+  });
+
+  it('неизвестный ключ отвергается адресно на КАЖДОМ уровне, а не игнорируется молча', () => {
+    expectErrors(
+      { postprocess: { toneMappin: {} } },
+      /postprocess\.toneMappin: неизвестное поле \(допустимы: toneMapping, bloom\)/,
+    );
+    expectErrors(
+      { postprocess: { toneMapping: { operator: 'aces', gamma: 2.2 } } },
+      /postprocess\.toneMapping\.gamma: неизвестное поле/,
+    );
+    expectErrors(
+      { postprocess: { bloom: { enabled: true, knee: 0.5 } } },
+      /postprocess\.bloom\.knee: неизвестное поле/,
+    );
+  });
+
+  it('значение не той формы — адресный отказ по каждому полю', () => {
+    // Экспозиция строго положительна: нулевая гасит кадр в чёрное, а «сведения
+    // нет» выражается оператором `none`, а не числом.
+    expectErrors(
+      { postprocess: { toneMapping: { exposure: 0 } } },
+      /postprocess\.toneMapping\.exposure: ожидалось положительное число экспозиции/,
+    );
+    expectErrors(
+      { postprocess: { toneMapping: { exposure: -1 } } },
+      /postprocess\.toneMapping\.exposure/,
+    );
+    expectErrors({ postprocess: { bloom: { enabled: 'yes' } } }, /postprocess\.bloom\.enabled/);
+    expectErrors({ postprocess: { bloom: { strength: -0.1 } } }, /postprocess\.bloom\.strength/);
+    expectErrors({ postprocess: { bloom: { threshold: -1 } } }, /postprocess\.bloom\.threshold/);
+    // Ширина — доля: и ниже нуля, и выше единицы прочтения у неё нет.
+    expectErrors({ postprocess: { bloom: { radius: 1.5 } } }, /postprocess\.bloom\.radius/);
+    expectErrors({ postprocess: { bloom: { radius: -0.5 } } }, /postprocess\.bloom\.radius/);
+    // Порог, наоборот, верхней границы не имеет: он меряется в линейных
+    // значениях ДО сведения, а заяркостный диапазон единицей не ограничен.
+    expect(validatePresentationScene({ postprocess: { bloom: { threshold: 12 } } }).ok).toBe(true);
+  });
+
+  it('секция и подсекции не-объектом отвергаются адресно', () => {
+    expectErrors({ postprocess: 'aces' }, /postprocess: ожидался объект секции, получено string/);
+    expectErrors({ postprocess: { bloom: true } }, /postprocess\.bloom: ожидался объект секции/);
+    expectErrors(
+      { postprocess: { toneMapping: [] } },
+      /postprocess\.toneMapping: ожидался объект секции, получено массив/,
+    );
+  });
+
+  it('ошибки секции собираются все разом, а не по первой', () => {
+    const errors = expectErrors({
+      postprocess: { toneMapping: { operator: 'filmic', exposure: 0 }, bloom: { radius: 2 } },
+    });
+    expect(errors).toHaveLength(3);
+  });
+});
+
 describe('PRES-2: секции документа сосуществуют', () => {
-  it('секции fog и lighting сосуществуют, и обе — вне симуляции (PRES-4)', () => {
+  it('секции fog, lighting и postprocess сосуществуют, и все — вне симуляции (PRES-4)', () => {
     const result = validatePresentationScene({
       decorations: [{ visual: 'rock', x: 1, y: 2 }],
       fog: { strength: 0.5 },
       lighting: { shadows: { mode: 'hybrid' } },
+      postprocess: { toneMapping: { operator: 'aces' } },
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.scene.fog).toEqual({ strength: 0.5 });
     expect(result.scene.lighting).toEqual({ shadows: { mode: 'hybrid' } });
+    expect(result.scene.postprocess).toEqual({ toneMapping: { operator: 'aces' } });
   });
 });
 
