@@ -102,18 +102,20 @@ export {
 } from './systems/terrain.js';
 export type { TerrainCellKind, TerrainDef } from './systems/terrain.js';
 export {
+  colliderHeightDeclared,
   createPhysicsApi,
   staticsFromTerrain,
   PhysicsSystem,
   PhysicsWorld,
   BLOCKS_MOVEMENT,
   BLOCKS_VISION,
+  COLLIDER_HEIGHT_FIELD,
   PHYSICS_EVENTS,
   SHAPE_AABB,
   SHAPE_CIRCLE,
   STATIC_COLLIDER,
 } from './systems/physics.js';
-export type { PhysicsOptions, StaticCollider } from './systems/physics.js';
+export type { PhysicsDeps, PhysicsOptions, StaticCollider } from './systems/physics.js';
 export {
   createArenaApi,
   arenaPrefab,

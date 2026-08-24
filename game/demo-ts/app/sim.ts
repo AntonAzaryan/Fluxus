@@ -17,6 +17,7 @@ import {
   PhysicsWorld,
   VISION_MODIFIER_COMPONENT,
   VisibilitySystem,
+  colliderHeightDeclared,
   createPhysicsApi,
   initialState,
   loadScene,
@@ -354,7 +355,12 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   // Физика ядра: статика обрывов из террейна — игрок не сойдёт с плато мимо
   // рампы (PHYS-8, TERR-5). Снаряд без коллайдера — летит поверх обрывов.
   const physicsWorld = new PhysicsWorld(staticsFromTerrain(grid), grid.tileSize);
-  scene.systems.register(new PhysicsSystem(physicsWorld));
+  // Зависимости сборки физики (DI-3): колоночный гейт включает сцена, объявив
+  // поле высоты у своего компонента коллайдера (PHYS-14), а уровень цели луч
+  // берёт из запроса террейна (TERR-4). Тот же состав, что у `buildSimulation`
+  // сетевого матча: одиночная симуляция обязана тикать ту же физику (SHELL-8).
+  const physicsDeps = { height: colliderHeightDeclared(scene.world), terrain };
+  scene.systems.register(new PhysicsSystem(physicsWorld, {}, physicsDeps));
   // Пересчёт видимости (FOW-4): сцена с `fog` объявляет компоненты, а систему
   // регистрирует сборка — ей нужен raycast, то есть зависимость сборки (DI-3).
   // Тот же состав, что у сетевого матча (`buildSimulation` через `visibility`
@@ -380,7 +386,7 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
     // через `ctx.physics.raycast`, и без него перекрытие обзора обрывами молча
     // выключено — локальный режим разошёлся бы с сетевым (SHELL-8), где
     // `buildSimulation` API передаёт.
-    physics: createPhysicsApi(scene.world, physicsWorld),
+    physics: createPhysicsApi(scene.world, physicsWorld, {}, physicsDeps),
   };
 
   return { sim, state, playerId, terrain, grid };

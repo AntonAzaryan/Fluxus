@@ -24,10 +24,12 @@ import { InputSystem, inputTargetDeclared } from '../systems/inputSystem.js';
 import { LocomotionSystem, type LocomotionOptions } from '../systems/locomotion.js';
 import { mathApi } from '../math/mathApi.js';
 import {
+  colliderHeightDeclared,
   createPhysicsApi,
   PhysicsSystem,
   PhysicsWorld,
   staticsFromTerrain,
+  type PhysicsDeps,
   type PhysicsOptions,
 } from '../systems/physics.js';
 import { requireModifierList } from '../systems/modifiers.js';
@@ -107,8 +109,16 @@ export function buildSimulation(
   if (def.physics !== undefined) {
     const statics = terrain === undefined ? [] : staticsFromTerrain(terrain.grid);
     const physicsWorld = new PhysicsWorld(statics, terrain?.grid.tileSize);
-    systems.register(new PhysicsSystem(physicsWorld, def.physics));
-    physics = createPhysicsApi(world, physicsWorld, def.physics);
+    // Зависимости сборки физики, а не поля документа (DI-3): колоночный гейт
+    // включает сцена объявлением поля высоты у своего компонента коллайдера
+    // (PHYS-14), а уровень луч берёт из запроса террейна (TERR-4). Схема
+    // компонента неизменна, поэтому спрашивается один раз — здесь.
+    const deps: PhysicsDeps = {
+      height: colliderHeightDeclared(world, def.physics.collider),
+      ...(terrain !== undefined ? { terrain } : {}),
+    };
+    systems.register(new PhysicsSystem(physicsWorld, def.physics, deps));
+    physics = createPhysicsApi(world, physicsWorld, def.physics, deps);
   }
 
   // Видимость считается по финальным позициям тика, поэтому регистрируется
