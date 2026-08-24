@@ -14,7 +14,7 @@
  * корневым модулем ради сорока строк транспорта незачем.
  */
 import type { PhysicsOptions, SceneDef, VisibilityOptions } from '@fluxus/core';
-import type { Transport, TransportServer } from '@fluxus/net';
+import type { ConnectionRole, Transport, TransportServer } from '@fluxus/net';
 import { shellPort } from '@fluxus/client/protocol';
 import { portTransport } from '@fluxus/client/portTransport';
 import type { BotBehaviorDocument } from './behavior.js';
@@ -71,6 +71,12 @@ export class PortConnections implements TransportServer {
 /** Один бот в init-сообщении воркера: кто он, каким мозгом и по каким документам. */
 export interface BotWorkerSeat {
   readonly playerId: string;
+  /**
+   * Роль соединения в слоте (`netcode-transport` NTR-18); отсутствие — владелец.
+   * Едет ЗДЕСЬ, а не выводится воркером из фазы матча: фазы матча воркер не
+   * видит (BOT-4), а «сажаем заместителя» — решение сборки-основателя (BOT-14).
+   */
+  readonly role?: ConnectionRole;
   readonly brain: BrainKind;
   readonly profile: BotProfile;
   /**

@@ -21,6 +21,7 @@ export type {
   ByeMessage,
   ClientCloseReason,
   ClientMessage,
+  ConnectionRole,
   EndMessage,
   EndReason,
   EventBatch,

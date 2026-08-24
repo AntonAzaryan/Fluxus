@@ -90,6 +90,7 @@ import {
   type AssetState,
   type BakedDerivatives,
   type BakedSkinSet,
+  type DecodedImage,
   type EntityVisual,
   type NormalizedModel,
   type VisualManifest,
@@ -123,6 +124,7 @@ import {
   type ModelBounds,
   type ModelInstance,
   type SharedModelData,
+  type TextureTarget,
 } from '../model/build.js';
 import {
   advanceFall,
@@ -135,7 +137,12 @@ import { AnimationController, MixerAnimationBackend } from '../model/animation.j
 import { VatAnimationBackend } from '../model/vatAnimation.js';
 import { BoneControlState } from '../model/boneControl.js';
 import { smoothYaw } from '../model/boneControl.js';
-import { applySkin, skinTextureSources, type SkinApplication } from '../model/skins.js';
+import {
+  applySkin,
+  skinTextureSources,
+  type SkinApplication,
+  type SkinTextureSource,
+} from '../model/skins.js';
 import { ModelBatch, batchLevels } from '../model/batch.js';
 import { BatchSkinLoader, skinArrayTexture } from '../model/batchSkins.js';
 import {
@@ -201,15 +208,36 @@ export interface ModelInstanceView {
 /**
  * Результат прогрева подсистемы моделей (`prewarm`): паркуемые корни для
  * компиляции программ тёплой сценой и текстуры для заливки на GPU до первого
- * кадра. `finish()` возвращает прогретое: детальные образцы сносятся,
- * батч-группы отпускаются из тёплой сцены (и, если за время прогрева к батчу
- * успела привязаться живая запись, встают в настоящую).
+ * кадра. `finish()` возвращает прогретое: образцы сносятся, батч-группы
+ * отпускаются из тёплой сцены (и, если за время прогрева к батчу успела
+ * привязаться живая запись, встают в настоящую); якоря программ остаются жить
+ * с ассетом.
+ *
+ * Ступени ДВЕ, и разделены они по входу, а не по вкусу: `roots` строятся из
+ * одних моделей, `anchoredRoots()` — ещё и из текстур скина (REND-6). Ассет
+ * вправе стоять в `loading` неограниченно (ASSET-4), и одна застрявшая текстура
+ * не должна отменять прогрев батчей, VAT-текстур и образцов, которым она не
+ * нужна вовсе.
  */
 export interface ModelsPrewarm {
-  /** Корни вне сцены: батч-группы и образцы детальных видов. Рисовать их нельзя. */
+  /**
+   * Первая ступень: корни вне сцены — батч-группы и образцы детальных видов.
+   * Ждут только своих МОДЕЛЕЙ. Рисовать их нельзя.
+   */
   readonly roots: readonly THREE.Object3D[];
   /** Текстуры прогретых батчей (VAT) — вход `WebGLRenderer.initTexture`. */
   readonly textures: readonly THREE.Texture[];
+  /**
+   * Вторая ступень: образцы детальных видов под ЯКОРЯМИ программ (FOW-8) —
+   * материалами с текстурами записи, теми же, какими рисует матч. Обещание
+   * разрешается, когда доедут текстуры скина, и собирающий вправе не дожидаться
+   * его вовсе: прогрев тогда сделает меньше, но сделает.
+   *
+   * Каждый вид даёт непрозрачный образец, а вид СУЩНОСТИ — ещё и прозрачный:
+   * угасание (FOW-8) есть только у неё, decoration не угасает никогда (REND-18).
+   * Корни первой ступени сюда не попадают — они уже отданы `roots`.
+   */
+  anchoredRoots(): Promise<readonly THREE.Object3D[]>;
   finish(): void;
 }
 
@@ -471,8 +499,62 @@ interface SharedEntry {
   vatTexture: THREE.DataTexture | null;
   /** Об отсутствии производных уже предупредили — один раз на модель (REND-20). */
   warnedDerivatives: boolean;
+  /**
+   * Якоря прогретых программ материалов модели (FOW-8) по НАБОРУ ЗАНЯТЫХ
+   * СЛОТОВ (`warmAnchorKey`); пустая карта — прогрева не было. Ключ не «модель»,
+   * потому что подмена скина вправе занять слот, который сама модель оставила
+   * пустым (`skinTextureSources`): у двух записей одной модели тогда РАЗНЫЕ
+   * ключи программы, и один набор якорей грел бы только одну из них. Верхняя
+   * граница — число различных занятостей в манифесте, то есть функция
+   * документа, а не длины сессии (REND-31).
+   */
+  readonly warmAnchors: Map<string, WarmAnchors>;
   /** Инстансы, ждущие готовности ассета. */
   readonly waiting: Set<InstanceRecord>;
+}
+
+/**
+ * Якоря прогретых шейдерных программ модели (FOW-8, `prewarm`): по варианту на
+ * то, чем модель вообще рисуют, с текстурами записи — теми же, какими рисует
+ * матч.
+ *
+ * Якорь не рисуется ни одного кадра, и смысл у него ровно один: пока материал
+ * жив, `usedTimes` его программы у three не падает до нуля, и программа не
+ * удаляется (`WebGLPrograms.releaseProgram`). Освободи прогрев свои материалы
+ * по концу — компиляция вернулась бы в первый же кадр, которому эта программа
+ * понадобится. Живут якоря столько же, сколько разделяемая часть ассета, и
+ * отдаются вместе с ней (`releaseShared`, REND-31).
+ */
+interface WarmAnchors {
+  /** Вариант, которым вид рисуется обычно. */
+  readonly opaque: WarmVariant;
+  /**
+   * Вариант с `transparent` — им идёт угасание (FOW-8). null, пока о нём не
+   * спросили: модель, которую рисуют одни декорации, не угасает никогда
+   * (REND-18), и прозрачные якоря с их текстурами были бы у неё мёртвым грузом.
+   */
+  faded: WarmVariant | null;
+}
+
+/** Один вариант якорей: разделяемый материал модели → якорь и его текстуры. */
+interface WarmVariant {
+  readonly materials: ReadonlyMap<THREE.Material, THREE.MeshStandardMaterial>;
+  /** Живое применение скина к якорям варианта: держит их текстуры (REND-6). */
+  readonly skin: SkinApplication;
+}
+
+/**
+ * Детальный вид, ждущий второй ступени прогрева (FOW-8): что построить, когда
+ * доедут его текстуры скина. Источники слотов посчитаны один раз — ими же
+ * ключуется набор якорей и по ним же спрашиваются ожидания.
+ */
+interface AnchorPlan {
+  readonly entry: SharedEntry;
+  readonly data: SharedModelData;
+  readonly options: { scale?: number; hiddenParts?: readonly number[] };
+  /** Вид пришёл из раздела decoration манифеста (ASSET-9, REND-18). */
+  readonly decoration: boolean;
+  readonly sources: ReadonlyMap<number, SkinTextureSource>;
 }
 
 /**
@@ -667,7 +749,12 @@ interface InstanceRecord {
   publicView: ModelInstanceView | null;
 }
 
-/** Меш держателя и его РАЗДЕЛЯЕМЫЕ материалы, отложенные на время fade (FOW-8). */
+/**
+ * Меш держателя и его РАЗДЕЛЯЕМЫЕ материалы, отложенные на время fade (FOW-8).
+ * Пока запись жива, в самом меше стоят fade-копии, выданные пулами оригиналов
+ * (`borrowFadeClone`); порядок в массиве тот же, что у оригиналов, — по нему
+ * копии и возвращаются (`returnFadeTargets`).
+ */
 interface FadeTarget {
   readonly mesh: { material: THREE.Material | THREE.Material[] };
   readonly original: THREE.Material | THREE.Material[];
@@ -676,6 +763,61 @@ interface FadeTarget {
 /** Материалы меша списком — у three они бывают и одиночными, и массивом. */
 function materialsOf(material: THREE.Material | THREE.Material[]): readonly THREE.Material[] {
   return Array.isArray(material) ? material : [material];
+}
+
+/**
+ * Материал со слотами карт — теми, что `applySkin` заполняет (`assignTexture`) и
+ * что входят в ключ программы three занятостью (`mapUv` и соседи). Базовый
+ * `Material` их не объявляет: они принадлежат подтипам, а fade-копия работает с
+ * любым материалом меша.
+ */
+type MappedMaterial = THREE.Material & {
+  map?: THREE.Texture | null;
+  normalMap?: THREE.Texture | null;
+  emissiveMap?: THREE.Texture | null;
+};
+
+/** Альфа кадра на fade-копии: доля проявленности от базовой непрозрачности (FOW-8). */
+function applyFadeOpacity(clone: THREE.Material, fade: number): void {
+  clone.opacity = (clone.userData.fadeBaseOpacity as number) * fade;
+}
+
+/**
+ * Ключ набора якорей прогрева (FOW-8) — слоты, которые запись действительно
+ * ЗАНИМАЕТ: те, у которых есть источник и есть место употребления в материалах
+ * модели. Именно занятость входит в ключ программы three (`mapUv` и соседи), а
+ * какая текстура в слоте — нет: две записи с разными скинами одних и тех же
+ * слотов делят якоря, а запись, чей скин занял слот, пустой у модели, получает
+ * свои (REND-6).
+ */
+function warmAnchorKey(
+  sources: ReadonlyMap<number, SkinTextureSource>,
+  data: SharedModelData,
+): string {
+  const occupied: number[] = [];
+  for (const slot of sources.keys()) {
+    if ((data.textureTargets.get(slot)?.length ?? 0) > 0) occupied.push(slot);
+  }
+  occupied.sort((a, b) => a - b);
+  return occupied.join(',');
+}
+
+/**
+ * Материалы образца прогрева — якорями своего варианта (FOW-8): компилируется
+ * ровно то, чем рисует матч. Меш, материала которого среди якорей нет (модель
+ * без материалов рисуется своей заглушкой, `createModelInstance`), остаётся как
+ * был — прогревать у него нечего.
+ */
+function applyWarmAnchors(
+  instance: ModelInstance,
+  anchors: ReadonlyMap<THREE.Material, THREE.MeshStandardMaterial>,
+): void {
+  for (const mesh of instance.meshes) {
+    const current = mesh.material;
+    if (Array.isArray(current)) continue;
+    const anchor = anchors.get(current);
+    if (anchor !== undefined) mesh.material = anchor;
+  }
 }
 
 export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
@@ -699,6 +841,30 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * call'а нет), а следующий инстанс той же записи не собирает его заново.
    */
   private readonly batches = new Map<string, BatchEntry>();
+  /**
+   * Пулы fade-копий по ИСХОДНОМУ материалу (FOW-8). Копия отличается от
+   * оригинала одним полем — `transparent`, — но в three r0.185 это бит 17 ключа
+   * программы (`opaque` = `!transparent && NormalBlending && !alphaToCoverage`,
+   * `WebGLPrograms.getProgramCacheKeyBooleans`): у копии ДРУГАЯ программа, и
+   * первый её draw компилирует и линкует шейдер прямо в кадре — десятки
+   * миллисекунд на материал. Освобождать копию по концу эпизода значило бы
+   * ронять `usedTimes` её программы до нуля, а с ним и саму программу
+   * (`releaseProgram`), и платить компиляцию на КАЖДОМ открытии обзора; поэтому
+   * копии не освобождаются, а возвращаются в пул своего оригинала и выдаются
+   * следующему эпизоду.
+   *
+   * Пул — свободный список, а не одна копия на материал: угасают одновременно
+   * несколько инстансов, а `opacity` — свойство материала, и одна копия на всех
+   * означала бы, что доля одного видна на другом. Копия выдаётся на меш-слот и
+   * возвращается концом его эпизода; длина списка ограничена числом
+   * одновременно угасающих, а число ключей — материалами контента плюс своими
+   * материалами живых инстансов (REND-6).
+   *
+   * Копия живёт ровно столько, сколько её оригинал (`disposeFadeClones`):
+   * пережить его она не вправе — ключа, по которому её нашли бы снова, больше
+   * нет, и она осталась бы висеть со своей программой навсегда.
+   */
+  private readonly fadeClones = new Map<THREE.Material, THREE.Material[]>();
   private readonly warnedKinds = new Set<string>();
   /** Переиспользуемая запись прокси обхода (REND-15): валидна внутри визита. */
   private readonly proxy: PickProxy = createPickProxy();
@@ -752,6 +918,14 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     this.batches.clear();
     for (const entry of this.shared.values()) this.releaseShared(entry);
     this.shared.clear();
+    // Пулы, оригинал которых подсистеме НЕ принадлежит, освобождением ассета не
+    // закрываются: материал заглушки общий на все инстансы и на все подсистемы
+    // (`makePlaceholder`) и переживает снос. Его fade-копии — наши, и держать
+    // ими программу дальше сноса нельзя (REND-31).
+    for (const pool of this.fadeClones.values()) {
+      for (const clone of pool) clone.dispose();
+    }
+    this.fadeClones.clear();
   }
 
   /**
@@ -765,7 +939,20 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     entry.baseSkin = null;
     entry.vatTexture?.dispose();
     entry.vatTexture = null;
+    // Якоря прогрева (FOW-8) — производные тех же материалов и живут с ними:
+    // сперва применение скина (оно владеет их текстурами), затем сами якоря.
+    for (const anchors of entry.warmAnchors.values()) {
+      for (const variant of [anchors.opaque, anchors.faded]) {
+        if (variant === null) continue;
+        variant.skin.dispose();
+        for (const anchor of variant.materials.values()) anchor.dispose();
+      }
+    }
+    entry.warmAnchors.clear();
     for (const mesh of entry.data?.meshes ?? []) mesh.geometry.dispose();
+    // Fade-копии материалов ассета уходят вместе с ними (FOW-8): пул ключуется
+    // оригиналом, и без оригинала его записи уже никто не найдёт.
+    this.disposeFadeClones(entry.data?.materials ?? []);
     for (const material of entry.data?.materials ?? []) material.dispose();
     entry.waiting.clear();
     entry.data = null;
@@ -1258,8 +1445,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * Fade держателя (FOW-8) — прозрачностью: материалы мешей разделяются с
    * ассетом (REND-3) и copy-on-write скинов (REND-6), поэтому на время fade
    * инстанс получает СВОИ копии с `transparent`, а по концу возвращает
-   * разделяемые и копии освобождает. Программа шейдера та же — прозрачность
-   * не перекомпилирует; копии появляются ровно на эпизод угасания.
+   * разделяемые. Копии берутся из пула своего оригинала (`fadeClones`) и туда
+   * же уходят: программа шейдера у прозрачной копии ДРУГАЯ, и пересоздавать
+   * копию на каждый эпизод значит компилировать шейдер прямо в кадре открытия
+   * обзора — тот самый всплеск, ради которого заведён и прогрев (`prewarm`).
    */
   private applyHolderFade(record: InstanceRecord): void {
     if (record.fade >= 1) {
@@ -1268,39 +1457,120 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
     const holder = record.holder;
     if (holder === null) return;
-    if (record.fadedTargets === null) {
-      const targets: FadeTarget[] = [];
-      holder.traverse((node) => {
-        // Узкий типизированный проход: `instanceof THREE.Mesh` дал бы Mesh<any>.
-        const mesh = node as Partial<THREE.Mesh> & THREE.Object3D;
-        if (mesh.isMesh !== true || mesh.material === undefined) return;
-        const original = mesh.material;
-        const clones = materialsOf(original).map((material) => {
-          const clone = material.clone();
-          clone.transparent = true;
-          clone.userData.fadeBaseOpacity = clone.opacity;
-          return clone;
-        });
-        mesh.material = Array.isArray(original) ? clones : clones[0]!;
-        targets.push({ mesh: mesh as FadeTarget['mesh'], original });
-      });
-      record.fadedTargets = targets;
-    }
+    record.fadedTargets ??= this.lendFadeTargets(holder);
     for (const target of record.fadedTargets) {
-      for (const clone of materialsOf(target.mesh.material)) {
-        clone.opacity = (clone.userData.fadeBaseOpacity as number) * record.fade;
+      // Проход БЕЗ аллокации (REND-26): `materialsOf` заводил бы здесь массив
+      // на каждый меш и каждый кадр угасания.
+      const material = target.mesh.material;
+      if (Array.isArray(material)) {
+        for (const clone of material) applyFadeOpacity(clone, record.fade);
+      } else {
+        applyFadeOpacity(material, record.fade);
       }
     }
   }
 
-  /** Возврат разделяемых материалов мешам и освобождение fade-копий (FOW-8). */
+  /**
+   * Подменяет материалы мешей поддерева fade-копиями из пулов их оригиналов и
+   * отдаёт записи для возврата (FOW-8).
+   */
+  private lendFadeTargets(root: THREE.Object3D): FadeTarget[] {
+    const targets: FadeTarget[] = [];
+    root.traverse((node) => {
+      // Узкий типизированный проход: `instanceof THREE.Mesh` дал бы Mesh<any>.
+      const mesh = node as Partial<THREE.Mesh> & THREE.Object3D;
+      if (mesh.isMesh !== true || mesh.material === undefined) return;
+      const original = mesh.material;
+      mesh.material = Array.isArray(original)
+        ? original.map((material) => this.borrowFadeClone(material))
+        : this.borrowFadeClone(original);
+      targets.push({ mesh: mesh as FadeTarget['mesh'], original });
+    });
+    return targets;
+  }
+
+  /**
+   * Прозрачная копия оригинала — из его пула либо новая (FOW-8).
+   *
+   * Копия из пула — снимок оригинала на момент ПРОШЛОЙ выдачи, а оригинал
+   * меняется и после неё: текстуры слотов приезжают асинхронно (ASSET-4), и
+   * `ensureBaseSkin`/`applyInstanceSkin` пишут карты в него задним числом — как
+   * и смена скина (REND-6). Поэтому при каждой выдаче копия пересобирается по
+   * оригиналу ЦЕЛИКОМ: иначе первая же копия, взятая в окне загрузки, рисовала
+   * бы модель без текстуры до конца сессии, и рисовала бы её своей программой —
+   * занятость слота карты входит в ключ (`mapUv`), и прогрев такой не грел.
+   */
+  private borrowFadeClone(original: THREE.Material): THREE.Material {
+    const pooled = this.fadeClones.get(original)?.pop();
+    if (pooled === undefined) {
+      const fresh = original.clone();
+      fresh.transparent = true;
+      // База берётся у ОРИГИНАЛА на каждой выдаче: копия живёт дольше эпизода,
+      // и запомни она свою же (уже умноженную) непрозрачность — следующий
+      // эпизод угасал бы от угасшего.
+      fresh.userData.fadeBaseOpacity = original.opacity;
+      return fresh;
+    }
+    const maps = pooled as MappedMaterial;
+    const wasMap = maps.map ?? null;
+    const wasNormal = maps.normalMap ?? null;
+    const wasEmissive = maps.emissiveMap ?? null;
+    pooled.copy(original);
+    pooled.transparent = true;
+    // `Material.copy` переносит и `userData` оригинала, поэтому база ставится
+    // ПОСЛЕ него, а не до.
+    pooled.userData.fadeBaseOpacity = original.opacity;
+    // Пересборка материала объявляется three, только если карты действительно
+    // сменились: на обычном пути (оригинал с прошлой выдачи не менялся) версия
+    // не растёт, и копия рисуется прогретой программой без пере-поиска.
+    if ((maps.map ?? null) !== wasMap
+      || (maps.normalMap ?? null) !== wasNormal
+      || (maps.emissiveMap ?? null) !== wasEmissive) {
+      pooled.needsUpdate = true;
+    }
+    return pooled;
+  }
+
+  /**
+   * Конец эпизода угасания: разделяемые материалы — обратно мешам, fade-копии —
+   * в пулы своих оригиналов (FOW-8). Копии не освобождаются: они и есть кэш
+   * скомпилированных программ, ради которого пулы заведены.
+   */
   private clearHolderFade(record: InstanceRecord): void {
     const targets = record.fadedTargets;
     if (targets === null) return;
     record.fadedTargets = null;
+    this.returnFadeTargets(targets);
+  }
+
+  /** Возврат отложенных материалов мешам, а выданных копий — в пулы (FOW-8). */
+  private returnFadeTargets(targets: readonly FadeTarget[]): void {
     for (const target of targets) {
-      for (const clone of materialsOf(target.mesh.material)) clone.dispose();
+      const originals = materialsOf(target.original);
+      const clones = materialsOf(target.mesh.material);
       target.mesh.material = target.original;
+      for (let i = 0; i < clones.length; i++) {
+        const original = originals[i];
+        const clone = clones[i];
+        if (original === undefined || clone === undefined) continue;
+        const pool = this.fadeClones.get(original);
+        if (pool === undefined) this.fadeClones.set(original, [clone]);
+        else pool.push(clone);
+      }
+    }
+  }
+
+  /**
+   * Освобождает fade-копии перечисленных оригиналов (FOW-8, REND-31): копия
+   * живёт ровно столько, сколько её оригинал — материалы ассета отдаются
+   * `releaseShared`, свои материалы инстанса (REND-6) — вместе с инстансом.
+   */
+  private disposeFadeClones(originals: Iterable<THREE.Material>): void {
+    for (const original of originals) {
+      const pool = this.fadeClones.get(original);
+      if (pool === undefined) continue;
+      for (const clone of pool) clone.dispose();
+      this.fadeClones.delete(original);
     }
   }
 
@@ -1401,11 +1671,17 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * появления вида — а первое появление в матче с туманом это всплеск
    * открытия обзора (FOW-8): разделяемую часть и запечённые производные
    * (ASSET-12, у демо-модели — десятки миллисекунд запекания VAT), батчи
-   * батчевых видов с их материалами и по одному образцу-инстансу детальных
-   * видов. Возвращённые корни стоят ВНЕ сцены — сборка компилирует их
-   * программы тёплой сценой (`WebGLRenderer.compile(warm, camera, scene)`)
-   * и возвращает прогретое `finish()`; в кадр они не попадают ни на тик
-   * (REND-11, REND-18: пустой батч не оставляет в сцене даже узла).
+   * батчевых видов с их материалами и по образцу-инстансу детальных видов.
+   * Возвращённые корни стоят ВНЕ сцены — сборка компилирует их программы тёплой
+   * сценой (`WebGLRenderer.compile(warm, camera, scene)`) и возвращает
+   * прогретое `finish()`; в кадр они не попадают ни на тик (REND-11, REND-18:
+   * пустой батч не оставляет в сцене даже узла).
+   *
+   * Ждёт этот промис ТОЛЬКО модели. Всё, чему нужны ещё и текстуры скина, —
+   * якоря программ (FOW-8) — вынесено во вторую ступень (`anchoredRoots`):
+   * ассет вправе стоять в `loading` неограниченно (ASSET-4), и застрявшая
+   * текстура одного вида не вправе отменить прогрев батчей и VAT-текстур,
+   * которым она не нужна вовсе.
    *
    * Наблюдаемого состояния прогрев не меняет и счётчиков стоимости не двигает
    * (PERF-3 меряет доставку и кадр — прогрев живёт во времени загрузки);
@@ -1434,23 +1710,118 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     return Promise.all(waits).then(() => this.collectWarm());
   }
 
-  /** Тёплые корни по доехавшим моделям — низ `prewarm`, после всех ожиданий. */
+  /**
+   * Ожидание текстур, которыми будут нарисованы якоря прогрева (FOW-8, REND-6):
+   * слоты модели плюс подмены скина записи, по одному ожиданию на путь. Ждать
+   * их обязан прогрев, а не матч: слот, занятый текстурой, и слот пустой — это
+   * РАЗНЫЕ программы, и прогретая «пустая» матчу не пригодится.
+   *
+   * Спрашиваются ровно те виды, что попали в план якорей, — детальные (у
+   * батчевого угасание идёт пер-инстансным атрибутом альфы в разделяемом
+   * VAT-материале, прозрачном всегда, и якорей ему не нужно). Первая ступень
+   * прогрева этих ожиданий не видит вовсе.
+   */
+  private warmSkinWaits(plan: readonly AnchorPlan[]): Promise<void>[] {
+    const ctx = this.requireCtx();
+    const waits: Promise<void>[] = [];
+    const requested = new Set<string>();
+    for (const item of plan) {
+      for (const source of item.sources.values()) {
+        if (source.kind !== 'path' || requested.has(source.path)) continue;
+        requested.add(source.path);
+        const handle = ctx.assets.request<DecodedImage>('texture', source.path);
+        waits.push(
+          new Promise<void>((resolve) => {
+            ctx.assets.subscribe(handle, (state) => {
+              if (state.status !== 'loading') resolve();
+            });
+          }),
+        );
+      }
+    }
+    return waits;
+  }
+
+  /**
+   * Якоря прогретых программ модели (FOW-8) со скином записи поверх. Набор общий
+   * у записей с одинаковой ЗАНЯТОСТЬЮ СЛОТОВ, а не у всех записей модели: какая
+   * именно текстура стоит в слоте, ключа программы не меняет — меняет его лишь
+   * то, занят слот или пуст, а подмена скина вправе занять слот, пустой у самой
+   * модели (REND-6, `skinTextureSources`).
+   *
+   * Прозрачный вариант строится, только когда о нём спросили (`withFaded`):
+   * угасание есть у видов сущностей, а decoration не угасает никогда (REND-18),
+   * и модели, которую рисуют одни декорации, прозрачные якоря с их текстурами
+   * достались бы мёртвым грузом. Спрошенный позже — достраивается к тому же
+   * набору, а не рядом с ним.
+   *
+   * Якоря не рисуются ни одного кадра и живут до сноса ассета: пока материал
+   * жив, `usedTimes` его программы не падает до нуля, и three её не удаляет.
+   * Это и есть страховка прогрева — эпизод угасания, чья копия почему-либо
+   * освободилась, всё равно найдёт программу в кэше three, а не соберёт её.
+   */
+  private ensureWarmAnchors(item: AnchorPlan, withFaded: boolean): WarmAnchors | null {
+    const data = item.entry.data;
+    if (data === null) return null;
+    const key = warmAnchorKey(item.sources, data);
+    const anchors = item.entry.warmAnchors.get(key)
+      ?? { opaque: this.buildWarmVariant(data, item.sources, false), faded: null };
+    if (withFaded && anchors.faded === null) {
+      anchors.faded = this.buildWarmVariant(data, item.sources, true);
+    }
+    item.entry.warmAnchors.set(key, anchors);
+    return anchors;
+  }
+
+  /** Один вариант якорей: копии материалов модели со скином записи (FOW-8). */
+  private buildWarmVariant(
+    data: SharedModelData,
+    sources: ReadonlyMap<number, SkinTextureSource>,
+    transparent: boolean,
+  ): WarmVariant {
+    const materials = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+    for (const material of data.materials) {
+      const anchor = material.clone();
+      // Только вверх: непрозрачный вариант оставляет `transparent` записи
+      // ассета (`materialFromAsset` берёт его из `alphaMode`), прозрачный —
+      // поднимает, и ровно это и есть бит `opaque` ключа программы.
+      if (transparent) anchor.transparent = true;
+      materials.set(material, anchor);
+    }
+    // Места употребления слота те же, что у ассета (`collectTextureTargets`),
+    // только материалы другие.
+    const targets = new Map<number, TextureTarget[]>();
+    for (const [slot, places] of data.textureTargets) {
+      const remapped: TextureTarget[] = [];
+      for (const place of places) {
+        const anchor = materials.get(place.material);
+        if (anchor !== undefined) remapped.push({ material: anchor, map: place.map });
+      }
+      targets.set(slot, remapped);
+    }
+    return { materials, skin: applySkin(targets, sources, this.requireCtx().assets) };
+  }
+
+  /** Тёплые корни по доехавшим моделям — низ `prewarm`, после ожидания моделей. */
   private collectWarm(): ModelsPrewarm {
     const roots: THREE.Object3D[] = [];
     const textures: THREE.Texture[] = [];
     const warmBatches: BatchEntry[] = [];
     const warmDetailed: ModelInstance[] = [];
+    const plan: AnchorPlan[] = [];
     for (const kind of visualKinds(this.manifest)) {
       const visual = resolveVisual(this.manifest, kind);
       if (visual === undefined) continue;
       const entry = this.shared.get(visual.model);
       const data = entry?.data ?? null;
       if (entry === undefined || data === null) continue;
+      // Происхождение вида нужно ОБОИМ ярусам: батчевому — как ярус кастера,
+      // детальному — как ответ на вопрос, бывает ли у вида угасание вообще.
+      const decoration = this.manifest.entities[kind] === undefined;
       if (declaredTier(visual, this.defaultTier) === 'batched' && entry.derivatives !== null) {
         // Ярус кастера — та же производная данных, что у живой записи
         // (`casterTierOf`): вид сущности динамичен всегда, decoration статичен,
         // пока запись не объявила анимаций.
-        const decoration = this.manifest.entities[kind] === undefined;
         const tier: ShadowCasterTier =
           decoration && !animatedVisual(visual) ? 'static' : 'dynamic';
         const key = batchKey(visual, kind, tier);
@@ -1469,16 +1840,53 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
         const instance = createModelInstance(data, options);
         roots.push(instance.root);
         warmDetailed.push(instance);
+        // Якорям нужны ещё и текстуры скина — они уходят во ВТОРУЮ ступень
+        // (`anchoredRoots`), чтобы застрявшая текстура не отменила эту.
+        plan.push({
+          entry,
+          data,
+          options,
+          decoration,
+          sources: skinTextureSources(data.model, visual, visual.defaultSkin),
+        });
       }
     }
+    let finished = false;
     return {
       roots,
       textures,
+      anchoredRoots: async () => {
+        await Promise.all(this.warmSkinWaits(plan));
+        // Пока ждали текстуры, прогрев мог быть уже свёрнут: строить образцы
+        // теперь некому и незачем — сносить их было бы уже нечем.
+        if (finished) return [];
+        const anchored: THREE.Object3D[] = [];
+        for (const item of plan) {
+          const anchors = this.ensureWarmAnchors(item, !item.decoration);
+          if (anchors === null) continue;
+          anchored.push(this.warmAnchoredSample(item, anchors.opaque, warmDetailed));
+          // Прозрачный образец — только виду СУЩНОСТИ (FOW-8): угасание есть у
+          // неё, а decoration не угасает никогда (REND-18) — ни `syncPool`, ни
+          // `poseAll` не дают его записи долю меньше единицы. Прогревать
+          // вариант, которого не нарисует ни один кадр, значит платить за него
+          // компиляцией во время загрузки и держать его материалы всю сессию.
+          if (anchors.faded === null) continue;
+          anchored.push(this.warmAnchoredSample(item, anchors.faded, warmDetailed));
+        }
+        return anchored;
+      },
       finish: () => {
+        finished = true;
+        // Образцы сносятся, ЯКОРЯ остаются (FOW-8): своих материалов у образца
+        // нет — скин ставился в якоря, а не через copy-on-write инстанса, — и
+        // `dispose` их не трогает. Тем они программы и держат: освободи прогрев
+        // свои материалы здесь, three удалила бы программы вместе с ними, и
+        // компиляция вернулась бы в первый же кадр, которому они нужны.
         for (const instance of warmDetailed) {
           instance.root.removeFromParent();
           instance.dispose();
         }
+        warmDetailed.length = 0;
         for (const batchEntry of warmBatches) {
           const group = batchEntry.batch.group;
           group.removeFromParent();
@@ -1489,6 +1897,18 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
         }
       },
     };
+  }
+
+  /** Образец второй ступени под якорями варианта; сносится общим `finish`. */
+  private warmAnchoredSample(
+    item: AnchorPlan,
+    variant: WarmVariant,
+    warmDetailed: ModelInstance[],
+  ): THREE.Object3D {
+    const instance = createModelInstance(item.data, item.options);
+    applyWarmAnchors(instance, variant.materials);
+    warmDetailed.push(instance);
+    return instance.root;
   }
 
   /**
@@ -2200,6 +2620,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       derivatives: null,
       vatTexture: null,
       warnedDerivatives: false,
+      warmAnchors: new Map(),
       waiting: new Set(),
     };
     this.shared.set(modelId, entry);
@@ -2249,8 +2670,8 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private attachModel(record: InstanceRecord, shared: SharedModelData): void {
     if (record.model !== null || record.batch !== null) return;
     // Смена содержимого держателя (заглушка → модель): fade-копии материалов
-    // привязаны к прежним мешам — вернуть разделяемые и освободить копии;
-    // идущий fade заново соберёт их по новому поддереву (FOW-8).
+    // привязаны к прежним мешам — вернуть разделяемые, копии — в пулы их
+    // оригиналов; идущий fade заново возьмёт их по новому поддереву (FOW-8).
     this.clearHolderFade(record);
     const entry = record.visual === undefined ? undefined : this.shared.get(record.visual.model);
     if (entry === undefined) return;
@@ -2566,9 +2987,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * разделяемые данные ассета и сам батч остаются в кэше (REND-3).
    */
   private detachModel(record: InstanceRecord): void {
-    // Возврат разделяемых материалов ДО снятия поддерева: dispose модели
-    // освобождает материалы её мешей, и это должны быть fade-копии, а не
-    // разделяемые с ассетом (FOW-8, REND-3).
+    // Конец эпизода угасания ПЕРВЫМ делом (FOW-8): пока копии выданы, они
+    // лежат в мешах, а не в пулах, — и снос поддерева ниже унёс бы их вместе с
+    // единственной ссылкой, а освобождение материалов инстанса оставило бы
+    // выданную копию жить дольше своего оригинала (REND-3, REND-6).
     this.clearHolderFade(record);
     for (const entry of this.shared.values()) entry.waiting.delete(record);
     // Ярус — свойство НАРИСОВАННОГО (REND-20): пока построенного из ассета у
@@ -2598,6 +3020,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
     if (record.model !== null) {
       record.model.root.removeFromParent();
+      // Материалы, принадлежащие инстансу (свои копии скина REND-6 и заглушка
+      // модели без материалов), уходят вместе с ним — и их fade-копии тоже
+      // (FOW-8): пул ключуется оригиналом, а оригинала сейчас не станет.
+      // Спрашивается ровно тот список, который инстанс и освободит: `dispose`
+      // идёт по нему же. Разделяемых материалов ассета в нём нет — их пулы
+      // живут с ассетом (REND-3).
+      this.disposeFadeClones(record.model.ownedMaterials);
       record.model.dispose();
       record.model = null;
     }

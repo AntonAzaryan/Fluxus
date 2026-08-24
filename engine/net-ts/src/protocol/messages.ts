@@ -28,23 +28,61 @@ export interface GameVersion {
 }
 
 /**
+ * Роль соединения в слоте (NTR-18): владелец слота либо заместитель.
+ *
+ * Свойство СОЕДИНЕНИЯ, а не участника: сервер по-прежнему не отличает ботов от
+ * людей (`bot-player` BOT-1) — он различает право на слот, и предъявить любую
+ * роль технически может любая сторона.
+ */
+export type ConnectionRole = 'owner' | 'substitute';
+
+/**
  * Исходы отказа во входе. Половина версии названа отдельно (NET-16): «обновить
  * сборку» и «обновить контент» — разные действия игрока, и это единственная
  * причина, по которой версия является парой, а не строкой.
+ *
+ * `match-ended` пришёл на смену прежнему «матч уже идёт»: идущий матч
+ * участника ростера больше не отвергает — он принимает его реконнектом
+ * (NTR-17), — и единственный матч, возвращаться в который некуда, это матч
+ * завершённый (NTR-17, сценарий «Игрок вернулся слишком поздно»).
  */
 export type RejectReason =
   | 'build-mismatch'
   | 'content-mismatch'
-  | 'match-in-progress'
+  | 'match-ended'
   | 'unknown-player'
   | 'slot-taken'
+  /** Заместитель до `Start`: до старта слоты занимают владельцы (NTR-18). */
+  | 'substitute-before-start'
+  /** Заместитель вытеснен вернувшимся владельцем слота (NTR-18). */
+  | 'displaced-by-owner'
   | 'observer-not-allowed'
   | 'protocol-error';
 
-export type EndReason = 'player-silent' | 'player-left' | 'server-stopped';
+/**
+ * Исходы конца матча. Добровольного «игрок вышел» здесь нет намеренно: `Bye` в
+ * идущем матче отвязывает соединение от слота, а не завершает матч (NTR-6:
+ * «Разрыв соединения игрока MUST NOT останавливать матч»), — дальше работают
+ * порог молчания и политика сборки-основателя (`bot-player` BOT-14). Иначе
+ * ушедший добровольно убивал бы матч в обход заместителя.
+ */
+export type EndReason = 'player-silent' | 'server-stopped';
 
-/** Исходы, по которым соединение рвёт сам клиент. Отделены от `RejectReason`: это его решение, не серверное. */
-export type ClientCloseReason = 'data-mismatch' | 'rejected' | 'ended' | 'protocol-error';
+/**
+ * Исходы, по которым соединение рвёт сам клиент. Отделены от `RejectReason`:
+ * это его решение, не серверное.
+ *
+ * `ended` и `disconnected` — разные исходы, и разница у них потребительская
+ * (NTR-17): матч кончился сообщением `End`, возвращаться некуда, — против
+ * «канал закрылся», после которого владелец слота вправе вернуться реконнектом.
+ * Слитые в один исход, они заставляли бы сборку решать это по тексту.
+ */
+export type ClientCloseReason =
+  | 'data-mismatch'
+  | 'rejected'
+  | 'ended'
+  | 'disconnected'
+  | 'protocol-error';
 
 /**
  * Кадр ввода на проводе (TICK-2) — плоский: `Vec2` разложен в пару полей, чтобы
@@ -81,6 +119,14 @@ export interface HelloMessage {
   readonly type: 'Hello';
   readonly playerId: string;
   readonly version: GameVersion;
+  /**
+   * Роль соединения в слоте (NTR-18) — поле ОБЯЗАТЕЛЬНОЕ: свободных полей «на
+   * будущее» и необязательных расширений набор не допускает (NTR-4), а
+   * умолчание, подставленное разбором, означало бы согласование возможностей в
+   * рантайме. Участники исполняют одну версию (NET-16), и смена формата
+   * `Hello` — смена сборки.
+   */
+  readonly role: ConnectionRole;
   readonly observer: boolean;
 }
 
@@ -311,6 +357,20 @@ function int(source: Record<string, unknown>, key: string, what: string, lo: num
   return value;
 }
 
+/**
+ * Роль соединения с провода (NTR-18). Отсутствие поля и незнакомое значение —
+ * `protocol-error`, а не умолчание «владелец»: молча подставленная роль дала бы
+ * заместителю право владельца, то есть вытеснение чужого соединения по
+ * невнимательности отправителя.
+ */
+function connectionRole(source: Record<string, unknown>): ConnectionRole {
+  const value = source.role;
+  if (value !== 'owner' && value !== 'substitute') {
+    throw new ProtocolError('Hello: поле "role" — "owner" либо "substitute" (NTR-18)');
+  }
+  return value;
+}
+
 function version(value: unknown): GameVersion {
   const source = object(value, 'Hello.version');
   return {
@@ -377,6 +437,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
         type: 'Hello',
         playerId: str(source, 'playerId', 'Hello'),
         version: version(source.version),
+        role: connectionRole(source),
         observer: source.observer === true,
       };
     case 'Input': {

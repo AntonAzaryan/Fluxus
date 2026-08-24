@@ -24,12 +24,17 @@ import {
   type WorkerLike,
 } from '@fluxus/bot';
 import type { RenderSubsystem, TickView } from '@fluxus/render';
-import { jsonSerializer } from '@fluxus/net';
+import { jsonSerializer, type Transport } from '@fluxus/net';
 import { RemoteHost, portTransport, shellPort, type ShellPort } from '@fluxus/client';
 import { DEMO_PLAYERS, demoMatchConfig } from '../app/match.js';
 import { demoBotBehavior, demoBotProfile } from '../app/bots.js';
 import { openLocalSession, type DemoLocalSession } from '../app/localSession.js';
-import { bufferedShellPort, joinDemoMatch, type DemoJoinResult } from '../app/netClient.js';
+import {
+  bufferedShellPort,
+  joinDemoMatch,
+  RECONNECTING_NOTICE,
+  type DemoJoinResult,
+} from '../app/netClient.js';
 import { demoHudComposition } from '../app/hud.js';
 import {
   demoMode,
@@ -365,10 +370,146 @@ describe('демо по умолчанию: матч против бота на 
     const third = await join(opened, DEMO_PLAYERS, clock);
     expect(third.joined.ok).toBe(false);
     if (third.joined.ok) return;
-    // Матч уже идёт: отказ фазы матча (NTR-6) — и он назван.
-    expect(third.joined.reason).toContain('match-in-progress');
-    if (first.joined.ok) first.joined.shell.stop();
-    if (second.joined.ok) second.joined.shell.stop();
+    // Оба слота заняты ЖИВЫМИ соединениями владельцев, и отказ об этом и
+    // говорит: реконнект (NTR-17) возвращает владельца в СВОЙ слот, но чужой
+    // живой слот не отбирает — двух владельцев у слота не бывает.
+    expect(third.joined.reason).toContain('slot-taken');
+    if (first.joined.ok) first.joined.stop();
+    if (second.joined.ok) second.joined.stop();
+  });
+});
+
+describe('возврат в матч после разрыва (NTR-17, design D8)', () => {
+  it('обрыв канала — клиент возвращается в свой слот и снова получает состояние', async () => {
+    const clock = { ms: 0 };
+    const opened = session(DEMO_PLAYERS.slice(0, 1));
+    /** Каналы участника: первый — вход, второй — возврат; оба к тому же матчу. */
+    const links: Transport[] = [];
+    const notices: string[] = [];
+    // Главный поток НАСТОЯЩИЙ: без него не видно ни признака разрыва в
+    // доставленном тике (SHELL-7), ни таблицы видов, которую он копит (SHELL-3).
+    const [rawWorkerPort, mainPort] = syncPortPair();
+    /**
+     * Доставки СНИМКОМ, а не ссылкой: `ViewBuffer.view` — один объект на всю
+     * сессию, и список ссылок на него сказал бы про все доставки то, что верно
+     * про последнюю.
+     */
+    const delivered: { tick: number; snapAll: boolean }[] = [];
+    const recorder: RenderSubsystem = {
+      name: 'snap-probe',
+      init: () => {},
+      syncTick: (view) => delivered.push({ tick: view.tick, snapAll: view.snapAll }),
+      updateFrame: () => {},
+    };
+    const remote: RemoteHost = new RemoteHost(dummyContext(), {
+      clock: () => clock.ms,
+      onReady: () => remote.register(recorder),
+    }).connect(mainPort);
+    const hellos: unknown[] = [];
+    const workerPort: ShellPort = {
+      post(message, transfer) {
+        if ((message as { t?: string }).t === 'hello') hellos.push(message);
+        rawWorkerPort.post(message, transfer);
+      },
+      onMessage(handler) {
+        rawWorkerPort.onMessage(handler);
+      },
+    };
+    /** Пауза перед попыткой возврата держится тестом: время двигает он (NTR-12). */
+    let releasePause: (() => void) | null = null;
+    const joined = await joinDemoMatch({
+      port: workerPort,
+      connect: () => {
+        const link = portTransport(shellPort(opened.connect(makeChannel())));
+        links.push(link);
+        return Promise.resolve(link);
+      },
+      candidates: [DEMO_PLAYERS[0]!],
+      clock: () => clock.ms,
+      settle: () => flush(1),
+      timeoutMs: 2000,
+      notify: (message) => notices.push(message),
+      reconnectDelaysMs: [1, 1, 1],
+      sleep: () => new Promise<void>((done) => { releasePause = done; }),
+    });
+    expect(joined.ok).toBe(true);
+    if (!joined.ok) return;
+    joined.shell.stop();
+
+    opened.filler.fill();
+    await flush();
+    expect(opened.server.phase).toBe('running');
+    const step = async (): Promise<void> => {
+      clock.ms += 1000 / 60;
+      joined.shell.step();
+      bots!.step();
+      await flush(1);
+      opened.host.step();
+      await flush(1);
+    };
+    for (let i = 0; i < 10; i++) await step();
+    const applied = joined.client.metrics.snapshotsApplied;
+    expect(applied).toBeGreaterThan(0);
+
+    // Канал рвётся посреди боя — так же, как его рвёт сеть.
+    const first = joined.client;
+    links[0]!.close('обрыв сети');
+    await flush(2);
+    // Слот остался за игроком, но живого соединения у него нет (NTR-6, NTR-17),
+    // и сборка уже сообщила человеку, что возвращается (design D8).
+    expect(opened.server.slotAttached(0)).toBe(false);
+    expect(joined.reconnecting).toBe(true);
+    expect(notices).toContain(RECONNECTING_NOTICE);
+    // Матч жив: разрыв его не останавливает — слот идёт на predicted-кадрах.
+    expect(opened.server.phase).toBe('running');
+    for (let i = 0; i < 3; i++) {
+      clock.ms += 1000 / 60;
+      bots!.step();
+      await flush(1);
+      opened.host.step();
+      await flush(1);
+    }
+    expect(opened.server.phase).toBe('running');
+
+    // Пауза истекла — попытка возврата: НОВЫЙ клиент в ТОЙ ЖЕ оболочке, тот же
+    // слот и тот же герой (design D5, `NetworkShell.reattach`).
+    releasePause!();
+    await flush(8);
+    expect(joined.reconnecting).toBe(false);
+    expect(joined.client).not.toBe(first);
+    expect(joined.client.slot).toBe(0);
+    expect(opened.server.slotAttached(0)).toBe(true);
+    // Уведомление погашено: игрок снова в бою.
+    expect(notices.at(-1)).toBe('');
+    expect(opened.server.phase).toBe('running');
+
+    joined.shell.stop();
+    const deliveredBefore = delivered.length;
+    for (let i = 0; i < 6; i++) await step();
+    // Состояние снова доезжает — с ЧИСТЫХ курсоров нового клиента (NTR-17).
+    expect(joined.client.metrics.snapshotsApplied).toBeGreaterThan(0);
+    expect(joined.client.metrics.eventRangeGaps).toBe(0);
+    expect(joined.client.latest!.tick).toBeGreaterThan(0);
+
+    // ПЕРВАЯ доставка после возврата — snap'ом (NTR-17, SHELL-7): между
+    // картиной до разрыва и «сейчас» матча промежуточных положений не было, и
+    // интерполяция между ними нарисовала бы проезд героя по карте.
+    const afterReturn = delivered.slice(deliveredBefore);
+    expect(afterReturn.length).toBeGreaterThan(0);
+    expect(afterReturn[0]!.snapAll).toBe(true);
+    // И только первая: дальше матч идёт обычной интерполяцией.
+    expect(afterReturn.slice(1).some((view) => view.snapAll)).toBe(false);
+
+    // Handshake главному потоку доехал РОВНО ОДИН за всю сессию (SHELL-5):
+    // оболочка та же, и возврат для главного потока не новый старт.
+    expect(hellos).toHaveLength(1);
+    // Таблица видов сквозная: имя своего героя главный поток читает по индексу
+    // из конверта, и продюсер, начавший нумерацию заново, назвал бы его чужим
+    // видом. Герой — единственная сущность, которая в персональном снапшоте
+    // есть всегда (NET-15).
+    const view = remote.view!;
+    expect(view.entities.get(joined.hero)!.kind).toBe('Hero');
+    joined.stop();
   });
 });
 

@@ -77,6 +77,10 @@ export type { BotSeatOptions } from './host.js';
 export { BotSlotFiller } from './fill.js';
 export type { BotFillSeat, BotSlotFillerOptions, FillSchedule } from './fill.js';
 
+// замещение отвалившегося игрока (BOT-14): та же сторона, что владеет ботом
+export { BotSubstitutes } from './substitute.js';
+export type { BotSubstitutesOptions } from './substitute.js';
+
 // сборка: пара портов серверу и боту (design D3)
 export { PortConnections, botWorkerInit, isBotWorkerInit } from './assembly.js';
 export type { BotWireFormat, BotWorkerInit, BotWorkerSeat, MessageChannelLike, RawPort } from './assembly.js';

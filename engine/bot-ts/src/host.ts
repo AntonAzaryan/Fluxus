@@ -26,6 +26,7 @@ import {
   ClientHost,
   MatchClient,
   type ClientStep,
+  type ConnectionRole,
   type ContentPack,
   type GameVersion,
   type InputSample,
@@ -37,6 +38,13 @@ import type { BotProfile } from './profile.js';
 
 export interface BotSeatOptions {
   readonly playerId: string;
+  /**
+   * Роль соединения в слоте (`netcode-transport` NTR-18). Умолчание — владелец:
+   * бот-заполнитель (BOT-7) доигрывает матч своим слотом. Заместитель
+   * отвалившегося игрока (BOT-14) называет роль явно — и уступает слот
+   * вернувшемуся владельцу вытеснением, которое проводит сервер.
+   */
+  readonly role?: ConnectionRole;
   /** Канал до сервера матча: по транспорту на бота — соединение как у человека (NTR-2). */
   readonly transport: Transport;
   /** Фабрика мозга (BOT-2): хост не знает, какая реализация под контрактом. */
@@ -63,6 +71,13 @@ export interface BotSeatOptions {
  * TICK-5), и темп, по которому считается всё, что мозг интегрирует по времени
  * (NTR-7). Ждать их честнее, чем выдумывать: до `Welcome` наблюдать ещё нечего,
  * состояния клиент не отдаёт вовсе.
+ *
+ * Отсюда же вход в ИДУЩИЙ матч (BOT-14): бот-заместитель начинает не с
+ * `worldInit`, а с первого принятого персонального снапшота — потому что мозг
+ * и в обычном матче начинает с него же. Ветки «вошёл с середины» здесь нет и
+ * не нужно: она была бы вторым способом сделать то, что уже делается одним.
+ * Граница честности при этом не сдвигается (BOT-2, BOT-3, NTR-9) — заместитель
+ * получает тот же фильтрованный снапшот слота, что получал бы владелец.
  */
 export class BotSeat {
   readonly playerId: string;
@@ -83,6 +98,7 @@ export class BotSeat {
       playerId: options.playerId,
       version: options.version,
       content: options.content,
+      ...(options.role !== undefined ? { role: options.role } : {}),
       ...(options.physics !== undefined ? { physics: options.physics } : {}),
       ...(options.visibility !== undefined ? { visibility: options.visibility } : {}),
       ...(options.interpolationDelayMs !== undefined
@@ -107,6 +123,11 @@ export class BotSeat {
    * Бот доиграл: канал закрыт с той или с этой стороны либо клиент закрылся сам
    * (`End`, отказ хендшейка, разрыв). Читается хостом, чтобы остановить темп:
    * тикать мёртвого клиента — работа без потребителя.
+   *
+   * Вытеснение владельцем (NTR-18) приезжает сюда штатным `Reject` и отпускает
+   * канал тем же путём, что всякий отказ: пере-подключаться место не пытается —
+   * слот занят владельцем, и решать, что делать дальше, будет сборка-основатель
+   * (BOT-14).
    */
   get closed(): boolean {
     return this.transport.isClosed || this.client.phase === 'closed';

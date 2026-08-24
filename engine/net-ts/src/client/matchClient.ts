@@ -40,6 +40,7 @@ import {
 import type {
   ClientCloseReason,
   ClientMessage,
+  ConnectionRole,
   EventBatch,
   EventsMessage,
   GameVersion,
@@ -58,6 +59,15 @@ export interface MatchClientOptions {
   readonly playerId: string;
   readonly version: GameVersion;
   readonly content: ContentPack;
+  /**
+   * Роль соединения в слоте (NTR-18). Отсутствие поля — `owner`: клиент входит
+   * за СВОЙ слот, пока сборка не сказала обратного, и заместителем становятся
+   * намеренно (`bot-player` BOT-14), а не по невнимательности.
+   *
+   * Умолчание живёт здесь и только здесь: на проводе поле обязательно (NTR-4),
+   * и разбор входящего умолчаний не знает.
+   */
+  readonly role?: ConnectionRole;
   readonly observer?: boolean;
   /** Зависимости сборки (DI-3): приезжают со сборкой клиента, а не с провода. */
   readonly physics?: PhysicsOptions;
@@ -342,12 +352,21 @@ export class MatchClient {
     return this.eventQueue;
   }
 
-  /** Предъявление версии (NET-16) — первое, что уходит в соединение. */
+  /**
+   * Предъявление версии (NET-16) — первое, что уходит в соединение.
+   *
+   * Реконнект в идущий матч (NTR-17) идёт этим же путём и другого не имеет:
+   * клиент одноразовый, и возвращение — это НОВЫЙ клиент с чистыми курсорами,
+   * пустым буфером интерполяции и оценкой тика, которую синхронизирует первый
+   * принятый снапшот. «Оживление» старого инстанса потребовало бы вручную
+   * сбрасывать каждый курсор и доказывать полноту сброса.
+   */
   start(): void {
     this.outbox.push({
       type: 'Hello',
       playerId: this.options.playerId,
       version: this.options.version,
+      role: this.options.role ?? 'owner',
       observer: this.options.observer === true,
     });
   }
@@ -459,6 +478,11 @@ export class MatchClient {
         this.close('rejected', `${message.reason}: ${message.detail}`);
         return;
       case 'Start':
+        // Вход в ИДУЩИЙ матч приходит тем же `Start` и с тем же тиком начала
+        // матча (NTR-17): для вернувшегося он не «сейчас», а точка отсчёта
+        // матча. Оценку серверного тика ставит на место первый принятый
+        // снапшот (`resyncTick`) — вторая оценка «где сейчас сервер» рядом
+        // означала бы второй источник одной величины.
         this.clientPhase = 'playing';
         this.estimatedTick = message.tick;
         return;
@@ -474,9 +498,15 @@ export class MatchClient {
     }
   }
 
-  /** Канал закрылся не по нашей воле — состояние приводится к тому же виду. */
+  /**
+   * Канал закрылся не по нашей воле — состояние приводится к тому же виду, но
+   * исход НАЗЫВАЕТСЯ отдельно (`disconnected`, а не `ended`): матч, кончившийся
+   * `End`, и оборвавшийся канал требуют от сборки разного — во втором случае
+   * владелец слота вправе вернуться реконнектом (NTR-17), пока не превышен
+   * порог молчания (NTR-6). Слитый исход заставлял бы решать это по тексту.
+   */
   onTransportClosed(): void {
-    if (this.clientPhase !== 'closed') this.close('ended', 'соединение закрыто');
+    if (this.clientPhase !== 'closed') this.close('disconnected', 'соединение закрыто');
   }
 
   private onWelcome(

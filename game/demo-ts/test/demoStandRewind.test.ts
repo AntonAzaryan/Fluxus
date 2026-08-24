@@ -89,6 +89,9 @@ function standMatch(config: MatchConfig) {
     type: 'Hello',
     playerId,
     version: config.version,
+    // Роль соединения — обязательное поле `Hello` (NTR-4, NTR-18); за свой слот
+    // до старта входит владелец.
+    role: 'owner',
     observer: false,
   });
   config.players.forEach((playerId, slot) => {

@@ -485,3 +485,109 @@ describe('снос подсистемы моделей (REND-31)', () => {
     expect(ctx.scene.children).toHaveLength(0);
   });
 });
+
+/**
+ * Fade-копии материалов (FOW-8) живут дольше эпизода угасания — их держит пул
+ * ради скомпилированной программы, — но не дольше своего ОРИГИНАЛА: пул
+ * ключуется им, и копия, пережившая оригинал, осталась бы в кэше навсегда.
+ */
+describe('время жизни fade-копий материалов (FOW-8 → REND-31)', () => {
+  const FADE = 0.5;
+  /** Детальный ярус: только у него угасание идёт копиями материалов. */
+  const detailed: VisualManifest = {
+    entities: { Runner: { model: MODEL_ID, scale: 1, tier: 'detailed' } },
+  };
+  /** Тот же вид со скином: подмена слота переводит материалы в СВОИ (REND-6). */
+  const skinned: VisualManifest = {
+    entities: {
+      Runner: {
+        model: MODEL_ID,
+        scale: 1,
+        tier: 'detailed',
+        defaultSkin: 'red',
+        skins: { red: { '0': 'tex/red.png' } },
+      },
+    },
+  };
+
+  function makeFadingRig(manifest: VisualManifest): Rig {
+    const assets = makeAssets();
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 0.5 },
+    };
+    const subsystem = new ModelsSubsystem(manifest, { warn: () => {}, fadeSeconds: FADE });
+    subsystem.init(ctx);
+    subsystem.syncTick(makeTickView([makeEntityView(HERO)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    return { subsystem, ctx, assets };
+  }
+
+  /** Копии, которыми инстанс нарисован в идущем эпизоде угасания. */
+  function fadeClones(ctx: RenderContext): THREE.Material[] {
+    const clones: THREE.Material[] = [];
+    ctx.scene.traverse((node) => {
+      const mesh = node as Partial<THREE.Mesh> & THREE.Object3D;
+      if (mesh.isMesh !== true || mesh.material === undefined) return;
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        if (material.transparent) clones.push(material);
+      }
+    });
+    expect(clones.length).toBeGreaterThan(0);
+    return clones;
+  }
+
+  it('копии разделяемого материала ассета отдаются сносом подсистемы', () => {
+    const { subsystem, ctx } = makeFadingRig(detailed);
+    subsystem.updateFrame(1 / 60, 1); // fade-in появления: копии выданы
+    const spies = fadeClones(ctx).map((clone) => vi.spyOn(clone, 'dispose'));
+    // Эпизод доигран: копии в пуле, оригинал — материал ассета, ещё живой.
+    for (let i = 0; i < 60; i++) subsystem.updateFrame(1 / 60, 1);
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+
+    subsystem.dispose();
+    for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('копии СВОИХ материалов инстанса (REND-6) уходят вместе с инстансом', () => {
+    const { subsystem, ctx } = makeFadingRig(skinned);
+    subsystem.updateFrame(1 / 60, 1);
+    const spies = fadeClones(ctx).map((clone) => vi.spyOn(clone, 'dispose'));
+    for (let i = 0; i < 60; i++) subsystem.updateFrame(1 / 60, 1);
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+
+    // Разрыв непрерывности убирает инстанс сразу (FOW-8), а с ним — его свои
+    // материалы: их копиям в пуле держаться больше не за что.
+    subsystem.syncTick(makeTickView([], { snapAll: true }));
+    expect(subsystem.instanceFor(HERO)).toBeNull();
+    for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('копии ЗАГЛУШКИ модели без материалов уходят с инстансом, хоть он их и не «owns»', () => {
+    // Модель без материалов даёт каждому инстансу СВОЙ материал по умолчанию
+    // (`createModelInstance`), и `ownsMaterials` при этом остаётся ложью. Копию
+    // такого оригинала нужно отпустить всё равно: инстанс освободит его своим
+    // сносом, и копия пережила бы его — по одному мёртвому ключу пула на
+    // каждый спавн (REND-31).
+    const assets = makeAssets();
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 0.5 },
+    };
+    const subsystem = new ModelsSubsystem(detailed, { warn: () => {}, fadeSeconds: FADE });
+    subsystem.init(ctx);
+    subsystem.syncTick(makeTickView([makeEntityView(HERO)]));
+    assets.resolve('model', MODEL_ID, { ...makeModel(), materials: [], textureSlots: [] });
+
+    subsystem.updateFrame(1 / 60, 1);
+    const spies = fadeClones(ctx).map((clone) => vi.spyOn(clone, 'dispose'));
+    for (let i = 0; i < 60; i++) subsystem.updateFrame(1 / 60, 1);
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+
+    subsystem.syncTick(makeTickView([], { snapAll: true }));
+    expect(subsystem.instanceFor(HERO)).toBeNull();
+    for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
+  });
+});

@@ -15,6 +15,7 @@ import {
   BENCH_GLOBAL_KEY,
   BENCH_PROBE_VERSION,
   BENCH_STAGES,
+  BENCH_WORST_FRAMES,
   BenchProbe,
   attachBenchProbe,
   benchPercentile,
@@ -215,6 +216,115 @@ describe('probe стадий кадра (PERF-2)', () => {
     expect(report.frames).toBe(2);
     expect(report.frameMs.max).toBe(4);
     expect(report.dropped).toBe(0);
+  });
+});
+
+describe('хвост распределения за p99 (PERF-7)', () => {
+  it('разовый фриз при зелёных перцентилях виден в максимуме и в худших кадрах', () => {
+    const { probe, clock } = probeOnClock();
+    // Ровно случай, ради которого писался хвост: минута ровных кадров и ОДИН
+    // кадр в сотни миллисекунд — компиляция шейдерных программ на открытии
+    // видимости. Перцентили его не видят: один кадр из трёхсот не двигает ни
+    // p50, ни p99.
+    let at = 0;
+    for (let i = 0; i < 300; i += 1) {
+      const freeze = i === 120;
+      feed(probe, clock, at, freeze ? [0.1, 0.2, 1.7, 320] : [0.1, 0.2, 1.7, 2], i);
+      at += freeze ? 325 : 16;
+    }
+
+    const report = probe.report();
+
+    expect(report.frameMs.p99).toBeLessThan(5);
+    expect(report.intervalMs.p99).toBe(16);
+    // А максимум и топ худших кадров называют и период, и стадию, которая его
+    // понесла.
+    expect(report.frameMs.max).toBeCloseTo(322, 6);
+    expect(report.intervalMs.max).toBe(325);
+    const worst = report.worstFrames[0]!;
+    expect(worst.intervalMs).toBe(325);
+    expect(worst.frameMs).toBeCloseTo(322, 6);
+    expect(worst.stagesMs.draw).toBeCloseTo(320, 6);
+    expect(worst.stagesMs.present).toBeCloseTo(1.7, 6);
+    expect(worst.tick).toBe(120);
+    // Период спарен с работой ТОГО кадра, который внутри него работал: остаток
+    // «вне стадий» тогда мал и честен, а не равен всему фризу.
+    expect(worst.intervalMs - worst.frameMs).toBeCloseTo(3, 6);
+    // Отметка — от начала окна, а не по часам страницы.
+    expect(worst.atMs).toBe(120 * 16);
+  });
+
+  it('фриз МЕЖДУ кадрами попадает в топ и виден остатком «вне стадий»', () => {
+    const { probe, clock } = probeOnClock();
+    // Работа кадра дешёвая вся, а период вырос: так выглядит приём доставки
+    // (SHELL-3) и сборка мусора — их в стадиях кадра нет вовсе (см. шапку
+    // probe), и топ по работе кадра этот фриз пропустил бы.
+    feed(probe, clock, 0, [0.1, 0.1, 0.1, 0.1], 1);
+    feed(probe, clock, 200, [0.1, 0.1, 0.1, 0.1], 2);
+    feed(probe, clock, 216, [0.1, 0.1, 0.1, 0.1], 3);
+
+    const worst = probe.report().worstFrames[0]!;
+
+    expect(worst.intervalMs).toBe(200);
+    expect(worst.frameMs).toBeCloseTo(0.4, 6);
+    expect(worst.intervalMs - worst.frameMs).toBeGreaterThan(199);
+  });
+
+  it('топ упорядочен по периоду и не длиннее потолка', () => {
+    const { probe, clock } = probeOnClock();
+    // Периоды 10, 20, ... 100 мс: их ровно десять, а в отчёт обязаны попасть
+    // пять худших, от худшего к лучшему.
+    let at = 0;
+    for (let i = 1; i <= 10; i += 1) {
+      feed(probe, clock, at, [0, 0, 0, 1], i);
+      at += i * 10;
+    }
+    feed(probe, clock, at, [0, 0, 0, 1], 11);
+
+    const worst = probe.report().worstFrames;
+
+    expect(worst.length).toBe(BENCH_WORST_FRAMES);
+    expect(worst.map((frame) => frame.intervalMs)).toEqual([100, 90, 80, 70, 60]);
+  });
+
+  it('работа кадра длиннее его периода остаётся как есть: остаток уходит в минус', () => {
+    const { probe, clock } = probeOnClock();
+    // Отметка rAF — метка кадровой синхронизации, а не момент запуска колбэка:
+    // затянувшийся кадр честно переваливает за свой номинальный период в
+    // следующий. Клампа здесь нет — нуль на месте отрицательного остатка сказал
+    // бы «кадр уложился», а он не уложился.
+    feed(probe, clock, 0, [1, 1, 1, 7], 1);
+    feed(probe, clock, 6, [0, 0, 0, 0], 2);
+
+    const worst = probe.report().worstFrames[0]!;
+
+    expect(worst.intervalMs).toBe(6);
+    expect(worst.frameMs).toBe(10);
+    expect(worst.intervalMs - worst.frameMs).toBeLessThan(0);
+  });
+
+  it('окно короче двух кадров: периодов нет, и худших кадров тоже — не нули', () => {
+    const { probe, clock } = probeOnClock();
+    feed(probe, clock, 0, [1, 1, 1, 1], 1);
+
+    expect(probe.report().worstFrames).toEqual([]);
+  });
+
+  it('версия формата отчёта поднята вместе с его ростом', () => {
+    // Харнесс сверяет версию до чтения полей: страница со старым probe обязана
+    // быть отвергнута, а не прочитана наполовину. Число здесь ЖЁСТКОЕ и стоит в
+    // паре с тем полем, ради которого версия росла: вырастет формат ещё раз без
+    // инкремента — краснеет этот тест, а не чужой прогон с несовместимой
+    // страницей. «Не меньше двух» не покраснело бы уже никогда.
+    const { probe, clock } = probeOnClock();
+    feed(probe, clock, 0, [1, 1, 1, 1], 1);
+    feed(probe, clock, 16, [1, 1, 1, 1], 2);
+
+    const report = probe.report();
+
+    expect(BENCH_PROBE_VERSION).toBe(2);
+    expect(report.version).toBe(2);
+    expect(report.worstFrames.length).toBe(1);
   });
 });
 

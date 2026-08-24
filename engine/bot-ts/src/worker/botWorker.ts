@@ -89,6 +89,9 @@ export function startBotWorker(init: BotWorkerInit, options: BotWorkerOptions = 
     host.add({
       playerId: seat.playerId,
       transport: portTransport(shellPort(port)),
+      // Роль соединения (NTR-18) едет данными init-сообщения: воркер о фазе
+      // матча не знает и вывести её не может (BOT-4, BOT-14).
+      ...(seat.role !== undefined ? { role: seat.role } : {}),
       // Документ поведения — СВОЙ у каждого места (BOT-8): профиль называет его
       // путь, и два бота одного матча вправе играть разную политику. Разбор,
       // как и у профиля, происходит на этой стороне границы: документ приехал

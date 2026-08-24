@@ -27,12 +27,20 @@ function rendezvousOf(init: DemoClientInit): DemoRendezvous {
   return directRendezvous(init.url, DEMO_PLAYERS);
 }
 
+/** Состояние сессии человеку: почему матча нет и что сейчас происходит. */
+function notice(message: string): void {
+  const envelope: DemoNotice = { t: 'demo-notice', message };
+  port.post(envelope);
+}
+
 scope.addEventListener('message', (event) => {
   if (!isDemoClientInit(event.data)) return;
   const { connect, candidates } = rendezvousOf(event.data);
-  void joinDemoMatch({ port, connect, candidates }).then((joined) => {
+  // `notify` — состояние возврата в матч (NTR-17, design D8): «возвращаюсь»,
+  // «вернуться не удалось», пустая строка на успехе. Тем же конвертом, что и
+  // причина, по которой матча нет: у человека это одно и то же место на экране.
+  void joinDemoMatch({ port, connect, candidates, notify: notice }).then((joined) => {
     if (joined.ok) return;
-    const notice: DemoNotice = { t: 'demo-notice', message: joined.reason };
-    port.post(notice);
+    notice(joined.reason);
   });
 });
