@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import * as fixed from '../src/math/fixed.js';
 import { mathApi } from '../src/math/mathApi.js';
 import { addComponent, componentNames, getField, setField, spawn } from '../src/ecs/world.js';
-import { BLOCKS_VISION, createPhysicsApi, PhysicsWorld, SHAPE_AABB, staticsFromTerrain } from '../src/systems/physics.js';
+import {
+  colliderHeightDeclared,
+  createPhysicsApi,
+  BLOCKS_VISION,
+  PhysicsWorld,
+  SHAPE_AABB,
+  staticsFromTerrain,
+} from '../src/systems/physics.js';
 import {
   isVisibleTo,
   teamBit,
@@ -30,7 +37,13 @@ const TERRAIN = {
 const SCENE: SceneDef = {
   components: [
     { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
-    { name: 'Collider', fields: { halfX: 'fixed', halfY: 'fixed', radius: 'fixed', shape: 'i32' } },
+    // Поле высоты объявлено, но нигде не задано: колоночный гейт (PHYS-14)
+    // включён схемой, а полосы у всех не ограничены — остальные тесты файла
+    // проверяют, что LoS от этого не меняется.
+    {
+      name: 'Collider',
+      fields: { halfX: 'fixed', halfY: 'fixed', radius: 'fixed', shape: 'i32', height: 'i32' },
+    },
     { name: LEVEL_OVERRIDE_COMPONENT, fields: { level: 'i32' } },
   ],
   fog: true,
@@ -77,7 +90,10 @@ function harness(terrainDef: typeof TERRAIN = TERRAIN) {
     systems,
     worldSeed: 1,
     math: mathApi,
-    physics: createPhysicsApi(world, physicsWorld),
+    physics: createPhysicsApi(world, physicsWorld, {}, {
+      height: colliderHeightDeclared(world),
+      terrain: terrain!,
+    }),
     terrain: terrain!,
     modifiers,
   };
@@ -242,6 +258,56 @@ describe('асимметрия высоты через ребро обрыва (
 
     expect(h.mask(below)).toBe(teamBit(0) | teamBit(1));
     expect(h.mask(farPlateau)).toBe(teamBit(0) | teamBit(1));
+  });
+});
+
+/**
+ * Колоночный гейт (PHYS-14) достаёт до луча LoS: опция уровня у `raycast` одна
+ * и та же — ту же, что PHYS-13 отдаёт обрывам, `VisibilitySystem` передаёт как
+ * уровень наблюдателя (FOW-5). Следствие поэтому нормативно, а не побочно:
+ * укрытие с ОГРАНИЧЕННОЙ полосой перестаёт перекрывать обзор наблюдателю, чей
+ * уровень в эту полосу не попал. Полоса не задана — укрытие перекрывает как
+ * раньше, и это то умолчание, на котором стоит весь остальной файл.
+ */
+describe('полоса укрытия в луче обзора (FOW-5, PHYS-14)', () => {
+  it('укрытие своей полосы обзор перекрывает', () => {
+    const h = harness();
+    h.place('Watcher', { Position: { x: F(1), y: F(1) } });
+    h.place('Wall', { Position: { x: F(2), y: F(1) }, Collider: { height: 1 } });
+    const enemy = h.place('Enemy', { Position: { x: F(3), y: F(1) } });
+    h.step();
+
+    // Наблюдатель, цель и укрытие — все уровня 0, полоса укрытия [0, 0].
+    expect(h.mask(enemy)).toBe(teamBit(1));
+  });
+
+  it('то же укрытие наблюдателю выше его полосы обзор не перекрывает', () => {
+    const h = harness();
+    const watcher = h.place('Watcher', { Position: { x: F(1), y: F(1) } });
+    h.place('Wall', { Position: { x: F(2), y: F(1) }, Collider: { height: 1 } });
+    const enemy = h.place('Enemy', { Position: { x: F(3), y: F(1) } });
+    // Наблюдатель и цель — на уровне 2 (ARENA-6), укрытие осталось на нуле:
+    // фильтр высоты FOW-5 цель пропускает (уровни равны), а луч уровня 2 в
+    // полосу [0, 0] укрытия не попадает и проходит насквозь.
+    h.level(watcher, 2);
+    h.level(enemy, 2);
+    h.step();
+
+    expect(h.mask(enemy)).toBe(teamBit(0) | teamBit(1));
+  });
+
+  it('укрытие без полосы перекрывает луч любого уровня — умолчание не изменилось', () => {
+    const h = harness();
+    const watcher = h.place('Watcher', { Position: { x: F(1), y: F(1) } });
+    // Высота 0 — полоса не ограничена: ровно то укрытие, что было до PHYS-14.
+    h.place('Wall', { Position: { x: F(2), y: F(1) }, Collider: { height: 0 } });
+    const enemy = h.place('Enemy', { Position: { x: F(3), y: F(1) } });
+    h.level(watcher, 2);
+    h.level(enemy, 2);
+    h.step();
+
+    // Отличие предыдущего теста — полоса укрытия, а не высота наблюдателя.
+    expect(h.mask(enemy)).toBe(teamBit(1));
   });
 });
 

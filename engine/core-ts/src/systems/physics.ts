@@ -325,11 +325,19 @@ export class PhysicsSystem implements System {
       // Полоса движущегося для БЛОКИРОВКИ (PHYS-8, PHYS-9) — одна оценка на
       // тик, по состоянию до хода: обе оси видят один уровень, и промежуточных
       // уровней вдоль пути не возникает (PHYS-14).
+      //
+      // Пустая маска блокировки уровня не спрашивает вовсе: до `nearestBlocker`
+      // такой ход не доходит (ниже), а полосу заметаемого объёма сенсорная
+      // проверка всё равно считает заново — по разрешённому состоянию. Сквозной
+      // снаряд (`blockMask = 0`, `hitMask ≠ 0`) — ровно тот случай, ради
+      // которого писался гейт, и мёртвого `levelAt` на тик он платить не должен.
       this.moverHeight = this.heightGate
         ? ctx.get(mover, this.colliderComponent, COLLIDER_HEIGHT_FIELD)
         : 0;
       this.moverLevel =
-        this.moverHeight > 0 ? effectiveLevel(ctx, this.probe, mover, from.x, from.y) : 0;
+        this.moverHeight > 0 && blockMask !== 0
+          ? effectiveLevel(ctx, this.probe, mover, from.x, from.y)
+          : 0;
 
       for (const axis of ['x', 'y'] as const) {
         const step = fixed.mul(ctx.get(mover, this.velocityComponent, axis), scale);

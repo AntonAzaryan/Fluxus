@@ -1260,36 +1260,45 @@ describe('колоночный гейт пересечений (PHYS-14)', () =>
 
   it('контакт на рампе: полосы высоты 2 на смежных уровнях пересекаются', () => {
     // Переход помечен рампой, поэтому коллайдера обрыва между уровнями нет
-    // (TERR-5) — блокировать движение может только гейт полос.
+    // (TERR-5) — блокировать движение может только гейт полос. Движущийся при
+    // этом блокируется И статикой (`blockMask` накрывает её слой): без этого
+    // рампа была бы декорацией — обрыв всё равно отсеялся бы маской, и тест
+    // прошёл бы на обычном `TERRAIN`.
     const h = harness(true, TERRAIN_RAMP);
-    const upper = h.place('Column', { Position: { x: F(2.2), y: F(0.5) }, Collider: { height: 2 } });
+    expect(staticsFromTerrain(createTerrainGrid(TERRAIN_RAMP))).toHaveLength(0);
+    expect(staticsFromTerrain(createTerrainGrid(TERRAIN))).toHaveLength(2);
+    const upper = h.place('Column', { Position: { x: F(2.5), y: F(0.5) }, Collider: { height: 2 } });
     const lower = h.place('Column', {
-      Position: { x: F(1.5), y: F(0.5) },
+      Position: { x: F(1.7), y: F(0.5) },
       Velocity: { x: F(0.5) },
-      Collider: { height: 2 },
+      Collider: { height: 2, blockMask: LAYER_UNIT | LAYER_STATIC },
     });
     // Уровни смежные: полосы [0, 1] и [1, 2] имеют общий уровень 1.
     expect(h.terrain!.levelOf(lower)).toBe(0);
     expect(h.terrain!.levelOf(upper)).toBe(1);
 
     const events = h.step();
-    expect(h.position(lower)).toEqual(at(1.5, 0.5));
+    expect(h.position(lower)).toEqual(at(1.7, 0.5));
     expect(events.map((e) => e.type)).toEqual(['Collision']);
     expect(events[0]!.data.entity).toBe(lower);
+    // Именно сосед, а не статика: обрыв на этом месте оказался бы БЛИЖЕ соседа
+    // (0.3 против 0.55) и забрал бы `other` себе — рампа тем и наблюдаема.
     expect(events[0]!.data.other).toBe(upper);
   });
 
   it('те же соседи с полосой в один уровень друг друга не задевают', () => {
+    // Тот же `blockMask`, накрывающий и статику: ход разрешён рампой (обрыва
+    // нет) и полосами (общего уровня нет), а не тем, что маска отсеяла обрыв.
     const h = harness(true, TERRAIN_RAMP);
-    h.place('Column', { Position: { x: F(2.2), y: F(0.5) }, Collider: { height: 1 } });
+    h.place('Column', { Position: { x: F(2.5), y: F(0.5) }, Collider: { height: 1 } });
     const lower = h.place('Column', {
-      Position: { x: F(1.5), y: F(0.5) },
+      Position: { x: F(1.7), y: F(0.5) },
       Velocity: { x: F(0.5) },
-      Collider: { height: 1 },
+      Collider: { height: 1, blockMask: LAYER_UNIT | LAYER_STATIC },
     });
     // Полосы [0, 0] и [1, 1] общего уровня не имеют: ход исполнен, события нет.
     expect(h.step()).toEqual([]);
-    expect(h.position(lower)).toEqual(at(2, 0.5));
+    expect(h.position(lower)).toEqual(at(2.2, 0.5));
   });
 
   it('летающая сущность над наземной зоной Overlap не даёт', () => {
@@ -1402,7 +1411,6 @@ describe('колоночный гейт пересечений (PHYS-14)', () =>
     const events = h.step();
     expect(events.map((e) => e.type)).toEqual(['Overlap']);
     expect(events[0]!.data).toEqual({ entity: ground, other: zone });
-    void zone;
 
     // А override действует и без террейна: уровень 3 из полосы зоны выпадает.
     const second = harness(false, null);
@@ -1474,13 +1482,18 @@ describe('колоночный гейт пересечений (PHYS-14)', () =>
   });
 
   it('статика обрывов полосы не получает: гейт её не касается', () => {
-    // У снаряда полоса [5, 5] — выше любого уровня арены; обрыв всё равно
-    // останавливает его как обычная статика (PHYS-11 при `cliffRise = 0`).
+    // Полоса движущегося — [5, 5], то есть выше ОБЕИХ сторон ребра (0 и 1):
+    // реализация, выдавшая статике полосу по её уровням, пропустила бы ход.
+    // Обрыв всё равно останавливает его как обычная статика (PHYS-11 при
+    // `cliffRise = 0`) — высотная семантика обрыва живёт в PHYS-11/PHYS-13.
     const h = harness();
-    const mover = h.place('Column', {
+    const edge = staticsFromTerrain(createTerrainGrid(TERRAIN))[0]!;
+    expect([edge.levelNeg, edge.levelPos]).toEqual([0, 1]);
+    const mover = h.place('Flyer', {
       Position: { x: F(1.5), y: F(0.5) },
       Velocity: { x: F(0.5) },
       Collider: { height: 1, blockMask: LAYER_STATIC },
+      LevelOverride: { level: 5 },
     });
     const events = h.step();
     expect(h.position(mover)).toEqual(at(1.5, 0.5));
