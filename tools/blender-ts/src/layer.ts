@@ -318,7 +318,11 @@ function placementRecord(
   write(binding.component, binding.x, source.x);
   write(binding.component, binding.y, source.y);
   if (binding.rotation !== undefined) {
-    write(binding.rotation.component, binding.rotation.field, source.yaw);
+    // Та же свёртка полного оборота, что у записи decoration: курс 1.0 в
+    // Q16.16 квантовался бы в FIXED_ONE — а полный оборот есть тот же курс,
+    // что 0, и в переопределение обязан уехать 0, а не 65536 (BLND-4).
+    const turn = quantizedFixed(source.yaw);
+    write(binding.rotation.component, binding.rotation.field, turn === FIXED_ONE ? 0 : source.yaw);
     // Зеркало курсом не выражается: разложение зеркального трансформа отдаёт
     // курс, отличающийся на пол-оборота (BLND-3). Позиции это не касается,
     // поэтому у сцены без поворота и предупреждения нет.
@@ -383,7 +387,12 @@ function decorationRecord(sink: Sink, source: SourceObject, context: SpatialLaye
 
   const x = quantizeDecorationLength(source.x);
   const y = quantizeDecorationLength(source.y);
-  const yaw = quantizeDecorationYaw(source.yaw);
+  // Курс — величина по модулю оборота, и сворачивается он ПОСЛЕ квантования:
+  // полосу (1 − шаг/2, 1) округление к шагу PRES-3 приводит ровно к 1, а полный
+  // оборот — тот же курс, что 0. Иначе шум экспорта тоньше шага давал бы в
+  // диффе «yaw: 1» вместо отсутствующего ключа умолчания (BLND-4).
+  const turn = quantizeDecorationYaw(source.yaw);
+  const yaw = turn === 1 ? 0 : turn;
   const scale = quantizeDecorationLength(source.scale);
   if (x === null || y === null || yaw === null || scale === null) {
     error(sink, source.name, 'позиция, курс либо масштаб не являются конечными числами (PRES-3)');

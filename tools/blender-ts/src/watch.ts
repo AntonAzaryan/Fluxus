@@ -208,6 +208,12 @@ export interface WatchTriggerOptions {
 export interface WatchTrigger {
   /** Источник изменился: запланировать прогон, отложив уже запланированный. */
   notify(): void;
+  /**
+   * Прогон сразу, без дебаунса, но тем же насосом, что `notify()`: событие
+   * источника, пришедшее во время него, даёт ровно один следующий прогон, а не
+   * второй пишущий рядом. Разрешается вместе с прогонами, которые он потянул.
+   */
+  prime(): Promise<void>;
   /** Идёт ли прогон прямо сейчас. */
   readonly running: boolean;
   /** Ждёт завершения идущего прогона и всех, которые он за собой потянул. */
@@ -266,6 +272,14 @@ export function createWatchTrigger(options: WatchTriggerOptions): WatchTrigger {
       if (closed) return;
       cancel?.();
       cancel = timers.delay(debounceMs, fire);
+    },
+    prime(): Promise<void> {
+      if (closed) return Promise.resolve();
+      // Отложенный дебаунсом вызов немедленный прогон поглощает: источник
+      // читается сейчас, то есть уже с той правкой, о которой было событие.
+      cancel?.();
+      fire();
+      return running ?? Promise.resolve();
     },
     get running(): boolean {
       return running !== null;
@@ -416,8 +430,10 @@ export async function runImportWatch(options: ImportWatchOptions): Promise<numbe
   options.io.err(`watch: слежу за "${options.source}"; правка источника — импорт (BLND-12)`);
   // Первый прогон — сразу: watch начинается с того, что документы приводятся в
   // соответствие источнику, иначе кадр до первого сохранения показывал бы то,
-  // что осталось от прошлого раза.
-  await cycle.run();
+  // что осталось от прошлого раза. Идёт он ЧЕРЕЗ ТРИГГЕР: наблюдение уже
+  // взведено, и сохранение, пришедшее во время первого импорта, обязано дать
+  // один следующий прогон, а не второй пишущий рядом с первым (см. триггер).
+  await trigger.prime();
 
   try {
     await new Promise<void>((resolve) => {

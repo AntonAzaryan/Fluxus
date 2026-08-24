@@ -182,6 +182,35 @@ describe('BLND-4: квантование выполняет импортёр д�
     expect(record?.x).toBe(1.235);
     expect(record?.yaw).toBe(0.1235);
   });
+
+  it('курс на волосок ниже оборота квантуется в 0, а не в «yaw: 1» (BLND-4, PRES-3)', () => {
+    // Полоса (1 − шаг/2, 1) округляется к шагу PRES-3 ровно в 1, а полный
+    // оборот — тот же курс, что 0: ключ умолчания в запись не пишется вовсе.
+    const objects = objectsOf('placements.gltf').map((object) =>
+      object.name === 'beta-statue' ? { ...object, yaw: 0.99997 } : object,
+    );
+    const [record] = generateSpatialLayer(objects, context()).decorations;
+    expect(record?.yaw).toBeUndefined();
+  });
+
+  it('курс «полный оборот» в переопределении поворота — 0, а не 65536 (BLND-4, FP-1)', () => {
+    const objects = objectsOf('placements.gltf').map((object) =>
+      object.name === 'zeta-hero' ? { ...object, yaw: 1 } : object,
+    );
+    const layer = generateSpatialLayer(
+      objects,
+      context({ binding: { ...DEFAULT_POSITION_BINDING, rotation: ROTATION } }),
+    );
+    expect(layer.initial[1]).toEqual({
+      prefab: 'Hero',
+      overrides: {
+        Facing: { turns: 0 },
+        Locomotion: { maxSpeed: fixed.fromFloat(0.5) },
+        Player: { slot: 1 },
+        Position: { x: fixed.fromFloat(3), y: fixed.fromFloat(4) },
+      },
+    });
+  });
 });
 
 describe('BLND-3, BLND-6: находки называют объект Blender', () => {

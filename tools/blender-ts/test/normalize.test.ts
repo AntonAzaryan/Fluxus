@@ -32,6 +32,13 @@ describe('BLND-3: соответствие осей зафиксировано',
     expect(decompose(matrix).yaw).toBeCloseTo(0.75, TURN_PRECISION);
   });
 
+  it('крошечный отрицательный поворот даёт yaw = 0, а не 1: [0, 1) держится и на краю', () => {
+    // У курса тоньше пол-ulp сумма `turns + 1` округляется в double ровно в 1,
+    // а полный оборот — тот же курс, что 0: единица наружу не выходит (BLND-4).
+    const matrix = localMatrixOf({ rotation: [0, -3.5e-17, 0, 1] });
+    expect(decompose(matrix).yaw).toBe(0);
+  });
+
   it('родительство не двигает объект: трансформы перемножаются', () => {
     const child = objectNamed(objects, 'child');
     expect([child.x, child.y]).toEqual([3, 4]);
