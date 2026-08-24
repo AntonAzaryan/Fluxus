@@ -254,6 +254,17 @@ async function openSession(profile: AppProfile): Promise<Session> {
     if (event.level === 'error') complaints.push(event.message);
   });
 
+  // Мост принадлежит СВОЕЙ странице: preload перезапускается на каждом
+  // переходе WebContents, и чужой документ (перетащенный в окно файл или
+  // ссылка, `window.open` — новое окно наследует webPreferences вместе с
+  // preload'ом) получил бы возможности профиля целиком — доступ обходным
+  // путём, который DSK-5 запрещает. Поэтому уход с собственной раздачи
+  // гасится, а новых окон контейнер не открывает вовсе.
+  target.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith(BASE)) event.preventDefault();
+  });
+  target.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
   // Описание сессии страница получает синхронно на старте: базовый адрес
   // раздачи и список возможностей нужны ей до первого запроса (DSK-4, DSK-5).
   ipcMain.on(CHANNELS.session, (event) => {

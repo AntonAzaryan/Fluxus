@@ -103,6 +103,11 @@ export const DEAD_SERVICE_SCRIPT = fileURLToPath(
   new URL('./fixtures/deadService.mjs', import.meta.url),
 );
 
+/** Сервис, отмечающий каждый свой запуск строкой в файле `--mark` (DSK-7). */
+export const MARKED_SERVICE_SCRIPT = fileURLToPath(
+  new URL('./fixtures/markedService.mjs', import.meta.url),
+);
+
 /**
  * Свободный порт: занимаем и сразу отпускаем. Гонка тут возможна в принципе, но
  * адрес сервиса обязан быть известен ДО запуска (его объявляет профиль), а
