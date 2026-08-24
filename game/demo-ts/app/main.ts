@@ -975,12 +975,19 @@ function demoDecorations(presentation: PresentationScene): DecorationInstance[] 
   return presentation.decorations.map((record, index) => decorationInstanceOf(record, `#${index}`));
 }
 
-/** Сообщение человеку поверх вьюпорта: матч занят, сервер не отвечает и т. п. */
+/**
+ * Сообщение человеку поверх вьюпорта: матч занят, сервер не отвечает,
+ * «возвращаюсь в матч» после разрыва (`netcode-transport` NTR-17, design D8).
+ *
+ * Пустая строка ГАСИТ показанное: состояние переподключения обязано исчезать,
+ * когда игрок снова в бою, — иначе висящая надпись пережила бы то, о чём
+ * сообщала.
+ */
 function showNotice(message: string): void {
   const notice = document.getElementById('notice');
   if (notice === null) return;
   notice.textContent = message;
-  notice.style.display = 'block';
+  notice.style.display = message === '' ? 'none' : 'block';
 }
 
 /**

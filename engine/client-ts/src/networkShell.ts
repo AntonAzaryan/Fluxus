@@ -135,13 +135,18 @@ export interface NetworkShellConfig {
 }
 
 export class NetworkShell {
-  /** Клиент матча — наблюдаемый выход сессии: фаза, счётчики (NTR-11), эпоха. */
-  readonly client: MatchClient;
-
   private readonly config: NetworkShellConfig;
   private readonly sender: ShellSender;
-  private readonly host: ClientHost;
   private readonly clock: () => number;
+
+  /**
+   * Клиент и его связка с каналом — ЕДИНСТВЕННОЕ, что переживает не всю сессию
+   * (NTR-17): вернувшийся после разрыва приходит новым `MatchClient`'ом с
+   * чистыми курсорами, а оболочка, её канал к главному потоку, её sender и её
+   * `Extractor` живут дальше (см. `reattach`).
+   */
+  private current: MatchClient;
+  private host: ClientHost;
 
   /** Латч ввода между отправками — общий обоим режимам (`inputLatch.ts`, SHELL-6). */
   private readonly input = new InputLatch();
@@ -160,22 +165,67 @@ export class NetworkShell {
 
   constructor(config: NetworkShellConfig) {
     this.config = config;
-    this.client = config.client;
+    this.current = config.client;
     this.clock = config.clock ?? (() => performance.now());
     this.sender = new ShellSender(config.port, config.sender);
-    this.host = new ClientHost(config.client, config.transport, {
-      now: this.clock,
-      // Ввод главного потока уходит серверу сообщением `Input` (`netcode` NET-7)
-      // и локально не применяется: предсказания в MVP нет (NTR-10).
-      input: () => this.takeInput(),
-      ...(config.serializer !== undefined ? { serializer: config.serializer } : {}),
-    });
+    this.host = this.hostFor(config.client, config.transport);
     config.port.onMessage((message) => { this.onMessage(message as MainToWorker); });
+  }
+
+  /** Клиент матча — наблюдаемый выход сессии: фаза, счётчики (NTR-11), эпоха. */
+  get client(): MatchClient {
+    return this.current;
   }
 
   /** Сколько запросов переходов отброшено без отображения в кнопку — диагностика. */
   get unmappedControls(): number {
     return this.unmapped;
+  }
+
+  private hostFor(client: MatchClient, transport: Transport): ClientHost {
+    return new ClientHost(client, transport, {
+      now: this.clock,
+      // Ввод главного потока уходит серверу сообщением `Input` (`netcode` NET-7)
+      // и локально не применяется: предсказания в MVP нет (NTR-10).
+      input: () => this.takeInput(),
+      ...(this.config.serializer !== undefined ? { serializer: this.config.serializer } : {}),
+    });
+  }
+
+  /**
+   * Продолжить сессию НОВЫМ подключением — возврат в матч после разрыва
+   * (`netcode-transport` NTR-17). Клиент матча одноразовый, и вернувшийся
+   * приходит новым инстансом: чистые курсоры снапшота и потока событий, пустой
+   * буфер интерполяции и пересинхронизация оценки тика достаются свойством
+   * свежего инстанса, а не ручным сбросом, полноту которого пришлось бы
+   * доказывать.
+   *
+   * Оболочка при этом та же, и это не экономия, а требование сразу с двух
+   * сторон. Главный поток получает РОВНО ОДИН handshake за сессию (SHELL-5):
+   * режим, темп, террейн и словарь статов от возврата не меняются, а второй
+   * `hello` означал бы для него новый старт. И таблица видов (`kindTable`
+   * `Extractor`'а вместе со счётчиком уже отправленных записей в `ShellSender`)
+   * — сквозная: её индексы едут в конверте числами, главный поток копит их
+   * подряд, и продюсер, начавший нумерацию заново, назвал бы сущностям чужие
+   * виды.
+   *
+   * Первая доставка после возврата уходит с признаком разрыва (SHELL-7,
+   * NTR-17): между картиной до разрыва и «сейчас» матча промежуточных положений
+   * не существовало, и интерполяция между ними нарисовала бы проезд по карте.
+   * Копится он ИЛИ-ем в `step()` и гаснет чтением на доставке — как всякий
+   * другой разрыв непрерывности.
+   */
+  reattach(client: MatchClient, transport: Transport): void {
+    this.stop();
+    this.current = client;
+    this.host = this.hostFor(client, transport);
+    this.discontinuity = true;
+    // Факты, не дождавшиеся своего состояния до разрыва, дальше не едут: их тик
+    // остался по ту сторону дыры, а картинка через неё перепрыгнула — играть их
+    // значило бы озвучивать историю, которую зритель не видел (SHELL-4, OBS-5).
+    this.pending = [];
+    this.host.start();
+    this.schedule();
   }
 
   /**

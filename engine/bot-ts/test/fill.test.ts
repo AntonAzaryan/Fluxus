@@ -21,6 +21,7 @@ import {
   connectHuman,
   duelConfig,
   harness,
+  manualSchedule,
   settle,
   stepMatch,
   testProfile,
@@ -30,23 +31,6 @@ import {
 const PLAYERS = ['p1', 'p2'] as const;
 /** Шаг ввода, одинаковый у человека и у бота: сравнивать логи иначе нечем. */
 const MOVE = 0.15;
-
-/** Ручной планировщик: дедлайн наступает вызовом теста, а не течением времени. */
-function manualSchedule(): { schedule: FillSchedule; run: () => void; pending: () => boolean } {
-  let queued: (() => void) | null = null;
-  return {
-    schedule: (run) => {
-      queued = run;
-      return 1;
-    },
-    run: () => {
-      const task = queued;
-      queued = null;
-      task?.();
-    },
-    pending: () => queued !== null,
-  };
-}
 
 /** Мозг с постоянным намерением: ввод бота предсказуем и сравним с человеческим. */
 function steadyBrain(intent: BotIntent) {
@@ -151,7 +135,7 @@ describe('бот держит слот до заморозки ростера (B
     bots.dispose();
   });
 
-  it('человек пришёл после старта: штатный отказ фазы матча (NTR-6)', async () => {
+  it('человек пришёл после старта на слот бота: «слот занят» (BOT-7, NTR-18)', async () => {
     const fixture = harness(duelConfig({ players: [...PLAYERS] }));
     const bots = new BotHost();
     const fill = filler(fixture, bots, { reserved: ['p1'] });
@@ -162,13 +146,14 @@ describe('бот держит слот до заморозки ростера (B
     await settle();
     expect(fixture.server.phase).toBe('running');
 
-    // Опоздавший претендует на слот бота — и получает отказ, определённый для
-    // фазы матча. Замены посреди матча этот механизм не вводит.
+    // Опоздавший претендует на слот бота — и получает отказ: бот-заполнитель
+    // ВЛАДЕЕТ своим слотом и вытеснению (NTR-18) не подлежит. Замены посреди
+    // матча этот механизм не вводит и не вводил (BOT-7).
     const late = connectHuman(fixture, 'p2');
     await settle();
     expect(late.client.phase).toBe('closed');
     expect(late.client.closeReason).toBe('rejected');
-    expect(late.client.closeDetail).toContain('match-in-progress');
+    expect(late.client.closeDetail).toContain('slot-taken');
     // Бот доигрывает свой матч: состав заморожен.
     expect(bots.seats[0]!.client.phase).toBe('playing');
     expect(fill.prune()).toBe(0);

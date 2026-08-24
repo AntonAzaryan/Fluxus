@@ -148,6 +148,11 @@ interface NetworkRig {
   readonly posted: string[];
   /** Прогонов систем в мире оболочки: нулевой счётчик и есть «tick() не вызван». */
   systemRuns(): number;
+  /**
+   * Возврат владельца слота в идущий матч (NTR-17): НОВЫЙ клиент и новый канал
+   * в ТУ ЖЕ оболочку. Таймер снимается сразу — шаги делает тест.
+   */
+  rejoin(): MatchClient;
 }
 
 function networkRig(
@@ -207,11 +212,14 @@ function networkRig(
     onReady: () => remote.register(shellProbe.subsystem),
   }).connect(mainPort);
 
+  const wrap = options.wrapTransport ?? ((transport: Transport): Transport => transport);
+  /** Канал ТЕКУЩЕГО подключения: возврат в матч рвёт его и открывает новый. */
+  let link = wrap(hub.connect());
   const shell = new NetworkShell({
     mode: 'network',
     port: workerPort,
     client,
-    transport: (options.wrapTransport ?? ((transport): Transport => transport))(hub.connect()),
+    transport: link,
     state: world.state,
     // Доставки идут в темпе рассылки снапшотов — знаменатель альфы главного
     // потока берётся оттуда же (SHELL-3).
@@ -239,6 +247,20 @@ function networkRig(
     probe: shellProbe,
     posted,
     systemRuns: () => runs,
+    rejoin: () => {
+      // Канал рвётся так же, как его рвёт сеть: сервер отвязывает соединение от
+      // слота, но слот остаётся за игроком (NTR-6).
+      link.close('обрыв канала');
+      const back = new MatchClient({
+        playerId: PLAYER_ID,
+        version: config.version,
+        content: pack,
+      });
+      link = wrap(hub.connect());
+      shell.reattach(back, link);
+      shell.stop();
+      return back;
+    },
   };
 }
 
@@ -470,6 +492,44 @@ describe('сетевой режим: тонкий клиент против ло
     // которую только оно и даёт: сколько ввода игрока унесла перемотка (NTR-10).
     expect(rig.client.metrics.inputsStranded).toBeGreaterThan(0);
     expect(rig.systemRuns()).toBe(0);
+  });
+});
+
+describe('возврат в матч тем же каналом главного потока (NTR-17, SHELL-5, SHELL-7)', () => {
+  it('реаттач: второго handshake нет, первая доставка — snap, таблица видов сквозная', async () => {
+    const rig = networkRig();
+    await playTicks(rig, 6);
+    const beforeReturn = rig.probe.views.length;
+    expect(beforeReturn).toBeGreaterThan(0);
+    expect(rig.posted.filter((type) => type === 'hello')).toHaveLength(1);
+
+    // Канал рвётся, и владелец слота возвращается НОВЫМ клиентом (NTR-17,
+    // design D5): курсоры, буфер интерполяции и оценка тика у него чистые.
+    const returned = rig.rejoin();
+    // Разрыв и новый `Hello` доезжают до сервера в порядке отправки (NTR-2).
+    await settle();
+    expect(rig.shell.client).toBe(returned);
+
+    await playTicks(rig, 6);
+    expect(returned.slot).toBe(0);
+    expect(returned.metrics.snapshotsApplied).toBeGreaterThan(0);
+
+    // Handshake главному потоку по-прежнему ОДИН (SHELL-5): для него сессия не
+    // начиналась заново — режим, темп, террейн и словарь статов те же.
+    expect(rig.posted.filter((type) => type === 'hello')).toHaveLength(1);
+
+    // Первая доставка после возврата — snap'ом (NTR-17): между картиной до
+    // разрыва и «сейчас» матча промежуточных положений не существовало.
+    const after = rig.probe.views.slice(beforeReturn) as { snapAll: boolean }[];
+    expect(after.length).toBeGreaterThan(0);
+    expect(after[0]!.snapAll).toBe(true);
+    expect(after.slice(1).some((view) => view.snapAll)).toBe(false);
+
+    // Таблица видов сквозная: индексы конверта — числа, главный поток копит их
+    // подряд, и продюсер, начавший нумерацию заново, назвал бы сущностям чужие
+    // виды. Своя сущность в персональном снапшоте есть всегда (NET-15).
+    const view = rig.remote.view!;
+    expect([...view.entities.values()][0]!.kind).toBe('Hero');
   });
 });
 

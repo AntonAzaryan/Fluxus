@@ -22,7 +22,12 @@ import { MatchHost } from '../src/server/host.js';
 import { MatchServer, type MatchConfig } from '../src/server/matchServer.js';
 import { LoopbackHub } from '../src/transport/loopback.js';
 import type { Transport } from '../src/transport/transport.js';
-import type { ClientMessage, GameVersion, WireInput } from '../src/protocol/messages.js';
+import type {
+  ClientMessage,
+  ConnectionRole,
+  GameVersion,
+  WireInput,
+} from '../src/protocol/messages.js';
 
 export const BUILD_ID = 'test-build-0001';
 
@@ -255,8 +260,18 @@ export function harness(config: MatchConfig = duelConfig()): Harness {
 // ------------------------------------------------------ сообщения для тестов,
 // работающих с `MatchServer` напрямую, без транспорта (NTR-3)
 
-export function hello(playerId: string, version: GameVersion, observer = false): ClientMessage {
-  return { type: 'Hello', playerId, version, observer };
+/**
+ * `Hello` тестов. Роль соединения (NTR-18) — обязательное поле протокола
+ * (NTR-4), и умолчание здесь ТЕСТОВОЕ: подавляющее большинство входов — вход
+ * владельца за свой слот, а заместитель называется явно.
+ */
+export function hello(
+  playerId: string,
+  version: GameVersion,
+  observer = false,
+  role: ConnectionRole = 'owner',
+): ClientMessage {
+  return { type: 'Hello', playerId, version, role, observer };
 }
 
 export function wireInput(tick: number, seq: number, moveX = 0, moveY = 0, buttons = 0): WireInput {
