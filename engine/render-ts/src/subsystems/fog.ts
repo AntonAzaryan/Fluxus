@@ -67,9 +67,10 @@ import { costSink, type RenderCostCounters } from '../cost.js';
 import type { DebugSource } from '../debug/contract.js';
 import { fogMaskDebugSource } from '../debug/fogSource.js';
 import { resolveFogConfig, type FogRenderConfig } from '../fog/config.js';
+import type { FogRendererLike, FogStatNames, FogSubsystemOptions } from '../fog/contract.js';
 import { POST_FRAGMENT, POST_VERTEX, createMaskTexture } from '../fog/postPass.js';
-import { FogMinimapSurface, type FogLayerCanvas, type FogMinimapLayer } from '../fog/layer.js';
-import { FogDirtyBlocks, dissolveWindow } from '../fog/dirty.js';
+import { FogMinimapSurface, type FogMinimapLayer } from '../fog/layer.js';
+import { FogBlitCadence, FogDirtyBlocks, dissolveWindow } from '../fog/dirty.js';
 import {
   MaskRebuild,
   REBUILD_BUDGET_MASK_AREAS,
@@ -97,66 +98,6 @@ import {
  * объёма остаётся этот потолок.
  */
 const FOG_MASK_RESOLUTION = 'fog.maskResolution';
-
-/** Имена статов доставки (HUD-8, design D4): радиус обзора и команда сущности. */
-export interface FogStatNames {
-  readonly visionRadius: string;
-  readonly team: string;
-}
-
-/**
- * Рендерер глазами пост-прохода — структурный минимум `THREE.WebGLRenderer`:
- * подсистема не требует живого WebGL в тестах, а в сборке это он и есть.
- */
-export interface FogRendererLike {
-  render(scene: THREE.Object3D, camera: THREE.Camera): void;
-  setRenderTarget(target: THREE.WebGLRenderTarget | null): void;
-  getDrawingBufferSize(target: THREE.Vector2): THREE.Vector2;
-}
-
-export interface FogSubsystemOptions {
-  /** Сетка террейна сцены — прямоугольник маски и cliff-отрезки (TERR-5, FOW-9). */
-  readonly grid: TerrainGrid;
-  /** Имена статов доставки (design D4): их объявляет конфигурация сборки воркера. */
-  readonly stats: FogStatNames;
-  /**
-   * Сущность героя игрока — из неё читается команда, чьи наблюдатели открывают
-   * маску (design D4). Функция, а не значение: ID приезжает handshake'ом позже
-   * сборки подсистем.
-   */
-  readonly hero: () => EntityId | null;
-  /** Секция `fog` парного документа (PRES-2); нет — умолчания (FOW-10). */
-  readonly config?: PresentationFog;
-  /**
-   * Фабрика канваса слоя миникарты (design D6) — её приносит сборка (в
-   * браузере — `document.createElement('canvas')`): пакет рендера DOM не
-   * трогает. Без фабрики слоя миникарты нет; маска и пост-проход работают.
-   */
-  readonly createCanvas?: (width: number, height: number) => FogLayerCanvas;
-  /**
-   * Бюджет порционной перестройки маски — тексель-операций на кадр (design D1,
-   * PERF-3). Не задан — от площади маски (`REBUILD_BUDGET_MASK_AREAS`): полная
-   * перестройка укладывается в ≤3 кадра. `Infinity` — перестройка целиком в
-   * первом же кадре после доставки: так меряют РАБОТУ перестройки стенды, чей
-   * каденс кадров не равен игровому (`integration-ts`), и так же она идёт при
-   * снапе.
-   *
-   * Единицы машинно-независимые (тексели, а не миллисекунды): счётчики
-   * стоимости остаются воспроизводимыми побитово (PERF-3).
-   */
-  readonly rebuildBudget?: number;
-  /**
-   * Пост-обработка кадра портом (`rendering` REND-34, FOW-7, change
-   * `bloom-tone-mapping` design D2): при активной цепочке маскирующий проход
-   * читает ЕЁ выход, а сцену подсистема тумана не рисует. Порта нет — кадр
-   * ровно такой, каким был до REND-34.
-   *
-   * Порт, а не ссылка на подсистему: подсистемы не знают друг о друге, а общий
-   * объект им приносит сборка — тот же приём, что у приёмника теневых кастеров.
-   * Владелец порта регистрируется РАНЬШЕ тумана и переживает его снос (REND-31).
-   */
-  readonly post?: ScenePostSource;
-}
 
 export class FogSubsystem implements RenderSubsystem {
   readonly name = 'fog';
@@ -199,6 +140,11 @@ export class FogSubsystem implements RenderSubsystem {
    * платит за туман в кадре ничего.
    */
   private dirty: FogDirtyBlocks;
+  /**
+   * Каденс блита миникарты в окне рассеивания (`FOG_MINIMAP_BLIT_SECONDS`):
+   * канвас перерисовывается не каждым кадром, окна пропущенных копятся.
+   */
+  private readonly minimapCadence = new FogBlitCadence();
 
   /**
    * Перестройка маски (change `fog-mask-budgeted-rebuild`, design D1–D3): три
@@ -334,6 +280,7 @@ export class FogSubsystem implements RenderSubsystem {
     this.rebuild.abort();
     this.dirty.clear();
     this.settling = false;
+    this.minimapCadence.reset();
   }
 
   /**
@@ -432,26 +379,38 @@ export class FogSubsystem implements RenderSubsystem {
     this.shown.set(this.mask.data);
     this.settling = false;
     this.dirty.clear();
-    this.publishTexture(cost, null);
+    this.publishTexture(cost);
     this.built = true;
   }
 
   /**
-   * Загрузка растра в текстуру и блит слоя миникарты. Байт на тексель
-   * (RedFormat, UnsignedByteType): весь растр уезжает в текстуру — цена
-   * разрешения маски, а не наблюдателей. Точка счёта ОДНА на загрузку и живёт
-   * здесь, у поднятого флага версии: создание текстуры (`createMaskTexture`)
-   * своего трафика не имеет — три сливает его флаг с этим в одну загрузку.
+   * ПОЛНАЯ публикация показанной маски: загрузка растра в текстуру и блит слоя
+   * миникарты целиком — первая перестройка, снап (REND-2) и выключенное
+   * рассеивание. Полный блит накрывает всё, что могло копиться в окне каденса,
+   * — накопитель и счёт времени сбрасываются вместе с ним.
+   */
+  private publishTexture(cost: RenderCostCounters | undefined): void {
+    this.uploadTexture(cost);
+    this.minimap.blit(this.mask, this.shown, this.colorHex, cost, null);
+    this.minimapCadence.reset();
+  }
+
+  /**
+   * Загрузка растра в текстуру. Байт на тексель (RedFormat, UnsignedByteType):
+   * весь растр уезжает в текстуру — цена разрешения маски, а не наблюдателей.
+   * Точка счёта ОДНА на загрузку и живёт здесь, у поднятого флага версии:
+   * создание текстуры (`createMaskTexture`) своего трафика не имеет — три
+   * сливает его флаг с этим в одну загрузку.
    *
    * Частичной загрузки нет намеренно (Non-Goals change
-   * `fog-mask-budgeted-rebuild`): грязное окно правит блит миникарты и проход
-   * рассеивания, а растр уезжает целиком — `copyTextureToTexture` потребовал бы
-   * расширения `FogRendererLike` и всех тестовых дублей.
+   * `fog-mask-budgeted-rebuild`, FOW-11 «принятый остаток»): окно правит блит
+   * миникарты и проход рассеивания, а растр уезжает целиком —
+   * `copyTextureToTexture` потребовал бы расширения `FogRendererLike` и всех
+   * тестовых дублей.
    */
-  private publishTexture(cost: RenderCostCounters | undefined, region: FogDirtyBlocks | null): void {
+  private uploadTexture(cost: RenderCostCounters | undefined): void {
     this.maskTexture.needsUpdate = true;
     if (cost !== undefined) cost.fogMaskUploadBytes += this.mask.data.length;
-    this.minimap.blit(this.mask, this.shown, this.colorHex, cost, region);
   }
 
   /**
@@ -522,11 +481,17 @@ export class FogSubsystem implements RenderSubsystem {
   private onPublished(instant: boolean, cost: RenderCostCounters | undefined): void {
     const first = !this.built;
     this.built = true;
+    // Публикация открыла СВЕЖЕЕ окно (устоявшаяся сцена пришла в движение)?
+    // Тогда первый его кадр рассеивания блитует миникарту сразу, не дожидаясь
+    // каденса: слой не должен запаздывать на треть каденса от начала скачка.
+    // Окно, открытое поверх идущего рассеивания, каденс не сбивает.
+    let fresh = false;
     if (instant) {
       this.shown.set(this.mask.data);
       this.dirty.clear();
       this.settling = false;
     } else {
+      fresh = !this.settling && !this.dirty.empty;
       this.settling = !this.dirty.empty;
     }
     // Текстура и слой миникарты отражают ПОКАЗАННУЮ маску — а её эта публикация
@@ -534,7 +499,10 @@ export class FogSubsystem implements RenderSubsystem {
     // рассеивание кадрами, и загрузка неизменных байтов здесь была бы платой ни
     // за что (PERF-3). Исключение — первая перестройка: слой миникарты обязан
     // существовать с неё (design D6).
-    if (instant || first) this.publishTexture(cost, null);
+    if (instant || first) this.publishTexture(cost);
+    // Засев — ПОСЛЕ полного блита первой перестройки: он сбрасывает каденс, а
+    // свежее окно обязано блитовать первым же кадром рассеивания.
+    if (fresh) this.minimapCadence.prime();
   }
 
   /**
@@ -543,6 +511,12 @@ export class FogSubsystem implements RenderSubsystem {
    * симметричны. Работа кадра пропорциональна ещё не устоявшейся области, а не
    * всему растру, и по мере схождения окно сжимается; сошлось — кадры перестают
    * платить и за проход, и за загрузку текстуры, и за блит миникарты.
+   *
+   * Показанная маска и её текстура двигаются КАЖДЫМ кадром окна — рассеивание
+   * на экране плавное; канвас миникарты перерисовывается каденсом
+   * (`MINIMAP_BLIT_SECONDS`), а окна пропущенных кадров копятся общим
+   * прямоугольником. Схождение окна блитует накопленное немедленно — последнее
+   * значение каждого блока в канвасе оказывается всегда.
    */
   private dissolve(dt: number, cost: RenderCostCounters | undefined): void {
     if (!this.settling) return;
@@ -551,11 +525,15 @@ export class FogSubsystem implements RenderSubsystem {
     const step = Math.max(1, Math.round((255 * elapsed) / this.current.dissolveSeconds));
     const dirty = this.dirty;
     dissolveWindow(this.mask.data, this.shown, this.mask.width, this.mask.height, dirty, step);
-    this.publishTexture(cost, dirty);
-    // Блоки снимаются с окна ПОСЛЕ блита: иначе последнее их значение не
-    // доехало бы в канвас миникарты.
+    this.uploadTexture(cost);
+    const due = this.minimapCadence.advance(dirty, elapsed);
     dirty.flushSettled();
     this.settling = !dirty.empty;
+    // Финальный блит по схождении окна обязателен, каденс набран или нет.
+    if (due || !this.settling) {
+      this.minimap.blit(this.mask, this.shown, this.colorHex, cost, this.minimapCadence.region);
+      this.minimapCadence.reset();
+    }
   }
 
   /** Бюджет порции: авторский из опций либо от площади маски (design D1). */
@@ -665,6 +643,8 @@ export class FogSubsystem implements RenderSubsystem {
       this.rebuild.budget = this.budgetFor(this.mask);
       this.rebuild.abort();
       this.settling = false;
+      // Накопленное окно каденса — координаты прежнего растра: не переносится.
+      this.minimapCadence.reset();
       this.maskTexture.dispose();
       this.maskTexture = createMaskTexture(this.mask, this.shown);
       (this.postMaterial.uniforms.tMask as { value: THREE.Texture }).value = this.maskTexture;
@@ -689,6 +669,8 @@ export class FogSubsystem implements RenderSubsystem {
     // держит униформа пост-прохода выше.
     if (repaint && this.built) {
       this.minimap.blit(this.mask, this.shown, this.colorHex, costSink(), null);
+      // Полный блит перекраски накрыл и всё накопленное окно каденса.
+      this.minimapCadence.reset();
     }
     // Смена ширины градиента и консервативности доедет ближайшей перестройкой:
     // они — слоты сигнатуры входов (design D4); длительность fade читают

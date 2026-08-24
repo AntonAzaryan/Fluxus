@@ -221,7 +221,7 @@ export type {
 export { FogSubsystem } from './subsystems/fog.js';
 export { DEFAULT_FOG_CONFIG, resolveFogConfig } from './fog/config.js';
 export type { FogRenderConfig } from './fog/config.js';
-export type { FogRendererLike, FogStatNames, FogSubsystemOptions } from './subsystems/fog.js';
+export type { FogRendererLike, FogStatNames, FogSubsystemOptions } from './fog/contract.js';
 export type { FogLayerCanvas, FogLayerContext, FogMinimapLayer } from './fog/layer.js';
 export {
   VisibilityMask,

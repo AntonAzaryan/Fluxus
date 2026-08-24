@@ -8,7 +8,7 @@
  * здесь — структурный минимум, а не `HTMLCanvasElement`.
  */
 import type { RenderCostCounters } from '../cost.js';
-import { FOG_DIRTY_BLOCK, type FogDirtyBlocks } from './dirty.js';
+import type { FogTexelRect } from './dirty.js';
 import type { FogWorldRect, VisibilityMask } from './mask.js';
 
 /**
@@ -108,22 +108,24 @@ export class FogMinimapSurface {
    * Блит маски в канвас (design D6): пиксель — тон тумана с альфой `1 − свет`;
    * силу затемнения виджет применяет сам из того же конфига (HUD-6).
    *
-   * `dirty` — окно рассеивания (design D5): переписываются только его блоки, и
-   * в канвас уезжает их общий прямоугольник. Без окна (`null`) блит идёт по
-   * всему растру — так публикуется первая перестройка и снап (REND-2).
+   * `region` — накопленный прямоугольник окна рассеивания (design D5): блит
+   * идёт каденсом, а не каждым кадром, и прямоугольник объединяет блоки всех
+   * кадров с прошлого блита — альфа и канвас переписываются только в нём. Без
+   * окна (`null`) блит идёт по всему растру — так публикуется первая
+   * перестройка и снап (REND-2).
    *
    * Тон приходит sRGB-числом (`THREE.Color#getHex`, кэш подсистемы): канвасу
    * нужны sRGB-байты, а компоненты THREE.Color — рабочее (линейное)
    * пространство, тон брался бы темнее авторского. Числом, а не строкой,
-   * намеренно: блит зовётся каждым кадром рассеивания (FOW-7), и парсить цвет
-   * заново на каждый вызов — аллокация ни за что.
+   * намеренно: блит зовётся кадрами каденса рассеивания (FOW-7), и парсить
+   * цвет заново на каждый вызов — аллокация ни за что.
    */
   blit(
     mask: VisibilityMask,
     shown: Uint8Array,
     hex: number,
     cost: RenderCostCounters | undefined,
-    dirty: FogDirtyBlocks | null = null,
+    region: FogTexelRect | null = null,
   ): void {
     if (this.create === null) return;
     if (this.canvas === null) {
@@ -152,9 +154,9 @@ export class FogMinimapSurface {
       }
       this.imageHex = hex;
     }
-    // Свежий буфер и смена тона — блит целиком: грязное окно накрыло бы лишь
-    // часть перекрашенных пикселей, и в канвасе остались бы два тона разом.
-    if (dirty === null || fresh || repainted) {
+    // Свежий буфер и смена тона — блит целиком: накопленное окно накрыло бы
+    // лишь часть перекрашенных пикселей, и в канвасе остались бы два тона разом.
+    if (region === null || fresh || repainted) {
       // Блит идёт по всему растру: та же квадратичная зависимость от разрешения,
       // что у обнуления и загрузки, но в главном потоке и попиксельно (PERF-3).
       // Сток уже прочитан вызывающим — здесь только инкремент, и он стоит ПОСЛЕ
@@ -164,45 +166,28 @@ export class FogMinimapSurface {
       context.putImageData(image, 0, 0);
       return;
     }
-    // Окно рассеивания (design D5): альфа переписывается только в грязных
-    // блоках, а в канвас уезжает их ОБЩИЙ прямоугольник. Ряды перевёрнуты (см.
-    // ниже), поэтому нижняя граница блоков даёт ВЕРХНЮЮ границу прямоугольника.
-    let xMin = mask.width;
-    let xMax = -1;
-    let yMin = mask.height;
-    let yMax = -1;
-    for (let row = 0; row < dirty.rows; row++) {
-      const y0 = row * FOG_DIRTY_BLOCK;
-      const y1 = Math.min(y0 + FOG_DIRTY_BLOCK, mask.height) - 1;
-      for (let column = 0; column < dirty.cols; column++) {
-        if (!dirty.isDirty(column, row)) continue;
-        const x0 = column * FOG_DIRTY_BLOCK;
-        const x1 = Math.min(x0 + FOG_DIRTY_BLOCK, mask.width) - 1;
-        this.alphaRows(image.data, mask, shown, y0, y1, x0, x1);
-        if (x0 < xMin) xMin = x0;
-        if (x1 > xMax) xMax = x1;
-        if (y0 < yMin) yMin = y0;
-        if (y1 > yMax) yMax = y1;
-      }
-    }
-    if (yMax < 0) return;
-    // Считается ПРЯМОУГОЛЬНИК, а не сумма блоков: копию в канвас делает
-    // `putImageData`, и платит она за весь прямоугольник целиком — кольцо
-    // рассеивания вокруг наблюдателя занимает лишь часть своего bbox, и сумма
-    // блоков занижала бы работу главного потока тем сильнее, чем тоньше маска
-    // (PERF-3). Перезапись альфы идёт по блокам внутри него, то есть дешевле, —
-    // но счётчик обязан называть большее из двух, а не меньшее.
+    // Накопленное окно рассеивания (design D5): пустое — блиту нечего делать.
+    if (region.x1 < region.x0 || region.y1 < region.y0) return;
+    // Прямоугольник и есть объём работы: копию в канвас делает `putImageData`,
+    // и платит она за него целиком — кольцо рассеивания вокруг наблюдателя
+    // занимает лишь часть своего bbox, и сумма блоков занижала бы работу
+    // главного потока тем сильнее, чем тоньше маска (PERF-3). Альфа
+    // переписывается по нему же: значения вне когда-либо грязных блоков не
+    // менялись, и та же запись возвращает их байт в байт.
     if (cost !== undefined) {
-      cost.fogMinimapTexels += (xMax - xMin + 1) * (yMax - yMin + 1);
+      cost.fogMinimapTexels += (region.x1 - region.x0 + 1) * (region.y1 - region.y0 + 1);
     }
+    this.alphaRows(image.data, mask, shown, region.y0, region.y1, region.x0, region.x1);
+    // Ряды перевёрнуты (см. `alphaRows`), поэтому нижняя граница окна даёт
+    // ВЕРХНЮЮ границу прямоугольника канваса.
     context.putImageData(
       image,
       0,
       0,
-      xMin,
-      mask.height - 1 - yMax,
-      xMax - xMin + 1,
-      yMax - yMin + 1,
+      region.x0,
+      mask.height - 1 - region.y1,
+      region.x1 - region.x0 + 1,
+      region.y1 - region.y0 + 1,
     );
   }
 

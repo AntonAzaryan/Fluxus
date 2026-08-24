@@ -943,6 +943,65 @@ describe('бюджетная перестройка маски и коалеси
     expect(frame.fogMinimapTexels).toBeGreaterThan(frame.fogDissolveTexels);
   });
 
+  it('блит миникарты идёт каденсом, финальный доводит канвас до целевой (design D5)', () => {
+    const canvases: FakeCanvas[] = [];
+    const fog = new FogSubsystem({
+      grid: flatGrid(16),
+      stats: STATS,
+      hero: () => 1,
+      config: { dissolveSeconds: 0.4 },
+      createCanvas: (width, height) => {
+        const canvas = fakeCanvas();
+        canvas.width = width;
+        canvas.height = height;
+        canvases.push(canvas);
+        return canvas;
+      },
+    });
+    fog.init(makeRenderContext());
+    fog.syncTick(makeTickView([observerView(1, 8, 8, 0, 3)]));
+    buildFogMask(fog);
+    const canvas = canvases[0]!;
+
+    // Свежее окно рассеивания блитует первым же кадром, не дожидаясь каденса.
+    const dt = 1 / 240;
+    fog.updateFrame(dt, 0);
+    const opened = canvas.puts;
+    expect(opened).toBeGreaterThan(1); // полный блит публикации + оконный
+
+    // Дальше кадры копят окно: до шага каденса (1/30 с — восемь кадров по
+    // 1/240) канвас не трогается, показанная маска при этом движется покадрово.
+    const shownBefore = fog.shownAt(8, 8);
+    for (let frame = 0; frame < 7; frame++) fog.updateFrame(dt, 0);
+    expect(canvas.puts).toBe(opened);
+    expect(fog.shownAt(8, 8)).toBeGreaterThan(shownBefore);
+    // Восьмой кадр набирает каденс — блит одного накопленного прямоугольника.
+    fog.updateFrame(dt, 0);
+    expect(canvas.puts).toBe(opened + 1);
+
+    // Рассеивание доигрывается: блитов сильно меньше, чем кадров, а финальный
+    // блит по схождении обязателен — канвас показывает целевую маску.
+    let frames = 0;
+    const putsBefore = canvas.puts;
+    while (frames < 400) {
+      const counters = createCostCounters();
+      withCostSink(counters, () => {
+        fog.updateFrame(dt, 0);
+      });
+      frames++;
+      if (counters.fogDissolveTexels === 0) break;
+    }
+    expect(frames).toBeGreaterThan(30);
+    expect(canvas.puts - putsBefore).toBeLessThan(frames / 4);
+    // Центр обзора полностью открыт и в канвасе: альфа тумана там нулевая.
+    const image = canvas.image!;
+    const tx = Math.floor(8 * 4);
+    const ty = Math.floor(8 * 4);
+    const alpha = image.data[((image.height - 1 - ty) * image.width + tx) * 4 + 3]!;
+    expect(fog.shownAt(8, 8)).toBe(1);
+    expect(alpha).toBe(0);
+  });
+
   it('смена тона перекрашивает слой миникарты событием правки (FOW-10, HUD-6)', () => {
     const { fog, canvases } = cachedSubsystem();
     fog.syncTick(makeTickView([observerView(1, 2.5, 4.5, 0, 3)]));

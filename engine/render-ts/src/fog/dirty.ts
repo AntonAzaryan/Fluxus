@@ -21,15 +21,95 @@ import { costSink } from '../cost.js';
 export const FOG_DIRTY_BLOCK = 16;
 
 /**
+ * Прямоугольник растра маски в текселях, границы ВКЛЮЧИТЕЛЬНЫЕ; пустой —
+ * `x1 < x0`. Накопленное окно блита миникарты живёт в такой форме: блит идёт
+ * каденсом, а не каждым кадром рассеивания, и прямоугольник объединяет окна
+ * кадров, прошедших с последнего блита.
+ */
+export interface FogTexelRect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** Пустой прямоугольник на месте: следующий `unionInto` начнёт с чистого листа. */
+function resetTexelRect(rect: FogTexelRect): void {
+  rect.x0 = Number.MAX_SAFE_INTEGER;
+  rect.y0 = Number.MAX_SAFE_INTEGER;
+  rect.x1 = -1;
+  rect.y1 = -1;
+}
+
+/**
+ * Каденс блита слоя миникарты в окне рассеивания, секунды мирового времени.
+ * Кадр рассеивания ведёт показанную маску и её текстуру ПОКАДРОВО — картинку
+ * основного вида каденс не трогает, — а канвас миникарты перерисовывается не
+ * чаще этого шага: на высоком fps попиксельный блит и `putImageData` каждый
+ * кадр были заметной долей просадки при скачке обзора, притом что поверхность
+ * миникарты мельче кадра на порядок (HUD-6 точности основного вида там не
+ * требует). Детерминизм счётчиков не задет: каденс считается от доставленного
+ * `dt`, а не от часов машины (PERF-3).
+ */
+const FOG_MINIMAP_BLIT_SECONDS = 1 / 30;
+
+/**
+ * Накопитель окна блита миникарты между кадрами каденса: окна пропущенных
+ * кадров объединяются прямоугольником, и очередной блит переписывает его
+ * целиком — последнее значение каждого когда-либо грязного блока доезжает в
+ * канвас всегда. Финальный блит по схождении окна решает вызывающий: окно
+ * кончилось — блит обязателен независимо от каденса.
+ */
+export class FogBlitCadence {
+  private readonly pending: FogTexelRect = { x0: 0, y0: 0, x1: -1, y1: -1 };
+  private due = 0;
+
+  constructor() {
+    resetTexelRect(this.pending);
+  }
+
+  /** Окно, накопленное с прошлого блита, — аргумент оконного блита слоя. */
+  get region(): FogTexelRect {
+    return this.pending;
+  }
+
+  /** Свежее окно рассеивания: первый его кадр блитует немедленно. */
+  prime(): void {
+    this.due = FOG_MINIMAP_BLIT_SECONDS;
+  }
+
+  /** Блит случился (оконный или полный) — накопление с чистого листа. */
+  reset(): void {
+    resetTexelRect(this.pending);
+    this.due = 0;
+  }
+
+  /**
+   * Окно кадра — в накопитель, время кадра — в счёт каденса; `true` — каденс
+   * набран, пора блитовать. Зовётся ДО `flushSettled`: блок, устоявшийся в
+   * этом кадре, обязан попасть в ближайший блит последним своим значением.
+   */
+  advance(dirty: FogDirtyBlocks, elapsed: number): boolean {
+    dirty.unionInto(this.pending);
+    this.due += elapsed;
+    return this.due >= FOG_MINIMAP_BLIT_SECONDS;
+  }
+}
+
+/**
  * Набор блоков, в которых показанная маска ещё не сошлась с целевой.
  *
- * Блоки снимаются с набора ДВУМЯ шагами (`settle` → `flushSettled`): блит
- * миникарты читает набор ПОСЛЕ прохода схождения, и блок, снятый прямо в
- * проходе, не доехал бы в канвас последним своим значением.
+ * Блоки снимаются с набора ДВУМЯ шагами (`settle` → `flushSettled`): окно
+ * кадра уходит в накопленный прямоугольник блита ПОСЛЕ прохода схождения, и
+ * блок, снятый прямо в проходе, не доехал бы в канвас последним своим
+ * значением.
  */
 export class FogDirtyBlocks {
   readonly cols: number;
   readonly rows: number;
+  /** Размер растра в текселях — правая и верхняя границы неполных блоков. */
+  private readonly width: number;
+  private readonly height: number;
   private readonly flags: Uint8Array;
   /** Блоки, устоявшиеся в текущем проходе; снимаются `flushSettled`. */
   private readonly settled: Int32Array;
@@ -39,6 +119,8 @@ export class FogDirtyBlocks {
   constructor(width: number, height: number) {
     this.cols = Math.max(1, Math.ceil(width / FOG_DIRTY_BLOCK));
     this.rows = Math.max(1, Math.ceil(height / FOG_DIRTY_BLOCK));
+    this.width = width;
+    this.height = height;
     this.flags = new Uint8Array(this.cols * this.rows);
     this.settled = new Int32Array(this.flags.length);
   }
@@ -65,6 +147,29 @@ export class FogDirtyBlocks {
   /** Блок устоялся в текущем проходе — снимется после блита (`flushSettled`). */
   settle(column: number, row: number): void {
     this.settled[this.settledCount++] = row * this.cols + column;
+  }
+
+  /**
+   * Объединяет тексельный bbox ТЕКУЩЕГО набора блоков в прямоугольник —
+   * накопление окна блита миникарты между кадрами каденса. Зовётся ДО
+   * `flushSettled`: блок, устоявшийся в этом кадре, обязан попасть в ближайший
+   * блит последним своим значением.
+   */
+  unionInto(rect: FogTexelRect): void {
+    if (this.live === 0) return;
+    for (let row = 0; row < this.rows; row++) {
+      const y0 = row * FOG_DIRTY_BLOCK;
+      const y1 = Math.min(y0 + FOG_DIRTY_BLOCK, this.height) - 1;
+      for (let column = 0; column < this.cols; column++) {
+        if (this.flags[row * this.cols + column] !== 1) continue;
+        const x0 = column * FOG_DIRTY_BLOCK;
+        const x1 = Math.min(x0 + FOG_DIRTY_BLOCK, this.width) - 1;
+        if (x0 < rect.x0) rect.x0 = x0;
+        if (x1 > rect.x1) rect.x1 = x1;
+        if (y0 < rect.y0) rect.y0 = y0;
+        if (y1 > rect.y1) rect.y1 = y1;
+      }
+    }
   }
 
   /** Снимает с набора блоки, устоявшиеся с прошлого `flushSettled`. */
@@ -107,7 +212,31 @@ export class FogDirtyBlocks {
   }
 }
 
-/** Различаются ли растры в прямоугольнике [x0, x1) × [y0, y1). */
+/**
+ * 32-битные виды растров для пословного сравнения в `differs`. Кэш по буферу:
+ * маска живёт двойным буфером со свопом ссылок, видов ровно два на подсистему,
+ * и заводить их на каждую публикацию было бы аллокацией в горячем пути.
+ */
+const WORD_VIEWS = new WeakMap<Uint8Array, Uint32Array>();
+
+function wordsOf(raster: Uint8Array): Uint32Array {
+  let view = WORD_VIEWS.get(raster);
+  if (view === undefined) {
+    view = new Uint32Array(raster.buffer, raster.byteOffset, raster.byteLength >> 2);
+    WORD_VIEWS.set(raster, view);
+  }
+  return view;
+}
+
+/**
+ * Различаются ли растры в прямоугольнике [x0, x1) × [y0, y1).
+ *
+ * Быстрый путь сравнивает по четыре текселя словом: разметка окна на публикации
+ * идёт по ВСЕМУ ещё чистому растру (`markChanged`), и побайтовый обход был
+ * заметной долей кадра публикации. Равенство слов не зависит от порядка байтов
+ * машины — детерминизм разметки не задет (PERF-3). Кромочные блоки с границами
+ * не по слову сравниваются как раньше, побайтово.
+ */
 function differs(
   previous: Uint8Array,
   next: Uint8Array,
@@ -117,6 +246,20 @@ function differs(
   y0: number,
   y1: number,
 ): boolean {
+  if ((width & 3) === 0 && (x0 & 3) === 0 && ((x1 - x0) & 3) === 0 && (previous.byteOffset & 3) === 0 && (next.byteOffset & 3) === 0) {
+    const p = wordsOf(previous);
+    const n = wordsOf(next);
+    const rowWords = width >> 2;
+    const from = x0 >> 2;
+    const count = (x1 - x0) >> 2;
+    for (let y = y0; y < y1; y++) {
+      const row = y * rowWords + from;
+      for (let i = 0; i < count; i++) {
+        if (p[row + i] !== n[row + i]) return true;
+      }
+    }
+    return false;
+  }
   for (let y = y0; y < y1; y++) {
     const row = y * width;
     for (let x = x0; x < x1; x++) {
