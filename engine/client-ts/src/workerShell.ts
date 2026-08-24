@@ -178,8 +178,20 @@ export class WorkerShell {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private nextTickAt = 0;
 
+  /**
+   * Наибольший исполненный ЖИВОЙ тик — граница `seekTo` (REW-7): точка
+   * остановки лежит в исполненном прошлом живой ветви. Тот же смысл, что у
+   * `liveFrontier` сервера матча (`MatchServer`): живой тик ставит границу
+   * равной себе, поэтому после возобновления с откаченного тика она опускается
+   * вместе с ним — записи канонического лога дальше неё принадлежат стёртой
+   * ветви, и доигрывать по ним нечего.
+   */
+  private liveFrontier: number;
+
   constructor(config: WorkerShellConfig) {
     this.config = config;
+    // Состояние до первого тика — тоже точка восстановления (REW-1).
+    this.liveFrontier = config.state.tick;
     this.clock = config.clock ?? (() => performance.now());
     this.tickMs = config.tickSeconds * 1000;
     this.sender = new ShellSender(config.port, config.sender);
@@ -238,6 +250,8 @@ export class WorkerShell {
     dispatch(result, [this.observer, ...(this.config.observers ?? [])]);
     if (!live) return;
 
+    // Живой тик ставит границу `seekTo` равной себе (REW-7) — как у сервера.
+    this.liveFrontier = state.tick;
     // Снапшоты — только с живых тиков (SNAP-1).
     this.config.history?.record(state);
     // Запрос перемотки дренируется ПОСЛЕ тика: ядро событие не исполняет, мир
@@ -435,22 +449,39 @@ export class WorkerShell {
    * режиме этого пути нет вовсе — запрос уезжает вводом на сервер
    * (`NetworkShell`), потому что собственной перемотки у клиента MUST NOT быть
    * ни при каких условиях (`netcode` NET-11).
+   *
+   * Команда приезжает каналом асинхронно и может разминуться с режимом мира:
+   * двойной клик паузы, `resume` в момент, когда ульта уже увела мир в
+   * `Rewinding`. Недопустимый для текущего режима переход поэтому
+   * ОТБРАСЫВАЕТСЯ, а не доводится до броска core-API (WSM-2, WSM-5, REW-8) из
+   * обработчика сообщений воркера: гонка канала — штатный случай, а не дефект
+   * вызывающей политики, каким перемотка вперёд является у `MatchServer.seekTo`.
    */
   private onControl(message: ControlMessage): void {
     const rewind = this.config.rewind;
     if (rewind === undefined) return;
     switch (message.action) {
       case 'pause':
+        // Разрешён из Running и из Rewinding (WSM-2, WSM-3); в Paused — no-op.
         rewind.pause();
         return;
       case 'resume':
-        rewind.resume();
+        if (rewind.mode === 'Paused') rewind.resume();
         return;
       case 'beginRewind':
-        rewind.beginRewind();
+        if (rewind.mode === 'Paused') rewind.beginRewind();
         return;
       case 'seekTo':
-        if (message.tick !== undefined) rewind.seekTo(message.tick);
+        if (message.tick === undefined || rewind.mode !== 'Rewinding') return;
+        // Точка остановки лежит в исполненном прошлом живой ветви (REW-7):
+        // `seekTo` вперёд границы доиграл бы мир реплеем по ПУСТОМУ логу
+        // вводов — до состояния, которого нет и не будет в каноническом логе.
+        if (message.tick > this.liveFrontier) return;
+        rewind.seekTo(message.tick);
+        // Стёртая ветвь уходит из истории здесь же, как в `stepScrub`: живые
+        // тики новой ветви пойдут по тем же номерам, и двух снапшотов на один
+        // тик в буфере быть не должно.
+        this.config.history?.dropAfter?.(this.config.state.tick);
         return;
     }
   }

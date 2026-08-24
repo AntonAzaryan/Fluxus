@@ -276,7 +276,15 @@ export class NetworkShell {
       // приёме: пачка могла лечь в ожидание ДО того, как эпоха выросла, и её тик
       // с тиками новой ветви несравним (NTR-16).
       if (batch.epoch < epoch) continue;
-      if (batch.tick < latest.tick) {
+      // Факты эпохи, которую применённое состояние ещё НЕ догнало: канал не
+      // упорядочен (NTR-2), и `Events` новой эпохи может обогнать её первый
+      // снапшот. Тик такой пачки с тиками текущей ветви несравним точно так же
+      // (NTR-16) — сравнение с `latest.tick` уложило бы её в `before`, то есть
+      // проиграло бы факты новой ветви на картинке старой и съело их. Пачка
+      // ждёт доставки состояния своей эпохи.
+      if (batch.epoch > epoch) {
+        rest.push(batch);
+      } else if (batch.tick < latest.tick) {
         for (const event of batch.events) {
           before.push({ type: event.type, tick: batch.tick, data: event.data });
         }
