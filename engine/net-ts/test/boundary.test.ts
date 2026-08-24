@@ -27,7 +27,7 @@ describe('зависимость односторонняя', () => {
   });
 
   it('ни один исходник ядра не ссылается на сетевой модуль', () => {
-    const offenders = coreSources().filter((file) => readFileSync(file, 'utf8').includes('@game-mvp/net'));
+    const offenders = coreSources().filter((file) => readFileSync(file, 'utf8').includes('@fluxus/net'));
     expect(offenders).toEqual([]);
   });
 });
@@ -42,12 +42,12 @@ describe('поверхность ядра не расширялась', () => {
   });
 
   it('сетевой слой обходится опубликованной поверхностью', () => {
-    // Импорт из глубины ядра (`@game-mvp/core/src/...`) означал бы, что граница
+    // Импорт из глубины ядра (`@fluxus/core/src/...`) означал бы, что граница
     // держится на честном слове, а не на экспортах.
     const netRoot = new URL('../src/', import.meta.url).pathname;
     const offenders = readdirSync(netRoot, { recursive: true, encoding: 'utf8' })
       .filter((entry) => entry.endsWith('.ts'))
-      .filter((entry) => readFileSync(join(netRoot, entry), 'utf8').includes('@game-mvp/core/'));
+      .filter((entry) => readFileSync(join(netRoot, entry), 'utf8').includes('@fluxus/core/'));
     expect(offenders).toEqual([]);
   });
 });

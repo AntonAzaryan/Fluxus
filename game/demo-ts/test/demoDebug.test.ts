@@ -13,7 +13,7 @@
  * прогоне нет, а панель — обычный DOM приложения (design D10).
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { createTerrainGrid, type EntityId, type TerrainGrid } from '@game-mvp/core';
+import { createTerrainGrid, type EntityId, type TerrainGrid } from '@fluxus/core';
 import {
   PresentationStage,
   RenderDebugLayer,
@@ -25,9 +25,9 @@ import {
   type EntityView,
   type RenderContext,
   type TickView,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 import * as THREE from 'three';
-import type { AssetService } from '@game-mvp/assets';
+import type { AssetService } from '@fluxus/assets';
 import {
   DEBUG_GLOBAL_KEY,
   DEBUG_STORAGE_KEY,

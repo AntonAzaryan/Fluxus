@@ -1,5 +1,5 @@
 {
-  "name": "@game-mvp/hud",
+  "name": "@fluxus/hud",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,9 +17,9 @@
     "node": ">=22.18 <23 || ^24 || >=26"
   },
   "dependencies": {
-    "@game-mvp/assets": "*",
-    "@game-mvp/client": "*",
-    "@game-mvp/render": "*",
+    "@fluxus/assets": "*",
+    "@fluxus/client": "*",
+    "@fluxus/render": "*",
     "three": "^0.185.1"
   },
   "devDependencies": {

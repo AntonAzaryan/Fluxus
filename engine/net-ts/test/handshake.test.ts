@@ -7,7 +7,7 @@
  * ассетами, — и слитый исход отправил бы игрока чинить не то.
  */
 import { describe, expect, it } from 'vitest';
-import { fixed } from '@game-mvp/core';
+import { fixed } from '@fluxus/core';
 import {
   BUILD_ID,
   connectClient,

@@ -12,8 +12,8 @@
  * буфера или к сырому RangeError из конструктора TypedArray.
  */
 import { describe, expect, it } from 'vitest';
-import { tick, type WorldMode } from '@game-mvp/core';
-import { ViewBuffer, type ExtractedTick } from '@game-mvp/render';
+import { tick, type WorldMode } from '@fluxus/core';
+import { ViewBuffer, type ExtractedTick } from '@fluxus/render';
 import { CODEC_VERSION, readTick, requiredBytes, writeTick } from '../src/index.js';
 import { PLAYER_ID, STEP, TICK_SECONDS, makeExtractor, makeRig, snapshotView } from './fixtures.js';
 

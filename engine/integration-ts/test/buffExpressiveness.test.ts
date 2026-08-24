@@ -29,7 +29,7 @@ import {
   type Simulation,
   type SimulationState,
   type WorldState,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import { AURAD, BURN, CHILLED, PASSIVE, buffScene } from './fixtures.js';
 
 interface Stand {

@@ -22,7 +22,7 @@ import {
   STEP_VECTOR,
   type AbilityCatalog,
   type Expression,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import * as THREE from 'three';
 
 /** Разбиение единичной окружности: круглая на глаз и дешёвая — фигур в кадре единицы. */

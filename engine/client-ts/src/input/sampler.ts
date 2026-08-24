@@ -4,7 +4,7 @@
  * квантование float → Q16.16 живут только здесь — источники о битах, fixed
  * и `InputFrame` не знают.
  */
-import { FIXED_ONE, fixed, type Vec2 } from '@game-mvp/core';
+import { FIXED_ONE, fixed, type Vec2 } from '@fluxus/core';
 import { TURN_UNITS, type ActionSink, type ContinuousSample, type InputSource } from './types.js';
 
 /** Готовый канонический ввод тика — аргументы `RemoteHost.sendInput` (SHELL-6). */

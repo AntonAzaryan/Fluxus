@@ -37,7 +37,7 @@ import {
   type StringResources,
   type ValidationRule,
   type ViewportToolContribution,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   createWorkspaceFrame,
   issueText,
@@ -50,7 +50,7 @@ import {
   type WorkspaceArea,
   type WorkspaceFrame,
 } from '../src/index.js';
-import { presentationPathOf } from '@game-mvp/assets';
+import { presentationPathOf } from '@fluxus/assets';
 import {
   BLENDER_BUNDLES,
   SOURCE_EXTENSIONS,
@@ -59,7 +59,7 @@ import {
   sourcePathOf,
   spatialLayerSyncRule,
   type SpatialLayerSourceCache,
-} from '@game-mvp/blender-ts';
+} from '@fluxus/blender-ts';
 import { watchExternalDocuments } from './documentRefresh.js';
 import { createAssetModule } from '../src/areas/assetModule.js';
 import {

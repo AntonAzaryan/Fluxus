@@ -14,7 +14,7 @@ import {
   runScenario,
   snapshotToPlain,
   world as coreWorld,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   connectClient,
   duelConfig,
@@ -137,7 +137,7 @@ describe('матч двух игроков', () => {
     const { a, server } = await playMatch(16);
 
     // Локальный мир клиента поднят ради сверки хешей и остался на worldInit:
-    // предсказания в MVP нет, и мир вперёд клиент не двигает.
+    // предсказания пока нет, и мир вперёд клиент не двигает.
     expect(a.client.worldInitHash).toBe(server.worldInitHash);
     expect(a.client.latest!.tick).toBeGreaterThan(0);
   });

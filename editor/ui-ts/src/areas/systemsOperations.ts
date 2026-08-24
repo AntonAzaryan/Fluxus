@@ -39,7 +39,7 @@ import {
   type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   BODY_KEY,
   EVENT_ACTION,

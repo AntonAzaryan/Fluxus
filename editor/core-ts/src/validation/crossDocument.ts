@@ -47,7 +47,7 @@
  * есть заводил вторую реализацию правила (ED-1, ED-30). Раскладку знает тот,
  * кто собирает редактор (ED-25); правило знает только отношение.
  */
-import { ARENA_PREFAB, TERRAIN_PREFAB } from '@game-mvp/core';
+import { ARENA_PREFAB, TERRAIN_PREFAB } from '@fluxus/core';
 import {
   getAtPath,
   isJsonArray,

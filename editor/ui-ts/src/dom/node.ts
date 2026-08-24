@@ -24,7 +24,7 @@
  * высота строки из токена). Виджету достаётся `vars` — только пользовательские
  * свойства, только для параметра раскладки вроде глубины узла дерева.
  */
-import { formatIssue, type TextSource, type ValidationIssue } from '@game-mvp/editor-core';
+import { formatIssue, type TextSource, type ValidationIssue } from '@fluxus/editor-core';
 
 /**
  * Откуда взялся текст. `resource` — строка из локали (ED-27); `value` —

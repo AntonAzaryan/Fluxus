@@ -22,7 +22,7 @@ import {
   runOperationRoundTrip,
   type EditorSession,
   type MemoryHost,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { collectTexts, findAll, type UiNode } from '../src/dom/node.js';
 import { uiResources } from '../src/i18n/uiBundles.js';
 import {

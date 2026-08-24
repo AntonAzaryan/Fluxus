@@ -46,7 +46,7 @@ import {
   validateQualityPreset,
   type PresentationStage,
   type QualityPreset,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 import performanceJson from './presets/performance.json';
 import balancedJson from './presets/balanced.json';
 import ultraJson from './presets/ultra.json';

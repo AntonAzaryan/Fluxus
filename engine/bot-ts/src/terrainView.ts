@@ -20,7 +20,7 @@
  * Fixed → float здесь же, на границе (BOT-5): внутрь мозга уезжают мировые
  * единицы обычными числами.
  */
-import { cellAt, createTerrainGrid, fixed, type SceneDef, type TerrainGrid } from '@game-mvp/core';
+import { cellAt, createTerrainGrid, fixed, type SceneDef, type TerrainGrid } from '@fluxus/core';
 
 export interface BotTerrain {
   /** Размер клетки в мировых единицах (TERR-2): шаг, которым имеет смысл щупать рельеф. */

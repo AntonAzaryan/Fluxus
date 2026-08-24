@@ -29,14 +29,14 @@
  * лежит в документе, — записать «почти число» значило бы положить в документ
  * то, чего схема не допускает (ED-3).
  */
-import { fixed } from '@game-mvp/core';
+import { fixed } from '@fluxus/core';
 import {
   ContributionRegistry,
   type ContributionReader,
   type FieldEditorContribution,
   type JsonValue,
   type StringResources,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { documentValue, type UiNode, type UiText } from '../dom/node.js';
 import { numberField, select, textField, toggle } from '../widgets/field.js';
 import type { ValidationState } from '../widgets/validation.js';

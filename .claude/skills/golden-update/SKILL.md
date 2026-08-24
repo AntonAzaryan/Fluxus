@@ -22,7 +22,7 @@ compatibility: Run from the repository root workspace
 npm run golden
 ```
 
-Она делает **два шага в правильном порядке**: сначала `npm run record -w @game-mvp/integration` (UPDATE_MATCHES=1 — переигрывает loopback-матчи и переписывает `match-*.scenario.json`, CLI-10), затем `npm run golden -w @game-mvp/core` (UPDATE_GOLDEN=1 — переписывает все `*.golden.json`, включая пары к свежезаписанным match-сценариям). Запуск только core-части при изменившемся сетевом слое оставит `match-*` рассинхронизированными.
+Она делает **два шага в правильном порядке**: сначала `npm run record -w @fluxus/integration` (UPDATE_MATCHES=1 — переигрывает loopback-матчи и переписывает `match-*.scenario.json`, CLI-10), затем `npm run golden -w @fluxus/core` (UPDATE_GOLDEN=1 — переписывает все `*.golden.json`, включая пары к свежезаписанным match-сценариям). Запуск только core-части при изменившемся сетевом слое оставит `match-*` рассинхронизированными.
 
 После перезаписи:
 

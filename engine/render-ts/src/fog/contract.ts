@@ -5,8 +5,8 @@
  * уходят через `index.ts` тем же путём, что и раньше.
  */
 import type * as THREE from 'three';
-import type { EntityId, TerrainGrid } from '@game-mvp/core';
-import type { PresentationFog } from '@game-mvp/assets';
+import type { EntityId, TerrainGrid } from '@fluxus/core';
+import type { PresentationFog } from '@fluxus/assets';
 import type { ScenePostSource } from '../types.js';
 import type { FogLayerCanvas } from './layer.js';
 

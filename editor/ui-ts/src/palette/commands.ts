@@ -28,7 +28,7 @@
  * раньше вкладов. Объявить их здесь значило бы объявить сочетание, которого
  * команда никогда не получит; каркас на такое объявление и отвечает отказом.
  */
-import type { ContributionRegistry, StringResources } from '@game-mvp/editor-core';
+import type { ContributionRegistry, StringResources } from '@fluxus/editor-core';
 import { documentValue } from '../dom/node.js';
 import type { WorkspaceArea } from '../frame/area.js';
 import type { CommandTarget, PaletteCommand } from './palette.js';

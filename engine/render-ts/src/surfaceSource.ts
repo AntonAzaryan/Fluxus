@@ -21,8 +21,8 @@
  * поверхность), чтобы подсистема террейна инвалидировала свои чанки точечно, а
  * не пересобирала арену на каждый мазок.
  */
-import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
-import type { AssetState, TerrainCurvatureMap } from '@game-mvp/assets';
+import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
+import type { AssetState, TerrainCurvatureMap } from '@fluxus/assets';
 import type { RenderContext } from './types.js';
 import { createVisualSurface, type MutableVisualSurface } from './visualSurface.js';
 import { WalkableSurfaceRegistry, type WalkablePlacement } from './walkableSurface.js';

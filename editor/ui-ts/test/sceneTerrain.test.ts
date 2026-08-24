@@ -16,14 +16,14 @@
  *   меняет конфиг сцены ни на байт;
  * - непрерывный мазок — одна запись истории (ED-18).
  */
-import { FIXED_ONE, createTerrainGrid, loadScene, type SceneDef, type TerrainDef } from '@game-mvp/core';
-import { validateCurvatureMap } from '@game-mvp/assets';
+import { FIXED_ONE, createTerrainGrid, loadScene, type SceneDef, type TerrainDef } from '@fluxus/core';
+import { validateCurvatureMap } from '@fluxus/assets';
 import {
   getAtPath,
   runOperationRoundTrip,
   type EditorSession,
   type JsonValue,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { describe, expect, it } from 'vitest';
 import { sceneDraft } from '../src/areas/sceneDocuments.js';
 import { TERRAIN_ASSET } from '../src/areas/sceneProject.js';

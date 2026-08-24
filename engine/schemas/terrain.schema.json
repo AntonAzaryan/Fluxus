@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://game-mvp.local/schemas/terrain.schema.json",
+  "$id": "https://fluxus.local/schemas/terrain.schema.json",
   "title": "Ассет террейна (TERR-2, TERR-3)",
   "type": "object",
   "additionalProperties": false,

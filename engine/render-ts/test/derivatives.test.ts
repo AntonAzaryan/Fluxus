@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { VAT_TEXELS_PER_BONE, bakeDerivatives, type BakedDerivatives } from '@game-mvp/assets';
+import { VAT_TEXELS_PER_BONE, bakeDerivatives, type BakedDerivatives } from '@fluxus/assets';
 import { buildSharedModel, createModelInstance } from '../src/index.js';
 import { makeModel } from './fixtures.js';
 

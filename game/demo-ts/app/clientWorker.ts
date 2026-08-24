@@ -8,7 +8,7 @@
  * SES-1, SES-3), — а клиент не видит и её. Соло-режим живёт в `worker.ts` и
  * этого файла не касается вовсе.
  */
-import { shellPort } from '@game-mvp/client';
+import { shellPort } from '@fluxus/client';
 import { DEMO_PLAYERS } from './match.js';
 import { joinDemoMatch } from './netClient.js';
 import { directRendezvous, tabRendezvous, type DemoRendezvous } from './rendezvous.js';

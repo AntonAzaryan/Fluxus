@@ -6,7 +6,7 @@
  */
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import type { DecodedImage, NormalizedModel } from '@game-mvp/assets';
+import type { DecodedImage, NormalizedModel } from '@fluxus/assets';
 import { applySkin, buildSharedModel, createModelInstance, skinTextureSources } from '../src/index.js';
 import type { SkinTextureSource } from '../src/model/skins.js';
 import { makeAssets, makeModel } from './fixtures.js';

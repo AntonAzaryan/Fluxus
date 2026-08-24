@@ -63,8 +63,8 @@ import { fileURLToPath } from 'node:url';
 // лежит `.ts` — типы Node стрипает сам (>=22.18), хук добавляет остальное. Тот
 // же приём, что у `core-ts/bin/sim.mjs`; регистрация обязана случиться ДО
 // динамического импорта ниже, поэтому импорт статический, а импорт профиля — нет.
-import '@game-mvp/net/bin/tsHook.mjs';
-import { flag, option } from '@game-mvp/net/bin/matchFile.mjs';
+import '@fluxus/net/bin/tsHook.mjs';
+import { flag, option } from '@fluxus/net/bin/matchFile.mjs';
 
 const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
 const PROFILES = join(PACKAGE, 'bench', 'profiles');

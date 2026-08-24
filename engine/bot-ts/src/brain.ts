@@ -20,7 +20,7 @@
  * NET-12..15). Ничего, кроме шага, мозг не получает ни при каком размещении
  * бота — в том числе когда бот собран в одном процессе с сервером.
  */
-import type { ClientStep } from '@game-mvp/net';
+import type { ClientStep } from '@fluxus/net';
 import type { BotIntent } from './boundary.js';
 import type { BotProfile } from './profile.js';
 

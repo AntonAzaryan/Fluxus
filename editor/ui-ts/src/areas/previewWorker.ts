@@ -12,7 +12,7 @@
  * handshake и конвертов тиков (SHELL-2, SHELL-5), — записать в документы отсюда
  * нечем.
  */
-import { shellPort } from '@game-mvp/client';
+import { shellPort } from '@fluxus/client';
 import { isPreviewSceneMessage, startPreviewSimulation } from './scenePreview.js';
 
 const port = shellPort(self as unknown as Worker);

@@ -33,7 +33,7 @@ import {
   type SimulationState,
   type VisibilityOptions,
   type WorldState,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 
 export interface MatchWorldDef {
   readonly scene: SceneDef;

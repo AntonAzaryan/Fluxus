@@ -31,7 +31,7 @@ import {
   type SceneDef,
   type SimulationState,
   type System,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   LoopbackHub,
   MatchClient,
@@ -43,8 +43,8 @@ import {
   type MatchConfig,
   type ServerMessage,
   type Transport,
-} from '@game-mvp/net';
-import { Extractor, kindByTags, type RenderSubsystem, type TickView } from '@game-mvp/render';
+} from '@fluxus/net';
+import { Extractor, kindByTags, type RenderSubsystem, type TickView } from '@fluxus/render';
 import { NetworkShell, RemoteHost, WorkerShell, type ShellPort } from '../src/index.js';
 import {
   PLAYER_ID,

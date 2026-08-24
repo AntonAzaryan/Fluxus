@@ -24,8 +24,8 @@ import {
   type SceneDef,
   type Simulation,
   type SimulationState,
-} from '@game-mvp/core';
-import { REWIND_REQUEST_EVENT } from '@game-mvp/net';
+} from '@fluxus/core';
+import { REWIND_REQUEST_EVENT } from '@fluxus/net';
 import { WorkerShell, type ControlMessage, type ShellHistory } from '../src/index.js';
 import { PLAYER_ID, TICK_SECONDS, makeExtractor, sceneDef, syncPortPair } from './fixtures.js';
 

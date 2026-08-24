@@ -24,9 +24,9 @@
  * Рандеву заканчивается транспортом и заканчивается НА ЭТОМ (SES-3): дальше
  * идёт хендшейк матча (NTR-5), одинаковый во всех режимах.
  */
-import type { RawPort } from '@game-mvp/bot';
-import { connectWebSocket, type Transport } from '@game-mvp/net';
-import { portTransport, shellPort } from '@game-mvp/client';
+import type { RawPort } from '@fluxus/bot';
+import { connectWebSocket, type Transport } from '@fluxus/net';
+import { portTransport, shellPort } from '@fluxus/client';
 import { slotCandidates } from './mode.js';
 
 export interface DemoRendezvous {

@@ -11,12 +11,12 @@
  * обход дерева здесь не заводится.
  *
  * Без этой проверки DSK-3 держался бы на ревью, а ломается он дёшево: одна
- * строка `import type { ... } from '@game-mvp/core'` в клее контейнера — и
+ * строка `import type { ... } from '@fluxus/core'` в клее контейнера — и
  * рефакторинг движка начинает требовать пересборки оболочки, ровно того, чего
  * требование не допускает.
  *
  * Обратное направление — приложение → контракт моста — законно и запретом не
- * покрывается: `editor/ui-ts` импортирует типы `@game-mvp/desktop-shell/bridge`
+ * покрывается: `editor/ui-ts` импортирует типы `@fluxus/desktop-shell/bridge`
  * своим адаптером хостового шва (ED-12), и это зависимость приложения от
  * ГРАНИЦЫ, а не контейнера от движка. Здесь проверяется обратное: адаптер
  * лежит у редактора и говорит на типах шва, а имён этого шва в контейнере нет
@@ -49,7 +49,7 @@ const EDITOR_ADAPTER = 'ui-ts/src/host/desktop.ts';
  */
 const CONTAINER_IMPORTS: readonly ForbiddenReference[] = [
   {
-    match: '@game-mvp/',
+    match: '@fluxus/',
     rule: 'engine-in-container',
     why: 'контейнер не зависит от пакетов движка и редактора (DSK-3)',
   },
@@ -111,7 +111,7 @@ describe('guard: запрет для контейнера ловит то, чт�
     root = mkdtempSync(join(tmpdir(), 'container-guard-'));
     mkdirSync(join(root, 'shell-ts/src/electron'), { recursive: true });
     mkdirSync(join(root, 'shell-ts/build/game/assets'), { recursive: true });
-    writeFileSync(join(root, 'shell-ts/src/named.ts'), "import { tick } from '@game-mvp/core';\n");
+    writeFileSync(join(root, 'shell-ts/src/named.ts'), "import { tick } from '@fluxus/core';\n");
     writeFileSync(
       join(root, 'shell-ts/src/relative.ts'),
       "import { createWebHost } from '../../../editor/ui-ts/src/host/web.js';\n",
@@ -126,7 +126,7 @@ describe('guard: запрет для контейнера ловит то, чт�
     // ровно та же зависимость, что импорт из `.ts`.
     writeFileSync(
       join(root, 'shell-ts/src/electron/preload.cjs'),
-      "const { tick } = require('@game-mvp/core');\n",
+      "const { tick } = require('@fluxus/core');\n",
     );
     writeFileSync(
       join(root, 'shell-ts/electron-builder.cjs'),
@@ -140,7 +140,7 @@ describe('guard: запрет для контейнера ловит то, чт�
     // слитые в один файл, и запрет на импорт к нему неприменим.
     writeFileSync(
       join(root, 'shell-ts/build/game/assets/index.js'),
-      "import { tick } from '@game-mvp/core';\n",
+      "import { tick } from '@fluxus/core';\n",
     );
     // Не нарушения: собственные модули контейнера и упоминание в комментарии.
     writeFileSync(
@@ -150,7 +150,7 @@ describe('guard: запрет для контейнера ловит то, чт�
     writeFileSync(
       join(root, 'shell-ts/src/clean.ts'),
       [
-        '// мост не знает про @game-mvp/core — это комментарий, а не зависимость',
+        '// мост не знает про @fluxus/core — это комментарий, а не зависимость',
         "import { createHostRoot } from './host/root.js';",
         "import { app } from 'electron';",
         'export const use = [createHostRoot, app];',
@@ -158,7 +158,7 @@ describe('guard: запрет для контейнера ловит то, чт�
     );
     writeFileSync(
       join(root, 'shell-ts/package.json'),
-      JSON.stringify({ name: '@game-mvp/desktop-shell', devDependencies: { electron: '^43.0.0' } }),
+      JSON.stringify({ name: '@fluxus/desktop-shell', devDependencies: { electron: '^43.0.0' } }),
     );
   });
 
@@ -207,7 +207,7 @@ describe('guard: запрет для контейнера ловит то, чт�
   it('манифест с зависимостью от движка виден и без единого импорта', () => {
     writeFileSync(
       join(root, 'shell-ts/package.json'),
-      JSON.stringify({ dependencies: { '@game-mvp/core': '*' } }),
+      JSON.stringify({ dependencies: { '@fluxus/core': '*' } }),
     );
     const violations = scanAuthoringDependencies(root, CONTAINER_IMPORTS);
     expect(violations.map((v) => v.file)).toEqual(['shell-ts/package.json']);

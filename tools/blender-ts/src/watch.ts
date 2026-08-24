@@ -57,7 +57,7 @@ import type {
   ContributionReader,
   DocumentId,
   ValidationRule,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { runImport, type ImportResult } from './importer.js';
 import { importResources, reportFindings, type ReportIo } from './report.js';
 

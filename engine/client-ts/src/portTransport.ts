@@ -7,7 +7,7 @@
  * буферы, а отчуждение чужого буфера — сюрприз, которого интерфейс
  * `Transport` не обещает. Границы сообщений даёт сам канал.
  */
-import { BaseTransport, type Transport } from '@game-mvp/net';
+import { BaseTransport, type Transport } from '@fluxus/net';
 import type { ShellPort } from './protocol.js';
 
 interface BytesMessage {

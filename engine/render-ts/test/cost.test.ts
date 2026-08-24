@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { FIXED_ONE, createTerrainGrid, type EntityId } from '@game-mvp/core';
+import { FIXED_ONE, createTerrainGrid, type EntityId } from '@fluxus/core';
 import {
   validateCurvatureMap,
   type NormalizedMesh,
@@ -22,7 +22,7 @@ import {
   type ParticleEffectDocument,
   type TerrainCurvatureMap,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   COST_COUNTER_STAGES,
   FogSubsystem,

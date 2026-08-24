@@ -130,7 +130,7 @@ export interface WindowHost {
 }
 
 /**
- * Хост среды целиком. Реализаций две — веб (`@game-mvp/editor-ui`) и десктоп;
+ * Хост среды целиком. Реализаций две — веб (`@fluxus/editor-ui`) и десктоп;
  * третья, `createMemoryHost`, служит тестовым дублем и подложкой несохранённого.
  */
 export interface EnvironmentHost {

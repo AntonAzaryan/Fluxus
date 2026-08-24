@@ -11,7 +11,7 @@
  * добирается до команды именно так, и «зарегистрирована» без «показана»
  * ничего не значит (ED-26 — недоступное показано недоступным, а не спрятано).
  */
-import { createMemoryHost, type MemoryHost } from '@game-mvp/editor-core';
+import { createMemoryHost, type MemoryHost } from '@fluxus/editor-core';
 import { describe, expect, it } from 'vitest';
 import { createEditorApp } from '../app/assembly.js';
 import { SHELL_COMMANDS } from '../src/palette/commands.js';
@@ -22,7 +22,7 @@ import type { PaletteEntry } from '../src/palette/palette.js';
 import type { WorkspaceFrame } from '../src/frame/frame.js';
 import { buildFrame } from './support/frame.js';
 import { FIXTURE_CURVATURE, FIXTURE_SCENE, settle } from './support/project.js';
-import { ContributionRegistry } from '@game-mvp/editor-core';
+import { ContributionRegistry } from '@fluxus/editor-core';
 import type { PaletteCommand } from '../src/palette/palette.js';
 import { registerShellCommands } from '../src/palette/commands.js';
 import { stubArea } from './support/stubArea.js';

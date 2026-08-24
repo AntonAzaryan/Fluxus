@@ -6,7 +6,7 @@
  * сборочной: `new Worker(new URL(…))` берёт путь, а не имя пакета, и адресовать
  * файл внутри зависимости этим способом нечем.
  */
-import { isBotWorkerInit, startBotWorker } from '@game-mvp/bot';
+import { isBotWorkerInit, startBotWorker } from '@fluxus/bot';
 
 const scope = self as unknown as {
   addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;

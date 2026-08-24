@@ -13,9 +13,9 @@
  * `validateManifest`, карта кривизны — `validateCurvatureMap`. Иначе проверка
  * производной проверяла бы только саму себя.
  */
-import { createMemoryHost, type MemoryHost } from '@game-mvp/editor-core';
-import type { VisualManifest } from '@game-mvp/assets';
-import { PresentationStage, type CameraPose, type RenderContext } from '@game-mvp/render';
+import { createMemoryHost, type MemoryHost } from '@fluxus/editor-core';
+import type { VisualManifest } from '@fluxus/assets';
+import { PresentationStage, type CameraPose, type RenderContext } from '@fluxus/render';
 import type { PositionBinding } from '../../src/areas/sceneDocuments.js';
 import type { SceneStage, StageDraft } from '../../src/areas/sceneStage.js';
 import type { SceneProjectIds } from '../../src/areas/sceneProject.js';

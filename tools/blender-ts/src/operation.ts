@@ -71,7 +71,7 @@ import {
   type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { hasErrors, type Finding, type SpatialLayer } from './layer.js';
 
 /** Идентификатор операции: по нему её зовут и из редактора, и из командной строки. */

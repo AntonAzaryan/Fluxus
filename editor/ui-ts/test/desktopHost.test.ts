@@ -18,9 +18,9 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { normalizeAppProfile } from '@game-mvp/desktop-shell/bridge';
-import { openApp, type OpenedApp } from '@game-mvp/desktop-shell/host';
-import type { ContentChange } from '@game-mvp/editor-core';
+import { normalizeAppProfile } from '@fluxus/desktop-shell/bridge';
+import { openApp, type OpenedApp } from '@fluxus/desktop-shell/host';
+import type { ContentChange } from '@fluxus/editor-core';
 import { createDesktopHost } from '../src/host/desktop.js';
 import { createWebHost, type HttpFetch } from '../src/host/web.js';
 

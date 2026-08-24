@@ -7,8 +7,8 @@
  * редактору: во что попадание превращается — в правку документа операцией
  * (ED-29), в одну запись истории на мазок (ED-18) и в набор наложений (REND-16).
  */
-import { createTerrainGrid, type TerrainDef } from '@game-mvp/core';
-import { CURVATURE_GRID_RULE, getAtPath, type EditorSession } from '@game-mvp/editor-core';
+import { createTerrainGrid, type TerrainDef } from '@fluxus/core';
+import { CURVATURE_GRID_RULE, getAtPath, type EditorSession } from '@fluxus/editor-core';
 import { describe, expect, it } from 'vitest';
 import { findAll, type UiNode } from '../src/dom/node.js';
 import { SCENE_AREA_ID, sceneArea } from '../src/areas/scene.js';

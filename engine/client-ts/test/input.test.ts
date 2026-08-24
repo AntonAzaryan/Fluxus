@@ -15,7 +15,7 @@ import {
   worldInitSpawn,
   type SceneDef,
   type Simulation,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   GamepadSource,
   HeldActions,

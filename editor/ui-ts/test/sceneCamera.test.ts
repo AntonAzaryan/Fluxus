@@ -9,8 +9,8 @@
  * сценарий CAM-1 «Headless-тест позы»: WebGL не создаётся.
  */
 import { describe, expect, it } from 'vitest';
-import { createTerrainGrid } from '@game-mvp/core';
-import { DEFAULT_CAMERA_CONFIG } from '@game-mvp/render';
+import { createTerrainGrid } from '@fluxus/core';
+import { DEFAULT_CAMERA_CONFIG } from '@fluxus/render';
 import { CAMERA_KEYS, EDITOR_CAMERA_CONFIG, createSceneCamera } from '../src/areas/sceneCamera.js';
 
 const HEIGHT_STEP = 0.6;

@@ -17,7 +17,7 @@
  * двумя последними доставленными тиками по часам этого потока (SHELL-7).
  */
 import * as THREE from 'three';
-import { ABILITY_STEPS, loadScene, type EntityId, type SceneDef } from '@game-mvp/core';
+import { ABILITY_STEPS, loadScene, type EntityId, type SceneDef } from '@fluxus/core';
 import {
   AssetService,
   createManifestLoader,
@@ -33,7 +33,7 @@ import {
   type AssetState,
   type PresentationScene,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   AbilityPreviewSubsystem,
   CAMERA_CONFIG_DESCRIPTION,
@@ -65,8 +65,8 @@ import {
   type AbilitySlotStatNames,
   type DecorationInstance,
   type RenderContext,
-} from '@game-mvp/render';
-import type { HudCameraContract } from '@game-mvp/hud';
+} from '@fluxus/render';
+import type { HudCameraContract } from '@fluxus/hud';
 import {
   GamepadSource,
   InputSampler,
@@ -81,7 +81,7 @@ import {
   type AimPoint,
   type AimResolution,
   type InputSource,
-} from '@game-mvp/client';
+} from '@fluxus/client';
 import {
   ACTION_BITS,
   CHARGE_PREVIEW_MIN_TICKS,

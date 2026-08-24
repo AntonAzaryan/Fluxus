@@ -27,8 +27,8 @@ import {
   runScenario,
   runScenarioBytes,
   type SceneDef,
-} from '@game-mvp/core';
-import { contentPack } from '@game-mvp/net';
+} from '@fluxus/core';
+import { contentPack } from '@fluxus/net';
 import {
   CAMERA_CONFIG_DESCRIPTION,
   CAMERA_CONFIG_PARAMS,
@@ -43,7 +43,7 @@ import {
   type DecorationInstance,
   type PostRendererLike,
   type RenderContext,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 import {
   presentationPathOf,
   resolveVisual,
@@ -56,7 +56,7 @@ import {
   type PresentationScene,
   type VisualLight,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import { BUILD_ID, duelConfig, duelScene, playMatch, walkRight } from './fixtures.js';
 
 const CONTENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../content');

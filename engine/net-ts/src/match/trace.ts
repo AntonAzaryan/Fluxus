@@ -20,7 +20,7 @@ import {
   type DiagnosticsSink,
   type TraceLevel,
   type TraceSelect,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 
 /** Вид отметки ветви (DIAG-9): границы, которые знает только сервер матча. */
 export type MatchTraceMarkKind = 'live' | 'replayBegin' | 'replayEnd';
@@ -44,7 +44,7 @@ export interface MatchTraceMark {
  *
  * Тип приезжает из ядра, а не заводится здесь: отбирают оба хоста — прогонщик
  * сценария (CLI-7) и сервер матча, — и «тот же отбор» в CLI-11 обязан означать
- * ту же функцию. Имя реэкспортируется, потому что для потребителей `@game-mvp/net`
+ * ту же функцию. Имя реэкспортируется, потому что для потребителей `@fluxus/net`
  * отбор — часть описания матча.
  */
 export type { TraceSelect };

@@ -15,7 +15,7 @@ import {
   ContributionRegistry,
   type AuthoringOperation,
   type ValidationRule,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { describe, expect, it } from 'vitest';
 import { collectTexts, findAll, hasClass, type UiNode } from '../src/dom/node.js';
 import { PALETTE_CLASS, PALETTE_ROVING_ID } from '../src/palette/view.js';

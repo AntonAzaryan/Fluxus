@@ -1,6 +1,6 @@
 /**
  * Строки хрома редактора — те самые `ui.*`, которых сознательно нет в
- * `@game-mvp/editor-core`: их «приносит тот, кто приносит сам интерфейс»
+ * `@fluxus/editor-core`: их «приносит тот, кто приносит сам интерфейс»
  * (см. `editorBundles.ts` соседнего пакета). Подпись кнопки, которой не
  * существует, ничем не лучше отсутствующей, поэтому бандл живёт здесь и растёт
  * вместе с виджетами.
@@ -18,7 +18,7 @@ import {
   type LocaleBundle,
   type LocaleBundles,
   type LocaleId,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import en from './locales/ui.en.json';
 import ru from './locales/ui.ru.json';
 import { CAMERA_EFFECT_BUNDLES } from './cameraEffectBundles.js';
@@ -31,7 +31,7 @@ export const UI_BUNDLES: LocaleBundles = { en, ru };
 /*
  * Причин находок валидации (`validation.*`, ED-8, ED-30) здесь нет: ключ причины
  * выводится из пары «правило + код» (`reasonKey`), правила живут в
- * `@game-mvp/editor-core`, и его же бандл несёт их причины. Копия в этом пакете
+ * `@fluxus/editor-core`, и его же бандл несёт их причины. Копия в этом пакете
  * была бы вторым определением той же строки — расходиться ей с оригиналом ничто
  * не мешает, а заметить расхождение некому.
  */

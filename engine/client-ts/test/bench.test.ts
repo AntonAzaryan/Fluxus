@@ -5,7 +5,7 @@
  * (открытый вопрос № 2 обзора); здесь — структурные затраты оболочки.
  */
 import { describe, expect, it } from 'vitest';
-import { ViewBuffer, type ExtractedTick } from '@game-mvp/render';
+import { ViewBuffer, type ExtractedTick } from '@fluxus/render';
 import { readTick, requiredBytes, shellPort, writeTick, type TickEnvelope } from '../src/index.js';
 
 /** Синтетический тик на N сущностей — целевая сцена больше реальной. */

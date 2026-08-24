@@ -12,7 +12,7 @@
  * добавленное в конфиг матча и не названное ни в одном из списков, краснеет на
  * `npm run typecheck` — до того, как молча пропадёт из матча.
  */
-import type { SceneDef } from '@game-mvp/core';
+import type { SceneDef } from '@fluxus/core';
 import type { LoadedContentPack } from '../src/content/pack.js';
 import type { MatchConfig } from '../src/server/matchServer.js';
 

@@ -15,7 +15,7 @@
  * DOM и WebGL не нужны: `canRender()` в headless-прогоне ложен, и области
  * собираются без единого обращения к рендеру.
  */
-import { createMemoryHost, type JsonValue, type MemoryHost } from '@game-mvp/editor-core';
+import { createMemoryHost, type JsonValue, type MemoryHost } from '@fluxus/editor-core';
 import { describe, expect, it } from 'vitest';
 import { createEditorApp } from '../app/assembly.js';
 import { collectTexts, findAll, type UiNode } from '../src/dom/node.js';

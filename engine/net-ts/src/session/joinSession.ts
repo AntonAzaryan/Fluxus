@@ -7,7 +7,7 @@
  * же `MatchClient` с тем же `Hello` (NTR-5), и режим сессии до него не доходит
  * (SES-2).
  */
-import type { Serializer } from '@game-mvp/core';
+import type { Serializer } from '@fluxus/core';
 import { ClientHost, type ClientHostOptions } from '../client/host.js';
 import { MatchClient, type MatchClientOptions } from '../client/matchClient.js';
 import { LobbyClientHost } from '../lobby/clientHost.js';

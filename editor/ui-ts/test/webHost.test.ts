@@ -14,7 +14,7 @@
  * каталог и «успешную» запись.
  */
 import { describe, expect, it } from 'vitest';
-import { createHostAssetSource } from '@game-mvp/editor-core';
+import { createHostAssetSource } from '@fluxus/editor-core';
 import { createWebHost, type HttpFetch, type HttpRequest, type HttpResponse } from '../src/host/web.js';
 import { resolveInside } from '../app/contentEndpoint.js';
 

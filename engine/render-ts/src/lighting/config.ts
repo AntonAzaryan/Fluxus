@@ -20,8 +20,8 @@ import type {
   PresentationLightingPhase,
   PresentationRimLight,
   PresentationShadowMode,
-} from '@game-mvp/assets';
-import { PRESENTATION_SHADOW_MODES } from '@game-mvp/assets';
+} from '@fluxus/assets';
+import { PRESENTATION_SHADOW_MODES } from '@fluxus/assets';
 
 /** Режим теней сцены — словарь формата, а не второй его перечень. */
 export type ShadowMode = PresentationShadowMode;

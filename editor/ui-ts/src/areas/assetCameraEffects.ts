@@ -45,7 +45,7 @@ import {
   type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   cameraEffectParamInRange,
   cameraEffectParams,
@@ -56,8 +56,8 @@ import {
   type CameraEffectParamSpec,
   type CameraEffectTypeSpec,
   type CameraEffectsDescription,
-} from '@game-mvp/assets';
-import { CAMERA_EFFECTS_DESCRIPTION } from '@game-mvp/render';
+} from '@fluxus/assets';
+import { CAMERA_EFFECTS_DESCRIPTION } from '@fluxus/render';
 
 /** Идентификаторы операций над секцией эффектов. */
 export const CAMERA_EFFECTS_OPERATIONS = {

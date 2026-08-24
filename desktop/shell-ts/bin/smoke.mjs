@@ -11,11 +11,11 @@
  * И то и другое — предусловия, и отсутствие каждого он называет вслух, а не
  * изображает провал контейнера:
  *
- *   npm run build -w @game-mvp/editor-ui      # бандл редактора
- *   npm run demo:build -w @game-mvp/demo      # бандл демо игры
+ *   npm run build -w @fluxus/editor-ui        # бандл редактора
+ *   npm run demo:build -w @fluxus/demo        # бандл демо игры
  *   npm install                               # с бинарём Electron
  *
- * Запуск: `npm run smoke -w @game-mvp/desktop-shell` (или `-- editor`, `-- game`).
+ * Запуск: `npm run smoke -w @fluxus/desktop-shell` (или `-- editor`, `-- game`).
  */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

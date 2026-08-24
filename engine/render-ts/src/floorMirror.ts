@@ -13,7 +13,7 @@ import {
   type EntityId,
   type TerrainGrid,
   type WorldState,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 
 /** Тег singleton-сущности террейна — конвенция `terrainPrefab` ядра. */
 const TERRAIN_TAG = 'terrain';

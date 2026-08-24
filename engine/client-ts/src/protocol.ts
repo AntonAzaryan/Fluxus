@@ -7,8 +7,8 @@
  * одном потоке подходят одинаково. Замена доставки не трогает ни кодек,
  * ни sender/receiver (SHELL-3).
  */
-import type { TerrainGrid, Vec2 } from '@game-mvp/core';
-import type { RenderEvent } from '@game-mvp/render';
+import type { TerrainGrid, Vec2 } from '@fluxus/core';
+import type { RenderEvent } from '@fluxus/render';
 
 // ---------------------------------------------------------------------- порт
 

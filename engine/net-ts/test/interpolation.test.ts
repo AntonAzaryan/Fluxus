@@ -3,10 +3,10 @@
  * сущность — это «ушла в туман», а не смерть (NET-14).
  */
 import { describe, expect, it } from 'vitest';
-import { filterSnapshot, VIEWPOINT_ALL } from '@game-mvp/core';
+import { filterSnapshot, VIEWPOINT_ALL } from '@fluxus/core';
 import { InterpolationBuffer, vanishedEntities } from '../src/client/interpolation.js';
 import { fogScene, duelConfig, harness, hello } from './fixtures.js';
-import type { Snapshot } from '@game-mvp/core';
+import type { Snapshot } from '@fluxus/core';
 
 function fogMatch() {
   const config = duelConfig({

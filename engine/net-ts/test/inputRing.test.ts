@@ -1,7 +1,7 @@
 /**
  * Кольцо своих кадров ввода (NET-9, NET-10): контракт вытеснения.
  *
- * Тестов у кольца не было вовсе: клиент MVP не предсказывает (NTR-10), кольцо
+ * Тестов у кольца не было вовсе: клиент не предсказывает (NTR-10), кольцо
  * ему нужно для замера «нажал → увидел» и разбора потерь, и на матчевых тестах
  * его поведение не видно — они смотрят на снапшоты, а не на то, что клиент
  * помнит о своей отправке. Когда включится reconciliation (NET-4), тот же
@@ -16,7 +16,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RING_TICKS, InputRing } from '../src/client/inputRing.js';
-import type { InputFrame } from '@game-mvp/core';
+import type { InputFrame } from '@fluxus/core';
 
 function frame(tick: number, seq: number = tick): InputFrame {
   return { tick, playerId: 'p1', seq, move: { x: 0, y: 0 }, aimDir: 0, buttons: 0 };

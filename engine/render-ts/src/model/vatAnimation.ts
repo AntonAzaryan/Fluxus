@@ -18,7 +18,7 @@
  * секунды, поза уходящего клипа на это время замирает — известное упрощение,
  * а не недосмотр (design, Risks: «кроссфейд в батче усложняет шейдер»).
  */
-import type { BakedClip } from '@game-mvp/assets';
+import type { BakedClip } from '@fluxus/assets';
 import type { AnimationBackend } from './animation.js';
 
 export class VatAnimationBackend implements AnimationBackend {

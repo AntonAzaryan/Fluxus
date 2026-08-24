@@ -7,7 +7,7 @@
  * (BLND-5), и её здесь нет.
  */
 import { describe, expect, it } from 'vitest';
-import { fixed } from '@game-mvp/core';
+import { fixed } from '@fluxus/core';
 import {
   DEFAULT_POSITION_BINDING,
   generateSpatialLayer,

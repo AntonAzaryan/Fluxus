@@ -24,7 +24,7 @@
  * очередью накопленных тряск (CAM-5, CAM-6). Длящиеся — от присутствия
  * состояния на сущности-цели в снапшоте (`EntityView.states`).
  */
-import { FIXED_ONE, type EntityId } from '@game-mvp/core';
+import { FIXED_ONE, type EntityId } from '@fluxus/core';
 import {
   cameraEffectParams,
   clampCameraEffectParam,
@@ -33,7 +33,7 @@ import {
   type CameraEffectTypeSpec,
   type CameraEffectsDescription,
   type CameraEffectsSection,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import type { TickView } from '../types.js';
 import {
   EffectStack,

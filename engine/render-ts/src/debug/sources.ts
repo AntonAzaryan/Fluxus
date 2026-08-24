@@ -18,7 +18,7 @@ import {
   type CostStage,
   type RenderCostCounters,
 } from '../cost.js';
-import type { EntityId } from '@game-mvp/core';
+import type { EntityId } from '@fluxus/core';
 import {
   DebugRows,
   type DebugColor,

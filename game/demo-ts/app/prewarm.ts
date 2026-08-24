@@ -13,7 +13,7 @@
  * держит — ленивый путь монтажа с заглушкой (ASSET-4) остаётся как был.
  */
 import * as THREE from 'three';
-import type { FogSubsystem, ModelsSubsystem, ParticlesSubsystem } from '@game-mvp/render';
+import type { FogSubsystem, ModelsSubsystem, ParticlesSubsystem } from '@fluxus/render';
 
 export interface PrewarmOptions {
   readonly renderer: THREE.WebGLRenderer;

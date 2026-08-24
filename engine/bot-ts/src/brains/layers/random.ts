@@ -8,7 +8,7 @@
  * превращает разбор поведения в ловлю призрака. В симуляцию эта случайность не
  * попадает никак — она уходит во ввод, который остаётся каноническими данными.
  */
-import { XorShift128Stream, seedStateFromName } from '@game-mvp/core';
+import { XorShift128Stream, seedStateFromName } from '@fluxus/core';
 
 export interface BrainRandom {
   /** Целое в [0, bound). */

@@ -14,7 +14,7 @@
  * правки (REND-17).
  */
 import * as THREE from 'three';
-import type { EntityId } from '@game-mvp/core';
+import type { EntityId } from '@fluxus/core';
 import type { EffectInstance } from '../particleEffects.js';
 import { resolveSocketNode, type SocketSource } from '../particleSockets.js';
 import type { EntityView } from '../types.js';

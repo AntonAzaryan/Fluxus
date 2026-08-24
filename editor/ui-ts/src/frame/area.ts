@@ -1,7 +1,7 @@
 /**
  * Что каркас знает о рабочей области — и чего он о ней не знает.
  *
- * Вклад области (`WorkspaceAreaContribution` из `@game-mvp/editor-core`)
+ * Вклад области (`WorkspaceAreaContribution` из `@fluxus/editor-core`)
  * описывает область для машинного каталога (ED-30); здесь к нему добавляется
  * ровно то, что нужно интерфейсу: чем область показана в рельсе и что она
  * кладёт в три зоны скелета (ED-24). Больше каркас не спрашивает: доменное
@@ -33,7 +33,7 @@ import type {
   EditorSession,
   StringResources,
   WorkspaceAreaContribution,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import type { UiNode } from '../dom/node.js';
 import type { FieldEditor } from '../inspector/editors.js';
 import type { SearchHit } from '../palette/palette.js';

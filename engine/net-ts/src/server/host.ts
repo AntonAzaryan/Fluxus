@@ -7,7 +7,7 @@
  * WebSocket в живом матче (NTR-12): различается объект, переданный в
  * конструктор, а не код.
  */
-import type { Serializer } from '@game-mvp/core';
+import type { Serializer } from '@fluxus/core';
 import { serverCodec, DEFAULT_SERIALIZER, type Codec } from '../protocol/codec.js';
 import { ProtocolError, type ClientMessage, type ServerMessage } from '../protocol/messages.js';
 import type { ConnectionId, Transport, TransportServer } from '../transport/transport.js';

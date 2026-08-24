@@ -10,13 +10,13 @@
  * выделен отдельным модулем — «импортом этого файла, а не второй копией кода».
  */
 import { parentPort } from 'node:worker_threads';
-import '@game-mvp/net/bin/tsHook.mjs';
+import '@fluxus/net/bin/tsHook.mjs';
 
 if (parentPort === null) {
   throw new Error('demoBot.worker: файл исполняется вне worker_threads — parentPort отсутствует');
 }
 
-const { isBotWorkerInit, startBotWorker } = await import('@game-mvp/bot');
+const { isBotWorkerInit, startBotWorker } = await import('@fluxus/bot');
 
 /**
  * Отчёт об исходе посадки: какие слоты бот действительно занял, а где сервер

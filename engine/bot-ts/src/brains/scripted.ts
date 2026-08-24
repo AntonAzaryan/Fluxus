@@ -15,7 +15,7 @@ import type { BotBrain, BotBrainFactory, BotSelf } from '../brain.js';
 import type { BotIntent } from '../boundary.js';
 import type { BotProfile } from '../profile.js';
 import { readWorldView, type WorldViewNames } from '../worldView.js';
-import type { ClientStep } from '@game-mvp/net';
+import type { ClientStep } from '@fluxus/net';
 
 /**
  * Куда идти. Умолчание — начало координат, но сборка обязана передавать сюда

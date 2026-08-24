@@ -28,7 +28,7 @@ import {
   type ContentPath,
   type ContributionReader,
   type ValidationRule,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { runImport, type ImportResult } from './importer.js';
 import { createNodeHost } from './nodeHost.js';
 import { isSourcePath } from './pairing.js';

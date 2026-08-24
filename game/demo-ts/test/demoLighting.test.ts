@@ -14,14 +14,14 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import type { AssetService, PresentationLighting } from '@game-mvp/assets';
+import type { AssetService, PresentationLighting } from '@fluxus/assets';
 import {
   LightingSubsystem,
   resolveLightingCycle,
   type DebugFrameState,
   type DebugLightingProbe,
   type RenderContext,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 import presentationJson from '../../../content/scenes/duel.presentation.json';
 
 const LIGHTING = (presentationJson as { lighting: PresentationLighting }).lighting;

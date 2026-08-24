@@ -44,7 +44,7 @@ import type {
   EditorSession,
   PaletteCommandContribution,
   StringResources,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { documentValue, resourceText, type UiText } from '../dom/node.js';
 import type { AreaState } from '../frame/area.js';
 import type { EditorMode } from '../frame/preview.js';

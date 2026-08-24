@@ -22,7 +22,7 @@
  * снимок годится для dev-дистрибутива, а «редактор открывает ЧУЖОЙ проект»
  * решается профилем при выборе структуры дистрибутивов и контракта не меняет.
  *
- * Запуск: `npm run pack -w @game-mvp/desktop-shell -- game [--stage] [--linux dir]`
+ * Запуск: `npm run pack -w @fluxus/desktop-shell -- game [--stage] [--linux dir]`
  */
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -51,8 +51,8 @@ const profile = JSON.parse(readFileSync(manifestPath, 'utf8'));
 const bundle = resolve(dirname(manifestPath), profile.bundle);
 if (!existsSync(bundle)) {
   console.error(`бандл не собран: ${bundle}`);
-  console.error('editor: npm run build:desktop -w @game-mvp/editor-ui');
-  console.error('game:   npm run demo:build:desktop -w @game-mvp/demo');
+  console.error('editor: npm run build:desktop -w @fluxus/editor-ui');
+  console.error('game:   npm run demo:build:desktop -w @fluxus/demo');
   process.exit(2);
 }
 

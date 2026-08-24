@@ -31,7 +31,7 @@ import {
   type SimulationState,
   type TerrainApi,
   type TerrainGrid,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 
 // ----------------------------------------------------------------- константы
 

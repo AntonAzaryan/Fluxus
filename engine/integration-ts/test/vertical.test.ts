@@ -14,8 +14,8 @@ import {
   FLOOR_COMPONENT,
   query,
   world as coreWorld,
-} from '@game-mvp/core';
-import type { PresentedState } from '@game-mvp/net';
+} from '@fluxus/core';
+import type { PresentedState } from '@fluxus/net';
 import { TICK_DELTA, TICK_RATE, fogConfig, playMatch, walkRight } from './fixtures.js';
 
 function slotX(snapshot: PresentedState, slot: number): number {

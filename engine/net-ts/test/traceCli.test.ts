@@ -15,7 +15,7 @@ import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import type { DiagnosticRecord } from '@game-mvp/core';
+import type { DiagnosticRecord } from '@fluxus/core';
 import {
   fileLineWriter,
   guardedLineWriter,

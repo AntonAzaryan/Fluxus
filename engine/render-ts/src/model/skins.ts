@@ -24,7 +24,7 @@ import type {
   DecodedImage,
   EntityVisual,
   NormalizedModel,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import type { TextureTarget } from './build.js';
 
 /**

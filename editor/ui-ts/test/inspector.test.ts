@@ -8,7 +8,7 @@
  * дописанное в схему компонента, обязано появиться строкой, а код редактора при
  * этом не правится ни на символ.
  */
-import { fixed } from '@game-mvp/core';
+import { fixed } from '@fluxus/core';
 import {
   StringResources,
   createEditorSession,
@@ -16,7 +16,7 @@ import {
   registerBuiltinOperations,
   type EditorSession,
   type ValidationRule,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { describe, expect, it } from 'vitest';
 import { documentValue, findAll, hasClass, type UiNode } from '../src/dom/node.js';
 import {

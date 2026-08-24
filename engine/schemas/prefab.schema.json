@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://game-mvp.local/schemas/prefab.schema.json",
+  "$id": "https://fluxus.local/schemas/prefab.schema.json",
   "title": "Prefab (ECS-4)",
   "type": "object",
   "additionalProperties": false,

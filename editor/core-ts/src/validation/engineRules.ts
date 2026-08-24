@@ -46,14 +46,14 @@ import {
   type SceneDef,
   type SystemDef,
   type TerrainDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   validateCurvatureMap,
   validateManifest,
   validatePresentationScene,
   type CameraConfigDescription,
   type CameraEffectsDescription,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   getAtPath,
   isJsonArray,
@@ -120,7 +120,7 @@ function systemSitesOf(kinds: EngineRuleKinds, sites: readonly SystemSite[] | un
  * состав редактируемого знает тот, кто собирает редактор (ED-25).
  *
  * Описание типов эффектов камеры (`camera` CAM-9) импортом сюда прийти не может:
- * пакет headless и от `@game-mvp/render` не зависит — а описание живёт там.
+ * пакет headless и от `@fluxus/render` не зависит — а описание живёт там.
  * Без него секция эффектов проверяется структурно (ASSET-8), с ним — по нему.
  * Ровно теми же основаниями и тем же путём приходит описание конфига камеры
  * (`camera` CAM-1) для секции конфига (ASSET-10).
@@ -131,12 +131,12 @@ export interface EngineRuleOptions {
 }
 
 /** Кто проверял — уезжает в ожидание находки, чтобы вопрос «чьё правило» не гадался. */
-export const LOAD_SCENE = '@game-mvp/core:loadScene';
-export const CREATE_TERRAIN_GRID = '@game-mvp/core:createTerrainGrid';
-export const VALIDATE_SYSTEM = '@game-mvp/core:validateSystem';
-export const VALIDATE_MANIFEST = '@game-mvp/assets:validateManifest';
-export const VALIDATE_CURVATURE_MAP = '@game-mvp/assets:validateCurvatureMap';
-export const VALIDATE_PRESENTATION = '@game-mvp/assets:validatePresentationScene';
+export const LOAD_SCENE = '@fluxus/core:loadScene';
+export const CREATE_TERRAIN_GRID = '@fluxus/core:createTerrainGrid';
+export const VALIDATE_SYSTEM = '@fluxus/core:validateSystem';
+export const VALIDATE_MANIFEST = '@fluxus/assets:validateManifest';
+export const VALIDATE_CURVATURE_MAP = '@fluxus/assets:validateCurvatureMap';
+export const VALIDATE_PRESENTATION = '@fluxus/assets:validatePresentationScene';
 
 export const SCENE_RULE = 'core.scene';
 export const TERRAIN_RULE = 'core.terrain';

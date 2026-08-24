@@ -2,7 +2,7 @@
  * Связка клиента с транспортом — зеркало серверного хоста: сокет, таймер и
  * часы живут здесь, а `MatchClient` остаётся чистым циклом (NTR-10).
  */
-import type { Serializer } from '@game-mvp/core';
+import type { Serializer } from '@fluxus/core';
 import { clientCodec, DEFAULT_SERIALIZER, type Codec } from '../protocol/codec.js';
 import { ProtocolError, type ClientMessage, type ServerMessage } from '../protocol/messages.js';
 import type { Transport } from '../transport/transport.js';

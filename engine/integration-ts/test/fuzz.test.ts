@@ -20,7 +20,7 @@
  * не удлинением одного прогона.
  */
 import { describe, expect, it } from 'vitest';
-import { runScenario, snapshotToPlain } from '@game-mvp/core';
+import { runScenario, snapshotToPlain } from '@fluxus/core';
 import { fuzzInput, playMatch, type PlayedMatch } from './fixtures.js';
 
 const TICKS = 90;

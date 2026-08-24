@@ -34,14 +34,14 @@ import {
   type ContentEntryKind,
   type ContentPath,
   type ContentTreeHost,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   gltfLoader,
   mdxLoader,
   pngTextureLoader,
   type AssetKind,
   type AssetLoader,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 
 /**
  * Загрузчики, ассеты которых просмотрщик умеет открывать. Тот же список, что

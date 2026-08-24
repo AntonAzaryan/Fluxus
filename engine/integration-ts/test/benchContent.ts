@@ -20,7 +20,7 @@
  *
  * Чужих `test/` файл не импортирует (CLI-9): фикстуры `render-ts` собраны из
  * его внутренних путей, а межпакетная сюита ходит только через опубликованные
- * поверхности `@game-mvp/assets` и `@game-mvp/render`.
+ * поверхности `@fluxus/assets` и `@fluxus/render`.
  *
  * ## Что подобрано и почему именно так
  *
@@ -40,7 +40,7 @@
  *   квадратично (REND-9), не превращая пересборку чанка в главную статью
  *   времени прогона.
  */
-import type { TerrainGrid } from '@game-mvp/core';
+import type { TerrainGrid } from '@fluxus/core';
 import {
   validateCurvatureMap,
   validateManifest,
@@ -54,7 +54,7 @@ import {
   type ParticleEffectDocument,
   type TerrainCurvatureMap,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 
 /** Asset id модели стенда — путь от корня дерева, как у всякого ассета (ASSET-2). */
 const BENCH_MODEL_ID = 'bench/visuals/models/runner.mdx';

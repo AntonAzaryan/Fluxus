@@ -5,7 +5,7 @@
  * Один и тот же хост обслуживает внутрипроцессное рандеву в автотесте и
  * WebSocket в живом сборе: различается объект, переданный в конструктор.
  */
-import type { Serializer } from '@game-mvp/core';
+import type { Serializer } from '@fluxus/core';
 import { DEFAULT_SERIALIZER, type Codec } from '../protocol/codec.js';
 import type { ConnectionId, Transport, TransportServer } from '../transport/transport.js';
 import { lobbyServerCodec } from './codec.js';

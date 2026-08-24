@@ -52,8 +52,8 @@
  * (design D3): превью тумана в редакторе — отдельная будущая работа.
  */
 import * as THREE from 'three';
-import type { EntityId, TerrainGrid } from '@game-mvp/core';
-import type { PresentationFog } from '@game-mvp/assets';
+import type { EntityId, TerrainGrid } from '@fluxus/core';
+import type { PresentationFog } from '@fluxus/assets';
 import type {
   QualityDeclaration,
   QualityValues,

@@ -12,8 +12,8 @@
  * пересборки.
  */
 import type * as THREE from 'three';
-import type { EntityId } from '@game-mvp/core';
-import type { VisualTier } from '@game-mvp/assets';
+import type { EntityId } from '@fluxus/core';
+import type { VisualTier } from '@fluxus/assets';
 
 /**
  * Инстанс глазами подсистемы частиц (REND-24): ярус, которым он нарисован, и

@@ -4,7 +4,7 @@
  * MessageChannel-пары, тот же код, что играет по loopback и WebSocket (NTR-2).
  */
 import { describe, expect, it } from 'vitest';
-import { contentPackHash, fixed, type SceneDef } from '@game-mvp/core';
+import { contentPackHash, fixed, type SceneDef } from '@fluxus/core';
 import {
   ClientHost,
   MatchClient,
@@ -14,7 +14,7 @@ import {
   type MatchConfig,
   type Transport,
   type TransportServer,
-} from '@game-mvp/net';
+} from '@fluxus/net';
 import { portTransport, shellPort } from '../src/index.js';
 import { syncPortPair } from './fixtures.js';
 

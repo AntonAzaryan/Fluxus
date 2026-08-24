@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import type { NormalizedMesh, NormalizedModel, VisualManifest } from '@game-mvp/assets';
+import type { NormalizedMesh, NormalizedModel, VisualManifest } from '@fluxus/assets';
 import { ModelsSubsystem, createPickProxy, type RenderContext } from '../src/index.js';
 import { makeAssets, makeEntityView, makeModel, makeTickView, type AssetsStub } from './fixtures.js';
 

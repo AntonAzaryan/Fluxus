@@ -35,7 +35,7 @@
  * маски видят только целиком построенный передний растр — полупостроенного
  * состояния не наблюдает никто.
  */
-import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
+import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import { costSink } from '../cost.js';
 import type { FogDirtyBlocks } from './dirty.js';
 

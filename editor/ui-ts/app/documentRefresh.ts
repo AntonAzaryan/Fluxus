@@ -53,7 +53,7 @@ import {
   type ContentTreeHost,
   type DocumentId,
   type EditorSession,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 
 /** Почему документ остался прежним, хотя в дереве он изменился. */
 export type RefreshKeptReason = 'dirty' | 'history' | 'busy';

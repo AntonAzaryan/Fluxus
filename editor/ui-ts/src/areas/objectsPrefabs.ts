@@ -36,8 +36,8 @@ import {
   type JsonPath,
   type JsonValue,
   type SchemaPath,
-} from '@game-mvp/editor-core';
-import { schemaFiles } from '@game-mvp/core';
+} from '@fluxus/editor-core';
+import { schemaFiles } from '@fluxus/core';
 import { documentValue } from '../dom/node.js';
 import type { FieldGroup, InspectorSubject, SchemaField } from '../inspector/index.js';
 import { jsonSchemaFields } from './sceneSchema.js';

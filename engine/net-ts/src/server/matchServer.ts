@@ -34,7 +34,7 @@ import {
   type TickResult,
   type VisibilityOptions,
   type WorldMode,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import { BranchHistory, type MatchHistory } from '../match/history.js';
 import {
   firstRewindRequest,
@@ -680,7 +680,7 @@ export class MatchServer {
       return;
     }
     if (this.matchPhase !== 'lobby') {
-      // Реконнекта в MVP нет, и отсутствует он явно, а не молчанием (NTR-6).
+      // Реконнекта пока нет, и отсутствует он явно, а не молчанием (NTR-6).
       this.reject(connection.id, 'match-in-progress', 'матч уже идёт, реконнект не поддержан');
       return;
     }

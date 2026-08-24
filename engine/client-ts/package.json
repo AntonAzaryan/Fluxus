@@ -1,5 +1,5 @@
 {
-  "name": "@game-mvp/client",
+  "name": "@fluxus/client",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -19,12 +19,12 @@
     "node": ">=22.18 <23 || ^24 || >=26"
   },
   "dependencies": {
-    "@game-mvp/core": "*",
-    "@game-mvp/net": "*",
-    "@game-mvp/render": "*"
+    "@fluxus/core": "*",
+    "@fluxus/net": "*",
+    "@fluxus/render": "*"
   },
   "devDependencies": {
-    "@game-mvp/assets": "*",
+    "@fluxus/assets": "*",
     "@types/node": "^22.0.0",
     "@types/three": "^0.185.4",
     "three": "^0.185.1",

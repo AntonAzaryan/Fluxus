@@ -30,7 +30,7 @@ import {
   type RingHistoryOptions,
   type SimulationState,
   type Snapshot,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 
 /** Провайдер ядра плюс то, что нужно матчу: глубина буфера и обрезка ветви. */
 export interface MatchHistory extends HistoryProvider {

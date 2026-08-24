@@ -54,7 +54,7 @@ import type {
   JsonPath,
   OperationParams,
   OperationTransaction,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import type { SceneOverlay, ScenePicker, StagePointer } from './sceneInteraction.js';
 import {
   MAX_LEVEL,

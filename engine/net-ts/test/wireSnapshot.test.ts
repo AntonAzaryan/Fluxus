@@ -8,7 +8,7 @@
  * рядом с проекцией, а не внутри неё.
  */
 import { describe, expect, it } from 'vitest';
-import { snapshotToPlain, VIEWPOINT_ALL } from '@game-mvp/core';
+import { snapshotToPlain, VIEWPOINT_ALL } from '@fluxus/core';
 import { buildMatchWorld } from '../src/match/world.js';
 import { MatchClient } from '../src/client/matchClient.js';
 import { contentPack } from '../src/content/pack.js';

@@ -8,8 +8,8 @@
  * сборку игры поверх неё. Общей фикстуры у них быть не должно: пакет оболочки
  * не вправе зависеть от игры, а игра — от тестовой оснастки чужого пакета.
  */
-import type { RenderContext } from '@game-mvp/render';
-import type { ShellPort } from '@game-mvp/client';
+import type { RenderContext } from '@fluxus/render';
+import type { ShellPort } from '@fluxus/client';
 
 /** RenderContext для RemoteHost без THREE: подсистемы в тестах его не трогают. */
 export function dummyContext(): RenderContext {

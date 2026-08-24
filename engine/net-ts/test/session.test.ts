@@ -7,7 +7,7 @@
  * сборкой.
  */
 import { describe, expect, it } from 'vitest';
-import { query, world as coreWorld } from '@game-mvp/core';
+import { query, world as coreWorld } from '@fluxus/core';
 import { contentPack } from '../src/content/pack.js';
 import { ClientHost } from '../src/client/host.js';
 import { MatchClient } from '../src/client/matchClient.js';

@@ -9,7 +9,7 @@
  * рантайм-утверждений здесь нет и не нужно.
  */
 import { describe, expect, it } from 'vitest';
-import type { InputSource, RemoteHost } from '@game-mvp/client';
+import type { InputSource, RemoteHost } from '@fluxus/client';
 import type {
   HudActionsFacade,
   HudControlChannel,

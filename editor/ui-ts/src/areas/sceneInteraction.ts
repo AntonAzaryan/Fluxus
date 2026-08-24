@@ -85,8 +85,8 @@ import type {
   JsonPath,
   OperationParams,
   OperationTransaction,
-} from '@game-mvp/editor-core';
-import type { OverlayCells, OverlayGizmo, OverlayGrid } from '@game-mvp/render';
+} from '@fluxus/editor-core';
+import type { OverlayCells, OverlayGizmo, OverlayGrid } from '@fluxus/render';
 import type { AreaSelection, SelectionRef } from '../frame/selection.js';
 import type {
   PlacementLayer,

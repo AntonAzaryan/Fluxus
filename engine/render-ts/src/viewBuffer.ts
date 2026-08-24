@@ -10,7 +10,7 @@
  * Мира здесь нет и быть не может: всё, что нужно кадру, обязано приехать
  * в плоской форме (SHELL-1, SHELL-2).
  */
-import { LOCOMOTION_NORMAL, type EntityId, type WorldMode } from '@game-mvp/core';
+import { LOCOMOTION_NORMAL, type EntityId, type WorldMode } from '@fluxus/core';
 import {
   ENTITY_LEVEL_OVERRIDE,
   ENTITY_MOVING,

@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { FIXED_ONE, createTerrainGrid } from '@game-mvp/core';
+import { FIXED_ONE, createTerrainGrid } from '@fluxus/core';
 import { ParticleEmitter, type ParticleSystem } from 'three.quarks';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +26,7 @@ import {
   type NormalizedModel,
   type TerrainCurvatureMap,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
   EffectsSubsystem,

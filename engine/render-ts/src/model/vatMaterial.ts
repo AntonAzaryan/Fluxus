@@ -23,7 +23,7 @@
  * арене — и это известное ограничение батчевого яруса, а не недосмотр.
  */
 import * as THREE from 'three';
-import type { NormalizedMaterial } from '@game-mvp/assets';
+import type { NormalizedMaterial } from '@fluxus/assets';
 
 /** Вид карты материала — тот же словарь, что у мест употребления слотов (REND-6). */
 export type VatMapKind = 'base' | 'normal' | 'emissive';

@@ -87,7 +87,7 @@ core-ts (sim, Q16.16, worker)
 
 ## Recommendations
 
-**Этап 1 (MVP анимации):**
+**Этап 1 (базовые анимации):**
 1. Пайплайн Blender → glTF: in-place клипы (idle/run/attack/hit/death), NLA-треки → отдельные `AnimationClip`. Держи ≤30 костей, ≤4 веса/вершину.
 2. Пакет `anim-ts`: FSM + матрица переходов + `AnimationMixer`-раннер. Crossfade по смене enum, длительности 0.1–0.25 с. Используй `reset().fadeIn().play()`, не `stopAllAction`, чтобы не ловить T-pose-мигание.
 3. Blend tree локомоции по `|velocity|`; синхронизируй `timeScale` цикла со скоростью против foot sliding.

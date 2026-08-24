@@ -4,7 +4,7 @@
  * что обойти их бот не может: сверхчеловеческий ввод не выражается.
  */
 import { describe, expect, it } from 'vitest';
-import { FIXED_ONE, fixed } from '@game-mvp/core';
+import { FIXED_ONE, fixed } from '@fluxus/core';
 import { TURN_UNITS, aimToRadians, toInputSample } from '../src/boundary.js';
 
 const length = (sample: { move: { x: number; y: number } }): number =>

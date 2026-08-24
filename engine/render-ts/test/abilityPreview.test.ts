@@ -28,7 +28,7 @@ import {
   type AbilityCatalog,
   type EntityId,
   type SceneDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   AbilityPreviewSubsystem,
   PresentationStage,

@@ -19,7 +19,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { actions, expr, loadScene, validateSystem, world, type SceneDef, type SystemDef } from '@game-mvp/core';
+import { actions, expr, loadScene, validateSystem, world, type SceneDef, type SystemDef } from '@fluxus/core';
 import {
   ContributionRegistry,
   SYSTEM_RULE,
@@ -36,7 +36,7 @@ import {
   type JsonPath,
   type JsonValue,
   type ValidationRule,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { findAll, hasClass, type UiNode } from '../src/dom/node.js';
 import {
   SYSTEMS_AREA_ID,

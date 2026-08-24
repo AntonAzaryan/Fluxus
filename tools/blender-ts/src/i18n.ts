@@ -13,7 +13,7 @@
  * считается отчёт ED-28 о полях схем, — как и `ui.*` у интерфейса; пространство
  * `validation.*` в отчёт входит, и обе его стороны сверяет тест пакета.
  */
-import type { LocaleBundles } from '@game-mvp/editor-core';
+import type { LocaleBundles } from '@fluxus/editor-core';
 import en from './locales/blender.en.json';
 import ru from './locales/blender.ru.json';
 

@@ -8,12 +8,12 @@
  * контейнером, что у grid-фикстур.
  */
 import { describe, expect, it } from 'vitest';
-import { createTerrainGrid } from '@game-mvp/core';
-import { CURVATURE_SCALE, validateCurvatureMap } from '@game-mvp/assets';
-import { createMemoryHost } from '@game-mvp/editor-core';
+import { createTerrainGrid } from '@fluxus/core';
+import { CURVATURE_SCALE, validateCurvatureMap } from '@fluxus/assets';
+import { createMemoryHost } from '@fluxus/editor-core';
 // Правило углов рендера — то же, что читает `sculpt.ts`: второй реализации
 // узловой базы BLND-13 не допускает (REND-9).
-import { cornerLevels, createVisualSurface } from '@game-mvp/render/visualSurface';
+import { cornerLevels, createVisualSurface } from '@fluxus/render/visualSurface';
 import { parseGltf } from '../src/gltf.js';
 import { runImport } from '../src/importer.js';
 import { LEVEL_UNIT, generateCellLayer, type CellLayer } from '../src/maps.js';

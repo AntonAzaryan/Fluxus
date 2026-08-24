@@ -17,8 +17,8 @@
  * между наборами номера не пересекаются по смыслу: это адреса инстансов набора.
  * Возврат ключа даёт новый номер: инстанс создаётся заново (REND-11).
  */
-import type { EntityId } from '@game-mvp/core';
-import { LOCOMOTION_NORMAL } from '@game-mvp/core';
+import type { EntityId } from '@fluxus/core';
+import { LOCOMOTION_NORMAL } from '@fluxus/core';
 import type { EntityView } from './types.js';
 
 /** Что механизм требует от записи набора: ключ, вид и позиция (REND-11, REND-18). */

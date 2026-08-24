@@ -29,7 +29,7 @@
  * профиль — не документ симуляции, в `worldInit` он не входит и на детерминизм
  * не влияет (BOT-5).
  */
-import { ABILITY_STEPS } from '@game-mvp/core';
+import { ABILITY_STEPS } from '@fluxus/core';
 import {
   name as documentName,
   num,

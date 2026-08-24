@@ -8,7 +8,7 @@
  * конверта, и каждый несёт ровно то, что нельзя передать иначе: порт участника
  * (его не скопировать — только transfer) и адрес стенда.
  */
-import type { RawPort } from '@game-mvp/bot';
+import type { RawPort } from '@fluxus/bot';
 
 /** Главный поток → воркеру сервера: подними матч вкладки. */
 export interface DemoServerInit {

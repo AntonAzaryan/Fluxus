@@ -24,8 +24,8 @@ import {
   type Simulation,
   type System,
   type TerrainGrid,
-} from '@game-mvp/core';
-import type { VisualManifest } from '@game-mvp/assets';
+} from '@fluxus/core';
+import type { VisualManifest } from '@fluxus/assets';
 import {
   DecorationSet,
   DocumentSource,

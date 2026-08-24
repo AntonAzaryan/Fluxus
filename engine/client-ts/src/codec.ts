@@ -34,8 +34,8 @@
  *   motion      u8×count    — состояние машины локомоушена (LOC-3, REND-4)
  *   statCount   u8×count    — сколько пар статов у сущности (HUD-8)
  */
-import type { ExtractedTick, RenderEvent } from '@game-mvp/render';
-import type { WorldMode } from '@game-mvp/core';
+import type { ExtractedTick, RenderEvent } from '@fluxus/render';
+import type { WorldMode } from '@fluxus/core';
 
 /** 4: добавлены колонка фазы полёта (REND-12) и разреженные статы (HUD-8). */
 export const CODEC_VERSION = 4;

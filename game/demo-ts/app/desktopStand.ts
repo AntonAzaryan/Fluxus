@@ -21,7 +21,7 @@ import {
   desktopBridgeOf,
   sessionGrants,
   type DesktopBridge,
-} from '@game-mvp/desktop-shell/bridge';
+} from '@fluxus/desktop-shell/bridge';
 
 /**
  * Имя сервиса стенда. То же, что в `desktop/shell-ts/apps/game.app.json`:

@@ -6,7 +6,7 @@
  * клиентский воркер соединяется с матчем. Ни состояния, ни тиков, ни presentation:
  * рисует их клиент, как и в матче на выделенном стенде (SES-2).
  */
-import { isBotWorkerInit, startBotWorker, type WorkerLike } from '@game-mvp/bot';
+import { isBotWorkerInit, startBotWorker, type WorkerLike } from '@fluxus/bot';
 import { DEMO_PLAYERS, demoMatchConfig } from './match.js';
 import { demoBotBehavior, demoBotProfile } from './bots.js';
 import { openLocalSession } from './localSession.js';

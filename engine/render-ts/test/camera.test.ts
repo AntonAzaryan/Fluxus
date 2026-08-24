@@ -20,7 +20,7 @@ import {
   type CameraRigOptions,
   type FollowTarget,
 } from '../src/index.js';
-import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
+import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 
 const target = (x: number, y: number, snap = false): FollowTarget => ({ x, y, snap });
 

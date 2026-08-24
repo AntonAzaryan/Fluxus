@@ -20,14 +20,14 @@ import {
   snapshotToPlain,
   world as coreWorld,
   type SceneDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   replaySegments,
   REWIND_REQUEST_EVENT,
   type InputSource,
   type MatchSegment,
   type PresentedState,
-} from '@game-mvp/net';
+} from '@fluxus/net';
 import {
   RenderBridge,
   STEP,

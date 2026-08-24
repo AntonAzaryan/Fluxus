@@ -32,8 +32,8 @@
  * скалпта в точке» и «какие уровни/флаги из этого следуют числами», а формат —
  * вопрос ядра.
  */
-import type { TerrainGrid } from '@game-mvp/core';
-import { cornerLevels } from '@game-mvp/render/visualSurface';
+import type { TerrainGrid } from '@fluxus/core';
+import { cornerLevels } from '@fluxus/render/visualSurface';
 import type { CellGridSpec } from './cells.js';
 import { GltfParseError, readMeshGeometry, type GltfDocument } from './gltf.js';
 import { worldPoint, type SourceObject } from './normalize.js';

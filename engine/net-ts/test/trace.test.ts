@@ -17,7 +17,7 @@ import {
   type DiagnosticRecord,
   type GameEvent,
   type SceneDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import { createMatchTrace } from '../src/match/trace.js';
 import { parseServerMessage } from '../src/protocol/messages.js';
 import { MatchServer, type MatchConfig } from '../src/server/matchServer.js';

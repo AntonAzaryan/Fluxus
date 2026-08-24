@@ -7,7 +7,7 @@
  *                        [--add] [--dry-run]
  *
  * Значение флага принимается обеими формами — `--root=content` и `--root
- * content` (CLI-11, `@game-mvp/net/bin/matchFile.mjs`).
+ * content` (CLI-11, `@fluxus/net/bin/matchFile.mjs`).
  *
  * Команда запускается дизайнером РУКАМИ: сцена получила новое определение
  * способности, аннотация его описала — и запись профиля рождается из двух
@@ -48,7 +48,7 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Ради побочного действия (хук резолва) и ради разбора флагов обеих форм.
-import { flag, option } from '@game-mvp/net/bin/matchFile.mjs';
+import { flag, option } from '@fluxus/net/bin/matchFile.mjs';
 
 const USAGE =
   'usage: npm run bots:sync -- [--root content] [--profile bots/normal.json] [--add] [--dry-run]\n' +
@@ -63,8 +63,8 @@ if (flag('help')) {
   process.exit(0);
 }
 
-const { parseBotProfile } = await import('@game-mvp/bot');
-const { prettyJsonSerializer } = await import('@game-mvp/core');
+const { parseBotProfile } = await import('@fluxus/bot');
+const { prettyJsonSerializer } = await import('@fluxus/core');
 const { BOT_HINTS_SUFFIX, parseBotHints } = await import('../app/botHints.ts');
 const { expectedAbilities, syncProfileAbilities, verifyProfileAbilities } = await import(
   '../app/botContract.ts'
@@ -72,7 +72,7 @@ const { expectedAbilities, syncProfileAbilities, verifyProfileAbilities } = awai
 
 // Умолчание корня — дерево контента РЕПОЗИТОРИЯ, а не `content/` рядом с
 // рабочим каталогом: команда запускается и из корня (`npm run bots:sync`), и из
-// пакета (`npm run bots:sync -w @game-mvp/demo`), и второй запуск не обязан
+// пакета (`npm run bots:sync -w @fluxus/demo`), и второй запуск не обязан
 // падать ENOENT'ом. Тот же приём, что у стенда демо-арены (`demo-serve.mjs`).
 // Явный `--root` резолвится от рабочего каталога — его называет человек.
 const REPO_CONTENT = fileURLToPath(new URL('../../../content', import.meta.url));

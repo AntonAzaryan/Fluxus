@@ -36,13 +36,13 @@ import {
   world,
   worldInitHash,
   type SceneDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   presentationPathOf,
   validateCurvatureMap,
   validateManifest,
   validatePresentationScene,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import { runImport } from '../src/importer.js';
 import { createNodeHost } from '../src/nodeHost.js';
 import {

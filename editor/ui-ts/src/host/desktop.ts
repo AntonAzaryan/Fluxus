@@ -11,7 +11,7 @@
  *
  * ## Зависимость направлена от приложения к границе
  *
- * Отсюда импортируются типы `@game-mvp/desktop-shell/bridge` — слой без единой
+ * Отсюда импортируются типы `@fluxus/desktop-shell/bridge` — слой без единой
  * зависимости, описывающий ГРАНИЦУ. Обратной связи нет: контейнер о редакторе
  * не знает и знать не может, это проверяется гейтом (DSK-3).
  *
@@ -37,7 +37,7 @@ import type {
   BridgePath,
   BridgeRootId,
   DesktopBridge,
-} from '@game-mvp/desktop-shell/bridge';
+} from '@fluxus/desktop-shell/bridge';
 import {
   normalizeContentPath,
   type ChoiceRequest,
@@ -50,7 +50,7 @@ import {
   type ContentWatcher,
   type EnvironmentHost,
   type WindowHost,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 
 export interface DesktopHostOptions {
   /** Имя реализации для диагностики; ветвиться по нему запрещено (ED-12). */

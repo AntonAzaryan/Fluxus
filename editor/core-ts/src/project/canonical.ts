@@ -13,7 +13,7 @@
  * называет порядок записей расстановки нормативным, потому что он задаёт
  * выданные ID.
  */
-import { prettyJsonSerializer } from '@game-mvp/core';
+import { prettyJsonSerializer } from '@fluxus/core';
 import type { JsonValue } from '../document/json.js';
 
 /** Байты документа в канонической форме. */

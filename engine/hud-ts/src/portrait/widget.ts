@@ -53,7 +53,7 @@ import {
   type AssetService,
   type NormalizedModel,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import type { HudParams } from '../composition.js';
 import type { HudDeliveredEvent, HudEntityView } from '../delivery.js';
 import { el, type HudNode } from '../dom/node.js';

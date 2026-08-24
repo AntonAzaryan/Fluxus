@@ -41,15 +41,15 @@ import {
   type Serializer,
   type SimulationState,
   type TerrainGrid,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   ClientHost,
   type DeliveredEvents,
   type InputSample,
   type MatchClient,
   type Transport,
-} from '@game-mvp/net';
-import type { Extractor, RenderEvent } from '@game-mvp/render';
+} from '@fluxus/net';
+import type { Extractor, RenderEvent } from '@fluxus/render';
 import { ShellSender, type SenderOptions } from './sender.js';
 import { InputLatch, routeMainMessage } from './inputLatch.js';
 import { helloMessage, type ControlMessage, type MainToWorker, type ShellPort } from './protocol.js';
@@ -166,7 +166,7 @@ export class NetworkShell {
     this.host = new ClientHost(config.client, config.transport, {
       now: this.clock,
       // Ввод главного потока уходит серверу сообщением `Input` (`netcode` NET-7)
-      // и локально не применяется: предсказания в MVP нет (NTR-10).
+      // и локально не применяется: предсказания у клиента пока нет (NTR-10).
       input: () => this.takeInput(),
       ...(config.serializer !== undefined ? { serializer: config.serializer } : {}),
     });

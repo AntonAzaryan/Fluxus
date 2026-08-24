@@ -17,14 +17,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { FIXED_ONE, createTerrainGrid, type TerrainGrid } from '@game-mvp/core';
+import { FIXED_ONE, createTerrainGrid, type TerrainGrid } from '@fluxus/core';
 import type {
   AssetService,
   PresentationFog,
   PresentationLighting,
   PresentationPostprocess,
   VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   EffectsSubsystem,
   FogSubsystem,
@@ -38,7 +38,7 @@ import {
   validateQualityPreset,
   type QualityValue,
   type RenderContext,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 import {
   DEFAULT_QUALITY_PRESET,
   QUALITY_PRESETS,

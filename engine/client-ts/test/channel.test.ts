@@ -16,8 +16,8 @@ import {
   query,
   tick,
   world as coreWorld,
-} from '@game-mvp/core';
-import { ViewBuffer, type RenderSubsystem, type TickView } from '@game-mvp/render';
+} from '@fluxus/core';
+import { ViewBuffer, type RenderSubsystem, type TickView } from '@fluxus/render';
 import { RemoteHost, WorkerShell, shellPort, type TickEnvelope } from '../src/index.js';
 import {
   PLAYER_ID,

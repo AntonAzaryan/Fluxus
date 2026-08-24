@@ -45,8 +45,8 @@ import {
   type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
-} from '@game-mvp/editor-core';
-import { validateManifest, type EntityVisual, type VisualManifest } from '@game-mvp/assets';
+} from '@fluxus/editor-core';
+import { validateManifest, type EntityVisual, type VisualManifest } from '@fluxus/assets';
 
 /** Идентификаторы операций над записями манифеста. */
 export const VISUALS_OPERATIONS = {

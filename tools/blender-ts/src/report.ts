@@ -10,7 +10,7 @@
  * Строк интерфейса здесь нет: текст находки принадлежит правилу и приходит из
  * ресурсов (ED-27, ED-28), а этот модуль только ставит его в строку вывода.
  */
-import { StringResources, formatIssue, type ValidationIssue } from '@game-mvp/editor-core';
+import { StringResources, formatIssue, type ValidationIssue } from '@fluxus/editor-core';
 import { BLENDER_BUNDLES } from './i18n.js';
 import type { ImportResult } from './importer.js';
 import type { Finding } from './layer.js';

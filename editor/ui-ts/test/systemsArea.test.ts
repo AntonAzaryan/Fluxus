@@ -17,7 +17,7 @@
  *   называет причину, а не показывает пустой перечень.
  */
 import { describe, expect, it } from 'vitest';
-import { loadScene, type SceneDef } from '@game-mvp/core';
+import { loadScene, type SceneDef } from '@fluxus/core';
 import {
   createEditorSession,
   createMemoryHost,
@@ -26,7 +26,7 @@ import {
   registerBuiltinOperations,
   type EditorSession,
   type JsonValue,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { findAll, type UiNode } from '../src/dom/node.js';
 import {
   SYSTEMS_AREA_ID,

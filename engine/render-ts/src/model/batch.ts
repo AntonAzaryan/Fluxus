@@ -33,7 +33,7 @@
  * переживает).
  */
 import * as THREE from 'three';
-import type { BakedPartVisibility, NormalizedMesh } from '@game-mvp/assets';
+import type { BakedPartVisibility, NormalizedMesh } from '@fluxus/assets';
 import type { RenderCostCounters } from '../cost.js';
 import { geometryFromMesh, type SharedMeshData } from './build.js';
 import type { VatMaterial } from './vatMaterial.js';

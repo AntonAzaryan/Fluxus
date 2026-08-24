@@ -7,11 +7,11 @@
  * один канонический лог (NTR-8), а различие обязано быть видно только в
  * опубликованном `SessionInfo`.
  *
- * Собирается всё из публичной поверхности `@game-mvp/net` — как того требует
+ * Собирается всё из публичной поверхности `@fluxus/net` — как того требует
  * CLI-9 и как это делает запускалка.
  */
 import { describe, expect, it } from 'vitest';
-import type { InputFrame } from '@game-mvp/core';
+import type { InputFrame } from '@fluxus/core';
 import {
   DedicatedSession,
   HostSession,
@@ -21,7 +21,7 @@ import {
   joinSession,
   type MatchConfig,
   type SessionInfo,
-} from '@game-mvp/net';
+} from '@fluxus/net';
 import { BUILD_ID, TICK_RATE, duelConfig, settle, walkRight, type Clock } from './fixtures.js';
 
 interface Played {

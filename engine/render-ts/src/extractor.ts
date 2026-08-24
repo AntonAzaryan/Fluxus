@@ -32,7 +32,7 @@ import {
   type TickResult,
   type WorldMode,
   type WorldState,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import { FloorMirror } from './floorMirror.js';
 import {
   StatReader,

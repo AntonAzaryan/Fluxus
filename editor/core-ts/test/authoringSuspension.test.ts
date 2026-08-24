@@ -14,7 +14,7 @@
  * канонический вид — правило ядра, и второй его реализации в редакторе быть не
  * должно (ED-1, ED-21).
  */
-import { jsonSerializer } from '@game-mvp/core';
+import { jsonSerializer } from '@fluxus/core';
 import { describe, expect, it } from 'vitest';
 import {
   createEditorSession,

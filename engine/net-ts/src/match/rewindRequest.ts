@@ -16,7 +16,7 @@
  * Payload — это балансная политика, приезжающая из контента: инициатор и
  * глубина автостопа в тиках. Ни одного числа хост от себя не добавляет (WSM-5).
  */
-import type { EntityId, GameEvent } from '@game-mvp/core';
+import type { EntityId, GameEvent } from '@fluxus/core';
 
 /** Тип служебного события-запроса на шине тика. */
 export const REWIND_REQUEST_EVENT = '$rewind/request';

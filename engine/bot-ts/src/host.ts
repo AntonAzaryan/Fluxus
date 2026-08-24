@@ -21,7 +21,7 @@
  * внутрипроцессном транспорте автотеста, в паре портов воркера и в WebSocket
  * (NTR-2). Место исполнения выбирает сборка — `src/worker/`.
  */
-import type { PhysicsOptions, Serializer, VisibilityOptions } from '@game-mvp/core';
+import type { PhysicsOptions, Serializer, VisibilityOptions } from '@fluxus/core';
 import {
   ClientHost,
   MatchClient,
@@ -30,7 +30,7 @@ import {
   type GameVersion,
   type InputSample,
   type Transport,
-} from '@game-mvp/net';
+} from '@fluxus/net';
 import type { BotBrain, BotBrainFactory } from './brain.js';
 import { toInputSample } from './boundary.js';
 import type { BotProfile } from './profile.js';

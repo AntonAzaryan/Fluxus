@@ -16,7 +16,7 @@
  * контракт камеры и сообщений воркеру не порождают: симуляция о них не
  * узнаёт (HUD-2).
  */
-import type { ActionSink, ContinuousSample, ControlMessage, InputSource } from '@game-mvp/client';
+import type { ActionSink, ContinuousSample, ControlMessage, InputSource } from '@fluxus/client';
 
 /**
  * Контракт управления камерой для presentation-действий (HUD-2): узкая

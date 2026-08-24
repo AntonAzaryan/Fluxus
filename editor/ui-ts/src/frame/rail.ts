@@ -15,7 +15,7 @@
  * является — её место в палитре команд (W2-3), где сочетания показываются
  * рядом с командами.
  */
-import type { StringResources } from '@game-mvp/editor-core';
+import type { StringResources } from '@fluxus/editor-core';
 import { el, resourceText, type UiNode } from '../dom/node.js';
 import { rovingContainer, rovingItem, rovingTarget } from '../dom/roving.js';
 import { icon } from '../widgets/icon.js';

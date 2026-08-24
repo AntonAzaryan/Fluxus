@@ -13,7 +13,7 @@
  * умолчание кода. Параметр, конфигом не объявленный, пропускается с
  * предупреждением и отказом не является (ASSET-10).
  */
-import type { CameraConfigDescription, CameraConfigSection } from '@game-mvp/assets';
+import type { CameraConfigDescription, CameraConfigSection } from '@fluxus/assets';
 import { DEFAULT_CAMERA_CONFIG, type CameraConfig } from './rig.js';
 
 /** Имена параметров конфига камеры — единственный их перечень (CAM-1). */

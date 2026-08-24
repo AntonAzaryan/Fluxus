@@ -11,7 +11,7 @@
  * гистограмма уровней, число рамп, клеток без пола и накрытых настилом. Растра
  * высот в дампе нет (RDBG-7) — арена в тысячи клеток бесполезна обеим граням.
  */
-import type { TerrainGrid } from '@game-mvp/core';
+import type { TerrainGrid } from '@fluxus/core';
 import type { VisualSurface } from '../visualSurface.js';
 import { DebugRows, type DebugColor, type DebugDraw, type DebugProbe, type DebugSource } from './contract.js';
 

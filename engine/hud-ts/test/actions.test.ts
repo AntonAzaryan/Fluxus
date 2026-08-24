@@ -4,7 +4,7 @@
  * локальный вызов контракта камеры без единого сообщения воркеру.
  */
 import { describe, expect, it } from 'vitest';
-import { InputSampler, KeyboardMouseSource } from '@game-mvp/client';
+import { InputSampler, KeyboardMouseSource } from '@fluxus/client';
 import { HudActionsFacade, HudRegistry } from '../src/index.js';
 import { CameraSpy } from './support/hud.js';
 

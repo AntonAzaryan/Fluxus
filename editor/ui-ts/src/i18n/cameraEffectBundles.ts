@@ -8,9 +8,9 @@
  *   ключи начинались с `ui.`, а это пространство ОПИСАНИЙ ПОЛЕЙ (ED-28) — ключ
  *   выводится из пути `['cameraEffect', <тип>, <параметр>]`, тем же
  *   `descriptionKey`, каким выводятся описания компонентов;
- * - в бандл `@game-mvp/editor-core` — тоже нельзя: его гейт сводит бандл с
+ * - в бандл `@fluxus/editor-core` — тоже нельзя: его гейт сводит бандл с
  *   путями, которые ПАКЕТ УМЕЕТ ВЫВЕСТИ (схемы ядра, правила валидации), а пути
- *   эффектов он вывести не может — описание живёт в `@game-mvp/render`, которого
+ *   эффектов он вывести не может — описание живёт в `@fluxus/render`, которого
  *   у него нет. Строки числились бы осиротевшими и уронили бы гейт.
  *
  * Отсюда правило и для роста: строки приносит тот, кто приносит описание. Свой
@@ -18,8 +18,8 @@
  * `CAMERA_EFFECTS_DESCRIPTION` в обе стороны — тип без строк красит тест, а не
  * показывает автору голый ключ.
  */
-import { descriptionKey, type LocaleBundles } from '@game-mvp/editor-core';
-import { cameraEffectParams, type CameraEffectsDescription } from '@game-mvp/assets';
+import { descriptionKey, type LocaleBundles } from '@fluxus/editor-core';
+import { cameraEffectParams, type CameraEffectsDescription } from '@fluxus/assets';
 import en from './locales/cameraEffect.en.json';
 import ru from './locales/cameraEffect.ru.json';
 

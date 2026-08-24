@@ -14,8 +14,8 @@ import {
   validateSystem,
   type SceneDef,
   type TerrainDef,
-} from '@game-mvp/core';
-import type { CameraConfigDescription, CameraEffectsDescription } from '@game-mvp/assets';
+} from '@fluxus/core';
+import type { CameraConfigDescription, CameraEffectsDescription } from '@fluxus/assets';
 import { describe, expect, it } from 'vitest';
 import { createEditorSession, type EditorSession, type JsonValue } from '../src/document/index.js';
 import { EDITOR_BUNDLES, StringResources } from '../src/i18n/index.js';

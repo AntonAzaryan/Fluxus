@@ -12,7 +12,7 @@
  *                                       [--dict <словарь журнала>]
  *
  * Значение флага принимается обеими формами — `--trace=full` и `--trace full`
- * (CLI-11, `@game-mvp/net/bin/matchFile.mjs`).
+ * (CLI-11, `@fluxus/net/bin/matchFile.mjs`).
  *
  * Отладочный прогон (`--debug`, CLI-11) — ОДНА команда и ни человека за
  * клавиатурой, ни второго процесса: боты занимают слоты немедленно, матч
@@ -36,7 +36,7 @@
  * `content/bots/behaviors/*.json`) через `fs`, а движку дерево контента запрещено
  * (`game-content` CONT-4). Игре оно разрешено — она и есть игра (CONT-1),
  * поэтому здесь чтение не требует оправдания. Сетевые детали приходят
- * опубликованной поверхностью пакета (`@game-mvp/net`), а не файлами под его
+ * опубликованной поверхностью пакета (`@fluxus/net`), а не файлами под его
  * `src/`.
  *
  * Тонкая обвязка поверх тех же деталей, что и `serve.mjs` пакета net:
@@ -69,9 +69,9 @@ import { MessageChannel, Worker } from 'node:worker_threads';
 // Раскладка документа матча — та же, что у запускалок net (`matchConfigOf`), и
 // берётся она оттуда же: разойдись стенд с `serve.mjs` в сборке мира, и один
 // файл матча поднял бы два разных мира (NTR-5, NTR-14). Подпуть пакета, потому
-// что помощник запускалок в публичный `@game-mvp/net` не входит, а вторая копия
+// что помощник запускалок в публичный `@fluxus/net` не входит, а вторая копия
 // раскладки и есть тот самый способ разойтись.
-import { flag, matchConfigOf, option, readMatchFile } from '@game-mvp/net/bin/matchFile.mjs';
+import { flag, matchConfigOf, option, readMatchFile } from '@fluxus/net/bin/matchFile.mjs';
 // Флаги трейса — оттуда же и по той же причине (CLI-11): уровень, отбор и путь
 // вывода стенд принимает тем же образом, что и `serve.mjs`.
 import {
@@ -79,10 +79,10 @@ import {
   traceOptions,
   TRACE_USAGE,
   TRACE_WITHOUT_RECORD,
-} from '@game-mvp/net/bin/trace.mjs';
+} from '@fluxus/net/bin/trace.mjs';
 // Журнал собирается ТЕМ ЖЕ кодом, что и команда `npm run journal` (CLI-12):
 // второй разбор трейса рядом означал бы вторую реализацию выборки фактов.
-import { journalDocument, journalFromFile, journalReport } from '@game-mvp/core/bin/journal.mjs';
+import { journalDocument, journalFromFile, journalReport } from '@fluxus/core/bin/journal.mjs';
 
 const fromRepo = (relative) => fileURLToPath(new URL(`../../../${relative}`, import.meta.url));
 
@@ -103,9 +103,9 @@ const {
   MatchHost,
   MatchServer,
   webSocketTransportServer,
-} = await import('@game-mvp/net');
+} = await import('@fluxus/net');
 const { BRAIN_KINDS, BotSlotFiller, PortConnections, attachBots, parseBotBehavior, parseBotProfile } =
-  await import('@game-mvp/bot');
+  await import('@fluxus/bot');
 // Слушающая сторона между матчами — модуль сборки, а не часть скрипта: окно
 // рестарта проверяется тестом (`test/standSession.test.ts`). Типы Node
 // стрипает сам (>=22.18, тот же приём, что у `bots-sync.mjs`), а динамическим

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://game-mvp.local/schemas/component.schema.json",
+  "$id": "https://fluxus.local/schemas/component.schema.json",
   "title": "Схема компонента (ECS-3)",
   "type": "object",
   "additionalProperties": false,

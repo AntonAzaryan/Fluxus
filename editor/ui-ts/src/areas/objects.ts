@@ -54,7 +54,7 @@ import {
   type JsonPath,
   type JsonValue,
   type OperationParams,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   children,
   documentValue,

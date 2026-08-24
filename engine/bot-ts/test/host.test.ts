@@ -4,8 +4,8 @@
  * нельзя обойти изнутри мозга (BOT-2, BOT-4, BOT-5).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fixed } from '@game-mvp/core';
-import type { Transport } from '@game-mvp/net';
+import { fixed } from '@fluxus/core';
+import type { Transport } from '@fluxus/net';
 import type { BotBrain, BotBrainFactory, BotSelf } from '../src/brain.js';
 import type { BotIntent } from '../src/boundary.js';
 import { BotHost } from '../src/host.js';

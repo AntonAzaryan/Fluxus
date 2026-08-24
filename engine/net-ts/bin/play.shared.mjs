@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { flag, option } from './matchFile.mjs';
 
-const { fixed } = await import('@game-mvp/core');
+const { fixed } = await import('@fluxus/core');
 
 /** Один шаг в Q16.16 — заметное движение, которое видно в снапшоте. */
 const STEP = fixed.fromFloat(0.15);

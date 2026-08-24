@@ -35,8 +35,8 @@
  * жизненный цикл инстанса нормирован один раз (REND-3), и реализация у него
  * тоже одна. Своё у набора — поля, которые он пишет, и вход сцены.
  */
-import type { DecorationRecord } from '@game-mvp/assets';
-import type { EntityId } from '@game-mvp/core';
+import type { DecorationRecord } from '@fluxus/assets';
+import type { EntityId } from '@fluxus/core';
 import type { EntityView } from './types.js';
 import { KeyedInstanceSet } from './keyedInstanceSet.js';
 import type { PresentationStage } from './stage.js';

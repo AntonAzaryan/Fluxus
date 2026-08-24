@@ -4,8 +4,8 @@
  * загрузки. Сама развёртка остаётся у подсистемы (`warm` — её замыкание): пул,
  * группа и батч-рендерер — её собственность.
  */
-import type { AssetService, ParticleEffectDocument, VisualManifest } from '@game-mvp/assets';
-import { resolveVisualEmitter } from '@game-mvp/assets';
+import type { AssetService, ParticleEffectDocument, VisualManifest } from '@fluxus/assets';
+import { resolveVisualEmitter } from '@fluxus/assets';
 
 /**
  * Все asset id эффектов, на которые ссылается манифест: секции частиц

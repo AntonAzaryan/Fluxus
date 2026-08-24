@@ -10,7 +10,7 @@
  * переименование экспорта в бине краснеет импортом, а не остаётся здесь
  * тихой ложью.
  */
-import type { DiagnosticRecord, TraceSelect } from '@game-mvp/core';
+import type { DiagnosticRecord, TraceSelect } from '@fluxus/core';
 import type { MatchTrace } from '../src/match/trace.js';
 
 /** Разобранные флаги трейса (CLI-11). */

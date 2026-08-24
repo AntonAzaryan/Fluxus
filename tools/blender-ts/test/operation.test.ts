@@ -18,7 +18,7 @@ import {
   runOperationRoundTrip,
   type EditorSession,
   type JsonValue,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   BLENDER_BUNDLES,
   DEFAULT_DECORATIONS_PATH,

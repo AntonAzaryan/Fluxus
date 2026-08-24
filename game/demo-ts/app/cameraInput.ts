@@ -23,7 +23,7 @@
  * край работает как работал — там открепляться уже не от чего, и панорама краем
  * экрана остаётся основным способом вести камеру.
  */
-import { edgePanAxes, type CameraMode } from '@game-mvp/render';
+import { edgePanAxes, type CameraMode } from '@fluxus/render';
 
 /** Общий литерал покоя: функция зовётся покадрово и мусора не оставляет. */
 const IDLE: { readonly x: number; readonly y: number } = Object.freeze({ x: 0, y: 0 });

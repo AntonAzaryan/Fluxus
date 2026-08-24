@@ -5,13 +5,13 @@
  * функцией ядра `contentPackHash`, а не своей: двух разных способов хешировать
  * данные в движке быть не должно (NET-17).
  *
- * Ограничение MVP осознанное: пак содержит ровно одну сцену. `contentPackHash`
+ * Ограничение осознанное: пак содержит ровно одну сцену. `contentPackHash`
  * — чистая функция ОДНОГО конфига сцены, и склейка хешей нескольких сцен в один
  * потребовала бы нормы (в каком порядке, каким способом), которой в NET-17 нет.
  * Изобрести её здесь значило бы завести второй способ хеширования — ровно то,
  * что требование запрещает. Многосценовый пак — отдельный change со своей нормой.
  */
-import { contentPackHash, type SceneDef } from '@game-mvp/core';
+import { contentPackHash, type SceneDef } from '@fluxus/core';
 import type { ContentPack } from '../client/matchClient.js';
 
 export interface LoadedContentPack extends ContentPack {
@@ -24,7 +24,7 @@ export function contentPack(scenes: Readonly<Record<string, SceneDef>>): LoadedC
   const refs = Object.keys(scenes);
   if (refs.length !== 1) {
     throw new Error(
-      `контент-пак MVP содержит ровно одну сцену, получено ${refs.length}: ` +
+      `контент-пак содержит ровно одну сцену, получено ${refs.length}: ` +
         'склейка хешей нескольких сцен не нормирована (NET-17) и вводится отдельным change\'ем',
     );
   }

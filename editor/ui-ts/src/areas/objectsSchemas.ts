@@ -30,7 +30,7 @@
  * Отсутствие операции и есть способ сделать «перестановка MUST NOT быть
  * побочным эффектом» проверяемым: переставить нечем.
  */
-import { loadScene, schemaFiles, world, type SceneDef, type WorldState } from '@game-mvp/core';
+import { loadScene, schemaFiles, world, type SceneDef, type WorldState } from '@fluxus/core';
 import {
   OperationError,
   getAtPath,
@@ -45,7 +45,7 @@ import {
   type OperationParamSpec,
   type OperationRegistry,
   type SchemaPath,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { documentValue } from '../dom/node.js';
 import type { FieldGroup, InspectorSubject, SchemaField } from '../inspector/index.js';
 import { jsonSchemaFields } from './sceneSchema.js';

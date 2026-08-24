@@ -62,7 +62,7 @@ import {
   type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { PREFAB_COMPONENTS_KEY } from './objectsPrefabs.js';
 
 /** Идентификаторы операций пары (ED-19). */

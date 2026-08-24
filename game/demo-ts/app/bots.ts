@@ -20,7 +20,7 @@ import {
   parseBotProfile,
   type BotBehaviorDocument,
   type BotProfile,
-} from '@game-mvp/bot';
+} from '@fluxus/bot';
 import profileJson from '../../../content/bots/normal.json';
 import classicJson from '../../../content/bots/behaviors/classic.json';
 import cautiousJson from '../../../content/bots/behaviors/cautious.json';

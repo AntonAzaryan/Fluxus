@@ -1,5 +1,5 @@
 /**
- * HUD демо на пакете `@game-mvp/hud` (задача 5.2): композиция — декларативное
+ * HUD демо на пакете `@fluxus/hud` (задача 5.2): композиция — декларативное
  * TS-значение (HUD-4), реестры видов/селекторов/действий — сборка демо,
  * исполнитель и оверлей-хост — из пакета. Ad-hoc HUD из `main.ts` заменён
  * целиком: статус матча, панель способностей, миникарта и живой портрет —
@@ -11,7 +11,7 @@
  * паузы — обратным каналом `RemoteHost.control`; клик миникарты — presentation-
  * действие контракта камеры, сообщений воркеру не порождает.
  */
-import type { AssetService, VisualManifest } from '@game-mvp/assets';
+import type { AssetService, VisualManifest } from '@fluxus/assets';
 import {
   HudActionsFacade,
   HudOverlayHost,
@@ -34,7 +34,7 @@ import {
   type HudIconSource,
   type MinimapFogSource,
   type MinimapTerrainSource,
-} from '@game-mvp/hud';
+} from '@fluxus/hud';
 import { COOLDOWN_ABILITIES, RESPAWN_EVENT, STATS } from './sim.js';
 
 /** Что даёт оболочка этой сборки: от этого зависит состав HUD (SHELL-8). */

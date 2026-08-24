@@ -10,8 +10,8 @@
  * (SHELL-3) от статов не разъезжается.
  */
 import { describe, expect, it } from 'vitest';
-import { tick } from '@game-mvp/core';
-import { Extractor, ViewBuffer, kindByTags, type StatSource } from '@game-mvp/render';
+import { tick } from '@fluxus/core';
+import { Extractor, ViewBuffer, kindByTags, type StatSource } from '@fluxus/render';
 import { RemoteHost, WorkerShell, readTick, requiredBytes, writeTick } from '../src/index.js';
 import {
   PLAYER_ID,

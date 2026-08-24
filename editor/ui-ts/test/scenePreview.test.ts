@@ -15,8 +15,8 @@
  * та мутация, ради которой REND-14 требует переподачи сетки на выходе —
  * «в превью взрыв выбивает пол… после выхода документы в том же состоянии».
  */
-import { FLOOR_COMPONENT, world, type EntityId } from '@game-mvp/core';
-import { AuthoringSuspendedError } from '@game-mvp/editor-core';
+import { FLOOR_COMPONENT, world, type EntityId } from '@fluxus/core';
+import { AuthoringSuspendedError } from '@fluxus/editor-core';
 import { describe, expect, it } from 'vitest';
 import { documentValue, findAll, type UiNode } from '../src/dom/node.js';
 import { PREVIEW_SUSPENSION_REASON } from '../src/frame/preview.js';

@@ -30,8 +30,8 @@ import {
   type CameraInput,
   type CameraPose,
   type TerrainCameraSource,
-} from '@game-mvp/render';
-import type { TerrainGrid } from '@game-mvp/core';
+} from '@fluxus/render';
+import type { TerrainGrid } from '@fluxus/core';
 
 /**
  * Раскладка камеры вьюпорта. Данными, а не разбросанными по коду сравнениями:

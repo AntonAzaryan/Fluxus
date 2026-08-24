@@ -10,7 +10,7 @@
  * сетевом слое при этом нет ни одного: глубина приезжает в payload события.
  */
 import { describe, expect, it } from 'vitest';
-import { fixed, type GameEvent, type SceneDef } from '@game-mvp/core';
+import { fixed, type GameEvent, type SceneDef } from '@fluxus/core';
 import { MatchClient, type InputSample } from '../src/client/matchClient.js';
 import { contentPack } from '../src/content/pack.js';
 import { REWIND_REQUEST_EVENT, firstRewindRequest } from '../src/match/rewindRequest.js';

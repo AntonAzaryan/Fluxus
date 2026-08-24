@@ -7,7 +7,7 @@
  * прогоне нет, поэтому попадания раскладывает по точкам экрана сам тест —
  * согласованность попадания с изображением есть свойство рендера (REND-15).
  */
-import { getAtPath, type JsonValue } from '@game-mvp/editor-core';
+import { getAtPath, type JsonValue } from '@fluxus/editor-core';
 import { describe, expect, it } from 'vitest';
 import { SCENE_AREA_ID, type SceneAreaState } from '../src/areas/scene.js';
 import { DECORATION_LIST, PLACEMENT_LIST } from '../src/areas/sceneProject.js';

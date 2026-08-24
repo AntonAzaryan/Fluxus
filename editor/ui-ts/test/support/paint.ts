@@ -13,7 +13,7 @@ import {
   createOperationRegistry,
   registerBuiltinOperations,
   type EditorSession,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { PLACEMENT_LIST } from '../../src/areas/sceneProject.js';
 import { registerPlacementOperations } from '../../src/areas/scenePlacement.js';
 import { registerTerrainOperations } from '../../src/areas/sceneTerrain.js';

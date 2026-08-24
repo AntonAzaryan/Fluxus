@@ -29,10 +29,10 @@
  * к прицелу. Своей копии этих величин он не держит.
  */
 import * as THREE from 'three';
-import { FIXED_ONE, type EntityId } from '@game-mvp/core';
-import { resolveEffectByKind, type VisualEffect, type VisualManifest } from '@game-mvp/assets';
-import { TURN_UNITS } from '@game-mvp/client';
-import type { EntityView, ModelInstanceView } from '@game-mvp/render';
+import { FIXED_ONE, type EntityId } from '@fluxus/core';
+import { resolveEffectByKind, type VisualEffect, type VisualManifest } from '@fluxus/assets';
+import { TURN_UNITS } from '@fluxus/client';
+import type { EntityView, ModelInstanceView } from '@fluxus/render';
 import { CHARGE_VISUAL, STATS, chargeHeld } from './sim.js';
 
 /**

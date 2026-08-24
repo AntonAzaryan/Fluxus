@@ -11,10 +11,10 @@
  * пришло от другого потока и типом не гарантировано ничем. Поэтому профиль
  * разбирается и проверяется на этой стороне (BOT-6), а не принимается на веру.
  */
-import { fixed, type SceneDef, type Serializer } from '@game-mvp/core';
-import { contentPack, jsonSerializer, msgpackSerializer, type ContentPack } from '@game-mvp/net';
-import { shellPort } from '@game-mvp/client/protocol';
-import { portTransport } from '@game-mvp/client/portTransport';
+import { fixed, type SceneDef, type Serializer } from '@fluxus/core';
+import { contentPack, jsonSerializer, msgpackSerializer, type ContentPack } from '@fluxus/net';
+import { shellPort } from '@fluxus/client/protocol';
+import { portTransport } from '@fluxus/client/portTransport';
 import type { BotWireFormat, BotWorkerInit } from '../assembly.js';
 import { parseBotBehavior } from '../behavior.js';
 import { brainFactoryByKind } from '../brains/registry.js';

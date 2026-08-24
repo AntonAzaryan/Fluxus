@@ -24,8 +24,8 @@ import {
   type EntityId,
   type WorldMode,
   type WorldState,
-} from '@game-mvp/core';
-import type { ClientStep, MatchSample } from '@game-mvp/net';
+} from '@fluxus/core';
+import type { ClientStep, MatchSample } from '@fluxus/net';
 import { readFixedField, readIntField } from './boundary.js';
 
 /**

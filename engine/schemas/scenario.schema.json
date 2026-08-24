@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://game-mvp.local/schemas/scenario.schema.json",
+  "$id": "https://fluxus.local/schemas/scenario.schema.json",
   "title": "Сценарий CLI (CLI-2)",
   "type": "object",
   "additionalProperties": false,

@@ -18,7 +18,7 @@
  * документных веток в нём нет, а второй продюсер (`DocumentSource`) пользуется
  * той же сценой, не заглядывая сюда.
  */
-import { world, type EntityId, type TickObserver, type TickResult, type WorldState } from '@game-mvp/core';
+import { world, type EntityId, type TickObserver, type TickResult, type WorldState } from '@fluxus/core';
 import { Extractor } from './extractor.js';
 import { ViewBuffer } from './viewBuffer.js';
 import { PresentationStage, type PresentationProducer } from './stage.js';

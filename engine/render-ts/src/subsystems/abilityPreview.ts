@@ -77,7 +77,7 @@ import {
   STEP_NONE,
   type AbilityCatalog,
   type EntityId,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import type {
   EntityView,
   LocalInputSample,

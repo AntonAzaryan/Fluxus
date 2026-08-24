@@ -110,7 +110,7 @@ describe('guard: у редактора о конвейере знает толь
   it('исключения — не мёртвые: каждый названный файл вправду импортирует пакет', () => {
     for (const [file, why] of Object.entries(EDITOR_ASSEMBLY)) {
       const source = readFileSync(join(EDITOR_ROOT, file), 'utf8');
-      expect(moduleSpecifiers(source), `${file}: ${why}`).toContain('@game-mvp/blender-ts');
+      expect(moduleSpecifiers(source), `${file}: ${why}`).toContain('@fluxus/blender-ts');
     }
   });
 
@@ -122,7 +122,7 @@ describe('guard: у редактора о конвейере знает толь
     const manifest = JSON.parse(readFileSync(join(EDITOR_ROOT, EDITOR_MANIFEST), 'utf8')) as {
       dependencies?: Record<string, string>;
     };
-    expect(Object.keys(manifest.dependencies ?? {})).toContain('@game-mvp/blender-ts');
+    expect(Object.keys(manifest.dependencies ?? {})).toContain('@fluxus/blender-ts');
   });
 });
 
@@ -189,7 +189,7 @@ describe('guard: сканер границы авторинга ловит то,
     mkdirSync(join(root, 'pkg-ts/node_modules/dep'), { recursive: true });
     writeFileSync(
       join(root, 'pkg-ts/src/importing.ts'),
-      "import { runImport } from '@game-mvp/blender-ts';\n",
+      "import { runImport } from '@fluxus/blender-ts';\n",
     );
     writeFileSync(
       join(root, 'pkg-ts/src/relative.ts'),
@@ -200,24 +200,24 @@ describe('guard: сканер границы авторинга ловит то,
     // Не нарушения: комментарий про конвейер и обычные импорты рантайма.
     writeFileSync(
       join(root, 'pkg-ts/src/clean.ts'),
-      "// импорт из @game-mvp/blender-ts здесь только в комментарии\nimport { tick } from '@game-mvp/core';\n",
+      "// импорт из @fluxus/blender-ts здесь только в комментарии\nimport { tick } from '@fluxus/core';\n",
     );
     // Чужой пакет в общем хранилище — не исходник репозитория.
     writeFileSync(
       join(root, 'pkg-ts/node_modules/dep/index.ts'),
-      "import x from '@game-mvp/blender-ts';\n",
+      "import x from '@fluxus/blender-ts';\n",
     );
     writeFileSync(
       join(root, 'pkg-ts/package.json'),
       JSON.stringify({
-        dependencies: { '@game-mvp/blender-ts': '*' },
+        dependencies: { '@fluxus/blender-ts': '*' },
         scripts: {
           // Команда Blender'ом: ровно то, чего в гейте быть не должно.
           export: 'blender --background scene.blend',
           // А это — не он: путь пакета и имя workspace, в которых слово стоит
           // частью имени, а не командой.
           import: 'node tools/blender-ts/bin/import.mjs',
-          test: 'npm run test -w @game-mvp/blender-ts',
+          test: 'npm run test -w @fluxus/blender-ts',
         },
       }),
     );

@@ -420,4 +420,4 @@ export type {
   PartVisibilityTrack,
   TextureSlotRef,
   VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';

@@ -8,7 +8,7 @@
  * Float, шум и Math-тригонометрия здесь легальны: слой живёт в рендере
  * (REND-1), в симуляцию ничего не течёт.
  */
-import { POSITIVE_MIN, type CameraEffectParamSpec, type CameraEffectTypeSpec } from '@game-mvp/assets';
+import { POSITIVE_MIN, type CameraEffectParamSpec, type CameraEffectTypeSpec } from '@fluxus/assets';
 import type { CameraPose } from './rig.js';
 
 /** Аддитивный офсет позы; поля соответствуют `CameraPose`. */
@@ -43,7 +43,7 @@ export interface LastingEffect extends CameraEffect {
 
 /**
  * Дескриптор типа эффекта: описание CAM-9 плюс фабрика. Фабрика живёт здесь, а
- * не в контракте `@game-mvp/assets`, потому что она render-специфична — валидации
+ * не в контракте `@fluxus/assets`, потому что она render-специфична — валидации
  * секции и редактору хватает описания без неё (design.md).
  *
  * Видов два, и каждый обещает свой контракт запуска: импульсный строит
@@ -82,7 +82,7 @@ const nonNegative = (name: string, defaultValue: number): CameraEffectParamSpec 
 /**
  * Положительное число: частота нулём не бывает — это остановленное время.
  * Границы описания включающие, и строгую положительность выражает `POSITIVE_MIN`
- * — общее слово формата, а не число на месте (`@game-mvp/assets`).
+ * — общее слово формата, а не число на месте (`@fluxus/assets`).
  */
 const positive = (name: string, defaultValue: number): CameraEffectParamSpec =>
   Object.freeze({ name, defaultValue, min: POSITIVE_MIN });

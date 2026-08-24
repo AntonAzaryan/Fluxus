@@ -15,7 +15,7 @@
  *   совпадает с тем, что редактор в него записал;
  * - непрерывное перетаскивание — одна запись истории (ED-18).
  */
-import { fixed, FIXED_ONE } from '@game-mvp/core';
+import { fixed, FIXED_ONE } from '@fluxus/core';
 import {
   ContributionRegistry,
   createEditorSession,
@@ -29,7 +29,7 @@ import {
   type EditorSession,
   type JsonValue,
   type ValidationRule,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { describe, expect, it } from 'vitest';
 import { PLACEMENT_LIST, SCENE_KINDS, sceneValidationRules } from '../src/areas/sceneProject.js';
 import {

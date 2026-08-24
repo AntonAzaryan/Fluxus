@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import type { DecodedImage, VisualManifest } from '@game-mvp/assets';
+import type { DecodedImage, VisualManifest } from '@fluxus/assets';
 import {
   ModelsSubsystem,
   createSkinPlaceholder,

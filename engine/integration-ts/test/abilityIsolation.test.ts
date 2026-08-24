@@ -17,8 +17,8 @@
  * только целиком.
  */
 import { describe, expect, it } from 'vitest';
-import { query, world as coreWorld } from '@game-mvp/core';
-import type { PresentedState } from '@game-mvp/net';
+import { query, world as coreWorld } from '@fluxus/core';
+import type { PresentedState } from '@fluxus/net';
 import { abilityFogConfig, playMatch, walkRight } from './fixtures.js';
 
 type View = PresentedState['world'];

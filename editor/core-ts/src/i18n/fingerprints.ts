@@ -16,7 +16,7 @@
  * По паре отпечатков правило подтверждения механическое: подтверждается тот
  * ключ, чей перевод с прошлого раза изменился.
  */
-import { fnv1a32, prettyJsonSerializer } from '@game-mvp/core';
+import { fnv1a32, prettyJsonSerializer } from '@fluxus/core';
 import type { LocaleBundle, LocaleId } from './resources.js';
 
 /**

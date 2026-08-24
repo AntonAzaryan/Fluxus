@@ -59,8 +59,8 @@ import {
   type PositionBinding,
   type ValidationRule,
   type ValidationRun,
-} from '@game-mvp/editor-core';
-import { presentationPathOf } from '@game-mvp/assets';
+} from '@fluxus/editor-core';
+import { presentationPathOf } from '@fluxus/assets';
 import { parseGltf, type GltfDocument } from './gltf.js';
 import { generateSpatialLayer, hasErrors, type SpatialLayer, type SpatialLayerContext } from './layer.js';
 import { generateCellLayer, withCellLayer } from './maps.js';

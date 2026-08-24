@@ -23,8 +23,8 @@
  * бинарная нет, а форматом BLND-3 называет glTF 2.0, а не контейнер. Blender не
  * зовётся ни в какой форме (BLND-7).
  */
-import { createMemoryHost, type MemoryHost } from '@game-mvp/editor-core';
-import { IMPORT_SPATIAL_LAYER, SPATIAL_LAYER_SYNC_RULE } from '@game-mvp/blender-ts';
+import { createMemoryHost, type MemoryHost } from '@fluxus/editor-core';
+import { IMPORT_SPATIAL_LAYER, SPATIAL_LAYER_SYNC_RULE } from '@fluxus/blender-ts';
 import { describe, expect, it } from 'vitest';
 import { createEditorApp } from '../app/assembly.js';
 import { findAll, issueText } from '../src/dom/node.js';

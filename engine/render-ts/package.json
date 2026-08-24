@@ -1,5 +1,5 @@
 {
-  "name": "@game-mvp/render",
+  "name": "@fluxus/render",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -18,8 +18,8 @@
     "node": ">=22.18 <23 || ^24 || >=26"
   },
   "dependencies": {
-    "@game-mvp/assets": "*",
-    "@game-mvp/core": "*",
+    "@fluxus/assets": "*",
+    "@fluxus/core": "*",
     "three": "^0.185.1",
     "three.quarks": "0.17.1"
   },

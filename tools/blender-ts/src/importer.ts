@@ -29,7 +29,7 @@ import {
   type PositionBinding,
   type ValidationIssue,
   type ValidationRule,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { parseGltf, type GltfDocument } from './gltf.js';
 import { generateSpatialLayer, hasErrors, type Finding, type SpatialLayer } from './layer.js';
 import { generateCellLayer, withCellLayer } from './maps.js';

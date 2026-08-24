@@ -11,7 +11,7 @@
  */
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
-import type { ColorLut, PresentationPostprocess } from '@game-mvp/assets';
+import type { ColorLut, PresentationPostprocess } from '@fluxus/assets';
 import {
   BLOOM_LEVELS,
   DEFAULT_POSTPROCESS_CONFIG,

@@ -3,14 +3,14 @@
  * управлением состояниями и конструкторы presentation-состояния.
  */
 import * as THREE from 'three';
-import { LOCOMOTION_NORMAL, createTerrainGrid, type EntityId, type TerrainGrid } from '@game-mvp/core';
+import { LOCOMOTION_NORMAL, createTerrainGrid, type EntityId, type TerrainGrid } from '@fluxus/core';
 import type {
   AssetKind,
   AssetService,
   AssetState,
   NormalizedModel,
   NormalizedSequence,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import type {
   EntityView,
   FogLayerCanvas,

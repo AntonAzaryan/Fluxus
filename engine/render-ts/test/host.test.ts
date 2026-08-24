@@ -29,7 +29,7 @@ import {
   type System,
   type TickResult,
   type WorldMode,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   RenderHost,
   kindByTags,

@@ -8,8 +8,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { FIXED_ONE, createTerrainGrid, type EntityId } from '@game-mvp/core';
-import { validateCurvatureMap, type VisualManifest } from '@game-mvp/assets';
+import { FIXED_ONE, createTerrainGrid, type EntityId } from '@fluxus/core';
+import { validateCurvatureMap, type VisualManifest } from '@fluxus/assets';
 import {
   ModelsSubsystem,
   VisualSurfaceSource,

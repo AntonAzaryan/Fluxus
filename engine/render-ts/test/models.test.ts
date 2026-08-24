@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { ModelsSubsystem, type RenderContext } from '../src/index.js';
-import type { VisualManifest } from '@game-mvp/assets';
+import type { VisualManifest } from '@fluxus/assets';
 import { makeAssets, makeEntityView, makeModel, makeTickView, type AssetsStub } from './fixtures.js';
 
 const MODEL_ID = 'models/runner.mdx';

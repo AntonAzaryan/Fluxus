@@ -7,7 +7,7 @@
  * `worldInit`, посчитанный ядром по документу редактора. Своего представления о
  * каноническом виде документа редактор не заводит (ED-1) — считает ядро.
  */
-import { loadScene, worldInitHash, type SceneDef } from '@game-mvp/core';
+import { loadScene, worldInitHash, type SceneDef } from '@fluxus/core';
 import { describe, expect, it } from 'vitest';
 import { createEditorSession, type EditorSession } from '../src/document/index.js';
 import {

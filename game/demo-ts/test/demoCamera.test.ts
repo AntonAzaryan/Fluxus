@@ -10,7 +10,7 @@
  * тем, что режим после него не меняется.
  */
 import { describe, expect, it } from 'vitest';
-import { CameraRig, createCameraInput, resetCameraInput } from '@game-mvp/render';
+import { CameraRig, createCameraInput, resetCameraInput } from '@fluxus/render';
 import { demoEdgePan, type EdgePanFrame } from '../app/cameraInput.js';
 
 const RECT = { left: 0, top: 0, width: 800, height: 600 };

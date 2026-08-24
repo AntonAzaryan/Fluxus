@@ -17,7 +17,7 @@
  * Чтение описания графического контекста не требует (CAM-9): это данные, и
  * заводить ради них рендер не нужно ни редактору, ни тестам.
  */
-import type { CameraEffectParamSpec, CameraEffectsDescription } from '@game-mvp/assets';
+import type { CameraEffectParamSpec, CameraEffectsDescription } from '@fluxus/assets';
 import { SHAKE_TYPE, SWAY_TYPE, type CameraEffectType } from './effects.js';
 
 /**
@@ -50,7 +50,7 @@ export const CAMERA_EFFECT_TYPES: readonly CameraEffectType[] = Object.freeze([
 /**
  * То же описание, но с фабриками: слою эффектов нужен второй уровень контракта
  * (`CameraEffectType`), валидации и редактору хватает первого
- * (`CameraEffectTypeSpec` в `@game-mvp/assets`). Описание при этом ОДНО — второй
+ * (`CameraEffectTypeSpec` в `@fluxus/assets`). Описание при этом ОДНО — второй
  * тип не заводит второго перечня, он лишь называет, что у него есть сверх.
  */
 export interface CameraEffectsCatalog extends CameraEffectsDescription {

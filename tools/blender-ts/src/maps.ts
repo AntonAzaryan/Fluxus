@@ -41,8 +41,8 @@ import {
   terrainFlagChar,
   terrainLevelChar,
   type TerrainDef,
-} from '@game-mvp/core';
-import { CURVATURE_SCALE, validateCurvatureMap } from '@game-mvp/assets';
+} from '@fluxus/core';
+import { CURVATURE_SCALE, validateCurvatureMap } from '@fluxus/assets';
 import {
   HEIGHT_EPSILON,
   NOFLOOR_CHANNEL,

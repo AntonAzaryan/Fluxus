@@ -20,7 +20,7 @@
  * (NTR-5), и его потеря была бы проверкой другого требования.
  */
 import { describe, expect, it } from 'vitest';
-import { runScenario, snapshotToPlain } from '@game-mvp/core';
+import { runScenario, snapshotToPlain } from '@fluxus/core';
 import {
   DEFAULT_SERIALIZER,
   serverCodec,
@@ -30,7 +30,7 @@ import {
   type MatchServer,
   type ServerMessage,
   type Transport,
-} from '@game-mvp/net';
+} from '@fluxus/net';
 import {
   TICK_RATE,
   connectClient,

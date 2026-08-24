@@ -23,14 +23,14 @@ import {
   type EntityId,
   type Serializer,
   type SimulationState,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   MatchClient,
   buildMatchWorld,
   type ClientCloseReason,
   type Transport,
-} from '@game-mvp/net';
-import { NetworkShell, type ShellPort } from '@game-mvp/client';
+} from '@fluxus/net';
+import { NetworkShell, type ShellPort } from '@fluxus/client';
 import { createDemoExtractor } from './extractor.js';
 import {
   DEMO_MATCH,

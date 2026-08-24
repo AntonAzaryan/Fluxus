@@ -65,8 +65,8 @@ import {
   type ScenarioDef,
   type TerrainGrid,
   type TickResult,
-} from '@game-mvp/core';
-import type { PresentationLighting, PresentationPostprocess } from '@game-mvp/assets';
+} from '@fluxus/core';
+import type { PresentationLighting, PresentationPostprocess } from '@fluxus/assets';
 import {
   Extractor,
   FogSubsystem,
@@ -90,7 +90,7 @@ import {
   type RenderEvent,
   type StatSource,
   type TickView,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 import {
   BENCH_BURST_EVENT,
   BENCH_KINDS,

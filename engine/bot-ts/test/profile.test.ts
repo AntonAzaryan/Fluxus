@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { NO_PHASE } from '@game-mvp/core';
+import { NO_PHASE } from '@fluxus/core';
 import { BOT_PROFILE_SCHEMA, parseBotProfile } from '../src/profile.js';
 import { BOT_BEHAVIOR_SCHEMA, BOT_EXECUTORS, parseBotBehavior } from '../src/behavior.js';
 import { AbilityLayer } from '../src/brains/layers/abilities.js';

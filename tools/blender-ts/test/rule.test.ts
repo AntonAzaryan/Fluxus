@@ -20,7 +20,7 @@ import {
   type JsonValue,
   type ValidationIssue,
   type ValidationRule,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   DEFAULT_DECORATIONS_PATH,
   DEFAULT_INITIAL_PATH,

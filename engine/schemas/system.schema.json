@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://game-mvp.local/schemas/system.schema.json",
+  "$id": "https://fluxus.local/schemas/system.schema.json",
   "title": "JSON-описание системы (SYS-1)",
   "type": "object",
   "additionalProperties": false,

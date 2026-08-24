@@ -29,7 +29,7 @@
  * Мир при этом законный и тот же: `validateSystem` читает компоненты и
  * prefabs, а их состав от регистрации систем не зависит вовсе.
  */
-import { loadScene, world as coreWorld, type SceneDef, type WorldState } from '@game-mvp/core';
+import { loadScene, world as coreWorld, type SceneDef, type WorldState } from '@fluxus/core';
 import { isJsonObject, type JsonValue } from '../document/json.js';
 
 /** То, что пикеры блока спрашивают у мира. Только чтение — мир не правится ничем. */

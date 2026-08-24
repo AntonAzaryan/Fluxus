@@ -85,13 +85,13 @@ import {
   type AssetKind,
   type AssetState,
   type Handle,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   createHostAssetSource,
   normalizeContentPath,
   type ContentAssetSource,
   type EnvironmentHost,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import type { AssetStates } from './assetPreview.js';
 
 /**
