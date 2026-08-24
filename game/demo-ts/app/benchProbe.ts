@@ -245,8 +245,8 @@ export class BenchProbe {
     const stages: number[][] = BENCH_STAGES.map(() => []);
     let previousAt = 0;
     let previousTick = -1;
-    let firstTick = -1;
-    let lastTick = -1;
+    let segmentFirst = -1;
+    let delivered = 0;
     let deliveredAt = 0;
 
     for (let i = 0; i < order.length; i += 1) {
@@ -260,19 +260,29 @@ export class BenchProbe {
       const tick = this.tickNo[slot]!;
       if (tick < 0) continue;
       if (previousTick < 0) {
-        firstTick = tick;
+        segmentFirst = tick;
         deliveredAt = at;
       } else if (tick > previousTick) {
         gaps.push(at - deliveredAt);
         deliveredAt = at;
+      } else if (tick < previousTick) {
+        // Номер тика пошёл НАЗАД — перемотка (NTR-16): нумерация ветви истории
+        // начинается заново, и через границу ветвей приращения не читаются.
+        // Разность «последний − первый» мерила бы здесь глубину отката, а не
+        // каденс (вплоть до отрицательного «тиков доставлено»), поэтому
+        // доставленное копится по отрезкам монотонной нумерации. Разрыв через
+        // границу тоже не записывается: пауза перемотки — состояние матча, а
+        // не заикание тикера воркера.
+        delivered += previousTick - segmentFirst;
+        segmentFirst = tick;
+        deliveredAt = at;
       }
       previousTick = tick;
-      lastTick = tick;
     }
+    if (segmentFirst >= 0) delivered += previousTick - segmentFirst;
 
     const seconds =
       order.length < 2 ? 0 : (this.atMs[order[order.length - 1]!]! - this.atMs[order[0]!]!) / 1000;
-    const delivered = firstTick < 0 ? 0 : lastTick - firstTick;
     const stagesMs = {} as Record<BenchStage, BenchPercentiles>;
     for (let s = 0; s < BENCH_STAGES.length; s += 1) stagesMs[BENCH_STAGES[s]!] = benchSummarize(stages[s]!);
 
