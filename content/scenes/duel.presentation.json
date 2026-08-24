@@ -71,7 +71,7 @@
     }
   },
   "postprocess": {
-    "toneMapping": { "operator": "aces", "exposure": 1 },
+    "toneMapping": { "operator": "neutral", "exposure": 1 },
     "bloom": { "enabled": true, "strength": 0.35, "threshold": 1, "radius": 0.5 }
   }
 }
