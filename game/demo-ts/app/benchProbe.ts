@@ -17,6 +17,13 @@
  * стадии кадра пишутся в заранее созданный `scratch`, и единственная аллокация
  * — сборка отчёта, которая случается один раз в конце прогона.
  *
+ * Хвост распределения ЗА p99 отчёт называет отдельно (PERF-7): максимум каждой
+ * серии и худшие кадры окна с раскладкой по стадиям (`BenchWorstFrame`). Один
+ * кадр из тысячи не двигает ни p50, ни p99 — перцентили прячут разовый фриз по
+ * построению, — а игрок видит именно его. Отбирается хвост в `report()`, из уже
+ * хранимого кольца: покадровому пути от этого не прибавляется ни работы, ни
+ * аллокаций.
+ *
  * Каденс тика выведен ПАССИВНО, из уже доставленного: номер тика последней
  * доставки (`TickView.tick`) читается покадрово, и его приращения дают и число
  * доставленных тиков, и разрывы между доставками. Своих сообщений в канал
@@ -64,7 +71,15 @@ export type BenchStage = (typeof BENCH_STAGES)[number];
 export const BENCH_GLOBAL_KEY = '__benchProbe';
 
 /** Версия формата отчёта: харнесс сверяет её, прежде чем читать поля. */
-export const BENCH_PROBE_VERSION = 1;
+export const BENCH_PROBE_VERSION = 2;
+
+/**
+ * Худших кадров окна в отчёте (PERF-7). Наличие потолка — механизм, его
+ * величина — политика: пять строк читаются целиком, а поменять их число значит
+ * поправить константу, а не формат отчёта (то же правило, что у перечней дампа
+ * отладки, `render-debug` RDBG-7).
+ */
+export const BENCH_WORST_FRAMES = 5;
 
 /**
  * Ёмкость кольца в кадрах: ~136 с при 60 fps. Прогон бенча короче (порядка
@@ -91,6 +106,46 @@ export interface BenchTicks {
   readonly gapMs: BenchPercentiles;
 }
 
+/**
+ * Один худший кадр окна — хвост распределения ЗА p99 (PERF-7).
+ *
+ * ## Что с чем спарено
+ *
+ * Отметка rAF кадра N — это КОНЕЦ периода, внутри которого работал кадр N−1:
+ * своя работа кадра N начинается уже после его отметки. Поэтому строка сводит
+ * период `at[N] − at[N−1]` с работой и стадиями кадра N−1 — единственной
+ * работой главного потока, которая в этот период попала. Спари период с работой
+ * ОДНОГО и того же кадра — и строка фриза показала бы гигантский период рядом с
+ * дешёвым кадром, то есть ровно не назвала бы виновника.
+ *
+ * ## Почему отбор по периоду, а не по работе кадра
+ *
+ * Игрок видит период. Фриз, случившийся МЕЖДУ кадрами (приём доставки SHELL-3,
+ * сборка мусора), в работу кадра не входит вовсе и в топ по ней не попал бы, а
+ * период его несёт. Незакрытый остаток `intervalMs − frameMs` эту работу и
+ * называет — печатает его харнесс отдельной колонкой «вне стадий». Остаток
+ * бывает и отрицательным: отметка rAF — метка кадровой синхронизации, а не
+ * момент запуска колбэка, и работа затянувшегося кадра честно переваливает за
+ * свой номинальный период в следующий.
+ */
+export interface BenchWorstFrame {
+  /**
+   * Начало периода ОТ НАЧАЛА окна замера, мс — место кадра внутри окна, и
+   * только оно. Ключом к записям трейса эта величина не является: своего трейса
+   * бенч не пишет вовсе, а записи `npm run demo:debug` ключуются номером тика
+   * (`tick` ниже), не часами главного потока.
+   */
+  readonly atMs: number;
+  /** Период кадра по часам rAF, мс — то, что пережил игрок. */
+  readonly intervalMs: number;
+  /** Работа главного потока внутри этого периода, мс. */
+  readonly frameMs: number;
+  /** Та же работа по стадиям (PERF-2), мс. */
+  readonly stagesMs: Readonly<Record<BenchStage, number>>;
+  /** Номер последнего доставленного тика на этом кадре; < 0 — доставки не было. */
+  readonly tick: number;
+}
+
 /** Отчёт probe за окно замера. */
 export interface BenchSummary {
   readonly version: number;
@@ -107,6 +162,13 @@ export interface BenchSummary {
   readonly intervalMs: BenchPercentiles;
   readonly stagesMs: Readonly<Record<BenchStage, BenchPercentiles>>;
   readonly ticks: BenchTicks;
+  /**
+   * Худшие кадры окна по периоду, от худшего к лучшему; не длиннее
+   * `BENCH_WORST_FRAMES` (PERF-7). Перцентили хвост за p99 прячут по
+   * построению: разовый фриз в сотни миллисекунд при зелёном p99 виден только
+   * здесь и в `max` серий.
+   */
+  readonly worstFrames: readonly BenchWorstFrame[];
 }
 
 /**
@@ -243,6 +305,18 @@ export class BenchProbe {
     const intervals: number[] = [];
     const gaps: number[] = [];
     const stages: number[][] = BENCH_STAGES.map(() => []);
+    /**
+     * Худшие периоды окна: отбираются ЗДЕСЬ, из уже хранимого кольца, а не
+     * копятся на кадре. Кольцо несёт всё нужное, и покадровый отбор был бы
+     * работой и аллокацией В КАДРЕ ради отчёта, который снимается раз в прогон
+     * (та же дисциплина, что у остального `report()`). Список короткий —
+     * вставка в него дешевле сортировки всего окна и не растёт с числом кадров.
+     *
+     * `slot` — кадр, РАБОТА которого пришлась на этот период, то есть
+     * предыдущий по хронологии (см. `BenchWorstFrame`).
+     */
+    const worst: { slot: number; interval: number }[] = [];
+    let previousSlot = -1;
     let previousAt = 0;
     let previousTick = -1;
     let segmentFirst = -1;
@@ -253,7 +327,20 @@ export class BenchProbe {
       const slot = order[i]!;
       const at = this.atMs[slot]!;
       totals.push(this.totalMs[slot]!);
-      if (i > 0) intervals.push(at - previousAt);
+      if (i > 0) {
+        const interval = at - previousAt;
+        intervals.push(interval);
+        // Место в списке ищется с хвоста, и вставка идёт только строго БОЛЬШЕ
+        // соседа: на равных периодах впереди остаётся тот, что случился раньше,
+        // и топ не пляшет от порядка обхода.
+        let place = worst.length;
+        while (place > 0 && interval > worst[place - 1]!.interval) place -= 1;
+        if (place < BENCH_WORST_FRAMES) {
+          worst.splice(place, 0, { slot: previousSlot, interval });
+          if (worst.length > BENCH_WORST_FRAMES) worst.length = BENCH_WORST_FRAMES;
+        }
+      }
+      previousSlot = slot;
       previousAt = at;
       const base = slot * BENCH_STAGES.length;
       for (let s = 0; s < BENCH_STAGES.length; s += 1) stages[s]!.push(this.stageMs[base + s]!);
@@ -286,6 +373,25 @@ export class BenchProbe {
     const stagesMs = {} as Record<BenchStage, BenchPercentiles>;
     for (let s = 0; s < BENCH_STAGES.length; s += 1) stagesMs[BENCH_STAGES[s]!] = benchSummarize(stages[s]!);
 
+    // Отметки худших кадров — ОТ НАЧАЛА окна, а не по часам страницы: окно
+    // начинается с `reset()`, и абсолютное время главного потока читателю
+    // отчёта не говорит ничего.
+    const windowAt = order.length === 0 ? 0 : this.atMs[order[0]!]!;
+    const worstFrames: BenchWorstFrame[] = worst.map(({ slot, interval }) => {
+      const frameStages = {} as Record<BenchStage, number>;
+      const base = slot * BENCH_STAGES.length;
+      for (let s = 0; s < BENCH_STAGES.length; s += 1) {
+        frameStages[BENCH_STAGES[s]!] = this.stageMs[base + s]!;
+      }
+      return {
+        atMs: this.atMs[slot]! - windowAt,
+        intervalMs: interval,
+        frameMs: this.totalMs[slot]!,
+        stagesMs: frameStages,
+        tick: this.tickNo[slot]!,
+      };
+    });
+
     return {
       version: BENCH_PROBE_VERSION,
       seconds,
@@ -300,6 +406,7 @@ export class BenchProbe {
         perSecond: seconds > 0 ? delivered / seconds : 0,
         gapMs: benchSummarize(gaps),
       },
+      worstFrames,
     };
   }
 }

@@ -21,6 +21,7 @@ import {
   createCostCounters,
   deliveryDebugSource,
   costCountersDebugSource,
+  programsDebugSource,
   withCostSink,
   type DebugDraw,
   type DebugFrameState,
@@ -758,5 +759,112 @@ describe('RDBG-8: отладка невидима счётчикам стоим�
     expect(withDebug).toEqual(without);
     // И проверялось не отсутствие работы: счётчики непустые.
     expect(without.syncTickSubsystems).toBeGreaterThan(0);
+  });
+});
+
+// ------------------------------------- render.programs: число живых программ
+
+describe('render.programs: число живых шейдерных программ (RDBG-1, RDBG-7)', () => {
+  /** Рендерер стендом: живой WebGL источнику не нужен — он читает готовый набор. */
+  function fakeRenderer(): { info: { programs: { name: string }[] | null } } {
+    return { info: { programs: [] } };
+  }
+
+  /** Число живых программ из дампа; undefined — секции нет (источник выключен). */
+  function liveCount(layer: RenderDebugLayer): number | undefined {
+    const section = layer.dump().sections['render.programs'] as
+      | { liveProgramCount: number }
+      | undefined;
+    return section?.liveProgramCount;
+  }
+
+  it('включённый источник называет число живых программ, выключенного в дампе нет', () => {
+    const renderer = fakeRenderer();
+    renderer.info.programs!.push({ name: 'terrain' }, { name: 'models' });
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    layer.register(programsDebugSource(renderer));
+
+    // Выключенный источник секции не имеет вовсе — «выключено» и «данных нет»
+    // различаются (RDBG-7).
+    expect(layer.dump().sections['render.programs']).toBeUndefined();
+
+    layer.setEnabled('render.programs', true);
+    expect(liveCount(layer)).toBe(2);
+  });
+
+  it('компиляция с новым ключом кэша видна приращением — так ловится пересборка на каждом появлении', () => {
+    const renderer = fakeRenderer();
+    renderer.info.programs!.push({ name: 'terrain' });
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    layer.register(programsDebugSource(renderer));
+    layer.setEnabled('render.programs', true);
+    const before = liveCount(layer)!;
+
+    // Открылась видимость, нарисовался новый материал — драйвер собрал программу,
+    // и прежняя осталась живой: набор вырос.
+    renderer.info.programs!.push({ name: 'fogMaskedModels' });
+
+    expect(before).toBe(1);
+    expect(liveCount(layer)! - before).toBe(1);
+  });
+
+  it('это размер ЖИВОГО набора: освобождение уменьшает число, а пара «освободили+собрали» даёт ноль', () => {
+    // Граница метода, из-за которой отчёт печатает оговорку: `releaseProgram`
+    // вынимает запись из того же набора (three 0.185), поэтому компиляция,
+    // уравновешенная освобождением, между двумя пробами неотличима от «ничего
+    // не происходило». Счётчиком компиляций эта величина не является.
+    const renderer = fakeRenderer();
+    renderer.info.programs!.push({ name: 'terrain' }, { name: 'models' });
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    layer.register(programsDebugSource(renderer));
+    layer.setEnabled('render.programs', true);
+    const before = liveCount(layer)!;
+
+    // Последний пользователь материала ушёл — программа освобождена.
+    renderer.info.programs!.pop();
+    expect(liveCount(layer)).toBe(before - 1);
+
+    // И собрана заново на следующем появлении: набор той же длины, что до пары.
+    renderer.info.programs!.push({ name: 'models' });
+    expect(liveCount(layer)).toBe(before);
+  });
+
+  it('рендерер без набора живых программ говорит это вслух, а не показывает ноль', () => {
+    const renderer = fakeRenderer();
+    renderer.info.programs = null;
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    layer.register(programsDebugSource(renderer));
+    layer.setEnabled('render.programs', true);
+
+    const section = layer.dump().sections['render.programs'] as { noData?: string };
+    // Причина едет наружу дословно: потребитель (бенч) печатает её как есть, а
+    // не подменяет собственной догадкой «источник не зарегистрирован».
+    expect(section.noData).toMatch(/не ведёт набора живых программ/);
+  });
+
+  it('проба ничего у рендерера не заказывает: читается только готовый набор (RDBG-8)', () => {
+    // Инструментированной работы источник не просит — весь его вход это одно
+    // чтение уже существующего поля. Сток счётчиков он не трогает вовсе.
+    const reads: number[] = [];
+    const renderer: { info: { programs: { length: number } } } = {
+      info: {
+        get programs(): { length: number } {
+          reads.push(1);
+          return { length: 3 };
+        },
+      },
+    };
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    layer.register(programsDebugSource(renderer));
+    layer.setEnabled('render.programs', true);
+    const counters = createCostCounters();
+
+    withCostSink(counters, () => {
+      layer.frame(frameState(null));
+      layer.dump();
+    });
+
+    expect(reads.length).toBe(2);
+    expect({ ...counters }).toEqual({ ...createCostCounters() });
   });
 });

@@ -57,6 +57,7 @@ import {
   costCountersDebugSource,
   createCameraInput,
   deliveryDebugSource,
+  programsDebugSource,
   resetCameraInput,
   resolveFogConfig,
   terrainGroundApi,
@@ -1144,6 +1145,13 @@ function wireDebugPanel(surface: VisualSurfaceSource, bounds: CameraBounds): voi
   layer
     .register(deliveryDebugSource())
     .register(costCountersDebugSource())
+    // Число живых шейдерных программ (RDBG-1): источник движка, а регистрирует
+    // его ВЛАДЕЛЕЦ рендерера — им здесь является страница (design D8). Ни один
+    // счётчик стоимости компиляцию программы не растит (PERF-3), и рост размера
+    // живого кэша программ на устоявшейся игре — единственный печатный признак
+    // того, что программа пересобирается с новым ключом на каждом появлении
+    // (PERF-7).
+    .register(programsDebugSource(renderer3))
     .register(staticCollidersDebugSource(() => remote?.terrain ?? null))
     .register(dynamicCollidersDebugSource(STATS.colliderRadius))
     .register(
