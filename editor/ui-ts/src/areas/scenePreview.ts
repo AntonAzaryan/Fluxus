@@ -50,6 +50,7 @@ import {
   PhysicsWorld,
   initialState,
   loadScene,
+  colliderHeightDeclared,
   mathApi,
   staticsFromTerrain,
   type SceneDef,
@@ -123,8 +124,13 @@ export function startPreviewSimulation(
   // выводится ядром из той же сетки, из которой рендер строит стенки (TERR-5).
   if (scene.terrain !== undefined) {
     const grid = scene.terrain.grid;
+    // Колоночный гейт (PHYS-14) включает сама сцена, объявив поле высоты у
+    // своего компонента коллайдера: превью обязано тикать ту же физику, что и
+    // игра, иначе редактор показывал бы не то, что получит игрок.
     scene.systems.register(
-      new PhysicsSystem(new PhysicsWorld(staticsFromTerrain(grid), grid.tileSize)),
+      new PhysicsSystem(new PhysicsWorld(staticsFromTerrain(grid), grid.tileSize), {}, {
+        height: colliderHeightDeclared(scene.world),
+      }),
     );
   }
   const state = initialState(scene.world, message.seed);
