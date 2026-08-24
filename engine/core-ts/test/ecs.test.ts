@@ -19,7 +19,7 @@ import { query } from '../src/ecs/query.js';
 import { indexOf as rawIndexOf } from '../src/ecs/entityIndex.js';
 import { createCommandBuffer } from '../src/ecs/commands.js';
 import * as core from '../src/index.js';
-import type { ComponentSchema } from '../src/types.js';
+import { NO_ENTITY, type ComponentSchema } from '../src/types.js';
 
 const Position: ComponentSchema = { name: 'Position', fields: { x: 'fixed', y: 'fixed' } };
 const Health: ComponentSchema = { name: 'Health', fields: { hp: 'i32' }, defaults: { hp: 100 } };
@@ -233,6 +233,37 @@ describe('чтение отложенного из буфера (CMD-5)', () => 
     expect(getField(world, e, 'Health', 'hp')).toBe(2);
     // Буфер очищен: отложенного больше нет, читатель падает на состояние мира.
     expect(commands.peekField(e, 'Health', 'hp')).toBeUndefined();
+  });
+
+  it('addComponent в буфере тоже определяет поле: чтение совпадает с миром после flush (CMD-5, CMD-3)', () => {
+    const Ref: ComponentSchema = { name: 'Ref', fields: { target: 'entity' } };
+    const world = createWorld([...schemas, Ref], [prefab('P', { Health: {} })]);
+    const e = spawn(world, 'P');
+    const commands = createCommandBuffer(world);
+
+    // Значение, привезённое самим addComponent, видно до flush.
+    commands.addComponent(e, 'Stealth', { flag: 7 });
+    expect(commands.peekField(e, 'Stealth', 'flag')).toBe(7);
+
+    // addComponent после setField перекрывает его default'ом схемы (CMD-3).
+    commands.setField(e, 'Health', 'hp', 5);
+    commands.addComponent(e, 'Health');
+    expect(commands.peekField(e, 'Health', 'hp')).toBe(100);
+
+    // Поле без values и без default получает нейтральное значение типа (ECS-6).
+    commands.addComponent(e, 'Ref');
+    expect(commands.peekField(e, 'Ref', 'target')).toBe(NO_ENTITY);
+
+    // setField после addComponent побеждает как более поздняя команда (CMD-3).
+    commands.addComponent(e, 'Position');
+    commands.setField(e, 'Position', 'x', 42);
+    expect(commands.peekField(e, 'Position', 'x')).toBe(42);
+
+    commands.flush();
+    expect(getField(world, e, 'Stealth', 'flag')).toBe(7);
+    expect(getField(world, e, 'Health', 'hp')).toBe(100);
+    expect(getField(world, e, 'Ref', 'target')).toBe(NO_ENTITY);
+    expect(getField(world, e, 'Position', 'x')).toBe(42);
   });
 });
 

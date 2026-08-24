@@ -168,6 +168,11 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
      * CMD-5: точечное чтение уже отложенного. Обратный проход — потому что
      * побеждает последняя команда на поле, как и на flush (CMD-3).
      *
+     * Значение адресу ставит не только `setField`: `addComponent` на flush
+     * переписывает все поля компонента (`values` → default схемы → нейтральное
+     * значение типа, ECS-3, ECS-6), поэтому и здесь он отвечает за поле — иначе
+     * чтение разошлось бы с тем, что окажется в мире после flush (CMD-5).
+     *
      * ponytail: O(команд в буфере) на вызов. Буфер флашится в конце каждой
      * системы, поэтому список короткий; индекс по адресу поля — когда
      * распределение слотов станет горячим.
@@ -177,6 +182,15 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
         const cmd = commands[i]!;
         if (cmd.kind === 'setField' && cmd.entity === entity && cmd.component === component && cmd.field === field) {
           return cmd.value;
+        }
+        if (cmd.kind === 'addComponent' && cmd.entity === entity && cmd.component === component) {
+          const schema = world.componentSchema(state, component);
+          const type = schema?.fields[field];
+          // Поле вне схемы (или незарегистрированный компонент) `addComponent`
+          // не пишет — значения на этот адрес такая команда не ставит.
+          if (type === undefined) continue;
+          // Тот же порядок источников, что у мутатора в `world.ts` (ECS-3).
+          return cmd.values?.[field] ?? schema?.defaults?.[field] ?? world.neutralValue(type);
         }
       }
       return undefined;
