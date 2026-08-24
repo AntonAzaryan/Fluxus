@@ -3,6 +3,7 @@ import * as fixed from '../src/math/fixed.js';
 import { addComponent, getField, listAlive, setField, spawn } from '../src/ecs/world.js';
 import { mathApi } from '../src/math/mathApi.js';
 import {
+  colliderHeightDeclared,
   createPhysicsApi,
   PhysicsSystem,
   PhysicsWorld,
@@ -19,6 +20,7 @@ import { cliffGateOpen, type Bounds, type Move } from '../src/systems/collisionG
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { createTerrainGrid } from '../src/systems/terrain.js';
 import { initialState, tick, type Simulation } from '../src/sim/tick.js';
+import { LEVEL_OVERRIDE_COMPONENT } from '../src/types.js';
 import type { FieldOverrides, GameEvent, Vec2 } from '../src/types.js';
 
 const F = fixed.fromFloat;
@@ -41,6 +43,13 @@ const TERRAIN = {
 /** Та же арена с перепадом в два уровня — для гейта PHYS-11. */
 const TERRAIN_STEEP = { ...TERRAIN, levels: ['0022', '0022'] };
 
+/**
+ * Та же ступенька 0→1, но переход помечен рампой: перепад в единицу через рампу
+ * проходим (TERR-5), и коллайдера обрыва на нём не возникает вовсе — сцена для
+ * контакта на рампе (PHYS-14), где мешать движению обязаны только полосы.
+ */
+const TERRAIN_RAMP = { ...TERRAIN, flags: ['..^.', '..^.'] };
+
 const SCENE: SceneDef = {
   components: [
     { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
@@ -56,10 +65,18 @@ const SCENE: SceneDef = {
         blockMask: 'i32',
         hitMask: 'i32',
         cliffRise: 'i32',
+        // Поле высоты объявлено, но нигде не задано: колоночный гейт включён
+        // схемой, а полосы у всех не ограничены (PHYS-14). Весь остальной набор
+        // тестов файла тем самым и есть проверка нормы «сущность, получившая
+        // поле схемой, но не значением, поведения не меняет».
+        height: 'i32',
       },
     },
     // Компонент читает `getEffectiveDelta` (TIME-3); система сведения здесь не нужна.
     { name: 'TimeScale', fields: { value: 'fixed' } },
+    // Override уровня (ARENA-6) — источник эффективного уровня наравне с
+    // производным от позиции (TERR-4); состав компонентов задаёт только prefab.
+    { name: LEVEL_OVERRIDE_COMPONENT, fields: { level: 'i32' } },
   ],
   prefabs: [
     {
@@ -115,27 +132,105 @@ const SCENE: SceneDef = {
         },
       },
     },
+    /**
+     * Юнит колоночной модели (PHYS-14): уровень производный от позиции (TERR-4),
+     * высота задаётся спавном. Блокируется такими же юнитами — гейт полос виден
+     * и на блокировке (PHYS-8), и на событии (PHYS-9).
+     */
+    {
+      name: 'Column',
+      components: {
+        Position: { x: 0, y: 0 },
+        Velocity: { x: 0, y: 0 },
+        Collider: {
+          halfX: F(0.25),
+          halfY: F(0.25),
+          radius: F(0.25),
+          shape: SHAPE_AABB,
+          layer: LAYER_UNIT,
+          blockMask: LAYER_UNIT,
+        },
+      },
+    },
+    /** Тот же юнит, но с override уровня (ARENA-6): летающий и снаряд-сенсор. */
+    {
+      name: 'Flyer',
+      components: {
+        Position: { x: 0, y: 0 },
+        Velocity: { x: 0, y: 0 },
+        Collider: {
+          halfX: F(0.1),
+          halfY: F(0.1),
+          radius: F(0.1),
+          shape: SHAPE_AABB,
+          layer: LAYER_BULLET,
+          hitMask: LAYER_UNIT,
+        },
+        [LEVEL_OVERRIDE_COMPONENT]: { level: 0 },
+      },
+    },
   ],
   terrain: TERRAIN,
 };
 
+/**
+ * Та же сцена без поля высоты у коллайдера — мир ДО колоночного гейта:
+ * `colliderHeightDeclared` на ней ложь, и полосы не появляются ни у кого
+ * (PHYS-14, сценарий «Коллайдер без поля высоты»).
+ */
+const SCENE_NO_HEIGHT: SceneDef = {
+  ...SCENE,
+  components: SCENE.components.map((component) => {
+    if (component.name !== 'Collider') return component;
+    const { height: _height, ...fields } = component.fields;
+    return { ...component, fields };
+  }),
+};
+
+/**
+ * Документ сцены прогона. Террейн подставляется параметром, а `null` даёт сцену
+ * БЕЗ него: полосы применимы и там (PHYS-14), а `loadScene` такую сцену
+ * принимает штатно (TERR-4). Именно `null`, а не `undefined`: умолчание
+ * параметра подставляется как раз на `undefined`, и «без террейна» было бы им
+ * молча заменено на арену по умолчанию.
+ */
+function sceneFor(scene: SceneDef, terrainDef: typeof TERRAIN | null): SceneDef {
+  if (terrainDef !== null) return { ...scene, terrain: terrainDef };
+  const { terrain: _terrain, ...rest } = scene;
+  return rest;
+}
+
 function harness(
   withTerrainStatics = true,
-  terrainDef: typeof TERRAIN = TERRAIN,
+  terrainDef: typeof TERRAIN | null = TERRAIN,
   extraStatics: readonly StaticCollider[] = [],
+  scene: SceneDef = SCENE,
 ) {
-  const { world, terrain, systems } = loadScene({ ...SCENE, terrain: terrainDef });
-  const statics = withTerrainStatics ? staticsFromTerrain(terrain!.grid) : [];
-  const physicsWorld = new PhysicsWorld([...statics, ...extraStatics], terrain!.grid.tileSize);
-  systems.register(new PhysicsSystem(physicsWorld));
-  const physics = createPhysicsApi(world, physicsWorld);
-  const sim: Simulation = { systems, worldSeed: 1, math: mathApi, physics, terrain: terrain! };
+  const { world, terrain, systems } = loadScene(sceneFor(scene, terrainDef));
+  const statics = withTerrainStatics && terrain !== undefined ? staticsFromTerrain(terrain.grid) : [];
+  const physicsWorld = new PhysicsWorld([...statics, ...extraStatics], terrain?.grid.tileSize);
+  // Зависимости сборки (DI-3): колоночный гейт включает сцена объявлением поля
+  // высоты, уровень — запрос террейна (PHYS-14, TERR-4).
+  const deps = {
+    height: colliderHeightDeclared(world),
+    ...(terrain !== undefined ? { terrain } : {}),
+  };
+  systems.register(new PhysicsSystem(physicsWorld, {}, deps));
+  const physics = createPhysicsApi(world, physicsWorld, {}, deps);
+  const sim: Simulation = {
+    systems,
+    worldSeed: 1,
+    math: mathApi,
+    physics,
+    ...(terrain !== undefined ? { terrain } : {}),
+  };
   const state = initialState(world, 1);
 
   return {
     world,
     physics,
     physicsWorld,
+    terrain,
     place: (prefab: string, overrides: FieldOverrides) => spawn(world, prefab, overrides),
     step: (): readonly GameEvent[] => [...tick(sim, state).events],
     position: (entity: number): Vec2 => ({
@@ -1090,5 +1185,342 @@ describe('перекрытие луча обрывом относительно 
     const events = h.step();
     expect(h.position(mover)).toEqual(at(2.5, 0.5));
     expect(events.map((e) => e.type)).toEqual(['Collision']);
+  });
+});
+
+/**
+ * Колоночная модель пересечений (PHYS-14): полоса участника — отрезок
+ * ДИСКРЕТНЫХ уровней `[L, L + h − 1]`, и пара пересекается, только если полосы
+ * имеют общий уровень. Непрерывной вертикали от этого не появляется (PHYS-1) —
+ * всё правило укладывается в два целочисленных сравнения.
+ *
+ * Умолчание нормативно: нет поля высоты — нет и гейта. Базовая сцена файла поле
+ * ОБЪЯВЛЯЕТ и нигде не задаёт, поэтому весь остальной набор тестов и есть
+ * проверка нормы «сущность, получившая поле схемой, но не значением, поведения
+ * не меняет».
+ */
+describe('колоночный гейт пересечений (PHYS-14)', () => {
+  it('снаряд у подножия обрыва цель на плато не задевает', () => {
+    // Арена `TERRAIN_STEEP`: слева уровень 0, справа — 2.
+    const h = harness(true, TERRAIN_STEEP);
+    // Цель стоит на плато: производный уровень 2, высота 1 — полоса [2, 2].
+    const target = h.place('Column', {
+      Position: { x: F(2.5), y: F(0.5) },
+      Collider: { height: 1 },
+    });
+    // Снаряд летит под плато: override уровня 0, высота 1 — полоса [0, 0].
+    const bullet = h.place('Flyer', {
+      Position: { x: F(0.5), y: F(0.5) },
+      Velocity: { x: F(3) },
+      Collider: { height: 1 },
+      LevelOverride: { level: 0 },
+    });
+    // Анти-вакуумность: 2D-проекции ДЕЙСТВИТЕЛЬНО пересекаются — иначе тест
+    // проверял бы геометрию, а не гейт.
+    expect(h.terrain!.levelOf(target)).toBe(2);
+    expect(h.terrain!.levelOf(bullet)).toBe(0);
+
+    expect(h.step()).toEqual([]);
+    // Снаряд продолжает полёт: гейт не блокирует, он лишь не засчитывает пару.
+    expect(h.position(bullet).x).toBe(F(3.5));
+  });
+
+  it('та же пара с неограниченной полосой цели Overlap даёт: гейт аддитивен', () => {
+    const h = harness(true, TERRAIN_STEEP);
+    // Высота 0 — умолчание свежеобъявленного поля: полоса не ограничена.
+    const target = h.place('Column', { Position: { x: F(2.5), y: F(0.5) }, Collider: { height: 0 } });
+    const bullet = h.place('Flyer', {
+      Position: { x: F(0.5), y: F(0.5) },
+      Velocity: { x: F(3) },
+      Collider: { height: 1 },
+      LevelOverride: { level: 0 },
+    });
+
+    const events = h.step();
+    expect(events.map((e) => e.type)).toEqual(['Overlap']);
+    expect(events[0]!.data).toEqual({ entity: bullet, other: target });
+  });
+
+  it('и зеркально: неограниченная полоса ДВИЖУЩЕГОСЯ против ограниченной цели', () => {
+    // Умолчание PHYS-14 симметрично — «у ОДНОГО участника поле отсутствует», —
+    // и вторая его половина отдельна от первой: движущийся с неограниченной
+    // полосой обязан засчитывать пару, не спрашивая уровней вовсе. Реализация,
+    // прочитавшая такую полосу как единичную, дала бы здесь [0, 0] против
+    // [2, 2] и промолчала.
+    const h = harness(true, TERRAIN_STEEP);
+    const target = h.place('Column', { Position: { x: F(2.5), y: F(0.5) }, Collider: { height: 1 } });
+    const bullet = h.place('Flyer', {
+      Position: { x: F(0.5), y: F(0.5) },
+      Velocity: { x: F(3) },
+      Collider: { height: 0 },
+      LevelOverride: { level: 0 },
+    });
+    // Уровни РАЗНЫЕ: пара проходит умолчанием, а не совпадением полос.
+    expect(h.terrain!.levelOf(target)).toBe(2);
+    expect(h.terrain!.levelOf(bullet)).toBe(0);
+
+    const events = h.step();
+    expect(events.map((e) => e.type)).toEqual(['Overlap']);
+    expect(events[0]!.data).toEqual({ entity: bullet, other: target });
+  });
+
+  it('коллайдер без поля высоты: сцена без поля гейта не знает вовсе', () => {
+    // Та же геометрия, что и в «подножии обрыва», но поля высоты у коллайдера
+    // нет в схеме — задать полосу нечем, и пара засчитывается при любых уровнях.
+    const h = harness(true, TERRAIN_STEEP, [], SCENE_NO_HEIGHT);
+    const target = h.place('Column', { Position: { x: F(2.5), y: F(0.5) } });
+    const bullet = h.place('Flyer', {
+      Position: { x: F(0.5), y: F(0.5) },
+      Velocity: { x: F(3) },
+      LevelOverride: { level: 0 },
+    });
+    expect(h.terrain!.levelOf(target)).toBe(2);
+
+    const events = h.step();
+    expect(events.map((e) => e.type)).toEqual(['Overlap']);
+    expect(events[0]!.data).toEqual({ entity: bullet, other: target });
+  });
+
+  it('контакт на рампе: полосы высоты 2 на смежных уровнях пересекаются', () => {
+    // Переход помечен рампой, поэтому коллайдера обрыва между уровнями нет
+    // (TERR-5) — блокировать движение может только гейт полос. Движущийся при
+    // этом блокируется И статикой (`blockMask` накрывает её слой): без этого
+    // рампа была бы декорацией — обрыв всё равно отсеялся бы маской, и тест
+    // прошёл бы на обычном `TERRAIN`.
+    const h = harness(true, TERRAIN_RAMP);
+    expect(staticsFromTerrain(createTerrainGrid(TERRAIN_RAMP))).toHaveLength(0);
+    expect(staticsFromTerrain(createTerrainGrid(TERRAIN))).toHaveLength(2);
+    const upper = h.place('Column', { Position: { x: F(2.5), y: F(0.5) }, Collider: { height: 2 } });
+    const lower = h.place('Column', {
+      Position: { x: F(1.7), y: F(0.5) },
+      Velocity: { x: F(0.5) },
+      Collider: { height: 2, blockMask: LAYER_UNIT | LAYER_STATIC },
+    });
+    // Уровни смежные: полосы [0, 1] и [1, 2] имеют общий уровень 1.
+    expect(h.terrain!.levelOf(lower)).toBe(0);
+    expect(h.terrain!.levelOf(upper)).toBe(1);
+
+    const events = h.step();
+    expect(h.position(lower)).toEqual(at(1.7, 0.5));
+    expect(events.map((e) => e.type)).toEqual(['Collision']);
+    expect(events[0]!.data.entity).toBe(lower);
+    // Именно сосед, а не статика: обрыв на этом месте оказался бы БЛИЖЕ соседа
+    // (0.3 против 0.55) и забрал бы `other` себе — рампа тем и наблюдаема.
+    expect(events[0]!.data.other).toBe(upper);
+  });
+
+  it('те же соседи с полосой в один уровень друг друга не задевают', () => {
+    // Тот же `blockMask`, накрывающий и статику: ход разрешён рампой (обрыва
+    // нет) и полосами (общего уровня нет), а не тем, что маска отсеяла обрыв.
+    const h = harness(true, TERRAIN_RAMP);
+    h.place('Column', { Position: { x: F(2.5), y: F(0.5) }, Collider: { height: 1 } });
+    const lower = h.place('Column', {
+      Position: { x: F(1.7), y: F(0.5) },
+      Velocity: { x: F(0.5) },
+      Collider: { height: 1, blockMask: LAYER_UNIT | LAYER_STATIC },
+    });
+    // Полосы [0, 0] и [1, 1] общего уровня не имеют: ход исполнен, события нет.
+    expect(h.step()).toEqual([]);
+    expect(h.position(lower)).toEqual(at(2.2, 0.5));
+  });
+
+  it('летающая сущность над наземной зоной Overlap не даёт', () => {
+    const h = harness(false);
+    // Наземная зона: уровень 0, высота 2 — полоса [0, 1].
+    h.place('Column', { Position: { x: F(1.5), y: F(0.5) }, Collider: { height: 2 } });
+    const flyer = h.place('Flyer', {
+      Position: { x: F(0.5), y: F(0.5) },
+      Velocity: { x: F(2) },
+      Collider: { height: 1 },
+      LevelOverride: { level: 3 },
+    });
+    expect(h.terrain!.levelOf(flyer)).toBe(3);
+    expect(h.step()).toEqual([]);
+  });
+
+  it('та же зона задевает того же летающего, спустившегося на её полосу', () => {
+    const h = harness(false);
+    const zone = h.place('Column', { Position: { x: F(1.5), y: F(0.5) }, Collider: { height: 2 } });
+    const flyer = h.place('Flyer', {
+      Position: { x: F(0.5), y: F(0.5) },
+      Velocity: { x: F(2) },
+      Collider: { height: 1 },
+      LevelOverride: { level: 1 },
+    });
+    const events = h.step();
+    expect(events.map((e) => e.type)).toEqual(['Overlap']);
+    expect(events[0]!.data).toEqual({ entity: flyer, other: zone });
+  });
+
+  it('луч с уровнем мимо низкой цели: без уровня попадание засчитано', () => {
+    const h = harness(false);
+    // Цель на уровне 0 с высотой 1 — полоса [0, 0].
+    const target = h.place('Column', { Position: { x: F(1), y: F(0) }, Collider: { height: 1 } });
+    expect(h.terrain!.levelOf(target)).toBe(0);
+
+    // Луч уровня 2 полосы не пересекает — попадания нет.
+    expect(h.physics.raycast(at(0, 0), at(3, 0), { elevation: 2 })).toBeNull();
+    // Тот же луч своего уровня и тот же луч БЕЗ уровня попадание засчитывают:
+    // умолчание консервативно, как у обрывов в PHYS-13.
+    expect(h.physics.raycast(at(0, 0), at(3, 0), { elevation: 0 })!.entity).toBe(target);
+    expect(h.physics.raycast(at(0, 0), at(3, 0))!.entity).toBe(target);
+  });
+
+  it('луч видит цель на её override-уровне и не видит на чужом', () => {
+    const h = harness(false);
+    const flyer = h.place('Flyer', {
+      Position: { x: F(1), y: F(0) },
+      Collider: { height: 1 },
+      LevelOverride: { level: 2 },
+    });
+    expect(h.physics.raycast(at(0, 0), at(3, 0), { elevation: 2 })!.entity).toBe(flyer);
+    expect(h.physics.raycast(at(0, 0), at(3, 0), { elevation: 0 })).toBeNull();
+    // Полоса не ограничена — луч любого уровня цель видит.
+    const everywhere = h.place('Flyer', {
+      Position: { x: F(2), y: F(0) },
+      Collider: { height: 0 },
+      LevelOverride: { level: 2 },
+    });
+    expect(h.physics.raycast(at(2.5, 0), at(1.5, 0), { elevation: 9 })!.entity).toBe(everywhere);
+  });
+
+  it('полоса заметаемого объёма берётся по разрешённому состоянию, а не по стартовой точке', () => {
+    // Снаряд БЕЗ override за тик уходит с уровня 0 на уровень 2: полоса цели —
+    // [2, 2], и пара засчитывается только потому, что уровень оценён по
+    // разрешённому состоянию тика. Промежуточные уровни вдоль пути не считаются.
+    const h = harness(true, TERRAIN_STEEP);
+    const target = h.place('Column', { Position: { x: F(2.5), y: F(0.5) }, Collider: { height: 1 } });
+    const bullet = h.place('Bullet', {
+      Position: { x: F(0.5), y: F(0.5) },
+      Velocity: { x: F(3) },
+      Collider: { height: 1 },
+    });
+    // Анти-вакуумность: стартовая клетка снаряда — уровня 0, конечная — уровня 2.
+    expect(h.terrain!.levelAt(at(0.5, 0.5))).toBe(0);
+    expect(h.terrain!.levelAt(at(3.5, 0.5))).toBe(2);
+
+    const events = h.step();
+    expect(events.map((e) => e.type)).toEqual(['Overlap']);
+    expect(events[0]!.data).toEqual({ entity: bullet, other: target });
+  });
+
+  it('полоса быстрого снаряда с override оценивается один раз — уровень пути её не трогает', () => {
+    const h = harness(true, TERRAIN_STEEP);
+    h.place('Column', { Position: { x: F(2.5), y: F(0.5) }, Collider: { height: 1 } });
+    // `levelAt` вдоль пути менялся бы с 0 на 2, но override держит полосу [0, 0]
+    // на всём ходу: одна оценка за тик, и она — по override (ARENA-6).
+    const bullet = h.place('Flyer', {
+      Position: { x: F(0.5), y: F(0.5) },
+      Velocity: { x: F(3) },
+      Collider: { height: 1 },
+      LevelOverride: { level: 0 },
+    });
+    expect(h.step()).toEqual([]);
+    expect(h.position(bullet).x).toBe(F(3.5));
+  });
+
+  it('сцена без террейна: производный уровень ноль, override из гейта выводит', () => {
+    // Террейна нет вовсе — запроса уровня у симуляции тоже (TERR-4).
+    const h = harness(false, null);
+    expect(h.terrain).toBeUndefined();
+    const zone = h.place('Column', { Position: { x: F(1.5), y: F(0.5) }, Collider: { height: 2 } });
+    const ground = h.place('Flyer', {
+      Position: { x: F(0.5), y: F(0.5) },
+      Velocity: { x: F(2) },
+      Collider: { height: 1 },
+      LevelOverride: { level: 0 },
+    });
+    // Полосы [0, 1] и [0, 0] пересекаются на нуле: производный уровень нулевой.
+    const events = h.step();
+    expect(events.map((e) => e.type)).toEqual(['Overlap']);
+    expect(events[0]!.data).toEqual({ entity: ground, other: zone });
+
+    // А override действует и без террейна: уровень 3 из полосы зоны выпадает.
+    const second = harness(false, null);
+    second.place('Column', { Position: { x: F(1.5), y: F(0.5) }, Collider: { height: 2 } });
+    second.place('Flyer', {
+      Position: { x: F(0.5), y: F(0.5) },
+      Velocity: { x: F(2) },
+      Collider: { height: 1 },
+      LevelOverride: { level: 3 },
+    });
+    expect(second.step()).toEqual([]);
+  });
+
+  /**
+   * Гейт полос и высотные правила обрыва — РАЗНЫЕ правила с общим источником
+   * уровней (TERR-4, ARENA-6). Уровень сущности в физике читается одним
+   * помощником, поэтому значение, по которому строится полоса, обязано
+   * совпадать и с `levelOf` (его же передаёт в опцию луча пересчёт видимости,
+   * PHYS-13), и с уровнем стороны ребра, на которой сущность стоит (PHYS-11).
+   */
+  it('уровень одной сущности совпадает в гейте полос, в levelOf и в данных ребра', () => {
+    const h = harness();
+    const target = h.place('Column', { Position: { x: F(2.5), y: F(0.5) }, Collider: { height: 1 } });
+    // Уровень стороны ребра, на которой стоит цель (PHYS-11, TERR-5).
+    const edge = staticsFromTerrain(createTerrainGrid(TERRAIN))[0]!;
+    expect(edge.levelPos).toBe(1);
+    // Тот же уровень отдаёт запрос TERR-4 — и его же получает опция луча PHYS-13.
+    expect(h.terrain!.levelOf(target)).toBe(1);
+    // И тот же уровень видит гейт полос: полоса цели — ровно [1, 1].
+    expect(h.physics.raycast(at(3.5, 0.5), at(2, 0.5), { elevation: 1 })!.entity).toBe(target);
+    expect(h.physics.raycast(at(3.5, 0.5), at(2, 0.5), { elevation: 0 })).toBeNull();
+    expect(h.physics.raycast(at(3.5, 0.5), at(2, 0.5), { elevation: 2 })).toBeNull();
+  });
+
+  it('override уровня приоритетнее производного в обоих путях', () => {
+    const h = harness();
+    const flyer = h.place('Flyer', {
+      Position: { x: F(2.5), y: F(0.5) },
+      Collider: { height: 1 },
+      LevelOverride: { level: 3 },
+    });
+    // Клетка под сущностью — уровня 1, но override приоритетнее (ARENA-6).
+    expect(h.terrain!.levelAt(at(2.5, 0.5))).toBe(1);
+    expect(h.terrain!.levelOf(flyer)).toBe(3);
+    expect(h.physics.raycast(at(3.5, 0.5), at(2, 0.5), { elevation: 3 })!.entity).toBe(flyer);
+    expect(h.physics.raycast(at(3.5, 0.5), at(2, 0.5), { elevation: 1 })).toBeNull();
+  });
+
+  /**
+   * Новая редакция PHYS-1: пересечения считаются в 2D-проекции, а разница
+   * уровней сама по себе препятствием не является — препятствием MAY быть
+   * только НЕПУСТОЙ гейт PHYS-14.
+   */
+  it('снаряд с верхнего уровня по нижнему попадает, пока полосы не заданы', () => {
+    const h = harness(true, TERRAIN_STEEP);
+    // Цель внизу, стрелок наверху — полос ни у кого нет (высота 0).
+    const target = h.place('Column', { Position: { x: F(0.5), y: F(0.5) } });
+    const bullet = h.place('Flyer', {
+      Position: { x: F(3.5), y: F(0.5) },
+      Velocity: { x: F(-3) },
+      LevelOverride: { level: 2 },
+    });
+    expect(h.terrain!.levelOf(target)).toBe(0);
+    expect(h.terrain!.levelOf(bullet)).toBe(2);
+
+    const events = h.step();
+    expect(events.map((e) => e.type)).toEqual(['Overlap']);
+    expect(events[0]!.data).toEqual({ entity: bullet, other: target });
+  });
+
+  it('статика обрывов полосы не получает: гейт её не касается', () => {
+    // Полоса движущегося — [5, 5], то есть выше ОБЕИХ сторон ребра (0 и 1):
+    // реализация, выдавшая статике полосу по её уровням, пропустила бы ход.
+    // Обрыв всё равно останавливает его как обычная статика (PHYS-11 при
+    // `cliffRise = 0`) — высотная семантика обрыва живёт в PHYS-11/PHYS-13.
+    const h = harness();
+    const edge = staticsFromTerrain(createTerrainGrid(TERRAIN))[0]!;
+    expect([edge.levelNeg, edge.levelPos]).toEqual([0, 1]);
+    const mover = h.place('Flyer', {
+      Position: { x: F(1.5), y: F(0.5) },
+      Velocity: { x: F(0.5) },
+      Collider: { height: 1, blockMask: LAYER_STATIC },
+      LevelOverride: { level: 5 },
+    });
+    const events = h.step();
+    expect(h.position(mover)).toEqual(at(1.5, 0.5));
+    expect(events.map((e) => e.type)).toEqual(['Collision']);
+    expect(events[0]!.data.other).toBe(STATIC_COLLIDER);
   });
 });

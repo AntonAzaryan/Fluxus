@@ -1,10 +1,12 @@
 /**
- * Физика (PHYS-1..13): примитивные коллайдеры, статика обрывов, разрешение
+ * Физика (PHYS-1..14): примитивные коллайдеры, статика обрывов, разрешение
  * движения по маскам слоёв, sensor-пересечения и детерминированный raycast.
  *
- * Всё считается в 2D-проекции и в Q16.16 (PHYS-1, PHYS-3). Уровень террейна на
- * пересечения не влияет — перепад высот входит в физику статическими
- * коллайдерами обрывов (`terrain` TERR-5), а не третьей координатой.
+ * Всё считается в 2D-проекции и в Q16.16 (PHYS-1, PHYS-3). Третьей координаты
+ * не появляется и здесь: перепад высот входит в физику статическими
+ * коллайдерами обрывов (`terrain` TERR-5), а участие пары в пересечении
+ * дополнительно гейтуется колоночной моделью (PHYS-14) — отрезком ДИСКРЕТНЫХ
+ * уровней террейна, а не непрерывным z.
  *
  * Диапазон: расстояния, участвующие в квадратичных тестах, не должны выходить
  * за ~181 единицу — квадрат большего значения не помещается в Q16.16. Тот же
@@ -34,14 +36,22 @@ import {
   rayVsBox,
   rayVsCircle,
 } from './collisionGeometry.js';
+import {
+  bandsMeet,
+  effectiveLevel,
+  COLLIDER_HEIGHT_FIELD,
+  type LevelProbe,
+  type LevelSource,
+  type PhysicsDeps,
+} from './columnModel.js';
+import { PhysicsWorld } from './broadPhase.js';
 import { countCostBroadPhase, countCostRaycast } from '../debug.js';
-import { getField, hasComponent } from '../ecs/world.js';
+import { componentSchema, getField, hasComponent } from '../ecs/world.js';
 import { query } from '../ecs/query.js';
 import {
   FIXED_ONE,
   POSITION_COMPONENT,
   type EntityId,
-  type Fixed,
   type PhysicsApi,
   type RaycastHit,
   type System,
@@ -58,6 +68,15 @@ import {
  */
 export { SHAPE_AABB, SHAPE_CIRCLE } from './collisionGeometry.js';
 export type { Bounds, StaticCollider } from './collisionGeometry.js';
+/**
+ * Broad-phase (PHYS-5) и колоночная модель (PHYS-14) вынесены в собственные
+ * модули — сетка по статике не знает ни ECS, ни террейна, а правило полос не
+ * знает ни форм, ни свипов. Наружу они выходят отсюда: адрес физики один, и
+ * потребителю незачем знать, на сколько файлов она разложена внутри.
+ */
+export { PhysicsWorld } from './broadPhase.js';
+export { COLLIDER_HEIGHT_FIELD } from './columnModel.js';
+export type { PhysicsDeps } from './columnModel.js';
 
 /**
  * Теги блокировки: обычные теги сущности (ECS), у статики — её собственные.
@@ -96,7 +115,6 @@ export const DEFAULT_CLIFF_LAYER = 1;
 
 const DEFAULT_COLLIDER_COMPONENT = 'Collider';
 const DEFAULT_VELOCITY_COMPONENT = 'Velocity';
-const DEFAULT_CELL_SIZE = fixed.fromInt(4);
 /** Якорь шкалы `order` (DET-9); параметром сборки не является. */
 const ANCHOR_ORDER = 100;
 
@@ -118,114 +136,6 @@ export function staticsFromTerrain(
     levelNeg: edge.levelNeg,
     levelPos: edge.levelPos,
   }));
-}
-
-/**
- * Broad-phase (PHYS-5): равномерная сетка по статике. Динамика не
- * индексируется — её десятки, и живой линейный обход не может протухнуть,
- * в отличие от индекса, который пришлось бы инвалидировать после каждой
- * записи в `Position` любой системой.
- *
- * ponytail: индексировать динамику имеет смысл, когда её станут сотни;
- * пока это лишний инвариант, который легко нарушить молча.
- */
-export class PhysicsWorld {
-  private readonly cells = new Map<number, number[]>();
-  /** Метка последнего запроса на каждый коллайдер — дешёвая дедупликация по клеткам. */
-  private readonly stamp: Int32Array;
-  private queryId = 0;
-  // Поля объявлены явно, а не parameter properties: `bin/sim.mjs` исполняет
-  // исходники через strip-only режим node, который их не поддерживает (CLI-1).
-  readonly statics: readonly StaticCollider[];
-  readonly cellSize: Fixed;
-
-  constructor(statics: readonly StaticCollider[], cellSize: Fixed = DEFAULT_CELL_SIZE) {
-    this.statics = statics;
-    this.cellSize = cellSize;
-    this.stamp = new Int32Array(statics.length);
-    for (let i = 0; i < statics.length; i++) {
-      const s = statics[i]!;
-      for (let cy = this.cell(s.minY); cy <= this.cell(s.maxY); cy++) {
-        for (let cx = this.cell(s.minX); cx <= this.cell(s.maxX); cx++) {
-          const key = cx * 131072 + cy;
-          const bucket = this.cells.get(key);
-          if (bucket) bucket.push(i);
-          else this.cells.set(key, [i]);
-        }
-      }
-    }
-  }
-
-  /**
-   * Клетка сетки по мировой координате.
-   *
-   * DET-2, условия 3 и 5: делимое — координата в Q16.16, то есть `i32` по
-   * модулю меньше 2^31; делитель `cellSize` — положительное целое Q16.16.
-   * Промежуток из 2^53 не выходит, частное приводится к целому.
-   *
-   * Условие 4: делимое БЫВАЕТ отрицательным (арена левее и ниже начала
-   * координат), и `floor` расходится там с усечением к нулю. Расхождение
-   * ненаблюдаемо, и держится это не на выборе `floor`, а на том, что вставка в
-   * индекс и запрос по нему пользуются ОДНОЙ этой функцией: при любой конвенции
-   * отображение остаётся разбиением плоскости на клетки, коллайдер лежит в той
-   * же клетке, в которой его ищут, и набор кандидатов совпадает. Обход клеток
-   * идёт по возрастанию, а результат сортируется по индексу статики (DET-6),
-   * поэтому и порядок от конвенции не зависит. Закреплено тестом на статике с
-   * отрицательными координатами в `physics.test.ts`.
-   */
-  private cell(coordinate: Fixed): number {
-    return Math.floor(coordinate / this.cellSize);
-  }
-
-  /**
-   * Статика, чей AABB пересекает `bounds` и у которой есть тег `tag`; без тега
-   * — вся статика, попавшая в `bounds` (PHYS-6: маска ФИЛЬТРУЕТ, и её
-   * отсутствие фильтром быть не может). Порядок — по индексу (DET-6).
-   */
-  query(bounds: Bounds, tag?: string): StaticCollider[] {
-    return this.collect(bounds, tag, undefined);
-  }
-
-  /** Статика, чей AABB пересекает `bounds` и чей `layer` попал в маску (PHYS-2). Порядок — по индексу (DET-6). */
-  queryByLayer(bounds: Bounds, mask: number): StaticCollider[] {
-    return this.collect(bounds, undefined, mask);
-  }
-
-  /**
-   * Общий обход клеток обоих запросов: фильтр — тег (raycast; без тега фильтра
-   * нет вовсе) либо маска слоёв (движение, сенсоры).
-   *
-   * ponytail: один запрос стоит двух массивов — индексов кандидатов и выданных
-   * коллайдеров, — а зовут его на каждом шаге оси каждого движущегося и ещё раз
-   * на его сенсоры. Снимается переиспользуемым буфером на `PhysicsWorld` либо
-   * обходом через колбэк; и то и другое — когда профиль на реальной сцене
-   * покажет эти аллокации, а не по вкусу.
-   */
-  private collect(bounds: Bounds, tag: string | undefined, mask: number | undefined): StaticCollider[] {
-    this.queryId++;
-    const found: number[] = [];
-    // Объём работы broad-phase — осмотренные кандидаты (PERF-3). Считается в
-    // локальную переменную, а не вызовом на каждого: в горячем цикле это ровно
-    // одно целочисленное сложение, а сумма уходит наружу один раз за запрос.
-    let pairs = 0;
-    for (let cy = this.cell(bounds.minY); cy <= this.cell(bounds.maxY); cy++) {
-      for (let cx = this.cell(bounds.minX); cx <= this.cell(bounds.maxX); cx++) {
-        for (const index of this.cells.get(cx * 131072 + cy) ?? []) {
-          if (this.stamp[index] === this.queryId) continue;
-          this.stamp[index] = this.queryId;
-          pairs++;
-          const s = this.statics[index]!;
-          const rejected = mask === undefined ? tag !== undefined && !s.tags.includes(tag) : (s.layer & mask) === 0;
-          if (rejected) continue;
-          if (!overlaps(bounds, s)) continue;
-          found.push(index);
-        }
-      }
-    }
-    countCostBroadPhase(pairs);
-    found.sort((a, b) => a - b);
-    return found.map((index) => this.statics[index]!);
-  }
 }
 
 // ------------------------------------------------------------- коллайдеры ECS
@@ -261,6 +171,26 @@ function colliderInto(
 
 type FieldReader = (entity: EntityId, component: string, field: string) => number;
 
+// ------------------------------------------------ колоночная модель (PHYS-14)
+
+/**
+ * Объявила ли сцена поле высоты у своего компонента коллайдера (PHYS-14).
+ * Спрашивается ОДИН раз, на сборке: состав полей компонента неизменен, а ответ
+ * — зависимость сборки физики. Тот же приём, что у `inputTargetDeclared`
+ * (TICK-4): системе мир на конструировании не передают, и спрашивать схему на
+ * каждом тике незачем.
+ *
+ * Умолчание «поля нет — гейта нет» нормативно (PHYS-14): контент, не знающий о
+ * высотах, от появления гейта не меняется вовсе — ни поведением, ни стоимостью
+ * тика.
+ */
+export function colliderHeightDeclared(
+  world: WorldState,
+  component: string = DEFAULT_COLLIDER_COMPONENT,
+): boolean {
+  return componentSchema(world, component)?.fields[COLLIDER_HEIGHT_FIELD] !== undefined;
+}
+
 // --------------------------------------------------------- разрешение движения
 
 export interface PhysicsOptions {
@@ -281,6 +211,11 @@ export interface PhysicsOptions {
  * непусто (PHYS-2); статика обрывов дополнительно проходит направленный гейт
  * по `cliffRise` (PHYS-11). Пересечения по `hitMask` не блокируют, а дают
  * событие `Overlap` по фактически исполненному свипу (PHYS-12).
+ *
+ * Вторым и НЕЗАВИСИМЫМ от масок условием пары идёт колоночный гейт (PHYS-14):
+ * полосы дискретных уровней участников обязаны иметь общий уровень. Полоса
+ * берётся только у сущностей — статика обрывов её не получает, её высотная
+ * семантика уже в PHYS-11 и PHYS-13.
  *
  * Система — документированный опт-ин в TimeScale (TIME-4, TIME-5): шаг оси —
  * произведение скорости на итоговый множитель `getEffectiveDelta` (TIME-3,
@@ -322,11 +257,31 @@ export class PhysicsSystem implements System {
     radius: 0,
   };
   private readonly candidateBounds: Bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  /** Объявила ли сцена поле высоты коллайдера (PHYS-14) — ответ сборки, не вопрос тика. */
+  private readonly heightGate: boolean;
+  /**
+   * Эффективные уровни препятствий на этот тик (PHYS-14), параллельно массиву
+   * запроса. Скретч переживает тики и перевыделяется только при РОСТЕ сцены:
+   * оценка уровня — одна на препятствие за тик, и без общего буфера она стоила
+   * бы карты или пары объектов на каждого.
+   */
+  private levels = new Int32Array(0);
+  /** Точка запроса `levelAt`: одна на систему, а не одна на вызов. */
+  private readonly probe: LevelProbe = { x: 0, y: 0 };
+  /**
+   * Полоса текущего движущегося (PHYS-14). Живёт полем по той же причине, что и
+   * `blocker`: её читают обход препятствий и sensor-проверка, а лишний параметр
+   * на каждом кандидате ничего не объясняет. Высота, не большая нуля, — полоса
+   * не ограничена, и гейт для этого движущегося выключен целиком.
+   */
+  private moverLevel = 0;
+  private moverHeight = 0;
 
-  constructor(physicsWorld: PhysicsWorld, options: PhysicsOptions = {}) {
+  constructor(physicsWorld: PhysicsWorld, options: PhysicsOptions = {}, deps: PhysicsDeps = {}) {
     this.physicsWorld = physicsWorld;
     this.colliderComponent = options.collider ?? DEFAULT_COLLIDER_COMPONENT;
     this.velocityComponent = options.velocity ?? DEFAULT_VELOCITY_COMPONENT;
+    this.heightGate = deps.height === true;
   }
 
   run(ctx: SystemContext): void {
@@ -353,6 +308,8 @@ export class PhysicsSystem implements System {
         y: ctx.get(entity, POSITION_COMPONENT, 'y'),
       };
 
+    this.cacheLevels(ctx, obstacles);
+
     for (const mover of movers) {
       const collider = colliderOf(ctx.get, mover, this.colliderComponent);
       const blockMask = ctx.get(mover, this.colliderComponent, 'blockMask');
@@ -364,6 +321,23 @@ export class PhysicsSystem implements System {
       const from = positionOf(mover);
       let x = from.x;
       let y = from.y;
+
+      // Полоса движущегося для БЛОКИРОВКИ (PHYS-8, PHYS-9) — одна оценка на
+      // тик, по состоянию до хода: обе оси видят один уровень, и промежуточных
+      // уровней вдоль пути не возникает (PHYS-14).
+      //
+      // Пустая маска блокировки уровня не спрашивает вовсе: до `nearestBlocker`
+      // такой ход не доходит (ниже), а полосу заметаемого объёма сенсорная
+      // проверка всё равно считает заново — по разрешённому состоянию. Сквозной
+      // снаряд (`blockMask = 0`, `hitMask ≠ 0`) — ровно тот случай, ради
+      // которого писался гейт, и мёртвого `levelAt` на тик он платить не должен.
+      this.moverHeight = this.heightGate
+        ? ctx.get(mover, this.colliderComponent, COLLIDER_HEIGHT_FIELD)
+        : 0;
+      this.moverLevel =
+        this.moverHeight > 0 && blockMask !== 0
+          ? effectiveLevel(ctx, this.probe, mover, from.x, from.y)
+          : 0;
 
       for (const axis of ['x', 'y'] as const) {
         const step = fixed.mul(ctx.get(mover, this.velocityComponent, axis), scale);
@@ -419,6 +393,13 @@ export class PhysicsSystem implements System {
       // и объединение), а каждое препятствие в обходе ниже — своей позиции и
       // своего коллайдера. Те же буферы, что и на шаге оси, снимают и это.
       if (hitMask !== 0) {
+        // Полоса движущегося для заметаемого объёма (PHYS-14) — ОДНА оценка за
+        // тик, по разрешённому состоянию: позиция после разрешения обеих осей.
+        // Промежуточных уровней вдоль пути не считается вовсе — одна оценка
+        // детерминированна и не зависит от порядка разрешения осей.
+        if (this.moverHeight > 0) {
+          this.moverLevel = effectiveLevel(ctx, this.probe, mover, x, y);
+        }
         const executed = union(boundsAt(from.x, from.y, collider), boundsAt(x, y, collider));
         // Пара «движущийся — статика» наблюдаема как ОДНА: сущности у статики
         // нет, и `other` у всех отрезков один и тот же (STATIC_COLLIDER). При
@@ -435,10 +416,15 @@ export class PhysicsSystem implements System {
         // в цикле — ровно одно целочисленное сложение. Кандидат, отсеянный
         // маской, тоже кандидат: работа по его осмотру уже сделана.
         let pairs = 0;
-        for (const other of obstacles) {
+        for (let index = 0; index < obstacles.length; index++) {
+          const other = obstacles[index]!;
           if (other === mover) continue;
           pairs++;
           if ((ctx.get(other, this.colliderComponent, 'layer') & hitMask) === 0) continue;
+          // Колоночный гейт (PHYS-14) — второе условие рядом с маской, и оно
+          // независимо от неё: маска выражает отношение слоёв, полоса —
+          // совместность по высоте.
+          if (!this.bandsMeetWithMover(ctx, other, index)) continue;
           const position = positionOf(other);
           const otherCollider = colliderOf(ctx.get, other, this.colliderComponent);
           if (overlaps(executed, boundsAt(position.x, position.y, otherCollider))) {
@@ -499,10 +485,14 @@ export class PhysicsSystem implements System {
     // в локальную переменную, наружу уходит одной суммой на шаг оси. Кандидат,
     // отсеянный маской, из счёта не выпадает — его осмотр уже состоялся.
     let pairs = 0;
-    for (const other of obstacles) {
+    for (let index = 0; index < obstacles.length; index++) {
+      const other = obstacles[index]!;
       if (other === mover) continue;
       pairs++;
       if ((ctx.get(other, this.colliderComponent, 'layer') & blockMask) === 0) continue;
+      // Колоночный гейт (PHYS-14) — второе условие рядом с маской: пара без
+      // общего уровня хода не блокирует и события `Collision` не даёт.
+      if (!this.bandsMeetWithMover(ctx, other, index)) continue;
       // Позиция читается без объекта-обёртки: уже разрешённый сосед отдаёт
       // свою (Command Buffer вливается только в конце системы), остальные —
       // живое поле мира.
@@ -526,6 +516,43 @@ export class PhysicsSystem implements System {
     countCostBroadPhase(pairs);
     return found;
   }
+
+  /**
+   * Эффективные уровни препятствий на этот тик (PHYS-14): одна оценка на
+   * препятствие, по состоянию ДО разрешения. Оценивать уровень соседа по его
+   * уже разрешённой позиции значило бы поставить полосу в зависимость от того,
+   * успел ли сосед пройти разрешение раньше, — то есть от порядка обхода.
+   *
+   * Гейт выключен (поля высоты в схеме нет) — цикла нет вовсе: сцена, не
+   * знающая о высотах, не платит за колоночную модель ничем.
+   */
+  private cacheLevels(ctx: SystemContext, obstacles: Float64Array): void {
+    if (!this.heightGate) return;
+    // Скретч растёт вместе со сценой и переживает тики: перевыделение — только
+    // при росте, а не на каждом тике (дисциплина аллокаций).
+    if (this.levels.length < obstacles.length) this.levels = new Int32Array(obstacles.length);
+    for (let index = 0; index < obstacles.length; index++) {
+      const other = obstacles[index]!;
+      this.levels[index] = effectiveLevel(
+        ctx,
+        this.probe,
+        other,
+        ctx.get(other, POSITION_COMPONENT, 'x'),
+        ctx.get(other, POSITION_COMPONENT, 'y'),
+      );
+    }
+  }
+
+  /**
+   * Пересекается ли полоса текущего движущегося с полосой препятствия (PHYS-14).
+   * Полоса движущегося не ограничена — пара проходит, и поля высоты препятствия
+   * не читается вовсе: при выключенном гейте его в схеме нет.
+   */
+  private bandsMeetWithMover(ctx: SystemContext, other: EntityId, index: number): boolean {
+    if (this.moverHeight <= 0) return true;
+    const height = ctx.get(other, this.colliderComponent, COLLIDER_HEIGHT_FIELD);
+    return bandsMeet(this.moverLevel, this.moverHeight, this.levels[index]!, height);
+  }
 }
 
 /** `other` в событии столкновения: сущности у статического коллайдера нет. */
@@ -542,9 +569,20 @@ export function createPhysicsApi(
   world: WorldState,
   physicsWorld: PhysicsWorld,
   options: PhysicsOptions = {},
+  deps: PhysicsDeps = {},
 ): PhysicsApi {
   const colliderComponent = options.collider ?? DEFAULT_COLLIDER_COMPONENT;
   const read: FieldReader = (entity, component, field) => getField(world, entity, component, field);
+  const heightGate = deps.height === true;
+  // Источник уровня и точка запроса собираются ОДИН раз на симуляцию, а не на
+  // вызов луча: `raycast` зовут из середины тика на каждого кандидата видимости
+  // (FOW-5), и объект на вызов был бы аллокацией, пропорциональной сцене.
+  const levels: LevelSource = {
+    has: (entity, component) => hasComponent(world, entity, component),
+    get: read,
+    ...(deps.terrain !== undefined ? { terrain: deps.terrain } : {}),
+  };
+  const probe: LevelProbe = { x: 0, y: 0 };
 
   return {
     raycast: (from, to, rayOptions) => {
@@ -556,6 +594,7 @@ export function createPhysicsApi(
       // сам (`VisibilitySystem`), и подставленное умолчание молча сужало бы
       // луч, пущенный из выражения без маски (EXPR-8).
       const tag = rayOptions?.mask;
+      const elevation = rayOptions?.elevation;
       const delta = vec.sub(to, from);
       const rayLength = vec.length(delta);
       if (rayLength === 0) return null;
@@ -574,7 +613,7 @@ export function createPhysicsApi(
       for (const s of physicsWorld.query(rayBounds, tag)) {
         // PHYS-13: ребро, чей верхний уровень не выше уровня луча, прозрачно —
         // пересечение не засчитывается вовсе.
-        if (cliffRayOpen(rayOptions?.elevation, s)) continue;
+        if (cliffRayOpen(elevation, s)) continue;
         const distance = rayVsBox(from, dir, rayLength, s);
         if (distance !== undefined && (best === undefined || distance < best)) {
           best = distance;
@@ -586,6 +625,16 @@ export function createPhysicsApi(
         if (entity === rayOptions?.ignore) continue;
         const x = read(entity, POSITION_COMPONENT, 'x');
         const y = read(entity, POSITION_COMPONENT, 'y');
+        // Колоночный гейт луча (PHYS-14): попадание засчитывается, только если
+        // полоса коллайдера содержит уровень испускателя. Луч БЕЗ уровня
+        // пересекает коллайдер любой полосы — то же консервативное умолчание,
+        // что у обрывов в PHYS-13. Статика через этот гейт не проходит: полосы
+        // у неё нет, её высотную семантику несут PHYS-11 и PHYS-13.
+        if (heightGate && elevation !== undefined) {
+          const height = read(entity, colliderComponent, COLLIDER_HEIGHT_FIELD);
+          const level = height > 0 ? effectiveLevel(levels, probe, entity, x, y) : 0;
+          if (!bandsMeet(level, height, elevation, 1)) continue;
+        }
         const collider = colliderOf(read, entity, colliderComponent);
         const distance =
           collider.shape === SHAPE_CIRCLE
