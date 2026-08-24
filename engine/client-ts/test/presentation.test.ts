@@ -17,8 +17,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { tick, type EntityId } from '@game-mvp/core';
-import type { AssetService, VisualManifest } from '@game-mvp/assets';
+import { tick, type EntityId } from '@fluxus/core';
+import type { AssetService, VisualManifest } from '@fluxus/assets';
 import {
   DocumentSource,
   ModelsSubsystem,
@@ -27,7 +27,7 @@ import {
   type DocumentInstance,
   type RenderContext,
   type RenderSubsystem,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 import { RemoteHost, WorkerShell, type ShellPort } from '../src/index.js';
 import {
   PLAYER_ID,

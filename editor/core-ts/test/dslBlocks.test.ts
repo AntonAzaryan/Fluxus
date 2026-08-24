@@ -23,7 +23,7 @@ import {
   world as coreWorld,
   type SceneDef,
   type SystemDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import { describe, expect, it } from 'vitest';
 import {
   actionBlock,

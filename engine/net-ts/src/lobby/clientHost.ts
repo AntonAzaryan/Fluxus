@@ -2,7 +2,7 @@
  * Связка клиента лобби с транспортом — зеркало `ClientHost` матча: сокет живёт
  * здесь, `LobbyClient` остаётся чистым циклом.
  */
-import type { Serializer } from '@game-mvp/core';
+import type { Serializer } from '@fluxus/core';
 import { DEFAULT_SERIALIZER, type Codec } from '../protocol/codec.js';
 import type { Transport } from '../transport/transport.js';
 import { lobbyClientCodec } from './codec.js';

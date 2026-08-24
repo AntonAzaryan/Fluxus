@@ -23,7 +23,7 @@
  * прогона на одном потоке наблюдений с одним seed дают одну последовательность
  * намерений, и флаки от несеяной случайности не существует.
  */
-import type { ClientStep } from '@game-mvp/net';
+import type { ClientStep } from '@fluxus/net';
 import { parseBotBehavior, type BotBehaviorDocument, type BotExecutor } from '../../behavior.js';
 import type { BotBrain, BotBrainFactory, BotSelf } from '../../brain.js';
 import type { BotIntent } from '../../boundary.js';

@@ -1,7 +1,7 @@
 /**
  * Веб-реализация хоста среды (ED-12). Вторая — десктопная — пишется оболочкой;
  * весь остальной редактор ни о той, ни о другой не знает: он видит один
- * интерфейс из `@game-mvp/editor-core`.
+ * интерфейс из `@fluxus/editor-core`.
  *
  * ## Чтение — тот же шов, что у модуля ассетов
  *
@@ -59,7 +59,7 @@ import {
   type ContentWatcher,
   type EnvironmentHost,
   type WindowHost,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 
 /**
  * Минимум от `fetch`, которым пользуется хост. Объявлен структурно, а не

@@ -9,8 +9,8 @@
  * числа (CONT-4).
  */
 import { readFileSync } from 'node:fs';
-import type { ComponentSchema, PrefabDef } from '@game-mvp/core';
-import type { VisualManifest } from '@game-mvp/assets';
+import type { ComponentSchema, PrefabDef } from '@fluxus/core';
+import type { VisualManifest } from '@fluxus/assets';
 import { parseGltf, type GltfDocument } from '../src/gltf.js';
 import { normalizeDocument, type SourceObject } from '../src/normalize.js';
 import type { SpatialLayerContext } from '../src/layer.js';

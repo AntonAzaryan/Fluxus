@@ -10,7 +10,7 @@
  */
 import { botWorkerInit, type BotWireFormat, type BotWorkerSeat, type MessageChannelLike, type PortConnections, type RawPort } from '../assembly.js';
 import type { WorldViewNames } from '../worldView.js';
-import type { PhysicsOptions, SceneDef, VisibilityOptions } from '@game-mvp/core';
+import type { PhysicsOptions, SceneDef, VisibilityOptions } from '@fluxus/core';
 
 /** Структурный минимум воркера: только отправка сообщения с переносом портов. */
 export interface WorkerLike {

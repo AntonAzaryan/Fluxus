@@ -21,8 +21,8 @@
  * сети).
  */
 import { describe, expect, it } from 'vitest';
-import type { WorldMode } from '@game-mvp/core';
-import type { ClientStep } from '@game-mvp/net';
+import type { WorldMode } from '@fluxus/core';
+import type { ClientStep } from '@fluxus/net';
 import { Perception } from '../src/brains/layers/perception.js';
 import { evaluatedBrain } from '../src/brains/evaluated/evaluatedBrain.js';
 import { brainRandom } from '../src/brains/layers/random.js';

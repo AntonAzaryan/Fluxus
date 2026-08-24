@@ -15,7 +15,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { createEditorSession, createOperationRegistry, registerBuiltinOperations } from '@game-mvp/editor-core';
+import { createEditorSession, createOperationRegistry, registerBuiltinOperations } from '@fluxus/editor-core';
 import {
   curvatureOf,
   placementsOf,

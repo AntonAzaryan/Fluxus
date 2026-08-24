@@ -25,12 +25,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { createTerrainGrid, type EntityId, type TerrainGrid } from '@game-mvp/core';
+import { createTerrainGrid, type EntityId, type TerrainGrid } from '@fluxus/core';
 import type {
   AssetService,
   PresentationLighting,
   VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   LightingSubsystem,
   ModelsSubsystem,
@@ -41,7 +41,7 @@ import {
   type PresentationProducer,
   type QualityPreset,
   type RenderContext,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 

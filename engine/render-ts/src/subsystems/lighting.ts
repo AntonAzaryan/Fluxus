@@ -64,8 +64,8 @@
  * пола.
  */
 import * as THREE from 'three';
-import type { TerrainGrid } from '@game-mvp/core';
-import { PRESENTATION_SHADOW_MODES, type PresentationLighting } from '@game-mvp/assets';
+import type { TerrainGrid } from '@fluxus/core';
+import { PRESENTATION_SHADOW_MODES, type PresentationLighting } from '@fluxus/assets';
 import type {
   BlobCaster,
   BlobCasterSink,

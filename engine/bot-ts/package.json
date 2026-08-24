@@ -1,5 +1,5 @@
 {
-  "name": "@game-mvp/bot",
+  "name": "@fluxus/bot",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,9 +17,9 @@
     "node": ">=22.18 <23 || ^24 || >=26"
   },
   "dependencies": {
-    "@game-mvp/client": "*",
-    "@game-mvp/core": "*",
-    "@game-mvp/net": "*",
+    "@fluxus/client": "*",
+    "@fluxus/core": "*",
+    "@fluxus/net": "*",
     "yuka": "0.7.8"
   },
   "devDependencies": {

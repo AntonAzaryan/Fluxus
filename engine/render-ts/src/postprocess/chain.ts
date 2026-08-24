@@ -28,7 +28,7 @@
  * bloom теряет запас яркости, а не падает.
  */
 import * as THREE from 'three';
-import type { ColorLut } from '@game-mvp/assets';
+import type { ColorLut } from '@fluxus/assets';
 import { costSink, type RenderCostCounters } from '../cost.js';
 import { createWarnOnce } from '../warnOnce.js';
 import type { PostRendererLike, ScenePostFrame } from '../types.js';

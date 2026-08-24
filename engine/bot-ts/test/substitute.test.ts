@@ -10,7 +10,7 @@
  * видит вовсе.
  */
 import { describe, expect, it } from 'vitest';
-import type { InputFrame } from '@game-mvp/core';
+import type { InputFrame } from '@fluxus/core';
 import { BotHost } from '../src/host.js';
 import { BotSubstitutes } from '../src/substitute.js';
 import type { BotIntent } from '../src/boundary.js';
@@ -25,7 +25,7 @@ import {
   testProfile,
   type Harness,
 } from './fixtures.js';
-import type { Transport } from '@game-mvp/net';
+import type { Transport } from '@fluxus/net';
 
 const PLAYERS = ['p1', 'p2'] as const;
 /** Заметный шаг вправо: по нему видно, что ввод заместителя доехал до лога. */

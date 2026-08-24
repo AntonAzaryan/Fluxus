@@ -19,7 +19,7 @@ import {
   world,
   type EntityId,
   type WorldState,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 
 /** Откуда сборка берёт фазу полёта (REND-12): компонент, поле и полный путь. */
 export interface FlightPhaseSource {

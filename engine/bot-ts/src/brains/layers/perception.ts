@@ -26,8 +26,8 @@
  * «картинка назад не ходит» удерживали бы мозг на СТЁРТОМ будущем на всю
  * глубину отката. Пауза и возобновление ветвь НЕ трогают и памяти не стоят.
  */
-import type { EntityId, WorldMode } from '@game-mvp/core';
-import type { ClientStep } from '@game-mvp/net';
+import type { EntityId, WorldMode } from '@fluxus/core';
+import type { ClientStep } from '@fluxus/net';
 import type { BotSelf } from '../../brain.js';
 import type { BotProfile } from '../../profile.js';
 import {

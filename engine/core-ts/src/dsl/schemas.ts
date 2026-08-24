@@ -28,7 +28,7 @@ import { FIELD_TYPES } from '../types.js';
 type Json = Record<string, unknown>;
 
 const DIALECT = 'https://json-schema.org/draft/2020-12/schema';
-const BASE = 'https://game-mvp.local/schemas';
+const BASE = 'https://fluxus.local/schemas';
 
 const sorted = (names: readonly string[]): string[] => [...names].sort();
 

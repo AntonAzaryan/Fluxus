@@ -8,7 +8,7 @@
  * данные. Оракул — та же реплей-парность, что у матча людей (NTR-8, CLI-10).
  */
 import { describe, expect, it } from 'vitest';
-import { runScenario, runScenarioBytes, snapshotToPlain } from '@game-mvp/core';
+import { runScenario, runScenarioBytes, snapshotToPlain } from '@fluxus/core';
 import type { BotBrainFactory } from '../src/brain.js';
 import { BotHost } from '../src/host.js';
 import { evaluatedBrain } from '../src/brains/evaluated/evaluatedBrain.js';

@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { ParticleEmitter } from 'three.quarks';
-import type { ParticleEffectDocument, VisualManifest } from '@game-mvp/assets';
+import type { ParticleEffectDocument, VisualManifest } from '@fluxus/assets';
 import {
   ModelsSubsystem,
   ParticlesSubsystem,

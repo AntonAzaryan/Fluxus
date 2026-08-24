@@ -22,7 +22,7 @@
  * (переподача документа, догрузка ассета) — события правки, не кадра.
  */
 import * as THREE from 'three';
-import { modelSurfaceIndex, type ModelSurfaceHit, type ModelSurfaceIndex, type NormalizedModel } from '@game-mvp/assets';
+import { modelSurfaceIndex, type ModelSurfaceHit, type ModelSurfaceIndex, type NormalizedModel } from '@fluxus/assets';
 import { orientFromTiltYaw, tiltTarget, type TiltVector } from './model/surfaceAlign.js';
 import type { SurfaceNormal } from './visualSurface.js';
 

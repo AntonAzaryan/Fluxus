@@ -44,14 +44,14 @@
  * модулю ассетов; предела амплитуды у формата нет — читаемость перепадов
  * обеспечивает cliff-кромка (REND-9), а не кисть.
  */
-import { CURVATURE_SCALE } from '@game-mvp/assets';
+import { CURVATURE_SCALE } from '@fluxus/assets';
 import {
   TERRAIN_CELL_KINDS,
   TERRAIN_LEVEL_MAX,
   terrainFlagChar,
   terrainLevelChar,
   type TerrainCellKind,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   OperationError,
   formatPath,
@@ -64,7 +64,7 @@ import {
   type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 
 /** Идентификаторы операций кистей. */
 export const TERRAIN_OPERATIONS = {

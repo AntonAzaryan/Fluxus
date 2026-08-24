@@ -7,7 +7,7 @@
  * BOT-3.
  */
 import { describe, expect, it } from 'vitest';
-import type { ClientStep } from '@game-mvp/net';
+import type { ClientStep } from '@fluxus/net';
 import type { BotBrain } from '../src/brain.js';
 import type { BotIntent } from '../src/boundary.js';
 import type { BotBehaviorDocument } from '../src/behavior.js';

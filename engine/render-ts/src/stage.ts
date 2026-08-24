@@ -19,7 +19,7 @@
  * (`publishDecorations`): он не продюсер, взаимоисключающесть на него не
  * распространяется, и смена режима его гасить MUST NOT.
  */
-import type { EntityId } from '@game-mvp/core';
+import type { EntityId } from '@fluxus/core';
 import { costSink } from './cost.js';
 import type { EntityView, RenderContext, RenderSubsystem, TickView } from './types.js';
 

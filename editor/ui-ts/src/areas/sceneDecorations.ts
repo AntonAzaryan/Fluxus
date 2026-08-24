@@ -49,13 +49,13 @@
  * запрещает, а две операции подряд — ровно такое состояние между ними, и
  * `undo` водил бы по нему как по достижимому (ED-18).
  */
-import { fixed } from '@game-mvp/core';
+import { fixed } from '@fluxus/core';
 import {
   quantizeDecorationLength,
   quantizeDecorationYaw,
   visualKeys,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   OperationError,
   isJsonObject,
@@ -67,7 +67,7 @@ import {
   type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { DECORATION_FIELDS, type PositionBinding } from './sceneDocuments.js';
 
 export { DECORATION_FIELDS };

@@ -39,8 +39,8 @@ import {
   type ModelInstance,
   type SharedModelData,
   type SkinApplication,
-} from '@game-mvp/render';
-import type { EntityVisual, NormalizedModel } from '@game-mvp/assets';
+} from '@fluxus/render';
+import type { EntityVisual, NormalizedModel } from '@fluxus/assets';
 import type { PortraitStage, PortraitStageOptions } from './stage.js';
 
 /**

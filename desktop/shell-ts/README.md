@@ -1,4 +1,4 @@
-# @game-mvp/desktop-shell
+# @fluxus/desktop-shell
 
 Десктоп-контейнер веб-приложений репозитория — capability `desktop-shell`
 (DSK-1..6). Один контейнер запускает и редактор, и игрового клиента; чем они
@@ -26,7 +26,7 @@
 сьют работает на чистом Node.
 
 Сьют при этом один на все реализации, и Electron проходит его целиком — только
-вне гейта: `npm run contract:electron -w @game-mvp/desktop-shell` поднимает те
+вне гейта: `npm run contract:electron -w @fluxus/desktop-shell` поднимает те
 же случаи в настоящем окне (preload, IPC, protocol handler). Вторая реализация
 контейнера регистрируется тем же вызовом `describeContainerContract`.
 
@@ -92,15 +92,15 @@
 контейнер, и запечённый в бандл снимок заслонил бы живые байты.
 
 ```sh
-npm run build:desktop -w @game-mvp/editor-ui        # бандл редактора
-npm run demo:build:desktop -w @game-mvp/demo        # бандл демо игры
+npm run build:desktop -w @fluxus/editor-ui        # бандл редактора
+npm run demo:build:desktop -w @fluxus/demo        # бандл демо игры
 
-npm run start:editor -w @game-mvp/desktop-shell     # окно редактора
-npm run start:game -w @game-mvp/desktop-shell       # окно игры
+npm run start:editor -w @fluxus/desktop-shell     # окно редактора
+npm run start:game -w @fluxus/desktop-shell       # окно игры
 
-npm run contract:electron -w @game-mvp/desktop-shell  # контрактный сьют в контейнере (вне гейта)
-npm run smoke -w @game-mvp/desktop-shell            # прогон обоих профилей вне гейта
-npm run pack -w @game-mvp/desktop-shell -- game     # дистрибутив одного профиля
+npm run contract:electron -w @fluxus/desktop-shell  # контрактный сьют в контейнере (вне гейта)
+npm run smoke -w @fluxus/desktop-shell            # прогон обоих профилей вне гейта
+npm run pack -w @fluxus/desktop-shell -- game     # дистрибутив одного профиля
 ```
 
 Шага сборки у самого контейнера нет: типы стрипает Node (>=22.18), а хук

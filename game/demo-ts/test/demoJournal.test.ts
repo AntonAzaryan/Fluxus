@@ -11,7 +11,7 @@
  * и политика разведены правильно.
  */
 import { describe, expect, it } from 'vitest';
-import { ARENA_EVENTS, PHYSICS_EVENTS } from '@game-mvp/core';
+import { ARENA_EVENTS, PHYSICS_EVENTS } from '@fluxus/core';
 import dictionaryJson from '../app/journal/duel.dictionary.json';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 

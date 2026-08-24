@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import type { DecodedImage, ParticleEffectDocument, VisualManifest } from '@game-mvp/assets';
+import type { DecodedImage, ParticleEffectDocument, VisualManifest } from '@fluxus/assets';
 import { ModelsSubsystem, ParticlesSubsystem, type RenderContext } from '../src/index.js';
 import { makeAssets, makeEntityView, makeModel, makeTickView } from './fixtures.js';
 

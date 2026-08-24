@@ -78,7 +78,7 @@ import {
   LOCOMOTION_DODGE,
   LOCOMOTION_ROLL,
   type EntityId,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   modelDerivatives,
   resolveEffectByKind,
@@ -95,7 +95,7 @@ import {
   type NormalizedModel,
   type VisualManifest,
   type VisualTier,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import type {
   BlobCaster,
   BlobCasterPose,

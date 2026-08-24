@@ -26,7 +26,7 @@ import {
   type Action,
   type SceneDef,
   type SystemDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   ClientHost,
   DEFAULT_SERIALIZER,
@@ -44,7 +44,7 @@ import {
   type ServerMessage,
   type SnapshotMessage,
   type Transport,
-} from '@game-mvp/net';
+} from '@fluxus/net';
 import {
   TICK_RATE,
   connectClient,

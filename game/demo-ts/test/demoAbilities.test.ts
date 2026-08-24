@@ -32,9 +32,9 @@ import {
   type SceneDef,
   type SimulationState,
   type Simulation,
-} from '@game-mvp/core';
-import { buildMatchWorld, REWIND_REQUEST_EVENT } from '@game-mvp/net';
-import { ViewBuffer, type TickView } from '@game-mvp/render';
+} from '@fluxus/core';
+import { buildMatchWorld, REWIND_REQUEST_EVENT } from '@fluxus/net';
+import { ViewBuffer, type TickView } from '@fluxus/render';
 import {
   ABILITY_SLOTS,
   ACTION_BITS,

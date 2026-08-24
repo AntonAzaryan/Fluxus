@@ -9,13 +9,13 @@
  * вовсе, и умолчанием этот выбор не достаётся — иначе один из двух режимов стал
  * бы неявной нормой.
  */
-import { shellPort, WorkerShell } from '@game-mvp/client';
+import { shellPort, WorkerShell } from '@fluxus/client';
 import {
   RingHistory,
   createInputLog,
   createRewindController,
   type SceneDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import { ACTION_BITS, PLAYER_ID, TICK_SECONDS, createDemoSimulation } from './sim.js';
 import { DEMO_REWIND, DEMO_SCRUB_EVERY } from './match.js';
 import { createDemoExtractor } from './extractor.js';

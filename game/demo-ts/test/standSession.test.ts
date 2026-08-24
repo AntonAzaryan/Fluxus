@@ -14,7 +14,7 @@
  * одинокий клиент окна рестарта ждал бы бота вечно, вопреки обещанию стенда.
  */
 import { describe, expect, it } from 'vitest';
-import type { Transport } from '@game-mvp/net';
+import type { Transport } from '@fluxus/net';
 import { standSession } from '../app/standSession.js';
 
 /**

@@ -8,7 +8,7 @@
  * к нему тоже один.
  *
  * Тип источника объявлен здесь структурно, а не импортирован из
- * `@game-mvp/assets`: `AssetSource` — интерфейс из одного метода, и зависимость
+ * `@fluxus/assets`: `AssetSource` — интерфейс из одного метода, и зависимость
  * headless-каркаса редактора от пакета ассетов ради него была бы платой за
  * ничто. Совместимость держится подписью, а не импортом; расхождение поймает
  * компилятор в первом же месте, где источник передают в `new AssetService(...)`.
@@ -44,7 +44,7 @@ import type { ContentPath } from './paths.js';
 import type { ContentTreeHost } from './types.js';
 
 /**
- * Структурный аналог `AssetSource` пакета `@game-mvp/assets` (ASSET-2): ID
+ * Структурный аналог `AssetSource` пакета `@fluxus/assets` (ASSET-2): ID
  * ассета — путь в дереве контента, и другого ввода-вывода у модуля нет.
  */
 export interface ContentAssetSource {

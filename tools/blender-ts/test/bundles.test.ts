@@ -16,7 +16,7 @@ import {
   reasonKey,
   ruleDescriptionKey,
   validationDescriptionPaths,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { BLENDER_BUNDLES, SPATIAL_LAYER_SYNC_RULE, spatialLayerSyncRule } from '../src/index.js';
 import { importSpatialLayerOperation } from '../src/operation.js';
 

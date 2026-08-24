@@ -13,10 +13,10 @@
  * подпутями пакета оболочки: боту не нужны ни DOM, ни рендер, и тянуть их
  * корневым модулем ради сорока строк транспорта незачем.
  */
-import type { PhysicsOptions, SceneDef, VisibilityOptions } from '@game-mvp/core';
-import type { ConnectionRole, Transport, TransportServer } from '@game-mvp/net';
-import { shellPort } from '@game-mvp/client/protocol';
-import { portTransport } from '@game-mvp/client/portTransport';
+import type { PhysicsOptions, SceneDef, VisibilityOptions } from '@fluxus/core';
+import type { ConnectionRole, Transport, TransportServer } from '@fluxus/net';
+import { shellPort } from '@fluxus/client/protocol';
+import { portTransport } from '@fluxus/client/portTransport';
 import type { BotBehaviorDocument } from './behavior.js';
 import type { BotProfile } from './profile.js';
 import type { BrainKind } from './brains/registry.js';

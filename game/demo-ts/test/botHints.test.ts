@@ -8,7 +8,7 @@
  * способность без прицеливания.
  */
 import { describe, expect, it } from 'vitest';
-import type { AbilityDef, PrefabDef } from '@game-mvp/core';
+import type { AbilityDef, PrefabDef } from '@fluxus/core';
 import { BOT_HINTS_SCHEMA, parseBotHints } from '../app/botHints.js';
 import { expectedAbilities, type ContractScene } from '../app/botContract.js';
 

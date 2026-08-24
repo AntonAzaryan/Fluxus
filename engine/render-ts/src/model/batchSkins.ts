@@ -21,7 +21,7 @@ import {
   type DecodedImage,
   type EntityVisual,
   type NormalizedModel,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import { skinTextureSources, type SkinTextureSource } from './skins.js';
 import type { VatMapKind } from './vatMaterial.js';
 

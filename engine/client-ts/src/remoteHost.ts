@@ -29,7 +29,7 @@
  * Игровой сборке сцену передавать неоткуда — второго продюсера в ней не
  * существует, и хост заводит свою.
  */
-import type { TerrainGrid, Vec2 } from '@game-mvp/core';
+import type { TerrainGrid, Vec2 } from '@fluxus/core';
 import {
   PresentationStage,
   ViewBuffer,
@@ -37,7 +37,7 @@ import {
   type RenderContext,
   type RenderSubsystem,
   type TickView,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 import { readTick } from './codec.js';
 import type {
   ControlMessage,

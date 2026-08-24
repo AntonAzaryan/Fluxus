@@ -266,7 +266,7 @@ export class AnimationController {
 
   /** Идёт one-shot: смены состояния копятся и применяются по его завершении. */
   private oneShotPlaying = false;
-  /** Текущее состояние локомоции ('idle'/'move' в MVP). */
+  /** Текущее состояние локомоции (сейчас 'idle'/'move'). */
   private state: string | null = null;
   /** Клип, назначенный набором инстансов поверх состояния (REND-11); undefined — не назначен. */
   private override: string | undefined = undefined;

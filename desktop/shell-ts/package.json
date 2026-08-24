@@ -1,5 +1,5 @@
 {
-  "name": "@game-mvp/desktop-shell",
+  "name": "@fluxus/desktop-shell",
   "version": "0.1.0",
   "private": true,
   "type": "module",

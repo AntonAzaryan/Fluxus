@@ -21,8 +21,8 @@ import {
   type Scene,
   type Simulation,
   type System,
-} from '@game-mvp/core';
-import type { VisualManifest } from '@game-mvp/assets';
+} from '@fluxus/core';
+import type { VisualManifest } from '@fluxus/assets';
 import {
   DocumentSource,
   ModelsSubsystem,

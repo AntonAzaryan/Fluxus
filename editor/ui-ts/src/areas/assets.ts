@@ -63,9 +63,9 @@ import {
   type EditorSession,
   type EnvironmentHost,
   type OperationParams,
-} from '@game-mvp/editor-core';
-import type { CameraEffectsDescription, EntityVisual } from '@game-mvp/assets';
-import { CAMERA_EFFECTS_DESCRIPTION } from '@game-mvp/render';
+} from '@fluxus/editor-core';
+import type { CameraEffectsDescription, EntityVisual } from '@fluxus/assets';
+import { CAMERA_EFFECTS_DESCRIPTION } from '@fluxus/render';
 import {
   children,
   documentValue,

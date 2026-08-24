@@ -24,7 +24,7 @@ import {
   type SceneDef,
   type ScenarioSpawn,
   type TerrainDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 
 const PLAYER = 'p1';
 /** Биты кнопок — параметры системы, а не конвенция ядра (LOC-1). */

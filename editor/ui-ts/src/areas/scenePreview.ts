@@ -56,9 +56,9 @@ import {
   type SceneDef,
   type Simulation,
   type SimulationState,
-} from '@game-mvp/core';
-import { Extractor, kindByTags } from '@game-mvp/render';
-import { RemoteHost, WorkerShell, shellPort, type ShellPort } from '@game-mvp/client';
+} from '@fluxus/core';
+import { Extractor, kindByTags } from '@fluxus/render';
+import { RemoteHost, WorkerShell, shellPort, type ShellPort } from '@fluxus/client';
 import type { PreviewRun, PreviewSource } from '../frame/preview.js';
 import type { SceneStage } from './sceneStage.js';
 

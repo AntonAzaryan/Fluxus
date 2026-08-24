@@ -3,7 +3,7 @@
  *
  * Стенд поднимает матч не так, как вкладка: вкладка собирает конфиг кодом
  * (`app/match.ts`), а стенд раскладывает документ матча помощником запускалок
- * `@game-mvp/net/bin/matchFile.mjs` — тем же, которым его раскладывает
+ * `@fluxus/net/bin/matchFile.mjs` — тем же, которым его раскладывает
  * `serve.mjs`. Ровно на этом шве ульта и терялась: раскладка перечисляла секции
  * поимённо и не называла `rewind`, поэтому `MatchServer` собирался БЕЗ истории,
  * `$rewind/request` отбрасывался, а игрок видел ульту, которая жжёт cooldown и
@@ -21,9 +21,9 @@
  */
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import type { SceneDef } from '@game-mvp/core';
-import { MatchServer, contentPack, type ClientMessage, type MatchConfig } from '@game-mvp/net';
-import { MATCH_DOCUMENT_FIELDS, matchConfigOf, readMatchFile } from '@game-mvp/net/bin/matchFile.mjs';
+import type { SceneDef } from '@fluxus/core';
+import { MatchServer, contentPack, type ClientMessage, type MatchConfig } from '@fluxus/net';
+import { MATCH_DOCUMENT_FIELDS, matchConfigOf, readMatchFile } from '@fluxus/net/bin/matchFile.mjs';
 import {
   DEMO_DOCUMENT_FIELDS,
   DEMO_MATCH,

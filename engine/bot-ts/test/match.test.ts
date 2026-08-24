@@ -8,7 +8,7 @@
  * как запоздавший ввод человека (NTR-7).
  */
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SERIALIZER, serverCodec, type ClientMessage, type Transport } from '@game-mvp/net';
+import { DEFAULT_SERIALIZER, serverCodec, type ClientMessage, type Transport } from '@fluxus/net';
 import { BotHost } from '../src/host.js';
 import { walkToCenter } from '../src/brains/scripted.js';
 import type { BotBrain, BotBrainFactory } from '../src/brain.js';

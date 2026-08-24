@@ -47,7 +47,7 @@
  * (REND-3), и реализация у него тоже одна. Своё у источника — поля, которые он
  * пишет, presentation-состояние и кадр.
  */
-import type { EntityId } from '@game-mvp/core';
+import type { EntityId } from '@fluxus/core';
 import type { EntityView, TickView } from './types.js';
 import { KeyedInstanceSet } from './keyedInstanceSet.js';
 import type { PresentationProducer, PresentationStage } from './stage.js';

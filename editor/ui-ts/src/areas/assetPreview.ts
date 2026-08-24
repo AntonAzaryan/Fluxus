@@ -49,7 +49,7 @@ import type {
   Handle,
   NormalizedModel,
   VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import type { StageDraft } from './sceneStage.js';
 
 /**

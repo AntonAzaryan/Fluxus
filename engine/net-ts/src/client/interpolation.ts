@@ -9,7 +9,7 @@
  * `alpha` здесь — обычный float, и это не нарушение DET-2: интерполяция живёт
  * в представлении, а не в симуляции. В мир из этого файла не уходит ничего.
  */
-import { world as coreWorld, type EntityId, type Snapshot } from '@game-mvp/core';
+import { world as coreWorld, type EntityId, type Snapshot } from '@fluxus/core';
 
 export interface InterpolationOptions {
   readonly delayMs?: number;

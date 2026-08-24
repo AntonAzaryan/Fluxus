@@ -17,7 +17,7 @@ import {
   worldInitSpawn,
   type EntityId,
   type Simulation,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   CAMERA_EFFECTS_DESCRIPTION,
   CameraEffectsDirector,

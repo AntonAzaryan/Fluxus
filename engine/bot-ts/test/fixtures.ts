@@ -14,7 +14,7 @@ import {
   contentPackHash,
   fixed,
   type SceneDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   ClientHost,
   LoopbackHub,
@@ -27,7 +27,7 @@ import {
   type InputSource,
   type MatchConfig,
   type Transport,
-} from '@game-mvp/net';
+} from '@fluxus/net';
 import type { FillSchedule } from '../src/fill.js';
 import { BotHost, type BotSeat } from '../src/host.js';
 import {

@@ -201,7 +201,7 @@ export default defineConfig([
         {
           patterns: [
             {
-              group: ['@game-mvp/*', '**/engine/*', '**/editor/*'],
+              group: ['@fluxus/*', '**/engine/*', '**/editor/*'],
               message:
                 'контейнер не зависит от пакетов движка и редактора (DSK-3): через границу проходят пути, байты и события, а предметная семантика остаётся в приложениях',
             },
@@ -218,7 +218,7 @@ export default defineConfig([
    * поэтому выключен: с отсутствующими типами он краснел бы на каждой строке
    * «unsafe call of an error typed value» — то есть требовал бы установленного
    * Electron ровно там, где требование его не допускает. Проверяет клей
-   * `npm run typecheck:electron -w @game-mvp/desktop-shell`, вне гейта.
+   * `npm run typecheck:electron -w @fluxus/desktop-shell`, вне гейта.
    */
   {
     files: ['desktop/shell-ts/src/electron/**/*.ts'],

@@ -17,7 +17,7 @@
 import type {
   PresentationPostprocess,
   PresentationToneMappingOperator,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 
 /** Оператор сведения яркости — словарь формата, а не второй его перечень. */
 export type ToneMappingOperator = PresentationToneMappingOperator;

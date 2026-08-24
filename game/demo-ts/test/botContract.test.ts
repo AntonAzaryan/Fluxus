@@ -17,7 +17,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { parseBotProfile, type BotProfile } from '@game-mvp/bot';
+import { parseBotProfile, type BotProfile } from '@fluxus/bot';
 import { BOT_HINTS_SUFFIX, parseBotHints, type BotHintsDocument } from '../app/botHints.js';
 import { expectedAbilities, verifyProfileAbilities, type ContractScene } from '../app/botContract.js';
 

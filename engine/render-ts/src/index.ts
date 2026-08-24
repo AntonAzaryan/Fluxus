@@ -66,13 +66,19 @@ export type {
   DebugWorldMode,
 } from './debug/contract.js';
 // Источники движка, которыми не владеет подсистема: их регистрирует сборка.
-export { costCountersDebugSource, deliveryDebugSource } from './debug/sources.js';
+export {
+  costCountersDebugSource,
+  deliveryDebugSource,
+  programsDebugSource,
+} from './debug/sources.js';
 export type {
   DebugCostProbe,
   DebugDeliveryProbe,
   DebugDeliveryRow,
+  DebugProgramsProbe,
   DebugSnapReason,
   DeliverySourceOptions,
+  ProgramCountRenderer,
 } from './debug/sources.js';
 export type { DebugFogProbe } from './debug/fogSource.js';
 export type { DebugCellRow, DebugTerrainProbe } from './debug/terrainSource.js';
@@ -420,4 +426,4 @@ export type {
   PartVisibilityTrack,
   TextureSlotRef,
   VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';

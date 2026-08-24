@@ -12,7 +12,7 @@
  * расстановки больше нет и отказ называет запись.
  */
 import { describe, expect, it } from 'vitest';
-import { query, world as coreWorld, type SceneDef } from '@game-mvp/core';
+import { query, world as coreWorld, type SceneDef } from '@fluxus/core';
 import { buildMatchWorld } from '../src/match/world.js';
 import { replaySegments } from '../src/match/replay.js';
 import { duelConfig, duelScene, placedScene } from './fixtures.js';

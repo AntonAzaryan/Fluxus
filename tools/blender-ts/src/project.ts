@@ -13,8 +13,8 @@
  * законна), и на диск уходит только с содержимым (ED-21). Иначе первый же
  * импорт сцены, у которой декораций ещё не было, писать их было бы некуда.
  */
-import { validateManifest, type VisualManifest } from '@game-mvp/assets';
-import type { ComponentSchema, PrefabDef } from '@game-mvp/core';
+import { validateManifest, type VisualManifest } from '@fluxus/assets';
+import type { ComponentSchema, PrefabDef } from '@fluxus/core';
 import {
   getAtPath,
   isJsonObject,
@@ -28,8 +28,8 @@ import {
   type JsonPath,
   type JsonValue,
   type PositionBinding,
-} from '@game-mvp/editor-core';
-import { presentationPathOf } from '@game-mvp/assets';
+} from '@fluxus/editor-core';
+import { presentationPathOf } from '@fluxus/assets';
 import { DEFAULT_DECORATIONS_PATH, DEFAULT_INITIAL_PATH, DEFAULT_TERRAIN_PATH } from './operation.js';
 import type { SpatialLayerContext, TargetTerrain } from './layer.js';
 

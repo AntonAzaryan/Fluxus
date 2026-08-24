@@ -9,7 +9,7 @@
  * Q16.16, дальше только float.
  */
 import type * as THREE from 'three';
-import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
+import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 
 /**
  * Радиус арены, когда сетки террейна подсистеме не дали (превью ассета ED-20,

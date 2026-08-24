@@ -36,7 +36,7 @@ import {
   type StringResources,
   type ValidationIssue,
   type ValidationReport,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { children, documentValue, el, issueText, resourceText, type UiNode } from '../dom/node.js';
 import { statusChip } from '../widgets/chip.js';
 import { textField } from '../widgets/field.js';
@@ -50,7 +50,7 @@ import {
   type SchemaField,
   type SubjectAddress,
 } from './schema.js';
-import type { ContributionReader } from '@game-mvp/editor-core';
+import type { ContributionReader } from '@fluxus/editor-core';
 
 export interface InspectorSpec {
   readonly resources: StringResources;

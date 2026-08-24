@@ -20,9 +20,9 @@ import {
   world as coreWorld,
   type EntityId,
   type WorldState,
-} from '@game-mvp/core';
-import { toWorldFixed } from '@game-mvp/client';
-import type { InputSample } from '@game-mvp/net';
+} from '@fluxus/core';
+import { toWorldFixed } from '@fluxus/client';
+import type { InputSample } from '@fluxus/net';
 
 /**
  * Полный оборот в единицах угла ядра (`fixed-point-math` FP-7): угол — binary

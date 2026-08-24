@@ -14,12 +14,12 @@ import {
   runOperationRoundTrip,
   type EditorSession,
   type JsonValue,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   CAMERA_EFFECTS_DESCRIPTION,
   type CameraEffectsCatalog,
-} from '@game-mvp/render';
-import { validateManifest, type CameraEffectsDescription } from '@game-mvp/assets';
+} from '@fluxus/render';
+import { validateManifest, type CameraEffectsDescription } from '@fluxus/assets';
 import { findAll, type UiNode } from '../src/dom/node.js';
 import {
   CAMERA_EFFECTS_OPERATIONS,

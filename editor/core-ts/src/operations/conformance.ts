@@ -15,7 +15,7 @@
  * в редакторе запрещена (ED-1, ED-21). Побайтовое равенство здесь означает
  * ровно то же, что пустой дифф файла после «открыл — сохранил».
  */
-import { jsonSerializer } from '@game-mvp/core';
+import { jsonSerializer } from '@fluxus/core';
 import type { EditorSession } from '../document/session.js';
 import type { DocumentId } from '../document/types.js';
 import { pathKey } from '../document/json.js';

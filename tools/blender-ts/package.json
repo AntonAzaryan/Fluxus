@@ -1,5 +1,5 @@
 {
-  "name": "@game-mvp/blender-ts",
+  "name": "@fluxus/blender-ts",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,10 +17,10 @@
     "node": ">=22.18 <23 || ^24 || >=26"
   },
   "dependencies": {
-    "@game-mvp/assets": "*",
-    "@game-mvp/core": "*",
-    "@game-mvp/editor-core": "*",
-    "@game-mvp/render": "*"
+    "@fluxus/assets": "*",
+    "@fluxus/core": "*",
+    "@fluxus/editor-core": "*",
+    "@fluxus/render": "*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

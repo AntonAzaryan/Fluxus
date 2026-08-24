@@ -34,7 +34,7 @@ import {
   type TickResult,
   type VisibilityOptions,
   type WorldMode,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import { BranchHistory, type MatchHistory } from '../match/history.js';
 import {
   firstRewindRequest,

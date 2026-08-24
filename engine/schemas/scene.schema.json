@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://game-mvp.local/schemas/scene.schema.json",
+  "$id": "https://fluxus.local/schemas/scene.schema.json",
   "title": "Сцена (SER-7)",
   "type": "object",
   "additionalProperties": false,

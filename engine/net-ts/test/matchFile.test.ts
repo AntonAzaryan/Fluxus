@@ -26,7 +26,7 @@ import {
   matchDataOf,
   type MatchDocument,
 } from '../bin/matchFile.mjs';
-import type { SceneDef } from '@game-mvp/core';
+import type { SceneDef } from '@fluxus/core';
 import { contentPack } from '../src/content/pack.js';
 import { MatchServer, type MatchConfig } from '../src/server/matchServer.js';
 import { duelScene } from './fixtures.js';

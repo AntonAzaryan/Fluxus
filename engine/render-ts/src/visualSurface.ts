@@ -48,8 +48,8 @@
  * на каждый мазок. Пересчитанную сетку отдаёт ядро (TERR-5): производные
  * величины здесь не выводятся, только читаются.
  */
-import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
-import { CURVATURE_SCALE, type TerrainCurvatureMap } from '@game-mvp/assets';
+import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
+import { CURVATURE_SCALE, type TerrainCurvatureMap } from '@fluxus/assets';
 // Только тип: walkable-реестр создаёт источник поверхности, здесь он читается.
 import type { WalkableField } from './walkableSurface.js';
 

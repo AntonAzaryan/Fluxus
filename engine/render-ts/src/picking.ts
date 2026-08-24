@@ -32,7 +32,7 @@
  * запись прокси переиспользуются между вызовами.
  */
 import * as THREE from 'three';
-import { FIXED_ONE, type EntityId } from '@game-mvp/core';
+import { FIXED_ONE, type EntityId } from '@fluxus/core';
 import { applyCameraPose } from './camera/apply.js';
 import type { CameraPose } from './camera/rig.js';
 import type { VisualSurfaceSource } from './surfaceSource.js';

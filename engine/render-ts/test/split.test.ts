@@ -22,7 +22,7 @@ import {
   type Scene,
   type Simulation,
   type System,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   Extractor,
   RenderHost,

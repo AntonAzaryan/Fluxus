@@ -8,8 +8,8 @@
  * принадлежит редактору: во что попадание превращается — в выделение, в набор
  * наложений и в правку документа операцией (ED-29).
  */
-import { fixed, FIXED_ONE } from '@game-mvp/core';
-import { getAtPath, type JsonValue } from '@game-mvp/editor-core';
+import { fixed, FIXED_ONE } from '@fluxus/core';
+import { getAtPath, type JsonValue } from '@fluxus/editor-core';
 import { describe, expect, it } from 'vitest';
 import { SCENE_AREA_ID } from '../src/areas/scene.js';
 import { PLACEMENT_LIST } from '../src/areas/sceneProject.js';

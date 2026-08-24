@@ -12,6 +12,19 @@
  * перцентили кадра и стадий (PERF-2) и печатает их против бюджетов профиля
  * (PERF-1) с вердиктом по каждой строке.
  *
+ * ## Хвост за p99
+ *
+ * Вердикт перцентильный, а разовые фризы живут в хвосте ЗА ним: один кадр в
+ * 325 мс на двадцатисекундном окне не двигает ни p50, ни p99, и в отчёте из
+ * одних перцентилей его нет вовсе. Поэтому рядом с ними печатаются максимум
+ * каждой серии, топ худших кадров окна с раскладкой по стадиям и остатком «вне
+ * стадий», а в режиме вождения — число ЖИВЫХ шейдерных программ рендерера на
+ * границах окна (`render.programs`, «было → стало»): компиляция программы не
+ * растит ни одного счётчика стоимости (PERF-3), и другого печатного следа у неё
+ * нет. Это размер живого кэша, а не счётчик компиляций, и отчёт печатает границу
+ * метода рядом с числом. Всё это ДИАГНОСТИКА: вердикт «сходится / не сходится» и
+ * код возврата от хвоста не зависят (PERF-7).
+ *
  * В ГЕЙТ НЕ ВХОДИТ и входить не может (PERF-7): нужен браузер, а числа шумят от
  * машины к машине. Это диагностика по запросу, как `npm run coverage`; от
  * расползания стоимости между такими сверками страхуют детерминированные
@@ -63,8 +76,8 @@ import { fileURLToPath } from 'node:url';
 // лежит `.ts` — типы Node стрипает сам (>=22.18), хук добавляет остальное. Тот
 // же приём, что у `core-ts/bin/sim.mjs`; регистрация обязана случиться ДО
 // динамического импорта ниже, поэтому импорт статический, а импорт профиля — нет.
-import '@game-mvp/net/bin/tsHook.mjs';
-import { flag, option } from '@game-mvp/net/bin/matchFile.mjs';
+import '@fluxus/net/bin/tsHook.mjs';
+import { flag, option } from '@fluxus/net/bin/matchFile.mjs';
 
 const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
 const PROFILES = join(PACKAGE, 'bench', 'profiles');
@@ -203,7 +216,7 @@ const profilePath =
 
 const { validateBenchProfile, benchVerdict, benchLineFits, benchPaceFits } =
   await import('../bench/profile.ts');
-const { BENCH_GLOBAL_KEY, BENCH_PROBE_VERSION } = await import('../app/benchProbe.ts');
+const { BENCH_GLOBAL_KEY, BENCH_PROBE_VERSION, BENCH_STAGES } = await import('../app/benchProbe.ts');
 
 let profile;
 try {
@@ -495,6 +508,24 @@ const FOG_SOURCE_ID = 'fog.mask';
 const CAMERA_SOURCE_ID = 'camera.pose';
 
 /**
+ * Источник числа ЖИВЫХ шейдерных программ рендерера (`render.programs`,
+ * RDBG-1). Читается ТЕМИ ЖЕ двумя пробами, что счётчик перестроек маски, — до
+ * окна и после, вне замера (RDBG-4).
+ *
+ * Величина — размер живого кэша программ, а не счётчик компиляций: освобождение
+ * вынимает запись из того же набора, и компиляция, уравновешенная
+ * освобождением, даёт нулевую разность. Отчёт печатает границы окна («было →
+ * стало») вместе с оговоркой метода, а не одно приращение, выданное за число
+ * компиляций.
+ *
+ * Отсутствие источника на странице замеру НЕ отказ, в отличие от маски: маской
+ * проверяется, что вождение вообще доехало до героя, а число программ — это
+ * подсказка к чтению отчёта. Не измерено — отчёт называет ПРИЧИНУ, а не печатает
+ * «Δ0»: «мы не смотрели» и «не изменилось» — разные утверждения.
+ */
+const PROGRAMS_SOURCE_ID = 'render.programs';
+
+/**
  * Плоское расписание макроса на всё окно замера: события в миллисекундах ОТ
  * НАЧАЛА окна. Собирается заранее и целиком — так число нажатий в отчёте взято
  * из того же расписания, по которому шло вождение, а не выведено из времени.
@@ -522,6 +553,41 @@ function focusOf(sections) {
   if (camera === null || typeof camera.focusWorldX !== 'number') return null;
   if (typeof camera.noData === 'string') return null;
   return { x: camera.focusWorldX, y: camera.focusWorldY };
+}
+
+/**
+ * Число живых шейдерных программ в пробе — вместе с ПРИЧИНОЙ, если числа нет.
+ *
+ * Причин молчания ЧЕТЫРЕ, и они разные: ручка отладки страницы не отвечает
+ * вовсе (тогда о реестре ничего не известно и утверждать про него нечего);
+ * источника нет в реестре; источник есть, но рендерер набора живых программ не
+ * ведёт (его собственное `noData`); формат секции разошёлся с бенчем. Свести их
+ * в один null значило бы печатать «источник не зарегистрирован» там, где он
+ * зарегистрирован и честно сказал о себе другое — или где его никто не
+ * спрашивал. Поэтому слово источника едет наружу дословно.
+ */
+function programsProbeOf(sections) {
+  if (sections === null || sections === undefined) {
+    return {
+      count: null,
+      reason: `ручка отладки страницы ${DEBUG_GLOBAL_KEY} не отвечает: спросить число программ негде`,
+    };
+  }
+  const section = sectionOf(sections, PROGRAMS_SOURCE_ID);
+  if (section === null) {
+    return {
+      count: null,
+      reason: `отладочный источник "${PROGRAMS_SOURCE_ID}" на странице не зарегистрирован`,
+    };
+  }
+  if (typeof section.noData === 'string') return { count: null, reason: section.noData };
+  if (typeof section.liveProgramCount !== 'number') {
+    return {
+      count: null,
+      reason: `проба "${PROGRAMS_SOURCE_ID}" не назвала числа живых программ: формат дампа разошёлся с бенчем`,
+    };
+  }
+  return { count: section.liveProgramCount, reason: null };
 }
 
 /**
@@ -591,6 +657,18 @@ const LINE_LABELS = {
   draw: 'рисование',
 };
 
+/**
+ * Заголовки колонок стадий в таблице худших кадров: та же четвёрка PERF-2, что
+ * в `LINE_LABELS`, но в ширину колонки. Полные имена стоят выше, в основной
+ * таблице, — второго СЛОВАРЯ стадий здесь не заводится, только вторая подпись.
+ */
+const WORST_COLUMNS = {
+  input: 'ввод',
+  camera: 'камера',
+  present: 'подсистемы',
+  draw: 'рисование',
+};
+
 /** Вердикт строки словами: что именно не влезло — p50, p99 или оба. */
 function verdictOf(line) {
   if (line.budget === null) return '—';
@@ -604,6 +682,59 @@ function verdictOf(line) {
 /** Точка в мировых единицах для отчёта; null — источник ничего не сказал. */
 function pointOf(place) {
   return place === null ? '—' : `(${place.x.toFixed(1)}, ${place.y.toFixed(1)})`;
+}
+
+/**
+ * Худшие кадры окна — тот же хвост ЗА p99, что и колонка max (PERF-7).
+ *
+ * Строка сводит ПЕРИОД кадра (то, что пережил игрок) с работой главного потока
+ * ВНУТРИ этого периода и её раскладкой по стадиям. Незакрытый остаток печатается
+ * колонкой «вне стадий» и называет работу МЕЖДУ кадрами — приём доставки
+ * (`syncTick` идёт вне rAF-колбэка, SHELL-3) и сборку мусора: стадии их не
+ * видят вовсе, а приписать их стадии значило бы соврать.
+ *
+ * Компиляция шейдерной программы, вопреки первому впечатлению, живёт НЕ в этой
+ * колонке: драйвер собирает программу на первом рисовании нового материала, то
+ * есть ВНУТРИ стадии — так фриз и выглядит («рисование» в сотни миллисекунд).
+ * Отложенную часть этой работы драйвер вправе доделать и между кадрами, поэтому
+ * искать её стоит в обеих колонках, а не в одной.
+ *
+ * Остаток бывает и ОТРИЦАТЕЛЬНЫМ, и это не сбой счёта: отметка rAF — это метка
+ * кадровой синхронизации, а не момент запуска колбэка, и работа затянувшегося
+ * кадра честно переваливает за свой номинальный период в следующий. Клампа
+ * поэтому нет: −2 мс говорят «кадр не уложился в свой период», а нуль на этом
+ * месте сказал бы «уложился ровно».
+ *
+ * Печать, не гейт: вердикт и код возврата от этих чисел не зависят.
+ */
+function printWorstFrames(out, summary) {
+  if (summary.worstFrames.length === 0) return;
+  out.push('  худшие кадры окна — хвост ЗА p99, тот же, что колонка max (вердикта не меняет):');
+  out.push(
+    `    ${'в окне, с'.padEnd(11)}${'тик'.padEnd(9)}${'период'.padEnd(10)}${'кадр'.padEnd(10)}` +
+      BENCH_STAGES.map((stage) => (WORST_COLUMNS[stage] ?? stage).padEnd(11)).join('') +
+      'вне стадий',
+  );
+  for (const frame of summary.worstFrames) {
+    // Тик < 0 — доставок на этом кадре ещё не было: прочерк, а не «тик −1».
+    const tick = frame.tick < 0 ? '—' : String(frame.tick);
+    out.push(
+      `    ${(frame.atMs / 1000).toFixed(2).padEnd(11)}${tick.padEnd(9)}` +
+        `${frame.intervalMs.toFixed(2).padEnd(10)}${frame.frameMs.toFixed(2).padEnd(10)}` +
+        BENCH_STAGES.map((stage) => frame.stagesMs[stage].toFixed(2).padEnd(11)).join('') +
+        (frame.intervalMs - frame.frameMs).toFixed(2),
+    );
+  }
+  out.push(
+    '    числа — миллисекунды, «в окне» — секунды от начала замера, «тик» — номер последнего\n' +
+      '    доставленного тика на этом кадре (сам бенч трейса не пишет; номер — зацепка для\n' +
+      '    отдельного разбора). «Кадр» и стадии — работа главного потока внутри этого периода,\n' +
+      '    «вне стадий» — незакрытый остаток: приём доставки (syncTick) и сборка мусора, которых\n' +
+      '    стадии не видят вовсе; остаток со знаком минус — работа кадра не уложилась в свой\n' +
+      '    период и ушла в следующий. Компиляция шейдерной программы сюда НЕ попадает целиком:\n' +
+      '    драйвер собирает её на первом рисовании нового материала, то есть внутри стадии',
+  );
+  out.push('');
 }
 
 function printReport(summary, pageUrl, drive) {
@@ -623,8 +754,11 @@ function printReport(summary, pageUrl, drive) {
     out.push(`  ВНИМАНИЕ: кольцо probe вытеснило ${summary.dropped} кадров — окно длиннее буфера`);
   }
   out.push('');
+  // Колонка max — ХВОСТ за p99 (PERF-7): вердикт по ней не выносится, но без
+  // неё разовый фриз в сотни миллисекунд не виден из отчёта вовсе — один кадр
+  // из тысячи не двигает ни p50, ни p99.
   out.push(
-    `  ${'величина'.padEnd(16)}${'p50'.padEnd(12)}${'p99'.padEnd(12)}` +
+    `  ${'величина'.padEnd(16)}${'p50'.padEnd(12)}${'p99'.padEnd(12)}${'max'.padEnd(12)}` +
       `${'бюджет p50/p99'.padEnd(22)}вердикт`,
   );
   for (const line of lines) {
@@ -633,7 +767,7 @@ function printReport(summary, pageUrl, drive) {
       line.budget === null ? '—' : `${line.budget.p50.toFixed(2)} / ${line.budget.p99.toFixed(2)} мс`;
     out.push(
       `  ${label.padEnd(16)}${ms(line.measured.p50).padEnd(12)}${ms(line.measured.p99).padEnd(12)}` +
-        `${budget.padEnd(22)}${verdictOf(line)}`,
+        `${ms(line.measured.max).padEnd(12)}${budget.padEnd(22)}${verdictOf(line)}`,
     );
   }
   out.push('');
@@ -643,15 +777,17 @@ function printReport(summary, pageUrl, drive) {
   const frameBudget = profile.budgetsMs.frame;
   out.push(
     `  ${'период кадра'.padEnd(16)}${ms(summary.intervalMs.p50).padEnd(12)}` +
-      `${ms(summary.intervalMs.p99).padEnd(12)}` +
+      `${ms(summary.intervalMs.p99).padEnd(12)}${ms(summary.intervalMs.max).padEnd(12)}` +
       `${`${frameBudget.p50.toFixed(2)} / ${frameBudget.p99.toFixed(2)} мс`.padEnd(22)}` +
       `${paceFits ? 'темп держится' : 'темп НЕ держится'}`,
   );
   out.push(
     `  ${'разрыв тика'.padEnd(16)}${ms(summary.ticks.gapMs.p50).padEnd(12)}` +
-      `${ms(summary.ticks.gapMs.p99).padEnd(12)}${'—'.padEnd(22)}каденс доставки`,
+      `${ms(summary.ticks.gapMs.p99).padEnd(12)}${ms(summary.ticks.gapMs.max).padEnd(12)}` +
+      `${'—'.padEnd(22)}каденс доставки`,
   );
   out.push('');
+  printWorstFrames(out, summary);
   if (drive !== null) {
     // Что вождение действительно доехало до героя — числами, а не доверием:
     // маска перестраивается ТОЛЬКО когда сдвинулся наблюдатель своей команды
@@ -677,6 +813,34 @@ function printReport(summary, pageUrl, drive) {
         '  под тексельный бюджет (FoW, change `fog-mask-budgeted-rebuild`): её цену видно\n' +
         '  в строке «кадр подсистем», а размазана она по кадрам публикации маски',
     );
+    // Компиляция шейдерной программы не растит НИ ОДНОГО счётчика стоимости
+    // (PERF-3) и перцентилям кадра не видна — размер живого кэша программ на
+    // границах окна и есть весь печатный след этого класса разовых фризов
+    // (PERF-7). Печатаются ОБЕ границы, а не одна дельта: дельта без «было →
+    // стало» читалась бы как число компиляций, которым она не является.
+    if (drive.programsBefore === null || drive.programsAfter === null) {
+      out.push(
+        `  живых шейдерных программ рендерера: не измерено — ${drive.programsReason}\n` +
+          '  (замеру это не отказ: величина — подсказка к чтению, а не проверка)',
+      );
+    } else {
+      const delta = drive.programsAfter - drive.programsBefore;
+      out.push(
+        `  живых шейдерных программ рендерера: было ${drive.programsBefore} → ` +
+          `стало ${drive.programsAfter} (Δ${delta >= 0 ? '+' : ''}${delta} за окно)`,
+      );
+      // Оговорка метода печатается ВСЕГДА, а не только при ненулевой дельте:
+      // ровно нулевая дельта и есть то прочтение, от которого она страхует.
+      out.push(
+        '  это размер ЖИВОГО кэша программ, а не счётчик компиляций: освобождение вынимает\n' +
+          '  запись из того же набора, поэтому компиляция, уравновешенная освобождением внутри\n' +
+          '  окна, даёт Δ0 — нулевая дельта НЕ доказывает, что не компилировалось. Растущая от\n' +
+          '  окна к окну Δ на устоявшейся игре — сигнатура пересборки с новым ключом кэша на\n' +
+          '  каждом появлении; отрицательная Δ — освобождённые за окно программы, а не «минус\n' +
+          '  компиляции». Точный счёт компиляций требует инструментализации GL и остаётся\n' +
+          '  ручным приёмом разового разбора',
+      );
+    }
     out.push('');
   }
   // Что именно измерено — частью отчёта, а не знанием читателя: стадии PERF-2
@@ -798,7 +962,7 @@ try {
     evaluate(`(() => {
       const debug = globalThis[${JSON.stringify(DEBUG_GLOBAL_KEY)}];
       if (debug === undefined) return null;
-      const ids = ${JSON.stringify([FOG_SOURCE_ID, CAMERA_SOURCE_ID])};
+      const ids = ${JSON.stringify([FOG_SOURCE_ID, CAMERA_SOURCE_ID, PROGRAMS_SOURCE_ID])};
       const restore = [];
       for (const id of ids) {
         const known = debug.sources().find((source) => source.id === id);
@@ -919,6 +1083,8 @@ try {
   if (driveScript !== null) {
     const fogAfter = sectionOf(after, FOG_SOURCE_ID);
     const rebuilds = rebuildsBetween(before, after);
+    const programsBefore = programsProbeOf(before);
+    const programsAfter = programsProbeOf(after);
     drive = {
       script: driveName,
       title: driveScript.title,
@@ -927,6 +1093,13 @@ try {
       dissolving: fogAfter !== null && fogAfter.dissolving === true,
       focusBefore: focusOf(before),
       focusAfter: focusOf(after),
+      // Обе границы окна, а не одна дельта: «было → стало» не даёт прочитать
+      // разность как число компиляций (см. оговорку метода в отчёте).
+      programsBefore: programsBefore.count,
+      programsAfter: programsAfter.count,
+      // Причина — у той пробы, которая числа не назвала: молчать они могли по
+      // разным поводам, и в отчёт едет слово источника, а не догадка бенча.
+      programsReason: programsAfter.reason ?? programsBefore.reason,
     };
     // Отчёт печатается ДО отказа: причина «замер не состоялся» читается вместе с
     // числами, на которых её увидели, а не вместо них.

@@ -33,7 +33,7 @@
  * тип известен только по факту чтения мира, и ответ на это — не проверка, а
  * превью (ED-9).
  */
-import { expr } from '@game-mvp/core';
+import { expr } from '@fluxus/core';
 import { descriptionKey } from '../i18n/keys.js';
 import { dslDescriptionPaths } from '../i18n/paths.js';
 import { CONVENTION_SLOTS, type ConventionSlot } from './slots.js';

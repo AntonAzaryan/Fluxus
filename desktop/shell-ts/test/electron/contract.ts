@@ -1,6 +1,6 @@
 /**
  * Реализация на Electron под общим контрактным сьютом границы (DSK-6) — прогон
- * ВНЕ гейта: `npm run contract:electron -w @game-mvp/desktop-shell`.
+ * ВНЕ гейта: `npm run contract:electron -w @fluxus/desktop-shell`.
  *
  * DSK-6: «Любая реализация контейнера SHALL проходить один общий контрактный
  * тест-сьют границы», и «полный прогон в контейнере — отдельная проверка вне

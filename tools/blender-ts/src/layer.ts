@@ -13,7 +13,7 @@
  * и курс записываются переопределением полей компонентов, а какие это компонент
  * и поля — настройка проекта (ED-16). Импортёр её MUST NOT вводить (BLND-3),
  * поэтому привязка приходит ЗНАЧЕНИЕМ (`PositionBinding`), объявленным у
- * редактора (`@game-mvp/editor-core`), а умолчание берётся у ядра — ровно тем
+ * редактора (`@fluxus/editor-core`), а умолчание берётся у ядра — ровно тем
  * же способом, что у расстановки редактора. Проект, не назвавший, где лежит
  * поворот, поворота не хранит, и
  * курс сим-объекта в документ не пишется: выдуманное имя компонента было бы
@@ -34,32 +34,32 @@
  * названо честно: переименование и добавление объекта двигают позиции записей
  * `initial`, то есть выданные ID и хеш `worldInit`.
  */
-import { fixed, FIXED_ONE, type ComponentSchema, type FieldType, type PrefabDef } from '@game-mvp/core';
+import { fixed, FIXED_ONE, type ComponentSchema, type FieldType, type PrefabDef } from '@fluxus/core';
 import {
   quantizeDecorationLength,
   quantizeDecorationYaw,
   resolveVisual,
   resolveVisualEmitter,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   DEFAULT_POSITION_BINDING,
   type JsonObject,
   type JsonValue,
   type PositionBinding,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { SKIN_KEY, WALKABLE_KEY, type SourceObject } from './normalize.js';
 
 /**
  * Привязка позиции и поворота (ED-16) — общая с расстановкой редактора и потому
- * объявленная у него: `@game-mvp/editor-core`, `project/binding.ts`. Реэкспорт,
+ * объявленная у него: `@fluxus/editor-core`, `project/binding.ts`. Реэкспорт,
  * а не второе объявление: состав у неё один, второй разошёлся бы молча (ED-1).
  */
 export {
   DEFAULT_POSITION_BINDING,
   type PositionBinding,
   type RotationBinding,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 
 /** Важность находки: «ошибка» останавливает запись целиком (BLND-6). */
 export type FindingSeverity = 'error' | 'warning';

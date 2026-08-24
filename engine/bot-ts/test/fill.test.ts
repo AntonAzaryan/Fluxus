@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { fixed, type InputFrame } from '@game-mvp/core';
+import { fixed, type InputFrame } from '@fluxus/core';
 import { BotHost } from '../src/host.js';
 import { BotSlotFiller, type FillSchedule } from '../src/fill.js';
 import type { BotIntent } from '../src/boundary.js';

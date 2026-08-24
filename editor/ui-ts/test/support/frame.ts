@@ -17,7 +17,7 @@ import {
   type MemoryHost,
   type StringResources,
   type ValidationRule,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import type { FieldEditor } from '../../src/inspector/index.js';
 import type { PaletteCommand } from '../../src/palette/palette.js';
 import { findAll, walk, type UiNode } from '../../src/dom/node.js';
@@ -32,7 +32,7 @@ import { registerDecorationOperations } from '../../src/areas/sceneDecorations.j
 import { registerTerrainOperations } from '../../src/areas/sceneTerrain.js';
 import { registerVisualsOperations } from '../../src/areas/assetVisuals.js';
 import { registerCameraEffectsOperations } from '../../src/areas/assetCameraEffects.js';
-import type { CameraEffectsDescription } from '@game-mvp/assets';
+import type { CameraEffectsDescription } from '@fluxus/assets';
 import { stubArea } from './stubArea.js';
 import { previewProbe, type PreviewProbe } from './preview.js';
 import { FIXTURE_IDS, fakeStage, fixtureHost, settle, type FakeStage } from './project.js';

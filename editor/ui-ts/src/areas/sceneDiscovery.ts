@@ -47,7 +47,7 @@ import {
   type ContentRootInfo,
   type EnvironmentHost,
   type JsonValue,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import type { SceneProjectIds } from './sceneProject.js';
 
 /**

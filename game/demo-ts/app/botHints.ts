@@ -38,7 +38,7 @@ import {
   type BotAbilityHands,
   type BotAbilityTarget,
   type BotStepAim,
-} from '@game-mvp/bot';
+} from '@fluxus/bot';
 
 /**
  * Версия формы документа (BOT-12: «SHALL версионироваться обязательным полем

@@ -35,7 +35,7 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { DiagnosticsSink } from '@game-mvp/core';
+import type { DiagnosticsSink } from '@fluxus/core';
 import {
   COST_COUNTER_STAGES,
   createCostCounters,
@@ -43,7 +43,7 @@ import {
   type CostStage,
   type QualityPreset,
   type RenderCostCounters,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 import {
   BENCH_PRESETS,
   BENCH_PRESET_NAMES,

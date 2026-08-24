@@ -12,8 +12,8 @@
  * же, а признак — наличие возможности. Ветвление кончается этой строкой: ниже
  * и дальше редактор видит один интерфейс хоста.
  */
-import { desktopBridgeOf } from '@game-mvp/desktop-shell/bridge';
-import type { ContentChangeKind, ContentPath } from '@game-mvp/editor-core';
+import { desktopBridgeOf } from '@fluxus/desktop-shell/bridge';
+import type { ContentChangeKind, ContentPath } from '@fluxus/editor-core';
 import { createDesktopHost, createWebHost, mountWorkspaceFrame } from '../src/index.js';
 import { createEditorApp } from './assembly.js';
 

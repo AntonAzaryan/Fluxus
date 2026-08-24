@@ -15,7 +15,7 @@
  * во вкладке, не знает и знать не может — режим сессии до него не доходит
  * (SES-2).
  */
-import type { Serializer } from '@game-mvp/core';
+import type { Serializer } from '@fluxus/core';
 import {
   MatchHost,
   MatchServer,
@@ -24,7 +24,7 @@ import {
   type MatchConfig,
   type SessionInfo,
   type TransportServer,
-} from '@game-mvp/net';
+} from '@fluxus/net';
 import {
   BotSlotFiller,
   PortConnections,
@@ -37,7 +37,7 @@ import {
   type MessageChannelLike,
   type RawPort,
   type WorkerLike,
-} from '@game-mvp/bot';
+} from '@fluxus/bot';
 
 /**
  * Формат кадра, которым говорит эта сессия (`serialization` SER-3).

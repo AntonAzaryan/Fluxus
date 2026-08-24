@@ -8,7 +8,7 @@
  * набор сообщений (SES-2). Лобби здесь нет вовсе, потому что ростер известен из
  * конфига (NTR-6).
  */
-import type { Serializer } from '@game-mvp/core';
+import type { Serializer } from '@fluxus/core';
 import { MatchHost } from '../server/host.js';
 import { MatchServer, type MatchConfig } from '../server/matchServer.js';
 import type { PublishedSession, Rendezvous } from './rendezvous.js';

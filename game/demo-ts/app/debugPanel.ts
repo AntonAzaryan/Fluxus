@@ -33,8 +33,8 @@
  * дамп тем же способом, каким браузерный бенч берёт отчёт, и второй конвенции не
  * заводится.
  */
-import type { DebugDump, DebugSourceInfo, RenderDebugLayer } from '@game-mvp/render';
-import { DEBUG_DUMP_VERSION } from '@game-mvp/render';
+import type { DebugDump, DebugSourceInfo, RenderDebugLayer } from '@fluxus/render';
+import { DEBUG_DUMP_VERSION } from '@fluxus/render';
 import { qualityStorageOf, type QualityStorage } from './quality.js';
 
 /** Имя ручки на `window`, по которому дамп забирает харнесс и модель. */

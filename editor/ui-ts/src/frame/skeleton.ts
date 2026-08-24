@@ -13,7 +13,7 @@
  * случайное: скелет одинаков во всех областях, значит и клавиатурный путь
  * через него одинаков, и заучивается он один раз.
  */
-import type { StringResources } from '@game-mvp/editor-core';
+import type { StringResources } from '@fluxus/editor-core';
 import { el, resourceText, type UiNode } from '../dom/node.js';
 import type { AreaZones } from './area.js';
 import {

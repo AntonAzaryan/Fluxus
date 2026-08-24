@@ -11,8 +11,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import type { EntityId } from '@game-mvp/core';
-import type { VisualLight, VisualManifest } from '@game-mvp/assets';
+import type { EntityId } from '@fluxus/core';
+import type { VisualLight, VisualManifest } from '@fluxus/assets';
 import {
   DEFAULT_MAX_LOCAL_LIGHTS,
   LIGHTING_MAX_LOCAL_LIGHTS,

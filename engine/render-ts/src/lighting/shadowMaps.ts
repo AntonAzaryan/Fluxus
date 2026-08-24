@@ -8,7 +8,7 @@
  * Своего состояния у модуля нет: это чистые операции над переданными объектами.
  */
 import type * as THREE from 'three';
-import { PRESENTATION_SHADOW_MODES, type PresentationShadowMode } from '@game-mvp/assets';
+import { PRESENTATION_SHADOW_MODES, type PresentationShadowMode } from '@fluxus/assets';
 import type { LightingRenderConfig, ShadowMode } from './config.js';
 import { aimDirectional, type ArenaExtent } from './arena.js';
 

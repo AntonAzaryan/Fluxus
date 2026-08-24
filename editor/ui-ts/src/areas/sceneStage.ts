@@ -138,7 +138,7 @@ import type {
   PresentationPostprocess,
   TerrainCurvatureMap,
   VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   DecorationSet,
   DocumentSource,
@@ -161,8 +161,8 @@ import {
   type PickHit,
   type QualityPreset,
   type RenderContext,
-} from '@game-mvp/render';
-import type { TerrainGrid } from '@game-mvp/core';
+} from '@fluxus/render';
+import type { TerrainGrid } from '@fluxus/core';
 import type { AssetModule } from './assetModule.js';
 import { createSceneCamera, type PointerSample, type SceneCamera } from './sceneCamera.js';
 import type {

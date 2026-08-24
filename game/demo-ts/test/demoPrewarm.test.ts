@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import type { FogSubsystem, ModelsPrewarm, ModelsSubsystem, ParticlesSubsystem } from '@game-mvp/render';
+import type { FogSubsystem, ModelsPrewarm, ModelsSubsystem, ParticlesSubsystem } from '@fluxus/render';
 import { prewarmPresentation } from '../app/prewarm.js';
 
 /** Что и подо что компилировалось: имя сцены и вид связанной цели кадра. */

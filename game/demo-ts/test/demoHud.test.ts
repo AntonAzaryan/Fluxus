@@ -8,10 +8,10 @@
  * что статы и фаза полёта доезжают до `TickView`, из которого HUD и читает.
  */
 import { describe, expect, it } from 'vitest';
-import { tick as simTick, type SceneDef } from '@game-mvp/core';
-import { resolveComposition, type MinimapTerrainSource } from '@game-mvp/hud';
-import type { AssetService, VisualManifest } from '@game-mvp/assets';
-import { RemoteHost, WorkerShell } from '@game-mvp/client';
+import { tick as simTick, type SceneDef } from '@fluxus/core';
+import { resolveComposition, type MinimapTerrainSource } from '@fluxus/hud';
+import type { AssetService, VisualManifest } from '@fluxus/assets';
+import { RemoteHost, WorkerShell } from '@fluxus/client';
 import {
   HOLD_ONLY_ABILITIES,
   createDemoHudRegistry,

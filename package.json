@@ -1,5 +1,5 @@
 {
-  "name": "game-mvp",
+  "name": "fluxus",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -25,12 +25,12 @@
     "import": "node tools/blender-ts/bin/import.mjs",
     "sim": "node engine/core-ts/bin/sim.mjs",
     "journal": "node engine/core-ts/bin/journal.mjs",
-    "demo": "npm run dev -w @game-mvp/demo",
-    "demo:lan": "npm run dev -w @game-mvp/demo -- --host",
+    "demo": "npm run dev -w @fluxus/demo",
+    "demo:lan": "npm run dev -w @fluxus/demo -- --host",
     "demo:serve": "node game/demo-ts/bin/demo-serve.mjs",
     "demo:debug": "node game/demo-ts/bin/demo-serve.mjs --debug",
     "bots:sync": "node game/demo-ts/bin/bots-sync.mjs",
-    "bench:demo": "npm run bench:demo -w @game-mvp/demo --",
+    "bench:demo": "npm run bench:demo -w @fluxus/demo --",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "lint:dead": "knip",
@@ -38,8 +38,8 @@
     "lint:arch": "depcruise engine editor game tools desktop scripts",
     "lint:all": "npm run typecheck && npm run lint && npm run lint:dead && npm run lint:dup && npm run lint:arch",
     "check": "npm run lint:all && npm run spec-graph -- check && npm test",
-    "golden": "npm run record -w @game-mvp/integration && npm run golden -w @game-mvp/core",
-    "golden:cost": "npm run golden:cost -w @game-mvp/integration",
+    "golden": "npm run record -w @fluxus/integration && npm run golden -w @fluxus/core",
+    "golden:cost": "npm run golden:cost -w @fluxus/integration",
     "spec-graph": "node scripts/spec-graph.mjs"
   },
   "engines": {

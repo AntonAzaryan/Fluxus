@@ -14,7 +14,7 @@
  * - перевод между слоями переносит объект и не оставляет его в обоих
  *   документах сразу, а погрешности двух направлений разные (PRES-5).
  */
-import { fixed } from '@game-mvp/core';
+import { fixed } from '@fluxus/core';
 import {
   createEditorSession,
   createOperationRegistry,
@@ -23,12 +23,12 @@ import {
   runOperationRoundTrip,
   type EditorSession,
   type JsonValue,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   DECORATION_POSITION_STEP,
   DECORATION_YAW_STEP,
   presentationPathOf,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import { describe, expect, it } from 'vitest';
 import {
   DECORATION_AUTHORING_OPERATIONS,

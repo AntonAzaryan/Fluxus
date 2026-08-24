@@ -31,8 +31,8 @@ import {
   type Scene,
   type Simulation,
   type SimulationState,
-} from '@game-mvp/core';
-import type { VisualManifest } from '@game-mvp/assets';
+} from '@fluxus/core';
+import type { VisualManifest } from '@fluxus/assets';
 import {
   Extractor,
   ModelsSubsystem,

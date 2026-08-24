@@ -68,7 +68,7 @@
  */
 import * as THREE from 'three';
 import { BatchedRenderer } from 'three.quarks';
-import { FIXED_ONE, type EntityId } from '@game-mvp/core';
+import { FIXED_ONE, type EntityId } from '@fluxus/core';
 import {
   resolveParticlesByEvent,
   resolveParticlesByKind,
@@ -77,7 +77,7 @@ import {
   type AssetState,
   type ParticleEffectDocument,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import type { EntityView, QualityDeclaration, QualityValues, RenderContext, RenderSubsystem, TickView } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';

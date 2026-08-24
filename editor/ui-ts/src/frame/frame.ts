@@ -45,7 +45,7 @@ import {
   type StringResources,
   type ValidationRuleContribution,
   type ViewportToolContribution,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { children, el, type UiNode, type UiText } from '../dom/node.js';
 import { defaultFieldEditors, type FieldEditor } from '../inspector/editors.js';
 import {

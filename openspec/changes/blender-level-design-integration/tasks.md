@@ -10,7 +10,7 @@
 
 ## 2. Пакет импортёра: разбор и генерация
 
-- [x] 2.1 Завести workspace-пакет `tools/blender-ts` (`@game-mvp/blender-ts`): tsconfig по образцу editor-core, зависимости `@game-mvp/editor-core` и `@game-mvp/core`, скрипты `typecheck`/`lint`/`test`, включение в корневые `check`/`test`
+- [x] 2.1 Завести workspace-пакет `tools/blender-ts` (`@fluxus/blender-ts`): tsconfig по образцу editor-core, зависимости `@fluxus/editor-core` и `@fluxus/core`, скрипты `typecheck`/`lint`/`test`, включение в корневые `check`/`test`
 - [x] 2.2 Разбор glTF: `.gltf` (JSON) и `.glb` (контейнер → JSON-чанк + бинарный чанк); `nodes` — имя, трансформ (матрица либо TRS), `extras`; accessors/bufferViews для позиций вершин grid-мешей (нужны BLND-9/10); прочее игнорируется (design, решение 2)
 - [x] 2.3 Нормализация: декомпозиция матрицы, конверсия осей по CONVENTIONS, извлечение `yaw`, коэрция типов `extras`; тест-фикстура пиннит знаки соответствия осей (design, решение 5)
 - [x] 2.4 Генерация слоя размещений: узлы с `prefab` → записи `initial` (позиция/курс переопределением компонентов из настройки проекта, как у ED-16; прочие `<Компонент>.<поле>` → `overrides`), узлы с `visual` → записи `decorations` (позиция, `yaw`, `scale`, `skin`); порядок — лексикографически по имени объекта (BLND-4); квантование Q16.16 / шаг PRES-3

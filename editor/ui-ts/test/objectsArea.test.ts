@@ -18,7 +18,7 @@
  *   соседей, а раздел навигатора переживает уход в другую область и возврат.
  */
 import { describe, expect, it } from 'vitest';
-import { loadScene, world, type SceneDef } from '@game-mvp/core';
+import { loadScene, world, type SceneDef } from '@fluxus/core';
 import {
   createEditorSession,
   createMemoryHost,
@@ -30,7 +30,7 @@ import {
   type EditorSession,
   type JsonPath,
   type JsonValue,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { findAll, type UiNode } from '../src/dom/node.js';
 import { placementSubject } from '../src/areas/sceneSchema.js';
 import {

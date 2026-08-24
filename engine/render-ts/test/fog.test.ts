@@ -9,8 +9,8 @@
  */
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { createTerrainGrid, type TerrainGrid } from '@game-mvp/core';
-import type { PresentationFog } from '@game-mvp/assets';
+import { createTerrainGrid, type TerrainGrid } from '@fluxus/core';
+import type { PresentationFog } from '@fluxus/assets';
 import {
   FogDirtyBlocks,
   FogSubsystem,

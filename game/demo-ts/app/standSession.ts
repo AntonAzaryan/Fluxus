@@ -9,7 +9,7 @@
  * потерянный `Hello` — снаружи неотличим от сети («сервер не ответил» после
  * тайм-аута входа), и ручным прогоном его не поймать.
  */
-import type { Transport, TransportServer } from '@game-mvp/net';
+import type { Transport, TransportServer } from '@fluxus/net';
 
 /** Слушающая сторона стенда: очередь окна рестарта, претенденты и вид для матча. */
 export interface StandSession {

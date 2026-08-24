@@ -13,7 +13,7 @@
  *
  * Мутация пола (TERR-6) приходит дельтой клеток из presentation-состояния и
  * пересобирает затронутый чанк не позже следующего кадра; полная пересборка
- * чанка — осознанный выбор MVP (см. design Risks).
+ * чанка — осознанный выбор (см. design Risks).
  *
  * У документного продюсера (REND-11) мутабельны и уровни: кисти редактора
  * правят карту уровней, флаги и пол (ED-10), а вьюпорт обязан показать
@@ -40,7 +40,7 @@
  * их арифметики нет.
  */
 import * as THREE from 'three';
-import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
+import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
   type QualityDeclaration,

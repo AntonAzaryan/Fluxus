@@ -15,14 +15,14 @@
  * проверяется своим тестом в `engine/bot-ts`, где ей и место.
  */
 import { describe, expect, it } from 'vitest';
-import { runScenario, snapshotToPlain, type InputFrame } from '@game-mvp/core';
+import { runScenario, snapshotToPlain, type InputFrame } from '@fluxus/core';
 import {
   contentPack,
   ClientHost,
   MatchClient,
   type InputSource,
   type Transport,
-} from '@game-mvp/net';
+} from '@fluxus/net';
 import {
   BUILD_ID,
   STEP,

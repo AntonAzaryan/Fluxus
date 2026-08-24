@@ -20,7 +20,7 @@
  * иначе оно применилось бы к кадру дважды.
  */
 import * as THREE from 'three';
-import type { ColorLut } from '@game-mvp/assets';
+import type { ColorLut } from '@fluxus/assets';
 import type { ToneMappingOperator } from './config.js';
 
 /** Ярусов пирамиды bloom (design D4): пять — как у схемы UnrealBloomPass. */

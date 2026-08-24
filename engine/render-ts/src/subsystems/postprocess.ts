@@ -32,7 +32,7 @@
  * и картинка игрока совпадают по построению, а не дисциплиной копирования чисел.
  */
 import type * as THREE from 'three';
-import { LUT_ASSET_KIND, type ColorLut, type PresentationPostprocess } from '@game-mvp/assets';
+import { LUT_ASSET_KIND, type ColorLut, type PresentationPostprocess } from '@fluxus/assets';
 import type {
   PostRendererLike,
   QualityDeclaration,

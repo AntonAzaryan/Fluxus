@@ -26,7 +26,7 @@
  * (SHELL-3). Различается только источник `ExtractedTick` — собственный тик или
  * применённый персональный снапшот.
  */
-import type { ExtractedTick, RenderEvent } from '@game-mvp/render';
+import type { ExtractedTick, RenderEvent } from '@fluxus/render';
 import { requiredBytes, writeTick } from './codec.js';
 import type { ShellPort, TickEnvelope } from './protocol.js';
 

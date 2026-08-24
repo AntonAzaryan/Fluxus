@@ -11,8 +11,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { createTerrainGrid, type TerrainGrid } from '@game-mvp/core';
-import type { AssetService, VisualManifest } from '@game-mvp/assets';
+import { createTerrainGrid, type TerrainGrid } from '@fluxus/core';
+import type { AssetService, VisualManifest } from '@fluxus/assets';
 import {
   LightingSubsystem,
   ModelsSubsystem,
@@ -25,7 +25,7 @@ import {
   validateQualityPreset,
   type QualityValue,
   type RenderContext,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 import { EDITOR_QUALITY_PRESET } from '../src/areas/sceneStage.js';
 
 const SIZE = 4;

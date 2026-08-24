@@ -28,7 +28,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import type { ParticleEffectDocument, VisualManifest } from '@game-mvp/assets';
+import type { ParticleEffectDocument, VisualManifest } from '@fluxus/assets';
 import {
   BoneControlState,
   CameraRig,

@@ -21,8 +21,8 @@
  * осознанно (design D5), поэтому дамп называет величину РЕКОНСТРУКЦИЕЙ, а размер
  * клетки берётся из конфигурации сборки, а не угадывается.
  */
-import type { EntityId, TerrainGrid } from '@game-mvp/core';
-import { FIXED_ONE } from '@game-mvp/core';
+import type { EntityId, TerrainGrid } from '@fluxus/core';
+import { FIXED_ONE } from '@fluxus/core';
 import {
   DebugRows,
   type CameraBounds,
@@ -35,7 +35,7 @@ import {
   type DebugSource,
   type PickHit,
   type ViewportPicking,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 
 // ------------------------------------------------------------------ палитра
 

@@ -40,7 +40,7 @@
  * проекта, а не из зашитого в редактор имени компонента». Поэтому привязка —
  * значение (`PositionBinding`), приходящее сверху вместе с документами, а не
  * литерал в этом файле. Само объявление привязки и её умолчание живут в
- * `@game-mvp/editor-core` — у слоя расстановки и у импортёра конвейера Blender
+ * `@fluxus/editor-core` — у слоя расстановки и у импортёра конвейера Blender
  * она одна и та же (BLND-3), — а умолчание берётся у ядра и только у него: это
  * его собственная конвенция, на которую опираются его же нативные системы, и
  * повторять её строкой значило бы завести вторую (ED-1, CORE-3). Проект, у
@@ -82,7 +82,7 @@ import {
   type ScenarioSpawn,
   type TerrainDef,
   type TerrainGrid,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   validateCurvatureMap,
   validateManifest,
@@ -91,8 +91,8 @@ import {
   type PresentationPostprocess,
   type TerrainCurvatureMap,
   type VisualManifest,
-} from '@game-mvp/assets';
-import { decorationInstanceOf, kindByTags, type DecorationInstance, type DocumentInstance } from '@game-mvp/render';
+} from '@fluxus/assets';
+import { decorationInstanceOf, kindByTags, type DecorationInstance, type DocumentInstance } from '@fluxus/render';
 
 /**
  * Размещённое сцены глазами редактора: то же, что отдаётся рендеру набором
@@ -209,7 +209,7 @@ const TURN_RADIANS = Math.PI * 2;
 
 /**
  * Где у сим-объекта лежат позиция и поворот (ED-16). Объявление живёт в
- * `@game-mvp/editor-core` (`project/binding.ts`) и реэкспортируется отсюда:
+ * `@fluxus/editor-core` (`project/binding.ts`) и реэкспортируется отсюда:
  * потребителей у привязки два — инструменты расстановки этого пакета и импортёр
  * конвейера Blender (`blender-pipeline` BLND-3, BLND-5), — а этот пакет DOM-ный
  * и в headless-инструмент не тянется. Реэкспорт, а не второе объявление: у
@@ -219,8 +219,8 @@ export {
   DEFAULT_POSITION_BINDING,
   type PositionBinding,
   type RotationBinding,
-} from '@game-mvp/editor-core';
-import { DEFAULT_POSITION_BINDING, type PositionBinding } from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
+import { DEFAULT_POSITION_BINDING, type PositionBinding } from '@fluxus/editor-core';
 
 export interface SceneDraftInput {
   /** Значение конфига сцены — как его отдаёт сессия. */

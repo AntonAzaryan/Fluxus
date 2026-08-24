@@ -40,7 +40,7 @@ import {
   type ParticleSystem,
   type ValueGenerator,
 } from 'three.quarks';
-import type { ParticleEffectDocument } from '@game-mvp/assets';
+import type { ParticleEffectDocument } from '@fluxus/assets';
 
 /** Генератор числа частиц — эмиссия во времени и счёт единовременного выброса. */
 type EmissionGenerator = ValueGenerator | FunctionValueGenerator;

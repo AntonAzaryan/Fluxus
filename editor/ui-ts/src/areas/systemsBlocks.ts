@@ -5,7 +5,7 @@
  *
  * ED-5: «Действия и выражения SHALL собираться визуально из блоков; на диск
  * уходит JSON-AST». Здесь — только «визуально»: чем блок является, знает модель
- * DSL пакета `@game-mvp/editor-core` (`dsl/`), и ни одного правила языка этот
+ * DSL пакета `@fluxus/editor-core` (`dsl/`), и ни одного правила языка этот
  * файл не заводит (ED-1).
  *
  * Что откуда берётся:
@@ -43,7 +43,7 @@
  * `fixed` в инспекторе. Второй реализации перевода в кванты здесь нет (ED-1), а
  * в документ уходит ровно то, что ядро в нём ожидает.
  */
-import { fixed } from '@game-mvp/core';
+import { fixed } from '@fluxus/core';
 import {
   CONVENTION_SLOTS,
   QUERY_SLOTS,
@@ -66,7 +66,7 @@ import {
   type NameSource,
   type OperatorArg,
   type StringResources,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
 import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';

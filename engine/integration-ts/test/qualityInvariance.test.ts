@@ -33,14 +33,14 @@ import {
   snapshotToPlain,
   takeSnapshot,
   type PlainSnapshot,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   createCostCounters,
   withCostSink,
   type RenderCostCounters,
   type TickView,
   type VisibilityMask,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 import {
   BENCH_PRESETS,
   FOG_STATS,

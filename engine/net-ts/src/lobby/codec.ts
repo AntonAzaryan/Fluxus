@@ -2,7 +2,7 @@
  * Кодек лобби. Формат кадра тот же, что у матча (NTR-13), — свойство сборки, а
  * не поле в сообщении; различается только набор сообщений (`net-session` SES-4).
  */
-import type { Serializer } from '@game-mvp/core';
+import type { Serializer } from '@fluxus/core';
 import { DEFAULT_SERIALIZER, type Codec } from '../protocol/codec.js';
 import {
   LobbyProtocolError,

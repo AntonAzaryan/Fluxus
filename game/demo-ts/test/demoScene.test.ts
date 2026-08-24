@@ -22,7 +22,7 @@ import {
   type EntityId,
   type SceneDef,
   type WorldState,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import { ABILITY_SLOTS, ACTION_BITS, PLAYER_ID, createDemoSimulation } from '../app/sim.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';

@@ -80,7 +80,7 @@ for (const segment of segments) {
     }
   }
   const workspaceIsCore =
-    workspace != null && (workspace === '@game-mvp/core' || isCoreDir(workspace.replaceAll('\\', '/')));
+    workspace != null && (workspace === '@fluxus/core' || isCoreDir(workspace.replaceAll('\\', '/')));
   const targetsCore = workspaceIsCore || (workspace == null && isCoreDir(effectiveDir));
   const isDev = /(^|\s)(-D|--save-dev)(\s|$)/.test(segment);
   if (targetsCore && packages.length > 0 && !isDev) {

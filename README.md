@@ -1,4 +1,4 @@
-# game-mvp
+# Fluxus
 
 Движок сетевой 2.5D PvP-игры (до 10 игроков, изометрия) с детерминированным
 ECS-ядром тика. Продуктовая рамка — песочница арен-потасовок: каждая сцена — отдельная
@@ -66,7 +66,7 @@ npm test          # тесты всех пакетов
 npm run typecheck # tsc --noEmit всех пакетов
 npm run lint      # eslint . --max-warnings 0
 npm run golden    # перезаписать golden-эталоны (сначала матчи, затем ядро)
-npm run demo      # демо-игра в браузере (vite; = npm run dev -w @game-mvp/demo)
+npm run demo      # демо-игра в браузере (vite; = npm run dev -w @fluxus/demo)
 
 openspec list --specs               # список capability
 openspec spec show netcode          # одна спецификация
@@ -74,7 +74,7 @@ openspec validate --specs --strict  # проверка формата
 /opsx:propose "<этап roadmap>"      # новое изменение
 ```
 
-Команды отдельных пакетов — из их директорий (либо `npm run <script> -w @game-mvp/<name>`
+Команды отдельных пакетов — из их директорий (либо `npm run <script> -w @fluxus/<name>`
 из корня):
 
 ```sh

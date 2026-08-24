@@ -16,8 +16,8 @@ import {
   type ContentTreeHost,
   type EnvironmentHost,
   type MemoryHost,
-} from '@game-mvp/editor-core';
-import type { AssetKind, AssetState, Handle, NormalizedModel } from '@game-mvp/assets';
+} from '@fluxus/editor-core';
+import type { AssetKind, AssetState, Handle, NormalizedModel } from '@fluxus/assets';
 import { createAssetArea, type AssetAreaState } from '../../src/areas/assets.js';
 import type { AssetStates } from '../../src/areas/assetPreview.js';
 import type { WorkspaceArea } from '../../src/frame/area.js';

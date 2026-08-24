@@ -62,7 +62,7 @@
  * вне диапазона он заворачивается молча, то есть позиция уехала бы на другой
  * край арены без единого сообщения.
  */
-import { fixed, FIXED_ONE } from '@game-mvp/core';
+import { fixed, FIXED_ONE } from '@fluxus/core';
 import {
   OperationError,
   isJsonArray,
@@ -75,8 +75,8 @@ import {
   type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
-} from '@game-mvp/editor-core';
-import { quantizeDecorationLength, quantizeDecorationYaw } from '@game-mvp/assets';
+} from '@fluxus/editor-core';
+import { quantizeDecorationLength, quantizeDecorationYaw } from '@fluxus/assets';
 import {
   DECORATION_FIELDS,
   DEFAULT_POSITION_BINDING,

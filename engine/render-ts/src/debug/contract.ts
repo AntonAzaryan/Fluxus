@@ -33,7 +33,7 @@
  * источник платит за пробу каждый кадр, и свежий объект на кадр был бы мусором,
  * растущим с числом сущностей.
  */
-import type { WorldMode } from '@game-mvp/core';
+import type { WorldMode } from '@fluxus/core';
 import type { TickView } from '../types.js';
 
 // ------------------------------------------------------------------- проба

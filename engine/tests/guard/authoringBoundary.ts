@@ -7,7 +7,7 @@
  *
  * BLND-7 запрещает зависимость от BLENDER — «ни рантаймной, ни тестовой», — и
  * держится он на том, что гейт `npm run check` проходит без установленного
- * Blender. Пакет `@game-mvp/blender-ts` этим Blender'ом НЕ является: он на
+ * Blender. Пакет `@fluxus/blender-ts` этим Blender'ом НЕ является: он на
  * TypeScript, читает закоммиченные фикстуры экспорта и Blender не вызывает ни в
  * какой форме (проверка — `scanProcessLaunch` ниже и тест гейта рядом).
  *
@@ -89,7 +89,7 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', 'dist-desktop', 'build', 'cov
  * десктоп-контейнера и конфиг его упаковщика — именно `.cjs` (в песочнице
  * Electron `require` соседнего модуля недоступен, поэтому файл самодостаточный
  * и на CommonJS). Список без них покрывал бы бо́льшую часть пакета вместо
- * пакета, а `require('@game-mvp/core')` в непросматриваемом файле оставался бы
+ * пакета, а `require('@fluxus/core')` в непросматриваемом файле оставался бы
  * зелёным — при том, что спецификаторы `require` сканер разбирает (DSK-3,
  * BLND-7).
  */
@@ -102,7 +102,7 @@ const CODE_EXTENSIONS = ['.ts', '.mts', '.cts', '.tsx', '.mjs', '.cjs', '.js', '
  */
 export const AUTHORING_IMPORTS: readonly ForbiddenReference[] = [
   {
-    match: '@game-mvp/blender-ts',
+    match: '@fluxus/blender-ts',
     rule: 'authoring-in-runtime',
     why: 'импортёр конвейера Blender — инструмент времени авторинга (BLND-7)',
   },
@@ -267,7 +267,7 @@ export function scanAuthoringDependencies(
  *
  * 1. **Скрипты манифестов** — по слову-командой `blender` в значении скрипта.
  *    Слово, а не подстрока: `tools/blender-ts/bin/import.mjs` и
- *    `-w @game-mvp/blender-ts` — пути и имена пакетов, а не команда.
+ *    `-w @fluxus/blender-ts` — пути и имена пакетов, а не команда.
  * 2. **Запуск подпроцесса из кода** — по модулю `child_process`. Тоньше не
  *    нужно и нельзя: имя бинаря в коде собирается из чего угодно, а без
  *    подпроцесса его не запустить ни под каким именем. Гейт подпроцессов не

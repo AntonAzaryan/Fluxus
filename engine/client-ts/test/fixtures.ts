@@ -18,8 +18,8 @@ import {
   type Simulation,
   type SimulationState,
   type System,
-} from '@game-mvp/core';
-import { Extractor, kindByTags, type RenderContext, type TickView } from '@game-mvp/render';
+} from '@fluxus/core';
+import { Extractor, kindByTags, type RenderContext, type TickView } from '@fluxus/render';
 import type { ShellPort } from '../src/index.js';
 
 export const PLAYER_ID = 'p1';

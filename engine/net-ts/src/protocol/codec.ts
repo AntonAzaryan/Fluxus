@@ -8,7 +8,7 @@
  * своих ролей, и оба ходят через один интерфейс.
  */
 import { decode as msgpackDecode, encode as msgpackEncode } from '@msgpack/msgpack';
-import { jsonSerializer, type Serializer } from '@game-mvp/core';
+import { jsonSerializer, type Serializer } from '@fluxus/core';
 import {
   parseClientMessage,
   parseServerMessage,

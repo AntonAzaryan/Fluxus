@@ -35,8 +35,8 @@
  * — операция `json`, а не строка инспектора). Вложенные разделы — работа
  * редактора схем (ED-6), которого этим проходом ещё нет.
  */
-import { schemaFiles } from '@game-mvp/core';
-import type { EditorSession, JsonValue, SchemaPath } from '@game-mvp/editor-core';
+import { schemaFiles } from '@fluxus/core';
+import type { EditorSession, JsonValue, SchemaPath } from '@fluxus/editor-core';
 import { documentValue } from '../dom/node.js';
 import type { FieldGroup, InspectorSubject, SchemaField } from '../inspector/index.js';
 

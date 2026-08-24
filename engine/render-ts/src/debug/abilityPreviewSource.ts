@@ -25,7 +25,7 @@
  * что уже лежит в подсистеме, а альфу интерполяции называет сам кадр (RDBG-7).
  * Два дампа на одном доставленном состоянии поэтому совпадают.
  */
-import { STEP_NONE, STEP_POINT, STEP_UNIT, STEP_VECTOR } from '@game-mvp/core';
+import { STEP_NONE, STEP_POINT, STEP_UNIT, STEP_VECTOR } from '@fluxus/core';
 import type { DebugColor, DebugDraw, DebugProbe, DebugSource } from './contract.js';
 
 /** Цвет отметки прицела: тон отладки, а не палитра самого превью. */

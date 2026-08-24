@@ -12,8 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { ParticleEmitter, type ParticleSystem } from 'three.quarks';
-import { FIXED_ONE, createTerrainGrid, type EntityId } from '@game-mvp/core';
-import type { NormalizedMesh, ParticleEffectDocument, VisualManifest } from '@game-mvp/assets';
+import { FIXED_ONE, createTerrainGrid, type EntityId } from '@fluxus/core';
+import type { NormalizedMesh, ParticleEffectDocument, VisualManifest } from '@fluxus/assets';
 import {
   EffectsSubsystem,
   FogSubsystem,

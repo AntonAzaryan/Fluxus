@@ -15,7 +15,7 @@
  * Недоступная строка помечена `aria-disabled` и приглушена — показана, а не
  * спрятана (ED-26).
  */
-import type { StringResources } from '@game-mvp/editor-core';
+import type { StringResources } from '@fluxus/editor-core';
 import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
 import { rovingContainer } from '../dom/roving.js';
 import { icon } from '../widgets/icon.js';

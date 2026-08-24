@@ -14,7 +14,7 @@ import {
   TEAM_SCHEMA,
   VISIBILITY_SCHEMA,
   type SceneDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import { contentPack } from '../src/content/pack.js';
 import { ClientHost, type ClientHostOptions } from '../src/client/host.js';
 import { MatchClient, type MatchClientOptions } from '../src/client/matchClient.js';

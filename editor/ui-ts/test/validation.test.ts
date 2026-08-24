@@ -40,7 +40,7 @@ import {
   registerBuiltinOperations,
   registerValidationRules,
   type ValidationRule,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { SCENE_KINDS, sceneValidationRules } from '../src/areas/sceneProject.js';
 
 const page = controlCasePage(

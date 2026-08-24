@@ -9,8 +9,8 @@
  * `ClientStep`.
  */
 import { describe, expect, it } from 'vitest';
-import { query, world as coreWorld } from '@game-mvp/core';
-import type { ClientStep } from '@game-mvp/net';
+import { query, world as coreWorld } from '@fluxus/core';
+import type { ClientStep } from '@fluxus/net';
 import { BotHost } from '../src/host.js';
 import type { BotBrain, BotBrainFactory, BotSelf } from '../src/brain.js';
 import type { BotProfile } from '../src/profile.js';

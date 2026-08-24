@@ -14,7 +14,7 @@
  * Реальная реализация — `threeStage.ts`; тесты подставляют заглушку через
  * `PortraitSetup.createStage`.
  */
-import type { AssetService, EntityVisual, NormalizedModel } from '@game-mvp/assets';
+import type { AssetService, EntityVisual, NormalizedModel } from '@fluxus/assets';
 
 /**
  * Изолированный стенд одной модели. Жизненный цикл повторяет виджет:

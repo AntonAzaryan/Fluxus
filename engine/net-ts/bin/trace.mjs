@@ -34,7 +34,7 @@ import { flag, option } from './matchFile.mjs';
 // Словарь и разбор отбора берутся у ядра — там же, где живёт CLI прогона
 // сценария: «тем же образом» (CLI-11) означает ту же функцию, а не два похожих
 // разбора одной строки.
-const { parseTraceSelect, TRACE_LEVELS } = await import('@game-mvp/core');
+const { parseTraceSelect, TRACE_LEVELS } = await import('@fluxus/core');
 const { createMatchTrace } = await import('../src/match/trace.ts');
 
 export { parseTraceSelect };

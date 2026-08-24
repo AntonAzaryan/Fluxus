@@ -15,7 +15,7 @@ import {
   type EntityVisual,
   type NormalizedModel,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   PORTRAIT_DEAD_CLASS,
   PORTRAIT_EMPTY_CLASS,

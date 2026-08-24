@@ -34,7 +34,7 @@
  * `name` (ключ подмены SYS-7, имя RNG-стрима RNG-4) принадлежат системе, и у
  * «правила внутри `do`» ни того, ни другого нет.
  */
-import { schemaFiles } from '@game-mvp/core';
+import { schemaFiles } from '@fluxus/core';
 import {
   getAtPath,
   isJsonArray,
@@ -45,7 +45,7 @@ import {
   type JsonPath,
   type JsonValue,
   type SystemSite,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import { documentValue } from '../dom/node.js';
 import type { InspectorSubject } from '../inspector/index.js';
 import { jsonSchemaFields } from './sceneSchema.js';

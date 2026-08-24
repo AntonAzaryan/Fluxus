@@ -8,7 +8,7 @@
  * здесь утверждается только то, что данные ЭТОЙ сборки ему подходят.
  */
 import { describe, expect, it } from 'vitest';
-import { pointerAction, pointerSuppressed, validateBindings } from '@game-mvp/client';
+import { pointerAction, pointerSuppressed, validateBindings } from '@fluxus/client';
 import { ACTION_BITS } from '../app/sim.js';
 import demoBindings from '../app/bindings.json';
 

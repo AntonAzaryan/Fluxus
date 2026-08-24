@@ -27,7 +27,7 @@
  * — задача W2-3. Строка поиска стоит здесь уже сейчас, потому что её запрос —
  * сквозное состояние сессии: он не должен теряться от перехода в другую область.
  */
-import type { StringResources } from '@game-mvp/editor-core';
+import type { StringResources } from '@fluxus/editor-core';
 import {
   children,
   documentValue,

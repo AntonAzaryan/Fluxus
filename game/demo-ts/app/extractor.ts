@@ -6,8 +6,8 @@
  * обязано выглядеть одинаково независимо от того, кто произвёл тик, — иначе
  * подсистема рендера различала бы режимы, чего REND-8 не допускает.
  */
-import { ABILITY_STEPS, type TerrainGrid } from '@game-mvp/core';
-import { Extractor, kindByTags, type StatSource } from '@game-mvp/render';
+import { ABILITY_STEPS, type TerrainGrid } from '@fluxus/core';
+import { Extractor, kindByTags, type StatSource } from '@fluxus/render';
 import {
   ABILITY_SLOTS,
   COOLDOWN_SOURCES,

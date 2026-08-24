@@ -24,7 +24,7 @@
  * Каркас областей (ED-23, ED-24) эта страница по-прежнему не изображает: здесь
  * только словарь — токены, виджеты и их состояния.
  */
-import { schemaPathOf, descriptionKey, type StringResources } from '@game-mvp/editor-core';
+import { schemaPathOf, descriptionKey, type StringResources } from '@fluxus/editor-core';
 import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
 import { INSPECTOR_ZONE_CLASS, NAVIGATOR_ZONE_CLASS } from '../frame/styles.js';
 import { jsonStrings } from '../i18n/corpus.js';
@@ -53,7 +53,7 @@ export const SAMPLE_DESCRIPTIONS = sample.descriptions;
 /**
  * Изменяемое состояние страницы. Не модель документа — правки сюда не пишутся:
  * писать в документ можно только операциями авторинга (ED-29), а их приносит
- * `@game-mvp/editor-core`. Здесь ровно то, что принадлежит интерфейсу:
+ * `@fluxus/editor-core`. Здесь ровно то, что принадлежит интерфейсу:
  * выделение, раскрытие узлов и положение контролов.
  */
 export interface GalleryState {

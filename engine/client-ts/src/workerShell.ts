@@ -31,14 +31,14 @@ import {
   type Simulation,
   type SimulationState,
   type TickObserver,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   firstRewindRequest,
   warnToConsole,
   REWIND_REQUEST_EVENT,
   type RewindRequestWarn,
-} from '@game-mvp/net';
-import type { Extractor } from '@game-mvp/render';
+} from '@fluxus/net';
+import type { Extractor } from '@fluxus/render';
 import { ShellSender, type SenderOptions } from './sender.js';
 import { InputLatch, routeMainMessage } from './inputLatch.js';
 import { helloMessage, type ControlMessage, type MainToWorker, type ShellPort } from './protocol.js';
@@ -321,7 +321,7 @@ export class WorkerShell {
    *
    * Общего кода у них нет НАМЕРЕННО, и это не случайность, а невыбранный
    * вариант: разделяемый драйвер технически возможен (прецедент рядом —
-   * `firstRewindRequest` живёт в `@game-mvp/net`, и оболочка его импортирует,
+   * `firstRewindRequest` живёт в `@fluxus/net`, и оболочка его импортирует,
    * депкруиз этого не запрещает), но различий у двух хостов больше, чем общей
    * политики — источник органа, владелец счётчика молчания, правило «инициатор
    * без слота», рассылка восстановленного состояния, — и обёртка над ними

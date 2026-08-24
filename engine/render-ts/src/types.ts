@@ -35,8 +35,8 @@
  * записи в документ и вне этого пакета (`editor` ED-1, ED-16).
  */
 import type * as THREE from 'three';
-import type { EntityId, TerrainGrid, WorldMode, WorldState } from '@game-mvp/core';
-import type { AssetService, ResolvedVisualLight } from '@game-mvp/assets';
+import type { EntityId, TerrainGrid, WorldMode, WorldState } from '@fluxus/core';
+import type { AssetService, ResolvedVisualLight } from '@fluxus/assets';
 import type { FlightPhaseSource } from './statSources.js';
 // Только тип: цикл `types` ↔ `stage` стирается компиляцией и в рантайме не существует.
 import type { PresentationStage } from './stage.js';

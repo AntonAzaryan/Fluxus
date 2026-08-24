@@ -32,7 +32,7 @@ import {
   initialGalleryState,
   sampleDocumentStrings,
 } from '../src/gallery/controlCase.js';
-import { EDITOR_BUNDLES, REASON_PREFIX, type LocaleBundles } from '@game-mvp/editor-core';
+import { EDITOR_BUNDLES, REASON_PREFIX, type LocaleBundles } from '@fluxus/editor-core';
 import { UI_BUNDLES, UI_KEY_PREFIX, uiResources } from '../src/i18n/uiBundles.js';
 import {
   CAMERA_EFFECT_BUNDLES,
@@ -71,7 +71,7 @@ function sources(): { readonly path: string; readonly text: string }[] {
  * её сообщило (`validation.reason.*`, ключ выводит `reasonKey` ядра редактора).
  * Проверка на обоих одна и та же, поэтому и параметризована.
  *
- * Своего бандла причин у пакета нет: правила живут в `@game-mvp/editor-core`, и
+ * Своего бандла причин у пакета нет: правила живут в `@fluxus/editor-core`, и
  * причины приезжают его бандлом — второго определения той же строки не
  * заводится. Отсюда и срез: только `validation.reason.*`, потому что описания
  * самих правил (`validation.rule.*`) интерфейс не показывает и в этом

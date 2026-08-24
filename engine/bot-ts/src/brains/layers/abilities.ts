@@ -36,7 +36,7 @@
  * несеяный шум законны — наружу уходит только маска `buttons`, а она проходит
  * те же ограничения, что маска человека (`boundary.ts`, INP-3).
  */
-import { NO_PHASE } from '@game-mvp/core';
+import { NO_PHASE } from '@fluxus/core';
 import type { BotAbilityCastProfile, BotAbilityProfile, BotProfile, BotStepAim } from '../../profile.js';
 import type { BotTerrain } from '../../terrainView.js';
 import type { PerceivedWorld } from './perception.js';

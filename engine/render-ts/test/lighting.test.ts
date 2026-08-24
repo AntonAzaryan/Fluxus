@@ -12,12 +12,12 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import type { EntityId } from '@game-mvp/core';
+import type { EntityId } from '@fluxus/core';
 import type {
   PresentationLighting,
   PresentationLightingPhase,
   VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   DEFAULT_CYCLE_TRANSITION_SECONDS,
   DEFAULT_HEMISPHERE,

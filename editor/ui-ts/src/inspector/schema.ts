@@ -24,7 +24,7 @@
  * едет от удаления соседа, и инспектор, собранный по прочитанному списку,
  * записал бы правку не туда (ED-29).
  */
-import type { DocumentId, JsonPath, JsonValue, SchemaPath } from '@game-mvp/editor-core';
+import type { DocumentId, JsonPath, JsonValue, SchemaPath } from '@fluxus/editor-core';
 import type { UiText } from '../dom/node.js';
 
 /**

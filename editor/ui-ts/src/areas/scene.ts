@@ -33,8 +33,8 @@
  * и виден в верхнем баре каркаса; вторая пометка в области разошлась бы с
  * первой на первом же несовпадении.
  */
-import { FIXED_ONE, type SceneDef } from '@game-mvp/core';
-import type { VisualManifest } from '@game-mvp/assets';
+import { FIXED_ONE, type SceneDef } from '@fluxus/core';
+import type { VisualManifest } from '@fluxus/assets';
 import {
   ContributionRegistry,
   CURVATURE_GRID_RULE,
@@ -47,7 +47,7 @@ import {
   type ValidationReport,
   type ValidationRule,
   type Validator,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   children,
   documentValue,

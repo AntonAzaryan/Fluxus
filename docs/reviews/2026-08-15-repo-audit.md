@@ -118,7 +118,7 @@
   сегментов → один эмит на движущегося за тик).
 - **BLND-11 — плановый долг:** `content/visuals/manifest.json` всё ещё MDX (открытая ручная задача 6.4
   чейнджа `blender-level-design-integration`).
-- **FOW-8/FOW-9 — unimplemented** (fade-out vs death-VFX в рендере отсутствует; пост-MVP по преамбуле).
+- **FOW-8/FOW-9 — unimplemented** (fade-out vs death-VFX в рендере отсутствует; отложены преамбулой спеки).
 - **Стухшие утверждения в старых отчётах** (`docs/reviews/2026-08-08-editor-coverage.md`: «ED-12 —
   обе реализации не десктоп» — десктопный хост давно есть; `2026-08-09-spec-validation.md` П1, П10 —
   закрыты заархивированными чейнджами). Старые отчёты датированы и не редактируются; актуальный статус — здесь.
@@ -206,7 +206,7 @@
 
 - Патчи/миноры подняты (`ws`, `vite`, `jscpd`, `knip`, `typescript-eslint`, `dependency-cruiser`) —
   исправлено. Единственная high-уязвимость (`nanoid` &lt; 3.3.18, dev-only через vite→postcss) закрыта
-  через корневой `overrides` — исправлено. `@game-mvp/bot`/`@game-mvp/hud` перенесены из dev в
+  через корневой `overrides` — исправлено. `@fluxus/bot`/`@fluxus/hud` перенесены из dev в
   dependencies там, где импортируются рантаймом (`game/demo-ts`, `engine/net-ts`) — исправлено.
 - Дубликатов версий в workspace нет; ноль runtime-зависимостей ядра подтверждён.
 - Решения на потом: **eslint 10 + @eslint/js 10 + globals 17** одним PR (плагины готовы; три новых

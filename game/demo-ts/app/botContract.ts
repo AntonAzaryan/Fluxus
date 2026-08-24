@@ -30,7 +30,7 @@
  * Конвенция отгруженных профилей «чуть выше» (60→62, 120→125) была знанием в
  * комментарии; здесь она стала проверяемым инвариантом.
  */
-import type { AbilityDef, AbilityPhaseDef, PrefabDef } from '@game-mvp/core';
+import type { AbilityDef, AbilityPhaseDef, PrefabDef } from '@fluxus/core';
 import type {
   BotAbilityHands,
   BotAbilityProfile,
@@ -38,7 +38,7 @@ import type {
   BotCastCommit,
   BotProfile,
   BotStepAim,
-} from '@game-mvp/bot';
+} from '@fluxus/bot';
 import type { BotAbilityHint, BotHintsDocument } from './botHints.js';
 
 /** Часть конфига сцены, которую читает вывод: определения и prefab'ы слотов. */

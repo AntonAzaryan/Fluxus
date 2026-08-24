@@ -47,14 +47,14 @@
  * эффект нельзя по построению — эффект есть изображение, а не сущность.
  */
 import * as THREE from 'three';
-import { FIXED_ONE, type EntityId } from '@game-mvp/core';
+import { FIXED_ONE, type EntityId } from '@fluxus/core';
 import {
   resolveEffectByEvent,
   resolveEffectByKind,
   resolveEffectByState,
   type VisualEffect,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import type {
   EntityView,
   QualityDeclaration,

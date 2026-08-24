@@ -31,7 +31,7 @@
  * документный инстанс в игровом кадре.
  */
 import * as THREE from 'three';
-import { FIXED_ONE, type EntityId } from '@game-mvp/core';
+import { FIXED_ONE, type EntityId } from '@fluxus/core';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
   type QualityDeclaration,

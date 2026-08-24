@@ -19,7 +19,7 @@ import {
   type EntityId,
   type GameEvent,
   type SceneDef,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import {
   ClientHost,
   LoopbackHub,
@@ -34,14 +34,14 @@ import {
   type MatchWorld,
   type PresentedState,
   type Transport,
-} from '@game-mvp/net';
-import { AssetService } from '@game-mvp/assets';
+} from '@fluxus/net';
+import { AssetService } from '@fluxus/assets';
 import {
   RenderHost,
   type RenderContext,
   type RenderSubsystem,
   type TickView,
-} from '@game-mvp/render';
+} from '@fluxus/render';
 
 export const BUILD_ID = 'integration-build-0001';
 export const TICK_RATE = 60;

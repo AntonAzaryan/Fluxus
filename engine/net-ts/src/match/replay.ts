@@ -19,7 +19,7 @@ import {
   VIEWPOINT_ALL,
   type InputFrame,
   type Snapshot,
-} from '@game-mvp/core';
+} from '@fluxus/core';
 import { buildMatchWorld, type MatchWorldDef } from './world.js';
 
 /** Сегмент записи: эпоха и её кадры. Совпадает с `MatchSegment` сервера. */

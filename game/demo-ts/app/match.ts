@@ -10,19 +10,19 @@
  * Контентом этот модуль не является (`game-content` CONT-1): контент лежит в
  * `content/`, здесь только его чтение и раскладка в `MatchConfig`.
  */
-import type { SceneDef } from '@game-mvp/core';
+import type { SceneDef } from '@fluxus/core';
 import {
   contentPack,
   type LoadedContentPack,
   type MatchConfig,
   type MatchRewindOptions,
-} from '@game-mvp/net';
+} from '@fluxus/net';
 // Раскладку документа матча в `MatchConfig` нормирует помощник запускалок
-// (`@game-mvp/net/bin/matchFile.mjs`): остаток документа едет целиком,
+// (`@fluxus/net/bin/matchFile.mjs`): остаток документа едет целиком,
 // неизвестный ключ — отказ. Импортировать его сюда нельзя — он тянет `node:fs`
 // и хук резолва, которых в сборке вкладки нет, — поэтому берутся его ТИПЫ:
 // импорт стирается сборкой, а списки полей ниже приколочены типом кортежа.
-import type { MATCH_DOCUMENT_FIELDS, MatchDocumentField } from '@game-mvp/net/bin/matchFile.mjs';
+import type { MATCH_DOCUMENT_FIELDS, MatchDocumentField } from '@fluxus/net/bin/matchFile.mjs';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 

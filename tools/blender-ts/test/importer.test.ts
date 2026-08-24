@@ -17,7 +17,7 @@ import {
   saveDocuments,
   type ContentTreeHost,
   type EditorSession,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   IMPORT_SPATIAL_LAYER,
   generateCellLayer,

@@ -30,9 +30,9 @@ import {
   type JsonPath,
   type JsonValue,
   type ValidationRule,
-} from '@game-mvp/editor-core';
-import { presentationPathOf, type VisualManifest } from '@game-mvp/assets';
-import { CAMERA_CONFIG_DESCRIPTION, CAMERA_EFFECTS_DESCRIPTION } from '@game-mvp/render';
+} from '@fluxus/editor-core';
+import { presentationPathOf, type VisualManifest } from '@fluxus/assets';
+import { CAMERA_CONFIG_DESCRIPTION, CAMERA_EFFECTS_DESCRIPTION } from '@fluxus/render';
 import { OBJECT_LISTS } from './objects.js';
 import { SYSTEM_DOCUMENT_KIND, SYSTEM_LISTS } from './systems.js';
 import { systemSites } from './systemsDocuments.js';

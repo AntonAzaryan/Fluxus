@@ -12,8 +12,8 @@
  * параметра.
  */
 import { describe, expect, it } from 'vitest';
-import { CAMERA_EFFECTS_DESCRIPTION } from '@game-mvp/render';
-import type { CameraEffectsDescription } from '@game-mvp/assets';
+import { CAMERA_EFFECTS_DESCRIPTION } from '@fluxus/render';
+import type { CameraEffectsDescription } from '@fluxus/assets';
 import {
   CAMERA_EFFECT_BUNDLES,
   cameraEffectKeys,

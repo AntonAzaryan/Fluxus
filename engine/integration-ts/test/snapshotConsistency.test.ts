@@ -16,8 +16,8 @@
  * свойство вертикали, и разойтись стороны могут попарно.
  */
 import { describe, expect, it } from 'vitest';
-import { query, runScenario, snapshotToPlain, world as coreWorld } from '@game-mvp/core';
-import type { PresentedState } from '@game-mvp/net';
+import { query, runScenario, snapshotToPlain, world as coreWorld } from '@fluxus/core';
+import type { PresentedState } from '@fluxus/net';
 import { fogConfig, playMatch, walkRight } from './fixtures.js';
 
 /** Позиции героев по слотам — общая часть трёх миров, сравниваемая побитово. */

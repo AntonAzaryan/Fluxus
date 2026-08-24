@@ -19,7 +19,7 @@
  * (WSM-5), сетевой отправляет его вводом на сервер и у себя исполнять MUST NOT
  * (`netcode` NET-11). Разбор сообщений поэтому и берёт обработчик параметром.
  */
-import type { Vec2 } from '@game-mvp/core';
+import type { Vec2 } from '@fluxus/core';
 import type { ShellSender } from './sender.js';
 import type { ControlMessage, InputMessage, MainToWorker } from './protocol.js';
 

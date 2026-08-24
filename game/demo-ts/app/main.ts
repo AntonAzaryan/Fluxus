@@ -17,7 +17,7 @@
  * двумя последними доставленными тиками по часам этого потока (SHELL-7).
  */
 import * as THREE from 'three';
-import { ABILITY_STEPS, loadScene, type EntityId, type SceneDef } from '@game-mvp/core';
+import { ABILITY_STEPS, loadScene, type EntityId, type SceneDef } from '@fluxus/core';
 import {
   AssetService,
   createManifestLoader,
@@ -33,7 +33,7 @@ import {
   type AssetState,
   type PresentationScene,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   AbilityPreviewSubsystem,
   CAMERA_CONFIG_DESCRIPTION,
@@ -57,6 +57,7 @@ import {
   costCountersDebugSource,
   createCameraInput,
   deliveryDebugSource,
+  programsDebugSource,
   resetCameraInput,
   resolveFogConfig,
   terrainGroundApi,
@@ -65,8 +66,8 @@ import {
   type AbilitySlotStatNames,
   type DecorationInstance,
   type RenderContext,
-} from '@game-mvp/render';
-import type { HudCameraContract } from '@game-mvp/hud';
+} from '@fluxus/render';
+import type { HudCameraContract } from '@fluxus/hud';
 import {
   GamepadSource,
   InputSampler,
@@ -81,7 +82,7 @@ import {
   type AimPoint,
   type AimResolution,
   type InputSource,
-} from '@game-mvp/client';
+} from '@fluxus/client';
 import {
   ACTION_BITS,
   CHARGE_PREVIEW_MIN_TICKS,
@@ -1144,6 +1145,13 @@ function wireDebugPanel(surface: VisualSurfaceSource, bounds: CameraBounds): voi
   layer
     .register(deliveryDebugSource())
     .register(costCountersDebugSource())
+    // Число живых шейдерных программ (RDBG-1): источник движка, а регистрирует
+    // его ВЛАДЕЛЕЦ рендерера — им здесь является страница (design D8). Ни один
+    // счётчик стоимости компиляцию программы не растит (PERF-3), и рост размера
+    // живого кэша программ на устоявшейся игре — единственный печатный признак
+    // того, что программа пересобирается с новым ключом на каждом появлении
+    // (PERF-7).
+    .register(programsDebugSource(renderer3))
     .register(staticCollidersDebugSource(() => remote?.terrain ?? null))
     .register(dynamicCollidersDebugSource(STATS.colliderRadius))
     .register(

@@ -7,13 +7,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { FIXED_ONE, createTerrainGrid, type TerrainGrid } from '@game-mvp/core';
+import { FIXED_ONE, createTerrainGrid, type TerrainGrid } from '@fluxus/core';
 import {
   validateCurvatureMap,
   type NormalizedModel,
   type TerrainCurvatureMap,
   type VisualManifest,
-} from '@game-mvp/assets';
+} from '@fluxus/assets';
 import {
   DecorationSet,
   ModelsSubsystem,

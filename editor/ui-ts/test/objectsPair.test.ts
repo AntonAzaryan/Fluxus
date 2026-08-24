@@ -36,7 +36,7 @@ import {
   type JsonValue,
   type ValidationIssue,
   type ValidationRule,
-} from '@game-mvp/editor-core';
+} from '@fluxus/editor-core';
 import {
   PAIR_OPERATIONS,
   prefabReferences,

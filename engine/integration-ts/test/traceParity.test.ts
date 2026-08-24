@@ -30,8 +30,8 @@ import {
   runScenario,
   selectingSink,
   type SceneDef,
-} from '@game-mvp/core';
-import { createMatchTrace, type MatchConfig, type TraceSelect } from '@game-mvp/net';
+} from '@fluxus/core';
+import { createMatchTrace, type MatchConfig, type TraceSelect } from '@fluxus/net';
 import { STEP, TICK_RATE, connectClient, duelConfig, duelScene, harness, settle } from './fixtures.js';
 
 const TICKS = 16;

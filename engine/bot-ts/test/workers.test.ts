@@ -13,10 +13,10 @@
  */
 import { MessageChannel } from 'node:worker_threads';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fixed, query, world as coreWorld } from '@game-mvp/core';
-import { ClientHost, MatchClient, MatchHost, MatchServer, contentPack, jsonSerializer } from '@game-mvp/net';
-import { shellPort } from '@game-mvp/client/protocol';
-import { portTransport } from '@game-mvp/client/portTransport';
+import { fixed, query, world as coreWorld } from '@fluxus/core';
+import { ClientHost, MatchClient, MatchHost, MatchServer, contentPack, jsonSerializer } from '@fluxus/net';
+import { shellPort } from '@fluxus/client/protocol';
+import { portTransport } from '@fluxus/client/portTransport';
 import { PortConnections, botWorkerInit, isBotWorkerInit } from '../src/assembly.js';
 import { attachBots } from '../src/worker/spawn.js';
 import { startBotWorker } from '../src/worker/botWorker.js';

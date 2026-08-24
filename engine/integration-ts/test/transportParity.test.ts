@@ -16,7 +16,7 @@
  * различие было бы названо счётчиком, а не выглядело бы загадочным диффом лога.
  */
 import { describe, expect, it } from 'vitest';
-import { runScenario, snapshotToPlain, type InputFrame } from '@game-mvp/core';
+import { runScenario, snapshotToPlain, type InputFrame } from '@fluxus/core';
 import {
   DedicatedSession,
   InProcessRendezvous,
@@ -25,7 +25,7 @@ import {
   joinMatch,
   type MatchConfig,
   type Rendezvous,
-} from '@game-mvp/net';
+} from '@fluxus/net';
 import { BUILD_ID, TICK_RATE, duelConfig, fuzzInput, type Clock } from './fixtures.js';
 
 const TICKS = 24;

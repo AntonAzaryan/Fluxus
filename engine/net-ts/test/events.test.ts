@@ -11,7 +11,7 @@
  * доставка. Курсор получателя и счётчики разрывов — другая фаза изменения.
  */
 import { describe, expect, it } from 'vitest';
-import type { SceneDef } from '@game-mvp/core';
+import type { SceneDef } from '@fluxus/core';
 import {
   authoredMaskScene,
   duelConfig,

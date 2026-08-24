@@ -5,8 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { FIXED_ONE, createTerrainGrid } from '@game-mvp/core';
-import { validateCurvatureMap, type TerrainCurvatureMap } from '@game-mvp/assets';
+import { FIXED_ONE, createTerrainGrid } from '@fluxus/core';
+import { validateCurvatureMap, type TerrainCurvatureMap } from '@fluxus/assets';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
   TerrainSubsystem,

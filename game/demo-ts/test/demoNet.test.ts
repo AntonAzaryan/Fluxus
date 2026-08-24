@@ -16,16 +16,16 @@
  */
 import { MessageChannel } from 'node:worker_threads';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fixed, type Serializer } from '@game-mvp/core';
+import { fixed, type Serializer } from '@fluxus/core';
 import {
   isBotWorkerInit,
   startBotWorker,
   type BotHost,
   type WorkerLike,
-} from '@game-mvp/bot';
-import type { RenderSubsystem, TickView } from '@game-mvp/render';
-import { jsonSerializer, type Transport } from '@game-mvp/net';
-import { RemoteHost, portTransport, shellPort, type ShellPort } from '@game-mvp/client';
+} from '@fluxus/bot';
+import type { RenderSubsystem, TickView } from '@fluxus/render';
+import { jsonSerializer, type Transport } from '@fluxus/net';
+import { RemoteHost, portTransport, shellPort, type ShellPort } from '@fluxus/client';
 import { DEMO_PLAYERS, demoMatchConfig } from '../app/match.js';
 import { demoBotBehavior, demoBotProfile } from '../app/bots.js';
 import { openLocalSession, type DemoLocalSession } from '../app/localSession.js';
