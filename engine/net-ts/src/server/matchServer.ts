@@ -48,6 +48,8 @@ import { createServerMetrics, type ServerMetrics } from '../metrics.js';
 import type { ConnectionId } from '../transport/transport.js';
 import type {
   ClientMessage,
+  ConnectionRole,
+  EndReason,
   EventBatch,
   EventsMessage,
   GameVersion,
@@ -290,6 +292,26 @@ interface Connection {
   phase: ConnectionPhase;
   /** Слот игрока; у наблюдателя — `-1`. */
   slot: number;
+  /**
+   * Роль соединения в слоте (NTR-18): арендатор слота — владелец или
+   * заместитель. У наблюдателя и до хендшейка значения не имеет.
+   */
+  role: ConnectionRole;
+  /**
+   * Первый тик, факты которого адресованы ЭТОМУ соединению (NTR-17): тик его
+   * посадки плюс один. Накопитель потока общий на `viewpoint` (NTR-15), а
+   * «поток открыт заново» — свойство соединения, и держится оно этим срезом
+   * (см. `eventsFor`). У соединения, севшего до первого тика, срез не режет
+   * ничего.
+   */
+  eventsFrom: number;
+  /**
+   * Эпоха, в которой сделан срез (NTR-16). Номер тика без эпохи ветвь истории
+   * не называет: после перемотки тики идут заново, и «позже» между эпохами не
+   * определено — срез, применённый к чужой эпохе, вырезал бы живую ветвь
+   * целиком.
+   */
+  eventsEpoch: number;
 }
 
 const DEFAULTS = {
@@ -350,7 +372,15 @@ export class MatchServer {
   private rewindUnavailableReported = false;
 
   private readonly connections = new Map<ConnectionId, Connection>();
-  /** Соединение, занимающее слот; `undefined` — слот свободен либо игрок отвалился. */
+  /**
+   * Живое соединение слота — его арендатор (NTR-17, NTR-18); `undefined` —
+   * слот свободен (до `Start`) либо арендатора у него сейчас нет.
+   *
+   * Аренда — не состав: после `Start` слот остаётся за игроком ростера (NTR-6),
+   * меняется только соединение. Отсюда и разделение с `slotClaimed`: первое
+   * поле отвечает на «кто говорит за слот прямо сейчас», второе — на «занят ли
+   * слот ростером».
+   */
   private readonly slotConnection: (ConnectionId | undefined)[];
   private readonly slotClaimed: boolean[];
   /** Пришедший, но ещё не исполненный ввод: слот → тик → кадр. */
@@ -368,6 +398,12 @@ export class MatchServer {
   private readonly segments: OpenSegment[] = [];
   private readonly outbox: Outgoing[] = [];
   private matchPhase: MatchPhase = 'lobby';
+  /**
+   * Тик начала матча — тот, что уехал в `Start` (NTR-6). Хранится ради
+   * реконнекта: вернувшемуся владельцу уходит `Start` с ТЕМ ЖЕ тиком начала
+   * (NTR-17), потому что матч для него не начался заново.
+   */
+  private startTick = 0;
 
   /**
    * Пара `(эпоха, тик)` последнего авторитетного состояния матча (NTR-16).
@@ -588,19 +624,58 @@ export class MatchServer {
 
   connect(id: ConnectionId): void {
     if (this.connections.has(id)) throw new Error(`MatchServer: соединение ${id} уже зарегистрировано`);
-    this.connections.set(id, { id, phase: 'greeting', slot: -1 });
+    this.connections.set(id, {
+      id,
+      phase: 'greeting',
+      slot: -1,
+      role: 'owner',
+      eventsFrom: 0,
+      eventsEpoch: this.currentEpoch,
+    });
   }
 
   disconnect(id: ConnectionId): void {
     const connection = this.connections.get(id);
     if (connection === undefined) return;
     this.connections.delete(id);
+    this.releaseSlot(connection);
+  }
+
+  /**
+   * Соединение перестало существовать — аренда слота кончается вместе с ним
+   * (NTR-17). Одно место на оба конца соединения: закрытый канал
+   * (`disconnect`) и разрыв по названному исходу (`reject`). Раздельные ветви
+   * означали бы, что слот освобождается от одного вида смерти соединения и не
+   * освобождается от другого, — а слот с мёртвым арендатором не пускает ни
+   * владельца обратно (NTR-17: «слот которого не занят живым соединением»), ни
+   * заместителя (NTR-18), и врёт наблюдающей сборке-основателю сессии, у
+   * которой этот факт — единственная наблюдательная поверхность
+   * (`slotAttached`).
+   *
+   * Аренда снимается, только если её держало ИМЕННО это соединение: вытесненное
+   * владельцем (NTR-18) закрывается ПОСЛЕ того, как слот достался владельцу, и
+   * без проверки его закрытие отняло бы слот у только что вошедшего.
+   */
+  private releaseSlot(connection: Connection): void {
     if (connection.slot < 0) return;
+    if (this.slotConnection[connection.slot] !== connection.id) return;
     this.slotConnection[connection.slot] = undefined;
-    // До старта слот освобождается — состав ещё не зафиксирован. После старта
-    // он остаётся за игроком (NTR-6): матч продолжается на predicted-кадрах, и
-    // занять чужой слот посреди матча нельзя.
+    // До старта слот освобождается совсем — состав ещё не зафиксирован. После
+    // старта он остаётся за игроком (NTR-6): матч продолжается на
+    // predicted-кадрах, а вернуться в него вправе владелец слота (NTR-17) либо
+    // заместитель (NTR-18) — но не новый участник.
     if (this.matchPhase === 'lobby') this.slotClaimed[connection.slot] = false;
+  }
+
+  /**
+   * Есть ли у слота живое соединение — наблюдение СНАРУЖИ сервера (NTR-18):
+   * политика «что делать со слотом, оставшимся без соединения» живёт у
+   * сборки-основателя сессии, и наблюдать ей нужен ровно этот факт. Кто именно
+   * арендует слот — владелец или заместитель, — сервер не рассказывает и не
+   * различает: он даёт механизм аренды, а не сведения об участниках.
+   */
+  slotAttached(slot: number): boolean {
+    return this.slotConnection[slot] !== undefined;
   }
 
   /** Разбор кадра не удался либо сообщение недопустимо — исход называется, соединение рвётся (NTR-4). */
@@ -619,7 +694,7 @@ export class MatchServer {
           this.protocolError(id, 'protocol-error', 'повторный Hello в установленном соединении');
           return;
         }
-        this.greet(connection, message.playerId, message.version, message.observer);
+        this.greet(connection, message.playerId, message.version, message.role, message.observer);
         return;
       case 'Input':
         if (connection.phase !== 'player') {
@@ -629,21 +704,29 @@ export class MatchServer {
         this.ingest(connection.slot, message.epoch, message.frames);
         return;
       case 'Bye':
-        // Осознанный уход отличается от разрыва канала: игрок сообщил намерение,
-        // и ждать порога молчания незачем (NTR-6). Намерение уйти есть только у
-        // участника состава: Bye наблюдателя или соединения без рукопожатия
-        // закрывает лишь само соединение — состав матча оно не занимает и
-        // завершать матч за игроков не может.
+        // Осознанный уход отвязывает соединение от слота — и только (design D4
+        // change'а `add-player-reconnect`). Матча он не завершает: слот остаётся
+        // за игроком ростера (NTR-6), дальше работают окно возврата (NTR-17),
+        // замещающее соединение (NTR-18) и порог молчания. Прежнее мгновенное
+        // `End` ломало бы замещение ровно в том случае, ради которого оно
+        // заведено: ушедший добровольно убивал бы матч в обход заместителя.
         this.disconnect(id);
-        if (connection.phase === 'player' && this.matchPhase === 'running') this.end('player-left');
         return;
     }
   }
 
+  /**
+   * Вход в матч (NTR-5) — один и тот же для первого входа, реконнекта (NTR-17)
+   * и замещающего соединения (NTR-18): те же две сверки, тот же `Welcome`, те
+   * же исходы отказа. Отдельного сообщения и ослабленного пути у возврата нет —
+   * реконнект есть тот же вход, поздний по времени, а набор сообщений закрыт
+   * (NTR-4).
+   */
   private greet(
     connection: Connection,
     playerId: string,
     version: GameVersion,
+    role: ConnectionRole,
     observer: boolean,
   ): void {
     // Сверка версии — до того, как о матче сообщено что-либо (NTR-5). Половина
@@ -670,30 +753,117 @@ export class MatchServer {
       connection.phase = 'observer';
       // Наблюдателю слот не выдаётся, поэтому и `Welcome` со слотом ему не
       // адресован: он не игрок, состава матча не занимает и `Start` дождётся
-      // вместе со всеми.
+      // вместе со всеми. Роль соединения (NTR-18) для него не значит ничего —
+      // она про право на слот, а слота у наблюдателя нет.
       return;
     }
 
     const slot = this.config.players.indexOf(playerId);
     if (slot < 0) {
+      // Ростер зафиксирован (NTR-6): реконнект возвращает участника ростера, но
+      // входа новым не открывает.
       this.reject(connection.id, 'unknown-player', `игрок "${playerId}" не заявлен в матче`);
       return;
     }
-    if (this.matchPhase !== 'lobby') {
-      // Реконнекта в MVP нет, и отсутствует он явно, а не молчанием (NTR-6).
-      this.reject(connection.id, 'match-in-progress', 'матч уже идёт, реконнект не поддержан');
+    if (this.matchPhase === 'ended') {
+      // Возвращаться некуда: идущего матча нет (NTR-17). Названный отказ, а не
+      // тихое зависание без снапшотов.
+      this.reject(connection.id, 'match-ended', 'матч уже завершён');
+      return;
+    }
+    if (this.matchPhase === 'lobby') {
+      this.greetBeforeStart(connection, slot, role);
+      return;
+    }
+    this.greetRunning(connection, slot, role);
+  }
+
+  /**
+   * Вход до `Start`: слоты занимают владельцы. Заместителю здесь отказ с
+   * названным исходом (NTR-18) — кто и чем занимает пустой слот до старта,
+   * решает сборка-основатель сессии, и механизмом замещения это не является.
+   */
+  private greetBeforeStart(connection: Connection, slot: number, role: ConnectionRole): void {
+    if (role === 'substitute') {
+      this.reject(
+        connection.id,
+        'substitute-before-start',
+        'до старта матча слоты занимают владельцы (NTR-18)',
+      );
       return;
     }
     if (this.slotClaimed[slot] === true) {
       this.reject(connection.id, 'slot-taken', `слот ${slot} уже занят`);
       return;
     }
+    this.seat(connection, slot, role);
+    this.welcome(connection, slot);
+    if (this.slotClaimed.every(Boolean)) this.start();
+  }
 
+  /**
+   * Вход в ИДУЩИЙ матч — смена арендатора слота, а не состава (NTR-6):
+   * реконнект владельца (NTR-17) либо замещающее соединение (NTR-18).
+   *
+   * Слот с живым соединением отдаётся только в одном случае — владелец
+   * вытесняет заместителя; во всех остальных «слот занят». Двух владельцев у
+   * слота не бывает, и «умного» отбора настоящего владельца при двух
+   * предъявителях одного идентификатора нет и не будет без аутентификации:
+   * граница названа в NTR-17.
+   */
+  private greetRunning(connection: Connection, slot: number, role: ConnectionRole): void {
+    const live = this.slotConnection[slot];
+    if (live !== undefined) {
+      const holder = this.connections.get(live);
+      if (role !== 'owner' || holder?.role !== 'substitute') {
+        this.reject(connection.id, 'slot-taken', `слот ${slot} занят живым соединением`);
+        return;
+      }
+      // Вытеснение — исход плюс разрыв (NTR-18), без нового типа сообщения.
+      // Соединение уходит из карты немедленно (`reject`), поэтому ввод
+      // вытесненного дальше отбрасывается на общих основаниях проверки слота
+      // отправителя (NTR-7), а его закрытие не отнимет слот у владельца
+      // (см. `disconnect`): тика с двумя арендаторами слота не существует.
+      this.reject(live, 'displaced-by-owner', `слот ${slot} возвращён владельцу`);
+    }
+    this.seat(connection, slot, role);
+    this.welcome(connection, slot);
+    // Повторный `Start` — с ИСХОДНЫМ тиком начала матча (NTR-17): матч для
+    // вернувшегося не начался заново, а оценка серверного тика у него
+    // синхронизируется первым принятым снапшотом (NTR-10).
+    this.send(connection.id, { type: 'Start', tick: this.startTick });
+  }
+
+  /**
+   * Соединение садится в слот арендатором (NTR-17, NTR-18). Единственное место,
+   * где слот получает живое соединение, — и потому единственное, где гасится
+   * наследство прежнего арендатора.
+   */
+  private seat(connection: Connection, slot: number, role: ConnectionRole): void {
     connection.phase = 'player';
     connection.slot = slot;
+    connection.role = role;
     this.slotClaimed[slot] = true;
     this.slotConnection[slot] = connection.id;
+    // Посадка живого соединения обнуляет молчание слота (NTR-6): порог есть
+    // окно ВОЗВРАТА, и отсчитывать его новому арендатору с чужого числа значило
+    // бы закрыть окно раньше срока. Дальше счётчик живёт как жил — по
+    // неприбывшему вводу: живое соединение, переставшее слать кадры, порогом
+    // матч завершает наравне с отвалившимся.
+    this.metrics.slots[slot]!.silentTicks = 0;
+    // Неисполненный ввод прежнего арендатора гасится: он адресован будущим
+    // тикам слота, у которого сменился арендатор, и применялся бы уже за
+    // вернувшегося владельца (NTR-7, NTR-18).
+    this.pending[slot]!.clear();
+    // Поток `Events` для ЭТОГО соединения открывается заново (NTR-17): всё, что
+    // опубликовано до его посадки, ему не адресовано — ни как повтор виденного
+    // до разрыва, ни как досылка пропущенного. Срез адресуется ПАРОЙ (NTR-16):
+    // один номер тика ветвь истории не называет.
+    connection.eventsFrom = this.state.tick + 1;
+    connection.eventsEpoch = this.currentEpoch;
+  }
 
+  private welcome(connection: Connection, slot: number): void {
     this.send(connection.id, {
       type: 'Welcome',
       slot,
@@ -703,15 +873,57 @@ export class MatchServer {
       worldInitHash: this.worldInitHash,
       pacing: this.pacing,
     });
+  }
 
-    if (this.slotClaimed.every(Boolean)) this.start();
+  /**
+   * Сообщение потока для КОНКРЕТНОГО соединения (NTR-17): диапазон и пачки
+   * срезаны по ПАРЕ его посадки — эпохе и тику (NTR-16).
+   *
+   * Накопитель ведётся по `viewpoint` — два соединения одной команды делят
+   * отобранный поток (NET-12), — а «открыт заново» относится к соединению:
+   * вернувшемуся не едут ни повторы окон, которые он видел ДО разрыва (дубли
+   * VFX), ни пачки тиков, исполненных, пока у слота не было живого соединения
+   * (досылка пропущенного, которую NTR-17 запрещает). Срез именно здесь, а не
+   * сбросом накопителя, потому что накопитель может быть общим: выбросить
+   * открытое окно из-за чужого возврата значило бы потерять ещё не
+   * доставленные факты союзника — то, ради чего поток и заведён.
+   *
+   * Объявленный диапазон от среза не перестаёт быть полным: тики
+   * `[eventsFrom, to]` собраны накопителем целиком, и тик без пачки внутри них
+   * по-прежнему означает «событий не было» (NTR-15).
+   *
+   * Срез действует ТОЛЬКО в своей эпохе (NTR-16). Номера тиков разных эпох
+   * несравнимы — «позже» между ветвями истории не определено, — и срез,
+   * применённый к сообщению новой ветви, вырезал бы её целиком: перемотка
+   * возвращает мир на тик РАНЬШЕ посадки вернувшегося (в этом её смысл), и
+   * каждое следующее сообщение потока оказалось бы пустым с перевёрнутым
+   * диапазоном `from > to`. Разбор такой кадр отвергает (NTR-4), клиент рвёт
+   * канал — то есть возврат в матч заканчивался бы вылетом на первой же ульте
+   * отката. Ветвь при этом ничего от среза и не требует: смена эпохи гасит
+   * накопители целиком (`onEpochChanged`), и пережить её опубликованному до
+   * посадки нечем.
+   *
+   * `undefined` — «этому соединению слать нечего»: весь объявленный диапазон
+   * опубликован до его посадки. Пустое сообщение с `from > to` вместо этого
+   * было бы кадром, который получатель обязан отвергнуть.
+   */
+  private eventsFor(connection: Connection, message: EventsMessage): EventsMessage | undefined {
+    const from = connection.eventsFrom;
+    if (message.epoch !== connection.eventsEpoch || from <= message.from) return message;
+    if (from > message.to) return undefined;
+    return {
+      ...message,
+      from,
+      batches: message.batches.filter((batch) => batch.tick >= from),
+    };
   }
 
   private start(): void {
     this.matchPhase = 'running';
+    this.startTick = this.state.tick;
     for (const connection of this.connections.values()) {
       if (connection.phase === 'greeting') continue;
-      this.send(connection.id, { type: 'Start', tick: this.state.tick });
+      this.send(connection.id, { type: 'Start', tick: this.startTick });
     }
   }
 
@@ -1081,7 +1293,12 @@ export class MatchServer {
         message = this.closeEventWindow(viewpoint, epoch);
         events.set(viewpoint, message);
       }
-      this.send(connection.id, message);
+      // Общая на `viewpoint` пачка — и персональный срез по паре посадки
+      // соединения (NTR-17): вернувшемуся не едет ни виденное до разрыва, ни
+      // пропущенное за время отсутствия. Срез, съевший диапазон целиком, не
+      // едет вовсе — сообщения без диапазона не бывает (NTR-15).
+      const addressed = this.eventsFor(connection, message);
+      if (addressed !== undefined) this.send(connection.id, addressed);
     }
   }
 
@@ -1115,6 +1332,14 @@ export class MatchServer {
     this.currentEpoch++;
     for (const pending of this.pending) pending.clear();
     this.eventStreams.clear();
+    // Персональные срезы потока (NTR-17) снимаются вместе с накопителями:
+    // накопители ушли целиком, и пережить смену ветви истории тому, что
+    // опубликовано до посадки соединения, нечем — резать в новой эпохе больше
+    // не от чего, а номера её тиков со старым срезом несравнимы (NTR-16).
+    for (const connection of this.connections.values()) {
+      connection.eventsFrom = 0;
+      connection.eventsEpoch = this.currentEpoch;
+    }
   }
 
   /**
@@ -1155,7 +1380,14 @@ export class MatchServer {
     for (const connection of this.connections.values()) {
       if (connection.phase === 'greeting') continue;
       if (this.viewpointOf(connection) !== viewpoint) continue;
-      this.send(connection.id, message);
+      // Поток режется по паре посадки и здесь: путь доставки другой, а правило
+      // «соединению не едет то, что опубликовано до его посадки» одно (NTR-17).
+      if (message.type !== 'Events') {
+        this.send(connection.id, message);
+        continue;
+      }
+      const personal = this.eventsFor(connection, message);
+      if (personal !== undefined) this.send(connection.id, personal);
     }
   }
 
@@ -1516,7 +1748,7 @@ export class MatchServer {
     return message;
   }
 
-  private end(reason: 'player-silent' | 'player-left' | 'server-stopped'): void {
+  private end(reason: EndReason): void {
     if (this.matchPhase === 'ended') return;
     this.matchPhase = 'ended';
     const epoch = this.currentEpoch;
@@ -1530,7 +1762,10 @@ export class MatchServer {
       const tail = tails.get(viewpoint);
       // Порядок в одном `drain()` значим ровно здесь: `Events` раньше `End`,
       // соединение закрывается после — исходящее с `closeAfter` последнее.
-      if (tail !== undefined) this.send(connection.id, tail);
+      if (tail !== undefined) {
+        const personal = this.eventsFor(connection, tail);
+        if (personal !== undefined) this.send(connection.id, personal);
+      }
       this.send(connection.id, { type: 'End', reason, tick: this.state.tick }, true);
     }
   }
@@ -1548,7 +1783,13 @@ export class MatchServer {
 
   private reject(to: ConnectionId, reason: RejectReason, detail: string): void {
     this.send(to, { type: 'Reject', reason, detail }, true);
+    const connection = this.connections.get(to);
     this.connections.delete(to);
+    // Отказ бывает и УЖЕ СЕВШЕМУ соединению: испорченный кадр, сообщение не для
+    // своего состояния, повторный `Hello` — всё это разрыв с названным исходом
+    // (NTR-4), и аренда слота кончается вместе с соединением так же, как при
+    // закрытом канале. Иначе слот навсегда числился бы занятым мертвецом.
+    if (connection !== undefined) this.releaseSlot(connection);
   }
 
   /** Забрать накопленные исходящие. Отправляет их транспортный слой (NTR-3). */

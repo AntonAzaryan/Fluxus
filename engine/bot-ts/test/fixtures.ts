@@ -23,10 +23,12 @@ import {
   MatchServer,
   contentPack,
   type ClientStep,
+  type ConnectionRole,
   type InputSource,
   type MatchConfig,
   type Transport,
 } from '@game-mvp/net';
+import type { FillSchedule } from '../src/fill.js';
 import { BotHost, type BotSeat } from '../src/host.js';
 import {
   BOT_BEHAVIOR_SCHEMA,
@@ -336,6 +338,31 @@ export function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * Ручной планировщик пауз: дедлайн заполнителя (BOT-7) и пауза до посадки
+ * заместителя (BOT-14) наступают вызовом теста, а не течением времени. Один на
+ * обе политики — они и приняли его одним типом (`FillSchedule`).
+ */
+export function manualSchedule(): {
+  schedule: FillSchedule;
+  run: () => void;
+  pending: () => boolean;
+} {
+  let queued: (() => void) | null = null;
+  return {
+    schedule: (run) => {
+      queued = run;
+      return 1;
+    },
+    run: () => {
+      const task = queued;
+      queued = null;
+      task?.();
+    },
+    pending: () => queued !== null,
+  };
+}
+
 export interface Clock {
   ms: number;
 }
@@ -387,6 +414,8 @@ export interface BotOptions {
   readonly brain: BotBrainFactory;
   readonly profile: BotProfile;
   readonly transport?: Transport;
+  /** Роль соединения (`netcode-transport` NTR-18); отсутствие — владелец слота. */
+  readonly role?: ConnectionRole;
 }
 
 /**
@@ -398,6 +427,7 @@ export function connectBot(fixture: Harness, host: BotHost, options: BotOptions)
   const seat = host.add({
     playerId: options.playerId,
     transport: options.transport ?? fixture.hub.connect(),
+    ...(options.role !== undefined ? { role: options.role } : {}),
     brain: options.brain,
     profile: options.profile,
     content: pack,

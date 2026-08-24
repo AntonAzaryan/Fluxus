@@ -194,13 +194,23 @@ describe('молчание слота', () => {
     expect(server.metrics.slots[0]!.silentTicks).toBe(0);
   });
 
-  it('осознанный уход завершает матч сразу, не дожидаясь порога', () => {
-    const { server } = running({ silenceTicks: 1000 });
+  it('осознанный уход отвязывает соединение, а матч живёт до порога (NTR-6)', () => {
+    // `Bye` — это разрыв, а не конец матча (design D4 change'а
+    // `add-player-reconnect`): слот остаётся за игроком ростера, идёт на
+    // predicted-кадрах и ждёт возврата (NTR-17) или заместителя (NTR-18).
+    const { server } = running({ silenceTicks: 3 });
     server.drain();
     server.receive(1, { type: 'Bye', reason: 'вышел' });
 
+    expect(server.phase).toBe('running');
+    expect(server.slotAttached(0)).toBe(false);
+    for (let i = 0; i < 3; i++) server.advance();
+    expect(server.phase).toBe('running');
+
+    // Конец приходит порогом молчания, а не намерением уйти.
+    server.advance();
     expect(server.phase).toBe('ended');
-    expect(server.drain()[0]!.message).toMatchObject({ type: 'End', reason: 'player-left' });
+    expect(server.drain().at(-1)!.message).toMatchObject({ type: 'End', reason: 'player-silent' });
   });
 
   it('Bye наблюдателя матч не завершает: состава он не занимает (NTR-6, NTR-9)', () => {
@@ -239,20 +249,16 @@ describe('молчание слота', () => {
     expect(server.metrics.slots[0]!.predicted).toBe(1);
   });
 
-  it('вернуться в идущий матч нельзя, и это сказано явно', () => {
-    const config = duelConfig({ silenceTicks: 1000 });
-    const fixture = harness(config);
-    const { server } = fixture;
-    server.connect(1);
-    server.receive(1, hello('p1', config.version));
-    server.connect(2);
-    server.receive(2, hello('p2', config.version));
+  it('в завершённый матч возвращаться некуда — и это сказано явно (NTR-17)', () => {
+    const { server } = running({ silenceTicks: 1 });
+    server.advance();
+    server.advance();
+    expect(server.phase).toBe('ended');
     server.drain();
 
-    server.disconnect(1);
     server.connect(3);
-    server.receive(3, hello('p1', config.version));
-    expect(server.drain()[0]!.message).toMatchObject({ reason: 'match-in-progress' });
+    server.receive(3, hello('p1', duelConfig().version));
+    expect(server.drain()[0]!.message).toMatchObject({ reason: 'match-ended' });
   });
 });
 

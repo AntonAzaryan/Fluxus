@@ -3,7 +3,9 @@
  * Стенд демо-арены: выделенный сервер матча (`net-session` SES-1, режим
  * `dedicated`) с бот-заполнителем слотов (BOT-7) и авто-рестартом (design D3).
  *
- *   node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 5000]
+ *   node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 120000]
+ *                                       [--on-disconnect bot|hold] [--substitute-delay-ms 2000]
+ *                                       [--silence-seconds <окно возврата>]
  *                                       [--match content/matches/duel.match.json]
  *                                       [--bot content/bots/normal.json] [--brain evaluated]
  *                                       [--json] [--once]
@@ -51,6 +53,13 @@
  *    соединения: пустой стенд ждёт людей, а не сажает ботов в вечный матч сам с
  *    собой, и молчащий сокет его не заводит. Боты живут в отдельном потоке
  *    (BOT-4) — `demoBot.worker.mjs`.
+ * 2а. Бот-заместитель: слот, потерявший соединение уже в бою, стенд по политике
+ *    `--on-disconnect bot` отдаёт боту (BOT-14) — обычным клиентом с ролью
+ *    заместителя (NTR-18), с паузой `--substitute-delay-ms`, чтобы сетевой
+ *    всплеск не дёргал бота. Вернувшийся владелец забирает слот вытеснением, и
+ *    это механизм СЕРВЕРА (NTR-17, NTR-18): стенд лишь не пере-подключает
+ *    вытесненного. Политика `hold` не делает ничего — слот ждёт владельца до
+ *    порога молчания (`--silence-seconds`, умолчание — поле документа матча).
  * 3. Авто-рестарт: по завершении матча (`End` любой причины, включая молчание
  *    слота) обвязка поднимает следующий матч тем же конфигом. Цикл живёт
  *    ЗДЕСЬ — `MatchServer` остаётся чистым тиком без ввода-вывода (NTR-3), и
@@ -88,7 +97,8 @@ const fromRepo = (relative) => fileURLToPath(new URL(`../../../${relative}`, imp
 
 if (flag('help')) {
   process.stdout.write(
-    'usage: node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 5000]\n' +
+    'usage: node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 120000]\n' +
+      '       [--on-disconnect bot|hold] [--substitute-delay-ms 2000] [--silence-seconds <сек>]\n' +
       '       [--match <match.json>] [--bot <profile.json>] [--brain evaluated|scripted] [--json] [--once]\n' +
       `       [--debug] [--max-ticks 600] [--out-dir runs/latest] [--dict <словарь>]\n       ${TRACE_USAGE}\n`,
   );
@@ -104,13 +114,24 @@ const {
   MatchServer,
   webSocketTransportServer,
 } = await import('@game-mvp/net');
-const { BRAIN_KINDS, BotSlotFiller, PortConnections, attachBots, parseBotBehavior, parseBotProfile } =
-  await import('@game-mvp/bot');
+const {
+  BRAIN_KINDS,
+  BotSlotFiller,
+  BotSubstitutes,
+  PortConnections,
+  attachBots,
+  parseBotBehavior,
+  parseBotProfile,
+} = await import('@game-mvp/bot');
 // Слушающая сторона между матчами — модуль сборки, а не часть скрипта: окно
 // рестарта проверяется тестом (`test/standSession.test.ts`). Типы Node
 // стрипает сам (>=22.18, тот же приём, что у `bots-sync.mjs`), а динамическим
 // импортом — как и всё типизированное в этом файле: после установки хука.
 const { standSession } = await import('../app/standSession.ts');
+// Умолчания и разбор политик стенда — там же и по той же причине: молча уехавшее
+// умолчание снаружи неотличимо от «стенд ведёт себя странно»
+// (`test/standPolicy.test.ts`).
+const { standPolicy } = await import('../app/standPolicy.ts');
 
 const match = readMatchFile(option('match', fromRepo('content/matches/duel.match.json')));
 const pack = contentPack(match.scenes);
@@ -150,16 +171,34 @@ function numberOption(name, fallback) {
   return value;
 }
 
-const port = numberOption('port', '8080');
+const port = numberOption('port', 8080);
 /**
  * Отладочный прогон (CLI-11): боты садятся немедленно, матч ограничен по тикам,
  * артефакты ложатся в каталог. `--once` он подразумевает — прогон для разбора
  * ровно один, и авто-рестарт переписал бы его артефакты следующим матчем.
  */
 const debugRun = flag('debug');
-const botFillMs = numberOption('bot-fill-ms', debugRun ? '0' : '5000');
+/**
+ * Политики этого запуска (BOT-7, BOT-14, NTR-6): дедлайн бота-заполнителя, что
+ * делать со слотом без соединения, пауза до заместителя и окно возврата.
+ * Умолчание окна — поле документа матча: величина остаётся данными, флаг лишь
+ * перекрывает её.
+ */
+let policy;
+try {
+  policy = standPolicy({
+    text: option,
+    number: numberOption,
+    debug: debugRun,
+    silenceSeconds: match.silenceSeconds ?? 10,
+  });
+} catch (error) {
+  process.stderr.write(`${error.message}\n`);
+  process.exit(2);
+}
+const botFillMs = policy.botFillMs;
 /** Ограничение длительности отладочного матча: десять секунд при 60 Гц. */
-const maxTicks = numberOption('max-ticks', '600');
+const maxTicks = numberOption('max-ticks', 600);
 const outDir = option('out-dir', fromRepo('runs/latest'));
 const dictPath = option('dict', fromRepo('game/demo-ts/app/journal/duel.dictionary.json'));
 // Каталог заводится ДО матча: писателю трейса открывать файл в несуществующем
@@ -198,6 +237,10 @@ const scene = pack.scene(match.sceneRef);
 function matchConfig() {
   return {
     ...matchConfigOf(match, pack),
+    // Окно возврата (NTR-6, NTR-17) — величина документа матча, перекрываемая
+    // флагом запуска: тюнить её можно без правки кода, а стенд, поднятый на
+    // время отладки, вправе сократить её одной командой.
+    silenceTicks: policy.silenceSeconds * tickRate,
     // Диагностика запроса перемотки — в отчёт стенда, то есть в stdout: её
     // умолчание пишет в stderr, а туда же по умолчанию идёт трейс, и мешать их
     // в одном потоке нельзя (CLI-11).
@@ -229,6 +272,11 @@ process.stdout.write(
     `  темп: ${tickRate} Гц, формат: ${serializer.name}\n` +
     `  бот-заполнитель: мозг "${brain}", профиль "${profile.name}", ` +
     `дедлайн ${botFillMs} мс после первого претендента на слот\n` +
+    `  разрыв в бою: ${
+      policy.onDisconnect === 'bot'
+        ? `бот-заместитель через ${policy.substituteDelayMs} мс`
+        : 'ничего — слот ждёт владельца'
+    }, окно возврата ${policy.silenceSeconds} с\n` +
     `  клиент: npm run play -- --url ws://127.0.0.1:${port} --player ${match.players[0]}\n` +
     `  вкладка: демо с ?server=ws://127.0.0.1:${port}\n` +
     (debugRun
@@ -285,6 +333,96 @@ async function runMatch(number) {
     failure = message;
     process.stdout.write(`\nстенд: ${message}\n`);
   };
+
+  /**
+   * Поток ботов этого матча — ОДИН на матч и на обе политики: заполнитель
+   * (BOT-7) и заместитель (BOT-14) сажают ботов в него же. Второй поток на
+   * заместителя ничего бы не дал: граница честности проходит по клиенту и его
+   * фильтру, а не по потоку (BOT-3, BOT-4).
+   */
+  const ensureBotWorker = () => {
+    if (botWorker !== null) return botWorker;
+    botWorker = new Worker(new URL('./demoBot.worker.mjs', import.meta.url));
+    botWorker.unref();
+    // Упавший поток ботов — самый тихий из отказов: матч просто не стартует.
+    // Поэтому и `error`, и ненулевой `exit` называются вслух.
+    botWorker.on('error', (error) => { fail(`поток ботов упал: ${error.message}`); });
+    botWorker.on('exit', (code) => {
+      // `terminate()` на сворачивании матча даёт код 1 — это не отказ.
+      if (code !== 0 && !stopping) fail(`поток ботов вышел с кодом ${code}`);
+    });
+    botWorker.on('message', (report) => {
+      if (report?.t !== 'bot-report') return;
+      const taken = report.seats.filter((seat) => seat.slot !== null);
+      process.stdout.write(
+        `\nбот сел в слоты: ${taken.map((seat) => seat.playerId).join(', ') || '—'}` +
+          `; отказано: ${report.seats.filter((seat) => seat.rejected !== null).length}\n`,
+      );
+      // Ни одного занятого слота при незамороженном ростере означает, что
+      // заполнитель не сработал: разошёлся формат кадра, версия или контент.
+      // Матч в этом состоянии стоит в лобби вечно, и молчать об этом нельзя.
+      // Отказ заместителю (слот успел занять владелец — `slot-taken`) отказом
+      // стенда не является: матч в этот момент идёт, а не стоит в лобби.
+      if (taken.length === 0 && server.phase === 'lobby') {
+        fail(
+          'бот не занял ни одного слота, а матч всё ещё в лобби — ' +
+            'проверьте формат кадра (--json), версию сборки и контент-пак (NTR-5)',
+        );
+      }
+    });
+    return botWorker;
+  };
+
+  /**
+   * Посадка ботов одним init-сообщением — общий путь заполнителя и заместителя:
+   * различаются они списком мест и ролью соединения (NTR-18), а не сборкой.
+   */
+  const spawnBots = (seats) => {
+    attachBots({
+      worker: ensureBotWorker(),
+      connections,
+      channel: () => new MessageChannel(),
+      seats,
+      buildId: match.buildId,
+      sceneRef: match.sceneRef,
+      scene,
+      // Тот же формат, которым говорит сервер (SER-3): бот — обычный участник
+      // матча, и «свойство сборки» относится к нему наравне с людьми.
+      wireFormat,
+      ...(match.physics !== undefined ? { physics: match.physics } : {}),
+      ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
+    });
+  };
+
+  /**
+   * Политика разрыва (BOT-14): слот, оставшийся без соединения уже в бою,
+   * получает бота-заместителя — или не получает ничего. Наблюдение идёт СНАРУЖИ
+   * сервера (`slotAttached`, `phase`), как и у заполнителя: сервер о ботах не
+   * знает (BOT-1).
+   */
+  const substitutes =
+    policy.onDisconnect === 'bot'
+      ? new BotSubstitutes({
+          players: match.players,
+          attached: (slot) => server.slotAttached(slot),
+          running: () => server.phase === 'running',
+          // Играть не с кем — заместителя не сажаем: то же условие, по которому
+          // заполнитель не заводит бой ботов в пустом матче (BOT-7). Считаются
+          // ПРЕТЕНДЕНТЫ слушающей стороны, то есть участники, пришедшие сокетом
+          // и не закрывшие его: боты приезжают портами (`PortConnections`) и в
+          // это число не входят — иначе матч, покинутый людьми, продлевал бы
+          // сам себя своими же заместителями и не кончился бы никогда (NTR-6).
+          // Отладочный прогон исключением не является: людей в нём нет по
+          // построению, и заместители ему не нужны — боты в нём владельцы.
+          abandoned: () => listening.claimants.size === 0,
+          delayMs: policy.substituteDelayMs,
+          attach: (playerId) => {
+            process.stdout.write(`\nслот "${playerId}" без соединения — сажаю заместителя\n`);
+            spawnBots([{ playerId, role: 'substitute', brain, profile, behavior }]);
+          },
+        })
+      : null;
+
   const makeFiller = () => new BotSlotFiller({
     players: match.players,
     deadlineMs: botFillMs,
@@ -306,46 +444,7 @@ async function runMatch(number) {
     // сервер отвергает штатным `slot-taken`, и бот отпускает канал; кто в итоге
     // сел, приезжает отчётом из потока ботов.
     attach: (playerIds) => {
-      botWorker = new Worker(new URL('./demoBot.worker.mjs', import.meta.url));
-      botWorker.unref();
-      // Упавший поток ботов — самый тихий из отказов: матч просто не стартует.
-      // Поэтому и `error`, и ненулевой `exit` называются вслух.
-      botWorker.on('error', (error) => { fail(`поток ботов упал: ${error.message}`); });
-      botWorker.on('exit', (code) => {
-        // `terminate()` на сворачивании матча даёт код 1 — это не отказ.
-        if (code !== 0 && !stopping) fail(`поток ботов вышел с кодом ${code}`);
-      });
-      botWorker.on('message', (report) => {
-        if (report?.t !== 'bot-report') return;
-        const taken = report.seats.filter((seat) => seat.slot !== null);
-        process.stdout.write(
-          `\nбот сел в слоты: ${taken.map((seat) => seat.playerId).join(', ') || '—'}` +
-            `; отказано: ${report.seats.filter((seat) => seat.rejected !== null).length}\n`,
-        );
-        // Ни одного занятого слота при незамороженном ростере означает, что
-        // заполнитель не сработал: разошёлся формат кадра, версия или контент.
-        // Матч в этом состоянии стоит в лобби вечно, и молчать об этом нельзя.
-        if (taken.length === 0 && server.phase === 'lobby') {
-          fail(
-            'бот не занял ни одного слота, а матч всё ещё в лобби — ' +
-              'проверьте формат кадра (--json), версию сборки и контент-пак (NTR-5)',
-          );
-        }
-      });
-      attachBots({
-        worker: botWorker,
-        connections,
-        channel: () => new MessageChannel(),
-        seats: playerIds.map((playerId) => ({ playerId, brain, profile, behavior })),
-        buildId: match.buildId,
-        sceneRef: match.sceneRef,
-        scene,
-        // Тот же формат, которым говорит сервер (SER-3): бот — обычный участник
-        // матча, и «свойство сборки» относится к нему наравне с людьми.
-        wireFormat,
-        ...(match.physics !== undefined ? { physics: match.physics } : {}),
-        ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
-      });
+      spawnBots(playerIds.map((playerId) => ({ playerId, brain, profile, behavior })));
       process.stdout.write(`\nдедлайн: бот предложен на слоты ${playerIds.join(', ')}\n`);
       // Места живут в другом потоке — наблюдать их отсюда нечем (BOT-4).
       return [];
@@ -387,6 +486,11 @@ async function runMatch(number) {
   // причину и выйти ненулевым кодом.
   await new Promise((resolve) => {
     const poll = setInterval(() => {
+      // Взгляд политики разрыва (BOT-14): слоты без живого соединения взводят
+      // паузу до посадки заместителя, вернувшийся владелец её отменяет.
+      // Опросом, потому что о разрывах сервер наружу не сообщает и не должен
+      // (NTR-3): расписание держит тот, кто им владеет.
+      substitutes?.poll();
       // Отладочный матч ограничен по длительности и завершается САМ (CLI-11):
       // человека, который нажмёт Ctrl+C, у прогона нет. Остановка идёт штатным
       // путём сервера — тем же `End`, что и всякий другой конец матча.
@@ -401,6 +505,9 @@ async function runMatch(number) {
   listening.onClaimant(() => {});
   listening.onClaimantsGone(() => {});
   filler.dispose();
+  // Неистёкшая пауза заместителя отменяется вместе с матчем: бот, приехавший в
+  // уже свёрнутый матч, получил бы отказ и оставил бы за собой лишний канал.
+  substitutes?.dispose();
   // `host.stop()` закрывает слушающие стороны обоих транспортов — и вид сокета,
   // и портовые каналы ботов (`mergeTransportServers`), — поэтому второго
   // закрытия здесь нет.
