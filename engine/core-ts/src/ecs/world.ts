@@ -120,9 +120,11 @@ function fieldArray(type: FieldType, capacity: number): FieldArray {
 
 /**
  * Нейтральное значение поля, для которого не объявлен `default` (ECS-3): ноль у
- * `i32`/`fixed`, «ссылки нет» у `entity` (ECS-6).
+ * `i32`/`fixed`, «ссылки нет» у `entity` (ECS-6). Экспорт — для `peekField`
+ * буфера команд (CMD-5): чтение отложенного `addComponent` обязано дать то же
+ * значение, что этот модуль запишет на flush, а не вторую копию правила.
  */
-function neutralValue(type: FieldType): number {
+export function neutralValue(type: FieldType): number {
   return type === 'entity' ? NO_ENTITY : 0;
 }
 
@@ -683,6 +685,27 @@ export function destroy(state: WorldState, entity: EntityId): void {
   clearEntity(internal.masks, index);
   internal.tags.delete(index);
   free(internal.entities, entity);
+}
+
+/**
+ * Затирает ячейки всех полей в слоте сущности нейтральными значениями их типов
+ * (ноль у `i32`/`fixed`, «ссылки нет» у `entity`, ECS-6). `destroy` гасит только
+ * живость, маску и теги (ID-3), а SoA-ячейки хранят прошлое сущности (см.
+ * `getField`), и `toPlain` сериализует массивы полей до `nextIndex` независимо
+ * от живости. Каноническому миру это законно — guarded-чтение мимо ячейки не
+ * ходит, — но персональному снапшоту мало: данных о скрытой сущности у клиента
+ * не должно быть ФИЗИЧЕСКИ (NET-12), иначе позиция и статы читались бы прямо из
+ * кадра на проводе (wallhack). Зовёт её фильтр проекции (`sim/filter.ts`) по
+ * КОПИИ мира, после `destroy`.
+ */
+export function scrubFields(state: WorldState, entity: EntityId): void {
+  const internal = toInternal(state);
+  const index = rawIndexOf(entity);
+  for (const store of internal.stores.values()) {
+    for (const [field, arr] of Object.entries(store.fields)) {
+      arr[index] = neutralValue(store.schema.fields[field]!);
+    }
+  }
 }
 
 /** ID-1/ID-3: живая проверка ссылки — учитывает и index, и generation. */

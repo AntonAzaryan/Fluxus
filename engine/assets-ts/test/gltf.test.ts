@@ -16,11 +16,15 @@ import {
 } from './glbFixture.js';
 
 import {
+  buildDanglingSkinFixture,
   buildDataUriFixture,
   buildMultiPrimitiveFixture,
+  buildTwoSkinsFixture,
   buildUnnormalizedWeightsFixture,
+  DANGLING_SKIN_ID,
   DATA_URI_ID,
   MULTI_PRIM_ID,
+  TWO_SKINS_ID,
   UNNORMALIZED_ID,
 } from './gltfVariants.js';
 
@@ -375,6 +379,42 @@ describe('Загрузчик glTF: меш из нескольких примит
     expect(fallback.alphaMode).toBe('opaque');
     expect(fallback.doubleSided).toBe(false);
     expect(fallback.baseColorTexture).toBeNull();
+  });
+});
+
+describe('Загрузчик glTF: несколько скинов в одном документе', () => {
+  it('JOINTS_0 разрешаются через скин СВОЕГО узла, а не через skins[0]', async () => {
+    const fixture = await buildTwoSkinsFixture();
+    const model = await loadFrom(
+      new MemoryAssetSource(
+        new Map([
+          [TWO_SKINS_ID, fixture.gltf],
+          ['gltf-mini/model.bin', fixture.bin],
+        ]),
+      ),
+      TWO_SKINS_ID,
+    );
+    // "Body" (skin 0, joints [2, 3]) — как в базовой фикстуре: сустав 0 = узел 2.
+    const body = model.meshes.find((m) => m.partId === 0)!;
+    // "Body2" (skin 1, joints [3, 2]): те же JOINTS_0 = 0, но сустав 0 ЕГО
+    // скина — узел 3. Прогон через skins[0] молча привязал бы вершины к узлу 2
+    // — тихо испорченный скининг вместо внятной модели (см. заголовок gltf.ts).
+    const second = model.meshes.find((m) => m.partId === 2)!;
+    for (let v = 0; v < 3; v++) {
+      expect(body.skinIndices[v * 4]).toBe(2);
+      expect(second.skinIndices[v * 4]).toBe(3);
+    }
+  });
+
+  it('ссылка узла на несуществующий skin — внятная ошибка, а не чужие суставы', async () => {
+    const fixture = await buildDanglingSkinFixture();
+    const source = new MemoryAssetSource(
+      new Map([
+        [DANGLING_SKIN_ID, fixture.gltf],
+        ['gltf-mini/model.bin', fixture.bin],
+      ]),
+    );
+    await expect(loadFrom(source, DANGLING_SKIN_ID)).rejects.toThrow('skin 7 не существует');
   });
 });
 

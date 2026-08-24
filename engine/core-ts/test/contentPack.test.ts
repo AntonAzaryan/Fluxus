@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { contentPackHash } from '../src/sim/contentPack.js';
 import { runScenario } from '../src/sim/scenario.js';
+import { NO_ENTITY } from '../src/types.js';
 import type { SceneDef } from '../src/sim/scene.js';
 
 /**
@@ -168,12 +169,33 @@ describe('хеш контент-пака (NET-17)', () => {
     expect(contentPackHash(withoutSlots as SceneDef)).toBe(contentPackHash({ ...BASE, modifierSlots: 4 }));
     expect(contentPackHash({ ...BASE, modifierSlots: 8 })).not.toBe(contentPackHash(BASE));
 
-    // Нулевое умолчание поля — то же самое, что его отсутствие: `spawn` читает
-    // `defaults?.[field] ?? 0`.
+    // Умолчание, равное нейтральному значению ТИПА поля, — то же самое, что его
+    // отсутствие: `spawn` и `addComponent` читают `defaults?.[field] ?? neutralValue(type)`,
+    // и у `i32`/`fixed` нейтральное — ноль (ECS-3).
     const zeroDefault = withScene({
       components: [{ ...BASE.components[0]!, defaults: { x: 0, y: 0 } }, BASE.components[1]!],
     });
     expect(contentPackHash(zeroDefault)).toBe(contentPackHash(BASE));
+  });
+
+  /**
+   * NET-17 (зонтичное правило): представление воспроизводит различения
+   * загрузчика. У `entity`-поля нейтральное значение — «ссылки нет» (`NO_ENTITY`,
+   * ECS-6), а ноль — валидный `EntityId` первого слота мира: `{other: 0}` и
+   * отсутствие умолчания загрузчик различает — обязан различать и хеш, иначе два
+   * участника с такими конфигами прошли бы сверку версий (NET-16) и разошлись
+   * на первом же рантайм-спавне компонента.
+   */
+  it('нулевое умолчание entity-поля значимо: ноль — ссылка, а не «нет ссылки» (NET-17, ECS-6)', () => {
+    const link = (defaults?: Record<string, number>): SceneDef =>
+      withScene({
+        components: [...BASE.components, { name: 'Link', fields: { other: 'entity' }, ...(defaults ? { defaults } : {}) }],
+      });
+
+    // `{other: 0}` — ссылка на нулевой слот, отсутствие — `NO_ENTITY`: правила разные.
+    expect(contentPackHash(link({ other: 0 }))).not.toBe(contentPackHash(link()));
+    // А явно выписанное «ссылки нет» и есть нейтральное значение типа.
+    expect(contentPackHash(link({ other: NO_ENTITY }))).toBe(contentPackHash(link()));
   });
 
   it('не различает пустые и отсутствующие prefabs/systems, но различает таблицу твинов', () => {

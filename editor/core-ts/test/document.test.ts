@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createEditorSession,
   DESCRIPTOR_SCOPE,
+  getAtPath,
   type EditorSession,
   type JsonValue,
 } from '../src/document/index.js';
@@ -214,6 +215,24 @@ describe('ED-29: обходных путей записи не остаётся'
     expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
     editor.applyOperation('document.setValue', { document: 'content/x.json', path: ['b'], value: 3 });
     expect(Object.keys(editor.documentValue('content/x.json') as object)).toEqual(['__proto__', 'b']);
+  });
+
+  it('имена из Object.prototype не читаются как значения, а их «удаление» правкой не считается', () => {
+    const editor = session();
+    openScene(editor);
+    // Унаследованный член — не значение документа: чтение по пути отдаёт
+    // отсутствие, а не функцию из цепочки прототипов под типом JsonValue.
+    expect(getAtPath(editor.documentValue(SCENE), ['toString'])).toBeUndefined();
+    expect(getAtPath(editor.documentValue(SCENE), ['constructor'])).toBeUndefined();
+    // Удаление ключа, которого в документе нет, — не правка: документ остаётся
+    // той же ссылкой, не помечается правленым, и пустой записи в истории нет
+    // (ED-21: «открыл — сохранил» обязано давать пустой дифф).
+    const before = editor.documentValue(SCENE);
+    const outcome = editor.applyOperation('document.removeValue', { document: SCENE, path: ['toString'] });
+    expect(outcome.recorded).toBe(false);
+    expect(editor.documentValue(SCENE)).toBe(before);
+    expect(editor.dirtyDocumentIds()).toEqual([]);
+    expect(editor.canUndo()).toBe(false);
   });
 });
 

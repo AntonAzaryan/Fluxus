@@ -630,9 +630,12 @@ export class MatchServer {
         return;
       case 'Bye':
         // Осознанный уход отличается от разрыва канала: игрок сообщил намерение,
-        // и ждать порога молчания незачем (NTR-6).
+        // и ждать порога молчания незачем (NTR-6). Намерение уйти есть только у
+        // участника состава: Bye наблюдателя или соединения без рукопожатия
+        // закрывает лишь само соединение — состав матча оно не занимает и
+        // завершать матч за игроков не может.
         this.disconnect(id);
-        if (this.matchPhase === 'running') this.end('player-left');
+        if (connection.phase === 'player' && this.matchPhase === 'running') this.end('player-left');
         return;
     }
   }

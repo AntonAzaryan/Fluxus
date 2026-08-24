@@ -19,6 +19,8 @@ import { encodeEmbeddedPng, EXTERNAL_TEXTURE_URI, JPEG_BYTES } from './glbFixtur
 export const DATA_URI_ID = 'gltf-mini/embedded-uri.gltf';
 export const MULTI_PRIM_ID = 'gltf-mini/multi-primitive.gltf';
 export const UNNORMALIZED_ID = 'gltf-mini/unnormalized-weights.gltf';
+export const TWO_SKINS_ID = 'gltf-mini/two-skins.gltf';
+export const DANGLING_SKIN_ID = 'gltf-mini/dangling-skin.gltf';
 
 /** Индексы в базовой фикстуре, на которые вариантам приходится ссылаться поимённо. */
 const PROP_MESH = 1;
@@ -91,6 +93,31 @@ export async function buildMultiPrimitiveFixture(): Promise<{ gltf: ArrayBuffer;
     ],
   };
   return { gltf: jsonBytes({ ...doc, meshes }), bin: toArrayBuffer(bin) };
+}
+
+/**
+ * Второй скин в том же документе: узел "Body2" повторяет "BodyMesh", но
+ * ссылается на СВОЙ скин с обратным порядком суставов ([3, 2] против [2, 3]) —
+ * так экспортёр отдаёт двух персонажей одной сценой. Те же индексы JOINTS_0
+ * обязаны разрешиться через скин своего узла, а не через `skins[0]`; матрицы
+ * inverseBind переиспользуются (в базовой фикстуре обе — единичные).
+ */
+export async function buildTwoSkinsFixture(): Promise<{ gltf: ArrayBuffer; bin: ArrayBuffer }> {
+  const { doc, bin } = await readBase();
+  const nodes = [...(doc.nodes as Json[])];
+  const armature = nodes[0]!;
+  nodes[0] = { ...armature, children: [...(armature.children as number[]), nodes.length] };
+  nodes.push({ name: 'Body2', mesh: BODY_MESH, skin: 1 });
+  const skins = [...(doc.skins as Json[]), { joints: [3, 2], inverseBindMatrices: 6 }];
+  return { gltf: jsonBytes({ ...doc, nodes, skins }), bin: toArrayBuffer(bin) };
+}
+
+/** Узел "Body" со ссылкой на скин, которого в документе нет. */
+export async function buildDanglingSkinFixture(): Promise<{ gltf: ArrayBuffer; bin: ArrayBuffer }> {
+  const { doc, bin } = await readBase();
+  const nodes = [...(doc.nodes as Json[])];
+  nodes[1] = { ...nodes[1]!, skin: 7 };
+  return { gltf: jsonBytes({ ...doc, nodes }), bin: toArrayBuffer(bin) };
 }
 
 /**

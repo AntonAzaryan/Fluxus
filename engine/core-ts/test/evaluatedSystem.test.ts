@@ -545,6 +545,44 @@ describe('валидация на регистрации (SYS-3)', () => {
     // Переменная итерации связана телом, а не аргументами самого обхода.
     expect(invalid(ordered({ limit: v('target') }))).toThrow(/переменная "target" не связана/);
   });
+
+  it('выражения-аргументы addTween, carveFloor и модификаторов проверяются на регистрации (SYS-3)', () => {
+    // Опечатка в имени поля внутри `from` — дефект текста системы, и падать он
+    // обязан на регистрации, а не на первом срабатывании ветки (SYS-3).
+    expect(
+      invalid({
+        do: [
+          {
+            addTween: {
+              entity: v('e'),
+              def: 0,
+              from: field(v('e'), 'Health', 'currnt'),
+              to: F(1),
+              duration: F(1),
+            },
+          },
+        ],
+      }),
+    ).toThrow(/нет поля "currnt"/);
+    // Необязательные числа addTween — те же выражения, что и обязательные.
+    expect(
+      invalid({
+        do: [{ addTween: { entity: v('e'), def: 0, from: 0, to: F(1), duration: F(1), easing: v('nope') } }],
+      }),
+    ).toThrow(/переменная "nope" не связана/);
+    expect(invalid({ do: [{ carveFloor: { at: { vec: [0, 0, 0] } } }] })).toThrow(
+      /оператор "vec": ожидалось аргументов 2, получено 3/,
+    );
+    expect(invalid({ do: [{ carveFloor: { at: { vec: [0, 0] }, radius: v('nope') } }] })).toThrow(
+      /переменная "nope" не связана/,
+    );
+    expect(
+      invalid({ do: [{ addModifier: { entity: v('e'), component: 'Health', id: { '**': [1, 2] }, value: F(1) } }] }),
+    ).toThrow(/неизвестный оператор "\*\*"/);
+    expect(
+      invalid({ do: [{ removeModifier: { entity: v('e'), component: 'Health', id: v('ghost') } }] }),
+    ).toThrow(/переменная "ghost" не связана/);
+  });
 });
 
 /**

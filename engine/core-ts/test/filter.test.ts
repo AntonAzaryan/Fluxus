@@ -14,6 +14,7 @@ import { RingHistory } from '../src/sim/history.js';
 import { createInputLog, createRewindController } from '../src/sim/rewind.js';
 import { teamBit, VisibilitySystem, VISIBILITY_COMPONENT, VISION_MODIFIER_COMPONENT } from '../src/systems/visibility.js';
 import { requireModifierList } from '../src/systems/modifiers.js';
+import { NO_ENTITY } from '../src/types.js';
 import type { EntityId, FieldOverrides, Snapshot } from '../src/types.js';
 
 const F = fixed.fromFloat;
@@ -185,6 +186,59 @@ describe('per-client фильтрация снапшота (NET-12)', () => {
     // Расхождение расхождением детерминизма не является: вход следующего тика —
     // канонический мир, и он остался нетронутым (ID-4, NET-12).
     expect(toPlain(h.world)).toEqual(canonical);
+  });
+
+  /**
+   * NET-12, обоснование («скрыть только в рендере = wallhack/ESP») и NET-18: в
+   * проекцию входят данные ECS только уцелевших сущностей. Штатное удаление
+   * гасит живость, маску и теги, но SoA-ячейки хранят прошлое сущности, а
+   * plain-форма сериализует массивы полей до `nextIndex` независимо от живости
+   * — без затирания позиция и статы скрытого врага читались бы модифицированным
+   * клиентом прямо из кадра на проводе.
+   */
+  it('данных скрытой сущности в plain-форме персонального снапшота нет физически (NET-12, NET-18)', () => {
+    const scene: SceneDef = {
+      ...SCENE,
+      // `entity`-поле — отдельный тип со своим нейтральным значением (ECS-6):
+      // проверяется, что затирание идёт по типу поля, а не нулём для всех.
+      components: [...SCENE.components, { name: 'Link', fields: { other: 'entity' } }],
+      prefabs: [
+        SCENE.prefabs![0]!,
+        {
+          ...SCENE.prefabs![1]!,
+          components: { ...SCENE.prefabs![1]!.components, Link: { other: NO_ENTITY } },
+        },
+        SCENE.prefabs![2]!,
+      ],
+    };
+    const { world, systems, modifiers, terrain } = loadScene(scene);
+    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+    const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers, terrain: terrain! };
+    const state = initialState(world, 1);
+    const watcher = spawn(world, 'Watcher', { Position: { x: F(0), y: F(0) } });
+    const enemy = spawn(world, 'Enemy', {
+      Position: { x: F(50), y: F(50) },
+      Link: { other: watcher },
+    });
+    tick(sim, state);
+
+    const slot = rawIndexOf(enemy);
+    const personal = toPlain(filterSnapshot(state, 0).world);
+    // Сущность вырезана штатным удалением (ID-3)…
+    expect(personal.alive[slot]).toBe(0);
+    // …и данных её у клиента нет ФИЗИЧЕСКИ: в ячейках — нейтральные значения
+    // типов, а не позиция, команда и ссылка скрытого врага.
+    expect(personal.components.Position!.x![slot]).toBe(0);
+    expect(personal.components.Position!.y![slot]).toBe(0);
+    expect(personal.components.Team!.id![slot]).toBe(0);
+    expect(personal.components.Link!.other![slot]).toBe(NO_ENTITY);
+
+    // В своём снапшоте данные врага целы: это вырезание, а не глобальная чистка.
+    const own = toPlain(filterSnapshot(state, 1).world);
+    expect(own.components.Position!.x![slot]).toBe(F(50));
+    expect(own.components.Link!.other![slot]).toBe(watcher);
+    // И канонический мир фильтр не тронул (NET-12, ID-4).
+    expect(getField(world, enemy, 'Position', 'x')).toBe(F(50));
   });
 
   it('команда вне 32 бит — ошибка (FOW-2)', () => {

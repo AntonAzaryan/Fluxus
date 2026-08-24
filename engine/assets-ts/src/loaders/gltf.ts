@@ -545,13 +545,18 @@ async function normalizeGltf(
   const nodes = doc.nodes;
   const parentOf = buildParentIndex(nodes);
   const restWorld = buildRestWorldMatrices(nodes, parentOf);
-  const skin = doc.skins?.[0];
 
   // ============================================================ A. Скелет
+  //
+  // Скинов в документе может быть несколько (два персонажа одним экспортом),
+  // поэтому inverseBind собираются со ВСЕХ; сустав, общий для двух скинов,
+  // оставляет матрицу первого — `NormalizedBone` держит одну матрицу на узел.
   const inverseBindByNode = new Map<number, Mat4>();
-  if (skin?.inverseBindMatrices != null) {
+  for (const skin of doc.skins ?? []) {
+    if (skin.inverseBindMatrices == null) continue;
     const ibm = readAccessor(doc, buffers, skin.inverseBindMatrices, false);
     skin.joints.forEach((nodeIndex, j) => {
+      if (inverseBindByNode.has(nodeIndex)) return;
       const raw = Float32Array.from(ibm.values.subarray(j * 16, j * 16 + 16));
       inverseBindByNode.set(nodeIndex, mat4Multiply(raw, MC_INVERSE));
     });
@@ -604,6 +609,15 @@ async function normalizeGltf(
     if (mesh == null) throw new Error(`glTF: mesh ${n.mesh} не существует (узел "${n.name}")`);
     if (mesh.primitives.length === 0) throw new Error(`glTF: mesh "${mesh.name}" без примитивов`);
 
+    // Индексы JOINTS_0 разрешаются через скин СВОЕГО узла (`node.skin`): при
+    // нескольких скинах joints первого молча перепривязали бы вершины чужого
+    // меша к посторонним узлам. Узел без объявленного скина сохраняет прежний
+    // допуск — первый скин документа; битая ссылка — внятная ошибка.
+    const nodeSkin = n.skin != null ? doc.skins?.[n.skin] : doc.skins?.[0];
+    if (n.skin != null && nodeSkin == null) {
+      throw new Error(`glTF: skin ${n.skin} не существует (узел "${n.name}")`);
+    }
+
     for (const prim of mesh.primitives) {
       if (prim.mode != null && prim.mode !== 4) {
         throw new Error(`glTF: mesh "${mesh.name}" — режим ${prim.mode} (нужен TRIANGLES=4)`);
@@ -625,7 +639,7 @@ async function normalizeGltf(
       if (skinned) {
         const joints = readAccessor(doc, buffers, prim.attributes.JOINTS_0!, false);
         const weights = readAccessor(doc, buffers, prim.attributes.WEIGHTS_0!, true);
-        const jointNodes = skin?.joints ?? [];
+        const jointNodes = nodeSkin?.joints ?? [];
         for (let v = 0; v < vcount; v++) {
           for (let k = 0; k < 4; k++) {
             const j = joints.values[v * 4 + k]!;

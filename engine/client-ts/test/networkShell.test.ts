@@ -38,8 +38,11 @@ import {
   MatchHost,
   MatchServer,
   buildMatchWorld,
+  clientCodec,
   contentPack,
   type MatchConfig,
+  type ServerMessage,
+  type Transport,
 } from '@game-mvp/net';
 import { Extractor, kindByTags, type RenderSubsystem, type TickView } from '@game-mvp/render';
 import { NetworkShell, RemoteHost, WorkerShell, type ShellPort } from '../src/index.js';
@@ -147,7 +150,9 @@ interface NetworkRig {
   systemRuns(): number;
 }
 
-function networkRig(options: { snapshotRate?: number } = {}): NetworkRig {
+function networkRig(
+  options: { snapshotRate?: number; wrapTransport?: (inner: Transport) => Transport } = {},
+): NetworkRig {
   const scene = matchScene();
   const pack = contentPack({ [SCENE_REF]: scene });
   const config = matchConfig(scene, pack.hash, options.snapshotRate);
@@ -206,7 +211,7 @@ function networkRig(options: { snapshotRate?: number } = {}): NetworkRig {
     mode: 'network',
     port: workerPort,
     client,
-    transport: hub.connect(),
+    transport: (options.wrapTransport ?? ((transport): Transport => transport))(hub.connect()),
     state: world.state,
     // Доставки идут в темпе рассылки снапшотов — знаменатель альфы главного
     // потока берётся оттуда же (SHELL-3).
@@ -464,6 +469,94 @@ describe('сетевой режим: тонкий клиент против ло
     // Кольцо своих кадров (NET-9) в сетевой сборке есть, и видно это по величине,
     // которую только оно и даёт: сколько ввода игрока унесла перемотка (NTR-10).
     expect(rig.client.metrics.inputsStranded).toBeGreaterThan(0);
+    expect(rig.systemRuns()).toBe(0);
+  });
+});
+
+describe('неупорядоченный канал: факты новой эпохи против состояния старой (NTR-2, NTR-16)', () => {
+  it('факты эпохи, обогнавшие её первый снапшот, ждут её состояния, а не проигрываются на картинке старой', async () => {
+    // Канал матча нормативно не упорядочен (NTR-2): `Events` новой эпохи может
+    // приехать раньше её первого снапшота, а снапшот старой — позже них обоих.
+    // Тик пачки новой эпохи с тиками старой ветви несравним (NTR-16): уложить
+    // его в `before` по номеру значило бы проиграть факты новой ветви на
+    // картинке старой эпохи, до snap'а разрыва, и съесть их. Тест играет роль
+    // канала: перехватывает байты и доставляет их в выбранном порядке.
+    const codec = clientCodec();
+    const held: Uint8Array[] = [];
+    let gate = false;
+    let deliver: ((bytes: Uint8Array) => void) | undefined;
+    const rig = networkRig({
+      wrapTransport: (inner) => ({
+        send: (bytes) => { inner.send(bytes); },
+        close: (reason) => { inner.close(reason); },
+        get isClosed() { return inner.isClosed; },
+        onMessage: (handler) => {
+          deliver = handler;
+          inner.onMessage((bytes) => {
+            if (gate) held.push(bytes);
+            else handler(bytes);
+          });
+        },
+        onClose: (handler) => { inner.onClose(handler); },
+      }),
+    });
+    // Выпускает из задержанного всё, что подходит под предикат, сохраняя порядок.
+    const release = (want: (message: ServerMessage) => boolean): number => {
+      let released = 0;
+      for (let i = 0; i < held.length; ) {
+        if (want(codec.decode(held[i]!))) {
+          deliver!(held[i]!);
+          held.splice(i, 1);
+          released++;
+        } else i++;
+      }
+      return released;
+    };
+    const stepShell = (): void => {
+      rig.clock.ms += 1000 / TICK_RATE;
+      rig.shell.step();
+    };
+    const pulseCount = (): number =>
+      rig.probe.events.filter((event) => event.type === PULSE_EVENT).length;
+
+    await playTicks(rig, 12);
+    const oldBranchTick = rig.state.tick;
+
+    // Дальше всё копится у «канала». Ещё один живой тик старой эпохи — его
+    // снапшот «задержится в пути»; затем перемотка на сервере и два живых тика
+    // новой эпохи по прежним номерам (NTR-16).
+    gate = true;
+    rig.matchHost.step();
+    await settle();
+    const target = 5;
+    rig.server.pause();
+    rig.server.beginRewind();
+    rig.server.seekTo(target);
+    rig.server.pause();
+    rig.server.resume();
+    rig.matchHost.flush();
+    rig.matchHost.step();
+    rig.matchHost.step();
+    await settle();
+
+    // Первыми доезжают `Events` новой эпохи — раньше любого её снапшота.
+    expect(release((message) => message.type === 'Events' && message.epoch > 0)).toBeGreaterThan(0);
+    stepShell();
+    const pulsesBefore = pulseCount();
+
+    // Следом — задержавшийся снапшот СТАРОЙ эпохи. Пачки новой эпохи обязаны
+    // остаться в ожидании её собственного состояния, а не уйти в представление
+    // фактами текущей: на картинке старой ветви их тики — чужие (NTR-16).
+    expect(release((message) => message.type === 'Snapshot' && message.epoch === 0)).toBe(1);
+    stepShell();
+    expect(rig.state.tick).toBe(oldBranchTick + 1);
+    expect(pulseCount()).toBe(pulsesBefore);
+
+    // Состояние новой эпохи доехало — мир перескочил на её ветвь.
+    release(() => true);
+    stepShell();
+    expect(rig.client.epoch).toBe(1);
+    expect(rig.state.tick).toBe(target + 2);
     expect(rig.systemRuns()).toBe(0);
   });
 });

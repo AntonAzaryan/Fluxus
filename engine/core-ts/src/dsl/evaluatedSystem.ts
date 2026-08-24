@@ -201,6 +201,21 @@ function checkAction(node: unknown, world: WorldState, scope: Scope, path: strin
       case 'value':
       case 'nearestTo':
       case 'limit':
+      case 'at':
+      case 'radius':
+      case 'def':
+      case 'from':
+      case 'to':
+      case 'duration':
+      case 'easing':
+      case 'ignoreTimeScale':
+      case 'id':
+        // Аргументы-выражения: шесть общих позиций плюс `at`/`radius` у
+        // carveFloor, числа addTween (`def`, `from`, `to`, `duration`,
+        // `easing`, `ignoreTimeScale`) и `id` модификаторов. Исполнитель
+        // вычисляет их все одним `evaluate` — значит и проверяет их этот же
+        // обход (SYS-3): опечатка в редко исполняемой ветке обязана упасть на
+        // регистрации, а не на первом срабатывании.
         checkExpression(value, world, scope, at);
         break;
       // Имя изменяемой привязки (ACT-4): вид связывания известен статически,
@@ -231,7 +246,8 @@ function checkAction(node: unknown, world: WorldState, scope: Scope, path: strin
       case 'subStream':
         literal(value, at);
         break;
-      // Аргумент вне конвенции содержимым не проверяется — предел, зафиксированный в SYS-3.
+      // Ключ вне конвенции не читает ни одно действие таблицы — содержимое
+      // такого аргумента исполнителю невидимо, и проверять в нём нечего.
     }
   }
 

@@ -21,8 +21,10 @@
  * Сверку версий делает транспорт, вызывая эту функцию.
  */
 import { fnv1a32, utf8Bytes } from '../math/rng.js';
+import { NO_ENTITY } from '../types.js';
 import { DEFAULT_MODIFIER_SLOTS } from '../systems/modifiers.js';
 import { canonicalJson } from './canonicalJson.js';
+import type { ComponentSchema } from '../types.js';
 import type { SystemDef } from '../dsl/evaluatedSystem.js';
 import type { SceneDef } from './scene.js';
 
@@ -42,7 +44,7 @@ export function contentPackForm(def: SceneDef): Record<string, unknown> {
     components: def.components.map((schema) => ({
       name: schema.name,
       fields: { ...schema.fields },
-      defaults: significantDefaults(schema.defaults),
+      defaults: significantDefaults(schema),
     })),
     // `prefabs` и `systems`: загрузчик берёт их через `?? []`, поэтому
     // отсутствующий список неотличим от пустого — и в хеше тоже.
@@ -102,13 +104,18 @@ export function contentPackHash(def: SceneDef): string {
 }
 
 /**
- * Умолчание, равное нулю, неотличимо от отсутствующего: `spawn` читает поле как
- * `defaults?.[field] ?? 0`, то есть ноль и есть значение по умолчанию.
+ * Незначимое умолчание — равное нейтральному значению ТИПА поля, и только оно:
+ * `spawn` и `addComponent` читают поле как `defaults?.[field] ?? neutralValue(type)`,
+ * где нейтральное — ноль у `i32`/`fixed` и «ссылки нет» (`NO_ENTITY`) у `entity`
+ * (ECS-3, ECS-6). Ноль у `entity`-поля загрузчик ОТЛИЧАЕТ от отсутствия
+ * умолчания — это валидный `EntityId` первого слота мира, а не «ссылки нет», —
+ * значит, отличает и представление (NET-17).
  */
-function significantDefaults(defaults: Readonly<Record<string, number>> | undefined): Record<string, number> {
+function significantDefaults(schema: ComponentSchema): Record<string, number> {
   const significant: Record<string, number> = {};
-  for (const [field, value] of Object.entries(defaults ?? {})) {
-    if (value !== 0) significant[field] = value;
+  for (const [field, value] of Object.entries(schema.defaults ?? {})) {
+    const neutral = schema.fields[field] === 'entity' ? NO_ENTITY : 0;
+    if (value !== neutral) significant[field] = value;
   }
   return significant;
 }

@@ -35,7 +35,7 @@
  * per-client baseline — оптимизация потом (NET-8), не сейчас.
  */
 import { query } from '../ecs/query.js';
-import { cloneWorld, destroy, getField, isAlive } from '../ecs/world.js';
+import { cloneWorld, destroy, getField, isAlive, scrubFields } from '../ecs/world.js';
 import { teamBit, VISIBILITY_COMPONENT } from '../systems/visibility.js';
 import { takeSnapshot } from './tick.js';
 import type { EntityId, GameEvent, SimulationState, Snapshot } from '../types.js';
@@ -130,7 +130,16 @@ export function filterSnapshot(
   // Мир без компонента `Visibility` (сцена без FoW) даёт пустой запрос — фильтр
   // тогда ничего не режет, и это верно: скрывать нечего.
   for (const entity of query(world, { all: [VISIBILITY_COMPONENT] })) {
-    if ((getField(world, entity, VISIBILITY_COMPONENT, 'visibleTo') & bit) === 0) destroy(world, entity);
+    if ((getField(world, entity, VISIBILITY_COMPONENT, 'visibleTo') & bit) === 0) {
+      destroy(world, entity);
+      // Штатного удаления мало: `destroy` гасит живость, маску и теги, а ячейки
+      // SoA-массивов хранят прошлое сущности и сериализуются в plain-форму
+      // независимо от живости. Данных о скрытой сущности у клиента нет
+      // ФИЗИЧЕСКИ (NET-12) — затираются и ячейки, иначе позиция, здоровье и
+      // сателлиты способностей читались бы модифицированным клиентом прямо из
+      // кадра на проводе (NET-18, wallhack).
+      scrubFields(world, entity);
+    }
   }
 
   // Видимость события считается по УЖЕ отфильтрованному миру: «сущность есть в
