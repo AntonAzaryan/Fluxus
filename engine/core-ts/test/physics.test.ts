@@ -1241,6 +1241,29 @@ describe('колоночный гейт пересечений (PHYS-14)', () =>
     expect(events[0]!.data).toEqual({ entity: bullet, other: target });
   });
 
+  it('и зеркально: неограниченная полоса ДВИЖУЩЕГОСЯ против ограниченной цели', () => {
+    // Умолчание PHYS-14 симметрично — «у ОДНОГО участника поле отсутствует», —
+    // и вторая его половина отдельна от первой: движущийся с неограниченной
+    // полосой обязан засчитывать пару, не спрашивая уровней вовсе. Реализация,
+    // прочитавшая такую полосу как единичную, дала бы здесь [0, 0] против
+    // [2, 2] и промолчала.
+    const h = harness(true, TERRAIN_STEEP);
+    const target = h.place('Column', { Position: { x: F(2.5), y: F(0.5) }, Collider: { height: 1 } });
+    const bullet = h.place('Flyer', {
+      Position: { x: F(0.5), y: F(0.5) },
+      Velocity: { x: F(3) },
+      Collider: { height: 0 },
+      LevelOverride: { level: 0 },
+    });
+    // Уровни РАЗНЫЕ: пара проходит умолчанием, а не совпадением полос.
+    expect(h.terrain!.levelOf(target)).toBe(2);
+    expect(h.terrain!.levelOf(bullet)).toBe(0);
+
+    const events = h.step();
+    expect(events.map((e) => e.type)).toEqual(['Overlap']);
+    expect(events[0]!.data).toEqual({ entity: bullet, other: target });
+  });
+
   it('коллайдер без поля высоты: сцена без поля гейта не знает вовсе', () => {
     // Та же геометрия, что и в «подножии обрыва», но поля высоты у коллайдера
     // нет в схеме — задать полосу нечем, и пара засчитывается при любых уровнях.
