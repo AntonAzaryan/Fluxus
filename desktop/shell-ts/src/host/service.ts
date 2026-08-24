@@ -181,28 +181,46 @@ export function createHostServices(options: HostServicesOptions): HostServices {
     if (!killed) live.child.kill('SIGKILL');
   };
 
+  const startFresh = async (id: BridgeServiceId): Promise<BridgeServiceState> => {
+    const declared = declaredOf(id);
+    const live = owned.get(id);
+    if (live?.alive === true) return stateOf(declared, true);
+    // Занятый адрес — не ошибка и не наш процесс: сервис, поднятый снаружи, и
+    // есть тот, к которому пойдёт приложение. Владение мы себе не
+    // приписываем, поэтому и не снимем его на закрытии окна.
+    if (await answers(declared.address)) {
+      owned.delete(id);
+      report(`сервис "${id}": по адресу ${declared.address} уже отвечают`);
+      return stateOf(declared, true);
+    }
+    const started = launch(declared);
+    owned.set(id, started);
+    try {
+      await untilReady(declared, started);
+    } catch (error) {
+      await kill(id, started);
+      throw error;
+    }
+    return stateOf(declared, true);
+  };
+
+  /** Запуски в полёте: параллельные вызовы `start` одного имени делят один. */
+  const starting = new Map<BridgeServiceId, Promise<BridgeServiceState>>();
+
   return {
     async start(id) {
-      const declared = declaredOf(id);
-      const live = owned.get(id);
-      if (live?.alive === true) return stateOf(declared, true);
-      // Занятый адрес — не ошибка и не наш процесс: сервис, поднятый снаружи, и
-      // есть тот, к которому пойдёт приложение. Владение мы себе не
-      // приписываем, поэтому и не снимем его на закрытии окна.
-      if (await answers(declared.address)) {
-        owned.delete(id);
-        report(`сервис "${id}": по адресу ${declared.address} уже отвечают`);
-        return stateOf(declared, true);
-      }
-      const started = launch(declared);
-      owned.set(id, started);
+      // Второй spawn того же сервиса осиротил бы первый процесс: запись в
+      // `owned` перезаписалась бы, и снять его не смогли бы ни stop(), ни
+      // закрытие сессии (DSK-7) — поэтому наложившиеся вызовы делят ОДИН запуск.
+      const inFlight = starting.get(id);
+      if (inFlight !== undefined) return inFlight;
+      const run = startFresh(id);
+      starting.set(id, run);
       try {
-        await untilReady(declared, started);
-      } catch (error) {
-        await kill(id, started);
-        throw error;
+        return await run;
+      } finally {
+        starting.delete(id);
       }
-      return stateOf(declared, true);
     },
     async stop(id) {
       const declared = declaredOf(id);

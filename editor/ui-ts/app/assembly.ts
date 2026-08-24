@@ -24,6 +24,7 @@ import {
   createEditorSession,
   createOperationRegistry,
   describeOperations,
+  isJsonObject,
   pairingGroups,
   registerBuiltinOperations,
   registerValidationRules,
@@ -105,10 +106,14 @@ export interface EditorAppOptions {
  * Открыт он ВСЕГДА — в том числе на сцене, у которой файла в дереве ещё нет
  * (`sceneProject.ts`): расстановка декораций и перевод prop → decoration
  * безусловны (ED-16, PRES-5). Записывать его при этом есть смысл не всегда, и
- * условия ровно два:
+ * условий ровно три:
  *
  * - в слое что-то есть — тогда файл и рождается правкой, а не «ради пустого
  *   слоя», чего PRES-1 не допускает;
+ * - в документе есть секция помимо декораций (свет, постобработка, туман —
+ *   PRES-2): она от отсутствующего файла ОТЛИЧИМА — без файла действуют
+ *   умолчания рендера, — и правка её обязана доехать до диска, иначе
+ *   сохранение отметило бы её сохранённой, не записав ничего (ED-21);
  * - файл уже лежит в дереве — тогда опустевший слой обязан доехать до диска,
  *   иначе удаление последней декорации потерялось бы.
  *
@@ -123,6 +128,8 @@ async function presentationGoesToDisk(
 ): Promise<boolean> {
   if (!session.isOpen(presentation)) return false;
   if (session.descriptors(presentation, DECORATION_LIST).length > 0) return true;
+  const value = session.documentValue(presentation);
+  if (isJsonObject(value) && Object.keys(value).some((key) => key !== 'decorations')) return true;
   return (await host.stat(presentation))?.kind === 'file';
 }
 

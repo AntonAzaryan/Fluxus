@@ -718,6 +718,32 @@ describe('PRES-1, ED-16: парный документ создаётся пра
     expect(session.dirtyDocumentIds()).toEqual([]);
   });
 
+  it('секция помимо декораций доезжает до диска, а не отмечается сохранённой молча (PRES-2)', async () => {
+    const { host, frame } = await opened();
+    // Правка без интерфейса (ED-29): секцию света кладёт первоклассная операция
+    // на всегда открытом парном документе. Декораций нет, файла в дереве нет —
+    // но свет от отсутствующего файла ОТЛИЧИМ (PRES-2: без файла действуют
+    // умолчания рендера), и неразличимость пустого списка на него не
+    // распространяется.
+    frame.session.applyOperation('document.setValue', {
+      document: PRESENTATION,
+      path: ['lighting'],
+      value: { ambient: { color: '#ffffff', intensity: 0.65 } },
+    });
+
+    runCommand(frame, SHELL_COMMANDS.save);
+    await settle();
+
+    // Правка стала файлом, а не пропала с меткой «сохранено» (ED-21): снять
+    // метку, ничего не записав, значило бы молча потерять секцию при закрытии.
+    expect(host.writes).toEqual([PRESENTATION]);
+    expect(JSON.parse(host.text(PRESENTATION))).toEqual({
+      lighting: { ambient: { color: '#ffffff', intensity: 0.65 } },
+    });
+    expect(host.windowState.unsaved).toBe(false);
+    expect(frame.session.dirtyDocumentIds()).toEqual([]);
+  });
+
   it('опустевший УЖЕ СУЩЕСТВУЮЩИЙ файл переписывается: удаление не теряется', async () => {
     const host = projectHost();
     host.set(PRESENTATION, JSON.stringify({ decorations: [{ visual: 'Hero', x: 1, y: 1 }] }));

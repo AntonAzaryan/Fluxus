@@ -234,13 +234,16 @@ export function decompose(matrix: readonly number[]): {
   const axisY = -(matrix[2] ?? 0);
   const angle = Math.atan2(axisY, axisX);
   const turns = angle / TURN_RADIANS;
+  // `[0, 1)`: отрицательный курс и курс «полтора оборота» — одно и то же
+  // направление, и документ обязан получить одно и то же число.
+  const wrapped = turns < 0 ? turns + 1 : turns >= 1 ? turns - 1 : turns;
   return {
     x: tx,
     y: -tz,
     elevation: ty,
-    // `[0, 1)`: отрицательный курс и курс «полтора оборота» — одно и то же
-    // направление, и документ обязан получить одно и то же число.
-    yaw: turns < 0 ? turns + 1 : turns >= 1 ? turns - 1 : turns,
+    // У курса тоньше пол-ulp сумма `turns + 1` округляется в double ровно в 1:
+    // полный оборот — тот же курс, что 0, и единица наружу не выходит.
+    yaw: wrapped === 1 ? 0 : wrapped,
     scale: sx,
     uniformScale: Math.abs(sx - sy) <= SCALE_TOLERANCE && Math.abs(sx - sz) <= SCALE_TOLERANCE,
     // Длины столбцов знака не несут, поэтому зеркало ими не ловится: у объекта

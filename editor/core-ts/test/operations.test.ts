@@ -110,6 +110,20 @@ describe('ED-29/ED-30: параметры проверяются по схеме
     ).toThrow(/неизвестный параметр "extra"/);
   });
 
+  it('неизвестный параметр с именем из Object.prototype — тот же отказ, а не «не заметили»', () => {
+    // `'toString' in схема` истинно через цепочку прототипов у любого объекта:
+    // проверка обязана смотреть собственные ключи схемы, иначе опечатка с таким
+    // именем прошла бы молча документом, в котором ничего не изменилось.
+    expect(() =>
+      editor.applyOperation('document.setValue', {
+        document: 'content/x.json',
+        path: ['a'],
+        value: 1,
+        toString: 2,
+      }),
+    ).toThrow(/неизвестный параметр "toString"/);
+  });
+
   it('несовпадение типа называет полученное значение', () => {
     try {
       editor.applyOperation('document.setValue', { document: 'content/x.json', path: 'a', value: 1 });

@@ -111,6 +111,49 @@ describe('bin/sim.mjs (CLI-1)', () => {
     expect(stderr).toContain('неизвестное имя "events"');
     expect(stderr).toContain('usage:');
   });
+
+  it('раздельная форма флагов работает наравне с `=` (CLI-11)', () => {
+    // `--trace full --trace-out <path>` — форма, обещанная описанием команд и
+    // принимаемая запускалками матча; молча превращаться в путь сценария она не
+    // должна: прогон с флагом до сценария завершался бы нулём БЕЗ трейса.
+    const dir = mkdtempSync(join(tmpdir(), 'sim-args-'));
+    const scenario = join(GOLDEN_DIR, 'collision-bounce.scenario.json');
+    const spacedOut = join(dir, 'spaced.jsonl');
+    const equalsOut = join(dir, 'equals.jsonl');
+
+    const spaced = runSim([scenario, '--trace', 'full', '--trace-select', 'event', '--trace-out', spacedOut]);
+    const equals = runSim([scenario, '--trace=full', '--trace-select=event', `--trace-out=${equalsOut}`]);
+    expect(spaced.status, spaced.stderr).toBe(0);
+    expect(spaced.stdout).toBe(equals.stdout);
+    expect(readFileSync(spacedOut, 'utf8')).toBe(readFileSync(equalsOut, 'utf8'));
+    expect(readFileSync(spacedOut, 'utf8')).not.toBe('');
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * Опечатка в аргументах — отказ с кодом 2, а не тихое умолчание (CLI-11): до
+   * правки любой не-флаговый аргумент молча становился путём сценария, и прогон
+   * `--trace-out t.jsonl scenario.json` завершался нулём без файла трейса —
+   * прогоном, делающим не то, что написано в команде.
+   */
+  const BAD_SIM_ARGS: Readonly<Record<string, readonly string[]>> = {
+    'незнакомый флаг': ['s.json', '--trqce=full'],
+    '--trace-out без значения': ['s.json', '--trace-out'],
+    '--trace-select, за которым флаг': ['s.json', '--trace-select', '--trace=full'],
+    'раздельный --trace с недопустимым уровнем': ['--trace', 's.json'],
+    'второй файл сценария': ['a.json', 'b.json'],
+  };
+
+  for (const [name, args] of Object.entries(BAD_SIM_ARGS)) {
+    it(`${name} — код 2 и подсказка`, () => {
+      const { status, stderr, stdout } = runSim(args);
+      expect(status).toBe(2);
+      expect(stderr).toContain('usage:');
+      // Ни байта документа CLI-3: отказ разбора не должен выглядеть прогоном.
+      expect(stdout).toBe('');
+    });
+  }
 });
 
 /**

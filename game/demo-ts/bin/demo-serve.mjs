@@ -106,6 +106,11 @@ const {
 } = await import('@game-mvp/net');
 const { BRAIN_KINDS, BotSlotFiller, PortConnections, attachBots, parseBotBehavior, parseBotProfile } =
   await import('@game-mvp/bot');
+// Слушающая сторона между матчами — модуль сборки, а не часть скрипта: окно
+// рестарта проверяется тестом (`test/standSession.test.ts`). Типы Node
+// стрипает сам (>=22.18, тот же приём, что у `bots-sync.mjs`), а динамическим
+// импортом — как и всё типизированное в этом файле: после установки хука.
+const { standSession } = await import('../app/standSession.ts');
 
 const match = readMatchFile(option('match', fromRepo('content/matches/duel.match.json')));
 const pack = contentPack(match.scenes);
@@ -206,91 +211,14 @@ function matchConfig() {
 // ------------------------------------------------- слушающая сторона стенда
 
 const sockets = webSocketTransportServer({ port });
-/** Соединения текущего матча: закрываются на рестарте, порт остаётся. */
-const live = new Set();
 /**
- * Претенденты на слоты: соединения, которые уже ЗАГОВОРИЛИ и не закрыты.
- *
- * Отсчёт до заморозки ростера идёт от них, а не от факта соединения (D2).
- * Разница не косметическая: открытый сокет, не сказавший ни слова, — это
- * сканер порта, недогрузившаяся вкладка или прокси, и заводить по нему матч
- * нельзя. Дедлайн, взведённый молчащим сокетом, сажает ботов в ОБА слота, матч
- * стартует бот против бота и занимает стенд, а пришедший следом человек
- * получает «матч занят» — стенд, выведенный из строя чужим подключением.
- *
- * Претендент опознаётся первым сообщением, а не разбором `Hello`: первое, что
- * шлёт участник, и есть предъявление версии (NTR-5), и второй разбор протокола
- * рядом с сервером обвязке не нужен — ей нужен факт «кто-то пришёл играть».
- * Отвергнутый (чужая версия, занятый слот) закрывается сервером и из множества
- * уходит сам.
+ * Слушающая сторона между матчами (`app/standSession.ts`): очередь окна
+ * рестарта, претенденты на слоты и «сессионный вид» для одного матча. Байты,
+ * пришедшие в окно рестарта, она копит и отдаёт следующему матчу — `Hello`
+ * клиент шлёт ровно один раз, и потерянный означал бы «сервер не ответил».
  */
-const claimants = new Set();
-/** Обработчик соединений текущего матча; между матчами — `undefined`. */
-let session;
-/** Пришедшие, пока матч не поднят: подключившийся раньше не теряется. */
-const waiting = [];
-/** Появился первый претендент этого матча — взвести дедлайн (D2). */
-let onClaimant = () => {};
-/** Претендентов не осталось — отсчёт начинать не с кого. */
-let onClaimantsGone = () => {};
-
-/**
- * Наблюдающая обёртка над соединением: считает, заговорил ли участник, и
- * убирает его при закрытии. Обёртка, а не подписка рядом, потому что и
- * `onMessage`, и `onClose` держат ровно по одному обработчику
- * (`BaseTransport`), и принадлежат они `MatchHost` — вклиниться можно только
- * между ним и настоящим транспортом. Байты обёртка не разбирает и не трогает.
- */
-function observed(inner) {
-  let spoke = false;
-  const wrapper = {
-    get isClosed() {
-      return inner.isClosed;
-    },
-    send: (bytes) => inner.send(bytes),
-    close: (reason) => inner.close(reason),
-    onMessage(handler) {
-      inner.onMessage((bytes) => {
-        if (!spoke) {
-          spoke = true;
-          claimants.add(wrapper);
-          onClaimant();
-        }
-        handler(bytes);
-      });
-    },
-    onClose(handler) {
-      inner.onClose((reason) => {
-        live.delete(wrapper);
-        if (claimants.delete(wrapper) && claimants.size === 0) onClaimantsGone();
-        handler(reason);
-      });
-    },
-  };
-  return wrapper;
-}
-
-sockets.onConnection((raw) => {
-  const transport = observed(raw);
-  live.add(transport);
-  if (session === undefined) waiting.push(transport);
-  else session(transport);
-});
-
-/** Вид слушающей стороны для ОДНОГО матча: его `close()` порт не отпускает. */
-const sessionServer = {
-  onConnection(next) {
-    session = next;
-    while (waiting.length > 0) next(waiting.shift());
-  },
-  close() {
-    session = undefined;
-    for (const transport of live) transport.close('match-restarted');
-    live.clear();
-    claimants.clear();
-    return Promise.resolve();
-  },
-};
+const listening = standSession();
+sockets.onConnection((raw) => { listening.accept(raw); });
 
 // ------------------------------------------------------------------- матчи
 
@@ -334,12 +262,12 @@ async function runMatch(number) {
   // участниками ЭТОГО матча — их раздаст конструктор `MatchHost` ниже. Те из
   // них, кто уже заговорил, — претенденты, и отсчёт для них идёт: без этого
   // одинокий клиент, попавший в окно рестарта, ждал бы бота вечно.
-  onClaimant = () => {};
-  onClaimantsGone = () => {};
+  listening.onClaimant(() => {});
+  listening.onClaimantsGone(() => {});
 
   const server = new MatchServer(matchConfig());
   const connections = new PortConnections();
-  const host = new MatchHost(server, mergeTransportServers(sessionServer, connections), { serializer });
+  const host = new MatchHost(server, mergeTransportServers(listening.sessionServer, connections), { serializer });
 
   let botWorker = null;
   let failure = null;
@@ -371,7 +299,7 @@ async function runMatch(number) {
     // (CLI-11, «Самодостаточность»), а бой ботов между собой и есть предмет
     // разбора. Первое условие остаётся: занятый людьми ростер не переигрывается
     // ботами ни в каком режиме.
-    frozen: () => server.phase !== 'lobby' || (!debugRun && claimants.size === 0),
+    frozen: () => server.phase !== 'lobby' || (!debugRun && listening.claimants.size === 0),
     // Слоты предлагаются ВСЕ: какой из них занят человеком, обвязка не знает —
     // сервер владельца слота не называет, и спрашивать его об этом значило бы
     // завести рядом с ним ветвление по типу участника (BOT-1). Занятый слот
@@ -425,20 +353,20 @@ async function runMatch(number) {
   });
 
   let filler = makeFiller();
-  onClaimant = () => { filler.arm(); };
+  listening.onClaimant(() => { filler.arm(); });
   // Ушёл последний претендент — отсчёт начинать не с кого: неистёкший дедлайн
   // отменяется вместе с заполнителем, а следующий пришедший заведёт свой.
   // Заполнитель однократен по построению (BOT-7: заморозка одна), поэтому
   // «отменить и завести заново» здесь и означает «отложить до людей».
-  onClaimantsGone = () => {
+  listening.onClaimantsGone(() => {
     if (filler.filled) return;
     filler.dispose();
     filler = makeFiller();
-  };
+  });
   // Претенденты, доставшиеся этому матчу из очереди рестарта, дедлайн уже
   // «нажали» — взводим его за них. Отладочный прогон взводит его сам: ждать
   // претендента-человека там некого, и пустой стенд ждал бы вечно.
-  if (claimants.size > 0 || debugRun) filler.arm();
+  if (listening.claimants.size > 0 || debugRun) filler.arm();
 
   process.stdout.write(`матч #${number}: жду участников на ws://127.0.0.1:${port}\n`);
   host.start();
@@ -470,8 +398,8 @@ async function runMatch(number) {
   });
 
   clearInterval(report);
-  onClaimant = () => {};
-  onClaimantsGone = () => {};
+  listening.onClaimant(() => {});
+  listening.onClaimantsGone(() => {});
   filler.dispose();
   // `host.stop()` закрывает слушающие стороны обоих транспортов — и вид сокета,
   // и портовые каналы ботов (`mergeTransportServers`), — поэтому второго

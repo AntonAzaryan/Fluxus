@@ -21,7 +21,7 @@
  * Отчёт человеку идёт в stderr, машинный JSON — в stdout и только он: смешать
  * их значило бы сломать мост первым же предупреждением.
  */
-import { resolve } from 'node:path';
+import { resolve, sep } from 'node:path';
 import {
   crossDocumentRules,
   engineValidationRules,
@@ -70,7 +70,9 @@ const USAGE = [
 export function contentPathOf(root: string, argument: string): ContentPath {
   const absolute = resolve(argument);
   const base = resolve(root);
-  if (absolute === base || !absolute.startsWith(`${base}/`)) {
+  // Разделитель — платформенный: на Windows `resolve` отдаёт пути с `\`, и
+  // литерал `/` отвергал бы любой законный путь внутри дерева.
+  if (absolute === base || !absolute.startsWith(`${base}${sep}`)) {
     throw new CliError(`путь "${argument}" лежит вне дерева контента "${base}"`);
   }
   return absolute.slice(base.length + 1).replaceAll('\\', '/');

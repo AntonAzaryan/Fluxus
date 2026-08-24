@@ -283,6 +283,45 @@ describe('BLND-12: дебаунс и сериализация прогонов',
     trigger.close();
   });
 
+  it('первый прогон идёт тем же насосом: событие во время него не даёт второго рядом', async () => {
+    const clock = fakeTimers();
+    const order: string[] = [];
+    const gate: { release: (() => void) | null } = { release: null };
+    const trigger = createWatchTrigger({
+      cycle: () => {
+        order.push('start');
+        return new Promise<void>((resolve) => {
+          gate.release = () => {
+            order.push('end');
+            resolve();
+          };
+        });
+      },
+      timers: clock.timers,
+    });
+
+    // Первый прогон — сразу, без дебаунса: watch начинается с импорта.
+    const primed = trigger.prime();
+    expect(order).toEqual(['start']);
+    expect(trigger.running).toBe(true);
+
+    // Blender сохранил, пока шёл первый импорт: второй прогон не пишет рядом
+    // с первым, а встаёт ровно одним следующим.
+    trigger.notify();
+    clock.flush();
+    expect(order).toEqual(['start']);
+
+    gate.release?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual(['start', 'end', 'start']);
+    gate.release?.();
+    await primed;
+    await trigger.settled();
+
+    expect(order).toEqual(['start', 'end', 'start', 'end']);
+    trigger.close();
+  });
+
   it('после закрытия событие ничего не планирует', () => {
     const clock = fakeTimers();
     let runs = 0;

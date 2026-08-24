@@ -290,6 +290,45 @@ describe('REND-16: превью кисти и сетка уходят набор
     expect(brush.overlays().map((item) => item.kind)).toEqual(['cells']);
   });
 
+  it('превью при несовпавших сетках не сворачивается в чужую строку террейна (ED-11, ASSET-7)', () => {
+    // Карта кривизны бывает другого размера, чем террейн, — то самое
+    // предупреждённое состояние (CURVATURE_GRID_RULE). Клетки превью обрезает
+    // сетка правимого слоя, а индексы наложения — индексы сетки террейна
+    // (REND-15): клетка с x за шириной террейна, свёрнутая его шагом, попала
+    // бы в строку ниже, и автор видел бы кисть не там, где она покрасит.
+    const session = paintSession();
+    const brush = createBrushTool({ session });
+    const side = PAINT_SIDE;
+    brush.attach({
+      picker: cellPicker(side),
+      terrain: {
+        target: { document: PAINT_IDS.config, path: TERRAIN_ASSET },
+        grid: { width: side, height: side },
+      },
+      curvature: {
+        target: { document: PAINT_IDS.curvature, path: [] },
+        grid: { width: side + 2, height: side + 2 },
+      },
+    });
+    brush.setLayer('curvature');
+    brush.setSize(3);
+    brush.pointer(at('move', side - 1, 2));
+
+    const cells = brush.overlays().find((item) => item.kind === 'cells');
+    const indices = cells?.kind === 'cells' ? cells.cells : [];
+    // Столбец x = side лежит на карте кривизны, но не на террейне: в наложение
+    // он не попадает вовсе — вместо девяти клеток квадрата подсвечены шесть,
+    // и все они в строках наведения, а не в соседних.
+    expect(indices).toEqual([
+      1 * side + (side - 2),
+      1 * side + (side - 1),
+      2 * side + (side - 2),
+      2 * side + (side - 1),
+      3 * side + (side - 2),
+      3 * side + (side - 1),
+    ]);
+  });
+
   it('курсор за ареной гасит превью, а не оставляет его на прежней клетке', () => {
     const { brush } = painter();
     brush.pointer(at('move', 2, 2));

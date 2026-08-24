@@ -6,10 +6,20 @@
  * хост, у которого есть процессы и порты. Разделение то же, что у корней:
  * контракт в сьюте, файловая механика — в своих тестах.
  */
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { normalizeAppProfile } from '../src/bridge/profile.js';
 import { createHostServices, endpointOf, serviceArgs } from '../src/host/service.js';
-import { DEAD_SERVICE_SCRIPT, freePort, SERVICE_SCRIPT, squat } from './support.js';
+import {
+  DEAD_SERVICE_SCRIPT,
+  dropTree,
+  freePort,
+  makeTree,
+  MARKED_SERVICE_SCRIPT,
+  SERVICE_SCRIPT,
+  squat,
+} from './support.js';
 
 const cleanups: (() => Promise<void>)[] = [];
 
@@ -17,7 +27,11 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-function profileWith(port: number, script = SERVICE_SCRIPT): ReturnType<typeof normalizeAppProfile> {
+function profileWith(
+  port: number,
+  script = SERVICE_SCRIPT,
+  args: readonly string[] = ['--port', '{port}', '--host', '{host}'],
+): ReturnType<typeof normalizeAppProfile> {
   return normalizeAppProfile(
     {
       id: 'game',
@@ -29,7 +43,7 @@ function profileWith(port: number, script = SERVICE_SCRIPT): ReturnType<typeof n
         {
           id: 'stand',
           script,
-          args: ['--port', '{port}', '--host', '{host}'],
+          args: [...args],
           address: `tcp://127.0.0.1:${String(port)}`,
         },
       ],
@@ -100,5 +114,28 @@ describe('жизненный цикл объявленного сервиса (D
   it('незнакомое имя не доходит до запуска', async () => {
     const services = createHostServices({ profile: profileWith(await freePort()) });
     await expect(services.start('другой')).rejects.toThrow('не объявлен');
+  });
+
+  it('наложившиеся запуски делят один процесс, и сессия его снимает (DSK-7)', async () => {
+    const port = await freePort();
+    const tree = await makeTree();
+    cleanups.push(() => dropTree(tree));
+    const marks = join(tree, 'starts.log');
+    const services = createHostServices({
+      profile: profileWith(port, MARKED_SERVICE_SCRIPT, ['--port', '{port}', '--mark', marks]),
+    });
+    cleanups.push(() => services.closeAll());
+
+    // Страница вправе позвать мост дважды, не дождавшись первого ответа: ручки
+    // IPC исполняются параллельно. Второй spawn осиротил бы первый процесс —
+    // перезаписанную запись в `owned` закрытие сессии уже не сняло бы.
+    const [first, second] = await Promise.all([services.start('stand'), services.start('stand')]);
+    expect(first.running).toBe(true);
+    expect(second.running).toBe(true);
+    expect(services.owned()).toBe(1);
+    expect((await readFile(marks, 'utf8')).trim().split('\n')).toHaveLength(1);
+
+    await services.closeAll();
+    expect((await services.state('stand')).running).toBe(false);
   });
 });

@@ -51,6 +51,14 @@
  * деревом. Поэтому порядок такой — сначала полная проверка, потом запись;
  * сорванная посреди записи среда оставит частично записанный проект, и это
  * свойство среды, а не выбор редактора.
+ *
+ * Асинхронна при этом только среда, а не состав записи: значения записываемых
+ * документов снимаются до первого `await`, и проверка с записью видят ОДНО
+ * состояние сессии. Правка, успевшая прийти за время сетевой записи, на диск не
+ * попадает и сохранённой не объявляется — иначе записалось бы значение, которого
+ * блокирующая проверка не видела (ED-21), — а сохранение, начатое посреди
+ * незакрытого взаимодействия, отвергается до записи: промежуточное состояние
+ * мазка на диск не попадает (ED-18).
  */
 import type { DocumentId, DocumentKind, EditorDocument, EditorSession, JsonValue } from '../document/index.js';
 import type { ContentTreeHost } from '../host/index.js';
@@ -211,8 +219,24 @@ async function onDiskValue(host: ContentTreeHost, id: DocumentId): Promise<JsonV
   }
 }
 
+/**
+ * Отказ сохранению, начатому посреди незакрытого взаимодействия: значения
+ * документов провизорны, и снимок зафиксировал бы состояние, которое `cancel`
+ * через мгновение отменит, — тот же запрет, которым `markSaved` сессии
+ * отвергает отметку посреди мазка (ED-18, ED-21). Отдельной функцией не ради
+ * переиспользования: `session.pending` — живой геттер, и сужение типа после
+ * throw внутри `saveDocuments` соврало бы о нём за первым же `await`.
+ */
+function refuseDuringInteraction(session: EditorSession): void {
+  if (session.pending) {
+    throw new Error('сохранить документы во время незакрытого взаимодействия нельзя');
+  }
+}
+
 export async function saveDocuments(request: SaveRequest): Promise<SaveResult> {
   const { session, host } = request;
+  // Отказ — до единой записи и до снимка значений.
+  refuseDuringInteraction(session);
   const groups = request.groups ?? [];
   const rules = request.rules;
 
@@ -224,6 +248,12 @@ export async function saveDocuments(request: SaveRequest): Promise<SaveResult> {
   // Порядок записи — порядок открытия документов в сессии: детерминированный и
   // не зависящий от того, в каком порядке вызывающий перечислил документы.
   const order = session.documentIds().filter((id) => writeSet.has(id));
+
+  // Снимок записываемых значений — до первого `await`. Сессия между `await`
+  // принимает правки, и значение, перечитанное в фазе записи, могло бы уже
+  // нести то, чего блокирующая проверка не видела: пишется и проверяется ровно
+  // этот снимок, а не «текущее на момент записи» (ED-21).
+  const values = new Map(order.map((id) => [id, session.documentValue(id)] as const));
 
   const found: ValidationIssue[] = [];
   const blocking: ValidationIssue[] = [];
@@ -261,7 +291,9 @@ export async function saveDocuments(request: SaveRequest): Promise<SaveResult> {
       const document = session.document(id);
       const disk = await onDiskValue(host, id);
       if (disk !== undefined) before.push(asTreeState(document, disk));
-      const next = writeSet.has(id) ? document.value : disk;
+      // Состояние «после записи» строится из того же снимка, который уйдёт на
+      // диск: значение сессии к этому месту могло уже уехать правкой.
+      const next = writeSet.has(id) ? values.get(id) : disk;
       if (next !== undefined) after.push(asTreeState(document, next));
     }
 
@@ -292,8 +324,13 @@ export async function saveDocuments(request: SaveRequest): Promise<SaveResult> {
 
   const written: DocumentId[] = [];
   for (const id of order) {
-    await host.write(id, encodeDocument(session.documentValue(id)));
-    session.markSaved(id);
+    const value = values.get(id)!;
+    await host.write(id, encodeDocument(value));
+    // Правка или взаимодействие, пришедшие за время асинхронной записи,
+    // сохранёнными не объявляются: на диске — проверенный снимок, в сессии —
+    // более новое состояние, и оно остаётся несохранённым до следующего
+    // сохранения. `markSaved` посреди мазка к тому же запрещён самой сессией.
+    if (!session.pending && session.documentValue(id) === value) session.markSaved(id);
     written.push(id);
   }
 

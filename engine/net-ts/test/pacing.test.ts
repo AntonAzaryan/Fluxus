@@ -203,6 +203,33 @@ describe('молчание слота', () => {
     expect(server.drain()[0]!.message).toMatchObject({ type: 'End', reason: 'player-left' });
   });
 
+  it('Bye наблюдателя матч не завершает: состава он не занимает (NTR-6, NTR-9)', () => {
+    const config = duelConfig({ silenceTicks: 1000, allowObserver: true });
+    const { server } = harness(config);
+    server.connect(1);
+    server.receive(1, hello('p1', config.version));
+    server.connect(2);
+    server.receive(2, hello('p2', config.version));
+    server.connect(3);
+    server.receive(3, hello('spectator', config.version, true));
+    server.drain();
+    expect(server.phase).toBe('running');
+
+    server.receive(3, { type: 'Bye', reason: 'насмотрелся' });
+    server.advance();
+
+    expect(server.phase).toBe('running');
+  });
+
+  it('Bye соединения без рукопожатия матч не завершает (NTR-6)', () => {
+    const { server } = running({ silenceTicks: 1000 });
+    server.connect(3);
+    server.receive(3, { type: 'Bye', reason: 'чужой' });
+    server.advance();
+
+    expect(server.phase).toBe('running');
+  });
+
   it('разрыв соединения матч не останавливает', () => {
     const { server } = running({ silenceTicks: 1000 });
     server.disconnect(1);

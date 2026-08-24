@@ -26,7 +26,7 @@ import {
   type SimulationState,
 } from '@game-mvp/core';
 import { REWIND_REQUEST_EVENT } from '@game-mvp/net';
-import { WorkerShell, type ShellHistory } from '../src/index.js';
+import { WorkerShell, type ControlMessage, type ShellHistory } from '../src/index.js';
 import { PLAYER_ID, TICK_SECONDS, makeExtractor, sceneDef, syncPortPair } from './fixtures.js';
 
 const ULT_BUTTON = 7;
@@ -130,6 +130,8 @@ interface Rig {
   send(buttons: number): void;
   run(ticks: number, buttons?: number): void;
   holdUntilResume(buttons: number, maxTicks?: number): void;
+  /** Команда управления из HUD — тем же каналом, что ввод (SHELL-6). */
+  control(action: ControlMessage['action'], tick?: number): void;
 }
 
 function localRig(options: RigOptions = {}): Rig {
@@ -186,6 +188,9 @@ function localRig(options: RigOptions = {}): Rig {
   const send = (buttons: number): void => {
     mainPort.post({ t: 'input', move: { x: 0, y: 0 }, aimDir: 0, buttons });
   };
+  const control = (action: ControlMessage['action'], tick?: number): void => {
+    mainPort.post({ t: 'control', action, ...(tick !== undefined ? { tick } : {}) });
+  };
   const run = (ticks: number, buttons = 0): void => {
     for (let i = 0; i < ticks; i++) {
       send(buttons);
@@ -199,7 +204,7 @@ function localRig(options: RigOptions = {}): Rig {
     }
   };
 
-  return { shell, state, history, dropped, send, run, holdUntilResume };
+  return { shell, state, history, dropped, send, run, holdUntilResume, control };
 }
 
 /** Кнопки, доехавшие до мира: то, что `InputSystem` положила на сущность игрока. */
@@ -368,5 +373,75 @@ describe('локальный режим: дренаж запроса и веде
     expect(rig.state.mode).toBe('Running');
     expect(rig.state.tick).toBe(resumed + 3);
     expect(rig.dropped.length).toBeGreaterThan(0);
+  });
+});
+
+describe('команды управления из HUD (SHELL-6, WSM-5)', () => {
+  it('seekTo командой управления обрезает стёртую ветвь истории, как шаг скраба (REW-13)', () => {
+    const rig = localRig();
+    rig.run(20);
+    rig.control('pause');
+    rig.control('beginRewind');
+
+    rig.control('seekTo', 15);
+
+    expect(rig.state.mode).toBe('Rewinding');
+    expect(rig.state.tick).toBe(15);
+    // Стёртая ветвь ушла из истории тем же вызовом, что у шага скраба: без
+    // обрезки в буфере лежали бы два снапшота на один номер тика — стёртой
+    // ветви и живой, — и следующая перемотка восстановила бы ту, в которой
+    // мира уже нет (контракт `ShellHistory`).
+    expect(rig.dropped).toEqual([15]);
+
+    // Скраб ВПЕРЁД внутри одной перемотки законен (REW-7): тик 18 исполнен и
+    // лежит в каноническом логе — граница у seekTo не текущий тик, а последний
+    // исполненный живой.
+    rig.control('seekTo', 18);
+    expect(rig.state.tick).toBe(18);
+    expect(rig.dropped).toEqual([15, 18]);
+  });
+
+  it('seekTo вперёд исполненного тика отбрасывается: реплей по пустому логу — не состояние (REW-7)', () => {
+    const rig = localRig();
+    rig.run(20);
+    rig.control('pause');
+    rig.control('beginRewind');
+
+    rig.control('seekTo', 100);
+
+    // Мир не «доигран» реплеем по пустому логу вводов до тика, которого нет и
+    // не будет в каноническом логе (там же смысл границы у `MatchServer.seekTo`):
+    // команда отброшена целиком, история не тронута.
+    expect(rig.state.tick).toBe(20);
+    expect(rig.state.mode).toBe('Rewinding');
+    expect(rig.dropped).toEqual([]);
+  });
+
+  it('команда, недопустимая для текущего режима, отбрасывается, а не роняет воркер (WSM-2, REW-8)', () => {
+    const rig = localRig();
+    rig.run(5);
+
+    // Канал управления асинхронен: main мог отправить команду до того, как
+    // узнал о смене режима. Ядро на такие переходы бросает (WSM-2, WSM-5,
+    // REW-8) — до обработчика сообщений воркера бросок долетать не должен.
+    expect(() => {
+      rig.control('resume'); // выход в Running не из Paused
+      rig.control('seekTo', 2); // seekTo вне Rewinding
+      rig.control('beginRewind'); // вход в Rewinding не из Paused
+    }).not.toThrow();
+    expect(rig.state.mode).toBe('Running');
+    expect(rig.state.tick).toBe(5);
+
+    rig.control('pause');
+    rig.control('pause'); // двойной клик паузы идемпотентен
+    expect(rig.state.mode).toBe('Paused');
+    rig.control('beginRewind');
+    // Перемотка внутри перемотки (REW-8) — отброшена, а не исключение.
+    expect(() => { rig.control('beginRewind'); }).not.toThrow();
+    expect(rig.state.mode).toBe('Rewinding');
+
+    rig.control('pause');
+    rig.control('resume');
+    expect(rig.state.mode).toBe('Running');
   });
 });

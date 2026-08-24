@@ -16,7 +16,10 @@ import { OperationError, type AuthoringOperation, type OperationParams, type Ope
 
 export function checkParams(operation: AuthoringOperation, params: OperationParams): void {
   for (const name of Object.keys(params)) {
-    if (!(name in operation.params)) {
+    // Собственные ключи схемы, а не цепочка прототипов: `'toString' in …`
+    // истинно для любого объекта, и опечатка с именем из Object.prototype
+    // прошла бы молча — вопреки правилу «лишний параметр — отказ».
+    if (!Object.hasOwn(operation.params, name)) {
       throw new OperationError(operation.id, `неизвестный параметр "${name}"`, { param: name });
     }
   }

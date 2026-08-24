@@ -23,7 +23,14 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { SceneDef } from '@game-mvp/core';
 import { MatchServer, contentPack, type ClientMessage, type MatchConfig } from '@game-mvp/net';
-import { matchConfigOf, readMatchFile } from '@game-mvp/net/bin/matchFile.mjs';
+import { MATCH_DOCUMENT_FIELDS, matchConfigOf, readMatchFile } from '@game-mvp/net/bin/matchFile.mjs';
+import {
+  DEMO_DOCUMENT_FIELDS,
+  DEMO_MATCH,
+  demoContentPack,
+  demoMatchConfig,
+  demoMatchConfigOf,
+} from '../app/match.js';
 import { ACTION_BITS } from '../app/sim.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
@@ -126,6 +133,40 @@ function castUlt(m: ReturnType<typeof standMatch>): boolean {
   }
   return m.server.mode !== 'Running';
 }
+
+describe('раскладка документа матча одна на обе сборки (NTR-14, NTR-5)', () => {
+  it('конфиг вкладки совпадает с конфигом запускалок на том же документе', () => {
+    const pack = demoContentPack();
+    expect(demoMatchConfig(pack)).toEqual(matchConfigOf(DEMO_MATCH, pack));
+  });
+
+  it('teams, inputWindow и eventRepeat доезжают до сервера и во вкладке (РЕГРЕССИЯ)', () => {
+    // РЕГРЕССИЯ: раскладка вкладки перечисляла поля поимённо и молча теряла
+    // эти три секции — стенд их вёз (`matchConfigOf`), а страница нет, и один
+    // документ матча поднимал два разных матча в зависимости от режима:
+    // команды и туман войны (NET-12), окно ввода (NTR-7), повтор событий
+    // (NTR-15). Тот же фасад дефекта, что и потерянная секция `rewind` ниже.
+    const document = { ...DEMO_MATCH, teams: [0, 0], inputWindow: 8, eventRepeat: 1 };
+    const pack = demoContentPack();
+    const config = demoMatchConfigOf(document, pack);
+    expect(config.teams).toEqual([0, 0]);
+    expect(config.inputWindow).toBe(8);
+    expect(config.eventRepeat).toBe(1);
+    expect(config).toEqual(matchConfigOf(document, pack));
+  });
+
+  it('опечатанная секция роняет сборку вкладки тем же отказом, что у запускалок', () => {
+    const document = { ...DEMO_MATCH, rewnd: { interval: 30 } };
+    expect(() => demoMatchConfigOf(document, demoContentPack())).toThrow(/"rewnd"/);
+    expect(() => matchConfigOf(document, demoContentPack())).toThrow(/"rewnd"/);
+  });
+
+  it('список полей документа вкладки — тот же, что у запускалок', () => {
+    // Совпадение списков держит тип кортежа (`npm run typecheck`); здесь —
+    // что объявление типов (`matchFile.d.mts`) не разошлось с `matchFile.mjs`.
+    expect([...DEMO_DOCUMENT_FIELDS]).toEqual([...MATCH_DOCUMENT_FIELDS]);
+  });
+});
 
 describe('стенд демо: ульта отката доезжает до сервера (NET-11, NTR-14)', () => {
   it('раскладка документа матча несёт секцию rewind дословно', () => {

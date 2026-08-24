@@ -73,17 +73,29 @@ export class RingHistory implements HistoryProvider {
    * Ближайший снапшот с тиком ≤ `tick`; запрос глубже буфера упирается в самый
    * старый доступный (REW-1).
    *
+   * Равный тик — не ничья: после перемотки живые тики записываются заново под
+   * теми же номерами (NTR-16), и буфер без усечения держит два снапшота одного
+   * тика — стёртой ветви и живой. Побеждает записанный ПОЗЖЕ (`>=` при обходе
+   * от старого слота к новому): стёртая ветвь отброшена (REW-13), и
+   * восстановление из неё молча подменило бы мир состоянием, в котором
+   * симуляция уже не находится.
+   *
    * ponytail: линейный скан по буферу. При ориентире SNAP-4 (порядка 14
    * снапшотов на ульту) бинарный поиск не окупает лишнего кода; менять — когда
    * появится провайдер с сотнями слотов.
    */
   nearest(tick: number): Snapshot | undefined {
     let best: Snapshot | undefined;
+    // Дно буфера — минимальный ТИК, а не самый старый слот: после перемотки
+    // порядок записи перестаёт совпадать с порядком тиков, и старейший слот
+    // может держать снапшот стёртой ветви с тиком выше живых.
+    let floor: Snapshot | undefined;
     for (let i = 0; i < this.size; i++) {
       const snapshot = this.at(i)!;
-      if (snapshot.tick <= tick && (best === undefined || snapshot.tick > best.tick)) best = snapshot;
+      if (snapshot.tick <= tick && (best === undefined || snapshot.tick >= best.tick)) best = snapshot;
+      if (floor === undefined || snapshot.tick <= floor.tick) floor = snapshot;
     }
-    return best ?? this.oldest();
+    return best ?? floor;
   }
 
   private oldest(): Snapshot | undefined {

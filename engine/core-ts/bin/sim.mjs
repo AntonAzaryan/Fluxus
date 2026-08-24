@@ -42,16 +42,54 @@ let file;
 let trace = 'off';
 let traceOut;
 let traceSelect;
+let parseError;
 
-for (const arg of args) {
+/** Значение флага, взятого раздельной формой: соседний аргумент — не флаг. */
+const valueAt = (index) => {
+  const value = args[index];
+  if (value === undefined || value.startsWith('--')) return undefined;
+  return value;
+};
+
+// Каждый флаг принимается ОБЕИМИ формами — `--k=v` и `--k v` (CLI-11): обе
+// напечатаны в описании команд, и форма, которая молча превращается в путь
+// сценария, — не отказ, а прогон, делающий не то, что написано в команде.
+// Незнакомый флаг и лишний позиционный аргумент — отказ с кодом 2, как у
+// `bin/journal.mjs`: опечатка иначе читалась бы как ENOENT либо как прогон
+// без трейса, неотличимый от законного.
+for (let i = 0; i < args.length && parseError === undefined; i++) {
+  const arg = args[i];
   if (arg.startsWith('--trace-out=')) traceOut = arg.slice('--trace-out='.length);
   else if (arg.startsWith('--trace-select=')) traceSelect = arg.slice('--trace-select='.length);
   else if (arg.startsWith('--trace=')) trace = arg.slice('--trace='.length);
-  else if (arg === '--trace') trace = 'full';
+  else if (arg === '--trace-out' || arg === '--trace-select') {
+    const value = valueAt(i + 1);
+    if (value === undefined) parseError = `флаг ${arg} назван без значения`;
+    else if (arg === '--trace-out') traceOut = value;
+    else traceSelect = value;
+    i++;
+  } else if (arg === '--trace') {
+    // Голая форма — уровень `full`; раздельная (`--trace systems`) забирает
+    // соседний аргумент, как `option()` у запускалок матча (CLI-11).
+    const value = valueAt(i + 1);
+    if (value === undefined) trace = 'full';
+    else {
+      trace = value;
+      i++;
+    }
+  } else if (arg.startsWith('--')) parseError = `неизвестный флаг ${arg}`;
+  else if (file !== undefined) parseError = `лишний аргумент "${arg}": файл сценария один`;
   else file = arg;
 }
 
-if (file === undefined || !TRACE_LEVELS.includes(trace)) {
+if (parseError === undefined && !TRACE_LEVELS.includes(trace)) {
+  parseError = `неизвестный уровень трейса "${trace}"; известные: ${TRACE_LEVELS.join(', ')}`;
+}
+if (parseError !== undefined) {
+  process.stderr.write(`${parseError}\n${USAGE}`);
+  process.exit(2);
+}
+if (file === undefined) {
   process.stderr.write(USAGE);
   process.exit(2);
 }
