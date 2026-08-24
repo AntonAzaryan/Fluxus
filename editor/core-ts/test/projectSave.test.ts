@@ -10,9 +10,15 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { createEditorSession, getAtPath, isJsonArray, type EditorSession } from '../src/document/index.js';
+import {
+  createEditorSession,
+  getAtPath,
+  isJsonArray,
+  type EditorSession,
+  type OperationTransaction,
+} from '../src/document/index.js';
 import { createOperationRegistry, registerBuiltinOperations } from '../src/operations/index.js';
-import { createMemoryHost, type MemoryHost } from '../src/host/index.js';
+import { createMemoryHost, type ContentTreeHost, type MemoryHost } from '../src/host/index.js';
 import {
   canonicalizeDocument,
   decodeDocument,
@@ -744,5 +750,111 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
     // Четыре пары «правило × документ»: сцена держит два междокументных
     // правила, манифест — два своих (пара ED-19 и имя состояния CAM-6).
     expect(validator.lastRun).toEqual({ executed: 0, reused: 4 });
+  });
+});
+
+/**
+ * Запись асинхронна (у веб-среды она сетевая), а сессия между `await`
+ * продолжает принимать правки. ED-21 при этом требует, чтобы на диск ушло ровно
+ * то состояние, которое прошло блокирующую проверку, — поэтому сохранение
+ * снимает значения до первого `await` и пишет снимок, а не «текущее на момент
+ * записи».
+ */
+describe('ED-21, ED-18: сохранение не гонится с параллельной правкой', () => {
+  const A = 'docs/a.json';
+  const B = 'docs/b.json';
+
+  async function opened(): Promise<{ host: MemoryHost; session: EditorSession }> {
+    const host = createMemoryHost({
+      files: { [A]: encodeDocument({ title: 'a' }), [B]: encodeDocument({ title: 'b' }) },
+    });
+    const session = newSession();
+    await openDocumentFromHost(session, host.content, { id: A, kind: 'any' });
+    await openDocumentFromHost(session, host.content, { id: B, kind: 'any' });
+    session.applyOperation('document.setValue', { document: A, path: ['title'], value: 'a2' });
+    session.applyOperation('document.setValue', { document: B, path: ['title'], value: 'b2' });
+    return { host, session };
+  }
+
+  /** Хост, у которого запись первого документа приносит событие в сессию. */
+  function hostActingOnWrite(host: MemoryHost, during: () => void): ContentTreeHost {
+    let acted = false;
+    return {
+      ...host.content,
+      write: async (path, bytes) => {
+        if (!acted) {
+          acted = true;
+          during();
+        }
+        await host.content.write(path, bytes);
+      },
+    };
+  }
+
+  it('правка, пришедшая во время записи, на диск не попадает и сохранённой не числится', async () => {
+    const { host, session } = await opened();
+    const content = hostActingOnWrite(host, () => {
+      // Правка второго документа приходит, пока сохранение ждёт записи
+      // первого: проверка её не видела, и записать её значило бы записать
+      // непроверенное (ED-21).
+      session.applyOperation('document.setValue', { document: B, path: ['title'], value: 'внезапная' });
+    });
+
+    const result = await saveDocuments({ session, host: content });
+
+    expect(result.refused).toBe(false);
+    expect(result.written).toEqual([A, B]);
+    // На диске — проверенный снимок, а не правка, которой проверка не видела.
+    expect(decodeDocument(host.bytes(B))).toEqual({ title: 'b2' });
+    // Сама правка не потеряна и сохранённой не объявлена: её очередь —
+    // следующее сохранение.
+    expect(session.documentValue(B)).toEqual({ title: 'внезапная' });
+    expect(session.dirtyDocumentIds()).toEqual([B]);
+
+    const again = await saveDocuments({ session, host: host.content });
+    expect(again.written).toEqual([B]);
+    expect(decodeDocument(host.bytes(B))).toEqual({ title: 'внезапная' });
+    expect(session.dirtyDocumentIds()).toEqual([]);
+  });
+
+  it('взаимодействие, открывшееся во время записи, не роняет сохранение и не кладёт на диск провизорного', async () => {
+    const { host, session } = await opened();
+    let stroke: OperationTransaction | undefined;
+    const content = hostActingOnWrite(host, () => {
+      // Мазок открывается, пока сохранение ждёт записи первого документа:
+      // промежуточное состояние мазка на диск не попадает (ED-18).
+      stroke = session.beginOperation('document.setValue', { document: B, path: ['title'], value: 'мазок' });
+    });
+
+    const result = await saveDocuments({ session, host: content });
+
+    // Группа записана целиком, а не оборвана отказом посреди цикла (ED-19).
+    expect(result.refused).toBe(false);
+    expect(result.written).toEqual([A, B]);
+    expect(decodeDocument(host.bytes(A))).toEqual({ title: 'a2' });
+    expect(decodeDocument(host.bytes(B))).toEqual({ title: 'b2' });
+
+    // Мазок жив: сохранение его не трогало, и отмена возвращает документ.
+    expect(session.pending).toBe(true);
+    stroke!.cancel();
+    expect(session.documentValue(B)).toEqual({ title: 'b2' });
+    // Сохранённым при открытом мазке не объявлялся никто (`markSaved` посреди
+    // взаимодействия запрещён сессией); порядок наводит следующее сохранение.
+    expect(session.dirtyDocumentIds()).toEqual([A, B]);
+    const again = await saveDocuments({ session, host: host.content });
+    expect(again.written).toEqual([A, B]);
+    expect(session.dirtyDocumentIds()).toEqual([]);
+  });
+
+  it('сохранение посреди незакрытого взаимодействия отказывает до первой записи', async () => {
+    const { host, session } = await opened();
+    const stroke = session.beginOperation('document.setValue', { document: A, path: ['title'], value: 'мазок' });
+
+    await expect(saveDocuments({ session, host: host.content })).rejects.toThrow(
+      /незакрытого взаимодействия/,
+    );
+    // Не записано ничего: отказ пришёл раньше, чем снимок провизорных значений.
+    expect(host.writes).toEqual([]);
+    stroke.cancel();
   });
 });

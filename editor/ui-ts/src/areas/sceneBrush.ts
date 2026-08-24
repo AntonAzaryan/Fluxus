@@ -418,10 +418,13 @@ export function createBrushTool(options: BrushToolOptions): BrushTool {
       const surface = surfaceOf(layer);
       if (hover === null || surface === null) return items;
       // Индексы клеток — индексы сетки террейна: ими picking их и называет
-      // (REND-15), и на визуальной поверхности рисует их подсистема.
-      const cells = cellsAround(hover, surface.grid).map(
-        (cell) => cell.y * terrain.grid.width + cell.x,
-      );
+      // (REND-15), и на визуальной поверхности рисует их подсистема. Клетки
+      // правимого слоя поэтому пересекаются с сеткой террейна: карта кривизны
+      // бывает другого размера (ED-11, ASSET-7), и клетка за её краем, свёрнутая
+      // шагом террейна, подсветила бы чужую строку.
+      const cells = cellsAround(hover, surface.grid)
+        .filter((cell) => cell.x < terrain.grid.width && cell.y < terrain.grid.height)
+        .map((cell) => cell.y * terrain.grid.width + cell.x);
       if (cells.length > 0) items.push({ kind: 'cells', key: BRUSH_OVERLAY_KEYS.cells, cells });
       return items;
     },
