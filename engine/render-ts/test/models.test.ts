@@ -3,7 +3,7 @@
  * загрузки и при отсутствии записи в манифесте (ASSET-4, ASSET-6), скины
  * пер-инстанс (REND-6), смерть по событию (REND-4), интерполяция позиции.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { ModelsSubsystem, type RenderContext } from '../src/index.js';
 import type { VisualManifest } from '@game-mvp/assets';
@@ -652,5 +652,110 @@ describe('FOW-8: fade «ушла в туман» отличается от см�
     subsystem.syncTick(makeTickView([makeEntityView(1)]));
     subsystem.syncTick(makeTickView([]));
     expect(subsystem.instanceFor(1)).toBeNull();
+  });
+});
+
+describe('FOW-8: кэш fade-копий материалов', () => {
+  const FADE = 0.5;
+
+  /** Материалы, которыми инстанс сущности нарисован СЕЙЧАС. */
+  function drawnMaterials(ctx: RenderContext, entity: number): THREE.Material[] {
+    const holder = ctx.scene.children.find((node) => node.name === `entity:${String(entity)}`);
+    if (holder === undefined) throw new Error(`в сцене нет инстанса ${String(entity)}`);
+    const materials: THREE.Material[] = [];
+    holder.traverse((node) => {
+      const mesh = node as Partial<THREE.Mesh> & THREE.Object3D;
+      if (mesh.isMesh !== true || mesh.material === undefined) return;
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        materials.push(material);
+      }
+    });
+    if (materials.length === 0) throw new Error('у инстанса нет меша');
+    return materials;
+  }
+
+  it('копия материала переиспользуется следующим эпизодом, а не собирается заново', () => {
+    const { subsystem, ctx, assets } = makeRig(plainManifest(), { fadeSeconds: FADE });
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+
+    // Первый эпизод — fade-in появления: меши идут на своих прозрачных копиях.
+    subsystem.updateFrame(1 / 60, 1);
+    const episode = drawnMaterials(ctx, 1);
+    expect(episode[0]!.transparent).toBe(true);
+
+    // Проявление доиграло — разделяемые материалы вернулись мешам (REND-3),
+    // а копия отложена в пул, а не освобождена.
+    const disposed = vi.spyOn(episode[0]!, 'dispose');
+    for (let i = 0; i < 60; i++) subsystem.updateFrame(1 / 60, 1);
+    expect(drawnMaterials(ctx, 1)[0]).not.toBe(episode[0]);
+    expect(disposed).not.toHaveBeenCalled();
+
+    // Второй эпизод — уход в туман. Копия ТА ЖЕ: у прозрачной копии своя
+    // программа шейдера, и собирать её заново на каждое открытие обзора
+    // значило бы платить компиляцией в кадре.
+    subsystem.syncTick(makeTickView([]));
+    subsystem.updateFrame(1 / 60, 1);
+    const reused = drawnMaterials(ctx, 1);
+    expect(reused[0]).toBe(episode[0]);
+    // База непрозрачности берётся у оригинала на каждой выдаче: доля второго
+    // эпизода считается от единицы, а не от того, чем эпизод кончился.
+    expect(reused[0]!.opacity).toBeGreaterThan(0.9);
+  });
+
+  it('копия из пула пересобирается по оригиналу: доехавшая текстура доезжает и до неё', () => {
+    const { subsystem, ctx, assets } = makeRig(plainManifest(), { fadeSeconds: FADE });
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+
+    // Эпизод начался В ОКНЕ ЗАГРУЗКИ: текстуры слота ещё нет (ASSET-4), и копия
+    // снята с материала без карты.
+    subsystem.updateFrame(1 / 60, 1);
+    const episode = drawnMaterials(ctx, 1)[0]! as THREE.MeshStandardMaterial;
+    expect(episode.map).toBeNull();
+
+    // Текстура доехала — `ensureBaseSkin` пишет её в ОРИГИНАЛ задним числом.
+    assets.resolve('texture', 'tex/base.png', {
+      width: 1,
+      height: 1,
+      format: 'rgba8',
+      pixels: Uint8Array.from([1, 2, 3, 255]),
+    });
+    for (let i = 0; i < 60; i++) subsystem.updateFrame(1 / 60, 1);
+    const original = drawnMaterials(ctx, 1)[0]! as THREE.MeshStandardMaterial;
+    expect(original.map).not.toBeNull();
+
+    // Второй эпизод берёт ту же копию из пула — и она обязана рисовать текстуру
+    // оригинала. Иначе модель угасала бы нетекстурированной весь остаток
+    // сессии, да ещё и своей программой: занятость слота карты входит в её ключ.
+    subsystem.syncTick(makeTickView([]));
+    subsystem.updateFrame(1 / 60, 1);
+    const reused = drawnMaterials(ctx, 1)[0]! as THREE.MeshStandardMaterial;
+    expect(reused).toBe(episode);
+    expect(reused.map).toBe(original.map);
+    expect(reused.transparent).toBe(true);
+  });
+
+  it('одновременное угасание инстансов одного материала: копии свои, доли не спорят', () => {
+    const { subsystem, ctx, assets } = makeRig(plainManifest(), { fadeSeconds: FADE });
+    subsystem.syncTick(makeTickView([makeEntityView(1), makeEntityView(2)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    for (let i = 0; i < 60; i++) subsystem.updateFrame(1 / 60, 1);
+    // Скин ничего не подменяет — материал у обоих ОДИН, разделяемый с ассетом.
+    expect(drawnMaterials(ctx, 1)[0]).toBe(drawnMaterials(ctx, 2)[0]);
+
+    // Первый ушёл в туман, шестью кадрами позже — второй: угасают оба, но
+    // доли у них заведомо разные.
+    subsystem.syncTick(makeTickView([makeEntityView(2)]));
+    for (let i = 0; i < 6; i++) subsystem.updateFrame(1 / 60, 1);
+    subsystem.syncTick(makeTickView([]));
+    subsystem.updateFrame(1 / 60, 1);
+
+    const first = drawnMaterials(ctx, 1)[0]!;
+    const second = drawnMaterials(ctx, 2)[0]!;
+    // `opacity` — свойство МАТЕРИАЛА: одна копия на двоих показывала бы долю
+    // одного на другом, поэтому копия выдаётся на меш каждого.
+    expect(first).not.toBe(second);
+    expect(first.opacity).toBeLessThan(second.opacity);
   });
 });

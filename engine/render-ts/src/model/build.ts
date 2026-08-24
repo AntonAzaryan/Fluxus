@@ -344,6 +344,18 @@ export interface ModelInstance {
   /** Материалы у инстанса свои — copy-on-write уже случился (REND-6). */
   readonly ownsMaterials: boolean;
   /**
+   * Материалы, ПРИНАДЛЕЖАЩИЕ инстансу, — ровно те, что освободит его `dispose`:
+   * свои копии после подмены скина (REND-6) и заглушка модели, у которой
+   * материалов нет вовсе. Разделяемых с ассетом здесь не бывает: их отдаёт
+   * владелец, а не инстанс (REND-3).
+   *
+   * Список нужен наружу тому, кто держит производные от материалов инстанса и
+   * обязан отпустить их вместе с ними, — fade-копиям подсистемы моделей
+   * (FOW-8): `ownsMaterials` для этого недостаточен, потому что заглушка своя у
+   * инстанса и при `ownsMaterials === false`.
+   */
+  readonly ownedMaterials: readonly THREE.Material[];
+  /**
    * Переводит материалы инстанса в СВОИ (если они ещё разделяемые) и отдаёт
    * места употребления слотов текстур в них — точку подмены скина (REND-6).
    * Копия делается один раз и только тем инстансом, которому скин что-то
@@ -536,6 +548,13 @@ export function createModelInstance(
     return textureTargets;
   };
 
+  /** Список принадлежащего инстансу — один на `ownedMaterials` и на `dispose`. */
+  const ownedMaterials = (): readonly THREE.Material[] => {
+    const owned: THREE.Material[] = ownsMaterials ? [...materials] : [];
+    if (ownFallback !== null) owned.push(ownFallback);
+    return owned;
+  };
+
   return {
     root,
     mixer,
@@ -548,6 +567,9 @@ export function createModelInstance(
     get ownsMaterials(): boolean {
       return ownsMaterials;
     },
+    get ownedMaterials(): readonly THREE.Material[] {
+      return ownedMaterials();
+    },
     ownTextureTargets,
     bounds,
     setScale,
@@ -556,9 +578,10 @@ export function createModelInstance(
       mixer.uncacheRoot(root);
       // Освобождаются только СВОИ материалы инстанса: разделяемые остаются в
       // кэше ассета вместе с геометрией (REND-3), а их текстуры общие и после
-      // copy-on-write — dispose'ить их здесь значило бы гасить соседей.
-      if (ownsMaterials) for (const material of materials) material.dispose();
-      ownFallback?.dispose();
+      // copy-on-write — dispose'ить их здесь значило бы гасить соседей. Список
+      // тот же, что отдаётся наружу: два ответа на вопрос «что здесь наше»
+      // разошлись бы, и производные от материала инстанса пережили бы его.
+      for (const material of ownedMaterials()) material.dispose();
     },
   };
 }
