@@ -8,6 +8,7 @@
  * террейна, и точка входной границы (REND-1, TERR-2) — `tileSize` приезжает в
  * Q16.16, дальше только float.
  */
+import type * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@game-mvp/core';
 
 /**
@@ -36,4 +37,35 @@ export function arenaExtent(grid: TerrainGrid | undefined): ArenaExtent {
   // источник тогда стоял бы в центре арены и не светил бы вовсе.
   const radius = Math.max(Math.hypot(width, height) / 2, 1);
   return { centerX: width / 2, centerY: height / 2, radius };
+}
+
+/**
+ * Наводит направленный источник по направлению «откуда светит» — смещению его
+ * позиции от цели (REND-29). Живёт здесь, а не в подсистеме, потому что наводка
+ * — производная ГРАНИЦ АРЕНЫ и ничего больше, и одним путём наводятся все
+ * направленные источники сцены: солнце, его динамический ярус (REND-30) и
+ * контровой источник.
+ *
+ * Работа фиксированного размера и без аллокаций (REND-26): её делает и кадр
+ * перехода цикла времени суток (REND-32).
+ */
+export function aimDirectional(
+  light: THREE.DirectionalLight,
+  extent: ArenaExtent,
+  dx: number,
+  dy: number,
+  dz: number,
+): void {
+  const length = Math.hypot(dx, dy, dz);
+  // Нулевое направление — вырожденная секция: источник тогда светит сверху,
+  // а не исчезает; отвергать её — дело валидации формата (PRES-2).
+  const unit = length > 0 ? 1 / length : 0;
+  const distance = extent.radius * 2;
+  light.position.set(
+    extent.centerX + dx * unit * distance,
+    extent.centerY + dy * unit * distance,
+    length > 0 ? dz * unit * distance : distance,
+  );
+  light.target.position.set(extent.centerX, extent.centerY, 0);
+  light.target.updateMatrixWorld();
 }

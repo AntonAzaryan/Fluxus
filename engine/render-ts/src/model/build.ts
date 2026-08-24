@@ -387,6 +387,11 @@ function materialFromAsset(source: NormalizedMaterial): THREE.MeshStandardMateri
   });
   material.color.setRGB(source.baseColorFactor[0], source.baseColorFactor[1], source.baseColorFactor[2]);
   material.emissive.setRGB(source.emissiveFactor[0], source.emissiveFactor[1], source.emissiveFactor[2]);
+  // Сила эмиссии ассета (ASSET-5) — как есть, БЕЗ клампа: значение больше
+  // единицы и есть HDR-свечение, которым материал пересекает порог bloom
+  // (REND-34). Обрезав его здесь, рендер решил бы за автора модели, что
+  // светиться нечему, — ровно то, чего ASSET-5 не допускает.
+  material.emissiveIntensity = source.emissiveStrength;
   return material;
 }
 
@@ -399,6 +404,7 @@ const DEFAULT_MATERIAL: NormalizedMaterial = {
   normalTexture: null,
   emissiveFactor: [0, 0, 0],
   emissiveTexture: null,
+  emissiveStrength: 1,
   alphaMode: 'opaque',
   alphaCutoff: 0.5,
   doubleSided: true,

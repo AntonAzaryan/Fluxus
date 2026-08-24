@@ -20,6 +20,7 @@
  * иначе оно применилось бы к кадру дважды.
  */
 import * as THREE from 'three';
+import type { ColorLut } from '@game-mvp/assets';
 import type { ToneMappingOperator } from './config.js';
 
 /** Ярусов пирамиды bloom (design D4): пять — как у схемы UnrealBloomPass. */
@@ -150,6 +151,41 @@ float bloomWeight(float factor) {
 #include <tonemapping_pars_fragment>
 #endif
 
+#ifdef POST_LUT
+uniform sampler3D tLut;
+uniform float uLutSize;
+uniform float uLutAmount;
+
+/**
+ * Выборка таблицы цвета (REND-34).
+ *
+ * ДОМЕН ТАБЛИЦЫ — ОТОБРАЖАЕМЫЙ КАДР, а не линейное рабочее пространство:
+ * .cube-файл автор снимает в пакете цветокоррекции с той картинки, которую
+ * видит, то есть с sRGB-кодированных значений («таблица авторится по итоговому
+ * виду кадра», REND-34). Поэтому вход кодируется в sRGB перед выборкой, а
+ * результат раскодируется обратно — проход остаётся в линейном пространстве и
+ * не зависит от своего НАЗНАЧЕНИЯ (цель или канвас), как и весь остальной
+ * resolve. Отдав таблице линейные значения, мы кормили бы её не тем доменом, и
+ * грейд читался бы неверно на всём кадре, а не в крайних точках.
+ *
+ * Обе функции переноса объявлены префиксом фрагментного шейдера three
+ * (чанк colorspace_pars_fragment), тем же, откуда берётся linearToOutputTexel
+ * для include colorspace_fragment ниже.
+ *
+ * Координата узла берётся в ЦЕНТРЕ текселя — иначе линейная фильтрация на краях
+ * решётки тянула бы значение за её границу и крайние цвета кадра поехали бы. Та
+ * же нормировка, что у эталонных реализаций формата .cube: масштаб (N-1)/N плюс
+ * полтекселя.
+ */
+vec3 lutLookup(vec3 rgb) {
+  vec3 encoded = sRGBTransferOETF(vec4(clamp(rgb, 0.0, 1.0), 1.0)).rgb;
+  vec3 scale = vec3((uLutSize - 1.0) / uLutSize);
+  vec3 offset = vec3(1.0 / (2.0 * uLutSize));
+  vec3 graded = texture(tLut, scale * encoded + offset).rgb;
+  return sRGBTransferEOTF(vec4(graded, 1.0)).rgb;
+}
+#endif
+
 void main() {
   vec3 color = texture2D(tScene, vUv).rgb;
 
@@ -166,10 +202,58 @@ void main() {
   color = POST_TONE_MAPPING(color);
   #endif
 
+  // LUT — ПОСЛЕ сведения яркости и ДО кодирования цветового пространства
+  // (REND-34): таблица авторится по сведённому кадру, а место до кодирования
+  // выбрано потому, что кодирование зависит от НАЗНАЧЕНИЯ прохода (цель или
+  // канвас), и коррекция после него давала бы два разных кадра из одной таблицы.
+  #ifdef POST_LUT
+  color = mix(color, lutLookup(color), uLutAmount);
+  #endif
+
   gl_FragColor = vec4(color, 1.0);
   #include <colorspace_fragment>
 }
 `;
+
+/**
+ * Трёхмерная текстура из данных ассета таблицы цвета (REND-34, ASSET-5): ассет
+ * отдаёт разделяемые ЧИСЛА, а GPU-объект строит потребитель — здесь.
+ *
+ * Формат — RGBA8, а не float: таблица применяется ПОСЛЕ сведения яркости, то
+ * есть к отображаемому диапазону [0, 1], и восьми бит на канал ей ровно
+ * столько, сколько несёт сам кадр. Линейная фильтрация байтовой текстуры
+ * гарантирована везде, а у float она требует расширения, которого на слабом
+ * железе может не быть, — то есть ровно там, где LUT и нужен вместо теней.
+ */
+export function createLutTexture(lut: ColorLut): THREE.Data3DTexture {
+  const size = lut.size;
+  const texels = size * size * size;
+  const data = new Uint8Array(texels * 4);
+  for (let index = 0; index < texels; index++) {
+    for (let channel = 0; channel < 3; channel++) {
+      const value = lut.data[index * 3 + channel] ?? 0;
+      data[index * 4 + channel] = Math.round(Math.min(1, Math.max(0, value)) * 255);
+    }
+    data[index * 4 + 3] = 255;
+  }
+  const texture = new THREE.Data3DTexture(data, size, size, size);
+  texture.format = THREE.RGBAFormat;
+  texture.type = THREE.UnsignedByteType;
+  // Значения таблицы — СЫРЫЕ: и вход, и выход выборки живут в отображаемом
+  // домене, а переносы делает сам шейдер (`lutLookup`). Объявленное цветовое
+  // пространство заставило бы три конвертировать их за нас, и перенос
+  // применился бы дважды.
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  // Края решётки — крайние цвета кадра: повтор или зеркало завернули бы белое
+  // в чёрное. Зажим по всем трём осям, включая третью (`wrapR`).
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.wrapR = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
+  return texture;
+}
 
 /** Материал полноэкранного прохода: глубина ему не нужна ни на чтение, ни на запись. */
 function fullscreenMaterial(
@@ -220,6 +304,9 @@ export function createResolveMaterial(config: {
   readonly bloom: boolean;
   readonly strength: number;
   readonly radius: number;
+  /** Загруженная таблица цвета либо `null` — её наличие включает define POST_LUT. */
+  readonly lut: THREE.Data3DTexture | null;
+  readonly lutAmount: number;
 }): THREE.ShaderMaterial {
   const operator = toneMappingFunction(config.operator);
   const uniforms: Record<string, THREE.IUniform> = { tScene: { value: null } };
@@ -234,5 +321,23 @@ export function createResolveMaterial(config: {
     uniforms.uStrength = { value: config.strength };
     uniforms.uRadius = { value: config.radius };
   }
+  const lut = config.lut;
+  if (lut !== null) {
+    defines.POST_LUT = '';
+    uniforms.tLut = { value: lut };
+    uniforms.uLutSize = { value: lut.image.width };
+    uniforms.uLutAmount = { value: config.lutAmount };
+  }
+  // `glslVersion` НЕ поднимается до GLSL3, хотя `sampler3D` — тип из GLSL ES
+  // 3.00, и поднимать его не нужно: не-raw `ShaderMaterial` three компилирует
+  // как `#version 300 es` всегда (`WebGLProgram`, ветка
+  // `isRawShaderMaterial !== true`), а `precision <p> sampler3D` объявляет её
+  // `generatePrecision`. Явный GLSL3, наоборот, СНИМАЕТ шим GLSL1-записи —
+  // `layout(location = 0) out highp vec4 pc_fragColor` и
+  // `#define gl_FragColor pc_fragColor` три добавляет только при
+  // `glslVersion !== GLSL3`, — и текст этого прохода, пишущий `gl_FragColor` и
+  // подключающий `<colorspace_fragment>`, перестал бы компилироваться на каждом
+  // кадре с таблицей. Головой такое не ловится: программы здесь компилирует GPU,
+  // а тесты пакета headless, — поэтому версия закреплена тестом.
   return fullscreenMaterial(RESOLVE_FRAGMENT, uniforms, defines);
 }

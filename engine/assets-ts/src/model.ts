@@ -129,6 +129,17 @@ export interface NormalizedMaterial {
   readonly normalTexture: number | null;
   readonly emissiveFactor: readonly [number, number, number];
   readonly emissiveTexture: number | null;
+  /**
+   * Сила эмиссии — неотрицательный множитель ПОВЕРХ цвета эмиссии, по умолчанию
+   * 1 (ASSET-5). Значения больше единицы наверх не клампятся ни здесь, ни у
+   * потребителя: они и есть HDR-свечение, которым материал пересекает порог
+   * bloom (`rendering` REND-34), и обрезав их по единице, модуль сам решил бы
+   * за автора, что светиться нечему.
+   *
+   * Источник в glTF — расширение `KHR_materials_emissive_strength`; формат без
+   * такого понятия (MDX) даёт 1, то есть вид байт-в-байт как до появления поля.
+   */
+  readonly emissiveStrength: number;
   /** `mask` отсекает по `alphaCutoff`, `blend` смешивает, `opaque` игнорирует альфу. */
   readonly alphaMode: 'opaque' | 'mask' | 'blend';
   readonly alphaCutoff: number;

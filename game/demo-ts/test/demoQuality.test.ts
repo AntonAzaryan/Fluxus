@@ -171,6 +171,7 @@ describe('документы пресетов применимы к сцене �
       'particles.density',
       'postprocess.bloom',
       'postprocess.bloomResolution',
+      'postprocess.lut',
       'terrain.curvatureTessellation',
     ]);
   });
@@ -273,13 +274,22 @@ describe('performance — первые реальные ограничения (
     expect(cheap['particles.density']).toBeLessThan(baseline['particles.density'] as number);
     // Дешёвый носитель закреплён явно, а не унаследован (REND-20).
     expect(cheap['models.defaultTier']).toBe('batched');
-    // Тени выключены потолком: на слабом устройстве теневого прохода нет вовсе,
-    // что бы сцена ни объявила.
-    expect(cheap['lighting.shadowMode']).toBe('none');
+    // Тени урезаны потолком до контактных пятен (REND-30): карт теней на слабом
+    // устройстве нет вовсе, что бы сцена ни объявила, а силуэт юнита всё же
+    // держится за землю. Сцена демо объявляет `full`, поэтому потолок здесь
+    // кусает по-настоящему, а не пишется на будущее.
+    expect(cheap['lighting.shadowMode']).toBe('blob');
+    expect(baseline['lighting.shadowMode']).toBe('hybrid');
     // Свечение выключено потолком (REND-34): порога и пирамиды на слабом
     // устройстве нет вовсе, а сведение яркости остаётся — это один проход.
     expect(cheap['postprocess.bloom']).toBe(false);
     expect(baseline['postprocess.bloom']).toBe(true);
+    // Цветокоррекция выключена потолком (REND-34): своего прохода LUT не
+    // добавляет, но трёхмерная выборка есть у каждого пикселя кадра, и на
+    // слабом устройстве её нет. Сцена демо таблицы сегодня не несёт — этот
+    // потолок написан на будущее, в отличие от соседних.
+    expect(cheap['postprocess.lut']).toBe(false);
+    expect(baseline['postprocess.lut']).toBe(true);
   });
 
   it('потолок свечения гасит авторски включённый bloom, документ сцены не трогается', () => {
@@ -296,6 +306,9 @@ describe('performance — первые реальные ограничения (
   });
 
   it('потолок режима теней кусает поверх авторского full, документ сцены не трогается', () => {
+    // Ровно секция сцены демо (`duel.presentation.json`): она объявляет `full`,
+    // и потолок `blob` производительного пресета режет её по рангу
+    // `none` < `blob` < `hybrid` < `full` (REND-30, QUAL-1).
     const authored: PresentationLighting = { shadows: { mode: 'full', mapSize: 2048 } };
     const before = JSON.stringify(authored);
     const stage = new PresentationStage(demoContext());
@@ -305,7 +318,7 @@ describe('performance — первые реальные ограничения (
 
     new QualityController(stage, QUALITY_PRESETS.performance);
 
-    expect(lighting.config.shadowMode).toBe('none');
+    expect(lighting.config.shadowMode).toBe('blob');
     expect(JSON.stringify(authored)).toBe(before);
   });
 

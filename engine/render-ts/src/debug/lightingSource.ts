@@ -61,8 +61,19 @@ export interface DebugLightingState {
   authoredSection: boolean;
   /** Рассеянных источников в сцене (REND-29). */
   ambientLights: number;
-  /** Направленных источников: 1 либо 2 — пара ярусов режима `hybrid` (REND-30). */
+  /**
+   * Полусферных подсветок в сцене: 0 либо 1 (REND-29). Ноль — подсекции
+   * `hemisphere` у секции нет, и источника в кадре не существует вовсе; второго
+   * прочтения у нуля здесь нет — «выключенной» подсветки формат не знает.
+   */
+  hemisphereLights: number;
+  /**
+   * Направленных источников: пара ярусов режима `hybrid` (REND-30) плюс
+   * контровой источник, если подсекция `rim` написана (REND-29). От 1 до 3.
+   */
   directionalLights: number;
+  /** Интенсивность контрового источника; 0 — его в кадре нет (REND-29). */
+  rimIntensity: number;
   /**
    * Тон рассеянного источника из ДЕЙСТВУЮЩЕЙ конфигурации — статической части
    * секции под потолками пресета. На кадре перехода цикла (REND-32) живые
@@ -147,12 +158,16 @@ export interface DebugLightingProbe extends DebugProbe {
   /** Источников света у подсистемы в сцене: рассеянные плюс направленные. */
   readonly lightCount: number;
   readonly ambientLights: number;
+  /** Полусферных подсветок: 0 либо 1 (REND-29). */
+  readonly hemisphereLights: number;
   readonly directionalLights: number;
   readonly ambientColor: string;
   readonly ambientIntensity: number;
   readonly directionalColor: string;
   /** Суммарная интенсивность направленных источников кадра — до деления. */
   readonly directionalIntensity: number;
+  /** Интенсивность контрового источника; 0 — его в кадре нет (REND-29). */
+  readonly rimIntensity: number;
   readonly sunIntensity: number;
   readonly sunDynamicIntensity: number;
   readonly lightWorldX: number;
@@ -208,7 +223,9 @@ export function lightingSceneDebugSource(
     inScene: false,
     authoredSection: false,
     ambientLights: 0,
+    hemisphereLights: 0,
     directionalLights: 0,
+    rimIntensity: 0,
     ambientColor: '',
     ambientIntensity: 0,
     directionalColor: '',
@@ -269,7 +286,9 @@ export function lightingSceneDebugSource(
     authoredSection: false,
     lightCount: 0,
     ambientLights: 0,
+    hemisphereLights: 0,
     directionalLights: 0,
+    rimIntensity: 0,
     ambientColor: '',
     ambientIntensity: 0,
     directionalColor: '',
@@ -323,8 +342,11 @@ export function lightingSceneDebugSource(
       probe.noData = undefined;
       probe.authoredSection = state.authoredSection;
       probe.ambientLights = state.ambientLights;
+      probe.hemisphereLights = state.hemisphereLights;
       probe.directionalLights = state.directionalLights;
-      probe.lightCount = state.ambientLights + state.directionalLights;
+      probe.rimIntensity = state.rimIntensity;
+      probe.lightCount =
+        state.ambientLights + state.hemisphereLights + state.directionalLights;
       probe.ambientColor = state.ambientColor;
       probe.ambientIntensity = state.ambientIntensity;
       probe.directionalColor = state.directionalColor;

@@ -40,6 +40,14 @@ export interface PostprocessRenderConfig {
   readonly bloomThreshold: number;
   /** Ширина свечения — доля [0, 1] в пользу широких ярусов пирамиды. */
   readonly bloomRadius: number;
+  /**
+   * ID ассета таблицы цвета в дереве контента (ASSET-2); `null` — подсекции
+   * `lut` у секции нет, и LUT-прохода не существует. Второго способа записать
+   * «без LUT» здесь нет: тождественной таблицы формат не знает.
+   */
+  readonly lutAsset: string | null;
+  /** Доля применения таблицы, [0, 1]: lerp исходного и скорректированного цвета. */
+  readonly lutAmount: number;
 }
 
 /**
@@ -62,6 +70,10 @@ export const DEFAULT_POSTPROCESS_CONFIG: PostprocessRenderConfig = Object.freeze
   bloomStrength: 0.4,
   bloomThreshold: 1,
   bloomRadius: 0.5,
+  // Таблицы цвета у сцены без секции нет — и это и есть сегодняшний кадр
+  // байт-в-байт: ни выборки, ни прохода (REND-34).
+  lutAsset: null,
+  lutAmount: 1,
 } satisfies PostprocessRenderConfig);
 
 /** Секция документа поверх умолчаний: отсутствующее поле — умолчание (PRES-2). */
@@ -78,13 +90,22 @@ export function resolvePostprocessConfig(
     bloomStrength: bloom?.strength ?? fallback.bloomStrength,
     bloomThreshold: bloom?.threshold ?? fallback.bloomThreshold,
     bloomRadius: bloom?.radius ?? fallback.bloomRadius,
+    lutAsset: section?.lut?.asset ?? fallback.lutAsset,
+    lutAmount: section?.lut?.amount ?? fallback.lutAmount,
   };
 }
 
 /**
- * Есть ли у цепочки работа (REND-34): сведение яркости оператором либо bloom.
- * Неактивная цепочка не добавляет в кадр ни цели, ни прохода — потребитель
- * рисует сцену ровно так, как рисовал до появления capability.
+ * Есть ли у цепочки работа от КОНФИГУРАЦИИ (REND-34): сведение яркости
+ * оператором либо bloom. Неактивная цепочка не добавляет в кадр ни цели, ни
+ * прохода — потребитель рисует сцену ровно так, как рисовал до появления
+ * capability.
+ *
+ * LUT сюда НЕ входит намеренно: подсекция названа документом, а таблица приезжает
+ * ассетом (ASSET-4), и работа у прохода появляется вместе с ней, а не вместе с
+ * объявлением. Иначе сцена с неудавшейся таблицей платила бы целью и проходом за
+ * коррекцию, которой в кадре нет (REND-34: недоступный ассет — кадр БЕЗ LUT).
+ * Наличие таблицы держит цепочка (`chain.ts`, `active`).
  *
  * Сила свечения нулём здесь НЕ проверяется: `strength: 0` — авторское значение
  * включённого bloom, а не выключенный bloom, и молчаливое «включено, но не

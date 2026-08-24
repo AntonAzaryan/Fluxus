@@ -645,7 +645,7 @@ describe('PRES-2: парный presentation-документ и секция lig
     const report = presentation({ lighting: { shadows: { mode: 'soft' } } });
     const issue = report.forDocument(PRESENTATION).find((found) => found.ruleId === PRESENTATION_RULE)!;
     expect(issue.path).toEqual(['lighting', 'shadows', 'mode']);
-    expect(detailOf(issue)).toContain('none | hybrid | full');
+    expect(detailOf(issue)).toContain('none | blob | hybrid | full');
   });
 
   it('нетиповое значение отвергается по каждому полю разом, а не по первому', () => {

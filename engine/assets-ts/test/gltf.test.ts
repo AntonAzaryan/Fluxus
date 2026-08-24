@@ -17,9 +17,11 @@ import {
 
 import {
   buildDataUriFixture,
+  buildEmissiveStrengthFixture,
   buildMultiPrimitiveFixture,
   buildUnnormalizedWeightsFixture,
   DATA_URI_ID,
+  EMISSIVE_STRENGTH_ID,
   MULTI_PRIM_ID,
   UNNORMALIZED_ID,
 } from './gltfVariants.js';
@@ -142,6 +144,9 @@ describe('Загрузчик glTF: рукописная фикстура (ASSET-
     // работает по слоту (REND-6), поэтому нумерация обязана быть сквозной.
     expect(material.baseColorTexture).toBe(0);
     expect(material.normalTexture).toBeNull();
+    // Файл без `KHR_materials_emissive_strength` — сила 1 (ASSET-5): вид модели
+    // от появления поля не меняется ни на бит.
+    expect(material.emissiveStrength).toBe(1);
   });
 
   it('слоты текстур: путь разрешается ОТ ID ассета, слот без источника остаётся в нумерации', () => {
@@ -397,4 +402,27 @@ describe('Загрузчик glTF: ненормированные веса ск�
       closeArray(body.skinWeights.subarray(v * 4, v * 4 + 4), [0.5, 0.5, 0, 0]);
     }
   });
+});
+
+describe('Загрузчик glTF: сила эмиссии KHR_materials_emissive_strength (ASSET-5)', () => {
+  it('сила 4 доезжает без клампа, а материал без расширения даёт 1', async () => {
+    const fixture = await buildEmissiveStrengthFixture();
+    const model = await loadFrom(
+      new MemoryAssetSource(
+        new Map([
+          [EMISSIVE_STRENGTH_ID, fixture.gltf],
+          ['gltf-mini/model.bin', fixture.bin],
+        ]),
+      ),
+      EMISSIVE_STRENGTH_ID,
+    );
+    // Значение больше единицы — и есть HDR-свечение: обрежь его загрузчик по
+    // единице, материал не пересёк бы порог bloom (`rendering` REND-34).
+    expect(model.materials[0]!.emissiveStrength).toBe(4);
+    closeArray(model.materials[0]!.emissiveFactor, [1, 0.8, 0.4]);
+    // Тот же материал без расширения — сила 1, то есть вид байт-в-байт как до
+    // появления поля.
+    expect(model.materials[1]!.emissiveStrength).toBe(1);
+  });
+
 });

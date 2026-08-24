@@ -86,6 +86,27 @@ describe('createModelInstance: скелет и биндинг', () => {
     expect(a.ownTextureTargets()).toBe(targets);
   });
 
+  it('сила эмиссии ассета доезжает до материала БЕЗ клампа (ASSET-5, REND-34)', () => {
+    const source = makeModel();
+    const hdr: NormalizedModel = {
+      ...source,
+      materials: [{ ...source.materials[0]!, emissiveFactor: [1, 0.8, 0.4], emissiveStrength: 4 }],
+    };
+
+    const shared = buildSharedModel(hdr);
+
+    const material = shared.materials[0]!;
+    // Четыре, а не единица: обрежь рендер значение по единице — материал не
+    // пересёк бы порог bloom (REND-34), ради которого поле и заведено.
+    expect(material.emissiveIntensity).toBe(4);
+    expect(material.emissive.toArray()).toEqual([1, 0.8, 0.4]);
+  });
+
+  it('модель без силы эмиссии — интенсивность 1: кадр как до появления поля', () => {
+    const shared = buildSharedModel(makeModel());
+    expect(shared.materials[0]!.emissiveIntensity).toBe(1);
+  });
+
   it('нормализация масштаба: высота модели → одна единица × scale манифеста', () => {
     const shared = buildSharedModel(makeModel()); // height = 2
     const plain = createModelInstance(shared);

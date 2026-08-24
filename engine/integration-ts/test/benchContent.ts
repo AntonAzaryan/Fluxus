@@ -199,6 +199,7 @@ const BENCH_MODEL: NormalizedModel = Object.freeze<NormalizedModel>({
       normalTexture: null,
       emissiveFactor: [0, 0, 0],
       emissiveTexture: null,
+      emissiveStrength: 1,
       alphaMode: 'opaque',
       alphaCutoff: 0.5,
       doubleSided: false,

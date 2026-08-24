@@ -1,6 +1,11 @@
 // Контракты пакета: подсистемы, presentation-состояние, конфиг хоста.
 export { DEFAULT_CURVATURE_TESSELLATION } from './types.js';
 export type {
+  // носители контактных пятен режима `blob` (REND-30): порт подсистемы
+  // освещения, которым владелец инстансов объявляет динамику
+  BlobCaster,
+  BlobCasterPose,
+  BlobCasterSink,
   EntityView,
   // носители локального света инстансов (REND-33): порт подсистемы освещения и
   // пара портов, которой владелец инстансов её видит
@@ -236,7 +241,12 @@ export { FogDirtyBlocks } from './fog/dirty.js';
 // документа (PRES-2). При умолчаниях кадр байт-в-байт прежний: ни целей, ни
 // проходов. Порт `ScenePostSource` отдаёт её выход маскирующему проходу тумана
 // (FOW-7) — сборка передаёт его подсистеме тумана опцией `post`.
-export { PostprocessSubsystem, POSTPROCESS_BLOOM, POSTPROCESS_BLOOM_RESOLUTION } from './subsystems/postprocess.js';
+export {
+  PostprocessSubsystem,
+  POSTPROCESS_BLOOM,
+  POSTPROCESS_BLOOM_RESOLUTION,
+  POSTPROCESS_LUT,
+} from './subsystems/postprocess.js';
 export type { PostprocessOptions } from './subsystems/postprocess.js';
 export { DEFAULT_POSTPROCESS_CONFIG, resolvePostprocessConfig } from './postprocess/config.js';
 export type { PostprocessRenderConfig, ToneMappingOperator } from './postprocess/config.js';
@@ -257,16 +267,20 @@ export {
 } from './lighting/localLights.js';
 export {
   DEFAULT_CYCLE_TRANSITION_SECONDS,
+  DEFAULT_HEMISPHERE,
   DEFAULT_LIGHTING_CONFIG,
+  DEFAULT_RIM,
   minShadowMode,
   resolveLightingConfig,
   resolveLightingCycle,
   shadowModeRank,
 } from './lighting/config.js';
 export type {
+  HemisphereConfig,
   LightingCycleConfig,
   LightingPhaseConfig,
   LightingRenderConfig,
+  RimConfig,
   ShadowMode,
 } from './lighting/config.js';
 

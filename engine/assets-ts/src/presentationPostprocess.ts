@@ -62,6 +62,22 @@ export interface PresentationBloom {
 }
 
 /**
+ * Подсекция `lut` — цветокоррекция кадра трёхмерной таблицей (REND-34).
+ * Отсутствие подсекции значит ОТСУТСТВИЕ ПРОХОДА, а не таблицу с умолчаниями:
+ * тождественной таблицы формат не знает, и заводить её было бы выборкой ни за
+ * чем.
+ */
+export interface PresentationLut {
+  /**
+   * ID ассета таблицы цвета в дереве контента (`assets` ASSET-2) — путь от корня
+   * дерева, как у любого ассета. Обязателен: подсекция без таблицы бессмысленна.
+   */
+  readonly asset: string;
+  /** Доля применения таблицы, [0, 1]; нет — 1 (таблица действует целиком). */
+  readonly amount?: number;
+}
+
+/**
  * Секция `postprocess` — конфигурация пост-обработки кадра (PRES-2, REND-34).
  * Как и секции `fog` и `lighting`, все поля необязательны, состав закрыт, а
  * политику картинки держит подсистема рендера, не этот модуль.
@@ -69,6 +85,7 @@ export interface PresentationBloom {
 export interface PresentationPostprocess {
   readonly toneMapping?: PresentationToneMapping;
   readonly bloom?: PresentationBloom;
+  readonly lut?: PresentationLut;
 }
 
 /**
@@ -76,9 +93,10 @@ export interface PresentationPostprocess {
  * что читаются вместе: неизвестный ключ отвергается адресно и называет
  * допустимых соседей ТОГО ЖЕ уровня, а не всего документа.
  */
-const POSTPROCESS_KEYS: readonly string[] = ['toneMapping', 'bloom'];
+const POSTPROCESS_KEYS: readonly string[] = ['toneMapping', 'bloom', 'lut'];
 const TONE_MAPPING_KEYS: readonly string[] = ['operator', 'exposure'];
 const BLOOM_KEYS: readonly string[] = ['enabled', 'strength', 'threshold', 'radius'];
+const LUT_KEYS: readonly string[] = ['asset', 'amount'];
 
 /**
  * Подсекция сведения яркости: оператор из закрытого словаря и положительная
@@ -128,6 +146,25 @@ function validateBloom(node: Record<string, unknown>, errors: string[]): void {
 }
 
 /**
+ * Подсекция цветокоррекции: ID таблицы и доля применения (REND-34). ID
+ * обязателен — подсекция без таблицы не имеет прочтения ни при каких умолчаниях
+ * подсистемы: «без LUT» выражается отсутствием подсекции, а не пустым полем.
+ * Существование самого файла здесь не проверяется: дерева контента этот модуль
+ * не видит, а недоступный ассет — кадр без LUT и предупреждение (REND-34).
+ */
+function validateLut(node: Record<string, unknown>, errors: string[]): void {
+  const path = 'postprocess.lut';
+  closedKeys(node, path, LUT_KEYS, errors);
+  const asset = node.asset;
+  if (typeof asset !== 'string' || asset.length === 0) {
+    errors.push(
+      `${path}.asset: обязательное поле — ID ассета таблицы цвета (непустая строка), получено ${typeName(asset)}`,
+    );
+  }
+  numberField(node, path, 'amount', { what: 'число из [0, 1] — доля применения таблицы', min: 0, max: 1 }, errors);
+}
+
+/**
  * Валидация секции `postprocess` (PRES-2): состав закрыт на каждом уровне,
  * неизвестный ключ и значение не той формы отвергаются адресно — по общему
  * правилу документа. Семантику значений нормирует `rendering` REND-34, здесь
@@ -144,5 +181,9 @@ export function validatePostprocess(section: unknown, errors: string[]): void {
   if ('bloom' in root) {
     const bloom = subsection(root.bloom, 'postprocess.bloom', errors);
     if (bloom !== null) validateBloom(bloom, errors);
+  }
+  if ('lut' in root) {
+    const lut = subsection(root.lut, 'postprocess.lut', errors);
+    if (lut !== null) validateLut(lut, errors);
   }
 }

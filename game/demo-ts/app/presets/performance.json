@@ -4,7 +4,8 @@
   "models.lodThresholdScale": 2,
   "models.defaultTier": "batched",
   "particles.density": 0.5,
-  "lighting.shadowMode": "none",
+  "lighting.shadowMode": "blob",
   "lighting.maxLocalLights": 2,
-  "postprocess.bloom": false
+  "postprocess.bloom": false,
+  "postprocess.lut": false
 }

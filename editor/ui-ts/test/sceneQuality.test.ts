@@ -101,6 +101,7 @@ describe('вьюпорт редактора живёт на «ультре» (QU
       // «потолка нет», то есть авторская секция сцены как написана (QUAL-1).
       'postprocess.bloom',
       'postprocess.bloomResolution',
+      'postprocess.lut',
       'terrain.curvatureTessellation',
     ]);
   });
@@ -121,6 +122,9 @@ describe('вьюпорт редактора живёт на «ультре» (QU
     // пирамиды производно от кадра, а не от потолка (REND-34).
     expect(effectiveOf(controller)['postprocess.bloom']).toBe(true);
     expect(effectiveOf(controller)['postprocess.bloomResolution']).toBe(Number.POSITIVE_INFINITY);
+    // Цветокоррекция — тем же порядком: потолка нет, и таблица сцены действует
+    // как написана (REND-34).
+    expect(effectiveOf(controller)['postprocess.lut']).toBe(true);
   });
 
   it('картинка та же, что без контроллера вовсе: документ повторяет умолчания', () => {

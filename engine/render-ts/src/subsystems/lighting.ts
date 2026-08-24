@@ -39,6 +39,17 @@
  * анимации записи вида, подсистема террейна статикой своих чанков. Здесь только
  * реестр корней, флаги и решение, чью карту рисовать в этом кадре.
  *
+ * ## Что живёт рядом, а не здесь
+ *
+ * Подсистема держит РЕШЕНИЯ — режим, фазу теневого прохода, ход цикла, — а
+ * механика их исполнения разложена по соседним модулям тем же швом, каким там
+ * же живут пул локальных источников (REND-33) и часы цикла (REND-32):
+ * `lighting/optionalLights.ts` — полусферная подсветка и контровой источник
+ * (REND-29), `lighting/blobShadows.ts` — контактные пятна режима `blob`
+ * (REND-30), `lighting/shadowMaps.ts` — карты теней, их фрустумы и флаги
+ * кастеров, `lighting/arena.ts` — границы арены и наводка направленных
+ * источников по ним.
+ *
  * ## Цикл времени суток
  *
  * Необязательная подсекция `cycle` (REND-32) исполняется здесь же: часы и фазы —
@@ -56,6 +67,8 @@ import * as THREE from 'three';
 import type { TerrainGrid } from '@game-mvp/core';
 import { PRESENTATION_SHADOW_MODES, type PresentationLighting } from '@game-mvp/assets';
 import type {
+  BlobCaster,
+  BlobCasterSink,
   LightCarrier,
   LightCarrierSink,
   QualityDeclaration,
@@ -78,7 +91,15 @@ import {
   type ShadowMode,
 } from '../lighting/config.js';
 import { LightingCycle, type LightingCycleSample } from '../lighting/cycle.js';
-import { arenaExtent, type ArenaExtent } from '../lighting/arena.js';
+import { aimDirectional, arenaExtent, type ArenaExtent } from '../lighting/arena.js';
+import { BlobShadowField } from '../lighting/blobShadows.js';
+import { OptionalLights } from '../lighting/optionalLights.js';
+import {
+  aimShadowLight,
+  applyShadowFlags,
+  isShadowMode,
+  releaseShadowMap,
+} from '../lighting/shadowMaps.js';
 
 /**
  * Ручки качества подсистемы (QUAL-1, QUAL-3). Обе — ПОТОЛКИ над авторскими
@@ -88,38 +109,6 @@ import { arenaExtent, type ArenaExtent } from '../lighting/arena.js';
  */
 const LIGHTING_SHADOW_MODE = 'lighting.shadowMode';
 const LIGHTING_SHADOW_MAP_SIZE = 'lighting.shadowMapSize';
-
-/**
- * Запас фрустума теневой камеры над ареной, доля её радиуса: модели стоят выше
- * пола, и обтянутый ровно по сетке фрустум срезал бы тень высокой декорации.
- */
-const FRUSTUM_MARGIN = 0.25;
-
-/**
- * Смещения выборки карты теней — в ТЕКСЕЛЯХ этой карты, а не в мировых
- * единицах и не авторским числом секции (REND-29).
- *
- * Поверхность, освещённая вкось, за один тексель карты меняет глубину на
- * `тексель · tg(угол между нормалью и светом)`, и без смещения она затеняет
- * сама себя: половина текселя оказывается «за» собственной глубиной, половина
- * перед ней. На арене это читалось РЕБРИСТОЙ СЕТКОЙ на боках клифов — они
- * стоят почти вдоль лучей, и угол там наибольший.
- *
- * Смещение поэтому и меряется текселями: величина дефекта — свойство
- * ПЛОТНОСТИ карты, а плотность меняют и автор сцены (`shadows.mapSize`), и
- * потолок пресета (QUAL-1), и размер арены. Мировое число, поставленное под
- * одну из этих троек, под остальными либо не спасало бы от сетки, либо
- * отрывало бы тень от ног. Отсюда и место расчёта — `aimLight`, где фрустум и
- * сторона карты известны обе.
- *
- * Двух смещений именно два, потому что они лечат разное: `normalBias` сдвигает
- * точку выборки ВДОЛЬ НОРМАЛИ приёмника (то есть ровно поперёк ошибки наклона)
- * и делает основную работу, `bias` — постоянная поправка глубины, добавка
- * против остатка на самых косых поверхностях. Больше текселя-двух ни то, ни
- * другое брать нельзя: смещение — это и есть отрыв тени от контакта.
- */
-const NORMAL_BIAS_TEXELS = 2;
-const DEPTH_BIAS_TEXELS = 1;
 
 export interface LightingOptions {
   /**
@@ -144,7 +133,9 @@ export interface LightingOptions {
   readonly camera?: THREE.Camera;
 }
 
-export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, LightCarrierSink {
+export class LightingSubsystem
+  implements RenderSubsystem, ShadowCasterSink, LightCarrierSink, BlobCasterSink
+{
   readonly name = 'lighting';
 
   /**
@@ -163,6 +154,12 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
 
   private readonly ambient = new THREE.AmbientLight();
   /**
+   * Необязательные источники секции (REND-29) — полусферная подсветка и
+   * контровой свет: и их значения, и правило «нет подсекции — нет источника»
+   * живут в `lighting/optionalLights.ts`.
+   */
+  private readonly optional = new OptionalLights();
+  /**
    * Направленный источник сцены. В `hybrid` он несёт КЭШИРОВАННУЮ карту
    * статики, в `full` — единственную покадровую, в `none` — теней не несёт.
    */
@@ -177,6 +174,11 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
   /** Реестр корней нарисованного по ярусам — вход флагов и счётчиков. */
   private readonly staticRoots = new Set<THREE.Object3D>();
   private readonly dynamicRoots = new Set<THREE.Object3D>();
+  /**
+   * Контактные пятна режима `blob` (REND-30): реестр носителей, геометрия,
+   * материал и инстанс-буфер — всё в `lighting/blobShadows.ts`.
+   */
+  private readonly blobs = new BlobShadowField();
 
   private phase: ShadowPhase = 'none';
   /** Кэш статики устарел: ближайший кадр перерисует его (design D2). */
@@ -243,15 +245,26 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
   /** Источники сцены — вход тестов и диагностики; сцене они принадлежат отсюда. */
   get lights(): {
     readonly ambient: THREE.AmbientLight;
+    readonly hemisphere: THREE.HemisphereLight;
+    readonly rim: THREE.DirectionalLight;
     readonly sun: THREE.DirectionalLight;
     readonly sunDynamic: THREE.DirectionalLight;
   } {
-    return { ambient: this.ambient, sun: this.sun, sunDynamic: this.sunDynamic };
+    return {
+      ambient: this.ambient,
+      hemisphere: this.optional.hemisphere,
+      rim: this.optional.rim,
+      sun: this.sun,
+      sunDynamic: this.sunDynamic,
+    };
   }
 
   init(ctx: RenderContext): void {
     this.ctx = ctx;
     this.local.init(ctx.scene);
+    // Инстанс-меш пятен встанет в сцену первым кадром режима `blob`, а не
+    // сейчас: сцена другого режима не платит за него ни узлом, ни буфером.
+    this.blobs.init(ctx.scene);
     ctx.scene.add(this.ambient);
     ctx.scene.add(this.sun);
     // Цель направленного источника — объект сцены: без неё матрица цели не
@@ -274,12 +287,16 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
    */
   dispose(): void {
     this.local.dispose();
+    // Поле пятен владеет мешем, буфером инстансов, материалом, геометрией и
+    // сгенерированной текстурой — всё это его точка освобождения (REND-31).
+    this.blobs.dispose();
     for (const light of [this.sun, this.sunDynamic]) {
       releaseShadowMap(light);
       light.target.removeFromParent();
       light.removeFromParent();
     }
     this.ambient.removeFromParent();
+    this.optional.dispose();
     this.staticRoots.clear();
     this.dynamicRoots.clear();
   }
@@ -316,7 +333,20 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
     this.local.updateFrame(this.camera, this.extent.centerX, this.extent.centerY);
     const cost = costSink();
     const mode = this.current.shadowMode;
+    if (mode !== 'blob') this.blobs.hide();
     if (mode === 'none') {
+      this.applyPhase('none');
+      return;
+    }
+    if (mode === 'blob') {
+      // Карт теней в режиме нет вовсе: фаза `none` снимает флаги кастеров обоих
+      // ярусов — статика теней не отбрасывает, динамика рисуется пятнами
+      // (REND-30). Приёмник пятен — террейн, и приходит изображение к нему
+      // основным проходом сцены, а не теневым.
+      //
+      // Сами пятна пишутся не здесь, а в `blobCastersPosed`: позы кадра ставит
+      // владелец инстансов, зарегистрированный ПОЗЖЕ этой подсистемы, и написать
+      // пятна сейчас значило бы поставить их по позам прошлого кадра.
       this.applyPhase('none');
       return;
     }
@@ -418,6 +448,41 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
     this.staticStale = true;
   }
 
+  // ------------------------------------------ носители контактных пятен
+
+  /** Носитель контактного пятна (REND-30): инстанс динамического яруса. */
+  setBlobCaster(caster: BlobCaster): void {
+    this.blobs.add(caster);
+  }
+
+  dropBlobCaster(caster: BlobCaster): void {
+    this.blobs.remove(caster);
+  }
+
+  /**
+   * Позы кадра поставлены владельцем инстансов (REND-3) — момент, когда пятна
+   * можно писать. Режим решается здесь и только здесь: владелец инстансов о
+   * режиме теней не знает и знать не должен, он лишь называет момент.
+   */
+  blobCastersPosed(): void {
+    if (this.ctx === null || this.current.shadowMode !== 'blob') return;
+    // Число пятен за кадр — детерминированный счётчик (PERF-2): он растёт
+    // составом доставки, а не временем и не состоянием GPU.
+    const cost = costSink();
+    const drawn = this.blobs.updateFrame();
+    if (cost !== undefined) cost.lightingBlobDecals += drawn;
+  }
+
+  /** Носителей пятен в реестре — пробник тестов и диагностики (REND-30). */
+  get blobCasterCount(): number {
+    return this.blobs.casterCount;
+  }
+
+  /** Инстанс-меш контактных пятен; `null` — режима `blob` в этой сцене не было. */
+  get blobShadows(): THREE.InstancedMesh | null {
+    return this.blobs.instances;
+  }
+
   // ------------------------------------------- носители локального света
 
   /**
@@ -481,7 +546,7 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
       knobs: [
         {
           name: LIGHTING_SHADOW_MODE,
-          cost: 'теневые проходы кадра: `none` — их нет, `hybrid` — покадрово рисуется только динамический ярус, `full` — все кастеры каждым кадром',
+          cost: 'теневые проходы кадра: `none` — их нет, `blob` — карт нет, под динамикой контактные пятна одним инстанс-мешем, `hybrid` — покадрово рисуется только динамический ярус, `full` — все кастеры каждым кадром',
           semantics: 'ceiling',
           // Потолка нет — действует авторский режим секции: самый дорогой из
           // объявленных и есть «не ограничивать».
@@ -555,8 +620,13 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
     if (this.ctx === null) return;
     const authored = resolveLightingConfig(this.section);
     const paired = this.sunDynamic.parent !== null;
+    // Необязательные источники (REND-29) считаются по ПРИСУТСТВИЮ В СЦЕНЕ, а не
+    // по конфигурации: дамп называет то, чем нарисован кадр.
+    const rimLit = this.optional.rimLit;
     out.ambientLights = 1;
-    out.directionalLights = paired ? 2 : 1;
+    out.hemisphereLights = this.optional.hemisphereLit ? 1 : 0;
+    out.directionalLights = (paired ? 2 : 1) + (rimLit ? 1 : 0);
+    out.rimIntensity = rimLit ? this.optional.rim.intensity : 0;
     out.ambientColor = this.current.ambientColor;
     out.ambientIntensity = this.ambient.intensity;
     out.directionalColor = this.current.directionalColor;
@@ -613,12 +683,17 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
     this.current = next;
     this.ambient.color.set(next.ambientColor);
     this.ambient.intensity = next.ambientIntensity;
+    this.optional.apply(this.ctx?.scene, this.extent, next.hemisphere, next.rim);
 
     const hybrid = next.shadowMode === 'hybrid';
     const share = hybrid ? next.staticShare : 1;
-    this.aimLight(this.sun, next, next.directionalIntensity * share);
-    this.aimLight(this.sunDynamic, next, next.directionalIntensity * (1 - share));
-    this.sun.castShadow = next.shadowMode !== 'none';
+    aimShadowLight(this.sun, this.extent, next, next.directionalIntensity * share);
+    aimShadowLight(this.sunDynamic, this.extent, next, next.directionalIntensity * (1 - share));
+    // Карты теней есть ровно у `hybrid` и `full` (REND-30): в `blob` их нет —
+    // тени там рисуются контактными пятнами, — и источник их не несёт наравне с
+    // режимом `none`.
+    const mapped = next.shadowMode === 'hybrid' || next.shadowMode === 'full';
+    this.sun.castShadow = mapped;
     this.sunDynamic.castShadow = hybrid;
     // Источник, переставший нести тени, отдаёт и свою карту: three держит её у
     // `shadow.map` до пересоздания и сам не освобождает, а пресет теней `none`
@@ -664,6 +739,10 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
   private applyCycleSample(sample: LightingCycleSample): void {
     this.ambient.color.copy(sample.ambientColor);
     this.ambient.intensity = sample.ambientIntensity;
+    // Необязательные источники ведёт фаза, но ЗАВОДИТ их статическая часть
+    // (REND-32): источник уже в сцене, кадр меняет только числа — ни добавления,
+    // ни снятия здесь не бывает, и пересборки программ материалов кадром тоже.
+    this.optional.applySample(sample, this.extent);
     this.sun.color.copy(sample.directionalColor);
     this.sunDynamic.color.copy(sample.directionalColor);
     // Доля статики применяется к УЖЕ слерпленной суммарной интенсивности: пара
@@ -672,8 +751,8 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
     this.sun.intensity = sample.directionalIntensity * share;
     this.sunDynamic.intensity = sample.directionalIntensity * (1 - share);
     const { directionX: dx, directionY: dy, directionZ: dz } = sample;
-    this.aimDirection(this.sun, dx, dy, dz);
-    this.aimDirection(this.sunDynamic, dx, dy, dz);
+    aimDirectional(this.sun, this.extent, dx, dy, dz);
+    aimDirectional(this.sunDynamic, this.extent, dx, dy, dz);
     // Карта глубины зависит от направления, а не от тона: кэш статики устаревает
     // ровно тогда, когда источник ПОЕХАЛ, — и на каждом таком кадре, включая
     // последний, добивающий кэш точным направлением установившейся фазы.
@@ -685,62 +764,6 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
     // чередование поверх ворот лишь вдвое разредило бы обновление кэша там, где
     // динамики нет, и жгло бы кадры на перестановку флагов ни за чем.
     if (sample.directionMoved) this.staticStale = true;
-  }
-
-  /**
-   * Позиция и цель источника по направлению — то единственное, что переставляет
-   * кадр перехода (design D2): работа фиксированного размера, без аллокаций.
-   * Числа приходят врозь, а не записью: наводится источник одним путём и от
-   * статической части секции, и от кадра цикла (REND-32), а общего им — ровно
-   * эта тройка.
-   */
-  private aimDirection(light: THREE.DirectionalLight, dx: number, dy: number, dz: number): void {
-    const length = Math.hypot(dx, dy, dz);
-    // Нулевое направление — вырожденная секция: источник тогда светит сверху,
-    // а не исчезает; отвергать её — дело валидации формата (PRES-2).
-    const unit = length > 0 ? 1 / length : 0;
-    const distance = this.extent.radius * 2;
-    light.position.set(
-      this.extent.centerX + dx * unit * distance,
-      this.extent.centerY + dy * unit * distance,
-      length > 0 ? dz * unit * distance : distance,
-    );
-    light.target.position.set(this.extent.centerX, this.extent.centerY, 0);
-    light.target.updateMatrixWorld();
-  }
-
-  /** Позиция, цель, тон и фрустум теневой камеры одного источника (design D6). */
-  private aimLight(
-    light: THREE.DirectionalLight,
-    config: LightingRenderConfig,
-    intensity: number,
-  ): void {
-    light.color.set(config.directionalColor);
-    light.intensity = intensity;
-    this.aimDirection(light, config.directionX, config.directionY, config.directionZ);
-
-    const distance = this.extent.radius * 2;
-    const radius = this.extent.radius * (1 + FRUSTUM_MARGIN);
-    const camera = light.shadow.camera;
-    camera.left = -radius;
-    camera.right = radius;
-    camera.top = radius;
-    camera.bottom = -radius;
-    camera.near = 0.5;
-    camera.far = distance + radius * 2;
-    camera.updateProjectionMatrix();
-    resizeShadowMap(light, config.shadowMapSize);
-
-    // Смещения выборки — производная фрустума и стороны карты (см. константы):
-    // тексель камеры ортографический, то есть один и тот же по всей арене.
-    const side = Math.max(1, Math.round(config.shadowMapSize));
-    const texel = (radius * 2) / side;
-    light.shadow.normalBias = texel * NORMAL_BIAS_TEXELS;
-    // `bias` три складывает с нормированной глубиной приёмника, а глубина
-    // ортографической камеры линейна по `far − near`: мировая поправка
-    // становится долей этого отрезка. Знак отрицательный — приёмник надо
-    // подвинуть К свету, иначе сравнение оставит его в собственной тени.
-    light.shadow.bias = -((texel * DEPTH_BIAS_TEXELS) / (camera.far - camera.near));
   }
 
   /**
@@ -776,46 +799,4 @@ export class LightingSubsystem implements RenderSubsystem, ShadowCasterSink, Lig
         : phase === 'dynamic' || phase === 'full';
     applyShadowFlags(root, casts, receive);
   }
-}
-
-/** Значение ручки — режим теней; иначе потолка нет (QUAL-1). */
-function isShadowMode(value: unknown): value is ShadowMode {
-  return value === 'none' || value === 'hybrid' || value === 'full';
-}
-
-/**
- * Флаги теней всему поддереву корня: `castShadow`/`receiveShadow` три проверяет
- * на каждом меше, а корень — это то, что подсистема-владелец объявила кастером
- * (узел детального инстанса, группа батча, меш чанка террейна).
- */
-function applyShadowFlags(root: THREE.Object3D, cast: boolean, receive: boolean): void {
-  root.traverse((node) => {
-    node.castShadow = cast;
-    node.receiveShadow = receive;
-  });
-}
-
-/**
- * Сторона карты теней. Смена — событие (правка секции, пресет): готовую карту
- * three по изменившемуся `mapSize` не пересоздаёт, поэтому прежняя
- * освобождается здесь вместе с её текстурой глубины.
- */
-function resizeShadowMap(light: THREE.DirectionalLight, size: number): void {
-  const side = Math.max(1, Math.round(size));
-  if (light.shadow.mapSize.x === side && light.shadow.mapSize.y === side) return;
-  light.shadow.mapSize.set(side, side);
-  releaseShadowMap(light);
-}
-
-/**
- * Освобождает построенную карту теней источника вместе с её текстурой глубины.
- * Пустая карта (`null`) — обычное состояние источника, который ещё не рисовали:
- * three строит её на первом теневом проходе и сам никогда не освобождает.
- */
-function releaseShadowMap(light: THREE.DirectionalLight): void {
-  const map = light.shadow.map;
-  if (map === null) return;
-  map.depthTexture?.dispose();
-  map.dispose();
-  light.shadow.map = null;
 }

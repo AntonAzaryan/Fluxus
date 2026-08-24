@@ -284,12 +284,13 @@ describe('PRES-2: секция lighting — закрытая конфигура�
     expectErrors({ lighting: { shadows: { size: 1024 } } }, /lighting\.shadows\.size: неизвестное поле/);
   });
 
-  it('режим теней — только объявленные три значения', () => {
+  it('режим теней — только объявленные четыре значения (REND-30)', () => {
     expectErrors(
       { lighting: { shadows: { mode: 'soft' } } },
-      /lighting\.shadows\.mode: ожидался режим теней из none \| hybrid \| full/,
+      /lighting\.shadows\.mode: ожидался режим теней из none \| blob \| hybrid \| full/,
     );
-    for (const mode of ['none', 'hybrid', 'full']) {
+    // Порядок значений нормативен — по нему считается потолок пресета (QUAL-1).
+    for (const mode of ['none', 'blob', 'hybrid', 'full']) {
       expect(validatePresentationScene({ lighting: { shadows: { mode } } }).ok).toBe(true);
     }
   });
@@ -324,6 +325,46 @@ describe('PRES-2: секция lighting — закрытая конфигура�
     expectErrors({ lighting: true }, /lighting: ожидался объект секции/);
     expectErrors({ lighting: { ambient: 0.5 } }, /lighting\.ambient: ожидался объект секции/);
     expectErrors({ lighting: [] }, /lighting: ожидался объект секции.*массив/);
+  });
+
+  it('REND-29: полусферная подсветка и контровой источник — необязательные подсекции', () => {
+    const lighting = {
+      hemisphere: { skyColor: '#88aaff', groundColor: '#6b5a3a', intensity: 0.5 },
+      rim: { color: '#ffe8c0', intensity: 0.8, direction: { x: -6, y: 10, z: 4 } },
+    };
+    const result = validatePresentationScene({ decorations: [], lighting });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.lighting).toEqual(lighting);
+    // Отсутствие подсекции — отсутствие источника, а не источник с умолчаниями:
+    // наружу подсекция не выходит вовсе.
+    const bare = validatePresentationScene({ decorations: [], lighting: {} });
+    expect(bare.ok && bare.scene.lighting?.hemisphere).toBeUndefined();
+    expect(bare.ok && bare.scene.lighting?.rim).toBeUndefined();
+  });
+
+  it('REND-29: состав новых подсекций закрыт, значение не той формы — адресный отказ', () => {
+    expectErrors(
+      { lighting: { hemisphere: { sky: '#ffffff' } } },
+      /lighting\.hemisphere\.sky: неизвестное поле \(допустимы: skyColor, groundColor, intensity\)/,
+    );
+    expectErrors({ lighting: { rim: { falloff: 2 } } }, /lighting\.rim\.falloff: неизвестное поле/);
+    const errors = expectErrors(
+      {
+        lighting: {
+          hemisphere: { skyColor: 'небо', groundColor: '#zzz', intensity: -1 },
+          rim: { color: 'тепло', direction: { y: Number.POSITIVE_INFINITY } },
+        },
+      },
+      /lighting\.hemisphere\.skyColor: ожидался цвет формы "#rrggbb"/,
+      /lighting\.hemisphere\.groundColor: ожидался цвет формы "#rrggbb"/,
+      /lighting\.hemisphere\.intensity: ожидалось неотрицательное число интенсивности/,
+      /lighting\.rim\.color: ожидался цвет формы "#rrggbb"/,
+      /lighting\.rim\.direction\.y: ожидалось конечное число мировых единиц/,
+    );
+    expect(errors).toHaveLength(5);
+    expectErrors({ lighting: { hemisphere: 0.5 } }, /lighting\.hemisphere: ожидался объект секции/);
+    expectErrors({ lighting: { rim: [] } }, /lighting\.rim: ожидался объект секции.*массив/);
   });
 
   it('сцена без подсекции цикла разбирается как прежде: наружу цикл не выходит', () => {
@@ -415,6 +456,68 @@ describe('REND-32: подсекция цикла времени суток — �
         new RegExp(`phases\\[0\\]\\.${key}: параметров теней в фазе цикла нет`),
       );
     }
+  });
+
+  it('REND-32: фаза ведёт hemisphere и rim по кругу, если они есть у статики', () => {
+    const lighting = {
+      hemisphere: { skyColor: '#88aaff', groundColor: '#6b5a3a', intensity: 0.5 },
+      rim: { color: '#ffe8c0', intensity: 0.8 },
+      cycle: {
+        transitionSeconds: 5,
+        phases: [
+          { name: 'день', seconds: 120, hemisphere: { skyColor: '#a0c8ff' } },
+          { name: 'ночь', seconds: 120, hemisphere: { intensity: 0.1 }, rim: { intensity: 0 } },
+        ],
+      },
+    };
+    const result = validatePresentationScene({ decorations: [], lighting });
+    expect(result.ok ? [] : result.errors).toEqual([]);
+    if (!result.ok) return;
+    expect(result.scene.lighting).toEqual(lighting);
+  });
+
+  it('REND-32: фаза не включает источника, которого нет в статической части', () => {
+    // Наличие возможности — свойство секции; фаза меняет только числа, и
+    // включение источника из ничего отвергается адресно (design D6).
+    expectErrors(
+      { lighting: { cycle: { phases: [{ seconds: 1, hemisphere: { intensity: 1 } }, { seconds: 1 }] } } },
+      /lighting\.cycle\.phases\[0\]\.hemisphere: полусферной подсветки нет в статической части секции/,
+    );
+    expectErrors(
+      { lighting: { cycle: { phases: [{ seconds: 1 }, { seconds: 1, rim: { intensity: 1 } }] } } },
+      /lighting\.cycle\.phases\[1\]\.rim: контрового источника нет в статической части секции/,
+    );
+    // Пустая подсекция статики источник ЗАВОДИТ (умолчаниями подсистемы), и
+    // фаза вправе вести его числа.
+    expect(
+      validatePresentationScene({
+        lighting: {
+          hemisphere: {},
+          cycle: { phases: [{ seconds: 1, hemisphere: { intensity: 1 } }, { seconds: 1 }] },
+        },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('REND-32: состав фазовых подсекций закрыт тем же перечнем, что у статики', () => {
+    expectErrors(
+      {
+        lighting: {
+          hemisphere: {},
+          cycle: { phases: [{ seconds: 1, hemisphere: { sky: '#ffffff' } }, { seconds: 1 }] },
+        },
+      },
+      /lighting\.cycle\.phases\[0\]\.hemisphere\.sky: неизвестное поле/,
+    );
+    expectErrors(
+      {
+        lighting: {
+          rim: {},
+          cycle: { phases: [{ seconds: 1 }, { seconds: 1, rim: { color: 'тепло' } }] },
+        },
+      },
+      /lighting\.cycle\.phases\[1\]\.rim\.color: ожидался цвет формы "#rrggbb"/,
+    );
   });
 
   it('вырожденная подсекция отвергается: пустой список, одна фаза, нулевая длительность', () => {
@@ -559,7 +662,7 @@ describe('PRES-2, REND-34: секция postprocess — закрытая кон�
   it('неизвестный ключ отвергается адресно на КАЖДОМ уровне, а не игнорируется молча', () => {
     expectErrors(
       { postprocess: { toneMappin: {} } },
-      /postprocess\.toneMappin: неизвестное поле \(допустимы: toneMapping, bloom\)/,
+      /postprocess\.toneMappin: неизвестное поле \(допустимы: toneMapping, bloom, lut\)/,
     );
     expectErrors(
       { postprocess: { toneMapping: { operator: 'aces', gamma: 2.2 } } },
@@ -569,6 +672,38 @@ describe('PRES-2, REND-34: секция postprocess — закрытая кон�
       { postprocess: { bloom: { enabled: true, knee: 0.5 } } },
       /postprocess\.bloom\.knee: неизвестное поле/,
     );
+  });
+
+  it('REND-34: подсекция lut — ID таблицы обязателен, доля применения из [0, 1]', () => {
+    const postprocess = { lut: { asset: 'visuals/luts/warm.cube', amount: 0.6 } };
+    const result = validatePresentationScene({ decorations: [], postprocess });
+    expect(result.ok ? [] : result.errors).toEqual([]);
+    if (!result.ok) return;
+    expect(result.scene.postprocess).toEqual(postprocess);
+    // Доля необязательна: её умолчание — политика подсистемы рендера.
+    expect(validatePresentationScene({ postprocess: { lut: { asset: 'a.cube' } } }).ok).toBe(true);
+    // Отсутствие подсекции — отсутствие прохода, а не таблица с умолчаниями.
+    const bare = validatePresentationScene({ postprocess: {} });
+    expect(bare.ok && bare.scene.postprocess?.lut).toBeUndefined();
+  });
+
+  it('REND-34: состав подсекции lut закрыт, значение не той формы — адресный отказ', () => {
+    expectErrors(
+      { postprocess: { lut: { asset: 'a.cube', strength: 1 } } },
+      /postprocess\.lut\.strength: неизвестное поле \(допустимы: asset, amount\)/,
+    );
+    expectErrors(
+      { postprocess: { lut: {} } },
+      /postprocess\.lut\.asset: обязательное поле — ID ассета таблицы цвета/,
+    );
+    expectErrors({ postprocess: { lut: { asset: '' } } }, /postprocess\.lut\.asset/);
+    expectErrors({ postprocess: { lut: { asset: 12 } } }, /postprocess\.lut\.asset.*number/);
+    expectErrors(
+      { postprocess: { lut: { asset: 'a.cube', amount: 1.5 } } },
+      /postprocess\.lut\.amount: ожидалось число из \[0, 1\] — доля применения таблицы/,
+    );
+    expectErrors({ postprocess: { lut: { asset: 'a.cube', amount: -0.1 } } }, /postprocess\.lut\.amount/);
+    expectErrors({ postprocess: { lut: 'warm.cube' } }, /postprocess\.lut: ожидался объект секции/);
   });
 
   it('значение не той формы — адресный отказ по каждому полю', () => {

@@ -144,6 +144,10 @@ export { validateParticleEffect } from './particleEffect.js';
 export type { TerrainCurvatureMap } from './curvature.js';
 export { validateCurvatureMap, CURVATURE_SCALE } from './curvature.js';
 
+// таблица цветокоррекции кадра (`rendering` REND-34) — вид ассета `lut`
+export type { ColorLut } from './colorLut.js';
+export { MAX_LUT_SIZE, MIN_LUT_SIZE, parseCubeLut } from './colorLut.js';
+
 // парный presentation-документ сцены (`presentation-scene` PRES-1..3)
 export type { DecorationRecord, PresentationFog, PresentationScene } from './presentation.js';
 export {
@@ -160,10 +164,12 @@ export {
 export type {
   PresentationAmbientLight,
   PresentationDirectionalLight,
+  PresentationHemisphereLight,
   PresentationLightDirection,
   PresentationLighting,
   PresentationLightingCycle,
   PresentationLightingPhase,
+  PresentationRimLight,
   PresentationShadowMode,
   PresentationShadows,
 } from './presentationLighting.js';
@@ -171,6 +177,7 @@ export { PRESENTATION_SHADOW_MODES } from './presentationLighting.js';
 // секция `postprocess` документа (`rendering` REND-34)
 export type {
   PresentationBloom,
+  PresentationLut,
   PresentationPostprocess,
   PresentationToneMapping,
   PresentationToneMappingOperator,
@@ -184,5 +191,6 @@ export { pngTextureLoader, decodePng } from './loaders/png.js';
 export { manifestLoader, createManifestLoader } from './loaders/manifest.js';
 export type { ManifestLoaderOptions } from './loaders/manifest.js';
 export { curvatureLoader } from './loaders/curvature.js';
+export { LUT_ASSET_KIND, cubeLutLoader } from './loaders/cube.js';
 export { particleEffectLoader } from './loaders/particleEffect.js';
 export { presentationLoader } from './loaders/presentation.js';

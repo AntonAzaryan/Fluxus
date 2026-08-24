@@ -96,6 +96,8 @@ import {
   type VisualTier,
 } from '@game-mvp/assets';
 import type {
+  BlobCaster,
+  BlobCasterPose,
   EntityView,
   LightCarrier,
   LightCarrierPose,
@@ -654,6 +656,13 @@ interface InstanceRecord {
    * (REND-17), а снимается он вместе с инстансом.
    */
   lightCarrier: LightCarrier | null;
+  /**
+   * Носитель контактного пятна инстанса (REND-30, режим `blob`); null — инстанс
+   * не динамический кастер либо порта пятен у сборки нет. Живёт вместе с
+   * инстансом: радиус правится на нём переподачей манифеста (REND-17), а
+   * снимается он вместе с инстансом или со сменой яруса кастера.
+   */
+  blobCaster: BlobCaster | null;
   /** Публичный вид инстанса; строится лениво и живёт с инстансом (REND-17). */
   publicView: ModelInstanceView | null;
 }
@@ -877,6 +886,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       if (entityView.scale !== record.viewScale) {
         record.viewScale = entityView.scale;
         record.scale = entityView.scale ?? 1;
+        // След контактного пятна — производная габарита И масштаба (REND-30):
+        // правленый масштаб двигает размер пятна тем же кадром, каким двигает
+        // саму картинку и walkable-вклад ниже (REND-17, ED-15). Без этого пятно
+        // держало бы прежний радиус до пересборки инстанса.
+        this.syncBlobCaster(record);
       }
       this.applyAnimation(record);
       // Правка walkable-записи (позиция, курс, масштаб, сам флаг) доводит
@@ -950,6 +964,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // Компактация видимых записей в инстанс-буферы — последним: до неё batch
     // не знает ни позы кадра, ни видимости.
     for (const entry of this.batches.values()) entry.batch.flush(cost);
+
+    // Контактные пятна режима `blob` (REND-30) пишутся ЗДЕСЬ, а не в кадре
+    // подсистемы освещения: она зарегистрирована раньше владельца инстансов, её
+    // кадр идёт первым, и пятна отставали бы от юнитов на кадр. Что писать и
+    // писать ли вообще, решает по-прежнему она — здесь только момент, когда
+    // позы и видимость кадра уже посчитаны.
+    this.options.shadows?.blobCastersPosed?.();
   }
 
   /**
@@ -1583,6 +1604,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       record.controller?.setMapping(record.visual?.animations ?? {});
       this.syncBoneControls(record);
       this.syncSkin(record, before);
+      // Правленая запись двигает и след пятна (REND-30): анимация записи меняет
+      // ярус кастера, масштаб и габарит — радиус.
+      this.syncBlobCaster(record);
       // Правка записи (масштаб, наклон, перёд) двигает и walkable-поверхность
       // вместе с картинкой (REND-17 → REND-9).
       if (record.decoration) this.syncWalkable(record);
@@ -1955,6 +1979,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       fadedTargets: null,
       fadingOut: false,
       lightCarrier: null,
+      blobCaster: null,
       publicView: null,
     };
     this.applyEntryParams(record);
@@ -1965,6 +1990,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // объявляется здесь же, до готовности модели и независимо от того, рисуют
     // инстанс модель, заглушка (ASSET-4) или частицы (ASSET-14).
     this.syncLightCarrier(record);
+    // Пятно — свойство ЯРУСА КАСТЕРА (REND-30), и объявляется оно тем же
+    // порядком: радиус нулевой, пока габаритов нет, и приезжает вместе с моделью.
+    this.syncBlobCaster(record);
     return record;
   }
 
@@ -2104,6 +2132,48 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   }
 
   /**
+   * Носитель контактного пятна инстанса (REND-30, режим `blob`) — приёмнику
+   * подсистемы освещения. Носителями становятся ровно ДИНАМИЧЕСКИЕ кастеры: в
+   * `blob` статика теней не отбрасывает, и пятна ей не положены.
+   *
+   * Заводится он независимо от действующего режима теней: режим — свойство
+   * секции, которое автор правит в рантайме (ED-15), и держать реестр по режиму
+   * значило бы показывать пятна не раньше, чем пересоздадутся инстансы.
+   * Стоимости у реестра нет — по нему ходит только кадр режима `blob`.
+   *
+   * Радиус — ПРОИЗВОДНАЯ ДАННЫХ (REND-30): горизонтальный габарит записи вида,
+   * тот же источник, что у отсечения и LOD, — поэтому он и пересчитывается
+   * здесь же, на переподаче манифеста (REND-17).
+   */
+  private syncBlobCaster(record: InstanceRecord): void {
+    const sink = this.options.shadows;
+    if (sink?.setBlobCaster === undefined) return;
+    if (casterTierOf(record) !== 'dynamic') {
+      this.dropBlobCaster(record);
+      return;
+    }
+    const existing = record.blobCaster;
+    if (existing !== null) {
+      existing.radius = blobRadiusOf(record);
+      return;
+    }
+    const next: BlobCaster = {
+      radius: blobRadiusOf(record),
+      pose: (out) => poseOfBlob(record, out),
+    };
+    record.blobCaster = next;
+    sink.setBlobCaster(next);
+  }
+
+  /** Пятно снято: исчезнувший инстанс либо инстанс, ставший статикой (REND-30). */
+  private dropBlobCaster(record: InstanceRecord): void {
+    const caster = record.blobCaster;
+    if (caster === null) return;
+    record.blobCaster = null;
+    this.options.shadows?.dropBlobCaster?.(caster);
+  }
+
+  /**
    * Заглушка инстанса (ASSET-4). Геометрия и материал у всех заглушек ОБЩИЕ:
    * пер-инстансного в заглушке нет ничего, а своя пара на инстанс — это лишний
    * буфер и лишний материал на каждую незагруженную модель.
@@ -2194,6 +2264,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // Ярус нарисованного сменился (заглушка → модель либо → запись батча): его
     // корень объявляется приёмнику теней заново.
     this.markCaster(record);
+    // Габариты приехали вместе с моделью (ASSET-4, ASSET-12) — след пятна
+    // считается по ним, а не по заглушке (REND-30).
+    this.syncBlobCaster(record);
 
     // Модель готова — walkable-вклад появляется в поле, и подписчики поверхности
     // узнают о клетках под bbox не позже следующего кадра (ASSET-4 → REND-9).
@@ -2444,6 +2517,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // Источник снят вместе с инстансом (REND-33): источники прочих инстансов
     // той же записи горят как горели.
     this.dropLightCarrier(record);
+    this.dropBlobCaster(record);
     this.detachModel(record);
     if (record.holder !== null) this.options.shadows?.dropCaster(record.holder);
     record.holder?.removeFromParent();
@@ -2656,6 +2730,52 @@ function poseOfCarrier(record: InstanceRecord, out: LightCarrierPose): boolean {
   out.qz = record.quat.z;
   out.qw = record.quat.w;
   return true;
+}
+
+/**
+ * Позиция контактного пятна инстанса (REND-30): ТА САМАЯ поза, которой инстанс
+ * нарисован в этом кадре (REND-3), а не второй её расчёт. `false` — пятна в
+ * кадре нет, и оснований для этого три:
+ *
+ * - позы кадра инстанс ещё не получил;
+ * - он отсечён пирамидой видимости (REND-21) — в кадре его нет вовсе;
+ * - он НЕ ПРОЯВЛЕН ПОЛНОСТЬЮ (`fade < 1`, FOW-8). Последнее — не мелочь:
+ *   поддерево инстанса растворяется прозрачностью, а пятно непрозрачности не
+ *   имеет вовсе и осталось бы чёрным кругом под пустотой. Условие взято долей
+ *   проявленности, а не флагом `fadingOut`, потому что дефект СИММЕТРИЧЕН:
+ *   угасание «ушла в туман» и проявление вернувшегося из тумана (FOW-8) — одна
+ *   и та же рампа, пройденная в разные стороны, и на обеих модели в кадре
+ *   почти нет. REND-30 требует, чтобы пятно было ЧАСТЬЮ ПРЕДСТАВЛЕНИЯ инстанса,
+ *   а представление на рампе — это доля `fade`.
+ *
+ * Доля пересчитывается в `poseAll` того же кадра, то есть ДО `blobCastersPosed`
+ * (см. `updateFrame`), и вне рампы она равна единице по построению: у декораций
+ * и при выключенном fade запись держит 1 всегда, так что ни один другой путь
+ * пятна не теряет.
+ */
+function poseOfBlob(record: InstanceRecord, out: BlobCasterPose): boolean {
+  if (!record.posed || !record.visible || record.fade < 1) return false;
+  out.x = record.pos.x;
+  out.y = record.pos.y;
+  out.z = record.pos.z;
+  return true;
+}
+
+/**
+ * Радиус контактного пятна инстанса, мировые единицы (REND-30): половина
+ * БОЛЬШЕГО горизонтального габарита вида, взятая из тех же данных, что питают
+ * отсечение и выбор уровня детализации (REND-21, REND-22, ASSET-12).
+ *
+ * Горизонтального, а не диагонального: пятно лежит на полу и повторяет след
+ * инстанса, а высота модели к следу отношения не имеет — иначе башня отбрасывала
+ * бы пятно во всю свою высоту. Габаритов ещё нет (модель не загружена, ASSET-4)
+ * — радиус нулевой: пятно появится вместе с моделью, а не константой кода.
+ */
+function blobRadiusOf(record: InstanceRecord): number {
+  const bounds = cullBoundsOf(record) ?? boundsOf(record);
+  if (bounds === null) return 0;
+  const width = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+  return (width / 2) * Math.abs(record.scale);
 }
 
 /**

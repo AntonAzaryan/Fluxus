@@ -159,6 +159,16 @@ interface GltfMaterial {
   readonly normalTexture?: GltfTextureRef;
   readonly emissiveFactor?: readonly [number, number, number];
   readonly emissiveTexture?: GltfTextureRef;
+  /**
+   * Расширения материала. Единственное читаемое —
+   * `KHR_materials_emissive_strength` (ASSET-5): множитель эмиссии сверх
+   * единицы, без которого HDR-свечение не доезжает до порога bloom (REND-34).
+   * Остальные расширения формата модуль не знает и молча пропускает — таков
+   * контракт расширений glTF.
+   */
+  readonly extensions?: {
+    readonly KHR_materials_emissive_strength?: { readonly emissiveStrength?: number };
+  };
   readonly alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND';
   readonly alphaCutoff?: number;
   readonly doubleSided?: boolean;
@@ -464,6 +474,23 @@ function imageBytes(
   return buffer.subarray(start, start + bv.byteLength);
 }
 
+/**
+ * Сила эмиссии материала (ASSET-5) — из расширения
+ * `KHR_materials_emissive_strength`. Умолчание расширения и умолчание отсутствия
+ * расширения совпадают и равны 1: файл без него обязан давать вид байт-в-байт
+ * как до появления поля.
+ *
+ * Значение, не являющееся конечным неотрицательным числом, читается как 1: у
+ * отрицательной силы прочтения нет вовсе (она вывернула бы эмиссию в
+ * отрицательный цвет), а сверху границы нет — единица и есть точка, за которой
+ * начинается HDR-свечение, пересекающее порог bloom (`rendering` REND-34).
+ */
+function emissiveStrengthOf(material: GltfMaterial | undefined): number {
+  const strength = material?.extensions?.KHR_materials_emissive_strength?.emissiveStrength;
+  if (typeof strength !== 'number' || !Number.isFinite(strength) || strength < 0) return 1;
+  return strength;
+}
+
 /** Сигнатура PNG — единственный формат встроенных изображений, который модуль умеет. */
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
 
@@ -712,6 +739,13 @@ async function normalizeGltf(
       normalTexture: m?.normalTexture?.index ?? null,
       emissiveFactor: Object.freeze((m?.emissiveFactor ?? [0, 0, 0]) as [number, number, number]),
       emissiveTexture: m?.emissiveTexture?.index ?? null,
+      // Сила эмиссии — из расширения (ASSET-5); файл без расширения даёт 1, то
+      // есть вид байт-в-байт как до появления поля. Отрицательное значение
+      // расширением не описано и прочтения не имеет — оно гасило бы эмиссию в
+      // отрицательный цвет; такой файл читается как «силы нет», то есть 1.
+      // Наверх значение не клампится: единица и есть точка, выше которой
+      // начинается HDR (REND-34).
+      emissiveStrength: emissiveStrengthOf(m),
       alphaMode: m?.alphaMode === 'MASK' ? 'mask' : m?.alphaMode === 'BLEND' ? 'blend' : 'opaque',
       alphaCutoff: m?.alphaCutoff ?? 0.5,
       doubleSided: m?.doubleSided ?? false,

@@ -93,13 +93,28 @@ export function numberField(
   if (bad) errors.push(`${path}.${key}: ожидалось ${range.what}, получено ${typeName(value)}`);
 }
 
+/**
+ * Поле цвета ПО ИМЕНИ — та же форма `#rrggbb` на все секции документа. Имя
+ * приходит параметром потому, что тонов у подсекции бывает больше одного:
+ * полусферная подсветка (`rendering` REND-29) несёт «небо» и «землю», и второй
+ * её тон обязан проверяться тем же правилом и тем же текстом отказа, что первый.
+ */
+export function namedColorField(
+  node: Record<string, unknown>,
+  path: string,
+  key: string,
+  errors: string[],
+): void {
+  if (!(key in node)) return;
+  const value = node[key];
+  if (typeof value !== 'string' || !HEX_COLOR_RE.test(value)) {
+    errors.push(`${path}.${key}: ожидался цвет формы "#rrggbb", получено ${typeName(value)}`);
+  }
+}
+
 /** Тон источника — та же форма `#rrggbb`, что у тона тумана. */
 export function colorField(node: Record<string, unknown>, path: string, errors: string[]): void {
-  if (!('color' in node)) return;
-  const value = node.color;
-  if (typeof value !== 'string' || !HEX_COLOR_RE.test(value)) {
-    errors.push(`${path}.color: ожидался цвет формы "#rrggbb", получено ${typeName(value)}`);
-  }
+  namedColorField(node, path, 'color', errors);
 }
 
 /** Булево поле секции: отсутствие и `false` неразличимы (PRES-2), третьего прочтения нет. */

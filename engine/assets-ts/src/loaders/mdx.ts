@@ -202,6 +202,9 @@ function buildMaterials(mdl: MdlModel.Model): NormalizedMaterial[] {
       normalTexture: null,
       emissiveFactor: Object.freeze([0, 0, 0] as [number, number, number]),
       emissiveTexture: null,
+      // Понятия «сила эмиссии» у MDX нет: 1 — умолчание контракта (ASSET-5), то
+      // есть вид модели от появления поля не меняется ни на бит.
+      emissiveStrength: 1,
       alphaMode: 'opaque' as const,
       alphaCutoff: 0.5,
       doubleSided: true,

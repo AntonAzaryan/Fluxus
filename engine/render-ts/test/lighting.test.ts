@@ -20,8 +20,10 @@ import type {
 } from '@game-mvp/assets';
 import {
   DEFAULT_CYCLE_TRANSITION_SECONDS,
+  DEFAULT_HEMISPHERE,
   DEFAULT_LIGHTING_CONFIG,
   DEFAULT_MAX_LOCAL_LIGHTS,
+  DEFAULT_RIM,
   LightingSubsystem,
   ModelsSubsystem,
   PresentationStage,
@@ -41,6 +43,7 @@ import {
   type QualityPreset,
   type RenderContext,
 } from '../src/index.js';
+import { OptionalLights } from '../src/lighting/optionalLights.js';
 import { flatGrid, makeAssets, makeEntityView, makeModel, makeTickView } from './fixtures.js';
 
 const MODEL_ID = 'models/rock.mdx';
@@ -73,7 +76,11 @@ interface Rig {
  * Модель разрешается сразу — батчевый ярус (REND-20) собирается той же
  * доставкой, и тестировать заглушку вместо него незачем.
  */
-function makeRig(config?: PresentationLighting, preset?: QualityPreset): Rig {
+function makeRig(
+  config?: PresentationLighting,
+  preset?: QualityPreset,
+  options: { readonly fadeSeconds?: number } = {},
+): Rig {
   const assets = makeAssets();
   const scene = new THREE.Scene();
   const ctx: RenderContext = { scene, assets: assets.service, config: { heightStep: 0.5 } };
@@ -83,7 +90,11 @@ function makeRig(config?: PresentationLighting, preset?: QualityPreset): Rig {
   stage.register(lighting);
   const terrain = new TerrainSubsystem(grid, { shadows: lighting });
   stage.register(terrain);
-  const models = new ModelsSubsystem(makeManifest(), { shadows: lighting, warn: () => {} });
+  const models = new ModelsSubsystem(makeManifest(), {
+    shadows: lighting,
+    warn: () => {},
+    ...(options.fadeSeconds === undefined ? {} : { fadeSeconds: options.fadeSeconds }),
+  });
   stage.register(models);
   if (preset !== undefined) new QualityController(stage, preset);
   assets.resolve('model', MODEL_ID, makeModel());
@@ -164,9 +175,43 @@ describe('конфигурация освещения — данные секц�
       directionX: 1,
       directionY: 2,
       directionZ: 3,
+      hemisphere: undefined,
+      rim: undefined,
       shadowMode: 'full',
       shadowMapSize: 512,
       staticShare: 0.25,
+    });
+  });
+
+  it('REND-29: нет подсекции — нет источника, а не источник с умолчаниями', () => {
+    // Второго способа записать «выключено» у формата нет: `undefined` здесь —
+    // единственное прочтение отсутствия, и на нём держится «байт-в-байт».
+    expect(DEFAULT_LIGHTING_CONFIG.hemisphere).toBeUndefined();
+    expect(DEFAULT_LIGHTING_CONFIG.rim).toBeUndefined();
+    expect(resolveLightingConfig({}).hemisphere).toBeUndefined();
+    expect(resolveLightingConfig({}).rim).toBeUndefined();
+  });
+
+  it('REND-29: написанная подсекция заводит источник, дыры полей — умолчания', () => {
+    const empty = resolveLightingConfig({ hemisphere: {}, rim: {} });
+    expect(empty.hemisphere).toEqual(DEFAULT_HEMISPHERE);
+    expect(empty.rim).toEqual(DEFAULT_RIM);
+
+    const authored = resolveLightingConfig({
+      hemisphere: { skyColor: '#88aaff', intensity: 0.25 },
+      rim: { color: '#ffe8c0', direction: { x: -1, z: 5 } },
+    });
+    expect(authored.hemisphere).toEqual({
+      skyColor: '#88aaff',
+      groundColor: DEFAULT_HEMISPHERE.groundColor,
+      intensity: 0.25,
+    });
+    expect(authored.rim).toEqual({
+      color: '#ffe8c0',
+      intensity: DEFAULT_RIM.intensity,
+      directionX: -1,
+      directionY: DEFAULT_RIM.directionY,
+      directionZ: 5,
     });
   });
 
@@ -342,6 +387,138 @@ describe('подсистема освещения — источники сце�
   });
 });
 
+// ------------------------------ полусферная подсветка и контровой источник
+
+/** Полусферные подсветки сцены — их число и есть наблюдаемое «есть/нет». */
+function hemisphereLights(scene: THREE.Scene): THREE.HemisphereLight[] {
+  return scene.children.filter(
+    (node) => (node as THREE.HemisphereLight).isHemisphereLight,
+  ) as THREE.HemisphereLight[];
+}
+
+describe('полусферная подсветка и контровой источник (REND-29)', () => {
+  it('сцена без подсекций: сцена-граф ровно тот же, что до появления возможности', () => {
+    const rig = makeRig();
+    // «Нет подсекции — нет источника»: ни полусферной подсветки, ни контрового
+    // источника в сцене не заводится, и число направленных остаётся прежним —
+    // одно солнце. Держись в сцене нулевой источник, он всё равно занимал бы
+    // место в униформах материалов, и кадр перестал бы совпадать байт-в-байт.
+    expect(hemisphereLights(rig.scene)).toEqual([]);
+    expect(directionalLights(rig.scene).length).toBe(1);
+    expect(rig.lighting.config.hemisphere).toBeUndefined();
+    expect(rig.lighting.config.rim).toBeUndefined();
+  });
+
+  it('подсекция заводит источник с авторскими числами; тонов у подсветки два', () => {
+    const rig = makeRig({
+      hemisphere: { skyColor: '#88aaff', groundColor: '#6b5a3a', intensity: 0.5 },
+    });
+
+    const [light] = hemisphereLights(rig.scene);
+    expect(light).toBeDefined();
+    expect(light!.color.getHexString()).toBe('88aaff');
+    expect(light!.groundColor.getHexString()).toBe('6b5a3a');
+    expect(light!.intensity).toBe(0.5);
+    // Тени подсветка не создаёт вовсе: карт у неё нет и быть не может.
+    expect(directionalLights(rig.scene).length).toBe(1);
+  });
+
+  it('контровой источник — второй направленный, теней не отбрасывает и вне реестра кастеров', () => {
+    const rig = makeRig({
+      rim: { color: '#ffe8c0', intensity: 0.8, direction: { x: -6, y: 10, z: 4 } },
+      shadows: { mode: 'full' },
+    });
+
+    const lights = directionalLights(rig.scene);
+    // Солнце плюс контровой; пары ярусов у `full` нет — карта одна.
+    expect(lights.length).toBe(2);
+    const rim = rig.lighting.lights.rim;
+    expect(rim.castShadow).toBe(false);
+    expect(rim.intensity).toBe(0.8);
+    expect(rim.color.getHexString()).toBe('ffe8c0');
+    // Направление — та же семантика, что у солнца: смещение позиции от цели.
+    const direction = rim.position.clone().sub(rim.target.position).normalize();
+    expect(direction.x).toBeCloseTo(-6 / Math.hypot(-6, 10, 4), 6);
+    expect(direction.z).toBeCloseTo(4 / Math.hypot(-6, 10, 4), 6);
+    // В реестре кастеров источника нет: тени принадлежат солнцу (REND-30).
+    expect(rig.lighting.casterCount('static') + rig.lighting.casterCount('dynamic')).toBeGreaterThan(
+      0,
+    );
+    expect(rig.lighting.lights.sun.castShadow).toBe(true);
+  });
+
+  it('правка секции в рантайме заводит и снимает источники без пересборки (ED-15)', () => {
+    const rig = makeRig();
+
+    rig.lighting.applyConfig({ hemisphere: { intensity: 0.4 }, rim: { intensity: 0.7 } });
+
+    const hemisphere = hemisphereLights(rig.scene);
+    expect(hemisphere.length).toBe(1);
+    expect(hemisphere[0]!.intensity).toBe(0.4);
+    expect(directionalLights(rig.scene).length).toBe(2);
+
+    // Правка чисел — на ЖИВОМ источнике: объект тот же, пересоздания нет.
+    rig.lighting.applyConfig({ hemisphere: { intensity: 0.1 }, rim: { intensity: 0.7 } });
+    expect(hemisphereLights(rig.scene)[0]).toBe(hemisphere[0]);
+    expect(hemisphereLights(rig.scene)[0]!.intensity).toBe(0.1);
+
+    // Снятая подсекция снимает источник — вместе с целью контрового света.
+    rig.lighting.applyConfig({});
+    expect(hemisphereLights(rig.scene)).toEqual([]);
+    expect(directionalLights(rig.scene).length).toBe(1);
+    expect(rig.lighting.lights.rim.target.parent).toBeNull();
+  });
+
+  it('запись кадра без значений источника его НЕ трогает (REND-32)', () => {
+    // Флаги записи и присутствие источника в сцене — разные вопросы: первый про
+    // «есть ли что ставить на этом кадре», второй про «есть ли куда». Сегодня
+    // они совпадают по построению конфигурации, но контракт записи держится
+    // флагом, и запись без значений обязана оставить живой источник как есть —
+    // иначе на него легли бы нули незаполненной записи.
+    const optional = new OptionalLights();
+    const scene = new THREE.Scene();
+    const extent = { centerX: 0, centerY: 0, radius: 10 };
+    optional.apply(scene, extent, { skyColor: '#ffffff', groundColor: '#ffffff', intensity: 1 }, {
+      color: '#ffffff',
+      intensity: 1,
+      directionX: 0,
+      directionY: 0,
+      directionZ: 1,
+    });
+
+    optional.applySample(
+      {
+        hasHemisphere: false,
+        hasRim: false,
+        hemisphereSkyColor: new THREE.Color('#000000'),
+        hemisphereGroundColor: new THREE.Color('#000000'),
+        hemisphereIntensity: 0,
+        rimColor: new THREE.Color('#000000'),
+        rimIntensity: 0,
+        rimDirectionX: 0,
+        rimDirectionY: 0,
+        rimDirectionZ: 0,
+      },
+      extent,
+    );
+
+    expect(optional.hemisphere.intensity).toBe(1);
+    expect(optional.hemisphere.color.getHexString()).toBe('ffffff');
+    expect(optional.rim.intensity).toBe(1);
+    expect(optional.rim.color.getHexString()).toBe('ffffff');
+  });
+
+  it('снос подсистемы снимает оба источника со сцены (REND-31)', () => {
+    const rig = makeRig({ hemisphere: {}, rim: {} });
+    expect(hemisphereLights(rig.scene).length).toBe(1);
+
+    rig.lighting.dispose();
+
+    expect(hemisphereLights(rig.scene)).toEqual([]);
+    expect(directionalLights(rig.scene)).toEqual([]);
+  });
+});
+
 // ------------------------------------------------------ ярусы кастеров
 
 describe('ярус теневого кастера — производная данных (design D3)', () => {
@@ -413,6 +590,259 @@ describe('ярус теневого кастера — производная д
     // Запись переехала в батч своего яруса целиком: прежний батч остался в
     // кэше пустым (REND-3), а записи в нём нет ни одной.
     expect(rig.models.batchStats().records).toBe(1);
+  });
+});
+
+// ------------------------------------------------- контактные пятна (blob)
+
+describe('режим теней `blob` — контактные пятна вместо карт (REND-30)', () => {
+  it('порядок стоимости: `none` < `blob` < `hybrid` < `full`', () => {
+    expect(shadowModeRank('none')).toBeLessThan(shadowModeRank('blob'));
+    expect(shadowModeRank('blob')).toBeLessThan(shadowModeRank('hybrid'));
+    // Потолок пресета считается тем же рангом — второго определения порядка нет.
+    expect(minShadowMode('hybrid', 'blob')).toBe('blob');
+    expect(minShadowMode('blob', 'full')).toBe('blob');
+    expect(minShadowMode('none', 'blob')).toBe('none');
+  });
+
+  it('карт теней не строится, статика теней не отбрасывает', () => {
+    const rig = makeRig({ shadows: { mode: 'blob' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+
+    // Ни один источник карты не несёт: теневого прохода в режиме нет вовсе.
+    expect(rig.lighting.lights.sun.castShadow).toBe(false);
+    expect(rig.lighting.lights.sunDynamic.castShadow).toBe(false);
+    // Пара ярусов — свойство `hybrid`: здесь источник один.
+    expect(directionalLights(rig.scene).length).toBe(1);
+    // Статические кастеры теней не отбрасывают и не принимают.
+    expect(floorMesh(rig.scene).castShadow).toBe(false);
+    expect(floorMesh(rig.scene).receiveShadow).toBe(false);
+    for (const mesh of rig.models.batchMeshes()) expect(mesh.castShadow).toBe(false);
+  });
+
+  it('под динамикой пятна, и следуют они позиции инстанса кадр в кадр', () => {
+    const rig = makeRig({ shadows: { mode: 'blob' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock', prevX: 2, currX: 2, prevY: 3, currY: 3 })]));
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+
+    const mesh = rig.lighting.blobShadows;
+    expect(mesh).not.toBeNull();
+    // Носитель ровно один — динамический инстанс; статичная декорация пятна не
+    // получает: в этом режиме статика теней не отбрасывает вовсе.
+    expect(rig.lighting.blobCasterCount).toBe(1);
+    expect(mesh!.count).toBe(1);
+    expect(mesh!.parent).toBe(rig.scene);
+
+    const matrix = new THREE.Matrix4();
+    mesh!.getMatrixAt(0, matrix);
+    const position = new THREE.Vector3().setFromMatrixPosition(matrix);
+    expect(position.x).toBeCloseTo(2, 6);
+    expect(position.y).toBeCloseTo(3, 6);
+    // Размер — производная габарита вида, а не константа кода: у фикстурной
+    // модели след ненулевой, и диаметр пятна ему пропорционален.
+    const scale = new THREE.Vector3().setFromMatrixScale(matrix);
+    expect(scale.x).toBeGreaterThan(0);
+    expect(scale.x).toBeCloseTo(scale.y, 6);
+
+    // Юнит переехал — пятно за ним.
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock', prevX: 5, currX: 5, prevY: -1, currY: -1 })]));
+    rig.stage.frame(0.016, 0);
+    mesh!.getMatrixAt(0, matrix);
+    position.setFromMatrixPosition(matrix);
+    expect(position.x).toBeCloseTo(5, 6);
+    expect(position.y).toBeCloseTo(-1, 6);
+  });
+
+  it('пятно исчезает вместе с инстансом', () => {
+    const rig = makeRig({ shadows: { mode: 'blob' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+    expect(rig.lighting.blobShadows?.count).toBe(1);
+
+    rig.stage.publish(PRODUCER, makeTickView([]));
+    rig.stage.frame(0.016, 0);
+
+    expect(rig.lighting.blobCasterCount).toBe(0);
+    expect(rig.lighting.blobShadows?.count).toBe(0);
+  });
+
+  /** Кадры до конца рампы проявления (FOW-8): её длина — доля от `fadeSeconds`. */
+  function settleFade(rig: Rig): void {
+    for (let frame = 0; frame < 30; frame++) rig.stage.frame(1 / 60, 0);
+  }
+
+  it('пятно уходит вместе с инстансом, а не переживает его угасание (FOW-8)', () => {
+    // Инстанс, ушедший в туман, ДОИГРЫВАЕТ угасание: его поддерево растворяется
+    // до нулевой непрозрачности. Непрозрачности у пятна нет вовсе, и переживи
+    // оно угасание — последние кадры показывали бы чёрный круг под пустотой.
+    // REND-30: пятно — часть представления инстанса и исчезает вместе с ним.
+    const rig = makeRig({ shadows: { mode: 'blob' } }, undefined, { fadeSeconds: 0.4 });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    settleFade(rig);
+    expect(rig.lighting.blobShadows?.count).toBe(1);
+
+    // Сущность ушла из доставки без события смерти — это и есть «ушла в туман».
+    rig.stage.publish(PRODUCER, makeTickView([]));
+    rig.stage.frame(1 / 60, 0);
+
+    // Инстанс ещё жив и доигрывает угасание, а пятна под ним уже нет.
+    expect(rig.models.instanceFor(1)).not.toBeNull();
+    expect(rig.lighting.blobShadows?.count).toBe(0);
+    // Носитель при этом из реестра не выпал: он снимается вместе с инстансом,
+    // а до конца угасания просто не отдаёт позы.
+    expect(rig.lighting.blobCasterCount).toBe(1);
+  });
+
+  it('пятно не опережает инстанс на ПРОЯВЛЕНИИ — та же рампа с другой стороны (FOW-8)', () => {
+    // Зеркало предыдущего случая: вернувшийся из тумана инстанс начинает с
+    // нулевой проявленности и набирает её за долю `fadeSeconds`. Нарисуй мы
+    // пятно сразу — под всё ещё невидимой моделью лежал бы сплошной чёрный круг,
+    // ровно тот дефект, ради которого закрыто угасание.
+    const rig = makeRig({ shadows: { mode: 'blob' } }, undefined, { fadeSeconds: 0.4 });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+
+    rig.stage.frame(1 / 60, 0);
+
+    // Носитель объявлен сразу — он свойство яруса кастера, — а позы не отдаёт.
+    expect(rig.lighting.blobCasterCount).toBe(1);
+    expect(rig.lighting.blobShadows?.count).toBe(0);
+
+    // Проявление доиграно — пятно на месте.
+    settleFade(rig);
+    expect(rig.lighting.blobShadows?.count).toBe(1);
+  });
+
+  it('правленый масштаб размещения двигает и размер пятна (REND-17, ED-15)', () => {
+    // Радиус пятна — производная габарита вида И масштаба инстанса (REND-30).
+    // Правка масштаба идёт на ЖИВОМ инстансе (пересборки нет), и след обязан
+    // поехать тем же кадром, каким едут картинка и walkable-вклад.
+    const rig = makeRig({ shadows: { mode: 'blob' } });
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Torch' })]));
+    rig.stage.frame(0.016, 0);
+    const mesh = rig.lighting.blobShadows!;
+    const matrix = new THREE.Matrix4();
+    mesh.getMatrixAt(0, matrix);
+    const before = new THREE.Vector3().setFromMatrixScale(matrix).x;
+    expect(before).toBeGreaterThan(0);
+
+    rig.stage.publishDecorations(
+      decorations([makeEntityView(2, { kind: 'Torch', scale: 2 })]),
+    );
+    rig.stage.frame(0.016, 0);
+
+    mesh.getMatrixAt(0, matrix);
+    expect(new THREE.Vector3().setFromMatrixScale(matrix).x).toBeCloseTo(before * 2, 5);
+  });
+
+  it('пятно рисуется В СЦЕНЕ, то есть до маски тумана (FOW-7, QUAL-2)', () => {
+    const rig = makeRig({ shadows: { mode: 'blob' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+
+    const mesh = rig.lighting.blobShadows!;
+    // Меш пятен — узел ОСНОВНОЙ сцены: маска тумана ложится финальным проходом
+    // поверх всего кадра (FOW-7), поэтому пятно затемнено наравне с самим
+    // инстансом, и позицию скрытого юнита по нему не прочитать.
+    expect(mesh.parent).toBe(rig.scene);
+    // Собственной картой теней пятно не является и в теневой проход не входит.
+    expect(mesh.castShadow).toBe(false);
+    expect(mesh.receiveShadow).toBe(false);
+  });
+
+  it('смена режима гасит пятна, а возврат зажигает их тем же мешем (ED-15)', () => {
+    const rig = makeRig({ shadows: { mode: 'blob' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+    const mesh = rig.lighting.blobShadows;
+    expect(mesh?.count).toBe(1);
+
+    rig.lighting.applyConfig({ shadows: { mode: 'hybrid' } });
+    rig.stage.frame(0.016, 0);
+    expect(mesh!.count).toBe(0);
+    expect(mesh!.visible).toBe(false);
+    // Реестр носителей режимом не управляется: он свойство яруса кастера, и
+    // правка секции обязана показать пятна ближайшим кадром.
+    expect(rig.lighting.blobCasterCount).toBe(1);
+
+    rig.lighting.applyConfig({ shadows: { mode: 'blob' } });
+    rig.stage.frame(0.016, 0);
+    expect(rig.lighting.blobShadows).toBe(mesh);
+    expect(mesh!.count).toBe(1);
+    expect(mesh!.visible).toBe(true);
+  });
+
+  it('потолок пресета режет авторский hybrid до blob по рангу (QUAL-1)', () => {
+    const authored: PresentationLighting = { shadows: { mode: 'hybrid', mapSize: 2048 } };
+    const before = JSON.stringify(authored);
+    const rig = makeRig(authored, { 'lighting.shadowMode': 'blob' });
+
+    expect(rig.lighting.config.shadowMode).toBe('blob');
+    // Карты теней не строятся: потолок снял именно их, а не пятна.
+    expect(rig.lighting.lights.sun.castShadow).toBe(false);
+    // Документ сцены пресет не трогает ни байтом.
+    expect(JSON.stringify(authored)).toBe(before);
+  });
+
+  it('потолок ВЫШЕ авторского режима не поднимает: `min` работает в одну сторону', () => {
+    const rig = makeRig({ shadows: { mode: 'blob' } }, { 'lighting.shadowMode': 'full' });
+    expect(rig.lighting.config.shadowMode).toBe('blob');
+  });
+
+  it('снос подсистемы отдаёт меш пятен и чистит реестр носителей (REND-31)', () => {
+    const rig = makeRig({ shadows: { mode: 'blob' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+    const mesh = rig.lighting.blobShadows!;
+
+    rig.lighting.dispose();
+
+    expect(rig.lighting.blobShadows).toBeNull();
+    expect(rig.lighting.blobCasterCount).toBe(0);
+    expect(mesh.parent).toBeNull();
+  });
+});
+
+describe('счётчик контактных пятен (PERF-2, PERF-3)', () => {
+  it('число пятен за кадр детерминировано и растёт составом доставки', () => {
+    const rig = makeRig({ shadows: { mode: 'blob' } });
+    rig.stage.publish(
+      PRODUCER,
+      makeTickView([
+        makeEntityView(1, { kind: 'Rock' }),
+        makeEntityView(2, { kind: 'Rock', prevX: 4, currX: 4 }),
+      ]),
+    );
+
+    const first = createCostCounters();
+    withCostSink(first, () => {
+      rig.stage.frame(0.016, 0);
+    });
+    const second = createCostCounters();
+    withCostSink(second, () => {
+      rig.stage.frame(0.016, 0);
+    });
+
+    // Тот же кадр — то же число: ни времени, ни состояния GPU в счётчике нет.
+    expect(first.lightingBlobDecals).toBe(2);
+    expect(second.lightingBlobDecals).toBe(2);
+    // Карт теней в режиме нет — ярусные счётчики нулевые.
+    expect(first.lightingStaticCasters).toBe(0);
+    expect(first.lightingDynamicCasters).toBe(0);
+  });
+
+  it('вне режима `blob` счётчик нулевой: пятен там нет вовсе', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+
+    const cost = createCostCounters();
+    withCostSink(cost, () => {
+      rig.stage.frame(0.016, 0);
+    });
+
+    expect(cost.lightingBlobDecals).toBe(0);
   });
 });
 
@@ -687,6 +1117,65 @@ describe('цикл времени суток — исполнение подси
     expect(rig.lighting.lights.ambient.intensity).toBe(0);
     expect(rig.lighting.lights.sun.intensity).toBe(0);
     expect(rig.lighting.lights.ambient.color.getHexString()).toBe('000000');
+  });
+
+  it('REND-32: фазы ведут hemisphere и rim наравне с рассеянным и направленным', () => {
+    const rig = makeRig(
+      cycleSection({
+        hemisphere: { skyColor: '#ffffff', groundColor: '#ffffff', intensity: 1 },
+        rim: { color: '#ffffff', intensity: 1, direction: { x: 0, y: 0, z: 10 } },
+        cycle: {
+          transitionSeconds: 2,
+          phases: [
+            { ...PHASES[0]!, hemisphere: { intensity: 1 }, rim: { intensity: 1 } },
+            {
+              ...PHASES[1]!,
+              hemisphere: { skyColor: '#000000', intensity: 0 },
+              rim: { intensity: 0 },
+            },
+          ],
+        },
+      }),
+    );
+    const { hemisphere, rim } = rig.lighting.lights;
+    // Первая фаза стоит сразу: поле, которого фаза не назвала, держит значение
+    // статической части — тон «земли» остаётся белым.
+    expect(hemisphere.intensity).toBe(1);
+    expect(hemisphere.groundColor.getHexString()).toBe('ffffff');
+    expect(rim.intensity).toBe(1);
+
+    // Половина перехода: тона и интенсивности — ровно посередине.
+    advance(rig, 9);
+    expect(hemisphere.intensity).toBeCloseTo(0.5, 6);
+    expect(hemisphere.color.getHexString()).not.toBe('ffffff');
+    expect(hemisphere.groundColor.getHexString()).toBe('ffffff');
+    expect(rim.intensity).toBeCloseTo(0.5, 6);
+
+    // Граница слота — вторая фаза точно.
+    advance(rig, 1);
+    expect(hemisphere.intensity).toBe(0);
+    expect(hemisphere.color.getHexString()).toBe('000000');
+    expect(rim.intensity).toBe(0);
+  });
+
+  it('REND-32: нет источника у статики — фаза его не заводит', () => {
+    // Валидация такой документ отвергает адресно (PRES-2); подсистеме, собранной
+    // руками, положено то же прочтение: наличие — свойство секции, не фазы.
+    const rig = makeRig(
+      cycleSection({
+        cycle: {
+          transitionSeconds: 2,
+          phases: [
+            { ...PHASES[0]!, hemisphere: { intensity: 1 } },
+            { ...PHASES[1]!, hemisphere: { intensity: 0 } },
+          ],
+        },
+      }),
+    );
+
+    expect(hemisphereLights(rig.scene)).toEqual([]);
+    advance(rig, 9);
+    expect(hemisphereLights(rig.scene)).toEqual([]);
   });
 
   it('круг замыкается на сумме длительностей фаз и возвращается к первой без скачка', () => {

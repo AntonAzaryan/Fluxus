@@ -65,8 +65,31 @@ interface LightingCyclePhase {
   readonly directionX: number;
   readonly directionY: number;
   readonly directionZ: number;
+  /**
+   * Значения необязательных источников фазы (REND-29, REND-32): `null` — источника
+   * нет у СТАТИЧЕСКОЙ части секции, и по кругу ходить нечему. Заводить его фазой
+   * нельзя — это свойство секции, а не фазы (design D6).
+   */
+  readonly hemisphere: LightingCyclePhaseHemisphere | null;
+  readonly rim: LightingCyclePhaseRim | null;
   /** Направление следующей фазы совпадает с этим — переход не двигает источник. */
   readonly holdsDirection: boolean;
+}
+
+/** Тона и интенсивность полусферной подсветки фазы, разложенные к кадру. */
+interface LightingCyclePhaseHemisphere {
+  readonly skyColor: THREE.Color;
+  readonly groundColor: THREE.Color;
+  readonly intensity: number;
+}
+
+/** Тон, интенсивность и направление контрового источника фазы. */
+interface LightingCyclePhaseRim {
+  readonly color: THREE.Color;
+  readonly intensity: number;
+  readonly directionX: number;
+  readonly directionY: number;
+  readonly directionZ: number;
 }
 
 /**
@@ -86,6 +109,24 @@ export interface LightingCycleSample {
   directionX: number;
   directionY: number;
   directionZ: number;
+  /**
+   * Значимы ли поля полусферной подсветки этой записи (REND-32): `false` —
+   * подсветки нет у секции, и трогать источник кадру нечем. Флаг, а не
+   * вложенная запись с `undefined`, по той же причине, по какой запись здесь
+   * переиспользуется: пересобирать вложенный объект кадром — аллокация на кадр
+   * (REND-26).
+   */
+  hasHemisphere: boolean;
+  readonly hemisphereSkyColor: THREE.Color;
+  readonly hemisphereGroundColor: THREE.Color;
+  hemisphereIntensity: number;
+  /** То же для контрового источника (REND-29, REND-32). */
+  hasRim: boolean;
+  readonly rimColor: THREE.Color;
+  rimIntensity: number;
+  rimDirectionX: number;
+  rimDirectionY: number;
+  rimDirectionZ: number;
 }
 
 /** Цикла нет — общий пустой список, а не свежий на каждое применение секции. */
@@ -120,6 +161,27 @@ function prepare(config: LightingCycleConfig): readonly LightingCyclePhase[] {
       directionX: phase.directionX,
       directionY: phase.directionY,
       directionZ: phase.directionZ,
+      // Тона необязательных источников — тем же порядком, что тона основных:
+      // разбор `#rrggbb` один раз на применение секции, а не на кадр перехода
+      // (см. заголовок про аллокации).
+      hemisphere:
+        phase.hemisphere === undefined
+          ? null
+          : {
+              skyColor: new THREE.Color(phase.hemisphere.skyColor),
+              groundColor: new THREE.Color(phase.hemisphere.groundColor),
+              intensity: phase.hemisphere.intensity,
+            },
+      rim:
+        phase.rim === undefined
+          ? null
+          : {
+              color: new THREE.Color(phase.rim.color),
+              intensity: phase.rim.intensity,
+              directionX: phase.rim.directionX,
+              directionY: phase.rim.directionY,
+              directionZ: phase.rim.directionZ,
+            },
       // Сравниваются АВТОРСКИЕ компоненты направления: та же тройка — тот же
       // источник в той же точке, и кэш статики на переходе цел (design D3).
       holdsDirection:
@@ -156,6 +218,16 @@ export class LightingCycle {
     directionX: 0,
     directionY: 0,
     directionZ: 0,
+    hasHemisphere: false,
+    hemisphereSkyColor: new THREE.Color(),
+    hemisphereGroundColor: new THREE.Color(),
+    hemisphereIntensity: 0,
+    hasRim: false,
+    rimColor: new THREE.Color(),
+    rimIntensity: 0,
+    rimDirectionX: 0,
+    rimDirectionY: 0,
+    rimDirectionZ: 0,
   };
 
   /** Идёт кроссфейд к следующей фазе — от этого зависит политика теней (D3). */
@@ -249,6 +321,22 @@ export class LightingCycle {
     out.ambientIntensity = phase.ambientIntensity;
     out.directionalColor.copy(phase.directionalColor);
     out.directionalIntensity = phase.directionalIntensity;
+    const hemisphere = phase.hemisphere;
+    out.hasHemisphere = hemisphere !== null;
+    if (hemisphere !== null) {
+      out.hemisphereSkyColor.copy(hemisphere.skyColor);
+      out.hemisphereGroundColor.copy(hemisphere.groundColor);
+      out.hemisphereIntensity = hemisphere.intensity;
+    }
+    const rim = phase.rim;
+    out.hasRim = rim !== null;
+    if (rim !== null) {
+      out.rimColor.copy(rim.color);
+      out.rimIntensity = rim.intensity;
+      out.rimDirectionX = rim.directionX;
+      out.rimDirectionY = rim.directionY;
+      out.rimDirectionZ = rim.directionZ;
+    }
     // Кроссфейд кончается не ровно на границе кадра, и кэш статики остался печён
     // под чуть отличным направлением: установившаяся фаза добивает его один раз.
     // Тем же сравнением ловится и переход нулевой длины — там источник
@@ -272,6 +360,27 @@ export class LightingCycle {
     out.ambientIntensity = mix(from.ambientIntensity, to.ambientIntensity, t);
     out.directionalColor.lerpColors(from.directionalColor, to.directionalColor, t);
     out.directionalIntensity = mix(from.directionalIntensity, to.directionalIntensity, t);
+    // Необязательные источники смешиваются НАРАВНЕ с рассеянным и направленным
+    // (REND-32): наличие источника одинаково у всех фаз круга — оно свойство
+    // секции, — поэтому парность `from`/`to` здесь гарантирована построением.
+    const fromHemisphere = from.hemisphere;
+    const toHemisphere = to.hemisphere;
+    out.hasHemisphere = fromHemisphere !== null && toHemisphere !== null;
+    if (fromHemisphere !== null && toHemisphere !== null) {
+      out.hemisphereSkyColor.lerpColors(fromHemisphere.skyColor, toHemisphere.skyColor, t);
+      out.hemisphereGroundColor.lerpColors(fromHemisphere.groundColor, toHemisphere.groundColor, t);
+      out.hemisphereIntensity = mix(fromHemisphere.intensity, toHemisphere.intensity, t);
+    }
+    const fromRim = from.rim;
+    const toRim = to.rim;
+    out.hasRim = fromRim !== null && toRim !== null;
+    if (fromRim !== null && toRim !== null) {
+      out.rimColor.lerpColors(fromRim.color, toRim.color, t);
+      out.rimIntensity = mix(fromRim.intensity, toRim.intensity, t);
+      out.rimDirectionX = mix(fromRim.directionX, toRim.directionX, t);
+      out.rimDirectionY = mix(fromRim.directionY, toRim.directionY, t);
+      out.rimDirectionZ = mix(fromRim.directionZ, toRim.directionZ, t);
+    }
     if (from.holdsDirection) {
       // Направления соседних фаз равны: источник стоит, карта глубины от тона не
       // зависит — переход бесплатен для теней при любой длине (design D3).

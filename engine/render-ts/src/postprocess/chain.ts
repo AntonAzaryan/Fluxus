@@ -28,6 +28,7 @@
  * bloom теряет запас яркости, а не падает.
  */
 import * as THREE from 'three';
+import type { ColorLut } from '@game-mvp/assets';
 import { costSink, type RenderCostCounters } from '../cost.js';
 import { createWarnOnce } from '../warnOnce.js';
 import type { PostRendererLike, ScenePostFrame } from '../types.js';
@@ -39,6 +40,7 @@ import {
 import {
   BLOOM_LEVELS,
   createDownsampleMaterial,
+  createLutTexture,
   createResolveMaterial,
   createThresholdMaterial,
   toneMappingFunction,
@@ -77,6 +79,12 @@ export class PostprocessChain {
   private levels: BloomLevel[] = [];
   private thresholdMaterial: THREE.ShaderMaterial | null = null;
   private resolveMaterial: THREE.ShaderMaterial | null = null;
+  /**
+   * Трёхмерная таблица цвета (REND-34); `null` — подсекции `lut` нет, ассет ещё
+   * грузится либо не загрузился. Строит её цепочка из разделяемых данных ассета
+   * (ASSET-5) и владеет ею до своего сноса (REND-31).
+   */
+  private lutTexture: THREE.Data3DTexture | null = null;
 
   private readonly passScene = new THREE.Scene();
   private readonly passCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -99,9 +107,16 @@ export class PostprocessChain {
     return this.config;
   }
 
-  /** Есть ли у цепочки работа: false — ни целей, ни проходов (REND-34). */
+  /**
+   * Есть ли у цепочки работа: false — ни целей, ни проходов (REND-34).
+   *
+   * Таблица цвета входит сюда НАЛИЧИЕМ, а не объявлением: подсекция названа
+   * документом, а таблица приезжает ассетом (ASSET-4), и до её готовности кадр
+   * рисуется без LUT — «кадром, нарисованным наполовину загруженной таблицей»,
+   * он не бывает ни на одном кадре (REND-34).
+   */
   get active(): boolean {
-    return isPostprocessActive(this.config);
+    return isPostprocessActive(this.config) || this.lutTexture !== null;
   }
 
   /**
@@ -115,6 +130,7 @@ export class PostprocessChain {
     readonly pyramid: readonly THREE.WebGLRenderTarget[];
     readonly resolve: THREE.ShaderMaterial | null;
     readonly threshold: THREE.ShaderMaterial | null;
+    readonly lut: THREE.Data3DTexture | null;
     readonly hdr: boolean;
   } {
     return {
@@ -123,6 +139,7 @@ export class PostprocessChain {
       pyramid: this.levels.map((level) => level.target),
       resolve: this.resolveMaterial,
       threshold: this.thresholdMaterial,
+      lut: this.lutTexture,
       hdr: this.hdr,
     };
   }
@@ -136,7 +153,7 @@ export class PostprocessChain {
   apply(next: PostprocessRenderConfig): void {
     const previous = this.config;
     this.config = next;
-    if (!isPostprocessActive(next)) {
+    if (!this.active) {
       this.release();
       return;
     }
@@ -149,6 +166,28 @@ export class PostprocessChain {
     }
     if (!next.bloomEnabled) this.releaseBloom();
     this.pushUniforms();
+  }
+
+  /**
+   * Загруженная таблица цвета либо её отсутствие (REND-34, ED-15). Наличие
+   * таблицы — DEFINE материала сведения (design D5, `POST_LUT`), поэтому смена
+   * наличия пересобирает ОДИН этот материал: событие догрузки ассета (ASSET-4),
+   * правки секции или потолка пресета (QUAL-1), а не кадровый путь.
+   *
+   * Данные ассета разделяемы и иммутабельны (ASSET-5) — GPU-объект из них
+   * цепочка строит СВОЙ и им же владеет: снос отдаёт его (REND-31).
+   */
+  applyLut(lut: ColorLut | null): void {
+    // «Таблицы не было и нет» — не событие: снятие несуществующей таблицы не
+    // должно пересобирать материал сведения на каждом отказе ассета.
+    if (lut === null && this.lutTexture === null) return;
+    this.releaseLut();
+    if (lut !== null) this.lutTexture = createLutTexture(lut);
+    // Материал сведения пересобирается всегда: и появление таблицы, и её
+    // снятие меняют define, а старая униформа держала бы снесённую текстуру.
+    this.resolveMaterial?.dispose();
+    this.resolveMaterial = null;
+    if (!this.active) this.release();
   }
 
   /** Потолок ширины вершины пирамиды (QUAL-1): `min(производное, потолок)`. */
@@ -207,6 +246,7 @@ export class PostprocessChain {
    */
   dispose(): void {
     this.release();
+    this.releaseLut();
     this.quad?.geometry.dispose();
     this.quad?.removeFromParent();
     this.quad = null;
@@ -364,6 +404,8 @@ export class PostprocessChain {
         bloom: config.bloomEnabled,
         strength: config.bloomStrength,
         radius: config.bloomRadius,
+        lut: this.lutTexture,
+        lutAmount: config.lutAmount,
       });
     this.resolveMaterial = material;
     material.uniforms.tScene!.value = sceneTarget.texture;
@@ -391,11 +433,21 @@ export class PostprocessChain {
     if (strength !== undefined) strength.value = config.bloomStrength;
     const radius = resolve.uniforms.uRadius;
     if (radius !== undefined) radius.value = config.bloomRadius;
+    // Доля применения таблицы — число, а не define: правка `amount` в рантайме
+    // идёт униформой и пересборки материала не требует (ED-15).
+    const amount = resolve.uniforms.uLutAmount;
+    if (amount !== undefined) amount.value = config.lutAmount;
   }
 
   // ---------------------------------------------------------- освобождение
 
-  /** Всё, чем цепочка владеет в GPU, кроме квада: он переживает выключение. */
+  /**
+   * Всё, чем цепочка владеет в GPU, кроме квада: он переживает выключение.
+   *
+   * Таблица цвета сюда НЕ входит: выключение цепочки — следствие того, что
+   * таблицы нет (`active`), и снимает её `applyLut`; выключение по другому
+   * поводу при живой таблице невозможно по построению.
+   */
   private release(): void {
     this.releaseBloom();
     this.sceneTarget?.dispose();
@@ -404,6 +456,12 @@ export class PostprocessChain {
     this.outputTarget = null;
     this.resolveMaterial?.dispose();
     this.resolveMaterial = null;
+  }
+
+  /** Трёхмерная текстура таблицы цвета — её строила цепочка, ей и отдавать. */
+  private releaseLut(): void {
+    this.lutTexture?.dispose();
+    this.lutTexture = null;
   }
 
   /** Пирамида и порог: их отдаёт и выключение bloom, и смена его разрешения. */

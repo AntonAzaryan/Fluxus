@@ -15,14 +15,65 @@
  * тем же кадром, что рисовалась.
  */
 import type {
+  PresentationHemisphereLight,
   PresentationLighting,
   PresentationLightingPhase,
+  PresentationRimLight,
   PresentationShadowMode,
 } from '@game-mvp/assets';
 import { PRESENTATION_SHADOW_MODES } from '@game-mvp/assets';
 
 /** Режим теней сцены — словарь формата, а не второй его перечень. */
 export type ShadowMode = PresentationShadowMode;
+
+/**
+ * Значения полусферной подсветки с закрытыми дырами (REND-29). Отдельной
+ * записью, а не тремя полями плоской конфигурации, ровно потому, что её
+ * ОТСУТСТВИЕ — состояние: `undefined` вместо записи и есть «источника нет».
+ */
+export interface HemisphereConfig {
+  /** Тон «неба», `#rrggbb`. */
+  readonly skyColor: string;
+  /** Тон «земли», `#rrggbb`. */
+  readonly groundColor: string;
+  readonly intensity: number;
+}
+
+/** Значения контрового источника с закрытыми дырами (REND-29). */
+export interface RimConfig {
+  readonly color: string;
+  readonly intensity: number;
+  /** Откуда светит: смещение позиции от цели — та же семантика, что у солнца. */
+  readonly directionX: number;
+  readonly directionY: number;
+  readonly directionZ: number;
+}
+
+/**
+ * Умолчания ПОЛЕЙ необязательных источников (REND-29). Написана подсекция —
+ * автор источник захотел, и дыры её полей закрываются этими числами; не
+ * написана — источника нет вовсе, и до умолчаний дело не доходит.
+ *
+ * Тона взяты нейтральными и симметричными сегодняшнему кадру: холодный верх и
+ * тёплый низ — то, ради чего подсветка и заводится, а половинная интенсивность
+ * держит её добавкой к рассеянному свету, а не его заменой. Контровой источник
+ * светит «из-за спины сцены» — с противоположной солнцу стороны
+ * (`DEFAULT_LIGHTING_CONFIG.direction*` со знаком минус по горизонтали), потому
+ * что смысл его один: отделить силуэт от фона там, куда солнце не достаёт.
+ */
+export const DEFAULT_HEMISPHERE: HemisphereConfig = Object.freeze({
+  skyColor: '#b4c8ff',
+  groundColor: '#6b5a3a',
+  intensity: 0.5,
+} satisfies HemisphereConfig);
+
+export const DEFAULT_RIM: RimConfig = Object.freeze({
+  color: '#ffffff',
+  intensity: 0.6,
+  directionX: -8,
+  directionY: 12,
+  directionZ: 10,
+} satisfies RimConfig);
 
 /**
  * Действующая конфигурация освещения — секция `lighting` с закрытыми дырами.
@@ -42,7 +93,17 @@ export interface LightingRenderConfig {
   readonly directionX: number;
   readonly directionY: number;
   readonly directionZ: number;
-  /** Режим теней: `none` < `hybrid` < `full` по стоимости. */
+  /**
+   * Полусферная подсветка (REND-29) — либо её значения, либо `undefined`, и
+   * `undefined` значит ОТСУТСТВИЕ ИСТОЧНИКА, а не «источник с нулём». Второго
+   * способа записать «выключено» здесь нет намеренно: нулевой источник всё равно
+   * жил бы в сцене и в униформах материалов, и сцена без подсекции перестала бы
+   * рисоваться байт-в-байт как прежде.
+   */
+  readonly hemisphere: HemisphereConfig | undefined;
+  /** Контровой источник (REND-29) — под тем же правилом «нет — значит нет». */
+  readonly rim: RimConfig | undefined;
+  /** Режим теней: `none` < `blob` < `hybrid` < `full` по стоимости (REND-30). */
   readonly shadowMode: ShadowMode;
   /** Сторона карты теней в текселях. */
   readonly shadowMapSize: number;
@@ -68,6 +129,10 @@ export const DEFAULT_LIGHTING_CONFIG: LightingRenderConfig = Object.freeze({
   directionX: 8,
   directionY: -12,
   directionZ: 18,
+  // Ни полусферной подсветки, ни контрового источника у сцены без секции нет
+  // (REND-29): их отсутствие — и есть сегодняшний кадр байт-в-байт.
+  hemisphere: undefined,
+  rim: undefined,
   shadowMode: 'none',
   // Половина типовой карты теней: у арены на десять игроков ортографический
   // фрустум обтягивает всю сетку, и 2048 текселей на её сторону — та плотность,
@@ -80,9 +145,9 @@ export const DEFAULT_LIGHTING_CONFIG: LightingRenderConfig = Object.freeze({
 } satisfies LightingRenderConfig);
 
 /**
- * Ранг режима теней — его место в порядке стоимости (`none` < `hybrid` <
- * `full`). Существует ради потолка пресета: `min` над перечислением считается
- * по рангу, и второго определения этого порядка быть не должно.
+ * Ранг режима теней — его место в порядке стоимости (`none` < `blob` <
+ * `hybrid` < `full`). Существует ради потолка пресета: `min` над перечислением
+ * считается по рангу, и второго определения этого порядка быть не должно.
  */
 export function shadowModeRank(mode: ShadowMode): number {
   return PRESENTATION_SHADOW_MODES.indexOf(mode);
@@ -134,6 +199,16 @@ export interface LightingPhaseConfig {
   readonly directionX: number;
   readonly directionY: number;
   readonly directionZ: number;
+  /**
+   * Значения полусферной подсветки на фазе (REND-32) — либо запись, либо
+   * `undefined`, и `undefined` здесь значит ровно одно: подсветки нет у
+   * СТАТИЧЕСКОЙ части секции. Завести источник фазой нельзя — валидация такой
+   * документ отвергает адресно (PRES-2), а подсистеме, собранной руками,
+   * отдаётся то же прочтение: нет в статике — нет и по кругу.
+   */
+  readonly hemisphere: HemisphereConfig | undefined;
+  /** Значения контрового источника на фазе — под тем же правилом (REND-32). */
+  readonly rim: RimConfig | undefined;
 }
 
 /** Действующий цикл времени суток: фазы по кругу и длина перехода (REND-32). */
@@ -162,6 +237,16 @@ function resolvePhase(
     directionX: axes?.x ?? base.directionX,
     directionY: axes?.y ?? base.directionY,
     directionZ: axes?.z ?? base.directionZ,
+    // Дыры фазы закрывает СТАТИЧЕСКАЯ ЧАСТЬ секции, а не умолчания подсветки:
+    // источник у секции уже есть со своими числами, и фаза, назвавшая одну
+    // интенсивность, обязана держать её тона (REND-32). Нет источника у
+    // статики — нет его и у фазы: `base.hemisphere` тогда `undefined`, и
+    // значения фазы отбрасываются вместе с ним.
+    hemisphere:
+      base.hemisphere === undefined
+        ? undefined
+        : resolveHemisphere(phase.hemisphere ?? {}, base.hemisphere),
+    rim: base.rim === undefined ? undefined : resolveRim(phase.rim ?? {}, base.rim),
   };
 }
 
@@ -198,6 +283,38 @@ export function resolveLightingCycle(
   };
 }
 
+/**
+ * Подсекция полусферной подсветки в значения кадра (REND-29). Нет подсекции —
+ * `undefined`: источника нет, и сцена рисуется прежним кадром.
+ */
+function resolveHemisphere(
+  section: PresentationHemisphereLight | undefined,
+  fallback: HemisphereConfig,
+): HemisphereConfig | undefined {
+  if (section === undefined) return undefined;
+  return {
+    skyColor: section.skyColor ?? fallback.skyColor,
+    groundColor: section.groundColor ?? fallback.groundColor,
+    intensity: section.intensity ?? fallback.intensity,
+  };
+}
+
+/** Подсекция контрового источника в значения кадра (REND-29); нет — `undefined`. */
+function resolveRim(
+  section: PresentationRimLight | undefined,
+  fallback: RimConfig,
+): RimConfig | undefined {
+  if (section === undefined) return undefined;
+  const direction = section.direction;
+  return {
+    color: section.color ?? fallback.color,
+    intensity: section.intensity ?? fallback.intensity,
+    directionX: direction?.x ?? fallback.directionX,
+    directionY: direction?.y ?? fallback.directionY,
+    directionZ: direction?.z ?? fallback.directionZ,
+  };
+}
+
 /** Секция документа поверх умолчаний: отсутствующее поле — умолчание (PRES-2). */
 export function resolveLightingConfig(section?: PresentationLighting): LightingRenderConfig {
   const ambient = section?.ambient;
@@ -213,6 +330,8 @@ export function resolveLightingConfig(section?: PresentationLighting): LightingR
     directionX: direction?.x ?? fallback.directionX,
     directionY: direction?.y ?? fallback.directionY,
     directionZ: direction?.z ?? fallback.directionZ,
+    hemisphere: resolveHemisphere(section?.hemisphere, DEFAULT_HEMISPHERE),
+    rim: resolveRim(section?.rim, DEFAULT_RIM),
     shadowMode: shadows?.mode ?? fallback.shadowMode,
     shadowMapSize: shadows?.mapSize ?? fallback.shadowMapSize,
     staticShare: shadows?.staticShare ?? fallback.staticShare,

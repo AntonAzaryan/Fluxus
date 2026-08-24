@@ -32,7 +32,7 @@
  * и картинка игрока совпадают по построению, а не дисциплиной копирования чисел.
  */
 import type * as THREE from 'three';
-import type { PresentationPostprocess } from '@game-mvp/assets';
+import { LUT_ASSET_KIND, type ColorLut, type PresentationPostprocess } from '@game-mvp/assets';
 import type {
   PostRendererLike,
   QualityDeclaration,
@@ -45,7 +45,6 @@ import type {
 } from '../types.js';
 import { PostprocessChain } from '../postprocess/chain.js';
 import {
-  isPostprocessActive,
   resolvePostprocessConfig,
   type PostprocessRenderConfig,
 } from '../postprocess/config.js';
@@ -62,6 +61,18 @@ import {
  */
 export const POSTPROCESS_BLOOM = 'postprocess.bloom';
 export const POSTPROCESS_BLOOM_RESOLUTION = 'postprocess.bloomResolution';
+/**
+ * `postprocess.lut` — потолок-выключатель цветокоррекции по образцу
+ * `postprocess.bloom` (QUAL-1): `false` снимает авторски объявленную таблицу,
+ * `true` (умолчание — «потолка нет») ненаписанную не заводит.
+ *
+ * Стоимость прохода константна относительно контента сцены (QUAL-3) — одна
+ * выборка таблицы на пиксель, — но не нулевая: на слабом устройстве это
+ * трёхмерная выборка на каждый пиксель кадра, и рычаг снять её пресет иметь
+ * обязан. Своей «разрешающей» ручки у LUT нет: сторона решётки — свойство
+ * авторского файла, а не пресета.
+ */
+export const POSTPROCESS_LUT = 'postprocess.lut';
 
 /**
  * Нижняя граница потолка разрешения пирамиды: у вершины уже кадра во столько-то
@@ -95,13 +106,29 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
   private section: PresentationPostprocess | undefined;
   /** Разрешает ли пресет авторски включённый bloom (QUAL-1): `false` — гасит. */
   private bloomAllowed = true;
+  /** Разрешает ли пресет авторски объявленный LUT-проход (QUAL-1). */
+  private lutAllowed = true;
   private current: PostprocessRenderConfig;
   private readonly chain: PostprocessChain;
   private ctx: RenderContext | null = null;
+  /** Канал предупреждений: недоступная таблица цвета — кадр без LUT (REND-34). */
+  private readonly warn: (message: string) => void;
+  /**
+   * ID таблицы, на которую подписка уже сделана; `null` — подписки нет. Ассет
+   * запрашивается ровно на смене ID (ASSET-2 идемпотентен по ID, но лишняя
+   * подписка пережила бы правку секции и слала бы состояния снятой таблицы).
+   */
+  private lutId: string | null = null;
+  private unsubscribeLut: (() => void) | null = null;
 
   constructor(options: PostprocessOptions = {}) {
     this.section = options.config;
     this.current = this.effective();
+    this.warn =
+      options.warn ??
+      ((message): void => {
+        console.warn(message);
+      });
     this.chain = new PostprocessChain(options.warn === undefined ? {} : { warn: options.warn });
     this.chain.apply(this.current);
   }
@@ -116,13 +143,18 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
     return this.chain.passes;
   }
 
-  /** Есть ли у цепочки работа (REND-34): false — кадр как до появления capability. */
+  /**
+   * Есть ли у цепочки работа (REND-34): false — кадр как до появления
+   * capability. Спрашивается у ЦЕПОЧКИ, а не у конфигурации: объявленная, но
+   * ещё не приехавшая (или не приехавшая вовсе) таблица цвета работы не даёт.
+   */
   get active(): boolean {
-    return isPostprocessActive(this.current);
+    return this.chain.active;
   }
 
   init(ctx: RenderContext): void {
     this.ctx = ctx;
+    this.syncLut();
   }
 
   /**
@@ -131,6 +163,9 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
    * только рисует.
    */
   dispose(): void {
+    this.unsubscribeLut?.();
+    this.unsubscribeLut = null;
+    this.lutId = null;
     this.chain.dispose();
   }
 
@@ -202,11 +237,21 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
   }
 
   /**
-   * Ручки качества подсистемы (QUAL-1, QUAL-3; design D5). Стоимость цепочки
-   * растёт разрешением кадра и числом проходов, поэтому рычагов ровно два:
-   * выключить самую дорогую часть и ограничить её разрешение. Сведение яркости
-   * ручки не имеет намеренно: это ОДИН проход постоянной стоимости, и выключать
-   * его пресетом значило бы менять облик кадра, а не его цену (QUAL-2).
+   * Ручки качества подсистемы (QUAL-1, QUAL-3; design D5) — по рычагу на каждую
+   * ось стоимости цепочки, и осей три:
+   *
+   * - число и размер проходов bloom — самая дорогая часть: её выключает
+   *   `postprocess.bloom`, а разрешение её пирамиды ограничивает
+   *   `postprocess.bloomResolution`;
+   * - выборка трёхмерной таблицы цвета — своего прохода LUT не добавляет, но
+   *   выборка есть у КАЖДОГО пикселя кадра; стоимость её константна
+   *   относительно контента сцены (QUAL-3), а не нулевая, и снимает её
+   *   `postprocess.lut`. Своей «разрешающей» ручки у таблицы нет: сторона
+   *   решётки — свойство авторского файла, а не пресета.
+   *
+   * Сведение яркости ручки не имеет намеренно: это ОДИН проход постоянной
+   * стоимости, и выключать его пресетом значило бы менять облик кадра, а не его
+   * цену (QUAL-2).
    */
   quality(): QualityDeclaration {
     return {
@@ -228,6 +273,14 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
           min: MIN_BLOOM_RESOLUTION,
           max: MAX_BLOOM_RESOLUTION,
         },
+        {
+          name: POSTPROCESS_LUT,
+          cost: 'выборка трёхмерной таблицы цвета на каждый пиксель кадра: своего прохода LUT не добавляет, но выборка есть у каждого пикселя (REND-34)',
+          semantics: 'ceiling',
+          // Потолка нет — действует авторская секция (REND-34, QUAL-1).
+          default: true,
+          values: [true, false],
+        },
       ],
     };
   }
@@ -239,6 +292,8 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
   applyQuality(values: QualityValues): void {
     const bloom = values.get(POSTPROCESS_BLOOM);
     this.bloomAllowed = typeof bloom === 'boolean' ? bloom : true;
+    const lut = values.get(POSTPROCESS_LUT);
+    this.lutAllowed = typeof lut === 'boolean' ? lut : true;
     const resolution = values.get(POSTPROCESS_BLOOM_RESOLUTION);
     this.chain.applyResolutionCeiling(
       typeof resolution === 'number' ? resolution : Number.POSITIVE_INFINITY,
@@ -261,12 +316,57 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
   private effective(): PostprocessRenderConfig {
     const authored = resolvePostprocessConfig(this.section);
     const bloomEnabled = authored.bloomEnabled && this.bloomAllowed;
-    return bloomEnabled === authored.bloomEnabled ? authored : { ...authored, bloomEnabled };
+    // Потолок `false` снимает ТАБЛИЦУ, а не долю её применения: действующая
+    // конфигурация просто перестаёт называть ассет, и вместе с ним уходят и
+    // запрос ассета, и текстура, и define материала (QUAL-1).
+    const lutAsset = this.lutAllowed ? authored.lutAsset : null;
+    if (bloomEnabled === authored.bloomEnabled && lutAsset === authored.lutAsset) return authored;
+    return { ...authored, bloomEnabled, lutAsset };
   }
 
   /** Общий шов применения: и правка секции автором, и потолок пресета — сюда. */
   private applyResolved(): void {
     this.current = this.effective();
     this.chain.apply(this.current);
+    this.syncLut();
+  }
+
+  /**
+   * Ассет таблицы цвета (REND-34, ASSET-3/ASSET-4): подписка на его состояние и
+   * передача данных цепочке. Смена ID — снятие прежней подписки и новый запрос;
+   * отсутствие ID (нет подсекции либо потолок пресета) — снятие таблицы.
+   *
+   * Недоступный или невалидный ассет НЕ роняет рендер: кадр рисуется без LUT, а
+   * причина уходит предупреждением — тем же каналом, каким о деградации говорит
+   * цепочка. Пока ассет грузится, таблицы тоже нет: кадром, нарисованным
+   * наполовину загруженной таблицей, LUT не бывает.
+   */
+  private syncLut(): void {
+    const ctx = this.ctx;
+    const id = this.current.lutAsset;
+    if (ctx === null || id === this.lutId) return;
+    this.unsubscribeLut?.();
+    this.unsubscribeLut = null;
+    this.lutId = id;
+    if (id === null) {
+      this.chain.applyLut(null);
+      return;
+    }
+    const handle = ctx.assets.request<ColorLut>(LUT_ASSET_KIND, id);
+    this.unsubscribeLut = ctx.assets.subscribe(handle, (state) => {
+      // Состояние ассета, на который подписка уже снята правкой секции, кадру
+      // не адресовано: сервис вправе уведомить синхронно на отписке.
+      if (this.lutId !== id) return;
+      if (state.status === 'ready') {
+        this.chain.applyLut(state.data);
+        return;
+      }
+      this.chain.applyLut(null);
+      if (state.status === 'failed') {
+        this.warn(
+          `render: таблица цвета "${id}" не загрузилась: ${state.reason} — кадр без LUT (REND-34)`,
+        );
+      }
+    });
   }
 }

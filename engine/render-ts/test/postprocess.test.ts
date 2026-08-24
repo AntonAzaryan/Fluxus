@@ -11,13 +11,14 @@
  */
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
-import type { PresentationPostprocess } from '@game-mvp/assets';
+import type { ColorLut, PresentationPostprocess } from '@game-mvp/assets';
 import {
   BLOOM_LEVELS,
   DEFAULT_POSTPROCESS_CONFIG,
   FogSubsystem,
   POSTPROCESS_BLOOM,
   POSTPROCESS_BLOOM_RESOLUTION,
+  POSTPROCESS_LUT,
   PostprocessSubsystem,
   PresentationStage,
   QualityController,
@@ -28,11 +29,12 @@ import {
   type PostRendererLike,
   type RenderContext,
 } from '../src/index.js';
-import { RESOLVE_FRAGMENT } from '../src/postprocess/passes.js';
+import { RESOLVE_FRAGMENT, createResolveMaterial } from '../src/postprocess/passes.js';
 import {
   buildFogMask,
   flatGrid,
   fogCanvasFactory,
+  makeAssets,
   makeEntityView,
   makeRenderContext,
   makeTickView,
@@ -419,7 +421,9 @@ describe('REND-31: снос отдаёт цели, пирамиду и мате�
 describe('REND-34: без расширения half-float цепочка идёт в LDR', () => {
   it('кадр остаётся корректным, а предупреждение сказано один раз', () => {
     const said: string[] = [];
-    const { post } = subsystem(TONE_AND_BLOOM, (message) => said.push(message));
+    const { post } = subsystem(TONE_AND_BLOOM, (message) => {
+      said.push(message);
+    });
     const renderer = new PostRendererSpy(false);
 
     post.render(renderer, camera());
@@ -607,5 +611,236 @@ describe('FOW-7, REND-34: маска остаётся финальным про�
     // У тумана — один проход (маскирующий): сцену рисовала цепочка.
     expect(counters.fogRenderPasses).toBe(1);
     expect(counters.postprocessPasses).toBe(2);
+  });
+});
+
+// ------------------------------------------------ 4: цветокоррекция (LUT)
+
+/** Тождественная таблица стороны 2 — форма данных ассета важнее её содержимого. */
+function identityLut(size = 2): ColorLut {
+  const data = new Float32Array(size * size * size * 3);
+  const last = size - 1;
+  let at = 0;
+  for (let b = 0; b < size; b++) {
+    for (let g = 0; g < size; g++) {
+      for (let r = 0; r < size; r++) {
+        data[at++] = r / last;
+        data[at++] = g / last;
+        data[at++] = b / last;
+      }
+    }
+  }
+  return { size, data };
+}
+
+const LUT_ID = 'visuals/luts/warm.cube';
+const WITH_LUT: PresentationPostprocess = { lut: { asset: LUT_ID, amount: 0.75 } };
+
+/** Стенд с настоящим стабом ассетов: таблица приезжает асинхронно (ASSET-4). */
+function lutStand(
+  config: PresentationPostprocess = WITH_LUT,
+  warn?: (message: string) => void,
+): { post: PostprocessSubsystem; assets: ReturnType<typeof makeAssets>; ctx: RenderContext } {
+  const assets = makeAssets();
+  const ctx: RenderContext = { ...makeRenderContext(), assets: assets.service };
+  const post = new PostprocessSubsystem({ config, ...(warn === undefined ? {} : { warn }) });
+  post.init(ctx);
+  return { post, assets, ctx };
+}
+
+describe('REND-34: LUT — цветокоррекция после сведения яркости', () => {
+  it('до готовности таблицы кадр рисуется БЕЗ LUT и без единого прохода', () => {
+    const { post, assets, ctx } = lutStand();
+    const renderer = new PostRendererSpy();
+
+    post.render(renderer, camera());
+
+    // Ассет запрошен видом `lut` (ASSET-3), но кадром он ещё не рисует:
+    // «наполовину загруженной таблицей» кадр не бывает.
+    expect(assets.requests).toEqual([{ kind: 'lut', id: LUT_ID }]);
+    expect(post.active).toBe(false);
+    expect(post.passes.lut).toBeNull();
+    // Ровно прямая отрисовка сцены: ни промежуточной цели, ни прохода (PERF-2).
+    expect(renderer.rendered).toEqual([ctx.scene]);
+    expect(renderer.targets).toEqual([]);
+    expect(post.passes.scene).toBeNull();
+  });
+
+  it('готовая таблица включает проход: define, трёхмерная текстура и доля', () => {
+    const { post, assets } = lutStand();
+
+    assets.resolve('lut', LUT_ID, identityLut());
+    post.render(new PostRendererSpy(), camera());
+
+    expect(post.active).toBe(true);
+    const texture = post.passes.lut;
+    expect(texture).not.toBeNull();
+    // Сторона решётки едет в униформу — выборка нормируется по ней.
+    expect(texture!.image.width).toBe(2);
+    const resolve = post.passes.resolve!;
+    expect((resolve.defines as Record<string, string>).POST_LUT).toBe('');
+    expect(resolve.uniforms.tLut?.value).toBe(texture);
+    expect(resolve.uniforms.uLutSize?.value).toBe(2);
+    expect(resolve.uniforms.uLutAmount?.value).toBe(0.75);
+  });
+
+  it('выборка стоит ПОСЛЕ оператора сведения и до кодирования кадра', () => {
+    const tone = RESOLVE_FRAGMENT.indexOf('POST_TONE_MAPPING(color)');
+    const lut = RESOLVE_FRAGMENT.indexOf('lutLookup(color)');
+    // Именно директива включения, а не упоминание чанка в комментарии выше.
+    const encode = RESOLVE_FRAGMENT.indexOf('#include <colorspace_fragment>');
+    expect(tone).toBeGreaterThan(0);
+    expect(lut).toBeGreaterThan(tone);
+    expect(encode).toBeGreaterThan(lut);
+  });
+
+  it('домен таблицы — ОТОБРАЖАЕМЫЙ кадр: вход кодируется, выход декодируется', () => {
+    // `.cube` автор снимает с той картинки, которую видит (REND-34: «таблица
+    // авторится по итоговому виду кадра»), то есть с sRGB-кодированных значений.
+    // Отдай мы решётке линейное рабочее пространство — грейд читался бы неверно
+    // на всём кадре. Перенос идёт вокруг ВЫБОРКИ, а не вокруг прохода: проход
+    // остаётся линейным и не зависит от своего назначения (цель или канвас).
+    const encode = RESOLVE_FRAGMENT.indexOf('sRGBTransferOETF');
+    const sample = RESOLVE_FRAGMENT.indexOf('texture(tLut');
+    const decode = RESOLVE_FRAGMENT.indexOf('sRGBTransferEOTF');
+    expect(encode).toBeGreaterThan(0);
+    expect(sample).toBeGreaterThan(encode);
+    expect(decode).toBeGreaterThan(sample);
+  });
+
+  it('материал сведения остаётся GLSL1-записью: явный GLSL3 снял бы шим three', () => {
+    // Не-raw `ShaderMaterial` three компилирует как `#version 300 es` всегда, и
+    // `sampler3D` там законен без всякого `glslVersion`. А вот ЯВНЫЙ GLSL3
+    // выключает совместимость GLSL1-записи — `layout(location = 0) out highp
+    // vec4 pc_fragColor` и `#define gl_FragColor pc_fragColor` добавляются
+    // только при `glslVersion !== GLSL3` (`WebGLProgram`), — и текст этого
+    // прохода, пишущий `gl_FragColor`, перестал бы компилироваться на каждом
+    // кадре с таблицей. Программы здесь компилирует GPU, тесты пакета headless:
+    // поймать такое можно только тут.
+    const lut = new THREE.Data3DTexture(new Uint8Array(8 * 4), 2, 2, 2);
+    const material = createResolveMaterial({
+      operator: 'aces',
+      exposure: 1,
+      bloom: false,
+      strength: 0,
+      radius: 0,
+      lut,
+      lutAmount: 1,
+    });
+    expect(material.glslVersion).toBeNull();
+    // …и без таблицы — тоже: версия материала от LUT не зависит вовсе.
+    expect(
+      createResolveMaterial({
+        operator: 'aces',
+        exposure: 1,
+        bloom: false,
+        strength: 0,
+        radius: 0,
+        lut: null,
+        lutAmount: 1,
+      }).glslVersion,
+    ).toBeNull();
+    material.dispose();
+    lut.dispose();
+  });
+
+  it('недоступный ассет — кадр без LUT и предупреждение с причиной, а не падение', () => {
+    const said: string[] = [];
+    const { post, assets } = lutStand(WITH_LUT, (message) => {
+      said.push(message);
+    });
+
+    expect(() => {
+      assets.fail('lut', LUT_ID, 'файл не найден');
+    }).not.toThrow();
+    const renderer = new PostRendererSpy();
+    post.render(renderer, camera());
+
+    expect(post.passes.lut).toBeNull();
+    expect(post.active).toBe(false);
+    // Кадр — ровно прямая отрисовка сцены: ни цели, ни прохода (PERF-2).
+    expect(renderer.targets).toEqual([]);
+    expect(said.some((message) => message.includes('файл не найден'))).toBe(true);
+    expect(said.some((message) => message.includes(LUT_ID))).toBe(true);
+  });
+
+  it('правка доли применения идёт униформой, смена таблицы — новым запросом (ED-15)', () => {
+    const { post, assets } = lutStand();
+    assets.resolve('lut', LUT_ID, identityLut());
+    post.render(new PostRendererSpy(), camera());
+    const resolve = post.passes.resolve;
+
+    post.applyConfig({ lut: { asset: LUT_ID, amount: 0.25 } });
+    post.render(new PostRendererSpy(), camera());
+
+    // Материал тот же: число — униформа, а не define.
+    expect(post.passes.resolve).toBe(resolve);
+    expect(resolve?.uniforms.uLutAmount?.value).toBe(0.25);
+
+    // Другой ассет — новый запрос и новая подписка.
+    post.applyConfig({ lut: { asset: 'visuals/luts/cold.cube' } });
+    expect(assets.requests.at(-1)).toEqual({ kind: 'lut', id: 'visuals/luts/cold.cube' });
+    // Прежняя таблица снята сразу: рисовать кадр чужой коррекцией нельзя.
+    expect(post.passes.lut).toBeNull();
+  });
+
+  it('снятая подсекция снимает таблицу и возвращает кадр к прямой отрисовке', () => {
+    const { post, assets, ctx } = lutStand();
+    assets.resolve('lut', LUT_ID, identityLut());
+    post.render(new PostRendererSpy(), camera());
+    const texture = post.passes.lut!;
+    const released = vi.spyOn(texture, 'dispose');
+
+    post.applyConfig(undefined);
+    const renderer = new PostRendererSpy();
+    post.render(renderer, camera());
+
+    expect(released).toHaveBeenCalledTimes(1);
+    expect(post.passes.lut).toBeNull();
+    expect(post.active).toBe(false);
+    expect(renderer.rendered).toEqual([ctx.scene]);
+  });
+
+  it('снос отдаёт трёхмерную текстуру таблицы (REND-31)', () => {
+    const { post, assets } = lutStand();
+    assets.resolve('lut', LUT_ID, identityLut());
+    post.render(new PostRendererSpy(), camera());
+    const released = vi.spyOn(post.passes.lut!, 'dispose');
+
+    post.dispose();
+
+    expect(released).toHaveBeenCalledTimes(1);
+    expect(post.passes.lut).toBeNull();
+  });
+
+  it('потолок пресета выключает LUT, документ сцены не трогается (QUAL-1)', () => {
+    const frozen = JSON.stringify(WITH_LUT);
+    const assets = makeAssets();
+    const ctx: RenderContext = { ...makeRenderContext(), assets: assets.service };
+    const stage = new PresentationStage(ctx);
+    const post = new PostprocessSubsystem({ config: WITH_LUT });
+    stage.register(post);
+    assets.resolve('lut', LUT_ID, identityLut());
+    expect(post.passes.lut).not.toBeNull();
+
+    new QualityController(stage, { [POSTPROCESS_LUT]: false });
+
+    expect(post.config.lutAsset).toBeNull();
+    expect(post.passes.lut).toBeNull();
+    expect(post.active).toBe(false);
+    expect(JSON.stringify(WITH_LUT)).toBe(frozen);
+  });
+
+  it('потолок `true` ненаписанную таблицу не заводит: `min` работает в одну сторону', () => {
+    const assets = makeAssets();
+    const ctx: RenderContext = { ...makeRenderContext(), assets: assets.service };
+    const stage = new PresentationStage(ctx);
+    const post = new PostprocessSubsystem({ config: TONE_ONLY });
+    stage.register(post);
+
+    new QualityController(stage, { [POSTPROCESS_LUT]: true });
+
+    expect(post.config.lutAsset).toBeNull();
+    expect(assets.requests).toEqual([]);
   });
 });

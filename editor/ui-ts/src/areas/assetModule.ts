@@ -75,6 +75,7 @@
  */
 import {
   AssetService,
+  cubeLutLoader,
   curvatureLoader,
   gltfLoader,
   manifestLoader,
@@ -129,6 +130,11 @@ function build(source: ContentAssetSource): AssetService {
   // (`rendering` REND-24), поэтому загрузчик — часть комплектации редактора, а
   // не только игрового клиента.
   assets.registerLoader(particleEffectLoader);
+  // Таблица цветокоррекции кадра (REND-34) — по тому же основанию: кадр вьюпорта
+  // и кадр игрока обязаны совпадать по построению (ED-22), а без загрузчика
+  // ссылка подсекции `postprocess.lut` разрешалась бы в `failed` (ASSET-3) и
+  // автор правил бы грейд, которого не видит.
+  assets.registerLoader(cubeLutLoader);
   return assets;
 }
 

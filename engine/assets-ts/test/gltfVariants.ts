@@ -19,6 +19,7 @@ import { encodeEmbeddedPng, EXTERNAL_TEXTURE_URI, JPEG_BYTES } from './glbFixtur
 export const DATA_URI_ID = 'gltf-mini/embedded-uri.gltf';
 export const MULTI_PRIM_ID = 'gltf-mini/multi-primitive.gltf';
 export const UNNORMALIZED_ID = 'gltf-mini/unnormalized-weights.gltf';
+export const EMISSIVE_STRENGTH_ID = 'gltf-mini/emissive-strength.gltf';
 
 /** Индексы в базовой фикстуре, на которые вариантам приходится ссылаться поимённо. */
 const PROP_MESH = 1;
@@ -91,6 +92,32 @@ export async function buildMultiPrimitiveFixture(): Promise<{ gltf: ArrayBuffer;
     ],
   };
   return { gltf: jsonBytes({ ...doc, meshes }), bin: toArrayBuffer(bin) };
+}
+
+/**
+ * Материал с `KHR_materials_emissive_strength` (ASSET-5): сила 4 — HDR-свечение,
+ * которым материал пересекает порог bloom (`rendering` REND-34). Второй материал
+ * документа расширения не несёт вовсе — он и показывает, что умолчание 1
+ * приезжает без него.
+ */
+export async function buildEmissiveStrengthFixture(): Promise<{
+  gltf: ArrayBuffer;
+  bin: ArrayBuffer;
+}> {
+  const { doc, bin } = await readBase();
+  const authored = (doc.materials as Json[])[0]!;
+  const materials: Json[] = [
+    {
+      ...authored,
+      emissiveFactor: [1, 0.8, 0.4],
+      extensions: { KHR_materials_emissive_strength: { emissiveStrength: 4 } },
+    },
+    { ...authored, emissiveFactor: [1, 0.8, 0.4] },
+  ];
+  return {
+    gltf: jsonBytes({ ...doc, materials, extensionsUsed: ['KHR_materials_emissive_strength'] }),
+    bin: toArrayBuffer(bin),
+  };
 }
 
 /**

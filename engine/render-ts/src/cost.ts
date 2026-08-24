@@ -378,6 +378,17 @@ export interface RenderCostCounters {
    */
   lightingDynamicCasters: number;
   /**
+   * Контактные пятна режима `blob`, НАПИСАННЫЕ кадром (REND-30): по одному на
+   * носителя динамического яруса, получившего позу этого кадра. Ось стоимости
+   * дешёвого режима: пятна рисуются одним инстанс-мешем, и работа кадра — это
+   * запись матрицы на пятно плюс их прозрачный проход.
+   *
+   * Вне режима `blob` счётчик нулевой: пятен там нет вовсе, а не «есть, но
+   * невидимы». Величина машинно-независима (PERF-3) — она равна числу носителей
+   * с позой, и ни времени, ни состояния GPU в ней нет.
+   */
+  lightingBlobDecals: number;
+  /**
    * Носители локального света в сцене (REND-33) — инстансы, чья запись несёт
    * блок `light` (ASSET-16), суммарно по кадрам. Растёт содержимым сцены, а не
    * потолком: носителей может быть больше, чем источников, и разница этого
@@ -483,6 +494,7 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     particlesSystemsStepped: 'frame',
     lightingStaticCasters: 'frame',
     lightingDynamicCasters: 'frame',
+    lightingBlobDecals: 'frame',
     lightingLocalCarriers: 'frame',
     lightingLocalActive: 'frame',
     lightingStaticRebuilds: 'frame',
@@ -533,6 +545,7 @@ export function createCostCounters(): RenderCostCounters {
     particlesSystemsStepped: 0,
     lightingStaticCasters: 0,
     lightingDynamicCasters: 0,
+    lightingBlobDecals: 0,
     lightingLocalCarriers: 0,
     lightingLocalActive: 0,
     lightingStaticRebuilds: 0,

@@ -21,6 +21,7 @@ import { ABILITY_STEPS, loadScene, type EntityId, type SceneDef } from '@game-mv
 import {
   AssetService,
   createManifestLoader,
+  cubeLutLoader,
   curvatureLoader,
   gltfLoader,
   mdxLoader,
@@ -206,6 +207,10 @@ assets.registerLoader(
   }),
 );
 assets.registerLoader(curvatureLoader);
+// Таблица цветокоррекции кадра (`rendering` REND-34): без загрузчика ссылка
+// подсекции `postprocess.lut` разрешалась бы в `failed` «нет загрузчика под пару
+// вид+формат» (ASSET-3), и кадр рисовался бы без LUT с предупреждением.
+assets.registerLoader(cubeLutLoader);
 // Парный presentation-документ сцены (PRES-1): декорации арены и секция `fog`
 // (FOW-10). Ассет наравне с манифестом — тем же реестром загрузчиков (ASSET-3).
 assets.registerLoader(presentationLoader);
