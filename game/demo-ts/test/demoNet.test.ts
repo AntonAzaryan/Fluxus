@@ -183,9 +183,17 @@ async function join(
 }
 
 /** Конверты handshake, доехавшие до главного потока (SHELL-5). */
-function hellos(rig: Rig): { extra?: { hero: number; playerId: string; slot: number } }[] {
+interface HelloExtra {
+  hero: number;
+  playerId: string;
+  slot: number;
+  /** Ростер матча для оверлея паузы (HUD-9): данные сборки, не оболочки. */
+  players: readonly string[];
+}
+
+function hellos(rig: Rig): { extra?: HelloExtra }[] {
   return rig.posted.filter(
-    (message): message is { t: 'hello'; extra?: { hero: number; playerId: string; slot: number } } =>
+    (message): message is { t: 'hello'; extra?: HelloExtra } =>
       (message as { t?: string }).t === 'hello',
   );
 }
@@ -208,6 +216,7 @@ describe('демо по умолчанию: матч против бота на 
       hero: rig.joined.hero,
       playerId: DEMO_PLAYERS[0],
       slot: 0,
+      players: [...DEMO_PLAYERS],
     });
 
     // Таймер оболочки снимается: шаги делает тест (NTR-12).
@@ -355,6 +364,7 @@ describe('демо по умолчанию: матч против бота на 
       hero: second.joined.hero,
       playerId: DEMO_PLAYERS[1],
       slot: 1,
+      players: [...DEMO_PLAYERS],
     });
     if (first.joined.ok) first.joined.shell.stop();
     second.joined.shell.stop();
@@ -688,23 +698,65 @@ describe('стенд поднимается вместе с dev-сервером
 /** Длительность тика — та, что приезжает handshake'ом (SHELL-5). */
 const TICK_MS = 1000 / 60;
 
-describe('HUD деградирует по контракту оболочки (D5)', () => {
-  it('сетевая сборка не заводит слотов паузы у статуса матча', () => {
-    const local = demoHudComposition({ controls: true, tickMs: TICK_MS }).entries[0]!;
-    const network = demoHudComposition({ controls: false, tickMs: TICK_MS }).entries[0]!;
+describe('HUD деградирует по контракту оболочки (D5, NTR-20)', () => {
+  const local = (): ReturnType<typeof demoHudComposition> =>
+    demoHudComposition({ controls: true, matchPause: false, tickMs: TICK_MS });
+  const network = (): ReturnType<typeof demoHudComposition> =>
+    demoHudComposition({ controls: false, matchPause: true, tickMs: TICK_MS });
 
-    expect(local.widget).toBe('match-status');
-    expect(local.actions).toEqual({ pause: 'match.pause', resume: 'match.resume' });
-    expect(local.params).toEqual({ controls: true });
+  it('кнопки паузы есть у обеих сборок, но по разным основаниям', () => {
+    // Локальная останавливает СВОЙ мир переходом машины состояний (SHELL-6),
+    // сетевая просит паузу МАТЧА у сервера (NTR-20). Обратный канал у них один,
+    // поэтому и слоты действий одни и те же.
+    for (const composition of [local(), network()]) {
+      const status = composition.entries[0]!;
+      expect(status.widget).toBe('match-status');
+      expect(status.actions).toEqual({ pause: 'match.pause', resume: 'match.resume' });
+      expect(status.params).toEqual({ controls: true });
+    }
+  });
 
-    expect(network.widget).toBe('match-status');
-    // Слотов нет вовсе: кнопка, которой некуда вести, — обещание, которого
-    // сборка не выполнит (NET-11, REW-6).
-    expect(network.actions).toBeUndefined();
-    expect(network.params).toEqual({ controls: false });
-    // Прочие виджеты не различаются: им всё равно, кто тикает (SHELL-2..5).
-    expect(demoHudComposition({ controls: false, tickMs: TICK_MS }).entries.slice(1)).toEqual(
-      demoHudComposition({ controls: true, tickMs: TICK_MS }).entries.slice(1),
-    );
+  it('кнопка сетевой сборки выбирает команду по ДОСТАВЛЕННОЙ паузе матча (NTR-20, HUD-9)', () => {
+    // Режим мира тут не источник: в заморозке матча снапшотов нет вовсе, и он
+    // остаётся `Running` до самого возобновления — кнопка, глядящая на него, не
+    // послала бы `resume` никогда, то есть «запрос паузы И СНЯТИЯ» не работал бы.
+    expect(network().entries[0]!.bindings).toEqual({ pauseState: 'match.pause.state' });
+    // Локальная останавливает свой мир и видит это доставленным режимом — ей
+    // биндинг не нужен и не даётся (умолчание виджета).
+    expect(local().entries[0]!.bindings).toBeUndefined();
+  });
+
+  it('сборка без обеих пауз кнопок не получает вовсе', () => {
+    // Кнопка, которой некуда вести, — обещание, которого сборка не выполнит.
+    const bare = demoHudComposition({ controls: false, matchPause: false, tickMs: TICK_MS })
+      .entries[0]!;
+    expect(bare.actions).toBeUndefined();
+    expect(bare.params).toEqual({ controls: false });
+  });
+
+  it('оверлей паузы монтирует только сетевая сборка: паузу матча ставит сервер', () => {
+    const widgets = (composition: ReturnType<typeof demoHudComposition>): string[] =>
+      composition.entries.map((entry) => entry.widget);
+    expect(widgets(network())).toContain('pause-overlay');
+    // В локальном прогоне сервера нет, состояние паузы никто не доставляет —
+    // виджету нечего показывать, и он не монтируется (HUD-9).
+    expect(widgets(local())).not.toContain('pause-overlay');
+  });
+
+  it('оверлей читает ДОСТАВЛЕННОЕ состояние паузы, а не режим мира', () => {
+    const overlay = network().entries.find((entry) => entry.widget === 'pause-overlay')!;
+    expect(overlay.bindings).toEqual({ pause: 'match.pause.state' });
+    // Словарь причин отказа — данные композиции (HUD-4): смысл причин
+    // принадлежит игре, а не виджету.
+    const labels = overlay.params!.denyLabels as Record<string, string>;
+    expect(labels['budget-spent']).toBeTypeOf('string');
+  });
+
+  it('прочие виджеты сборками не различаются: им всё равно, кто тикает (SHELL-2..5)', () => {
+    const withoutPause = (composition: ReturnType<typeof demoHudComposition>) =>
+      composition.entries.filter(
+        (entry) => entry.widget !== 'match-status' && entry.widget !== 'pause-overlay',
+      );
+    expect(withoutPause(network())).toEqual(withoutPause(local()));
   });
 });

@@ -67,7 +67,7 @@ import {
   type DecorationInstance,
   type RenderContext,
 } from '@fluxus/render';
-import type { HudCameraContract } from '@fluxus/hud';
+import type { HudCameraContract, HudRuntime } from '@fluxus/hud';
 import {
   GamepadSource,
   InputSampler,
@@ -360,6 +360,14 @@ window.addEventListener('keyup', (e) => keys.delete(e.code));
  */
 let hudRoot: Element | null = null;
 let pointerOverHud = false;
+/**
+ * Исполнитель HUD: держится модулем ради ОДНОГО адресата — объявления состояния
+ * паузы матча (`netcode-transport` NTR-20). Оно приезжает своим конвертом
+ * канала, а не кадром тика (в заморозке кадров нет вовсе), и попадает в HUD
+ * ровно тем же способом, каким туда попадает всё остальное, — доставленным
+ * значением (HUD-1, HUD-9).
+ */
+let hudRuntime: HudRuntime | null = null;
 
 window.addEventListener('mousemove', (e) => {
   pointerOverHud =
@@ -1235,6 +1243,11 @@ async function main(): Promise<void> {
   const worker = spawnShellWorker(mode);
 
   remote = new RemoteHost(context, {
+    // Состояние паузы матча (NTR-20) — прямо в HUD: сборка его не трактует и
+    // ничего по нему не решает, потому что решать по нему нечего. Мир идёт или
+    // стоит по воле сервера, а картинка о паузе узнаёт единственным законным
+    // способом — доставкой (HUD-9).
+    onPause: (pause) => hudRuntime?.deliverPause(pause),
     onReady: (hello) => {
       heroId = (hello.extra as { hero: EntityId }).hero;
       const grid = remote!.terrain;
@@ -1424,17 +1437,33 @@ async function main(): Promise<void> {
       });
       sampler.add(hud.facade);
       remote!.register(hud.runtime.subsystem);
-      // Состав HUD — от того, что даёт оболочка (design D5): пауза и перемотка
-      // существуют только у локальной, и режим приезжает в handshake (SHELL-8),
-      // а не выводится наблюдением за потоком доставок.
+      // Состав HUD — от того, что даёт оболочка (design D5): своя машина
+      // состояний есть только у локальной, пауза МАТЧА — только у сетевой
+      // (NTR-20), и режим приезжает в handshake (SHELL-8), а не выводится
+      // наблюдением за потоком доставок.
       hud.runtime.apply(
         demoHudComposition({
           controls: hello.mode === 'local',
+          // Пауза МАТЧА живёт только в сетевой сборке (NTR-20): в локальном
+          // прогоне сервера нет вовсе, а «пауза» там — переход машины состояний
+          // собственного воркера (SHELL-6), у которого своё отображение.
+          matchPause: hello.mode === 'network',
+          // Имена слотов оверлею паузы: кто именно её поставил (HUD-9). Ростер
+          // приезжает полезной нагрузкой handshake (SHELL-5) — это данные матча
+          // сборки, а не знание оболочки и не знание HUD.
+          slotNames: (hello.extra as { players?: readonly string[] }).players ?? [],
           // Длительность тика — из того же handshake: по ней кулдаун переводит
           // доставленные тики в секунды (SHELL-5, HUD-8).
           tickMs: hello.tickSeconds * 1000,
         }),
       );
+      hudRuntime = hud.runtime;
+      // Объявление паузы могло приехать РАНЬШЕ сборки HUD — например, войди
+      // игрок в уже замороженный матч (NTR-20, D8): тогда конверт доехал до
+      // главного потока, пока подсистем ещё не было. Последнее объявленное
+      // отдаётся исполнителю здесь, иначе оверлея не будет до следующей смены
+      // состояния паузы, то есть до самого возобновления.
+      if (remote!.lastPause !== undefined) hud.runtime.deliverPause(remote!.lastPause);
       hudRoot = hud.root;
       // Ульта кастуется удержанием клавиши, а не кликом (см. `hero.rewind` в
       // `hud.ts`): её кнопка в панели показывает кулдаун и помечена нерабочей —

@@ -23,7 +23,12 @@
  */
 import type { HudActionsFacade } from './actions.js';
 import type { HudComposition } from './composition.js';
-import type { HudDeliveredEvent, HudDeliveredState, HudDeliverySubsystem } from './delivery.js';
+import type {
+  HudDeliveredEvent,
+  HudDeliveredState,
+  HudDeliverySubsystem,
+  HudPauseState,
+} from './delivery.js';
 import type { HudNode } from './dom/node.js';
 import type { HudOverlayHost } from './host.js';
 import { resolveComposition, type HudRegistry, type ResolvedHudBinding, type ResolvedHudEntry } from './registry.js';
@@ -60,6 +65,14 @@ export class HudRuntime {
    * меняется, к моменту `apply` равен последней доставке.
    */
   private lastDelivered: HudDeliveredState | null = null;
+  /**
+   * Последнее объявленное состояние паузы (NTR-20); `null` — не объявляли.
+   *
+   * Живёт рядом с доставкой тика, а не внутри неё, потому что приезжает другим
+   * каденсом: в заморозке доставок тика нет вовсе, и пауза, привязанная к ним,
+   * дошла бы до виджета только с возобновлением.
+   */
+  private pause: HudPauseState | null = null;
 
   constructor(options: HudRuntimeOptions) {
     this.options = options;
@@ -129,8 +142,50 @@ export class HudRuntime {
 
     const view = this.lastDelivered;
     if (view !== null) {
-      for (const entry of this.mounted) this.update(entry, view, true, NO_EVENTS);
+      for (const entry of this.mounted) this.update(entry, this.withPause(view), true, NO_EVENTS);
     }
+  }
+
+  /**
+   * Объявление состояния паузы матча (NTR-20) — вторая точка доставки рядом с
+   * `syncTick`, и заводится она не от удобства: в заморозке живых тиков нет, а
+   * значит нет и доставок состояния, — привяжи мы паузу к ним, оверлей появился
+   * бы на экране только вместе с возобновлением.
+   *
+   * Виджеты обновляются немедленно и последним доставленным состоянием: события
+   * не повторяются («ровно один раз», HUD-5), разрыва здесь нет — пауза
+   * непрерывности мира не рвёт, мир просто стоит.
+   *
+   * До первой доставки тика обновлять нечем: селекторы считаются над
+   * доставленным состоянием, а его ещё не было. Объявление при этом не
+   * теряется — оно доедет первой же доставкой.
+   */
+  deliverPause(pause: HudPauseState): void {
+    this.pause = pause;
+    const view = this.lastDelivered;
+    if (view === null) return;
+    const state = this.withPause(view);
+    for (const entry of this.mounted) this.update(entry, state, false, NO_EVENTS);
+  }
+
+  /**
+   * Доставленное состояние вместе с объявленной паузой.
+   *
+   * Копия ПОВЕРХНОСТНАЯ — один объектный литерал на доставку, в темпе рассылки
+   * снапшотов, а не кадров: записи сущностей, маска пола и очередь событий
+   * остаются живыми объектами продюсера (`delivery.ts`) и не копируются.
+   *
+   * Платит за неё каждый СЕТЕВОЙ матч, а не только замороженный: сервер шлёт
+   * `Pause{running}` уже на входе в идущий матч (NTR-20, решение D8), поэтому
+   * `pause` здесь непустая с первой же секунды. Обойти копию можно было бы,
+   * только пронеся паузу мимо доставленного состояния — отдельным аргументом
+   * `update`, — но тогда её не увидел бы селектор (`HudSelector` считается над
+   * доставленным состоянием, HUD-4), и биндинг пришлось бы завести особым
+   * случаем. Ветвь без паузы остаётся бесплатной: локальная сборка состояния
+   * паузы не получает вовсе.
+   */
+  private withPause(view: HudDeliveredState): HudDeliveredState {
+    return this.pause === null ? view : { ...view, pause: this.pause };
   }
 
   /** Снимает все смонтированные виджеты; композиция становится пустой. */
@@ -162,7 +217,8 @@ export class HudRuntime {
   private deliver(view: HudDeliveredState): void {
     this.lastDelivered = view;
     const events = view.freshEvents ? view.events : NO_EVENTS;
-    for (const entry of this.mounted) this.update(entry, view, view.snapAll, events);
+    const state = this.withPause(view);
+    for (const entry of this.mounted) this.update(entry, state, view.snapAll, events);
   }
 
   /** Обновление одного виджета: резолв селекторов записи и вызов `update`. */

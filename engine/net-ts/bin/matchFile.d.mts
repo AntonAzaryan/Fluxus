@@ -29,6 +29,7 @@ export declare const MATCH_DOCUMENT_FIELDS: readonly [
   'inputWindow',
   'eventRepeat',
   'rewind',
+  'pause',
   'physics',
   'locomotion',
   'visibility',

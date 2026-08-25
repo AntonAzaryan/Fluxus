@@ -26,6 +26,7 @@ export type {
   HudDeliveredState,
   HudDeliverySubsystem,
   HudEntityView,
+  HudPauseState,
   HudWorldMode,
 } from './delivery.js';
 

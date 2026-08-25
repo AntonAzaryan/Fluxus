@@ -41,11 +41,18 @@ import {
   clientCodec,
   contentPack,
   type MatchConfig,
+  type MatchPauseOptions,
   type ServerMessage,
   type Transport,
 } from '@fluxus/net';
 import { Extractor, kindByTags, type RenderSubsystem, type TickView } from '@fluxus/render';
-import { NetworkShell, RemoteHost, WorkerShell, type ShellPort } from '../src/index.js';
+import {
+  NetworkShell,
+  RemoteHost,
+  WorkerShell,
+  type PauseEnvelope,
+  type ShellPort,
+} from '../src/index.js';
 import {
   PLAYER_ID,
   STEP,
@@ -92,8 +99,20 @@ function matchScene(): SceneDef {
   };
 }
 
-function matchConfig(scene: SceneDef, hash: string, snapshotRate = TICK_RATE): MatchConfig {
+/**
+ * Политика паузы стенда теста (NTR-20) — числа документа матча, не сервера.
+ * Отсчёт в 100 мс при 20 Гц — ровно два шага расписания.
+ */
+const PAUSE_POLICY: MatchPauseOptions = { budgetPerPlayer: 2, resumeCountdownMs: 100 };
+
+function matchConfig(
+  scene: SceneDef,
+  hash: string,
+  snapshotRate = TICK_RATE,
+  pause: MatchPauseOptions = PAUSE_POLICY,
+): MatchConfig {
   return {
+    pause,
     version: { buildId: BUILD_ID, contentPackHash: hash },
     // Один слот: матч стартует, как только он занят, и второй клиент вертикали
     // оболочки ничего не добавляет — проверяется клиент, а не состав матча.
@@ -146,6 +165,8 @@ interface NetworkRig {
   readonly state: SimulationState;
   readonly probe: ReturnType<typeof probe>;
   readonly posted: string[];
+  /** Конверты состояния паузы, доехавшие до главного потока (NTR-20). */
+  readonly pauses: PauseEnvelope[];
   /** Прогонов систем в мире оболочки: нулевой счётчик и есть «tick() не вызван». */
   systemRuns(): number;
   /**
@@ -156,11 +177,15 @@ interface NetworkRig {
 }
 
 function networkRig(
-  options: { snapshotRate?: number; wrapTransport?: (inner: Transport) => Transport } = {},
+  options: {
+    snapshotRate?: number;
+    pause?: MatchPauseOptions;
+    wrapTransport?: (inner: Transport) => Transport;
+  } = {},
 ): NetworkRig {
   const scene = matchScene();
   const pack = contentPack({ [SCENE_REF]: scene });
-  const config = matchConfig(scene, pack.hash, options.snapshotRate);
+  const config = matchConfig(scene, pack.hash, options.snapshotRate, options.pause);
   const clock = { ms: 0 };
 
   const hub = new LoopbackHub();
@@ -207,9 +232,11 @@ function networkRig(
   };
 
   const shellProbe = probe();
+  const pauses: PauseEnvelope[] = [];
   const remote = new RemoteHost(dummyContext(), {
     clock: () => clock.ms,
     onReady: () => remote.register(shellProbe.subsystem),
+    onPause: (pause) => pauses.push(pause),
   }).connect(mainPort);
 
   const wrap = options.wrapTransport ?? ((transport: Transport): Transport => transport);
@@ -226,8 +253,9 @@ function networkRig(
     tickSeconds: 1 / (config.snapshotRate ?? TICK_RATE),
     extractor,
     terrain: grid ?? null,
-    // Политика сборки: ульта отката висит на этом бите (WSM-5). Пауза и
-    // возобновление не отображены намеренно — проверяется и это.
+    // Политика сборки: ульта отката висит на этом бите (WSM-5). `seekTo` не
+    // отображён намеренно — проверяется и это. Пауза и возобновление в кнопки не
+    // отображаются вовсе: у них свой тип протокола (`PauseRequest`, NTR-20).
     controlButtons: { beginRewind: REWIND_BUTTON },
     helloExtra: { player: PLAYER_ID },
     clock: () => clock.ms,
@@ -246,6 +274,7 @@ function networkRig(
     state: world.state,
     probe: shellProbe,
     posted,
+    pauses,
     systemRuns: () => runs,
     rejoin: () => {
       // Канал рвётся так же, как его рвёт сеть: сервер отвязывает соединение от
@@ -422,8 +451,9 @@ describe('сетевой режим: тонкий клиент против ло
     const modeBefore = rig.state.mode;
 
     // Неотображённое действие отбрасывается: исполнять переход у себя воркер
-    // MUST NOT ни при каком отображении (SHELL-6).
-    rig.remote.control('pause');
+    // MUST NOT ни при каком отображении (SHELL-6). `seekTo` не отображён
+    // намеренно — точку остановки ведёт инициатор на сервере (REW-7).
+    rig.remote.control('seekTo', 4);
     expect(rig.shell.unmappedControls).toBe(1);
     expect(rig.state.mode).toBe(modeBefore);
 
@@ -446,6 +476,59 @@ describe('сетевой режим: тонкий клиент против ло
     // сервер, и своей перемотки у клиента нет.
     expect(rig.state.mode).toBe('Running');
     expect(rig.systemRuns()).toBe(0);
+  });
+
+  it('пауза матча уходит своим сообщением, а состояние приезжает конвертом канала (NTR-20, HUD-9)', async () => {
+    const rig = networkRig();
+    await playTicks(rig, 4);
+    // Пауза не объявлялась — конвертов нет. «Матч идёт» главному потоку никто
+    // не утверждал, и выводить это из идущих доставок он не вправе (HUD-9).
+    expect(rig.pauses).toEqual([]);
+
+    // Запрос из HUD (HUD-2) уходит обратным каналом оболочки и превращается в
+    // `PauseRequest` — не в бит ввода: кадры замороженного мира сервер
+    // отбрасывает целиком (NET-11), и снятие паузы битом не доехало бы.
+    rig.remote.control('pause');
+    await playTicks(rig, 2);
+    expect(rig.server.pauseState).toBe('frozen');
+    expect(rig.pauses.at(-1)).toMatchObject({ t: 'pause', state: 'frozen', slot: 0 });
+
+    // В заморозке живых тиков нет: тик сервера стоит, и новых доставок нет.
+    const frozenTick = rig.server.tick;
+    await playTicks(rig, 5);
+    expect(rig.server.tick).toBe(frozenTick);
+
+    rig.remote.control('resume');
+    await playTicks(rig, 6);
+    expect(rig.pauses.map((pause) => pause.state)).toEqual([
+      'frozen',
+      'resuming',
+      'running',
+    ]);
+    expect(rig.server.tick).toBeGreaterThan(frozenTick);
+    // Своей машины состояний у воркера по-прежнему нет: mode он взял из
+    // доставленного снапшота, а `tick()` не вызывал ни разу (SHELL-8).
+    expect(rig.state.mode).toBe('Running');
+    expect(rig.systemRuns()).toBe(0);
+  });
+
+  it('именованный отказ политики возвращается адресно и доезжает до главного потока (NTR-20, D4)', async () => {
+    const rig = networkRig({ pause: { budgetPerPlayer: 0 } });
+    await playTicks(rig, 3);
+
+    rig.remote.control('pause');
+    await playTicks(rig, 2);
+    // Матч не тронут, соединение живо, причина названа.
+    expect(rig.server.mode).toBe('Running');
+    expect(rig.client.phase).toBe('playing');
+    expect(rig.pauses.at(-1)).toMatchObject({ state: 'running', denied: 'budget-spent' });
+
+    // Второй такой же отказ отличим от первого: без счётчика он совпал бы с
+    // прежним состоянием и до главного потока не доехал бы вовсе (HUD-9).
+    const first = rig.pauses.at(-1)!.deniedSeq;
+    rig.remote.control('pause');
+    await playTicks(rig, 2);
+    expect(rig.pauses.at(-1)!.deniedSeq).toBe(first + 1);
   });
 
   it('картинка перематывается только с приходом перемотанных авторитетных состояний (NTR-16, SHELL-7)', async () => {

@@ -16,15 +16,21 @@
  */
 
 /**
- * Что стенд делает со слотом, потерявшим соединение (BOT-14):
+ * Что стенд делает со слотом, потерявшим соединение (BOT-14, NTR-20):
  *
  * - `bot` — сажает бота-заместителя (`netcode-transport` NTR-18);
  * - `hold` — не делает ничего: слот живёт на predicted-кадрах и ждёт владельца,
- *   а по превышению порога молчания матч завершается (NTR-6).
+ *   а по превышению порога молчания матч завершается (NTR-6);
+ * - `pause` — замораживает матч серверным API паузы (NTR-20, решение D6) и
+ *   снимает заморозку, когда владелец вернулся реконнектом (NTR-17).
+ *
+ * Комбинация «pause, а затем bot по таймауту» тоже была бы политикой стенда —
+ * механизм её не знает, — но третьим значением она здесь не появляется: это
+ * ДВЕ политики сразу, и выражается такое парой полей, а не именем варианта.
  */
-export type DisconnectPolicy = 'bot' | 'hold';
+export type DisconnectPolicy = 'bot' | 'hold' | 'pause';
 
-export const DISCONNECT_POLICIES: readonly DisconnectPolicy[] = ['bot', 'hold'];
+export const DISCONNECT_POLICIES: readonly DisconnectPolicy[] = ['bot', 'hold', 'pause'];
 
 /**
  * Умолчания стенда. Числа здесь — политика демо, и меняются они здесь либо
@@ -65,6 +71,17 @@ export interface StandPolicyInput {
    * запуска (design D7).
    */
   readonly silenceSeconds: number;
+  /**
+   * Поле `pause.onOwnerDetach` ДОКУМЕНТА матча (NTR-20, решение D6) — умолчание
+   * для `--on-disconnect`, ровно как `silenceSeconds` для `--silence-seconds`:
+   * «замораживать ли матч при отвязке владельца» — правило паузы, а правила
+   * паузы приходят данными матча. Флаг перекрывает его для одного запуска.
+   *
+   * Тип здесь ШИРЕ перечня намеренно: значение приезжает из JSON, где типов
+   * нет, и сузить его объявлением значило бы объявить проверенным то, что никто
+   * не проверял. Проверка — ниже, в `standPolicy`.
+   */
+  readonly onOwnerDetach?: string;
 }
 
 export interface StandPolicy {
@@ -76,13 +93,30 @@ export interface StandPolicy {
   readonly silenceSeconds: number;
 }
 
+/** Что документ матча вправе сказать про отвязку владельца (NTR-20). */
+const OWNER_DETACH_VALUES: readonly string[] = ['pause', 'ignore'];
+
 /**
  * Политики одного запуска стенда. Неизвестное значение `--on-disconnect` —
  * ОТКАЗ, а не тихое умолчание: «--on-disconnect none» иначе означал бы «сажать
  * бота», то есть прямо противоположное написанному в команде.
  */
 export function standPolicy(input: StandPolicyInput): StandPolicy {
-  const onDisconnect = input.text('on-disconnect', STAND_DEFAULTS.onDisconnect);
+  // Умолчание флага берётся у документа матча (NTR-20): сказал он
+  // `onOwnerDetach: "pause"` — стенд по умолчанию замораживает матч, и это
+  // остаётся ДАННЫМИ. Не сказал — прежнее умолчание стенда.
+  //
+  // Опечатка в этом поле — ОТКАЗ по тому же основанию, что и опечатка во флаге:
+  // «"puase"» иначе значило бы «сажать бота», то есть прямо противоположное
+  // написанному в документе, и притом молча.
+  const detach = input.onOwnerDetach;
+  if (detach !== undefined && !OWNER_DETACH_VALUES.includes(detach)) {
+    throw new Error(
+      `pause.onOwnerDetach: неизвестное значение "${detach}"; известные: ${OWNER_DETACH_VALUES.join(', ')}`,
+    );
+  }
+  const fallback = detach === 'pause' ? 'pause' : STAND_DEFAULTS.onDisconnect;
+  const onDisconnect = input.text('on-disconnect', fallback);
   if (!DISCONNECT_POLICIES.includes(onDisconnect as DisconnectPolicy)) {
     throw new Error(
       `--on-disconnect: неизвестная политика "${onDisconnect}"; известные: ${DISCONNECT_POLICIES.join(', ')}`,

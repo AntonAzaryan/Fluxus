@@ -43,6 +43,7 @@ import type {
   ControlMessage,
   HelloMessage,
   InputMessage,
+  PauseEnvelope,
   ShellMode,
   ShellPort,
   TickEnvelope,
@@ -66,6 +67,16 @@ export interface RemoteHostConfig {
    * пора регистрировать подсистемы — до первой доставки состояния.
    */
   readonly onReady?: (hello: HelloMessage) => void;
+  /**
+   * Доставлено состояние паузы матча (`netcode-transport` NTR-20). Отдельным
+   * колбэком, а не полем кадра: в заморозке кадров нет вовсе, и пауза, привязанная
+   * к ним, доехала бы только с возобновлением (см. `PauseEnvelope`).
+   *
+   * Хост его не трактует и ничего по нему не решает — он поток доставок, а не
+   * состояние матча: куда пойдёт объявление, решает сборка (в демо — HUD,
+   * HUD-9).
+   */
+  readonly onPause?: (pause: PauseEnvelope) => void;
 }
 
 export class RemoteHost implements PresentationProducer {
@@ -88,6 +99,13 @@ export class RemoteHost implements PresentationProducer {
   mode: ShellMode | null = null;
   /** Суммарно вытесненных лимитом аккумулятора событий (диагностика Risks). */
   expiredEvents = 0;
+  /**
+   * Последнее доставленное состояние паузы матча (NTR-20); `undefined` — его не
+   * доставляли. Наблюдательное поле рядом с колбэком — для сборки, которая
+   * подписалась позже первой доставки, и для проверок; матч по нему хост не
+   * ведёт (см. `onPause`).
+   */
+  lastPause: PauseEnvelope | undefined;
 
   constructor(context: RenderContext, config: RemoteHostConfig = {}) {
     this.presentation = config.stage ?? new PresentationStage(context);
@@ -155,6 +173,10 @@ export class RemoteHost implements PresentationProducer {
         return;
       case 'tick':
         this.onTick(message);
+        return;
+      case 'pause':
+        this.lastPause = message;
+        this.config.onPause?.(message);
         return;
     }
   }

@@ -43,9 +43,15 @@ const stubOptions = {
 };
 
 describe('композиция HUD демо резолвится против реестров (HUD-4)', () => {
+  // Две сборки демо: локальная (своя машина состояний, `controls`) и сетевая
+  // (пауза матча сервером, `matchPause`, NTR-20). Резолв обязан сойтись у обеих.
   it.each([true, false])('сборка с controls=%s: все имена известны', (controls) => {
     const registry = createDemoHudRegistry(stubOptions);
-    const composition = demoHudComposition({ controls, tickMs: TICK_SECONDS * 1000 });
+    const composition = demoHudComposition({
+      controls,
+      matchPause: !controls,
+      tickMs: TICK_SECONDS * 1000,
+    });
     const resolved = resolveComposition(registry, composition);
     expect(resolved.entries).toHaveLength(composition.entries.length);
     // Виджеты на месте — включая те, что появились вместе со статами (HUD-8).
@@ -55,7 +61,7 @@ describe('композиция HUD демо резолвится против р
   });
 
   it('панель кулдаунов забиндена на имена статов сборки, а не на компоненты мира', () => {
-    const composition = demoHudComposition({ controls: true, tickMs: 16 });
+    const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
     const cooldowns = composition.entries.find((entry) => entry.widget === 'cooldowns')!;
     const abilities = cooldowns.params!.abilities as readonly Record<string, string>[];
     expect(abilities.map((ability) => ability.action)).toEqual([...COOLDOWN_ABILITIES]);
@@ -70,7 +76,7 @@ describe('композиция HUD демо резолвится против р
     // `EntityId` снимает `Dead`), поэтому «портрет ожил» держится ровно на
     // совпадении этой строки с типом события системы `Respawn`. Опечатка здесь
     // выглядела бы как мёртвый портрет на живом герое — и молчала бы.
-    const composition = demoHudComposition({ controls: true, tickMs: 16 });
+    const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
     const portrait = composition.entries.find((entry) => entry.widget === 'portrait')!;
     const reviveEvent = portrait.params!.reviveEvent as string;
     const respawn = SCENE.systems!.find((system) => system.name === 'Respawn')!;
@@ -79,7 +85,7 @@ describe('композиция HUD демо резолвится против р
 
   it('виды виджетов создаются по своим params: ошибка параметра — до монтирования', () => {
     const registry = createDemoHudRegistry(stubOptions);
-    const composition = demoHudComposition({ controls: true, tickMs: 16 });
+    const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
     for (const entry of resolveComposition(registry, composition).entries) {
       // Портрет тянет THREE-стенд и заглушечный asset-сервис — его пропускаем:
       // проверяется резолв параметров остальных, а не рендер портрета (HUD-7).
@@ -261,7 +267,7 @@ describe('панель способностей не обещает нажати
   it('помеченная способность всё равно показывает свой кулдаун', () => {
     // Пометка снимает нажатие, а не запись панели: игрок обязан видеть, сколько
     // ждать, — иначе ульта исчезла бы из HUD совсем.
-    const composition = demoHudComposition({ controls: true, tickMs: 16 });
+    const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
     const cooldowns = composition.entries.find((entry) => entry.widget === 'cooldowns')!;
     const abilities = cooldowns.params!.abilities as readonly Record<string, string>[];
     for (const action of HOLD_ONLY_ABILITIES) {

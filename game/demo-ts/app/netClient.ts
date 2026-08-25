@@ -458,7 +458,16 @@ function demoSession(
     joined(accepted: Attempt): DemoJoined {
       current = accepted;
       const hero = heroOfSlot(state, accepted.client.slot!);
-      buffered.commit({ hero, playerId, slot: accepted.client.slot });
+      // Ростер уезжает в handshake сборкой, а не оболочкой (SHELL-5: `extra` —
+      // полезная нагрузка сборки, оболочка её не трактует): оверлей паузы
+      // называет инициатора по имени слота (HUD-9), а имена — данные матча
+      // демо, и второго их источника в главном потоке заводить незачем.
+      buffered.commit({
+        hero,
+        playerId,
+        slot: accepted.client.slot,
+        players: [...DEMO_MATCH.players],
+      });
       return {
         ok: true,
         playerId,

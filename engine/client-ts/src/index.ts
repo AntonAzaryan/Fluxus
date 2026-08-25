@@ -10,6 +10,7 @@ export type {
   HelloMessage,
   InputMessage,
   MainToWorker,
+  PauseEnvelope,
   ReturnBufferMessage,
   ShellMode,
   ShellPort,

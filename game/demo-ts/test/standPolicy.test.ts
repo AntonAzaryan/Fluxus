@@ -31,11 +31,16 @@ function readers(flags: Readonly<Record<string, string>> = {}): Pick<
 /** Документ демо-арены называет окно возврата сам — умолчание флага берётся оттуда. */
 const DOCUMENT_SILENCE_SECONDS = 300;
 
-function policy(flags: Readonly<Record<string, string>> = {}, debug = false) {
+function policy(
+  flags: Readonly<Record<string, string>> = {},
+  debug = false,
+  onOwnerDetach?: 'pause' | 'ignore',
+) {
   return standPolicy({
     ...readers(flags),
     debug,
     silenceSeconds: DOCUMENT_SILENCE_SECONDS,
+    ...(onOwnerDetach !== undefined ? { onOwnerDetach } : {}),
   });
 }
 
@@ -74,6 +79,26 @@ describe('политика разрыва в бою (BOT-14, design D7)', () => 
 
   it('пауза до посадки задаётся флагом', () => {
     expect(policy({ 'substitute-delay-ms': '5000' }).substituteDelayMs).toBe(5000);
+  });
+
+  it('«заморозить матч» — третий вариант политики и читается как есть (NTR-20, D6)', () => {
+    expect(policy({ 'on-disconnect': 'pause' }).onDisconnect).toBe('pause');
+  });
+
+  it('умолчание берётся у ДОКУМЕНТА матча, а флаг перекрывает его (NTR-20)', () => {
+    // «Ставится ли пауза при отвязке владельца» — правило паузы, а правила
+    // паузы приходят данными матча (NTR-20), не умолчанием запускалки.
+    expect(policy({}, false, 'pause').onDisconnect).toBe('pause');
+    expect(policy({}, false, 'ignore').onDisconnect).toBe(STAND_DEFAULTS.onDisconnect);
+    expect(policy({ 'on-disconnect': 'bot' }, false, 'pause').onDisconnect).toBe('bot');
+  });
+
+  it('опечатка в поле документа — отказ, а не тихое «сажать бота» (NTR-20)', () => {
+    // Единственное поле политики паузы, приезжающее строкой: молча приведённое
+    // к умолчанию, оно означало бы прямо противоположное написанному в
+    // документе — ровно то, за что отвергается опечатка во флаге.
+    expect(() => policy({}, false, 'puase' as 'pause')).toThrow(/onOwnerDetach/);
+    expect(() => policy({}, false, 'Pause' as 'pause')).toThrow(/onOwnerDetach/);
   });
 });
 

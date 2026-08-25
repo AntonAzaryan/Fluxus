@@ -54,6 +54,9 @@ import type {
   EventsMessage,
   GameVersion,
   Pacing,
+  PauseAction,
+  PauseDenyReason,
+  PauseState,
   RejectReason,
   ServerMessage,
   WireInput,
@@ -106,6 +109,18 @@ export interface MatchConfig {
    * интервал и глубина суть параметры провайдера, а не константы ядра (SNAP-4).
    */
   readonly rewind?: MatchRewindOptions;
+  /**
+   * Политика паузы матча (NTR-20): бюджеты, право противника на снятие,
+   * длительность отсчёта возобновления, максимум одной паузы. Данные документа
+   * матча, а не константы сервера — «сервер MUST NOT содержать балансных
+   * констант паузы» (NTR-20, механизм против политики).
+   *
+   * Поля нет — политики нет, и это НЕ умолчание с числами: игроки паузу не
+   * ставят вовсе (бюджет ноль), отсчёт нулевой, ограничений на снятие и на
+   * длительность нет. Серверное API паузы (`pauseMatch`) при этом работает: оно
+   * не игрок, и бюджет игрока к нему не относится.
+   */
+  readonly pause?: MatchPauseOptions;
   /**
    * Приёмник диагностики запроса перемотки (REW-12): испорченный payload и
    * запрос, который матч НЕ МОЖЕТ исполнить структурно — история не собрана.
@@ -198,6 +213,61 @@ export interface MatchRewindOptions {
    */
   readonly holdTimeoutTicks?: number;
 }
+
+/**
+ * Политика паузы матча (NTR-20) — секция документа матча целиком. Каждое поле
+ * необязательно, и отсутствующее означает «правила нет», а не число: числа
+ * принадлежат игре, и сервер их не придумывает.
+ *
+ * Все длительности — в миллисекундах, потому что отсчёт паузы не тиковый
+ * (решение D2): живых тиков в заморозке нет. Сервер переводит их в шаги своего
+ * расписания (`advance()` зовётся драйвером в темпе `tickRate` и в заморозке
+ * тоже) — часов внутри у него по-прежнему нет (NTR-3).
+ */
+export interface MatchPauseOptions {
+  /**
+   * Сколько пауз за матч вправе поставить ОДИН слот. Нет поля — ни одной:
+   * механизм без объявленной политики права не выдаёт.
+   */
+  readonly budgetPerPlayer?: number;
+  /**
+   * Через сколько миллисекунд заморозки чужую паузу вправе снять другой слот.
+   * Инициатора это не ограничивает никогда — снять свою он может сразу.
+   */
+  readonly opponentUnpauseAfterMs?: number;
+  /** Длительность объявляемого обратного отсчёта возобновления. `0` — возобновление сразу. */
+  readonly resumeCountdownMs?: number;
+  /**
+   * Максимальная длительность ОДНОЙ заморозки: по её истечении сервер сам
+   * объявляет возобновление (риск «пауза на неопределённо долго вешает матч»).
+   * `0` и отсутствие поля — ограничения нет.
+   */
+  readonly maxPauseMs?: number;
+  /**
+   * Ставить ли паузу при отвязке соединения владельца (решение D6). Поле читает
+   * ОБВЯЗКА (стенд, агент) — сервер о разрывах наружу не сообщает и политики
+   * реакции на них не исполняет (NTR-3). Живёт оно здесь потому, что это
+   * правило паузы, а правила паузы — данные документа матча (NTR-20).
+   *
+   * Названа здесь только отвязка, и кто сядет в опустевший слот — не словарь
+   * этого файла: происхождение участника сервер матча не различает вовсе, и
+   * отсутствие такого слова в его исходниках закреплено отдельным тестом.
+   */
+  readonly onOwnerDetach?: 'pause' | 'ignore';
+}
+
+/**
+ * Источник заморозки мира (решение D1, NTR-20) — исчерпывающий перечень.
+ *
+ * Мир бывает в `Paused` по двум разным поводам, и хост обязан их различать:
+ * пауза матча и служебная заморозка машины перемотки (`Running → Paused →
+ * Rewinding`, WSM-2). Спутай их — и `PauseRequest` посреди скраба снял бы чужую
+ * перемотку, а `resume()` машины перемотки — чужую паузу матча.
+ */
+type FreezeSource = 'none' | 'match-pause' | 'rewind';
+
+/** Слот-инициатор, которого нет: пауза от обвязки стенда или админа (NTR-20). */
+const SERVER_SLOT = -1;
 
 /**
  * Ведение точки перемотки (REW-7): что именно сервер сейчас скрабит. Живёт
@@ -340,6 +410,36 @@ const SLOT_FIELD = 'slot';
 
 const EMPTY_FRAMES: readonly InputFrame[] = [];
 
+/**
+ * Число политики паузы: неотрицательное целое либо отсутствие. Отказ на сборке
+ * матча, а не приведение молча: `budgetPerPlayer: -1` и `resumeCountdownMs:
+ * 1.5` не означают ничего, а тихо приведённые к нулю выдали бы политику,
+ * которой в документе не написано (NTR-20, механизм против политики).
+ */
+function nonNegative(value: number | undefined, field: string): number {
+  if (value === undefined) return 0;
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`MatchConfig: ${field} (${value}) — целое, не меньше нуля (NTR-20)`);
+  }
+  return value;
+}
+
+/**
+ * `pause.onOwnerDetach` — единственное НЕчисловое поле политики паузы, и
+ * проверяется оно здесь наравне с числами, хотя читает его обвязка, а не
+ * сервер.
+ *
+ * Здесь потому, что документ матча один на всех потребителей — выделенный
+ * стенд, страницу, агента, — и проверка на стороне читателя означала бы, что
+ * `"Pause"`, `"puase"` и `"freeze"` тихо значат «политики нет» ровно у того
+ * потребителя, который проверить забыл. Это тот же класс дефекта, что потерянная
+ * секция документа: объявленное геймдизайнером правило исчезает молча.
+ */
+function ownerDetach(value: string | undefined): void {
+  if (value === undefined || value === 'pause' || value === 'ignore') return;
+  throw new Error(`MatchConfig: pause.onOwnerDetach ("${value}") — "pause" либо "ignore" (NTR-20)`);
+}
+
 export class MatchServer {
   readonly config: MatchConfig;
   readonly worldInitHash: string;
@@ -360,6 +460,20 @@ export class MatchServer {
   private readonly history: MatchHistory | undefined;
   private readonly inputLog: InputLog | undefined;
   private readonly rewindController: RewindController | undefined;
+  /**
+   * Ручка переходов машины состояний мира (WSM-5) — есть у КАЖДОГО матча, в том
+   * числе поднятого без истории.
+   *
+   * Пауза матча (NTR-20) историей не пользуется вовсе: ей нужны `pause()` и
+   * `resume()`, то есть два перехода `Running ↔ Paused`, и ядру для них нечего
+   * восстанавливать. Второй реализации этих переходов ядро не публикует, а
+   * писать `state.mode = 'Paused'` рядом означало бы завести WSM-2 второй раз в
+   * обход единственного core-API (WSM-5, DI-3), — поэтому у матча без секции
+   * `rewind` контроллер собирается на ВЫРОЖДЕННОЙ истории, в которую никто
+   * никогда не пишет и из которой никто не читает: `beginRewind`/`seekTo`
+   * закрыты отдельной проверкой (`requireRewind`), и добраться до неё неоткуда.
+   */
+  private readonly wsm: RewindController;
   private readonly scrubStep: number;
   private readonly holdTimeoutTicks: number;
   /** Ведущаяся перемотка; `undefined` — сервер скраб не ведёт. */
@@ -370,6 +484,32 @@ export class MatchServer {
    * каст утопила бы отчёт запускалки в собственном шуме.
    */
   private rewindUnavailableReported = false;
+
+  // ------------------------------------------------------------ пауза матча
+  //
+  // Состояние паузы — состояние ХОСТА, а не мира (решение D1): в снапшот оно не
+  // входит, в канонический лог не попадает и симуляции невидимо (NTR-20).
+  // Отсчёты ведутся в ШАГАХ РАСПИСАНИЯ: драйвер зовёт `advance()` тем же темпом
+  // и в заморозке, поэтому шаг равен тику матча по длительности, а часов внутри
+  // сервера по-прежнему нет (NTR-3) — иначе его нельзя было бы прогнать
+  // вызовами в тесте (NTR-12).
+
+  /** Кто заморозил мир (D1): пауза матча, машина перемотки или никто. */
+  private freezeSource: FreezeSource = 'none';
+  private pausePhase: PauseState = 'running';
+  /** Слот, чьё действие привело к текущему состоянию; `SERVER_SLOT` — обвязка. */
+  private pauseSlot: number = SERVER_SLOT;
+  /** Сколько пауз слот уже израсходовал за матч (бюджет — политика документа). */
+  private readonly pausesUsed: number[];
+  /** Шагов расписания с начала текущей заморозки: право противника и максимум. */
+  private frozenSteps = 0;
+  /** Шагов до объявленного возобновления; значим только в `resuming`. */
+  private resumeSteps = 0;
+  private readonly pauseBudget: number;
+  private readonly opponentUnpauseSteps: number;
+  private readonly resumeCountdownSteps: number;
+  /** `0` — ограничения на длительность одной заморозки нет. */
+  private readonly maxPauseSteps: number;
 
   private readonly connections = new Map<ConnectionId, Connection>();
   /**
@@ -506,6 +646,24 @@ export class MatchServer {
       throw new Error(`MatchConfig: rewind.holdButton (${holdButton}) — целое 0..31 (NET-11)`);
     }
 
+    // Политика паузы (NTR-20). Отсутствующая секция и отсутствующее поле дают
+    // НЕЙТРАЛЬНЫЙ элемент механизма, а не число: бюджета у игроков нет, отсчёт
+    // нулевой, ограничений на снятие и на длительность нет. Числа приезжают
+    // документом матча — сервер балансных констант паузы не содержит.
+    this.pauseBudget = nonNegative(config.pause?.budgetPerPlayer, 'pause.budgetPerPlayer');
+    // Миллисекунды отсчёта живут ровно до перевода в шаги: наружу уезжает
+    // ОСТАТОК (`countdownMs`), а он считается из шагов — держать рядом ещё и
+    // объявленную длительность значило бы завести второе мнение о ней.
+    this.resumeCountdownSteps = this.stepsOf(
+      nonNegative(config.pause?.resumeCountdownMs, 'pause.resumeCountdownMs'),
+    );
+    this.opponentUnpauseSteps = this.stepsOf(
+      nonNegative(config.pause?.opponentUnpauseAfterMs, 'pause.opponentUnpauseAfterMs'),
+    );
+    this.maxPauseSteps = this.stepsOf(nonNegative(config.pause?.maxPauseMs, 'pause.maxPauseMs'));
+    ownerDetach(config.pause?.onOwnerDetach);
+    this.pausesUsed = Array.from({ length: config.players.length }, () => 0);
+
     const built = buildMatchWorld({
       scene: config.scene,
       seed: config.seed,
@@ -553,6 +711,15 @@ export class MatchServer {
         ...(config.rewind.exempt !== undefined ? { exempt: config.rewind.exempt } : {}),
       });
     }
+    // Одна ручка переходов на обе заморозки (см. поле `wsm`): у матча с историей
+    // это контроллер перемотки, у матча без неё — он же на вырожденной истории.
+    // Две ручки означали бы два независимых мнения о `state.mode`.
+    this.wsm =
+      this.rewindController ??
+      createRewindController(this.sim, this.state, {
+        history: new BranchHistory({ interval: 1, capacity: 1 }),
+        inputs: createInputLog(1),
+      });
   }
 
   get tick(): number {
@@ -703,6 +870,18 @@ export class MatchServer {
         }
         this.ingest(connection.slot, message.epoch, message.frames);
         return;
+      case 'PauseRequest':
+        // Запрос допустим в любом состоянии соединения ПОСЛЕ хендшейка, включая
+        // наблюдательское: недопущенный политикой запрос получает адресный
+        // `Pause` с причиной, а не разрыв (NTR-20, решение D4). Разрыв остаётся
+        // только за запросом ДО хендшейка — сообщением, недопустимым для
+        // состояния соединения (NTR-4).
+        if (connection.phase === 'greeting') {
+          this.protocolError(id, 'protocol-error', 'запрос паузы до входа в матч');
+          return;
+        }
+        this.requestPause(connection, message.action);
+        return;
       case 'Bye':
         // Осознанный уход отвязывает соединение от слота — и только (design D4
         // change'а `add-player-reconnect`). Матча он не завершает: слот остаётся
@@ -755,6 +934,12 @@ export class MatchServer {
       // адресован: он не игрок, состава матча не занимает и `Start` дождётся
       // вместе со всеми. Роль соединения (NTR-18) для него не значит ничего —
       // она про право на слот, а слота у наблюдателя нет.
+      //
+      // Единственное, чего он не дождётся сам, — это заморозка: рассылок в ней
+      // нет, и наблюдатель, подключившийся в паузу, смотрел бы в пустой экран.
+      // Состояние паузы он получает наравне с игроками (NTR-20, NTR-9) — тем же
+      // путём и в том же порядке.
+      this.sendPauseState(connection);
       return;
     }
 
@@ -832,6 +1017,11 @@ export class MatchServer {
     // вернувшегося не начался заново, а оценка серверного тика у него
     // синхронизируется первым принятым снапшотом (NTR-10).
     this.send(connection.id, { type: 'Start', tick: this.startTick });
+    // Реконнект В ПАУЗУ (NTR-20, решение D8): хендшейк от состояния паузы не
+    // зависит, но живых рассылок в заморозке нет — поэтому замороженное
+    // состояние и текущее состояние паузы уезжают здесь, в фиксированном
+    // порядке. Заместитель, севший в паузу, получает то же самое: путь один.
+    this.sendPauseState(connection);
   }
 
   /**
@@ -1015,8 +1205,16 @@ export class MatchServer {
     //
     // Расписание при этом не останавливается: драйвер зовёт `advance()` тем же
     // темпом, и шаг перемотки делается здесь — точка остановки идёт назад по
-    // тикам, пока инициатор держит орган управления (REW-7).
+    // тикам, пока инициатор держит орган управления (REW-7). Тем же шагом
+    // ведётся и пауза матча (NTR-20): обратный отсчёт возобновления и предел
+    // длительности заморозки — величины расписания хоста, а не тика (D2).
+    //
+    // Возобновившийся здесь мир исполняет первый живой тик СЛЕДУЮЩИМ шагом, а
+    // не этим: один шаг расписания — одно действие, и втискивать тик в шаг,
+    // который только что объявил возобновление, значило бы менять смысл шага в
+    // зависимости от состояния.
     if (this.state.mode !== 'Running') {
+      this.drivePause();
       this.driveScrub();
       return;
     }
@@ -1391,6 +1589,262 @@ export class MatchServer {
     }
   }
 
+  // ------------------------------------------------------------ пауза матча
+
+  /** Текущее состояние паузы матча (NTR-20). Наблюдательный доступ для обвязки и тестов. */
+  get pauseState(): PauseState {
+    return this.pausePhase;
+  }
+
+  /** Слот-инициатор текущего состояния паузы; `-1` — обвязка (стенд, админ). */
+  get pauseInitiator(): number {
+    return this.pauseSlot;
+  }
+
+  /**
+   * Длительность в миллисекундах → шагов расписания. Драйвер зовёт `advance()`
+   * в темпе `tickRate` и в заморозке тоже (см. `advance`), поэтому шаг равен
+   * тику по длительности — и отсчёт паузы остаётся wall-clock'ом ХОСТА
+   * (решение D2), не заводя часов внутри сервера (NTR-3).
+   *
+   * Округление вверх: объявленная длительность — обещание игроку, и отсчёт,
+   * кончившийся раньше объявленного, хуже кончившегося на шаг позже.
+   */
+  private stepsOf(ms: number): number {
+    if (ms <= 0) return 0;
+    return Math.max(1, Math.ceil((ms * this.tickRate) / 1000));
+  }
+
+  /**
+   * Запрос паузы от участника матча (NTR-20). Решает СЕРВЕР по данным политики
+   * матча: бюджеты и права — его учёт вне мира (решение D3).
+   *
+   * Недопущенный запрос получает адресный `Pause` с НЕИЗМЕНЁННЫМ состоянием и
+   * названной причиной — соединение живо, матч не тронут (решение D4): `Reject`
+   * в этом протоколе рвёт соединение (NTR-4, NTR-5), а «нельзя сейчас» — не
+   * нарушение протокола.
+   */
+  private requestPause(connection: Connection, action: PauseAction): void {
+    // Наблюдатель (NTR-9) паузой не распоряжается: слота у него нет, бюджет
+    // считать не на ком, и «кто поставил» некому назвать.
+    if (connection.phase !== 'player') {
+      this.denyPause(connection.id, 'not-a-player');
+      return;
+    }
+    const denied =
+      action === 'pause' ? this.freezeBySlot(connection.slot) : this.unfreezeBySlot(connection.slot);
+    if (denied !== undefined) this.denyPause(connection.id, denied);
+  }
+
+  /**
+   * Пауза по вызову ОБВЯЗКИ (NTR-20): стенд — в том числе как политика реакции
+   * на отвязку владельца (решение D6), — админ через управляющий канал
+   * (`server-control` SRV-5).
+   *
+   * Тот же путь, что у запроса игрока, минус бюджет игрока: бюджет — правило
+   * для участников матча, а обвязка участником не является. Возвращает
+   * названную причину отказа либо `undefined` — обвязке её показывать человеку,
+   * а не гадать по состоянию.
+   */
+  pauseMatch(): PauseDenyReason | undefined {
+    return this.freezeBySlot(SERVER_SLOT);
+  }
+
+  /** Снятие паузы обвязкой (NTR-20): срок права противника к ней не относится. */
+  resumeMatch(): PauseDenyReason | undefined {
+    return this.unfreezeBySlot(SERVER_SLOT);
+  }
+
+  /**
+   * Заморозка: общий путь игрока и обвязки. Проверки идут от самого общего к
+   * самому частному — состояние матча, состояние мира, состояние паузы, бюджет,
+   * — потому что ровно в этом порядке они перестают быть верными.
+   */
+  private freezeBySlot(slot: number): PauseDenyReason | undefined {
+    if (this.matchPhase !== 'running') return 'match-not-running';
+    // Мир в `Rewinding` — машина перемотки доигрывает свой флоу нетронутой
+    // (NTR-20, сценарий «Пауза во время перемотки»). Её служебный `Paused`
+    // сюда попасть не может: скраб ведётся вызовами `advance()` внутри одного
+    // шага, и снаружи мир между ними всегда `Rewinding`.
+    if (this.freezeSource === 'rewind' || this.state.mode === 'Rewinding') return 'rewinding';
+    // Объявленный отсчёт доводится до конца: отмены объявленного возобновления
+    // механизм не знает, а поставить паузу снова можно уже после него — за счёт
+    // своего бюджета. Иначе двое игроков ставили бы и снимали её по кругу, и
+    // матч не возобновился бы никогда.
+    //
+    // Причина при этом называет то, что есть на самом деле: «уже стоит» и «уже
+    // возобновляется» — разные состояния и разные действия игрока дальше
+    // (ждать снятия против ждать отсчёта), а отказ обязан быть ИМЕННОВАННЫМ
+    // (NTR-20), то есть отвечать на «почему нельзя», а не на «нельзя».
+    if (this.pausePhase === 'resuming') return 'already-resuming';
+    if (this.pausePhase !== 'running') return 'already-frozen';
+    if (slot !== SERVER_SLOT) {
+      if ((this.pausesUsed[slot] ?? 0) >= this.pauseBudget) return 'budget-spent';
+      this.pausesUsed[slot] = (this.pausesUsed[slot] ?? 0) + 1;
+    }
+    this.wsm.pause();
+    this.freezeSource = 'match-pause';
+    this.pausePhase = 'frozen';
+    this.pauseSlot = slot;
+    this.frozenSteps = 0;
+    this.resumeSteps = 0;
+    this.broadcastPause();
+    return undefined;
+  }
+
+  /**
+   * Снятие: объявление обратного отсчёта либо немедленное возобновление, если
+   * политика отсчёта не объявила.
+   *
+   * Право на снятие ЧУЖОЙ паузы приходит по сроку (`opponentUnpauseAfterMs`):
+   * инициатор снимает свою когда угодно, обвязка — тоже (она не противник).
+   */
+  private unfreezeBySlot(slot: number): PauseDenyReason | undefined {
+    if (this.matchPhase !== 'running') return 'match-not-running';
+    if (this.freezeSource === 'rewind') return 'rewinding';
+    if (this.pausePhase === 'running') return 'not-frozen';
+    if (this.pausePhase === 'resuming') return 'already-resuming';
+    if (
+      slot !== SERVER_SLOT &&
+      slot !== this.pauseSlot &&
+      this.frozenSteps < this.opponentUnpauseSteps
+    ) {
+      return 'too-early';
+    }
+    this.beginResume(slot);
+    return undefined;
+  }
+
+  /**
+   * Объявление возобновления (NTR-20): «возобновляется» с длительностью отсчёта,
+   * по истечении которого проводится `Paused → Running`.
+   *
+   * Нулевой отсчёт — не особый случай, а его вырожденная длина: состояние
+   * `resuming` не объявляется вовсе, и матч продолжается тем же шагом. Объявить
+   * отсчёт нулевой длительности значило бы прислать HUD состояние, которое
+   * кончится раньше, чем он его нарисует.
+   */
+  private beginResume(slot: number): void {
+    this.pauseSlot = slot;
+    if (this.resumeCountdownSteps === 0) {
+      this.finishResume();
+      return;
+    }
+    this.pausePhase = 'resuming';
+    this.resumeSteps = this.resumeCountdownSteps;
+    this.broadcastPause();
+  }
+
+  /** Конец отсчёта: `Paused → Running` и объявление «идёт» (NTR-20). */
+  private finishResume(): void {
+    this.wsm.resume();
+    this.freezeSource = 'none';
+    this.pausePhase = 'running';
+    this.resumeSteps = 0;
+    this.frozenSteps = 0;
+    // Накопленный неприменённый ввод гасится по тому же основанию, что и на
+    // выходе из перемотки (`resume`): кадр, доехавший до заморозки, ждал бы
+    // возобновления и лёг бы на мир залпом — «действий, которых игрок в идущем
+    // матче не совершал» (NET-11).
+    for (const pending of this.pending) pending.clear();
+    this.broadcastPause();
+  }
+
+  /**
+   * Ведение паузы в темпе расписания: обратный отсчёт возобновления и предел
+   * длительности одной заморозки.
+   *
+   * Предел — ответ на риск «пауза на неопределённо долго вешает матч и слоты
+   * стенда»: по его истечении возобновление объявляет САМ сервер, инициатором
+   * `SERVER_SLOT`. Число приходит документом матча, а не отсюда.
+   */
+  private drivePause(): void {
+    if (this.freezeSource !== 'match-pause') return;
+    if (this.pausePhase === 'resuming') {
+      this.resumeSteps--;
+      if (this.resumeSteps <= 0) this.finishResume();
+      return;
+    }
+    this.frozenSteps++;
+    if (this.maxPauseSteps > 0 && this.frozenSteps >= this.maxPauseSteps) {
+      this.beginResume(SERVER_SLOT);
+    }
+  }
+
+  /** Остаток объявленного отсчёта в миллисекундах — то, что уезжает на провод. */
+  private countdownMs(): number {
+    if (this.pausePhase !== 'resuming') return 0;
+    return Math.ceil((this.resumeSteps * 1000) / this.tickRate);
+  }
+
+  /**
+   * Смена состояния паузы — ВСЕМ соединениям матча, включая наблюдателя
+   * (NTR-20, NTR-9). Адресного среза здесь нет и быть не может: пауза одна на
+   * матч, и знать о ней участники обязаны одинаково.
+   */
+  private broadcastPause(): void {
+    const message: ServerMessage = {
+      type: 'Pause',
+      state: this.pausePhase,
+      slot: this.pauseSlot,
+      countdownMs: this.countdownMs(),
+    };
+    for (const connection of this.connections.values()) {
+      if (connection.phase === 'greeting') continue;
+      this.send(connection.id, message);
+    }
+  }
+
+  /**
+   * Адресный отказ (решение D4): то же сообщение, НЕИЗМЕНЁННОЕ состояние и
+   * названная причина. Уходит только запросившему — рассылать отказ остальным
+   * значило бы сообщать им о чужих нажатиях.
+   */
+  private denyPause(to: ConnectionId, denied: PauseDenyReason): void {
+    this.send(to, {
+      type: 'Pause',
+      state: this.pausePhase,
+      slot: this.pauseSlot,
+      countdownMs: this.countdownMs(),
+      denied,
+    });
+  }
+
+  /**
+   * Состояние паузы вошедшему в ИДУЩИЙ матч (решение D8, NTR-20) — вернувшемуся
+   * владельцу (NTR-17), заместителю (NTR-18) и наблюдателю (NTR-9).
+   *
+   * Уезжает ВСЕГДА, а не только в заморозке, и это не избыточность: «паузы нет»
+   * — утверждение сервера, а его отсутствие — отсутствие утверждения. Вернись
+   * игрок в матч, который возобновили без него, и без этого сообщения его HUD
+   * так и держал бы оверлей паузы, поставленной до разрыва: доставленного
+   * состояния, которое его снимет, не пришло бы никогда (HUD-9).
+   *
+   * Замороженное состояние снапшотом идёт ПЕРЕД ним, и порядок обратным быть не
+   * может: рассылок снапшота в заморозке нет вовсе, поэтому без него вернувшийся
+   * смотрел бы в пустой мир до самого возобновления, а приди `Pause` раньше —
+   * HUD мигнул бы «боем», потому что состояние приехало бы после объявления
+   * паузы.
+   */
+  private sendPauseState(connection: Connection): void {
+    if (this.matchPhase !== 'running') return;
+    if (this.pausePhase !== 'running') {
+      const personal = this.filterFor(this.viewpointOf(connection));
+      this.send(connection.id, {
+        type: 'Snapshot',
+        epoch: this.currentEpoch,
+        tick: this.state.tick,
+        snapshot: toWireSnapshot(personal),
+      });
+    }
+    this.send(connection.id, {
+      type: 'Pause',
+      state: this.pausePhase,
+      slot: this.pauseSlot,
+      countdownMs: this.countdownMs(),
+    });
+  }
+
   // -------------------------------------------------------------- перемотка
 
   /**
@@ -1612,17 +2066,45 @@ export class MatchServer {
     this.resume();
   }
 
-  /** `Running → Paused` либо `Rewinding → Paused` (WSM-2). */
+  /**
+   * `Running → Paused` либо `Rewinding → Paused` (WSM-2) — СЛУЖЕБНАЯ заморозка
+   * машины перемотки. Паузой матча она не является: у той свой путь
+   * (`pauseMatch`, `PauseRequest`) и своя причина в поле `freezeSource`.
+   *
+   * Из паузы матча перемотка не начинается, и отказ здесь явный (NTR-20): «мир
+   * заморожен паузой матча» — не то состояние, из которого машина перемотки
+   * умеет продолжить, а запрос перемотки в заморозке не рождается вовсе (REW-12:
+   * его порождает живой тик, которых тут нет).
+   */
   pause(): void {
+    if (this.freezeSource === 'match-pause') {
+      throw new Error(
+        'MatchServer.pause: мир заморожен паузой матча (NTR-20) — перемотка из неё не начинается',
+      );
+    }
     this.requireRewind().pause();
+    this.freezeSource = 'rewind';
   }
 
   /**
    * `Paused → Rewinding` (WSM-2). Прямого входа из `Running` нет ни у политики,
    * ни у сетевого слоя — единственный флоу `Running → Paused → Rewinding →
    * Paused → Running` (NET-11).
+   *
+   * Отказ на паузе матча стоит ЗДЕСЬ, а не только в `pause()`, потому что
+   * требование говорит про перемотку, а не про вход в неё: «перемотка из паузы
+   * матча не начинается» (NTR-20). Ядру этот вход законен — `beginRewind`
+   * спрашивает у мира только `Paused`, а пауза матча ровно его и оставляет, —
+   * поэтому единственное место, где заморозки различаются, это хост (D1).
+   * Без гарда обвязка получила бы `Rewinding` с причиной заморозки
+   * `match-pause`, а возобновление паузы упало бы позже и в чужом месте.
    */
   beginRewind(): void {
+    if (this.freezeSource === 'match-pause') {
+      throw new Error(
+        'MatchServer.beginRewind: мир заморожен паузой матча (NTR-20) — перемотка из неё не начинается',
+      );
+    }
     this.requireRewind().beginRewind();
   }
 
@@ -1636,7 +2118,13 @@ export class MatchServer {
    * (NET-11, REW-5), а лишний `clear` на переходе стоит ровно ничего.
    */
   resume(): void {
+    if (this.freezeSource === 'match-pause') {
+      throw new Error(
+        'MatchServer.resume: паузу матча снимает `resumeMatch`/`PauseRequest` (NTR-20), а не выход из перемотки',
+      );
+    }
     this.requireRewind().resume();
+    this.freezeSource = 'none';
     for (const pending of this.pending) pending.clear();
   }
 

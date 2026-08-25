@@ -69,6 +69,64 @@ export type RejectReason =
 export type EndReason = 'player-silent' | 'server-stopped';
 
 /**
+ * Требуемое действие в `PauseRequest` (NTR-20): поставить паузу либо снять её.
+ * Двух значений хватает потому, что состояние паузы одно на матч, а не на
+ * слот: «снять» относится к той паузе, которая стоит, кто бы её ни поставил.
+ */
+export type PauseAction = 'pause' | 'resume';
+
+/**
+ * Состояние паузы матча (NTR-20): исчерпывающий перечень из трёх значений —
+ * ровно те, которые называет требование.
+ *
+ * - `running` — паузы нет, матч идёт;
+ * - `frozen` — мир заморожен (`Running → Paused`, WSM-2), живых тиков нет;
+ * - `resuming` — возобновление объявлено, идёт обратный отсчёт; мир всё ещё
+ *   заморожен, и `Paused → Running` произойдёт по его истечении.
+ *
+ * Состояние — свойство МАТЧА, а не соединения: одно и то же значение уезжает
+ * всем, включая наблюдателя (NTR-9).
+ *
+ * Перечень объявлен ЗНАЧЕНИЕМ, а тип выведен из него: разбор обязан перечень
+ * проверить (HUD ветвится по этим значениям, HUD-9), а список, написанный
+ * вторым разом для проверки, — это второе место, где закрытый набор может
+ * разойтись сам с собой.
+ */
+export const PAUSE_STATES = ['running', 'frozen', 'resuming'] as const;
+
+export type PauseState = (typeof PAUSE_STATES)[number];
+
+/**
+ * Именованные причины отказа в запросе паузы (NTR-20). Отказ — законное «нельзя
+ * сейчас», а не нарушение протокола: он уезжает адресным `Pause` с неизменённым
+ * состоянием и соединения MUST NOT рвать (решение D4 дизайна).
+ *
+ * Перечень закрыт по тому же основанию, что и набор сообщений (NTR-4): причина,
+ * приехавшая свободной строкой, читалась бы человеком, а показывать её обязан
+ * HUD (HUD-9).
+ */
+export const PAUSE_DENY_REASONS = [
+  /** Матч ещё не начался или уже кончился — замораживать нечего. */
+  'match-not-running',
+  /** Мир в `Rewinding`: машина перемотки доигрывает свой флоу (NTR-20, WSM-2). */
+  'rewinding',
+  /** Запрос от соединения без игрового слота — наблюдателя (NTR-9). */
+  'not-a-player',
+  /** Бюджет пауз слота исчерпан (политика документа матча). */
+  'budget-spent',
+  /** Пауза уже стоит: повторная заморозка ничего не меняет. */
+  'already-frozen',
+  /** Возобновление уже объявлено — объявленный отсчёт доводится до конца. */
+  'already-resuming',
+  /** Снятие в идущем матче: снимать нечего. */
+  'not-frozen',
+  /** Чужую паузу противник вправе снять не раньше срока, названного политикой. */
+  'too-early',
+] as const;
+
+export type PauseDenyReason = (typeof PAUSE_DENY_REASONS)[number];
+
+/**
  * Исходы, по которым соединение рвёт сам клиент. Отделены от `RejectReason`:
  * это его решение, не серверное.
  *
@@ -142,12 +200,28 @@ export interface InputMessage {
   readonly frames: readonly WireInput[];
 }
 
+/**
+ * Запрос паузы матча (NTR-20) — отдельный тип закрытого набора (NTR-4), а не
+ * бит в `Input`.
+ *
+ * Битом это выразить нельзя, и причина не в удобстве: кадры ввода в заморозке
+ * отбрасываются целиком (NET-11, REW-5), то есть «снять паузу» не доехало бы
+ * ровно в том состоянии, ради которого оно и посылается. Единственное
+ * исключение из отбрасывания — контрольный бит ведения скраба (REW-5), и второе
+ * исключение рядом с ним означало бы, что заморозка перестала быть заморозкой
+ * ввода.
+ */
+export interface PauseRequestMessage {
+  readonly type: 'PauseRequest';
+  readonly action: PauseAction;
+}
+
 export interface ByeMessage {
   readonly type: 'Bye';
   readonly reason: string;
 }
 
-export type ClientMessage = HelloMessage | InputMessage | ByeMessage;
+export type ClientMessage = HelloMessage | InputMessage | PauseRequestMessage | ByeMessage;
 
 // ------------------------------------------------------------ server → client
 
@@ -301,6 +375,39 @@ export interface EventsMessage {
   readonly batches: readonly EventBatch[];
 }
 
+/**
+ * Состояние паузы матча (NTR-20). Одно сообщение на два назначения — объявление
+ * смены состояния всем соединениям и адресный отказ запросившему, — и это не
+ * экономия типов, а решение D4: `Reject` в этом протоколе рвёт соединение
+ * (NTR-4, NTR-5), а «нельзя сейчас» соединения не рвёт.
+ *
+ * Отсчёт едет ДЛИТЕЛЬНОСТЬЮ, а не тиком и не моментом времени (решение D2):
+ * тики в заморозке не исполняются, поэтому тикового отсчёта быть не может, а
+ * общих часов у сервера с клиентом нет. Клиент ведёт визуальный отсчёт от
+ * доставленной длительности (HUD-9); авторитетен момент фактического
+ * возобновления — первый живой снапшот.
+ */
+export interface PauseMessage {
+  readonly type: 'Pause';
+  readonly state: PauseState;
+  /**
+   * Слот, чьё действие привело к этому состоянию; `-1` — сервер: пауза от
+   * обвязки стенда, админ-пауза (`server-control` SRV-5) и самовозобновление по
+   * истечении максимальной длительности паузы. Слота у них нет и выдумывать его
+   * нельзя — HUD назвал бы игрока, который ничего не делал.
+   */
+  readonly slot: number;
+  /** Остаток объявленного отсчёта возобновления в миллисекундах; вне `resuming` — 0. */
+  readonly countdownMs: number;
+  /**
+   * Именованная причина отказа (NTR-20). Поля НЕТ — это объявление состояния, а
+   * не отказ: два разных высказывания, и значение «не отказано» было бы третьим
+   * состоянием там, где их два. Свободным расширением поле не является (NTR-4) —
+   * его отсутствие несёт смысл, как отсутствие точки прицела в кадре ввода.
+   */
+  readonly denied?: PauseDenyReason;
+}
+
 export interface EndMessage {
   readonly type: 'End';
   readonly reason: EndReason;
@@ -313,6 +420,7 @@ export type ServerMessage =
   | StartMessage
   | SnapshotMessage
   | EventsMessage
+  | PauseMessage
   | EndMessage;
 
 // ------------------------------------------------------------------- разбор
@@ -458,6 +566,16 @@ export function parseClientMessage(value: unknown): ClientMessage {
         frames: frames.map(wireInput),
       };
     }
+    case 'PauseRequest': {
+      // Умолчания у действия нет намеренно (NTR-4): молча подставленное
+      // «поставить» превратило бы опечатку клиента в заморозку матча, а
+      // подставленное «снять» — в снятие чужой паузы.
+      const action = source.action;
+      if (action !== 'pause' && action !== 'resume') {
+        throw new ProtocolError('PauseRequest: поле "action" — "pause" либо "resume" (NTR-20)');
+      }
+      return { type: 'PauseRequest', action };
+    }
     case 'Bye':
       return { type: 'Bye', reason: typeof source.reason === 'string' ? source.reason : '' };
     default:
@@ -537,6 +655,28 @@ function wireSnapshot(value: unknown): WireSnapshot {
   };
 }
 
+/**
+ * Значение из закрытого перечня (NTR-20). Разбор обязан перечень ПРОВЕРИТЬ, а
+ * не привести к типу приведением: HUD ветвится по этим значениям (HUD-9), и
+ * незнакомое дошло бы до виджета молча.
+ */
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], what: string): T {
+  if (typeof value !== 'string' || !allowed.includes(value as T)) {
+    throw new ProtocolError(`${what} — одно из ${allowed.join(', ')} (NTR-20)`);
+  }
+  return value as T;
+}
+
+/**
+ * Причина отказа: её нет вовсе либо она из перечня. `undefined` и «не из
+ * перечня» — разные случаи, и второй отвергается, а не приводится к первому:
+ * отказ с неразобранной причиной выглядел бы для HUD объявлением состояния.
+ */
+function pauseDenied(source: Record<string, unknown>): { denied?: PauseDenyReason } {
+  if (source.denied === undefined) return {};
+  return { denied: oneOf(source.denied, PAUSE_DENY_REASONS, 'Pause: поле "denied"') };
+}
+
 /** Симметричный разбор на клиенте: сервер тоже недоверен ровно в той мере, в какой недоверен провод. */
 export function parseServerMessage(value: unknown): ServerMessage {
   const source = object(value, 'сообщение');
@@ -605,6 +745,16 @@ export function parseServerMessage(value: unknown): ServerMessage {
         batches: batches.map((batch) => eventBatch(batch, from, to)),
       };
     }
+    case 'Pause':
+      return {
+        type: 'Pause',
+        state: oneOf(source.state, PAUSE_STATES, 'Pause: поле "state"'),
+        // `-1` — сервер (обвязка стенда, админ): слота у него нет, и нижняя
+        // граница включает его намеренно.
+        slot: int(source, 'slot', 'Pause', -1, Number.MAX_SAFE_INTEGER),
+        countdownMs: int(source, 'countdownMs', 'Pause', 0, Number.MAX_SAFE_INTEGER),
+        ...pauseDenied(source),
+      };
     case 'End':
       return {
         type: 'End',

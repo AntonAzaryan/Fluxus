@@ -4,7 +4,7 @@
  * `dedicated`) с бот-заполнителем слотов (BOT-7) и авто-рестартом (design D3).
  *
  *   node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 120000]
- *                                       [--on-disconnect bot|hold] [--substitute-delay-ms 2000]
+ *                                       [--on-disconnect bot|hold|pause] [--substitute-delay-ms 2000]
  *                                       [--silence-seconds <окно возврата>]
  *                                       [--match content/matches/duel.match.json]
  *                                       [--bot content/bots/normal.json] [--brain evaluated]
@@ -60,6 +60,11 @@
  *    это механизм СЕРВЕРА (NTR-17, NTR-18): стенд лишь не пере-подключает
  *    вытесненного. Политика `hold` не делает ничего — слот ждёт владельца до
  *    порога молчания (`--silence-seconds`, умолчание — поле документа матча).
+ * 2б. Пауза при разрыве: политика `--on-disconnect pause` (NTR-20, решение D6)
+ *    замораживает матч серверным API паузы, пока слот без соединения, и
+ *    возобновляет его по правилам документа матча, когда владелец вернулся
+ *    реконнектом (NTR-17). Умолчание флага — поле `pause.onOwnerDetach`
+ *    документа матча: правила паузы — данные, а не флаги запускалки.
  * 3. Авто-рестарт: по завершении матча (`End` любой причины, включая молчание
  *    слота) обвязка поднимает следующий матч тем же конфигом. Цикл живёт
  *    ЗДЕСЬ — `MatchServer` остаётся чистым тиком без ввода-вывода (NTR-3), и
@@ -98,7 +103,7 @@ const fromRepo = (relative) => fileURLToPath(new URL(`../../../${relative}`, imp
 if (flag('help')) {
   process.stdout.write(
     'usage: node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 120000]\n' +
-      '       [--on-disconnect bot|hold] [--substitute-delay-ms 2000] [--silence-seconds <сек>]\n' +
+      '       [--on-disconnect bot|hold|pause] [--substitute-delay-ms 2000] [--silence-seconds <сек>]\n' +
       '       [--match <match.json>] [--bot <profile.json>] [--brain evaluated|scripted] [--json] [--once]\n' +
       `       [--debug] [--max-ticks 600] [--out-dir runs/latest] [--dict <словарь>]\n       ${TRACE_USAGE}\n`,
   );
@@ -132,6 +137,9 @@ const { standSession } = await import('../app/standSession.ts');
 // умолчание снаружи неотличимо от «стенд ведёт себя странно»
 // (`test/standPolicy.test.ts`).
 const { standPolicy } = await import('../app/standPolicy.ts');
+// Политика «разрыв замораживает матч» (NTR-20, D6) — там же и по той же
+// причине: она принадлежит сборке-основателю, а не серверу матча.
+const { DetachPause } = await import('../app/detachPause.ts');
 
 const match = readMatchFile(option('match', fromRepo('content/matches/duel.match.json')));
 const pack = contentPack(match.scenes);
@@ -191,6 +199,11 @@ try {
     number: numberOption,
     debug: debugRun,
     silenceSeconds: match.silenceSeconds ?? 10,
+    // Умолчание `--on-disconnect` берётся у документа матча (NTR-20, D6): что
+    // делать при отвязке владельца — правило паузы, а правила паузы — данные.
+    ...(match.pause?.onOwnerDetach !== undefined
+      ? { onOwnerDetach: match.pause.onOwnerDetach }
+      : {}),
   });
 } catch (error) {
   process.stderr.write(`${error.message}\n`);
@@ -275,7 +288,9 @@ process.stdout.write(
     `  разрыв в бою: ${
       policy.onDisconnect === 'bot'
         ? `бот-заместитель через ${policy.substituteDelayMs} мс`
-        : 'ничего — слот ждёт владельца'
+        : policy.onDisconnect === 'pause'
+          ? 'пауза матча до возврата владельца'
+          : 'ничего — слот ждёт владельца'
     }, окно возврата ${policy.silenceSeconds} с\n` +
     `  клиент: npm run play -- --url ws://127.0.0.1:${port} --player ${match.players[0]}\n` +
     `  вкладка: демо с ?server=ws://127.0.0.1:${port}\n` +
@@ -423,6 +438,28 @@ async function runMatch(number) {
         })
       : null;
 
+  /**
+   * Политика разрыва «заморозить матч» (NTR-20, D6): слот без соединения
+   * накрывается паузой серверного API, вернувшийся владелец её снимает. Тем же
+   * наблюдением снаружи, что и заместитель, и через то же API, которым паузу
+   * ставит админ (`server-control` SRV-5).
+   */
+  const detachPause =
+    policy.onDisconnect === 'pause'
+      ? new DetachPause({
+          players: match.players,
+          attached: (slot) => server.slotAttached(slot),
+          running: () => server.phase === 'running',
+          state: () => server.pauseState,
+          pause: () => server.pauseMatch(),
+          resume: () => server.resumeMatch(),
+          // Матч, покинутый всеми, не замораживается: заморозка остановила бы и
+          // порог молчания (NTR-6), и он не кончился бы никогда.
+          abandoned: () => listening.claimants.size === 0,
+          report: (message) => process.stdout.write(`\n${message}\n`),
+        })
+      : null;
+
   const makeFiller = () => new BotSlotFiller({
     players: match.players,
     deadlineMs: botFillMs,
@@ -491,6 +528,9 @@ async function runMatch(number) {
       // Опросом, потому что о разрывах сервер наружу не сообщает и не должен
       // (NTR-3): расписание держит тот, кто им владеет.
       substitutes?.poll();
+      // Взгляд политики «разрыв замораживает матч» (NTR-20): тем же опросом и
+      // по той же причине — о разрывах сервер наружу не сообщает.
+      detachPause?.poll();
       // Отладочный матч ограничен по длительности и завершается САМ (CLI-11):
       // человека, который нажмёт Ctrl+C, у прогона нет. Остановка идёт штатным
       // путём сервера — тем же `End`, что и всякий другой конец матча.
@@ -508,6 +548,7 @@ async function runMatch(number) {
   // Неистёкшая пауза заместителя отменяется вместе с матчем: бот, приехавший в
   // уже свёрнутый матч, получил бы отказ и оставил бы за собой лишний канал.
   substitutes?.dispose();
+  detachPause?.dispose();
   // `host.stop()` закрывает слушающие стороны обоих транспортов — и вид сокета,
   // и портовые каналы ботов (`mergeTransportServers`), — поэтому второго
   // закрытия здесь нет.

@@ -7,6 +7,7 @@
 export {
   MATCH_STATUS_CONTROLS_PARAM,
   MATCH_STATUS_PAUSE_SLOT,
+  MATCH_STATUS_PAUSE_STATE_SLOT,
   MATCH_STATUS_PAUSED_CLASS,
   MATCH_STATUS_RESUME_SLOT,
   MATCH_STATUS_WIDGET,
@@ -30,3 +31,10 @@ export {
   RUNTIME_WIDGET,
   runtimeKind,
 } from './runtimePanel.js';
+// Оверлей паузы матча на доставленном состоянии паузы (HUD-9, NTR-20).
+export {
+  PAUSE_OVERLAY_SLOT,
+  PAUSE_OVERLAY_WIDGET,
+  matchPauseSelector,
+  pauseOverlayKind,
+} from './pauseOverlay.js';

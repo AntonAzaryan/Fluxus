@@ -21,10 +21,12 @@ import {
   createPortraitKind,
   deathsKind,
   hpBarKind,
+  matchPauseSelector,
   matchStatusKind,
   minimapEntitiesSelector,
   minimapFloorSelector,
   minimapWidgetKind,
+  pauseOverlayKind,
   runtimeKind,
   type HudCameraContract,
   type HudComposition,
@@ -37,6 +39,23 @@ import {
 } from '@fluxus/hud';
 import { COOLDOWN_ABILITIES, RESPAWN_EVENT, STATS } from './sim.js';
 
+/**
+ * Словарь причин отказа в паузе (`netcode-transport` NTR-20) — ДАННЫЕ демо, а
+ * не строки виджета: смысл причин принадлежит игре, и оверлей показывает то,
+ * что ему дала композиция (HUD-4, HUD-9). Причина без записи доезжает до экрана
+ * своим ключом и потому видна, а не теряется.
+ */
+const PAUSE_DENY_LABELS: Readonly<Record<string, string>> = {
+  'match-not-running': 'матч ещё не идёт',
+  rewinding: 'идёт откат — паузу поставить нельзя',
+  'not-a-player': 'наблюдатель паузу не ставит',
+  'budget-spent': 'паузы на этот матч кончились',
+  'already-frozen': 'пауза уже стоит',
+  'already-resuming': 'матч уже возобновляется',
+  'not-frozen': 'паузы нет',
+  'too-early': 'чужую паузу пока снимать рано',
+};
+
 /** Что даёт оболочка этой сборки: от этого зависит состав HUD (SHELL-8). */
 export interface DemoShellCapabilities {
   /**
@@ -46,6 +65,18 @@ export interface DemoShellCapabilities {
    * стилем, а не появляются вовсе (design D5).
    */
   readonly controls: boolean;
+  /**
+   * Пауза МАТЧА (NTR-20): её ставит сервер по запросу участника, и своей машины
+   * состояний тонкому клиенту она не даёт. Поэтому в сетевом режиме кнопки
+   * паузы существуют, а оверлей рисуется по ДОСТАВЛЕННОМУ состоянию паузы
+   * (HUD-9), а не по режиму мира.
+   *
+   * В локальном режиме её нет: пауза одиночного прогона — переход WSM в воркере
+   * (SHELL-6), сервера в этой сборке не существует вовсе.
+   */
+  readonly matchPause: boolean;
+  /** Имена слотов матча для оверлея паузы: кто именно её поставил (HUD-9). */
+  readonly slotNames?: readonly string[];
   /**
    * Длительность тика в миллисекундах — из handshake (SHELL-5). Оверлей
    * кулдауна переводит по ней доставленные ТИКИ в секунды (HUD-8): сам он не
@@ -85,13 +116,37 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
       {
         widget: 'match-status',
         zone: 'top-left',
-        params: { controls: capabilities.controls },
-        // Слоты действий ведут в реестр только там, где им есть куда вести:
-        // запрос паузы от тонкого клиента не исполнил бы никто (SHELL-6).
-        ...(capabilities.controls
+        // Кнопки паузы есть у обеих сборок, но по разным основаниям: у локальной
+        // это переход машины состояний её собственного воркера (SHELL-6), у
+        // сетевой — запрос паузы МАТЧА серверу (NTR-20). Обратный канал у них
+        // один и тот же, поэтому и запись композиции одна.
+        params: { controls: capabilities.controls || capabilities.matchPause },
+        ...(capabilities.controls || capabilities.matchPause
           ? { actions: { pause: 'match.pause', resume: 'match.resume' } }
           : {}),
+        // Чем кнопка выбирает команду: сетевая сборка — ДОСТАВЛЕННЫМ состоянием
+        // паузы матча (NTR-20), локальная — доставленным режимом своего мира
+        // (умолчание виджета). Разница не косметическая: в заморозке матча
+        // снапшотов нет вовсе, режим мира у клиента остаётся `Running`, и без
+        // этого биндинга кнопка не смогла бы послать `resume` никогда (HUD-9).
+        ...(capabilities.matchPause ? { bindings: { pauseState: 'match.pause.state' } } : {}),
       },
+      // Оверлей паузы матча (HUD-9) — только там, где пауза матча существует:
+      // в локальном прогоне сервера нет, состояние паузы никто не доставляет, и
+      // виджет, которому нечего показывать, лучше не монтировать вовсе.
+      ...(capabilities.matchPause
+        ? [
+            {
+              widget: 'pause-overlay',
+              zone: 'center' as const,
+              params: {
+                slotNames: [...(capabilities.slotNames ?? [])],
+                denyLabels: PAUSE_DENY_LABELS,
+              },
+              bindings: { pause: 'match.pause.state' },
+            },
+          ]
+        : []),
       // Рантайм-панель (design D5): кадры главного потока, тик доставки и число
       // доставленных сущностей. Помощь по управлению уехала в README демо —
       // статический блок поверх вьюпорта на её месте больше не висит.
@@ -294,6 +349,7 @@ export function createDemoHudRegistry(
   registry.registerWidget(hpBarKind);
   registry.registerWidget(deathsKind);
   registry.registerWidget(runtimeKind);
+  registry.registerWidget(pauseOverlayKind);
 
   registry.registerSelector('hero.entity', heroEntitySelector);
   registry.registerSelector('minimap.entities', minimapEntitiesSelector);
@@ -301,6 +357,10 @@ export function createDemoHudRegistry(
   // Все доставленные сущности: вход счётчиков смертей и рантайм-панели.
   // Скрытых туманом здесь нет по построению (HUD-1).
   registry.registerSelector('entities', (state: HudDeliveredState) => state.entities);
+  // Доставленное состояние паузы матча (NTR-20). Имя с суффиксом `.state`, а не
+  // `match.pause`: последнее уже занято ДЕЙСТВИЕМ «поставить паузу», а реестры
+  // селекторов и действий разные — совпадение имён читалось бы как одно понятие.
+  registry.registerSelector('match.pause.state', matchPauseSelector);
 
   // Мировые действия — имена словаря биндингов (INP-4): в воркер уходит тот же
   // канонический ввод, что от назначенной клавиши (HUD-2).

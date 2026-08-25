@@ -31,6 +31,11 @@ export type {
   InputMessage,
   MatchDescriptor,
   Pacing,
+  PauseAction,
+  PauseDenyReason,
+  PauseMessage,
+  PauseRequestMessage,
+  PauseState,
   RejectMessage,
   RejectReason,
   ServerMessage,
@@ -83,6 +88,7 @@ export type {
 export { MatchServer } from './server/matchServer.js';
 export type {
   MatchConfig,
+  MatchPauseOptions,
   MatchPhase,
   MatchRewindOptions,
   MatchSegment,
@@ -101,6 +107,7 @@ export type {
   MatchClientOptions,
   MatchSample,
 } from './client/matchClient.js';
+export type { DeliveredPause } from './client/pause.js';
 export { ClientHost } from './client/host.js';
 export type { ClientHostOptions, ClientStep, InputSource } from './client/host.js';
 export { InputRing, DEFAULT_RING_TICKS } from './client/inputRing.js';

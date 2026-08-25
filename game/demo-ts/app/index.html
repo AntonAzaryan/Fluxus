@@ -64,6 +64,38 @@
       .hud-cooldowns__button:active {
         border-color: #ffd479;
       }
+      /* Оверлей паузы матча (HUD-9): плашка в центре вьюпорта. Показывается и
+         прячется САМ виджет (inline `display`) по доставленному состоянию —
+         здесь только вид. Жёлтый тот же, что у паузы статуса матча: это одно и
+         то же событие, названное двумя виджетами. */
+      .hud-pause {
+        margin: 12px;
+        padding: 14px 22px;
+        text-align: center;
+        background: rgba(10, 10, 24, 0.82);
+        border: 1px solid rgba(255, 212, 121, 0.5);
+        border-radius: 10px;
+      }
+      .hud-pause__title {
+        font-size: 20px;
+        letter-spacing: 0.08em;
+        color: #ffd479;
+      }
+      .hud-pause__by {
+        margin-top: 4px;
+        opacity: 0.75;
+      }
+      .hud-pause__countdown {
+        margin-top: 8px;
+        font-size: 16px;
+        color: #ffd479;
+      }
+      /* Отказ политики показывается и БЕЗ заморозки — тогда плашка состоит из
+         одной этой строки (HUD-9, сценарий «Отказ в паузе»). */
+      .hud-pause__denied {
+        margin-top: 4px;
+        color: #ff9f9f;
+      }
       /* Панель способностей: сетка в два ряда — число колонок ставит виджет
          инлайн-стилем по параметру композиции (HUD-4). Нижний отступ меньше
          бокового: полоса прижата к краю экрана, центрирует её сетка зон

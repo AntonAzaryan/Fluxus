@@ -63,6 +63,19 @@ const REWIND = {
   holdTimeoutTicks: 15,
 } as const;
 
+/**
+ * Секция паузы (NTR-20) — тоже дословно с настоящего документа: правила паузы
+ * приходят данными матча, и потеряйся секция в раскладке, игроки лишились бы
+ * паузы молча, ровно как лишились когда-то ульты отката.
+ */
+const PAUSE = {
+  budgetPerPlayer: 3,
+  opponentUnpauseAfterMs: 30_000,
+  resumeCountdownMs: 3000,
+  maxPauseMs: 300_000,
+  onOwnerDetach: 'ignore',
+} as const;
+
 function document(overrides: Partial<MatchDocument> = {}): MatchDocument {
   return {
     name: 'duel',
@@ -83,6 +96,7 @@ function document(overrides: Partial<MatchDocument> = {}): MatchDocument {
     eventRepeat: 2,
     silenceSeconds: 30,
     rewind: REWIND,
+    pause: PAUSE,
     scenes: { duel: scene() },
     ...overrides,
   };

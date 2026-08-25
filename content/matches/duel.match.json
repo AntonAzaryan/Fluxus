@@ -30,5 +30,12 @@
     "holdButton": 7,
     "step": 4,
     "holdTimeoutTicks": 15
+  },
+  "pause": {
+    "budgetPerPlayer": 3,
+    "opponentUnpauseAfterMs": 30000,
+    "resumeCountdownMs": 3000,
+    "maxPauseMs": 300000,
+    "onOwnerDetach": "ignore"
   }
 }

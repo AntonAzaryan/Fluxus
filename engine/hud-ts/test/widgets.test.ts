@@ -14,7 +14,7 @@ import {
   HudRuntime,
   type HudComposition,
 } from '../src/index.js';
-import { MATCH_STATUS_PAUSED_CLASS, matchStatusKind } from '../src/widgets/index.js';
+import { MATCH_STATUS_PAUSED_CLASS, matchPauseSelector, matchStatusKind } from '../src/widgets/index.js';
 import { asElement, fakeDom, walkElements, type FakeElement } from './support/fakeDom.js';
 import { CameraSpy, makeView } from './support/hud.js';
 
@@ -31,6 +31,7 @@ function bench(): {
 } {
   const registry = new HudRegistry();
   registry.registerWidget(matchStatusKind);
+  registry.registerSelector('match.pause.state', matchPauseSelector);
   registry.registerAction('hud.pause', { target: 'control', action: 'pause' });
   registry.registerAction('hud.resume', { target: 'control', action: 'resume' });
   registry.registerAction('hero.cast', { target: 'world', action: 'cast' });
@@ -117,6 +118,51 @@ describe('статус матча: пауза из HUD (HUD-2)', () => {
     ]);
     // И снова: видимое состояние не меняется до следующей доставки.
     expect((root.getAttribute('class') ?? '').includes(MATCH_STATUS_PAUSED_CLASS)).toBe(true);
+  });
+
+  it('в сетевой сборке кнопка снимает паузу МАТЧА, а не ждёт режима мира (NTR-20, HUD-9)', () => {
+    // Сетевая запись композиции биндит доставленное состояние паузы. Без него
+    // кнопка выбирала бы команду по режиму мира — а он в заморозке матча
+    // остаётся `Running`: снапшотов сервер не рассылает, живых тиков нет. Тогда
+    // поставивший паузу жал бы «Пауза» до конца матча и получал `already-frozen`.
+    const { runtime, host, controlCalls } = bench();
+    runtime.apply({
+      entries: [
+        {
+          widget: 'match-status',
+          zone: 'top-left',
+          actions: { pause: 'hud.pause', resume: 'hud.resume' },
+          bindings: { pauseState: 'match.pause.state' },
+        },
+      ],
+    });
+    runtime.subsystem.syncTick(makeView({ tick: 12, mode: 'Running' }));
+
+    const zone = host.zone('top-left');
+    const root = findByClass(zone, 'hud-match-status');
+    const button = findByClass(zone, 'hud-match-status__pause');
+    button.dispatch('click');
+    expect(controlCalls).toEqual([['pause', undefined]]);
+
+    // Заморозка приезжает СВОИМ каденсом, режим мира в доставке прежний.
+    runtime.deliverPause({ state: 'frozen', slot: 0, countdownMs: 0, deniedSeq: 0 });
+    expect(findByClass(zone, 'hud-match-status__mode').textContent).toBe('Running');
+    expect((root.getAttribute('class') ?? '').includes(MATCH_STATUS_PAUSED_CLASS)).toBe(true);
+    expect(button.textContent).toBe('Продолжить');
+
+    button.dispatch('click');
+    expect(controlCalls).toEqual([
+      ['pause', undefined],
+      ['resume', undefined],
+    ]);
+
+    // Отсчёт возобновления — тоже «пауза стоит»: снимать её второй раз нечего.
+    runtime.deliverPause({ state: 'resuming', slot: 0, countdownMs: 3000, deniedSeq: 0 });
+    expect(button.textContent).toBe('Продолжить');
+    // Доставленное «идёт» возвращает кнопке паузу.
+    runtime.deliverPause({ state: 'running', slot: 0, countdownMs: 0, deniedSeq: 0 });
+    expect(button.textContent).toBe('Пауза');
+    expect((root.getAttribute('class') ?? '').includes(MATCH_STATUS_PAUSED_CLASS)).toBe(false);
   });
 
   it('оболочка без управления миром не получает кнопки вовсе (D5 демо, NET-11)', () => {

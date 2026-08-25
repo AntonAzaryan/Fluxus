@@ -59,6 +59,7 @@ export const MATCH_DOCUMENT_FIELDS = [
   'inputWindow',
   'eventRepeat',
   'rewind',
+  'pause',
   'physics',
   'locomotion',
   'visibility',
