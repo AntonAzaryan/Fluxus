@@ -48,6 +48,8 @@ export default defineConfig({
       'editor/ui-ts',
       'tools/blender-ts',
       'game/demo-ts',
+      'game/server-agent-ts',
+      'game/server-manager-ts',
     ].map((pkg) => root + pkg),
     coverage: {
       provider: 'v8',
@@ -58,6 +60,8 @@ export default defineConfig({
         'editor/*/src/**',
         'tools/blender-ts/src/**',
         'game/demo-ts/app/**/*.ts',
+        'game/server-agent-ts/src/**',
+        'game/server-manager-ts/src/**',
       ],
     },
   },

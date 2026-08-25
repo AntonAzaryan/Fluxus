@@ -44,7 +44,9 @@
     "bot-player": "editor-content",
     "performance-budget": "client",
     "render-quality": "client",
-    "render-debug": "client"
+    "render-debug": "client",
+    "server-control": "net",
+    "server-manager": "editor-content"
   },
   "exceptions": [
     {

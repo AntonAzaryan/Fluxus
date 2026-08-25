@@ -17,6 +17,17 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { profileService, type AppProfile, type ProfileService } from '../bridge/profile.js';
 import type { BridgeServiceId, BridgeServiceState } from '../bridge/types.js';
+import {
+  defaultServiceStateDir,
+  detachedFiles,
+  detachedSurvivor,
+  forgetDetached,
+  readAddressFile,
+  serviceSpawnOptions,
+  stopPid,
+  writePid,
+  type DetachedFiles,
+} from './detached.js';
 
 /** Сколько ждать готовности сервиса после запуска. */
 const READY_TIMEOUT_MS = 10_000;
@@ -40,6 +51,13 @@ export interface HostServicesOptions {
   readonly readyTimeoutMs?: number;
   readonly graceMs?: number;
   readonly report?: (text: string) => void;
+  /**
+   * Каталог состояния сервисов (решение D6): там живут адресный файл и pid
+   * отвязываемого сервиса, которыми он пере-обнаруживается через границу
+   * сессий. Реализация контейнера называет свой (у Electron — каталог данных
+   * приложения); умолчание — временный каталог системы.
+   */
+  readonly stateDir?: string;
 }
 
 export interface HostServices {
@@ -68,14 +86,17 @@ export function endpointOf(address: string): { host: string; port: number } | un
 
 /**
  * Аргументы запуска: `{port}` и `{host}` приезжают из адреса, а не второй
- * записью числа в манифесте (см. `ProfileService`).
+ * записью числа в манифесте (см. `ProfileService`), а `{addressFile}` — из
+ * каталога состояния сервисов: путь выбирает контейнер, и страница на него не
+ * влияет никак (DSK-7).
  */
-export function serviceArgs(service: ProfileService): readonly string[] {
+export function serviceArgs(service: ProfileService, addressFile = ''): readonly string[] {
   const endpoint = endpointOf(service.address);
   return service.args.map((arg) =>
     arg
       .replaceAll('{port}', endpoint === undefined ? '' : String(endpoint.port))
-      .replaceAll('{host}', endpoint?.host ?? ''),
+      .replaceAll('{host}', endpoint?.host ?? '')
+      .replaceAll('{addressFile}', addressFile),
   );
 }
 
@@ -109,6 +130,8 @@ interface Owned {
   readonly child: ChildProcess;
   readonly exited: Promise<void>;
   alive: boolean;
+  /** Объявленная отвязываемость (DSK-7): такой процесс переживает сессию. */
+  readonly detached: boolean;
 }
 
 function refuse(what: string): Error {
@@ -121,6 +144,7 @@ export function createHostServices(options: HostServicesOptions): HostServices {
   const readyTimeoutMs = options.readyTimeoutMs ?? READY_TIMEOUT_MS;
   const graceMs = options.graceMs ?? GRACE_MS;
   const report = options.report ?? ((): void => undefined);
+  const stateDir = options.stateDir ?? defaultServiceStateDir();
   const owned = new Map<BridgeServiceId, Owned>();
 
   const declaredOf = (id: BridgeServiceId): ProfileService => {
@@ -131,10 +155,24 @@ export function createHostServices(options: HostServicesOptions): HostServices {
     return declared;
   };
 
+  /** Файлы отвязываемого сервиса; у обычного их нет — ему нечего переживать. */
+  const filesOf = (declared: ProfileService): DetachedFiles | undefined =>
+    declared.detached ? detachedFiles(stateDir, declared.id) : undefined;
+
+  /**
+   * Адрес сервиса: объявленный профилем либо написанный САМИМ процессом
+   * (DSK-7). Контейнер эту строку не разбирает и не строит — он передаёт её как
+   * есть, а истолковывает приложение.
+   */
+  const addressOf = (declared: ProfileService, files: DetachedFiles | undefined): string => {
+    const written = files === undefined ? '' : readAddressFile(files.addressFile);
+    return written === '' ? declared.address : written;
+  };
+
   const stateOf = (declared: ProfileService, running: boolean): BridgeServiceState => ({
     id: declared.id,
     running,
-    address: running ? declared.address : '',
+    address: running ? addressOf(declared, filesOf(declared)) : '',
   });
 
   /** Ждёт, пока по адресу ответят; смерть процесса прекращает ожидание сразу. */
@@ -151,14 +189,21 @@ export function createHostServices(options: HostServicesOptions): HostServices {
     }
   };
 
-  const launch = (declared: ProfileService): Owned => {
-    const child = spawn(runtime, [declared.script, ...serviceArgs(declared)], {
-      stdio: 'inherit',
+  const launch = (declared: ProfileService, files: DetachedFiles | undefined): Owned => {
+    const child = spawn(runtime, [declared.script, ...serviceArgs(declared, files?.addressFile ?? '')], {
+      ...serviceSpawnOptions(declared.detached, process.platform),
       ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
     });
+    // Отвязанный процесс не держит контейнер живым и не умирает вместе с ним:
+    // ссылку на него в цикле событий мы отпускаем сразу (DSK-7).
+    if (declared.detached) {
+      child.unref();
+      if (files !== undefined && child.pid !== undefined) writePid(files.pidFile, child.pid);
+    }
     const live: Owned = {
       child,
       alive: true,
+      detached: declared.detached,
       exited: new Promise<void>((done) => {
         child.once('exit', () => {
           live.alive = false;
@@ -181,10 +226,39 @@ export function createHostServices(options: HostServicesOptions): HostServices {
     if (!killed) live.child.kill('SIGKILL');
   };
 
+  /**
+   * Отвязанный сервис, переживший ПРЕЖНЮЮ сессию (DSK-7, решение D6): его
+   * процесс жив, а владения им у этой сессии нет. Повторный запрос на запуск
+   * обязан вернуть его адрес и не породить второго процесса — в том числе через
+   * границу сессий.
+   */
+  const survivorState = async (
+    declared: ProfileService,
+    files: DetachedFiles | undefined,
+  ): Promise<BridgeServiceState | undefined> => {
+    if (files === undefined) return undefined;
+    const survivor = detachedSurvivor(files);
+    if (survivor === undefined) {
+      // Процесса нет — файлы врут: чистим, чтобы следующий запуск не считал
+      // мертвеца живым.
+      forgetDetached(files);
+      return undefined;
+    }
+    const address = survivor.address === '' ? declared.address : survivor.address;
+    // Живой процесс — ещё не работающий сервис: адрес обязан отвечать. Иначе мы
+    // выдали бы приложению строку, по которой никого нет.
+    if (endpointOf(address) !== undefined && !(await answers(address))) return undefined;
+    report(`сервис "${declared.id}": пережил прежнюю сессию, адрес ${address}`);
+    return { id: declared.id, running: true, address };
+  };
+
   const startFresh = async (id: BridgeServiceId): Promise<BridgeServiceState> => {
     const declared = declaredOf(id);
+    const files = filesOf(declared);
     const live = owned.get(id);
     if (live?.alive === true) return stateOf(declared, true);
+    const survivor = await survivorState(declared, files);
+    if (survivor !== undefined) return survivor;
     // Занятый адрес — не ошибка и не наш процесс: сервис, поднятый снаружи, и
     // есть тот, к которому пойдёт приложение. Владение мы себе не
     // приписываем, поэтому и не снимем его на закрытии окна.
@@ -193,12 +267,13 @@ export function createHostServices(options: HostServicesOptions): HostServices {
       report(`сервис "${id}": по адресу ${declared.address} уже отвечают`);
       return stateOf(declared, true);
     }
-    const started = launch(declared);
+    const started = launch(declared, files);
     owned.set(id, started);
     try {
       await untilReady(declared, started);
     } catch (error) {
       await kill(id, started);
+      if (files !== undefined) forgetDetached(files);
       throw error;
     }
     return stateOf(declared, true);
@@ -224,21 +299,43 @@ export function createHostServices(options: HostServicesOptions): HostServices {
     },
     async stop(id) {
       const declared = declaredOf(id);
+      const files = filesOf(declared);
       const live = owned.get(id);
-      if (live === undefined) return stateOf(declared, await answers(declared.address));
-      await kill(id, live);
-      return stateOf(declared, false);
+      if (live !== undefined) {
+        await kill(id, live);
+        if (files !== undefined) forgetDetached(files);
+        return stateOf(declared, false);
+      }
+      // Отвязанный сервис останавливается ЯВНОЙ операцией и через границу
+      // сессий (DSK-7): владения у этой сессии нет, а идентификатор процесса
+      // остался в каталоге состояния.
+      const survivor = files === undefined ? undefined : detachedSurvivor(files);
+      if (survivor !== undefined) {
+        // Сигнал шлётся только ТОМУ процессу, чей момент старта совпадает: PID
+        // мог переиспользоваться после перезагрузки (DSK-7).
+        await stopPid({ pid: survivor.pid, startProc: survivor.startProc }, graceMs);
+        forgetDetached(files!);
+        return stateOf(declared, false);
+      }
+      return stateOf(declared, await answers(declared.address));
     },
     async state(id) {
       const declared = declaredOf(id);
       if (owned.get(id)?.alive === true) return stateOf(declared, true);
+      const files = filesOf(declared);
+      const survivor = await survivorState(declared, files);
+      if (survivor !== undefined) return survivor;
       return stateOf(declared, await answers(declared.address));
     },
     owned() {
       return [...owned.values()].filter((live) => live.alive).length;
     },
     async closeAll() {
-      await Promise.all([...owned].map(([id, live]) => kill(id, live)));
+      // Отвязываемый сервис сессию ПЕРЕЖИВАЕТ (DSK-7): закрытие снимает только
+      // тех, кто отвязываемым себя не объявлял. Судьба отвязанного — политика
+      // приложения (`server-manager` MGR-4), и решается она явной остановкой.
+      const mortal = [...owned].filter(([, live]) => !live.detached);
+      await Promise.all(mortal.map(([id, live]) => kill(id, live)));
     },
   };
 }

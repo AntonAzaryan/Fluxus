@@ -7,20 +7,28 @@
  * вызовы в те же самые модули, поэтому проверенным оказывается ровно то
  * поведение, которое увидит страница в настоящем окне.
  *
+ * Отвязываемый сервис (DSK-7) проверяется здесь же и обеими ветвями: сессия
+ * открывается ПОВТОРНО на том же каталоге состояния — так приложение открывают
+ * во второй раз, — и переживший процесс обязан найтись по адресному файлу.
+ *
  * Вторая реализация контейнера регистрируется здесь же — вызовом
  * `describeContainerContract` со своей функцией `open`.
  */
+import { existsSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { normalizeAppProfile } from '../src/bridge/profile.js';
 import { openApp } from '../src/host/app.js';
+import { detachedFiles, pidAlive, readPid } from '../src/host/detached.js';
 import {
   CONTENT,
   SERVICE,
   describeContainerContract,
+  type ContractCase,
   type ContractSession,
 } from './contractSuite.js';
 import {
+  DETACHED_SERVICE_SCRIPT,
   dropTree,
   fakeObserver,
   freePort,
@@ -35,8 +43,16 @@ import {
 /** Базовый адрес раздачи: страница получает его от контейнера (DSK-4). */
 const BASE = 'fluxus://app/';
 
-describeContainerContract('node-хост', async (kase): Promise<ContractSession> => {
-  const workspace = await makeTree();
+/** Что переживает пересоздание сессии: дерево, порт сервиса и его состояние. */
+interface Ground {
+  readonly workspace: string;
+  readonly port: number;
+  readonly stateDir: string;
+  readonly marks: string;
+}
+
+async function openOn(kase: ContractCase, ground: Ground): Promise<ContractSession> {
+  const { workspace, port, stateDir, marks } = ground;
   const bundleDirectory = join(workspace, 'bundle');
   const contentDirectory = join(workspace, 'content');
   for (const [path, content] of Object.entries(kase.bundle ?? {})) {
@@ -47,10 +63,7 @@ describeContainerContract('node-хост', async (kase): Promise<ContractSession
   }
 
   const observer = fakeObserver();
-  // Адрес сервиса объявляет профиль (DSK-7), поэтому порт выбирается ДО
-  // запуска; в аргументы он приезжает подстановкой из адреса, а не второй
-  // записью числа.
-  const port = await freePort();
+  const detached = kase.detachedService === true;
   const profile = normalizeAppProfile(
     {
       id: 'contract',
@@ -70,9 +83,14 @@ describeContainerContract('node-хост', async (kase): Promise<ContractSession
         ? [
             {
               id: SERVICE,
-              script: SERVICE_SCRIPT,
-              args: ['--port', '{port}'],
+              // Отвязываемому нужен процесс, который пишет свой адрес и
+              // отмечает запуски; обычному хватает пустышки.
+              script: detached ? DETACHED_SERVICE_SCRIPT : SERVICE_SCRIPT,
+              args: detached
+                ? ['--port', '{port}', '--address-file', '{addressFile}', '--mark', marks]
+                : ['--port', '{port}'],
               address: `tcp://127.0.0.1:${String(port)}`,
+              ...(detached ? { detached: true } : {}),
             },
           ]
         : [],
@@ -88,7 +106,15 @@ describeContainerContract('node-хост', async (kase): Promise<ContractSession
     // проверяет не системный диалог, а то, что через границу проходит путь.
     dialogs: { choose: (request) => Promise.resolve(request.startIn ?? '') },
     window: { setTitle: () => undefined, setUnsaved: () => undefined },
+    services: { stateDir },
   });
+
+  /** Жив ли процесс сервиса: свой — по записи контейнера, чужой — по pid-файлу. */
+  const alive = (): boolean => {
+    if ((app.services?.owned() ?? 0) > 0) return true;
+    const files = detachedFiles(stateDir, SERVICE);
+    return pidAlive(readPid(files.pidFile));
+  };
 
   return {
     bridge: app.handle.bridge,
@@ -110,10 +136,33 @@ describeContainerContract('node-хост', async (kase): Promise<ContractSession
     // Взгляд снаружи границы: сколько процессов держит контейнер. Отвечает и
     // после `close` — иначе «сервис не пережил сессию» осталось бы обещанием.
     serviceProcesses: () => Promise.resolve(app.services?.owned() ?? 0),
+    serviceAlive: () => Promise.resolve(alive()),
+    serviceStarts: () =>
+      Promise.resolve(existsSync(marks) ? readFileSync(marks, 'utf8').trim().split('\n').length : 0),
+    // Вторая сессия того же профиля на том же состоянии: дерево, порт и каталог
+    // состояния сервисов остаются прежними — меняется только сессия.
+    reopen: () => openOn(kase, ground),
     async close() {
       app.close();
       await app.services?.closeAll();
-      await dropTree(workspace);
+      // Дерево уносится только тогда, когда уносить безопасно: у отвязываемого
+      // сервиса оно переживает сессию вместе с ним — там лежат его адресный
+      // файл и pid, которыми его найдёт следующая сессия (DSK-7).
+      if (!alive()) await dropTree(workspace);
     },
   };
+}
+
+describeContainerContract('node-хост', async (kase): Promise<ContractSession> => {
+  const workspace = await makeTree();
+  // Адрес сервиса объявляет профиль (DSK-7), поэтому порт выбирается ДО
+  // запуска; в аргументы он приезжает подстановкой из адреса, а не второй
+  // записью числа.
+  const port = await freePort();
+  return openOn(kase, {
+    workspace,
+    port,
+    stateDir: join(workspace, 'services'),
+    marks: join(workspace, 'starts.log'),
+  });
 });

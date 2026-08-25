@@ -108,6 +108,11 @@ export const MARKED_SERVICE_SCRIPT = fileURLToPath(
   new URL('./fixtures/markedService.mjs', import.meta.url),
 );
 
+/** Отвязываемый сервис: пишет свой адрес в файл и отмечает запуски (DSK-7). */
+export const DETACHED_SERVICE_SCRIPT = fileURLToPath(
+  new URL('./fixtures/detachedService.mjs', import.meta.url),
+);
+
 /**
  * Свободный порт: занимаем и сразу отпускаем. Гонка тут возможна в принципе, но
  * адрес сервиса обязан быть известен ДО запуска (его объявляет профиль), а

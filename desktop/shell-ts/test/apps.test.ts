@@ -17,6 +17,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { loadAppProfile } from '../src/host/app.js';
+import { createHostBridge } from '../src/host/bridge.js';
+import type { BridgeServiceState } from '../src/bridge/types.js';
 
 const PACKAGE = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO = join(PACKAGE, '../..');
@@ -67,12 +69,85 @@ describe('профили приложений репозитория', () => {
     expect(profile.capabilities).not.toContain('service');
   });
 
+  it('менеджер: оконная интеграция и отвязываемый агент, БЕЗ дерева контента (DSK-5, MGR-5)', async () => {
+    const profile = await loadAppProfile(join(PACKAGE, 'apps/server-manager.app.json'));
+    expect(profile.id).toBe('server-manager');
+    expect(profile.bundle).toBe(join(REPO, 'game/server-manager-ts/app/dist-desktop'));
+    // «Ни чтения, ни записи дерева контента у него MUST NOT быть»: корней нет
+    // вовсе, и возможностей чтения/записи профиль не объявляет. С контентом
+    // менеджер работает только через управляющий протокол агента (решение D11).
+    expect(profile.roots).toEqual([]);
+    expect([...profile.capabilities].sort()).toEqual(['service', 'window']);
+    expect(profile.capabilities).not.toContain('read');
+    expect(profile.capabilities).not.toContain('write');
+  });
+
+  it('менеджер: агент объявлен ОТВЯЗЫВАЕМЫМ сервисом (DSK-7, MGR-5)', async () => {
+    const profile = await loadAppProfile(join(PACKAGE, 'apps/server-manager.app.json'));
+    expect(profile.services).toHaveLength(1);
+    expect(profile.services[0]).toMatchObject({
+      id: 'agent',
+      script: join(REPO, 'game/server-agent-ts/bin/agent.mjs'),
+      detached: true,
+    });
+    // Адрес и материал автопейринга приезжают ЧЕРЕЗ сервис (MGR-5): путь
+    // адресного файла подставляет контейнер, страница его не выбирает.
+    expect(profile.services[0]?.args).toContain('{addressFile}');
+    expect(profile.services[0]?.args).toContain('{port}');
+    // Управляющий канал — на loopback (агент локальный), раздача — наружу
+    // (SRV-8): иначе ссылка входа вела бы на машину тестера (MGR-2). Оба хоста
+    // объявлены раздельно.
+    const args = profile.services[0]!.args;
+    expect(args[args.indexOf('--control-host') + 1]).toBe('127.0.0.1');
+    expect(args[args.indexOf('--host') + 1]).toBe('0.0.0.0');
+    // И раздача клиента объявлена (`--bundle`), чтобы страница входа не была 404.
+    expect(args).toContain('--bundle');
+    // И он единственный отвязываемый: у игры стенд матча умирает с сессией.
+    const game = await loadAppProfile(join(PACKAGE, 'apps/game.app.json'));
+    expect(game.services[0]?.detached).toBe(false);
+  });
+
   it('оба профиля указывают на одно дерево контента', async () => {
     const editor = await loadAppProfile(join(PACKAGE, 'apps/editor.app.json'));
     const game = await loadAppProfile(join(PACKAGE, 'apps/game.app.json'));
     // Дерево контента одно (CONT-1), и профили расходиться в нём не вправе:
     // разойдясь, они показали бы автору и игроку разный контент.
     expect(game.roots[0]?.directory).toBe(editor.roots[0]?.directory);
+  });
+});
+
+describe('профиль менеджера как whitelist моста (DSK-5, MGR-5)', () => {
+  /** Сервисы подставные: предмет проверки — форма моста, а не запуск процесса. */
+  const stubServices = {
+    start: (id: string): Promise<BridgeServiceState> =>
+      Promise.resolve({ id, running: true, address: 'wss://127.0.0.1:1/?code=1' }),
+    stop: (id: string): Promise<BridgeServiceState> =>
+      Promise.resolve({ id, running: false, address: '' }),
+    state: (id: string): Promise<BridgeServiceState> =>
+      Promise.resolve({ id, running: false, address: '' }),
+    owned: () => 0,
+    closeAll: () => Promise.resolve(),
+  };
+
+  it('чтение и запись дерева контента из профиля менеджера — не отказ, а ОТСУТСТВИЕ канала', async () => {
+    const profile = await loadAppProfile(join(PACKAGE, 'apps/server-manager.app.json'));
+    const handle = createHostBridge({ profile, roots: [], services: stubServices });
+    const bridge = handle.bridge;
+    // Возможности, не объявленной профилем, не существует: не метод, отвечающий
+    // отказом, а отсутствующее поле (DSK-5).
+    expect(bridge.read).toBeUndefined();
+    expect(bridge.write).toBeUndefined();
+    expect(bridge.list).toBeUndefined();
+    expect(bridge.stat).toBeUndefined();
+    expect(bridge.watch).toBeUndefined();
+    expect(bridge.choose).toBeUndefined();
+    // А объявленное — есть: окно и сервис агента.
+    expect(bridge.setTitle).toBeDefined();
+    expect(bridge.startService).toBeDefined();
+    expect(bridge.session.services).toEqual(['agent']);
+    // Корней нет вовсе: раздавать и показывать нечего.
+    expect(bridge.session.roots).toEqual([]);
+    handle.close();
   });
 });
 

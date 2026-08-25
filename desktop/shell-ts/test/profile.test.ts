@@ -131,7 +131,19 @@ describe('объявленные профилем сервисы (DSK-7)', () =>
       script: 'stand.mjs',
       args: ['--port', '{port}'],
       address: 'ws://127.0.0.1:8080',
+      // Отвязываемость — свойство ОБЪЯВЛЕНИЯ (DSK-7), и умолчание у него
+      // прежнее правило: сервис умирает с сессией.
+      detached: false,
     });
+    expect(
+      profileService(
+        normalizeAppProfile(
+          { ...GAME, services: [{ ...GAME.services[0], detached: true }] },
+          'game.app.json',
+        ),
+        'match-stand',
+      )?.detached,
+    ).toBe(true);
     expect(profileService(profile, 'нет')).toBeUndefined();
   });
 

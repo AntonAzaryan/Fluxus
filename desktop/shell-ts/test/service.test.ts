@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { normalizeAppProfile } from '../src/bridge/profile.js';
 import { createHostServices, endpointOf, serviceArgs } from '../src/host/service.js';
+import { processStartTicks, sameProcess, serviceSpawnOptions } from '../src/host/detached.js';
 import {
   DEAD_SERVICE_SCRIPT,
   dropTree,
@@ -65,6 +66,52 @@ describe('адрес — единственный источник правды 
   it('подстановка кладёт порт адреса в аргументы', () => {
     const profile = profileWith(8080);
     expect(serviceArgs(profile.services[0]!)).toEqual(['--port', '8080', '--host', '127.0.0.1']);
+  });
+
+  it('путь адресного файла подставляет КОНТЕЙНЕР, а не манифест и не страница (DSK-7)', () => {
+    const profile = profileWith(8080, SERVICE_SCRIPT, ['--address-file', '{addressFile}']);
+    expect(serviceArgs(profile.services[0]!, '/state/stand.address')).toEqual([
+      '--address-file',
+      '/state/stand.address',
+    ]);
+    // Без каталога состояния подстановка пуста: выдумывать путь контейнер не
+    // вправе — процесс тогда написал бы адрес неизвестно куда.
+    expect(serviceArgs(profile.services[0]!)).toEqual(['--address-file', '']);
+  });
+});
+
+describe('опции запуска отвязываемого сервиса (DSK-7, решение D6)', () => {
+  it('обычный сервис наследует stdio и в свою группу процессов не уходит', () => {
+    expect(serviceSpawnOptions(false, 'linux')).toEqual({ stdio: 'inherit' });
+    expect(serviceSpawnOptions(false, 'win32')).toEqual({ stdio: 'inherit' });
+  });
+
+  it('отвязываемый уходит в свою группу и отпускает потоки — на обеих платформах', () => {
+    // POSIX: `detached` — новая группа процессов, поэтому сигнал, адресованный
+    // контейнеру, не приходит сервису.
+    expect(serviceSpawnOptions(true, 'linux')).toEqual({ detached: true, stdio: 'ignore' });
+    // Windows: групп процессов в том же смысле нет, но флаг означает то же —
+    // «не умирать вместе с родителем»; отдельно гасится консольное окно,
+    // которого у десктопного приложения быть не должно.
+    expect(serviceSpawnOptions(true, 'win32')).toEqual({
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+  });
+
+  it('пере-обнаружение сверяет МОМЕНТ старта, а не только PID (DSK-7)', () => {
+    // Голого «PID жив» мало: после перезагрузки его носит чужой процесс, и
+    // тогда `stopPid` убил бы постороннего, а пере-обнаружение воскресило бы
+    // фантомный сервис. Момент старта отличает наш процесс от занявшего номер.
+    const startProc = process.platform === 'linux' ? processStartTicks(process.pid) : 0;
+    expect(sameProcess({ pid: process.pid, startProc })).toBe(true);
+    if (process.platform === 'linux') {
+      expect(sameProcess({ pid: process.pid, startProc: startProc + 1 })).toBe(false);
+    }
+    // Момент неизвестен (не Linux, старый pid-файл) — падаем на существование.
+    expect(sameProcess({ pid: process.pid, startProc: 0 })).toBe(true);
+    expect(sameProcess({ pid: 2_147_483_646, startProc: 0 })).toBe(false);
   });
 });
 

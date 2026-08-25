@@ -6,14 +6,34 @@
  * приходится, в отличие от транспорта поверх голого потока.
  */
 import { WebSocketServer, type WebSocket } from 'ws';
-import { BaseTransport, type Transport, type TransportServer } from './transport.js';
+import {
+  BaseTransport,
+  RTT_PENDING,
+  type Transport,
+  type TransportRtt,
+  type TransportServer,
+} from './transport.js';
+
+/**
+ * Период ping'а несущего канала (NTR-11): раз в секунду. Величина замера, а не
+ * протокола, — сообщением игрового набора ping не является (NTR-4), и матч о
+ * нём не знает. Секунда взята под адресата метрики: админ смотрит на RTT
+ * соединения в деталях сервера (`server-control` SRV-4), где отчёт идёт тем же
+ * темпом, и более частый круг ничего к ответу «дорога или сервер» не добавляет.
+ */
+const PING_EVERY_MS = 1000;
 
 class WsTransport extends BaseTransport {
   private readonly socket: WebSocket;
+  /** Отметка отправки ping'а, ждущего pong; `-1` — незакрытого круга нет. */
+  private pingedAt = -1;
+  /** Последний измеренный круг в мс; `-1` — замеров ещё не было. */
+  private lastRttMs = -1;
+  private readonly pinger: ReturnType<typeof setInterval> | undefined;
 
   // Поле объявлено явно, а не parameter property: строгий TS их допускает, но
   // strip-only режим Node — нет, а bin-скрипты ходят через него.
-  constructor(socket: WebSocket) {
+  constructor(socket: WebSocket, pingEveryMs: number) {
     super();
     this.socket = socket;
     socket.binaryType = 'nodebuffer';
@@ -22,8 +42,40 @@ class WsTransport extends BaseTransport {
       // следующее сообщение, а разбор кадра переживает возврат из обработчика.
       this.deliver(new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)));
     });
-    socket.on('close', () => { this.closedByPeer(); });
-    socket.on('error', (error: Error) => { this.closedByPeer(error.message); });
+    socket.on('close', () => { this.stopPinging(); this.closedByPeer(); });
+    socket.on('error', (error: Error) => { this.stopPinging(); this.closedByPeer(error.message); });
+    // Круг меряется КАДРАМИ несущего канала (NTR-11, решение D7): ping/pong
+    // WebSocket — часть транспорта, а не сообщение матча, и добавить его в
+    // закрытый набор (NTR-4) было бы нельзя.
+    socket.on('pong', () => {
+      if (this.pingedAt < 0) return;
+      this.lastRttMs = Math.max(0, Date.now() - this.pingedAt);
+      this.pingedAt = -1;
+    });
+    if (pingEveryMs <= 0) return;
+    this.pinger = setInterval(() => { this.ping(); }, pingEveryMs);
+    // Замер не держит процесс живым: у стенда есть свои основания жить, а
+    // висящий таймер измерителя не даёт выйти прогону, который уже всё сказал.
+    this.pinger.unref();
+  }
+
+  private ping(): void {
+    if (this.isClosed || this.socket.readyState !== this.socket.OPEN) return;
+    // Незакрытый круг не перезаписывается: ответ на прежний ping считался бы
+    // кругом ПОСЛЕДНЕГО, то есть меньшим, чем на самом деле. Молчащий канал
+    // остаётся при последнем измеренном круге — «отсутствие ответа» это уже
+    // другая наблюдаемая (порог молчания слота, NTR-6).
+    if (this.pingedAt < 0) this.pingedAt = Date.now();
+    this.socket.ping();
+  }
+
+  private stopPinging(): void {
+    if (this.pinger !== undefined) clearInterval(this.pinger);
+  }
+
+  override rtt(): TransportRtt {
+    if (this.pinger === undefined) return super.rtt();
+    return this.lastRttMs < 0 ? RTT_PENDING : { kind: 'measured', ms: this.lastRttMs };
   }
 
   send(bytes: Uint8Array): void {
@@ -32,6 +84,7 @@ class WsTransport extends BaseTransport {
   }
 
   protected doClose(): void {
+    this.stopPinging();
     this.socket.close();
   }
 }
@@ -39,6 +92,12 @@ class WsTransport extends BaseTransport {
 export interface WebSocketServerOptions {
   readonly port: number;
   readonly host?: string;
+  /**
+   * Период ping'а несущего канала в мс (NTR-11); `0` — не мерить круг вовсе, и
+   * тогда транспорт сообщает отсутствие RTT явно. Величина сборки, а не
+   * протокола: тесту круг нужен за миллисекунды, стенду — раз в секунду.
+   */
+  readonly pingEveryMs?: number;
 }
 
 export function webSocketTransportServer(options: WebSocketServerOptions): TransportServer {
@@ -46,11 +105,12 @@ export function webSocketTransportServer(options: WebSocketServerOptions): Trans
     port: options.port,
     ...(options.host !== undefined ? { host: options.host } : {}),
   });
+  const pingEveryMs = options.pingEveryMs ?? PING_EVERY_MS;
   let handler: ((transport: Transport) => void) | undefined;
   const pending: Transport[] = [];
 
   wss.on('connection', (socket: WebSocket) => {
-    const transport = new WsTransport(socket);
+    const transport = new WsTransport(socket, pingEveryMs);
     if (handler === undefined) pending.push(transport);
     else handler(transport);
   });
@@ -113,13 +173,14 @@ export async function webSocketChannelServer(
   const { createServer } = await import(/* @vite-ignore */ 'node:http');
   const http = createServer();
   const channels = new Map<string, ChannelState>();
+  const pingEveryMs = options.pingEveryMs ?? PING_EVERY_MS;
 
   const state = (path: string): ChannelState => {
     const existing = channels.get(path);
     if (existing !== undefined) return existing;
     const created: ChannelState = { wss: new WebSocketServer({ noServer: true }), handler: undefined, pending: [] };
     created.wss.on('connection', (socket: WebSocket) => {
-      const transport = new WsTransport(socket);
+      const transport = new WsTransport(socket, pingEveryMs);
       if (created.handler === undefined) created.pending.push(transport);
       else created.handler(transport);
     });

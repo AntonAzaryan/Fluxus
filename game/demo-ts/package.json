@@ -26,6 +26,7 @@
     "@fluxus/hud": "*",
     "@fluxus/net": "*",
     "@fluxus/render": "*",
+    "@fluxus/server-agent": "*",
     "three": "^0.185.1"
   },
   "devDependencies": {

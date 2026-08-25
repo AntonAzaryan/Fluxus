@@ -55,8 +55,13 @@ export {
 export type { Codec } from './protocol/codec.js';
 
 // транспорт
-export { BaseTransport } from './transport/transport.js';
-export type { ConnectionId, Transport, TransportServer } from './transport/transport.js';
+export { BaseTransport, transportRtt, RTT_PENDING, RTT_UNSUPPORTED } from './transport/transport.js';
+export type {
+  ConnectionId,
+  Transport,
+  TransportRtt,
+  TransportServer,
+} from './transport/transport.js';
 export { loopbackPair, LoopbackHub } from './transport/loopback.js';
 export type { LoopbackOptions } from './transport/loopback.js';
 export { connectWebSocket } from './transport/webSocketClient.js';
@@ -93,9 +98,12 @@ export type {
   MatchRewindOptions,
   MatchSegment,
   Outgoing,
+  SlotLease,
+  SlotLeaseEnd,
 } from './server/matchServer.js';
 export { MatchHost } from './server/host.js';
-export type { MatchHostOptions } from './server/host.js';
+export type { ConnectionMetrics, HostReport, MatchHostOptions } from './server/host.js';
+export type { DurationSummary } from './server/hostMetrics.js';
 
 // клиент
 export { MatchClient } from './client/matchClient.js';

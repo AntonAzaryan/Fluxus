@@ -17,6 +17,7 @@
     "typecheck:electron": "tsc --noEmit -p tsconfig.electron.json",
     "start:editor": "electron src/electron/entry.mjs --app apps/editor.app.json",
     "start:game": "electron src/electron/entry.mjs --app apps/game.app.json",
+    "start:manager": "electron src/electron/entry.mjs --app apps/server-manager.app.json",
     "contract:electron": "vitest run --config test/electron/vitest.config.ts",
     "smoke": "node bin/smoke.mjs",
     "pack": "node bin/pack.mjs"

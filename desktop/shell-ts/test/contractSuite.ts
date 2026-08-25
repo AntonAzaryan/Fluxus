@@ -41,6 +41,12 @@ export interface ContractCase {
   readonly capabilities: readonly BridgeCapability[];
   /** Открыт ли корень контента на запись. */
   readonly writable: boolean;
+  /**
+   * Объявлен ли сервис профиля ОТВЯЗЫВАЕМЫМ (DSK-7): такой переживает сессию, а
+   * его адрес пере-обнаруживается следующей. Свойство объявления, поэтому оно
+   * здесь, а не в вызове страницы.
+   */
+  readonly detachedService?: boolean;
 }
 
 export interface ContractResponse {
@@ -80,6 +86,24 @@ export interface ContractSession {
    * не даёт — и обе проверки пропускаются.
    */
   serviceProcesses?(): Promise<number>;
+  /**
+   * Жив ли процесс сервиса ПРЯМО СЕЙЧАС — взгляд снаружи границы, как `peek`
+   * для дерева. Отвечает и после `close`: иначе «отвязываемый пережил сессию»
+   * осталось бы обещанием. Реализация, которой смотреть нечем, метода не даёт.
+   */
+  serviceAlive?(): Promise<boolean>;
+  /**
+   * Сколько РАЗ процесс сервиса поднимался за всё время. По записи контейнера
+   * этого не разглядеть — она перезаписывается, — а «второго процесса не
+   * появилось» держится именно на этом числе.
+   */
+  serviceStarts?(): Promise<number>;
+  /**
+   * Новая сессия ТОГО ЖЕ профиля на том же состоянии: так открывают приложение
+   * во второй раз. Реализация, которая так не умеет, метода не даёт — и
+   * проверки через границу сессий пропускаются.
+   */
+  reopen?(): Promise<ContractSession>;
   /** Запрос к раздаче контейнера (DSK-4). */
   fetch(pathname: string): Promise<ContractResponse>;
   /** Контейнер спрашивает страницу о закрытии. */
@@ -440,6 +464,62 @@ export function describeContainerContract(name: string, open: ContainerUnderTest
       await session.close();
       if (session.serviceProcesses !== undefined) {
         expect(await session.serviceProcesses()).toBe(0);
+      }
+    });
+
+    it('отвязываемый сервис переживает сессию, а новая находит его по адресу', async () => {
+      const session = await open({
+        bundle: BUNDLE,
+        content: TREE,
+        capabilities: ['service'],
+        writable: false,
+        detachedService: true,
+      });
+      if (session.reopen === undefined || session.serviceAlive === undefined) {
+        await session.close();
+        return;
+      }
+      const first = await session.bridge.startService!(SERVICE);
+      expect(first.running).toBe(true);
+      await session.close();
+      // Сессии нет, а процесс есть: отвязываемость — свойство объявления, и
+      // закрытие окна его не отменяет (DSK-7).
+      expect(await session.serviceAlive()).toBe(true);
+
+      const next = await session.reopen();
+      try {
+        const again = await next.bridge.startService!(SERVICE);
+        // Тот же адрес и НЕ второй процесс — через границу сессий.
+        expect(again.address).toBe(first.address);
+        if (next.serviceStarts !== undefined) expect(await next.serviceStarts()).toBe(1);
+
+        // Остановка отвязанного остаётся доступной ЯВНОЙ операцией.
+        const stopped = await next.bridge.stopService!(SERVICE);
+        expect(stopped.running).toBe(false);
+        if (next.serviceAlive !== undefined) expect(await next.serviceAlive()).toBe(false);
+      } finally {
+        await next.close();
+      }
+    });
+
+    it('адрес отвязываемого сервиса приходит от САМОГО процесса (DSK-7)', async () => {
+      const session = await open({
+        bundle: BUNDLE,
+        content: TREE,
+        capabilities: ['service'],
+        writable: false,
+        detachedService: true,
+      });
+      try {
+        const started = await session.bridge.startService!(SERVICE);
+        // Контейнер строку не строит и не разбирает: он берёт её у объявления
+        // либо у процесса и передаёт как есть. Пустой адрес означал бы, что
+        // приложению нечего истолковывать.
+        expect(started.address).not.toBe('');
+        expect(await session.bridge.serviceState!(SERVICE)).toEqual(started);
+      } finally {
+        await session.bridge.stopService!(SERVICE);
+        await session.close();
       }
     });
 

@@ -9,7 +9,7 @@
  * потерянный `Hello` — снаружи неотличим от сети («сервер не ответил» после
  * тайм-аута входа), и ручным прогоном его не поймать.
  */
-import type { Transport, TransportServer } from '@fluxus/net';
+import { transportRtt, type Transport, type TransportServer } from '@fluxus/net';
 
 /** Слушающая сторона стенда: очередь окна рестарта, претенденты и вид для матча. */
 export interface StandSession {
@@ -94,6 +94,10 @@ export function standSession(): StandSession {
         messageHandler = handler;
         while (pending.length > 0) handler(pending.shift()!);
       },
+      // Круг несущего канала (NTR-11) обёртка не измеряет и не выдумывает — она
+      // ПЕРЕДАЁТ наблюдаемую обёрнутого канала. Забудь она это, и админ видел бы
+      // «круга нет» у живого ws-соединения (`server-control` SRV-4).
+      rtt: () => transportRtt(inner),
       onClose(handler) {
         if (closeHandler !== undefined) {
           throw new Error('Transport: обработчик закрытия уже назначен');

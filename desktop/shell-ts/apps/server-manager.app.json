@@ -1,0 +1,31 @@
+{
+  "id": "server-manager",
+  "title": "Fluxus Server Manager",
+  "bundle": "../../../game/server-manager-ts/app/dist-desktop",
+  "entry": "index.html",
+  "roots": [],
+  "capabilities": ["window", "service"],
+  "services": [
+    {
+      "id": "agent",
+      "script": "../../../game/server-agent-ts/bin/agent.mjs",
+      "args": [
+        "--control-port",
+        "{port}",
+        "--control-host",
+        "127.0.0.1",
+        "--host",
+        "0.0.0.0",
+        "--http-port",
+        "8088",
+        "--bundle",
+        "game/demo-ts/app/dist-desktop",
+        "--address-file",
+        "{addressFile}"
+      ],
+      "address": "wss://127.0.0.1:8443",
+      "detached": true
+    }
+  ],
+  "window": { "width": 1400, "height": 900 }
+}

@@ -223,7 +223,15 @@ async function openSession(profile: AppProfile): Promise<Session> {
     // Скрипт сервиса запускается ЭТИМ же исполняемым файлом (DSK-7): у
     // упакованного приложения `node` в PATH пользовательской машины может не
     // быть вовсе, а Electron умеет быть Node по просьбе переменной среды.
-    services: { env: { ELECTRON_RUN_AS_NODE: '1' } },
+    //
+    // Каталог состояния сервисов — данные приложения: там живут адресный файл и
+    // pid отвязываемого сервиса, которыми он пере-обнаруживается через границу
+    // сессий (DSK-7, решение D6). Временный каталог для этого не годится —
+    // «пережил сессию» обязано пережить и уборку /tmp.
+    services: {
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+      stateDir: join(app.getPath('userData'), 'services'),
+    },
   });
   const bridge = opened.handle.bridge;
 

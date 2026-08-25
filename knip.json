@@ -59,6 +59,15 @@
     "game/demo-ts": {
       "entry": ["app/**/*.ts", "bin/*.mjs", "test/**/*.test.ts"]
     },
+    "game/server-agent-ts": {
+      // Фикстуры тестов агента — СКРИПТЫ ПРОЦЕССОВ: агент спавнит их путём, а
+      // не импортирует, и графом модулей они не видны. Тот же случай, что у
+      // фикстур сервисов десктоп-контейнера.
+      "entry": ["bin/*.mjs", "test/**/*.test.ts", "test/fixtures/*.mjs"]
+    },
+    "game/server-manager-ts": {
+      "entry": ["app/**/*.ts", "test/**/*.test.ts", "test/fixtures/*.mjs"]
+    },
     "tools/blender-ts": {
       "entry": ["bin/*.mjs", "test/**/*.test.ts", "test/fixtures/build.mjs"]
     },

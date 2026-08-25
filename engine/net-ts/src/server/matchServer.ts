@@ -348,6 +348,51 @@ interface EventStream {
 
 export type MatchPhase = 'lobby' | 'running' | 'ended';
 
+/**
+ * Чем кончилась последняя аренда слота (NTR-17, NTR-18, NTR-19) — наблюдение
+ * ОБВЯЗКИ, а не состояние матча.
+ *
+ * Заведено ради внешнего слоя, которому статусы игроков нужно назвать человеку
+ * (`server-control` SRV-4): «ушёл сам» и «оборвалась связь» — разные слова для
+ * админа и разные действия дальше, а сервер их и так различает (`Bye` против
+ * закрытого канала). В мир, в снапшот и в канонический лог ничто отсюда не
+ * попадает: это то же самое наблюдение снаружи, что и `slotAttached`.
+ */
+export type SlotLeaseEnd =
+  /** Канал закрылся: разрыв связи либо уход без `Bye`. */
+  | 'closed'
+  /** Осознанный уход участника: `Bye` в идущем матче (NTR-6). */
+  | 'bye'
+  /** Соединение разорвано названным исходом (NTR-4). */
+  | 'rejected'
+  /** Заместитель вытеснен вернувшимся владельцем (NTR-18). */
+  | 'displaced'
+  /** Владелец отвязан запиранием слота (NTR-19). */
+  | 'barred';
+
+/**
+ * Аренда слота глазами обвязки (NTR-17, NTR-18, NTR-19). Ровно те факты, из
+ * которых внешний слой выводит статус игрока (`server-control` SRV-4), и ни
+ * одного факта об участнике: происхождение арендатора сервер не различает
+ * вовсе — слова об этом в его исходниках нет, и это закреплено гейт-тестом.
+ */
+export interface SlotLease {
+  /** Занят ли слот ростером: после `Start` — всегда (NTR-6). */
+  readonly claimed: boolean;
+  /** Есть ли у слота живое соединение прямо сейчас. */
+  readonly attached: boolean;
+  /** Соединение арендатора; `undefined` — арендатора нет. */
+  readonly connection: ConnectionId | undefined;
+  /** Роль живого арендатора (NTR-18); `undefined` — арендатора нет. */
+  readonly role: ConnectionRole | undefined;
+  /** Заперт ли слот админ-операцией (NTR-19). */
+  readonly barred: boolean;
+  /** Чем кончилась последняя аренда; `undefined` — аренды ещё не было. */
+  readonly lastEnd: SlotLeaseEnd | undefined;
+  /** Исход последнего отказа входу в ЭТОТ слот; `undefined` — отказов не было. */
+  readonly lastReject: RejectReason | undefined;
+}
+
 /** Исходящее: сообщение конкретному соединению и признак «после этого закрыть». */
 export interface Outgoing {
   readonly to: ConnectionId;
@@ -440,6 +485,17 @@ function ownerDetach(value: string | undefined): void {
   throw new Error(`MatchConfig: pause.onOwnerDetach ("${value}") — "pause" либо "ignore" (NTR-20)`);
 }
 
+/**
+ * Исход аренды по исходу отказа (SRV-4): вытеснение владельцем (NTR-18) и
+ * запирание слота (NTR-19) названы отдельно, потому что для наблюдающей обвязки
+ * это разные события — одно про смену арендатора, другое про админ-запрет.
+ */
+function endOfReject(reason: RejectReason): SlotLeaseEnd {
+  if (reason === 'displaced-by-owner') return 'displaced';
+  if (reason === 'slot-barred') return 'barred';
+  return 'rejected';
+}
+
 export class MatchServer {
   readonly config: MatchConfig;
   readonly worldInitHash: string;
@@ -523,6 +579,16 @@ export class MatchServer {
    */
   private readonly slotConnection: (ConnectionId | undefined)[];
   private readonly slotClaimed: boolean[];
+  /**
+   * Запертые слоты (NTR-19): обратимый админ-запрет владельцу занимать свой
+   * слот. Допуск соединений — и только он: ростер, мир, эпоха и канонический лог
+   * от запирания не двигаются, и запись такого матча реплеится без знания о нём.
+   */
+  private readonly slotBarred: boolean[];
+  /** Чем кончилась последняя аренда слота — наблюдение обвязки (SRV-4). */
+  private readonly slotEnd: (SlotLeaseEnd | undefined)[];
+  /** Исход последнего отказа входу в слот — там же и затем же. */
+  private readonly slotReject: (RejectReason | undefined)[];
   /** Пришедший, но ещё не исполненный ввод: слот → тик → кадр. */
   private readonly pending: Map<number, InputFrame>[];
   private readonly lastFrame: (InputFrame | undefined)[];
@@ -682,6 +748,9 @@ export class MatchServer {
     this.metrics = createServerMetrics(slots);
     this.slotConnection = Array.from({ length: slots }, () => undefined);
     this.slotClaimed = Array.from({ length: slots }, () => false);
+    this.slotBarred = Array.from({ length: slots }, () => false);
+    this.slotEnd = Array.from({ length: slots }, () => undefined);
+    this.slotReject = Array.from({ length: slots }, () => undefined);
     this.pending = Array.from({ length: slots }, () => new Map<number, InputFrame>());
     this.lastFrame = Array.from({ length: slots }, () => undefined);
 
@@ -802,10 +871,19 @@ export class MatchServer {
   }
 
   disconnect(id: ConnectionId): void {
+    this.detach(id, 'closed');
+  }
+
+  /**
+   * Соединение уходит с НАЗВАННЫМ исходом аренды (SRV-4). Один путь на все
+   * концы соединения: закрытый канал, `Bye`, разрыв по отказу, — разные слова
+   * для наблюдающей обвязки и одна и та же операция для матча.
+   */
+  private detach(id: ConnectionId, end: SlotLeaseEnd): void {
     const connection = this.connections.get(id);
     if (connection === undefined) return;
     this.connections.delete(id);
-    this.releaseSlot(connection);
+    this.releaseSlot(connection, end);
   }
 
   /**
@@ -823,10 +901,11 @@ export class MatchServer {
    * владельцем (NTR-18) закрывается ПОСЛЕ того, как слот достался владельцу, и
    * без проверки его закрытие отняло бы слот у только что вошедшего.
    */
-  private releaseSlot(connection: Connection): void {
+  private releaseSlot(connection: Connection, end: SlotLeaseEnd): void {
     if (connection.slot < 0) return;
     if (this.slotConnection[connection.slot] !== connection.id) return;
     this.slotConnection[connection.slot] = undefined;
+    this.slotEnd[connection.slot] = end;
     // До старта слот освобождается совсем — состав ещё не зафиксирован. После
     // старта он остаётся за игроком (NTR-6): матч продолжается на
     // predicted-кадрах, а вернуться в него вправе владелец слота (NTR-17) либо
@@ -843,6 +922,86 @@ export class MatchServer {
    */
   slotAttached(slot: number): boolean {
     return this.slotConnection[slot] !== undefined;
+  }
+
+  // --------------------------------------------------------- запертый слот
+  //
+  // Запирание (NTR-19) — операция серверного API для ВНЕШНЕЙ ОБВЯЗКИ (стенда,
+  // агента), а не сообщение игрового протокола: набор сообщений закрыт (NTR-4),
+  // и участники матча такой операции не отдают. Меняется единственная вещь —
+  // допуск соединений к слоту; ростер (NTR-6), сущности мира, эпоха (NTR-16) и
+  // канонический лог (NTR-8) остаются нетронутыми, поэтому запись матча с
+  // запиранием реплеится побитово и без знания о нём.
+
+  /**
+   * Запереть слот (NTR-19): владелец получает названный отказ входу, живое
+   * соединение владельца рвётся тем же исходом — существующим путём «исход плюс
+   * разрыв», которым идёт вытеснение заместителя (NTR-18).
+   *
+   * Заместителя запирание НЕ трогает: если слот ведёт заместитель, он его и
+   * продолжает вести, а при его отсутствии слот получает predicted-кадры
+   * (NTR-7). Порог молчания (NTR-6) запирание не отключает — иначе запертый
+   * слот вешал бы матч навсегда.
+   */
+  bar(slot: number): void {
+    this.requireSlot(slot, 'bar');
+    if (this.slotBarred[slot] === true) return;
+    this.slotBarred[slot] = true;
+    const live = this.slotConnection[slot];
+    if (live === undefined) return;
+    // Рвётся ТОЛЬКО владелец: запрет адресован ему. Заместитель за тем же
+    // слотом остаётся — матч продолжается, ради чего запирание и обратимо.
+    if (this.connections.get(live)?.role !== 'owner') return;
+    this.rejectSlot(slot, live, 'slot-barred', `слот ${slot} заперт администратором`);
+  }
+
+  /**
+   * Снять запирание (NTR-19). После снятия владелец возвращается ШТАТНЫМ
+   * реконнектом (NTR-17) без дополнительных условий: сервер его не зовёт и
+   * ничего ему не шлёт — сообщения «запрет снят» в наборе нет и быть не может.
+   */
+  unbar(slot: number): void {
+    this.requireSlot(slot, 'unbar');
+    this.slotBarred[slot] = false;
+  }
+
+  /** Заперт ли слот (NTR-19) — наблюдательный доступ для обвязки и тестов. */
+  slotBarredAt(slot: number): boolean {
+    this.requireSlot(slot, 'slotBarredAt');
+    return this.slotBarred[slot] === true;
+  }
+
+  /**
+   * Аренда слота глазами обвязки (SRV-4): факты, из которых внешний слой
+   * выводит статус игрока. Отдельным методом, а не россыпью предикатов, потому
+   * что статус выводится из НАБОРА фактов, и собранные по одному они разъехались
+   * бы между двумя опросами.
+   */
+  slotLease(slot: number): SlotLease {
+    this.requireSlot(slot, 'slotLease');
+    const connection = this.slotConnection[slot];
+    return {
+      claimed: this.slotClaimed[slot] === true,
+      attached: connection !== undefined,
+      connection,
+      role: connection === undefined ? undefined : this.connections.get(connection)?.role,
+      barred: this.slotBarred[slot] === true,
+      lastEnd: this.slotEnd[slot],
+      lastReject: this.slotReject[slot],
+    };
+  }
+
+  /**
+   * Слот вне ростера — отказ, а не молчание: `bar(7)` в матче на два слота
+   * означает дефект вызывающего, и молча проглоченная операция выглядела бы
+   * исполненной.
+   */
+  private requireSlot(slot: number, what: string): void {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= this.config.players.length) {
+      throw new Error(
+        `MatchServer.${what}: слот ${slot} вне ростера из ${this.config.players.length} слотов (NTR-6)`,
+      );
+    }
   }
 
   /** Разбор кадра не удался либо сообщение недопустимо — исход называется, соединение рвётся (NTR-4). */
@@ -889,7 +1048,11 @@ export class MatchServer {
         // замещающее соединение (NTR-18) и порог молчания. Прежнее мгновенное
         // `End` ломало бы замещение ровно в том случае, ради которого оно
         // заведено: ушедший добровольно убивал бы матч в обход заместителя.
-        this.disconnect(id);
+        //
+        // Обвязке уход называется ОТДЕЛЬНЫМ исходом аренды (`server-control`
+        // SRV-4): «ушёл сам» и «оборвалась связь» — разные слова для админа, и
+        // различает их сервер, потому что различает их протокол.
+        this.detach(id, 'bye');
         return;
     }
   }
@@ -953,7 +1116,19 @@ export class MatchServer {
     if (this.matchPhase === 'ended') {
       // Возвращаться некуда: идущего матча нет (NTR-17). Названный отказ, а не
       // тихое зависание без снапшотов.
-      this.reject(connection.id, 'match-ended', 'матч уже завершён');
+      this.rejectSlot(slot, connection.id, 'match-ended', 'матч уже завершён');
+      return;
+    }
+    // Запертый слот (NTR-19): владельцу называется ЗАПРЕТ, а не занятость.
+    // Отличимость исходов и есть смысл отдельного значения в словаре: «слот
+    // занят» игрок ждёт, а запрет ему сняли или не сняли.
+    //
+    // Заместителя (NTR-18) запирание не трогает — ни здесь, ни при самой
+    // операции: пока владелец заперт, слот ведёт заместитель, и матч
+    // продолжается. Запрет адресован владельцу, потому что он и есть
+    // административный запрет ВЛАДЕЛЬЦУ занимать свой слот.
+    if (this.slotBarred[slot] === true && role === 'owner') {
+      this.rejectSlot(slot, connection.id, 'slot-barred', `слот ${slot} заперт администратором`);
       return;
     }
     if (this.matchPhase === 'lobby') {
@@ -970,7 +1145,8 @@ export class MatchServer {
    */
   private greetBeforeStart(connection: Connection, slot: number, role: ConnectionRole): void {
     if (role === 'substitute') {
-      this.reject(
+      this.rejectSlot(
+        slot,
         connection.id,
         'substitute-before-start',
         'до старта матча слоты занимают владельцы (NTR-18)',
@@ -978,7 +1154,7 @@ export class MatchServer {
       return;
     }
     if (this.slotClaimed[slot] === true) {
-      this.reject(connection.id, 'slot-taken', `слот ${slot} уже занят`);
+      this.rejectSlot(slot, connection.id, 'slot-taken', `слот ${slot} уже занят`);
       return;
     }
     this.seat(connection, slot, role);
@@ -1001,7 +1177,7 @@ export class MatchServer {
     if (live !== undefined) {
       const holder = this.connections.get(live);
       if (role !== 'owner' || holder?.role !== 'substitute') {
-        this.reject(connection.id, 'slot-taken', `слот ${slot} занят живым соединением`);
+        this.rejectSlot(slot, connection.id, 'slot-taken', `слот ${slot} занят живым соединением`);
         return;
       }
       // Вытеснение — исход плюс разрыв (NTR-18), без нового типа сообщения.
@@ -2277,7 +2453,17 @@ export class MatchServer {
     // своего состояния, повторный `Hello` — всё это разрыв с названным исходом
     // (NTR-4), и аренда слота кончается вместе с соединением так же, как при
     // закрытом канале. Иначе слот навсегда числился бы занятым мертвецом.
-    if (connection !== undefined) this.releaseSlot(connection);
+    if (connection !== undefined) this.releaseSlot(connection, endOfReject(reason));
+  }
+
+  /**
+   * Исход отказа входу, адресованный СЛОТУ (SRV-4): его наблюдает обвязка,
+   * показывая статус игрока. Пишется только там, где слот известен: сверка
+   * версии идёт до разбора игрока (NTR-5), и приписывать её отказ слоту нечему.
+   */
+  private rejectSlot(slot: number, id: ConnectionId, reason: RejectReason, detail: string): void {
+    this.slotReject[slot] = reason;
+    this.reject(id, reason, detail);
   }
 
   /** Забрать накопленные исходящие. Отправляет их транспортный слой (NTR-3). */

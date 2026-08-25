@@ -8,10 +8,16 @@
  *                                       [--silence-seconds <окно возврата>]
  *                                       [--match content/matches/duel.match.json]
  *                                       [--bot content/bots/normal.json] [--brain evaluated]
- *                                       [--json] [--once]
+ *                                       [--json] [--once] [--control-adapter]
  *                                       [--debug] [--max-ticks 600] [--out-dir runs/latest]
  *                                       [--trace=off|systems|full] [--trace-select=<вид|код>,...]
  *                                       [--dict <словарь журнала>]
+ *
+ * `--control-adapter` (`server-control` SRV-1, SRV-4, SRV-5; решение D2) —
+ * стенд, поднятый АГЕНТОМ хоста: отчёт о фазе, слотах и метриках уходит
+ * маркированными JSON-линиями в stdout, команды админа приходят JSON-линиями в
+ * stdin. Без флага стенд ведёт себя ровно как прежде — ни одной лишней строки,
+ * ни одного лишнего замера (решение D9).
  *
  * Значение флага принимается обеими формами — `--trace=full` и `--trace full`
  * (CLI-11, `@fluxus/net/bin/matchFile.mjs`).
@@ -105,6 +111,7 @@ if (flag('help')) {
     'usage: node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 120000]\n' +
       '       [--on-disconnect bot|hold|pause] [--substitute-delay-ms 2000] [--silence-seconds <сек>]\n' +
       '       [--match <match.json>] [--bot <profile.json>] [--brain evaluated|scripted] [--json] [--once]\n' +
+      '       [--control-adapter]\n' +
       `       [--debug] [--max-ticks 600] [--out-dir runs/latest] [--dict <словарь>]\n       ${TRACE_USAGE}\n`,
   );
   process.exit(0);
@@ -140,6 +147,10 @@ const { standPolicy } = await import('../app/standPolicy.ts');
 // Политика «разрыв замораживает матч» (NTR-20, D6) — там же и по той же
 // причине: она принадлежит сборке-основателю, а не серверу матча.
 const { DetachPause } = await import('../app/detachPause.ts');
+// Control-адаптер агента хоста (`server-control` SRV-4, SRV-5; решение D2):
+// отчёт и команды по stdio. Там же и по той же причине, что политики выше —
+// проверяется он тестом, а не глазами по выводу процесса.
+const { standControl } = await import('../app/controlAdapter.ts');
 
 const match = readMatchFile(option('match', fromRepo('content/matches/duel.match.json')));
 const pack = contentPack(match.scenes);
@@ -267,6 +278,59 @@ function matchConfig() {
 // ------------------------------------------------- слушающая сторона стенда
 
 const sockets = webSocketTransportServer({ port });
+
+// ------------------------------------------------- control-адаптер агента
+//
+// Поднимается ТОЛЬКО по флагу (решение D2): без него стенд остаётся ровно тем,
+// чем был, — ни отчёта, ни замера задержки цикла событий, ни подписки на stdin.
+
+/**
+ * Задержка цикла событий процесса (решение D9). Мониторится встроенным
+ * гистограммой `perf_hooks` — тем же прибором, каким её мерит Node сам, — и
+ * сбрасывается на каждом отчёте: величина за интервал отвечает на «сервер
+ * тормозит ПРЯМО СЕЙЧАС», а величина за всё время жизни процесса — нет.
+ */
+let loopDelay = null;
+/** Стоп по команде агента: авто-рестарт после него не поднимает следующий матч. */
+let stopRequested = false;
+const control = flag('control-adapter')
+  ? standControl({
+      write: (text) => process.stdout.write(text),
+      process: () => {
+        const mean = loopDelay === null ? 0 : loopDelay.mean / 1e6;
+        loopDelay?.reset();
+        return {
+          eventLoopDelayMs: Number.isFinite(mean) ? mean : 0,
+          rssBytes: process.memoryUsage.rss(),
+        };
+      },
+    })
+  : null;
+if (control !== null) {
+  const { monitorEventLoopDelay } = await import('node:perf_hooks');
+  loopDelay = monitorEventLoopDelay({ resolution: 10 });
+  loopDelay.enable();
+  // Команды приходят линиями: буфер собирается здесь, потому что stdin —
+  // поток байтов, а не строк, и команда вправе приехать двумя кусками.
+  let pending = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    pending += chunk;
+    for (;;) {
+      const edge = pending.indexOf('\n');
+      if (edge < 0) break;
+      const line = pending.slice(0, edge);
+      pending = pending.slice(edge + 1);
+      if (line.trim() !== '') control.handle(line);
+    }
+  });
+  control.ready({
+    port,
+    players: match.players,
+    buildId: match.buildId,
+    contentPackHash: pack.hash,
+  });
+}
 /**
  * Слушающая сторона между матчами (`app/standSession.ts`): очередь окна
  * рестарта, претенденты на слоты и «сессионный вид» для одного матча. Байты,
@@ -307,7 +371,9 @@ for (;;) {
   failed = await runMatch(round);
   // Отладочный прогон — ровно один матч: авто-рестарт переписал бы его
   // артефакты следующим матчем, и разбирать было бы уже не тот бой.
-  if (flag('once') || debugRun) break;
+  // Команда `stop` агента (SRV-2) — тот же случай: следующий матч поднимать
+  // некому и незачем.
+  if (flag('once') || debugRun || stopRequested) break;
   process.stdout.write('\nматч завершён — поднимаю следующий тем же конфигом\n');
 }
 // Одиночный прогон — это проверка, и её исход обязан быть в коде возврата:
@@ -507,7 +573,73 @@ async function runMatch(number) {
   process.stdout.write(`матч #${number}: жду участников на ws://127.0.0.1:${port}\n`);
   host.start();
 
+  // Матч этого круга глазами агента (решение D2). Всё, что здесь читается, —
+  // публичные наблюдения сервера и хоста: аренда слота (NTR-17..NTR-19),
+  // счётчики слотов и счётчики хоста (NTR-11). Ни одного захода в мир (OBS-2).
+  control?.attach({
+    players: match.players,
+    round: number,
+    phase: () => server.phase,
+    tick: () => server.tick,
+    pause: () => server.pauseState,
+    lease: (slot) => server.slotLease(slot),
+    counters: (slot) => server.metrics.slots[slot],
+    wire: (slot) => {
+      const connection = server.slotLease(slot).connection;
+      if (connection === undefined) return undefined;
+      const metrics = host.connectionMetrics(connection);
+      if (metrics === undefined) return undefined;
+      return { snapshotBytes: metrics.snapshotBytes, rtt: metrics.rtt, responseMs: metrics.responseMs };
+    },
+    metrics: () => {
+      const summary = host.report();
+      return {
+        tickP99Ms: summary.tick.p99Ms,
+        tickMeanMs: summary.tick.meanMs,
+        broadcastP99Ms: summary.broadcast.p99Ms,
+        snapshotsSent: server.metrics.snapshotsSent,
+        bytesSent: server.metrics.bytesSent,
+      };
+    },
+    // Админ-операции (SRV-5) — существующими механизмами сервера матча, без
+    // единого нового сообщения в игровом протоколе (NTR-4). Исходящие уезжают
+    // рассылкой хоста: сам сервер ввода-вывода не делает (NTR-3).
+    disconnect: (slot) => {
+      const connection = server.slotLease(slot).connection;
+      if (connection === undefined) return 'у слота нет живого соединения';
+      // Отвязка идёт ЧЕРЕЗ ХОСТ: канал принадлежит ему (NTR-3), и рвать его
+      // обязан он — иначе клиент считал бы себя в матче, а сервер молча
+      // отбрасывал бы его ввод. Дальше действует штатный реконнект (NTR-17).
+      return host.detach(connection) ? '' : 'соединение уже закрыто';
+    },
+    bar: (slot) => {
+      server.bar(slot);
+      host.flush();
+      return '';
+    },
+    unbar: (slot) => {
+      server.unbar(slot);
+      return '';
+    },
+    freeze: () => server.pauseMatch() ?? '',
+    unfreeze: () => server.resumeMatch() ?? '',
+    stop: () => {
+      stopRequested = true;
+      server.stop();
+      host.flush();
+      return '';
+    },
+  });
+
+  // Отчёт стенда — ЛИБО человеку, либо агенту, но не оба сразу: прогресс-строка
+  // пишется без перевода строки (`\r`), и управляющая линия, приклеенная к её
+  // хвосту, перестала бы читаться агентом как линия (риск дизайна «лог и
+  // управляющие сообщения не смешиваются без маркировки»).
   const report = setInterval(() => {
+    if (control !== null) {
+      control.report();
+      return;
+    }
     const slots = server.metrics.slots
       .map((slot, i) => `${match.players[i]}: ${slot.applied}/${slot.predicted}/${slot.late}`)
       .join('  ');
@@ -542,6 +674,9 @@ async function runMatch(number) {
   });
 
   clearInterval(report);
+  // Матч свернулся: отчитываться до следующего `attach` не о чем, а команды
+  // получают названный отказ «матча нет» вместо действия над мертвецом.
+  control?.detach();
   listening.onClaimant(() => {});
   listening.onClaimantsGone(() => {});
   filler.dispose();

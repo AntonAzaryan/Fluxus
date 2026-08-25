@@ -56,10 +56,25 @@ export interface ProfileService {
   readonly id: BridgeServiceId;
   /** Скрипт сервиса — так, как его написал манифест (относительный или абсолютный). */
   readonly script: string;
-  /** Аргументы запуска; `{port}` и `{host}` подставляются из адреса. */
+  /**
+   * Аргументы запуска; `{port}` и `{host}` подставляются из адреса, а
+   * `{addressFile}` — путь, по которому САМ процесс вправе написать свой адрес
+   * (DSK-7: «адрес SHALL приходить от объявления профиля либо от самого
+   * процесса»). Путь этот выбирает контейнер, а не страница и не манифест.
+   */
   readonly args: readonly string[];
   /** Адрес, по которому сервис будет доступен: контейнер его не разбирает по смыслу. */
   readonly address: string;
+  /**
+   * Переживает ли сервис сессию, которая его подняла (DSK-7).
+   *
+   * Свойство ОБЪЯВЛЕНИЯ, а не решение страницы на живой сессии: иначе
+   * «переживёт ли процесс закрытие окна» решал бы тот, кто нажал кнопку, и
+   * whitelist профиля перестал бы ограничивать время жизни так же, как он
+   * ограничивает состав. Умолчание — `false`: прежнее правило «сервис умирает с
+   * сессией» действует для всех, кто отвязываемым себя не объявил.
+   */
+  readonly detached: boolean;
 }
 
 /** Профиль приложения целиком. */
@@ -154,6 +169,7 @@ function asService(value: unknown, where: string, index: number): ProfileService
     script: asText(raw.script, where, `services[${index}].script`),
     args: asArgs(raw.args, where, id),
     address: asText(raw.address, where, `services[${index}].address`),
+    detached: asFlag(raw.detached, where, `services[${index}].detached`, false),
   };
 }
 
