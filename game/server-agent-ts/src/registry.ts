@@ -297,7 +297,14 @@ export function createRegistry(options: RegistryOptions): ServerRegistry {
     return args;
   };
 
-  const startProcess = async (live: LiveServer): Promise<void> => {
+  /**
+   * `startedAt` приходит СНАРУЖИ, а не читается здесь вторым `now()`: тем же
+   * числом назван каталог прогона (`runs/<id>-<startedAt>`), и `adopt` собирает
+   * его имя обратно из книги. Разойдись два чтения часов хоть на миллисекунду —
+   * после рестарта агента постмортем (SRV-6) искал бы артефакты по имени,
+   * которого на диске нет, и молча не находил бы ничего.
+   */
+  const startProcess = async (live: LiveServer, startedAt: number): Promise<void> => {
     const process = startStandProcess({
       runtime: options.runtime,
       script: options.standScript,
@@ -349,7 +356,7 @@ export function createRegistry(options: RegistryOptions): ServerRegistry {
       pid: process.pid,
       port: live.port,
       match: live.params.match,
-      startedAt: now(),
+      startedAt,
       startProc: live.startProc,
     });
     try {
@@ -469,12 +476,13 @@ export function createRegistry(options: RegistryOptions): ServerRegistry {
         pendingLog: [],
         // Имя РАЗОВОЕ: счётчик имён начинается заново с каждым запуском агента, и
         // `runs/srv-1` без метки времени переиспользовался бы чужим прогоном —
-        // а из него собираются материалы разбора краша (SRV-6).
+        // а из него собираются материалы разбора краша (SRV-6). Момент один и
+        // тот же и здесь, и в книге — см. `startProcess`.
         runDir: join(options.paths.root, 'runs', `${id}-${String(startedAt)}`),
       };
       servers.set(id, live);
       options.onChanged(id);
-      await startProcess(live);
+      await startProcess(live, startedAt);
       return entryOf(live);
     },
     async stop(id) {

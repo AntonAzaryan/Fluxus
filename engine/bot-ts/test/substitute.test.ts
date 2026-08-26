@@ -59,6 +59,10 @@ function policy(fixture: Harness): Policy {
   const substitutes = new BotSubstitutes({
     players: fixture.config.players,
     attached: (slot) => fixture.server.slotAttached(slot),
+    // Запертость читается у НАСТОЯЩЕГО сервера, а не подставным флагом: вопрос
+    // ровно в том, совпадает ли взгляд политики с допуском, который сервер
+    // применит к приехавшему боту (NTR-19).
+    barred: (slot) => fixture.server.slotBarredAt(slot),
     running: () => fixture.server.phase === 'running',
     abandoned: () => abandoned.value,
     schedule: timer.schedule,
@@ -156,6 +160,59 @@ describe('политика «бот»: слот подхвачен (BOT-14)', ()
     timer.run();
     await settle();
     // Условия перепроверяются на истечении паузы, а не только при взводе.
+    expect(seated).toHaveLength(0);
+    expect(substitutes.stateOf(0)).toBe('idle');
+    bots.dispose();
+    substitutes.dispose();
+  });
+});
+
+describe('запертый слот заместителя не получает (BOT-14, NTR-19)', () => {
+  it('запирание рвёт владельца, и посадка не взводится вовсе', async () => {
+    const { fixture, rival } = await duel();
+    const { substitutes, timer, seated, bots } = policy(fixture);
+
+    // Админ убрал игрока (NTR-19): соединение владельца порвано названным
+    // исходом, и слот выглядит ровно как отвалившийся — тем и опасен.
+    fixture.server.bar(0);
+    await settle();
+    expect(fixture.server.slotAttached(0)).toBe(false);
+    expect(fixture.server.slotBarredAt(0)).toBe(true);
+
+    substitutes.poll();
+    // Паузы нет: сажать некого — вход в запертый слот закрыт «НЕЗАВИСИМО от
+    // заявленной роли соединения», то есть и заместителю (NTR-19). Посади его
+    // политика — сервер ответил бы `slot-barred`, и стенд потерял бы бота,
+    // объявив о посадке, которой не было.
+    expect(timer.pending()).toBe(false);
+    expect(substitutes.stateOf(0)).toBe('idle');
+
+    // Матч при этом ИДЁТ: слот получает predicted-кадры (NTR-7), как и обещает
+    // требование, — а не ждёт заместителя и не кончается вместе с запретом.
+    for (let i = 0; i < 4; i++) {
+      await stepMatch(fixture, [rival.host]);
+      substitutes.poll();
+    }
+    expect(seated).toHaveLength(0);
+    expect(fixture.server.metrics.slots[0]!.predicted).toBeGreaterThan(0);
+    bots.dispose();
+    substitutes.dispose();
+  });
+
+  it('слот заперли ЗА паузу — посадки уже не будет', async () => {
+    const { fixture, owner } = await duel();
+    const { substitutes, timer, seated, bots } = policy(fixture);
+
+    owner.transport.close('обрыв');
+    await settle();
+    substitutes.poll();
+    expect(substitutes.stateOf(0)).toBe('pending');
+
+    // Между взводом паузы и её истечением админ запер слот: условия
+    // перепроверяются на посадке, иначе бот выехал бы ровно к отказу.
+    fixture.server.bar(0);
+    timer.run();
+    await settle();
     expect(seated).toHaveLength(0);
     expect(substitutes.stateOf(0)).toBe('idle');
     bots.dispose();

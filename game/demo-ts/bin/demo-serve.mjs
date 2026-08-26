@@ -151,6 +151,11 @@ const { DetachPause } = await import('../app/detachPause.ts');
 // отчёт и команды по stdio. Там же и по той же причине, что политики выше —
 // проверяется он тестом, а не глазами по выводу процесса.
 const { standControl } = await import('../app/controlAdapter.ts');
+// Что запертый слот (NTR-19) значит для стенда: переезд запрета в следующий круг
+// и диагноз пустой посадки. Там же и по той же причине, что политики выше — круг,
+// не стартующий из-за запрета, обязан сказать об этом сам и не обязан падать, а
+// проверяется это тестом (`test/barredSlots.test.ts`).
+const { carryBarredSlots, seatingIsStandFailure } = await import('../app/barredSlots.ts');
 
 const match = readMatchFile(option('match', fromRepo('content/matches/duel.match.json')));
 const pack = contentPack(match.scenes);
@@ -456,16 +461,17 @@ async function runMatch(number) {
       // заполнитель не сработал: разошёлся формат кадра, версия или контент.
       // Матч в этом состоянии стоит в лобби вечно, и молчать об этом нельзя.
       // Отказ заместителю (слот успел занять владелец — `slot-taken`) отказом
-      // стенда не является: матч в этот момент идёт, а не стоит в лобби.
-      // Запертый слот (NTR-19) отказом стенда тоже не является: админ запретил
-      // вход в него намеренно, и «ни одного занятого» здесь означает ровно то,
-      // о чём просили. Без этой оговорки запирание слота в лобби роняло бы
-      // живой круг вместе с сидящим в нём человеком — и объясняло бы это
-      // разошедшимся форматом кадра, которого никто не менял.
-      const barredSeat = report.seats.some(
-        (seat) => seat.rejected !== null && String(seat.rejected).includes('slot-barred'),
-      );
-      if (taken.length === 0 && server.phase === 'lobby' && !barredSeat) {
+      // стенда не является: матч в этот момент идёт, а не стоит в лобби. Что
+      // делает с этим диагнозом запертый слот (NTR-19) и почему судить о нём по
+      // отказу `slot-barred` НЕЛЬЗЯ — `app/barredSlots.ts`.
+      if (
+        seatingIsStandFailure({
+          taken: taken.length,
+          rejections: report.seats.map((seat) => (seat.rejected === null ? '' : String(seat.rejected))),
+          lobby: server.phase === 'lobby',
+          barred: match.players.some((_, slot) => server.slotBarredAt(slot)),
+        })
+      ) {
         fail(
           'бот не занял ни одного слота, а матч всё ещё в лобби — ' +
             'проверьте формат кадра (--json), версию сборки и контент-пак (NTR-5)',
@@ -507,6 +513,13 @@ async function runMatch(number) {
       ? new BotSubstitutes({
           players: match.players,
           attached: (slot) => server.slotAttached(slot),
+          // Запертому админом слоту (NTR-19) заместителя не предлагаем — по той
+          // же причине, по какой его не предлагает заполнитель и не ждёт
+          // `DetachPause`: вход в запертый слот закрыт НЕЗАВИСИМО от заявленной
+          // роли, и посаженный бот получил бы `slot-barred`. Плата за отсутствие
+          // этой проверки — потерянный бот и строка «сажаю заместителя» о
+          // посадке, которой не будет.
+          barred: (slot) => server.slotBarredAt(slot),
           running: () => server.phase === 'running',
           // Играть не с кем — заместителя не сажаем: то же условие, по которому
           // заполнитель не заводит бой ботов в пустом матче (BOT-7). Считаются
@@ -608,9 +621,11 @@ async function runMatch(number) {
   host.start();
   // Запреты, поставленные админом раньше (NTR-19), переносятся на новый круг:
   // `MatchServer` у каждого матча свой, а запрет отменяет только человек (SRV-5).
-  for (const slot of barredSlots) {
-    if (slot < match.players.length) host.bar(slot);
-  }
+  // Переезд НАЗЫВАЕТСЯ: круг с запертым слотом не стартует вовсе, и молчащий об
+  // этом стенд выглядит зависшим (`app/barredSlots.ts`).
+  const carried = carryBarredSlots(barredSlots, match.players);
+  for (const slot of carried.slots) host.bar(slot);
+  if (carried.note !== '') process.stdout.write(carried.note);
 
   // Матч этого круга глазами агента (решение D2). Всё, что здесь читается, —
   // публичные наблюдения сервера и хоста: аренда слота (NTR-17..NTR-19),

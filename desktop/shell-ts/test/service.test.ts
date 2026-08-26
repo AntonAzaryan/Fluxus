@@ -6,12 +6,17 @@
  * хост, у которого есть процессы и порты. Разделение то же, что у корней:
  * контракт в сьюте, файловая механика — в своих тестах.
  */
-import { readFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { normalizeAppProfile } from '../src/bridge/profile.js';
 import { createHostServices, endpointOf, serviceArgs } from '../src/host/service.js';
-import { processStartTicks, sameProcess, serviceSpawnOptions } from '../src/host/detached.js';
+import {
+  detachedFiles,
+  processStartTicks,
+  sameProcess,
+  serviceSpawnOptions,
+} from '../src/host/detached.js';
 import {
   DEAD_SERVICE_SCRIPT,
   dropTree,
@@ -98,6 +103,30 @@ describe('опции запуска отвязываемого сервиса (D
       stdio: 'ignore',
       windowsHide: true,
     });
+  });
+
+  it('каталог состояния, открытый на запись чужим, — НАЗВАННЫЙ отказ (DSK-7)', async () => {
+    // `mkdirSync(..., { mode })` выставляет права только при СОЗДАНИИ: каталог,
+    // заведённый раньше нас соседом по машине (имя предсказуемо), сохраняет свои
+    // права. А в нём — pid, которому уходит SIGKILL, и адрес, которым страница
+    // предъявляет материал автопейринга (MGR-5, SRV-3).
+    const root = await makeTree();
+    cleanups.push(() => dropTree(root));
+    const stateDir = join(root, 'services');
+    // Прав POSIX Windows этими полями не выражает: утверждать по ним что-либо
+    // было бы выдумкой, и проверка там не работает по построению.
+    if (process.platform === 'win32') {
+      expect(() => detachedFiles(stateDir, 'stand')).not.toThrow();
+      return;
+    }
+    await mkdir(stateDir, { recursive: true, mode: 0o777 });
+    await chmod(stateDir, 0o777);
+    expect(() => detachedFiles(stateDir, 'stand')).toThrow(/на запись/);
+
+    // Свой и закрытый каталог отказом не является: отказывает не проверка, а
+    // конкретное положение дел.
+    await chmod(stateDir, 0o700);
+    expect(() => detachedFiles(stateDir, 'stand')).not.toThrow();
   });
 
   it('пере-обнаружение сверяет МОМЕНТ старта, а не только PID (DSK-7)', () => {

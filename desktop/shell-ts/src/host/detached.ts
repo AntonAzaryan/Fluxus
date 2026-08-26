@@ -16,7 +16,7 @@
  * проверяются контрактным сьютом в гейте (DSK-6), и вторая — на тех же опциях
  * spawn, что и в настоящем контейнере.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import type { SpawnOptions } from 'node:child_process';
@@ -34,14 +34,61 @@ import type { BridgeServiceId } from '../bridge/types.js';
  * (`electron/main.ts`) — умолчание не должно быть слабее.
  */
 export function defaultServiceStateDir(): string {
-  let who = '';
+  // `userInfo()` на Windows НЕ бросает: он отвечает, но полей POSIX у учётной
+  // записи там нет — `uid` равен `-1`. Ветвь `catch` поэтому не срабатывала
+  // никогда, а имя каталога получалось `...-−1`; спрашиваем ЗНАЧЕНИЕ, а не
+  // исключение. Общего имени на Windows достаточно: временный каталог там и так
+  // свой у каждого профиля (`%LOCALAPPDATA%\Temp`).
+  let who = 'user';
   try {
-    who = String(userInfo().uid);
+    const { uid } = userInfo();
+    if (uid >= 0) who = String(uid);
   } catch {
-    // Windows не называет uid — там временный каталог и так свой у сессии.
-    who = 'user';
+    // Окружение без учётной записи вовсе (контейнер с вырезанным passwd):
+    // разделять там некого, и общее имя — честный ответ.
   }
   return join(tmpdir(), `fluxus-desktop-services-${who}`);
+}
+
+/**
+ * Каталог состояния сервисов, ПРИГОДНЫЙ для того, что в нём лежит (DSK-7).
+ *
+ * `mkdirSync(..., { mode })` выставляет права ТОЛЬКО при создании. Каталог,
+ * заведённый до нас — соседом по многопользовательской машине, знающим имя
+ * заранее, — сохраняет своего владельца и свои права, а мы кладём туда pid
+ * (адресат SIGTERM и SIGKILL) и адрес управляющего канала вместе с материалом
+ * автопейринга (MGR-5, SRV-3). Поэтому после создания каталог ПРОВЕРЯЕТСЯ, и
+ * чужой — НАЗВАННЫЙ отказ, а не тихая работа в нём.
+ *
+ * Проверка POSIX-only: владельца и биты записи Windows этими полями не
+ * выражает (`stat.uid` там — `0` у всех), и утверждать по ним что-либо было бы
+ * выдумкой. Защита каталога там — сам профиль пользователя.
+ */
+function ensureStateDir(stateDir: string): void {
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  if (process.platform === 'win32') return;
+  // Учётной записи может не быть вовсе (тот же случай, что в
+  // `defaultServiceStateDir`): владельца тогда не с чем сравнивать, но проверка
+  // битов записи остаётся — она ни о какой учётной записи не спрашивает.
+  let uid = -1;
+  try {
+    uid = userInfo().uid;
+  } catch {
+    uid = -1;
+  }
+  const stat = statSync(stateDir);
+  if (uid >= 0 && stat.uid !== uid) {
+    throw new Error(
+      `каталог состояния сервисов "${stateDir}" принадлежит не нам (uid ${String(stat.uid)} против ${String(uid)}): ` +
+        'в нём лежат pid и материал автопейринга, и чужому владельцу их доверять нельзя (DSK-7)',
+    );
+  }
+  if ((stat.mode & 0o022) !== 0) {
+    throw new Error(
+      `каталог состояния сервисов "${stateDir}" открыт на запись группе или всем (режим ${(stat.mode & 0o777).toString(8)}): ` +
+        'подменённый pid уводит SIGKILL на чужой процесс, подменённый адрес — автопейринг на чужой канал (DSK-7)',
+    );
+  }
 }
 
 /**
@@ -71,9 +118,10 @@ export interface DetachedFiles {
 }
 
 export function detachedFiles(stateDir: string, id: BridgeServiceId): DetachedFiles {
-  // Права ЗАДАНЫ: в каталоге лежат идентификатор процесса, которому мы шлём
-  // сигналы, и адрес, по которому страница предъявляет материал автопейринга.
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  // Права ЗАДАНЫ И ПРОВЕРЕНЫ: в каталоге лежат идентификатор процесса, которому
+  // мы шлём сигналы, и адрес, по которому страница предъявляет материал
+  // автопейринга. Почему одного `mode` мало — см. `ensureStateDir`.
+  ensureStateDir(stateDir);
   // Имя файла — идентификатор сервиса: он приходит из ОБЪЯВЛЕНИЯ профиля, а не
   // из страницы, поэтому подстановки чужого пути здесь быть не может.
   const safe = id.replace(/[^A-Za-z0-9_-]/g, '_');

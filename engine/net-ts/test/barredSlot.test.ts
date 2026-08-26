@@ -107,6 +107,21 @@ describe('запирание слота — операция серверног�
     server.advance();
     server.advance();
     expect(server.metrics.slots[0]!.applied).toBeGreaterThan(0);
+
+    // Владелец пробует вернуться в ЗАПЕРТЫЙ слот, который ведёт заместитель.
+    // Порядок проверок решает исход: запрет (NTR-19) идёт ПЕРЕД вытеснением
+    // (NTR-18), иначе владелец выбил бы заместителя и слот остался бы пустым —
+    // то есть запирание превращалось бы в «убрать обоих», а матч терял бы
+    // единственного, кто его ведёт.
+    const denied = join(server, config, 4, 'p1');
+    expect(denied.some((message) => message.type === 'Welcome')).toBe(false);
+    expect(
+      denied.filter((message) => message.type === 'Reject').map((message) => message.reason),
+    ).toEqual(['slot-barred']);
+    // Заместитель не тронут: ни отказа ему, ни смены арендатора.
+    expect(rejectsTo(server.drain(), 3)).toEqual([]);
+    expect(server.slotAttached(0)).toBe(true);
+    expect(server.slotLease(0).role).toBe('substitute');
   });
 
   it('ЗАНЯТЬ запертый слот заново нельзя и заявившему роль заместителя', () => {

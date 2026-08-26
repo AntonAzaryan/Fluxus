@@ -30,6 +30,7 @@ export {
 export {
   startStandProcess,
   portBusy,
+  CONTROL_TAIL_LIMIT,
   LOG_LINE_LIMIT,
   LOG_RING,
   type StandProcess,
