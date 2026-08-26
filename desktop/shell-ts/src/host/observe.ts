@@ -68,19 +68,26 @@ export const NODE_OBSERVER: DirectoryObserver = (options) => {
     const watcher = watch(canonicalDirectory(options.directory), { recursive: true }, (_event, filename) => {
       options.changed(filename);
     });
-    watcher.on('error', (error: unknown) => {
-      report(
-        `наблюдение за "${options.directory}" сорвалось: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    });
-    return {
+    // `active` — ПОЛЕ, а не литерал: срыв наблюдения приезжает событием, а не
+    // броском (ENOSPC на исчерпанных inotify-вотчах, исчезнувший каталог на
+    // Windows). Оставь его `true` — и корень отчитывался бы «наблюдаю» о мёртвом
+    // наблюдателе, чьи дескрипторы вдобавок никто не освободил.
+    const observation = {
       active: true,
       close: () => {
         watcher.close();
       },
     };
+    watcher.on('error', (error: unknown) => {
+      observation.active = false;
+      watcher.close();
+      report(
+        `наблюдение за "${options.directory}" сорвалось: ${
+          error instanceof Error ? error.message : String(error)
+        }; уведомлений об изменениях извне больше не будет`,
+      );
+    });
+    return observation;
   } catch (error) {
     report(
       `наблюдение за "${options.directory}" недоступно: ${

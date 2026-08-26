@@ -15,6 +15,7 @@
 import {
   ADMIN_OPS,
   MATCH_PHASES,
+  PAUSE_STATES,
   REFUSAL_REASONS,
   SERVER_STATES,
   SLOT_STATUSES,
@@ -22,6 +23,7 @@ import {
   type ControlRequest,
   type ControlResponse,
   type MatchPhase,
+  type PauseStateView,
   type RefusalReason,
   type ServerEntry,
   type ServerMetricsView,
@@ -231,11 +233,10 @@ function serverEntry(value: unknown): ServerEntry {
       : oneOf<MatchPhase>(source.phase, MATCH_PHASES, 'запись реестра: поле "phase"'),
     pause: source.pause === null || source.pause === undefined
       ? null
-      : oneOf<'running' | 'frozen' | 'resuming'>(
-          source.pause,
-          ['running', 'frozen', 'resuming'],
-          'запись реестра: поле "pause"',
-        ),
+      // Набор ОДИН — тот же, что у сервера матча (`netcode-transport` NTR-20):
+      // переписанный здесь литералом, он разошёлся бы с ним молча на проводе, а
+      // не ошибкой типов, — как и говорит комментарий у самой константы.
+      : oneOf<PauseStateView>(source.pause, PAUSE_STATES, 'запись реестра: поле "pause"'),
     restarts: int(source, 'restarts', 'запись реестра', 0, Number.MAX_SAFE_INTEGER),
     exitCode: typeof source.exitCode === 'number' ? source.exitCode : null,
     postmortem: typeof source.postmortem === 'string' ? source.postmortem : null,

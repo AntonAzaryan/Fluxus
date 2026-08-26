@@ -263,6 +263,24 @@ export class MatchHost {
     return transport !== undefined;
   }
 
+  /**
+   * Запереть слот (NTR-19) и снять запирание — с рассылкой, как `detach`.
+   *
+   * Здесь, а не только в `MatchServer`, ровно по той же причине: `bar` кладёт
+   * исход владельцу в исходящее, а закрывает канал ХОЗЯИН канала — хост (NTR-3).
+   * Оставь рассылку на совести вызывающего — и запертый клиент считал бы себя в
+   * матче, пока кто-нибудь не сделает следующий шаг расписания.
+   */
+  bar(slot: number): void {
+    this.server.bar(slot);
+    this.flush();
+  }
+
+  unbar(slot: number): void {
+    this.server.unbar(slot);
+    this.flush();
+  }
+
   /** Один шаг расписания. Отдельно от `start()`, чтобы тест двигал матч сам. */
   step(): void {
     const startedAt = this.now();

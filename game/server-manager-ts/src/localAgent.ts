@@ -79,7 +79,12 @@ export async function startLocalAgent(bridge: ManagerBridge): Promise<LocalAgent
   const state = await start(AGENT_SERVICE);
   const parsed = parseLocalAgentAddress(state.address);
   if (parsed === undefined) {
-    throw new Error(`агент вернул адрес, который менеджер не понимает: "${state.address}"`);
+    // Адрес НЕ ЦИТИРУЕТСЯ целиком: в нём материал автопейринга (`code`,
+    // `fingerprint` — MGR-5), а это сообщение уходит в консоль страницы.
+    // Называется схема и происхождение, а не секрет.
+    throw new Error(
+      `агент вернул адрес, который менеджер не понимает (ожидался wss:// с кодом и отпечатком), длиной ${String(state.address.length)}`,
+    );
   }
   return parsed;
 }

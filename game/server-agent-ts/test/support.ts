@@ -43,6 +43,9 @@ export function sandbox(): Sandbox {
   writeFileSync(join(contentRoot, 'matches', 'die.match.json'), '{"name":"die"}\n');
   // Стенд с незнакомым статусом слота — дрейф стенда и агента (SRV-4).
   writeFileSync(join(contentRoot, 'matches', 'drift.match.json'), '{"name":"drift"}\n');
+  // Стенд, глухой к SIGTERM: штатная остановка идёт через SIGKILL — так уходит
+  // всякий стенд без обработчика сигнала и всякий стенд на Windows.
+  writeFileSync(join(contentRoot, 'matches', 'deaf.match.json'), '{"name":"deaf"}\n');
   return {
     stateDir: join(root, 'state'),
     contentRoot,

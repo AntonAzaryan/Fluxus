@@ -49,7 +49,7 @@ import type {
   ServerMessage,
   WireSnapshot,
 } from '../protocol/messages.js';
-import { applyPause, type DeliveredPause } from './pause.js';
+import { applyPause, frozenByMatch, type DeliveredPause } from './pause.js';
 
 /** Контент-пак клиента: сцена резолвится по ссылке локально — сервер её не раздаёт (NET-16). */
 export interface ContentPack {
@@ -445,7 +445,15 @@ export class MatchClient {
    * проверить, что она помогла.
    */
   advance(): void {
-    if (this.clientPhase === 'playing') this.estimatedTick++;
+    // В ЗАМОРОЗКЕ матча оценка стоит. Тиков в ней нет (NTR-20), снапшотов
+    // сервер не шлёт — и оценка, идущая своим темпом, уезжает ровно на
+    // длительность паузы: полуминутная пауза даёт разницу в 1800 тиков.
+    // Пересинхронизация первым снапшотом после возобновления вернёт её назад, но
+    // всё это время `serverTick` наблюдаем и просто неверен, кадры уходят
+    // помеченными будущим, а те, что были в полёте, ложатся в счётчик
+    // «разъехавшейся оценки» (NTR-11) — величину, которая должна говорить о
+    // канале, а не о паузе.
+    if (this.clientPhase === 'playing' && !frozenByMatch(this.pauseState)) this.estimatedTick++;
   }
 
   /** Ввод игрока: помечается тиком с запасом задержки (NTR-7) и уходит на сервер. */
@@ -467,7 +475,12 @@ export class MatchClient {
     // только бит ведения скраба. Серверное подавление (`ingest` бросает кадры
     // не-`Running` целиком) остаётся авторитетным — это второй рубеж, а не
     // замена первому.
-    const frozen = this.lastAppliedMode !== 'Running';
+    // Пауза МАТЧА маскирует ввод наравне с заморозкой машины перемотки, и по той
+    // же причине: игрок смотрит на замороженный мир, а кадр доезжает уже после
+    // возобновления — с верной эпохой и верным будущим тиком, то есть проходит
+    // `ingest` и ложится на живой мир. Читать здесь один `lastAppliedMode`
+    // нельзя: снапшотов в заморозке нет, и он всю паузу говорит `Running`.
+    const frozen = this.lastAppliedMode !== 'Running' || frozenByMatch(this.pauseState);
     const holdMask = this.options.holdButton === undefined ? 0 : 1 << this.options.holdButton;
     const frame: InputFrame = {
       tick: this.estimatedTick + this.matchPacing.inputDelay,

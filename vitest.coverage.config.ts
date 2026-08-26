@@ -62,6 +62,7 @@ export default defineConfig({
         'game/demo-ts/app/**/*.ts',
         'game/server-agent-ts/src/**',
         'game/server-manager-ts/src/**',
+        'game/server-manager-ts/app/**/*.ts',
       ],
     },
   },

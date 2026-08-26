@@ -110,9 +110,17 @@ export interface StandCommand {
   readonly slot: number;
 }
 
-/** Управляющая линия в stdout: маркер плюс компактный JSON. */
+/**
+ * Управляющая линия в stdout: маркер плюс компактный JSON.
+ *
+ * Перевод строки стоит и ПЕРЕД маркером. Стенд — не единственный, кто пишет в
+ * свой stdout: библиотеки печатают баннеры и прогресс, и написанное без
+ * завершающего перевода склеилось бы с маркером — линия перестала бы начинаться
+ * с него, разбор счёл бы её обычным логом, и отчёт исчез бы без единой ошибки.
+ * Пустая строка агенту ничего не стоит: он их отбрасывает.
+ */
 export function encodeStandLine(line: StandLine): string {
-  return `${CONTROL_LINE_PREFIX}${JSON.stringify(line)}\n`;
+  return `\n${CONTROL_LINE_PREFIX}${JSON.stringify(line)}\n`;
 }
 
 /**

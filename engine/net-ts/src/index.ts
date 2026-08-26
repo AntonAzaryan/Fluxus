@@ -16,6 +16,12 @@ export {
   toInputFrame,
   toWireSnapshot,
   ProtocolError,
+  // Закрытые наборы паузы — ЗНАЧЕНИЯМИ, а не только типами (NTR-20). Внешний
+  // разбор (управляющий протокол агента) иначе переписывает их у себя строковым
+  // литералом, и четвёртое состояние стало бы у него молчаливым отказом на
+  // проводе вместо ошибки типов.
+  PAUSE_DENY_REASONS,
+  PAUSE_STATES,
 } from './protocol/messages.js';
 export type {
   ByeMessage,

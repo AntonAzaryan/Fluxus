@@ -26,7 +26,7 @@ import { RefusalError } from './refusal.js';
 import type { AgentPaths } from './state/paths.js';
 import {
   processStartTicks,
-  sameProcess,
+  stopProcessByPid,
   type BookEntry,
   type ProcessBook,
 } from './state/book.js';
@@ -254,35 +254,6 @@ export function createRegistry(options: RegistryOptions): ServerRegistry {
   };
 
   /**
-   * Остановка процесса, которым агент не владеет: сперва вежливо, потом жёстко.
-   *
-   * Сигнал шлётся ТОЛЬКО тому процессу, чей момент старта совпадает с
-   * запомненным (`sameProcess`): за время между сверкой книги и остановкой PID
-   * мог переиспользоваться, и SIGKILL постороннему процессу — куда худший исход,
-   * чем не остановленный сервер.
-   */
-  const stopByPid = async (pid: number, startProc: number): Promise<void> => {
-    const ours = (): boolean => sameProcess({ pid, startProc });
-    if (!ours()) return;
-    try {
-      process.kill(pid, 'SIGTERM');
-    } catch {
-      // Процесс успел уйти сам между проверкой и сигналом — это и есть цель.
-      return;
-    }
-    for (let i = 0; i < 30 && ours(); i++) {
-      await new Promise((done) => setTimeout(done, 100));
-    }
-    if (ours()) {
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        // Тот же случай: ушёл сам.
-      }
-    }
-  };
-
-  /**
    * Материалы разбора краша (SRV-6): код выхода, хвост лога и артефакты матча,
    * если прогон их писал. Сорвавшееся сохранение НАЗЫВАЕТСЯ там же, где
    * состояние `crashed`, а не теряется молча.
@@ -351,10 +322,12 @@ export function createRegistry(options: RegistryOptions): ServerRegistry {
         live.pendingLog.push(line);
         if (live.pendingLog.length > 200) live.pendingLog.shift();
       },
-      onExit: (code, signal) => {
+      onExit: (code, signal, state) => {
         live.exitCode = code;
-        // Тот же счёт, что и у процесса: краш — всё, кроме нулевого кода.
-        live.state = code === 0 ? 'stopped' : 'crashed';
+        // Вердикт даёт ПРОЦЕСС: он один знает, просили ли мы этот выход. Считать
+        // здесь по коду значило бы объявлять крахом — и писать постмортем
+        // (SRV-6) — всякую штатную остановку стенда, который уходит от SIGTERM.
+        live.state = state;
         // Процесс, не начавший слушать, — несостоявшийся запуск, а не крах
         // идущего сервера: постмортема он не оставляет и событий не шлёт. Всю
         // его запись отзовёт путь отказа запуска ниже; попытайся onExit сохранить
@@ -444,7 +417,7 @@ export function createRegistry(options: RegistryOptions): ServerRegistry {
         postmortem: null,
         postmortemFailure: null,
         pendingLog: [],
-        runDir: join(options.paths.root, 'runs', entry.id),
+        runDir: join(options.paths.root, 'runs', `${entry.id}-${String(entry.startedAt)}`),
       };
       servers.set(entry.id, live);
       if (counter < numberOf(entry.id)) counter = numberOf(entry.id);
@@ -477,6 +450,7 @@ export function createRegistry(options: RegistryOptions): ServerRegistry {
       }
       counter += 1;
       const id = `srv-${String(counter)}`;
+      const startedAt = now();
       const live: LiveServer = {
         id,
         params,
@@ -493,7 +467,10 @@ export function createRegistry(options: RegistryOptions): ServerRegistry {
         postmortem: null,
         postmortemFailure: null,
         pendingLog: [],
-        runDir: join(options.paths.root, 'runs', id),
+        // Имя РАЗОВОЕ: счётчик имён начинается заново с каждым запуском агента, и
+        // `runs/srv-1` без метки времени переиспользовался бы чужим прогоном —
+        // а из него собираются материалы разбора краша (SRV-6).
+        runDir: join(options.paths.root, 'runs', `${id}-${String(startedAt)}`),
       };
       servers.set(id, live);
       options.onChanged(id);
@@ -502,7 +479,9 @@ export function createRegistry(options: RegistryOptions): ServerRegistry {
     },
     async stop(id) {
       const live = require(id);
-      if (live.process === undefined) await stopByPid(live.pid, live.startProc);
+      if (live.process === undefined) {
+        await stopProcessByPid(live.pid, live.startProc, (detail) => new RefusalError('internal', detail));
+      }
       else await live.process.stop();
       live.state = 'stopped';
       options.book.remove(id);
@@ -554,7 +533,11 @@ export function createRegistry(options: RegistryOptions): ServerRegistry {
     },
     async setSubscribed(id, on) {
       const process = running(id);
-      await process.command(on ? 'subscribe' : 'unsubscribe');
+      // Исход команды НАЗЫВАЕТСЯ (SRV-2). Выброшенный, он превращал молчащий
+      // стенд в «подписка удалась»: метрики так и остаются пустыми, и человеку
+      // ни разу не сказали, почему.
+      const reason = await process.command(on ? 'subscribe' : 'unsubscribe');
+      if (reason !== '') throw new RefusalError('refused-by-server', reason);
     },
   };
 }

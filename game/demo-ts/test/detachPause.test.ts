@@ -44,6 +44,7 @@ function stand(overrides: Partial<MatchConfig> = {}) {
     players: config.players,
     attached: (slot) => server.slotAttached(slot),
     running: () => server.phase === 'running',
+    barred: (slot) => server.slotBarredAt(slot),
     state: () => server.pauseState,
     pause: () => server.pauseMatch(),
     resume: () => server.resumeMatch(),
@@ -239,5 +240,35 @@ describe('разрыв замораживает матч, возврат вла�
     s.detach.poll();
     expect(s.detach.holding).toBe(false);
     expect(s.report.join('\n')).toContain('rewinding');
+  });
+
+  it('запертый админом слот матч НЕ замораживает (NTR-19)', () => {
+    const s = stand();
+    advance(s.server, 10);
+
+    // Админ убирает игрока (SRV-5): слот заперт, соединение владельца разорвано.
+    s.server.bar(0);
+    s.server.drain();
+    expect(s.server.slotAttached(0)).toBe(false);
+
+    // Ждать запертого владельца НЕЛЬЗЯ: его `Hello` получает названный отказ, и
+    // вернуться он не может по определению. Заморозь стенд матч — и
+    // админ-операция «убрать одного» встала бы всем матчем до истечения
+    // `pause.maxPauseMs`, а в документе без этого поля — навсегда. NTR-19
+    // обещает обратное: «матч продолжается — слот ведёт заместитель или
+    // predicted-фреймы».
+    s.detach.poll();
+    expect(s.server.pauseState).toBe('running');
+    expect(s.detach.holding).toBe(false);
+
+    // И матч действительно идёт: тики живые, слот на predicted-кадрах (NTR-7).
+    const before = s.server.tick;
+    advance(s.server, 20);
+    expect(s.server.tick).toBeGreaterThan(before);
+
+    // Запрет снят, владелец ещё не вернулся — вот теперь ждать есть кого.
+    s.server.unbar(0);
+    s.detach.poll();
+    expect(s.server.pauseState).toBe('frozen');
   });
 });

@@ -179,7 +179,10 @@ if (crashAfter > 0) {
   }, crashAfter);
 }
 
-if (!has('deaf')) {
+// Глухой к SIGTERM стенд: та же договорённость — слово `deaf` в имени документа.
+// Нужен, чтобы штатная остановка шла ЧЕРЕЗ SIGKILL: именно так уходит стенд без
+// обработчика сигнала, и именно так уходит любой стенд на Windows.
+if (!has('deaf') && !String(at('match', '')).includes('deaf')) {
   process.on('SIGTERM', () => { process.exit(0); });
   process.on('SIGINT', () => { process.exit(0); });
 }

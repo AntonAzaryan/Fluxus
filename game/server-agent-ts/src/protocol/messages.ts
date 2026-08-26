@@ -29,6 +29,19 @@
  */
 export const CONTROL_PROTOCOL_VERSION = 1;
 
+/**
+ * Состояние паузы матча (`netcode-transport` NTR-20) глазами админ-канала.
+ *
+ * Набор НАЗВАН константой, как соседние `SERVER_STATES` и `MATCH_PHASES`, а не
+ * переписан литералом в разборе: там он был бы вторым местом, где закрытый набор
+ * может разойтись сам с собой. Импортировать его из `@fluxus/net` нельзя —
+ * словарь читается и страницей менеджера, а корень `@fluxus/net` тянет за собой
+ * `ws` и `node:*`; связь наборов держит тест соответствия, а не сборка.
+ */
+export const PAUSE_STATES = ['running', 'frozen', 'resuming'] as const;
+
+export type PauseStateView = (typeof PAUSE_STATES)[number];
+
 // ------------------------------------------------------------------ реестр
 
 /** Состояние ПРОЦЕССА сервера (SRV-1) — не путать с фазой матча в нём. */
@@ -121,7 +134,7 @@ export interface ServerEntry {
   /** Фаза матча ОТДЕЛЬНЫМ полем (SRV-1); `null` — процесс ещё ничего не сообщил. */
   readonly phase: MatchPhase | null;
   /** Состояние паузы матча (NTR-20); `null` — процесс ещё ничего не сообщил. */
-  readonly pause: 'running' | 'frozen' | 'resuming' | null;
+  readonly pause: PauseStateView | null;
   readonly restarts: number;
   /** Код выхода упавшего процесса; `null` — процесс не падал. */
   readonly exitCode: number | null;

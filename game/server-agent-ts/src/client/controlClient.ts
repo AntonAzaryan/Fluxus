@@ -115,6 +115,13 @@ export interface ControlClient {
   revoke(token: string): Promise<ResultResponse>;
   /** События подписки (SRV-2): реестр меняется — подписчик узнаёт без опроса. */
   onEvent(listener: (event: ServerEvent) => void): () => void;
+  /**
+   * Разрыв канала — наблюдаемое событие, а не молчание (SRV-2). Клиент, у
+   * которого канал умер (агент ушёл, сеть пропала, токен отозван — SRV-3),
+   * обязан сказать об этом наблюдателю: иначе тот показывает прошлое состояние
+   * как настоящее и узнаёт правду только по отказу первой же операции.
+   */
+  onClose(listener: (reason: string) => void): () => void;
   close(): void;
   readonly connected: boolean;
 }
@@ -129,6 +136,7 @@ export function createControlClient(open: ControlSocketFactory): ControlClient {
   let nextId = 1;
   const waiting = new Map<number, Waiting>();
   const listeners = new Set<(event: ServerEvent) => void>();
+  const closing = new Set<(reason: string) => void>();
   let greeting: ((response: ControlResponse) => void) | undefined;
 
   const fail = (error: ControlClientError): void => {
@@ -189,6 +197,23 @@ export function createControlClient(open: ControlSocketFactory): ControlClient {
     },
     async connect(options) {
       const pinned = options.pinned ?? '';
+      // Только шифрованный канал (SRV-3) — и на стороне КЛИЕНТА тоже. Агент
+      // незашифрованного слушателя не поднимает вовсе, но опечатка в адресе
+      // (`ws://`) уводила бы страницу на чужой открытый сокет, вынося на провод
+      // код пейринга и админ-токен; в Node тот же адрес роняет `nodeSocket`
+      // обращением к TLS-методам обычного сокета.
+      let scheme = '';
+      try {
+        scheme = new URL(options.url).protocol;
+      } catch {
+        throw new ControlClientError('connect-failed', `адрес "${options.url}" не разобрать`);
+      }
+      if (scheme !== 'wss:') {
+        throw new ControlClientError(
+          'connect-failed',
+          `управляющий канал существует только шифрованным (SRV-3), а адрес назвал "${scheme}"`,
+        );
+      }
       const opened = await open(options.url, pinned);
       socket = opened.socket;
       opened.socket.onMessage(receive);
@@ -204,6 +229,7 @@ export function createControlClient(open: ControlSocketFactory): ControlClient {
           detail: reason === '' ? 'канал закрылся до рукопожатия' : reason,
         });
         fail(new ControlClientError('closed', reason === '' ? 'канал закрыт' : reason));
+        for (const listener of closing) listener(reason);
       });
       const welcome = await new Promise<ControlResponse>((resolve) => {
         // Рукопожатие обязано ЗАВЕРШИТЬСЯ исходом (SRV-2: «Отказ любой операции
@@ -249,7 +275,11 @@ export function createControlClient(open: ControlSocketFactory): ControlClient {
       // на случай среды, где сертификат каналу не виден (страница). Это слабее
       // проверки на уровне TLS и не заменяет её: там, где отпечаток виден,
       // канал не открылся бы вовсе (см. `nodeSocket`).
-      if (pinned !== '' && welcome.fingerprint !== '' && welcome.fingerprint !== pinned) {
+      // Отсутствие отпечатка — НЕ совпадение. Пропустив пустой, закрепление
+      // отменял бы сам предъявитель: достаточно не назваться, и TOFU обходится,
+      // а пустое значение потом ложится в книгу вместо прежнего закрепления —
+      // хост оказался бы откреплён навсегда (SRV-3).
+      if (pinned !== '' && welcome.fingerprint !== pinned) {
         opened.socket.close();
         socket = undefined;
         throw new ControlClientError(
@@ -277,6 +307,10 @@ export function createControlClient(open: ControlSocketFactory): ControlClient {
     onEvent(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    onClose(listener) {
+      closing.add(listener);
+      return () => closing.delete(listener);
     },
     close() {
       socket?.close();

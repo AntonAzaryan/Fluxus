@@ -293,6 +293,11 @@ const sockets = webSocketTransportServer({ port });
 let loopDelay = null;
 /** Стоп по команде агента: авто-рестарт после него не поднимает следующий матч. */
 let stopRequested = false;
+/**
+ * Слоты, запертые админом (NTR-19). Живут ДОЛЬШЕ круга: `MatchServer` строится
+ * заново на каждый матч (D3), а запрет отменяет только человек (SRV-5).
+ */
+const barredSlots = new Set();
 const control = flag('control-adapter')
   ? standControl({
       write: (text) => process.stdout.write(text),
@@ -314,6 +319,10 @@ if (control !== null) {
   // поток байтов, а не строк, и команда вправе приехать двумя кусками.
   let pending = '';
   process.stdin.setEncoding('utf8');
+  // Команда набора — десятки байтов; всё, что длиннее без перевода строки, не
+  // команда. Потолок нужен потому, что растущая строка кончается не отказом, а
+  // `RangeError` внутри обработчика `data` — то есть смертью стенда посреди матча.
+  const COMMAND_LINE_LIMIT = 64 * 1024;
   process.stdin.on('data', (chunk) => {
     pending += chunk;
     for (;;) {
@@ -322,6 +331,10 @@ if (control !== null) {
       const line = pending.slice(0, edge);
       pending = pending.slice(edge + 1);
       if (line.trim() !== '') control.handle(line);
+    }
+    if (pending.length > COMMAND_LINE_LIMIT) {
+      pending = '';
+      process.stdout.write('\nстенд: команда без перевода строки длиннее предела — буфер сброшен\n');
     }
   });
   control.ready({
@@ -444,7 +457,15 @@ async function runMatch(number) {
       // Матч в этом состоянии стоит в лобби вечно, и молчать об этом нельзя.
       // Отказ заместителю (слот успел занять владелец — `slot-taken`) отказом
       // стенда не является: матч в этот момент идёт, а не стоит в лобби.
-      if (taken.length === 0 && server.phase === 'lobby') {
+      // Запертый слот (NTR-19) отказом стенда тоже не является: админ запретил
+      // вход в него намеренно, и «ни одного занятого» здесь означает ровно то,
+      // о чём просили. Без этой оговорки запирание слота в лобби роняло бы
+      // живой круг вместе с сидящим в нём человеком — и объясняло бы это
+      // разошедшимся форматом кадра, которого никто не менял.
+      const barredSeat = report.seats.some(
+        (seat) => seat.rejected !== null && String(seat.rejected).includes('slot-barred'),
+      );
+      if (taken.length === 0 && server.phase === 'lobby' && !barredSeat) {
         fail(
           'бот не занял ни одного слота, а матч всё ещё в лобби — ' +
             'проверьте формат кадра (--json), версию сборки и контент-пак (NTR-5)',
@@ -515,6 +536,10 @@ async function runMatch(number) {
       ? new DetachPause({
           players: match.players,
           attached: (slot) => server.slotAttached(slot),
+          // Запертого админом владельца (NTR-19) ждать нечего: его `Hello`
+          // получает названный отказ, и вернуться он не может. Без этого
+          // админ-операция «убрать игрока» замораживала бы весь матч.
+          barred: (slot) => server.slotBarredAt(slot),
           running: () => server.phase === 'running',
           state: () => server.pauseState,
           pause: () => server.pauseMatch(),
@@ -547,8 +572,17 @@ async function runMatch(number) {
     // сервер отвергает штатным `slot-taken`, и бот отпускает канал; кто в итоге
     // сел, приезжает отчётом из потока ботов.
     attach: (playerIds) => {
-      spawnBots(playerIds.map((playerId) => ({ playerId, brain, profile, behavior })));
-      process.stdout.write(`\nдедлайн: бот предложен на слоты ${playerIds.join(', ')}\n`);
+      // Запертые слоты (NTR-19) из предложения выпадают: вход в них запрещён
+      // админом, и предлагать их значило бы гарантировать отказ.
+      const offered = playerIds.filter(
+        (playerId) => !server.slotBarredAt(match.players.indexOf(playerId)),
+      );
+      if (offered.length === 0) {
+        process.stdout.write('\nдедлайн: свободных незапертых слотов нет — бот не предлагается\n');
+        return [];
+      }
+      spawnBots(offered.map((playerId) => ({ playerId, brain, profile, behavior })));
+      process.stdout.write(`\nдедлайн: бот предложен на слоты ${offered.join(', ')}\n`);
       // Места живут в другом потоке — наблюдать их отсюда нечем (BOT-4).
       return [];
     },
@@ -572,6 +606,11 @@ async function runMatch(number) {
 
   process.stdout.write(`матч #${number}: жду участников на ws://127.0.0.1:${port}\n`);
   host.start();
+  // Запреты, поставленные админом раньше (NTR-19), переносятся на новый круг:
+  // `MatchServer` у каждого матча свой, а запрет отменяет только человек (SRV-5).
+  for (const slot of barredSlots) {
+    if (slot < match.players.length) host.bar(slot);
+  }
 
   // Матч этого круга глазами агента (решение D2). Всё, что здесь читается, —
   // публичные наблюдения сервера и хоста: аренда слота (NTR-17..NTR-19),
@@ -605,20 +644,33 @@ async function runMatch(number) {
     // единого нового сообщения в игровом протоколе (NTR-4). Исходящие уезжают
     // рассылкой хоста: сам сервер ввода-вывода не делает (NTR-3).
     disconnect: (slot) => {
-      const connection = server.slotLease(slot).connection;
+      const lease = server.slotLease(slot);
+      const connection = lease.connection;
       if (connection === undefined) return 'у слота нет живого соединения';
+      // Операция адресована ВЛАДЕЛЬЦУ (SRV-5). Слот, который ведёт заместитель
+      // (NTR-18), она бы порвала впустую: политика стенда посадит нового через
+      // `substituteDelayMs`, и админу отчитались бы успехом об отменённом
+      // действии. Названный отказ честнее.
+      if (lease.role === 'substitute') {
+        return 'слот ведёт заместитель, а не владелец: отвязывать нечего (NTR-18)';
+      }
       // Отвязка идёт ЧЕРЕЗ ХОСТ: канал принадлежит ему (NTR-3), и рвать его
       // обязан он — иначе клиент считал бы себя в матче, а сервер молча
       // отбрасывал бы его ввод. Дальше действует штатный реконнект (NTR-17).
       return host.detach(connection) ? '' : 'соединение уже закрыто';
     },
     bar: (slot) => {
-      server.bar(slot);
-      host.flush();
+      host.bar(slot);
+      // Запрет ПЕРЕЖИВАЕТ авто-рестарт круга. Он живёт в `MatchServer`, а тот
+      // строится заново на каждый круг (D3 стенда): без этой памяти запрет
+      // тихо истекал бы сменой матча, и убранный игрок возвращался бы сам — а
+      // админу об этом никто бы не сказал. Снимает его только `unbar` (SRV-5).
+      barredSlots.add(slot);
       return '';
     },
     unbar: (slot) => {
-      server.unbar(slot);
+      host.unbar(slot);
+      barredSlots.delete(slot);
       return '';
     },
     freeze: () => server.pauseMatch() ?? '',
@@ -629,6 +681,7 @@ async function runMatch(number) {
       host.flush();
       return '';
     },
+
   });
 
   // Отчёт стенда — ЛИБО человеку, либо агенту, но не оба сразу: прогресс-строка

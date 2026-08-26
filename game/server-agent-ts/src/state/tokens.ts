@@ -18,7 +18,7 @@
  * риск назван и на стороне менеджера (решение D11).
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 
 /** Срок жизни пейринг-кода: пять минут — «короткоживущий» из SRV-3. */
 export const PAIRING_CODE_TTL_MS = 5 * 60 * 1000;
@@ -130,7 +130,23 @@ export function tokenStore(file: string): TokenStore {
     state.failures.filter((at) => at > now - PAIRING_CODE_TTL_MS);
 
   const write = (state: TokenFile): void => {
-    writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+    // Запись АТОМАРНАЯ: `writeFileSync` в целевой файл обрезает его первым делом,
+    // и обрыв на середине (питание, SIGKILL) оставил бы половину JSON. Разбор
+    // такого файла честно считает, что токенов нет, — то есть КАЖДЫЙ выданный
+    // токен перестаёт работать разом, и вернуть управление можно только придя к
+    // машине. Временный файл плюс `rename` делает смену одним шагом.
+    const temporary = `${file}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temporary, file);
+    // Режим ПЕРЕВЫСТАВЛЯЕТСЯ: `mode` действует только при создании, и файл,
+    // однажды оказавшийся доступным на чтение всем (восстановленный бэкап,
+    // разложенный дистрибутив), так и оставался бы таким после каждой записи.
+    try {
+      chmodSync(file, 0o600);
+    } catch {
+      // Файловая система без прав POSIX (FAT на флешке, некоторые монтирования
+      // Windows) — режим там не выражается вовсе, и это не повод падать.
+    }
   };
 
   return {
@@ -140,7 +156,13 @@ export function tokenStore(file: string): TokenStore {
       // Просроченные коды выметаются здесь же: файл не должен расти от того,
       // что кто-то нажал «пейринг» и передумал.
       state.codes = state.codes.filter((entry) => entry.expiresAt > now);
-      state.failures = recentFailures(state, now);
+      // Выдача кода — ЛОКАЛЬНАЯ команда человека у машины (SRV-3), и она снимает
+      // запирание перебором. Иначе сосед по сети, шлющий один неверный код в
+      // минуту, запирал бы пейринг навсегда: существующие токены работают, но
+      // добавить новый менеджер нельзя — отказ в самом обслуживании, которого
+      // порог не имел в виду. Перебирать при этом по-прежнему бесполезно: сбросить
+      // счётчик перебором нельзя, только доступом к самой машине.
+      state.failures = [];
       state.codes.push({ code, expiresAt: now + PAIRING_CODE_TTL_MS });
       write(state);
       return code;

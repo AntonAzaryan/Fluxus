@@ -20,6 +20,16 @@ import { ControlClientError, type ControlSocketFactory, type OpenedSocket } from
 
 /** Отпечаток предъявленного сертификата в той же форме, что и у агента. */
 function peerFingerprint(socket: TLSSocket): string {
+  // Сокет вправе оказаться НЕ TLS: `ws://` в адресе даёт обычный `net.Socket`,
+  // у которого этих методов нет вовсе, и обращение к ним роняло бы процесс
+  // держателя клиента `TypeError`-ом вместо названного отказа. Канал существует
+  // только шифрованным (SRV-3) — значит, это отказ, а не крах.
+  if (typeof socket.getPeerX509Certificate !== 'function') {
+    throw new ControlClientError(
+      'connect-failed',
+      'канал открылся без TLS: управляющий канал существует только шифрованным (SRV-3)',
+    );
+  }
   const certificate = socket.getPeerX509Certificate();
   if (certificate !== undefined) return normalizeFingerprint(certificate.fingerprint256);
   // Старая форма API — тот же отпечаток, полученный другим путём.
@@ -36,7 +46,14 @@ export const nodeSocket: ControlSocketFactory = (url, pinned) =>
     const closeHandlers: ((reason: string) => void)[] = [];
 
     socket.on('upgrade', (response) => {
-      fingerprint = peerFingerprint(response.socket as TLSSocket);
+      try {
+        fingerprint = peerFingerprint(response.socket as TLSSocket);
+      } catch (error) {
+        settled = true;
+        socket.terminate();
+        reject(error instanceof Error ? error : new ControlClientError('connect-failed', String(error)));
+        return;
+      }
       if (pinned === '' || fingerprint === pinned) return;
       // Громкий отказ (SRV-3): канал рвётся до единого сообщения, и причина
       // называет обе величины — иначе человеку нечего сравнить.

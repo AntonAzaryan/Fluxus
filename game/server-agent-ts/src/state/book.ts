@@ -11,7 +11,7 @@
  * `stopped`. Перезагрузка хоста серверы не воскрешает — и не должна: агент
  * супервизор, а не менеджер автозапуска (Non-Goals дизайна).
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 
 /** Запись книги: столько, сколько нужно, чтобы узнать процесс после рестарта агента. */
 export interface BookEntry {
@@ -102,7 +102,12 @@ export function processBook(file: string): ProcessBook {
 
   let entries = read();
   const write = (): void => {
-    writeFileSync(file, `${JSON.stringify(entries, null, 2)}\n`);
+    // Атомарно, как и файл токенов: обрыв на середине записи оставил бы половину
+    // JSON, разбор честно счёл бы книгу пустой — и пережившие агента серверы
+    // (решение D5) стали бы неуправляемыми процессами, которых никто не найдёт.
+    const temporary = `${file}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify(entries, null, 2)}\n`);
+    renameSync(temporary, file);
   };
 
   return {
@@ -127,4 +132,49 @@ export function processBook(file: string): ProcessBook {
       return live;
     },
   };
+}
+
+/**
+ * Остановка процесса, которым агент не владеет: сперва вежливо, потом жёстко.
+ *
+ * Сигнал шлётся ТОЛЬКО тому процессу, чей момент старта совпадает с запомненным
+ * (`sameProcess`): за время между сверкой книги и остановкой PID мог
+ * переиспользоваться, и SIGKILL постороннему процессу — куда худший исход, чем
+ * не остановленный сервер.
+ *
+ * Живёт здесь, рядом с книгой, а не в реестре: книга и есть то, что помнит PID и
+ * момент старта, а «тот же ли это процесс» — её собственный вопрос.
+ *
+ * Исход НАЗЫВАЕТСЯ. `ESRCH` — процесс ушёл сам между проверкой и сигналом, это и
+ * есть цель. Всё остальное (в первую очередь `EPERM`: процесс ЖИВ, но чужой —
+ * агент перезапущен под другим пользователем) — отказ: сказать человеку
+ * «остановлено» и вычеркнуть из книги сервер, который держит свой порт, значит
+ * потерять его навсегда. И SIGKILL сверяется: «послали» и «ушёл» — разные факты.
+ */
+export async function stopProcessByPid(
+  pid: number,
+  startProc: number,
+  fail: (detail: string) => Error,
+): Promise<void> {
+  const ours = (): boolean => sameProcess({ pid, startProc });
+  const signal = (kind: 'SIGTERM' | 'SIGKILL'): boolean => {
+    try {
+      process.kill(pid, kind);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+      const why = error instanceof Error ? error.message : String(error);
+      throw fail(`процесс ${String(pid)}: ${kind} не прошёл — ${why}`);
+    }
+  };
+  const settle = async (steps: number): Promise<void> => {
+    for (let i = 0; i < steps && ours(); i++) {
+      await new Promise((done) => setTimeout(done, 100));
+    }
+  };
+  if (!ours() || !signal('SIGTERM')) return;
+  await settle(30);
+  if (!ours() || !signal('SIGKILL')) return;
+  await settle(20);
+  if (ours()) throw fail(`процесс ${String(pid)} жив после SIGKILL`);
 }

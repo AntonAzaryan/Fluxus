@@ -15,6 +15,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import {
+  CONTROL_LINE_PREFIX,
   decodeStandLine,
   encodeStandCommand,
   type StandCommandKind,
@@ -52,8 +53,12 @@ export interface StandProcessOptions {
   /** Отчёт стенда доехал: агент обновляет запись реестра и будит подписчиков. */
   readonly onReport?: (report: StandReportLine) => void;
   readonly onReady?: (ready: StandReadyLine) => void;
-  /** Процесс вышел: код и сигнал — материал постмортема (SRV-6). */
-  readonly onExit?: (code: number | null, signal: string | null) => void;
+  /**
+   * Процесс вышел: код и сигнал — материал постмортема (SRV-6), а `state` —
+   * вердикт «краш или остановка». Вердикт даёт процесс, а не код выхода: смерть
+   * от SIGTERM, которого попросили мы сами, кодом `0` не сопровождается.
+   */
+  readonly onExit?: (code: number | null, signal: string | null, state: StandProcessState) => void;
   /** Новая строка лога: подписчику деталей уезжает хвост (SRV-4). */
   readonly onLog?: (line: string) => void;
 }
@@ -104,12 +109,26 @@ export function startStandProcess(options: StandProcessOptions): StandProcess {
     // stdin — канал команд, stdout — отчёт и лог, stderr — тоже лог: трейс
     // стенда по умолчанию идёт туда, и терять его в никуда нельзя.
     stdio: ['pipe', 'pipe', 'pipe'],
+    // СВОЯ группа процессов (POSIX). Иначе Ctrl+C в терминале агента шлёт SIGINT
+    // всей группе переднего плана и убивает все идущие матчи разом — а серверы
+    // обязаны переживать уход агента: на этом стоит и книга процессов (D5), и
+    // выключенный тумблер MGR-4. Останов идёт по PID и от группы не зависит.
+    ...(process.platform === 'win32' ? { windowsHide: true } : { detached: true }),
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
   });
+  // Ошибки каналов stdio — НЕ повод падать. Запись в stdin процесса, который уже
+  // умер, но чей `exit` ещё не доставлен, поднимает EPIPE необработанным
+  // событием: агент умер бы вместе со ВСЕМИ своими серверами (SRV-1). Исход
+  // висящей команды всё равно назовёт обработчик выхода.
+  child.stdin?.on('error', () => undefined);
+  child.stdout?.on('error', () => undefined);
+  child.stderr?.on('error', () => undefined);
 
   const log: string[] = [];
   const pending = new Map<number, (reason: string) => void>();
   let state: StandProcessState = 'starting';
+  /** Выход попросили МЫ: см. вердикт в обработчике `exit`. */
+  let stopping = false;
   let exitCode: number | null = null;
   let report: StandReportLine | undefined;
   let ready: StandReadyLine | undefined;
@@ -122,9 +141,20 @@ export function startStandProcess(options: StandProcessOptions): StandProcess {
     options.onLog?.(text);
   };
 
+  /** Хвосты потоков без перевода строки: их дочитывает выход процесса. */
+  const flushes: (() => void)[] = [];
+
   /** Разбор потока в линии: stdout — поток байтов, линия вправе приехать частями. */
   const reader = (handle: (line: string) => void): ((chunk: string) => void) => {
     let rest = '';
+    // Предсмертная строка без перевода — самая ценная для разбора (SRV-6):
+    // выход процесса её дочитывает, а не выбрасывает вместе с буфером.
+    flushes.push(() => {
+      if (rest === '') return;
+      const tail = rest;
+      rest = '';
+      handle(tail);
+    });
     return (chunk: string): void => {
       rest += chunk;
       for (;;) {
@@ -134,8 +164,10 @@ export function startStandProcess(options: StandProcessOptions): StandProcess {
         rest = rest.slice(edge + 1);
       }
       // Прогресс-строка стенда пишется без перевода строки; чтобы она не копилась
-      // в буфере бесконечно, длинный хвост считаем линией сам.
-      if (rest.length > LOG_LINE_LIMIT) {
+      // в буфере бесконечно, длинный хвост считаем линией сам. УПРАВЛЯЮЩУЮ линию
+      // так резать нельзя: половина JSON перестаёт быть отчётом и молча уходит в
+      // лог — отчёт пропадает, а видимая запись застывает на прошлой (решение D2).
+      if (rest.length > LOG_LINE_LIMIT && !rest.startsWith(CONTROL_LINE_PREFIX)) {
         handle(rest);
         rest = '';
       }
@@ -170,23 +202,25 @@ export function startStandProcess(options: StandProcessOptions): StandProcess {
   const exited = new Promise<void>((done) => {
     child.once('exit', (code, signal) => {
       exitCode = code;
-      // Крах — ВСЁ, кроме нулевого кода (SRV-1): и ненулевой код, и смерть от
-      // сигнала. Убитый OOM-killer'ом процесс кода не оставляет вовсе, и
-      // считать его «остановленным» значило бы прятать ночной краш. Остановку,
-      // которую попросили мы сами, реестр помечает `stopped` явно — ему не
-      // нужно выводить её из кода выхода.
-      state = code === 0 ? 'stopped' : 'crashed';
+      for (const flush of flushes) flush();
+      // Крах — всё, кроме нулевого кода И кроме выхода, которого мы САМИ
+      // попросили (SRV-1). Убитый OOM-killer'ом процесс кода не оставляет вовсе,
+      // и считать его «остановленным» значило бы прятать ночной краш; но и
+      // обратное неверно: стенд без обработчика SIGTERM уходит от сигнала, а на
+      // Windows иначе не уходит вовсе — каждая штатная остановка объявлялась бы
+      // крахом и писала постмортем (SRV-6).
+      state = stopping || code === 0 ? 'stopped' : 'crashed';
       for (const [id, resolve] of pending) {
         resolve('процесс сервера завершился');
         pending.delete(id);
       }
-      options.onExit?.(code, signal);
+      options.onExit?.(code, signal, state);
       done();
     });
     child.once('error', (error) => {
       state = 'crashed';
       remember(`процесс не запустился: ${error.message}`);
-      options.onExit?.(null, null);
+      options.onExit?.(null, null, state);
       done();
     });
   });
@@ -248,8 +282,16 @@ export function startStandProcess(options: StandProcessOptions): StandProcess {
     },
     async stop() {
       if (state === 'crashed' || state === 'stopped') return;
+      stopping = true;
       child.kill('SIGTERM');
-      const stopped = await Promise.race([exited.then(() => true), wait(GRACE_MS).then(() => false)]);
+      // Таймер милости СНИМАЕТСЯ: проигравший в гонке `setTimeout` иначе держит
+      // цикл событий ещё три секунды на каждый остановленный сервер.
+      let grace: ReturnType<typeof setTimeout> | undefined;
+      const patience = new Promise<boolean>((done) => {
+        grace = setTimeout(() => { done(false); }, GRACE_MS);
+      });
+      const stopped = await Promise.race([exited.then(() => true), patience]);
+      if (grace !== undefined) clearTimeout(grace);
       if (!stopped) child.kill('SIGKILL');
       await exited;
     },

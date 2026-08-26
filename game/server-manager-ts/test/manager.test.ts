@@ -195,6 +195,54 @@ describe('отказ подключения к хосту наблюдаем (MG
     );
     expect(nodesOf(managerView(session.state), 'mg-notice')[0]?.text).toContain('connect-failed');
   });
+
+  it('УМЕРШИЙ канал тоже назван: хост перестаёт числиться живым', async () => {
+    const agent = await liveAgent();
+    const session = manager();
+    await session.addRemote(agent.controlUrl, agent.tokens.issueCode(Date.now()), 'VPS');
+    expect(session.state.hosts[0]?.connected).toBe(true);
+
+    // Агент ушёл (машина выключилась, сеть пропала, токен отозван — SRV-3).
+    // Канал закрывается, и об этом обязано быть сказано: молчащий менеджер
+    // показывал бы прошлое состояние как настоящее — живой хост и его серверы,
+    // которых давно нет (MGR-2), — а узналось бы это отказом первой же кнопки.
+    await agent.close();
+    await until(() => session.state.hosts[0]?.connected === false, 5000);
+
+    expect(session.state.hosts[0]?.connected).toBe(false);
+    expect(session.state.hosts[0]?.failure).toContain('канал закрыт');
+    expect(nodesOf(managerView(session.state), 'mg-host__failure')[0]?.text).toContain('канал закрыт');
+  });
+
+  it('серверы двух хостов не путаются одинаковыми идентификаторами (MGR-2, MGR-3)', async () => {
+    // Реестр нумерует серверы У СЕБЯ (`srv-1`, `srv-2`…), поэтому у двух хостов
+    // первые серверы называются одинаково. Опознавай менеджер сервер голым
+    // идентификатором — и остановка на одном хосте закрывала бы детали чужого,
+    // а подсветка выбранного зажигалась бы сразу в двух строках.
+    const first = await liveAgent();
+    const second = await liveAgent();
+    const session = manager();
+    await session.addLocal(first.controlUrl, first.tokens.issueCode(Date.now()), '');
+    await session.addRemote(second.controlUrl, second.tokens.issueCode(Date.now()), 'VPS');
+    const hostA = session.state.hosts[0]!.id;
+    const hostB = session.state.hosts[1]!.id;
+
+    await session.start(hostA, params());
+    await session.start(hostB, params());
+    const rows = session.state.servers;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.entry.id).toBe(rows[1]!.entry.id);
+
+    await session.select(hostB, rows[1]!.entry.id);
+    expect(session.state.details?.host).toBe(hostB);
+    // Подсвечена РОВНО одна строка — та, чей хост выбран.
+    const selected = nodesOf(managerView(session.state), 'mg-server--selected');
+    expect(selected).toHaveLength(1);
+
+    // Остановка сервера ДРУГОГО хоста деталей не закрывает.
+    await session.stop(hostA, rows[0]!.entry.id);
+    expect(session.state.details?.host).toBe(hostB);
+  });
 });
 
 describe('список серверов и запуск (MGR-2)', () => {

@@ -153,15 +153,24 @@ export async function startAgent(options: AgentOptions): Promise<Agent> {
   // оставить админа с чужими процессами на своей машине.
   for (const entry of survivors) registry.adopt(entry);
 
-  const control = await startControlServer({
-    port: options.controlPort,
-    ...(controlHost === undefined ? {} : { host: controlHost }),
-    cert: certificate,
-    tokens,
-    registry,
-    versions: options.versions,
-    ...(options.now === undefined ? {} : { now: options.now }),
-  });
+  let control: ControlServer;
+  try {
+    control = await startControlServer({
+      port: options.controlPort,
+      ...(controlHost === undefined ? {} : { host: controlHost }),
+      cert: certificate,
+      tokens,
+      registry,
+      versions: options.versions,
+      ...(options.now === undefined ? {} : { now: options.now }),
+    });
+  } catch (error) {
+    // Раздача уже СЛУШАЕТ (она поднялась выше): уйдя отсюда, не закрыв её, агент
+    // оставил бы за собой занятый порт, который никто больше не закроет, — и
+    // повторная попытка запуска упёрлась бы уже в него.
+    await http?.close();
+    throw error;
+  }
   endpoint.server = control;
 
   return {
