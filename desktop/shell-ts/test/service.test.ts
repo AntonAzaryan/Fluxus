@@ -6,26 +6,38 @@
  * хост, у которого есть процессы и порты. Разделение то же, что у корней:
  * контракт в сьюте, файловая механика — в своих тестах.
  */
-import { chmod, mkdir, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { normalizeAppProfile } from '../src/bridge/profile.js';
 import { createHostServices, endpointOf, serviceArgs } from '../src/host/service.js';
 import {
   detachedFiles,
+  forgetDetached,
   processStartTicks,
+  readPinFile,
   sameProcess,
   serviceSpawnOptions,
 } from '../src/host/detached.js';
 import {
   DEAD_SERVICE_SCRIPT,
+  DETACHED_SERVICE_SCRIPT,
   dropTree,
   freePort,
   makeTree,
   MARKED_SERVICE_SCRIPT,
   SERVICE_SCRIPT,
   squat,
+  waitFor,
 } from './support.js';
+
+/**
+ * Закрепление, которое пишет сервис-пустышка: своего сертификата у неё нет, и
+ * отпечаток ей называет тот, кто её объявил (`--pin`). Форма — та же, что у
+ * настоящего: 64 hex-знака нижнего регистра (решение D1).
+ */
+const SERVICE_PIN = 'b3'.repeat(32);
 
 const cleanups: (() => Promise<void>)[] = [];
 
@@ -37,6 +49,7 @@ function profileWith(
   port: number,
   script = SERVICE_SCRIPT,
   args: readonly string[] = ['--port', '{port}', '--host', '{host}'],
+  detached = false,
 ): ReturnType<typeof normalizeAppProfile> {
   return normalizeAppProfile(
     {
@@ -51,6 +64,7 @@ function profileWith(
           script,
           args: [...args],
           address: `tcp://127.0.0.1:${String(port)}`,
+          detached,
         },
       ],
     },
@@ -82,6 +96,22 @@ describe('адрес — единственный источник правды 
     // Без каталога состояния подстановка пуста: выдумывать путь контейнер не
     // вправе — процесс тогда написал бы адрес неизвестно куда.
     expect(serviceArgs(profile.services[0]!)).toEqual(['--address-file', '']);
+  });
+
+  it('путь файла закрепления подставляется тем же способом (DSK-8, решение D2)', () => {
+    const profile = profileWith(8080, SERVICE_SCRIPT, ['--pin-file', '{pinFile}']);
+    expect(serviceArgs(profile.services[0]!, '/state/stand.address', '/state/stand.pin')).toEqual([
+      '--pin-file',
+      '/state/stand.pin',
+    ]);
+    // Признак закрепления — сама подстановка, и новых полей у профиля нет: чьё
+    // объявление её не подставляет, тот закрепления не обещает и живёт как жил.
+    expect(serviceArgs(profile.services[0]!)).toEqual(['--pin-file', '']);
+    const plain = profileWith(8080, SERVICE_SCRIPT, ['--port', '{port}']);
+    expect(serviceArgs(plain.services[0]!, '/state/stand.address', '/state/stand.pin')).toEqual([
+      '--port',
+      '8080',
+    ]);
   });
 });
 
@@ -213,5 +243,134 @@ describe('жизненный цикл объявленного сервиса (D
 
     await services.closeAll();
     expect((await services.state('stand')).running).toBe(false);
+  });
+});
+
+describe('закрепление сертификата объявленного сервиса (DSK-8)', () => {
+  it('валидное содержимое читается, мусор и отсутствие — «закрепления нет» (решение D1)', async () => {
+    const root = await makeTree();
+    cleanups.push(() => dropTree(root));
+    const files = detachedFiles(join(root, 'services'), 'stand');
+    // Имя файла — имя сервиса из ОБЪЯВЛЕНИЯ, рядом с адресным и pid-файлом.
+    expect(files.pinFile).toBe(join(root, 'services', 'stand.pin'));
+
+    // Файла нет вовсе — закрепления нет: сервис его ещё не писал.
+    expect(readPinFile(files.pinFile)).toBe('');
+    await writeFile(files.pinFile, `  ${SERVICE_PIN}\n`);
+    expect(readPinFile(files.pinFile)).toBe(SERVICE_PIN);
+
+    // Всё, что не отпечаток, читается как отсутствие закрепления: у сверки
+    // сертификатов «не понял» обязано означать отказ, а не сравнение с мусором.
+    for (const garbage of [
+      '',
+      '\n',
+      'закрепления тут нет',
+      SERVICE_PIN.toUpperCase(),
+      SERVICE_PIN.slice(0, 63),
+      `${SERVICE_PIN}0`,
+      `${SERVICE_PIN} ${SERVICE_PIN}`,
+    ]) {
+      await writeFile(files.pinFile, garbage);
+      expect(readPinFile(files.pinFile), JSON.stringify(garbage)).toBe('');
+    }
+  });
+
+  it('забытый сервис уносит и своё закрепление', async () => {
+    const root = await makeTree();
+    cleanups.push(() => dropTree(root));
+    const files = detachedFiles(join(root, 'services'), 'stand');
+    await writeFile(files.addressFile, 'tcp://127.0.0.1:1\n');
+    await writeFile(files.pidFile, '1 0\n');
+    await writeFile(files.pinFile, `${SERVICE_PIN}\n`);
+
+    forgetDetached(files);
+    // Оставленное закрепление продолжало бы расширять доверие на сертификат
+    // сервиса, которого больше нет.
+    expect(existsSync(files.pinFile)).toBe(false);
+    expect(existsSync(files.addressFile)).toBe(false);
+    expect(existsSync(files.pidFile)).toBe(false);
+  });
+
+  it('закрепление появляется после записи файла САМИМ сервисом и переживает сессию (решение D3)', async () => {
+    const port = await freePort();
+    const root = await makeTree();
+    const stateDir = join(root, 'services');
+    const profile = profileWith(
+      port,
+      DETACHED_SERVICE_SCRIPT,
+      ['--port', '{port}', '--address-file', '{addressFile}', '--pin-file', '{pinFile}', '--pin', SERVICE_PIN],
+      true,
+    );
+    const services = createHostServices({ profile, stateDir });
+    cleanups.push(async () => {
+      // Отвязываемый переживает сессию намеренно (DSK-7) — прогон уносит его
+      // явной остановкой, а не надеждой на закрытие.
+      await services.stop('stand');
+      await services.closeAll();
+    });
+    cleanups.push(() => dropTree(root));
+
+    // Закрепление строит не контейнер: пока сервис не написал файл, закреплять
+    // нечего (DSK-8 — «контейнер MUST NOT строить закрепление сам»).
+    expect(services.certificatePins()).toEqual([]);
+
+    await services.start('stand');
+    await waitFor(() => services.certificatePins().length > 0);
+    expect(services.certificatePins()).toEqual([SERVICE_PIN]);
+
+    // Новая сессия того же профиля на том же каталоге состояния: процесса она не
+    // поднимала, а закрепление пережившего читает из того же файла (DSK-8,
+    // сценарий «Сервис пережил сессию»).
+    const next = createHostServices({ profile, stateDir });
+    expect(next.certificatePins()).toEqual([SERVICE_PIN]);
+
+    // Испорченный файл выпадает из множества целиком: доверять половине строки
+    // не на чем.
+    await writeFile(detachedFiles(stateDir, 'stand').pinFile, 'не отпечаток\n');
+    expect(services.certificatePins()).toEqual([]);
+  });
+
+  it('непригодный каталог состояния — пустое множество, а не исключение', async () => {
+    const root = await makeTree();
+    cleanups.push(() => dropTree(root));
+    const stateDir = join(root, 'services');
+    const services = createHostServices({
+      profile: profileWith(await freePort(), DETACHED_SERVICE_SCRIPT, ['--port', '{port}'], true),
+      stateDir,
+    });
+    // Вопрос задаёт проверка сертификата: исключение здесь означало бы упавший
+    // контейнер вместо отвергнутого сертификата. Громко тот же отказ звучит на
+    // запуске сервиса.
+    if (process.platform !== 'win32') {
+      await mkdir(stateDir, { recursive: true, mode: 0o777 });
+      await chmod(stateDir, 0o777);
+      expect(() => detachedFiles(stateDir, 'stand')).toThrow(/на запись/);
+    }
+    expect(services.certificatePins()).toEqual([]);
+  });
+
+  it('сервис без закрепления множества не пополняет', async () => {
+    const port = await freePort();
+    const root = await makeTree();
+    const stateDir = join(root, 'services');
+    // Тот же отвязываемый сервис, но его объявление `{pinFile}` не подставляет:
+    // «Сервис без файла закрепления SHALL вести себя как сегодня» (DSK-8).
+    const services = createHostServices({
+      profile: profileWith(
+        port,
+        DETACHED_SERVICE_SCRIPT,
+        ['--port', '{port}', '--address-file', '{addressFile}'],
+        true,
+      ),
+      stateDir,
+    });
+    cleanups.push(async () => {
+      await services.stop('stand');
+      await services.closeAll();
+    });
+    cleanups.push(() => dropTree(root));
+
+    await services.start('stand');
+    expect(services.certificatePins()).toEqual([]);
   });
 });

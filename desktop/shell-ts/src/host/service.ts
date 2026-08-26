@@ -23,6 +23,7 @@ import {
   detachedSurvivor,
   forgetDetached,
   readAddressFile,
+  readPinFile,
   serviceSpawnOptions,
   stopPid,
   writePid,
@@ -66,6 +67,20 @@ export interface HostServices {
   /** Остановить сервис, поднятый ЭТИМ контейнером; чужой — оставить как есть. */
   stop(id: BridgeServiceId): Promise<BridgeServiceState>;
   state(id: BridgeServiceId): Promise<BridgeServiceState>;
+  /**
+   * Закрепления сертификатов объявленных сервисов (DSK-8, решение D3): те, что
+   * сервисы написали сами и что прочитались как отпечатки.
+   *
+   * Множество, а не адрес и не origin: привязка закрепления к адресу
+   * потребовала бы разбирать адресную строку, чего контейнер не вправе (DSK-7).
+   * Закрепление по идентичности сертификата строже модели CA и в такой привязке
+   * не нуждается.
+   *
+   * Наружу страницы это не выходит: спрашивает реализация контейнера, когда
+   * платформа отвергла сертификат, — словарь границы (DSK-2) отсюда ничего не
+   * получает.
+   */
+  certificatePins(): readonly string[];
   /** Сколько процессов контейнер поднял и держит. Нужно проверкам, не странице. */
   owned(): number;
   /** Снять всё поднятое: закрытие сессии и завершение контейнера (DSK-7). */
@@ -86,17 +101,27 @@ export function endpointOf(address: string): { host: string; port: number } | un
 
 /**
  * Аргументы запуска: `{port}` и `{host}` приезжают из адреса, а не второй
- * записью числа в манифесте (см. `ProfileService`), а `{addressFile}` — из
- * каталога состояния сервисов: путь выбирает контейнер, и страница на него не
- * влияет никак (DSK-7).
+ * записью числа в манифесте (см. `ProfileService`), а `{addressFile}` и
+ * `{pinFile}` — из каталога состояния сервисов: пути выбирает контейнер, и
+ * страница на них не влияет никак (DSK-7).
+ *
+ * `{pinFile}` — единственный признак того, что сервис обещает закрепление
+ * сертификата (DSK-8, решение D2): новых полей схема профиля не получает, как не
+ * получала их и подстановка адресного файла. Сервис, чьё объявление её не
+ * подставляет, живёт как жил.
  */
-export function serviceArgs(service: ProfileService, addressFile = ''): readonly string[] {
+export function serviceArgs(
+  service: ProfileService,
+  addressFile = '',
+  pinFile = '',
+): readonly string[] {
   const endpoint = endpointOf(service.address);
   return service.args.map((arg) =>
     arg
       .replaceAll('{port}', endpoint === undefined ? '' : String(endpoint.port))
       .replaceAll('{host}', endpoint?.host ?? '')
-      .replaceAll('{addressFile}', addressFile),
+      .replaceAll('{addressFile}', addressFile)
+      .replaceAll('{pinFile}', pinFile),
   );
 }
 
@@ -155,7 +180,13 @@ export function createHostServices(options: HostServicesOptions): HostServices {
     return declared;
   };
 
-  /** Файлы отвязываемого сервиса; у обычного их нет — ему нечего переживать. */
+  /**
+   * Файлы отвязываемого сервиса; у обычного их нет — ему нечего переживать.
+   *
+   * Закрепление сертификата (DSK-8) лежит среди них по той же причине, по
+   * которой оно объявлено рядом с адресным файлом (решение D1): его читает и та
+   * сессия, которая сервиса не поднимала.
+   */
   const filesOf = (declared: ProfileService): DetachedFiles | undefined =>
     declared.detached ? detachedFiles(stateDir, declared.id) : undefined;
 
@@ -198,7 +229,8 @@ export function createHostServices(options: HostServicesOptions): HostServices {
   };
 
   const launch = (declared: ProfileService, files: DetachedFiles | undefined): Owned => {
-    const child = spawn(runtime, [declared.script, ...serviceArgs(declared, files?.addressFile ?? '')], {
+    const args = serviceArgs(declared, files?.addressFile ?? '', files?.pinFile ?? '');
+    const child = spawn(runtime, [declared.script, ...args], {
       ...serviceSpawnOptions(declared.detached, process.platform),
       ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
     });
@@ -398,6 +430,29 @@ export function createHostServices(options: HostServicesOptions): HostServices {
       const survivor = await survivorState(declared, files);
       if (survivor !== undefined) return survivor;
       return stateOf(declared, await answers(declared.address));
+    },
+    certificatePins() {
+      // Файлы читаются В МОМЕНТ вопроса и не кешируются: закрепление пишет сам
+      // сервис, и сессия, задавшая вопрос, могла не поднимать его вовсе —
+      // переживший прежнюю сессию процесс написал свой файл до неё (DSK-8).
+      const pins = new Set<string>();
+      for (const declared of profile.services) {
+        // Непригодный каталог состояния (чужой владелец, права на запись всем)
+        // `detachedFiles` называет отказом — и здесь этот отказ НЕ летит дальше:
+        // вопрос задан проверкой сертификата, и исключение на нём означало бы
+        // упавший контейнер вместо отвергнутого сертификата. Громко тот же отказ
+        // звучит на запуске сервиса (`start`), где ему и место.
+        let pin = '';
+        try {
+          const files = filesOf(declared);
+          if (files === undefined) continue;
+          pin = readPinFile(files.pinFile);
+        } catch {
+          continue;
+        }
+        if (pin !== '') pins.add(pin);
+      }
+      return [...pins];
     },
     owned() {
       return [...owned.values()].filter((live) => live.alive).length;

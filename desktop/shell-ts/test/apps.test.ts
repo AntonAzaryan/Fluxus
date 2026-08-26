@@ -102,6 +102,12 @@ describe('профили приложений репозитория', () => {
     expect(args[args.indexOf('--host') + 1]).toBe('0.0.0.0');
     // И раздача клиента объявлена (`--bundle`), чтобы страница входа не была 404.
     expect(args).toContain('--bundle');
+    // Закрепление сертификата приезжает тем же способом, что и адрес (DSK-8,
+    // MGR-5): без него wss из страницы менеджера к локальному агенту не
+    // открывается вовсе — self-signed сертификат Chromium отвергает так же, как
+    // в обычной вкладке. Подстановка `{pinFile}` и есть признак того, что сервис
+    // закрепление обещает (решение D2).
+    expect(args[args.indexOf('--pin-file') + 1]).toBe('{pinFile}');
     // И он единственный отвязываемый: у игры стенд матча умирает с сессией.
     const game = await loadAppProfile(join(PACKAGE, 'apps/game.app.json'));
     expect(game.services[0]?.detached).toBe(false);
@@ -125,6 +131,7 @@ describe('профиль менеджера как whitelist моста (DSK-5, 
       Promise.resolve({ id, running: false, address: '' }),
     state: (id: string): Promise<BridgeServiceState> =>
       Promise.resolve({ id, running: false, address: '' }),
+    certificatePins: () => [],
     owned: () => 0,
     closeAll: () => Promise.resolve(),
   };

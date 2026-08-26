@@ -25,8 +25,15 @@
  *
  * ## Чего этот файл НЕ делает
  *
- * Не повторяет ни одного утверждения сьюта и не заводит своих: всё, что здесь
- * есть, — поднятие контейнера и перевод вызовов границы в его канал.
+ * Не повторяет ни одного утверждения сьюта: всё, что здесь есть, — поднятие
+ * контейнера и перевод вызовов границы в его канал.
+ *
+ * Своё утверждение здесь ровно одно — закрепление сертификата (DSK-8), и живёт
+ * оно здесь по необходимости: общий сьют границы выразить его не может. Проверке
+ * нужна НАСТОЯЩАЯ проверка сертификата, которую контейнер дополняет; у
+ * реализации на чистом Node её нет вовсе — там некому отвергнуть self-signed
+ * сертификат и, значит, нечего дополнять. Вне гейта эта проверка тем же самым
+ * прогоном, что и сьют (DSK-6).
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -35,6 +42,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
 import type {
   BridgeChange,
   BridgeChangeListener,
@@ -63,6 +71,7 @@ import {
   putFile,
   readText,
   SERVICE_SCRIPT,
+  TLS_SERVICE_SCRIPT,
 } from '../support.js';
 
 const PACKAGE = join(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -413,3 +422,149 @@ async function open(kase: ContractCase): Promise<ContractSession> {
 }
 
 describeContainerContract('electron-контейнер', open);
+
+/**
+ * Имя шифрованного сервиса — СВОЁ у каждого из двух случаев и отличное от имени
+ * сьюта (`SERVICE`).
+ *
+ * Каталог состояния сервисов у контейнера один на все прогоны
+ * (`userData/services`), а файлы отвязываемого сервиса именуются его
+ * идентификатором (DSK-7). Общее имя означало бы, что случай видит адресный и
+ * пин-файл, оставленные ЧУЖИМ прогоном — оборванным или соседним, — и «канал не
+ * открылся» могло бы значить «подключились не туда».
+ */
+const pinningService = (pinned: boolean): string => (pinned ? 'pinned-tls' : 'unpinned-tls');
+
+/**
+ * Профиль с ШИФРОВАННЫМ объявленным сервисом (DSK-8). Закрепление обещает та же
+ * подстановка, что и адрес: объявление, подставляющее `{pinFile}`, — и есть
+ * признак (решение D2). Сервис отвязываемый: файлы, которыми он называет свой
+ * адрес и своё закрепление, лежат в каталоге состояния (решение D1).
+ */
+function pinningManifest(bundle: string, port: number, pinned: boolean): string {
+  return JSON.stringify({
+    id: 'contract-pinning',
+    title: 'Fluxus Contract TLS',
+    bundle,
+    roots: [],
+    capabilities: ['service'],
+    services: [
+      {
+        id: pinningService(pinned),
+        script: TLS_SERVICE_SCRIPT,
+        args: [
+          '--port',
+          '{port}',
+          '--address-file',
+          '{addressFile}',
+          ...(pinned ? ['--pin-file', '{pinFile}'] : []),
+        ],
+        address: `wss://127.0.0.1:${String(port)}`,
+        detached: true,
+      },
+    ],
+    window: { width: 900, height: 700 },
+  });
+}
+
+/** Что вернула страница, попытавшись открыть шифрованный канал. */
+interface SocketAttempt {
+  readonly open: boolean;
+  readonly error?: string;
+}
+
+/**
+ * Поднимает контейнер на профиле с шифрованным сервисом, даёт странице открыть к
+ * нему канал и уносит за собой всё: сервис отвязываемый и сессию переживает
+ * намеренно (DSK-7), поэтому останавливается ЯВНО.
+ */
+async function withPinnedService(
+  pinned: boolean,
+  body: (attempt: SocketAttempt, service: BridgeServiceState) => void,
+): Promise<void> {
+  const id = pinningService(pinned);
+  const workspace = await makeTree();
+  const bundleDirectory = join(workspace, 'bundle');
+  await mkdir(bundleDirectory, { recursive: true });
+  await putFile(bundleDirectory, 'index.html', '<!doctype html><title>pinning</title>');
+  const manifest = join(workspace, 'pinning.app.json');
+  await writeFile(manifest, pinningManifest(bundleDirectory, await freePort(), pinned));
+
+  const log: string[] = [];
+  const child = spawn(BINARY, [ENTRY, ...launchFlags(), '--app', manifest, '--contract'], {
+    cwd: PACKAGE,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
+  });
+  let markReady: () => void = () => undefined;
+  const started = new Promise<void>((done, fail) => {
+    markReady = done;
+    child.on('error', fail);
+    child.on('close', (code) => {
+      fail(new Error(`контейнер закрылся, не начав прогон (код ${String(code)}):\n${log.join('\n')}`));
+    });
+  });
+  const channel = connect(child, () => {
+    markReady();
+  }, log);
+  await started;
+
+  try {
+    const service = (await channel.call('startService', [id])) as BridgeServiceState;
+    // Адрес пишет сам процесс (DSK-7): контейнер отдал странице ту строку,
+    // которую нашёл в его адресном файле.
+    const attempt = (await channel.send('socket', { url: service.address })) as SocketAttempt;
+    body(attempt, service);
+  } finally {
+    const ended = new Promise<void>((done) => {
+      child.once('close', () => {
+        done();
+      });
+    });
+    // Отказ остановки ГЛОТАЕТСЯ намеренно: бросок из `finally` подменил бы собой
+    // находку случая. Осиротеть при этом некому больше, чем одному процессу
+    // пустышки: имя сервиса своё у каждого случая, и следующий прогон найдёт
+    // его же, а не примет чужие файлы за свои.
+    await channel.call('stopService', [id]).catch(() => undefined);
+    await channel.close();
+    await ended;
+    await dropTree(workspace);
+  }
+}
+
+/**
+ * Сервис вправду поднят и вправду шифрованный.
+ *
+ * Проверяется в ОБОИХ случаях, и в отрицательном это не педантизм: «канал не
+ * открылся» само по себе выполнимо и тем, что подключаться было не к чему —
+ * пустышка не поднялась, — а такой случай не сказал бы о закреплении ничего.
+ */
+function servingEncrypted(service: BridgeServiceState): void {
+  expect(service.running, JSON.stringify(service)).toBe(true);
+  expect(service.address.startsWith('wss://'), service.address).toBe(true);
+}
+
+describe('electron-контейнер: закрепление сертификата объявленного сервиса (DSK-8)', () => {
+  it('страница открывает шифрованный канал к сервису с закреплением', async () => {
+    await withPinnedService(true, (attempt, service) => {
+      servingEncrypted(service);
+      // Штатная проверка платформы этот сертификат отвергает — цепочки у него
+      // нет, — и открыть канал позволяет ровно одно: его отпечаток равен
+      // закреплению, которое сервис написал сам.
+      expect(attempt.error ?? '').toBe('');
+      expect(attempt.open).toBe(true);
+    });
+  }, 120_000);
+
+  it('тот же сервис без закрепления — канал отвергнут, как в браузере', async () => {
+    await withPinnedService(false, (attempt, service) => {
+      // Сервис тот же и поднят так же — разница ровно одна: пин-файла он не
+      // писал, потому что его объявление не подставляет `{pinFile}`.
+      servingEncrypted(service);
+      // «Сервис без файла закрепления SHALL вести себя как сегодня»: сертификат
+      // такой же self-signed, а принять его не на чем — закрепление одного
+      // сервиса не ослабляет проверку ни для кого другого.
+      expect(attempt.open).toBe(false);
+    });
+  }, 120_000);
+});

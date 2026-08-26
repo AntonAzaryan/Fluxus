@@ -21,6 +21,7 @@ import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import type { SpawnOptions } from 'node:child_process';
 import type { BridgeServiceId } from '../bridge/types.js';
+import { isFingerprint } from './certificate.js';
 
 /**
  * Каталог состояния сервисов по умолчанию: реализация вправе назвать свой.
@@ -115,6 +116,16 @@ export function serviceSpawnOptions(detached: boolean, platform: string): SpawnO
 export interface DetachedFiles {
   readonly addressFile: string;
   readonly pidFile: string;
+  /**
+   * Файл закрепления сертификата (DSK-8, решение D1): формат задаёт контейнер —
+   * одна строка с отпечатком, — а пишет его САМ процесс сервиса по подстановке
+   * `{pinFile}`, тем же путём, каким он называет свой адрес.
+   *
+   * Лежит рядом с адресным файлом, потому что живёт ровно столько же: закрепление
+   * обязано находиться и через границу сессий — новая сессия, нашедшая
+   * пережившего, читает его отсюда же (DSK-8, сценарий «Сервис пережил сессию»).
+   */
+  readonly pinFile: string;
 }
 
 export function detachedFiles(stateDir: string, id: BridgeServiceId): DetachedFiles {
@@ -128,6 +139,7 @@ export function detachedFiles(stateDir: string, id: BridgeServiceId): DetachedFi
   return {
     addressFile: join(stateDir, `${safe}.address`),
     pidFile: join(stateDir, `${safe}.pid`),
+    pinFile: join(stateDir, `${safe}.pin`),
   };
 }
 
@@ -135,6 +147,25 @@ export function detachedFiles(stateDir: string, id: BridgeServiceId): DetachedFi
 export function readAddressFile(file: string): string {
   try {
     return readFileSync(file, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Закрепление сертификата, записанное самим сервисом (DSK-8, решение D1);
+ * пустая строка — «закрепления нет».
+ *
+ * Валидным считается РОВНО отпечаток: 64 шестнадцатеричных знака нижнего
+ * регистра после trim. Всё прочее — пустой файл, недописанная строка, чужой
+ * текст — читается как отсутствие закрепления, а не как закрепление, которому
+ * не с чем совпасть: у сверки сертификатов «не понял» обязано означать отказ, а
+ * не неудачное сравнение с мусором.
+ */
+export function readPinFile(file: string): string {
+  try {
+    const pin = readFileSync(file, 'utf8').trim();
+    return isFingerprint(pin) ? pin : '';
   } catch {
     return '';
   }
@@ -180,6 +211,9 @@ export function readPid(file: string): number {
 export function forgetDetached(files: DetachedFiles): void {
   rmSync(files.pidFile, { force: true });
   rmSync(files.addressFile, { force: true });
+  // Закрепление уходит вместе с адресом (DSK-8): оставленное, оно продолжало бы
+  // расширять доверие на сертификат сервиса, которого больше нет.
+  rmSync(files.pinFile, { force: true });
 }
 
 /** Жив ли процесс: сигнал `0` ничего не делает, но отвечает на вопрос существования. */

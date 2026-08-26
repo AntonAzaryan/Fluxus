@@ -23,6 +23,12 @@
  * байты (base64, потому что канал текстовый) и события. Сам сьют об этом канале
  * не знает вовсе: он говорит с `DesktopBridge`, а собирает этот объект поверх
  * канала уже сторона теста.
+ *
+ * Сверх моста помощник умеет ровно две вещи, которые мостом и не являются:
+ * запросить раздачу обычным `fetch` и открыть `WebSocket` — то есть сделать то,
+ * что страница делает СВОИМИ силами. Второе нужно закреплению сертификата
+ * (DSK-8): проверку сертификата проходит настоящий Chromium, и увидеть её
+ * результат можно только из страницы.
  */
 import type { BrowserWindow } from 'electron';
 import { app } from 'electron';
@@ -119,6 +125,36 @@ const HELPER = `(() => {
       return true;
     },
     drain: () => events.splice(0),
+    // Шифрованный канал ИЗ СТРАНИЦЫ (DSK-8): открылся или нет — единственное,
+    // что о нём спрашивают. Открывает его тот же WebSocket, которым страница
+    // менеджера идёт к локальному агенту (MGR-5), и проверку сертификата он
+    // проходит настоящую. (Обратных кавычек здесь быть не должно: код помощника
+    // живёт в шаблонной строке, и первая же кавычка оборвала бы её.)
+    socket: (url) =>
+      new Promise((done) => {
+        let settled = false;
+        let channel = null;
+        const finish = (result) => {
+          if (settled) return;
+          settled = true;
+          try {
+            if (channel !== null) channel.close();
+          } catch (error) {
+            void error;
+          }
+          done(result);
+        };
+        try {
+          channel = new WebSocket(url);
+        } catch (error) {
+          finish({ open: false, error: String(error) });
+          return;
+        }
+        channel.onopen = () => finish({ open: true });
+        channel.onerror = () => finish({ open: false, error: 'канал отвергнут' });
+        channel.onclose = () => finish({ open: false, error: 'канал закрылся, не открывшись' });
+        setTimeout(() => finish({ open: false, error: 'канал не ответил' }), 10000);
+      }),
     fetch: async (path) => {
       const response = await fetch(path);
       return {
@@ -142,6 +178,8 @@ interface ContractRequest {
   readonly ask?: number;
   readonly allow?: boolean;
   readonly path?: string;
+  /** Адрес шифрованного канала, который открывает страница (DSK-8). */
+  readonly url?: string;
 }
 
 /** Вызов помощника в странице: код собирается из JSON-безопасных значений. */
@@ -158,6 +196,8 @@ async function answer(window: BrowserWindow, opened: OpenedApp, request: Contrac
       return await inPage(window, 'call', request.method, request.args ?? []);
     case 'fetch':
       return await inPage(window, 'fetch', request.path);
+    case 'socket':
+      return await inPage(window, 'socket', request.url);
     case 'watchOn':
       return await inPage(window, 'watchOn', request.root);
     case 'watchOff':

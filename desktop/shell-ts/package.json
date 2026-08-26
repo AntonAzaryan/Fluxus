@@ -29,6 +29,7 @@
     "@types/node": "^22.0.0",
     "electron": "^43.0.0",
     "electron-builder": "^26.0.12",
+    "selfsigned": "^2.4.1",
     "typescript": "^5.9.0",
     "vitest": "^4.1.10"
   }

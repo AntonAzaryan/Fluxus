@@ -3,10 +3,11 @@
  * DSK-4, DSK-5).
  *
  * Клей тонкий по построению — вся логика уже проверена в `src/host/` на чистом
- * Node (DSK-6). Здесь только четыре вещи, которых на чистом Node не бывает:
- * окно, custom protocol, IPC и системные диалоги. Всё, что можно было решить
- * до Electron, решено до него: разбор профиля, границы корней, атомарная
- * запись, порядок слоёв раздачи и whitelist возможностей.
+ * Node (DSK-6). Здесь только пять вещей, которых на чистом Node не бывает:
+ * окно, custom protocol, IPC, системные диалоги и проверка сертификата
+ * Chromium (DSK-8). Всё, что можно было решить до Electron, решено до него:
+ * разбор профиля, границы корней, атомарная запись, порядок слоёв раздачи,
+ * whitelist возможностей и счёт отпечатка сертификата.
  *
  * ## Раздача — protocol handler, а не локальный HTTP-порт
  *
@@ -25,6 +26,7 @@
  * файловой системе и процессам у страницы нет.
  */
 import { app, BrowserWindow, dialog, ipcMain, protocol } from 'electron';
+import type { Certificate, Event as ElectronEvent, WebContents } from 'electron';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -35,7 +37,13 @@ import type {
   BridgeRootId,
   BridgeServiceId,
 } from '../bridge/types.js';
-import { loadAppProfile, openApp, type HostRoot, type OpenedApp } from '../host/index.js';
+import {
+  certificateFingerprint,
+  loadAppProfile,
+  openApp,
+  type HostRoot,
+  type OpenedApp,
+} from '../host/index.js';
 import { insideRoot } from '../host/root.js';
 import { CHANNELS } from './channels.js';
 
@@ -237,6 +245,43 @@ async function openSession(profile: AppProfile): Promise<Session> {
 
   protocol.handle(SCHEME, serveWith(opened));
 
+  /**
+   * Сертификат, отвергнутый штатной проверкой платформы (DSK-8, решение D6).
+   *
+   * Принимается РОВНО один случай: отпечаток предъявленного сертификата равен
+   * закреплению объявленного сервиса зафиксированного профиля — тому, которое
+   * сервис написал сам (`certificatePins`). Всё прочее остаётся отвергнутым:
+   * доверие расширяется на закреплённые сертификаты и ни на что сверх них, а
+   * глобального ослабления проверки (`--ignore-certificate-errors`,
+   * `setCertificateVerifyProc`) в контейнере нет и быть не должно.
+   *
+   * `setCertificateVerifyProc` отвергнут именно поэтому: он подменяет проверку
+   * целиком, а нужно ДОПОЛНИТЬ её одним основанием доверия.
+   *
+   * Счёт отпечатка живёт в `src/host/` на чистом Node и проверен в гейте: клей
+   * вне гейта (DSK-6) и потому не решает здесь ничего сам.
+   */
+  const pinnedCertificate = (
+    event: ElectronEvent,
+    _contents: WebContents,
+    _url: string,
+    _error: string,
+    certificate: Certificate,
+    callback: (isTrusted: boolean) => void,
+  ): void => {
+    const shown = certificateFingerprint(certificate.data);
+    // Закрепления читаются в момент вопроса: сервис мог написать своё уже после
+    // открытия окна, а переживший сессию — задолго до него (DSK-7).
+    const pinned = shown !== '' && (opened.services?.certificatePins() ?? []).includes(shown);
+    if (!pinned) {
+      callback(false);
+      return;
+    }
+    event.preventDefault();
+    callback(true);
+  };
+  app.on('certificate-error', pinnedCertificate);
+
   window = new BrowserWindow({
     width: profile.window.width,
     height: profile.window.height,
@@ -361,9 +406,12 @@ async function openSession(profile: AppProfile): Promise<Session> {
 
   target.on('closed', () => {
     window = null;
-    // Раздача и ручки IPC — регистрации процесса, а не окна, и снимаются здесь
-    // же: следующее открытие (macOS, клик по иконке) регистрирует их заново.
+    // Раздача, проверка сертификата и ручки IPC — регистрации процесса, а не
+    // окна, и снимаются здесь же: следующее открытие (macOS, клик по иконке)
+    // регистрирует их заново. Оставленный обработчик закрепления держал бы
+    // доверие сессии, которой уже нет (DSK-8).
     protocol.unhandle(SCHEME);
+    app.off('certificate-error', pinnedCertificate);
     for (const channel of Object.values(CHANNELS)) {
       ipcMain.removeHandler(channel);
       ipcMain.removeAllListeners(channel);

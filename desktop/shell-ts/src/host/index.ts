@@ -6,6 +6,8 @@
 export { BUNDLE_ROOT, loadAppProfile, openApp, resolveProfilePaths } from './app.js';
 export type { OpenAppOptions, OpenedApp } from './app.js';
 
+export { certificateFingerprint, isFingerprint } from './certificate.js';
+
 export { createHostBridge } from './bridge.js';
 export type { HostBridgeHandle, HostBridgeOptions, HostDialogs, HostWindowSink } from './bridge.js';
 
