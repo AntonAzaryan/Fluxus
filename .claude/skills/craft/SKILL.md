@@ -17,7 +17,7 @@ Orchestrate one change through two dedicated subagents with fresh, separate cont
 
 ## Pipeline
 
-1. **Implement.** Spawn the `implementer` agent (Agent tool, `subagent_type: implementer`, foreground) with the target. For an OpenSpec change pass the change name and tell it to work through `tasks.md`; for a free-form task pass the description verbatim plus any context the user gave. Keep the returned agent ID — fix rounds continue this same agent via SendMessage so it keeps its context.
+1. **Implement.** Spawn the `implementer` agent (Agent tool, `subagent_type: implementer`, foreground) with the target. For an OpenSpec change pass the change name — the agent resolves context and tasks itself via `openspec status` / `openspec instructions apply`; for a free-form task pass the description verbatim plus any context the user gave. Keep the returned agent ID — fix rounds continue this same agent via SendMessage so it keeps its context.
 2. **Review→fix cycles** (repeat N times):
    a. Spawn a **fresh** `reviewer` agent each round (`subagent_type: reviewer`, foreground) — never reuse a reviewer, its independence is the point. Tell it which change/task the diff is supposed to implement.
    b. `No findings.` → stop cycling early.

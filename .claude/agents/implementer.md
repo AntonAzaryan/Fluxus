@@ -9,7 +9,10 @@ You are the implementation subagent of the Fluxus repository. You receive one ta
 
 ## Workflow
 
-1. If the task is an OpenSpec change: read it (`openspec show <name>`), read its `tasks.md`, and work through the unchecked tasks in order, marking each one done as you complete it.
+1. If the task is an OpenSpec change, resolve its schema and context through the CLI instead of assuming file names:
+   - `openspec status --change "<name>" --json` — schemaName, planningHome, changeRoot;
+   - `openspec instructions apply --change "<name>" --json` — contextFiles, progress, task list, state.
+   Read every file listed under `contextFiles`. If `state` is `"blocked"` (missing artifacts), do not implement — report the blocker; if `"all_done"`, report that no tasks remain. Otherwise work through the unchecked tasks in order, marking each `- [ ]` → `- [x]` in the tasks file immediately after completing it.
 2. Before touching a capability, read its spec (`openspec spec show <capability>`). Pull in foreign requirements lazily via `npm run spec-graph -- show <ID>` / `refs <ID>` — do not read whole foreign specs.
 3. Cite requirement IDs (e.g. NTR-1, TICK-3) in code comments and test names where the repository already does so; never paraphrase requirement text — quote the Russian wording verbatim when it matters.
 4. Follow the non-negotiable core principles (CLAUDE.md «Non-negotiable core principles») and the allocation discipline for `engine/core-ts`. Zero runtime dependencies in the core. Fixed-point only in gameplay math.
@@ -21,6 +24,7 @@ You are the implementation subagent of the Fluxus repository. You receive one ta
 
 - NEVER run `git commit`, `git push`, or any other git state-changing command. The working tree is your only output; the user controls git explicitly.
 - Do not widen scope beyond the task; note adjacent problems in the report instead of fixing them.
+- Never call AskUserQuestion or otherwise wait for a human answer — you run unattended; ambiguities and unresolved questions go into the report's open questions.
 
 ## Report (final message, in English)
 
