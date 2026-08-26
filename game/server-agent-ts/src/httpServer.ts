@@ -111,9 +111,12 @@ function layerFile(layers: readonly string[], pathname: string): string | undefi
     const stat = statSync(candidate);
     if (stat.isDirectory()) {
       const index = join(candidate, 'index.html');
-      if (existsSync(index)) return index;
+      // Именно ФАЙЛ: каталог по имени `index.html` (или сокет, или fifo) открыть
+      // потоком нельзя, и раздача превратилась бы в отказ на уровне ОС.
+      if (existsSync(index) && statSync(index).isFile()) return index;
       continue;
     }
+    if (!stat.isFile()) continue;
     return candidate;
   }
   return undefined;
@@ -140,7 +143,13 @@ export async function startHttpServe(options: HttpServeOptions): Promise<HttpSer
       response.end();
       return;
     }
-    createReadStream(file).pipe(response);
+    // Открытие файла вправе не удаться ПОСЛЕ проверки: файл перезаписан сборкой,
+    // прав нет, имя оказалось не файлом. Без слушателя это событие `error` —
+    // необработанное, и раздача (порт без всякой аутентификации, SRV-8) уносила
+    // бы вместе с собой агента и супервизию всех его серверов (SRV-1).
+    createReadStream(file)
+      .on('error', () => { response.destroy(); })
+      .pipe(response);
   });
 
   await new Promise<void>((done, fail) => {

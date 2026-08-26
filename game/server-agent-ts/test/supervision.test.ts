@@ -112,6 +112,24 @@ describe('агент — супервизор серверов хоста (SRV-1
 });
 
 describe('книга процессов и сверка на старте (решение D5)', () => {
+  it('ПРОСИМАЯ остановка — `stopped`, даже когда процесс уходит от сигнала', async () => {
+    const home = box();
+    const agent = await agentOn(home);
+    const entry = await agent.registry.start(startParams({ match: 'matches/deaf.match.json' }));
+    // Стенд глух к SIGTERM: остановка доводится SIGKILL'ом, и кода `0` у такого
+    // выхода нет вовсе. Вывести вердикт из кода — значит объявить крахом всякую
+    // штатную остановку: на Windows иначе не уходит НИ ОДИН стенд.
+    await agent.registry.stop(entry.id);
+
+    // Остановленный сервер уходит из реестра — и уходит именно остановленным.
+    expect(agent.registry.list()).toEqual([]);
+    // Материалов разбора (SRV-6) остановка не оставляет: разбирать нечего.
+    // Иначе каталог крашей рос бы на одну запись с КАЖДОЙ остановки сервера.
+    const crashRoot = agentPaths(home.stateDir).crashDir;
+    const crashes = existsSync(crashRoot) ? readdirSync(crashRoot) : [];
+    expect(crashes).toEqual([]);
+  });
+
   it('перезапуск агента при живом сервере сохраняет управление им', async () => {
     const current = box();
     const first = await agentOn(current);

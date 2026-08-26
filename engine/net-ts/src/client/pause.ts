@@ -45,3 +45,15 @@ export function applyPause(
   const seq = previous?.deniedSeq ?? 0;
   return { ...delivered, deniedSeq: delivered.denied === undefined ? seq : seq + 1 };
 }
+
+/**
+ * Стоит ли пауза МАТЧА по доставленному (NTR-20).
+ *
+ * Отдельный факт от режима мира, и путать их нельзя: в заморозке сервер живых
+ * тиков не исполняет и снапшотов не рассылает, поэтому режим последнего
+ * применённого снапшота всю паузу описывает мир ДО неё — то есть `Running`.
+ * Ничего не доставляли — паузы нет: выдумывать её из молчания нельзя.
+ */
+export function frozenByMatch(pause: DeliveredPause | undefined): boolean {
+  return pause !== undefined && pause.state !== 'running';
+}

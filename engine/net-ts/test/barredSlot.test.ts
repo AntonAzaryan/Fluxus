@@ -109,15 +109,27 @@ describe('запирание слота — операция серверног�
     expect(server.metrics.slots[0]!.applied).toBeGreaterThan(0);
   });
 
-  it('вход заместителя в ЗАПЕРТЫЙ слот без арендатора разрешён', () => {
+  it('ЗАНЯТЬ запертый слот заново нельзя и заявившему роль заместителя', () => {
     const { server, config } = running();
     server.bar(0);
     server.drain();
     expect(server.slotAttached(0)).toBe(false);
 
-    const seated = join(server, config, 3, 'p1', 'substitute');
-    expect(seated.some((message) => message.type === 'Welcome')).toBe(true);
-    expect(server.slotAttached(0)).toBe(true);
+    // `role` в `Hello` пишет сам подключающийся, и роль в нём не удостоверена
+    // ничем. Пропусти сервер такой вход — и запертый владелец возвращался бы в
+    // свой же слот одной строкой в собственном сообщении, а обвязка всё это
+    // время показывала бы его `removed` (NTR-19, SRV-5).
+    const refused = join(server, config, 3, 'p1', 'substitute');
+    expect(refused.some((message) => message.type === 'Welcome')).toBe(false);
+    expect(
+      refused.filter((message) => message.type === 'Reject').map((message) => message.reason),
+    ).toEqual(['slot-barred']);
+    expect(server.slotAttached(0)).toBe(false);
+    // Слот идёт на predicted-кадрах (NTR-7) — ровно то, что NTR-19 и обещает
+    // «при отсутствии заместителя».
+    server.advance();
+    server.advance();
+    expect(server.metrics.slots[0]!.predicted).toBeGreaterThan(0);
   });
 
   it('после снятия владелец возвращается штатным реконнектом (NTR-17)', () => {

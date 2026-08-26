@@ -137,7 +137,14 @@ describe('словарь линий стенда (решение D2)', () => {
       buildId: 'b',
       contentPackHash: 'h',
     });
-    expect(line.startsWith(CONTROL_LINE_PREFIX)).toBe(true);
+    // Маркер стоит В НАЧАЛЕ СВОЕЙ СТРОКИ, и перевод строки перед ним — часть
+    // договорённости: стенд не единственный, кто пишет в свой stdout, и
+    // напечатанное чужой библиотекой без перевода склеилось бы с маркером —
+    // линия перестала бы начинаться с него и молча ушла бы в лог.
+    expect(line.startsWith('\n')).toBe(true);
+    const marked = line.split('\n').filter((part) => part !== '');
+    expect(marked).toHaveLength(1);
+    expect(marked[0]!.startsWith(CONTROL_LINE_PREFIX)).toBe(true);
     expect(decodeStandLine(line.trim())).toMatchObject({ t: 'ready', port: 8080 });
 
     // Обычная строка лога управляющей не является — и это единственное, что их

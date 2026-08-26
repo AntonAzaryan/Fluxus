@@ -22,7 +22,10 @@ const electronVersion = require('electron/package.json').version;
 module.exports = {
   appId: `dev.fluxus.${app}`,
   electronVersion,
-  productName: app === 'editor' ? 'Fluxus Editor' : 'Fluxus',
+  // Имя берётся у ПРОФИЛЯ, разложенного `bin/pack.mjs`, а не у списка имён здесь:
+  // профилей три и будет больше, а перечисление, о котором забывают при
+  // добавлении четвёртого, выпускает дистрибутив под чужим именем (DSK-1).
+  productName: require(`./build/${app}/package.json`).productName,
   directories: {
     app: `build/${app}`,
     output: `dist/${app}`,

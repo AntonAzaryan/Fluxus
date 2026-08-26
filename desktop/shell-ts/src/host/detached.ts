@@ -16,15 +16,32 @@
  * проверяются контрактным сьютом в гейте (DSK-6), и вторая — на тех же опциях
  * spawn, что и в настоящем контейнере.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import type { SpawnOptions } from 'node:child_process';
 import type { BridgeServiceId } from '../bridge/types.js';
 
-/** Каталог состояния сервисов по умолчанию: реализация вправе назвать свой. */
+/**
+ * Каталог состояния сервисов по умолчанию: реализация вправе назвать свой.
+ *
+ * Имя ПЕРСОНАЛЬНОЕ. Общий каталог во временном — это файлы, которые на общей
+ * машине вправе создать кто угодно раньше нас: `pid` оттуда получает SIGTERM и
+ * SIGKILL, а адрес оттуда уезжает странице как адрес управляющего канала — то
+ * есть туда уедет и материал автопейринга (MGR-5, SRV-3). Разделив каталоги по
+ * пользователю, мы возвращаем этим файлам того единственного автора, которому
+ * они и так уже доверены. Контейнер и без того кладёт их в `userData`
+ * (`electron/main.ts`) — умолчание не должно быть слабее.
+ */
 export function defaultServiceStateDir(): string {
-  return join(tmpdir(), 'fluxus-desktop-services');
+  let who = '';
+  try {
+    who = String(userInfo().uid);
+  } catch {
+    // Windows не называет uid — там временный каталог и так свой у сессии.
+    who = 'user';
+  }
+  return join(tmpdir(), `fluxus-desktop-services-${who}`);
 }
 
 /**
@@ -54,7 +71,9 @@ export interface DetachedFiles {
 }
 
 export function detachedFiles(stateDir: string, id: BridgeServiceId): DetachedFiles {
-  mkdirSync(stateDir, { recursive: true });
+  // Права ЗАДАНЫ: в каталоге лежат идентификатор процесса, которому мы шлём
+  // сигналы, и адрес, по которому страница предъявляет материал автопейринга.
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   // Имя файла — идентификатор сервиса: он приходит из ОБЪЯВЛЕНИЯ профиля, а не
   // из страницы, поэтому подстановки чужого пути здесь быть не может.
   const safe = id.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -191,7 +210,5 @@ export function detachedSurvivor(
   const record = readPidRecord(files.pidFile);
   // Именно ТОТ процесс, а не занявший его номер после перезагрузки.
   if (!sameProcess(record)) return undefined;
-  const address = readAddressFile(files.addressFile);
-  if (address === '' && !existsSync(files.addressFile)) return { ...record, address: '' };
-  return { ...record, address };
+  return { ...record, address: readAddressFile(files.addressFile) };
 }

@@ -38,7 +38,7 @@
  */
 import { execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative as relativePath, resolve } from 'node:path';
+import { dirname, join, relative as relativePath, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { flag, option, readMatchFile } from '@fluxus/net/bin/matchFile.mjs';
 
@@ -148,6 +148,17 @@ function copyTree(source, target) {
 }
 
 say(`сборка дистрибутива хоста → ${outDir}\n`);
+// Каталог назначения СНОСИТСЯ рекурсивно, и его имя пришло из командной строки:
+// `--out` без значения подхватывает следующий флаг (`--out --quiet` → каталог
+// «--quiet»), а `--out .` снёс бы рабочее дерево. Отказываемся от всего, что
+// содержит в себе репозиторий или текущий каталог.
+const outResolved = resolve(outDir);
+for (const guarded of [resolve(REPO), resolve(process.cwd())]) {
+  if (guarded === outResolved || guarded.startsWith(`${outResolved}${sep}`)) {
+    console.error(`каталог сборки "${outResolved}" содержит в себе "${guarded}" — отказ`);
+    process.exit(2);
+  }
+}
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 

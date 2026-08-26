@@ -44,15 +44,23 @@ const fields = new Map<string, string>();
 function apply(action: string, args: readonly string[]): void {
   const [first = '', second = '', third = ''] = args;
   switch (action) {
-    case 'add-host':
-      void session.addRemote(fields.get('host-url') ?? '', fields.get('host-code') ?? '', '');
+    case 'add-host': {
+      const code = fields.get('host-code') ?? '';
+      // Код пейринга ОДНОРАЗОВЫЙ (SRV-3): оставить его в поле значило бы держать
+      // на экране секрет, которым больше нельзя воспользоваться.
+      fields.delete('host-code');
+      void session.addRemote(fields.get('host-url') ?? '', code, '');
       return;
+    }
     case 'forget-host':
       void session.forget(first);
       return;
     case 'launch-host':
       // Смена цели запуска: список документов принадлежит хосту, поэтому выбор
-      // хоста обновляет и его (MGR-2).
+      // хоста обновляет и его (MGR-2). Запомненный документ ПРЕЖНЕГО хоста при
+      // этом снимается: на новом его может не быть вовсе, и запуск ушёл бы с
+      // именем, которого принимающий агент не знает, — обещанный отказ.
+      fields.delete('launch-match');
       session.setLaunchHost(fields.get('launch-host') ?? first);
       return;
     case 'start': {
@@ -123,10 +131,40 @@ function build(node: UiNode): Node {
   // выпадающий список хоста запуска врал бы, показывая не ту цель (MGR-2).
   if (isField) {
     const field = element as HTMLInputElement;
-    field.value = fields.get(node.action ?? '') ?? node.value ?? '';
+    const name = node.action ?? '';
+    field.value = fields.get(name) ?? node.value ?? '';
+    // Значение, которому не нашлось `<option>`, браузер не выбирает никак
+    // (`selectedIndex === -1`): список выглядел бы пустым, а запуск шёл бы с
+    // запомненным именем чужого хоста. Возвращаемся к первому документу и
+    // запоминаем ИМЕННО ЕГО — показанное и отправляемое должны совпасть (MGR-2).
+    if (node.tag === 'select' && (element as HTMLSelectElement).selectedIndex < 0) {
+      (element as HTMLSelectElement).selectedIndex = 0;
+      if (field.value !== '') fields.set(name, field.value);
+    }
   }
   return element;
 }
+
+/**
+ * Действия, которые знает `apply`. Список, а не проверка на пустую строку:
+ * кнопка с действием, которого нет в `switch`, молча ничего не делает — и
+ * именно этот случай надо ловить, а пустого действия ни один узел не отдаёт.
+ */
+const KNOWN_ACTIONS = new Set([
+  'add-host',
+  'forget-host',
+  'launch-host',
+  'start',
+  'stop',
+  'select',
+  'copy-join',
+  'toggle-kill-on-exit',
+  'disconnect-player',
+  'bar-slot',
+  'unbar-slot',
+  'pause',
+  'resume',
+]);
 
 function draw(): void {
   const view = managerView(session.state);
@@ -134,8 +172,8 @@ function draw(): void {
   // Названные действия обязаны существовать в переводе: узел с действием,
   // которого не знает `apply`, был бы кнопкой, ничего не делающей.
   for (const item of walk(view)) {
-    if (item.action !== undefined && item.tag === 'button' && item.action === '') {
-      throw new Error('узел с пустым действием');
+    if (item.tag === 'button' && item.action !== undefined && !KNOWN_ACTIONS.has(item.action)) {
+      throw new Error(`кнопка с неизвестным действием "${item.action}"`);
     }
   }
 }
@@ -161,8 +199,18 @@ void session.restore();
 // исполняет явную остановку сервиса, как всякую другую (решение D6).
 globalThis.addEventListener('beforeunload', () => {
   if (!session.state.killOnExit) return;
-  void session.closing();
-  void bridge?.stopService?.(AGENT_SERVICE);
+  // ПО ОЧЕРЕДИ, а не разом: остановка серверов идёт кадром по управляющему
+  // каналу к агенту, а остановка сервиса — сигналом мимо него. Пущенные
+  // параллельно, они гонятся, и выигравший сигнал уносит агента вместе с
+  // недоставленным `stop-all` — серверы переживают закрытие при ВКЛЮЧЁННОМ
+  // тумблере, то есть ровно наоборот MGR-4.
+  //
+  // Полного лекарства здесь нет: `beforeunload` не умеет ждать, и остаток —
+  // хук закрытия контейнера, который умеет (тот же шов, что у DSK-7).
+  void session.closing().then(
+    () => bridge?.stopService?.(AGENT_SERVICE),
+    () => bridge?.stopService?.(AGENT_SERVICE),
+  );
 });
 
 // Ссылка входа игрока приезжает от агента (SRV-8): дублировать её разбором

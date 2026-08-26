@@ -31,6 +31,23 @@ import type { ServerRegistry } from './registry.js';
 import type { AgentCertificate } from './state/certificate.js';
 import type { TokenStore } from './state/tokens.js';
 
+/**
+ * Потолок управляющего кадра. Самое большое сообщение набора — перечень
+ * серверов со слотами и хвостом лога; мегабайта хватает с запасом, а всё, что
+ * больше, — не операция протокола.
+ */
+const MAX_FRAME_BYTES = 1 << 20;
+
+/**
+ * Сколько соединение вправе молчать до рукопожатия. Открытый и не назвавшийся
+ * сокет держит сессию и память бесплатно и без токена — дедлайн делает эту
+ * плату конечной. Значение с большим запасом к клиентскому (`controlClient`).
+ */
+const GREETING_DEADLINE_MS = 15_000;
+
+/** Период проверки живости соединений: пропущенный ответ — мёртвый канал. */
+const HEARTBEAT_MS = 30_000;
+
 /** Пустой исход: поля ответа перечислены всегда, чтобы разбор был один на все. */
 const EMPTY_RESULT: Omit<ResultResponse, 't' | 'id'> = {
   servers: [],
@@ -58,6 +75,19 @@ export interface ControlServer {
   close(): Promise<void>;
 }
 
+/** Операция набора: всё, кроме рукопожатия, — у неё есть номер (SRV-2). */
+type NumberedRequest = Exclude<ControlRequest, { t: 'hello' }>;
+
+/**
+ * Номер запроса из СЫРОГО тела — до разбора. Ответ на операцию клиент ждёт по
+ * номеру; отказ, потерявший номер, для него неотличим от молчания.
+ */
+function requestIdOf(raw: unknown): number {
+  if (typeof raw !== 'object' || raw === null) return 0;
+  const id: unknown = (raw as { id?: unknown }).id;
+  return typeof id === 'number' && Number.isInteger(id) && id > 0 ? id : 0;
+}
+
 /** Одно подключение управляющего канала. */
 interface Session {
   readonly socket: WebSocket;
@@ -70,7 +100,15 @@ interface Session {
 export async function startControlServer(options: ControlServerOptions): Promise<ControlServer> {
   const now = options.now ?? Date.now;
   const https: Server = createServer({ key: options.cert.key, cert: options.cert.cert });
-  const wss = new WebSocketServer({ server: https });
+  // Потолок кадра. Умолчание `ws` — 100 МиБ, и это память, которую ЛЮБОЙ сосед
+  // по сети занимает ДО всякой проверки токена: кадр буферизуется целиком,
+  // прежде чем его увидит разбор. Сообщения набора (SRV-2) мерятся килобайтами.
+  const wss = new WebSocketServer({ server: https, maxPayload: MAX_FRAME_BYTES });
+  // `ws` пере-излучает ошибку HTTP-сервера на себе, и делает это РАНЬШЕ, чем
+  // `once('error', reject)` ниже: без слушателя занятый порт становится не
+  // названным отказом, а необработанным событием, роняющим агента вместе со
+  // всеми его серверами (SRV-1). Отказ называется промисом listen'а.
+  wss.on('error', () => undefined);
   const sessions = new Set<Session>();
 
   await new Promise<void>((resolve, reject) => {
@@ -175,11 +213,7 @@ export async function startControlServer(options: ControlServerOptions): Promise
     });
   };
 
-  const dispatch = async (session: Session, request: ControlRequest): Promise<void> => {
-    if (request.t === 'hello') {
-      // Повторное рукопожатие — не операция набора: соединение уже названо.
-      throw new RefusalError('unknown-message', 'повторное рукопожатие в установленном соединении');
-    }
+  const dispatch = async (session: Session, request: NumberedRequest): Promise<void> => {
     if (session.token === '' || !options.tokens.valid(session.token)) {
       // Токен могли отозвать МЕЖДУ операциями: отозванный перестаёт действовать
       // и для существующих подключений (SRV-3).
@@ -208,8 +242,12 @@ export async function startControlServer(options: ControlServerOptions): Promise
       case 'subscribe': {
         const entry = options.registry.entry(request.server);
         if (entry === undefined) throw new RefusalError('unknown-server', `сервера "${request.server}" нет`);
-        session.details.add(request.server);
+        // Подписка записывается ПОСЛЕ успеха включения сбора: отказ (сервер
+        // упал, стенд не ответил) иначе оставлял бы соединение подписчиком
+        // операции, которой человеку назвали отказ, — и хвост лога разрушающим
+        // `takeLog` уходил бы читателю, которого нет.
         await options.registry.setSubscribed(request.server, true);
+        session.details.add(request.server);
         result(session, request.id, { servers: [entry], server: request.server });
         return;
       }
@@ -246,20 +284,43 @@ export async function startControlServer(options: ControlServerOptions): Promise
     }
   };
 
+  /**
+   * Соединения, ответившие на последний пинг. Живость проверяется ниже: `ws`
+   * сам не пингует, а TCP молчит про пропавшую машину часами.
+   */
+  const alive = new Set<WebSocket>();
+
   wss.on('connection', (socket: WebSocket) => {
     const session: Session = { socket, token: '', details: new Set() };
     sessions.add(session);
+    alive.add(socket);
+    // Не назвавшееся соединение закрывается по дедлайну: см. `GREETING_DEADLINE_MS`.
+    const greetingDeadline = setTimeout(() => {
+      if (session.token === '') socket.terminate();
+    }, GREETING_DEADLINE_MS);
+    greetingDeadline.unref();
     socket.on('message', (data: Buffer) => {
+      let raw: unknown;
       let request: ControlRequest;
       try {
-        request = parseControlRequest(JSON.parse(data.toString('utf8')));
+        raw = JSON.parse(data.toString('utf8'));
+        request = parseControlRequest(raw);
       } catch (error) {
         const reason = error instanceof ControlProtocolError ? error.reason : 'malformed';
-        refuse(session, 0, reason, error instanceof Error ? error.message : String(error));
+        // Отказ РАЗБОРА возвращается тем же номером, что и всякий другой: он
+        // вычитывается из сырого тела ещё до разбора. С номером рукопожатия
+        // (`0`) клиент не связал бы его ни с чем, и операция — скажем, `start`
+        // с портом вне диапазона — висела бы вечно вместо названного отказа
+        // (SRV-2).
+        refuse(session, requestIdOf(raw), reason, error instanceof Error ? error.message : String(error));
         return;
       }
       if (request.t === 'hello') {
-        greet(session, request);
+        // Рукопожатие бывает ОДНО. Второй `hello` в установленном соединении —
+        // не операция набора: приняв его, агент позволил бы подменить личность
+        // живой сессии и заново разменивать пейринг-коды по уже открытому каналу.
+        if (session.token === '') greet(session, request);
+        else refuse(session, 0, 'unknown-message', 'повторное рукопожатие в установленном соединении');
         return;
       }
       void dispatch(session, request).catch((error: unknown) => {
@@ -267,9 +328,28 @@ export async function startControlServer(options: ControlServerOptions): Promise
         refuse(session, request.id, named.reason, named.detail);
       });
     });
-    socket.on('close', () => { forget(session); });
-    socket.on('error', () => { forget(session); });
+    socket.on('pong', () => { alive.add(socket); });
+    socket.on('close', () => { clearTimeout(greetingDeadline); forget(session); });
+    socket.on('error', () => { clearTimeout(greetingDeadline); forget(session); });
   });
+
+  /**
+   * Не ответившее на пинг соединение считается мёртвым и рвётся. Без этого
+   * менеджер, у которого выдернули сеть, оставался бы в `sessions` подписчиком —
+   * и каждый подписанный стенд считал бы перцентили и `perf_hooks` в горячем
+   * цикле без единого читателя (решение D9).
+   */
+  const heartbeat = setInterval(() => {
+    for (const session of sessions) {
+      if (!alive.has(session.socket)) {
+        session.socket.terminate();
+        continue;
+      }
+      alive.delete(session.socket);
+      session.socket.ping();
+    }
+  }, HEARTBEAT_MS);
+  heartbeat.unref();
 
   /**
    * Соединение ушло: снять его подписки и, если на сервер больше никто не
@@ -311,6 +391,7 @@ export async function startControlServer(options: ControlServerOptions): Promise
       }
     },
     close() {
+      clearInterval(heartbeat);
       return new Promise<void>((resolve) => {
         for (const session of sessions) session.socket.close();
         wss.close();

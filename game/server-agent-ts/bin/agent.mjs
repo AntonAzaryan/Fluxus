@@ -159,10 +159,25 @@ const agent = await startAgent({
 // который читает контейнер и отдаёт странице как адрес сервиса. Страница ничего
 // не зашивает в себя и ничего не выбирает — она получает строку.
 if (addressFile !== '') {
-  const code = agent.tokens.issueCode(Date.now());
-  const url = `${agent.controlUrl}?code=${code}&fingerprint=${agent.certificate.fingerprint}`;
-  mkdirSync(dirname(resolve(process.cwd(), addressFile)), { recursive: true });
-  writeFileSync(resolve(process.cwd(), addressFile), url, { mode: 0o600 });
+  const target = resolve(process.cwd(), addressFile);
+  mkdirSync(dirname(target), { recursive: true });
+  const refresh = () => {
+    const code = agent.tokens.issueCode(Date.now());
+    writeFileSync(
+      target,
+      `${agent.controlUrl}?code=${code}&fingerprint=${agent.certificate.fingerprint}`,
+      { mode: 0o600 },
+    );
+  };
+  refresh();
+  // Код ОБНОВЛЯЕТСЯ, пока агент жив. Он короткоживущий (пять минут, SRV-3) и
+  // одноразовый, а сам агент — отвязываемый сервис (DSK-7): он переживает
+  // сессию, и следующий запуск менеджера читает ТОТ ЖЕ файл. Напиши мы код
+  // однажды — второй запуск через час предъявил бы просроченный и уже
+  // обменянный код, автопейринг (MGR-5) отказал бы, и пяти таких попыток
+  // хватило бы, чтобы запереть пейринг порогом перебора.
+  const rotate = setInterval(refresh, 60_000);
+  rotate.unref();
 }
 
 process.stdout.write(

@@ -130,11 +130,17 @@ function detailsPanel(details: ServerDetails): UiNode {
   ]);
 }
 
-/** Строка общего списка серверов (MGR-2). */
-function serverRow(row: ServerRow, selected: string): UiNode {
+/**
+ * Строка общего списка серверов (MGR-2). Выбранный опознаётся ПАРОЙ «хост +
+ * идентификатор»: идентификаторы реестра (`srv-1`, `srv-2`…) нумеруются внутри
+ * агента, и у двух хостов они совпадают — по голому идентификатору подсветились
+ * бы обе строки сразу, и человек не понял бы, чей сервер в деталях.
+ */
+function serverRow(row: ServerRow, selected: ServerDetails | undefined): UiNode {
   const entry = row.entry;
   const busy = entry.slots.filter((slot) => slot.status === 'active').length;
-  return node('div', `mg-server${entry.id === selected ? ' mg-server--selected' : ''}`, [
+  const picked = selected?.host === row.host && selected.entry.id === entry.id;
+  return node('div', `mg-server${picked ? ' mg-server--selected' : ''}`, [
     {
       tag: 'button',
       cls: 'mg-server__pick',
@@ -218,6 +224,10 @@ function launchPanel(state: ManagerState): UiNode {
       tag: 'select',
       cls: 'mg-input',
       action: 'launch-match',
+      // Умолчание НАЗВАНО, а не подразумевается: `<select>` без значения
+      // показывал бы первый документ, а запуск без выбора уходил бы со своим
+      // собственным умолчанием — форма обещала бы не то, что запускает (MGR-2).
+      value: state.matches[0] ?? '',
       // Документы матча — из перечня ЦЕЛЕВОГО хоста (решение D11): дерева
       // контента у профиля менеджера нет вовсе, список приходит от его агента.
       children: state.matches.map((match) => ({ tag: 'option', text: match, value: match })),
@@ -229,7 +239,7 @@ function launchPanel(state: ManagerState): UiNode {
 
 /** Всё окно менеджера одним описанием. */
 export function managerView(state: ManagerState): UiNode {
-  const selected = state.details?.entry.id ?? '';
+  const selected = state.details;
   return node('div', 'mg-app', [
     node('header', 'mg-top', [
       text('h1', 'mg-top__title', 'Fluxus Server Manager'),

@@ -177,7 +177,15 @@ export function createHostServices(options: HostServicesOptions): HostServices {
 
   /** Ждёт, пока по адресу ответят; смерть процесса прекращает ожидание сразу. */
   const untilReady = async (declared: ProfileService, live: Owned): Promise<void> => {
-    if (endpointOf(declared.address) === undefined) return;
+    if (endpointOf(declared.address) === undefined) {
+      // Адреса с портом у сервиса нет — проверять нечем, но «нечем проверить» не
+      // значит «поднялся»: процесс, умерший на первом тике, объявлялся бы
+      // запущенным (DSK-7 обещает обратное). Один шаг ожидания даёт его выходу
+      // дойти до нас, дальше верим на слово.
+      await wait(READY_STEP_MS);
+      if (!live.alive) throw refuse(`сервис "${declared.id}" завершился сразу после запуска`);
+      return;
+    }
     const deadline = Date.now() + readyTimeoutMs;
     for (;;) {
       if (await answers(declared.address)) return;
@@ -252,6 +260,43 @@ export function createHostServices(options: HostServicesOptions): HostServices {
     return { id: declared.id, running: true, address };
   };
 
+  /**
+   * Переживший процесс ЖИВ, но по адресу ещё молчит (DSK-7).
+   *
+   * «Молчит» и «его нет» — разные вещи, и различать их обязательно: агент на
+   * первом запуске генерирует ключ и самоподписанный сертификат (SRV-3), а порт
+   * мог на миг залипнуть. Сочти второе первым — и повторный запуск породил бы
+   * ВТОРОЙ процесс на тех же портах, а первый остался бы жив, недостижим ни для
+   * `stop()`, ни для `state()`, потому что файл идентификатора уже переписан.
+   * Поэтому здесь ждут, а не запускают; смерть процесса ожидание прекращает —
+   * тогда запускать и вправду можно.
+   */
+  const untilSurvivorAnswers = async (
+    declared: ProfileService,
+    files: DetachedFiles,
+  ): Promise<BridgeServiceState | undefined> => {
+    const deadline = Date.now() + readyTimeoutMs;
+    for (;;) {
+      const survivor = detachedSurvivor(files);
+      if (survivor === undefined) {
+        forgetDetached(files);
+        return undefined;
+      }
+      const address = survivor.address === '' ? declared.address : survivor.address;
+      if (endpointOf(address) === undefined || (await answers(address))) {
+        report(`сервис "${declared.id}": пережил прежнюю сессию, адрес ${address}`);
+        return { id: declared.id, running: true, address };
+      }
+      if (Date.now() >= deadline) {
+        throw refuse(
+          `сервис "${declared.id}": процесс ${String(survivor.pid)} пережил прежнюю сессию, ` +
+            `но по адресу ${address} не отвечает`,
+        );
+      }
+      await wait(READY_STEP_MS);
+    }
+  };
+
   const startFresh = async (id: BridgeServiceId): Promise<BridgeServiceState> => {
     const declared = declaredOf(id);
     const files = filesOf(declared);
@@ -259,6 +304,10 @@ export function createHostServices(options: HostServicesOptions): HostServices {
     if (live?.alive === true) return stateOf(declared, true);
     const survivor = await survivorState(declared, files);
     if (survivor !== undefined) return survivor;
+    if (files !== undefined) {
+      const answered = await untilSurvivorAnswers(declared, files);
+      if (answered !== undefined) return answered;
+    }
     // Занятый адрес — не ошибка и не наш процесс: сервис, поднятый снаружи, и
     // есть тот, к которому пойдёт приложение. Владение мы себе не
     // приписываем, поэтому и не снимем его на закрытии окна.
@@ -269,6 +318,14 @@ export function createHostServices(options: HostServicesOptions): HostServices {
     }
     const started = launch(declared, files);
     owned.set(id, started);
+    // Сессию могли закрыть, ПОКА мы стартовали: `closeAll` снял тогда пустую
+    // карту, и этот процесс остался бы жить, держа свой адрес занятым, — ровно
+    // то, что DSK-7 обещает не допускать («сервис останавливается вместе с
+    // окном»). Отвязываемого это не касается: он сессию переживает намеренно.
+    if (closed && !declared.detached) {
+      await kill(id, started);
+      throw refuse(`сервис "${id}": сессия закрылась, пока он поднимался`);
+    }
     try {
       await untilReady(declared, started);
     } catch (error) {
@@ -281,6 +338,8 @@ export function createHostServices(options: HostServicesOptions): HostServices {
 
   /** Запуски в полёте: параллельные вызовы `start` одного имени делят один. */
   const starting = new Map<BridgeServiceId, Promise<BridgeServiceState>>();
+  /** Сессия закрыта: запуск, севший в это окно, снимает сам себя. */
+  let closed = false;
 
   return {
     async start(id) {
@@ -313,6 +372,19 @@ export function createHostServices(options: HostServicesOptions): HostServices {
       if (survivor !== undefined) {
         // Сигнал шлётся только ТОМУ процессу, чей момент старта совпадает: PID
         // мог переиспользоваться после перезагрузки (DSK-7).
+        //
+        // Момент старта читается не везде: там, где платформа его не называет
+        // (`startProc === 0` — всё, кроме Linux), «тот же процесс» вырождается в
+        // «номер занят». Каталог состояния при этом переживает перезагрузку
+        // (`userData`), а после неё номер держит уже кто угодно — например
+        // редактор самого пользователя. Поэтому в таком случае мы шлём сигнал
+        // только тому, кто ОТВЕЧАЕТ по адресу сервиса: это единственное, чем
+        // его ещё можно опознать. Не отвечает — просто забываем запись.
+        const identified = survivor.startProc !== 0 || (await answers(addressOf(declared, files)));
+        if (!identified) {
+          forgetDetached(files!);
+          return stateOf(declared, false);
+        }
         await stopPid({ pid: survivor.pid, startProc: survivor.startProc }, graceMs);
         forgetDetached(files!);
         return stateOf(declared, false);
@@ -331,6 +403,11 @@ export function createHostServices(options: HostServicesOptions): HostServices {
       return [...owned.values()].filter((live) => live.alive).length;
     },
     async closeAll() {
+      closed = true;
+      // Запуски В ПОЛЁТЕ дожидаются: их процесс появляется в `owned` только
+      // после спавна, и снимок карты, взятый раньше, его не увидел бы. Отказ
+      // такого запуска здесь не важен — важно, что он закончился.
+      await Promise.allSettled([...starting.values()]);
       // Отвязываемый сервис сессию ПЕРЕЖИВАЕТ (DSK-7): закрытие снимает только
       // тех, кто отвязываемым себя не объявлял. Судьба отвязанного — политика
       // приложения (`server-manager` MGR-4), и решается она явной остановкой.

@@ -57,6 +57,11 @@ export interface AdapterLease {
  * аренда, потом — чем кончилась прошлая: «ушёл сам» и «оборвалось» суть разные
  * слова для админа, и различает их сервер.
  *
+ * Исхода `barred` среди прошлых НЕ проверяем, и это не пропуск: пока запрет
+ * стоит, отвечает первая ветвь, а `unbar` переводит исход прошлой аренды в
+ * `closed` (NTR-19). Проверяй его здесь — и снятый запрет читался бы как
+ * стоящий: слот навсегда оставался бы `removed`, а кнопка админа — «вернуть».
+ *
  * Слот, за которым никого не было и нет, — `connecting`: матч ждёт входа. Это не
  * «нет игрока»: перечень слотов есть ростер (NTR-6), и слот из него не исчезает.
  */
@@ -64,7 +69,6 @@ export function slotStatusOf(lease: AdapterLease, phase: StandPhase): SlotStatus
   if (lease.barred) return 'removed';
   if (lease.attached) return phase === 'running' ? 'active' : 'connecting';
   if (lease.lastEnd === 'bye') return 'left';
-  if (lease.lastEnd === 'barred') return 'removed';
   if (lease.claimed) return 'disconnected';
   if (lease.lastReject !== undefined) return 'rejected';
   return 'connecting';
@@ -180,6 +184,11 @@ export function standControl(options: StandControlOptions): StandControl {
     // метрик (решение D9), и матч о ней не знает.
     if (command.cmd === 'subscribe') {
       subscribed = true;
+      // Гистограмма задержки цикла сбрасывается ПРИ ПОДПИСКЕ, а не только на
+      // отчёте: без подписки отчёта нет вовсе, и она копила бы всё время жизни
+      // процесса — первое, что увидел бы подписавшийся, было бы средним «за
+      // всегда», а обещана величина за интервал (решение D9).
+      options.process();
       return '';
     }
     if (command.cmd === 'unsubscribe') {

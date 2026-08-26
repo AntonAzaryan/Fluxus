@@ -11,7 +11,8 @@
  * проверки протокол, а не бой.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { CONTROL_PROTOCOL_VERSION } from '../src/protocol/messages.js';
+import { PAUSE_STATES as NET_PAUSE_STATES } from '@fluxus/net';
+import { CONTROL_PROTOCOL_VERSION, PAUSE_STATES } from '../src/protocol/messages.js';
 import type { ServerEvent } from '../src/protocol/messages.js';
 import {
   createControlClient,
@@ -321,5 +322,56 @@ describe('подписка: доставка и освобождение (SRV-2,
     const mark = after.length;
     await until(() => after.length > mark, 5_000);
     expect(after.slice(mark).every((event) => event.metrics === null)).toBe(true);
+  });
+});
+
+describe('отказ операции доезжает до вызвавшего (SRV-2)', () => {
+  it('отказ РАЗБОРА возвращается номером запроса, а не номером рукопожатия', async () => {
+    const { client } = await paired();
+
+    // Порт вне диапазона отвергается РАЗБОРОМ — до всякой операции реестра.
+    // Отказ, потерявший номер запроса, для клиента неотличим от молчания:
+    // операция висела бы вечно, а человеку не сказали бы ничего.
+    await expect(client.start({ ...startParams(), port: 70_000 })).rejects.toMatchObject({
+      reason: 'malformed',
+    });
+
+    // Канал при этом жив: разбор отказал ОПЕРАЦИИ, а не соединению.
+    expect((await client.list()).servers).toEqual([]);
+  });
+
+  it('повторное рукопожатие в установленном соединении — названный отказ', async () => {
+    const { agent } = await paired();
+    // Сырой канал: клиентская библиотека здоровается один раз, а предмет
+    // проверки — ВТОРОЙ `hello` в уже установленном соединении. Принятый, он
+    // позволил бы подменить личность живой сессии и заново разменивать
+    // пейринг-коды по открытому каналу (SRV-3).
+    const opened = await nodeSocket(agent.controlUrl, '');
+    const answers: unknown[] = [];
+    opened.socket.onMessage((text) => answers.push(JSON.parse(text)));
+    const code = agent.tokens.issueCode(Date.now());
+    opened.socket.send(
+      JSON.stringify({ t: 'hello', protocol: CONTROL_PROTOCOL_VERSION, token: '', pairingCode: code, label: 'сырой' }),
+    );
+    await until(() => answers.length > 0);
+    expect(answers[0]).toMatchObject({ t: 'welcome' });
+
+    opened.socket.send(
+      JSON.stringify({ t: 'hello', protocol: CONTROL_PROTOCOL_VERSION, token: '', pairingCode: '', label: 'сырой' }),
+    );
+    await until(() => answers.length > 1);
+    expect(answers[1]).toMatchObject({ t: 'refused', reason: 'unknown-message' });
+    opened.socket.close();
+  });
+});
+
+describe('словарь админ-канала не расходится с игровым (NTR-20)', () => {
+  it('набор состояний паузы тот же, что у сервера матча', () => {
+    // Словарь протокола агента импортов не имеет намеренно (страница менеджера
+    // не должна тянуть `ws` и `node:*` вместе с корнем `@fluxus/net`), поэтому
+    // набор в нём — своя константа. Связь держит ЭТОТ тест: он живёт в Node, где
+    // импорт игрового пакета законен, и краснеет в тот день, когда у паузы
+    // появится четвёртое состояние, — вместо молчаливого отказа на проводе.
+    expect([...PAUSE_STATES]).toEqual([...NET_PAUSE_STATES]);
   });
 });

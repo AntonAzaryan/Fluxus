@@ -56,6 +56,19 @@ if (!existsSync(bundle)) {
   process.exit(2);
 }
 
+// Объявленные сервисы (DSK-7) раскладка НЕ переносит: `script` в профиле — путь
+// к исходнику в репозитории, и в дистрибутиве он указывал бы наружу приложения.
+// Молчать об этом нельзя: собранный менеджер (MGR-5) не поднял бы своего агента
+// вовсе, а узналось бы это только у человека, который скачал дистрибутив.
+if (Array.isArray(profile.services) && profile.services.length > 0) {
+  console.error(`профиль "${app}" объявляет сервисы, а раскладка их не переносит:`);
+  for (const service of profile.services) {
+    console.error(`  ${service.id} → ${service.script}`);
+  }
+  console.error('нужен перенос скрипта сервиса и его зависимостей в дистрибутив (DSK-7).');
+  process.exit(2);
+}
+
 const staged = join(BUILD, app);
 rmSync(staged, { recursive: true, force: true });
 mkdirSync(staged, { recursive: true });

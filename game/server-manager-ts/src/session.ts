@@ -131,6 +131,8 @@ export interface ManagerSession {
 export function createManagerSession(options: ManagerSessionOptions): ManagerSession {
   const book = hostBook(options.storage);
   const hosts = new Map<string, LiveHost>();
+  /** Номер последней попытки подключения к хосту: см. `attach`. */
+  const attempts = new Map<string, number>();
   const listeners = new Set<() => void>();
   let details: ServerDetails | undefined;
   /** Явно выбранная цель запуска; пустая строка — берётся первый подходящий. */
@@ -175,8 +177,16 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
   const onEvent = (hostId: string, event: ServerEvent): void => {
     const host = hosts.get(hostId);
     if (host === undefined) return;
-    const rest = host.servers.filter((entry) => entry.id !== event.server.id);
-    host.servers = event.event === 'removed' ? rest : [...rest, event.server];
+    if (event.event === 'removed') {
+      host.servers = host.servers.filter((entry) => entry.id !== event.server.id);
+    } else if (host.servers.some((entry) => entry.id === event.server.id)) {
+      // Замена НА МЕСТЕ, а не «выкинуть и дописать в конец»: порядок списка —
+      // то, по чему человек целится кнопкой (MGR-2), и подключившийся игрок не
+      // повод переставлять строки под курсором.
+      host.servers = host.servers.map((entry) => (entry.id === event.server.id ? event.server : entry));
+    } else {
+      host.servers = [...host.servers, event.server];
+    }
     if (details?.host === hostId && details.entry.id === event.server.id) {
       details =
         event.event === 'removed'
@@ -200,6 +210,14 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
     const existing = hosts.get(known.id);
     existing?.client?.close();
     const client = createControlClient(options.connect);
+    // ПОКОЛЕНИЕ попытки. `close()` вытесняемого клиента — не остановка: пока
+    // канал только открывается, сокета у него ещё нет и закрывать нечего.
+    // Поэтому поздняя попытка не гонится с ранней, а объявляет её чужой: та
+    // после каждого своего `await` видит, что хост уже не её, закрывает свой
+    // канал и уходит молча — не подменяя исход живой попытки своим (SRV-2) и
+    // не оставляя второго открытого канала к тому же агенту.
+    const generation = (attempts.get(known.id) ?? 0) + 1;
+    attempts.set(known.id, generation);
     const host: LiveHost = {
       client,
       servers: [],
@@ -217,13 +235,31 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
       },
     };
     hosts.set(known.id, host);
+    const mine = (): boolean => attempts.get(known.id) === generation && hosts.get(known.id) === host;
     // Хост показывается С НАЧАЛА попытки, а не по её исходу. Иначе всё время,
     // пока канал открывается — а он вправе открываться долго и вправе не
     // открыться никогда, — человек видит ровно то же, что до нажатия: пустое
     // место, хотя хост уже добавлен (MGR-1). А отказ, о котором нельзя сказать,
     // начался ли он вообще, не наблюдаем в смысле SRV-2.
     changed();
-    client.onEvent((event) => { onEvent(known.id, event); });
+    client.onEvent((event) => { if (mine()) onEvent(known.id, event); });
+    // Умерший канал НАЗЫВАЕТСЯ (SRV-2). Без этого отзыв токена (SRV-3), уход
+    // агента или пропавшая сеть оставляли бы хост в списке живым, а его серверы
+    // — в состоянии, которое давно неправда (MGR-2). Отказ рукопожатия сюда не
+    // попадает: там канал закрывается уже после названного исхода, и `connected`
+    // ещё не поднимался — переписывать его причину этой было бы хуже.
+    client.onClose((reason) => {
+      if (!mine() || !host.view.connected) return;
+      host.client = undefined;
+      host.view = {
+        ...host.view,
+        connected: false,
+        connecting: false,
+        failure: reason === '' ? 'канал закрыт' : `канал закрыт: ${reason}`,
+      };
+      notice = host.view.failure;
+      changed();
+    });
     try {
       const welcome = await client.connect({
         url: known.url,
@@ -232,6 +268,10 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
         pinned: known.fingerprint,
         label: options.label ?? 'Fluxus Server Manager',
       });
+      if (!mine()) {
+        client.close();
+        return;
+      }
       host.view = {
         ...host.view,
         connected: true,
@@ -241,18 +281,39 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
       };
       // Токен и отпечаток запоминаются ПОСЛЕ успеха: книга не должна помнить
       // того, чего не было. Локальный хост в книгу не попадает (MGR-5).
+      // Своим try, потому что книга, которую не удалось записать, — не отказ
+      // подключения: канал открыт, хост работает, потеряна только память о нём.
       if (!local) {
-        book.remember({
-          ...known,
-          token: welcome.token === '' ? known.token : welcome.token,
-          fingerprint: welcome.fingerprint,
-        });
+        try {
+          book.remember({
+            ...known,
+            token: welcome.token === '' ? known.token : welcome.token,
+            fingerprint: welcome.fingerprint,
+          });
+        } catch (error) {
+          notice = `хост подключён, но не запомнен: ${named(error)}`;
+        }
       }
-      host.servers = (await client.list()).servers;
+      const listed = await client.list();
+      if (!mine()) {
+        client.close();
+        return;
+      }
+      host.servers = listed.servers;
       // Перечень документов матча — у КАЖДОГО хоста свой (решение D11): один
       // общий список предлагал бы документы, которых на принимающем хосте нет.
-      host.matches = (await client.matches()).matches;
+      const documents = await client.matches();
+      if (!mine()) {
+        client.close();
+        return;
+      }
+      host.matches = documents.matches;
     } catch (error) {
+      // Канал мог остаться ОТКРЫТЫМ: рукопожатие прошло, а отказала уже
+      // операция после него. Бросить ссылку, не закрыв его, значило бы оставить
+      // живой канал, события которого правят список хоста, показанного мёртвым.
+      client.close();
+      if (!mine()) return;
       host.client = undefined;
       // Причина НАЗЫВАЕТСЯ: добавление хоста — операция протокола (MGR-1), а
       // «Отказ любой операции SHALL быть наблюдаем как отказ с названной
@@ -318,22 +379,30 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
       );
     },
     async restore() {
-      for (const known of book.list()) await attach(known, false, '');
+      // Параллельно, а не по очереди: `attach` вправе длиться до своего дедлайна
+      // (недостижимый адрес — это молчание, а не быстрый отказ), и очередь
+      // прятала бы РАБОЧИЙ хост за временем ожидания мёртвого. «Хостов SHALL
+      // быть много» (MGR-1) — значит, один недоступный не задерживает остальных.
+      await Promise.all(book.list().map((known) => attach(known, false, '')));
     },
     async forget(hostId) {
       hosts.get(hostId)?.client?.close();
       hosts.delete(hostId);
+      attempts.delete(hostId);
       book.forget(hostId);
       if (details?.host === hostId) details = undefined;
       changed();
       await Promise.resolve();
     },
-    async refresh() {
-      for (const host of hosts.values()) {
-        if (host.client?.connected !== true) continue;
-        host.servers = (await host.client.list()).servers;
-      }
-      changed();
+    refresh() {
+      // Под `guarded`, как всякая операция протокола: отказ `list` называется
+      // человеку, а не улетает отклонённым промисом (SRV-2).
+      return guarded(async () => {
+        for (const host of hosts.values()) {
+          if (host.client?.connected !== true) continue;
+          host.servers = (await host.client.list()).servers;
+        }
+      });
     },
     start(hostId, params) {
       return guarded(async () => {
@@ -347,14 +416,17 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
         const client = clientOf(hostId);
         await client.stop(serverId);
         require(hostId).servers = (await client.list()).servers;
-        if (details?.entry.id === serverId) details = undefined;
+        // Сервер опознаётся ПАРОЙ «хост + идентификатор»: `srv-1` есть у
+        // каждого агента (реестр нумерует их у себя), и голого идентификатора
+        // хватило бы, чтобы остановка на одном хосте закрыла детали чужого.
+        if (details?.host === hostId && details.entry.id === serverId) details = undefined;
       });
     },
     select(hostId, serverId) {
       return guarded(async () => {
         const client = clientOf(hostId);
         // Отписка от прежнего: без читателя отчёт метрик не собирается (D9).
-        if (details !== undefined && details.entry.id !== serverId) {
+        if (details !== undefined && (details.host !== hostId || details.entry.id !== serverId)) {
           try {
             await clientOf(details.host).unsubscribe(details.entry.id);
           } catch {
@@ -401,6 +473,7 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
     close() {
       for (const host of hosts.values()) host.client?.close();
       hosts.clear();
+      attempts.clear();
       details = undefined;
       changed();
     },

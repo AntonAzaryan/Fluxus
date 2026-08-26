@@ -31,7 +31,12 @@ export interface KnownHost {
 export interface PageStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  /** Есть у `Storage`; книге нужен только для пробы записи в `pageStorage`. */
+  removeItem?(key: string): void;
 }
+
+/** Ключ пробы записи: пишется и стирается, книгу не задевает. */
+const PROBE_KEY = 'fluxus.server-manager.probe';
 
 /** Ключ записи в хранилище страницы. */
 export const HOST_BOOK_KEY = 'fluxus.server-manager.hosts';
@@ -53,15 +58,38 @@ export function hostIdOf(url: string): string {
   }
 }
 
+/** Строковое поле записи книги либо умолчание: чужое значение в книге — мусор. */
+function field(entry: Record<string, unknown>, key: string, fallback: string): string {
+  const value = entry[key];
+  return typeof value === 'string' ? value : fallback;
+}
+
 function parse(raw: string | null): KnownHost[] {
   if (raw === null || raw === '') return [];
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (entry): entry is KnownHost =>
-        typeof entry === 'object' && entry !== null && typeof (entry as KnownHost).url === 'string',
-    );
+    const hosts: KnownHost[] = [];
+    for (const entry of parsed) {
+      if (typeof entry !== 'object' || entry === null) continue;
+      const record = entry as Record<string, unknown>;
+      const url = field(record, 'url', '');
+      if (url === '') continue;
+      // Проверяется КАЖДОЕ поле, а не один адрес: запись с чужим `id` уходила
+      // в карту хостов ключом `undefined`, и хост показывался безымянным, а
+      // рукопожатие уходило с пустым токеном — отказ вместо подключения.
+      // Недостающее восстанавливается из адреса, а не подставляется молча
+      // неопределённым.
+      const id = field(record, 'id', hostIdOf(url));
+      hosts.push({
+        id,
+        url,
+        label: field(record, 'label', id),
+        token: field(record, 'token', ''),
+        fingerprint: field(record, 'fingerprint', ''),
+      });
+    }
+    return hosts;
   } catch {
     // Испорченная книга не роняет приложение и не «чинится» молча: считаем, что
     // известных хостов нет, — добавить их заново можно пейрингом.
@@ -70,7 +98,15 @@ function parse(raw: string | null): KnownHost[] {
 }
 
 export function hostBook(storage: PageStorage): HostBook {
-  const read = (): KnownHost[] => parse(storage.getItem(HOST_BOOK_KEY));
+  const read = (): KnownHost[] => {
+    try {
+      return parse(storage.getItem(HOST_BOOK_KEY));
+    } catch {
+      // Хранилище вправе бросить и на ЧТЕНИИ (политика данных сайта меняется
+      // при живой странице): книги нет — работаем без памяти о хостах.
+      return [];
+    }
+  };
   const write = (hosts: readonly KnownHost[]): void => {
     storage.setItem(HOST_BOOK_KEY, JSON.stringify(hosts));
   };
@@ -95,6 +131,9 @@ export function memoryStorage(): PageStorage {
     setItem: (key, value) => {
       cells.set(key, value);
     },
+    removeItem: (key) => {
+      cells.delete(key);
+    },
   };
 }
 
@@ -107,7 +146,12 @@ export function pageStorage(scope: { localStorage?: PageStorage }): PageStorage 
   try {
     const storage = scope.localStorage;
     if (storage === undefined) return memoryStorage();
-    storage.getItem(HOST_BOOK_KEY);
+    // Проба именно ЗАПИСЬЮ: `localStorage`, исчерпавший квоту или запрещённый
+    // к записи политикой, читается прекрасно и бросает только на `setItem` —
+    // проба чтением объявила бы его годным, и первая же запомненная запись
+    // выглядела бы отказом ПОДКЛЮЧЕНИЯ, которого не было.
+    storage.setItem(PROBE_KEY, '1');
+    storage.removeItem?.(PROBE_KEY);
     return storage;
   } catch {
     return memoryStorage();

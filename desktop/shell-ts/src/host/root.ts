@@ -43,7 +43,7 @@
  */
 import { realpath as realpathNative, realpathSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import type {
   BridgeChange,
   BridgeChangeKind,
@@ -263,7 +263,17 @@ export function createHostRoot(options: HostRootOptions): HostRoot {
   };
 
   const notify = (change: BridgeChange): void => {
-    for (const listener of [...listeners]) listener(change);
+    for (const listener of [...listeners]) {
+      try {
+        listener(change);
+      } catch {
+        // Слушатель вправе умереть раньше отписки: в контейнере это
+        // `event.sender.send` на уничтоженном `WebContents` (перезагрузка
+        // страницы, закрытие окна). Зовут `notify` из `.then()` наблюдателя —
+        // брошенное отсюда стало бы необработанным отклонением, а оно валит
+        // главный процесс контейнера целиком.
+      }
+    }
   };
 
   /** Событие наблюдателя → изменение дерева. `null` от платформы игнорируется. */
@@ -400,20 +410,46 @@ export function createHostRoot(options: HostRootOptions): HostRoot {
 }
 
 /**
+ * Реальный путь ещё не существующего пути: ближайший существующий предок,
+ * разрешённый системой, плюс приписанный назад хвост. `null` — предка разрешить
+ * не удалось, и это тот же отказ в сторону строгости, что и всюду здесь.
+ */
+function realOfMissing(absolute: string): string | null {
+  const tail: string[] = [];
+  let probe = absolute;
+  for (;;) {
+    const found = realSync(probe);
+    if (found.kind === 'failed') return null;
+    if (found.kind === 'path') return tail.length === 0 ? found.path : join(found.path, ...tail);
+    const parent = dirname(probe);
+    if (parent === probe) return null;
+    tail.unshift(basename(probe));
+    probe = parent;
+  }
+}
+
+/**
  * Путь файла относительно корня или `null` — файл лежит вне его.
  *
  * Сверяются РЕАЛЬНЫЕ пути обеих сторон: сюда приходит то, что выбрал автор в
  * системном диалоге, и ссылка, ведущая наружу, обязана стать отказом, а не
- * путём дерева (DSK-5). Пути ещё нет — сверяется лексически: диалог отдаёт
- * существующий путь, а несуществующему взяться из ссылки неоткуда. Не
- * РАЗРЕШАЕТСЯ (иная ошибка файловой системы) — ответ «вне корня»: это отказ в
- * сторону строгости, а сверять непроверенное значило бы отвечать наугад.
+ * путём дерева (DSK-5). Пути ещё нет — разрешается ближайший существующий
+ * предок и к нему приписывается хвост (`realOfMissing`): сверять лексическую
+ * цель с каноническим корнем нельзя, под корнем-ссылкой они не совпали бы
+ * никогда. Не РАЗРЕШАЕТСЯ (иная ошибка файловой системы) — ответ «вне корня»:
+ * это отказ в сторону строгости, а сверять непроверенное значило бы отвечать
+ * наугад.
  */
 export function insideRoot(root: HostRoot, absolute: string): HostPath | null {
   const target = realSync(resolve(absolute));
   const rootPath = realSync(root.directory);
   if (target.kind === 'failed' || rootPath.kind === 'failed') return null;
-  const full = target.kind === 'path' ? target.path : resolve(absolute);
+  // Путь, которого ЕЩЁ НЕТ, разрешается по ближайшему существующему предку, а
+  // не берётся лексически: корень к этому моменту уже канонический, и
+  // лексическая цель под корнем-ссылкой не совпала бы с ним ни одним префиксом —
+  // всякий новый файл под таким корнем читался бы как лежащий вне его.
+  const full = target.kind === 'path' ? target.path : realOfMissing(resolve(absolute));
+  if (full === null) return null;
   const base = rootPath.kind === 'path' ? rootPath.path : root.directory;
   if (full === base) return '';
   if (!contains(base, full)) return null;

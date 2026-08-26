@@ -35,6 +35,15 @@ export interface DetachPauseOptions {
   readonly players: readonly string[];
   /** Есть ли у слота живое соединение — публичное наблюдение за своим матчем (NTR-18). */
   readonly attached: (slot: number) => boolean;
+  /**
+   * Заперт ли слот админом (NTR-19). Запертого владельца ЖДАТЬ НЕЛЬЗЯ: его
+   * `Hello` получает названный отказ, и вернуться он не может по определению.
+   * Считай стенд такой слот «отвязанным» — и админ-операция «убрать игрока»
+   * превращалась бы в заморозку всего матча до истечения `pause.maxPauseMs`, а в
+   * документе без этого поля — навсегда. NTR-19 требует прямо обратного: «матч
+   * продолжается — слот ведёт заместитель или predicted-фреймы».
+   */
+  readonly barred?: (slot: number) => boolean;
   /** Идёт ли матч: до `Start` и после конца замораживать нечего. */
   readonly running: () => boolean;
   /** Текущее состояние паузы матча (NTR-20). */
@@ -115,7 +124,9 @@ export class DetachPause {
       this.spent = false;
       return;
     }
-    const missing = this.options.players.some((_, slot) => !this.options.attached(slot));
+    const missing = this.options.players.some(
+      (_, slot) => !this.options.attached(slot) && this.options.barred?.(slot) !== true,
+    );
     if (!missing) {
       // Состав полон — эпизод отвязки кончился: снимаем свою заморозку и
       // возвращаем право заморозить СЛЕДУЮЩИЙ разрыв.
