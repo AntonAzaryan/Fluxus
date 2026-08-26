@@ -13,13 +13,44 @@
  * Node, а не то, как его грузит vitest.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * Умеет ли окружение заводить ссылку на КАТАЛОГ.
+ *
+ * На Windows это привилегия (режим разработчика либо администратор), и её
+ * отсутствие — свойство машины, а не дефект кода. Случай поэтому ПРОПУСКАЕТСЯ
+ * явно: назвать проверку непроведённой честнее, чем подменить её ссылкой,
+ * которой в проверяемом сценарии нет.
+ *
+ * Junction, привилегии не требующий, заменой не служит: он нацеливается только
+ * на ЛОКАЛЬНЫЙ том, а том репозитория бывает и не таким. На машине, где это
+ * писалось, junction на каталог репозитория создавался успешно, после чего
+ * любое обращение к нему падало с «имя содержит по крайней мере одну точку
+ * подключения, которая ссылается на том, к которому объект устройства не
+ * подключен». Проба поэтому заводит обычную ссылку — она такого ограничения не
+ * знает и проверяет ровно то право, которое тесту и нужно.
+ */
+const DIRECTORY_LINKS_ALLOWED = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'journal-linkprobe-'));
+  try {
+    // Цель у пробы своя, а не каталог репозитория: проверяется право заводить
+    // ссылку, и трогать ради этого дерево репозитория незачем.
+    mkdirSync(join(probe, 'target'));
+    symlinkSync(join(probe, 'target'), join(probe, 'link'), 'dir');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
 const SIM = join(ROOT, 'bin', 'sim.mjs');
 const GOLDEN_DIR = join(ROOT, '..', 'tests', 'golden');
 
@@ -225,7 +256,7 @@ describe('bin/journal.mjs (CLI-12)', () => {
     });
   }
 
-  it('работает и через симлинк на каталог репозитория', () => {
+  it.skipIf(!DIRECTORY_LINKS_ALLOWED)('работает и через симлинк на каталог репозитория', () => {
     // Признак «запущен как команда» сравнивает URL после разрешения симлинков:
     // сравнение строк путей давало бы через симлинк ПУСТОЙ вывод и код 0 —
     // самый дорогой вид отказа для того, кто зовёт команду из скрипта.

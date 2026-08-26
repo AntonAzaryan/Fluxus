@@ -35,6 +35,12 @@ export interface HostView {
   /** Локальный хост поднят объявленным сервисом контейнера (MGR-5). */
   readonly local: boolean;
   readonly connected: boolean;
+  /**
+   * Попытка подключения ИДЁТ: ни `connected`, ни `failure` пока ничего не
+   * значат. Отдельное состояние, а не «ещё не подключён», потому что человеку
+   * это разные вещи: попытка, которая длится, и попытка, которой не было.
+   */
+  readonly connecting: boolean;
   /** Версии дистрибутива хоста (SRV-7); пустые — рукопожатия ещё не было. */
   readonly buildId: string;
   readonly contentPackHash: string;
@@ -204,12 +210,19 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
         url: known.url,
         local,
         connected: false,
+        connecting: true,
         buildId: '',
         contentPackHash: '',
         failure: '',
       },
     };
     hosts.set(known.id, host);
+    // Хост показывается С НАЧАЛА попытки, а не по её исходу. Иначе всё время,
+    // пока канал открывается — а он вправе открываться долго и вправе не
+    // открыться никогда, — человек видит ровно то же, что до нажатия: пустое
+    // место, хотя хост уже добавлен (MGR-1). А отказ, о котором нельзя сказать,
+    // начался ли он вообще, не наблюдаем в смысле SRV-2.
+    changed();
     client.onEvent((event) => { onEvent(known.id, event); });
     try {
       const welcome = await client.connect({
@@ -222,6 +235,7 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
       host.view = {
         ...host.view,
         connected: true,
+        connecting: false,
         buildId: welcome.versions.buildId,
         contentPackHash: welcome.versions.contentPackHash,
       };
@@ -240,9 +254,11 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
       host.matches = (await client.matches()).matches;
     } catch (error) {
       host.client = undefined;
-      // Причина НАЗЫВАЕТСЯ: «сервер не появился» — не ответ (MGR-2), и смена
-      // отпечатка (SRV-3) обязана быть громкой.
-      host.view = { ...host.view, connected: false, failure: named(error) };
+      // Причина НАЗЫВАЕТСЯ: добавление хоста — операция протокола (MGR-1), а
+      // «Отказ любой операции SHALL быть наблюдаем как отказ с названной
+      // причиной» (SRV-2). Смена отпечатка (SRV-3) обязана быть громкой тем же
+      // порядком.
+      host.view = { ...host.view, connected: false, connecting: false, failure: named(error) };
       notice = host.view.failure;
     }
     changed();

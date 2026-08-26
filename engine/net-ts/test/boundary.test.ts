@@ -8,9 +8,16 @@
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const CORE_ROOT = new URL('../../core-ts/', import.meta.url).pathname;
+/**
+ * Путь берётся `fileURLToPath`, а не `URL.pathname`: у `file:`-адреса на
+ * Windows `pathname` — это `/D:/Fluxus/...`, и `join` с него начинает второй
+ * абсолютный путь (`D:\D:\Fluxus\...`). Проверка границы падала бы на ENOENT,
+ * ни разу не заглянув в исходники.
+ */
+const CORE_ROOT = fileURLToPath(new URL('../../core-ts/', import.meta.url));
 
 function coreSources(): string[] {
   return readdirSync(join(CORE_ROOT, 'src'), { recursive: true, encoding: 'utf8' })
@@ -44,7 +51,7 @@ describe('поверхность ядра не расширялась', () => {
   it('сетевой слой обходится опубликованной поверхностью', () => {
     // Импорт из глубины ядра (`@fluxus/core/src/...`) означал бы, что граница
     // держится на честном слове, а не на экспортах.
-    const netRoot = new URL('../src/', import.meta.url).pathname;
+    const netRoot = fileURLToPath(new URL('../src/', import.meta.url));
     const offenders = readdirSync(netRoot, { recursive: true, encoding: 'utf8' })
       .filter((entry) => entry.endsWith('.ts'))
       .filter((entry) => readFileSync(join(netRoot, entry), 'utf8').includes('@fluxus/core/'));

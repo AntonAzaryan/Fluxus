@@ -13,7 +13,7 @@
  * не прячет. Сборка страницы игрока — шаг упаковки, а не предмет этого теста.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,11 +42,26 @@ describe('дистрибутив хоста собирается одной ко
   beforeAll(() => {
     work = mkdtempSync(join(tmpdir(), 'fluxus-bundle-'));
     out = join(work, 'host-bundle');
-    execFileSync(process.execPath, [BUNDLE_SCRIPT, '--out', out, '--skip-client', '--quiet'], {
-      cwd: REPO,
-      env: { ...process.env, NODE_OPTIONS: '' },
-      timeout: 120_000,
-    });
+    execFileSync(
+      process.execPath,
+      [
+        BUNDLE_SCRIPT,
+        '--out', out,
+        '--skip-client',
+        // Каталог страницы назван ЯВНО и заведомо пуст. Без этого предмет
+        // проверки — «отсутствие страницы игрока НАЗВАНО» — зависел бы от того,
+        // запускал ли кто-то в этом дереве `npm run demo:build` раньше: сборка
+        // подобрала бы готовый `game/demo-ts/app/dist` и честно сообщила о нём.
+        // Проверять надо утверждение, а не состояние чужого каталога.
+        '--client-dist', join(work, 'no-client'),
+        '--quiet',
+      ],
+      {
+        cwd: REPO,
+        env: { ...process.env, NODE_OPTIONS: '' },
+        timeout: 120_000,
+      },
+    );
     distribution = JSON.parse(readFileSync(join(out, 'distribution.json'), 'utf8')) as Distribution;
   }, 180_000);
 
@@ -70,9 +85,35 @@ describe('дистрибутив хоста собирается одной ко
     // NTR-5): собрать его из разных версий нечем — второго источника нет.
     expect(distribution.buildId).not.toBe('');
     expect(distribution.contentPackHash).not.toBe('');
-    // Отсутствие страницы игрока НАЗВАНО, а не подменено заглушкой.
-    expect(distribution.client).toBe('отсутствует');
+    // Отсутствие страницы игрока НАЗВАНО, а не подменено заглушкой, — и названо
+    // ВМЕСТЕ С ПРИЧИНОЙ: каталог назвали, а его нет. Голое «отсутствует» не
+    // отличило бы опечатку во флаге от осознанной сборки без страницы, а флаг
+    // ещё и отменяет `vite build`.
+    expect(distribution.client).toBe(
+      `отсутствует: каталог --client-dist "${join(work, 'no-client')}" не существует`,
+    );
   });
+
+  it('происхождение страницы игрока названо честно: взята со стороны, а не собрана (SRV-7)', () => {
+    // `distribution.json` — запись о том, ЧТО в дистрибутиве лежит. Страница,
+    // приехавшая со стороны, обязана быть названа приехавшей: сказать о ней
+    // «собран vite build» значило бы приписать дистрибутиву сборку, которой не
+    // было, — и `--client-dist` поэтому сборку не запускает вовсе.
+    const prebuilt = join(work, 'prebuilt-client');
+    mkdirSync(prebuilt, { recursive: true });
+    writeFileSync(join(prebuilt, 'index.html'), 'страница со стороны\n');
+    const outside = join(work, 'outside-bundle');
+    // Флага `--skip-client` здесь НЕТ намеренно: проверяется именно то, что
+    // названный каталог сам по себе отменяет сборку.
+    execFileSync(
+      process.execPath,
+      [BUNDLE_SCRIPT, '--out', outside, '--client-dist', prebuilt, '--quiet'],
+      { cwd: REPO, env: { ...process.env, NODE_OPTIONS: '' }, timeout: 120_000 },
+    );
+    const record = JSON.parse(readFileSync(join(outside, 'distribution.json'), 'utf8')) as Distribution;
+    expect(record.client).toBe('взят готовым (--client-dist)');
+    expect(readFileSync(join(outside, 'client/index.html'), 'utf8')).toContain('страница со стороны');
+  }, 120_000);
 
   it('агент из дистрибутива поднимает сервер и раздаёт дерево, не заглядывая в репозиторий', async () => {
     const stateDir = join(work, 'state');

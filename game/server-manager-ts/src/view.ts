@@ -173,6 +173,10 @@ function hostsPanel(state: ManagerState): UiNode {
         text('span', 'mg-host__label', host.label),
         text('span', 'mg-host__url', host.url),
         text('span', 'mg-host__version', host.connected ? `${host.buildId} + ${host.contentPackHash}` : ''),
+        // Идущая попытка НАЗВАНА: строка хоста появляется сразу по нажатию
+        // (MGR-1), и без этого слова она молчала бы ровно так же, как строка
+        // хоста, подключение к которому не начиналось.
+        text('span', 'mg-host__state', host.connecting ? 'подключается…' : ''),
         text('span', 'mg-host__failure', host.failure),
         {
           tag: 'button',

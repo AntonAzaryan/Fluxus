@@ -48,7 +48,7 @@
  * авторинга при этом не заводится (design, решение 12). В клиент матча watch не
  * встраивается ни в каком виде (BLND-7).
  */
-import { watch as watchFs } from 'node:fs';
+import { realpathSync, watch as watchFs } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import type {
@@ -308,6 +308,19 @@ export interface SourceWatchOptions {
   readonly report?: (text: string) => void;
 }
 
+/**
+ * Путь в том написании, в каком его понимает сама система. Не разрешается —
+ * остаётся как есть: тогда откажет само наблюдение, названной причиной, и это
+ * предусмотренный здесь исход.
+ */
+function canonical(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
+}
+
 /** Отпечаток файла: правку видно по времени, размеру и inode (подмена файла). */
 async function stamp(file: string): Promise<string> {
   try {
@@ -344,7 +357,15 @@ export function watchSourceFile(options: SourceWatchOptions): () => void {
     // Каталог, а не файл: переименование на место переживает только запись
     // каталога (см. шапку модуля). `filename === null` бывает на платформах,
     // не сообщающих имя, — тогда событие берётся целиком.
-    const watcher = watchFs(directory, (_event, filename) => {
+    //
+    // Путь уходит в наблюдение КАНОНИЧЕСКИЙ, а не тот, что сложился из корня
+    // дерева. На Windows он может содержать короткое имя 8.3 (`C:\Users\3EC2~1\…`
+    // — так, в частности, выглядит `%TEMP%` у профиля с кириллицей), а
+    // наблюдение за таким каталогом роняет ПРОЦЕСС на внутреннем assert'е libuv:
+    // имена, которые приносит система, короткому написанию уже не соответствуют.
+    // Отказ наблюдения watch переживает — остаётся опрос, — а падение процесса
+    // не переживает никто.
+    const watcher = watchFs(canonical(directory), (_event, filename) => {
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- baseline
       if (filename === null || basename(String(filename)) === name) announce();
     });

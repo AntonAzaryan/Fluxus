@@ -50,6 +50,7 @@ body { margin: 0; background: var(--mg-canvas); color: var(--mg-text);
   padding: 4px 0; border-bottom: 1px solid var(--mg-border); }
 .mg-host--live .mg-host__label { color: var(--mg-accent-bright); }
 .mg-host__url, .mg-host__version, .mg-server__address { color: var(--mg-faint); font-family: ui-monospace, monospace; }
+.mg-host__state { color: var(--mg-muted); }
 .mg-host__failure, .mg-notice { color: var(--mg-accent-bright); }
 .mg-server--selected { background: var(--mg-accent-wash); }
 .mg-server__pick { background: none; border: none; color: var(--mg-text); cursor: pointer;

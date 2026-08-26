@@ -9,6 +9,7 @@
  * ставит один вызов `withValidation`, и разъединить их вызывающему нечем.
  */
 import { readFileSync, readdirSync } from 'node:fs';
+import { sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -127,7 +128,9 @@ describe('ED-22: признак нарушения не существует б�
       .filter((entry) => entry.endsWith('.ts'))
       .filter((entry) => /`\$\{?(INVALID_CLASS_PREFIX|VALIDATION_CLASS)/.test(
         readFileSync(`${dir}/${entry}`, 'utf8'),
-      ));
+      ))
+      // Разделитель у `readdir` платформенный, а модуль назван через `/`.
+      .map((entry) => entry.split(sep).join('/'));
     expect(builders).toEqual(['widgets/validation.ts']);
   });
 });

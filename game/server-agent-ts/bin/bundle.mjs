@@ -3,7 +3,7 @@
  * Сборка дистрибутива хоста (SRV-7, решение D10) — ОДНОЙ командой:
  *
  *   npm run host:bundle [-- --out dist/host-bundle] [--match content/matches/duel.match.json]
- *                          [--skip-client]
+ *                          [--skip-client] [--client-dist game/demo-ts/app/dist]
  *
  * Состав дистрибутива согласован ПО ПОСТРОЕНИЮ: агент, запускалка сервера матча,
  * собранный клиентский бандл и дерево контента кладутся вместе, а версии
@@ -21,8 +21,22 @@
  * Отсутствующий бандл при этом НЕ подменяется заглушкой — он назван
  * отсутствующим в `distribution.json` и в отчёте: дистрибутив без страницы
  * игрока честнее молча пустого каталога.
+ *
+ * `--client-dist` называет каталог собранной страницы явно. Умолчание —
+ * `game/demo-ts/app/dist`, куда кладёт её `vite build`; явная форма нужна там,
+ * где бандл приехал со стороны, и там, где сборку проверяют ИМЕННО на
+ * отсутствующей странице: без неё состав дистрибутива зависел бы от того,
+ * запускал ли кто-то `npm run demo:build` в этом дереве раньше.
+ *
+ * Названный каталог ПОДРАЗУМЕВАЕТ пропуск сборки, и не ради экономии времени: с
+ * ним `vite build` писал бы в один каталог, а страница бралась бы из другого, и
+ * `distribution.json` — запись SRV-7 о том, ЧТО в дистрибутиве лежит, —
+ * сообщал бы «собран vite build» о странице, которую эта сборка не производила.
+ * Поэтому источник страницы называется в отчёте прямо, и все случаи различимы:
+ * собрана здесь, взята готовой из умолчания, взята по `--client-dist` — и
+ * отдельно отсутствует потому, что названного каталога нет на диске.
  */
-import { execFileSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative as relativePath, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,14 +49,18 @@ const fromRepo = (relative) => join(REPO, relative);
 if (flag('help')) {
   process.stdout.write(
     'usage: npm run host:bundle [-- --out dist/host-bundle] [--match content/matches/duel.match.json]\n' +
-      '                           [--skip-client]\n',
+      '                           [--skip-client] [--client-dist game/demo-ts/app/dist]\n',
   );
   process.exit(0);
 }
 
 const outDir = resolve(process.cwd(), option('out', fromRepo('dist/host-bundle')));
 const matchPath = resolve(process.cwd(), option('match', fromRepo('content/matches/duel.match.json')));
-const skipClient = flag('skip-client');
+const namedDist = option('client-dist', '');
+const clientDist = resolve(process.cwd(), namedDist === '' ? fromRepo('game/demo-ts/app/dist') : namedDist);
+// Названный каталог страницы — сам по себе указание не собирать: собирать в
+// один каталог, а брать из другого, значило бы врать отчётом о происхождении.
+const skipClient = flag('skip-client') || namedDist !== '';
 const quiet = flag('quiet');
 const say = (text) => { if (!quiet) process.stdout.write(text); };
 
@@ -134,13 +152,40 @@ rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
 // 1. Клиентский бандл: тот же `vite build`, каким собирается десктоп-сборка игры.
-const clientDist = fromRepo('game/demo-ts/app/dist');
 if (!skipClient) {
   say('  собираю клиент (vite build)…\n');
-  execFileSync('npm', ['run', 'demo:build', '-w', '@fluxus/demo'], { cwd: REPO, stdio: quiet ? 'ignore' : 'inherit' });
+  // Команда репозитория, а не вызов vite напрямую: второй способ собрать
+  // страницу был бы вторым мнением о том, как она собирается.
+  //
+  // Идёт она через оболочку, и это не удобство: на Windows `npm` — это
+  // `npm.cmd`, а Node с 20-й версии отказывается запускать `.cmd` иначе, и шаг
+  // падал `spawnSync npm ENOENT` там, где команда написана верно. Оболочке
+  // отдаётся ОДНА постоянная строка: подставлять в неё нечего, поэтому
+  // единственная опасность оболочки — подстановка — здесь отсутствует, а
+  // массив аргументов при `shell` Node объявил устаревшим (DEP0190).
+  execSync('npm run demo:build -w @fluxus/demo', {
+    cwd: REPO,
+    stdio: quiet ? 'ignore' : 'inherit',
+  });
 }
 const clientBuilt = existsSync(clientDist);
 if (clientBuilt) cpSync(clientDist, join(outDir, 'client'), { recursive: true });
+
+/** Откуда взялась страница игрока — ровно то, что записывается в `distribution.json` (SRV-7). */
+function clientOrigin() {
+  if (clientBuilt) {
+    if (namedDist !== '') return 'взят готовым (--client-dist)';
+    if (skipClient) return 'взят готовым (--skip-client)';
+    return 'собран vite build';
+  }
+  // Названный каталог, которого нет, — почти наверняка опечатка во флаге, а не
+  // решение собрать дистрибутив без страницы игрока. Отличать этот случай
+  // обязательно: флаг ещё и отменяет сборку, поэтому одна опечатка молча даёт
+  // дистрибутив без страницы, и «отсутствует» вообще не назвало бы, чего не
+  // хватило. Отсутствие называется вместе с причиной.
+  if (namedDist !== '') return `отсутствует: каталог --client-dist "${namedDist}" не существует`;
+  return 'отсутствует';
+}
 
 // 2. Дерево контента — целиком: сервер поднимает по нему матч, клиент читает
 //    ассеты той же раздачей (SRV-8).
@@ -172,7 +217,7 @@ const distribution = {
   contentPackHash: pack.hash,
   match: matchPath.slice(REPO.length + 1),
   builtWith: process.version,
-  client: clientBuilt ? (skipClient ? 'взят готовым (--skip-client)' : 'собран vite build') : 'отсутствует',
+  client: clientOrigin(),
 };
 writeFileSync(join(outDir, 'distribution.json'), `${JSON.stringify(distribution, null, 2)}\n`);
 

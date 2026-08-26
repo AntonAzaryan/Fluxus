@@ -41,8 +41,8 @@
  * `created`. Потребителю обе формы означают «перечитай», и строить ради
  * различения индекс всего дерева на старте — платить деревом за уведомление.
  */
-import { realpathSync } from 'node:fs';
-import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { realpath as realpathNative, realpathSync } from 'node:fs';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type {
   BridgeChange,
@@ -119,42 +119,99 @@ function chainToRoot(absolute: string, directory: string): string[] {
 }
 
 /**
- * Разрешается ли цель внутрь корня НА САМОМ ДЕЛЕ. Решает первый предок, который
- * существует: то, чего ещё нет, окажется там, куда указывает он. Не разрешается
- * даже сам корень — корня ещё нет на диске, и ссылке, ведущей наружу, взяться
- * неоткуда: недостающие каталоги создаст сама запись.
+ * Что файловая система ответила о пути.
+ *
+ * Три исхода, а не два, потому что «пути нет» и «разрешить не удалось» — разные
+ * ответы, и путать их здесь опаснее всего: у первого есть законное продолжение
+ * (недостающее создаст запись), у второго — нет никакого.
  */
-async function realInside(absolute: string, directory: string, real: string): Promise<boolean> {
-  const chain = chainToRoot(absolute, directory);
-  if (chain.length === 0) return false;
-  for (const probe of chain) {
-    const resolved = await realpath(probe).then(
-      (value) => value,
-      () => null,
-    );
-    if (resolved !== null) return contains(real, resolved);
-  }
-  return true;
+type Real =
+  | { readonly kind: 'path'; readonly path: string }
+  /** Пути ещё нет — `ENOENT` (на POSIX ещё `ENOTDIR`, когда предок оказался файлом). */
+  | { readonly kind: 'missing' }
+  /** Разрешить не удалось по иной причине: это отказ, а не «ещё нет». */
+  | { readonly kind: 'failed'; readonly why: string };
+
+function classify(error: unknown): Real {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'missing' };
+  return { kind: 'failed', why: error instanceof Error ? error.message : String(error) };
 }
 
-/** Синхронный близнец `realInside` — для `resolve`, который синхронен. */
-function realInsideSync(absolute: string, directory: string, real: string): boolean {
+/**
+ * Разрешается ли цель внутрь корня НА САМОМ ДЕЛЕ. `null` — да; строка — причина
+ * отказа, которую и увидит вызывающий.
+ *
+ * Решает первый предок, который СУЩЕСТВУЕТ: то, чего ещё нет, окажется там, куда
+ * указывает он. Не разрешается даже сам корень — корня ещё нет на диске, и
+ * ссылке, ведущей наружу, взяться неоткуда: недостающие каталоги создаст сама
+ * запись.
+ *
+ * А вот предок, который есть, но не разрешается, — отказ, и это не педантизм.
+ * Системный `realpath` умеет отказывать не только «нет такого пути»: на musl он
+ * требует смонтированного `/proc`, на Windows отвечает `UNKNOWN` на точке
+ * подключения, чей том не подключён. Проглотить такой ответ значило бы молча
+ * опустить проверку до лексической — ровно до той, недостаточность которой и
+ * описана в шапке модуля.
+ */
+async function outsideReason(absolute: string, directory: string, real: string): Promise<string | null> {
   const chain = chainToRoot(absolute, directory);
-  if (chain.length === 0) return false;
+  if (chain.length === 0) return OUTSIDE;
   for (const probe of chain) {
-    const resolved = realOrNull(probe);
-    if (resolved !== null) return contains(real, resolved);
+    const found = await realOf(probe);
+    if (found.kind === 'failed') return unresolved(found.why);
+    if (found.kind === 'path') return contains(real, found.path) ? null : OUTSIDE;
   }
-  return true;
+  return null;
 }
 
-/** Реальный путь или `null` — пути на диске нет (или он не разрешается). */
-function realOrNull(path: string): string | null {
+/** Синхронный близнец `outsideReason` — для `resolve`, который синхронен. */
+function outsideReasonSync(absolute: string, directory: string, real: string): string | null {
+  const chain = chainToRoot(absolute, directory);
+  if (chain.length === 0) return OUTSIDE;
+  for (const probe of chain) {
+    const found = realSync(probe);
+    if (found.kind === 'failed') return unresolved(found.why);
+    if (found.kind === 'path') return contains(real, found.path) ? null : OUTSIDE;
+  }
+  return null;
+}
+
+const OUTSIDE = 'разрешается за пределы корня (DSK-5)';
+const unresolved = (why: string): string =>
+  `не разрешается файловой системой, и границу по нему не проверить: ${why} (DSK-5)`;
+
+/**
+ * Реальный путь пути на диске.
+ *
+ * Разрешает ОБЕ пары — синхронная и асинхронная — одна и та же реализация
+ * `realpath`, системная (`native`). Это не вкусовщина: у Node две разные
+ * реализации, и они отвечают РАЗНОЕ. Своя, на `lstat`, разворачивает ссылки, но
+ * оставляет путь таким, как его написали; системная приводит путь к
+ * каноническому виду целиком — на Windows это, в частности, разворачивает
+ * короткие имена 8.3 (`C:\Users\3EC2~1\…` → `C:\Users\Антон\…`).
+ *
+ * Взять на две стороны разные реализации значит сравнивать разные написания
+ * одного каталога. Ровно это и случилось: корень запоминался своей, цель
+ * разрешалась системной, `contains` не совпадал ни разу — и корень, лежащий под
+ * коротким путём, отвергал КАЖДУЮ операцию как выход за свои пределы (DSK-5),
+ * не выпустив при этом наружу ничего. Отказ ложный, а выглядит как настоящий.
+ */
+function realSync(path: string): Real {
   try {
-    return realpathSync(path);
-  } catch {
-    return null;
+    return { kind: 'path', path: realpathSync.native(path) };
+  } catch (error) {
+    return classify(error);
   }
+}
+
+/** Асинхронный близнец `realSync` — та же системная реализация. */
+function realOf(path: string): Promise<Real> {
+  return new Promise((done) => {
+    realpathNative.native(path, (error, resolved) => {
+      done(error === null ? { kind: 'path', path: resolved } : classify(error));
+    });
+  });
 }
 
 export function createHostRoot(options: HostRootOptions): HostRoot {
@@ -172,28 +229,36 @@ export function createHostRoot(options: HostRootOptions): HostRoot {
    * дальше он сверяется на каждой операции. Сравнивать реальный путь цели с
    * лексическим путём корня нельзя: `/var` → `/private/var` и прочие системные
    * ссылки покраснели бы на пустом месте.
+   *
+   * Корень, который ЕСТЬ, но не разрешается, — отказ, а не повод сверяться с
+   * лексическим путём: сверка двух разных написаний одного каталога не значит
+   * ничего, а выглядит как пройденная проверка.
    */
   let realDirectory: string | null = null;
   const rootReal = (): string => {
-    realDirectory ??= realOrNull(directory);
-    return realDirectory ?? directory;
+    if (realDirectory !== null) return realDirectory;
+    const found = realSync(directory);
+    if (found.kind === 'failed') throw refuse(id, directory, `корень ${unresolved(found.why)}`);
+    // Корня ещё нет на диске — сверяться не с чем, и это законно: цель тогда
+    // тоже не разрешается ни в одном предке, а недостающее создаст запись.
+    if (found.kind === 'missing') return directory;
+    realDirectory = found.path;
+    return realDirectory;
   };
 
   const absoluteOf = (path: string): string => resolve(join(directory, normalizeHostPath(path)));
 
   const at = async (path: string): Promise<string> => {
     const absolute = absoluteOf(path);
-    if (!(await realInside(absolute, directory, rootReal()))) {
-      throw refuse(id, path, 'разрешается за пределы корня (DSK-5)');
-    }
+    const why = await outsideReason(absolute, directory, rootReal());
+    if (why !== null) throw refuse(id, path, why);
     return absolute;
   };
 
   const atSync = (path: string): string => {
     const absolute = absoluteOf(path);
-    if (!realInsideSync(absolute, directory, rootReal())) {
-      throw refuse(id, path, 'разрешается за пределы корня (DSK-5)');
-    }
+    const why = outsideReasonSync(absolute, directory, rootReal());
+    if (why !== null) throw refuse(id, path, why);
     return absolute;
   };
 
@@ -339,12 +404,17 @@ export function createHostRoot(options: HostRootOptions): HostRoot {
  *
  * Сверяются РЕАЛЬНЫЕ пути обеих сторон: сюда приходит то, что выбрал автор в
  * системном диалоге, и ссылка, ведущая наружу, обязана стать отказом, а не
- * путём дерева (DSK-5). Не разрешается — сверяется лексически: это отказ в
- * сторону строгости, а диалог отдаёт существующий путь.
+ * путём дерева (DSK-5). Пути ещё нет — сверяется лексически: диалог отдаёт
+ * существующий путь, а несуществующему взяться из ссылки неоткуда. Не
+ * РАЗРЕШАЕТСЯ (иная ошибка файловой системы) — ответ «вне корня»: это отказ в
+ * сторону строгости, а сверять непроверенное значило бы отвечать наугад.
  */
 export function insideRoot(root: HostRoot, absolute: string): HostPath | null {
-  const full = realOrNull(resolve(absolute)) ?? resolve(absolute);
-  const base = realOrNull(root.directory) ?? root.directory;
+  const target = realSync(resolve(absolute));
+  const rootPath = realSync(root.directory);
+  if (target.kind === 'failed' || rootPath.kind === 'failed') return null;
+  const full = target.kind === 'path' ? target.path : resolve(absolute);
+  const base = rootPath.kind === 'path' ? rootPath.path : root.directory;
   if (full === base) return '';
   if (!contains(base, full)) return null;
   return relative(base, full).split(sep).join('/');

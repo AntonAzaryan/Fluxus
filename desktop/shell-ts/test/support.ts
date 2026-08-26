@@ -8,6 +8,7 @@
  * тестом (`watchLive.test.ts`), и там ожидание — по условию с крайним сроком, а
  * не по часам.
  */
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -40,6 +41,39 @@ export async function readText(root: string, path: string): Promise<string | und
 export const OUTSIDE_SECRET = 'СЕКРЕТ ВНЕ КОРНЯ';
 
 /**
+ * Ссылка на КАТАЛОГ. На Windows обычная символическая ссылка требует
+ * привилегии, а junction — нет; `realpath` разрешает обе одинаково, и DSK-5 про
+ * то, КУДА путь разрешается, а не каким видом ссылки он туда ведёт. Так случай
+ * «дерево привезло ссылку наружу» проверяется и там, где ссылки заводить
+ * запрещено.
+ */
+export async function linkDirectory(target: string, path: string): Promise<void> {
+  await symlink(target, path, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
+/**
+ * Умеет ли окружение заводить ссылку на ФАЙЛ.
+ *
+ * У каталога обход есть (`linkDirectory`), у файла — нет: junction'а для файла
+ * не существует, а символическая ссылка на Windows остаётся привилегией (режим
+ * разработчика либо администратор). Отсутствие привилегии — свойство машины, а
+ * не дефект, поэтому случай файловой ссылки в такой среде ПРОПУСКАЕТСЯ явно:
+ * назвать проверку непроведённой честнее, чем молча ослабить её до каталога.
+ */
+export const FILE_LINKS_ALLOWED = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'fluxus-link-'));
+  try {
+    writeFileSync(join(probe, 'target'), '');
+    symlinkSync(join(probe, 'target'), join(probe, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
+/**
  * Кладёт по `path` внутри дерева ссылку на каталог `outside` (вне дерева), где
  * лежит `secret.txt`. Так дерево контента приезжает от чужого инструмента —
  * страница ссылок не создаёт (DSK-5).
@@ -47,7 +81,7 @@ export const OUTSIDE_SECRET = 'СЕКРЕТ ВНЕ КОРНЯ';
 export async function linkOutside(root: string, path: string, outside: string): Promise<void> {
   await mkdir(outside, { recursive: true });
   await writeFile(join(outside, 'secret.txt'), OUTSIDE_SECRET);
-  await symlink(outside, join(root, path), 'dir');
+  await linkDirectory(outside, join(root, path));
 }
 
 export async function dropTree(root: string): Promise<void> {

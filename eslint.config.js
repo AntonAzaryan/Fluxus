@@ -47,6 +47,11 @@ export default defineConfig([
     '**/node_modules/**',
     '**/dist/**',
     '**/dist-desktop/**',
+    // Распакованная сборка десктоп-контейнера (`bin/pack.mjs`): это КОПИЯ
+    // исходников репозитория рядом с ними, git её и так не видит (`.gitignore`).
+    // Без исключения линт краснел бы на том же коде во второй раз — и только у
+    // того, кто контейнер собирал.
+    'desktop/shell-ts/build/**',
     'engine/schemas/**',
     'engine/tests/golden/**',
     'content/**',

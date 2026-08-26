@@ -94,8 +94,17 @@ describe('агент — супервизор серверов хоста (SRV-1
     const dir = crashed!.postmortem!;
     expect(existsSync(join(dir, 'exit.json'))).toBe(true);
     expect(existsSync(join(dir, 'log.txt'))).toBe(true);
-    const exit: unknown = JSON.parse(readFileSync(join(dir, 'exit.json'), 'utf8'));
-    expect((exit as { signal: string }).signal).toBe('SIGKILL');
+    const exit = JSON.parse(readFileSync(join(dir, 'exit.json'), 'utf8')) as {
+      signal: string | null;
+      exitCode: number | null;
+    };
+    // Агент записывает то, что сообщила ОС, и недостающего не выдумывает.
+    // Сигналов на Windows нет вовсе: `SIGKILL` там означает `TerminateProcess`,
+    // и ядро называет КОД выхода, а сигнал — нет. Утверждение поэтому одно и то
+    // же на обеих платформах — «выход убитого процесса НАЗВАН» (SRV-6), — а не
+    // его posix-написание.
+    if (process.platform === 'win32') expect(exit.exitCode).not.toBeNull();
+    else expect(exit.signal).toBe('SIGKILL');
     // Хвост лога процесса — то, с чего начинается разбор ночного краша.
     expect(readFileSync(join(dir, 'log.txt'), 'utf8')).toContain('подставной стенд поднят');
   });

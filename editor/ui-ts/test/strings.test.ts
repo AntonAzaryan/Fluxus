@@ -24,6 +24,7 @@
  * пакета, остальные два — тем, что оба источника читаются глазами один раз.
  */
 import { readFileSync, readdirSync } from 'node:fs';
+import { sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -61,7 +62,13 @@ function sources(): { readonly path: string; readonly text: string }[] {
     const dir = fileURLToPath(new URL(`../${root}`, import.meta.url));
     return readdirSync(dir, { recursive: true, encoding: 'utf8' })
       .filter((entry) => entry.endsWith('.ts'))
-      .map((entry) => ({ path: `${root}/${entry}`, text: readFileSync(`${dir}/${entry}`, 'utf8') }));
+      .map((entry) => ({
+        // Адрес модуля пишется через `/` — им же он назван в проверках ниже. У
+        // `readdir` разделитель платформенный (на Windows `dom\render.ts`), и
+        // без приведения сверка с адресом разъехалась бы на пустом месте.
+        path: `${root}/${entry.split(sep).join('/')}`,
+        text: readFileSync(`${dir}/${entry}`, 'utf8'),
+      }));
   });
 }
 

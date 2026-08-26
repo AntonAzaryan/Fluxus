@@ -10,7 +10,17 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BridgeChange } from '../src/bridge/types.js';
 import { createHostRoot, insideRoot } from '../src/host/root.js';
-import { dropTree, fakeObserver, makeTree, putFile, readText, text, utf8 } from './support.js';
+import {
+  dropTree,
+  fakeObserver,
+  linkDirectory,
+  makeTree,
+  putFile,
+  readText,
+  text,
+  utf8,
+  FILE_LINKS_ALLOWED,
+} from './support.js';
 
 const trees: string[] = [];
 
@@ -109,7 +119,9 @@ describe('чтение и границы', () => {
   it('resolve не выпускает за корень', async () => {
     const directory = await tree();
     const root = createHostRoot({ id: 'content', directory });
-    expect(root.resolve('scenes/duel.scene.json')).toBe(`${directory}/scenes/duel.scene.json`);
+    // Ожидание собирается тем же `join`, что и ответ: разделитель — свойство
+    // платформы, а не предмет проверки (на Windows корень пришёл бы с `\`).
+    expect(root.resolve('scenes/duel.scene.json')).toBe(join(directory, 'scenes/duel.scene.json'));
     expect(() => root.resolve('../secret')).toThrow();
     root.close();
   });
@@ -146,16 +158,13 @@ describe('ссылка не выводит за корень (DSK-5)', () => {
   it('ни чтение, ни запись, ни stat, ни перечисление сквозь неё не проходят', async () => {
     const outside = await tree({ 'secret.txt': 'СЕКРЕТ ВНЕ КОРНЯ' });
     const directory = await tree({ 'scenes/duel.scene.json': '{"scene":"duel"}' });
-    await symlink(outside, join(directory, 'outside'), 'dir');
-    await symlink(join(outside, 'secret.txt'), join(directory, 'secret-link.txt'));
+    await linkDirectory(outside, join(directory, 'outside'));
     const root = createHostRoot({ id: 'content', directory, writable: true });
 
     await expect(root.read('outside/secret.txt')).rejects.toThrow('DSK-5');
-    await expect(root.read('secret-link.txt')).rejects.toThrow('DSK-5');
     await expect(root.stat('outside/secret.txt')).rejects.toThrow('DSK-5');
     await expect(root.list('outside')).rejects.toThrow('DSK-5');
     await expect(root.write('outside/written.json', utf8('{}'))).rejects.toThrow('DSK-5');
-    await expect(root.write('secret-link.txt', utf8('{}'))).rejects.toThrow('DSK-5');
     expect(() => root.resolve('outside/secret.txt')).toThrow('DSK-5');
 
     // И ни одного следа снаружи: запись отвергнута до создания каталогов.
@@ -164,14 +173,95 @@ describe('ссылка не выводит за корень (DSK-5)', () => {
     root.close();
   });
 
+  /**
+   * Ссылка на ФАЙЛ — тот же обход, но заводится она не во всякой среде
+   * (`FILE_LINKS_ALLOWED`), а подменить её ссылкой на каталог нельзя: это
+   * другой случай, и он проверен выше. Поэтому здесь честный пропуск, а не
+   * тихо ослабленная проверка.
+   */
+  it.skipIf(!FILE_LINKS_ALLOWED)('ссылка на файл наружу — такой же отказ', async () => {
+    const outside = await tree({ 'secret.txt': 'СЕКРЕТ ВНЕ КОРНЯ' });
+    const directory = await tree({ 'scenes/duel.scene.json': '{"scene":"duel"}' });
+    await symlink(join(outside, 'secret.txt'), join(directory, 'secret-link.txt'));
+    const root = createHostRoot({ id: 'content', directory, writable: true });
+
+    await expect(root.read('secret-link.txt')).rejects.toThrow('DSK-5');
+    await expect(root.write('secret-link.txt', utf8('{}'))).rejects.toThrow('DSK-5');
+    expect(await readText(outside, 'secret.txt')).toBe('СЕКРЕТ ВНЕ КОРНЯ');
+    root.close();
+  });
+
   it('а ссылка внутрь дерева остаётся путём дерева', async () => {
     // Отказ по факту ссылки был бы проще и был бы неверен: наружу выводит не
     // ссылка, а то, куда она указывает.
     const directory = await tree({ 'scenes/duel.scene.json': '{"scene":"duel"}' });
-    await symlink(join(directory, 'scenes'), join(directory, 'сцены'), 'dir');
+    await linkDirectory(join(directory, 'scenes'), join(directory, 'сцены'));
     const root = createHostRoot({ id: 'content', directory });
     expect(text(await root.read('сцены/duel.scene.json'))).toBe('{"scene":"duel"}');
     expect((await root.list('сцены')).map((entry) => entry.name)).toEqual(['duel.scene.json']);
+    root.close();
+  });
+});
+
+/**
+ * Путь, который ЕСТЬ, но не разрешается: ссылка, указывающая на саму себя.
+ * `realpath` отвечает на неё `ELOOP` — не «пути нет», — и это ровно тот случай,
+ * ради которого граница различает «ещё нет» и «не разрешилось»: проглоти она
+ * второе, проверка молча опустилась бы до лексической, а лексической, как
+ * сказано в шапке модуля, недостаточно (DSK-5).
+ *
+ * Петля здесь заведена ОБЫЧНОЙ ссылкой, а не junction'ом, и это не мелочь.
+ * Junction такую петлю на Windows заводит без всякой привилегии — но УБРАТЬ его
+ * потом нельзя ничем: ни `fs.rm`, ни `fs.rmdir`, ни `cmd rd`, ни `fsutil
+ * reparsepoint delete` (проверено — диспетчер объектов отказывается разбирать
+ * само имя, ERROR_CANT_RESOLVE_FILENAME). Фикстура, которую нельзя снести,
+ * оставляла бы неудаляемый каталог во временной папке на КАЖДОМ прогоне гейта, а
+ * `dropTree` вдобавок падал бы в `afterEach`. Обычная ссылка снимается
+ * `unlink`, поэтому случай и проверяется там, где её дают заводить.
+ */
+describe.skipIf(!FILE_LINKS_ALLOWED)('путь, который не разрешается, — отказ (DSK-5)', () => {
+  /** Часть причины, общая всем отказам этого рода. */
+  const UNRESOLVED = 'не разрешается файловой системой';
+
+  it('чтение, stat, перечисление, запись и resolve отвергаются с названной причиной', async () => {
+    const directory = await tree({ 'scenes/duel.scene.json': '{"scene":"duel"}' });
+    const loop = join(directory, 'loop');
+    await symlink(loop, loop);
+    const root = createHostRoot({ id: 'content', directory, writable: true });
+
+    await expect(root.read('loop/secret.txt')).rejects.toThrow(UNRESOLVED);
+    await expect(root.stat('loop')).rejects.toThrow(UNRESOLVED);
+    await expect(root.list('loop')).rejects.toThrow(UNRESOLVED);
+    await expect(root.write('loop/written.json', utf8('{}'))).rejects.toThrow(UNRESOLVED);
+    expect(() => root.resolve('loop/secret.txt')).toThrow(UNRESOLVED);
+    // Отказ назван требованием, а не только словами.
+    await expect(root.read('loop/secret.txt')).rejects.toThrow('DSK-5');
+
+    // И это именно ОТКАЗ, а не поломка корня: соседний документ читается.
+    expect(text(await root.read('scenes/duel.scene.json'))).toBe('{"scene":"duel"}');
+    root.close();
+  });
+
+  it('insideRoot отвечает «вне корня», а не сверяет непроверенное', async () => {
+    const directory = await tree();
+    const loop = join(directory, 'loop');
+    await symlink(loop, loop);
+    const root = createHostRoot({ id: 'content', directory });
+    // Лексически путь лежит внутри корня — и ровно поэтому ответ «внутри» был
+    // бы ответом наугад: чем этот путь окажется на диске, никто не проверил.
+    expect(insideRoot(root, loop)).toBeNull();
+    root.close();
+  });
+
+  it('корень, который сам не разрешается, отвергает операции, называя корень', async () => {
+    const outer = await tree();
+    const directory = join(outer, 'loop');
+    await symlink(directory, directory);
+    const root = createHostRoot({ id: 'content', directory, writable: true });
+
+    await expect(root.read('a.json')).rejects.toThrow(`корень ${UNRESOLVED}`);
+    await expect(root.list('')).rejects.toThrow(`корень ${UNRESOLVED}`);
+    expect(() => root.resolve('a.json')).toThrow(`корень ${UNRESOLVED}`);
     root.close();
   });
 });

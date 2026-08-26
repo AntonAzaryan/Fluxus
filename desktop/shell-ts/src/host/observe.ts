@@ -17,7 +17,7 @@
  * страдает свежесть картинки, а не корректность (то же правило, что у шва среды
  * редактора, ED-12).
  */
-import { watch } from 'node:fs';
+import { realpathSync, watch } from 'node:fs';
 
 export interface DirectoryObserverOptions {
   /** Абсолютный путь наблюдаемого каталога. */
@@ -39,11 +39,33 @@ export interface DirectoryObservation {
 
 export type DirectoryObserver = (options: DirectoryObserverOptions) => DirectoryObservation;
 
+/**
+ * Каталог в том написании, в каком его понимает сама система.
+ *
+ * `fs.watch` получает КАНОНИЧЕСКИЙ путь, а не тот, что назвал вызывающий, и это
+ * не косметика. На Windows путь может прийти с коротким именем 8.3
+ * (`C:\Users\3EC2~1\…` — так, в частности, выглядит `%TEMP%` у профиля с
+ * кириллицей): наблюдение за таким каталогом роняет ПРОЦЕСС на внутреннем
+ * assert'е libuv, потому что имена, которые приносит система, короткому
+ * написанию каталога уже не соответствуют. Отказ наблюдения этот модуль
+ * переживает (`active === false`), а падение процесса — нет и не может.
+ *
+ * Путь, который не разрешается, остаётся как есть: тогда `fs.watch` откажет
+ * сам, названной причиной, — а это и есть предусмотренный здесь исход.
+ */
+function canonicalDirectory(directory: string): string {
+  try {
+    return realpathSync.native(directory);
+  } catch {
+    return directory;
+  }
+}
+
 /** Наблюдатель поверх `fs.watch` — тот, с которым контейнер работает вживую. */
 export const NODE_OBSERVER: DirectoryObserver = (options) => {
   const report = options.report ?? ((): void => undefined);
   try {
-    const watcher = watch(options.directory, { recursive: true }, (_event, filename) => {
+    const watcher = watch(canonicalDirectory(options.directory), { recursive: true }, (_event, filename) => {
       options.changed(filename);
     });
     watcher.on('error', (error: unknown) => {

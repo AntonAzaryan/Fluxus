@@ -20,6 +20,38 @@
  */
 import { ControlClientError, type ControlSocketFactory, type OpenedSocket } from './controlClient.js';
 
+/**
+ * Дедлайн ОТКРЫТИЯ канала.
+ *
+ * Дедлайн рукопожатия (`controlClient`) этот случай не закрывает: он начинается
+ * с уже открытого канала. А браузер об адресе, который не отвечает и не
+ * отказывает, вправе молчать сколько угодно — и без срока добавление хоста
+ * висело бы без хоста, без ошибки и без конца, тогда как SRV-2 требует: «Отказ
+ * любой операции SHALL быть наблюдаем как отказ с названной причиной».
+ */
+const OPEN_TIMEOUT_MS = 10_000;
+
+/**
+ * Половина причины, которую страница знает про СЕБЯ, а вызывающий — нет.
+ *
+ * Сертификат агента самоподписан (SRV-3), принять незнакомый сертификат
+ * страница не может ничем — и «не удалось подключиться» без этой половины
+ * отправляет человека чинить сеть, адрес и код пейринга по очереди, тогда как
+ * чинить нечего: у канала из вкладки такой возможности нет по устройству среды
+ * (см. шапку модуля). Поэтому причина называет и обход — профиль
+ * десктоп-контейнера, где агент поднят объявленным сервисом (MGR-5).
+ *
+ * Приписывается она ТОЛЬКО к немедленному отказу канала (`error`, `close`) —
+ * там, где отвергнутый сертификат и правда самое вероятное объяснение. К
+ * молчанию по сроку не приписывается вовсе: отказ TLS приходит сразу, а не
+ * десятью секундами тишины, и назвать её сертификатом значило бы выдумать
+ * причину ровно там, где пакет в остальном требует обратного («сервер не
+ * появился» — не ответ).
+ */
+const PAGE_LIMIT =
+  'вероятная причина — самоподписанный сертификат агента: принять его страница не может; ' +
+  'поддержанный путь для этого — профиль десктоп-контейнера с локальным агентом (MGR-5)';
+
 /** Фабрика канала для страницы менеджера. Отпечаток она не видит и не выдумывает. */
 export const browserSocket: ControlSocketFactory = (url) =>
   new Promise<OpenedSocket>((resolve, reject) => {
@@ -28,6 +60,23 @@ export const browserSocket: ControlSocketFactory = (url) =>
     const closeHandlers: ((reason: string) => void)[] = [];
     let settled = false;
 
+    /** Первый исход забирает попытку себе и снимает срок; остальные — no-op. */
+    const claim = (): boolean => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(deadline);
+      return true;
+    };
+    const refuse = (detail: string): void => {
+      if (!claim()) return;
+      socket.close();
+      reject(new ControlClientError('connect-failed', detail));
+    };
+    const deadline = setTimeout(() => {
+      // Названо ровно то, что известно: канал не открылся и не был отвергнут.
+      refuse(`адрес ${url} не ответил за ${String(OPEN_TIMEOUT_MS)} мс: канал не открылся и не был отвергнут`);
+    }, OPEN_TIMEOUT_MS);
+
     socket.addEventListener('message', (event: MessageEvent) => {
       const data: unknown = event.data;
       if (typeof data !== 'string') return;
@@ -35,18 +84,13 @@ export const browserSocket: ControlSocketFactory = (url) =>
     });
     socket.addEventListener('close', () => {
       for (const handler of closeHandlers) handler('');
-      if (settled) return;
-      settled = true;
-      reject(new ControlClientError('connect-failed', `канал до ${url} закрылся, не открывшись`));
+      refuse(`канал до ${url} закрылся, не открывшись; ${PAGE_LIMIT}`);
     });
     socket.addEventListener('error', () => {
-      if (settled) return;
-      settled = true;
-      reject(new ControlClientError('connect-failed', `не удалось подключиться к ${url}`));
+      refuse(`не удалось подключиться к ${url}; ${PAGE_LIMIT}`);
     });
     socket.addEventListener('open', () => {
-      if (settled) return;
-      settled = true;
+      if (!claim()) return;
       resolve({
         // Пустая строка означает «среда отпечаток не показывает» — не «отпечаток
         // пустой»: закреплять нечего, и клиент сверяет то, что назвал агент.

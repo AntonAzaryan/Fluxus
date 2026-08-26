@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createHostRoot } from '../src/host/root.js';
 import { createStaticServer, mimeOf, requestPath } from '../src/host/serve.js';
-import { dropTree, makeTree, text } from './support.js';
+import { dropTree, linkDirectory, makeTree, text, FILE_LINKS_ALLOWED } from './support.js';
 
 describe('адрес запроса', () => {
   it('декодируется, теряет query и нормализуется', () => {
@@ -85,21 +85,46 @@ describe('слои раздачи', () => {
       'content/visuals/manifest.json': '{"visuals":{}}',
       'secret.txt': 'СЕКРЕТ ВНЕ КОРНЯ',
     });
-    await symlink(join(workspace, 'secret.txt'), join(workspace, 'content/secret-link.txt'));
-    await symlink(workspace, join(workspace, 'content/outside'), 'dir');
+    await linkDirectory(workspace, join(workspace, 'content/outside'));
     const bundle = createHostRoot({ id: 'bundle', directory: `${workspace}/bundle`, serve: true });
     const content = createHostRoot({ id: 'content', directory: `${workspace}/content`, serve: true });
     const server = createStaticServer({ layers: [bundle, content] });
 
-    for (const path of ['/secret-link.txt', '/outside/secret.txt']) {
-      const answer = await server.serve(path);
-      expect(answer.ok, path).toBe(false);
-      expect(!answer.ok && answer.status, path).toBe(400);
-      expect(!answer.ok && answer.reason, path).toContain('DSK-5');
-    }
+    const answer = await server.serve('/outside/secret.txt');
+    expect(answer.ok).toBe(false);
+    expect(!answer.ok && answer.status).toBe(400);
+    expect(!answer.ok && answer.reason).toContain('DSK-5');
+
     // А обычный ассет того же корня по-прежнему доезжает.
     const asset = await server.serve('/visuals/manifest.json');
     expect(asset.ok && text(asset.bytes)).toBe('{"visuals":{}}');
+
+    bundle.close();
+    content.close();
+    await dropTree(workspace);
+  });
+
+  /**
+   * Ссылка на ФАЙЛ — отдельный случай перечня и отдельный тест: завести её может
+   * не всякая среда (`FILE_LINKS_ALLOWED`), и выпасть она обязана ВИДИМО. Спрятав
+   * её в перечень соседнего теста, прогон отчитался бы полным зелёным о
+   * проверке, которой не было.
+   */
+  it.skipIf(!FILE_LINKS_ALLOWED)('раздача не отдаёт ссылку на файл наружу (DSK-5)', async () => {
+    const workspace = await makeTree({
+      'bundle/index.html': 'бандл',
+      'content/visuals/manifest.json': '{"visuals":{}}',
+      'secret.txt': 'СЕКРЕТ ВНЕ КОРНЯ',
+    });
+    await symlink(join(workspace, 'secret.txt'), join(workspace, 'content/secret-link.txt'));
+    const bundle = createHostRoot({ id: 'bundle', directory: `${workspace}/bundle`, serve: true });
+    const content = createHostRoot({ id: 'content', directory: `${workspace}/content`, serve: true });
+    const server = createStaticServer({ layers: [bundle, content] });
+
+    const answer = await server.serve('/secret-link.txt');
+    expect(answer.ok).toBe(false);
+    expect(!answer.ok && answer.status).toBe(400);
+    expect(!answer.ok && answer.reason).toContain('DSK-5');
 
     bundle.close();
     content.close();

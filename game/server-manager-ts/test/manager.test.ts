@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startAgent, type Agent } from '@fluxus/server-agent';
+import { ControlClientError, type ControlSocketFactory } from '@fluxus/server-agent/client';
 import { nodeSocket } from '@fluxus/server-agent/client/node';
 import type { StartParams } from '@fluxus/server-agent/protocol';
 import {
@@ -133,6 +134,66 @@ describe('менеджер — клиент агентов (MGR-1)', () => {
     await next.restore();
     expect(next.state.hosts[0]?.connected).toBe(true);
     expect(next.state.hosts[0]?.label).toBe('VPS');
+  });
+});
+
+/**
+ * Добавление хоста — MGR-1 («удалённый добавляется адресом и пейрингом»), а
+ * требование к его отказу приезжает из протокола, которым менеджер только и
+ * управляет: SRV-2, «Отказ любой операции SHALL быть наблюдаем как отказ с
+ * названной причиной». Отказ ЗАПУСКА сервера — требование соседнего блока ниже,
+ * и проверяется он там, на занятом порте; сюда его клауза не относится.
+ *
+ * Живой агент этот случай не покрывает — у него всё получается, — а самый
+ * частый исход добавления хоста ровно этот: канал не открылся. Поэтому здесь
+ * канал подставной, и предмет проверки — что человек видит, пока попытка идёт, и
+ * что он видит, когда она кончилась ничем.
+ */
+describe('отказ подключения к хосту наблюдаем (MGR-1, SRV-2)', () => {
+  it('хост виден с первой секунды попытки, а её исход назван причиной', async () => {
+    let refuse: (() => void) | undefined;
+    // Канал, который сам собой не разрешается: так выглядит адрес, который не
+    // отвечает и не отказывает.
+    const hanging: ControlSocketFactory = () =>
+      new Promise((_open, reject) => {
+        refuse = () => {
+          reject(new ControlClientError('connect-failed', 'самоподписанный сертификат не принят'));
+        };
+      });
+    const session = createManagerSession({ connect: hanging, storage: memoryStorage() });
+    sessions.push(session);
+
+    // Подписка, а НЕ чтение `session.state` напрямую: состояние — живой геттер
+    // над картой хостов, и запись в неё видна из него ещё до всякого
+    // уведомления. Страница же перерисовывается ровно и только по `onChange`
+    // (`app/main.ts`), поэтому проверять надо приход уведомления: без него
+    // хост, уже лежащий в состоянии, на экране не появится до самого исхода
+    // попытки — тот самый дефект, ради которого всё это и написано.
+    const notified: boolean[] = [];
+    session.onChange(() => notified.push(session.state.hosts[0]?.connecting ?? false));
+
+    const attempt = session.addRemote('wss://127.0.0.1:8443', 'код', 'VPS');
+
+    // Уведомление пришло СРАЗУ, и в нём хост назван подключающимся.
+    expect(notified[0]).toBe(true);
+    // Пока попытка идёт, хост УЖЕ в списке и назван подключающимся: иначе
+    // человек смотрит на пустое место и не знает, случилось ли хоть что-то.
+    expect(session.state.hosts[0]?.connecting).toBe(true);
+    expect(nodesOf(managerView(session.state), 'mg-host__state')[0]?.text).toContain('подключается');
+
+    refuse?.();
+    await attempt;
+    // И об исходе подписчик тоже узнал — вторым уведомлением, уже не «идёт».
+    expect(notified.length).toBeGreaterThan(1);
+    expect(notified[notified.length - 1]).toBe(false);
+    expect(session.state.hosts[0]?.connecting).toBe(false);
+    expect(session.state.hosts[0]?.connected).toBe(false);
+    // Причина названа И в строке хоста, И общим сообщением: отказ операции
+    // обязан быть наблюдаем как отказ с названной причиной (SRV-2).
+    expect(nodesOf(managerView(session.state), 'mg-host__failure')[0]?.text).toContain(
+      'самоподписанный сертификат не принят',
+    );
+    expect(nodesOf(managerView(session.state), 'mg-notice')[0]?.text).toContain('connect-failed');
   });
 });
 

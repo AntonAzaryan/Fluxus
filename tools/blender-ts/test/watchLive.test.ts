@@ -27,6 +27,14 @@ import { MANIFEST_ID, SCENE_ID, SOURCE_ID, contentFiles, fixtureBytes } from './
 /** -4.5 в Q16.16: позиция, в которую автор переставил объект. */
 const MOVED_X = -294912;
 
+/** Ждёт условия до крайнего срока: медленная машина делает тест медленным, а не красным. */
+async function waitFor(condition: () => boolean, deadlineMs = 5000): Promise<void> {
+  const edge = Date.now() + deadlineMs;
+  while (Date.now() < edge && !condition()) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 describe('BLND-12: watch-режим целиком, с живым наблюдателем', () => {
   it('подмена источника переименованием доезжает до документов', async () => {
     const root = await mkdtemp(join(tmpdir(), 'blender-live-'));
@@ -49,6 +57,15 @@ describe('BLND-12: watch-режим целиком, с живым наблюда
       pollMs: 50,
       signal: stop.signal,
     });
+
+    // Первый импорт watch делает сам, ещё до всякой правки, и читает при этом
+    // ИСТОЧНИК. Подменять его, пока это чтение идёт, нельзя: на Windows
+    // переименование поверх открытого файла отвергается (`EPERM`), а на POSIX
+    // проходит — и тогда первый же импорт подхватил бы новую позицию, то есть
+    // тест зеленел бы, не проверив наблюдателя вовсе. Поэтому подмена ждёт, пока
+    // watch отчитается о первом прогоне.
+    await waitFor(() => err.some((line) => line.includes('импорт 1')));
+    expect(err.join('\n')).toContain('импорт 1');
 
     const source = JSON.parse(new TextDecoder().decode(fixtureBytes('placements.gltf'))) as {
       nodes: { name: string; translation?: number[] }[];

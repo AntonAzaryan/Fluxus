@@ -13,6 +13,7 @@
  * (статическая выкладка) обязана отказать, называя путь, а не показать пустой
  * каталог и «успешную» запись.
  */
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createHostAssetSource } from '@fluxus/editor-core';
 import { createWebHost, type HttpFetch, type HttpRequest, type HttpResponse } from '../src/host/web.js';
@@ -149,16 +150,21 @@ describe('CONT-1: за корень дерева контента не выхо�
   });
 
   it('вторая граница — серверная: эндпойнт сам решает, что лежит в дереве', () => {
-    const root = '/srv/content';
-    expect(resolveInside(root, 'visuals/manifest.json')).toBe('/srv/content/visuals/manifest.json');
+    // Корень здесь — путь НА ДИСКЕ (его даёт `vite.config.ts`), а путём от
+    // корня дерева, то есть ID ассета (ASSET-2), приходит только второй
+    // аргумент. Поэтому и корень, и ожидания собираются средствами платформы:
+    // на Windows тот же случай выглядит как `D:\srv\content\...`, и посаженный
+    // в тест posix-литерал проверял бы разделитель, а не границу.
+    const root = resolve('/srv/content');
+    expect(resolveInside(root, 'visuals/manifest.json')).toBe(join(root, 'visuals/manifest.json'));
     // Абсолютный путь читается как путь ОТ КОРНЯ ДЕРЕВА, а не от корня диска.
-    expect(resolveInside(root, '/etc/passwd')).toBe('/srv/content/etc/passwd');
+    expect(resolveInside(root, '/etc/passwd')).toBe(join(root, 'etc/passwd'));
     expect(resolveInside(root, '')).toBe(root);
     for (const escape of ['../secrets', 'a/../../secrets', '..', '..\\secrets', 'a/./../../b']) {
       expect(resolveInside(root, escape), escape).toBeNull();
     }
     // Сосед с общим префиксом именем каталога не является.
-    expect(resolveInside('/srv/content', '../content-private/x')).toBeNull();
+    expect(resolveInside(root, '../content-private/x')).toBeNull();
   });
 
   it('отказ эндпойнта со своей причиной её и называет, а не подменяет догадкой', async () => {
