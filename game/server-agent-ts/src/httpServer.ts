@@ -105,19 +105,29 @@ export interface HttpServe {
 function layerFile(layers: readonly string[], pathname: string): string | undefined {
   for (const root of layers) {
     if (root === '') continue;
-    const candidate = insideOf(root, pathname);
-    if (candidate === undefined) continue;
-    if (!existsSync(candidate)) continue;
-    const stat = statSync(candidate);
-    if (stat.isDirectory()) {
-      const index = join(candidate, 'index.html');
-      // Именно ФАЙЛ: каталог по имени `index.html` (или сокет, или fifo) открыть
-      // потоком нельзя, и раздача превратилась бы в отказ на уровне ОС.
-      if (existsSync(index) && statSync(index).isFile()) return index;
+    try {
+      const candidate = insideOf(root, pathname);
+      if (candidate === undefined) continue;
+      if (!existsSync(candidate)) continue;
+      const stat = statSync(candidate);
+      if (stat.isDirectory()) {
+        const index = join(candidate, 'index.html');
+        // Именно ФАЙЛ: каталог по имени `index.html` (или сокет, или fifo) открыть
+        // потоком нельзя, и раздача превратилась бы в отказ на уровне ОС.
+        if (existsSync(index) && statSync(index).isFile()) return index;
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      return candidate;
+    } catch {
+      // `statSync` вправе бросить ПОСЛЕ `existsSync`: файл убрали в окне между
+      // ними (сборка, чистка каталога), прав на каталог нет, битая ссылка. Без
+      // этого перехвата исключение уходит из обработчика запроса и уносит вместе
+      // с собой агента и супервизию ВСЕХ его серверов (SRV-1) — с порта, который
+      // не аутентифицирует никого (SRV-8). Слой, о котором нельзя сказать, что в
+      // нём лежит, — это слой без такого файла: пробуем следующий.
       continue;
     }
-    if (!stat.isFile()) continue;
-    return candidate;
   }
   return undefined;
 }

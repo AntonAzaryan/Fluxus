@@ -95,6 +95,18 @@ interface Session {
   token: string;
   /** Серверы, на детали которых подписано ЭТО подключение (SRV-2). */
   readonly details: Set<string>;
+  /**
+   * Ответило ли соединение на последний пинг. Живость проверяется ниже: `ws`
+   * сам не пингует, а TCP молчит про пропавшую машину часами.
+   *
+   * Полем СЕССИИ, а не отдельным множеством сокетов рядом: у второго множества
+   * своё время жизни, и снимать соединение пришлось бы из ДВУХ мест — `forget`
+   * убирает сессию, а сокет остался бы в нём навсегда. Агент живёт долго
+   * (`desktop-shell` DSK-7), менеджер переподключается на каждый запуск, и такая
+   * утечка росла бы без предела. Здесь снимать нечего: сессию удалили — записи
+   * о живости не стало.
+   */
+  alive: boolean;
 }
 
 export async function startControlServer(options: ControlServerOptions): Promise<ControlServer> {
@@ -165,7 +177,12 @@ export async function startControlServer(options: ControlServerOptions): Promise
       }
       const token = options.tokens.redeem(request.pairingCode, request.label, now());
       if (token === undefined) {
-        refuse(session, 0, 'pairing-failed', 'код пейринга неверен или просрочен', true);
+        // Три случая одним отказом, и все три названы: набор причин закрыт
+        // (SRV-2), а различать их В ОТКАЗЕ означало бы отвечать перебирающему,
+        // насколько он близок. Человеку с кодом на руках хватает перечисления —
+        // «уже обменян» среди них самый частый (второй запуск менеджера в одном
+        // окне ротации), и молчать о нём значило бы посылать его искать опечатку.
+        refuse(session, 0, 'pairing-failed', 'код пейринга неверен, уже обменян или просрочен', true);
         return;
       }
       issued = token.secret;
@@ -284,16 +301,9 @@ export async function startControlServer(options: ControlServerOptions): Promise
     }
   };
 
-  /**
-   * Соединения, ответившие на последний пинг. Живость проверяется ниже: `ws`
-   * сам не пингует, а TCP молчит про пропавшую машину часами.
-   */
-  const alive = new Set<WebSocket>();
-
   wss.on('connection', (socket: WebSocket) => {
-    const session: Session = { socket, token: '', details: new Set() };
+    const session: Session = { socket, token: '', details: new Set(), alive: true };
     sessions.add(session);
-    alive.add(socket);
     // Не назвавшееся соединение закрывается по дедлайну: см. `GREETING_DEADLINE_MS`.
     const greetingDeadline = setTimeout(() => {
       if (session.token === '') socket.terminate();
@@ -328,7 +338,7 @@ export async function startControlServer(options: ControlServerOptions): Promise
         refuse(session, request.id, named.reason, named.detail);
       });
     });
-    socket.on('pong', () => { alive.add(socket); });
+    socket.on('pong', () => { session.alive = true; });
     socket.on('close', () => { clearTimeout(greetingDeadline); forget(session); });
     socket.on('error', () => { clearTimeout(greetingDeadline); forget(session); });
   });
@@ -341,11 +351,11 @@ export async function startControlServer(options: ControlServerOptions): Promise
    */
   const heartbeat = setInterval(() => {
     for (const session of sessions) {
-      if (!alive.has(session.socket)) {
+      if (!session.alive) {
         session.socket.terminate();
         continue;
       }
-      alive.delete(session.socket);
+      session.alive = false;
       session.socket.ping();
     }
   }, HEARTBEAT_MS);

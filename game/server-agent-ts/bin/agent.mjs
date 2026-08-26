@@ -162,7 +162,11 @@ if (addressFile !== '') {
   const target = resolve(process.cwd(), addressFile);
   mkdirSync(dirname(target), { recursive: true });
   const refresh = () => {
-    const code = agent.tokens.issueCode(Date.now());
+    // `mintCode`, а НЕ `issueCode`: здесь у машины никто не стоит. `issueCode`
+    // снимает запирание перебором на том основании, что код предъявляет человек
+    // (SRV-3), и позови его ротация — порог `MAX_PAIRING_FAILURES` жил бы не
+    // дольше периода ниже, то есть не защищал бы вовсе.
+    const code = agent.tokens.mintCode(Date.now());
     writeFileSync(
       target,
       `${agent.controlUrl}?code=${code}&fingerprint=${agent.certificate.fingerprint}`,

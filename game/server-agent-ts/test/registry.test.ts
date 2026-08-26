@@ -9,7 +9,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createRegistry, freePort, type ServerRegistry } from '../src/index.js';
+import { createRegistry, freePort, CONTROL_TAIL_LIMIT, type ServerRegistry } from '../src/index.js';
 import { agentPaths } from '../src/state/paths.js';
 import { processBook } from '../src/state/book.js';
 import { FAKE_STAND, sandbox, startParams, until, type Sandbox } from './support.js';
@@ -28,9 +28,11 @@ interface Spied {
   readonly removed: string[];
   readonly crashDir: string;
   readonly runsDir: string;
+  /** Книга процессов реестра (D5): её момент старта именует каталог прогона. */
+  readonly bookFile: string;
 }
 
-function spiedRegistry(): Spied {
+function spiedRegistry(now?: () => number): Spied {
   const box = sandbox();
   boxes.push(box);
   const paths = agentPaths(box.stateDir);
@@ -46,9 +48,27 @@ function spiedRegistry(): Spied {
     freePort,
     onChanged: (id) => changed.push(id),
     onRemoved: (id) => removed.push(id),
+    ...(now === undefined ? {} : { now }),
   });
   registries.push(registry);
-  return { registry, changed, removed, crashDir: paths.crashDir, runsDir: join(paths.root, 'runs') };
+  return {
+    registry,
+    changed,
+    removed,
+    crashDir: paths.crashDir,
+    runsDir: join(paths.root, 'runs'),
+    bookFile: paths.bookFile,
+  };
+}
+
+/**
+ * Часы, отдающие НОВОЕ значение на каждый вызов. Совпади два чтения `now()`,
+ * тест на настоящих часах проходил бы по совпадению миллисекунды — то есть
+ * почти всегда, и разъехавшиеся имена он бы не поймал.
+ */
+function tickingClock(): () => number {
+  let value = 1_700_000_000_000;
+  return () => value++;
 }
 
 describe('отказ запуска не оставляет призрака (SRV-1, SRV-2)', () => {
@@ -73,6 +93,67 @@ describe('отказ запуска не оставляет призрака (SR
     // запуска: сироты (каталог, который никто не назовёт) быть не должно.
     const crashEntries = existsSync(spied.crashDir) ? readdirSync(spied.crashDir) : [];
     expect(crashEntries).toEqual([]);
+  });
+});
+
+describe('каталог прогона назван ОДНИМ моментом старта (SRV-6, D5)', () => {
+  it('имя каталога прогона и запись книги — одно и то же число', async () => {
+    const spied = spiedRegistry(tickingClock());
+    const started = await spied.registry.start(startParams());
+
+    const entry = processBook(spied.bookFile).entries.find((record) => record.id === started.id);
+    expect(entry).toBeDefined();
+    // `adopt` собирает имя каталога обратно ИЗ КНИГИ (`runs/<id>-<startedAt>`):
+    // прочитай запуск часы дважды, после рестарта агента постмортем искал бы
+    // артефакты по имени, которого на диске нет, — и молча не находил бы ничего.
+    expect(readdirSync(spied.runsDir)).toContain(`${started.id}-${String(entry!.startedAt)}`);
+  });
+
+  it('постмортем краха забирает артефакты прогона, а не пустоту', async () => {
+    const spied = spiedRegistry(tickingClock());
+    const started = await spied.registry.start(startParams({ match: 'matches/crash.match.json' }));
+    await until(() => spied.registry.entry(started.id)?.state === 'crashed');
+
+    const crashed = spied.registry.entry(started.id);
+    expect(crashed?.postmortemFailure).toBeNull();
+    expect(crashed?.postmortem).not.toBeNull();
+    // Пинается здесь ветвь артефактов постмортема (SRV-6) — то, что каталог,
+    // названный стенду флагом `--out-dir`, доезжает в материалы разбора. Момента
+    // старта этот тест НЕ различает: `postmortem` копирует `live.runDir`, а он
+    // построен из того же локального `startedAt`, что ушёл стенду, — книга в этот
+    // путь не входит. Единственный момент старта пинает тест выше.
+    //
+    // Каталог при этом заводит фикстура: настоящий стенд создаёт его только в
+    // отладочном прогоне, которого в наборе параметров запуска (SRV-2) нет, — см.
+    // шапку `fixtures/fakeStand.mjs` и пункт 9 ревью от 2026-08-26.
+    expect(existsSync(join(crashed!.postmortem!, 'run', 'run.json'))).toBe(true);
+  });
+});
+
+describe('хвост управляющей линии не растёт без предела (SRV-1)', () => {
+  it('маркированный хвост без перевода строки сбрасывается и НАЗЫВАЕТСЯ', async () => {
+    // Управляющую линию потолок обычной строки не режет намеренно: половина
+    // JSON перестаёт быть отчётом (решение D2). Но исключение без потолка — это
+    // буфер, растущий до `RangeError` внутри обработчика `data`, то есть смерть
+    // агента вместе со ВСЕМИ его серверами. Стенд здесь льёт вдвое больше
+    // потолка одной записью (`fixtures/fakeStand.mjs`).
+    const spied = spiedRegistry();
+    const started = await spied.registry.start(startParams({ match: 'matches/flood.match.json' }));
+
+    // Срок короче умолчания `until`: два мегабайта приезжают за доли секунды, а
+    // не приехав — тест обязан сказать «сброса не было», а не упереться в
+    // тайм-аут vitest'а и назвать отказ зависанием.
+    const dropped = await until(
+      () => spied.registry.log(started.id).some((line) => line.includes('хвост сброшен')),
+      3000,
+    );
+    expect(dropped).toBe(true);
+    // Сброшен В ЛОГ и с названным размером: молча выброшенный мегабайт выглядел
+    // бы как «стенд перестал отчитываться» — и отлаживали бы не то.
+    const named = spied.registry.log(started.id).find((line) => line.includes('хвост сброшен'));
+    expect(named).toContain(String(CONTROL_TAIL_LIMIT));
+    // И агент ЖИВ: сервер по-прежнему в реестре и его можно остановить.
+    expect(spied.registry.entry(started.id)?.state).toBe('listening');
   });
 });
 

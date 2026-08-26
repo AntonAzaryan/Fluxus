@@ -46,6 +46,8 @@ export function sandbox(): Sandbox {
   // Стенд, глухой к SIGTERM: штатная остановка идёт через SIGKILL — так уходит
   // всякий стенд без обработчика сигнала и всякий стенд на Windows.
   writeFileSync(join(contentRoot, 'matches', 'deaf.match.json'), '{"name":"deaf"}\n');
+  // Стенд, льющий управляющую линию без перевода строки: потолок хвоста (SRV-1).
+  writeFileSync(join(contentRoot, 'matches', 'flood.match.json'), '{"name":"flood"}\n');
   return {
     stateDir: join(root, 'state'),
     contentRoot,

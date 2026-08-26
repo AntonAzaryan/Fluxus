@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { SceneDef } from '@fluxus/core';
-import { MatchClient } from '../src/client/matchClient.js';
+import { MatchClient, type InputSample } from '../src/client/matchClient.js';
 import { contentPack } from '../src/content/pack.js';
 import { clientCodec, jsonSerializer, msgpackSerializer, serverCodec } from '../src/protocol/codec.js';
 import { REWIND_REQUEST_EVENT } from '../src/match/rewindRequest.js';
@@ -19,6 +19,7 @@ import type {
   ClientMessage,
   PauseMessage,
   ServerMessage,
+  WireInput,
 } from '../src/protocol/messages.js';
 import type {
   MatchConfig,
@@ -34,6 +35,7 @@ import {
   hello,
   inputMessageOf,
   settle,
+  STEP,
   wireInput,
 } from './fixtures.js';
 
@@ -633,6 +635,143 @@ describe('серверное API паузы (NTR-20, D6)', () => {
     fixture.server.receive(2, hello('p2', config.version));
     fixture.server.stop();
     expect(fixture.server.pauseMatch()).toBe('match-not-running');
+  });
+});
+
+// ------------------------------------------- клиентская сторона паузы матча
+
+/** Бит действия сборки: любой номер, лишь бы это был не бит ведения скраба. */
+const CAST_BUTTON = 1 << 0;
+/** Бит ведения скраба перемотки — единственный, что переживает маску (NET-11). */
+const HOLD_BUTTON = 3;
+const HOLD = 1 << HOLD_BUTTON;
+
+/**
+ * Матч ДВУХ подключённых клиентов на loopback'е. Здесь, в отличие от тестов
+ * выше, нужен настоящий канал: предмет — что делает с паузой КЛИЕНТ, а его
+ * наблюдения без канала не появляются (состояние паузы приезжает сообщением, а
+ * оценка серверного тика двигается шагом клиентского хоста).
+ */
+async function played() {
+  const config = duelConfig({ silenceTicks: 100_000, pause: POLICY });
+  const fixture = harness(config);
+  const player = connectClient(fixture.hub, 'p1', fixture.clock, config.scene, {
+    // Раскладку битов знает сборка игры — тот же номер она объявила бы серверу.
+    holdButton: HOLD_BUTTON,
+  });
+  // Второй слот занят: без него матч стоит в лобби, и `playing` не наступает.
+  connectClient(fixture.hub, 'p2', fixture.clock, config.scene);
+  await settle();
+  return { fixture, player };
+}
+
+/** Кадры, уехавшие с ОДНИМ сэмплом ввода: шаг клиента здесь делает тест. */
+function framesOf(client: MatchClient, sample: InputSample): readonly WireInput[] {
+  client.advance();
+  client.pushInput(sample, 0);
+  return client.drain().flatMap((message) => (message.type === 'Input' ? message.frames : []));
+}
+
+describe('клиентская сторона паузы матча (NTR-20, NTR-11, NET-11)', () => {
+  it('оценка серверного тика стоит всю заморозку — и весь отсчёт возобновления', async () => {
+    const m = await played();
+    expect(m.player.client.phase).toBe('playing');
+    for (let i = 0; i < 5; i++) {
+      m.fixture.host.step();
+      m.player.host.step();
+      await settle();
+    }
+    const estimate = m.player.client.serverTick;
+    const tick = m.fixture.server.tick;
+    expect(estimate).toBeGreaterThan(0);
+
+    expect(m.fixture.server.pauseMatch()).toBeUndefined();
+    m.fixture.host.step();
+    await settle();
+    expect(m.player.client.pause?.state).toBe('frozen');
+
+    for (let i = 0; i < 20; i++) {
+      m.fixture.host.step();
+      m.player.host.step();
+      await settle();
+    }
+    // Живых тиков в заморозке нет (NTR-20), снапшотов сервер не шлёт — и оценка
+    // не уезжает вместе с настенным временем. Иди она своим темпом, полминуты
+    // паузы дали бы разницу в 1800 тиков: `serverTick` наблюдаем и просто
+    // неверен, кадры уходят помеченными будущим, а счётчик «разъехавшейся
+    // оценки» (NTR-11) говорит о паузе вместо канала — то есть врёт о том
+    // единственном, ради чего заведён.
+    expect(m.fixture.server.tick).toBe(tick);
+    expect(m.player.client.serverTick).toBe(estimate);
+
+    // ОТСЧЁТ ВОЗОБНОВЛЕНИЯ — та же остановка: живой тик в нём не идёт. На этом,
+    // и только на этом, основании `resuming` входит в предикат заморозки
+    // клиента, поэтому утверждение проверяется здесь, а не подразумевается.
+    expect(m.fixture.server.resumeMatch()).toBeUndefined();
+    m.fixture.host.step();
+    await settle();
+    expect(m.player.client.pause?.state).toBe('resuming');
+    for (let i = 0; i < RESUME_STEPS - 2; i++) {
+      m.fixture.host.step();
+      m.player.host.step();
+      await settle();
+    }
+    expect(m.fixture.server.pauseState).toBe('resuming');
+    expect(m.fixture.server.tick).toBe(tick);
+    expect(m.player.client.serverTick).toBe(estimate);
+
+    // Отсчёт кончился — идут и матч, и оценка: значит стояли они из-за паузы, а
+    // не из-за клиента, который перестал считать вовсе.
+    for (let i = 0; i < 5; i++) {
+      m.fixture.host.step();
+      m.player.host.step();
+      await settle();
+    }
+    expect(m.player.client.pause?.state).toBe('running');
+    expect(m.fixture.server.tick).toBeGreaterThan(tick);
+    expect(m.player.client.serverTick).toBeGreaterThan(estimate);
+  });
+
+  it('кадр, отправленный в паузу матча, везёт только бит ведения скраба', async () => {
+    const m = await played();
+    const sample: InputSample = {
+      move: { x: STEP, y: 0 },
+      aimDir: STEP,
+      buttons: CAST_BUTTON | HOLD,
+    };
+
+    // Контроль: в идущем матче кадр уезжает КАК ЕСТЬ — значит утверждение ниже
+    // о заморозке, а не о клиенте, который гасит ввод всегда.
+    const live = framesOf(m.player.client, sample);
+    expect(live).toHaveLength(1);
+    expect(live[0]!.buttons).toBe(CAST_BUTTON | HOLD);
+    expect(live[0]!.moveX).toBe(STEP);
+
+    expect(m.fixture.server.pauseMatch()).toBeUndefined();
+    m.fixture.host.step();
+    await settle();
+    expect(m.player.client.pause?.state).toBe('frozen');
+
+    // Молчать нельзя, слать всё — тоже: кадр доедет уже после возобновления, с
+    // верной эпохой и верным будущим тиком, то есть пройдёт `ingest` и ляжет на
+    // живой мир (NET-11, REW-5). Поэтому маска: движения нет, из кнопок остаётся
+    // один бит ведения скраба.
+    const frozen = framesOf(m.player.client, sample);
+    expect(frozen).toHaveLength(1);
+    expect(frozen[0]!.buttons).toBe(HOLD);
+    expect(frozen[0]!.moveX).toBe(0);
+    expect(frozen[0]!.moveY).toBe(0);
+    // Прицел маской не гасится: это последнее известное СОСТОЯНИЕ ввода, а не
+    // действие (TICK-2), и живых тиков, на которых оно сработало бы, всё равно
+    // нет.
+    expect(frozen[0]!.aimDir).toBe(sample.aimDir);
+
+    // Отсчёт возобновления — та же маска и по той же причине.
+    expect(m.fixture.server.resumeMatch()).toBeUndefined();
+    m.fixture.host.step();
+    await settle();
+    expect(m.player.client.pause?.state).toBe('resuming');
+    expect(framesOf(m.player.client, sample)[0]!.buttons).toBe(HOLD);
   });
 });
 
