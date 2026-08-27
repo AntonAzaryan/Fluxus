@@ -109,13 +109,14 @@ export function overlaps(a: Bounds, b: Bounds): boolean {
   return a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
 }
 
-export function union(a: Bounds, b: Bounds): Bounds {
-  return {
-    minX: Math.min(a.minX, b.minX),
-    minY: Math.min(a.minY, b.minY),
-    maxX: Math.max(a.maxX, b.maxX),
-    maxY: Math.max(a.maxY, b.maxY),
-  };
+/** Объединение в готовый буфер — по той же причине, что `boundsInto`: шаг оси
+ * зовёт его на каждого движущегося, и объект на вызов был бы аллокацией,
+ * пропорциональной числу движущихся за тик. */
+export function unionInto(target: Bounds, a: Readonly<Bounds>, b: Readonly<Bounds>): void {
+  target.minX = Math.min(a.minX, b.minX);
+  target.minY = Math.min(a.minY, b.minY);
+  target.maxX = Math.max(a.maxX, b.maxX);
+  target.maxY = Math.max(a.maxY, b.maxY);
 }
 
 /**
