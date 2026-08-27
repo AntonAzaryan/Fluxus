@@ -71,6 +71,8 @@ const COMPONENTS: SceneDef['components'] = [
 const PREFABS: NonNullable<SceneDef['prefabs']> = [
   { name: 'Hero', components: { Position: { x: 0, y: 0 }, Input: {}, Player: { slot: 0 } } },
   { name: 'Foe', components: { Position: { x: F(3), y: 0 }, Enemy: { flag: 1 } } },
+  // Кандидат БЕЗ `Position` — тот, на котором стоит запрос кандидатов (QUERY-1).
+  { name: 'Ghost', components: { Enemy: { flag: 1 } } },
   { name: 'Slot', components: { AbilitySlot: {}, AbilityCooldown: { remaining: 0, total: 0 } } },
   { name: 'Ball', components: { Position: {}, AbilityProjectile: {}, Payload: { ticks: 0 } } },
   { name: 'Zone', components: { Position: {}, AbilityDuration: {} } },
@@ -399,6 +401,29 @@ describe('TargetingCommitSystem: цепочка шагов (ABIL-5)', () => {
     h.aim(F(1), 0);
     h.step(CAST | CONFIRM);
     expect(h.slotField(slot, 'step0e')).toBe(-1);
+  });
+
+  it('кандидат без `Position` в выборку не попадает вовсе (QUERY-1)', () => {
+    // РЕГРЕССИЯ. Запрос кандидатов не требовал `Position`, а `withinRadius`
+    // владения им не требует и читает поле тотально (ECS-7): бесплотная
+    // сущность оказывалась в мировом начале координат. Здесь начало шага —
+    // герой в нуле, прицел на единицу впереди, настоящая цель на тройке: до
+    // прицела бесплотному кандидату «единица», настоящему — «двойка», и выбор
+    // ближайшей (ABIL-5) доставался тому, расстояния до которого не существует.
+    const h = harness(scene([chain]));
+    const hero = h.place('Hero');
+    const ghost = h.place('Ghost');
+    const foe = h.place('Foe');
+    const slot = giveSlot(h, hero);
+
+    h.step(CAST);
+    h.aim(F(1), 0);
+    h.step(CAST | CONFIRM);
+    expect(h.slotField(slot, 'step0e')).not.toBe(ghost);
+    expect(h.slotField(slot, 'step0e')).toBe(foe);
+    // И читать `Position` без владения ядро при этом не пыталось: запрос отсёк
+    // кандидата маской компонентов, до всякого чтения поля.
+    expect(hasComponent(h.world, ghost, 'Position')).toBe(false);
   });
 });
 

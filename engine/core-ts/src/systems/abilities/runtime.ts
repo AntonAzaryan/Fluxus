@@ -442,15 +442,28 @@ export function visibleToOwner(
  * сравнение оставляет первого встреченного, а запрос отдаёт кандидатов по
  * возрастанию raw-индекса. Сравнение квадратов — точной 64-битной
  * `distSqCompare`, той же, что у упорядоченной выборки (ACT-5).
+ *
+ * Требование `Position` стоит в САМОМ запросе — той канонической формой
+ * `{all: ['Position'], withinRadius}`, которой QUERY-1 записывает поиск целей в
+ * радиусе. Без него запрос широк на весь мир: `withinRadius` владения
+ * `Position` не требует, а читает поле тотально (ECS-7, открытый вопрос
+ * QUERY-1), то есть сущность-слот, инстанс баффа и всякий спутник без положения
+ * оказываются в мировом начале координат. Два следствия, и оба дефекты: ядро
+ * читает `Position` без владения на каждом подтверждении шага (запись
+ * сломанного инварианта в диагностике, FP-4), а каст, чьё начало шага близко к
+ * началу координат, выбирает целью сущность, расстояния до которой не
+ * существует, — «ближайшая к точке прицела» (ABIL-5) о такой не определено
+ * вовсе. Предикат `filter` эту дыру не закрывает: он фильтр контента, а чтение
+ * идёт до него, внутри запроса.
  */
 export class CandidatePicker {
   private readonly center: MutableVec2 = { x: 0, y: 0 };
   private readonly withinRadius = { center: this.center as Vec2, radius: 0 as Fixed };
   private readonly bounded: QuerySpec;
-  private readonly unbounded: QuerySpec = {};
+  private readonly unbounded: QuerySpec = { all: [POSITION_COMPONENT] };
 
   constructor() {
-    this.bounded = { withinRadius: this.withinRadius };
+    this.bounded = { all: [POSITION_COMPONENT], withinRadius: this.withinRadius };
   }
 
   nearest(
