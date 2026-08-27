@@ -21,8 +21,8 @@
             "fogShadowRayTests": 1181,
             "fogShadowTexelTests": 136,
             "frameCalls": 1,
-            "frameInstances": 224,
-            "frameSubsystems": 7,
+            "frameInstances": 256,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -42,7 +42,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
-            "terrainWallQuads": 120
+            "terrainWallQuads": 120,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 32,
@@ -53,8 +57,8 @@
             "particlesShellsSynced": 16,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 224,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 256,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         },
@@ -74,8 +78,8 @@
             "fogShadowRayTests": 1181,
             "fogShadowTexelTests": 136,
             "frameCalls": 1,
-            "frameInstances": 1792,
-            "frameSubsystems": 7,
+            "frameInstances": 2048,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -95,7 +99,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
-            "terrainWallQuads": 120
+            "terrainWallQuads": 120,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 256,
@@ -106,8 +114,8 @@
             "particlesShellsSynced": 128,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 1792,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 2048,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         }
@@ -134,8 +142,8 @@
             "fogShadowRayTests": 1181,
             "fogShadowTexelTests": 136,
             "frameCalls": 1,
-            "frameInstances": 448,
-            "frameSubsystems": 7,
+            "frameInstances": 512,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -155,7 +163,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
-            "terrainWallQuads": 120
+            "terrainWallQuads": 120,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 64,
@@ -166,8 +178,8 @@
             "particlesShellsSynced": 32,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 448,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 512,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         },
@@ -187,8 +199,8 @@
             "fogShadowRayTests": 7796,
             "fogShadowTexelTests": 955,
             "frameCalls": 1,
-            "frameInstances": 448,
-            "frameSubsystems": 7,
+            "frameInstances": 512,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -208,7 +220,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
-            "terrainWallQuads": 120
+            "terrainWallQuads": 120,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 64,
@@ -219,8 +235,8 @@
             "particlesShellsSynced": 32,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 448,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 512,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         }
@@ -247,8 +263,8 @@
             "fogShadowRayTests": 847,
             "fogShadowTexelTests": 94,
             "frameCalls": 1,
-            "frameInstances": 448,
-            "frameSubsystems": 7,
+            "frameInstances": 512,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -268,7 +284,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
-            "terrainWallQuads": 28
+            "terrainWallQuads": 28,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 64,
@@ -279,8 +299,8 @@
             "particlesShellsSynced": 32,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 448,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 512,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         },
@@ -300,8 +320,8 @@
             "fogShadowRayTests": 2619,
             "fogShadowTexelTests": 192,
             "frameCalls": 1,
-            "frameInstances": 448,
-            "frameSubsystems": 7,
+            "frameInstances": 512,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -321,7 +341,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
-            "terrainWallQuads": 262
+            "terrainWallQuads": 262,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 64,
@@ -332,8 +356,8 @@
             "particlesShellsSynced": 32,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 448,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 512,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         }
@@ -360,8 +384,8 @@
             "fogShadowRayTests": 1181,
             "fogShadowTexelTests": 136,
             "frameCalls": 1,
-            "frameInstances": 448,
-            "frameSubsystems": 7,
+            "frameInstances": 512,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -381,7 +405,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
-            "terrainWallQuads": 120
+            "terrainWallQuads": 120,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 64,
@@ -392,8 +420,8 @@
             "particlesShellsSynced": 32,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 448,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 512,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         },
@@ -413,8 +441,8 @@
             "fogShadowRayTests": 1181,
             "fogShadowTexelTests": 550,
             "frameCalls": 1,
-            "frameInstances": 448,
-            "frameSubsystems": 7,
+            "frameInstances": 512,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -434,7 +462,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
-            "terrainWallQuads": 120
+            "terrainWallQuads": 120,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 64,
@@ -445,8 +477,8 @@
             "particlesShellsSynced": 32,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 448,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 512,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         }
@@ -473,8 +505,8 @@
             "fogShadowRayTests": 1181,
             "fogShadowTexelTests": 136,
             "frameCalls": 1,
-            "frameInstances": 448,
-            "frameSubsystems": 7,
+            "frameInstances": 512,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -494,7 +526,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
-            "terrainWallQuads": 120
+            "terrainWallQuads": 120,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 64,
@@ -505,8 +541,8 @@
             "particlesShellsSynced": 32,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 448,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 512,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         },
@@ -526,8 +562,8 @@
             "fogShadowRayTests": 1181,
             "fogShadowTexelTests": 136,
             "frameCalls": 1,
-            "frameInstances": 448,
-            "frameSubsystems": 7,
+            "frameInstances": 512,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -547,7 +583,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
-            "terrainWallQuads": 120
+            "terrainWallQuads": 120,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 64,
@@ -558,8 +598,8 @@
             "particlesShellsSynced": 32,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 448,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 512,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         }
@@ -586,8 +626,8 @@
             "fogShadowRayTests": 1181,
             "fogShadowTexelTests": 136,
             "frameCalls": 1,
-            "frameInstances": 448,
-            "frameSubsystems": 7,
+            "frameInstances": 512,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -607,7 +647,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 216,
-            "terrainWallQuads": 60
+            "terrainWallQuads": 60,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 64,
@@ -618,8 +662,8 @@
             "particlesShellsSynced": 32,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 448,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 512,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         },
@@ -639,8 +683,8 @@
             "fogShadowRayTests": 1181,
             "fogShadowTexelTests": 136,
             "frameCalls": 1,
-            "frameInstances": 448,
-            "frameSubsystems": 7,
+            "frameInstances": 512,
+            "frameSubsystems": 8,
             "lightingBlobDecals": 0,
             "lightingDynamicCasters": 2,
             "lightingLocalActive": 0,
@@ -660,7 +704,11 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
-            "terrainWallQuads": 120
+            "terrainWallQuads": 120,
+            "waterBodiesDrawn": 1,
+            "waterDepthTexels": 4096,
+            "waterQuads": 4,
+            "waterRippleSources": 0
           },
           "syncTick": {
             "fogEntitiesScanned": 64,
@@ -671,8 +719,8 @@
             "particlesShellsSynced": 32,
             "syncTickDecorationInstances": 0,
             "syncTickDeliveries": 1,
-            "syncTickInstances": 448,
-            "syncTickSubsystems": 7,
+            "syncTickInstances": 512,
+            "syncTickSubsystems": 8,
             "terrainChunksMarked": 2
           }
         }

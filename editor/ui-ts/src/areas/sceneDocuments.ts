@@ -88,7 +88,9 @@ import {
   validateManifest,
   validatePresentationScene,
   type PresentationLighting,
+  type PresentationSceneContext,
   type PresentationPostprocess,
+  type PresentationWater,
   type TerrainCurvatureMap,
   type VisualManifest,
 } from '@fluxus/assets';
@@ -164,6 +166,14 @@ export interface SceneDraft {
    * без единого её прохода.
    */
   readonly postprocess?: PresentationPostprocess;
+  /**
+   * Секция `water` парного документа (PRES-2, `rendering` REND-35) — вход
+   * подсистемы воды вьюпорта; нет секции — сцена без воды. Она здесь по той же
+   * причине, что свет и пост-обработка: кисть кривизны (ED-11) правит дно
+   * лощины под водоёмом, и автор обязан видеть новый берег не позже следующего
+   * кадра (ED-15), а не после сохранения и перезапуска.
+   */
+  readonly water?: PresentationWater;
   /**
    * Манифест визуалов кадра (ASSET-6). Он здесь по той же причине, по которой
    * здесь сетка и кривизна: манифест — такой же редактируемый документ (ED-14),
@@ -338,10 +348,13 @@ export function placementsOf(input: SceneDraftInput): readonly ScenePlacement[] 
  * валидации `editor.decorationVisual` (PRES-2) — вторая проверка здесь была бы
  * вторым описанием того же нарушения (ED-1, ED-30).
  */
-export function decorationsOf(input: SceneDraftInput): readonly SceneDecoration[] {
+export function decorationsOf(
+  input: SceneDraftInput,
+  grid?: TerrainGrid | null,
+): readonly SceneDecoration[] {
   const value = input.presentation;
   if (value === undefined || value === null) return [];
-  const checked = validatePresentationScene(value);
+  const checked = validatePresentationScene(value, sceneContext(grid));
   if (!checked.ok) throw new Error(`presentation-документ: ${checked.errors.join('; ')}`);
 
   return checked.scene.decorations.map((record, index) => ({
@@ -365,18 +378,43 @@ export function decorationsOf(input: SceneDraftInput): readonly SceneDecoration[
  * (ED-8 требует её один раз, а не трижды), а сцена без разобранных секций
  * рисуется умолчаниями подсистем — законный кадр, а не отказ вьюпорта.
  */
-function sectionsOf(input: SceneDraftInput): {
+function sectionsOf(
+  input: SceneDraftInput,
+  grid: TerrainGrid | null | undefined,
+): {
   readonly lighting?: PresentationLighting;
   readonly postprocess?: PresentationPostprocess;
+  readonly water?: PresentationWater;
 } {
   const value = input.presentation;
   if (value === undefined || value === null) return {};
-  const checked = validatePresentationScene(value);
+  const checked = validatePresentationScene(value, sceneContext(grid));
   if (!checked.ok) return {};
   return {
     ...(checked.scene.lighting === undefined ? {} : { lighting: checked.scene.lighting }),
     ...(checked.scene.postprocess === undefined ? {} : { postprocess: checked.scene.postprocess }),
+    ...(checked.scene.water === undefined ? {} : { water: checked.scene.water }),
   };
+}
+
+/**
+ * Что валидация парного документа знает о сцене (PRES-1): пока это только сетка
+ * террейна — клеточная карта секции `water` адресует её клетки (REND-35).
+ *
+ * Состояний ТРИ, и различать их обязательно:
+ *
+ * - сетка есть — карта сверяется с её размерами;
+ * - `null` — конфиг разобран, и террейна у сцены НЕТ: секция воды у такой сцены
+ *   отвергается, привязать её карту не к чему;
+ * - `undefined` — сетка НЕИЗВЕСТНА (конфига в сессии нет, либо он не
+ *   разбирается). Это не «сцены без террейна», и толковать это так значило бы
+ *   гасить парный слой от поломки сим-документа — ровно наоборот инварианту
+ *   PRES-4, которым этот модуль и живёт: сломанная сцена не отнимает у автора
+ *   ни декораций, ни света, ни пост-обработки.
+ */
+function sceneContext(grid: TerrainGrid | null | undefined): PresentationSceneContext {
+  if (grid === undefined) return {};
+  return { terrain: grid === null ? null : { width: grid.width, height: grid.height } };
 }
 
 /**
@@ -406,15 +444,24 @@ export function visualsOf(value: unknown): VisualManifest {
 export function sceneDraft(input: SceneDraftInput): SceneDraft {
   const reasons: string[] = [];
   let grid: TerrainGrid | null = null;
+  /**
+   * Разобран ли конфиг настолько, чтобы судить о сетке. `false` — конфига в
+   * черновике нет либо он сломан: сетка НЕИЗВЕСТНА, и парный слой от этого не
+   * гаснет (PRES-4, см. `sceneContext`).
+   */
+  let terrainKnown = false;
   let curvature: TerrainCurvatureMap | null = null;
   let placements: readonly ScenePlacement[] = [];
   let decorations: readonly SceneDecoration[] = [];
 
   try {
     grid = terrainOf(input.config);
+    // Конфиг разобран: «сетка есть» и «террейна у сцены нет» теперь различимы.
+    terrainKnown = input.config !== undefined && input.config !== null;
   } catch (error) {
     reasons.push(message(error));
   }
+  const terrain = terrainKnown ? grid : undefined;
   try {
     curvature = curvatureOf(input.curvature);
   } catch (error) {
@@ -429,7 +476,10 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
   // изолирован от симуляции (PRES-4), и картинка без декораций — законный кадр
   // с названной причиной, а не отказ вьюпорта.
   try {
-    decorations = decorationsOf(input);
+    // Сетка — контекст валидации парного документа: карта воды адресует её
+    // клетки (REND-35). Неразобранный конфиг делает её НЕИЗВЕСТНОЙ, а не
+    // отсутствующей: парный слой от поломки сим-документа не гаснет (PRES-4).
+    decorations = decorationsOf(input, terrain);
   } catch (error) {
     reasons.push(message(error));
   }
@@ -438,7 +488,7 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
   // между двумя документами, и правило для него одно — `editor.curvatureGrid`
   // слоя валидации (ED-11). Кадр его не повторяет: вторая реализация правила,
   // у которого есть источник, расходится с ним по определению (ED-1, CORE-3).
-  const sections = sectionsOf(input);
+  const sections = sectionsOf(input, terrain);
   return {
     grid,
     curvature,
@@ -446,6 +496,7 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
     decorations,
     ...(sections.lighting === undefined ? {} : { lighting: sections.lighting }),
     ...(sections.postprocess === undefined ? {} : { postprocess: sections.postprocess }),
+    ...(sections.water === undefined ? {} : { water: sections.water }),
     visuals: input.visuals ?? null,
     failure: reasons.length === 0 ? null : reasons.join('; '),
   };

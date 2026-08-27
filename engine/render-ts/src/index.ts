@@ -258,6 +258,42 @@ export { DEFAULT_POSTPROCESS_CONFIG, resolvePostprocessConfig } from './postproc
 export type { PostprocessRenderConfig, ToneMappingOperator } from './postprocess/config.js';
 export { BLOOM_LEVELS } from './postprocess/passes.js';
 
+// Подсистема воды (REND-35, REND-36): тела воды из секции `water` парного
+// документа (PRES-2), глубина — производная единого поля высот (REND-9), рябь —
+// чистая производная presentation-состояния. Сцена без секции не платит ничем.
+export {
+  WaterSubsystem,
+  WATER_DEPTH_TEXELS_PER_CELL,
+  WATER_DETAIL_LAYERS,
+  WATER_RIPPLE_SOURCES,
+} from './subsystems/water.js';
+export type { WaterOptions } from './subsystems/water.js';
+export {
+  DEFAULT_WATER_BODY,
+  DEFAULT_WATER_DEPTH_TEXELS_PER_CELL,
+  DEFAULT_WATER_DETAIL,
+  DEFAULT_WATER_RIPPLES,
+  linearColorOf,
+  resolveWaterConfig,
+} from './water/config.js';
+export type {
+  LinearColor,
+  WaterBodyConfig,
+  WaterDetailConfig,
+  WaterRenderConfig,
+  WaterRipplesConfig,
+} from './water/config.js';
+export { WATER_RENDER_ORDER, WaterBodyView } from './water/body.js';
+export type { WaterBodyLimits, WaterBodyOptions } from './water/body.js';
+export { greedyRects, waterGeometryOf, waterRegionsOf } from './water/region.js';
+export type { WaterGeometryData, WaterRect, WaterRegion } from './water/region.js';
+export { depthTexelRect, fillWaterDepth, levelFieldSampler, waterDepthLayout } from './water/depth.js';
+export type { WaterDepthLayout, WaterFieldSampler } from './water/depth.js';
+export { WaterRippleField } from './water/ripples.js';
+export type { WaterRippleOptions, WaterRippleSource } from './water/ripples.js';
+export { createWaterMaterial, waterFragmentShader } from './water/material.js';
+export type { WaterMaterialInput } from './water/material.js';
+
 // Подсистема освещения сцены (REND-8): источники света арены и теневые карты
 // из секции `lighting` парного документа (PRES-2). Свет всех потребителей
 // рендера — отсюда: своего они больше не заводят (`editor` ED-22).

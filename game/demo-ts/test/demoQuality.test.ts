@@ -23,6 +23,7 @@ import type {
   PresentationFog,
   PresentationLighting,
   PresentationPostprocess,
+  PresentationWater,
   VisualManifest,
 } from '@fluxus/assets';
 import {
@@ -35,6 +36,7 @@ import {
   PresentationStage,
   QualityController,
   TerrainSubsystem,
+  WaterSubsystem,
   validateQualityPreset,
   type QualityValue,
   type RenderContext,
@@ -62,6 +64,8 @@ const MANIFEST = manifestJson as unknown as VisualManifest;
 const SCENE_FOG = (presentationJson as { fog: PresentationFog }).fog;
 /** Секция `postprocess` сцены демо (PRES-2, REND-34) — тот же контент, что у сборки. */
 const SCENE_POSTPROCESS = (presentationJson as { postprocess: PresentationPostprocess }).postprocess;
+/** Секция `water` сцены демо (PRES-2, REND-35) — она же вход ручек воды. */
+const SCENE_WATER = (presentationJson as unknown as { water: PresentationWater }).water;
 
 /** Ровная арена: реестру ручек размер безразличен, а маска на ней дешевле. */
 function flatGrid(size = 8): TerrainGrid {
@@ -112,6 +116,12 @@ function demoRig(options: { readonly fog?: boolean } = {}): DemoRig {
   const lighting = new LightingSubsystem({ grid });
   stage.register(lighting);
   stage.register(new TerrainSubsystem(grid, { shadows: lighting }));
+  // Вода — следом за террейном, как в `onReady` сборки: её три ручки тоже часть
+  // реестра, против которого проверяются документы пресетов (REND-35, QUAL-1).
+  // Карта секции сцены адресует клетки НАСТОЯЩЕЙ сетки 48×48, а здесь арена
+  // маленькая: тел из такой карты не соберётся ни одного, а декларация ручек от
+  // этого не зависит — её спрашивают при регистрации (design D1).
+  stage.register(new WaterSubsystem({ grid, config: SCENE_WATER }));
   stage.register(new ModelsSubsystem(empty, { shadows: lighting, warn: () => {} }));
   stage.register(new EffectsSubsystem(empty, { warn: () => {} }));
   stage.register(new ParticlesSubsystem(empty, { warn: () => {} }));
@@ -173,6 +183,9 @@ describe('документы пресетов применимы к сцене �
       'postprocess.bloomResolution',
       'postprocess.lut',
       'terrain.curvatureTessellation',
+      'water.depthTexelsPerCell',
+      'water.detailLayers',
+      'water.rippleSources',
     ]);
   });
 });
@@ -284,6 +297,15 @@ describe('performance — первые реальные ограничения (
     // устройстве нет вовсе, а сведение яркости остаётся — это один проход.
     expect(cheap['postprocess.bloom']).toBe(false);
     expect(baseline['postprocess.bloom']).toBe(true);
+    // Вода на слабом устройстве без ряби вовсе (REND-36): каждое кольцо
+    // считается на каждом её фрагменте, и это самая дорогая её часть. Слои
+    // детали и плотность выборки глубины урезаны ниже авторских — сцена демо
+    // объявляет три слоя и получает четыре текселя на клетку по умолчанию
+    // рендера, поэтому оба потолка кусают по-настоящему (REND-35, QUAL-1).
+    expect(cheap['water.rippleSources']).toBe(0);
+    expect(cheap['water.detailLayers']).toBe(2);
+    expect(cheap['water.depthTexelsPerCell']).toBe(2);
+    expect(baseline['water.rippleSources']).toBe(Number.POSITIVE_INFINITY);
     // Цветокоррекция выключена потолком (REND-34): своего прохода LUT не
     // добавляет, но трёхмерная выборка есть у каждого пикселя кадра, и на
     // слабом устройстве её нет. Сцена демо таблицы сегодня не несёт — этот

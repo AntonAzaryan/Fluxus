@@ -746,18 +746,174 @@ describe('PRES-2, REND-34: секция postprocess — закрытая кон�
 });
 
 describe('PRES-2: секции документа сосуществуют', () => {
-  it('секции fog, lighting и postprocess сосуществуют, и все — вне симуляции (PRES-4)', () => {
+  it('секции fog, lighting, postprocess и water сосуществуют, и все — вне симуляции (PRES-4)', () => {
     const result = validatePresentationScene({
       decorations: [{ visual: 'rock', x: 1, y: 2 }],
       fog: { strength: 0.5 },
       lighting: { shadows: { mode: 'hybrid' } },
       postprocess: { toneMapping: { operator: 'aces' } },
+      water: WATER,
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.scene.fog).toEqual({ strength: 0.5 });
     expect(result.scene.lighting).toEqual({ shadows: { mode: 'hybrid' } });
     expect(result.scene.postprocess).toEqual({ toneMapping: { operator: 'aces' } });
+    expect(result.scene.water).toEqual(WATER);
+  });
+});
+
+// ------------------------------------- секция `water` (REND-35, REND-36)
+
+/** Минимальная валидная секция: карта 4×4 и одно тело обязательного состава. */
+const WATER = {
+  cells: ['....', '.00.', '.00.', '....'],
+  bodies: [{ surfaceLevel: -0.1, shallowColor: '#4db8c4', deepColor: '#16505e' }],
+};
+
+/** Сетка сцены глазами валидации: секция воды адресует её клетки (REND-35). */
+const GRID = { width: 4, height: 4 };
+
+function waterErrors(section: unknown, grid?: { width: number; height: number } | null): string[] {
+  const result = validatePresentationScene(
+    { decorations: [], water: section },
+    grid === undefined ? {} : { terrain: grid },
+  );
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error('ожидался провал валидации');
+  return result.errors;
+}
+
+function expectWaterError(
+  section: unknown,
+  pattern: RegExp,
+  grid?: { width: number; height: number } | null,
+): void {
+  const errors = waterErrors(section, grid);
+  expect(
+    errors.some((message) => pattern.test(message)),
+    `нет ошибки под ${pattern}; есть:\n${errors.join('\n')}`,
+  ).toBe(true);
+}
+
+describe('REND-35: состав секции water закрыт и её находки адресны', () => {
+  it('валидная секция проходит и с известной сеткой, и без неё', () => {
+    expect(validatePresentationScene({ water: WATER }, { terrain: GRID }).ok).toBe(true);
+    expect(validatePresentationScene({ water: WATER }).ok).toBe(true);
+  });
+
+  it('тело принимает все необязательные блоки: пена, деталь, рябь', () => {
+    const rich = {
+      cells: WATER.cells,
+      bodies: [
+        {
+          surfaceLevel: 0.5,
+          shallowColor: '#4db8c4',
+          deepColor: '#16505e',
+          maxDepth: 1.5,
+          banding: 0,
+          foam: { width: 0.2, color: '#ffffff', hardness: 0 },
+          detail: {
+            source: 'textured',
+            layers: 3,
+            scale: 4,
+            speed: 0.2,
+            strength: 0.5,
+            normalMap: 'water/normal.png',
+            foamNoise: 'water/foam.png',
+            flowMap: 'water/flow.png',
+          },
+          ripples: {
+            sources: 12,
+            wavelength: 1,
+            speed: 2,
+            amplitude: 0.4,
+            decaySeconds: 2,
+            minSpeed: 0.02,
+          },
+        },
+      ],
+    };
+    expect(validatePresentationScene({ water: rich }, { terrain: GRID }).ok).toBe(true);
+  });
+
+  it('символ вне алфавита отвергается с координатой клетки', () => {
+    expectWaterError({ ...WATER, cells: ['....', '.0x.', '.00.', '....'] }, /water\.cells\[1\]\[2\].*алфавита/u, GRID);
+  });
+
+  it('ряд другой длины отвергается и умолчанием не дополняется', () => {
+    expectWaterError({ ...WATER, cells: ['....', '.00.', '.00', '....'] }, /water\.cells\[2\].*длиной 4/u, GRID);
+  });
+
+  it('число рядов сверяется с высотой сетки террейна', () => {
+    expectWaterError({ ...WATER, cells: ['....', '.00.'] }, /water\.cells: ожидалось 4 рядов/u, GRID);
+  });
+
+  it('индекс без тела в bodies отвергается адресно', () => {
+    expectWaterError({ ...WATER, cells: ['....', '.03.', '.00.', '....'] }, /water\.cells\[1\]\[2\].*индекс тела 3/u, GRID);
+  });
+
+  it('обязательные поля тела: урез и оба цвета', () => {
+    expectWaterError({ cells: WATER.cells, bodies: [{}] }, /water\.bodies\[0\]\.surfaceLevel: обязательное/u, GRID);
+    expectWaterError({ cells: WATER.cells, bodies: [{}] }, /water\.bodies\[0\]\.shallowColor: обязательное/u, GRID);
+    expectWaterError({ cells: WATER.cells, bodies: [{}] }, /water\.bodies\[0\]\.deepColor: обязательное/u, GRID);
+  });
+
+  it('отрицательный и дробный урез законны — вода живёт в лощине', () => {
+    const deep = { cells: WATER.cells, bodies: [{ ...WATER.bodies[0]!, surfaceLevel: -2.75 }] };
+    expect(validatePresentationScene({ water: deep }, { terrain: GRID }).ok).toBe(true);
+  });
+
+  it('нечисловое и отрицательное там, где запрещено, отвергается адресно', () => {
+    const body = (over: Record<string, unknown>): unknown => ({
+      cells: WATER.cells,
+      bodies: [{ ...WATER.bodies[0]!, ...over }],
+    });
+    expectWaterError(body({ surfaceLevel: 'низко' }), /surfaceLevel/u, GRID);
+    expectWaterError(body({ maxDepth: 0 }), /maxDepth/u, GRID);
+    expectWaterError(body({ banding: -1 }), /banding/u, GRID);
+    expectWaterError(body({ banding: 1.5 }), /banding/u, GRID);
+    expectWaterError(body({ shallowColor: 'aqua' }), /shallowColor/u, GRID);
+    expectWaterError(body({ foam: { width: -1 } }), /foam\.width/u, GRID);
+    expectWaterError(body({ foam: { hardness: 2 } }), /foam\.hardness/u, GRID);
+    expectWaterError(body({ detail: { source: 'painted' } }), /detail\.source/u, GRID);
+    expectWaterError(body({ detail: { layers: 0 } }), /detail\.layers/u, GRID);
+    expectWaterError(body({ detail: { normalMap: 7 } }), /detail\.normalMap/u, GRID);
+    expectWaterError(body({ ripples: { sources: 17 } }), /ripples\.sources/u, GRID);
+    expectWaterError(body({ ripples: { minSpeed: -0.1 } }), /ripples\.minSpeed/u, GRID);
+  });
+
+  it('неизвестный ключ секции, тела и блока отвергается с перечнем соседей', () => {
+    expectWaterError({ ...WATER, tide: 1 }, /water\.tide: неизвестное поле/u, GRID);
+    expectWaterError(
+      { cells: WATER.cells, bodies: [{ ...WATER.bodies[0]!, prefab: 'lake' }] },
+      /water\.bodies\[0\]\.prefab: неизвестное поле/u,
+      GRID,
+    );
+    expectWaterError(
+      { cells: WATER.cells, bodies: [{ ...WATER.bodies[0]!, foam: { thickness: 1 } }] },
+      /water\.bodies\[0\]\.foam\.thickness: неизвестное поле/u,
+      GRID,
+    );
+  });
+
+  it('секция при сцене без террейна отвергается целиком', () => {
+    expectWaterError(WATER, /секция воды у сцены без террейна/u, null);
+  });
+
+  it('карта без списка тел и список не тем типом — находки формы', () => {
+    expectWaterError({ cells: WATER.cells }, /water\.bodies: ожидался список/u, GRID);
+    expectWaterError({ cells: 'строка', bodies: [] }, /water\.cells: ожидался список/u, GRID);
+    expectWaterError({ cells: [1, 2, 3, 4], bodies: [] }, /water\.cells\[0\]: ожидался ряд/u, GRID);
+  });
+
+  it('находки собираются все разом, а не по первой', () => {
+    const errors = waterErrors({ ...WATER, cells: ['....', '.0x.', '.0y.', '....'] }, GRID);
+    expect(errors).toHaveLength(2);
+  });
+
+  it('без известной сетки проверяется прямоугольность карты', () => {
+    expectWaterError({ ...WATER, cells: ['....', '.00.', '.00', '....'] }, /water\.cells\[2\]/u);
   });
 });
 

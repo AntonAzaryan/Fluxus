@@ -52,6 +52,7 @@ import {
   TerrainSubsystem,
   ViewportPicking,
   VisualSurfaceSource,
+  WaterSubsystem,
   applyCameraPose,
   cameraConfigFromManifest,
   costCountersDebugSource,
@@ -1287,6 +1288,18 @@ async function main(): Promise<void> {
       remote!.register(lighting);
       // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
       remote!.register(new TerrainSubsystem(grid, { surface, shadows: lighting }));
+      // Вода (REND-35) — сразу за террейном и до моделей: глубину она берёт из
+      // ТОЙ ЖЕ визуальной поверхности (REND-9), а рисуется прозрачным
+      // материалом ниже прочих прозрачных (частицы и превью каста ложатся
+      // поверх, design D6). Нет секции `water` в парном документе — нет ни
+      // мешей, ни текстур, ни счётчиков: кадр байт-в-байт прежний (PERF-2).
+      remote!.register(
+        new WaterSubsystem({
+          grid,
+          surface,
+          ...(presentation?.water !== undefined ? { config: presentation.water } : {}),
+        }),
+      );
       // Перёд модели больше не параметр сборки: он описан в записи манифеста
       // (ASSET-6 `facingDeg`, REND-13), поэтому модели разных форматов с разным
       // передом уживаются в одной сцене без общего для всех значения.

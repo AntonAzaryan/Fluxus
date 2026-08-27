@@ -136,6 +136,7 @@ import type {
   AssetService,
   PresentationLighting,
   PresentationPostprocess,
+  PresentationWater,
   TerrainCurvatureMap,
   VisualManifest,
 } from '@fluxus/assets';
@@ -152,6 +153,7 @@ import {
   TerrainSubsystem,
   ViewportPicking,
   VisualSurfaceSource,
+  WaterSubsystem,
   applyCameraPose,
   type CameraBounds,
   type CameraPose,
@@ -229,6 +231,13 @@ export interface StageDraft {
    * Автор видит ту же яркость и то же свечение, что игрок (ED-22).
    */
   readonly postprocess?: PresentationPostprocess;
+  /**
+   * Секция `water` парного документа (PRES-2, REND-35); нет поля — сцена без
+   * воды, и подсистема не создаёт ни мешей, ни текстур. Автор видит ту же воду,
+   * что игрок (ED-22), и правка кривизны под водоёмом меняет её берег не позже
+   * следующего кадра (ED-15, REND-35).
+   */
+  readonly water?: PresentationWater;
 }
 
 export interface SceneStageOptions {
@@ -445,6 +454,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   let postprocess: PostprocessSubsystem | null = null;
   let lighting: LightingSubsystem | null = null;
   let terrain: TerrainSubsystem | null = null;
+  let water: WaterSubsystem | null = null;
   let models: ModelsSubsystem | null = null;
   let particles: ParticlesSubsystem | null = null;
   let overlays: OverlaySubsystem | null = null;
@@ -621,6 +631,12 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       surface = new VisualSurfaceSource(first);
       terrain = new TerrainSubsystem(first, { surface, shadows: lighting });
       presentation.register(terrain);
+      // Вода (REND-35) — сразу за террейном, как в игровой сборке: глубину она
+      // берёт из той же визуальной поверхности, поэтому мазок кисти кривизны
+      // (ED-11) двигает и дно, и берег одним и тем же полем (REND-9). Сцены без
+      // террейна у воды не бывает вовсе — карта адресует клетки его сетки.
+      water = new WaterSubsystem({ grid: first, surface });
+      presentation.register(water);
     }
     // Камера подсистеме — вход отсечения невидимых инстансов (REND-21): та же
     // самая (`camera3`), которой рисуется кадр и считается луч наведения. Позу
@@ -687,6 +703,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
         // Повторная доставка той же сетки не пуста — она возвращает карту пола
         // (REND-14), и на этом держится выход из превью (ED-9).
         terrain?.applyGrid(next.grid);
+        // Той же доставкой (REND-14) идёт и вода: карта её тел адресует клетки
+        // сетки, и другая арена — другая карта (REND-35).
+        water?.applyGrid(next.grid);
         camera?.setGrid(next.grid);
         // Границы арены сменились — фрустумы теневых камер обтянуты по ним, а
         // кэшированная карта статики устарела вместе с геометрией (REND-14).
@@ -709,6 +728,10 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     // REND-34): смена оператора или силы свечения видна не позже следующего
     // кадра, пересборки рендера нет.
     postprocess?.applyConfig(next.postprocess);
+    // Секция `water` — тем же порядком и на живой подсистеме (ED-15, REND-35):
+    // правка карты или чисел тела видна не позже следующего кадра, пересборки
+    // рендера нет.
+    water?.applyConfig(next.water);
     // Декорации — отдельный набор и отдельная подача: продюсера они не
     // трогают, и в превью их гасить нечем (REND-18).
     decorations.apply(next.decorations ?? []);

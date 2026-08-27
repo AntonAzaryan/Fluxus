@@ -66,7 +66,11 @@ import {
   type TerrainGrid,
   type TickResult,
 } from '@fluxus/core';
-import type { PresentationLighting, PresentationPostprocess } from '@fluxus/assets';
+import type {
+  PresentationLighting,
+  PresentationPostprocess,
+  PresentationWater,
+} from '@fluxus/assets';
 import {
   Extractor,
   FogSubsystem,
@@ -80,6 +84,7 @@ import {
   TerrainSubsystem,
   ViewBuffer,
   VisualSurfaceSource,
+  WaterSubsystem,
   costCountersDebugSource,
   deliveryDebugSource,
   type ExtractedTick,
@@ -306,6 +311,49 @@ const BENCH_POSTPROCESS: PresentationPostprocess = Object.freeze({
   bloom: { enabled: true },
 } as const);
 
+/**
+ * Секция `water` стенда (PRES-2, REND-35) — водоём С ВЫРЕЗОМ намеренно: карта
+ * из одного прямоугольника давала бы один квад, и greedy-объединение (design
+ * D1) в эталоне не читалось бы вовсе. Урез 0.5 стоит между полом нулевого
+ * уровня и вершинами решётки укрытий (`benchGrid` поднимает их на уровень 1):
+ * вода заливает низину и обрывается у столбов — берег, который считает
+ * фрагмент, а не карта.
+ *
+ * Карта строится ПО СЕТКЕ, а не пишется константой: арены стенда разного
+ * размера (матчевая 8×8, синтетическая 16×16), а ряды карты обязаны совпадать с
+ * сеткой клетка в клетку — дополнять их умолчанием REND-35 запрещает.
+ *
+ * Числа детали и ряби названы авторски и ВЫШЕ потолков производительного
+ * пресета (`PERFORMANCE_PRESET` ниже) — по тому же основанию, по какому у
+ * стенда авторский режим теней `full`: иначе min() не срабатывал бы, и обе
+ * секции эталона несли бы один бюджет под двумя именами (QUAL-4, design D3).
+ * Источник детали — `procedural`: текстурных ассетов у стенда нет вовсе (CONT-4).
+ */
+function benchWater(grid: TerrainGrid): PresentationWater {
+  const holeX = Math.floor(grid.width / 2);
+  const holeY = Math.floor(grid.height / 2);
+  const cells = Array.from({ length: grid.height }, (_, y) =>
+    Array.from({ length: grid.width }, (_, x) =>
+      x >= holeX && x < holeX + 2 && y >= holeY && y < holeY + 2 ? '.' : '0',
+    ).join(''),
+  );
+  return {
+    cells,
+    bodies: [
+      {
+        surfaceLevel: 0.5,
+        shallowColor: '#4db8c4',
+        deepColor: '#16505e',
+        maxDepth: 0.5,
+        detail: { source: 'procedural', layers: 4 },
+        // Порог скорости почти нулевой: сущности записанных матчей идут медленно,
+        // а без источников счётчик ряби лежал бы нулём во всех эталонах.
+        ripples: { sources: 16, minSpeed: 0.0001 },
+      },
+    ],
+  };
+}
+
 const PRODUCER: PresentationProducer = { name: 'bench' };
 
 /** Кадров на доставку: один — каденс кадра от каденса тика бенч не отвязывает. */
@@ -359,6 +407,12 @@ const PERFORMANCE_PRESET: QualityPreset = Object.freeze({
   // не его цену (QUAL-2).
   'postprocess.bloom': false,
   'terrain.curvatureTessellation': 2,
+  // Потолки воды ниже авторских чисел секции стенда (`benchWater`): рябь
+  // выключена вовсе, слоёв детали вдвое меньше, выборка глубины вчетверо
+  // дешевле — три строки диффа, которых на ультра-пресете нет (REND-35, QUAL-4).
+  'water.rippleSources': 0,
+  'water.detailLayers': 2,
+  'water.depthTexelsPerCell': 2,
 });
 
 /**
@@ -570,6 +624,11 @@ export class PresentationBench {
       .register(this.fog)
       .register(new PositionsSubsystem())
       .register(new TerrainSubsystem(grid, { chunkSize: TERRAIN_CHUNK, surface, shadows: this.lighting }))
+      // Вода — сразу за террейном, как в сборках (REND-8): глубину она берёт из
+      // той же визуальной поверхности. Без неё счётчики `water*` лежали бы
+      // нулями во всех эталонах, и ни удорожание фрагмента, ни потолки
+      // `water.*` гейту видны не были бы (PERF-4, QUAL-4).
+      .register(new WaterSubsystem({ grid, config: benchWater(grid), surface, warn }))
       .register(new ModelsSubsystem(benchManifest(), { camera: this.camera, warn, shadows: this.lighting }))
       .register(new ParticlesSubsystem(benchManifest(), { warn }));
     if (this.debug !== null) {

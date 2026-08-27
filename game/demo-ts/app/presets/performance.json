@@ -7,5 +7,8 @@
   "lighting.shadowMode": "blob",
   "lighting.maxLocalLights": 2,
   "postprocess.bloom": false,
-  "postprocess.lut": false
+  "postprocess.lut": false,
+  "water.rippleSources": 0,
+  "water.detailLayers": 2,
+  "water.depthTexelsPerCell": 2
 }

@@ -160,7 +160,15 @@ export function sceneValidationRules(): readonly ValidationRule[] {
       },
       // Описания камеры — вход валидации манифеста (ASSET-8, ASSET-10): их
       // приносит собирающий редактор, потому что перечни живут в коде камеры.
-      { cameraEffects: CAMERA_EFFECTS_DESCRIPTION, cameraConfig: CAMERA_CONFIG_DESCRIPTION },
+      // Адрес ассета террейна — вход правила парного документа: клеточная карта
+      // секции `water` адресует клетки этой сетки (REND-35), и без адреса «ряды
+      // по сетке» не проверялось бы вовсе. Адрес тот же, что у междокументного
+      // правила кривизны ниже: раскладку знает сборка, а не правило (ED-25).
+      {
+        cameraEffects: CAMERA_EFFECTS_DESCRIPTION,
+        cameraConfig: CAMERA_CONFIG_DESCRIPTION,
+        terrainSites: [{ kind: SCENE_KINDS.config, path: TERRAIN_ASSET }],
+      },
       systemSites(SCENE_KINDS.config),
     ),
     ...crossDocumentRules(
