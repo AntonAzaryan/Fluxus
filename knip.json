@@ -1,12 +1,11 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  // baseline: 93 unused exports + 21 unused types + 1 duplicate export существовали
-  // до внедрения knip — категории временно выключены, чтобы гейт был зелёным.
-  // Счётчики и порядок разгребания — в LINT_BASELINE.md. Проверки files,
-  // dependencies, unlisted, unresolved — активны.
+  // Проверки exports и types активны: baseline из LINT_BASELINE.md п.3 разгребён
+  // (2026-08-27). duplicates выключена ради единственной находки-не-дефекта:
+  // msgpackSerializer = DEFAULT_SERIALIZER в engine/net-ts/src/protocol/codec.ts —
+  // одно значение под двумя именами, используются оба (см. LINT_BASELINE.md).
+  // Проверки files, dependencies, unlisted, unresolved — активны.
   "rules": {
-    "exports": "off",
-    "types": "off",
     "duplicates": "off"
   },
   "ignore": [
