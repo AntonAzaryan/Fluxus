@@ -22,10 +22,21 @@
  * DSL, переизобретающего TypeScript. Композицию исполнителей, steering-примитивы
  * и микро-слой документ описывать не вправе вовсе — это механизм.
  *
+ * Из трёх словарей ботовых ДВА: исполнители и входы. Словарь форм кривых —
+ * общей модели скоринга ядра (`npc-behavior` NPC-3), разделяемой с поведением
+ * NPC: новая форма появляется одной правкой модели и становится доступна обоим
+ * документам, а «ботового» набора форм не существует.
+ *
  * Форма — интерпретируемая, но компиляции не мешает (design, решение владельца):
  * действие — плоский список considerations с кривой-записью, поэтому «собрать из
  * документа функцию» остаётся возможным без смены формата.
  */
+import {
+  SCORING_CURVES,
+  SCORING_CURVE_FIELDS,
+  type ScoringCurve,
+  type ScoringCurveType,
+} from '@fluxus/core';
 import {
   name as documentName,
   num,
@@ -76,31 +87,23 @@ export const BOT_INPUTS = [
 
 export type BotInput = (typeof BOT_INPUTS)[number];
 
-/** Формы кривой отклика — закрытый набор (BOT-9); параметры живут полями кривой. */
-export const BOT_CURVES = ['linear', 'quadratic', 'logistic', 'constant'] as const;
+/**
+ * Формы кривой отклика — закрытый набор ОБЩЕЙ МОДЕЛИ (BOT-9, `npc-behavior`
+ * NPC-3): своего набора у бота нет, и новая форма приезжает сюда правкой
+ * модели ядра, а не правкой этого файла. Параметры живут полями кривой.
+ */
+export const BOT_CURVES = SCORING_CURVES;
 
-export type BotCurveType = (typeof BOT_CURVES)[number];
+export type BotCurveType = ScoringCurveType;
 
 /**
- * Кривая отклика: вход в [0, 1] → оценка, которая клампится в [0, 1].
+ * Кривая отклика: вход в [0, 1] → оценка, которая клампится в [0, 1]. Форма —
+ * общей модели (NPC-3), псевдоним оставлен ради читаемости документа бота.
  *
  * Формул в документе нет и не будет (design Non-Goals): «вход → кривая → вес» —
  * это ровно та граница, за которой начинается генеральный DSL выражений.
  */
-export type BotCurve =
-  /** `slope * x + intercept` — прямая; убывающая задаётся отрицательным наклоном. */
-  | { readonly type: 'linear'; readonly slope: number; readonly intercept: number }
-  /** `slope * (x - shift)² + intercept` — мягкое начало и резкий конец (или наоборот). */
-  | {
-      readonly type: 'quadratic';
-      readonly slope: number;
-      readonly intercept: number;
-      readonly shift: number;
-    }
-  /** `1 / (1 + e^(-slope * (x - midpoint)))` — порог с плавными краями. */
-  | { readonly type: 'logistic'; readonly slope: number; readonly midpoint: number }
-  /** Постоянная: вход не читается вовсе — «это действие всегда столько стоит». */
-  | { readonly type: 'constant'; readonly value: number };
+export type BotCurve = ScoringCurve;
 
 /** Одна ось полезности: вход словаря, кривая отклика и вес (BOT-9). */
 export interface BotConsideration {
@@ -141,40 +144,29 @@ export interface BotBehaviorDocument {
   readonly actions: readonly BotAction[];
 }
 
-/** Разбор кривой: тип из словаря, параметры — поля самой кривой (BOT-9). */
+/**
+ * Разбор кривой: форма из словаря ОБЩЕЙ МОДЕЛИ, параметры — её же таблица
+ * полей (BOT-9, NPC-3). Ходом по таблице, а не своим `switch` на имя формы:
+ * иначе новая форма модели требовала бы второй правки — здесь, — и обещание
+ * «одна правка на обоих потребителей» держалось бы на памяти автора.
+ *
+ * Диапазоны параметров широкие намеренно: кривая — форма отклика, а не
+ * балансное число, и ограничивать наклон значило бы запрещать дизайнеру
+ * резкость. Клампится РЕЗУЛЬТАТ (общая модель), а не коэффициенты; поле-долю
+ * модель называет сама, и её диапазон — [0, 1].
+ */
 function parseCurve(input: unknown, path: string, findings: Findings): BotCurve {
   const root = record(input, path, findings);
-  const type = oneOf(root, 'type', path, BOT_CURVES, findings);
-  // Диапазоны параметров широкие намеренно: кривая — форма отклика, а не
-  // балансное число, и ограничивать наклон значило бы запрещать дизайнеру
-  // резкость. Клампится РЕЗУЛЬТАТ (`scoring.ts`), а не коэффициенты.
+  const named = oneOf(root, 'type', path, BOT_CURVES, findings);
+  // Неизвестная форма уже названа находкой; читается она как прямая, чтобы
+  // разбор дошёл до конца и назвал ОСТАЛЬНЫЕ находки документа.
+  const type: ScoringCurveType = named ?? 'linear';
   const span = { min: -1000, max: 1000 } as const;
-  switch (type) {
-    case 'quadratic':
-      return {
-        type,
-        slope: num(root, 'slope', path, span, findings),
-        intercept: num(root, 'intercept', path, span, findings),
-        shift: num(root, 'shift', path, span, findings),
-      };
-    case 'logistic':
-      return {
-        type,
-        slope: num(root, 'slope', path, span, findings),
-        midpoint: num(root, 'midpoint', path, span, findings),
-      };
-    case 'constant':
-      return { type, value: num(root, 'value', path, { min: 0, max: 1 }, findings) };
-    case 'linear':
-    case undefined:
-      // Неизвестная форма уже названа находкой; читается она как прямая, чтобы
-      // разбор дошёл до конца и назвал ОСТАЛЬНЫЕ находки документа.
-      return {
-        type: 'linear',
-        slope: num(root, 'slope', path, span, findings),
-        intercept: num(root, 'intercept', path, span, findings),
-      };
+  const parsed: Record<string, unknown> = { type };
+  for (const field of SCORING_CURVE_FIELDS[type]) {
+    parsed[field.key] = num(root, field.key, path, field.unit ? { min: 0, max: 1 } : span, findings);
   }
+  return parsed as unknown as BotCurve;
 }
 
 /** Разбор одной оси полезности: вход, его параметр, кривая и вес. */

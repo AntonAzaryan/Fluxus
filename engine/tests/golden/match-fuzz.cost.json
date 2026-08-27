@@ -3,6 +3,7 @@
     "broadPhasePairs": 0,
     "commandsApplied": 1168,
     "expressions": 840,
+    "npcNeighbors": 0,
     "raycasts": 0,
     "ticks": 60
   },

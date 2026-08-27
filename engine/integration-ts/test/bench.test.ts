@@ -18,11 +18,20 @@
  * прогона, а не симуляцию.
  */
 import { describe, expect, it } from 'vitest';
-import { RECORDED_MATCHES, loadRecording, prepareRecording } from './benchLoad.js';
+import { NPC_STRESS, RECORDED_MATCHES, loadNpcStress, loadRecording, prepareRecording } from './benchLoad.js';
+import type { ScenarioDef } from '@fluxus/core';
 
 /** Прогонов на прогрев JIT и прогонов под замером. */
 const WARMUP = 20;
 const REPEATS = 40;
+
+/**
+ * Столько же для нагрузки массы NPC (NPC-9): её тик делает работу за две сотни
+ * агентов, и полсотни прогонов заняли бы минуты — при том, что сторож мерит
+ * ПОРЯДОК, а не разброс между прогонами.
+ */
+const NPC_WARMUP = 2;
+const NPC_REPEATS = 4;
 
 /**
  * Сторожевой порог: наблюдаемое на машине разработчика — 30 000…50 000 тиков/с
@@ -37,16 +46,16 @@ const MIN_TICKS_PER_SECOND = 3_000;
  * замер обязан покрывать только цикл тиков, а повторный прогон — начинаться с
  * того же начального состояния, что и первый.
  */
-function ticksPerSecond(name: string): number {
-  const def = loadRecording(name);
-  for (let i = 0; i < WARMUP; i++) prepareRecording(def).run();
+function ticksPerSecond(name: string, load?: ScenarioDef, warmup = WARMUP, repeats = REPEATS): number {
+  const def = load ?? loadRecording(name);
+  for (let i = 0; i < warmup; i++) prepareRecording(def).run();
 
-  const prepared = Array.from({ length: REPEATS }, () => prepareRecording(def));
+  const prepared = Array.from({ length: repeats }, () => prepareRecording(def));
   const t0 = performance.now();
   for (const recording of prepared) recording.run();
   const elapsedMs = performance.now() - t0;
 
-  const ticks = def.ticks * REPEATS;
+  const ticks = def.ticks * repeats;
   const rate = (ticks / elapsedMs) * 1000;
   console.log(
     `[bench] тик ядра, ${name}: ${Math.round(rate).toLocaleString('ru-RU')} тиков/с ` +
@@ -61,4 +70,22 @@ describe('замеры ядра на записанных матчах (инфо
       expect(ticksPerSecond(match)).toBeGreaterThan(MIN_TICKS_PER_SECOND);
     });
   }
+});
+
+/**
+ * Сторож массы NPC (`npc-behavior` NPC-9, PERF-5): двести массовых крипов на
+ * арене — та же нагрузка, чью работу считает эталон стоимости, но замеряется
+ * здесь ВРЕМЯ, которого счётчики не видят.
+ *
+ * Порог свой и много ниже матчевого: тик этой нагрузки делает работу за две
+ * сотни агентов, а не за двоих героев. Как и у соседей выше, он сторожит
+ * замедление на порядок, а не «сколько должно быть» (PERF-5).
+ */
+const MIN_NPC_TICKS_PER_SECOND = 15;
+
+describe('замер массы NPC (информативно, NPC-9)', () => {
+  it(`${NPC_STRESS}: тиков в секунду выше порядка сторожевого порога`, () => {
+    const rate = ticksPerSecond(NPC_STRESS, loadNpcStress(), NPC_WARMUP, NPC_REPEATS);
+    expect(rate).toBeGreaterThan(MIN_NPC_TICKS_PER_SECOND);
+  });
 });

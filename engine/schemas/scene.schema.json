@@ -77,6 +77,10 @@
       "$comment": "Биндинги сцены для платформы способностей (ABIL-8).",
       "$ref": "#/$defs/abilityRuntime"
     },
+    "npc": {
+      "$comment": "Платформа поведения NPC (NPC-2): наличие подключает компоненты платформы и её системы.",
+      "$ref": "#/$defs/npc"
+    },
     "initial": {
       "type": "array",
       "items": {
@@ -708,6 +712,514 @@
           }
         }
       ]
+    },
+    "npc": {
+      "title": "Платформа поведения NPC (NPC-2)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "behaviors"
+      ],
+      "properties": {
+        "behaviors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/npcBehavior"
+          }
+        },
+        "bindings": {
+          "$comment": "Что в этой сцене значат позиция, скорость, здоровье и сторона (NPC-1).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "position": {
+              "type": "string",
+              "minLength": 1
+            },
+            "velocity": {
+              "type": "string",
+              "minLength": 1
+            },
+            "health": {
+              "$ref": "#/$defs/npcFieldRef"
+            },
+            "healthMax": {
+              "$ref": "#/$defs/npcFieldRef"
+            },
+            "team": {
+              "$ref": "#/$defs/npcFieldRef"
+            },
+            "deadMarker": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "decisionBudget": {
+          "$comment": "Предел дорогих пересмотров решений на тик (NPC-4).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "waves": {
+          "$comment": "Таблица волн режиссёра (NPC-8); cap — предел активных NPC.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cap",
+            "entries"
+          ],
+          "properties": {
+            "cap": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "entries": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/npcWave"
+              }
+            }
+          }
+        }
+      }
+    },
+    "npcAction": {
+      "title": "Действие состояния (NPC-2)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executor",
+        "considerations"
+      ],
+      "properties": {
+        "executor": {
+          "$comment": "Исполнитель закрытого словаря кода.",
+          "enum": [
+            "cast",
+            "followRoute",
+            "hold",
+            "seekTarget"
+          ]
+        },
+        "event": {
+          "$comment": "Тип публикуемого события — только у исполнителя cast (NPC-7).",
+          "type": "string",
+          "minLength": 1
+        },
+        "considerations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/npcConsideration"
+          }
+        }
+      }
+    },
+    "npcBehavior": {
+      "title": "Документ поведения NPC (NPC-2)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "name",
+        "tier",
+        "decision",
+        "ranges",
+        "speed",
+        "states"
+      ],
+      "properties": {
+        "schema": {
+          "$comment": "Версия формы документа (NPC-2).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tier": {
+          "$comment": "Массовый или особый агент (NPC-4).",
+          "enum": [
+            "elite",
+            "mass"
+          ]
+        },
+        "decision": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "intervalTicks"
+          ],
+          "properties": {
+            "intervalTicks": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "ranges": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sense",
+            "attack",
+            "arrive",
+            "separation"
+          ],
+          "properties": {
+            "sense": {
+              "type": "integer"
+            },
+            "attack": {
+              "type": "integer"
+            },
+            "arrive": {
+              "type": "integer"
+            },
+            "separation": {
+              "type": "integer"
+            }
+          }
+        },
+        "speed": {
+          "type": "integer"
+        },
+        "separationWeight": {
+          "type": "integer"
+        },
+        "scales": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "elapsedTicks": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "crowd": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "threat": {
+          "$comment": "Правила накопления угрозы — политика документа (NPC-5).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "switchMargin",
+            "sources"
+          ],
+          "properties": {
+            "switchMargin": {
+              "type": "integer"
+            },
+            "decayPerTick": {
+              "type": "integer"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "event",
+                  "victimField",
+                  "sourceField",
+                  "weight"
+                ],
+                "properties": {
+                  "event": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "victimField": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sourceField": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "amountField": {
+                    "$comment": "Поле события с ЦЕЛЫМ счётчиком (единицы урона, лечения); угроза — вес, помноженный на него. Без поля вес засчитывается как есть.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "weight": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "states": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/npcState"
+          }
+        }
+      }
+    },
+    "npcConsideration": {
+      "title": "Ось полезности (NPC-3)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input",
+        "curve",
+        "weight"
+      ],
+      "properties": {
+        "input": {
+          "$comment": "Вход закрытого словаря NPC.",
+          "enum": [
+            "always",
+            "crowding",
+            "healthFraction",
+            "routeRemaining",
+            "stateElapsed",
+            "targetDistance",
+            "targetKnown"
+          ]
+        },
+        "curve": {
+          "$ref": "#/$defs/npcCurve"
+        },
+        "weight": {
+          "$comment": "Доля [0, 1] в Q16.16.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65536
+        }
+      }
+    },
+    "npcCurve": {
+      "title": "Кривая отклика (NPC-3)",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "slope",
+            "intercept"
+          ],
+          "properties": {
+            "type": {
+              "const": "linear"
+            },
+            "slope": {
+              "type": "integer"
+            },
+            "intercept": {
+              "type": "integer"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "slope",
+            "intercept",
+            "shift"
+          ],
+          "properties": {
+            "type": {
+              "const": "quadratic"
+            },
+            "slope": {
+              "type": "integer"
+            },
+            "intercept": {
+              "type": "integer"
+            },
+            "shift": {
+              "type": "integer"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "slope",
+            "midpoint"
+          ],
+          "properties": {
+            "type": {
+              "const": "logistic"
+            },
+            "slope": {
+              "type": "integer"
+            },
+            "midpoint": {
+              "type": "integer"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "constant"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65536
+            }
+          }
+        }
+      ]
+    },
+    "npcFieldRef": {
+      "$comment": "Пара «компонент, поле».",
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "npcState": {
+      "title": "Состояние HFSM (NPC-2)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "actions"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/npcAction"
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/npcTransition"
+          }
+        }
+      }
+    },
+    "npcTransition": {
+      "title": "Переход HFSM (NPC-7)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "to",
+        "when"
+      ],
+      "properties": {
+        "to": {
+          "type": "string",
+          "minLength": 1
+        },
+        "when": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "elapsed",
+                "event",
+                "hasTarget",
+                "healthAbove",
+                "healthBelow",
+                "noTarget",
+                "routeDone",
+                "targetBeyond",
+                "targetWithin"
+              ]
+            },
+            "value": {
+              "type": "integer"
+            },
+            "ticks": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "event": {
+              "type": "string",
+              "minLength": 1
+            },
+            "entityField": {
+              "$comment": "Поле события с адресатом — у условия event. Без него переход срабатывает на событии типа, кому бы оно ни было адресовано.",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "npcWave": {
+      "title": "Запись таблицы волн (NPC-8)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prefab",
+        "count",
+        "behavior",
+        "delayTicks",
+        "spacingTicks"
+      ],
+      "properties": {
+        "prefab": {
+          "type": "string",
+          "minLength": 1
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "behavior": {
+          "$comment": "Индекс документа поведения в таблице сцены.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "delayTicks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "spacingTicks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "route": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        }
+      }
     },
     "prefab": {
       "title": "Prefab (ECS-4)",

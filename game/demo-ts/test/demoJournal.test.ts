@@ -69,9 +69,36 @@ function emittedEvents(node: unknown, found = new Map<string, Set<string>>()): M
   return found;
 }
 
+/**
+ * Типы событий, которыми РОТАЦИЯ NPC просит способность (`npc-behavior` NPC-7).
+ * Действием `emitEvent` они не описаны и обходом выше не находятся: их
+ * публикует нативная система поведения, а документ называет лишь тип — обход
+ * документа поведения поэтому свой.
+ *
+ * Поля просьбы задаёт механизм (`systems/npc/behavior.ts`), а не документ, и
+ * перечислены они здесь ровно затем, чтобы роли словаря проверялись по ним
+ * наравне с событиями сцены.
+ */
+const NPC_ASK_FIELDS = ['caster', 'target', 'x', 'y'];
+
+function npcAskEvents(node: unknown, found = new Map<string, Set<string>>()): Map<string, Set<string>> {
+  if (Array.isArray(node)) {
+    for (const item of node) npcAskEvents(item, found);
+    return found;
+  }
+  if (typeof node !== 'object' || node === null) return found;
+  const record = node as Record<string, unknown>;
+  if (record.executor === 'cast' && typeof record.event === 'string') {
+    found.set(record.event, new Set(NPC_ASK_FIELDS));
+  }
+  for (const value of Object.values(record)) npcAskEvents(value, found);
+  return found;
+}
+
 /** Всё, что матч демо-арены может опубликовать: события сцены плюс нативные. */
 const EMITTED = ((): Map<string, Set<string>> => {
   const found = emittedEvents(sceneJson);
+  for (const [type, fields] of npcAskEvents(sceneJson)) found.set(type, fields);
   for (const [type, fields] of Object.entries(NATIVE_EVENTS)) found.set(type, new Set(fields));
   return found;
 })();
@@ -84,6 +111,9 @@ describe('словарь журнала демо-арены (DIAG-10)', () => {
     // что половина проверки покрытия молча выключилась.
     expect(Object.keys(NATIVE_EVENTS).length).toBeGreaterThan(0);
     expect([...EMITTED.keys()]).toContain('Overlap');
+    // И просьбы ротации NPC — тоже: без них словарь молча не покрывал бы
+    // половину боевых фактов боя с боссом (NPC-7).
+    expect(npcAskEvents(sceneJson).size).toBeGreaterThan(0);
   });
 
   it('каждый тип события матча назван словарём', () => {

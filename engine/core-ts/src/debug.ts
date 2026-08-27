@@ -61,6 +61,7 @@ export interface DiagnosticsContext {
   costCommandsApplied: number;
   costExpressions: number;
   costBroadPhasePairs: number;
+  costNpcNeighbors: number;
   costRaycasts: number;
 }
 
@@ -97,6 +98,7 @@ export function withDiagnostics<T>(
     costCommandsApplied: 0,
     costExpressions: 0,
     costBroadPhasePairs: 0,
+    costNpcNeighbors: 0,
     costRaycasts: 0,
   };
   current = ctx;
@@ -260,17 +262,34 @@ export function countCostExpression(): void {
 }
 
 /**
- * Кандидаты broad-phase, осмотренные за один запрос (PERF-3). Покрывает ОБА
- * источника кандидатов физики: кандидатов статики, выданных обходом клеток
+ * Кандидаты broad-phase ФИЗИКИ, осмотренные за один запрос (PERF-3). Покрывает
+ * оба её источника кандидатов: кандидатов статики, выданных обходом клеток
  * сетки на каждый запрос (`PhysicsWorld.collect`), и кандидатов динамики,
  * осмотренных линейным обходом препятствий на каждого движущегося (динамика не
  * индексируется — `physics.ts`). Кандидат, отсеянный маской слоёв или тегом,
  * считается наравне с прошедшим: работа по его осмотру уже сделана.
+ *
+ * Выборка соседей платформы поведения NPC сюда НЕ входит: у неё свой счётчик
+ * ниже. Общий счётчик на двоих прятал бы регрессию одной стороны за шумом
+ * другой — на сцене с сотнями агентов их выборка соседей превосходит работу
+ * физики на порядок, и подорожавший луч в такой сумме был бы не виден вовсе.
  */
 export function countCostBroadPhase(pairs: number): void {
   const ctx = current;
   if (ctx === undefined) return;
   ctx.costBroadPhasePairs += pairs;
+}
+
+/**
+ * Соседи-агенты, осмотренные за один запрос к сетке платформы поведения NPC
+ * (`npc-behavior` NPC-6, NPC-9). Единица та же, что у кандидатов broad-phase, —
+ * осмотренный кандидат, — но величина другая: она растёт числом агентов и
+ * плотностью толпы, а не составом статики сцены.
+ */
+export function countCostNpcNeighbors(examined: number): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costNpcNeighbors += examined;
 }
 
 /** Вызов детерминированного raycast Physics API (PERF-3). */
@@ -316,6 +335,7 @@ function recordTickCost(ctx: DiagnosticsContext): void {
       commandsApplied: ctx.costCommandsApplied,
       expressions: ctx.costExpressions,
       broadPhasePairs: ctx.costBroadPhasePairs,
+      npcNeighbors: ctx.costNpcNeighbors,
       raycasts: ctx.costRaycasts,
     },
   });

@@ -46,6 +46,13 @@ import type {
   AbilityRuntimeDef,
   BuffDef,
 } from '../systems/abilities/model.js';
+import { NPC_COMPONENTS } from '../systems/npc/components.js';
+import { compileNpcCatalog } from '../systems/npc/document.js';
+import { NpcBehaviorSystem } from '../systems/npc/behavior.js';
+import { NpcDirectorSystem } from '../systems/npc/director.js';
+import { NpcMovementSystem } from '../systems/npc/movement.js';
+import { NpcThreatSystem } from '../systems/npc/threat.js';
+import type { NpcCatalog, NpcPlatformDef } from '../systems/npc/model.js';
 import { applyPlacement, type ScenarioSpawn } from './placement.js';
 import type { ArenaApi, ComponentSchema, ModifierRegistry, TerrainApi, WorldState } from '../types.js';
 
@@ -97,6 +104,19 @@ export interface SceneDef {
    */
   readonly abilityRuntime?: AbilityRuntimeDef;
   /**
+   * Платформа поведения NPC (`npc-behavior` NPC-2): таблица документов
+   * поведения, биндинги сцены, бюджет решений и таблица волн. Наличие поля
+   * подключает компоненты платформы и её системы — тем же порядком, каким
+   * `abilities` подключает платформу способностей.
+   *
+   * Документы живут полем конфига сцены, а не отдельными файлами, по той же
+   * причине, что таблицы твинов и способностей: из мира документ адресуется
+   * ИНДЕКСОМ в таблице (поле `NpcAgent.behavior`), а индекс имеет смысл только
+   * вместе с таблицей. Деревом контента это остаётся: конфиг сцены и есть
+   * контент (CONT-1).
+   */
+  readonly npc?: NpcPlatformDef;
+  /**
    * Начальная расстановка сцены (SER-7, SER-8) — то, что стоит на арене в
    * каждом её прогоне. Порядок записей нормативен: он задаёт выданные
    * `index`/`generation` (ID-2, DET-6), а через плоскую форму мира — хеш
@@ -128,6 +148,13 @@ export interface Scene {
    * (design Decision 2).
    */
   readonly abilities?: AbilityCatalog;
+  /**
+   * Скомпилированная платформа поведения NPC (NPC-2). Есть, если сцена
+   * объявила `npc`. Живёт рядом с таблицей способностей и по тем же
+   * основаниям: порождена данными сцены, иммутабельна и в снапшот не входит —
+   * состояние агентов целиком лежит в полях компонентов (NPC-1).
+   */
+  readonly npc?: NpcCatalog;
 }
 
 export function loadScene(def: SceneDef): Scene {
@@ -176,6 +203,7 @@ export function loadScene(def: SceneDef): Scene {
     ...(def.fog === true ? fowComponents(visionModifiers) : []),
     ...(def.abilities === undefined ? [] : ABILITY_COMPONENTS),
     ...(def.buffs === undefined ? [] : BUFF_COMPONENTS),
+    ...(def.npc === undefined ? [] : NPC_COMPONENTS),
   ];
   const prefabs = [
     ...(def.prefabs ?? []),
@@ -186,6 +214,11 @@ export function loadScene(def: SceneDef): Scene {
   // Коэффициент опоры в prefabs сцены — доля в [0, 1] (ARENA-3): опечатка
   // контента не должна доживать до первого тика.
   checkArenaSupport(def.prefabs ?? []);
+  // Документы поведения NPC проверяются ДО создания мира (SER-7, NPC-2): опечатка
+  // в имени исполнителя не должна доживать даже до расстановки. Мира компиляции
+  // не нужно — документ поведения не адресует ни компонентов, ни prefab'ов, — и
+  // тем она отличается от таблицы способностей, которой мир необходим (ABIL-10).
+  const npc = def.npc === undefined ? undefined : compileNpcCatalog(def.npc);
 
   const world = createWorld(components, prefabs, def.capacity);
   // Сущности террейна и арены спавнятся до начальной расстановки: они часть
@@ -248,6 +281,19 @@ export function loadScene(def: SceneDef): Scene {
   if (abilities !== undefined && def.fog === true) {
     systems.register(new AbilityVisibilitySystem(abilities));
   }
+  // Платформа поведения NPC включается составом сцены целиком (SER-7, NPC-2):
+  // зависимостей сборки у её систем нет — восприятие есть прямое чтение мира
+  // (NPC-1), поиск пути не требуется (NAV-6), — а без систем объявленные
+  // компоненты остались бы мёртвыми данными. Сами документы разобраны выше, до
+  // создания мира.
+  if (npc !== undefined) {
+    systems.register(new NpcBehaviorSystem(npc));
+    systems.register(new NpcMovementSystem(npc));
+    systems.register(new NpcThreatSystem(npc));
+    // Режиссёр включается таблицей волн, а не самой платформой: сцена вправе
+    // расставить NPC руками и волн не иметь вовсе (NPC-8).
+    if (npc.waves !== undefined) systems.register(new NpcDirectorSystem(npc));
+  }
   // Валидация каждой системы — внутри registerFromJson (SYS-3): конфиг с
   // опечаткой не должен доживать до первого тика.
   for (const system of def.systems ?? []) systems.registerFromJson(system, world);
@@ -258,5 +304,6 @@ export function loadScene(def: SceneDef): Scene {
     ...(terrain !== undefined ? { terrain } : {}),
     ...(arena !== undefined ? { arena } : {}),
     ...(abilities !== undefined ? { abilities } : {}),
+    ...(npc !== undefined ? { npc } : {}),
   };
 }

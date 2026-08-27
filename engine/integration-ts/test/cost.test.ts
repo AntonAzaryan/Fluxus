@@ -35,7 +35,7 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { DiagnosticsSink } from '@fluxus/core';
+import { runScenario, type DiagnosticsSink } from '@fluxus/core';
 import {
   COST_COUNTER_STAGES,
   createCostCounters,
@@ -47,6 +47,8 @@ import {
 import {
   BENCH_PRESETS,
   BENCH_PRESET_NAMES,
+  NPC_STRESS,
+  loadNpcStress,
   GOLDEN_DIR,
   MATCH_STAND,
   PresentationBench,
@@ -76,12 +78,21 @@ interface TickCost extends StageCost {
   broadPhasePairs: number;
   commandsApplied: number;
   expressions: number;
+  /** Осмотренные соседи-агенты сетки платформы поведения NPC (NPC-6, NPC-9). */
+  npcNeighbors: number;
   raycasts: number;
   ticks: number;
 }
 
 function tickCostCollector(): { readonly sink: DiagnosticsSink; readonly total: TickCost } {
-  const total: TickCost = { broadPhasePairs: 0, commandsApplied: 0, expressions: 0, raycasts: 0, ticks: 0 };
+  const total: TickCost = {
+    broadPhasePairs: 0,
+    commandsApplied: 0,
+    expressions: 0,
+    npcNeighbors: 0,
+    raycasts: 0,
+    ticks: 0,
+  };
   const sink: DiagnosticsSink = {
     // Границы систем достаточно: сводка стоимости — штатная телеметрия DIAG-3,
     // полного потока команд ей не нужно, а он стоил бы прогону на порядок.
@@ -94,6 +105,7 @@ function tickCostCollector(): { readonly sink: DiagnosticsSink; readonly total: 
       total.broadPhasePairs += Number(entry.data?.broadPhasePairs ?? 0);
       total.commandsApplied += Number(entry.data?.commandsApplied ?? 0);
       total.expressions += Number(entry.data?.expressions ?? 0);
+      total.npcNeighbors += Number(entry.data?.npcNeighbors ?? 0);
       total.raycasts += Number(entry.data?.raycasts ?? 0);
     },
   };
@@ -708,6 +720,43 @@ describe('PERF-6: оси масштабирования бенч-нагрузк�
   });
 });
 
+/**
+ * Стоимость NPC-части тика под массой агентов (`npc-behavior` NPC-9): двести
+ * массовых крипов, режиссёр волн, маршрут и двое героев в центре.
+ *
+ * Стадия здесь ОДНА — `tick`: у нагрузки нет ни клиента, ни кадра, а мерить
+ * она заведена именно симуляцию. Эталон в общем гейте затем, чтобы удорожание
+ * решения агента краснело диффом на ревью, а не обнаруживалось на плейтесте;
+ * принятие удорожания — та же явная регенерация `npm run golden:cost`.
+ *
+ * Побитового эталона состояния у нагрузки нет намеренно — основание в
+ * `benchLoad.ts` рядом с её загрузчиком.
+ */
+function measureNpcStress(): unknown {
+  const { sink, total } = tickCostCollector();
+  runScenario(loadNpcStress(), sink);
+  return { tick: sorted(total) };
+}
+
+describe('NPC-9: эталон стоимости массы NPC', () => {
+  it('счётчики стадии тика совпадают с эталоном', () => {
+    checkGolden(`${NPC_STRESS}.cost.json`, measureNpcStress());
+  });
+
+  it('нагрузка не мёртвая: работа тика сделана каждым счётчиком объёма', () => {
+    const document = measureNpcStress() as { tick: TickCost };
+    expect(document.tick.ticks).toBe(loadNpcStress().ticks);
+    expect(document.tick.commandsApplied).toBeGreaterThan(0);
+    // Выборка соседей платформы поведения — СВОЯ строка эталона (NPC-6, NPC-9),
+    // и разделение это не косметическое: вся выборка нагрузки приходится на
+    // сетку агентов, а broad-phase физики на ней не делает ничего (коллайдеры
+    // крипов никого не блокируют). В общем счётчике удорожание луча утонуло бы
+    // в этих девяноста тысячах бесследно.
+    expect(document.tick.npcNeighbors).toBeGreaterThan(0);
+    expect(document.tick.broadPhasePairs).toBe(0);
+  });
+});
+
 describe('PERF-3: счётчики машинно-независимы', () => {
   it('повторный прогон в одном процессе даёт побитово тот же документ', () => {
     for (const match of RECORDED_MATCHES) {
@@ -722,5 +771,11 @@ describe('PERF-3: счётчики машинно-независимы', () => {
     const first = scalingDocument();
     expect(scalingDocument()).toEqual(first);
     expect(canonical(scalingDocument())).toBe(canonical(first));
+  });
+
+  it('стресс-нагрузка NPC повторяется так же (NPC-9)', () => {
+    const first = measureNpcStress();
+    expect(measureNpcStress()).toEqual(first);
+    expect(canonical(measureNpcStress())).toBe(canonical(first));
   });
 });

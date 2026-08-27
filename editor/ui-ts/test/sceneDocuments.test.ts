@@ -260,12 +260,16 @@ describe('ED-15: настоящая сцена дерева контента, а
     expect(draft.curvature?.height).toBe(draft.grid?.height);
   });
 
-  it('расстановки в конфиге сцены сегодня нет — и набор поэтому пуст', () => {
+  it('расстановка конфига сцены доезжает до вьюпорта как есть', () => {
     // Не «вьюпорт ничего не рисует»: террейн и кривизна те же, что у игрока.
-    // Записи расстановки в `duel.scene.json` пока нет вовсе (её пишет W3-3), и
-    // честнее это зафиксировать, чем показать пустоту как полноту.
+    // Сегодня в `duel.scene.json` стоит ровно один житель арены — босс
+    // (`npc-behavior` NPC-7), — и вьюпорт обязан показать его на том же месте,
+    // где его увидит игрок: в центре арены и со своим визуалом манифеста.
     const draft = sceneDraft({ config, visuals: manifest });
-    expect(draft.placements).toEqual([]);
+    expect(draft.placements.map((entry) => entry.prefab)).toEqual(['Boss']);
+    const boss = draft.placements[0]!;
+    expect(boss.kind).toBe('Boss');
+    expect([boss.x, boss.y]).toEqual([24, 24]);
   });
 });
 

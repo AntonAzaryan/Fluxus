@@ -1,0 +1,2128 @@
+{
+  "name": "npc-stress",
+  "seed": 20260826,
+  "ticks": 24,
+  "scene": {
+    "components": [
+      {
+        "name": "Position",
+        "fields": {
+          "x": "fixed",
+          "y": "fixed"
+        }
+      },
+      {
+        "name": "Velocity",
+        "fields": {
+          "x": "fixed",
+          "y": "fixed"
+        }
+      },
+      {
+        "name": "Collider",
+        "fields": {
+          "blockMask": "i32",
+          "cliffRise": "i32",
+          "halfX": "fixed",
+          "halfY": "fixed",
+          "hitMask": "i32",
+          "layer": "i32",
+          "radius": "fixed",
+          "shape": "i32"
+        }
+      },
+      {
+        "name": "Team",
+        "fields": {
+          "id": "i32"
+        }
+      },
+      {
+        "name": "Health",
+        "fields": {
+          "hp": "i32",
+          "hpMax": "i32"
+        }
+      },
+      {
+        "name": "Dead",
+        "fields": {
+          "at": "i32"
+        }
+      }
+    ],
+    "prefabs": [
+      {
+        "name": "Creep",
+        "components": {
+          "Position": {
+            "x": 0,
+            "y": 0
+          },
+          "Velocity": {
+            "x": 0,
+            "y": 0
+          },
+          "Collider": {
+            "blockMask": 0,
+            "cliffRise": 0,
+            "halfX": 19660,
+            "halfY": 19660,
+            "hitMask": 0,
+            "layer": 2,
+            "radius": 19660,
+            "shape": 0
+          },
+          "Team": {
+            "id": 1
+          },
+          "Health": {
+            "hp": 40,
+            "hpMax": 40
+          },
+          "NpcAgent": {},
+          "NpcThreat": {},
+          "NpcRoute": {}
+        }
+      },
+      {
+        "name": "Hero",
+        "components": {
+          "Position": {
+            "x": 0,
+            "y": 0
+          },
+          "Collider": {
+            "blockMask": 0,
+            "cliffRise": 0,
+            "halfX": 26214,
+            "halfY": 26214,
+            "hitMask": 0,
+            "layer": 2,
+            "radius": 26214,
+            "shape": 0
+          },
+          "Team": {
+            "id": 0
+          },
+          "Health": {
+            "hp": 1000,
+            "hpMax": 1000
+          }
+        }
+      },
+      {
+        "name": "Point",
+        "components": {
+          "Position": {
+            "x": 0,
+            "y": 0
+          },
+          "Waypoint": {}
+        }
+      },
+      {
+        "name": "Wave",
+        "components": {
+          "NpcDirector": {}
+        }
+      }
+    ],
+    "npc": {
+      "behaviors": [
+        {
+          "schema": 1,
+          "name": "grunt",
+          "tier": "mass",
+          "decision": {
+            "intervalTicks": 8
+          },
+          "ranges": {
+            "sense": 393216,
+            "attack": 65536,
+            "arrive": 65536,
+            "separation": 98304
+          },
+          "speed": 7864,
+          "separationWeight": 32768,
+          "scales": {
+            "elapsedTicks": 60,
+            "crowd": 6
+          },
+          "threat": {
+            "switchMargin": 6553,
+            "decayPerTick": 64880,
+            "sources": [
+              {
+                "event": "Damage",
+                "victimField": "target",
+                "sourceField": "source",
+                "amountField": "amount",
+                "weight": 65536
+              }
+            ]
+          },
+          "states": [
+            {
+              "name": "march",
+              "actions": [
+                {
+                  "executor": "seekTarget",
+                  "considerations": [
+                    {
+                      "input": "targetKnown",
+                      "curve": {
+                        "type": "linear",
+                        "slope": 65536,
+                        "intercept": 0
+                      },
+                      "weight": 65536
+                    }
+                  ]
+                },
+                {
+                  "executor": "followRoute",
+                  "considerations": [
+                    {
+                      "input": "routeRemaining",
+                      "curve": {
+                        "type": "linear",
+                        "slope": 65536,
+                        "intercept": 0
+                      },
+                      "weight": 32768
+                    }
+                  ]
+                }
+              ],
+              "transitions": [
+                {
+                  "to": "swarm",
+                  "when": {
+                    "kind": "targetWithin",
+                    "value": 131072
+                  }
+                }
+              ]
+            },
+            {
+              "name": "swarm",
+              "actions": [
+                {
+                  "executor": "seekTarget",
+                  "considerations": [
+                    {
+                      "input": "targetKnown",
+                      "curve": {
+                        "type": "linear",
+                        "slope": 65536,
+                        "intercept": 0
+                      },
+                      "weight": 65536
+                    }
+                  ]
+                },
+                {
+                  "executor": "hold",
+                  "considerations": [
+                    {
+                      "input": "crowding",
+                      "curve": {
+                        "type": "linear",
+                        "slope": 65536,
+                        "intercept": 0
+                      },
+                      "weight": 26214
+                    }
+                  ]
+                }
+              ],
+              "transitions": [
+                {
+                  "to": "march",
+                  "when": {
+                    "kind": "noTarget"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "bindings": {
+        "position": "Position",
+        "velocity": "Velocity",
+        "health": [
+          "Health",
+          "hp"
+        ],
+        "healthMax": [
+          "Health",
+          "hpMax"
+        ],
+        "team": [
+          "Team",
+          "id"
+        ],
+        "deadMarker": "Dead"
+      },
+      "decisionBudget": 48,
+      "waves": {
+        "cap": 220,
+        "entries": [
+          {
+            "prefab": "Creep",
+            "count": 16,
+            "behavior": 0,
+            "delayTicks": 0,
+            "spacingTicks": 0,
+            "route": 0
+          }
+        ]
+      }
+    },
+    "initial": [
+      {
+        "prefab": "Point",
+        "overrides": {
+          "Position": {
+            "x": 262144,
+            "y": 262144
+          },
+          "Waypoint": {
+            "route": 0,
+            "index": 0
+          }
+        }
+      },
+      {
+        "prefab": "Point",
+        "overrides": {
+          "Position": {
+            "x": 1703936,
+            "y": 262144
+          },
+          "Waypoint": {
+            "route": 0,
+            "index": 1
+          }
+        }
+      },
+      {
+        "prefab": "Point",
+        "overrides": {
+          "Position": {
+            "x": 1703936,
+            "y": 1703936
+          },
+          "Waypoint": {
+            "route": 0,
+            "index": 2
+          }
+        }
+      },
+      {
+        "prefab": "Point",
+        "overrides": {
+          "Position": {
+            "x": 262144,
+            "y": 1703936
+          },
+          "Waypoint": {
+            "route": 0,
+            "index": 3
+          }
+        }
+      },
+      {
+        "prefab": "Hero",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 983040
+          }
+        }
+      },
+      {
+        "prefab": "Hero",
+        "overrides": {
+          "Position": {
+            "x": 1048576,
+            "y": 983040
+          }
+        }
+      },
+      {
+        "prefab": "Wave"
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 327680
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 425984
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 524288
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 622592
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 720896
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 819200
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 917504
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 1015808
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 1114112
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 1212416
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 1310720
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 1409024
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 1507328
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 327680,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 524288,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 622592,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 720896,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 819200,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 917504,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1015808,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1114112,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1212416,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1310720,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1409024,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1507328,
+            "y": 1605632
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 1605632,
+            "y": 1605632
+          }
+        }
+      }
+    ]
+  },
+  "physics": {
+    "collider": "Collider",
+    "velocity": "Velocity"
+  }
+}

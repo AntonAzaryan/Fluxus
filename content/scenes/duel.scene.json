@@ -226,7 +226,47 @@
       }
     },
     { "name": "BuffSlow", "components": { "BuffInstance": { "buffId": 0 } } },
-    { "name": "BuffShielded", "components": { "BuffInstance": { "buffId": 1 } } }
+    { "name": "BuffShielded", "components": { "BuffInstance": { "buffId": 1 } } },
+    {
+      "name": "Boss",
+      "components": {
+        "Position": { "x": 1572864, "y": 1572864 },
+        "Velocity": { "x": 0, "y": 0 },
+        "Collider": {
+          "blockMask": 1,
+          "cliffRise": 0,
+          "halfX": 39321,
+          "halfY": 39321,
+          "hitMask": 0,
+          "layer": 2,
+          "radius": 39321,
+          "shape": 0
+        },
+        "ArenaState": { "support": 0 },
+        "FallConfig": { "deathDepth": 4915200, "speed": 16384 },
+        "Health": { "hp": 4000, "hpMax": 4000 },
+        "Vision": { "radius": 1572864 },
+        "Team": { "id": 2 },
+        "Visibility": { "visibleTo": 0 },
+        "NpcAgent": {},
+        "NpcThreat": {}
+      },
+      "tags": ["Boss"]
+    },
+    {
+      "name": "SlotBossSlam",
+      "components": {
+        "AbilitySlot": { "abilityId": 8, "slotIndex": 0 },
+        "AbilityCooldown": { "remaining": 0, "total": 0 }
+      }
+    },
+    {
+      "name": "SlotBossQuake",
+      "components": {
+        "AbilitySlot": { "abilityId": 9, "slotIndex": 1 },
+        "AbilityCooldown": { "remaining": 0, "total": 0 }
+      }
+    }
   ],
   "systems": [
     {
@@ -301,6 +341,33 @@
         {
           "addComponent": {
             "entity": { "var": "d" },
+            "component": "Granted",
+            "values": { "atTick": { "tick": [] } }
+          }
+        }
+      ]
+    },
+    {
+      "name": "GrantBossSlots",
+      "order": -949,
+      "query": { "all": ["NpcAgent"], "not": ["Granted"] },
+      "as": "b",
+      "do": [
+        {
+          "spawnEntity": {
+            "prefab": "SlotBossSlam",
+            "overrides": { "AbilitySlot": { "owner": { "var": "b" } } }
+          }
+        },
+        {
+          "spawnEntity": {
+            "prefab": "SlotBossQuake",
+            "overrides": { "AbilitySlot": { "owner": { "var": "b" } } }
+          }
+        },
+        {
+          "addComponent": {
+            "entity": { "var": "b" },
             "component": "Granted",
             "values": { "atTick": { "tick": [] } }
           }
@@ -2210,6 +2277,160 @@
           }
         }
       ]
+    },
+    {
+      "id": "bossSlam",
+      "trigger": { "event": { "type": "BossSlam", "as": "ask" } },
+      "condition": {
+        "and": [
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Dead"] }] },
+          { "==": [{ "eventField": [{ "var": "ask" }, "caster"] }, { "var": "owner" }] }
+        ]
+      },
+      "cooldownTicks": 240,
+      "phases": [
+        {
+          "id": "windup",
+          "trigger": "auto",
+          "durationTicks": 45,
+          "onEnter": [
+            {
+              "emitEvent": {
+                "type": "BossTelegraph",
+                "data": {
+                  "entity": { "var": "owner" },
+                  "radius": 262144,
+                  "ticks": 45,
+                  "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                  "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                }
+              }
+            }
+          ],
+          "timeout": { "then": "commit" }
+        }
+      ],
+      "interrupts": { "damaged": { "cooldown": "partial", "refund": 32768 } },
+      "effects": [
+        {
+          "forEach": {
+            "query": {
+              "all": ["Health", "Player"],
+              "not": ["Dead"],
+              "withinRadius": {
+                "center": {
+                  "vec": [
+                    { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                  ]
+                },
+                "radius": 262144
+              }
+            },
+            "as": "victim",
+            "do": [
+              {
+                "emitEvent": {
+                  "type": "Damage",
+                  "data": {
+                    "amount": 90,
+                    "entity": { "var": "victim" },
+                    "source": { "var": "owner" }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "emitEvent": {
+            "type": "BossSlamLanded",
+            "data": {
+              "entity": { "var": "owner" },
+              "radius": 262144,
+              "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+              "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "bossQuake",
+      "trigger": { "event": { "type": "BossQuake", "as": "ask" } },
+      "condition": {
+        "and": [
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Dead"] }] },
+          { "==": [{ "eventField": [{ "var": "ask" }, "caster"] }, { "var": "owner" }] }
+        ]
+      },
+      "cooldownTicks": 300,
+      "phases": [
+        {
+          "id": "windup",
+          "trigger": "auto",
+          "durationTicks": 75,
+          "onEnter": [
+            {
+              "emitEvent": {
+                "type": "BossTelegraph",
+                "data": {
+                  "entity": { "var": "owner" },
+                  "radius": 458752,
+                  "ticks": 75,
+                  "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                  "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                }
+              }
+            }
+          ],
+          "timeout": { "then": "commit" }
+        }
+      ],
+      "interrupts": { "damaged": { "cooldown": "partial", "refund": 32768 } },
+      "effects": [
+        {
+          "forEach": {
+            "query": {
+              "all": ["Health", "Player"],
+              "not": ["Dead"],
+              "withinRadius": {
+                "center": {
+                  "vec": [
+                    { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                  ]
+                },
+                "radius": 458752
+              }
+            },
+            "as": "victim",
+            "do": [
+              {
+                "emitEvent": {
+                  "type": "Damage",
+                  "data": {
+                    "amount": 140,
+                    "entity": { "var": "victim" },
+                    "source": { "var": "owner" }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "emitEvent": {
+            "type": "BossQuakeLanded",
+            "data": {
+              "entity": { "var": "owner" },
+              "radius": 458752,
+              "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+              "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+            }
+          }
+        }
+      ]
     }
   ],
   "buffs": [
@@ -2241,6 +2462,117 @@
     "deadMarker": "Dead",
     "teamField": ["Player", "slot"]
   },
+  "npc": {
+    "behaviors": [
+      {
+        "schema": 1,
+        "name": "arenaBoss",
+        "tier": "elite",
+        "decision": { "intervalTicks": 1 },
+        "ranges": { "sense": 917504, "attack": 163840, "arrive": 65536, "separation": 0 },
+        "speed": 2949,
+        "separationWeight": 0,
+        "scales": { "elapsedTicks": 180, "crowd": 4 },
+        "threat": {
+          "switchMargin": 19661,
+          "decayPerTick": 65208,
+          "sources": [
+            {
+              "event": "Damage",
+              "victimField": "entity",
+              "sourceField": "source",
+              "amountField": "amount",
+              "weight": 65536
+            }
+          ]
+        },
+        "states": [
+          {
+            "name": "stalk",
+            "actions": [
+              {
+                "executor": "seekTarget",
+                "considerations": [
+                  {
+                    "input": "targetKnown",
+                    "curve": { "type": "linear", "slope": 65536, "intercept": 0 },
+                    "weight": 65536
+                  }
+                ]
+              }
+            ],
+            "transitions": [
+              { "to": "quake", "when": { "kind": "healthBelow", "value": 32768 } },
+              { "to": "slam", "when": { "kind": "elapsed", "ticks": 150 } }
+            ]
+          },
+          {
+            "name": "slam",
+            "actions": [
+              {
+                "executor": "cast",
+                "event": "BossSlam",
+                "considerations": [
+                  {
+                    "input": "targetKnown",
+                    "curve": { "type": "linear", "slope": 65536, "intercept": 0 },
+                    "weight": 65536
+                  }
+                ]
+              }
+            ],
+            "transitions": [
+              { "to": "quake", "when": { "kind": "healthBelow", "value": 32768 } },
+              { "to": "stalk", "when": { "kind": "elapsed", "ticks": 120 } }
+            ]
+          },
+          {
+            "name": "quake",
+            "actions": [
+              {
+                "executor": "cast",
+                "event": "BossQuake",
+                "considerations": [
+                  {
+                    "input": "always",
+                    "curve": { "type": "constant", "value": 65536 },
+                    "weight": 65536
+                  }
+                ]
+              }
+            ],
+            "transitions": [{ "to": "rampage", "when": { "kind": "elapsed", "ticks": 150 } }]
+          },
+          {
+            "name": "rampage",
+            "actions": [
+              {
+                "executor": "seekTarget",
+                "considerations": [
+                  {
+                    "input": "targetKnown",
+                    "curve": { "type": "linear", "slope": 65536, "intercept": 0 },
+                    "weight": 65536
+                  }
+                ]
+              }
+            ],
+            "transitions": [{ "to": "quake", "when": { "kind": "elapsed", "ticks": 120 } }]
+          }
+        ]
+      }
+    ],
+    "bindings": {
+      "position": "Position",
+      "velocity": "Velocity",
+      "health": ["Health", "hp"],
+      "healthMax": ["Health", "hpMax"],
+      "team": ["Team", "id"],
+      "deadMarker": "Dead"
+    },
+    "decisionBudget": 8
+  },
+  "initial": [{ "prefab": "Boss" }],
   "arena": { "center": { "x": 1572864, "y": 1572864 }, "radius": 1376256 },
   "terrain": {
     "width": 48,

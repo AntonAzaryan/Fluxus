@@ -1,0 +1,925 @@
+/**
+ * Платформа поведения NPC (`npc-behavior` NPC-1..NPC-8) на настоящем стенде из
+ * `loadScene` и `tick`: HFSM, каденс решений с бюджетом, threat-таблица, выбор
+ * цели, движение по маршруту, расхождение и режиссёр волн.
+ *
+ * Сцена здесь синтетическая и живёт в тесте: предмет проверки — МЕХАНИЗМ,
+ * который понимает реализация, а не числа, которые тюнит дизайнер. Тестовые
+ * фикстуры движка контентом не являются и остаются в `engine/` (CONT-4).
+ */
+import { describe, expect, it } from 'vitest';
+import * as fixed from '../src/math/fixed.js';
+import { mathApi } from '../src/math/mathApi.js';
+import { addComponent, getField, setField, spawn } from '../src/ecs/world.js';
+import { query } from '../src/ecs/query.js';
+import { loadScene, type SceneDef } from '../src/sim/scene.js';
+import { initialState, tick, type Simulation } from '../src/sim/tick.js';
+import {
+  NPC_AGENT_COMPONENT,
+  NPC_ROUTE_COMPONENT,
+  NPC_THREAT_COMPONENT,
+} from '../src/systems/npc/components.js';
+import { compileNpcCatalog } from '../src/systems/npc/document.js';
+import type { NpcPlatformDef } from '../src/systems/npc/model.js';
+import {
+  FIXED_ONE,
+  NO_ENTITY,
+  type EntityId,
+  type GameEvent,
+  type System,
+  type SystemContext,
+} from '../src/types.js';
+
+const F = fixed.fromFloat;
+const ONE = FIXED_ONE;
+
+/** Прямая `y = x`: единичный наклон в Q16.16. */
+const RISING = { type: 'linear', slope: ONE, intercept: 0 } as const;
+
+const COMPONENTS: SceneDef['components'] = [
+  { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+  { name: 'Velocity', fields: { x: 'fixed', y: 'fixed' } },
+  { name: 'Team', fields: { id: 'i32' } },
+  { name: 'Health', fields: { hp: 'i32', hpMax: 'i32' } },
+  { name: 'Dead', fields: { at: 'i32' } },
+];
+
+const PREFABS: NonNullable<SceneDef['prefabs']> = [
+  {
+    name: 'Creep',
+    components: {
+      Position: { x: 0, y: 0 },
+      Velocity: { x: 0, y: 0 },
+      Team: { id: 1 },
+      Health: { hp: 100, hpMax: 100 },
+      NpcAgent: {},
+      NpcThreat: {},
+      NpcRoute: {},
+    },
+  },
+  {
+    name: 'Hero',
+    components: { Position: { x: 0, y: 0 }, Team: { id: 0 }, Health: { hp: 100, hpMax: 100 } },
+  },
+  { name: 'Point', components: { Position: { x: 0, y: 0 }, Waypoint: {} } },
+  { name: 'Director', components: { NpcDirector: {} } },
+];
+
+const BINDINGS: NonNullable<NpcPlatformDef['bindings']> = {
+  position: 'Position',
+  velocity: 'Velocity',
+  health: ['Health', 'hp'],
+  healthMax: ['Health', 'hpMax'],
+  team: ['Team', 'id'],
+  deadMarker: 'Dead',
+};
+
+/** Крип: гонится за целью, иначе стоит. Интервал решений — четыре тика. */
+function chaser(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schema: 1,
+    name: 'chaser',
+    tier: 'mass',
+    decision: { intervalTicks: 4 },
+    ranges: { sense: F(20), attack: F(1), arrive: F(1), separation: F(2) },
+    speed: F(1),
+    separationWeight: 0,
+    threat: {
+      switchMargin: 0,
+      sources: [
+        {
+          event: 'Damage',
+          victimField: 'target',
+          sourceField: 'source',
+          amountField: 'amount',
+          weight: ONE,
+        },
+      ],
+    },
+    states: [
+      {
+        name: 'chase',
+        actions: [
+          { executor: 'seekTarget', considerations: [{ input: 'targetKnown', curve: RISING, weight: ONE }] },
+        ],
+      },
+    ],
+    ...over,
+  };
+}
+
+/** Ходок: идёт по маршруту, пока он не кончится. */
+function walker(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schema: 1,
+    name: 'walker',
+    tier: 'mass',
+    decision: { intervalTicks: 1 },
+    ranges: { sense: F(20), attack: F(1), arrive: F(1), separation: F(2) },
+    speed: F(1),
+    separationWeight: 0,
+    states: [
+      {
+        name: 'march',
+        actions: [
+          { executor: 'followRoute', considerations: [{ input: 'routeRemaining', curve: RISING, weight: ONE }] },
+        ],
+      },
+    ],
+    ...over,
+  };
+}
+
+/** Босс: две фазы по порогу здоровья, каждая со своей ротацией каста. */
+function boss(): Record<string, unknown> {
+  return {
+    schema: 1,
+    name: 'boss',
+    tier: 'elite',
+    decision: { intervalTicks: 1 },
+    ranges: { sense: F(20), attack: F(2), arrive: F(1), separation: 0 },
+    speed: F(1),
+    states: [
+      {
+        name: 'calm',
+        actions: [
+          {
+            executor: 'cast',
+            event: 'BossSlam',
+            considerations: [{ input: 'targetKnown', curve: RISING, weight: ONE }],
+          },
+        ],
+        transitions: [{ to: 'rage', when: { kind: 'healthBelow', value: ONE / 2 } }],
+      },
+      {
+        name: 'rage',
+        actions: [
+          {
+            executor: 'cast',
+            event: 'BossRage',
+            considerations: [{ input: 'always', curve: { type: 'constant', value: ONE }, weight: ONE }],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+interface Harness {
+  readonly world: ReturnType<typeof loadScene>['world'];
+  step(): readonly GameEvent[];
+  place(prefab: string, overrides?: Record<string, Record<string, number>>): EntityId;
+  field(entity: EntityId, component: string, name: string): number;
+  emit(type: string, data: Record<string, number>): void;
+  /**
+   * Событие, публикуемое РАНЬШЕ системы поведения. Условие перехода `event`
+   * видит шину по общему правилу (EVT-2) — только от систем с меньшим `order`,
+   * — поэтому сигнал, на который сцена хочет переводить фазу, публикует система
+   * раньше −795. Урон в этой сцене публикуется позже (как и в игре) и переходом
+   * служить не может; накоплению угрозы (840) он виден.
+   */
+  signal(type: string, data: Record<string, number>): void;
+}
+
+/**
+ * Стенд: сцена, интегратор скорости на свободном `order` между движением NPC
+ * (70) и физикой (100) и шина для событий урона на месте систем сцены.
+ */
+function harness(npc: NpcPlatformDef, extra: Partial<SceneDef> = {}): Harness {
+  const loaded = loadScene({ components: COMPONENTS, prefabs: PREFABS, npc, ...extra });
+  const { world, systems } = loaded;
+  let pending: { type: string; data: Record<string, number> } | undefined;
+  let early: { type: string; data: Record<string, number> } | undefined;
+  // Раньше системы поведения (−795): так сцена публикует сигналы, по которым
+  // документ переводит фазы (EVT-2).
+  systems.register({
+    name: 'SceneSignal',
+    order: -950,
+    run: (ctx: SystemContext) => {
+      if (early === undefined) return;
+      ctx.events.emit(early.type, early.data);
+      early = undefined;
+    },
+  });
+  systems.register({
+    name: 'Integrate',
+    order: 90,
+    run: (ctx: SystemContext) => {
+      for (const entity of ctx.query({ all: ['Position', 'Velocity'] })) {
+        ctx.commands.setField(
+          entity,
+          'Position',
+          'x',
+          fixed.add(ctx.get(entity, 'Position', 'x'), ctx.get(entity, 'Velocity', 'x')),
+        );
+        ctx.commands.setField(
+          entity,
+          'Position',
+          'y',
+          fixed.add(ctx.get(entity, 'Position', 'y'), ctx.get(entity, 'Velocity', 'y')),
+        );
+      }
+    },
+  });
+  // Публикация урона — работа системы сцены; её `order` меньше `NpcThreat`
+  // (840), поэтому событие видно накоплению угрозы на том же тике (EVT-2).
+  systems.register({
+    name: 'SceneDamage',
+    order: 200,
+    run: (ctx: SystemContext) => {
+      if (pending === undefined) return;
+      ctx.events.emit(pending.type, pending.data);
+      pending = undefined;
+    },
+  });
+
+  const sim: Simulation = { systems, worldSeed: 1, math: mathApi };
+  const state = initialState(world, 1);
+  return {
+    world,
+    step: () => [...tick(sim, state).events],
+    place: (prefab, overrides) => spawn(world, prefab, overrides),
+    field: (entity, component, name) => getField(world, entity, component, name),
+    emit: (type, data) => {
+      pending = { type, data };
+    },
+    signal: (type, data) => {
+      early = { type, data };
+    },
+  };
+}
+
+describe('NPC-2: документ поведения — контент, словари закрыты', () => {
+  it('валидный документ компилируется целиком', () => {
+    const catalog = compileNpcCatalog({ behaviors: [chaser() as never], bindings: BINDINGS });
+    expect(catalog.behaviors).toHaveLength(1);
+    expect(catalog.behaviors[0]!.name).toBe('chaser');
+    expect(catalog.behaviors[0]!.states[0]!.actions[0]!.considerations).toHaveLength(1);
+  });
+
+  it('неизвестный исполнитель — находка с его именем', () => {
+    const broken = chaser({
+      states: [{ name: 'chase', actions: [{ executor: 'flank', considerations: [] }] }],
+    });
+    expect(() => compileNpcCatalog({ behaviors: [broken as never] })).toThrow(/flank/);
+  });
+
+  it('неизвестный вход — находка с его именем', () => {
+    const broken = chaser({
+      states: [
+        {
+          name: 'chase',
+          actions: [
+            { executor: 'hold', considerations: [{ input: 'enemyMorale', curve: RISING, weight: ONE }] },
+          ],
+        },
+      ],
+    });
+    expect(() => compileNpcCatalog({ behaviors: [broken as never] })).toThrow(/enemyMorale/);
+  });
+
+  it('неизвестная форма кривой — находка с её именем и словарём', () => {
+    const broken = chaser({
+      states: [
+        {
+          name: 'chase',
+          actions: [
+            {
+              executor: 'hold',
+              considerations: [{ input: 'always', curve: { type: 'sine' }, weight: ONE }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(() => compileNpcCatalog({ behaviors: [broken as never] })).toThrow(/sine/);
+    expect(() => compileNpcCatalog({ behaviors: [broken as never] })).toThrow(/logistic/);
+  });
+
+  it('параметр-доля общей модели ограничен [0, 1] у обоих потребителей', () => {
+    // `constant.value` помечен в общей модели как доля (NPC-3): документ NPC
+    // обязан ограничивать его тем же диапазоном, что документ бота, — иначе
+    // один параметр одной формы значил бы у них разное.
+    const broken = chaser({
+      states: [
+        {
+          name: 'chase',
+          actions: [
+            {
+              executor: 'hold',
+              considerations: [
+                { input: 'always', curve: { type: 'constant', value: 5 * ONE }, weight: ONE },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(() => compileNpcCatalog({ behaviors: [broken as never] })).toThrow(/value/);
+    // Коэффициент формы долей не помечен и шире единицы законен.
+    const steep = chaser({
+      states: [
+        {
+          name: 'chase',
+          actions: [
+            {
+              executor: 'hold',
+              considerations: [
+                {
+                  input: 'always',
+                  curve: { type: 'linear', slope: 5 * ONE, intercept: 0 },
+                  weight: ONE,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(() => compileNpcCatalog({ behaviors: [steep as never] })).not.toThrow();
+  });
+
+  it('чужая версия формы документа названа явно', () => {
+    expect(() => compileNpcCatalog({ behaviors: [chaser({ schema: 2 }) as never] })).toThrow(/schema/);
+  });
+
+  it('переход в несуществующее состояние назван вместе со списком объявленных', () => {
+    const broken = boss();
+    (broken.states as Record<string, unknown>[])[0]!.transitions = [
+      { to: 'phase3', when: { kind: 'elapsed', ticks: 1 } },
+    ];
+    expect(() => compileNpcCatalog({ behaviors: [broken as never] })).toThrow(/phase3/);
+  });
+
+  it('tier "elite" с интервалом больше тика — противоречие документа', () => {
+    const broken = chaser({ tier: 'elite', decision: { intervalTicks: 4 } });
+    expect(() => compileNpcCatalog({ behaviors: [broken as never] })).toThrow(/elite/);
+  });
+
+  it('исполнитель "cast" обязан назвать событие, прочие — не вправе', () => {
+    const noEvent = chaser({
+      states: [
+        { name: 'chase', actions: [{ executor: 'cast', considerations: [{ input: 'always', curve: RISING, weight: ONE }] }] },
+      ],
+    });
+    expect(() => compileNpcCatalog({ behaviors: [noEvent as never] })).toThrow(/cast/);
+    const strayEvent = chaser({
+      states: [
+        {
+          name: 'chase',
+          actions: [
+            { executor: 'hold', event: 'X', considerations: [{ input: 'always', curve: RISING, weight: ONE }] },
+          ],
+        },
+      ],
+    });
+    expect(() => compileNpcCatalog({ behaviors: [strayEvent as never] })).toThrow(/event/);
+  });
+});
+
+describe('NPC-1, NPC-4: решения внутри тика, каденс детерминирован', () => {
+  it('агент выбирает цель и сближается с ней', () => {
+    const h = harness({ behaviors: [chaser() as never], bindings: BINDINGS });
+    const hero = h.place('Hero', { Position: { x: F(10), y: 0 } });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(hero);
+    const before = h.field(creep, 'Position', 'x');
+    h.step();
+    expect(h.field(creep, 'Position', 'x')).toBeGreaterThan(before);
+  });
+
+  it('два прогона одной сцены дают побитово равные состояния (DET-1)', () => {
+    const run = (): number[] => {
+      const h = harness({ behaviors: [chaser() as never], bindings: BINDINGS });
+      h.place('Hero', { Position: { x: F(10), y: F(3) } });
+      const creeps = [
+        h.place('Creep', { Position: { x: 0, y: 0 } }),
+        h.place('Creep', { Position: { x: F(1), y: 0 } }),
+        h.place('Creep', { Position: { x: 0, y: F(1) } }),
+      ];
+      const out: number[] = [];
+      for (let i = 0; i < 20; i++) {
+        h.step();
+        for (const creep of creeps) {
+          out.push(h.field(creep, 'Position', 'x'), h.field(creep, 'Position', 'y'));
+        }
+      }
+      return out;
+    };
+    expect(run()).toEqual(run());
+  });
+
+  it('пересмотр идёт в предсказуемых окнах: интервал K — раз в K тиков', () => {
+    const h = harness({ behaviors: [chaser() as never], bindings: BINDINGS });
+    h.place('Hero', { Position: { x: F(10), y: 0 } });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    const decided: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      h.step();
+      decided.push(h.field(creep, NPC_AGENT_COMPONENT, 'decidedTick'));
+    }
+    // Первый пересмотр — вход в начальное состояние; дальше тики пересмотра
+    // образуют арифметическую прогрессию с шагом интервала документа.
+    const unique = [...new Set(decided)].slice(1);
+    expect(unique.length).toBeGreaterThan(1);
+    for (let i = 1; i < unique.length; i++) {
+      expect(unique[i]! - unique[i - 1]!).toBe(4);
+    }
+  });
+
+  it('бюджет ограничивает число пересмотров за тик, не число агентов', () => {
+    const h = harness({
+      behaviors: [chaser({ decision: { intervalTicks: 1 } }) as never],
+      bindings: BINDINGS,
+      decisionBudget: 1,
+    });
+    h.place('Hero', { Position: { x: F(10), y: 0 } });
+    const creeps = [
+      h.place('Creep', { Position: { x: 0, y: 0 } }),
+      h.place('Creep', { Position: { x: F(1), y: 0 } }),
+      h.place('Creep', { Position: { x: F(2), y: 0 } }),
+    ];
+    h.step();
+    const decided = creeps.map((creep) => h.field(creep, NPC_AGENT_COMPONENT, 'decidedTick'));
+    // Первый тик: вход в состояние форсирует пересмотр у всех, но бюджет — один.
+    expect(decided.filter((value) => value === 1)).toHaveLength(1);
+  });
+});
+
+describe('NPC-1: мёртвый агент не решает и не двигается', () => {
+  it('тело на арене не приобретает цели и не получает скорости', () => {
+    const h = harness({ behaviors: [chaser() as never], bindings: BINDINGS });
+    h.place('Hero', { Position: { x: F(10), y: 0 } });
+    const corpse = h.place('Creep', { Position: { x: 0, y: 0 } });
+    addComponent(h.world, corpse, 'Dead', { at: 0 });
+    for (let i = 0; i < 5; i++) h.step();
+    expect(h.field(corpse, NPC_AGENT_COMPONENT, 'target')).toBe(NO_ENTITY);
+    expect(h.field(corpse, 'Velocity', 'x')).toBe(0);
+    expect(h.field(corpse, 'Position', 'x')).toBe(0);
+  });
+
+  it('бюджет решений тратится на живых, а не на тела', () => {
+    const h = harness({
+      behaviors: [chaser({ decision: { intervalTicks: 1 } }) as never],
+      bindings: BINDINGS,
+      decisionBudget: 1,
+    });
+    h.place('Hero', { Position: { x: F(10), y: 0 } });
+    const corpse = h.place('Creep', { Position: { x: 0, y: 0 } });
+    addComponent(h.world, corpse, 'Dead', { at: 0 });
+    const live = h.place('Creep', { Position: { x: F(1), y: 0 } });
+    h.step();
+    // Единственный тик бюджета достался живому: тело выборки не занимает вовсе.
+    expect(h.field(live, NPC_AGENT_COMPONENT, 'decidedTick')).toBe(1);
+  });
+});
+
+describe('NPC-3: вход «сколько агент в состоянии» считается от ТЕКУЩЕГО состояния', () => {
+  /**
+   * Документ-щуп: в состоянии `fresh` соревнуются два действия — «стоять», чей
+   * вес растёт со временем в состоянии, и «идти к цели» с постоянным весом
+   * ниже. На тике ВХОДА в состояние `stateElapsed` обязан быть нулём, то есть
+   * побеждать должен seek: иначе агент читал бы время, проведённое в состоянии,
+   * которое он только что покинул.
+   */
+  function elapsedProbe(): Record<string, unknown> {
+    const rising = { input: 'stateElapsed', curve: RISING, weight: ONE };
+    const constant = { input: 'always', curve: { type: 'constant', value: ONE / 2 }, weight: ONE };
+    return {
+      schema: 1,
+      name: 'probe',
+      tier: 'elite',
+      decision: { intervalTicks: 1 },
+      ranges: { sense: F(20), attack: F(1), arrive: F(1), separation: 0 },
+      speed: F(1),
+      separationWeight: 0,
+      scales: { elapsedTicks: 8, crowd: 4 },
+      states: [
+        {
+          name: 'warm',
+          actions: [{ executor: 'hold', considerations: [constant] }],
+          transitions: [{ to: 'fresh', when: { kind: 'elapsed', ticks: 8 } }],
+        },
+        {
+          name: 'fresh',
+          actions: [
+            { executor: 'hold', considerations: [rising] },
+            { executor: 'seekTarget', considerations: [constant] },
+          ],
+        },
+      ],
+    };
+  }
+
+  it('на тике входа вход равен нулю, а не времени прошлого состояния', () => {
+    const h = harness({ behaviors: [elapsedProbe() as never], bindings: BINDINGS });
+    h.place('Hero', { Position: { x: F(10), y: 0 } });
+    const npc = h.place('Creep', { Position: { x: 0, y: 0 } });
+    // Восемь тиков в `warm` — ровно шкала `elapsedTicks`, то есть вход дошёл бы
+    // до единицы, если бы считался от входа в ПРЕДЫДУЩЕЕ состояние.
+    for (let i = 0; i < 9; i++) h.step();
+    expect(h.field(npc, NPC_AGENT_COMPONENT, 'state')).toBe(1);
+    expect(h.field(npc, NPC_AGENT_COMPONENT, 'enteredTick')).toBe(9);
+    // На тике входа `stateElapsed` = 0, поэтому «стоять» набирает ноль и
+    // выигрывает постоянное действие — второе в документе.
+    expect(h.field(npc, NPC_AGENT_COMPONENT, 'action')).toBe(1);
+    // Со временем ось растёт и обгоняет постоянную — тогда побеждает первое.
+    for (let i = 0; i < 6; i++) h.step();
+    expect(h.field(npc, NPC_AGENT_COMPONENT, 'action')).toBe(0);
+  });
+});
+
+describe('NPC-5: threat-таблица фиксированной ёмкости', () => {
+  it('крип переключается на источник урона по порогу документа', () => {
+    const h = harness({ behaviors: [chaser() as never], bindings: BINDINGS });
+    const near = h.place('Hero', { Position: { x: F(2), y: 0 } });
+    const far = h.place('Hero', { Position: { x: F(12), y: 0 } });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(near);
+    h.emit('Damage', { target: creep, source: far, amount: 50 });
+    h.step();
+    expect(h.field(creep, NPC_THREAT_COMPONENT, 'value0')).toBeGreaterThan(0);
+    // Форс-пересмотр по провокации — в начале следующего тика, вне окна каденса.
+    h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(far);
+  });
+
+  it('переполнение ёмкости вытесняет наименьшую угрозу, таблица не растёт', () => {
+    const h = harness({ behaviors: [chaser() as never], bindings: BINDINGS });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    const heroes = [1, 2, 3, 4, 5].map((i) => h.place('Hero', { Position: { x: F(30 + i), y: 0 } }));
+    h.step();
+    for (const [index, hero] of heroes.entries()) {
+      h.emit('Damage', { target: creep, source: hero, amount: (index + 1) * 10 });
+      h.step();
+    }
+    const sources = [0, 1, 2, 3].map((slot) => h.field(creep, NPC_THREAT_COMPONENT, `source${slot}`));
+    expect(sources).toHaveLength(4);
+    // Самый слабый источник вытеснен последним, самым сильным.
+    expect(sources).not.toContain(heroes[0]);
+    expect(sources).toContain(heroes[4]);
+  });
+});
+
+describe('NPC-5: накопление угрозы ограничено представлением, а не верой в данные', () => {
+  it('огромная величина события не переполняет таблицу и не уводит угрозу в минус', () => {
+    const h = harness({ behaviors: [chaser() as never], bindings: BINDINGS });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    const hero = h.place('Hero', { Position: { x: F(40), y: 0 } });
+    h.step();
+    // Счётчик события — число СЦЕНЫ, документом не проверенное: перевод в
+    // Q16.16 без насыщения вылетел бы за i32 на первом же начислении.
+    for (let i = 0; i < 4; i++) {
+      h.emit('Damage', { target: creep, source: hero, amount: 2_000_000_000 });
+      h.step();
+    }
+    const value = h.field(creep, NPC_THREAT_COMPONENT, 'value0');
+    expect(value).toBeGreaterThan(0);
+    expect(value).toBeLessThanOrEqual(0x1fffffff);
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(hero);
+  });
+
+  it('threat-таблица без компонента агента угрозы не копит', () => {
+    const h = harness({ behaviors: [chaser() as never], bindings: BINDINGS });
+    // Настоящий агент на сцене нужен: без него система угрозы не исполняет
+    // ничего, и проверка прошла бы на пустом месте.
+    h.place('Creep', { Position: { x: F(30), y: F(30) } });
+    const bare = h.place('Hero', { Position: { x: F(2), y: 0 } });
+    // Сущность со ЗНАЧКОМ таблицы, но без агента: чтение поля тотально (ECS-7),
+    // и без проверки она сошла бы за агента документа номер ноль.
+    addComponent(h.world, bare, NPC_THREAT_COMPONENT, {});
+    const hero = h.place('Hero', { Position: { x: F(4), y: 0 } });
+    h.step();
+    h.emit('Damage', { target: bare, source: hero, amount: 50 });
+    h.step();
+    expect(h.field(bare, NPC_THREAT_COMPONENT, 'value0')).toBe(0);
+  });
+});
+
+describe('NPC-5, NPC-4: смерть цели ведёт к перевыбору вне окна каденса', () => {
+  it('мёртвая цель заменяется на следующем тике, каденс соседей не нарушен', () => {
+    const h = harness({ behaviors: [chaser() as never], bindings: BINDINGS });
+    const first = h.place('Hero', { Position: { x: F(2), y: 0 } });
+    const second = h.place('Hero', { Position: { x: F(6), y: 0 } });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(first);
+    addComponent(h.world, first, 'Dead', { at: 1 });
+    h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(second);
+  });
+});
+
+describe('NPC-6: движение — политика над навигационным швом', () => {
+  it('волна проходит маршрут в сцене без Navigation API', () => {
+    const h = harness({ behaviors: [walker() as never], bindings: BINDINGS });
+    h.place('Point', { Position: { x: F(5), y: 0 }, Waypoint: { route: 0, index: 0 } });
+    h.place('Point', { Position: { x: F(5), y: F(5) }, Waypoint: { route: 0, index: 1 } });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 }, NpcRoute: { route: 0, index: 0 } });
+    for (let i = 0; i < 12; i++) h.step();
+    // Первая точка пройдена — прогресс маршрута продвинулся.
+    expect(h.field(creep, NPC_ROUTE_COMPONENT, 'index')).toBeGreaterThan(0);
+    expect(h.field(creep, 'Position', 'y')).toBeGreaterThan(0);
+  });
+
+  it('скученные крипы расходятся, стоимость шага не растёт квадратично', () => {
+    const h = harness({
+      behaviors: [chaser({ separationWeight: ONE, ranges: { sense: F(20), attack: F(1), arrive: F(1), separation: F(3) } }) as never],
+      bindings: BINDINGS,
+    });
+    const creeps = [
+      h.place('Creep', { Position: { x: 0, y: 0 } }),
+      h.place('Creep', { Position: { x: F(0.25), y: 0 } }),
+      h.place('Creep', { Position: { x: 0, y: F(0.25) } }),
+    ];
+    const spread = (): number => {
+      let maximum = 0;
+      for (const a of creeps) {
+        for (const b of creeps) {
+          const dx = h.field(a, 'Position', 'x') - h.field(b, 'Position', 'x');
+          const dy = h.field(a, 'Position', 'y') - h.field(b, 'Position', 'y');
+          maximum = Math.max(maximum, Math.abs(dx) + Math.abs(dy));
+        }
+      }
+      return maximum;
+    };
+    const before = spread();
+    for (let i = 0; i < 10; i++) h.step();
+    expect(spread()).toBeGreaterThan(before);
+  });
+});
+
+describe('NPC-8: волны — Director-слой из контентных таблиц', () => {
+  it('состав волны меняется таблицей, код режиссёра не трогается', () => {
+    const h = harness({
+      behaviors: [walker() as never],
+      bindings: BINDINGS,
+      waves: {
+        cap: 16,
+        entries: [{ prefab: 'Creep', count: 3, behavior: 0, delayTicks: 0, spacingTicks: 1, route: 0 }],
+      },
+    });
+    h.place('Point', { Position: { x: F(5), y: 0 }, Waypoint: { route: 0, index: 0 } });
+    h.place('Director');
+    for (let i = 0; i < 10; i++) h.step();
+    const spawned = countAgents(h);
+    expect(spawned).toBe(3);
+  });
+
+  it('волна с нулевым составом не выпускает никого', () => {
+    const h = harness({
+      behaviors: [walker() as never],
+      bindings: BINDINGS,
+      waves: {
+        cap: 16,
+        entries: [
+          { prefab: 'Creep', count: 0, behavior: 0, delayTicks: 0, spacingTicks: 0, x: 0, y: 0 },
+          { prefab: 'Creep', count: 1, behavior: 0, delayTicks: 0, spacingTicks: 0, x: 0, y: 0 },
+        ],
+      },
+    });
+    h.place('Director');
+    for (let i = 0; i < 8; i++) h.step();
+    // Ноль в составе волны значит ноль: выпущен только боец ВТОРОЙ волны.
+    expect(countAgents(h)).toBe(1);
+  });
+
+  it('мёртвые агенты предел не занимают: место освобождается их смертью', () => {
+    const h = harness({
+      behaviors: [walker() as never],
+      bindings: BINDINGS,
+      waves: {
+        cap: 1,
+        entries: [{ prefab: 'Creep', count: 3, behavior: 0, delayTicks: 0, spacingTicks: 0, x: 0, y: 0 }],
+      },
+    });
+    h.place('Director');
+    for (let i = 0; i < 4; i++) h.step();
+    expect(countAgents(h)).toBe(1);
+    // Тело остаётся на арене — так живут сцены с маркером мёртвых, — но место
+    // в пределе оно занимать не должно (NPC-8).
+    const first = query(h.world, { all: [NPC_AGENT_COMPONENT] })[0]!;
+    addComponent(h.world, first, 'Dead', { at: 4 });
+    for (let i = 0; i < 3; i++) h.step();
+    expect(countAgents(h)).toBe(2);
+  });
+
+  it('лимит активных NPC откладывает спавн, а не пропускает его', () => {
+    const h = harness({
+      behaviors: [walker() as never],
+      bindings: BINDINGS,
+      waves: {
+        cap: 2,
+        entries: [{ prefab: 'Creep', count: 4, behavior: 0, delayTicks: 0, spacingTicks: 0, x: 0, y: 0 }],
+      },
+    });
+    h.place('Director');
+    for (let i = 0; i < 10; i++) h.step();
+    expect(countAgents(h)).toBe(2);
+  });
+});
+
+describe('NPC-2: имя поля адресата события называет документ, а не механизм', () => {
+  /** Босс, чья вторая фаза открывается событием сцены, адресованным полем `target`. */
+  function signalled(entityField?: string): Record<string, unknown> {
+    const doc = boss();
+    (doc.states as Record<string, unknown>[])[0]!.transitions = [
+      {
+        to: 'rage',
+        when: { kind: 'event', event: 'Damage', ...(entityField === undefined ? {} : { entityField }) },
+      },
+    ];
+    return doc;
+  }
+
+  it('переход по событию срабатывает на поле, названном документом', () => {
+    const h = harness({ behaviors: [signalled('target') as never], bindings: BINDINGS });
+    const hero = h.place('Hero', { Position: { x: F(3), y: 0 } });
+    const npc = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.step();
+    expect(h.field(npc, NPC_AGENT_COMPONENT, 'state')).toBe(0);
+    h.signal('Damage', { target: npc, source: hero, amount: 5 });
+    h.step();
+    expect(h.field(npc, NPC_AGENT_COMPONENT, 'state')).toBe(1);
+  });
+
+  it('событие, адресованное другому, перехода не даёт', () => {
+    const h = harness({ behaviors: [signalled('target') as never], bindings: BINDINGS });
+    const hero = h.place('Hero', { Position: { x: F(3), y: 0 } });
+    const npc = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.step();
+    h.signal('Damage', { target: hero, source: npc, amount: 5 });
+    h.step();
+    expect(h.field(npc, NPC_AGENT_COMPONENT, 'state')).toBe(0);
+  });
+
+  it('документ, адресата не назвавший, читает событие как общий сигнал сцены', () => {
+    const h = harness({ behaviors: [signalled() as never], bindings: BINDINGS });
+    const hero = h.place('Hero', { Position: { x: F(3), y: 0 } });
+    const npc = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.step();
+    h.signal('Damage', { target: hero, source: npc, amount: 5 });
+    h.step();
+    expect(h.field(npc, NPC_AGENT_COMPONENT, 'state')).toBe(1);
+  });
+});
+
+describe('NPC-7: фазы босса и каст штатной машиной способностей', () => {
+  it('переход фазы по здоровью меняет ротацию, каст идёт событием', () => {
+    const h = harness({ behaviors: [boss() as never], bindings: BINDINGS });
+    h.place('Hero', { Position: { x: F(3), y: 0 } });
+    const npc = h.place('Creep', { Position: { x: 0, y: 0 } });
+    const calm = h.step();
+    expect(calm.map((event) => event.type)).toContain('BossSlam');
+    expect(calm.find((event) => event.type === 'BossSlam')!.data.caster).toBe(npc);
+    // Здоровье падает ниже порога документа — фаза меняется вместе с ротацией.
+    // Прямая запись мира — приём ТЕСТА: внутри тика мутации идут только через
+    // Command Buffer (DET-7).
+    setField(h.world, npc, 'Health', 'hp', 10);
+    const raged = h.step();
+    expect(raged.map((event) => event.type)).toContain('BossRage');
+    expect(raged.map((event) => event.type)).not.toContain('BossSlam');
+  });
+
+  it('просьба о касте — фронт, а не уровень: событие уходит на смене действия', () => {
+    const h = harness({ behaviors: [boss() as never], bindings: BINDINGS });
+    h.place('Hero', { Position: { x: F(3), y: 0 } });
+    h.place('Creep', { Position: { x: 0, y: 0 } });
+    expect(h.step().map((event) => event.type)).toContain('BossSlam');
+    // Тот же tier решает каждый тик, но действие не менялось — просьба не
+    // повторяется: гейт повторов у платформы способностей свой (ABIL-7).
+    expect(h.step().map((event) => event.type)).not.toContain('BossSlam');
+    expect(h.step().map((event) => event.type)).not.toContain('BossSlam');
+  });
+
+  /**
+   * Второго пути каста платформа не вводит (NPC-7): ротация ПРОСИТ способность
+   * событием, дальше работают штатные фазы (ABIL-4) и штатный словарь
+   * прерываний (ABIL-6).
+   */
+  function bossStand(): Harness {
+    const h = harness(
+      { behaviors: [boss() as never], bindings: BINDINGS },
+      {
+        prefabs: [
+          ...PREFABS,
+          { name: 'Slot', components: { AbilitySlot: {}, AbilityCooldown: { remaining: 0, total: 0 } } },
+        ],
+        abilities: [
+          {
+            id: 'slam',
+            trigger: { event: { type: 'BossSlam' } },
+            cooldownTicks: 20,
+            phases: [{ id: 'windup', trigger: 'auto', durationTicks: 3, timeout: { then: 'commit' } }],
+            interrupts: { damaged: { cooldown: 'full' } },
+            effects: [{ emitEvent: { type: 'SlamHit' } }],
+          },
+        ],
+        abilityRuntime: {
+          deadMarker: 'Dead',
+          damageEvent: { type: 'Damage', entityField: 'target', amountField: 'amount' },
+        },
+      },
+    );
+    return h;
+  }
+
+  it('каст ротации проходит фазами штатной машины и доходит до эффектов (ABIL-4)', () => {
+    const h = bossStand();
+    h.place('Hero', { Position: { x: F(3), y: 0 } });
+    const npc = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.place('Slot', { AbilitySlot: { owner: npc, abilityId: 0, slotIndex: 0 } });
+    const seen: string[] = [];
+    for (let i = 0; i < 8; i++) seen.push(...h.step().map((event) => event.type));
+    expect(seen).toContain('SlamHit');
+  });
+
+  it('прерывание телеграфированного каста — штатным словарём способности (ABIL-6)', () => {
+    const h = bossStand();
+    const hero = h.place('Hero', { Position: { x: F(3), y: 0 } });
+    const npc = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.place('Slot', { AbilitySlot: { owner: npc, abilityId: 0, slotIndex: 0 } });
+    h.step();
+    h.emit('Damage', { target: npc, source: hero, amount: 5 });
+    const seen: string[] = [];
+    for (let i = 0; i < 6; i++) seen.push(...h.step().map((event) => event.type));
+    // Каст сорван, кулдаун взведён целиком — до конца прогона эффект не идёт.
+    expect(seen).not.toContain('SlamHit');
+  });
+});
+
+function countAgents(h: Harness): number {
+  return query(h.world, { all: [NPC_AGENT_COMPONENT] }).length;
+}
+
+// ------------------------------------------------------- дисциплина аллокаций
+
+describe('Дисциплина аллокаций платформы NPC (NPC-4)', () => {
+  /**
+   * Счётчика аллокаций в vitest нет, поэтому проверяется наблюдаемое: число
+   * запросов к миру за тик. Каждый запрос — единственный контейнер, который
+   * система заводит на тик; всё прочее (сетка соседей, индекс маршрутов, кадр
+   * агента, спецификации запросов) живёт на экземпляре системы. Постоянное
+   * число запросов при десятикратном росте числа агентов и означает «тик не
+   * аллоцирует пропорционально их числу».
+   *
+   * Чего эта проверка НЕ видит: аллокации внутри самих систем. Их отсутствие
+   * держится конструкцией и читается на ревью — сетка соседей адресуется
+   * открыто в типизированных массивах (`grid.ts`), кадр решателя лежит полями
+   * решателя, направления считаются полями системы движения. Единственная
+   * оставленная аллокация на наполнение — карты индекса маршрутов, и величина
+   * её есть число точек маршрута, а не число агентов (`routes.ts`).
+   */
+  class CountingProbe implements System {
+    readonly name: string;
+    readonly order: number;
+    queries = 0;
+    private readonly inner: System;
+
+    constructor(inner: System) {
+      this.inner = inner;
+      this.name = inner.name;
+      this.order = inner.order;
+    }
+
+    run(ctx: SystemContext): void {
+      const probe: SystemContext = {
+        ...ctx,
+        query: (spec) => {
+          this.queries += 1;
+          return ctx.query(spec);
+        },
+      };
+      this.inner.run(probe);
+    }
+  }
+
+  function queriesFor(agents: number): number {
+    const loaded = loadScene({
+      components: COMPONENTS,
+      prefabs: PREFABS,
+      npc: { behaviors: [chaser() as never], bindings: BINDINGS },
+    });
+    const probes: CountingProbe[] = [];
+    for (const system of [...loaded.systems.ordered()]) {
+      if (!system.name.startsWith('Npc')) continue;
+      const probe = new CountingProbe(system);
+      loaded.systems.override(probe);
+      probes.push(probe);
+    }
+    spawn(loaded.world, 'Hero', { Position: { x: F(10), y: 0 } });
+    for (let i = 0; i < agents; i++) {
+      spawn(loaded.world, 'Creep', { Position: { x: F(i), y: 0 } });
+    }
+    const sim: Simulation = { systems: loaded.systems, worldSeed: 1, math: mathApi };
+    const state = initialState(loaded.world, 1);
+    tick(sim, state);
+    return probes.reduce((sum, probe) => sum + probe.queries, 0);
+  }
+
+  it('число запросов к миру за тик не зависит от числа агентов', () => {
+    expect(queriesFor(40)).toBe(queriesFor(4));
+  });
+});

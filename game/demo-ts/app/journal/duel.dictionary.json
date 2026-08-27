@@ -14,6 +14,12 @@
     "ChargeExploded": { "kind": "charge-explosion", "actor": "entity" },
     "$rewind/request": { "kind": "rewind-request", "actor": "initiator" },
 
+    "BossSlam": { "kind": "boss-asks-slam", "actor": "caster", "target": "target" },
+    "BossQuake": { "kind": "boss-asks-quake", "actor": "caster", "target": "target" },
+    "BossTelegraph": { "kind": "boss-telegraph", "actor": "entity" },
+    "BossSlamLanded": { "kind": "boss-slam", "actor": "entity" },
+    "BossQuakeLanded": { "kind": "boss-quake", "actor": "entity" },
+
     "Collision": { "kind": "collision", "actor": "entity", "target": "other" },
     "Overlap": { "kind": "overlap", "actor": "entity", "target": "other" },
     "LeftArena": { "kind": "left-arena", "target": "entity" },

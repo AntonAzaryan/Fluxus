@@ -634,6 +634,230 @@
       "source": "ef68019f",
       "translated": "69a958c5"
     },
+    "schema.npc.behaviors": {
+      "source": "4038e317",
+      "translated": "4aff997f"
+    },
+    "schema.npc.bindings": {
+      "source": "d31b4849",
+      "translated": "7557db85"
+    },
+    "schema.npc.bindings.deadMarker": {
+      "source": "1b089924",
+      "translated": "c027bb3a"
+    },
+    "schema.npc.bindings.health": {
+      "source": "4e5d7a10",
+      "translated": "c126b886"
+    },
+    "schema.npc.bindings.healthMax": {
+      "source": "41d82c0a",
+      "translated": "c6799f81"
+    },
+    "schema.npc.bindings.position": {
+      "source": "1e066191",
+      "translated": "fdd63435"
+    },
+    "schema.npc.bindings.team": {
+      "source": "67bfa9c3",
+      "translated": "43401873"
+    },
+    "schema.npc.bindings.velocity": {
+      "source": "319ec41e",
+      "translated": "a2ca1d47"
+    },
+    "schema.npc.decisionBudget": {
+      "source": "7d32abc0",
+      "translated": "c26923de"
+    },
+    "schema.npc.waves": {
+      "source": "8aa9bab4",
+      "translated": "0816bef5"
+    },
+    "schema.npc.waves.cap": {
+      "source": "cd9c19a3",
+      "translated": "11643831"
+    },
+    "schema.npc.waves.entries": {
+      "source": "5420d767",
+      "translated": "e654f8fc"
+    },
+    "schema.npcAction.considerations": {
+      "source": "8f3b0ade",
+      "translated": "d5719575"
+    },
+    "schema.npcAction.event": {
+      "source": "3acfed94",
+      "translated": "a22c91c7"
+    },
+    "schema.npcAction.executor": {
+      "source": "22bc42b1",
+      "translated": "c4994b5b"
+    },
+    "schema.npcBehavior.decision": {
+      "source": "578cc69f",
+      "translated": "05b78006"
+    },
+    "schema.npcBehavior.decision.intervalTicks": {
+      "source": "b2a14cee",
+      "translated": "a78e4597"
+    },
+    "schema.npcBehavior.name": {
+      "source": "218bdf66",
+      "translated": "80d25a6e"
+    },
+    "schema.npcBehavior.ranges": {
+      "source": "7dc97c7f",
+      "translated": "f6f22010"
+    },
+    "schema.npcBehavior.ranges.arrive": {
+      "source": "cbef3bec",
+      "translated": "3672db6e"
+    },
+    "schema.npcBehavior.ranges.attack": {
+      "source": "12984de0",
+      "translated": "988e3477"
+    },
+    "schema.npcBehavior.ranges.sense": {
+      "source": "2dcaa134",
+      "translated": "287c2b70"
+    },
+    "schema.npcBehavior.ranges.separation": {
+      "source": "afd27bd1",
+      "translated": "554357d4"
+    },
+    "schema.npcBehavior.scales": {
+      "source": "133edf6d",
+      "translated": "e047e6ad"
+    },
+    "schema.npcBehavior.scales.crowd": {
+      "source": "8c3c2bc0",
+      "translated": "b60833cd"
+    },
+    "schema.npcBehavior.scales.elapsedTicks": {
+      "source": "2128bed7",
+      "translated": "aae1a817"
+    },
+    "schema.npcBehavior.schema": {
+      "source": "f17be033",
+      "translated": "4924554e"
+    },
+    "schema.npcBehavior.separationWeight": {
+      "source": "d60e7c4c",
+      "translated": "44a13826"
+    },
+    "schema.npcBehavior.speed": {
+      "source": "489f967b",
+      "translated": "313651d3"
+    },
+    "schema.npcBehavior.states": {
+      "source": "c7f56839",
+      "translated": "cb313692"
+    },
+    "schema.npcBehavior.threat": {
+      "source": "63e83a0d",
+      "translated": "99d1ae13"
+    },
+    "schema.npcBehavior.threat.decayPerTick": {
+      "source": "63e65d08",
+      "translated": "eb2b2316"
+    },
+    "schema.npcBehavior.threat.sources": {
+      "source": "4b5337ff",
+      "translated": "7b95682d"
+    },
+    "schema.npcBehavior.threat.switchMargin": {
+      "source": "795028f2",
+      "translated": "f7f12ef6"
+    },
+    "schema.npcBehavior.tier": {
+      "source": "b5842677",
+      "translated": "0a2f14a9"
+    },
+    "schema.npcConsideration.curve": {
+      "source": "cf31382b",
+      "translated": "70ae8a6e"
+    },
+    "schema.npcConsideration.input": {
+      "source": "fad99858",
+      "translated": "fe3fcab2"
+    },
+    "schema.npcConsideration.weight": {
+      "source": "ca02f42a",
+      "translated": "0b76531b"
+    },
+    "schema.npcState.actions": {
+      "source": "8ee99053",
+      "translated": "a3573909"
+    },
+    "schema.npcState.name": {
+      "source": "d6665382",
+      "translated": "fb266ec2"
+    },
+    "schema.npcState.transitions": {
+      "source": "9363059e",
+      "translated": "5821e007"
+    },
+    "schema.npcTransition.to": {
+      "source": "7f3c117b",
+      "translated": "47f9a07b"
+    },
+    "schema.npcTransition.when": {
+      "source": "d313c7a4",
+      "translated": "1fd5c489"
+    },
+    "schema.npcTransition.when.entityField": {
+      "source": "0229bdb2",
+      "translated": "f3fd25d0"
+    },
+    "schema.npcTransition.when.event": {
+      "source": "2dab2c00",
+      "translated": "de9f3eea"
+    },
+    "schema.npcTransition.when.kind": {
+      "source": "ec4ed8f4",
+      "translated": "d957e43a"
+    },
+    "schema.npcTransition.when.ticks": {
+      "source": "b8272567",
+      "translated": "5441fb00"
+    },
+    "schema.npcTransition.when.value": {
+      "source": "db03f3e5",
+      "translated": "931ade5a"
+    },
+    "schema.npcWave.behavior": {
+      "source": "81e2d5dc",
+      "translated": "61cc7afe"
+    },
+    "schema.npcWave.count": {
+      "source": "c3f1226a",
+      "translated": "9a00278d"
+    },
+    "schema.npcWave.delayTicks": {
+      "source": "da0a9d5f",
+      "translated": "4b0100ea"
+    },
+    "schema.npcWave.prefab": {
+      "source": "b82fcc92",
+      "translated": "69717f46"
+    },
+    "schema.npcWave.route": {
+      "source": "106ccf1c",
+      "translated": "561d0015"
+    },
+    "schema.npcWave.spacingTicks": {
+      "source": "f4e90709",
+      "translated": "66055667"
+    },
+    "schema.npcWave.x": {
+      "source": "48c9e438",
+      "translated": "8aa05ba2"
+    },
+    "schema.npcWave.y": {
+      "source": "4161bf1d",
+      "translated": "e9ce2dbf"
+    },
     "schema.prefab.components": {
       "source": "85c489c9",
       "translated": "cc733b2f"
@@ -797,6 +1021,10 @@
     "schema.scene.modifierSlots": {
       "source": "f4120125",
       "translated": "c3da959d"
+    },
+    "schema.scene.npc": {
+      "source": "4298d492",
+      "translated": "8868eefb"
     },
     "schema.scene.prefabs": {
       "source": "899a43e4",

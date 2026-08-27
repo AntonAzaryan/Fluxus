@@ -145,17 +145,34 @@ export function triggerHoldEnded(ability: CompiledAbility, buttons: number): boo
  * Маска кнопок владельца. Собственного состояния фронта платформа не держит
  * (ABIL-3): обе маски читаются из компонента ввода, как их положил
  * `InputSystem` (TICK-4).
+ *
+ * Гейт двойной: сцена вправе не иметь компонента ввода вовсе (`hasInput`), а
+ * ВЛАДЕЛЕЦ вправе его не иметь, оставаясь при этом законным носителем
+ * способности, — так живёт NPC (`npc-behavior` NPC-1): его ротация просит каст
+ * событием, а кнопок у него нет и не будет.
+ *
+ * Чтение поля тотально (ECS-7) и без второго гейта вернуло бы тот же ноль, но
+ * вместе с записью о чтении без владения на КАЖДЫЙ тик каждой фазы (FP-4):
+ * диагностика заполнялась бы штатным положением дел, и настоящая находка в ней
+ * утонула бы.
  */
-export function buttonsOf(ctx: SystemContext, catalog: AbilityCatalog, owner: EntityId): number {
+function ownerButtons(
+  ctx: SystemContext,
+  catalog: AbilityCatalog,
+  owner: EntityId,
+  field: string,
+): number {
   const { bindings } = catalog;
-  if (!bindings.hasInput) return 0;
-  return ctx.get(owner, bindings.inputComponent, INPUT_BUTTONS_FIELD);
+  if (!bindings.hasInput || !ctx.has(owner, bindings.inputComponent)) return 0;
+  return ctx.get(owner, bindings.inputComponent, field);
+}
+
+export function buttonsOf(ctx: SystemContext, catalog: AbilityCatalog, owner: EntityId): number {
+  return ownerButtons(ctx, catalog, owner, INPUT_BUTTONS_FIELD);
 }
 
 export function prevButtonsOf(ctx: SystemContext, catalog: AbilityCatalog, owner: EntityId): number {
-  const { bindings } = catalog;
-  if (!bindings.hasInput) return 0;
-  return ctx.get(owner, bindings.inputComponent, INPUT_PREV_BUTTONS_FIELD);
+  return ownerButtons(ctx, catalog, owner, INPUT_PREV_BUTTONS_FIELD);
 }
 
 /**

@@ -40,11 +40,12 @@ export interface ArenaCenter {
   readonly y: number;
 }
 
-/** Оценка входа и кривой живёт в [0, 1] (BOT-9); не-число читается как ноль. */
-export function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return value < 0 ? 0 : value > 1 ? 1 : value;
-}
+/**
+ * Оценка входа и кривой живёт в [0, 1] (BOT-9); не-число читается как ноль.
+ * Тело — общей модели скоринга (`npc-behavior` NPC-3): диапазон у оценки один
+ * на бота и NPC, и второго зажима под тем же смыслом заводить не за чем.
+ */
+export { clamp01 } from '@fluxus/core';
 
 /** Ближайший известный враг: видимый предпочтительнее помнимого при равном расстоянии. */
 export function nearestEnemy(world: PerceivedWorld): RememberedEnemy | undefined {

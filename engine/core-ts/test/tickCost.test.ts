@@ -115,7 +115,15 @@ function measuredWork(): System {
   };
 }
 
-const EXPECTED_COST = { commandsApplied: 2, expressions: 2, broadPhasePairs: 1, raycasts: 1 };
+// `npcNeighbors` — своя строка сводки (NPC-6, NPC-9): на сцене без агентов
+// она ноль, и именно нулём отличает «работы не было» от «её сложили с чужой».
+const EXPECTED_COST = {
+  commandsApplied: 2,
+  expressions: 2,
+  broadPhasePairs: 1,
+  npcNeighbors: 0,
+  raycasts: 1,
+};
 
 /** Сколько тиков прогоняет тест «счётчики обнуляются на каждом тике». */
 const REPEATED_TICKS = 3;
@@ -262,6 +270,7 @@ describe('PERF-3: сводка стоимости — обычная запис�
       'broadPhasePairs',
       'commandsApplied',
       'expressions',
+      'npcNeighbors',
       'raycasts',
     ]);
     for (const value of Object.values(data)) expect(Number.isInteger(value)).toBe(true);
@@ -346,6 +355,8 @@ describe('PERF-3: счётчики считают отмеренную рабо�
       commandsApplied: EXPECTED_COST.commandsApplied * 2,
       expressions: EXPECTED_COST.expressions * 2,
       broadPhasePairs: EXPECTED_COST.broadPhasePairs * 2,
+      // Вдвое от нуля — ноль: агентов на этой сцене нет, и это тоже удвоение.
+      npcNeighbors: EXPECTED_COST.npcNeighbors * 2,
       raycasts: EXPECTED_COST.raycasts * 2,
     });
   });

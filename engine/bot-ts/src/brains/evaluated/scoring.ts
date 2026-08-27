@@ -7,18 +7,31 @@
  * запас до края) и из состояния (радиус арены, кулдаун своего слота), и
  * дизайнеру незачем повторять её в каждом documenте кривой.
  *
+ * СЧИТАЛОК здесь нет: кривая отклика, оценка оси и композиция — общая модель
+ * скоринга ядра (`npc-behavior` NPC-3), которую бот делит с поведением NPC.
+ * Собственной реализации считалок и собственного словаря форм кривых у бота
+ * быть не должно (BOT-9); ботовыми остаются словарь ВХОДОВ (ниже) и словарь
+ * ИСПОЛНИТЕЛЕЙ (`layers/plan.ts`).
+ *
  * Ветвлений «по имени поведения» тут нет ни одного (BOT-8): `switch` разбирает
- * ВХОД и ФОРМУ КРИВОЙ — то есть форму документа, — а не то, какое действие
- * считается. Действие для этого модуля — список осей, и `pressure` он от
- * `retreat` не отличает.
+ * ВХОД — то есть форму документа, — а не то, какое действие считается. Действие
+ * для этого модуля — список осей, и `pressure` он от `retreat` не отличает.
  *
  * Разбор пересчёта (BOT-10) строится ТОЛЬКО когда трасса включена: `records`
  * равно `undefined` — и ни одного объекта на тик не создаётся.
  */
+import {
+  clamp01,
+  combineUtility,
+  considerationScore as scoreAxis,
+  curveValue as curveOfModel,
+  finishUtility,
+  UTILITY_IDENTITY,
+} from '@fluxus/core';
 import type { BotAction, BotBehaviorDocument, BotConsideration, BotCurve, BotExecutor } from '../../behavior.js';
 import type { BotProfile } from '../../profile.js';
 import type { PerceivedWorld } from '../layers/perception.js';
-import { clamp01, distanceFromCenter, nearestEnemy, nearestThreat, type ArenaCenter } from '../layers/plan.js';
+import { distanceFromCenter, nearestEnemy, nearestThreat, type ArenaCenter } from '../layers/plan.js';
 
 /** Что скорингу нужно знать о сцене и о боте помимо наблюдения. */
 export interface ScoringContext {
@@ -123,20 +136,14 @@ export function inputValue(
   }
 }
 
-/** Кривая отклика: значение входа → оценка, зажатая в [0, 1] (BOT-9). */
+/**
+ * Кривая отклика: значение входа → оценка, зажатая в [0, 1] (BOT-9). Тело —
+ * общая модель ядра (NPC-3); здесь только имя, которым кривую зовут тесты и
+ * соседние слои бота. `BotCurve` — псевдоним формы этой же модели, поэтому
+ * приведения между ними нет.
+ */
 export function curveValue(curve: BotCurve, x: number): number {
-  switch (curve.type) {
-    case 'linear':
-      return clamp01(curve.slope * x + curve.intercept);
-    case 'quadratic': {
-      const shifted = x - curve.shift;
-      return clamp01(curve.slope * shifted * shifted + curve.intercept);
-    }
-    case 'logistic':
-      return clamp01(1 / (1 + Math.exp(-curve.slope * (x - curve.midpoint))));
-    case 'constant':
-      return clamp01(curve.value);
-  }
+  return curveOfModel(curve, x);
 }
 
 /** Оценка оси: кривая от входа, взвешенная документом; лежит в [0, 1] (BOT-9). */
@@ -145,28 +152,25 @@ export function considerationScore(
   world: PerceivedWorld,
   context: ScoringContext,
 ): number {
-  return curveValue(consideration.curve, inputValue(consideration, world, context)) * consideration.weight;
+  return scoreAxis(consideration.curve, consideration.weight, inputValue(consideration, world, context));
 }
 
 /**
- * Полезность действия — ПРОИЗВЕДЕНИЕ оценок его осей (BOT-9). Произведение, а не
- * сумма: ось с нулём выключает действие целиком («врага не видно — давить не на
- * кого»), а компенсацию числа осей (штраф Дэйва Марка) v1 не вводит — осей мало,
- * и форма документа позволяет добавить её полем позже.
- *
- * Диапазон сохраняется по построению: каждый сомножитель в [0, 1] (вес там же),
- * поэтому и произведение там же.
+ * Полезность действия — композиция оценок его осей (BOT-9). Правило композиции
+ * — произведение с сохранением диапазона — живёт в общей модели ядра (NPC-3);
+ * компенсацию числа осей (штраф Дэйва Марка) v1 не вводит: осей мало, и форма
+ * документа позволяет добавить её полем позже.
  */
 export function actionUtility(
   action: BotAction,
   world: PerceivedWorld,
   context: ScoringContext,
 ): number {
-  let utility = 1;
+  let utility = UTILITY_IDENTITY;
   for (const consideration of action.considerations) {
-    utility *= considerationScore(consideration, world, context);
+    utility = combineUtility(utility, considerationScore(consideration, world, context));
   }
-  return clamp01(utility);
+  return finishUtility(utility);
 }
 
 /** Выбор действия и (если трасса включена) разбор пересчёта. */
@@ -219,7 +223,7 @@ function tracedUtility(
   traces: ActionTrace[],
 ): number {
   const considerations: ConsiderationTrace[] = [];
-  let utility = 1;
+  let utility = UTILITY_IDENTITY;
   for (const consideration of action.considerations) {
     const score = considerationScore(consideration, world, context);
     considerations.push({
@@ -227,9 +231,9 @@ function tracedUtility(
       ...(consideration.slot === undefined ? {} : { slot: consideration.slot }),
       score,
     });
-    utility *= score;
+    utility = combineUtility(utility, score);
   }
-  const clamped = clamp01(utility);
+  const clamped = finishUtility(utility);
   traces.push({ executor: action.executor, utility: clamped, considerations });
   return clamped;
 }

@@ -203,7 +203,13 @@ function compileAbility(
     triggerBit: trigger.bit,
     eventType: trigger.eventType,
     eventAs: trigger.eventAs,
-    condition: expressionOf(def.condition, world, SLOT_BOUND_NAMES, `${path}.condition`),
+    // Условие сверх триггера (ABIL-3) считается ТАМ ЖЕ, где триггер, — на тике
+    // его срабатывания, с уже связанным именем события (`phase.ts`). Поэтому
+    // список связанных имён у него тот же, что у `onEnter` первой фазы: без
+    // события условие не может спросить, ЭТОМУ ли владельцу событие адресовано,
+    // а без такого вопроса одно событие поднимало бы каст у всех носителей
+    // определения разом (`npc-behavior` NPC-7).
+    condition: expressionOf(def.condition, world, eventNames, `${path}.condition`),
     confirmBit: def.confirmBit === undefined ? -1 : bitOf(def.confirmBit, `${path}.confirmBit`),
     cancelBit: def.cancelBit === undefined ? -1 : bitOf(def.cancelBit, `${path}.cancelBit`),
     phaseStart,

@@ -76,6 +76,36 @@ export type {
 } from './dsl/expr.js';
 export { EvaluatedSystem, validateActions, validateExpression, validateSystem } from './dsl/evaluatedSystem.js';
 export type { SystemDef } from './dsl/evaluatedSystem.js';
+/**
+ * Общая модель utility-скоринга (`npc-behavior` NPC-3, `bot-player` BOT-9):
+ * закрытый набор форм кривых, состав их параметров, оценка оси и композиция.
+ * Наружу уходит потому, что потребителей у неё двое и один из них — вне ядра:
+ * поведение NPC считает её `…Fixed`-телами внутри тика, мозг бота — обычными
+ * телами вне симуляции. Мутирующей поверхности это не расширяет (TICK-3):
+ * функции чистые и мира не касаются.
+ */
+export {
+  clamp01,
+  clamp01Fixed,
+  combineUtility,
+  combineUtilityFixed,
+  considerationScore,
+  considerationScoreFixed,
+  curveValue,
+  curveValueFixed,
+  finishUtility,
+  finishUtilityFixed,
+  logisticFixed,
+  CURVE_CONSTANT,
+  CURVE_LINEAR,
+  CURVE_LOGISTIC,
+  CURVE_QUADRATIC,
+  SCORING_CURVES,
+  SCORING_CURVE_FIELDS,
+  UTILITY_IDENTITY,
+  UTILITY_IDENTITY_FIXED,
+} from './dsl/scoring.js';
+export type { FixedCurve, ScoringCurve, ScoringCurveField, ScoringCurveType } from './dsl/scoring.js';
 export { schemaFiles, schemaFileContent } from './dsl/schemas.js';
 
 // systems — системы на TS, их API и реестр порядка исполнения

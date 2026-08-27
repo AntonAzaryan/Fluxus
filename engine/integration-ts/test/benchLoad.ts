@@ -114,6 +114,25 @@ export function loadRecording(name: string): ScenarioDef {
   return JSON.parse(readFileSync(join(GOLDEN_DIR, `${name}.scenario.json`), 'utf8')) as ScenarioDef;
 }
 
+/**
+ * Синтетическая стресс-нагрузка массы NPC (`npc-behavior` NPC-9): двести
+ * массовых крипов на арене, режиссёр волн, маршрут и двое героев в центре.
+ * Записью матча она не является — участников у неё нет вовсе, — поэтому и лежит
+ * не парой `*.scenario.json`/`*.golden.json`, а отдельным документом нагрузки.
+ *
+ * Расширение `.load.json`, а не `.scenario.json`, выбрано намеренно: пары
+ * golden-набора авто-обнаруживаются по второму имени (CLI-5), и побитовый
+ * эталон на двести сущностей за два десятка тиков весил бы мегабайты — то есть
+ * стоил бы репозиторию больше, чем стережёт. Побитовую воспроизводимость этой
+ * нагрузки закрывает прогон-сравнение в ядре (`test/npcStress.test.ts`), а её
+ * СТОИМОСТЬ — эталон `npc-stress.cost.json` в этом гейте (PERF-3, PERF-4).
+ */
+export const NPC_STRESS = 'npc-stress';
+
+export function loadNpcStress(): ScenarioDef {
+  return JSON.parse(readFileSync(join(GOLDEN_DIR, `${NPC_STRESS}.load.json`), 'utf8')) as ScenarioDef;
+}
+
 /** Крючки прогона записи: сток диагностики ядра и наблюдатель тиков. */
 export interface RecordingHooks {
   readonly diagnostics?: DiagnosticsSink;

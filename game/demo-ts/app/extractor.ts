@@ -82,7 +82,7 @@ export function createDemoExtractor(grid: TerrainGrid | undefined): Extractor {
     // `HeavyFireball` — ПЕРЕД `Fireball`: заряженный снаряд несёт оба тега
     // (системы сцены ищут его по `Fireball`), а тип берётся первым совпавшим —
     // так у него своя, более крупная запись эффекта.
-    kindOf: kindByTags(['Hero', 'HeavyFireball', 'Fireball', 'SlowDome']),
+    kindOf: kindByTags(['Hero', 'Boss', 'HeavyFireball', 'Fireball', 'SlowDome']),
     ...(grid !== undefined ? { terrainGrid: grid } : {}),
     // Доворот торса (REND-5) — по направлению каста: одно каноническое событие
     // сцены несёт и факт каста, и `dirX`/`dirY`. Событие заряда рядом с ним

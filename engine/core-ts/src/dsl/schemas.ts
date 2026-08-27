@@ -22,6 +22,18 @@ import {
   buffStatMod,
   buffTrigger,
 } from './abilitySchemas.js';
+import {
+  npc,
+  npcAction,
+  npcBehavior,
+  npcConsideration,
+  npcCurve,
+  npcFieldRef,
+  npcState,
+  npcTransition,
+  npcWave,
+} from './npcSchemas.js';
+import { arena, placement, spawnEntry, tweenDef, vec2 } from './sceneSchemas.js';
 import { operators } from './expr.js';
 import { FIELD_TYPES } from '../types.js';
 
@@ -147,54 +159,6 @@ const terrain: Json = {
   },
 };
 
-const vec2: Json = {
-  $comment: 'Компоненты в Q16.16 (FP-1).',
-  type: 'object',
-  additionalProperties: false,
-  required: ['x', 'y'],
-  properties: { x: { type: 'integer' }, y: { type: 'integer' } },
-};
-
-const arena: Json = {
-  title: 'Ассет арены (ARENA-1)',
-  type: 'object',
-  additionalProperties: false,
-  required: ['center', 'radius'],
-  properties: {
-    center: { $comment: 'Иммутабельный центр в Q16.16.', $ref: '#/$defs/vec2' },
-    radius: { $comment: 'Стартовый радиус в Q16.16; дальше живёт в компоненте (ARENA-4).', type: 'integer' },
-  },
-};
-
-const tweenDef: Json = {
-  title: 'Определение твина (TWEEN-1, TWEEN-3)',
-  type: 'object',
-  additionalProperties: false,
-  required: ['target'],
-  properties: {
-    target: { $comment: 'Путь к полю компонента, например "Health.value" (TWEEN-3).', type: 'string', minLength: 1 },
-    onComplete: { $comment: 'Исполняется по завершении твина (TWEEN-4).', type: 'array', items: { $ref: '#/$defs/action' } },
-  },
-};
-
-const spawnEntry: Json = {
-  title: 'Запись начальной расстановки (SER-8)',
-  type: 'object',
-  additionalProperties: false,
-  required: ['prefab'],
-  properties: {
-    prefab: { type: 'string', minLength: 1 },
-    overrides: {
-      $comment: "Карта «компонент → поле → значение» поверх значений prefab'а (CMD-6).",
-      type: 'object',
-      additionalProperties: { type: 'object', additionalProperties: { type: 'integer' } },
-    },
-  },
-};
-
-/** Список записей — общий формат расстановки конфига сцены и документа прогона (SER-8). */
-const placement: Json = { type: 'array', items: { $ref: '#/$defs/spawnEntry' } };
-
 const scene: Json = {
   title: 'Сцена (SER-7)',
   type: 'object',
@@ -249,6 +213,11 @@ const scene: Json = {
     abilityRuntime: {
       $comment: 'Биндинги сцены для платформы способностей (ABIL-8).',
       $ref: '#/$defs/abilityRuntime',
+    },
+    npc: {
+      $comment:
+        'Платформа поведения NPC (NPC-2): наличие подключает компоненты платформы и её системы.',
+      $ref: '#/$defs/npc',
     },
     initial: {
       ...placement,
@@ -359,9 +328,59 @@ const scenario: Json = {
   },
 };
 
+/**
+ * Ключи `$defs` — по алфавиту: порядок попадает в файл схемы, а тот сверяется
+ * побитово (SER-5). Сортировка здесь затем, чтобы он не зависел от того, в
+ * каком порядке перечень собрали, — иначе перестановка строки в исходнике
+ * краснила бы эталон, ничего не изменив по существу.
+ */
 function document(id: string, body: Json, defs: Json): Json {
-  return { $schema: DIALECT, $id: `${BASE}/${id}`, ...body, ...(Object.keys(defs).length > 0 ? { $defs: defs } : {}) };
+  const names = Object.keys(defs).sort();
+  if (names.length === 0) return { $schema: DIALECT, $id: `${BASE}/${id}`, ...body };
+  const sorted: Json = {};
+  for (const name of names) sorted[name] = defs[name];
+  return { $schema: DIALECT, $id: `${BASE}/${id}`, ...body, $defs: sorted };
 }
+
+/**
+ * Определения, на которые ссылается сцена. Один список на оба документа: схема
+ * прогона встраивает сцену целиком (`$ref` на `scene`), поэтому её `$defs`
+ * обязаны совпадать со сценовыми — две копии перечня разъехались бы молча на
+ * первом же новом блоке.
+ */
+const SCENE_DEFS: Json = {
+  abilityDef,
+  abilityInterrupt,
+  abilityInterrupts,
+  abilityPhase,
+  abilityRuntime,
+  abilityShape,
+  abilityStep,
+  abilityTrigger,
+  action,
+  arena,
+  buffDef,
+  buffStatMod,
+  buffTrigger,
+  component,
+  expression,
+  npc,
+  npcAction,
+  npcBehavior,
+  npcConsideration,
+  npcCurve,
+  npcFieldRef,
+  npcState,
+  npcTransition,
+  npcWave,
+  prefab,
+  query,
+  spawnEntry,
+  system,
+  terrain,
+  tweenDef,
+  vec2,
+};
 
 /** Имя файла → документ. Единственный источник для `engine/schemas/`. */
 export const schemaFiles: Readonly<Record<string, Json>> = {
@@ -369,55 +388,11 @@ export const schemaFiles: Readonly<Record<string, Json>> = {
   'prefab.schema.json': document('prefab.schema.json', prefab, {}),
   'system.schema.json': document('system.schema.json', system, { action, expression, query }),
   'terrain.schema.json': document('terrain.schema.json', terrain, {}),
-  'scene.schema.json': document('scene.schema.json', scene, {
-    abilityDef,
-    abilityInterrupt,
-    abilityInterrupts,
-    abilityPhase,
-    abilityRuntime,
-    abilityShape,
-    abilityStep,
-    abilityTrigger,
-    action,
-    arena,
-    buffDef,
-    buffStatMod,
-    buffTrigger,
-    component,
-    expression,
-    prefab,
-    query,
-    spawnEntry,
-    system,
-    terrain,
-    tweenDef,
-    vec2,
-  }),
+  'scene.schema.json': document('scene.schema.json', scene, SCENE_DEFS),
   'scenario.schema.json': document('scenario.schema.json', scenario, {
-    abilityDef,
-    abilityInterrupt,
-    abilityInterrupts,
-    abilityPhase,
-    abilityRuntime,
-    abilityShape,
-    abilityStep,
-    abilityTrigger,
-    action,
-    arena,
-    buffDef,
-    buffStatMod,
-    buffTrigger,
-    component,
-    expression,
+    ...SCENE_DEFS,
     inputFrame,
-    prefab,
-    query,
     scene,
-    spawnEntry,
-    system,
-    terrain,
-    tweenDef,
-    vec2,
   }),
 };
 
