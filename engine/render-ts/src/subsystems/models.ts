@@ -111,6 +111,8 @@ import type {
   TickView,
 } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
+import { createStateReader } from './shellSupport.js';
+import { createWarnOnce } from '../warnOnce.js';
 import type { DebugSource } from '../debug/contract.js';
 import { modelsInstancesDebugSource, type DebugInstanceRow } from '../debug/modelsSource.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
@@ -301,6 +303,23 @@ export interface ModelsOptions {
    * допускает.
    */
   readonly shadows?: LightingSink;
+  /**
+   * Компоненты-состояния в порядке, которым Extractor сборки выставляет биты
+   * `EntityView.states` (CAM-6, SHELL-2) — тот же список, что у подсистем
+   * эффектов и частиц (REND-23, REND-24). Нужен ровно затем, чтобы найти бит
+   * `deadState`; без него имени состояния соответствовать нечему.
+   */
+  readonly stateComponents?: readonly string[];
+  /**
+   * Имя состояния, которым доставленное состояние называет сущность мёртвой
+   * (REND-4). Умолчания нет по тем же основаниям, что у `reviveEvent`: смерть —
+   * конвенция ядра, а МАРКЕР смерти описывает сцена, и назвать его вправе только
+   * сборка. Не названо — фиксация клипа смерти живёт как прежде, событием и
+   * событием возрождения; названо — она следует доставленному состоянию в обе
+   * стороны, и сцена с двумя видами возрождения перестаёт зависеть от того,
+   * сколько имён событий сборка успела перечислить.
+   */
+  readonly deadState?: string;
   /**
    * Длительность fade-out «ушла в туман» в секундах (FOW-8, design D7) — из
    * конфигурации тумана (FOW-10), а не константа кода. Ноль или отсутствие —
@@ -726,6 +745,14 @@ interface InstanceRecord {
    */
   fadingOut: boolean;
   /**
+   * Инстанс ПОЯВИЛСЯ по доставленному состоянию, которое называет сущность
+   * мёртвой (REND-4): гибели этот инстанс не видел, и клип смерти ему ставится
+   * состоянием, а не событием. Снимается только тем, что сущность перестала
+   * быть мёртвой; удачей фиксации — нет, потому что контроллер вправе появиться
+   * позже модели (`assets` ASSET-4) и вправе смениться вместе с ярусом (REND-20).
+   */
+  bornDead: boolean;
+  /**
    * Меши держателя, чьи материалы на время fade подменены СВОИМИ копиями с
    * прозрачностью (FOW-8): разделяемые с ассетом материалы (REND-3, REND-6)
    * трогать нельзя. null — fade не идёт, у мешей разделяемые материалы.
@@ -866,6 +893,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    */
   private readonly fadeClones = new Map<THREE.Material, THREE.Material[]>();
   private readonly warnedKinds = new Set<string>();
+  /**
+   * Несёт ли доставленное состояние сущности маркер смерти (REND-4); null —
+   * сборка состояния смерти не назвала, и фиксация остаётся событийной.
+   */
+  private readonly isDeadState: ((view: EntityView) => boolean) | null;
   /** Переиспользуемая запись прокси обхода (REND-15): валидна внутри визита. */
   private readonly proxy: PickProxy = createPickProxy();
   /**
@@ -889,6 +921,27 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     this.manifest = manifest;
     this.options = options;
     this.warn = options.warn ?? ((message) => { console.warn(message); });
+    // Читатель бита состояния смерти — тот же общий словарь, которым читают
+    // свои состояния оболочки (`shellSupport.ts`, CAM-6). Строится один раз и
+    // только когда сборка назвала И состояние, И порядок битов: без любого из
+    // двух отвечать не на что, и путь остаётся прежним, событийным.
+    const deadState = options.deadState;
+    const warnOnce = createWarnOnce(this.warn);
+    this.isDeadState =
+      deadState === undefined
+        ? null
+        : ((reader) => (view: EntityView): boolean => reader(view, deadState))(
+            createStateReader(options.stateComponents ?? [], (name) => {
+              // Читатель зовётся на каждую сущность каждой доставки, а опечатка
+              // в имени состояния — одно явление: говорим о нём один раз, тем же
+              // приёмом, что и оболочки (REND-23, REND-24).
+              warnOnce(
+                `deadState:${name}`,
+                `render: состояние смерти "${name}" не зеркалируется Extractor'ом сборки — ` +
+                  `фиксация клипа смерти остаётся событийной (REND-4)`,
+              );
+            }),
+          );
   }
 
   init(ctx: RenderContext): void {
@@ -1044,11 +1097,28 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // продюсера, гашение набора пустым состоянием) убирает инстансы сразу —
     // плавное угасание нарисовало бы «уход в туман», которого не было (REND-2).
     const fadeSeconds = view !== null && !view.snapAll ? (this.options.fadeSeconds ?? 0) : 0;
+    // Маркер смерти доставленного состояния (REND-4) читается ТОЛЬКО у пула
+    // сущностей: у decoration-набора состояний нет вовсе (REND-18), и спрашивать
+    // его о смерти нечего. Читатель снимается один раз на доставку — на каждую
+    // запись он всё равно позовётся, а ветвление по опции платится однажды.
+    const isDeadState = decoration ? null : this.isDeadState;
     for (const entityView of entities.values()) {
       let record = pool.get(entityView.id);
       if (record === undefined) {
         record = this.create(ctx, entityView, decoration, fadeSeconds > 0);
         pool.set(entityView.id, record);
+        // «Появился уже мёртвым» — единственный случай, в котором фиксацию
+        // смерти ставит СОСТОЯНИЕ, а не событие (REND-4). Разделение несущее:
+        // сведение пула идёт до разбора событий тика, и на тике гибели маркер
+        // в мире уже стоит — фиксируй мы по состоянию всякий инстанс, гибель
+        // на глазах перестала бы играть клип, потому что `handleEvent` под
+        // фиксацией no-op.
+        //
+        // Флаг живёт на записи, а не в этой переменной, потому что контроллера
+        // на создании ещё может не быть: модель — разделяемый ассет и вправе
+        // ехать сколько угодно (`assets` ASSET-4), а фиксировать поведение
+        // нужно тому контроллеру, который в итоге появится.
+        record.bornDead = isDeadState?.(entityView) === true;
         if (cost !== undefined) cost.modelsInstancesCreated++;
       }
       // Сущность снова в доставленном состоянии: начатый fade-out отменяется,
@@ -1080,6 +1150,22 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
         this.syncBlobCaster(record);
       }
       this.applyAnimation(record);
+      // Фиксация смерти следует доставленному состоянию (REND-4): появившийся
+      // уже мёртвым встаёт последним кадром клипа смерти, потерявший маркер
+      // выходит из фиксации — каким бы событием сцена ни назвала возрождение
+      // (FOW-8; событие возрождения продолжает работать и находит контроллер
+      // уже живым, что REND-4 прямо называет no-op'ом).
+      if (isDeadState !== null) {
+        if (isDeadState(entityView)) {
+          // Флаг не гасится удачей: контроллер сменить ярус (REND-20) или
+          // появиться позже вправе, а сущность всё это время мертва — новый
+          // контроллер обязан встать трупом так же, как встал бы первый.
+          if (record.bornDead) record.controller?.enterDeath();
+        } else {
+          record.bornDead = false;
+          record.controller?.releaseDeath();
+        }
+      }
       // Правка walkable-записи (позиция, курс, масштаб, сам флаг) доводит
       // walkable-вклад поля до нового размещения (REND-9, REND-18); правка
       // не-walkable полей (скин) реестр не трогает — вклад тот же.
@@ -2398,6 +2484,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       fade: fadeIn && !decoration ? 0 : 1,
       fadedTargets: null,
       fadingOut: false,
+      bornDead: false,
       lightCarrier: null,
       blobCaster: null,
       publicView: null,
@@ -2780,7 +2867,14 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (this.options.crossfade !== undefined) options.crossfade = this.options.crossfade;
     if (this.options.deathEvent !== undefined) options.deathEvent = this.options.deathEvent;
     if (this.options.reviveEvent !== undefined) options.reviveEvent = this.options.reviveEvent;
-    return new AnimationController(backend, record.visual?.animations ?? {}, options);
+    const controller = new AnimationController(backend, record.visual?.animations ?? {}, options);
+    // Инстанс появился по состоянию, называющему сущность мёртвой (REND-4), а
+    // контроллера тогда ещё не было: модель — разделяемый ассет и вправе ехать
+    // сколько угодно (`assets` ASSET-4). Фиксация ставится ровно тому
+    // контроллеру, который в итоге появился, — иначе труп встал бы живым в тот
+    // самый момент, когда его наконец есть чем нарисовать.
+    if (record.bornDead) controller.enterDeath();
+    return controller;
   }
 
   /**

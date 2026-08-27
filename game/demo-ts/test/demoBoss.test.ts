@@ -23,6 +23,7 @@ import {
   tick as simTick,
   world as coreWorld,
   type EntityId,
+  type GameEvent,
   type InputFrame,
   type SceneDef,
   type SimulationState,
@@ -68,6 +69,19 @@ const DODGE_TICKS = 9;
 const STRAFE_DISTANCE = DODGE_SPEED * DODGE_TICKS;
 /** `BossRespawn`: окно возрождения босса — 10 с при 60 Гц. */
 const BOSS_RESPAWN_TICKS = 600;
+/**
+ * Слой коллизий босса — СВОЙ, а не общий слой актёров (2): им герой блокируется
+ * (`blockMask` 9 = обрывы + босс), а героя от героя он не трогает. Смерть гасит
+ * слой в ноль общим путём сцены, возрождение возвращает именно этот.
+ */
+const BOSS_LAYER = 8;
+/** Урон и радиус отталкивания в упор (`bossRepel`), кулдаун — его же. */
+const REPEL_DAMAGE = 250;
+const REPEL_RADIUS = 98304;
+const REPEL_COOLDOWN = 90;
+/** Радиусы тел: контакт героя с боссом — их сумма. */
+const BOSS_RADIUS = 39321;
+const HERO_RADIUS = 19661;
 /** Центр арены (`arena.center` сцены) — точка возрождения босса. */
 const ARENA_CENTER = 1572864;
 
@@ -78,6 +92,8 @@ interface Stand {
   readonly heroes: readonly EntityId[];
   /** Один тик; возвращает типы событий тика. */
   step(frames?: readonly { readonly buttons?: number; readonly moveX?: number }[]): readonly string[];
+  /** События ПОСЛЕДНЕГО тика целиком: типам не видно ни направления, ни цели. */
+  readonly last: { events: readonly GameEvent[] };
 }
 
 /**
@@ -114,11 +130,13 @@ function stand(cells: readonly (readonly [number, number])[], scene: SceneDef = 
   if (boss === undefined) throw new Error('расстановка сцены не поставила босса');
 
   let tick = 0;
+  const last: { events: readonly GameEvent[] } = { events: [] };
   return {
     sim: built.sim,
     state: built.state,
     boss,
     heroes,
+    last,
     step(frames = []) {
       tick += 1;
       const inputs: InputFrame[] = players.map((playerId, index) => ({
@@ -133,7 +151,8 @@ function stand(cells: readonly (readonly [number, number])[], scene: SceneDef = 
           y: coreWorld.getField(built.state.world, heroes[index]!, 'Position', 'y'),
         },
       }));
-      return [...simTick(built.sim, built.state, inputs).events].map((event) => event.type);
+      last.events = [...simTick(built.sim, built.state, inputs).events];
+      return last.events.map((event) => event.type);
     },
   };
 }
@@ -233,7 +252,7 @@ describe('босс демо-сцены уязвим: способности ге
 
     expect(coreWorld.hasComponent(a.state.world, a.boss, 'Dead')).toBe(false);
     expect(hp(a.state, a.boss)).toBe(HIT_DAMAGE);
-    expect(coreWorld.getField(a.state.world, a.boss, 'Collider', 'layer')).toBe(2);
+    expect(coreWorld.getField(a.state.world, a.boss, 'Collider', 'layer')).toBe(BOSS_LAYER);
     // В ЦЕНТРЕ арены, а не там, где его убили: точка возрождения — та же, что
     // `arena.center` сцены (зеркало пиннится ниже).
     expect(px(a.state, a.boss)).toBe(ARENA_CENTER);
@@ -352,5 +371,132 @@ describe('числа и картинка босса: ретюн виден в д
     );
     expect(MANIFEST.cameraEffects.events.BossSlamLanded!.effect).toBe('shake');
     expect(MANIFEST.cameraEffects.events.BossQuakeLanded!.effect).toBe('shake');
+  });
+});
+
+describe('герой и босс не проходят друг сквозь друга', () => {
+  it('герой упирается в босса и не оказывается за ним', () => {
+    // Босс стоит в центре арены, герой западнее и бежит на восток прямо в него.
+    // До правки масок он проходил насквозь: `blockMask` героя знал только слой
+    // обрывов (1), а босс лежал на общем слое актёров, который героя не держал.
+    const a = stand([[21, 24]]);
+    const hero = a.heroes[0]!;
+    const contact = BOSS_RADIUS + HERO_RADIUS;
+
+    for (let t = 0; t < 90; t++) {
+      a.step([{ moveX: FIXED_ONE }]);
+      // За спину босса герой не попадает ни на тик.
+      expect(px(a.state, hero)).toBeLessThan(px(a.state, a.boss));
+      // И не влезает в него: центры не сближаются ближе суммы радиусов.
+      expect(distance(a.state, hero, a.boss)).toBeGreaterThanOrEqual(contact);
+    }
+  });
+
+  it('герой героя по-прежнему не блокирует: слой босса свой, а не общий', () => {
+    // Правка адресная. Общий слой актёров в `blockMask` героя развернул бы и
+    // дуэль — там сквозное прохождение остаётся балансом, о котором отдельно
+    // не просили.
+    const collider = (name: string): Record<string, number> =>
+      SCENE.prefabs!.find((prefab) => prefab.name === name)!.components.Collider as Record<
+        string,
+        number
+      >;
+    const hero = collider('Hero');
+    const boss = collider('Boss');
+    expect(hero.layer).toBe(2);
+    expect(boss.layer).toBe(BOSS_LAYER);
+    // Герой держится боссом и обрывами, но не героем.
+    expect(hero.blockMask! & boss.layer!).toBe(boss.layer);
+    expect(hero.blockMask! & hero.layer!).toBe(0);
+    // Босс держится героями — «друг сквозь друга» верно в обе стороны.
+    expect(boss.blockMask! & hero.layer!).toBe(hero.layer);
+    // Снаряд по-прежнему видит в боссе сенсорную цель: слой сменился, маска — тоже.
+    for (const name of ['Fireball', 'HeavyFireball']) {
+      const ball = collider(name);
+      expect(ball.hitMask! & boss.layer!).toBe(boss.layer);
+      expect(ball.hitMask! & hero.layer!).toBe(hero.layer);
+      // И НЕ блокируется им: снаряд гаснет попаданием, а не упирается в тело.
+      expect(ball.blockMask! & boss.layer!).toBe(0);
+    }
+  });
+});
+
+describe('босс отталкивает подошедшего вплотную', () => {
+  it('снимает 250, уносит на дистанцию стрейфа и разворачивает босса к жертве', () => {
+    // Герой ставится внутрь радиуса отталкивания, но вне контакта тел.
+    const a = stand([[25.2, 24]]);
+    const hero = a.heroes[0]!;
+    const before = { x: px(a.state, hero), y: py(a.state, hero) };
+    const away = distance(a.state, hero, a.boss);
+    expect(away).toBeLessThan(REPEL_RADIUS);
+
+    // «Сразу же»: система близости просит отталкивание тем же тиком, каким
+    // герой оказался рядом, а способность без фазы замаха бьёт на нём же.
+    expect(a.step()).toContain('BossRepelLanded');
+    expect(hp(a.state, hero)).toBe(1000 - REPEL_DAMAGE);
+
+    // Отбрасывание — тот же `Dodge`-манёвр, что у слэма (LOC-3, LOC-4).
+    expect(coreWorld.getField(a.state.world, hero, 'LocomotionState', 'state')).toBe(
+      LOCOMOTION_DODGE,
+    );
+    const left = coreWorld.getField(a.state.world, hero, 'LocomotionState', 'ticksLeft');
+    expect(left).toBe(DODGE_TICKS - 1);
+    for (let t = 0; t < left; t++) a.step();
+    const moved = Math.hypot(px(a.state, hero) - before.x, py(a.state, hero) - before.y);
+    expect(Math.abs(moved - STRAFE_DISTANCE)).toBeLessThanOrEqual(DODGE_SPEED);
+    expect(distance(a.state, hero, a.boss)).toBeGreaterThan(away);
+  });
+
+  it('разворот к жертве едет направлением события, а не позой', () => {
+    // Курс инстанса производен от скорости (REND-13), и стоящего босса он не
+    // поворачивает. Разворот показывает доворот корпуса (REND-5) по `dirX`/`dirY`
+    // события — на жертву, а не куда попало.
+    const a = stand([[24, 25.2]]);
+    const hero = a.heroes[0]!;
+    a.step();
+    const landed = a.last.events.find((event) => event.type === 'BossRepelLanded');
+    expect(landed).toBeDefined();
+    expect(landed!.data.entity).toBe(a.boss);
+    expect(landed!.data.target).toBe(hero);
+    // Герой стоит СЕВЕРНЕЕ босса: направление на него — почти чистый +y.
+    expect(landed!.data.dirY!).toBeGreaterThan(0);
+    expect(Math.abs(landed!.data.dirX!)).toBeLessThan(landed!.data.dirY!);
+    // Тем же вектором уносит жертву: разворот и толчок — одно направление.
+    expect(coreWorld.getField(a.state.world, hero, 'LocomotionState', 'dirY')).toBeGreaterThan(0);
+  });
+
+  it('кулдаун держит паузу: второго удара в упор подряд не бывает', () => {
+    const a = stand([[25.2, 24]]);
+    expect(a.step()).toContain('BossRepelLanded');
+    // Герой остаётся рядом (его уносит, но босс идёт следом), а способность
+    // молчит: повторы глушит кулдаун слота, а не редкость события.
+    for (let t = 1; t < REPEL_COOLDOWN; t++) {
+      expect(a.step()).not.toContain('BossRepelLanded');
+    }
+  });
+
+  it('мёртвый босс не отталкивает и не задерживает снаряды', () => {
+    // hp ретюнится под один выстрел: предмет проверки — путь, а не число.
+    const a = stand([[20, 24]], wounded(HIT_DAMAGE, HIT_DAMAGE));
+    let events: readonly string[] = [];
+    for (let t = 0; t < 40 && !events.includes('EntityDied'); t++) {
+      events = a.step([{ buttons: t === 0 ? CAST : 0 }]);
+    }
+    expect(coreWorld.hasComponent(a.state.world, a.boss, 'Dead')).toBe(true);
+    expect(coreWorld.getField(a.state.world, a.boss, 'Collider', 'layer')).toBe(0);
+
+    // Герой бежит НА труп и дальше сквозь него, дольше кулдауна отталкивания:
+    // запрос системы близости мертвеца не касается (`not: ["Dead"]`), а слой
+    // коллизий смерть погасила — тело больше не препятствие.
+    const hero = a.heroes[0]!;
+    const healthy = hp(a.state, hero);
+    let crossed = false;
+    for (let t = 0; t < REPEL_COOLDOWN + 60; t++) {
+      expect(a.step([{ moveX: FIXED_ONE }])).not.toContain('BossRepelLanded');
+      if (px(a.state, hero) > px(a.state, a.boss)) crossed = true;
+    }
+    // Прошёл насквозь и цел: ни отталкивания, ни урона от трупа.
+    expect(crossed).toBe(true);
+    expect(hp(a.state, hero)).toBe(healthy);
   });
 });

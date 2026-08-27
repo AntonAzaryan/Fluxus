@@ -72,6 +72,7 @@
           "BossTelegraph": "Spell Slam",
           "BossSlamLanded": "Attack Slam",
           "BossQuakeLanded": "Attack Slam",
+          "BossRepelLanded": "Attack Slam",
           "EntityDied": "Death"
         }
       },
@@ -224,6 +225,17 @@
         "durationMs": 700,
         "curve": "easeOut",
         "height": 0.3
+      },
+      "BossRepelLanded": {
+        "primitive": "sphere",
+        "color": "#ffb347",
+        "radius": 0.5,
+        "radiusTo": 1.8,
+        "alpha": 0.5,
+        "alphaTo": 0,
+        "durationMs": 300,
+        "curve": "easeOut",
+        "height": 0.5
       }
     }
   },
@@ -241,6 +253,9 @@
         "effect": "visuals/effects/blood-burst.effect.json"
       },
       "BossTelegraph": {
+        "effect": "visuals/effects/cast-burst.effect.json"
+      },
+      "BossRepelLanded": {
         "effect": "visuals/effects/cast-burst.effect.json"
       }
     }
@@ -313,6 +328,15 @@
         "maxOffset": 0.6,
         "maxRoll": 0.09,
         "decay": 1.2
+      },
+      "BossRepelLanded": {
+        "effect": "shake",
+        "amplitude": 0.5,
+        "radius": 8,
+        "frequency": 12,
+        "maxOffset": 0.3,
+        "maxRoll": 0.05,
+        "decay": 2
       }
     },
     "states": {

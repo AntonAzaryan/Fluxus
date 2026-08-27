@@ -41,6 +41,7 @@ import {
   CHARGE_PREVIEW_MIN_TICKS,
   CHARGE_VISUAL,
   FIREBALL_LIFETIME_TICKS,
+  DEAD_COMPONENT,
   RESPAWN_EVENT,
   STATS,
   TICK_SECONDS,
@@ -3758,6 +3759,31 @@ describe('возрождение героя: смерть больше не те
     expect(alive(a, p2)).toBe(true);
     // И каждый — в своей точке, а не в чужой.
     expect(x(a.state, p1)).toBeLessThan(x(a.state, p2));
+  });
+
+  it('смерть доезжает и СОСТОЯНИЕМ: труп из тумана иначе встал бы живым', () => {
+    // Второй, независимый от события путь той же новости (REND-4): бит
+    // маркера в доставленном состоянии. Событие живёт один тик, а инстанс —
+    // сколько угодно, поэтому вернувшемуся из тумана трупу (FOW-8) и клиенту,
+    // подключившемуся после чужой гибели, событие не достаётся вовсе.
+    const a = ffa([20, 28], { extract: true });
+    const p1 = a.heroes[0]!;
+    const dead = stateBit(DEAD_COMPONENT);
+    a.step();
+    expect(a.stateBits(p1) & dead).toBe(0);
+
+    a.step([{ buttons: KILL }]);
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Dead')).toBe(true);
+    expect(a.stateBits(p1) & dead).toBe(dead);
+
+    // И гаснет он возрождением сцены — тем же битом, без участия имени
+    // события: возрождений в сцене два (`Respawn` героя и `BossRespawn`
+    // босса), а имя в опции подсистемы одно.
+    for (let i = 0; i < RESPAWN_TICKS - 1; i++) a.step();
+    expect(a.stateBits(p1) & dead).toBe(dead);
+    a.step();
+    expect(coreWorld.hasComponent(a.state.world, p1, 'Dead')).toBe(false);
+    expect(a.stateBits(p1) & dead).toBe(0);
   });
 
   it('возрождение доезжает до рендера СОБЫТИЕМ, а не разрывом доставки', () => {

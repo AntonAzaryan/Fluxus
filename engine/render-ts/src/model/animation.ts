@@ -118,6 +118,13 @@ export interface AnimationBackend {
   /** One-shot с фиксацией последнего кадра до возврата в локомоцию. */
   playOnce(index: number, crossfade: number): void;
   /**
+   * Последний кадр клипа СРАЗУ и навсегда: без кроссфейда, без проигрывания и
+   * без уведомления о завершении one-shot'а. Этим встаёт инстанс, созданный по
+   * доставленному состоянию, которое называет сущность мёртвой (REND-4): гибель
+   * случилась не сейчас, разыгрывать её заново нечего, а поза нужна конечная.
+   */
+  playFinal(index: number): void;
+  /**
    * Покадровое продвижение; здесь же срабатывает завершение one-shot. `dt` —
    * часы презентации СО ЗНАКОМ (REND-25): вперёд, стоп либо назад. При
    * обратном ходе завершением считается возврат one-shot к НАЧАЛУ клипа —
@@ -185,6 +192,22 @@ export class MixerAnimationBackend implements AnimationBackend {
     action.clampWhenFinished = true; // держим последний кадр до возврата в локомоцию
     this.fadeTo(action, crossfade);
     this.oneShot = action;
+    this.current = index;
+  }
+
+  playFinal(index: number): void {
+    const action = this.claim(index);
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+    // One-shot'а нет: уведомлять машину не о чем, а слушатель микшера сверяется
+    // именно с этим полем — обнулив его, мы гарантируем, что `finished`
+    // конечного кадра не вернёт инстанс в локомоцию.
+    this.oneShot = null;
+    this.fadeTo(action, 0);
+    // `fadeTo` зовёт `reset()`, поэтому время ставится ПОСЛЕ него; нулевой шаг
+    // микшера прикладывает позу к скелету, не двигая ни клипов, ни конвертов.
+    action.time = this.clips[index]!.duration;
+    this.mixer.update(0);
     this.current = index;
   }
 
@@ -362,7 +385,7 @@ export class AnimationController {
     // слышит событий вовсе, и событие, которое обязано её снять, — единственное
     // исключение. Оно же остаётся обычным событием: назвал манифест ему клип —
     // клип и сыграет one-shot'ом поверх вернувшейся локомоции.
-    const revived = type === this.reviveEvent && this.releaseDeath();
+    const revived = type === this.reviveEvent && this.clearDeath();
     if (this.dead) return false;
     const entry = this.mapping.events?.[type];
     if (entry === undefined) return revived;
@@ -387,6 +410,43 @@ export class AnimationController {
   }
 
   /**
+   * Фиксация смерти БЕЗ события: доставленное состояние называет сущность
+   * мёртвой, а гибели этот инстанс не видел (REND-4). Так встаёт инстанс,
+   * созданный по состоянию, — труп, вернувшийся из тумана (`fog-of-war`
+   * FOW-8), и всякая сущность, умершая до первого снапшота наблюдателя.
+   *
+   * Клип берётся тот же, что у события смерти, — запись манифеста его типа
+   * (REND-4), — но не проигрывается: инстанс встаёт последним кадром сразу.
+   * Разыграть one-shot значило бы показать гибель, случившуюся в прошлом, и
+   * тем соврать о моменте — ровно то, чего не делает и `snapAll` (REND-2).
+   *
+   * Возвращает false, если фиксировать было нечего: контроллер уже мёртв либо
+   * клип смерти манифестом не назван. Второй случай не ошибка и не повод
+   * подставлять произвольный клип (REND-4) — фиксация тогда просто не ставится,
+   * а предупреждение о неразрешённой записи выдаёт `clipFor`.
+   */
+  enterDeath(): boolean {
+    if (this.dead) return false;
+    const entry = this.mapping.events?.[this.deathEvent];
+    if (entry === undefined) return false;
+    const clip = this.clipFor(entry);
+    if (clip < 0) return false;
+    this.oneShotPlaying = false;
+    this.dead = true;
+    this.backend.playFinal(clip);
+    return true;
+  }
+
+  /**
+   * Снять фиксацию смерти, когда доставленное состояние больше не называет
+   * сущность мёртвой (REND-4). Тот же путь, которым её снимают событие
+   * возрождения и разрыв непрерывности, — и то же значение результата.
+   */
+  releaseDeath(): boolean {
+    return this.clearDeath();
+  }
+
+  /**
    * Доставка пришла разрывом (`snapAll`, REND-2): мир авторитетно ДРУГОЙ —
    * перемотка, реплей, смена ветви истории. Единственное, что здесь снимается, —
    * необратимость смерти.
@@ -401,10 +461,10 @@ export class AnimationController {
    *
    * Снап — не единственный путь: возрождение ИДУЩЕГО мира разрыва не даёт (мир
    * тот же и непрерывен), и снимает фиксацию названное сборкой событие
-   * возрождения — `handleEvent` тем же `releaseDeath`.
+   * возрождения — `handleEvent` тем же `clearDeath`.
    */
   onSnap(): void {
-    this.releaseDeath();
+    this.clearDeath();
   }
 
   /**
@@ -414,7 +474,7 @@ export class AnimationController {
    * one-shot ведёт своя шкала, и сбивать её фазу разрывом или возрождением
    * соседа нельзя).
    */
-  private releaseDeath(): boolean {
+  private clearDeath(): boolean {
     if (!this.dead) return false;
     this.dead = false;
     this.oneShotPlaying = false;

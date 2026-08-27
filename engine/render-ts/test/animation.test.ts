@@ -6,7 +6,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { AnimationController, MixerAnimationBackend, resolveClip } from '../src/index.js';
+import {
+  AnimationController,
+  MixerAnimationBackend,
+  VatAnimationBackend,
+  resolveClip,
+} from '../src/index.js';
 
 function makeClip(name: string, duration: number): THREE.AnimationClip {
   // Трек на реальную ноду 'b0' — чтобы PropertyBinding резолвился без warning.
@@ -420,5 +425,109 @@ describe('AnimationController: возрождение снимает фикса�
     // И по его завершении — возврат в локомоцию по общему правилу REND-4.
     controller.update(0.6);
     expect(controller.currentClipName).toBe('Walk Fast');
+  });
+});
+
+/**
+ * Фиксация смерти БЕЗ события (REND-4): доставленное состояние называет
+ * сущность мёртвой, а гибели этот контроллер не видел — так встаёт инстанс,
+ * созданный по состоянию (труп из тумана, FOW-8; сущность, умершая до первого
+ * снапшота наблюдателя). Клип тот же, что у события, но не проигрывается:
+ * поза конечная сразу.
+ */
+describe('AnimationController: фиксация смерти по состоянию (REND-4)', () => {
+  it('встаёт последним кадром клипа смерти, не разыгрывая гибель', () => {
+    const { controller } = makeController();
+    controller.setState('move');
+
+    expect(controller.enterDeath()).toBe(true);
+    expect(controller.isDead).toBe(true);
+    expect(controller.currentClipName).toBe('Death');
+
+    // Кадр не «доигрывает» клип: он уже на конце, и нулевой шаг ничего не
+    // меняет — фиксация держится, состояния и события не слышны.
+    controller.update(0);
+    expect(controller.currentClipName).toBe('Death');
+    controller.setState('idle');
+    expect(controller.currentClipName).toBe('Death');
+    expect(controller.handleEvent('CastFireball')).toBe(false);
+  });
+
+  it('повторный вход — no-op; клип смерти без записи манифеста не подставляется', () => {
+    const { controller } = makeController();
+    controller.enterDeath();
+    expect(controller.enterDeath()).toBe(false);
+
+    // Манифест без записи смерти: фиксация не ставится, произвольный клип
+    // не подставляется (REND-4) — отсутствие записи не ошибка.
+    const bare = makeController({ states: { idle: 'Stand', move: 'Walk' }, events: {} });
+    bare.controller.setState('move');
+    expect(bare.controller.enterDeath()).toBe(false);
+    expect(bare.controller.isDead).toBe(false);
+    expect(bare.controller.currentClipName).toBe('Walk Fast');
+  });
+
+  it('снятие по состоянию возвращает клип текущего состояния', () => {
+    const { controller } = makeController();
+    controller.setState('move');
+    controller.handleEvent('EntityDied');
+    controller.update(2);
+    expect(controller.isDead).toBe(true);
+
+    // Сцена возродила сущность СВОЕЙ системой, событие которой сборка назвать
+    // не успела: снятие приходит доставленным состоянием, а не именем события.
+    expect(controller.releaseDeath()).toBe(true);
+    expect(controller.isDead).toBe(false);
+    expect(controller.currentClipName).toBe('Walk Fast');
+    expect(controller.handleEvent('CastFireball')).toBe(true);
+    // Живому снимать нечего — фазу его one-shot это не сбивает.
+    expect(controller.releaseDeath()).toBe(false);
+  });
+});
+
+/**
+ * Паритет ярусов (REND-20): фиксация по состоянию — часть машины, а машина у
+ * ярусов одна. Батчевый носитель обязан вставать в тот же последний кадр, что
+ * и микшер, — и так же не звать возврат в локомоцию.
+ */
+describe('VatAnimationBackend: кадр-фиксатор батчевого яруса (REND-20, REND-4)', () => {
+  /** Две запечённых секвенции: `Walk` кадры 0..3, `Death` кадры 4..7 при 10 fps. */
+  const BAKED = [
+    { name: 'Walk', offset: 0, length: 4, duration: 0.4, loop: true },
+    { name: 'Death', offset: 4, length: 4, duration: 0.4, loop: false },
+  ];
+
+  it('встаёт последним кадром клипа и не сообщает о завершении one-shot', () => {
+    const backend = new VatAnimationBackend(BAKED, 10, 99);
+    let finished = 0;
+    backend.onOneShotFinished = (): void => { finished++; };
+
+    backend.playFinal(1);
+
+    expect(backend.currentClip).toBe(1);
+    // Последний кадр секвенции — `offset + length - 1`, без подмешивания
+    // следующего: смеси на конце клипа нет.
+    expect(backend.rowA).toBe(7);
+    expect(backend.rowB).toBe(7);
+    expect(backend.blend).toBe(0);
+
+    // Кадр фиксацию не двигает, и возврата в локомоцию не случается.
+    backend.update(1);
+    expect(backend.rowA).toBe(7);
+    expect(finished).toBe(0);
+  });
+
+  it('поза равна той, которой кончается доигранный one-shot того же клипа', () => {
+    const played = new VatAnimationBackend(BAKED, 10, 99);
+    played.playOnce(1, 0);
+    played.update(1); // доигран и зафиксирован clampWhenFinished-путём
+    const frozen = new VatAnimationBackend(BAKED, 10, 99);
+    frozen.playFinal(1);
+
+    expect({ a: frozen.rowA, b: frozen.rowB, blend: frozen.blend }).toEqual({
+      a: played.rowA,
+      b: played.rowB,
+      blend: played.blend,
+    });
   });
 });
