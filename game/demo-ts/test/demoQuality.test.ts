@@ -94,9 +94,16 @@ interface DemoRig {
  * в ней нет, и её ручки реестр не объявляет.
  */
 function demoContext(): RenderContext {
+  // Ассеты «вечно едут»: текстурную деталь воды (REND-35) секция сцены
+  // спрашивает при init, но для реестра ручек её приезд не нужен.
+  const assets = {
+    request: (kind: string, id: string) => ({ kind, id }),
+    state: () => ({ status: 'loading' }),
+    subscribe: () => () => {},
+  } as unknown as AssetService;
   return {
     scene: new THREE.Scene(),
-    assets: {} as unknown as AssetService,
+    assets,
     config: { heightStep: 0.6 },
   };
 }

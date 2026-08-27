@@ -133,7 +133,15 @@
         "maxDepth": 0.1,
         "banding": 3,
         "foam": { "width": 0.025, "color": "#dff3f7", "hardness": 0.7 },
-        "detail": { "source": "procedural", "layers": 3, "scale": 2.5, "speed": 0.1, "strength": 0.4 },
+        "detail": {
+          "source": "textured",
+          "layers": 3,
+          "scale": 2.5,
+          "speed": 0.1,
+          "strength": 0.4,
+          "normalMap": "visuals/textures/water-normal.png",
+          "foamNoise": "visuals/textures/water-foam.png"
+        },
         "ripples": {
           "sources": 8,
           "wavelength": 1.1,

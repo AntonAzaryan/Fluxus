@@ -54,7 +54,7 @@ export interface PresentationWaterFoam {
 
 /**
  * Источник мелкой детали поверхности (REND-35). `procedural` — шум, считаемый
- * в шейдере, не требующий НИ ОДНОГО текстурного ассета (умолчание и путь демо);
+ * в шейдере, не требующий НИ ОДНОГО текстурного ассета (умолчание);
  * `textured` — tileable-текстуры дерева контента по ID (`assets` ASSET-2).
  */
 export type PresentationWaterDetailSource = 'procedural' | 'textured';

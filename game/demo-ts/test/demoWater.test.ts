@@ -6,13 +6,16 @@
  * источников, ручки качества; здесь проверяется КОНТЕНТ, которого у движка нет
  * и быть не может: что карта водоёма ложится на настоящую сетку дуэльной арены,
  * что урез подобран между дном лощины кривизны и полом нулевого уровня (design
- * D8), что вода демо не требует ни одного текстурного ассета — и что работа
- * подсистемы видна счётчикам стоимости, то есть попадает и в бенч стадии кадра
- * (`performance-budget` PERF-2, PERF-7).
+ * D8), что текстурная деталь демо называет существующие в дереве контента
+ * ассеты и до их приезда вода рисуется procedural-фолбэком без единого
+ * предупреждения — и что работа подсистемы видна счётчикам стоимости, то есть
+ * попадает и в бенч стадии кадра (`performance-budget` PERF-2, PERF-7).
  *
  * Документы читаются прямо из дерева контента: демо — игра, и `content/` ему
  * принадлежит (CONT-4).
  */
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { createTerrainGrid, type TerrainGrid } from '@fluxus/core';
@@ -37,6 +40,9 @@ import sceneJson from '../../../content/scenes/duel.scene.json';
 
 /** Шаг высоты сборки демо (REND-7) — тот же, что в `app/main.ts`. */
 const HEIGHT_STEP = 0.6;
+
+/** Корень дерева контента: ID ассета — путь от него (ASSET-2). */
+const CONTENT_ROOT = join(import.meta.dirname, '../../../content');
 
 const WATER = (presentationJson as unknown as { water: PresentationWater }).water;
 
@@ -148,10 +154,23 @@ describe('REND-35: водоём демо лежит в лощине карты �
     expect(depthAt(rig, 22.5, 5.5)).toBeLessThanOrEqual(0);
   });
 
-  it('вода демо не требует ни одного текстурного ассета (путь procedural)', () => {
+  it('текстурная деталь демо: названные ассеты лежат в дереве контента', () => {
+    // Валидация ID существованием не проверяет (дерева контента у неё нет), а
+    // опечатка в пути означала бы procedural-фолбэк с предупреждением на каждом
+    // запуске демо (REND-35) — поэтому существование файлов держит этот тест.
+    const detail = resolveWaterConfig(WATER)!.bodies[0]!.detail;
+    expect(detail.source).toBe('textured');
+    for (const id of [detail.normalMap, detail.foamNoise]) {
+      expect(id).not.toBeNull();
+      expect(existsSync(join(CONTENT_ROOT, id!))).toBe(true);
+    }
+
+    // Подсистема спрашивает ровно названные текстуры; ещё не доехавший ассет —
+    // procedural-деталь БЕЗ предупреждения: он доедет и пересоберёт материал.
     const rig = makeRig();
-    expect(resolveWaterConfig(WATER)!.bodies[0]!.detail.source).toBe('procedural');
-    expect(rig.requests).toEqual([]);
+    expect(rig.requests.sort()).toEqual(
+      [detail.normalMap, detail.foamNoise].map((id) => `texture ${id}`).sort(),
+    );
     expect(rig.warnings).toEqual([]);
   });
 
