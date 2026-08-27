@@ -131,7 +131,7 @@
           "shape": 0
         },
         "Owner": { "slot": -1 },
-        "Projectile": { "damage": 100, "scale": 65536 },
+        "Projectile": { "damage": 200, "scale": 65536 },
         "TimeScaleModifiers": {},
         "AbilityProjectile": { "abilityId": 0, "range": 0, "ticksLeft": 50 }
       },
@@ -153,7 +153,7 @@
           "shape": 0
         },
         "Owner": { "slot": -1 },
-        "Projectile": { "damage": 100, "scale": 65536 },
+        "Projectile": { "damage": 200, "scale": 65536 },
         "TimeScaleModifiers": {},
         "AbilityProjectile": { "abilityId": 0, "range": 0, "ticksLeft": 50 }
       },
@@ -230,6 +230,7 @@
     {
       "name": "Boss",
       "components": {
+        "Player": { "slot": 2 },
         "Position": { "x": 1572864, "y": 1572864 },
         "Velocity": { "x": 0, "y": 0 },
         "Collider": {
@@ -624,7 +625,7 @@
                       "emitEvent": {
                         "type": "Damage",
                         "data": {
-                          "amount": 250,
+                          "amount": 500,
                           "entity": { "var": "holder" },
                           "source": {
                             "getComponent": [{ "var": "p" }, "AbilityProjectile", "owner"]
@@ -1451,7 +1452,7 @@
                                 "emitEvent": {
                                   "type": "Damage",
                                   "data": {
-                                    "amount": 250,
+                                    "amount": 500,
                                     "entity": { "var": "v" },
                                     "source": { "var": "owner" }
                                   }
@@ -1538,7 +1539,7 @@
                           "damage": {
                             "toInt": {
                               "*": [
-                                { "fromInt": 100 },
+                                { "fromInt": 200 },
                                 { "*": [{ "var": "scale" }, { "var": "scale" }] }
                               ]
                             }
@@ -2330,13 +2331,100 @@
             "as": "victim",
             "do": [
               {
-                "emitEvent": {
-                  "type": "Damage",
-                  "data": {
-                    "amount": 90,
-                    "entity": { "var": "victim" },
-                    "source": { "var": "owner" }
-                  }
+                "if": {
+                  "cond": { "!=": [{ "var": "victim" }, { "var": "owner" }] },
+                  "then": [
+                    {
+                      "emitEvent": {
+                        "type": "Damage",
+                        "data": {
+                          "amount": 180,
+                          "entity": { "var": "victim" },
+                          "source": { "var": "owner" }
+                        }
+                      }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "HeroHit",
+                        "data": {
+                          "entity": { "var": "victim" },
+                          "x": { "getComponent": [{ "var": "victim" }, "Position", "x"] },
+                          "y": { "getComponent": [{ "var": "victim" }, "Position", "y"] }
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "cond": {
+                          "and": [
+                            { "hasComponent": [{ "var": "victim" }, "Locomotion"] },
+                            { "hasComponent": [{ "var": "victim" }, "LocomotionState"] }
+                          ]
+                        },
+                        "then": [
+                          {
+                            "let": {
+                              "bindings": {
+                                "push": {
+                                  "vec.normalize": [
+                                    {
+                                      "vec": [
+                                        {
+                                          "-": [
+                                            {
+                                              "getComponent": [
+                                                { "var": "victim" },
+                                                "Position",
+                                                "x"
+                                              ]
+                                            },
+                                            { "getComponent": [{ "var": "owner" }, "Position", "x"] }
+                                          ]
+                                        },
+                                        {
+                                          "-": [
+                                            {
+                                              "getComponent": [
+                                                { "var": "victim" },
+                                                "Position",
+                                                "y"
+                                              ]
+                                            },
+                                            { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              },
+                              "do": [
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "victim" },
+                                    "component": "LocomotionState",
+                                    "values": {
+                                      "state": 1,
+                                      "dirX": { "vec.x": [{ "var": "push" }] },
+                                      "dirY": { "vec.y": [{ "var": "push" }] },
+                                      "ticksLeft": {
+                                        "getComponent": [
+                                          { "var": "victim" },
+                                          "Locomotion",
+                                          "dodgeTicks"
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
                 }
               }
             ]
@@ -2407,13 +2495,30 @@
             "as": "victim",
             "do": [
               {
-                "emitEvent": {
-                  "type": "Damage",
-                  "data": {
-                    "amount": 140,
-                    "entity": { "var": "victim" },
-                    "source": { "var": "owner" }
-                  }
+                "if": {
+                  "cond": { "!=": [{ "var": "victim" }, { "var": "owner" }] },
+                  "then": [
+                    {
+                      "emitEvent": {
+                        "type": "Damage",
+                        "data": {
+                          "amount": 280,
+                          "entity": { "var": "victim" },
+                          "source": { "var": "owner" }
+                        }
+                      }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "HeroHit",
+                        "data": {
+                          "entity": { "var": "victim" },
+                          "x": { "getComponent": [{ "var": "victim" }, "Position", "x"] },
+                          "y": { "getComponent": [{ "var": "victim" }, "Position", "y"] }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             ]

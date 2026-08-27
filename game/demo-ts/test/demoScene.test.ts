@@ -29,6 +29,15 @@ import matchJson from '../../../content/matches/duel.match.json';
 
 const SCENE = sceneJson as unknown as SceneDef;
 
+/**
+ * Пустая арена — та же сцена без её собственной расстановки (`initial`).
+ * Расстановка сцены — босс в центре, и он теперь полноценный участник боя:
+ * преследует героя, бьёт по площади и отталкивает слэмом. Здесь проверяются
+ * геометрия диска и рампы, то есть куда герой ДОХОДИТ сам; сбивающий его с
+ * маршрута босс был бы посторонней переменной. Его поведение — `demoBoss.test.ts`.
+ */
+const EMPTY_ARENA = { ...SCENE, initial: [] } as unknown as SceneDef;
+
 /** Расстановка матча дуэли (SER-8): по ней спавнятся оба героя. */
 const MATCH = matchJson as unknown as {
   readonly initial: readonly {
@@ -90,7 +99,7 @@ function walkPath(
   limit: number,
   onTick?: (demo: ReturnType<typeof createDemoSimulation>) => void,
 ) {
-  const demo = createDemoSimulation(SCENE);
+  const demo = createDemoSimulation(EMPTY_ARENA);
   const { sim, state, playerId } = demo;
   const TOLERANCE = 0.3;
   let leg = 0;
@@ -121,7 +130,7 @@ function walkPath(
 
 /** Уход по прямой до кромки диска: пола там нет, и герой проваливается. */
 function walkOffTheEdge(direction: -1 | 1, limit: number) {
-  const { sim, state, playerId } = createDemoSimulation(SCENE);
+  const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA);
   let fellAt: number | null = null;
   let diedAt: number | null = null;
   let leftAt: number | null = null;
@@ -210,7 +219,7 @@ describe('демо-сцена: кромка диска и смерть в пус
     // (ABIL-4): тем же тиком записывается шаг прицеливания (ABIL-5) и летит
     // снаряд. Удержание не спамит снарядами, а копит заряд, и на одно нажатие
     // приходится ровно один снаряд.
-    const { sim, state, playerId } = createDemoSimulation(SCENE);
+    const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA);
     const CAST = 1 << ACTION_BITS.cast;
     const fireballs = (): number => {
       let count = 0;
@@ -274,7 +283,7 @@ describe('демо-сцена: кромка диска и смерть в пус
   });
 
   it('на полу событий провала нет и герой жив', () => {
-    const { sim, state, playerId } = createDemoSimulation(SCENE);
+    const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA);
     for (let tick = 1; tick <= 60; tick++) {
       const result = simTick(sim, state, [
         { tick, playerId: PLAYER_ID, seq: tick, move: { x: 0, y: 0 }, aimDir: 0, buttons: 0 },
@@ -369,7 +378,7 @@ describe('демо-сцена: кромка плато вне рампы (LOC-5,
 
 describe('демо-матч: симметричный спавн героев на полу диска', () => {
   it('обе записи расстановки стоят в центрах клеток, на земле и зеркально центру', () => {
-    const { terrain, grid } = createDemoSimulation(SCENE);
+    const { terrain, grid } = createDemoSimulation(EMPTY_ARENA);
     const positions = MATCH.initial.map((entry) => entry.overrides?.Position);
     expect(positions.every((p) => p !== undefined)).toBe(true);
 

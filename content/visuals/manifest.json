@@ -202,6 +202,28 @@
         "durationMs": 520,
         "curve": "easeOut",
         "height": 0.6
+      },
+      "BossSlamLanded": {
+        "primitive": "sphere",
+        "color": "#ff6a1a",
+        "radius": 0.6,
+        "radiusTo": 4,
+        "alpha": 0.5,
+        "alphaTo": 0,
+        "durationMs": 480,
+        "curve": "easeOut",
+        "height": 0.25
+      },
+      "BossQuakeLanded": {
+        "primitive": "sphere",
+        "color": "#c8341f",
+        "radius": 0.8,
+        "radiusTo": 7,
+        "alpha": 0.45,
+        "alphaTo": 0,
+        "durationMs": 700,
+        "curve": "easeOut",
+        "height": 0.3
       }
     }
   },
@@ -217,6 +239,9 @@
       },
       "HeroHit": {
         "effect": "visuals/effects/blood-burst.effect.json"
+      },
+      "BossTelegraph": {
+        "effect": "visuals/effects/cast-burst.effect.json"
       }
     }
   },
@@ -270,6 +295,24 @@
         "maxOffset": 0.5,
         "maxRoll": 0.07,
         "decay": 1.4
+      },
+      "BossSlamLanded": {
+        "effect": "shake",
+        "amplitude": 0.8,
+        "radius": 16,
+        "frequency": 10,
+        "maxOffset": 0.45,
+        "maxRoll": 0.06,
+        "decay": 1.5
+      },
+      "BossQuakeLanded": {
+        "effect": "shake",
+        "amplitude": 1.2,
+        "radius": 24,
+        "frequency": 8,
+        "maxOffset": 0.6,
+        "maxRoll": 0.09,
+        "decay": 1.2
       }
     },
     "states": {

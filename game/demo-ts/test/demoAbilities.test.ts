@@ -54,6 +54,16 @@ import matchJson from '../../../content/matches/duel.match.json';
 import manifestJson from '../../../content/visuals/manifest.json';
 
 const SCENE = sceneJson as unknown as SceneDef;
+
+/**
+ * Стенд дуэльных механик — та же сцена БЕЗ её собственной расстановки
+ * (`initial`). Расстановка сцены — босс в центре арены, и он теперь полноценный
+ * участник боя: снаряд в нём гаснет, слэм бьёт и отталкивает. Дуэль этих тестов
+ * идёт ровно через центр (`arena()` разводит героев по обе стороны от него), то
+ * есть босс стоял бы посреди линии огня посторонней переменной. Здесь пиннятся
+ * механики ГЕРОЕВ; поведение самого босса — `demoBoss.test.ts`.
+ */
+const DUEL = { ...SCENE, initial: [] } as unknown as SceneDef;
 const MANIFEST = manifestJson as unknown as {
   readonly effects: {
     readonly byKind: Record<string, { readonly radius: number }>;
@@ -117,7 +127,7 @@ const CAPTURE_AIM_TICKS = 60;
  */
 const HOLD_TICKS = 121;
 const THROW_WINDOW_TICKS = HOLD_TICKS - 1;
-const EXPLOSION_DAMAGE = 250;
+const EXPLOSION_DAMAGE = 500;
 /** `Collider.radius` героя и множитель купола — те же поля, что читает `DomeCast`. */
 const HERO_RADIUS = 19661;
 const DOME_RADIUS_MUL = 655360;
@@ -131,8 +141,8 @@ const CHARGE_GRACE_TICKS = 18;
 const CHARGE_MAX_SCALE = 2 * FIXED_ONE;
 /** Порог «тяжёлого» снаряда: с него `ChargeRelease` спавнит prefab `HeavyFireball`. */
 const CHARGE_HEAVY_SCALE = 1.5 * FIXED_ONE;
-const HIT_DAMAGE = 100;
-const OVERCHARGE_DAMAGE = 250;
+const HIT_DAMAGE = 200;
+const OVERCHARGE_DAMAGE = 500;
 const OVERCHARGE_RADIUS = 3 * FIXED_ONE;
 /**
  * Щит — те же поля `AbilityConfig`/`Cooldowns`, по которым решают `ShieldCast`
@@ -206,7 +216,7 @@ const NEUTRAL: Frame = {};
  * Двое героев на одной линии в центре арены: `p1` слева, `p2` справа, между
  * ними четыре клетки — снаряд покрывает их за десяток тиков.
  */
-function arena(gap = 4, scene: SceneDef = SCENE): Arena {
+function arena(gap = 4, scene: SceneDef = DUEL): Arena {
   const left = (24 - gap / 2) * FIXED_ONE;
   const right = (24 + gap / 2) * FIXED_ONE;
   const built = buildMatchWorld({
@@ -308,7 +318,7 @@ function ffa(
   );
   const players = points.map((_, index) => `p${index + 1}`);
   const built = buildMatchWorld({
-    scene: SCENE,
+    scene: DUEL,
     seed: MATCH.seed,
     players,
     initial: points.map(([cx, cy], index) => ({
@@ -929,7 +939,7 @@ describe('захват снаряда: удержание, переброс и �
     expect(slowed).toBe(true);
   });
 
-  it('невыброшенный за 2 с снаряд взрывается на держателе и снимает 250 hp', () => {
+  it('невыброшенный за 2 с снаряд взрывается на держателе и снимает 500 hp', () => {
     const a = arena(8);
     chargeA(a, 0);
     const shot = fireballs(a.state)[0]!;
@@ -1372,7 +1382,7 @@ describe('числа способностей: ретюн виден в дифф
     expect(THROW_WINDOW_TICKS).toBe(120);
   });
 
-  it('заряд: 1 с до двойного размера, 300 мс передержки, урон 100/250', () => {
+  it('заряд: 1 с до двойного размера, 300 мс передержки, урон 200/500', () => {
     // Окно заряда и передержка — длительность фазы `charge` (ABIL-4): тик
     // перехода в передержку идёт СВЕРХ окна, отсюда единица.
     const phases = abilityDef('fireball').phases as readonly Record<string, unknown>[];
@@ -1682,8 +1692,8 @@ describe('пределы фиксированной точки: ретюн за 
     expect(scaleSq).toBe(4 * FIXED_ONE);
 
     const product = HIT_DAMAGE * scaleSq; // = mul(fromInt(hitDamage), scaleSq)
-    expect(product).toBe(26214400);
-    expect(fixed.toInt(product)).toBe(4 * HIT_DAMAGE); // те же 400, что пиннит тест роста урона
+    expect(product).toBe(52428800);
+    expect(fixed.toInt(product)).toBe(4 * HIT_DAMAGE); // те же 800, что пиннит тест роста урона
 
     // Предел ретюна: при нынешнем `chargeMaxScale` — 8191 урона, и ни единицей
     // больше. 8192 завернулось бы в отрицательное число, то есть максимальный
@@ -2058,23 +2068,23 @@ describe('заряд каста: рост, выстрел и передержк�
     };
   }
 
-  it('размер и урон растут по заряду: 0 → 100, половина → 225, максимум → 400', () => {
+  it('размер и урон растут по заряду: 0 → 200, половина → 450, максимум → 800', () => {
     // Тик нажатия окном заряда не считается: самый быстрый тап (отпускание на
     // следующем тике) обязан дать ОБЫЧНЫЙ шар, а не «чуть заряженный».
     expect(shotAfter(0)).toEqual({ damage: HIT_DAMAGE, scale: FIXED_ONE, heavy: false });
     // Половина заряда — полуторный размер и ровно его квадрат в уроне.
     expect(shotAfter(CHARGE_TICKS / 2)).toEqual({
-      damage: 225,
+      damage: 450,
       scale: CHARGE_HEAVY_SCALE,
       heavy: true,
     });
     expect(shotAfter(CHARGE_TICKS)).toEqual({
-      damage: 400,
+      damage: 800,
       scale: CHARGE_MAX_SCALE,
       heavy: true,
     });
     // Дальше максимума размер не растёт — растёт только риск передержки.
-    expect(shotAfter(CHARGE_TICKS + CHARGE_GRACE_TICKS - 1).damage).toBe(400);
+    expect(shotAfter(CHARGE_TICKS + CHARGE_GRACE_TICKS - 1).damage).toBe(800);
   });
 
   it('одиночный клик стреляет ТЕМ ЖЕ тиком и минимальным шаром', () => {
@@ -2204,8 +2214,8 @@ describe('заряд каста: рост, выстрел и передержк�
       ],
     };
     const retuned = {
-      ...SCENE,
-      systems: [...SCENE.systems!, stunner],
+      ...DUEL,
+      systems: [...DUEL.systems!, stunner],
     } as unknown as SceneDef;
 
     const a = arena(8, retuned);
@@ -2324,7 +2334,7 @@ describe('заряд каста: рост, выстрел и передержк�
     const p2 = a.heroes[1]!;
     chargeA(a, CHARGE_TICKS);
     const shot = fireballs(a.state)[0]!;
-    expect(projectile(a.state, shot, 'damage')).toBe(400);
+    expect(projectile(a.state, shot, 'damage')).toBe(800);
 
     for (let i = 0; i < 200 && x(a.state, p2) - x(a.state, shot) > 2 * FIXED_ONE; i++) {
       a.step(NEUTRAL);
@@ -2332,17 +2342,17 @@ describe('заряд каста: рост, выстрел и передержк�
     a.step(NEUTRAL, { buttons: CAPTURE, aimDir: AIM_WEST });
     a.step(NEUTRAL, { buttons: CONFIRM, aimDir: AIM_WEST });
     expect(coreWorld.hasComponent(a.state.world, shot, 'Held')).toBe(true);
-    // Захват сохраняет заряд: держать в руках 400 — не то же самое, что 100.
-    expect(projectile(a.state, shot, 'damage')).toBe(400);
+    // Захват сохраняет заряд: держать в руках 800 — не то же самое, что 200.
+    expect(projectile(a.state, shot, 'damage')).toBe(800);
 
     // Переброс на запад: владельцем становится бросивший.
     a.step(NEUTRAL, { buttons: CAST, aimDir: AIM_WEST });
     expect(coreWorld.getField(a.state.world, shot, 'Owner', 'slot')).toBe(1);
-    expect(projectile(a.state, shot, 'damage')).toBe(400);
+    expect(projectile(a.state, shot, 'damage')).toBe(800);
 
     for (let i = 0; i < 60 && fireballs(a.state).length > 0; i++) a.step(NEUTRAL);
     // Прилетело обратно в стрелка — его же зарядом.
-    expect(hp(a.state, p1)).toBe(1000 - 400);
+    expect(hp(a.state, p1)).toBe(1000 - 800);
     // А бросивший цел: снаряд после переброса принадлежит ЕМУ.
     expect(hp(a.state, p2)).toBe(1000);
   });
@@ -2649,7 +2659,7 @@ describe('щит: рикошет снаряда, смена владельца �
     expect(coreWorld.hasComponent(a.state.world, p1, 'Holding')).toBe(true);
   });
 
-  it('тяжёлый шар возвращается стрелку целиком: 400 урона и тот же размер', () => {
+  it('тяжёлый шар возвращается стрелку целиком: 800 урона и тот же размер', () => {
     const a = ffa([20, 28]);
     const p1 = a.heroes[0]!;
     const p2 = a.heroes[1]!;
@@ -2661,7 +2671,7 @@ describe('щит: рикошет снаряда, смена владельца �
     a.step([NEUTRAL, { buttons: SHIELD }]);
     a.step([{ buttons: CONFIRM }]);
     const shot = fireballs(a.state)[0]!;
-    expect(projectile(a.state, shot, 'damage')).toBe(400);
+    expect(projectile(a.state, shot, 'damage')).toBe(800);
     expect(coreWorld.hasTag(a.state.world, shot, 'HeavyFireball')).toBe(true);
 
     for (let i = 0; i < 40 && fireballs(a.state).length > 0; i++) {
@@ -2670,11 +2680,11 @@ describe('щит: рикошет снаряда, смена владельца �
     }
     expect(owner(a.state, shot)).toBe(1);
     // Рикошет не трогает ни урон, ни размер — как и захват с перебросом.
-    expect(projectile(a.state, shot, 'damage')).toBe(400);
+    expect(projectile(a.state, shot, 'damage')).toBe(800);
     expect(projectile(a.state, shot, 'scale')).toBe(CHARGE_MAX_SCALE);
 
     for (let i = 0; i < 40 && fireballs(a.state).length > 0; i++) a.step();
-    expect(hp(a.state, p1)).toBe(1000 - 400);
+    expect(hp(a.state, p1)).toBe(1000 - 800);
     expect(hp(a.state, p2)).toBe(1000);
   });
 
@@ -3561,8 +3571,8 @@ describe('возрождение героя: смерть больше не те
    */
   function withUltStart(remaining: number): SceneDef {
     return {
-      ...SCENE,
-      prefabs: SCENE.prefabs!.map((prefab) =>
+      ...DUEL,
+      prefabs: DUEL.prefabs!.map((prefab) =>
         prefab.name === 'SlotRewind'
           ? {
               ...prefab,
@@ -3646,8 +3656,8 @@ describe('возрождение героя: смерть больше не те
     const LONG = 900;
     expect(LONG).toBeGreaterThan(RESPAWN_TICKS);
     const retuned = {
-      ...SCENE,
-      abilities: (SCENE as unknown as SceneDefinitions).abilities!.map((entry) =>
+      ...DUEL,
+      abilities: (DUEL as unknown as SceneDefinitions).abilities!.map((entry) =>
         entry.id === 'shield' ? { ...entry, cooldownTicks: LONG } : entry,
       ),
     } as unknown as SceneDef;
