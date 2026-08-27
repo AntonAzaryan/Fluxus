@@ -28,16 +28,19 @@
  * Не повторяет ни одного утверждения сьюта: всё, что здесь есть, — поднятие
  * контейнера и перевод вызовов границы в его канал.
  *
- * Своё утверждение здесь ровно одно — закрепление сертификата (DSK-8), и живёт
- * оно здесь по необходимости: общий сьют границы выразить его не может. Проверке
- * нужна НАСТОЯЩАЯ проверка сертификата, которую контейнер дополняет; у
+ * Свои утверждения здесь ровно про одно — про доверие сертификату (DSK-8), и
+ * живут они здесь по необходимости: общий сьют границы выразить их не может.
+ * Проверке нужна НАСТОЯЩАЯ проверка сертификата, которую контейнер дополняет; у
  * реализации на чистом Node её нет вовсе — там некому отвергнуть self-signed
- * сертификат и, значит, нечего дополнять. Вне гейта эта проверка тем же самым
- * прогоном, что и сьют (DSK-6).
+ * сертификат и, значит, нечего дополнять. Порядок оснований, книга доверия и
+ * схлопывание вопросов проверены в гейте на чистом Node (`test/trust.test.ts`);
+ * здесь проверяется то, чего тот прогон не видит, — что решение доезжает до
+ * настоящего Chromium и открывает (или не открывает) настоящий канал. Вопрос
+ * человеку заменён автоответом (`--trust-answer`): диалог предъявлять некому.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -55,6 +58,7 @@ import type {
   BridgeSession,
   DesktopBridge,
 } from '../../src/bridge/types.js';
+import type { TrustQuestion } from '../../src/host/index.js';
 import {
   CONTENT,
   SERVICE,
@@ -424,24 +428,13 @@ async function open(kase: ContractCase): Promise<ContractSession> {
 describeContainerContract('electron-контейнер', open);
 
 /**
- * Имя шифрованного сервиса — СВОЁ у каждого из двух случаев и отличное от имени
- * сьюта (`SERVICE`).
- *
- * Каталог состояния сервисов у контейнера один на все прогоны
- * (`userData/services`), а файлы отвязываемого сервиса именуются его
- * идентификатором (DSK-7). Общее имя означало бы, что случай видит адресный и
- * пин-файл, оставленные ЧУЖИМ прогоном — оборванным или соседним, — и «канал не
- * открылся» могло бы значить «подключились не туда».
- */
-const pinningService = (pinned: boolean): string => (pinned ? 'pinned-tls' : 'unpinned-tls');
-
-/**
  * Профиль с ШИФРОВАННЫМ объявленным сервисом (DSK-8). Закрепление обещает та же
  * подстановка, что и адрес: объявление, подставляющее `{pinFile}`, — и есть
- * признак (решение D2). Сервис отвязываемый: файлы, которыми он называет свой
- * адрес и своё закрепление, лежат в каталоге состояния (решение D1).
+ * признак (решение D2 change'а `service-cert-pinning`). Сервис отвязываемый:
+ * файлы, которыми он называет свой адрес и своё закрепление, лежат в каталоге
+ * состояния.
  */
-function pinningManifest(bundle: string, port: number, pinned: boolean): string {
+function pinningManifest(bundle: string, id: string, port: number, pinned: boolean): string {
   return JSON.stringify({
     id: 'contract-pinning',
     title: 'Fluxus Contract TLS',
@@ -450,7 +443,7 @@ function pinningManifest(bundle: string, port: number, pinned: boolean): string 
     capabilities: ['service'],
     services: [
       {
-        id: pinningService(pinned),
+        id,
         script: TLS_SERVICE_SCRIPT,
         args: [
           '--port',
@@ -474,28 +467,84 @@ interface SocketAttempt {
 }
 
 /**
+ * Случай шифрованного сервиса.
+ *
+ * Имя сервиса — СВОЁ у каждого случая и отличное от имени сьюта (`SERVICE`):
+ * каталог состояния сервисов у контейнера один на все прогоны
+ * (`userData/services`), а файлы отвязываемого сервиса именуются его
+ * идентификатором (DSK-7). Общее имя означало бы, что случай видит адресный и
+ * пин-файл, оставленные ЧУЖИМ прогоном — оборванным или соседним, — и «канал не
+ * открылся» могло бы значить «подключились не туда».
+ */
+interface TlsCase {
+  readonly id: string;
+  /** Пишет ли сервис закрепление своего сертификата (DSK-8). */
+  readonly pinned: boolean;
+  /**
+   * Ответ ВМЕСТО человека: диалог предъявлять в прогоне некому (DSK-6). Сам
+   * вопрос при этом задаётся настоящий — тот же обработчик `certificate-error`.
+   */
+  readonly trust: 'yes' | 'no';
+  /** Чем заполнена книга доверия ДО запуска: так выглядит прежняя сессия. */
+  readonly book?: (origin: string) => Record<string, string>;
+}
+
+/** Шифрованный сервис под контейнером и то, что о нём спрашивает случай. */
+interface TlsRun {
+  /** Состояние поднятого сервиса: адрес в нём — тот, что он написал сам (DSK-7). */
+  readonly service: BridgeServiceState;
+  /** Origin соединения — ключ книги доверия (решение D1). */
+  readonly origin: string;
+  /** Открыть канал ИЗ СТРАНИЦЫ по адресу сервиса. */
+  socket(): Promise<SocketAttempt>;
+  /** Вопросы доверия, заданные контейнером за прогон (DSK-8). */
+  asked(): Promise<readonly TrustQuestion[]>;
+  /** Книга доверия контейнера, прочитанная с диска. */
+  book(): Promise<Record<string, string>>;
+}
+
+/**
  * Поднимает контейнер на профиле с шифрованным сервисом, даёт странице открыть к
  * нему канал и уносит за собой всё: сервис отвязываемый и сессию переживает
  * намеренно (DSK-7), поэтому останавливается ЯВНО.
+ *
+ * Книга доверия у случая СВОЯ (`--trust-file` в рабочем каталоге), а не общая с
+ * контейнером человека: origin складывается из порта, порт случаю выдаёт ОС, и
+ * повторно выданный номер означал бы решение, оставленное прошлым прогоном, —
+ * «незнакомый сертификат» превращался бы в «смену отпечатка» через раз.
  */
-async function withPinnedService(
-  pinned: boolean,
-  body: (attempt: SocketAttempt, service: BridgeServiceState) => void,
-): Promise<void> {
-  const id = pinningService(pinned);
+async function withTlsService(kase: TlsCase, body: (run: TlsRun) => Promise<void>): Promise<void> {
   const workspace = await makeTree();
   const bundleDirectory = join(workspace, 'bundle');
   await mkdir(bundleDirectory, { recursive: true });
   await putFile(bundleDirectory, 'index.html', '<!doctype html><title>pinning</title>');
+  const port = await freePort();
+  const origin = `wss://127.0.0.1:${String(port)}`;
   const manifest = join(workspace, 'pinning.app.json');
-  await writeFile(manifest, pinningManifest(bundleDirectory, await freePort(), pinned));
+  await writeFile(manifest, pinningManifest(bundleDirectory, kase.id, port, kase.pinned));
+  const trustFile = join(workspace, 'trust.json');
+  if (kase.book !== undefined) await writeFile(trustFile, JSON.stringify(kase.book(origin), null, 2));
 
   const log: string[] = [];
-  const child = spawn(BINARY, [ENTRY, ...launchFlags(), '--app', manifest, '--contract'], {
-    cwd: PACKAGE,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
-  });
+  const child = spawn(
+    BINARY,
+    [
+      ENTRY,
+      ...launchFlags(),
+      '--app',
+      manifest,
+      '--contract',
+      '--trust-file',
+      trustFile,
+      '--trust-answer',
+      kase.trust,
+    ],
+    {
+      cwd: PACKAGE,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
+    },
+  );
   let markReady: () => void = () => undefined;
   const started = new Promise<void>((done, fail) => {
     markReady = done;
@@ -510,11 +559,19 @@ async function withPinnedService(
   await started;
 
   try {
-    const service = (await channel.call('startService', [id])) as BridgeServiceState;
-    // Адрес пишет сам процесс (DSK-7): контейнер отдал странице ту строку,
-    // которую нашёл в его адресном файле.
-    const attempt = (await channel.send('socket', { url: service.address })) as SocketAttempt;
-    body(attempt, service);
+    const service = (await channel.call('startService', [kase.id])) as BridgeServiceState;
+    await body({
+      service,
+      origin,
+      // Адрес пишет сам процесс (DSK-7): контейнер отдал странице ту строку,
+      // которую нашёл в его адресном файле.
+      socket: async () => (await channel.send('socket', { url: service.address })) as SocketAttempt,
+      asked: async () => (await channel.send('trust')) as readonly TrustQuestion[],
+      book: async () => {
+        const written = await readFile(trustFile, 'utf8').catch(() => '');
+        return written === '' ? {} : (JSON.parse(written) as Record<string, string>);
+      },
+    });
   } finally {
     const ended = new Promise<void>((done) => {
       child.once('close', () => {
@@ -525,7 +582,7 @@ async function withPinnedService(
     // находку случая. Осиротеть при этом некому больше, чем одному процессу
     // пустышки: имя сервиса своё у каждого случая, и следующий прогон найдёт
     // его же, а не примет чужие файлы за свои.
-    await channel.call('stopService', [id]).catch(() => undefined);
+    await channel.call('stopService', [kase.id]).catch(() => undefined);
     await channel.close();
     await ended;
     await dropTree(workspace);
@@ -535,9 +592,9 @@ async function withPinnedService(
 /**
  * Сервис вправду поднят и вправду шифрованный.
  *
- * Проверяется в ОБОИХ случаях, и в отрицательном это не педантизм: «канал не
+ * Проверяется в КАЖДОМ случае, и в отрицательных это не педантизм: «канал не
  * открылся» само по себе выполнимо и тем, что подключаться было не к чему —
- * пустышка не поднялась, — а такой случай не сказал бы о закреплении ничего.
+ * пустышка не поднялась, — а такой случай не сказал бы о доверии ничего.
  */
 function servingEncrypted(service: BridgeServiceState): void {
   expect(service.running, JSON.stringify(service)).toBe(true);
@@ -545,26 +602,93 @@ function servingEncrypted(service: BridgeServiceState): void {
 }
 
 describe('electron-контейнер: закрепление сертификата объявленного сервиса (DSK-8)', () => {
-  it('страница открывает шифрованный канал к сервису с закреплением', async () => {
-    await withPinnedService(true, (attempt, service) => {
-      servingEncrypted(service);
+  it('страница открывает шифрованный канал к сервису с закреплением, без вопросов', async () => {
+    await withTlsService({ id: 'pinned-tls', pinned: true, trust: 'no' }, async (run) => {
+      servingEncrypted(run.service);
       // Штатная проверка платформы этот сертификат отвергает — цепочки у него
       // нет, — и открыть канал позволяет ровно одно: его отпечаток равен
       // закреплению, которое сервис написал сам.
+      const attempt = await run.socket();
       expect(attempt.error ?? '').toBe('');
       expect(attempt.open).toBe(true);
+      // Порядок оснований (решение D4): закрепления спрашиваются ПЕРВЫМИ, и
+      // локальный агент до диалога не доходит никогда — вопрос человеку про
+      // него был бы регрессом MGR-5 «без вопросов человеку». Автоответ здесь
+      // «отклонить» ровно затем, чтобы этот порядок был виден: дойди дело до
+      // вопроса — канал бы не открылся.
+      expect(await run.asked()).toEqual([]);
     });
   }, 120_000);
 
-  it('тот же сервис без закрепления — канал отвергнут, как в браузере', async () => {
-    await withPinnedService(false, (attempt, service) => {
+  it('тот же сервис без закрепления — вопрос человеку, и отказ отвергает канал', async () => {
+    await withTlsService({ id: 'refused-tls', pinned: false, trust: 'no' }, async (run) => {
       // Сервис тот же и поднят так же — разница ровно одна: пин-файла он не
       // писал, потому что его объявление не подставляет `{pinFile}`.
-      servingEncrypted(service);
-      // «Сервис без файла закрепления SHALL вести себя как сегодня»: сертификат
-      // такой же self-signed, а принять его не на чем — закрепление одного
-      // сервиса не ослабляет проверку ни для кого другого.
-      expect(attempt.open).toBe(false);
+      servingEncrypted(run.service);
+      // Сценарий «Чужой self-signed сертификат»: путь для него — тот же диалог
+      // доверия, а отказ в диалоге отвергает соединение так же, как браузер без
+      // контейнера.
+      expect((await run.socket()).open).toBe(false);
+      const asked = await run.asked();
+      expect(asked.length).toBeGreaterThanOrEqual(1);
+      expect(asked[0]).toMatchObject({ origin: run.origin, known: '' });
+      // «Отказ в книгу не записывается»: книги нет вовсе (решение D5).
+      expect(await run.book()).toEqual({});
+      // «...и следующая попытка спрашивает заново».
+      expect((await run.socket()).open).toBe(false);
+      expect((await run.asked()).length).toBeGreaterThan(asked.length);
     });
+  }, 120_000);
+});
+
+describe('electron-контейнер: доверие по решению человека (DSK-8, TOFU)', () => {
+  it('согласие открывает канал, пишет книгу, и повтор вопросов не задаёт', async () => {
+    await withTlsService({ id: 'tofu-tls', pinned: false, trust: 'yes' }, async (run) => {
+      servingEncrypted(run.service);
+      // Сценарий «Незнакомый сертификат — вопрос человеку»: согласие открывает
+      // соединение и записывает отпечаток в книгу.
+      const attempt = await run.socket();
+      expect(attempt.error ?? '').toBe('');
+      expect(attempt.open).toBe(true);
+      const asked = await run.asked();
+      expect(asked).toHaveLength(1);
+      expect(asked[0]!.origin).toBe(run.origin);
+      expect(asked[0]!.known).toBe('');
+      expect(await run.book()).toEqual({ [run.origin]: asked[0]!.fingerprint });
+
+      // Сценарий «Известный origin молчит»: второго вопроса нет. Ответить на
+      // повтор вправе и сам Chromium (принятую ошибку сертификата он помнит), и
+      // книга — важно, что человека не тревожат ни в том, ни в другом случае.
+      expect((await run.socket()).open).toBe(true);
+      expect(await run.asked()).toHaveLength(1);
+    });
+  }, 120_000);
+
+  it('смена отпечатка известного origin предъявляется как СМЕНА', async () => {
+    const previous = 'a'.repeat(64);
+    await withTlsService(
+      {
+        id: 'tofu-changed-tls',
+        pinned: false,
+        trust: 'yes',
+        // Так выглядит прежняя сессия: origin книге знаком, а отпечаток за ним
+        // записан ДРУГОЙ — пустышка рождает свой сертификат на каждом запуске.
+        book: (origin) => ({ [origin]: previous }),
+      },
+      async (run) => {
+        servingEncrypted(run.service);
+        const attempt = await run.socket();
+        expect(attempt.open).toBe(true);
+        // Сценарий «Отпечаток известного origin изменился»: молчаливого
+        // принятия нет — вопрос задан, и в нём названы ОБА отпечатка.
+        const asked = await run.asked();
+        expect(asked).toHaveLength(1);
+        expect(asked[0]!.origin).toBe(run.origin);
+        expect(asked[0]!.known).toBe(previous);
+        expect(asked[0]!.fingerprint).not.toBe(previous);
+        // «...новым явным согласием, которое переписывает запись книги».
+        expect(await run.book()).toEqual({ [run.origin]: asked[0]!.fingerprint });
+      },
+    );
   }, 120_000);
 });

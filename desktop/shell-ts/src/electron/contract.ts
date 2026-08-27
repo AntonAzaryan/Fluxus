@@ -33,7 +33,7 @@
 import type { BrowserWindow } from 'electron';
 import { app } from 'electron';
 import { createInterface } from 'node:readline';
-import type { OpenedApp } from '../host/index.js';
+import type { OpenedApp, TrustQuestion } from '../host/index.js';
 
 /** Строка ответа в stdout. Тем же приёмом отвечает smoke-режим. */
 const MARK = 'CONTRACT ';
@@ -188,8 +188,19 @@ function inPage(window: BrowserWindow, call: string, ...args: readonly unknown[]
   return window.webContents.executeJavaScript(`globalThis.__contract.${call}(${list})`) as Promise<unknown>;
 }
 
-async function answer(window: BrowserWindow, opened: OpenedApp, request: ContractRequest): Promise<unknown> {
+async function answer(
+  window: BrowserWindow,
+  opened: OpenedApp,
+  trustAsked: readonly TrustQuestion[],
+  request: ContractRequest,
+): Promise<unknown> {
   switch (request.op) {
+    // Вопросы доверия, заданные контейнером за прогон (DSK-8). Спрашивает их
+    // настоящий обработчик `certificate-error`, а отвечает вместо человека
+    // автоответ (`--trust-answer`): случаю сьюта нужно видеть, о чём спросили —
+    // о незнакомом сертификате или о СМЕНЕ отпечатка известного origin.
+    case 'trust':
+      return trustAsked.map((question) => ({ ...question }));
     case 'surface':
       return await inPage(window, 'surface');
     case 'call':
@@ -223,7 +234,11 @@ async function answer(window: BrowserWindow, opened: OpenedApp, request: Contrac
  * Поднимает канал прогона и держит процесс, пока прогон не скажет `bye`.
  * Возвращает промис — вызывающий (`main.ts`) на нём и стоит.
  */
-export async function serveContract(window: BrowserWindow, opened: OpenedApp): Promise<void> {
+export async function serveContract(
+  window: BrowserWindow,
+  opened: OpenedApp,
+  trustAsked: readonly TrustQuestion[],
+): Promise<void> {
   await window.webContents.executeJavaScript(HELPER);
   const reply = (value: unknown): void => {
     process.stdout.write(`${MARK}${JSON.stringify(value)}\n`);
@@ -235,7 +250,7 @@ export async function serveContract(window: BrowserWindow, opened: OpenedApp): P
 
     const run = async (request: ContractRequest): Promise<void> => {
       try {
-        reply({ id: request.id, ok: true, value: await answer(window, opened, request) });
+        reply({ id: request.id, ok: true, value: await answer(window, opened, trustAsked, request) });
       } catch (error) {
         reply({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) });
       }

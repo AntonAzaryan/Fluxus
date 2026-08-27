@@ -39,13 +39,17 @@ import type {
 } from '../bridge/types.js';
 import {
   certificateFingerprint,
+  createCertificateTrust,
   loadAppProfile,
   openApp,
+  originOf,
   type HostRoot,
   type OpenedApp,
+  type TrustQuestion,
 } from '../host/index.js';
 import { insideRoot } from '../host/root.js';
 import { CHANNELS } from './channels.js';
+import { createTrustDialog, trustBookFrom } from './trust.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -137,6 +141,14 @@ function manifestFrom(argv: readonly string[]): string {
   }
   throw new Error('контейнер запускается с профилем: `--app <манифест.app.json>` (DSK-5)');
 }
+
+/**
+ * Вопросы доверия, заданные под автоответом: их читает случай контрактного
+ * сьюта (DSK-8, сценарии «Незнакомый сертификат» и «Отпечаток известного origin
+ * изменился»). У обычного запуска этот список пуст и не растёт — спрашивают там
+ * человека.
+ */
+const trustAsked: TrustQuestion[] = [];
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -245,42 +257,72 @@ async function openSession(profile: AppProfile): Promise<Session> {
 
   protocol.handle(SCHEME, serveWith(opened));
 
+  // Диалог доверия — клей: окно и две кнопки (DSK-8, решение D2). Что спросить
+  // и когда — решает хост-слой ниже.
+  const asking = createTrustDialog({ window: () => window, argv: process.argv, asked: trustAsked });
+
+  const trust = createCertificateTrust({
+    file: trustBookFrom(process.argv),
+    // Закрепления читаются в момент вопроса: сервис мог написать своё уже после
+    // открытия окна, а переживший сессию — задолго до него (DSK-7).
+    pins: () => opened.services?.certificatePins() ?? [],
+    ask: asking.ask,
+    report: (text) => {
+      process.stderr.write(`[desktop-shell] ${text}\n`);
+    },
+  });
+
   /**
-   * Сертификат, отвергнутый штатной проверкой платформы (DSK-8, решение D6).
+   * Решение о сертификате, отвергнутом штатной проверкой платформы (DSK-8).
    *
-   * Принимается РОВНО один случай: отпечаток предъявленного сертификата равен
-   * закреплению объявленного сервиса зафиксированного профиля — тому, которое
-   * сервис написал сам (`certificatePins`). Всё прочее остаётся отвергнутым:
-   * доверие расширяется на закреплённые сертификаты и ни на что сверх них, а
-   * глобального ослабления проверки (`--ignore-certificate-errors`,
-   * `setCertificateVerifyProc`) в контейнере нет и быть не должно.
+   * Оснований принять ровно два, и порядок их фиксирован (решение D4):
+   * закрепление объявленного сервиса зафиксированного профиля — то, которое
+   * сервис написал сам, — и явное решение человека, пережившее сессию в книге
+   * доверия. Всё прочее остаётся отвергнутым, а глобального ослабления проверки
+   * (`--ignore-certificate-errors`, `setCertificateVerifyProc`) в контейнере нет
+   * и быть не должно.
    *
    * `setCertificateVerifyProc` отвергнут именно поэтому: он подменяет проверку
-   * целиком, а нужно ДОПОЛНИТЬ её одним основанием доверия.
+   * целиком, а нужно ДОПОЛНИТЬ её основаниями доверия.
    *
-   * Счёт отпечатка живёт в `src/host/` на чистом Node и проверен в гейте: клей
-   * вне гейта (DSK-6) и потому не решает здесь ничего сам.
+   * Порядок оснований, книга и схлопывание вопросов живут в `src/host/` на
+   * чистом Node и проверены в гейте: клей вне гейта (DSK-6) и потому не решает
+   * здесь ничего сам — он считает отпечаток, берёт origin из URL события и
+   * предъявляет вопрос.
+   *
+   * Origin берётся из URL СОБЫТИЯ, то есть из соединения, которое открыла
+   * страница: запрет DSK-7 «контейнер адрес не разбирает» касается адресной
+   * строки сервиса и этим не задевается.
    */
-  const pinnedCertificate = (
+  const answerCertificate = (
     event: ElectronEvent,
     _contents: WebContents,
-    _url: string,
+    url: string,
     _error: string,
     certificate: Certificate,
     callback: (isTrusted: boolean) => void,
   ): void => {
-    const shown = certificateFingerprint(certificate.data);
-    // Закрепления читаются в момент вопроса: сервис мог написать своё уже после
-    // открытия окна, а переживший сессию — задолго до него (DSK-7).
-    const pinned = shown !== '' && (opened.services?.certificatePins() ?? []).includes(shown);
-    if (!pinned) {
-      callback(false);
-      return;
-    }
+    // `preventDefault` — СИНХРОННО и всегда, до всякого решения: Electron
+    // смотрит на него прямо в момент события и, не увидев, отвергает сертификат
+    // сам. Ответ после этого наш — и обязан прийти ровно один раз.
     event.preventDefault();
-    callback(true);
+    let answered = false;
+    const answer = (trusted: boolean): void => {
+      if (answered) return;
+      answered = true;
+      callback(trusted);
+    };
+    void trust.decideCertificate(originOf(url), certificateFingerprint(certificate.data)).then(
+      answer,
+      (error: unknown) => {
+        process.stderr.write(
+          `[desktop-shell] доверие: решение сорвалось (${error instanceof Error ? error.message : String(error)})\n`,
+        );
+        answer(false);
+      },
+    );
   };
-  app.on('certificate-error', pinnedCertificate);
+  app.on('certificate-error', answerCertificate);
 
   window = new BrowserWindow({
     width: profile.window.width,
@@ -406,12 +448,16 @@ async function openSession(profile: AppProfile): Promise<Session> {
 
   target.on('closed', () => {
     window = null;
+    // Вопрос доверия, оставшийся открытым, отвечается ОТКАЗОМ (DSK-8, решение
+    // D2): окна больше нет, человек ответа не даст, а соединение, севшее его
+    // ждать, висело бы вечно.
+    asking.closeAll();
     // Раздача, проверка сертификата и ручки IPC — регистрации процесса, а не
     // окна, и снимаются здесь же: следующее открытие (macOS, клик по иконке)
-    // регистрирует их заново. Оставленный обработчик закрепления держал бы
-    // доверие сессии, которой уже нет (DSK-8).
+    // регистрирует их заново. Оставленный обработчик держал бы доверие сессии,
+    // которой уже нет (DSK-8).
     protocol.unhandle(SCHEME);
-    app.off('certificate-error', pinnedCertificate);
+    app.off('certificate-error', answerCertificate);
     for (const channel of Object.values(CHANNELS)) {
       ipcMain.removeHandler(channel);
       ipcMain.removeAllListeners(channel);
@@ -453,7 +499,7 @@ async function start(): Promise<void> {
   // и сам контейнер.
   if (process.argv.includes('--contract')) {
     const { serveContract } = await import('./contract.js');
-    await serveContract(session.target, session.opened);
+    await serveContract(session.target, session.opened, trustAsked);
     return;
   }
 
