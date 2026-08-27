@@ -36,17 +36,21 @@ export function createMasks(capacity: number, componentCount: number): Component
   };
 }
 
-/** Мягкая диагностика (FP-4): вызывающий код зовёт её безусловно, проверка — только под DEBUG. */
+/**
+ * Мягкая диагностика (FP-4): вызывающий код зовёт её безусловно, проверка —
+ * только под DEBUG. Текст находки строится ТОЛЬКО на ветке отказа: проверка
+ * стоит на каждом чтении поля каждой сущности, и безусловная сборка строки
+ * была строковой аллокацией на каждое чтение мира в debug-сборке — профиль
+ * npc-stress показывал её заметной долей self-time чтения и GC.
+ */
 function checkBounds(masks: ComponentMasks, index: number, componentId?: number): void {
   if (!DEBUG) return;
-  assert(
-    index >= 0 && index < masks.capacity,
-    `entity index ${index} вне capacity ${masks.capacity}`,
-    'MASK_INDEX_OUT_OF_RANGE',
-  );
-  if (componentId !== undefined) {
+  if (!(index >= 0 && index < masks.capacity)) {
+    assert(false, `entity index ${index} вне capacity ${masks.capacity}`, 'MASK_INDEX_OUT_OF_RANGE');
+  }
+  if (componentId !== undefined && !(componentId >= 0 && componentId < masks.wordsPerEntity * 32)) {
     assert(
-      componentId >= 0 && componentId < masks.wordsPerEntity * 32,
+      false,
       `componentId ${componentId} вне диапазона (wordsPerEntity=${masks.wordsPerEntity})`,
       'MASK_COMPONENT_OUT_OF_RANGE',
     );
@@ -69,11 +73,13 @@ export function clearComponent(masks: ComponentMasks, index: number, componentId
   masks.words[slot] = ((masks.words[slot]!) & ~(1 << bit)) >>> 0;
 }
 
+/** Слово и бит считаются на месте, без пары `bitPos`: проверка владения стоит
+ * на каждом чтении поля (ECS-7), и объект на вызов здесь был бы аллокацией,
+ * пропорциональной числу чтений за тик. */
 export function hasComponent(masks: ComponentMasks, index: number, componentId: number): boolean {
   checkBounds(masks, index, componentId);
-  const { word, bit } = bitPos(componentId);
-  const slot = index * masks.wordsPerEntity + word;
-  return (((masks.words[slot]!) >>> bit) & 1) !== 0;
+  const slot = index * masks.wordsPerEntity + (componentId >>> 5);
+  return (((masks.words[slot]!) >>> (componentId & 31)) & 1) !== 0;
 }
 
 export function clearEntity(masks: ComponentMasks, index: number): void {
