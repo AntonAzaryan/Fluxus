@@ -26,7 +26,11 @@ export interface FogRenderConfig {
   readonly strength: number;
   /** Тон тумана — во что затемняется кадр. */
   readonly color: string;
-  /** Ширина градиента края видимой области, мировые единицы (FOW-7). */
+  /**
+   * Ширина градиента края видимой области, мировые единицы (FOW-7). Той же
+   * шириной гаснет свет перед фронтом тени укрытия — кромка видимого одна, и
+   * второго числа на неё нет намеренно (`fog/mask.ts`).
+   */
   readonly edgeWidth: number;
   /** Коэффициент консервативности reveal-радиуса, (0, 1] (FOW-9). */
   readonly conservatism: number;
@@ -42,13 +46,13 @@ export interface FogRenderConfig {
  * политика картинки, которую дизайнер правит данными, а не этим файлом.
  */
 export const DEFAULT_FOG_CONFIG: FogRenderConfig = Object.freeze({
-  dissolveSeconds: 0.35,
-  strength: 0.6,
+  dissolveSeconds: 0.25,
+  strength: 0.5,
   color: '#0e1420',
-  edgeWidth: 1.5,
+  edgeWidth: 2.5,
   conservatism: 0.92,
   resolution: 4,
-  fadeSeconds: 0.4,
+  fadeSeconds: 0.15,
 });
 
 /** Секция документа поверх умолчаний: отсутствующее поле — умолчание (FOW-10). */

@@ -31,3 +31,23 @@ export type { HostServices, HostServicesOptions } from './service.js';
 
 export { createStaticServer, mimeOf, requestPath } from './serve.js';
 export type { ServeRefusal, ServeResult, ServedFile, StaticServer, StaticServerOptions } from './serve.js';
+
+export {
+  createCertificateTrust,
+  createTrustAsk,
+  openTrustBook,
+  originOf,
+  trustBookPath,
+  trustPrompt,
+} from './trust.js';
+export type {
+  CertificateTrust,
+  CertificateTrustOptions,
+  TrustAsk,
+  TrustAskOptions,
+  TrustBook,
+  TrustDialog,
+  TrustDialogShow,
+  TrustPrompt,
+  TrustQuestion,
+} from './trust.js';

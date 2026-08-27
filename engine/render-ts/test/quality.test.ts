@@ -406,6 +406,19 @@ describe('валидация документа пресета против ре
 describe('fog.maskResolution — потолок над сценным значением (FOW-10, QUAL-1, design D3)', () => {
   const STATS = { visionRadius: 'vision', team: 'team' } as const;
 
+  /**
+   * Ширина кромки стенда (FOW-10) — часть стенда, а не проверяемое поведение.
+   * Стенд — арена 8×8 с радиусом обзора 3, а умолчание `edgeWidth` задано в
+   * МИРОВЫХ единицах под арену демо: на здешнем круге оно съело бы под градиент
+   * почти всю площадь, и «зона открыта» проверялось бы полутоном. Здесь речь о
+   * потолке разрешения маски, кромка к нему отношения не имеет.
+   *
+   * Число едет в секцию КАЖДОГО стенда, а не подмешивается `fogRig`: подсистема
+   * обязана получить сам объект вызывающего, иначе тест «потолок не правит
+   * документ сцены» (QUAL-1, FOW-10) стережёт копию и не может упасть никогда.
+   */
+  const STAND_EDGE = 1.5;
+
   function fogRig(section?: PresentationFog) {
     const stage = makeStage();
     const fog = new FogSubsystem({
@@ -432,7 +445,7 @@ describe('fog.maskResolution — потолок над сценным значе
   }
 
   it('сцена 8 + потолок 4 → маска строится на 4 текселях/юнит', () => {
-    const { stage, fog } = fogRig({ resolution: 8 });
+    const { stage, fog } = fogRig({ edgeWidth: STAND_EDGE, resolution: 8 });
     expect(fog.visibility.texelsPerUnit).toBe(8);
 
     new QualityController(stage, { 'fog.maskResolution': 4 });
@@ -442,7 +455,7 @@ describe('fog.maskResolution — потолок над сценным значе
   });
 
   it('пресета без потолка достаточно, чтобы действовало сценное значение 8', () => {
-    const { stage, fog } = fogRig({ resolution: 8 });
+    const { stage, fog } = fogRig({ edgeWidth: STAND_EDGE, resolution: 8 });
     new QualityController(stage, {});
 
     expect(fog.visibility.texelsPerUnit).toBe(8);
@@ -450,7 +463,7 @@ describe('fog.maskResolution — потолок над сценным значе
   });
 
   it('потолок ВЫШЕ сценного значения его не поднимает — семантика min', () => {
-    const { stage, fog } = fogRig({ resolution: 8 });
+    const { stage, fog } = fogRig({ edgeWidth: STAND_EDGE, resolution: 8 });
     new QualityController(stage, { 'fog.maskResolution': 16 });
 
     expect(fog.visibility.texelsPerUnit).toBe(8);
@@ -473,7 +486,7 @@ describe('fog.maskResolution — потолок над сценным значе
   });
 
   it('смена потолка в рантайме идёт живой подсистемой — пересборки рендера нет', () => {
-    const { stage, fog } = fogRig({ resolution: 8 });
+    const { stage, fog } = fogRig({ edgeWidth: STAND_EDGE, resolution: 8 });
     const controller = new QualityController(stage, {});
     // Растр строит кадр порциями, а не доставка (change
     // `fog-mask-budgeted-rebuild`, design D1).

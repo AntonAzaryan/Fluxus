@@ -49,6 +49,20 @@ function gridWithPillar(): TerrainGrid {
 
 const STATS = { visionRadius: 'vision', team: 'team' } as const;
 
+/**
+ * Ширина кромки стендов подсистемы (FOW-10) — часть стенда, а не проверяемое
+ * поведение. Стенд — арена 8×8 с радиусом обзора 3, а умолчание `edgeWidth`
+ * задано в МИРОВЫХ единицах под арену демо (радиус обзора там на порядок
+ * больше): на здешнем круге оно съело бы под градиент почти всю площадь, и
+ * «зона открыта» проверялось бы полутоном вместо полного света. Саму геометрию
+ * градиента и полутени проверяют тесты маски выше — там ширина задана явно.
+ *
+ * Стенду с укрытием (`cachedSubsystem`) хватает того же числа: глубину полутени
+ * фронта ограничивает путь до укрытия (`penumbraOf`), и до наблюдателя она не
+ * дотягивается, как бы близко ни стояло укрытие.
+ */
+const STAND_EDGE = 1.5;
+
 function observerView(
   id: number,
   x: number,
@@ -230,6 +244,98 @@ describe('FOW-9: 2D shadow-casting по cliff-отрезкам', () => {
     expect(fromDip.valueAt(6.5, 4.5)).toBe(0);
   });
 
+  /**
+   * Стенд полутени: наблюдатель на полу в трёх с половиной юнитах западнее
+   * левого ребра возвышенной клетки (x = 4). Кромка уже полного света
+   * (радиус 6, кромка 1.5 — внутренний круг 4.5), поэтому на луче y = 4.5
+   * между наблюдателем и ребром спад даёт ровно полутень фронта, а не градиент
+   * границы обзора.
+   */
+  const PENUMBRA_OBSERVER = { x: 0.5, y: 4.5, radius: 6, level: 0 } as const;
+  const PENUMBRA_EDGE = 1.5;
+  const SHADOW_FRONT_X = 4;
+
+  /** Значения маски вдоль луча к фронту тени, от наблюдателя до самого ребра. */
+  function alongRay(mask: VisibilityMask): number[] {
+    const values: number[] = [];
+    for (let wx = PENUMBRA_OBSERVER.x + 0.125; wx < SHADOW_FRONT_X; wx += 0.125) {
+      values.push(mask.valueAt(wx, PENUMBRA_OBSERVER.y));
+    }
+    return values;
+  }
+
+  it('свет гаснет полутенью, подходя к фронту тени, — той же кромкой (FOW-7)', () => {
+    const grid = gridWithPillar();
+    const mask = new VisibilityMask(fogRectOf(grid), 8);
+    // Без smooth(): проверяется сама запись reveal, а не блюр после неё.
+    mask.reveal(PENUMBRA_OBSERVER, PENUMBRA_EDGE, fogSegmentsOf(grid));
+    const values = alongRay(mask);
+
+    // Монотонность: подходя к укрытию, свет только убывает.
+    for (let i = 1; i < values.length; i++) {
+      expect(values[i]!).toBeLessThanOrEqual(values[i - 1]! + 1e-9);
+    }
+    // Дальше кромки от фронта полутень не тянется: там ещё полный свет.
+    expect(mask.valueAt(SHADOW_FRONT_X - PENUMBRA_EDGE - 0.5, PENUMBRA_OBSERVER.y)).toBe(1);
+    // В полосе шириной с кромку — полутон, а у самого ребра свет почти погас.
+    expect(mask.valueAt(SHADOW_FRONT_X - PENUMBRA_EDGE * 0.5, PENUMBRA_OBSERVER.y)).toBeGreaterThan(
+      0,
+    );
+    expect(mask.valueAt(SHADOW_FRONT_X - PENUMBRA_EDGE * 0.5, PENUMBRA_OBSERVER.y)).toBeLessThan(1);
+    expect(values[values.length - 1]!).toBeLessThan(0.1);
+  });
+
+  it('полутень только гасит: за фронтом тень прежняя, перед ним не светлее круга (FOW-9)', () => {
+    const grid = gridWithPillar();
+    const shadowed = new VisibilityMask(fogRectOf(grid), 8);
+    shadowed.reveal(PENUMBRA_OBSERVER, PENUMBRA_EDGE, fogSegmentsOf(grid));
+    // Тот же наблюдатель без укрытий — потолок света: расхождение приближения
+    // обязано идти в сторону тумана, а не света (FOW-9).
+    const open = new VisibilityMask(fogRectOf(grid), 8);
+    open.reveal(PENUMBRA_OBSERVER, PENUMBRA_EDGE, []);
+    let lighter = 0;
+    for (let i = 0; i < shadowed.data.length; i++) {
+      if (shadowed.data[i]! > open.data[i]!) lighter++;
+    }
+    expect(lighter).toBe(0);
+    // За фронтом — по-прежнему ноль: полутень светит только ПЕРЕД укрытием.
+    expect(shadowed.valueAt(SHADOW_FRONT_X + 0.5, PENUMBRA_OBSERVER.y)).toBe(0);
+    expect(shadowed.valueAt(SHADOW_FRONT_X + 2.5, PENUMBRA_OBSERVER.y)).toBe(0);
+  });
+
+  it('нулевая кромка — прежний жёсткий срез фронта, а не полутень (FOW-10)', () => {
+    const grid = gridWithPillar();
+    const mask = new VisibilityMask(fogRectOf(grid), 8);
+    mask.reveal(PENUMBRA_OBSERVER, 0, fogSegmentsOf(grid));
+    // Законная конфигурация: свет либо есть целиком, либо его нет вовсе.
+    for (const value of alongRay(mask)) expect([0, 1]).toContain(value);
+    expect(mask.valueAt(SHADOW_FRONT_X - 0.125, PENUMBRA_OBSERVER.y)).toBe(1);
+    expect(mask.valueAt(SHADOW_FRONT_X + 0.125, PENUMBRA_OBSERVER.y)).toBe(0);
+  });
+
+  it('укрытие ближе кромки не гасит свет под ногами наблюдателя (FOW-7)', () => {
+    // Наблюдатель в полуюните от левого ребра возвышенной клетки, а кромка —
+    // вчетверо шире этого расстояния (как на арене демо: `edgeWidth` 4 против
+    // укрытий вплотную). Глубину полутени ограничивает путь до укрытия, иначе
+    // полоса гашения накрыла бы самого наблюдателя, и свет убывал бы НАЗАД, к
+    // нему, — размазанным пятном вместо тени.
+    const grid = gridWithPillar();
+    const mask = new VisibilityMask(fogRectOf(grid), 8);
+    const observer = { x: 3.5, y: 4.5, radius: 6, level: 0 };
+    mask.reveal(observer, 4, fogSegmentsOf(grid));
+
+    // Свой тексель — полный свет, без единой градации потери.
+    expect(mask.valueAt(observer.x, observer.y)).toBe(1);
+    // Открытый пол вокруг — тоже: на запад укрытия по лучу нет вовсе, а на
+    // восток полутень начинается не ближе половины пути до ребра.
+    expect(mask.valueAt(observer.x - 1, observer.y)).toBe(1);
+    expect(mask.valueAt(observer.x + 0.125, observer.y)).toBe(1);
+    // Ближе к ребру свет всё же гаснет — полутень никуда не делась…
+    expect(mask.valueAt(3.9, observer.y)).toBeLessThan(1);
+    // …и за ребром по-прежнему туман.
+    expect(mask.valueAt(4.5, observer.y)).toBe(0);
+  });
+
   it('segmentCasts: тень только от рёбер выше уровня наблюдателя (FOW-9, PHYS-13)', () => {
     const edge = { x1: 4, y1: 4, x2: 4, y2: 5, levelNeg: 0, levelPos: 1 };
     expect(segmentCasts(0, edge)).toBe(true); // наблюдатель ниже верхней стороны — тень
@@ -386,6 +492,7 @@ describe('FOW-7, FOW-9: отбор наблюдателей из доставл�
       grid: flatGrid(),
       stats: STATS,
       hero: () => 1,
+      config: { edgeWidth: STAND_EDGE },
       createCanvas: fogCanvasFactory(),
     });
     fog.init(makeRenderContext());
@@ -450,7 +557,7 @@ describe('FOW-7: рассеивание тумана не мгновенное',
       grid: flatGrid(),
       stats: STATS,
       hero: () => 1,
-      ...(config === undefined ? {} : { config }),
+      config: { edgeWidth: STAND_EDGE, ...config },
       createCanvas: fogCanvasFactory(),
     });
     fog.init(makeRenderContext());
@@ -526,6 +633,7 @@ describe('FOW-7, FOW-10: пост-проход и обновление конф�
       grid: flatGrid(),
       stats: STATS,
       hero: () => 1,
+      config: { edgeWidth: STAND_EDGE },
       createCanvas: fogCanvasFactory(),
     });
     fog.init(ctx);
@@ -612,6 +720,7 @@ function cachedSubsystem(budget?: number): {
     grid: gridWithPillar(),
     stats: STATS,
     hero: () => 1,
+    config: { edgeWidth: STAND_EDGE },
     ...(budget === undefined ? {} : { rebuildBudget: budget }),
     createCanvas: (width, height) => {
       const canvas = fakeCanvas();
@@ -794,7 +903,9 @@ describe('бюджетная перестройка маски и коалеси
     fog.updateFrame(1 / 60, 0);
     expect(fog.rebuilding).toBe(true);
 
-    fog.applyConfig({ resolution: 8 });
+    // Правка секции ЗАМЕЩАЕТ её целиком (`applyConfig`) — кромка стенда едет
+    // вместе с разрешением, иначе вернулось бы умолчание.
+    fog.applyConfig({ edgeWidth: STAND_EDGE, resolution: 8 });
     expect(fog.rebuilding).toBe(false);
     fog.updateFrame(1 / 60, 0);
     expect(fog.rebuilds).toBe(0);
@@ -949,7 +1060,7 @@ describe('бюджетная перестройка маски и коалеси
       grid: flatGrid(16),
       stats: STATS,
       hero: () => 1,
-      config: { dissolveSeconds: 0.4 },
+      config: { dissolveSeconds: 0.4, edgeWidth: STAND_EDGE },
       createCanvas: (width, height) => {
         const canvas = fakeCanvas();
         canvas.width = width;

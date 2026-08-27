@@ -109,7 +109,14 @@ describe('канал страницы: попытка обязана кончи�
     // Самоподписанный сертификат — догадка, уместная ровно здесь: отказ TLS
     // приходит сразу, а не молчанием (см. `PAGE_LIMIT`).
     expect(error.message).toContain('самоподписанный сертификат');
+    // Названы ОБА поддержанных пути контейнера: закреплённый локальный агент
+    // (MGR-5) и удалённый хост, принятый решением человека (`desktop-shell`
+    // DSK-8). Назвать только первый значило бы отправить админа VPS искать
+    // границу, которой больше нет.
     expect(error.message).toContain('MGR-5');
+    expect(error.message).toContain('DSK-8');
+    expect(error.message).toContain('локальный агент');
+    expect(error.message).toContain('удалённый хост');
     expect(vi.getTimerCount()).toBe(0);
   });
 
