@@ -186,11 +186,32 @@ export function free(idx: EntityIndex, id: EntityId): void {
   idx.freeList.push(index);
 }
 
-/** ID-1/ID-3: живая проверка ссылки — совпадение и index, и generation. */
+/**
+ * ID-1/ID-3: живая проверка ссылки — совпадение и index, и generation.
+ *
+ * Поколение сверяется ПЕРЕУПАКОВКОЙ (`generations[index] · 2^24 + index === id`),
+ * а не распаковкой `generationOf`: одно умножение вместо деления с floor на
+ * каждой проверке — а проверок столько же, сколько чтений мира (ECS-7). Для
+ * упакованного id сверки эквивалентны точно: произведение меньше 2^48 и сумма
+ * меньше 2^53 точны в double (DET-2, условие 3), а id, не являющийся упаковкой
+ * (отрицательный, дробный, «ссылки нет» ECS-6), даёт `undefined`/несовпадение
+ * на тех же входах, на которых прежний путь давал `false`.
+ */
 export function isAlive(idx: EntityIndex, id: EntityId): boolean {
+  return aliveIndexOf(idx, id) >= 0;
+}
+
+/**
+ * Raw-индекс живой сущности либо `-1` — та же проверка, что `isAlive`, но с
+ * индексом в ответе: горячему чтению поля (`readByHandle`) индекс нужен сразу
+ * за проверкой, и вторая распаковка id была бы вторым `%` на каждое чтение.
+ * Чтение за пределами массивов сюда не доходит: несуществующий слот отвечает
+ * `undefined` уже на `alive[index]`, и сравнение с единицей даёт `false`.
+ */
+export function aliveIndexOf(idx: EntityIndex, id: EntityId): number {
   const index = indexOf(id);
-  if (index >= idx.capacity) return false;
-  return idx.alive[index] === 1 && idx.generations[index] === generationOf(id);
+  if (idx.alive[index] !== 1) return -1;
+  return idx.generations[index]! * GENERATION_LIMIT + index === id ? index : -1;
 }
 
 /**

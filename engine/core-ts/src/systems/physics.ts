@@ -24,7 +24,7 @@ import {
   copyBounds,
   overlaps,
   surfaceNormal,
-  union,
+  unionInto,
   SHAPE_AABB,
   SHAPE_CIRCLE,
   type Blocker,
@@ -63,7 +63,6 @@ import {
   type System,
   type SystemContext,
   type TerrainGrid,
-  type Vec2,
   type WorldState,
 } from '../types.js';
 
@@ -233,6 +232,31 @@ export class PhysicsSystem implements System {
   /** Объявила ли сцена поле высоты коллайдера (PHYS-14) — ответ сборки, не вопрос тика. */
   private readonly heightGate: boolean;
   /**
+   * Позиции препятствий на этот тик, параллельно массиву запроса — как
+   * `levels`: скретчи переживают тики и перевыделяются только при росте сцены.
+   * Ячейка уже разрешённого движущегося обновляется на месте, поэтому сосед
+   * видит, куда его предшественник встал (Command Buffer вливается только в
+   * конце системы), — прежде это делала карта «сущность → пара координат»,
+   * заводимая каждый тик, с объектом-обёрткой на каждое чтение (снятый
+   * ponytail: профиль npc-stress показал эти аллокации долей GC ~10% тика).
+   */
+  private obstacleX = new Int32Array(0);
+  private obstacleY = new Int32Array(0);
+  /**
+   * Буферы шага оси: две огибающие, их объединение и сам `Move` жили объектами
+   * на каждый шаг каждого движущегося — восемь аллокаций на движущегося за тик
+   * (снятый ponytail, тот же профиль). Живут полями, как буферы кандидата;
+   * `axis`/`step`/центр перезаписываются на каждом шаге, буферы огибающих
+   * переиспользуются и заметаемым объёмом сенсорной проверки.
+   */
+  private readonly moveCurrent: Bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  private readonly moveNext: Bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  private readonly moveSwept: Bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  private readonly move = {
+    current: this.moveCurrent, next: this.moveNext, swept: this.moveSwept,
+    axis: 'x' as 'x' | 'y', step: 0, centerX: 0, centerY: 0,
+  };
+  /**
    * Эффективные уровни препятствий на этот тик (PHYS-14), параллельно массиву
    * запроса. Скретч переживает тики и перевыделяется только при РОСТЕ сцены:
    * оценка уровня — одна на препятствие за тик, и без общего буфера она стоила
@@ -276,24 +300,30 @@ export class PhysicsSystem implements System {
     // Препятствия — все носители коллайдера: участие в блокировке и в сенсорах
     // решают маски на narrow-phase (PHYS-2), а не тег на запросе.
     const obstacles = ctx.query({ all: [POSITION_COMPONENT, this.colliderComponent] });
-    // Позиции уже разрешённых на этом тике: Command Buffer вливается только в
-    // конце системы, а сосед обязан видеть, куда его предшественник уже встал.
-    //
-    // ponytail: карта заводится заново каждый тик, а `positionOf` отдаёт свежую
-    // пару координат на каждого не разрешённого ещё соседа — аллокация,
-    // пропорциональная числу движущихся и препятствий. Долгоживущая карта с
-    // очисткой и чтение координат без объекта-обёртки (как уже сделано в
-    // `nearestBlocker`) снимают и то и другое — по профилю, а не по вкусу.
-    const resolved = new Map<EntityId, Vec2>();
-    const positionOf = (entity: EntityId): Vec2 =>
-      resolved.get(entity) ?? {
-        x: ctx.getByHandle(entity, h.posX),
-        y: ctx.getByHandle(entity, h.posY),
-      };
+    // Позиции препятствий — в скретчи, одно чтение на препятствие за тик.
+    // `Position` внутри прогона системы неизменна (мутации идут через Command
+    // Buffer и вливаются после неё, CMD-2), поэтому снимок на входе равен
+    // живому чтению; уже разрешённые движущиеся обновляют свою ячейку на
+    // месте — сосед обязан видеть, куда его предшественник уже встал.
+    if (this.obstacleX.length < obstacles.length) {
+      this.obstacleX = new Int32Array(obstacles.length);
+      this.obstacleY = new Int32Array(obstacles.length);
+    }
+    for (let index = 0; index < obstacles.length; index++) {
+      const other = obstacles[index]!;
+      this.obstacleX[index] = ctx.getByHandle(other, h.posX);
+      this.obstacleY[index] = ctx.getByHandle(other, h.posY);
+    }
 
-    this.cacheLevels(ctx, h, obstacles);
+    this.cacheLevels(ctx, obstacles);
 
+    // Движущиеся — подпоследовательность препятствий в том же порядке: оба
+    // запроса обходят слоты по возрастанию raw-индекса (QUERY-2), а маска
+    // движущихся строже на компонент скорости. Поэтому ячейка движущегося в
+    // скретчах находится монотонным указателем, без поиска и без карты.
+    let moverAt = 0;
     for (const mover of movers) {
+      while (obstacles[moverAt] !== mover) moverAt++;
       const collider = this.moverCollider;
       colliderByHandle(ctx, mover, h, collider);
       const blockMask = ctx.getByHandle(mover, h.blockMask);
@@ -302,9 +332,10 @@ export class PhysicsSystem implements System {
       // Множитель шага — один на сущность и тик (TIME-3): обе оси одного хода
       // обязаны замедляться одинаково.
       const scale = ctx.getEffectiveDelta(mover, FIXED_ONE);
-      const from = positionOf(mover);
-      let x = from.x;
-      let y = from.y;
+      const fromX = this.obstacleX[moverAt]!;
+      const fromY = this.obstacleY[moverAt]!;
+      let x = fromX;
+      let y = fromY;
 
       // Полоса движущегося для БЛОКИРОВКИ (PHYS-8, PHYS-9) — одна оценка на
       // тик, по состоянию до хода: обе оси видят один уровень, и промежуточных
@@ -318,7 +349,7 @@ export class PhysicsSystem implements System {
       this.moverHeight = h.height === undefined ? 0 : ctx.getByHandle(mover, h.height);
       this.moverLevel =
         this.moverHeight > 0 && blockMask !== 0
-          ? effectiveLevel(ctx, this.probe, mover, from.x, from.y)
+          ? effectiveLevel(ctx, this.probe, mover, fromX, fromY)
           : 0;
 
       for (const axis of ['x', 'y'] as const) {
@@ -331,25 +362,18 @@ export class PhysicsSystem implements System {
         const nextY = axis === 'y' ? fixed.add(y, step) : y;
 
         // Пустая маска блокировки не порождает ни огибающих, ни поиска: сквозной
-        // снаряд проходит ось, не заплатив за narrow-phase (PHYS-2).
-        //
-        // ponytail: шаг оси стоит четырёх объектов — две огибающие, их
-        // объединение и сам `Move`, — то есть восьми на движущегося за тик.
-        // Все четыре живут ровно до конца итерации и снимаются полями системы,
-        // как уже сделано для кандидата (`candidateBounds`); ждём профиля.
+        // снаряд проходит ось, не заплатив за narrow-phase (PHYS-2). Огибающие,
+        // объединение и `Move` — буферы системы, а не объекты на шаг оси.
         if (blockMask !== 0) {
-          const current = boundsAt(x, y, collider);
-          const next = boundsAt(nextX, nextY, collider);
-          const move: Move = {
-            current,
-            next,
-            swept: union(current, next),
-            axis,
-            step,
-            centerX: x,
-            centerY: y,
-          };
-          if (this.nearestBlocker(ctx, h, move, mover, obstacles, resolved, blockMask, cliffRise)) {
+          const move = this.move;
+          boundsInto(this.moveCurrent, x, y, collider);
+          boundsInto(this.moveNext, nextX, nextY, collider);
+          unionInto(this.moveSwept, this.moveCurrent, this.moveNext);
+          move.axis = axis;
+          move.step = step;
+          move.centerX = x;
+          move.centerY = y;
+          if (this.nearestBlocker(ctx, h, move, mover, obstacles, blockMask, cliffRise)) {
             // Нормаль поверхности в точке контакта (PHYS-9); осевая против
             // движения — её фолбэк и полный ответ для пары прямоугольников.
             // Политике (отскок, кнокбэк, урон о стену) нужна сторона удара, а
@@ -372,11 +396,8 @@ export class PhysicsSystem implements System {
       // Сенсоры (PHYS-12): объём — фактически исполненный ход тика, обе оси
       // после разрешения. Порядок событий: статика раньше динамики, динамика —
       // по порядку запроса (QUERY-2); одно событие на пару за тик — обход
-      // каждого препятствия здесь единственный.
-      //
-      // ponytail: объём хода стоит трёх объектов на движущегося (две огибающие
-      // и объединение), а каждое препятствие в обходе ниже — своей позиции и
-      // своего коллайдера. Те же буферы, что и на шаге оси, снимают и это.
+      // каждого препятствия здесь единственный. Объём хода собирается в тех же
+      // буферах, что шаг оси, — к этому моменту они свободны.
       if (hitMask !== 0) {
         // Полоса движущегося для заметаемого объёма (PHYS-14) — ОДНА оценка за
         // тик, по разрешённому состоянию: позиция после разрешения обеих осей.
@@ -385,7 +406,10 @@ export class PhysicsSystem implements System {
         if (this.moverHeight > 0) {
           this.moverLevel = effectiveLevel(ctx, this.probe, mover, x, y);
         }
-        const executed = union(boundsAt(from.x, from.y, collider), boundsAt(x, y, collider));
+        boundsInto(this.moveCurrent, fromX, fromY, collider);
+        boundsInto(this.moveNext, x, y, collider);
+        unionInto(this.moveSwept, this.moveCurrent, this.moveNext);
+        const executed = this.moveSwept;
         // Пара «движущийся — статика» наблюдаема как ОДНА: сущности у статики
         // нет, и `other` у всех отрезков один и тот же (STATIC_COLLIDER). При
         // этом прямая стена мира — цепочка односкелеточных отрезков (TERR-5,
@@ -410,20 +434,22 @@ export class PhysicsSystem implements System {
           // независимо от неё: маска выражает отношение слоёв, полоса —
           // совместность по высоте.
           if (!this.bandsMeetWithMover(ctx, h, other, index)) continue;
-          const position = positionOf(other);
           colliderByHandle(ctx, other, h, this.candidateCollider);
-          if (overlaps(executed, boundsAt(position.x, position.y, this.candidateCollider))) {
+          boundsInto(this.candidateBounds, this.obstacleX[index]!, this.obstacleY[index]!, this.candidateCollider);
+          if (overlaps(executed, this.candidateBounds)) {
             ctx.events.emit(OVERLAP_EVENT, { entity: mover, other });
           }
         }
         countCostBroadPhase(pairs);
       }
 
-      if (x !== from.x || y !== from.y) {
-        resolved.set(mover, { x, y });
+      if (x !== fromX || y !== fromY) {
+        this.obstacleX[moverAt] = x;
+        this.obstacleY[moverAt] = y;
         ctx.commands.setField(mover, POSITION_COMPONENT, 'x', x);
         ctx.commands.setField(mover, POSITION_COMPONENT, 'y', y);
       }
+      moverAt++;
     }
   }
 
@@ -445,7 +471,6 @@ export class PhysicsSystem implements System {
     move: Move,
     mover: EntityId,
     obstacles: Float64Array,
-    resolved: ReadonlyMap<EntityId, Vec2>,
     blockMask: number,
     cliffRise: number,
   ): boolean {
@@ -479,12 +504,11 @@ export class PhysicsSystem implements System {
       // Колоночный гейт (PHYS-14) — второе условие рядом с маской: пара без
       // общего уровня хода не блокирует и события `Collision` не даёт.
       if (!this.bandsMeetWithMover(ctx, h, other, index)) continue;
-      // Позиция читается без объекта-обёртки: уже разрешённый сосед отдаёт
-      // свою (Command Buffer вливается только в конце системы), остальные —
-      // живое поле мира.
-      const position = resolved.get(other);
-      const px = position?.x ?? ctx.getByHandle(other, h.posX);
-      const py = position?.y ?? ctx.getByHandle(other, h.posY);
+      // Позиция — из скретча препятствий: уже разрешённый сосед лежит там
+      // обновлённым (Command Buffer вливается только в конце системы),
+      // остальные — снимком входа, равным живому полю мира.
+      const px = this.obstacleX[index]!;
+      const py = this.obstacleY[index]!;
       colliderByHandle(ctx, other, h, this.candidateCollider);
       boundsInto(this.candidateBounds, px, py, this.candidateCollider);
       if (!blocks(move, this.candidateBounds)) continue;
@@ -512,20 +536,15 @@ export class PhysicsSystem implements System {
    * Гейт выключен (поля высоты в схеме нет) — цикла нет вовсе: сцена, не
    * знающая о высотах, не платит за колоночную модель ничем.
    */
-  private cacheLevels(ctx: SystemContext, h: PhysicsHandles, obstacles: Float64Array): void {
+  private cacheLevels(ctx: SystemContext, obstacles: Float64Array): void {
     if (!this.heightGate) return;
     // Скретч растёт вместе со сценой и переживает тики: перевыделение — только
-    // при росте, а не на каждом тике (дисциплина аллокаций).
+    // при росте, а не на каждом тике (дисциплина аллокаций). Позиции — из
+    // скретчей препятствий, заполненных к этому моменту состоянием ДО
+    // разрешения: обход движущихся ещё не начался.
     if (this.levels.length < obstacles.length) this.levels = new Int32Array(obstacles.length);
     for (let index = 0; index < obstacles.length; index++) {
-      const other = obstacles[index]!;
-      this.levels[index] = effectiveLevel(
-        ctx,
-        this.probe,
-        other,
-        ctx.getByHandle(other, h.posX),
-        ctx.getByHandle(other, h.posY),
-      );
+      this.levels[index] = effectiveLevel(ctx, this.probe, obstacles[index]!, this.obstacleX[index]!, this.obstacleY[index]!);
     }
   }
 

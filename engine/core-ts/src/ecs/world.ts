@@ -81,16 +81,21 @@ interface WorldInternal {
   readonly stores: Map<string, ComponentStorage>;
   tags: Map<number, Set<string>>;
   /**
-   * Per-component dirty (OBS-6, NET-8): компонент → сущности, изменённые с
-   * последнего `clearDirty`. Гранулярность — per-component, а не
-   * per-entity-per-component: `changedEntities(component)` и сетевой дельте
-   * нужен ровно этот срез (открытый вопрос 3 в architecture.md).
+   * Per-component dirty (OBS-6, NET-8): сущности, изменённые с последнего
+   * `clearDirty`, индекс — числовой id компонента (`store.id`). Гранулярность —
+   * per-component, а не per-entity-per-component: `changedEntities(component)`
+   * и сетевой дельте нужен ровно этот срез (открытый вопрос 3 в
+   * architecture.md).
    *
-   * ponytail: Set на компонент, а не битовая маска по слотам. Set'ы
-   * переиспользуются между тиками (clearDirty чистит на месте, не пересоздаёт);
-   * замена на маску — когда замеры покажут, что заметен и сам обход Set'ов.
+   * Массив по id, а не карта по имени (снятая часть ponytail, профиль
+   * npc-stress): пометка стоит на КАЖДОЙ записи мира, и строковый поиск на ней
+   * был заметен сам по себе. Set'ы создаются вместе с миром и переиспользуются
+   * между тиками (clearDirty чистит на месте, не пересоздаёт) — наружу они
+   * уходят живым видом (OBS-3), и это ровно прежняя семантика. Остаток
+   * ponytail — сам Set против битовой маски по слотам — стоит на месте: замена
+   * на маску меняет форму `changedEntities` и ждёт замера обхода, а не пометки.
    */
-  dirty: Map<string, Set<EntityId>>;
+  dirty: Set<EntityId>[];
   /** Плоская таблица полей — адресное пространство handle (SYS-10). */
   fields: FieldTable;
 }
@@ -232,7 +237,7 @@ export function createWorld(
     prefabs: prefabMap,
     stores,
     tags: new Map(),
-    dirty: new Map(),
+    dirty: createDirty(stores.size),
     fields: table,
   };
   return toState(internal);
@@ -240,37 +245,43 @@ export function createWorld(
 
 // ------------------------------------------------------ dirty (OBS-6, NET-8)
 
-function markDirty(internal: WorldInternal, component: string, entity: EntityId): void {
-  const set = internal.dirty.get(component);
-  if (set === undefined) internal.dirty.set(component, new Set([entity]));
-  else set.add(entity);
+/** Срез по числу компонентов: Set на каждый store.id, созданный вместе с миром. */
+function createDirty(componentCount: number): Set<EntityId>[] {
+  return Array.from({ length: componentCount }, () => new Set<EntityId>());
+}
+
+/** Пометка по числовому id компонента (store.id): вызывающий его уже держит. */
+function markDirty(internal: WorldInternal, componentId: number, entity: EntityId): void {
+  internal.dirty[componentId]!.add(entity);
 }
 
 /** Все компоненты сущности разом — структурное изменение задевает каждый из них. */
 function markAllDirty(internal: WorldInternal, entity: EntityId): void {
   const index = rawIndexOf(entity);
-  for (const [name, store] of internal.stores) {
-    if (maskHas(internal.masks, index, store.id)) markDirty(internal, name, entity);
+  for (const store of internal.stores.values()) {
+    if (maskHas(internal.masks, index, store.id)) markDirty(internal, store.id, entity);
   }
 }
 
 /**
  * Начало тика: прошлый срез изменений отдан наблюдателям и больше не нужен
- * (OBS-3). Set'ы чистятся на месте, а не `map.clear()`: пустые они остаются в
- * карте и переиспользуются markDirty вместо аллокации новых на каждом тике.
+ * (OBS-3). Set'ы чистятся на месте, а не пересоздаются: пустые они остаются в
+ * срезе и переиспользуются markDirty вместо аллокации новых на каждом тике.
  */
 export function clearDirty(state: WorldState): void {
-  for (const set of toInternal(state).dirty.values()) set.clear();
+  for (const set of toInternal(state).dirty) set.clear();
 }
 
 const NO_ENTITIES: ReadonlySet<EntityId> = new Set();
 
 export function dirtyEntities(state: WorldState, component: string): ReadonlySet<EntityId> {
-  return toInternal(state).dirty.get(component) ?? NO_ENTITIES;
+  const internal = toInternal(state);
+  const id = internal.stores.get(component)?.id;
+  return id === undefined ? NO_ENTITIES : internal.dirty[id]!;
 }
 
 export function dirtyIsEmpty(state: WorldState): boolean {
-  for (const set of toInternal(state).dirty.values()) {
+  for (const set of toInternal(state).dirty) {
     if (set.size > 0) return false;
   }
   return true;
@@ -398,7 +409,7 @@ export function cloneWorld(state: WorldState): WorldState {
     stores,
     tags,
     // Снапшот — значение, а не живой мир: срез изменений в него не переносится.
-    dirty: new Map(),
+    dirty: createDirty(stores.size),
     fields: table,
   });
 }
@@ -775,11 +786,11 @@ export function hasComponentByHandle(
  * одном сценарии совпадают побитово. Guard `hasComponent` остаётся обязанностью
  * контента: ECS-7 делает дефект воспроизводимым, а не корректным.
  *
- * Аллокаций на пути владеющего чтения нет — в release. В debug-сборке текст
- * сообщения строится на ветке отказа (и `checkBounds` в маске строит свои
- * сообщения безусловно — это уже действующий приём FP-4). Ценой владеющего
- * чтения остаются второй `rawIndexOf` и деление в `generationOf` внутри
- * `isAlive`; это осознанный обмен, записанный в Risks дизайна change'а.
+ * Аллокаций на пути владеющего чтения нет ни в release, ни в debug: тексты
+ * находок — и здесь, и в `checkBounds` маски — строятся только на ветке
+ * отказа (FP-4). Распаковка id — одна на чтение (`aliveIndexOf`), поколение
+ * сверяется переупаковкой без деления; прежний обмен «второй `rawIndexOf` и
+ * деление в `generationOf`» из Risks дизайна change'а этим снят.
  *
  * Само чтение — `readByHandle` (SYS-10): строковый путь есть РАЗРЕШЕНИЕ ИМЕНИ
  * плюс handle-путь, и другого тела у него нет. Тотальность, порядок проверок и
@@ -811,7 +822,7 @@ export function setField(
   const type = fieldTypeOf(store, 'setField', component, field);
   if (!representable(type, value)) throw valueError('setField', component, field, type, value);
   store.fields[field]![rawIndexOf(entity)] = value;
-  markDirty(internal, component, entity);
+  markDirty(internal, store.id, entity);
 }
 
 /**
@@ -835,7 +846,7 @@ export function addComponent(
     if (!representable(type, value)) throw valueError('addComponent', component, field, type, value);
     store.fields[field]![index] = value;
   }
-  markDirty(internal, component, entity);
+  markDirty(internal, store.id, entity);
 }
 
 export function removeComponent(state: WorldState, entity: EntityId, component: string): void {
@@ -843,7 +854,7 @@ export function removeComponent(state: WorldState, entity: EntityId, component: 
   const store = internal.stores.get(component);
   if (!store) return;
   clearComponent(internal.masks, rawIndexOf(entity), store.id);
-  markDirty(internal, component, entity);
+  markDirty(internal, store.id, entity);
 }
 
 export function addTag(state: WorldState, entity: EntityId, tag: string): void {

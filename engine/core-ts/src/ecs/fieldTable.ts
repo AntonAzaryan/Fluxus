@@ -28,11 +28,7 @@ import {
   type FieldHandle,
   type FieldType,
 } from '../types.js';
-import {
-  indexOf as rawIndexOf,
-  isAlive as indexIsAlive,
-  type EntityIndex,
-} from './entityIndex.js';
+import { aliveIndexOf, type EntityIndex } from './entityIndex.js';
 import { hasComponent as maskHas, type ComponentMasks } from './componentMask.js';
 
 /**
@@ -199,8 +195,11 @@ export function readByHandle(
   handle: FieldHandle,
 ): number {
   const table = world.fields;
-  const index = rawIndexOf(entity);
-  if (!indexIsAlive(world.entities, entity) || !maskHas(world.masks, index, table.owners[handle]!)) {
+  // Распаковка id одна на чтение (`aliveIndexOf`): живость и индекс — один
+  // проход, маска на мёртвом/мусорном id не спрашивается вовсе (порядок
+  // проверок из шапки — тот же).
+  const index = aliveIndexOf(world.entities, entity);
+  if (index < 0 || !maskHas(world.masks, index, table.owners[handle]!)) {
     if (DEBUG) {
       assert(
         false,
@@ -219,6 +218,6 @@ export function ownsByHandle(
   entity: EntityId,
   handle: ComponentHandle,
 ): boolean {
-  if (!indexIsAlive(world.entities, entity)) return false;
-  return maskHas(world.masks, rawIndexOf(entity), handle);
+  const index = aliveIndexOf(world.entities, entity);
+  return index >= 0 && maskHas(world.masks, index, handle);
 }
