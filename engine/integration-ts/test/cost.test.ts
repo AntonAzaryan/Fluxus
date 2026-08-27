@@ -434,9 +434,10 @@ describe('PERF-4: голден-гейт стоимости на записанн
     // регистрации: пост-обработка (три ручки — выключатель bloom, потолок
     // разрешения его пирамиды и выключатель LUT, REND-34), освещение (три
     // ручки — две теневые и потолок локальных источников, REND-33), туман,
-    // террейн, модели (две ручки), частицы. Подсистема позиций ручек не имеет и
-    // в реестре не появляется — реестр собирается из того, что подсистемы
-    // объявили, а не из состава документа.
+    // террейн, вода (три ручки — источники ряби, слои детали и плотность
+    // выборки глубины, REND-35), модели (две ручки), частицы. Подсистема
+    // позиций ручек не имеет и в реестре не появляется — реестр собирается из
+    // того, что подсистемы объявили, а не из состава документа.
     expect(bench.quality.knobs.map((knob) => knob.name)).toEqual([
       'postprocess.bloom',
       'postprocess.bloomResolution',
@@ -446,6 +447,9 @@ describe('PERF-4: голден-гейт стоимости на записанн
       'lighting.maxLocalLights',
       'fog.maskResolution',
       'terrain.curvatureTessellation',
+      'water.rippleSources',
+      'water.detailLayers',
+      'water.depthTexelsPerCell',
       'models.lodThresholdScale',
       'models.defaultTier',
       'particles.density',
@@ -477,14 +481,14 @@ describe('PERF-4: голден-гейт стоимости на записанн
  * ОБЪЯВЛЕНИЯ пакета (`COST_COUNTER_STAGES`), а не выписывается здесь: новый
  * счётчик подсистемы обязан попасть под эти проверки сам, без правки теста.
  */
-const SUBSYSTEM_PREFIXES = ['lighting', 'models', 'particles', 'terrain'] as const;
+const SUBSYSTEM_PREFIXES = ['lighting', 'models', 'particles', 'terrain', 'water'] as const;
 
 function countersOf(prefix: string): (keyof RenderCostCounters)[] {
   const names = Object.keys(COST_COUNTER_STAGES) as (keyof RenderCostCounters)[];
   return names.filter((name) => name.startsWith(prefix));
 }
 
-describe('PERF-4: работа освещения, моделей, частиц и террейна видна эталону', () => {
+describe('PERF-4: работа освещения, моделей, частиц, террейна и воды видна эталону', () => {
   for (const prefix of SUBSYSTEM_PREFIXES) {
     it(`${prefix}: счётчики объявлены и на записанном матче не мёртвые`, () => {
       const names = countersOf(prefix);

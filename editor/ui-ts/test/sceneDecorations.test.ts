@@ -14,7 +14,7 @@
  * - перевод между слоями переносит объект и не оставляет его в обоих
  *   документах сразу, а погрешности двух направлений разные (PRES-5).
  */
-import { fixed } from '@fluxus/core';
+import { createTerrainGrid, fixed } from '@fluxus/core';
 import {
   createEditorSession,
   createOperationRegistry,
@@ -41,6 +41,17 @@ import {
   registerPlacementOperations,
 } from '../src/areas/scenePlacement.js';
 import { decorationsOf, type PositionBinding } from '../src/areas/sceneDocuments.js';
+
+/** Ровная сетка `w`×`h` — контекст валидации карты воды (REND-35). */
+function gridOf(width: number, height: number) {
+  return createTerrainGrid({
+    width,
+    height,
+    tileSize: 65536,
+    levels: Array.from({ length: height }, () => '0'.repeat(width)),
+    flags: Array.from({ length: height }, () => '.'.repeat(width)),
+  });
+}
 import { DECORATION_LIST, PLACEMENT_LIST, SCENE_KINDS } from '../src/areas/sceneProject.js';
 import {
   FIXTURE_IDS,
@@ -563,6 +574,31 @@ describe('ED-15: набор декораций — производная док
     expect(decorationsOf({ config: SCRATCH_SCENE, presentation: null })).toEqual([]);
     // Пустой и отсутствующий список неразличимы (PRES-2).
     expect(decorationsOf({ config: SCRATCH_SCENE, presentation: {} })).toEqual([]);
+  });
+
+  it('сетка неизвестна и сетки нет — не одно и то же для секции water (REND-35)', () => {
+    const water = {
+      decorations: [{ visual: 'Statue', x: 0, y: 0 }],
+      water: {
+        cells: ['..', '00'],
+        bodies: [{ surfaceLevel: -0.1, shallowColor: '#4db8c4', deepColor: '#16505e' }],
+      },
+    };
+    // Сетка НЕИЗВЕСТНА (аргумента нет): парный слой живёт как жил — сломанный
+    // сим-документ не отнимает у автора ни декораций, ни секций (PRES-4).
+    expect(decorationsOf({ config: SCRATCH_SCENE, presentation: water })).toHaveLength(1);
+    // Сетка ЕСТЬ и совпадает — тоже законный документ.
+    expect(
+      decorationsOf({ config: SCRATCH_SCENE, presentation: water }, gridOf(2, 2)),
+    ).toHaveLength(1);
+    // Сетка есть, но другого размера — отказ с адресом ряда.
+    expect(() => decorationsOf({ config: SCRATCH_SCENE, presentation: water }, gridOf(4, 4))).toThrow(
+      /water\.cells/u,
+    );
+    // Террейна у сцены НЕТ (`null`) — секцию воды привязать не к чему.
+    expect(() => decorationsOf({ config: SCRATCH_SCENE, presentation: water }, null)).toThrow(
+      /сцены без террейна/u,
+    );
   });
 
   it('неразрешимая ссылка набор не гасит: рендер рисует заглушку (PRES-2)', () => {

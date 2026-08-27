@@ -128,6 +128,20 @@ function systemSitesOf(kinds: EngineRuleKinds, sites: readonly SystemSite[] | un
 export interface EngineRuleOptions {
   readonly cameraEffects?: CameraEffectsDescription;
   readonly cameraConfig?: CameraConfigDescription;
+  /**
+   * Где лежит ассет террейна сцены (TERR-2) — вход правила парного документа:
+   * клеточная карта секции `water` адресует клетки ЭТОЙ сетки, и «ряды по
+   * сетке» без неё не проверяется вовсе (`rendering` REND-35). Адрес приходит
+   * параметром по тем же основаниям, что у междокументных правил: у реального
+   * проекта ассет лежит полем конфига сцены (SER-7), а не отдельным документом
+   * (ED-25).
+   *
+   * Не задан — сетка правилу неизвестна, и валидатор проверяет только то, для
+   * чего сетка не нужна: алфавит, прямоугольность карты и разрешимость
+   * индексов. Это не послабление, а тот же случай, что у загрузчика ассета
+   * (ASSET-3): второй стороны у него нет.
+   */
+  readonly terrainSites?: readonly DocumentSite[];
 }
 
 /** Кто проверял — уезжает в ожидание находки, чтобы вопрос «чьё правило» не гадался. */
@@ -359,18 +373,60 @@ export function curvatureRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): Va
 }
 
 /**
+ * Сетка террейна сцены глазами правила парного документа (`rendering` REND-35):
+ * размеры, которым обязана соответствовать клеточная карта секции `water`.
+ *
+ * `undefined` — сетка неизвестна: документа-носителя в сессии нет либо он не
+ * разбирается, и это не «сцена без террейна», а незагруженная вторая сторона —
+ * общее правило междокументного (`crossDocument.ts`). `null` — носитель
+ * разобран, а террейна в нём НЕТ: секция воды у такой сцены отвергается, потому
+ * что привязать её карту не к чему (REND-35).
+ */
+function terrainExtentOf(
+  run: ValidationRun,
+  sites: readonly DocumentSite[] | undefined,
+): { width: number; height: number } | null | undefined {
+  if (sites === undefined) return undefined;
+  let sawHolder = false;
+  for (const site of sites) {
+    for (const holder of run.documentsOfKind(site.kind)) {
+      const value = run.valueOf(holder.id);
+      if (!isJsonObject(value)) continue;
+      sawHolder = true;
+      const grid = getAtPath(value, site.path);
+      if (!isJsonObject(grid)) continue;
+      const width = grid.width;
+      const height = grid.height;
+      if (typeof width === 'number' && typeof height === 'number') return { width, height };
+    }
+  }
+  return sawHolder ? null : undefined;
+}
+
+/**
  * Парный presentation-документ сцены (PRES-2): закрытый состав документа,
- * записи decoration и необязательные секции — конфигурация тумана (FOW-10) и
- * конфигурация освещения. Проверяет их `validatePresentationScene` — тот же
- * вызов, которым документ поднимает загрузчик ассетов (ASSET-3), и второй его
- * реализации в редакторе быть не может (ED-1, CORE-3).
+ * записи decoration и необязательные секции — конфигурация тумана (FOW-10),
+ * конфигурация освещения, пост-обработка и вода. Проверяет их
+ * `validatePresentationScene` — тот же вызов, которым документ поднимает
+ * загрузчик ассетов (ASSET-3), и второй его реализации в редакторе быть не
+ * может (ED-1, CORE-3).
  *
  * Правило нужно ровно затем, зачем правило манифеста: ED-14 требует тех же
  * проверок в реальном времени, а адрес нарушения (`lighting.shadows.mode`,
- * `decorations[3].scale`) едет в находку разбором сообщения (`adapters.ts`) и
- * приводит автора к строке, а не к файлу.
+ * `decorations[3].scale`, `water.cells[7][12]`) едет в находку разбором
+ * сообщения (`adapters.ts`) и приводит автора к строке, а не к файлу.
+ *
+ * Сетку террейна правило берёт из документа-носителя по адресу сборки и отдаёт
+ * тому же валидатору контекстом: «ряды по сетке» и «секция воды у сцены без
+ * террейна» (REND-35) — часть ЕГО состава, а не второе правило рядом. Отдельным
+ * междокументным правилом это быть не может по той же причине, по какой не
+ * бывает второй реализации формата: находку выносит владелец формата, а
+ * редактор лишь приносит ему вторую сторону (ED-1).
  */
-export function presentationRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS): ValidationRule {
+export function presentationRule(
+  kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS,
+  options: EngineRuleOptions = {},
+): ValidationRule {
   return {
     id: PRESENTATION_RULE,
     descriptionKey: ruleDescriptionKey(PRESENTATION_RULE),
@@ -378,7 +434,12 @@ export function presentationRule(kinds: EngineRuleKinds = DEFAULT_ENGINE_KINDS):
     appliesTo: [kinds.presentation],
     check(run) {
       const value = run.valueOf(run.document.id);
-      reportErrorList(run, { by: VALIDATE_PRESENTATION }, validatePresentationScene(value));
+      const terrain = terrainExtentOf(run, options.terrainSites);
+      reportErrorList(
+        run,
+        { by: VALIDATE_PRESENTATION },
+        validatePresentationScene(value, terrain === undefined ? {} : { terrain }),
+      );
     },
   };
 }
@@ -401,6 +462,6 @@ export function engineValidationRules(
     systemRule(kinds, systemSites),
     manifestRule(kinds, options),
     curvatureRule(kinds),
-    presentationRule(kinds),
+    presentationRule(kinds, options),
   ]);
 }

@@ -609,6 +609,91 @@ describe('ED-11: карта кривизны', () => {
 });
 
 /**
+ * Клеточная карта секции `water` (`rendering` REND-35) — единственная часть
+ * парного документа, которую нельзя проверить, глядя на него одного: ряды
+ * адресуют клетки сетки террейна. Сетку правилу приносит СБОРКА адресом места
+ * (ED-25), а вердикт по-прежнему выносит валидатор формата (ED-1) — второго
+ * правила рядом не заводится.
+ */
+describe('REND-35: карта воды сверяется с сеткой террейна того же проекта', () => {
+  const BODY = { surfaceLevel: -0.1, shallowColor: '#4db8c4', deepColor: '#16505e' };
+  /** Сетка `TERRAIN_VALUE` — 2×2, значит и карта воды обязана быть 2×2. */
+  const FITTING = { cells: ['00', '00'], bodies: [BODY] };
+  /** Та же карта на ряд длиннее: на сетку 2×2 она не ложится. */
+  const TALLER = { cells: ['00', '00', '00'], bodies: [BODY] };
+
+  /** Правила с адресом ассета террейна — как их собирает редактор проекта. */
+  const WITH_GRID: readonly ValidationRule[] = [
+    ...engineValidationRules(DEFAULT_ENGINE_KINDS, {
+      terrainSites: [{ kind: DEFAULT_ENGINE_KINDS.terrain, path: [] }],
+    }),
+  ];
+
+  function waterIssues(report: ValidationReport): readonly ValidationIssue[] {
+    return report.forDocument(PRESENTATION).filter((issue) => issue.ruleId === PRESENTATION_RULE);
+  }
+
+  it('карта по сетке находок не даёт', () => {
+    const report = check(
+      {
+        [TERRAIN]: { kind: 'terrain', value: TERRAIN_VALUE },
+        [PRESENTATION]: { kind: 'presentation', value: { water: FITTING } },
+      },
+      WITH_GRID,
+    );
+    expect(waterIssues(report)).toHaveLength(0);
+  });
+
+  it('лишний ряд отвергается адресно — ряды не дополняются умолчанием', () => {
+    const report = check(
+      {
+        [TERRAIN]: { kind: 'terrain', value: TERRAIN_VALUE },
+        [PRESENTATION]: { kind: 'presentation', value: { water: TALLER } },
+      },
+      WITH_GRID,
+    );
+    const issue = waterIssues(report)[0]!;
+    expect(issue.path).toEqual(['water', 'cells']);
+    expect(detailOf(issue)).toContain('ожидалось 2 рядов по высоте сетки террейна');
+  });
+
+  it('без открытого носителя сетки о размерах карты не судят', () => {
+    // Та же карта, что выше, но второй стороны в сессии нет: это не
+    // несовпадение, а незагруженный документ — общее правило междокументного.
+    const report = check({ [PRESENTATION]: { kind: 'presentation', value: { water: TALLER } } }, WITH_GRID);
+    expect(waterIssues(report)).toHaveLength(0);
+  });
+
+  it('сцена без террейна секцию воды не несёт: привязать карту не к чему', () => {
+    // Раскладка реального проекта: ассет террейна — поле конфига сцены (SER-7).
+    // Конфиг разобран, поля `terrain` в нём нет — значит террейна у сцены нет.
+    const rules: readonly ValidationRule[] = [
+      ...engineValidationRules(DEFAULT_ENGINE_KINDS, {
+        terrainSites: [{ kind: DEFAULT_ENGINE_KINDS.scene, path: ['terrain'] }],
+      }),
+    ];
+    const report = check(
+      {
+        [SCENE]: { kind: 'scene', value: SCENE_VALUE },
+        [PRESENTATION]: { kind: 'presentation', value: { water: FITTING } },
+      },
+      rules,
+    );
+    const issue = waterIssues(report)[0]!;
+    expect(detailOf(issue)).toContain('секция воды у сцены без террейна');
+  });
+
+  it('правило работает без адреса сетки как прежде: состав секции проверен', () => {
+    // Умолчания сборки адреса не несут — и правило проверяет ровно то, для чего
+    // сетка не нужна: алфавит, прямоугольность карты, разрешимость индексов.
+    const report = check({
+      [PRESENTATION]: { kind: 'presentation', value: { water: { cells: ['0x'], bodies: [BODY] } } },
+    });
+    expect(detailOf(waterIssues(report)[0]!)).toContain('вне алфавита');
+  });
+});
+
+/**
  * Парный presentation-документ (PRES-2): его формат — закрытый состав документа,
  * записи decoration и секции тумана и освещения — проверяет валидатор ассетов,
  * а редактор только зовёт его и вешает ответ на адрес внутри документа (ED-1).

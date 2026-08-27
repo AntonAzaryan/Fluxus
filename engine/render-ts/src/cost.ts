@@ -468,6 +468,37 @@ export interface RenderCostCounters {
    * разбиения — в отличие от пола, где потолок квадратичен.
    */
   terrainWallQuads: number;
+
+  // ------------------------------------------------- вода: работа кадра (REND-35)
+
+  /**
+   * Тела воды, нарисованные кадром (REND-35): по одному на тело с непустым
+   * клеточным регионом. Сцена без секции `water` держит ноль — и это не «вода
+   * есть, но невидима», а отсутствие подсистемной работы вовсе (PERF-2).
+   */
+  waterBodiesDrawn: number;
+  /**
+   * Квады мешей воды в кадре — geometry, которую кадр отдаёт прозрачному
+   * проходу (REND-35, design D1). Растёт площадью водоёмов и ФОРМОЙ региона:
+   * greedy-объединение делает из компактного водоёма единицы квадов, а из
+   * рваного — десятки, и видно это здесь.
+   */
+  waterQuads: number;
+  /**
+   * Активные источники ряби кадра (REND-36) — сумма по телам. Ось стоимости
+   * фрагмента: каждое кольцо считается на КАЖДОМ фрагменте воды своего тела, и
+   * ровно это ограничивает потолок `water.rippleSources` (QUAL-1). Ноль на
+   * производительном пресете означает выключенную рябь, а не отсутствие воды.
+   */
+  waterRippleSources: number;
+  /**
+   * Тексели глубинных текстур, ЗАПОЛНЕННЫЕ кадром (REND-35, design D1).
+   * Стадия — `frame`, потому что платит за перезаполнение именно кадр: пометки
+   * копятся изменением поля (REND-9, REND-14) и пересборкой тел, а выборка идёт
+   * в `updateFrame` не позже следующего кадра. Растёт КВАДРАТОМ плотности
+   * `water.depthTexelsPerCell` (QUAL-1); установившаяся сцена платит ноль.
+   */
+  waterDepthTexels: number;
 }
 
 /**
@@ -528,6 +559,10 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     terrainChunksRebuilt: 'frame',
     terrainFloorQuads: 'frame',
     terrainWallQuads: 'frame',
+    waterBodiesDrawn: 'frame',
+    waterQuads: 'frame',
+    waterRippleSources: 'frame',
+    waterDepthTexels: 'frame',
   });
 
 /** Свежая структура счётчиков — все поля нулями. Создаётся раз на замер. */
@@ -580,6 +615,10 @@ export function createCostCounters(): RenderCostCounters {
     terrainChunksRebuilt: 0,
     terrainFloorQuads: 0,
     terrainWallQuads: 0,
+    waterBodiesDrawn: 0,
+    waterQuads: 0,
+    waterRippleSources: 0,
+    waterDepthTexels: 0,
   };
 }
 

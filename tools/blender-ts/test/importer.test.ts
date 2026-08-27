@@ -412,7 +412,7 @@ describe('BLND-3: мост — terrain-объект и walkable-декораци
   });
 });
 
-describe('BLND-2, PRES-2: импорт владеет только decorations — секции fog, lighting и postprocess байт-в-байт', () => {
+describe('BLND-2, PRES-2: импорт владеет только decorations — секции fog, lighting, postprocess и water байт-в-байт', () => {
   /** Секция fog цели (FOW-10): поле вне пространственного слоя импорта. */
   const FOG = {
     strength: 0.65,
@@ -434,6 +434,28 @@ describe('BLND-2, PRES-2: импорт владеет только decorations �
   const POSTPROCESS = {
     toneMapping: { operator: 'aces', exposure: 1 },
     bloom: { enabled: true, strength: 0.35, threshold: 1, radius: 0.5 },
+  };
+
+  /**
+   * Секция water цели (PRES-2, `rendering` REND-35) — та же чужая импорту
+   * секция, но самая уязвимая к переформатированию: она единственная несёт
+   * ДЛИННЫЙ массив строк (клеточную карту по сетке `TERRAIN_ASSET`, 4×4), и
+   * канонический пересейв мог бы разложить его иначе, не тронув ни одного
+   * значения.
+   */
+  const WATER = {
+    cells: ['....', '.00.', '.00.', '....'],
+    bodies: [
+      {
+        surfaceLevel: -0.1,
+        shallowColor: '#4db8c4',
+        deepColor: '#16505e',
+        maxDepth: 0.2,
+        banding: 3,
+        foam: { width: 0.03, color: '#dff3f7', hardness: 0.7 },
+        ripples: { sources: 8, wavelength: 1.1, decaySeconds: 1.4 },
+      },
+    ],
   };
 
   /** Байтовый срез секции fog из канонической формы файла — им и меряется «байт-в-байт». */
@@ -463,9 +485,10 @@ describe('BLND-2, PRES-2: импорт владеет только decorations �
       fog: FOG,
       lighting: LIGHTING,
       postprocess: POSTPROCESS,
+      water: WATER,
     });
     const root = await tree(
-      contentFiles('placements.gltf', sceneDocument(), presentationDocument(), {
+      contentFiles('placements.gltf', sceneDocument([], TERRAIN_ASSET), presentationDocument(), {
         [PRESENTATION_ID]: before,
       }),
     );
@@ -477,20 +500,24 @@ describe('BLND-2, PRES-2: импорт владеет только decorations �
     // Импорт переписал список decorations (источник даёт запись Statue)…
     const parsed = JSON.parse(after.toString('utf8')) as { decorations: unknown[]; fog: unknown };
     expect(parsed.decorations.length).toBeGreaterThan(0);
-    // …а секции fog, lighting и postprocess в файле — те же байтовые срезы, что
-    // до импорта: пространственный слой импорта — только `decorations` (BLND-2).
+    // …а секции fog, lighting, postprocess и water в файле — те же байтовые
+    // срезы, что до импорта: пространственный слой импорта — только
+    // `decorations` (BLND-2).
     expect(fogSlice(after)).toBe(fogSlice(Buffer.from(before)));
     expect(tailSlice(after, 'lighting')).toBe(tailSlice(Buffer.from(before), 'lighting'));
     expect(tailSlice(after, 'postprocess')).toBe(tailSlice(Buffer.from(before), 'postprocess'));
+    // `water` в каноническом порядке ключей идёт последней, поэтому её хвост —
+    // ровно она сама: карта, тела и все их отступы.
+    expect(tailSlice(after, 'water')).toBe(tailSlice(Buffer.from(before), 'water'));
     // Round-trip канонического сохранения (ED-21): записанное — каноническая
     // форма самого себя, то есть «открыл — сохранил» не изменит ни байта.
     expect(new Uint8Array(after)).toEqual(encodeDocument(parsed as never));
   });
 
-  it('повторный импорт того же источника не трогает документ с fog вовсе (BLND-4)', async () => {
+  it('повторный импорт того же источника не трогает документ с fog и water вовсе (BLND-4)', async () => {
     const root = await tree(
-      contentFiles('placements.gltf', sceneDocument(), presentationDocument(), {
-        [PRESENTATION_ID]: encodeDocument({ decorations: [], fog: FOG }),
+      contentFiles('placements.gltf', sceneDocument([], TERRAIN_ASSET), presentationDocument(), {
+        [PRESENTATION_ID]: encodeDocument({ decorations: [], fog: FOG, water: WATER }),
       }),
     );
     await runCli(root, [`content/${SOURCE_ID}`]);

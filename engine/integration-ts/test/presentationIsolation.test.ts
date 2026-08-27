@@ -23,10 +23,13 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
   contentPackHash,
+  createTerrainGrid,
+  fixed,
   loadScene,
   runScenario,
   runScenarioBytes,
   type SceneDef,
+  type TerrainGrid,
 } from '@fluxus/core';
 import { contentPack } from '@fluxus/net';
 import {
@@ -38,6 +41,7 @@ import {
   ModelsSubsystem,
   PostprocessSubsystem,
   PresentationStage,
+  WaterSubsystem,
   cameraConfigFromManifest,
   createCameraInput,
   type DecorationInstance,
@@ -54,6 +58,7 @@ import {
   type PresentationLighting,
   type PresentationPostprocess,
   type PresentationScene,
+  type PresentationWater,
   type VisualLight,
   type VisualManifest,
 } from '@fluxus/assets';
@@ -73,6 +78,28 @@ const FIXTURE_LAYER: PresentationScene = {
     { visual: 'Rubble', x: 0.001, y: 0.001 },
   ],
 };
+
+/**
+ * Секция `water` слоя ОДНОГО из клиентов (PRES-2, `rendering` REND-35). Тоже не
+ * контент: она пинает инвариант, а не описывает игру. Карта — по сетке
+ * `WATER_GRID` ниже; урез ниже пола нулевого уровня, чтобы тело действительно
+ * собралось, а не оказалось пустым регионом.
+ */
+const WATER_SECTION: PresentationWater = {
+  cells: ['....', '.00.', '.00.', '....'],
+  bodies: [{ surfaceLevel: -0.1, shallowColor: '#4db8c4', deepColor: '#16505e' }],
+};
+
+/** Сетка, на которой стоит карта воды: клетки её адресует секция (REND-35). */
+function waterGrid(): TerrainGrid {
+  return createTerrainGrid({
+    width: 4,
+    height: 4,
+    tileSize: fixed.fromInt(1),
+    levels: Array.from({ length: 4 }, () => '0000'),
+    flags: Array.from({ length: 4 }, () => '....'),
+  });
+}
 
 /** Сценарий прогона: та же сцена, тот же ввод, те же тики. */
 function scenario(scene: SceneDef): Parameters<typeof runScenarioBytes>[0] {
@@ -508,12 +535,22 @@ describe('PRES-4: разные парные документы у клиенто
     expect(packA.hash).toBe(packB.hash);
     expect(packA.hash).toBe(duelConfig({ scene }).version.contentPackHash);
 
-    // У клиентов разные слои: один украсил арену, второй — нет.
+    // У клиентов разные слои: один украсил арену и налил воду, второй — нет.
     const mine = new DecorationSet(decoratedStage());
     const theirs = new DecorationSet(decoratedStage());
     mine.apply(instancesOf(FIXTURE_LAYER));
     theirs.apply([]);
     expect(mine.size).not.toBe(theirs.size);
+
+    // Вода первого клиента ДЕЙСТВИТЕЛЬНО поднята, а не просто лежит в JSON:
+    // подсистема собрала тело на сетке (REND-35). У второго клиента секции нет
+    // вовсе — и его подсистема не создаёт ничего.
+    const withWater = new WaterSubsystem({ grid: waterGrid(), config: WATER_SECTION });
+    withWater.init(headlessContext());
+    const without = new WaterSubsystem({ grid: waterGrid() });
+    without.init(headlessContext());
+    expect(withWater.drawnBodies).toHaveLength(1);
+    expect(without.drawnBodies).toHaveLength(0);
 
     const match = await playMatch(16, { a: walkRight(1000) });
     expect(match.a.client.phase).toBe('playing');
@@ -598,9 +635,9 @@ describe('CONT-1: демонстрационный слой лежит в дер
  * (REND-18) — иначе тест утверждал бы про изоляцию слоя, которого не подняли.
  * Рисовать в headless-прогоне нечем, поэтому контекст — дубль.
  */
-function decoratedStage(): PresentationStage {
-  const context = {
-    scene: { add: () => undefined, remove: () => undefined },
+function headlessContext(): RenderContext {
+  return {
+    scene: new THREE.Scene(),
     assets: {
       request: (kind: string, id: string) => ({ kind, id }),
       state: () => ({ status: 'loading' }),
@@ -608,7 +645,10 @@ function decoratedStage(): PresentationStage {
     },
     config: { heightStep: 0.5 },
   } as unknown as RenderContext;
-  return new PresentationStage(context).register(
+}
+
+function decoratedStage(): PresentationStage {
+  return new PresentationStage(headlessContext()).register(
     new ModelsSubsystem({ entities: {} }, { warn: () => undefined }),
   );
 }

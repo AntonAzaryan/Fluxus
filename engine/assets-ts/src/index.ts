@@ -149,7 +149,12 @@ export type { ColorLut } from './colorLut.js';
 export { MAX_LUT_SIZE, MIN_LUT_SIZE, parseCubeLut } from './colorLut.js';
 
 // парный presentation-документ сцены (`presentation-scene` PRES-1..3)
-export type { DecorationRecord, PresentationFog, PresentationScene } from './presentation.js';
+export type {
+  DecorationRecord,
+  PresentationFog,
+  PresentationScene,
+  PresentationSceneContext,
+} from './presentation.js';
 export {
   DECORATION_POSITION_STEP,
   DECORATION_YAW_STEP,
@@ -183,6 +188,22 @@ export type {
   PresentationToneMappingOperator,
 } from './presentationPostprocess.js';
 export { PRESENTATION_TONE_MAPPING_OPERATORS } from './presentationPostprocess.js';
+// секция `water` документа (`rendering` REND-35, REND-36)
+export type {
+  PresentationWater,
+  PresentationWaterBody,
+  PresentationWaterDetail,
+  PresentationWaterDetailSource,
+  PresentationWaterFoam,
+  PresentationWaterRipples,
+  WaterGridExtent,
+} from './presentationWater.js';
+export {
+  PRESENTATION_WATER_DETAIL_SOURCES,
+  WATER_EMPTY_CELL,
+  WATER_MAX_RIPPLE_SOURCES,
+  validateWater,
+} from './presentationWater.js';
 
 // загрузчики реестра (ASSET-3); регистрируются потребителем через registerLoader
 export { mdxLoader } from './loaders/mdx.js';

@@ -36,11 +36,12 @@
  * ED-21), поэтому валидация проверяет конечность числа и положительность
  * масштаба, а не кратность шагу.
  *
- * ## Секции `lighting` и `postprocess` — рядом, отдельными модулями
+ * ## Секции `lighting`, `postprocess` и `water` — рядом, отдельными модулями
  *
  * Состав и валидация секции освещения (REND-29, REND-32) живут в
  * `presentationLighting.ts`, секции пост-обработки кадра (REND-34) — в
- * `presentationPostprocess.ts`: это самостоятельные форматы со своими уровнями
+ * `presentationPostprocess.ts`, секции воды (REND-35, REND-36) — в
+ * `presentationWater.ts`: это самостоятельные форматы со своими уровнями
  * вложенности и своими адресами находок, и читаются они отдельно от документа,
  * который их несёт. Сюда каждый входит одним полем и одним вызовом.
  */
@@ -49,6 +50,11 @@ import {
   validatePostprocess,
   type PresentationPostprocess,
 } from './presentationPostprocess.js';
+import {
+  validateWater,
+  type PresentationWater,
+  type WaterGridExtent,
+} from './presentationWater.js';
 
 /** Запись размещения decoration (PRES-2). Состав закрыт. */
 export interface DecorationRecord {
@@ -100,14 +106,32 @@ export interface PresentationFog {
 /**
  * Документ целиком (PRES-2): упорядоченный список записей `decorations` —
  * отсутствующий и пустой неразличимы, и то и другое означает слой без
- * декораций — плюс необязательные секции `fog` (FOW-10), `lighting` (REND-29)
- * и `postprocess` (REND-34); их отсутствие — значения по умолчанию.
+ * декораций — плюс необязательные секции `fog` (FOW-10), `lighting` (REND-29),
+ * `postprocess` (REND-34) и `water` (REND-35); их отсутствие — значения по
+ * умолчанию, а отсутствие `water` — сцена без воды.
  */
 export interface PresentationScene {
   readonly decorations: readonly DecorationRecord[];
   readonly fog?: PresentationFog;
   readonly lighting?: PresentationLighting;
   readonly postprocess?: PresentationPostprocess;
+  readonly water?: PresentationWater;
+}
+
+/**
+ * Что вызывающий знает о сцене, которой принадлежит документ (PRES-1). Пока
+ * поле одно — сетка террейна: клеточная карта секции `water` адресует её клетки
+ * (REND-35), и без сетки секцию не к чему привязать.
+ *
+ * Контекст необязателен, и это не послабление: загрузчик ассета держит ОДИН
+ * документ и о парном конфиге сцены не знает (ASSET-3), поэтому размеры карты
+ * проверяет тот, у кого сетка есть, — редактор и сборка сцены. Проверки,
+ * которым сетка не нужна (алфавит, прямоугольность, разрешимость индексов),
+ * идут в обоих случаях.
+ */
+export interface PresentationSceneContext {
+  /** Сетка террейна сцены; `null` — террейна у сцены нет; нет поля — неизвестно. */
+  readonly terrain?: WaterGridExtent | null;
 }
 
 /** Шаг квантования позиции и масштаба — 10⁻³ мировой единицы (PRES-3). */
@@ -189,7 +213,13 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /** Состав закрыт (PRES-2): ключ, которого формат не знает, — ошибка, а не игнор. */
-const DOCUMENT_KEYS: readonly string[] = ['decorations', 'fog', 'lighting', 'postprocess'];
+const DOCUMENT_KEYS: readonly string[] = [
+  'decorations',
+  'fog',
+  'lighting',
+  'postprocess',
+  'water',
+];
 const RECORD_KEYS: readonly string[] = ['visual', 'x', 'y', 'yaw', 'scale', 'skin', 'walkable'];
 const FOG_KEYS: readonly string[] = [
   'strength',
@@ -340,6 +370,7 @@ function validateRecord(entry: unknown, path: string, errors: string[]): void {
  */
 export function validatePresentationScene(
   doc: unknown,
+  context: PresentationSceneContext = {},
 ): { ok: true; scene: PresentationScene } | { ok: false; errors: string[] } {
   const errors: string[] = [];
   if (!isRecord(doc)) {
@@ -365,6 +396,18 @@ export function validatePresentationScene(
   // Секция `postprocess` (REND-34) — тем же порядком: её умолчания держит
   // подсистема пост-обработки, и они воспроизводят сегодняшний кадр.
   if (doc.postprocess !== undefined) validatePostprocess(doc.postprocess, errors);
+  // Секция `water` (REND-35) — тем же порядком, но с одним отличием: её
+  // клеточная карта адресует клетки сетки террейна, поэтому валидация получает
+  // сетку контекстом. Нет контекста — сетка вызывающему неизвестна, и размеры
+  // карты не проверяются; `terrain: null` — террейна у сцены нет, и секция
+  // отвергается целиком.
+  if (doc.water !== undefined) {
+    validateWater(
+      doc.water,
+      errors,
+      'terrain' in context ? (context.terrain ?? null) : undefined,
+    );
+  }
   if (errors.length > 0) return { ok: false, errors };
   // Отсутствующий и пустой список неразличимы (PRES-2): наружу и то и другое
   // выходит пустым списком, и потребителю не приходится различать их самому.
@@ -377,6 +420,7 @@ export function validatePresentationScene(
       ...(doc.postprocess === undefined
         ? {}
         : { postprocess: doc.postprocess as PresentationPostprocess }),
+      ...(doc.water === undefined ? {} : { water: doc.water as PresentationWater }),
     },
   };
 }
