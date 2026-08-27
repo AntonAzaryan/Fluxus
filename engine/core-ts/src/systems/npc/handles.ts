@@ -30,7 +30,7 @@ import { optionalComponentHandle } from '../optionalHandle.js';
 import type { ComponentHandle, FieldHandle, SystemContext } from '../../types.js';
 
 /** Слот threat-таблицы (NPC-5): handle для чтения и имя поля — для команд и `peekField` (CMD-5). */
-export interface NpcThreatSlotHandles {
+interface NpcThreatSlotHandles {
   readonly sourceField: string;
   readonly source: FieldHandle;
   readonly valueField: string;
@@ -38,13 +38,13 @@ export interface NpcThreatSlotHandles {
 }
 
 /** Сторона сущности (биндинг NPC-1): компонент и поле разрешаются парой либо не разрешаются вовсе. */
-export interface NpcTeamHandles {
+interface NpcTeamHandles {
   readonly component: ComponentHandle;
   readonly field: FieldHandle;
 }
 
 /** Здоровье и его максимум (биндинг NPC-1, NPC-7): доля считается их отношением. */
-export interface NpcHealthHandles {
+interface NpcHealthHandles {
   readonly value: FieldHandle;
   readonly max: FieldHandle;
 }

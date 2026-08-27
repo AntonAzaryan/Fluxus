@@ -121,7 +121,7 @@ function findOutcome(
  * определения, а платформенные умолчания действуют на всё, чего определение не
  * назвало (ABIL-6).
  */
-export function resolveOutcome(
+function resolveOutcome(
   catalog: AbilityCatalog,
   ability: CompiledAbility,
   phase: CompiledPhase | undefined,

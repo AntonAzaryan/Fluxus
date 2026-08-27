@@ -31,7 +31,7 @@ const KEY_FROM: OperationParamSpec = { type: 'string', descriptionKey: 'operatio
 const KEY_TO: OperationParamSpec = { type: 'string', descriptionKey: 'operation.param.to' };
 
 /** Правка одного места документа — то, чем пишет инспектор (ED-24). */
-export const setValueOperation: AuthoringOperation = {
+const setValueOperation: AuthoringOperation = {
   id: 'document.setValue',
   descriptionKey: 'operation.document.setValue',
   params: { document: DOCUMENT, path: PATH, value: VALUE },
@@ -42,7 +42,7 @@ export const setValueOperation: AuthoringOperation = {
 };
 
 /** Снятие значения: поле исчезает, а не получает `null` — это разные документы. */
-export const removeValueOperation: AuthoringOperation = {
+const removeValueOperation: AuthoringOperation = {
   id: 'document.removeValue',
   descriptionKey: 'operation.document.removeValue',
   params: { document: DOCUMENT, path: PATH },
@@ -73,7 +73,7 @@ export const removeValueOperation: AuthoringOperation = {
  * закрыты тем же запретом, что и для `document.setValue`, — записи списка
  * адресуются дескриптором.
  */
-export const renameKeyOperation: AuthoringOperation = {
+const renameKeyOperation: AuthoringOperation = {
   id: 'document.renameKey',
   descriptionKey: 'operation.document.renameKey',
   params: { document: DOCUMENT, path: PATH, from: KEY_FROM, to: KEY_TO },
@@ -114,7 +114,7 @@ export const renameKeyOperation: AuthoringOperation = {
 };
 
 /** Дописывает запись в конец списка и отдаёт её сессионный дескриптор (SER-8). */
-export const appendRecordOperation: AuthoringOperation = {
+const appendRecordOperation: AuthoringOperation = {
   id: 'document.list.append',
   descriptionKey: 'operation.document.list.append',
   params: { document: DOCUMENT, list: LIST, item: ITEM },
@@ -123,7 +123,7 @@ export const appendRecordOperation: AuthoringOperation = {
   },
 };
 
-export const removeRecordOperation: AuthoringOperation = {
+const removeRecordOperation: AuthoringOperation = {
   id: 'document.list.remove',
   descriptionKey: 'operation.document.list.remove',
   params: { document: DOCUMENT, record: RECORD },
@@ -134,7 +134,7 @@ export const removeRecordOperation: AuthoringOperation = {
 };
 
 /** Правка внутри записи: путь отсчитывается от записи, адрес — дескриптор (ED-29). */
-export const setRecordValueOperation: AuthoringOperation = {
+const setRecordValueOperation: AuthoringOperation = {
   id: 'document.list.setValue',
   descriptionKey: 'operation.document.list.setValue',
   params: { document: DOCUMENT, record: RECORD, path: PATH, value: VALUE },
@@ -149,7 +149,7 @@ export const setRecordValueOperation: AuthoringOperation = {
   },
 };
 
-export const removeRecordValueOperation: AuthoringOperation = {
+const removeRecordValueOperation: AuthoringOperation = {
   id: 'document.list.removeValue',
   descriptionKey: 'operation.document.list.removeValue',
   params: { document: DOCUMENT, record: RECORD, path: PATH },

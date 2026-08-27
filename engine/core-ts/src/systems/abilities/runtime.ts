@@ -419,7 +419,7 @@ export function stepOriginY(
  * этой части проверки не выполняет вовсе, а сущность без `Visibility` публична
  * по умолчанию (NET-12) — то же правило, что у фильтра снапшота.
  */
-export function visibleToOwner(
+function visibleToOwner(
   ctx: SystemContext,
   catalog: AbilityCatalog,
   owner: EntityId,

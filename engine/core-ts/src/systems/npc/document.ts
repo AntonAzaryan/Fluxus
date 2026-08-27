@@ -197,7 +197,7 @@ function compileThreatSource(node: unknown, path: string): CompiledThreatSource 
 }
 
 /** Документ поведения целиком (NPC-2): версия формы, tier, каденс, дистанции, состояния. */
-export function compileBehavior(node: unknown, path: string): CompiledBehavior {
+function compileBehavior(node: unknown, path: string): CompiledBehavior {
   const root = asObject(node, path);
   const schema = countOf(root.schema, `${path}.schema`);
   if (schema !== NPC_BEHAVIOR_SCHEMA) {

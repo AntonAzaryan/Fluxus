@@ -36,7 +36,7 @@ export const NPC_DIRECTOR_COMPONENT = 'NpcDirector';
 export const NPC_THREAT_SLOTS = 4;
 
 /** Значение поля `state`, означающее «состояние ещё не выбрано» (NPC-1). */
-export const NPC_STATE_NONE = -1;
+const NPC_STATE_NONE = -1;
 
 /** Значение поля `action`, означающее «действие на этом тике не выбрано» (NPC-4). */
 export const NPC_ACTION_NONE = -1;
@@ -88,7 +88,7 @@ function threatSchema(): ComponentSchema {
  * даром. Кэшем платформы вне мира он быть не может по тому же основанию, по
  * какому сетке соседей запрещено переживать тик.
  */
-export const NPC_AGENT_SCHEMA: ComponentSchema = {
+const NPC_AGENT_SCHEMA: ComponentSchema = {
   name: NPC_AGENT_COMPONENT,
   fields: {
     action: 'i32',
@@ -118,10 +118,10 @@ export const NPC_AGENT_SCHEMA: ComponentSchema = {
 };
 
 /** Threat-таблица фиксированной ёмкости (NPC-5): top-K источников плоскими полями. */
-export const NPC_THREAT_SCHEMA: ComponentSchema = threatSchema();
+const NPC_THREAT_SCHEMA: ComponentSchema = threatSchema();
 
 /** Прогресс по маршруту волны (NPC-6): номер маршрута и индекс текущей точки. */
-export const NPC_ROUTE_SCHEMA: ComponentSchema = {
+const NPC_ROUTE_SCHEMA: ComponentSchema = {
   name: NPC_ROUTE_COMPONENT,
   fields: { index: 'i32', route: 'i32' },
   defaults: { index: 0, route: 0 },
@@ -132,7 +132,7 @@ export const NPC_ROUTE_SCHEMA: ComponentSchema = {
  * `Position`. Схемы сцены это не расширяет: маршрут описывается расстановкой,
  * а не новым полем документа.
  */
-export const WAYPOINT_SCHEMA: ComponentSchema = {
+const WAYPOINT_SCHEMA: ComponentSchema = {
   name: WAYPOINT_COMPONENT,
   fields: { index: 'i32', route: 'i32' },
   defaults: { index: 0, route: 0 },
@@ -143,7 +143,7 @@ export const WAYPOINT_SCHEMA: ComponentSchema = {
  * следующего выпуска и сколько её бойцов уже выпущено. Носитель — обычная
  * сущность расстановки сцены, как носитель радиуса арены (ARENA-4).
  */
-export const NPC_DIRECTOR_SCHEMA: ComponentSchema = {
+const NPC_DIRECTOR_SCHEMA: ComponentSchema = {
   name: NPC_DIRECTOR_COMPONENT,
   fields: { released: 'i32', timer: 'i32', wave: 'i32' },
   defaults: { released: NPC_WAVE_UNARMED, timer: 0, wave: 0 },

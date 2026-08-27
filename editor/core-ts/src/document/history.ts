@@ -63,7 +63,7 @@ export interface HistorySnapshot {
   readonly dropped: number;
 }
 
-export function viewEntry(entry: HistoryEntry): HistoryEntryView {
+function viewEntry(entry: HistoryEntry): HistoryEntryView {
   const paths: DocumentPathRef[] = [];
   for (const change of entry.changes) {
     for (const path of change.paths) paths.push({ documentId: change.documentId, path });

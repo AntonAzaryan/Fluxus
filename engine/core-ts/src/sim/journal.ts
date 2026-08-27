@@ -46,7 +46,7 @@ export const JOURNAL_MESSAGE = '$message';
  * а не значение: журнал ничего не додумывает, и событие, не назвавшее источник
  * урона, даёт запись без актора (DIAG-10).
  */
-export interface JournalEventSemantics {
+interface JournalEventSemantics {
   /** Семантический код факта — политика игры, инструменту неизвестная. */
   readonly kind: string;
   /** Поле события, которое является актором. */
@@ -287,7 +287,7 @@ export function buildJournal(trace: string, dictionary?: JournalDictionary): Jou
  * строки трейса, — построчное сравнение двух сборок не должно зависеть от
  * порядка вставки полей.
  */
-export function journalLine(entry: JournalEntry): string {
+function journalLine(entry: JournalEntry): string {
   return canonicalJson(entry);
 }
 

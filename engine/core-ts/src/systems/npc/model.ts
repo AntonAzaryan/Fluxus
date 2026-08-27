@@ -27,7 +27,7 @@ export const NPC_BEHAVIOR_SCHEMA = 1;
  */
 export const NPC_TIERS = ['mass', 'elite'] as const;
 
-export type NpcTier = (typeof NPC_TIERS)[number];
+type NpcTier = (typeof NPC_TIERS)[number];
 
 export const TIER_MASS = 0;
 export const TIER_ELITE = 1;
@@ -46,7 +46,7 @@ export const TIER_ELITE = 1;
  */
 export const NPC_EXECUTORS = ['hold', 'followRoute', 'seekTarget', 'cast'] as const;
 
-export type NpcExecutor = (typeof NPC_EXECUTORS)[number];
+type NpcExecutor = (typeof NPC_EXECUTORS)[number];
 
 export const EXEC_HOLD = 0;
 export const EXEC_FOLLOW_ROUTE = 1;
@@ -79,7 +79,7 @@ export const NPC_INPUTS = [
   'routeRemaining',
 ] as const;
 
-export type NpcInput = (typeof NPC_INPUTS)[number];
+type NpcInput = (typeof NPC_INPUTS)[number];
 
 export const INPUT_ALWAYS = 0;
 export const INPUT_TARGET_KNOWN = 1;
@@ -106,7 +106,7 @@ export const NPC_CONDITIONS = [
   'routeDone',
 ] as const;
 
-export type NpcConditionKind = (typeof NPC_CONDITIONS)[number];
+type NpcConditionKind = (typeof NPC_CONDITIONS)[number];
 
 export const COND_HEALTH_BELOW = 0;
 export const COND_HEALTH_ABOVE = 1;
@@ -121,25 +121,25 @@ export const COND_ROUTE_DONE = 8;
 // ------------------------------------------------------------- документ (NPC-2)
 
 /** Кривая отклика документа NPC: форма общей модели, параметры — Q16.16 (NPC-3). */
-export interface NpcCurveDef {
+interface NpcCurveDef {
   readonly type: ScoringCurveType;
   readonly [param: string]: string | number;
 }
 
-export interface NpcConsiderationDef {
+interface NpcConsiderationDef {
   readonly input: NpcInput;
   readonly curve: NpcCurveDef;
   readonly weight: Fixed;
 }
 
-export interface NpcActionDef {
+interface NpcActionDef {
   readonly executor: NpcExecutor;
   /** Тип публикуемого события — только у `cast` (NPC-7). */
   readonly event?: string;
   readonly considerations: readonly NpcConsiderationDef[];
 }
 
-export interface NpcConditionDef {
+interface NpcConditionDef {
   readonly kind: NpcConditionKind;
   /** Порог Q16.16 — у условий о здоровье и дистанции. */
   readonly value?: Fixed;
@@ -159,13 +159,13 @@ export interface NpcConditionDef {
   readonly entityField?: string;
 }
 
-export interface NpcTransitionDef {
+interface NpcTransitionDef {
   /** Имя состояния-адресата; в скомпилированном виде — индекс. */
   readonly to: string;
   readonly when: NpcConditionDef;
 }
 
-export interface NpcStateDef {
+interface NpcStateDef {
   readonly name: string;
   readonly actions: readonly NpcActionDef[];
   /**
@@ -176,7 +176,7 @@ export interface NpcStateDef {
 }
 
 /** Источник угрозы: событие шины, его поля и вес (NPC-5). */
-export interface NpcThreatSourceDef {
+interface NpcThreatSourceDef {
   readonly event: string;
   /** Поле события с сущностью-получателем угрозы (сам агент). */
   readonly victimField: string;
@@ -192,7 +192,7 @@ export interface NpcThreatSourceDef {
   readonly weight: Fixed;
 }
 
-export interface NpcThreatDef {
+interface NpcThreatDef {
   /**
    * Насколько новая цель должна превзойти текущую, чтобы агент переключился
    * (NPC-5). Доля Q16.16 сверх текущей угрозы — то самое «110% угрозы лидера»
@@ -205,7 +205,7 @@ export interface NpcThreatDef {
 }
 
 /** Дистанции поведения (NPC-6): все — Q16.16 мировые расстояния. */
-export interface NpcRangesDef {
+interface NpcRangesDef {
   /** Радиус, в котором агент вообще замечает цели; масштаб входа `targetDistance`. */
   readonly sense: Fixed;
   /** Радиус, ближе которого агент считается в контакте. */
@@ -216,7 +216,7 @@ export interface NpcRangesDef {
   readonly separation: Fixed;
 }
 
-export interface NpcBehaviorDef {
+interface NpcBehaviorDef {
   readonly schema: number;
   readonly name: string;
   readonly tier: NpcTier;
@@ -313,7 +313,7 @@ export interface CompiledBehavior {
 }
 
 /** Биндинги сцены (NPC-1): что в этой сцене значат позиция, скорость, здоровье и сторона. */
-export interface NpcBindingsDef {
+interface NpcBindingsDef {
   readonly position?: string;
   readonly velocity?: string;
   readonly health?: readonly [string, string];

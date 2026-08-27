@@ -143,20 +143,20 @@ export interface AbilityPhaseDef {
 }
 
 /** Ровно один из трёх видов (ABIL-3). */
-export interface AbilityTriggerDef {
+interface AbilityTriggerDef {
   readonly input?: { readonly bit: number };
   readonly event?: { readonly type: string; readonly as?: string };
   readonly always?: unknown;
 }
 
 /** Блок доставки «снаряд» (ABIL-9). */
-export interface AbilityProjectileDef {
+interface AbilityProjectileDef {
   readonly onHit?: readonly Action[];
   readonly onFade?: readonly Action[];
 }
 
 /** Блок доставки «эффект с длительностью» (ABIL-9). */
-export interface AbilityDurationDef {
+interface AbilityDurationDef {
   readonly onExpire?: readonly Action[];
 }
 
