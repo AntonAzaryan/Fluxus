@@ -20,8 +20,12 @@ import {
   dirtyEntities,
   dirtyIsEmpty,
   getField,
+  getFieldByHandle,
   hasComponent,
+  hasComponentByHandle,
   isAlive,
+  resolveComponentHandle,
+  resolveFieldHandle,
 } from '../ecs/world.js';
 import { beginSystem, countQuery, endSystem, withDiagnostics } from '../debug.js';
 import type { AbilityCatalog } from '../systems/abilities/model.js';
@@ -176,6 +180,14 @@ function runSystems(
     },
     get: (entity, component, field) => getField(world, entity, component, field),
     has: (entity, component) => hasComponent(world, entity, component),
+    // Handle-путь чтения (SYS-10): разрешение имён оплачивается один раз — при
+    // конструировании системы или на первом её входе, — а горячий цикл дальше
+    // читает без строкового поиска. Канала записи по handle здесь нет и не
+    // появится: мутации идут через `commands` (CMD-1, TICK-3).
+    resolveField: (component, field) => resolveFieldHandle(world, component, field),
+    resolveComponent: (component) => resolveComponentHandle(world, component),
+    getByHandle: (entity, handle) => getFieldByHandle(world, entity, handle),
+    hasByHandle: (entity, handle) => hasComponentByHandle(world, entity, handle),
     isAlive: (entity) => isAlive(world, entity),
     commands,
     events: state.events,

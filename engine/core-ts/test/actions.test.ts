@@ -8,7 +8,19 @@ import { createRngRegistry } from '../src/math/rng.js';
 import { createCommandBuffer, type CommandBufferHandle } from '../src/ecs/commands.js';
 import { modifierList } from '../src/systems/modifiers.js';
 import { query } from '../src/ecs/query.js';
-import { createWorld, getField, hasComponent, isAlive, listAlive, spawn, type PrefabDef } from '../src/ecs/world.js';
+import {
+  createWorld,
+  getField,
+  getFieldByHandle,
+  hasComponent,
+  hasComponentByHandle,
+  isAlive,
+  listAlive,
+  resolveComponentHandle,
+  resolveFieldHandle,
+  spawn,
+  type PrefabDef,
+} from '../src/ecs/world.js';
 import {
   FIXED_ONE,
   TIME_SCALE_COMPONENT,
@@ -63,6 +75,10 @@ function harness(seed = 1234): Harness {
     query: (spec) => query(world, spec),
     get: (e, c, f) => getField(world, e, c, f),
     has: (e, c) => hasComponent(world, e, c),
+    resolveField: (c, f) => resolveFieldHandle(world, c, f),
+    resolveComponent: (c) => resolveComponentHandle(world, c),
+    getByHandle: (e, handle) => getFieldByHandle(world, e, handle),
+    hasByHandle: (e, handle) => hasComponentByHandle(world, e, handle),
     isAlive: (e) => isAlive(world, e),
     commands: {
       ...commands,

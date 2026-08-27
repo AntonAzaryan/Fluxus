@@ -40,6 +40,14 @@ const INT32_MAX = 2147483647;
 const DEFAULT_ELAPSED_SCALE = 60;
 const DEFAULT_CROWD_SCALE = 4;
 
+/**
+ * Умолчание интервала пересчёта вектора локального расхождения (NPC-2, NPC-6) —
+ * три тика. Число НОРМАТИВНОЕ, а не выбор реализации: молчание документа
+ * обязано значить у двух реализаций ядра одно и то же (CLI-6), поэтому оно
+ * живёт требованием, а здесь только повторено именем.
+ */
+const DEFAULT_SEPARATION_INTERVAL = 3;
+
 /** Число Q16.16 из документа: целое в контейнере i32 — иначе оно не Q16.16 (FP-1). */
 function fixedOf(node: unknown, path: string): Fixed {
   if (typeof node !== 'number' || !Number.isInteger(node) || node < INT32_MIN || node > INT32_MAX) {
@@ -206,6 +214,19 @@ export function compileBehavior(node: unknown, path: string): CompiledBehavior {
     // единицы у него — противоречие документа самому себе, а не настройка.
     fail(`${path}.decision.intervalTicks`, 'tier "elite" решает каждый тик — интервал обязан быть 1');
   }
+  // Каденс пересчёта расхождения (NPC-6): свежесть ИСПОЛНЕНИЯ уже принятого
+  // решения, поэтому поле лежит рядом с весом расхождения, а не внутри
+  // `decision` — в бюджет решений оно не входит и семантики документа не меняет.
+  const separationIntervalTicks =
+    root.separationIntervalTicks === undefined
+      ? DEFAULT_SEPARATION_INTERVAL
+      : countOf(root.separationIntervalTicks, `${path}.separationIntervalTicks`);
+  if (separationIntervalTicks === 0) {
+    fail(
+      `${path}.separationIntervalTicks`,
+      'интервал пересчёта расхождения — минимум один тик; ноль расхождения не выключает, для этого есть separationWeight',
+    );
+  }
   const ranges = asObject(root.ranges, `${path}.ranges`);
   const states = asList(root.states, `${path}.states`);
   if (states.length === 0) fail(`${path}.states`, 'ни одного состояния — исполнять нечего');
@@ -226,6 +247,7 @@ export function compileBehavior(node: unknown, path: string): CompiledBehavior {
     speed: fixedOf(root.speed, `${path}.speed`),
     // Умолчание веса расхождения — полная сила (NPC-2).
     separationWeight: fixedOr(root.separationWeight, `${path}.separationWeight`, FIXED_ONE),
+    separationIntervalTicks,
     elapsedScale:
       scales.elapsedTicks === undefined
         ? DEFAULT_ELAPSED_SCALE

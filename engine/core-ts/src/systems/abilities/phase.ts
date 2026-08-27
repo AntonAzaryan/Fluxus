@@ -61,6 +61,7 @@ import {
   ticksOf,
   triggerHoldEnded,
 } from './runtime.js';
+import type { SlotHandles } from './handles.js';
 import { NO_ENTITY, type EntityId, type QuerySpec, type System, type SystemContext } from '../../types.js';
 
 /** Якорь шкалы `order` (DET-9); параметром сборки не является. */
@@ -88,9 +89,13 @@ export class CastPhaseSystem implements System {
 
   run(ctx: SystemContext): void {
     const slots = ctx.query(this.spec);
+    if (slots.length === 0) return;
+    // Handle полей слота (SYS-10): разрешаются один раз, на первом входе, и
+    // ПОСЛЕ раннего выхода — сцена без слотов до имён не доходит.
+    const h = this.scope.handles(ctx);
     this.slots = slots;
     for (const slot of slots) {
-      const owner = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'owner');
+      const owner = ctx.getByHandle(slot, h.owner);
       // Слот-сирота: владельца больше не существует (design Decision 14).
       // Смерть владельца сиротством НЕ является — герой переживает её той же
       // сущностью, и удалённый по маркеру слот отнял бы у него способности
@@ -99,15 +104,15 @@ export class CastPhaseSystem implements System {
         ctx.commands.destroy(slot);
         continue;
       }
-      const ability = abilityOf(this.catalog, ctx, slot);
-      const phaseIndex = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'phase');
+      const ability = abilityOf(this.catalog, ctx, h, slot);
+      const phaseIndex = ctx.getByHandle(slot, h.phase);
       if (phaseIndex < 0) {
         this.tryStart(ctx, slot, owner, ability);
         continue;
       }
       const phase = this.phaseOf(ability, phaseIndex, slot);
       if (this.interrupted(ctx, slot, owner, ability, phase)) continue;
-      this.advance(ctx, slot, owner, ability, phase, phaseIndex);
+      this.advance(ctx, h, slot, owner, ability, phase, phaseIndex);
     }
     this.slots = NO_SLOTS;
   }
@@ -177,12 +182,13 @@ export class CastPhaseSystem implements System {
     for (const other of this.slots) {
       if (other === starter) continue;
       if (!ctx.isAlive(other)) continue;
-      if (ctx.get(other, ABILITY_SLOT_COMPONENT, 'owner') !== owner) continue;
+      const h = this.scope.handles(ctx);
+      if (ctx.getByHandle(other, h.owner) !== owner) continue;
       const phaseIndex =
         ctx.commands.peekField(other, ABILITY_SLOT_COMPONENT, 'phase') ??
-        ctx.get(other, ABILITY_SLOT_COMPONENT, 'phase');
+        ctx.getByHandle(other, h.phase);
       if (phaseIndex < 0) continue;
-      const ability = abilityOf(this.catalog, ctx, other);
+      const ability = abilityOf(this.catalog, ctx, h, other);
       applyInterrupt(
         ctx,
         this.catalog,
@@ -269,13 +275,14 @@ export class CastPhaseSystem implements System {
 
   private advance(
     ctx: SystemContext,
+    h: SlotHandles,
     slot: EntityId,
     owner: EntityId,
     ability: CompiledAbility,
     phase: CompiledPhase,
     phaseIndex: number,
   ): void {
-    const ticks = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'phaseTicks') + 1;
+    const ticks = ctx.getByHandle(slot, h.phaseTicks) + 1;
     this.scope.bind(ctx, slot, owner);
     this.scope.vars.phaseTicks = ticks;
 
@@ -290,7 +297,7 @@ export class CastPhaseSystem implements System {
       // Фаза подтверждения завершается накоплением всех объявленных шагов, а
       // при их отсутствии — фронтом бита подтверждения (ABIL-4).
       if (ability.stepCount > 0) {
-        completed = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'staged') >= ability.stepCount;
+        completed = ctx.getByHandle(slot, h.staged) >= ability.stepCount;
       } else {
         const buttons = buttonsOf(ctx, this.catalog, owner);
         const prevButtons = prevButtonsOf(ctx, this.catalog, owner);
@@ -351,7 +358,7 @@ export class CastPhaseSystem implements System {
   ): void {
     if (
       (phase.trigger === PHASE_COMMIT || phase.trigger === PHASE_RELEASE) &&
-      !stagedStepsValid(ctx, this.catalog, ability, slot, owner, this.scope.vars)
+      !stagedStepsValid(ctx, this.catalog, this.scope.handles(ctx), ability, slot, owner, this.scope.vars)
     ) {
       this.interrupt(ctx, slot, owner, ability, phase, INTERRUPT_TARGET_LOST);
       return;

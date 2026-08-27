@@ -742,6 +742,10 @@
       "source": "f17be033",
       "translated": "4924554e"
     },
+    "schema.npcBehavior.separationIntervalTicks": {
+      "source": "8addfa6d",
+      "translated": "d665e594"
+    },
     "schema.npcBehavior.separationWeight": {
       "source": "d60e7c4c",
       "translated": "44a13826"

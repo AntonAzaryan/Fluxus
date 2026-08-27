@@ -21,9 +21,12 @@
  */
 import { abs, add, clamp, mul, sub } from '../math/fixed.js';
 import * as vec from '../math/vector.js';
+import { optionalComponentHandle } from './optionalHandle.js';
 import {
   LEVEL_OVERRIDE_COMPONENT,
+  type ComponentHandle,
   type EntityId,
+  type FieldHandle,
   type Fixed,
   type QuerySpec,
   type System,
@@ -105,6 +108,43 @@ const DEFAULTS = {
  */
 const LOCK_MASK_FIELD = 'mask';
 
+/**
+ * Handle полей, которые читаются НА КАЖДУЮ сущность КАЖДЫЙ тик (SYS-10):
+ * состояние манёвра, ввод, скорость и три числа доводчика. Разрешаются один
+ * раз, на первом входе в систему.
+ *
+ * Разовые числа стартов манёвра (`dodgeTicks`, `windowTicks`, `jumpHeight`,
+ * скорости манёвров) остались на строковом пути намеренно (design D3): они
+ * читаются на переходе, а не в цикле, — а разрешить их заранее значило бы
+ * ОТКАЗАТЬ сцене, которая манёвра не имеет и его чисел не объявила. Строковый
+ * путь этого не требовал, и требовать он не начинает.
+ */
+interface LocomotionHandles {
+  readonly state: FieldHandle;
+  readonly ticksLeft: FieldHandle;
+  readonly dirX: FieldHandle;
+  readonly dirY: FieldHandle;
+  readonly buttons: FieldHandle;
+  readonly prevButtons: FieldHandle;
+  readonly moveX: FieldHandle;
+  readonly moveY: FieldHandle;
+  readonly velocityX: FieldHandle;
+  readonly velocityY: FieldHandle;
+  readonly maxSpeed: FieldHandle;
+  readonly accel: FieldHandle;
+  readonly decel: FieldHandle;
+  /**
+   * Компоненты, наличие которых система СПРАШИВАЕТ (`ctx.has`), а не требует:
+   * `undefined` — их в схемах сцены нет вовсе, и ответ тот же `false`, что у
+   * строкового пути (`systems/optionalHandle.ts`).
+   */
+  readonly collider: ComponentHandle | undefined;
+  readonly levelOverride: ComponentHandle | undefined;
+  /** `undefined` — лока в сборке нет: ни одного нового чтения мира (LOC-7). */
+  readonly lock: ComponentHandle | undefined;
+  readonly lockMask: FieldHandle | undefined;
+}
+
 /** Фронт кнопки — бит установлен сейчас и снят в прошлой маске (LOC-3, TICK-4). */
 function buttonEdge(buttons: number, prevButtons: number, bit: number): boolean {
   const mask = 1 << bit;
@@ -136,6 +176,8 @@ export class LocomotionSystem implements System {
   private readonly lock: string | undefined;
   private readonly maneuverLockMask: number;
   private readonly querySpec: QuerySpec;
+  /** Разрешаются на первом входе, ПОСЛЕ раннего выхода (SYS-10). */
+  private handles: LocomotionHandles | undefined;
 
   constructor(options: LocomotionOptions = {}) {
     this.name = options.name ?? DEFAULTS.name;
@@ -164,41 +206,72 @@ export class LocomotionSystem implements System {
   }
 
   run(ctx: SystemContext): void {
-    for (const entity of ctx.query(this.querySpec)) {
-      const state = ctx.get(entity, this.state, 'state');
+    const entities = ctx.query(this.querySpec);
+    if (entities.length === 0) return;
+    const h = (this.handles ??= this.resolveHandles(ctx));
+    for (const entity of entities) {
+      const state = ctx.getByHandle(entity, h.state);
       if (
         state === LOCOMOTION_DODGE ||
         state === LOCOMOTION_ROLL ||
         state === LOCOMOTION_AIRBORNE
       ) {
-        this.maneuver(ctx, entity, state);
+        this.maneuver(ctx, h, entity, state);
       } else {
-        this.grounded(ctx, entity, state);
+        this.grounded(ctx, h, entity, state);
       }
     }
+  }
+
+  private resolveHandles(ctx: SystemContext): LocomotionHandles {
+    const lock = this.lock === undefined ? undefined : optionalComponentHandle(ctx, this.lock);
+    return {
+      state: ctx.resolveField(this.state, 'state'),
+      ticksLeft: ctx.resolveField(this.state, 'ticksLeft'),
+      dirX: ctx.resolveField(this.state, 'dirX'),
+      dirY: ctx.resolveField(this.state, 'dirY'),
+      buttons: ctx.resolveField(this.input, 'buttons'),
+      prevButtons: ctx.resolveField(this.input, 'prevButtons'),
+      moveX: ctx.resolveField(this.input, 'moveX'),
+      moveY: ctx.resolveField(this.input, 'moveY'),
+      velocityX: ctx.resolveField(this.velocity, 'x'),
+      velocityY: ctx.resolveField(this.velocity, 'y'),
+      maxSpeed: ctx.resolveField(this.config, 'maxSpeed'),
+      accel: ctx.resolveField(this.config, 'accel'),
+      decel: ctx.resolveField(this.config, 'decel'),
+      collider: optionalComponentHandle(ctx, this.collider),
+      levelOverride: optionalComponentHandle(ctx, LEVEL_OVERRIDE_COMPONENT),
+      lock,
+      lockMask: lock === undefined ? undefined : ctx.resolveField(this.lock!, LOCK_MASK_FIELD),
+    };
   }
 
   /**
    * `Normal` и `Window`: фронты кнопок стартуют манёвр, иначе — разгон и
    * торможение к желаемой скорости (LOC-2, LOC-4, LOC-5).
    */
-  private grounded(ctx: SystemContext, entity: EntityId, state: number): void {
-    const buttons = ctx.get(entity, this.input, 'buttons');
-    const prevButtons = ctx.get(entity, this.input, 'prevButtons');
-    const moveX = ctx.get(entity, this.input, 'moveX');
-    const moveY = ctx.get(entity, this.input, 'moveY');
+  private grounded(
+    ctx: SystemContext,
+    h: LocomotionHandles,
+    entity: EntityId,
+    state: number,
+  ): void {
+    const buttons = ctx.getByHandle(entity, h.buttons);
+    const prevButtons = ctx.getByHandle(entity, h.prevButtons);
+    const moveX = ctx.getByHandle(entity, h.moveX);
+    const moveY = ctx.getByHandle(entity, h.moveY);
     // Лок гейтит только старты манёвров (LOC-7): разгон и торможение ниже он не
     // трогает, а проигнорированный фронт нигде не копится — после снятия лока
     // манёвр стартует только новым нажатием.
-    const locked = this.maneuversLocked(ctx, entity);
+    const locked = this.maneuversLocked(ctx, h, entity);
 
     if (!locked && this.dodgeButton !== null && buttonEdge(buttons, prevButtons, this.dodgeButton)) {
       if (state === LOCOMOTION_WINDOW) {
-        this.startRoll(ctx, entity, moveX, moveY);
+        this.startRoll(ctx, h, entity, moveX, moveY);
         return;
       }
       if (moveX !== 0 || moveY !== 0) {
-        this.startDodge(ctx, entity, moveX, moveY);
+        this.startDodge(ctx, h, entity, moveX, moveY);
         return;
       }
       // Уклон без направления игнорируется (LOC-4): манёвр без направления
@@ -207,14 +280,14 @@ export class LocomotionSystem implements System {
 
     // Прыжок — только из `Normal` (LOC-5): окно даблтапа его не открывает.
     if (!locked && state === LOCOMOTION_NORMAL && buttonEdge(buttons, prevButtons, this.jumpButton)) {
-      this.startJump(ctx, entity, moveX, moveY);
+      this.startJump(ctx, h, entity, moveX, moveY);
       return;
     }
 
-    this.steer(ctx, entity, moveX, moveY);
+    this.steer(ctx, h, entity, moveX, moveY);
 
     if (state === LOCOMOTION_WINDOW) {
-      const ticksLeft = ctx.get(entity, this.state, 'ticksLeft') - 1;
+      const ticksLeft = ctx.getByHandle(entity, h.ticksLeft) - 1;
       ctx.commands.setField(entity, this.state, 'ticksLeft', ticksLeft);
       if (ticksLeft <= 0) {
         ctx.commands.setField(entity, this.state, 'state', LOCOMOTION_NORMAL);
@@ -228,9 +301,10 @@ export class LocomotionSystem implements System {
    * снапшот на общих основаниях (SNAP-1), и своего состояния система не
    * заводит. Идущий манёвр сюда не заходит вовсе — гейтится только старт.
    */
-  private maneuversLocked(ctx: SystemContext, entity: EntityId): boolean {
-    if (this.lock === undefined || !ctx.has(entity, this.lock)) return false;
-    return (ctx.get(entity, this.lock, LOCK_MASK_FIELD) & this.maneuverLockMask) !== 0;
+  private maneuversLocked(ctx: SystemContext, h: LocomotionHandles, entity: EntityId): boolean {
+    if (h.lock === undefined || h.lockMask === undefined) return false;
+    if (!ctx.hasByHandle(entity, h.lock)) return false;
+    return (ctx.getByHandle(entity, h.lockMask) & this.maneuverLockMask) !== 0;
   }
 
   /**
@@ -238,15 +312,20 @@ export class LocomotionSystem implements System {
    * переписывается каждый тик — манёвр владеет ею, чужая запись не переживает
    * следующий тик.
    */
-  private maneuver(ctx: SystemContext, entity: EntityId, state: number): void {
+  private maneuver(
+    ctx: SystemContext,
+    h: LocomotionHandles,
+    entity: EntityId,
+    state: number,
+  ): void {
     const speedField =
       state === LOCOMOTION_DODGE ? 'dodgeSpeed' : state === LOCOMOTION_ROLL ? 'rollSpeed' : 'jumpSpeed';
     const speed = ctx.get(entity, this.config, speedField);
-    const dirX = ctx.get(entity, this.state, 'dirX');
-    const dirY = ctx.get(entity, this.state, 'dirY');
+    const dirX = ctx.getByHandle(entity, h.dirX);
+    const dirY = ctx.getByHandle(entity, h.dirY);
     this.setVelocity(ctx, entity, mul(dirX, speed), mul(dirY, speed));
 
-    const ticksLeft = ctx.get(entity, this.state, 'ticksLeft') - 1;
+    const ticksLeft = ctx.getByHandle(entity, h.ticksLeft) - 1;
     ctx.commands.setField(entity, this.state, 'ticksLeft', ticksLeft);
     if (ticksLeft > 0) return;
 
@@ -262,22 +341,28 @@ export class LocomotionSystem implements System {
     if (state === LOCOMOTION_AIRBORNE) {
       // Тик приземления (LOC-5): override снимается ДО проверки пола арены
       // (якоря 0 и 110, DET-9) — приземление в дыру даёт провал штатно.
-      if (ctx.has(entity, LEVEL_OVERRIDE_COMPONENT)) {
+      if (h.levelOverride !== undefined && ctx.hasByHandle(entity, h.levelOverride)) {
         ctx.commands.removeComponent(entity, LEVEL_OVERRIDE_COMPONENT);
       }
-      if (ctx.has(entity, this.collider)) {
+      if (h.collider !== undefined && ctx.hasByHandle(entity, h.collider)) {
         ctx.commands.setField(entity, this.collider, 'cliffRise', 0);
       }
     }
   }
 
   /** Разгон/торможение к `move × maxSpeed` покомпонентно (LOC-2). */
-  private steer(ctx: SystemContext, entity: EntityId, moveX: Fixed, moveY: Fixed): void {
-    const maxSpeed = ctx.get(entity, this.config, 'maxSpeed');
-    const accel = ctx.get(entity, this.config, 'accel');
-    const decel = ctx.get(entity, this.config, 'decel');
-    const vx = ctx.get(entity, this.velocity, 'x');
-    const vy = ctx.get(entity, this.velocity, 'y');
+  private steer(
+    ctx: SystemContext,
+    h: LocomotionHandles,
+    entity: EntityId,
+    moveX: Fixed,
+    moveY: Fixed,
+  ): void {
+    const maxSpeed = ctx.getByHandle(entity, h.maxSpeed);
+    const accel = ctx.getByHandle(entity, h.accel);
+    const decel = ctx.getByHandle(entity, h.decel);
+    const vx = ctx.getByHandle(entity, h.velocityX);
+    const vy = ctx.getByHandle(entity, h.velocityY);
     const nx = approach(vx, mul(moveX, maxSpeed), accel, decel);
     const ny = approach(vy, mul(moveY, maxSpeed), accel, decel);
     if (nx !== vx) ctx.commands.setField(entity, this.velocity, 'x', nx);
@@ -285,13 +370,25 @@ export class LocomotionSystem implements System {
   }
 
   /** Направление фиксируется на момент нажатия (LOC-3) — нормированный вектор движения. */
-  private startDodge(ctx: SystemContext, entity: EntityId, moveX: Fixed, moveY: Fixed): void {
+  private startDodge(
+    ctx: SystemContext,
+    h: LocomotionHandles,
+    entity: EntityId,
+    moveX: Fixed,
+    moveY: Fixed,
+  ): void {
     const dir = vec.normalize({ x: moveX, y: moveY });
     this.start(ctx, entity, LOCOMOTION_DODGE, 'dodgeTicks', dir.x, dir.y, 'dodgeSpeed');
   }
 
   /** Нулевой вектор на повторном нажатии — направление предыдущего уклона (LOC-4). */
-  private startRoll(ctx: SystemContext, entity: EntityId, moveX: Fixed, moveY: Fixed): void {
+  private startRoll(
+    ctx: SystemContext,
+    h: LocomotionHandles,
+    entity: EntityId,
+    moveX: Fixed,
+    moveY: Fixed,
+  ): void {
     let dirX: Fixed;
     let dirY: Fixed;
     if (moveX !== 0 || moveY !== 0) {
@@ -299,8 +396,8 @@ export class LocomotionSystem implements System {
       dirX = dir.x;
       dirY = dir.y;
     } else {
-      dirX = ctx.get(entity, this.state, 'dirX');
-      dirY = ctx.get(entity, this.state, 'dirY');
+      dirX = ctx.getByHandle(entity, h.dirX);
+      dirY = ctx.getByHandle(entity, h.dirY);
     }
     this.start(ctx, entity, LOCOMOTION_ROLL, 'rollTicks', dirX, dirY, 'rollSpeed');
   }
@@ -310,7 +407,13 @@ export class LocomotionSystem implements System {
    * фиксирует уровень на момент отрыва (ARENA-6), `cliffRise` открывает
    * подъём через обрыв на высоту прыжка (PHYS-11, D3).
    */
-  private startJump(ctx: SystemContext, entity: EntityId, moveX: Fixed, moveY: Fixed): void {
+  private startJump(
+    ctx: SystemContext,
+    h: LocomotionHandles,
+    entity: EntityId,
+    moveX: Fixed,
+    moveY: Fixed,
+  ): void {
     const dir = vec.normalize({ x: moveX, y: moveY });
     this.start(ctx, entity, LOCOMOTION_AIRBORNE, 'jumpTicks', dir.x, dir.y, 'jumpSpeed');
     // Сцена без террейна тикает штатно (DI-3): без уровней override не нужен.
@@ -319,7 +422,7 @@ export class LocomotionSystem implements System {
         level: ctx.terrain.levelOf(entity),
       });
     }
-    if (ctx.has(entity, this.collider)) {
+    if (h.collider !== undefined && ctx.hasByHandle(entity, h.collider)) {
       ctx.commands.setField(entity, this.collider, 'cliffRise', ctx.get(entity, this.config, 'jumpHeight'));
     }
   }

@@ -10,6 +10,7 @@
 import { distSqCompare, distSqLe } from '../../math/fixed.js';
 import { NpcGrid } from './grid.js';
 import { isDead, posX, posY, teamOf } from './runtime.js';
+import type { NpcHandles } from './handles.js';
 import type { CompiledNpcBindings } from './model.js';
 import { NO_ENTITY, type EntityId, type Fixed, type QuerySpec, type SystemContext } from '../../types.js';
 
@@ -57,18 +58,20 @@ export class NpcPerception {
    * со стороной и позицией: сторона нужна, чтобы отличить врага от союзника, а
    * сцена без объявленной стороны целей не выбирает вовсе (NPC-1).
    */
-  rebuild(ctx: SystemContext, bindings: CompiledNpcBindings): void {
+  rebuild(ctx: SystemContext, bindings: CompiledNpcBindings, handles: NpcHandles): void {
     if (!bindings.hasTeam) {
       this.candidates = NO_CANDIDATES;
       this.grid.begin(0);
       return;
     }
+    // Спецификация запроса адресуется ИМЕНАМИ (QuerySpec не тронут), чтение
+    // позиций — handle'ами (SYS-10): имена нужны один раз, чтение — на каждого.
     this.spec ??= { all: [bindings.teamComponent, bindings.position] };
     this.candidates = ctx.query(this.spec);
     this.grid.begin(this.candidates.length);
     for (let slot = 0; slot < this.candidates.length; slot++) {
       const entity = this.candidates[slot]!;
-      this.grid.add(slot, posX(ctx, bindings, entity), posY(ctx, bindings, entity));
+      this.grid.add(slot, posX(ctx, handles, entity), posY(ctx, handles, entity));
     }
   }
 
@@ -79,7 +82,7 @@ export class NpcPerception {
    */
   nearestEnemy(
     ctx: SystemContext,
-    bindings: CompiledNpcBindings,
+    handles: NpcHandles,
     self: EntityId,
     x: Fixed,
     y: Fixed,
@@ -94,8 +97,8 @@ export class NpcPerception {
       const slot = this.scratch[i]!;
       const entity = this.candidates[slot]!;
       if (entity === self) continue;
-      if (teamOf(ctx, bindings, entity) === team) continue;
-      if (isDead(ctx, bindings, entity)) continue;
+      if (teamOf(ctx, handles, entity) === team) continue;
+      if (isDead(ctx, handles, entity)) continue;
       const dx = this.grid.xAt(slot) - x;
       const dy = this.grid.yAt(slot) - y;
       if (best !== NO_ENTITY && distSqCompare(dx, dy, bestX, bestY) >= 0) continue;
@@ -109,7 +112,7 @@ export class NpcPerception {
   /** Сколько живых союзников в радиусе — вход `crowding` (NPC-3). */
   allies(
     ctx: SystemContext,
-    bindings: CompiledNpcBindings,
+    handles: NpcHandles,
     self: EntityId,
     x: Fixed,
     y: Fixed,
@@ -122,8 +125,8 @@ export class NpcPerception {
       const slot = this.scratch[i]!;
       const entity = this.candidates[slot]!;
       if (entity === self) continue;
-      if (teamOf(ctx, bindings, entity) !== team) continue;
-      if (isDead(ctx, bindings, entity)) continue;
+      if (teamOf(ctx, handles, entity) !== team) continue;
+      if (isDead(ctx, handles, entity)) continue;
       count++;
     }
     return count;
@@ -132,15 +135,15 @@ export class NpcPerception {
   /** Живая ли цель и в пределах ли она радиуса чувства — без выборки соседей. */
   static reaches(
     ctx: SystemContext,
-    bindings: CompiledNpcBindings,
+    handles: NpcHandles,
     self: EntityId,
     target: EntityId,
     radius: Fixed,
   ): boolean {
     if (target === NO_ENTITY || !ctx.isAlive(target)) return false;
-    if (isDead(ctx, bindings, target)) return false;
-    const dx = posX(ctx, bindings, target) - posX(ctx, bindings, self);
-    const dy = posY(ctx, bindings, target) - posY(ctx, bindings, self);
+    if (isDead(ctx, handles, target)) return false;
+    const dx = posX(ctx, handles, target) - posX(ctx, handles, self);
+    const dy = posY(ctx, handles, target) - posY(ctx, handles, self);
     return distSqLe(dx, dy, radius);
   }
 }

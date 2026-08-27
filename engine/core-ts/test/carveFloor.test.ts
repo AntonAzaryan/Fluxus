@@ -16,7 +16,16 @@ import { mathApi } from '../src/math/mathApi.js';
 import { createRngRegistry } from '../src/math/rng.js';
 import { createCommandBuffer, type CommandBufferHandle } from '../src/ecs/commands.js';
 import { query } from '../src/ecs/query.js';
-import { getField, hasComponent, isAlive, spawn } from '../src/ecs/world.js';
+import {
+  getField,
+  getFieldByHandle,
+  hasComponent,
+  hasComponentByHandle,
+  isAlive,
+  resolveComponentHandle,
+  resolveFieldHandle,
+  spawn,
+} from '../src/ecs/world.js';
 import { loadScene } from '../src/sim/scene.js';
 import {
   initialState,
@@ -76,6 +85,10 @@ function harness(def: TerrainDef | null = TERRAIN): Harness {
     query: (spec) => query(world, spec),
     get: (e, c, f) => getField(world, e, c, f),
     has: (e, c) => hasComponent(world, e, c),
+    resolveField: (c, f) => resolveFieldHandle(world, c, f),
+    resolveComponent: (c) => resolveComponentHandle(world, c),
+    getByHandle: (e, handle) => getFieldByHandle(world, e, handle),
+    hasByHandle: (e, handle) => hasComponentByHandle(world, e, handle),
     isAlive: (e) => isAlive(world, e),
     commands: {
       ...commands,

@@ -12,10 +12,14 @@
  *
  * Локальное расхождение — по соседям СЕТКИ (`grid.ts`): полного перебора пар
  * агентов нет, и стоимость шага растёт числом соседей, а не квадратом числа
- * агентов (NPC-6).
+ * агентов (NPC-6). Пересчёт вектора расхождения идёт СВОИМ каденсом — раз в
+ * `separationIntervalTicks` тиков на агента, — а между окнами применяется
+ * последний пересчитанный вектор из полей компонента (NPC-6).
  *
  * Исполнение решения идёт КАЖДЫЙ тик независимо от каденса пересмотра (NPC-4):
  * решение выбирает `behavior.ts` по своим окнам, а движется агент постоянно.
+ * Каденс пересчёта расхождения этого не меняет: он про СВЕЖЕСТЬ вектора, а не
+ * про право двигаться, — и в бюджет решений (NPC-4) не входит.
  *
  * Направления считаются в ПОЛЯХ системы, а не возвращаются векторами: литерал
  * `{ x, y }` на каждого агента (и на каждого его соседа) был бы аллокацией,
@@ -27,6 +31,7 @@ import { NpcGrid } from './grid.js';
 import { NpcRoutes } from './routes.js';
 import { isDead, livingAgents, posX, posY } from './runtime.js';
 import { NPC_ACTION_NONE, NPC_AGENT_COMPONENT, NPC_ROUTE_COMPONENT } from './components.js';
+import { resolveNpcHandles, type NpcHandles } from './handles.js';
 import { EXEC_FOLLOW_ROUTE, EXEC_SEEK_TARGET, type CompiledBehavior, type NpcCatalog } from './model.js';
 import {
   FIXED_ONE,
@@ -74,6 +79,8 @@ export class NpcMovementSystem implements System {
   /** Направление шага текущего агента: единичный вектор либо ноль. */
   private dirX: Fixed = 0;
   private dirY: Fixed = 0;
+  /** Handle платформы (SYS-10): один раз на первом входе, после раннего выхода. */
+  private handles: NpcHandles | undefined;
 
   constructor(catalog: NpcCatalog) {
     this.catalog = catalog;
@@ -91,21 +98,22 @@ export class NpcMovementSystem implements System {
     const agents = ctx.query(this.spec);
     if (agents.length === 0) return;
     const bindings = this.catalog.bindings;
-    this.routes.rebuild(ctx, bindings.position);
+    const handles = (this.handles ??= resolveNpcHandles(ctx, bindings));
+    this.routes.rebuild(ctx, bindings.position, handles);
     this.grid.begin(agents.length);
     for (let slot = 0; slot < agents.length; slot++) {
       const entity = agents[slot]!;
-      this.grid.add(slot, posX(ctx, bindings, entity), posY(ctx, bindings, entity));
+      this.grid.add(slot, posX(ctx, handles, entity), posY(ctx, handles, entity));
     }
 
     for (let slot = 0; slot < agents.length; slot++) {
       const entity = agents[slot]!;
-      const behavior = this.catalog.behaviors[ctx.get(entity, NPC_AGENT_COMPONENT, 'behavior')];
+      const behavior = this.catalog.behaviors[ctx.getByHandle(entity, handles.agentBehavior)];
       if (behavior === undefined) continue;
-      this.desired(ctx, behavior, entity);
+      this.desired(ctx, handles, behavior, entity);
       let vx = mul(this.dirX, behavior.speed);
       let vy = mul(this.dirY, behavior.speed);
-      this.separation(behavior, slot);
+      this.separation(ctx, handles, behavior, entity, slot);
       const push = mul(behavior.speed, behavior.separationWeight);
       vx = add(vx, mul(this.dirX, push));
       vy = add(vy, mul(this.dirY, push));
@@ -127,15 +135,20 @@ export class NpcMovementSystem implements System {
   }
 
   /** Направление движения принятого решения (NPC-4). */
-  private desired(ctx: SystemContext, behavior: CompiledBehavior, entity: EntityId): void {
+  private desired(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    behavior: CompiledBehavior,
+    entity: EntityId,
+  ): void {
     this.dirX = 0;
     this.dirY = 0;
-    const action = ctx.get(entity, NPC_AGENT_COMPONENT, 'action');
+    const action = ctx.getByHandle(entity, handles.agentAction);
     if (action === NPC_ACTION_NONE) return;
-    const state = behavior.states[ctx.get(entity, NPC_AGENT_COMPONENT, 'state')];
+    const state = behavior.states[ctx.getByHandle(entity, handles.agentState)];
     const executor = state?.actions[action]?.executor;
-    if (executor === EXEC_FOLLOW_ROUTE) this.followRoute(ctx, behavior, entity);
-    else if (executor === EXEC_SEEK_TARGET) this.seekTarget(ctx, behavior, entity);
+    if (executor === EXEC_FOLLOW_ROUTE) this.followRoute(ctx, handles, behavior, entity);
+    else if (executor === EXEC_SEEK_TARGET) this.seekTarget(ctx, handles, behavior, entity);
     // `hold` и `cast` стоят на месте: идущий каст двигать себя не должен, а
     // «атака в контакте» — это остановка, а не отдельный исполнитель.
   }
@@ -145,37 +158,82 @@ export class NpcMovementSystem implements System {
    * достижении. Прогресс живёт в компоненте агента, то есть снапшотится и
    * откатывается вместе с миром (SNAP-1).
    */
-  private followRoute(ctx: SystemContext, behavior: CompiledBehavior, entity: EntityId): void {
-    if (!ctx.has(entity, NPC_ROUTE_COMPONENT)) return;
-    const bindings = this.catalog.bindings;
-    const route = ctx.get(entity, NPC_ROUTE_COMPONENT, 'route');
-    let index = ctx.get(entity, NPC_ROUTE_COMPONENT, 'index');
+  private followRoute(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    behavior: CompiledBehavior,
+    entity: EntityId,
+  ): void {
+    if (!ctx.hasByHandle(entity, handles.route)) return;
+    const route = ctx.getByHandle(entity, handles.routeRoute);
+    let index = ctx.getByHandle(entity, handles.routeIndex);
     let point = this.routes.at(route, index);
     if (point === NO_ENTITY) return;
-    const x = posX(ctx, bindings, entity);
-    const y = posY(ctx, bindings, entity);
-    if (distSqLe(posX(ctx, bindings, point) - x, posY(ctx, bindings, point) - y, behavior.arrive)) {
+    const x = posX(ctx, handles, entity);
+    const y = posY(ctx, handles, entity);
+    if (distSqLe(posX(ctx, handles, point) - x, posY(ctx, handles, point) - y, behavior.arrive)) {
       index += 1;
       ctx.commands.setField(entity, NPC_ROUTE_COMPONENT, 'index', index);
       point = this.routes.at(route, index);
       if (point === NO_ENTITY) return;
     }
-    this.normalize(posX(ctx, bindings, point) - x, posY(ctx, bindings, point) - y);
+    this.normalize(posX(ctx, handles, point) - x, posY(ctx, handles, point) - y);
   }
 
   /** Сближение с целью; в пределах дистанции контакта агент стоит (NPC-4). */
-  private seekTarget(ctx: SystemContext, behavior: CompiledBehavior, entity: EntityId): void {
-    const bindings = this.catalog.bindings;
-    const target = ctx.get(entity, NPC_AGENT_COMPONENT, 'target');
-    if (target === NO_ENTITY || !ctx.isAlive(target) || isDead(ctx, bindings, target)) return;
-    const dx = posX(ctx, bindings, target) - posX(ctx, bindings, entity);
-    const dy = posY(ctx, bindings, target) - posY(ctx, bindings, entity);
+  private seekTarget(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    behavior: CompiledBehavior,
+    entity: EntityId,
+  ): void {
+    const target = ctx.getByHandle(entity, handles.agentTarget);
+    if (target === NO_ENTITY || !ctx.isAlive(target) || isDead(ctx, handles, target)) return;
+    const dx = posX(ctx, handles, target) - posX(ctx, handles, entity);
+    const dy = posY(ctx, handles, target) - posY(ctx, handles, entity);
     if (distSqLe(dx, dy, behavior.attack)) return;
     this.normalize(dx, dy);
   }
 
   /**
-   * Локальное расхождение по соседям сетки (NPC-6): чем ближе сосед, тем
+   * Вектор локального расхождения агента в `dirX`/`dirY` (NPC-6). Пересчёт идёт
+   * КАДЕНСОМ: в окне `(тик + место агента в обходе) % интервал` — та же
+   * конструкция, что у окна решений (NPC-4), и по той же причине. Место в
+   * обходе стабильно (QUERY-2), номер тика — состояние мира, поэтому окно есть
+   * функция состояния мира и только его: ни машины, ни нагрузки, ни «свободного
+   * времени» здесь нет, иначе два прогона одного матча разошлись бы.
+   *
+   * Между окнами применяется ДЕРЖИМЫЙ вектор — поля компонента агента, которые
+   * перемотка возвращает вместе с миром (SNAP-1). В самом окне свежий вектор
+   * применяется из полей системы, а в мир уходит командой: мир до flush её не
+   * видит (CMD-5) — тот же приём, что у `stateEnteredTick` решателя.
+   */
+  private separation(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    behavior: CompiledBehavior,
+    entity: EntityId,
+    slot: number,
+  ): void {
+    if (behavior.separation <= 0 || behavior.separationWeight <= 0) {
+      // Документ расхождения не просит: ни запроса к сетке, ни записей в
+      // компонент — держать нечего, и вектор остаётся нулевым.
+      this.dirX = 0;
+      this.dirY = 0;
+      return;
+    }
+    if ((ctx.tick + slot) % behavior.separationIntervalTicks !== 0) {
+      this.dirX = ctx.getByHandle(entity, handles.agentSepX);
+      this.dirY = ctx.getByHandle(entity, handles.agentSepY);
+      return;
+    }
+    this.recomputeSeparation(behavior, slot);
+    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'sepX', this.dirX);
+    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'sepY', this.dirY);
+  }
+
+  /**
+   * Пересчёт вектора расхождения по соседям сетки (NPC-6): чем ближе сосед, тем
    * сильнее отталкивание. Результат — единичный вектор в `dirX`/`dirY` либо
    * ноль; на скорость его переводит вызывающий весом документа.
    *
@@ -184,10 +242,9 @@ export class NpcMovementSystem implements System {
    * в Q16.16 стоит двоичного поиска, и на каждого соседа каждого агента их было
    * бы вдвое больше нужного.
    */
-  private separation(behavior: CompiledBehavior, slot: number): void {
+  private recomputeSeparation(behavior: CompiledBehavior, slot: number): void {
     this.dirX = 0;
     this.dirY = 0;
-    if (behavior.separation <= 0 || behavior.separationWeight <= 0) return;
     const x = this.grid.xAt(slot);
     const y = this.grid.yAt(slot);
     const found = this.grid.neighbors(slot, x, y, behavior.separation, this.scratch, EXAMINE_LIMIT);

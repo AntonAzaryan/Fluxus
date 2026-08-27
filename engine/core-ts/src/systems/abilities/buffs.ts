@@ -30,6 +30,7 @@ import {
   BUFF_INSTANCE_COMPONENT,
   NO_BUFF_CLASS,
 } from './components.js';
+import { resolveBuffInstanceHandles, type BuffInstanceHandles } from './handles.js';
 import { applyInterrupt, INTERRUPT_DISPEL } from './interrupt.js';
 import { STACKING_INDEPENDENT, STACKING_STACK, type AbilityCatalog, type CompiledBuff } from './model.js';
 import {
@@ -72,6 +73,11 @@ export class BuffSystem implements System {
   /** Область видимости прерываемого каста — отдельная (ABIL-10). */
   private readonly victim = new SlotScope();
   private readonly spec: QuerySpec = { all: [BUFF_INSTANCE_COMPONENT] };
+  /**
+   * Handle полей инстанса (SYS-10): разрешаются на первом входе и ПОСЛЕ раннего
+   * выхода — сцена без инстансов до имён не доходит.
+   */
+  private handles: BuffInstanceHandles | undefined;
 
   constructor(catalog: AbilityCatalog, modifiers: ModifierRegistry | undefined) {
     this.catalog = catalog;
@@ -80,8 +86,10 @@ export class BuffSystem implements System {
 
   run(ctx: SystemContext): void {
     const instances = ctx.query(this.spec);
-    for (const instance of instances) this.apply(ctx, instances, instance);
-    for (const instance of instances) this.advance(ctx, instance);
+    if (instances.length === 0) return;
+    const h = (this.handles ??= resolveBuffInstanceHandles(ctx));
+    for (const instance of instances) this.apply(ctx, h, instances, instance);
+    for (const instance of instances) this.advance(ctx, h, instance);
   }
 
   // ------------------------------------------------------------- наложение
@@ -91,17 +99,22 @@ export class BuffSystem implements System {
    * класс, длительность и статовые правки определения (BUFF-2) либо сводится с
    * действующим по политике стакинга (BUFF-3).
    */
-  private apply(ctx: SystemContext, instances: Float64Array, instance: EntityId): void {
-    if (ctx.get(instance, BUFF_INSTANCE_COMPONENT, 'class') !== NO_BUFF_CLASS) return;
-    const target = ctx.get(instance, BUFF_INSTANCE_COMPONENT, 'target');
+  private apply(
+    ctx: SystemContext,
+    h: BuffInstanceHandles,
+    instances: Float64Array,
+    instance: EntityId,
+  ): void {
+    if (ctx.getByHandle(instance, h.buffClass) !== NO_BUFF_CLASS) return;
+    const target = ctx.getByHandle(instance, h.target);
     // Цель исчезла раньше, чем бафф успел лечь: снимать нечего и исполнять
     // нечего (BUFF-6).
     if (target === NO_ENTITY || !ctx.isAlive(target)) {
       ctx.commands.destroy(instance);
       return;
     }
-    const buff = buffOf(this.catalog, ctx, instance);
-    const source = ctx.get(instance, BUFF_INSTANCE_COMPONENT, 'source');
+    const buff = buffOf(this.catalog, ctx, h, instance);
+    const source = ctx.getByHandle(instance, h.source);
 
     // Длительность нового наложения считается в области видимости НОВОГО
     // инстанса (BUFF-3) — и когда он живёт сам, и когда сводится с действующим.
@@ -109,7 +122,9 @@ export class BuffSystem implements System {
     const remaining = this.duration(ctx, buff);
 
     const host =
-      buff.stacking === STACKING_INDEPENDENT ? NO_ENTITY : this.host(ctx, instances, instance, target);
+      buff.stacking === STACKING_INDEPENDENT
+        ? NO_ENTITY
+        : this.host(ctx, h, instances, instance, target);
     if (host !== NO_ENTITY) {
       this.coalesce(ctx, buff, host, instance, target, remaining);
       return;
@@ -132,11 +147,12 @@ export class BuffSystem implements System {
    */
   private host(
     ctx: SystemContext,
+    h: BuffInstanceHandles,
     instances: Float64Array,
     instance: EntityId,
     target: EntityId,
   ): EntityId {
-    const buffId = ctx.get(instance, BUFF_INSTANCE_COMPONENT, 'buffId');
+    const buffId = ctx.getByHandle(instance, h.buffId);
     for (const other of instances) {
       if (other === instance) continue;
       if (!ctx.isAlive(other)) continue;
@@ -144,8 +160,8 @@ export class BuffSystem implements System {
       // проходом выше, для мира ещё не наложен (CMD-5).
       if (buffField(ctx, other, 'class') === NO_BUFF_CLASS) continue;
       if (buffField(ctx, other, 'dispelled') !== 0) continue;
-      if (ctx.get(other, BUFF_INSTANCE_COMPONENT, 'target') !== target) continue;
-      if (ctx.get(other, BUFF_INSTANCE_COMPONENT, 'buffId') !== buffId) continue;
+      if (ctx.getByHandle(other, h.target) !== target) continue;
+      if (ctx.getByHandle(other, h.buffId) !== buffId) continue;
       return other;
     }
     return NO_ENTITY;
@@ -194,9 +210,9 @@ export class BuffSystem implements System {
    * считается от тика наложения» (BUFF-5): счётчик начинает ход со следующего
    * тика, а не с того, на котором инстанс появился.
    */
-  private advance(ctx: SystemContext, instance: EntityId): void {
-    if (ctx.get(instance, BUFF_INSTANCE_COMPONENT, 'class') === NO_BUFF_CLASS) return;
-    const target = ctx.get(instance, BUFF_INSTANCE_COMPONENT, 'target');
+  private advance(ctx: SystemContext, h: BuffInstanceHandles, instance: EntityId): void {
+    if (ctx.getByHandle(instance, h.buffClass) === NO_BUFF_CLASS) return;
+    const target = ctx.getByHandle(instance, h.target);
     // Исчезновение цели удаляет инстанс БЕЗ `onExpire` (BUFF-6): исполнять
     // список действий над несуществующей сущностью нечем. Снимать источники
     // тоже не с кого — они исчезли вместе с целью.
@@ -204,7 +220,7 @@ export class BuffSystem implements System {
       ctx.commands.destroy(instance);
       return;
     }
-    const buff = buffOf(this.catalog, ctx, instance);
+    const buff = buffOf(this.catalog, ctx, h, instance);
     const source = buffField(ctx, instance, 'source');
     const stacks = buffField(ctx, instance, 'stacks');
 
@@ -295,11 +311,15 @@ export class BuffSystem implements System {
   private dispelCast(ctx: SystemContext, source: EntityId): void {
     if (source === NO_ENTITY || !ctx.isAlive(source)) return;
     if (!ctx.has(source, ABILITY_SLOT_COMPONENT)) return;
-    const phaseIndex = ctx.get(source, ABILITY_SLOT_COMPONENT, 'phase');
+    // Handle слота разрешаются ЗДЕСЬ, а не на входе системы: сцена вправе
+    // объявить одни баффы (SER-7), и компонента слота у неё тогда нет вовсе.
+    // Проверка выше доказывает, что он есть, — резолв законен (SYS-10).
+    const h = this.victim.handles(ctx);
+    const phaseIndex = ctx.getByHandle(source, h.phase);
     if (phaseIndex < 0) return;
-    const owner = ctx.get(source, ABILITY_SLOT_COMPONENT, 'owner');
+    const owner = ctx.getByHandle(source, h.owner);
     if (owner === NO_ENTITY || !ctx.isAlive(owner)) return;
-    const ability = abilityOf(this.catalog, ctx, source);
+    const ability = abilityOf(this.catalog, ctx, h, source);
     const phase = this.catalog.phases[ability.phaseStart + phaseIndex];
     if (phase === undefined || phaseIndex >= ability.phaseCount) return;
     applyInterrupt(

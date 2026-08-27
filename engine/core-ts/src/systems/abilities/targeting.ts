@@ -21,6 +21,7 @@
 import * as vector from '../../math/vector.js';
 import { evaluate, typeError } from '../../dsl/expr.js';
 import { ABILITY_SLOT_COMPONENT, stepFieldEntity, stepFieldX, stepFieldY } from './components.js';
+import type { SlotHandles } from './handles.js';
 import {
   PHASE_COMMIT,
   PHASE_RELEASE,
@@ -70,18 +71,22 @@ export class TargetingCommitSystem implements System {
   }
 
   run(ctx: SystemContext): void {
-    for (const slot of ctx.query(this.spec)) {
-      const phaseIndex = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'phase');
+    const slots = ctx.query(this.spec);
+    if (slots.length === 0) return;
+    // Handle полей слота (SYS-10): один раз, на первом входе, после раннего выхода.
+    const h = this.scope.handles(ctx);
+    for (const slot of slots) {
+      const phaseIndex = ctx.getByHandle(slot, h.phase);
       if (phaseIndex < 0) continue;
-      const ability = abilityOf(this.catalog, ctx, slot);
+      const ability = abilityOf(this.catalog, ctx, h, slot);
       if (ability.stepCount === 0) continue;
-      const staged = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'staged');
+      const staged = ctx.getByHandle(slot, h.staged);
       if (staged >= ability.stepCount) continue;
       // Шаг накапливают только фазы, которые его накапливают: `hold` и `auto`
       // завершаются временем и удержанием, и записывать в них нечего (ABIL-5).
       const trigger = this.catalog.phases[ability.phaseStart + phaseIndex]?.trigger;
       if (trigger !== PHASE_COMMIT && trigger !== PHASE_RELEASE) continue;
-      const owner = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'owner');
+      const owner = ctx.getByHandle(slot, h.owner);
       if (owner === NO_ENTITY || !ctx.isAlive(owner)) continue;
       const buttons = buttonsOf(ctx, this.catalog, owner);
       const prevButtons = prevButtonsOf(ctx, this.catalog, owner);
@@ -92,7 +97,7 @@ export class TargetingCommitSystem implements System {
         buttonEdge(buttons, prevButtons, ability.confirmBit) ||
         (trigger === PHASE_RELEASE && triggerHoldEnded(ability, buttons));
       if (!confirmed) continue;
-      this.commit(ctx, slot, owner, ability, staged);
+      this.commit(ctx, h, slot, owner, ability, staged);
     }
   }
 
@@ -103,6 +108,7 @@ export class TargetingCommitSystem implements System {
    */
   private commit(
     ctx: SystemContext,
+    h: SlotHandles,
     slot: EntityId,
     owner: EntityId,
     ability: CompiledAbility,
@@ -110,8 +116,8 @@ export class TargetingCommitSystem implements System {
   ): void {
     const step = this.catalog.steps[ability.stepStart + staged]!;
     this.scope.bind(ctx, slot, owner);
-    const originX = stepOriginX(ctx, slot, owner, staged);
-    const originY = stepOriginY(ctx, slot, owner, staged);
+    const originX = stepOriginX(ctx, h, slot, owner, staged);
+    const originY = stepOriginY(ctx, h, slot, owner, staged);
     const targetX = aimX(ctx, this.catalog, owner);
     const targetY = aimY(ctx, this.catalog, owner);
 

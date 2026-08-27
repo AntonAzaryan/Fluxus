@@ -131,6 +131,12 @@ const npcBehavior: Json = {
     },
     speed: fixed,
     separationWeight: fixed,
+    separationIntervalTicks: {
+      $comment:
+        'Тиков между пересчётами вектора локального расхождения (NPC-6); умолчание — 3 тика (NPC-2).',
+      type: 'integer',
+      minimum: 1,
+    },
     scales: {
       type: 'object',
       additionalProperties: false,

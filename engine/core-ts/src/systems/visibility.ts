@@ -19,10 +19,13 @@
  */
 import * as fixed from '../math/fixed.js';
 import { BLOCKS_VISION } from './physics.js';
+import { optionalComponentHandle } from './optionalHandle.js';
 import {
   POSITION_COMPONENT,
+  type ComponentHandle,
   type ComponentSchema,
   type EntityId,
+  type FieldHandle,
   type Fixed,
   type ModifierList,
   type System,
@@ -108,6 +111,42 @@ export function isVisibleTo(mask: number, team: number): boolean {
 const ANCHOR_ORDER = 900;
 
 /**
+ * Handle полей FoW (`data-driven-systems` SYS-10): пересчёт видимости читает
+ * позицию, команду и стелс на КАЖДОГО кандидата КАЖДОГО наблюдателя, то есть
+ * произведением, а не суммой. Имена разрешаются один раз, на первом входе.
+ */
+interface VisibilityHandles {
+  /**
+   * Сторона и стелс — компоненты, наличие которых система СПРАШИВАЕТ, а не
+   * требует: сущность без них видна по-настоящему и стелса не имеет.
+   * `undefined` — компонента нет и в схемах сцены, и ответ тот же `false`, что
+   * у строкового пути (`systems/optionalHandle.ts`).
+   */
+  readonly team: { readonly component: ComponentHandle; readonly id: FieldHandle } | undefined;
+  readonly stealth: { readonly component: ComponentHandle; readonly active: FieldHandle } | undefined;
+  readonly posX: FieldHandle;
+  readonly posY: FieldHandle;
+  readonly visibleTo: FieldHandle;
+  readonly visionRadius: FieldHandle;
+}
+
+function resolveHandles(ctx: SystemContext): VisibilityHandles {
+  const team = optionalComponentHandle(ctx, TEAM_COMPONENT);
+  const stealth = optionalComponentHandle(ctx, STEALTH_COMPONENT);
+  return {
+    team: team === undefined ? undefined : { component: team, id: ctx.resolveField(TEAM_COMPONENT, 'id') },
+    stealth:
+      stealth === undefined
+        ? undefined
+        : { component: stealth, active: ctx.resolveField(STEALTH_COMPONENT, 'active') },
+    posX: ctx.resolveField(POSITION_COMPONENT, 'x'),
+    posY: ctx.resolveField(POSITION_COMPONENT, 'y'),
+    visibleTo: ctx.resolveField(VISIBILITY_COMPONENT, 'visibleTo'),
+    visionRadius: ctx.resolveField(VISION_COMPONENT, 'radius'),
+  };
+}
+
+/**
  * Опций у системы не осталось: место в тике — якорь, а не параметр (DET-9).
  * Тип сохранён как форма поля-включателя в документах прогона и матча
  * (`"visibility": {}` в сценарии, CLI-2), поэтому объект без свойств.
@@ -134,6 +173,8 @@ export class VisibilitySystem implements System {
   // Через этот файл проходит `bin/sim.mjs` (CLI-1), так что сахар здесь стоил бы
   // CLI флага `--experimental-transform-types` и его предупреждения в выводе.
   private readonly modifiers: ModifierList;
+  /** Разрешаются на первом входе, ПОСЛЕ раннего выхода (SYS-10). */
+  private handles: VisibilityHandles | undefined;
 
   /** Список источников обзора приходит извне (DI-1): своего модульного у системы нет. */
   constructor(modifiers: ModifierList) {
@@ -143,31 +184,33 @@ export class VisibilitySystem implements System {
   run(ctx: SystemContext): void {
     const targets = ctx.query({ all: [VISIBILITY_COMPONENT, POSITION_COMPONENT] });
     if (targets.length === 0) return;
+    const h = (this.handles ??= resolveHandles(ctx));
 
     // Собственная команда видит свою сущность всегда, в том числе под стелсом
     // (FOW-3, NET-15) — с этого маска и начинается, а не с нуля.
     const next = new Map<EntityId, number>();
-    for (const target of targets) next.set(target, ownTeamBit(ctx, target));
+    for (const target of targets) next.set(target, ownTeamBit(ctx, h, target));
 
     const observers = ctx.query({ all: [VISION_COMPONENT, TEAM_COMPONENT, POSITION_COMPONENT] });
     for (const observer of observers) {
-      const bit = teamBit(ctx.get(observer, TEAM_COMPONENT, 'id'));
-      const from = positionOf(ctx, observer);
+      // Наблюдатель отобран запросом по `Team`: сторона у него есть заведомо.
+      const bit = teamBit(ctx.getByHandle(observer, h.team!.id));
+      const from = positionOf(ctx, h, observer);
       const level = ctx.terrain?.levelOf(observer);
 
       const candidates = ctx.query({
         all: [VISIBILITY_COMPONENT, POSITION_COMPONENT],
-        withinRadius: { center: from, radius: effectiveRadius(ctx, observer, this.modifiers) },
+        withinRadius: { center: from, radius: effectiveRadius(ctx, h, observer, this.modifiers) },
       });
       for (const candidate of candidates) {
         const mask = next.get(candidate);
         // Бит уже взведён другим наблюдателем той же команды (или это сама
         // сущность наблюдателя) — второй раз считать нечего.
         if (mask === undefined || (mask & bit) !== 0) continue;
-        if (isHidden(ctx, candidate)) continue;
+        if (isHidden(ctx, h, candidate)) continue;
         // FOW-5: строго выше — не видно; обратное направление не ограничено.
         if (level !== undefined && ctx.terrain!.levelOf(candidate) > level) continue;
-        if (!hasLineOfSight(ctx, observer, from, candidate, level)) continue;
+        if (!hasLineOfSight(ctx, h, observer, from, candidate, level)) continue;
         next.set(candidate, mask | bit);
       }
     }
@@ -176,45 +219,54 @@ export class VisibilitySystem implements System {
     // `Visibility` всегда dirty и сетевая дельта теряет смысл.
     for (const target of targets) {
       const mask = next.get(target)!;
-      if (mask === ctx.get(target, VISIBILITY_COMPONENT, 'visibleTo')) continue;
+      if (mask === ctx.getByHandle(target, h.visibleTo)) continue;
       ctx.commands.setField(target, VISIBILITY_COMPONENT, 'visibleTo', mask);
     }
   }
 }
 
 /** Сущность без `Team` ничьей «своей» не является: её видно только по-настоящему. */
-function ownTeamBit(ctx: SystemContext, entity: EntityId): number {
-  return ctx.has(entity, TEAM_COMPONENT) ? teamBit(ctx.get(entity, TEAM_COMPONENT, 'id')) : 0;
+function ownTeamBit(ctx: SystemContext, h: VisibilityHandles, entity: EntityId): number {
+  const team = h.team;
+  if (team === undefined || !ctx.hasByHandle(entity, team.component)) return 0;
+  return teamBit(ctx.getByHandle(entity, team.id));
 }
 
-function positionOf(ctx: SystemContext, entity: EntityId): Vec2 {
+function positionOf(ctx: SystemContext, h: VisibilityHandles, entity: EntityId): Vec2 {
   return {
-    x: ctx.get(entity, POSITION_COMPONENT, 'x'),
-    y: ctx.get(entity, POSITION_COMPONENT, 'y'),
+    x: ctx.getByHandle(entity, h.posX),
+    y: ctx.getByHandle(entity, h.posY),
   };
 }
 
 /** FOW-3: активный стелс исключает сущность из чужих масок. */
-function isHidden(ctx: SystemContext, entity: EntityId): boolean {
-  return ctx.has(entity, STEALTH_COMPONENT) && ctx.get(entity, STEALTH_COMPONENT, 'active') !== 0;
+function isHidden(ctx: SystemContext, h: VisibilityHandles, entity: EntityId): boolean {
+  const stealth = h.stealth;
+  return stealth !== undefined && ctx.hasByHandle(entity, stealth.component) && ctx.getByHandle(entity, stealth.active) !== 0;
 }
 
 /** FOW-3: `Vision.radius`, домноженный на произведение источников `VisionModifier`. */
-function effectiveRadius(ctx: SystemContext, observer: EntityId, modifiers: ModifierList): Fixed {
+function effectiveRadius(
+  ctx: SystemContext,
+  h: VisibilityHandles,
+  observer: EntityId,
+  modifiers: ModifierList,
+): Fixed {
   const scale = modifiers.product(ctx, observer, VISION_SCALE_MIN, VISION_SCALE_MAX);
-  return ctx.math.mul(ctx.get(observer, VISION_COMPONENT, 'radius'), scale);
+  return ctx.math.mul(ctx.getByHandle(observer, h.visionRadius), scale);
 }
 
 /** FOW-5: перекрыт ли кандидат укрытием — коллайдером с тегом `blocksVision`. */
 function hasLineOfSight(
   ctx: SystemContext,
+  h: VisibilityHandles,
   observer: EntityId,
   from: Vec2,
   candidate: EntityId,
   elevation: number | undefined,
 ): boolean {
   if (ctx.physics === undefined) return true;
-  const hit = ctx.physics.raycast(from, positionOf(ctx, candidate), {
+  const hit = ctx.physics.raycast(from, positionOf(ctx, h, candidate), {
     mask: BLOCKS_VISION,
     ignore: observer,
     // Уровень наблюдателя — тот же, что в фильтре по высоте (TERR-4): рёбра

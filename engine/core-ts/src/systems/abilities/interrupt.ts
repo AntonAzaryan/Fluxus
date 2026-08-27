@@ -238,12 +238,16 @@ export class CastInterruptSystem implements System {
     const published = ctx.events.length;
     if (published === 0) return;
 
-    for (const slot of ctx.query(this.spec)) {
-      const phaseIndex = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'phase');
+    const slots = ctx.query(this.spec);
+    if (slots.length === 0) return;
+    // Handle полей слота (SYS-10): один раз, на первом входе, после раннего выхода.
+    const h = this.scope.handles(ctx);
+    for (const slot of slots) {
+      const phaseIndex = ctx.getByHandle(slot, h.phase);
       if (phaseIndex < 0) continue;
-      const ability = abilityOf(this.catalog, ctx, slot);
+      const ability = abilityOf(this.catalog, ctx, h, slot);
       if ((ability.declared & sourceMask(INTERRUPT_DAMAGED)) === 0) continue;
-      const owner = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'owner');
+      const owner = ctx.getByHandle(slot, h.owner);
       if (owner === NO_ENTITY || !ctx.isAlive(owner)) continue;
 
       // Урон за тик суммируется: «получил урон сверх порога» — про тик, а не

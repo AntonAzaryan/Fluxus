@@ -9,17 +9,31 @@
  * Принадлежность компонентов — битовая маска на сущность (`componentMask.ts`),
  * а не проверка по имени: фильтр запроса сводится к одному И по словам вместо
  * строкового поиска на каждую сущность.
+ *
+ * Сами колонки и плоская таблица их адресов живут в `fieldTable.ts` — там же,
+ * где ЕДИНСТВЕННОЕ чтение поля (`readByHandle`). Строковый путь `getField`
+ * здесь — это разрешение имени плюс тот же вызов (SYS-10): два пути чтения не
+ * могут разойтись семантикой, потому что после разрешения имён путь один.
  */
 import type {
+  ComponentHandle,
   ComponentSchema,
   EntityId,
-  FieldArray,
+  FieldHandle,
   FieldOverrides,
   FieldType,
   WorldState,
 } from '../types.js';
 import { FIELD_TYPES, NO_ENTITY } from '../types.js';
-import { DEBUG, assert } from '../debug.js';
+import {
+  cloneStores,
+  createStores,
+  neutralValue,
+  ownsByHandle,
+  readByHandle,
+  type ComponentStorage,
+  type FieldTable,
+} from './fieldTable.js';
 import {
   allocate,
   assertRoom,
@@ -50,17 +64,12 @@ export interface PrefabDef {
   readonly tags?: readonly string[];
 }
 
-interface ComponentStorage {
-  readonly schema: ComponentSchema;
-  /** Числовой id компонента — позиция его бита в маске. */
-  readonly id: number;
-  /**
-   * SoA: поле → TypedArray ёмкостью `capacity`, индексируемый raw-индексом
-   * сущности (ECS-1). Тип массива выбирает тип поля (`fieldArray`): хранилище
-   * неоднородно ровно из-за `entity`, которому нужны 48 бит (ECS-6, ID-1).
-   */
-  readonly fields: Readonly<Record<string, FieldArray>>;
-}
+/**
+ * Хранилища и таблица полей живут в `fieldTable.ts` — там же, где чтение по
+ * handle (SYS-10). Реэкспорт: `peekField` буфера команд обязан брать
+ * нейтральное значение из того же правила, что мутаторы (CMD-5, ECS-3).
+ */
+export { neutralValue };
 
 interface WorldInternal {
   entities: EntityIndex;
@@ -82,6 +91,8 @@ interface WorldInternal {
    * замена на маску — когда замеры покажут, что заметен и сам обход Set'ов.
    */
   dirty: Map<string, Set<EntityId>>;
+  /** Плоская таблица полей — адресное пространство handle (SYS-10). */
+  fields: FieldTable;
 }
 
 const DEFAULT_CAPACITY = 1024;
@@ -105,27 +116,6 @@ const FIELD_TYPE_NAMES: readonly string[] = FIELD_TYPES;
 
 function isKnownFieldType(name: string): boolean {
   return FIELD_TYPE_NAMES.includes(name);
-}
-
-/**
- * Контейнер поля по его типу. `entity` — 48 бит без потерь (ECS-6, ID-1):
- * `Int32Array` усёк бы идентификатор молча, уже при `generation ≥ 256`.
- * Заполняется «ссылки нет», а не нулём: ноль — валидный `EntityId`, и
- * компонент, добавленный без значения, ссылался бы на сущность нулевого слота.
- */
-function fieldArray(type: FieldType, capacity: number): FieldArray {
-  if (type !== 'entity') return new Int32Array(capacity);
-  return new Float64Array(capacity).fill(NO_ENTITY);
-}
-
-/**
- * Нейтральное значение поля, для которого не объявлен `default` (ECS-3): ноль у
- * `i32`/`fixed`, «ссылки нет» у `entity` (ECS-6). Экспорт — для `peekField`
- * буфера команд (CMD-5): чтение отложенного `addComponent` обязано дать то же
- * значение, что этот модуль запишет на flush, а не вторую копию правила.
- */
-export function neutralValue(type: FieldType): number {
-  return type === 'entity' ? NO_ENTITY : 0;
 }
 
 /**
@@ -232,26 +222,18 @@ export function createWorld(
   const schemaMap = validateSchemas(schemas);
   const prefabMap = validatePrefabs(prefabs, schemaMap);
 
-  const stores = new Map<string, ComponentStorage>();
-  let nextComponentId = 0;
-  for (const schema of schemaMap.values()) {
-    const fields: Record<string, FieldArray> = {};
-    for (const [field, type] of Object.entries(schema.fields)) {
-      fields[field] = fieldArray(type, capacity);
-    }
-    stores.set(schema.name, { schema, id: nextComponentId, fields });
-    nextComponentId++;
-  }
+  const { stores, table } = createStores(schemaMap, capacity);
 
   const internal: WorldInternal = {
     entities: createEntityIndex(capacity),
-    masks: createMasks(capacity, Math.max(nextComponentId, 1)),
+    masks: createMasks(capacity, Math.max(stores.size, 1)),
     capacity,
     schemas: schemaMap,
     prefabs: prefabMap,
     stores,
     tags: new Map(),
     dirty: new Map(),
+    fields: table,
   };
   return toState(internal);
 }
@@ -402,17 +384,7 @@ export function fromPlain(
  */
 export function cloneWorld(state: WorldState): WorldState {
   const src = toInternal(state);
-
-  const stores = new Map<string, ComponentStorage>();
-  for (const [name, store] of src.stores) {
-    // `slice` сохраняет и содержимое, и вид массива — ширина поля клонируется
-    // вместе с ним, отдельного разбора по типу поля здесь не нужно.
-    const fields: Record<string, FieldArray> = {};
-    for (const [field, arr] of Object.entries(store.fields)) {
-      fields[field] = arr.slice();
-    }
-    stores.set(name, { schema: store.schema, id: store.id, fields });
-  }
+  const { stores, table } = cloneStores(src.stores);
 
   const tags = new Map<number, Set<string>>();
   for (const [index, set] of src.tags) tags.set(index, new Set(set));
@@ -427,6 +399,7 @@ export function cloneWorld(state: WorldState): WorldState {
     tags,
     // Снапшот — значение, а не живой мир: срез изменений в него не переносится.
     dirty: new Map(),
+    fields: table,
   });
 }
 
@@ -450,6 +423,9 @@ export function copyWorldInto(dst: WorldState, src: WorldState): void {
   to.entities.aliveCount = from.entities.aliveCount;
   to.masks.words.set(from.masks.words);
 
+  // Колонки перезаписываются НА МЕСТЕ, а не подменяются ссылками из снапшота, —
+  // и это же делает handle, разрешённый до отката, валидным после него (SYS-10):
+  // плоская таблица мира адресует те же массивы, что и до восстановления.
   for (const [name, store] of to.stores) {
     const source = from.stores.get(name);
     if (!source) throw new Error(`copyWorldInto: в источнике нет компонента "${name}"`);
@@ -716,9 +692,63 @@ export function isAlive(state: WorldState, entity: EntityId): boolean {
 export function hasComponent(state: WorldState, entity: EntityId, component: string): boolean {
   const internal = toInternal(state);
   const store = internal.stores.get(component);
+  // Незарегистрированное имя здесь — «не владеет», а не бросок: `has` и есть
+  // тот вопрос, которым контент проверяет наличие. Разрешение имени в handle
+  // отвечает на него иначе — ошибкой (SYS-10), и это не расхождение: резолв
+  // случается один раз до тика, где опечатке место, а не на каждой сущности.
   if (!store) return false;
-  if (!indexIsAlive(internal.entities, entity)) return false;
-  return maskHas(internal.masks, rawIndexOf(entity), store.id);
+  return ownsByHandle(internal, entity, store.id as ComponentHandle);
+}
+
+/**
+ * Разрешение имени компонента в handle (SYS-10). Зовётся при конструировании
+ * системы либо на первом её входе, а не на каждой сущности обхода: смысл
+ * handle в том, что строковый поиск оплачен заранее и ровно один раз.
+ *
+ * Неизвестное имя — ошибка НЕМЕДЛЕННО, с именем в тексте: тем же правилом, по
+ * которому система падает на отсутствующей зависимости (SYS-5). Ноль на каждом
+ * чтении посреди матча вместо этого превратил бы опечатку в поведение.
+ */
+export function resolveComponentHandle(state: WorldState, component: string): ComponentHandle {
+  const store = toInternal(state).stores.get(component);
+  if (!store) {
+    throw new Error(`resolveComponent: компонент "${component}" не зарегистрирован (SYS-10)`);
+  }
+  return store.id as ComponentHandle;
+}
+
+/** Разрешение имени поля в handle (SYS-10); условия и мотив — как у `resolveComponentHandle`. */
+export function resolveFieldHandle(
+  state: WorldState,
+  component: string,
+  field: string,
+): FieldHandle {
+  const store = toInternal(state).stores.get(component);
+  if (!store) {
+    throw new Error(`resolveField: компонент "${component}" не зарегистрирован (SYS-10)`);
+  }
+  const handle = store.handles[field];
+  if (handle === undefined) {
+    throw new Error(`resolveField: у компонента "${component}" нет поля "${field}" (SYS-10)`);
+  }
+  return handle;
+}
+
+/**
+ * Чтение поля по handle (SYS-10) — то же тотальное чтение ECS-7, что и
+ * строковое, без строкового поиска. Тело общее с `getField`: см. `readByHandle`.
+ */
+export function getFieldByHandle(state: WorldState, entity: EntityId, handle: FieldHandle): number {
+  return readByHandle(toInternal(state), entity, handle);
+}
+
+/** Владение компонентом по handle (SYS-10) — то же, что `hasComponent` после резолва. */
+export function hasComponentByHandle(
+  state: WorldState,
+  entity: EntityId,
+  handle: ComponentHandle,
+): boolean {
+  return ownsByHandle(toInternal(state), entity, handle);
 }
 
 /**
@@ -750,24 +780,18 @@ export function hasComponent(state: WorldState, entity: EntityId, component: str
  * сообщения безусловно — это уже действующий приём FP-4). Ценой владеющего
  * чтения остаются второй `rawIndexOf` и деление в `generationOf` внутри
  * `isAlive`; это осознанный обмен, записанный в Risks дизайна change'а.
+ *
+ * Само чтение — `readByHandle` (SYS-10): строковый путь есть РАЗРЕШЕНИЕ ИМЕНИ
+ * плюс handle-путь, и другого тела у него нет. Тотальность, порядок проверок и
+ * текст находки поэтому одни и те же у обоих путей по построению, а не потому,
+ * что их держат согласованными.
  */
 export function getField(state: WorldState, entity: EntityId, component: string, field: string): number {
   const internal = toInternal(state);
   const store = storeOf(internal, 'getField', component);
-  const arr = store.fields[field];
-  if (arr === undefined) throw missingField('getField', component, field);
-  const index = rawIndexOf(entity);
-  if (!indexIsAlive(internal.entities, entity) || !maskHas(internal.masks, index, store.id)) {
-    if (DEBUG) {
-      assert(
-        false,
-        `getField: сущность ${entity} не владеет компонентом "${component}" (ECS-7), поле "${field}"`,
-        'COMPONENT_READ_WITHOUT_OWNERSHIP',
-      );
-    }
-    return neutralValue(store.schema.fields[field]!);
-  }
-  return arr[index]!;
+  const handle = store.handles[field];
+  if (handle === undefined) throw missingField('getField', component, field);
+  return readByHandle(internal, entity, handle);
 }
 
 /**

@@ -20,6 +20,7 @@ import {
   UTILITY_IDENTITY_FIXED,
 } from '../../dsl/scoring.js';
 import { NPC_THREAT_SLOTS } from './components.js';
+import type { NpcHandles } from './handles.js';
 import {
   INPUT_ALWAYS,
   INPUT_CROWDING,
@@ -29,7 +30,6 @@ import {
   INPUT_TARGET_DISTANCE,
   INPUT_TARGET_KNOWN,
   type CompiledBehavior,
-  type CompiledNpcBindings,
   type CompiledState,
 } from './model.js';
 import { NpcPerception } from './perception.js';
@@ -120,22 +120,22 @@ export class NpcDecider {
    * Порог — ЧИСЛО ДОКУМЕНТА, а не кода: «на сколько охотнее переключаться» и
    * есть та ручка, которой дизайнер правит агрессивность крипа (NPC-2).
    */
-  chooseTarget(ctx: SystemContext, bindings: CompiledNpcBindings, behavior: CompiledBehavior): EntityId {
-    const current = NpcPerception.reaches(ctx, bindings, this.entity, this.target, behavior.sense)
+  chooseTarget(ctx: SystemContext, handles: NpcHandles, behavior: CompiledBehavior): EntityId {
+    const current = NpcPerception.reaches(ctx, handles, this.entity, this.target, behavior.sense)
       ? this.target
       : NO_ENTITY;
     let leader = NO_ENTITY;
     let leaderValue = 0;
     for (let slot = 0; slot < NPC_THREAT_SLOTS; slot++) {
-      const source = threatSourceAt(ctx, this.entity, slot);
-      if (source === NO_ENTITY || !ctx.isAlive(source) || isDead(ctx, bindings, source)) continue;
-      const value = threatValueAt(ctx, this.entity, slot);
+      const source = threatSourceAt(ctx, handles, this.entity, slot);
+      if (source === NO_ENTITY || !ctx.isAlive(source) || isDead(ctx, handles, source)) continue;
+      const value = threatValueAt(ctx, handles, this.entity, slot);
       if (value <= leaderValue) continue;
       leaderValue = value;
       leader = source;
     }
     if (leader !== NO_ENTITY && leader !== current) {
-      const held = current === NO_ENTITY ? 0 : threatOf(ctx, this.entity, current);
+      const held = current === NO_ENTITY ? 0 : threatOf(ctx, handles, this.entity, current);
       if (leaderValue > held + mul(held, behavior.switchMargin)) {
         this.target = leader;
         return leader;
@@ -146,7 +146,7 @@ export class NpcDecider {
         ? current
         : this.perception.nearestEnemy(
             ctx,
-            bindings,
+            handles,
             this.entity,
             this.x,
             this.y,
@@ -163,7 +163,7 @@ export class NpcDecider {
    */
   inputValue(
     ctx: SystemContext,
-    bindings: CompiledNpcBindings,
+    handles: NpcHandles,
     behavior: CompiledBehavior,
     routes: NpcRoutes,
     input: number,
@@ -175,17 +175,17 @@ export class NpcDecider {
         // Цели нет — «дальше некуда»: сближаться не с кем, и говорит это вход
         // `targetKnown`, а не подмена расстояния.
         if (this.target === NO_ENTITY || behavior.sense <= 0) return FIXED_ONE;
-        const dx = posX(ctx, bindings, this.target) - this.x;
-        const dy = posY(ctx, bindings, this.target) - this.y;
+        const dx = posX(ctx, handles, this.target) - this.x;
+        const dy = posY(ctx, handles, this.target) - this.y;
         return clampUnit(div(lengthOf(dx, dy), behavior.sense));
       }
       case INPUT_HEALTH_FRACTION:
-        return healthFraction(ctx, bindings, this.entity);
+        return healthFraction(ctx, handles, this.entity);
       case INPUT_CROWDING: {
         if (this.crowd < 0) {
           this.crowd = this.perception.allies(
             ctx,
-            bindings,
+            handles,
             this.entity,
             this.x,
             this.y,
@@ -215,7 +215,7 @@ export class NpcDecider {
    */
   chooseAction(
     ctx: SystemContext,
-    bindings: CompiledNpcBindings,
+    handles: NpcHandles,
     behavior: CompiledBehavior,
     routes: NpcRoutes,
     state: CompiledState,
@@ -227,7 +227,7 @@ export class NpcDecider {
       const action = state.actions[index]!;
       let utility = UTILITY_IDENTITY_FIXED;
       for (const consideration of action.considerations) {
-        const value = this.inputValue(ctx, bindings, behavior, routes, consideration.input);
+        const value = this.inputValue(ctx, handles, behavior, routes, consideration.input);
         utility = combineUtilityFixed(
           utility,
           considerationScoreFixed(consideration.curve, consideration.weight, value),

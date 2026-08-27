@@ -10,18 +10,14 @@
  * агенту на одном тике иначе перетёрли бы друг друга.
  */
 import { div, mul } from '../../math/fixed.js';
-import {
-  threatSourceField,
-  threatValueField,
-  NPC_AGENT_COMPONENT,
-  NPC_THREAT_COMPONENT,
-  NPC_THREAT_SLOTS,
-} from './components.js';
+import { NPC_AGENT_COMPONENT, NPC_THREAT_COMPONENT, NPC_THREAT_SLOTS } from './components.js';
+import type { NpcHandles } from './handles.js';
 import type { CompiledNpcBindings } from './model.js';
 import {
   FIXED_ONE,
   NO_ENTITY,
   type EntityId,
+  type FieldHandle,
   type Fixed,
   type QuerySpec,
   type SystemContext,
@@ -54,12 +50,12 @@ export function livingAgents(catalog: {
     : { all, not: [catalog.bindings.deadMarker] };
 }
 
-export function posX(ctx: SystemContext, bindings: CompiledNpcBindings, entity: EntityId): Fixed {
-  return ctx.get(entity, bindings.position, 'x');
+export function posX(ctx: SystemContext, handles: NpcHandles, entity: EntityId): Fixed {
+  return ctx.getByHandle(entity, handles.posX);
 }
 
-export function posY(ctx: SystemContext, bindings: CompiledNpcBindings, entity: EntityId): Fixed {
-  return ctx.get(entity, bindings.position, 'y');
+export function posY(ctx: SystemContext, handles: NpcHandles, entity: EntityId): Fixed {
+  return ctx.getByHandle(entity, handles.posY);
 }
 
 /**
@@ -67,18 +63,20 @@ export function posY(ctx: SystemContext, bindings: CompiledNpcBindings, entity: 
  * знает вовсе, и тогда живой считается всякая живая сущность: понятия смерти
  * ядро не приобретает.
  */
-export function isDead(ctx: SystemContext, bindings: CompiledNpcBindings, entity: EntityId): boolean {
-  return bindings.deadMarker !== '' && ctx.has(entity, bindings.deadMarker);
+export function isDead(ctx: SystemContext, handles: NpcHandles, entity: EntityId): boolean {
+  const marker = handles.deadMarker;
+  return marker !== undefined && ctx.hasByHandle(entity, marker);
 }
 
 /** Сторона сущности; `undefined` — сцена стороны не объявила либо её у сущности нет. */
 export function teamOf(
   ctx: SystemContext,
-  bindings: CompiledNpcBindings,
+  handles: NpcHandles,
   entity: EntityId,
 ): number | undefined {
-  if (!bindings.hasTeam || !ctx.has(entity, bindings.teamComponent)) return undefined;
-  return ctx.get(entity, bindings.teamComponent, bindings.teamField);
+  const team = handles.team;
+  if (team === undefined || !ctx.hasByHandle(entity, team.component)) return undefined;
+  return ctx.getByHandle(entity, team.field);
 }
 
 /**
@@ -88,13 +86,14 @@ export function teamOf(
  */
 export function healthFraction(
   ctx: SystemContext,
-  bindings: CompiledNpcBindings,
+  handles: NpcHandles,
   entity: EntityId,
 ): Fixed {
-  if (!bindings.hasHealth) return FIXED_ONE;
-  const max = ctx.get(entity, bindings.healthMaxComponent, bindings.healthMaxField);
+  const health = handles.health;
+  if (health === undefined) return FIXED_ONE;
+  const max = ctx.getByHandle(entity, health.max);
   if (max <= 0) return FIXED_ONE;
-  const hp = ctx.get(entity, bindings.healthComponent, bindings.healthField);
+  const hp = ctx.getByHandle(entity, health.value);
   if (hp <= 0) return 0;
   if (hp >= max) return FIXED_ONE;
   // Поля здоровья — обычные счётчики сцены (i32), поэтому доля считается
@@ -120,17 +119,33 @@ function addSaturating(accumulated: Fixed, amount: Fixed): Fixed {
   return sum >= THREAT_CEILING ? THREAT_CEILING : sum;
 }
 
-/** Значение поля таблицы с учётом уже поставленных команд буфера (CMD-5). */
-function pending(ctx: SystemContext, entity: EntityId, field: string): number {
-  return ctx.commands.peekField(entity, NPC_THREAT_COMPONENT, field) ?? ctx.get(entity, NPC_THREAT_COMPONENT, field);
+/**
+ * Значение поля таблицы с учётом уже поставленных команд буфера (CMD-5).
+ * Буферу нужно ИМЯ поля (адрес команды — строка, CMD-1), миру — handle: обе
+ * величины разрешены заранее и лежат в слоте рядом (SYS-10).
+ */
+function pending(ctx: SystemContext, entity: EntityId, field: string, handle: FieldHandle): number {
+  return ctx.commands.peekField(entity, NPC_THREAT_COMPONENT, field) ?? ctx.getByHandle(entity, handle);
 }
 
-export function threatSourceAt(ctx: SystemContext, entity: EntityId, slot: number): EntityId {
-  return pending(ctx, entity, threatSourceField(slot));
+export function threatSourceAt(
+  ctx: SystemContext,
+  handles: NpcHandles,
+  entity: EntityId,
+  slot: number,
+): EntityId {
+  const entry = handles.threatSlots[slot]!;
+  return pending(ctx, entity, entry.sourceField, entry.source);
 }
 
-export function threatValueAt(ctx: SystemContext, entity: EntityId, slot: number): Fixed {
-  return pending(ctx, entity, threatValueField(slot));
+export function threatValueAt(
+  ctx: SystemContext,
+  handles: NpcHandles,
+  entity: EntityId,
+  slot: number,
+): Fixed {
+  const entry = handles.threatSlots[slot]!;
+  return pending(ctx, entity, entry.valueField, entry.value);
 }
 
 /**
@@ -143,6 +158,7 @@ export function threatValueAt(ctx: SystemContext, entity: EntityId, slot: number
  */
 export function threatAdd(
   ctx: SystemContext,
+  handles: NpcHandles,
   entity: EntityId,
   source: EntityId,
   rawAmount: Fixed,
@@ -156,13 +172,13 @@ export function threatAdd(
   let minSlot = 0;
   let minValue = Number.POSITIVE_INFINITY;
   for (let slot = 0; slot < NPC_THREAT_SLOTS; slot++) {
-    const holder = threatSourceAt(ctx, entity, slot);
+    const holder = threatSourceAt(ctx, handles, entity, slot);
     if (holder === source) {
       ctx.commands.setField(
         entity,
         NPC_THREAT_COMPONENT,
-        threatValueField(slot),
-        addSaturating(threatValueAt(ctx, entity, slot), amount),
+        handles.threatSlots[slot]!.valueField,
+        addSaturating(threatValueAt(ctx, handles, entity, slot), amount),
       );
       return;
     }
@@ -170,7 +186,7 @@ export function threatAdd(
       if (freeSlot < 0) freeSlot = slot;
       continue;
     }
-    const value = threatValueAt(ctx, entity, slot);
+    const value = threatValueAt(ctx, handles, entity, slot);
     if (value < minValue) {
       minValue = value;
       minSlot = slot;
@@ -178,30 +194,44 @@ export function threatAdd(
   }
   const slot = freeSlot >= 0 ? freeSlot : minValue < amount ? minSlot : -1;
   if (slot < 0) return;
-  ctx.commands.setField(entity, NPC_THREAT_COMPONENT, threatSourceField(slot), source);
-  ctx.commands.setField(entity, NPC_THREAT_COMPONENT, threatValueField(slot), amount);
+  const entry = handles.threatSlots[slot]!;
+  ctx.commands.setField(entity, NPC_THREAT_COMPONENT, entry.sourceField, source);
+  ctx.commands.setField(entity, NPC_THREAT_COMPONENT, entry.valueField, amount);
 }
 
 /** Забывание: умножение накопленного на множитель документа (NPC-5). */
-export function threatDecay(ctx: SystemContext, entity: EntityId, factor: Fixed): void {
+export function threatDecay(
+  ctx: SystemContext,
+  handles: NpcHandles,
+  entity: EntityId,
+  factor: Fixed,
+): void {
   for (let slot = 0; slot < NPC_THREAT_SLOTS; slot++) {
-    if (threatSourceAt(ctx, entity, slot) === NO_ENTITY) continue;
-    const value = mul(threatValueAt(ctx, entity, slot), factor);
+    if (threatSourceAt(ctx, handles, entity, slot) === NO_ENTITY) continue;
+    const entry = handles.threatSlots[slot]!;
+    const value = mul(threatValueAt(ctx, handles, entity, slot), factor);
     if (value <= 0) {
       // Забытый источник освобождает слот: иначе таблица навсегда занята
       // нулями, и вытеснять было бы нечего.
-      ctx.commands.setField(entity, NPC_THREAT_COMPONENT, threatSourceField(slot), NO_ENTITY);
-      ctx.commands.setField(entity, NPC_THREAT_COMPONENT, threatValueField(slot), 0);
+      ctx.commands.setField(entity, NPC_THREAT_COMPONENT, entry.sourceField, NO_ENTITY);
+      ctx.commands.setField(entity, NPC_THREAT_COMPONENT, entry.valueField, 0);
       continue;
     }
-    ctx.commands.setField(entity, NPC_THREAT_COMPONENT, threatValueField(slot), value);
+    ctx.commands.setField(entity, NPC_THREAT_COMPONENT, entry.valueField, value);
   }
 }
 
 /** Угроза конкретного источника; ноль — источника в таблице нет. */
-export function threatOf(ctx: SystemContext, entity: EntityId, source: EntityId): Fixed {
+export function threatOf(
+  ctx: SystemContext,
+  handles: NpcHandles,
+  entity: EntityId,
+  source: EntityId,
+): Fixed {
   for (let slot = 0; slot < NPC_THREAT_SLOTS; slot++) {
-    if (threatSourceAt(ctx, entity, slot) === source) return threatValueAt(ctx, entity, slot);
+    if (threatSourceAt(ctx, handles, entity, slot) === source) {
+      return threatValueAt(ctx, handles, entity, slot);
+    }
   }
   return 0;
 }

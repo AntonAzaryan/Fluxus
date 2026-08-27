@@ -15,6 +15,7 @@
  */
 import { execute, systemError } from '../../dsl/actions.js';
 import { ABILITY_DURATION_COMPONENT } from './components.js';
+import { resolveDurationHandles, type DurationHandles } from './handles.js';
 import type { ExprVarsRecord } from './runtime.js';
 import type { AbilityCatalog } from './model.js';
 import type { QuerySpec, System, SystemContext } from '../../types.js';
@@ -29,19 +30,24 @@ export class EffectDurationSystem implements System {
   private readonly spec: QuerySpec = { all: [ABILITY_DURATION_COMPONENT] };
   /** Переиспользуемая область видимости списка истечения (ABIL-10). */
   private readonly vars: ExprVarsRecord = { self: 0, owner: 0 };
+  /** Handle полей длительности (SYS-10): один раз, на первом входе, после раннего выхода. */
+  private handles: DurationHandles | undefined;
 
   constructor(catalog: AbilityCatalog) {
     this.catalog = catalog;
   }
 
   run(ctx: SystemContext): void {
-    for (const effect of ctx.query(this.spec)) {
-      const remaining = ctx.get(effect, ABILITY_DURATION_COMPONENT, 'remaining');
+    const effects = ctx.query(this.spec);
+    if (effects.length === 0) return;
+    const h = (this.handles ??= resolveDurationHandles(ctx));
+    for (const effect of effects) {
+      const remaining = ctx.getByHandle(effect, h.remaining);
       if (remaining <= 0) continue;
       ctx.commands.setField(effect, ABILITY_DURATION_COMPONENT, 'remaining', remaining - 1);
       if (remaining > 1) continue;
 
-      const index = ctx.get(effect, ABILITY_DURATION_COMPONENT, 'abilityId');
+      const index = ctx.getByHandle(effect, h.abilityId);
       const ability = this.catalog.abilities[index];
       if (ability === undefined) {
         throw new Error(
@@ -51,7 +57,7 @@ export class EffectDurationSystem implements System {
       }
       if (ability.onExpire.length > 0) {
         this.vars.self = effect;
-        this.vars.owner = ctx.get(effect, ABILITY_DURATION_COMPONENT, 'owner');
+        this.vars.owner = ctx.getByHandle(effect, h.owner);
         try {
           execute(ability.onExpire, ctx, this.vars);
         } catch (cause) {

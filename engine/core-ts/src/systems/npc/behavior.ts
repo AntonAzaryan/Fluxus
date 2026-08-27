@@ -23,7 +23,8 @@
 import { NpcDecider, NO_ACTION } from './decide.js';
 import { NpcRoutes } from './routes.js';
 import { healthFraction, isDead, livingAgents, posX, posY, teamOf } from './runtime.js';
-import { NPC_ACTION_NONE, NPC_AGENT_COMPONENT, NPC_ROUTE_COMPONENT } from './components.js';
+import { NPC_ACTION_NONE, NPC_AGENT_COMPONENT } from './components.js';
+import { resolveNpcHandles, type NpcHandles } from './handles.js';
 import {
   COND_ELAPSED,
   COND_EVENT,
@@ -68,6 +69,12 @@ export class NpcBehaviorSystem implements System {
    * каждый тик, то есть аллокацией, пропорциональной числу сущностей.
    */
   private entered = false;
+  /**
+   * Handle платформы (SYS-10): разрешаются на первом входе, один раз на имя, и
+   * ПОСЛЕ раннего выхода — сцена, где решать некому, не должна падать на
+   * биндинге, до которого она бы и не дошла.
+   */
+  private handles: NpcHandles | undefined;
 
   constructor(catalog: NpcCatalog) {
     this.catalog = catalog;
@@ -78,36 +85,37 @@ export class NpcBehaviorSystem implements System {
     const agents = ctx.query(this.spec);
     if (agents.length === 0) return;
     const bindings = this.catalog.bindings;
-    this.decider.perception.rebuild(ctx, bindings);
-    this.routes.rebuild(ctx, bindings.position);
+    const handles = (this.handles ??= resolveNpcHandles(ctx, bindings));
+    this.decider.perception.rebuild(ctx, bindings, handles);
+    this.routes.rebuild(ctx, bindings.position, handles);
     const rng = ctx.rng.stream(RNG_STREAM);
     let budget = this.catalog.decisionBudget;
 
     for (let slot = 0; slot < agents.length; slot++) {
       const entity = agents[slot]!;
-      const behavior = this.catalog.behaviors[ctx.get(entity, NPC_AGENT_COMPONENT, 'behavior')];
+      const behavior = this.catalog.behaviors[ctx.getByHandle(entity, handles.agentBehavior)];
       // Индекс за таблицей поймать здесь нечем: документ проверен на загрузке
       // (NPC-2), а расстановка вправе поставить любое число. Агент без
       // документа просто не ведёт себя — молчаливым умолчанием это не является,
       // потому что и решения у него нет.
       if (behavior === undefined) continue;
-      const route = ctx.has(entity, NPC_ROUTE_COMPONENT)
-        ? ctx.get(entity, NPC_ROUTE_COMPONENT, 'route')
+      const route = ctx.hasByHandle(entity, handles.route)
+        ? ctx.getByHandle(entity, handles.routeRoute)
         : -1;
       this.decider.frame(
         entity,
-        posX(ctx, bindings, entity),
-        posY(ctx, bindings, entity),
-        teamOf(ctx, bindings, entity) ?? 0,
-        ctx.get(entity, NPC_AGENT_COMPONENT, 'target'),
-        ctx.get(entity, NPC_AGENT_COMPONENT, 'enteredTick'),
+        posX(ctx, handles, entity),
+        posY(ctx, handles, entity),
+        teamOf(ctx, handles, entity) ?? 0,
+        ctx.getByHandle(entity, handles.agentTarget),
+        ctx.getByHandle(entity, handles.agentEnteredTick),
         route,
-        route < 0 ? 0 : ctx.get(entity, NPC_ROUTE_COMPONENT, 'index'),
+        route < 0 ? 0 : ctx.getByHandle(entity, handles.routeIndex),
       );
-      const state = this.advanceState(ctx, behavior, entity);
-      if (this.wants(ctx, behavior, entity, this.entered, slot) && budget > 0) {
+      const state = this.advanceState(ctx, handles, behavior, entity);
+      if (this.wants(ctx, handles, behavior, entity, this.entered, slot) && budget > 0) {
         budget--;
-        this.decide(ctx, behavior, entity, state, rng.next());
+        this.decide(ctx, handles, behavior, entity, state, rng.next());
       }
     }
   }
@@ -117,9 +125,14 @@ export class NpcBehaviorSystem implements System {
    * состояния — порядок документа нормативен. Смена состояния сбрасывает
    * выбранное действие: набор действий у нового состояния свой.
    */
-  private advanceState(ctx: SystemContext, behavior: CompiledBehavior, entity: EntityId): number {
+  private advanceState(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    behavior: CompiledBehavior,
+    entity: EntityId,
+  ): number {
     this.entered = false;
-    let index = ctx.get(entity, NPC_AGENT_COMPONENT, 'state');
+    let index = ctx.getByHandle(entity, handles.agentState);
     if (index < 0 || index >= behavior.states.length) {
       // Начальное состояние — первое в документе (NPC-2).
       this.enter(ctx, entity, 0);
@@ -130,6 +143,7 @@ export class NpcBehaviorSystem implements System {
       if (
         !this.holds(
           ctx,
+          handles,
           behavior,
           entity,
           transition.kind,
@@ -164,6 +178,7 @@ export class NpcBehaviorSystem implements System {
   /** Условие перехода — закрытый словарь документа (NPC-2, NPC-7). */
   private holds(
     ctx: SystemContext,
+    handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
     kind: number,
@@ -172,36 +187,35 @@ export class NpcBehaviorSystem implements System {
     eventType: string,
     entityField: string,
   ): boolean {
-    const bindings = this.catalog.bindings;
     const target = this.decider.chosenTarget;
     switch (kind) {
       case COND_HEALTH_BELOW:
-        return healthFraction(ctx, bindings, entity) < value;
+        return healthFraction(ctx, handles, entity) < value;
       case COND_HEALTH_ABOVE:
-        return healthFraction(ctx, bindings, entity) > value;
+        return healthFraction(ctx, handles, entity) > value;
       case COND_ELAPSED:
-        return ctx.tick - ctx.get(entity, NPC_AGENT_COMPONENT, 'enteredTick') >= ticks;
+        return ctx.tick - ctx.getByHandle(entity, handles.agentEnteredTick) >= ticks;
       case COND_EVENT:
         return hasEvent(ctx, eventType, entityField, entity);
       case COND_TARGET_WITHIN:
-        return NpcPerception.reaches(ctx, bindings, entity, target, value);
+        return NpcPerception.reaches(ctx, handles, entity, target, value);
       case COND_TARGET_BEYOND:
-        return target !== NO_ENTITY && !NpcPerception.reaches(ctx, bindings, entity, target, value);
+        return target !== NO_ENTITY && !NpcPerception.reaches(ctx, handles, entity, target, value);
       case COND_HAS_TARGET:
-        return target !== NO_ENTITY && ctx.isAlive(target) && !isDead(ctx, bindings, target);
+        return target !== NO_ENTITY && ctx.isAlive(target) && !isDead(ctx, handles, target);
       case COND_NO_TARGET:
-        return target === NO_ENTITY || !ctx.isAlive(target) || isDead(ctx, bindings, target);
+        return target === NO_ENTITY || !ctx.isAlive(target) || isDead(ctx, handles, target);
       case COND_ROUTE_DONE:
-        return this.routeDone(ctx, entity);
+        return this.routeDone(ctx, handles, entity);
       default:
         return false;
     }
   }
 
-  private routeDone(ctx: SystemContext, entity: EntityId): boolean {
-    if (!ctx.has(entity, NPC_ROUTE_COMPONENT)) return true;
-    const route = ctx.get(entity, NPC_ROUTE_COMPONENT, 'route');
-    return this.routes.at(route, ctx.get(entity, NPC_ROUTE_COMPONENT, 'index')) === NO_ENTITY;
+  private routeDone(ctx: SystemContext, handles: NpcHandles, entity: EntityId): boolean {
+    if (!ctx.hasByHandle(entity, handles.route)) return true;
+    const route = ctx.getByHandle(entity, handles.routeRoute);
+    return this.routes.at(route, ctx.getByHandle(entity, handles.routeIndex)) === NO_ENTITY;
   }
 
   /**
@@ -213,16 +227,17 @@ export class NpcBehaviorSystem implements System {
    */
   private wants(
     ctx: SystemContext,
+    handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
     entered: boolean,
     slot: number,
   ): boolean {
     if (entered) return true;
-    const decidedTick = ctx.get(entity, NPC_AGENT_COMPONENT, 'decidedTick');
+    const decidedTick = ctx.getByHandle(entity, handles.agentDecidedTick);
     if (decidedTick < 0) return true;
-    const target = ctx.get(entity, NPC_AGENT_COMPONENT, 'target');
-    if (target !== NO_ENTITY && (!ctx.isAlive(target) || isDead(ctx, this.catalog.bindings, target))) {
+    const target = ctx.getByHandle(entity, handles.agentTarget);
+    if (target !== NO_ENTITY && (!ctx.isAlive(target) || isDead(ctx, handles, target))) {
       // Смерть цели — событие, а не срок: держать мёртвую цель до следующего
       // окна значило бы стоять на месте, пока идёт бой.
       return true;
@@ -233,21 +248,21 @@ export class NpcBehaviorSystem implements System {
   /** Пересмотр: цель, скоринг действий и публикация события каста (NPC-3, NPC-7). */
   private decide(
     ctx: SystemContext,
+    handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
     stateIndex: number,
     jitter: number,
   ): void {
-    const bindings = this.catalog.bindings;
-    const target = this.decider.chooseTarget(ctx, bindings, behavior);
+    const target = this.decider.chooseTarget(ctx, handles, behavior);
     const state: CompiledState = behavior.states[stateIndex]!;
-    const action = this.decider.chooseAction(ctx, bindings, behavior, this.routes, state, jitter);
+    const action = this.decider.chooseAction(ctx, handles, behavior, this.routes, state, jitter);
     // Прежнее действие читается СНАЧАЛА из уже поставленных команд буфера,
     // потом из мира (CMD-5): вход в состояние сбросил его командой на этом же
     // тике, а мир до flush её не видит.
     const previous =
       ctx.commands.peekField(entity, NPC_AGENT_COMPONENT, 'action') ??
-      ctx.get(entity, NPC_AGENT_COMPONENT, 'action');
+      ctx.getByHandle(entity, handles.agentAction);
     ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'target', target);
     ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'action', action);
     ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'decidedTick', ctx.tick);
@@ -265,8 +280,8 @@ export class NpcBehaviorSystem implements System {
     ctx.events.emit(chosen.eventType, {
       caster: entity,
       target,
-      x: posX(ctx, bindings, entity),
-      y: posY(ctx, bindings, entity),
+      x: posX(ctx, handles, entity),
+      y: posY(ctx, handles, entity),
     });
   }
 }

@@ -12,6 +12,7 @@
  * определений остаются теми же тиками, что в конфиге.
  */
 import { ABILITY_COOLDOWN_COMPONENT } from './components.js';
+import { resolveCooldownHandles, type CooldownHandles } from './handles.js';
 import type { QuerySpec, System, SystemContext } from '../../types.js';
 
 /** Якорь шкалы `order` (DET-9); параметром сборки не является. */
@@ -21,10 +22,15 @@ export class CooldownSystem implements System {
   readonly name = 'Cooldown';
   readonly order = ANCHOR_ORDER;
   private readonly spec: QuerySpec = { all: [ABILITY_COOLDOWN_COMPONENT] };
+  /** Handle поля остатка (SYS-10): один раз, на первом входе, после раннего выхода. */
+  private handles: CooldownHandles | undefined;
 
   run(ctx: SystemContext): void {
-    for (const slot of ctx.query(this.spec)) {
-      const remaining = ctx.get(slot, ABILITY_COOLDOWN_COMPONENT, 'remaining');
+    const slots = ctx.query(this.spec);
+    if (slots.length === 0) return;
+    const h = (this.handles ??= resolveCooldownHandles(ctx));
+    for (const slot of slots) {
+      const remaining = ctx.getByHandle(slot, h.remaining);
       if (remaining <= 0) continue;
       ctx.commands.setField(slot, ABILITY_COOLDOWN_COMPONENT, 'remaining', remaining - 1);
     }

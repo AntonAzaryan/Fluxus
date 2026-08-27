@@ -175,6 +175,15 @@ describe('spec-graph: линт ловит каждый класс дефекта
     expect(rules.filter((r) => r === 'unmapped-capability')).toHaveLength(0);
   });
 
+  it('принятое ребро из exceptions снимает content-boundary для своей пары', () => {
+    const model = buildModel(dir);
+    const findings = lint(model, {
+      ...LAYERS,
+      exceptions: [{ from: 'alpha', to: 'game-content', reason: 'фикстура' }],
+    });
+    expect(findings.filter((f) => f.rule === 'content-boundary')).toEqual([]);
+  });
+
   it('unmapped-capability срабатывает на capability вне конфига слоёв', () => {
     const model = buildModel(dir);
     const findings = lint(model, { ...LAYERS, layers: { alpha: 'foundation' } });

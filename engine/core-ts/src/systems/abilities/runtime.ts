@@ -16,13 +16,10 @@ import { evaluate, typeError, type Expression, type ExprValue } from '../../dsl/
 import { isVisibleTo, VISIBILITY_COMPONENT } from '../visibility.js';
 import {
   ABILITY_COOLDOWN_COMPONENT,
-  ABILITY_SLOT_COMPONENT,
   ABILITY_STEPS,
   BUFF_INSTANCE_COMPONENT,
-  stepFieldEntity,
-  stepFieldX,
-  stepFieldY,
 } from './components.js';
+import { resolveSlotHandles, type BuffInstanceHandles, type SlotHandles } from './handles.js';
 import {
   INPUT_BUTTONS_FIELD,
   INPUT_PREV_BUTTONS_FIELD,
@@ -89,9 +86,10 @@ export function predicate(expr: Expression, ctx: SystemContext, vars: ExprVarsRe
 export function abilityOf(
   catalog: AbilityCatalog,
   ctx: SystemContext,
+  h: SlotHandles,
   slot: EntityId,
 ): CompiledAbility {
-  const index = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'abilityId');
+  const index = ctx.getByHandle(slot, h.abilityId);
   const ability = catalog.abilities[index];
   if (ability === undefined) {
     throw new Error(
@@ -257,6 +255,14 @@ export const SLOT_BOUND_NAMES: readonly string[] = (() => {
 export class SlotScope {
   readonly vars: ExprVarsRecord = {};
   private readonly points: MutableVec2[] = [];
+  /**
+   * Handle полей слота (SYS-10). Живут ЗДЕСЬ, а не в системе: область — объект
+   * системы, создаваемый в её конструкторе, и разрешение имён на первом
+   * связывании происходит ровно один раз за её жизнь. Ленивость несущая: сцена
+   * с одними баффами компонента слота не объявляет вовсе (SER-7), и системе,
+   * которая до слотов не дошла, падать не на чем.
+   */
+  private cached: SlotHandles | undefined;
 
   constructor() {
     for (const name of SLOT_BOUND_NAMES) this.vars[name] = 0;
@@ -267,19 +273,24 @@ export class SlotScope {
     }
   }
 
+  /** Разрешённые handle полей слота; резолв — на первом обращении (SYS-10). */
+  handles(ctx: SystemContext): SlotHandles {
+    return (this.cached ??= resolveSlotHandles(ctx));
+  }
+
   bind(ctx: SystemContext, slot: EntityId, owner: EntityId): void {
-    const get = (field: string): number => ctx.get(slot, ABILITY_SLOT_COMPONENT, field);
+    const h = this.handles(ctx);
     this.vars.self = slot;
     this.vars.owner = owner;
-    this.vars.level = get('level');
-    this.vars.phaseTicks = get('phaseTicks');
-    this.vars.staged = get('staged');
-    this.vars.lastInterrupt = get('lastInterrupt');
+    this.vars.level = ctx.getByHandle(slot, h.level);
+    this.vars.phaseTicks = ctx.getByHandle(slot, h.phaseTicks);
+    this.vars.staged = ctx.getByHandle(slot, h.staged);
+    this.vars.lastInterrupt = ctx.getByHandle(slot, h.lastInterrupt);
     for (let i = 0; i < ABILITY_STEPS; i++) {
       const point = this.points[i]!;
-      point.x = get(stepFieldX(i));
-      point.y = get(stepFieldY(i));
-      this.vars[`unit${i}`] = get(stepFieldEntity(i));
+      point.x = ctx.getByHandle(slot, h.stepX[i]!);
+      point.y = ctx.getByHandle(slot, h.stepY[i]!);
+      this.vars[`unit${i}`] = ctx.getByHandle(slot, h.stepEntity[i]!);
     }
   }
 }
@@ -321,9 +332,10 @@ export class BuffScope {
 export function buffOf(
   catalog: AbilityCatalog,
   ctx: SystemContext,
+  h: BuffInstanceHandles,
   instance: EntityId,
 ): CompiledBuff {
-  const index = ctx.get(instance, BUFF_INSTANCE_COMPONENT, 'buffId');
+  const index = ctx.getByHandle(instance, h.buffId);
   const buff = catalog.buffs[index];
   if (buff === undefined) {
     throw new Error(
@@ -378,26 +390,28 @@ export const CANDIDATE_NAME = 'candidate';
  */
 export function stepOriginX(
   ctx: SystemContext,
+  h: SlotHandles,
   slot: EntityId,
   owner: EntityId,
   step: number,
 ): Fixed {
   if (step === 0) return positionOf(ctx, owner, 'x');
-  const previous = ctx.get(slot, ABILITY_SLOT_COMPONENT, stepFieldEntity(step - 1));
+  const previous = ctx.getByHandle(slot, h.stepEntity[step - 1]!);
   if (previous !== NO_ENTITY && ctx.isAlive(previous)) return positionOf(ctx, previous, 'x');
-  return ctx.get(slot, ABILITY_SLOT_COMPONENT, stepFieldX(step - 1));
+  return ctx.getByHandle(slot, h.stepX[step - 1]!);
 }
 
 export function stepOriginY(
   ctx: SystemContext,
+  h: SlotHandles,
   slot: EntityId,
   owner: EntityId,
   step: number,
 ): Fixed {
   if (step === 0) return positionOf(ctx, owner, 'y');
-  const previous = ctx.get(slot, ABILITY_SLOT_COMPONENT, stepFieldEntity(step - 1));
+  const previous = ctx.getByHandle(slot, h.stepEntity[step - 1]!);
   if (previous !== NO_ENTITY && ctx.isAlive(previous)) return positionOf(ctx, previous, 'y');
-  return ctx.get(slot, ABILITY_SLOT_COMPONENT, stepFieldY(step - 1));
+  return ctx.getByHandle(slot, h.stepY[step - 1]!);
 }
 
 /**
@@ -486,12 +500,13 @@ export class CandidatePicker {
 export function stagedStepsValid(
   ctx: SystemContext,
   catalog: AbilityCatalog,
+  h: SlotHandles,
   ability: CompiledAbility,
   slot: EntityId,
   owner: EntityId,
   vars: ExprVarsRecord,
 ): boolean {
-  const staged = ctx.get(slot, ABILITY_SLOT_COMPONENT, 'staged');
+  const staged = ctx.getByHandle(slot, h.staged);
   for (let i = 0; i < staged && i < ability.stepCount; i++) {
     const step = catalog.steps[ability.stepStart + i]!;
     // Точка проверки: у шага `unit` — ТЕКУЩАЯ позиция сущности (цель могла
@@ -500,7 +515,7 @@ export function stagedStepsValid(
     let pointX: Fixed;
     let pointY: Fixed;
     if (step.kind === STEP_UNIT) {
-      const unit = ctx.get(slot, ABILITY_SLOT_COMPONENT, stepFieldEntity(i));
+      const unit = ctx.getByHandle(slot, h.stepEntity[i]!);
       if (unit === NO_ENTITY || !ctx.isAlive(unit)) return false;
       if (step.filter !== undefined) {
         vars[CANDIDATE_NAME] = unit;
@@ -510,16 +525,16 @@ export function stagedStepsValid(
       pointX = positionOf(ctx, unit, 'x');
       pointY = positionOf(ctx, unit, 'y');
     } else if (step.kind === STEP_POINT) {
-      pointX = ctx.get(slot, ABILITY_SLOT_COMPONENT, stepFieldX(i));
-      pointY = ctx.get(slot, ABILITY_SLOT_COMPONENT, stepFieldY(i));
+      pointX = ctx.getByHandle(slot, h.stepX[i]!);
+      pointY = ctx.getByHandle(slot, h.stepY[i]!);
     } else {
       continue;
     }
     if (step.range === undefined) continue;
     const range = evaluate(step.range, ctx, vars);
     if (typeof range !== 'number') throw typeError(`шаг ${i} способности "${ability.id}"`, 'number', range);
-    const dx = ctx.math.sub(pointX, stepOriginX(ctx, slot, owner, i));
-    const dy = ctx.math.sub(pointY, stepOriginY(ctx, slot, owner, i));
+    const dx = ctx.math.sub(pointX, stepOriginX(ctx, h, slot, owner, i));
+    const dy = ctx.math.sub(pointY, stepOriginY(ctx, h, slot, owner, i));
     if (!distSqLe(dx, dy, range)) return false;
   }
   return true;
