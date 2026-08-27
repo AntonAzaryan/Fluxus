@@ -1,9 +1,9 @@
 {
   "tick": {
     "broadPhasePairs": 0,
-    "commandsApplied": 22130,
+    "commandsApplied": 25427,
     "expressions": 0,
-    "npcNeighbors": 215042,
+    "npcNeighbors": 132376,
     "raycasts": 0,
     "ticks": 24
   }

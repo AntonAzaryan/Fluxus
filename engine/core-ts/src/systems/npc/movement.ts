@@ -12,10 +12,14 @@
  *
  * Локальное расхождение — по соседям СЕТКИ (`grid.ts`): полного перебора пар
  * агентов нет, и стоимость шага растёт числом соседей, а не квадратом числа
- * агентов (NPC-6).
+ * агентов (NPC-6). Пересчёт вектора расхождения идёт СВОИМ каденсом — раз в
+ * `separationIntervalTicks` тиков на агента, — а между окнами применяется
+ * последний пересчитанный вектор из полей компонента (NPC-6).
  *
  * Исполнение решения идёт КАЖДЫЙ тик независимо от каденса пересмотра (NPC-4):
  * решение выбирает `behavior.ts` по своим окнам, а движется агент постоянно.
+ * Каденс пересчёта расхождения этого не меняет: он про СВЕЖЕСТЬ вектора, а не
+ * про право двигаться, — и в бюджет решений (NPC-4) не входит.
  *
  * Направления считаются в ПОЛЯХ системы, а не возвращаются векторами: литерал
  * `{ x, y }` на каждого агента (и на каждого его соседа) был бы аллокацией,
@@ -26,7 +30,7 @@ import { lengthOf } from '../../math/vector.js';
 import { NpcGrid } from './grid.js';
 import { NpcRoutes } from './routes.js';
 import { isDead, livingAgents, posX, posY } from './runtime.js';
-import { NPC_ACTION_NONE, NPC_ROUTE_COMPONENT } from './components.js';
+import { NPC_ACTION_NONE, NPC_AGENT_COMPONENT, NPC_ROUTE_COMPONENT } from './components.js';
 import { resolveNpcHandles, type NpcHandles } from './handles.js';
 import { EXEC_FOLLOW_ROUTE, EXEC_SEEK_TARGET, type CompiledBehavior, type NpcCatalog } from './model.js';
 import {
@@ -109,7 +113,7 @@ export class NpcMovementSystem implements System {
       this.desired(ctx, handles, behavior, entity);
       let vx = mul(this.dirX, behavior.speed);
       let vy = mul(this.dirY, behavior.speed);
-      this.separation(behavior, slot);
+      this.separation(ctx, handles, behavior, entity, slot);
       const push = mul(behavior.speed, behavior.separationWeight);
       vx = add(vx, mul(this.dirX, push));
       vy = add(vy, mul(this.dirY, push));
@@ -192,7 +196,44 @@ export class NpcMovementSystem implements System {
   }
 
   /**
-   * Локальное расхождение по соседям сетки (NPC-6): чем ближе сосед, тем
+   * Вектор локального расхождения агента в `dirX`/`dirY` (NPC-6). Пересчёт идёт
+   * КАДЕНСОМ: в окне `(тик + место агента в обходе) % интервал` — та же
+   * конструкция, что у окна решений (NPC-4), и по той же причине. Место в
+   * обходе стабильно (QUERY-2), номер тика — состояние мира, поэтому окно есть
+   * функция состояния мира и только его: ни машины, ни нагрузки, ни «свободного
+   * времени» здесь нет, иначе два прогона одного матча разошлись бы.
+   *
+   * Между окнами применяется ДЕРЖИМЫЙ вектор — поля компонента агента, которые
+   * перемотка возвращает вместе с миром (SNAP-1). В самом окне свежий вектор
+   * применяется из полей системы, а в мир уходит командой: мир до flush её не
+   * видит (CMD-5) — тот же приём, что у `stateEnteredTick` решателя.
+   */
+  private separation(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    behavior: CompiledBehavior,
+    entity: EntityId,
+    slot: number,
+  ): void {
+    if (behavior.separation <= 0 || behavior.separationWeight <= 0) {
+      // Документ расхождения не просит: ни запроса к сетке, ни записей в
+      // компонент — держать нечего, и вектор остаётся нулевым.
+      this.dirX = 0;
+      this.dirY = 0;
+      return;
+    }
+    if ((ctx.tick + slot) % behavior.separationIntervalTicks !== 0) {
+      this.dirX = ctx.getByHandle(entity, handles.agentSepX);
+      this.dirY = ctx.getByHandle(entity, handles.agentSepY);
+      return;
+    }
+    this.recomputeSeparation(behavior, slot);
+    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'sepX', this.dirX);
+    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'sepY', this.dirY);
+  }
+
+  /**
+   * Пересчёт вектора расхождения по соседям сетки (NPC-6): чем ближе сосед, тем
    * сильнее отталкивание. Результат — единичный вектор в `dirX`/`dirY` либо
    * ноль; на скорость его переводит вызывающий весом документа.
    *
@@ -201,10 +242,9 @@ export class NpcMovementSystem implements System {
    * в Q16.16 стоит двоичного поиска, и на каждого соседа каждого агента их было
    * бы вдвое больше нужного.
    */
-  private separation(behavior: CompiledBehavior, slot: number): void {
+  private recomputeSeparation(behavior: CompiledBehavior, slot: number): void {
     this.dirX = 0;
     this.dirY = 0;
-    if (behavior.separation <= 0 || behavior.separationWeight <= 0) return;
     const x = this.grid.xAt(slot);
     const y = this.grid.yAt(slot);
     const found = this.grid.neighbors(slot, x, y, behavior.separation, this.scratch, EXAMINE_LIMIT);

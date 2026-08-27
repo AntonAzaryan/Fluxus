@@ -228,6 +228,14 @@ export interface NpcBehaviorDef {
   /** Сила расхождения относительно скорости, Q16.16 доля (NPC-6). */
   readonly separationWeight?: Fixed;
   /**
+   * Тиков между пересчётами вектора локального расхождения (NPC-6). Между
+   * пересчётами применяется последний пересчитанный вектор, поэтому число это —
+   * свежесть исполнения, а не решение (NPC-4). Умолчание нормирует NPC-2;
+   * документ, которому нужен потиковый пересчёт, называет единицу, а ноль —
+   * находка валидации, а не «выключить расхождение».
+   */
+  readonly separationIntervalTicks?: number;
+  /**
    * Масштабы входов, у которых своей шкалы в мире нет (NPC-3): «долго ли в
    * состоянии» и «насколько тесно». Их умолчания нормирует NPC-2.
    */
@@ -292,6 +300,8 @@ export interface CompiledBehavior {
   readonly separation: Fixed;
   readonly speed: Fixed;
   readonly separationWeight: Fixed;
+  /** Тиков между пересчётами вектора расхождения (NPC-6); минимум единица. */
+  readonly separationIntervalTicks: number;
   /** Тиков до единицы у входа `stateElapsed`. */
   readonly elapsedScale: number;
   /** Соседей до единицы у входа `crowding`. */

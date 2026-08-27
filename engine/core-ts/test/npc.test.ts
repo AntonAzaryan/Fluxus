@@ -13,7 +13,14 @@ import { mathApi } from '../src/math/mathApi.js';
 import { addComponent, getField, setField, spawn } from '../src/ecs/world.js';
 import { query } from '../src/ecs/query.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
-import { initialState, tick, type Simulation } from '../src/sim/tick.js';
+import { snapshotToPlain } from '../src/sim/serialization.js';
+import {
+  initialState,
+  restoreSnapshot,
+  takeSnapshot,
+  tick,
+  type Simulation,
+} from '../src/sim/tick.js';
 import {
   NPC_AGENT_COMPONENT,
   NPC_ROUTE_COMPONENT,
@@ -26,6 +33,7 @@ import {
   NO_ENTITY,
   type EntityId,
   type GameEvent,
+  type SimulationState,
   type System,
   type SystemContext,
 } from '../src/types.js';
@@ -167,6 +175,8 @@ function boss(): Record<string, unknown> {
 
 interface Harness {
   readonly world: ReturnType<typeof loadScene>['world'];
+  /** Состояние симуляции — нужно тому, кто снимает и возвращает снапшот (SNAP-1). */
+  readonly state: SimulationState;
   step(): readonly GameEvent[];
   place(prefab: string, overrides?: Record<string, Record<string, number>>): EntityId;
   field(entity: EntityId, component: string, name: string): number;
@@ -237,6 +247,7 @@ function harness(npc: NpcPlatformDef, extra: Partial<SceneDef> = {}): Harness {
   const state = initialState(world, 1);
   return {
     world,
+    state,
     step: () => [...tick(sim, state).events],
     place: (prefab, overrides) => spawn(world, prefab, overrides),
     field: (entity, component, name) => getField(world, entity, component, name),
@@ -349,6 +360,30 @@ describe('NPC-2: документ поведения — контент, сло�
       { to: 'phase3', when: { kind: 'elapsed', ticks: 1 } },
     ];
     expect(() => compileNpcCatalog({ behaviors: [broken as never] })).toThrow(/phase3/);
+  });
+
+  it('молчание документа об интервале пересчёта расхождения — нормативные три тика', () => {
+    // Умолчание живёт в требовании (NPC-2, NPC-6), а не в выборе реализации:
+    // документ, его не назвавший, обязан исполняться двумя реализациями ядра
+    // одинаково (CLI-6).
+    const catalog = compileNpcCatalog({ behaviors: [chaser() as never], bindings: BINDINGS });
+    expect(catalog.behaviors[0]!.separationIntervalTicks).toBe(3);
+  });
+
+  it('документ, которому нужен потиковый пересчёт расхождения, называет единицу', () => {
+    const catalog = compileNpcCatalog({
+      behaviors: [chaser({ separationIntervalTicks: 1 }) as never],
+      bindings: BINDINGS,
+    });
+    expect(catalog.behaviors[0]!.separationIntervalTicks).toBe(1);
+  });
+
+  it('нулевой интервал пересчёта расхождения — находка валидации с путём поля', () => {
+    // Ноль — не «выключить расхождение», а ошибка документа (NPC-6).
+    const broken = chaser({ separationIntervalTicks: 0 });
+    expect(() => compileNpcCatalog({ behaviors: [broken as never] })).toThrow(
+      /separationIntervalTicks/,
+    );
   });
 
   it('tier "elite" с интервалом больше тика — противоречие документа', () => {
@@ -648,6 +683,175 @@ describe('NPC-6: движение — политика над навигацио
     const before = spread();
     for (let i = 0; i < 10; i++) h.step();
     expect(spread()).toBeGreaterThan(before);
+  });
+});
+
+describe('NPC-6: пересчёт вектора расхождения идёт каденсом', () => {
+  /**
+   * Толкучка: агент стоит и только расходится с соседями. Скорость и вес
+   * расхождения — единица, поэтому записанная скорость РАВНА применённому
+   * вектору расхождения, и наблюдать вектор можно прямо полем `Velocity`.
+   */
+  function crowder(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      schema: 1,
+      name: 'crowder',
+      tier: 'mass',
+      decision: { intervalTicks: 1 },
+      ranges: { sense: F(20), attack: F(1), arrive: F(1), separation: F(3) },
+      speed: ONE,
+      separationWeight: ONE,
+      states: [
+        {
+          name: 'stand',
+          actions: [
+            {
+              executor: 'hold',
+              considerations: [{ input: 'always', curve: { type: 'constant', value: ONE }, weight: ONE }],
+            },
+          ],
+        },
+      ],
+      ...over,
+    };
+  }
+
+  it('сосед сдвинулся вне окна — агент идёт с последним пересчитанным вектором', () => {
+    const h = harness({ behaviors: [crowder() as never], bindings: BINDINGS });
+    const agent = h.place('Creep', { Position: { x: 0, y: 0 } });
+    const neighbour = h.place('Creep', { Position: { x: F(1), y: 0 } });
+    // Расстановка закрепляется перед каждым тиком прямой записью мира — приём
+    // ТЕСТА (внутри тика мутации идут только через Command Buffer, DET-7):
+    // предмет проверки — окно пересчёта, а не траектория толкучки.
+    const pin = (at: number): void => {
+      setField(h.world, agent, 'Position', 'x', 0);
+      setField(h.world, agent, 'Position', 'y', 0);
+      setField(h.world, neighbour, 'Position', 'x', at);
+      setField(h.world, neighbour, 'Position', 'y', 0);
+    };
+    // Окно агента места 0 — тики, кратные трём (нормативное умолчание NPC-2).
+    for (let tick = 1; tick <= 3; tick++) {
+      pin(F(1));
+      h.step();
+    }
+    // Вектор смотрит ПРОЧЬ от соседа; единичным он выходит с точностью Q16.16,
+    // поэтому проверяется знак и совпадение с держимым, а не круглое число.
+    const held = h.field(agent, 'Velocity', 'x');
+    expect(held).toBeLessThan(0);
+    // Вектор — состояние симуляции, а не кэш платформы: он лежит полем
+    // компонента и потому уезжает в снапшот вместе с миром (SNAP-1).
+    expect(h.field(agent, NPC_AGENT_COMPONENT, 'sepX')).toBe(held);
+    // Сосед перепрыгнул на другую сторону, но окна агента на этих тиках нет —
+    // применяется прежний вектор, а не свежий.
+    for (let tick = 4; tick <= 5; tick++) {
+      pin(-F(1));
+      h.step();
+      expect(h.field(agent, 'Velocity', 'x')).toBe(held);
+    }
+    // В своё окно вектор пересчитывается по текущему миру.
+    pin(-F(1));
+    h.step();
+    expect(h.field(agent, 'Velocity', 'x')).toBeGreaterThan(0);
+    expect(h.field(agent, NPC_AGENT_COMPONENT, 'sepX')).toBe(h.field(agent, 'Velocity', 'x'));
+  });
+
+  it('окна пересчёта размазаны местом агента в обходе (QUERY-2)', () => {
+    const h = harness({ behaviors: [crowder() as never], bindings: BINDINGS });
+    const places: readonly (readonly [number, number])[] = [
+      [0, 0],
+      [F(1), 0],
+      [0, F(1)],
+    ];
+    const creeps = places.map(([x, y]) => h.place('Creep', { Position: { x, y } }));
+    const pin = (): void => {
+      creeps.forEach((creep, index) => {
+        setField(h.world, creep, 'Position', 'x', places[index]![0]);
+        setField(h.world, creep, 'Position', 'y', places[index]![1]);
+      });
+    };
+    const firstWindow = creeps.map(() => 0);
+    for (let tick = 1; tick <= 4; tick++) {
+      pin();
+      h.step();
+      creeps.forEach((creep, index) => {
+        if (firstWindow[index] === 0 && h.field(creep, 'Velocity', 'x') !== 0) {
+          firstWindow[index] = tick;
+        }
+      });
+    }
+    // Окно — `(тик + место в обходе) % 3 === 0`: у мест 0, 1 и 2 первое окно
+    // приходится на тики 3, 2 и 1. До своего окна агент идёт с нулевым
+    // вектором — умолчанием полей.
+    expect(firstWindow).toEqual([3, 2, 1]);
+  });
+
+  it('документ, назвавший единицу, пересчитывает вектор каждый тик', () => {
+    const h = harness({
+      behaviors: [crowder({ separationIntervalTicks: 1 }) as never],
+      bindings: BINDINGS,
+    });
+    const agent = h.place('Creep', { Position: { x: 0, y: 0 } });
+    const neighbour = h.place('Creep', { Position: { x: F(1), y: 0 } });
+    const pin = (at: number): void => {
+      setField(h.world, agent, 'Position', 'x', 0);
+      setField(h.world, agent, 'Position', 'y', 0);
+      setField(h.world, neighbour, 'Position', 'x', at);
+      setField(h.world, neighbour, 'Position', 'y', 0);
+    };
+    pin(F(1));
+    h.step();
+    expect(h.field(agent, 'Velocity', 'x')).toBeLessThan(0);
+    // Свежесть — на том же тике, а не через окно: следующий тик уже отвечает по
+    // сдвинувшемуся соседу.
+    pin(-F(1));
+    h.step();
+    expect(h.field(agent, 'Velocity', 'x')).toBeGreaterThan(0);
+  });
+
+  it('перемотка на тик МЕЖДУ окнами возвращает держимый вектор (SNAP-1, REW-2)', () => {
+    // Скорость мелкая нарочно: агенты остаются соседями все девять тиков, и
+    // вектор расхождения на тике снапшота заведомо не нулевой — иначе проверка
+    // прошла бы на пустом месте.
+    const h = harness({ behaviors: [crowder({ speed: F(0.1) }) as never], bindings: BINDINGS });
+    const creeps = [
+      h.place('Creep', { Position: { x: 0, y: 0 } }),
+      h.place('Creep', { Position: { x: F(1), y: 0 } }),
+      h.place('Creep', { Position: { x: 0, y: F(1) } }),
+    ];
+    // Окна агента места 0 — тики 3 и 6; снимок берётся на тике 4, то есть
+    // ПОСРЕДИ интервала: держимый вектор в этот момент есть, а пересчёта на
+    // следующем тике не будет.
+    for (let i = 0; i < 4; i++) h.step();
+    expect(h.state.tick).toBe(4);
+    const held = creeps.map((creep) => h.field(creep, NPC_AGENT_COMPONENT, 'sepX'));
+    expect(held.some((value) => value !== 0)).toBe(true);
+    const snapshot = takeSnapshot(h.state);
+
+    // Честный прогон дальше — до тика 9.
+    for (let i = 0; i < 5; i++) h.step();
+    const live = snapshotToPlain(takeSnapshot(h.state));
+
+    // Откат в середину интервала и тот же путь заново: вектор приезжает из
+    // снапшота вместе с миром, поэтому прогон с отката побитово совпадает с
+    // живым. Не снапшоться он — агенты вышли бы из отката с нулевым вектором и
+    // разошлись бы с живым прогоном на первом же тике.
+    restoreSnapshot(h.state, snapshot);
+    expect(h.state.tick).toBe(4);
+    expect(creeps.map((creep) => h.field(creep, NPC_AGENT_COMPONENT, 'sepX'))).toEqual(held);
+    for (let i = 0; i < 5; i++) h.step();
+    expect(snapshotToPlain(takeSnapshot(h.state))).toEqual(live);
+  });
+
+  it('документ без расхождения держимого вектора не пишет вовсе', () => {
+    // Ранний выход остаётся ранним (NPC-6): ни запроса к сетке, ни записей в
+    // компонент — веса расхождения у `chaser` ноль.
+    const h = harness({ behaviors: [chaser() as never], bindings: BINDINGS });
+    h.place('Hero', { Position: { x: F(10), y: 0 } });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.place('Creep', { Position: { x: F(1), y: 0 } });
+    for (let i = 0; i < 6; i++) h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'sepX')).toBe(0);
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'sepY')).toBe(0);
   });
 });
 

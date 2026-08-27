@@ -184,6 +184,7 @@
   "schema.npcBehavior.scales.crowd": "Number of neighbours at which the crowding input reaches one.",
   "schema.npcBehavior.scales.elapsedTicks": "Ticks over which the time-in-state input reaches one.",
   "schema.npcBehavior.schema": "Version of the behaviour document form; a document of another form is a validation finding, not a silent default.",
+  "schema.npcBehavior.separationIntervalTicks": "Ticks between recomputations of the local avoidance vector; between windows the agent moves with the last recomputed one.",
   "schema.npcBehavior.separationWeight": "Strength of local avoidance relative to speed; zero disables avoidance.",
   "schema.npcBehavior.speed": "Desired movement speed; physics integrates the velocity written from it.",
   "schema.npcBehavior.states": "HFSM states; the first one is the initial state.",
