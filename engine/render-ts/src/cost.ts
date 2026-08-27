@@ -119,6 +119,32 @@ export interface RenderCostCounters {
    */
   fogShadowRayTests: number;
   /**
+   * Обращения ТЕКСЕЛЯ к полярному depth-буферу (`mask.ts`, FOW-7, FOW-9):
+   * тексели reveal-цикла, которым пришлось спросить свой угол — `Math.atan2`,
+   * самая дорогая операция цикла, плюс полутень фронта за ним.
+   *
+   * Ось отдельная от `fogShadowRayTests`, потому что растёт она от другого:
+   * тот считает подготовку буфера (укрытия × их угловой размер), этот — долю
+   * КРУГА, попавшую за порог `penumbraStartSq`. Без него удорожание теневого
+   * пути в дифференциале эталона не видно вовсе: прочие fog-счётчики от этой
+   * доли не зависят.
+   *
+   * Порог отодвигает от тени глубина полутени, поэтому ширина кромки (FOW-10)
+   * это число двигает — но лишь ПОКА кромка уже половины пути до ближайшего
+   * укрытия: дальше глубину зажимает `PENUMBRA_REACH` (`mask.ts`), порог
+   * упирается в половину дистанции и на рост кромки не отвечает. На арене демо
+   * (кромка 4) наблюдатель ближе восьми юнитов к обрыву уже в этом упоре, и
+   * случай этот на дуэльной арене обычный, а не краевой.
+   *
+   * Зависит от ПОРЯДКА наблюдателей — ровно как `fogMaskTexelsWritten` и по
+   * той же причине: инкремент стоит за ранним выходом «не ярче уже лежащего»,
+   * и в перекрытии двух кругов второй наблюдатель до угла не доходит.
+   * Перестановка сущностей в доставке двигает это поле на проценты, не меняя
+   * ни картинки, ни настоящей стоимости кадра, — диффом ЭТОГО поля в одиночку
+   * удорожание не доказывается.
+   */
+  fogShadowTexelTests: number;
+  /**
    * Тексели, обработанные блюром кромки (`VisibilityMask.smooth`, FOW-7): два
    * прохода разделяемого box-блюра по всему растру — 2 × длина маски на
    * перестройку. Растёт квадратом разрешения, как обнуление и загрузка, и
@@ -477,6 +503,7 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     fogMaskTexels: 'frame',
     fogMaskTexelsWritten: 'frame',
     fogShadowRayTests: 'frame',
+    fogShadowTexelTests: 'frame',
     fogMaskSmoothTexels: 'frame',
     fogMaskUploadBytes: 'frame',
     fogMinimapTexels: 'frame',
@@ -518,6 +545,7 @@ export function createCostCounters(): RenderCostCounters {
     fogMaskTexels: 0,
     fogMaskTexelsWritten: 0,
     fogShadowRayTests: 0,
+    fogShadowTexelTests: 0,
     fogMaskSmoothTexels: 0,
     fogMaskUploadBytes: 0,
     fogMinimapTexels: 0,

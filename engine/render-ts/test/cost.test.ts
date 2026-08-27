@@ -405,6 +405,49 @@ describe('PERF-3, PERF-6: счётчики тумана растут по ося
     expect(many.fogShadowRayTests).toBeGreaterThan(few.fogShadowRayTests);
   });
 
+  it('обращения текселя к буферу теней: без укрытий ноль, с ними — растут с кромкой', () => {
+    // Ось теневого пути НА ТЕКСЕЛЕ (в отличие от `fogShadowRayTests`, который
+    // меряет подготовку буфера). Без укрытий ветка не исполняется вовсе: угол
+    // текселю спрашивать не у кого.
+    const bare = rebuildCost({ vision: 4, observers: [[3.5, 3.5]] });
+    const few = rebuildCost({ vision: 4, observers: [[3.5, 3.5]], pillarStep: 4 });
+    expect(bare.fogShadowTexelTests).toBe(0);
+    expect(few.fogShadowTexelTests).toBeGreaterThan(0);
+
+    // Рост от ширины кромки меряется на стенде с ОДНИМ ДАЛЁКИМ укрытием, и это
+    // не придирка к стенду: порог `penumbraStartSq` отодвигает глубина
+    // полутени, а её зажимает половина пути до укрытия (`PENUMBRA_REACH`). Стой
+    // наблюдатель близко к обрыву — глубина упёрлась бы в зажим, порог перестал
+    // бы двигаться, и проверка молча выродилась бы в равенство.
+    const size = 16;
+    const grid = createTerrainGrid({
+      width: size,
+      height: size,
+      tileSize: FIXED_ONE,
+      levels: Array.from({ length: size }, (_, y) =>
+        Array.from({ length: size }, (_, x) => (x === 12 && y === 8 ? '1' : '0')).join(''),
+      ),
+      flags: Array.from({ length: size }, () => '.'.repeat(size)),
+    });
+    const segments = fogSegmentsOf(grid);
+    // Ближайшая тень — левое ребро возвышенной клетки, 7.5 юнита; обе кромки
+    // ниже половины этой дистанции, то есть зажим ни одну из них не трогает.
+    const observer = { x: 4.5, y: 8.5, radius: 10, level: 0 };
+    const testsAt = (edgeWidth: number): number => {
+      const counters = createCostCounters();
+      withCostSink(counters, () => {
+        new VisibilityMask(fogRectOf(grid), 4).reveal(observer, edgeWidth, segments);
+      });
+      return counters.fogShadowTexelTests;
+    };
+    // Нулевая кромка — полутени нет, но жёсткий срез тени остаётся, и его
+    // порогом служит сама ближайшая тень: обращения к буферу есть и здесь.
+    const hard = testsAt(0);
+    expect(hard).toBeGreaterThan(0);
+    expect(testsAt(1)).toBeGreaterThan(hard);
+    expect(testsAt(3)).toBeGreaterThan(testsAt(1));
+  });
+
   it('весь растр маски — работа стадии кадра, а не доставки (FOW-7, PERF-2)', () => {
     const stand = fogStand({ resolution: 4 });
     const delivery = createCostCounters();

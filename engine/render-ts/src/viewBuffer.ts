@@ -62,6 +62,16 @@ function blend(previous: number, sample: number): number {
   return previous + (sample - previous) * SPAN_SMOOTHING;
 }
 
+/**
+ * Потолок памяти курсов (см. `facingMemory`). Идентификаторы сущностей
+ * поколенческие и не переиспользуются, поэтому за долгий матч словарь рос бы
+ * без границы — по записи на каждую когда-либо доставленную сущность.
+ * Несколько тысяч курсов — величина, до которой доходит только матч с очень
+ * длинным списком погибших, и переполнение здесь не потеря: чистка выбрасывает
+ * курсы сущностей, которых в доставленном состоянии уже нет.
+ */
+export const FACING_MEMORY_LIMIT = 4096;
+
 /** Внутренняя запись сущности: EntityView плюс интерполяционный буфер. */
 interface EntityRecord extends EntityView {
   prevX: number;
@@ -141,6 +151,28 @@ export class ViewBuffer {
 
   private readonly records = new Map<EntityId, EntityRecord>();
   private readonly seen = new Set<EntityId>();
+  /**
+   * Последний ИЗВЕСТНЫЙ курс сущности (REND-2, REND-13) — память, переживающая
+   * удаление записи.
+   *
+   * Курс приезжает только у движущейся сущности: стоящая приносит `NaN` —
+   * «курс не менять» (`Extractor`). Сущность, ушедшую в туман, фильтр снапшота
+   * вырезает из доставки целиком (`netcode` NET-12), и её запись здесь
+   * удаляется; вернувшись СТОЯЩЕЙ, она заводила бы запись заново — с нулевым
+   * курсом, то есть лицом на +X, независимо от того, куда смотрела до тумана.
+   * Затравка новой записи берётся отсюда, и юнит возвращается из тумана
+   * смотрящим туда же, куда уходил.
+   *
+   * Память живёт РОВНО одну ветвь истории и гасится разрывом непрерывности
+   * (`snapAll`, REND-2). Идентификаторы поколенческие и в пределах мира
+   * уникальны, но перемотка откатывает и счётчик поколений (NTR-16): за
+   * стёртой ветвью тот же упакованный id достаётся ДРУГОЙ сущности, и хранить
+   * её курс от прежней значило бы развернуть новорождённого по чужому следу.
+   * Живым сущностям гашение ничего не стоит — их курс лежит в записях, а
+   * `snapAll` записи не удаляет; теряется ровно память тех, кто в этот момент
+   * в тумане, то есть ровно то, чему после разрыва верить нельзя.
+   */
+  private readonly facingMemory = new Map<EntityId, number>();
   private readonly tickSeconds: number;
   private readonly snapDistanceSq: number;
   private readonly floorBits: Uint8Array | null;
@@ -300,6 +332,9 @@ export class ViewBuffer {
     // доставке через `span` тиков сущность вправе пройти во столько же раз
     // больше. Сравнение идёт квадратами, поэтому и множитель квадратичный.
     const teleportSq = this.snapDistanceSq * span * span;
+    // Разрыв непрерывности стирает память курсов (см. `facingMemory`): за
+    // стёртой ветвью истории упакованный id принадлежит уже другой сущности.
+    if (snapAll) this.facingMemory.clear();
     const seen = this.seen;
     seen.clear();
     // Курсор разреженной секции статов: пары идут подряд по сущностям в том же
@@ -336,7 +371,9 @@ export class ViewBuffer {
           spawned: true,
           moving: false,
           levelOverride: false,
-          facingYaw: 0,
+          // Ноль — только для сущности, курса которой не знали никогда:
+          // новорождённой либо не сделавшей ни шага (см. `facingMemory`).
+          facingYaw: this.facingMemory.get(id) ?? 0,
           aimYaw: null,
           states: 0,
           motion: LOCOMOTION_NORMAL,
@@ -384,7 +421,10 @@ export class ViewBuffer {
       record.levelOverride = (ext.flags[i]! & ENTITY_LEVEL_OVERRIDE) !== 0;
       record.states = ext.flags[i]! >>> STATE_BITS_SHIFT;
       const facing = ext.facingYaw[i]!;
-      if (!Number.isNaN(facing)) record.facingYaw = facing;
+      if (!Number.isNaN(facing)) {
+        record.facingYaw = facing;
+        this.rememberFacing(id, facing);
+      }
       const aim = ext.aimYaw[i]!;
       record.aimYaw = Number.isNaN(aim) ? null : aim;
     }
@@ -392,6 +432,39 @@ export class ViewBuffer {
     for (const id of this.records.keys()) {
       if (!seen.has(id)) this.records.delete(id);
     }
+  }
+
+  /**
+   * Курсов в памяти (см. `facingMemory`) — величина стенда, а не картины кадра:
+   * ограниченность памяти проверить снаружи иначе нечем, а `records` о ней
+   * ничего не говорит.
+   */
+  get facingMemorySize(): number {
+    return this.facingMemory.size;
+  }
+
+  /**
+   * Запоминает доставленный курс (см. `facingMemory`). Чистка идёт ТОЛЬКО по
+   * переполнению и разом — горячий путь доставки при этом не аллоцирует и в
+   * обычном тике вообще ничего не делает сверх одной записи в словарь.
+   *
+   * Выбрасываются курсы сущностей, которых нет в записях буфера НА ЭТОТ МОМЕНТ.
+   * Момент — середина обхода доставки, и записи ушедших сущностей ещё живы:
+   * удаляют их в конце `applyEntities`. Чистка поэтому пропускает часть мёртвых
+   * курсов — до следующего переполнения, — и это ровно та сторона, в которую
+   * ошибаться безопасно: лишний курс стоит одной записи в словаре, а выброшенный
+   * рано вернул бы юниту из тумана нулевой разворот. Сбрасывать память целиком
+   * (`clear`) приходится, только когда живых сущностей больше потолка: расти без
+   * границы ей нельзя, а выбрасывать нечего.
+   */
+  private rememberFacing(id: EntityId, facing: number): void {
+    const memory = this.facingMemory;
+    memory.set(id, facing);
+    if (memory.size <= FACING_MEMORY_LIMIT) return;
+    for (const key of memory.keys()) {
+      if (!this.records.has(key)) memory.delete(key);
+    }
+    if (memory.size > FACING_MEMORY_LIMIT) memory.clear();
   }
 
   /**
