@@ -77,6 +77,17 @@ export class VatAnimationBackend implements AnimationBackend {
     this.start(index, crossfade, true);
   }
 
+  playFinal(index: number): void {
+    // Тот же вход, что у one-shot'а, и сразу его конец: фаза на длительности,
+    // `once` снят, `clamped` поднят — кадр держится и `onOneShotFinished` не
+    // зовётся (REND-4, паритет ярусов REND-20).
+    this.start(index, 0, false);
+    const clip = this.clips[index];
+    this.phase = clip === undefined ? 0 : clip.duration;
+    this.clamped = true;
+    this.recompute();
+  }
+
   /**
    * Кадр: `dt` — часы презентации СО ЗНАКОМ (REND-25). Отрицательный шаг
    * отматывает клип назад, нулевой замораживает его на текущей фазе.

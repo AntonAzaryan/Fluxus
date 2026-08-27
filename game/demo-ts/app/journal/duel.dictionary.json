@@ -19,6 +19,8 @@
     "BossTelegraph": { "kind": "boss-telegraph", "actor": "entity" },
     "BossSlamLanded": { "kind": "boss-slam", "actor": "entity" },
     "BossQuakeLanded": { "kind": "boss-quake", "actor": "entity" },
+    "BossRepel": { "kind": "boss-asks-repel", "actor": "caster", "target": "target" },
+    "BossRepelLanded": { "kind": "boss-repel", "actor": "entity", "target": "target" },
     "BossRespawned": { "kind": "boss-respawn", "target": "entity" },
 
     "Collision": { "kind": "collision", "actor": "entity", "target": "other" },
