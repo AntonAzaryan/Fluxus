@@ -204,6 +204,9 @@ export function buildCodeIndex(roots = DEFAULT_CODE_ROOTS) {
  * направление-инвариант — граница механизма и политики: спека движка
  * MUST NOT ссылаться на game-content; capability слоя editor-content
  * (редактор и форматы контент-документов) — сама сторона политики, ей можно.
+ * Принятое ребро из layers.exceptions (from → game-content, с обоснованием)
+ * снимает гейт для своей пары — тем же списком, каким метрики принимают
+ * рёбра «вверх».
  */
 export function lint(model, layers, codeIndex = null) {
   const findings = [];
@@ -276,8 +279,13 @@ export function lint(model, layers, codeIndex = null) {
     }
   }
 
+  const acceptedEdges = new Set(layers.exceptions.map((x) => `${x.from}->${x.to}`));
   for (const e of capEdges.values()) {
-    if (e.to === 'game-content' && layers.layers[e.from] !== 'editor-content') {
+    if (
+      e.to === 'game-content' &&
+      layers.layers[e.from] !== 'editor-content' &&
+      !acceptedEdges.has(`${e.from}->${e.to}`)
+    ) {
       findings.push({
         rule: 'content-boundary',
         where: capabilities.get(e.from).file,
