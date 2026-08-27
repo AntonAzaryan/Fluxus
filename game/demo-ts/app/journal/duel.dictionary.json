@@ -19,6 +19,7 @@
     "BossTelegraph": { "kind": "boss-telegraph", "actor": "entity" },
     "BossSlamLanded": { "kind": "boss-slam", "actor": "entity" },
     "BossQuakeLanded": { "kind": "boss-quake", "actor": "entity" },
+    "BossRespawned": { "kind": "boss-respawn", "target": "entity" },
 
     "Collision": { "kind": "collision", "actor": "entity", "target": "other" },
     "Overlap": { "kind": "overlap", "actor": "entity", "target": "other" },

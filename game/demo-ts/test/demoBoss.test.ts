@@ -66,8 +66,10 @@ const QUAKE_RADIUS = 458752;
 const DODGE_SPEED = 26214;
 const DODGE_TICKS = 9;
 const STRAFE_DISTANCE = DODGE_SPEED * DODGE_TICKS;
-/** `Respawn`: окно возрождения героя. Босс через него проходить НЕ должен. */
-const RESPAWN_TICKS = 600;
+/** `BossRespawn`: окно возрождения босса — 10 с при 60 Гц. */
+const BOSS_RESPAWN_TICKS = 600;
+/** Центр арены (`arena.center` сцены) — точка возрождения босса. */
+const ARENA_CENTER = 1572864;
 
 interface Stand {
   readonly sim: Simulation;
@@ -203,7 +205,7 @@ describe('босс демо-сцены уязвим: способности ге
     ).toHaveLength(0);
   });
 
-  it('дошедший до нуля hp убивает босса — и он НЕ возрождается', () => {
+  it('дошедший до нуля hp убивает босса, и через 10 с он встаёт в центре', () => {
     // hp ретюнится под один выстрел: проверяется путь смерти, а не число.
     const a = stand([[20, 24]], wounded(HIT_DAMAGE, HIT_DAMAGE));
     let events: readonly string[] = [];
@@ -220,11 +222,28 @@ describe('босс демо-сцены уязвим: способности ге
     // больше не задерживает снаряды.
     expect(coreWorld.getField(a.state.world, a.boss, 'Collider', 'layer')).toBe(0);
 
-    // Возрождение — политика ГЕРОЯ: `Respawn` требует `Spawn` и
-    // `LocomotionState`, которых у босса нет. Окно с запасом.
-    for (let t = 0; t < RESPAWN_TICKS + 60; t++) a.step();
-    expect(coreWorld.hasComponent(a.state.world, a.boss, 'Dead')).toBe(true);
-    expect(hp(a.state, a.boss)).toBe(0);
+    // Возрождение — СВОЯ политика (`BossRespawn`), а не героическая: `Respawn`
+    // требует `Spawn` и `LocomotionState`, которых у босса нет. Окно то же —
+    // 600 тиков, ровно 10 с при 60 Гц, — и до последнего тика он лежит.
+    for (let t = 1; t < BOSS_RESPAWN_TICKS; t++) {
+      expect(a.step()).not.toContain('BossRespawned');
+      expect(coreWorld.hasComponent(a.state.world, a.boss, 'Dead')).toBe(true);
+    }
+    expect(a.step()).toContain('BossRespawned');
+
+    expect(coreWorld.hasComponent(a.state.world, a.boss, 'Dead')).toBe(false);
+    expect(hp(a.state, a.boss)).toBe(HIT_DAMAGE);
+    expect(coreWorld.getField(a.state.world, a.boss, 'Collider', 'layer')).toBe(2);
+    // В ЦЕНТРЕ арены, а не там, где его убили: точка возрождения — та же, что
+    // `arena.center` сцены (зеркало пиннится ниже).
+    expect(px(a.state, a.boss)).toBe(ARENA_CENTER);
+    expect(py(a.state, a.boss)).toBe(ARENA_CENTER);
+    // И начинает документ заново: `BossRespawn` (order 331) ставит `state = -1`,
+    // а платформа СЛЕДУЮЩИМ тиком читает его как «состояние ещё не выбрано» и
+    // входит в первое (NPC-2). Иначе босс вставал бы в фазе, в которой умер.
+    expect(coreWorld.getField(a.state.world, a.boss, 'NpcAgent', 'state')).toBe(-1);
+    a.step();
+    expect(coreWorld.getField(a.state.world, a.boss, 'NpcAgent', 'state')).toBe(0);
   });
 });
 
@@ -310,6 +329,15 @@ describe('числа и картинка босса: ретюн виден в д
     // Слот — чужой обоим игрокам матча: снаряд каждого видит в боссе цель.
     const slot = SCENE.prefabs!.find((prefab) => prefab.name === 'Boss')!.components.Player!.slot;
     expect(slot).toBe(MATCH.players.length);
+
+    // Возрождение: окно и точка. Точка — ЗЕРКАЛО `arena.center` сцены, и
+    // разъехаться им нельзя: босс, встающий не в центре, вставал бы в чистом
+    // поле, где документ `arenaBoss` его никогда не задумывал.
+    const respawn = numbers(SCENE.systems!.find((system) => system.name === 'BossRespawn')!);
+    expect(respawn).toContain(BOSS_RESPAWN_TICKS);
+    expect(respawn).toContain(ARENA_CENTER);
+    const center = (SCENE as unknown as { arena: { center: { x: number; y: number } } }).arena.center;
+    expect(center).toEqual({ x: ARENA_CENTER, y: ARENA_CENTER });
   });
 
   it('радиусы вспышек в манифесте — радиусы, по которым способности бьют', () => {

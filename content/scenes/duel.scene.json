@@ -1378,6 +1378,91 @@
           }
         }
       ]
+    },
+    {
+      "name": "BossRespawn",
+      "order": 331,
+      "query": { "all": ["Dead", "NpcAgent", "NpcThreat", "Position", "Velocity", "Collider", "Health"] },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": {
+              ">=": [
+                { "-": [{ "tick": [] }, { "getComponent": [{ "var": "e" }, "Dead", "atTick"] }] },
+                600
+              ]
+            },
+            "then": [
+              { "removeComponent": { "entity": { "var": "e" }, "component": "Dead" } },
+              { "removeComponent": { "entity": { "var": "e" }, "component": "Falling" } },
+              { "removeComponent": { "entity": { "var": "e" }, "component": "LevelOverride" } },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Collider",
+                  "values": { "layer": 2 }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Position",
+                  "values": { "x": 1572864, "y": 1572864 }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Velocity",
+                  "values": { "x": 0, "y": 0 }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "Health",
+                  "values": { "hp": { "getComponent": [{ "var": "e" }, "Health", "hpMax"] } }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "NpcAgent",
+                  "values": { "state": -1 }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "NpcThreat",
+                  "values": {
+                    "source0": -1,
+                    "source1": -1,
+                    "source2": -1,
+                    "source3": -1,
+                    "value0": 0,
+                    "value1": 0,
+                    "value2": 0,
+                    "value3": 0
+                  }
+                }
+              },
+              {
+                "emitEvent": {
+                  "type": "BossRespawned",
+                  "data": {
+                    "entity": { "var": "e" },
+                    "tick": { "tick": [] },
+                    "x": 1572864,
+                    "y": 1572864
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   ],
   "abilities": [
